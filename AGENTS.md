@@ -1,8 +1,67 @@
 # Repository Guidelines
 
+## Documentation Authority
+
+Before planning or changing gameplay, lore, progression, items, factions, world
+structure, or delivery scope, read:
+
+1. `docs/documentation-index.md`
+2. `docs/game-design-bible.md`
+3. The specialized canonical document for the system:
+   - `docs/characters-and-factions.md`
+   - `docs/world-and-settlements.md`
+   - `docs/progression-loot-and-skein.md`
+4. `README.md` and `docs/next-steps-mmorpg-prototype.md` for delivery order.
+
+Canonical design documents override conflicting recommendations in historical
+research reports. Historical documents remain useful as research, but must not
+silently reintroduce rejected arena-only PvP, optional frontier PvP,
+gear-equalized world combat, or traditional talent-tree assumptions.
+
+Do not guess unresolved tuning values, final faction names, level caps, drop
+rates, invasion schedules, or population limits. Preserve explicit `TBD`
+decisions until evidence or user direction resolves them.
+
+## Canonical Game Constraints
+
+- The target game has two opposing player factions.
+- Each faction has a protected starting territory and early quest campaign.
+- Rival players meet after a progression threshold in mixed territories where
+  open-world faction PvP is mandatory. There is no opt-in flag.
+- Neutral mixed cities are safe for both factions.
+- Faction capitals support individual infiltration and organized invasions, but
+  beginner districts and essential progression services remain protected.
+- All playable races may join either faction and use every supported class.
+- Every playable race supports male and female characters under identical
+  combat rules. Race, sex, and appearance never change statistics,
+  authoritative hitboxes, reach, timing, or loot probability.
+- Factions provide distinct Doctrine skills and utilities. They must be
+  asymmetrical in method but comparable in overall opportunity.
+- Character Level is permanent and separate from seasonal Ember Rank.
+- Skein Weaving uses ability Forms, Threads, a Keystone, and a Faction Doctrine;
+  do not replace it with a conventional point-and-row talent tree.
+- Equipment must create noticeable combat power and utility without replacing
+  aim, timing, positioning, blocking, dodging, interruption, or judgment.
+- Equipped items do not drop on PvP death. Only explicitly eligible unbanked
+  contested resources may be placed at risk.
+- Combat, progression, loot generation, PvP contribution, territory state, and
+  reward grants are server authoritative, transactional, idempotent, and
+  auditable.
+- Working names such as Dawn Concordat and Unbound Flame are not final names.
+
+Prototype deferral does not make a confirmed target feature optional. The
+prototype still begins with one class and one controlled combat space because
+movement, combat feel, latency tolerance, and authority must be proven before
+the faction world is built.
+
 ## Project Structure & Module Organization
 
-This repository currently contains planning and lore material under `docs/`; no Unreal project, source tree, automated tests, or build scripts have been added yet. Keep research, architecture notes, and game-design documents in `docs/`. When implementation begins, follow the planned Unreal layout:
+This repository currently contains planning and lore material under `docs/`,
+plus rendered codices under `output/pdf/`; no Unreal project, source tree,
+automated tests, or build scripts have been added yet. Keep research,
+architecture notes, and game-design documents in `docs/`. Keep maintained PDF
+outputs in `output/pdf/`. When implementation begins, follow the planned Unreal
+layout:
 
 - `Source/GameCore/` for gameplay framework classes.
 - `Source/GameCombat/` for Gameplay Ability System abilities, effects, and combat traces.
@@ -21,9 +80,35 @@ There are no repository-defined build or test commands yet. Documentation change
 
 Use Unreal Engine C++ conventions: tabs for C++ indentation, PascalCase types and methods, `b` prefixes for booleans, and standard class prefixes such as `A`, `U`, `F`, and `E`. Prefer server-authoritative gameplay; clients may predict presentation but must not decide damage, cooldowns, or persistence. Use consistent Gameplay Tags such as `Ability.Melee.Combo1`, `State.Dodging`, and `Cooldown.Dodge`. Name Markdown files descriptively and use clear heading hierarchies.
 
+Keep appearance, race, sex, class, faction, Character Level, Ember Rank,
+Skein loadout, Doctrine, inventory, and equipment as separate data concerns.
+Do not embed presentation choices inside class abilities or authoritative
+combat calculations.
+
+Keep loot tables, item-power budgets, affix rules, Skein options, Doctrine
+options, territory policy, and progression thresholds data driven. The client
+may request an allowed action but must never generate an item, choose a drop,
+grant progression, claim a hit, or decide whether an area permits PvP.
+
 ## Testing Guidelines
 
 Add focused automation tests beside each implemented system when practical. For networking changes, verify at least two PIE clients, replication, server authority, death/respawn, and behavior under simulated lag or packet loss. Record manual test steps in the pull request when automation is unavailable.
+
+When the applicable systems exist, also verify:
+
+- Protected faction starts cannot be entered or attacked by rivals.
+- Mixed-territory PvP cannot be disabled.
+- Safe-city boundaries reject hostile actions.
+- Capital invasions cannot expose beginner districts or permanently disable
+  essential services.
+- Male and female variants use equivalent authoritative collision, reach, and
+  timing.
+- Skein and Doctrine combinations are validated by the server.
+- Reward retries cannot duplicate items, currency, progression, or contested
+  resources.
+- Repeat-victim and collusion cases provide no exploitable PvP reward.
+- Equipment advantages remain meaningful without destroying readable
+  counterplay under representative latency.
 
 ## Environment Strategy
 

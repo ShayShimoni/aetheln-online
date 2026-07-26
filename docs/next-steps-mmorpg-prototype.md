@@ -1,6 +1,10 @@
 # Aetheln Online Prototype Roadmap
 
-The repository [README](../README.md#delivery-roadmap) defines release boundaries and the canonical dependency order. GitHub Issues remain the source of truth for work status, priority, ownership, and target version. This document expands the pre-1.0 prototype stage.
+The repository [README](../README.md#delivery-roadmap) defines release
+boundaries and the canonical dependency order. The
+[Game Design Bible](game-design-bible.md) defines the target game. GitHub Issues
+remain the source of truth for work status, priority, ownership, and target
+version. This document expands only the pre-1.0 prototype stage.
 
 **Do not begin by building the full MMORPG. Build a small, networked action-combat prototype first.**
 
@@ -13,6 +17,11 @@ Reference: [Understanding the Unreal Engine Gameplay Ability System](https://dev
 Your initial goal should be:
 
 > **A two-player online action-RPG combat arena inspired by TERA-style combat, using temporary assets.**
+
+This arena is a technical validation space, not the final PvP model. The target
+game uses separate faction starting territories followed by mixed territories
+with mandatory open-world PvP, safe neutral cities, and invasion-enabled faction
+capitals.
 
 The prototype should contain only:
 
@@ -49,6 +58,31 @@ Reference: [Gameplay Ability System for Unreal Engine](https://dev.epicgames.com
 - Production dedicated-server hosting or deployment infrastructure
 
 Those features come only after the combat prototype is enjoyable and stable.
+They are deferred from the prototype, not rejected from the target game.
+
+### Future-System Guardrails
+
+Prototype code and data must not prevent the confirmed future direction:
+
+- Characters eventually select one of two opposing factions and begin in that
+  faction's protected territory.
+- Reaching the frontier sends characters into mixed territory where faction PvP
+  is mandatory; there is no opt-in flag.
+- Safe mixed cities allow both factions to use shared services.
+- Faction capitals support individual infiltration and organized invasion while
+  keeping beginner districts inaccessible.
+- Each faction has a unique Doctrine with skills and utilities that affect
+  character development.
+- Permanent Character Levels are separate from seasonal Ember Rank.
+- Skein Weaving uses ability Forms, action-to-action Threads, a Keystone, and a
+  Faction Doctrine instead of a traditional talent tree.
+- Equipment provides meaningful power and utility, but the server-authoritative
+  action combat keeps aim, timing, positioning, block, dodge, and interruption
+  decisive.
+- Every playable race supports male and female characters with identical
+  combat rules and standardized hitboxes.
+- Future character appearance data remains separate from class, faction,
+  progression, and combat state.
 
 ## 2. Install the Minimum Toolset
 
@@ -241,6 +275,11 @@ Evaluate the result against Issue #48. Only after the prototype passes that gate
    - What are the first three abilities?
    - What is the camera behavior?
    - What causes victory and defeat?
+   - Which combat outcomes must remain skill-dependent when equipment differs?
+   - Which data boundaries will later separate level, equipment, Skein, faction
+     Doctrine, and appearance?
+   - Which prototype measurements are required before mandatory open-world PvP
+     can be attempted safely?
    - What is explicitly outside the prototype?
    - What must work with two connected players?
 

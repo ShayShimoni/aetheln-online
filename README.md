@@ -1,6 +1,46 @@
 # Aetheln Online
 
-Aetheln Online is a server-authoritative multiplayer fantasy action RPG. The first goal is a focused MMO-lite vertical slice that proves the combat, cooperative loop, persistence, and technical architecture before the project expands in scale.
+Aetheln Online is a server-authoritative fantasy action MMORPG built around two
+opposing factions, permanent character development, meaningful equipment, and
+mandatory open-world PvP in mixed territories. New characters begin inside
+separate protected faction homelands; safe neutral cities connect the wider
+world, while contested regions and invasion-enabled faction capitals create the
+long-term conflict.
+
+The first delivery goal remains a focused MMO-lite vertical slice. It proves
+combat, cooperation, persistence, and technical architecture before the project
+attempts the full faction world.
+
+Read the [documentation index](docs/documentation-index.md) and
+[canonical game-design bible](docs/game-design-bible.md) for the current product
+direction.
+
+## Canonical Design
+
+- Two opposing factions have distinct protected starting territories, quests,
+  skills, and utility progression.
+- Rival factions meet in mixed territories where open-world PvP is mandatory
+  and cannot be disabled.
+- Neutral mixed cities are safe. Faction capitals allow difficult individual
+  infiltration and organized invasions without exposing beginner districts.
+- Every playable race supports male and female characters. Race and sex do not
+  change combat statistics, class access, faction access, or authoritative
+  hitboxes.
+- Permanent Character Levels are separate from seasonal Ember Rank.
+- Skein Weaving uses ability Forms, action-to-action Threads, a Keystone, and a
+  Faction Doctrine instead of a traditional talent tree.
+- Equipment provides noticeable power, recovery, speed, and utility within
+  controlled limits. Aim, timing, positioning, blocking, dodging, interruption,
+  and judgment remain decisive.
+- The server owns combat outcomes, progression, item generation, loot grants,
+  contested-resource loss, and faction rewards.
+
+Detailed rules live in:
+
+- [Game Design Bible](docs/game-design-bible.md)
+- [Characters and Factions](docs/characters-and-factions.md)
+- [World and Settlements](docs/world-and-settlements.md)
+- [Progression, Loot, Skein Weaving, and Character Creation](docs/progression-loot-and-skein.md)
 
 ## Delivery Roadmap
 
@@ -24,7 +64,8 @@ The prototype must satisfy the agreed exit criteria before work advances to the 
 The MVP is the smallest externally playable version of the core experience:
 
 - Account authentication, character creation, and session recovery
-- One shared hub, one outdoor objective, and one cooperative dungeon
+- One representative safe hub, one outdoor objective, and one cooperative
+  dungeon
 - Responsive movement, aiming, abilities, dodge, damage, death, and respawn
 - Readable enemy attacks and one server-authoritative boss encounter
 - Party formation, world travel, completion flow, and return to the hub
@@ -35,11 +76,24 @@ The MVP is the smallest externally playable version of the core experience:
 
 ### Later Versions
 
-- **1.1.0 - Core Expansion:** CI quality gates, inventory, equipment, cooperative matchmaking, and structured playtest triage.
-- **1.2.0 - Social and Operations:** text chat, friends, and test administration or account-recovery tools.
-- **2.0.0 - PvP Expansion:** an isolated arena, PvP combat rules, balance telemetry, and exploit testing.
+- **1.1.0 - Character Development:** inventory, equipment, permanent levels,
+  initial Skein Weaving, CI quality gates, and structured playtest triage.
+- **1.2.0 - Social and Operations:** cooperative matchmaking, text chat,
+  friends, and test administration or account-recovery tools.
+- **2.0.0 - Faction Frontier:** two faction identities, representative starting
+  experiences, one mixed territory with mandatory PvP, a safe neutral city,
+  contested resources, PvP rewards, balance telemetry, and exploit testing.
+- **2.1.0 - Faction War:** expanded faction territories, individual capital
+  infiltration, organized capital invasions, territory objectives, and war
+  operations.
 
-PvP is not part of the prototype or 1.0 MVP gate. Large raids, seamless open-world technology, guild wars, housing, auction systems, deep crafting, mounts, pets, and large cosmetic pipelines remain outside the current roadmap.
+Open-world faction PvP is mandatory in the target game, but it is not part of
+the prototype or 1.0 MVP gate. Those early stages first prove the combat and
+server authority on which fair world PvP depends. Large raids, guild systems,
+housing, auction systems, deep crafting, mounts, pets, and large cosmetic
+pipelines remain outside the current delivery roadmap. The final world may use
+regional servers and streaming; "open world" does not require one unbounded
+simulation process.
 
 ## Execution Order
 
@@ -62,6 +116,13 @@ The repository currently contains planning and contribution infrastructure:
 
 - `.github/ISSUE_TEMPLATE/` - user story, bug, and technical-task templates
 - `.gitignore` - Unreal Engine, IDE, build-output, and local-secret exclusions
+- `docs/documentation-index.md` - document authority and reading order
+- `docs/game-design-bible.md` - canonical product and gameplay direction
+- `docs/characters-and-factions.md` - faction ideologies and character loyalties
+- `docs/world-and-settlements.md` - territory, city, and invasion rules
+- `docs/progression-loot-and-skein.md` - progression, builds, equipment, and
+  server-side reward rules
+- `output/pdf/` - rendered copies of maintained PDF codices
 - `README.md` - product scope, roadmap, and contributor entry point
 
 The planned Unreal Engine 5.8 layout uses `Source/` for C++ modules, `Content/` for game assets, `Config/` for tracked defaults, and `Plugins/` for project extensions. Generated directories such as `Binaries/`, `DerivedDataCache/`, `Intermediate/`, and `Saved/` must not be committed.
@@ -87,4 +148,8 @@ Use `Blocked` only when work cannot progress, and populate `Blocked Reason`. Pri
 
 ## Current Status
 
-The repository is in planning and technical-foundation setup. Implementation has not started. The next deliverable is the game brief under Epic #1, followed by the foundation and gameplay work in the dependency order above.
+The repository is in planning and technical-foundation setup. Implementation
+has not started. The canonical direction now includes the faction world,
+mandatory mixed-territory PvP, Skein Weaving, and bounded equipment power. The
+next delivery gate remains the game brief under Epic #1, followed by the
+foundation and gameplay work in the dependency order above.
