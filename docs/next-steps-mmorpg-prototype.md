@@ -4,7 +4,9 @@ The repository [README](../README.md#delivery-roadmap) defines release
 boundaries and the canonical dependency order. The
 [Game Design Bible](game-design-bible.md) defines the target game. GitHub Issues
 remain the source of truth for work status, priority, ownership, and target
-version. This document expands only the pre-1.0 prototype stage.
+version. The [Technical Architecture](technical-architecture.md) defines the
+implementation baseline. This document expands only the pre-1.0 prototype
+stage.
 
 **Do not begin by building the full MMORPG. Build a small, networked action-combat prototype first.**
 
@@ -27,7 +29,7 @@ The prototype should contain only:
 
 - One playable character class
 - Third-person movement and camera
-- Soft lock-on or targeting
+- Pure free aim
 - One basic three-hit attack chain
 - Dodge or evasive movement
 - Three active abilities
@@ -67,7 +69,8 @@ Prototype code and data must not prevent the confirmed future direction:
 - Characters eventually select one of two opposing factions and begin in that
   faction's protected territory.
 - Reaching the frontier sends characters into mixed territory where faction PvP
-  is mandatory; there is no opt-in flag.
+  is mandatory except inside explicit server-authoritative sanctuary subzones;
+  there is no opt-in flag.
 - Safe mixed cities allow both factions to use shared services.
 - Faction capitals support individual infiltration and organized invasion while
   keeping beginner districts inaccessible.
@@ -83,13 +86,16 @@ Prototype code and data must not prevent the confirmed future direction:
   combat rules and standardized hitboxes.
 - Future character appearance data remains separate from class, faction,
   progression, and combat state.
+- Persistent characters remain `Faction = Unassigned` before the 2.0 faction
+  stage. Doctrine is unavailable until the approved one-time faction choice.
 
 ## 2. Install the Minimum Toolset
 
 Install these in this order:
 
 1. **Epic Games Launcher**
-2. **The supported stable Unreal Engine 5.8 release**
+2. **The supported Unreal Engine 5.8 source revision pinned by Issues #13 and
+   #15**
 3. **Visual Studio with C++ development support**
 4. **GitHub Desktop**
 5. **Lyra Starter Game**
@@ -97,7 +103,9 @@ Install these in this order:
 7. **Codex CLI or Codex IDE extension**
 8. **Blender**, later when you begin creating original models
 
-Use a stable Unreal release, not a Preview build. Epic states that Preview builds are not intended for project development because they may contain bugs or instability.
+Use a stable Unreal release, not a Preview build. Issues #13 and #15 must record
+the exact source revision, compiler, SDK, Linux cross-toolchain, required
+plugins, and supported configurations.
 
 Reference: [Install Unreal Engine](https://dev.epicgames.com/documentation/en-us/unreal-engine/install-unreal-engine)
 
@@ -216,8 +224,12 @@ Complete:
 - The one-page game brief and prototype success criteria
 - Unreal source-control and Git LFS safeguards
 - The UE5.8 C++ project and initial module boundaries
+- The canonical technical architecture and decision registry
 - The networking and server-authority spike
-- Repeatable local client and dedicated-server builds
+- Repeatable packaged Windows x64 client and Linux x86-64 dedicated-server
+  builds
+- Foundational CI, automation, structured rejection telemetry, and performance
+  instrumentation
 
 Do not add gameplay systems until the project opens, builds, launches, and supports the planned two-client test path.
 
@@ -227,7 +239,7 @@ Build and validate:
 
 - Third-person movement and camera
 - Sprint
-- Aiming or targeting
+- Pure free aim
 - Unreal Character Movement prediction and reconciliation
 - Correct position and facing on both clients
 - Behavior under representative latency
@@ -246,6 +258,8 @@ Add the Gameplay Ability System:
 - Death
 - Respawn
 - Server validation of damage, cooldowns, and invalid repeated actions
+- A server-owned attack timeline whose authored windows and volumes are
+  independent from animation-notify authority
 
 Test every combat increment with two editor clients. Both players must see the same ability, damage, death, and respawn results, and neither client may falsely modify authoritative state. Unreal's editor supports multiple-player and dedicated-server-style tests before paid hosting is needed.
 
@@ -262,6 +276,7 @@ Add:
 - Sound and temporary effects
 - A two-player playtest under representative network conditions
 - Recorded build, test, logging, and performance evidence
+- Structured invalid-command rejection evidence
 
 Evaluate the result against Issue #48. Only after the prototype passes that gate should work begin on the explorable world, persistence, authentication, cooperative dungeon, external playtest build, or production hosting required by the 1.0 vertical slice.
 
@@ -271,7 +286,7 @@ Evaluate the result against Issue #48. Only after the prototype passes that gate
 
    - What does the player do every 30 seconds?
    - What makes combat different?
-   - Is targeting locked, soft-targeted, or fully aimed?
+   - How does pure free aim behave for the first three attacks?
    - What are the first three abilities?
    - What is the camera behavior?
    - What causes victory and defeat?
@@ -284,12 +299,13 @@ Evaluate the result against Issue #48. Only after the prototype passes that gate
    - What must work with two connected players?
 
 2. Configure Git LFS and Unreal repository safeguards in [Issue #14](https://github.com/ShayShimoni/aetheln-online/issues/14).
-3. Bootstrap the UE5.8 C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
-4. Validate the Unreal networking and server-authority approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
-5. Establish repeatable local client and dedicated-server builds in [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15).
-6. Implement replicated movement in [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17).
-7. Complete the minimal server-authoritative combat arena under [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6).
-8. Pass the prototype exit gate in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before starting the 1.0 vertical slice.
+3. Publish and maintain the canonical technical baseline in [Issue #59](https://github.com/ShayShimoni/aetheln-online/issues/59).
+4. Bootstrap the UE5.8 C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
+5. Validate the Unreal networking and server-authority approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
+6. Establish repeatable local client and dedicated-server builds in [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15).
+7. Implement replicated movement in [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17).
+8. Complete the minimal server-authoritative combat arena under [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6).
+9. Pass the prototype exit gate in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before starting the 1.0 vertical slice.
 
 Install Unreal Engine 5.8, Visual Studio, Git LFS, and Lyra only when needed for the corresponding foundation ticket.
 

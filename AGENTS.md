@@ -13,6 +13,24 @@ structure, or delivery scope, read:
    - `docs/progression-loot-and-skein.md`
 4. `README.md` and `docs/next-steps-mmorpg-prototype.md` for delivery order.
 
+Before planning or changing engine structure, networking, combat implementation,
+world runtime, persistence, security, operations, performance, testing, or
+delivery infrastructure, also read:
+
+1. `docs/technical-architecture.md`
+2. The specialized canonical technical document:
+   - `docs/combat-and-networking-architecture.md`
+   - `docs/world-runtime-and-building.md`
+   - `docs/progression-and-persistence-architecture.md`
+   - `docs/security-and-operations.md`
+   - `docs/performance-quality-and-delivery.md`
+3. `docs/architecture-decisions.md`
+
+Product documents govern player-facing behavior. Technical documents govern
+implementation. Roadmaps govern delivery order, and GitHub Issues govern work
+status. A technical recommendation must not silently change a canonical product
+rule.
+
 Canonical design documents override conflicting recommendations in historical
 research reports. Historical documents remain useful as research, but must not
 silently reintroduce rejected arena-only PvP, optional frontier PvP,
@@ -27,7 +45,8 @@ decisions until evidence or user direction resolves them.
 - The target game has two opposing player factions.
 - Each faction has a protected starting territory and early quest campaign.
 - Rival players meet after a progression threshold in mixed territories where
-  open-world faction PvP is mandatory. There is no opt-in flag.
+  open-world faction PvP is mandatory outside explicit server-authoritative
+  sanctuary subzones. There is no opt-in flag.
 - Neutral mixed cities are safe for both factions.
 - Faction capitals support individual infiltration and organized invasions, but
   beginner districts and essential progression services remain protected.
@@ -56,12 +75,12 @@ the faction world is built.
 
 ## Project Structure & Module Organization
 
-This repository currently contains planning and lore material under `docs/`,
-plus rendered codices under `output/pdf/`; no Unreal project, source tree,
-automated tests, or build scripts have been added yet. Keep research,
-architecture notes, and game-design documents in `docs/`. Keep maintained PDF
-outputs in `output/pdf/`. When implementation begins, follow the planned Unreal
-layout:
+This repository currently contains planning, canonical design, and canonical
+technical architecture under `docs/`, plus rendered codices under `output/pdf/`;
+no Unreal project, source tree, automated tests, or build scripts have been
+added yet. Keep research, architecture, and game-design documents in `docs/`.
+Keep maintained PDF outputs in `output/pdf/`. When implementation begins,
+follow the planned Unreal layout:
 
 - `Source/GameCore/` for gameplay framework classes.
 - `Source/GameCombat/` for Gameplay Ability System abilities, effects, and combat traces.
@@ -80,15 +99,28 @@ There are no repository-defined build or test commands yet. Documentation change
 
 Use Unreal Engine C++ conventions: tabs for C++ indentation, PascalCase types and methods, `b` prefixes for booleans, and standard class prefixes such as `A`, `U`, `F`, and `E`. Prefer server-authoritative gameplay; clients may predict presentation but must not decide damage, cooldowns, or persistence. Use consistent Gameplay Tags such as `Ability.Melee.Combo1`, `State.Dodging`, and `Cooldown.Dodge`. Name Markdown files descriptively and use clear heading hierarchies.
 
-Keep appearance, race, sex, class, faction, Character Level, Ember Rank,
-Skein loadout, Doctrine, inventory, and equipment as separate data concerns.
-Do not embed presentation choices inside class abilities or authoritative
-combat calculations.
+Use `UCharacterMovementComponent` for predicted/reconciled player movement and
+GAS for abilities. Player ASCs live on `PlayerState`; AI ASCs live on the
+authoritative pawn. Combat uses pure free aim: the server resolves authored
+attack volumes and never accepts a client-selected target or claimed hit.
+Animation and effects visualize the server-owned attack timeline but do not
+create gameplay truth.
+
+Keep identity, appearance, race, sex, class/Skein, faction/Doctrine, permanent
+Character Level, seasonal Ember Rank, inventory/equipment, cosmetics, and
+session state as separate data concerns. Do not embed presentation choices
+inside class abilities or authoritative combat calculations. Persist
+`Faction = Unassigned` before the 2.0 faction stage; Doctrine remains
+unavailable until the approved one-time faction choice.
 
 Keep loot tables, item-power budgets, affix rules, Skein options, Doctrine
 options, territory policy, and progression thresholds data driven. The client
 may request an allowed action but must never generate an item, choose a drop,
 grant progression, claim a hit, or decide whether an area permits PvP.
+
+Keep identity, backend, data, messaging, hosting, orchestration, and anti-cheat
+vendors behind adapters until an accepted architecture decision selects them.
+World Partition is per-map content streaming, not server distribution.
 
 ## Testing Guidelines
 

@@ -21,7 +21,7 @@ The game combines:
   character progression.
 - Mandatory open-world faction PvP once a character leaves protected faction
   territory.
-- Non-target action combat built around aim, spacing, attack commitment,
+- Pure-free-aim action combat built around aim, spacing, attack commitment,
   blocking, dodging, interruption, resource management, and readable
   animations.
 - Equipment that creates meaningful power and utility without replacing player
@@ -49,7 +49,8 @@ their class, complete faction-specific quests, and build an initial identity
 without encountering rival players.
 
 At a clearly communicated progression threshold, the story sends them into
-mixed territory. PvP there is always active. There is no opt-in flag.
+mixed territory. PvP there is always active outside explicit
+server-authoritative sanctuary subzones. There is no opt-in flag.
 
 ### Challenge Produces Earned Progress
 
@@ -123,7 +124,8 @@ not biological restrictions.
 ### Mixed Territory
 
 - Both factions receive PvE quests and world objectives in the same regions.
-- PvP is mandatory and always enabled.
+- PvP is mandatory and always enabled except inside explicit
+  server-authoritative sanctuary subzones.
 - The game clearly communicates the transition before a player crosses it.
 - Hostile-player risk raises the value of resources and rewards.
 - Territory objectives provide stronger incentives than random killing.
@@ -154,20 +156,26 @@ Faction Doctrine identities are defined in
 
 ## Combat
 
-Combat is third-person, action-based, and mostly non-targeted.
+Combat is third-person, action-based, and pure free aim. The player aims an
+authored attack; neither a soft lock nor a selected target determines
+authoritative contact.
 
 ### Authoritative Rules
 
 - The server decides movement validity, hits, damage, healing, resources,
   cooldowns, crowd control, death, loot, and PvP rewards.
-- Clients may predict local movement, animation, and presentation.
-- Melee attacks use server-validated swept traces during authored animation
-  windows.
+- Clients may predict supported local movement, GAS activation, animation, and
+  reversible presentation, but never a hit or persistent outcome.
+- Melee attacks use server-resolved swept volumes during authored windows on a
+  server-owned attack timeline.
 - Projectiles and persistent combat areas are server owned.
 - Dodges grant a server-validated defensive window.
 - Blocks are directional and consume a defensive resource.
 - Input buffering supports deliberate combo timing without automating the
   rotation.
+- Animation notifies, sockets, effects, audio, and camera feedback visualize the
+  authoritative timeline but do not create gameplay truth.
+- The server never accepts a client-selected target or claimed contact.
 
 ### Readability Rules
 
@@ -263,6 +271,11 @@ Confirmed rules:
 - Planned appearance categories include race, sex, body preset, face, hair,
   markings, and voice.
 
+Before the 2.0 faction stage, persisted characters use
+`Faction = Unassigned`. Doctrine is unavailable until the approved one-time
+faction choice. This delivery state does not change the target-game flow in
+which a faction character begins in its protected territory.
+
 ## Lore Spine
 
 Aetheln was dreamed into existence by the Waking Star. The Star's light is the
@@ -327,4 +340,5 @@ The following require dedicated design decisions and must not be guessed:
 - Territory population balancing and outnumbered-faction support.
 - Capital-invasion schedule, scale, victory state, and recovery duration.
 - Skein slot counts, unlock cadence, and class-specific Forms.
+- Relationship between Character Level and Doctrine prerequisites.
 - Ember Cycle duration and seasonal reset details.

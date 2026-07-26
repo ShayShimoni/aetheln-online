@@ -44,12 +44,15 @@ Character Level may unlock:
 - Class abilities and deeper combat interactions.
 - Equipment and content tiers.
 - Skein Forms, Threads, and Keystones.
-- Faction Doctrine options.
 - Access to increasingly dangerous regions and encounters.
 
 The maximum level, experience curve, unlock schedule, and level requirements are
 TBD. Levels must introduce complexity gradually rather than presenting the full
 combat system at character creation.
+
+Whether Character Level is a prerequisite for any Faction Doctrine option is an
+open design decision. Do not encode an assumed relationship before it is
+resolved.
 
 ### Ember Rank
 
@@ -168,16 +171,20 @@ weaving changes real combat decisions:
 - A small set of primary class abilities with mutually exclusive Forms.
 - A small equipped Thread loadout chosen from a larger unlocked collection.
 - One equipped Keystone.
-- One equipped Faction Doctrine.
+- One equipped Faction Doctrine when the faction stage introduces it.
 - A clear loadout screen that shows every active connection.
 
 An illustrative prototype configuration could use four primary abilities, two
-Forms per ability, three Thread slots, one Keystone slot, and one Doctrine slot.
-Those counts are examples only; the final counts are TBD.
+Forms per ability, three Thread slots, one Keystone slot, and one eventual
+Doctrine slot. Those counts are examples only; the final counts are TBD.
 
 Changing an equipped weave should occur at a defined safe service, such as a
 city trainer or rest point, during the initial implementation. Costs, field
 changes, saved loadouts, and competitive restrictions are TBD.
+
+Doctrine enters the playable delivery only with faction selection. Before the
+2.0 faction stage, a persisted character has `Faction = Unassigned`, cannot
+equip a Doctrine, and remains valid without one.
 
 ### Unlocking and Extensibility
 
@@ -285,6 +292,15 @@ controlled amount of affix variation.
 
 There is no requirement to issue a reward on a timed cadence. Reward value comes
 from the challenge, risk, and accomplishment that produced it.
+
+### Delivery Staging
+
+- The 1.0 cooperative vertical slice persists permanent progress and bounded
+  integer currency rewards through transactional, idempotent receipts.
+- Generated item inventory and equipment begin in 1.1 with item ownership,
+  versioning, migration, and reconciliation.
+- Deferring item rewards from 1.0 does not change the target loot design in this
+  document.
 
 ## Server-Side Drop Algorithm
 
@@ -471,29 +487,37 @@ Skein direction, attributes, loot probability, or combat power.
 Character
 |-- Identity
 |   |-- Character ID
-|   |-- Name
+|   `-- Name
+|-- Appearance
 |   |-- Race
 |   |-- Sex: Male or Female
-|   `-- Faction
-|-- Appearance
 |   |-- Body
 |   |-- Face
 |   |-- Hair
 |   |-- Markings
 |   `-- Voice
-|-- Class Progression
-|   |-- Character Level and Experience
-|   |-- Ember Rank
+|-- Permanent Progression
+|   |-- Character Level
+|   `-- Experience
+|-- Seasonal Progression
+|   `-- Ember Rank and Ember Cycle
+|-- Class and Skein
+|   |-- Class
 |   |-- Learned Abilities
 |   |-- Unlocked Forms, Threads, and Keystones
-|   |-- Equipped Skein Weave
-|   `-- Faction Doctrine
+|   `-- Equipped Skein Weave
+|-- Faction and Doctrine
+|   |-- Faction: Unassigned before 2.0, then selected faction
+|   |-- Doctrine Unlocks
+|   `-- Equipped Doctrine
 |-- Inventory and Equipment
-`-- Cosmetic Loadout
+|-- Cosmetics
+`-- Session and Location
 ```
 
-Faction selection determines the faction starting territory, story, and
-Doctrine. Any faction-change policy is TBD.
+The approved one-time faction selection determines the faction starting
+territory, story, and Doctrine. Doctrine is unavailable while faction is
+unassigned. Any later faction-change policy is TBD.
 
 Male and female presentations may use different bodies, faces, hair, voices, and
 animations. Combat collision, reach, trace rules, timing, and readable
@@ -520,6 +544,12 @@ assert that an objective or opponent was defeated.
 
 Every persistent mutation needs a stable request or event ID, authorization,
 validation, an atomic transaction, and an audit record.
+
+The persistence implementation additionally requires a single active character
+authority lease with a monotonically increasing fencing epoch, optimistic state
+versions, an immutable reward/currency ledger, and a transactional outbox. The
+canonical technical rules live in
+[Progression and Persistence Architecture](progression-and-persistence-architecture.md).
 
 ## Acceptance Criteria for Future Implementation
 
@@ -553,6 +583,7 @@ validation, an atomic transaction, and an audit record.
 ## Tuning Decisions Still Open
 
 - Character Level cap, experience curve, and unlock cadence.
+- Relationship between Character Level and Doctrine prerequisites.
 - Ember Rank names, rewards, and any seasonal rules.
 - Exact Form, Thread, Keystone, and Doctrine collections.
 - Number of equipped choices and loadout-change rules.

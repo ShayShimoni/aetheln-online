@@ -286,3 +286,8 @@ faction conflict asks whether memory can ever be owned for the common good.
 - Every playable race may join either player faction.
 - Character appearance and voice are independent from class, faction, Skein,
   equipment, and progression data.
+
+Faction selection enters the playable delivery in 2.0. Before that stage,
+persisted characters use `Faction = Unassigned` and have no Doctrine. The
+approved one-time selection then assigns the protected starting territory,
+faction story, and Doctrine; any later faction-change policy remains open.

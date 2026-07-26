@@ -13,14 +13,17 @@ attempts the full faction world.
 
 Read the [documentation index](docs/documentation-index.md) and
 [canonical game-design bible](docs/game-design-bible.md) for the current product
-direction.
+direction. Read the
+[technical architecture](docs/technical-architecture.md) before planning
+implementation.
 
 ## Canonical Design
 
 - Two opposing factions have distinct protected starting territories, quests,
   skills, and utility progression.
 - Rival factions meet in mixed territories where open-world PvP is mandatory
-  and cannot be disabled.
+  and cannot be disabled except inside explicit server-authoritative sanctuary
+  subzones.
 - Neutral mixed cities are safe. Faction capitals allow difficult individual
   infiltration and organized invasions without exposing beginner districts.
 - Every playable race supports male and female characters. Race and sex do not
@@ -34,6 +37,8 @@ direction.
   and judgment remain decisive.
 - The server owns combat outcomes, progression, item generation, loot grants,
   contested-resource loss, and faction rewards.
+- Combat uses pure free aim. The server resolves authored attack volumes and
+  never accepts a client-selected target or claimed hit.
 
 Detailed rules live in:
 
@@ -41,6 +46,25 @@ Detailed rules live in:
 - [Characters and Factions](docs/characters-and-factions.md)
 - [World and Settlements](docs/world-and-settlements.md)
 - [Progression, Loot, Skein Weaving, and Character Creation](docs/progression-loot-and-skein.md)
+
+## Canonical Architecture
+
+The [technical architecture overview](docs/technical-architecture.md) defines
+system context, trust zones, state ownership, Unreal module boundaries, staged
+topology, public contracts, and evidence gates.
+
+Focused specifications cover:
+
+- [Combat and Networking](docs/combat-and-networking-architecture.md)
+- [World Runtime and Building](docs/world-runtime-and-building.md)
+- [Progression and Persistence](docs/progression-and-persistence-architecture.md)
+- [Security and Operations](docs/security-and-operations.md)
+- [Performance, Quality, and Delivery](docs/performance-quality-and-delivery.md)
+- [Architecture Decisions](docs/architecture-decisions.md)
+
+Product documents govern player behavior. Technical documents govern
+implementation. Roadmaps govern delivery order, while GitHub Issues govern work
+status, priority, and ownership. Historical research is non-authoritative.
 
 ## Delivery Roadmap
 
@@ -52,9 +76,12 @@ The prototype proves the technical foundation and core combat before persistence
 
 - A one-page game brief defines the core loop, combat identity, target party size, success criteria, and explicit exclusions
 - Unreal Engine 5.8, C++, repository safeguards, and module boundaries form a repeatable baseline
-- Two connected players can move, aim, attack, dodge, take damage, die, and respawn in one greybox arena
+- Two connected players can move, use pure-free-aim attacks, dodge, take damage,
+  die, and respawn in one greybox arena
 - Movement and combat remain understandable under representative latency and packet loss
 - The server rejects invalid movement, attacks, cooldown use, and damage
+- Foundational CI, multiplayer automation, structured rejection telemetry, and
+  performance instrumentation run
 - Local build, multiplayer test, logging, and performance checks are documented
 
 The prototype must satisfy the agreed exit criteria before work advances to the 1.0 vertical slice.
@@ -69,7 +96,8 @@ The MVP is the smallest externally playable version of the core experience:
 - Responsive movement, aiming, abilities, dodge, damage, death, and respawn
 - Readable enemy attacks and one server-authoritative boss encounter
 - Party formation, world travel, completion flow, and return to the hub
-- Minimal persistent progression and safe, auditable reward grants
+- Minimal permanent progression plus bounded integer currency rewards with
+  transactional, idempotent receipts
 - Server-owned persistence APIs and validation of untrusted client actions
 - Logging, crash reporting, multiplayer tests, and performance budgets
 - A packaged build suitable for an external playtest
@@ -77,10 +105,12 @@ The MVP is the smallest externally playable version of the core experience:
 ### Later Versions
 
 - **1.1.0 - Character Development:** inventory, equipment, permanent levels,
-  initial Skein Weaving, CI quality gates, and structured playtest triage.
+  initial Skein Weaving, expanded CI/automation coverage, and structured
+  playtest triage.
 - **1.2.0 - Social and Operations:** cooperative matchmaking, text chat,
   friends, and test administration or account-recovery tools.
-- **2.0.0 - Faction Frontier:** two faction identities, representative starting
+- **2.0.0 - Faction Frontier:** the one-time choice from
+  `Faction = Unassigned`, two faction identities, representative starting
   experiences, one mixed territory with mandatory PvP, a safe neutral city,
   contested resources, PvP rewards, balance telemetry, and exploit testing.
 - **2.1.0 - Faction War:** expanded faction territories, individual capital
@@ -101,12 +131,13 @@ Complete roadmap work in dependency order:
 
 1. Finish the game brief and prototype success criteria under [Epic #1](https://github.com/ShayShimoni/aetheln-online/issues/1).
 2. Configure Unreal source-control and Git LFS safeguards in [Issue #14](https://github.com/ShayShimoni/aetheln-online/issues/14).
-3. Bootstrap and verify the Unreal Engine 5.8 C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
-4. Record Unreal Engine 5.8 as the selected engine and validate its networking, authority, latency, disconnect, and hosting approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
-5. Establish repeatable local client and dedicated-server builds in [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15).
-6. Implement and validate replicated third-person movement in [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17).
-7. Build the smallest server-authoritative combat arena through [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6).
-8. Evaluate the prototype against the exit criteria in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before beginning the 1.0 vertical slice.
+3. Publish and maintain the canonical technical baseline in [Issue #59](https://github.com/ShayShimoni/aetheln-online/issues/59).
+4. Bootstrap and verify the Unreal Engine 5.8 C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
+5. Record Unreal Engine 5.8 as the selected engine and validate its networking, authority, latency, disconnect, and hosting approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
+6. Establish repeatable local client and dedicated-server builds in [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15).
+7. Implement and validate replicated third-person movement in [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17).
+8. Build the smallest server-authoritative combat arena through [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6).
+9. Evaluate the prototype against the exit criteria in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before beginning the 1.0 vertical slice.
 
 The [GitHub Issues backlog](https://github.com/ShayShimoni/aetheln-online/issues) remains the source of truth for work status, priority, ownership, and target version. This roadmap defines stage boundaries and dependencies.
 
@@ -122,6 +153,11 @@ The repository currently contains planning and contribution infrastructure:
 - `docs/world-and-settlements.md` - territory, city, and invasion rules
 - `docs/progression-loot-and-skein.md` - progression, builds, equipment, and
   server-side reward rules
+- `docs/technical-architecture.md` - canonical technical overview and system
+  boundaries
+- `docs/*-architecture.md` plus `docs/security-and-operations.md` and
+  `docs/performance-quality-and-delivery.md` - focused implementation
+  specifications and decision registry
 - `output/pdf/` - rendered copies of maintained PDF codices
 - `README.md` - product scope, roadmap, and contributor entry point
 

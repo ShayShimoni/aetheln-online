@@ -56,6 +56,11 @@ Every world region must declare:
 - Settlement services.
 - Duskbreak scar.
 
+Regions may contain more-specific subzones. The server resolves policy from the
+region through the most-specific matching subzone; an explicit sanctuary,
+respawn, beginner, or other protection rule takes precedence over a containing
+mixed territory's hostility.
+
 ### Protected Starting Territories
 
 Each faction has a distinct homeland experience. Rival players do not enter its
@@ -71,8 +76,9 @@ These territories provide:
 
 ### Mixed Territories
 
-Mixed territories host quests for both factions and always enable faction PvP.
-There is no voluntary flag.
+Mixed territories host quests for both factions and enable mandatory faction
+PvP except inside explicit server-authoritative sanctuary subzones. There is no
+voluntary flag.
 
 They combine:
 
@@ -93,6 +99,10 @@ Individuals may infiltrate through difficult routes. Organized groups may
 attack gates and military objectives. Beginner districts remain inaccessible,
 and invasion outcomes cannot permanently remove essential services.
 
+Capital military and invasion subzones are separate security and topology
+domains from protected beginner districts. An invasion route never grants
+travel or simulation authority over beginner content.
+
 ## Major Settlements
 
 ### Kindlehold - The Last Lit City
@@ -106,7 +116,7 @@ Revised role:
 - Primary safe mixed city.
 - Shared trade, crafting, diplomacy, and story services.
 - Meeting point for cross-faction threats such as the Ashen Choir.
-- Sanctuary where hostile abilities are disabled.
+- Sanctuary where the server rejects hostile activation and effect application.
 
 Kindlehold is not either faction's main capital. Its neutrality is unstable and
 politically valuable.
@@ -260,8 +270,8 @@ Future communities of people reincarnated from spent Embers.
 
 1. Faction-specific protected homeland.
 2. Faction border and frontier warning.
-3. Mandatory-PvP mixed territory.
-4. Safe mixed city for banking and services.
+3. Mandatory-PvP mixed territory outside explicit sanctuary subzones.
+4. Safe mixed-city sanctuary for banking and services.
 5. More dangerous mixed regions and world encounters.
 6. Enemy infiltration and faction-capital invasions.
 7. Seasonal movement of Selaen and major Emberfalls.
@@ -296,6 +306,8 @@ staging points, contest an Ember store, and challenge a faction commander.
 Confirmed limits:
 
 - Beginner districts are inaccessible to invaders.
+- Military/invasion subzones have no topology or authority path into beginner
+  districts.
 - Essential character services cannot be permanently disabled.
 - Guards make unsupported attacks dangerous but do not replace defenders.
 - Defenders receive a clear alert and a fast route to the threatened capital.
@@ -311,8 +323,14 @@ and reward values remain TBD.
 Protection comes from world structure and enforcement, not optional flagging.
 
 - Rival players cannot enter faction starting territories.
-- Safe mixed cities disable hostile abilities.
-- Mixed-territory PvP cannot be disabled.
+- Safe mixed-city sanctuary policy rejects hostile ability activation and
+  hostile effect application when the authoritative source or target is
+  protected.
+- Projectiles, persistent areas, periodic effects, summons, traps, forced
+  movement, and other proxies pass the same server protection check at each
+  gameplay application.
+- Mixed-territory PvP cannot be disabled outside an explicit
+  server-authoritative sanctuary or protected subzone.
 - Respawn areas prevent immediate re-kills.
 - Repeat-victim rewards rapidly decay toward zero.
 - Killing a greatly lower-power player provides no normal kill reward.
