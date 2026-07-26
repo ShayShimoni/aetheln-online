@@ -1,0 +1,79 @@
+# Unreal Engine generated data
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+StagedBuilds/
+PackagedBuilds/
+.ddc/
+
+# Generated data inside project plugins
+Plugins/**/Binaries/
+Plugins/**/DerivedDataCache/
+Plugins/**/Intermediate/
+Plugins/**/Saved/
+
+# Generated project and build-system files
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+*.xcodeproj/
+*.xcworkspace/
+*.target
+*.modules
+*.uatbuildrecord
+Build/**/FileOpenOrder/
+Build/Receipts/
+
+# Compiled objects and debug symbols outside generated directories
+*.o
+*.obj
+*.pch
+*.pdb
+*.ilk
+*.dSYM/
+
+# IDE and editor state
+.vs/
+.idea/
+.fleet/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+!.vscode/tasks.json
+*.code-workspace
+*.rsuser
+*.user
+*.userosscache
+*.sln.docstates
+
+# Test and analysis output
+TestResults/
+Coverage/
+*.coverage
+*.coveragexml
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+.envrc
+
+# Logs, temporary files, and operating-system metadata
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.stackdump
+*~
+~$*
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/

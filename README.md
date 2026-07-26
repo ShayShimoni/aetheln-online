@@ -1,55 +1,60 @@
 # Aetheln Online
 
-Aetheln Online is an online multiplayer fantasy game project.
+Aetheln Online is a server-authoritative multiplayer fantasy action RPG. The first goal is a focused MMO-lite vertical slice that proves the combat, cooperative loop, persistence, and technical architecture before the project expands in scale.
 
-## Product direction
+## Release Plan
 
-The first target is an **MMO-lite vertical slice**, not a full seamless-world MMORPG. The goal is to prove the core combat, multiplayer loop, progression, and technical architecture before expanding the world.
+### 1.0.0 - MVP
 
-## Initial MVP scope
+The MVP is the smallest externally playable version of the core experience:
 
-- Account login and character creation
-- One shared hub town
-- One outdoor adventure zone
-- One instanced cooperative dungeon
-- Two playable classes initially
-- Real-time combat with abilities, dodge, block, and readable enemy attacks
-- Server-authoritative multiplayer
-- Persistent character progression, inventory, and equipment
-- Party formation and cooperative matchmaking
-- Basic chat and friends functionality
-- One small PvP prototype
-- Logging, crash reporting, and basic administration tools
+- Account authentication, character creation, and session recovery
+- One shared hub, one outdoor objective, and one cooperative dungeon
+- Responsive movement, aiming, abilities, dodge, damage, death, and respawn
+- Readable enemy attacks and one server-authoritative boss encounter
+- Party formation, world travel, completion flow, and return to the hub
+- Minimal persistent progression and safe, auditable reward grants
+- Server-owned persistence APIs and validation of untrusted client actions
+- Logging, crash reporting, multiplayer tests, and performance budgets
+- A packaged build suitable for an external playtest
 
-## Deferred until after MVP
+### Later Versions
 
-- Seamless open world
-- Auction house and deep crafting economy
-- Player housing
-- Guild wars and sieges
-- Large raids
-- Mount, pet, and companion systems
-- Large cosmetic and transmog pipelines
+- **1.1.0 - Core Expansion:** CI quality gates, inventory, equipment, cooperative matchmaking, and structured playtest triage.
+- **1.2.0 - Social and Operations:** text chat, friends, and test administration or account-recovery tools.
+- **2.0.0 - PvP Expansion:** an isolated arena, PvP combat rules, balance telemetry, and exploit testing.
 
-## Delivery phases
+Large raids, seamless open-world technology, guild wars, housing, auction systems, deep crafting, mounts, pets, and large cosmetic pipelines remain outside the current roadmap.
 
-1. **Prototype:** movement, camera, combat, and one networked encounter.
-2. **Vertical slice:** hub, adventure zone, dungeon, progression, and party flow.
-3. **Pre-alpha:** repeatable content pipeline, additional content, tooling, and stability.
-4. **Alpha:** progression balance, social systems, performance, and longer sessions.
-5. **Beta:** scale, security, operations, onboarding, and support readiness.
-6. **Launch:** stable live service and sustainable release cadence.
+## Repository Structure
 
-## Work management
+The repository currently contains planning and contribution infrastructure:
 
-GitHub Issues are the source of truth for user stories, bugs, and technical tasks.
+- `.github/ISSUE_TEMPLATE/` - user story, bug, and technical-task templates
+- `.gitignore` - Unreal Engine, IDE, build-output, and local-secret exclusions
+- `README.md` - product scope, roadmap, and contributor entry point
 
-Recommended board flow:
+The planned Unreal Engine 5.8 layout uses `Source/` for C++ modules, `Content/` for game assets, `Config/` for tracked defaults, and `Plugins/` for project extensions. Generated directories such as `Binaries/`, `DerivedDataCache/`, `Intermediate/`, and `Saved/` must not be committed.
 
-`Backlog → Ready → In Progress → Code Review → Done`
+## Getting Started
 
-Each user story should contain acceptance criteria and a definition of done. Pull requests should link their issue using `Closes #<issue-number>`.
+```powershell
+git clone --branch develop https://github.com/ShayShimoni/aetheln-online.git
+cd aetheln-online
+```
 
-## Current status
+No Unreal project, build command, or automated test command is available yet. The engine, networking, backend, and hosting spikes must be completed before implementation commands are documented.
 
-Repository initialized for planning. Engine, backend stack, hosting model, and art pipeline remain explicit architecture decisions to validate through prototype work.
+## Work Management
+
+[GitHub Issues](https://github.com/ShayShimoni/aetheln-online/issues) are the source of truth for epics, stories, features, tasks, and defects. Work is planned in the [Aetheln Online Development project](https://github.com/users/ShayShimoni/projects/1).
+
+Board workflow:
+
+`Backlog -> Open -> In Progress -> Code Review -> Dev Done -> QA -> Done`
+
+Use `Blocked` only when work cannot progress, and populate `Blocked Reason`. Priorities range from `P0 - Must` to `P3 - Later`; `Target Version` records the intended release. Pull requests should describe the change, report exact verification, link the relevant issue, and use `Closes #<issue-number>` when appropriate.
+
+## Current Status
+
+The repository is in planning and technical-foundation setup. All current tickets are prioritized and versioned; implementation has not started.
