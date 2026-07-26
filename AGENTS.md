@@ -25,6 +25,15 @@ Use Unreal Engine C++ conventions: tabs for C++ indentation, PascalCase types an
 
 Add focused automation tests beside each implemented system when practical. For networking changes, verify at least two PIE clients, replication, server authority, death/respawn, and behavior under simulated lag or packet loss. Record manual test steps in the pull request when automation is unavailable.
 
+## Environment Strategy
+
+During prototype, use only:
+
+- `local` for contributor machines, local services, and developer-specific configuration.
+- `development` for multiplayer, backend, and `develop` branch integration testing.
+
+Keep `QA` as a board status, not an environment. Add `staging` for external playtests or release candidates and `production` only for a public service. Isolate endpoints, credentials, databases, and logs. Commit example configuration only; keep secrets outside the repository.
+
 ## Commit & Pull Request Guidelines
 
 No Git history is available, so no existing commit convention can be inferred. Use short imperative subjects, for example `Add replicated sprint ability`. Keep commits scoped. Pull requests should explain intent, list verification performed, link relevant tasks, and include screenshots or video for visible gameplay or UI changes.
