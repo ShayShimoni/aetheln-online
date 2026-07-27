@@ -8,6 +8,8 @@ events, migrations, reconciliation, and staged persistence scope.
 
 Player-facing progression, equipment, loot, and Skein rules remain governed by
 [Progression, Loot, Skein Weaving, and Character Creation](progression-loot-and-skein.md).
+Player-facing race anatomy and appearance categories remain governed by
+[Playable Peoples](playable-peoples.md).
 Database and backend products remain candidates until
 [Issue #36](https://github.com/ShayShimoni/aetheln-online/issues/36) records an
 accepted decision.
@@ -91,7 +93,7 @@ The logical model separates:
 | Aggregate | Examples | Independent concerns |
 | --- | --- | --- |
 | Identity | Character ID, account link, name | Ownership and naming policy |
-| Appearance | Race, sex, body, face, hair, markings, voice | Presentation only |
+| Appearance | Race, sex, body, constrained visual height, age presentation, face, skin, markings, voice, race features | Presentation only |
 | Permanent progression | Character Level, experience, unlocks | Never seasonal |
 | Seasonal progression | Ember Rank and cycle identity | Compression/reset policy |
 | Class and Skein | Class, learned abilities, Forms, Threads, Keystone, equipped weave | Loadout validation |
@@ -107,6 +109,23 @@ silently changing another.
 Race, sex, appearance, and cosmetics never feed authoritative attributes,
 collision, reach, timing, loot probability, faction eligibility, or class
 eligibility.
+
+`RaceFeatures` is validated as a race-discriminated appearance block rather
+than a shared list of nullable fields:
+
+- Aurin store hair style, hair color, and hair-dye treatment.
+- Kell store crown, mantle, mineral family, mineral finish, wear, engraving,
+  and inlay.
+- Vesh store hair, veil form, veil adornment, inner-light hue, and light
+  pattern.
+
+The exact transport and storage shape remains an implementation decision. The
+semantic contract must reject fields that do not belong to the selected race
+and must keep all appearance data outside combat, class, faction, progression,
+and equipment authority.
+
+Portable cultural pigments and adornment styles use shared marking, cosmetic,
+or equipment data rather than a race-restricted feature field.
 
 ## Versioning Model
 

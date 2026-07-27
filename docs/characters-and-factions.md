@@ -9,6 +9,9 @@ open-world-PvP direction.
 Faction names are working names. Character loyalties describe their current
 position and may change through the story.
 
+Playable anatomy, visual identity, culture, and presentation contracts are
+defined in [Playable Peoples](playable-peoples.md).
+
 ## Faction Conflict
 
 ### Dawn Concordat - Working Name
@@ -182,7 +185,9 @@ Conflict:
 - **Combat lesson:** line of sight, healing angles, and area control
 
 Corvath crystallized from the glassed earth during the Duskbreak and remembers
-the catastrophe from inside its light.
+the catastrophe from inside its light. He remains a unique living-glass Kell:
+his complete material state is not ordinary Kell biology or an available player
+appearance.
 
 He preserves people at the instant before death as conscious, painless living
 glass. Among them is Maren Dross. Corvath considers this mercy; others consider
@@ -286,6 +291,8 @@ faction conflict asks whether memory can ever be owned for the common good.
 - Every playable race may join either player faction.
 - Character appearance and voice are independent from class, faction, Skein,
   equipment, and progression data.
+- Aurin, Kell, and Vesh use the race-specific appearance and shared combat
+  contracts defined in [Playable Peoples](playable-peoples.md).
 
 Faction selection enters the playable delivery in 2.0. Before that stage,
 persisted characters use `Faction = Unassigned` and have no Doctrine. The

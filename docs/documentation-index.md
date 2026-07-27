@@ -6,9 +6,10 @@ These documents govern player-facing behavior, lore, progression, and world
 rules. Read the Bible first, then the specialized document for the system.
 
 1. [Game Design Bible](game-design-bible.md)
-2. [Characters and Factions](characters-and-factions.md)
-3. [World, Settlements, and Open-World PvP](world-and-settlements.md)
-4. [Progression, Loot, and Skein Weaving](progression-loot-and-skein.md)
+2. [Playable Peoples](playable-peoples.md)
+3. [Characters and Factions](characters-and-factions.md)
+4. [World, Settlements, and Open-World PvP](world-and-settlements.md)
+5. [Progression, Loot, and Skein Weaving](progression-loot-and-skein.md)
 
 ## Canonical Technical Documents
 

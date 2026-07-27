@@ -5,8 +5,9 @@ boundaries and the canonical dependency order. The
 [Game Design Bible](game-design-bible.md) defines the target game. GitHub Issues
 remain the source of truth for work status, priority, ownership, and target
 version. The [Technical Architecture](technical-architecture.md) defines the
-implementation baseline. This document expands only the pre-1.0 prototype
-stage.
+implementation baseline. [Playable Peoples](playable-peoples.md) defines the
+future character-body and presentation contracts. This document expands only
+the pre-1.0 prototype stage.
 
 **Do not begin by building the full MMORPG. Build a small, networked action-combat prototype first.**
 
@@ -84,6 +85,9 @@ Prototype code and data must not prevent the confirmed future direction:
   decisive.
 - Every playable race supports male and female characters with identical
   combat rules and standardized hitboxes.
+- The confirmed future playable peoples are Aurin, Kell, and Vesh. Their
+  race-specific anatomy and animation presentation must remain outside
+  authoritative combat behavior.
 - Future character appearance data remains separate from class, faction,
   progression, and combat state.
 - Persistent characters remain `Faction = Unassigned` before the 2.0 faction

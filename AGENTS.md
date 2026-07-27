@@ -8,6 +8,7 @@ structure, or delivery scope, read:
 1. `docs/documentation-index.md`
 2. `docs/game-design-bible.md`
 3. The specialized canonical document for the system:
+   - `docs/playable-peoples.md`
    - `docs/characters-and-factions.md`
    - `docs/world-and-settlements.md`
    - `docs/progression-loot-and-skein.md`
