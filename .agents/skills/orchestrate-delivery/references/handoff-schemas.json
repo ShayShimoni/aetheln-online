@@ -1,0 +1,319 @@
+{
+  "schema_version": 1,
+  "common_required": [
+    "schema_version",
+    "stage",
+    "run_id",
+    "workspace_root",
+    "source_commit",
+    "ticket",
+    "acceptance_criteria",
+    "canonical_sources",
+    "output_contract"
+  ],
+  "common_allowed": [
+    "schema_version",
+    "stage",
+    "run_id",
+    "workspace_root",
+    "source_commit",
+    "ticket",
+    "acceptance_criteria",
+    "canonical_sources",
+    "output_contract",
+    "execution_policy"
+  ],
+  "execution_policy": {
+    "allowed": [
+      "attempt_ordinal",
+      "attempt_class",
+      "capability_class",
+      "retry_cause",
+      "limits"
+    ],
+    "attempt_classes": [
+      "initial",
+      "replacement",
+      "fix",
+      "adjudication"
+    ],
+    "capability_classes": [
+      "economy",
+      "standard",
+      "elevated"
+    ],
+    "economy_prohibited_stages": [
+      "verifier",
+      "reviewer",
+      "approver",
+      "adjudicator",
+      "qa"
+    ],
+    "limits_allowed": [
+      "total_tokens",
+      "elapsed_milliseconds",
+      "concurrent_stages",
+      "execution_retries",
+      "fix_cycles",
+      "provenance",
+      "approved_at_utc"
+    ]
+  },
+  "neutral_evidence_schema": {
+    "record_fields": [
+      "kind",
+      "provenance",
+      "encoding",
+      "source",
+      "sha256",
+      "content"
+    ],
+    "kinds": [
+      "text",
+      "command_log",
+      "artifact",
+      "diff",
+      "status",
+      "path_list"
+    ],
+    "provenances": [
+      "control_plane",
+      "repository",
+      "launcher",
+      "stage",
+      "external"
+    ],
+    "encodings": [
+      "utf8",
+      "base64"
+    ]
+  },
+  "blind_prohibited_keys": [
+    "agent_identity",
+    "agent_name",
+    "prior_findings",
+    "prior_verdict",
+    "verdict",
+    "confidence",
+    "severity",
+    "resolution",
+    "resolution_label",
+    "expected_outcome",
+    "preferred_outcome",
+    "corrections",
+    "implementer_narrative",
+    "verifier_conclusion",
+    "reviewer_conclusion"
+  ],
+  "stages": {
+    "analyst": {
+      "required": [
+        "board_export",
+        "repository_tree",
+        "repository_state"
+      ],
+      "allowed": [
+        "board_export",
+        "repository_tree",
+        "repository_state"
+      ],
+      "blind": false
+    },
+    "synthesizer": {
+      "required": [
+        "canonical_indexes",
+        "board_export",
+        "repository_tree",
+        "repository_state"
+      ],
+      "allowed": [
+        "canonical_indexes",
+        "board_export",
+        "repository_tree",
+        "repository_state"
+      ],
+      "neutral_evidence_fields": {
+        "board_export": "single:text:external|control_plane",
+        "repository_tree": "single:text:repository",
+        "repository_state": "single:status:repository|launcher"
+      },
+      "blind": true
+    },
+    "worker": {
+      "required": [
+        "allowed_paths",
+        "non_goals",
+        "required_checks",
+        "baseline_status",
+        "baseline_diff"
+      ],
+      "allowed": [
+        "execution_route",
+        "classifier_evidence",
+        "work_package",
+        "allowed_paths",
+        "non_goals",
+        "required_checks",
+        "baseline_status",
+        "baseline_diff"
+      ],
+      "blind": false
+    },
+    "integrator": {
+      "required": [
+        "candidate_artifacts",
+        "integration_order",
+        "conflict_locations",
+        "allowed_paths",
+        "non_goals",
+        "baseline_status",
+        "baseline_diff"
+      ],
+      "allowed": [
+        "candidate_artifacts",
+        "integration_order",
+        "conflict_locations",
+        "allowed_paths",
+        "non_goals",
+        "baseline_status",
+        "baseline_diff",
+        "required_checks"
+      ],
+      "neutral_evidence_fields": {
+        "candidate_artifacts": "array:artifact:launcher",
+        "conflict_locations": "single:text:control_plane",
+        "baseline_status": "single:status:launcher",
+        "baseline_diff": "single:diff:launcher"
+      },
+      "blind": true
+    },
+    "verifier": {
+      "required": [
+        "candidate_artifact",
+        "test_environment",
+        "commands",
+        "raw_check_output"
+      ],
+      "allowed": [
+        "candidate_artifact",
+        "test_environment",
+        "commands",
+        "raw_check_output"
+      ],
+      "neutral_evidence_fields": {
+        "candidate_artifact": "single:artifact:launcher",
+        "raw_check_output": "array:command_log:launcher"
+      },
+      "blind": true
+    },
+    "reviewer": {
+      "required": [
+        "baseline_status",
+        "baseline_diff",
+        "allowed_paths",
+        "non_goals",
+        "final_diff",
+        "artifact_state",
+        "raw_check_output"
+      ],
+      "allowed": [
+        "baseline_status",
+        "baseline_diff",
+        "allowed_paths",
+        "non_goals",
+        "final_diff",
+        "artifact_state",
+        "raw_check_output"
+      ],
+      "neutral_evidence_fields": {
+        "baseline_status": "single:status:launcher",
+        "baseline_diff": "single:diff:launcher",
+        "final_diff": "single:diff:launcher",
+        "artifact_state": "single:status:launcher",
+        "raw_check_output": "array:command_log:launcher"
+      },
+      "blind": true
+    },
+    "fixer": {
+      "required": [
+        "candidate_artifact",
+        "accepted_findings",
+        "allowed_paths",
+        "non_goals",
+        "required_checks",
+        "baseline_status",
+        "baseline_diff"
+      ],
+      "allowed": [
+        "candidate_artifact",
+        "accepted_findings",
+        "allowed_paths",
+        "non_goals",
+        "required_checks",
+        "baseline_status",
+        "baseline_diff"
+      ],
+      "blind": false
+    },
+    "adjudicator": {
+      "required": [
+        "neutral_question",
+        "raw_evidence"
+      ],
+      "allowed": [
+        "neutral_question",
+        "raw_evidence",
+        "fix_pass_count",
+        "artifact_change_summary"
+      ],
+      "neutral_evidence_fields": {
+        "raw_evidence": "array:text|command_log|artifact|diff|status:repository|launcher|control_plane|external",
+        "artifact_change_summary": "single:status:launcher"
+      },
+      "blind": true
+    },
+    "approver": {
+      "required": [
+        "baseline_status",
+        "baseline_diff",
+        "allowed_paths",
+        "non_goals",
+        "final_artifact",
+        "raw_check_output"
+      ],
+      "allowed": [
+        "baseline_status",
+        "baseline_diff",
+        "allowed_paths",
+        "non_goals",
+        "final_artifact",
+        "raw_check_output"
+      ],
+      "neutral_evidence_fields": {
+        "baseline_status": "single:status:launcher",
+        "baseline_diff": "single:diff:launcher",
+        "final_artifact": "single:artifact:launcher",
+        "raw_check_output": "array:command_log:launcher"
+      },
+      "blind": true
+    },
+    "qa": {
+      "required": [
+        "merged_commit",
+        "target_environment",
+        "qa_procedure",
+        "raw_runtime_evidence"
+      ],
+      "allowed": [
+        "merged_commit",
+        "target_environment",
+        "qa_procedure",
+        "raw_runtime_evidence"
+      ],
+      "neutral_evidence_fields": {
+        "raw_runtime_evidence": "array:command_log:launcher|external"
+      },
+      "blind": true
+    }
+  }
+}
