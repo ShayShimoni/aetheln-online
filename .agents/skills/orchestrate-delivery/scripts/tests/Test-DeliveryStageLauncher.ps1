@@ -148,7 +148,7 @@ function Invoke-TestGitBytes {
 		throw "Git command '$Arguments' failed: $StandardError"
 	}
 
-	return [byte[]]$Result
+	return ,([byte[]]$Result)
 }
 
 function Get-TestSha256 {
@@ -1343,6 +1343,46 @@ Add-Result `
 Add-Result `
 	-Name 'Production launcher has no command override' `
 	-Passed (-not (Get-Command $LaunchScript).Parameters.ContainsKey('CodexCommand'))
+
+$LauncherTokens = $null
+$LauncherParseErrors = $null
+$LauncherAst = [System.Management.Automation.Language.Parser]::ParseFile(
+	$LaunchScript,
+	[ref]$LauncherTokens,
+	[ref]$LauncherParseErrors
+)
+$GitBytesFunctionAst = $LauncherAst.Find({
+	param($Node)
+
+	return (
+		$Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+		$Node.Name -ceq 'Invoke-DeliveryGitBytes'
+	)
+}, $true)
+$EmptyGitBytesPassed = $false
+$EmptyGitBytesDetail = ''
+try {
+	if ($LauncherParseErrors.Count -ne 0 -or $null -eq $GitBytesFunctionAst) {
+		throw 'Could not isolate the production Git byte helper.'
+	}
+
+	$WorkspaceRoot = $RepositoryRoot
+	. ([scriptblock]::Create($GitBytesFunctionAst.Extent.Text))
+	$EmptyGitBytes = Invoke-DeliveryGitBytes `
+		-Arguments 'status --porcelain=v1 -z --untracked-files=no -- .delivery-empty-output-probe'
+	$EmptyGitBytesPassed = (
+		$null -ne $EmptyGitBytes -and
+		$EmptyGitBytes -is [byte[]] -and
+		$EmptyGitBytes.Length -eq 0
+	)
+}
+catch {
+	$EmptyGitBytesDetail = $_.Exception.Message
+}
+Add-Result `
+	-Name 'Production Git byte helper preserves successful empty output' `
+	-Passed $EmptyGitBytesPassed `
+	-Detail $EmptyGitBytesDetail
 
 $LauncherSource = Get-Content -Raw -LiteralPath $LaunchScript
 $MutationGateIndex = $LauncherSource.IndexOf('$ChangedPaths.Count -eq 0')

@@ -228,7 +228,7 @@ function Invoke-DeliveryGitBytes {
 		throw "Git command '$Arguments' failed: $StandardError"
 	}
 
-	return $Result
+	return ,$Result
 }
 
 function Invoke-DeliveryGitText {
