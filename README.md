@@ -29,6 +29,9 @@ implementation.
 - Every playable race supports male and female characters. Race and sex do not
   change combat statistics, class access, faction access, or authoritative
   hitboxes.
+- The confirmed playable peoples are human Aurin, organic-mineral Kell, and
+  dream-veiled Vesh. Culture, anatomy, and presentation never grant racial
+  gameplay advantages or lock faction, class, or equipment access.
 - Permanent Character Levels are separate from seasonal Ember Rank.
 - Skein Weaving uses ability Forms, action-to-action Threads, a Keystone, and a
   Faction Doctrine instead of a traditional talent tree.
@@ -43,6 +46,7 @@ implementation.
 Detailed rules live in:
 
 - [Game Design Bible](docs/game-design-bible.md)
+- [Playable Peoples](docs/playable-peoples.md)
 - [Characters and Factions](docs/characters-and-factions.md)
 - [World and Settlements](docs/world-and-settlements.md)
 - [Progression, Loot, Skein Weaving, and Character Creation](docs/progression-loot-and-skein.md)
@@ -150,6 +154,8 @@ The repository currently contains planning and contribution infrastructure:
 - `.gitattributes` - Git LFS and locking rules for Unreal binary assets
 - `docs/documentation-index.md` - document authority and reading order
 - `docs/game-design-bible.md` - canonical product and gameplay direction
+- `docs/playable-peoples.md` - playable anatomy, culture, customization, and
+  presentation contracts
 - `docs/characters-and-factions.md` - faction ideologies and character loyalties
 - `docs/world-and-settlements.md` - territory, city, and invasion rules
 - `docs/progression-loot-and-skein.md` - progression, builds, equipment, and
@@ -192,6 +198,7 @@ Use `Blocked` only when work cannot progress, and populate `Blocked Reason`. Pri
 
 The repository is in planning and technical-foundation setup. Implementation
 has not started. The canonical direction now includes the faction world,
-mandatory mixed-territory PvP, Skein Weaving, and bounded equipment power. The
-next delivery gate remains the game brief under Epic #1, followed by the
-foundation and gameplay work in the dependency order above.
+mandatory mixed-territory PvP, Skein Weaving, bounded equipment power, and
+distinct, gameplay-neutral presentation for the Aurin, Kell, and Vesh. The next
+delivery gate remains the game brief under Epic #1, followed by the foundation
+and gameplay work in the dependency order above.

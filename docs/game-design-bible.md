@@ -261,6 +261,9 @@ must account for it from the beginning.
 
 Confirmed rules:
 
+- The confirmed playable peoples are Aurin, Kell, and Vesh. The Waking Star
+  dreamed each people separately, all three predate the Duskbreak, and no
+  confirmed account identifies which was dreamed first.
 - Every playable race supports male and female characters.
 - Sex does not change attributes, combat power, class access, faction access,
   or authoritative hitboxes.
@@ -268,18 +271,26 @@ Confirmed rules:
 - Every playable race may join either player faction.
 - Appearance data is separate from class, faction, progression, equipment, and
   combat state.
-- Planned appearance categories include race, sex, body preset, face, hair,
-  markings, and voice.
+- Planned appearance categories include race, sex, body preset, constrained
+  visual height, age presentation, face, skin, markings, voice, and a
+  race-discriminated feature set.
 
 Before the 2.0 faction stage, persisted characters use
 `Faction = Unassigned`. Doctrine is unavailable until the approved one-time
 faction choice. This delivery state does not change the target-game flow in
 which a faction character begins in its protected territory.
 
+Detailed anatomy, culture, customization, rig, animation, equipment-fitting,
+and art-validation rules are defined in
+[Playable Peoples](playable-peoples.md).
+
 ## Lore Spine
 
 Aetheln was dreamed into existence by the Waking Star. The Star's light is the
 source of life, magic, and memory.
+
+The Star dreamed the Aurin, Kell, and Vesh separately. All three peoples
+predate the Duskbreak, and their creation order remains unknown.
 
 The Lucent Choir attempted to bind that light permanently and caused the
 Duskbreak, cracking the Star and glassing much of civilization. The wounded

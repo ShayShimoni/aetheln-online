@@ -6,6 +6,9 @@ This is the canonical world and settlement summary for the faction-based,
 mandatory open-world-PvP direction. Settlement names remain subject to creative
 and legal review.
 
+Playable origins, anatomy, and cultural-heritage rules are defined in
+[Playable Peoples](playable-peoples.md).
+
 ## Cosmology
 
 Before the world there was the Deepwake, an ocean of unrealized dream. The
@@ -139,8 +142,9 @@ either faction.
 
 ### Graefell - The Undervault
 
-Graefell is carved into the glass canyon where the first Kell awakened. Dying
-light is preserved as memory in its geode archives.
+Graefell is carved into the canyon where the first Kell awakened before the
+Duskbreak. The catastrophe later turned the canyon to glass. Dying light is
+preserved as memory in its geode archives.
 
 Revised role:
 
@@ -152,15 +156,17 @@ Revised role:
 
 ### Selaen - The Drift
 
-Selaen is a moving fleet of Vesh lantern-barges and dream-tech platforms that
-follows predicted Emberfalls.
+Selaen is an airborne convoy of Vesh lantern-craft and dream-tech platforms
+that follows predicted Emberfalls. Resonant lantern engines read and ride
+predicted Ember currents to suspend and steer the convoy; Vesh bodies are not
+aquatic and cannot fly.
 
 Revised role:
 
 - Mobile neutral or conditionally aligned settlement.
 - Seasonal arrival point in mixed territory.
 - Source of dream forecasts, rare trade, and changing world objectives.
-- Safe sanctuary only while docked inside a defined mixed-city boundary.
+- Safe sanctuary only while stationed inside a defined mixed-city boundary.
 
 Its final political status remains open.
 

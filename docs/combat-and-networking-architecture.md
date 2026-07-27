@@ -6,6 +6,8 @@ This document is the canonical technical specification for movement, abilities,
 free-aim combat, replication, prediction, correction, and latency validation.
 Player-facing combat goals remain governed by the
 [Game Design Bible](game-design-bible.md).
+Player-facing body, rig, and animation-presentation rules remain governed by
+[Playable Peoples](playable-peoples.md).
 
 Technology selections that require measurement remain candidates in
 [Architecture Decisions](architecture-decisions.md).
@@ -23,6 +25,12 @@ Technology selections that require measurement remain candidates in
   Niagara, audio, and camera feedback visualize the result but do not create it.
 - Appearance, race, sex, cosmetics, and client visual scale never change
   authoritative collision, reach, timing, or damage.
+- Kell crown and mantle bones and Vesh back-veil bones are visual-only
+  auxiliaries. They never drive combat collision, authoritative traces, shared
+  weapon-presentation sockets, root motion, authored contact timing, or
+  gameplay state.
+- Presentation sockets and camera or aim-presentation anchors never establish
+  gameplay windows, volumes, contacts, trace origins, or selected targets.
 - Territory policy is checked both when a hostile action activates and when an
   effect would apply.
 

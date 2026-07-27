@@ -481,6 +481,10 @@ Every playable race supports both male and female characters. Race and sex are
 visual and cultural identity choices; they do not restrict class, faction,
 Skein direction, attributes, loot probability, or combat power.
 
+The canonical anatomy, appearance options, rig rules, equipment fitting, and
+art-validation requirements are defined in
+[Playable Peoples](playable-peoples.md).
+
 ### Logical Character Data
 
 ```text
@@ -489,13 +493,20 @@ Character
 |   |-- Character ID
 |   `-- Name
 |-- Appearance
-|   |-- Race
+|   |-- Race: Aurin, Kell, or Vesh
 |   |-- Sex: Male or Female
-|   |-- Body
-|   |-- Face
-|   |-- Hair
+|   |-- Body Preset
+|   |-- Constrained Visual-Height Preset
+|   |-- Age-Presentation Preset
+|   |-- Face Preset
+|   |-- Skin Tone
 |   |-- Markings
-|   `-- Voice
+|   |-- Voice
+|   `-- Race Features
+|       |-- Aurin: Hair Style, Hair Color, and Hair-Dye Treatment
+|       |-- Kell: Crown, Mantle, Mineral Family, Mineral Finish, Wear,
+|       |   Engraving, and Inlay
+|       `-- Vesh: Hair, Veil Form, Veil Adornment, Inner-Light Hue, and Pattern
 |-- Permanent Progression
 |   |-- Character Level
 |   `-- Experience
@@ -523,6 +534,22 @@ Male and female presentations may use different bodies, faces, hair, voices, and
 animations. Combat collision, reach, trace rules, timing, and readable
 telegraphs must remain equivalent so no presentation becomes a competitive
 advantage.
+
+All people and sexes share one authoritative combat capsule, one
+combat-presentation skeleton, weapon-socket alignment, camera and
+aim-presentation anchors, a server-authored trace model, contact timing, and
+root-motion distance. Kell crown and mantle bones and Vesh back-veil bones are
+visual-only auxiliaries. They never affect collision, authoritative traces,
+shared weapon-presentation sockets, reach, or gameplay state. No presentation
+socket establishes a hit volume, window, contact, or selected target.
+
+One equipment item has one gameplay identity and race-and-sex-fitted visual
+assets. Its fitting set must support every approved body, height, hair, crown,
+mantle, and veil combination without hiding biological anatomy or restricting
+equipment access.
+
+Portable cultural pigments and adornment styles belong to shared cosmetic,
+marking, or equipment layers rather than a race-restricted appearance field.
 
 The prototype may use one fixed character, but gameplay code and persistent data
 must not embed that character's race, sex, appearance, or faction inside class
@@ -579,6 +606,13 @@ canonical technical rules live in
 - Both choices can use every supported class and faction.
 - Appearance never changes combat collision, reach, timing, statistics, or drop
   chance.
+- Every saved race/sex/body combination validates against its race-specific
+  appearance schema.
+- Supported equipment appearances fit every people and sex without hiding
+  mandatory anatomy, including extreme supported customization combinations.
+- Race-specific animation presentation preserves alignment with shared
+  presentation sockets, server-authored traces, contact frames, root motion,
+  recovery, and readable telegraphs.
 
 ## Tuning Decisions Still Open
 
