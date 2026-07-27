@@ -40,6 +40,16 @@ canonical product rules rather than redefine them.
 The PDF codices are rendered artifacts of the canonical Markdown character and
 settlement documents.
 
+## Historical Research Archive
+
+- [Historical planning and research](research/README.md)
+
+The archive preserves feasibility, lore, delivery, environment, and roadmap
+background under Issue
+[#65](https://github.com/ShayShimoni/aetheln-online/issues/65). Archive contents
+are non-authoritative and must not override canonical product, technical, or
+delivery documents.
+
 ## Decision Precedence
 
 When documents disagree:
