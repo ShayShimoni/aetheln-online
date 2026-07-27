@@ -168,9 +168,9 @@ The planned Unreal Engine 5.8 layout uses `Source/` for C++ modules, `Content/` 
 ## Getting Started
 
 ```powershell
+git lfs install
 git clone --branch develop https://github.com/ShayShimoni/aetheln-online.git
 cd aetheln-online
-git lfs install
 ```
 
 Review the [Unreal source-control workflow](docs/source-control.md) before
