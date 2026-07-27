@@ -671,7 +671,7 @@ if ($null -eq $StageSchemaProperty) {
 
 $StageSchema = $StageSchemaProperty.Value
 $Required = @($Schema.common_required) + @($StageSchema.required)
-$AllowEmpty = @('baseline_diff')
+$AllowEmpty = @('baseline_status', 'baseline_diff')
 $Allowed = [System.Collections.Generic.HashSet[string]]::new(
 	[string[]](@($Schema.common_allowed) + @($StageSchema.allowed)),
 	[System.StringComparer]::Ordinal

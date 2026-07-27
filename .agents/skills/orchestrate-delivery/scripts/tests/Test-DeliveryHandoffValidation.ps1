@@ -304,6 +304,14 @@ $ExplicitPlanned.execution_route = 'planned'
 $ExplicitPlanned.work_package = 'Explicit planned package.'
 Invoke-AcceptanceCase -Name 'Explicit planned worker is accepted' -Handoff $ExplicitPlanned
 
+$CleanPlanned = $BaseWorkerHandoff.Clone()
+$CleanPlanned.execution_route = 'planned'
+$CleanPlanned.work_package = 'Clean planned package.'
+$CleanPlanned.baseline_status = ''
+Invoke-AcceptanceCase `
+	-Name 'Clean worker baselines are accepted' `
+	-Handoff $CleanPlanned
+
 $DirectTextEdit = $BaseWorkerHandoff.Clone()
 $DirectTextEdit.execution_route = 'direct'
 $DirectTextEdit.classifier_evidence = New-DirectClassifier `
