@@ -149,13 +149,13 @@ function ConvertFrom-DeliveryNeutralEvidenceBytes {
 
 	try {
 		if ([string]$Record.encoding -ceq 'utf8') {
-			return [System.Text.UTF8Encoding]::new($false, $true).GetBytes(
+			return ,([System.Text.UTF8Encoding]::new($false, $true).GetBytes(
 				[string]$Record.content
-			)
+			))
 		}
 
 		if ([string]$Record.encoding -ceq 'base64') {
-			return [System.Convert]::FromBase64String([string]$Record.content)
+			return ,([System.Convert]::FromBase64String([string]$Record.content))
 		}
 
 		throw 'Unexpected neutral evidence encoding.'
