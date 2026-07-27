@@ -934,26 +934,67 @@ Add-Result `
 	-Passed ([string]::IsNullOrEmpty($ReviewerUtf8Error)) `
 	-Detail $ReviewerUtf8Error
 
-$StaleReviewerPath = Join-Path $TestRoot 'reviewer-stale-final-diff.json'
-$StaleReviewer = Get-Content -Raw -LiteralPath $ReviewerHandoffPath |
-	ConvertFrom-Json
-$StaleReviewer.run_id = 'test-reviewer-stale-final-diff'
-$StaleReviewer.final_diff = New-NeutralEvidenceRecord `
-	-Kind diff `
-	-Provenance launcher `
-	-Source 'stale-final-diff' `
-	-Text $ReviewerBaselineDiff `
-	-Encoding base64
-$StaleReviewer | ConvertTo-Json -Depth 8 | Set-Content `
-	-LiteralPath $StaleReviewerPath -Encoding UTF8
-$StaleReviewerFailure = Invoke-ExpectedFailure `
-	-Pattern 'final_diff does not match' `
-	-Action {
-	& $LaunchScript -HandoffPath $StaleReviewerPath -DryRun | Out-Null
+$StaleFixtureRelativePath = 'reviewer-stale-fixture-' +
+	[guid]::NewGuid().ToString('N') + '.txt'
+$StaleFixturePath = Join-Path $RepositoryRoot $StaleFixtureRelativePath
+$StaleReviewerStatusBefore = Invoke-TestGitBytes `
+	-Arguments 'status --porcelain=v1 -z --untracked-files=all'
+$StaleReviewerSnapshotBefore = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+$StaleReviewerFailure = $false
+try {
+	Set-Content `
+		-LiteralPath $StaleFixturePath `
+		-Value 'stale reviewer fixture' `
+		-Encoding UTF8
+	$StaleFixtureStatusBytes = Invoke-TestGitBytes `
+		-Arguments 'status --porcelain=v1 -z --untracked-files=all'
+	$StaleFixtureBaselineStatus = Invoke-TestGitText `
+		-Arguments 'status --short --untracked-files=all'
+	$StaleReviewerPath = Join-Path $TestRoot 'reviewer-stale-final-diff.json'
+	$StaleReviewer = Get-Content -Raw -LiteralPath $ReviewerHandoffPath |
+		ConvertFrom-Json
+	$StaleReviewer.run_id = 'test-reviewer-stale-final-diff'
+	$StaleReviewer.allowed_paths = @('AGENTS.md', $StaleFixtureRelativePath)
+	$StaleReviewer.baseline_status = New-NeutralEvidenceRecord `
+		-Kind status `
+		-Provenance launcher `
+		-Source 'stale-baseline-status' `
+		-Text $StaleFixtureBaselineStatus
+	$StaleReviewer.final_diff = New-NeutralEvidenceRecord `
+		-Kind diff `
+		-Provenance launcher `
+		-Source 'stale-final-diff' `
+		-Text $ReviewerBaselineDiff `
+		-Encoding base64
+	$StaleReviewer.artifact_state = New-NeutralEvidenceByteRecord `
+		-Kind status `
+		-Provenance launcher `
+		-Source 'stale-artifact-state' `
+		-Bytes $StaleFixtureStatusBytes `
+		-Encoding base64
+	$StaleReviewer | ConvertTo-Json -Depth 8 | Set-Content `
+		-LiteralPath $StaleReviewerPath -Encoding UTF8
+	$StaleReviewerFailure = Invoke-ExpectedFailure `
+		-Pattern 'final_diff does not match' `
+		-Action {
+		& $LaunchScript -HandoffPath $StaleReviewerPath -DryRun | Out-Null
+	}
 }
+finally {
+	Remove-Item -LiteralPath $StaleFixturePath -Force -ErrorAction SilentlyContinue
+}
+$StaleReviewerStatusAfter = Invoke-TestGitBytes `
+	-Arguments 'status --porcelain=v1 -z --untracked-files=all'
+$StaleReviewerSnapshotAfter = & $SnapshotScript -RepositoryRoot $RepositoryRoot
 Add-Result `
 	-Name 'Stale tracked-only reviewer final diff is rejected' `
 	-Passed $StaleReviewerFailure
+Add-Result `
+	-Name 'Stale reviewer fixture restores repository state' `
+	-Passed (
+		$StaleReviewerSnapshotBefore.Hash -eq $StaleReviewerSnapshotAfter.Hash -and
+		(Test-TestByteArrayEqual $StaleReviewerStatusBefore $StaleReviewerStatusAfter)
+	)
 
 $FabricatedReviewerPath = Join-Path $TestRoot 'reviewer-fabricated-final-diff.json'
 $FabricatedReviewer = Get-Content -Raw -LiteralPath $ReviewerHandoffPath |
