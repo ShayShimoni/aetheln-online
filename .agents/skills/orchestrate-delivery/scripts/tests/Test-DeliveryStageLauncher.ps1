@@ -211,7 +211,10 @@ function New-NeutralEvidenceByteRecord {
 
 function Test-TestByteArrayEqual {
 	param(
+		[AllowEmptyCollection()]
 		[byte[]]$Left,
+
+		[AllowEmptyCollection()]
 		[byte[]]$Right
 	)
 

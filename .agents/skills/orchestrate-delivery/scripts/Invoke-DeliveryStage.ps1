@@ -248,9 +248,11 @@ function Invoke-DeliveryGitText {
 function Test-DeliveryByteArrayEqual {
 	param(
 		[Parameter(Mandatory)]
+		[AllowEmptyCollection()]
 		[byte[]]$Left,
 
 		[Parameter(Mandatory)]
+		[AllowEmptyCollection()]
 		[byte[]]$Right
 	)
 
