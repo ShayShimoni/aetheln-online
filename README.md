@@ -147,6 +147,7 @@ The repository currently contains planning and contribution infrastructure:
 
 - `.github/ISSUE_TEMPLATE/` - user story, bug, and technical-task templates
 - `.gitignore` - Unreal Engine, IDE, build-output, and local-secret exclusions
+- `.gitattributes` - Git LFS and locking rules for Unreal binary assets
 - `docs/documentation-index.md` - document authority and reading order
 - `docs/game-design-bible.md` - canonical product and gameplay direction
 - `docs/characters-and-factions.md` - faction ideologies and character loyalties
@@ -158,6 +159,7 @@ The repository currently contains planning and contribution infrastructure:
 - `docs/*-architecture.md` plus `docs/security-and-operations.md` and
   `docs/performance-quality-and-delivery.md` - focused implementation
   specifications and decision registry
+- `docs/source-control.md` - Unreal asset locking and verification workflow
 - `output/pdf/` - rendered copies of maintained PDF codices
 - `README.md` - product scope, roadmap, and contributor entry point
 
@@ -168,7 +170,11 @@ The planned Unreal Engine 5.8 layout uses `Source/` for C++ modules, `Content/` 
 ```powershell
 git clone --branch develop https://github.com/ShayShimoni/aetheln-online.git
 cd aetheln-online
+git lfs install
 ```
+
+Review the [Unreal source-control workflow](docs/source-control.md) before
+adding or editing `.uasset` and `.umap` files.
 
 No Unreal project, build command, or automated test command is available yet. Issues #13 and #15 will establish and document the supported build and launch paths.
 
