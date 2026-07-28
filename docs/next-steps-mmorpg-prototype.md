@@ -7,7 +7,12 @@ remain the source of truth for work status, priority, ownership, and target
 version. The [Technical Architecture](technical-architecture.md) defines the
 implementation baseline. [Playable Peoples](playable-peoples.md) defines the
 future character-body and presentation contracts. This document expands only
-the pre-1.0 prototype stage.
+the pre-1.0 prototype stage. Use the [Prototype Game Brief](GameBrief.md) as the
+stage contract, the
+[1.0 Cooperative Vertical-Slice Brief](cooperative-vertical-slice-1.0-brief.md)
+for the separate next stage, and the
+[scope ledger](prototype-and-1.0-scope-ledger.md) and
+[supporting artifacts](prototype-and-1.0-supporting-artifacts.md) for traceability.
 
 **Do not begin by building the full MMORPG. Build a small, networked action-combat prototype first.**
 
@@ -34,7 +39,7 @@ The prototype should contain only:
 - One basic three-hit attack chain
 - Dodge or evasive movement
 - Three active abilities
-- Health, mana, cooldowns, and damage
+- Health, the unnamed prototype combat resource, cooldowns, and damage
 - One enemy type
 - One small greybox arena
 - Two players connecting locally
@@ -143,9 +148,12 @@ Do not heavily edit this project.
 
 ### Project B: Aetheln Online prototype
 
-Create a new **Games → Third Person → C++** project with Starter Content.
+The project template and Starter Content policy are a blocking TBD owned by
+[Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13), consuming
+the reviewed Issue #71 brief. Do not select the Third Person template, No
+Starter Content, or another option until that decision is recorded.
 
-This is where your actual prototype will live.
+The approved project is where the actual prototype will live.
 
 Record the exact Unreal project name in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13) before creating it; do not introduce a second product or repository name.
 
@@ -253,7 +261,7 @@ Build and validate:
 Add the Gameplay Ability System:
 
 - Health
-- Mana or stamina
+- The unnamed prototype combat resource
 - Basic attack ability
 - Dodge ability
 - Three skills
@@ -286,35 +294,22 @@ Evaluate the result against Issue #48. Only after the prototype passes that gate
 
 ## Current Execution Order
 
-1. Create a one-page `docs/GameBrief.md` under [Epic #1](https://github.com/ShayShimoni/aetheln-online/issues/1) answering:
-
-   - What does the player do every 30 seconds?
-   - What makes combat different?
-   - How does pure free aim behave for the first three attacks?
-   - What are the first three abilities?
-   - What is the camera behavior?
-   - What causes victory and defeat?
-   - Which combat outcomes must remain skill-dependent when equipment differs?
-   - Which data boundaries will later separate level, equipment, Skein, faction
-     Doctrine, and appearance?
-   - Which prototype measurements are required before mandatory open-world PvP
-     can be attempted safely?
-   - What is explicitly outside the prototype?
-   - What must work with two connected players?
-
+1. Complete and review the briefs, scope ledger, and supporting artifacts in
+   [Issue #71](https://github.com/ShayShimoni/aetheln-online/issues/71),
+   resolving or explicitly blocking its owned product decisions.
 2. Configure Git LFS and Unreal repository safeguards in [Issue #14](https://github.com/ShayShimoni/aetheln-online/issues/14).
 3. Publish and maintain the canonical technical baseline in [Issue #59](https://github.com/ShayShimoni/aetheln-online/issues/59).
-4. Bootstrap the UE5.8 C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
+4. After Issue #71 and Issue #13's other prerequisites are satisfied, bootstrap the supported Unreal Engine C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
 5. Validate the Unreal networking and server-authority approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
 6. Establish repeatable local client and dedicated-server builds in [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15).
 7. Implement replicated movement in [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17).
 8. Complete the minimal server-authoritative combat arena under [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6).
 9. Pass the prototype exit gate in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before starting the 1.0 vertical slice.
 
-Install Unreal Engine 5.8, Visual Studio, Git LFS, and Lyra only when needed for the corresponding foundation ticket.
+Install the supported Unreal Engine revision and other approved tools only when needed for the corresponding foundation ticket.
 
 ## First Gameplay Ticket
 
-After the game brief and foundation tickets are complete, implement [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17):
+After Issue #71's documentation prerequisite and the applicable foundation tickets are complete, implement [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17):
 
 > **Create a replicated third-person character that can move, sprint, rotate with the camera, and appear correctly in a two-player Unreal Editor session.**

@@ -24,6 +24,24 @@ canonical product rules rather than redefine them.
 6. [Performance, Quality, and Delivery](performance-quality-and-delivery.md)
 7. [Architecture Decisions](architecture-decisions.md)
 
+## Stage Contracts and Traceability
+
+After reading the applicable canonical product and technical documents, read
+these documents in order:
+
+1. [Prototype and 1.0 Scope Ledger](prototype-and-1.0-scope-ledger.md) records
+   the normative Issue #71 inventory and requirement dispositions.
+2. [Prototype Game Brief](GameBrief.md) summarizes the pre-1.0 prototype stage
+   contract.
+3. [1.0 Cooperative Vertical-Slice Brief](cooperative-vertical-slice-1.0-brief.md)
+   summarizes the separate 1.0 stage contract.
+4. [Prototype and 1.0 Supporting Artifacts](prototype-and-1.0-supporting-artifacts.md)
+   provides subordinate decision, terminology, state, release, threat, test,
+   and provenance traceability.
+
+The briefs summarize stage contracts and do not override the specialized
+canonical product or technical documents.
+
 ## Delivery and Work Status
 
 - [Repository Roadmap](../README.md) defines release boundaries and dependency
