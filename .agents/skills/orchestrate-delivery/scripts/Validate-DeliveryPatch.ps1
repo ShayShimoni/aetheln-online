@@ -13,6 +13,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $PatchPath = (Resolve-Path -LiteralPath $PatchPath).Path
 $WorkspaceRoot = (Resolve-Path -LiteralPath $WorkspaceRoot).Path
+$SensitivePathScript = Join-Path $PSScriptRoot 'Test-DeliverySensitivePath.ps1'
+$ReparseCheckScript = Join-Path $PSScriptRoot 'Assert-DeliveryPathNoReparse.ps1'
 
 function Assert-AllowedPathsSafe {
 	param(
@@ -116,12 +118,13 @@ function Invoke-GitNumstatRaw {
 	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
 	$StartInfo.FileName = 'git'
 	$StartInfo.WorkingDirectory = $RepositoryRoot
-	$StartInfo.Arguments = 'apply --recount --numstat -z -- "' +
+	$StartInfo.Arguments = '-c core.autocrlf=false apply --numstat -z -- "' +
 		$CandidatePatchPath.Replace('"', '\"') + '"'
 	$StartInfo.UseShellExecute = $false
 	$StartInfo.CreateNoWindow = $true
 	$StartInfo.RedirectStandardOutput = $true
 	$StartInfo.RedirectStandardError = $true
+	$StartInfo.EnvironmentVariables['GIT_ATTR_NOSYSTEM'] = '1'
 
 	$Process = [System.Diagnostics.Process]::new()
 	$Process.StartInfo = $StartInfo
@@ -134,7 +137,10 @@ function Invoke-GitNumstatRaw {
 		[void]$OutputTask.GetAwaiter().GetResult()
 		$StandardError = $ErrorTask.GetAwaiter().GetResult()
 		if ($Process.ExitCode -ne 0) {
-			throw "Candidate artifact is not a valid Git patch: $StandardError"
+			throw (
+				'[patch_malformed] Candidate artifact is not a valid Git patch: ' +
+				$StandardError
+			)
 		}
 
 		return ,$Output.ToArray()
@@ -145,12 +151,67 @@ function Invoke-GitNumstatRaw {
 	}
 }
 
+function ConvertTo-DeliveryAttributePattern {
+	param(
+		[Parameter(Mandatory)]
+		[string]$RelativePath
+	)
+
+	$Escaped = $RelativePath.Replace('\', '\\').Replace('"', '\"')
+	$Escaped = $Escaped.Replace("`t", '\t').Replace("`n", '\n').Replace("`r", '\r')
+	return '"' + $Escaped + '"'
+}
+
+function Invoke-IsolatedGit {
+	param(
+		[Parameter(Mandatory)]
+		[string]$WorkingDirectory,
+
+		[Parameter(Mandatory)]
+		[string]$Arguments
+	)
+
+	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+	$StartInfo.FileName = (Get-Command git -ErrorAction Stop).Source
+	$StartInfo.WorkingDirectory = $WorkingDirectory
+	$StartInfo.Arguments = $Arguments
+	$StartInfo.UseShellExecute = $false
+	$StartInfo.CreateNoWindow = $true
+	$StartInfo.RedirectStandardOutput = $true
+	$StartInfo.RedirectStandardError = $true
+	$StartInfo.EnvironmentVariables['GIT_CONFIG_NOSYSTEM'] = '1'
+	$StartInfo.EnvironmentVariables['GIT_CONFIG_GLOBAL'] = 'NUL'
+	$StartInfo.EnvironmentVariables['GIT_ATTR_NOSYSTEM'] = '1'
+
+	$Process = [System.Diagnostics.Process]::new()
+	$Process.StartInfo = $StartInfo
+	try {
+		if (-not $Process.Start()) {
+			throw 'Could not start isolated Git.'
+		}
+		$StandardOutputTask = $Process.StandardOutput.ReadToEndAsync()
+		$StandardErrorTask = $Process.StandardError.ReadToEndAsync()
+		$Process.WaitForExit()
+		$StandardOutput = $StandardOutputTask.GetAwaiter().GetResult()
+		$StandardError = $StandardErrorTask.GetAwaiter().GetResult()
+		return [pscustomobject]@{
+			ExitCode = $Process.ExitCode
+			StandardOutput = $StandardOutput
+			StandardError = $StandardError
+		}
+	}
+	finally {
+		$Process.Dispose()
+	}
+}
+
 Assert-AllowedPathsSafe -Paths $AllowedPaths
 
 foreach ($PatchLine in [System.IO.File]::ReadLines($PatchPath)) {
 	if ($PatchLine -cmatch '^(?:rename|copy) (?:from|to) ') {
 		throw (
-			'Candidate patch uses rename or copy metadata. Use delete and add patches instead.'
+			'[patch_path_unsupported] Candidate patch uses rename or copy metadata. ' +
+			'Use delete and add patches instead.'
 		)
 	}
 }
@@ -192,30 +253,113 @@ for ($RecordIndex = 0; $RecordIndex -lt $NumstatRecords.Count - 1; $RecordIndex+
 			[System.IO.Path]::IsPathRooted($ProposedPath) -or
 			($ProposedPath -split '[\\/]') -contains '..' -or
 			$ProposedPath.IndexOfAny([char[]]'*?[]') -ge 0) {
-			throw "Candidate patch path '$ProposedPath' is unsafe."
+			throw "[patch_path_unsafe] Candidate patch path '$ProposedPath' is unsafe."
+		}
+
+		if (& $SensitivePathScript -RelativePath $ProposedPath) {
+			throw (
+				"[patch_path_sensitive] Candidate patch path '$ProposedPath' is " +
+				'sensitive.'
+			)
 		}
 
 		if (-not (Test-RelativePathAllowed `
 				-RelativePath $ProposedPath `
 				-AllowedPaths $AllowedPaths)) {
-			throw "Candidate patch path '$ProposedPath' is outside allowed paths."
+			throw (
+				"[patch_out_of_scope] Candidate patch path '$ProposedPath' is " +
+				'outside allowed paths.'
+			)
 		}
 
 		$ProposedPaths += $ProposedPath
 	}
 }
 
-$PreviousErrorActionPreference = $ErrorActionPreference
+$UniquePaths = [System.Collections.Generic.HashSet[string]]::new(
+	[System.StringComparer]::Ordinal
+)
+foreach ($ProposedPath in $ProposedPaths) {
+	if (-not $UniquePaths.Add($ProposedPath)) {
+		throw "[patch_path_unsafe] Candidate patch path '$ProposedPath' is duplicated."
+	}
+}
+
+$SystemTempRoot = [System.IO.Path]::GetFullPath(
+	[System.IO.Path]::GetTempPath()
+).TrimEnd('\', '/')
+$ValidationRoot = Join-Path $SystemTempRoot (
+	'aetheln-delivery-check-' + [guid]::NewGuid().ToString('N')
+)
 try {
-	$ErrorActionPreference = 'Continue'
-	$PatchCheck = @(& git -C $WorkspaceRoot apply --recount --check -- $PatchPath 2>&1)
-	$PatchCheckExitCode = $LASTEXITCODE
+	New-Item -ItemType Directory -Path $ValidationRoot | Out-Null
+	$GitInit = Invoke-IsolatedGit `
+		-WorkingDirectory $ValidationRoot `
+		-Arguments 'init --quiet'
+	if ($GitInit.ExitCode -ne 0) {
+		throw (
+			'[patch_nonapplying] Could not initialize isolated validation: ' +
+			$GitInit.StandardError
+		)
+	}
+
+	$AttributeLines = foreach ($ProposedPath in $ProposedPaths) {
+		(
+			(ConvertTo-DeliveryAttributePattern -RelativePath $ProposedPath) +
+			' -text -crlf !eol -filter -ident -working-tree-encoding'
+		)
+	}
+	$AttributePath = Join-Path $ValidationRoot '.git\info\attributes'
+	[System.IO.File]::WriteAllText(
+		$AttributePath,
+		(($AttributeLines -join "`n") + "`n"),
+		[System.Text.UTF8Encoding]::new($false)
+	)
+
+	foreach ($ProposedPath in $ProposedPaths) {
+		$SourcePath = [System.IO.Path]::GetFullPath(
+			(Join-Path $WorkspaceRoot $ProposedPath)
+		)
+		& $ReparseCheckScript -Path $SourcePath -Root $WorkspaceRoot
+		if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+			continue
+		}
+
+		$ValidationPath = Join-Path $ValidationRoot $ProposedPath
+		$ValidationParent = [System.IO.Path]::GetDirectoryName($ValidationPath)
+		if (-not (Test-Path -LiteralPath $ValidationParent)) {
+			New-Item -ItemType Directory -Path $ValidationParent | Out-Null
+		}
+		[System.IO.File]::WriteAllBytes(
+			$ValidationPath,
+			[System.IO.File]::ReadAllBytes($SourcePath)
+		)
+	}
+
+	$PatchCheck = Invoke-IsolatedGit `
+		-WorkingDirectory $ValidationRoot `
+		-Arguments (
+			'-c core.autocrlf=false apply --binary --check -- "' +
+			$PatchPath.Replace('"', '\"') + '"'
+		)
+	if ($PatchCheck.ExitCode -ne 0) {
+		throw (
+			'[patch_nonapplying] Candidate patch does not apply cleanly: ' +
+			$PatchCheck.StandardError
+		)
+	}
 }
 finally {
-	$ErrorActionPreference = $PreviousErrorActionPreference
-}
-if ($PatchCheckExitCode -ne 0) {
-	throw "Candidate patch does not apply cleanly: $($PatchCheck -join ' ')"
+	$ResolvedValidationRoot = [System.IO.Path]::GetFullPath(
+		$ValidationRoot
+	).TrimEnd('\', '/')
+	if ((Test-Path -LiteralPath $ResolvedValidationRoot) -and
+		$ResolvedValidationRoot.StartsWith(
+			$SystemTempRoot + [System.IO.Path]::DirectorySeparatorChar,
+			[System.StringComparison]::OrdinalIgnoreCase
+		)) {
+		[System.IO.Directory]::Delete($ResolvedValidationRoot, $true)
+	}
 }
 
 [pscustomobject]@{

@@ -11,6 +11,10 @@ $ValidateScript = Join-Path $ScriptRoot 'Validate-DeliveryHandoff.ps1'
 $LaunchScript = Join-Path $ScriptRoot 'Invoke-DeliveryStage.ps1'
 $SnapshotScript = Join-Path $ScriptRoot 'Get-DeliveryRepositorySnapshot.ps1'
 $PatchValidationScript = Join-Path $ScriptRoot 'Validate-DeliveryPatch.ps1'
+$PatchApplicationScript = Join-Path $ScriptRoot 'Apply-DeliveryPatch.ps1'
+$BundleConversionScript = Join-Path (
+	$ScriptRoot
+) 'Convert-DeliveryFileBundleToPatch.ps1'
 $ReparseCheckScript = Join-Path $ScriptRoot 'Assert-DeliveryPathNoReparse.ps1'
 $PathSplitScript = Join-Path $ScriptRoot 'Split-DeliveryGitPathList.ps1'
 $SensitivePathScript = Join-Path $ScriptRoot 'Test-DeliverySensitivePath.ps1'
@@ -1115,6 +1119,7 @@ $FixtureCodexPath = Join-Path $FixtureBin 'codex.exe'
 Add-Type -TypeDefinition @'
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 
 public static class FixtureCodex
@@ -1148,6 +1153,50 @@ public static class FixtureCodex
 				"\"findings\":[],\"artifact\":\"\"}";
 			File.WriteAllText(outputPath, malformedOutput, new UTF8Encoding(false));
 			Console.WriteLine("MALFORMED_EVENT_FIXTURE");
+			return 0;
+		}
+		if (scenario == "passed-bundle")
+		{
+			byte[] baseBytes = File.ReadAllBytes(
+				Path.Combine(Environment.CurrentDirectory, "AGENTS.md")
+			);
+			string baseSha256;
+			using (SHA256 sha256 = SHA256.Create())
+			{
+				baseSha256 = BitConverter.ToString(sha256.ComputeHash(baseBytes))
+					.Replace("-", "").ToLowerInvariant();
+			}
+			byte[] suffix = new UTF8Encoding(false).GetBytes(
+				"\n# delivery bundle fixture candidate\n"
+			);
+			byte[] candidateBytes = new byte[baseBytes.Length + suffix.Length];
+			Buffer.BlockCopy(baseBytes, 0, candidateBytes, 0, baseBytes.Length);
+			Buffer.BlockCopy(
+				suffix,
+				0,
+				candidateBytes,
+				baseBytes.Length,
+				suffix.Length
+			);
+			string bundleOutput = "{\"stage\":\"worker\",\"status\":\"passed\"," +
+				"\"summary\":\"fixture passed\",\"evidence\":[]," +
+				"\"changed_paths\":[\"AGENTS.md\"],\"findings\":[]," +
+				"\"artifact\":{\"format\":\"delivery_file_bundle_v1\"," +
+				"\"files\":[{\"path\":\"AGENTS.md\",\"operation\":\"replace\"," +
+				"\"base_sha256\":\"" + baseSha256 + "\",\"encoding\":\"utf8\"," +
+				"\"content\":\"" + new UTF8Encoding(false, true)
+					.GetString(candidateBytes)
+					.Replace("\\", "\\\\").Replace("\"", "\\\"")
+					.Replace("\r", "\\r").Replace("\n", "\\n") + "\"}]}}";
+			File.WriteAllText(outputPath, bundleOutput, new UTF8Encoding(false));
+			Console.Error.WriteLine("IGNORED_FIXTURE_DIAGNOSTIC");
+			Console.WriteLine(
+				"{\"type\":\"thread.started\",\"thread_id\":\"fixture-session\"}"
+			);
+			Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{" +
+				"\"input_tokens\":100,\"cached_input_tokens\":40," +
+				"\"cache_write_input_tokens\":0,\"output_tokens\":20," +
+				"\"reasoning_output_tokens\":5}}");
 			return 0;
 		}
 
@@ -1289,7 +1338,7 @@ $FailureEvidenceCases = @(
 		'Nonzero child exit preserves primary error and seals existing evidence'),
 	@('missing-output', 'output artifact.+was not created', 4, $false,
 		'Missing output preserves validation error and seals existing evidence'),
-	@('passed-no-patch', 'returned no unified diff', 5, $true,
+	@('passed-no-patch', 'returned no candidate artifact', 5, $true,
 		'Passed writer without patch still fails closed')
 )
 foreach ($FailureEvidenceCase in $FailureEvidenceCases) {
@@ -1385,6 +1434,7 @@ Add-Result `
 		$RejectedAudit.ArtifactValidationError -match 'Candidate patch does not apply cleanly' -and
 		$RejectedTelemetry.ExitClass -eq 'output_invalid' -and
 		$RejectedTelemetry.StageStatus -eq 'passed' -and
+		$RejectedAudit.ArtifactFailureKind -eq 'patch_nonapplying' -and
 		[long]$RejectedTelemetry.PatchBytes -eq $RejectedPatchBytes.Length -and
 		(Test-TestByteArrayEqual $RejectedPatchBytes $ExpectedRejectedPatchBytes) -and
 		@($RejectedManifest.Files | Where-Object { $_.Path -eq $RejectedPatchPath }).Count -eq 1 -and
@@ -1393,6 +1443,86 @@ Add-Result `
 		$IntegrityOnlySucceeded
 	) `
 	-Detail $RejectedError
+
+$AcceptedBundleRunId = 'test-worker-passed-bundle'
+$AcceptedBundleHandoffPath = Join-Path $TestRoot "$AcceptedBundleRunId.json"
+$AcceptedBundleHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$AcceptedBundleHandoff.run_id = $AcceptedBundleRunId
+$AcceptedBundleHandoff.output_contract = (
+	'Return a delivery_file_bundle_v1 full-file artifact.'
+)
+$AcceptedBundleHandoff | ConvertTo-Json -Depth 8 | Set-Content `
+	-LiteralPath $AcceptedBundleHandoffPath -Encoding UTF8
+$AcceptedBundleArtifactRoot = Join-Path (
+	$TestRoot
+) "$AcceptedBundleRunId-artifacts"
+$AcceptedBundleManifestPath = Join-Path (
+	$AcceptedBundleArtifactRoot
+) "delivery-stage-$AcceptedBundleRunId-evidence.json"
+$AcceptedBundleAuditPath = Join-Path (
+	$AcceptedBundleArtifactRoot
+) "delivery-stage-$AcceptedBundleRunId-audit.json"
+$AcceptedBundlePatchPath = Join-Path (
+	$AcceptedBundleArtifactRoot
+) "delivery-stage-$AcceptedBundleRunId-candidate.patch"
+$AcceptedBundleBefore = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+$AcceptedBundleResult = $null
+$AcceptedBundleError = ''
+$OriginalPath = $env:PATH
+$OriginalScenario = $env:DELIVERY_FIXTURE_SCENARIO
+try {
+	$env:PATH = $FixtureBin + [System.IO.Path]::PathSeparator + $OriginalPath
+	$env:DELIVERY_FIXTURE_SCENARIO = 'passed-bundle'
+	$AcceptedBundleResult = & $LaunchScript `
+		-HandoffPath $AcceptedBundleHandoffPath `
+		-ArtifactRoot $AcceptedBundleArtifactRoot `
+		-PassThru
+}
+catch {
+	$AcceptedBundleError = $_.Exception.Message
+}
+finally {
+	$env:PATH = $OriginalPath
+	$env:DELIVERY_FIXTURE_SCENARIO = $OriginalScenario
+}
+$AcceptedBundleAfter = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+$AcceptedBundlePassed = $false
+if ($null -ne $AcceptedBundleResult) {
+	try {
+		$AcceptedBundleAudit = Get-Content -Raw -LiteralPath $AcceptedBundleAuditPath |
+			ConvertFrom-Json
+		$AcceptedBundleManifestHash = (
+			Get-FileHash -LiteralPath $AcceptedBundleManifestPath -Algorithm SHA256
+		).Hash.ToLowerInvariant()
+		$AcceptedBundleEvidence = & $EvidenceValidationScript `
+			-ManifestPath $AcceptedBundleManifestPath `
+			-ExpectedManifestHash $AcceptedBundleManifestHash `
+			-ExpectedHandoffHash ([string]$AcceptedBundleAudit.HandoffHash)
+		$AcceptedBundlePatchValidation = & $PatchValidationScript `
+			-PatchPath $AcceptedBundlePatchPath `
+			-WorkspaceRoot $RepositoryRoot `
+			-AllowedPaths @('AGENTS.md')
+		$AcceptedBundlePassed = (
+			$AcceptedBundleResult.ArtifactFormat -eq 'delivery_file_bundle_v1' -and
+			$AcceptedBundleAudit.ArtifactFormat -eq 'delivery_file_bundle_v1' -and
+			$AcceptedBundleAudit.ArtifactFailureKind -eq $null -and
+			$AcceptedBundleAudit.BeforeSnapshotHash -eq
+				$AcceptedBundleAudit.AfterSnapshotHash -and
+			$AcceptedBundleBefore.Hash -eq $AcceptedBundleAfter.Hash -and
+			@($AcceptedBundlePatchValidation.ProposedPaths).Count -eq 1 -and
+			$AcceptedBundlePatchValidation.ProposedPaths[0] -eq 'AGENTS.md' -and
+			$AcceptedBundleEvidence.Disposition -eq 'accepted'
+		)
+	}
+	catch {
+		$AcceptedBundleError = $_.Exception.Message
+	}
+}
+Add-Result `
+	-Name 'Structured producer bundle is converted and routed without worktree mutation' `
+	-Passed $AcceptedBundlePassed `
+	-Detail $AcceptedBundleError
 
 try {
 	$DryRun = & $LaunchScript -HandoffPath $WorkerHandoffPath -DryRun -PassThru
@@ -1415,7 +1545,12 @@ try {
 		-Name 'Artifact-producing worker is read-only' `
 		-Passed (
 			$MissingArguments.Count -eq 0 -and
-			-not [string]::IsNullOrWhiteSpace($DryRun.PatchPath)
+			-not [string]::IsNullOrWhiteSpace($DryRun.PatchPath) -and
+			$DryRun.Arguments[
+				[Array]::IndexOf($DryRun.Arguments, '--output-schema') + 1
+			] -eq (
+				Join-Path $SkillRoot 'references\stage-output-producer-schema.json'
+			)
 		) `
 		-Detail ($MissingArguments -join ', ')
 }
@@ -1425,6 +1560,34 @@ catch {
 		-Passed $false `
 		-Detail $_.Exception.Message
 }
+
+$WildcardWorkerHandoffPath = Join-Path $TestRoot 'worker-wildcard-scope.json'
+$WildcardWorkerHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$WildcardWorkerHandoff.run_id = 'test-worker-wildcard-scope'
+$WildcardWorkerHandoff.allowed_paths = @('.delivery-scope/**')
+$WildcardWorkerHandoff.work_package = 'Propose files inside the wildcard scope.'
+$WildcardWorkerHandoff | ConvertTo-Json -Depth 8 | Set-Content `
+	-LiteralPath $WildcardWorkerHandoffPath -Encoding UTF8
+$WildcardWorkerDryRunPassed = $false
+$WildcardWorkerDryRunDetail = ''
+try {
+	$WildcardWorkerDryRun = & $LaunchScript `
+		-HandoffPath $WildcardWorkerHandoffPath `
+		-DryRun `
+		-PassThru
+	$WildcardWorkerDryRunPassed = (
+		$WildcardWorkerDryRun.Stage -eq 'worker' -and
+		$WildcardWorkerDryRun.SandboxMode -eq 'read-only'
+	)
+}
+catch {
+	$WildcardWorkerDryRunDetail = $_.Exception.Message
+}
+Add-Result `
+	-Name 'Artifact-producer wildcard scope passes structural preflight' `
+	-Passed $WildcardWorkerDryRunPassed `
+	-Detail $WildcardWorkerDryRunDetail
 
 $WorkerArtifactAliases = @(
 	@('delivery-stage-test-worker-events.jsonl', 'event log'),
@@ -1764,6 +1927,27 @@ $OutOfScopeFailure = Invoke-ExpectedFailure -Pattern 'outside allowed paths|inva
 }
 Add-Result -Name 'Out-of-scope candidate patch is rejected' -Passed $OutOfScopeFailure
 
+$SensitiveCandidatePatchPath = Join-Path $TestRoot 'sensitive-candidate.patch'
+@'
+diff --git a/.delivery-scope/.env b/.delivery-scope/.env
+new file mode 100644
+--- /dev/null
++++ b/.delivery-scope/.env
+@@ -0,0 +1 @@
++placeholder
+'@ | Set-Content -LiteralPath $SensitiveCandidatePatchPath -Encoding UTF8
+$SensitiveCandidateFailure = Invoke-ExpectedFailure `
+	-Pattern 'patch_path_sensitive|is sensitive' `
+	-Action {
+		& $PatchValidationScript `
+			-PatchPath $SensitiveCandidatePatchPath `
+			-WorkspaceRoot $RepositoryRoot `
+			-AllowedPaths @('.delivery-scope/**') | Out-Null
+	}
+Add-Result `
+	-Name 'Sensitive candidate path is rejected before applicability checks' `
+	-Passed $SensitiveCandidateFailure
+
 $OutOfScopeRenamePatchPath = Join-Path $TestRoot 'out-of-scope-rename.patch'
 @'
 diff --git a/README.md b/.delivery-scope/renamed-readme.md
@@ -1788,7 +1972,9 @@ Add-Result `
 	-Name 'Patch paths use binary-safe Git output capture' `
 	-Passed (
 		$PatchValidatorSource -match 'StandardOutput\.BaseStream\.CopyToAsync' -and
-		$PatchValidatorSource -match '--numstat -z'
+		$PatchValidatorSource -match '--numstat -z' -and
+		$PatchValidatorSource -match 'core\.autocrlf=false' -and
+		$PatchValidatorSource -notmatch '--recount'
 	)
 
 $BinaryFixtureRepository = Join-Path $TestRoot 'binary-fixture-repository'
@@ -1844,6 +2030,468 @@ Add-Result `
 	-Name 'Accepted Git binary candidate remains routable' `
 	-Passed $BinaryPatchAccepted `
 	-Detail $BinaryPatchDetail
+
+$BundleTextPath = '.delivery-scope/bundle-text.txt'
+$BundleBinaryPath = '.delivery-scope/bundle-binary.dat'
+$BundleTextContent = 'caf' + [char]0x00E9 + "`nno-final-newline"
+$BundleBinaryBytes = [byte[]]@(0, 1, 2, 3, 0, 127, 128, 254, 255, 13, 10)
+$MultiFileBundle = [pscustomobject]@{
+	format = 'delivery_file_bundle_v1'
+	files = @(
+		[pscustomobject]@{
+			path = $BundleTextPath
+			operation = 'create'
+			base_sha256 = $null
+			encoding = 'utf8'
+			content = $BundleTextContent
+		},
+		[pscustomobject]@{
+			path = $BundleBinaryPath
+			operation = 'create'
+			base_sha256 = $null
+			encoding = 'base64'
+			content = [System.Convert]::ToBase64String($BundleBinaryBytes)
+		}
+	)
+}
+$MultiFileBundlePatchPath = Join-Path $TestRoot 'multi-file-bundle.patch'
+$MultiFileBundleBefore = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+$MultiFileBundleAccepted = $false
+$MultiFileBundleDetail = ''
+try {
+	$MultiFileBundleConversion = & $BundleConversionScript `
+		-Bundle $MultiFileBundle `
+		-WorkspaceRoot $RepositoryRoot `
+		-AllowedPaths @('.delivery-scope/**') `
+		-DeclaredPaths @($BundleTextPath, $BundleBinaryPath) `
+		-SnapshotFiles $MultiFileBundleBefore.Files `
+		-PatchPath $MultiFileBundlePatchPath
+	$MultiFileBundleValidation = & $PatchValidationScript `
+		-PatchPath $MultiFileBundlePatchPath `
+		-WorkspaceRoot $RepositoryRoot `
+		-AllowedPaths @('.delivery-scope/**')
+	$MultiFileBundlePatchBytes = [System.IO.File]::ReadAllBytes(
+		$MultiFileBundlePatchPath
+	)
+	$MultiFileBundlePatchText = [System.Text.Encoding]::ASCII.GetString(
+		$MultiFileBundlePatchBytes
+	)
+	$MultiFileBundleMaterialization = Join-Path (
+		$TestRoot
+	) 'multi-file-bundle-materialization'
+	New-Item -ItemType Directory -Path $MultiFileBundleMaterialization | Out-Null
+	$null = Invoke-TestGitBytes `
+		-Arguments 'init --quiet' `
+		-WorkingDirectory $MultiFileBundleMaterialization
+	$null = Invoke-TestGitBytes `
+		-Arguments 'config core.autocrlf true' `
+		-WorkingDirectory $MultiFileBundleMaterialization
+	$null = Invoke-TestGitBytes `
+		-Arguments 'config filter.reviewevil.required true' `
+		-WorkingDirectory $MultiFileBundleMaterialization
+	$null = Invoke-TestGitBytes `
+		-Arguments 'config filter.reviewevil.smudge false' `
+		-WorkingDirectory $MultiFileBundleMaterialization
+	$null = Invoke-TestGitBytes `
+		-Arguments 'config filter.reviewevil.clean false' `
+		-WorkingDirectory $MultiFileBundleMaterialization
+	$ExternalAttributesPath = Join-Path (
+		$MultiFileBundleMaterialization
+	) 'external-attributes'
+	$ExternalConfigPath = Join-Path (
+		$MultiFileBundleMaterialization
+	) 'external-gitconfig'
+	[System.IO.File]::WriteAllBytes(
+		$ExternalAttributesPath,
+		([System.Text.UTF8Encoding]::new($false)).GetBytes(
+			"*.dat filter=externalfail`n"
+		)
+	)
+	$ExternalAttributesGitPath = $ExternalAttributesPath.Replace('\', '/')
+	[System.IO.File]::WriteAllBytes(
+		$ExternalConfigPath,
+		([System.Text.UTF8Encoding]::new($false)).GetBytes(
+			"[core]`n" +
+			"`tattributesFile = $ExternalAttributesGitPath`n" +
+			"[filter `"externalfail`"]`n" +
+			"`trequired = true`n" +
+			"`tsmudge = false`n" +
+			"`tclean = false`n"
+		)
+	)
+	$MaterializationAttributesPath = Join-Path (
+		$MultiFileBundleMaterialization
+	) '.gitattributes'
+	$MaterializationAttributesBytes = (
+		[System.Text.UTF8Encoding]::new($false)
+	).GetBytes(
+		"*.txt text eol=crlf ident working-tree-encoding=UTF-16LE " +
+		"filter=reviewevil`n"
+	)
+	[System.IO.File]::WriteAllBytes(
+		$MaterializationAttributesPath,
+		$MaterializationAttributesBytes
+	)
+	$null = Invoke-TestGitBytes `
+		-Arguments 'add -- .gitattributes' `
+		-WorkingDirectory $MultiFileBundleMaterialization
+	$MaterializationConfigPath = Join-Path (
+		$MultiFileBundleMaterialization
+	) '.git/config'
+	$MaterializationConfigBytesBefore = [System.IO.File]::ReadAllBytes(
+		$MaterializationConfigPath
+	)
+	$MaterializationAttributesBytesBefore = [System.IO.File]::ReadAllBytes(
+		$MaterializationAttributesPath
+	)
+	$ExternalConfigBytesBefore = [System.IO.File]::ReadAllBytes(
+		$ExternalConfigPath
+	)
+	$ExternalAttributesBytesBefore = [System.IO.File]::ReadAllBytes(
+		$ExternalAttributesPath
+	)
+	$OriginalGitConfigGlobal = $env:GIT_CONFIG_GLOBAL
+	$OriginalGitConfigSystem = $env:GIT_CONFIG_SYSTEM
+	try {
+		$env:GIT_CONFIG_GLOBAL = $ExternalConfigPath
+		$env:GIT_CONFIG_SYSTEM = $ExternalConfigPath
+		$MultiFileBundleApplication = & $PatchApplicationScript `
+			-PatchPath $MultiFileBundlePatchPath `
+			-WorkspaceRoot $MultiFileBundleMaterialization `
+			-AllowedPaths @('.delivery-scope/**')
+	}
+	finally {
+		$env:GIT_CONFIG_GLOBAL = $OriginalGitConfigGlobal
+		$env:GIT_CONFIG_SYSTEM = $OriginalGitConfigSystem
+	}
+	$StoredAutoCrlf = (
+		[System.Text.Encoding]::UTF8.GetString(
+			(Invoke-TestGitBytes `
+				-Arguments 'config --get core.autocrlf' `
+				-WorkingDirectory $MultiFileBundleMaterialization)
+		)
+	).Trim()
+	$MaterializedTextBytes = [System.IO.File]::ReadAllBytes(
+		(Join-Path $MultiFileBundleMaterialization $BundleTextPath)
+	)
+	$MaterializedBinaryBytes = [System.IO.File]::ReadAllBytes(
+		(Join-Path $MultiFileBundleMaterialization $BundleBinaryPath)
+	)
+	$MaterializationConfigBytesAfter = [System.IO.File]::ReadAllBytes(
+		$MaterializationConfigPath
+	)
+	$MaterializationAttributesBytesAfter = [System.IO.File]::ReadAllBytes(
+		$MaterializationAttributesPath
+	)
+	$ExternalConfigBytesAfter = [System.IO.File]::ReadAllBytes(
+		$ExternalConfigPath
+	)
+	$ExternalAttributesBytesAfter = [System.IO.File]::ReadAllBytes(
+		$ExternalAttributesPath
+	)
+	$TrackedAttributesPath = (
+		[System.Text.Encoding]::UTF8.GetString(
+			(Invoke-TestGitBytes `
+				-Arguments 'ls-files -- .gitattributes' `
+				-WorkingDirectory $MultiFileBundleMaterialization)
+		)
+	).Trim()
+	$ExpectedTextBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+		$BundleTextContent
+	)
+	$MultiFileBundleAccepted = (
+		$MultiFileBundleConversion.Format -eq 'delivery_file_bundle_v1' -and
+		$MultiFileBundleConversion.FileCount -eq 2 -and
+		@($MultiFileBundleValidation.ProposedPaths).Count -eq 2 -and
+		@($MultiFileBundleValidation.ProposedPaths) -contains $BundleTextPath -and
+		@($MultiFileBundleValidation.ProposedPaths) -contains $BundleBinaryPath -and
+		$MultiFileBundlePatchText -match 'GIT binary patch' -and
+		@($MultiFileBundleApplication.ProposedPaths).Count -eq 2 -and
+		$StoredAutoCrlf -eq 'true' -and
+		$TrackedAttributesPath -eq '.gitattributes' -and
+		(Test-TestByteArrayEqual `
+			$MaterializationConfigBytesBefore `
+			$MaterializationConfigBytesAfter) -and
+		(Test-TestByteArrayEqual `
+			$MaterializationAttributesBytesBefore `
+			$MaterializationAttributesBytesAfter) -and
+		(Test-TestByteArrayEqual `
+			$ExternalConfigBytesBefore `
+			$ExternalConfigBytesAfter) -and
+		(Test-TestByteArrayEqual `
+			$ExternalAttributesBytesBefore `
+			$ExternalAttributesBytesAfter) -and
+		(Test-TestByteArrayEqual $MaterializedTextBytes $ExpectedTextBytes) -and
+		(Test-TestByteArrayEqual $MaterializedBinaryBytes $BundleBinaryBytes) -and
+		$MaterializedTextBytes[$MaterializedTextBytes.Length - 1] -ne 0x0A
+	)
+}
+catch {
+	$MultiFileBundleDetail = $_.Exception.Message
+}
+$MultiFileBundleAfter = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+Add-Result `
+	-Name 'Multi-file Unicode and binary bundle generates a strict applicable patch' `
+	-Passed (
+		$MultiFileBundleAccepted -and
+		$MultiFileBundleBefore.Hash -eq $MultiFileBundleAfter.Hash
+	) `
+	-Detail $MultiFileBundleDetail
+
+$DuplicateBundleFile = [pscustomobject]@{
+	path = '.delivery-scope/duplicate.txt'
+	operation = 'create'
+	base_sha256 = $null
+	encoding = 'utf8'
+	content = 'duplicate'
+}
+$ReadmePath = Join-Path $RepositoryRoot 'README.md'
+$ReadmeBytes = [System.IO.File]::ReadAllBytes($ReadmePath)
+$ReadmeSha256 = (
+	Get-FileHash -LiteralPath $ReadmePath -Algorithm SHA256
+).Hash.ToLowerInvariant()
+$InvalidBundleCases = @(
+	[pscustomobject]@{
+		Name = 'Stale replacement base hash is rejected'
+		Pattern = 'bundle_stale|stale'
+		AllowedPaths = @('README.md')
+		DeclaredPaths = @('README.md')
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @([pscustomobject]@{
+				path = 'README.md'
+				operation = 'replace'
+				base_sha256 = ('0' * 64)
+				encoding = 'utf8'
+				content = 'replacement'
+			})
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Replacement absent from source snapshot is rejected before access'
+		Pattern = 'bundle_stale|not present in the source snapshot'
+		AllowedPaths = @('README.md')
+		DeclaredPaths = @('README.md')
+		SnapshotFiles = @{}
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @([pscustomobject]@{
+				path = 'README.md'
+				operation = 'replace'
+				base_sha256 = $ReadmeSha256
+				encoding = 'base64'
+				content = [System.Convert]::ToBase64String($ReadmeBytes)
+			})
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Unchanged replacement content is rejected'
+		Pattern = 'bundle_empty|does not change content'
+		AllowedPaths = @('README.md')
+		DeclaredPaths = @('README.md')
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @([pscustomobject]@{
+				path = 'README.md'
+				operation = 'replace'
+				base_sha256 = $ReadmeSha256
+				encoding = 'base64'
+				content = [System.Convert]::ToBase64String($ReadmeBytes)
+			})
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Duplicate bundle paths are rejected'
+		Pattern = 'bundle_path_unsafe|duplicated'
+		AllowedPaths = @('.delivery-scope/**')
+		DeclaredPaths = @('.delivery-scope/duplicate.txt')
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @($DuplicateBundleFile, $DuplicateBundleFile)
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Bundle traversal path is rejected'
+		Pattern = 'bundle_path_unsafe|unsafe'
+		AllowedPaths = @('.delivery-scope/**')
+		DeclaredPaths = @('../escape.txt')
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @([pscustomobject]@{
+				path = '../escape.txt'
+				operation = 'create'
+				base_sha256 = $null
+				encoding = 'utf8'
+				content = 'escape'
+			})
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Sensitive replacement path is rejected before file access'
+		Pattern = 'bundle_path_sensitive|is sensitive'
+		AllowedPaths = @('.delivery-scope/**')
+		DeclaredPaths = @('.delivery-scope/.env')
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @([pscustomobject]@{
+				path = '.delivery-scope/.env'
+				operation = 'replace'
+				base_sha256 = ('0' * 64)
+				encoding = 'utf8'
+				content = 'placeholder'
+			})
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Out-of-scope bundle path is rejected'
+		Pattern = 'bundle_out_of_scope|outside allowed paths'
+		AllowedPaths = @('.delivery-scope/**')
+		DeclaredPaths = @('README.md')
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @([pscustomobject]@{
+				path = 'README.md'
+				operation = 'replace'
+				base_sha256 = ('0' * 64)
+				encoding = 'utf8'
+				content = 'replacement'
+			})
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Bundle and declared changed paths must exactly match'
+		Pattern = 'bundle_invalid|exactly match'
+		AllowedPaths = @('.delivery-scope/**')
+		DeclaredPaths = @('.delivery-scope/other.txt')
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @([pscustomobject]@{
+				path = '.delivery-scope/declared.txt'
+				operation = 'create'
+				base_sha256 = $null
+				encoding = 'utf8'
+				content = 'declared'
+			})
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Bundle objects reject undeclared properties'
+		Pattern = 'bundle_invalid|only the required properties'
+		AllowedPaths = @('.delivery-scope/**')
+		DeclaredPaths = @('.delivery-scope/extra.txt')
+		Bundle = [pscustomobject]@{
+			format = 'delivery_file_bundle_v1'
+			files = @([pscustomobject]@{
+				path = '.delivery-scope/extra.txt'
+				operation = 'create'
+				base_sha256 = $null
+				encoding = 'utf8'
+				content = 'extra'
+				unexpected = 'rejected'
+			})
+		}
+	}
+)
+$InvalidBundleSnapshotBefore = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+for ($InvalidBundleIndex = 0; $InvalidBundleIndex -lt $InvalidBundleCases.Count;
+	$InvalidBundleIndex++) {
+	$InvalidBundleCase = $InvalidBundleCases[$InvalidBundleIndex]
+	$InvalidBundlePatchPath = Join-Path (
+		$TestRoot
+	) "invalid-bundle-$InvalidBundleIndex.patch"
+	$InvalidBundleSnapshotFiles = if (
+		$null -ne $InvalidBundleCase.PSObject.Properties['SnapshotFiles']
+	) {
+		[hashtable]$InvalidBundleCase.SnapshotFiles
+	}
+	else {
+		[hashtable]$InvalidBundleSnapshotBefore.Files
+	}
+	$InvalidBundleRejected = Invoke-ExpectedFailure `
+		-Pattern $InvalidBundleCase.Pattern `
+		-Action {
+			& $BundleConversionScript `
+				-Bundle $InvalidBundleCase.Bundle `
+				-WorkspaceRoot $RepositoryRoot `
+				-AllowedPaths ([string[]]$InvalidBundleCase.AllowedPaths) `
+				-DeclaredPaths ([string[]]$InvalidBundleCase.DeclaredPaths) `
+				-SnapshotFiles $InvalidBundleSnapshotFiles `
+				-PatchPath $InvalidBundlePatchPath | Out-Null
+		}
+	Add-Result `
+		-Name $InvalidBundleCase.Name `
+		-Passed (
+			$InvalidBundleRejected -and
+			-not (Test-Path -LiteralPath $InvalidBundlePatchPath)
+		)
+}
+$InvalidBundleSnapshotAfter = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+Add-Result `
+	-Name 'Rejected bundles preserve the repository snapshot' `
+	-Passed ($InvalidBundleSnapshotBefore.Hash -eq $InvalidBundleSnapshotAfter.Hash)
+
+$MalformedMultiFilePatchPath = Join-Path $TestRoot 'malformed-multi-file.patch'
+@'
+diff --git a/.delivery-scope/first.txt b/.delivery-scope/first.txt
+new file mode 100644
+--- /dev/null
++++ b/.delivery-scope/first.txt
+@@ -0,0 +1,2 @@
++first
+diff --git a/.delivery-scope/second.txt b/.delivery-scope/second.txt
+new file mode 100644
+--- /dev/null
++++ b/.delivery-scope/second.txt
+@@ -0,0 +1 @@
++second
+'@ | Set-Content -LiteralPath $MalformedMultiFilePatchPath -Encoding UTF8
+$MalformedMultiFileFailure = Invoke-ExpectedFailure `
+	-Pattern 'not a valid Git patch|corrupt patch' `
+	-Action {
+		& $PatchValidationScript `
+			-PatchPath $MalformedMultiFilePatchPath `
+			-WorkspaceRoot $RepositoryRoot `
+			-AllowedPaths @('.delivery-scope/**') | Out-Null
+	}
+Add-Result `
+	-Name 'Malformed multi-file hunk metadata is never recounted into validity' `
+	-Passed $MalformedMultiFileFailure
+
+$ValidMultiFilePatchPath = Join-Path $TestRoot 'valid-multi-file.patch'
+@'
+diff --git a/.delivery-scope/first.txt b/.delivery-scope/first.txt
+new file mode 100644
+--- /dev/null
++++ b/.delivery-scope/first.txt
+@@ -0,0 +1 @@
++first
+diff --git a/.delivery-scope/second.txt b/.delivery-scope/second.txt
+new file mode 100644
+--- /dev/null
++++ b/.delivery-scope/second.txt
+@@ -0,0 +1 @@
++second
+'@ | Set-Content -LiteralPath $ValidMultiFilePatchPath -Encoding UTF8
+$ValidMultiFileAccepted = $false
+$ValidMultiFileDetail = ''
+try {
+	$ValidMultiFileValidation = & $PatchValidationScript `
+		-PatchPath $ValidMultiFilePatchPath `
+		-WorkspaceRoot $RepositoryRoot `
+		-AllowedPaths @('.delivery-scope/**')
+	$ValidMultiFileAccepted = (
+		@($ValidMultiFileValidation.ProposedPaths).Count -eq 2 -and
+		$ValidMultiFileValidation.ProposedPaths[0] -eq '.delivery-scope/first.txt' -and
+		$ValidMultiFileValidation.ProposedPaths[1] -eq '.delivery-scope/second.txt'
+	)
+}
+catch {
+	$ValidMultiFileDetail = $_.Exception.Message
+}
+Add-Result `
+	-Name 'Valid multi-file text candidate remains routable' `
+	-Passed $ValidMultiFileAccepted `
+	-Detail $ValidMultiFileDetail
 
 $WildcardPatchPath = Join-Path $TestRoot 'wildcard-scope.patch'
 @'

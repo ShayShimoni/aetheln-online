@@ -23,8 +23,14 @@ $RepositoryRoot = (Resolve-Path (Join-Path $SkillRoot '..\..\..')).Path
 $ValidateScript = Join-Path $PSScriptRoot 'Validate-DeliveryHandoff.ps1'
 $HandoffSchemaPath = Join-Path $SkillRoot 'references\handoff-schemas.json'
 $OutputSchemaPath = Join-Path $SkillRoot 'references\stage-output-schema.json'
+$ProducerOutputSchemaPath = Join-Path (
+	$SkillRoot
+) 'references\stage-output-producer-schema.json'
 $SnapshotScript = Join-Path $PSScriptRoot 'Get-DeliveryRepositorySnapshot.ps1'
 $PatchValidationScript = Join-Path $PSScriptRoot 'Validate-DeliveryPatch.ps1'
+$BundleConversionScript = Join-Path (
+	$PSScriptRoot
+) 'Convert-DeliveryFileBundleToPatch.ps1'
 $EvidenceProtectionScript = Join-Path $PSScriptRoot 'Protect-DeliveryEvidence.ps1'
 $EventTelemetryScript = Join-Path $PSScriptRoot 'Get-DeliveryEventTelemetry.ps1'
 $EvidenceValidationScript = Join-Path $PSScriptRoot 'Test-DeliveryEvidence.ps1'
@@ -37,6 +43,12 @@ $WorkspaceRoot = $Validation.WorkspaceRoot
 $Handoff = $Validation.Handoff
 $ArtifactProducerStages = @('worker', 'integrator', 'fixer')
 $IsArtifactProducer = $ArtifactProducerStages -contains $Stage
+$SelectedOutputSchemaPath = if ($IsArtifactProducer) {
+	$ProducerOutputSchemaPath
+}
+else {
+	$OutputSchemaPath
+}
 $SandboxMode = 'read-only'
 
 if (-not ([System.IO.Path]::GetFullPath($WorkspaceRoot).TrimEnd('\', '/')).Equals(
@@ -278,11 +290,23 @@ if ((Test-PathWithin -Path $CodexCommand -Root $RepositoryRoot) -or
 if ($IsArtifactProducer) {
 	$AllowedPaths = [string[]]@($Handoff.allowed_paths)
 	foreach ($AllowedPath in $AllowedPaths) {
-		$ResolvedCandidate = [System.IO.Path]::GetFullPath(
-			(Join-Path $WorkspaceRoot $AllowedPath)
-		)
-		if (-not (Test-PathWithin -Path $ResolvedCandidate -Root $WorkspaceRoot)) {
+		$NormalizedAllowedPath = $AllowedPath.Replace('\', '/').TrimEnd('/')
+		$AllowedPathSegments = @($NormalizedAllowedPath -split '/')
+		if ([string]::IsNullOrWhiteSpace($NormalizedAllowedPath) -or
+			[System.IO.Path]::IsPathRooted($AllowedPath) -or
+			$NormalizedAllowedPath.StartsWith('/') -or
+			$AllowedPathSegments -contains '..') {
 			throw "Allowed path '$AllowedPath' escapes the isolated workspace."
+		}
+
+		foreach ($AllowedPathSegment in $AllowedPathSegments) {
+			if ([string]::IsNullOrEmpty($AllowedPathSegment) -or
+				$AllowedPathSegment -eq '.' -or
+				($AllowedPathSegment.Contains('*') -and
+					$AllowedPathSegment -notin @('*', '**')) -or
+				$AllowedPathSegment.IndexOfAny([char[]]'?[]') -ge 0) {
+				throw "Allowed path '$AllowedPath' contains an unsupported segment."
+			}
 		}
 	}
 }
@@ -576,6 +600,15 @@ Repository snapshot SHA-256 before launch: $BeforeSnapshotHash
 
 $($Validation.HandoffJson)
 "@
+if ($IsArtifactProducer) {
+	$Prompt += @"
+
+Your artifact must be a delivery_file_bundle_v1 object containing complete
+create/replace file results. Do not hand-author a unified diff. The launcher
+will convert the validated bundle to a strict Git patch after confirming that
+the repository snapshot remained unchanged.
+"@
+}
 
 $Arguments = @(
 	'exec',
@@ -596,7 +629,7 @@ $Arguments = @(
 	'-c',
 	'approval_policy="never"',
 	'--output-schema',
-	$OutputSchemaPath,
+	$SelectedOutputSchemaPath,
 	'--output-last-message',
 	$OutputPath,
 	'--json',
@@ -674,6 +707,7 @@ if ($null -eq $AfterSnapshotError) {
 	}
 }
 $ProposedPaths = @()
+$ArtifactFormat = $null
 $ArtifactValidationError = $null
 $OutputMissing = $false
 $StageStatusError = $null
@@ -703,13 +737,35 @@ if ($CanConsumeStageOutput) {
 		}
 
 		if ($IsArtifactProducer -and [string]$StageOutput.status -eq 'passed') {
-			if ([string]::IsNullOrWhiteSpace([string]$StageOutput.artifact)) {
-				throw "Passed artifact-producing stage '$Stage' returned no unified diff."
-			}
+			if ($StageOutput.artifact -is [string]) {
+				if ([string]::IsNullOrWhiteSpace([string]$StageOutput.artifact)) {
+					throw (
+						"Passed artifact-producing stage '$Stage' returned no " +
+						'candidate artifact.'
+					)
+				}
 
-			Write-CandidatePatchArtifact `
-				-Path $PatchPath `
-				-Content ([string]$StageOutput.artifact)
+				$ArtifactFormat = 'legacy_unified_diff'
+				Write-CandidatePatchArtifact `
+					-Path $PatchPath `
+					-Content ([string]$StageOutput.artifact)
+			}
+			elseif ($null -ne $StageOutput.artifact) {
+				$BundleConversion = & $BundleConversionScript `
+					-Bundle $StageOutput.artifact `
+					-WorkspaceRoot $WorkspaceRoot `
+					-AllowedPaths ([string[]]@($Handoff.allowed_paths)) `
+					-DeclaredPaths ([string[]]@($StageOutput.changed_paths)) `
+					-SnapshotFiles $Before `
+					-PatchPath $PatchPath
+				$ArtifactFormat = [string]$BundleConversion.Format
+			}
+			else {
+				throw (
+					"Passed artifact-producing stage '$Stage' returned no " +
+					'candidate artifact.'
+				)
+			}
 
 			$PatchValidation = & $PatchValidationScript `
 				-PatchPath $PatchPath `
@@ -778,6 +834,21 @@ else {
 $PatchBytes = if ($null -ne $PatchPath -and
 	(Test-Path -LiteralPath $PatchPath -PathType Leaf)) {
 	(Get-Item -LiteralPath $PatchPath -Force).Length
+}
+else {
+	$null
+}
+$ArtifactFailureKind = if ($null -ne $ArtifactValidationError) {
+	$FailureKindMatch = [regex]::Match(
+		$ArtifactValidationError.Exception.Message,
+		'\[(patch|bundle)_[a-z_]+\]'
+	)
+	if ($FailureKindMatch.Success) {
+		$FailureKindMatch.Value.Trim('[', ']')
+	}
+	else {
+		'output_invalid'
+	}
 }
 else {
 	$null
@@ -856,6 +927,8 @@ $Audit = [ordered]@{
 	else {
 		$null
 	}
+	ArtifactFailureKind = $ArtifactFailureKind
+	ArtifactFormat = $ArtifactFormat
 	StageStatusError = $StageStatusError
 	EventLogPath = $EventLogPath
 	StandardErrorPath = $StandardErrorPath
@@ -968,6 +1041,7 @@ $Result = [pscustomobject]@{
 	EvidenceManifestHash = $EvidenceProtection.ManifestHash
 	ChangedPaths = $ChangedPaths
 	ProposedPaths = $ProposedPaths
+	ArtifactFormat = $ArtifactFormat
 }
 
 if ($PassThru) {

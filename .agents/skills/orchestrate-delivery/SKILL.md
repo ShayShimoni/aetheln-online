@@ -156,9 +156,9 @@ Do not rely on prompt instructions alone:
 - Give every stage agent, including worker, integrator, and fixer, a read-only
   repository and a tool surface with no mutation-capable GitHub, board,
   deployment, or external-system tools.
-- Require worker, integrator, and fixer agents to return a complete unified diff
-  as their structured artifact. They reason about and author the change, but do
-  not edit the worktree.
+- Require worker, integrator, and fixer agents to return a structured
+  `delivery_file_bundle_v1` full-file artifact. They reason about and author the
+  change, but do not edit the worktree or hand-author a patch.
 - Capture the source commit, complete pre-existing worktree status and diff,
   allowed paths, and non-goals before launch.
 - Require the declared source commit to resolve to the repository's current
@@ -169,20 +169,53 @@ Do not rely on prompt instructions alone:
   any reparse-point ancestor; never open or hash secret material. Capture Git
   inventory from the process's raw output stream and use NUL delimiters so valid
   special-character filenames are preserved without a shell text pipeline.
-- Do not parse, persist, or validate a candidate patch until post-stage
-  attestation succeeds and the changed-path set is empty. A mutating stage may
-  produce sealed failure evidence only.
-- Have the launcher parse each proposed patch, reject unsafe or out-of-scope
-  paths, and require `git apply --check` before returning it. Apply the exact
-  validated patch mechanically only when the user's request authorizes the
-  repository change.
+- Do not consume a producer bundle or generate, persist, or validate its
+  candidate patch until post-stage attestation succeeds and the changed-path
+  set is empty. A mutating stage may produce sealed failure evidence only.
+- Have the launcher validate each bundle record against the attested snapshot,
+  mechanically generate a candidate patch, parse its proposed paths, reject
+  unsafe or out-of-scope paths, and require strict `git apply --check` before
+  returning it. Apply the exact validated patch mechanically only when the
+  user's request authorizes the repository change.
+
+The producer artifact is a closed object with `format` exactly
+`delivery_file_bundle_v1` and a `files` array containing one full-result record
+per changed file. Every record has exactly `path`, `operation`, `base_sha256`,
+`encoding`, and `content`:
+
+- `path` is the normalized repository-relative path and must be unique, safe,
+  declared in `changed_paths`, and inside `allowed_paths`.
+- `operation` is `create` or `replace`; delete, rename, copy, and partial-file
+  operations are not supported.
+- `create` requires a path absent from the source snapshot and
+  `base_sha256: null`. `replace` requires an existing source-snapshot file and
+  the exact lowercase SHA-256 of its original bytes.
+- `encoding` is `utf8` for complete resulting text or `base64` for complete
+  resulting binary bytes. `content` is always the complete resulting file, not
+  a diff fragment.
+
+The launcher validates the closed bundle, path set, operation preconditions,
+base hashes, encoding, and complete content only after zero-mutation
+attestation. It then generates the candidate patch mechanically and sends that
+unchanged patch through the existing strict path, scope, sensitive-path, and
+applicability gates. Base64 bundle records use Git binary patch records; UTF-8
+records use Git's text patch route while still declaring complete resulting
+bytes. Validation and application must use the provided scripts. Applicability
+checking and application each use an isolated temporary repository whose
+proposed paths neutralize text, EOL, filter, ident, and working-tree encoding
+attributes. Application writes and verifies those exact bytes through
+reparse-checked destinations. Neither step may change repository or global Git
+configuration. The control plane must never infer, rewrite, or repair
+bundle content or generated patch bytes. A rejected output, bundle, or
+candidate patch remains sealed audit evidence only and is never routable to a
+later substantive stage.
 
 Inspect the effective child permissions and tool surface, not only the custom
 agent TOML. Parent-turn runtime overrides may broaden a child's sandbox or
 tools. Use a separately restricted fresh Codex session or equivalent
 environment. Never broaden a coding stage to workspace-write merely because the
-current runtime cannot provide finer path controls; read-only patch production
-is the required fallback.
+current runtime cannot provide finer path controls; read-only structured-bundle
+production is the required fallback.
 
 Stage profiles disable apps, web search, and inherited MCP servers. If the
 current surface ignores those restrictions or cannot remove external mutation
@@ -311,13 +344,44 @@ stage attempt and one newly spawned replacement for the same tool or execution
 failure. Treat launcher `output_invalid` as an execution failure: retain its
 rejected evidence, permit at most the fresh replacement, and never send its
 artifact into a fixer or substantive patch-repair loop. Escalate a repeated
-same-cause stage failure. Escalate a wave when two consecutive
+same-cause stage failure, except for the one bounded transport-only recovery
+defined below. Escalate a wave when two consecutive
 fix/adjudication cycles produce no net reduction in material findings, or when
 an explicit session time, token, concurrency, or user-approved budget is
 exhausted. Leave the ticket accurately active or blocked with evidence; never
 convert budget exhaustion into approval.
 
+After an unchanged planned work package exhausts its initial producer attempt
+and one fresh replacement solely because the launcher rejects a malformed or
+non-applying candidate patch, the control plane may run one transport-only
+recovery generation. This exception applies only when both children reported
+`passed`, source and post-stage snapshots are identical, allowed scope and
+authority are unchanged, no unsafe or out-of-scope path or tamper signal
+exists, and no product or architecture decision changed. A fresh adjudicator
+must confirm `ArtifactFailureKind` was only `patch_malformed` or
+`patch_nonapplying` and confirm the other facts from raw governing evidence,
+then a fresh planned
+synthesizer may partition the original allowed path set into a fixed set of
+nonempty, pairwise-disjoint packages whose union is an exact cover of that
+original set. Launch fresh producers for those packages.
+
+Do not give the adjudicator, synthesizer, or replacement producers any rejected
+bundle bytes, generated patch bytes, producer narrative, or attempted repair;
+those remain audit-only. The recovery may create only that one fixed
+decomposition and may not repartition or recur. Any failure in the recovery
+generation escalates with evidence. This is not a third adaptive execution
+route, and it must never be selected by size, file-count, or another heuristic;
+the wave remains `planned` throughout.
+
 ## Decide what can run in parallel
+
+During normal planned synthesis, identify natural disjoint full-file ownership
+boundaries for a multi-file scaffold before launching producers. When such
+boundaries are independently verifiable, declare the complete fixed package set
+and integration order up front so no single producer artifact is the only
+transport path. Do not partition by file count, bundle size, or another hidden
+threshold, and keep coupled changes sequential when a safe disjoint boundary
+does not exist.
 
 Parallelize only work that is independent, bounded, and independently
 verifiable. Default to:
@@ -337,9 +401,9 @@ prepare isolation through `$manage-git-flow` before applying candidate patches:
   worktree path, source commit, path owner, and integration order.
 - Run each restricted launcher from its own worktree so the launcher's resolved
   repository root and snapshot bind the stage to that worktree.
-- Apply validated patches serially inside each worktree. Keep stage agents
-  read-only and keep all branch, worktree, index, and commit operations in the
-  main control plane.
+- Apply validated patches serially inside each worktree with
+  `scripts/Apply-DeliveryPatch.ps1`. Keep stage agents read-only and keep all
+  branch, worktree, index, and commit operations in the main control plane.
 - Use a fresh integrator in the designated integration worktree when artifacts
   need substantive combination, then repeat fresh verification and review.
 
