@@ -15,7 +15,11 @@ Read the [documentation index](docs/documentation-index.md) and
 [canonical game-design bible](docs/game-design-bible.md) for the current product
 direction. Read the
 [technical architecture](docs/technical-architecture.md) before planning
-implementation.
+implementation. The reviewed stage contracts are the
+[Prototype Game Brief](docs/GameBrief.md) and
+[1.0 Cooperative Vertical-Slice Brief](docs/cooperative-vertical-slice-1.0-brief.md).
+The [scope ledger](docs/prototype-and-1.0-scope-ledger.md) and
+[supporting artifacts](docs/prototype-and-1.0-supporting-artifacts.md) provide traceability.
 
 ## Canonical Design
 
@@ -78,8 +82,11 @@ Release numbers describe player-facing deliverables. The GitHub project phases d
 
 The prototype proves the technical foundation and core combat before persistence, world scale, or social systems expand:
 
-- A one-page game brief defines the core loop, combat identity, target party size, success criteria, and explicit exclusions
-- Unreal Engine 5.8, C++, repository safeguards, and module boundaries form a repeatable baseline
+- The reviewed prototype brief defines the core loop, combat identity, success
+  criteria, explicit exclusions, and owned blocking decisions
+- The supported Unreal Engine source revision, C++, repository safeguards, and
+  accepted `GameCore`, `GameCombat`, `GameUI`, `GameNet`, and server-only
+  `GameServer` boundaries form a repeatable baseline
 - Two connected players can move, use pure-free-aim attacks, dodge, take damage,
   die, and respawn in one greybox arena
 - Movement and combat remain understandable under representative latency and packet loss
@@ -88,15 +95,17 @@ The prototype proves the technical foundation and core combat before persistence
   performance instrumentation run
 - Local build, multiplayer test, logging, and performance checks are documented
 
-The prototype must satisfy the agreed exit criteria before work advances to the 1.0 vertical slice.
+Issue #48 evaluates the implemented prototype against its exit criteria before
+work advances to the 1.0 vertical slice. It is not an entry prerequisite for
+Issue #13.
 
 ### 1.0.0 - Cooperative Vertical-Slice MVP
 
 The MVP is the smallest externally playable version of the core experience:
 
 - Account authentication, character creation, and session recovery
-- One representative safe hub, one outdoor objective, and one cooperative
-  dungeon
+- Distinct safe-hub, outdoor-zone, and on-demand cooperative-dungeon runtime
+  roles, with one representative objective and dungeon
 - Responsive movement, aiming, abilities, dodge, damage, death, and respawn
 - Readable enemy attacks and one server-authoritative boss encounter
 - Party formation, world travel, completion flow, and return to the hub
@@ -108,7 +117,8 @@ The MVP is the smallest externally playable version of the core experience:
 
 ### Later Versions
 
-- **1.1.0 - Character Development:** inventory, equipment, permanent levels,
+- **1.1.0 - Character Development:** inventory, equipment, permanent Character
+  Levels under Issue #50,
   initial Skein Weaving, expanded CI/automation coverage, and structured
   playtest triage.
 - **1.2.0 - Social and Operations:** cooperative matchmaking, text chat,
@@ -133,11 +143,15 @@ simulation process.
 
 Complete roadmap work in dependency order:
 
-1. Finish the game brief and prototype success criteria under [Epic #1](https://github.com/ShayShimoni/aetheln-online/issues/1).
+1. Complete and review the briefs, scope ledger, and supporting artifacts in
+   [Issue #71](https://github.com/ShayShimoni/aetheln-online/issues/71),
+   resolving or explicitly blocking its owned product decisions.
 2. Configure Unreal source-control and Git LFS safeguards in [Issue #14](https://github.com/ShayShimoni/aetheln-online/issues/14).
 3. Publish and maintain the canonical technical baseline in [Issue #59](https://github.com/ShayShimoni/aetheln-online/issues/59).
-4. Bootstrap and verify the Unreal Engine 5.8 C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
-5. Record Unreal Engine 5.8 as the selected engine and validate its networking, authority, latency, disconnect, and hosting approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
+4. After Issue #71 and Issue #13's other prerequisites are satisfied, bootstrap
+   and verify the supported Unreal Engine C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
+5. Validate the pinned engine revision's networking, authority, latency,
+   disconnect, and hosting approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
 6. Establish repeatable local client and dedicated-server builds in [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15).
 7. Implement and validate replicated third-person movement in [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17).
 8. Build the smallest server-authoritative combat arena through [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6).
@@ -153,6 +167,11 @@ The repository currently contains planning and contribution infrastructure:
 - `.gitignore` - Unreal Engine, IDE, build-output, and local-secret exclusions
 - `.gitattributes` - Git LFS and locking rules for Unreal binary assets
 - `docs/documentation-index.md` - document authority and reading order
+- `docs/GameBrief.md` and `docs/cooperative-vertical-slice-1.0-brief.md` -
+  reviewed prototype and 1.0 stage contracts
+- `docs/prototype-and-1.0-scope-ledger.md` and
+  `docs/prototype-and-1.0-supporting-artifacts.md` - requirement dispositions
+  and traceability
 - `docs/game-design-bible.md` - canonical product and gameplay direction
 - `docs/playable-peoples.md` - playable anatomy, culture, customization, and
   presentation contracts
@@ -169,7 +188,7 @@ The repository currently contains planning and contribution infrastructure:
 - `output/pdf/` - rendered copies of maintained PDF codices
 - `README.md` - product scope, roadmap, and contributor entry point
 
-The planned Unreal Engine 5.8 layout uses `Source/` for C++ modules, `Content/` for game assets, `Config/` for tracked defaults, and `Plugins/` for project extensions. Generated directories such as `Binaries/`, `DerivedDataCache/`, `Intermediate/`, and `Saved/` must not be committed.
+The planned Unreal Engine layout uses `Source/` for C++ modules, `Content/` for game assets, `Config/` for tracked defaults, and `Plugins/` for project extensions. Generated directories such as `Binaries/`, `DerivedDataCache/`, `Intermediate/`, and `Saved/` must not be committed.
 
 ## Getting Started
 
@@ -200,5 +219,5 @@ The repository is in planning and technical-foundation setup. Implementation
 has not started. The canonical direction now includes the faction world,
 mandatory mixed-territory PvP, Skein Weaving, bounded equipment power, and
 distinct, gameplay-neutral presentation for the Aurin, Kell, and Vesh. The next
-delivery gate remains the game brief under Epic #1, followed by the foundation
+delivery gate is the Issue #71 documentation contract, followed by the foundation
 and gameplay work in the dependency order above.
