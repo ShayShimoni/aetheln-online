@@ -756,6 +756,12 @@ elseif ($null -ne $TelemetryError) {
 else {
 	'completed'
 }
+$EvidenceDisposition = if ($ExitClass -ceq 'completed') {
+	'accepted'
+}
+else {
+	'rejected'
+}
 
 $StageStatus = if ($null -ne $StageOutput) {
 	[string]$StageOutput.status
@@ -875,11 +881,13 @@ $EvidencePaths = @(
 $EvidenceProtection = & $EvidenceProtectionScript `
 	-EvidencePaths $EvidencePaths `
 	-ManifestPath $EvidenceManifestPath `
-	-HandoffHash $Validation.HandoffHash
+	-HandoffHash $Validation.HandoffHash `
+	-Disposition $EvidenceDisposition
 $null = & $EvidenceValidationScript `
 	-ManifestPath $EvidenceProtection.ManifestPath `
 	-ExpectedManifestHash $EvidenceProtection.ManifestHash `
-	-ExpectedHandoffHash $Validation.HandoffHash
+	-ExpectedHandoffHash $Validation.HandoffHash `
+	-IntegrityOnly
 
 if ($null -ne $AfterSnapshotError) {
 	throw (
@@ -928,6 +936,11 @@ if ($null -ne $TelemetryError) {
 		"Restricted stage '$Stage' returned invalid telemetry. Audit: $AuditPath"
 	)
 }
+
+$null = & $EvidenceValidationScript `
+	-ManifestPath $EvidenceProtection.ManifestPath `
+	-ExpectedManifestHash $EvidenceProtection.ManifestHash `
+	-ExpectedHandoffHash $Validation.HandoffHash
 
 $SessionId = $null
 foreach ($Event in $Events) {

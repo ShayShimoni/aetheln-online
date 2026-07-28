@@ -7,7 +7,9 @@ param(
 	[string]$ExpectedManifestHash,
 
 	[Parameter(Mandatory)]
-	[string]$ExpectedHandoffHash
+	[string]$ExpectedHandoffHash,
+
+	[switch]$IntegrityOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +27,47 @@ if ($ActualManifestHash -ne $ExpectedManifestHash) {
 }
 
 $Manifest = Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json
+$ManifestPropertyNames = @($Manifest.PSObject.Properties.Name)
+$HasSchemaVersion = $ManifestPropertyNames -ccontains 'SchemaVersion'
+$HasDisposition = $ManifestPropertyNames -ccontains 'Disposition'
+$IsLegacyManifest = -not $HasSchemaVersion -and -not $HasDisposition
+
+if ($IsLegacyManifest) {
+	$LegacyPropertyNames = @('HandoffHash', 'Files')
+	if ($ManifestPropertyNames.Count -ne $LegacyPropertyNames.Count -or
+		@($LegacyPropertyNames | Where-Object {
+			$ManifestPropertyNames -cnotcontains $_
+		}).Count -ne 0) {
+		throw "Evidence manifest '$ManifestPath' has an unsupported legacy schema."
+	}
+	if (-not $IntegrityOnly) {
+		throw (
+			"Evidence manifest '$ManifestPath' is legacy evidence and not routable. " +
+			'Use -IntegrityOnly only to inspect retained failure evidence.'
+		)
+	}
+	$Disposition = 'legacy-unknown'
+}
+else {
+	if (-not $HasSchemaVersion -or -not $HasDisposition -or
+		($Manifest.SchemaVersion -isnot [int32] -and
+			$Manifest.SchemaVersion -isnot [int64]) -or
+		[long]$Manifest.SchemaVersion -ne 2) {
+		throw "Evidence manifest '$ManifestPath' has an unsupported schema version."
+	}
+
+	$Disposition = [string]$Manifest.Disposition
+	if (@('accepted', 'rejected') -cnotcontains $Disposition) {
+		throw "Evidence manifest '$ManifestPath' has an invalid disposition."
+	}
+	if (-not $IntegrityOnly -and $Disposition -cne 'accepted') {
+		throw (
+			"Evidence manifest '$ManifestPath' is rejected and not routable. " +
+			'Use -IntegrityOnly only to inspect retained failure evidence.'
+		)
+	}
+}
+
 if ([string]$Manifest.HandoffHash -ne $ExpectedHandoffHash) {
 	throw "Evidence manifest '$ManifestPath' belongs to a different handoff."
 }
@@ -52,5 +95,6 @@ foreach ($File in @($Manifest.Files)) {
 	ManifestPath = $ManifestPath
 	ManifestHash = $ActualManifestHash
 	HandoffHash = [string]$Manifest.HandoffHash
+	Disposition = $Disposition
 	FileCount = @($Manifest.Files).Count
 }
