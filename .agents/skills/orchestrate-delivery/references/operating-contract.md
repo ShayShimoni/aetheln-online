@@ -160,6 +160,13 @@ user to choose between resumption and strict roadmap order.
 
 ## Parallelization rules
 
+Before launching normal planned scaffold work, the synthesizer identifies
+natural disjoint full-file ownership boundaries. When those boundaries are
+independently verifiable, it declares the complete fixed package set and
+integration order before producer launch so one producer artifact is not the
+only transport path. It must not partition by file count, bundle size, or
+another hidden threshold; coupled changes remain sequential.
+
 Safe by default:
 
 - Multiple read-only analyses of different tickets.
@@ -179,7 +186,8 @@ Sequential by default:
 Multiple implementation agents require all of:
 
 - Disjoint file and system ownership.
-- Read-only patch production with mechanically validated candidate artifacts.
+- Read-only structured-bundle production with mechanically generated and
+  validated candidate artifacts.
 - Independent verification.
 - A named integration order and conflict owner.
 
@@ -190,8 +198,9 @@ package, and record its resolved path, source commit, file ownership, and
 integration order. Invoke the restricted stage launcher from within the
 corresponding worktree so its repository-root and snapshot attestations bind to
 that isolated checkout. Apply validated candidate patches serially within each
-worktree; stage agents remain read-only and the main control plane alone owns
-branch, worktree, index, and commit mutations.
+worktree with `scripts/Apply-DeliveryPatch.ps1`; stage agents remain read-only
+and the main control plane alone owns branch, worktree, index, and commit
+mutations.
 
 Use a fresh integrator in the designated integration worktree when substantive
 combination is required, followed by fresh verification and review. Do not
@@ -338,7 +347,7 @@ Before spawning a stage:
 - Make the repository read-only for analyst, synthesizer, verifier, reviewer,
   approver, adjudicator, and QA roles.
 - Keep worker, integrator, and fixer roles read-only. Require each to return a
-  complete unified diff as its structured artifact.
+  complete `delivery_file_bundle_v1` full-file structured artifact.
 - Resolve the declared source commit and require it to equal the repository's
   current `HEAD`. Require the handoff workspace to equal the launcher's resolved
   repository root. Hash all tracked and non-ignored files before and after the
@@ -347,8 +356,10 @@ Before spawning a stage:
   it. Capture Git inventory from the process's raw output stream and use
   NUL-delimited enumeration so tabs, newlines, quotes, and backslashes cannot
   disappear from the attested inventory.
-- Record the raw baseline, parse proposed paths, reject unsafe or out-of-scope
-  paths, and require `git apply --check` without modifying the worktree.
+- Record the raw baseline, validate the producer bundle against it,
+  mechanically generate the candidate patch, parse proposed paths, reject
+  unsafe or out-of-scope paths, and require strict `git apply --check` without
+  modifying the worktree.
 - Consume stage output only after the post-stage snapshot succeeds and confirms
   zero repository changes. A mutating stage may produce sealed failure evidence
   but no candidate patch.
@@ -400,13 +411,39 @@ script without that switch, using independently retained expected manifest and
 handoff hashes, before trusting or forwarding any artifact; normal verification
 accepts only an `accepted` manifest.
 
-For worker, integrator, and fixer outputs, persist the unified diff separately,
-use Git's patch parser to enumerate proposed paths, reject traversal, absolute,
-or out-of-scope paths, and require `git apply --check` against the attested
-read-only snapshot. The control plane may then apply that exact validated patch as a
-mechanical step when the user's request authorizes the change. A fresh verifier
-and reviewer must judge the applied result; the control plane must not rewrite
-the patch.
+For worker, integrator, and fixer outputs, the structured artifact is a closed
+object with `format` exactly `delivery_file_bundle_v1` and a `files` array with
+one complete resulting-file record per changed path. Each record has exactly
+`path`, `operation`, `base_sha256`, `encoding`, and `content`. The normalized
+repository-relative `path` must be unique, match the stage's declared
+`changed_paths`, and remain inside `allowed_paths`. `operation` is only
+`create` or `replace`: a create requires an absent source-snapshot path and
+null `base_sha256`; a replace requires an existing source-snapshot file and
+the exact lowercase SHA-256 of its original bytes. `encoding` is `utf8` for
+complete resulting text or `base64` for complete resulting binary bytes, and
+`content` always contains the full result. Delete, rename, copy, partial-file,
+and hand-authored patch operations are prohibited.
+
+Consume the bundle only after post-stage zero-mutation attestation. Validate
+its closed shape, paths, operation preconditions, base hashes, encodings, and
+complete contents against the attested snapshot. Then have the launcher
+mechanically generate the candidate patch as a separately bound artifact. Use
+Git's strict patch parser to enumerate proposed paths, reject traversal,
+absolute, sensitive, or out-of-scope paths, and require strict
+`git apply --check` against that same snapshot. Emit `base64` bundle records as
+Git binary patch records and `utf8` records through Git's text patch route;
+both declare complete resulting bytes. Validation and application must use the
+provided scripts. Applicability checking and `scripts/Apply-DeliveryPatch.ps1`
+each use a unique isolated temporary repository whose proposed paths neutralize
+text, EOL, filter, ident, and working-tree encoding attributes. Application
+writes and verifies those exact bytes through reparse-checked destinations.
+Neither step may change repository or global Git configuration. The control
+plane may apply
+only that exact validated patch with this script when the user's request
+authorizes the change. A fresh verifier and reviewer must judge the applied
+result; the control plane must not infer, rewrite, or repair bundle content or
+generated patch bytes. Any rejected output, bundle, or candidate patch is
+sealed audit evidence only and is never routable to a substantive stage.
 
 ## Specialist contracts
 
@@ -547,7 +584,8 @@ Classify an occurrence before acting:
 - **Invalid stage output:** Retain its rejected evidence and classify launcher
   `output_invalid` as an execution failure. Permit at most the one fresh
   replacement; never route the rejected candidate to a fixer or substantive
-  patch-repair loop.
+  patch-repair loop. Only the bounded transport-only recovery below may follow
+  two purely malformed or non-applying patch-transport failures.
 - **Implementation defect in scope:** Spawn a fresh `delivery_fixer`, then fresh
   verifier and reviewer agents. Never return it to the original worker or main
   agent for substantive correction.
@@ -562,6 +600,41 @@ Classify an occurrence before acting:
 - **Non-converging wave:** Escalate when two consecutive fix/adjudication cycles
   do not reduce material findings, or an explicit session/user budget is
   exhausted. Never approve incomplete work because a budget ended.
+
+### Bounded transport-only recovery
+
+An unchanged planned work package normally closes after its initial producer
+attempt and one fresh replacement. The control plane may open exactly one
+transport-only recovery generation only when both attempts:
+
+- returned child status `passed`;
+- were rejected solely because the launcher found malformed or non-applying
+  candidate-patch transport, recorded as `ArtifactFailureKind`
+  `patch_malformed` or `patch_nonapplying`;
+- left the source and post-stage repository snapshots identical;
+- preserved the original allowed scope, authority, and product or architecture
+  decisions; and
+- produced no unsafe-path, out-of-scope, mutation, tamper, or other
+  non-transport signal.
+
+A fresh adjudicator must confirm every prerequisite from raw governing
+evidence. If confirmed, run a fresh planned synthesis from the original raw
+ticket, canonical sources, source snapshot, allowed path set, and normative
+producer contract. That synthesis fixes a finite set of nonempty packages whose
+path sets are pairwise disjoint and whose union is an exact cover of the
+original allowed path set; then launch fresh producers for those packages.
+
+Rejected output bytes, bundle bytes, generated patch bytes, producer
+narratives, and proposed repairs remain sealed audit-only evidence and must not
+be passed to the adjudicator, synthesizer, or replacement producers. The fixed
+decomposition cannot be repartitioned, retried as another recovery generation,
+or used to repair a rejected artifact. Any recovery-generation failure
+escalates with evidence.
+
+This recovery is a one-time subroute inside the existing `planned` route. It is
+not a third adaptive execution route, does not change route classification, and
+must never be chosen from file count, bundle size, estimated complexity, or any
+other heuristic.
 
 Never expose secrets, credential output, private keys, `.env` contents, or
 authentication material in issue comments, agent prompts, logs, or summaries.
