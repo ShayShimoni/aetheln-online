@@ -215,10 +215,15 @@ Use the bundled restricted launcher for every substantive stage:
    workspace, profile, or artifact destination is a preflight validation result,
    not a stage attempt, and must never consume the retry budget.
 5. Retain the launcher-generated evidence manifest. It binds the output, event
-   log, audit, and candidate patch by SHA-256 and marks those files plus the
-   manifest read-only before returning. Run `scripts/Test-DeliveryEvidence.ps1`
-   with the independently retained expected manifest hash and handoff hash
-   before routing any bound artifact to a later stage.
+   log, audit, and candidate patch by SHA-256, records the launcher-controlled
+   `accepted` or `rejected` disposition, and marks those files plus the manifest
+   read-only. Integrity sealing proves authenticity, not acceptance. Use
+   `scripts/Test-DeliveryEvidence.ps1 -IntegrityOnly` only to inspect retained
+   failed-attempt evidence. Pre-disposition manifests may verify only in that
+   mode and report `legacy-unknown`; they are never routable. Run the script
+   without that switch, with the independently retained expected manifest and
+   handoff hashes, before routing any bound artifact to a later stage; normal
+   verification accepts only an `accepted` manifest.
 
 Do not replace the launcher with a normal shared-context spawn unless the
 current surface can mechanically attest equivalent tool, sandbox, workspace,
@@ -303,11 +308,14 @@ arbitrary iteration count was reached.
 
 Bound failed attempts without approving incomplete work. Permit one initial
 stage attempt and one newly spawned replacement for the same tool or execution
-failure. Escalate a repeated same-cause stage failure. Escalate a wave when two
-consecutive fix/adjudication cycles produce no net reduction in material
-findings, or when an explicit session time, token, concurrency, or user-approved
-budget is exhausted. Leave the ticket accurately active or blocked with
-evidence; never convert budget exhaustion into approval.
+failure. Treat launcher `output_invalid` as an execution failure: retain its
+rejected evidence, permit at most the fresh replacement, and never send its
+artifact into a fixer or substantive patch-repair loop. Escalate a repeated
+same-cause stage failure. Escalate a wave when two consecutive
+fix/adjudication cycles produce no net reduction in material findings, or when
+an explicit session time, token, concurrency, or user-approved budget is
+exhausted. Leave the ticket accurately active or blocked with evidence; never
+convert budget exhaustion into approval.
 
 ## Decide what can run in parallel
 

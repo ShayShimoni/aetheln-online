@@ -109,12 +109,14 @@ function Invoke-TestGitBytes {
 		[Parameter(Mandatory)]
 		[string]$Arguments,
 
-		[hashtable]$Environment = @{}
+		[hashtable]$Environment = @{},
+
+		[string]$WorkingDirectory = $RepositoryRoot
 	)
 
 	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
 	$StartInfo.FileName = (Get-Command git -ErrorAction Stop).Source
-	$StartInfo.WorkingDirectory = $RepositoryRoot
+	$StartInfo.WorkingDirectory = $WorkingDirectory
 	$StartInfo.Arguments = $Arguments
 	$StartInfo.UseShellExecute = $false
 	$StartInfo.CreateNoWindow = $true
@@ -1149,12 +1151,25 @@ public static class FixtureCodex
 			return 0;
 		}
 
+		string artifact = "";
+		if (scenario == "passed-nonapplying-patch")
+		{
+			artifact = "diff --git a/AGENTS.md b/AGENTS.md\n" +
+				"--- a/AGENTS.md\n" +
+				"+++ b/AGENTS.md\n" +
+				"@@ -1 +1 @@\n" +
+				"-this line cannot exist in the attested snapshot\n" +
+				"+replacement line\n";
+		}
+		string escapedArtifact = artifact.Replace("\\", "\\\\").Replace("\"", "\\\"")
+			.Replace("\r", "\\r").Replace("\n", "\\n");
 		string status = scenario == "blocked" ? "blocked" :
 			scenario == "failed" ? "failed" : "passed";
 		string summary = "fixture " + status;
 		string output = "{\"stage\":\"worker\",\"status\":\"" + status +
 			"\",\"summary\":\"" + summary +
-			"\",\"evidence\":[],\"changed_paths\":[],\"findings\":[],\"artifact\":\"\"}";
+			"\",\"evidence\":[],\"changed_paths\":[],\"findings\":[],\"artifact\":\"" +
+			escapedArtifact + "\"}";
 		File.WriteAllText(outputPath, output, new UTF8Encoding(false));
 		Console.Error.WriteLine("IGNORED_FIXTURE_DIAGNOSTIC");
 		Console.WriteLine("{\"type\":\"thread.started\",\"thread_id\":\"fixture-session\"}");
@@ -1254,6 +1269,7 @@ function Invoke-FailureEvidenceCase {
 			$AuditExists -and
 			$ManifestExists -and
 			$OnlyExistingEvidence -and
+			[string]$Manifest.Disposition -eq 'rejected' -and
 			$ManifestFiles.Count -eq $ExpectedFileCount -and
 			(Test-Path -LiteralPath $OutputPath -PathType Leaf) -eq $ExpectOutput -and
 			-not (Test-Path -LiteralPath $PatchPath) -and
@@ -1287,6 +1303,96 @@ foreach ($FailureEvidenceCase in $FailureEvidenceCases) {
 		-Passed $FailureEvidenceResult.Passed `
 		-Detail $FailureEvidenceResult.Detail
 }
+
+$RejectedRunId = 'test-worker-passed-nonapplying-patch'
+$RejectedHandoffPath = Join-Path $TestRoot "$RejectedRunId.json"
+$RejectedHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath | ConvertFrom-Json
+$RejectedHandoff.run_id = $RejectedRunId
+$RejectedHandoff | ConvertTo-Json -Depth 8 | Set-Content `
+	-LiteralPath $RejectedHandoffPath -Encoding UTF8
+$RejectedArtifactRoot = Join-Path $TestRoot "$RejectedRunId-artifacts"
+$RejectedAuditPath = Join-Path $RejectedArtifactRoot `
+	"delivery-stage-$RejectedRunId-audit.json"
+$RejectedManifestPath = Join-Path $RejectedArtifactRoot `
+	"delivery-stage-$RejectedRunId-evidence.json"
+$RejectedTelemetryPath = Join-Path $RejectedArtifactRoot `
+	"delivery-stage-$RejectedRunId-telemetry.json"
+$RejectedPatchPath = Join-Path $RejectedArtifactRoot `
+	"delivery-stage-$RejectedRunId-candidate.patch"
+$ExpectedRejectedPatch = [string]::Join("`n", @(
+	'diff --git a/AGENTS.md b/AGENTS.md',
+	'--- a/AGENTS.md',
+	'+++ b/AGENTS.md',
+	'@@ -1 +1 @@',
+	'-this line cannot exist in the attested snapshot',
+	'+replacement line'
+)) + "`n"
+$OriginalPath = $env:PATH
+$OriginalScenario = $env:DELIVERY_FIXTURE_SCENARIO
+$RejectedError = $null
+try {
+	$env:PATH = $FixtureBin + [System.IO.Path]::PathSeparator + $OriginalPath
+	$env:DELIVERY_FIXTURE_SCENARIO = 'passed-nonapplying-patch'
+	try {
+		& $LaunchScript `
+			-HandoffPath $RejectedHandoffPath `
+			-ArtifactRoot $RejectedArtifactRoot | Out-Null
+	}
+	catch {
+		$RejectedError = $_.Exception.Message
+	}
+}
+finally {
+	$env:PATH = $OriginalPath
+	$env:DELIVERY_FIXTURE_SCENARIO = $OriginalScenario
+}
+$RejectedAudit = Get-Content -Raw -LiteralPath $RejectedAuditPath | ConvertFrom-Json
+$RejectedTelemetry = Get-Content -Raw -LiteralPath $RejectedTelemetryPath |
+	ConvertFrom-Json
+$RejectedManifest = Get-Content -Raw -LiteralPath $RejectedManifestPath |
+	ConvertFrom-Json
+$RejectedManifestHash = (
+	Get-FileHash -LiteralPath $RejectedManifestPath -Algorithm SHA256
+).Hash.ToLowerInvariant()
+$RejectedPatchBytes = [System.IO.File]::ReadAllBytes($RejectedPatchPath)
+$ExpectedRejectedPatchBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+	$ExpectedRejectedPatch
+)
+$DefaultRejected = Invoke-ExpectedFailure `
+	-Pattern 'rejected|not routable|integrity-only' `
+	-Action {
+		& $EvidenceValidationScript `
+			-ManifestPath $RejectedManifestPath `
+			-ExpectedManifestHash $RejectedManifestHash `
+			-ExpectedHandoffHash ([string]$RejectedAudit.HandoffHash) | Out-Null
+	}
+$IntegrityOnlySucceeded = $false
+try {
+	& $EvidenceValidationScript `
+		-ManifestPath $RejectedManifestPath `
+		-ExpectedManifestHash $RejectedManifestHash `
+		-ExpectedHandoffHash ([string]$RejectedAudit.HandoffHash) `
+		-IntegrityOnly | Out-Null
+	$IntegrityOnlySucceeded = $true
+}
+catch {
+	$IntegrityOnlySucceeded = $false
+}
+Add-Result `
+	-Name 'Rejected passed-stage patch is sealed without becoming routable evidence' `
+	-Passed (
+		$RejectedError -match 'Candidate patch does not apply cleanly' -and
+		$RejectedAudit.ArtifactValidationError -match 'Candidate patch does not apply cleanly' -and
+		$RejectedTelemetry.ExitClass -eq 'output_invalid' -and
+		$RejectedTelemetry.StageStatus -eq 'passed' -and
+		[long]$RejectedTelemetry.PatchBytes -eq $RejectedPatchBytes.Length -and
+		(Test-TestByteArrayEqual $RejectedPatchBytes $ExpectedRejectedPatchBytes) -and
+		@($RejectedManifest.Files | Where-Object { $_.Path -eq $RejectedPatchPath }).Count -eq 1 -and
+		[string]$RejectedManifest.Disposition -eq 'rejected' -and
+		$DefaultRejected -and
+		$IntegrityOnlySucceeded
+	) `
+	-Detail $RejectedError
 
 try {
 	$DryRun = & $LaunchScript -HandoffPath $WorkerHandoffPath -DryRun -PassThru
@@ -1471,17 +1577,74 @@ foreach ($InvalidEvidenceCase in $InvalidEvidenceCases) {
 			& $EvidenceProtectionScript `
 				-EvidencePaths @($EvidenceFile, $InvalidEvidenceCase.Path) `
 				-ManifestPath $RejectedManifest `
-				-HandoffHash ('a' * 64) | Out-Null
+				-HandoffHash ('a' * 64) `
+				-Disposition 'accepted' | Out-Null
 		}
 	Add-Result `
 		-Name $InvalidEvidenceCase.Name `
 		-Passed ($InvalidEvidenceRejected -and -not (Test-Path -LiteralPath $RejectedManifest))
 }
 
+$LegacyEvidenceFile = Join-Path $TestRoot 'legacy-evidence-output.json'
+$LegacyManifestPath = Join-Path $TestRoot 'legacy-evidence-manifest.json'
+Set-Content `
+	-LiteralPath $LegacyEvidenceFile `
+	-Value '{"result":"legacy fixture"}' `
+	-Encoding UTF8
+$LegacyManifest = [ordered]@{
+	HandoffHash = ('d' * 64)
+	Files = @(
+		[ordered]@{
+			Path = (Resolve-Path -LiteralPath $LegacyEvidenceFile).Path
+			Sha256 = (
+				Get-FileHash -LiteralPath $LegacyEvidenceFile -Algorithm SHA256
+			).Hash.ToLowerInvariant()
+		}
+	)
+}
+$LegacyManifest |
+	ConvertTo-Json -Depth 8 |
+	Set-Content -LiteralPath $LegacyManifestPath -Encoding UTF8
+$LegacyManifestHash = (
+	Get-FileHash -LiteralPath $LegacyManifestPath -Algorithm SHA256
+).Hash.ToLowerInvariant()
+(Get-Item -LiteralPath $LegacyEvidenceFile -Force).IsReadOnly = $true
+(Get-Item -LiteralPath $LegacyManifestPath -Force).IsReadOnly = $true
+$LegacyDefaultRejected = Invoke-ExpectedFailure `
+	-Pattern 'legacy|not routable|unsupported schema' `
+	-Action {
+		& $EvidenceValidationScript `
+			-ManifestPath $LegacyManifestPath `
+			-ExpectedManifestHash $LegacyManifestHash `
+			-ExpectedHandoffHash ('d' * 64) | Out-Null
+	}
+$LegacyIntegrityOnlySucceeded = $false
+$LegacyIntegrityOnlyResult = $null
+try {
+	$LegacyIntegrityOnlyResult = & $EvidenceValidationScript `
+		-ManifestPath $LegacyManifestPath `
+		-ExpectedManifestHash $LegacyManifestHash `
+		-ExpectedHandoffHash ('d' * 64) `
+		-IntegrityOnly
+	$LegacyIntegrityOnlySucceeded = $true
+}
+catch {
+	$LegacyIntegrityOnlySucceeded = $false
+}
+Add-Result `
+	-Name 'Legacy evidence is audit-only and never normally routable' `
+	-Passed (
+		$LegacyDefaultRejected -and
+		$LegacyIntegrityOnlySucceeded -and
+		$LegacyIntegrityOnlyResult.Disposition -eq 'legacy-unknown' -and
+		$LegacyIntegrityOnlyResult.FileCount -eq 1
+	)
+
 $EvidenceProtection = & $EvidenceProtectionScript `
 	-EvidencePaths @($EvidenceFile) `
 	-ManifestPath $EvidenceManifest `
-	-HandoffHash ('a' * 64)
+	-HandoffHash ('a' * 64) `
+	-Disposition 'accepted'
 $EvidenceValidation = & $EvidenceValidationScript `
 	-ManifestPath $EvidenceManifest `
 	-ExpectedManifestHash $EvidenceProtection.ManifestHash `
@@ -1496,6 +1659,9 @@ Add-Result `
 		$EvidenceOverwriteRejected -and
 		(Get-Item -LiteralPath $EvidenceFile).IsReadOnly -and
 		(Get-Item -LiteralPath $EvidenceManifest).IsReadOnly -and
+		$EvidenceProtection.Disposition -eq 'accepted' -and
+		$EvidenceValidation.Disposition -eq 'accepted' -and
+		$EvidenceManifestContent.Disposition -eq 'accepted' -and
 		$EvidenceValidation.FileCount -eq 1 -and
 		$EvidenceManifestContent.Files[0].Sha256 -eq (
 			Get-FileHash -LiteralPath $EvidenceFile -Algorithm SHA256
@@ -1624,6 +1790,60 @@ Add-Result `
 		$PatchValidatorSource -match 'StandardOutput\.BaseStream\.CopyToAsync' -and
 		$PatchValidatorSource -match '--numstat -z'
 	)
+
+$BinaryFixtureRepository = Join-Path $TestRoot 'binary-fixture-repository'
+New-Item -ItemType Directory -Path $BinaryFixtureRepository | Out-Null
+$null = Invoke-TestGitBytes `
+	-Arguments 'init --quiet' `
+	-WorkingDirectory $BinaryFixtureRepository
+$BinaryFixtureRelativePath = '.delivery-scope/generated-binary.dat'
+$BinaryFixturePath = Join-Path $BinaryFixtureRepository $BinaryFixtureRelativePath
+New-Item -ItemType Directory -Path (Split-Path -Parent $BinaryFixturePath) |
+	Out-Null
+[System.IO.File]::WriteAllBytes(
+	$BinaryFixturePath,
+	[byte[]]@(0, 1, 2, 3, 0, 127, 128, 254, 255, 13, 10)
+)
+$null = Invoke-TestGitBytes `
+	-Arguments "-c core.autocrlf=false add -- $BinaryFixtureRelativePath" `
+	-WorkingDirectory $BinaryFixtureRepository
+$BinaryPatchBytes = Invoke-TestGitBytes `
+	-Arguments '-c core.autocrlf=false diff --cached --binary --full-index --no-ext-diff' `
+	-WorkingDirectory $BinaryFixtureRepository
+$BinaryPatchPath = Join-Path $TestRoot 'accepted-binary.patch'
+[System.IO.File]::WriteAllBytes($BinaryPatchPath, $BinaryPatchBytes)
+$BinaryPatchManifestPath = Join-Path $TestRoot 'accepted-binary-evidence.json'
+$BinaryPatchAccepted = $false
+$BinaryPatchDetail = ''
+try {
+	$BinaryPatchValidation = & $PatchValidationScript `
+		-PatchPath $BinaryPatchPath `
+		-WorkspaceRoot $RepositoryRoot `
+		-AllowedPaths @($BinaryFixtureRelativePath)
+	$BinaryPatchProtection = & $EvidenceProtectionScript `
+		-EvidencePaths @($BinaryPatchPath) `
+		-ManifestPath $BinaryPatchManifestPath `
+		-HandoffHash ('c' * 64) `
+		-Disposition 'accepted'
+	$BinaryPatchEvidence = & $EvidenceValidationScript `
+		-ManifestPath $BinaryPatchManifestPath `
+		-ExpectedManifestHash $BinaryPatchProtection.ManifestHash `
+		-ExpectedHandoffHash ('c' * 64)
+	$BinaryPatchText = [System.Text.Encoding]::ASCII.GetString($BinaryPatchBytes)
+	$BinaryPatchAccepted = (
+		$BinaryPatchText -match 'GIT binary patch' -and
+		@($BinaryPatchValidation.ProposedPaths).Count -eq 1 -and
+		$BinaryPatchValidation.ProposedPaths[0] -eq $BinaryFixtureRelativePath -and
+		$BinaryPatchEvidence.Disposition -eq 'accepted'
+	)
+}
+catch {
+	$BinaryPatchDetail = $_.Exception.Message
+}
+Add-Result `
+	-Name 'Accepted Git binary candidate remains routable' `
+	-Passed $BinaryPatchAccepted `
+	-Detail $BinaryPatchDetail
 
 $WildcardPatchPath = Join-Path $TestRoot 'wildcard-scope.patch'
 @'

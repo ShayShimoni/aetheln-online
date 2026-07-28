@@ -7,10 +7,17 @@ param(
 	[string]$ManifestPath,
 
 	[Parameter(Mandatory)]
-	[string]$HandoffHash
+	[string]$HandoffHash,
+
+	[Parameter(Mandatory)]
+	[string]$Disposition
 )
 
 $ErrorActionPreference = 'Stop'
+if (@('accepted', 'rejected') -cnotcontains $Disposition) {
+	throw 'Evidence disposition must be exactly accepted or rejected.'
+}
+
 $ManifestPath = [System.IO.Path]::GetFullPath($ManifestPath)
 if (Test-Path -LiteralPath $ManifestPath) {
 	throw "Evidence manifest '$ManifestPath' already exists."
@@ -38,6 +45,8 @@ foreach ($EvidencePath in @($EvidencePaths | Sort-Object -Unique)) {
 }
 
 $Manifest = [ordered]@{
+	SchemaVersion = 2
+	Disposition = $Disposition
 	HandoffHash = $HandoffHash
 	Files = $Files
 }
@@ -56,5 +65,6 @@ foreach ($ProtectedPath in @(
 [pscustomobject]@{
 	ManifestPath = $ManifestPath
 	ManifestHash = $ManifestHash
+	Disposition = $Disposition
 	Files = $Files
 }

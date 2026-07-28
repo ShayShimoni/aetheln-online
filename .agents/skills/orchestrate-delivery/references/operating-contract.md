@@ -389,11 +389,16 @@ traversal, nested or escaping artifact targets, unsafe run identifiers, and any
 target that already exists.
 
 Before returning from a launched stage, create a separate evidence manifest
-that binds the output JSON, event log, audit, and candidate patch by SHA-256.
-Mark every bound artifact and the manifest read-only. Later stages must verify
-the manifest with `scripts/Test-DeliveryEvidence.ps1` and independently retained
-expected manifest and handoff hashes before trusting or forwarding those
-artifacts.
+that binds the output JSON, event log, audit, and candidate patch by SHA-256 and
+records the launcher-controlled `accepted` or `rejected` disposition. Mark every
+bound artifact and the manifest read-only. Integrity sealing proves
+authenticity, not acceptance. Use
+`scripts/Test-DeliveryEvidence.ps1 -IntegrityOnly` only to inspect retained
+failed-attempt evidence. Pre-disposition manifests may verify only in that mode
+and report `legacy-unknown`; they are never routable. Later stages must run the
+script without that switch, using independently retained expected manifest and
+handoff hashes, before trusting or forwarding any artifact; normal verification
+accepts only an `accepted` manifest.
 
 For worker, integrator, and fixer outputs, persist the unified diff separately,
 use Git's patch parser to enumerate proposed paths, reject traversal, absolute,
@@ -539,6 +544,10 @@ Classify an occurrence before acting:
 - **Stalled or failed stage:** Abandon the attempt and spawn a different fresh
   agent with `fork_turns="none"`; never reuse the failed stage agent. After one
   same-cause replacement failure, escalate with evidence.
+- **Invalid stage output:** Retain its rejected evidence and classify launcher
+  `output_invalid` as an execution failure. Permit at most the one fresh
+  replacement; never route the rejected candidate to a fixer or substantive
+  patch-repair loop.
 - **Implementation defect in scope:** Spawn a fresh `delivery_fixer`, then fresh
   verifier and reviewer agents. Never return it to the original worker or main
   agent for substantive correction.
