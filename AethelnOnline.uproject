@@ -1,0 +1,53 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "GameCore",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "GameCombat",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "GameUI",
+			"Type": "ClientOnly",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "GameNet",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "GameServer",
+			"Type": "ServerOnly",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "GameplayAbilities",
+			"Enabled": true
+		},
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true,
+			"TargetDenyList": [
+				"Server"
+			]
+		},
+		{
+			"Name": "CommonUI",
+			"Enabled": true,
+			"TargetDenyList": [
+				"Server"
+			]
+		}
+	]
+}

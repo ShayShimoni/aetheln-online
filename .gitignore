@@ -15,6 +15,7 @@ Plugins/**/Saved/
 
 # Generated project and build-system files
 *.sln
+*.slnx
 *.suo
 *.opensdf
 *.sdf
@@ -50,6 +51,7 @@ Build/Receipts/
 *.user
 *.userosscache
 *.sln.docstates
+.vsconfig
 
 # Test and analysis output
 TestResults/
