@@ -721,7 +721,11 @@ $AttestedExistingPathSha256Json
 For every replace record, use the exact lowercase SHA-256 value for its path
 from that map as base_sha256. For every create record, base_sha256 must be null.
 Do not calculate or re-derive these hashes.
-Return the delivery_file_bundle_v1 object directly as your structured final output.
+Return the schema-defined outer stage object as your structured final output.
+It must contain stage, status, summary, evidence, changed_paths, findings, and
+artifact.
+Put the delivery_file_bundle_v1 object under artifact; do not return the bundle
+directly or omit the outer stage object.
 Do not use commands, scripts, shells, interpreters, executables, or temporary files
 for hashing, bundle construction, or bundle serialization. Do not write the
 bundle to an intermediate file.
