@@ -1136,6 +1136,7 @@ public static class FixtureCodex
 		}
 
 		string prompt = Console.In.ReadToEnd();
+		string normalizedPrompt = prompt.Replace("\r", "").Replace("\n", " ");
 		string scenario = Environment.GetEnvironmentVariable("DELIVERY_FIXTURE_SCENARIO");
 		if (scenario == "nonzero")
 		{
@@ -1175,18 +1176,45 @@ public static class FixtureCodex
 				expectedReadmeHashEntry,
 				StringComparison.Ordinal
 			);
+			int producerContractIndex = normalizedPrompt.LastIndexOf(
+				"Attested existing allowed-path SHA-256 map:",
+				StringComparison.Ordinal
+			);
 			if (String.IsNullOrWhiteSpace(agentsBaseSha256) ||
 				String.IsNullOrWhiteSpace(readmeBaseSha256) ||
 				agentsHashIndex < 0 ||
 				readmeHashIndex <= agentsHashIndex ||
-				!prompt.Contains(
+				producerContractIndex < 0 ||
+				normalizedPrompt.IndexOf(
 					"Return the delivery_file_bundle_v1 object directly as your " +
-					"structured final output."
-				) ||
-				!prompt.Contains(
+					"structured final output.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) >= 0 ||
+				normalizedPrompt.IndexOf(
+					"Return the schema-defined outer stage object as your structured " +
+					"final output.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0 ||
+				normalizedPrompt.IndexOf(
+					"It must contain stage, status, summary, evidence, changed_paths, " +
+					"findings, and artifact.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0 ||
+				normalizedPrompt.IndexOf(
+					"Put the delivery_file_bundle_v1 object under artifact; do not " +
+					"return the bundle directly or omit the outer stage object.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0 ||
+				normalizedPrompt.IndexOf(
 					"Do not use commands, scripts, shells, interpreters, " +
-					"executables, or temporary files"
-				))
+					"executables, or temporary files",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0)
 			{
 				Console.Error.WriteLine("PRODUCER_PROMPT_CONTRACT_MISSING");
 				return 24;
