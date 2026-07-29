@@ -82,6 +82,75 @@ function Test-PathWithin {
 	)
 }
 
+function Test-DeliveryRelativePathAllowed {
+	param(
+		[Parameter(Mandatory)]
+		[string]$RelativePath,
+
+		[Parameter(Mandatory)]
+		[string[]]$AllowedPaths
+	)
+
+	$Normalized = $RelativePath.Replace('\', '/')
+	$PathSegments = @($Normalized -split '/')
+	foreach ($AllowedPath in $AllowedPaths) {
+		$Allowed = $AllowedPath.Replace('\', '/').TrimEnd('/')
+		$ScopeSegments = @($Allowed -split '/')
+		$HasWildcard = @(
+			$ScopeSegments | Where-Object { $_ -in @('*', '**') }
+		).Count -gt 0
+		if (-not $HasWildcard) {
+			if ($Normalized.Equals(
+					$Allowed,
+					[System.StringComparison]::OrdinalIgnoreCase
+				) -or $Normalized.StartsWith(
+					$Allowed + '/',
+					[System.StringComparison]::OrdinalIgnoreCase
+				)) {
+				return $true
+			}
+			continue
+		}
+
+		$Memo = @{}
+		function Test-SegmentMatch {
+			param([int]$PathIndex, [int]$ScopeIndex)
+
+			$Key = "$PathIndex,$ScopeIndex"
+			if ($Memo.ContainsKey($Key)) {
+				return $Memo[$Key]
+			}
+
+			$Result = $false
+			if ($ScopeIndex -eq $ScopeSegments.Count) {
+				$Result = $PathIndex -eq $PathSegments.Count
+			}
+			elseif ($ScopeSegments[$ScopeIndex] -eq '**') {
+				$Result = (Test-SegmentMatch $PathIndex ($ScopeIndex + 1)) -or
+					($PathIndex -lt $PathSegments.Count -and
+						(Test-SegmentMatch ($PathIndex + 1) $ScopeIndex))
+			}
+			elseif ($PathIndex -lt $PathSegments.Count -and
+				($ScopeSegments[$ScopeIndex] -eq '*' -or
+					$PathSegments[$PathIndex].Equals(
+						$ScopeSegments[$ScopeIndex],
+						[System.StringComparison]::OrdinalIgnoreCase
+					))) {
+				$Result = Test-SegmentMatch ($PathIndex + 1) ($ScopeIndex + 1)
+			}
+
+			$Memo[$Key] = $Result
+			return $Result
+		}
+
+		if (Test-SegmentMatch 0 0) {
+			return $true
+		}
+	}
+
+	return $false
+}
+
 function Assert-NoReparsePoint {
 	param(
 		[Parameter(Mandatory)]
@@ -358,6 +427,44 @@ $NeutralEvidenceFields = @($StageSchema.neutral_evidence_fields.PSObject.Propert
 $BeforeSnapshot = & $SnapshotScript -RepositoryRoot $WorkspaceRoot
 $Before = $BeforeSnapshot.Files
 $BeforeSnapshotHash = $BeforeSnapshot.Hash
+$AttestedExistingPathSha256Json = '{}'
+if ($IsArtifactProducer) {
+	$AttestedExistingPathSha256 = [ordered]@{}
+	$SortedSnapshotPaths = [string[]]@($Before.Keys)
+	[System.Array]::Sort(
+		$SortedSnapshotPaths,
+		[System.StringComparer]::Ordinal
+	)
+	foreach ($SnapshotPath in $SortedSnapshotPaths) {
+		if (-not (Test-DeliveryRelativePathAllowed `
+				-RelativePath $SnapshotPath `
+				-AllowedPaths $AllowedPaths)) {
+			continue
+		}
+
+		$SnapshotFingerprint = [string]$Before[$SnapshotPath]
+		$FingerprintMatch = [regex]::Match(
+			$SnapshotFingerprint,
+			'^([0-9a-f]{64})\|attributes=-?[0-9]+$',
+			[System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+		)
+		if (-not $FingerprintMatch.Success) {
+			throw (
+				"Attested snapshot fingerprint for allowed path " +
+				"'$SnapshotPath' is malformed."
+			)
+		}
+
+		$AttestedExistingPathSha256[$SnapshotPath.Replace('\', '/')] = (
+			$FingerprintMatch.Groups[1].Value.ToLowerInvariant()
+		)
+	}
+
+	$AttestedExistingPathSha256Json = (
+		[pscustomobject]$AttestedExistingPathSha256 |
+			ConvertTo-Json -Compress
+	)
+}
 
 $ActualBaselines = [ordered]@{
 	baseline_status = Invoke-DeliveryGitText `
@@ -607,6 +714,17 @@ Your artifact must be a delivery_file_bundle_v1 object containing complete
 create/replace file results. Do not hand-author a unified diff. The launcher
 will convert the validated bundle to a strict Git patch after confirming that
 the repository snapshot remained unchanged.
+
+Attested existing allowed-path SHA-256 map:
+$AttestedExistingPathSha256Json
+
+For every replace record, use the exact lowercase SHA-256 value for its path
+from that map as base_sha256. For every create record, base_sha256 must be null.
+Do not calculate or re-derive these hashes.
+Return the delivery_file_bundle_v1 object directly as your structured final output.
+Do not use commands, scripts, shells, interpreters, executables, or temporary files
+for hashing, bundle construction, or bundle serialization. Do not write the
+bundle to an intermediate file.
 "@
 }
 

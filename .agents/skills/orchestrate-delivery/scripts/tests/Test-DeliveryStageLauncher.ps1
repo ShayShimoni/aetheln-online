@@ -1119,7 +1119,6 @@ $FixtureCodexPath = Join-Path $FixtureBin 'codex.exe'
 Add-Type -TypeDefinition @'
 using System;
 using System.IO;
-using System.Security.Cryptography;
 using System.Text;
 
 public static class FixtureCodex
@@ -1136,6 +1135,7 @@ public static class FixtureCodex
 			}
 		}
 
+		string prompt = Console.In.ReadToEnd();
 		string scenario = Environment.GetEnvironmentVariable("DELIVERY_FIXTURE_SCENARIO");
 		if (scenario == "nonzero")
 		{
@@ -1157,35 +1157,100 @@ public static class FixtureCodex
 		}
 		if (scenario == "passed-bundle")
 		{
-			byte[] baseBytes = File.ReadAllBytes(
+			string agentsBaseSha256 = Environment.GetEnvironmentVariable(
+				"DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256"
+			);
+			string readmeBaseSha256 = Environment.GetEnvironmentVariable(
+				"DELIVERY_FIXTURE_EXPECTED_README_SHA256"
+			);
+			string expectedAgentsHashEntry =
+				"\"AGENTS.md\":\"" + agentsBaseSha256 + "\"";
+			string expectedReadmeHashEntry =
+				"\"README.md\":\"" + readmeBaseSha256 + "\"";
+			int agentsHashIndex = prompt.IndexOf(
+				expectedAgentsHashEntry,
+				StringComparison.Ordinal
+			);
+			int readmeHashIndex = prompt.IndexOf(
+				expectedReadmeHashEntry,
+				StringComparison.Ordinal
+			);
+			if (String.IsNullOrWhiteSpace(agentsBaseSha256) ||
+				String.IsNullOrWhiteSpace(readmeBaseSha256) ||
+				agentsHashIndex < 0 ||
+				readmeHashIndex <= agentsHashIndex ||
+				!prompt.Contains(
+					"Return the delivery_file_bundle_v1 object directly as your " +
+					"structured final output."
+				) ||
+				!prompt.Contains(
+					"Do not use commands, scripts, shells, interpreters, " +
+					"executables, or temporary files"
+				))
+			{
+				Console.Error.WriteLine("PRODUCER_PROMPT_CONTRACT_MISSING");
+				return 24;
+			}
+			byte[] agentsBaseBytes = File.ReadAllBytes(
 				Path.Combine(Environment.CurrentDirectory, "AGENTS.md")
 			);
-			string baseSha256;
-			using (SHA256 sha256 = SHA256.Create())
-			{
-				baseSha256 = BitConverter.ToString(sha256.ComputeHash(baseBytes))
-					.Replace("-", "").ToLowerInvariant();
-			}
-			byte[] suffix = new UTF8Encoding(false).GetBytes(
+			byte[] agentsSuffix = new UTF8Encoding(false).GetBytes(
 				"\n# delivery bundle fixture candidate\n"
 			);
-			byte[] candidateBytes = new byte[baseBytes.Length + suffix.Length];
-			Buffer.BlockCopy(baseBytes, 0, candidateBytes, 0, baseBytes.Length);
+			byte[] agentsCandidateBytes = new byte[
+				agentsBaseBytes.Length + agentsSuffix.Length
+			];
 			Buffer.BlockCopy(
-				suffix,
+				agentsBaseBytes,
 				0,
-				candidateBytes,
-				baseBytes.Length,
-				suffix.Length
+				agentsCandidateBytes,
+				0,
+				agentsBaseBytes.Length
+			);
+			Buffer.BlockCopy(
+				agentsSuffix,
+				0,
+				agentsCandidateBytes,
+				agentsBaseBytes.Length,
+				agentsSuffix.Length
+			);
+			byte[] readmeBaseBytes = File.ReadAllBytes(
+				Path.Combine(Environment.CurrentDirectory, "README.md")
+			);
+			byte[] readmeSuffix = new UTF8Encoding(false).GetBytes(
+				"\n<!-- delivery bundle fixture candidate -->\n"
+			);
+			byte[] readmeCandidateBytes = new byte[
+				readmeBaseBytes.Length + readmeSuffix.Length
+			];
+			Buffer.BlockCopy(
+				readmeBaseBytes,
+				0,
+				readmeCandidateBytes,
+				0,
+				readmeBaseBytes.Length
+			);
+			Buffer.BlockCopy(
+				readmeSuffix,
+				0,
+				readmeCandidateBytes,
+				readmeBaseBytes.Length,
+				readmeSuffix.Length
 			);
 			string bundleOutput = "{\"stage\":\"worker\",\"status\":\"passed\"," +
 				"\"summary\":\"fixture passed\",\"evidence\":[]," +
-				"\"changed_paths\":[\"AGENTS.md\"],\"findings\":[]," +
+				"\"changed_paths\":[\"AGENTS.md\",\"README.md\"],\"findings\":[]," +
 				"\"artifact\":{\"format\":\"delivery_file_bundle_v1\"," +
 				"\"files\":[{\"path\":\"AGENTS.md\",\"operation\":\"replace\"," +
-				"\"base_sha256\":\"" + baseSha256 + "\",\"encoding\":\"utf8\"," +
-				"\"content\":\"" + new UTF8Encoding(false, true)
-					.GetString(candidateBytes)
+				"\"base_sha256\":\"" + agentsBaseSha256 +
+				"\",\"encoding\":\"utf8\",\"content\":\"" +
+				new UTF8Encoding(false, true).GetString(agentsCandidateBytes)
+					.Replace("\\", "\\\\").Replace("\"", "\\\"")
+					.Replace("\r", "\\r").Replace("\n", "\\n") +
+				"\"},{\"path\":\"README.md\",\"operation\":\"replace\"," +
+				"\"base_sha256\":\"" + readmeBaseSha256 +
+				"\",\"encoding\":\"utf8\",\"content\":\"" +
+				new UTF8Encoding(false, true).GetString(readmeCandidateBytes)
 					.Replace("\\", "\\\\").Replace("\"", "\\\"")
 					.Replace("\r", "\\r").Replace("\n", "\\n") + "\"}]}}";
 			File.WriteAllText(outputPath, bundleOutput, new UTF8Encoding(false));
@@ -1452,6 +1517,8 @@ $AcceptedBundleHandoff.run_id = $AcceptedBundleRunId
 $AcceptedBundleHandoff.output_contract = (
 	'Return a delivery_file_bundle_v1 full-file artifact.'
 )
+$AcceptedBundleHandoff.allowed_paths = @('AGENTS.md', 'README.md')
+$AcceptedBundleHandoff.work_package = 'Propose AGENTS.md and README.md changes.'
 $AcceptedBundleHandoff | ConvertTo-Json -Depth 8 | Set-Content `
 	-LiteralPath $AcceptedBundleHandoffPath -Encoding UTF8
 $AcceptedBundleArtifactRoot = Join-Path (
@@ -1467,13 +1534,33 @@ $AcceptedBundlePatchPath = Join-Path (
 	$AcceptedBundleArtifactRoot
 ) "delivery-stage-$AcceptedBundleRunId-candidate.patch"
 $AcceptedBundleBefore = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+$AcceptedBundleBaseSha256 = [ordered]@{}
+foreach ($AcceptedBundlePath in @('AGENTS.md', 'README.md')) {
+	$AcceptedBundleFingerprint = [string](
+		$AcceptedBundleBefore.Files[$AcceptedBundlePath]
+	)
+	if ($AcceptedBundleFingerprint -cnotmatch (
+			'^([0-9a-f]{64})\|attributes=-?[0-9]+$'
+		)) {
+		throw "Accepted bundle fixture $AcceptedBundlePath fingerprint is malformed."
+	}
+	$AcceptedBundleBaseSha256[$AcceptedBundlePath] = $Matches[1]
+}
 $AcceptedBundleResult = $null
 $AcceptedBundleError = ''
 $OriginalPath = $env:PATH
 $OriginalScenario = $env:DELIVERY_FIXTURE_SCENARIO
+$OriginalExpectedAgentsSha256 = $env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256
+$OriginalExpectedReadmeSha256 = $env:DELIVERY_FIXTURE_EXPECTED_README_SHA256
 try {
 	$env:PATH = $FixtureBin + [System.IO.Path]::PathSeparator + $OriginalPath
 	$env:DELIVERY_FIXTURE_SCENARIO = 'passed-bundle'
+	$env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256 = (
+		$AcceptedBundleBaseSha256['AGENTS.md']
+	)
+	$env:DELIVERY_FIXTURE_EXPECTED_README_SHA256 = (
+		$AcceptedBundleBaseSha256['README.md']
+	)
 	$AcceptedBundleResult = & $LaunchScript `
 		-HandoffPath $AcceptedBundleHandoffPath `
 		-ArtifactRoot $AcceptedBundleArtifactRoot `
@@ -1485,6 +1572,8 @@ catch {
 finally {
 	$env:PATH = $OriginalPath
 	$env:DELIVERY_FIXTURE_SCENARIO = $OriginalScenario
+	$env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256 = $OriginalExpectedAgentsSha256
+	$env:DELIVERY_FIXTURE_EXPECTED_README_SHA256 = $OriginalExpectedReadmeSha256
 }
 $AcceptedBundleAfter = & $SnapshotScript -RepositoryRoot $RepositoryRoot
 $AcceptedBundlePassed = $false
@@ -1502,7 +1591,7 @@ if ($null -ne $AcceptedBundleResult) {
 		$AcceptedBundlePatchValidation = & $PatchValidationScript `
 			-PatchPath $AcceptedBundlePatchPath `
 			-WorkspaceRoot $RepositoryRoot `
-			-AllowedPaths @('AGENTS.md')
+			-AllowedPaths @('AGENTS.md', 'README.md')
 		$AcceptedBundlePassed = (
 			$AcceptedBundleResult.ArtifactFormat -eq 'delivery_file_bundle_v1' -and
 			$AcceptedBundleAudit.ArtifactFormat -eq 'delivery_file_bundle_v1' -and
@@ -1510,8 +1599,9 @@ if ($null -ne $AcceptedBundleResult) {
 			$AcceptedBundleAudit.BeforeSnapshotHash -eq
 				$AcceptedBundleAudit.AfterSnapshotHash -and
 			$AcceptedBundleBefore.Hash -eq $AcceptedBundleAfter.Hash -and
-			@($AcceptedBundlePatchValidation.ProposedPaths).Count -eq 1 -and
-			$AcceptedBundlePatchValidation.ProposedPaths[0] -eq 'AGENTS.md' -and
+			@($AcceptedBundlePatchValidation.ProposedPaths).Count -eq 2 -and
+			$AcceptedBundlePatchValidation.ProposedPaths -contains 'AGENTS.md' -and
+			$AcceptedBundlePatchValidation.ProposedPaths -contains 'README.md' -and
 			$AcceptedBundleEvidence.Disposition -eq 'accepted'
 		)
 	}
@@ -1520,7 +1610,7 @@ if ($null -ne $AcceptedBundleResult) {
 	}
 }
 Add-Result `
-	-Name 'Structured producer bundle is converted and routed without worktree mutation' `
+	-Name 'Attested hash prompt enables direct structured replacement bundle output' `
 	-Passed $AcceptedBundlePassed `
 	-Detail $AcceptedBundleError
 
