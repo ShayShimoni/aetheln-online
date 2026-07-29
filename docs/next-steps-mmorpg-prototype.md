@@ -148,10 +148,9 @@ Do not heavily edit this project.
 
 ### Project B: Aetheln Online prototype
 
-The project template and Starter Content policy are a blocking TBD owned by
 [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13), consuming
-the reviewed Issue #71 brief. Do not select the Third Person template, No
-Starter Content, or another option until that decision is recorded.
+the reviewed Issue #71 brief, approved and verified a Blank C++ project with no
+Starter Content.
 
 The approved project is where the actual prototype will live.
 

@@ -26,6 +26,14 @@ target so its module graph does not acquire client input or presentation code.
 `GameplayTags` and `GameplayTasks` are engine modules. `CommonInput` is supplied
 by the `CommonUI` plugin; it is not a separate project plugin.
 
+The minimal plugin defaults are recorded in
+[`DefaultEngine.ini`](../Config/DefaultEngine.ini) and
+[`DefaultInput.ini`](../Config/DefaultInput.ini):
+`CommonGameViewportClient` integrates CommonUI with the game viewport, while
+`EnhancedPlayerInput` and `EnhancedInputComponent` select Enhanced Input's base
+classes. These defaults do not define gameplay input mappings, bindings, or
+broader UI design.
+
 ## Local prerequisites
 
 1. Obtain Epic's Unreal Engine source and check out the exact tag and commit.
