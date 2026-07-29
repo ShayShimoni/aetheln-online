@@ -102,9 +102,11 @@ Prototype code and data must not prevent the confirmed future direction:
 
 Install these in this order:
 
-1. **Epic Games Launcher**
-2. **The supported Unreal Engine 5.8 source revision pinned by Issues #13 and
-   #15**
+1. **Epic Games Launcher**, only for Epic account, tool, and sample acquisition;
+   launcher engine binaries are not the canonical build source for the
+   packaged Linux dedicated server
+2. **The supported Unreal Engine 5.8 source checkout pinned by Issues #13 and
+   #15**, which is the canonical client and dedicated-server build path
 3. **Visual Studio with C++ development support**
 4. **GitHub Desktop**
 5. **Lyra Starter Game**
@@ -299,10 +301,22 @@ Evaluate the result against Issue #48. Only after the prototype passes that gate
 2. Configure Git LFS and Unreal repository safeguards in [Issue #14](https://github.com/ShayShimoni/aetheln-online/issues/14).
 3. Publish and maintain the canonical technical baseline in [Issue #59](https://github.com/ShayShimoni/aetheln-online/issues/59).
 4. After Issue #71 and Issue #13's other prerequisites are satisfied, bootstrap the supported Unreal Engine C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
-5. Validate the Unreal networking and server-authority approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
-6. Establish repeatable local client and dedicated-server builds in [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15).
-7. Implement replicated movement in [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17).
-8. Complete the minimal server-authoritative combat arena under [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6).
+5. After the pinned project exists, begin the design and editor-prototype work
+   for [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2), and
+   begin the repository, formatting, static-analysis, and focused-automation
+   foundation for [Issue #16](https://github.com/ShayShimoni/aetheln-online/issues/16).
+   This early work is not Issue #2's final packaged evidence.
+6. Use the pinned Unreal source engine to establish repeatable packaged Windows
+   client and Linux dedicated-server builds in
+   [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15);
+   launcher binaries are not the canonical packaged-server path.
+7. Complete Issue #16's supported-target and packaged-smoke gates using Issue
+   #15's build path, then complete Issue #2's final equivalent packaged
+   comparisons and closure evidence using Issue #15's artifacts.
+8. Complete the minimal server-authoritative combat arena under
+   [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6), with
+   [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17) as its
+   first actionable child rather than a separately counted roadmap step.
 9. Pass the prototype exit gate in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before starting the 1.0 vertical slice.
 
 Install the supported Unreal Engine revision and other approved tools only when needed for the corresponding foundation ticket.

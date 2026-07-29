@@ -87,8 +87,10 @@ The prototype proves the technical foundation and core combat before persistence
 - The supported Unreal Engine source revision, C++, repository safeguards, and
   accepted `GameCore`, `GameCombat`, `GameUI`, `GameNet`, and server-only
   `GameServer` boundaries form a repeatable baseline
-- Two connected players can move, use pure-free-aim attacks, dodge, take damage,
-  die, and respawn in one greybox arena
+- Two connected players can move, use pure free aim, perform a basic three-hit
+  attack chain, dodge, use three representative active abilities, engage one
+  readable enemy and one authoritative objective, take damage, die, and respawn
+  in one greybox arena
 - Movement and combat remain understandable under representative latency and packet loss
 - The server rejects invalid movement, attacks, cooldown use, and damage
 - Foundational CI, multiplayer automation, structured rejection telemetry, and
@@ -150,11 +152,22 @@ Complete roadmap work in dependency order:
 3. Publish and maintain the canonical technical baseline in [Issue #59](https://github.com/ShayShimoni/aetheln-online/issues/59).
 4. After Issue #71 and Issue #13's other prerequisites are satisfied, bootstrap
    and verify the supported Unreal Engine C++ project in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13).
-5. Validate the pinned engine revision's networking, authority, latency,
-   disconnect, and hosting approach in [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2).
-6. Establish repeatable local client and dedicated-server builds in [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15).
-7. Implement and validate replicated third-person movement in [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17).
-8. Build the smallest server-authoritative combat arena through [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6).
+5. After the pinned project exists, begin the design and editor-prototype work
+   for [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2), and
+   begin the repository, formatting, static-analysis, and focused-automation
+   foundation for [Issue #16](https://github.com/ShayShimoni/aetheln-online/issues/16).
+   This early work is not Issue #2's final packaged evidence.
+6. Use the pinned Unreal source engine to establish repeatable packaged Windows
+   client and Linux dedicated-server builds in
+   [Issue #15](https://github.com/ShayShimoni/aetheln-online/issues/15);
+   launcher binaries are not the canonical packaged-server path.
+7. Complete Issue #16's supported-target and packaged-smoke gates using Issue
+   #15's build path, then complete Issue #2's final equivalent packaged
+   comparisons and closure evidence using Issue #15's artifacts.
+8. Build the smallest server-authoritative combat arena through
+   [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6), with
+   [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17) as its
+   first actionable child rather than a separately counted roadmap step.
 9. Evaluate the prototype against the exit criteria in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before beginning the 1.0 vertical slice.
 
 The [GitHub Issues backlog](https://github.com/ShayShimoni/aetheln-online/issues) remains the source of truth for work status, priority, ownership, and target version. This roadmap defines stage boundaries and dependencies.
@@ -221,9 +234,11 @@ Use `Blocked` only when work cannot progress, and populate `Blocked Reason`. Pri
 
 ## Current Status
 
-The repository is in planning and technical-foundation setup. Implementation
-has not started. The canonical direction now includes the faction world,
-mandatory mixed-territory PvP, Skein Weaving, bounded equipment power, and
-distinct, gameplay-neutral presentation for the Aurin, Kell, and Vesh. The next
-delivery gate is the Issue #71 documentation contract, followed by the foundation
-and gameplay work in the dependency order above.
+The repository has moved from planning into technical-foundation
+implementation. The canonical documentation contract in Issue #71 is complete,
+and the pinned Unreal Engine C++ bootstrap delivered through Issue #13 is
+present in the repository while that issue completes its remaining board
+lifecycle. The canonical direction includes the faction world, mandatory
+mixed-territory PvP, Skein Weaving, bounded equipment power, and distinct,
+gameplay-neutral presentation for the Aurin, Kell, and Vesh. Delivery continues
+through the dependency order above and the live GitHub Issues board.

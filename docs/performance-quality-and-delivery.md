@@ -10,6 +10,8 @@ stage exit criteria.
 client, server, and bandwidth budgets.
 [Issue #44](https://github.com/ShayShimoni/aetheln-online/issues/44) owns
 multiplayer automation.
+[Issue #16](https://github.com/ShayShimoni/aetheln-online/issues/16) owns CI
+execution, runner requirements, and evidence publication.
 [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) owns the
 recorded go/no-go evaluation for each stage.
 
@@ -177,13 +179,20 @@ applicable subset of:
 6. Artifact, dependency, and secret policy checks.
 7. Machine-readable test and performance evidence publication.
 
+Issue #16 may establish repository policy, formatting, static, and focused
+automation checks as soon as Issue #13 provides the project. Its
+supported-target compilation and packaged-build smoke gates consume the
+source-build and packaging path owned by Issue #15; editor-only or launcher
+binary evidence cannot satisfy those gates.
+
 Later stages expand this foundation with persistence services, content
 validation, migrations, multi-process scenarios, platform packaging, security
 tests, and scalability suites. CI quality gates are not deferred for first
 introduction in 1.1.
 
-Exact commands and runner requirements remain absent until Issues #13, #15, and
-#44 add the Unreal project and supported toolchain.
+Exact commands and runner requirements remain absent until Issues #13, #15,
+#16, and #44 add the Unreal project, supported toolchain, CI execution path, and
+multiplayer automation.
 
 ## Change Gates
 
@@ -254,6 +263,11 @@ where the diagnostic purpose does not require them.
 8. Run a 64-player stress test to identify failure shape, not to declare
    support.
 9. Add representative capital-invasion coordination only for the 2.1 gate.
+
+The two-client correctness step cannot support a density or capacity
+conclusion. Replication candidates are selected only after equivalent packaged
+actor mixes and scenarios are measured and reviewed through Issues #2 and #45;
+progression through this list does not select a technology by itself.
 
 At each step, correctness and observable rejection are checked alongside
 throughput. Overload must degrade through explicit admission, queue, or

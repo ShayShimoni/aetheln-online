@@ -232,6 +232,12 @@ The actor mix includes players, AI, projectiles, persistent areas, objectives,
 world-policy state, and representative cosmetic replication boundaries.
 Measurements must distinguish editor from packaged builds.
 
+The required two-client prototype establishes correctness and capture
+instrumentation only. It does not establish player or actor density, instance
+capacity, or a replication-technology selection. Selection requires equivalent
+packaged candidate runs with the same actor mix and scenarios, followed by
+reviewed evidence owned by Issues #2 and #45.
+
 References:
 
 - [Unreal Engine 5.8 release notes](https://dev.epicgames.com/documentation/unreal-engine/unreal-engine-5-8-release-notes)

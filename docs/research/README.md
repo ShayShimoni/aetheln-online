@@ -23,5 +23,25 @@ owns the archive cleanup, not the original research conclusions.
 | [MMORPG development roadmap image](mmorpg-development-roadmap.md) | Generic historical roadmap illustration. The repository README defines the current delivery sequence. |
 | [Phase 0 environment setup](phase-0-environment-setup.md) | Historical environment snapshot. Current project bootstrap and build evidence belong to Issues #13 and #15. |
 
+## Routing Stale Recommendations
+
+Archive statements remain historical even when they name a current product or
+tool. Route them as follows instead of treating them as implementation
+decisions:
+
+- Iris, Replication Graph, and generic push-model recommendations route to
+  candidate TC-001 in [Architecture Decisions](../architecture-decisions.md)
+  and require equivalent packaged evidence owned by Issues #2 and #45.
+- Launcher installation or binaries route to the
+  [pinned source setup](../unreal-project-setup.md) and Issue #15. Launcher
+  binaries are not the canonical packaged Linux dedicated-server path.
+- Hardware baselines, player-count estimates, and capacity claims route to
+  [Performance, Quality, and Delivery](../performance-quality-and-delivery.md)
+  and Issue #45. Historical estimates are neither measured targets nor
+  supported capacity.
+- Backend, identity, data, messaging, hosting, orchestration, or anti-cheat
+  recommendations route to the candidate registry and their owning issues.
+  Historical examples do not select a vendor.
+
 The maintained character and settlement codices remain in `output/pdf/` and
 are not duplicated here.
