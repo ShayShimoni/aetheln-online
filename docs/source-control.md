@@ -43,6 +43,18 @@ git lfs unlock Content/Path/Asset.uasset
 Use the same workflow for `.umap` files. Do not force-unlock another
 contributor's file; coordinate with the lock owner instead.
 
+## Completed Delivery Branch Cleanup
+
+Branch cleanup is part of completed ticket delivery. After verifying that a
+short-lived ticket branch is merged into `develop`, delete that exact local
+branch and that exact branch on `origin`. Never delete an unmerged branch or a
+long-lived branch such as `develop`, and never infer the target from a wildcard
+or broad prune operation.
+
+The cleanup rule does not itself authorize a deletion. Follow the repository's
+operation-permission and Git-safety requirements before running the exact local
+and remote deletion commands.
+
 ## Verification
 
 Inspect the effective attributes without creating representative binary files:

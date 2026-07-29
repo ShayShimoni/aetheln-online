@@ -207,7 +207,7 @@ Every accepted decision records:
   rather than first introduce them.
 - **Rationale:** Authority, latency, and performance cannot be proven
   retrospectively after system and content scale expand.
-- **Owner/evidence:** Issues #44, #45, and #48.
+- **Owner/evidence:** Issues #16, #44, #45, and #48.
 - **Rejected alternatives:** Deferring CI and instrumentation to 1.1; relying on
   editor-only manual tests.
 - **Consequences:** The prototype gate includes packaged multi-process and
@@ -219,7 +219,7 @@ Every accepted decision records:
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |
 | --- | --- | --- | --- | --- | --- |
-| TC-001 | Generic push-model replication, Replication Graph, or Iris | Same packaged actor mix; CPU, memory, bandwidth, correction, complexity, failure behavior | #2, #45 | Selecting Iris or Replication Graph from historical advice | Completed benchmark and reviewed record |
+| TC-001 | Generic push-model replication, Replication Graph, or Iris | Equivalent packaged actor mix and scenarios; CPU, memory, bandwidth, correction, complexity, and failure behavior. The two-client prototype proves correctness only, not density or selection. | #2, #45 | Selecting a technology without the owning evidence, including Iris or Replication Graph from historical advice | Completed benchmark and reviewed record |
 | TC-002 | Present-time validation or bounded rewind by action family | Melee, projectile, block/dodge ordering, clamping, abuse, CPU/memory, correction evidence | #2 | Unbounded rewind or client-claimed targets/hits | Pre-mandatory-PvP spike |
 | TC-003 | Identity, backend framework, database, cache/message, hosting, orchestration | Thin working path; cost, complexity, Unreal integration, security, local flow, exit strategy | #36 | Treating Nakama, PostgreSQL, Redis, GameLift, EOS, or another vendor as selected | Issue #36 ADR |
 | TC-004 | World Partition adoption per outdoor map | Editor/runtime memory, streaming, nav, cook, source-control, server reference evidence | #45 and map delivery issue | Global mandate; server-distribution interpretation | Representative outdoor-map measurement |

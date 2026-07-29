@@ -182,4 +182,8 @@ deployment, deletion, or migration.
 
 ## Commit & Pull Request Guidelines
 
-No Git history is available, so no existing commit convention can be inferred. Use short imperative subjects, for example `Add replicated sprint ability`. Keep commits scoped. Pull requests should explain intent, list verification performed, link relevant tasks, and include screenshots or video for visible gameplay or UI changes.
+Follow the scoped Conventional Commit-style subjects established by repository
+history: `type(scope): #<issue> <imperative summary>`, for example
+`feat(combat): #17 add replicated sprint ability`. Keep commits scoped. Pull
+requests should explain intent, list verification performed, link relevant
+tasks, and include screenshots or video for visible gameplay or UI changes.
