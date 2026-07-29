@@ -79,6 +79,48 @@ function Test-NonEmptyValue {
 }
 
 $HasRoute = $PropertyNames -ccontains 'execution_route'
+$ConsumesExternalFiles = $PropertyNames -ccontains 'consumes_external_files'
+$HasExternalEvidence = $PropertyNames -ccontains 'external_ingest_evidence'
+if ($ConsumesExternalFiles -ne $HasExternalEvidence) {
+	Stop-WorkerRouteContract -Code 'external_ingest_gate_incomplete'
+}
+if ($ConsumesExternalFiles) {
+	if ($Handoff.consumes_external_files -isnot [bool] -or
+		-not $Handoff.consumes_external_files) {
+		Stop-WorkerRouteContract -Code 'external_ingest_marker_invalid'
+	}
+	$EvidenceNames = @(
+		'evidence_manifest_path', 'evidence_manifest_sha256',
+		'external_manifest_path', 'external_manifest_sha256',
+		'prepared_journal_path', 'prepared_journal_sha256',
+		'source_commit', 'target_root'
+	)
+	if (-not (Test-ExactObjectNames `
+			-Value $Handoff.external_ingest_evidence `
+			-Expected $EvidenceNames)) {
+		Stop-WorkerRouteContract -Code 'external_ingest_evidence_invalid'
+	}
+	$ExternalEvidence = $Handoff.external_ingest_evidence
+	if ($ExternalEvidence.evidence_manifest_path -isnot [string] -or
+		[string]::IsNullOrWhiteSpace($ExternalEvidence.evidence_manifest_path) -or
+		$ExternalEvidence.evidence_manifest_sha256 -isnot [string] -or
+		$ExternalEvidence.evidence_manifest_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+		$ExternalEvidence.external_manifest_path -isnot [string] -or
+		[string]::IsNullOrWhiteSpace($ExternalEvidence.external_manifest_path) -or
+		$ExternalEvidence.external_manifest_sha256 -isnot [string] -or
+		$ExternalEvidence.external_manifest_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+		$ExternalEvidence.prepared_journal_path -isnot [string] -or
+		[string]::IsNullOrWhiteSpace($ExternalEvidence.prepared_journal_path) -or
+		$ExternalEvidence.prepared_journal_sha256 -isnot [string] -or
+		$ExternalEvidence.prepared_journal_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+		$ExternalEvidence.source_commit -isnot [string] -or
+		$ExternalEvidence.source_commit -cne [string]$Handoff.source_commit -or
+		$ExternalEvidence.target_root -isnot [string] -or
+		$ExternalEvidence.target_root -cne 'visuals') {
+		Stop-WorkerRouteContract -Code 'external_ingest_evidence_invalid'
+	}
+}
+
 if (-not $HasRoute) {
 	if ($PropertyNames -cnotcontains 'work_package' -or
 		-not (Test-NonEmptyValue -Value $Handoff.work_package)) {

@@ -230,6 +230,21 @@ loop iteration. Use only the allowlist for the receiving stage:
   - **Planned:** Set `execution_route` to `planned` and include the synthesized
     `work_package`. Omission of `execution_route` is accepted only for legacy
     planned-handoff compatibility and is not normal control-plane output.
+  - **External-file consumer:** Also set `consumes_external_files` to the JSON
+    boolean `true` and include `external_ingest_evidence` with exactly
+    `evidence_manifest_path`, `evidence_manifest_sha256`,
+    `external_manifest_path`, `external_manifest_sha256`,
+    `prepared_journal_path`, `prepared_journal_sha256`, `source_commit`, and
+    `target_root`.
+    The evidence source commit must equal the handoff source commit and
+    `target_root` must be `visuals`. Marker and evidence must appear together;
+    `false`, partial, or unmarked evidence is invalid. The launcher verifies
+    the read-only accepted evidence, external manifest, and prepared journal
+    against their independently retained hashes and cross-links, plus the
+    destination and current inventory, before child launch. It repeats that
+    verification after the launch snapshot and immediately before child
+    execution; the post-stage snapshot rejects concurrent mutation. Omit both
+    fields for unrelated text-only workers.
 
   If direct work expands beyond its classified scope or risk, stop the direct
   worker, reclassify from the retained `direct` route, run the missing analyst
@@ -318,6 +333,110 @@ content or rejected values. The stable codes are
 `neutral_evidence_content_invalid`, `neutral_evidence_base64_invalid`,
 `neutral_evidence_hash_mismatch`, and
 `neutral_evidence_field_contract_invalid`.
+
+### External-file ingest and composite candidates
+
+The external-file path is a control-plane exception for frozen
+user-provided artifacts; it does not widen `delivery_file_bundle_v1`.
+`delivery_external_file_bundle_v1` is a closed object with exactly `format`,
+`target_root`, and `files`. The target is the literal absent repository root
+`visuals`. The array contains 1-128 records with exactly `path`, `operation`,
+`size`, and `sha256`; operation is `create`, size is a nonnegative JSON
+integer no greater than 9223372036854775807, and the hash is lowercase SHA-256.
+Paths are slash-normalized and relative to both the standalone source root and
+target root. V1 accepts only
+the case-sensitive extensions `.png`, `.svg`, `.ps1`, `.md`, and `.json`, and
+limits each path to 240 characters.
+The external schema root uses `oneOf` to select the bundle, journal, or accepted
+evidence contract; a definitions-only schema is not routable.
+
+Use `scripts/New-DeliveryExternalFileBundle.ps1` with the explicit repository
+root to produce deterministic compact UTF-8 manifest bytes. The writer rejects
+repository- or source-contained output before file creation. The manifest has
+no self digest; retain its exact-byte SHA-256 independently. Contract JSON is
+limited to 1 MiB and 16 levels of nesting. Keep the external manifest outside
+the source, staging, and repository roots. The importer rejects rooted or
+traversing paths, unsafe or reserved names, trailing dots/spaces, colons and
+alternate streams, case/Unicode-normalization collisions, reparse points,
+unsupported extensions, unexpected files or directories, byte/hash drift, an
+existing destination, overlapping roots, and cross-volume staging.
+
+`scripts/Invoke-DeliveryExternalFileIngest.ps1` copies only declared regular
+default streams into a new non-reparse staging payload outside the repository
+and on its volume. It verifies source and staging, persists and flushes the
+closed read-only `delivery_external_file_ingest_journal_v1`, revalidates
+source/staging/target and repository `HEAD`, then uses one same-volume directory
+move to create the absent destination. The caller-provided source commit must
+equal `HEAD` before preparation, immediately before that move, immediately
+after it, and before evidence publication. Prepare sealed evidence bytes at a
+non-routable pending path, make the final `HEAD` decision, then atomically
+revalidate the complete destination, and atomically publish the accepted
+evidence as the commit point. Drift detected before publication returns
+`ingest_evidence_incomplete` with no routable evidence. Accepted
+`delivery_external_file_ingest_evidence_v1` binds the external manifest bytes,
+journal hash, source commit, final inventory, changed paths, and file records.
+
+Every pre-move failure leaves the repository unchanged. Every post-move
+verification or evidence-sealing failure returns
+`ingest_evidence_incomplete`; it must not roll back, repair, rewrite, or delete
+the imported tree. Reconcile only with
+`scripts/Confirm-DeliveryExternalFileIngest.ps1`, the immutable prepared
+journal, and its independently retained expected hash. Reconciliation is
+repository-read-only and may only create accepted evidence outside the
+repository when the destination is exact. If failure left the deterministic
+evidence bytes at the final evidence path before read-only sealing completed,
+reconciliation may seal that exact file in place; it rejects any differing
+pre-existing file.
+
+The atomic boundary is the same-volume directory rename, not a transaction
+with every process running as the same local Windows principal. Revalidate the
+complete staging inventory after all planned pre-move work and verify the
+destination immediately after the rename. A same-principal concurrent mutation
+that lands after the last staging read may therefore create only an
+`ingest_evidence_incomplete` destination; it must never seal accepted evidence
+or allow an external-consuming worker to launch. Persistent ACL changes or
+rollback are not permitted as substitutes because they would make the retained
+tree non-exact or violate non-repairing recovery.
+
+Normal ingest and reconciliation both prepare evidence at a non-routable path,
+then recheck `HEAD` and the complete destination immediately before atomic
+publication. The remaining same-principal check-to-rename instruction boundary
+is not claimed to be transactional; every external-consuming worker reopens
+the manifest, journal, evidence, `HEAD`, and destination inventory immediately
+before launch, and the launcher rejects concurrent repository mutation.
+
+Inventory hashes cover ordinal-sorted records encoded as normalized path,
+NUL, invariant decimal byte length, NUL, lowercase SHA-256, and LF, all in
+UTF-8. New journal, evidence, and composite JSON use deterministic compact
+UTF-8 without BOM or trailing newline, are create-only, and must pass the same
+1 MiB and 16-level limits before any file is created. Prospective accepted
+evidence is serialized and checked before staging or repository mutation.
+
+After accepted external ingest and accepted text-patch evidence are present,
+`scripts/New-DeliveryCompositeCandidate.ps1` creates exactly:
+`format`, `source_commit`, `external_ingest_evidence_sha256`,
+`text_patch_evidence_sha256`, `final_inventory_sha256`, and `changed_paths`.
+The format is `delivery_composite_candidate_v1`; both evidence hashes bind
+exact accepted evidence-manifest bytes, and changed paths are the complete
+unique ordinal-sorted artifact union. The composite contains no binary content
+or stage judgment. Extract text-patch paths with Git's NUL-delimited patch
+parser so quoted or Unicode paths cannot be misread, and revalidate both
+accepted evidence sets immediately before sealing. External revalidation opens
+the accepted evidence, frozen external manifest, and prepared journal using
+their independently retained hashes. Validate the exact text-patch handoff and
+require its source commit to equal the composite source commit. Reject
+repository-contained handoff, evidence, patch, and composite output paths.
+Hash the complete candidate inventory—the exact union named by
+`changed_paths`—initially, again immediately before sealing, and again after
+sealing; any difference fails without returning an accepted candidate.
+Composite validation likewise compares two complete changed-path inventory
+passes and rereads the sealed candidate before returning success. Unrelated
+repository paths are intentionally outside this artifact hash; the launcher's
+whole-repository pre/post snapshots reject their concurrent mutation.
+Supply the sealed composite bytes in the verifier
+`candidate_artifact`, approver `final_artifact`, and reviewer artifact-state
+evidence with the complete diff and inventory. Binding two accepted mechanical
+artifacts does not require an integrator unless substantive conflicts exist.
 
 For local Git-state comparison only, the launcher decodes mapped
 `baseline_status` and `baseline_diff` records. It preserves the original typed

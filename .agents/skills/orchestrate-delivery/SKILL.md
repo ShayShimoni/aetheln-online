@@ -210,6 +210,81 @@ bundle content or generated patch bytes. A rejected output, bundle, or
 candidate patch remains sealed audit evidence only and is never routable to a
 later substantive stage.
 
+### Attested external-file ingest
+
+`delivery_file_bundle_v1` remains restricted to agent-authored results. A
+frozen user-provided file tree may enter the repository only through
+`delivery_external_file_bundle_v1` and
+`scripts/Invoke-DeliveryExternalFileIngest.ps1`. Version 1 is closed to the
+literal absent target root `visuals`, 1-128 create-only records, and the
+case-sensitive extensions `.png`, `.svg`, `.ps1`, `.md`, and `.json`. Each
+record has exactly `path`, `operation`, `size`, and `sha256`; mapping, rename,
+replace, delete, and partial import are unsupported. Paths are limited to 240
+characters so every derived journal and evidence artifact remains bounded.
+The published external schema selects the manifest, prepared journal, and
+accepted evidence contracts at its root; validate schema artifacts with
+`scripts/tests/Test-DeliveryArtifactSchemas.ps1`.
+Manifest and composite writers require an explicit repository root and reject
+repository-contained output paths before creating a file. Text-patch handoff,
+evidence, and patch inputs to composite binding must also remain outside the
+repository.
+
+The source root is the declared standalone `visuals` directory itself. Never
+enumerate its parent. The importer verifies exact source and staged
+file-and-directory inventories, rejects contract JSON over 1 MiB or 16 levels
+of nesting, and preflights those limits for deterministic output artifacts. It
+uses a new non-reparse staging root outside the repository on the
+repository volume, durably seals a prepared journal, and atomically moves the
+complete staged payload into the absent destination. The external manifest
+must remain outside the source, staging, and repository roots. The declared
+source commit must equal repository `HEAD` before preparation and immediately
+before the move. Recheck `HEAD` immediately after the move, prepare sealed
+evidence at a non-routable pending path, and make the final `HEAD` decision
+and destination-inventory check before atomically publishing accepted evidence.
+Detected drift before publication returns an incomplete result with no routable
+evidence. The same-principal check-to-rename instruction boundary is not
+transactional; worker launch revalidates the full chain and destination. A failure before that
+move leaves the repository unchanged. A failure after the move but before
+accepted evidence is published returns
+`ingest_evidence_incomplete` and leaves the imported tree and journal intact.
+The directory rename is not a transaction with arbitrary processes running as
+the same local principal: mutation after the last staging read is detected by
+destination verification and can only yield the incomplete state, never
+accepted evidence or a worker launch. Do not persist ACL changes or roll back
+the retained tree to simulate a stronger cross-process transaction.
+Only `scripts/Confirm-DeliveryExternalFileIngest.ps1`, supplied with the
+independently retained journal hash, may reconcile that state; it verifies and
+seals evidence but never repairs, rewrites, rolls back, or deletes files.
+If the deterministic evidence file already exists because failure occurred
+after its final rename, reconciliation accepts and seals it only when its exact
+bytes match the reconstructed evidence; any differing file is rejected.
+
+Every worker that consumes imported external files must set
+`consumes_external_files: true` and include the closed
+`external_ingest_evidence` object with the evidence-manifest, external-manifest,
+and prepared-journal paths and independently retained SHA-256 values, plus
+`source_commit` and `target_root`. The launcher opens all three read-only
+artifacts, verifies their exact hashes and cross-field agreement, and checks the
+source commit, literal target root, destination, and current inventory before
+starting the child. Revalidate after the launch snapshot and again immediately
+before child execution; the normal post-stage snapshot rejects any concurrent
+mutation. Do not add these fields to unrelated text-only workers.
+
+After accepted external ingest and accepted authored-text evidence both exist,
+use `scripts/New-DeliveryCompositeCandidate.ps1` to create the closed
+`delivery_composite_candidate_v1`. It binds the source commit, the exact
+external- and text-evidence manifest hashes, the final inventory hash, and the
+complete ordinal-sorted changed paths. It reopens the external evidence,
+external manifest, and prepared journal against their retained hashes, validates
+the text producer's exact handoff, requires the same source commit, and compares
+the complete `changed_paths` artifact union before and after sealing. Its
+validator uses two changed-path inventory passes and rereads the sealed
+candidate. Unrelated worktree mutation remains the launcher's pre/post snapshot
+responsibility. Route the exact sealed bytes as the single launcher-provenance
+artifact for verifier and approver, and as reviewer artifact-state evidence
+alongside the complete diff and inventory. Mechanical binding alone does not
+require an integrator; substantive conflict resolution does.
+
 Inspect the effective child permissions and tool surface, not only the custom
 agent TOML. Parent-turn runtime overrides may broaden a child's sandbox or
 tools. Use a separately restricted fresh Codex session or equivalent

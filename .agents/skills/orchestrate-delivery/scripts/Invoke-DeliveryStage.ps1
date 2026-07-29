@@ -50,6 +50,8 @@ else {
 	$OutputSchemaPath
 }
 $SandboxMode = 'read-only'
+$ExternalIngestRequired = $false
+$ExternalEvidence = $null
 
 if (-not ([System.IO.Path]::GetFullPath($WorkspaceRoot).TrimEnd('\', '/')).Equals(
 		[System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/'),
@@ -59,6 +61,27 @@ if (-not ([System.IO.Path]::GetFullPath($WorkspaceRoot).TrimEnd('\', '/')).Equal
 		"Stage workspace_root must equal the configured repository " +
 		"'$RepositoryRoot'."
 	)
+}
+
+if ($Stage -ceq 'worker' -and
+	@($Handoff.PSObject.Properties.Name) -ccontains 'consumes_external_files') {
+	$ExternalIngestRequired = $true
+	$ExternalIngestLibrary = Join-Path `
+		$PSScriptRoot 'DeliveryExternalFileIngest.Common.ps1'
+	if (-not (Test-Path -LiteralPath $ExternalIngestLibrary -PathType Leaf)) {
+		throw 'External-ingest validation library is missing.'
+	}
+	. $ExternalIngestLibrary
+	$ExternalEvidence = $Handoff.external_ingest_evidence
+	$null = Test-DeliveryAcceptedIngestEvidence `
+		-EvidenceManifestPath ([string]$ExternalEvidence.evidence_manifest_path) `
+		-ExpectedEvidenceManifestSha256 ([string]$ExternalEvidence.evidence_manifest_sha256) `
+		-ExternalManifestPath ([string]$ExternalEvidence.external_manifest_path) `
+		-ExpectedExternalManifestSha256 ([string]$ExternalEvidence.external_manifest_sha256) `
+		-PreparedJournalPath ([string]$ExternalEvidence.prepared_journal_path) `
+		-ExpectedPreparedJournalSha256 ([string]$ExternalEvidence.prepared_journal_sha256) `
+		-ExpectedSourceCommit ([string]$ExternalEvidence.source_commit) `
+		-RepositoryRoot $WorkspaceRoot
 }
 
 function Test-PathWithin {
@@ -427,6 +450,17 @@ $NeutralEvidenceFields = @($StageSchema.neutral_evidence_fields.PSObject.Propert
 $BeforeSnapshot = & $SnapshotScript -RepositoryRoot $WorkspaceRoot
 $Before = $BeforeSnapshot.Files
 $BeforeSnapshotHash = $BeforeSnapshot.Hash
+if ($ExternalIngestRequired) {
+	$null = Test-DeliveryAcceptedIngestEvidence `
+		-EvidenceManifestPath ([string]$ExternalEvidence.evidence_manifest_path) `
+		-ExpectedEvidenceManifestSha256 ([string]$ExternalEvidence.evidence_manifest_sha256) `
+		-ExternalManifestPath ([string]$ExternalEvidence.external_manifest_path) `
+		-ExpectedExternalManifestSha256 ([string]$ExternalEvidence.external_manifest_sha256) `
+		-PreparedJournalPath ([string]$ExternalEvidence.prepared_journal_path) `
+		-ExpectedPreparedJournalSha256 ([string]$ExternalEvidence.prepared_journal_sha256) `
+		-ExpectedSourceCommit ([string]$ExternalEvidence.source_commit) `
+		-RepositoryRoot $WorkspaceRoot
+}
 $AttestedExistingPathSha256Json = '{}'
 if ($IsArtifactProducer) {
 	$AttestedExistingPathSha256 = [ordered]@{}
@@ -793,6 +827,17 @@ try {
 	$ErrorActionPreference = 'Continue'
 	$StartedAt = [datetime]::UtcNow
 	$StartedAtUtc = $StartedAt.ToString('o')
+	if ($ExternalIngestRequired) {
+		$null = Test-DeliveryAcceptedIngestEvidence `
+			-EvidenceManifestPath ([string]$ExternalEvidence.evidence_manifest_path) `
+			-ExpectedEvidenceManifestSha256 ([string]$ExternalEvidence.evidence_manifest_sha256) `
+			-ExternalManifestPath ([string]$ExternalEvidence.external_manifest_path) `
+			-ExpectedExternalManifestSha256 ([string]$ExternalEvidence.external_manifest_sha256) `
+			-PreparedJournalPath ([string]$ExternalEvidence.prepared_journal_path) `
+			-ExpectedPreparedJournalSha256 ([string]$ExternalEvidence.prepared_journal_sha256) `
+			-ExpectedSourceCommit ([string]$ExternalEvidence.source_commit) `
+			-RepositoryRoot $WorkspaceRoot
+	}
 	$Events = @($Prompt | & $CodexCommand @Arguments 2> $StandardErrorPath)
 	$ExitCode = $LASTEXITCODE
 }
