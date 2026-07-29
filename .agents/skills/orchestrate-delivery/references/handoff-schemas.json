@@ -155,7 +155,9 @@
         "non_goals",
         "required_checks",
         "baseline_status",
-        "baseline_diff"
+        "baseline_diff",
+        "consumes_external_files",
+        "external_ingest_evidence"
       ],
       "blind": false
     },

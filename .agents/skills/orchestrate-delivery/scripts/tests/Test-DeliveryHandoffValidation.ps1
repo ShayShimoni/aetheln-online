@@ -312,6 +312,75 @@ Invoke-AcceptanceCase `
 	-Name 'Clean worker baselines are accepted' `
 	-Handoff $CleanPlanned
 
+$ExternalGate = $BaseWorkerHandoff.Clone()
+$ExternalGate.execution_route = 'planned'
+$ExternalGate.work_package = 'External-file consuming package.'
+$ExternalGate.consumes_external_files = $true
+$ExternalGate.external_ingest_evidence = [ordered]@{
+	evidence_manifest_path = 'C:\delivery\evidence.json'
+	evidence_manifest_sha256 = '1' * 64
+	external_manifest_path = 'C:\delivery\external-manifest.json'
+	external_manifest_sha256 = '2' * 64
+	prepared_journal_path = 'C:\delivery\prepared-journal.json'
+	prepared_journal_sha256 = '3' * 64
+	source_commit = $ExternalGate.source_commit
+	target_root = 'visuals'
+}
+Invoke-AcceptanceCase `
+	-Name 'Complete external-ingest worker marker is accepted' `
+	-Handoff $ExternalGate
+
+$MarkerOnly = $BaseWorkerHandoff.Clone()
+$MarkerOnly.execution_route = 'planned'
+$MarkerOnly.work_package = 'Marker only.'
+$MarkerOnly.consumes_external_files = $true
+Invoke-WorkerRejectionCase `
+	-Name 'External worker marker without evidence is rejected' `
+	-Handoff $MarkerOnly `
+	-ExpectedCode 'external_ingest_gate_incomplete' `
+	-PrivateMarker 'private-marker-only'
+
+$EvidenceOnly = $BaseWorkerHandoff.Clone()
+$EvidenceOnly.execution_route = 'planned'
+$EvidenceOnly.work_package = 'Evidence only.'
+$EvidenceOnly.external_ingest_evidence = $ExternalGate.external_ingest_evidence
+Invoke-WorkerRejectionCase `
+	-Name 'External evidence without worker marker is rejected' `
+	-Handoff $EvidenceOnly `
+	-ExpectedCode 'external_ingest_gate_incomplete' `
+	-PrivateMarker 'private-evidence-only'
+
+$FalseMarker = $BaseWorkerHandoff.Clone()
+$FalseMarker.execution_route = 'planned'
+$FalseMarker.work_package = 'False marker.'
+$FalseMarker.consumes_external_files = $false
+$FalseMarker.external_ingest_evidence = $ExternalGate.external_ingest_evidence
+Invoke-WorkerRejectionCase `
+	-Name 'False external worker marker is rejected' `
+	-Handoff $FalseMarker `
+	-ExpectedCode 'external_ingest_marker_invalid' `
+	-PrivateMarker 'private-false-marker'
+
+$WrongCommitEvidence = $BaseWorkerHandoff.Clone()
+$WrongCommitEvidence.execution_route = 'planned'
+$WrongCommitEvidence.work_package = 'Wrong commit evidence.'
+$WrongCommitEvidence.consumes_external_files = $true
+$WrongCommitEvidence.external_ingest_evidence = [ordered]@{
+	evidence_manifest_path = 'C:\delivery\evidence.json'
+	evidence_manifest_sha256 = '1' * 64
+	external_manifest_path = 'C:\delivery\external-manifest.json'
+	external_manifest_sha256 = '2' * 64
+	prepared_journal_path = 'C:\delivery\prepared-journal.json'
+	prepared_journal_sha256 = '3' * 64
+	source_commit = '2' * 40
+	target_root = 'visuals'
+}
+Invoke-WorkerRejectionCase `
+	-Name 'External evidence with wrong source commit is rejected' `
+	-Handoff $WrongCommitEvidence `
+	-ExpectedCode 'external_ingest_evidence_invalid' `
+	-PrivateMarker 'private-wrong-external-commit'
+
 $DirectTextEdit = $BaseWorkerHandoff.Clone()
 $DirectTextEdit.execution_route = 'direct'
 $DirectTextEdit.classifier_evidence = New-DirectClassifier `

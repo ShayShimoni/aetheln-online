@@ -1113,6 +1113,56 @@ $BaselineMismatchFailure = Invoke-ExpectedFailure -Pattern 'baseline_status' -Ac
 }
 Add-Result -Name 'Baseline mismatch is rejected before child launch' -Passed $BaselineMismatchFailure
 
+$ExternalGateHandoffPath = Join-Path $TestRoot 'worker-external-gate-missing.json'
+$ExternalGateHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$ExternalGateHandoff.run_id = 'test-worker-external-gate-missing'
+$ExternalGateHandoff | Add-Member `
+	-NotePropertyName consumes_external_files -NotePropertyValue $true
+$ExternalGateHandoff | Add-Member `
+	-NotePropertyName external_ingest_evidence `
+	-NotePropertyValue ([pscustomobject][ordered]@{
+		evidence_manifest_path = Join-Path $TestRoot 'missing-ingest-evidence.json'
+		evidence_manifest_sha256 = '1' * 64
+		external_manifest_path = Join-Path $TestRoot 'missing-external-manifest.json'
+		external_manifest_sha256 = '2' * 64
+		prepared_journal_path = Join-Path $TestRoot 'missing-prepared-journal.json'
+		prepared_journal_sha256 = '3' * 64
+		source_commit = $SourceCommit
+		target_root = 'visuals'
+	})
+$ExternalGateHandoff | ConvertTo-Json -Depth 10 | Set-Content `
+	-LiteralPath $ExternalGateHandoffPath -Encoding UTF8
+$MissingExternalEvidenceFailure = Invoke-ExpectedFailure `
+	-Pattern 'missing-ingest-evidence|does not exist|cannot find' `
+	-Action {
+		& $LaunchScript -HandoffPath $ExternalGateHandoffPath -DryRun | Out-Null
+	}
+Add-Result `
+	-Name 'External-consuming worker cannot launch without accepted ingest evidence' `
+	-Passed $MissingExternalEvidenceFailure
+
+$LauncherSource = Get-Content -Raw -LiteralPath $LaunchScript
+$SnapshotGateIndex = $LauncherSource.IndexOf(
+	'$BeforeSnapshot = & $SnapshotScript',
+	[System.StringComparison]::Ordinal
+)
+$LastEvidenceGateIndex = $LauncherSource.LastIndexOf(
+	'Test-DeliveryAcceptedIngestEvidence',
+	[System.StringComparison]::Ordinal
+)
+$ChildLaunchIndex = $LauncherSource.IndexOf(
+	'$Events = @($Prompt | & $CodexCommand',
+	[System.StringComparison]::Ordinal
+)
+Add-Result `
+	-Name 'External evidence is revalidated after snapshot and immediately before child launch' `
+	-Passed (
+		$SnapshotGateIndex -ge 0 -and
+		$LastEvidenceGateIndex -gt $SnapshotGateIndex -and
+		$ChildLaunchIndex -gt $LastEvidenceGateIndex
+	)
+
 $FixtureBin = Join-Path $TestRoot 'fixture-bin'
 New-Item -ItemType Directory -Path $FixtureBin | Out-Null
 $FixtureCodexPath = Join-Path $FixtureBin 'codex.exe'

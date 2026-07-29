@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Case/Unicode collision rejection and ordinal ordering are enforced by the runtime validator because JSON Schema cannot express them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "source_commit",
+    "external_ingest_evidence_sha256",
+    "text_patch_evidence_sha256",
+    "final_inventory_sha256",
+    "changed_paths"
+  ],
+  "properties": {
+    "format": { "const": "delivery_composite_candidate_v1" },
+    "source_commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "external_ingest_evidence_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "text_patch_evidence_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "final_inventory_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "changed_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512,
+        "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*[\\\\<>:\"|?*\\u0000-\\u001F])(?!(?:.*\\/)?(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|/|$))(?!.*[. ](?:/|$)).+$"
+      }
+    }
+  }
+}
