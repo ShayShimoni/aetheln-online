@@ -16,7 +16,7 @@ rules. (Trace: P10-040.)
 | Target party size | Blocking TBD | #1/#71; both briefs | Party-size-dependent 1.0 implementation is not ready. |
 | First PvE completion condition | Blocking TBD | #1/#71; both briefs | Prototype and 1.0 terminal objective contracts cannot finalize. |
 | Prototype combat resource identity | Blocking TBD; use only `prototype combat resource` | #1/#71, then #18/#19/#61 | GAS attribute, cost, recovery, and HUD wording cannot finalize. |
-| Project template and Starter Content | Blocking TBD | #13 consuming #71 | Project bootstrap cannot select Third Person template or No Starter Content from current prose. |
+| Project template and Starter Content | Approved and verified: Blank C++, no Starter Content | #13 consuming #71 | Bootstrap choice is resolved by recorded approval plus project generation, Editor build, and starter-map launch evidence. |
 | Exact 1.0 progress and currency identities | Blocking TBD | #27/#30 with #1/#71 approval | Persistence and reward fields cannot finalize. |
 | Toolchains, plugins, vendors, deployment | Evidence-gated TBD | #13/#15/#36 and an accepted ADR | Only dependent implementation is blocked. |
 | Numeric tuning, budgets, capacity, retention, schedules, gate thresholds | Evidence/product-gated TBD | #2/#40/#45/#48/#62 and feature owner | No value may be claimed or locked before review. |

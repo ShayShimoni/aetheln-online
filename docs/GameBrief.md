@@ -60,9 +60,8 @@ resource is deliberately unnamed: Guard, mana, and stamina are not approved.
 
 The accepted module baseline is `GameCore`, `GameCombat`, `GameUI`,
 `GameNet`, and server-only `GameServer`. Exact engine revision, compiler,
-SDK, plugin, build, and deployment mechanics remain owned by #13/#15. The
-project template and Starter Content policy are a blocking TBD for #13; neither
-the Third Person template nor No Starter Content is selected here. (Trace:
+SDK, plugin, build, and deployment mechanics remain owned by #13/#15. Issue
+#13 approved and verified a Blank C++ project with no Starter Content. (Trace:
 P10-002, P10-004, P10-006, P10-008, P10-044, P10-048, P10-051; canonical owner:
 [Technical Architecture](technical-architecture.md).)
 
@@ -103,7 +102,6 @@ P10-046, P10-051; release allocation:
 | Target party size | #1/#71 | Blocks party-size-dependent 1.0 work; the prototype does not select it. |
 | First PvE completion condition | #1/#71 | Blocks final objective contracts in the prototype and 1.0. |
 | Prototype combat resource identity | #1/#71 | Blocks final GAS attribute, cost, recovery, and HUD wording. |
-| Project template and Starter Content | #13 consuming #71 | Blocks the project bootstrap choice. |
 
 These decisions require reviewed updates to their canonical destinations; brief
-prose alone cannot resolve them. (Trace: P10-041-P10-044.)
+prose alone cannot resolve them. (Trace: P10-041-P10-043.)

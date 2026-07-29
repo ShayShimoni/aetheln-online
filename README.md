@@ -185,6 +185,8 @@ The repository currently contains planning and contribution infrastructure:
   `docs/performance-quality-and-delivery.md` - focused implementation
   specifications and decision registry
 - `docs/source-control.md` - Unreal asset locking and verification workflow
+- `docs/unreal-project-setup.md` - pinned UE 5.8 project setup, build, and
+  first-launch workflow
 - `output/pdf/` - rendered copies of maintained PDF codices
 - `README.md` - product scope, roadmap, and contributor entry point
 
@@ -201,7 +203,11 @@ cd aetheln-online
 Review the [Unreal source-control workflow](docs/source-control.md) before
 adding or editing `.uasset` and `.umap` files.
 
-No Unreal project, build command, or automated test command is available yet. Issues #13 and #15 will establish and document the supported build and launch paths.
+Use the [pinned Unreal project setup guide](docs/unreal-project-setup.md) to
+verify the engine revision, generate project files, build the Development
+Editor target, and launch the starter map. Issue #15 owns clean client/server
+builds, cooking, and packaging. No repository-defined automated test command
+exists yet.
 
 ## Work Management
 

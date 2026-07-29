@@ -76,12 +76,9 @@ the faction world is built.
 
 ## Project Structure & Module Organization
 
-This repository currently contains planning, canonical design, and canonical
-technical architecture under `docs/`, plus rendered codices under `output/pdf/`;
-no Unreal project, source tree, automated tests, or build scripts have been
-added yet. Keep research, architecture, and game-design documents in `docs/`.
-Keep maintained PDF outputs in `output/pdf/`. When implementation begins,
-follow the planned Unreal layout:
+This repository contains planning, canonical design, canonical technical
+architecture, and the pinned Unreal contributor setup under `docs/`, plus
+rendered codices under `output/pdf/`. The Unreal project follows this layout:
 
 - `Source/GameCore/` for gameplay framework classes.
 - `Source/GameCombat/` for Gameplay Ability System abilities, effects, and combat traces.
@@ -94,7 +91,23 @@ Do not commit generated Unreal directories such as `Binaries/`, `DerivedDataCach
 
 ## Build, Test, and Development Commands
 
-There are no repository-defined build or test commands yet. Documentation changes should be checked with `git diff --check` once Git is initialized. After the `.uproject` is added, document exact engine-version-specific commands here. Expected workflows include building from Visual Studio, launching the project in Unreal Editor, testing multiplayer through Play In Editor (PIE), and packaging a Windows client plus Linux dedicated server.
+Use `docs/unreal-project-setup.md` as the source of truth for the pinned engine,
+toolchain, project-generation command, Development Editor build, and first
+launch. From the repository root in PowerShell:
+
+```powershell
+$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnProject = (Resolve-Path '.\AethelnOnline.uproject').Path
+& (Join-Path $AethelnEngineRoot 'GenerateProjectFiles.bat') "-project=$AethelnProject" -game -engine -progress
+& (Join-Path $AethelnEngineRoot 'Engine\Build\BatchFiles\Build.bat') AethelnOnlineEditor Win64 Development $AethelnProject -WaitMutex -NoHotReloadFromIDE
+& (Join-Path $AethelnEngineRoot 'Engine\Binaries\Win64\UnrealEditor.exe') $AethelnProject /Game/Maps/StarterMap -log
+```
+
+Local engine paths must remain untracked. Issue #13 owns project generation,
+the Editor build/open path, map/default-game-mode setup, and initial-launch
+evidence. Issue #15 owns clean Win64 client/Linux server builds, cooking,
+packaging, and their evidence. No repository-defined automated test command
+exists yet. Check documentation changes with `git diff --check`.
 
 ## Coding Style & Naming Conventions
 
