@@ -48,6 +48,9 @@ canonical product or technical documents.
   order.
 - [Prototype Roadmap](next-steps-mmorpg-prototype.md) expands the pre-1.0
   prototype.
+- [Playable Movement POC](movement-poc.md) records the temporary local
+  movement-feel exception, imported asset provenance, and verification evidence
+  for issue #100.
 - [GitHub Issues](https://github.com/ShayShimoni/aetheln-online/issues) govern
   work status, ownership, priority, and target version.
 
