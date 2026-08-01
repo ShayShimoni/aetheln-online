@@ -30,26 +30,79 @@ namespace
 			FarDistance);
 	}
 
-	bool ShouldHideCharacterMeshAtCameraDistance(
+	float CalculateCameraShoulderOffset(
 		float CameraDistance,
-		float FirstPersonMeshHideDistance)
+		float FirstPersonDistance,
+		float MaxShoulderOffset)
 	{
-		return CameraDistance
-			<= FMath::Max(FirstPersonMeshHideDistance, 0.0f)
-				+ KINDA_SMALL_NUMBER;
+		const float NearDistance = FMath::Max(FirstPersonDistance, 0.0f);
+		const float Offset = FMath::Max(MaxShoulderOffset, 0.0f);
+		return CameraDistance > NearDistance ? Offset : 0.0f;
+	}
+
+	float AdvanceCameraZoomLinearly(
+		float CurrentDistance,
+		float DesiredDistance,
+		float DeltaSeconds,
+		float ZoomSpeed)
+	{
+		return FMath::FInterpConstantTo(
+			CurrentDistance,
+			DesiredDistance,
+			FMath::Max(DeltaSeconds, 0.0f),
+			FMath::Max(ZoomSpeed, 0.0f));
+	}
+
+	float CalculateCameraTargetHeight(
+		float CameraDistance,
+		float FirstPersonDistance,
+		float ThirdPersonHeight,
+		float FirstPersonHeight)
+	{
+		const float TransitionDistance = FMath::Max(FirstPersonDistance, 0.0f);
+		if (TransitionDistance <= KINDA_SMALL_NUMBER)
+		{
+			return FMath::Max(ThirdPersonHeight, 0.0f);
+		}
+		const float Alpha = FMath::Clamp(
+			CameraDistance / TransitionDistance,
+			0.0f,
+			1.0f);
+		return FMath::Lerp(
+			FMath::Max(FirstPersonHeight, 0.0f),
+			FMath::Max(ThirdPersonHeight, 0.0f),
+			Alpha);
+	}
+
+	bool ShouldHideCharacterMeshWithHysteresis(
+		bool bCurrentlyHidden,
+		float RequestedCameraDistance,
+		float ResolvedCameraDistance,
+		float HideDistance,
+		float RestoreDistance)
+	{
+		const float SafeHideDistance = FMath::Max(HideDistance, 0.0f);
+		const float SafeRestoreDistance = FMath::Max(
+			RestoreDistance,
+			SafeHideDistance);
+		if (!bCurrentlyHidden)
+		{
+			return RequestedCameraDistance <= SafeHideDistance + KINDA_SMALL_NUMBER
+				|| ResolvedCameraDistance <= SafeHideDistance + KINDA_SMALL_NUMBER;
+		}
+		return RequestedCameraDistance < SafeRestoreDistance - KINDA_SMALL_NUMBER
+			|| ResolvedCameraDistance < SafeRestoreDistance - KINDA_SMALL_NUMBER;
 	}
 
 	void ConfigureGroundRotationMode(
 		UCharacterMovementComponent& Movement,
 		bool bWantsAimSteering,
-		bool bWantsBackpedal,
-		bool bUseLockedMovementReference = false)
+		bool bWantsBackpedal)
 	{
 		Movement.bOrientRotationToMovement =
 			!bWantsAimSteering && !bWantsBackpedal;
 		Movement.bUseControllerDesiredRotation =
-			bWantsAimSteering
-			|| (bWantsBackpedal && !bUseLockedMovementReference);
+			bWantsAimSteering || bWantsBackpedal;
 	}
 
 	void ConfigureAirborneRotationMode(
@@ -136,15 +189,6 @@ namespace
 			|| (bWantsAimSteering && !bPureLateralAimJump);
 	}
 
-	float SelectMovementReferenceYaw(
-		float ControlYaw,
-		bool bUseLockedMovementYaw,
-		float LockedMovementYaw)
-	{
-		return bUseLockedMovementYaw
-			? LockedMovementYaw
-			: ControlYaw;
-	}
 
 	float CalculateAimJumpFacingOffset(
 		float BodyYaw,
@@ -212,23 +256,23 @@ bool FAethelnPOCCameraZoomTest::RunTest(const FString& Parameters)
 {
 	constexpr float MinDistance = 0.0f;
 	constexpr float MaxDistance = 700.0f;
-	constexpr float ZoomStep = 10.0f;
+	constexpr float ZoomStep = 40.0f;
 
 	TestEqual(
 		TEXT("Wheel up moves the camera one bounded step closer"),
 		CalculateCameraZoomDistance(
 			400.0f, 1.0f, ZoomStep, MinDistance, MaxDistance),
-		390.0f);
+		360.0f);
 	TestEqual(
 		TEXT("Wheel down moves the camera one small step farther"),
 		CalculateCameraZoomDistance(
 			400.0f, -1.0f, ZoomStep, MinDistance, MaxDistance),
-		410.0f);
+		440.0f);
 	TestEqual(
 		TEXT("Zooming out from first person uses the same small step"),
 		CalculateCameraZoomDistance(
 			0.0f, -1.0f, ZoomStep, MinDistance, MaxDistance),
-		10.0f);
+		40.0f);
 	TestEqual(
 		TEXT("Zoom in cannot pass the near limit"),
 		CalculateCameraZoomDistance(
@@ -244,13 +288,6 @@ bool FAethelnPOCCameraZoomTest::RunTest(const FString& Parameters)
 		CalculateCameraZoomDistance(
 			400.0f, 0.0f, ZoomStep, MinDistance, MaxDistance),
 		400.0f);
-	TestTrue(
-		TEXT("Closest zoom hides the local mannequin before camera intersection"),
-		ShouldHideCharacterMeshAtCameraDistance(50.0f, 50.0f));
-	TestFalse(
-		TEXT("Zooming away from first person restores the local mannequin"),
-		ShouldHideCharacterMeshAtCameraDistance(75.0f, 50.0f));
-
 	AAethelnPlayerCharacter* Character =
 		NewObject<AAethelnPlayerCharacter>();
 	const FFloatProperty* MinZoomProperty = FindFProperty<FFloatProperty>(
@@ -290,6 +327,94 @@ bool FAethelnPOCCameraZoomTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnPOCCloseCameraTest,
+	"Aetheln.POC.Camera.CloseShoulderOffset",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnPOCCloseCameraTest::RunTest(const FString& Parameters)
+{
+	constexpr float FirstPersonDistance = 50.0f;
+	constexpr float MaxShoulderOffset = 50.0f;
+
+	TestEqual(
+		TEXT("Far third-person camera keeps Quinn clear of the reticle"),
+		CalculateCameraShoulderOffset(
+			400.0f,
+			FirstPersonDistance,
+			MaxShoulderOffset),
+		MaxShoulderOffset);
+	TestEqual(
+		TEXT("Close third-person framing remains shouldered"),
+		CalculateCameraShoulderOffset(
+			100.0f,
+			FirstPersonDistance,
+			MaxShoulderOffset),
+		MaxShoulderOffset);
+	TestEqual(
+		TEXT("First-person threshold recenters the camera"),
+		CalculateCameraShoulderOffset(
+			FirstPersonDistance,
+			FirstPersonDistance,
+			MaxShoulderOffset),
+		0.0f);
+	TestTrue(
+		TEXT("Every visible third-person frame uses positive local-right offset"),
+		CalculateCameraShoulderOffset(
+			50.01f,
+			FirstPersonDistance,
+			MaxShoulderOffset) > 0.0f);
+	TestEqual(
+		TEXT("Negative offset tuning cannot reverse the framing side"),
+		CalculateCameraShoulderOffset(
+			100.0f,
+			FirstPersonDistance,
+			-MaxShoulderOffset),
+		0.0f);
+	TestEqual(
+		TEXT("Wheel zoom advances by constant linear distance"),
+		AdvanceCameraZoomLinearly(400.0f, 390.0f, 0.05f, 100.0f),
+		395.0f);
+	TestEqual(
+		TEXT("Linear zoom stops exactly at the requested distance"),
+		AdvanceCameraZoomLinearly(395.0f, 390.0f, 0.1f, 100.0f),
+		390.0f);
+	TestEqual(
+		TEXT("A new wheel event replaces queued travel with one current step"),
+		CalculateCameraZoomDistance(
+			395.0f, 1.0f, 40.0f, 0.0f, 700.0f),
+		355.0f);
+	TestEqual(
+		TEXT("Third-person aim pivot keeps the reticle above Quinn"),
+		CalculateCameraTargetHeight(400.0f, 50.0f, 120.0f, 70.0f),
+		120.0f);
+	TestEqual(
+		TEXT("Hidden first-person transition lowers the camera linearly"),
+		CalculateCameraTargetHeight(25.0f, 50.0f, 120.0f, 70.0f),
+		95.0f);
+	TestEqual(
+		TEXT("First-person endpoint returns to eye-level framing"),
+		CalculateCameraTargetHeight(0.0f, 50.0f, 120.0f, 70.0f),
+		70.0f);
+	TestTrue(
+		TEXT("Requested first-person zoom hides Quinn"),
+		ShouldHideCharacterMeshWithHysteresis(
+			false, 50.0f, 120.0f, 50.0f, 60.0f));
+	TestTrue(
+		TEXT("Collision-compressed first-person distance hides Quinn"),
+		ShouldHideCharacterMeshWithHysteresis(
+			false, 400.0f, 50.0f, 50.0f, 60.0f));
+	TestTrue(
+		TEXT("Hysteresis keeps Quinn hidden before both distances recover"),
+		ShouldHideCharacterMeshWithHysteresis(
+			true, 400.0f, 55.0f, 50.0f, 60.0f));
+	TestFalse(
+		TEXT("Quinn returns after requested and resolved distances recover"),
+		ShouldHideCharacterMeshWithHysteresis(
+			true, 60.0f, 60.0f, 50.0f, 60.0f));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnPOCRotationModeTest,
 	"Aetheln.POC.Movement.RotationModes",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -301,10 +426,10 @@ bool FAethelnPOCRotationModeTest::RunTest(const FString& Parameters)
 
 	ConfigureGroundRotationMode(*Movement, false, false);
 	TestTrue(
-		TEXT("Normal and left-mouse orbit movement faces travel direction"),
+		TEXT("Movement without aim steering faces travel direction"),
 		Movement->bOrientRotationToMovement);
 	TestFalse(
-		TEXT("Normal and left-mouse orbit movement ignores controller yaw"),
+		TEXT("Movement without aim steering ignores controller yaw"),
 		Movement->bUseControllerDesiredRotation);
 
 	ConfigureGroundRotationMode(*Movement, false, true);
@@ -317,15 +442,10 @@ bool FAethelnPOCRotationModeTest::RunTest(const FString& Parameters)
 
 	ConfigureGroundRotationMode(*Movement, true, true);
 	TestFalse(
-		TEXT("Right-mouse aim preserves camera-facing strafing"),
+		TEXT("Reticle aim preserves camera-facing strafing"),
 		Movement->bOrientRotationToMovement);
 	TestTrue(
-		TEXT("Right-mouse aim steers character with controller yaw"),
-		Movement->bUseControllerDesiredRotation);
-
-	ConfigureGroundRotationMode(*Movement, false, true, true);
-	TestFalse(
-		TEXT("LMB orbit keeps backpedal facing independent from live camera yaw"),
+		TEXT("Reticle aim steers character with controller yaw"),
 		Movement->bUseControllerDesiredRotation);
 
 	ConfigureAirborneRotationMode(*Movement, false);
@@ -556,14 +676,6 @@ bool FAethelnPOCJumpFacingTest::RunTest(const FString& Parameters)
 		TEXT("Stationary jumps preserve current facing"),
 		ShouldSnapJumpFacing(
 			FVector2D::ZeroVector));
-	TestEqual(
-		TEXT("LMB orbit preserves the captured movement yaw"),
-		SelectMovementReferenceYaw(120.0f, true, 35.0f),
-		35.0f);
-	TestEqual(
-		TEXT("RMB steering uses the live controller yaw"),
-		SelectMovementReferenceYaw(120.0f, false, 35.0f),
-		120.0f);
 	const float RightJumpFacingOffset =
 		CalculateAimJumpFacingOffset(90.0f, 0.0f);
 	TestEqual(
@@ -692,6 +804,8 @@ void AAethelnPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 	BaseMeshRelativeYaw = GetMesh()->GetRelativeRotation().Yaw;
+	DesiredCameraZoomDistance = CameraBoom->TargetArmLength;
+	UpdateCameraPresentation(0.0f);
 	if (GetNetMode() == NM_DedicatedServer)
 	{
 		SetActorTickEnabled(false);
@@ -707,6 +821,7 @@ void AAethelnPlayerCharacter::Tick(float DeltaSeconds)
 	}
 	UpdateAirborneAimFacing();
 	UpdateMovementPresentation(DeltaSeconds);
+	UpdateCameraPresentation(DeltaSeconds);
 }
 
 void AAethelnPlayerCharacter::ReceiveMoveInput(const FVector2D& MovementInput)
@@ -717,17 +832,6 @@ void AAethelnPlayerCharacter::ReceiveMoveInput(const FVector2D& MovementInput)
 	}
 
 	const FVector2D ClampedInput = MovementInput.GetClampedToMaxSize(1.0f);
-	if (bCameraOnlyOrbitActive
-		&& !ClampedInput.IsNearlyZero()
-		&& LastMovementInput.IsNearlyZero())
-	{
-		CaptureMovementReferenceYaw();
-	}
-	if (ClampedInput.IsNearlyZero()
-		&& !bCameraOnlyOrbitActive)
-	{
-		bUseLockedMovementReference = false;
-	}
 	const FVector2D SpeedAdjustedInput =
 		ApplyBackpedalSpeedScale(ClampedInput, BackpedalSpeedScale);
 	LastMovementInput = ClampedInput;
@@ -760,19 +864,12 @@ void AAethelnPlayerCharacter::ReceiveCameraZoomInput(float ZoomInput)
 		return;
 	}
 
-	CameraBoom->TargetArmLength = CalculateCameraZoomDistance(
+	DesiredCameraZoomDistance = CalculateCameraZoomDistance(
 		CameraBoom->TargetArmLength,
 		ZoomInput,
 		CameraZoomStep,
 		CameraZoomMinDistance,
 		CameraZoomMaxDistance);
-	UpdateCameraMeshVisibility();
-}
-
-void AAethelnPlayerCharacter::ReceiveCameraOrbitIntent(
-	bool bWantsCameraOnlyOrbit)
-{
-	ApplyCameraOrbitIntent(bWantsCameraOnlyOrbit);
 }
 
 void AAethelnPlayerCharacter::ReceiveAimSteeringIntent(bool bWantsAimSteering)
@@ -830,13 +927,13 @@ void AAethelnPlayerCharacter::ReceiveSprintIntent(bool bWantsToSprint)
 void AAethelnPlayerCharacter::UnPossessed()
 {
 	GetMesh()->SetOwnerNoSee(false);
+	bCameraMeshHidden = false;
 	ResetMovementPresentation(true);
 	ClearBufferedJumpRequest();
 	LastMovementInput = FVector2D::ZeroVector;
 	bWantsBackpedal = false;
 	bTravelFacingAimJumpActive = false;
 	TravelFacingAimJumpOffset = 0.0f;
-	ApplyCameraOrbitIntent(false);
 	ApplyAimSteeringIntent(false);
 	ApplySprintIntent(false);
 	StopJumping();
@@ -846,13 +943,13 @@ void AAethelnPlayerCharacter::UnPossessed()
 void AAethelnPlayerCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetMesh()->SetOwnerNoSee(false);
+	bCameraMeshHidden = false;
 	ResetMovementPresentation(true);
 	ClearBufferedJumpRequest();
 	LastMovementInput = FVector2D::ZeroVector;
 	bWantsBackpedal = false;
 	bTravelFacingAimJumpActive = false;
 	TravelFacingAimJumpOffset = 0.0f;
-	ApplyCameraOrbitIntent(false);
 	ApplyAimSteeringIntent(false);
 	ApplySprintIntent(false);
 	StopJumping();
@@ -910,10 +1007,6 @@ void AAethelnPlayerCharacter::ApplyAimSteeringIntent(bool bWantsAimSteering)
 {
 	const bool bWasAimSteeringActive = bAimSteeringActive;
 	bAimSteeringActive = bWantsAimSteering;
-	if (bAimSteeringActive)
-	{
-		bUseLockedMovementReference = false;
-	}
 	UCharacterMovementComponent* Movement = GetCharacterMovement();
 	if (Movement->IsFalling())
 	{
@@ -947,34 +1040,43 @@ void AAethelnPlayerCharacter::CaptureTravelFacingAimJumpOffset()
 			Controller->GetControlRotation().Yaw);
 }
 
-void AAethelnPlayerCharacter::ApplyCameraOrbitIntent(
-	bool bWantsCameraOnlyOrbit)
+void AAethelnPlayerCharacter::UpdateCameraPresentation(float DeltaSeconds)
 {
-	bCameraOnlyOrbitActive = bWantsCameraOnlyOrbit;
-	if (bCameraOnlyOrbitActive
-		&& !LastMovementInput.IsNearlyZero())
-	{
-		CaptureMovementReferenceYaw();
-	}
-	else if (!bCameraOnlyOrbitActive
-		&& LastMovementInput.IsNearlyZero())
-	{
-		bUseLockedMovementReference = false;
-	}
-	ApplyCurrentGroundRotationMode();
-}
-
-void AAethelnPlayerCharacter::UpdateCameraMeshVisibility()
-{
-	if (CameraBoom == nullptr || GetMesh() == nullptr)
+	if (CameraBoom == nullptr || FollowCamera == nullptr || GetMesh() == nullptr
+		|| !IsLocallyControlled())
 	{
 		return;
 	}
+	CameraBoom->TargetArmLength = AdvanceCameraZoomLinearly(
+		CameraBoom->TargetArmLength,
+		DesiredCameraZoomDistance,
+		DeltaSeconds,
+		CameraZoomTransitionSpeed);
+	CameraBoom->TargetOffset.Z = CalculateCameraTargetHeight(
+		CameraBoom->TargetArmLength,
+		FirstPersonMeshHideDistance,
+		ThirdPersonCameraTargetHeight,
+		FirstPersonCameraTargetHeight);
 
-	GetMesh()->SetOwnerNoSee(
-		ShouldHideCharacterMeshAtCameraDistance(
+	CameraBoom->SocketOffset = FVector(
+		0.0f,
+		CalculateCameraShoulderOffset(
 			CameraBoom->TargetArmLength,
-			FirstPersonMeshHideDistance));
+			FirstPersonMeshHideDistance,
+			CameraShoulderMaxOffset),
+		0.0f);
+	const FVector BoomPivot =
+		CameraBoom->GetComponentLocation() + CameraBoom->TargetOffset;
+	const float ResolvedCameraDistance = FVector::Distance(
+		FollowCamera->GetComponentLocation(),
+		BoomPivot);
+	bCameraMeshHidden = ShouldHideCharacterMeshWithHysteresis(
+		bCameraMeshHidden,
+		CameraBoom->TargetArmLength,
+		ResolvedCameraDistance,
+		FirstPersonMeshHideDistance,
+		FirstPersonMeshRestoreDistance);
+	GetMesh()->SetOwnerNoSee(bCameraMeshHidden);
 }
 
 void AAethelnPlayerCharacter::ApplyCurrentGroundRotationMode()
@@ -984,8 +1086,7 @@ void AAethelnPlayerCharacter::ApplyCurrentGroundRotationMode()
 		ConfigureGroundRotationMode(
 			*Movement,
 			bAimSteeringActive,
-			bWantsBackpedal,
-			bUseLockedMovementReference);
+			bWantsBackpedal);
 	}
 }
 
@@ -1071,30 +1172,12 @@ void AAethelnPlayerCharacter::ApplyCurrentJumpFacing()
 		ETeleportType::TeleportPhysics);
 }
 
-void AAethelnPlayerCharacter::CaptureMovementReferenceYaw()
-{
-	if (Controller == nullptr)
-	{
-		return;
-	}
-
-	LockedMovementReferenceYaw =
-		Controller->GetControlRotation().Yaw;
-	bUseLockedMovementReference = true;
-}
-
 FRotator AAethelnPlayerCharacter::GetMovementReferenceRotation() const
 {
 	const float ControlYaw = Controller != nullptr
 		? Controller->GetControlRotation().Yaw
 		: GetActorRotation().Yaw;
-	return FRotator(
-		0.0f,
-		SelectMovementReferenceYaw(
-			ControlYaw,
-			bUseLockedMovementReference,
-			LockedMovementReferenceYaw),
-		0.0f);
+	return FRotator(0.0f, ControlYaw, 0.0f);
 }
 
 void AAethelnPlayerCharacter::ClearBufferedJumpRequest()

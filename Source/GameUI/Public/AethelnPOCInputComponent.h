@@ -11,6 +11,12 @@ class ULocalPlayer;
 class UInputAction;
 class UInputMappingContext;
 
+enum class EAethelnPOCControlMode : uint8
+{
+	Reticle,
+	Cursor,
+};
+
 /**
  * Client-only transient Enhanced Input setup for the movement POC.
  * The component is selected only by the POC pawn Blueprint.
@@ -37,13 +43,13 @@ private:
 	void BindReceiver();
 	void ActivateLocalPlayerResources();
 	void ReleaseLocalPlayerResources();
-	void ResetHeldState();
+	void ResetGameplayInputState();
 	void HandleApplicationDeactivated();
 	void HandleApplicationReactivated();
 	void RemoveLifecycleDelegates();
-	void UpdateMouseControlState();
+	void ApplyControlMode(EAethelnPOCControlMode NewMode);
 	void UpdateMovementTickState();
-	void SetMouseCapture(bool bCaptureMouse);
+	void ApplyPlayerInputMode();
 
 	void HandleLook(const FInputActionValue& Value);
 	void HandleZoom(const FInputActionValue& Value);
@@ -55,10 +61,8 @@ private:
 	void HandleMoveLeftStopped(const FInputActionValue& Value);
 	void HandleMoveRightStarted(const FInputActionValue& Value);
 	void HandleMoveRightStopped(const FInputActionValue& Value);
-	void HandleLeftMouseStarted(const FInputActionValue& Value);
-	void HandleLeftMouseStopped(const FInputActionValue& Value);
-	void HandleRightMouseStarted(const FInputActionValue& Value);
-	void HandleRightMouseStopped(const FInputActionValue& Value);
+	void HandleToggleControlMode(const FInputActionValue& Value);
+	void HandleViewportRecapture(const FInputActionValue& Value);
 	void HandleJumpStarted(const FInputActionValue& Value);
 	void HandleJumpStopped(const FInputActionValue& Value);
 	void HandleJumpCanceled(const FInputActionValue& Value);
@@ -86,10 +90,10 @@ private:
 	TObjectPtr<UInputAction> ZoomAction;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UInputAction> LeftMouseAction;
+	TObjectPtr<UInputAction> ToggleControlModeAction;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UInputAction> RightMouseAction;
+	TObjectPtr<UInputAction> ViewportRecaptureAction;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> JumpAction;
@@ -108,13 +112,12 @@ private:
 	TWeakObjectPtr<APlayerController> AppliedPlayerController;
 	FDelegateHandle DeactivateHandle;
 	FDelegateHandle ReactivateHandle;
+	EAethelnPOCControlMode ControlMode = EAethelnPOCControlMode::Reticle;
 	bool bContextApplied = false;
 	bool bBindingsApplied = false;
-	bool bLookCaptured = false;
+	bool bSuppressNextLookInput = true;
 	bool bMoveForwardHeld = false;
 	bool bMoveBackwardHeld = false;
 	bool bMoveLeftHeld = false;
 	bool bMoveRightHeld = false;
-	bool bLeftMouseHeld = false;
-	bool bRightMouseHeld = false;
 };

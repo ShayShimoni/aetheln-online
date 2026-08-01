@@ -9,13 +9,13 @@ Continue GitHub issue [#100](https://github.com/ShayShimoni/aetheln-online/issue
 ## Repository state
 
 - Repository: the root of the current checkout
-- Branch: `codex/100-movement-poc`
+- Branch: `codex/100-reticle-cursor-poc`
 - Baseline POC commit: `1ab315e` (`feat(movement): #100 add playable movement POC`)
 - Integration base at publication: `origin/develop` commit `7053bcb`
-- The user explicitly authorized committing, pushing this branch, and opening a pull request to `develop` at the end of this session
-- The user later explicitly authorized reviewing, fixing, and merging pull request #101; inspect the live PR before repeating any action
+- The current follow-up authorizes implementation only. Do not commit, push,
+  publish, or merge without separate authorization.
 - Inspect `git log`, the live issue, and the live pull request for the final publication identifiers and check state
-- Issue #100 should be in `Code Review` after the reviewable branch and pull request are published
+- Issue #100 is `In Progress` pending owner hands-on confirmation.
 - Do not change branches, pull, deploy, remove files, or resolve the unrelated config change without explicit user authority
 
 ## Current playable result
@@ -25,29 +25,44 @@ Continue GitHub issue [#100](https://github.com/ShayShimoni/aetheln-online/issue
 Controls:
 
 - `WASD`: camera-relative movement
-- `LMB`: orbit the camera independently from held movement
-- `RMB`: aim/steer the character with the camera
-- `LMB + RMB`: aim/steer and move forward
+- Reticle mode starts captured with a fixed center reticle, hidden cursor,
+  camera-relative movement, and camera-facing steering
+- `Left Alt`: toggle unlocked Cursor mode
+- Unhandled viewport `LMB` in Cursor mode: recapture Reticle mode without
+  forwarding the click as gameplay input
+- `LMB` primary attack and `RMB` defensive action are reserved but inactive
 - `Space`: jump, including the tuned landing buffer
 - `Left Shift`: standalone-only sprint; backward movement cannot sprint
-- Mouse wheel: camera zoom in consistent 10 cm steps
+- Mouse wheel: camera zoom in consistent 40 cm steps
 
 Final camera zoom tuning:
 
 - Default spring-arm distance: 400 cm
 - Minimum: 0 cm, producing a first-person-like view
 - Maximum: 700 cm
-- Step: 10 cm per wheel notch in both directions
-- At 50 cm or closer, Quinn is hidden only from the owning local camera to prevent the camera intersecting the mannequin's head
-- Zooming beyond 50 cm restores Quinn
+- Step: 40 cm per wheel notch in both directions
+- Every visible third-person distance uses a 35 cm local-right shoulder offset
+  and 120 cm target height so Quinn stays below-left of the fixed reticle
+- Wheel requests use 40 cm steps, animate at a constant 400 cm/s, and replace
+  queued travel from the currently displayed distance so scrolling stops promptly
+- At 50 cm Quinn hides and the camera recenters; the hidden transition then
+  lowers linearly to the 70 cm first-person target height at 0 cm
+- Requested zoom alone drives shoulder framing; spring-arm collision does not
+  oscillate the offset
+- Requested or resolved distance at 50 cm hides Quinn only for the owner;
+  restoration waits until both reach 60 cm
 - Camera collision, 90-degree FOV, 70 cm target offset, and no-lag behavior remain unchanged
 
 Owner feedback at handoff:
 
 - The owner said the course and prior camera behavior seemed good.
 - After the final 0-700 cm / 10 cm-step change, the owner confirmed: "the camera zoom now ok."
+- The owner later supplied zoom-sequence screenshots showing the reticle crossing
+  Quinn's head and TERA references showing the desired below-left character
+  composition. The persistent shoulder framing and linear transition address
+  that feedback; fresh hands-on confirmation is pending.
 
-## Zoom follow-up scope
+## Reticle, cursor, and close-camera follow-up scope
 
 The zoom follow-up modifies:
 
@@ -68,32 +83,45 @@ The implementation keeps Enhanced Input inside client-only `GameUI`. `GameCore` 
 
 Because of this unrelated file, run scoped diff checks that exclude `Config/DefaultEngine.ini` until it is resolved.
 
-## Verification completed for the final zoom implementation
+## Verification state for the current follow-up
 
-- Test-first evidence: focused zoom automation failed against the previous 475/25/75 tuning, then passed with the approved 700/10/10 values
+The current reticle/cursor and close-camera implementation has completed these
+automated gates:
+
+- Test-first evidence: directional input automation failed while mouse-button
+  movement remained, then passed after its removal
 - `AethelnOnlineEditor Win64 Development`: passed
-- Full `Aetheln.POC` automation: 7/7 passed
+- Full `Aetheln.POC` automation: 9/9 passed
 - Full-Editor `validate-target`: 21 actors; 0 static-geometry, presentation, or movement failures
 - Scoped `AethelnOnlineServer Win64 Development -Module=GameCore+GameCombat+GameNet+GameServer -NoLink`: passed
 - Scoped `git diff --check`, excluding the unrelated config change: passed
-- Issue #100 received progress comments recording the scope refinement and verification
+- Owner PIE and Standalone confirmation remains pending
 
-The final PR review added a focused regression for combining `W` with
-both-button forward movement. Those inputs now produce one logical forward
-intent, so adding `A` or `D` preserves the intended normalized 45-degree
-diagonal instead of double-counting forward input.
+The earlier PR review added a regression for the now-removed both-button
+forward shortcut. The current follow-up removes all mouse-button movement and
+orbit intent; WASD remains the only directional input in this POC.
 
 The usual Unreal platform discovery output still reports unavailable non-Windows SDKs, including VisionOS. Win64 is valid, the requested checks exit successfully, and this is not a regression introduced by the POC.
 
 ## Recommended next steps
 
-1. Read `AGENTS.md`, `docs/documentation-index.md`, `docs/movement-poc.md`, and the applicable workflow skills before acting.
-2. Inspect the published pull request, its checks, review state, and the live #100 project item before continuing.
-3. Review only the committed POC/zoom changes; keep the unrelated `Config/DefaultEngine.ini` modification out of Git.
-4. If review causes any file change, rerun the focused zoom test, full `Aetheln.POC` suite, Editor build, scoped Server compile, target validation, and scoped diff check.
-5. Inspect the live state of PR #101 and issue #100 before taking further delivery action.
-6. After the reviewed merge, move #100 only to `Dev Done`; do not claim independent QA or `Done` evidence.
+1. Run focused and full `Aetheln.POC` automation, the Development Editor build,
+   full-Editor target validation, scoped Server module compile, and scoped diff
+   checks.
+2. Launch `/Game/Maps/MovementPOC` for owner hands-on confirmation in PIE and
+   Standalone, including focus loss, held inputs, the complete zoom path,
+   corridor collision, and corner behavior.
+3. Record subjective camera and input tuning feedback on issue #100 and keep it
+   `In Progress` until the owner confirms the result.
+4. Keep the unrelated `Config/DefaultEngine.ini` modification out of Git and
+   all verification output.
 
 ## POC exclusions still in force
 
-No controller, crouch, interaction, combat, multiplayer proof, audio, persistence, packaging, custom Aetheln art, or canonical performance claim. Quinn remains a temporary engine mannequin. Issue #17 still owns predicted, replicated, server-validated movement.
+No controller, crouch, NPC interaction, cinematic dialogue cameras, interactive
+menus, CommonUI cursor-ownership stack, combat execution, multiplayer proof,
+audio, persistence, packaging, custom Aetheln art, or canonical performance
+claim. Shoulder parallax and near-cover attack obstruction remain future combat
+concerns; this POC does not prove reticle-to-attack alignment. Quinn remains a
+temporary engine mannequin. Issue #17 still owns predicted, replicated,
+server-validated movement.

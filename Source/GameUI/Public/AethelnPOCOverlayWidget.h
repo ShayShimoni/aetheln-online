@@ -16,11 +16,12 @@ class GAMEUI_API UAethelnPOCOverlayWidget : public UUserWidget
 
 public:
 	UAethelnPOCOverlayWidget(const FObjectInitializer& ObjectInitializer);
-	void SetAimReticleVisible(bool bVisible);
+	void SetControlMode(bool bReticleMode);
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
 	TSharedPtr<STextBlock> AimReticle;
+	TSharedPtr<STextBlock> ModeStatus;
 };

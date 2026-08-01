@@ -157,30 +157,24 @@ so the pose blends briefly without delaying movement.
   landing instead of decelerating in mid-air
 - Maximum acceleration: 10,000 cm/s²
 - Ground friction: 16
-- Travel-facing rotation: 720 degrees/s. Normal movement faces Quinn toward
-  forward or lateral travel. LMB-only orbit captures the movement reference
-  when orbit or movement begins, so dragging the camera cannot redirect an
-  already-held WASD direction; the reference remains locked until movement
-  stops or RMB takes steering control. S normally realigns Quinn camera-forward
-  after lateral travel and backpedals without a 180-degree reverse turn; during
-  LMB-only orbit its facing also ignores live camera-yaw changes. Right-mouse
-  aim/steering keeps the capsule camera-facing so A/D remain strafes, while the
+- Camera-facing rotation: 720 degrees/s. Reticle mode continuously steers Quinn
+  toward camera-forward while WASD remains camera relative. S backpedals
+  without a 180-degree reverse turn, and A/D remain strafes while the
   visible mesh adds up to 35 degrees of proportional yaw toward lateral ground
   travel (about 25 degrees for a normalized forward diagonal). This stronger
   body angle blends in and out without changing movement, aim, collision, or
   the camera. Movement trajectory changes immediately; the lower facing rate
   smooths only the visible ground turn.
 - A jump uses the normalized direction held at takeoff. Airborne input cannot
-  redirect the trajectory. RMB/both-button camera movement may turn capsule
+  redirect the trajectory. Reticle camera movement may turn capsule
   facing while airborne without changing velocity. Diagonal aimed jumps with
   positive forward input add up to 25 degrees of local, presentation-only mesh
   yaw toward the locked takeoff direction; it blends in and returns after
-  landing without changing collision or aim. Pure lateral RMB jumps instead
-  snap the whole body to the locked travel direction. While RMB remains held,
+  landing without changing collision or aim. Pure lateral aimed jumps instead
+  snap the whole body to the locked travel direction. While Reticle mode remains active,
   later camera-yaw changes rotate that airborne body angle by the same amount
-  without redirecting velocity; releasing and repressing RMB recaptures the
-  current body-to-camera offset without a snap. Separate camera-facing head
-  tracking is deferred. Backward RMB jumps add no local yaw and retain
+  without redirecting velocity. Separate camera-facing head
+  tracking is deferred. Backward aimed jumps add no local yaw and retain
   camera-forward body facing.
 - A Space press during the final 0.20 seconds before landing is retained once
   and consumed on landing. Both buffered and just-grounded jumps replace the
@@ -189,27 +183,37 @@ so the pose blends briefly without delaying movement.
   allowing steering during the current jump. Free-running jump takeoff also
   snaps capsule/body yaw to that resolved direction, avoiding incremental turns
   across rapid landing jumps. Backpedal takeoff snaps the body to camera-forward
-  while velocity remains backward. RMB/both takeoff snaps its base yaw to camera
+  while velocity remains backward. Aimed takeoff snaps its base yaw to camera
   aim; only a forward-plus-lateral takeoff layers the 25-degree directional
   mesh turn on top. Expired, canceled, focus-lost, unpossessed, and teardown
   requests are discarded.
-- Camera: centered 400 cm collision-aware spring arm, 70 cm target offset,
+- Camera: default 400 cm collision-aware spring arm, dynamic target height,
   90-degree FOV, no camera lag, and bounded mouse-wheel zoom from 0 cm to
-  700 cm in consistent 10 cm steps.
-  At 50 cm or closer, Quinn is hidden only from the
-  owning local camera to prevent the view intersecting the mannequin; zooming
-  back out restores the third-person model.
-- Input: WASD; use the mouse wheel for a small bounded camera zoom; hold left
-  mouse to orbit the camera independently without
-  redirecting held movement; hold right mouse to aim/steer Quinn with the
-  camera; hold both mouse buttons to aim/steer and move forward; Space to jump;
-  and hold Left Shift to sprint forward or laterally. Backpedaling remains at
-  350 cm/s while Shift is held. When neither mouse button is held, the cursor
-  is visible and unlocked.
+  700 cm in consistent 40 cm requested steps animated at a constant 400 cm/s.
+  Each wheel event replaces any remaining queued travel with one step from the
+  currently displayed distance, so releasing the wheel cannot leave a long
+  camera glide. Every visible third-person frame uses a 35 cm local-right shoulder offset and
+  a 120 cm target height so Quinn remains below-left of the fixed reticle, as in
+  the approved action-camera reference. At 50 cm the mesh hides and framing
+  recenters; from 50 cm to the 0 cm endpoint, the hidden first-person camera
+  lowers linearly to its 70 cm eye-level target height. Only the animated
+  requested zoom drives framing. Quinn hides from the owning local camera
+  when requested or collision-compressed distance reaches 50 cm and restores
+  only after both reach 60 cm.
+- Input: Reticle mode is the default, with a hidden cursor, fixed reticle,
+  camera-relative WASD, and camera-facing steering. Left Alt toggles unlocked
+  Cursor mode; an unhandled viewport click recaptures Reticle mode. Focus loss
+  enters Cursor mode and focus recovery does not recapture automatically.
+  Cursor mode blocks new movement, look, zoom, jump, and sprint input while
+  physics and accepted movement continue naturally. Recapture consumes the
+  click and first mouse delta and requires fresh key presses. Space jumps, Left
+  Shift sprints forward or laterally, and the wheel zooms. LMB primary attack
+  and RMB defensive action are reserved but inactive in this movement POC.
 
 The runtime input actions and mapping context are transient and retained by the
 POC input component. They are scoped to the POC pawn Blueprint, removed on
-teardown or focus loss, and restored without duplication after focus returns.
+teardown or focus loss, and restored without duplication in Cursor mode after
+focus returns.
 Jump and sprint state are cleared on cancellation, focus loss, unpossession,
 component destruction, and PIE shutdown.
 
@@ -218,6 +222,11 @@ play. A non-standalone attempt emits one development warning. This prevents
 the POC shortcut from being mistaken for validated multiplayer movement.
 
 ## Verification and feedback
+
+The mouse-button observations in the historical tuning table below describe
+the earlier control scheme that produced the retained facing and jump tuning.
+The current Reticle/Cursor scheme supersedes those bindings without discarding
+the accepted movement behavior.
 
 Automated evidence for this branch:
 
