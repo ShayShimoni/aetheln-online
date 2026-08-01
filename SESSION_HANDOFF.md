@@ -51,7 +51,8 @@ Final camera zoom tuning:
   oscillate the offset
 - Requested or resolved distance at 50 cm hides Quinn only for the owner;
   restoration waits until both reach 60 cm
-- Camera collision, 90-degree FOV, 70 cm target offset, and no-lag behavior remain unchanged
+- Camera collision, 90-degree FOV, and no-lag behavior remain unchanged; target
+  height now transitions from 120 cm in third person to 70 cm at the first-person endpoint
 
 Owner feedback at handoff:
 
