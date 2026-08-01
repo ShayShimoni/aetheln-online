@@ -33,6 +33,7 @@ TSharedRef<SWidget> UAethelnPOCOverlayWidget::RebuildWidget()
 					.Text(FText::FromString(
 						TEXT("AETHELN MOVEMENT POC\n")
 						TEXT("WASD  Move    LMB  Orbit    RMB  Aim/Steer\n")
+						TEXT("Mouse Wheel  Camera Zoom / First-Person View\n")
 						TEXT("LMB + RMB  Move Forward\n")
 						TEXT("Space  Jump   Shift  Sprint Forward (Standalone)")))
 					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))

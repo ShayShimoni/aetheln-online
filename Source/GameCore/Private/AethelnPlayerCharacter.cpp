@@ -15,6 +15,30 @@ DEFINE_LOG_CATEGORY_STATIC(LogAethelnMovementPOC, Log, All);
 
 namespace
 {
+	float CalculateCameraZoomDistance(
+		float CurrentDistance,
+		float ZoomInput,
+		float ZoomStep,
+		float MinDistance,
+		float MaxDistance)
+	{
+		const float NearDistance = FMath::Min(MinDistance, MaxDistance);
+		const float FarDistance = FMath::Max(MinDistance, MaxDistance);
+		return FMath::Clamp(
+			CurrentDistance - ZoomInput * FMath::Max(ZoomStep, 0.0f),
+			NearDistance,
+			FarDistance);
+	}
+
+	bool ShouldHideCharacterMeshAtCameraDistance(
+		float CameraDistance,
+		float FirstPersonMeshHideDistance)
+	{
+		return CameraDistance
+			<= FMath::Max(FirstPersonMeshHideDistance, 0.0f)
+				+ KINDA_SMALL_NUMBER;
+	}
+
 	void ConfigureGroundRotationMode(
 		UCharacterMovementComponent& Movement,
 		bool bWantsAimSteering,
@@ -179,6 +203,92 @@ namespace
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnPOCCameraZoomTest,
+	"Aetheln.POC.Camera.MouseWheelZoom",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnPOCCameraZoomTest::RunTest(const FString& Parameters)
+{
+	constexpr float MinDistance = 0.0f;
+	constexpr float MaxDistance = 700.0f;
+	constexpr float ZoomStep = 10.0f;
+
+	TestEqual(
+		TEXT("Wheel up moves the camera one bounded step closer"),
+		CalculateCameraZoomDistance(
+			400.0f, 1.0f, ZoomStep, MinDistance, MaxDistance),
+		390.0f);
+	TestEqual(
+		TEXT("Wheel down moves the camera one small step farther"),
+		CalculateCameraZoomDistance(
+			400.0f, -1.0f, ZoomStep, MinDistance, MaxDistance),
+		410.0f);
+	TestEqual(
+		TEXT("Zooming out from first person uses the same small step"),
+		CalculateCameraZoomDistance(
+			0.0f, -1.0f, ZoomStep, MinDistance, MaxDistance),
+		10.0f);
+	TestEqual(
+		TEXT("Zoom in cannot pass the near limit"),
+		CalculateCameraZoomDistance(
+			10.0f, 1.0f, ZoomStep, MinDistance, MaxDistance),
+		MinDistance);
+	TestEqual(
+		TEXT("Zoom out cannot pass the far limit"),
+		CalculateCameraZoomDistance(
+			695.0f, -1.0f, ZoomStep, MinDistance, MaxDistance),
+		MaxDistance);
+	TestEqual(
+		TEXT("No wheel input preserves the current distance"),
+		CalculateCameraZoomDistance(
+			400.0f, 0.0f, ZoomStep, MinDistance, MaxDistance),
+		400.0f);
+	TestTrue(
+		TEXT("Closest zoom hides the local mannequin before camera intersection"),
+		ShouldHideCharacterMeshAtCameraDistance(50.0f, 50.0f));
+	TestFalse(
+		TEXT("Zooming away from first person restores the local mannequin"),
+		ShouldHideCharacterMeshAtCameraDistance(75.0f, 50.0f));
+
+	AAethelnPlayerCharacter* Character =
+		NewObject<AAethelnPlayerCharacter>();
+	const FFloatProperty* MinZoomProperty = FindFProperty<FFloatProperty>(
+		AAethelnPlayerCharacter::StaticClass(),
+		TEXT("CameraZoomMinDistance"));
+	TestNotNull(TEXT("Minimum zoom distance remains configurable"), MinZoomProperty);
+	if (MinZoomProperty != nullptr)
+	{
+		TestEqual(
+			TEXT("POC camera can reach its first-person-like endpoint"),
+			MinZoomProperty->GetPropertyValue_InContainer(Character),
+			MinDistance);
+	}
+	const FFloatProperty* MaxZoomProperty = FindFProperty<FFloatProperty>(
+		AAethelnPlayerCharacter::StaticClass(),
+		TEXT("CameraZoomMaxDistance"));
+	const FFloatProperty* ZoomStepProperty = FindFProperty<FFloatProperty>(
+		AAethelnPlayerCharacter::StaticClass(),
+		TEXT("CameraZoomStep"));
+	TestNotNull(TEXT("Maximum zoom distance remains configurable"), MaxZoomProperty);
+	TestNotNull(TEXT("Zoom step remains configurable"), ZoomStepProperty);
+	if (MaxZoomProperty != nullptr)
+	{
+		TestEqual(
+			TEXT("POC camera supports the approved far view"),
+			MaxZoomProperty->GetPropertyValue_InContainer(Character),
+			MaxDistance);
+	}
+	if (ZoomStepProperty != nullptr)
+	{
+		TestEqual(
+			TEXT("POC zoom uses the approved small step in both directions"),
+			ZoomStepProperty->GetPropertyValue_InContainer(Character),
+			ZoomStep);
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnPOCRotationModeTest,
 	"Aetheln.POC.Movement.RotationModes",
@@ -643,6 +753,22 @@ void AAethelnPlayerCharacter::ReceiveLookInput(const FVector2D& LookInput)
 	AddControllerPitchInput(LookInput.Y);
 }
 
+void AAethelnPlayerCharacter::ReceiveCameraZoomInput(float ZoomInput)
+{
+	if (CameraBoom == nullptr)
+	{
+		return;
+	}
+
+	CameraBoom->TargetArmLength = CalculateCameraZoomDistance(
+		CameraBoom->TargetArmLength,
+		ZoomInput,
+		CameraZoomStep,
+		CameraZoomMinDistance,
+		CameraZoomMaxDistance);
+	UpdateCameraMeshVisibility();
+}
+
 void AAethelnPlayerCharacter::ReceiveCameraOrbitIntent(
 	bool bWantsCameraOnlyOrbit)
 {
@@ -703,6 +829,7 @@ void AAethelnPlayerCharacter::ReceiveSprintIntent(bool bWantsToSprint)
 
 void AAethelnPlayerCharacter::UnPossessed()
 {
+	GetMesh()->SetOwnerNoSee(false);
 	ResetMovementPresentation(true);
 	ClearBufferedJumpRequest();
 	LastMovementInput = FVector2D::ZeroVector;
@@ -718,6 +845,7 @@ void AAethelnPlayerCharacter::UnPossessed()
 
 void AAethelnPlayerCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	GetMesh()->SetOwnerNoSee(false);
 	ResetMovementPresentation(true);
 	ClearBufferedJumpRequest();
 	LastMovementInput = FVector2D::ZeroVector;
@@ -834,6 +962,19 @@ void AAethelnPlayerCharacter::ApplyCameraOrbitIntent(
 		bUseLockedMovementReference = false;
 	}
 	ApplyCurrentGroundRotationMode();
+}
+
+void AAethelnPlayerCharacter::UpdateCameraMeshVisibility()
+{
+	if (CameraBoom == nullptr || GetMesh() == nullptr)
+	{
+		return;
+	}
+
+	GetMesh()->SetOwnerNoSee(
+		ShouldHideCharacterMeshAtCameraDistance(
+			CameraBoom->TargetArmLength,
+			FirstPersonMeshHideDistance));
 }
 
 void AAethelnPlayerCharacter::ApplyCurrentGroundRotationMode()

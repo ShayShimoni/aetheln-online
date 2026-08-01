@@ -194,8 +194,13 @@ so the pose blends briefly without delaying movement.
   mesh turn on top. Expired, canceled, focus-lost, unpossessed, and teardown
   requests are discarded.
 - Camera: centered 400 cm collision-aware spring arm, 70 cm target offset,
-  90-degree FOV, no camera lag or zoom
-- Input: WASD; hold left mouse to orbit the camera independently without
+  90-degree FOV, no camera lag, and bounded mouse-wheel zoom from 0 cm to
+  700 cm in consistent 10 cm steps.
+  At 50 cm or closer, Quinn is hidden only from the
+  owning local camera to prevent the view intersecting the mannequin; zooming
+  back out restores the third-person model.
+- Input: WASD; use the mouse wheel for a small bounded camera zoom; hold left
+  mouse to orbit the camera independently without
   redirecting held movement; hold right mouse to aim/steer Quinn with the
   camera; hold both mouse buttons to aim/steer and move forward; Space to jump;
   and hold Left Shift to sprint forward or laterally. Backpedaling remains at
@@ -228,19 +233,20 @@ Automated evidence for this branch:
   unapproved asset families were introduced
 
 The first shader/DDC run is a warm-up and must be discarded before judging
-feel. The owner feedback pass remains required in local one-player PIE. Record
-the result here before moving #100 beyond `In Progress`:
+feel. The owner completed the local one-player PIE feedback and bounded tuning
+pass. The final confirmation reported that the course, movement, camera, and
+mouse-wheel zoom felt good:
 
 | Area | Feedback | Bounded tuning |
 | --- | --- | --- |
-| Acceleration and braking | W+A/W+D direction changes eased into the turn; full air control allowed unwanted navigation, while zero air control plus falling braking stopped forward momentum | Maximum acceleration 10,000 cm/s² and ground friction 16 on ground; air control 0 and falling braking 0 lock and preserve takeoff trajectory; owner retest pending |
-| Turn rate | Instant rotation and zero animation smoothing looked rigid; S also rotated Quinn 180 degrees, lateral-to-S left the body sideways, the first 1,080-degree/s tuning still felt rigid in free running, LMB orbit redirected held movement as controller yaw changed, and grounded RMB strafing did not show enough body angle | Ground facing reduced to 720 degrees/s while trajectory response stays immediate; fast 12/sec non-eased presentation blend, camera-aligned S backpedal, an LMB-only movement-yaw lock, up to 35 degrees of presentation-only grounded RMB strafe yaw, airborne RMB/both facing control without trajectory steering, and instant free-jump takeoff facing; owner retest pending |
-| Camera distance and pitch | Pending local PIE | Pending |
-| Sprint | Backpedaling at the forward or sprint pace felt unnatural | Backward and backward-diagonal input uses a 70% scale for 350 cm/s, and Shift cannot raise the backward cap; owner retest pending |
-| Jump | A direction change followed by Space at landing worked inconsistently because the press could arrive just before or after the grounded transition; rapid free and backward chains moved correctly but body facing turned only partway; forward RMB diagonals needed a stronger pose; pure RMB lateral jumps faced camera-forward, then could not follow later RMB camera turns after travel-facing takeoff was added | A one-shot 0.20-second landing buffer handles timing; free and pure-lateral RMB takeoff snap the whole body to travel yaw; pure-lateral RMB body yaw then tracks camera-yaw deltas while velocity stays locked; backward takeoff snaps camera-forward; and forward-diagonal RMB/both applies up to 25 degrees of local mesh yaw; independent camera-facing head tracking is deferred; owner retest pending |
-| Animation sliding | Camera-facing A/D returned to the same-side pose when raw -90/+90 samples were restored; removing all smoothing also made transitions unnatural | POC -90/+90 samples use distinct forward-left/right clips, backward samples remain authored, and transitions use a fast 12/sec non-eased blend; owner retest pending |
-| Layout and snagging | Pending local PIE | Pending |
+| Acceleration and braking | W+A/W+D direction changes eased into the turn; full air control allowed unwanted navigation, while zero air control plus falling braking stopped forward momentum | Maximum acceleration 10,000 cm/s² and ground friction 16 on ground; air control 0 and falling braking 0 lock and preserve takeoff trajectory; owner confirmed final feel |
+| Turn rate | Instant rotation and zero animation smoothing looked rigid; S also rotated Quinn 180 degrees, lateral-to-S left the body sideways, the first 1,080-degree/s tuning still felt rigid in free running, LMB orbit redirected held movement as controller yaw changed, and grounded RMB strafing did not show enough body angle | Ground facing reduced to 720 degrees/s while trajectory response stays immediate; fast 12/sec non-eased presentation blend, camera-aligned S backpedal, an LMB-only movement-yaw lock, up to 35 degrees of presentation-only grounded RMB strafe yaw, airborne RMB/both facing control without trajectory steering, and instant free-jump takeoff facing; owner confirmed final feel |
+| Camera distance and pitch | Owner confirmed the base camera and course traversal felt good, then requested fine mouse-wheel control from a first-person-like endpoint to a substantially farther overview | Bounded 0-700 cm spring-arm zoom using consistent 10 cm steps; the local mannequin hides at 50 cm or closer and returns when zooming out; owner confirmed final zoom feel |
+| Sprint | Backpedaling at the forward or sprint pace felt unnatural | Backward and backward-diagonal input uses a 70% scale for 350 cm/s, and Shift cannot raise the backward cap; owner confirmed final feel |
+| Jump | A direction change followed by Space at landing worked inconsistently because the press could arrive just before or after the grounded transition; rapid free and backward chains moved correctly but body facing turned only partway; forward RMB diagonals needed a stronger pose; pure RMB lateral jumps faced camera-forward, then could not follow later RMB camera turns after travel-facing takeoff was added | A one-shot 0.20-second landing buffer handles timing; free and pure-lateral RMB takeoff snap the whole body to travel yaw; pure-lateral RMB body yaw then tracks camera-yaw deltas while velocity stays locked; backward takeoff snaps camera-forward; and forward-diagonal RMB/both applies up to 25 degrees of local mesh yaw; independent camera-facing head tracking is deferred; owner confirmed final feel |
+| Animation sliding | Camera-facing A/D returned to the same-side pose when raw -90/+90 samples were restored; removing all smoothing also made transitions unnatural | POC -90/+90 samples use distinct forward-left/right clips, backward samples remain authored, and transitions use a fast 12/sec non-eased blend; owner confirmed final feel |
+| Layout and snagging | Owner traversed the final course and reported that it seemed good, with no remaining snagging or falling issue | No additional layout tuning required |
 
-After one bounded tuning pass, repeat the applicable build, headless-load,
-asset, and hands-on checks. This POC remains `In Progress` until that evidence
-is recorded.
+After the bounded tuning pass, the applicable build, target validation, asset,
+automation, server-leakage, and hands-on checks passed. Publication and review
+still govern advancement beyond local implementation evidence.

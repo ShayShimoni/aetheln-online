@@ -26,6 +26,7 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void ReceiveMoveInput(const FVector2D& MovementInput) override;
 	virtual void ReceiveLookInput(const FVector2D& LookInput) override;
+	virtual void ReceiveCameraZoomInput(float ZoomInput) override;
 	virtual void ReceiveCameraOrbitIntent(bool bWantsCameraOnlyOrbit) override;
 	virtual void ReceiveAimSteeringIntent(bool bWantsAimSteering) override;
 	virtual void ReceiveJumpStarted() override;
@@ -57,6 +58,7 @@ private:
 	void ResetMovementPresentation(bool bResetImmediately);
 	void TryConsumeBufferedJump();
 	void UpdateAirborneAimFacing();
+	void UpdateCameraMeshVisibility();
 	void UpdateMovementPresentation(float DeltaSeconds);
 
 	UPROPERTY(VisibleAnywhere, Category = "POC|Camera", meta = (AllowPrivateAccess = "true"))
@@ -64,6 +66,18 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "POC|Camera", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCameraComponent> FollowCamera;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
+	float CameraZoomMinDistance = 0.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
+	float CameraZoomMaxDistance = 700.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
+	float CameraZoomStep = 10.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
+	float FirstPersonMeshHideDistance = 50.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float WalkSpeed = 500.0f;

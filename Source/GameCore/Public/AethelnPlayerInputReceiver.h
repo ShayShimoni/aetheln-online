@@ -22,6 +22,7 @@ class GAMECORE_API IAethelnPlayerInputReceiver
 public:
 	virtual void ReceiveMoveInput(const FVector2D& MovementInput) = 0;
 	virtual void ReceiveLookInput(const FVector2D& LookInput) = 0;
+	virtual void ReceiveCameraZoomInput(float ZoomInput) = 0;
 	virtual void ReceiveCameraOrbitIntent(bool bWantsCameraOnlyOrbit) = 0;
 	virtual void ReceiveAimSteeringIntent(bool bWantsAimSteering) = 0;
 	virtual void ReceiveJumpStarted() = 0;

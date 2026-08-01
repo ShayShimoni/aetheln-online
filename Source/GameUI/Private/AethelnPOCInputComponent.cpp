@@ -197,6 +197,9 @@ void UAethelnPOCInputComponent::InitializeActions()
 	LookAction->ValueType = EInputActionValueType::Axis2D;
 	LookAction->AccumulationBehavior = EInputActionAccumulationBehavior::Cumulative;
 
+	ZoomAction = NewObject<UInputAction>(this, TEXT("IA_POC_Zoom"), RF_Transient);
+	ZoomAction->ValueType = EInputActionValueType::Axis1D;
+
 	LeftMouseAction = NewObject<UInputAction>(
 		this,
 		TEXT("IA_POC_LeftMouse"),
@@ -226,6 +229,7 @@ void UAethelnPOCInputComponent::InitializeActions()
 		LookAction,
 		EKeys::Mouse2D);
 	AddNegateYModifier(Look, MappingContext);
+	MappingContext->MapKey(ZoomAction, EKeys::MouseWheelAxis);
 	MappingContext->MapKey(LeftMouseAction, EKeys::LeftMouseButton);
 	MappingContext->MapKey(RightMouseAction, EKeys::RightMouseButton);
 
@@ -259,6 +263,7 @@ void UAethelnPOCInputComponent::BindReceiver()
 	ReceiverObject = OwnerPawn;
 
 	BindAction(LookAction, ETriggerEvent::Triggered, this, &UAethelnPOCInputComponent::HandleLook);
+	BindAction(ZoomAction, ETriggerEvent::Triggered, this, &UAethelnPOCInputComponent::HandleZoom);
 	BindAction(MoveForwardAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleMoveForwardStarted);
 	BindAction(MoveForwardAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleMoveForwardStopped);
 	BindAction(MoveForwardAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleMoveForwardStopped);
@@ -538,6 +543,14 @@ void UAethelnPOCInputComponent::HandleLook(const FInputActionValue& Value)
 		{
 			Receiver->ReceiveLookInput(Value.Get<FVector2D>());
 		}
+	}
+}
+
+void UAethelnPOCInputComponent::HandleZoom(const FInputActionValue& Value)
+{
+	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
+	{
+		Receiver->ReceiveCameraZoomInput(Value.Get<float>());
 	}
 }
 

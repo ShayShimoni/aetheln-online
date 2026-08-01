@@ -46,6 +46,7 @@ private:
 	void SetMouseCapture(bool bCaptureMouse);
 
 	void HandleLook(const FInputActionValue& Value);
+	void HandleZoom(const FInputActionValue& Value);
 	void HandleMoveForwardStarted(const FInputActionValue& Value);
 	void HandleMoveForwardStopped(const FInputActionValue& Value);
 	void HandleMoveBackwardStarted(const FInputActionValue& Value);
@@ -80,6 +81,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> LookAction;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> ZoomAction;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> LeftMouseAction;
