@@ -37,9 +37,9 @@ namespace
 	{
 		const float Horizontal = static_cast<float>(bMoveRight)
 			- static_cast<float>(bMoveLeft);
-		const float Vertical = static_cast<float>(bMoveForward)
-			- static_cast<float>(bMoveBackward)
-			+ static_cast<float>(bMouseForward);
+		const bool bAnyForward = bMoveForward || bMouseForward;
+		const float Vertical = static_cast<float>(bAnyForward)
+			- static_cast<float>(bMoveBackward);
 		return FVector2D(Horizontal, Vertical).GetClampedToMaxSize(1.0f);
 	}
 
@@ -77,6 +77,14 @@ bool FAethelnPOCDirectionalMovementInputTest::RunTest(
 	TestTrue(
 		TEXT("W+D produces a 45-degree movement request"),
 		FMath::IsNearlyEqual(Diagonal.X, Diagonal.Y));
+
+	const FVector2D CombinedForwardDiagonal = BuildMovementInput(
+		true, false, false, true, true);
+	TestTrue(
+		TEXT("W and both-button forward remain one logical forward intent"),
+		FMath::IsNearlyEqual(
+			CombinedForwardDiagonal.X,
+			CombinedForwardDiagonal.Y));
 
 	const FVector2D OpposedHorizontal = BuildMovementInput(
 		false, false, true, true, false);

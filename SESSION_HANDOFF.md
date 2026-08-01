@@ -8,14 +8,15 @@ Continue GitHub issue [#100](https://github.com/ShayShimoni/aetheln-online/issue
 
 ## Repository state
 
-- Repository: `D:\aetheln-online`
+- Repository: the root of the current checkout
 - Branch: `codex/100-movement-poc`
 - Baseline POC commit: `1ab315e` (`feat(movement): #100 add playable movement POC`)
 - Integration base at publication: `origin/develop` commit `7053bcb`
 - The user explicitly authorized committing, pushing this branch, and opening a pull request to `develop` at the end of this session
+- The user later explicitly authorized reviewing, fixing, and merging pull request #101; inspect the live PR before repeating any action
 - Inspect `git log`, the live issue, and the live pull request for the final publication identifiers and check state
 - Issue #100 should be in `Code Review` after the reviewable branch and pull request are published
-- Do not merge, change branches, pull, deploy, remove files, or resolve the unrelated config change without explicit user authority
+- Do not change branches, pull, deploy, remove files, or resolve the unrelated config change without explicit user authority
 
 ## Current playable result
 
@@ -77,6 +78,11 @@ Because of this unrelated file, run scoped diff checks that exclude `Config/Defa
 - Scoped `git diff --check`, excluding the unrelated config change: passed
 - Issue #100 received progress comments recording the scope refinement and verification
 
+The final PR review added a focused regression for combining `W` with
+both-button forward movement. Those inputs now produce one logical forward
+intent, so adding `A` or `D` preserves the intended normalized 45-degree
+diagonal instead of double-counting forward input.
+
 The usual Unreal platform discovery output still reports unavailable non-Windows SDKs, including VisionOS. Win64 is valid, the requested checks exit successfully, and this is not a regression introduced by the POC.
 
 ## Recommended next steps
@@ -85,8 +91,8 @@ The usual Unreal platform discovery output still reports unavailable non-Windows
 2. Inspect the published pull request, its checks, review state, and the live #100 project item before continuing.
 3. Review only the committed POC/zoom changes; keep the unrelated `Config/DefaultEngine.ini` modification out of Git.
 4. If review causes any file change, rerun the focused zoom test, full `Aetheln.POC` suite, Editor build, scoped Server compile, target validation, and scoped diff check.
-5. Use the PR-review workflow for findings and merge readiness. Do not merge without separate explicit authority.
-6. After an authorized reviewed merge, move #100 only as far as the repository's evidence-based board workflow permits.
+5. Inspect the live state of PR #101 and issue #100 before taking further delivery action.
+6. After the reviewed merge, move #100 only to `Dev Done`; do not claim independent QA or `Done` evidence.
 
 ## POC exclusions still in force
 
