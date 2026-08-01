@@ -3,6 +3,7 @@
 #include "Styling/CoreStyle.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -28,17 +29,31 @@ TSharedRef<SWidget> UAethelnPOCOverlayWidget::RebuildWidget()
 			[
 				SNew(SBox)
 				.WidthOverride(390.0f)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				[
+					SAssignNew(ModeStatus, STextBlock)
+					.Text(FText::FromString(TEXT("RETICLE MODE")))
+					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 16))
+					.ColorAndOpacity(FLinearColor(0.65f, 0.9f, 1.0f, 1.0f))
+				]
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(0.0f, 4.0f, 0.0f, 0.0f)
 				[
 					SNew(STextBlock)
 					.Text(FText::FromString(
-						TEXT("AETHELN MOVEMENT POC\n")
-						TEXT("WASD  Move    LMB  Orbit    RMB  Aim/Steer\n")
-						TEXT("Mouse Wheel  Camera Zoom / First-Person View\n")
-						TEXT("LMB + RMB  Move Forward\n")
-						TEXT("Space  Jump   Shift  Sprint Forward (Standalone)")))
+						TEXT("WASD  Move    Mouse  Aim / Camera\n")
+						TEXT("Left Alt  Toggle Cursor Mode\n")
+						TEXT("Mouse Wheel  Camera Zoom / Shoulder / First Person\n")
+						TEXT("Space  Jump   Shift  Sprint Forward (Standalone)\n")
+						TEXT("LMB Primary / RMB Defense  Reserved (No Combat Yet)")))
 					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
 					.ColorAndOpacity(FLinearColor(0.95f, 0.97f, 1.0f, 1.0f))
 				]
+			]
 			]
 		]
 		+ SOverlay::Slot()
@@ -49,15 +64,24 @@ TSharedRef<SWidget> UAethelnPOCOverlayWidget::RebuildWidget()
 			.Text(FText::FromString(TEXT("+")))
 			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 24))
 			.ColorAndOpacity(FLinearColor(0.95f, 0.97f, 1.0f, 0.9f))
-			.Visibility(EVisibility::Collapsed)
+			.Visibility(EVisibility::HitTestInvisible)
 		];
 }
 
-void UAethelnPOCOverlayWidget::SetAimReticleVisible(bool bVisible)
+void UAethelnPOCOverlayWidget::SetControlMode(bool bReticleMode)
 {
 	if (AimReticle.IsValid())
 	{
 		AimReticle->SetVisibility(
-			bVisible ? EVisibility::HitTestInvisible : EVisibility::Collapsed);
+			bReticleMode
+				? EVisibility::HitTestInvisible
+				: EVisibility::Collapsed);
+	}
+	if (ModeStatus.IsValid())
+	{
+		ModeStatus->SetText(FText::FromString(
+			bReticleMode
+				? TEXT("RETICLE MODE")
+				: TEXT("CURSOR MODE - ALT OR CLICK VIEWPORT TO RETURN")));
 	}
 }

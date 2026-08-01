@@ -34,6 +34,27 @@ Technology selections that require measurement remain candidates in
 - Territory policy is checked both when a hostile action activates and when an
   effect would apply.
 
+## Local Control Modes
+
+The owning client starts gameplay in Reticle mode: hidden cursor, fixed center
+reticle, camera-relative movement, camera-directed aim, and continuous
+camera-facing steering intent. Cursor mode is a local input gate. Entering it
+clears pending movement, jump, sprint, zoom, and look input and requires fresh
+presses after recapture, but it does not pause physics, remove existing
+momentum, cancel accepted abilities, or stop server-owned timelines.
+
+Left Alt provides the prototype toggle. Future CommonUI screens and dialogue
+flows must use stacked cursor-ownership requests rather than independent
+booleans. An unhandled viewport click may recapture gameplay; a UI-handled click
+must not. Focus loss enters Cursor mode, and focus recovery remains there until
+an explicit recapture.
+
+Close-camera shoulder offset and owner-only mesh hiding are presentation. They
+never modify the authoritative aim direction, attack origin, authored volume,
+collision, reach, or timeline. Shoulder-camera parallax and attacks obstructed
+by near cover require separate combat validation; the movement prototype does
+not prove reticle-to-attack alignment.
+
 ## Runtime Ownership
 
 ### Character Movement Component

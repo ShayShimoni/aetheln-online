@@ -160,6 +160,19 @@ Combat is third-person, action-based, and pure free aim. The player aims an
 authored attack; neither a soft lock nor a selected target determines
 authoritative contact.
 
+Reticle mode is the default gameplay state: the cursor is hidden, a fixed
+center reticle expresses camera-directed aim, movement is camera relative, and
+the character turns smoothly toward camera-forward combat facing. Left mouse
+defaults to the primary attack and right mouse to the class defensive action;
+both bindings remain remappable. Space remains jump, including when a combo
+follow-up is available through its normal remappable ability binding.
+
+Manual Left Alt toggling and future interface or dialogue layers may request
+Cursor mode. Those future layers must hold stacked cursor ownership so closing
+one layer cannot recapture the mouse while another still needs it. Cursor mode
+blocks new gameplay input; it does not pause gravity, erase momentum, cancel an
+accepted attack, or stop an authoritative combat timeline.
+
 ### Authoritative Rules
 
 - The server decides movement validity, hits, damage, healing, resources,
@@ -167,15 +180,21 @@ authoritative contact.
 - Clients may predict supported local movement, GAS activation, animation, and
   reversible presentation, but never a hit or persistent outcome.
 - Melee attacks use server-resolved swept volumes during authored windows on a
-  server-owned attack timeline.
+  server-owned attack timeline. Those authored volumes match the readable
+  animation; rendered-weapon or character-mesh collision is not gameplay truth.
 - Projectiles and persistent combat areas are server owned.
 - Dodges grant a server-validated defensive window.
 - Blocks are directional and consume a defensive resource.
+- Ability-authored movement restrictions provide commitment. Individual
+  attacks may restrict movement differently rather than sharing a universal
+  immobilization rule.
 - Input buffering supports deliberate combo timing without automating the
   rotation.
 - Animation notifies, sockets, effects, audio, and camera feedback visualize the
   authoritative timeline but do not create gameplay truth.
 - The server never accepts a client-selected target or claimed contact.
+- Shoulder framing, close-camera offsets, and mesh hiding are presentation
+  only. They never alter attack origins, hitboxes, reach, timing, or collision.
 
 ### Readability Rules
 

@@ -6,6 +6,7 @@
 #include "EnhancedActionKeyMapping.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/GameViewportClient.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
@@ -32,22 +33,44 @@ namespace
 		bool bMoveForward,
 		bool bMoveBackward,
 		bool bMoveLeft,
-		bool bMoveRight,
-		bool bMouseForward)
+		bool bMoveRight)
 	{
 		const float Horizontal = static_cast<float>(bMoveRight)
 			- static_cast<float>(bMoveLeft);
-		const bool bAnyForward = bMoveForward || bMouseForward;
-		const float Vertical = static_cast<float>(bAnyForward)
+		const float Vertical = static_cast<float>(bMoveForward)
 			- static_cast<float>(bMoveBackward);
 		return FVector2D(Horizontal, Vertical).GetClampedToMaxSize(1.0f);
 	}
 
-	bool IsCameraOnlyOrbit(
-		bool bLeftMouseHeld,
-		bool bRightMouseHeld)
+	bool IsGameplayInputEnabled(EAethelnPOCControlMode ControlMode)
 	{
-		return bLeftMouseHeld && !bRightMouseHeld;
+		return ControlMode == EAethelnPOCControlMode::Reticle;
+	}
+
+	EAethelnPOCControlMode ToggleControlMode(
+		EAethelnPOCControlMode ControlMode)
+	{
+		return IsGameplayInputEnabled(ControlMode)
+			? EAethelnPOCControlMode::Cursor
+			: EAethelnPOCControlMode::Reticle;
+	}
+
+	bool ConsumeLookSuppression(bool& bSuppressNextLookInput)
+	{
+		if (!bSuppressNextLookInput)
+		{
+			return false;
+		}
+
+		bSuppressNextLookInput = false;
+		return true;
+	}
+
+	FModifyContextOptions BuildPOCMappingContextOptions()
+	{
+		FModifyContextOptions Options;
+		Options.bIgnoreAllPressedKeysUntilRelease = true;
+		return Options;
 	}
 }
 
@@ -61,16 +84,16 @@ bool FAethelnPOCDirectionalMovementInputTest::RunTest(
 	const FString& Parameters)
 {
 	const FVector2D MoveLeft = BuildMovementInput(
-		false, false, true, false, false);
+		false, false, true, false);
 	const FVector2D MoveRight = BuildMovementInput(
-		false, false, false, true, false);
+		false, false, false, true);
 	TestEqual(TEXT("A produces negative horizontal input"), MoveLeft.X, -1.0);
 	TestEqual(TEXT("D produces positive horizontal input"), MoveRight.X, 1.0);
 	TestEqual(TEXT("Pure lateral A has no forward input"), MoveLeft.Y, 0.0);
 	TestEqual(TEXT("Pure lateral D has no forward input"), MoveRight.Y, 0.0);
 
 	const FVector2D Diagonal = BuildMovementInput(
-		true, false, false, true, false);
+		true, false, false, true);
 	TestTrue(
 		TEXT("Diagonal movement is normalized"),
 		FMath::IsNearlyEqual(Diagonal.Size(), 1.0f));
@@ -78,31 +101,62 @@ bool FAethelnPOCDirectionalMovementInputTest::RunTest(
 		TEXT("W+D produces a 45-degree movement request"),
 		FMath::IsNearlyEqual(Diagonal.X, Diagonal.Y));
 
-	const FVector2D CombinedForwardDiagonal = BuildMovementInput(
-		true, false, false, true, true);
 	TestTrue(
-		TEXT("W and both-button forward remain one logical forward intent"),
+		TEXT("Mouse buttons no longer add movement intent"),
+		BuildMovementInput(
+			false, false, false, false).IsNearlyZero());
+	TestTrue(
+		TEXT("Keyboard diagonals remain balanced"),
 		FMath::IsNearlyEqual(
-			CombinedForwardDiagonal.X,
-			CombinedForwardDiagonal.Y));
+			Diagonal.X,
+			Diagonal.Y));
 
 	const FVector2D OpposedHorizontal = BuildMovementInput(
-		false, false, true, true, false);
+		false, false, true, true);
 	TestTrue(
 		TEXT("A and D cancel"),
 		OpposedHorizontal.IsNearlyZero());
 
-	const FVector2D MouseForwardCanceled = BuildMovementInput(
-		false, true, false, false, true);
+	const FVector2D OpposedVertical = BuildMovementInput(
+		true, true, false, false);
 	TestTrue(
-		TEXT("S cancels both-button forward"),
-		MouseForwardCanceled.IsNearlyZero());
+		TEXT("W and S cancel"),
+		OpposedVertical.IsNearlyZero());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnPOCControlModeTest,
+	"Aetheln.POC.Input.ControlModes",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnPOCControlModeTest::RunTest(const FString& Parameters)
+{
 	TestTrue(
-		TEXT("LMB alone requests camera-only orbit"),
-		IsCameraOnlyOrbit(true, false));
+		TEXT("Reticle mode accepts gameplay input"),
+		IsGameplayInputEnabled(EAethelnPOCControlMode::Reticle));
 	TestFalse(
-		TEXT("RMB takes steering control when both buttons are held"),
-		IsCameraOnlyOrbit(true, true));
+		TEXT("Cursor mode blocks gameplay input"),
+		IsGameplayInputEnabled(EAethelnPOCControlMode::Cursor));
+	TestEqual(
+		TEXT("Left Alt moves Reticle mode to Cursor mode"),
+		ToggleControlMode(EAethelnPOCControlMode::Reticle),
+		EAethelnPOCControlMode::Cursor);
+	TestEqual(
+		TEXT("Left Alt or a viewport click recaptures Reticle mode"),
+		ToggleControlMode(EAethelnPOCControlMode::Cursor),
+		EAethelnPOCControlMode::Reticle);
+
+	bool bSuppressLook = true;
+	TestTrue(
+		TEXT("The first look sample after capture is suppressed"),
+		ConsumeLookSuppression(bSuppressLook));
+	TestFalse(
+		TEXT("Later look samples are accepted"),
+		ConsumeLookSuppression(bSuppressLook));
+	TestTrue(
+		TEXT("Restored input ignores keys held across focus recovery"),
+		BuildPOCMappingContextOptions().bIgnoreAllPressedKeysUntilRelease);
 	return true;
 }
 #endif
@@ -116,6 +170,8 @@ UAethelnPOCInputComponent::UAethelnPOCInputComponent()
 void UAethelnPOCInputComponent::OnRegister()
 {
 	Super::OnRegister();
+	ControlMode = EAethelnPOCControlMode::Reticle;
+	bSuppressNextLookInput = true;
 
 	InitializeActions();
 	BindReceiver();
@@ -159,8 +215,7 @@ void UAethelnPOCInputComponent::TickComponent(
 		bMoveForwardHeld,
 		bMoveBackwardHeld,
 		bMoveLeftHeld,
-		bMoveRightHeld,
-		bLeftMouseHeld && bRightMouseHeld);
+		bMoveRightHeld);
 	if (!MovementInput.IsNearlyZero())
 	{
 		if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
@@ -208,17 +263,17 @@ void UAethelnPOCInputComponent::InitializeActions()
 	ZoomAction = NewObject<UInputAction>(this, TEXT("IA_POC_Zoom"), RF_Transient);
 	ZoomAction->ValueType = EInputActionValueType::Axis1D;
 
-	LeftMouseAction = NewObject<UInputAction>(
+	ToggleControlModeAction = NewObject<UInputAction>(
 		this,
-		TEXT("IA_POC_LeftMouse"),
+		TEXT("IA_POC_ToggleControlMode"),
 		RF_Transient);
-	LeftMouseAction->ValueType = EInputActionValueType::Boolean;
+	ToggleControlModeAction->ValueType = EInputActionValueType::Boolean;
 
-	RightMouseAction = NewObject<UInputAction>(
+	ViewportRecaptureAction = NewObject<UInputAction>(
 		this,
-		TEXT("IA_POC_RightMouse"),
+		TEXT("IA_POC_ViewportRecapture"),
 		RF_Transient);
-	RightMouseAction->ValueType = EInputActionValueType::Boolean;
+	ViewportRecaptureAction->ValueType = EInputActionValueType::Boolean;
 
 	JumpAction = NewObject<UInputAction>(this, TEXT("IA_POC_Jump"), RF_Transient);
 	JumpAction->ValueType = EInputActionValueType::Boolean;
@@ -238,8 +293,10 @@ void UAethelnPOCInputComponent::InitializeActions()
 		EKeys::Mouse2D);
 	AddNegateYModifier(Look, MappingContext);
 	MappingContext->MapKey(ZoomAction, EKeys::MouseWheelAxis);
-	MappingContext->MapKey(LeftMouseAction, EKeys::LeftMouseButton);
-	MappingContext->MapKey(RightMouseAction, EKeys::RightMouseButton);
+	MappingContext->MapKey(ToggleControlModeAction, EKeys::LeftAlt);
+	MappingContext->MapKey(
+		ViewportRecaptureAction,
+		EKeys::LeftMouseButton);
 
 	MappingContext->MapKey(JumpAction, EKeys::SpaceBar);
 	MappingContext->MapKey(SprintAction, EKeys::LeftShift);
@@ -284,12 +341,8 @@ void UAethelnPOCInputComponent::BindReceiver()
 	BindAction(MoveRightAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleMoveRightStarted);
 	BindAction(MoveRightAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleMoveRightStopped);
 	BindAction(MoveRightAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleMoveRightStopped);
-	BindAction(LeftMouseAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleLeftMouseStarted);
-	BindAction(LeftMouseAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleLeftMouseStopped);
-	BindAction(LeftMouseAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleLeftMouseStopped);
-	BindAction(RightMouseAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleRightMouseStarted);
-	BindAction(RightMouseAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleRightMouseStopped);
-	BindAction(RightMouseAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleRightMouseStopped);
+	BindAction(ToggleControlModeAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleToggleControlMode);
+	BindAction(ViewportRecaptureAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleViewportRecapture);
 	BindAction(JumpAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleJumpStarted);
 	BindAction(JumpAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleJumpStopped);
 	BindAction(JumpAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleJumpCanceled);
@@ -317,7 +370,10 @@ void UAethelnPOCInputComponent::ActivateLocalPlayerResources()
 	{
 		if (!bContextApplied)
 		{
-			InputSubsystem->AddMappingContext(MappingContext, 0);
+			InputSubsystem->AddMappingContext(
+				MappingContext,
+				0,
+				BuildPOCMappingContextOptions());
 			bContextApplied = true;
 			AppliedLocalPlayer = LocalPlayer;
 		}
@@ -334,12 +390,12 @@ void UAethelnPOCInputComponent::ActivateLocalPlayerResources()
 		}
 	}
 
-	UpdateMouseControlState();
+	ApplyControlMode(ControlMode);
 }
 
 void UAethelnPOCInputComponent::ReleaseLocalPlayerResources()
 {
-	ResetHeldState();
+	ApplyControlMode(EAethelnPOCControlMode::Cursor);
 
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	APlayerController* PlayerController = OwnerPawn != nullptr
@@ -370,11 +426,10 @@ void UAethelnPOCInputComponent::ReleaseLocalPlayerResources()
 	AppliedPlayerController.Reset();
 }
 
-void UAethelnPOCInputComponent::ResetHeldState()
+void UAethelnPOCInputComponent::ResetGameplayInputState()
 {
 	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
 	{
-		Receiver->ReceiveCameraOrbitIntent(false);
 		Receiver->ReceiveAimSteeringIntent(false);
 		Receiver->ReceiveSprintIntent(false);
 		Receiver->ReceiveJumpCanceled();
@@ -383,19 +438,11 @@ void UAethelnPOCInputComponent::ResetHeldState()
 	bMoveBackwardHeld = false;
 	bMoveLeftHeld = false;
 	bMoveRightHeld = false;
-	bLeftMouseHeld = false;
-	bRightMouseHeld = false;
-	bLookCaptured = false;
 	SetComponentTickEnabled(false);
 	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
 	{
 		Receiver->ReceiveMoveInput(FVector2D::ZeroVector);
 	}
-	if (OverlayWidget != nullptr)
-	{
-		OverlayWidget->SetAimReticleVisible(false);
-	}
-	SetMouseCapture(false);
 }
 
 void UAethelnPOCInputComponent::HandleApplicationDeactivated()
@@ -417,27 +464,35 @@ void UAethelnPOCInputComponent::RemoveLifecycleDelegates()
 	ReactivateHandle.Reset();
 }
 
-void UAethelnPOCInputComponent::UpdateMouseControlState()
+void UAethelnPOCInputComponent::ApplyControlMode(
+	EAethelnPOCControlMode NewMode)
 {
-	const bool bCaptureMouse = bLeftMouseHeld || bRightMouseHeld;
-	bLookCaptured = bCaptureMouse;
-	UpdateMovementTickState();
+	ControlMode = NewMode;
+	const bool bReticleMode = IsGameplayInputEnabled(ControlMode);
 
-	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
+	if (!bReticleMode)
 	{
-		Receiver->ReceiveCameraOrbitIntent(
-			IsCameraOnlyOrbit(
-				bLeftMouseHeld,
-				bRightMouseHeld));
-		Receiver->ReceiveAimSteeringIntent(bRightMouseHeld);
+		ResetGameplayInputState();
+		if (APlayerController* PlayerController = AppliedPlayerController.Get())
+		{
+			PlayerController->FlushPressedKeys();
+		}
+	}
+	else
+	{
+		bSuppressNextLookInput = true;
+		if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
+		{
+			Receiver->ReceiveAimSteeringIntent(true);
+		}
 	}
 
 	if (OverlayWidget != nullptr)
 	{
-		OverlayWidget->SetAimReticleVisible(bRightMouseHeld);
+		OverlayWidget->SetControlMode(bReticleMode);
 	}
 
-	SetMouseCapture(bCaptureMouse);
+	ApplyPlayerInputMode();
 }
 
 void UAethelnPOCInputComponent::UpdateMovementTickState()
@@ -446,8 +501,7 @@ void UAethelnPOCInputComponent::UpdateMovementTickState()
 		bMoveForwardHeld,
 		bMoveBackwardHeld,
 		bMoveLeftHeld,
-		bMoveRightHeld,
-		bLeftMouseHeld && bRightMouseHeld);
+		bMoveRightHeld);
 	if (MovementInput.IsNearlyZero())
 	{
 		if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
@@ -458,7 +512,7 @@ void UAethelnPOCInputComponent::UpdateMovementTickState()
 	SetComponentTickEnabled(!MovementInput.IsNearlyZero());
 }
 
-void UAethelnPOCInputComponent::SetMouseCapture(bool bCaptureMouse)
+void UAethelnPOCInputComponent::ApplyPlayerInputMode()
 {
 	APlayerController* PlayerController = AppliedPlayerController.Get();
 	if (PlayerController == nullptr)
@@ -473,14 +527,31 @@ void UAethelnPOCInputComponent::SetMouseCapture(bool bCaptureMouse)
 		return;
 	}
 
-	PlayerController->bShowMouseCursor = !bCaptureMouse;
-	if (bCaptureMouse)
+	const bool bReticleMode = IsGameplayInputEnabled(ControlMode);
+	PlayerController->bShowMouseCursor = !bReticleMode;
+	if (bReticleMode)
 	{
+		if (ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer())
+		{
+			if (UGameViewportClient* ViewportClient = LocalPlayer->ViewportClient)
+			{
+				ViewportClient->SetMouseCaptureMode(
+					EMouseCaptureMode::CapturePermanently_IncludingInitialMouseDown);
+			}
+		}
 		FInputModeGameOnly InputMode;
+		InputMode.SetConsumeCaptureMouseDown(true);
 		PlayerController->SetInputMode(InputMode);
 		return;
 	}
 
+	if (ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer())
+	{
+		if (UGameViewportClient* ViewportClient = LocalPlayer->ViewportClient)
+		{
+			ViewportClient->SetMouseCaptureMode(EMouseCaptureMode::NoCapture);
+		}
+	}
 	FInputModeGameAndUI InputMode;
 	InputMode.SetHideCursorDuringCapture(false);
 	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
@@ -490,6 +561,10 @@ void UAethelnPOCInputComponent::SetMouseCapture(bool bCaptureMouse)
 void UAethelnPOCInputComponent::HandleMoveForwardStarted(
 	const FInputActionValue& Value)
 {
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
 	bMoveForwardHeld = true;
 	UpdateMovementTickState();
 }
@@ -504,6 +579,10 @@ void UAethelnPOCInputComponent::HandleMoveForwardStopped(
 void UAethelnPOCInputComponent::HandleMoveBackwardStarted(
 	const FInputActionValue& Value)
 {
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
 	bMoveBackwardHeld = true;
 	UpdateMovementTickState();
 }
@@ -518,6 +597,10 @@ void UAethelnPOCInputComponent::HandleMoveBackwardStopped(
 void UAethelnPOCInputComponent::HandleMoveLeftStarted(
 	const FInputActionValue& Value)
 {
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
 	bMoveLeftHeld = true;
 	UpdateMovementTickState();
 }
@@ -532,6 +615,10 @@ void UAethelnPOCInputComponent::HandleMoveLeftStopped(
 void UAethelnPOCInputComponent::HandleMoveRightStarted(
 	const FInputActionValue& Value)
 {
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
 	bMoveRightHeld = true;
 	UpdateMovementTickState();
 }
@@ -545,53 +632,53 @@ void UAethelnPOCInputComponent::HandleMoveRightStopped(
 
 void UAethelnPOCInputComponent::HandleLook(const FInputActionValue& Value)
 {
-	if (bLookCaptured)
+	if (!IsGameplayInputEnabled(ControlMode)
+		|| ConsumeLookSuppression(bSuppressNextLookInput))
 	{
-		if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
-		{
-			Receiver->ReceiveLookInput(Value.Get<FVector2D>());
-		}
+		return;
+	}
+
+	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
+	{
+		Receiver->ReceiveLookInput(Value.Get<FVector2D>());
 	}
 }
 
 void UAethelnPOCInputComponent::HandleZoom(const FInputActionValue& Value)
 {
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
+
 	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
 	{
 		Receiver->ReceiveCameraZoomInput(Value.Get<float>());
 	}
 }
 
-void UAethelnPOCInputComponent::HandleLeftMouseStarted(
+void UAethelnPOCInputComponent::HandleToggleControlMode(
 	const FInputActionValue& Value)
 {
-	bLeftMouseHeld = true;
-	UpdateMouseControlState();
+	ApplyControlMode(ToggleControlMode(ControlMode));
 }
 
-void UAethelnPOCInputComponent::HandleLeftMouseStopped(
+void UAethelnPOCInputComponent::HandleViewportRecapture(
 	const FInputActionValue& Value)
 {
-	bLeftMouseHeld = false;
-	UpdateMouseControlState();
-}
-
-void UAethelnPOCInputComponent::HandleRightMouseStarted(
-	const FInputActionValue& Value)
-{
-	bRightMouseHeld = true;
-	UpdateMouseControlState();
-}
-
-void UAethelnPOCInputComponent::HandleRightMouseStopped(
-	const FInputActionValue& Value)
-{
-	bRightMouseHeld = false;
-	UpdateMouseControlState();
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		ApplyControlMode(EAethelnPOCControlMode::Reticle);
+	}
 }
 
 void UAethelnPOCInputComponent::HandleJumpStarted(const FInputActionValue& Value)
 {
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
+
 	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
 	{
 		Receiver->ReceiveJumpStarted();
@@ -617,6 +704,11 @@ void UAethelnPOCInputComponent::HandleJumpCanceled(
 
 void UAethelnPOCInputComponent::HandleSprintStarted(const FInputActionValue& Value)
 {
+	if (!IsGameplayInputEnabled(ControlMode))
+	{
+		return;
+	}
+
 	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
 	{
 		Receiver->ReceiveSprintIntent(true);

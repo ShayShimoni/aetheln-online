@@ -27,7 +27,6 @@ public:
 	virtual void ReceiveMoveInput(const FVector2D& MovementInput) override;
 	virtual void ReceiveLookInput(const FVector2D& LookInput) override;
 	virtual void ReceiveCameraZoomInput(float ZoomInput) override;
-	virtual void ReceiveCameraOrbitIntent(bool bWantsCameraOnlyOrbit) override;
 	virtual void ReceiveAimSteeringIntent(bool bWantsAimSteering) override;
 	virtual void ReceiveJumpStarted() override;
 	virtual void ReceiveJumpStopped() override;
@@ -45,20 +44,18 @@ protected:
 
 private:
 	void ApplyAimSteeringIntent(bool bWantsAimSteering);
-	void ApplyCameraOrbitIntent(bool bWantsCameraOnlyOrbit);
 	void ApplyCurrentGroundRotationMode();
 	void ApplyCurrentGroundSpeed();
 	void ApplyCurrentJumpFacing();
 	void ApplyCurrentJumpHorizontalVelocity();
 	void ApplySprintIntent(bool bWantsToSprint);
-	void CaptureMovementReferenceYaw();
 	void CaptureTravelFacingAimJumpOffset();
 	void ClearBufferedJumpRequest();
 	FRotator GetMovementReferenceRotation() const;
 	void ResetMovementPresentation(bool bResetImmediately);
 	void TryConsumeBufferedJump();
 	void UpdateAirborneAimFacing();
-	void UpdateCameraMeshVisibility();
+	void UpdateCameraPresentation(float DeltaSeconds);
 	void UpdateMovementPresentation(float DeltaSeconds);
 
 	UPROPERTY(VisibleAnywhere, Category = "POC|Camera", meta = (AllowPrivateAccess = "true"))
@@ -74,10 +71,25 @@ private:
 	float CameraZoomMaxDistance = 700.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
-	float CameraZoomStep = 10.0f;
+	float CameraZoomStep = 40.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm/s"))
+	float CameraZoomTransitionSpeed = 400.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
 	float FirstPersonMeshHideDistance = 50.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
+	float FirstPersonMeshRestoreDistance = 60.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
+	float CameraShoulderMaxOffset = 35.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
+	float ThirdPersonCameraTargetHeight = 120.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category = "POC|Camera", meta = (ClampMin = "0.0", Units = "cm"))
+	float FirstPersonCameraTargetHeight = 70.0f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float WalkSpeed = 500.0f;
@@ -106,15 +118,14 @@ private:
 	float PendingJumpPresentationYaw = 0.0f;
 	float LockedJumpPresentationYaw = 0.0f;
 	float CurrentPresentationYaw = 0.0f;
-	float LockedMovementReferenceYaw = 0.0f;
+	float DesiredCameraZoomDistance = 400.0f;
 	float TravelFacingAimJumpOffset = 0.0f;
 	bool bIssuedNetworkSprintWarning = false;
 	bool bAimSteeringActive = false;
-	bool bCameraOnlyOrbitActive = false;
+	bool bCameraMeshHidden = false;
 	bool bHasBufferedJump = false;
 	bool bSprintIntentActive = false;
 	bool bTravelFacingAimJumpActive = false;
-	bool bUseLockedMovementReference = false;
 	bool bWantsBackpedal = false;
 	bool bJumpPresentationActive = false;
 };
