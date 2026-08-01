@@ -63,6 +63,7 @@ Coverage/
 
 # Local planning artifacts
 /todos/
+/.codex-workflow-scratchpad.md
 
 # Local environment and secrets
 .env
