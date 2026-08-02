@@ -1,0 +1,171 @@
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+Push-Location $RepositoryRoot
+
+try {
+	function Invoke-Git {
+		param([Parameter(Mandatory)][string[]] $Arguments)
+
+		$Output = & git @Arguments 2>&1
+		if ($LASTEXITCODE -ne 0) {
+			throw "git $($Arguments -join ' ') failed: $($Output -join [Environment]::NewLine)"
+		}
+		return @($Output)
+	}
+
+	function Get-Attributes {
+		param([Parameter(Mandatory)][string] $Path)
+
+		$Result = @{}
+		$Lines = Invoke-Git -Arguments @('check-attr', 'filter', 'diff', 'merge', 'text', 'eol', 'lockable', '--', $Path)
+		foreach ($Line in $Lines) {
+			if ($Line -match '^.+?: ([^:]+): (.+)$') {
+				$Result[$Matches[1]] = $Matches[2]
+			}
+		}
+		return $Result
+	}
+
+	function Assert-Equal {
+		param(
+			[Parameter(Mandatory)] $Actual,
+			[Parameter(Mandatory)] $Expected,
+			[Parameter(Mandatory)][string] $Message
+		)
+
+		if ($Actual -ne $Expected) {
+			throw "$Message Expected '$Expected', got '$Actual'."
+		}
+	}
+
+	$LfsExtensions = @(
+		'uasset', 'umap', 'psd', 'psb', 'blend', 'fbx', 'png', 'jpg', 'jpeg',
+		'tga', 'tif', 'tiff', 'exr', 'hdr', 'dds', 'wav', 'flac', 'ogg', 'mp3',
+		'mp4', 'mov', 'webm', 'ttf', 'otf'
+	)
+
+	foreach ($Extension in $LfsExtensions) {
+		$Path = "PolicyProbe/asset.$Extension"
+		$Attributes = Get-Attributes -Path $Path
+		foreach ($Attribute in @('filter', 'diff', 'merge')) {
+			Assert-Equal $Attributes[$Attribute] 'lfs' "$Path $Attribute mismatch."
+		}
+		Assert-Equal $Attributes['text'] 'unset' "$Path text mismatch."
+		Assert-Equal $Attributes['lockable'] 'set' "$Path lockable mismatch."
+	}
+
+	$HistoricalRoadmap = 'docs/research/mmorpg-development-roadmap.png'
+	$ExpectedRoadmapHash = '359cabc4dbeda76ab251ac01e3936c011ed5a111169d0986b754e53ff4db42dd'
+	$ActualRoadmapHash = (Get-FileHash -LiteralPath $HistoricalRoadmap -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-Equal $ActualRoadmapHash $ExpectedRoadmapHash 'Historical roadmap PNG SHA-256 mismatch.'
+	$HistoricalAttributes = Get-Attributes -Path $HistoricalRoadmap
+	foreach ($Attribute in @('filter', 'diff', 'merge')) {
+		Assert-Equal $HistoricalAttributes[$Attribute] 'unspecified' "Historical roadmap PNG $Attribute must remain unspecified."
+	}
+	Assert-Equal $HistoricalAttributes['text'] 'unset' 'Historical roadmap PNG text mismatch.'
+	Assert-Equal $HistoricalAttributes['lockable'] 'unset' 'Historical roadmap PNG must not be lockable.'
+
+	$TextMatrix = @(
+		@{ Path = 'Source/PolicyProbe.h'; Eol = 'lf' },
+		@{ Path = 'Source/PolicyProbe.hpp'; Eol = 'lf' },
+		@{ Path = 'Source/PolicyProbe.c'; Eol = 'lf' },
+		@{ Path = 'Source/PolicyProbe.cpp'; Eol = 'lf' },
+		@{ Path = 'docs/policy-probe.md'; Eol = 'lf' },
+		@{ Path = 'Config/policy-probe.json'; Eol = 'lf' },
+		@{ Path = 'Config/policy-probe.ini'; Eol = 'lf' },
+		@{ Path = 'Generated/PolicyProbe.sln'; Eol = 'crlf' },
+		@{ Path = 'Generated/PolicyProbe.slnx'; Eol = 'crlf' }
+	)
+
+	foreach ($Case in $TextMatrix) {
+		$Attributes = Get-Attributes -Path $Case.Path
+		Assert-Equal $Attributes['text'] 'set' "$($Case.Path) text mismatch."
+		Assert-Equal $Attributes['eol'] $Case.Eol "$($Case.Path) EOL mismatch."
+		Assert-Equal $Attributes['filter'] 'unspecified' "$($Case.Path) must not use LFS."
+		Assert-Equal $Attributes['lockable'] 'unspecified' "$($Case.Path) must not be lockable."
+	}
+
+	foreach ($Path in @(
+		'Content/Maps/__ExternalActors__/A/B/Actor.uasset',
+		'Content/Maps/__ExternalObjects__/A/B/Object.uasset'
+	)) {
+		$Attributes = Get-Attributes -Path $Path
+		foreach ($Attribute in @('filter', 'diff', 'merge')) {
+			Assert-Equal $Attributes[$Attribute] 'lfs' "$Path $Attribute mismatch."
+		}
+		Assert-Equal $Attributes['text'] 'unset' "$Path text mismatch."
+		Assert-Equal $Attributes['lockable'] 'unset' "$Path must be exempt from mandatory locks."
+	}
+
+	$IgnoredPaths = @(
+		'Binaries/PolicyProbe.dll',
+		'Generated/PolicyProbe.sln',
+		'Generated/PolicyProbe.slnx',
+		'local/signing-material/release.pem',
+		'local/signing-materials/release.key',
+		'local/service-account/account.json',
+		'local/service-accounts/account.json',
+		'local/release.p12',
+		'local/release.pfx',
+		'local/release.jks',
+		'local/release.keystore',
+		'local/release.mobileprovision',
+		'local/game-service-account.json',
+		'local/game_service_account.json'
+	)
+
+	foreach ($Path in $IgnoredPaths) {
+		& git check-ignore --quiet --no-index -- $Path
+		if ($LASTEXITCODE -ne 0) {
+			throw "$Path must be ignored."
+		}
+	}
+
+	foreach ($Path in @('service-account.redacted.example.json', 'service_account.redacted.example.json')) {
+		& git check-ignore --quiet --no-index -- $Path
+		if ($LASTEXITCODE -eq 0) {
+			throw "$Path must remain eligible for source control."
+		}
+	}
+
+	$ProhibitedTrackedPatterns = @(
+		'*.pem', '*.key', '*.p12', '*.pfx', '*.jks', '*.keystore',
+		'*.mobileprovision', '*service-account*.json', '*service_account*.json'
+	)
+	$TrackedViolations = @()
+	foreach ($Pattern in $ProhibitedTrackedPatterns) {
+		$TrackedViolations += @(Invoke-Git -Arguments @('ls-files', '--', $Pattern))
+	}
+	$TrackedViolations += @(Invoke-Git -Arguments @('ls-files', '--', ':(glob)**/signing-material/**', ':(glob)**/signing-materials/**', ':(glob)**/service-account/**', ':(glob)**/service-accounts/**'))
+	$TrackedViolations = @($TrackedViolations | Where-Object {
+		$_ -and $_ -notmatch '(^|/)(service-account|service_account)\.redacted\.example\.json$' -and
+		$_ -ne '.agents/skills/orchestrate-delivery/scripts/tests/fixtures/snapshot-sensitive-test.pem'
+	} | Sort-Object -Unique)
+	if ($TrackedViolations.Count -gt 0) {
+		throw "Prohibited sensitive-pattern paths are tracked: $($TrackedViolations -join ', ')"
+	}
+
+	$StarterMap = 'Content/Maps/StarterMap.umap'
+	$ExpectedHash = '2a2b755b0feee3035b6c84fcd1eacebb67505d9344e66d0fb578b7804044b49a'
+	$ActualHash = (Get-FileHash -LiteralPath $StarterMap -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-Equal $ActualHash $ExpectedHash 'StarterMap SHA-256 mismatch.'
+
+	$LfsVersion = & git lfs version 2>&1
+	if ($LASTEXITCODE -ne 0) {
+		throw "Git LFS is required for this policy check: $($LfsVersion -join [Environment]::NewLine)"
+	}
+	$StarterMapLfs = @(Invoke-Git -Arguments @('lfs', 'ls-files', "--include=$StarterMap"))
+	if ($StarterMapLfs.Count -ne 1 -or $StarterMapLfs[0] -notmatch '^2a2b755b0f\s+\*\s+Content/Maps/StarterMap\.umap$') {
+		throw 'StarterMap must remain an LFS-owned object with object prefix 2a2b755b0f.'
+	}
+
+	Write-Host 'Source-control policy checks passed.'
+}
+finally {
+	Pop-Location
+}

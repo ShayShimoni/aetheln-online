@@ -1,8 +1,10 @@
 # Source Control for Unreal Assets
 
 Aetheln Online uses Git for source and configuration files and Git LFS for
-Unreal binary assets. The repository rules make `.uasset` and `.umap` files
-lockable because Git cannot merge those binary formats safely.
+Unreal packages and reviewed binary source assets. The committed
+[`.gitattributes`](../.gitattributes) and [`.gitignore`](../.gitignore) files are
+the source of truth. This policy does not authorize rewriting existing objects,
+resaving assets, or migrating history.
 
 ## Prerequisites
 
@@ -14,71 +16,109 @@ git lfs version
 git lfs install
 ```
 
-The committed [`.gitattributes`](../.gitattributes) file is the source of truth
-for tracked file types:
+## Attribute Policy
 
-- `.uasset` files use Git LFS and require a lock before editing.
-- `.umap` files use Git LFS and require a lock before editing.
-- C++, Markdown, and Unreal `.ini` configuration remain normal Git objects.
+The reviewed LFS matrix is:
 
-Do not add more LFS patterns without checking the expected file sizes,
-collaboration workflow, and remote storage impact.
+| Category | Extensions | Policy |
+| --- | --- | --- |
+| Unreal packages | `.uasset`, `.umap` | LFS binary and lockable |
+| Source art and DCC | `.psd`, `.psb`, `.blend`, `.fbx` | LFS binary and lockable |
+| Textures and images | `.png`, `.jpg`, `.jpeg`, `.tga`, `.tif`, `.tiff`, `.exr`, `.hdr`, `.dds` | LFS binary and lockable |
+| Audio | `.wav`, `.flac`, `.ogg`, `.mp3` | LFS binary and lockable |
+| Video | `.mp4`, `.mov`, `.webm` | LFS binary and lockable |
+| Fonts | `.ttf`, `.otf` | LFS binary and lockable |
+| OFPA packages | `Content/**/__ExternalActors__/**/*.uasset`, `Content/**/__ExternalObjects__/**/*.uasset` | LFS binary, not lockable |
+
+C/C++, Markdown, JSON, and Unreal configuration (`.h`, `.hpp`, `.c`, `.cpp`,
+`.md`, `.json`, and `.ini`) remain normal Git text normalized to LF. Generated
+Visual Studio `.sln` and `.slnx` files are ignored, but their explicit text
+policy is CRLF so diagnostic or generated copies behave consistently.
+
+The existing `docs/research/mmorpg-development-roadmap.png` predates the expanded
+image policy and is grandfathered as a normal non-LFS Git binary without a
+mandatory lock. Its exact-path exception prevents routine adds from migrating
+that historical object. New PNG paths remain LFS binary and lockable.
+
+Do not add another LFS pattern without reviewing expected sizes, edit
+concurrency, merge behavior, remote storage and transfer cost, and recovery.
+Revisit this matrix when representative repository measurements show material
+storage or clone cost, repeated merge loss, repeated unnecessary lock waits, or
+a new binary authoring format.
 
 ## Locking Workflow
 
-Pull the latest integration branch before beginning asset work. Lock an Unreal
-asset before opening it for edits:
+Pull the latest integration branch before beginning asset work. Lock a normal
+Unreal package or reviewed binary source asset before editing it:
 
 ```powershell
 git lfs lock Content/Path/Asset.uasset
 git lfs locks
 ```
 
-After the reviewed asset change is committed and pushed, release the lock:
+After the reviewed change is committed and pushed, release the lock:
 
 ```powershell
 git lfs unlock Content/Path/Asset.uasset
 ```
 
-Use the same workflow for `.umap` files. Do not force-unlock another
-contributor's file; coordinate with the lock owner instead.
+Do not force-unlock another contributor's file. If a lock appears stale,
+contact its owner, preserve their work, and have the owner release it or follow
+an explicitly authorized repository-administration recovery process. Record the
+asset, owner, related ticket, and recovery outcome.
+
+OFPA external actor and external object packages are deliberately not lockable.
+Their per-actor ownership policy is defined in
+[World Runtime and Building](world-runtime-and-building.md). The containing map
+remains lockable when it must be edited.
+
+## Sensitive Material
+
+Private keys, certificates, signing bundles, provisioning profiles, keystores,
+signing-material directories, and service-account material stay outside source
+control. Only narrowly named redacted examples may be committed. Never open or
+print a suspected sensitive file to diagnose ignore behavior; test its path with
+`git check-ignore`.
+
+If sensitive material is staged, committed, or exposed, stop distribution,
+notify the security owner, preserve safe metadata, rotate or revoke the affected
+material, and follow the incident process in
+[Security and Operations](security-and-operations.md). Removing a filename from
+the latest tree is not credential recovery and does not erase history.
+
+## Failure and Recovery
+
+- If an LFS object is missing or a pointer is malformed, stop before editing or
+  resaving the asset. Confirm Git LFS availability and retrieve the exact object
+  through the approved remote workflow; do not replace it with a regenerated
+  binary.
+- `Content/Maps/StarterMap.umap` is a protected baseline. Its expected SHA-256 is
+  `2a2b755b0feee3035b6c84fcd1eacebb67505d9344e66d0fb578b7804044b49a`, and
+  `git lfs ls-files` must identify it with object prefix `2a2b755b0f`. A mismatch
+  blocks delivery and requires investigation; do not resave or normalize it.
+- For an accidental binary normalization or LFS ownership change, preserve the
+  working copy, stop further writes, identify the last reviewed object, and
+  coordinate a scoped recovery. Do not rewrite history without separate
+  explicit authorization.
 
 ## Completed Delivery Branch Cleanup
 
-Branch cleanup is part of completed ticket delivery. After verifying that a
-short-lived ticket branch is merged into `develop`, delete that exact local
-branch and that exact branch on `origin`. Never delete an unmerged branch or a
-long-lived branch such as `develop`, and never infer the target from a wildcard
-or broad prune operation.
-
-The cleanup rule does not itself authorize a deletion. Follow the repository's
-operation-permission and Git-safety requirements before running the exact local
-and remote deletion commands.
+Branch cleanup is part of completed ticket delivery only after verifying that a
+short-lived ticket branch is merged into `develop`. The rule does not authorize
+a deletion; follow repository operation-permission and Git-safety requirements.
+Never infer a target from a wildcard or broad prune operation.
 
 ## Verification
 
-Inspect the effective attributes without creating representative binary files:
+Run the focused, provider-neutral check locally and in the future CI execution
+path:
 
 ```powershell
-git check-attr filter diff merge text lockable -- `
-  Content/TestAsset.uasset `
-  Content/TestMap.umap `
-  Source/GameCore/Test.cpp `
-  Config/DefaultGame.ini
+pwsh -NoProfile -File scripts/tests/Test-SourceControlPolicy.ps1
 ```
 
-Expected results:
-
-- The `.uasset` and `.umap` paths report `filter: lfs`, `diff: lfs`,
-  `merge: lfs`, `text: unset`, and `lockable: set`.
-- The `.cpp` and `.ini` paths report these attributes as `unspecified`.
-
-After real Unreal assets are added, confirm that Git LFS owns them:
-
-```powershell
-git lfs ls-files
-```
-
-Generated Unreal directories such as `Binaries/`, `DerivedDataCache/`,
-`Intermediate/`, and `Saved/` must remain untracked as defined by
-[`.gitignore`](../.gitignore).
+It checks the LFS and EOL matrices, the grandfathered historical PNG, OFPA lock
+exemption, generated and sensitive ignore paths without reading matched files,
+prohibited tracked path names, and the StarterMap digest and LFS ownership. Also
+run `git diff --check` and review the complete diff and status. CI provider and
+runner selection remain owned by their dedicated delivery work.
