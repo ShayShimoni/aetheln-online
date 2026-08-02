@@ -163,9 +163,15 @@ does not mark an unrun check as passed.
 No asset is approved by this template. Each temporary or intended production
 asset must receive a row before use or distribution.
 
+The imported non-canonical visual-development package maintains its detailed
+records in [`visuals/asset-provenance.md`](../visuals/asset-provenance.md). Those
+records supplement this register; repository inclusion does not constitute
+creative, production, legal, or runtime approval.
+
 | Asset ID | Source and author | License or permission evidence | Reviewed version/hash | Review status | Owner | Permitted stage/use | Replacement status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | TBD | TBD | TBD | TBD | Pending | TBD | Not approved | TBD |
+| Visual-development package | See package provenance register | See package provenance register | See package manifest and provenance register | Imported; non-canonical | #94 and the affected asset owner | Review and production planning only; not approved for Unreal `Content/` | Per-asset review required |
 
 Review status must distinguish pending, approved with scope, rejected, and
 expired. Record source files and derived outputs separately when their license,

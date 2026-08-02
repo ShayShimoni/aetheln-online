@@ -46,6 +46,20 @@ Revisit this matrix when representative repository measurements show material
 storage or clone cost, repeated merge loss, repeated unnecessary lock waits, or
 a new binary authoring format.
 
+## Visual-Development Package
+
+The repository-root [`visuals/`](../visuals/README.md) package is a preserved,
+non-canonical source and review collection. Its PNG files use the repository's
+normal LFS image policy. Importing the package does not authorize resaving,
+recompressing, stripping metadata, moving files into Unreal `Content/`, or
+marking concepts as approved.
+
+Before editing a binary in this package, fetch its LFS object, verify that the
+working copy is not an LFS pointer, and follow the locking workflow below. Keep
+full-resolution sources separate from derived previews and record any approved
+derivation in the package's
+[provenance register](../visuals/asset-provenance.md).
+
 ## Locking Workflow
 
 Pull the latest integration branch before beginning asset work. Lock a normal
@@ -122,3 +136,15 @@ exemption, generated and sensitive ignore paths without reading matched files,
 prohibited tracked path names, and the StarterMap digest and LFS ownership. Also
 run `git diff --check` and review the complete diff and status. CI provider and
 runner selection remain owned by their dedicated delivery work.
+
+Changes under `visuals/` also require the package-specific validator:
+
+```powershell
+powershell -NoProfile -File visuals/Test-VisualPackage.ps1
+```
+
+That validation is path-scoped so routine code-only work does not require
+fetching the visual package's LFS objects. A missing LFS object, hash mismatch,
+unexpected metadata change, broken internal reference, or incomplete provenance
+entry blocks visual-package delivery; do not repair such failures by recreating
+or resaving the affected binary.

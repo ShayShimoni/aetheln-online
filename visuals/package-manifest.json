@@ -1,0 +1,873 @@
+﻿{
+    "schemaVersion":  1,
+    "packageStatus":  "non-canonical",
+    "generatedAt":  "2026-08-02",
+    "expectedAssetCount":  103,
+    "expectedTotalFileCount":  107,
+    "expectedC2paPngCount":  45,
+    "mirrorPairs":  [
+                        {
+                            "left":  "02-playable-peoples-lineup.png",
+                            "right":  "ui-production-v2/assets/playable-peoples-reference.png"
+                        },
+                        {
+                            "left":  "ui-production/backgrounds/character-selection-stage.png",
+                            "right":  "ui-production-v2/assets/character-selection-stage.png"
+                        },
+                        {
+                            "left":  "ui-production/backgrounds/main-menu-background.png",
+                            "right":  "ui-production-v2/assets/main-menu-background.png"
+                        }
+                    ],
+    "assets":  [
+                   {
+                       "path":  "01-main-menu-concept.png",
+                       "sha256":  "b3c63ec7b4c9feaaaf29b9c04262d8dc0820e321e418ee0aebf69e6fc8f5c303",
+                       "bytes":  2361269,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "01-overall-mood-key.png",
+                       "sha256":  "2695f4f25bf5e6786b37aa9c4f0368db5189c3e886ebfa94b9c5846b354d295d",
+                       "bytes":  2338884,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "02-aurin-playable-study.png",
+                       "sha256":  "0dfc9e25f5223320c17789252f5452df734b29078119f15ad8008a3a92d047a4",
+                       "bytes":  2571108,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "02-playable-peoples-lineup.png",
+                       "sha256":  "522184a4a311a6a582e16b950793653676498f16873710c993e36e6903bde6b7",
+                       "bytes":  2451101,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "03-aurin-bulwark-equipment.png",
+                       "sha256":  "7fb264525b6f066a373ebd077ce266dcab1e8dddc572e91c18dad8001b053641",
+                       "bytes":  2223263,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "03-kell-playable-study.png",
+                       "sha256":  "3149b73c435a5b1abf6cf6de2b942ce9b84fe1b36eb1789425986f6bc33203d7",
+                       "bytes":  3227367,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "04-branmark-settlement.png",
+                       "sha256":  "53dd7bb2a83f855102162c3596af2906b3725bcf1dc9ff5d3aafd19f0314adbf",
+                       "bytes":  2449402,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "04-vesh-playable-study.png",
+                       "sha256":  "73f6a2c51abae46fda8c5ab1a99ba16428a2756e493cdc84d90d396054b02c82",
+                       "bytes":  2643176,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "05-glasswake-reach.png",
+                       "sha256":  "4df12bcb3eb14604bd59c510f79eecbd42ecd13a2f3b4c201175f7a1e48fb45e",
+                       "bytes":  2423240,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "05-oathscar-combat-sheet.png",
+                       "sha256":  "ad564deeab7faa528a4d35ab96b72689768970e0157498efab2e26273b0a8196",
+                       "bytes":  2889372,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "06-character-selection-concept.png",
+                       "sha256":  "2c40ce4d546f3d5fecd965db00e66fe7d96b25df6175542ca8895c787d71f2b5",
+                       "bytes":  2015659,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "06-nullwright-combat-sheet.png",
+                       "sha256":  "a5c0ccf47d588f5480c8d3889925c210060a433b21c2ca963efe8511874b09bf",
+                       "bytes":  3227158,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "07-hushblade-combat-sheet.png",
+                       "sha256":  "40f6b3c090181b6e5471f997d7ebbf9e5d4001de8c3fb5e2e2f528bee1e937b9",
+                       "bytes":  2634993,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "07-ui-style-system.png",
+                       "sha256":  "6ca9ddde6be08d347dec2a0611b018af6bdd2dd4d21fb98325b2800ce14f9c5b",
+                       "bytes":  2183536,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "08-gravecant-combat-sheet.png",
+                       "sha256":  "da74c9cbf0d87b072b1023fd14b775fd863110425416800e4d69a8d55f9c1720",
+                       "bytes":  2660494,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "09-blackfletch-combat-sheet.png",
+                       "sha256":  "9c00d6de8985d5d108f21c16ec61085ec939b1ccf34d8db92b20b83ba1a2a3a7",
+                       "bytes":  2382447,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "10-combat-readability-scene.png",
+                       "sha256":  "a01f2d337387ae5457e8dd0242eb64d24a8c514f2c62b9d07367a9d7bf903aab",
+                       "bytes":  2494089,
+                       "mediaType":  "image/png",
+                       "width":  1536,
+                       "height":  1024,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "FUTURE-VISUALS-PLAN.md",
+                       "sha256":  "291d8c30be8478838db074da43a37816cb21209078420eba19e9cb91397588eb",
+                       "bytes":  12189,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
+                       "path":  "generation-prompts.md",
+                       "sha256":  "ec40795dc76536f797fbc132917cafbdce2112e4b0e03cbd01160db511901ce8",
+                       "bytes":  8611,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
+                       "path":  "README.md",
+                       "sha256":  "65d69e08b35af6ab9ab46ab7285fd0478904c09681dd85f43ab37bc46fd6e0a6",
+                       "bytes":  4172,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
+                       "path":  "ui-production/assets/controls.svg",
+                       "sha256":  "cd4f01b42820866886cfc0db62435c110bb9a884f35b879eba13a277bcb0752b",
+                       "bytes":  1200,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/assets/divider.svg",
+                       "sha256":  "625c07864f492881d5c3f5d844ad6db63d9a6c2133a1fb65eb53cab3355129b5",
+                       "bytes":  255,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/assets/logo-aetheln-online.svg",
+                       "sha256":  "8df95ff33f336e58c989596beb8c01a86c9794e8f667d01c25af2774028c4034",
+                       "bytes":  1247,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/assets/panel-nine-slice.svg",
+                       "sha256":  "34a8d9fda208a3b96ff12726daa70ba57a63ee2bff82b1f56752738057d92b63",
+                       "bytes":  515,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/assets/primary-button-disabled.svg",
+                       "sha256":  "c25e789aa7c667f41419d4b70353a17d8e7ad1947bcb4662fae3f65ec4fa4bea",
+                       "bytes":  299,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/assets/primary-button-focused.svg",
+                       "sha256":  "515baef8a8b74a4db434567f808ca3137aea264f6210c5fa9aeaead489ee763f",
+                       "bytes":  416,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/assets/primary-button-hover.svg",
+                       "sha256":  "31dcfec56cd7799a3874b0a1024f16faec56ff5bce4b40dd04875b8cb37af34c",
+                       "bytes":  398,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/assets/primary-button-normal.svg",
+                       "sha256":  "6eb49bc2be9aef5f927747301744eddfea9e00a2bde166365013d02e3d6fb1e2",
+                       "bytes":  299,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/assets/primary-button-pressed.svg",
+                       "sha256":  "f12d6ca936ff7fc965d9c5c8506ecb2fa316a38baa06061588629356a5eaa245",
+                       "bytes":  299,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/backgrounds/character-selection-stage.png",
+                       "sha256":  "135d63aaf1838bd5036f36c460e5057bf90266787d89a2149ba1e1b927080965",
+                       "bytes":  2044207,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production/backgrounds/main-menu-background.png",
+                       "sha256":  "e2a48803c32bd5a1e79bc159d8a350765a87a3a1199a8b32b207a8cc1575c4cc",
+                       "bytes":  2219659,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production/font-recommendations.md",
+                       "sha256":  "866f9d3dd2e76a9223cffac9f4b78af0783efe3a2de83f26fbd7a652d99e2470",
+                       "bytes":  1259,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
+                       "path":  "ui-production/README.md",
+                       "sha256":  "562fd974e749c20139419a51943091a3c200f5efcc64012c28ec20cec643863b",
+                       "bytes":  2072,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
+                       "path":  "ui-production/screen-flow.md",
+                       "sha256":  "b285d8e008e824a2e45e80102e2a1eab891e5129f56961f3d7d3bc4d385b4d63",
+                       "bytes":  1253,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
+                       "path":  "ui-production/screens/accessibility.svg",
+                       "sha256":  "50bf466915ade1aef2757d1f966248693013c4f7e5a8163836dbeb399f87e6c3",
+                       "bytes":  3407,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/screens/character-selection.svg",
+                       "sha256":  "9372a163101bf4db366d06ddc0a22cc791a50bc7dd88981ff76565d0428d2548",
+                       "bytes":  3986,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/screens/main-menu.svg",
+                       "sha256":  "baa4730f80b043fb1305a1b18aafd30f9f8b894b6d3e3ecb1e6166154e1260b2",
+                       "bytes":  2870,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/screens/settings.svg",
+                       "sha256":  "2bdfb7c0356dcae46d2fec8addd254387741eff6f387c1a422e097c15d1ff976",
+                       "bytes":  3289,
+                       "mediaType":  "image/svg+xml"
+                   },
+                   {
+                       "path":  "ui-production/ui-tokens.json",
+                       "sha256":  "2daa55f1bcddc097f5f75af305dd84755265da4694015190b967819d6d83685b",
+                       "bytes":  1348,
+                       "mediaType":  "application/json"
+                   },
+                   {
+                       "path":  "ui-production/unreal-commonui-spec.md",
+                       "sha256":  "90cd880537784e48f711e2aee4578e18f78769e93a51e519eafe751173f38573",
+                       "bytes":  2581,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/button-disabled.png",
+                       "sha256":  "9653eb0407bfa4e30aff486637c7269b76ed145f61c76812b915451125f486f9",
+                       "bytes":  819133,
+                       "mediaType":  "image/png",
+                       "width":  1759,
+                       "height":  299,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/button-focused.png",
+                       "sha256":  "f8bf51e20e683cd2f274e3c2ff423a6285777f97d4085a94be5dafa32cd71f1e",
+                       "bytes":  980938,
+                       "mediaType":  "image/png",
+                       "width":  1758,
+                       "height":  299,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/button-hover.png",
+                       "sha256":  "8e95da8a3230bf6080dde1d4b88487249780956ccd7072b1e66378ab8a6d4c10",
+                       "bytes":  1113677,
+                       "mediaType":  "image/png",
+                       "width":  1759,
+                       "height":  300,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/button-normal.png",
+                       "sha256":  "b5ff9c8546ea5b3deddc0dc750a1cb74efb5e8e92870d7e219d21aa68a7b22ed",
+                       "bytes":  901978,
+                       "mediaType":  "image/png",
+                       "width":  1759,
+                       "height":  299,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/character-selection-stage.png",
+                       "sha256":  "135d63aaf1838bd5036f36c460e5057bf90266787d89a2149ba1e1b927080965",
+                       "bytes":  2044207,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/hud-status-frame.png",
+                       "sha256":  "c30f386a4ad4ac7476a67a47c86563da68f473297918c2ef19a15cb84bc00387",
+                       "bytes":  904343,
+                       "mediaType":  "image/png",
+                       "width":  2104,
+                       "height":  344,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/icon-basic-attack.png",
+                       "sha256":  "5d0112d9be314293f6d8ab01689f207be68121aa67cd9e221d577aa37603439e",
+                       "bytes":  894167,
+                       "mediaType":  "image/png",
+                       "width":  973,
+                       "height":  980,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/icon-block.png",
+                       "sha256":  "6ed1e11ddb20a9a47f9b1f0badda2defc7353f35030e351d6fa9502ccce923a8",
+                       "bytes":  1539217,
+                       "mediaType":  "image/png",
+                       "width":  841,
+                       "height":  1148,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/icon-buff.png",
+                       "sha256":  "7def7fee2143291f83f306ea39029bb0c9f1c630005475782a1f6d62839f8003",
+                       "bytes":  837733,
+                       "mediaType":  "image/png",
+                       "width":  585,
+                       "height":  1101,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/icon-debuff.png",
+                       "sha256":  "dfd3df6e8d0cf6a93873fd429ea55db872c239ae4dc38873bccca19b12bef576",
+                       "bytes":  834811,
+                       "mediaType":  "image/png",
+                       "width":  700,
+                       "height":  1115,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/icon-dodge.png",
+                       "sha256":  "1a1632020c2e868105fd13d9d1a2db0ca24da39e69a35fa3c9a54dc18c252b73",
+                       "bytes":  1328547,
+                       "mediaType":  "image/png",
+                       "width":  947,
+                       "height":  964,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/icon-health-consumable.png",
+                       "sha256":  "ccd1b2531d68f483da3199010732a66f324a45f58e0e1291141e05aaf01dbc05",
+                       "bytes":  1014708,
+                       "mediaType":  "image/png",
+                       "width":  585,
+                       "height":  1071,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/kell-female-selection.png",
+                       "sha256":  "8ec2177227026d94330ea37d267de45a3bd220ea11b14e3a5e630cb1b85dee9f",
+                       "bytes":  1004729,
+                       "mediaType":  "image/png",
+                       "width":  443,
+                       "height":  1458,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/loading-indicator.png",
+                       "sha256":  "c50b333db788dd08a43ab1c5edb23bf23cbe9a389f802d432860b19d6aa282fc",
+                       "bytes":  912116,
+                       "mediaType":  "image/png",
+                       "width":  1142,
+                       "height":  1132,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/logo.png",
+                       "sha256":  "91ef2cdb3dcbb25c5202439231c49eaae4634a76277c7a1af8f368a7fa4c064f",
+                       "bytes":  562828,
+                       "mediaType":  "image/png",
+                       "width":  1574,
+                       "height":  576,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/main-menu-background.png",
+                       "sha256":  "e2a48803c32bd5a1e79bc159d8a350765a87a3a1199a8b32b207a8cc1575c4cc",
+                       "bytes":  2219659,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/marker-interact.png",
+                       "sha256":  "0fd2dca0952e5d74e43985188082e3fc1715a2faf6603afc1d78244b9addb811",
+                       "bytes":  360829,
+                       "mediaType":  "image/png",
+                       "width":  487,
+                       "height":  855,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/marker-objective.png",
+                       "sha256":  "142c71f5cd214124d6bbc77bab32f77aa4748e3c4b5e1d710f162b32c94f00f2",
+                       "bytes":  637908,
+                       "mediaType":  "image/png",
+                       "width":  579,
+                       "height":  1213,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/panel-large.png",
+                       "sha256":  "dec0847fc93c0bda9b2dbbd5b472093fee22a36cefaa6a2999e31eab82a022f0",
+                       "bytes":  1974797,
+                       "mediaType":  "image/png",
+                       "width":  1307,
+                       "height":  988,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/playable-peoples-reference.png",
+                       "sha256":  "522184a4a311a6a582e16b950793653676498f16873710c993e36e6903bde6b7",
+                       "bytes":  2451101,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/reticle-free-aim.png",
+                       "sha256":  "beb138d76c1b143e90c62d163c4f8751708ba31ccb1f98e3f594db832dc4ef34",
+                       "bytes":  26726,
+                       "mediaType":  "image/png",
+                       "width":  628,
+                       "height":  637,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/selection-card-frame.png",
+                       "sha256":  "69c606bf049798cc392c85011cd5c5efde9157c24aac2ffee6c2286cbf9ba22d",
+                       "bytes":  993274,
+                       "mediaType":  "image/png",
+                       "width":  960,
+                       "height":  1460,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/slider-cyan-65.png",
+                       "sha256":  "a3d0ae4c4f61fdd8a975335e038823bc17f25205df7069b5988ab3a095118f3a",
+                       "bytes":  719207,
+                       "mediaType":  "image/png",
+                       "width":  1854,
+                       "height":  211,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/slot-frame.png",
+                       "sha256":  "1b49538e07da81e3597be938617827c3bd9754c6a753516f3000c28e925d5727",
+                       "bytes":  1843727,
+                       "mediaType":  "image/png",
+                       "width":  984,
+                       "height":  1069,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/toggle-off.png",
+                       "sha256":  "ec906a6bf02714296d1ad3db2087d100e00d8dc82905f969056d315d448bf455",
+                       "bytes":  1103667,
+                       "mediaType":  "image/png",
+                       "width":  1290,
+                       "height":  445,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/assets/toggle-on.png",
+                       "sha256":  "ab87bb61b79a77179c351a0f31186a08b88bc6cba43f3434acb6a7b815659e14",
+                       "bytes":  1176738,
+                       "mediaType":  "image/png",
+                       "width":  1308,
+                       "height":  477,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/build-gameplay-assets-preview.ps1",
+                       "sha256":  "5720357c41cde651b93c20140c208fbaa98f05edb6cfd46c84dfef7838029f68",
+                       "bytes":  4881,
+                       "mediaType":  "text/x-powershell"
+                   },
+                   {
+                       "path":  "ui-production-v2/build-preview.ps1",
+                       "sha256":  "101e8327dca00bd09601a5142bcafaff855759d1fe6401d954ad5a5dac4eede8",
+                       "bytes":  4711,
+                       "mediaType":  "text/x-powershell"
+                   },
+                   {
+                       "path":  "ui-production-v2/build-screen-previews.ps1",
+                       "sha256":  "77f270e2b63061e9de20abfe1d1c88860494d93bfe13fceea56920407e54766a",
+                       "bytes":  14171,
+                       "mediaType":  "text/x-powershell"
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/button-disabled-source.png",
+                       "sha256":  "6ed7db085293289b9025a91916febaf77cb0ceeafd9591ee79837b7412cc92c4",
+                       "bytes":  1383681,
+                       "mediaType":  "image/png",
+                       "width":  1881,
+                       "height":  836,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/button-focused-source.png",
+                       "sha256":  "9772bc1a63e38f7db4ec09fe8fb9040094e66cce0501796a76eeb35ae9d549ba",
+                       "bytes":  1449283,
+                       "mediaType":  "image/png",
+                       "width":  1880,
+                       "height":  837,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/button-hover-source.png",
+                       "sha256":  "cbd205d7a700ed15d764387b26d7e77a21decaaa6e73ef81fef8a8882ed374fc",
+                       "bytes":  1592945,
+                       "mediaType":  "image/png",
+                       "width":  1881,
+                       "height":  836,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/button-normal-source.png",
+                       "sha256":  "92ee9e546e81eaa26fd4da9ec66df4c2c29e4cd314822089a5f18f632a87ff20",
+                       "bytes":  1397034,
+                       "mediaType":  "image/png",
+                       "width":  1881,
+                       "height":  836,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/hud-status-frame-source.png",
+                       "sha256":  "26eadb355982786e549f3c3e362417522bd31e1ea47157667bf9828ac73bb43e",
+                       "bytes":  1361380,
+                       "mediaType":  "image/png",
+                       "width":  2172,
+                       "height":  724,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/icon-basic-attack-source.png",
+                       "sha256":  "7d31add38b66f213738cc5cceccb30ce459dcb73013daf82fdf12d1a9fcae074",
+                       "bytes":  1557877,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/icon-block-source.png",
+                       "sha256":  "317d277aaa05bd7815a8a98c0b3ba13e750dd1e30b61914c110054a3548dc8d8",
+                       "bytes":  1964583,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/icon-buff-source.png",
+                       "sha256":  "c82e4b98c6c039e4e6512712bf583e30d688ff1706d39ba28976f7693af88280",
+                       "bytes":  1497896,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/icon-debuff-source.png",
+                       "sha256":  "ed12c1d20e9a498fb092de01043e63171a7e109dde8fbe7d0ab40934563c744b",
+                       "bytes":  1529617,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/icon-dodge-source.png",
+                       "sha256":  "00298c0d65ab939613948c8cd05b58e0e18c5edffe9cfff0a69e8e985da198f4",
+                       "bytes":  1765266,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/icon-health-consumable-source.png",
+                       "sha256":  "0db70baed0adcf886a6043c2508e428ae98d18e02b574c5dc31a7bda2df0531d",
+                       "bytes":  1513332,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/kell-female-selection-source.png",
+                       "sha256":  "ac1dcbfaa4edc86eedfeaa75100d66b82bdd1d8d986f0c3e0bff26518a3dddf9",
+                       "bytes":  1557805,
+                       "mediaType":  "image/png",
+                       "width":  941,
+                       "height":  1672,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/loading-indicator-source.png",
+                       "sha256":  "e407325b69cdcc715419da504f4951504bcbe3d317d59752f552c0f87fc08e11",
+                       "bytes":  1622308,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/logo-source.png",
+                       "sha256":  "de065af6b8e0e13df465a0f6f61e6051eb92f607ac32698ea17a9b1379d1214a",
+                       "bytes":  1314398,
+                       "mediaType":  "image/png",
+                       "width":  1755,
+                       "height":  896,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/marker-interact-source.png",
+                       "sha256":  "01f69cc54fa3b232887e4de7dd073bb2def948b5bbce35133ee100df9007aa2b",
+                       "bytes":  1213476,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/marker-objective-source.png",
+                       "sha256":  "53882b445cb10c0d7a1277d6c9d7ec9629525dca85851643f15603df6a625b83",
+                       "bytes":  1563096,
+                       "mediaType":  "image/png",
+                       "width":  1024,
+                       "height":  1536,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/panel-large-source.png",
+                       "sha256":  "983185438450bac8a69565246c0c285e43f700294265285484a7c70cc3fb449a",
+                       "bytes":  1943218,
+                       "mediaType":  "image/png",
+                       "width":  1448,
+                       "height":  1086,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/reticle-free-aim-source.png",
+                       "sha256":  "c9524d9340ad5c213d627aa7cfce28aaefa8a240559631baed8482ef5bd79586",
+                       "bytes":  927118,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/selection-card-frame-source.png",
+                       "sha256":  "037258801e9c1bac6254bf1e0031fa28681e769b00bc3b2e09a1d2b80f2ec9ad",
+                       "bytes":  1498919,
+                       "mediaType":  "image/png",
+                       "width":  1024,
+                       "height":  1535,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/slider-cyan-65-source.png",
+                       "sha256":  "807a407f9d60d5a587bbad4afdbde88466282f4dd604e2b87745f9bc1c01120f",
+                       "bytes":  1243935,
+                       "mediaType":  "image/png",
+                       "width":  1983,
+                       "height":  793,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/slot-frame-source.png",
+                       "sha256":  "879456312ae583276d534298193918c61b45265e816936f543e80ef75e4952c9",
+                       "bytes":  2047140,
+                       "mediaType":  "image/png",
+                       "width":  1254,
+                       "height":  1254,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/toggle-off-source.png",
+                       "sha256":  "4489674fa0945481d0676389032c1e2ed5f406a22a6689e40320fd6756894e23",
+                       "bytes":  1600666,
+                       "mediaType":  "image/png",
+                       "width":  1942,
+                       "height":  809,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/chroma-sources/toggle-on-source.png",
+                       "sha256":  "0d135764782ff88beacc17ea7319826290c4a5f1093504385e6f6b8674092d4d",
+                       "bytes":  1473824,
+                       "mediaType":  "image/png",
+                       "width":  1942,
+                       "height":  809,
+                       "c2pa":  true
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/accessibility-v2-preview.png",
+                       "sha256":  "8553378403f5a0c17260378886fc066d0fb6fb7fa52d7ca71020d6305c6f9190",
+                       "bytes":  2543400,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/character-selection-v2-preview.png",
+                       "sha256":  "15ad9a4cbef613af844a483d26a4f849bd8192a9866cfdcc1312fae6fe191573",
+                       "bytes":  3111724,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/dialog-tooltip-v2-preview.png",
+                       "sha256":  "c8cabedcdfb22d29d1211bac09136e997f00cb2e7468f8c8933f2330030bab96",
+                       "bytes":  2221666,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/gameplay-icons-v2-preview.png",
+                       "sha256":  "12a1db0036dd73444b7f6cc600f683a933d948b5fe32209f8fcd3da4530745e8",
+                       "bytes":  2247495,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/hud-v2-preview.png",
+                       "sha256":  "ddc5324591fbe9fd1f4794edaeacda201f03603ec6dff0163f1010fad56b0b4c",
+                       "bytes":  3012458,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/inventory-v2-preview.png",
+                       "sha256":  "2dfc687e5be8412380a7afb5538b3c7a81e4163a84484134803fd592038a40d9",
+                       "bytes":  2101508,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/loading-v2-preview.png",
+                       "sha256":  "c26b76e1d7c9894ff30e6cdf9d90faa833cf4871d1892a1bc9dca65b3af59305",
+                       "bytes":  2688838,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/main-menu-v2-preview.png",
+                       "sha256":  "983dcbaa8d7f9f598d09b1ca0f9fbdd04babf47e8cd49e3845f4894168b5f5a9",
+                       "bytes":  3199705,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/previews/settings-v2-preview.png",
+                       "sha256":  "d300e9937e0c3a2b3ae9c64d79bc6d7ac797df9077d4912a0a710f68992da440",
+                       "bytes":  2542060,
+                       "mediaType":  "image/png",
+                       "width":  1672,
+                       "height":  941,
+                       "c2pa":  false
+                   },
+                   {
+                       "path":  "ui-production-v2/README.md",
+                       "sha256":  "3dcf97d34fdc169fc2637998ca5fdc11e3bf70b713c4629fcbcd64bb1a7dd6a2",
+                       "bytes":  4928,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
+                       "path":  "ui-production-v2/remove-chroma.ps1",
+                       "sha256":  "cbebc10d6a5ef2d2a03b1f0a96df92ead9db26b6fb9000760da8b98b1d35aba1",
+                       "bytes":  3642,
+                       "mediaType":  "text/x-powershell"
+                   }
+               ]
+}

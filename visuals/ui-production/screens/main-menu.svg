@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="scrim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#080B0E" stop-opacity=".96"/>
+      <stop offset=".42" stop-color="#080B0E" stop-opacity=".78"/>
+      <stop offset=".68" stop-color="#080B0E" stop-opacity=".15"/>
+      <stop offset="1" stop-color="#080B0E" stop-opacity="0"/>
+    </linearGradient>
+    <style>
+      .button { fill:#171D23EB; stroke:#55585A; stroke-width:2; }
+      .focus { fill:#20272CF7; stroke:#F49A4A; stroke-width:3; }
+      .label { fill:#D8D0BE; font:600 30px 'Source Sans 3',Arial,sans-serif; letter-spacing:3px; }
+      .disabled { fill:#73777A; }
+    </style>
+  </defs>
+  <image href="../backgrounds/main-menu-background.png" width="1920" height="1080" preserveAspectRatio="xMidYMid slice"/>
+  <rect width="1920" height="1080" fill="url(#scrim)"/>
+  <image href="../assets/logo-aetheln-online.svg" x="80" y="64" width="720" height="224"/>
+  <g transform="translate(128 360)">
+    <g transform="translate(0 0)">
+      <path class="button" d="M18 2H502L518 18V54L502 70H18L2 54V18Z"/>
+      <text class="label disabled" x="260" y="47" text-anchor="middle">CONTINUE</text>
+    </g>
+    <g transform="translate(0 88)">
+      <path class="focus" d="M18 2H502L518 18V54L502 70H18L2 54V18Z"/>
+      <path d="M2 36L14 24L26 36L14 48ZM518 36L506 24L494 36L506 48Z" fill="#D76A28" stroke="#F49A4A" stroke-width="2"/>
+      <text class="label" x="260" y="47" text-anchor="middle">PLAY</text>
+    </g>
+    <g transform="translate(0 176)">
+      <path class="button" d="M18 2H502L518 18V54L502 70H18L2 54V18Z"/>
+      <text class="label" x="260" y="47" text-anchor="middle">SETTINGS</text>
+    </g>
+    <g transform="translate(0 264)">
+      <path class="button" d="M18 2H502L518 18V54L502 70H18L2 54V18Z"/>
+      <text class="label" x="260" y="47" text-anchor="middle">ACCESSIBILITY</text>
+    </g>
+    <g transform="translate(0 352)">
+      <path class="button" d="M18 2H502L518 18V54L502 70H18L2 54V18Z"/>
+      <text class="label" x="260" y="47" text-anchor="middle">CREDITS</text>
+    </g>
+    <g transform="translate(0 440)">
+      <path class="button" d="M18 2H502L518 18V54L502 70H18L2 54V18Z"/>
+      <text class="label" x="260" y="47" text-anchor="middle">QUIT</text>
+    </g>
+  </g>
+  <g transform="translate(128 1010)" font-family="Source Sans 3,Arial,sans-serif" font-size="22" fill="#D8D0BE">
+    <rect width="56" height="36" rx="4" fill="#20272C" stroke="#A79F90"/>
+    <text x="28" y="26" text-anchor="middle">↵</text>
+    <text x="72" y="26">SELECT</text>
+    <rect x="184" width="56" height="36" rx="4" fill="#20272C" stroke="#A79F90"/>
+    <text x="212" y="26" text-anchor="middle">ESC</text>
+    <text x="256" y="26">BACK</text>
+  </g>
+</svg>
+
