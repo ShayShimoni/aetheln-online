@@ -93,7 +93,7 @@ $ClientArguments = $CommonArguments + @('-target=AethelnOnlineClient', '-platfor
 $ServerNeverCookDirectories = @(
 	(Join-Path $ResolvedEngine 'Engine/Plugins/Runtime/CommonUI/Content'),
 	(Join-Path $ResolvedEngine 'Engine/Plugins/EnhancedInput/Content'),
-	(Join-Path $ResolvedEngine 'Engine/Plugins/Interchange/Runtime/Interchange/Content')
+	(Join-Path $ResolvedEngine 'Engine/Plugins/Interchange/Runtime/Content')
 )
 foreach ($Directory in $ServerNeverCookDirectories) {
 	if (-not (Test-Path -LiteralPath $Directory -PathType Container)) { throw "Required server cook exclusion directory '$Directory' does not exist." }
