@@ -260,9 +260,32 @@ is not a region, layer, instance, lease, policy, or transfer boundary.
 
 ### One File Per Actor
 
-OFPA is preferred where it measurably reduces content-authoring contention.
-Actor ownership, naming, validation, and external-actor source-control behavior
-must be documented before a map is opened to broad production work.
+OFPA is preferred where it measurably reduces content-authoring contention. It
+is not enabled or migrated by source-control policy alone. Before enabling OFPA
+for a map, record the map owner, actor-area ownership plan, naming and validation
+rules, editor/cook evidence, and recovery rehearsal.
+
+External actor and external object `.uasset` packages remain Git LFS objects but
+are exempt from mandatory LFS locks because independently owned actor packages
+are the concurrency boundary. The containing `.umap` remains lockable. Before
+editing, synchronize the integration branch, claim the actor or agreed spatial
+area in the delivery ticket, and avoid simultaneous edits to the same actor.
+Generated package names are not human ownership identities; ownership is
+recorded against the actor and work item.
+
+If two contributors edit the same actor, stop further saves and coordinate both
+owners. Preserve both working copies, select the authoritative result through
+an editor-level review, reapply the losing intent if needed, and validate the
+map, references, cook, and source-control state. Do not byte-merge packages,
+force-unlock unrelated assets, or regenerate a missing LFS object. Stale locks
+on the containing map follow the coordinated recovery process in
+[Source Control](source-control.md).
+
+Revisit OFPA adoption or the lock exemption when representative measurements
+show repeated same-actor collisions, material editor/save/cook regressions,
+missing-package recovery failures, or lock contention that outweighs the
+measured concurrency benefit. Each change requires an owner, evidence, and a
+recovery plan.
 
 ### Data Layers
 

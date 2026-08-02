@@ -64,11 +64,26 @@ Coverage/
 # Local planning artifacts
 /todos/
 
-# Local environment and secrets
+# Local environment and sensitive material
 .env
 .env.*
 !.env.example
 .envrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+**/signing-material/
+**/signing-materials/
+**/service-account/
+**/service-accounts/
+*service-account*.json
+*service_account*.json
+!service-account.redacted.example.json
+!service_account.redacted.example.json
 
 # Logs, temporary files, and operating-system metadata
 *.log
