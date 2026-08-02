@@ -48,6 +48,7 @@ try {
 	$FixtureAssetPath = Join-Path $FixtureRoot ($FirstAsset.path -replace '/', [System.IO.Path]::DirectorySeparatorChar)
 	[System.IO.Directory]::CreateDirectory((Split-Path -Parent $FixtureAssetPath)) | Out-Null
 	Copy-Item -LiteralPath $AssetPath -Destination $FixtureAssetPath
+	(Get-Item -LiteralPath $FixtureAssetPath).IsReadOnly = $false
 
 	Assert-Throws -Pattern 'inventory' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
 
