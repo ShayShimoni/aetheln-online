@@ -28,7 +28,9 @@ function New-TargetFixture {
 		[Parameter(Mandatory)]
 		[string[]] $ClientModules,
 		[Parameter(Mandatory)]
-		[string[]] $ServerModules
+		[string[]] $ServerModules,
+		[string] $EngineConfig = "[/Script/Engine.Engine]`nGameViewportClientClassName=/Script/Engine.GameViewportClient",
+		[string] $InputConfig = $null
 	)
 
 	$SourceDirectory = Join-Path $Root 'Source'
@@ -56,6 +58,13 @@ public class $($Definition.Class) : TargetRules
 }
 "@
 		Set-Content -LiteralPath (Join-Path $SourceDirectory $Definition.File) -Value $Content -Encoding UTF8
+	}
+
+	$ConfigDirectory = Join-Path $Root 'Config'
+	New-Item -ItemType Directory -Path $ConfigDirectory -Force | Out-Null
+	Set-Content -LiteralPath (Join-Path $ConfigDirectory 'DefaultEngine.ini') -Value $EngineConfig -Encoding UTF8
+	if ($null -ne $InputConfig) {
+		Set-Content -LiteralPath (Join-Path $ConfigDirectory 'DefaultInput.ini') -Value $InputConfig -Encoding UTF8
 	}
 }
 
@@ -97,6 +106,22 @@ try {
 	New-TargetFixture -Root $ServerViolationRoot -ClientModules @('GameCore', 'GameUI') -ServerModules @('GameCore', 'GameServer', 'GameUI')
 	Invoke-ExpectedFailure -Root $ServerViolationRoot -ExpectedPattern 'AethelnOnlineServerTarget.*Server.*GameUI'
 	Write-Output 'PASS: GameUI in the server target is rejected with target and module names'
+
+	$SharedConfigViolationRoot = Join-Path $FixtureRoot 'shared-config-has-ui'
+	New-TargetFixture -Root $SharedConfigViolationRoot -ClientModules @('GameCore', 'GameUI') -ServerModules @('GameCore', 'GameServer') -EngineConfig "[/Script/Engine.Engine]`nGameViewportClientClassName=/Script/CommonUI.CommonGameViewportClient"
+	Invoke-ExpectedFailure -Root $SharedConfigViolationRoot -ExpectedPattern 'DefaultEngine\.ini.*CommonUI.*dedicated-server'
+	Write-Output 'PASS: client-only script packages in shared config are rejected'
+
+	$SharedContentViolationRoot = Join-Path $FixtureRoot 'shared-config-has-client-content'
+	New-TargetFixture -Root $SharedContentViolationRoot -ClientModules @('GameCore', 'GameUI') -ServerModules @('GameCore', 'GameServer') -InputConfig "[/Script/CommonUI.CommonUIInputSettings]`nDefaultVirtualPointerClass=/CommonUI/WBP_VirtualPointer.WBP_VirtualPointer_C"
+	Invoke-ExpectedFailure -Root $SharedContentViolationRoot -ExpectedPattern 'DefaultInput\.ini.*client-only content package.*CommonUI'
+	Write-Output 'PASS: client-only content references in root shared config are rejected'
+
+	$CommentedConfigRoot = Join-Path $FixtureRoot 'commented-config-ui'
+	New-TargetFixture -Root $CommentedConfigRoot -ClientModules @('GameCore', 'GameUI') -ServerModules @('GameCore', 'GameServer') -EngineConfig ";GameViewportClientClassName=/Script/CommonUI.CommonGameViewportClient`n[/Script/Engine.Engine]`nGameViewportClientClassName=/Script/Engine.GameViewportClient"
+	$CommentedOutput = & $Validator -ProjectRoot $CommentedConfigRoot | Out-String
+	Assert-True -Condition ($CommentedOutput -match 'Target composition validation passed\.') -Message 'Commented client-only config references should be ignored.'
+	Write-Output 'PASS: commented client-only config references are ignored'
 
 	Write-Output 'All target composition tests passed.'
 }

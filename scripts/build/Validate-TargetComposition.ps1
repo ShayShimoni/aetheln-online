@@ -78,6 +78,48 @@ foreach ($Target in $Targets) {
 	}
 }
 
+$ConfigDirectory = Join-Path $ProjectRoot 'Config'
+if (Test-Path -LiteralPath $ConfigDirectory -PathType Container) {
+	$ClientOnlyScriptPattern = [regex]::new(
+		'/Script/(?<Package>CommonUI|GameUI)\.',
+		[System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+	)
+	$ClientOnlyContentPattern = [regex]::new(
+		'/(?<Package>CommonUI|GameUI)/',
+		[System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+	)
+	foreach ($ConfigFile in Get-ChildItem -LiteralPath $ConfigDirectory -File -Filter 'Default*.ini') {
+		$LineNumber = 0
+		foreach ($Line in Get-Content -LiteralPath $ConfigFile.FullName) {
+			$LineNumber++
+			$Trimmed = $Line.Trim()
+			if ([string]::IsNullOrWhiteSpace($Trimmed) -or $Trimmed.StartsWith(';') -or $Trimmed.StartsWith('#')) {
+				continue
+			}
+			if ($Trimmed.StartsWith('[')) {
+				continue
+			}
+			$Match = $ClientOnlyScriptPattern.Match($Trimmed)
+			if ($Match.Success) {
+				$DedicatedEnginePath = Join-Path $ConfigDirectory 'DedicatedServerEngine.ini'
+				$DedicatedInputPath = Join-Path $ConfigDirectory 'DedicatedServerInput.ini'
+				$HasViewportOverride = (Test-Path -LiteralPath $DedicatedEnginePath -PathType Leaf) -and
+					((Get-Content -LiteralPath $DedicatedEnginePath -Raw) -match 'GameViewportClientClassName\s*=\s*/Script/Engine\.GameViewportClient')
+				$HasVirtualPointerOverride = (Test-Path -LiteralPath $DedicatedInputPath -PathType Leaf) -and
+					((Get-Content -LiteralPath $DedicatedInputPath -Raw) -match 'DefaultVirtualPointerClass\s*=\s*None')
+				if ($Match.Groups['Package'].Value -ieq 'CommonUI' -and $Trimmed -match '^GameViewportClientClassName\s*=' -and $HasViewportOverride -and $HasVirtualPointerOverride) {
+					continue
+				}
+				$Violations.Add("Shared config '$($ConfigFile.FullName)' line $LineNumber references client-only script package '$($Match.Groups['Package'].Value)' in '$Trimmed'; dedicated-server config must override client presentation classes.")
+			}
+			$ContentMatch = $ClientOnlyContentPattern.Match($Trimmed)
+			if ($ContentMatch.Success) {
+				$Violations.Add("Shared config '$($ConfigFile.FullName)' line $LineNumber references client-only content package '$($ContentMatch.Groups['Package'].Value)' in '$Trimmed'; root Default*.ini files must remain safe for dedicated-server cooks.")
+			}
+		}
+	}
+}
+
 if ($Violations.Count -gt 0) {
 	throw "Target composition validation failed:`n - $($Violations -join "`n - ")"
 }
