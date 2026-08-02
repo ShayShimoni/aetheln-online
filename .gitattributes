@@ -41,6 +41,14 @@ Content/**/__ExternalObjects__/**/*.uasset filter=lfs diff=lfs merge=lfs -text -
 *.json text eol=lf
 *.ini text eol=lf
 
+# Preserve the frozen legacy visual-source endings without treating their
+# intentional terminal spacer line as a newly introduced whitespace defect.
+visuals/ui-production/** whitespace=-blank-at-eof
+
+# The visual package manifest seals working-tree bytes. Disable checkout-time
+# newline conversion for every package path so hashes remain portable.
+visuals/** -text
+
 # Generated Visual Studio solutions use native Windows line endings when present.
 *.sln text eol=crlf
 *.slnx text eol=crlf

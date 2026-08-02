@@ -62,6 +62,19 @@ canonical product or technical documents.
 The PDF codices are rendered artifacts of the canonical Markdown character and
 settlement documents.
 
+## Non-Canonical Visual Development
+
+- [Visual-development package](../visuals/README.md) describes the imported
+  concepts and editable UI studies.
+- [Asset provenance](../visuals/asset-provenance.md) records source, processing,
+  and review status for the imported package.
+- [Future visuals plan](../visuals/FUTURE-VISUALS-PLAN.md) governs continuation
+  of the established visual language.
+
+These files support review and production planning. They do not override the
+canonical product or technical documents, and repository inclusion does not
+approve an asset for Unreal `Content/` or runtime use.
+
 ## Historical Research Archive
 
 - [Historical planning and research](research/README.md)

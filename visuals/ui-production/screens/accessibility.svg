@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <filter id="soft"><feGaussianBlur stdDeviation="3"/></filter>
+    <style>
+      .title { fill:#D8D0BE; font:500 52px Cinzel,Georgia,serif; letter-spacing:6px; }
+      .row { fill:#D8D0BE; font:600 26px 'Source Sans 3',Arial,sans-serif; }
+      .hint { fill:#A79F90; font:400 21px 'Source Sans 3',Arial,sans-serif; }
+      .button { fill:#171D23; stroke:#55585A; stroke-width:2; }
+      .focus { fill:#20272C; stroke:#F49A4A; stroke-width:3; }
+    </style>
+  </defs>
+  <image href="../backgrounds/main-menu-background.png" width="1920" height="1080" preserveAspectRatio="xMidYMid slice" filter="url(#soft)"/>
+  <rect width="1920" height="1080" fill="#080B0ED9"/>
+  <path d="M150 86H1770L1810 126V954L1770 994H150L110 954V126Z" fill="#101419F2" stroke="#55585A" stroke-width="2"/>
+  <text class="title" x="180" y="174">ACCESSIBILITY</text>
+  <path d="M180 208H1740" stroke="#55585A" stroke-width="2"/>
+  <g transform="translate(180 270)">
+    <text class="row" y="34">TEXT SIZE</text>
+    <text class="hint" y="66">Increase interface and subtitle text size.</text>
+    <rect x="980" y="26" width="520" height="8" rx="4" fill="#303943"/>
+    <rect x="980" y="26" width="340" height="8" rx="4" fill="#D76A28"/>
+    <path d="M1320 10L1336 30L1320 50L1304 30Z" fill="#D8D0BE" stroke="#F49A4A" stroke-width="3"/>
+    <path d="M0 92H1500" stroke="#303943"/>
+    <text class="row" y="154">HIGH-CONTRAST FOCUS</text>
+    <text class="hint" y="186">Add bright borders and corner markers to focused controls.</text>
+    <rect x="1396" y="132" width="104" height="48" rx="24" fill="#253D42" stroke="#55B8C4" stroke-width="2"/>
+    <circle cx="1474" cy="156" r="18" fill="#D8D0BE" stroke="#55B8C4" stroke-width="3"/>
+    <path d="M0 212H1500" stroke="#303943"/>
+    <text class="row" y="274">REDUCED MOTION</text>
+    <text class="hint" y="306">Disable decorative transitions, star movement, and UI parallax.</text>
+    <rect x="1396" y="252" width="104" height="48" rx="24" fill="#20272C" stroke="#55585A" stroke-width="2"/>
+    <circle cx="1422" cy="276" r="18" fill="#73777A"/>
+    <path d="M0 332H1500" stroke="#303943"/>
+    <text class="row" y="394">COLOR-VISION PRESET</text>
+    <text class="hint" y="426">Adjust presentation while preserving symbols and luminance.</text>
+    <rect x="980" y="360" width="520" height="64" class="focus"/>
+    <text class="row" x="1010" y="401">DEFAULT</text>
+    <path d="M1460 384L1476 400L1492 384" fill="none" stroke="#D8D0BE" stroke-width="3"/>
+    <path d="M0 452H1500" stroke="#303943"/>
+    <text class="row" y="514">SUBTITLE BACKGROUND</text>
+    <text class="hint" y="546">Choose background opacity for spoken dialogue.</text>
+    <rect x="980" y="506" width="520" height="8" rx="4" fill="#303943"/>
+    <rect x="980" y="506" width="390" height="8" rx="4" fill="#D76A28"/>
+    <path d="M1370 490L1386 510L1370 530L1354 510Z" fill="#D8D0BE" stroke="#F49A4A" stroke-width="3"/>
+  </g>
+  <g transform="translate(1020 900)">
+    <path class="button" d="M18 2H302L318 18V54L302 70H18L2 54V18Z"/>
+    <text class="row" x="160" y="46" text-anchor="middle">RESET</text>
+    <g transform="translate(344)">
+      <path class="focus" d="M18 2H302L318 18V54L302 70H18L2 54V18Z"/>
+      <text class="row" x="160" y="46" text-anchor="middle">APPLY</text>
+    </g>
+  </g>
+</svg>
+
