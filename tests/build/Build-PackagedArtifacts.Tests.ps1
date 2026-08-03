@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Script = Join-Path $RepositoryRoot 'scripts/build/Build-PackagedArtifacts.ps1'
 $FixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AethelnPackagingTests-{0}" -f [guid]::NewGuid().ToString('N'))
+$OriginalUebpLogFolder = [Environment]::GetEnvironmentVariable('uebp_LogFolder', 'Process')
+$OriginalUebpFinalLogFolder = [Environment]::GetEnvironmentVariable('uebp_FinalLogFolder', 'Process')
 
 function Assert-True([bool] $Condition, [string] $Message) { if (-not $Condition) { throw "Assertion failed: $Message" } }
 
@@ -22,6 +24,7 @@ try {
 	$EngineRoot = Join-Path $FixtureRoot 'UE'
 	$ToolchainRoot = Join-Path $FixtureRoot 'v26_clang-20.1.8-rockylinux8'
 	$ArchiveRoot = Join-Path $FixtureRoot 'Archive'
+	$env:AETHELN_TEST_ARCHIVE_ROOT = $ArchiveRoot
 	$LogRoot = Join-Path $FixtureRoot 'Logs'
 	$UatDirectory = Join-Path $EngineRoot 'Engine/Build/BatchFiles'
 	New-Item -ItemType Directory -Path $UatDirectory -Force | Out-Null
@@ -37,19 +40,32 @@ try {
 	New-Item -ItemType Directory -Path (Split-Path -Parent $SelectedCompiler), (Split-Path -Parent $SelectedResourceCompiler) -Force | Out-Null
 	Set-Content -LiteralPath $SelectedCompiler -Value 'selected compiler' -Encoding Ascii
 	Set-Content -LiteralPath $SelectedResourceCompiler -Value 'selected resource compiler' -Encoding Ascii
+	$ConflictingCompiler = Join-Path $FixtureRoot 'Visual Studio/MSVC/14.43.34808/bin/Hostx64/x64/cl.exe'
+	New-Item -ItemType Directory -Path (Split-Path -Parent $ConflictingCompiler) -Force | Out-Null
+	Set-Content -LiteralPath $ConflictingCompiler -Value 'conflicting compiler' -Encoding Ascii
+	$PriorLogFolder = Join-Path $FixtureRoot 'PriorAutomationToolLogs'
+	$PriorFinalLogFolder = Join-Path $FixtureRoot 'PriorFinalAutomationToolLogs'
+	New-Item -ItemType Directory -Path $PriorLogFolder, $PriorFinalLogFolder -Force | Out-Null
+	Set-Content -LiteralPath (Join-Path $PriorLogFolder 'UBA-stale.txt') -Value "Compiler: $ConflictingCompiler" -Encoding Ascii
+	[Environment]::SetEnvironmentVariable('uebp_LogFolder', $PriorLogFolder, 'Process')
+	[Environment]::SetEnvironmentVariable('uebp_FinalLogFolder', $PriorFinalLogFolder, 'Process')
 	$FakeUat = Join-Path $UatDirectory 'RunUAT.bat'
 	$FakeBody = @"
 @echo off
 echo %*>>"$CapturePath"
 echo %* | findstr /c:"-serverplatform=Linux" >nul
 if %errorlevel%==0 (
-	mkdir "$ArchiveRoot\LinuxServer" 2>nul
-	echo server>"$ArchiveRoot\LinuxServer\AethelnOnlineServer"
+	mkdir "%AETHELN_TEST_ARCHIVE_ROOT%\LinuxServer" 2>nul
+	echo server>"%AETHELN_TEST_ARCHIVE_ROOT%\LinuxServer\AethelnOnlineServer"
 ) else (
-	mkdir "$ArchiveRoot\WindowsClient" 2>nul
-	echo client>"$ArchiveRoot\WindowsClient\AethelnOnlineClient.exe"
-	echo Compiler: $SelectedCompiler
-	echo Resource Compiler: $SelectedResourceCompiler
+	mkdir "%AETHELN_TEST_ARCHIVE_ROOT%\WindowsClient" 2>nul
+	echo client>"%AETHELN_TEST_ARCHIVE_ROOT%\WindowsClient\AethelnOnlineClient.exe"
+	mkdir "%uebp_LogFolder%" 2>nul
+	>"%uebp_LogFolder%\UBA-client.txt" echo Compiler: $SelectedCompiler
+	>>"%uebp_LogFolder%\UBA-client.txt" echo Compiler: $SelectedCompiler
+	>>"%uebp_LogFolder%\UBA-client.txt" echo Resource Compiler: $SelectedResourceCompiler
+	>>"%uebp_LogFolder%\UBA-client.txt" echo Resource Compiler: $SelectedResourceCompiler
+	if "%AETHELN_TEST_CONFLICTING_COMPILER%"=="1" echo Compiler: $ConflictingCompiler>>"%uebp_LogFolder%\UBA-conflict.txt"
 )
 exit /b 0
 "@
@@ -98,7 +114,26 @@ public static class FakeEditor {
 	Assert-True (Test-Path -LiteralPath (Join-Path $LogRoot 'server-dependency-registry-dump.log')) 'Dependency dump should have an actionable log.'
 	Assert-True (Test-Path -LiteralPath (Join-Path $LogRoot 'server-cooked-inventory-dump.log')) 'Inventory dump should have an actionable log.'
 	Assert-True ($Provenance.artifacts.inventory.Count -eq 2) 'Every packaged file should be inventoried.'
+	$ProjectDescriptor = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -Raw | ConvertFrom-Json
+	$AndroidFileServer = @($ProjectDescriptor.Plugins | Where-Object { $_.Name -eq 'AndroidFileServer' })
+	Assert-True ($AndroidFileServer.Count -eq 1 -and $AndroidFileServer[0].Enabled -eq $false) 'AndroidFileServer must remain explicitly disabled so commandlets cannot write generated settings into tracked project config.'
+	Assert-True (Test-Path -LiteralPath (Join-Path $LogRoot 'client-automationtool/UBA-client.txt')) 'Client UBT sidecars should be isolated under the run LogRoot.'
+	Assert-True (Test-Path -LiteralPath (Join-Path $LogRoot 'server-automationtool')) 'Server AutomationTool logs should use a distinct isolated directory.'
+	Assert-True (-not ((Get-Content -LiteralPath (Join-Path $LogRoot 'client-uat.log') -Raw) -match '(?m)^Compiler:')) 'Toolchain evidence should not depend on UAT stdout.'
+	Assert-True ([Environment]::GetEnvironmentVariable('uebp_LogFolder', 'Process') -eq $PriorLogFolder) 'The prior AutomationTool log folder should be restored after success.'
+	Assert-True ([Environment]::GetEnvironmentVariable('uebp_FinalLogFolder', 'Process') -eq $PriorFinalLogFolder) 'The prior final AutomationTool log folder should be restored after success.'
 	Write-Output 'PASS: proven client/server UAT invocations produce validated executables and exact provenance'
+
+	$env:AETHELN_TEST_CONFLICTING_COMPILER = '1'
+	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'ConflictArchive'
+	$Failure = $null
+	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ConflictArchive') -LogRoot (Join-Path $FixtureRoot 'ConflictLogs') -SourceRevision $Revision } catch { $Failure = $_.Exception.Message }
+	Assert-True ($Failure -match 'exactly one UBT-selected Compiler.*found 2') 'Conflicting compiler paths from the isolated client sidecars should fail actionably.'
+	Assert-True ([Environment]::GetEnvironmentVariable('uebp_LogFolder', 'Process') -eq $PriorLogFolder) 'The prior AutomationTool log folder should be restored after failure.'
+	Assert-True ([Environment]::GetEnvironmentVariable('uebp_FinalLogFolder', 'Process') -eq $PriorFinalLogFolder) 'The prior final AutomationTool log folder should be restored after failure.'
+	Remove-Item Env:AETHELN_TEST_CONFLICTING_COMPILER
+	$env:AETHELN_TEST_ARCHIVE_ROOT = $ArchiveRoot
+	Write-Output 'PASS: conflicting isolated UBT toolchain evidence is rejected and environment state is restored'
 
 	$DirtyRoot = Join-Path $FixtureRoot 'DirtyArchive'
 	New-Item -ItemType Directory -Path $DirtyRoot | Out-Null
@@ -126,5 +161,9 @@ public static class FakeEditor {
 finally {
 	if ($null -ne $OriginalPath) { $env:PATH = $OriginalPath }
 	Remove-Item Env:AETHELN_TEST_GIT_STATUS -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_TEST_CONFLICTING_COMPILER -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_TEST_ARCHIVE_ROOT -ErrorAction SilentlyContinue
+	[Environment]::SetEnvironmentVariable('uebp_LogFolder', $OriginalUebpLogFolder, 'Process')
+	[Environment]::SetEnvironmentVariable('uebp_FinalLogFolder', $OriginalUebpFinalLogFolder, 'Process')
 	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 }

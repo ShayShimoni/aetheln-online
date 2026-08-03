@@ -190,6 +190,10 @@ exit summary. Useful evidence includes:
 - script name, arguments, exit code, start/end time, and host platform;
 - target, platform, configuration, engine and repository revision;
 - UAT/build/cook/stage/package logs and the produced artifact path;
+- isolated `client-automationtool` and `server-automationtool` directories;
+  exact MSVC and Windows resource-compiler provenance is read from the client
+  invocation's `UBA-*.txt` sidecars rather than inferred from shared or stale
+  AutomationTool logs;
 - server and client stdout plus Unreal log paths for the smoke run;
 - whether the failure reproduces from a new clean output root.
 

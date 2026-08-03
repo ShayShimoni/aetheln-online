@@ -37,11 +37,21 @@ function Initialize-EmptyDirectory([string] $Name, [string] $Path) {
 	} else { New-Item -ItemType Directory -Path $Path | Out-Null }
 	(Resolve-Path -LiteralPath $Path).Path
 }
-function Invoke-UatBuild([string] $Label, [string[]] $Arguments, [string] $LogPath) {
+function Invoke-UatBuild([string] $Label, [string[]] $Arguments, [string] $LogPath, [string] $AutomationToolLogDirectory) {
 	Write-Output "Starting $Label. UAT log: '$LogPath'."
 	New-Item -ItemType File -Path $LogPath | Out-Null
-	& $script:RunUat @Arguments 2>&1 | Tee-Object -FilePath $LogPath
-	if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE. Review '$LogPath' for the Unreal AutomationTool error." }
+	$ResolvedAutomationToolLogs = Initialize-EmptyDirectory "$Label AutomationTool log directory" $AutomationToolLogDirectory
+	$PreviousLogFolder = [Environment]::GetEnvironmentVariable('uebp_LogFolder', 'Process')
+	$PreviousFinalLogFolder = [Environment]::GetEnvironmentVariable('uebp_FinalLogFolder', 'Process')
+	try {
+		[Environment]::SetEnvironmentVariable('uebp_LogFolder', $ResolvedAutomationToolLogs, 'Process')
+		[Environment]::SetEnvironmentVariable('uebp_FinalLogFolder', $ResolvedAutomationToolLogs, 'Process')
+		& $script:RunUat @Arguments 2>&1 | Tee-Object -FilePath $LogPath
+		if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE. Review '$LogPath' for the Unreal AutomationTool error." }
+	} finally {
+		[Environment]::SetEnvironmentVariable('uebp_LogFolder', $PreviousLogFolder, 'Process')
+		[Environment]::SetEnvironmentVariable('uebp_FinalLogFolder', $PreviousFinalLogFolder, 'Process')
+	}
 }
 function Invoke-LoggedCommand([string] $Label, [string] $Executable, [string[]] $Arguments, [string] $LogPath) {
 	Write-Output "Starting $Label. Log: '$LogPath'."
@@ -53,12 +63,22 @@ function Assert-PackagedExecutable([string] $Label, [string] $Root, [string[]] $
 	$Match = @(Get-ChildItem -LiteralPath $Root -Recurse -File | Where-Object { $Names -contains $_.Name })
 	if ($Match.Count -eq 0) { throw "$Label completed but no expected packaged executable ($($Names -join ', ')) exists under '$Root'." }
 }
-function Resolve-UbtSelectedTool([string] $LogPath, [string] $Label, [string] $ExecutableName) {
-	$Matches = @(Get-Content -LiteralPath $LogPath | ForEach-Object {
-		if ($_ -match "(?:^|\s)$([regex]::Escape($Label)):\s+(?<Path>.+$([regex]::Escape($ExecutableName)))\s*$") { $Matches.Path.Trim() }
+function Resolve-UbtSelectedTool([string] $LogDirectory, [string] $Label, [string] $ExecutableName) {
+	$Sidecars = @(Get-ChildItem -LiteralPath $LogDirectory -File -Filter 'UBA-*.txt' | Sort-Object FullName)
+	$Candidates = @($Sidecars | ForEach-Object {
+		Get-Content -LiteralPath $_.FullName | ForEach-Object {
+			if ($_ -match "^$([regex]::Escape($Label)):\s+(?<Path>.+$([regex]::Escape($ExecutableName)))\s*$") { $Matches.Path.Trim() }
+		}
+	})
+	$UniqueCandidates = @($Candidates | ForEach-Object {
+		try { [System.IO.Path]::GetFullPath($_) } catch { $_ }
 	} | Sort-Object -Unique)
-	if ($Matches.Count -ne 1) { throw "UAT log '$LogPath' must identify exactly one UBT-selected $Label path ending in '$ExecutableName'; found $($Matches.Count)." }
-	Resolve-RequiredPath $Label $Matches[0] 'Leaf'
+	if ($UniqueCandidates.Count -ne 1) {
+		$Searched = if ($Sidecars.Count -eq 0) { '<none>' } else { $Sidecars.FullName -join ', ' }
+		$Found = if ($UniqueCandidates.Count -eq 0) { '<none>' } else { $UniqueCandidates -join ', ' }
+		throw "AutomationTool log directory '$LogDirectory' must identify exactly one UBT-selected $Label path ending in '$ExecutableName'; found $($UniqueCandidates.Count). Searched UBA sidecars: $Searched. Candidates: $Found."
+	}
+	Resolve-RequiredPath $Label $UniqueCandidates[0] 'Leaf'
 }
 function Assert-CleanRepository([string] $Root) {
 	$StatusArguments = @('-C', $Root, 'status', '--porcelain=v1', '--untracked-files=all')
@@ -104,16 +124,18 @@ $DependencyRegistryPath = Join-Path $ProjectRoot 'Saved/Cooked/LinuxServer/Aethe
 $CookedInventoryPath = Join-Path $ProjectRoot 'Saved/Cooked/LinuxServer/AethelnOnline/AssetRegistry.bin'
 $DependencyRegistryDump = Join-Path $ResolvedLogs 'server-dependency-registry-dump'
 $CookedInventoryDump = Join-Path $ResolvedLogs 'server-cooked-inventory-dump'
+$ClientAutomationToolLogs = Join-Path $ResolvedLogs 'client-automationtool'
+$ServerAutomationToolLogs = Join-Path $ResolvedLogs 'server-automationtool'
 $DependencyRegistryArguments = @($ResolvedProject, '-run=DumpAssetRegistry', "-Path=$DependencyRegistryPath", "-OutDir=$DependencyRegistryDump", '-ObjectPath', '-PackageName', '-Class', '-DependencyDetails', '-PackageData', '-unattended', '-nop4')
 $CookedInventoryArguments = @($ResolvedProject, '-run=DumpAssetRegistry', "-Path=$CookedInventoryPath", "-OutDir=$CookedInventoryDump", '-PackageName', '-unattended', '-nop4')
 $PreviousToolchain = [Environment]::GetEnvironmentVariable('LINUX_MULTIARCH_ROOT', 'Process')
 try {
 	[Environment]::SetEnvironmentVariable('LINUX_MULTIARCH_ROOT', $ResolvedToolchain, 'Process')
-	Invoke-UatBuild 'Windows x64 client build/cook/package' $ClientArguments (Join-Path $ResolvedLogs 'client-uat.log')
+	Invoke-UatBuild 'Windows x64 client build/cook/package' $ClientArguments (Join-Path $ResolvedLogs 'client-uat.log') $ClientAutomationToolLogs
 	Assert-PackagedExecutable 'Windows client packaging' $ClientArchive @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
-	$SelectedCompiler = Resolve-UbtSelectedTool (Join-Path $ResolvedLogs 'client-uat.log') 'Compiler' 'cl.exe'
-	$SelectedResourceCompiler = Resolve-UbtSelectedTool (Join-Path $ResolvedLogs 'client-uat.log') 'Resource Compiler' 'rc.exe'
-	Invoke-UatBuild 'Linux x86-64 dedicated server build/cook/package' $ServerArguments (Join-Path $ResolvedLogs 'server-uat.log')
+	$SelectedCompiler = Resolve-UbtSelectedTool $ClientAutomationToolLogs 'Compiler' 'cl.exe'
+	$SelectedResourceCompiler = Resolve-UbtSelectedTool $ClientAutomationToolLogs 'Resource Compiler' 'rc.exe'
+	Invoke-UatBuild 'Linux x86-64 dedicated server build/cook/package' $ServerArguments (Join-Path $ResolvedLogs 'server-uat.log') $ServerAutomationToolLogs
 	Assert-PackagedExecutable 'Linux server packaging' $ServerArchive @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping')
 	Invoke-LoggedCommand 'dedicated-server dependency registry dump' $UnrealEditorCmd $DependencyRegistryArguments (Join-Path $ResolvedLogs 'server-dependency-registry-dump.log')
 	Invoke-LoggedCommand 'dedicated-server cooked inventory dump' $UnrealEditorCmd $CookedInventoryArguments (Join-Path $ResolvedLogs 'server-cooked-inventory-dump.log')
