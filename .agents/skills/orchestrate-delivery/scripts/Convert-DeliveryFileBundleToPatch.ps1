@@ -376,7 +376,18 @@ function Invoke-GitBytes {
 	$Process = [System.Diagnostics.Process]::new()
 	$Process.StartInfo = $StartInfo
 	$Output = [System.IO.MemoryStream]::new()
+	$SavedInputEncoding = $null
 	try {
+		# .NET Framework builds the StandardInput writer inside Start() with
+		# Console.InputEncoding; a BOM preamble gets flushed into the child
+		# stdin pipe, corrupting git index-info and hash-object streams. Force
+		# a preamble-less encoding for the duration of the call.
+		if ($null -ne $InputStream -and
+			[Console]::InputEncoding.GetPreamble().Length -gt 0) {
+			$SavedInputEncoding = [Console]::InputEncoding
+			[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+		}
+
 		if (-not $Process.Start()) {
 			throw "Could not start Git command '$Arguments'."
 		}
@@ -395,6 +406,9 @@ function Invoke-GitBytes {
 		$Result = $Output.ToArray()
 	}
 	finally {
+		if ($null -ne $SavedInputEncoding) {
+			[Console]::InputEncoding = $SavedInputEncoding
+		}
 		$Output.Dispose()
 		$Process.Dispose()
 	}
