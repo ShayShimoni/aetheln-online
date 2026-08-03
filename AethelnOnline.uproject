@@ -48,6 +48,10 @@
 			"TargetDenyList": [
 				"Server"
 			]
+		},
+		{
+			"Name": "AndroidFileServer",
+			"Enabled": false
 		}
 	]
 }
