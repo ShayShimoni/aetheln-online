@@ -125,7 +125,17 @@ Launch every substantive stage as follows:
    `Convert-DeliveryFileBundleToPatch.ps1`, validate with
    `Validate-DeliveryPatch.ps1` (path scope, sensitive paths, strict
    `git apply --check`), and apply only with `Apply-DeliveryPatch.ps1`, and
-   only when the user's request authorizes the repository change. Never
+   only when the user's request authorizes the repository change.
+
+   **Required encoding preflight:** run these scripts in a PowerShell process
+   that first executes
+   `[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)`.
+   Under a UTF-8 console input encoding with a BOM preamble (the Claude Code
+   harness default), .NET Framework injects the 3-byte preamble into every
+   child-process stdin pipe, which corrupts the script's
+   `git update-index --index-info` and `git hash-object --stdin` streams and
+   fails conversion. Verified 2026-08-04 with a clean-process reproduction and
+   fix test. Never
    hand-edit, infer, rewrite, or repair bundle or patch bytes. A rejected
    bundle or patch is audit evidence only and is never routable to a later
    substantive stage.
