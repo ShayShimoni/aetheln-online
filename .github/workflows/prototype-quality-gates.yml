@@ -1,0 +1,30 @@
+name: Prototype quality gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gates:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Fetch StarterMap LFS object
+        shell: powershell
+        run: git lfs pull --include "Content/Maps/StarterMap.umap"
+      - name: Run CI suite
+        shell: powershell
+        run: powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1
+      - name: Upload machine-readable report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-report
+          path: TestResults/ci-report.json

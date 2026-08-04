@@ -124,8 +124,9 @@ Never infer a target from a wildcard or broad prune operation.
 
 ## Verification
 
-Run the focused, provider-neutral check locally and in the future CI execution
-path:
+Run the focused, provider-neutral check locally and in the CI execution path
+(the required `source-control-policy` check in
+`scripts/ci/Invoke-CiSuite.ps1`):
 
 ```powershell
 pwsh -NoProfile -File scripts/tests/Test-SourceControlPolicy.ps1
