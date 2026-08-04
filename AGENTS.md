@@ -106,8 +106,10 @@ $AethelnProject = (Resolve-Path '.\AethelnOnline.uproject').Path
 Local engine paths must remain untracked. Issue #13 owns project generation,
 the Editor build/open path, map/default-game-mode setup, and initial-launch
 evidence. Issue #15 owns clean Win64 client/Linux server builds, cooking,
-packaging, and their evidence. No repository-defined automated test command
-exists yet. Check documentation changes with `git diff --check`.
+packaging, and their evidence. Run the repository-defined automated checks with
+`powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1`;
+`docs/continuous-integration.md` records the required and advisory gates.
+Check documentation changes with `git diff --check`.
 
 ## Coding Style & Naming Conventions
 

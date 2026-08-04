@@ -51,6 +51,9 @@ canonical product or technical documents.
 - [Playable Movement POC](movement-poc.md) records the temporary local
   movement-feel exception, imported asset provenance, and verification evidence
   for issue #100.
+- [Continuous Integration](continuous-integration.md) records the Issue #16
+  prototype CI quality gates, required-versus-advisory checks, runner
+  constraints, and machine-readable evidence path.
 - [GitHub Issues](https://github.com/ShayShimoni/aetheln-online/issues) govern
   work status, ownership, priority, and target version.
 

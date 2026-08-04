@@ -229,8 +229,10 @@ runtime use.
 Use the [pinned Unreal project setup guide](docs/unreal-project-setup.md) to
 verify the engine revision, generate project files, build the Development
 Editor target, and launch the starter map. Issue #15 owns clean client/server
-builds, cooking, and packaging. No repository-defined automated test command
-exists yet.
+builds, cooking, and packaging. Run the repository-defined automated checks
+with `powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1`;
+[docs/continuous-integration.md](docs/continuous-integration.md) records the
+required and advisory gates.
 
 ## Work Management
 

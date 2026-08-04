@@ -190,9 +190,12 @@ validation, migrations, multi-process scenarios, platform packaging, security
 tests, and scalability suites. CI quality gates are not deferred for first
 introduction in 1.1.
 
-Exact commands and runner requirements remain absent until Issues #13, #15,
-#16, and #44 add the Unreal project, supported toolchain, CI execution path, and
-multiplayer automation.
+The repository-policy, formatting, static-check, and focused-automation subset
+now has exact commands and hosted-runner requirements in
+[Continuous Integration](continuous-integration.md). Exact supported-target
+compilation, packaged-build smoke, and multiplayer-automation commands and
+their engine-capable runner requirements remain absent until the open
+runner-topology decision and Issue #44 land.
 
 ## Change Gates
 
