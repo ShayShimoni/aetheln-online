@@ -55,8 +55,9 @@ if ($SourceChanges.Count -gt 0) { throw "Provenance requires a clean repository 
 $BuildVersionPath = Resolve-RequiredPath 'Unreal Build.version' (Join-Path $ResolvedEngine 'Engine/Build/Build.version') 'Leaf'
 try { $BuildVersion = Get-Content -LiteralPath $BuildVersionPath -Raw | ConvertFrom-Json } catch { throw "Unreal identity file '$BuildVersionPath' is not valid JSON: $($_.Exception.Message)" }
 $ToolchainRootIdentity = Split-Path -Leaf $ResolvedToolchain
-$ToolchainCompiler = Get-ChildItem -LiteralPath $ResolvedToolchain -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('clang++.exe', 'clang.exe', 'clang++.bat', 'clang.bat') } | Sort-Object FullName | Select-Object -First 1
-if (-not $ToolchainCompiler) { throw "Linux cross-toolchain identity could not find clang under '$ResolvedToolchain'." }
+$ToolchainCompilerRoot = Resolve-RequiredPath 'Linux cross-toolchain x86_64-unknown-linux-gnu directory' (Join-Path $ResolvedToolchain 'x86_64-unknown-linux-gnu') 'Container'
+$ToolchainCompiler = Get-ChildItem -LiteralPath $ToolchainCompilerRoot -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('clang++.exe', 'clang.exe', 'clang++.bat', 'clang.bat') } | Sort-Object FullName | Select-Object -First 1
+if (-not $ToolchainCompiler) { throw "Linux cross-toolchain identity could not find clang under '$ToolchainCompilerRoot'." }
 $ToolchainCompilerBanner = Invoke-IdentityCommand $ToolchainCompiler.FullName @('--version')
 if (-not $ToolchainCompilerBanner) { throw "Linux cross-toolchain compiler '$($ToolchainCompiler.FullName)' did not provide a version identity." }
 $ToolchainMarker = Get-ChildItem -LiteralPath $ResolvedToolchain -File | Where-Object { $_.Name -match '(?i)(version|toolchain)' } | Sort-Object Name | Select-Object -First 1
