@@ -22,7 +22,11 @@ try {
 	$Server = Join-Path $FixtureRoot 'Server'
 	New-Item -ItemType Directory -Path (Join-Path $EngineRoot 'Engine/Build'), $ToolchainRoot, $Client, $Server -Force | Out-Null
 	Set-Content -LiteralPath (Join-Path $EngineRoot 'Engine/Build/Build.version') -Value '{"MajorVersion":5,"MinorVersion":8,"PatchVersion":1,"Changelist":123,"CompatibleChangelist":120,"BranchName":"++UE5+Release-5.8"}' -Encoding UTF8
-	Set-Content -LiteralPath (Join-Path $ToolchainRoot 'clang.bat') -Value '@echo clang version 20.1.8' -Encoding Ascii
+	$ToolchainX64Bin = Join-Path $ToolchainRoot 'x86_64-unknown-linux-gnu/bin'
+	$ToolchainDecoyBin = Join-Path $ToolchainRoot 'aarch64-unknown-linux-gnueabi/bin'
+	New-Item -ItemType Directory -Path $ToolchainX64Bin, $ToolchainDecoyBin -Force | Out-Null
+	Set-Content -LiteralPath (Join-Path $ToolchainX64Bin 'clang.bat') -Value '@echo clang version 20.1.8' -Encoding Ascii
+	Set-Content -LiteralPath (Join-Path $ToolchainDecoyBin 'clang.bat') -Value '@echo clang version 20.1.8' -Encoding Ascii
 	Set-Content -LiteralPath (Join-Path $Client 'AethelnOnlineClient.exe') -Value client
 	Set-Content -LiteralPath (Join-Path $Server 'AethelnOnlineServer') -Value server
 	$Compiler = Join-Path $FixtureRoot 'VS/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe'
@@ -43,6 +47,7 @@ try {
 	Assert-True ($Provenance.tools.unreal.build.branchName -eq '++UE5+Release-5.8') 'Exact Unreal build identity should be recorded.'
 	Assert-True ($Provenance.tools.linuxCrossToolchain.identity -eq 'v26_clang-20.1.8-rockylinux8') 'Versioned cross-toolchain root identity should be recorded.'
 	Assert-True ($Provenance.tools.linuxCrossToolchain.compilerBanner -match '20\.1\.8') 'Cross-toolchain compiler identity should be recorded.'
+	Assert-True ($Provenance.tools.linuxCrossToolchain.compilerPath.Replace('\', '/') -like '*/x86_64-unknown-linux-gnu/bin/clang.bat') 'Cross-toolchain compiler path must resolve under the x86_64 architecture directory.'
 	Assert-True ($Provenance.tools.compiler.path -eq $Compiler) 'Pinned compiler must win when multiple installations exist.'
 	Assert-True ($Provenance.tools.compiler.version -eq '14.44.35207') 'Exactly one pinned MSVC version should be recorded.'
 	Assert-True ($Provenance.tools.windowsSdk.resourceCompilerPath -eq $ResourceCompiler) 'Pinned SDK tool must win when multiple SDKs exist.'
