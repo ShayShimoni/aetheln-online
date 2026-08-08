@@ -215,6 +215,47 @@ Every accepted decision records:
 - **Revisit trigger:** Tooling may change after measured cost/reliability review;
   the gate remains.
 
+### TA-011 - Repository-Scoped Engine Runner
+
+- **Status:** Accepted
+- **Scope:** Issue #16 engine-dependent GitHub Actions gates
+- **Decision:** Use one repository-scoped GitHub Actions self-hosted runner on
+  the current Windows development PC under the current owner account, labeled
+  `[self-hosted, Windows, X64, aetheln-engine]`. Owner-authored, owner-triggered
+  same-repository pull requests may run the supported-target compile gate. A
+  packaged-smoke gate runs at `02:00 UTC` from the protected default branch
+  `main`, and the repository owner may request the same gate manually.
+- **Rationale:** The pinned Unreal source build, Visual Studio and Linux
+  cross-toolchains, WSL topology, disk capacity, and local build paths are not
+  available on ordinary GitHub-hosted runners. Repository scope and explicit
+  trust predicates bound unreviewed code execution on the owner's machine.
+- **Owner/evidence:** Issue #16 and the reviewed
+  `.github/workflows/prototype-quality-gates.yml`,
+  `scripts/ci/Invoke-EngineRunnerGate.ps1`, and focused fixture tests. This is
+  implementation evidence only: zero self-hosted runners are currently
+  registered, so live compile, scheduled smoke, manual smoke, and
+  representative-branch acceptance evidence do not yet exist.
+- **Rejected alternatives:** Assuming `windows-latest` contains the pinned
+  engine/toolchains; running engine jobs for fork or collaborator-authored
+  pull requests; granting future collaborators runner access without a new
+  review; storing local paths as repository secrets; uploading packaged builds,
+  cook output, or full logs by default; treating `develop` as the schedule's
+  activation branch.
+- **Consequences:** The owner must provision and maintain the runner, pinned
+  toolchains, WSL `Ubuntu` distribution and `aethelnqa` user. Non-secret
+  `AETHELN_ENGINE_ROOT` and `AETHELN_LINUX_TOOLCHAIN_ROOT` paths are current-
+  account user variables inherited by the runner process. Engine jobs serialize
+  through one concurrency group, convert the packaged server path with WSL
+  `wslpath`, publish only the redacted JSON report by default, and retain large
+  archives/logs locally under per-run roots. The schedule becomes active only
+  when the workflow reaches `main` through normal Git Flow; `develop` remains
+  the integration branch. Artifact retention, local-output retention, scanner,
+  SBOM, and signing decisions remain open.
+- **Revisit trigger:** A collaborator needs runner access, the runner moves to a
+  different host/account or trust domain, hosted/ephemeral infrastructure can
+  reproduce the pinned toolchain, or measured cost, reliability, isolation, or
+  capacity requires a different topology.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |

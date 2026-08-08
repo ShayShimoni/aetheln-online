@@ -190,12 +190,21 @@ validation, migrations, multi-process scenarios, platform packaging, security
 tests, and scalability suites. CI quality gates are not deferred for first
 introduction in 1.1.
 
-The repository-policy, formatting, static-check, and focused-automation subset
-now has exact commands and hosted-runner requirements in
-[Continuous Integration](continuous-integration.md). Exact supported-target
-compilation, packaged-build smoke, and multiplayer-automation commands and
-their engine-capable runner requirements remain absent until the open
-runner-topology decision and Issue #44 land.
+The repository-policy, formatting, static-check, focused-automation,
+supported-target compilation, and packaged-build smoke paths now have exact
+commands and runner requirements in
+[Continuous Integration](continuous-integration.md). Engine-dependent jobs use
+the accepted repository-scoped Windows self-hosted topology; multiplayer
+automation remains owned by Issue #44 and is not supplied by the packaged-smoke
+gate.
+
+The repository currently has zero registered engine runners. Consequently live
+supported-target compilation, scheduled smoke, owner-dispatched smoke, and
+representative-branch evidence do not yet exist. The `02:00 UTC` schedule
+becomes active only after the workflow reaches the protected default branch
+`main` through normal Git Flow; `develop` remains the integration branch.
+Owner provisioning and live execution are prerequisites, not evidence produced
+by the repository implementation.
 
 ## Change Gates
 
@@ -354,7 +363,7 @@ Required evidence:
 - Final client minimum/recommended specifications and quality tiers.
 - Approved server tick, population, actor, bandwidth, and latency budgets.
 - Supported network-profile thresholds.
-- CI provider, runner topology, artifact retention, and scheduled-suite cadence.
+- Artifact retention and local engine-output retention policy.
 - Performance exception policy and regression thresholds.
 - Final 2.0 layer and 2.1 invasion capacity.
 
