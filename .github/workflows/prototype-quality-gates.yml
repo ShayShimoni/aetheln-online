@@ -47,9 +47,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: false
-      - name: Fetch StarterMap LFS object
+      - name: Fetch Unreal Content LFS objects
         shell: powershell
-        run: git lfs pull --include "Content/Maps/StarterMap.umap"
+        run: git lfs pull --include "Content/**"
       - name: Compile supported client and server targets
         shell: powershell
         run: |
@@ -79,9 +79,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: false
-      - name: Fetch StarterMap LFS object
+      - name: Fetch Unreal Content LFS objects
         shell: powershell
-        run: git lfs pull --include "Content/Maps/StarterMap.umap"
+        run: git lfs pull --include "Content/**"
       - name: Run packaged smoke gate
         shell: powershell
         run: |
@@ -113,9 +113,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: false
-      - name: Fetch StarterMap LFS object
+      - name: Fetch Unreal Content LFS objects
         shell: powershell
-        run: git lfs pull --include "Content/Maps/StarterMap.umap"
+        run: git lfs pull --include "Content/**"
       - name: Run packaged smoke gate
         shell: powershell
         run: |
