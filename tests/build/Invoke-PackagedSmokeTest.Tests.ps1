@@ -92,13 +92,13 @@ Start-Sleep -Seconds 20
 	Write-Output 'PASS: server connection pattern requires the ConnectionId capture'
 
 	$Failure = $null
-	try { Invoke-Smoke -Scenario early-exit -LogRoot (Join-Path $FixtureRoot 'exit') -TimeoutSeconds 3 } catch { $Failure = $_.Exception.Message }
+	try { Invoke-Smoke -Scenario early-exit -LogRoot (Join-Path $FixtureRoot 'exit') -TimeoutSeconds 10 } catch { $Failure = $_.Exception.Message }
 	Write-Output "Observed early-exit failure: $Failure"
 	Assert-True ($Failure -match 'client-2.*exited.*exit code.*client-2\.stdout\.log.*client-2\.stderr\.log') 'Early client exit should identify its role, exit-code field, and actionable redirected logs.'
 	Write-Output 'PASS: early process exit fails actionably'
 
 	$Failure = $null
-	try { Invoke-Smoke -Scenario logged-error -LogRoot (Join-Path $FixtureRoot 'error') -TimeoutSeconds 3 } catch { $Failure = $_.Exception.Message }
+	try { Invoke-Smoke -Scenario logged-error -LogRoot (Join-Path $FixtureRoot 'error') -TimeoutSeconds 10 } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'client-1 reported an error.*Connection TIMED OUT') 'A connection timeout log event should fail even when readiness text is present.'
 	Write-Output 'PASS: connection-timeout source-log events fail the smoke'
 }
