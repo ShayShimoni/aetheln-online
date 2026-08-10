@@ -57,7 +57,7 @@ powershell -NoProfile -File scripts/tests/Test-SourceControlPolicy.ps1
 | `markdown-link-tests` (`tests/ci/Test-MarkdownLinks.Tests.ps1`) | Required | Fixture regression tests for the link checker itself. |
 | `formatting-policy-tests` (`tests/ci/Test-FormattingPolicy.Tests.ps1`) | Required | Fixture regression tests for the formatting checker itself. |
 | `ci-suite-tests` (`tests/ci/Invoke-CiSuite.Tests.ps1`) | Required | Fixture regression tests for the runner, report schema, and exit codes. |
-| `engine-runner-gate-tests` (`tests/ci/Invoke-EngineRunnerGate.Tests.ps1`) | Required | Fixture regression tests for engine-runner input validation, command selection, redacted failures, report schema, and exit codes. |
+| `engine-runner-gate-tests` (`tests/ci/Invoke-EngineRunnerGate.Tests.ps1`) | Required | Fixture regression tests for engine-runner input validation, command selection, repository-state enforcement, redacted failures, report schema, and exit codes. |
 | `psscriptanalyzer` (`Invoke-ScriptAnalyzer` over `scripts/` and `tests/`) | Advisory | PowerShell static analysis. Advisory because the module is not guaranteed on contributor machines (the check reports `skipped` when it is absent) and the pre-existing finding baseline has not been triaged into a gate. |
 
 Required checks fail the suite and the workflow. Advisory checks are reported
@@ -84,13 +84,16 @@ check, runs the local invocation above, and always uploads
 
 Engine-dependent jobs use a repository-scoped Windows self-hosted runner with
 labels `[self-hosted, Windows, X64, aetheln-engine]` and serialize through the
-`aetheln-engine-runner` concurrency group. Their event and trust contract is:
+`aetheln-engine-runner` concurrency group without cancelling an active engine
+job. Before compiling, packaging, or cooking, each selected engine job fetches
+all Unreal Content LFS objects with `git lfs pull --include "Content/**"`.
+Their event and trust contract is:
 
 | Job | Event | Trust predicate | Gate |
 | --- | --- | --- | --- |
-| `trusted-candidate-compile` | `pull_request` | The head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Compile the supported Windows client and Linux server targets. |
-| `scheduled-packaged-smoke` | `schedule` at `02:00 UTC` daily | The schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Build both supported targets and run packaged smoke. |
-| `manual-packaged-smoke` | `workflow_dispatch` | `github.triggering_actor` is the repository owner. | Owner-requested build and packaged smoke. |
+| `trusted-candidate-compile` | `pull_request` | The head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
+| `scheduled-packaged-smoke` | `schedule` at `02:00 UTC` daily | The schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Clean-package both supported targets once and smoke those packaged outputs. |
+| `manual-packaged-smoke` | `workflow_dispatch` | `github.triggering_actor` is the repository owner. | Owner-requested clean package and packaged smoke. |
 
 `develop` remains the integration branch. Merely adding the schedule on a
 feature or `develop` branch does not activate it; GitHub schedules run from the
@@ -127,11 +130,12 @@ nonzero when a required check fails.
 - No GitHub secret is required by the engine wrapper. Workflow permissions
   remain `contents: read`.
 
-There are currently zero registered self-hosted runners. Therefore no live
-supported-target compile, scheduled smoke, manual smoke, or representative-
-branch engine-runner evidence exists. Repository-owner provisioning is an
-external prerequisite and is not performed or proven by Issue #16's repository
-changes.
+Runner provisioning is an external operational responsibility and is not
+performed or proven by Issue #16 or Issue #127 repository changes.
+Representative engine-runner evidence is commit-specific and must come from
+the artifacts uploaded by the corresponding GitHub run. An earlier or
+in-progress run does not establish that the unpublished incremental candidate
+has completed successfully.
 
 ## Engine-Dependent Gates
 
@@ -155,19 +159,63 @@ powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
   -LogRoot (Join-Path $RunRoot 'logs')
 ```
 
-Both modes call `scripts/build/Build-PackagedArtifacts.ps1` for the Development
-Windows client and Linux server using `/Game/Maps/StarterMap`. `PackagedSmoke`
-also discovers exactly one packaged client and one
-`AethelnOnlineServer.sh`, converts the server path with
-`wsl.exe -d Ubuntu -u aethelnqa -- wslpath <WindowsPath>`, requires exactly one
-absolute WSL path, obtains an IPv4 WSL guest address, and invokes
-`Invoke-PackagedSmokeTest.ps1` with two Windows clients and a 120-second timeout.
-Archive and log roots must be empty or absent, outside the repository, and
-unique to the workflow run/job.
+### Compile Policy
 
-These commands implement Issue #16's repository side of the gates. They do not
-prove that the owner provisioned a runner or that either mode has executed
-successfully on a representative branch.
+`Compile` is the routine pull-request policy. It reports
+`policy = incremental-target-compilation` and invokes the pinned engine's
+`Engine/Build/BatchFiles/Build.bat` sequentially with these exact target
+vectors, where `$AethelnProject` is the resolved
+`AethelnOnline.uproject` path:
+
+```powershell
+& $BuildBatch AethelnOnlineClient Win64 Development $AethelnProject -WaitMutex -NoHotReloadFromIDE
+& $BuildBatch AethelnOnlineServer Linux Development $AethelnProject -WaitMutex -NoHotReloadFromIDE
+```
+
+The server command runs only after the client command succeeds. This mode does
+not invoke `BuildCookRun`, `RunUAT`, or `Build-PackagedArtifacts.ps1`, and it
+does not request clean, cook, stage, package, pak, or archive phases. It is an
+incremental target-compilation gate, not proof of a clean package or runnable
+packaged build.
+
+Before the first target, between the two targets, and after the final target,
+the wrapper requires both of the following:
+
+- `git rev-parse HEAD` returns exactly one full 40-hex revision equal to the
+  supplied `SourceRevision` (`${{ github.sha }}` in the workflow).
+- `git status --porcelain --untracked-files=all` reports no tracked or
+  non-ignored changes.
+
+A revision change or repository drift fails closed and stops the remaining
+work. Ignored Unreal intermediates, including the generated directories
+excluded by source-control policy, do not appear in this status check. They may
+be reused by the incremental compiler and are never deleted by this gate.
+
+### PackagedSmoke Policy
+
+`PackagedSmoke` is the explicit scheduled or owner-requested milestone policy.
+It reports `policy = clean-package-and-smoke` and invokes
+`scripts/build/Build-PackagedArtifacts.ps1` exactly once for the Development
+Windows client and Linux server, using `/Game/Maps/StarterMap` and the supplied
+`ArchiveRoot`. That packaging entry point owns its clean build, cook, stage,
+package, and archive work.
+
+After packaging, the wrapper verifies the revision and clean tracked/non-ignored
+repository status. It then discovers exactly one packaged Windows client and
+one `AethelnOnlineServer.sh` under that same `ArchiveRoot`; it does not rebuild
+or select outputs from a different archive. The server path is converted with
+`wsl.exe -d Ubuntu -u aethelnqa -- wslpath <WindowsPath>`, which must return
+exactly one absolute WSL path. The wrapper obtains an IPv4 WSL guest address
+and invokes `Invoke-PackagedSmokeTest.ps1` against that packaged client/server
+pair with two Windows clients and a 120-second timeout. A final revision and
+repository-status check runs after smoke.
+
+Archive and log roots for both modes must be empty or absent, outside the
+repository, and unique to the workflow run/job. These commands implement the
+repository side of the policies. They do not prove that the owner provisioned
+a runner or that either policy has executed successfully on a representative
+branch. In particular, an earlier heavyweight run does not validate the new
+incremental compile policy.
 
 ## Artifact Policy
 
@@ -178,8 +226,10 @@ successfully on a representative branch.
   cook output, and detailed logs remain local to the self-hosted runner and are
   never uploaded by default. The owner may inspect or remove the per-run paths
   locally after evidence review.
-- The LFS fetch is limited to `Content/Maps/StarterMap.umap`; the workflow
-  does not smudge the full LFS object set.
+- The portable job's LFS fetch is limited to
+  `Content/Maps/StarterMap.umap`. Each engine job fetches `Content/**` so all
+  Unreal Content required by compilation, cooking, and packaging is
+  materialized.
 - Artifact retention periods remain an open decision and are not configured.
 
 ## Secret Policy
@@ -229,9 +279,12 @@ a `summary` with `total`, `passed`, `failed`, `skipped`, and `requiredFailed`
 counts.
 
 `TestResults/engine-runner-report.json` uses schema version 1 and contains
-`mode` (`Compile` or `PackagedSmoke`), `revision`, `startedUtc`, `finishedUtc`,
-a `checks` array, and `summary`. Each check contains `name`, the required
-`tier`, `status`, `durationSeconds`, a stable `command`, and a redacted
-`message`. The summary contains `total`, `passed`, `failed`, `skipped`, and
-`requiredFailed`. Input validation and supported client/server build are
-present in both modes; packaged smoke is present only in `PackagedSmoke` mode.
+`mode` (`Compile` or `PackagedSmoke`), `policy`
+(`incremental-target-compilation` or `clean-package-and-smoke`), `revision`,
+`startedUtc`, `finishedUtc`, a `checks` array, and `summary`. Each check contains
+`name`, the required `tier`, `status`, `durationSeconds`, a stable `command`,
+and a redacted `message`. The summary contains `total`, `passed`, `failed`,
+`skipped`, and `requiredFailed`. Input validation and repository-state checks
+are present in both modes. `Compile` records separate incremental client and
+server build checks; `PackagedSmoke` records one clean packaged client/server
+build and one packaged-smoke check.

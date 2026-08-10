@@ -19,6 +19,7 @@ $Checks = New-Object System.Collections.ArrayList
 $RequiredFailed = $false
 $FailureCode = $null
 $ResolvedRepository = $null
+$Policy = if ($Mode -eq 'Compile') { 'incremental-target-compilation' } else { 'clean-package-and-smoke' }
 
 function Test-IsWithin([string] $Candidate, [string] $Parent) {
 	$CandidatePath = [System.IO.Path]::GetFullPath($Candidate).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
@@ -90,7 +91,7 @@ function Get-SafeDiagnosticMessage([string] $Reason, [System.Collections.IEnumer
 	return $Reason + "`n" + $Diagnostic
 }
 
-function Invoke-Captured([string] $Executable, [string[]] $Arguments, [string] $FailureReason) {
+function Invoke-Captured([string] $Executable, [string[]] $Arguments) {
 	$PreviousErrorActionPreference = $ErrorActionPreference
 	try {
 		$ErrorActionPreference = 'Continue'
@@ -99,8 +100,40 @@ function Invoke-Captured([string] $Executable, [string[]] $Arguments, [string] $
 	} finally {
 		$ErrorActionPreference = $PreviousErrorActionPreference
 	}
-	if ($ExitCode -ne 0) { throw $FailureReason }
-	return $Output
+	return [ordered]@{ output = $Output; exitCode = $ExitCode }
+}
+
+function Assert-RepositoryState([string] $Name) {
+	$CheckStarted = [DateTime]::UtcNow
+	try {
+		$HeadResult = Invoke-Captured 'git' @('-C', $ResolvedRepository, 'rev-parse', 'HEAD')
+		if ($HeadResult.exitCode -ne 0) { throw 'revision_query_failed' }
+		$HeadLines = @($HeadResult.output | ForEach-Object { ([string] $_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+		if ($HeadLines.Count -ne 1 -or $HeadLines[0] -notmatch '^[0-9a-fA-F]{40}$') { throw 'revision_invalid' }
+		if (-not $HeadLines[0].Equals($SourceRevision, [StringComparison]::OrdinalIgnoreCase)) { throw 'revision_changed' }
+
+		$StatusResult = Invoke-Captured 'git' @('-C', $ResolvedRepository, 'status', '--porcelain', '--untracked-files=all')
+		if ($StatusResult.exitCode -ne 0) { throw 'repository_status_failed' }
+		$Changes = @($StatusResult.output | Where-Object { -not [string]::IsNullOrWhiteSpace([string] $_) })
+		if ($Changes.Count -ne 0) { throw 'repository_drift_detected' }
+		Add-Check $Name 'passed' $CheckStarted 'git-revision-and-status' 'repository_state_valid'
+	} catch {
+		$Reason = [string] $_.Exception.Message
+		if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'repository_state_invalid' }
+		Add-Check $Name 'failed' $CheckStarted 'git-revision-and-status' $Reason
+		throw $Reason
+	}
+}
+
+function Complete-CommandStateCheck([string] $Name, [string] $CommandFailure) {
+	$RepositoryFailure = $null
+	try {
+		Assert-RepositoryState $Name
+	} catch {
+		$RepositoryFailure = [string] $_.Exception.Message
+	}
+	if (-not [string]::IsNullOrWhiteSpace($CommandFailure)) { throw $CommandFailure }
+	if (-not [string]::IsNullOrWhiteSpace($RepositoryFailure)) { throw $RepositoryFailure }
 }
 
 function Write-RunnerReport {
@@ -113,6 +146,7 @@ function Write-RunnerReport {
 	$Report = [ordered]@{
 		schemaVersion = 1
 		mode = $Mode
+		policy = $Policy
 		revision = $SourceRevision
 		startedUtc = $Started.ToString('o')
 		finishedUtc = [DateTime]::UtcNow.ToString('o')
@@ -136,52 +170,82 @@ try {
 		$BuildScript = Join-Path $ResolvedRepository 'scripts/build/Build-PackagedArtifacts.ps1'
 		$SmokeScript = Join-Path $ResolvedRepository 'scripts/build/Invoke-PackagedSmokeTest.ps1'
 		if (-not (Test-Path -LiteralPath $ProjectPath -PathType Leaf)) { throw 'project_missing' }
-		if (-not (Test-Path -LiteralPath $BuildScript -PathType Leaf)) { throw 'build_script_missing' }
-		if ($Mode -eq 'PackagedSmoke' -and -not (Test-Path -LiteralPath $SmokeScript -PathType Leaf)) { throw 'smoke_script_missing' }
 		$EngineRoot = Resolve-RequiredDirectory ([Environment]::GetEnvironmentVariable('AETHELN_ENGINE_ROOT', 'Process')) 'engine_root_invalid'
 		$ToolchainRoot = Resolve-RequiredDirectory ([Environment]::GetEnvironmentVariable('AETHELN_LINUX_TOOLCHAIN_ROOT', 'Process')) 'toolchain_root_invalid'
+		$BuildBatch = Join-Path $EngineRoot 'Engine/Build/BatchFiles/Build.bat'
+		if ($Mode -eq 'Compile' -and -not (Test-Path -LiteralPath $BuildBatch -PathType Leaf)) { throw 'build_batch_missing' }
+		if ($Mode -eq 'PackagedSmoke') {
+			if (-not (Test-Path -LiteralPath $BuildScript -PathType Leaf)) { throw 'build_script_missing' }
+			if (-not (Test-Path -LiteralPath $SmokeScript -PathType Leaf)) { throw 'smoke_script_missing' }
+		}
 		$ResolvedArchive = Resolve-OutputRoot $ArchiveRoot $ResolvedRepository 'archive_root_invalid'
 		$ResolvedLogs = Resolve-OutputRoot $LogRoot $ResolvedRepository 'log_root_invalid'
-		if ([string]::IsNullOrWhiteSpace($SourceRevision)) { throw 'revision_invalid' }
+		if ($SourceRevision -notmatch '^[0-9a-fA-F]{40}$') { throw 'revision_invalid' }
 		Add-Check 'runner-input-validation' 'passed' $ValidationStarted 'validate-runner-inputs' 'validation_passed'
 	} catch {
 		Add-Check 'runner-input-validation' 'failed' $ValidationStarted 'validate-runner-inputs' ([string] $_.Exception.Message)
 		throw
 	}
-	$ProtectedValues = @($ResolvedRepository, $ProjectPath, $BuildScript, $SmokeScript, $EngineRoot, $ToolchainRoot, $ResolvedArchive, $ResolvedLogs)
+	$ProtectedValues = @($ResolvedRepository, $ProjectPath, $BuildScript, $SmokeScript, $BuildBatch, $EngineRoot, $ToolchainRoot, $ResolvedArchive, $ResolvedLogs)
 
-	$BuildStarted = [DateTime]::UtcNow
-	$BuildOutput = New-Object System.Collections.ArrayList
-	try {
-		& $BuildScript -ProjectPath $ProjectPath -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $ResolvedArchive -LogRoot $ResolvedLogs -SourceRevision $SourceRevision -Configuration Development -Map '/Game/Maps/StarterMap' *>&1 | ForEach-Object { [void] $BuildOutput.Add($_) }
-		Add-Check 'supported-client-server-build' 'passed' $BuildStarted 'Build-PackagedArtifacts.ps1' 'build_passed'
-	} catch {
-		[void] $BuildOutput.Add($_)
-		$BuildMessage = Get-SafeDiagnosticMessage 'build_failed' $BuildOutput $ProtectedValues
-		Add-Check 'supported-client-server-build' 'failed' $BuildStarted 'Build-PackagedArtifacts.ps1' $BuildMessage
-		throw 'build_failed'
-	}
+	Assert-RepositoryState 'repository-state-before-work'
 
-	if ($Mode -eq 'PackagedSmoke') {
+	if ($Mode -eq 'Compile') {
+		$Targets = @(
+			[ordered]@{ name = 'incremental-client-build'; label = 'AethelnOnlineClient Win64 Development'; arguments = @('AethelnOnlineClient', 'Win64', 'Development', $ProjectPath, '-WaitMutex', '-NoHotReloadFromIDE') },
+			[ordered]@{ name = 'incremental-server-build'; label = 'AethelnOnlineServer Linux Development'; arguments = @('AethelnOnlineServer', 'Linux', 'Development', $ProjectPath, '-WaitMutex', '-NoHotReloadFromIDE') }
+		)
+		foreach ($Target in $Targets) {
+			$BuildStarted = [DateTime]::UtcNow
+			$BuildResult = Invoke-Captured $BuildBatch $Target.arguments
+			$BuildFailure = $null
+			if ($BuildResult.exitCode -ne 0) {
+				$BuildMessage = Get-SafeDiagnosticMessage 'build_failed' $BuildResult.output $ProtectedValues
+				Add-Check $Target.name 'failed' $BuildStarted $Target.label $BuildMessage
+				$BuildFailure = 'build_failed'
+			} else {
+				Add-Check $Target.name 'passed' $BuildStarted $Target.label 'build_passed'
+			}
+			Complete-CommandStateCheck ($Target.name + '-repository-state') $BuildFailure
+		}
+		Assert-RepositoryState 'repository-state-at-completion'
+	} else {
+		$BuildStarted = [DateTime]::UtcNow
+		$BuildOutput = New-Object System.Collections.ArrayList
+		$BuildFailure = $null
+		try {
+			& $BuildScript -ProjectPath $ProjectPath -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $ResolvedArchive -LogRoot $ResolvedLogs -SourceRevision $SourceRevision -Configuration Development -Map '/Game/Maps/StarterMap' *>&1 | ForEach-Object { [void] $BuildOutput.Add($_) }
+			Add-Check 'clean-packaged-client-server-build' 'passed' $BuildStarted 'Build-PackagedArtifacts.ps1' 'build_passed'
+		} catch {
+			[void] $BuildOutput.Add($_)
+			$BuildMessage = Get-SafeDiagnosticMessage 'build_failed' $BuildOutput $ProtectedValues
+			Add-Check 'clean-packaged-client-server-build' 'failed' $BuildStarted 'Build-PackagedArtifacts.ps1' $BuildMessage
+			$BuildFailure = 'build_failed'
+		}
+
+		Complete-CommandStateCheck 'repository-state-after-package' $BuildFailure
+
 		$SmokeStarted = [DateTime]::UtcNow
 		$SmokeOutput = New-Object System.Collections.ArrayList
 		$SmokeProtectedValues = @($ProtectedValues)
+		$SmokeFailure = $null
 		try {
 			$Clients = @(Get-ChildItem -LiteralPath $ResolvedArchive -Recurse -File | Where-Object { $_.Name -in @('AethelnOnlineClient.exe', 'AethelnOnline.exe') })
 			if ($Clients.Count -ne 1) { throw 'client_discovery_invalid' }
 			$Servers = @(Get-ChildItem -LiteralPath $ResolvedArchive -Recurse -File | Where-Object { $_.Name -eq 'AethelnOnlineServer.sh' })
 			if ($Servers.Count -ne 1) { throw 'server_discovery_invalid' }
 
-			$WslPathArguments = @('-d', 'Ubuntu', '-u', 'aethelnqa', '--', 'wslpath', $Servers[0].FullName)
-			$Translated = Invoke-Captured 'wsl.exe' $WslPathArguments 'wslpath_exit_nonzero'
-			$TranslatedLines = @($Translated | ForEach-Object { [string] $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+			$WslPathResult = Invoke-Captured 'wsl.exe' @('-d', 'Ubuntu', '-u', 'aethelnqa', '--', 'wslpath', $Servers[0].FullName)
+			if ($WslPathResult.exitCode -ne 0) { throw 'wslpath_exit_nonzero' }
+			$TranslatedLines = @($WslPathResult.output | ForEach-Object { [string] $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 			if ($TranslatedLines.Count -ne 1) { throw 'wslpath_line_count_invalid' }
 			$LinuxServer = $TranslatedLines[0].Trim()
 			if ([string]::IsNullOrWhiteSpace($LinuxServer) -or -not $LinuxServer.StartsWith('/')) { throw 'wslpath_result_invalid' }
 			$SmokeProtectedValues += @($Clients[0].FullName, $Servers[0].FullName, $LinuxServer)
 
-			$AddressOutput = Invoke-Captured 'wsl.exe' @('-d', 'Ubuntu', '-u', 'aethelnqa', '--', 'hostname', '-I') 'wsl_address_exit_nonzero'
-			$AddressCandidates = @((($AddressOutput -join ' ').Trim() -split '\s+') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+			$AddressResult = Invoke-Captured 'wsl.exe' @('-d', 'Ubuntu', '-u', 'aethelnqa', '--', 'hostname', '-I')
+			if ($AddressResult.exitCode -ne 0) { throw 'wsl_address_exit_nonzero' }
+			$AddressCandidates = @((($AddressResult.output -join ' ').Trim() -split '\s+') | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 			$UsableAddresses = @($AddressCandidates | Where-Object {
 				$ParsedAddress = $null
 				[System.Net.IPAddress]::TryParse($_, [ref] $ParsedAddress) -and $ParsedAddress.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork
@@ -212,8 +276,10 @@ try {
 			if ($SafeReason -notmatch '^[a-z0-9_]+$') { $SafeReason = 'smoke_failed' }
 			$SmokeMessage = Get-SafeDiagnosticMessage $SafeReason $SmokeOutput $SmokeProtectedValues
 			Add-Check 'packaged-build-smoke' 'failed' $SmokeStarted 'Invoke-PackagedSmokeTest.ps1' $SmokeMessage
-			throw $SafeReason
+			$SmokeFailure = $SafeReason
 		}
+
+		Complete-CommandStateCheck 'repository-state-at-completion' $SmokeFailure
 	}
 } catch {
 	$RequiredFailed = $true

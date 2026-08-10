@@ -198,13 +198,14 @@ the accepted repository-scoped Windows self-hosted topology; multiplayer
 automation remains owned by Issue #44 and is not supplied by the packaged-smoke
 gate.
 
-The repository currently has zero registered engine runners. Consequently live
-supported-target compilation, scheduled smoke, owner-dispatched smoke, and
-representative-branch evidence do not yet exist. The `02:00 UTC` schedule
-becomes active only after the workflow reaches the protected default branch
-`main` through normal Git Flow; `develop` remains the integration branch.
-Owner provisioning and live execution are prerequisites, not evidence produced
-by the repository implementation.
+Runner provisioning is an external operational responsibility and is not
+performed or proven by Issue #16 or Issue #127 repository changes.
+Representative engine-runner evidence is commit-specific and must come from
+the artifacts uploaded by the corresponding GitHub run. An earlier or
+in-progress run does not establish that the unpublished incremental candidate
+has completed successfully. The `02:00 UTC` schedule becomes active only after
+the workflow reaches the protected default branch `main` through normal Git
+Flow; `develop` remains the integration branch.
 
 ## Change Gates
 
