@@ -34,6 +34,7 @@ foreach ($Job in @(
 )) {
 	Assert-True ($Job.Body -match 'git lfs pull --include "Content/\*\*"') "$($Job.Name) must materialize every Unreal Content LFS object before build or cook."
 	Assert-True ($Job.Body -notmatch 'git lfs pull --include "Content/Maps/StarterMap\.umap"') "$($Job.Name) must not fetch only StarterMap."
+	Assert-True ($Job.Body -match 'timeout-minutes:\s*1440') "$($Job.Name) must allow a full clean source-engine gate to run for up to 24 hours."
 }
 
 Write-Output 'PASS: every self-hosted engine job materializes all Unreal Content LFS objects'
