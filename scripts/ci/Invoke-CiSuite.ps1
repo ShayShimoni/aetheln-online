@@ -12,8 +12,8 @@ if (-not $ReportPath) {
 	$ReportPath = Join-Path $RepositoryRoot 'TestResults\ci-report.json'
 }
 
-# Default manifest. Engine-dependent compile and packaged-smoke gates are
-# deferred; see docs/continuous-integration.md.
+# Default manifest. Engine-dependent compile and packaged-smoke gates run in
+# trusted self-hosted workflow jobs; their wrapper fixture suite runs here.
 $DefaultChecks = @(
 	@{ name = 'formatting-policy'; tier = 'required'; script = 'scripts/ci/Test-FormattingPolicy.ps1' },
 	@{ name = 'markdown-links'; tier = 'required'; script = 'scripts/ci/Test-MarkdownLinks.ps1' },
@@ -26,6 +26,9 @@ $DefaultChecks = @(
 	@{ name = 'markdown-link-tests'; tier = 'required'; script = 'tests/ci/Test-MarkdownLinks.Tests.ps1' },
 	@{ name = 'formatting-policy-tests'; tier = 'required'; script = 'tests/ci/Test-FormattingPolicy.Tests.ps1' },
 	@{ name = 'ci-suite-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiSuite.Tests.ps1' },
+	@{ name = 'engine-runner-gate-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerGate.Tests.ps1' },
+	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
+	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'

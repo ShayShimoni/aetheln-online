@@ -190,12 +190,22 @@ validation, migrations, multi-process scenarios, platform packaging, security
 tests, and scalability suites. CI quality gates are not deferred for first
 introduction in 1.1.
 
-The repository-policy, formatting, static-check, and focused-automation subset
-now has exact commands and hosted-runner requirements in
-[Continuous Integration](continuous-integration.md). Exact supported-target
-compilation, packaged-build smoke, and multiplayer-automation commands and
-their engine-capable runner requirements remain absent until the open
-runner-topology decision and Issue #44 land.
+The repository-policy, formatting, static-check, focused-automation,
+supported-target compilation, and packaged-build smoke paths now have exact
+commands and runner requirements in
+[Continuous Integration](continuous-integration.md). Engine-dependent jobs use
+the accepted repository-scoped Windows self-hosted topology; multiplayer
+automation remains owned by Issue #44 and is not supplied by the packaged-smoke
+gate.
+
+Runner provisioning is an external operational responsibility and is not
+performed or proven by Issue #16 or Issue #127 repository changes.
+Representative engine-runner evidence is commit-specific and must come from
+the artifacts uploaded by the corresponding GitHub run. An earlier or
+in-progress run does not establish that the unpublished incremental candidate
+has completed successfully. The `02:00 UTC` schedule becomes active only after
+the workflow reaches the protected default branch `main` through normal Git
+Flow; `develop` remains the integration branch.
 
 ## Change Gates
 
@@ -354,7 +364,7 @@ Required evidence:
 - Final client minimum/recommended specifications and quality tiers.
 - Approved server tick, population, actor, bandwidth, and latency budgets.
 - Supported network-profile thresholds.
-- CI provider, runner topology, artifact retention, and scheduled-suite cadence.
+- Artifact retention and local engine-output retention policy.
 - Performance exception policy and regression thresholds.
 - Final 2.0 layer and 2.1 invasion capacity.
 
