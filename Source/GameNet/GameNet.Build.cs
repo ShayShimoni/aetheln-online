@@ -10,8 +10,7 @@ public class GameNet : ModuleRules
 		{
 			"Core",
 			"CoreUObject",
-			"Engine",
-			"GameCore"
+			"Engine"
 		});
 	}
 }

@@ -231,7 +231,7 @@ $Processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new(
 
 try {
 	$ExpandedServerArguments = Expand-Arguments $ServerLauncherArguments 'server' $ServerLogPath
-	$ServerProcess = Start-Process -FilePath $ResolvedLauncher -ArgumentList $ExpandedServerArguments -RedirectStandardOutput $ServerStdOutLog -RedirectStandardError $ServerStdErrLog -PassThru
+	$ServerProcess = Start-Process -FilePath $ResolvedLauncher -ArgumentList $ExpandedServerArguments -RedirectStandardOutput $ServerStdOutLog -RedirectStandardError $ServerStdErrLog -WindowStyle Hidden -PassThru
 	$Processes.Add($ServerProcess)
 	Write-Evidence 'server' 'server' 'process_started' $ResolvedLauncher ($ExpandedServerArguments -join ' ')
 	Wait-ForEvidence 'server' 'server' $ServerProcess 'server listen readiness' $ServerStdOutLog $ServerStdErrLog (Expand-Pattern $ServerReadyPattern 'server') 'server_listening'
@@ -243,7 +243,7 @@ try {
 		$ClientStdErrLog = Join-Path $ResolvedLogs "$ClientId.stderr.log"
 		$ResolvedClientLogPath = if ($null -eq $ClientLogPath) { $null } else { $ClientLogPath.Replace('{ClientId}', $ClientId) }
 		$ExpandedClientArguments = Expand-Arguments $ClientBaseArguments $ClientId $ResolvedClientLogPath
-		$ClientProcess = Start-Process -FilePath $ResolvedClient -ArgumentList $ExpandedClientArguments -RedirectStandardOutput $ClientStdOutLog -RedirectStandardError $ClientStdErrLog -PassThru
+		$ClientProcess = Start-Process -FilePath $ResolvedClient -ArgumentList $ExpandedClientArguments -RedirectStandardOutput $ClientStdOutLog -RedirectStandardError $ClientStdErrLog -WindowStyle Hidden -PassThru
 		$Processes.Add($ClientProcess)
 		$Clients[$ClientId] = $ClientProcess
 		Write-Evidence $ClientId 'client' 'process_started' $ResolvedClient ($ExpandedClientArguments -join ' ')

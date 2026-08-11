@@ -51,6 +51,9 @@ canonical product or technical documents.
 - [Playable Movement POC](movement-poc.md) records the temporary local
   movement-feel exception, imported asset provenance, and verification evidence
   for issue #100.
+- [Networking Authority Spike: Unit 1](networking-authority-spike.md) records
+  the Issue #2 replication-neutral authority baseline, evidence boundaries,
+  focused verification commands, and remaining candidate and measurement work.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path.
