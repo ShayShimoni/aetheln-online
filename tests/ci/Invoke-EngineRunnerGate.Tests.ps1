@@ -68,8 +68,12 @@ exit /b 9
 exit /b 0'
 	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map)
 @{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
-New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "w"),(Join-Path $ArchiveRoot "l"),$LogRoot|Out-Null
-Set-Content (Join-Path $ArchiveRoot "w/AethelnOnlineClient.exe") client
+New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "w/AethelnOnline/Binaries/Win64"),(Join-Path $ArchiveRoot "l"),$LogRoot|Out-Null
+Set-Content (Join-Path $ArchiveRoot "w/AethelnOnlineClient.exe") launcher
+if($env:RUNNER_TEST_INTERNAL -ne "missing"){
+$InternalName=if($env:RUNNER_TEST_INTERNAL -eq "mismatch"){"AethelnOnline.exe"}else{"AethelnOnlineClient.exe"}
+Set-Content (Join-Path $ArchiveRoot "w/AethelnOnline/Binaries/Win64/$InternalName") binary
+}
 Set-Content (Join-Path $ArchiveRoot "l/AethelnOnlineServer.sh") server
 if($env:RUNNER_TEST_AMBIGUOUS -eq "client"){Set-Content (Join-Path $ArchiveRoot "w/AethelnOnline.exe") client2}
 if($env:RUNNER_TEST_AMBIGUOUS -eq "server"){New-Item -ItemType Directory -Force (Join-Path $ArchiveRoot "l2")|Out-Null;Set-Content (Join-Path $ArchiveRoot "l2/AethelnOnlineServer.sh") server2}'
@@ -105,6 +109,7 @@ throw "revealing failure"
 	$env:RUNNER_TEST_MUTATION = ''
 	$env:RUNNER_TEST_FAIL_TARGET = ''
 	$env:RUNNER_TEST_AMBIGUOUS = ''
+	$env:RUNNER_TEST_INTERNAL = ''
 	$env:RUNNER_TEST_SMOKE_FAIL = ''
 	$env:RUNNER_TEST_WSLPATH_OUTPUT = '/mnt/d/archive/LinuxServer/Linux/AethelnOnlineServer.sh'
 	$env:RUNNER_TEST_HOSTNAME_OUTPUT = '172.25.32.7 '
@@ -227,6 +232,14 @@ try {
 		Assert-True (@((Read-Report $Result).checks | Where-Object message -like ($Kind + '_discovery_invalid*')).Count -eq 1) "Ambiguous $Kind must report its reason."
 	}
 
+	foreach ($Kind in @('missing','mismatch')) {
+		$Fixture = New-Case ('internal-' + $Kind)
+		$env:RUNNER_TEST_INTERNAL = $Kind
+		$Result = Invoke-Gate $Fixture 'PackagedSmoke'
+		Assert-True ($Result.ExitCode -ne 0 -and -not (Test-Path $Fixture.SmokeCapture)) "A $Kind internal client binary must fail before smoke."
+		Assert-True (@((Read-Report $Result).checks | Where-Object message -like 'client_discovery_invalid*').Count -eq 1) "A $Kind internal client binary must report client_discovery_invalid."
+	}
+
 	foreach ($Variable in @('AETHELN_ENGINE_ROOT','AETHELN_LINUX_TOOLCHAIN_ROOT')) {
 		$Fixture = New-Case ('missing-' + $Variable)
 		Set-Item -LiteralPath ('Env:' + $Variable) -Value $null
@@ -264,6 +277,6 @@ try {
 	$env:PATH = $Original.PATH
 	$env:AETHELN_ENGINE_ROOT = $Original.Engine
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $Original.Toolchain
-	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
+	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
 	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 }

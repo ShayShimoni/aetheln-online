@@ -77,6 +77,24 @@ function Resolve-Executable([string] $Name, [string] $Path) {
 	return [string] $Command.Source
 }
 
+function Get-ProcessesUnderPath([string] $Root) {
+	$ResolvedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+	$Prefix = $ResolvedRoot + [System.IO.Path]::DirectorySeparatorChar
+	foreach ($Process in @(Get-Process -ErrorAction SilentlyContinue)) {
+		try { $ProcessPath = [string] $Process.Path } catch { continue }
+		if ([string]::IsNullOrWhiteSpace($ProcessPath)) { continue }
+		try { $FullProcessPath = [System.IO.Path]::GetFullPath($ProcessPath) } catch { continue }
+		if ($FullProcessPath.StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $Process }
+	}
+}
+
+function Test-IsPreexistingProcessIdentity($Process, [hashtable] $Baseline) {
+	$ProcessId = [string] $Process.Id
+	if (-not $Baseline.ContainsKey($ProcessId)) { return $false }
+	try { $StartTicks = [long] $Process.StartTime.ToUniversalTime().Ticks } catch { return $false }
+	return $StartTicks -eq [long] $Baseline[$ProcessId]
+}
+
 function Initialize-EmptyLogRoot([string] $Path) {
 	if (Test-Path -LiteralPath $Path) {
 		if (-not (Test-Path -LiteralPath $Path -PathType Container)) { throw "LogRoot '$Path' exists but is not a directory." }
@@ -113,7 +131,16 @@ function Write-Evidence([string] $Process, [string] $Role, [string] $Event, [str
 		detail = $Detail
 	}
 	if ($ConnectionId) { $Record['connection_id'] = $ConnectionId }
-	Add-Content -LiteralPath $EvidencePath -Value ($Record | ConvertTo-Json -Compress) -Encoding UTF8
+	$SerializedRecord = $Record | ConvertTo-Json -Compress
+	for ($Attempt = 1; $Attempt -le 50; $Attempt++) {
+		try {
+			Add-Content -LiteralPath $EvidencePath -Value $SerializedRecord -Encoding UTF8
+			return
+		} catch [System.IO.IOException] {
+			if ($Attempt -eq 50) { throw }
+			Start-Sleep -Milliseconds 20
+		}
+	}
 }
 
 function Wait-ForEvidence([string] $ProcessName, [string] $Role, [System.Diagnostics.Process] $Process, [string] $Description, [string] $Path, [string] $ErrorPath, [string] $Pattern, [string] $Event) {
@@ -192,6 +219,11 @@ if (($ClientBaseArguments -join ' ') -like '*{LogPath}*' -and [string]::IsNullOr
 $ResolvedLauncher = Resolve-Executable 'ServerLauncherExecutable' $ServerLauncherExecutable
 $ResolvedClient = Resolve-Executable 'ClientExecutable' $ClientExecutable
 $ResolvedLogs = Initialize-EmptyLogRoot $LogRoot
+$ClientPackageRoot = Split-Path -Parent $ResolvedClient
+$PreexistingClientProcessIdentities = @{}
+foreach ($Process in @(Get-ProcessesUnderPath $ClientPackageRoot)) {
+	try { $PreexistingClientProcessIdentities[[string] $Process.Id] = [long] $Process.StartTime.ToUniversalTime().Ticks } catch { }
+}
 $EvidencePath = Join-Path $ResolvedLogs 'smoke-evidence.jsonl'
 $ServerStdOutLog = Join-Path $ResolvedLogs 'server.stdout.log'
 $ServerStdErrLog = Join-Path $ResolvedLogs 'server.stderr.log'
@@ -235,4 +267,28 @@ finally {
 		$Process.WaitForExit()
 		$Process.Dispose()
 	}
+	Write-Evidence 'orchestrator' 'cleanup' 'process_cleanup_started' $EvidencePath 'Scanning for smoke-owned package processes.'
+	$CleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
+	$QuiescentSince = $null
+	do {
+		$NewPackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot | Where-Object { -not (Test-IsPreexistingProcessIdentity $_ $PreexistingClientProcessIdentities) })
+		if ($NewPackageProcesses.Count -gt 0) {
+			$QuiescentSince = $null
+			foreach ($Process in $NewPackageProcesses) {
+				Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+				try { [void] $Process.WaitForExit(5000) } catch { }
+				$Process.Dispose()
+			}
+		} elseif ($null -eq $QuiescentSince) {
+			$QuiescentSince = [DateTime]::UtcNow
+		} elseif (([DateTime]::UtcNow - $QuiescentSince).TotalSeconds -ge 2) {
+			break
+		}
+		Start-Sleep -Milliseconds 100
+	} while ([DateTime]::UtcNow -lt $CleanupDeadline)
+	$RemainingPackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot | Where-Object { -not (Test-IsPreexistingProcessIdentity $_ $PreexistingClientProcessIdentities) })
+	if ($RemainingPackageProcesses.Count -gt 0 -or $null -eq $QuiescentSince -or ([DateTime]::UtcNow - $QuiescentSince).TotalSeconds -lt 2) {
+		throw 'Packaged client process cleanup did not reach quiescence within 10 seconds.'
+	}
+	Write-Evidence 'orchestrator' 'cleanup' 'process_cleanup_complete' $EvidencePath 'No smoke-owned package processes remained after the quiescence window.'
 }

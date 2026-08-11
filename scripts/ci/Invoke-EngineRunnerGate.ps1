@@ -230,8 +230,21 @@ try {
 		$SmokeProtectedValues = @($ProtectedValues)
 		$SmokeFailure = $null
 		try {
-			$Clients = @(Get-ChildItem -LiteralPath $ResolvedArchive -Recurse -File | Where-Object { $_.Name -in @('AethelnOnlineClient.exe', 'AethelnOnline.exe') })
+			$ClientCandidates = @(Get-ChildItem -LiteralPath $ResolvedArchive -Recurse -File | Where-Object {
+				$_.Name -in @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
+			})
+			$Clients = @($ClientCandidates | Where-Object {
+				if ($_.Name -notin @('AethelnOnlineClient.exe', 'AethelnOnline.exe')) { return $false }
+				$RelativePath = $_.FullName.Substring($ResolvedArchive.Length)
+				return -not (@($RelativePath -split '[\\/]' | Where-Object { $_ -eq 'Binaries' }).Count)
+			})
 			if ($Clients.Count -ne 1) { throw 'client_discovery_invalid' }
+			$InternalClients = @($ClientCandidates | Where-Object {
+				$RelativePath = $_.FullName.Substring($ResolvedArchive.Length)
+				$HasBinariesSegment = @($RelativePath -split '[\\/]' | Where-Object { $_ -eq 'Binaries' }).Count -gt 0
+				$HasBinariesSegment -and $_.Name -eq $Clients[0].Name
+			})
+			if ($InternalClients.Count -lt 1) { throw 'client_discovery_invalid' }
 			$Servers = @(Get-ChildItem -LiteralPath $ResolvedArchive -Recurse -File | Where-Object { $_.Name -eq 'AethelnOnlineServer.sh' })
 			if ($Servers.Count -ne 1) { throw 'server_discovery_invalid' }
 

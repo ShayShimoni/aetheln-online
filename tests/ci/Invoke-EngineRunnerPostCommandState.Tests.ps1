@@ -74,8 +74,9 @@ if ($env:RUNNER_POST_CASE -eq "package-dirty") {
 	Set-Content -LiteralPath (Join-Path $env:RUNNER_POST_REPOSITORY "tracked") -Value changed
 	throw "package failed"
 }
-New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "w"),(Join-Path $ArchiveRoot "l"),$LogRoot | Out-Null
-Set-Content -LiteralPath (Join-Path $ArchiveRoot "w/AethelnOnlineClient.exe") -Value client
+New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "w/AethelnOnline/Binaries/Win64"),(Join-Path $ArchiveRoot "l"),$LogRoot | Out-Null
+Set-Content -LiteralPath (Join-Path $ArchiveRoot "w/AethelnOnlineClient.exe") -Value launcher
+Set-Content -LiteralPath (Join-Path $ArchiveRoot "w/AethelnOnline/Binaries/Win64/AethelnOnlineClient.exe") -Value binary
 Set-Content -LiteralPath (Join-Path $ArchiveRoot "l/AethelnOnlineServer.sh") -Value server'
 
 	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Invoke-PackagedSmokeTest.ps1') 'param($ServerExecutable,$ServerLauncherExecutable,$ServerLauncherArguments,$ClientExecutable,$ClientBaseArguments,$ServerEndpoint,$ServerMap,$LogRoot,$ServerReadyPattern,$ServerClientConnectedPattern,$ClientConnectedPattern,$ClientMapPattern,$TimeoutSeconds)
