@@ -219,7 +219,9 @@ scenario/profile/run identities, unknown or category-inappropriate rejection
 reasons, reused connections, reordered gameplay/lifecycle evidence, and early
 process exits. Its explicit `fixture` evidence mode can produce only
 `fixture-passed`; synthetic processes can never produce a packaged `passed`
-result. Packaged mode additionally requires the Issue #15 schema-v2 build
+result. Packaged mode produces only `packaged-candidate`, which requires a
+fresh restricted verifier and approver before it can satisfy the ticket; the
+runner never self-awards final packaged success. Packaged mode additionally requires the Issue #15 schema-v2 build
 provenance document, an exact clean source revision and build identity, and
 unique inventory hashes binding the exact normalized selected-client and
 launcher-side server paths. A basename-only or merely hash-shaped inventory

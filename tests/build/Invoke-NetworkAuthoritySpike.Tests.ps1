@@ -353,6 +353,23 @@ exit $Child.ExitCode
 	Assert-True ($ClientPathFailure -match 'Packaged executable identity is not uniquely bound') 'Packaged evidence must bind the exact selected-client path, not only filename and digest.'
 	Write-Output 'PASS: same-named client at an unrelated path cannot use packaged provenance'
 
+	$SelfAuthoredProvenancePath = Join-Path $FixtureRoot 'self-authored-provenance.json'
+	[ordered]@{
+		schemaVersion = 2
+		source = [ordered]@{ revision = 'fixture-revision'; clean = $true }
+		host = [ordered]@{ buildIdentity = 'fixture-build' }
+		artifacts = [ordered]@{ inventory = @(
+			[ordered]@{ kind = 'client'; path = $PowerShellExecutable.Replace('\', '/'); sha256 = $ClientSha256 },
+			[ordered]@{ kind = 'server'; path = $PowerShellExecutable.Replace('\', '/'); sha256 = $ClientSha256 }
+		) }
+	} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $SelfAuthoredProvenancePath -Encoding UTF8
+	$SelfAuthoredRoot = Join-Path $FixtureRoot 'self-authored-packaged'
+	Invoke-FixtureRun -FixtureLogRoot $SelfAuthoredRoot -FixtureRunId 'fixture-self-authored' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $SelfAuthoredProvenancePath
+	$SelfAuthoredEvidence = Get-Content -LiteralPath (Join-Path $SelfAuthoredRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($SelfAuthoredEvidence.result -eq 'packaged-candidate') 'Even matching caller-authored provenance can produce only a candidate awaiting independent gates.'
+	Assert-True ($SelfAuthoredEvidence.result -ne 'passed') 'The runner must never self-award packaged success.'
+	Write-Output 'PASS: self-authored matching provenance cannot self-award packaged success'
+
 	$NegativeScenarios = @(
 		@{ Name = 'missing'; Behavior = 'missing-damage'; Failure = 'waiting for authoritative damage' },
 		@{ Name = 'duplicate'; Behavior = 'duplicate-damage'; Failure = 'Expected exactly one damage-application record, observed 2' },

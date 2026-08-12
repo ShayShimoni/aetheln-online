@@ -575,7 +575,7 @@ try {
 		[pscustomobject]@{ Name = 'client-2'; Process = $ClientProcesses['client-2']; StandardOutputPath = (Join-Path $ResolvedLogs 'client-2.stdout.log'); StandardErrorPath = (Join-Path $ResolvedLogs 'client-2.stderr.log') },
 		[pscustomobject]@{ Name = $ReconnectId; Process = $ReconnectProcess; StandardOutputPath = $ReconnectStdOut; StandardErrorPath = $ReconnectStdErr }
 	) $DurationSeconds
-	$Result = if ($EvidenceMode -ceq 'packaged') { 'passed' } else { 'fixture-passed' }
+	$Result = if ($EvidenceMode -ceq 'packaged') { 'packaged-candidate' } else { 'fixture-passed' }
 }
 catch {
 	$Failure = $_.Exception.Message
