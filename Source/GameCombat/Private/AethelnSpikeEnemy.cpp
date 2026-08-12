@@ -7,6 +7,7 @@
 AAethelnSpikeEnemy::AAethelnSpikeEnemy()
 {
 	bReplicates = true;
+	SetReplicateMovement(true);
 
 	USphereComponent* Collision = CreateDefaultSubobject<USphereComponent>(TEXT("Collision"));
 	Collision->InitSphereRadius(50.0f);

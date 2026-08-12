@@ -190,8 +190,13 @@ EAethelnSpikeAttackRejection UAethelnSpikeAuthorityComponent::ProcessServerScena
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnScenarioId="), ScenarioId);
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnProfileId="), ProfileId);
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnRunId="), RunId);
-	UE_LOG(LogTemp, Warning, TEXT("AUTHORITY rejection category=%s reason=%s client=%s scenario=%s profile=%s run=%s"), *Probe.Category.ToString(), LexToString(Reason), *ClientId, *ScenarioId, *ProfileId, *RunId);
+	UE_LOG(LogTemp, Warning, TEXT("AUTHORITY rejection category=%s reason=%s client=%s scenario=%s profile=%s run=%s"), *GetScenarioCategoryId(Probe.Category), LexToString(Reason), *ClientId, *ScenarioId, *ProfileId, *RunId);
 	return Reason;
+}
+
+FString UAethelnSpikeAuthorityComponent::GetScenarioCategoryId(FName Category)
+{
+	return Category.ToString().ToLower();
 }
 
 void UAethelnSpikeAuthorityComponent::ProcessServerIntent(const FAethelnSpikeAttackIntent& Intent)

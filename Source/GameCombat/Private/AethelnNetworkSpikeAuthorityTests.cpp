@@ -32,6 +32,13 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("Damage is structurally absent"), IntentStruct->FindPropertyByName(TEXT("Damage")));
 	TestEqual(TEXT("Activation refusal reason is stable"), FString(LexToString(EAethelnSpikeAttackRejection::ActivationBlocked)), FString(TEXT("activation-blocked")));
 	TestEqual(TEXT("Impossible aim refusal reason is stable"), FString(LexToString(EAethelnSpikeAttackRejection::ImpossibleAimTransition)), FString(TEXT("impossible-aim-transition")));
+	for (const TCHAR* Category : { TEXT("movement"), TEXT("aim"), TEXT("activation"), TEXT("hit"), TEXT("cooldown"), TEXT("dodge"), TEXT("block"), TEXT("damage"), TEXT("disconnected-command") })
+	{
+		TestEqual(
+			*FString::Printf(TEXT("%s evidence category has stable lowercase identity"), Category),
+			UAethelnSpikeAuthorityComponent::GetScenarioCategoryId(FName(Category)),
+			FString(Category));
+	}
 
 	TestTrue(TEXT("Initial client one label is accepted only for spike correlation"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("client-1")));
 	TestTrue(TEXT("Initial client two label is accepted only for spike correlation"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("client-2")));
@@ -72,6 +79,7 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 		GEngine->DestroyWorldContext(World);
 		return false;
 	}
+	TestTrue(TEXT("Scenario enemy movement replicates after server positioning"), Target->IsReplicatingMovement());
 
 	UAethelnSpikeAuthorityComponent* AuthorityComponent = NewObject<UAethelnSpikeAuthorityComponent>(Attacker, TEXT("TestAuthorityComponent"));
 	AuthorityComponent->RegisterComponent();

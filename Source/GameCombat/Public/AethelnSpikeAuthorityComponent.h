@@ -38,6 +38,7 @@ public:
 		bool bActorUsable);
 	EAethelnSpikeAttackRejection ValidateScenarioProbe(const FAethelnSpikeScenarioProbe& Probe) const;
 	EAethelnSpikeAttackRejection ProcessServerScenarioProbe(const FAethelnSpikeScenarioProbe& Probe, const FString& ClientIdOverride = FString());
+	static FString GetScenarioCategoryId(FName Category);
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
