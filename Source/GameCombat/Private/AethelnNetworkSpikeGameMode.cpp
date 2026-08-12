@@ -1,19 +1,48 @@
 #include "AethelnNetworkSpikeGameMode.h"
 
 #include "AethelnSpikeCharacter.h"
+#include "AethelnSpikeAuthorityComponent.h"
 #include "AethelnSpikeEnemy.h"
 #include "AethelnSpikePlayerState.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
+#include "Kismet/GameplayStatics.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+
+namespace AethelnNetworkSpikeScenario
+{
+	FString ReadArgument(const TCHAR* Key, const FString& Fallback)
+	{
+		FString Value;
+		return FParse::Value(FCommandLine::Get(), Key, Value) && !Value.IsEmpty() ? Value : Fallback;
+	}
+}
 
 AAethelnNetworkSpikeGameMode::AAethelnNetworkSpikeGameMode()
 {
 	DefaultPawnClass = AAethelnSpikeCharacter::StaticClass();
 	PlayerStateClass = AAethelnSpikePlayerState::StaticClass();
+	PrimaryActorTick.bCanEverTick = true;
 }
 
 void AAethelnNetworkSpikeGameMode::BeginPlay()
 {
 	Super::BeginPlay();
+	bScenarioEnabled = FParse::Param(FCommandLine::Get(), TEXT("AethelnAuthorityScenario"));
+	if (!bScenarioEnabled)
+	{
+		return;
+	}
+
+	ScenarioId = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnScenarioId="), TEXT("network-authority.baseline.v1"));
+	ProfileId = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnProfileId="), TEXT("network-profile.unset"));
+	RunId = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnRunId="), TEXT("run-unset"));
+	ServerEndpoint = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnServerEndpoint="), TEXT("endpoint-unset"));
+	ServerMap = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnServerMap="), TEXT("/Game/Maps/StarterMap"));
+	NetworkConfigIdentity = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnNetworkConfig="), TEXT("network-config-unset"));
+
 	if (HasAuthority() && GetWorld() != nullptr)
 	{
 		FActorSpawnParameters SpawnParameters;
@@ -23,17 +52,147 @@ void AAethelnNetworkSpikeGameMode::BeginPlay()
 			FVector(300.0f, 0.0f, 100.0f),
 			FRotator::ZeroRotator,
 			SpawnParameters);
+		UE_LOG(LogTemp, Log, TEXT("AUTHORITY server_ready endpoint=%s map=%s network_config=%s %s"), *ServerEndpoint, *ServerMap, *NetworkConfigIdentity, *GetIdentityFields());
+		UE_LOG(LogTemp, Log, TEXT("AUTHORITY network_config network_config=%s %s"), *NetworkConfigIdentity, *GetIdentityFields());
+		if (SpawnedEnemy != nullptr)
+		{
+			UE_LOG(LogTemp, Log, TEXT("AUTHORITY enemy_spawned enemy=%s %s"), *SpawnedEnemy->GetName(), *GetIdentityFields());
+		}
 	}
+}
+
+void AAethelnNetworkSpikeGameMode::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	if (!bScenarioEnabled || !HasAuthority())
+	{
+		return;
+	}
+
+	for (const TPair<TWeakObjectPtr<AController>, FVector>& Entry : InitialLocations)
+	{
+		AController* Controller = Entry.Key.Get();
+		APawn* Pawn = Controller != nullptr ? Controller->GetPawn() : nullptr;
+		const FString ClientId = GetClientId(Controller);
+		if (Pawn != nullptr && !ClientId.IsEmpty() && !MovementObserved.Contains(ClientId)
+			&& FVector::DistSquared(Pawn->GetActorLocation(), Entry.Value) >= 1.0f)
+		{
+			MovementObserved.Add(ClientId);
+			UE_LOG(LogTemp, Log, TEXT("AUTHORITY movement client=%s %s"), *ClientId, *GetIdentityFields());
+		}
+	}
+}
+
+FString AAethelnNetworkSpikeGameMode::InitNewPlayer(
+	APlayerController* NewPlayerController,
+	const FUniqueNetIdRepl& UniqueId,
+	const FString& Options,
+	const FString& Portal)
+{
+	const FString Error = Super::InitNewPlayer(NewPlayerController, UniqueId, Options, Portal);
+	if (bScenarioEnabled && NewPlayerController != nullptr)
+	{
+		const FString ClientId = UGameplayStatics::ParseOption(Options, TEXT("AethelnClientId"));
+		if (IsAllowedScenarioClientId(ClientId))
+		{
+			ClientIds.Add(NewPlayerController, ClientId);
+		}
+	}
+	return Error;
 }
 
 void AAethelnNetworkSpikeGameMode::PostLogin(APlayerController* NewPlayer)
 {
 	Super::PostLogin(NewPlayer);
-	UE_LOG(LogTemp, Log, TEXT("AethelnSpikeLifecycle PostLogin Player=%s"), *GetNameSafe(NewPlayer));
+	if (!bScenarioEnabled || NewPlayer == nullptr)
+	{
+		return;
+	}
+
+	const FString ClientId = GetClientId(NewPlayer);
+	if (!IsAllowedScenarioClientId(ClientId))
+	{
+		return;
+	}
+	const FString ConnectionId = MakeScenarioConnectionId(RunId, NextConnectionSequence++);
+	ConnectionIds.Add(NewPlayer, ConnectionId);
+	if (NewPlayer->PlayerState != nullptr)
+	{
+		NewPlayer->PlayerState->SetPlayerName(ClientId);
+	}
+	if (APawn* Pawn = NewPlayer->GetPawn())
+	{
+		InitialLocations.Add(NewPlayer, Pawn->GetActorLocation());
+	}
+	PositionEnemyForFirstClient(NewPlayer);
+	UE_LOG(LogTemp, Log, TEXT("AUTHORITY connection client=%s connection=%s %s"), *ClientId, *ConnectionId, *GetIdentityFields());
+	if (ClientId == TEXT("client-1-reconnect"))
+	{
+		UE_LOG(LogTemp, Log, TEXT("AUTHORITY reconnected client=%s connection=%s %s"), *ClientId, *ConnectionId, *GetIdentityFields());
+	}
 }
 
 void AAethelnNetworkSpikeGameMode::Logout(AController* Exiting)
 {
-	UE_LOG(LogTemp, Log, TEXT("AethelnSpikeLifecycle Logout Controller=%s"), *GetNameSafe(Exiting));
+	if (bScenarioEnabled && Exiting != nullptr)
+	{
+		const FString ClientId = GetClientId(Exiting);
+		const FString* ConnectionId = ConnectionIds.Find(Exiting);
+		if (ClientId == TEXT("client-1") && ConnectionId != nullptr)
+		{
+			UE_LOG(LogTemp, Log, TEXT("AUTHORITY disconnected client=%s connection=%s %s"), *ClientId, **ConnectionId, *GetIdentityFields());
+			if (APawn* Pawn = Exiting->GetPawn())
+			{
+				if (UAethelnSpikeAuthorityComponent* AuthorityComponent = Pawn->FindComponentByClass<UAethelnSpikeAuthorityComponent>())
+				{
+					AuthorityComponent->SetLifecycleReady(false);
+					FAethelnSpikeScenarioProbe ClosedCommand;
+					ClosedCommand.Category = TEXT("disconnected-command");
+					ClosedCommand.Sequence = 1;
+					ClosedCommand.ClaimedMagnitude = 1.0f;
+					AuthorityComponent->ProcessServerScenarioProbe(ClosedCommand, ClientId);
+				}
+			}
+		}
+		InitialLocations.Remove(Exiting);
+		ConnectionIds.Remove(Exiting);
+		ClientIds.Remove(Exiting);
+	}
 	Super::Logout(Exiting);
+}
+
+bool AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(const FString& ClientId)
+{
+	return ClientId == TEXT("client-1") || ClientId == TEXT("client-2") || ClientId == TEXT("client-1-reconnect");
+}
+
+FString AAethelnNetworkSpikeGameMode::MakeScenarioConnectionId(const FString& InRunId, uint32 Sequence)
+{
+	return FString::Printf(TEXT("%s-connection-%04u"), *InRunId, Sequence);
+}
+
+FString AAethelnNetworkSpikeGameMode::GetIdentityFields() const
+{
+	return FString::Printf(TEXT("scenario=%s profile=%s run=%s"), *ScenarioId, *ProfileId, *RunId);
+}
+
+FString AAethelnNetworkSpikeGameMode::GetClientId(const AController* Controller) const
+{
+	if (const FString* ClientId = ClientIds.Find(Controller))
+	{
+		return *ClientId;
+	}
+	return FString();
+}
+
+void AAethelnNetworkSpikeGameMode::PositionEnemyForFirstClient(APlayerController* NewPlayer)
+{
+	if (SpawnedEnemy == nullptr || NewPlayer == nullptr || GetClientId(NewPlayer) != TEXT("client-1"))
+	{
+		return;
+	}
+	if (APawn* Pawn = NewPlayer->GetPawn())
+	{
+		SpawnedEnemy->SetActorLocation(Pawn->GetActorLocation() + Pawn->GetActorForwardVector() * 175.0f);
+	}
 }

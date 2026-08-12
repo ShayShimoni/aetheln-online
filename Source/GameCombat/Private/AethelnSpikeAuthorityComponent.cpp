@@ -11,6 +11,8 @@
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Net/UnrealNetwork.h"
 
 namespace AethelnSpikeAuthority
@@ -18,6 +20,14 @@ namespace AethelnSpikeAuthority
 	constexpr uint8 SchemaVersion = 1;
 	constexpr uint32 ContentVersion = 1;
 	constexpr float AimUnitTolerance = 0.01f;
+}
+
+void UAethelnSpikeAuthorityComponent::SubmitScenarioProbe(const FAethelnSpikeScenarioProbe& Probe)
+{
+	if (FParse::Param(FCommandLine::Get(), TEXT("AethelnAuthorityScenario")))
+	{
+		ServerSubmitScenarioProbe(Probe);
+	}
 }
 
 UAethelnSpikeAuthorityComponent::UAethelnSpikeAuthorityComponent()
@@ -111,6 +121,77 @@ EAethelnSpikeAttackRejection UAethelnSpikeAuthorityComponent::ValidateIntent(
 void UAethelnSpikeAuthorityComponent::ServerSubmitAttack_Implementation(const FAethelnSpikeAttackIntent& Intent)
 {
 	ProcessServerIntent(Intent);
+}
+
+void UAethelnSpikeAuthorityComponent::ServerSubmitScenarioProbe_Implementation(const FAethelnSpikeScenarioProbe& Probe)
+{
+	if (!FParse::Param(FCommandLine::Get(), TEXT("AethelnAuthorityScenario")))
+	{
+		return;
+	}
+	ProcessServerScenarioProbe(Probe);
+}
+
+EAethelnSpikeAttackRejection UAethelnSpikeAuthorityComponent::ValidateScenarioProbe(const FAethelnSpikeScenarioProbe& Probe) const
+{
+	const AActor* Owner = GetOwner();
+	if (!bLifecycleReady)
+	{
+		return EAethelnSpikeAttackRejection::ConnectionClosed;
+	}
+	if (Owner == nullptr || Owner->IsActorBeingDestroyed())
+	{
+		return EAethelnSpikeAttackRejection::ActorDestroyed;
+	}
+	if (Probe.Sequence == 0 || !FMath::IsFinite(Probe.ClaimedMagnitude))
+	{
+		return EAethelnSpikeAttackRejection::MalformedIntent;
+	}
+	if (Probe.Category == TEXT("movement"))
+	{
+		return !FVector(Probe.ClaimedMovement).Equals(Owner->GetActorLocation())
+			? EAethelnSpikeAttackRejection::MalformedIntent
+			: EAethelnSpikeAttackRejection::None;
+	}
+	if (Probe.Category == TEXT("aim"))
+	{
+		return FVector(Probe.ClaimedAim).GetSafeNormal().Equals(Owner->GetActorForwardVector(), AethelnSpikeAuthority::AimUnitTolerance)
+			? EAethelnSpikeAttackRejection::None
+			: EAethelnSpikeAttackRejection::ImpossibleAimTransition;
+	}
+	if (Probe.Category == TEXT("hit") || Probe.Category == TEXT("damage"))
+	{
+		return !Probe.ClaimedOutcome.IsNone() || !FMath::IsNearlyZero(Probe.ClaimedMagnitude)
+			? EAethelnSpikeAttackRejection::MalformedIntent
+			: EAethelnSpikeAttackRejection::None;
+	}
+	if (Probe.Category == TEXT("activation") || Probe.Category == TEXT("cooldown")
+		|| Probe.Category == TEXT("dodge") || Probe.Category == TEXT("block"))
+	{
+		return EAethelnSpikeAttackRejection::ActivationBlocked;
+	}
+	return EAethelnSpikeAttackRejection::MalformedIntent;
+}
+
+EAethelnSpikeAttackRejection UAethelnSpikeAuthorityComponent::ProcessServerScenarioProbe(
+	const FAethelnSpikeScenarioProbe& Probe,
+	const FString& ClientIdOverride)
+{
+	const EAethelnSpikeAttackRejection Reason = ValidateScenarioProbe(Probe);
+
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	const APlayerState* PlayerState = Pawn != nullptr ? Pawn->GetPlayerState() : nullptr;
+	const FString ClientId = !ClientIdOverride.IsEmpty()
+		? ClientIdOverride
+		: (PlayerState != nullptr ? PlayerState->GetPlayerName() : FString());
+	FString ScenarioId;
+	FString ProfileId;
+	FString RunId;
+	FParse::Value(FCommandLine::Get(), TEXT("AethelnScenarioId="), ScenarioId);
+	FParse::Value(FCommandLine::Get(), TEXT("AethelnProfileId="), ProfileId);
+	FParse::Value(FCommandLine::Get(), TEXT("AethelnRunId="), RunId);
+	UE_LOG(LogTemp, Warning, TEXT("AUTHORITY rejection category=%s reason=%s client=%s scenario=%s profile=%s run=%s"), *Probe.Category.ToString(), LexToString(Reason), *ClientId, *ScenarioId, *ProfileId, *RunId);
+	return Reason;
 }
 
 void UAethelnSpikeAuthorityComponent::ProcessServerIntent(const FAethelnSpikeAttackIntent& Intent)
@@ -216,7 +297,26 @@ bool UAethelnSpikeAuthorityComponent::ExecuteActiveAttack()
 			EffectContext);
 		if (EffectSpec.IsValid())
 		{
+			const bool bAuthorityScenario = FParse::Param(FCommandLine::Get(), TEXT("AethelnAuthorityScenario"));
+			const float PreviousHealth = bAuthorityScenario ? Enemy->GetHealth() : 0.0f;
 			SourceAbilitySystem->ApplyGameplayEffectSpecToTarget(*EffectSpec.Data.Get(), TargetAbilitySystem);
+			if (bAuthorityScenario)
+			{
+				const APawn* OwnerPawn = Cast<APawn>(Owner);
+				const APlayerState* OwnerPlayerState = OwnerPawn != nullptr ? OwnerPawn->GetPlayerState() : nullptr;
+				const FString ClientId = OwnerPlayerState != nullptr ? OwnerPlayerState->GetPlayerName() : FString();
+				FString ScenarioId;
+				FString ProfileId;
+				FString RunId;
+				FParse::Value(FCommandLine::Get(), TEXT("AethelnScenarioId="), ScenarioId);
+				FParse::Value(FCommandLine::Get(), TEXT("AethelnProfileId="), ProfileId);
+				FParse::Value(FCommandLine::Get(), TEXT("AethelnRunId="), RunId);
+				UE_LOG(LogTemp, Log, TEXT("AUTHORITY melee_resolved attacker=%s enemy=%s scenario=%s profile=%s run=%s"), *ClientId, *Enemy->GetName(), *ScenarioId, *ProfileId, *RunId);
+				if (Enemy->GetHealth() < PreviousHealth)
+				{
+					UE_LOG(LogTemp, Log, TEXT("AUTHORITY damage_applied attacker=%s enemy=%s scenario=%s profile=%s run=%s"), *ClientId, *Enemy->GetName(), *ScenarioId, *ProfileId, *RunId);
+				}
+			}
 		}
 	}
 

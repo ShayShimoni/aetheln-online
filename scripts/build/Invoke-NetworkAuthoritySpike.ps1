@@ -13,12 +13,15 @@ replication candidate, latency policy, rewind policy, or numeric network profile
 param(
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ServerExecutable,
 	[Parameter(Mandatory)] [string[]] $ServerArguments,
+	[ValidateNotNullOrEmpty()] [string] $ServerLauncherExecutable,
+	[string[]] $ServerLauncherArguments = @(),
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ClientExecutable,
 	[Parameter(Mandatory)] [string[]] $ClientArguments,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ServerEndpoint,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ServerMap,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ScenarioId,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ProfileId,
+	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $NetworkConfigIdentity,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $RunId,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $SourceRevision,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $BuildIdentity,
@@ -26,6 +29,8 @@ param(
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $HardwareIdentity,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $TopologyIdentity,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ActorMixIdentity,
+	[Parameter(Mandatory)] [ValidateSet('fixture', 'packaged')] [string] $EvidenceMode,
+	[string] $PackagedBuildProvenancePath,
 	[Parameter(Mandatory)] [ValidateRange(1, 86400)] [int] $DurationSeconds,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $LogRoot,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ServerReadyPattern,
@@ -39,6 +44,7 @@ param(
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $JoinInProgressPattern,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $DisconnectPattern,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ReconnectPattern,
+	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $NetworkConfigPattern,
 	[ValidateNotNullOrEmpty()] [string] $ErrorPattern = '(?i)(fatal error|network\s+failure|connection\s+failed|failed to load package)',
 	[ValidateRange(1, 3600)] [int] $TimeoutSeconds = 120
 )
@@ -129,7 +135,7 @@ function Assert-Placeholder([string[]] $Arguments, [string] $Placeholder, [strin
 }
 
 function Expand-Values([string] $Value, [string] $ClientId) {
-	return $Value.Replace('{ClientId}', $ClientId).Replace('{ServerEndpoint}', $ServerEndpoint).Replace('{ServerMap}', $ServerMap).Replace('{ScenarioId}', $ScenarioId).Replace('{ProfileId}', $ProfileId).Replace('{RunId}', $RunId)
+	return $Value.Replace('{ClientId}', $ClientId).Replace('{ServerEndpoint}', $ServerEndpoint).Replace('{ServerMap}', $ServerMap).Replace('{ScenarioId}', $ScenarioId).Replace('{ProfileId}', $ProfileId).Replace('{NetworkConfigIdentity}', $NetworkConfigIdentity).Replace('{RunId}', $RunId)
 }
 
 function Expand-Arguments([string[]] $Arguments, [string] $ClientId) {
@@ -137,7 +143,19 @@ function Expand-Arguments([string[]] $Arguments, [string] $ClientId) {
 }
 
 function Expand-Pattern([string] $Pattern, [string] $ClientId) {
-	return $Pattern.Replace('{ClientId}', [regex]::Escape($ClientId)).Replace('{ServerEndpoint}', [regex]::Escape($ServerEndpoint)).Replace('{ServerMap}', [regex]::Escape($ServerMap)).Replace('{ScenarioId}', [regex]::Escape($ScenarioId)).Replace('{ProfileId}', [regex]::Escape($ProfileId)).Replace('{RunId}', [regex]::Escape($RunId))
+	return $Pattern.Replace('{ClientId}', [regex]::Escape($ClientId)).Replace('{ServerEndpoint}', [regex]::Escape($ServerEndpoint)).Replace('{ServerMap}', [regex]::Escape($ServerMap)).Replace('{ScenarioId}', [regex]::Escape($ScenarioId)).Replace('{ProfileId}', [regex]::Escape($ProfileId)).Replace('{NetworkConfigIdentity}', [regex]::Escape($NetworkConfigIdentity)).Replace('{RunId}', [regex]::Escape($RunId))
+}
+
+function Expand-ServerLauncherArguments([string[]] $Arguments, [string] $ResolvedServerExecutable, [string[]] $ExpandedServerArguments) {
+	$Expanded = [System.Collections.Generic.List[string]]::new()
+	foreach ($Argument in $Arguments) {
+		if ($Argument -eq '{ServerArguments}') {
+			foreach ($ServerArgument in $ExpandedServerArguments) { $Expanded.Add($ServerArgument) }
+		} else {
+			$Expanded.Add((Expand-Values $Argument 'server').Replace('{ServerExecutable}', $ResolvedServerExecutable))
+		}
+	}
+	return @($Expanded)
 }
 
 function ConvertTo-ProcessArgument([string] $Argument) {
@@ -200,6 +218,27 @@ function Wait-ForMatch([System.Diagnostics.Process] $Process, [string] $Path, [s
 	throw "Timed out after $TimeoutSeconds seconds waiting for $Description in '$Path' (pattern '$Pattern')."
 }
 
+function Wait-ForRejection([System.Diagnostics.Process] $Process, [string] $Path, [string] $ErrorPath, [regex] $Regex, [string] $Category) {
+	$Deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+	do {
+		$ErrorLine = Get-RuntimeError @($Path, $ErrorPath)
+		if ($ErrorLine) { throw "Runtime reported an error while waiting for rejection '$Category': $ErrorLine" }
+		if (Test-Path -LiteralPath $Path -PathType Leaf) {
+			foreach ($Line in @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)) {
+				$Match = $Regex.Match($Line)
+				if ($Match.Success -and $Match.Groups['Category'].Value -ceq $Category) { return [pscustomobject]@{ Line = [string] $Line; Match = $Match } }
+			}
+		}
+		$Process.Refresh()
+		if ($Process.HasExited) {
+			$Process.WaitForExit()
+			throw "Process exited with code $($Process.ExitCode) while waiting for rejection '$Category'. Review '$Path' and '$ErrorPath'."
+		}
+		Start-Sleep -Milliseconds 100
+	} while ([DateTime]::UtcNow -lt $Deadline)
+	throw "Timed out after $TimeoutSeconds seconds waiting for rejection '$Category' in '$Path'."
+}
+
 function Wait-ForObservationInterval {
 	param(
 		[Parameter(Mandatory, Position = 0)] [object[]] $RequiredProcesses,
@@ -231,19 +270,83 @@ function New-Observation([string] $Event, [string] $Source, [string] $Detail, [s
 	return [pscustomobject] $Record
 }
 
+function Get-SingleMatchIndex([string[]] $Lines, [string] $Pattern, [string] $Description) {
+	$Indexes = [System.Collections.Generic.List[int]]::new()
+	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
+		if ($Lines[$Index] -match $Pattern) { $Indexes.Add($Index) }
+	}
+	if ($Indexes.Count -ne 1) { throw "Expected exactly one $Description record, observed $($Indexes.Count)." }
+	return $Indexes[0]
+}
+
+function Assert-RecordToken([string] $Name, [string] $Value) {
+	if ($Value -notmatch '^\S+$') { throw "$Name must be one non-empty structured-record token without whitespace." }
+}
+
+function Test-PackagedBuildProvenance([string] $Path) {
+	if (-not $Path) { throw 'PackagedBuildProvenancePath is required for packaged evidence.' }
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Packaged build provenance '$Path' does not exist." }
+	try { $Provenance = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { throw "Packaged build provenance '$Path' is invalid JSON: $($_.Exception.Message)" }
+	if ($Provenance.schemaVersion -ne 2 -or $Provenance.source.revision -cne $SourceRevision -or $Provenance.source.clean -ne $true) { throw 'Packaged build provenance does not bind a clean exact source revision.' }
+	if ($Provenance.host.buildIdentity -cne $BuildIdentity) { throw 'BuildIdentity does not match packaged build provenance.' }
+	$ClientHash = (Get-FileHash -LiteralPath $ResolvedClient -Algorithm SHA256).Hash.ToLowerInvariant()
+	$ClientName = [System.IO.Path]::GetFileName($ResolvedClient)
+	$ServerName = [System.IO.Path]::GetFileName($ServerExecutable.Replace('/', '\'))
+	$ClientEntries = @($Provenance.artifacts.inventory | Where-Object { $_.kind -ceq 'client' -and [System.IO.Path]::GetFileName(([string] $_.path).Replace('/', '\')) -ceq $ClientName -and $_.sha256 -ceq $ClientHash })
+	$ServerEntries = @($Provenance.artifacts.inventory | Where-Object { $_.kind -ceq 'server' -and [System.IO.Path]::GetFileName(([string] $_.path).Replace('/', '\')) -ceq $ServerName -and ([string] $_.sha256) -match '^[0-9a-f]{64}$' })
+	if ($ClientEntries.Count -ne 1 -or $ServerEntries.Count -ne 1) { throw 'Packaged executable identity is not uniquely bound by build provenance.' }
+	return [pscustomobject]@{ Path = (Resolve-Path -LiteralPath $Path).Path; Sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+}
+
 foreach ($Placeholder in @('{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}')) { Assert-Placeholder $ServerArguments $Placeholder 'ServerArguments' }
-foreach ($Placeholder in @('{ClientId}','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}')) { Assert-Placeholder $ClientArguments $Placeholder 'ClientArguments' }
+Assert-Placeholder $ServerArguments '{NetworkConfigIdentity}' 'ServerArguments'
+foreach ($Placeholder in @('{ClientId}','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{NetworkConfigIdentity}','{RunId}')) { Assert-Placeholder $ClientArguments $Placeholder 'ClientArguments' }
+if ($ServerLauncherExecutable) {
+	Assert-Placeholder $ServerLauncherArguments '{ServerExecutable}' 'ServerLauncherArguments'
+	Assert-Placeholder $ServerLauncherArguments '{ServerArguments}' 'ServerLauncherArguments'
+} elseif ($ServerLauncherArguments.Count -gt 0) {
+	throw 'ServerLauncherExecutable is required when ServerLauncherArguments are supplied.'
+}
+foreach ($PatternEntry in @(
+	@('ServerReadyPattern', $ServerReadyPattern), @('ServerConnectionPattern', $ServerConnectionPattern),
+	@('ClientReadyPattern', $ClientReadyPattern), @('MovementPattern', $MovementPattern),
+	@('EnemyPattern', $EnemyPattern), @('MeleePattern', $MeleePattern), @('DamagePattern', $DamagePattern),
+	@('RejectionPattern', $RejectionPattern), @('JoinInProgressPattern', $JoinInProgressPattern),
+	@('DisconnectPattern', $DisconnectPattern), @('ReconnectPattern', $ReconnectPattern),
+	@('NetworkConfigPattern', $NetworkConfigPattern)
+)) {
+	foreach ($IdentityPlaceholder in @('{ScenarioId}','{ProfileId}','{RunId}')) { Assert-Placeholder @([string] $PatternEntry[1]) $IdentityPlaceholder ([string] $PatternEntry[0]) }
+}
+foreach ($TokenEntry in @(
+	@('ServerEndpoint', $ServerEndpoint), @('ServerMap', $ServerMap), @('ScenarioId', $ScenarioId),
+	@('ProfileId', $ProfileId), @('NetworkConfigIdentity', $NetworkConfigIdentity), @('RunId', $RunId),
+	@('SourceRevision', $SourceRevision), @('BuildIdentity', $BuildIdentity), @('ToolchainIdentity', $ToolchainIdentity),
+	@('HardwareIdentity', $HardwareIdentity), @('TopologyIdentity', $TopologyIdentity), @('ActorMixIdentity', $ActorMixIdentity)
+)) { Assert-RecordToken ([string] $TokenEntry[0]) ([string] $TokenEntry[1]) }
 
 $ConnectionRegex = [regex]::new((Expand-Pattern $ServerConnectionPattern ''))
 if ($ConnectionRegex.GetGroupNames() -notcontains 'ClientId' -or $ConnectionRegex.GetGroupNames() -notcontains 'ConnectionId') { throw 'ServerConnectionPattern must contain named ClientId and ConnectionId captures.' }
 $RejectionRegex = [regex]::new((Expand-Pattern $RejectionPattern ''))
-if ($RejectionRegex.GetGroupNames() -notcontains 'Reason') { throw 'RejectionPattern must contain a named Reason capture.' }
+foreach ($Capture in @('Category','Reason','ClientId')) { if ($RejectionRegex.GetGroupNames() -notcontains $Capture) { throw "RejectionPattern must contain a named $Capture capture." } }
 $StableRejectionReasons = @('none','stale-sequence','duplicate-sequence','incompatible-version','timestamp-out-of-bounds','impossible-aim-transition','connection-closed','actor-destroyed','malformed-intent','activation-blocked')
+$RequiredRejectionCategories = [ordered]@{
+	'movement' = 'malformed-intent'
+	'aim' = 'impossible-aim-transition'
+	'activation' = 'activation-blocked'
+	'hit' = 'malformed-intent'
+	'cooldown' = 'activation-blocked'
+	'dodge' = 'activation-blocked'
+	'block' = 'activation-blocked'
+	'damage' = 'malformed-intent'
+	'disconnected-command' = 'connection-closed'
+}
 $ReconnectRegex = [regex]::new((Expand-Pattern $ReconnectPattern 'client-1-reconnect'))
 if ($ReconnectRegex.GetGroupNames() -notcontains 'ConnectionId') { throw 'ReconnectPattern must contain a named ConnectionId capture.' }
 
-$ResolvedServer = Resolve-Executable 'ServerExecutable' $ServerExecutable
+$ResolvedServer = if ($ServerLauncherExecutable) { $ServerExecutable } else { Resolve-Executable 'ServerExecutable' $ServerExecutable }
+$ResolvedServerLauncher = if ($ServerLauncherExecutable) { Resolve-Executable 'ServerLauncherExecutable' $ServerLauncherExecutable } else { $ResolvedServer }
 $ResolvedClient = Resolve-Executable 'ClientExecutable' $ClientExecutable
+$PackagedProvenance = if ($EvidenceMode -ceq 'packaged') { Test-PackagedBuildProvenance $PackagedBuildProvenancePath } else { $null }
 $ResolvedLogs = Initialize-EmptyLogRoot $LogRoot
 $EvidencePath = Join-Path $ResolvedLogs 'network-authority-spike-evidence.json'
 $Processes = [System.Collections.Generic.List[object]]::new()
@@ -258,11 +361,14 @@ try {
 	$ServerStdOut = Join-Path $ResolvedLogs 'server.stdout.log'
 	$ServerStdErr = Join-Path $ResolvedLogs 'server.stderr.log'
 	$ExpandedServerArguments = Expand-Arguments $ServerArguments 'server'
-	$ServerHandle = Start-HiddenProcess $ResolvedServer $ExpandedServerArguments $ServerStdOut $ServerStdErr
+	$ServerProcessArguments = if ($ServerLauncherExecutable) { Expand-ServerLauncherArguments $ServerLauncherArguments $ResolvedServer $ExpandedServerArguments } else { $ExpandedServerArguments }
+	$ServerHandle = Start-HiddenProcess $ResolvedServerLauncher $ServerProcessArguments $ServerStdOut $ServerStdErr
 	$Processes.Add($ServerHandle)
 	$ServerProcess = $ServerHandle.Process
 	$ReadyLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'server readiness' (Expand-Pattern $ServerReadyPattern 'server')
 	$Lifecycle.Add((New-Observation 'server_ready' $ServerStdOut $ReadyLine))
+	$NetworkConfigLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'network emulation configuration confirmation' (Expand-Pattern $NetworkConfigPattern 'server')
+	$Lifecycle.Add((New-Observation 'network_config_confirmed' $ServerStdOut $NetworkConfigLine))
 
 	$ClientProcesses = @{}
 	foreach ($ClientId in @('client-1','client-2')) {
@@ -297,18 +403,25 @@ try {
 	$Observations.Add((New-Observation 'melee_resolved' $ServerStdOut $MeleeLine))
 	$DamageLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'authoritative damage' (Expand-Pattern $DamagePattern 'server')
 	$Observations.Add((New-Observation 'damage_applied' $ServerStdOut $DamageLine))
-	$JoinLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'join-in-progress state' (Expand-Pattern $JoinInProgressPattern 'client-2')
-	$Lifecycle.Add((New-Observation 'join_in_progress' $ServerStdOut $JoinLine 'client-2'))
-	$RejectionLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'invalid-claim rejection' (Expand-Pattern $RejectionPattern 'server')
-	$RejectionMatch = $RejectionRegex.Match($RejectionLine)
-	$RejectionReason = $RejectionMatch.Groups['Reason'].Value
-	if ($RejectionReason -cnotin $StableRejectionReasons) { throw "Unsupported rejection reason '$RejectionReason'." }
-	$Rejections.Add([pscustomobject]@{ reason = $RejectionReason; source = $ServerStdOut; detail = $RejectionLine })
+	$JoinLine = Wait-ForMatch $ClientProcesses['client-2'] (Join-Path $ResolvedLogs 'client-2.stdout.log') (Join-Path $ResolvedLogs 'client-2.stderr.log') 'join-in-progress state' (Expand-Pattern $JoinInProgressPattern 'client-2')
+	$Lifecycle.Add((New-Observation 'join_in_progress' (Join-Path $ResolvedLogs 'client-2.stdout.log') $JoinLine 'client-2'))
+	foreach ($Category in @($RequiredRejectionCategories.Keys | Where-Object { $_ -ne 'disconnected-command' })) {
+		$Observed = Wait-ForRejection $ServerProcess $ServerStdOut $ServerStdErr $RejectionRegex $Category
+		$Reason = $Observed.Match.Groups['Reason'].Value
+		$ClientId = $Observed.Match.Groups['ClientId'].Value
+		if ($Reason -cnotin $StableRejectionReasons) { throw "Unsupported rejection reason '$Reason'." }
+		if ($Reason -cne $RequiredRejectionCategories[$Category]) { throw "Rejection category '$Category' used '$Reason' instead of '$($RequiredRejectionCategories[$Category])'." }
+		if ($ClientId -cne 'client-2') { throw "Rejection category '$Category' must be correlated to client-2, not '$ClientId'." }
+		$Rejections.Add([pscustomobject]@{ category = $Category; reason = $Reason; client_id = $ClientId; source = $ServerStdOut; detail = $Observed.Line })
+	}
 
 	Stop-Process -Id $ClientProcesses['client-1'].Id -Force
 	$ClientProcesses['client-1'].WaitForExit()
 	$DisconnectLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'disconnect cleanup' (Expand-Pattern $DisconnectPattern 'client-1')
 	$Lifecycle.Add((New-Observation 'disconnect' $ServerStdOut $DisconnectLine 'client-1'))
+	$DisconnectedRejection = Wait-ForRejection $ServerProcess $ServerStdOut $ServerStdErr $RejectionRegex 'disconnected-command'
+	if ($DisconnectedRejection.Match.Groups['Reason'].Value -cne 'connection-closed' -or $DisconnectedRejection.Match.Groups['ClientId'].Value -cne 'client-1') { throw 'Disconnected command eligibility did not fail closed for client-1.' }
+	$Rejections.Add([pscustomobject]@{ category = 'disconnected-command'; reason = 'connection-closed'; client_id = 'client-1'; source = $ServerStdOut; detail = $DisconnectedRejection.Line })
 
 	$ReconnectId = 'client-1-reconnect'
 	$ReconnectStdOut = Join-Path $ResolvedLogs "$ReconnectId.stdout.log"
@@ -323,12 +436,71 @@ try {
 	if ($ReconnectMatch.Groups['ConnectionId'].Value -eq $Connections['client-1']) { throw 'Reconnect reused the disconnected connection identity.' }
 	$Lifecycle.Add([pscustomobject]@{ event = 'reconnect'; client_id = $ReconnectId; connection_id = $ReconnectMatch.Groups['ConnectionId'].Value; source = $ServerStdOut; detail = $ReconnectLine })
 
+	$ServerLines = @(Get-Content -LiteralPath $ServerStdOut -ErrorAction Stop)
+	$ReadyIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $ServerReadyPattern 'server') 'server-ready'
+	$NetworkConfigIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $NetworkConfigPattern 'server') 'network-config'
+	[void] (Get-SingleMatchIndex $ServerLines (Expand-Pattern $EnemyPattern 'server') 'enemy-spawn')
+	$MeleeIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $MeleePattern 'server') 'melee-resolution'
+	$DamageIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $DamagePattern 'server') 'damage-application'
+	$DisconnectIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $DisconnectPattern 'client-1') 'disconnect'
+	$ReconnectIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $ReconnectPattern 'client-1-reconnect') 'reconnect'
+	$MovementIndexes = @{}
+	foreach ($ClientId in @('client-1','client-2')) { $MovementIndexes[$ClientId] = Get-SingleMatchIndex $ServerLines (Expand-Pattern $MovementPattern $ClientId) "$ClientId movement" }
+	$ConnectionIndexes = @{}
+	for ($Index = 0; $Index -lt $ServerLines.Count; $Index++) {
+		$Match = $ConnectionRegex.Match($ServerLines[$Index])
+		if ($Match.Success) {
+			$ClientId = $Match.Groups['ClientId'].Value
+			if ($ConnectionIndexes.ContainsKey($ClientId)) { throw "Observed duplicate connection record for '$ClientId'." }
+			$ConnectionIndexes[$ClientId] = $Index
+		}
+	}
+	foreach ($ClientId in @('client-1','client-2','client-1-reconnect')) { if (-not $ConnectionIndexes.ContainsKey($ClientId)) { throw "Missing connection record for '$ClientId'." } }
+	if ($ConnectionIndexes.Count -ne 3) { throw "Expected exactly three correlated connection records, observed $($ConnectionIndexes.Count)." }
+
+	$RejectionIndexes = @{}
+	foreach ($Category in $RequiredRejectionCategories.Keys) {
+		$CategoryIndexes = [System.Collections.Generic.List[int]]::new()
+		for ($Index = 0; $Index -lt $ServerLines.Count; $Index++) {
+			$Match = $RejectionRegex.Match($ServerLines[$Index])
+			if ($Match.Success -and $Match.Groups['Category'].Value -ceq $Category) { $CategoryIndexes.Add($Index) }
+		}
+		if ($CategoryIndexes.Count -ne 1) { throw "Expected exactly one '$Category' rejection, observed $($CategoryIndexes.Count)." }
+		$RejectionIndexes[$Category] = $CategoryIndexes[0]
+	}
+	foreach ($ClientId in @('client-1','client-2','client-1-reconnect')) {
+		$ClientLines = @(Get-Content -LiteralPath (Join-Path $ResolvedLogs "$ClientId.stdout.log") -ErrorAction Stop)
+		[void] (Get-SingleMatchIndex $ClientLines (Expand-Pattern $ClientReadyPattern $ClientId) "$ClientId ready")
+		if ($ClientId -eq 'client-2') { [void] (Get-SingleMatchIndex $ClientLines (Expand-Pattern $JoinInProgressPattern $ClientId) 'client-2 join-in-progress') }
+	}
+	$GameplayOrderInvalid = $ReadyIndex -ge $NetworkConfigIndex -or
+		$ReadyIndex -ge $ConnectionIndexes['client-1'] -or
+		$ReadyIndex -ge $ConnectionIndexes['client-2'] -or
+		$ConnectionIndexes['client-1'] -ge $MovementIndexes['client-1'] -or
+		$ConnectionIndexes['client-2'] -ge $MovementIndexes['client-2'] -or
+		$MovementIndexes['client-1'] -ge $MeleeIndex -or
+		$MeleeIndex -ge $DamageIndex
+	if ($GameplayOrderInvalid) {
+		throw 'Authority observations were duplicated or reordered before authoritative damage.'
+	}
+	$GameplayRejectionIndexes = @($RequiredRejectionCategories.Keys | Where-Object { $_ -ne 'disconnected-command' } | ForEach-Object { $RejectionIndexes[$_] })
+	$FirstGameplayRejectionIndex = ($GameplayRejectionIndexes | Measure-Object -Minimum).Minimum
+	$LastGameplayRejectionIndex = ($GameplayRejectionIndexes | Measure-Object -Maximum).Maximum
+	$LifecycleOrderInvalid = $DamageIndex -ge $FirstGameplayRejectionIndex -or
+		$LastGameplayRejectionIndex -ge $DisconnectIndex -or
+		$DisconnectIndex -ge $RejectionIndexes['disconnected-command'] -or
+		$RejectionIndexes['disconnected-command'] -ge $ConnectionIndexes['client-1-reconnect'] -or
+		$ConnectionIndexes['client-1-reconnect'] -ge $ReconnectIndex
+	if ($LifecycleOrderInvalid) {
+		throw 'Authority rejection, disconnect, and reconnect observations were reordered.'
+	}
+
 	Wait-ForObservationInterval @(
 		[pscustomobject]@{ Name = 'server'; Process = $ServerProcess; StandardOutputPath = $ServerStdOut; StandardErrorPath = $ServerStdErr },
 		[pscustomobject]@{ Name = 'client-2'; Process = $ClientProcesses['client-2']; StandardOutputPath = (Join-Path $ResolvedLogs 'client-2.stdout.log'); StandardErrorPath = (Join-Path $ResolvedLogs 'client-2.stderr.log') },
 		[pscustomobject]@{ Name = $ReconnectId; Process = $ReconnectProcess; StandardOutputPath = $ReconnectStdOut; StandardErrorPath = $ReconnectStdErr }
 	) $DurationSeconds
-	$Result = 'passed'
+	$Result = if ($EvidenceMode -ceq 'packaged') { 'passed' } else { 'fixture-passed' }
 }
 catch {
 	$Failure = $_.Exception.Message
@@ -350,11 +522,12 @@ finally {
 		schema_id = 'aetheln.network-authority-evidence'
 		schema_version = 1
 		run_id = $RunId
+		evidence_mode = $EvidenceMode
 		result = $Result
 		failure = $Failure
 		scenario = [ordered]@{ id = $ScenarioId; validation_mode = 'present_time'; action_family = 'melee'; map = $ServerMap; duration_seconds = $DurationSeconds; actor_mix = $ActorMixIdentity; seed = $RunId }
-		provenance = [ordered]@{ source_revision = $SourceRevision; build = $BuildIdentity; toolchain = $ToolchainIdentity; hardware = $HardwareIdentity; topology = $TopologyIdentity }
-		network_profile = [ordered]@{ schema_id = 'aetheln.network-profile'; schema_version = 1; id = $ProfileId; latency_ms = $null; jitter_ms = $null; loss_percent = $null; duplication_percent = $null; reorder_percent = $null; server_tick_hz = $null; history_ms = $null; bandwidth_limit_kbps = $null; capacity_players = $null }
+		provenance = [ordered]@{ source_revision = $SourceRevision; build = $BuildIdentity; toolchain = $ToolchainIdentity; hardware = $HardwareIdentity; topology = $TopologyIdentity; packaged_build_provenance = if ($PackagedProvenance) { [ordered]@{ path = $PackagedProvenance.Path; sha256 = $PackagedProvenance.Sha256 } } else { $null } }
+		network_profile = [ordered]@{ schema_id = 'aetheln.network-profile'; schema_version = 1; id = $ProfileId; runtime_config_identity = $NetworkConfigIdentity; latency_ms = $null; jitter_ms = $null; loss_percent = $null; duplication_percent = $null; reorder_percent = $null; server_tick_hz = $null; history_ms = $null; bandwidth_limit_kbps = $null; capacity_players = $null }
 		clients = @($Clients)
 		lifecycle = @($Lifecycle)
 		observations = @($Observations)
@@ -378,4 +551,4 @@ finally {
 	$Evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
 }
 
-Write-Output "Network authority spike passed. Evidence: '$EvidencePath'."
+Write-Output "Network authority spike $Result. Evidence: '$EvidencePath'."

@@ -4,6 +4,7 @@
 #include "AethelnSpikeAuthorityTypes.h"
 #include "AethelnSpikeEnemy.h"
 #include "AethelnSpikeMeleeAbility.h"
+#include "AethelnNetworkSpikeGameMode.h"
 #include "AbilitySystemComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -31,6 +32,12 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("Damage is structurally absent"), IntentStruct->FindPropertyByName(TEXT("Damage")));
 	TestEqual(TEXT("Activation refusal reason is stable"), FString(LexToString(EAethelnSpikeAttackRejection::ActivationBlocked)), FString(TEXT("activation-blocked")));
 	TestEqual(TEXT("Impossible aim refusal reason is stable"), FString(LexToString(EAethelnSpikeAttackRejection::ImpossibleAimTransition)), FString(TEXT("impossible-aim-transition")));
+
+	TestTrue(TEXT("Initial client one label is accepted only for spike correlation"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("client-1")));
+	TestTrue(TEXT("Initial client two label is accepted only for spike correlation"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("client-2")));
+	TestTrue(TEXT("Reconnect label is accepted only for spike correlation"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("client-1-reconnect")));
+	TestFalse(TEXT("Arbitrary client labels are rejected"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("admin")));
+	TestNotEqual(TEXT("Server connection identities are unique"), AAethelnNetworkSpikeGameMode::MakeScenarioConnectionId(TEXT("run-1"), 1), AAethelnNetworkSpikeGameMode::MakeScenarioConnectionId(TEXT("run-1"), 2));
 
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
 	TestNotNull(TEXT("Behavioral authority world was created"), World);
@@ -68,6 +75,30 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 
 	UAethelnSpikeAuthorityComponent* AuthorityComponent = NewObject<UAethelnSpikeAuthorityComponent>(Attacker, TEXT("TestAuthorityComponent"));
 	AuthorityComponent->RegisterComponent();
+	AuthorityComponent->SetLifecycleReady(true);
+	FAethelnSpikeScenarioProbe Probe;
+	Probe.Sequence = 1;
+	Probe.Category = TEXT("movement");
+	Probe.ClaimedMovement = FVector(100000.0f, 0.0f, 0.0f);
+	TestEqual(TEXT("Impossible movement claim is validated against authoritative position"), AuthorityComponent->ValidateScenarioProbe(Probe), EAethelnSpikeAttackRejection::MalformedIntent);
+	Probe.Category = TEXT("aim");
+	Probe.ClaimedAim = -FVector::ForwardVector;
+	TestEqual(TEXT("Impossible aim claim is validated against authoritative aim"), AuthorityComponent->ValidateScenarioProbe(Probe), EAethelnSpikeAttackRejection::ImpossibleAimTransition);
+	for (const FName ActivationCategory : { FName(TEXT("activation")), FName(TEXT("cooldown")), FName(TEXT("dodge")), FName(TEXT("block")) })
+	{
+		Probe.Category = ActivationCategory;
+		TestEqual(*FString::Printf(TEXT("%s command is unavailable and fails closed"), *ActivationCategory.ToString()), AuthorityComponent->ValidateScenarioProbe(Probe), EAethelnSpikeAttackRejection::ActivationBlocked);
+	}
+	for (const FName OutcomeCategory : { FName(TEXT("hit")), FName(TEXT("damage")) })
+	{
+		Probe.Category = OutcomeCategory;
+		Probe.ClaimedOutcome = OutcomeCategory;
+		Probe.ClaimedMagnitude = 100000.0f;
+		TestEqual(*FString::Printf(TEXT("%s outcome claim is structurally rejected"), *OutcomeCategory.ToString()), AuthorityComponent->ValidateScenarioProbe(Probe), EAethelnSpikeAttackRejection::MalformedIntent);
+	}
+	AuthorityComponent->SetLifecycleReady(false);
+	Probe.Category = TEXT("disconnected-command");
+	TestEqual(TEXT("Closed lifecycle rejects an actual post-disconnect command"), AuthorityComponent->ValidateScenarioProbe(Probe), EAethelnSpikeAttackRejection::ConnectionClosed);
 	AuthorityComponent->SetLifecycleReady(true);
 	UAbilitySystemComponent* AttackerAbilitySystem = Attacker->GetAbilitySystemComponent();
 	UAbilitySystemComponent* TargetAbilitySystem = Target->GetAbilitySystemComponent();
