@@ -198,8 +198,14 @@ The runner supports the Issue #15 WSL topology through
 `ServerLauncherExecutable` and `ServerLauncherArguments`. Launcher arguments
 must contain both `{ServerExecutable}` and `{ServerArguments}`; the latter is
 expanded into the complete packaged-server argument vector. A typical launch
-uses `wsl.exe` with `--exec`, while Windows clients launch directly. All child
-processes remain redirected, monitored, and cleaned up.
+uses `wsl.exe` with `--exec`, while Windows clients launch directly. A launcher
+must also provide `ServerIdentityArguments`, `ServerCleanupArguments`, and a
+`ServerProcessIdPattern` with a named `ProcessId` capture. The identity command
+hashes the exact Linux executable path before launch. The launch command emits
+the Linux descendant PID, and the cleanup command consumes
+`{ServerProcessId}`, terminates that descendant, waits until it is absent, and
+exits nonzero if absence cannot be confirmed. All launcher, control, server,
+and client processes remain hidden, redirected, monitored, and cleaned up.
 
 Every server/client argument vector carries the caller-supplied
 `NetworkConfigIdentity`, and the server must confirm that identity at runtime.
@@ -215,7 +221,9 @@ process exits. Its explicit `fixture` evidence mode can produce only
 `fixture-passed`; synthetic processes can never produce a packaged `passed`
 result. Packaged mode additionally requires the Issue #15 schema-v2 build
 provenance document, an exact clean source revision and build identity, and
-unique inventory hashes binding the selected client and server executables.
+unique inventory hashes binding the selected client and the exact normalized
+launcher-side server path. A basename or merely hash-shaped server inventory
+entry is insufficient.
 It creates the server and client child runtimes through
 `System.Diagnostics.ProcessStartInfo` with `UseShellExecute = $false` and
 `CreateNoWindow = $true`. Packaged authority runs therefore do not create
@@ -226,7 +234,9 @@ asserts the direct and launcher-mediated no-window process configurations, and
 verifies that an early server exit during the interval is rejected. It also
 requires all nine rejection records (the eight invalid-claim categories plus a
 post-disconnect command) and the runtime network-configuration confirmation.
-Those checks validate runner
+The launcher fixture uses a real descendant process, proves it is absent after
+cleanup, fails closed when cleanup confirmation fails, and rejects a server
+digest that does not match the exact provenance inventory entry. Those checks validate runner
 orchestration and failure handling only. They do not replace the real packaged
 dedicated-server-plus-client capture required for multiplayer evidence.
 

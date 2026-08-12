@@ -21,6 +21,9 @@ try {
 	Assert-True ($RunnerSource -notmatch '\bStart-Process\b') 'The runner must not launch runtime children through Start-Process.'
 	Assert-True ($RunnerSource -match 'ServerLauncherExecutable') 'The runner must support an explicit Linux-server launcher executable.'
 	Assert-True ($RunnerSource -match 'ServerLauncherArguments') 'The runner must support explicit Linux-server launcher arguments.'
+	Assert-True ($RunnerSource -match 'ServerIdentityArguments') 'The runner must authenticate the exact launcher-side server executable.'
+	Assert-True ($RunnerSource -match 'ServerCleanupArguments') 'The runner must own launcher-side descendant cleanup.'
+	Assert-True ($RunnerSource -match 'ServerProcessIdPattern') 'The runner must capture a launcher-side descendant process identity.'
 	Assert-True ($RunnerSource -match 'RequiredRejectionCategories') 'The runner must fail closed unless every required invalid-claim category is observed.'
 
 	$RunnerTokens = $null
@@ -127,13 +130,28 @@ Start-Sleep -Seconds 30
 '@
 	$FakeLauncher = Join-Path $FixtureRoot 'fake-launcher.ps1'
 Set-Content -LiteralPath $FakeLauncher -Encoding UTF8 -Value @'
-param([string] $Target, [Parameter(ValueFromRemainingArguments)] [string[]] $Remaining)
+param([string] $Mode, [string] $Target, [Parameter(ValueFromRemainingArguments)] [string[]] $Remaining)
+if ($Mode -eq 'identity') {
+	Write-Output ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $Target)
+	exit 0
+}
+if ($Mode -eq 'cleanup') {
+	$TargetProcess = Get-Process -Id ([int] $Target) -ErrorAction SilentlyContinue
+	if ($TargetProcess) {
+		Stop-Process -Id $TargetProcess.Id -Force
+		$TargetProcess.WaitForExit()
+	}
+	if (Get-Process -Id ([int] $Target) -ErrorAction SilentlyContinue) { exit 43 }
+	if ($env:AETHELN_TEST_CLEANUP_FAIL -eq 'true') { exit 42 }
+	Write-Output "AETHELN_SERVER_DESCENDANT_EXITED=$Target"
+	exit 0
+}
+if ($Mode -ne 'launch') { throw "Unsupported launcher mode '$Mode'." }
 if ($env:AETHELN_TEST_LAUNCHER_FAIL -eq 'true') { exit 41 }
-$FileIndex = [Array]::IndexOf($Remaining, '-File')
-if ($FileIndex -lt 0 -or $FileIndex + 1 -ge $Remaining.Count) { throw 'Expected a -File server launch contract.' }
-$ScriptPath = $Remaining[$FileIndex + 1]
-$ScriptArguments = @($Remaining | Select-Object -Skip ($FileIndex + 2))
-& $ScriptPath @ScriptArguments
+$Child = Start-Process -FilePath $Target -ArgumentList $Remaining -PassThru -NoNewWindow
+Write-Output "AETHELN_SERVER_DESCENDANT_PID=$($Child.Id)"
+$Child.WaitForExit()
+exit $Child.ExitCode
 '@
 
 	function Invoke-FixtureRun(
@@ -144,7 +162,9 @@ $ScriptArguments = @($Remaining | Select-Object -Skip ($FileIndex + 2))
 		[bool] $ExitAfterMarkers = $false,
 		[bool] $UseLauncher = $false,
 		[string] $Behavior = 'normal',
-		[int] $TimeoutSeconds = 8
+		[int] $TimeoutSeconds = 8,
+		[string] $EvidenceMode = 'fixture',
+		[string] $PackagedBuildProvenancePath
 	) {
 		$Arguments = @{
 			ServerExecutable = $PowerShellExecutable
@@ -163,7 +183,7 @@ $ScriptArguments = @($Remaining | Select-Object -Skip ($FileIndex + 2))
 			HardwareIdentity = 'fixture-host'
 			TopologyIdentity = 'one-server-two-clients-local-fixture'
 			ActorMixIdentity = 'network-authority.actor-mix.v1'
-			EvidenceMode = 'fixture'
+			EvidenceMode = $EvidenceMode
 			DurationSeconds = $DurationSeconds
 			LogRoot = $FixtureLogRoot
 			ServerReadyPattern = 'AUTHORITY server_ready.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
@@ -182,8 +202,12 @@ $ScriptArguments = @($Remaining | Select-Object -Skip ($FileIndex + 2))
 		}
 		if ($UseLauncher) {
 			$Arguments.ServerLauncherExecutable = $PowerShellExecutable
-			$Arguments.ServerLauncherArguments = @('-NoProfile', '-File', $FakeLauncher, '{ServerExecutable}', '{ServerArguments}')
+			$Arguments.ServerLauncherArguments = @('-NoProfile', '-File', $FakeLauncher, 'launch', '{ServerExecutable}', '{ServerArguments}')
+			$Arguments.ServerIdentityArguments = @('-NoProfile', '-File', $FakeLauncher, 'identity', '{ServerExecutable}')
+			$Arguments.ServerCleanupArguments = @('-NoProfile', '-File', $FakeLauncher, 'cleanup', '{ServerProcessId}')
+			$Arguments.ServerProcessIdPattern = 'AETHELN_SERVER_DESCENDANT_PID=(?<ProcessId>[1-9][0-9]*)'
 		}
+		if ($PackagedBuildProvenancePath) { $Arguments.PackagedBuildProvenancePath = $PackagedBuildProvenancePath }
 		& $Script @Arguments
 	}
 
@@ -275,7 +299,42 @@ $ScriptArguments = @($Remaining | Select-Object -Skip ($FileIndex + 2))
 	Invoke-FixtureRun $LauncherLogRoot 'fixture-launcher' 'malformed-intent' 1 $false $true
 	$LauncherEvidence = Get-Content -LiteralPath (Join-Path $LauncherLogRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
 	Assert-True ($LauncherEvidence.result -eq 'fixture-passed') 'The explicit server launcher topology must preserve fixture validation without claiming packaged success.'
-	Write-Output 'PASS: explicit Linux-server launcher indirection remains hidden, redirected, monitored, and cleaned up'
+	$LauncherDescendants = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
+		$_.ExecutablePath -eq $PowerShellExecutable -and
+		$_.CommandLine -and
+		$_.CommandLine.IndexOf($FakeRuntime, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+	})
+	Assert-True ($LauncherDescendants.Count -eq 0) 'Launcher-side server descendants must be confirmed stopped, not merely detached from the launcher.'
+	Write-Output 'PASS: explicit Linux-server launcher indirection remains hidden, redirected, monitored, provenance-ready, and descendant-cleaned'
+
+	$env:AETHELN_TEST_CLEANUP_FAIL = 'true'
+	$CleanupFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'cleanup-failure') -FixtureRunId 'fixture-cleanup-failure' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true
+	} catch { $CleanupFailure = $_.Exception.Message }
+	Remove-Item -LiteralPath Env:AETHELN_TEST_CLEANUP_FAIL -ErrorAction Ignore
+	Assert-True ($CleanupFailure -match 'server descendant cleanup.*exited with code 42') "A launcher-side cleanup failure must fail the run. Actual: $CleanupFailure"
+	$CleanupFailureEvidence = Get-Content -LiteralPath (Join-Path $FixtureRoot 'cleanup-failure/network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($CleanupFailureEvidence.result -eq 'failed') 'Cleanup failure must downgrade otherwise complete evidence to failed.'
+	Write-Output 'PASS: launcher-side descendant cleanup failure is observable and fails closed'
+
+	$ProvenancePath = Join-Path $FixtureRoot 'mismatched-server-provenance.json'
+	$ClientSha256 = (Get-FileHash -LiteralPath $PowerShellExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+	[ordered]@{
+		schemaVersion = 2
+		source = [ordered]@{ revision = 'fixture-revision'; clean = $true }
+		host = [ordered]@{ buildIdentity = 'fixture-build' }
+		artifacts = [ordered]@{ inventory = @(
+			[ordered]@{ kind = 'client'; path = $PowerShellExecutable; sha256 = $ClientSha256 },
+			[ordered]@{ kind = 'server'; path = $PowerShellExecutable.Replace('\', '/'); sha256 = ('0' * 64) }
+		) }
+	} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ProvenancePath -Encoding UTF8
+	$ServerIdentityFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'server-identity-mismatch') -FixtureRunId 'fixture-server-identity-mismatch' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $ProvenancePath
+	} catch { $ServerIdentityFailure = $_.Exception.Message }
+	Assert-True ($ServerIdentityFailure -match 'Packaged executable identity is not uniquely bound') 'Packaged evidence must hash and authenticate the exact launcher-side server path.'
+	Write-Output 'PASS: mismatched launcher-side server digest cannot use unrelated packaged provenance'
 
 	$NegativeScenarios = @(
 		@{ Name = 'missing'; Behavior = 'missing-damage'; Failure = 'waiting for authoritative damage' },
@@ -295,7 +354,7 @@ $ScriptArguments = @($Remaining | Select-Object -Skip ($FileIndex + 2))
 	$LauncherFailure = $null
 	try { Invoke-FixtureRun (Join-Path $FixtureRoot 'launcher-failure') 'fixture-launcher-failure' 'malformed-intent' 1 $false $true 'normal' 2 } catch { $LauncherFailure = $_.Exception.Message }
 	Remove-Item -LiteralPath Env:AETHELN_TEST_LAUNCHER_FAIL -ErrorAction Ignore
-	Assert-True ($LauncherFailure -match 'Process exited with code 41 while waiting for server readiness') 'A launcher failure must fail before gameplay evidence can pass.'
+	Assert-True ($LauncherFailure -match 'Process exited with code 41 while waiting for server descendant process identity') "A launcher failure must fail before gameplay evidence can pass. Actual: $LauncherFailure"
 	Write-Output 'PASS: launcher failure cannot fabricate a successful authority capture'
 
 	$FabricatedPackagedFailure = $null

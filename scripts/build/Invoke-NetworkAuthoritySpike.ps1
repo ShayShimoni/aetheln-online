@@ -15,6 +15,9 @@ param(
 	[Parameter(Mandatory)] [string[]] $ServerArguments,
 	[ValidateNotNullOrEmpty()] [string] $ServerLauncherExecutable,
 	[string[]] $ServerLauncherArguments = @(),
+	[string[]] $ServerIdentityArguments = @(),
+	[string[]] $ServerCleanupArguments = @(),
+	[string] $ServerProcessIdPattern,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ClientExecutable,
 	[Parameter(Mandatory)] [string[]] $ClientArguments,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ServerEndpoint,
@@ -158,6 +161,12 @@ function Expand-ServerLauncherArguments([string[]] $Arguments, [string] $Resolve
 	return @($Expanded)
 }
 
+function Expand-ServerControlArguments([string[]] $Arguments, [string] $ResolvedServerExecutable, [string] $ServerProcessId = '') {
+	return @($Arguments | ForEach-Object {
+		(Expand-Values $_ 'server').Replace('{ServerExecutable}', $ResolvedServerExecutable).Replace('{ServerProcessId}', $ServerProcessId)
+	})
+}
+
 function ConvertTo-ProcessArgument([string] $Argument) {
 	$Quoted = [regex]::Replace($Argument, '(\\*)"', '$1$1\"')
 	$Quoted = [regex]::Replace($Quoted, '(\\+)$', '$1$1')
@@ -216,6 +225,33 @@ function Wait-ForMatch([System.Diagnostics.Process] $Process, [string] $Path, [s
 		Start-Sleep -Milliseconds 100
 	} while ([DateTime]::UtcNow -lt $Deadline)
 	throw "Timed out after $TimeoutSeconds seconds waiting for $Description in '$Path' (pattern '$Pattern')."
+}
+
+function Invoke-HiddenCommand([string] $Executable, [string[]] $Arguments, [string] $StandardOutputPath, [string] $StandardErrorPath, [string] $Description) {
+	$Handle = Start-HiddenProcess $Executable $Arguments $StandardOutputPath $StandardErrorPath
+	$Process = $Handle.Process
+	try {
+		if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
+			Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+			$Process.WaitForExit()
+			throw "Timed out after $TimeoutSeconds seconds waiting for $Description."
+		}
+		$Process.WaitForExit()
+		if ($Process.ExitCode -ne 0) {
+			$ErrorText = if (Test-Path -LiteralPath $StandardErrorPath) { [string] (Get-Content -LiteralPath $StandardErrorPath -Raw -ErrorAction SilentlyContinue) } else { '' }
+			throw "$Description exited with code $($Process.ExitCode). Standard error: $ErrorText"
+		}
+		return [pscustomobject]@{
+			Output = if (Test-Path -LiteralPath $StandardOutputPath) { Get-Content -LiteralPath $StandardOutputPath -Raw -ErrorAction Stop } else { '' }
+			Error = if (Test-Path -LiteralPath $StandardErrorPath) { Get-Content -LiteralPath $StandardErrorPath -Raw -ErrorAction SilentlyContinue } else { '' }
+		}
+	}
+	finally {
+		try { $Process.CancelOutputRead() } catch { }
+		try { $Process.CancelErrorRead() } catch { }
+		$Handle.Capture.Dispose()
+		$Process.Dispose()
+	}
 }
 
 function Wait-ForRejection([System.Diagnostics.Process] $Process, [string] $Path, [string] $ErrorPath, [regex] $Regex, [string] $Category) {
@@ -283,7 +319,7 @@ function Assert-RecordToken([string] $Name, [string] $Value) {
 	if ($Value -notmatch '^\S+$') { throw "$Name must be one non-empty structured-record token without whitespace." }
 }
 
-function Test-PackagedBuildProvenance([string] $Path) {
+function Test-PackagedBuildProvenance([string] $Path, [string] $ActualServerSha256) {
 	if (-not $Path) { throw 'PackagedBuildProvenancePath is required for packaged evidence.' }
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Packaged build provenance '$Path' does not exist." }
 	try { $Provenance = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { throw "Packaged build provenance '$Path' is invalid JSON: $($_.Exception.Message)" }
@@ -291,9 +327,14 @@ function Test-PackagedBuildProvenance([string] $Path) {
 	if ($Provenance.host.buildIdentity -cne $BuildIdentity) { throw 'BuildIdentity does not match packaged build provenance.' }
 	$ClientHash = (Get-FileHash -LiteralPath $ResolvedClient -Algorithm SHA256).Hash.ToLowerInvariant()
 	$ClientName = [System.IO.Path]::GetFileName($ResolvedClient)
-	$ServerName = [System.IO.Path]::GetFileName($ServerExecutable.Replace('/', '\'))
+	$ExpectedServerPath = if ($ServerLauncherExecutable) { $ServerExecutable } else { $ResolvedServer }
+	$ExpectedServerPath = $ExpectedServerPath.Replace('\', '/')
 	$ClientEntries = @($Provenance.artifacts.inventory | Where-Object { $_.kind -ceq 'client' -and [System.IO.Path]::GetFileName(([string] $_.path).Replace('/', '\')) -ceq $ClientName -and $_.sha256 -ceq $ClientHash })
-	$ServerEntries = @($Provenance.artifacts.inventory | Where-Object { $_.kind -ceq 'server' -and [System.IO.Path]::GetFileName(([string] $_.path).Replace('/', '\')) -ceq $ServerName -and ([string] $_.sha256) -match '^[0-9a-f]{64}$' })
+	$ServerEntries = @($Provenance.artifacts.inventory | Where-Object {
+		$_.kind -ceq 'server' -and
+		([string] $_.path).Replace('\', '/') -ceq $ExpectedServerPath -and
+		([string] $_.sha256).ToLowerInvariant() -ceq $ActualServerSha256
+	})
 	if ($ClientEntries.Count -ne 1 -or $ServerEntries.Count -ne 1) { throw 'Packaged executable identity is not uniquely bound by build provenance.' }
 	return [pscustomobject]@{ Path = (Resolve-Path -LiteralPath $Path).Path; Sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
@@ -304,8 +345,15 @@ foreach ($Placeholder in @('{ClientId}','{ServerEndpoint}','{ServerMap}','{Scena
 if ($ServerLauncherExecutable) {
 	Assert-Placeholder $ServerLauncherArguments '{ServerExecutable}' 'ServerLauncherArguments'
 	Assert-Placeholder $ServerLauncherArguments '{ServerArguments}' 'ServerLauncherArguments'
+	Assert-Placeholder $ServerCleanupArguments '{ServerProcessId}' 'ServerCleanupArguments'
+	if (-not $ServerProcessIdPattern) { throw 'ServerProcessIdPattern is required when ServerLauncherExecutable is supplied.' }
+	$ServerProcessIdRegex = [regex]::new($ServerProcessIdPattern)
+	if ($ServerProcessIdRegex.GetGroupNames() -notcontains 'ProcessId') { throw 'ServerProcessIdPattern must contain a named ProcessId capture.' }
+	if ($EvidenceMode -ceq 'packaged') { Assert-Placeholder $ServerIdentityArguments '{ServerExecutable}' 'ServerIdentityArguments' }
 } elseif ($ServerLauncherArguments.Count -gt 0) {
 	throw 'ServerLauncherExecutable is required when ServerLauncherArguments are supplied.'
+} elseif ($ServerIdentityArguments.Count -gt 0 -or $ServerCleanupArguments.Count -gt 0 -or $ServerProcessIdPattern) {
+	throw 'ServerLauncherExecutable is required when server identity or cleanup controls are supplied.'
 }
 foreach ($PatternEntry in @(
 	@('ServerReadyPattern', $ServerReadyPattern), @('ServerConnectionPattern', $ServerConnectionPattern),
@@ -346,8 +394,23 @@ if ($ReconnectRegex.GetGroupNames() -notcontains 'ConnectionId') { throw 'Reconn
 $ResolvedServer = if ($ServerLauncherExecutable) { $ServerExecutable } else { Resolve-Executable 'ServerExecutable' $ServerExecutable }
 $ResolvedServerLauncher = if ($ServerLauncherExecutable) { Resolve-Executable 'ServerLauncherExecutable' $ServerLauncherExecutable } else { $ResolvedServer }
 $ResolvedClient = Resolve-Executable 'ClientExecutable' $ClientExecutable
-$PackagedProvenance = if ($EvidenceMode -ceq 'packaged') { Test-PackagedBuildProvenance $PackagedBuildProvenancePath } else { $null }
 $ResolvedLogs = Initialize-EmptyLogRoot $LogRoot
+$ActualServerSha256 = if ($EvidenceMode -ceq 'packaged') {
+	if ($ServerLauncherExecutable) {
+		$IdentityCommand = Invoke-HiddenCommand `
+			$ResolvedServerLauncher `
+			(Expand-ServerControlArguments $ServerIdentityArguments $ResolvedServer) `
+			(Join-Path $ResolvedLogs 'server.identity.stdout.log') `
+			(Join-Path $ResolvedLogs 'server.identity.stderr.log') `
+			'server executable identity probe'
+		$IdentityMatches = @([regex]::Matches($IdentityCommand.Output, '(?im)^(?<Sha256>[0-9a-f]{64})(?:\s+|\s+\*)'))
+		if ($IdentityMatches.Count -ne 1) { throw 'Server identity probe must emit exactly one SHA-256 record.' }
+		$IdentityMatches[0].Groups['Sha256'].Value.ToLowerInvariant()
+	} else {
+		(Get-FileHash -LiteralPath $ResolvedServer -Algorithm SHA256).Hash.ToLowerInvariant()
+	}
+} else { $null }
+$PackagedProvenance = if ($EvidenceMode -ceq 'packaged') { Test-PackagedBuildProvenance $PackagedBuildProvenancePath $ActualServerSha256 } else { $null }
 $EvidencePath = Join-Path $ResolvedLogs 'network-authority-spike-evidence.json'
 $Processes = [System.Collections.Generic.List[object]]::new()
 $Lifecycle = [System.Collections.Generic.List[object]]::new()
@@ -356,6 +419,8 @@ $Rejections = [System.Collections.Generic.List[object]]::new()
 $Clients = [System.Collections.Generic.List[object]]::new()
 $Result = 'failed'
 $Failure = $null
+$CleanupFailure = $null
+$ServerDescendantProcessId = $null
 
 try {
 	$ServerStdOut = Join-Path $ResolvedLogs 'server.stdout.log'
@@ -365,6 +430,12 @@ try {
 	$ServerHandle = Start-HiddenProcess $ResolvedServerLauncher $ServerProcessArguments $ServerStdOut $ServerStdErr
 	$Processes.Add($ServerHandle)
 	$ServerProcess = $ServerHandle.Process
+	if ($ServerLauncherExecutable) {
+		$ProcessIdLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'server descendant process identity' $ServerProcessIdPattern
+		$ProcessIdMatch = $ServerProcessIdRegex.Match($ProcessIdLine)
+		$ServerDescendantProcessId = $ProcessIdMatch.Groups['ProcessId'].Value
+		if ($ServerDescendantProcessId -notmatch '^[1-9][0-9]*$') { throw 'Server launcher emitted an invalid descendant process identity.' }
+	}
 	$ReadyLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'server readiness' (Expand-Pattern $ServerReadyPattern 'server')
 	$Lifecycle.Add((New-Observation 'server_ready' $ServerStdOut $ReadyLine))
 	$NetworkConfigLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'network emulation configuration confirmation' (Expand-Pattern $NetworkConfigPattern 'server')
@@ -507,6 +578,21 @@ catch {
 	throw
 }
 finally {
+	if ($ServerLauncherExecutable -and $ServerDescendantProcessId) {
+		try {
+			[void] (Invoke-HiddenCommand `
+				$ResolvedServerLauncher `
+				(Expand-ServerControlArguments $ServerCleanupArguments $ResolvedServer $ServerDescendantProcessId) `
+				(Join-Path $ResolvedLogs 'server.cleanup.stdout.log') `
+				(Join-Path $ResolvedLogs 'server.cleanup.stderr.log') `
+				"server descendant cleanup for process $ServerDescendantProcessId")
+		}
+		catch {
+			$CleanupFailure = $_.Exception.Message
+			$Result = 'failed'
+			if (-not $Failure) { $Failure = $CleanupFailure }
+		}
+	}
 	foreach ($Handle in $Processes) {
 		$Process = $Handle.Process
 		try {
@@ -549,6 +635,7 @@ finally {
 		unsupported_capabilities = @('projectile','block','dodge','rewind')
 	}
 	$Evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
+	if ($CleanupFailure) { throw "Server cleanup failed: $CleanupFailure" }
 }
 
 Write-Output "Network authority spike $Result. Evidence: '$EvidencePath'."
