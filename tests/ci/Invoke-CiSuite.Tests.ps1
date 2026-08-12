@@ -31,11 +31,29 @@ function Invoke-Runner {
 
 	$PreviousPreference = $ErrorActionPreference
 	$ErrorActionPreference = 'Continue'
+	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+	$StartInfo.FileName = (Get-Command powershell.exe -ErrorAction Stop).Source
+	$StartInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`" -ChecksPath `"$ManifestPath`" -ReportPath `"$ReportPath`""
+	$StartInfo.WorkingDirectory = $RepositoryRoot
+	$StartInfo.UseShellExecute = $false
+	$StartInfo.CreateNoWindow = $true
+	$StartInfo.RedirectStandardOutput = $true
+	$StartInfo.RedirectStandardError = $true
+	$Process = [System.Diagnostics.Process]::new()
+	$Process.StartInfo = $StartInfo
 	try {
-		$Output = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Runner -ChecksPath $ManifestPath -ReportPath $ReportPath 2>&1 | ForEach-Object { "$_" })
-		$ExitCode = $LASTEXITCODE
+		if (-not $Process.Start()) { throw 'Could not start the CI runner fixture.' }
+		$StandardOutput = $Process.StandardOutput.ReadToEndAsync()
+		$StandardError = $Process.StandardError.ReadToEndAsync()
+		$Process.WaitForExit()
+		$Output = @(
+			@($StandardOutput.GetAwaiter().GetResult() -split "`r?`n")
+			@($StandardError.GetAwaiter().GetResult() -split "`r?`n")
+		) | Where-Object { -not [string]::IsNullOrEmpty($_) }
+		$ExitCode = $Process.ExitCode
 	}
 	finally {
+		$Process.Dispose()
 		$ErrorActionPreference = $PreviousPreference
 	}
 	return @{ Output = $Output; ExitCode = $ExitCode }
@@ -53,6 +71,9 @@ function Assert-CheckShape {
 
 try {
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
+	$RunnerSource = Get-Content -LiteralPath $Runner -Raw
+	Assert-True -Condition ($RunnerSource -match 'CreateNoWindow\s*=\s*\$true') -Message 'CI child PowerShell processes must be created without windows.'
+	Assert-True -Condition ($RunnerSource -notmatch '&\s+powershell\.exe\s+@ArgumentList') -Message 'CI checks must not use direct visible powershell.exe child invocation.'
 
 	$PassScript = Join-Path $FixtureRoot 'pass.ps1'
 	[System.IO.File]::WriteAllText($PassScript, "Write-Output 'fixture pass output'`nexit 0`n")
@@ -107,6 +128,7 @@ try {
 
 	$RequiredRun = Invoke-Runner -ManifestPath $RequiredManifest -ReportPath $RequiredReport
 	Assert-True -Condition ($RequiredRun.ExitCode -ne 0) -Message 'A required-check failure must exit nonzero.'
+	Assert-True -Condition (Test-Path -LiteralPath $RequiredReport) -Message "A required-check failure must still write its report. Output: $($RequiredRun.Output -join "`n")"
 	$Report = (Get-Content -LiteralPath $RequiredReport -Raw) | ConvertFrom-Json
 	$FailCheck = @($Report.checks | Where-Object { $_.name -eq 'fixture-required-fail' })[0]
 	Assert-True -Condition ($FailCheck.status -eq 'failed' -and $FailCheck.tier -eq 'required') -Message 'The required failure must be reported as failed.'

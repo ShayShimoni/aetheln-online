@@ -147,7 +147,7 @@ public static class CLASS {
 
 	$ChildLogRoot = Join-Path $FixtureRoot 'child-process'
 	$DelayedMarker = Join-Path $PackageRoot 'success-delayed-child.pid'
-	$PreexistingRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $ChildLogRoot 'smoke-evidence.jsonl'), $DelayedMarker) -PassThru
+	$PreexistingRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $ChildLogRoot 'smoke-evidence.jsonl'), $DelayedMarker) -WindowStyle Hidden -PassThru
 	try {
 		$ReadyDeadline = [DateTime]::UtcNow.AddSeconds(5)
 		while (-not (Test-Path -LiteralPath "$DelayedMarker.ready") -and [DateTime]::UtcNow -lt $ReadyDeadline) { Start-Sleep -Milliseconds 50 }
@@ -168,7 +168,7 @@ public static class CLASS {
 
 	$FailureLogRoot = Join-Path $FixtureRoot 'child-process-failure'
 	$FailureDelayedMarker = Join-Path $PackageRoot 'failure-delayed-child.pid'
-	$PreexistingFailureRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $FailureLogRoot 'smoke-evidence.jsonl'), $FailureDelayedMarker) -PassThru
+	$PreexistingFailureRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $FailureLogRoot 'smoke-evidence.jsonl'), $FailureDelayedMarker) -WindowStyle Hidden -PassThru
 	try {
 		$ReadyDeadline = [DateTime]::UtcNow.AddSeconds(5)
 		while (-not (Test-Path -LiteralPath "$FailureDelayedMarker.ready") -and [DateTime]::UtcNow -lt $ReadyDeadline) { Start-Sleep -Milliseconds 50 }

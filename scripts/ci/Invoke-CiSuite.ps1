@@ -20,6 +20,7 @@ $DefaultChecks = @(
 	@{ name = 'source-control-policy'; tier = 'required'; script = 'scripts/tests/Test-SourceControlPolicy.ps1' },
 	@{ name = 'build-packaged-artifacts-tests'; tier = 'required'; script = 'tests/build/Build-PackagedArtifacts.Tests.ps1' },
 	@{ name = 'packaged-smoke-test-tests'; tier = 'required'; script = 'tests/build/Invoke-PackagedSmokeTest.Tests.ps1' },
+	@{ name = 'network-authority-spike-tests'; tier = 'required'; script = 'tests/build/Invoke-NetworkAuthoritySpike.Tests.ps1' },
 	@{ name = 'server-cook-reference-tests'; tier = 'required'; script = 'tests/build/Validate-ServerCookReferences.Tests.ps1' },
 	@{ name = 'target-composition-tests'; tier = 'required'; script = 'tests/build/Validate-TargetComposition.Tests.ps1' },
 	@{ name = 'build-provenance-tests'; tier = 'required'; script = 'tests/build/Write-BuildProvenance.Tests.ps1' },
@@ -70,6 +71,41 @@ function Get-OutputTail {
 	return ($Lines -join "`n")
 }
 
+function Invoke-HiddenPowerShell {
+	param(
+		[Parameter(Mandatory)][string] $Arguments,
+		[Parameter(Mandatory)][string] $WorkingDirectory
+	)
+
+	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+	$StartInfo.FileName = (Get-Command powershell.exe -ErrorAction Stop).Source
+	$StartInfo.Arguments = $Arguments
+	$StartInfo.WorkingDirectory = $WorkingDirectory
+	$StartInfo.UseShellExecute = $false
+	$StartInfo.CreateNoWindow = $true
+	$StartInfo.RedirectStandardOutput = $true
+	$StartInfo.RedirectStandardError = $true
+
+	$Process = [System.Diagnostics.Process]::new()
+	$Process.StartInfo = $StartInfo
+	try {
+		if (-not $Process.Start()) {
+			throw 'Could not start the CI child PowerShell process.'
+		}
+		$StandardOutput = $Process.StandardOutput.ReadToEndAsync()
+		$StandardError = $Process.StandardError.ReadToEndAsync()
+		$Process.WaitForExit()
+		$Output = @(
+			@($StandardOutput.GetAwaiter().GetResult() -split "`r?`n")
+			@($StandardError.GetAwaiter().GetResult() -split "`r?`n")
+		) | Where-Object { -not [string]::IsNullOrEmpty($_) }
+		return @{ Output = @($Output); ExitCode = $Process.ExitCode }
+	}
+	finally {
+		$Process.Dispose()
+	}
+}
+
 if ($ChecksPath) {
 	$ParsedChecks = Get-Content -LiteralPath $ChecksPath -Raw | ConvertFrom-Json
 	$Checks = @($ParsedChecks)
@@ -105,11 +141,12 @@ foreach ($Check in $Checks) {
 
 	if ($Script) {
 		$ScriptPath = if ([IO.Path]::IsPathRooted($Script)) { $Script } else { Join-Path $RepositoryRoot ($Script -replace '/', [IO.Path]::DirectorySeparatorChar) }
-		$ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath)
+		$ProcessArguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
 		$CommandText = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
 	}
 	else {
-		$ArgumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $Command)
+		$EncodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Command))
+		$ProcessArguments = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $EncodedCommand"
 		$CommandText = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"$Command`""
 	}
 
@@ -127,16 +164,9 @@ foreach ($Check in $Checks) {
 	}
 
 	$Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-	Push-Location $RepositoryRoot
-	$ErrorActionPreference = 'Continue'
-	try {
-		$Output = @(& powershell.exe @ArgumentList 2>&1 | ForEach-Object { "$_" })
-		$ExitCode = $LASTEXITCODE
-	}
-	finally {
-		$ErrorActionPreference = 'Stop'
-		Pop-Location
-	}
+	$ChildResult = Invoke-HiddenPowerShell -Arguments $ProcessArguments -WorkingDirectory $RepositoryRoot
+	$Output = @($ChildResult.Output)
+	$ExitCode = $ChildResult.ExitCode
 	$Stopwatch.Stop()
 
 	$Status = if ($ExitCode -eq 0) { 'passed' } else { 'failed' }
