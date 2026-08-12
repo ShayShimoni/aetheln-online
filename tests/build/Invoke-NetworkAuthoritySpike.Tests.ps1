@@ -336,6 +336,23 @@ exit $Child.ExitCode
 	Assert-True ($ServerIdentityFailure -match 'Packaged executable identity is not uniquely bound') 'Packaged evidence must hash and authenticate the exact launcher-side server path.'
 	Write-Output 'PASS: mismatched launcher-side server digest cannot use unrelated packaged provenance'
 
+	$MismatchedClientProvenancePath = Join-Path $FixtureRoot 'mismatched-client-path-provenance.json'
+	[ordered]@{
+		schemaVersion = 2
+		source = [ordered]@{ revision = 'fixture-revision'; clean = $true }
+		host = [ordered]@{ buildIdentity = 'fixture-build' }
+		artifacts = [ordered]@{ inventory = @(
+			[ordered]@{ kind = 'client'; path = ('C:/unrelated/' + [System.IO.Path]::GetFileName($PowerShellExecutable)); sha256 = $ClientSha256 },
+			[ordered]@{ kind = 'server'; path = $PowerShellExecutable.Replace('\', '/'); sha256 = $ClientSha256 }
+		) }
+	} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $MismatchedClientProvenancePath -Encoding UTF8
+	$ClientPathFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'client-path-mismatch') -FixtureRunId 'fixture-client-path-mismatch' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $MismatchedClientProvenancePath
+	} catch { $ClientPathFailure = $_.Exception.Message }
+	Assert-True ($ClientPathFailure -match 'Packaged executable identity is not uniquely bound') 'Packaged evidence must bind the exact selected-client path, not only filename and digest.'
+	Write-Output 'PASS: same-named client at an unrelated path cannot use packaged provenance'
+
 	$NegativeScenarios = @(
 		@{ Name = 'missing'; Behavior = 'missing-damage'; Failure = 'waiting for authoritative damage' },
 		@{ Name = 'duplicate'; Behavior = 'duplicate-damage'; Failure = 'Expected exactly one damage-application record, observed 2' },

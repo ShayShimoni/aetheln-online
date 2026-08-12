@@ -326,10 +326,14 @@ function Test-PackagedBuildProvenance([string] $Path, [string] $ActualServerSha2
 	if ($Provenance.schemaVersion -ne 2 -or $Provenance.source.revision -cne $SourceRevision -or $Provenance.source.clean -ne $true) { throw 'Packaged build provenance does not bind a clean exact source revision.' }
 	if ($Provenance.host.buildIdentity -cne $BuildIdentity) { throw 'BuildIdentity does not match packaged build provenance.' }
 	$ClientHash = (Get-FileHash -LiteralPath $ResolvedClient -Algorithm SHA256).Hash.ToLowerInvariant()
-	$ClientName = [System.IO.Path]::GetFileName($ResolvedClient)
+	$ExpectedClientPath = $ResolvedClient.Replace('\', '/')
 	$ExpectedServerPath = if ($ServerLauncherExecutable) { $ServerExecutable } else { $ResolvedServer }
 	$ExpectedServerPath = $ExpectedServerPath.Replace('\', '/')
-	$ClientEntries = @($Provenance.artifacts.inventory | Where-Object { $_.kind -ceq 'client' -and [System.IO.Path]::GetFileName(([string] $_.path).Replace('/', '\')) -ceq $ClientName -and $_.sha256 -ceq $ClientHash })
+	$ClientEntries = @($Provenance.artifacts.inventory | Where-Object {
+		$_.kind -ceq 'client' -and
+		([string] $_.path).Replace('\', '/') -ceq $ExpectedClientPath -and
+		([string] $_.sha256).ToLowerInvariant() -ceq $ClientHash
+	})
 	$ServerEntries = @($Provenance.artifacts.inventory | Where-Object {
 		$_.kind -ceq 'server' -and
 		([string] $_.path).Replace('\', '/') -ceq $ExpectedServerPath -and
