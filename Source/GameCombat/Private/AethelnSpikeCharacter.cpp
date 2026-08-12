@@ -44,10 +44,10 @@ void AAethelnSpikeCharacter::Tick(float DeltaSeconds)
 	}
 
 	AAethelnSpikeEnemy* ObservedEnemy = nullptr;
-	for (TActorIterator<AAethelnSpikeEnemy> EnemyIt(GetWorld()); EnemyIt; ++EnemyIt)
+	TActorIterator<AAethelnSpikeEnemy> EnemyIt(GetWorld());
+	if (EnemyIt)
 	{
 		ObservedEnemy = *EnemyIt;
-		break;
 	}
 	if (ObservedEnemy != nullptr && ScenarioClientId == TEXT("client-2") && !bJoinInProgressObserved)
 	{
