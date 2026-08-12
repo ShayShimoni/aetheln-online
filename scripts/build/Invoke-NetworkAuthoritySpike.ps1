@@ -18,6 +18,7 @@ param(
 	[string[]] $ServerIdentityArguments = @(),
 	[string[]] $ServerCleanupArguments = @(),
 	[string] $ServerProcessIdPattern,
+	[string] $ServerProvenanceExecutable,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ClientExecutable,
 	[Parameter(Mandatory)] [string[]] $ClientArguments,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ServerEndpoint,
@@ -319,27 +320,116 @@ function Assert-RecordToken([string] $Name, [string] $Value) {
 	if ($Value -notmatch '^\S+$') { throw "$Name must be one non-empty structured-record token without whitespace." }
 }
 
+function Resolve-ProvenanceArchiveRoot([string] $Name, [string] $Path) {
+	if (-not $Path -or -not [System.IO.Path]::IsPathRooted($Path)) { throw "$Name must be an absolute archive root." }
+	if (-not (Test-Path -LiteralPath $Path -PathType Container)) { throw "$Name '$Path' does not exist or is not a directory." }
+	return [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Path).Path)
+}
+
+function Get-ArchivePrefix([string] $ArchiveRoot) {
+	$Trimmed = $ArchiveRoot.TrimEnd([char[]] @('\', '/'))
+	if ($Trimmed -match '^[A-Za-z]:$') { return $Trimmed + '\' }
+	return $Trimmed + [System.IO.Path]::DirectorySeparatorChar
+}
+
+function Get-ProvenancePathComparison([char] $DirectorySeparator = [System.IO.Path]::DirectorySeparatorChar) {
+	if ($DirectorySeparator -ceq '\') { return [System.StringComparison]::OrdinalIgnoreCase }
+	return [System.StringComparison]::Ordinal
+}
+
+function Resolve-ArchiveInventoryPath([string] $ArchiveRoot, [string] $InventoryPath) {
+	if ([string]::IsNullOrWhiteSpace($InventoryPath) -or [System.IO.Path]::IsPathRooted($InventoryPath) -or $InventoryPath -match '^[A-Za-z]:') {
+		throw 'Packaged provenance inventory path must be archive-relative and remain within its declared archive root.'
+	}
+	if ($InventoryPath.Contains('\')) {
+		throw 'Packaged provenance inventory path must be an exact canonical archive-relative path.'
+	}
+	$NormalizedInventoryPath = $InventoryPath
+	$NativePath = $InventoryPath.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+	$ResolvedPath = [System.IO.Path]::GetFullPath((Join-Path $ArchiveRoot $NativePath))
+	$ArchivePrefix = Get-ArchivePrefix $ArchiveRoot
+	if (-not $ResolvedPath.StartsWith($ArchivePrefix, (Get-ProvenancePathComparison))) {
+		throw 'Packaged provenance inventory path must be archive-relative and remain within its declared archive root.'
+	}
+	$ResolvedRelativePath = $ResolvedPath.Substring($ArchivePrefix.Length).Replace('\', '/')
+	if ($NormalizedInventoryPath -cne $ResolvedRelativePath) {
+		throw 'Packaged provenance inventory path must be an exact canonical archive-relative path.'
+	}
+	Assert-NoProvenanceReparsePoint 'Packaged provenance inventory path' $ArchiveRoot $ResolvedPath -AllowMissing
+	return [pscustomobject]@{
+		FullPath = $ResolvedPath
+		RelativePath = $ResolvedRelativePath
+	}
+}
+
+function Assert-NoProvenanceReparsePoint([string] $Name, [string] $ArchiveRoot, [string] $ResolvedPath, [switch] $AllowMissing) {
+	$ArchivePrefix = Get-ArchivePrefix $ArchiveRoot
+	$CurrentPath = $ArchiveRoot.TrimEnd([char[]] @('\', '/'))
+	$RelativePath = $ResolvedPath.Substring($ArchivePrefix.Length)
+	$PathsToInspect = @($CurrentPath)
+	foreach ($Segment in @($RelativePath -split '[\\/]')) {
+		if ([string]::IsNullOrWhiteSpace($Segment)) { continue }
+		$CurrentPath = Join-Path $CurrentPath $Segment
+		$PathsToInspect += $CurrentPath
+	}
+	foreach ($CandidatePath in $PathsToInspect) {
+		if (-not (Test-Path -LiteralPath $CandidatePath)) {
+			if ($AllowMissing) { break }
+			throw "$Name path component '$CandidatePath' does not exist."
+		}
+		$Attributes = [System.IO.File]::GetAttributes($CandidatePath)
+		if (($Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+			throw "$Name must not traverse a reparse point beneath its packaged archive root."
+		}
+	}
+}
+
+function Resolve-ProvenanceExecutable([string] $Name, [string] $Path, [string] $ArchiveName, [string] $ArchiveRoot) {
+	if (-not $Path -or -not [System.IO.Path]::IsPathRooted($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+		throw "$Name must be an absolute existing file beneath packaged $ArchiveName."
+	}
+	$ResolvedPath = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $Path).Path)
+	$ArchivePrefix = Get-ArchivePrefix $ArchiveRoot
+	if (-not $ResolvedPath.StartsWith($ArchivePrefix, (Get-ProvenancePathComparison))) {
+		throw "$Name must resolve beneath packaged $ArchiveName."
+	}
+	Assert-NoProvenanceReparsePoint $Name $ArchiveRoot $ResolvedPath
+	return [pscustomobject]@{
+		FullPath = $ResolvedPath
+		RelativePath = $ResolvedPath.Substring($ArchivePrefix.Length).Replace('\', '/')
+		Sha256 = (Get-FileHash -LiteralPath $ResolvedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+	}
+}
+
 function Test-PackagedBuildProvenance([string] $Path, [string] $ActualServerSha256) {
 	if (-not $Path) { throw 'PackagedBuildProvenancePath is required for packaged evidence.' }
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Packaged build provenance '$Path' does not exist." }
 	try { $Provenance = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { throw "Packaged build provenance '$Path' is invalid JSON: $($_.Exception.Message)" }
 	if ($Provenance.schemaVersion -ne 2 -or $Provenance.source.revision -cne $SourceRevision -or $Provenance.source.clean -ne $true) { throw 'Packaged build provenance does not bind a clean exact source revision.' }
 	if ($Provenance.host.buildIdentity -cne $BuildIdentity) { throw 'BuildIdentity does not match packaged build provenance.' }
-	$ClientHash = (Get-FileHash -LiteralPath $ResolvedClient -Algorithm SHA256).Hash.ToLowerInvariant()
-	$ExpectedClientPath = $ResolvedClient.Replace('\', '/')
-	$ExpectedServerPath = if ($ServerLauncherExecutable) { $ServerExecutable } else { $ResolvedServer }
-	$ExpectedServerPath = $ExpectedServerPath.Replace('\', '/')
-	$ClientEntries = @($Provenance.artifacts.inventory | Where-Object {
-		$_.kind -ceq 'client' -and
-		([string] $_.path).Replace('\', '/') -ceq $ExpectedClientPath -and
-		([string] $_.sha256).ToLowerInvariant() -ceq $ClientHash
+	$ClientArchive = Resolve-ProvenanceArchiveRoot 'artifacts.clientArchive' ([string] $Provenance.artifacts.clientArchive)
+	$ServerArchive = Resolve-ProvenanceArchiveRoot 'artifacts.serverArchive' ([string] $Provenance.artifacts.serverArchive)
+	$ServerHostExecutable = if ($ServerLauncherExecutable) { $ServerProvenanceExecutable } else { $ResolvedServer }
+	$ClientBinding = Resolve-ProvenanceExecutable 'ClientExecutable' $ResolvedClient 'clientArchive' $ClientArchive
+	$ServerBinding = Resolve-ProvenanceExecutable 'ServerProvenanceExecutable' $ServerHostExecutable 'serverArchive' $ServerArchive
+	if ($ServerBinding.Sha256 -cne $ActualServerSha256) { throw 'Packaged executable identity is not uniquely bound by build provenance.' }
+	$Inventory = @($Provenance.artifacts.inventory | ForEach-Object {
+		$Kind = [string] $_.kind
+		if ($Kind -cne 'client' -and $Kind -cne 'server') { throw 'Packaged provenance inventory kind must be client or server.' }
+		$ArchiveRoot = if ($Kind -ceq 'client') { $ClientArchive } else { $ServerArchive }
+		$ResolvedEntry = Resolve-ArchiveInventoryPath $ArchiveRoot ([string] $_.path)
+		[pscustomobject]@{ Kind = $Kind; RelativePath = $ResolvedEntry.RelativePath; Sha256 = ([string] $_.sha256).ToLowerInvariant() }
 	})
-	$ServerEntries = @($Provenance.artifacts.inventory | Where-Object {
-		$_.kind -ceq 'server' -and
-		([string] $_.path).Replace('\', '/') -ceq $ExpectedServerPath -and
-		([string] $_.sha256).ToLowerInvariant() -ceq $ActualServerSha256
+	$ClientEntries = @($Inventory | Where-Object {
+		$_.Kind -ceq 'client' -and
+		$_.RelativePath -ceq $ClientBinding.RelativePath
+	})
+	$ServerEntries = @($Inventory | Where-Object {
+		$_.Kind -ceq 'server' -and
+		$_.RelativePath -ceq $ServerBinding.RelativePath
 	})
 	if ($ClientEntries.Count -ne 1 -or $ServerEntries.Count -ne 1) { throw 'Packaged executable identity is not uniquely bound by build provenance.' }
+	if ($ClientEntries[0].Sha256 -cne $ClientBinding.Sha256 -or $ServerEntries[0].Sha256 -cne $ActualServerSha256) { throw 'Packaged executable identity is not uniquely bound by build provenance.' }
 	return [pscustomobject]@{ Path = (Resolve-Path -LiteralPath $Path).Path; Sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
 
@@ -353,7 +443,10 @@ if ($ServerLauncherExecutable) {
 	if (-not $ServerProcessIdPattern) { throw 'ServerProcessIdPattern is required when ServerLauncherExecutable is supplied.' }
 	$ServerProcessIdRegex = [regex]::new($ServerProcessIdPattern)
 	if ($ServerProcessIdRegex.GetGroupNames() -notcontains 'ProcessId') { throw 'ServerProcessIdPattern must contain a named ProcessId capture.' }
-	if ($EvidenceMode -ceq 'packaged') { Assert-Placeholder $ServerIdentityArguments '{ServerExecutable}' 'ServerIdentityArguments' }
+	if ($EvidenceMode -ceq 'packaged') {
+		Assert-Placeholder $ServerIdentityArguments '{ServerExecutable}' 'ServerIdentityArguments'
+		if (-not $ServerProvenanceExecutable) { throw 'ServerProvenanceExecutable is required for packaged evidence when ServerLauncherExecutable is supplied.' }
+	}
 } elseif ($ServerLauncherArguments.Count -gt 0) {
 	throw 'ServerLauncherExecutable is required when ServerLauncherArguments are supplied.'
 } elseif ($ServerIdentityArguments.Count -gt 0 -or $ServerCleanupArguments.Count -gt 0 -or $ServerProcessIdPattern) {

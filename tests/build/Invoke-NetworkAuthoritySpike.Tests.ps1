@@ -164,7 +164,8 @@ exit $Child.ExitCode
 		[string] $Behavior = 'normal',
 		[int] $TimeoutSeconds = 8,
 		[string] $EvidenceMode = 'fixture',
-		[string] $PackagedBuildProvenancePath
+		[string] $PackagedBuildProvenancePath,
+		[string] $ServerProvenanceExecutable
 	) {
 		$Arguments = @{
 			ServerExecutable = $PowerShellExecutable
@@ -208,6 +209,7 @@ exit $Child.ExitCode
 			$Arguments.ServerProcessIdPattern = 'AETHELN_SERVER_DESCENDANT_PID=(?<ProcessId>[1-9][0-9]*)'
 		}
 		if ($PackagedBuildProvenancePath) { $Arguments.PackagedBuildProvenancePath = $PackagedBuildProvenancePath }
+		if ($ServerProvenanceExecutable) { $Arguments.ServerProvenanceExecutable = $ServerProvenanceExecutable }
 		& $Script @Arguments
 	}
 
@@ -318,53 +320,210 @@ exit $Child.ExitCode
 	Assert-True ($CleanupFailureEvidence.result -eq 'failed') 'Cleanup failure must downgrade otherwise complete evidence to failed.'
 	Write-Output 'PASS: launcher-side descendant cleanup failure is observable and fails closed'
 
-	$ProvenancePath = Join-Path $FixtureRoot 'mismatched-server-provenance.json'
+	$PowerShellArchive = Split-Path -Parent $PowerShellExecutable
+	$PowerShellInventoryPath = [System.IO.Path]::GetFileName($PowerShellExecutable)
 	$ClientSha256 = (Get-FileHash -LiteralPath $PowerShellExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
-	[ordered]@{
-		schemaVersion = 2
-		source = [ordered]@{ revision = 'fixture-revision'; clean = $true }
-		host = [ordered]@{ buildIdentity = 'fixture-build' }
-		artifacts = [ordered]@{ inventory = @(
-			[ordered]@{ kind = 'client'; path = $PowerShellExecutable; sha256 = $ClientSha256 },
-			[ordered]@{ kind = 'server'; path = $PowerShellExecutable.Replace('\', '/'); sha256 = ('0' * 64) }
-		) }
-	} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ProvenancePath -Encoding UTF8
+	$RunnerTokens = $null
+	$RunnerParseErrors = $null
+	$RunnerAst = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref] $RunnerTokens, [ref] $RunnerParseErrors)
+	Assert-True ($RunnerParseErrors.Count -eq 0) 'The authority runner must parse before its path-comparison helper is inspected.'
+	$ComparisonFunction = @($RunnerAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -ceq 'Get-ProvenancePathComparison' }, $true))
+	Assert-True ($ComparisonFunction.Count -eq 1) 'The authority runner must define one OS-aware provenance path-comparison helper.'
+	$ComparisonProbe = [scriptblock]::Create($ComparisonFunction[0].Extent.Text + "`n[pscustomobject]@{ Windows = Get-ProvenancePathComparison ([char] 92); Posix = Get-ProvenancePathComparison ([char] 47) }")
+	$ComparisonResult = & $ComparisonProbe
+	Assert-True ($ComparisonResult.Windows -eq [System.StringComparison]::OrdinalIgnoreCase) 'Windows provenance containment must be case-insensitive.'
+	Assert-True ($ComparisonResult.Posix -eq [System.StringComparison]::Ordinal) 'Case-sensitive hosts must use ordinal provenance containment.'
+	Write-Output 'PASS: provenance containment selects OS-appropriate case sensitivity'
+	function Write-ProvenanceFixture([string] $Path, [object[]] $Inventory, [string] $ClientArchive = $PowerShellArchive, [string] $ServerArchive = $PowerShellArchive) {
+		[ordered]@{
+			schemaVersion = 2
+			source = [ordered]@{ revision = 'fixture-revision'; clean = $true }
+			host = [ordered]@{ buildIdentity = 'fixture-build' }
+			artifacts = [ordered]@{
+				clientArchive = $ClientArchive
+				serverArchive = $ServerArchive
+				inventory = @($Inventory)
+			}
+		} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding UTF8
+	}
+
+	$MissingHostPathProvenance = Join-Path $FixtureRoot 'missing-host-path-provenance.json'
+	Write-ProvenanceFixture $MissingHostPathProvenance @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 }
+	)
+	$MissingHostPathFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'missing-host-path') -FixtureRunId 'fixture-missing-host-path' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $MissingHostPathProvenance
+	} catch { $MissingHostPathFailure = $_.Exception.Message }
+	Assert-True ($MissingHostPathFailure -match 'ServerProvenanceExecutable is required') 'Packaged launcher evidence must require an explicit host-side server provenance path.'
+	Write-Output 'PASS: packaged launcher provenance requires an explicit host-side server path'
+
+	$ProvenancePath = Join-Path $FixtureRoot 'mismatched-server-provenance.json'
+	Write-ProvenanceFixture $ProvenancePath @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = ('0' * 64) }
+	)
 	$ServerIdentityFailure = $null
 	try {
-		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'server-identity-mismatch') -FixtureRunId 'fixture-server-identity-mismatch' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $ProvenancePath
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'server-identity-mismatch') -FixtureRunId 'fixture-server-identity-mismatch' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $ProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
 	} catch { $ServerIdentityFailure = $_.Exception.Message }
 	Assert-True ($ServerIdentityFailure -match 'Packaged executable identity is not uniquely bound') 'Packaged evidence must hash and authenticate the exact launcher-side server path.'
 	Write-Output 'PASS: mismatched launcher-side server digest cannot use unrelated packaged provenance'
 
 	$MismatchedClientProvenancePath = Join-Path $FixtureRoot 'mismatched-client-path-provenance.json'
-	[ordered]@{
-		schemaVersion = 2
-		source = [ordered]@{ revision = 'fixture-revision'; clean = $true }
-		host = [ordered]@{ buildIdentity = 'fixture-build' }
-		artifacts = [ordered]@{ inventory = @(
-			[ordered]@{ kind = 'client'; path = ('C:/unrelated/' + [System.IO.Path]::GetFileName($PowerShellExecutable)); sha256 = $ClientSha256 },
-			[ordered]@{ kind = 'server'; path = $PowerShellExecutable.Replace('\', '/'); sha256 = $ClientSha256 }
-		) }
-	} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $MismatchedClientProvenancePath -Encoding UTF8
+	Write-ProvenanceFixture $MismatchedClientProvenancePath @(
+		[ordered]@{ kind = 'client'; path = 'unrelated/powershell.exe'; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 }
+	)
 	$ClientPathFailure = $null
 	try {
-		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'client-path-mismatch') -FixtureRunId 'fixture-client-path-mismatch' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $MismatchedClientProvenancePath
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'client-path-mismatch') -FixtureRunId 'fixture-client-path-mismatch' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $MismatchedClientProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
 	} catch { $ClientPathFailure = $_.Exception.Message }
 	Assert-True ($ClientPathFailure -match 'Packaged executable identity is not uniquely bound') 'Packaged evidence must bind the exact selected-client path, not only filename and digest.'
 	Write-Output 'PASS: same-named client at an unrelated path cannot use packaged provenance'
 
+	foreach ($UnsafeInventoryCase in @(
+		@{ Name = 'rooted'; Path = $PowerShellExecutable },
+		@{ Name = 'escape'; Path = '../powershell.exe' },
+		@{ Name = 'dot-alias'; Path = "./$PowerShellInventoryPath" },
+		@{ Name = 'parent-alias'; Path = "unused/../$PowerShellInventoryPath" }
+	)) {
+		$UnsafeProvenancePath = Join-Path $FixtureRoot ("unsafe-$($UnsafeInventoryCase.Name)-provenance.json")
+		Write-ProvenanceFixture $UnsafeProvenancePath @(
+			[ordered]@{ kind = 'client'; path = $UnsafeInventoryCase.Path; sha256 = $ClientSha256 },
+			[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 }
+		)
+		$UnsafeFailure = $null
+		try {
+			Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot ("unsafe-$($UnsafeInventoryCase.Name)")) -FixtureRunId ("fixture-unsafe-$($UnsafeInventoryCase.Name)") -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $UnsafeProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
+		} catch { $UnsafeFailure = $_.Exception.Message }
+		Assert-True ($UnsafeFailure -match 'archive-relative') "A $($UnsafeInventoryCase.Name) inventory path must fail closed. Actual: $UnsafeFailure"
+	}
+	Write-Output 'PASS: rooted and escaping provenance inventory paths fail closed'
+
+	$ClientArchiveParent = Split-Path -Parent $PowerShellArchive
+	$ClientArchiveDirectory = Split-Path -Leaf $PowerShellArchive
+	$SeparatorAliasProvenancePath = Join-Path $FixtureRoot 'separator-alias-provenance.json'
+	Write-ProvenanceFixture $SeparatorAliasProvenancePath @(
+		[ordered]@{ kind = 'client'; path = "$ClientArchiveDirectory\$PowerShellInventoryPath"; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 }
+	) -ClientArchive $ClientArchiveParent
+	$SeparatorAliasFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'separator-alias') -FixtureRunId 'fixture-separator-alias' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $SeparatorAliasProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
+	} catch { $SeparatorAliasFailure = $_.Exception.Message }
+	Assert-True ($SeparatorAliasFailure -match 'exact canonical archive-relative path') 'Backslash-separated inventory aliases must fail closed.'
+	Write-Output 'PASS: provenance inventory paths require canonical forward slashes'
+
+	$OutsideRootProvenancePath = Join-Path $FixtureRoot 'outside-root-provenance.json'
+	Write-ProvenanceFixture $OutsideRootProvenancePath @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 }
+	) -ServerArchive $FixtureRoot
+	$OutsideRootFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'outside-root') -FixtureRunId 'fixture-outside-root' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $OutsideRootProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
+	} catch { $OutsideRootFailure = $_.Exception.Message }
+	Assert-True ($OutsideRootFailure -match 'ServerProvenanceExecutable.*serverArchive') 'The host-side server provenance path must remain beneath serverArchive.'
+	Write-Output 'PASS: host-side server provenance path outside serverArchive fails closed'
+
+	$LinkedServerArchive = Join-Path $FixtureRoot 'linked-server-archive'
+	$LinkedServerTarget = Join-Path $LinkedServerArchive 'linked'
+	New-Item -ItemType Directory -Path $LinkedServerArchive -Force | Out-Null
+	$LinkItemType = if ([System.IO.Path]::DirectorySeparatorChar -ceq '\') { 'Junction' } else { 'SymbolicLink' }
+	New-Item -ItemType $LinkItemType -Path $LinkedServerTarget -Target $PowerShellArchive | Out-Null
+	$LinkedServerProvenancePath = Join-Path $FixtureRoot 'linked-server-provenance.json'
+	Write-ProvenanceFixture $LinkedServerProvenancePath @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = "linked/$PowerShellInventoryPath"; sha256 = $ClientSha256 }
+	) -ServerArchive $LinkedServerArchive
+	$LinkedServerFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'linked-server') -FixtureRunId 'fixture-linked-server' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $LinkedServerProvenancePath -ServerProvenanceExecutable (Join-Path $LinkedServerTarget $PowerShellInventoryPath)
+	} catch { $LinkedServerFailure = $_.Exception.Message }
+	Assert-True ($LinkedServerFailure -match 'reparse point') 'A host-side server provenance path traversing a filesystem link must fail closed.'
+	Write-Output 'PASS: host-side server provenance path cannot escape through a filesystem link'
+
+	$InventoryLinkedServerArchive = Join-Path $FixtureRoot 'inventory-linked-server-archive'
+	$InventoryLinkedServerExecutable = Join-Path $InventoryLinkedServerArchive 'server.exe'
+	$InventoryLinkedTarget = Join-Path $InventoryLinkedServerArchive 'linked'
+	New-Item -ItemType Directory -Path $InventoryLinkedServerArchive -Force | Out-Null
+	Copy-Item -LiteralPath $PowerShellExecutable -Destination $InventoryLinkedServerExecutable
+	New-Item -ItemType $LinkItemType -Path $InventoryLinkedTarget -Target $PowerShellArchive | Out-Null
+	$InventoryLinkedProvenancePath = Join-Path $FixtureRoot 'inventory-linked-provenance.json'
+	Write-ProvenanceFixture $InventoryLinkedProvenancePath @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = 'server.exe'; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = "linked/$PowerShellInventoryPath"; sha256 = $ClientSha256 }
+	) -ServerArchive $InventoryLinkedServerArchive
+	$InventoryLinkedFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'inventory-linked') -FixtureRunId 'fixture-inventory-linked' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $InventoryLinkedProvenancePath -ServerProvenanceExecutable $InventoryLinkedServerExecutable
+	} catch { $InventoryLinkedFailure = $_.Exception.Message }
+	Assert-True ($InventoryLinkedFailure -match 'reparse point') 'Every provenance inventory entry must fail closed when it traverses a filesystem link.'
+	Write-Output 'PASS: every provenance inventory entry rejects filesystem-link escape'
+
+	foreach ($InvalidKind in @('auxiliary', 'CLIENT', 'SERVER')) {
+		$InvalidKindProvenancePath = Join-Path $FixtureRoot ("invalid-kind-$InvalidKind-provenance.json")
+		Write-ProvenanceFixture $InvalidKindProvenancePath @(
+			[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+			[ordered]@{ kind = 'server'; path = 'server.exe'; sha256 = $ClientSha256 },
+			[ordered]@{ kind = $InvalidKind; path = "linked/$PowerShellInventoryPath"; sha256 = $ClientSha256 }
+		) -ServerArchive $InventoryLinkedServerArchive
+		$InvalidKindFailure = $null
+		try {
+			Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot ("invalid-kind-$InvalidKind")) -FixtureRunId ("fixture-invalid-kind-$InvalidKind") -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $InvalidKindProvenancePath -ServerProvenanceExecutable $InventoryLinkedServerExecutable
+		} catch { $InvalidKindFailure = $_.Exception.Message }
+		Assert-True ($InvalidKindFailure -match 'kind must be client or server') "Invalid provenance inventory kind '$InvalidKind' must fail closed."
+	}
+	Write-Output 'PASS: provenance inventory kinds require exact lowercase client or server'
+
+	$DuplicateProvenancePath = Join-Path $FixtureRoot 'duplicate-provenance.json'
+	Write-ProvenanceFixture $DuplicateProvenancePath @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 }
+	)
+	$DuplicateFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'duplicate-provenance') -FixtureRunId 'fixture-duplicate-provenance' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $DuplicateProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
+	} catch { $DuplicateFailure = $_.Exception.Message }
+	Assert-True ($DuplicateFailure -match 'Packaged executable identity is not uniquely bound') 'Duplicate matching inventory entries must fail closed.'
+	Write-Output 'PASS: duplicate matching provenance entries fail closed'
+
+	$ConflictingDigestProvenancePath = Join-Path $FixtureRoot 'conflicting-digest-provenance.json'
+	Write-ProvenanceFixture $ConflictingDigestProvenancePath @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = ('0' * 64) }
+	)
+	$ConflictingDigestFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'conflicting-digest-provenance') -FixtureRunId 'fixture-conflicting-digest-provenance' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $ConflictingDigestProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
+	} catch { $ConflictingDigestFailure = $_.Exception.Message }
+	Assert-True ($ConflictingDigestFailure -match 'Packaged executable identity is not uniquely bound') 'Conflicting digests for one kind and relative path must fail closed.'
+	Write-Output 'PASS: conflicting provenance digests for one artifact identity fail closed'
+
+	$WrongKindProvenancePath = Join-Path $FixtureRoot 'wrong-kind-provenance.json'
+	Write-ProvenanceFixture $WrongKindProvenancePath @(
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'client'; path = 'unrelated/powershell.exe'; sha256 = $ClientSha256 }
+	)
+	$WrongKindFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'wrong-kind-provenance') -FixtureRunId 'fixture-wrong-kind-provenance' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $WrongKindProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
+	} catch { $WrongKindFailure = $_.Exception.Message }
+	Assert-True ($WrongKindFailure -match 'Packaged executable identity is not uniquely bound') 'Wrong-kind provenance entries must fail closed.'
+	Write-Output 'PASS: wrong-kind provenance entries fail closed'
+
 	$SelfAuthoredProvenancePath = Join-Path $FixtureRoot 'self-authored-provenance.json'
-	[ordered]@{
-		schemaVersion = 2
-		source = [ordered]@{ revision = 'fixture-revision'; clean = $true }
-		host = [ordered]@{ buildIdentity = 'fixture-build' }
-		artifacts = [ordered]@{ inventory = @(
-			[ordered]@{ kind = 'client'; path = $PowerShellExecutable.Replace('\', '/'); sha256 = $ClientSha256 },
-			[ordered]@{ kind = 'server'; path = $PowerShellExecutable.Replace('\', '/'); sha256 = $ClientSha256 }
-		) }
-	} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $SelfAuthoredProvenancePath -Encoding UTF8
+	Write-ProvenanceFixture $SelfAuthoredProvenancePath @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 }
+	)
 	$SelfAuthoredRoot = Join-Path $FixtureRoot 'self-authored-packaged'
-	Invoke-FixtureRun -FixtureLogRoot $SelfAuthoredRoot -FixtureRunId 'fixture-self-authored' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $SelfAuthoredProvenancePath
+	Invoke-FixtureRun -FixtureLogRoot $SelfAuthoredRoot -FixtureRunId 'fixture-self-authored' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $SelfAuthoredProvenancePath -ServerProvenanceExecutable $PowerShellExecutable
 	$SelfAuthoredEvidence = Get-Content -LiteralPath (Join-Path $SelfAuthoredRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
 	Assert-True ($SelfAuthoredEvidence.result -eq 'packaged-candidate') 'Even matching caller-authored provenance can produce only a candidate awaiting independent gates.'
 	Assert-True ($SelfAuthoredEvidence.result -ne 'passed') 'The runner must never self-award packaged success.'
