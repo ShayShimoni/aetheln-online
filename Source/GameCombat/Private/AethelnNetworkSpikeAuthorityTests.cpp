@@ -2,6 +2,7 @@
 
 #include "AethelnSpikeAuthorityComponent.h"
 #include "AethelnSpikeAuthorityTypes.h"
+#include "AethelnSpikeCharacter.h"
 #include "AethelnSpikeEnemy.h"
 #include "AethelnSpikeMeleeAbility.h"
 #include "AethelnNetworkSpikeGameMode.h"
@@ -45,6 +46,12 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Reconnect label is accepted only for spike correlation"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("client-1-reconnect")));
 	TestFalse(TEXT("Arbitrary client labels are rejected"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("admin")));
 	TestNotEqual(TEXT("Server connection identities are unique"), AAethelnNetworkSpikeGameMode::MakeScenarioConnectionId(TEXT("run-1"), 1), AAethelnNetworkSpikeGameMode::MakeScenarioConnectionId(TEXT("run-1"), 2));
+
+	TestFalse(TEXT("Attack waits for client readiness"), AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(TEXT("client-1"), false, 2.0f, false));
+	TestFalse(TEXT("Only client one submits the scenario attack"), AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(TEXT("client-2"), true, 2.0f, false));
+	TestFalse(TEXT("Attack waits for the elapsed-time threshold"), AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(TEXT("client-1"), true, 1.99f, false));
+	TestTrue(TEXT("Ready client one submits without an observed enemy input"), AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(TEXT("client-1"), true, 2.0f, false));
+	TestFalse(TEXT("Scenario attack is submitted only once"), AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(TEXT("client-1"), true, 3.0f, true));
 
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
 	TestNotNull(TEXT("Behavioral authority world was created"), World);

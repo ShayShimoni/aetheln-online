@@ -23,6 +23,8 @@ public:
 	void SubmitFreeAimAttack(const FVector& AimDirection);
 	void SubmitScenarioProbe(const FAethelnSpikeScenarioProbe& Probe);
 
+	static bool ShouldSubmitScenarioAttack(const FString& ClientId, bool bClientReady, float ElapsedSeconds, bool bAlreadySubmitted);
+
 private:
 	void InitializePlayerStateAbilitySystem();
 	void InitializePackagedScenario();

@@ -54,18 +54,10 @@ void AAethelnSpikeCharacter::Tick(float DeltaSeconds)
 		bJoinInProgressObserved = true;
 		UE_LOG(LogTemp, Log, TEXT("AUTHORITY join_in_progress client=%s enemy=%s %s"), *ScenarioClientId, *ObservedEnemy->GetName(), *GetScenarioIdentityFields());
 	}
-	if (ObservedEnemy != nullptr && ScenarioClientId == TEXT("client-1") && !bAttackSubmitted)
+	if (ShouldSubmitScenarioAttack(ScenarioClientId, bClientReadyObserved, ScenarioElapsedSeconds, bAttackSubmitted))
 	{
-		const FVector Aim = (ObservedEnemy->GetActorLocation() - GetActorLocation()).GetSafeNormal();
-		if (Controller != nullptr)
-		{
-			Controller->SetControlRotation(Aim.Rotation());
-		}
-		if (ScenarioElapsedSeconds >= 2.0f)
-		{
-			bAttackSubmitted = true;
-			SubmitFreeAimAttack(Aim);
-		}
+		bAttackSubmitted = true;
+		SubmitFreeAimAttack(GetActorForwardVector());
 	}
 	if (ScenarioClientId == TEXT("client-2") && !bProbesSubmitted && ScenarioElapsedSeconds >= 3.0f)
 	{
@@ -106,6 +98,11 @@ void AAethelnSpikeCharacter::SubmitFreeAimAttack(const FVector& AimDirection)
 void AAethelnSpikeCharacter::SubmitScenarioProbe(const FAethelnSpikeScenarioProbe& Probe)
 {
 	AuthorityComponent->SubmitScenarioProbe(Probe);
+}
+
+bool AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(const FString& ClientId, bool bClientReady, float ElapsedSeconds, bool bAlreadySubmitted)
+{
+	return ClientId == TEXT("client-1") && bClientReady && ElapsedSeconds >= 2.0f && !bAlreadySubmitted;
 }
 
 void AAethelnSpikeCharacter::InitializePlayerStateAbilitySystem()
