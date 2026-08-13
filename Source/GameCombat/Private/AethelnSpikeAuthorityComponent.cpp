@@ -20,6 +20,61 @@ namespace AethelnSpikeAuthority
 	constexpr uint8 SchemaVersion = 1;
 	constexpr uint32 ContentVersion = 1;
 	constexpr float AimUnitTolerance = 0.01f;
+
+	bool IsAuthorityScenario()
+	{
+		return FParse::Param(FCommandLine::Get(), TEXT("AethelnAuthorityScenario"));
+	}
+
+	void RecordScenarioStage(
+		const AActor* Owner,
+		const FAethelnSpikeAttackIntent& Intent,
+		const FGuid& AttackId,
+		const TCHAR* Stage,
+		const TCHAR* Result,
+		EAethelnSpikeAttackRejection Reason,
+		int32 OverlapCount = 0,
+		int32 EffectCount = 0,
+		int32 DamageCount = 0)
+	{
+		if (!IsAuthorityScenario())
+		{
+			return;
+		}
+
+		const APawn* Pawn = Cast<APawn>(Owner);
+		const APlayerState* PlayerState = Pawn != nullptr ? Pawn->GetPlayerState() : nullptr;
+		const FString ClientId = PlayerState != nullptr ? PlayerState->GetPlayerName() : FString();
+		FString ScenarioId;
+		FString ProfileId;
+		FString RunId;
+		FParse::Value(FCommandLine::Get(), TEXT("AethelnScenarioId="), ScenarioId);
+		FParse::Value(FCommandLine::Get(), TEXT("AethelnProfileId="), ProfileId);
+		FParse::Value(FCommandLine::Get(), TEXT("AethelnRunId="), RunId);
+
+		UE_LOG(
+			LogTemp,
+			Log,
+			TEXT("AUTHORITY intent stage=%s result=%s reason=%s client=%s scenario=%s profile=%s run=%s attack=%s schema=%u content=%u sequence=%u timestamp=%.6f aim_x=%.6f aim_y=%.6f aim_z=%.6f overlaps=%d effects=%d damage=%d"),
+			Stage,
+			Result,
+			LexToString(Reason),
+			*ClientId,
+			*ScenarioId,
+			*ProfileId,
+			*RunId,
+			*AttackId.ToString(EGuidFormats::DigitsWithHyphensLower),
+			Intent.SchemaVersion,
+			Intent.ContentVersion,
+			Intent.Sequence,
+			Intent.ClientTimestampSeconds,
+			Intent.Aim.X,
+			Intent.Aim.Y,
+			Intent.Aim.Z,
+			OverlapCount,
+			EffectCount,
+			DamageCount);
+	}
 }
 
 void UAethelnSpikeAuthorityComponent::SubmitScenarioProbe(const FAethelnSpikeScenarioProbe& Probe)
@@ -50,6 +105,13 @@ void UAethelnSpikeAuthorityComponent::SubmitAttack(const FVector& AimDirection)
 		? GameState->GetServerWorldTimeSeconds()
 		: World->GetTimeSeconds();
 	Intent.Aim = AimDirection;
+	AethelnSpikeAuthority::RecordScenarioStage(
+		GetOwner(),
+		Intent,
+		FGuid(),
+		TEXT("submission"),
+		TEXT("submitted"),
+		EAethelnSpikeAttackRejection::None);
 	ServerSubmitAttack(Intent);
 }
 
@@ -120,6 +182,13 @@ EAethelnSpikeAttackRejection UAethelnSpikeAuthorityComponent::ValidateIntent(
 
 void UAethelnSpikeAuthorityComponent::ServerSubmitAttack_Implementation(const FAethelnSpikeAttackIntent& Intent)
 {
+	AethelnSpikeAuthority::RecordScenarioStage(
+		GetOwner(),
+		Intent,
+		FGuid(),
+		TEXT("rpc-receipt"),
+		TEXT("received"),
+		EAethelnSpikeAttackRejection::None);
 	ProcessServerIntent(Intent);
 }
 
@@ -225,8 +294,22 @@ void UAethelnSpikeAuthorityComponent::ProcessServerIntent(const FAethelnSpikeAtt
 		ProvisionalMaximumTimestampDeltaSeconds,
 		bLifecycleReady,
 		bActorUsable);
+	AethelnSpikeAuthority::RecordScenarioStage(
+		Owner,
+		Intent,
+		FGuid(),
+		TEXT("validation"),
+		Rejection == EAethelnSpikeAttackRejection::None ? TEXT("accepted") : TEXT("rejected"),
+		Rejection);
 	if (Rejection != EAethelnSpikeAttackRejection::None)
 	{
+		AethelnSpikeAuthority::RecordScenarioStage(
+			Owner,
+			Intent,
+			FGuid(),
+			TEXT("terminal"),
+			TEXT("rejected"),
+			Rejection);
 		Reject(Rejection);
 		return;
 	}
@@ -236,9 +319,30 @@ void UAethelnSpikeAuthorityComponent::ProcessServerIntent(const FAethelnSpikeAtt
 	AlreadyHitTargets.Reset();
 	bAttackWindowActive = true;
 	LastRejection = EAethelnSpikeAttackRejection::None;
+	AethelnSpikeAuthority::RecordScenarioStage(
+		Owner,
+		PendingIntent,
+		ActiveAttackId,
+		TEXT("activation-request"),
+		TEXT("requested"),
+		EAethelnSpikeAttackRejection::None);
 
 	if (!AbilitySystem->TryActivateAbilityByClass(UAethelnSpikeMeleeAbility::StaticClass(), true))
 	{
+		AethelnSpikeAuthority::RecordScenarioStage(
+			Owner,
+			PendingIntent,
+			ActiveAttackId,
+			TEXT("activation-result"),
+			TEXT("blocked"),
+			EAethelnSpikeAttackRejection::ActivationBlocked);
+		AethelnSpikeAuthority::RecordScenarioStage(
+			Owner,
+			PendingIntent,
+			ActiveAttackId,
+			TEXT("terminal"),
+			TEXT("activation-blocked"),
+			EAethelnSpikeAttackRejection::ActivationBlocked);
 		CloseAttackWindow();
 		Reject(EAethelnSpikeAttackRejection::ActivationBlocked);
 		return;
@@ -260,10 +364,38 @@ bool UAethelnSpikeAuthorityComponent::ExecuteActiveAttack()
 		|| !Owner->HasAuthority()
 		|| Owner->IsActorBeingDestroyed())
 	{
+		const EAethelnSpikeAttackRejection Reason = Owner == nullptr || Owner->IsActorBeingDestroyed()
+			? EAethelnSpikeAttackRejection::ActorDestroyed
+			: EAethelnSpikeAttackRejection::ConnectionClosed;
+		AethelnSpikeAuthority::RecordScenarioStage(
+			Owner,
+			PendingIntent,
+			ActiveAttackId,
+			TEXT("resolution"),
+			TEXT("rejected"),
+			Reason);
+		AethelnSpikeAuthority::RecordScenarioStage(
+			Owner,
+			PendingIntent,
+			ActiveAttackId,
+			TEXT("terminal"),
+			TEXT("rejected"),
+			Reason);
 		CloseAttackWindow();
 		return false;
 	}
 
+	AethelnSpikeAuthority::RecordScenarioStage(
+		Owner,
+		PendingIntent,
+		ActiveAttackId,
+		TEXT("activation-result"),
+		TEXT("activated"),
+		EAethelnSpikeAttackRejection::None);
+
+	int32 ServerOverlapCount = 0;
+	int32 ServerEffectCount = 0;
+	int32 ServerDamageCount = 0;
 	const FVector Center = Owner->GetActorLocation() + FVector(PendingIntent.Aim) * ProvisionalAttackReach;
 	TArray<FOverlapResult> Overlaps;
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AethelnSpikeMelee), false, Owner);
@@ -274,6 +406,7 @@ bool UAethelnSpikeAuthorityComponent::ExecuteActiveAttack()
 		FCollisionObjectQueryParams::AllDynamicObjects,
 		FCollisionShape::MakeSphere(ProvisionalAttackRadius),
 		QueryParams);
+	ServerOverlapCount = Overlaps.Num();
 
 	for (const FOverlapResult& Overlap : Overlaps)
 	{
@@ -302,6 +435,7 @@ bool UAethelnSpikeAuthorityComponent::ExecuteActiveAttack()
 			EffectContext);
 		if (EffectSpec.IsValid())
 		{
+			++ServerEffectCount;
 			const bool bAuthorityScenario = FParse::Param(FCommandLine::Get(), TEXT("AethelnAuthorityScenario"));
 			const float PreviousHealth = bAuthorityScenario ? Enemy->GetHealth() : 0.0f;
 			SourceAbilitySystem->ApplyGameplayEffectSpecToTarget(*EffectSpec.Data.Get(), TargetAbilitySystem);
@@ -319,12 +453,33 @@ bool UAethelnSpikeAuthorityComponent::ExecuteActiveAttack()
 				UE_LOG(LogTemp, Log, TEXT("AUTHORITY melee_resolved attacker=%s enemy=%s scenario=%s profile=%s run=%s"), *ClientId, *Enemy->GetName(), *ScenarioId, *ProfileId, *RunId);
 				if (Enemy->GetHealth() < PreviousHealth)
 				{
+					++ServerDamageCount;
 					UE_LOG(LogTemp, Log, TEXT("AUTHORITY damage_applied attacker=%s enemy=%s scenario=%s profile=%s run=%s"), *ClientId, *Enemy->GetName(), *ScenarioId, *ProfileId, *RunId);
 				}
 			}
 		}
 	}
 
+	AethelnSpikeAuthority::RecordScenarioStage(
+		Owner,
+		PendingIntent,
+		ActiveAttackId,
+		TEXT("resolution"),
+		TEXT("resolved"),
+		EAethelnSpikeAttackRejection::None,
+		ServerOverlapCount,
+		ServerEffectCount,
+		ServerDamageCount);
+	AethelnSpikeAuthority::RecordScenarioStage(
+		Owner,
+		PendingIntent,
+		ActiveAttackId,
+		TEXT("terminal"),
+		TEXT("resolved"),
+		EAethelnSpikeAttackRejection::None,
+		ServerOverlapCount,
+		ServerEffectCount,
+		ServerDamageCount);
 	CloseAttackWindow();
 	return true;
 }

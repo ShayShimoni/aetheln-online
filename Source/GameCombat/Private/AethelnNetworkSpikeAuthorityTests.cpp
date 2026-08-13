@@ -10,7 +10,106 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/OutputDevice.h"
+#include "Misc/OutputDeviceRedirector.h"
 #include "UObject/UnrealType.h"
+
+namespace AethelnNetworkSpikeAuthorityTests
+{
+	class FScopedAuthorityLogCapture final : public FOutputDevice
+	{
+	public:
+		FScopedAuthorityLogCapture()
+			: OriginalCommandLine(FCommandLine::Get())
+		{
+			if (GLog != nullptr)
+			{
+				GLog->AddOutputDevice(this);
+				bRegistered = true;
+			}
+		}
+
+		virtual ~FScopedAuthorityLogCapture() override
+		{
+			FCommandLine::Set(*OriginalCommandLine);
+			if (bRegistered && GLog != nullptr)
+			{
+				GLog->FlushThreadedLogs();
+				GLog->RemoveOutputDevice(this);
+			}
+		}
+
+		virtual void Serialize(const TCHAR* Message, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			AddObservedStages(Message);
+		}
+
+		void SetScenarioEnabled(bool bEnabled)
+		{
+			FCommandLine::Set(bEnabled ? TEXT("-AethelnAuthorityScenario") : TEXT(""));
+		}
+
+		void Reset()
+		{
+			FlushThreadedLogs();
+			ObservedStages.Reset();
+		}
+
+		int32 CountStage(const FString& Stage) const
+		{
+			FlushThreadedLogs();
+			int32 Result = 0;
+			for (const FString& ObservedStage : ObservedStages)
+			{
+				if (ObservedStage == Stage)
+				{
+					++Result;
+				}
+			}
+			return Result;
+		}
+
+		int32 Num() const
+		{
+			FlushThreadedLogs();
+			return ObservedStages.Num();
+		}
+
+	private:
+		void FlushThreadedLogs() const
+		{
+			if (GLog != nullptr)
+			{
+				GLog->FlushThreadedLogs();
+			}
+		}
+
+		void AddObservedStages(const FString& Line)
+		{
+			const FString Marker(TEXT("stage="));
+			int32 MarkerStart = Line.Find(Marker, ESearchCase::CaseSensitive);
+			while (MarkerStart != INDEX_NONE)
+			{
+				const int32 StageStart = MarkerStart + Marker.Len();
+				int32 StageEnd = Line.Find(TEXT(" "), ESearchCase::CaseSensitive, ESearchDir::FromStart, StageStart);
+				if (StageEnd == INDEX_NONE)
+				{
+					StageEnd = Line.Len();
+				}
+				if (StageEnd > StageStart)
+				{
+					ObservedStages.Add(Line.Mid(StageStart, StageEnd - StageStart));
+				}
+				MarkerStart = Line.Find(Marker, ESearchCase::CaseSensitive, ESearchDir::FromStart, StageEnd);
+			}
+		}
+
+		FString OriginalCommandLine;
+		TArray<FString> ObservedStages;
+		bool bRegistered = false;
+	};
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnNetworkSpikeAuthorityTest,
@@ -128,58 +227,95 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	AttackerAbilitySystem->InitAbilityActorInfo(Attacker, Attacker);
 	TargetAbilitySystem->InitAbilityActorInfo(Target, Target);
 
+	AethelnNetworkSpikeAuthorityTests::FScopedAuthorityLogCapture LogCapture;
 	FAethelnSpikeAttackIntent Intent;
 	Intent.Sequence = 1;
 	Intent.ClientTimestampSeconds = World->GetTimeSeconds();
 	Intent.Aim = -FVector::ForwardVector;
 
 	const float InitialHealth = Target->GetHealth();
+	LogCapture.SetScenarioEnabled(false);
+	AuthorityComponent->SubmitAttack(-FVector::ForwardVector);
+	TestEqual(TEXT("Disabled authority scenario emits no authority stages"), LogCapture.Num(), 0);
+	TestEqual(TEXT("Disabled authority scenario causes no damage"), Target->GetHealth(), InitialHealth);
+
+	LogCapture.Reset();
+	LogCapture.SetScenarioEnabled(true);
 	AuthorityComponent->ProcessServerIntent(Intent);
 	TestEqual(TEXT("Client aim conflicting with authoritative view is rejected"), AuthorityComponent->GetLastRejection(), EAethelnSpikeAttackRejection::ImpossibleAimTransition);
 	TestEqual(TEXT("Impossible aim transition causes no damage"), Target->GetHealth(), InitialHealth);
 	TestFalse(TEXT("Impossible aim transition never opens the attack window"), AuthorityComponent->IsAttackWindowActive());
 	TestFalse(TEXT("Impossible aim transition creates no activation identity"), AuthorityComponent->GetActiveAttackId().IsValid());
+	TestEqual(TEXT("Rejected command records validation"), LogCapture.CountStage(TEXT("validation")), 1);
+	TestEqual(TEXT("Rejected command records terminal"), LogCapture.CountStage(TEXT("terminal")), 1);
 
+	LogCapture.Reset();
 	Intent.Aim = FVector::ForwardVector;
 	AuthorityComponent->ProcessServerIntent(Intent);
 	TestEqual(TEXT("Unavailable GAS ability has a truthful refusal"), AuthorityComponent->GetLastRejection(), EAethelnSpikeAttackRejection::ActivationBlocked);
 	TestEqual(TEXT("Activation refusal causes no damage"), Target->GetHealth(), InitialHealth);
 	TestFalse(TEXT("Activation refusal closes the authored attack window"), AuthorityComponent->IsAttackWindowActive());
 	TestFalse(TEXT("Activation refusal retires the activation identity"), AuthorityComponent->GetActiveAttackId().IsValid());
+	TestEqual(TEXT("Blocked command records validation"), LogCapture.CountStage(TEXT("validation")), 1);
+	TestEqual(TEXT("Blocked command records activation request"), LogCapture.CountStage(TEXT("activation-request")), 1);
+	TestEqual(TEXT("Blocked command records activation result"), LogCapture.CountStage(TEXT("activation-result")), 1);
+	TestEqual(TEXT("Blocked command records terminal"), LogCapture.CountStage(TEXT("terminal")), 1);
 
 	AttackerAbilitySystem->GiveAbility(FGameplayAbilitySpec(UAethelnSpikeMeleeAbility::StaticClass(), 1));
-	AuthorityComponent->ProcessServerIntent(Intent);
+	LogCapture.Reset();
+	AuthorityComponent->SubmitAttack(FVector::ForwardVector);
 	TestEqual(TEXT("The refused sequence remains retryable after the GAS block clears"), Target->GetHealth(), InitialHealth - 25.0f);
 	TestEqual(TEXT("Successful retry clears the refusal"), AuthorityComponent->GetLastRejection(), EAethelnSpikeAttackRejection::None);
 	TestFalse(TEXT("Authored attack window closes after resolution"), AuthorityComponent->IsAttackWindowActive());
 	TestFalse(TEXT("Activation identity is retired with its window"), AuthorityComponent->GetActiveAttackId().IsValid());
+	const TArray<FString> ExpectedStages = {
+		TEXT("submission"),
+		TEXT("rpc-receipt"),
+		TEXT("validation"),
+		TEXT("activation-request"),
+		TEXT("activation-result"),
+		TEXT("resolution"),
+		TEXT("terminal")
+	};
+	TestEqual(TEXT("Successful authority request records exactly seven stages"), LogCapture.Num(), ExpectedStages.Num());
+	for (const FString& ExpectedStage : ExpectedStages)
+	{
+		TestEqual(
+			*FString::Printf(TEXT("Successful authority request records %s exactly once"), *ExpectedStage),
+			LogCapture.CountStage(ExpectedStage),
+			1);
+	}
 
 	const float HealthAfterFirstActivation = Target->GetHealth();
+	LogCapture.Reset();
+	Intent.Sequence = 2;
 	AuthorityComponent->ProcessServerIntent(Intent);
 	TestEqual(TEXT("Accepted sequence becomes a duplicate"), AuthorityComponent->GetLastRejection(), EAethelnSpikeAttackRejection::DuplicateSequence);
 	TestEqual(TEXT("Duplicate command cannot deal additional damage"), Target->GetHealth(), HealthAfterFirstActivation);
+	TestEqual(TEXT("Duplicate command records validation"), LogCapture.CountStage(TEXT("validation")), 1);
+	TestEqual(TEXT("Duplicate command records terminal"), LogCapture.CountStage(TEXT("terminal")), 1);
 
-	Intent.Sequence = 2;
+	Intent.Sequence = 3;
 	Intent.SchemaVersion = 2;
 	AuthorityComponent->ProcessServerIntent(Intent);
 	TestEqual(TEXT("Invalid version causes no damage"), Target->GetHealth(), HealthAfterFirstActivation);
 	Intent.SchemaVersion = 1;
 
-	Intent.Sequence = 3;
+	Intent.Sequence = 4;
 	Intent.Aim = FVector::ZeroVector;
 	AuthorityComponent->ProcessServerIntent(Intent);
 	TestEqual(TEXT("Invalid aim causes no damage"), Target->GetHealth(), HealthAfterFirstActivation);
 	Intent.Aim = FVector::ForwardVector;
 
 	AuthorityComponent->SetLifecycleReady(false);
-	Intent.Sequence = 4;
+	Intent.Sequence = 5;
 	AuthorityComponent->ProcessServerIntent(Intent);
 	TestEqual(TEXT("Closed lifecycle causes no damage"), Target->GetHealth(), HealthAfterFirstActivation);
 	AuthorityComponent->SetLifecycleReady(true);
 
 	const float HealthBeforeDestroyedTargetRequest = Target->GetHealth();
 	Target->Destroy();
-	Intent.Sequence = 5;
+	Intent.Sequence = 6;
 	AuthorityComponent->ProcessServerIntent(Intent);
 	TestEqual(TEXT("Destroyed target receives no further effect"), Target->GetHealth(), HealthBeforeDestroyedTargetRequest);
 
