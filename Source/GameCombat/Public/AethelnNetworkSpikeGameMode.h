@@ -4,6 +4,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "AethelnNetworkSpikeGameMode.generated.h"
 
+class UAethelnSpikeAuthorityComponent;
+
 UCLASS()
 class GAMECOMBAT_API AAethelnNetworkSpikeGameMode : public AGameModeBase
 {
@@ -23,6 +25,7 @@ public:
 
 private:
 #if WITH_DEV_AUTOMATION_TESTS
+	friend class FAethelnNetworkSpikeGameModeDisconnectLifecycleTest;
 	friend class FAethelnNetworkSpikeGameModeRuntimePlacementTest;
 #endif
 
@@ -36,6 +39,7 @@ private:
 	TMap<TWeakObjectPtr<AController>, FString> ClientIds;
 	TMap<TWeakObjectPtr<AController>, FString> ConnectionIds;
 	TMap<TWeakObjectPtr<AController>, FVector> InitialLocations;
+	TMap<TWeakObjectPtr<AController>, TWeakObjectPtr<UAethelnSpikeAuthorityComponent>> AuthorityComponents;
 	TSet<FString> MovementObserved;
 	FString ScenarioId;
 	FString ProfileId;

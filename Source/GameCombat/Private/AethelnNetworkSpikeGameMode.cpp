@@ -127,6 +127,10 @@ void AAethelnNetworkSpikeGameMode::PostLogin(APlayerController* NewPlayer)
 	if (APawn* Pawn = NewPlayer->GetPawn())
 	{
 		InitialLocations.Add(NewPlayer, Pawn->GetActorLocation());
+		if (UAethelnSpikeAuthorityComponent* AuthorityComponent = Pawn->FindComponentByClass<UAethelnSpikeAuthorityComponent>())
+		{
+			AuthorityComponents.Add(NewPlayer, AuthorityComponent);
+		}
 	}
 	PositionEnemyForFirstClient(NewPlayer);
 	UE_LOG(LogTemp, Log, TEXT("AUTHORITY connection client=%s connection=%s %s"), *ClientId, *ConnectionId, *GetIdentityFields());
@@ -145,19 +149,17 @@ void AAethelnNetworkSpikeGameMode::Logout(AController* Exiting)
 		if (ClientId == TEXT("client-1") && ConnectionId != nullptr)
 		{
 			UE_LOG(LogTemp, Log, TEXT("AUTHORITY disconnected client=%s connection=%s %s"), *ClientId, **ConnectionId, *GetIdentityFields());
-			if (APawn* Pawn = Exiting->GetPawn())
+			if (UAethelnSpikeAuthorityComponent* AuthorityComponent = AuthorityComponents.FindRef(Exiting).Get())
 			{
-				if (UAethelnSpikeAuthorityComponent* AuthorityComponent = Pawn->FindComponentByClass<UAethelnSpikeAuthorityComponent>())
-				{
-					AuthorityComponent->SetLifecycleReady(false);
-					FAethelnSpikeScenarioProbe ClosedCommand;
-					ClosedCommand.Category = TEXT("disconnected-command");
-					ClosedCommand.Sequence = 1;
-					ClosedCommand.ClaimedMagnitude = 1.0f;
-					AuthorityComponent->ProcessServerScenarioProbe(ClosedCommand, ClientId);
-				}
+				AuthorityComponent->SetLifecycleReady(false);
+				FAethelnSpikeScenarioProbe ClosedCommand;
+				ClosedCommand.Category = TEXT("disconnected-command");
+				ClosedCommand.Sequence = 1;
+				ClosedCommand.ClaimedMagnitude = 1.0f;
+				AuthorityComponent->ProcessServerScenarioProbe(ClosedCommand, ClientId);
 			}
 		}
+		AuthorityComponents.Remove(Exiting);
 		InitialLocations.Remove(Exiting);
 		ConnectionIds.Remove(Exiting);
 		ClientIds.Remove(Exiting);
