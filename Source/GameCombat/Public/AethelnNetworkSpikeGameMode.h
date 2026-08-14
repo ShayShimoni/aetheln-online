@@ -19,8 +19,13 @@ public:
 
 	static bool IsAllowedScenarioClientId(const FString& ClientId);
 	static FString MakeScenarioConnectionId(const FString& RunId, uint32 Sequence);
+	static FVector MakeScenarioEnemyLocation(const FVector& PawnLocation, const FVector& PawnForward);
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FAethelnNetworkSpikeGameModeRuntimePlacementTest;
+#endif
+
 	FString GetIdentityFields() const;
 	FString GetClientId(const AController* Controller) const;
 	void PositionEnemyForFirstClient(APlayerController* NewPlayer);

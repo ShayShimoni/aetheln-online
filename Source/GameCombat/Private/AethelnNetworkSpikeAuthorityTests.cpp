@@ -145,6 +145,10 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Reconnect label is accepted only for spike correlation"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("client-1-reconnect")));
 	TestFalse(TEXT("Arbitrary client labels are rejected"), AAethelnNetworkSpikeGameMode::IsAllowedScenarioClientId(TEXT("admin")));
 	TestNotEqual(TEXT("Server connection identities are unique"), AAethelnNetworkSpikeGameMode::MakeScenarioConnectionId(TEXT("run-1"), 1), AAethelnNetworkSpikeGameMode::MakeScenarioConnectionId(TEXT("run-1"), 2));
+	TestEqual(
+		TEXT("Scenario enemy follows authoritative client one at the authored attack reach"),
+		AAethelnNetworkSpikeGameMode::MakeScenarioEnemyLocation(FVector(100.0f, 200.0f, 300.0f), FVector(10.0f, 0.0f, 0.0f)),
+		FVector(275.0f, 200.0f, 300.0f));
 
 	TestFalse(TEXT("Attack waits for client readiness"), AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(TEXT("client-1"), false, 2.0f, false));
 	TestFalse(TEXT("Only client one submits the scenario attack"), AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(TEXT("client-2"), true, 2.0f, false));

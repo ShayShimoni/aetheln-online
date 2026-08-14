@@ -74,6 +74,10 @@ void AAethelnNetworkSpikeGameMode::Tick(float DeltaSeconds)
 		AController* Controller = Entry.Key.Get();
 		APawn* Pawn = Controller != nullptr ? Controller->GetPawn() : nullptr;
 		const FString ClientId = GetClientId(Controller);
+		if (ClientId == TEXT("client-1"))
+		{
+			PositionEnemyForFirstClient(Cast<APlayerController>(Controller));
+		}
 		if (Pawn != nullptr && !ClientId.IsEmpty() && !MovementObserved.Contains(ClientId)
 			&& FVector::DistSquared(Pawn->GetActorLocation(), Entry.Value) >= 1.0f)
 		{
@@ -171,6 +175,11 @@ FString AAethelnNetworkSpikeGameMode::MakeScenarioConnectionId(const FString& In
 	return FString::Printf(TEXT("%s-connection-%04u"), *InRunId, Sequence);
 }
 
+FVector AAethelnNetworkSpikeGameMode::MakeScenarioEnemyLocation(const FVector& PawnLocation, const FVector& PawnForward)
+{
+	return PawnLocation + PawnForward.GetSafeNormal() * 175.0f;
+}
+
 FString AAethelnNetworkSpikeGameMode::GetIdentityFields() const
 {
 	return FString::Printf(TEXT("scenario=%s profile=%s run=%s"), *ScenarioId, *ProfileId, *RunId);
@@ -193,6 +202,6 @@ void AAethelnNetworkSpikeGameMode::PositionEnemyForFirstClient(APlayerController
 	}
 	if (APawn* Pawn = NewPlayer->GetPawn())
 	{
-		SpawnedEnemy->SetActorLocation(Pawn->GetActorLocation() + Pawn->GetActorForwardVector() * 175.0f);
+		SpawnedEnemy->SetActorLocation(MakeScenarioEnemyLocation(Pawn->GetActorLocation(), Pawn->GetActorForwardVector()));
 	}
 }
