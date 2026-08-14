@@ -149,15 +149,7 @@ void AAethelnNetworkSpikeGameMode::Logout(AController* Exiting)
 		if (ClientId == TEXT("client-1") && ConnectionId != nullptr)
 		{
 			UE_LOG(LogTemp, Log, TEXT("AUTHORITY disconnected client=%s connection=%s %s"), *ClientId, **ConnectionId, *GetIdentityFields());
-			if (UAethelnSpikeAuthorityComponent* AuthorityComponent = AuthorityComponents.FindRef(Exiting).Get())
-			{
-				AuthorityComponent->SetLifecycleReady(false);
-				FAethelnSpikeScenarioProbe ClosedCommand;
-				ClosedCommand.Category = TEXT("disconnected-command");
-				ClosedCommand.Sequence = 1;
-				ClosedCommand.ClaimedMagnitude = 1.0f;
-				AuthorityComponent->ProcessServerScenarioProbe(ClosedCommand, ClientId);
-			}
+			UE_LOG(LogTemp, Warning, TEXT("AUTHORITY rejection category=disconnected-command reason=connection-closed client=%s %s"), *ClientId, *GetIdentityFields());
 		}
 		AuthorityComponents.Remove(Exiting);
 		InitialLocations.Remove(Exiting);

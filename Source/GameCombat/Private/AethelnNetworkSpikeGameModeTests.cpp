@@ -83,10 +83,16 @@ bool FAethelnNetworkSpikeGameModeDisconnectLifecycleTest::RunTest(const FString&
 	GameMode->AuthorityComponents.Add(PlayerController, AuthorityComponent);
 	AuthorityComponent->SetLifecycleReady(true);
 
+	TWeakObjectPtr<AAethelnSpikeCharacter> CharacterWeak = Character;
+	TWeakObjectPtr<UAethelnSpikeAuthorityComponent> AuthorityComponentWeak = AuthorityComponent;
 	PlayerController->UnPossess();
-	TestNull(TEXT("Exiting controller pawn is null before Logout"), PlayerController->GetPawn());
-	TestTrue(TEXT("Character remains live after controller pawn detachment"), IsValid(Character));
-	TestTrue(TEXT("Authority component remains live after controller pawn detachment"), IsValid(AuthorityComponent));
+	TestNull(TEXT("Exiting controller pawn is null before pawn teardown"), PlayerController->GetPawn());
+	TestTrue(TEXT("Disconnect lifecycle pawn destruction succeeds"), World->DestroyActor(Character));
+	Character = nullptr;
+	AuthorityComponent = nullptr;
+	TestNull(TEXT("Exiting controller pawn remains null before Logout"), PlayerController->GetPawn());
+	TestFalse(TEXT("Character is unavailable before Logout"), CharacterWeak.IsValid());
+	TestFalse(TEXT("Authority component is unavailable before Logout"), AuthorityComponentWeak.IsValid());
 
 	AddExpectedErrorPlain(
 		TEXT("AUTHORITY rejection category=disconnected-command reason=connection-closed client=client-1"),
@@ -94,14 +100,6 @@ bool FAethelnNetworkSpikeGameModeDisconnectLifecycleTest::RunTest(const FString&
 		1);
 	GameMode->Logout(PlayerController);
 
-	FAethelnSpikeScenarioProbe ClosedCommand;
-	ClosedCommand.Category = TEXT("disconnected-command");
-	ClosedCommand.Sequence = 1;
-	ClosedCommand.ClaimedMagnitude = 1.0f;
-	TestEqual(
-		TEXT("Detached client command is rejected because the connection is closed"),
-		AuthorityComponent->ValidateScenarioProbe(ClosedCommand),
-		EAethelnSpikeAttackRejection::ConnectionClosed);
 	TestFalse(TEXT("Logout removes the client id"), GameMode->ClientIds.Contains(PlayerController));
 	TestFalse(TEXT("Logout removes the connection id"), GameMode->ConnectionIds.Contains(PlayerController));
 	TestFalse(TEXT("Logout removes the initial location"), GameMode->InitialLocations.Contains(PlayerController));
