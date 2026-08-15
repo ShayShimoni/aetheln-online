@@ -149,7 +149,6 @@ void AAethelnNetworkSpikeGameMode::Logout(AController* Exiting)
 		if (ClientId == TEXT("client-1") && ConnectionId != nullptr)
 		{
 			UE_LOG(LogTemp, Log, TEXT("AUTHORITY disconnected client=%s connection=%s %s"), *ClientId, **ConnectionId, *GetIdentityFields());
-			UE_LOG(LogTemp, Warning, TEXT("AUTHORITY rejection category=disconnected-command reason=connection-closed client=%s %s"), *ClientId, *GetIdentityFields());
 		}
 		AuthorityComponents.Remove(Exiting);
 		InitialLocations.Remove(Exiting);

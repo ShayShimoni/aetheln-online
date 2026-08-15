@@ -9,6 +9,54 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/OutputDevice.h"
+#include "Misc/OutputDeviceRedirector.h"
+
+namespace AethelnNetworkSpikeGameModeTests
+{
+	class FScopedDisconnectLogCapture final : public FOutputDevice
+	{
+	public:
+		FScopedDisconnectLogCapture()
+		{
+			if (GLog != nullptr)
+			{
+				GLog->AddOutputDevice(this);
+				bRegistered = true;
+			}
+		}
+
+		virtual ~FScopedDisconnectLogCapture() override
+		{
+			if (bRegistered && GLog != nullptr)
+			{
+				GLog->FlushThreadedLogs();
+				GLog->RemoveOutputDevice(this);
+			}
+		}
+
+		virtual void Serialize(const TCHAR* Message, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (FCString::Strstr(Message, TEXT("AUTHORITY rejection category=disconnected-command")) != nullptr)
+			{
+				++DisconnectedCommandRejectionCount;
+			}
+		}
+
+		int32 GetDisconnectedCommandRejectionCount() const
+		{
+			if (GLog != nullptr)
+			{
+				GLog->FlushThreadedLogs();
+			}
+			return DisconnectedCommandRejectionCount;
+		}
+
+	private:
+		int32 DisconnectedCommandRejectionCount = 0;
+		bool bRegistered = false;
+	};
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnNetworkSpikeGameModeDisconnectLifecycleTest,
@@ -94,12 +142,13 @@ bool FAethelnNetworkSpikeGameModeDisconnectLifecycleTest::RunTest(const FString&
 	TestFalse(TEXT("Character is unavailable before Logout"), CharacterWeak.IsValid());
 	TestFalse(TEXT("Authority component is unavailable before Logout"), AuthorityComponentWeak.IsValid());
 
-	AddExpectedErrorPlain(
-		TEXT("AUTHORITY rejection category=disconnected-command reason=connection-closed client=client-1"),
-		EAutomationExpectedErrorFlags::Contains,
-		1);
+	AethelnNetworkSpikeGameModeTests::FScopedDisconnectLogCapture LogCapture;
 	GameMode->Logout(PlayerController);
 
+	TestEqual(
+		TEXT("Logout does not fabricate a disconnected-command rejection without a command-validation attempt"),
+		LogCapture.GetDisconnectedCommandRejectionCount(),
+		0);
 	TestFalse(TEXT("Logout removes the client id"), GameMode->ClientIds.Contains(PlayerController));
 	TestFalse(TEXT("Logout removes the connection id"), GameMode->ConnectionIds.Contains(PlayerController));
 	TestFalse(TEXT("Logout removes the initial location"), GameMode->InitialLocations.Contains(PlayerController));

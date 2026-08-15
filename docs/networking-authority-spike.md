@@ -187,12 +187,18 @@ unchanged.
 During this scenario, the server records correlated structured observations
 only after it observes the corresponding authoritative state: connection,
 movement, enemy spawn, melee resolution, damage application, disconnect
-cleanup, loss of command eligibility, and reconnect with a new connection.
+cleanup, and reconnect with a new connection.
 The second client emits its join-in-progress observation only after the
 replicated enemy exists locally. Eight bounded negative probes cover invalid
 movement, aim, activation, hit, cooldown, dodge, block, and damage claims. The
 probes expose rejection behavior only; they do not implement deferred dodge or
 block gameplay.
+
+The packaged scenario does not transport or prove a command attempt after the
+client disconnects. `connection-closed` remains part of the stable rejection
+vocabulary and is directly covered by the closed-lifecycle authority validator
+test; a `Logout` lifecycle observation must not be reported as rejected-command
+evidence.
 
 The runner supports the Issue #15 WSL topology through
 `ServerLauncherExecutable` and `ServerLauncherArguments`. Launcher arguments
@@ -234,8 +240,8 @@ console windows for those child processes.
 The focused PowerShell fixture measures the successful post-marker interval,
 asserts the direct and launcher-mediated no-window process configurations, and
 verifies that an early server exit during the interval is rejected. It also
-requires all nine rejection records (the eight invalid-claim categories plus a
-post-disconnect command) and the runtime network-configuration confirmation.
+requires all eight invalid-claim rejection records, the real disconnect and
+reconnect lifecycle records, and the runtime network-configuration confirmation.
 The launcher fixture uses a real descendant process, proves it is absent after
 cleanup, fails closed when cleanup confirmation fails, and rejects a server
 digest that does not match the exact provenance inventory entry. Those checks validate runner

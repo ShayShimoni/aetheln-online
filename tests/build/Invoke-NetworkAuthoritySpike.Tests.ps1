@@ -76,6 +76,16 @@ try {
 	Assert-True ($BoundaryFailure.Message -match "Required process 'boundary-runtime' exited unexpectedly with code 0 during the 1-second observation interval") 'A required process that exits during the final polling sleep must be rejected by the post-sleep health check.'
 	Write-Output 'PASS: final polling-sleep exits are rejected by a deterministic post-sleep health check'
 
+	$CaptureDisposeIndex = $RunnerSource.LastIndexOf('$Handle.Capture.Dispose()', [System.StringComparison]::Ordinal)
+	$FinalInventoryIndex = $RunnerSource.LastIndexOf('Assert-ExactRejectionInventory @($FinalServerLines + $FinalServerErrorLines)', [System.StringComparison]::Ordinal)
+	$SuccessfulResultIndex = $RunnerSource.LastIndexOf("`$Result = if (`$EvidenceMode -ceq 'packaged')", [System.StringComparison]::Ordinal)
+	$EvidenceWriteIndex = $RunnerSource.LastIndexOf('$Evidence | ConvertTo-Json', [System.StringComparison]::Ordinal)
+	Assert-True ($CaptureDisposeIndex -ge 0) 'The runner must close and drain process captures.'
+	Assert-True ($FinalInventoryIndex -gt $CaptureDisposeIndex) 'The final rejection inventory must be validated only after every process capture is closed and drained.'
+	Assert-True ($SuccessfulResultIndex -gt $FinalInventoryIndex) 'A successful result must be assigned only after final rejection-inventory validation.'
+	Assert-True ($EvidenceWriteIndex -gt $SuccessfulResultIndex) 'Evidence must be written only after final rejection-inventory validation and result assignment.'
+	Write-Output 'PASS: cleanup-boundary rejection validation runs after capture drain and before success publication'
+
 	$PowerShellExecutable = (Get-Process -Id $PID).Path
 	$FakeRuntime = Join-Path $FixtureRoot 'fake-runtime.ps1'
 	Set-Content -LiteralPath $FakeRuntime -Encoding UTF8 -Value @'
@@ -113,11 +123,31 @@ if ($Role -eq 'server') {
 		if ($Category -eq 'movement') { $Reason = $RejectionReason }
 		Write-Output "AUTHORITY rejection category=$Category reason=$Reason client=client-2 $Identity"
 	}
-	Write-Output "AUTHORITY disconnected client=client-1 connection=connection-1 $Identity"
-	Write-Output "AUTHORITY rejection category=disconnected-command reason=connection-closed client=client-1 $Identity"
 	$ReconnectConnection = if ($Behavior -eq 'reused-connection') { 'connection-1' } else { 'connection-3' }
-	Write-Output "AUTHORITY connection client=client-1-reconnect connection=$ReconnectConnection $Identity"
-	Write-Output "AUTHORITY reconnected client=client-1-reconnect connection=$ReconnectConnection $Identity"
+	if ($Behavior -eq 'reordered-lifecycle') {
+		Write-Output "AUTHORITY connection client=client-1-reconnect connection=$ReconnectConnection $Identity"
+		Write-Output "AUTHORITY reconnected client=client-1-reconnect connection=$ReconnectConnection $Identity"
+	}
+	if ($Behavior -ne 'missing-disconnect') {
+		Write-Output "AUTHORITY disconnected client=client-1 connection=connection-1 $Identity"
+	}
+	if ($Behavior -eq 'fabricated-disconnected-command') {
+		Write-Output "AUTHORITY rejection category=disconnected-command reason=connection-closed client=client-1 $Identity"
+	}
+	if ($Behavior -eq 'fabricated-disconnected-command-stderr') {
+		[Console]::Error.WriteLine("AUTHORITY rejection category=disconnected-command reason=connection-closed client=client-1 $Identity")
+	}
+	if ($Behavior -eq 'unexpected-rejection-category') {
+		Write-Output "AUTHORITY rejection category=unexpected reason=malformed-intent client=client-2 $Identity"
+	}
+	if ($Behavior -ne 'missing-reconnect' -and $Behavior -ne 'reordered-lifecycle') {
+		Write-Output "AUTHORITY connection client=client-1-reconnect connection=$ReconnectConnection $Identity"
+		Write-Output "AUTHORITY reconnected client=client-1-reconnect connection=$ReconnectConnection $Identity"
+	}
+	if ($Behavior -eq 'delayed-fabricated-disconnected-command') {
+		Start-Sleep -Milliseconds 750
+		Write-Output "AUTHORITY rejection category=disconnected-command reason=connection-closed client=client-1 $Identity"
+	}
 	if ($ExitAfterMarkers -eq 'true') {
 		Start-Sleep -Seconds 1
 		exit 0
@@ -243,9 +273,11 @@ exit $Child.ExitCode
 	Assert-True (@($Evidence.observations | Where-Object { $_.event -eq 'movement' }).Count -eq 2) 'Movement must be observed for both clients.'
 	Assert-True (@($Evidence.observations | Where-Object { $_.event -eq 'melee_resolved' }).Count -eq 1) 'One server-resolved melee observation is required.'
 	Assert-True (@($Evidence.observations | Where-Object { $_.event -eq 'damage_applied' }).Count -eq 1) 'Authoritative damage must be observed.'
-	foreach ($Category in @('movement','aim','activation','hit','cooldown','dodge','block','damage','disconnected-command')) {
+	foreach ($Category in @('movement','aim','activation','hit','cooldown','dodge','block','damage')) {
 		Assert-True (@($Evidence.rejections | Where-Object { $_.category -eq $Category }).Count -eq 1) "Exactly one observable rejection is required for $Category."
 	}
+	Assert-True (@($Evidence.rejections).Count -eq 8) 'Evidence must contain exactly the eight genuine invalid-claim rejections.'
+	Assert-True (@($Evidence.rejections | Where-Object { $_.category -eq 'disconnected-command' }).Count -eq 0) 'Logout must not be admitted as disconnected-command rejection evidence.'
 	$MeasurementFields = @(
 		'server_game_thread_milliseconds',
 		'server_replication_cpu_milliseconds',
@@ -534,14 +566,21 @@ exit $Child.ExitCode
 		@{ Name = 'duplicate'; Behavior = 'duplicate-damage'; Failure = 'Expected exactly one damage-application record, observed 2' },
 		@{ Name = 'mismatched'; Behavior = 'mismatched-run'; Failure = 'waiting for authoritative damage' },
 		@{ Name = 'reordered'; Behavior = 'reordered'; Failure = 'reordered before authoritative damage' },
-		@{ Name = 'reused'; Behavior = 'reused-connection'; Failure = 'Reconnect reused the disconnected connection identity' }
+		@{ Name = 'missing-disconnect'; Behavior = 'missing-disconnect'; Failure = 'waiting for disconnect cleanup' },
+		@{ Name = 'missing-reconnect'; Behavior = 'missing-reconnect'; Failure = 'waiting for new reconnect identity' },
+		@{ Name = 'reordered-lifecycle'; Behavior = 'reordered-lifecycle'; Failure = 'Authority rejection, disconnect, and reconnect observations were reordered' },
+		@{ Name = 'reused'; Behavior = 'reused-connection'; Failure = 'Reconnect reused the disconnected connection identity' },
+		@{ Name = 'fabricated-disconnected-command'; Behavior = 'fabricated-disconnected-command'; Failure = 'Unexpected disconnected-command rejection without a transported command-validation attempt' },
+		@{ Name = 'delayed-fabricated-disconnected-command'; Behavior = 'delayed-fabricated-disconnected-command'; Failure = 'Unexpected disconnected-command rejection without a transported command-validation attempt' },
+		@{ Name = 'fabricated-disconnected-command-stderr'; Behavior = 'fabricated-disconnected-command-stderr'; Failure = 'Unexpected disconnected-command rejection without a transported command-validation attempt' },
+		@{ Name = 'unexpected-rejection-category'; Behavior = 'unexpected-rejection-category'; Failure = "Unexpected authority rejection category 'unexpected'" }
 	)
 	foreach ($Scenario in $NegativeScenarios) {
 		$NegativeFailure = $null
 		try { Invoke-FixtureRun (Join-Path $FixtureRoot $Scenario.Name) ("fixture-" + $Scenario.Name) 'malformed-intent' 1 $false $false $Scenario.Behavior 2 } catch { $NegativeFailure = $_.Exception.Message }
 		Assert-True ($NegativeFailure -match [regex]::Escape($Scenario.Failure)) "$($Scenario.Name) evidence must fail closed."
 	}
-	Write-Output 'PASS: missing, duplicate, mismatched-run, reordered, and reused-connection evidence fails closed'
+	Write-Output 'PASS: missing, duplicate, mismatched-run, reordered, lifecycle, reused-connection, and fabricated-command evidence fails closed'
 
 	$env:AETHELN_TEST_LAUNCHER_FAIL = 'true'
 	$LauncherFailure = $null

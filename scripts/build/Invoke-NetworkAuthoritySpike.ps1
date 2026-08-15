@@ -276,6 +276,40 @@ function Wait-ForRejection([System.Diagnostics.Process] $Process, [string] $Path
 	throw "Timed out after $TimeoutSeconds seconds waiting for rejection '$Category' in '$Path'."
 }
 
+function Assert-ExactRejectionInventory([string[]] $Lines, [regex] $Regex, [System.Collections.IDictionary] $RequiredCategories) {
+	$ObservedCounts = @{}
+	$ObservedTotal = 0
+	foreach ($Line in $Lines) {
+		$Match = $Regex.Match($Line)
+		if (-not $Match.Success) { continue }
+		$Category = $Match.Groups['Category'].Value
+		if ($Category -ceq 'disconnected-command') {
+			throw 'Unexpected disconnected-command rejection without a transported command-validation attempt.'
+		}
+		if (-not $RequiredCategories.Contains($Category)) {
+			throw "Unexpected authority rejection category '$Category'."
+		}
+		$Reason = $Match.Groups['Reason'].Value
+		if ($Reason -cne $RequiredCategories[$Category]) {
+			throw "Rejection '$Category' used unexpected reason '$Reason'."
+		}
+		$ClientId = $Match.Groups['ClientId'].Value
+		if ($ClientId -cne 'client-2') {
+			throw "Rejection '$Category' was not correlated to client-2."
+		}
+		$ObservedCounts[$Category] = 1 + [int] $ObservedCounts[$Category]
+		++$ObservedTotal
+	}
+	foreach ($Category in $RequiredCategories.Keys) {
+		if ([int] $ObservedCounts[$Category] -ne 1) {
+			throw "Expected exactly one '$Category' rejection, observed $([int] $ObservedCounts[$Category])."
+		}
+	}
+	if ($ObservedTotal -ne $RequiredCategories.Count) {
+		throw "Expected exactly $($RequiredCategories.Count) correlated authority rejections, observed $ObservedTotal."
+	}
+}
+
 function Wait-ForObservationInterval {
 	param(
 		[Parameter(Mandatory, Position = 0)] [object[]] $RequiredProcesses,
@@ -483,7 +517,6 @@ $RequiredRejectionCategories = [ordered]@{
 	'dodge' = 'activation-blocked'
 	'block' = 'activation-blocked'
 	'damage' = 'malformed-intent'
-	'disconnected-command' = 'connection-closed'
 }
 $ReconnectRegex = [regex]::new((Expand-Pattern $ReconnectPattern 'client-1-reconnect'))
 if ($ReconnectRegex.GetGroupNames() -notcontains 'ConnectionId') { throw 'ReconnectPattern must contain a named ConnectionId capture.' }
@@ -517,7 +550,9 @@ $Clients = [System.Collections.Generic.List[object]]::new()
 $Result = 'failed'
 $Failure = $null
 $CleanupFailure = $null
+$PostCaptureValidationFailure = $null
 $ServerDescendantProcessId = $null
+$ObservationCompleted = $false
 
 try {
 	$ServerStdOut = Join-Path $ResolvedLogs 'server.stdout.log'
@@ -573,7 +608,7 @@ try {
 	$Observations.Add((New-Observation 'damage_applied' $ServerStdOut $DamageLine))
 	$JoinLine = Wait-ForMatch $ClientProcesses['client-2'] (Join-Path $ResolvedLogs 'client-2.stdout.log') (Join-Path $ResolvedLogs 'client-2.stderr.log') 'join-in-progress state' (Expand-Pattern $JoinInProgressPattern 'client-2')
 	$Lifecycle.Add((New-Observation 'join_in_progress' (Join-Path $ResolvedLogs 'client-2.stdout.log') $JoinLine 'client-2'))
-	foreach ($Category in @($RequiredRejectionCategories.Keys | Where-Object { $_ -ne 'disconnected-command' })) {
+	foreach ($Category in $RequiredRejectionCategories.Keys) {
 		$Observed = Wait-ForRejection $ServerProcess $ServerStdOut $ServerStdErr $RejectionRegex $Category
 		$Reason = $Observed.Match.Groups['Reason'].Value
 		$ClientId = $Observed.Match.Groups['ClientId'].Value
@@ -587,9 +622,6 @@ try {
 	$ClientProcesses['client-1'].WaitForExit()
 	$DisconnectLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'disconnect cleanup' (Expand-Pattern $DisconnectPattern 'client-1')
 	$Lifecycle.Add((New-Observation 'disconnect' $ServerStdOut $DisconnectLine 'client-1'))
-	$DisconnectedRejection = Wait-ForRejection $ServerProcess $ServerStdOut $ServerStdErr $RejectionRegex 'disconnected-command'
-	if ($DisconnectedRejection.Match.Groups['Reason'].Value -cne 'connection-closed' -or $DisconnectedRejection.Match.Groups['ClientId'].Value -cne 'client-1') { throw 'Disconnected command eligibility did not fail closed for client-1.' }
-	$Rejections.Add([pscustomobject]@{ category = 'disconnected-command'; reason = 'connection-closed'; client_id = 'client-1'; source = $ServerStdOut; detail = $DisconnectedRejection.Line })
 
 	$ReconnectId = 'client-1-reconnect'
 	$ReconnectStdOut = Join-Path $ResolvedLogs "$ReconnectId.stdout.log"
@@ -636,6 +668,8 @@ try {
 		if ($CategoryIndexes.Count -ne 1) { throw "Expected exactly one '$Category' rejection, observed $($CategoryIndexes.Count)." }
 		$RejectionIndexes[$Category] = $CategoryIndexes[0]
 	}
+	$ServerErrorLines = @(Get-Content -LiteralPath $ServerStdErr -ErrorAction Stop)
+	Assert-ExactRejectionInventory @($ServerLines + $ServerErrorLines) $RejectionRegex $RequiredRejectionCategories
 	foreach ($ClientId in @('client-1','client-2','client-1-reconnect')) {
 		$ClientLines = @(Get-Content -LiteralPath (Join-Path $ResolvedLogs "$ClientId.stdout.log") -ErrorAction Stop)
 		[void] (Get-SingleMatchIndex $ClientLines (Expand-Pattern $ClientReadyPattern $ClientId) "$ClientId ready")
@@ -651,13 +685,12 @@ try {
 	if ($GameplayOrderInvalid) {
 		throw 'Authority observations were duplicated or reordered before authoritative damage.'
 	}
-	$GameplayRejectionIndexes = @($RequiredRejectionCategories.Keys | Where-Object { $_ -ne 'disconnected-command' } | ForEach-Object { $RejectionIndexes[$_] })
+	$GameplayRejectionIndexes = @($RequiredRejectionCategories.Keys | ForEach-Object { $RejectionIndexes[$_] })
 	$FirstGameplayRejectionIndex = ($GameplayRejectionIndexes | Measure-Object -Minimum).Minimum
 	$LastGameplayRejectionIndex = ($GameplayRejectionIndexes | Measure-Object -Maximum).Maximum
 	$LifecycleOrderInvalid = $DamageIndex -ge $FirstGameplayRejectionIndex -or
 		$LastGameplayRejectionIndex -ge $DisconnectIndex -or
-		$DisconnectIndex -ge $RejectionIndexes['disconnected-command'] -or
-		$RejectionIndexes['disconnected-command'] -ge $ConnectionIndexes['client-1-reconnect'] -or
+		$DisconnectIndex -ge $ConnectionIndexes['client-1-reconnect'] -or
 		$ConnectionIndexes['client-1-reconnect'] -ge $ReconnectIndex
 	if ($LifecycleOrderInvalid) {
 		throw 'Authority rejection, disconnect, and reconnect observations were reordered.'
@@ -668,7 +701,7 @@ try {
 		[pscustomobject]@{ Name = 'client-2'; Process = $ClientProcesses['client-2']; StandardOutputPath = (Join-Path $ResolvedLogs 'client-2.stdout.log'); StandardErrorPath = (Join-Path $ResolvedLogs 'client-2.stderr.log') },
 		[pscustomobject]@{ Name = $ReconnectId; Process = $ReconnectProcess; StandardOutputPath = $ReconnectStdOut; StandardErrorPath = $ReconnectStdErr }
 	) $DurationSeconds
-	$Result = if ($EvidenceMode -ceq 'packaged') { 'packaged-candidate' } else { 'fixture-passed' }
+	$ObservationCompleted = $true
 }
 catch {
 	$Failure = $_.Exception.Message
@@ -701,6 +734,19 @@ finally {
 		$Handle.Capture.Dispose()
 		$Process.Dispose()
 	}
+	if ($ObservationCompleted -and -not $Failure -and -not $CleanupFailure) {
+		try {
+			$FinalServerLines = @(Get-Content -LiteralPath $ServerStdOut -ErrorAction Stop)
+			$FinalServerErrorLines = @(Get-Content -LiteralPath $ServerStdErr -ErrorAction Stop)
+			Assert-ExactRejectionInventory @($FinalServerLines + $FinalServerErrorLines) $RejectionRegex $RequiredRejectionCategories
+			$Result = if ($EvidenceMode -ceq 'packaged') { 'packaged-candidate' } else { 'fixture-passed' }
+		}
+		catch {
+			$PostCaptureValidationFailure = $_.Exception.Message
+			$Failure = $PostCaptureValidationFailure
+			$Result = 'failed'
+		}
+	}
 	$Evidence = [ordered]@{
 		schema_id = 'aetheln.network-authority-evidence'
 		schema_version = 1
@@ -732,6 +778,7 @@ finally {
 		unsupported_capabilities = @('projectile','block','dodge','rewind')
 	}
 	$Evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
+	if ($PostCaptureValidationFailure) { throw "Post-capture evidence validation failed: $PostCaptureValidationFailure" }
 	if ($CleanupFailure) { throw "Server cleanup failed: $CleanupFailure" }
 }
 
