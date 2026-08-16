@@ -69,3 +69,31 @@ struct GAMECOMBAT_API FAethelnSpikeAttackIntent
 	UPROPERTY()
 	FVector_NetQuantizeNormal Aim = FVector::ForwardVector;
 };
+
+/**
+ * Deliberately invalid, spike-only command used to prove server rejection boundaries.
+ * It is separate from gameplay intent so forbidden outcome claims can never enter the real attack contract.
+ */
+USTRUCT()
+struct GAMECOMBAT_API FAethelnSpikeScenarioProbe
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FName Category;
+
+	UPROPERTY()
+	uint32 Sequence = 0;
+
+	UPROPERTY()
+	FVector_NetQuantize100 ClaimedMovement = FVector::ZeroVector;
+
+	UPROPERTY()
+	FVector_NetQuantizeNormal ClaimedAim = FVector::ForwardVector;
+
+	UPROPERTY()
+	FName ClaimedOutcome;
+
+	UPROPERTY()
+	float ClaimedMagnitude = 0.0f;
+};

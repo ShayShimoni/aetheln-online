@@ -145,6 +145,27 @@ correlates all placeholders, fails closed on missing observations or reused
 connection identity, and writes
 `network-authority-spike-evidence.json` beneath the supplied log root.
 
+The server argument template must include the identity switches consumed by
+the opt-in driver:
+
+```text
+-AethelnAuthorityScenario
+-AethelnServerEndpoint={ServerEndpoint}
+-AethelnServerMap={ServerMap}
+-AethelnScenarioId={ScenarioId}
+-AethelnProfileId={ProfileId}
+-AethelnRunId={RunId}
+-AethelnNetworkConfig={NetworkConfigIdentity}
+```
+
+Each client uses the same switches plus
+`-AethelnSpikeClientId={ClientId}` and connects to
+`{ServerEndpoint}?AethelnClientId={ClientId}`. The client label in the URL is
+only a bounded correlation input; the server generates the connection ID.
+Actual caller-selected packet-emulation switches, if any, remain additional
+server/client arguments and must correspond to the supplied
+`NetworkConfigIdentity`.
+
 ### Post-marker observation and process contract
 
 `DurationSeconds` is an enforced observation interval, not metadata only. After
@@ -155,14 +176,75 @@ runtime error or unexpected exit from any of those three processes during the
 interval fails the run; successful marker collection alone does not end the
 observation early.
 
-The runner creates the server and client child runtimes through
+The packaged scenario driver is opt-in. It runs only when the spike GameMode URL
+override and `-AethelnAuthorityScenario` are both present. Each client connects
+with one bounded URL correlation value (`AethelnClientId=client-1`,
+`client-2`, or `client-1-reconnect`) and receives a separate server-assigned
+connection identity. The client label cannot select a target, claim a hit or
+damage result, or grant command eligibility. Normal `StarterMap` behavior is
+unchanged.
+
+During this scenario, the server records correlated structured observations
+only after it observes the corresponding authoritative state: connection,
+movement, enemy spawn, melee resolution, damage application, disconnect
+cleanup, and reconnect with a new connection.
+The second client emits its join-in-progress observation only after the
+replicated enemy exists locally. Eight bounded negative probes cover invalid
+movement, aim, activation, hit, cooldown, dodge, block, and damage claims. The
+probes expose rejection behavior only; they do not implement deferred dodge or
+block gameplay.
+
+The packaged scenario does not transport or prove a command attempt after the
+client disconnects. `connection-closed` remains part of the stable rejection
+vocabulary and is directly covered by the closed-lifecycle authority validator
+test; a `Logout` lifecycle observation must not be reported as rejected-command
+evidence.
+
+The runner supports the Issue #15 WSL topology through
+`ServerLauncherExecutable` and `ServerLauncherArguments`. Launcher arguments
+must contain both `{ServerExecutable}` and `{ServerArguments}`; the latter is
+expanded into the complete packaged-server argument vector. A typical launch
+uses `wsl.exe` with `--exec`, while Windows clients launch directly. A launcher
+must also provide `ServerIdentityArguments`, `ServerCleanupArguments`, and a
+`ServerProcessIdPattern` with a named `ProcessId` capture. The identity command
+hashes the exact Linux executable path before launch. The launch command emits
+the Linux descendant PID, and the cleanup command consumes
+`{ServerProcessId}`, terminates that descendant, waits until it is absent, and
+exits nonzero if absence cannot be confirmed. All launcher, control, server,
+and client processes remain hidden, redirected, monitored, and cleaned up.
+
+Every server/client argument vector carries the caller-supplied
+`NetworkConfigIdentity`, and the server must confirm that identity at runtime.
+The identity correlates the external network-emulation configuration; the
+repository still chooses no latency, jitter, loss, tick, history, bandwidth,
+or capacity number. Those evidence fields remain null until a measured profile
+is reviewed.
+
+The runner rejects missing or duplicate required records, mismatched
+scenario/profile/run identities, unknown or category-inappropriate rejection
+reasons, reused connections, reordered gameplay/lifecycle evidence, and early
+process exits. Its explicit `fixture` evidence mode can produce only
+`fixture-passed`; synthetic processes can never produce a packaged `passed`
+result. Packaged mode produces only `packaged-candidate`, which requires a
+fresh restricted verifier and approver before it can satisfy the ticket; the
+runner never self-awards final packaged success. Packaged mode additionally requires the Issue #15 schema-v2 build
+provenance document, an exact clean source revision and build identity, and
+unique inventory hashes binding the exact normalized selected-client and
+launcher-side server paths. A basename-only or merely hash-shaped inventory
+entry is insufficient.
+It creates the server and client child runtimes through
 `System.Diagnostics.ProcessStartInfo` with `UseShellExecute = $false` and
 `CreateNoWindow = $true`. Packaged authority runs therefore do not create
 console windows for those child processes.
 
 The focused PowerShell fixture measures the successful post-marker interval,
-asserts the no-window process configuration, and verifies that an early server
-exit during the interval is rejected. Those checks validate runner
+asserts the direct and launcher-mediated no-window process configurations, and
+verifies that an early server exit during the interval is rejected. It also
+requires all eight invalid-claim rejection records, the real disconnect and
+reconnect lifecycle records, and the runtime network-configuration confirmation.
+The launcher fixture uses a real descendant process, proves it is absent after
+cleanup, fails closed when cleanup confirmation fails, and rejects a server
+digest that does not match the exact provenance inventory entry. Those checks validate runner
 orchestration and failure handling only. They do not replace the real packaged
 dedicated-server-plus-client capture required for multiplayer evidence.
 
@@ -178,12 +260,13 @@ lifecycle, authority observations, rejection, provenance, explicit null
 measurements, process cleanup, and fail-closed placeholder validation. The
 fixture test is registered as a required check in the CI suite.
 
-Local verification on 2026-08-11 passed the focused PowerShell fixture, all 15
+Local verification on 2026-08-12 passed the focused PowerShell fixture, all 15
 required CI checks, the incremental `AethelnOnlineEditor Win64 Development`
-compile, all six `Aetheln.NetworkSpike` contract tests, and
-`Aetheln.GameCombat.NetworkSpike.Authority`. The advisory PSScriptAnalyzer gate
-was skipped because that module was unavailable. These results validate the
-bounded source baseline only; they are not packaged multiplayer evidence.
+compile, all six `Aetheln.NetworkSpike` contract tests, and the focused
+`Aetheln.GameCombat.NetworkSpike.Authority` test. The advisory PSScriptAnalyzer
+gate was skipped because that module was unavailable. These results validate
+the bounded source and orchestration baseline only; they are not packaged
+multiplayer evidence.
 
 ### Not yet performed
 

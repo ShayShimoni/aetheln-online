@@ -17,6 +17,7 @@ public:
 	UAethelnSpikeAuthorityComponent();
 
 	void SubmitAttack(const FVector& AimDirection);
+	void SubmitScenarioProbe(const FAethelnSpikeScenarioProbe& Probe);
 	void SetLifecycleReady(bool bReady);
 	EAethelnSpikeAttackRejection GetLastRejection() const { return LastRejection; }
 	const FGuid& GetActiveAttackId() const { return ActiveAttackId; }
@@ -35,12 +36,18 @@ public:
 		double MaximumTimestampDeltaSeconds,
 		bool bLifecycleReady,
 		bool bActorUsable);
+	EAethelnSpikeAttackRejection ValidateScenarioProbe(const FAethelnSpikeScenarioProbe& Probe) const;
+	EAethelnSpikeAttackRejection ProcessServerScenarioProbe(const FAethelnSpikeScenarioProbe& Probe, const FString& ClientIdOverride = FString());
+	static FString GetScenarioCategoryId(FName Category);
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 protected:
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitAttack(const FAethelnSpikeAttackIntent& Intent);
+
+	UFUNCTION(Server, Reliable)
+	void ServerSubmitScenarioProbe(const FAethelnSpikeScenarioProbe& Probe);
 
 private:
 	void Reject(EAethelnSpikeAttackRejection Reason);
