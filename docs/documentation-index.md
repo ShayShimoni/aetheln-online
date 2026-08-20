@@ -38,9 +38,12 @@ these documents in order:
 4. [Prototype and 1.0 Supporting Artifacts](prototype-and-1.0-supporting-artifacts.md)
    provides subordinate decision, terminology, state, release, threat, test,
    and provenance traceability.
+5. [Staged Multiplayer Threat Model](staged-multiplayer-threat-model.md)
+   records the Issue #40 prototype baseline, representative 1.0 threat and test
+   specifications, risk decisions, and follow-up traceability.
 
-The briefs summarize stage contracts and do not override the specialized
-canonical product or technical documents.
+The briefs and traceability artifacts summarize stage contracts and remain
+subordinate to the specialized canonical product and technical documents.
 
 ## Delivery and Work Status
 

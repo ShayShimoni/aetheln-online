@@ -123,6 +123,9 @@ P10-031, P10-038.)
 
 ## Threat and data inventory
 
+The detailed Issue #40 baseline, boundaries, abuse register, risk decisions, and
+follow-up specifications are in the [Staged Multiplayer Threat Model](staged-multiplayer-threat-model.md).
+
 | Asset or data | Boundary and principal risks | Owner/evidence |
 | --- | --- | --- |
 | Source, dependencies, build artifacts, configuration, release provenance | Tampering, vulnerable dependency, secret leakage, incompatible build | #13/#15/#16/#40/#46; P10-004-P10-007, P10-033, P10-054 |
@@ -140,6 +143,9 @@ P10-030, P10-051-P10-053; canonical owner:
 [Security and Operations](security-and-operations.md).)
 
 ## Test matrix
+
+Detailed adversarial fixtures, authoritative oracles, telemetry, automation
+status, and evidence boundaries are in the [Staged Multiplayer Threat Model](staged-multiplayer-threat-model.md#representative-test-plan).
 
 | Requirement | Verification class | Evidence owner |
 | --- | --- | --- |
