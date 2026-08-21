@@ -88,6 +88,37 @@
       "base64"
     ]
   },
+  "authoritative_evidence_manifest_schema": {
+    "root_fields": [
+      "format",
+      "stage",
+      "records"
+    ],
+    "format": "delivery_authoritative_evidence_manifest_v1",
+    "stages": [
+      "verifier",
+      "approver"
+    ],
+    "records_minimum": 1,
+    "record_fields": [
+      "field",
+      "kind",
+      "provenance",
+      "encoding",
+      "source",
+      "sha256"
+    ]
+  },
+  "required_evidence_source_schema": {
+    "record_fields": [
+      "field",
+      "kind",
+      "provenance",
+      "encoding",
+      "source",
+      "sha256"
+    ]
+  },
   "blind_prohibited_keys": [
     "agent_identity",
     "agent_name",
@@ -194,18 +225,21 @@
         "candidate_artifact",
         "test_environment",
         "commands",
-        "raw_check_output"
+        "raw_check_output",
+        "required_evidence_sources"
       ],
       "allowed": [
         "candidate_artifact",
         "test_environment",
         "commands",
-        "raw_check_output"
+        "raw_check_output",
+        "required_evidence_sources"
       ],
       "neutral_evidence_fields": {
         "candidate_artifact": "single:artifact:launcher",
         "raw_check_output": "array:command_log:launcher"
       },
+      "authoritative_evidence_manifest_required": true,
       "blind": true
     },
     "reviewer": {
@@ -281,7 +315,8 @@
         "allowed_paths",
         "non_goals",
         "final_artifact",
-        "raw_check_output"
+        "raw_check_output",
+        "required_evidence_sources"
       ],
       "allowed": [
         "baseline_status",
@@ -289,7 +324,8 @@
         "allowed_paths",
         "non_goals",
         "final_artifact",
-        "raw_check_output"
+        "raw_check_output",
+        "required_evidence_sources"
       ],
       "neutral_evidence_fields": {
         "baseline_status": "single:status:launcher",
@@ -297,6 +333,7 @@
         "final_artifact": "single:artifact:launcher",
         "raw_check_output": "array:command_log:launcher"
       },
+      "authoritative_evidence_manifest_required": true,
       "blind": true
     },
     "qa": {

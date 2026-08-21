@@ -334,6 +334,99 @@ content or rejected values. The stable codes are
 `neutral_evidence_hash_mismatch`, and
 `neutral_evidence_field_contract_invalid`.
 
+### Required neutral-evidence composition preflight
+
+Every verifier and approver launch requires one independently authoritative,
+out-of-band manifest. `delivery_authoritative_evidence_manifest_v1` is a closed
+object with exactly `format`, `stage`, and `records`. `format` is the literal
+`delivery_authoritative_evidence_manifest_v1`; `stage` is exactly `verifier` or
+`approver` and must match the routed stage; and `records` is a nonempty array.
+Each record is closed with exactly these six members: `field`, `kind`,
+`provenance`, `encoding`, `source`, and `sha256`. `field` names a mapped neutral-
+evidence handoff field, `kind` and `provenance` must be permitted by that field,
+`encoding` is `utf8` or `base64`, `source` is nonblank, and `sha256` is lowercase
+64-hex. The manifest intentionally contains no evidence content.
+
+The manifest contains exactly one record for every neutral-evidence record the
+stage requires. Every required raw Linux check log for a verifier or approver
+is an independent manifest record with `field: raw_check_output`,
+`kind: command_log`, and `provenance: launcher`. Its handoff declaration and
+routed envelope must carry those same values. A repository-provenance record,
+Windows output, the `commands` field, command text, combined output, or a
+narrative cannot satisfy or replace that Linux source.
+
+The only public path input is
+`Invoke-DeliveryStage.ps1 -AuthoritativeEvidenceManifestPath <path>
+-AuthoritativeEvidenceManifestSha256 <sha256>`. The control plane supplies both
+arguments outside the handoff and retains the expected hash independently. The
+launcher reads the manifest bytes exactly once, verifies the expected hash,
+and freezes those exact bytes before it reads or validates the handoff. Its
+validator call is
+`Validate-DeliveryHandoff.ps1 -AuthoritativeEvidenceManifestBytes <bytes>
+-ExpectedAuthoritativeEvidenceManifestSha256 <sha256>`. Only the launcher may
+supply that validator input. The validator must not accept a manifest path,
+reread the source, reconstruct authority from canonical stage schema, or use a
+manifest, inventory, encoding, or hash copied from the handoff as authority.
+
+Before ordinary object materialization, inspect the frozen JSON bytes for
+member duplication. Reject any duplicate member in the manifest root or a
+manifest record. In the handoff, reject any duplicate member that can affect
+`stage`, `required_evidence_sources`, or a mapped neutral-evidence field,
+including duplicate members inside a declaration or routed record. This check
+must occur before a parser can collapse duplicate members with first- or last-
+value semantics.
+
+After freezing both inputs, and before Codex command resolution or child
+launch, validate the complete composition once. Treat the case-sensitive pair
+`field` and `source` as the record identity. Require a bijection in which each
+identity occurs exactly once in the frozen manifest, exactly once in the
+handoff `required_evidence_sources` declarations, and exactly once in the
+mapped routed records; reject missing and extra entries in every set. A routed
+record's `field` is its containing mapped handoff field. Require `field`,
+`kind`, `provenance`, `encoding`, `source`, and `sha256` to match the manifest
+exactly, validate the mapped field's shape and cardinality, decode its content
+according to the declared encoding, and recompute the routed content SHA-256.
+Never infer, synthesize, merge, normalize, repair, or substitute evidence.
+Changing a source, provenance, encoding, or hash is a mismatch, not a new valid
+record.
+
+The stable sanitized preflight codes are:
+
+- `authoritative_evidence_manifest_required` for a missing, null, or empty path,
+  expected hash, manifest, or record array.
+- `authoritative_evidence_manifest_hash_mismatch` when the frozen bytes do not
+  match the independently retained hash.
+- `authoritative_evidence_manifest_malformed` for invalid JSON, root shape,
+  stage, record shape, or record value.
+- `required_evidence_json_member_duplicate` for any relevant duplicate JSON
+  member described above.
+- `authoritative_evidence_source_duplicate` for a repeated manifest identity.
+- `required_evidence_declarations_malformed` or
+  `required_evidence_declaration_duplicate` for missing, null, empty, malformed,
+  extra, or duplicate handoff declarations.
+- `required_evidence_routed_record_malformed` or
+  `required_evidence_routed_record_duplicate` for missing, null, empty,
+  malformed, extra, or duplicate mapped routed records. Existing typed-envelope
+  shape, encoding, and content-hash codes remain valid members of this retry-
+  neutral family.
+- `required_evidence_composition_mismatch` for a missing, substituted, or
+  mismatched identity or any disagreement in the six authoritative values,
+  mapped cardinality, decoded encoding, or recomputed content hash.
+
+Every code in this family is a retry-neutral preflight defect. Emit exactly one
+closed sanitized result with only `phase`, `code`, `field`, `child_launched`,
+and `attempt_consumed`. `phase` is `preflight`; `field` is only the affected
+schema field (or `authoritative_evidence_manifest` for manifest-level defects);
+and both booleans are `false`. Never return rejected content, paths, source
+identities, encodings, hashes, duplicate values, or nested parser errors. The
+rejection does not launch a child, consume an attempt, advance its ordinal, or
+reduce the replacement budget.
+
+Once the child has actually launched, process, output, attestation, mutation,
+candidate, and applicability failures remain launched-stage execution failures.
+Retain their sealed evidence and preserve the existing bound of the initial
+attempt plus one fresh replacement.
+
 ### External-file ingest and composite candidates
 
 The external-file path is a control-plane exception for frozen

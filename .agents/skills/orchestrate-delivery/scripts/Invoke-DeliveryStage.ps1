@@ -11,6 +11,14 @@ param(
 
 	[string]$ArtifactRoot,
 
+	[AllowNull()]
+	[AllowEmptyString()]
+	[string]$AuthoritativeEvidenceManifestPath,
+
+	[AllowNull()]
+	[AllowEmptyString()]
+	[string]$AuthoritativeEvidenceManifestSha256,
+
 	[switch]$DryRun,
 
 	[switch]$PassThru
@@ -34,10 +42,164 @@ $BundleConversionScript = Join-Path (
 $EvidenceProtectionScript = Join-Path $PSScriptRoot 'Protect-DeliveryEvidence.ps1'
 $EventTelemetryScript = Join-Path $PSScriptRoot 'Get-DeliveryEventTelemetry.ps1'
 $EvidenceValidationScript = Join-Path $PSScriptRoot 'Test-DeliveryEvidence.ps1'
+$NeutralEvidenceFieldAllowlist = @(
+	'artifact_change_summary',
+	'artifact_state',
+	'authoritative_evidence_manifest',
+	'baseline_diff',
+	'baseline_status',
+	'board_export',
+	'candidate_artifact',
+	'candidate_artifacts',
+	'conflict_locations',
+	'final_artifact',
+	'final_diff',
+	'raw_check_output',
+	'raw_evidence',
+	'raw_runtime_evidence',
+	'required_evidence_sources',
+	'repository_state',
+	'repository_tree',
+	'stage'
+)
+$NeutralEvidenceValidationCodeAllowlist = @(
+	'neutral_evidence_record_required',
+	'neutral_evidence_array_required',
+	'neutral_evidence_keys_invalid',
+	'neutral_evidence_kind_invalid',
+	'neutral_evidence_provenance_invalid',
+	'neutral_evidence_encoding_invalid',
+	'neutral_evidence_source_invalid',
+	'neutral_evidence_sha256_invalid',
+	'neutral_evidence_content_invalid',
+	'neutral_evidence_base64_invalid',
+	'neutral_evidence_hash_mismatch',
+	'neutral_evidence_field_contract_invalid',
+	'authoritative_evidence_manifest_required',
+	'authoritative_evidence_manifest_hash_mismatch',
+	'authoritative_evidence_manifest_malformed',
+	'authoritative_evidence_source_duplicate',
+	'required_evidence_json_member_duplicate',
+	'required_evidence_declarations_malformed',
+	'required_evidence_routed_record_malformed',
+	'required_evidence_routed_record_duplicate',
+	'required_evidence_composition_mismatch',
+	'required_evidence_sources_array_required',
+	'required_evidence_declaration_required',
+	'required_evidence_declaration_keys_invalid',
+	'required_evidence_declaration_field_invalid',
+	'required_evidence_declaration_kind_invalid',
+	'required_evidence_declaration_provenance_invalid',
+	'required_evidence_declaration_encoding_invalid',
+	'required_evidence_declaration_source_invalid',
+	'required_evidence_declaration_sha256_invalid',
+	'required_evidence_declaration_duplicate',
+	'required_evidence_authoritative_cardinality_invalid',
+	'required_evidence_record_cardinality_invalid',
+	'required_evidence_record_mismatch',
+	'required_evidence_record_undeclared'
+)
+
+$AuthoritativeEvidenceManifestBytes = $null
+try {
+	$ManifestPathSupplied = -not [string]::IsNullOrWhiteSpace(
+		$AuthoritativeEvidenceManifestPath
+	)
+	$ManifestSha256Supplied = -not [string]::IsNullOrWhiteSpace(
+		$AuthoritativeEvidenceManifestSha256
+	)
+	if ($ManifestPathSupplied -or $ManifestSha256Supplied) {
+		if (-not $ManifestPathSupplied -or -not $ManifestSha256Supplied) {
+			throw (
+				"Required evidence field 'authoritative_evidence_manifest' " +
+				'failed validation: authoritative_evidence_manifest_required.'
+			)
+		}
+		if ($AuthoritativeEvidenceManifestSha256 -cnotmatch '^[0-9a-f]{64}$') {
+			throw (
+				"Required evidence field 'authoritative_evidence_manifest' " +
+				'failed validation: authoritative_evidence_manifest_malformed.'
+			)
+		}
+
+		try {
+			$AuthoritativeEvidenceManifestBytes = [System.IO.File]::ReadAllBytes(
+				$AuthoritativeEvidenceManifestPath
+			)
+		}
+		catch {
+			throw (
+				"Required evidence field 'authoritative_evidence_manifest' " +
+				'failed validation: authoritative_evidence_manifest_required.'
+			)
+		}
+		if ($AuthoritativeEvidenceManifestBytes.Count -eq 0) {
+			throw (
+				"Required evidence field 'authoritative_evidence_manifest' " +
+				'failed validation: authoritative_evidence_manifest_required.'
+			)
+		}
+
+		$ManifestHasher = [System.Security.Cryptography.SHA256]::Create()
+		try {
+			$ActualAuthoritativeEvidenceManifestSha256 = (
+				[System.BitConverter]::ToString(
+					$ManifestHasher.ComputeHash(
+						$AuthoritativeEvidenceManifestBytes
+					)
+				).Replace('-', '').ToLowerInvariant()
+			)
+		}
+		finally {
+			$ManifestHasher.Dispose()
+		}
+		if ($ActualAuthoritativeEvidenceManifestSha256 -cne
+			$AuthoritativeEvidenceManifestSha256) {
+			throw (
+				"Required evidence field 'authoritative_evidence_manifest' " +
+				'failed validation: authoritative_evidence_manifest_hash_mismatch.'
+			)
+		}
+	}
+
+	$Validation = & $ValidateScript `
+		-HandoffPath $HandoffPath `
+		-SchemaPath $HandoffSchemaPath `
+		-AuthoritativeEvidenceManifestBytes $AuthoritativeEvidenceManifestBytes `
+		-ExpectedAuthoritativeEvidenceManifestSha256 (
+			$AuthoritativeEvidenceManifestSha256
+		)
+}
+catch {
+	$ValidationMessage = [string]$_.Exception.Message
+	$ValidationTokens = [string[]]@(
+		$ValidationMessage -csplit '[^a-z0-9_]+' |
+			Where-Object { -not [string]::IsNullOrEmpty($_) }
+	)
+	$MatchedFields = @(
+		$NeutralEvidenceFieldAllowlist | Where-Object {
+			$ValidationTokens -ccontains $_
+		}
+	)
+	$MatchedCodes = @(
+		$NeutralEvidenceValidationCodeAllowlist | Where-Object {
+			$ValidationTokens -ccontains $_
+		}
+	)
+
+	if ($MatchedFields.Count -eq 1 -and $MatchedCodes.Count -eq 1) {
+		Write-Output -NoEnumerate ([pscustomobject][ordered]@{
+			phase = 'preflight'
+			code = $MatchedCodes[0]
+			field = $MatchedFields[0]
+			child_launched = $false
+			attempt_consumed = $false
+		})
+	}
+
+	throw
+}
 $CodexCommand = (Get-Command codex -ErrorAction Stop).Source
-$Validation = & $ValidateScript `
-	-HandoffPath $HandoffPath `
-	-SchemaPath $HandoffSchemaPath
 $Stage = $Validation.Stage
 $WorkspaceRoot = $Validation.WorkspaceRoot
 $Handoff = $Validation.Handoff
@@ -571,8 +733,8 @@ if ($Stage -ceq 'reviewer') {
 			-FieldName 'final_diff' `
 			-Record $Handoff.final_diff
 		if (-not (Test-DeliveryByteArrayEqual `
-			-Left $ExpectedFinalDiff `
-			-Right $ActualFinalDiff)) {
+				-Left $ExpectedFinalDiff `
+				-Right $ActualFinalDiff)) {
 			throw 'Stage handoff final_diff does not match the staged worktree.'
 		}
 
@@ -582,8 +744,8 @@ if ($Stage -ceq 'reviewer') {
 			-FieldName 'artifact_state' `
 			-Record $Handoff.artifact_state
 		if (-not (Test-DeliveryByteArrayEqual `
-			-Left $ExpectedArtifactState `
-			-Right $ActualArtifactState)) {
+				-Left $ExpectedArtifactState `
+				-Right $ActualArtifactState)) {
 			throw 'Stage handoff artifact_state does not match the worktree.'
 		}
 	}
@@ -597,8 +759,8 @@ if ($Stage -ceq 'reviewer') {
 			$TemporaryRootName = Split-Path -Leaf $ResolvedTemporaryRoot
 
 			if (-not (Test-PathWithin `
-				-Path $ResolvedTemporaryRoot `
-				-Root $ResolvedSystemTempRoot) -or
+					-Path $ResolvedTemporaryRoot `
+					-Root $ResolvedSystemTempRoot) -or
 				-not $TemporaryRootName.Equals(
 					(Split-Path -Leaf $TemporaryRoot),
 					[System.StringComparison]::Ordinal
@@ -618,7 +780,7 @@ if ($Stage -ceq 'reviewer') {
 }
 
 $AgentFile = Join-Path (
-		Join-Path $RepositoryRoot '.codex\agents'
+	Join-Path $RepositoryRoot '.codex\agents'
 ) ("delivery-$Stage.toml")
 if (-not (Test-Path -LiteralPath $AgentFile)) {
 	throw "Missing custom agent profile '$AgentFile'."
@@ -645,8 +807,8 @@ $SystemTempRoot = [System.IO.Path]::GetFullPath(
 ).TrimEnd('\', '/')
 $ArtifactDriveRoot = [System.IO.Path]::GetPathRoot($ArtifactRoot).TrimEnd('\', '/')
 if ($ArtifactRoot.Equals(
-	$ArtifactDriveRoot,
-	[System.StringComparison]::OrdinalIgnoreCase
+		$ArtifactDriveRoot,
+		[System.StringComparison]::OrdinalIgnoreCase
 	)) {
 	throw "Artifact root '$ArtifactRoot' must not be a filesystem root."
 }
@@ -721,9 +883,9 @@ for ($LeftIndex = 0; $LeftIndex -lt $ResolvedArtifactTargetNames.Count; $LeftInd
 		$LeftName = $ResolvedArtifactTargetNames[$LeftIndex]
 		$RightName = $ResolvedArtifactTargetNames[$RightIndex]
 		if ([System.IO.Path]::GetFullPath($ArtifactTargets[$LeftName]).Equals(
-			[System.IO.Path]::GetFullPath($ArtifactTargets[$RightName]),
-			[System.StringComparison]::OrdinalIgnoreCase
-		)) {
+				[System.IO.Path]::GetFullPath($ArtifactTargets[$RightName]),
+				[System.StringComparison]::OrdinalIgnoreCase
+			)) {
 			throw "Artifact targets '$LeftName' and '$RightName' resolve to the same path."
 		}
 	}
