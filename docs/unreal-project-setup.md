@@ -106,6 +106,23 @@ Editor build completes, the Editor loads `/Game/Maps/StarterMap`, the map uses
 `AAethelnGameModeBase`, and the initial launch reports no bootstrap-blocking
 errors.
 
+## Headless Unreal automation
+
+After the Development Editor target is available, run the repository-owned
+Issue #85 smoke and server-authority tests through the pinned source engine:
+
+```powershell
+powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
+  -EngineRoot $AethelnEngineRoot
+```
+
+`-EngineRoot` is an explicit, non-secret local path. The runner defaults to a
+600-second timeout and fails closed unless it discovers and passes exactly
+`Aetheln.Harness.ProjectAndModuleLoad` and
+`Aetheln.GameCombat.NetworkSpike.Authority`. See
+[Unreal Automation](unreal-automation.md) for the exact filter, output paths,
+normalized report schema, and all nonzero exit conditions.
+
 ## Repository hygiene and delivery boundary
 
 Keep `Binaries/`, `DerivedDataCache/`, `Intermediate/`, `Saved/`, generated

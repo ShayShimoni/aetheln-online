@@ -19,8 +19,12 @@ This document and workflow do not implement:
   [Issue #44](https://github.com/ShayShimoni/aetheln-online/issues/44).
 - Measured performance budgets, owned by
   [Issue #45](https://github.com/ShayShimoni/aetheln-online/issues/45).
-- The Unreal automation harness, owned by
-  [Issue #85](https://github.com/ShayShimoni/aetheln-online/issues/85).
+
+[Issue #85](https://github.com/ShayShimoni/aetheln-online/issues/85) supplies
+the repository-owned headless Unreal automation harness described in
+[Unreal Automation](unreal-automation.md). Issue #16 owns where and when CI
+invokes that engine-dependent harness; Issues #44 and #45 retain their
+multiplayer-scenario and performance-evidence scopes.
 
 ## Local Invocation
 
@@ -42,6 +46,18 @@ powershell -NoProfile -File scripts/ci/Test-MarkdownLinks.ps1
 powershell -NoProfile -File scripts/tests/Test-SourceControlPolicy.ps1
 ```
 
+With the pinned source engine already built, run the real headless Unreal tests
+locally by passing its explicit non-secret path:
+
+```powershell
+$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
+  -EngineRoot $AethelnEngineRoot
+```
+
+The default timeout is 600 seconds. Full discovery, result, output, and failure
+semantics are documented in [Unreal Automation](unreal-automation.md).
+
 ## Required and Advisory Checks
 
 | Check | Tier | What it gates |
@@ -58,6 +74,7 @@ powershell -NoProfile -File scripts/tests/Test-SourceControlPolicy.ps1
 | `formatting-policy-tests` (`tests/ci/Test-FormattingPolicy.Tests.ps1`) | Required | Fixture regression tests for the formatting checker itself. |
 | `ci-suite-tests` (`tests/ci/Invoke-CiSuite.Tests.ps1`) | Required | Fixture regression tests for the runner, report schema, and exit codes. |
 | `engine-runner-gate-tests` (`tests/ci/Invoke-EngineRunnerGate.Tests.ps1`) | Required | Fixture regression tests for engine-runner input validation, command selection, repository-state enforcement, redacted failures, report schema, and exit codes. |
+| `unreal-automation-tests` (`tests/ci/Invoke-UnrealAutomationTests.Tests.ps1`) | Required | Portable fixture regression tests for the headless Unreal runner's engine pin, discovery, repository-state, timeout, report validation, and fail-closed exit behavior. |
 | `psscriptanalyzer` (`Invoke-ScriptAnalyzer` over `scripts/` and `tests/`) | Advisory | PowerShell static analysis. Advisory because the module is not guaranteed on contributor machines (the check reports `skipped` when it is absent) and the pre-existing finding baseline has not been triaged into a gate. |
 
 Required checks fail the suite and the workflow. Advisory checks are reported
@@ -81,6 +98,9 @@ runner. That job checks out without LFS smudge, fetches only the
 `Content/Maps/StarterMap.umap` LFS object required by the source-control policy
 check, runs the local invocation above, and always uploads
 `TestResults/ci-report.json` as the `ci-report` artifact.
+The required `unreal-automation-tests` check exercises portable fixtures and
+does not launch Unreal Engine. The GitHub-hosted portable job does not run the
+real engine automation tests.
 
 Engine-dependent jobs use a repository-scoped Windows self-hosted runner with
 labels `[self-hosted, Windows, X64, aetheln-engine]` and serialize through the
@@ -136,6 +156,31 @@ Representative engine-runner evidence is commit-specific and must come from
 the artifacts uploaded by the corresponding GitHub run. An earlier or
 in-progress run does not establish that the unpublished incremental candidate
 has completed successfully.
+
+## Unreal Automation Harness
+
+The production PowerShell 5.1 runner is
+`scripts/ci/Invoke-UnrealAutomationTests.ps1`. It requires an explicit
+`-EngineRoot` for the source engine pinned to tag `5.8.1-release` and commit
+`71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`; `-TimeoutSeconds` is optional and
+defaults to 600. It runs exactly the project/module-load smoke test and focused
+network-spike authority test under the frozen filter, validates exact discovery,
+and exits nonzero on every preflight, process, discovery, report, or test
+failure. The detailed contract and normalized report schema are in
+[Unreal Automation](unreal-automation.md).
+
+This production run is attainable on the accepted Issue #16 repository-scoped
+self-hosted Windows topology because that machine owns the pinned source engine
+and toolchain. A workflow integration must pass the local non-secret engine
+path explicitly and preserve the existing owner/trust predicates, serialization,
+revision checks, and clean-workspace enforcement. This document does not claim
+that a GitHub-hosted runner has the engine or that the real automation run is
+part of the portable job.
+
+Issue #44 remains responsible for packaged dedicated-server/two-client lifecycle,
+Gauntlet, and representative or harsh network-profile scenarios; those scenarios
+reuse this harness rather than creating a second test system. Issue #45 remains
+responsible for measured performance evidence and budgets.
 
 ## Engine-Dependent Gates
 
@@ -222,6 +267,11 @@ incremental compile policy.
 - The portable workflow uploads `TestResults/ci-report.json`. Each selected
   engine job uploads only `TestResults/engine-runner-report.json`, with distinct
   compile, scheduled-smoke, and manual-smoke artifact names.
+- Headless Unreal automation generates
+  `TestResults/UnrealAutomation/index.json`,
+  `TestResults/unreal-automation-report.json`, and
+  `Saved/Logs/AethelnUnrealAutomation.log`. These paths remain ignored and are
+  not added to the portable artifact contract by Issue #85.
 - Large generated artifacts such as `Saved/`, `StagedBuilds/`, packaged archives,
   cook output, and detailed logs remain local to the self-hosted runner and are
   never uploaded by default. The owner may inspect or remove the per-run paths
@@ -277,6 +327,11 @@ suite ran against, `startedUtc`/`finishedUtc`, one record per check with
 `durationSeconds`, the exact `command`, and a captured output `message`, plus
 a `summary` with `total`, `passed`, `failed`, `skipped`, and `requiredFailed`
 counts.
+
+`TestResults/unreal-automation-report.json` uses the separate normalized schema
+documented in [Unreal Automation](unreal-automation.md). Its raw Unreal report
+and log remain repository-local ignored output unless Issue #16 separately
+selects and redacts evidence for publication.
 
 `TestResults/engine-runner-report.json` uses schema version 1 and contains
 `mode` (`Compile` or `PackagedSmoke`), `policy`

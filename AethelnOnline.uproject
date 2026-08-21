@@ -28,6 +28,11 @@
 			"Name": "GameServer",
 			"Type": "ServerOnly",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "GameTests",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
 		}
 	],
 	"Plugins": [
