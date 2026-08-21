@@ -118,6 +118,41 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 {
+	AddExpectedMessagePlain(
+		TEXT("LogAbilitySystem: No GameplayCueNotifyPaths were specified in DefaultGame.ini under [/Script/GameplayAbilities.AbilitySystemGlobals]. Falling back to using all of /Game/. This may be slow on large projects. Consider specifying which paths are to be searched."),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=impossible-aim-transition"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		2);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=activation-blocked"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=duplicate-sequence"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=incompatible-version"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=malformed-intent"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=connection-closed"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
 	const UScriptStruct* IntentStruct = FAethelnSpikeAttackIntent::StaticStruct();
 	TestNotNull(TEXT("Intent schema exists"), IntentStruct);
 
