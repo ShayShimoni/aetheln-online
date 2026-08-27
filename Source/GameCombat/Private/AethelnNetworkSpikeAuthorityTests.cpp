@@ -5,9 +5,12 @@
 #include "AethelnSpikeCharacter.h"
 #include "AethelnSpikeEnemy.h"
 #include "AethelnSpikeMeleeAbility.h"
+#include "AethelnObservability.h"
+#include "AethelnObservabilitySubsystem.h"
 #include "AethelnNetworkSpikeGameMode.h"
 #include "AbilitySystemComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/CommandLine.h"
@@ -132,7 +135,7 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("Damage is structurally absent"), IntentStruct->FindPropertyByName(TEXT("Damage")));
 	TestEqual(TEXT("Activation refusal reason is stable"), FString(LexToString(EAethelnSpikeAttackRejection::ActivationBlocked)), FString(TEXT("activation-blocked")));
 	TestEqual(TEXT("Impossible aim refusal reason is stable"), FString(LexToString(EAethelnSpikeAttackRejection::ImpossibleAimTransition)), FString(TEXT("impossible-aim-transition")));
-	for (const TCHAR* Category : { TEXT("movement"), TEXT("aim"), TEXT("activation"), TEXT("hit"), TEXT("cooldown"), TEXT("dodge"), TEXT("block"), TEXT("damage"), TEXT("disconnected-command") })
+	for (const TCHAR* Category : { TEXT("movement"), TEXT("aim"), TEXT("activation"), TEXT("hit"), TEXT("cooldown"), TEXT("dodge"), TEXT("block"), TEXT("resource"), TEXT("death"), TEXT("respawn"), TEXT("damage"), TEXT("disconnected-command") })
 	{
 		TestEqual(
 			*FString::Printf(TEXT("%s evidence category has stable lowercase identity"), Category),
@@ -171,9 +174,37 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	}
 
 	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+	TestNotNull(TEXT("Behavioral authority game instance was created"), GameInstance);
+	if (GameInstance == nullptr)
+	{
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		return false;
+	}
+	WorldContext.OwningGameInstance = GameInstance;
+	World->SetGameInstance(GameInstance);
 	WorldContext.SetCurrentWorld(World);
+	GameInstance->Init();
 	World->InitializeActorsForPlay(FURL());
 	World->BeginPlay();
+
+	UAethelnObservabilitySubsystem* ObservabilitySubsystem = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>();
+	TestNotNull(TEXT("Game instance owns the observability service"), ObservabilitySubsystem);
+	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> ObservabilitySink =
+		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(16);
+	if (ObservabilitySubsystem == nullptr
+		|| !ObservabilitySubsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-authority-test"),
+			TEXT("instance-authority-test"),
+			TEXT("connection-authority-test")))
+	{
+		GameInstance->Shutdown();
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		return false;
+	}
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -185,6 +216,7 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Authoritative target pawn exists"), Target);
 	if (Attacker == nullptr || Target == nullptr)
 	{
+		GameInstance->Shutdown();
 		World->DestroyWorld(false);
 		GEngine->DestroyWorldContext(World);
 		return false;
@@ -224,6 +256,7 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("Target pawn owns an ASC"), TargetAbilitySystem);
 	if (AttackerAbilitySystem == nullptr || TargetAbilitySystem == nullptr)
 	{
+		GameInstance->Shutdown();
 		World->DestroyWorld(false);
 		GEngine->DestroyWorldContext(World);
 		return false;
@@ -242,16 +275,92 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	AuthorityComponent->SubmitAttack(-FVector::ForwardVector);
 	TestEqual(TEXT("Disabled authority scenario emits no authority stages"), LogCapture.Num(), 0);
 	TestEqual(TEXT("Disabled authority scenario causes no damage"), Target->GetHealth(), InitialHealth);
+	if (!ObservabilitySubsystem->SetTestSink(ObservabilitySink))
+	{
+		GameInstance->Shutdown();
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		return false;
+	}
 
 	LogCapture.Reset();
 	LogCapture.SetScenarioEnabled(true);
 	AuthorityComponent->ProcessServerIntent(Intent);
+	TestTrue(TEXT("Impossible aim observability dispatch drains"), ObservabilitySubsystem->WaitForIdleForTests());
 	TestEqual(TEXT("Client aim conflicting with authoritative view is rejected"), AuthorityComponent->GetLastRejection(), EAethelnSpikeAttackRejection::ImpossibleAimTransition);
 	TestEqual(TEXT("Impossible aim transition causes no damage"), Target->GetHealth(), InitialHealth);
 	TestFalse(TEXT("Impossible aim transition never opens the attack window"), AuthorityComponent->IsAttackWindowActive());
 	TestFalse(TEXT("Impossible aim transition creates no activation identity"), AuthorityComponent->GetActiveAttackId().IsValid());
 	TestEqual(TEXT("Rejected command records validation"), LogCapture.CountStage(TEXT("validation")), 1);
 	TestEqual(TEXT("Rejected command records terminal"), LogCapture.CountStage(TEXT("terminal")), 1);
+	TestEqual(TEXT("Impossible aim rejection emits exactly one structured event"), ObservabilitySink->GetEvents().Num(), 1);
+	if (ObservabilitySink->GetEvents().Num() == 1)
+	{
+		const FAethelnObservabilityEvent& RejectionEvent = ObservabilitySink->GetEvents()[0];
+		TestEqual(TEXT("Rejection envelope has a stable category"), RejectionEvent.Category, EAethelnObservabilityCategory::Rejection);
+		TestEqual(TEXT("Rejection retains the rejected claim family"), RejectionEvent.SubjectCategory, EAethelnObservabilityCategory::Aim);
+		TestEqual(TEXT("Rejection maps to the shared safe reason"), RejectionEvent.SafeReason, EAethelnSafeReason::ImpossibleAimTransition);
+		TestEqual(TEXT("Rejection uses the stable ability identity"), RejectionEvent.Correlation.AbilityId, FString(TEXT("Ability.Melee.Combo1")));
+		TestEqual(TEXT("Rejection retains the intent sequence"), RejectionEvent.Correlation.Sequence, static_cast<uint64>(Intent.Sequence));
+		TestTrue(TEXT("Pre-activation rejection does not invent an activation identity"), RejectionEvent.Correlation.ActivationId.IsEmpty());
+	}
+
+	ObservabilitySink->SetFailWrites(true);
+	Intent.Sequence = 7;
+	AuthorityComponent->ProcessServerIntent(Intent);
+	TestTrue(TEXT("Failed observability sink work drains"), ObservabilitySubsystem->WaitForIdleForTests());
+	TestEqual(TEXT("Sink failure cannot change the authoritative rejection"), AuthorityComponent->GetLastRejection(), EAethelnSpikeAttackRejection::ImpossibleAimTransition);
+	TestEqual(TEXT("Sink failure cannot change authoritative health"), Target->GetHealth(), InitialHealth);
+	TestFalse(TEXT("Sink failure cannot open the attack window"), AuthorityComponent->IsAttackWindowActive());
+	TestEqual(TEXT("Failed sink writes do not mutate prior evidence"), ObservabilitySink->GetEvents().Num(), 1);
+	ObservabilitySink->SetFailWrites(false);
+	Intent.Sequence = 1;
+
+	const TArray<TPair<FName, EAethelnObservabilityCategory>> RejectedClaimFamilies = {
+		{ TEXT("movement"), EAethelnObservabilityCategory::Movement },
+		{ TEXT("aim"), EAethelnObservabilityCategory::Aim },
+		{ TEXT("activation"), EAethelnObservabilityCategory::Ability },
+		{ TEXT("cooldown"), EAethelnObservabilityCategory::Cooldown },
+		{ TEXT("hit"), EAethelnObservabilityCategory::Hit },
+		{ TEXT("dodge"), EAethelnObservabilityCategory::Dodge },
+		{ TEXT("block"), EAethelnObservabilityCategory::Block },
+		{ TEXT("resource"), EAethelnObservabilityCategory::Resource },
+		{ TEXT("death"), EAethelnObservabilityCategory::Death },
+		{ TEXT("respawn"), EAethelnObservabilityCategory::Respawn }
+	};
+	for (int32 Index = 0; Index < RejectedClaimFamilies.Num(); ++Index)
+	{
+		FAethelnSpikeScenarioProbe RejectedProbe;
+		RejectedProbe.Sequence = static_cast<uint32>(100 + Index);
+		RejectedProbe.Category = RejectedClaimFamilies[Index].Key;
+		RejectedProbe.ClaimedMovement = FVector(100000.0f, 0.0f, 0.0f);
+		RejectedProbe.ClaimedAim = -FVector::ForwardVector;
+		RejectedProbe.ClaimedOutcome = RejectedProbe.Category;
+		RejectedProbe.ClaimedMagnitude = 100000.0f;
+		const int32 BeforeEventCount = ObservabilitySink->GetEvents().Num();
+		const EAethelnSpikeAttackRejection ProbeRejection =
+			AuthorityComponent->ProcessServerScenarioProbe(RejectedProbe, TEXT("client-test"));
+		TestTrue(
+			*FString::Printf(TEXT("%s observability dispatch drains"), *RejectedProbe.Category.ToString()),
+			ObservabilitySubsystem->WaitForIdleForTests());
+		TestNotEqual(
+			*FString::Printf(TEXT("%s representative claim is rejected"), *RejectedProbe.Category.ToString()),
+			ProbeRejection,
+			EAethelnSpikeAttackRejection::None);
+		TestEqual(
+			*FString::Printf(TEXT("%s rejection emits one structured event"), *RejectedProbe.Category.ToString()),
+			ObservabilitySink->GetEvents().Num(),
+			BeforeEventCount + 1);
+		if (ObservabilitySink->GetEvents().Num() == BeforeEventCount + 1)
+		{
+			const FAethelnObservabilityEvent& ClaimEvent = ObservabilitySink->GetEvents().Last();
+			TestEqual(
+				*FString::Printf(TEXT("%s rejection retains its closed-enum family"), *RejectedProbe.Category.ToString()),
+				ClaimEvent.SubjectCategory,
+				RejectedClaimFamilies[Index].Value);
+			TestTrue(TEXT("Representative rejection excludes an activation identity"), ClaimEvent.Correlation.ActivationId.IsEmpty());
+		}
+	}
 
 	LogCapture.Reset();
 	Intent.Aim = FVector::ForwardVector;
@@ -317,12 +426,32 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Closed lifecycle causes no damage"), Target->GetHealth(), HealthAfterFirstActivation);
 	AuthorityComponent->SetLifecycleReady(true);
 
+	TestTrue(TEXT("All authoritative observability work drains before sink reset"), ObservabilitySubsystem->WaitForIdleForTests());
+	ObservabilitySubsystem->ResetSink();
+	Intent.Sequence = 6;
+	Intent.Aim = -FVector::ForwardVector;
+	AuthorityComponent->ProcessServerIntent(Intent);
+	TestTrue(TEXT("Structured-log rejection dispatch drains"), ObservabilitySubsystem->WaitForIdleForTests());
+	TestEqual(
+		TEXT("Normal structured-log sink observes an authoritative rejection"),
+		AuthorityComponent->GetLastRejection(),
+		EAethelnSpikeAttackRejection::ImpossibleAimTransition);
+	TestEqual(
+		TEXT("Structured-log rejection causes no damage"),
+		Target->GetHealth(),
+		HealthAfterFirstActivation);
+	Intent.Aim = FVector::ForwardVector;
+
 	const float HealthBeforeDestroyedTargetRequest = Target->GetHealth();
 	Target->Destroy();
-	Intent.Sequence = 6;
+	Intent.Sequence = 7;
 	AuthorityComponent->ProcessServerIntent(Intent);
+	TestTrue(TEXT("Destroyed-target observability dispatch drains"), ObservabilitySubsystem->WaitForIdleForTests());
 	TestEqual(TEXT("Destroyed target receives no further effect"), Target->GetHealth(), HealthBeforeDestroyedTargetRequest);
 
+	ObservabilitySubsystem->ResetSink();
+	ObservabilitySubsystem->ResetRuntimeContext();
+	GameInstance->Shutdown();
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);
 	return true;

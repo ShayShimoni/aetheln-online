@@ -27,6 +27,7 @@ param(
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ProfileId,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $NetworkConfigIdentity,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $RunId,
+	[Parameter(Mandatory)] [ValidateSet('local', 'development')] [string] $Environment,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $SourceRevision,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $BuildIdentity,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ToolchainIdentity,
@@ -44,7 +45,6 @@ param(
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $EnemyPattern,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $MeleePattern,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $DamagePattern,
-	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $RejectionPattern,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $JoinInProgressPattern,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $DisconnectPattern,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $ReconnectPattern,
@@ -139,11 +139,22 @@ function Assert-Placeholder([string[]] $Arguments, [string] $Placeholder, [strin
 }
 
 function Expand-Values([string] $Value, [string] $ClientId) {
-	return $Value.Replace('{ClientId}', $ClientId).Replace('{ServerEndpoint}', $ServerEndpoint).Replace('{ServerMap}', $ServerMap).Replace('{ScenarioId}', $ScenarioId).Replace('{ProfileId}', $ProfileId).Replace('{NetworkConfigIdentity}', $NetworkConfigIdentity).Replace('{RunId}', $RunId)
+	return $Value.Replace('{ClientId}', $ClientId).Replace('{ServerEndpoint}', $ServerEndpoint).Replace('{ServerMap}', $ServerMap).Replace('{ScenarioId}', $ScenarioId).Replace('{ProfileId}', $ProfileId).Replace('{NetworkConfigIdentity}', $NetworkConfigIdentity).Replace('{RunId}', $RunId).Replace('{Environment}', $Environment)
 }
 
 function Expand-Arguments([string[]] $Arguments, [string] $ClientId) {
-	return @($Arguments | ForEach-Object { Expand-Values $_ $ClientId })
+	$Expanded = [System.Collections.Generic.List[string]]::new()
+	foreach ($Argument in $Arguments) {
+		$Expanded.Add((Expand-Values $Argument $ClientId))
+	}
+	foreach ($IdentityArgument in @(
+		"-AethelnSourceRevision=$SourceRevision",
+		"-AethelnBuildIdentity=$BuildIdentity",
+		"-AethelnToolchainIdentity=$ToolchainIdentity"
+	)) {
+		$Expanded.Add($IdentityArgument)
+	}
+	return @($Expanded)
 }
 
 function Expand-Pattern([string] $Pattern, [string] $ClientId) {
@@ -276,27 +287,71 @@ function Wait-ForRejection([System.Diagnostics.Process] $Process, [string] $Path
 	throw "Timed out after $TimeoutSeconds seconds waiting for rejection '$Category' in '$Path'."
 }
 
-function Assert-ExactRejectionInventory([string[]] $Lines, [regex] $Regex, [System.Collections.IDictionary] $RequiredCategories) {
-	$ObservedCounts = @{}
-	$ObservedTotal = 0
+function Assert-StructuredRejectionMatch(
+	[System.Text.RegularExpressions.Match] $Match,
+	[string] $ExpectedCategory,
+	[string] $ExpectedReason,
+	[string] $ExpectedConnectionId
+) {
+	if ($Match.Groups['SchemaId'].Value -cne 'aetheln.observability-event' -or [int] $Match.Groups['SchemaVersion'].Value -ne 1) {
+		throw "Rejection '$ExpectedCategory' used an unsupported structured schema."
+	}
+	if ($Match.Groups['EnvelopeCategory'].Value -cne 'rejection' -or $Match.Groups['Category'].Value -cne $ExpectedCategory) {
+		throw "Rejection '$ExpectedCategory' used an invalid envelope or subject category."
+	}
+	if ($Match.Groups['Reason'].Value -cne $ExpectedReason) { throw "Rejection '$ExpectedCategory' used unexpected reason '$($Match.Groups['Reason'].Value)'." }
+	if ($Match.Groups['Flow'].Value -cne 'prototype-authority') { throw "Rejection '$ExpectedCategory' used an unexpected flow." }
+	if ($Match.Groups['EventRunId'].Value -cne $RunId) { throw "Rejection '$ExpectedCategory' was not correlated to the requested run." }
+	if ($Match.Groups['ConnectionId'].Value -cne $ExpectedConnectionId) { throw "Rejection '$ExpectedCategory' was not correlated to client-2's authority-owned connection pseudonym." }
+	if ($Match.Groups['EventSourceRevision'].Value -cne $SourceRevision -or
+		$Match.Groups['EventBuildIdentity'].Value -cne $BuildIdentity -or
+		$Match.Groups['EventToolchainIdentity'].Value -cne $ToolchainIdentity -or
+		$Match.Groups['EventProfileId'].Value -cne $ProfileId) {
+		throw "Rejection '$ExpectedCategory' was not correlated to the requested build and network profile."
+	}
+	if ($Match.Groups['BuildConfiguration'].Value -cne 'Development' -or
+		$Match.Groups['EngineRevision'].Value -in @('', 'unknown') -or
+		$Match.Groups['InstanceId'].Value -in @('', 'unknown')) {
+		throw "Rejection '$ExpectedCategory' omitted bounded runtime provenance."
+	}
+	[uint64] $Sequence = 0
+	if (-not [uint64]::TryParse($Match.Groups['Sequence'].Value, [ref] $Sequence) -or $Sequence -eq 0) {
+		throw "Rejection '$ExpectedCategory' omitted its nonzero authority sequence."
+	}
+	foreach ($BoundedField in @('EventRunId','ConnectionId','InstanceId','ActivationId','AbilityId','EventSourceRevision','EventBuildIdentity','BuildConfiguration','EngineRevision','EventToolchainIdentity','EventProfileId')) {
+		if ($Match.Groups[$BoundedField].Value.Length -gt 96) { throw "Rejection '$ExpectedCategory' exceeded the bounded public-field contract." }
+	}
+	if ($Match.Value -match 'client-2') { throw "Rejection '$ExpectedCategory' exposed the raw scenario client identifier." }
+}
+
+function Assert-MetricEnvironmentInventory([string[]] $Lines, [regex] $Regex, [string] $ExpectedEnvironment) {
+	$MetricCount = 0
 	foreach ($Line in $Lines) {
 		$Match = $Regex.Match($Line)
 		if (-not $Match.Success) { continue }
-		$Category = $Match.Groups['Category'].Value
-		if ($Category -ceq 'disconnected-command') {
+		++$MetricCount
+		if ($Match.Groups['Environment'].Value -cne $ExpectedEnvironment) {
+			throw "Structured metric '$($Match.Groups['Metric'].Value)' used environment '$($Match.Groups['Environment'].Value)' instead of '$ExpectedEnvironment'."
+		}
+	}
+	if ($MetricCount -eq 0) { throw 'No structured metric environment evidence was observed.' }
+}
+
+function Assert-ExactRejectionInventory([string[]] $Lines, [regex] $Regex, [System.Collections.IDictionary] $RequiredCategories, [string] $ExpectedConnectionId) {
+	$ObservedCounts = @{}
+	$ObservedTotal = 0
+	foreach ($Line in $Lines) {
+		if ($Line -match 'AUTHORITY rejection category=disconnected-command(?:\s|$)') {
 			throw 'Unexpected disconnected-command rejection without a transported command-validation attempt.'
 		}
+		$Match = $Regex.Match($Line)
+		if (-not $Match.Success) { continue }
+		$Category = $Match.Groups['Category'].Value
 		if (-not $RequiredCategories.Contains($Category)) {
 			throw "Unexpected authority rejection category '$Category'."
 		}
 		$Reason = $Match.Groups['Reason'].Value
-		if ($Reason -cne $RequiredCategories[$Category]) {
-			throw "Rejection '$Category' used unexpected reason '$Reason'."
-		}
-		$ClientId = $Match.Groups['ClientId'].Value
-		if ($ClientId -cne 'client-2') {
-			throw "Rejection '$Category' was not correlated to client-2."
-		}
+		Assert-StructuredRejectionMatch $Match $Category $RequiredCategories[$Category] $ExpectedConnectionId
 		$ObservedCounts[$Category] = 1 + [int] $ObservedCounts[$Category]
 		++$ObservedTotal
 	}
@@ -467,9 +522,10 @@ function Test-PackagedBuildProvenance([string] $Path, [string] $ActualServerSha2
 	return [pscustomobject]@{ Path = (Resolve-Path -LiteralPath $Path).Path; Sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 }
 
-foreach ($Placeholder in @('{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}')) { Assert-Placeholder $ServerArguments $Placeholder 'ServerArguments' }
+foreach ($Placeholder in @('{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}','{Environment}')) { Assert-Placeholder $ServerArguments $Placeholder 'ServerArguments' }
 Assert-Placeholder $ServerArguments '{NetworkConfigIdentity}' 'ServerArguments'
-foreach ($Placeholder in @('{ClientId}','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{NetworkConfigIdentity}','{RunId}')) { Assert-Placeholder $ClientArguments $Placeholder 'ClientArguments' }
+foreach ($Placeholder in @('{ClientId}','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{NetworkConfigIdentity}','{RunId}','{Environment}')) { Assert-Placeholder $ClientArguments $Placeholder 'ClientArguments' }
+if ($EvidenceMode -ceq 'packaged' -and $Environment -cne 'development') { throw 'Packaged authority evidence must use the development environment.' }
 if ($ServerLauncherExecutable) {
 	Assert-Placeholder $ServerLauncherArguments '{ServerExecutable}' 'ServerLauncherArguments'
 	Assert-Placeholder $ServerLauncherArguments '{ServerArguments}' 'ServerLauncherArguments'
@@ -490,7 +546,7 @@ foreach ($PatternEntry in @(
 	@('ServerReadyPattern', $ServerReadyPattern), @('ServerConnectionPattern', $ServerConnectionPattern),
 	@('ClientReadyPattern', $ClientReadyPattern), @('MovementPattern', $MovementPattern),
 	@('EnemyPattern', $EnemyPattern), @('MeleePattern', $MeleePattern), @('DamagePattern', $DamagePattern),
-	@('RejectionPattern', $RejectionPattern), @('JoinInProgressPattern', $JoinInProgressPattern),
+	@('JoinInProgressPattern', $JoinInProgressPattern),
 	@('DisconnectPattern', $DisconnectPattern), @('ReconnectPattern', $ReconnectPattern),
 	@('NetworkConfigPattern', $NetworkConfigPattern)
 )) {
@@ -499,24 +555,27 @@ foreach ($PatternEntry in @(
 foreach ($TokenEntry in @(
 	@('ServerEndpoint', $ServerEndpoint), @('ServerMap', $ServerMap), @('ScenarioId', $ScenarioId),
 	@('ProfileId', $ProfileId), @('NetworkConfigIdentity', $NetworkConfigIdentity), @('RunId', $RunId),
+	@('Environment', $Environment),
 	@('SourceRevision', $SourceRevision), @('BuildIdentity', $BuildIdentity), @('ToolchainIdentity', $ToolchainIdentity),
 	@('HardwareIdentity', $HardwareIdentity), @('TopologyIdentity', $TopologyIdentity), @('ActorMixIdentity', $ActorMixIdentity)
 )) { Assert-RecordToken ([string] $TokenEntry[0]) ([string] $TokenEntry[1]) }
 
 $ConnectionRegex = [regex]::new((Expand-Pattern $ServerConnectionPattern ''))
 if ($ConnectionRegex.GetGroupNames() -notcontains 'ClientId' -or $ConnectionRegex.GetGroupNames() -notcontains 'ConnectionId') { throw 'ServerConnectionPattern must contain named ClientId and ConnectionId captures.' }
-$RejectionRegex = [regex]::new((Expand-Pattern $RejectionPattern ''))
-foreach ($Capture in @('Category','Reason','ClientId')) { if ($RejectionRegex.GetGroupNames() -notcontains $Capture) { throw "RejectionPattern must contain a named $Capture capture." } }
-$StableRejectionReasons = @('none','stale-sequence','duplicate-sequence','incompatible-version','timestamp-out-of-bounds','impossible-aim-transition','connection-closed','actor-destroyed','malformed-intent','activation-blocked')
+$RejectionRegex = [regex]::new('LogAethelnObservability: event schema="(?<SchemaId>[^"]+)" version=(?<SchemaVersion>[0-9]+) category="(?<EnvelopeCategory>[^"]+)" subject="(?<Category>[^"]+)" reason="(?<Reason>[^"]+)" flow="(?<Flow>[^"]+)" run="(?<EventRunId>[^"]+)" connection="(?<ConnectionId>[^"]+)" instance="(?<InstanceId>[^"]+)" activation="(?<ActivationId>[^"]*)" ability="(?<AbilityId>[^"]*)" sequence=(?<Sequence>[0-9]+) source_revision="(?<EventSourceRevision>[^"]+)" build="(?<EventBuildIdentity>[^"]+)" configuration="(?<BuildConfiguration>[^"]+)" engine="(?<EngineRevision>[^"]+)" toolchain="(?<EventToolchainIdentity>[^"]+)" network_profile="(?<EventProfileId>[^"]+)"')
+$MetricRegex = [regex]::new('LogAethelnObservability: metric name="(?<Metric>[^"]+)" category="(?<Category>[^"]+)" reason="(?<Reason>[^"]+)" environment="(?<Environment>[^"]+)" value=(?<Value>-?[0-9]+)')
+$StableRejectionReasons = @('none','stale-sequence','duplicate-sequence','incompatible-version','timestamp-out-of-bounds','impossible-aim-transition','connection-closed','actor-destroyed','malformed-request','activation-blocked')
 $RequiredRejectionCategories = [ordered]@{
-	'movement' = 'malformed-intent'
+	'movement' = 'malformed-request'
 	'aim' = 'impossible-aim-transition'
-	'activation' = 'activation-blocked'
-	'hit' = 'malformed-intent'
+	'ability' = 'activation-blocked'
+	'hit' = 'malformed-request'
 	'cooldown' = 'activation-blocked'
 	'dodge' = 'activation-blocked'
 	'block' = 'activation-blocked'
-	'damage' = 'malformed-intent'
+	'resource' = 'malformed-request'
+	'death' = 'malformed-request'
+	'respawn' = 'malformed-request'
 }
 $ReconnectRegex = [regex]::new((Expand-Pattern $ReconnectPattern 'client-1-reconnect'))
 if ($ReconnectRegex.GetGroupNames() -notcontains 'ConnectionId') { throw 'ReconnectPattern must contain a named ConnectionId capture.' }
@@ -611,11 +670,10 @@ try {
 	foreach ($Category in $RequiredRejectionCategories.Keys) {
 		$Observed = Wait-ForRejection $ServerProcess $ServerStdOut $ServerStdErr $RejectionRegex $Category
 		$Reason = $Observed.Match.Groups['Reason'].Value
-		$ClientId = $Observed.Match.Groups['ClientId'].Value
 		if ($Reason -cnotin $StableRejectionReasons) { throw "Unsupported rejection reason '$Reason'." }
 		if ($Reason -cne $RequiredRejectionCategories[$Category]) { throw "Rejection category '$Category' used '$Reason' instead of '$($RequiredRejectionCategories[$Category])'." }
-		if ($ClientId -cne 'client-2') { throw "Rejection category '$Category' must be correlated to client-2, not '$ClientId'." }
-		$Rejections.Add([pscustomobject]@{ category = $Category; reason = $Reason; client_id = $ClientId; source = $ServerStdOut; detail = $Observed.Line })
+		Assert-StructuredRejectionMatch $Observed.Match $Category $Reason $Connections['client-2']
+		$Rejections.Add([pscustomobject]@{ category = $Category; reason = $Reason; connection_pseudonym = $Connections['client-2']; source = $ServerStdOut; detail = $Observed.Line })
 	}
 
 	Stop-Process -Id $ClientProcesses['client-1'].Id -Force
@@ -669,7 +727,8 @@ try {
 		$RejectionIndexes[$Category] = $CategoryIndexes[0]
 	}
 	$ServerErrorLines = @(Get-Content -LiteralPath $ServerStdErr -ErrorAction Stop)
-	Assert-ExactRejectionInventory @($ServerLines + $ServerErrorLines) $RejectionRegex $RequiredRejectionCategories
+	Assert-ExactRejectionInventory @($ServerLines + $ServerErrorLines) $RejectionRegex $RequiredRejectionCategories $Connections['client-2']
+	Assert-MetricEnvironmentInventory @($ServerLines + $ServerErrorLines) $MetricRegex $Environment
 	foreach ($ClientId in @('client-1','client-2','client-1-reconnect')) {
 		$ClientLines = @(Get-Content -LiteralPath (Join-Path $ResolvedLogs "$ClientId.stdout.log") -ErrorAction Stop)
 		[void] (Get-SingleMatchIndex $ClientLines (Expand-Pattern $ClientReadyPattern $ClientId) "$ClientId ready")
@@ -738,7 +797,8 @@ finally {
 		try {
 			$FinalServerLines = @(Get-Content -LiteralPath $ServerStdOut -ErrorAction Stop)
 			$FinalServerErrorLines = @(Get-Content -LiteralPath $ServerStdErr -ErrorAction Stop)
-			Assert-ExactRejectionInventory @($FinalServerLines + $FinalServerErrorLines) $RejectionRegex $RequiredRejectionCategories
+			Assert-ExactRejectionInventory @($FinalServerLines + $FinalServerErrorLines) $RejectionRegex $RequiredRejectionCategories $Connections['client-2']
+			Assert-MetricEnvironmentInventory @($FinalServerLines + $FinalServerErrorLines) $MetricRegex $Environment
 			$Result = if ($EvidenceMode -ceq 'packaged') { 'packaged-candidate' } else { 'fixture-passed' }
 		}
 		catch {
@@ -754,7 +814,7 @@ finally {
 		evidence_mode = $EvidenceMode
 		result = $Result
 		failure = $Failure
-		scenario = [ordered]@{ id = $ScenarioId; validation_mode = 'present_time'; action_family = 'melee'; map = $ServerMap; duration_seconds = $DurationSeconds; actor_mix = $ActorMixIdentity; seed = $RunId }
+		scenario = [ordered]@{ id = $ScenarioId; validation_mode = 'present_time'; action_family = 'melee'; map = $ServerMap; duration_seconds = $DurationSeconds; actor_mix = $ActorMixIdentity; seed = $RunId; environment = $Environment }
 		provenance = [ordered]@{ source_revision = $SourceRevision; build = $BuildIdentity; toolchain = $ToolchainIdentity; hardware = $HardwareIdentity; topology = $TopologyIdentity; packaged_build_provenance = if ($PackagedProvenance) { [ordered]@{ path = $PackagedProvenance.Path; sha256 = $PackagedProvenance.Sha256 } } else { $null } }
 		network_profile = [ordered]@{ schema_id = 'aetheln.network-profile'; schema_version = 1; id = $ProfileId; runtime_config_identity = $NetworkConfigIdentity; latency_ms = $null; jitter_ms = $null; loss_percent = $null; duplication_percent = $null; reorder_percent = $null; server_tick_hz = $null; history_ms = $null; bandwidth_limit_kbps = $null; capacity_players = $null }
 		clients = @($Clients)

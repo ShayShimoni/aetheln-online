@@ -2,13 +2,32 @@
 
 #include "AethelnSpikeAuthorityComponent.h"
 #include "AethelnSpikeEnemy.h"
+#include "AethelnSpikeMovementComponent.h"
 #include "AethelnSpikePlayerState.h"
+#include "AethelnObservability.h"
+#include "AethelnObservabilitySubsystem.h"
+#include "Engine/GameInstance.h"
 #include "EngineUtils.h"
 #include "GameFramework/Controller.h"
+#include "Misc/App.h"
 #include "Misc/CommandLine.h"
+#include "Misc/EngineVersion.h"
 #include "Misc/Parse.h"
+#include "Net/UnrealNetwork.h"
 
-AAethelnSpikeCharacter::AAethelnSpikeCharacter()
+namespace AethelnSpikeObservability
+{
+	FString ReadArgument(const TCHAR* Key, const FString& Fallback = AethelnObservability::UnknownValue)
+	{
+		FString Value;
+		return FParse::Value(FCommandLine::Get(), Key, Value) && !Value.IsEmpty()
+			? Value
+			: Fallback;
+	}
+}
+
+AAethelnSpikeCharacter::AAethelnSpikeCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UAethelnSpikeMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	AuthorityComponent = CreateDefaultSubobject<UAethelnSpikeAuthorityComponent>(TEXT("AuthorityComponent"));
 	PrimaryActorTick.bCanEverTick = true;
@@ -62,7 +81,7 @@ void AAethelnSpikeCharacter::Tick(float DeltaSeconds)
 	if (ScenarioClientId == TEXT("client-2") && !bProbesSubmitted && ScenarioElapsedSeconds >= 3.0f)
 	{
 		bProbesSubmitted = true;
-		for (const FName Category : { FName(TEXT("movement")), FName(TEXT("aim")), FName(TEXT("activation")), FName(TEXT("hit")), FName(TEXT("cooldown")), FName(TEXT("dodge")), FName(TEXT("block")), FName(TEXT("damage")) })
+		for (const FName Category : { FName(TEXT("movement")), FName(TEXT("aim")), FName(TEXT("activation")), FName(TEXT("hit")), FName(TEXT("cooldown")), FName(TEXT("dodge")), FName(TEXT("block")), FName(TEXT("resource")), FName(TEXT("death")), FName(TEXT("respawn")) })
 		{
 			FAethelnSpikeScenarioProbe Probe;
 			Probe.Category = Category;
@@ -90,6 +109,12 @@ void AAethelnSpikeCharacter::OnRep_PlayerState()
 	AuthorityComponent->SetLifecycleReady(GetPlayerState() != nullptr);
 }
 
+void AAethelnSpikeCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME_CONDITION(AAethelnSpikeCharacter, ObservabilityConnectionPseudonym, COND_OwnerOnly);
+}
+
 void AAethelnSpikeCharacter::SubmitFreeAimAttack(const FVector& AimDirection)
 {
 	AuthorityComponent->SubmitAttack(AimDirection);
@@ -98,6 +123,16 @@ void AAethelnSpikeCharacter::SubmitFreeAimAttack(const FVector& AimDirection)
 void AAethelnSpikeCharacter::SubmitScenarioProbe(const FAethelnSpikeScenarioProbe& Probe)
 {
 	AuthorityComponent->SubmitScenarioProbe(Probe);
+}
+
+void AAethelnSpikeCharacter::SetObservabilityConnectionPseudonym(const FString& ConnectionPseudonym)
+{
+	if (HasAuthority()
+		&& !ConnectionPseudonym.IsEmpty()
+		&& ConnectionPseudonym.Len() <= AethelnObservability::MaxIdentifierLength)
+	{
+		ObservabilityConnectionPseudonym = ConnectionPseudonym;
+	}
 }
 
 bool AAethelnSpikeCharacter::ShouldSubmitScenarioAttack(const FString& ClientId, bool bClientReady, float ElapsedSeconds, bool bAlreadySubmitted)
@@ -126,6 +161,31 @@ void AAethelnSpikeCharacter::InitializePackagedScenario()
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnScenarioId="), ScenarioId);
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnProfileId="), ScenarioProfileId);
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnRunId="), ScenarioRunId);
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UAethelnObservabilitySubsystem* Observability = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>())
+		{
+			Observability->SetEnvironment(
+				AethelnSpikeObservability::ReadArgument(TEXT("AethelnEnvironment="), TEXT("local")));
+			const FString RunIdentity = ScenarioRunId.IsEmpty() ? TEXT("run-unset") : ScenarioRunId;
+			Observability->SetRuntimeContext(
+				EAethelnFlowKind::PrototypeAuthority,
+				RunIdentity,
+				TEXT("network-authority-client"),
+				AethelnObservability::ExcludedIdentifier);
+			FAethelnBuildIdentity Build;
+			Build.SourceRevision = AethelnSpikeObservability::ReadArgument(TEXT("AethelnSourceRevision="));
+			Build.BuildIdentity = AethelnSpikeObservability::ReadArgument(TEXT("AethelnBuildIdentity="));
+			Build.BuildConfiguration = LexToString(FApp::GetBuildConfiguration());
+			Build.EngineRevision = FEngineVersion::Current().ToString();
+			Build.ToolchainIdentity = AethelnSpikeObservability::ReadArgument(TEXT("AethelnToolchainIdentity="));
+			FAethelnNetworkProfile Profile;
+			Profile.ProfileId = ScenarioProfileId.IsEmpty()
+				? AethelnNetworkSpike::UnsetNetworkProfileId
+				: ScenarioProfileId;
+			Observability->SetBuildContext(Build, Profile);
+		}
+	}
 }
 
 FString AAethelnSpikeCharacter::GetScenarioIdentityFields() const
