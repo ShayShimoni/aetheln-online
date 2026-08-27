@@ -206,6 +206,36 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	{
+		AethelnNetworkSpikeAuthorityTests::FScopedAuthorityLogCapture ScenarioCommandLine;
+		ScenarioCommandLine.SetScenarioEnabled(true);
+		FActorSpawnParameters ScenarioCharacterSpawnParameters;
+		ScenarioCharacterSpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		AAethelnSpikeCharacter* ServerScenarioCharacter = World->SpawnActor<AAethelnSpikeCharacter>(
+			AAethelnSpikeCharacter::StaticClass(),
+			FVector(10000.0f, 0.0f, 0.0f),
+			FRotator::ZeroRotator,
+			ScenarioCharacterSpawnParameters);
+		TestNotNull(TEXT("Server scenario character exists for process-correlation regression"), ServerScenarioCharacter);
+		FAethelnObservabilityEventContext ServerLifecycleContext;
+		ServerLifecycleContext.Sequence = 1;
+		FAethelnCorrelationContext ServerLifecycleCorrelation;
+		TestTrue(
+			TEXT("Server lifecycle correlation remains composable after a server character begins play"),
+			ObservabilitySubsystem->TryComposeCorrelation(
+				EAethelnObservabilityCategory::ServerLifecycle,
+				ServerLifecycleContext,
+				ServerLifecycleCorrelation));
+		TestEqual(
+			TEXT("Server character initialization cannot relabel the process as a client"),
+			ServerLifecycleCorrelation.InstanceId,
+			FString(TEXT("instance-authority-test")));
+		TestEqual(
+			TEXT("Server character initialization cannot replace the server run identity"),
+			ServerLifecycleCorrelation.RunId,
+			FString(TEXT("run-authority-test")));
+	}
+
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	AAethelnSpikeEnemy* Attacker = World->SpawnActor<AAethelnSpikeEnemy>(
@@ -359,6 +389,7 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 				ClaimEvent.SubjectCategory,
 				RejectedClaimFamilies[Index].Value);
 			TestTrue(TEXT("Representative rejection excludes an activation identity"), ClaimEvent.Correlation.ActivationId.IsEmpty());
+			TestTrue(TEXT("Scenario probes exclude a fabricated ability identity"), ClaimEvent.Correlation.AbilityId.IsEmpty());
 		}
 	}
 

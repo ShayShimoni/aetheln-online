@@ -142,6 +142,13 @@ namespace AethelnServerObservability
 			? TEXT("world-running")
 			: TEXT("controlled-shutdown");
 	}
+
+	EAethelnSafeReason GetLifecycleReasonAfterWorldCleanup(int32 RemainingObservableWorldCount)
+	{
+		return RemainingObservableWorldCount > 0
+			? EAethelnSafeReason::Accepted
+			: EAethelnSafeReason::ControlledShutdown;
+	}
 }
 
 class FAethelnGameServerModule final : public IModuleInterface
@@ -188,9 +195,9 @@ private:
 			return;
 		}
 
-		AethelnServerObservability::ConfigureContext(*Subsystem);
 		if (!SampledWorlds.Contains(World))
 		{
+			AethelnServerObservability::ConfigureContext(*Subsystem);
 			SampledWorlds.Add(World);
 			NextHealthSampleTimes.Add(World, 0.0);
 			AethelnServerObservability::EmitEvent(
@@ -289,6 +296,9 @@ private:
 		{
 			return;
 		}
+		const int32 RemainingObservableWorldCount = SampledWorlds.Contains(World)
+			? SampledWorlds.Num() - 1
+			: SampledWorlds.Num();
 		if (UGameInstance* GameInstance = World->GetGameInstance())
 		{
 			if (UAethelnObservabilitySubsystem* Subsystem = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>())
@@ -296,7 +306,7 @@ private:
 				AethelnServerObservability::EmitEvent(
 					*Subsystem,
 					EAethelnObservabilityCategory::ServerLifecycle,
-					EAethelnSafeReason::Accepted,
+					AethelnServerObservability::GetLifecycleReasonAfterWorldCleanup(RemainingObservableWorldCount),
 					NextSequence++);
 			}
 		}
@@ -305,7 +315,7 @@ private:
 		WorldTickStartTimes.Remove(World);
 		FGenericCrashContext::SetGameData(
 			AethelnServerObservability::CrashLifecycleKey,
-			AethelnServerObservability::GetLifecycleAfterWorldCleanup(SampledWorlds.Num()));
+			AethelnServerObservability::GetLifecycleAfterWorldCleanup(RemainingObservableWorldCount));
 	}
 
 	void OnSystemError()
@@ -343,6 +353,14 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 		TEXT("No remaining observable worlds enter controlled shutdown"),
 		FString(AethelnServerObservability::GetLifecycleAfterWorldCleanup(0)),
 		FString(TEXT("controlled-shutdown")));
+	TestEqual(
+		TEXT("No remaining observable worlds emit a distinct controlled-shutdown reason"),
+		AethelnServerObservability::GetLifecycleReasonAfterWorldCleanup(0),
+		EAethelnSafeReason::ControlledShutdown);
+	TestEqual(
+		TEXT("Remaining observable worlds retain the accepted lifecycle reason"),
+		AethelnServerObservability::GetLifecycleReasonAfterWorldCleanup(1),
+		EAethelnSafeReason::Accepted);
 	const int64 TickDurationMicroseconds = AethelnServerObservability::CalculateTickDurationMicroseconds(10.0, 10.0025);
 	TestEqual(TEXT("Tick duration uses monotonic start/end elapsed time"), TickDurationMicroseconds, static_cast<int64>(2500));
 	TestEqual(TEXT("Backwards tick timestamps fail closed to zero"), AethelnServerObservability::CalculateTickDurationMicroseconds(10.0, 9.0), static_cast<int64>(0));

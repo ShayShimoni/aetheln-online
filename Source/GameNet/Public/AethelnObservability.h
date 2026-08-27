@@ -71,7 +71,8 @@ enum class EAethelnSafeReason : uint8
 	ActorDestroyed,
 	ActivationBlocked,
 	NotImplemented,
-	InternalFailure
+	InternalFailure,
+	ControlledShutdown
 };
 
 enum class EAethelnDiagnosticCode : uint8
@@ -146,6 +147,26 @@ inline bool IsKnown(EAethelnObservabilityCategory Value)
 	}
 }
 
+inline bool IsCorrectableSubject(EAethelnObservabilityCategory Value)
+{
+	switch (Value)
+	{
+	case EAethelnObservabilityCategory::Movement:
+	case EAethelnObservabilityCategory::Aim:
+	case EAethelnObservabilityCategory::Ability:
+	case EAethelnObservabilityCategory::Cooldown:
+	case EAethelnObservabilityCategory::Hit:
+	case EAethelnObservabilityCategory::Dodge:
+	case EAethelnObservabilityCategory::Block:
+	case EAethelnObservabilityCategory::Resource:
+	case EAethelnObservabilityCategory::Death:
+	case EAethelnObservabilityCategory::Respawn:
+		return true;
+	default:
+		return false;
+	}
+}
+
 inline bool IsKnown(EAethelnSafeReason Value)
 {
 	switch (Value)
@@ -165,6 +186,7 @@ inline bool IsKnown(EAethelnSafeReason Value)
 	case EAethelnSafeReason::ActivationBlocked:
 	case EAethelnSafeReason::NotImplemented:
 	case EAethelnSafeReason::InternalFailure:
+	case EAethelnSafeReason::ControlledShutdown:
 		return true;
 	default:
 		return false;
@@ -250,6 +272,7 @@ inline const TCHAR* LexToString(EAethelnSafeReason Value)
 	case EAethelnSafeReason::ActivationBlocked: return TEXT("activation-blocked");
 	case EAethelnSafeReason::NotImplemented: return TEXT("not-implemented");
 	case EAethelnSafeReason::InternalFailure: return TEXT("internal-failure");
+	case EAethelnSafeReason::ControlledShutdown: return TEXT("controlled-shutdown");
 	default: return TEXT("unknown");
 	}
 }
@@ -355,10 +378,11 @@ struct GAMENET_API FAethelnCorrelationContext
 			|| SubjectCategory == EAethelnObservabilityCategory::Hit;
 		const bool bRequiresActivation = Category != EAethelnObservabilityCategory::Rejection
 			&& bCombatActivationSubject;
-		const bool bRequiresAbility = bCombatActivationSubject
-			|| SubjectCategory == EAethelnObservabilityCategory::Cooldown
-			|| SubjectCategory == EAethelnObservabilityCategory::Dodge
-			|| SubjectCategory == EAethelnObservabilityCategory::Block;
+		const bool bRequiresAbility = Category != EAethelnObservabilityCategory::Rejection
+			&& (bCombatActivationSubject
+				|| SubjectCategory == EAethelnObservabilityCategory::Cooldown
+				|| SubjectCategory == EAethelnObservabilityCategory::Dodge
+				|| SubjectCategory == EAethelnObservabilityCategory::Block);
 		return IsBounded()
 			&& !RunId.IsEmpty()
 			&& !ConnectionPseudonym.IsEmpty()
@@ -410,8 +434,9 @@ struct GAMENET_API FAethelnObservabilityEvent
 
 	bool IsBounded() const
 	{
-		const bool bSubjectMatchesCategory = Category == EAethelnObservabilityCategory::Rejection
-			|| SubjectCategory == Category;
+		const bool bSubjectMatchesCategory = Category == EAethelnObservabilityCategory::Correction
+			? IsCorrectableSubject(SubjectCategory)
+			: (Category == EAethelnObservabilityCategory::Rejection || SubjectCategory == Category);
 		return SchemaId == AethelnObservability::SchemaId
 			&& SchemaVersion == AethelnObservability::SchemaVersion
 			&& IsKnown(Category)

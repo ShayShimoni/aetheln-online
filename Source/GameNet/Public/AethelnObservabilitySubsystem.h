@@ -48,10 +48,11 @@ struct GAMENET_API FAethelnObservabilityEventContext
 			|| SubjectCategory == EAethelnObservabilityCategory::Hit;
 		const bool bRequiresActivation = Category != EAethelnObservabilityCategory::Rejection
 			&& bCombatActivationSubject;
-		const bool bRequiresAbility = bCombatActivationSubject
-			|| SubjectCategory == EAethelnObservabilityCategory::Cooldown
-			|| SubjectCategory == EAethelnObservabilityCategory::Dodge
-			|| SubjectCategory == EAethelnObservabilityCategory::Block;
+		const bool bRequiresAbility = Category != EAethelnObservabilityCategory::Rejection
+			&& (bCombatActivationSubject
+				|| SubjectCategory == EAethelnObservabilityCategory::Cooldown
+				|| SubjectCategory == EAethelnObservabilityCategory::Dodge
+				|| SubjectCategory == EAethelnObservabilityCategory::Block);
 		return (!bRequiresActivation || !ActivationId.IsEmpty())
 			&& (!bRequiresAbility || !AbilityId.IsEmpty())
 			&& Sequence != 0

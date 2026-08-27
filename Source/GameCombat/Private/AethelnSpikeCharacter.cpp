@@ -161,29 +161,32 @@ void AAethelnSpikeCharacter::InitializePackagedScenario()
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnScenarioId="), ScenarioId);
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnProfileId="), ScenarioProfileId);
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnRunId="), ScenarioRunId);
-	if (UGameInstance* GameInstance = GetGameInstance())
+	if (GetNetMode() == NM_Client)
 	{
-		if (UAethelnObservabilitySubsystem* Observability = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>())
+		if (UGameInstance* GameInstance = GetGameInstance())
 		{
-			Observability->SetEnvironment(
-				AethelnSpikeObservability::ReadArgument(TEXT("AethelnEnvironment="), TEXT("local")));
-			const FString RunIdentity = ScenarioRunId.IsEmpty() ? TEXT("run-unset") : ScenarioRunId;
-			Observability->SetRuntimeContext(
-				EAethelnFlowKind::PrototypeAuthority,
-				RunIdentity,
-				TEXT("network-authority-client"),
-				AethelnObservability::ExcludedIdentifier);
-			FAethelnBuildIdentity Build;
-			Build.SourceRevision = AethelnSpikeObservability::ReadArgument(TEXT("AethelnSourceRevision="));
-			Build.BuildIdentity = AethelnSpikeObservability::ReadArgument(TEXT("AethelnBuildIdentity="));
-			Build.BuildConfiguration = LexToString(FApp::GetBuildConfiguration());
-			Build.EngineRevision = FEngineVersion::Current().ToString();
-			Build.ToolchainIdentity = AethelnSpikeObservability::ReadArgument(TEXT("AethelnToolchainIdentity="));
-			FAethelnNetworkProfile Profile;
-			Profile.ProfileId = ScenarioProfileId.IsEmpty()
-				? AethelnNetworkSpike::UnsetNetworkProfileId
-				: ScenarioProfileId;
-			Observability->SetBuildContext(Build, Profile);
+			if (UAethelnObservabilitySubsystem* Observability = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>())
+			{
+				Observability->SetEnvironment(
+					AethelnSpikeObservability::ReadArgument(TEXT("AethelnEnvironment="), TEXT("local")));
+				const FString RunIdentity = ScenarioRunId.IsEmpty() ? TEXT("run-unset") : ScenarioRunId;
+				Observability->SetRuntimeContext(
+					EAethelnFlowKind::PrototypeAuthority,
+					RunIdentity,
+					TEXT("network-authority-client"),
+					AethelnObservability::ExcludedIdentifier);
+				FAethelnBuildIdentity Build;
+				Build.SourceRevision = AethelnSpikeObservability::ReadArgument(TEXT("AethelnSourceRevision="));
+				Build.BuildIdentity = AethelnSpikeObservability::ReadArgument(TEXT("AethelnBuildIdentity="));
+				Build.BuildConfiguration = LexToString(FApp::GetBuildConfiguration());
+				Build.EngineRevision = FEngineVersion::Current().ToString();
+				Build.ToolchainIdentity = AethelnSpikeObservability::ReadArgument(TEXT("AethelnToolchainIdentity="));
+				FAethelnNetworkProfile Profile;
+				Profile.ProfileId = ScenarioProfileId.IsEmpty()
+					? AethelnNetworkSpike::UnsetNetworkProfileId
+					: ScenarioProfileId;
+				Observability->SetBuildContext(Build, Profile);
+			}
 		}
 	}
 }

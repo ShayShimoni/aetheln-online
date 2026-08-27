@@ -125,6 +125,17 @@ bool FAethelnObservabilitySchemaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Respawn category is stable"), FString(LexToString(EAethelnObservabilityCategory::Respawn)), FString(TEXT("respawn")));
 	TestEqual(TEXT("Event subject category is a closed enum"), Event.SubjectCategory, EAethelnObservabilityCategory::ServerLifecycle);
 	TestEqual(TEXT("Safe rejection reason is stable"), FString(LexToString(EAethelnSafeReason::Rejected)), FString(TEXT("rejected")));
+	TestEqual(TEXT("Controlled shutdown reason is stable"), FString(LexToString(EAethelnSafeReason::ControlledShutdown)), FString(TEXT("controlled-shutdown")));
+	TestFalse(
+		TEXT("Correction cannot use a server lifecycle default as its affected subject"),
+		AethelnObservabilityTests::MakeValidEvent(
+			EAethelnObservabilityCategory::Correction,
+			EAethelnObservabilityCategory::ServerLifecycle).IsBounded());
+	TestFalse(
+		TEXT("Correction cannot be self-referential"),
+		AethelnObservabilityTests::MakeValidEvent(
+			EAethelnObservabilityCategory::Correction,
+			EAethelnObservabilityCategory::Correction).IsBounded());
 	TestEqual(TEXT("Admission extension is stable"), FString(LexToString(EAethelnFlowKind::Admission)), FString(TEXT("admission")));
 	TestEqual(TEXT("Lease extension is stable"), FString(LexToString(EAethelnFlowKind::Lease)), FString(TEXT("lease")));
 	TestEqual(TEXT("Persistent command extension is stable"), FString(LexToString(EAethelnFlowKind::PersistentCommand)), FString(TEXT("persistent-command")));

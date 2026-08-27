@@ -203,9 +203,16 @@ void UAethelnObservabilitySubsystem::EmitEvent(
 	{
 		return;
 	}
+	if (Event.Category == EAethelnObservabilityCategory::Correction
+		&& !IsCorrectableSubject(Event.SubjectCategory))
+	{
+		return;
+	}
 
 	FAethelnCorrelationContext Correlation;
-	const EAethelnObservabilityCategory EffectiveSubject = Event.Category == EAethelnObservabilityCategory::Rejection
+	const bool bSubjectEnvelope = Event.Category == EAethelnObservabilityCategory::Rejection
+		|| Event.Category == EAethelnObservabilityCategory::Correction;
+	const EAethelnObservabilityCategory EffectiveSubject = bSubjectEnvelope
 		? Event.SubjectCategory
 		: Event.Category;
 	if (!TryComposeCorrelation(Event.Category, EffectiveSubject, EventContext, Correlation))
@@ -362,9 +369,10 @@ bool FAethelnObservabilitySubsystemContextTest::RunTest(const FString& Parameter
 
 	FAethelnObservabilityEventContext MissingAbility = PreActivationRejection;
 	MissingAbility.AbilityId.Reset();
-	TestFalse(
-		TEXT("Missing ability suppresses rejection composition"),
+	TestTrue(
+		TEXT("Pre-resolution rejection composes without fabricating an ability"),
 		Subsystem->TryComposeCorrelation(EAethelnObservabilityCategory::Rejection, MissingAbility, Correlation));
+	TestTrue(TEXT("Pre-resolution rejection retains an empty ability identity"), Correlation.AbilityId.IsEmpty());
 
 	FAethelnObservabilityEventContext MissingSequence = PreActivationRejection;
 	MissingSequence.Sequence = 0;
@@ -432,7 +440,7 @@ bool FAethelnObservabilitySubsystemSinkTest::RunTest(const FString& Parameters)
 	TWeakPtr<IAethelnObservabilitySink, ESPMode::ThreadSafe> WeakSink;
 	TWeakPtr<IAethelnRestrictedAuditSink, ESPMode::ThreadSafe> WeakRestrictedSink;
 	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> InMemorySink =
-		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(4);
+		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(8);
 	TSharedPtr<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe> InMemoryRestrictedSink =
 		MakeShared<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe>(8);
 	WeakSink = InMemorySink;
@@ -490,6 +498,31 @@ bool FAethelnObservabilitySubsystemSinkTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Restricted channel retained every emitted event"), RecordedRestrictedSink->GetEvents().Num(), 3);
 	TestEqual(TEXT("Restricted movement rejection retains diagnostic detail"), RecordedRestrictedSink->GetEvents()[2].DiagnosticCode, EAethelnDiagnosticCode::ValidationFailed);
 
+	FAethelnObservabilityEvent MovementCorrectionEvent;
+	MovementCorrectionEvent.Category = EAethelnObservabilityCategory::Correction;
+	MovementCorrectionEvent.SubjectCategory = EAethelnObservabilityCategory::Movement;
+	MovementCorrectionEvent.SafeReason = EAethelnSafeReason::Corrected;
+	FAethelnObservabilityEventContext MovementCorrectionContext;
+	MovementCorrectionContext.Sequence = 25;
+	Subsystem->EmitEvent(MovementCorrectionEvent, MovementCorrectionContext);
+	TestTrue(TEXT("Movement correction dispatch drains"), Subsystem->WaitForIdleForTests());
+	TestEqual(TEXT("Movement correction reaches the sink"), RecordedSink->GetEvents().Num(), 4);
+	TestEqual(
+		TEXT("Movement correction retains the corrected subject"),
+		RecordedSink->GetEvents()[3].SubjectCategory,
+		EAethelnObservabilityCategory::Movement);
+	TestTrue(TEXT("Movement correction has no fabricated ability identity"), RecordedSink->GetEvents()[3].Correlation.AbilityId.IsEmpty());
+	FAethelnObservabilityEvent MissingCorrectionSubject = MovementCorrectionEvent;
+	MissingCorrectionSubject.SubjectCategory = EAethelnObservabilityCategory::ServerLifecycle;
+	MovementCorrectionContext.Sequence = 26;
+	Subsystem->EmitEvent(MissingCorrectionSubject, MovementCorrectionContext);
+	FAethelnObservabilityEvent SelfReferentialCorrection = MovementCorrectionEvent;
+	SelfReferentialCorrection.SubjectCategory = EAethelnObservabilityCategory::Correction;
+	MovementCorrectionContext.Sequence = 27;
+	Subsystem->EmitEvent(SelfReferentialCorrection, MovementCorrectionContext);
+	TestTrue(TEXT("Invalid correction subjects leave dispatch idle"), Subsystem->WaitForIdleForTests());
+	TestEqual(TEXT("Corrections without a concrete gameplay subject are suppressed"), RecordedSink->GetEvents().Num(), 4);
+
 	Subsystem->EmitMetric(FAethelnMetricSample());
 	TestTrue(TEXT("Local metric dispatch drains"), Subsystem->WaitForIdleForTests());
 	TestEqual(TEXT("Contributor metrics default to the local environment"), RecordedSink->GetMetrics().Num(), 1);
@@ -509,13 +542,13 @@ bool FAethelnObservabilitySubsystemSinkTest::RunTest(const FString& Parameters)
 	InvalidRejectionContext.Sequence = 0;
 	Subsystem->EmitEvent(RejectionEvent, InvalidRejectionContext);
 	TestTrue(TEXT("Invalid rejection leaves dispatch idle"), Subsystem->WaitForIdleForTests());
-	TestEqual(TEXT("Invalid rejection context suppresses void emission"), RecordedSink->GetEvents().Num(), 3);
+	TestEqual(TEXT("Invalid rejection context suppresses void emission"), RecordedSink->GetEvents().Num(), 4);
 
 	RecordedSink->SetFailWrites(true);
 	Subsystem->EmitEvent(Event, Overlay);
 	Subsystem->EmitMetric(FAethelnMetricSample());
 	TestTrue(TEXT("Failed injected writes drain without escaping"), Subsystem->WaitForIdleForTests());
-	TestEqual(TEXT("Sink event failure does not escape or alter state"), RecordedSink->GetEvents().Num(), 3);
+	TestEqual(TEXT("Sink event failure does not escape or alter state"), RecordedSink->GetEvents().Num(), 4);
 	TestEqual(TEXT("Sink metric failure does not escape or alter state"), RecordedSink->GetMetrics().Num(), 2);
 
 	TestFalse(
@@ -524,7 +557,7 @@ bool FAethelnObservabilitySubsystemSinkTest::RunTest(const FString& Parameters)
 	RecordedSink->SetFailWrites(false);
 	Subsystem->EmitEvent(Event, Overlay);
 	TestTrue(TEXT("Preserved injected sink dispatch drains"), Subsystem->WaitForIdleForTests());
-	TestEqual(TEXT("Rejected injection preserves the active sink"), RecordedSink->GetEvents().Num(), 4);
+	TestEqual(TEXT("Rejected injection preserves the active sink"), RecordedSink->GetEvents().Num(), 5);
 
 	PinnedSink.Reset();
 	RecordedSink.Reset();

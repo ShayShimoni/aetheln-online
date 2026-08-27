@@ -71,7 +71,8 @@ namespace AethelnSpikeAuthority
 		uint64 Sequence,
 		const FGuid& AttackId,
 		EAethelnObservabilityCategory SubjectCategory,
-		EAethelnSpikeAttackRejection Reason)
+		EAethelnSpikeAttackRejection Reason,
+		bool bIncludeMeleeAbilityIdentity = true)
 	{
 		UAethelnObservabilitySubsystem* Subsystem = ResolveObservabilitySubsystem(Owner);
 		if (Subsystem == nullptr)
@@ -97,7 +98,10 @@ namespace AethelnSpikeAuthority
 		Context.ActivationId = AttackId.IsValid()
 			? AttackId.ToString(EGuidFormats::DigitsWithHyphensLower)
 			: FString();
-		Context.AbilityId = MeleeAbilityId;
+		if (bIncludeMeleeAbilityIdentity)
+		{
+			Context.AbilityId = MeleeAbilityId;
+		}
 		Context.Sequence = Sequence;
 		Subsystem->EmitEvent(Event, Context);
 
@@ -328,10 +332,6 @@ EAethelnSpikeAttackRejection UAethelnSpikeAuthorityComponent::ValidateScenarioPr
 	{
 		return EAethelnSpikeAttackRejection::ActivationBlocked;
 	}
-	if (Probe.Category == TEXT("resource") || Probe.Category == TEXT("death") || Probe.Category == TEXT("respawn"))
-	{
-		return EAethelnSpikeAttackRejection::MalformedIntent;
-	}
 	return EAethelnSpikeAttackRejection::MalformedIntent;
 }
 
@@ -360,7 +360,8 @@ EAethelnSpikeAttackRejection UAethelnSpikeAuthorityComponent::ProcessServerScena
 			Probe.Sequence,
 			FGuid(),
 			AethelnSpikeAuthority::ToObservabilityCategory(Probe.Category),
-			Reason);
+			Reason,
+			false);
 	}
 	return Reason;
 }
