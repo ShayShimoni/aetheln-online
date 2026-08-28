@@ -311,9 +311,11 @@ decide them:
 - Artifact signing and the retention policy for local engine logs and archives.
 
 The repository-scoped self-hosted topology and `02:00 UTC` cadence are accepted
-in [Architecture Decisions](architecture-decisions.md). Owner provisioning and
-live evidence remain outstanding operational prerequisites, not architecture
-decisions.
+in [Architecture Decisions](architecture-decisions.md). A compile-capable
+runner is registered, and commit-specific live compile evidence exists for
+GitHub Actions run `33161041115`. Ongoing runner maintenance, packaging-only
+prerequisites, and scheduled or manual packaged-smoke evidence remain
+outstanding operational responsibilities, not architecture decisions.
 
 ## Relationship to Visual Package Validation
 
