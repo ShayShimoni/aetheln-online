@@ -762,7 +762,9 @@ bool FAethelnPOCResponsiveMovementSettingsTest::RunTest(
 }
 #endif
 
-AAethelnPlayerCharacter::AAethelnPlayerCharacter()
+AAethelnPlayerCharacter::AAethelnPlayerCharacter(
+	const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
 {
 	PrimaryActorTick.bCanEverTick = true;
 

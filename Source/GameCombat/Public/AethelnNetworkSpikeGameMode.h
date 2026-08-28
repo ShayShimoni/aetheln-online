@@ -17,6 +17,7 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options, const FString& Portal = TEXT("")) override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
+	virtual void FinishRestartPlayer(AController* NewPlayer, const FRotator& StartRotation) override;
 	virtual void Logout(AController* Exiting) override;
 
 	static bool IsAllowedScenarioClientId(const FString& ClientId);
@@ -26,11 +27,14 @@ public:
 private:
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FAethelnNetworkSpikeGameModeDisconnectLifecycleTest;
+	friend class FAethelnNetworkSpikeGameModeDeferredPseudonymTest;
 	friend class FAethelnNetworkSpikeGameModeRuntimePlacementTest;
 #endif
 
 	FString GetIdentityFields() const;
 	FString GetClientId(const AController* Controller) const;
+	bool RegisterScenarioConnection(APlayerController* NewPlayer);
+	bool ApplyStoredConnectionPseudonym(AController* Controller);
 	void PositionEnemyForFirstClient(APlayerController* NewPlayer);
 
 	UPROPERTY()

@@ -57,6 +57,9 @@ subordinate to the specialized canonical product and technical documents.
 - [Networking Authority Spike: Unit 1](networking-authority-spike.md) records
   the Issue #2 replication-neutral authority baseline, evidence boundaries,
   focused verification commands, and remaining candidate and measurement work.
+- [Structured Observability and Crash Diagnostics](observability-and-crash-diagnostics.md)
+  records the Issue #38 event, metric, redaction, lifecycle, crash-context,
+  environment, retention, and downstream-ownership contracts.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path.

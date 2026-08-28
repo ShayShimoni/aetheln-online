@@ -21,7 +21,8 @@ class GAMECORE_API AAethelnPlayerCharacter
 	GENERATED_BODY()
 
 public:
-	AAethelnPlayerCharacter();
+	explicit AAethelnPlayerCharacter(
+		const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void ReceiveMoveInput(const FVector2D& MovementInput) override;

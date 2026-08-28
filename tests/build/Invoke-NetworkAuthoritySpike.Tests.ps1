@@ -98,6 +98,7 @@ param(
 	[string] $ProfileId,
 	[string] $RunId,
 	[string] $NetworkConfigIdentity,
+	[string] $Environment,
 	[string] $Behavior = 'normal',
 	[string] $RejectionReason = 'duplicate-sequence',
 	[string] $ExitAfterMarkers = 'false'
@@ -118,11 +119,17 @@ if ($Role -eq 'server') {
 		Write-Output "AUTHORITY damage_applied attacker=client-1 enemy=spike-enemy-1 $DamageIdentity"
 		if ($Behavior -eq 'duplicate-damage') { Write-Output "AUTHORITY damage_applied attacker=client-1 enemy=spike-enemy-1 $DamageIdentity" }
 	}
-	foreach ($Category in @('movement','aim','activation','hit','cooldown','dodge','block','damage')) {
+	$StructuredSequence = 1
+	foreach ($Category in @('movement','aim','activation','hit','cooldown','dodge','block','resource','death','respawn')) {
 		$Reason = if ($Category -eq 'aim') { 'impossible-aim-transition' } elseif ($Category -in @('activation','cooldown','dodge','block')) { 'activation-blocked' } else { 'malformed-intent' }
 		if ($Category -eq 'movement') { $Reason = $RejectionReason }
 		Write-Output "AUTHORITY rejection category=$Category reason=$Reason client=client-2 $Identity"
+		$StructuredSubject = if ($Category -eq 'activation') { 'ability' } else { $Category }
+		$StructuredReason = if ($Reason -eq 'malformed-intent') { 'malformed-request' } else { $Reason }
+		Write-Output "LogAethelnObservability: event schema=`"aetheln.observability-event`" version=1 category=`"rejection`" subject=`"$StructuredSubject`" reason=`"$StructuredReason`" flow=`"prototype-authority`" run=`"$RunId`" connection=`"connection-2`" instance=`"network-authority-server`" activation=`"`" ability=`"Ability.Melee.Combo1`" sequence=$StructuredSequence source_revision=`"fixture-revision`" build=`"fixture-build`" configuration=`"Development`" engine=`"5.8.1-fixture`" toolchain=`"UE-5.8.1-fixture`" network_profile=`"$ProfileId`""
+		++$StructuredSequence
 	}
+	Write-Output "LogAethelnObservability: metric name=`"rejection-count`" category=`"movement`" reason=`"malformed-request`" environment=`"$Environment`" value=1"
 	$ReconnectConnection = if ($Behavior -eq 'reused-connection') { 'connection-1' } else { 'connection-3' }
 	if ($Behavior -eq 'reordered-lifecycle') {
 		Write-Output "AUTHORITY connection client=client-1-reconnect connection=$ReconnectConnection $Identity"
@@ -139,6 +146,7 @@ if ($Role -eq 'server') {
 	}
 	if ($Behavior -eq 'unexpected-rejection-category') {
 		Write-Output "AUTHORITY rejection category=unexpected reason=malformed-intent client=client-2 $Identity"
+		Write-Output "LogAethelnObservability: event schema=`"aetheln.observability-event`" version=1 category=`"rejection`" subject=`"unexpected`" reason=`"malformed-request`" flow=`"prototype-authority`" run=`"$RunId`" connection=`"connection-2`" instance=`"network-authority-server`" activation=`"`" ability=`"Ability.Melee.Combo1`" sequence=99 source_revision=`"fixture-revision`" build=`"fixture-build`" configuration=`"Development`" engine=`"5.8.1-fixture`" toolchain=`"UE-5.8.1-fixture`" network_profile=`"$ProfileId`""
 	}
 	if ($Behavior -ne 'missing-reconnect' -and $Behavior -ne 'reordered-lifecycle') {
 		Write-Output "AUTHORITY connection client=client-1-reconnect connection=$ReconnectConnection $Identity"
@@ -195,19 +203,21 @@ exit $Child.ExitCode
 		[int] $TimeoutSeconds = 8,
 		[string] $EvidenceMode = 'fixture',
 		[string] $PackagedBuildProvenancePath,
-		[string] $ServerProvenanceExecutable
+		[string] $ServerProvenanceExecutable,
+		[string] $FixtureEnvironment
 	) {
 		$Arguments = @{
 			ServerExecutable = $PowerShellExecutable
-			ServerArguments = @('-NoProfile', '-File', $FakeRuntime, 'server', 'server', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', $Behavior, $RejectionReason, $ExitAfterMarkers.ToString().ToLowerInvariant())
+			ServerArguments = @('-NoProfile', '-File', $FakeRuntime, 'server', 'server', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', '{Environment}', $Behavior, $RejectionReason, $ExitAfterMarkers.ToString().ToLowerInvariant())
 			ClientExecutable = $PowerShellExecutable
-			ClientArguments = @('-NoProfile', '-File', $FakeRuntime, 'client', '{ClientId}', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}')
+			ClientArguments = @('-NoProfile', '-File', $FakeRuntime, 'client', '{ClientId}', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', '{Environment}')
 			ServerEndpoint = '127.0.0.1:7777'
 			ServerMap = '/Game/Maps/StarterMap'
 			ScenarioId = 'network-authority.baseline.v1'
 			ProfileId = 'network-profile.unset'
 			NetworkConfigIdentity = 'network-emulation.caller-supplied'
 			RunId = $FixtureRunId
+			Environment = if ($FixtureEnvironment) { $FixtureEnvironment } elseif ($EvidenceMode -ceq 'packaged') { 'development' } else { 'local' }
 			SourceRevision = 'fixture-revision'
 			BuildIdentity = 'fixture-build'
 			ToolchainIdentity = 'UE-5.8.1-fixture'
@@ -224,7 +234,6 @@ exit $Child.ExitCode
 			EnemyPattern = 'AUTHORITY enemy_spawned enemy=.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
 			MeleePattern = 'AUTHORITY melee_resolved attacker=.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
 			DamagePattern = 'AUTHORITY damage_applied attacker=.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
-			RejectionPattern = 'AUTHORITY rejection category=(?<Category>[^ ]+) reason=(?<Reason>[^ ]+) client=(?<ClientId>[^ ]+).*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
 			JoinInProgressPattern = 'AUTHORITY join_in_progress client=client-2.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
 			DisconnectPattern = 'AUTHORITY disconnected client=client-1.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
 			ReconnectPattern = 'AUTHORITY reconnected client=client-1-reconnect connection=(?<ConnectionId>[^ ]+).*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
@@ -273,10 +282,11 @@ exit $Child.ExitCode
 	Assert-True (@($Evidence.observations | Where-Object { $_.event -eq 'movement' }).Count -eq 2) 'Movement must be observed for both clients.'
 	Assert-True (@($Evidence.observations | Where-Object { $_.event -eq 'melee_resolved' }).Count -eq 1) 'One server-resolved melee observation is required.'
 	Assert-True (@($Evidence.observations | Where-Object { $_.event -eq 'damage_applied' }).Count -eq 1) 'Authoritative damage must be observed.'
-	foreach ($Category in @('movement','aim','activation','hit','cooldown','dodge','block','damage')) {
+	foreach ($Category in @('movement','aim','ability','hit','cooldown','dodge','block','resource','death','respawn')) {
 		Assert-True (@($Evidence.rejections | Where-Object { $_.category -eq $Category }).Count -eq 1) "Exactly one observable rejection is required for $Category."
 	}
-	Assert-True (@($Evidence.rejections).Count -eq 8) 'Evidence must contain exactly the eight genuine invalid-claim rejections.'
+	Assert-True (@($Evidence.rejections).Count -eq 10) 'Evidence must contain exactly the ten structured invalid-claim rejections.'
+	Assert-True ($Evidence.scenario.environment -eq 'local') 'Fixture evidence must preserve the explicit local environment.'
 	Assert-True (@($Evidence.rejections | Where-Object { $_.category -eq 'disconnected-command' }).Count -eq 0) 'Logout must not be admitted as disconnected-command rejection evidence.'
 	$MeasurementFields = @(
 		'server_game_thread_milliseconds',
@@ -561,6 +571,13 @@ exit $Child.ExitCode
 	Assert-True ($SelfAuthoredEvidence.result -ne 'passed') 'The runner must never self-award packaged success.'
 	Write-Output 'PASS: self-authored matching provenance cannot self-award packaged success'
 
+	$PackagedLocalFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'packaged-local') -FixtureRunId 'fixture-packaged-local' -RejectionReason 'malformed-intent' -DurationSeconds 1 -EvidenceMode 'packaged' -FixtureEnvironment 'local'
+	} catch { $PackagedLocalFailure = $_.Exception.Message }
+	Assert-True ($PackagedLocalFailure -match 'Packaged authority evidence must use the development environment') 'Packaged multiplayer evidence must reject the local environment before launch.'
+	Write-Output 'PASS: packaged authority evidence requires the explicit development environment'
+
 	$NegativeScenarios = @(
 		@{ Name = 'missing'; Behavior = 'missing-damage'; Failure = 'waiting for authoritative damage' },
 		@{ Name = 'duplicate'; Behavior = 'duplicate-damage'; Failure = 'Expected exactly one damage-application record, observed 2' },
@@ -592,11 +609,12 @@ exit $Child.ExitCode
 	$FabricatedPackagedFailure = $null
 	try {
 		$FabricatedArgs = @{
-			ServerExecutable = $PowerShellExecutable; ServerArguments = @('-NoProfile','-File',$FakeRuntime,'server','server','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}','{NetworkConfigIdentity}','normal','malformed-intent','false')
-			ClientExecutable = $PowerShellExecutable; ClientArguments = @('-NoProfile','-File',$FakeRuntime,'client','{ClientId}','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}','{NetworkConfigIdentity}')
+			ServerExecutable = $PowerShellExecutable; ServerArguments = @('-NoProfile','-File',$FakeRuntime,'server','server','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}','{NetworkConfigIdentity}','{Environment}','normal','malformed-intent','false')
+			ClientExecutable = $PowerShellExecutable; ClientArguments = @('-NoProfile','-File',$FakeRuntime,'client','{ClientId}','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}','{NetworkConfigIdentity}','{Environment}')
 			ServerEndpoint = '127.0.0.1:7777'; ServerMap = '/Game/Maps/StarterMap'; ScenarioId = 'network-authority.baseline.v1'; ProfileId = 'network-profile.unset'; NetworkConfigIdentity = 'network-emulation.caller-supplied'; RunId = 'fabricated-packaged'
+			Environment = 'development'
 			SourceRevision = 'fixture-revision'; BuildIdentity = 'fixture-build'; ToolchainIdentity = 'fixture-toolchain'; HardwareIdentity = 'fixture-host'; TopologyIdentity = 'fixture-topology'; ActorMixIdentity = 'network-authority.actor-mix.v1'; EvidenceMode = 'packaged'; DurationSeconds = 1; LogRoot = (Join-Path $FixtureRoot 'fabricated-packaged')
-			ServerReadyPattern = 'AUTHORITY server_ready.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; ServerConnectionPattern = 'AUTHORITY connection client=(?<ClientId>[^ ]+) connection=(?<ConnectionId>[^ ]+).*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; ClientReadyPattern = 'AUTHORITY client_ready client={ClientId}.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; MovementPattern = 'AUTHORITY movement client={ClientId}.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; EnemyPattern = 'AUTHORITY enemy_spawned.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; MeleePattern = 'AUTHORITY melee_resolved.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; DamagePattern = 'AUTHORITY damage_applied.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; RejectionPattern = 'AUTHORITY rejection category=(?<Category>[^ ]+) reason=(?<Reason>[^ ]+) client=(?<ClientId>[^ ]+).*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; JoinInProgressPattern = 'AUTHORITY join_in_progress.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; DisconnectPattern = 'AUTHORITY disconnected.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; ReconnectPattern = 'AUTHORITY reconnected.*connection=(?<ConnectionId>[^ ]+).*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; NetworkConfigPattern = 'AUTHORITY network_config.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
+			ServerReadyPattern = 'AUTHORITY server_ready.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; ServerConnectionPattern = 'AUTHORITY connection client=(?<ClientId>[^ ]+) connection=(?<ConnectionId>[^ ]+).*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; ClientReadyPattern = 'AUTHORITY client_ready client={ClientId}.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; MovementPattern = 'AUTHORITY movement client={ClientId}.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; EnemyPattern = 'AUTHORITY enemy_spawned.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; MeleePattern = 'AUTHORITY melee_resolved.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; DamagePattern = 'AUTHORITY damage_applied.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; JoinInProgressPattern = 'AUTHORITY join_in_progress.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; DisconnectPattern = 'AUTHORITY disconnected.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; ReconnectPattern = 'AUTHORITY reconnected.*connection=(?<ConnectionId>[^ ]+).*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'; NetworkConfigPattern = 'AUTHORITY network_config.*scenario={ScenarioId}.*profile={ProfileId}.*run={RunId}'
 		}
 		& $Script @FabricatedArgs
 	} catch { $FabricatedPackagedFailure = $_.Exception.Message }
@@ -618,7 +636,7 @@ exit $Child.ExitCode
 
 	$Failure = $null
 	try {
-		& $Script -ServerExecutable $PowerShellExecutable -ServerArguments @('{ServerEndpoint}', '{ServerMap}') -ClientExecutable $PowerShellExecutable -ClientArguments @('{ClientId}') -ServerEndpoint '127.0.0.1:7777' -ServerMap '/Game/Maps/StarterMap' -ScenarioId 'network-authority.baseline.v1' -ProfileId 'network-profile.unset' -NetworkConfigIdentity 'network-emulation.caller-supplied' -RunId 'invalid' -SourceRevision 'revision' -BuildIdentity 'build' -ToolchainIdentity 'toolchain' -HardwareIdentity 'hardware' -TopologyIdentity 'topology' -ActorMixIdentity 'network-authority.actor-mix.v1' -EvidenceMode 'fixture' -DurationSeconds 1 -LogRoot (Join-Path $FixtureRoot 'invalid') -ServerReadyPattern 'ready' -ServerConnectionPattern 'connection' -ClientReadyPattern 'ready' -MovementPattern 'movement' -EnemyPattern 'enemy' -MeleePattern 'melee' -DamagePattern 'damage' -RejectionPattern 'rejection' -JoinInProgressPattern 'join' -DisconnectPattern 'disconnect' -ReconnectPattern 'reconnect' -NetworkConfigPattern 'network'
+		& $Script -ServerExecutable $PowerShellExecutable -ServerArguments @('{ServerEndpoint}', '{ServerMap}') -ClientExecutable $PowerShellExecutable -ClientArguments @('{ClientId}') -ServerEndpoint '127.0.0.1:7777' -ServerMap '/Game/Maps/StarterMap' -ScenarioId 'network-authority.baseline.v1' -ProfileId 'network-profile.unset' -NetworkConfigIdentity 'network-emulation.caller-supplied' -RunId 'invalid' -Environment 'local' -SourceRevision 'revision' -BuildIdentity 'build' -ToolchainIdentity 'toolchain' -HardwareIdentity 'hardware' -TopologyIdentity 'topology' -ActorMixIdentity 'network-authority.actor-mix.v1' -EvidenceMode 'fixture' -DurationSeconds 1 -LogRoot (Join-Path $FixtureRoot 'invalid') -ServerReadyPattern 'ready' -ServerConnectionPattern 'connection' -ClientReadyPattern 'ready' -MovementPattern 'movement' -EnemyPattern 'enemy' -MeleePattern 'melee' -DamagePattern 'damage' -JoinInProgressPattern 'join' -DisconnectPattern 'disconnect' -ReconnectPattern 'reconnect' -NetworkConfigPattern 'network'
 	} catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'ServerArguments must contain.*ScenarioId') 'Missing correlation placeholders must fail before launch.'
 	Write-Output 'PASS: incomplete launch correlation fails closed'
