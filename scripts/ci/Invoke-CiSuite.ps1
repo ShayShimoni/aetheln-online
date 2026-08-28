@@ -31,12 +31,13 @@ $DefaultChecks = @(
 	@{ name = 'ci-suite-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiSuite.Tests.ps1' },
 	@{ name = 'engine-runner-gate-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerGate.Tests.ps1' },
 	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
+	@{ name = 'unreal-automation-tests'; tier = 'required'; script = 'tests/ci/Invoke-UnrealAutomationTests.Tests.ps1' },
 	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'
 		requiredModule = 'PSScriptAnalyzer'
-		command = '$Findings = @(Invoke-ScriptAnalyzer -Path scripts, tests -Recurse); $Findings | Format-Table -AutoSize | Out-String -Width 200 | Write-Output; if ($Findings.Count -gt 0) { exit 1 } exit 0'
+		command = '$ErrorActionPreference = ''Stop''; $Findings = @(foreach ($AnalyzerPath in @(''scripts'', ''tests'')) { Invoke-ScriptAnalyzer -Path $AnalyzerPath -Recurse }); $Findings | Format-Table -AutoSize | Out-String -Width 200 | Write-Output; if ($Findings.Count -gt 0) { exit 1 } exit 0'
 	}
 )
 

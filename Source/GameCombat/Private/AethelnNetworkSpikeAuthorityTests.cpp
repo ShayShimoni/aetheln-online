@@ -121,6 +121,55 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 {
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=impossible-aim-transition"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		4);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=activation-blocked"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=duplicate-sequence"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=incompatible-version"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=malformed-intent"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	AddExpectedMessagePlain(
+		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=connection-closed"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Exact,
+		1);
+	for (const TCHAR* ExpectedAuthorityWarning : {
+		TEXT("LogTemp: AUTHORITY rejection category=movement reason=malformed-intent client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=aim reason=impossible-aim-transition client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=activation reason=activation-blocked client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=cooldown reason=activation-blocked client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=hit reason=malformed-intent client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=dodge reason=activation-blocked client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=block reason=activation-blocked client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=resource reason=malformed-intent client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=death reason=malformed-intent client=client-test scenario= profile= run="),
+		TEXT("LogTemp: AUTHORITY rejection category=respawn reason=malformed-intent client=client-test scenario= profile= run=")
+	})
+	{
+		AddExpectedMessagePlain(
+			ExpectedAuthorityWarning,
+			ELogVerbosity::Warning,
+			EAutomationExpectedMessageFlags::Exact,
+			1);
+	}
 	AddExpectedMessage(
 		TEXT("dispatch_failure metric=\\\"sink-failure-count\\\" channel=\\\"public\\\" kind=\\\"sink-write\\\" work_class=\\\"critical\\\" delta=1 total=[12]"),
 		ELogVerbosity::Warning,

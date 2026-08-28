@@ -231,10 +231,14 @@ Every accepted decision records:
   trust predicates bound unreviewed code execution on the owner's machine.
 - **Owner/evidence:** Issue #16 and the reviewed
   `.github/workflows/prototype-quality-gates.yml`,
-  `scripts/ci/Invoke-EngineRunnerGate.ps1`, and focused fixture tests. This is
-  implementation evidence only: zero self-hosted runners are currently
-  registered, so live compile, scheduled smoke, manual smoke, and
-  representative-branch acceptance evidence do not yet exist.
+  `scripts/ci/Invoke-EngineRunnerGate.ps1`, and focused fixture tests. A
+  repository-scoped runner is registered, and GitHub Actions run `33161041115`
+  provides candidate-specific live compile evidence for synthetic merge
+  `d1edef0ceb0b83c610937713bd64b4425423fa74` (base
+  `6f2e01204b6c76b9134d4a9fe0acc88320ecd680`, head
+  `3f61f86feef3b8abe283845660eab92140588315`); the engine report SHA-256 is
+  `BA69A43008B7E99CDEE257EC66B29CE600982AB46E71D7EE15FAD6D031E81253`.
+  Scheduled and manual packaged-smoke evidence remains outstanding.
 - **Rejected alternatives:** Assuming `windows-latest` contains the pinned
   engine/toolchains; running engine jobs for fork or collaborator-authored
   pull requests; granting future collaborators runner access without a new

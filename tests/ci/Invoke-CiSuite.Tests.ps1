@@ -74,6 +74,39 @@ try {
 	$RunnerSource = Get-Content -LiteralPath $Runner -Raw
 	Assert-True -Condition ($RunnerSource -match 'CreateNoWindow\s*=\s*\$true') -Message 'CI child PowerShell processes must be created without windows.'
 	Assert-True -Condition ($RunnerSource -notmatch '&\s+powershell\.exe\s+@ArgumentList') -Message 'CI checks must not use direct visible powershell.exe child invocation.'
+	$AnalyzerCommandMatch = [regex]::Match(
+		$RunnerSource,
+		"(?m)^\s*command\s*=\s*'(?<command>.*)'\s*$"
+	)
+	Assert-True -Condition $AnalyzerCommandMatch.Success -Message 'The default PSScriptAnalyzer command must be discoverable.'
+	$AnalyzerCommand = $AnalyzerCommandMatch.Groups['command'].Value -replace "''", "'"
+	Assert-True -Condition ($AnalyzerCommand -notmatch '-Path\s+scripts,\s*tests') -Message 'PSScriptAnalyzer must receive one path at a time.'
+
+	$AnalyzerFixtureCommand = @"
+function Invoke-ScriptAnalyzer {
+	[CmdletBinding()]
+	param(
+		[Parameter(Mandatory)][string] `$Path,
+		[switch] `$Recurse
+	)
+	if (`$Path -eq 'tests') {
+		Write-Error 'fixture analyzer failure'
+	}
+}
+$AnalyzerCommand
+"@
+	$AnalyzerManifest = Join-Path $FixtureRoot 'analyzer-manifest.json'
+	$AnalyzerChecks = @(
+		@{ name = 'fixture-analyzer'; tier = 'advisory'; command = $AnalyzerFixtureCommand }
+	)
+	[System.IO.File]::WriteAllText($AnalyzerManifest, (ConvertTo-Json -InputObject $AnalyzerChecks -Depth 4))
+	$AnalyzerReport = Join-Path $FixtureRoot 'analyzer-report.json'
+	$AnalyzerRun = Invoke-Runner -ManifestPath $AnalyzerManifest -ReportPath $AnalyzerReport
+	Assert-True -Condition ($AnalyzerRun.ExitCode -eq 0) -Message 'An advisory analyzer failure must not fail the required CI suite.'
+	$AnalyzerResult = (Get-Content -LiteralPath $AnalyzerReport -Raw | ConvertFrom-Json).checks[0]
+	Assert-True -Condition ($AnalyzerResult.status -eq 'failed') -Message 'A PSScriptAnalyzer invocation error must not be reported as passed.'
+	Assert-True -Condition ($AnalyzerResult.message -match 'fixture analyzer failure') -Message "The analyzer failure must remain actionable in the report: $($AnalyzerResult.message)"
+	Write-Output 'PASS: PSScriptAnalyzer path and invocation failures fail closed'
 
 	$PassScript = Join-Path $FixtureRoot 'pass.ps1'
 	[System.IO.File]::WriteAllText($PassScript, "Write-Output 'fixture pass output'`nexit 0`n")

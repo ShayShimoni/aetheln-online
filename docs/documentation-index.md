@@ -63,6 +63,9 @@ subordinate to the specialized canonical product and technical documents.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path.
+- [Unreal Automation](unreal-automation.md) records the pinned headless harness,
+  exact Issue #85 tests and discovery contract, fail-closed behavior, local
+  invocation, and normalized evidence schema.
 - [GitHub Issues](https://github.com/ShayShimoni/aetheln-online/issues) govern
   work status, ownership, priority, and target version.
 
