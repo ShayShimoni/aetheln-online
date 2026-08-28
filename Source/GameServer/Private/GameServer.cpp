@@ -1,5 +1,6 @@
 #include "AethelnObservability.h"
 #include "AethelnObservabilitySubsystem.h"
+#include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -394,6 +395,73 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Initial health sample is due"), AethelnServerObservability::ShouldSampleHealth(0.0, 0.0));
 	TestFalse(TEXT("Health sampling remains bounded between due times"), AethelnServerObservability::ShouldSampleHealth(30.0, 29.0));
 	TestTrue(TEXT("Later health sample becomes due"), AethelnServerObservability::ShouldSampleHealth(30.0, 30.0));
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	TestNotNull(TEXT("Server lifecycle runtime world was created"), World);
+	TestNotNull(TEXT("Engine exists for server lifecycle runtime world"), GEngine);
+	if (World == nullptr || GEngine == nullptr)
+	{
+		if (World != nullptr)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+	TestNotNull(TEXT("Server lifecycle game instance was created"), GameInstance);
+	if (GameInstance == nullptr)
+	{
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		return false;
+	}
+	WorldContext.OwningGameInstance = GameInstance;
+	World->SetGameInstance(GameInstance);
+	WorldContext.SetCurrentWorld(World);
+	GameInstance->Init();
+	World->InitializeActorsForPlay(FURL());
+	World->BeginPlay();
+
+	UAethelnObservabilitySubsystem* Subsystem = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>();
+	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> Sink =
+		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(16);
+	TestNotNull(TEXT("Server lifecycle runtime owns the observability subsystem"), Subsystem);
+	if (Subsystem == nullptr
+		|| !Subsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-server-runtime"),
+			TEXT("instance-server-runtime"),
+			AethelnObservability::ExcludedIdentifier)
+		|| !Subsystem->SetTestSink(Sink))
+	{
+		GameInstance->Shutdown();
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		return false;
+	}
+
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldCleanup.Broadcast(World, true, true);
+	TestTrue(TEXT("Actual server world delegates drain lifecycle and health evidence"), Subsystem->WaitForIdleForTests());
+	const TArray<FAethelnObservabilityEvent> RuntimeEvents = Sink->GetEvents();
+	TestEqual(TEXT("Actual server world delegates emit start, health, and shutdown events"), RuntimeEvents.Num(), 3);
+	if (RuntimeEvents.Num() == 3)
+	{
+		TestEqual(TEXT("World-start delegate emits server lifecycle"), RuntimeEvents[0].Category, EAethelnObservabilityCategory::ServerLifecycle);
+		TestEqual(TEXT("World-tick delegate emits server health"), RuntimeEvents[1].Category, EAethelnObservabilityCategory::ServerHealth);
+		TestEqual(TEXT("World-cleanup delegate emits server lifecycle"), RuntimeEvents[2].Category, EAethelnObservabilityCategory::ServerLifecycle);
+		TestEqual(TEXT("World-cleanup delegate emits controlled shutdown"), RuntimeEvents[2].SafeReason, EAethelnSafeReason::ControlledShutdown);
+	}
+	TestEqual(TEXT("Actual server health delegate emits seven metrics"), Sink->GetMetrics().Num(), 7);
+
+	Subsystem->ResetSink();
+	Subsystem->ResetRuntimeContext();
+	GameInstance->Shutdown();
+	World->DestroyWorld(false);
+	GEngine->DestroyWorldContext(World);
 	return true;
 }
 #endif

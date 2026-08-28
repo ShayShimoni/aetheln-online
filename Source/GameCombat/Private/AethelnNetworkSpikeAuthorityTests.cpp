@@ -121,6 +121,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 {
+	AddExpectedMessage(
+		TEXT("dispatch_failure metric=\\\"sink-failure-count\\\" channel=\\\"public\\\" kind=\\\"sink-write\\\" work_class=\\\"critical\\\" delta=1 total=[12]"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		2);
 	const UScriptStruct* IntentStruct = FAethelnSpikeAttackIntent::StaticStruct();
 	TestNotNull(TEXT("Intent schema exists"), IntentStruct);
 
@@ -192,7 +197,7 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	UAethelnObservabilitySubsystem* ObservabilitySubsystem = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>();
 	TestNotNull(TEXT("Game instance owns the observability service"), ObservabilitySubsystem);
 	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> ObservabilitySink =
-		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(16);
+		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(64);
 	if (ObservabilitySubsystem == nullptr
 		|| !ObservabilitySubsystem->SetRuntimeContext(
 			EAethelnFlowKind::PrototypeAuthority,
@@ -334,6 +339,12 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Rejection retains the intent sequence"), RejectionEvent.Correlation.Sequence, static_cast<uint64>(Intent.Sequence));
 		TestTrue(TEXT("Pre-activation rejection does not invent an activation identity"), RejectionEvent.Correlation.ActivationId.IsEmpty());
 	}
+	TestEqual(TEXT("Impossible aim rejection emits one count metric"), ObservabilitySink->GetMetrics().Num(), 1);
+	if (ObservabilitySink->GetMetrics().Num() == 1)
+	{
+		TestEqual(TEXT("Impossible aim rejection metric uses the rejection counter"), ObservabilitySink->GetMetrics()[0].Metric, EAethelnMetricKind::RejectionCount);
+		TestEqual(TEXT("Impossible aim rejection metric increments by one"), ObservabilitySink->GetMetrics()[0].Value, static_cast<int64>(1));
+	}
 
 	ObservabilitySink->SetFailWrites(true);
 	Intent.Sequence = 7;
@@ -458,6 +469,13 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 	AuthorityComponent->SetLifecycleReady(true);
 
 	TestTrue(TEXT("All authoritative observability work drains before sink reset"), ObservabilitySubsystem->WaitForIdleForTests());
+	for (const FAethelnMetricSample& Metric : ObservabilitySink->GetMetrics())
+	{
+		if (Metric.Metric == EAethelnMetricKind::EventCount || Metric.Metric == EAethelnMetricKind::RejectionCount)
+		{
+			TestEqual(TEXT("Every authority count metric increments by one"), Metric.Value, static_cast<int64>(1));
+		}
+	}
 	ObservabilitySubsystem->ResetSink();
 	Intent.Sequence = 6;
 	Intent.Aim = -FVector::ForwardVector;

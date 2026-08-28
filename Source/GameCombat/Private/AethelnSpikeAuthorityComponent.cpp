@@ -111,6 +111,7 @@ namespace AethelnSpikeAuthority
 			: EAethelnMetricKind::RejectionCount;
 		EventMetric.Category = SubjectCategory;
 		EventMetric.Reason = Event.SafeReason;
+		EventMetric.Value = 1;
 		Subsystem->EmitMetric(EventMetric);
 	}
 

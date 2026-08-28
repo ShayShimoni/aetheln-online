@@ -78,11 +78,15 @@ service pointers. Runtime correlation and build/profile contexts are validated
 before replacement; invalid replacement leaves the prior valid context intact.
 
 The service has independent public and restricted channels. Authoritative
-producers only enqueue into separate capacity-bounded dispatch queues; sink
-work runs on independently scheduled background workers. A blocked public or
-restricted sink cannot block the other channel or authoritative simulation,
-and saturation drops observability work rather than waiting or changing
-gameplay truth. The default public sink receives only `MakePublicCopy()` and
+producers only enqueue into capacity-bounded dispatch queues; sink work runs on
+independently scheduled background workers. The public channel has separate
+bounded lanes for routine accepted-movement evidence and critical evidence.
+The public worker drains critical rejection, correction, and non-routine work
+before routine movement, so routine movement saturation cannot consume the
+critical lane. A blocked public or restricted sink cannot block the other
+channel or authoritative simulation, and saturation drops observability work
+rather than waiting or changing gameplay truth. The default public sink
+receives only `MakePublicCopy()` and
 writes the bounded public contract through Unreal's structured log lifecycle.
 The full bounded event is retained separately in a capacity-bounded,
 process-local restricted audit buffer; that
@@ -92,6 +96,12 @@ exporter replace either channel independently. A later exporter must remain
 vendor neutral until a reviewed decision selects it. Public or restricted sink
 failure cannot block the other channel, returns no gameplay result, and is
 ignored by every producer.
+
+Queue drops and sink-write failures are reported from the background dispatch
+workers through a structured warning carrying only the closed channel, failure
+kind, work class, delta, and total count. This failure signal bypasses the
+saturated telemetry queue and never performs sink I/O on the authoritative
+producer thread.
 
 The authority spike configures its context from bounded command-line identities
 when the existing scenario is active. Missing packaged provenance remains the

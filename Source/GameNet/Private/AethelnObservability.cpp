@@ -40,6 +40,7 @@ struct FAethelnObservabilityService::FDispatchState final
 		FAethelnObservabilityEvent Event;
 		FAethelnMetricSample Metric;
 		FSinkPtr Sink;
+		bool bRoutineMovement = false;
 	};
 
 	struct FRestrictedWork
@@ -82,15 +83,27 @@ struct FAethelnObservabilityService::FDispatchState final
 		FPublicWork Work;
 		Work.Kind = EPublicWorkKind::Event;
 		Work.Event = Event;
+		Work.bRoutineMovement = IsRoutineMovementEvent(Event);
 		{
 			FScopeLock SinkLock(&SinkMutex);
 			Work.Sink = PublicSink;
 			FScopeLock DispatchLock(&PublicDispatchMutex);
-			if (!TryReserve(PublicPending, PublicDropped))
+			if (Work.bRoutineMovement)
 			{
-				return false;
+				if (!TryReserve(PublicRoutinePending, PublicRoutineDropped))
+				{
+					return false;
+				}
+				PublicRoutineQueue.Enqueue(MoveTemp(Work));
 			}
-			PublicQueue.Enqueue(MoveTemp(Work));
+			else
+			{
+				if (!TryReserve(PublicPending, PublicDropped))
+				{
+					return false;
+				}
+				PublicQueue.Enqueue(MoveTemp(Work));
+			}
 			SchedulePublicLocked();
 		}
 		return true;
@@ -101,15 +114,27 @@ struct FAethelnObservabilityService::FDispatchState final
 		FPublicWork Work;
 		Work.Kind = EPublicWorkKind::Metric;
 		Work.Metric = Metric;
+		Work.bRoutineMovement = IsRoutineMovementMetric(Metric);
 		{
 			FScopeLock SinkLock(&SinkMutex);
 			Work.Sink = PublicSink;
 			FScopeLock DispatchLock(&PublicDispatchMutex);
-			if (!TryReserve(PublicPending, PublicDropped))
+			if (Work.bRoutineMovement)
 			{
-				return false;
+				if (!TryReserve(PublicRoutinePending, PublicRoutineDropped))
+				{
+					return false;
+				}
+				PublicRoutineQueue.Enqueue(MoveTemp(Work));
 			}
-			PublicQueue.Enqueue(MoveTemp(Work));
+			else
+			{
+				if (!TryReserve(PublicPending, PublicDropped))
+				{
+					return false;
+				}
+				PublicQueue.Enqueue(MoveTemp(Work));
+			}
 			SchedulePublicLocked();
 		}
 		return true;
@@ -135,7 +160,7 @@ struct FAethelnObservabilityService::FDispatchState final
 
 	bool WaitForPublicIdle(double TimeoutSeconds) const
 	{
-		return WaitForIdle(PublicPending, TimeoutSeconds);
+		return WaitForIdle(PublicPending, PublicRoutinePending, TimeoutSeconds);
 	}
 
 	bool WaitForRestrictedIdle(double TimeoutSeconds) const
@@ -143,12 +168,34 @@ struct FAethelnObservabilityService::FDispatchState final
 		return WaitForIdle(RestrictedPending, TimeoutSeconds);
 	}
 
-	int32 GetPublicPending() const { return PublicPending.load(std::memory_order_acquire); }
+	int32 GetPublicPending() const
+	{
+		return PublicPending.load(std::memory_order_acquire)
+			+ PublicRoutinePending.load(std::memory_order_acquire);
+	}
 	int32 GetRestrictedPending() const { return RestrictedPending.load(std::memory_order_acquire); }
-	uint64 GetPublicDropped() const { return PublicDropped.load(std::memory_order_relaxed); }
+	uint64 GetPublicDropped() const
+	{
+		return PublicDropped.load(std::memory_order_relaxed)
+			+ PublicRoutineDropped.load(std::memory_order_relaxed);
+	}
 	uint64 GetRestrictedDropped() const { return RestrictedDropped.load(std::memory_order_relaxed); }
 
 private:
+	static bool IsRoutineMovementEvent(const FAethelnObservabilityEvent& Event)
+	{
+		return Event.Category == EAethelnObservabilityCategory::Movement
+			&& Event.SubjectCategory == EAethelnObservabilityCategory::Movement
+			&& Event.SafeReason == EAethelnSafeReason::Accepted;
+	}
+
+	static bool IsRoutineMovementMetric(const FAethelnMetricSample& Metric)
+	{
+		return Metric.Metric == EAethelnMetricKind::EventCount
+			&& Metric.Category == EAethelnObservabilityCategory::Movement
+			&& Metric.Reason == EAethelnSafeReason::Accepted;
+	}
+
 	bool TryReserve(std::atomic<int32>& Pending, std::atomic<uint64>& Dropped) const
 	{
 		int32 Current = Pending.load(std::memory_order_relaxed);
@@ -182,6 +229,26 @@ private:
 		return Pending.load(std::memory_order_acquire) == 0;
 	}
 
+	static bool WaitForIdle(
+		const std::atomic<int32>& FirstPending,
+		const std::atomic<int32>& SecondPending,
+		double TimeoutSeconds)
+	{
+		const double Deadline = FPlatformTime::Seconds() + FMath::Max(0.0, TimeoutSeconds);
+		do
+		{
+			if (FirstPending.load(std::memory_order_acquire) == 0
+				&& SecondPending.load(std::memory_order_acquire) == 0)
+			{
+				return true;
+			}
+			FPlatformProcess::SleepNoStats(0.001f);
+		}
+		while (FPlatformTime::Seconds() < Deadline);
+		return FirstPending.load(std::memory_order_acquire) == 0
+			&& SecondPending.load(std::memory_order_acquire) == 0;
+	}
+
 	void SchedulePublicLocked()
 	{
 		if (!bPublicWorkerScheduled)
@@ -206,28 +273,42 @@ private:
 	{
 		for (;;)
 		{
+			ReportPublicQueueDrops();
 			FPublicWork Work;
 			{
 				FScopeLock DispatchLock(&PublicDispatchMutex);
-				if (!PublicQueue.Dequeue(Work))
+				if (!PublicQueue.Dequeue(Work) && !PublicRoutineQueue.Dequeue(Work))
 				{
 					bPublicWorkerScheduled = false;
 					return;
 				}
 			}
 
+			bool bRecorded = false;
 			if (Work.Sink.IsValid())
 			{
 				if (Work.Kind == EPublicWorkKind::Event)
 				{
-					Work.Sink->TryRecordEvent(Work.Event);
+					bRecorded = Work.Sink->TryRecordEvent(Work.Event);
 				}
 				else
 				{
-					Work.Sink->TryRecordMetric(Work.Metric);
+					bRecorded = Work.Sink->TryRecordMetric(Work.Metric);
 				}
 			}
-			PublicPending.fetch_sub(1, std::memory_order_release);
+			if (!bRecorded)
+			{
+				++PublicSinkFailures;
+				ReportDispatchFailure(
+					LexToString(EAethelnMetricKind::SinkFailureCount),
+					TEXT("public"),
+					TEXT("sink-write"),
+					Work.bRoutineMovement ? TEXT("routine-movement") : TEXT("critical"),
+					1,
+					PublicSinkFailures);
+			}
+			std::atomic<int32>& Pending = Work.bRoutineMovement ? PublicRoutinePending : PublicPending;
+			Pending.fetch_sub(1, std::memory_order_release);
 		}
 	}
 
@@ -235,6 +316,7 @@ private:
 	{
 		for (;;)
 		{
+			ReportRestrictedQueueDrops();
 			FRestrictedWork Work;
 			{
 				FScopeLock DispatchLock(&RestrictedDispatchMutex);
@@ -245,11 +327,88 @@ private:
 				}
 			}
 
+			bool bRecorded = false;
 			if (Work.Sink.IsValid())
 			{
-				Work.Sink->TryRecordEvent(Work.Event);
+				bRecorded = Work.Sink->TryRecordEvent(Work.Event);
+			}
+			if (!bRecorded)
+			{
+				++RestrictedSinkFailures;
+				ReportDispatchFailure(
+					LexToString(EAethelnMetricKind::SinkFailureCount),
+					TEXT("restricted"),
+					TEXT("sink-write"),
+					TEXT("restricted"),
+					1,
+					RestrictedSinkFailures);
 			}
 			RestrictedPending.fetch_sub(1, std::memory_order_release);
+		}
+	}
+
+	static void ReportDispatchFailure(
+		const TCHAR* MetricName,
+		const TCHAR* Channel,
+		const TCHAR* FailureKind,
+		const TCHAR* WorkClass,
+		uint64 Delta,
+		uint64 Total)
+	{
+		UE_LOG(
+			LogAethelnObservability,
+			Warning,
+			TEXT("dispatch_failure metric=\"%s\" channel=\"%s\" kind=\"%s\" work_class=\"%s\" delta=%llu total=%llu"),
+			MetricName,
+			Channel,
+			FailureKind,
+			WorkClass,
+			Delta,
+			Total);
+	}
+
+	void ReportPublicQueueDrops()
+	{
+		const uint64 CriticalTotal = PublicDropped.load(std::memory_order_acquire);
+		if (CriticalTotal > PublicDroppedReported)
+		{
+			ReportDispatchFailure(
+				LexToString(EAethelnMetricKind::QueueDropCount),
+				TEXT("public"),
+				TEXT("queue-drop"),
+				TEXT("critical"),
+				CriticalTotal - PublicDroppedReported,
+				CriticalTotal);
+			PublicDroppedReported = CriticalTotal;
+		}
+
+		const uint64 RoutineTotal = PublicRoutineDropped.load(std::memory_order_acquire);
+		if (RoutineTotal > PublicRoutineDroppedReported)
+		{
+			ReportDispatchFailure(
+				LexToString(EAethelnMetricKind::QueueDropCount),
+				TEXT("public"),
+				TEXT("queue-drop"),
+				TEXT("routine-movement"),
+				RoutineTotal - PublicRoutineDroppedReported,
+				RoutineTotal);
+			PublicRoutineDroppedReported = RoutineTotal;
+		}
+	}
+
+	void ReportRestrictedQueueDrops()
+	{
+		const uint64 Total = RestrictedDropped.load(std::memory_order_acquire);
+		if (Total > RestrictedDroppedReported)
+		{
+			ReportDispatchFailure(
+				LexToString(EAethelnMetricKind::QueueDropCount),
+				TEXT("restricted"),
+				TEXT("queue-drop"),
+				TEXT("restricted"),
+				Total - RestrictedDroppedReported,
+				Total);
+			RestrictedDroppedReported = Total;
 		}
 	}
 
@@ -260,11 +419,19 @@ private:
 	FRestrictedSinkPtr RestrictedSink;
 	const int32 Capacity;
 	TQueue<FPublicWork, EQueueMode::Mpsc> PublicQueue;
+	TQueue<FPublicWork, EQueueMode::Mpsc> PublicRoutineQueue;
 	TQueue<FRestrictedWork, EQueueMode::Mpsc> RestrictedQueue;
 	std::atomic<int32> PublicPending { 0 };
+	std::atomic<int32> PublicRoutinePending { 0 };
 	std::atomic<int32> RestrictedPending { 0 };
 	std::atomic<uint64> PublicDropped { 0 };
+	std::atomic<uint64> PublicRoutineDropped { 0 };
 	std::atomic<uint64> RestrictedDropped { 0 };
+	uint64 PublicDroppedReported = 0;
+	uint64 PublicRoutineDroppedReported = 0;
+	uint64 RestrictedDroppedReported = 0;
+	uint64 PublicSinkFailures = 0;
+	uint64 RestrictedSinkFailures = 0;
 	bool bPublicWorkerScheduled = false;
 	bool bRestrictedWorkerScheduled = false;
 };

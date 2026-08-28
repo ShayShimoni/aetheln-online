@@ -107,6 +107,7 @@ enum class EAethelnMetricKind : uint8
 	RejectionCount,
 	LifecycleCount,
 	SinkFailureCount,
+	QueueDropCount,
 	ServerTickMicroseconds,
 	ActorCount,
 	ReplicatedActorCount,
@@ -306,6 +307,7 @@ inline const TCHAR* LexToString(EAethelnMetricKind Value)
 	case EAethelnMetricKind::RejectionCount: return TEXT("rejection-count");
 	case EAethelnMetricKind::LifecycleCount: return TEXT("lifecycle-count");
 	case EAethelnMetricKind::SinkFailureCount: return TEXT("sink-failure-count");
+	case EAethelnMetricKind::QueueDropCount: return TEXT("queue-drop-count");
 	case EAethelnMetricKind::ServerTickMicroseconds: return TEXT("server-tick-microseconds");
 	case EAethelnMetricKind::ActorCount: return TEXT("actor-count");
 	case EAethelnMetricKind::ReplicatedActorCount: return TEXT("replicated-actor-count");

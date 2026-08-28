@@ -3,9 +3,11 @@
 #include "AethelnObservability.h"
 #include "AethelnObservabilitySubsystem.h"
 #include "AethelnSpikeCharacter.h"
+#include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
+#include "Interfaces/MovementBaseInterface.h"
 
 uint64 UAethelnSpikeMovementComponent::MakeMovementSequence(float TimeStamp)
 {
@@ -147,6 +149,129 @@ bool FAethelnSpikeMovementObservabilityContractTest::RunTest(const FString& Para
 	TestEqual(TEXT("Repeated movement timestamp remains correlatable"), UAethelnSpikeMovementComponent::MakeMovementSequence(1.25f), UAethelnSpikeMovementComponent::MakeMovementSequence(1.25f));
 	TestTrue(TEXT("Authoritative position error maps to a movement rejection observation"), UAethelnSpikeMovementComponent::ShouldEmitServerMovementRejection(true));
 	TestFalse(TEXT("Accepted authoritative movement does not emit a rejection"), UAethelnSpikeMovementComponent::ShouldEmitServerMovementRejection(false));
+
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	TestNotNull(TEXT("Movement observability runtime world was created"), World);
+	TestNotNull(TEXT("Engine exists for movement observability runtime world"), GEngine);
+	if (World == nullptr || GEngine == nullptr)
+	{
+		if (World != nullptr)
+		{
+			World->DestroyWorld(false);
+		}
+		return false;
+	}
+
+	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+	TestNotNull(TEXT("Movement observability game instance was created"), GameInstance);
+	if (GameInstance == nullptr)
+	{
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		return false;
+	}
+	WorldContext.OwningGameInstance = GameInstance;
+	World->SetGameInstance(GameInstance);
+	WorldContext.SetCurrentWorld(World);
+	GameInstance->Init();
+	World->InitializeActorsForPlay(FURL());
+	World->BeginPlay();
+
+	auto DestroyTestWorld = [World, GameInstance]()
+	{
+		GameInstance->Shutdown();
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+	};
+
+	UAethelnObservabilitySubsystem* Subsystem = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>();
+	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> Sink =
+		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(16);
+	TestNotNull(TEXT("Movement runtime owns the observability subsystem"), Subsystem);
+	if (Subsystem == nullptr
+		|| !Subsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-movement-runtime"),
+			TEXT("instance-movement-runtime"),
+			TEXT("connection-movement-runtime"))
+		|| !Subsystem->SetTestSink(Sink))
+	{
+		DestroyTestWorld();
+		return false;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AAethelnSpikeCharacter* Character = World->SpawnActor<AAethelnSpikeCharacter>(
+		AAethelnSpikeCharacter::StaticClass(),
+		FVector::ZeroVector,
+		FRotator::ZeroRotator,
+		SpawnParameters);
+	UAethelnSpikeMovementComponent* Movement = Character != nullptr
+		? Cast<UAethelnSpikeMovementComponent>(Character->GetCharacterMovement())
+		: nullptr;
+	TestNotNull(TEXT("Runtime character uses the spike movement component"), Movement);
+	if (Movement == nullptr)
+	{
+		DestroyTestWorld();
+		return false;
+	}
+	Character->SetObservabilityConnectionPseudonym(TEXT("connection-movement-runtime"));
+
+	Movement->MoveAutonomous(1.0f, 0.016f, 0, FVector(100.0f, 0.0f, 0.0f));
+	FMovementBaseInterfaceData MovementBase;
+	const FVector RejectedClientLocation = Character->GetActorLocation() + FVector(100000.0f, 0.0f, 0.0f);
+	const bool bServerRejected = Movement->ServerExceedsAllowablePositionError(
+		2.0f,
+		0.016f,
+		FVector::ZeroVector,
+		RejectedClientLocation,
+		RejectedClientLocation,
+		&MovementBase,
+		NAME_None,
+		Movement->PackNetworkMovementMode());
+	FNetworkPredictionData_Client_Character ClientData(*Movement);
+	Movement->OnClientCorrectionReceived(
+		ClientData,
+		3.0f,
+		Character->GetActorLocation(),
+		Movement->Velocity,
+		&MovementBase,
+		NAME_None,
+		false,
+		false,
+		Movement->PackNetworkMovementMode(),
+		FVector(0.0f, 0.0f, -1.0f));
+
+	TestTrue(TEXT("Actual server position-error path rejects an impossible client location"), bServerRejected);
+	TestTrue(TEXT("Actual movement and correction emissions drain"), Subsystem->WaitForIdleForTests());
+	const TArray<FAethelnObservabilityEvent> Events = Sink->GetEvents();
+	TestEqual(TEXT("Three actual movement seams emit three events"), Events.Num(), 3);
+	int32 AcceptedMovementCount = 0;
+	int32 ServerRejectionCount = 0;
+	int32 ClientCorrectionCount = 0;
+	for (const FAethelnObservabilityEvent& Event : Events)
+	{
+		AcceptedMovementCount += Event.Category == EAethelnObservabilityCategory::Movement ? 1 : 0;
+		ServerRejectionCount += Event.Category == EAethelnObservabilityCategory::Rejection
+			&& Event.SubjectCategory == EAethelnObservabilityCategory::Movement ? 1 : 0;
+		ClientCorrectionCount += Event.Category == EAethelnObservabilityCategory::Correction
+			&& Event.SubjectCategory == EAethelnObservabilityCategory::Movement ? 1 : 0;
+	}
+	TestEqual(TEXT("MoveAutonomous emits one accepted movement event"), AcceptedMovementCount, 1);
+	TestEqual(TEXT("Server error emits one movement rejection envelope"), ServerRejectionCount, 1);
+	TestEqual(TEXT("Client correction callback emits one movement correction"), ClientCorrectionCount, 1);
+	const TArray<FAethelnMetricSample> Metrics = Sink->GetMetrics();
+	TestEqual(TEXT("Three actual movement seams emit three metrics"), Metrics.Num(), 3);
+	for (const FAethelnMetricSample& Metric : Metrics)
+	{
+		TestEqual(TEXT("Every movement seam increments its metric by one"), Metric.Value, static_cast<int64>(1));
+	}
+
+	Subsystem->ResetSink();
+	Subsystem->ResetRuntimeContext();
+	DestroyTestWorld();
 	return true;
 }
 #endif

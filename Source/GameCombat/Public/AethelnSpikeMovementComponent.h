@@ -39,5 +39,6 @@ protected:
 		FVector ServerGravityDirection) override;
 
 private:
+	friend class FAethelnSpikeMovementObservabilityContractTest;
 	void EmitMovementObservation(bool bCorrection, bool bServerRejected, float TimeStamp) const;
 };

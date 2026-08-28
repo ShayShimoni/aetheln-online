@@ -4,6 +4,7 @@
 #include "HAL/Event.h"
 #include "HAL/PlatformProcess.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeLock.h"
 
 #include <atomic>
 
@@ -25,11 +26,13 @@ namespace AethelnObservabilityTests
 			FPlatformProcess::ReturnSynchEventToPool(Release);
 		}
 
-		virtual bool TryRecordEvent(const FAethelnObservabilityEvent&) override
+		virtual bool TryRecordEvent(const FAethelnObservabilityEvent& Event) override
 		{
 			Calls.fetch_add(1, std::memory_order_relaxed);
 			Entered->Trigger();
 			Release->Wait();
+			FScopeLock Lock(&EventsMutex);
+			Events.Add(Event);
 			return true;
 		}
 
@@ -37,10 +40,17 @@ namespace AethelnObservabilityTests
 		bool WaitUntilEntered() const { return Entered->Wait(2000); }
 		void ReleaseBlockedWrite() { Release->Trigger(); }
 		int32 GetCalls() const { return Calls.load(std::memory_order_relaxed); }
+		TArray<FAethelnObservabilityEvent> GetEvents() const
+		{
+			FScopeLock Lock(&EventsMutex);
+			return Events;
+		}
 
 	private:
 		FEvent* Entered;
 		FEvent* Release;
+		mutable FCriticalSection EventsMutex;
+		TArray<FAethelnObservabilityEvent> Events;
 		std::atomic<int32> Calls { 0 };
 	};
 
@@ -126,6 +136,7 @@ bool FAethelnObservabilitySchemaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Event subject category is a closed enum"), Event.SubjectCategory, EAethelnObservabilityCategory::ServerLifecycle);
 	TestEqual(TEXT("Safe rejection reason is stable"), FString(LexToString(EAethelnSafeReason::Rejected)), FString(TEXT("rejected")));
 	TestEqual(TEXT("Controlled shutdown reason is stable"), FString(LexToString(EAethelnSafeReason::ControlledShutdown)), FString(TEXT("controlled-shutdown")));
+	TestEqual(TEXT("Queue drop metric is stable"), FString(LexToString(EAethelnMetricKind::QueueDropCount)), FString(TEXT("queue-drop-count")));
 	TestFalse(
 		TEXT("Correction cannot use a server lifecycle default as its affected subject"),
 		AethelnObservabilityTests::MakeValidEvent(
@@ -233,6 +244,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnObservabilityBoundedSinkTest::RunTest(const FString& Parameters)
 {
+	AddExpectedMessage(
+		TEXT("dispatch_failure metric=\\\"sink-failure-count\\\" channel=\\\"public\\\" kind=\\\"sink-write\\\" work_class=\\\"critical\\\" delta=1 total=[123]"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		3);
+	AddExpectedMessage(
+		TEXT("dispatch_failure metric=\\\"sink-failure-count\\\" channel=\\\"restricted\\\" kind=\\\"sink-write\\\" work_class=\\\"restricted\\\" delta=1 total=[123]"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		3);
 	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> PublicSink = MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(4);
 	TSharedPtr<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe> RestrictedSink = MakeShared<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe>(2);
 	FAethelnObservabilityService Service(PublicSink, RestrictedSink);
@@ -390,7 +411,24 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnObservabilityNonBlockingDispatchTest::RunTest(const FString& Parameters)
 {
-	FAethelnObservabilityEvent Event = AethelnObservabilityTests::MakeValidEvent();
+	AddExpectedMessage(
+		TEXT("dispatch_failure metric=\\\"queue-drop-count\\\" channel=\\\"public\\\" kind=\\\"queue-drop\\\" work_class=\\\"routine-movement\\\" delta=[1-9][0-9]* total=[1-9][0-9]*"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		1);
+	AddExpectedMessage(
+		TEXT("dispatch_failure metric=\\\"queue-drop-count\\\" channel=\\\"public\\\" kind=\\\"queue-drop\\\" work_class=\\\"critical\\\" delta=[1-9][0-9]* total=[1-9][0-9]*"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		1);
+	AddExpectedMessage(
+		TEXT("dispatch_failure metric=\\\"queue-drop-count\\\" channel=\\\"restricted\\\" kind=\\\"queue-drop\\\" work_class=\\\"restricted\\\" delta=[1-9][0-9]* total=[1-9][0-9]*"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		1);
+	FAethelnObservabilityEvent Event = AethelnObservabilityTests::MakeValidEvent(
+		EAethelnObservabilityCategory::Movement,
+		EAethelnObservabilityCategory::Movement);
 	TSharedPtr<AethelnObservabilityTests::FBlockingPublicSink, ESPMode::ThreadSafe> BlockingPublic =
 		MakeShared<AethelnObservabilityTests::FBlockingPublicSink, ESPMode::ThreadSafe>();
 	TSharedPtr<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe> Restricted =
@@ -405,18 +443,57 @@ bool FAethelnObservabilityNonBlockingDispatchTest::RunTest(const FString& Parame
 		PublicBlocked.EmitEvent(Event);
 		TestTrue(TEXT("Restricted channel remains independently drainable"), PublicBlocked.WaitForRestrictedIdleForTests());
 	}
-	TestTrue(TEXT("Blocked public work never exceeds dispatch capacity"), PublicBlocked.GetPublicPendingCountForTests() <= 2);
+	FAethelnObservabilityEvent Rejection = AethelnObservabilityTests::MakeValidEvent(
+		EAethelnObservabilityCategory::Rejection,
+		EAethelnObservabilityCategory::Movement);
+	Rejection.SafeReason = EAethelnSafeReason::Rejected;
+	Rejection.Correlation.Sequence = 5;
+	PublicBlocked.EmitEvent(Rejection);
+	TestTrue(TEXT("Critical public work remains independently bounded"), PublicBlocked.GetPublicPendingCountForTests() <= 4);
 	TestTrue(TEXT("Blocked public saturation drops observability work"), PublicBlocked.GetPublicDroppedCountForTests() > 0);
-	TestEqual(TEXT("Restricted channel retained all independently drained events"), Restricted->GetEvents().Num(), 4);
+	TestTrue(TEXT("Critical rejection remains admitted while routine movement is saturated"), PublicBlocked.GetPublicPendingCountForTests() >= 2);
+	TestTrue(TEXT("Restricted channel drains the critical rejection independently"), PublicBlocked.WaitForRestrictedIdleForTests());
+	TestEqual(TEXT("Restricted channel retained all independently drained events"), Restricted->GetEvents().Num(), 5);
 	BlockingPublic->ReleaseBlockedWrite();
 	TestTrue(TEXT("Public channel drains after the blocked sink is released"), PublicBlocked.WaitForIdleForTests());
-	TestEqual(TEXT("Only bounded public work reached the blocked sink"), BlockingPublic->GetCalls(), 2);
+	TestEqual(TEXT("Bounded routine work and the critical rejection reached the blocked sink"), BlockingPublic->GetCalls(), 3);
+	const TArray<FAethelnObservabilityEvent> PublicEvents = BlockingPublic->GetEvents();
+	TestTrue(
+		TEXT("Critical rejection reaches the public sink despite routine movement saturation"),
+		PublicEvents.ContainsByPredicate([](const FAethelnObservabilityEvent& Recorded)
+		{
+			return Recorded.Category == EAethelnObservabilityCategory::Rejection
+				&& Recorded.SubjectCategory == EAethelnObservabilityCategory::Movement;
+		}));
+
+	TSharedPtr<AethelnObservabilityTests::FBlockingPublicSink, ESPMode::ThreadSafe> BlockingCritical =
+		MakeShared<AethelnObservabilityTests::FBlockingPublicSink, ESPMode::ThreadSafe>();
+	TSharedPtr<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe> CriticalRestricted =
+		MakeShared<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe>(8);
+	FAethelnObservabilityService CriticalBlocked(BlockingCritical, CriticalRestricted, 2);
+	FAethelnObservabilityEvent CriticalEvent = AethelnObservabilityTests::MakeValidEvent(
+		EAethelnObservabilityCategory::Rejection,
+		EAethelnObservabilityCategory::Movement);
+	CriticalEvent.SafeReason = EAethelnSafeReason::Rejected;
+	CriticalBlocked.EmitEvent(CriticalEvent);
+	TestTrue(TEXT("Critical public sink runs on the background dispatcher"), BlockingCritical->WaitUntilEntered());
+	for (uint64 Sequence = 2; Sequence <= 4; ++Sequence)
+	{
+		CriticalEvent.Correlation.Sequence = Sequence;
+		CriticalBlocked.EmitEvent(CriticalEvent);
+		TestTrue(TEXT("Restricted evidence drains during critical public saturation"), CriticalBlocked.WaitForRestrictedIdleForTests());
+	}
+	TestTrue(TEXT("Critical public saturation increments the production-visible drop count"), CriticalBlocked.GetPublicDroppedCountForTests() > 0);
+	BlockingCritical->ReleaseBlockedWrite();
+	TestTrue(TEXT("Critical public lane drains after release"), CriticalBlocked.WaitForIdleForTests());
+	TestEqual(TEXT("Critical public lane remains capacity bounded"), BlockingCritical->GetCalls(), 2);
 
 	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> Public =
 		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(8);
 	TSharedPtr<AethelnObservabilityTests::FBlockingRestrictedSink, ESPMode::ThreadSafe> BlockingRestricted =
 		MakeShared<AethelnObservabilityTests::FBlockingRestrictedSink, ESPMode::ThreadSafe>();
 	FAethelnObservabilityService RestrictedBlocked(Public, BlockingRestricted, 2);
+	Event = AethelnObservabilityTests::MakeValidEvent();
 	Event.Correlation.Sequence = 10;
 	RestrictedBlocked.EmitEvent(Event);
 	TestTrue(TEXT("Restricted sink runs on its independent background dispatcher"), BlockingRestricted->WaitUntilEntered());
