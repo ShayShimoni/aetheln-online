@@ -37,7 +37,7 @@ $DefaultChecks = @(
 		name = 'psscriptanalyzer'
 		tier = 'advisory'
 		requiredModule = 'PSScriptAnalyzer'
-		command = '$Findings = @(Invoke-ScriptAnalyzer -Path scripts, tests -Recurse); $Findings | Format-Table -AutoSize | Out-String -Width 200 | Write-Output; if ($Findings.Count -gt 0) { exit 1 } exit 0'
+		command = '$ErrorActionPreference = ''Stop''; $Findings = @(foreach ($AnalyzerPath in @(''scripts'', ''tests'')) { Invoke-ScriptAnalyzer -Path $AnalyzerPath -Recurse }); $Findings | Format-Table -AutoSize | Out-String -Width 200 | Write-Output; if ($Findings.Count -gt 0) { exit 1 } exit 0'
 	}
 )
 
