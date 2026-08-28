@@ -485,7 +485,7 @@ bool FAethelnObservabilitySubsystemSinkTest::RunTest(const FString& Parameters)
 	FAethelnObservabilityEvent MovementRejectionEvent;
 	MovementRejectionEvent.Category = EAethelnObservabilityCategory::Rejection;
 	MovementRejectionEvent.SubjectCategory = EAethelnObservabilityCategory::Movement;
-	MovementRejectionEvent.SafeReason = EAethelnSafeReason::Corrected;
+	MovementRejectionEvent.SafeReason = EAethelnSafeReason::Rejected;
 	MovementRejectionEvent.DiagnosticCode = EAethelnDiagnosticCode::ValidationFailed;
 	FAethelnObservabilityEventContext MovementRejectionContext;
 	MovementRejectionContext.Sequence = 24;
@@ -493,9 +493,11 @@ bool FAethelnObservabilitySubsystemSinkTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Movement rejection dispatch drains"), Subsystem->WaitForIdleForTests());
 	TestEqual(TEXT("Movement rejection without fabricated combat identities reaches the sink"), RecordedSink->GetEvents().Num(), 3);
 	TestEqual(TEXT("Movement rejection retains its authoritative subject"), RecordedSink->GetEvents()[2].SubjectCategory, EAethelnObservabilityCategory::Movement);
+	TestEqual(TEXT("Public movement rejection retains its safe rejection reason"), RecordedSink->GetEvents()[2].SafeReason, EAethelnSafeReason::Rejected);
 	TestTrue(TEXT("Movement rejection has no fabricated ability identity"), RecordedSink->GetEvents()[2].Correlation.AbilityId.IsEmpty());
 	TestEqual(TEXT("Public movement rejection removes diagnostic detail"), RecordedSink->GetEvents()[2].DiagnosticCode, EAethelnDiagnosticCode::None);
 	TestEqual(TEXT("Restricted channel retained every emitted event"), RecordedRestrictedSink->GetEvents().Num(), 3);
+	TestEqual(TEXT("Restricted movement rejection retains its safe rejection reason"), RecordedRestrictedSink->GetEvents()[2].SafeReason, EAethelnSafeReason::Rejected);
 	TestEqual(TEXT("Restricted movement rejection retains diagnostic detail"), RecordedRestrictedSink->GetEvents()[2].DiagnosticCode, EAethelnDiagnosticCode::ValidationFailed);
 
 	FAethelnObservabilityEvent MovementCorrectionEvent;

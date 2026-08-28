@@ -110,9 +110,11 @@ void UAethelnSpikeMovementComponent::EmitMovementObservation(
 			? EAethelnObservabilityCategory::Correction
 			: EAethelnObservabilityCategory::Movement);
 	Event.SubjectCategory = EAethelnObservabilityCategory::Movement;
-	Event.SafeReason = bServerRejected || bCorrection
-		? EAethelnSafeReason::Corrected
-		: EAethelnSafeReason::Accepted;
+	Event.SafeReason = bServerRejected
+		? EAethelnSafeReason::Rejected
+		: (bCorrection
+			? EAethelnSafeReason::Corrected
+			: EAethelnSafeReason::Accepted);
 	Event.DiagnosticCode = bServerRejected
 		? EAethelnDiagnosticCode::ValidationFailed
 		: EAethelnDiagnosticCode::None;
@@ -253,11 +255,23 @@ bool FAethelnSpikeMovementObservabilityContractTest::RunTest(const FString& Para
 	int32 ClientCorrectionCount = 0;
 	for (const FAethelnObservabilityEvent& Event : Events)
 	{
-		AcceptedMovementCount += Event.Category == EAethelnObservabilityCategory::Movement ? 1 : 0;
-		ServerRejectionCount += Event.Category == EAethelnObservabilityCategory::Rejection
-			&& Event.SubjectCategory == EAethelnObservabilityCategory::Movement ? 1 : 0;
-		ClientCorrectionCount += Event.Category == EAethelnObservabilityCategory::Correction
-			&& Event.SubjectCategory == EAethelnObservabilityCategory::Movement ? 1 : 0;
+		if (Event.Category == EAethelnObservabilityCategory::Movement)
+		{
+			++AcceptedMovementCount;
+			TestEqual(TEXT("Accepted movement carries the accepted safe reason"), Event.SafeReason, EAethelnSafeReason::Accepted);
+		}
+		if (Event.Category == EAethelnObservabilityCategory::Rejection
+			&& Event.SubjectCategory == EAethelnObservabilityCategory::Movement)
+		{
+			++ServerRejectionCount;
+			TestEqual(TEXT("Server movement rejection carries the rejected safe reason"), Event.SafeReason, EAethelnSafeReason::Rejected);
+		}
+		if (Event.Category == EAethelnObservabilityCategory::Correction
+			&& Event.SubjectCategory == EAethelnObservabilityCategory::Movement)
+		{
+			++ClientCorrectionCount;
+			TestEqual(TEXT("Client movement correction carries the corrected safe reason"), Event.SafeReason, EAethelnSafeReason::Corrected);
+		}
 	}
 	TestEqual(TEXT("MoveAutonomous emits one accepted movement event"), AcceptedMovementCount, 1);
 	TestEqual(TEXT("Server error emits one movement rejection envelope"), ServerRejectionCount, 1);
