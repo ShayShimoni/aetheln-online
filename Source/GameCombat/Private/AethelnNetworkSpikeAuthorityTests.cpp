@@ -130,7 +130,7 @@ bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=impossible-aim-transition"),
 		ELogVerbosity::Warning,
 		EAutomationExpectedMessageFlags::Exact,
-		2);
+		4);
 	AddExpectedMessagePlain(
 		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=activation-blocked"),
 		ELogVerbosity::Warning,
