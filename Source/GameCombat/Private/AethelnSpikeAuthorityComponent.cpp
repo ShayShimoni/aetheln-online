@@ -4,7 +4,11 @@
 #include "AbilitySystemInterface.h"
 #include "AethelnSpikeDamageEffect.h"
 #include "AethelnSpikeEnemy.h"
+#include "AethelnSpikeCharacter.h"
 #include "AethelnSpikeMeleeAbility.h"
+#include "AethelnObservability.h"
+#include "AethelnObservabilitySubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
@@ -20,6 +24,96 @@ namespace AethelnSpikeAuthority
 	constexpr uint8 SchemaVersion = 1;
 	constexpr uint32 ContentVersion = 1;
 	constexpr float AimUnitTolerance = 0.01f;
+	constexpr TCHAR MeleeAbilityId[] = TEXT("Ability.Melee.Combo1");
+
+	EAethelnSafeReason ToSafeReason(EAethelnSpikeAttackRejection Reason)
+	{
+		switch (Reason)
+		{
+		case EAethelnSpikeAttackRejection::None: return EAethelnSafeReason::Accepted;
+		case EAethelnSpikeAttackRejection::StaleSequence: return EAethelnSafeReason::StaleSequence;
+		case EAethelnSpikeAttackRejection::DuplicateSequence: return EAethelnSafeReason::DuplicateSequence;
+		case EAethelnSpikeAttackRejection::IncompatibleVersion: return EAethelnSafeReason::IncompatibleVersion;
+		case EAethelnSpikeAttackRejection::TimestampOutOfBounds: return EAethelnSafeReason::TimestampOutOfBounds;
+		case EAethelnSpikeAttackRejection::ImpossibleAimTransition: return EAethelnSafeReason::ImpossibleAimTransition;
+		case EAethelnSpikeAttackRejection::ConnectionClosed: return EAethelnSafeReason::ConnectionClosed;
+		case EAethelnSpikeAttackRejection::ActorDestroyed: return EAethelnSafeReason::ActorDestroyed;
+		case EAethelnSpikeAttackRejection::MalformedIntent: return EAethelnSafeReason::MalformedRequest;
+		case EAethelnSpikeAttackRejection::ActivationBlocked: return EAethelnSafeReason::ActivationBlocked;
+		default: return EAethelnSafeReason::Rejected;
+		}
+	}
+
+	EAethelnObservabilityCategory ToObservabilityCategory(FName Category)
+	{
+		if (Category == TEXT("movement")) return EAethelnObservabilityCategory::Movement;
+		if (Category == TEXT("aim")) return EAethelnObservabilityCategory::Aim;
+		if (Category == TEXT("activation")) return EAethelnObservabilityCategory::Ability;
+		if (Category == TEXT("cooldown")) return EAethelnObservabilityCategory::Cooldown;
+		if (Category == TEXT("hit") || Category == TEXT("damage")) return EAethelnObservabilityCategory::Hit;
+		if (Category == TEXT("dodge")) return EAethelnObservabilityCategory::Dodge;
+		if (Category == TEXT("block")) return EAethelnObservabilityCategory::Block;
+		if (Category == TEXT("resource")) return EAethelnObservabilityCategory::Resource;
+		if (Category == TEXT("death")) return EAethelnObservabilityCategory::Death;
+		if (Category == TEXT("respawn")) return EAethelnObservabilityCategory::Respawn;
+		return EAethelnObservabilityCategory::Rejection;
+	}
+
+	UAethelnObservabilitySubsystem* ResolveObservabilitySubsystem(const AActor* Owner)
+	{
+		const UWorld* World = Owner != nullptr ? Owner->GetWorld() : nullptr;
+		UGameInstance* GameInstance = World != nullptr ? World->GetGameInstance() : nullptr;
+		return GameInstance != nullptr ? GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>() : nullptr;
+	}
+
+	void EmitObservabilityEvent(
+		const AActor* Owner,
+		uint64 Sequence,
+		const FGuid& AttackId,
+		EAethelnObservabilityCategory SubjectCategory,
+		EAethelnSpikeAttackRejection Reason,
+		bool bIncludeMeleeAbilityIdentity = true)
+	{
+		UAethelnObservabilitySubsystem* Subsystem = ResolveObservabilitySubsystem(Owner);
+		if (Subsystem == nullptr)
+		{
+			return;
+		}
+
+		FAethelnObservabilityEvent Event;
+		Event.Category = Reason == EAethelnSpikeAttackRejection::None
+			? SubjectCategory
+			: EAethelnObservabilityCategory::Rejection;
+		Event.SubjectCategory = SubjectCategory;
+		Event.SafeReason = ToSafeReason(Reason);
+		Event.DiagnosticCode = Reason == EAethelnSpikeAttackRejection::None
+			? EAethelnDiagnosticCode::None
+			: EAethelnDiagnosticCode::ValidationFailed;
+
+		FAethelnObservabilityEventContext Context;
+		if (const AAethelnSpikeCharacter* SpikeCharacter = Cast<AAethelnSpikeCharacter>(Owner))
+		{
+			Context.ConnectionPseudonym = SpikeCharacter->GetObservabilityConnectionPseudonym();
+		}
+		Context.ActivationId = AttackId.IsValid()
+			? AttackId.ToString(EGuidFormats::DigitsWithHyphensLower)
+			: FString();
+		if (bIncludeMeleeAbilityIdentity)
+		{
+			Context.AbilityId = MeleeAbilityId;
+		}
+		Context.Sequence = Sequence;
+		Subsystem->EmitEvent(Event, Context);
+
+		FAethelnMetricSample EventMetric;
+		EventMetric.Metric = Reason == EAethelnSpikeAttackRejection::None
+			? EAethelnMetricKind::EventCount
+			: EAethelnMetricKind::RejectionCount;
+		EventMetric.Category = SubjectCategory;
+		EventMetric.Reason = Event.SafeReason;
+		EventMetric.Value = 1;
+		Subsystem->EmitMetric(EventMetric);
+	}
 
 	bool IsAuthorityScenario()
 	{
@@ -260,6 +354,16 @@ EAethelnSpikeAttackRejection UAethelnSpikeAuthorityComponent::ProcessServerScena
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnProfileId="), ProfileId);
 	FParse::Value(FCommandLine::Get(), TEXT("AethelnRunId="), RunId);
 	UE_LOG(LogTemp, Warning, TEXT("AUTHORITY rejection category=%s reason=%s client=%s scenario=%s profile=%s run=%s"), *GetScenarioCategoryId(Probe.Category), LexToString(Reason), *ClientId, *ScenarioId, *ProfileId, *RunId);
+	if (Reason != EAethelnSpikeAttackRejection::None)
+	{
+		AethelnSpikeAuthority::EmitObservabilityEvent(
+			GetOwner(),
+			Probe.Sequence,
+			FGuid(),
+			AethelnSpikeAuthority::ToObservabilityCategory(Probe.Category),
+			Reason,
+			false);
+	}
 	return Reason;
 }
 
@@ -303,6 +407,15 @@ void UAethelnSpikeAuthorityComponent::ProcessServerIntent(const FAethelnSpikeAtt
 		Rejection);
 	if (Rejection != EAethelnSpikeAttackRejection::None)
 	{
+		const EAethelnObservabilityCategory SubjectCategory = Rejection == EAethelnSpikeAttackRejection::ImpossibleAimTransition
+			? EAethelnObservabilityCategory::Aim
+			: EAethelnObservabilityCategory::Ability;
+		AethelnSpikeAuthority::EmitObservabilityEvent(
+			Owner,
+			Intent.Sequence,
+			FGuid(),
+			SubjectCategory,
+			Rejection);
 		AethelnSpikeAuthority::RecordScenarioStage(
 			Owner,
 			Intent,
@@ -329,6 +442,12 @@ void UAethelnSpikeAuthorityComponent::ProcessServerIntent(const FAethelnSpikeAtt
 
 	if (!AbilitySystem->TryActivateAbilityByClass(UAethelnSpikeMeleeAbility::StaticClass(), true))
 	{
+		AethelnSpikeAuthority::EmitObservabilityEvent(
+			Owner,
+			PendingIntent.Sequence,
+			ActiveAttackId,
+			EAethelnObservabilityCategory::Ability,
+			EAethelnSpikeAttackRejection::ActivationBlocked);
 		AethelnSpikeAuthority::RecordScenarioStage(
 			Owner,
 			PendingIntent,
@@ -374,6 +493,12 @@ bool UAethelnSpikeAuthorityComponent::ExecuteActiveAttack()
 			TEXT("resolution"),
 			TEXT("rejected"),
 			Reason);
+		AethelnSpikeAuthority::EmitObservabilityEvent(
+			Owner,
+			PendingIntent.Sequence,
+			ActiveAttackId,
+			EAethelnObservabilityCategory::Ability,
+			Reason);
 		AethelnSpikeAuthority::RecordScenarioStage(
 			Owner,
 			PendingIntent,
@@ -391,6 +516,12 @@ bool UAethelnSpikeAuthorityComponent::ExecuteActiveAttack()
 		ActiveAttackId,
 		TEXT("activation-result"),
 		TEXT("activated"),
+		EAethelnSpikeAttackRejection::None);
+	AethelnSpikeAuthority::EmitObservabilityEvent(
+		Owner,
+		PendingIntent.Sequence,
+		ActiveAttackId,
+		EAethelnObservabilityCategory::Ability,
 		EAethelnSpikeAttackRejection::None);
 
 	int32 ServerOverlapCount = 0;
@@ -480,6 +611,15 @@ bool UAethelnSpikeAuthorityComponent::ExecuteActiveAttack()
 		ServerOverlapCount,
 		ServerEffectCount,
 		ServerDamageCount);
+	if (ServerEffectCount > 0)
+	{
+		AethelnSpikeAuthority::EmitObservabilityEvent(
+			Owner,
+			PendingIntent.Sequence,
+			ActiveAttackId,
+			EAethelnObservabilityCategory::Hit,
+			EAethelnSpikeAttackRejection::None);
+	}
 	CloseAttackWindow();
 	return true;
 }

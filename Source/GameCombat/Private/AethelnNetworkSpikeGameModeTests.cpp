@@ -123,6 +123,15 @@ bool FAethelnNetworkSpikeGameModeDisconnectLifecycleTest::RunTest(const FString&
 		DestroyTestWorld();
 		return false;
 	}
+	TestEqual(
+		TEXT("Connection identity is excluded until the authority assigns an opaque value"),
+		Character->GetObservabilityConnectionPseudonym(),
+		FString(TEXT("excluded")));
+	Character->SetObservabilityConnectionPseudonym(TEXT("server-connection-test-0001"));
+	TestEqual(
+		TEXT("Authority-owned opaque connection identity is retained by the producer owner"),
+		Character->GetObservabilityConnectionPseudonym(),
+		FString(TEXT("server-connection-test-0001")));
 
 	GameMode->bScenarioEnabled = true;
 	GameMode->ClientIds.Add(PlayerController, TEXT("client-1"));
@@ -154,6 +163,83 @@ bool FAethelnNetworkSpikeGameModeDisconnectLifecycleTest::RunTest(const FString&
 	TestFalse(TEXT("Logout removes the initial location"), GameMode->InitialLocations.Contains(PlayerController));
 	TestFalse(TEXT("Logout removes the authority component association"), GameMode->AuthorityComponents.Contains(PlayerController));
 
+	DestroyTestWorld();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnNetworkSpikeGameModeDeferredPseudonymTest,
+	"Aetheln.GameCombat.NetworkSpike.DeferredConnectionPseudonym",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnNetworkSpikeGameModeDeferredPseudonymTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	TestNotNull(TEXT("Deferred-pseudonym world was created"), World);
+	if (World == nullptr || GEngine == nullptr)
+	{
+		return false;
+	}
+
+	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+	WorldContext.SetCurrentWorld(World);
+	auto DestroyTestWorld = [World]()
+	{
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+	};
+	World->InitializeActorsForPlay(FURL());
+	World->BeginPlay();
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AAethelnNetworkSpikeGameMode* GameMode = World->SpawnActor<AAethelnNetworkSpikeGameMode>(
+		AAethelnNetworkSpikeGameMode::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters);
+	APlayerController* PlayerController = World->SpawnActor<APlayerController>(
+		APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters);
+	TestNotNull(TEXT("Deferred-pseudonym GameMode exists"), GameMode);
+	TestNotNull(TEXT("Deferred-pseudonym controller exists"), PlayerController);
+	if (GameMode == nullptr || PlayerController == nullptr)
+	{
+		DestroyTestWorld();
+		return false;
+	}
+
+	GameMode->bScenarioEnabled = true;
+	GameMode->RunId = TEXT("run-deferred-login");
+	GameMode->ClientIds.Add(PlayerController, TEXT("client-1"));
+	TestNull(TEXT("Login starts before an authoritative pawn exists"), PlayerController->GetPawn());
+	TestTrue(TEXT("PostLogin registration seam accepts the pawnless connection"), GameMode->RegisterScenarioConnection(PlayerController));
+	TestNull(TEXT("Connection registration does not require a pawn"), PlayerController->GetPawn());
+	const FString* StoredConnection = GameMode->ConnectionIds.Find(PlayerController);
+	TestNotNull(TEXT("PostLogin stores an authority-owned connection pseudonym"), StoredConnection);
+	TestFalse(
+		TEXT("Stored pseudonym is not fabricated onto an absent pawn"),
+		GameMode->ApplyStoredConnectionPseudonym(PlayerController));
+	if (StoredConnection == nullptr)
+	{
+		DestroyTestWorld();
+		return false;
+	}
+	const FString ExpectedConnection = *StoredConnection;
+
+	AAethelnSpikeCharacter* Character = World->SpawnActor<AAethelnSpikeCharacter>(
+		AAethelnSpikeCharacter::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters);
+	TestNotNull(TEXT("Deferred authoritative pawn exists"), Character);
+	if (Character == nullptr)
+	{
+		DestroyTestWorld();
+		return false;
+	}
+	PlayerController->SetPawn(Character);
+	GameMode->FinishRestartPlayer(PlayerController, FRotator::ZeroRotator);
+	TestTrue(TEXT("Normal restart flow possesses the deferred pawn"), PlayerController->GetPawn() == Character);
+	TestEqual(
+		TEXT("Normal restart flow applies the stored authority-owned pseudonym"),
+		Character->GetObservabilityConnectionPseudonym(),
+		ExpectedConnection);
+
+	GameMode->Logout(PlayerController);
 	DestroyTestWorld();
 	return true;
 }

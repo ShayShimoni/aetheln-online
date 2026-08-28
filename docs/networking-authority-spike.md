@@ -156,12 +156,21 @@ the opt-in driver:
 -AethelnProfileId={ProfileId}
 -AethelnRunId={RunId}
 -AethelnNetworkConfig={NetworkConfigIdentity}
+-AethelnEnvironment={Environment}
 ```
 
 Each client uses the same switches plus
 `-AethelnSpikeClientId={ClientId}` and connects to
 `{ServerEndpoint}?AethelnClientId={ClientId}`. The client label in the URL is
 only a bounded correlation input; the server generates the connection ID.
+The runner appends the required `SourceRevision`, `BuildIdentity`, and
+`ToolchainIdentity` values to every server and client process. Each executable
+records its engine-reported `BuildConfiguration`, so both sides retain the same
+provenance-bound packaged-build context without trusting caller-supplied build
+configuration text.
+`Environment` is a separate closed runtime identity. Fixture runs may use
+`local`; provenance-bound packaged multiplayer evidence must use `development`,
+and the runner propagates that value to both server and clients.
 Actual caller-selected packet-emulation switches, if any, remain additional
 server/client arguments and must correspond to the supplied
 `NetworkConfigIdentity`.
@@ -189,10 +198,18 @@ only after it observes the corresponding authoritative state: connection,
 movement, enemy spawn, melee resolution, damage application, disconnect
 cleanup, and reconnect with a new connection.
 The second client emits its join-in-progress observation only after the
-replicated enemy exists locally. Eight bounded negative probes cover invalid
-movement, aim, activation, hit, cooldown, dodge, block, and damage claims. The
-probes expose rejection behavior only; they do not implement deferred dodge or
-block gameplay.
+replicated enemy exists locally. Ten bounded negative probes cover invalid
+movement, aim, activation, hit, cooldown, dodge, block, resource, death, and
+respawn claims. The probes expose rejection behavior only; they do not
+implement deferred gameplay systems.
+
+The runner owns the structured rejection-envelope parser. It requires schema
+version 1, the rejection envelope and exact subject/reason vocabulary, a
+nonzero authority sequence, the server-owned connection pseudonym mapped to
+the second client, bounded public fields, exact run/build/toolchain/profile
+identity, engine and Development configuration identity, and the explicit
+metric environment. Legacy `AUTHORITY rejection` lines remain scenario control
+diagnostics and cannot satisfy structured rejection evidence.
 
 The packaged scenario does not transport or prove a command attempt after the
 client disconnects. `connection-closed` remains part of the stable rejection

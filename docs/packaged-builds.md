@@ -27,6 +27,12 @@ captured for each run. Do not replace an unknown or unavailable value with an
 estimate; record it as `TBD` or mark the run unsupported until it can be
 resolved.
 
+The vendor-neutral runtime attachment and redaction rules are defined in
+[Structured Observability and Crash Diagnostics](observability-and-crash-diagnostics.md).
+Packaged runs must pass their exact validated source, build, toolchain, and
+network-profile identities into that attachment; an absent value remains
+explicitly unknown and must not be inferred.
+
 ## Build entry points
 
 Run the repository scripts from PowerShell at the repository root. Their

@@ -13,15 +13,18 @@ class GAMECOMBAT_API AAethelnSpikeCharacter : public AAethelnPlayerCharacter
 	GENERATED_BODY()
 
 public:
-	AAethelnSpikeCharacter();
+	explicit AAethelnSpikeCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void OnRep_PlayerState() override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	UFUNCTION(BlueprintCallable, Category = "Spike|Combat")
 	void SubmitFreeAimAttack(const FVector& AimDirection);
 	void SubmitScenarioProbe(const FAethelnSpikeScenarioProbe& Probe);
+	void SetObservabilityConnectionPseudonym(const FString& ConnectionPseudonym);
+	const FString& GetObservabilityConnectionPseudonym() const { return ObservabilityConnectionPseudonym; }
 
 	static bool ShouldSubmitScenarioAttack(const FString& ClientId, bool bClientReady, float ElapsedSeconds, bool bAlreadySubmitted);
 
@@ -32,6 +35,10 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Spike|Combat")
 	TObjectPtr<UAethelnSpikeAuthorityComponent> AuthorityComponent;
+
+	/** Server-owned opaque connection identity, replicated only to the owning client for correction joins. */
+	UPROPERTY(Replicated)
+	FString ObservabilityConnectionPseudonym = TEXT("excluded");
 
 	FString ScenarioClientId;
 	FString ScenarioEndpoint;

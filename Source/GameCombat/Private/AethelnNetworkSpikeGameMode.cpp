@@ -4,11 +4,16 @@
 #include "AethelnSpikeAuthorityComponent.h"
 #include "AethelnSpikeEnemy.h"
 #include "AethelnSpikePlayerState.h"
+#include "AethelnObservability.h"
+#include "AethelnObservabilitySubsystem.h"
+#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/App.h"
 #include "Misc/CommandLine.h"
+#include "Misc/EngineVersion.h"
 #include "Misc/Parse.h"
 
 namespace AethelnNetworkSpikeScenario
@@ -42,6 +47,30 @@ void AAethelnNetworkSpikeGameMode::BeginPlay()
 	ServerEndpoint = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnServerEndpoint="), TEXT("endpoint-unset"));
 	ServerMap = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnServerMap="), TEXT("/Game/Maps/StarterMap"));
 	NetworkConfigIdentity = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnNetworkConfig="), TEXT("network-config-unset"));
+
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		if (UAethelnObservabilitySubsystem* Observability = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>())
+		{
+			Observability->SetEnvironment(
+				AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnEnvironment="), TEXT("local")));
+			Observability->SetRuntimeContext(
+				EAethelnFlowKind::PrototypeAuthority,
+				RunId,
+				TEXT("network-authority-server"),
+				AethelnObservability::ExcludedIdentifier);
+
+			FAethelnBuildIdentity Build;
+			Build.SourceRevision = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnSourceRevision="), AethelnObservability::UnknownValue);
+			Build.BuildIdentity = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnBuildIdentity="), AethelnObservability::UnknownValue);
+			Build.BuildConfiguration = LexToString(FApp::GetBuildConfiguration());
+			Build.EngineRevision = FEngineVersion::Current().ToString();
+			Build.ToolchainIdentity = AethelnNetworkSpikeScenario::ReadArgument(TEXT("AethelnToolchainIdentity="), AethelnObservability::UnknownValue);
+			FAethelnNetworkProfile Profile;
+			Profile.ProfileId = ProfileId;
+			Observability->SetBuildContext(Build, Profile);
+		}
+	}
 
 	if (HasAuthority() && GetWorld() != nullptr)
 	{
@@ -108,15 +137,20 @@ FString AAethelnNetworkSpikeGameMode::InitNewPlayer(
 void AAethelnNetworkSpikeGameMode::PostLogin(APlayerController* NewPlayer)
 {
 	Super::PostLogin(NewPlayer);
+	RegisterScenarioConnection(NewPlayer);
+}
+
+bool AAethelnNetworkSpikeGameMode::RegisterScenarioConnection(APlayerController* NewPlayer)
+{
 	if (!bScenarioEnabled || NewPlayer == nullptr)
 	{
-		return;
+		return false;
 	}
 
 	const FString ClientId = GetClientId(NewPlayer);
 	if (!IsAllowedScenarioClientId(ClientId))
 	{
-		return;
+		return false;
 	}
 	const FString ConnectionId = MakeScenarioConnectionId(RunId, NextConnectionSequence++);
 	ConnectionIds.Add(NewPlayer, ConnectionId);
@@ -124,6 +158,7 @@ void AAethelnNetworkSpikeGameMode::PostLogin(APlayerController* NewPlayer)
 	{
 		NewPlayer->PlayerState->SetPlayerName(ClientId);
 	}
+	ApplyStoredConnectionPseudonym(NewPlayer);
 	if (APawn* Pawn = NewPlayer->GetPawn())
 	{
 		InitialLocations.Add(NewPlayer, Pawn->GetActorLocation());
@@ -138,6 +173,15 @@ void AAethelnNetworkSpikeGameMode::PostLogin(APlayerController* NewPlayer)
 	{
 		UE_LOG(LogTemp, Log, TEXT("AUTHORITY reconnected client=%s connection=%s %s"), *ClientId, *ConnectionId, *GetIdentityFields());
 	}
+	return true;
+}
+
+void AAethelnNetworkSpikeGameMode::FinishRestartPlayer(
+	AController* NewPlayer,
+	const FRotator& StartRotation)
+{
+	Super::FinishRestartPlayer(NewPlayer, StartRotation);
+	ApplyStoredConnectionPseudonym(NewPlayer);
 }
 
 void AAethelnNetworkSpikeGameMode::Logout(AController* Exiting)
@@ -185,6 +229,20 @@ FString AAethelnNetworkSpikeGameMode::GetClientId(const AController* Controller)
 		return *ClientId;
 	}
 	return FString();
+}
+
+bool AAethelnNetworkSpikeGameMode::ApplyStoredConnectionPseudonym(AController* Controller)
+{
+	const FString* ConnectionId = ConnectionIds.Find(Controller);
+	AAethelnSpikeCharacter* SpikeCharacter = Controller != nullptr
+		? Cast<AAethelnSpikeCharacter>(Controller->GetPawn())
+		: nullptr;
+	if (ConnectionId == nullptr || SpikeCharacter == nullptr)
+	{
+		return false;
+	}
+	SpikeCharacter->SetObservabilityConnectionPseudonym(*ConnectionId);
+	return SpikeCharacter->GetObservabilityConnectionPseudonym() == *ConnectionId;
 }
 
 void AAethelnNetworkSpikeGameMode::PositionEnemyForFirstClient(APlayerController* NewPlayer)
