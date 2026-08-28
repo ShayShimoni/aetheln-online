@@ -122,11 +122,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FAethelnNetworkSpikeAuthorityTest::RunTest(const FString& Parameters)
 {
 	AddExpectedMessagePlain(
-		TEXT("LogAbilitySystem: No GameplayCueNotifyPaths were specified in DefaultGame.ini under [/Script/GameplayAbilities.AbilitySystemGlobals]. Falling back to using all of /Game/. This may be slow on large projects. Consider specifying which paths are to be searched."),
-		ELogVerbosity::Warning,
-		EAutomationExpectedMessageFlags::Exact,
-		1);
-	AddExpectedMessagePlain(
 		TEXT("LogTemp: AethelnSpikeAttackRejected Reason=impossible-aim-transition"),
 		ELogVerbosity::Warning,
 		EAutomationExpectedMessageFlags::Exact,

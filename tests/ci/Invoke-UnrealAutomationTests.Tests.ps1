@@ -4,6 +4,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $SourceRunner = Join-Path $RepositoryRoot 'scripts\ci\Invoke-UnrealAutomationTests.ps1'
+$DefaultGameConfig = Join-Path $RepositoryRoot 'Config\DefaultGame.ini'
+$AuthorityTestSource = Join-Path $RepositoryRoot 'Source\GameCombat\Private\AethelnNetworkSpikeAuthorityTests.cpp'
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('AethelnUnrealAutomationTests-' + [guid]::NewGuid().ToString('N'))
 $FakeBin = Join-Path $FixtureRoot 'fake-bin'
 $PowerShell = (Get-Process -Id $PID).Path
@@ -109,6 +111,11 @@ function Assert-Failure($Run,[string] $ExpectedReason) {
 	Assert-True ($Run.exitCode-ne 0) "$ExpectedReason must exit nonzero.";Assert-True ($Run.report.result-ceq 'failed') "$ExpectedReason must report failed.";Assert-True ($Run.report.failureReason-ceq $ExpectedReason) "Expected $ExpectedReason, got $($Run.report.failureReason).";Assert-True ($Run.report.failureReason-cin $AllowedFailureReasons) "$ExpectedReason must be in enum.";Assert-True ($Run.report.failureReason-is [string]) 'failureReason must be a string.'
 }
 try {
+	$DefaultGameSource = Get-Content -LiteralPath $DefaultGameConfig -Raw
+	Assert-True ([regex]::Matches($DefaultGameSource, '(?m)^\[/Script/GameplayAbilities\.AbilitySystemGlobals\]\r?$').Count -eq 1) 'DefaultGame.ini must declare the AbilitySystemGlobals section exactly once.'
+	Assert-True ([regex]::Matches($DefaultGameSource, '(?m)^\+GameplayCueNotifyPaths=/Game\r?$').Count -eq 1) 'DefaultGame.ini must explicitly preserve the current /Game gameplay-cue search path.'
+	$AuthoritySource = Get-Content -LiteralPath $AuthorityTestSource -Raw
+	Assert-True ($AuthoritySource -notmatch 'No GameplayCueNotifyPaths were specified') 'The authority test must not require unrelated project-configuration warnings.'
 	New-Item -ItemType Directory $FixtureRoot -Force|Out-Null;Build-Fakes;$env:PATH=$FakeBin+[IO.Path]::PathSeparator+$OriginalPath
 	$Tokens=$null;$Errors=$null;$Ast=[Management.Automation.Language.Parser]::ParseFile($SourceRunner,[ref]$Tokens,[ref]$Errors);Assert-True ($Errors.Count-eq 0) 'Runner must parse.';$Names=@($Ast.ParamBlock.Parameters|ForEach-Object{$_.Name.VariablePath.UserPath});Assert-True ($Names.Count-eq 2-and $Names[0]-ceq 'EngineRoot'-and $Names[1]-ceq 'TimeoutSeconds') 'Only exact public parameters are allowed.'
 	$RunnerSource=Get-Content $SourceRunner -Raw;Assert-True ($RunnerSource-match '\[Parameter\(Mandatory\)\][\s\S]*\[string\]\s+\$EngineRoot') 'EngineRoot must be required.';Assert-True ($RunnerSource-match '\[int\]\s+\$TimeoutSeconds\s*=\s*600') 'Timeout default must be 600.';$CreateIndex=$RunnerSource.IndexOf('if(!CreateProcess(');$AssignIndex=$RunnerSource.IndexOf('Assign(information.process)');$ResumeIndex=$RunnerSource.IndexOf('ResumeThread(information.thread)');Assert-True ($CreateIndex-ge 0-and $CreateIndex-lt $AssignIndex-and $AssignIndex-lt $ResumeIndex-and $RunnerSource-match 'CreateSuspended') 'CreateProcess must stay suspended until assignment to the kill-on-close job succeeds.';Assert-True ($RunnerSource-notmatch '\$Process\.Start\(') 'The editor must not use managed Process.Start before job assignment.';Assert-True ($RunnerSource-match 'JOB_OBJECT_LIMIT_KILL_ON_CLOSE|KillOnJobClose'-and $RunnerSource-match 'AssignProcessToJobObject'-and $RunnerSource-match '\$TargetJob\.Dispose\(\)') 'The editor tree must be owned by a kill-on-close Windows Job Object.';Assert-True ($RunnerSource-match 'WaitForExit\(5000\)'-and $RunnerSource-match 'taskkill\.exe'-and $RunnerSource-match "'/T'|/T") 'Cleanup must close the job first and bound taskkill fallback.'
