@@ -53,6 +53,129 @@ The contracts align the runner and runtime around these identities:
 | Candidate schema | `aetheln.replication-candidate`, version 1 |
 | Unselected candidate | `replication-candidate.unselected` |
 
+Issue #44 extends the runner without replacing these unit-1 identities. When a
+versioned scenario and profile catalog are supplied together, the runner emits
+`aetheln.network-authority-evidence` version 2. Calls that omit both contracts
+retain the version-1 interface and evidence shape.
+
+## Issue #44 Versioned Fixture Contracts
+
+The first Issue #44 wave adds a fixture-only contract around the existing
+runner. It does not add a competing launcher, choose network tuning, or execute
+a real packaged build. `NetworkProfileCatalogPath` and `ScenarioContractPath`
+must be supplied together. Contract mode also requires `DeathPattern`,
+`RespawnPattern`, and `ShutdownPattern`; each pattern carries the scenario,
+selected profile, and run placeholders already required by the runner.
+
+The profile catalog is a closed JSON object:
+
+```json
+{
+  "schema_id": "aetheln.network-profile-catalog",
+  "schema_version": 1,
+  "selected_profile_id": "network-profile.clean",
+  "profiles": [
+    { "id": "network-profile.clean", "version": "catalog-v1", "kind": "clean", "runtime_config_identity": "network-emulation.clean", "server_arguments": ["<caller-supplied-clean-server-switch>"], "client_arguments": ["<caller-supplied-clean-client-switch>"] },
+    { "id": "network-profile.representative", "version": "catalog-v1", "kind": "representative", "runtime_config_identity": "network-emulation.representative", "server_arguments": ["<caller-supplied-representative-server-switch>"], "client_arguments": ["<caller-supplied-representative-client-switch>"] },
+    { "id": "network-profile.harsh", "version": "catalog-v1", "kind": "harsh", "runtime_config_identity": "network-emulation.harsh", "server_arguments": ["<caller-supplied-harsh-server-switch>"], "client_arguments": ["<caller-supplied-harsh-client-switch>"] },
+    { "id": "network-profile.loss", "version": "catalog-v1", "kind": "loss", "runtime_config_identity": "network-emulation.loss", "server_arguments": ["<caller-supplied-loss-server-switch>"], "client_arguments": ["<caller-supplied-loss-client-switch>"] },
+    { "id": "network-profile.duplication", "version": "catalog-v1", "kind": "duplication", "runtime_config_identity": "network-emulation.duplication", "server_arguments": ["<caller-supplied-duplication-server-switch>"], "client_arguments": ["<caller-supplied-duplication-client-switch>"] },
+    { "id": "network-profile.reordering", "version": "catalog-v1", "kind": "reordering", "runtime_config_identity": "network-emulation.reordering", "server_arguments": ["<caller-supplied-reordering-server-switch>"], "client_arguments": ["<caller-supplied-reordering-client-switch>"] }
+  ]
+}
+```
+
+The catalog must contain exactly one case-sensitive identity for each of the
+six kinds shown above, exactly one selected declared profile, a nonblank
+version and runtime configuration identity for every profile, and only opaque
+nonempty argument strings. The selected profile ID and runtime configuration
+identity must match `ProfileId` and `NetworkConfigIdentity`. The runner appends
+the selected opaque arguments literally after expanding only the caller-owned
+runner argument templates. A recognized runner token such as `{RunId}` inside
+a profile argument remains literal and cannot satisfy a required placeholder
+missing from a caller-owned server or client template. The runner never
+interprets profile arguments as latency, jitter, loss, duplication, reordering,
+tick, history, bandwidth, or capacity values. It records only the counts and a
+SHA-256 correlation digest of the exact opaque argument arrays supplied to the
+process launches; raw arguments are excluded from evidence. Numeric network
+fields remain JSON `null` until reviewed measured values exist.
+
+The scenario contract is also closed and ordered:
+
+```json
+{
+  "schema_id": "aetheln.network-authority-scenario",
+  "schema_version": 1,
+  "id": "network-authority.baseline.v1",
+  "version": "scenario-v1",
+  "lifecycle_stages": [
+    "join",
+    "play",
+    "death",
+    "respawn",
+    "disconnect",
+    "reconnect",
+    "shutdown"
+  ]
+}
+```
+
+The ID must match `ScenarioId`, and the seven stages must appear exactly once
+in that order. Contract evidence records stable ordinals; source revision and
+build; scenario and profile IDs/versions; process role and client identity;
+explicit nullable activation and sequence fields; a stage-specific
+authoritative result; relative raw-log names; selected profile argument
+counts/digest; and a deterministic lifecycle summary. Each invalid-command
+rejection records its activation and authority sequence, authoritative result,
+build, scenario, and profile identity.
+
+Because `join` is observed in a client stream while authoritative `play` is
+observed in the server stream, procedural waits do not establish their order.
+In version-2 mode, `JoinInProgressPattern` and `DamagePattern` must each expose
+a named `Sequence` capture containing a positive 64-bit integer authority
+sequence. The join sequence must be strictly less than the play sequence; an
+equal, reversed, missing, zero, or invalid sequence fails closed. Successful
+evidence records those identities as `sequence_id` on the `join` and `play`
+lifecycle stages. Stages without this cross-stream contract retain explicit
+JSON `null` sequence identity. Same-log ordering checks continue to govern the
+later authoritative stages.
+
+Successful version-2 evidence also contains a closed `process_outcomes` array
+with exactly one record for each runner-owned server or client process. Each
+record contains only `process_role`, nullable `client_id`, `timed_out`,
+`exit_code`, and `termination_state`. Successful records always set
+`timed_out` to `false`, include the confirmed exit code, and use either
+`exited` for a process that exited without runner termination or
+`runner-terminated` for a still-running client the runner stopped during the
+scenario or final cleanup. Paths, arguments, and free-form exceptions are not
+part of this field.
+
+Issue #16 may consume the version-2 fixture result as portable CI contract
+evidence and owns the runner topology, invocation policy, and artifact
+publication that expose it to downstream gates. Issue #16 must not reclassify
+fixture output as real packaged multiplayer evidence or treat it as Issue #44
+completion. Issue #48 may consume the same machine-readable result only as one
+bounded input to the Prototype Gate decision; real representative packaged
+scenario evidence remains separately required.
+
+On failure, `failure_details` identifies `source_revision`, `build`, scenario
+ID/version, profile ID/version, `process_role`, `client_id`, `observed_stage`,
+activation/sequence when applicable, authoritative result, normalized reason,
+exit code when available, timeout state, cleanup outcome, and relative raw-log
+filenames. Absolute executable and log-root paths and raw profile arguments are
+not published in version-2 evidence. Successful evidence sets
+`failure_details` to JSON `null` and records successful controlled cleanup.
+
+### Fixture flake policy
+
+The runner performs no automatic retry. Every attempt uses a unique run ID and
+an empty log root. A failed attempt and its raw logs remain evidence; a later
+rerun is a separate attempt with a new identity and cannot erase or override
+the failure. Missing, duplicate, reordered, wrong-client, stale-profile,
+timeout, process-role, or cleanup evidence fails closed. Repeated or
+non-deterministic fixture behavior blocks the gate for investigation instead
+of being reclassified as a pass.
+
 ### Stable rejection vocabulary
 
 Runtime logs and evidence use one shared, case-sensitive rejection vocabulary:
@@ -185,6 +308,14 @@ runtime error or unexpected exit from any of those three processes during the
 interval fails the run; successful marker collection alone does not end the
 observation early.
 
+For the versioned scenario contract, the controlled-shutdown marker is
+necessary but not sufficient. After matching the single correlated marker, the
+runner waits only for the configured bounded timeout for the authoritative
+server process to exit, requires exit code `0`, and only then publishes the
+`shutdown` lifecycle stage with authoritative result `shutdown-complete`. A
+server that emits the marker but remains alive fails closed and is terminated
+during cleanup; the marker alone cannot prove controlled shutdown.
+
 The packaged scenario driver is opt-in. It runs only when the spike GameMode URL
 override and `-AethelnAuthorityScenario` are both present. Each client connects
 with one bounded URL correlation value (`AethelnClientId=client-1`,
@@ -257,7 +388,7 @@ console windows for those child processes.
 The focused PowerShell fixture measures the successful post-marker interval,
 asserts the direct and launcher-mediated no-window process configurations, and
 verifies that an early server exit during the interval is rejected. It also
-requires all eight invalid-claim rejection records, the real disconnect and
+requires all ten invalid-claim rejection records, the real disconnect and
 reconnect lifecycle records, and the runtime network-configuration confirmation.
 The launcher fixture uses a real descendant process, proves it is absent after
 cleanup, fails closed when cleanup confirmation fails, and rejects a server
@@ -277,6 +408,12 @@ lifecycle, authority observations, rejection, provenance, explicit null
 measurements, process cleanup, and fail-closed placeholder validation. The
 fixture test is registered as a required check in the CI suite.
 
+The Issue #44 first wave additionally establishes the versioned six-profile
+catalog, exact seven-stage scenario contract, normalized version-2 failure
+identity, opaque argument correlation, cleanup outcome, and negative fixtures
+for missing, duplicate, reordered, wrong-client, stale-profile, timeout, and
+role-specific failures. This is contract and orchestration coverage only.
+
 Local verification on 2026-08-12 passed the focused PowerShell fixture, all 15
 required CI checks, the incremental `AethelnOnlineEditor Win64 Development`
 compile, all six `Aetheln.NetworkSpike` contract tests, and the focused
@@ -288,7 +425,7 @@ multiplayer evidence.
 ### Not yet performed
 
 No real packaged dedicated-server-plus-two-client gameplay capture is claimed
-by this unit or by the fixture smoke test. The fixture uses a fake process that
+by this unit or by the Issue #44 fixture contract. The fixture uses a fake process that
 emits expected log records; it validates orchestration and evidence handling,
 not Unreal networking, replicated gameplay, combat feel, latency tolerance, or
 packaged lifecycle behavior. A packaged run and its correlated raw logs and
