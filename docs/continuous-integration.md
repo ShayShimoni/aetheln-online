@@ -72,6 +72,7 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `server-cook-reference-tests` (`tests/build/Validate-ServerCookReferences.Tests.ps1`) | Required | Focused automation for server cook reference rules. |
 | `target-composition-tests` (`tests/build/Validate-TargetComposition.Tests.ps1`) | Required | Focused automation for client/server module composition rules. |
 | `build-provenance-tests` (`tests/build/Write-BuildProvenance.Tests.ps1`) | Required | Focused automation for build provenance recording. |
+| `network-authority-spike-tests` (`tests/build/Invoke-NetworkAuthoritySpike.Tests.ps1`) | Required | Fixture-only validation of the existing authority runner, including versioned six-profile selection, exact join/play/death/respawn/disconnect/reconnect/shutdown ordering, normalized role/stage failures, and cleanup evidence. It does not execute packaged Unreal processes. |
 | `markdown-link-tests` (`tests/ci/Test-MarkdownLinks.Tests.ps1`) | Required | Fixture regression tests for the link checker itself. |
 | `formatting-policy-tests` (`tests/ci/Test-FormattingPolicy.Tests.ps1`) | Required | Fixture regression tests for the formatting checker itself. |
 | `observability-contract-tests` (`tests/ci/Test-ObservabilityContract.Tests.ps1`) | Required | Fixture regression tests proving the observability checker accepts the bounded contract and fails closed on a sensitive free-form field. |
@@ -184,6 +185,13 @@ Issue #44 remains responsible for packaged dedicated-server/two-client lifecycle
 Gauntlet, and representative or harsh network-profile scenarios; those scenarios
 reuse this harness rather than creating a second test system. Issue #45 remains
 responsible for measured performance evidence and budgets.
+
+The required portable `network-authority-spike-tests` check covers only the
+versioned scenario/profile contract and fake-process orchestration. Its six
+profile kinds carry caller-supplied opaque switches; the repository does not
+invent numeric network conditions. A passing fixture report is neither a real
+packaged run nor Issue #44 completion, and it cannot select a network profile,
+satisfy Issue #48's prototype exit decision, or authorize packaged smoke.
 
 ## Engine-Dependent Gates
 

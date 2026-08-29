@@ -174,6 +174,11 @@ Issue #44 must reuse this automation foundation for its downstream packaged
 dedicated-server/two-client lifecycle, Gauntlet orchestration, and network-
 profile scenarios rather than create a second test system. Those packaged
 multi-process scenarios are not satisfied by the two focused Issue #85 tests.
+The first Issue #44 fixture wave extends the existing
+`Invoke-NetworkAuthoritySpike.ps1` orchestration contract with versioned
+scenario/profile inputs and normalized lifecycle/failure evidence. It does not
+change this harness's frozen two-test discovery filter, launch Unreal, or prove
+packaged execution. A real packaged scenario remains a separate evidence gate.
 Issue #45 separately owns performance captures, thresholds, and evidence; this
 harness does not establish a performance budget.
 
