@@ -1017,8 +1017,8 @@ exit $Child.ExitCode
 	)
 	foreach ($Scenario in $NegativeScenarios) {
 		$NegativeFailure = $null
-		try { Invoke-FixtureRun (Join-Path $FixtureRoot $Scenario.Name) ("fixture-" + $Scenario.Name) 'malformed-intent' 1 $false $false $Scenario.Behavior 2 } catch { $NegativeFailure = $_.Exception.Message }
-		Assert-True ($NegativeFailure -match [regex]::Escape($Scenario.Failure)) "$($Scenario.Name) evidence must fail closed."
+		try { Invoke-FixtureRun (Join-Path $FixtureRoot $Scenario.Name) ("fixture-" + $Scenario.Name) 'malformed-intent' 1 $false $false $Scenario.Behavior } catch { $NegativeFailure = $_.Exception.Message }
+		Assert-True ($NegativeFailure -match [regex]::Escape($Scenario.Failure)) "$($Scenario.Name) evidence must fail closed. Actual: $NegativeFailure"
 	}
 	Write-Output 'PASS: missing, duplicate, mismatched-run, reordered, lifecycle, reused-connection, and fabricated-command evidence fails closed'
 
