@@ -560,6 +560,13 @@ Before spawning a stage:
   approver, adjudicator, and QA roles.
 - Keep worker, integrator, and fixer roles read-only. Require each to return a
   complete `delivery_file_bundle_v1` full-file structured artifact.
+- For worker, integrator, and fixer only, disable the default shell and expose
+  exactly one required launcher-owned MCP tool named
+  `read_allowed_source_file`. It accepts one exact allowed repository-relative
+  path and returns complete attested source bytes plus the launcher-owned base
+  hash. Disable web, apps, inherited MCP, directory listing, arbitrary reads,
+  producer hashing, commands, and writes. Non-producer stages receive no source
+  inspection server.
 - Resolve the declared source commit and require it to equal the repository's
   current `HEAD`. Require the handoff workspace to equal the launcher's resolved
   repository root. Hash all tracked and non-ignored files before and after the
@@ -656,6 +663,20 @@ authorizes the change. A fresh verifier and reviewer must judge the applied
 result; the control plane must not infer, rewrite, or repair bundle content or
 generated patch bytes. Any rejected output, bundle, or candidate patch is
 sealed audit evidence only and is never routable to a substantive stage.
+
+### Verified Codex configuration facts (2026-08-29)
+
+A fresh official manual check verified the exact Codex configuration keys this
+producer boundary relies on:
+
+- `features.shell_tool = false` disables the child's default shell tool.
+- A stdio `mcp_servers.<id>` entry supports `command`, `args`,
+  `required = true`, and `enabled_tools`.
+- `web_search = "disabled"` disables web search.
+- `--strict-config` rejects unknown configuration keys.
+
+Sources: <https://learn.chatgpt.com/docs/config-file/config-reference> and
+<https://learn.chatgpt.com/docs/mcp>.
 
 ## Specialist contracts
 

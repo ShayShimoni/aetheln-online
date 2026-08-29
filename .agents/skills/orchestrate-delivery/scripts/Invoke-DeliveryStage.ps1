@@ -404,6 +404,19 @@ function Write-CandidatePatchArtifact {
 	[System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
 }
 
+function ConvertTo-DeliveryTomlLiteralString {
+	param(
+		[Parameter(Mandatory)]
+		[string]$Value
+	)
+
+	if ($Value.IndexOfAny([char[]]@("'", "`r", "`n")) -ge 0) {
+		throw "Value '$Value' cannot be encoded as a TOML literal string."
+	}
+
+	return "'" + $Value + "'"
+}
+
 function ConvertFrom-DeliveryNeutralEvidenceBytes {
 	param(
 		[Parameter(Mandatory)]
@@ -863,6 +876,16 @@ $PatchPath = if ($IsArtifactProducer) {
 else {
 	$null
 }
+$SourceAttestationPath = if ($IsArtifactProducer) {
+	Resolve-ArtifactTarget `
+		-DefaultFileName (
+			"delivery-stage-$($Validation.RunId)-source-attestation.json"
+		) `
+		-Root $ArtifactRoot
+}
+else {
+	$null
+}
 
 $ArtifactTargets = [ordered]@{
 	Output = $OutputPath
@@ -872,6 +895,7 @@ $ArtifactTargets = [ordered]@{
 	Telemetry = $TelemetryPath
 	EvidenceManifest = $EvidenceManifestPath
 	CandidatePatch = $PatchPath
+	SourceAttestation = $SourceAttestationPath
 }
 $ResolvedArtifactTargetNames = @(
 	$ArtifactTargets.Keys | Where-Object {
@@ -889,6 +913,89 @@ for ($LeftIndex = 0; $LeftIndex -lt $ResolvedArtifactTargetNames.Count; $LeftInd
 			throw "Artifact targets '$LeftName' and '$RightName' resolve to the same path."
 		}
 	}
+}
+
+$ToolConfigurationArguments = @(
+	'-c',
+	'mcp_servers={}'
+)
+if ($IsArtifactProducer) {
+	$SourceInspectionServerScript = Join-Path (
+		$PSScriptRoot
+	) 'Invoke-DeliverySourceInspectionServer.ps1'
+	if (-not (Test-Path -LiteralPath $SourceInspectionServerScript -PathType Leaf)) {
+		throw 'Source-inspection server script is missing.'
+	}
+
+	$SourceInspectionHost = Get-Command pwsh -ErrorAction SilentlyContinue
+	if ($null -eq $SourceInspectionHost) {
+		$SourceInspectionHost = Get-Command powershell -ErrorAction SilentlyContinue
+	}
+	if ($null -eq $SourceInspectionHost -or
+		[string]::IsNullOrWhiteSpace([string]$SourceInspectionHost.Source)) {
+		throw (
+			'Could not resolve an absolute PowerShell host for the ' +
+			'source-inspection server.'
+		)
+	}
+	$SourceInspectionHostCommand = [string]$SourceInspectionHost.Source
+
+	$SourceAttestationJson = [pscustomobject][ordered]@{
+		workspace_root = $WorkspaceRoot
+		allowed_paths = [string[]]@($AllowedPaths)
+		attested_files = [pscustomobject]$AttestedExistingPathSha256
+	} | ConvertTo-Json -Depth 4
+	$SourceAttestationBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
+		$SourceAttestationJson
+	)
+	$SourceAttestationHasher = [System.Security.Cryptography.SHA256]::Create()
+	try {
+		$SourceAttestationSha256 = [System.BitConverter]::ToString(
+			$SourceAttestationHasher.ComputeHash($SourceAttestationBytes)
+		).Replace('-', '').ToLowerInvariant()
+	}
+	finally {
+		$SourceAttestationHasher.Dispose()
+	}
+	if (-not $DryRun) {
+		[System.IO.File]::WriteAllBytes(
+			$SourceAttestationPath,
+			$SourceAttestationBytes
+		)
+	}
+
+	$SourceInspectionServerArguments = @(
+		'-NoLogo',
+		'-NoProfile',
+		'-NonInteractive',
+		'-File',
+		$SourceInspectionServerScript,
+		'-AttestationPath',
+		$SourceAttestationPath,
+		'-AttestationSha256',
+		$SourceAttestationSha256,
+		'-WorkspaceRoot',
+		$WorkspaceRoot
+	)
+	$SourceInspectionArgsToml = '[' + (@(
+		$SourceInspectionServerArguments | ForEach-Object {
+			ConvertTo-DeliveryTomlLiteralString -Value $_
+		}
+	) -join ', ') + ']'
+	$ToolConfigurationArguments = @(
+		'-c',
+		'features.shell_tool=false',
+		'-c',
+		('mcp_servers.source_inspection.command=' + (
+			ConvertTo-DeliveryTomlLiteralString -Value $SourceInspectionHostCommand
+		)),
+		'-c',
+		('mcp_servers.source_inspection.args=' + $SourceInspectionArgsToml),
+		'-c',
+		'mcp_servers.source_inspection.required=true',
+		'-c',
+		'mcp_servers.source_inspection.enabled_tools=[''read_allowed_source_file'']'
+	)
 }
 
 $Prompt = @"
@@ -922,6 +1029,7 @@ It must contain stage, status, summary, evidence, changed_paths, findings, and
 artifact.
 Put the delivery_file_bundle_v1 object under artifact; do not return the bundle
 directly or omit the outer stage object.
+Inspect allowed source files only with the required read_allowed_source_file tool.
 Do not use commands, scripts, shells, interpreters, executables, or temporary files
 for hashing, bundle construction, or bundle serialization. Do not write the
 bundle to an intermediate file.
@@ -939,9 +1047,8 @@ $Arguments = @(
 	$SandboxMode,
 	'-C',
 	$WorkspaceRoot,
-	'--skip-git-repo-check',
-	'-c',
-	'mcp_servers={}',
+	'--skip-git-repo-check'
+) + $ToolConfigurationArguments + @(
 	'-c',
 	'web_search="disabled"',
 	'-c',

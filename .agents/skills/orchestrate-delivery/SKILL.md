@@ -159,6 +159,13 @@ Do not rely on prompt instructions alone:
 - Require worker, integrator, and fixer agents to return a structured
   `delivery_file_bundle_v1` full-file artifact. They reason about and author the
   change, but do not edit the worktree or hand-author a patch.
+- For worker, integrator, and fixer only, disable the default shell and expose
+  exactly one required launcher-owned MCP tool, `read_allowed_source_file`.
+  It may return only the complete attested bytes and launcher-owned base hash
+  for one exact existing allowed source path. Keep web, apps, inherited MCP,
+  directory listing, arbitrary filesystem access, producer hashing, and every
+  write or command capability disabled. Non-producer stages receive no source
+  inspection server.
 - Capture the source commit, complete pre-existing worktree status and diff,
   allowed paths, and non-goals before launch.
 - Require the declared source commit to resolve to the repository's current
