@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "name": "Aetheln Online UI",
+    "version": "0.1.0",
+    "referenceCanvas": [1920, 1080]
+  },
+  "color": {
+    "charcoal": "#101419",
+    "charcoalRaised": "#171D23",
+    "coldSlate": "#303943",
+    "iron": "#55585A",
+    "smokeGlass": "#20272CEB",
+    "parchment": "#D8D0BE",
+    "parchmentMuted": "#A79F90",
+    "ember": "#D76A28",
+    "emberBright": "#F49A4A",
+    "spectralCyan": "#55B8C4",
+    "rust": "#7A3B2D",
+    "duskPlum": "#4B354F",
+    "disabled": "#73777A",
+    "danger": "#B54A3C",
+    "success": "#6D9A72",
+    "backdropScrim": "#080B0ECC"
+  },
+  "type": {
+    "displayFamily": "Cinzel",
+    "uiFamily": "Source Sans 3",
+    "display": 76,
+    "screenTitle": 44,
+    "sectionTitle": 32,
+    "button": 28,
+    "body": 24,
+    "caption": 20,
+    "letterSpacingDisplay": 6,
+    "letterSpacingControl": 2
+  },
+  "spacing": {
+    "xs": 8,
+    "sm": 12,
+    "md": 20,
+    "lg": 32,
+    "xl": 48,
+    "xxl": 72
+  },
+  "control": {
+    "primaryWidth": 520,
+    "primaryHeight": 72,
+    "secondaryHeight": 64,
+    "focusBorder": 3,
+    "standardBorder": 2,
+    "cornerCut": 18,
+    "panelPadding": 40,
+    "nineSliceInset": 24
+  },
+  "safeZone": {
+    "horizontalPercent": 5,
+    "verticalPercent": 5
+  },
+  "motion": {
+    "focusInMs": 120,
+    "pressMs": 80,
+    "panelTransitionMs": 180,
+    "reducedMotionMs": 0
+  }
+}
+

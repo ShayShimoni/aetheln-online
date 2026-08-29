@@ -200,6 +200,9 @@ The repository currently contains planning and contribution infrastructure:
 - `docs/source-control.md` - Unreal asset locking and verification workflow
 - `docs/unreal-project-setup.md` - pinned UE 5.8 project setup, build, and
   first-launch workflow
+- `visuals/` - non-canonical visual-development concepts, editable UI studies,
+  package provenance, and validation tooling; these assets remain outside
+  Unreal `Content/` until separately reviewed for implementation
 - `output/pdf/` - rendered copies of maintained PDF codices
 - `README.md` - product scope, roadmap, and contributor entry point
 
@@ -216,11 +219,20 @@ cd aetheln-online
 Review the [Unreal source-control workflow](docs/source-control.md) before
 adding or editing `.uasset` and `.umap` files.
 
+Review the [visual-development package](visuals/README.md), its
+[provenance register](visuals/asset-provenance.md), and the
+[future visuals plan](visuals/FUTURE-VISUALS-PLAN.md) before using or extending
+the imported concepts. Repository inclusion records and preserves the package;
+it does not make an image canonical, production-ready, or approved for Unreal
+runtime use.
+
 Use the [pinned Unreal project setup guide](docs/unreal-project-setup.md) to
 verify the engine revision, generate project files, build the Development
 Editor target, and launch the starter map. Issue #15 owns clean client/server
-builds, cooking, and packaging. No repository-defined automated test command
-exists yet.
+builds, cooking, and packaging. Run the repository-defined automated checks
+with `powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1`;
+[docs/continuous-integration.md](docs/continuous-integration.md) records the
+required and advisory gates.
 
 ## Work Management
 

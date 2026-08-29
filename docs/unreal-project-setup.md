@@ -17,8 +17,9 @@ project-generation command, Development Editor build, and first launch.
 | Linux cross-toolchain | `v26_clang-20.1.8-rockylinux8` |
 
 The project defines Development Game, Client, Editor, and Server targets. Issue
-#13 exercises project generation and the Editor target. Clean Win64 client and
-Linux server builds remain downstream issue #15 work.
+#13 exercises project generation and the Editor target. The repeatable clean
+Win64 client and Linux dedicated-server package workflow is documented in
+[Packaged Builds](packaged-builds.md).
 
 The project enables the `GameplayAbilities`, `EnhancedInput`, and `CommonUI`
 plugins. `EnhancedInput` and `CommonUI` are denied for the dedicated-server
@@ -39,8 +40,7 @@ broader UI design.
 1. Obtain Epic's Unreal Engine source and check out the exact tag and commit.
 2. Install Visual Studio 2022 17.14 with the pinned MSVC toolset and Windows SDK.
 3. Run the normal source-engine dependency and project-file setup.
-4. Install the pinned Linux cross-toolchain before downstream Linux server
-   work.
+4. Install the pinned Linux cross-toolchain before Linux server packaging.
 5. Initialize Git LFS for this repository before editing Unreal assets.
 
 Engine and repository locations differ between contributors. Keep those paths
@@ -106,6 +106,23 @@ Editor build completes, the Editor loads `/Game/Maps/StarterMap`, the map uses
 `AAethelnGameModeBase`, and the initial launch reports no bootstrap-blocking
 errors.
 
+## Headless Unreal automation
+
+After the Development Editor target is available, run the repository-owned
+Issue #85 smoke and server-authority tests through the pinned source engine:
+
+```powershell
+powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
+  -EngineRoot $AethelnEngineRoot
+```
+
+`-EngineRoot` is an explicit, non-secret local path. The runner defaults to a
+600-second timeout and fails closed unless it discovers and passes exactly
+`Aetheln.Harness.ProjectAndModuleLoad` and
+`Aetheln.GameCombat.NetworkSpike.Authority`. See
+[Unreal Automation](unreal-automation.md) for the exact filter, output paths,
+normalized report schema, and all nonzero exit conditions.
+
 ## Repository hygiene and delivery boundary
 
 Keep `Binaries/`, `DerivedDataCache/`, `Intermediate/`, `Saved/`, generated
@@ -114,5 +131,6 @@ solutions and IDE output, and logs untracked.
 Issue #13 owns project generation, the Development Editor build/open workflow,
 the starter map and default-game-mode configuration, and initial-launch
 evidence. Issue #15 owns clean Win64 client builds, clean Linux dedicated-server
-builds, cooking, packaging, and their evidence. An issue #13 Editor launch does
-not prove issue #15 has passed.
+builds, cooking, packaging, and their evidence. Follow
+[Packaged Builds](packaged-builds.md) for that workflow. An issue #13 Editor
+launch does not prove issue #15 has passed.

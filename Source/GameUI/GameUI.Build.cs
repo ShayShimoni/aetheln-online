@@ -12,6 +12,7 @@ public class GameUI : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"GameCore",
+			"InputCore",
 			"UMG",
 			"Slate",
 			"SlateCore",

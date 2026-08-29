@@ -38,9 +38,12 @@ these documents in order:
 4. [Prototype and 1.0 Supporting Artifacts](prototype-and-1.0-supporting-artifacts.md)
    provides subordinate decision, terminology, state, release, threat, test,
    and provenance traceability.
+5. [Staged Multiplayer Threat Model](staged-multiplayer-threat-model.md)
+   records the Issue #40 prototype baseline, representative 1.0 threat and test
+   specifications, risk decisions, and follow-up traceability.
 
-The briefs summarize stage contracts and do not override the specialized
-canonical product or technical documents.
+The briefs and traceability artifacts summarize stage contracts and remain
+subordinate to the specialized canonical product and technical documents.
 
 ## Delivery and Work Status
 
@@ -48,6 +51,21 @@ canonical product or technical documents.
   order.
 - [Prototype Roadmap](next-steps-mmorpg-prototype.md) expands the pre-1.0
   prototype.
+- [Playable Movement POC](movement-poc.md) records the temporary local
+  movement-feel exception, imported asset provenance, and verification evidence
+  for issue #100.
+- [Networking Authority Spike: Unit 1](networking-authority-spike.md) records
+  the Issue #2 replication-neutral authority baseline, evidence boundaries,
+  focused verification commands, and remaining candidate and measurement work.
+- [Structured Observability and Crash Diagnostics](observability-and-crash-diagnostics.md)
+  records the Issue #38 event, metric, redaction, lifecycle, crash-context,
+  environment, retention, and downstream-ownership contracts.
+- [Continuous Integration](continuous-integration.md) records the Issue #16
+  prototype CI quality gates, required-versus-advisory checks, runner
+  constraints, and machine-readable evidence path.
+- [Unreal Automation](unreal-automation.md) records the pinned headless harness,
+  exact Issue #85 tests and discovery contract, fail-closed behavior, local
+  invocation, and normalized evidence schema.
 - [GitHub Issues](https://github.com/ShayShimoni/aetheln-online/issues) govern
   work status, ownership, priority, and target version.
 
@@ -58,6 +76,19 @@ canonical product or technical documents.
 
 The PDF codices are rendered artifacts of the canonical Markdown character and
 settlement documents.
+
+## Non-Canonical Visual Development
+
+- [Visual-development package](../visuals/README.md) describes the imported
+  concepts and editable UI studies.
+- [Asset provenance](../visuals/asset-provenance.md) records source, processing,
+  and review status for the imported package.
+- [Future visuals plan](../visuals/FUTURE-VISUALS-PLAN.md) governs continuation
+  of the established visual language.
+
+These files support review and production planning. They do not override the
+canonical product or technical documents, and repository inclusion does not
+approve an asset for Unreal `Content/` or runtime use.
 
 ## Historical Research Archive
 

@@ -16,5 +16,7 @@ public class GameCombat : ModuleRules
 			"GameplayTags",
 			"GameplayTasks"
 		});
+
+		PrivateDependencyModuleNames.Add("GameNet");
 	}
 }

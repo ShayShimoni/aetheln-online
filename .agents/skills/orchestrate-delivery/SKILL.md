@@ -333,6 +333,42 @@ Use the bundled restricted launcher for every substantive stage:
    handoff hashes, before routing any bound artifact to a later stage; normal
    verification accepts only an `accepted` manifest.
 
+Before reading a verifier or approver handoff, the launcher alone must ingest
+one out-of-band `delivery_authoritative_evidence_manifest_v1` through
+`Invoke-DeliveryStage.ps1 -AuthoritativeEvidenceManifestPath <path>
+-AuthoritativeEvidenceManifestSha256 <sha256>`. Neither input belongs to or may
+be derived from the routed handoff. The launcher reads the manifest once,
+verifies its independently retained hash, and freezes its exact bytes before
+reading the handoff. It passes only those frozen bytes and that hash to
+`Validate-DeliveryHandoff.ps1 -AuthoritativeEvidenceManifestBytes <bytes>
+-ExpectedAuthoritativeEvidenceManifestSha256 <sha256>`; the validator must not
+reopen a manifest path or accept a handoff-controlled substitute.
+
+The manifest is a closed object with exactly `format`, `stage`, and a nonempty
+`records` array. Every record is closed with exactly `field`, `kind`,
+`provenance`, `encoding`, `source`, and `sha256`. Every required verifier or
+approver Linux check log is a distinct `raw_check_output` record with
+`kind: command_log` and `provenance: launcher`; repository narrative, Windows
+output, command text, or aggregate output cannot substitute for it.
+
+Complete evidence preflight before resolving or invoking Codex. Detect relevant
+duplicate JSON members in the frozen raw manifest and handoff bytes before
+ordinary parsing can collapse them. Compare the frozen manifest, handoff
+`required_evidence_sources` declarations, and mapped routed records as a
+case-sensitive exact-once correspondence keyed by `field` and `source`, then
+require all six authoritative values, routed encoding, and recomputed content
+SHA-256 to agree. No set may contain a missing, extra, duplicate, synthesized,
+merged, normalized, or substituted entry.
+
+Reject every missing, null, empty, malformed, duplicate, substituted, or
+mismatched manifest, declaration, mapped field, or routed record with the
+stable retry-neutral codes defined in the operating contract. Emit exactly one
+sanitized closed result containing only `phase`, `code`, `field`,
+`child_launched: false`, and `attempt_consumed: false`; never expose rejected
+values. Such preflight defects do not consume or increment a stage attempt.
+After a child actually launches, execution failures remain bounded to the
+initial attempt plus one fresh replacement.
+
 Do not replace the launcher with a normal shared-context spawn unless the
 current surface can mechanically attest equivalent tool, sandbox, workspace,
 freshness, schema, and audit controls.

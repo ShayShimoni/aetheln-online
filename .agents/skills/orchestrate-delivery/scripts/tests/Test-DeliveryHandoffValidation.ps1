@@ -685,6 +685,784 @@ Invoke-NeutralEvidenceRejectionCase `
 	-Name 'Singular value for array evidence field is rejected' `
 	-Handoff $ArrayAsSingular
 
+function Get-TestSha256 {
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyCollection()]
+		[byte[]]$Bytes
+	)
+
+	$Hasher = [System.Security.Cryptography.SHA256]::Create()
+	try {
+		return [System.BitConverter]::ToString(
+			$Hasher.ComputeHash($Bytes)
+		).Replace('-', '').ToLowerInvariant()
+	}
+	finally {
+		$Hasher.Dispose()
+	}
+}
+
+function New-RequiredEvidenceDeclaration {
+	param(
+		[Parameter(Mandatory)][string]$Field,
+		[Parameter(Mandatory)][object]$Record
+	)
+	return [ordered]@{
+		field = $Field
+		kind = $Record.kind
+		provenance = $Record.provenance
+		encoding = $Record.encoding
+		source = $Record.source
+		sha256 = $Record.sha256
+	}
+}
+
+function New-FrozenAuthoritativeEvidenceManifest {
+	param(
+		[Parameter(Mandatory)][ValidateSet('verifier', 'approver')][string]$Stage,
+		[Parameter(Mandatory)][object]$Handoff
+	)
+
+	[string[]]$FieldNames = if ($Stage -eq 'verifier') {
+		@('candidate_artifact', 'raw_check_output')
+	}
+	else {
+		@('baseline_status', 'baseline_diff', 'final_artifact', 'raw_check_output')
+	}
+	$Records = [System.Collections.Generic.List[object]]::new()
+	foreach ($FieldName in $FieldNames) {
+		$FieldValue = $Handoff[$FieldName]
+		$FieldRecords = if ($FieldValue -is [System.Array]) {
+			@($FieldValue)
+		}
+		else {
+			@($FieldValue)
+		}
+		foreach ($Record in $FieldRecords) {
+			$null = $Records.Add([ordered]@{
+				field = $FieldName
+				kind = $Record.kind
+				provenance = $Record.provenance
+				encoding = $Record.encoding
+				source = $Record.source
+				sha256 = $Record.sha256
+			})
+		}
+	}
+
+	$Manifest = [ordered]@{
+		format = 'delivery_authoritative_evidence_manifest_v1'
+		stage = $Stage
+		records = [object[]]@($Records)
+	}
+	$Json = $Manifest | ConvertTo-Json -Depth 8 -Compress
+	$Bytes = $Utf8NoBom.GetBytes($Json)
+	return [pscustomobject]@{
+		Manifest = $Manifest
+		Records = [object[]]@($Records)
+		Json = $Json
+		Bytes = [byte[]]$Bytes
+		Sha256 = Get-TestSha256 -Bytes $Bytes
+	}
+}
+
+function New-TestJsonBytes {
+	param([Parameter(Mandatory)][AllowEmptyString()][string]$Json)
+
+	$Bytes = $Utf8NoBom.GetBytes($Json)
+	return [pscustomobject]@{
+		Json = $Json
+		Bytes = [byte[]]$Bytes
+		Sha256 = Get-TestSha256 -Bytes $Bytes
+	}
+}
+
+function Add-DuplicateJsonMemberAtFirstMatch {
+	param(
+		[Parameter(Mandatory)][string]$Json,
+		[Parameter(Mandatory)][string]$Fragment,
+		[Parameter(Mandatory)][string]$Replacement,
+		[int]$StartIndex = 0
+	)
+
+	$Index = $Json.IndexOf(
+		$Fragment,
+		$StartIndex,
+		[System.StringComparison]::Ordinal
+	)
+	if ($Index -lt 0) {
+		throw "Test JSON fragment was not found."
+	}
+	return $Json.Substring(0, $Index) + $Replacement +
+		$Json.Substring($Index + $Fragment.Length)
+}
+
+function Invoke-RequiredEvidenceAcceptanceCase {
+	param(
+		[Parameter(Mandatory)][string]$Name,
+		[Parameter(Mandatory)][object]$Handoff,
+		[Parameter(Mandatory)][byte[]]$ManifestBytes,
+		[Parameter(Mandatory)][string]$ExpectedManifestSha256,
+		[Parameter(Mandatory)][int]$ExpectedManifestRecordCount,
+		[Parameter(Mandatory)][ValidateSet('verifier', 'approver')][string]$ExpectedStage
+	)
+
+	$Path = Write-Fixture `
+		-Name "$($Name.Replace(' ', '-')).json" `
+		-Json ($Handoff | ConvertTo-Json -Depth 20 -Compress) `
+		-Encoding $Utf8NoBom
+	try {
+		$Result = & $ValidatorPath `
+			-HandoffPath $Path `
+			-SchemaPath $SchemaPath `
+			-AuthoritativeEvidenceManifestBytes $ManifestBytes `
+			-ExpectedAuthoritativeEvidenceManifestSha256 $ExpectedManifestSha256
+		Add-Result -Name $Name -Passed (
+			$Result.Stage -ceq $ExpectedStage -and
+			$Result.AuthoritativeEvidenceManifestValidated -eq $true -and
+			$Result.AuthoritativeEvidenceManifestHash -ceq $ExpectedManifestSha256 -and
+			$Result.AuthoritativeEvidenceManifestRecordCount -eq
+				$ExpectedManifestRecordCount
+		)
+	}
+	catch {
+		Add-Result -Name $Name -Passed $false -Detail $_.Exception.Message
+	}
+}
+
+function Invoke-RequiredEvidenceRejectionCase {
+	param(
+		[Parameter(Mandatory)][string]$Name,
+		[AllowNull()][object]$Handoff,
+		[AllowNull()][AllowEmptyString()][string]$Json,
+		[AllowNull()][AllowEmptyCollection()][byte[]]$ManifestBytes,
+		[AllowNull()][AllowEmptyString()][string]$ExpectedManifestSha256,
+		[bool]$SupplyManifestBytes = $true,
+		[bool]$SupplyExpectedHash = $true,
+		[Parameter(Mandatory)][string]$ExpectedCode,
+		[Parameter(Mandatory)][string]$ExpectedField,
+		[string]$PrivateMarker = 'private-required-evidence-marker'
+	)
+
+	$FixtureJson = if ($PSBoundParameters.ContainsKey('Json')) {
+		$Json
+	}
+	elseif ($PSBoundParameters.ContainsKey('Handoff')) {
+		$Handoff | ConvertTo-Json -Depth 20 -Compress
+	}
+	else {
+		throw 'A handoff object or raw JSON fixture is required.'
+	}
+	$Path = Write-Fixture `
+		-Name "$($Name.Replace(' ', '-')).json" `
+		-Json $FixtureJson `
+		-Encoding $Utf8NoBom
+	$ValidatorParameters = @{
+		HandoffPath = $Path
+		SchemaPath = $SchemaPath
+	}
+	if ($SupplyManifestBytes) {
+		$ValidatorParameters['AuthoritativeEvidenceManifestBytes'] = $ManifestBytes
+	}
+	if ($SupplyExpectedHash) {
+		$ValidatorParameters['ExpectedAuthoritativeEvidenceManifestSha256'] =
+			$ExpectedManifestSha256
+	}
+
+	$Message = ''
+	try {
+		& $ValidatorPath @ValidatorParameters | Out-Null
+	}
+	catch {
+		$Message = $_.Exception.Message
+	}
+	$Tokens = [string[]]@(
+		$Message -csplit '[^a-z0-9_]+' |
+			Where-Object { -not [string]::IsNullOrEmpty($_) }
+	)
+	Add-Result -Name $Name -Passed (
+		-not [string]::IsNullOrWhiteSpace($Message) -and
+		$Tokens -ccontains $ExpectedCode -and
+		$Tokens -ccontains $ExpectedField -and
+		$Message.IndexOf(
+			$PrivateMarker,
+			[System.StringComparison]::Ordinal
+		) -lt 0
+	) -Detail $Message
+}
+
+function New-DeclaredEvidenceHandoff {
+	param([Parameter(Mandatory)][ValidateSet('verifier', 'approver')][string]$Stage)
+
+	$LinuxLog = New-EvidenceRecord -Kind 'command_log' -Provenance 'launcher' `
+		-Source 'linux-server-build-log' -Text 'Linux server build passed.'
+	$DiffCheck = New-EvidenceRecord -Kind 'command_log' -Provenance 'launcher' `
+		-Source 'git-diff-check-log' -Text 'git diff --check passed.'
+	$Handoff = [ordered]@{
+		schema_version = 1
+		stage = $Stage
+		run_id = "$Stage-required-evidence-test"
+		workspace_root = $RepositoryRoot
+		source_commit = '0000000000000000000000000000000000000000'
+		ticket = 'Issue #130'
+		acceptance_criteria = @('Validate required evidence declarations.')
+		canonical_sources = @('AGENTS.md')
+		output_contract = 'Return independent evidence.'
+		allowed_paths = @('docs/example.md')
+		non_goals = @('Production changes')
+	}
+
+	if ($Stage -eq 'verifier') {
+		$Candidate = New-EvidenceRecord -Kind 'artifact' -Provenance 'launcher' `
+			-Source 'candidate-artifact' -Text 'candidate bytes'
+		$Handoff.Remove('allowed_paths')
+		$Handoff.Remove('non_goals')
+		$Handoff['candidate_artifact'] = $Candidate
+		$Handoff['test_environment'] = 'read-only validator test'
+		$Handoff['commands'] = @('Invoke focused checks.')
+		$Handoff['raw_check_output'] = @($LinuxLog, $DiffCheck)
+		$Handoff['required_evidence_sources'] = @(
+			(New-RequiredEvidenceDeclaration -Field 'candidate_artifact' -Record $Candidate),
+			(New-RequiredEvidenceDeclaration -Field 'raw_check_output' -Record $LinuxLog),
+			(New-RequiredEvidenceDeclaration -Field 'raw_check_output' -Record $DiffCheck)
+		)
+	}
+	else {
+		$BaselineStatus = New-EvidenceRecord -Kind 'status' -Provenance 'launcher' `
+			-Source 'baseline-status' -Text 'clean'
+		$BaselineDiff = New-EvidenceRecord -Kind 'diff' -Provenance 'launcher' `
+			-Source 'baseline-diff' -Text ''
+		$FinalArtifact = New-EvidenceRecord -Kind 'artifact' -Provenance 'launcher' `
+			-Source 'final-artifact' -Text 'final candidate bytes'
+		$Handoff['baseline_status'] = $BaselineStatus
+		$Handoff['baseline_diff'] = $BaselineDiff
+		$Handoff['final_artifact'] = $FinalArtifact
+		$Handoff['raw_check_output'] = @($LinuxLog, $DiffCheck)
+		$Handoff['required_evidence_sources'] = @(
+			(New-RequiredEvidenceDeclaration -Field 'baseline_status' -Record $BaselineStatus),
+			(New-RequiredEvidenceDeclaration -Field 'baseline_diff' -Record $BaselineDiff),
+			(New-RequiredEvidenceDeclaration -Field 'final_artifact' -Record $FinalArtifact),
+			(New-RequiredEvidenceDeclaration -Field 'raw_check_output' -Record $LinuxLog),
+			(New-RequiredEvidenceDeclaration -Field 'raw_check_output' -Record $DiffCheck)
+		)
+	}
+
+	return $Handoff
+}
+
+$VerifierDeclaredEvidence = New-DeclaredEvidenceHandoff -Stage 'verifier'
+$ApproverDeclaredEvidence = New-DeclaredEvidenceHandoff -Stage 'approver'
+$DeclaredEvidenceStages = @(
+	[pscustomobject]@{
+		Name = 'Verifier'
+		Stage = 'verifier'
+		SingularField = 'candidate_artifact'
+		Base = $VerifierDeclaredEvidence
+		FrozenManifest = New-FrozenAuthoritativeEvidenceManifest `
+			-Stage 'verifier' -Handoff $VerifierDeclaredEvidence
+	},
+	[pscustomobject]@{
+		Name = 'Approver'
+		Stage = 'approver'
+		SingularField = 'final_artifact'
+		Base = $ApproverDeclaredEvidence
+		FrozenManifest = New-FrozenAuthoritativeEvidenceManifest `
+			-Stage 'approver' -Handoff $ApproverDeclaredEvidence
+	}
+)
+
+$ManifestInputCase = $DeclaredEvidenceStages[0]
+$FrozenVerifierManifest = $ManifestInputCase.FrozenManifest
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Missing authoritative manifest inputs are rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-SupplyManifestBytes $false `
+	-SupplyExpectedHash $false `
+	-ExpectedCode 'authoritative_evidence_manifest_required' `
+	-ExpectedField 'authoritative_evidence_manifest'
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Manifest bytes without expected hash are rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $FrozenVerifierManifest.Bytes `
+	-SupplyExpectedHash $false `
+	-ExpectedCode 'authoritative_evidence_manifest_required' `
+	-ExpectedField 'authoritative_evidence_manifest'
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Expected hash without manifest bytes is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ExpectedManifestSha256 $FrozenVerifierManifest.Sha256 `
+	-SupplyManifestBytes $false `
+	-ExpectedCode 'authoritative_evidence_manifest_required' `
+	-ExpectedField 'authoritative_evidence_manifest'
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Empty authoritative manifest bytes are rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes ([byte[]]@()) `
+	-ExpectedManifestSha256 $FrozenVerifierManifest.Sha256 `
+	-ExpectedCode 'authoritative_evidence_manifest_required' `
+	-ExpectedField 'authoritative_evidence_manifest'
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Empty authoritative manifest expected hash is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $FrozenVerifierManifest.Bytes `
+	-ExpectedManifestSha256 '' `
+	-ExpectedCode 'authoritative_evidence_manifest_required' `
+	-ExpectedField 'authoritative_evidence_manifest'
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Invalid authoritative manifest expected hash syntax is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $FrozenVerifierManifest.Bytes `
+	-ExpectedManifestSha256 'private-invalid-expected-hash' `
+	-ExpectedCode 'authoritative_evidence_manifest_malformed' `
+	-ExpectedField 'authoritative_evidence_manifest' `
+	-PrivateMarker 'private-invalid-expected-hash'
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Exact authoritative manifest hash mismatch is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $FrozenVerifierManifest.Bytes `
+	-ExpectedManifestSha256 ('0' * 64) `
+	-ExpectedCode 'authoritative_evidence_manifest_hash_mismatch' `
+	-ExpectedField 'authoritative_evidence_manifest'
+
+$MalformedManifest = New-TestJsonBytes -Json '{'
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Malformed authoritative manifest JSON is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $MalformedManifest.Bytes `
+	-ExpectedManifestSha256 $MalformedManifest.Sha256 `
+	-ExpectedCode 'authoritative_evidence_manifest_malformed' `
+	-ExpectedField 'authoritative_evidence_manifest'
+
+$DuplicateManifestRootJson = $FrozenVerifierManifest.Json.Substring(
+	0,
+	$FrozenVerifierManifest.Json.Length - 1
+) + ',"stage":"private-duplicate-manifest-stage"}'
+$DuplicateManifestRoot = New-TestJsonBytes -Json $DuplicateManifestRootJson
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Duplicate authoritative manifest root member is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $DuplicateManifestRoot.Bytes `
+	-ExpectedManifestSha256 $DuplicateManifestRoot.Sha256 `
+	-ExpectedCode 'required_evidence_json_member_duplicate' `
+	-ExpectedField 'authoritative_evidence_manifest' `
+	-PrivateMarker 'private-duplicate-manifest-stage'
+
+$ManifestSourceFragment = '"source":"' +
+	[string]$FrozenVerifierManifest.Records[0].source + '"'
+$DuplicateManifestRecordJson = Add-DuplicateJsonMemberAtFirstMatch `
+	-Json $FrozenVerifierManifest.Json `
+	-Fragment $ManifestSourceFragment `
+	-Replacement ($ManifestSourceFragment +
+		',"source":"private-duplicate-manifest-source"')
+$DuplicateManifestRecord = New-TestJsonBytes -Json $DuplicateManifestRecordJson
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Duplicate authoritative manifest record member is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $DuplicateManifestRecord.Bytes `
+	-ExpectedManifestSha256 $DuplicateManifestRecord.Sha256 `
+	-ExpectedCode 'required_evidence_json_member_duplicate' `
+	-ExpectedField 'authoritative_evidence_manifest' `
+	-PrivateMarker 'private-duplicate-manifest-source'
+
+$WrongStageManifestObject = Copy-JsonObject $FrozenVerifierManifest.Manifest
+$WrongStageManifestObject.stage = 'approver'
+$WrongStageManifest = New-TestJsonBytes -Json (
+	$WrongStageManifestObject | ConvertTo-Json -Depth 8 -Compress
+)
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Wrong-stage authoritative manifest is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $WrongStageManifest.Bytes `
+	-ExpectedManifestSha256 $WrongStageManifest.Sha256 `
+	-ExpectedCode 'authoritative_evidence_manifest_malformed' `
+	-ExpectedField 'authoritative_evidence_manifest'
+
+$EmptyRecordsManifestObject = Copy-JsonObject $FrozenVerifierManifest.Manifest
+$EmptyRecordsManifestObject.records = @()
+$EmptyRecordsManifest = New-TestJsonBytes -Json (
+	$EmptyRecordsManifestObject | ConvertTo-Json -Depth 8 -Compress
+)
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Empty authoritative manifest record array is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $EmptyRecordsManifest.Bytes `
+	-ExpectedManifestSha256 $EmptyRecordsManifest.Sha256 `
+	-ExpectedCode 'authoritative_evidence_manifest_malformed' `
+	-ExpectedField 'authoritative_evidence_manifest'
+
+$EmptyRecordManifestObject = Copy-JsonObject $FrozenVerifierManifest.Manifest
+$EmptyRecordManifestObject.records = @([pscustomobject]@{})
+$EmptyRecordManifest = New-TestJsonBytes -Json (
+	$EmptyRecordManifestObject | ConvertTo-Json -Depth 8 -Compress
+)
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Empty authoritative manifest record is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $EmptyRecordManifest.Bytes `
+	-ExpectedManifestSha256 $EmptyRecordManifest.Sha256 `
+	-ExpectedCode 'authoritative_evidence_manifest_malformed' `
+	-ExpectedField 'authoritative_evidence_manifest'
+
+$DuplicateIdentityManifestObject = Copy-JsonObject $FrozenVerifierManifest.Manifest
+$DuplicateIdentityManifestObject.records = @(
+	$DuplicateIdentityManifestObject.records
+) + @((Copy-JsonObject $DuplicateIdentityManifestObject.records[0]))
+$DuplicateIdentityManifest = New-TestJsonBytes -Json (
+	$DuplicateIdentityManifestObject | ConvertTo-Json -Depth 8 -Compress
+)
+Invoke-RequiredEvidenceRejectionCase `
+	-Name 'Duplicate authoritative manifest identity is rejected' `
+	-Handoff $ManifestInputCase.Base `
+	-ManifestBytes $DuplicateIdentityManifest.Bytes `
+	-ExpectedManifestSha256 $DuplicateIdentityManifest.Sha256 `
+	-ExpectedCode 'authoritative_evidence_source_duplicate' `
+	-ExpectedField 'candidate_artifact'
+
+foreach ($StageCase in $DeclaredEvidenceStages) {
+	$FrozenManifest = $StageCase.FrozenManifest
+	Invoke-RequiredEvidenceAcceptanceCase `
+		-Name "$($StageCase.Name) valid exact-once launcher provenance evidence is accepted" `
+		-Handoff $StageCase.Base `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedManifestRecordCount $FrozenManifest.Records.Count `
+		-ExpectedStage $StageCase.Stage
+
+	$MissingSingular = Copy-JsonObject $StageCase.Base
+	$MissingSingular.PSObject.Properties.Remove($StageCase.SingularField)
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) omitted singular evidence is rejected" `
+		-Handoff $MissingSingular `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_routed_record_malformed' `
+		-ExpectedField $StageCase.SingularField
+
+	$NullSingular = Copy-JsonObject $StageCase.Base
+	$NullSingular.($StageCase.SingularField) = $null
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) null singular evidence is rejected" `
+		-Handoff $NullSingular `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_routed_record_malformed' `
+		-ExpectedField $StageCase.SingularField
+
+	$EmptySingular = Copy-JsonObject $StageCase.Base
+	$EmptySingular.($StageCase.SingularField) = [pscustomobject]@{}
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) empty singular evidence record is rejected" `
+		-Handoff $EmptySingular `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'neutral_evidence_keys_invalid' `
+		-ExpectedField $StageCase.SingularField
+
+	$MissingArray = Copy-JsonObject $StageCase.Base
+	$MissingArray.PSObject.Properties.Remove('raw_check_output')
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) omitted evidence array is rejected" `
+		-Handoff $MissingArray `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_routed_record_malformed' `
+		-ExpectedField 'raw_check_output'
+
+	$EmptyArray = Copy-JsonObject $StageCase.Base
+	$EmptyArray.raw_check_output = @()
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) empty evidence array is rejected" `
+		-Handoff $EmptyArray `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_routed_record_malformed' `
+		-ExpectedField 'raw_check_output'
+
+	$MissingDeclarations = Copy-JsonObject $StageCase.Base
+	$MissingDeclarations.PSObject.Properties.Remove('required_evidence_sources')
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) missing evidence declarations are rejected" `
+		-Handoff $MissingDeclarations `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_declarations_malformed' `
+		-ExpectedField 'required_evidence_sources'
+
+	$EmptyDeclarations = Copy-JsonObject $StageCase.Base
+	$EmptyDeclarations.required_evidence_sources = @()
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) empty evidence declarations are rejected" `
+		-Handoff $EmptyDeclarations `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_declarations_malformed' `
+		-ExpectedField 'required_evidence_sources'
+
+	$NullDeclarations = Copy-JsonObject $StageCase.Base
+	$NullDeclarations.required_evidence_sources = $null
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) null evidence declarations are rejected" `
+		-Handoff $NullDeclarations `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_declarations_malformed' `
+		-ExpectedField 'required_evidence_sources'
+
+	$MalformedDeclaration = Copy-JsonObject $StageCase.Base
+	$MalformedDeclaration.required_evidence_sources[0] | Add-Member `
+		-NotePropertyName extra -NotePropertyValue 'private-declaration-extra'
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) malformed evidence declaration is rejected" `
+		-Handoff $MalformedDeclaration `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_declarations_malformed' `
+		-ExpectedField 'required_evidence_sources' `
+		-PrivateMarker 'private-declaration-extra'
+
+	$IncompleteDeclaration = Copy-JsonObject $StageCase.Base
+	$IncompleteDeclaration.required_evidence_sources[0].PSObject.Properties.Remove('sha256')
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) incomplete evidence declaration is rejected" `
+		-Handoff $IncompleteDeclaration `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_declarations_malformed' `
+		-ExpectedField 'required_evidence_sources'
+
+	$DuplicateDeclaration = Copy-JsonObject $StageCase.Base
+	$DuplicateDeclaration.required_evidence_sources = @(
+		$DuplicateDeclaration.required_evidence_sources
+	) + @((Copy-JsonObject $DuplicateDeclaration.required_evidence_sources[0]))
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) duplicate evidence declaration is rejected" `
+		-Handoff $DuplicateDeclaration `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_declaration_duplicate' `
+		-ExpectedField 'required_evidence_sources'
+
+	$DuplicateRecord = Copy-JsonObject $StageCase.Base
+	$LinuxRecord = @($DuplicateRecord.raw_check_output | Where-Object {
+		$_.source -ceq 'linux-server-build-log'
+	})[0]
+	$DuplicateRecord.raw_check_output = @($DuplicateRecord.raw_check_output) +
+		@((Copy-JsonObject $LinuxRecord))
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) duplicate evidence record is rejected" `
+		-Handoff $DuplicateRecord `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_routed_record_duplicate' `
+		-ExpectedField 'raw_check_output'
+
+	foreach ($Mismatch in @(
+		[pscustomobject]@{
+			Name = 'kind'
+			Property = 'kind'
+			Value = 'text'
+			Code = 'required_evidence_declarations_malformed'
+			Field = 'required_evidence_sources'
+		},
+		[pscustomobject]@{
+			Name = 'provenance'
+			Property = 'provenance'
+			Value = 'repository'
+			Code = 'required_evidence_declarations_malformed'
+			Field = 'required_evidence_sources'
+		},
+		[pscustomobject]@{
+			Name = 'encoding'
+			Property = 'encoding'
+			Value = 'base64'
+			Code = 'required_evidence_composition_mismatch'
+			Field = 'raw_check_output'
+		},
+		[pscustomobject]@{
+			Name = 'hash'
+			Property = 'sha256'
+			Value = ('0' * 64)
+			Code = 'required_evidence_composition_mismatch'
+			Field = 'raw_check_output'
+		},
+		[pscustomobject]@{
+			Name = 'source'
+			Property = 'source'
+			Value = 'private-declaration-source-substitution'
+			Code = 'required_evidence_composition_mismatch'
+			Field = 'raw_check_output'
+		}
+	)) {
+		$MismatchedDeclaration = Copy-JsonObject $StageCase.Base
+		$LinuxDeclaration = @($MismatchedDeclaration.required_evidence_sources |
+			Where-Object { $_.source -ceq 'linux-server-build-log' })[0]
+		$LinuxDeclaration.($Mismatch.Property) = $Mismatch.Value
+		Invoke-RequiredEvidenceRejectionCase `
+			-Name "$($StageCase.Name) declaration $($Mismatch.Name) mismatch is rejected" `
+			-Handoff $MismatchedDeclaration `
+			-ManifestBytes $FrozenManifest.Bytes `
+			-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+			-ExpectedCode $Mismatch.Code `
+			-ExpectedField $Mismatch.Field `
+			-PrivateMarker ([string]$Mismatch.Value)
+	}
+
+	$RoutedEncodingMismatch = Copy-JsonObject $StageCase.Base
+	$RoutedEncodingLinux = @($RoutedEncodingMismatch.raw_check_output |
+		Where-Object { $_.source -ceq 'linux-server-build-log' })[0]
+	$RoutedEncodingLinux.encoding = 'base64'
+	$RoutedEncodingLinux.content = [System.Convert]::ToBase64String(
+		[System.Text.Encoding]::UTF8.GetBytes([string]$RoutedEncodingLinux.content)
+	)
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) routed encoding substitution is rejected" `
+		-Handoff $RoutedEncodingMismatch `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_composition_mismatch' `
+		-ExpectedField 'raw_check_output'
+
+	$RoutedProvenanceMismatch = Copy-JsonObject $StageCase.Base
+	$RoutedProvenanceLinux = @($RoutedProvenanceMismatch.raw_check_output |
+		Where-Object { $_.source -ceq 'linux-server-build-log' })[0]
+	$RoutedProvenanceLinux.provenance = 'repository'
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) routed repository provenance is rejected" `
+		-Handoff $RoutedProvenanceMismatch `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'neutral_evidence_provenance_invalid' `
+		-ExpectedField 'raw_check_output'
+
+	$ConsistentSubstitution = Copy-JsonObject $StageCase.Base
+	$SubstitutedRoutedRecord = @($ConsistentSubstitution.raw_check_output |
+		Where-Object { $_.source -ceq 'linux-server-build-log' })[0]
+	$SubstitutedDeclaration = @($ConsistentSubstitution.required_evidence_sources |
+		Where-Object { $_.source -ceq 'linux-server-build-log' })[0]
+	$SubstitutedRoutedRecord.source = 'private-consistent-linux-substitution'
+	$SubstitutedDeclaration.source = 'private-consistent-linux-substitution'
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) mutually consistent handoff substitution is rejected" `
+		-Handoff $ConsistentSubstitution `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_composition_mismatch' `
+		-ExpectedField 'raw_check_output' `
+		-PrivateMarker 'private-consistent-linux-substitution'
+
+	$RepositoryLinuxHandoff = Copy-JsonObject $StageCase.Base
+	$RepositoryLinuxRecord = @($RepositoryLinuxHandoff.raw_check_output |
+		Where-Object { $_.source -ceq 'linux-server-build-log' })[0]
+	$RepositoryLinuxDeclaration = @(
+		$RepositoryLinuxHandoff.required_evidence_sources |
+			Where-Object { $_.source -ceq 'linux-server-build-log' }
+	)[0]
+	$RepositoryLinuxRecord.provenance = 'repository'
+	$RepositoryLinuxDeclaration.provenance = 'repository'
+	$RepositoryLinuxManifestObject = Copy-JsonObject $FrozenManifest.Manifest
+	$RepositoryLinuxManifestRecord = @($RepositoryLinuxManifestObject.records |
+		Where-Object {
+			$_.field -ceq 'raw_check_output' -and
+			$_.source -ceq 'linux-server-build-log'
+		})[0]
+	$RepositoryLinuxManifestRecord.provenance = 'repository'
+	$RepositoryLinuxManifest = New-TestJsonBytes -Json (
+		$RepositoryLinuxManifestObject | ConvertTo-Json -Depth 8 -Compress
+	)
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) repository-provenance Linux manifest record is rejected" `
+		-Handoff $RepositoryLinuxHandoff `
+		-ManifestBytes $RepositoryLinuxManifest.Bytes `
+		-ExpectedManifestSha256 $RepositoryLinuxManifest.Sha256 `
+		-ExpectedCode 'authoritative_evidence_manifest_malformed' `
+		-ExpectedField 'authoritative_evidence_manifest'
+
+	$UndeclaredEvidence = Copy-JsonObject $StageCase.Base
+	$UndeclaredEvidence.raw_check_output = @($UndeclaredEvidence.raw_check_output) + @(
+		(New-EvidenceRecord -Kind 'command_log' -Provenance 'launcher' `
+			-Source 'undeclared-check-log' -Text 'undeclared output')
+	)
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) undeclared evidence is rejected" `
+		-Handoff $UndeclaredEvidence `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_composition_mismatch' `
+		-ExpectedField 'raw_check_output'
+
+	$MissingLinuxLog = Copy-JsonObject $StageCase.Base
+	$MissingLinuxLog.raw_check_output = @($MissingLinuxLog.raw_check_output |
+		Where-Object { $_.source -cne 'linux-server-build-log' })
+	$MissingLinuxLog.required_evidence_sources = @(
+		$MissingLinuxLog.required_evidence_sources |
+			Where-Object { $_.source -cne 'linux-server-build-log' }
+	)
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) authoritative Linux build log omission is rejected" `
+		-Handoff $MissingLinuxLog `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_composition_mismatch' `
+		-ExpectedField 'raw_check_output'
+
+	$BaseJson = $StageCase.Base | ConvertTo-Json -Depth 20 -Compress
+	$DuplicateRequiredSourcesJson = $BaseJson.Substring(0, $BaseJson.Length - 1) +
+		',"required_evidence_sources":[]}'
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) duplicate required_evidence_sources member is rejected" `
+		-Json $DuplicateRequiredSourcesJson `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_json_member_duplicate' `
+		-ExpectedField 'required_evidence_sources'
+
+	$DuplicateRawOutputJson = $BaseJson.Substring(0, $BaseJson.Length - 1) +
+		',"raw_check_output":[]}'
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) duplicate raw_check_output member is rejected" `
+		-Json $DuplicateRawOutputJson `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_json_member_duplicate' `
+		-ExpectedField 'raw_check_output'
+
+	$DeclarationStart = $BaseJson.IndexOf(
+		'"required_evidence_sources":',
+		[System.StringComparison]::Ordinal
+	)
+	$DeclarationFieldFragment = '"field":"' + $StageCase.SingularField + '"'
+	$DuplicateDeclarationMemberJson = Add-DuplicateJsonMemberAtFirstMatch `
+		-Json $BaseJson `
+		-Fragment $DeclarationFieldFragment `
+		-Replacement ($DeclarationFieldFragment +
+			',"field":"private-duplicate-declaration-field"') `
+		-StartIndex $DeclarationStart
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) duplicate declaration JSON member is rejected" `
+		-Json $DuplicateDeclarationMemberJson `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_json_member_duplicate' `
+		-ExpectedField 'required_evidence_sources' `
+		-PrivateMarker 'private-duplicate-declaration-field'
+
+	$RoutedSourceFragment = '"source":"linux-server-build-log"'
+	$DuplicateRoutedMemberJson = Add-DuplicateJsonMemberAtFirstMatch `
+		-Json $BaseJson `
+		-Fragment $RoutedSourceFragment `
+		-Replacement ($RoutedSourceFragment +
+			',"source":"private-duplicate-routed-source"')
+	Invoke-RequiredEvidenceRejectionCase `
+		-Name "$($StageCase.Name) duplicate routed-record JSON member is rejected" `
+		-Json $DuplicateRoutedMemberJson `
+		-ManifestBytes $FrozenManifest.Bytes `
+		-ExpectedManifestSha256 $FrozenManifest.Sha256 `
+		-ExpectedCode 'required_evidence_json_member_duplicate' `
+		-ExpectedField 'raw_check_output' `
+		-PrivateMarker 'private-duplicate-routed-source'
+}
+
 $Results | Format-Table -AutoSize
 $Failed = @($Results | Where-Object { -not $_.Passed })
 if ($Failed.Count -gt 0) {

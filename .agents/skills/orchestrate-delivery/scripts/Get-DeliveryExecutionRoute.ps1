@@ -265,11 +265,9 @@ try {
 		'promoted_to_planned'
 	}
 
-	$DirectSkippedStages = if ($Route -ceq 'direct') {
-		@('analyst', 'synthesizer')
-	}
-	else {
-		@()
+	[string[]]$DirectSkippedStages = @()
+	if ($Route -ceq 'direct') {
+		$DirectSkippedStages = @('analyst', 'synthesizer')
 	}
 	$RequiredDownstreamStages = if ($Route -ceq 'direct') {
 		@('worker', 'verifier', 'reviewer', 'approver')

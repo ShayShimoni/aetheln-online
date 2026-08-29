@@ -1,0 +1,134 @@
+name: Prototype quality gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - develop
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gates:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Fetch StarterMap LFS object
+        shell: powershell
+        run: git lfs pull --include "Content/Maps/StarterMap.umap"
+      - name: Run CI suite
+        shell: powershell
+        run: powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1
+      - name: Upload machine-readable report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-report
+          path: TestResults/ci-report.json
+
+  trusted-candidate-compile:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.triggering_actor == github.repository_owner
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    concurrency:
+      group: aetheln-engine-runner
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Fetch Unreal Content LFS objects
+        shell: powershell
+        run: git lfs pull --include "Content/**"
+      - name: Compile supported client and server targets
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode Compile `
+            -RepositoryRoot '${{ github.workspace }}' `
+            -SourceRevision '${{ github.sha }}' `
+            -ArchiveRoot (Join-Path $RunRoot 'archives') `
+            -LogRoot (Join-Path $RunRoot 'logs')
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-compile-report
+          path: TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  scheduled-packaged-smoke:
+    if: github.event_name == 'schedule'
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 1440
+    concurrency:
+      group: aetheln-engine-runner
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Fetch Unreal Content LFS objects
+        shell: powershell
+        run: git lfs pull --include "Content/**"
+      - name: Run packaged smoke gate
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode PackagedSmoke `
+            -RepositoryRoot '${{ github.workspace }}' `
+            -SourceRevision '${{ github.sha }}' `
+            -ArchiveRoot (Join-Path $RunRoot 'archives') `
+            -LogRoot (Join-Path $RunRoot 'logs')
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-scheduled-smoke-report
+          path: TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  manual-packaged-smoke:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.triggering_actor == github.repository_owner
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 1440
+    concurrency:
+      group: aetheln-engine-runner
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Fetch Unreal Content LFS objects
+        shell: powershell
+        run: git lfs pull --include "Content/**"
+      - name: Run packaged smoke gate
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode PackagedSmoke `
+            -RepositoryRoot '${{ github.workspace }}' `
+            -SourceRevision '${{ github.sha }}' `
+            -ArchiveRoot (Join-Path $RunRoot 'archives') `
+            -LogRoot (Join-Path $RunRoot 'logs')
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-manual-smoke-report
+          path: TestResults/engine-runner-report.json
+          if-no-files-found: error

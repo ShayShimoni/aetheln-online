@@ -1,0 +1,32 @@
+name: Visual package validation
+
+on:
+  pull_request:
+    paths:
+      - '.gitattributes'
+      - 'visuals/**'
+      - '.github/workflows/visual-package-validation.yml'
+  push:
+    branches:
+      - develop
+    paths:
+      - '.gitattributes'
+      - 'visuals/**'
+      - '.github/workflows/visual-package-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Validate visual package
+        shell: powershell
+        run: .\visuals\Test-VisualPackage.ps1
+      - name: Run visual validation regressions
+        shell: powershell
+        run: .\visuals\tests\Test-VisualPackageValidation.ps1

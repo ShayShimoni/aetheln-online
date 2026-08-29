@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <filter id="soft"><feGaussianBlur stdDeviation="3"/></filter>
+    <style>
+      .title { fill:#D8D0BE; font:500 52px Cinzel,Georgia,serif; letter-spacing:6px; }
+      .tab { fill:#A79F90; font:600 25px 'Source Sans 3',Arial,sans-serif; letter-spacing:2px; }
+      .tabActive { fill:#F4EBDD; }
+      .row { fill:#D8D0BE; font:600 26px 'Source Sans 3',Arial,sans-serif; }
+      .hint { fill:#A79F90; font:400 21px 'Source Sans 3',Arial,sans-serif; }
+      .button { fill:#171D23; stroke:#55585A; stroke-width:2; }
+      .focus { fill:#20272C; stroke:#F49A4A; stroke-width:3; }
+    </style>
+  </defs>
+  <image href="../backgrounds/main-menu-background.png" width="1920" height="1080" preserveAspectRatio="xMidYMid slice" filter="url(#soft)"/>
+  <rect width="1920" height="1080" fill="#080B0ECC"/>
+  <path d="M150 86H1770L1810 126V954L1770 994H150L110 954V126Z" fill="#101419F2" stroke="#55585A" stroke-width="2"/>
+  <text class="title" x="180" y="174">SETTINGS</text>
+  <path d="M180 208H1740" stroke="#55585A" stroke-width="2"/>
+  <g transform="translate(180 244)">
+    <text class="tab tabActive" x="0" y="32">DISPLAY</text>
+    <text class="tab" x="190" y="32">AUDIO</text>
+    <text class="tab" x="340" y="32">CONTROLS</text>
+    <text class="tab" x="560" y="32">ACCESSIBILITY</text>
+    <path d="M0 58H138" stroke="#F49A4A" stroke-width="4"/>
+  </g>
+  <g transform="translate(180 350)">
+    <text class="row" y="34">WINDOW MODE</text>
+    <text class="hint" y="66">Choose fullscreen, borderless, or windowed display.</text>
+    <rect x="980" width="520" height="64" class="focus"/>
+    <text class="row" x="1010" y="41">BORDERLESS</text>
+    <path d="M1460 24L1476 40L1492 24" fill="none" stroke="#D8D0BE" stroke-width="3"/>
+    <path d="M0 92H1500" stroke="#303943"/>
+    <text class="row" y="154">RESOLUTION</text>
+    <text class="hint" y="186">Applies after confirmation.</text>
+    <rect x="980" y="120" width="520" height="64" class="button"/>
+    <text class="row" x="1010" y="161">1920 × 1080</text>
+    <path d="M0 212H1500" stroke="#303943"/>
+    <text class="row" y="274">UI SCALE</text>
+    <text class="hint" y="306">Scale menus and interface text.</text>
+    <rect x="980" y="258" width="520" height="8" rx="4" fill="#303943"/>
+    <rect x="980" y="258" width="300" height="8" rx="4" fill="#D76A28"/>
+    <path d="M1280 242L1296 262L1280 282L1264 262Z" fill="#D8D0BE" stroke="#F49A4A" stroke-width="3"/>
+    <path d="M0 332H1500" stroke="#303943"/>
+    <text class="row" y="394">V-SYNC</text>
+    <text class="hint" y="426">Synchronize frame presentation to the display.</text>
+    <rect x="1396" y="372" width="104" height="48" rx="24" fill="#253D42" stroke="#55B8C4" stroke-width="2"/>
+    <circle cx="1474" cy="396" r="18" fill="#D8D0BE" stroke="#55B8C4" stroke-width="3"/>
+  </g>
+  <g transform="translate(1020 900)">
+    <path class="button" d="M18 2H302L318 18V54L302 70H18L2 54V18Z"/>
+    <text class="row" x="160" y="46" text-anchor="middle">CANCEL</text>
+    <g transform="translate(344)">
+      <path class="focus" d="M18 2H302L318 18V54L302 70H18L2 54V18Z"/>
+      <text class="row" x="160" y="46" text-anchor="middle">APPLY</text>
+    </g>
+  </g>
+</svg>
+

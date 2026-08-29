@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <style>
+      .title { fill:#D8D0BE; font:500 46px Cinzel,Georgia,serif; letter-spacing:5px; }
+      .heading { fill:#D8D0BE; font:500 38px Cinzel,Georgia,serif; letter-spacing:4px; }
+      .row { fill:#D8D0BE; font:600 25px 'Source Sans 3',Arial,sans-serif; letter-spacing:2px; }
+      .hint { fill:#A79F90; font:400 21px 'Source Sans 3',Arial,sans-serif; }
+      .button { fill:#171D23EB; stroke:#55585A; stroke-width:2; }
+      .focus { fill:#20272CF7; stroke:#F49A4A; stroke-width:3; }
+      .panel { fill:#101419E8; stroke:#55585A; stroke-width:2; }
+    </style>
+  </defs>
+  <image href="../backgrounds/character-selection-stage.png" width="1920" height="1080" preserveAspectRatio="xMidYMid slice"/>
+  <rect width="1920" height="1080" fill="#080B0E26"/>
+  <text class="title" x="80" y="94">SELECT CHARACTER</text>
+  <path d="M80 120H650" stroke="#55585A" stroke-width="2"/>
+  <g transform="translate(70 170)">
+    <path class="panel" d="M20 2H330L348 20V680L330 698H20L2 680V20Z"/>
+    <g transform="translate(26 28)">
+      <rect width="296" height="190" fill="#20272C" stroke="#55585A" stroke-width="2"/>
+      <circle cx="148" cy="74" r="46" fill="#303943"/>
+      <path d="M78 168Q148 102 218 168" fill="#303943"/>
+      <text class="row" x="148" y="184" text-anchor="middle">AURIN</text>
+    </g>
+    <g transform="translate(26 246)">
+      <rect width="296" height="190" fill="#20272C" stroke="#F49A4A" stroke-width="3"/>
+      <path d="M0 95L14 81L28 95L14 109ZM296 95L282 81L268 95L282 109Z" fill="#D76A28"/>
+      <circle cx="148" cy="74" r="46" fill="#55585A"/>
+      <path d="M78 168Q148 102 218 168" fill="#55585A"/>
+      <text class="row" x="148" y="184" text-anchor="middle">KELL</text>
+    </g>
+    <g transform="translate(26 464)">
+      <rect width="296" height="190" fill="#20272C" stroke="#55585A" stroke-width="2"/>
+      <circle cx="148" cy="74" r="46" fill="#4B354F"/>
+      <path d="M78 168Q148 102 218 168" fill="#4B354F"/>
+      <text class="row" x="148" y="184" text-anchor="middle">VESH</text>
+    </g>
+  </g>
+  <g transform="translate(770 210)" opacity=".72">
+    <circle cx="190" cy="130" r="86" fill="#303943" stroke="#A79F90" stroke-width="3"/>
+    <path d="M62 600Q72 280 190 238Q308 280 318 600Z" fill="#20272C" stroke="#A79F90" stroke-width="3"/>
+    <path d="M96 370H284M80 480H300" stroke="#55585A" stroke-width="2"/>
+    <text class="hint" x="190" y="650" text-anchor="middle">3D CHARACTER PREVIEW</text>
+  </g>
+  <g transform="translate(1410 170)">
+    <path class="panel" d="M20 2H420L438 20V590L420 608H20L2 590V20Z"/>
+    <text class="heading" x="220" y="90" text-anchor="middle">KELL</text>
+    <path d="M48 124H390" stroke="#55585A" stroke-width="2"/>
+    <text class="row" x="58" y="188">LEVEL 1</text>
+    <text class="row" x="58" y="248">FACTION UNASSIGNED</text>
+    <path d="M48 282H390" stroke="#303943"/>
+    <text class="hint" x="58" y="338">Appearance does not change</text>
+    <text class="hint" x="58" y="370">statistics, reach, or collision.</text>
+  </g>
+  <g transform="translate(70 932)">
+    <path class="button" d="M18 2H272L288 18V54L272 70H18L2 54V18Z"/>
+    <text class="row" x="145" y="46" text-anchor="middle">BACK</text>
+    <g transform="translate(310)">
+      <path class="button" d="M18 2H272L288 18V54L272 70H18L2 54V18Z"/>
+      <text class="row" x="145" y="46" text-anchor="middle">DELETE</text>
+    </g>
+    <g transform="translate(660)">
+      <path class="focus" d="M18 2H502L518 18V54L502 70H18L2 54V18Z"/>
+      <path d="M2 36L14 24L26 36L14 48ZM518 36L506 24L494 36L506 48Z" fill="#D76A28"/>
+      <text class="row" x="260" y="46" text-anchor="middle">ENTER WORLD</text>
+    </g>
+    <g transform="translate(1230)">
+      <path class="button" d="M18 2H502L518 18V54L502 70H18L2 54V18Z"/>
+      <text class="row" x="260" y="46" text-anchor="middle">CREATE CHARACTER</text>
+    </g>
+  </g>
+</svg>
+

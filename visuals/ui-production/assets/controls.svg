@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="260" viewBox="0 0 900 260">
+  <rect width="900" height="260" fill="#101419"/>
+  <g font-family="Source Sans 3, Arial, sans-serif" font-size="24" fill="#D8D0BE">
+    <text x="40" y="48">SLIDER</text>
+    <text x="40" y="138">TOGGLE OFF</text>
+    <text x="460" y="138">TOGGLE ON</text>
+    <text x="40" y="228">CHECKBOX</text>
+  </g>
+  <g>
+    <rect x="180" y="28" width="640" height="8" rx="4" fill="#303943"/>
+    <rect x="180" y="28" width="390" height="8" rx="4" fill="#D76A28"/>
+    <path d="M570 14L586 32L570 50L554 32Z" fill="#D8D0BE" stroke="#F49A4A" stroke-width="3"/>
+    <rect x="220" y="104" width="104" height="48" rx="24" fill="#20272C" stroke="#55585A" stroke-width="2"/>
+    <circle cx="246" cy="128" r="18" fill="#73777A"/>
+    <rect x="640" y="104" width="104" height="48" rx="24" fill="#253D42" stroke="#55B8C4" stroke-width="2"/>
+    <circle cx="718" cy="128" r="18" fill="#D8D0BE" stroke="#55B8C4" stroke-width="3"/>
+    <rect x="220" y="190" width="42" height="42" fill="#171D23" stroke="#F49A4A" stroke-width="3"/>
+    <path d="M229 211L238 220L254 201" fill="none" stroke="#D8D0BE" stroke-width="4"/>
+  </g>
+</svg>
+

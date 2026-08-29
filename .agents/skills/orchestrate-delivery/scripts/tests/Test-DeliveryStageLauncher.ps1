@@ -278,6 +278,83 @@ function New-NeutralEvidenceRecord {
 	}
 }
 
+function New-RequiredEvidenceDeclaration {
+	param(
+		[Parameter(Mandatory)][string]$Field,
+		[Parameter(Mandatory)][object]$Record
+	)
+
+	return [ordered]@{
+		field = $Field
+		kind = $Record.kind
+		provenance = $Record.provenance
+		encoding = $Record.encoding
+		source = $Record.source
+		sha256 = $Record.sha256
+	}
+}
+
+function New-FrozenAuthoritativeEvidenceManifest {
+	param(
+		[Parameter(Mandatory)]
+		[ValidateSet('verifier', 'approver')]
+		[string]$Stage,
+
+		[Parameter(Mandatory)][object]$Handoff,
+
+		[Parameter(Mandatory)][string]$Name
+	)
+
+	[string[]]$FieldNames = if ($Stage -ceq 'verifier') {
+		@('candidate_artifact', 'raw_check_output')
+	}
+	else {
+		@('baseline_status', 'baseline_diff', 'final_artifact', 'raw_check_output')
+	}
+	$Records = [System.Collections.Generic.List[object]]::new()
+	foreach ($FieldName in $FieldNames) {
+		$FieldValue = if ($Handoff -is [System.Collections.IDictionary]) {
+			$Handoff[$FieldName]
+		}
+		else {
+			$Handoff.$FieldName
+		}
+		$FieldRecords = if ($FieldValue -is [System.Array]) {
+			@($FieldValue)
+		}
+		else {
+			@($FieldValue)
+		}
+		foreach ($Record in $FieldRecords) {
+			[void]$Records.Add([pscustomobject][ordered]@{
+				field = $FieldName
+				kind = $Record.kind
+				provenance = $Record.provenance
+				encoding = $Record.encoding
+				source = $Record.source
+				sha256 = $Record.sha256
+			})
+		}
+	}
+
+	$Manifest = [pscustomobject][ordered]@{
+		format = 'delivery_authoritative_evidence_manifest_v1'
+		stage = $Stage
+		records = [object[]]@($Records)
+	}
+	$Json = $Manifest | ConvertTo-Json -Depth 10 -Compress
+	$Utf8NoBom = [System.Text.UTF8Encoding]::new($false, $true)
+	$Bytes = $Utf8NoBom.GetBytes($Json)
+	$Path = Join-Path $TestRoot "$Name-authoritative-evidence-manifest.json"
+	[System.IO.File]::WriteAllBytes($Path, $Bytes)
+
+	return [pscustomobject]@{
+		Path = $Path
+		Bytes = [byte[]]$Bytes
+		Sha256 = Get-TestSha256 -Bytes $Bytes
+	}
+}
+
 try {
 	$AnalystHandoffPath = Join-Path $TestRoot 'analyst.json'
 	@{
@@ -452,7 +529,12 @@ try {
 			canonical_sources = @('AGENTS.md'); output_contract = 'Return evidence.'
 			execution_policy = @{ capability_class = 'economy' }
 		}
+		$RequiredEvidenceSources = @()
 		foreach ($RequiredName in @($GateSchema.required)) {
+			if ($RequiredName -ceq 'required_evidence_sources') {
+				continue
+			}
+
 			$NeutralField = $GateSchema.neutral_evidence_fields.PSObject.Properties[
 				$RequiredName
 			]
@@ -465,21 +547,52 @@ try {
 			$Cardinality = $NeutralParts[0]
 			$Kind = ($NeutralParts[1] -split '\|')[0]
 			$Provenance = ($NeutralParts[2] -split '\|')[0]
+			$NeutralSource = "economy-$GateStage-$RequiredName"
+			$AuthoritativeSources = @(
+				@($GateSchema.authoritative_evidence_sources) |
+					Where-Object { $_.field -ceq $RequiredName }
+			)
+			if ($AuthoritativeSources.Count -eq 1) {
+				$Kind = $AuthoritativeSources[0].kind
+				$Provenance = $AuthoritativeSources[0].provenance
+				$NeutralSource = $AuthoritativeSources[0].source
+			}
 			$NeutralRecord = New-NeutralEvidenceRecord `
 				-Kind $Kind `
 				-Provenance $Provenance `
-				-Source "economy-$GateStage-$RequiredName" `
+				-Source $NeutralSource `
 				-Text 'raw evidence'
 			if ($Cardinality -eq 'array') {
 				$GateHandoff[$RequiredName] = [object[]]@($NeutralRecord)
 			} else {
 				$GateHandoff[$RequiredName] = $NeutralRecord
 			}
+			$RequiredEvidenceSources += New-RequiredEvidenceDeclaration `
+				-Field $RequiredName `
+				-Record $NeutralRecord
+		}
+		if (@($GateSchema.required) -ccontains 'required_evidence_sources') {
+			$GateHandoff['required_evidence_sources'] = `
+				[object[]]$RequiredEvidenceSources
 		}
 		$GateHandoff | ConvertTo-Json -Depth 8 | Set-Content `
 			-LiteralPath $GateHandoffPath -Encoding UTF8
+		$GateValidationParameters = @{
+			HandoffPath = $GateHandoffPath
+			SchemaPath = $SchemaPath
+		}
+		if (@('verifier', 'approver') -ccontains $GateStage) {
+			$GateManifest = New-FrozenAuthoritativeEvidenceManifest `
+				-Stage $GateStage `
+				-Handoff $GateHandoff `
+				-Name "economy-$GateStage"
+			$GateValidationParameters['AuthoritativeEvidenceManifestBytes'] = `
+				$GateManifest.Bytes
+			$GateValidationParameters['ExpectedAuthoritativeEvidenceManifestSha256'] = `
+				$GateManifest.Sha256
+		}
 		$EconomyRejected = Invoke-ExpectedFailure -Pattern 'economy.*not allowed' -Action {
-			& $ValidateScript -HandoffPath $GateHandoffPath -SchemaPath $SchemaPath | Out-Null
+			& $ValidateScript @GateValidationParameters | Out-Null
 		}
 		Add-Result -Name "Economy capability is rejected for $GateStage" -Passed $EconomyRejected
 	}
@@ -525,6 +638,21 @@ catch {
 }
 
 $VerifierHandoffPath = Join-Path $TestRoot 'verifier-with-verdict.json'
+$VerifierCandidateArtifact = New-NeutralEvidenceRecord -Kind artifact `
+	-Provenance launcher -Source 'candidate.patch' -Text 'candidate patch'
+$VerifierLinuxBuildLog = New-NeutralEvidenceRecord -Kind command_log `
+	-Provenance launcher -Source 'linux-server-build-log' `
+	-Text 'Linux server build passed.'
+$VerifierCheckOutput = New-NeutralEvidenceRecord -Kind command_log `
+	-Provenance launcher -Source 'verifier-check-output' -Text 'check completed'
+$VerifierRequiredEvidenceSources = @(
+	(New-RequiredEvidenceDeclaration -Field 'candidate_artifact' `
+		-Record $VerifierCandidateArtifact),
+	(New-RequiredEvidenceDeclaration -Field 'raw_check_output' `
+		-Record $VerifierLinuxBuildLog),
+	(New-RequiredEvidenceDeclaration -Field 'raw_check_output' `
+		-Record $VerifierCheckOutput)
+)
 @{
 	schema_version = 1
 	stage = 'verifier'
@@ -535,19 +663,28 @@ $VerifierHandoffPath = Join-Path $TestRoot 'verifier-with-verdict.json'
 	acceptance_criteria = @('Criterion')
 	canonical_sources = @('AGENTS.md')
 	output_contract = 'Return verification evidence.'
-	candidate_artifact = New-NeutralEvidenceRecord -Kind artifact `
-		-Provenance launcher -Source 'candidate.patch' -Text 'candidate patch'
+	candidate_artifact = $VerifierCandidateArtifact
 	test_environment = 'local'
 	commands = @('git diff --check')
 	raw_check_output = @(
-		New-NeutralEvidenceRecord -Kind command_log -Provenance launcher `
-			-Source 'verifier-check-output' -Text 'check completed'
+		$VerifierLinuxBuildLog
+		$VerifierCheckOutput
 	)
+	required_evidence_sources = $VerifierRequiredEvidenceSources
 	prior_findings = @('Expected to pass')
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $VerifierHandoffPath -Encoding UTF8
 
+$VerifierManifest = New-FrozenAuthoritativeEvidenceManifest `
+	-Stage 'verifier' `
+	-Handoff (Get-Content -Raw -LiteralPath $VerifierHandoffPath | ConvertFrom-Json) `
+	-Name 'test-verifier'
 $BlindFailure = Invoke-ExpectedFailure -Pattern 'not allowed|prohibited' -Action {
-	& $ValidateScript -HandoffPath $VerifierHandoffPath -SchemaPath $SchemaPath | Out-Null
+	& $ValidateScript `
+		-HandoffPath $VerifierHandoffPath `
+		-SchemaPath $SchemaPath `
+		-AuthoritativeEvidenceManifestBytes $VerifierManifest.Bytes `
+		-ExpectedAuthoritativeEvidenceManifestSha256 $VerifierManifest.Sha256 |
+		Out-Null
 }
 Add-Result -Name 'Blind verifier rejects prior verdict fields' -Passed $BlindFailure
 
@@ -559,11 +696,21 @@ $VerifierStringBypass.run_id = 'test-verifier-string-bypass'
 $VerifierStringBypass.candidate_artifact = New-NeutralEvidenceRecord `
 	-Kind artifact -Provenance launcher -Source 'candidate.patch' `
 	-Text 'candidate.patch with prior_verdict embedded'
+$VerifierStringBypass.required_evidence_sources[0] = `
+	New-RequiredEvidenceDeclaration -Field 'candidate_artifact' `
+		-Record $VerifierStringBypass.candidate_artifact
 $VerifierStringBypass | ConvertTo-Json -Depth 8 | Set-Content `
 	-LiteralPath $VerifierStringBypassPath -Encoding UTF8
+$VerifierStringBypassManifest = New-FrozenAuthoritativeEvidenceManifest `
+	-Stage 'verifier' `
+	-Handoff $VerifierStringBypass `
+	-Name 'test-verifier-string-bypass'
 & $ValidateScript `
 	-HandoffPath $VerifierStringBypassPath `
-	-SchemaPath $SchemaPath | Out-Null
+	-SchemaPath $SchemaPath `
+	-AuthoritativeEvidenceManifestBytes $VerifierStringBypassManifest.Bytes `
+	-ExpectedAuthoritativeEvidenceManifestSha256 $VerifierStringBypassManifest.Sha256 |
+	Out-Null
 Add-Result `
 	-Name 'Blind verifier treats validated typed content as opaque' `
 	-Passed $true
@@ -576,17 +723,27 @@ $VerifierNestedBypass.run_id = 'test-verifier-nested-bypass'
 $VerifierNestedBypass.candidate_artifact = New-NeutralEvidenceRecord `
 	-Kind artifact -Provenance launcher -Source 'candidate.patch' `
 	-Text 'candidate patch'
+$VerifierNestedBypass.required_evidence_sources[0] = `
+	New-RequiredEvidenceDeclaration -Field 'candidate_artifact' `
+		-Record $VerifierNestedBypass.candidate_artifact
 $NestedEvidenceValue = 'do-not-expose-agent-summary'
 $VerifierNestedBypass.candidate_artifact | Add-Member `
 	-NotePropertyName agent_summary `
 	-NotePropertyValue $NestedEvidenceValue
 $VerifierNestedBypass | ConvertTo-Json -Depth 8 | Set-Content `
 	-LiteralPath $VerifierNestedBypassPath -Encoding UTF8
+$VerifierNestedBypassManifest = New-FrozenAuthoritativeEvidenceManifest `
+	-Stage 'verifier' `
+	-Handoff $VerifierNestedBypass `
+	-Name 'test-verifier-nested-bypass'
 $BlindNestedBypassError = ''
 try {
 	& $ValidateScript `
 		-HandoffPath $VerifierNestedBypassPath `
-		-SchemaPath $SchemaPath | Out-Null
+		-SchemaPath $SchemaPath `
+		-AuthoritativeEvidenceManifestBytes $VerifierNestedBypassManifest.Bytes `
+		-ExpectedAuthoritativeEvidenceManifestSha256 $VerifierNestedBypassManifest.Sha256 |
+		Out-Null
 }
 catch {
 	$BlindNestedBypassError = $_.Exception.Message
