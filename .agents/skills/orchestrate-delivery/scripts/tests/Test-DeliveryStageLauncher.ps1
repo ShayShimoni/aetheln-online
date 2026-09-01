@@ -1334,6 +1334,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 
 public static class FixtureCodex
@@ -1633,48 +1634,145 @@ public static class FixtureCodex
 				);
 				serverProcess.StandardInput.Flush();
 				string listResponse = serverProcess.StandardOutput.ReadLine();
-				serverProcess.StandardInput.WriteLine(
-					"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\"," +
-					"\"params\":{\"name\":\"read_allowed_source_file\"," +
-					"\"arguments\":{\"path\":\"AGENTS.md\"}}}"
-				);
-				serverProcess.StandardInput.Flush();
-				string callResponse = serverProcess.StandardOutput.ReadLine();
+				long expectedOffsetBytes = 0;
+				long expectedFileSizeBytes = -1;
+				string toolEncoding = null;
+				string toolBaseSha256 = null;
+				StringBuilder escapedToolContent = new StringBuilder();
+				MemoryStream reconstructedSource = new MemoryStream();
+				int requestId = 3;
+				bool reachedEof = false;
+				while (!reachedEof)
+				{
+					serverProcess.StandardInput.WriteLine(
+						"{\"jsonrpc\":\"2.0\",\"id\":" + requestId +
+						",\"method\":\"tools/call\",\"params\":{\"name\":" +
+						"\"read_allowed_source_file\",\"arguments\":{\"path\":" +
+						"\"AGENTS.md\",\"offset_bytes\":" + expectedOffsetBytes + "}}}"
+					);
+					serverProcess.StandardInput.Flush();
+					string callResponse = serverProcess.StandardOutput.ReadLine();
+					if (callResponse == null || callResponse.IndexOf(
+							"\"isError\":false",
+							StringComparison.Ordinal
+						) < 0)
+					{
+						Console.Error.WriteLine("SOURCE_INSPECTION_PROTOCOL_FAILED");
+						return 26;
+					}
+					int structuredIndex = callResponse.IndexOf(
+						"\"structuredContent\":",
+						StringComparison.Ordinal
+					);
+					int structuredStart = structuredIndex +
+						"\"structuredContent\":".Length;
+					int structuredEnd = callResponse.IndexOf(
+						",\"isError\":",
+						structuredStart,
+						StringComparison.Ordinal
+					);
+					string canonicalText = DecodeJsonString(ExtractEscapedJsonValue(
+						callResponse, "\"text\":\"", 0
+					));
+					if (structuredIndex < 0 || structuredEnd < structuredStart ||
+						canonicalText == null || canonicalText != callResponse.Substring(
+							structuredStart,
+							structuredEnd - structuredStart
+						))
+					{
+						Console.Error.WriteLine("SOURCE_INSPECTION_PROTOCOL_FAILED");
+						return 26;
+					}
+					string pagePath = ExtractEscapedJsonValue(
+						callResponse, "\"path\":\"", structuredIndex
+					);
+					string pageEncoding = ExtractEscapedJsonValue(
+						callResponse, "\"encoding\":\"", structuredIndex
+					);
+					string pageContent = ExtractEscapedJsonValue(
+						callResponse, "\"content\":\"", structuredIndex
+					);
+					string pageBaseSha256 = ExtractEscapedJsonValue(
+						callResponse, "\"base_sha256\":\"", structuredIndex
+					);
+					long pageOffsetBytes = ExtractJsonInt64(
+						callResponse, "\"offset_bytes\":", structuredIndex
+					);
+					long pageContentBytes = ExtractJsonInt64(
+						callResponse, "\"content_bytes\":", structuredIndex
+					);
+					long pageEndOffsetBytes = ExtractJsonInt64(
+						callResponse, "\"end_offset_bytes\":", structuredIndex
+					);
+					long pageFileSizeBytes = ExtractJsonInt64(
+						callResponse, "\"file_size_bytes\":", structuredIndex
+					);
+					bool? pageEof = ExtractJsonBoolean(
+						callResponse, "\"eof\":", structuredIndex
+					);
+					string decodedPageContent = DecodeJsonString(pageContent);
+					byte[] pageBytes = null;
+					try
+					{
+						if (pageEncoding == "utf8" && decodedPageContent != null)
+						{
+							pageBytes = new UTF8Encoding(false, true).GetBytes(
+								decodedPageContent
+							);
+						}
+					}
+					catch (EncoderFallbackException)
+					{
+						pageBytes = null;
+					}
+					if (expectedFileSizeBytes < 0)
+					{
+						expectedFileSizeBytes = pageFileSizeBytes;
+						toolEncoding = pageEncoding;
+						toolBaseSha256 = pageBaseSha256;
+					}
+					if (pagePath != "AGENTS.md" || pageEncoding != toolEncoding ||
+						pageEncoding != "utf8" || pageContent == null ||
+						pageBaseSha256 != toolBaseSha256 ||
+						toolBaseSha256 == null || toolBaseSha256.Length != 64 ||
+						pageFileSizeBytes != expectedFileSizeBytes ||
+						pageOffsetBytes != expectedOffsetBytes ||
+						pageContentBytes < 0 || pageContentBytes > 8192 ||
+						pageBytes == null || pageBytes.LongLength != pageContentBytes ||
+						pageEndOffsetBytes != pageOffsetBytes + pageContentBytes ||
+						pageEndOffsetBytes > pageFileSizeBytes || pageEof == null ||
+						pageEof.Value != (pageEndOffsetBytes == pageFileSizeBytes) ||
+						(!pageEof.Value && pageContentBytes == 0))
+					{
+						Console.Error.WriteLine("SOURCE_INSPECTION_RESULT_INVALID");
+						return 27;
+					}
+					escapedToolContent.Append(pageContent);
+					reconstructedSource.Write(pageBytes, 0, pageBytes.Length);
+					expectedOffsetBytes = pageEndOffsetBytes;
+					reachedEof = pageEof.Value;
+					requestId++;
+				}
 				serverProcess.StandardInput.Close();
 				serverProcess.WaitForExit(30000);
 				if (initializeResponse == null || listResponse == null ||
-					callResponse == null ||
 					listResponse.IndexOf(
 						"\"read_allowed_source_file\"",
 						StringComparison.Ordinal
 					) < 0 ||
-					callResponse.IndexOf(
-						"\"structuredContent\":",
-						StringComparison.Ordinal
-					) < 0 ||
-					callResponse.IndexOf(
-						"\"isError\":false",
+					listResponse.IndexOf(
+						"\"required\":[\"path\",\"offset_bytes\"]",
 						StringComparison.Ordinal
 					) < 0)
 				{
 					Console.Error.WriteLine("SOURCE_INSPECTION_PROTOCOL_FAILED");
 					return 26;
 				}
-				int structuredIndex = callResponse.IndexOf(
-					"\"structuredContent\":",
-					StringComparison.Ordinal
-				);
-				string toolEncoding = ExtractEscapedJsonValue(
-					callResponse, "\"encoding\":\"", structuredIndex
-				);
-				string toolContent = ExtractEscapedJsonValue(
-					callResponse, "\"content\":\"", structuredIndex
-				);
-				string toolBaseSha256 = ExtractEscapedJsonValue(
-					callResponse, "\"base_sha256\":\"", structuredIndex
-				);
-				if (toolEncoding != "utf8" || toolContent == null ||
-					toolBaseSha256 == null || toolBaseSha256.Length != 64)
+				byte[] reconstructedBytes = reconstructedSource.ToArray();
+				reconstructedSource.Dispose();
+				if (reconstructedBytes.LongLength != expectedFileSizeBytes ||
+					expectedOffsetBytes != expectedFileSizeBytes ||
+					ComputeSha256(reconstructedBytes) != toolBaseSha256)
 				{
 					Console.Error.WriteLine("SOURCE_INSPECTION_RESULT_INVALID");
 					return 27;
@@ -1685,7 +1783,8 @@ public static class FixtureCodex
 					"\"artifact\":{\"format\":\"delivery_file_bundle_v1\"," +
 					"\"files\":[{\"path\":\"AGENTS.md\",\"operation\":\"replace\"," +
 					"\"base_sha256\":\"" + toolBaseSha256 +
-					"\",\"encoding\":\"utf8\",\"content\":\"" + toolContent +
+					"\",\"encoding\":\"utf8\",\"content\":\"" +
+					escapedToolContent.ToString() +
 					"\n# delivery source inspection fixture candidate\n\"}]}}";
 				File.WriteAllText(outputPath, correctedOutput, new UTF8Encoding(false));
 			}
@@ -1729,6 +1828,122 @@ public static class FixtureCodex
 			"\"cache_write_input_tokens\":0,\"output_tokens\":20," +
 			"\"reasoning_output_tokens\":5}}");
 		return 0;
+	}
+	private static long ExtractJsonInt64(
+		string source,
+		string marker,
+		int startIndex)
+	{
+		if (startIndex < 0)
+		{
+			return -1;
+		}
+		int markerIndex = source.IndexOf(marker, startIndex, StringComparison.Ordinal);
+		if (markerIndex < 0)
+		{
+			return -1;
+		}
+		int cursor = markerIndex + marker.Length;
+		int valueStart = cursor;
+		while (cursor < source.Length && source[cursor] >= '0' && source[cursor] <= '9')
+		{
+			cursor++;
+		}
+		long value;
+		if (cursor == valueStart || !Int64.TryParse(
+			source.Substring(valueStart, cursor - valueStart),
+			out value
+		))
+		{
+			return -1;
+		}
+		return value;
+	}
+	private static bool? ExtractJsonBoolean(
+		string source,
+		string marker,
+		int startIndex)
+	{
+		if (startIndex < 0)
+		{
+			return null;
+		}
+		int markerIndex = source.IndexOf(marker, startIndex, StringComparison.Ordinal);
+		if (markerIndex < 0)
+		{
+			return null;
+		}
+		int valueStart = markerIndex + marker.Length;
+		if (source.IndexOf("true", valueStart, StringComparison.Ordinal) == valueStart)
+		{
+			return true;
+		}
+		if (source.IndexOf("false", valueStart, StringComparison.Ordinal) == valueStart)
+		{
+			return false;
+		}
+		return null;
+	}
+	private static string DecodeJsonString(string value)
+	{
+		if (value == null)
+		{
+			return null;
+		}
+		StringBuilder decoded = new StringBuilder();
+		for (int cursor = 0; cursor < value.Length; cursor++)
+		{
+			char current = value[cursor];
+			if (current != '\\')
+			{
+				decoded.Append(current);
+				continue;
+			}
+			if (++cursor >= value.Length)
+			{
+				return null;
+			}
+			char escaped = value[cursor];
+			switch (escaped)
+			{
+				case '"': decoded.Append('"'); break;
+				case '\\': decoded.Append('\\'); break;
+				case '/': decoded.Append('/'); break;
+				case 'b': decoded.Append('\b'); break;
+				case 'f': decoded.Append('\f'); break;
+				case 'n': decoded.Append('\n'); break;
+				case 'r': decoded.Append('\r'); break;
+				case 't': decoded.Append('\t'); break;
+				case 'u':
+					if (cursor + 4 >= value.Length)
+					{
+						return null;
+					}
+					int codePoint;
+					if (!Int32.TryParse(
+						value.Substring(cursor + 1, 4),
+						System.Globalization.NumberStyles.HexNumber,
+						System.Globalization.CultureInfo.InvariantCulture,
+						out codePoint
+					))
+					{
+						return null;
+					}
+					decoded.Append((char)codePoint);
+					cursor += 4;
+					break;
+				default: return null;
+			}
+		}
+		return decoded.ToString();
+	}
+	private static string ComputeSha256(byte[] bytes)
+	{
+		using (SHA256 hasher = SHA256.Create())
+		{
+			return BitConverter.ToString(hasher.ComputeHash(bytes))
+				.Replace("-", "").ToLowerInvariant();
+		}
 	}
 	private static string ExtractEscapedJsonValue(
 		string source,

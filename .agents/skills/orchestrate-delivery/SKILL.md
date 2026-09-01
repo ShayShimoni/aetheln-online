@@ -161,8 +161,16 @@ Do not rely on prompt instructions alone:
   change, but do not edit the worktree or hand-author a patch.
 - For worker, integrator, and fixer only, disable the default shell and expose
   exactly one required launcher-owned MCP tool, `read_allowed_source_file`.
-  It may return only the complete attested bytes and launcher-owned base hash
-  for one exact existing allowed source path. Keep web, apps, inherited MCP,
+  It accepts one exact existing allowed source path and a required
+  `offset_bytes`. Start at offset zero and request the exact prior
+  `end_offset_bytes` until `eof` to obtain deterministic pages of at most 8192
+  original bytes. UTF-8 pages end only at code-point boundaries; files that are
+  not valid UTF-8 use base64 pages. Require the single text result to equal the
+  canonical JSON serialization of `structuredContent` exactly, with stable
+  path, encoding, launcher-owned `base_sha256`, and `file_size_bytes` metadata
+  and exact sequential offsets. Reconstruct the complete bytes without gaps,
+  overlaps, reordering, or duplication, then verify the final size and
+  full-file hash. Keep web, apps, inherited MCP,
   directory listing, arbitrary filesystem access, producer hashing, and every
   write or command capability disabled. Non-producer stages receive no source
   inspection server.

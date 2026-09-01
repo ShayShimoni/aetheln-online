@@ -563,10 +563,20 @@ Before spawning a stage:
 - For worker, integrator, and fixer only, disable the default shell and expose
   exactly one required launcher-owned MCP tool named
   `read_allowed_source_file`. It accepts one exact allowed repository-relative
-  path and returns complete attested source bytes plus the launcher-owned base
-  hash. Disable web, apps, inherited MCP, directory listing, arbitrary reads,
-  producer hashing, commands, and writes. Non-producer stages receive no source
-  inspection server.
+  path plus a required non-negative `offset_bytes` and returns one
+  deterministic page containing at most 8192 original bytes. Begin at zero and
+  request the exact preceding `end_offset_bytes` until `eof`. UTF-8 pages must
+  end at code-point boundaries; an invalid UTF-8 file uses base64 pages. The
+  single text result must equal the canonical JSON serialization of
+  `structuredContent` exactly.
+  Require stable path, encoding, launcher-owned `base_sha256`, and
+  `file_size_bytes` metadata across pages; require exact sequential
+  `offset_bytes`, `content_bytes`, and `end_offset_bytes`; reject gaps,
+  overlaps, reordering, duplication, or a non-EOF page that makes no progress.
+  Reconstruct the complete source bytes and verify the final size and full-file
+  SHA-256 before authoring a replacement. Disable web, apps, inherited MCP,
+  directory listing, arbitrary reads, producer hashing, commands, and writes.
+  Non-producer stages receive no source inspection server.
 - Resolve the declared source commit and require it to equal the repository's
   current `HEAD`. Require the handoff workspace to equal the launcher's resolved
   repository root. Hash all tracked and non-ignored files before and after the

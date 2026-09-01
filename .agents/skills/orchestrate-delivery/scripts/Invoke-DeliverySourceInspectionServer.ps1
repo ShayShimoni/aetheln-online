@@ -14,6 +14,8 @@ $ErrorActionPreference = 'Stop'
 
 $SensitivePathScript = Join-Path $PSScriptRoot 'Test-DeliverySensitivePath.ps1'
 $ReparseCheckScript = Join-Path $PSScriptRoot 'Assert-DeliveryPathNoReparse.ps1'
+$MaximumPageBytes = 8192
+$StrictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
 
 function Get-DeliverySourceSha256 {
 	param(
@@ -53,9 +55,7 @@ try {
 		)
 	}
 
-	$Attestation = [System.Text.UTF8Encoding]::new($false, $true).GetString(
-		$AttestationBytes
-	) | ConvertFrom-Json
+	$Attestation = $StrictUtf8.GetString($AttestationBytes) | ConvertFrom-Json
 	if ($null -eq $Attestation.attested_files) {
 		throw 'Source attestation does not declare an attested_files map.'
 	}
@@ -104,6 +104,44 @@ function New-DeliveryToolError {
 	}
 }
 
+function Test-DeliveryOffsetInteger {
+	param(
+		[AllowNull()]
+		[object]$Value
+	)
+
+	return $Value -is [byte] -or
+		$Value -is [sbyte] -or
+		$Value -is [int16] -or
+		$Value -is [uint16] -or
+		$Value -is [int32] -or
+		$Value -is [uint32] -or
+		$Value -is [int64] -or
+		$Value -is [uint64]
+}
+
+function Test-DeliveryUtf8Range {
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyCollection()]
+		[byte[]]$Bytes,
+
+		[Parameter(Mandatory)]
+		[int64]$Offset,
+
+		[Parameter(Mandatory)]
+		[int64]$Count
+	)
+
+	try {
+		$null = $StrictUtf8.GetString($Bytes, [int]$Offset, [int]$Count)
+		return $true
+	}
+	catch [System.Text.DecoderFallbackException] {
+		return $false
+	}
+}
+
 function Invoke-DeliveryReadAllowedSourceFile {
 	param(
 		[AllowNull()]
@@ -111,9 +149,16 @@ function Invoke-DeliveryReadAllowedSourceFile {
 	)
 
 	$RequestedPath = $null
-	if ($null -ne $Arguments -and
-		@($Arguments.PSObject.Properties.Name) -ccontains 'path') {
-		$RequestedPath = $Arguments.path
+	$OffsetValue = $null
+	$ArgumentNames = @()
+	if ($null -ne $Arguments) {
+		$ArgumentNames = @($Arguments.PSObject.Properties.Name)
+		if ($ArgumentNames -ccontains 'path') {
+			$RequestedPath = $Arguments.path
+		}
+		if ($ArgumentNames -ccontains 'offset_bytes') {
+			$OffsetValue = $Arguments.offset_bytes
+		}
 	}
 
 	if ($RequestedPath -isnot [string] -or
@@ -121,6 +166,27 @@ function Invoke-DeliveryReadAllowedSourceFile {
 		return New-DeliveryToolError `
 			-Code 'source_path_unsafe' `
 			-Message 'Tool argument path must be one non-empty string.'
+	}
+
+	if ($ArgumentNames -cnotcontains 'offset_bytes' -or
+		-not (Test-DeliveryOffsetInteger -Value $OffsetValue)) {
+		return New-DeliveryToolError `
+			-Code 'source_offset_invalid' `
+			-Message 'Tool argument offset_bytes must be one non-negative integer.'
+	}
+
+	try {
+		$OffsetBytes = [int64]$OffsetValue
+	}
+	catch {
+		return New-DeliveryToolError `
+			-Code 'source_offset_invalid' `
+			-Message 'Tool argument offset_bytes must be one non-negative integer.'
+	}
+	if ($OffsetBytes -lt 0) {
+		return New-DeliveryToolError `
+			-Code 'source_offset_invalid' `
+			-Message 'Tool argument offset_bytes must be one non-negative integer.'
 	}
 
 	$PathSegments = @($RequestedPath -split '[\/]')
@@ -180,32 +246,85 @@ function Invoke-DeliveryReadAllowedSourceFile {
 			-Message 'Source file bytes no longer match the attested snapshot hash.'
 	}
 
+	$FileSizeBytes = [int64]$FileBytes.LongLength
+	if ($OffsetBytes -gt $FileSizeBytes) {
+		return New-DeliveryToolError `
+			-Code 'source_offset_out_of_range' `
+			-Message 'Tool argument offset_bytes exceeds the attested file size.'
+	}
+
+	$IsUtf8 = Test-DeliveryUtf8Range `
+		-Bytes $FileBytes `
+		-Offset 0 `
+		-Count $FileSizeBytes
+	if ($IsUtf8 -and -not (Test-DeliveryUtf8Range `
+			-Bytes $FileBytes `
+			-Offset 0 `
+			-Count $OffsetBytes)) {
+		return New-DeliveryToolError `
+			-Code 'source_offset_utf8_boundary' `
+			-Message 'Tool argument offset_bytes splits a UTF-8 code point.'
+	}
+
+	$ContentBytes = [Math]::Min(
+		[int64]$MaximumPageBytes,
+		$FileSizeBytes - $OffsetBytes
+	)
+	if ($IsUtf8) {
+		while ($ContentBytes -gt 0 -and
+			-not (Test-DeliveryUtf8Range `
+				-Bytes $FileBytes `
+				-Offset $OffsetBytes `
+				-Count $ContentBytes)) {
+			$ContentBytes--
+		}
+	}
+
 	$Encoding = 'base64'
-	$Content = $null
-	try {
-		$Content = [System.Text.UTF8Encoding]::new($false, $true).GetString(
-			$FileBytes
-		)
+	if ($IsUtf8) {
 		$Encoding = 'utf8'
+		$Content = $StrictUtf8.GetString(
+			$FileBytes,
+			[int]$OffsetBytes,
+			[int]$ContentBytes
+		)
 	}
-	catch {
-		$Content = [System.Convert]::ToBase64String($FileBytes)
-		$Encoding = 'base64'
+	else {
+		$PageBytes = [byte[]]::new([int]$ContentBytes)
+		if ($ContentBytes -gt 0) {
+			[System.Buffer]::BlockCopy(
+				$FileBytes,
+				[int]$OffsetBytes,
+				$PageBytes,
+				0,
+				[int]$ContentBytes
+			)
+		}
+		$Content = [System.Convert]::ToBase64String($PageBytes)
 	}
+
+	$EndOffsetBytes = $OffsetBytes + $ContentBytes
+	$PageResult = [pscustomobject][ordered]@{
+		path = $RequestedPath
+		encoding = $Encoding
+		content = $Content
+		base_sha256 = $ActualSha256
+		offset_bytes = $OffsetBytes
+		content_bytes = $ContentBytes
+		end_offset_bytes = $EndOffsetBytes
+		file_size_bytes = $FileSizeBytes
+		eof = ($EndOffsetBytes -eq $FileSizeBytes)
+	}
+	$PageText = $PageResult | ConvertTo-Json -Depth 4 -Compress
 
 	return [pscustomobject][ordered]@{
 		content = @(
 			[pscustomobject][ordered]@{
 				type = 'text'
-				text = 'read_allowed_source_file returned the attested file result.'
+				text = $PageText
 			}
 		)
-		structuredContent = [pscustomobject][ordered]@{
-			path = $RequestedPath
-			encoding = $Encoding
-			content = $Content
-			base_sha256 = $ActualSha256
-		}
+		structuredContent = $PageResult
 		isError = $false
 	}
 }
@@ -213,8 +332,8 @@ function Invoke-DeliveryReadAllowedSourceFile {
 $ToolDefinition = [pscustomobject][ordered]@{
 	name = 'read_allowed_source_file'
 	description = (
-		'Return the complete attested bytes and the launcher-owned base ' +
-		'SHA-256 for one exact allowed repository-relative source path.'
+		'Return one bounded page of complete attested bytes and the launcher-owned ' +
+		'base SHA-256 for one exact allowed repository-relative source path.'
 	)
 	inputSchema = [pscustomobject][ordered]@{
 		type = 'object'
@@ -223,8 +342,13 @@ $ToolDefinition = [pscustomobject][ordered]@{
 				type = 'string'
 				description = 'Exact repository-relative allowed source path.'
 			}
+			offset_bytes = [pscustomobject][ordered]@{
+				type = 'integer'
+				minimum = 0
+				description = 'Zero-based page offset measured in original file bytes.'
+			}
 		}
-		required = @('path')
+		required = @('path', 'offset_bytes')
 		additionalProperties = $false
 	}
 }
