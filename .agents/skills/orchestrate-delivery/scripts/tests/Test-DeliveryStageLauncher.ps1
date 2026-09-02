@@ -628,6 +628,12 @@ try {
 			}).Count -eq 0 -and
 			@($AnalystDryRun.Arguments | Where-Object {
 				$_ -match '^mcp_servers\.source_inspection\.'
+			}).Count -eq 0 -and
+			@($AnalystDryRun.Arguments | Where-Object {
+				$_ -ceq (
+					'mcp_servers.source_inspection.tools.read_allowed_source_file.' +
+					'approval_mode=''approve'''
+				)
 			}).Count -eq 0
 		)
 }
@@ -1520,6 +1526,7 @@ public static class FixtureCodex
 			bool inheritedServersCleared = true;
 			bool requiredServer = false;
 			bool enabledToolsRestricted = false;
+			bool readToolApproved = false;
 			string commandOverride = null;
 			string argsOverride = null;
 			for (int index = 0; index < args.Length; index++)
@@ -1535,6 +1542,12 @@ public static class FixtureCodex
 					"mcp_servers.source_inspection.enabled_tools=['read_allowed_source_file']")
 				{
 					enabledToolsRestricted = true;
+				}
+				if (argument ==
+					"mcp_servers.source_inspection.tools.read_allowed_source_file." +
+					"approval_mode='approve'")
+				{
+					readToolApproved = true;
 				}
 				if (argument.StartsWith(
 					"mcp_servers.source_inspection.command=",
@@ -1554,7 +1567,7 @@ public static class FixtureCodex
 				}
 			}
 			if (!shellToolDisabled || !inheritedServersCleared || !requiredServer ||
-				!enabledToolsRestricted || commandOverride == null ||
+				!enabledToolsRestricted || !readToolApproved || commandOverride == null ||
 				argsOverride == null || commandOverride.Length < 2 ||
 				commandOverride[0] != '\'' ||
 				commandOverride[commandOverride.Length - 1] != '\'')
@@ -2446,6 +2459,10 @@ try {
 		'features.shell_tool=false',
 		'mcp_servers.source_inspection.required=true',
 		'mcp_servers.source_inspection.enabled_tools=[''read_allowed_source_file'']',
+		(
+			'mcp_servers.source_inspection.tools.read_allowed_source_file.' +
+			'approval_mode=''approve'''
+		),
 		'web_search="disabled"'
 	)
 	$MissingArguments = @($RequiredArguments | Where-Object {
@@ -2582,6 +2599,10 @@ foreach ($ProducerSurfaceCase in $ProducerSurfaceCases) {
 					'mcp_servers.source_inspection.enabled_tools=' +
 					'[''read_allowed_source_file'']'
 				) -and
+				$ProducerSurfaceDryRun.Arguments -contains (
+					'mcp_servers.source_inspection.tools.read_allowed_source_file.' +
+					'approval_mode=''approve'''
+				) -and
 				@($ProducerSurfaceDryRun.Arguments | Where-Object {
 					$_ -match '^mcp_servers\.source_inspection\.command='
 				}).Count -eq 1 -and
@@ -2597,6 +2618,65 @@ foreach ($ProducerSurfaceCase in $ProducerSurfaceCases) {
 			-Passed $false `
 			-Detail $_.Exception.Message
 	}
+}
+
+
+$ArtifactProducerProfiles = @(
+	@{ Name = 'worker'; Path = '.codex\agents\delivery-worker.toml' },
+	@{ Name = 'integrator'; Path = '.codex\agents\delivery-integrator.toml' },
+	@{ Name = 'fixer'; Path = '.codex\agents\delivery-fixer.toml' }
+)
+$SourcePagingContractMarkers = @(
+	'start with `offset_bytes` set to zero',
+	'exact prior `end_offset_bytes` until `eof` is true',
+	'each call returns at most 8192 bytes',
+	'without gaps, overlaps, reordering, or duplication',
+	'consistent `path`, `encoding`, `file_size_bytes`, and launcher-owned `base_sha256`',
+	'final `end_offset_bytes` and reconstructed byte count to equal `file_size_bytes` exactly',
+	'use that consistent launcher-owned `base_sha256` exactly without calculating or re-deriving it'
+)
+$ObsoleteOneCallContract = (
+	'the tool returns the complete attested bytes'
+)
+$ObsoleteProducerHashContract = (
+	'sha-256 equal to that consistent `base_sha256`'
+)
+foreach ($ProducerProfile in $ArtifactProducerProfiles) {
+	$ProducerProfileSource = Get-Content -Raw -LiteralPath (
+		Join-Path $RepositoryRoot $ProducerProfile.Path
+	)
+	$ProducerInstructionMatch = [regex]::Match(
+		$ProducerProfileSource,
+		'(?s)developer_instructions\s*=\s*"""\r?\n?(.*?)\r?\n?"""'
+	)
+	$EffectiveProducerPrompt = if ($ProducerInstructionMatch.Success) {
+		$ProducerInstructionMatch.Groups[1].Value.ToLowerInvariant()
+	}
+	else {
+		''
+	}
+	$MissingPagingMarkers = @($SourcePagingContractMarkers | Where-Object {
+		-not $EffectiveProducerPrompt.Contains($_)
+	})
+	Add-Result `
+		-Name "$($ProducerProfile.Name) effective prompt requires paged source reconstruction" `
+		-Passed (
+			$ProducerInstructionMatch.Success -and
+			$MissingPagingMarkers.Count -eq 0
+		) `
+		-Detail ([string]::Join(', ', $MissingPagingMarkers))
+	Add-Result `
+		-Name "$($ProducerProfile.Name) effective prompt rejects obsolete one-call source reading" `
+		-Passed (
+			$ProducerInstructionMatch.Success -and
+			-not $EffectiveProducerPrompt.Contains($ObsoleteOneCallContract)
+		)
+	Add-Result `
+		-Name "$($ProducerProfile.Name) effective prompt rejects producer-driven hash verification" `
+		-Passed (
+			$ProducerInstructionMatch.Success -and
+			-not $EffectiveProducerPrompt.Contains($ObsoleteProducerHashContract)
+		)
 }
 
 $WildcardWorkerHandoffPath = Join-Path $TestRoot 'worker-wildcard-scope.json'

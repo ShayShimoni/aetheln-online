@@ -169,8 +169,10 @@ Do not rely on prompt instructions alone:
   canonical JSON serialization of `structuredContent` exactly, with stable
   path, encoding, launcher-owned `base_sha256`, and `file_size_bytes` metadata
   and exact sequential offsets. Reconstruct the complete bytes without gaps,
-  overlaps, reordering, or duplication, then verify the final size and
-  full-file hash. Keep web, apps, inherited MCP,
+  overlaps, reordering, or duplication. Require the final `end_offset_bytes`
+  and reconstructed byte count to equal `file_size_bytes` exactly, then use the
+  consistent launcher-owned `base_sha256` exactly without calculating or
+  re-deriving it. Keep web, apps, inherited MCP,
   directory listing, arbitrary filesystem access, producer hashing, and every
   write or command capability disabled. Non-producer stages receive no source
   inspection server.

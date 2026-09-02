@@ -573,8 +573,10 @@ Before spawning a stage:
   `file_size_bytes` metadata across pages; require exact sequential
   `offset_bytes`, `content_bytes`, and `end_offset_bytes`; reject gaps,
   overlaps, reordering, duplication, or a non-EOF page that makes no progress.
-  Reconstruct the complete source bytes and verify the final size and full-file
-  SHA-256 before authoring a replacement. Disable web, apps, inherited MCP,
+  Reconstruct the complete source bytes. Require the final `end_offset_bytes`
+  and reconstructed byte count to equal `file_size_bytes` exactly, then use the
+  consistent launcher-owned `base_sha256` exactly without calculating or
+  re-deriving it before authoring a replacement. Disable web, apps, inherited MCP,
   directory listing, arbitrary reads, producer hashing, commands, and writes.
   Non-producer stages receive no source inspection server.
 - Resolve the declared source commit and require it to equal the repository's

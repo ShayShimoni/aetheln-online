@@ -994,7 +994,9 @@ if ($IsArtifactProducer) {
 		'-c',
 		'mcp_servers.source_inspection.required=true',
 		'-c',
-		'mcp_servers.source_inspection.enabled_tools=[''read_allowed_source_file'']'
+		'mcp_servers.source_inspection.enabled_tools=[''read_allowed_source_file'']',
+		'-c',
+		'mcp_servers.source_inspection.tools.read_allowed_source_file.approval_mode=''approve'''
 	)
 }
 
