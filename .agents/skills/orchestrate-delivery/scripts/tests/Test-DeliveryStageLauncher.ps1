@@ -622,7 +622,19 @@ try {
 			$AnalystDryRun.SandboxMode -eq 'read-only' -and
 			$AnalystDryRun.Arguments -contains '--ignore-user-config' -and
 			$AnalystDryRun.Arguments -contains 'apps' -and
-			$AnalystDryRun.Arguments -contains 'mcp_servers={}'
+			$AnalystDryRun.Arguments -contains 'mcp_servers={}' -and
+			@($AnalystDryRun.Arguments | Where-Object {
+				$_ -match '^features\.shell_tool='
+			}).Count -eq 0 -and
+			@($AnalystDryRun.Arguments | Where-Object {
+				$_ -match '^mcp_servers\.source_inspection\.'
+			}).Count -eq 0 -and
+			@($AnalystDryRun.Arguments | Where-Object {
+				$_ -ceq (
+					'mcp_servers.source_inspection.tools.read_allowed_source_file.' +
+					'approval_mode=''approve'''
+				)
+			}).Count -eq 0
 		)
 }
 catch {
@@ -1325,7 +1337,10 @@ New-Item -ItemType Directory -Path $FixtureBin | Out-Null
 $FixtureCodexPath = Join-Path $FixtureBin 'codex.exe'
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 
 public static class FixtureCodex
@@ -1417,6 +1432,12 @@ public static class FixtureCodex
 					StringComparison.Ordinal
 				) < 0 ||
 				normalizedPrompt.IndexOf(
+					"Inspect allowed source files only with the required " +
+					"read_allowed_source_file tool.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0 ||
+				normalizedPrompt.IndexOf(
 					"Do not use commands, scripts, shells, interpreters, " +
 					"executables, or temporary files",
 					producerContractIndex,
@@ -1499,6 +1520,296 @@ public static class FixtureCodex
 				"\"reasoning_output_tokens\":5}}");
 			return 0;
 		}
+		if (scenario == "issue141-corrected")
+		{
+			bool shellToolDisabled = false;
+			bool inheritedServersCleared = true;
+			bool requiredServer = false;
+			bool enabledToolsRestricted = false;
+			bool readToolApproved = false;
+			string commandOverride = null;
+			string argsOverride = null;
+			for (int index = 0; index < args.Length; index++)
+			{
+				string argument = args[index];
+				if (argument == "features.shell_tool=false") { shellToolDisabled = true; }
+				if (argument == "mcp_servers={}") { inheritedServersCleared = false; }
+				if (argument == "mcp_servers.source_inspection.required=true")
+				{
+					requiredServer = true;
+				}
+				if (argument ==
+					"mcp_servers.source_inspection.enabled_tools=['read_allowed_source_file']")
+				{
+					enabledToolsRestricted = true;
+				}
+				if (argument ==
+					"mcp_servers.source_inspection.tools.read_allowed_source_file." +
+					"approval_mode='approve'")
+				{
+					readToolApproved = true;
+				}
+				if (argument.StartsWith(
+					"mcp_servers.source_inspection.command=",
+					StringComparison.Ordinal))
+				{
+					commandOverride = argument.Substring(
+						"mcp_servers.source_inspection.command=".Length
+					);
+				}
+				if (argument.StartsWith(
+					"mcp_servers.source_inspection.args=",
+					StringComparison.Ordinal))
+				{
+					argsOverride = argument.Substring(
+						"mcp_servers.source_inspection.args=".Length
+					);
+				}
+			}
+			if (!shellToolDisabled || !inheritedServersCleared || !requiredServer ||
+				!enabledToolsRestricted || !readToolApproved || commandOverride == null ||
+				argsOverride == null || commandOverride.Length < 2 ||
+				commandOverride[0] != '\'' ||
+				commandOverride[commandOverride.Length - 1] != '\'')
+			{
+				Console.Error.WriteLine("SOURCE_INSPECTION_SURFACE_MISSING");
+				return 25;
+			}
+			string serverCommand = commandOverride.Substring(
+				1,
+				commandOverride.Length - 2
+			);
+			List<string> serverArguments = new List<string>();
+			int argsCursor = 0;
+			while (argsCursor < argsOverride.Length)
+			{
+				if (argsOverride[argsCursor] == '\'')
+				{
+					int closeQuote = argsOverride.IndexOf('\'', argsCursor + 1);
+					if (closeQuote < 0)
+					{
+						Console.Error.WriteLine("SOURCE_INSPECTION_ARGS_MALFORMED");
+						return 25;
+					}
+					serverArguments.Add(argsOverride.Substring(
+						argsCursor + 1,
+						closeQuote - argsCursor - 1
+					));
+					argsCursor = closeQuote + 1;
+				}
+				else
+				{
+					argsCursor++;
+				}
+			}
+			StringBuilder serverArgumentText = new StringBuilder();
+			foreach (string serverArgument in serverArguments)
+			{
+				if (serverArgumentText.Length > 0)
+				{
+					serverArgumentText.Append(' ');
+				}
+				serverArgumentText.Append('"').Append(serverArgument);
+				int trailingBackslashes = 0;
+				while (trailingBackslashes < serverArgument.Length &&
+					serverArgument[
+						serverArgument.Length - 1 - trailingBackslashes
+					] == '\\')
+				{
+					trailingBackslashes++;
+				}
+				serverArgumentText.Append('\\', trailingBackslashes).Append('"');
+			}
+			ProcessStartInfo serverStartInfo = new ProcessStartInfo();
+			serverStartInfo.FileName = serverCommand;
+			serverStartInfo.Arguments = serverArgumentText.ToString();
+			serverStartInfo.UseShellExecute = false;
+			serverStartInfo.CreateNoWindow = true;
+			serverStartInfo.RedirectStandardInput = true;
+			serverStartInfo.RedirectStandardOutput = true;
+			serverStartInfo.RedirectStandardError = true;
+			using (Process serverProcess = Process.Start(serverStartInfo))
+			{
+				serverProcess.StandardInput.WriteLine(
+					"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"," +
+					"\"params\":{\"protocolVersion\":\"2025-03-26\"," +
+					"\"capabilities\":{},\"clientInfo\":{\"name\":\"fixture-codex\"," +
+					"\"version\":\"1.0.0\"}}}"
+				);
+				serverProcess.StandardInput.Flush();
+				string initializeResponse = serverProcess.StandardOutput.ReadLine();
+				serverProcess.StandardInput.WriteLine(
+					"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"
+				);
+				serverProcess.StandardInput.WriteLine(
+					"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"," +
+					"\"params\":{}}"
+				);
+				serverProcess.StandardInput.Flush();
+				string listResponse = serverProcess.StandardOutput.ReadLine();
+				long expectedOffsetBytes = 0;
+				long expectedFileSizeBytes = -1;
+				string toolEncoding = null;
+				string toolBaseSha256 = null;
+				StringBuilder escapedToolContent = new StringBuilder();
+				MemoryStream reconstructedSource = new MemoryStream();
+				int requestId = 3;
+				bool reachedEof = false;
+				while (!reachedEof)
+				{
+					serverProcess.StandardInput.WriteLine(
+						"{\"jsonrpc\":\"2.0\",\"id\":" + requestId +
+						",\"method\":\"tools/call\",\"params\":{\"name\":" +
+						"\"read_allowed_source_file\",\"arguments\":{\"path\":" +
+						"\"AGENTS.md\",\"offset_bytes\":" + expectedOffsetBytes + "}}}"
+					);
+					serverProcess.StandardInput.Flush();
+					string callResponse = serverProcess.StandardOutput.ReadLine();
+					if (callResponse == null || callResponse.IndexOf(
+							"\"isError\":false",
+							StringComparison.Ordinal
+						) < 0)
+					{
+						Console.Error.WriteLine("SOURCE_INSPECTION_PROTOCOL_FAILED");
+						return 26;
+					}
+					int structuredIndex = callResponse.IndexOf(
+						"\"structuredContent\":",
+						StringComparison.Ordinal
+					);
+					int structuredStart = structuredIndex +
+						"\"structuredContent\":".Length;
+					int structuredEnd = callResponse.IndexOf(
+						",\"isError\":",
+						structuredStart,
+						StringComparison.Ordinal
+					);
+					string canonicalText = DecodeJsonString(ExtractEscapedJsonValue(
+						callResponse, "\"text\":\"", 0
+					));
+					if (structuredIndex < 0 || structuredEnd < structuredStart ||
+						canonicalText == null || canonicalText != callResponse.Substring(
+							structuredStart,
+							structuredEnd - structuredStart
+						))
+					{
+						Console.Error.WriteLine("SOURCE_INSPECTION_PROTOCOL_FAILED");
+						return 26;
+					}
+					string pagePath = ExtractEscapedJsonValue(
+						callResponse, "\"path\":\"", structuredIndex
+					);
+					string pageEncoding = ExtractEscapedJsonValue(
+						callResponse, "\"encoding\":\"", structuredIndex
+					);
+					string pageContent = ExtractEscapedJsonValue(
+						callResponse, "\"content\":\"", structuredIndex
+					);
+					string pageBaseSha256 = ExtractEscapedJsonValue(
+						callResponse, "\"base_sha256\":\"", structuredIndex
+					);
+					long pageOffsetBytes = ExtractJsonInt64(
+						callResponse, "\"offset_bytes\":", structuredIndex
+					);
+					long pageContentBytes = ExtractJsonInt64(
+						callResponse, "\"content_bytes\":", structuredIndex
+					);
+					long pageEndOffsetBytes = ExtractJsonInt64(
+						callResponse, "\"end_offset_bytes\":", structuredIndex
+					);
+					long pageFileSizeBytes = ExtractJsonInt64(
+						callResponse, "\"file_size_bytes\":", structuredIndex
+					);
+					bool? pageEof = ExtractJsonBoolean(
+						callResponse, "\"eof\":", structuredIndex
+					);
+					string decodedPageContent = DecodeJsonString(pageContent);
+					byte[] pageBytes = null;
+					try
+					{
+						if (pageEncoding == "utf8" && decodedPageContent != null)
+						{
+							pageBytes = new UTF8Encoding(false, true).GetBytes(
+								decodedPageContent
+							);
+						}
+					}
+					catch (EncoderFallbackException)
+					{
+						pageBytes = null;
+					}
+					if (expectedFileSizeBytes < 0)
+					{
+						expectedFileSizeBytes = pageFileSizeBytes;
+						toolEncoding = pageEncoding;
+						toolBaseSha256 = pageBaseSha256;
+					}
+					if (pagePath != "AGENTS.md" || pageEncoding != toolEncoding ||
+						pageEncoding != "utf8" || pageContent == null ||
+						pageBaseSha256 != toolBaseSha256 ||
+						toolBaseSha256 == null || toolBaseSha256.Length != 64 ||
+						pageFileSizeBytes != expectedFileSizeBytes ||
+						pageOffsetBytes != expectedOffsetBytes ||
+						pageContentBytes < 0 || pageContentBytes > 8192 ||
+						pageBytes == null || pageBytes.LongLength != pageContentBytes ||
+						pageEndOffsetBytes != pageOffsetBytes + pageContentBytes ||
+						pageEndOffsetBytes > pageFileSizeBytes || pageEof == null ||
+						pageEof.Value != (pageEndOffsetBytes == pageFileSizeBytes) ||
+						(!pageEof.Value && pageContentBytes == 0))
+					{
+						Console.Error.WriteLine("SOURCE_INSPECTION_RESULT_INVALID");
+						return 27;
+					}
+					escapedToolContent.Append(pageContent);
+					reconstructedSource.Write(pageBytes, 0, pageBytes.Length);
+					expectedOffsetBytes = pageEndOffsetBytes;
+					reachedEof = pageEof.Value;
+					requestId++;
+				}
+				serverProcess.StandardInput.Close();
+				serverProcess.WaitForExit(30000);
+				if (initializeResponse == null || listResponse == null ||
+					listResponse.IndexOf(
+						"\"read_allowed_source_file\"",
+						StringComparison.Ordinal
+					) < 0 ||
+					listResponse.IndexOf(
+						"\"required\":[\"path\",\"offset_bytes\"]",
+						StringComparison.Ordinal
+					) < 0)
+				{
+					Console.Error.WriteLine("SOURCE_INSPECTION_PROTOCOL_FAILED");
+					return 26;
+				}
+				byte[] reconstructedBytes = reconstructedSource.ToArray();
+				reconstructedSource.Dispose();
+				if (reconstructedBytes.LongLength != expectedFileSizeBytes ||
+					expectedOffsetBytes != expectedFileSizeBytes ||
+					ComputeSha256(reconstructedBytes) != toolBaseSha256)
+				{
+					Console.Error.WriteLine("SOURCE_INSPECTION_RESULT_INVALID");
+					return 27;
+				}
+				string correctedOutput = "{\"stage\":\"worker\",\"status\":\"passed\"," +
+					"\"summary\":\"fixture passed\",\"evidence\":[]," +
+					"\"changed_paths\":[\"AGENTS.md\"],\"findings\":[]," +
+					"\"artifact\":{\"format\":\"delivery_file_bundle_v1\"," +
+					"\"files\":[{\"path\":\"AGENTS.md\",\"operation\":\"replace\"," +
+					"\"base_sha256\":\"" + toolBaseSha256 +
+					"\",\"encoding\":\"utf8\",\"content\":\"" +
+					escapedToolContent.ToString() +
+					"\n# delivery source inspection fixture candidate\n\"}]}}";
+				File.WriteAllText(outputPath, correctedOutput, new UTF8Encoding(false));
+			}
+			Console.WriteLine(
+				"{\"type\":\"thread.started\",\"thread_id\":\"fixture-session\"}"
+			);
+			Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{" +
+				"\"input_tokens\":100,\"cached_input_tokens\":40," +
+				"\"cache_write_input_tokens\":0,\"output_tokens\":20," +
+				"\"reasoning_output_tokens\":5}}");
+			return 0;
+		}
 
 		string artifact = "";
 		if (scenario == "passed-nonapplying-patch")
@@ -1513,8 +1824,11 @@ public static class FixtureCodex
 		string escapedArtifact = artifact.Replace("\\", "\\\\").Replace("\"", "\\\"")
 			.Replace("\r", "\\r").Replace("\n", "\\n");
 		string status = scenario == "blocked" ? "blocked" :
-			scenario == "failed" ? "failed" : "passed";
-		string summary = "fixture " + status;
+			(scenario == "failed" || scenario == "issue45-initial") ? "failed" :
+			"passed";
+		string summary = scenario == "issue45-initial"
+			? "sandbox-rejected-baseline"
+			: "fixture " + status;
 		string output = "{\"stage\":\"worker\",\"status\":\"" + status +
 			"\",\"summary\":\"" + summary +
 			"\",\"evidence\":[],\"changed_paths\":[],\"findings\":[],\"artifact\":\"" +
@@ -1527,6 +1841,160 @@ public static class FixtureCodex
 			"\"cache_write_input_tokens\":0,\"output_tokens\":20," +
 			"\"reasoning_output_tokens\":5}}");
 		return 0;
+	}
+	private static long ExtractJsonInt64(
+		string source,
+		string marker,
+		int startIndex)
+	{
+		if (startIndex < 0)
+		{
+			return -1;
+		}
+		int markerIndex = source.IndexOf(marker, startIndex, StringComparison.Ordinal);
+		if (markerIndex < 0)
+		{
+			return -1;
+		}
+		int cursor = markerIndex + marker.Length;
+		int valueStart = cursor;
+		while (cursor < source.Length && source[cursor] >= '0' && source[cursor] <= '9')
+		{
+			cursor++;
+		}
+		long value;
+		if (cursor == valueStart || !Int64.TryParse(
+			source.Substring(valueStart, cursor - valueStart),
+			out value
+		))
+		{
+			return -1;
+		}
+		return value;
+	}
+	private static bool? ExtractJsonBoolean(
+		string source,
+		string marker,
+		int startIndex)
+	{
+		if (startIndex < 0)
+		{
+			return null;
+		}
+		int markerIndex = source.IndexOf(marker, startIndex, StringComparison.Ordinal);
+		if (markerIndex < 0)
+		{
+			return null;
+		}
+		int valueStart = markerIndex + marker.Length;
+		if (source.IndexOf("true", valueStart, StringComparison.Ordinal) == valueStart)
+		{
+			return true;
+		}
+		if (source.IndexOf("false", valueStart, StringComparison.Ordinal) == valueStart)
+		{
+			return false;
+		}
+		return null;
+	}
+	private static string DecodeJsonString(string value)
+	{
+		if (value == null)
+		{
+			return null;
+		}
+		StringBuilder decoded = new StringBuilder();
+		for (int cursor = 0; cursor < value.Length; cursor++)
+		{
+			char current = value[cursor];
+			if (current != '\\')
+			{
+				decoded.Append(current);
+				continue;
+			}
+			if (++cursor >= value.Length)
+			{
+				return null;
+			}
+			char escaped = value[cursor];
+			switch (escaped)
+			{
+				case '"': decoded.Append('"'); break;
+				case '\\': decoded.Append('\\'); break;
+				case '/': decoded.Append('/'); break;
+				case 'b': decoded.Append('\b'); break;
+				case 'f': decoded.Append('\f'); break;
+				case 'n': decoded.Append('\n'); break;
+				case 'r': decoded.Append('\r'); break;
+				case 't': decoded.Append('\t'); break;
+				case 'u':
+					if (cursor + 4 >= value.Length)
+					{
+						return null;
+					}
+					int codePoint;
+					if (!Int32.TryParse(
+						value.Substring(cursor + 1, 4),
+						System.Globalization.NumberStyles.HexNumber,
+						System.Globalization.CultureInfo.InvariantCulture,
+						out codePoint
+					))
+					{
+						return null;
+					}
+					decoded.Append((char)codePoint);
+					cursor += 4;
+					break;
+				default: return null;
+			}
+		}
+		return decoded.ToString();
+	}
+	private static string ComputeSha256(byte[] bytes)
+	{
+		using (SHA256 hasher = SHA256.Create())
+		{
+			return BitConverter.ToString(hasher.ComputeHash(bytes))
+				.Replace("-", "").ToLowerInvariant();
+		}
+	}
+	private static string ExtractEscapedJsonValue(
+		string source,
+		string marker,
+		int startIndex)
+	{
+		if (startIndex < 0)
+		{
+			return null;
+		}
+		int markerIndex = source.IndexOf(marker, startIndex, StringComparison.Ordinal);
+		if (markerIndex < 0)
+		{
+			return null;
+		}
+		StringBuilder value = new StringBuilder();
+		int cursor = markerIndex + marker.Length;
+		while (cursor < source.Length)
+		{
+			char current = source[cursor];
+			if (current == '\\')
+			{
+				if (cursor + 1 >= source.Length)
+				{
+					return null;
+				}
+				value.Append(current).Append(source[cursor + 1]);
+				cursor += 2;
+				continue;
+			}
+			if (current == '"')
+			{
+				return value.ToString();
+			}
+			value.Append(current);
+			cursor++;
+		}
+		return null;
 	}
 }
 '@ -OutputAssembly $FixtureCodexPath -OutputType ConsoleApplication
@@ -1639,7 +2107,11 @@ $FailureEvidenceCases = @(
 	@('missing-output', 'output artifact.+was not created', 4, $false,
 		'Missing output preserves validation error and seals existing evidence'),
 	@('passed-no-patch', 'returned no candidate artifact', 5, $true,
-		'Passed writer without patch still fails closed')
+		'Passed writer without patch still fails closed'),
+	@('issue45-initial', "reported status 'failed': sandbox-rejected-baseline", 5, $true,
+		'Issue #45 initial sandbox-rejected baseline seals rejected evidence'),
+	@('issue45-replacement', 'returned no candidate artifact', 5, $true,
+		'Issue #45 replacement empty artifact fails closed without a patch')
 )
 foreach ($FailureEvidenceCase in $FailureEvidenceCases) {
 	$FailureEvidenceResult = Invoke-FailureEvidenceCase `
@@ -1652,6 +2124,41 @@ foreach ($FailureEvidenceCase in $FailureEvidenceCases) {
 		-Passed $FailureEvidenceResult.Passed `
 		-Detail $FailureEvidenceResult.Detail
 }
+$Issue45InitialAudit = Get-Content -Raw -LiteralPath (
+	Join-Path $TestRoot (
+		'test-worker-issue45-initial-artifacts\' +
+		'delivery-stage-test-worker-issue45-initial-audit.json'
+	)
+) | ConvertFrom-Json
+$Issue45InitialTelemetry = Get-Content -Raw -LiteralPath (
+	[string]$Issue45InitialAudit.TelemetryPath
+) | ConvertFrom-Json
+$Issue45ReplacementAudit = Get-Content -Raw -LiteralPath (
+	Join-Path $TestRoot (
+		'test-worker-issue45-replacement-artifacts\' +
+		'delivery-stage-test-worker-issue45-replacement-audit.json'
+	)
+) | ConvertFrom-Json
+$Issue45ReplacementTelemetry = Get-Content -Raw -LiteralPath (
+	[string]$Issue45ReplacementAudit.TelemetryPath
+) | ConvertFrom-Json
+Add-Result `
+	-Name 'Issue #45 reproductions retain zero changed paths and exact exit classes' `
+	-Passed (
+		@($Issue45InitialAudit.ChangedPaths).Count -eq 0 -and
+		$null -eq $Issue45InitialAudit.PatchPath -and
+		[string]$Issue45InitialAudit.BeforeSnapshotHash -eq
+			[string]$Issue45InitialAudit.AfterSnapshotHash -and
+		[string]$Issue45InitialTelemetry.ExitClass -eq 'stage_not_passed' -and
+		[string]$Issue45InitialTelemetry.StageStatus -eq 'failed' -and
+		@($Issue45ReplacementAudit.ChangedPaths).Count -eq 0 -and
+		$null -eq $Issue45ReplacementAudit.PatchPath -and
+		[string]$Issue45ReplacementAudit.BeforeSnapshotHash -eq
+			[string]$Issue45ReplacementAudit.AfterSnapshotHash -and
+		[string]$Issue45ReplacementTelemetry.ExitClass -eq 'output_invalid' -and
+		[string]$Issue45ReplacementTelemetry.StageStatus -eq 'passed'
+	)
+
 
 $RejectedRunId = 'test-worker-passed-nonapplying-patch'
 $RejectedHandoffPath = Join-Path $TestRoot "$RejectedRunId.json"
@@ -1848,6 +2355,96 @@ Add-Result `
 	-Name 'Attested hash prompt enables direct structured replacement bundle output' `
 	-Passed $AcceptedBundlePassed `
 	-Detail $AcceptedBundleError
+$CorrectedRunId = 'test-worker-issue141-corrected'
+$CorrectedHandoffPath = Join-Path $TestRoot "$CorrectedRunId.json"
+$CorrectedHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$CorrectedHandoff.run_id = $CorrectedRunId
+$CorrectedHandoff.output_contract = (
+	'Return a delivery_file_bundle_v1 full-file artifact.'
+)
+$CorrectedHandoff.work_package = (
+	'Propose an AGENTS.md change from tool-read source.'
+)
+$CorrectedHandoff | ConvertTo-Json -Depth 8 | Set-Content `
+	-LiteralPath $CorrectedHandoffPath -Encoding UTF8
+$CorrectedArtifactRoot = Join-Path $TestRoot "$CorrectedRunId-artifacts"
+$CorrectedAuditPath = Join-Path (
+	$CorrectedArtifactRoot
+) "delivery-stage-$CorrectedRunId-audit.json"
+$CorrectedManifestPath = Join-Path (
+	$CorrectedArtifactRoot
+) "delivery-stage-$CorrectedRunId-evidence.json"
+$CorrectedPatchPath = Join-Path (
+	$CorrectedArtifactRoot
+) "delivery-stage-$CorrectedRunId-candidate.patch"
+$CorrectedAttestationPath = Join-Path (
+	$CorrectedArtifactRoot
+) "delivery-stage-$CorrectedRunId-source-attestation.json"
+$CorrectedBefore = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+$CorrectedResult = $null
+$CorrectedError = ''
+$OriginalPath = $env:PATH
+$OriginalScenario = $env:DELIVERY_FIXTURE_SCENARIO
+try {
+	$env:PATH = $FixtureBin + [System.IO.Path]::PathSeparator + $OriginalPath
+	$env:DELIVERY_FIXTURE_SCENARIO = 'issue141-corrected'
+	$CorrectedResult = & $LaunchScript `
+		-HandoffPath $CorrectedHandoffPath `
+		-ArtifactRoot $CorrectedArtifactRoot `
+		-PassThru
+}
+catch {
+	$CorrectedError = $_.Exception.Message
+}
+finally {
+	$env:PATH = $OriginalPath
+	$env:DELIVERY_FIXTURE_SCENARIO = $OriginalScenario
+}
+$CorrectedAfter = & $SnapshotScript -RepositoryRoot $RepositoryRoot
+$CorrectedPassed = $false
+if ($null -ne $CorrectedResult) {
+	try {
+		$CorrectedAudit = Get-Content -Raw -LiteralPath $CorrectedAuditPath |
+			ConvertFrom-Json
+		$CorrectedManifestHash = (
+			Get-FileHash -LiteralPath $CorrectedManifestPath -Algorithm SHA256
+		).Hash.ToLowerInvariant()
+		$CorrectedEvidence = & $EvidenceValidationScript `
+			-ManifestPath $CorrectedManifestPath `
+			-ExpectedManifestHash $CorrectedManifestHash `
+			-ExpectedHandoffHash ([string]$CorrectedAudit.HandoffHash)
+		$CorrectedPatchValidation = & $PatchValidationScript `
+			-PatchPath $CorrectedPatchPath `
+			-WorkspaceRoot $RepositoryRoot `
+			-AllowedPaths @('AGENTS.md')
+		$CorrectedManifest = Get-Content -Raw -LiteralPath $CorrectedManifestPath |
+			ConvertFrom-Json
+		$CorrectedPassed = (
+			$CorrectedResult.ArtifactFormat -eq 'delivery_file_bundle_v1' -and
+			$CorrectedAudit.ArtifactFormat -eq 'delivery_file_bundle_v1' -and
+			$CorrectedAudit.ArtifactFailureKind -eq $null -and
+			$CorrectedAudit.BeforeSnapshotHash -eq
+				$CorrectedAudit.AfterSnapshotHash -and
+			$CorrectedBefore.Hash -eq $CorrectedAfter.Hash -and
+			(Test-Path -LiteralPath $CorrectedAttestationPath -PathType Leaf) -and
+			@($CorrectedManifest.Files | Where-Object {
+				[string]$_.Path -eq $CorrectedAttestationPath
+			}).Count -eq 0 -and
+			@($CorrectedPatchValidation.ProposedPaths).Count -eq 1 -and
+			$CorrectedPatchValidation.ProposedPaths[0] -eq 'AGENTS.md' -and
+			$CorrectedEvidence.Disposition -eq 'accepted'
+		)
+	}
+	catch {
+		$CorrectedError = $_.Exception.Message
+	}
+}
+Add-Result `
+	-Name 'Restricted source-inspection surface produces an accepted full-file bundle' `
+	-Passed $CorrectedPassed `
+	-Detail $CorrectedError
+
 
 try {
 	$DryRun = & $LaunchScript -HandoffPath $WorkerHandoffPath -DryRun -PassThru
@@ -1859,17 +2456,52 @@ try {
 		'apps',
 		'--sandbox',
 		'read-only',
-		'mcp_servers={}',
+		'features.shell_tool=false',
+		'mcp_servers.source_inspection.required=true',
+		'mcp_servers.source_inspection.enabled_tools=[''read_allowed_source_file'']',
+		(
+			'mcp_servers.source_inspection.tools.read_allowed_source_file.' +
+			'approval_mode=''approve'''
+		),
 		'web_search="disabled"'
 	)
 	$MissingArguments = @($RequiredArguments | Where-Object {
 		$DryRun.Arguments -notcontains $_
 	})
+	$SourceInspectionCommandArguments = @($DryRun.Arguments | Where-Object {
+		$_ -match '^mcp_servers\.source_inspection\.command='
+	})
+	$SourceInspectionArgsArguments = @($DryRun.Arguments | Where-Object {
+		$_ -match '^mcp_servers\.source_inspection\.args='
+	})
+	$AttestationArgumentMatch = if ($SourceInspectionArgsArguments.Count -eq 1) {
+		[regex]::Match(
+			$SourceInspectionArgsArguments[0],
+			"'-AttestationPath', '([^']+)'"
+		)
+	}
+	else {
+		$null
+	}
 
 	Add-Result `
 		-Name 'Artifact-producing worker is read-only' `
 		-Passed (
 			$MissingArguments.Count -eq 0 -and
+			$DryRun.Arguments -notcontains 'mcp_servers={}' -and
+			$SourceInspectionCommandArguments.Count -eq 1 -and
+			$SourceInspectionArgsArguments.Count -eq 1 -and
+			$SourceInspectionArgsArguments[0].Contains(
+				'Invoke-DeliverySourceInspectionServer.ps1'
+			) -and
+			$SourceInspectionArgsArguments[0].Contains('-AttestationSha256') -and
+			$SourceInspectionArgsArguments[0].Contains('-WorkspaceRoot') -and
+			$SourceInspectionArgsArguments[0].Contains(
+				'delivery-stage-test-worker-source-attestation.json'
+			) -and
+			$null -ne $AttestationArgumentMatch -and
+			$AttestationArgumentMatch.Success -and
+			-not (Test-Path -LiteralPath $AttestationArgumentMatch.Groups[1].Value) -and
 			-not [string]::IsNullOrWhiteSpace($DryRun.PatchPath) -and
 			$DryRun.Arguments[
 				[Array]::IndexOf($DryRun.Arguments, '--output-schema') + 1
@@ -1884,6 +2516,167 @@ catch {
 		-Name 'Artifact-producing worker is read-only' `
 		-Passed $false `
 		-Detail $_.Exception.Message
+}
+$ProducerSurfaceCases = @(
+	[pscustomobject]@{
+		Stage = 'integrator'
+		Handoff = [ordered]@{
+			schema_version = 1
+			stage = 'integrator'
+			run_id = 'test-integrator-surface'
+			workspace_root = $RepositoryRoot
+			source_commit = $SourceCommit
+			ticket = 'Issue #123'
+			acceptance_criteria = @('Criterion')
+			canonical_sources = @('AGENTS.md')
+			output_contract = 'Return a delivery_file_bundle_v1 full-file artifact.'
+			candidate_artifacts = @(
+				New-NeutralEvidenceRecord -Kind artifact -Provenance launcher `
+					-Source 'candidate-a' -Text 'candidate a'
+			)
+			integration_order = @('candidate-a')
+			conflict_locations = New-NeutralEvidenceRecord -Kind text `
+				-Provenance control_plane -Source 'conflicts' -Text 'none'
+			allowed_paths = @('AGENTS.md')
+			non_goals = @('Everything else')
+			baseline_status = New-NeutralEvidenceRecord -Kind status `
+				-Provenance launcher -Source 'baseline-status' `
+				-Text $WorkerBaselineStatus
+			baseline_diff = New-NeutralEvidenceRecord -Kind diff `
+				-Provenance launcher -Source 'baseline-diff' `
+				-Text $WorkerBaselineDiff -Encoding base64
+		}
+	},
+	[pscustomobject]@{
+		Stage = 'fixer'
+		Handoff = [ordered]@{
+			schema_version = 1
+			stage = 'fixer'
+			run_id = 'test-fixer-surface'
+			workspace_root = $RepositoryRoot
+			source_commit = $SourceCommit
+			ticket = 'Issue #123'
+			acceptance_criteria = @('Criterion')
+			canonical_sources = @('AGENTS.md')
+			output_contract = 'Return a delivery_file_bundle_v1 full-file artifact.'
+			candidate_artifact = 'candidate artifact'
+			accepted_findings = @('Finding')
+			allowed_paths = @('AGENTS.md')
+			non_goals = @('Everything else')
+			required_checks = @('git diff --check')
+			baseline_status = $WorkerBaselineStatus
+			baseline_diff = $WorkerBaselineDiff
+		}
+	}
+)
+foreach ($ProducerSurfaceCase in $ProducerSurfaceCases) {
+	$ProducerSurfaceName = (
+		"Artifact-producing $($ProducerSurfaceCase.Stage) receives the " +
+		'restricted source-inspection surface'
+	)
+	try {
+		$ProducerSurfaceHandoffPath = Join-Path $TestRoot (
+			"$($ProducerSurfaceCase.Stage)-surface.json"
+		)
+		$ProducerSurfaceCase.Handoff | ConvertTo-Json -Depth 8 | Set-Content `
+			-LiteralPath $ProducerSurfaceHandoffPath -Encoding UTF8
+		$ProducerSurfaceDryRun = & $LaunchScript `
+			-HandoffPath $ProducerSurfaceHandoffPath `
+			-DryRun `
+			-PassThru
+		Add-Result `
+			-Name $ProducerSurfaceName `
+			-Passed (
+				$ProducerSurfaceDryRun.SandboxMode -eq 'read-only' -and
+				$ProducerSurfaceDryRun.Arguments -contains (
+					'features.shell_tool=false'
+				) -and
+				$ProducerSurfaceDryRun.Arguments -notcontains 'mcp_servers={}' -and
+				$ProducerSurfaceDryRun.Arguments -contains (
+					'mcp_servers.source_inspection.required=true'
+				) -and
+				$ProducerSurfaceDryRun.Arguments -contains (
+					'mcp_servers.source_inspection.enabled_tools=' +
+					'[''read_allowed_source_file'']'
+				) -and
+				$ProducerSurfaceDryRun.Arguments -contains (
+					'mcp_servers.source_inspection.tools.read_allowed_source_file.' +
+					'approval_mode=''approve'''
+				) -and
+				@($ProducerSurfaceDryRun.Arguments | Where-Object {
+					$_ -match '^mcp_servers\.source_inspection\.command='
+				}).Count -eq 1 -and
+				@($ProducerSurfaceDryRun.Arguments | Where-Object {
+					$_ -match '^mcp_servers\.source_inspection\.args='
+				}).Count -eq 1 -and
+				-not [string]::IsNullOrWhiteSpace($ProducerSurfaceDryRun.PatchPath)
+			)
+	}
+	catch {
+		Add-Result `
+			-Name $ProducerSurfaceName `
+			-Passed $false `
+			-Detail $_.Exception.Message
+	}
+}
+
+
+$ArtifactProducerProfiles = @(
+	@{ Name = 'worker'; Path = '.codex\agents\delivery-worker.toml' },
+	@{ Name = 'integrator'; Path = '.codex\agents\delivery-integrator.toml' },
+	@{ Name = 'fixer'; Path = '.codex\agents\delivery-fixer.toml' }
+)
+$SourcePagingContractMarkers = @(
+	'start with `offset_bytes` set to zero',
+	'exact prior `end_offset_bytes` until `eof` is true',
+	'each call returns at most 8192 bytes',
+	'without gaps, overlaps, reordering, or duplication',
+	'consistent `path`, `encoding`, `file_size_bytes`, and launcher-owned `base_sha256`',
+	'final `end_offset_bytes` and reconstructed byte count to equal `file_size_bytes` exactly',
+	'use that consistent launcher-owned `base_sha256` exactly without calculating or re-deriving it'
+)
+$ObsoleteOneCallContract = (
+	'the tool returns the complete attested bytes'
+)
+$ObsoleteProducerHashContract = (
+	'sha-256 equal to that consistent `base_sha256`'
+)
+foreach ($ProducerProfile in $ArtifactProducerProfiles) {
+	$ProducerProfileSource = Get-Content -Raw -LiteralPath (
+		Join-Path $RepositoryRoot $ProducerProfile.Path
+	)
+	$ProducerInstructionMatch = [regex]::Match(
+		$ProducerProfileSource,
+		'(?s)developer_instructions\s*=\s*"""\r?\n?(.*?)\r?\n?"""'
+	)
+	$EffectiveProducerPrompt = if ($ProducerInstructionMatch.Success) {
+		$ProducerInstructionMatch.Groups[1].Value.ToLowerInvariant()
+	}
+	else {
+		''
+	}
+	$MissingPagingMarkers = @($SourcePagingContractMarkers | Where-Object {
+		-not $EffectiveProducerPrompt.Contains($_)
+	})
+	Add-Result `
+		-Name "$($ProducerProfile.Name) effective prompt requires paged source reconstruction" `
+		-Passed (
+			$ProducerInstructionMatch.Success -and
+			$MissingPagingMarkers.Count -eq 0
+		) `
+		-Detail ([string]::Join(', ', $MissingPagingMarkers))
+	Add-Result `
+		-Name "$($ProducerProfile.Name) effective prompt rejects obsolete one-call source reading" `
+		-Passed (
+			$ProducerInstructionMatch.Success -and
+			-not $EffectiveProducerPrompt.Contains($ObsoleteOneCallContract)
+		)
+	Add-Result `
+		-Name "$($ProducerProfile.Name) effective prompt rejects producer-driven hash verification" `
+		-Passed (
+			$ProducerInstructionMatch.Success -and
+			-not $EffectiveProducerPrompt.Contains($ObsoleteProducerHashContract)
+		)
 }
 
 $WildcardWorkerHandoffPath = Join-Path $TestRoot 'worker-wildcard-scope.json'

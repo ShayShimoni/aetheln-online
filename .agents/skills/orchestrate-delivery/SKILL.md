@@ -159,6 +159,23 @@ Do not rely on prompt instructions alone:
 - Require worker, integrator, and fixer agents to return a structured
   `delivery_file_bundle_v1` full-file artifact. They reason about and author the
   change, but do not edit the worktree or hand-author a patch.
+- For worker, integrator, and fixer only, disable the default shell and expose
+  exactly one required launcher-owned MCP tool, `read_allowed_source_file`.
+  It accepts one exact existing allowed source path and a required
+  `offset_bytes`. Start at offset zero and request the exact prior
+  `end_offset_bytes` until `eof` to obtain deterministic pages of at most 8192
+  original bytes. UTF-8 pages end only at code-point boundaries; files that are
+  not valid UTF-8 use base64 pages. Require the single text result to equal the
+  canonical JSON serialization of `structuredContent` exactly, with stable
+  path, encoding, launcher-owned `base_sha256`, and `file_size_bytes` metadata
+  and exact sequential offsets. Reconstruct the complete bytes without gaps,
+  overlaps, reordering, or duplication. Require the final `end_offset_bytes`
+  and reconstructed byte count to equal `file_size_bytes` exactly, then use the
+  consistent launcher-owned `base_sha256` exactly without calculating or
+  re-deriving it. Keep web, apps, inherited MCP,
+  directory listing, arbitrary filesystem access, producer hashing, and every
+  write or command capability disabled. Non-producer stages receive no source
+  inspection server.
 - Capture the source commit, complete pre-existing worktree status and diff,
   allowed paths, and non-goals before launch.
 - Require the declared source commit to resolve to the repository's current
