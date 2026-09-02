@@ -295,6 +295,490 @@ $BaseWorkerHandoff = @{
 	baseline_diff = ''
 }
 
+$SupportedSourceInspectionProtocol = [ordered]@{
+	schema_version = 1
+	tool = 'read_allowed_source_file'
+	request_arguments = @('path', 'offset_bytes')
+	path_source = 'allowed_paths'
+	initial_offset_bytes = 0
+	next_offset_field = 'end_offset_bytes'
+	completion_field = 'eof'
+	maximum_page_bytes = 8192
+}
+
+$ProtocolWorker = $BaseWorkerHandoff.Clone()
+$ProtocolWorker.execution_route = 'planned'
+$ProtocolWorker.work_package = 'Explicit protocol package.'
+$ProtocolWorker.source_inspection_protocol = $SupportedSourceInspectionProtocol
+Invoke-AcceptanceCase `
+	-Name 'Exact source-inspection protocol is accepted' `
+	-Handoff $ProtocolWorker
+
+$UnsupportedProtocolWorker = Copy-JsonObject -Value $ProtocolWorker
+$UnsupportedProtocolWorker.source_inspection_protocol.request_arguments = @(
+	'path', 'offset_bytes', 'limit_bytes'
+)
+Invoke-RejectionCase `
+	-Name 'Unsupported source-inspection argument is rejected' `
+	-Json ($UnsupportedProtocolWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-unsupported-protocol'
+
+$ConflictingOperationalWorker = $BaseWorkerHandoff.Clone()
+$ConflictingOperationalWorker.execution_route = 'planned'
+$ConflictingOperationalWorker.work_package = (
+	'Require limit_bytes 2048 private-operational-value.'
+)
+Invoke-RejectionCase `
+	-Name 'Conflicting source-reader work package is rejected' `
+	-Json ($ConflictingOperationalWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-operational-value'
+
+$NestedConflictingOperationalWorker = $BaseWorkerHandoff.Clone()
+$NestedConflictingOperationalWorker.execution_route = 'planned'
+$NestedConflictingOperationalWorker.work_package = [ordered]@{
+	instructions = 'Require limit_bytes 2048 private-nested-operational-value.'
+}
+Invoke-RejectionCase `
+	-Name 'Nested conflicting source-reader work package is rejected' `
+	-Json ($NestedConflictingOperationalWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-nested-operational-value'
+
+$AlternateConflictingOperationalWorker = $BaseWorkerHandoff.Clone()
+$AlternateConflictingOperationalWorker.execution_route = 'planned'
+$AlternateConflictingOperationalWorker.work_package = (
+	'Require page_size_bytes 2048 private-alternate-operational-value.'
+)
+Invoke-RejectionCase `
+	-Name 'Alternate unsupported source-reader member is rejected' `
+	-Json ($AlternateConflictingOperationalWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-alternate-operational-value'
+
+$ResultOnlyRequestWorker = $BaseWorkerHandoff.Clone()
+$ResultOnlyRequestWorker.execution_route = 'planned'
+$ResultOnlyRequestWorker.work_package = [ordered]@{
+	instructions = (
+		'Every read_allowed_source_file request must include ' +
+		'maximum_page_bytes 8192 private-result-only-value.'
+	)
+}
+Invoke-RejectionCase `
+	-Name 'Result-only member required as source request input is rejected' `
+	-Json ($ResultOnlyRequestWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-result-only-value'
+
+$NonByteRequestWorker = $BaseWorkerHandoff.Clone()
+$NonByteRequestWorker.execution_route = 'planned'
+$NonByteRequestWorker.required_checks = @(
+	'Every read_allowed_source_file request must include timeout_seconds private-nonbyte-value.'
+)
+$NonByteRequestWorker.work_package = 'Inspect only attested sources.'
+Invoke-RejectionCase `
+	-Name 'Unsupported non-byte source request member in required checks is rejected' `
+	-Json ($NonByteRequestWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-nonbyte-value'
+
+$BareRequestMemberWorker = $BaseWorkerHandoff.Clone()
+$BareRequestMemberWorker.execution_route = 'planned'
+$BareRequestMemberWorker.work_package = (
+	'Every read_allowed_source_file request must include limit 2048 private-bare-value.'
+)
+Invoke-RejectionCase `
+	-Name 'Unsupported bare source request member is rejected' `
+	-Json ($BareRequestMemberWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-bare-value'
+
+$SplitRequestContextWorker = $BaseWorkerHandoff.Clone()
+$SplitRequestContextWorker.execution_route = 'planned'
+$SplitRequestContextWorker.required_checks = @(
+	'Use read_allowed_source_file.',
+	'Every request must include timeout_seconds private-split-value.'
+)
+$SplitRequestContextWorker.work_package = 'Inspect only attested sources.'
+Invoke-RejectionCase `
+	-Name 'Split source request context is rejected' `
+	-Json ($SplitRequestContextWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-split-value'
+
+$SplitStringRequestContextWorker = $BaseWorkerHandoff.Clone()
+$SplitStringRequestContextWorker.execution_route = 'planned'
+$SplitStringRequestContextWorker.work_package = (
+	'Use read_allowed_source_file. Every request must include timeout_seconds private-split-string.'
+)
+Invoke-RejectionCase `
+	-Name 'Split source request context in one string is rejected' `
+	-Json ($SplitStringRequestContextWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-split-string'
+
+$ToolWithUnsupportedWorker = $BaseWorkerHandoff.Clone()
+$ToolWithUnsupportedWorker.execution_route = 'planned'
+$ToolWithUnsupportedWorker.work_package = (
+	'Use read_allowed_source_file with path, offset_bytes, and timeout_seconds private-with-value.'
+)
+Invoke-RejectionCase `
+	-Name 'Direct source tool with unsupported member is rejected' `
+	-Json ($ToolWithUnsupportedWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-with-value'
+
+$ToolSignatureUnsupportedWorker = $BaseWorkerHandoff.Clone()
+$ToolSignatureUnsupportedWorker.execution_route = 'planned'
+$ToolSignatureUnsupportedWorker.work_package = (
+	'Invoke read_allowed_source_file(path, offset_bytes, timeout_seconds) private-signature-value.'
+)
+Invoke-RejectionCase `
+	-Name 'Source tool signature with unsupported member is rejected' `
+	-Json ($ToolSignatureUnsupportedWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-signature-value'
+
+$ToolWithSupportedWorker = $BaseWorkerHandoff.Clone()
+$ToolWithSupportedWorker.execution_route = 'planned'
+$ToolWithSupportedWorker.work_package = (
+	'Use read_allowed_source_file with path and offset_bytes.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Direct source tool with supported pair remains accepted' `
+	-Handoff $ToolWithSupportedWorker
+
+$ToolSignatureSupportedWorker = $BaseWorkerHandoff.Clone()
+$ToolSignatureSupportedWorker.execution_route = 'planned'
+$ToolSignatureSupportedWorker.work_package = (
+	'Invoke read_allowed_source_file(path, offset_bytes).'
+)
+Invoke-AcceptanceCase `
+	-Name 'Source tool signature with supported pair remains accepted' `
+	-Handoff $ToolSignatureSupportedWorker
+
+$SupportedPagingProseCases = @(
+	'Every read_allowed_source_file request must include path and offset_bytes, then start at zero and continue with end_offset_bytes until eof.',
+	'Call read_allowed_source_file with path and offset_bytes for each page.',
+	'Use read_allowed_source_file with path and offset_bytes until eof.'
+)
+for ($SupportedPagingIndex = 0; $SupportedPagingIndex -lt $SupportedPagingProseCases.Count; $SupportedPagingIndex++) {
+	$SupportedPagingProseWorker = $BaseWorkerHandoff.Clone()
+	$SupportedPagingProseWorker.execution_route = 'planned'
+	$SupportedPagingProseWorker.work_package = $SupportedPagingProseCases[$SupportedPagingIndex]
+	Invoke-AcceptanceCase `
+		-Name "Supported paging prose case $($SupportedPagingIndex + 1) remains accepted" `
+		-Handoff $SupportedPagingProseWorker
+}
+
+$UnsupportedPagingSuffixWorker = $BaseWorkerHandoff.Clone()
+$UnsupportedPagingSuffixWorker.execution_route = 'planned'
+$UnsupportedPagingSuffixWorker.work_package = (
+	'Use read_allowed_source_file with path and offset_bytes, then include timeout_seconds private-suffix-value.'
+)
+Invoke-RejectionCase `
+	-Name 'Unsupported request member in paging suffix is rejected' `
+	-Json ($UnsupportedPagingSuffixWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-suffix-value'
+
+$UnrelatedByteMetricWorker = $BaseWorkerHandoff.Clone()
+$UnrelatedByteMetricWorker.execution_route = 'planned'
+$UnrelatedByteMetricWorker.work_package = (
+	'Record the unrelated cache limit_bytes metric for the output bundle.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Unrelated byte metrics remain accepted' `
+	-Handoff $UnrelatedByteMetricWorker
+
+$SupportedRequestProseWorker = $BaseWorkerHandoff.Clone()
+$SupportedRequestProseWorker.execution_route = 'planned'
+$SupportedRequestProseWorker.work_package = (
+	'Every read_allowed_source_file request must include path and offset_bytes.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Supported source request prose remains accepted' `
+	-Handoff $SupportedRequestProseWorker
+
+$CombinedSupportedAndMetricWorker = $BaseWorkerHandoff.Clone()
+$CombinedSupportedAndMetricWorker.execution_route = 'planned'
+$CombinedSupportedAndMetricWorker.work_package = (
+	'Every read_allowed_source_file request must include path and offset_bytes. ' +
+	'Record unrelated output_size_bytes for the bundle.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Supported source prose and unrelated metric remain accepted together' `
+	-Handoff $CombinedSupportedAndMetricWorker
+
+$PlainUnsupportedMemberWorker = $BaseWorkerHandoff.Clone()
+$PlainUnsupportedMemberWorker.execution_route = 'planned'
+$PlainUnsupportedMemberWorker.work_package = (
+	'Every read_allowed_source_file request must include encoding private-plain-value.'
+)
+Invoke-RejectionCase `
+	-Name 'Unsupported plain source request member is rejected' `
+	-Json ($PlainUnsupportedMemberWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-plain-value'
+
+$UnsupportedSourcePhrasings = @(
+	'read_allowed_source_file accepts limit_bytes 2048 private-accepts-value.',
+	'The read_allowed_source_file input schema has limit_bytes 2048 private-schema-value.',
+	'For read_allowed_source_file, add limit_bytes 2048 private-add-value.',
+	'Call read_allowed_source_file and add limit_bytes 2048 private-call-add-value.'
+)
+for ($UnsupportedSourcePhrasingIndex = 0; $UnsupportedSourcePhrasingIndex -lt $UnsupportedSourcePhrasings.Count; $UnsupportedSourcePhrasingIndex++) {
+	$UnsupportedSourcePhrasingWorker = $BaseWorkerHandoff.Clone()
+	$UnsupportedSourcePhrasingWorker.execution_route = 'planned'
+	$UnsupportedSourcePhrasingWorker.work_package = $UnsupportedSourcePhrasings[$UnsupportedSourcePhrasingIndex]
+	Invoke-RejectionCase `
+		-Name "Unsupported source-reader phrasing case $($UnsupportedSourcePhrasingIndex + 1) is rejected" `
+		-Json ($UnsupportedSourcePhrasingWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker ('private-{0}-value' -f @('accepts', 'schema', 'add', 'call-add')[$UnsupportedSourcePhrasingIndex])
+}
+
+$UnrelatedSiblingRequestWorker = $BaseWorkerHandoff.Clone()
+$UnrelatedSiblingRequestWorker.execution_route = 'planned'
+$UnrelatedSiblingRequestWorker.work_package = [ordered]@{
+	source_rule = 'Use read_allowed_source_file with path and offset_bytes.'
+	backend_rule = 'The backend request must include id and token.'
+}
+Invoke-AcceptanceCase `
+	-Name 'Source context does not leak across unrelated object siblings' `
+	-Handoff $UnrelatedSiblingRequestWorker
+
+$RelatedSiblingRequestWorker = $BaseWorkerHandoff.Clone()
+$RelatedSiblingRequestWorker.execution_route = 'planned'
+$RelatedSiblingRequestWorker.work_package = [ordered]@{
+	mechanism = 'Use read_allowed_source_file with path and offset_bytes.'
+	continuation = 'For every later call, also pass timeout_seconds private-sibling-value.'
+}
+Invoke-RejectionCase `
+	-Name 'Source context carries across related structured instruction siblings' `
+	-Json ($RelatedSiblingRequestWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-sibling-value'
+
+foreach ($StructuredNumericMember in @('limit_bytes', 'timeout_seconds')) {
+	$StructuredNumericMemberWorker = $BaseWorkerHandoff.Clone()
+	$StructuredNumericMemberWorker.execution_route = 'planned'
+	$StructuredNumericMemberWorker.work_package = [ordered]@{
+		mechanism = 'Use read_allowed_source_file with path and offset_bytes.'
+	}
+	$StructuredNumericMemberWorker.work_package[$StructuredNumericMember] = 2048
+	Invoke-RejectionCase `
+		-Name "Structured numeric source member $StructuredNumericMember is rejected" `
+		-Json ($StructuredNumericMemberWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-structured-numeric-value'
+}
+
+$BenignStructuredCompanionWorker = $BaseWorkerHandoff.Clone()
+$BenignStructuredCompanionWorker.execution_route = 'planned'
+$BenignStructuredCompanionWorker.work_package = [ordered]@{
+	mechanism = 'Use read_allowed_source_file with path and offset_bytes.'
+	implementation = 'Update validation and tests.'
+}
+Invoke-AcceptanceCase `
+	-Name 'Canonical source protocol allows benign structured companion work' `
+	-Handoff $BenignStructuredCompanionWorker
+
+$BenignPageVerificationWorker = $BaseWorkerHandoff.Clone()
+$BenignPageVerificationWorker.execution_route = 'planned'
+$BenignPageVerificationWorker.work_package = [ordered]@{
+	mechanism = 'Use read_allowed_source_file with path and offset_bytes.'
+	verification = 'Verify reconstructed page hashes.'
+}
+Invoke-AcceptanceCase `
+	-Name 'Canonical source protocol allows benign page verification work' `
+	-Handoff $BenignPageVerificationWorker
+
+$BenignArrayCompanionWorker = $BaseWorkerHandoff.Clone()
+$BenignArrayCompanionWorker.execution_route = 'planned'
+$BenignArrayCompanionWorker.work_package = @(
+	'Use read_allowed_source_file with path and offset_bytes.',
+	'Update validation and run checks.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Canonical source protocol allows benign array companion work' `
+	-Handoff $BenignArrayCompanionWorker
+
+$NoncanonicalSourceCallWorker = $BaseWorkerHandoff.Clone()
+$NoncanonicalSourceCallWorker.execution_route = 'planned'
+$NoncanonicalSourceCallWorker.work_package = (
+	'Request chunk_bytes 2048 private-chunk-value on each read_allowed_source_file call.'
+)
+Invoke-RejectionCase `
+	-Name 'Noncanonical source-reader call instruction is rejected' `
+	-Json ($NoncanonicalSourceCallWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-chunk-value'
+
+$StructuredUnsupportedWorker = $BaseWorkerHandoff.Clone()
+$StructuredUnsupportedWorker.execution_route = 'planned'
+$StructuredUnsupportedWorker.work_package = [ordered]@{
+	tool = 'read_allowed_source_file'
+	timeout_seconds = 30
+}
+Invoke-RejectionCase `
+	-Name 'Structured unsupported source request member is rejected' `
+	-Json ($StructuredUnsupportedWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-structured-value'
+
+$NestedStructuredUnsupportedWorker = $BaseWorkerHandoff.Clone()
+$NestedStructuredUnsupportedWorker.execution_route = 'planned'
+$NestedStructuredUnsupportedWorker.work_package = [ordered]@{
+	tool_name = 'read_allowed_source_file'
+	arguments = [ordered]@{ path = 'AGENTS.md'; timeout_seconds = 30 }
+}
+Invoke-RejectionCase `
+	-Name 'Nested structured source request contract is rejected' `
+	-Json ($NestedStructuredUnsupportedWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-nested-structured-value'
+
+$CaseVariantStructuredUnsupportedWorker = $BaseWorkerHandoff.Clone()
+$CaseVariantStructuredUnsupportedWorker.execution_route = 'planned'
+$CaseVariantStructuredUnsupportedWorker.work_package = [ordered]@{
+	tool = 'READ_ALLOWED_SOURCE_FILE'
+	arguments = [ordered]@{
+		path = 'AGENTS.md'
+		offset_bytes = 0
+		timeout_seconds = 30
+	}
+}
+Invoke-RejectionCase `
+	-Name 'Case-variant structured source request contract is rejected' `
+	-Json ($CaseVariantStructuredUnsupportedWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-case-structured-value'
+
+$ClassifierStructuredUnsupportedWorker = $BaseWorkerHandoff.Clone()
+$ClassifierStructuredUnsupportedWorker.execution_route = 'planned'
+$ClassifierStructuredUnsupportedWorker.work_package = 'Inspect only attested sources.'
+$ClassifierStructuredUnsupportedWorker.classifier_evidence = [ordered]@{
+	tool = 'read_allowed_source_file'
+	arguments = [ordered]@{ path = 'docs/example.md'; timeout_seconds = 30 }
+}
+Invoke-RejectionCase `
+	-Name 'Structured source contract in classifier evidence is rejected' `
+	-Json ($ClassifierStructuredUnsupportedWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-classifier-structured-value'
+
+$BaselineSourceProtocolEvidenceWorker = $BaseWorkerHandoff.Clone()
+$BaselineSourceProtocolEvidenceWorker.execution_route = 'planned'
+$BaselineSourceProtocolEvidenceWorker.work_package = 'Apply the bounded change.'
+$BaselineSourceProtocolEvidenceWorker.baseline_diff = (
+	'diff evidence documents that read_allowed_source_file once accepted limit_bytes.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Baseline diff source protocol prose remains inert evidence' `
+	-Handoff $BaselineSourceProtocolEvidenceWorker
+
+$HistoricalTicketSourceProtocolWorker = $BaseWorkerHandoff.Clone()
+$HistoricalTicketSourceProtocolWorker.execution_route = 'planned'
+$HistoricalTicketSourceProtocolWorker.work_package = 'Apply the normalized bounded change.'
+$HistoricalTicketSourceProtocolWorker.ticket = (
+	'Historical evidence: the prior replacement handoff required limit_bytes 2048, ' +
+	'while the closed source reader accepted path and offset_bytes.'
+)
+$HistoricalTicketSourceProtocolWorker.acceptance_criteria = @(
+	'Reproduce evidence that the old request required limit_bytes without reusing it.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Historical ticket and acceptance prose remain inert evidence' `
+	-Handoff $HistoricalTicketSourceProtocolWorker
+
+$HistoricalFixerFinding = @{
+	schema_version = 1
+	stage = 'fixer'
+	run_id = 'fixer-historical-source-finding'
+	workspace_root = $RepositoryRoot
+	source_commit = '0000000000000000000000000000000000000000'
+	ticket = 'Issue #151'
+	acceptance_criteria = @('Repair the closed source protocol.')
+	canonical_sources = @('AGENTS.md')
+	output_contract = 'Return a corrected candidate artifact.'
+	candidate_artifact = 'candidate.patch'
+	accepted_findings = @(
+		'Remove the prior requirement to pass limit_bytes to read_allowed_source_file.'
+	)
+	allowed_paths = @('docs/example.md')
+	non_goals = @('Unrelated delivery changes')
+	required_checks = @('Validate the corrected artifact.')
+	baseline_status = 'clean'
+	baseline_diff = ''
+}
+Invoke-AcceptanceCase `
+	-Name 'Historical fixer finding remains inert evidence' `
+	-Handoff $HistoricalFixerFinding `
+	-ExpectedStage 'fixer'
+
+$OperationalFixerFinding = $HistoricalFixerFinding.Clone()
+$OperationalFixerFinding.run_id = 'fixer-operational-source-finding'
+$OperationalFixerFinding.accepted_findings = @(
+	'For every read_allowed_source_file call, also pass timeout_seconds private-fixer-value.'
+)
+Invoke-RejectionCase `
+	-Name 'Operational fixer source finding is rejected' `
+	-Json ($OperationalFixerFinding | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-fixer-value'
+
+$MixedCorrectiveSourceFindings = @(
+	'Remove limit_bytes from read_allowed_source_file, but pass timeout_seconds private-mixed-value instead.',
+	'Do not pass limit_bytes to read_allowed_source_file; require timeout_seconds private-split-correction instead.',
+	'Use read_allowed_source_file with path and offset_bytes; attach timeout_seconds private-synonym-value afterward.',
+	'Remove limit_bytes from read_allowed_source_file, plus pass timeout_seconds private-plus-value.',
+	'Remove limit_bytes from read_allowed_source_file while using timeout_seconds private-while-value.',
+	'Remove limit_bytes from read_allowed_source_file, yet require timeout_seconds private-yet-value.',
+	'Remove limit_bytes from read_allowed_source_file, plus pass timeout private-plain-timeout-value.',
+	'Remove limit_bytes from read_allowed_source_file while using encoding private-plain-encoding-value.',
+	'Remove page_size_bytes from read_allowed_source_file, yet add limit private-plain-limit-value.'
+)
+for ($MixedCorrectiveIndex = 0; $MixedCorrectiveIndex -lt $MixedCorrectiveSourceFindings.Count; $MixedCorrectiveIndex++) {
+	$MixedCorrectiveFixer = $HistoricalFixerFinding.Clone()
+	$MixedCorrectiveFixer.run_id = "fixer-mixed-corrective-$MixedCorrectiveIndex"
+	$MixedCorrectiveFixer.accepted_findings = @($MixedCorrectiveSourceFindings[$MixedCorrectiveIndex])
+	Invoke-RejectionCase `
+		-Name "Mixed corrective source finding case $($MixedCorrectiveIndex + 1) is rejected" `
+		-Json ($MixedCorrectiveFixer | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker @(
+			'private-mixed-value',
+			'private-split-correction',
+			'private-synonym-value',
+			'private-plus-value',
+			'private-while-value',
+			'private-yet-value',
+			'private-plain-timeout-value',
+			'private-plain-encoding-value',
+			'private-plain-limit-value'
+		)[$MixedCorrectiveIndex]
+}
+
+$ExtraProtocolMemberWorker = Copy-JsonObject -Value $ProtocolWorker
+$ExtraProtocolMemberWorker.source_inspection_protocol | Add-Member `
+	-NotePropertyName timeout_seconds -NotePropertyValue 30
+Invoke-RejectionCase `
+	-Name 'Extra source protocol member uses sanitized protocol rejection' `
+	-Json ($ExtraProtocolMemberWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-extra-protocol-value'
+
+$SupportedPagingOperationalWorker = $BaseWorkerHandoff.Clone()
+$SupportedPagingOperationalWorker.execution_route = 'planned'
+$SupportedPagingOperationalWorker.work_package = (
+	'Start offset_bytes at zero and continue with end_offset_bytes until eof.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Supported source-reader paging members remain accepted' `
+	-Handoff $SupportedPagingOperationalWorker
+
 $LegacyPlanned = $BaseWorkerHandoff.Clone()
 $LegacyPlanned.work_package = 'Legacy planned package.'
 Invoke-AcceptanceCase -Name 'Legacy planned worker is accepted' -Handoff $LegacyPlanned

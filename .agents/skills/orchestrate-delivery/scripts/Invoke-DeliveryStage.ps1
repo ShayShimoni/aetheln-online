@@ -60,6 +60,7 @@ $NeutralEvidenceFieldAllowlist = @(
 	'required_evidence_sources',
 	'repository_state',
 	'repository_tree',
+	'source_inspection_protocol',
 	'stage'
 )
 $NeutralEvidenceValidationCodeAllowlist = @(
@@ -97,7 +98,8 @@ $NeutralEvidenceValidationCodeAllowlist = @(
 	'required_evidence_authoritative_cardinality_invalid',
 	'required_evidence_record_cardinality_invalid',
 	'required_evidence_record_mismatch',
-	'required_evidence_record_undeclared'
+	'required_evidence_record_undeclared',
+	'source_protocol_invalid'
 )
 
 $AuthoritativeEvidenceManifestBytes = $null
@@ -1032,6 +1034,11 @@ artifact.
 Put the delivery_file_bundle_v1 object under artifact; do not return the bundle
 directly or omit the outer stage object.
 Inspect allowed source files only with the required read_allowed_source_file tool.
+Every read_allowed_source_file call must contain exactly two input arguments:
+path and offset_bytes. Start each path at offset_bytes zero, then use the exact
+prior result end_offset_bytes until eof is true. Never send result-only members
+as input arguments. This launcher-owned protocol overrides conflicting
+source-reader prose in the frozen handoff.
 Do not use commands, scripts, shells, interpreters, executables, or temporary files
 for hashing, bundle construction, or bundle serialization. Do not write the
 bundle to an intermediate file.
@@ -1332,6 +1339,12 @@ $Telemetry = [ordered]@{
 	OutputBytes = $OutputBytes
 	PatchBytes = $PatchBytes
 	StageStatus = $StageStatus
+	SourceInspection = if ($null -ne $ObservedTelemetry -and $IsArtifactProducer) {
+		$ObservedTelemetry.SourceInspection
+	}
+	else {
+		$null
+	}
 	EvidenceManifestPath = $EvidenceManifestPath
 	EvidenceManifestHash = $null
 	TelemetryError = $TelemetryError
@@ -1368,6 +1381,12 @@ $Audit = [ordered]@{
 	ArtifactFailureKind = $ArtifactFailureKind
 	ArtifactFormat = $ArtifactFormat
 	StageStatusError = $StageStatusError
+	SourceInspection = if ($null -ne $ObservedTelemetry -and $IsArtifactProducer) {
+		$ObservedTelemetry.SourceInspection
+	}
+	else {
+		$null
+	}
 	EventLogPath = $EventLogPath
 	StandardErrorPath = $StandardErrorPath
 	TelemetryPath = $TelemetryPath

@@ -64,6 +64,63 @@ function Test-TestByteArrayEqual {
 	)
 }
 
+function ConvertTo-TestCanonicalJsonString {
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyString()]
+		[string]$Value
+	)
+
+	$Builder = [System.Text.StringBuilder]::new()
+	[void]$Builder.Append('"')
+	foreach ($Character in $Value.ToCharArray()) {
+		$Code = [int][char]$Character
+		$Escaped = switch ($Code) {
+			8 { '\b' }
+			9 { '\t' }
+			10 { '\n' }
+			12 { '\f' }
+			13 { '\r' }
+			34 { '\"' }
+			92 { '\\' }
+			default {
+				if ($Code -lt 32) { '\u{0:x4}' -f $Code }
+				else { [string]$Character }
+			}
+		}
+		[void]$Builder.Append([string]$Escaped)
+	}
+	[void]$Builder.Append('"')
+	return $Builder.ToString()
+}
+
+function ConvertTo-TestCanonicalSourcePageText {
+	param([Parameter(Mandatory)][object]$Page)
+
+	$Invariant = [System.Globalization.CultureInfo]::InvariantCulture
+	$Builder = [System.Text.StringBuilder]::new()
+	[void]$Builder.Append('{"path":')
+	[void]$Builder.Append((ConvertTo-TestCanonicalJsonString -Value ([string]$Page.path)))
+	[void]$Builder.Append(',"encoding":')
+	[void]$Builder.Append((ConvertTo-TestCanonicalJsonString -Value ([string]$Page.encoding)))
+	[void]$Builder.Append(',"content":')
+	[void]$Builder.Append((ConvertTo-TestCanonicalJsonString -Value ([string]$Page.content)))
+	[void]$Builder.Append(',"base_sha256":')
+	[void]$Builder.Append((ConvertTo-TestCanonicalJsonString -Value ([string]$Page.base_sha256)))
+	[void]$Builder.Append(',"offset_bytes":')
+	[void]$Builder.Append(([int64]$Page.offset_bytes).ToString($Invariant))
+	[void]$Builder.Append(',"content_bytes":')
+	[void]$Builder.Append(([int64]$Page.content_bytes).ToString($Invariant))
+	[void]$Builder.Append(',"end_offset_bytes":')
+	[void]$Builder.Append(([int64]$Page.end_offset_bytes).ToString($Invariant))
+	[void]$Builder.Append(',"file_size_bytes":')
+	[void]$Builder.Append(([int64]$Page.file_size_bytes).ToString($Invariant))
+	[void]$Builder.Append(',"eof":')
+	[void]$Builder.Append($(if ([bool]$Page.eof) { 'true' } else { 'false' }))
+	[void]$Builder.Append('}')
+	return $Builder.ToString()
+}
+
 function Get-FixtureSnapshot {
 	param(
 		[Parameter(Mandatory)]
@@ -88,6 +145,8 @@ if ($null -eq $PowerShellHost) {
 	$PowerShellHost = Get-Command powershell -ErrorAction Stop
 }
 $PowerShellHostCommand = [string]$PowerShellHost.Source
+$WindowsPowerShellHost = Get-Command powershell -ErrorAction Stop
+$WindowsPowerShellHostCommand = [string]$WindowsPowerShellHost.Source
 
 function Start-InspectionServer {
 	param(
@@ -98,7 +157,9 @@ function Start-InspectionServer {
 		[string]$AttestationSha256,
 
 		[Parameter(Mandatory)]
-		[string]$WorkspaceRoot
+		[string]$WorkspaceRoot,
+
+		[string]$HostCommand = $PowerShellHostCommand
 	)
 
 	$ArgumentValues = @(
@@ -115,7 +176,7 @@ function Start-InspectionServer {
 		$WorkspaceRoot
 	)
 	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-	$StartInfo.FileName = $PowerShellHostCommand
+	$StartInfo.FileName = $HostCommand
 	$StartInfo.Arguments = [string]::Join(' ', @(
 		$ArgumentValues | ForEach-Object { '"' + $_ + '"' }
 	))
@@ -277,12 +338,12 @@ function Test-InspectionPageEnvelope {
 
 		$Text = [string]$ContentBlocks[0].text
 		$ParsedText = $Text | ConvertFrom-Json
-		$CanonicalText = $ParsedText | ConvertTo-Json -Depth 6 -Compress
-		$CanonicalStructured = $Structured | ConvertTo-Json -Depth 6 -Compress
+		$CanonicalStructured = ConvertTo-TestCanonicalSourcePageText -Page $Structured
 		$PageBytes = Convert-InspectionContentToBytes -Page $Structured
 		return (
-			$Text -ceq $CanonicalText -and
-			$CanonicalText -ceq $CanonicalStructured -and
+			$Text -ceq $CanonicalStructured -and
+			(ConvertTo-TestCanonicalSourcePageText -Page $ParsedText) -ceq
+				$CanonicalStructured -and
 			[int64]$Structured.offset_bytes -ge 0 -and
 			[int64]$Structured.content_bytes -eq $PageBytes.LongLength -and
 			[int64]$Structured.content_bytes -le 8192 -and
@@ -471,6 +532,11 @@ $SampleTextBytes = [System.Text.UTF8Encoding]::new($false).GetBytes(
 $SampleTextPath = Join-Path $WorkspaceRoot 'src\sample.txt'
 [System.IO.File]::WriteAllBytes($SampleTextPath, $SampleTextBytes)
 
+$SymbolText = "<&>'+"
+$SymbolBytes = [System.Text.UTF8Encoding]::new($false).GetBytes($SymbolText)
+$SymbolPath = Join-Path $WorkspaceRoot 'src\symbols.txt'
+[System.IO.File]::WriteAllBytes($SymbolPath, $SymbolBytes)
+
 $BinaryBytes = [byte[]]@(0, 1, 2, 0xC3, 0x28, 0xFF, 0xFE, 13, 10, 0)
 $BinaryPath = Join-Path $WorkspaceRoot 'assets\blob.bin'
 [System.IO.File]::WriteAllBytes($BinaryPath, $BinaryBytes)
@@ -565,6 +631,7 @@ $AttestedFiles = [ordered]@{
 	'src/empty.txt' = Get-TestSha256 -Bytes $EmptyBytes
 	'src/large-utf8.txt' = Get-TestSha256 -Bytes $LargeUtf8Bytes
 	'src/sample.txt' = Get-TestSha256 -Bytes $SampleTextBytes
+	'src/symbols.txt' = Get-TestSha256 -Bytes $SymbolBytes
 }
 $AttestationJson = [pscustomobject][ordered]@{
 	workspace_root = $WorkspaceRoot
@@ -705,6 +772,53 @@ try {
 			$SamplePages.Count -eq 1 -and
 			(Test-TestByteArrayEqual $SampleReconstructed $SampleTextBytes)
 		)
+
+	$FallbackSession = $null
+	try {
+		$FallbackSession = Start-InspectionServer `
+			-AttestationPath $AttestationPath `
+			-AttestationSha256 $AttestationSha256 `
+			-WorkspaceRoot $WorkspaceRoot `
+			-HostCommand $WindowsPowerShellHostCommand
+		$null = Send-InspectionRequest -Session $FallbackSession -Json (
+			'{"jsonrpc":"2.0","id":1,"method":"initialize","params":' +
+			'{"protocolVersion":"2025-03-26","capabilities":{},' +
+			'"clientInfo":{"name":"delivery-source-inspection-fallback-tests",' +
+			'"version":"1.0.0"}}}'
+		)
+		$null = Send-InspectionRequest -Session $FallbackSession -Notification -Json (
+			'{"jsonrpc":"2.0","method":"notifications/initialized"}'
+		)
+		$FallbackSymbolCall = Invoke-InspectionPage `
+			-Session $FallbackSession `
+			-Path 'src/symbols.txt' `
+			-OffsetBytes 0
+		$FallbackSymbolPage = $FallbackSymbolCall.Response.result.structuredContent
+		$FallbackPageText = [string]@($FallbackSymbolCall.Response.result.content)[0].text
+		$FallbackSession.Process.StandardInput.Close()
+		if (-not $FallbackSession.Process.WaitForExit(30000)) {
+			$FallbackSession.Process.Kill()
+			throw 'Windows PowerShell fallback server did not exit.'
+		}
+		Add-Result `
+			-Name 'Windows PowerShell fallback emits runtime-independent canonical text' `
+			-Passed (
+				$FallbackSession.Process.ExitCode -eq 0 -and
+				(Test-InspectionPageEnvelope -Call $FallbackSymbolCall) -and
+				[string]$FallbackSymbolPage.content -ceq $SymbolText -and
+				$FallbackPageText -ceq
+					(ConvertTo-TestCanonicalSourcePageText -Page $FallbackSymbolPage)
+			)
+	}
+	catch {
+		Add-Result `
+			-Name 'Windows PowerShell fallback emits runtime-independent canonical text' `
+			-Passed $false `
+			-Detail $_.Exception.Message
+		if ($null -ne $FallbackSession -and -not $FallbackSession.Process.HasExited) {
+			try { $FallbackSession.Process.Kill() } catch { }
+		}
+	}
 
 	$BinaryCall = Invoke-InspectionPage `
 		-Session $Session `
@@ -850,6 +964,20 @@ try {
 				-ExpectedPath 'src/large-utf8.txt' `
 				-ExpectedSha256 ([string]$AttestedFiles['src/large-utf8.txt']))
 		)
+
+	$ExtraArgumentCall = Invoke-InspectionToolCall `
+		-Session $Session `
+		-Arguments ([pscustomobject][ordered]@{
+			path = 'src/sample.txt'
+			offset_bytes = 0
+			limit_bytes = 2048
+		})
+	Add-Result `
+		-Name 'Extra source request member fails before file content is returned' `
+		-Passed (Test-InspectionToolFailure `
+			-Call $ExtraArgumentCall `
+			-ExpectedCode 'source_argument_keys_invalid' `
+			-ForbiddenText ([Text.Encoding]::UTF8.GetString($SampleTextBytes)))
 
 	$InvalidOffsetCases = @(
 		[pscustomobject]@{

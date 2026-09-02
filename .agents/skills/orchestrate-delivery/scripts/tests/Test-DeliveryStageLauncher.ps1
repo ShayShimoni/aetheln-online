@@ -1271,6 +1271,88 @@ $WorkerHandoffPath = Join-Path $TestRoot 'worker.json'
 	baseline_diff = $WorkerBaselineDiff
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $WorkerHandoffPath -Encoding UTF8
 
+$ConflictingSourceProtocolHandoffPath = Join-Path $TestRoot 'worker-source-protocol-conflict.json'
+$ConflictingSourceProtocolHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$ConflictingSourceProtocolHandoff.run_id = 'test-worker-source-protocol-conflict'
+$ConflictingSourceProtocolHandoff.work_package = (
+	'Require limit_bytes 2048 private-source-protocol-value.'
+)
+$ConflictingSourceProtocolHandoff | ConvertTo-Json -Depth 8 | Set-Content `
+	-LiteralPath $ConflictingSourceProtocolHandoffPath -Encoding UTF8
+$ConflictingSourceProtocolCarrier = @()
+$ConflictingSourceProtocolFailure = try {
+	& $LaunchScript `
+		-HandoffPath $ConflictingSourceProtocolHandoffPath `
+		-OutVariable ConflictingSourceProtocolCarrier |
+		Out-Null
+	$false
+}
+catch {
+	$_.Exception.Message -match 'source_protocol_invalid'
+}
+$RetryNeutralSourceProtocolCarrier = @(
+	$ConflictingSourceProtocolCarrier | Where-Object {
+		$_.phase -ceq 'preflight' -and
+		$_.code -ceq 'source_protocol_invalid' -and
+		$_.field -ceq 'source_inspection_protocol' -and
+		$_.child_launched -eq $false -and
+		$_.attempt_consumed -eq $false
+	}
+)
+Add-Result `
+	-Name 'Conflicting source-reader requirement is retry-neutrally rejected before launch' `
+	-Passed (
+		$ConflictingSourceProtocolFailure -and
+		$RetryNeutralSourceProtocolCarrier.Count -eq 1
+	)
+
+$MalformedSourceProtocolHandoffPath = Join-Path $TestRoot 'worker-source-protocol-extra.json'
+$MalformedSourceProtocolHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$MalformedSourceProtocolHandoff.run_id = 'test-worker-source-protocol-extra'
+$MalformedSourceProtocolHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue ([pscustomobject][ordered]@{
+		schema_version = 1
+		tool = 'read_allowed_source_file'
+		request_arguments = @('path', 'offset_bytes')
+		path_source = 'allowed_paths'
+		initial_offset_bytes = 0
+		next_offset_field = 'end_offset_bytes'
+		completion_field = 'eof'
+		maximum_page_bytes = 8192
+		timeout_seconds = 30
+	})
+$MalformedSourceProtocolHandoff | ConvertTo-Json -Depth 8 | Set-Content `
+	-LiteralPath $MalformedSourceProtocolHandoffPath -Encoding UTF8
+$MalformedSourceProtocolCarrier = @()
+$MalformedSourceProtocolFailure = try {
+	& $LaunchScript `
+		-HandoffPath $MalformedSourceProtocolHandoffPath `
+		-OutVariable MalformedSourceProtocolCarrier |
+		Out-Null
+	$false
+}
+catch {
+	$_.Exception.Message -match 'source_protocol_invalid'
+}
+$RetryNeutralMalformedProtocolCarrier = @(
+	$MalformedSourceProtocolCarrier | Where-Object {
+		$_.phase -ceq 'preflight' -and
+		$_.code -ceq 'source_protocol_invalid' -and
+		$_.field -ceq 'source_inspection_protocol' -and
+		$_.child_launched -eq $false -and
+		$_.attempt_consumed -eq $false
+	}
+)
+Add-Result `
+	-Name 'Malformed source protocol emits retry-neutral preflight evidence' `
+	-Passed (
+		$MalformedSourceProtocolFailure -and
+		$RetryNeutralMalformedProtocolCarrier.Count -eq 1
+	)
+
 $MismatchedWorkerPath = Join-Path $TestRoot 'worker-baseline-mismatch.json'
 $MismatchedWorker = Get-Content -Raw -LiteralPath $WorkerHandoffPath | ConvertFrom-Json
 $MismatchedWorker.run_id = 'test-worker-baseline-mismatch'
@@ -1434,6 +1516,23 @@ public static class FixtureCodex
 				normalizedPrompt.IndexOf(
 					"Inspect allowed source files only with the required " +
 					"read_allowed_source_file tool.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0 ||
+				normalizedPrompt.IndexOf(
+					"Every read_allowed_source_file call must contain exactly two " +
+					"input arguments: path and offset_bytes.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0 ||
+				normalizedPrompt.IndexOf(
+					"Start each path at offset_bytes zero, then use the exact prior " +
+					"result end_offset_bytes until eof is true.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0 ||
+				normalizedPrompt.IndexOf(
+					"Never send result-only members as input arguments.",
 					producerContractIndex,
 					StringComparison.Ordinal
 				) < 0 ||
@@ -3806,7 +3905,536 @@ Add-Result `
 	-Name 'Event payload text is not exposed' `
 	-Passed (
 		$LeakingTelemetryJson -notmatch 'do-not-expose-command' -and
-		$LeakingTelemetryJson -notmatch 'do-not-expose-message'
+		$LeakingTelemetryJson -notmatch 'do-not-expose-message' -and
+		$LeakingTelemetryJson -match 'no_tool_call'
+	)
+
+$ArgumentFailureEventPath = Join-Path $TestRoot 'source-argument-failure-events.jsonl'
+@'
+{"type":"item.started","item":{"id":"call-1","type":"mcp_tool_call","server":"source_inspection","tool":"read_allowed_source_file","arguments":{"path":"AGENTS.md","offset_bytes":0,"limit_bytes":2048},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"call-1","type":"mcp_tool_call","server":"source_inspection","tool":"read_allowed_source_file","arguments":{"path":"AGENTS.md","offset_bytes":0,"limit_bytes":2048},"result":null,"error":{"message":"do-not-retain-invalid-argument"},"status":"failed"}}
+'@ | Set-Content -LiteralPath $ArgumentFailureEventPath -Encoding UTF8
+$ArgumentFailureTelemetry = & $EventTelemetryScript -EventLogPath $ArgumentFailureEventPath
+Add-Result `
+	-Name 'Source inspection argument failures are classified without payload leakage' `
+	-Passed (
+		$ArgumentFailureTelemetry.SourceInspection.Outcome -ceq 'argument_validation_failed' -and
+		$ArgumentFailureTelemetry.SourceInspection.CallCount -eq 1 -and
+		((& $EventTelemetryScript -EventLogPath $ArgumentFailureEventPath |
+			ConvertTo-Json -Compress) -notmatch 'do-not-retain-invalid-argument')
+	)
+
+foreach ($OutOfRangeOffset in @(
+	'9223372036854775808',
+	'-9223372036854775809'
+)) {
+	$OutOfRangeOffsetEventPath = Join-Path $TestRoot (
+		'source-offset-int64-range-{0}-events.jsonl' -f
+		($OutOfRangeOffset -replace '-', 'negative-')
+	)
+	$OutOfRangeOffsetEvents = @'
+{"type":"item.started","item":{"id":"range-call","type":"mcp_tool_call","server":"source_inspection","tool":"read_allowed_source_file","arguments":{"path":"AGENTS.md","offset_bytes":__OFFSET__},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"range-call","type":"mcp_tool_call","server":"source_inspection","tool":"read_allowed_source_file","arguments":{"path":"AGENTS.md","offset_bytes":__OFFSET__},"result":null,"error":{"message":"do-not-retain-range-error"},"status":"failed"}}
+'@ -replace '__OFFSET__', $OutOfRangeOffset
+	$OutOfRangeOffsetEvents | Set-Content `
+		-LiteralPath $OutOfRangeOffsetEventPath -Encoding UTF8
+	$OutOfRangeOffsetTelemetry = & $EventTelemetryScript `
+		-EventLogPath $OutOfRangeOffsetEventPath
+	Add-Result `
+		-Name "Out-of-Int64 source offset $OutOfRangeOffset is classified safely" `
+		-Passed (
+			$OutOfRangeOffsetTelemetry.SourceInspection.Outcome -ceq
+				'argument_validation_failed' -and
+			((& $EventTelemetryScript -EventLogPath $OutOfRangeOffsetEventPath |
+				ConvertTo-Json -Compress) -notmatch 'do-not-retain-range-error')
+		)
+}
+
+foreach ($OffsetFailureCode in @(
+	'source_offset_out_of_range',
+	'source_offset_utf8_boundary'
+)) {
+	$OffsetFailureEventPath = Join-Path $TestRoot "$OffsetFailureCode-events.jsonl"
+	$OffsetFailureEvents = @(
+		[ordered]@{
+			type = 'item.started'
+			item = [ordered]@{
+				id = $OffsetFailureCode
+				type = 'mcp_tool_call'
+				server = 'source_inspection'
+				tool = 'read_allowed_source_file'
+				arguments = [ordered]@{ path = 'AGENTS.md'; offset_bytes = 0 }
+				status = 'in_progress'
+			}
+		}
+		[ordered]@{
+			type = 'item.completed'
+			item = [ordered]@{
+				id = $OffsetFailureCode
+				type = 'mcp_tool_call'
+				server = 'source_inspection'
+				tool = 'read_allowed_source_file'
+				arguments = [ordered]@{ path = 'AGENTS.md'; offset_bytes = 0 }
+				result = [ordered]@{
+					content = @([ordered]@{
+						type = 'text'
+						text = "[$OffsetFailureCode] do-not-retain-offset-message"
+					})
+					isError = $true
+				}
+				error = $null
+				status = 'completed'
+			}
+		}
+	) | ForEach-Object { $_ | ConvertTo-Json -Depth 8 -Compress }
+	$OffsetFailureEvents | Set-Content -LiteralPath $OffsetFailureEventPath -Encoding UTF8
+	$OffsetFailureTelemetry = & $EventTelemetryScript -EventLogPath $OffsetFailureEventPath
+	Add-Result `
+		-Name "$OffsetFailureCode is classified as an argument validation failure" `
+		-Passed (
+			$OffsetFailureTelemetry.SourceInspection.Outcome -ceq 'argument_validation_failed' -and
+			((& $EventTelemetryScript -EventLogPath $OffsetFailureEventPath |
+				ConvertTo-Json -Compress) -notmatch 'do-not-retain-offset-message')
+		)
+}
+
+function New-TestSourcePageEventJson {
+	param(
+		[Parameter(Mandatory)][string]$Id,
+		[Parameter(Mandatory)][string]$Path,
+		[Parameter(Mandatory)][string]$Encoding,
+		[Parameter(Mandatory)][string]$Content,
+		[Parameter(Mandatory)][string]$BaseSha256,
+		[Parameter(Mandatory)][int64]$OffsetBytes,
+		[Parameter(Mandatory)][int64]$ContentBytes,
+		[Parameter(Mandatory)][int64]$EndOffsetBytes,
+		[Parameter(Mandatory)][int64]$FileSizeBytes,
+		[Parameter(Mandatory)][bool]$Eof
+	)
+
+	$Page = [ordered]@{
+		path = $Path
+		encoding = $Encoding
+		content = $Content
+		base_sha256 = $BaseSha256
+		offset_bytes = $OffsetBytes
+		content_bytes = $ContentBytes
+		end_offset_bytes = $EndOffsetBytes
+		file_size_bytes = $FileSizeBytes
+		eof = $Eof
+	}
+	$PageText = $Page | ConvertTo-Json -Compress
+	$StartedEvent = [ordered]@{
+		type = 'item.started'
+		item = [ordered]@{
+			id = $Id
+			type = 'mcp_tool_call'
+			server = 'source_inspection'
+			tool = 'read_allowed_source_file'
+			arguments = [ordered]@{ path = $Path; offset_bytes = $OffsetBytes }
+			status = 'in_progress'
+		}
+	} | ConvertTo-Json -Depth 8 -Compress
+	$CompletedEvent = [ordered]@{
+		type = 'item.completed'
+		item = [ordered]@{
+			id = $Id
+			type = 'mcp_tool_call'
+			server = 'source_inspection'
+			tool = 'read_allowed_source_file'
+			arguments = [ordered]@{ path = $Path; offset_bytes = $OffsetBytes }
+			result = [ordered]@{
+				content = @([ordered]@{ type = 'text'; text = $PageText })
+				structured_content = $Page
+				isError = $false
+			}
+			error = $null
+			status = 'completed'
+		}
+	} | ConvertTo-Json -Depth 8 -Compress
+	return @($StartedEvent, $CompletedEvent)
+}
+
+$IncompletePaginationEventPath = Join-Path $TestRoot 'source-incomplete-pagination-events.jsonl'
+@(
+	New-TestSourcePageEventJson -Id 'page-1' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'abcd' `
+		-BaseSha256 '72399361da6a7754fec986dca5b7cbaf1c810a28ded4abaf56b2106d06cb78b0' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 10 -Eof $false
+	New-TestSourcePageEventJson -Id 'page-2' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'efgh' `
+		-BaseSha256 '72399361da6a7754fec986dca5b7cbaf1c810a28ded4abaf56b2106d06cb78b0' `
+		-OffsetBytes 4 -ContentBytes 4 -EndOffsetBytes 8 -FileSizeBytes 10 -Eof $false
+) | Set-Content -LiteralPath $IncompletePaginationEventPath -Encoding UTF8
+$IncompletePaginationTelemetry = & $EventTelemetryScript -EventLogPath $IncompletePaginationEventPath
+Add-Result `
+	-Name 'Incomplete source pagination is classified from contiguous metadata' `
+	-Passed (
+		$IncompletePaginationTelemetry.SourceInspection.Outcome -ceq 'incomplete_pagination' -and
+		$IncompletePaginationTelemetry.SourceInspection.CallCount -eq 2 -and
+		$IncompletePaginationTelemetry.SourceInspection.CompletedPageCount -eq 2 -and
+		$IncompletePaginationTelemetry.SourceInspection.CompletedPathCount -eq 0
+	)
+
+$CompletePaginationEventPath = Join-Path $TestRoot 'source-complete-pagination-events.jsonl'
+New-TestSourcePageEventJson -Id 'page-complete' -Path 'AGENTS.md' -Encoding 'utf8' `
+	-Content 'data' `
+	-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+	-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true |
+	Set-Content -LiteralPath $CompletePaginationEventPath -Encoding UTF8
+$CompletePaginationTelemetry = & $EventTelemetryScript -EventLogPath $CompletePaginationEventPath
+Add-Result `
+	-Name 'Complete source pagination is classified at exact EOF' `
+	-Passed (
+		$CompletePaginationTelemetry.SourceInspection.Outcome -ceq 'complete_pagination' -and
+		$CompletePaginationTelemetry.SourceInspection.CompletedPageCount -eq 1 -and
+		$CompletePaginationTelemetry.SourceInspection.CompletedPathCount -eq 1
+	)
+
+$HtmlSensitiveContent = "<&>'+"
+$HtmlSensitiveBytes = [Text.Encoding]::UTF8.GetBytes($HtmlSensitiveContent)
+$HtmlSensitiveHash = [BitConverter]::ToString(
+	([Security.Cryptography.SHA256]::Create()).ComputeHash($HtmlSensitiveBytes)
+).Replace('-', '').ToLowerInvariant()
+$HtmlSensitiveEvents = @(
+	New-TestSourcePageEventJson -Id 'html-sensitive' -Path 'Symbols.txt' -Encoding 'utf8' `
+		-Content $HtmlSensitiveContent -BaseSha256 $HtmlSensitiveHash `
+		-OffsetBytes 0 -ContentBytes 5 -EndOffsetBytes 5 -FileSizeBytes 5 -Eof $true
+)
+$HtmlSensitiveCompletion = $HtmlSensitiveEvents[1] | ConvertFrom-Json
+$HtmlSensitiveCompletion.item.result.content[0].text = (
+	'{"path":"Symbols.txt","encoding":"utf8","content":"<&>''+",' +
+	'"base_sha256":"' + $HtmlSensitiveHash + '","offset_bytes":0,' +
+	'"content_bytes":5,"end_offset_bytes":5,"file_size_bytes":5,"eof":true}'
+)
+$HtmlSensitiveEventPath = Join-Path $TestRoot 'source-html-sensitive-events.jsonl'
+@(
+	$HtmlSensitiveEvents[0]
+	$HtmlSensitiveCompletion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $HtmlSensitiveEventPath -Encoding UTF8
+$HtmlSensitiveTelemetry = & $EventTelemetryScript -EventLogPath $HtmlSensitiveEventPath
+Add-Result `
+	-Name 'Canonical source text is stable across PowerShell runtimes' `
+	-Passed ($HtmlSensitiveTelemetry.SourceInspection.Outcome -ceq 'complete_pagination')
+
+$EscapedHtmlCompletion = $HtmlSensitiveCompletion |
+	ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json
+$EscapedHtmlCompletion.item.result.content[0].text = (
+	[string]$EscapedHtmlCompletion.item.result.content[0].text
+).Replace('<', '\u003c').Replace('>', '\u003e').Replace('&', '\u0026').Replace("'", '\u0027').Replace('+', '\u002b')
+$EscapedHtmlEventPath = Join-Path $TestRoot 'source-escaped-html-events.jsonl'
+@(
+	$HtmlSensitiveEvents[0]
+	$EscapedHtmlCompletion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $EscapedHtmlEventPath -Encoding UTF8
+$EscapedHtmlTelemetry = & $EventTelemetryScript -EventLogPath $EscapedHtmlEventPath
+Add-Result `
+	-Name 'Runtime-specific escaped source text is noncanonical' `
+	-Passed ($EscapedHtmlTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$CorrelatedPageEvents = @(
+	New-TestSourcePageEventJson -Id 'correlation' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$OrphanCompletionEventPath = Join-Path $TestRoot 'source-orphan-completion-events.jsonl'
+$CorrelatedPageEvents[1] | Set-Content -LiteralPath $OrphanCompletionEventPath -Encoding UTF8
+$OrphanCompletionTelemetry = & $EventTelemetryScript -EventLogPath $OrphanCompletionEventPath
+Add-Result `
+	-Name 'Source completion without a start is protocol rejection' `
+	-Passed ($OrphanCompletionTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$ReversedSourceEventPath = Join-Path $TestRoot 'source-completion-before-start-events.jsonl'
+@($CorrelatedPageEvents[1], $CorrelatedPageEvents[0]) |
+	Set-Content -LiteralPath $ReversedSourceEventPath -Encoding UTF8
+$ReversedSourceTelemetry = & $EventTelemetryScript -EventLogPath $ReversedSourceEventPath
+Add-Result `
+	-Name 'Source completion before its start is protocol rejection' `
+	-Passed ($ReversedSourceTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$MismatchedStart = $CorrelatedPageEvents[0] | ConvertFrom-Json
+$MismatchedStart.item.arguments.path = 'agents.md'
+$MismatchedSourceEventPath = Join-Path $TestRoot 'source-mismatched-call-events.jsonl'
+@(
+	$MismatchedStart | ConvertTo-Json -Depth 8 -Compress
+	$CorrelatedPageEvents[1]
+) | Set-Content -LiteralPath $MismatchedSourceEventPath -Encoding UTF8
+$MismatchedSourceTelemetry = & $EventTelemetryScript -EventLogPath $MismatchedSourceEventPath
+Add-Result `
+	-Name 'Source start and completion arguments must match exactly' `
+	-Passed ($MismatchedSourceTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$CaseVariantIdentityEvents = @(
+	New-TestSourcePageEventJson -Id 'case-identity' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$CaseVariantIdentityStart = $CaseVariantIdentityEvents[0] | ConvertFrom-Json
+$CaseVariantIdentityCompletion = $CaseVariantIdentityEvents[1] | ConvertFrom-Json
+foreach ($IdentityEvent in @($CaseVariantIdentityStart, $CaseVariantIdentityCompletion)) {
+	$IdentityEvent.item.server = 'Source_Inspection'
+	$IdentityEvent.item.tool = 'Read_Allowed_Source_File'
+}
+$CaseVariantIdentityEventPath = Join-Path $TestRoot 'source-case-identity-events.jsonl'
+@(
+	$CaseVariantIdentityStart | ConvertTo-Json -Depth 8 -Compress
+	$CaseVariantIdentityCompletion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $CaseVariantIdentityEventPath -Encoding UTF8
+$CaseVariantIdentityTelemetry = & $EventTelemetryScript `
+	-EventLogPath $CaseVariantIdentityEventPath
+Add-Result `
+	-Name 'Source server and tool identities are case-sensitive' `
+	-Passed (
+		$CaseVariantIdentityTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected' -and
+		$CaseVariantIdentityTelemetry.SourceInspection.CallCount -eq 1
+	)
+
+$ContradictoryStartedEvents = @(
+	New-TestSourcePageEventJson -Id 'contradictory-start' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$ContradictoryStarted = $ContradictoryStartedEvents[0] | ConvertFrom-Json
+$ContradictoryStarted.item.status = 'completed'
+$ContradictoryStartedEventPath = Join-Path $TestRoot 'source-contradictory-start-events.jsonl'
+@(
+	$ContradictoryStarted | ConvertTo-Json -Depth 8 -Compress
+	$ContradictoryStartedEvents[1]
+) | Set-Content -LiteralPath $ContradictoryStartedEventPath -Encoding UTF8
+$ContradictoryStartedTelemetry = & $EventTelemetryScript `
+	-EventLogPath $ContradictoryStartedEventPath
+Add-Result `
+	-Name 'Source start requires the canonical in-progress envelope' `
+	-Passed ($ContradictoryStartedTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$PopulatedStartedEvents = @(
+	New-TestSourcePageEventJson -Id 'populated-start' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$PopulatedStarted = $PopulatedStartedEvents[0] | ConvertFrom-Json
+$PopulatedStarted.item | Add-Member -NotePropertyName result -NotePropertyValue ([ordered]@{ value = 1 })
+$PopulatedStarted.item | Add-Member -NotePropertyName error -NotePropertyValue ([ordered]@{ code = 'bad' })
+$PopulatedStartedEventPath = Join-Path $TestRoot 'source-populated-start-events.jsonl'
+@(
+	$PopulatedStarted | ConvertTo-Json -Depth 8 -Compress
+	$PopulatedStartedEvents[1]
+) | Set-Content -LiteralPath $PopulatedStartedEventPath -Encoding UTF8
+$PopulatedStartedTelemetry = & $EventTelemetryScript -EventLogPath $PopulatedStartedEventPath
+Add-Result `
+	-Name 'Source start rejects populated result and error fields' `
+	-Passed ($PopulatedStartedTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$DualStructuredEvents = @(
+	New-TestSourcePageEventJson -Id 'dual-structured' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$DualStructuredCompletion = $DualStructuredEvents[1] | ConvertFrom-Json
+$ConflictingStructured = $DualStructuredCompletion.item.result.structured_content |
+	ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json
+$ConflictingStructured.content = 'different'
+$DualStructuredCompletion.item.result | Add-Member `
+	-NotePropertyName structuredContent -NotePropertyValue $ConflictingStructured
+$DualStructuredEventPath = Join-Path $TestRoot 'source-dual-structured-events.jsonl'
+@(
+	$DualStructuredEvents[0]
+	$DualStructuredCompletion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $DualStructuredEventPath -Encoding UTF8
+$DualStructuredTelemetry = & $EventTelemetryScript -EventLogPath $DualStructuredEventPath
+Add-Result `
+	-Name 'Source completion rejects dual structured-result aliases' `
+	-Passed ($DualStructuredTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$DualErrorEvents = @(
+	New-TestSourcePageEventJson -Id 'dual-error' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$DualErrorCompletion = $DualErrorEvents[1] | ConvertFrom-Json
+$DualErrorCompletion.item.result | Add-Member -NotePropertyName is_error -NotePropertyValue $false
+$DualErrorEventPath = Join-Path $TestRoot 'source-dual-error-events.jsonl'
+@(
+	$DualErrorEvents[0]
+	$DualErrorCompletion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $DualErrorEventPath -Encoding UTF8
+$DualErrorTelemetry = & $EventTelemetryScript -EventLogPath $DualErrorEventPath
+Add-Result `
+	-Name 'Source completion rejects dual tool-error aliases' `
+	-Passed ($DualErrorTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$NonBooleanErrorEvents = @(
+	New-TestSourcePageEventJson -Id 'nonboolean-error' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$NonBooleanErrorCompletion = $NonBooleanErrorEvents[1] | ConvertFrom-Json
+$NonBooleanErrorCompletion.item.result.isError = 'false'
+$NonBooleanErrorEventPath = Join-Path $TestRoot 'source-nonboolean-error-events.jsonl'
+@(
+	$NonBooleanErrorEvents[0]
+	$NonBooleanErrorCompletion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $NonBooleanErrorEventPath -Encoding UTF8
+$NonBooleanErrorTelemetry = & $EventTelemetryScript -EventLogPath $NonBooleanErrorEventPath
+Add-Result `
+	-Name 'Source completion rejects non-boolean tool-error state' `
+	-Passed ($NonBooleanErrorTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$CaseVariantEnvelopeEvents = @(
+	New-TestSourcePageEventJson -Id 'case-envelope' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$CaseVariantEnvelopeStart = $CaseVariantEnvelopeEvents[0] | ConvertFrom-Json
+$CaseVariantEnvelopeCompletion = $CaseVariantEnvelopeEvents[1] | ConvertFrom-Json
+$CaseVariantEnvelopeStart.type = 'Item.Started'
+$CaseVariantEnvelopeCompletion.type = 'Item.Completed'
+$CaseVariantEnvelopeStart.item.type = 'MCP_Tool_Call'
+$CaseVariantEnvelopeCompletion.item.type = 'MCP_Tool_Call'
+$CaseVariantEnvelopeEventPath = Join-Path $TestRoot 'source-case-envelope-events.jsonl'
+@(
+	$CaseVariantEnvelopeStart | ConvertTo-Json -Depth 8 -Compress
+	$CaseVariantEnvelopeCompletion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $CaseVariantEnvelopeEventPath -Encoding UTF8
+$CaseVariantEnvelopeTelemetry = & $EventTelemetryScript -EventLogPath $CaseVariantEnvelopeEventPath
+Add-Result `
+	-Name 'Source event and item envelope identities are case-sensitive' `
+	-Passed ($CaseVariantEnvelopeTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$FirstOverlappingPage = @(
+	New-TestSourcePageEventJson -Id 'overlap-1' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'abcd' `
+		-BaseSha256 '9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 8 -Eof $false
+)
+$SecondOverlappingPage = @(
+	New-TestSourcePageEventJson -Id 'overlap-2' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'efgh' `
+		-BaseSha256 '9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab' `
+		-OffsetBytes 4 -ContentBytes 4 -EndOffsetBytes 8 -FileSizeBytes 8 -Eof $true
+)
+$OverlappingSourceEventPath = Join-Path $TestRoot 'source-overlapping-call-events.jsonl'
+@(
+	$FirstOverlappingPage[0]
+	$SecondOverlappingPage[0]
+	$FirstOverlappingPage[1]
+	$SecondOverlappingPage[1]
+) | Set-Content -LiteralPath $OverlappingSourceEventPath -Encoding UTF8
+$OverlappingSourceTelemetry = & $EventTelemetryScript -EventLogPath $OverlappingSourceEventPath
+Add-Result `
+	-Name 'Same-path source calls cannot overlap before continuation metadata exists' `
+	-Passed ($OverlappingSourceTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$NoncanonicalTextEvents = @(
+	New-TestSourcePageEventJson -Id 'noncanonical-text' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'data' `
+		-BaseSha256 '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 4 -Eof $true
+)
+$NoncanonicalCompletion = $NoncanonicalTextEvents[1] | ConvertFrom-Json
+$NoncanonicalCompletion.item.result.content[0].text = (
+	' ' + [string]$NoncanonicalCompletion.item.result.content[0].text
+)
+$NoncanonicalTextEventPath = Join-Path $TestRoot 'source-noncanonical-text-events.jsonl'
+@(
+	$NoncanonicalTextEvents[0]
+	$NoncanonicalCompletion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $NoncanonicalTextEventPath -Encoding UTF8
+$NoncanonicalTextTelemetry = & $EventTelemetryScript -EventLogPath $NoncanonicalTextEventPath
+Add-Result `
+	-Name 'Source text result must equal canonical structured serialization' `
+	-Passed ($NoncanonicalTextTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$ProtocolFailureEventPath = Join-Path $TestRoot 'source-protocol-failure-events.jsonl'
+@(
+	New-TestSourcePageEventJson -Id 'gap-1' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'abcd' `
+		-BaseSha256 '9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 8 -Eof $false
+	New-TestSourcePageEventJson -Id 'gap-2' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'fgh' `
+		-BaseSha256 '9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab' `
+		-OffsetBytes 5 -ContentBytes 3 -EndOffsetBytes 8 -FileSizeBytes 8 -Eof $true
+) | Set-Content -LiteralPath $ProtocolFailureEventPath -Encoding UTF8
+$ProtocolFailureTelemetry = & $EventTelemetryScript -EventLogPath $ProtocolFailureEventPath
+Add-Result `
+	-Name 'Source pagination gaps are classified as protocol rejection' `
+	-Passed ($ProtocolFailureTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$CaseVariantEventPath = Join-Path $TestRoot 'source-case-variant-events.jsonl'
+@(
+	New-TestSourcePageEventJson -Id 'case-1' -Path 'AGENTS.md' -Encoding 'utf8' `
+		-Content 'abcd' `
+		-BaseSha256 '9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab' `
+		-OffsetBytes 0 -ContentBytes 4 -EndOffsetBytes 4 -FileSizeBytes 8 -Eof $false
+	New-TestSourcePageEventJson -Id 'case-2' -Path 'agents.md' -Encoding 'utf8' `
+		-Content 'efgh' `
+		-BaseSha256 '9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab' `
+		-OffsetBytes 4 -ContentBytes 4 -EndOffsetBytes 8 -FileSizeBytes 8 -Eof $true
+) | Set-Content -LiteralPath $CaseVariantEventPath -Encoding UTF8
+$CaseVariantTelemetry = & $EventTelemetryScript -EventLogPath $CaseVariantEventPath
+Add-Result `
+	-Name 'Source path continuity is case-sensitive' `
+	-Passed ($CaseVariantTelemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$Base64EventPath = Join-Path $TestRoot 'source-base64-events.jsonl'
+$Base64Bytes = [byte[]]@(255, 0, 128)
+$Base64Hash = [BitConverter]::ToString(
+	([Security.Cryptography.SHA256]::Create()).ComputeHash($Base64Bytes)
+).Replace('-', '').ToLowerInvariant()
+New-TestSourcePageEventJson -Id 'base64-1' -Path 'Content.bin' -Encoding 'base64' `
+	-Content ([Convert]::ToBase64String($Base64Bytes)) -BaseSha256 $Base64Hash `
+	-OffsetBytes 0 -ContentBytes 3 -EndOffsetBytes 3 -FileSizeBytes 3 -Eof $true |
+	Set-Content -LiteralPath $Base64EventPath -Encoding UTF8
+$Base64Telemetry = & $EventTelemetryScript -EventLogPath $Base64EventPath
+Add-Result `
+	-Name 'Valid base64 source pagination is classified complete' `
+	-Passed ($Base64Telemetry.SourceInspection.Outcome -ceq 'complete_pagination')
+
+$NoncanonicalBase64Events = @(
+	New-TestSourcePageEventJson -Id 'base64-whitespace' -Path 'Content.bin' -Encoding 'base64' `
+		-Content ([Convert]::ToBase64String($Base64Bytes)) -BaseSha256 $Base64Hash `
+		-OffsetBytes 0 -ContentBytes 3 -EndOffsetBytes 3 -FileSizeBytes 3 -Eof $true
+)
+$NoncanonicalBase64Completion = $NoncanonicalBase64Events[1] | ConvertFrom-Json
+$NoncanonicalBase64Completion.item.result.structured_content.content = (
+	[Convert]::ToBase64String($Base64Bytes).Insert(2, ' ')
+)
+$NoncanonicalBase64Completion.item.result.content[0].text = (
+	$NoncanonicalBase64Completion.item.result.structured_content |
+		ConvertTo-Json -Depth 4 -Compress
+)
+$NoncanonicalBase64EventPath = Join-Path $TestRoot 'source-noncanonical-base64-events.jsonl'
+@(
+	$NoncanonicalBase64Events[0]
+	$NoncanonicalBase64Completion | ConvertTo-Json -Depth 8 -Compress
+) | Set-Content -LiteralPath $NoncanonicalBase64EventPath -Encoding UTF8
+$NoncanonicalBase64Telemetry = & $EventTelemetryScript `
+	-EventLogPath $NoncanonicalBase64EventPath
+Add-Result `
+	-Name 'Source base64 content must use canonical encoding' `
+	-Passed ($NoncanonicalBase64Telemetry.SourceInspection.Outcome -ceq 'protocol_rejected')
+
+$SourcePolicyEventPath = Join-Path $TestRoot 'source-policy-rejection-events.jsonl'
+@'
+{"type":"item.started","item":{"id":"policy-1","type":"mcp_tool_call","server":"source_inspection","tool":"read_allowed_source_file","arguments":{"path":"AGENTS.md","offset_bytes":0},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"policy-1","type":"mcp_tool_call","server":"source_inspection","tool":"read_allowed_source_file","arguments":{"path":"AGENTS.md","offset_bytes":0},"result":{"content":[{"type":"text","text":"[source_path_sensitive] do-not-retain-policy-message"}],"isError":true},"error":null,"status":"completed"}}
+'@ | Set-Content -LiteralPath $SourcePolicyEventPath -Encoding UTF8
+$SourcePolicyTelemetry = & $EventTelemetryScript -EventLogPath $SourcePolicyEventPath
+Add-Result `
+	-Name 'Source policy rejection is classified without retaining error text' `
+	-Passed (
+		$SourcePolicyTelemetry.SourceInspection.Outcome -ceq 'source_policy_rejected' -and
+		((& $EventTelemetryScript -EventLogPath $SourcePolicyEventPath |
+			ConvertTo-Json -Compress) -notmatch 'do-not-retain-policy-message')
 	)
 
 function Get-FixtureTelemetry {
@@ -3845,7 +4473,10 @@ $TelemetryRootProperties = @(
 	'CachedInputTokens', 'CacheWriteInputTokens', 'OutputTokens',
 	'ReasoningOutputTokens', 'TotalTokens', 'ExitClass', 'ChangedPathCount',
 	'ProposedPathCount', 'OutputBytes', 'PatchBytes', 'StageStatus',
-	'EvidenceManifestPath', 'EvidenceManifestHash', 'TelemetryError'
+	'SourceInspection', 'EvidenceManifestPath', 'EvidenceManifestHash', 'TelemetryError'
+)
+$SourceInspectionTelemetryProperties = @(
+	'Outcome', 'CallCount', 'CompletedPageCount', 'CompletedPathCount'
 )
 $TelemetryLimitsProperties = @(
 	'TotalTokens', 'ElapsedMilliseconds', 'ConcurrentStages', 'ExecutionRetries',
@@ -3898,12 +4529,19 @@ $ObservedLimitsProperties = [string]::Join(
 	'|', [string[]]@($BlockedTelemetry.Limits.PSObject.Properties.Name)
 )
 $ExpectedLimitsProperties = [string]::Join('|', [string[]]$TelemetryLimitsProperties)
+$ObservedSourceInspectionProperties = [string]::Join(
+	'|', [string[]]@($BlockedTelemetry.SourceInspection.PSObject.Properties.Name)
+)
+$ExpectedSourceInspectionProperties = [string]::Join(
+	'|', [string[]]$SourceInspectionTelemetryProperties
+)
 Add-Result `
 	-Name 'Telemetry schema has exact ordered properties' `
 	-Passed (
 		$BlockedTelemetry.SchemaVersion -eq 1 -and
 		$ObservedTelemetryProperties -ceq $ExpectedTelemetryProperties -and
-		$ObservedLimitsProperties -ceq $ExpectedLimitsProperties
+		$ObservedLimitsProperties -ceq $ExpectedLimitsProperties -and
+		$ObservedSourceInspectionProperties -ceq $ExpectedSourceInspectionProperties
 	)
 
 Add-Result `
@@ -3922,6 +4560,8 @@ Add-Result `
 		$BlockedTelemetry.OutputBytes -gt 0 -and
 		$null -eq $BlockedTelemetry.PatchBytes -and
 		[string]$BlockedTelemetry.StageStatus -eq 'blocked' -and
+		[string]$BlockedTelemetry.SourceInspection.Outcome -eq 'no_tool_call' -and
+		$BlockedTelemetry.SourceInspection.CallCount -eq 0 -and
 		$null -eq $BlockedTelemetry.EvidenceManifestHash
 	)
 

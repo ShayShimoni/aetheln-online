@@ -59,6 +59,29 @@
       "approved_at_utc"
     ]
   },
+  "source_inspection_protocol": {
+    "allowed": [
+      "schema_version",
+      "tool",
+      "request_arguments",
+      "path_source",
+      "initial_offset_bytes",
+      "next_offset_field",
+      "completion_field",
+      "maximum_page_bytes"
+    ],
+    "schema_version": 1,
+    "tool": "read_allowed_source_file",
+    "request_arguments": [
+      "path",
+      "offset_bytes"
+    ],
+    "path_source": "allowed_paths",
+    "initial_offset_bytes": 0,
+    "next_offset_field": "end_offset_bytes",
+    "completion_field": "eof",
+    "maximum_page_bytes": 8192
+  },
   "neutral_evidence_schema": {
     "record_fields": [
       "kind",
@@ -187,6 +210,7 @@
         "required_checks",
         "baseline_status",
         "baseline_diff",
+        "source_inspection_protocol",
         "consumes_external_files",
         "external_ingest_evidence"
       ],
@@ -210,6 +234,7 @@
         "non_goals",
         "baseline_status",
         "baseline_diff",
+        "source_inspection_protocol",
         "required_checks"
       ],
       "neutral_evidence_fields": {
@@ -287,7 +312,8 @@
         "non_goals",
         "required_checks",
         "baseline_status",
-        "baseline_diff"
+        "baseline_diff",
+        "source_inspection_protocol"
       ],
       "blind": false
     },
