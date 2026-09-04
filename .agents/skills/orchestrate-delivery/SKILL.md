@@ -176,6 +176,15 @@ Do not rely on prompt instructions alone:
   directory listing, arbitrary filesystem access, producer hashing, and every
   write or command capability disabled. Non-producer stages receive no source
   inspection server.
+- For new producer handoffs, include the closed `source_inspection_protocol`
+  object defined by the handoff schema. It fixes request members to `path` and
+  `offset_bytes`, the first offset to zero, continuation to
+  `end_offset_bytes`, completion to `eof`, and the page ceiling to 8192 bytes.
+  The validator accepts omission only for legacy compatibility and normalizes
+  the same contract in the launcher prompt. It rejects a mismatched protocol or
+  an operational work package requiring an unsupported request member such as
+  `limit_bytes` before child launch; that preflight rejection does not consume
+  an attempt.
 - Capture the source commit, complete pre-existing worktree status and diff,
   allowed paths, and non-goals before launch.
 - Require the declared source commit to resolve to the repository's current

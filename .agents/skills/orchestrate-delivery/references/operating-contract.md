@@ -579,6 +579,16 @@ Before spawning a stage:
   re-deriving it before authoring a replacement. Disable web, apps, inherited MCP,
   directory listing, arbitrary reads, producer hashing, commands, and writes.
   Non-producer stages receive no source inspection server.
+- New worker, integrator, and fixer handoffs carry the closed
+  `source_inspection_protocol` object from `handoff-schemas.json`. The only
+  valid values bind `read_allowed_source_file` to request arguments `path` and
+  `offset_bytes`, `allowed_paths`, initial offset zero, continuation through
+  `end_offset_bytes`, completion through `eof`, and an 8192-byte maximum page.
+  Legacy producer handoffs may omit the object, in which case the launcher
+  applies the identical normalized protocol. Any supplied mismatch, or an
+  operational work package that requires an unsupported request member such as
+  `limit_bytes`, fails preflight with `source_protocol_invalid` before child
+  launch and does not consume an attempt.
 - Resolve the declared source commit and require it to equal the repository's
   current `HEAD`. Require the handoff workspace to equal the launcher's resolved
   repository root. Hash all tracked and non-ignored files before and after the

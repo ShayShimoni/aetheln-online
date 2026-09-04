@@ -60,6 +60,7 @@ $NeutralEvidenceFieldAllowlist = @(
 	'required_evidence_sources',
 	'repository_state',
 	'repository_tree',
+	'source_inspection_protocol',
 	'stage'
 )
 $NeutralEvidenceValidationCodeAllowlist = @(
@@ -97,7 +98,8 @@ $NeutralEvidenceValidationCodeAllowlist = @(
 	'required_evidence_authoritative_cardinality_invalid',
 	'required_evidence_record_cardinality_invalid',
 	'required_evidence_record_mismatch',
-	'required_evidence_record_undeclared'
+	'required_evidence_record_undeclared',
+	'source_protocol_invalid'
 )
 
 $AuthoritativeEvidenceManifestBytes = $null
@@ -188,7 +190,7 @@ catch {
 	)
 
 	if ($MatchedFields.Count -eq 1 -and $MatchedCodes.Count -eq 1) {
-		Write-Output -NoEnumerate ([pscustomobject][ordered]@{
+		Write-Output ([pscustomobject][ordered]@{
 			phase = 'preflight'
 			code = $MatchedCodes[0]
 			field = $MatchedFields[0]
@@ -1032,6 +1034,11 @@ artifact.
 Put the delivery_file_bundle_v1 object under artifact; do not return the bundle
 directly or omit the outer stage object.
 Inspect allowed source files only with the required read_allowed_source_file tool.
+Every read_allowed_source_file call must contain exactly two input arguments:
+path and offset_bytes. Start each path at offset_bytes zero, then use the exact
+prior result end_offset_bytes until eof is true. Never send result-only members
+as input arguments. This launcher-owned protocol overrides conflicting
+source-reader prose in the frozen handoff.
 Do not use commands, scripts, shells, interpreters, executables, or temporary files
 for hashing, bundle construction, or bundle serialization. Do not write the
 bundle to an intermediate file.
@@ -1145,6 +1152,7 @@ if ($null -eq $AfterSnapshotError) {
 	}
 }
 $ProposedPaths = @()
+$BundleReplacementSources = @()
 $ArtifactFormat = $null
 $ArtifactValidationError = $null
 $OutputMissing = $false
@@ -1197,6 +1205,16 @@ if ($CanConsumeStageOutput) {
 					-SnapshotFiles $Before `
 					-PatchPath $PatchPath
 				$ArtifactFormat = [string]$BundleConversion.Format
+				$BundleReplacementSources = [object[]]@(
+					$StageOutput.artifact.files |
+						Where-Object { [string]$_.operation -ceq 'replace' } |
+						ForEach-Object {
+							[pscustomobject]@{
+								Path = ([string]$_.path).Replace('\', '/')
+								BaseSha256 = [string]$_.base_sha256
+							}
+						}
+				)
 			}
 			else {
 				throw (
@@ -1219,11 +1237,65 @@ if ($CanConsumeStageOutput) {
 
 $ObservedTelemetry = $null
 $TelemetryError = $null
+$SourceInspectionError = $null
 try {
-	$ObservedTelemetry = & $EventTelemetryScript -EventLogPath $EventLogPath
+	$ObservedTelemetry = & $EventTelemetryScript `
+		-EventLogPath $EventLogPath `
+		-RequiredSourcePaths ([string[]]@($BundleReplacementSources.Path))
 }
 catch {
 	$TelemetryError = 'The event log could not be parsed as bounded telemetry.'
+}
+if ($null -eq $TelemetryError -and $IsArtifactProducer) {
+	$SourceOutcome = [string]$ObservedTelemetry.SourceInspection.Outcome
+	$SourceOutcomeInvalid = @('no_tool_call', 'complete_pagination') `
+		-cnotcontains $SourceOutcome
+	$SourceInspectionRequired = (
+		$ArtifactFormat -ceq 'legacy_unified_diff' -or
+		$BundleReplacementSources.Count -gt 0
+	)
+	$SourceIdentityMismatch = $false
+	if (-not $SourceOutcomeInvalid -and $BundleReplacementSources.Count -gt 0 -and
+		$SourceOutcome -ceq 'complete_pagination') {
+		$CompletedSourceMap = [System.Collections.Generic.Dictionary[string, string]]::new(
+			[System.StringComparer]::Ordinal
+		)
+		foreach ($CompletedSource in @(
+				$ObservedTelemetry.SourceInspection.CompletedSources
+			)) {
+			if ($null -eq $CompletedSource -or
+				$CompletedSource.Path -isnot [string] -or
+				$CompletedSource.BaseSha256 -isnot [string] -or
+				$CompletedSourceMap.ContainsKey([string]$CompletedSource.Path)) {
+				$SourceIdentityMismatch = $true
+				break
+			}
+			$CompletedSourceMap.Add(
+				[string]$CompletedSource.Path,
+				[string]$CompletedSource.BaseSha256
+			)
+		}
+		if (-not $SourceIdentityMismatch) {
+			foreach ($ReplacementSource in $BundleReplacementSources) {
+				$ObservedBaseSha256 = ''
+				if (-not $CompletedSourceMap.TryGetValue(
+						[string]$ReplacementSource.Path,
+						[ref]$ObservedBaseSha256
+					) -or $ObservedBaseSha256 -cne
+					[string]$ReplacementSource.BaseSha256) {
+					$SourceIdentityMismatch = $true
+					break
+				}
+			}
+		}
+	}
+	if ($SourceOutcomeInvalid -or
+		($SourceInspectionRequired -and $SourceOutcome -cne 'complete_pagination') -or
+		$SourceIdentityMismatch) {
+		$SourceInspectionError = (
+			'Required source inspection did not complete under the supported protocol.'
+		)
+	}
 }
 
 $ExitClass = if ($null -ne $AfterSnapshotError -or $ChangedPaths.Count -gt 0) {
@@ -1246,6 +1318,9 @@ elseif ($null -ne $StageStatusError) {
 }
 elseif ($null -ne $TelemetryError) {
 	'telemetry_invalid'
+}
+elseif ($null -ne $SourceInspectionError) {
+	'source_inspection_invalid'
 }
 else {
 	'completed'
@@ -1332,6 +1407,12 @@ $Telemetry = [ordered]@{
 	OutputBytes = $OutputBytes
 	PatchBytes = $PatchBytes
 	StageStatus = $StageStatus
+	SourceInspection = if ($null -ne $ObservedTelemetry -and $IsArtifactProducer) {
+		$ObservedTelemetry.SourceInspection
+	}
+	else {
+		$null
+	}
 	EvidenceManifestPath = $EvidenceManifestPath
 	EvidenceManifestHash = $null
 	TelemetryError = $TelemetryError
@@ -1368,6 +1449,12 @@ $Audit = [ordered]@{
 	ArtifactFailureKind = $ArtifactFailureKind
 	ArtifactFormat = $ArtifactFormat
 	StageStatusError = $StageStatusError
+	SourceInspection = if ($null -ne $ObservedTelemetry -and $IsArtifactProducer) {
+		$ObservedTelemetry.SourceInspection
+	}
+	else {
+		$null
+	}
 	EventLogPath = $EventLogPath
 	StandardErrorPath = $StandardErrorPath
 	TelemetryPath = $TelemetryPath
@@ -1445,6 +1532,13 @@ if ($ExitCode -ne 0) {
 if ($null -ne $TelemetryError) {
 	throw (
 		"Restricted stage '$Stage' returned invalid telemetry. Audit: $AuditPath"
+	)
+}
+
+if ($null -ne $SourceInspectionError) {
+	throw (
+		"Restricted stage '$Stage' failed closed because required source inspection " +
+		"did not complete. Audit: $AuditPath"
 	)
 }
 

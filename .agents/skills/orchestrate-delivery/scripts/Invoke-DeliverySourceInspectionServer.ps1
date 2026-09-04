@@ -35,6 +35,63 @@ function Get-DeliverySourceSha256 {
 	}
 }
 
+function ConvertTo-DeliverySourceJsonString {
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyString()]
+		[string]$Value
+	)
+
+	$Builder = [System.Text.StringBuilder]::new()
+	[void]$Builder.Append('"')
+	foreach ($Character in $Value.ToCharArray()) {
+		$Code = [int][char]$Character
+		$Escaped = switch ($Code) {
+			8 { '\b' }
+			9 { '\t' }
+			10 { '\n' }
+			12 { '\f' }
+			13 { '\r' }
+			34 { '\"' }
+			92 { '\\' }
+			default {
+				if ($Code -lt 32) { '\u{0:x4}' -f $Code }
+				else { [string]$Character }
+			}
+		}
+		[void]$Builder.Append([string]$Escaped)
+	}
+	[void]$Builder.Append('"')
+	return $Builder.ToString()
+}
+
+function ConvertTo-DeliverySourcePageText {
+	param([Parameter(Mandatory)][object]$Page)
+
+	$Invariant = [System.Globalization.CultureInfo]::InvariantCulture
+	$Builder = [System.Text.StringBuilder]::new()
+	[void]$Builder.Append('{"path":')
+	[void]$Builder.Append((ConvertTo-DeliverySourceJsonString -Value ([string]$Page.path)))
+	[void]$Builder.Append(',"encoding":')
+	[void]$Builder.Append((ConvertTo-DeliverySourceJsonString -Value ([string]$Page.encoding)))
+	[void]$Builder.Append(',"content":')
+	[void]$Builder.Append((ConvertTo-DeliverySourceJsonString -Value ([string]$Page.content)))
+	[void]$Builder.Append(',"base_sha256":')
+	[void]$Builder.Append((ConvertTo-DeliverySourceJsonString -Value ([string]$Page.base_sha256)))
+	[void]$Builder.Append(',"offset_bytes":')
+	[void]$Builder.Append(([int64]$Page.offset_bytes).ToString($Invariant))
+	[void]$Builder.Append(',"content_bytes":')
+	[void]$Builder.Append(([int64]$Page.content_bytes).ToString($Invariant))
+	[void]$Builder.Append(',"end_offset_bytes":')
+	[void]$Builder.Append(([int64]$Page.end_offset_bytes).ToString($Invariant))
+	[void]$Builder.Append(',"file_size_bytes":')
+	[void]$Builder.Append(([int64]$Page.file_size_bytes).ToString($Invariant))
+	[void]$Builder.Append(',"eof":')
+	[void]$Builder.Append($(if ([bool]$Page.eof) { 'true' } else { 'false' }))
+	[void]$Builder.Append('}')
+	return $Builder.ToString()
+}
+
 $AttestedFiles = $null
 try {
 	if (-not (Test-Path -LiteralPath $SensitivePathScript -PathType Leaf) -or
@@ -159,6 +216,14 @@ function Invoke-DeliveryReadAllowedSourceFile {
 		if ($ArgumentNames -ccontains 'offset_bytes') {
 			$OffsetValue = $Arguments.offset_bytes
 		}
+	}
+	$UnsupportedArgumentNames = @($ArgumentNames | Where-Object {
+		@('path', 'offset_bytes') -cnotcontains [string]$_
+	})
+	if ($ArgumentNames.Count -gt 2 -or $UnsupportedArgumentNames.Count -gt 0) {
+		return New-DeliveryToolError `
+			-Code 'source_argument_keys_invalid' `
+			-Message 'Tool arguments must contain exactly path and offset_bytes.'
 	}
 
 	if ($RequestedPath -isnot [string] -or
@@ -315,7 +380,7 @@ function Invoke-DeliveryReadAllowedSourceFile {
 		file_size_bytes = $FileSizeBytes
 		eof = ($EndOffsetBytes -eq $FileSizeBytes)
 	}
-	$PageText = $PageResult | ConvertTo-Json -Depth 4 -Compress
+	$PageText = ConvertTo-DeliverySourcePageText -Page $PageResult
 
 	return [pscustomobject][ordered]@{
 		content = @(
