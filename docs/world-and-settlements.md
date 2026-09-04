@@ -11,11 +11,17 @@ Playable origins, anatomy, and cultural-heritage rules are defined in
 
 ## Cosmology
 
-Before the world there was the Deepwake, an ocean of unrealized dream. The
-Waking Star emerged from it and dreamed Aetheln into physical existence.
+Before the world there was the Deepwake, an ocean of unrealized lives and
+histories - everything that could have happened and did not. The Waking Star
+emerged from it: a partly sentient memory engine that dreamed Aetheln into
+physical existence by realizing some histories and rejecting the rest. Whether
+the Star intends anything by what it realizes remains disputed, and that
+dispute is deliberate canon.
 
 The Star's light is life, magic, and memory. Three wounded Wardens tend its
-remaining influence:
+remaining influence. The Wardens are metaphysical functions of how the Star
+remembers, not conventional gods; they are prayed to, but they are aspects of
+the engine, not persons who answer:
 
 - **Sother:** kindling, dawn, law, and order.
 - **Vael:** the deep, dusk, dreams, and mystery.
@@ -25,26 +31,32 @@ The Wardens do not map cleanly to the two player factions.
 
 ## The Duskbreak
 
-The Lucent Choir attempted to bind the Waking Star's light permanently into the
-world and end death. Its ritual cracked the Star, glassed civilizations, and
-began the world's slow dimming.
+The Lucent Choir attempted the Great Concordance: binding the Waking Star's
+light permanently into the world, ending death, and forcing incompatible
+histories to coexist. The Concordance cracked the Star, glassed civilizations,
+and began the world's slow dimming.
 
-Fragments of the wounded Star now fall as Embers. Settlements need Embers to
-survive, while the Ashen Choir gathers them to complete the original ritual.
+Fragments of the wounded Star now fall as Embers - rejected memories seeking
+realization. Settlements need Embers to survive, while the Ashen Choir gathers
+them to complete the original ritual. Where the Duskbreak tore continuity away
+entirely, Forgettings remain: people, creatures, and places that still exist
+but have lost the history that made them coherent.
 
 ## Present Conflict
 
 The Concord traditionally regulates all contested Ember use. The world has now
 divided between two coalitions:
 
-- The **Dawn Concordat** believes shared law and central control are necessary
-  for survival.
-- The **Unbound Flame** believes local communities and finders must control the
-  light they preserve or recover.
+- The **Crowned Ledger** believes shared law and central control are necessary
+  for survival. It preserves accountable continuity but risks owned truth.
+- The **Hundred Witnesses** believe local communities and finders must control
+  the light they preserve or recover. They protect plurality but risk
+  fragmentation and paralysis.
 
-These are working faction names. Both factions fight the Ashen Choir while also
-fighting each other over territory, Emberfalls, routes, ruins, and political
-control.
+These are working faction names; under Issue #104 they supersede the earlier
+working names Dawn Concordat and Unbound Flame, and final faction naming is
+owned by Issue #54. Both factions fight the Ashen Choir while also fighting
+each other over territory, Emberfalls, routes, ruins, and political control.
 
 ## Territory Model
 
@@ -131,7 +143,7 @@ is measured and every household contributes to the light-tithe.
 
 Revised role:
 
-- Major Dawn Concordat stronghold and candidate faction capital.
+- Major Crowned Ledger stronghold and candidate faction capital.
 - Defensive Doctrine training and regulated Ember logistics.
 - Invasion objectives centered on tithe gates, barracks, signal towers, and a
   protected Ember registry.
@@ -148,9 +160,9 @@ preserved as memory in its geode archives.
 
 Revised role:
 
-- Politically aligned with Unbound arguments about local ownership.
+- Politically aligned with Hundred Witnesses arguments about local ownership.
 - Crafting and memory-archive center.
-- Possible Unbound Flame stronghold, but not automatically race-locked.
+- Possible Hundred Witnesses stronghold, but not automatically race-locked.
 - Source of archive dungeons and disputes over whether memory can be privately
   held.
 
@@ -247,13 +259,13 @@ territory without making dungeon equipment an automatic PvP victory.
 
 ### Faction Homeland A
 
-The Dawn Concordat requires a complete starting region with its own settlement,
+The Crowned Ledger requires a complete starting region with its own settlement,
 quest sequence, Doctrine introduction, and border transition. Branmark is a
 candidate anchor.
 
 ### Faction Homeland B
 
-The Unbound Flame requires an equivalent but not identical starting region.
+The Hundred Witnesses require an equivalent but not identical starting region.
 Graefell is a candidate anchor.
 
 Equivalent means comparable progression time, opportunity, and production

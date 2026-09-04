@@ -33,9 +33,13 @@ owned TBD register. (Trace: P10-041-P10-044, P10-051-P10-053.)
 | Hollow Choir | The initial cooperative dungeon containing the Sevrin Vale encounter. | P10-022, P10-049; [World and Settlements](world-and-settlements.md#the-hollow-choir) |
 | Ashen Choir | The hostile remnant of the Lucent Choir and enemy of both future player factions. | P10-049; [Characters and Factions](characters-and-factions.md#the-ashen-choir) |
 | Lucent Choir | The historical group whose ritual caused the Duskbreak; it is not the current dungeon or player faction. | P10-049; [Game Design Bible](game-design-bible.md) |
-| Concord | The old legal and religious structure governing Ember use; it is not identical to the Dawn Concordat. | P10-049; [Characters and Factions](characters-and-factions.md#the-concord) |
-| Dawn Concordat | A working player-faction name, not a final name and without an invented rename deadline. | P10-050; [Characters and Factions](characters-and-factions.md#dawn-concordat---working-name) |
-| Skeinblade | A canonical current class label. The supplied canon does not mark it as a working name, so this package does not invent a naming deadline or replacement. | P10-050; [Game Design Bible](game-design-bible.md) |
+| Concord | The old legal and religious structure governing Ember use; it is not identical to the Crowned Ledger (previously recorded as Dawn Concordat). | P10-049; [Characters and Factions](characters-and-factions.md#the-concord) |
+| Crowned Ledger | The working player-faction display name superseding Dawn Concordat under Issue #104. Not a final name; final faction naming is owned by #54. | P10-050; [Characters and Factions](characters-and-factions.md#crowned-ledger---working-name) |
+| Hundred Witnesses | The working player-faction display name superseding Unbound Flame under Issue #104. Not a final name; final faction naming is owned by #54. | P10-050; [Characters and Factions](characters-and-factions.md#hundred-witnesses---working-name) |
+| Dawn Concordat | Historical working faction name superseded by Crowned Ledger under Issue #104; retained only in historical evidence. | P10-050; [Characters and Factions](characters-and-factions.md#crowned-ledger---working-name) |
+| Unbound Flame | Historical working faction name superseded by Hundred Witnesses under Issue #104; retained only in historical evidence. | P10-050; [Characters and Factions](characters-and-factions.md#hundred-witnesses---working-name) |
+| Oathscar | The active initial Order/class working label, superseding Skeinblade under Issue #104. Stable ID `order.oathscar`. | P10-050; [Game Design Bible](game-design-bible.md) |
+| Skeinblade | Historical class working label superseded by Oathscar under Issue #104; retained only in historical evidence. | P10-050; [Game Design Bible](game-design-bible.md) |
 
 These definitions distinguish existing uses only and add no lore.
 

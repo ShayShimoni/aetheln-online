@@ -204,20 +204,40 @@ accepted attack, or stop an authoritative combat timeline.
 - Visual character differences must not change the authoritative combat
   capsule or create male, female, or race-based hitbox advantages.
 
-## Playable Classes
+## Playable Orders
 
-The initial class concepts remain:
+Orders are the game's classes: surviving institutions that train the
+Emberbound. Under Issue #104, the five Orders below supersede the earlier four
+initial class concepts (Bulwark, Skeinblade, Embercaller, and Lumen), and
+Oathscar supersedes Skeinblade as the active initial Order working label.
+Every display name below is a working name with a stable semantic ID.
 
-- **Bulwark:** pavise and spear; blocking, counters, protection, and guard
-  pressure.
-- **Skeinblade:** paired light-glass blades; dodging, momentum, pursuit, and
-  recovery punishment.
-- **Embercaller:** focus or relic gauntlet; aimed bursts, channels, zones, and
-  ranged control.
-- **Lumen:** chime-staff; healing, wards, support, and battlefield tempo.
+- **Oathscar** (`order.oathscar`): greatsword, sword-and-shield, two-handed
+  spear, and dual wield; sworn grudges spent as the Grudge resource; standing
+  ground, guard pressure, and punishment.
+- **Nullwright** (`order.nullwright`): staff, focus gauntlet, grimoire-blade,
+  and orbiting seals; demonstrated claims banked as the Proof resource; aimed
+  bursts, zones, and unmaking forced history.
+- **Hushblade** (`order.hushblade`): twin knives, sheathed blade, chain-sickle,
+  and needle fan; stolen rhythm banked as the Tempo resource; dodging,
+  momentum, pursuit, and recovery punishment.
+- **Gravecant** (`order.gravecant`): chime-staff, mace-reliquary, chain-censer,
+  and tome-rod; measured song banked as the Cadence resource; healing, wards,
+  witness-keeping, and battlefield tempo.
+- **Blackfletch** (`order.blackfletch`): longbow, recurve bow, greatbow, and
+  tether/trap bow; drawn stillness banked as the Tension resource; range,
+  traps, tethers, and route control.
 
-Classes are not faction-locked. Faction Doctrines modify how a class approaches
-the world and combat without replacing its identity.
+Each Order has two specializations and one Peak; a specialization selects the
+dominant interpretation of the Order's oath, and a Peak briefly realizes a
+forbidden version of the character. Resource names are working names and all
+resource behavior is tuning TBD; the prototype combat resource identity remains
+owned by its existing decision record.
+
+Orders are not faction-locked. Faction Doctrines modify how an Order approaches
+the world and combat without replacing its identity. The full Order
+institutions, specializations, Peaks, and character connections are defined in
+[Characters and Factions](characters-and-factions.md).
 
 ## Character Development
 
@@ -241,10 +261,12 @@ Skein Weaving replaces a traditional WoW-style talent tree.
 
 Its initial elements are:
 
-- **Forms:** mutually exclusive behavior changes for class abilities.
+- **Forms:** mutually exclusive behavior changes for class abilities. In lore,
+  a Form is an alternate history of a technique drawn from the Deepwake.
 - **Threads:** limited links in which one successful combat action changes
-  another.
-- **Keystone:** one major rule that changes the class's combat rhythm.
+  another. In lore, a Thread binds a remembered cause to its consequence.
+- **Keystone:** one major rule that changes the class's combat rhythm. In lore,
+  a Keystone accepts one defining contradiction into the character.
 - **Faction Doctrine:** faction-specific active and utility development.
 
 The initial playable implementation should use a small number of meaningful
@@ -305,22 +327,33 @@ and art-validation rules are defined in
 
 ## Lore Spine
 
-Aetheln was dreamed into existence by the Waking Star. The Star's light is the
-source of life, magic, and memory.
+Before the world there was the Deepwake, an ocean of unrealized lives and
+histories - everything that could have happened and did not. The Waking Star
+emerged from it: a partly sentient memory engine that dreamed Aetheln into
+physical existence by realizing some histories and rejecting the rest. Whether
+the Star intends anything by what it realizes remains disputed, and that
+dispute is deliberate canon. The Star's light is the source of life, magic, and
+memory.
 
 The Star dreamed the Aurin, Kell, and Vesh separately. All three peoples
 predate the Duskbreak, and their creation order remains unknown.
 
-The Lucent Choir attempted to bind that light permanently and caused the
-Duskbreak, cracking the Star and glassing much of civilization. The wounded
-Star now sheds scarce Embers into the world.
+The Lucent Choir attempted the Great Concordance: binding the Star's light
+permanently and forcing incompatible histories to coexist. The Concordance
+caused the Duskbreak, cracking the Star and glassing much of civilization. The
+wounded Star now sheds scarce Embers - rejected memories seeking realization -
+into the world. Forgettings are what remains when a life or place loses its
+continuity: still present, no longer coherent. The Emberbound, who carry
+realized Embers, respawn from their last coherent witnessed record.
 
 The Concord was created to regulate those Embers, but its laws are severe and
 its control is disputed. The two player factions now disagree over who should
 control the remaining light and what survival justifies.
 
-The Ashen Choir seeks to complete the failed ritual. Its success would extinguish
-the Star and end all life.
+The Ashen Choir seeks to complete the failed ritual. Its Choirmaster believes a
+completed Concordance - the Onefold Vault - can end suffering; the Waking Star
+never clearly commands him. The Choir's success would extinguish the Star and
+end all life.
 
 ## Reward Philosophy
 
@@ -347,7 +380,8 @@ Weaving, PvE, and persistent online services.
 The current prototype does not build that entire game at once. It first proves:
 
 - Responsive replicated movement.
-- One representative class kit.
+- One representative Order kit; Oathscar is the active initial Order working
+  label, superseding Skeinblade.
 - Server-authoritative attacks, dodge, damage, death, and respawn.
 - One enemy and one controlled combat space.
 - Playability under representative latency and packet loss.
