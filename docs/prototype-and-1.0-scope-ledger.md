@@ -27,6 +27,7 @@ Every ledger row uses exactly one of these values:
 
 - `canonical fact`
 - `accepted architecture`
+- `accepted project decision`
 - `proposed product decision`
 - `evidence-gated technical candidate`
 - `tuning candidate`
@@ -47,10 +48,10 @@ separate rows so they cannot be silently absorbed into another contract.
 | Combat epic #6 | #6, #4, #17, #18, #19, #20, #21, #60, #61 | 9 | P10-009-P10-017 |
 | Cooperative-world epic #7 | #7, #3, #22, #23, #24, #25, #26, #31 | 8 | P10-018-P10-025 |
 | Backend epic #10 | #10, #27, #30, #35, #36, #37, #38, #40 | 8 | P10-026-P10-033 |
-| Quality and gate owners | #12, #44, #45, #46, #48, #62 | 6 | P10-034-P10-038, P10-054 |
+| Quality and gate owners | #12, #44, #45, #46, #47, #48, #62 | 7 | P10-034-P10-038, P10-054, P10-055 |
 | Explicit later ownership | #50 | 1 | P10-039 |
 | Issue #71 conflicts/TBDs | #1, #2, #7, #13, #15, #22-#25, #36, #40, #45, #48, #50, #59, #60, #62, canonical documents | 13 | P10-041-P10-053 |
-| **Total** | **41 unique board items** | **54** | **P10-001-P10-054** |
+| **Total** | **42 unique board items** | **55** | **P10-001-P10-055** |
 
 ## Exactly-one-disposition ledger
 
@@ -110,6 +111,7 @@ separate rows so they cannot be silently absorbed into another contract.
 | P10-052 | Issue #71 conflict; #2/#40/#45/#48/#62 and related tickets | Cross-stage | Exact combat values, network profiles, tick/performance/hardware targets, rewards, retention, capacity, schedules, and go/no-go percentages. | tuning candidate | #2, #40, #45, #48, #62, and the applicable feature owner | Remains TBD until measured or explicitly approved with scenario, owner, evidence, and revisit trigger. |
 | P10-053 | Issue #71 conflict; security/operations canon | Cross-stage | Legal/privacy conclusions, jurisdictions, processing locations, access, retention, and regional requirements. | legal/privacy dependency | Qualified legal/privacy review; #40 and applicable service/data owner | No planning prose is legal approval; blocks collection or operation requiring an unresolved policy and revisits when jurisdiction, data, or provider changes. |
 | P10-054 | #46 | 1.0 Cooperative Slice | Produce controlled external-test distribution with access control, identified build provenance, privacy guidance, update and rollback behavior, uninstall behavior, and clean-machine install/run validation. | accepted architecture | #46; `docs/performance-quality-and-delivery.md`; `docs/security-and-operations.md` | The 1.0 external playtest is not ready until the implemented distribution path has recorded lifecycle and clean-machine evidence; provider and delivery mechanics remain evidence-owned. |
+| P10-055 | #47 | 1.1 Character Development | Standardize versioned playtest feedback intake, defect classification, duplicate linkage, severity and ownership assignment, privacy-safe handling, templates, triage cadence, and traceability. | deferred follow-up | #47 | Revisit in 1.1; #47 does not expand the prototype or 1.0 scope, and its cadence, response-time, severity, privacy, and retention values remain owned TBDs of #47. |
 
 ## Owned TBD register
 
