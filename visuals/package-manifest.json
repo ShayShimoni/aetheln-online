@@ -2,8 +2,8 @@
     "schemaVersion":  1,
     "packageStatus":  "non-canonical",
     "generatedAt":  "2026-08-02",
-    "expectedAssetCount":  103,
-    "expectedTotalFileCount":  107,
+    "expectedAssetCount":  104,
+    "expectedTotalFileCount":  108,
     "expectedC2paPngCount":  45,
     "mirrorPairs":  [
                         {
@@ -186,9 +186,15 @@
                        "mediaType":  "text/markdown"
                    },
                    {
+                       "path":  "issue-95-opening-screen-commonui-validation.md",
+                       "sha256":  "3c12c19397e16c21e6b52ba2aa8d8d22b51560fd123e87f5c1f2b09966e4b723",
+                       "bytes":  25197,
+                       "mediaType":  "text/markdown"
+                   },
+                   {
                        "path":  "README.md",
-                       "sha256":  "65d69e08b35af6ab9ab46ab7285fd0478904c09681dd85f43ab37bc46fd6e0a6",
-                       "bytes":  4172,
+                       "sha256":  "08ec8b204f8d02875c3a825dbd3d1822eb1e661a8176edd38da74eecbe6ce666",
+                       "bytes":  4512,
                        "mediaType":  "text/markdown"
                    },
                    {

@@ -1,17 +1,19 @@
 [CmdletBinding()]
 param(
-	[string] $Root = $PSScriptRoot,
-	[int] $RequiredAssetCount = 103,
-	[int] $RequiredTotalFileCount = 107
+	[string] $Root,
+	[int] $RequiredAssetCount = 104,
+	[int] $RequiredTotalFileCount = 108
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $PSScriptRoot }
 $Root = (Resolve-Path -LiteralPath $Root).Path
 $ManifestPath = Join-Path $Root 'package-manifest.json'
 $ProvenancePath = Join-Path $Root 'asset-provenance.md'
 $PromptPath = Join-Path $Root 'generation-prompts.md'
+$Issue95ReportPath = Join-Path $Root 'issue-95-opening-screen-commonui-validation.md'
 $GovernancePaths = @(
 	'package-manifest.json',
 	'asset-provenance.md',
@@ -70,7 +72,6 @@ function Test-Png {
 Assert-Condition (Test-Path -LiteralPath $ManifestPath -PathType Leaf) "Manifest is missing: $ManifestPath"
 Assert-Condition (Test-Path -LiteralPath $ProvenancePath -PathType Leaf) "Provenance is missing: $ProvenancePath"
 Assert-Condition (Test-Path -LiteralPath $PromptPath -PathType Leaf) "Generation prompts are missing: $PromptPath"
-
 $Manifest = Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json
 Assert-Condition ($Manifest.schemaVersion -eq 1) 'Manifest schemaVersion must be 1.'
 Assert-Condition ($Manifest.packageStatus -eq 'non-canonical') 'Manifest packageStatus must be non-canonical.'
@@ -79,6 +80,7 @@ Assert-Condition ($Manifest.expectedTotalFileCount -eq $RequiredTotalFileCount) 
 Assert-Condition (@($Manifest.assets).Count -eq $Manifest.expectedAssetCount) 'Manifest asset count does not match expectedAssetCount.'
 
 $ManifestPaths = @($Manifest.assets | ForEach-Object { [string]$_.path })
+$HasIssue95Report = $ManifestPaths -contains 'issue-95-opening-screen-commonui-validation.md'
 Assert-Condition (@($ManifestPaths | Sort-Object -Unique).Count -eq @($ManifestPaths).Count) 'Manifest contains duplicate paths.'
 foreach ($RelativePath in $ManifestPaths) {
 	Assert-Condition ($RelativePath -notmatch '^[A-Za-z]:[/\\]' -and $RelativePath -notmatch '^[/\\]' -and $RelativePath -notmatch '(^|/)\.\.(/|$)' -and $RelativePath -notmatch '\\') "Manifest paths must be normalized relative paths: $RelativePath"
@@ -89,6 +91,9 @@ $ExpectedAssetPaths = @($ManifestPaths | Sort-Object)
 Assert-Condition (($ActualAssetPaths -join "`n") -eq ($ExpectedAssetPaths -join "`n")) 'Package inventory differs from the manifest inventory.'
 $ActualTotal = @(Get-ChildItem -LiteralPath $Root -Recurse -File).Count
 Assert-Condition ($ActualTotal -eq $Manifest.expectedTotalFileCount) "Package contains $ActualTotal files; expected $($Manifest.expectedTotalFileCount)."
+if ($HasIssue95Report) {
+	Assert-Condition (Test-Path -LiteralPath $Issue95ReportPath -PathType Leaf) "Issue #95 report is missing: $Issue95ReportPath"
+}
 
 $C2paCount = 0
 foreach ($Entry in $Manifest.assets) {
@@ -174,6 +179,66 @@ foreach ($Required in @(
 	'No row in this register grants public distribution'
 )) {
 	Assert-Condition ($Provenance.Contains($Required)) "Provenance permission coverage missing: $Required"
+}
+
+if ($HasIssue95Report) {
+	$Issue95Report = Get-Content -Raw -LiteralPath $Issue95ReportPath
+	foreach ($Required in @(
+	'# Issue #95 Opening-Screen Visual Review and CommonUI Plan',
+	'## Opening-screen assessment',
+	'Legibility and contrast',
+	'Focus order and keyboard/controller navigation',
+	'Safe zones and localization expansion',
+	'Ultrawide and scalable layout',
+	'## Per-asset classification',
+	'Visual suitability',
+	'Rights/provenance state',
+	'Allowed current use',
+	'Reference-only',
+	'Potential internal prototype',
+	'Replacement/clearance required',
+	'Pending/TBD provenance prohibits production',
+	'packageStatus: non-canonical',
+	'## Issue #3 minimal entry contract',
+	'## Issue #53 later editor contract',
+	'Identity, race, sex, appearance, class/Skein, faction/Doctrine',
+	'class/Skein, faction/Doctrine, permanent',
+	'Character Level, seasonal Ember Rank, inventory/equipment, cosmetics',
+	'session state remain separate data concerns',
+	'Race, sex, and appearance never alter statistics',
+	'hitboxes, reach, timing, collision, traces, or loot probability',
+	'Faction = Unassigned',
+	'Doctrine selection',
+	'W_RootLayout',
+	'Game layer',
+	'Menu layer',
+	'Modal layer',
+	'Notification layer',
+	'Loading layer',
+	'focus',
+	'Accept',
+	'Back',
+	'1280×720',
+	'1920×1080',
+	'2560×1440',
+	'3440×1440',
+	'3840×2160',
+	'## Testable acceptance checklist',
+	'## Blockers and unresolved TBD decisions'
+	)) {
+		Assert-Condition ($Issue95Report.Contains($Required)) "Issue #95 report contract missing: $Required"
+	}
+	foreach ($Screen in @(
+	'Main menu',
+	'Character roster/selection',
+	'Minimal character entry (#3)',
+	'Settings',
+	'Accessibility',
+	'Dialog/tooltip and errors',
+	'Loading'
+	)) {
+		Assert-Condition ($Issue95Report.Contains("| $Screen |")) "Issue #95 screen assessment missing: $Screen"
+	}
 }
 
 $Prompts = Get-Content -Raw -LiteralPath $PromptPath

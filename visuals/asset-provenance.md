@@ -36,6 +36,7 @@ use.
 | `10-combat-readability-scene.png` | Owner-directed concept generated through the built-in image-generation workflow for issue #114; frozen external ingest. | Non-canonical reference/source asset |
 | `FUTURE-VISUALS-PLAN.md` | Owner-supplied legacy visual-package guidance; repository references and governance handoff updated by issue #94 after attested ingest. | Non-canonical reference/source asset |
 | `generation-prompts.md` | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | Non-canonical reference/source asset |
+| `issue-95-opening-screen-commonui-validation.md` | Repository-authored Issue #95 visual-review and CommonUI planning report derived from canonical and imported-package evidence. | Non-canonical planning/governance artifact; grants no asset rights, runtime approval, publication approval, or `Content/` promotion |
 | `README.md` | Owner-supplied legacy visual-package guidance; repository governance and current owner-approved concept direction updated by issue #94 after attested ingest. | Non-canonical reference/source asset |
 | `ui-production/assets/controls.svg` | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | Non-canonical reference/source asset |
 | `ui-production/assets/divider.svg` | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | Non-canonical reference/source asset |
