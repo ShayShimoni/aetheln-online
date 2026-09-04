@@ -153,15 +153,26 @@ concurrency group, so a trusted compile that queued during phase *k* starts
 before the dependent phase *k+1*, whose queue wait starts only when phase *k*
 completes. Each job `timeout-minutes` is the **total concurrency-holding
 bound** for that phase — checkout, LFS materialization, the gate script, and
-evidence upload all fit inside it — and the gate's script-enforced watchdog is
-one **absolute script-phase deadline** set below that bound and established
-immediately after input validation. The deadline covers the whole gate-script
-interval: setup, handoff validation, cleanup scanning, root accounting,
-manifest reads, payload hashing, and the build/smoke child all consume the
-remaining time from that single deadline (the child never receives a fresh
-full watchdog duration and is never started once the deadline has expired), so
-a `phase_timeout` report is written and uploaded before the platform cancels
-the job. Checkout/LFS and the report upload sit only inside the workflow job
+evidence upload all fit inside it — and the gate enforces a **hard bound over
+its whole controlled script interval**. A supervising parent re-invokes the
+gate as a child tree owned by a kill-on-close Windows Job Object; the complete
+phase body — setup, handoff validation, cleanup scanning, root accounting,
+manifest reads, payload hashing, smoke discovery, the build/smoke work, and
+timeout finalization — runs inside that tree. The child keeps the cooperative
+**absolute script-phase deadline** established immediately after input
+validation (every operation consumes the remaining time from that single
+deadline; the build/smoke grandchild never receives a fresh full watchdog
+duration and is never started once the deadline has expired), which yields
+precise per-check timeout evidence while operations stay responsive. If any
+single synchronous operation — a payload hash, a JSON read, a direct Git call,
+a discovery or cleanup scan — or the post-timeout finalization itself blocks
+across the deadline, the parent stops and verifies the whole child tree at the
+deadline plus a bounded finalization grace (`-PhaseFinalizeGraceSeconds`,
+default 120 seconds, validated and capped at 600), classifies `phase_timeout`
+(or `phase_cleanup_failed` when tree termination cannot be verified), and
+writes the bounded report itself — so a timeout report is written and uploaded
+before the platform cancels the job (deadline plus grace stays below every job
+bound). Checkout/LFS and the report upload sit only inside the workflow job
 bound; no report can be preserved if the platform kills the job before the
 gate script starts:
 
@@ -173,10 +184,11 @@ gate script starts:
 | Packaged smoke | 120 minutes (2 hours) | 105 |
 
 Reaching the deadline is an explicit `phase_timeout` failure, whether it
-expires during controlled pre-work (the bounded report is still written and
-retained, and the phase child is not started) or during the child: the gate
-runs each phase's work in a child process tree owned by a kill-on-close
-Windows Job Object, disposes the Job Object on timeout, verifies the tree
+expires during controlled pre-work between operations (the bounded report is
+still written and retained, and the build/smoke grandchild is not started),
+inside a single blocking synchronous operation (the supervisor hard bound
+interrupts it), or during the build/smoke work: on timeout the gate disposes
+the owning kill-on-close Job Object first, verifies the tree
 ended (bounded `taskkill /T /F` is only a fallback), rejects partial outputs
 (an unpublished integrity manifest can never be consumed, and a timed-out
 smoke never publishes a completion marker), retains the bounded report through

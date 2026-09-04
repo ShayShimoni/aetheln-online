@@ -275,12 +275,19 @@ Every accepted decision records:
   phases whose job `timeout-minutes` are the total concurrency-holding bounds
   (client package 8 h, server package 12 h, registry/provenance validation
   1 h, packaged smoke 2 h), each reacquiring the concurrency group, with a
-  script-enforced absolute phase deadline (450/690/45/105 minutes) below each
-  bound covering the whole gate-script interval — setup, handoff validation,
-  cleanup scanning, root accounting, manifest reads, payload hashing, and the
-  build/smoke child all consume remaining time from that one deadline — so
-  timeout evidence is recorded before platform cancellation; checkout/LFS and
-  report upload sit only inside the job bound. The recorded
+  hard bound over the whole controlled gate-script interval: a supervising
+  parent runs the complete phase body — setup, handoff validation, cleanup
+  scanning, root accounting, manifest reads, payload hashing, smoke discovery,
+  build/smoke work, and timeout finalization — in an owned kill-on-close child
+  tree. The child keeps the cooperative absolute phase deadline (450/690/45/105
+  minutes, every operation consuming remaining time from that one deadline);
+  if any synchronous operation or the timeout finalization blocks across it,
+  the parent stops and verifies the whole tree at the deadline plus a bounded
+  finalization grace (`-PhaseFinalizeGraceSeconds`, default 120 s, capped at
+  600), classifies `phase_timeout` or `phase_cleanup_failed`, and writes the
+  bounded report itself — so timeout evidence is recorded before platform
+  cancellation (deadline plus grace stays below each job bound); checkout/LFS
+  and report upload sit only inside the job bound. The recorded
   12-hour value is the maximum trusted-compile queue delay attributable to one
   currently running scheduled phase, subject to platform assignment latency;
   total queue time can be longer when older jobs are already ahead.
@@ -329,13 +336,15 @@ Every accepted decision records:
 - **Consequences:** The owner provisions `AETHELN_HANDOFF_ROOT` once and
   restarts the runner service; the first live scheduled run after merge is the
   independent operational proof. Phase evidence stays separate per job; a
-  phase-deadline expiry — during controlled pre-work (the child is then never
-  started) or during the child — is an explicit `phase_timeout` failure with
-  a retained bounded report and, for a running child, an owned,
-  verified process-tree stop (kill-on-close Job Object first, bounded taskkill
-  only as fallback, `phase_cleanup_failed` when the tree cannot be proven
-  ended), and the next scheduled attempt restarts the milestone from clean
-  inputs. Handoff cleanup is an external operational action driven by
+  phase-deadline expiry — between controlled pre-work operations (the
+  build/smoke grandchild is then never started), inside a single blocking
+  synchronous operation or the timeout finalization (the supervisor hard bound
+  interrupts it at deadline plus bounded grace), or during the build/smoke
+  work — is an explicit `phase_timeout` failure with a retained bounded report
+  and an owned, verified process-tree stop (kill-on-close Job Object first,
+  bounded taskkill only as fallback, `phase_cleanup_failed` when the tree
+  cannot be proven ended), and the next scheduled attempt restarts the
+  milestone from clean inputs. Handoff cleanup is an external operational action driven by
   cleanup-request records.
 - **Revisit trigger:** Retained phase evidence shows a bound is materially
   wrong, a second matching runner is registered, GitHub ships native job

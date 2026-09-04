@@ -7,16 +7,24 @@ modes (PackageClient, PackageServer, ValidateProvenance, SmokePhase) split the
 scheduled clean-package milestone into bounded jobs that exchange outputs only
 through the durable run-scoped handoff store under AETHELN_HANDOFF_ROOT, with
 fail-closed integrity manifests and a run-context record binding each run
-directory to its producing context. Every phase runs under one absolute
-script-phase deadline established immediately after input validation and sized
-below the job timeout: handoff validation, cleanup scanning, root accounting,
-manifest reads, payload hashing, and the build/smoke child (a kill-on-close
-Windows Job Object) all consume remaining time from that deadline rather than
-receiving a fresh watchdog duration, so phase_timeout evidence is recorded and
-uploaded before the platform cancels the job. The deadline covers only the
-gate-script interval: checkout/LFS and report upload sit inside the workflow
-job bound, and a report cannot be preserved if the platform kills the job
-before this script starts. Handoff directories are never deleted here; eligible
+directory to its producing context. Every phase runs under a hard-bounded
+supervisor: after input validation the parent process re-invokes this script as
+a supervised child inside an owned kill-on-close Windows Job Object, so the
+complete controlled gate interval — handoff validation, cleanup scanning, root
+accounting, manifest reads, payload hashing, smoke discovery, the build/smoke
+grandchild, and timeout finalization — runs in that child tree. The child keeps
+the cooperative absolute script-phase deadline (established immediately after
+input validation and sized below the job timeout; every operation consumes
+remaining time from it rather than receiving a fresh watchdog duration) for
+precise per-check evidence, and its post-timeout finalization is itself bounded
+by PhaseFinalizeGraceSeconds: if any synchronous operation blocks across the
+deadline, the parent stops and verifies the whole child tree at deadline plus
+grace, classifies phase_timeout (or phase_cleanup_failed when tree termination
+cannot be verified), and writes the bounded report itself — so evidence is
+recorded and uploaded before the platform cancels the job. The bound covers
+only the gate-script interval: checkout/LFS and report upload sit inside the
+workflow job bound, and a report cannot be preserved if the platform kills the
+job before this script starts. Handoff directories are never deleted here; eligible
 directories are only listed in cleanup-request records for external
 operational cleanup.
 #>
@@ -34,7 +42,8 @@ param(
 	[double] $PhaseTimeoutMinutes = 0,
 	[long] $HandoffPayloadCapBytes = 68719476736,
 	[long] $HandoffRootCapBytes = 274877906944,
-	[double] $HandoffStaleHours = 48
+	[double] $HandoffStaleHours = 48,
+	[double] $PhaseFinalizeGraceSeconds = 120
 )
 
 Set-StrictMode -Version Latest
@@ -43,6 +52,7 @@ $ErrorActionPreference = 'Stop'
 $Started = [DateTime]::UtcNow
 $Checks = New-Object System.Collections.ArrayList
 $RequiredFailed = $false
+$SupervisedChildExited = $false
 $FailureCode = $null
 $ResolvedRepository = $null
 $PhaseByMode = @{ PackageClient = 'client'; PackageServer = 'server'; ValidateProvenance = 'provenance'; SmokePhase = 'smoke' }
@@ -399,6 +409,7 @@ function Assert-PhaseContext {
 	if ($RunAttempt -notmatch '^[0-9]{1,6}$') { throw 'handoff_context_invalid' }
 	if ($RunnerName -notmatch $RunnerNamePattern) { throw 'handoff_context_invalid' }
 	if ($PhaseTimeoutMinutes -le 0 -or $PhaseTimeoutMinutes -gt 1440) { throw 'handoff_context_invalid' }
+	if ($PhaseFinalizeGraceSeconds -lt 1 -or $PhaseFinalizeGraceSeconds -gt 600) { throw 'handoff_context_invalid' }
 }
 
 function Resolve-HandoffRoot([string[]] $ForbiddenRoots) {
@@ -513,6 +524,17 @@ function Get-HandoffRelativeFiles([string] $PhaseDirectory) {
 	$Seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 	return @(Get-ChildEntriesSafe $PhaseDirectory 'handoff_payload_invalid' | Sort-Object FullName | ForEach-Object {
 		Assert-PhaseDeadline
+		# RUNNER_TEST_HASH_BLOCK_SECONDS is a fault-injection seam used only by
+		# the focused fixture suite to block a payload hash synchronously across
+		# the script-phase deadline (spawning a marker descendant via
+		# RUNNER_TEST_DESCENDANT_EXE) so the supervisor hard bound is provable;
+		# real CI never sets it.
+		$HashBlockSeconds = [Environment]::GetEnvironmentVariable('RUNNER_TEST_HASH_BLOCK_SECONDS', 'Process')
+		if (-not [string]::IsNullOrWhiteSpace($HashBlockSeconds)) {
+			$DescendantExecutable = [Environment]::GetEnvironmentVariable('RUNNER_TEST_DESCENDANT_EXE', 'Process')
+			if (-not [string]::IsNullOrWhiteSpace($DescendantExecutable)) { Start-Process -FilePath $DescendantExecutable -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 240') -WindowStyle Hidden | Out-Null }
+			Start-Sleep -Seconds ([int] $HashBlockSeconds)
+		}
 		$RelativePath = ($_.FullName.Substring($Prefix.Length) -replace '\\', '/')
 		if (-not $Seen.Add($RelativePath)) { throw 'handoff_payload_invalid' }
 		[ordered]@{
@@ -747,9 +769,9 @@ function Stop-PhaseProcessTree($TargetProcess, $TargetJob) {
 	if ($StillAlive) { throw 'phase_cleanup_failed' }
 }
 
-function Invoke-PhaseChildScript([string] $InvocationText, [double] $TimeoutMinutes, [bool] $UseNativeExitCode = $false) {
+function Invoke-PhaseChildScript([string] $InvocationText, [double] $TimeoutMinutes, [bool] $UseNativeExitCode = $false, [string] $WatchdogRoot = '') {
 	Initialize-EngineGateJobType
-	$WatchdogRoot = Join-Path $ResolvedLogs 'phase-watchdog'
+	if ([string]::IsNullOrWhiteSpace($WatchdogRoot)) { $WatchdogRoot = Join-Path $ResolvedLogs 'phase-watchdog' }
 	if (-not (Test-Path -LiteralPath $WatchdogRoot)) { New-Item -ItemType Directory -Path $WatchdogRoot -Force | Out-Null }
 	$Token = [guid]::NewGuid().ToString('N')
 	$DriverPath = Join-Path $WatchdogRoot ('driver-' + $Token + '.ps1')
@@ -784,6 +806,43 @@ function Invoke-PhaseChildWithinDeadline([string] $InvocationText) {
 	$RemainingMinutes = ($script:PhaseDeadlineUtc - [DateTime]::UtcNow).TotalMinutes
 	if ($RemainingMinutes -le 0) { return [ordered]@{ timedOut = $true; exitCode = -1; output = @(); cleanupFailure = $null } }
 	return Invoke-PhaseChildScript $InvocationText $RemainingMinutes
+}
+
+function Invoke-PhaseSupervisor {
+	# Hard bound for the whole controlled gate interval: the parent owns the
+	# absolute deadline and the report, while the complete phase body — handoff
+	# validation, cleanup/root scans, manifest reads, payload hashing, smoke
+	# discovery, build/smoke work, and timeout finalization — runs as this same
+	# script re-invoked inside an owned kill-on-close child tree. The child
+	# keeps the cooperative script-phase deadline for precise per-check
+	# evidence; the parent stops and verifies the whole tree at
+	# PhaseTimeoutMinutes plus a bounded finalization grace, so no synchronous
+	# operation and no post-timeout finalization can outlive the bound.
+	$ChildParameters = [ordered]@{
+		Mode = $Mode
+		RepositoryRoot = $ResolvedRepository
+		SourceRevision = $SourceRevision
+		LogRoot = (Join-Path $ResolvedLogs 'phase')
+		Repository = $Repository
+		RunId = $RunId
+		RunAttempt = $RunAttempt
+		RunnerName = $RunnerName
+		PhaseTimeoutMinutes = [string] $PhaseTimeoutMinutes
+		HandoffPayloadCapBytes = [string] $HandoffPayloadCapBytes
+		HandoffRootCapBytes = [string] $HandoffRootCapBytes
+		HandoffStaleHours = [string] $HandoffStaleHours
+		PhaseFinalizeGraceSeconds = [string] $PhaseFinalizeGraceSeconds
+	}
+	$BoundedGraceSeconds = [Math]::Min([Math]::Max($PhaseFinalizeGraceSeconds, 1), 600)
+	$HardDeadlineUtc = $Started.AddMinutes($PhaseTimeoutMinutes).AddSeconds($BoundedGraceSeconds)
+	$RemainingMinutes = ($HardDeadlineUtc - [DateTime]::UtcNow).TotalMinutes
+	if ($RemainingMinutes -le 0) { return [ordered]@{ timedOut = $true; exitCode = -1; output = @(); cleanupFailure = $null } }
+	[Environment]::SetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', '1', 'Process')
+	try {
+		return Invoke-PhaseChildScript (New-NamedInvocationText $PSCommandPath $ChildParameters) $RemainingMinutes $true (Join-Path $ResolvedLogs 'supervisor-watchdog')
+	} finally {
+		[Environment]::SetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', $null, 'Process')
+	}
 }
 
 function Invoke-BoundedGateCommand([string] $InvocationText, [datetime] $DeadlineUtc, [bool] $UseNativeExitCode = $false) {
@@ -962,12 +1021,32 @@ try {
 	}
 	$ProtectedValues = @($ResolvedRepository, $ProjectPath, $BuildScript, $SmokeScript, $BuildBatch, $EngineRoot, $ToolchainRoot, $ResolvedArchive, $ResolvedLogs)
 
+	if ($IsPhaseMode -and $PhaseTimeoutMinutes -gt 0 -and $PhaseTimeoutMinutes -le 1440 -and [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', 'Process') -ne '1') {
+		# Supervisor (parent) path: run the complete phase body in an owned
+		# kill-on-close child tree; on a normal child exit relay its captured
+		# output and exit code (the child already wrote the report), on hard
+		# expiry classify and let the finally block write the bounded report.
+		$SupervisorStarted = [DateTime]::UtcNow
+		$SupervisorResult = Invoke-PhaseSupervisor
+		if ($SupervisorResult.timedOut) {
+			$HardReason = if ([string]::IsNullOrWhiteSpace([string] $SupervisorResult.cleanupFailure)) { 'phase_timeout' } else { 'phase_cleanup_failed' }
+			Add-Check 'phase-hard-deadline' 'failed' $SupervisorStarted 'supervise-phase-child-tree' $HardReason
+			throw $HardReason
+		}
+		$SupervisedChildExited = $true
+		foreach ($Line in @($SupervisorResult.output)) { Write-Output ([string] $Line) }
+		if ($SupervisorResult.exitCode -ne 0) { exit 1 }
+		exit 0
+	}
+
 	if ($IsPhaseMode -and $PhaseTimeoutMinutes -gt 0 -and $PhaseTimeoutMinutes -le 1440) {
-		# One absolute script-phase deadline, anchored at script start, covers
-		# the whole gate-script interval: every later handoff, cleanup-scan,
-		# root-accounting, manifest, hashing, and child operation consumes
-		# remaining time from it. An out-of-range timeout is still rejected by
-		# Assert-PhaseContext.
+		# One absolute cooperative script-phase deadline, anchored at script
+		# start, covers the whole gate-script interval: every later handoff,
+		# cleanup-scan, root-accounting, manifest, hashing, and child operation
+		# consumes remaining time from it. This branch runs only in the
+		# supervised child, whose whole tree the parent additionally hard-kills
+		# at this deadline plus the bounded finalization grace. An out-of-range
+		# timeout is still rejected by Assert-PhaseContext.
 		$script:PhaseDeadlineUtc = $Started.AddMinutes($PhaseTimeoutMinutes)
 	}
 
@@ -1155,9 +1234,10 @@ try {
 		[void] (Invoke-HandoffConsumeSet $RunDirectory @('client', 'server', 'provenance') 'smoke')
 
 		$SmokeFailure = Invoke-SmokeGateWork $RunDirectory $script:PhaseDeadlineUtc
-		# Marker, cleanup-request, and report finalization run inside the fixed
-		# margin between the script deadline and the workflow job bound, so a
-		# timed-out smoke still retains its bounded evidence.
+		# Marker, cleanup-request, and report finalization run after the
+		# cooperative deadline but stay bounded: the supervising parent kills
+		# this whole child tree at the deadline plus PhaseFinalizeGraceSeconds
+		# and writes the bounded report itself if finalization blocks.
 		$script:PhaseDeadlineUtc = [DateTime]::MaxValue
 
 		$MarkerStarted = [DateTime]::UtcNow
@@ -1194,7 +1274,12 @@ try {
 	$FailureCode = [string] $_.Exception.Message
 	if ($FailureCode -notmatch '^[a-z0-9_]+$') { $FailureCode = 'engine_runner_failed' }
 } finally {
-	try { Write-RunnerReport } catch { $RequiredFailed = $true; $FailureCode = 'report_write_failed' }
+	# A supervised child that exited on its own already wrote the report;
+	# overwriting it here would replace rich per-check evidence with the
+	# parent's minimal view.
+	if (-not $SupervisedChildExited) {
+		try { Write-RunnerReport } catch { $RequiredFailed = $true; $FailureCode = 'report_write_failed' }
+	}
 }
 
 if ($RequiredFailed) {

@@ -42,9 +42,11 @@ Assert-True ($Workflow -notmatch '(?m)^\s+cancel-in-progress: true\r?$') 'No eng
 
 # The scheduled milestone is split into four bounded phases. Job
 # timeout-minutes is the total concurrency-holding bound for the phase
-# (480/720/60/120), and every phase runs its work under a script-enforced
-# watchdog (450/690/45/105) that expires early enough inside the job bound to
-# record and upload phase_timeout evidence before platform cancellation.
+# (480/720/60/120), and every phase runs its work under a cooperative script
+# deadline (450/690/45/105) plus the gate's supervisor hard bound (deadline
+# plus a finalization grace capped at 600 seconds) that together expire early
+# enough inside the job bound to record and upload phase_timeout evidence
+# before platform cancellation.
 $PhaseContract = @(
 	@{ Job = 'scheduled-client-package'; Needs = $null; JobTimeout = 480; Mode = 'PackageClient'; PhaseTimeout = '450'; Artifact = 'engine-runner-client-package-report' },
 	@{ Job = 'scheduled-server-package'; Needs = 'scheduled-client-package'; JobTimeout = 720; Mode = 'PackageServer'; PhaseTimeout = '690'; Artifact = 'engine-runner-server-package-report' },

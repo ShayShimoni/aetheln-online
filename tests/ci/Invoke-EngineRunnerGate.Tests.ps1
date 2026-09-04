@@ -144,6 +144,7 @@ throw "revealing failure"
 	$env:RUNNER_TEST_PHASE_FAIL = ''
 	$env:RUNNER_TEST_PHASE_SPAWN = ''
 	$env:RUNNER_TEST_KILL_FAULT = ''
+	$env:RUNNER_TEST_HASH_BLOCK_SECONDS = ''
 	$env:RUNNER_TEST_DESCENDANT_EXE = Join-Path $Fixture.Bin 'FakeAethelnDescendant.exe'
 	$env:AETHELN_HANDOFF_ROOT = $Fixture.Handoff
 	$env:RUNNER_TEST_WSLPATH_OUTPUT = '/mnt/d/archive/LinuxServer/Linux/AethelnOnlineServer.sh'
@@ -454,6 +455,39 @@ try {
 	Assert-ReportReason $Result 'phase_timeout' 'A script-phase deadline expiring during controlled pre-work must fail as phase_timeout with a retained report'
 	Assert-True (@(Get-Content $Fixture.PackageCapture).Count -eq $CallsBeforeDeadline) 'The phase child must never start after the script-phase deadline.'
 
+	foreach ($HardCase in @(
+		@{ Name = 'phase-hash-block-hard-deadline'; Fault = ''; Reason = 'phase_timeout' },
+		@{ Name = 'phase-hash-block-cleanup-failure'; Fault = 'skip-all'; Reason = 'phase_cleanup_failed' }
+	)) {
+		# A synchronous payload hash blocked across the script-phase deadline
+		# must be interrupted by the supervisor hard bound: bounded return, no
+		# consumer start, no surviving descendant, retained bounded report.
+		$Fixture = New-Case $HardCase.Name
+		[void] (Invoke-PhaseGate $Fixture 'PackageClient')
+		[void] (Invoke-PhaseGate $Fixture 'PackageServer')
+		$CallsBeforeBlock = @(Get-Content $Fixture.PackageCapture).Count
+		$env:RUNNER_TEST_HASH_BLOCK_SECONDS = '240'
+		$env:RUNNER_TEST_KILL_FAULT = $HardCase.Fault
+		$BlockStarted = [DateTime]::UtcNow
+		$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' @('-PhaseFinalizeGraceSeconds', '5') '12345' 'fixture-runner' '0.25'
+		$BlockElapsed = ([DateTime]::UtcNow - $BlockStarted).TotalSeconds
+		$env:RUNNER_TEST_HASH_BLOCK_SECONDS = ''
+		$env:RUNNER_TEST_KILL_FAULT = ''
+		Assert-ReportReason $Result $HardCase.Reason "$($HardCase.Name) must classify the blocked pre-work hash as $($HardCase.Reason)"
+		Assert-True (@((Read-Report $Result).checks | Where-Object { $_.name -eq 'phase-hard-deadline' -and $_.message -like ($HardCase.Reason + '*') }).Count -eq 1) "$($HardCase.Name) must be enforced by the supervisor hard bound, not the cooperative deadline."
+		Assert-True ($BlockElapsed -lt 90) "$($HardCase.Name) must return within the bounded interval including timeout finalization, took ${BlockElapsed}s."
+		Assert-True (@(Get-Content $Fixture.PackageCapture).Count -eq $CallsBeforeBlock) "$($HardCase.Name) must never start the provenance consumer."
+		$Survivors = @()
+		foreach ($Attempt in 1..20) {
+			$Survivors = @(Get-Process -Name 'FakeAethelnDescendant' -ErrorAction SilentlyContinue)
+			if ($Survivors.Count -eq 0) { break }
+			Start-Sleep -Milliseconds 250
+		}
+		if ($Survivors.Count -gt 0) { $Survivors | Stop-Process -Force -ErrorAction SilentlyContinue }
+		Assert-True ($Survivors.Count -eq 0) "$($HardCase.Name) must leave no supervised descendant alive before the gate returns."
+		Assert-True (-not (Test-Path (Join-Path (Get-PhaseRunDirectory $Fixture) 'manifest-provenance.json'))) "$($HardCase.Name) must not publish partial outputs."
+	}
+
 	$Fixture = New-Case 'phase-smoke-timeout-required'
 	$Result = Invoke-PhaseGate $Fixture 'SmokePhase' @() '12345' 'fixture-runner' '0'
 	Assert-ReportReason $Result 'handoff_context_invalid' 'SmokePhase without a positive phase-work timeout must be rejected'
@@ -646,6 +680,6 @@ try {
 	$env:AETHELN_ENGINE_ROOT = $Original.Engine
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $Original.Toolchain
 	$env:AETHELN_HANDOFF_ROOT = $Original.Handoff
-	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_SMOKE_HANG','RUNNER_TEST_PHASE_SLEEP','RUNNER_TEST_PHASE_FAIL','RUNNER_TEST_PHASE_SPAWN','RUNNER_TEST_KILL_FAULT','RUNNER_TEST_DESCENDANT_EXE','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
+	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_SMOKE_HANG','RUNNER_TEST_PHASE_SLEEP','RUNNER_TEST_PHASE_FAIL','RUNNER_TEST_PHASE_SPAWN','RUNNER_TEST_KILL_FAULT','RUNNER_TEST_HASH_BLOCK_SECONDS','RUNNER_TEST_DESCENDANT_EXE','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
 	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 }

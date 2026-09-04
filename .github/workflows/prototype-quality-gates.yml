@@ -76,13 +76,22 @@ jobs:
   # not an absolute priority and older queued jobs stay ahead of it. Job
   # timeout-minutes is the total concurrency-holding bound for each phase
   # (checkout, LFS, the gate script, and evidence upload all fit inside it).
-  # The gate enforces one absolute script-phase deadline covering its whole
-  # script interval — setup, handoff validation, cleanup scanning, root
-  # accounting, manifest reads, payload hashing, and the build/smoke child all
-  # consume remaining time from that deadline — so a phase_timeout report is
-  # written and uploaded before the platform cancels the job. Checkout/LFS and
-  # the report upload sit only inside the job bound: no report can be
-  # preserved if the platform kills the job before the gate script starts.
+  # The gate enforces a hard bound over its whole controlled script interval:
+  # a supervising parent re-invokes the gate as a kill-on-close child tree
+  # that runs the complete phase body — setup, handoff validation, cleanup
+  # scanning, root accounting, manifest reads, payload hashing, smoke
+  # discovery, the build/smoke work, and timeout finalization. The child keeps
+  # the cooperative absolute script-phase deadline (every operation consumes
+  # remaining time from it); if any synchronous operation or finalization
+  # blocks across that deadline, the parent stops and verifies the whole tree
+  # at the deadline plus a bounded finalization grace (default 120 s, capped
+  # at 600 s), classifies phase_timeout (or phase_cleanup_failed when tree
+  # termination cannot be verified), and writes the bounded report itself —
+  # so a phase_timeout report is written and uploaded before the platform
+  # cancels the job (deadline + grace stays below every job bound).
+  # Checkout/LFS and the report upload sit only inside the job bound: no
+  # report can be preserved if the platform kills the job before the gate
+  # script starts.
   # Packaged bytes move between phases only through the durable
   # AETHELN_HANDOFF_ROOT store with fail-closed integrity manifests; nothing
   # under it is deleted by CI.
