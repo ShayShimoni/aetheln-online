@@ -152,10 +152,18 @@ The mechanism: each scheduled phase job reacquires the `aetheln-engine-runner`
 concurrency group, so a trusted compile that queued during phase *k* starts
 before the dependent phase *k+1*, whose queue wait starts only when phase *k*
 completes. Each job `timeout-minutes` is the **total concurrency-holding
-bound** for that phase — checkout, LFS materialization, phase work, and
+bound** for that phase — checkout, LFS materialization, the gate script, and
 evidence upload all fit inside it — and the gate's script-enforced watchdog is
-set below it so a `phase_timeout` report is written and uploaded before the
-platform cancels the job:
+one **absolute script-phase deadline** set below that bound and established
+immediately after input validation. The deadline covers the whole gate-script
+interval: setup, handoff validation, cleanup scanning, root accounting,
+manifest reads, payload hashing, and the build/smoke child all consume the
+remaining time from that single deadline (the child never receives a fresh
+full watchdog duration and is never started once the deadline has expired), so
+a `phase_timeout` report is written and uploaded before the platform cancels
+the job. Checkout/LFS and the report upload sit only inside the workflow job
+bound; no report can be preserved if the platform kills the job before the
+gate script starts:
 
 | Phase | Total job bound (`timeout-minutes`) | Script watchdog (`-PhaseTimeoutMinutes`) |
 | --- | --- | --- |
@@ -164,7 +172,9 @@ platform cancels the job:
 | Registry/provenance validation | 60 minutes (1 hour) | 45 |
 | Packaged smoke | 120 minutes (2 hours) | 105 |
 
-Reaching a watchdog limit is an explicit `phase_timeout` failure: the gate
+Reaching the deadline is an explicit `phase_timeout` failure, whether it
+expires during controlled pre-work (the bounded report is still written and
+retained, and the phase child is not started) or during the child: the gate
 runs each phase's work in a child process tree owned by a kill-on-close
 Windows Job Object, disposes the Job Object on timeout, verifies the tree
 ended (bounded `taskkill /T /F` is only a fallback), rejects partial outputs
@@ -222,8 +232,13 @@ of silently missing or accepting foreign state. An unset or invalid
 redacted setup code; portable checks and `trusted-candidate-compile` are
 unaffected.
 
-Bounds: at most **64 GiB** of payload per run attempt, enforced during both
-publication and consumption (`handoff_size_exceeded` above it). Before
+Bounds: at most **64 GiB** of payload per run attempt — one cap per run
+attempt, enforced cumulatively at both publication and consumption
+(`handoff_size_exceeded` above it): publication sums every previously
+committed manifest before accepting a new one, and consumption validates the
+complete required manifest set for the consumer as one closed set, rejecting
+the run with overflow-safe aggregate accounting before any phase directory is
+handed to the consumer. Before
 creating a new run directory the first phase measures the **complete
 validated handoff root** — every repository scope counts, reparse points are
 never traversed or counted — and fails closed as `handoff_storage_exhausted`

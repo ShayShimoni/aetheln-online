@@ -425,6 +425,35 @@ try {
 	Assert-ReportReason $Result 'handoff_size_exceeded' 'A payload above the per-attempt cap must fail closed'
 	Assert-True (-not (Test-Path (Join-Path (Get-PhaseRunDirectory $Fixture) 'manifest-client.json'))) 'An oversized payload must not publish its manifest.'
 
+	$Fixture = New-Case 'phase-consume-aggregate-cap'
+	$RunDirectory = Get-PhaseRunDirectory $Fixture
+	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
+	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
+	$ClientTotal = [long] (Get-Content (Join-Path $RunDirectory 'manifest-client.json') -Raw | ConvertFrom-Json).totalBytes
+	$ServerTotal = [long] (Get-Content (Join-Path $RunDirectory 'manifest-server.json') -Raw | ConvertFrom-Json).totalBytes
+	$AggregateCap = [Math]::Max($ClientTotal, $ServerTotal)
+	Assert-True ($ClientTotal -gt 0 -and $ServerTotal -gt 0 -and $AggregateCap -lt ($ClientTotal + $ServerTotal)) 'The aggregate-cap fixture must hold two individually valid manifests whose sum exceeds the chosen cap.'
+	$CallsBeforeConsume = @(Get-Content $Fixture.PackageCapture).Count
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' @('-HandoffPayloadCapBytes', [string] $AggregateCap)
+	Assert-ReportReason $Result 'handoff_size_exceeded' 'Individually valid manifests whose aggregate exceeds the per-run cap must fail closed at provenance consumption'
+	Assert-True (@(Get-Content $Fixture.PackageCapture).Count -eq $CallsBeforeConsume) 'An aggregate cap rejection must stop provenance before any payload use.'
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance'
+	Assert-True ($Result.ExitCode -eq 0) "The same manifest set must validate under the full cap. Output: $($Result.Output)"
+	$ProvenanceTotal = [long] (Get-Content (Join-Path $RunDirectory 'manifest-provenance.json') -Raw | ConvertFrom-Json).totalBytes
+	$SmokeCap = [Math]::Max($AggregateCap, $ProvenanceTotal)
+	Assert-True (($ClientTotal + $ServerTotal + $ProvenanceTotal) -gt $SmokeCap) 'The smoke aggregate must exceed the chosen cap while every single manifest stays within it.'
+	$Result = Invoke-PhaseGate $Fixture 'SmokePhase' @('-HandoffPayloadCapBytes', [string] $SmokeCap)
+	Assert-ReportReason $Result 'handoff_size_exceeded' 'Individually valid manifests whose aggregate exceeds the per-run cap must fail closed at smoke consumption'
+	Assert-True (-not (Test-Path $Fixture.SmokeCapture)) 'An aggregate cap rejection must stop smoke before any payload use.'
+
+	$Fixture = New-Case 'phase-prework-deadline'
+	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
+	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
+	$CallsBeforeDeadline = @(Get-Content $Fixture.PackageCapture).Count
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' @() '12345' 'fixture-runner' '0.0001'
+	Assert-ReportReason $Result 'phase_timeout' 'A script-phase deadline expiring during controlled pre-work must fail as phase_timeout with a retained report'
+	Assert-True (@(Get-Content $Fixture.PackageCapture).Count -eq $CallsBeforeDeadline) 'The phase child must never start after the script-phase deadline.'
+
 	$Fixture = New-Case 'phase-smoke-timeout-required'
 	$Result = Invoke-PhaseGate $Fixture 'SmokePhase' @() '12345' 'fixture-runner' '0'
 	Assert-ReportReason $Result 'handoff_context_invalid' 'SmokePhase without a positive phase-work timeout must be rejected'

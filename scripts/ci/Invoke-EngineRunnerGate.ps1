@@ -7,10 +7,16 @@ modes (PackageClient, PackageServer, ValidateProvenance, SmokePhase) split the
 scheduled clean-package milestone into bounded jobs that exchange outputs only
 through the durable run-scoped handoff store under AETHELN_HANDOFF_ROOT, with
 fail-closed integrity manifests and a run-context record binding each run
-directory to its producing context. Every phase runs its long work under a
-script-enforced watchdog (a kill-on-close Windows Job Object) sized below the
-job timeout so phase_timeout evidence is recorded and uploaded before the
-platform cancels the job. Handoff directories are never deleted here; eligible
+directory to its producing context. Every phase runs under one absolute
+script-phase deadline established immediately after input validation and sized
+below the job timeout: handoff validation, cleanup scanning, root accounting,
+manifest reads, payload hashing, and the build/smoke child (a kill-on-close
+Windows Job Object) all consume remaining time from that deadline rather than
+receiving a fresh watchdog duration, so phase_timeout evidence is recorded and
+uploaded before the platform cancels the job. The deadline covers only the
+gate-script interval: checkout/LFS and report upload sit inside the workflow
+job bound, and a report cannot be preserved if the platform kills the job
+before this script starts. Handoff directories are never deleted here; eligible
 directories are only listed in cleanup-request records for external
 operational cleanup.
 #>
@@ -48,6 +54,7 @@ $ManifestPropertyNames = @('schemaVersion', 'repository', 'sourceRevision', 'run
 $RunContextPropertyNames = @('schemaVersion', 'repository', 'sourceRevision', 'runId', 'runAttempt', 'runnerName', 'createdUtc')
 $MarkerPropertyNames = @('schemaVersion', 'repository', 'sourceRevision', 'runId', 'runAttempt', 'runnerName', 'state', 'finishedUtc')
 $SmokeDeadlineUtc = [DateTime]::MaxValue
+$PhaseDeadlineUtc = [DateTime]::MaxValue
 
 $EngineGateJobSource = @"
 using System;
@@ -99,6 +106,10 @@ namespace Aetheln {
 
 function Initialize-EngineGateJobType {
 	if ($null -eq ('Aetheln.EngineGateJob' -as [type])) { Add-Type -TypeDefinition $EngineGateJobSource -Language CSharp }
+}
+
+function Assert-PhaseDeadline {
+	if ([DateTime]::UtcNow -ge $script:PhaseDeadlineUtc) { throw 'phase_timeout' }
 }
 
 function Test-IsWithin([string] $Candidate, [string] $Parent) {
@@ -258,6 +269,7 @@ function Get-ChildEntriesSafe([string] $Root, [string] $ReasonCode, [bool] $Skip
 	}
 	$Directories.Push(([System.IO.Path]::GetFullPath($Root)))
 	while ($Directories.Count -gt 0) {
+		Assert-PhaseDeadline
 		$Current = $Directories.Pop()
 		foreach ($Item in @(Get-ChildItem -LiteralPath $Current -Force)) {
 			if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -500,6 +512,7 @@ function Get-HandoffRelativeFiles([string] $PhaseDirectory) {
 	$Prefix = [System.IO.Path]::GetFullPath($PhaseDirectory).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
 	$Seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 	return @(Get-ChildEntriesSafe $PhaseDirectory 'handoff_payload_invalid' | Sort-Object FullName | ForEach-Object {
+		Assert-PhaseDeadline
 		$RelativePath = ($_.FullName.Substring($Prefix.Length) -replace '\\', '/')
 		if (-not $Seen.Add($RelativePath)) { throw 'handoff_payload_invalid' }
 		[ordered]@{
@@ -514,6 +527,7 @@ function Write-CleanupRequest([string] $ScopeRoot, [string] $RequestingPhase) {
 	$Entries = New-Object System.Collections.ArrayList
 	$RunDirectories = @(Get-ChildItem -LiteralPath $ScopeRoot -Directory -Force | Where-Object { $_.Name -like 'run-*' } | Sort-Object Name | Select-Object -First 100)
 	foreach ($Directory in $RunDirectories) {
+		Assert-PhaseDeadline
 		$AgeHours = [Math]::Round(([DateTime]::UtcNow - $Directory.CreationTimeUtc).TotalHours, 2)
 		$State = 'active'
 		$Eligible = $false
@@ -629,7 +643,7 @@ function Test-HandoffManifest([string] $RunDirectory, [string] $Phase, [string] 
 	Assert-PathChainSafe $HandoffRoot $ManifestPath 'handoff_payload_invalid'
 	if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) { throw 'handoff_missing' }
 	$Manifest = Read-JsonStrict $ManifestPath 'handoff_schema_invalid'
-	[void] (Test-HandoffManifestShape $Manifest)
+	$Shape = Test-HandoffManifestShape $Manifest
 	if ([string] $Manifest.repository -cne $Repository) { throw 'handoff_context_mismatch' }
 	if (-not ([string] $Manifest.sourceRevision).Equals($SourceRevision, [StringComparison]::OrdinalIgnoreCase)) { throw 'handoff_context_mismatch' }
 	if ([string] $Manifest.runId -ne $RunId -or [string] $Manifest.runAttempt -ne $RunAttempt) { throw 'handoff_context_mismatch' }
@@ -649,7 +663,7 @@ function Test-HandoffManifest([string] $RunDirectory, [string] $Phase, [string] 
 		if ([long] $Actual.bytes -ne [long] $Entry.bytes) { throw 'handoff_digest_mismatch' }
 		if ([string] $Actual.sha256 -cne [string] $Entry.sha256) { throw 'handoff_digest_mismatch' }
 	}
-	return $PhaseDirectory
+	return [ordered]@{ phaseDirectory = $PhaseDirectory; totalBytes = [long] $Shape.totalBytes }
 }
 
 function ConvertTo-DriverLiteral([string] $Value) {
@@ -763,6 +777,15 @@ function Invoke-PhaseChildScript([string] $InvocationText, [double] $TimeoutMinu
 	}
 }
 
+function Invoke-PhaseChildWithinDeadline([string] $InvocationText) {
+	# The phase child never receives a fresh watchdog duration: it gets only
+	# the time remaining on the absolute script-phase deadline, and it is
+	# never started once that deadline has expired.
+	$RemainingMinutes = ($script:PhaseDeadlineUtc - [DateTime]::UtcNow).TotalMinutes
+	if ($RemainingMinutes -le 0) { return [ordered]@{ timedOut = $true; exitCode = -1; output = @(); cleanupFailure = $null } }
+	return Invoke-PhaseChildScript $InvocationText $RemainingMinutes
+}
+
 function Invoke-BoundedGateCommand([string] $InvocationText, [datetime] $DeadlineUtc, [bool] $UseNativeExitCode = $false) {
 	$RemainingMinutes = ($DeadlineUtc - [DateTime]::UtcNow).TotalMinutes
 	if ($RemainingMinutes -le 0) { throw 'phase_timeout' }
@@ -778,15 +801,16 @@ function Invoke-GateCommand([string] $Executable, [string[]] $Arguments) {
 	return [ordered]@{ output = @($Result.output); exitCode = $Result.exitCode }
 }
 
-function Invoke-SmokeGateWork([string] $SearchRoot, [double] $WatchdogMinutes = 0) {
+function Invoke-SmokeGateWork([string] $SearchRoot, [datetime] $DeadlineUtc = [DateTime]::MaxValue) {
 	$SmokeStarted = [DateTime]::UtcNow
 	$SmokeOutput = New-Object System.Collections.ArrayList
 	$SmokeProtectedValues = @($ProtectedValues)
 	$SmokeFailure = $null
-	$script:SmokeDeadlineUtc = if ($WatchdogMinutes -gt 0) { [DateTime]::UtcNow.AddMinutes($WatchdogMinutes) } else { [DateTime]::MaxValue }
+	$script:SmokeDeadlineUtc = $DeadlineUtc
 	$ServerLauncherArgumentVector = @('-d', 'Ubuntu', '-u', 'aethelnqa', '--exec', '{ServerExecutable}', '{ServerMap}', '-port=7777', '-stdout', '-FullStdOutLogOutput')
 	$ClientBaseArgumentVector = @('{ServerEndpoint}', '-stdout', '-FullStdOutLogOutput')
 	try {
+		if ([DateTime]::UtcNow -ge $script:SmokeDeadlineUtc) { throw 'phase_timeout' }
 		$ClientCandidates = @(Get-ChildItem -LiteralPath $SearchRoot -Recurse -File | Where-Object {
 			$_.Name -in @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
 		})
@@ -887,18 +911,31 @@ function Invoke-HandoffPublish([string] $PublishRunDirectory, [string] $Phase, [
 	}
 }
 
-function Invoke-HandoffConsume([string] $ConsumeRunDirectory, [string] $Phase, [string] $ConsumingPhase) {
-	$CheckStarted = [DateTime]::UtcNow
-	try {
-		$PhaseDirectory = Test-HandoffManifest $ConsumeRunDirectory $Phase $ConsumingPhase
-		Add-Check ('handoff-consume-{0}' -f $Phase) 'passed' $CheckStarted 'verify-handoff-manifest' 'handoff_verified'
-		return $PhaseDirectory
-	} catch {
-		$Reason = [string] $_.Exception.Message
-		if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'handoff_schema_invalid' }
-		Add-Check ('handoff-consume-{0}' -f $Phase) 'failed' $CheckStarted 'verify-handoff-manifest' $Reason
-		throw $Reason
+function Invoke-HandoffConsumeSet([string] $ConsumeRunDirectory, [string[]] $Phases, [string] $ConsumingPhase) {
+	# The complete required manifest set for the consumer is validated as one
+	# closed set: every manifest and payload passes the full per-manifest
+	# checks, the aggregate totalBytes stays under the single per-run payload
+	# cap with overflow-safe accounting, and no phase directory is returned
+	# until the whole set is accepted.
+	$Directories = [ordered]@{}
+	$AggregateBytes = [long] 0
+	foreach ($Phase in $Phases) {
+		$CheckStarted = [DateTime]::UtcNow
+		try {
+			Assert-PhaseDeadline
+			$Verified = Test-HandoffManifest $ConsumeRunDirectory $Phase $ConsumingPhase
+			$AggregateBytes += [long] $Verified.totalBytes
+			if ($AggregateBytes -lt 0 -or $AggregateBytes -gt $HandoffPayloadCapBytes) { throw 'handoff_size_exceeded' }
+			$Directories[$Phase] = $Verified.phaseDirectory
+			Add-Check ('handoff-consume-{0}' -f $Phase) 'passed' $CheckStarted 'verify-handoff-manifest' 'handoff_verified'
+		} catch {
+			$Reason = [string] $_.Exception.Message
+			if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'handoff_schema_invalid' }
+			Add-Check ('handoff-consume-{0}' -f $Phase) 'failed' $CheckStarted 'verify-handoff-manifest' $Reason
+			throw $Reason
+		}
 	}
+	return $Directories
 }
 
 try {
@@ -925,6 +962,15 @@ try {
 	}
 	$ProtectedValues = @($ResolvedRepository, $ProjectPath, $BuildScript, $SmokeScript, $BuildBatch, $EngineRoot, $ToolchainRoot, $ResolvedArchive, $ResolvedLogs)
 
+	if ($IsPhaseMode -and $PhaseTimeoutMinutes -gt 0 -and $PhaseTimeoutMinutes -le 1440) {
+		# One absolute script-phase deadline, anchored at script start, covers
+		# the whole gate-script interval: every later handoff, cleanup-scan,
+		# root-accounting, manifest, hashing, and child operation consumes
+		# remaining time from it. An out-of-range timeout is still rejected by
+		# Assert-PhaseContext.
+		$script:PhaseDeadlineUtc = $Started.AddMinutes($PhaseTimeoutMinutes)
+	}
+
 	$HandoffRoot = $null
 	$ScopeRoot = $null
 	$RunDirectory = $null
@@ -933,6 +979,7 @@ try {
 		$PhaseName = $PhaseByMode[$Mode]
 		$HandoffStarted = [DateTime]::UtcNow
 		try {
+			Assert-PhaseDeadline
 			Assert-PhaseContext
 			$HandoffRoot = Resolve-HandoffRoot @($ResolvedRepository, $EngineRoot, $ToolchainRoot, [Environment]::GetEnvironmentVariable('RUNNER_TEMP', 'Process'), [Environment]::GetEnvironmentVariable('GITHUB_WORKSPACE', 'Process'))
 			$RepositoryParts = $Repository -split '/'
@@ -953,6 +1000,7 @@ try {
 		if ($Mode -eq 'PackageClient') {
 			$StorageStarted = [DateTime]::UtcNow
 			try {
+				Assert-PhaseDeadline
 				Write-CleanupRequest $ScopeRoot $PhaseName
 				# The committed measurement spans the complete validated handoff
 				# root, so every repository scope counts toward the total cap.
@@ -973,6 +1021,7 @@ try {
 		} else {
 			$RunContextStarted = [DateTime]::UtcNow
 			try {
+				Assert-PhaseDeadline
 				if (-not (Test-Path -LiteralPath $RunDirectory -PathType Container)) { throw 'handoff_missing' }
 				[void] (Test-RunContextRecord $RunDirectory $true)
 				Add-Check 'handoff-run-directory' 'passed' $RunContextStarted 'validate-handoff-run-context' 'handoff_run_context_valid'
@@ -1045,7 +1094,7 @@ try {
 			Map = '/Game/Maps/StarterMap'
 		}
 		$BuildStarted = [DateTime]::UtcNow
-		$PhaseResult = Invoke-PhaseChildScript (New-NamedInvocationText $BuildScript $PhaseParameters) $PhaseTimeoutMinutes
+		$PhaseResult = Invoke-PhaseChildWithinDeadline (New-NamedInvocationText $BuildScript $PhaseParameters)
 		$BuildFailure = $null
 		if ($PhaseResult.timedOut) {
 			$TimeoutReason = if ([string]::IsNullOrWhiteSpace([string] $PhaseResult.cleanupFailure)) { 'phase_timeout' } else { 'phase_cleanup_failed' }
@@ -1063,8 +1112,9 @@ try {
 		Invoke-HandoffPublish $RunDirectory $PhaseName @('provenance', 'smoke')
 		Assert-RepositoryState 'repository-state-at-completion'
 	} elseif ($Mode -eq 'ValidateProvenance') {
-		$ClientDirectory = Invoke-HandoffConsume $RunDirectory 'client' 'provenance'
-		$ServerDirectory = Invoke-HandoffConsume $RunDirectory 'server' 'provenance'
+		$ConsumedDirectories = Invoke-HandoffConsumeSet $RunDirectory @('client', 'server') 'provenance'
+		$ClientDirectory = $ConsumedDirectories['client']
+		$ServerDirectory = $ConsumedDirectories['server']
 		$PhaseDirectory = Get-HandoffChildPath $RunDirectory $PhaseName 'handoff_conflict'
 		if ((Test-Path -LiteralPath $PhaseDirectory) -or (Test-Path -LiteralPath (Join-Path $RunDirectory ('manifest-{0}.json' -f $PhaseName)))) {
 			Add-Check 'registry-provenance-validation' 'failed' ([DateTime]::UtcNow) 'Build-PackagedArtifacts.ps1' 'handoff_conflict'
@@ -1084,7 +1134,7 @@ try {
 			ServerStageRoot = $ServerDirectory
 		}
 		$BuildStarted = [DateTime]::UtcNow
-		$PhaseResult = Invoke-PhaseChildScript (New-NamedInvocationText $BuildScript $PhaseParameters) $PhaseTimeoutMinutes
+		$PhaseResult = Invoke-PhaseChildWithinDeadline (New-NamedInvocationText $BuildScript $PhaseParameters)
 		$BuildFailure = $null
 		if ($PhaseResult.timedOut) {
 			$TimeoutReason = if ([string]::IsNullOrWhiteSpace([string] $PhaseResult.cleanupFailure)) { 'phase_timeout' } else { 'phase_cleanup_failed' }
@@ -1102,11 +1152,13 @@ try {
 		Invoke-HandoffPublish $RunDirectory $PhaseName @('smoke')
 		Assert-RepositoryState 'repository-state-at-completion'
 	} else {
-		[void] (Invoke-HandoffConsume $RunDirectory 'client' 'smoke')
-		[void] (Invoke-HandoffConsume $RunDirectory 'server' 'smoke')
-		[void] (Invoke-HandoffConsume $RunDirectory 'provenance' 'smoke')
+		[void] (Invoke-HandoffConsumeSet $RunDirectory @('client', 'server', 'provenance') 'smoke')
 
-		$SmokeFailure = Invoke-SmokeGateWork $RunDirectory $PhaseTimeoutMinutes
+		$SmokeFailure = Invoke-SmokeGateWork $RunDirectory $script:PhaseDeadlineUtc
+		# Marker, cleanup-request, and report finalization run inside the fixed
+		# margin between the script deadline and the workflow job bound, so a
+		# timed-out smoke still retains its bounded evidence.
+		$script:PhaseDeadlineUtc = [DateTime]::MaxValue
 
 		$MarkerStarted = [DateTime]::UtcNow
 		try {

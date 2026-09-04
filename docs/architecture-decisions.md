@@ -275,8 +275,12 @@ Every accepted decision records:
   phases whose job `timeout-minutes` are the total concurrency-holding bounds
   (client package 8 h, server package 12 h, registry/provenance validation
   1 h, packaged smoke 2 h), each reacquiring the concurrency group, with a
-  script-enforced watchdog (450/690/45/105 minutes) below each bound so
-  timeout evidence is recorded before platform cancellation. The recorded
+  script-enforced absolute phase deadline (450/690/45/105 minutes) below each
+  bound covering the whole gate-script interval — setup, handoff validation,
+  cleanup scanning, root accounting, manifest reads, payload hashing, and the
+  build/smoke child all consume remaining time from that one deadline — so
+  timeout evidence is recorded before platform cancellation; checkout/LFS and
+  report upload sit only inside the job bound. The recorded
   12-hour value is the maximum trusted-compile queue delay attributable to one
   currently running scheduled phase, subject to platform assignment latency;
   total queue time can be longer when older jobs are already ahead.
@@ -292,8 +296,11 @@ Every accepted decision records:
   as closed documents — exact property sets, duplicate-JSON-property and
   case-colliding-path rejection, exact manifest/actual path-set equality,
   overflow-safe totals — with reparse-point and containment revalidation of
-  every path chain before use. Payload is capped at 64 GiB per run attempt
-  (enforced at publication and consumption) against a 256 GiB default
+  every path chain before use. Payload is capped at 64 GiB per run attempt,
+  enforced cumulatively at publication (prior manifests are summed before a
+  new one is accepted) and at consumption (the consumer's complete required
+  manifest set is validated as one closed set and the run is rejected on an
+  aggregate above the cap before any payload use), against a 256 GiB default
   total-root cap measured over the complete validated root. CI never deletes
   handoff content; it writes bounded cleanup-request records (48-hour
   abandonment threshold, eligibility only with a valid context and, for
@@ -322,7 +329,9 @@ Every accepted decision records:
 - **Consequences:** The owner provisions `AETHELN_HANDOFF_ROOT` once and
   restarts the runner service; the first live scheduled run after merge is the
   independent operational proof. Phase evidence stays separate per job; a
-  watchdog expiry is an explicit `phase_timeout` failure with an owned,
+  phase-deadline expiry — during controlled pre-work (the child is then never
+  started) or during the child — is an explicit `phase_timeout` failure with
+  a retained bounded report and, for a running child, an owned,
   verified process-tree stop (kill-on-close Job Object first, bounded taskkill
   only as fallback, `phase_cleanup_failed` when the tree cannot be proven
   ended), and the next scheduled attempt restarts the milestone from clean
