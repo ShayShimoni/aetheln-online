@@ -2,7 +2,10 @@
 param(
 	[Parameter(Mandatory)]
 	[ValidateNotNullOrEmpty()]
-	[string]$EventLogPath
+	[string]$EventLogPath,
+
+	[AllowEmptyCollection()]
+	[string[]]$RequiredSourcePaths
 )
 
 $ErrorActionPreference = 'Stop'
@@ -625,6 +628,31 @@ foreach ($PathState in $SourcePathStates.Values) {
 	$PathState.Hasher.Dispose()
 }
 
+$RequiredSourcePathSet = $null
+if ($PSBoundParameters.ContainsKey('RequiredSourcePaths')) {
+	$RequiredSourcePathSet = [System.Collections.Generic.HashSet[string]]::new(
+		[System.StringComparer]::Ordinal
+	)
+	foreach ($RequiredSourcePath in $RequiredSourcePaths) {
+		[void]$RequiredSourcePathSet.Add([string]$RequiredSourcePath)
+	}
+}
+$CompletedSources = [object[]]@(
+	$SourcePathStates.Values |
+		Where-Object {
+			[bool]$_.Eof -and
+			($null -eq $RequiredSourcePathSet -or
+				$RequiredSourcePathSet.Contains([string]$_.Path))
+		} |
+		Sort-Object -Property Path |
+		ForEach-Object {
+			[pscustomobject][ordered]@{
+				Path = [string]$_.Path
+				BaseSha256 = [string]$_.BaseSha256
+			}
+		}
+)
+
 $SourceInspectionOutcome = if (-not $HasSourceToolEvent) {
 	'no_tool_call'
 }
@@ -674,5 +702,6 @@ foreach ($TokenName in $TokenNames) {
 		CallCount = [long]$SourceCallIds.Count
 		CompletedPageCount = [long]$CompletedSourcePageCount
 		CompletedPathCount = [long]$CompletedSourcePaths.Count
+		CompletedSources = $CompletedSources
 	}
 }

@@ -387,7 +387,7 @@ function Assert-ClosedObject {
 	}
 }
 
-function Test-DeliveryContainsSourceInspectionReference {
+function Test-DeliveryContainsExactSourceTool {
 	param(
 		[AllowNull()]
 		[object]$Value
@@ -397,15 +397,13 @@ function Test-DeliveryContainsSourceInspectionReference {
 		return $false
 	}
 	if ($Value -is [string]) {
-		return [string]$Value -cmatch (
-			'(?i)(?<![A-Za-z0-9_])(?:read_allowed_source_file|source_inspection|' +
-			'source[_ -]?reader)(?![A-Za-z0-9_])'
-		)
+		return [string]$Value -cmatch `
+			'(?<![A-Za-z0-9_])read_allowed_source_file(?![A-Za-z0-9_])'
 	}
 	if ($Value -is [pscustomobject]) {
 		foreach ($Property in $Value.PSObject.Properties) {
-			if ((Test-DeliveryContainsSourceInspectionReference -Value $Property.Name) -or
-				(Test-DeliveryContainsSourceInspectionReference -Value $Property.Value)) {
+			if ((Test-DeliveryContainsExactSourceTool -Value $Property.Name) -or
+				(Test-DeliveryContainsExactSourceTool -Value $Property.Value)) {
 				return $true
 			}
 		}
@@ -413,8 +411,8 @@ function Test-DeliveryContainsSourceInspectionReference {
 	}
 	if ($Value -is [System.Collections.IDictionary]) {
 		foreach ($Key in $Value.Keys) {
-			if ((Test-DeliveryContainsSourceInspectionReference -Value $Key) -or
-				(Test-DeliveryContainsSourceInspectionReference -Value $Value[$Key])) {
+			if ((Test-DeliveryContainsExactSourceTool -Value $Key) -or
+				(Test-DeliveryContainsExactSourceTool -Value $Value[$Key])) {
 				return $true
 			}
 		}
@@ -422,12 +420,459 @@ function Test-DeliveryContainsSourceInspectionReference {
 	}
 	if ($Value -is [System.Collections.IEnumerable]) {
 		foreach ($Entry in $Value) {
-			if (Test-DeliveryContainsSourceInspectionReference -Value $Entry) {
+			if (Test-DeliveryContainsExactSourceTool -Value $Entry) {
 				return $true
 			}
 		}
 	}
 	return $false
+}
+
+function Test-DeliverySourceClauseIsHistoricalOrCorrective {
+	param(
+		[Parameter(Mandatory)]
+		[string]$Clause
+	)
+
+	$Clause = [regex]::Replace(
+		$Clause,
+		'(`+)(?<content>[^`\r\n]+)\1',
+		'${content}'
+	)
+	$IsReplacement = $Clause -cmatch '(?i)^\s*replace\b'
+	if ($IsReplacement) {
+		$Replacement = [regex]::Match(
+			$Clause,
+			'(?i)^\s*replace\s+(?<unsupported>.+?)\s+(?:with|in\s+favor\s+of)\s+' +
+			'(?<canonical>(?:read_allowed_source_file\s*\(\s*path\s*,\s*' +
+			'offset_bytes\s*\)|path\s*(?:,|\s+and\s+)\s*offset_bytes))\s*$'
+		)
+		if (-not $Replacement.Success) {
+			return $false
+		}
+		$Unsupported = [string]$Replacement.Groups['unsupported'].Value
+		$UnsupportedSignature = @(
+			Get-DeliveryExplicitRequestMembers -Clause $Unsupported -SourceContext $true
+		).Count -gt 0
+		$UnsupportedMember = [regex]::Match(
+			$Unsupported,
+			'(?i)^\s*(?:the\s+)?(?:unsupported\s+)?' +
+			'(?<member>[A-Za-z_][A-Za-z0-9_-]*)\s*$'
+		)
+		return $UnsupportedSignature -or (
+			$UnsupportedMember.Success -and
+			$UnsupportedMember.Groups['member'].Value -cnotin @('path', 'offset_bytes')
+		)
+	}
+
+	$UnsupportedMember = '(?!(?:path|offset_bytes)\b)(?:limit_bytes|page_size_bytes|' +
+		'timeout_seconds|encoding|' +
+		'charset|max_bytes|chunk_bytes|read_window_bytes|aperture_bytes|' +
+		'[A-Za-z_][A-Za-z0-9_-]*)'
+	$IsDirectNegativeMember = $Clause -cmatch (
+		'(?i)^\s*(?:(?:do\s+not|never)\s+(?:pass|include|send|set|add|use|' +
+		'supply|attach|append)\s+(?:the\s+)?' + $UnsupportedMember + '\b|' +
+		'no\s+(?:source\s+)?(?:calls?|requests?|invocations?)\s+' +
+		'(?:with|using|containing|including)\s+' + $UnsupportedMember + '\b)'
+	)
+	$IsAdministrativeCorrection = $Clause -cmatch (
+		'(?i)^\s*(?:remove\b|reject\b|forbid\b|disallow\b|prevent\b|' +
+		'swap\b|change\s+from\b|document\s+that\b)'
+	)
+	$IsCorrective = $IsDirectNegativeMember -or (
+		$IsAdministrativeCorrection -and
+		-not (Test-DeliverySourceClauseHasActiveDirective -Clause $Clause)
+	)
+	if ($IsCorrective) {
+		return $true
+	}
+	$IsNegativeVerification = $Clause -cmatch (
+		'(?i)^\s*(?:check\s+that|verify)\b.{0,192}?' +
+		'\b(?:is|are)\s+(?:rejected|forbidden|disallowed|prevented)\s*$'
+	)
+	if ($IsNegativeVerification) {
+		return $true
+	}
+	$IsHistorical = $Clause -cmatch (
+		'(?i)^\s*(?:historical\b|history\b|prior\b|previous\b|old\b|' +
+		'earlier\b|reproduce\s+(?:the\s+)?(?:retained\s+)?(?:raw\s+)?evidence\b)'
+	)
+	if (-not $IsHistorical) {
+		return $false
+	}
+	return -not (Test-DeliverySourceClauseHasActiveDirective -Clause $Clause)
+}
+
+function Test-DeliverySourceClauseHasActiveDirective {
+	param(
+		[Parameter(Mandatory)]
+		[string]$Clause
+	)
+
+	$DirectiveVerb = '(?:invoke|call|use|pass|include|require|set|cap|specify|' +
+		'supply|attach|append|send|provide|assign)'
+	return $Clause -cmatch ('(?i)^\s*' + $DirectiveVerb + '\b') -or
+		$Clause -cmatch (
+			'(?i)\bby\s+(?:invoking|calling|passing|including|requiring|specifying)\b'
+		) -or $Clause -cmatch (
+			'(?i)\b(?:so|then)\s+' + $DirectiveVerb + '\b'
+		) -or $Clause -cmatch (
+			'(?i)\b(?:must|shall|required\s+to)\s+' + $DirectiveVerb + '\b'
+		) -or $Clause -cmatch (
+			'(?i)\brequires?\b.{0,96}?\b' + $DirectiveVerb + '\b'
+		)
+}
+
+function Test-DeliveryLooksLikeSourceCallObject {
+	param(
+		[AllowNull()]
+		[object]$Value
+	)
+
+	if ($Value -is [pscustomobject]) {
+		$ToolProperty = @($Value.PSObject.Properties | Where-Object {
+			$_.Name -ieq 'tool'
+		})
+		return $ToolProperty.Count -eq 1 -and
+			$ToolProperty[0].Value -is [string] -and
+			[string]$ToolProperty[0].Value -ieq 'read_allowed_source_file'
+	}
+	if ($Value -is [System.Collections.IDictionary]) {
+		$ToolKeys = @($Value.Keys | Where-Object { [string]$_ -ieq 'tool' })
+		return $ToolKeys.Count -eq 1 -and
+			$Value[$ToolKeys[0]] -is [string] -and
+			[string]$Value[$ToolKeys[0]] -ieq 'read_allowed_source_file'
+	}
+	return $false
+}
+
+function Test-DeliverySourceCallObjectIsCanonical {
+	param(
+		[Parameter(Mandatory)]
+		[object]$Value
+	)
+
+	if ($Value -is [pscustomobject]) {
+		$Names = [string[]]@($Value.PSObject.Properties.Name)
+		if ($Names.Count -ne 2 -or $Names -cnotcontains 'tool' -or
+			$Names -cnotcontains 'arguments' -or
+			$Value.tool -isnot [string] -or
+			$Value.tool -cne 'read_allowed_source_file' -or
+			$Value.arguments -isnot [pscustomobject]) {
+			return $false
+		}
+		$ArgumentNames = [string[]]@($Value.arguments.PSObject.Properties.Name)
+		$PathValue = $Value.arguments.path
+		$OffsetValue = $Value.arguments.offset_bytes
+	}
+	elseif ($Value -is [System.Collections.IDictionary]) {
+		$Names = [string[]]@($Value.Keys | ForEach-Object { [string]$_ })
+		if ($Names.Count -ne 2 -or $Names -cnotcontains 'tool' -or
+			$Names -cnotcontains 'arguments' -or
+			$Value['tool'] -isnot [string] -or
+			$Value['tool'] -cne 'read_allowed_source_file' -or
+			$Value['arguments'] -isnot [System.Collections.IDictionary]) {
+			return $false
+		}
+		$ArgumentNames = [string[]]@(
+			$Value['arguments'].Keys | ForEach-Object { [string]$_ }
+		)
+		$PathValue = $Value['arguments']['path']
+		$OffsetValue = $Value['arguments']['offset_bytes']
+	}
+	else {
+		return $false
+	}
+
+	if ($ArgumentNames.Count -ne 2 -or
+		$ArgumentNames -cnotcontains 'path' -or
+		$ArgumentNames -cnotcontains 'offset_bytes' -or
+		$PathValue -isnot [string] -or
+		[string]::IsNullOrWhiteSpace([string]$PathValue) -or
+		-not (Test-JsonInteger -Value $OffsetValue)) {
+		return $false
+	}
+	try {
+		$Offset = [long]$OffsetValue
+	}
+	catch {
+		return $false
+	}
+	return $Offset -ge 0
+}
+
+function Test-DeliverySourceClauseEstablishesContext {
+	param(
+		[Parameter(Mandatory)]
+		[string]$Clause
+	)
+
+	if ((Test-DeliverySourceClauseIsHistoricalOrCorrective -Clause $Clause) -or
+		-not (Test-DeliveryContainsExactSourceTool -Value $Clause)) {
+		return $false
+	}
+	return (Test-DeliverySourceClauseHasActiveDirective -Clause $Clause) -or
+		$Clause -cmatch '(?i)^\s*(?:inspect|use)\b' -or
+		$Clause -cmatch (
+		'(?i)(?<![A-Za-z0-9_])read_allowed_source_file\s*\('
+	)
+}
+
+function Test-DeliveryIsExactSourceCallObject {
+	param(
+		[AllowNull()]
+		[object]$Value
+	)
+
+	return (Test-DeliveryLooksLikeSourceCallObject -Value $Value) -and
+		(Test-DeliverySourceCallObjectIsCanonical -Value $Value)
+}
+
+function Test-DeliverySourceInstructionSibling {
+	param(
+		[Parameter(Mandatory)]
+		[string]$Name,
+
+		[AllowNull()]
+		[object]$Value
+	)
+
+	if ($Name -cmatch '(?i)(?:^|_)(?:evidence|hash|path|baseline)(?:_|$)') {
+		return $false
+	}
+	if ($Name -cmatch '(?i)(?:^|_)(?:instruction|instructions|required_checks)(?:_|$)') {
+		return $true
+	}
+	if ($Value -isnot [string]) {
+		return $false
+	}
+	return [string]$Value -cmatch (
+		'(?i)\b(?:must|invok(?:e|es|ed|ing)|call(?:s|ed|ing)?|' +
+		'pass(?:es|ed|ing)?|includ(?:e|es|ed|ing)|requir(?:e|es|ed|ing)|' +
+		'suppl(?:y|ies|ied|ying)|attach(?:es|ed|ing)?|append(?:s|ed|ing)?|' +
+		'send(?:s|ing)?|sent|provid(?:e|es|ed|ing)|assign(?:s|ed|ing)?|' +
+		'specif(?:y|ies|ied|ying)|set(?:s|ting)?|use(?:s|d|ing)?)\b'
+	)
+}
+
+function Test-DeliverySourceRequestMemberListIsCanonical {
+	param(
+		[Parameter(Mandatory)]
+		[AllowEmptyString()]
+		[string]$Members
+	)
+
+	$MemberList = [regex]::Replace($Members.Trim(), '(?i)^(?:only|exactly)\s+', '')
+	$MemberList = [regex]::Split(
+		$MemberList,
+		'(?i)\s+\b(?:for|in|on|then|until|through|when|while)\b',
+		2
+	)[0].Trim()
+	if ([string]::IsNullOrWhiteSpace($MemberList)) {
+		return $false
+	}
+
+	$MemberList = [regex]::Replace($MemberList, '(?i),\s*and\s+', ',')
+	$MemberList = [regex]::Replace($MemberList, '(?i)\s+and\s+', ',')
+	if ($MemberList -cnotmatch (
+		'^[A-Za-z_][A-Za-z0-9_-]*' +
+		'(?:\s*,\s*[A-Za-z_][A-Za-z0-9_-]*)*$'
+	)) {
+		return $false
+	}
+
+	$Names = [string[]]@($MemberList -csplit '\s*,\s*')
+	return $Names.Count -eq 2 -and
+		$Names[0] -ceq 'path' -and
+		$Names[1] -ceq 'offset_bytes'
+}
+
+function Test-DeliverySourceMemberContainerIsCanonical {
+	param(
+		[AllowNull()]
+		[object]$Value
+	)
+
+	if ($Value -is [pscustomobject]) {
+		$Names = [string[]]@($Value.PSObject.Properties.Name)
+	}
+	elseif ($Value -is [System.Collections.IDictionary]) {
+		$Names = [string[]]@($Value.Keys | ForEach-Object { [string]$_ })
+	}
+	elseif ($Value -is [System.Collections.IEnumerable] -and
+		$Value -isnot [string]) {
+		$Names = [string[]]@($Value)
+	}
+	else {
+		return $false
+	}
+
+	return $Names.Count -eq 2 -and
+		$Names[0] -ceq 'path' -and
+		$Names[1] -ceq 'offset_bytes'
+}
+
+function Get-DeliveryExplicitRequestMembers {
+	param(
+		[Parameter(Mandatory)]
+		[string]$Clause,
+
+		[bool]$SourceContext = $false
+	)
+
+	$Clause = [regex]::Replace(
+		$Clause,
+		'(`+)(?<content>[^`\r\n]+)\1',
+		'${content}'
+	)
+	$ExactTool = '(?<![A-Za-z0-9_])read_allowed_source_file(?![A-Za-z0-9_])'
+	$HasExactTool = $Clause -cmatch $ExactTool
+	if (-not $SourceContext -and -not $HasExactTool) {
+		return @()
+	}
+	$InvalidEnumeration = '__invalid_source_request_enumeration__'
+	if (($SourceContext -or $HasExactTool) -and $Clause -cmatch (
+		'(?i)^\s*(?:(?:do\s+not|never)\s+' +
+		'(?:pass|include|send|set|add|use|supply|attach|append)\s+' +
+		'(?:the\s+)?(?:path|offset_bytes)\b|' +
+		'no\s+(?:source\s+)?(?:calls?|requests?|invocations?)\s+' +
+		'(?:with|using|containing|including)\s+(?:path|offset_bytes)\b)'
+	)) {
+		return @($InvalidEnumeration)
+	}
+	$MemberToken = '(?:path|[a-z][a-z0-9]*_[a-z0-9_]+|' +
+		'[a-z]+(?:Bytes|Seconds|Offset|Limit|Size|Token))'
+	foreach ($Enumeration in [regex]::Matches(
+		$Clause,
+		'(?-i)(?<members>' + $MemberToken +
+		'(?:\s*(?:,\s*(?:and\s+)?|\s+and\s+)' + $MemberToken + ')+)'
+	)) {
+		if (-not (Test-DeliverySourceRequestMemberListIsCanonical `
+				-Members ([string]$Enumeration.Groups['members'].Value))) {
+			return @($InvalidEnumeration)
+		}
+	}
+
+	foreach ($Signature in [regex]::Matches(
+		$Clause,
+		'(?i)' + $ExactTool + '\s*\((?<members>[^)]*)\)'
+	)) {
+		$SignatureMembers = [string]$Signature.Groups['members'].Value
+		if ($SignatureMembers -cnotmatch '^\s*path\s*,\s*offset_bytes\s*$') {
+			return @($InvalidEnumeration)
+		}
+	}
+
+	$ExplicitListPatterns = @(
+		('(?i)^\s*(?:pass|include|require|provide|send|supply|attach|append|' +
+			'assign|set|add|specify)\s+(?<members>[^.;\r\n()]*?)\s+' +
+			'(?:to|for|on)\s+(?:the\s+)?' + $ExactTool + '\b'),
+		('(?i)' + $ExactTool + '\s+(?:with|using)\s+' +
+			'(?:(?:arguments?|members?|fields?)\s*(?::|=|\bare\b)?\s*)?' +
+			'(?<members>[^.;\r\n()]*)'),
+		('(?i)' + $ExactTool + '\s+(?:arguments?|members?|fields?)\s*' +
+			'(?::|=|\bare\b)?\s*(?<members>[^.;\r\n()]*)'),
+		('(?i)' + $ExactTool + '\s+(?:requests?|calls?|invocations?|inputs?)\b' +
+			'.{0,64}?\b(?:include|contain|send|pass|provide|require|use|with|specify|' +
+			'using|set|accept|add|supply|attach|append)\b' +
+			'(?<members>[^.;\r\n()]*)')
+	)
+	if ($SourceContext -and -not $HasExactTool) {
+		$ExplicitListPatterns += @(
+			('(?i)\b(?:requests?|calls?|invocations?|inputs?|arguments?|members?|fields?)\b' +
+			'.{0,64}?\b(?:include|contain|send|pass|provide|require|use|with|specify|' +
+			'using|set|accept|add|supply|attach|append)\b' +
+			'(?<members>[^.;\r\n()]*)'),
+			('(?i)^\s*(?:pass|include|require|provide|send|supply|attach|append)\b' +
+			'(?<members>[^.;\r\n()]*)')
+		)
+	}
+	foreach ($Pattern in $ExplicitListPatterns) {
+		foreach ($Enumeration in [regex]::Matches($Clause, $Pattern)) {
+			$EnumerationMembers = [string]$Enumeration.Groups['members'].Value
+			if (-not (Test-DeliverySourceRequestMemberListIsCanonical `
+					-Members $EnumerationMembers)) {
+				return @($InvalidEnumeration)
+			}
+		}
+	}
+
+	$Segments = [System.Collections.Generic.List[string]]::new()
+	foreach ($Signature in [regex]::Matches(
+		$Clause,
+		'(?i)' + $ExactTool + '\s*\((?<members>[^)]*)\)'
+	)) {
+		$Segments.Add([string]$Signature.Groups['members'].Value)
+	}
+	foreach ($Request in [regex]::Matches(
+		$Clause,
+		'(?i)(?:(?:' + $ExactTool + ').{0,96})?' +
+		'\b(?:requests?|calls?|invocations?|inputs?|arguments?)\b.{0,96}?' +
+		'\b(?:must\s+)?(?:include|contain|send|pass|provide|require|use|' +
+		'with|set|accept|add|supply|attach|append)\b(?<members>[^.;\r\n]*)'
+	)) {
+		$Segments.Add([string]$Request.Groups['members'].Value)
+	}
+	if ($HasExactTool) {
+		foreach ($Direct in [regex]::Matches(
+			$Clause,
+			'(?i)' + $ExactTool + '.{0,96}?' +
+			'\b(?:include|contain|send|pass|provide|require|use|with|specify|' +
+			'specifying|set|' +
+			'accept|add|supply|attach|append)\b(?<members>[^.;\r\n]*)'
+		)) {
+			$Segments.Add([string]$Direct.Groups['members'].Value)
+		}
+	}
+	if ($SourceContext) {
+		$HasScopedMemberDirective = $false
+		foreach ($MemberDirective in [regex]::Matches(
+			$Clause,
+			'(?i)^\s*(?:then\s+)?' +
+			'(?:set|assign|add|include|pass|require|use)\s+' +
+			'(?:only\s+)?' +
+			'(?:(?:the|a|an)\s+)?' +
+			'(?<member>[A-Za-z_][A-Za-z0-9_-]*)\b' +
+			'[^.;\r\n]*?\b(?:every|each)\s+' +
+			'(?:source\s+)?(?:call|request)s?\b'
+		)) {
+			$HasScopedMemberDirective = $true
+			$MemberName = [string]$MemberDirective.Groups['member'].Value
+			if ($MemberName -cnotin @('path', 'offset_bytes')) {
+				return @($MemberName)
+			}
+		}
+		if (-not $HasScopedMemberDirective) {
+			foreach ($Direct in [regex]::Matches(
+				$Clause,
+				'(?i)\b(?:invok(?:e|es|ed|ing)|call(?:s|ed|ing)?|' +
+				'pass(?:es|ed|ing)?|includ(?:e|es|ed|ing)|' +
+				'requir(?:e|es|ed|ing))\b' +
+				'(?<members>[^.;\r\n]*)'
+			)) {
+				$Segments.Add([string]$Direct.Groups['members'].Value)
+			}
+		}
+	}
+
+	$Members = [System.Collections.Generic.List[string]]::new()
+	foreach ($Segment in $Segments) {
+		$RequestMembers = [regex]::Split(
+			$Segment,
+			'(?i)\b(?:then|until|through)\b'
+		)[0]
+		foreach ($Identifier in [regex]::Matches(
+			$RequestMembers,
+			'(?-i)(?<![A-Za-z0-9_])(?:[a-z][a-z0-9]*_[a-z0-9_]+|' +
+			'[a-z]+(?:Bytes|Seconds|Offset|Limit|Size|Token))(?![A-Za-z0-9_])'
+		)) {
+			$Name = [string]$Identifier.Value
+			if ($Name -cnotin @('read_allowed_source_file', 'offset_bytes')) {
+				$Members.Add($Name)
+			}
+		}
+	}
+	return [string[]]@($Members)
 }
 
 function Test-DeliveryContainsUnsupportedSourceArgument {
@@ -441,219 +886,84 @@ function Test-DeliveryContainsUnsupportedSourceArgument {
 	if ($null -eq $Value) {
 		return $false
 	}
-	$EffectiveSourceContext = $SourceContext -or
-		(Test-DeliveryContainsSourceInspectionReference -Value $Value)
 	if ($Value -is [string]) {
-		$StringSourceContext = $SourceContext -or
-			(Test-DeliveryContainsSourceInspectionReference -Value $Value)
-		$Clauses = [string[]]@(
-			[string]$Value -csplit '[.;\r\n]+' |
-				Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-		)
-		foreach ($Clause in $Clauses) {
-			$ClauseHasSourceReference =
-				Test-DeliveryContainsSourceInspectionReference -Value $Clause
-			$ClauseSourceContext = $StringSourceContext -or $ClauseHasSourceReference
-			$IsExplicitUnrelatedClause = $Clause -cmatch (
-				'(?i)^\s*(?:record\s+(?:the\s+)?unrelated\b|' +
-				'(?:the\s+)?(?:backend|database|network|cache|output|artifact|' +
-				'bundle|logging|telemetry)\b)'
-			)
-			$ClauseArgumentIdentifiers = @(
-				[regex]::Matches(
-					$Clause,
-					'(?-i)(?<![A-Za-z0-9_])(?:[a-z][a-z0-9]*_[a-z0-9_]+|' +
-					'[a-z]+(?:Bytes|Seconds|Offset|Limit|Size|Token))(?![A-Za-z0-9_])'
-				) | ForEach-Object { $_.Value } | Where-Object {
-					$_ -cne 'read_allowed_source_file'
-				}
-			)
-			$ActiveRequirementVerbPattern = (
-				'(?i)\b(?:must|require|requires|include[sd]?|contain[sd]?|send|' +
-				'pass|provide[sd]?|use[sd]?|using|with|set|accepts?|add[sd]?|has|have)\b'
-			)
-			$HasActiveRequirementVerb = $Clause -cmatch $ActiveRequirementVerbPattern
-			$SourceToolIndex = $Clause.IndexOf(
-				'read_allowed_source_file',
-				[System.StringComparison]::OrdinalIgnoreCase
-			)
-			$HasActiveRequirementAfterSourceTool = $SourceToolIndex -ge 0 -and
-				$Clause.Substring(
-					$SourceToolIndex + 'read_allowed_source_file'.Length
-				) -cmatch $ActiveRequirementVerbPattern
-			$IsCorrectiveSourceClause = $ClauseHasSourceReference -and (
-				$Clause -cmatch '(?i)^\s*(?:remove|reject|forbid|disallow|prevent)\b' -or
-				$Clause -cmatch '(?i)\b(?:do\s+not|must\s+not|never)\s+(?:pass|send|add|include|use)\b'
-			) -and $ClauseArgumentIdentifiers.Count -eq 1 -and
-			$ClauseArgumentIdentifiers[0] -cmatch '^(?:limit_bytes|page_size_bytes)$' -and
-			-not $HasActiveRequirementAfterSourceTool -and
-			$Clause -cnotmatch (
-				'(?i)(?:\b(?:and|then|but)\b.*\b(?:pass|send|add|include|use|' +
-				'require|set)\b|\binstead\b)'
-			)
-			if ($IsCorrectiveSourceClause) {
+		$ClauseSourceContext = $SourceContext
+		foreach ($Clause in ([string]$Value -csplit '[.;\r\n]+')) {
+			if ([string]::IsNullOrWhiteSpace($Clause) -or
+				(Test-DeliverySourceClauseIsHistoricalOrCorrective -Clause $Clause)) {
 				continue
 			}
-			$HasRequirementVerb = $Clause -cmatch (
-				'(?i)\b(?:must|required?|require[sd]?|include[sd]?|contain[sd]?|' +
-				'send|pass|provide[sd]?|use[sd]?|using|with|set|' +
-				'accept(?:s|ed)?|add(?:s|ed)?|has|have)\b'
-			)
-			$HasKnownUnsupportedMember = $Clause -cmatch (
-				'(?i)(?<![A-Za-z0-9_])(?:limit_bytes|page_size_bytes)(?![A-Za-z0-9_])'
-			)
-			$HasRequestVocabulary = $Clause -cmatch (
-				'(?i)\b(?:request|call|input|argument|member|field|parameter|' +
-				'property|key|offset|page)s?\b'
-			)
-			$HasArgumentLikeIdentifier = $Clause -cmatch (
-				'(?-i)(?<![A-Za-z0-9_])(?:[a-z][a-z0-9]*_[a-z0-9_]+|' +
-				'[a-z]+(?:Bytes|Seconds|Offset|Limit|Size|Token))(?![A-Za-z0-9_])'
-			)
-			if (-not $ClauseSourceContext) {
-				if ($HasRequirementVerb -and $HasKnownUnsupportedMember) {
-					return $true
-				}
-				continue
-			}
-
-			# Any clause that names the source reader is an operational contract in
-			# producer fields. Only the canonical supported enumeration below may pass.
-			$ExplicitToolContract = $ClauseHasSourceReference
-			$DescribesRequestContract = (
-				($HasRequestVocabulary -and $HasRequirementVerb) -or
-				$ExplicitToolContract
-			)
-			if (-not $DescribesRequestContract) {
-				$IsBenignImplementationClause = (
-					$Clause -cmatch '(?i)\b(?:tests?|checks?|validation|implementation|documentation)\b' -and
-					-not $HasRequestVocabulary -and -not $HasArgumentLikeIdentifier
-				)
-				if ($ClauseSourceContext -and -not $ClauseHasSourceReference -and
-					-not $IsExplicitUnrelatedClause -and
-					-not $IsBenignImplementationClause -and
-					($HasActiveRequirementVerb -or $HasArgumentLikeIdentifier -or
-						($HasRequestVocabulary -and $HasRequirementVerb))) {
-					return $true
-				}
-				if ($HasRequirementVerb -and $HasKnownUnsupportedMember) {
-					return $true
-				}
-				continue
-			}
-
-			$SupportedPair = (
-				'(?:(?:path\s*(?:,\s*|\s+and\s+)' +
-				'offset_bytes)|(?:offset_bytes\s*(?:,\s*|\s+and\s+)path))'
-			)
-			$SupportedPagingSuffix = (
-				'(?:\s+(?:arguments?|members?|fields?|inputs?))?' +
-				'(?:\s*(?:,\s*)?(?:' +
-				'then\s+start\s+at\s+(?:offset_bytes\s+)?zero\s+and\s+' +
-				'continue\s+with\s+end_offset_bytes\s+until\s+eof|' +
-				'for\s+each\s+page|until\s+eof))?\s*$'
-			)
-			$SupportedRequestEnumeration = $Clause -cmatch (
-				'(?i)\b(?:include[sd]?|contain[sd]?|send|pass|provide[sd]?|' +
-				'require[sd]?|use[sd]?|using|with|set|accept(?:s|ed)?|' +
-				'add(?:s|ed)?|has|have)\s+' +
-				'(?:(?:exactly|only|the|two|both|required|supported)\s+)*' +
-				$SupportedPair +
-				$SupportedPagingSuffix
-			)
-			if (-not $SupportedRequestEnumeration -and $ExplicitToolContract) {
-				$SupportedRequestEnumeration = (
-					$Clause -cmatch (
-						'(?i)\bread_allowed_source_file\s+(?:call\s+)?with\s+' +
-						'(?:(?:exactly|only|the|two|both|required|supported)\s+)*' +
-						$SupportedPair +
-						$SupportedPagingSuffix
-					) -or
-					$Clause -cmatch (
-						'(?i)\bread_allowed_source_file\s*\(\s*' +
-						$SupportedPair + '\s*\)\s*$'
-					)
-				)
-			}
-			if (-not $SupportedRequestEnumeration) {
+			$ClauseHasExactTool = Test-DeliveryContainsExactSourceTool -Value $Clause
+			if (($ClauseSourceContext -or $ClauseHasExactTool) -and
+				$Clause -cmatch `
+				'(?i)(?<![A-Za-z0-9_])limit_bytes\s*:\s*2048(?![0-9])') {
 				return $true
+			}
+			if (($ClauseSourceContext -or $ClauseHasExactTool) -and
+				$Clause -cmatch (
+					'(?i)\b(?:cap|limit|restrict|keep)\b.{0,64}?' +
+					'\b(?:each|every)\s+(?:source\s+)?' +
+					'(?:call|request|page|read)s?\b.{0,48}?' +
+					'\b(?:[0-9]+\s*)?(?:bytes?|kilobytes?|kib|kb)\b'
+				)) {
+				return $true
+			}
+			if (@(Get-DeliveryExplicitRequestMembers `
+					-Clause $Clause `
+					-SourceContext ($ClauseSourceContext -or $ClauseHasExactTool)).Count -gt 0) {
+				return $true
+			}
+			if (Test-DeliverySourceClauseEstablishesContext -Clause $Clause) {
+				$ClauseSourceContext = $true
 			}
 		}
 		return $false
 	}
 	if ($Value -is [pscustomobject]) {
-		$ObjectContainsSourceReference =
-			Test-DeliveryContainsSourceInspectionReference -Value $Value
-		$IsExplicitSourceToolObject = (
-			@($Value.PSObject.Properties | Where-Object {
-				$_.Value -is [string] -and $_.Value -ieq 'read_allowed_source_file'
-			}).Count -gt 0
-		)
-		if ($IsExplicitSourceToolObject) {
-			return $true
+		if (Test-DeliveryLooksLikeSourceCallObject -Value $Value) {
+			return -not (Test-DeliverySourceCallObjectIsCanonical -Value $Value)
 		}
+		$ContainsExactSourceCall = @($Value.PSObject.Properties | Where-Object {
+			Test-DeliveryIsExactSourceCallObject -Value $_.Value
+		}).Count -gt 0
 		foreach ($Property in $Value.PSObject.Properties) {
-			$IsExplicitUnrelatedProperty = (
-				$Property.Name -cmatch (
-					'(?i)^(?:backend|database|network|cache|output|artifact|bundle|' +
-					'logging|telemetry)(?:_|$)'
-				) -or
-				($Property.Value -is [string] -and $Property.Value -cmatch (
-					'(?i)^\s*(?:the\s+)?(?:backend|database|network|cache|output|' +
-					'artifact|bundle|logging|telemetry)\b'
-				))
-			)
-			$PropertySourceContext = $SourceContext -or
-				(Test-DeliveryContainsSourceInspectionReference -Value $Property.Name) -or
-				($ObjectContainsSourceReference -and -not $IsExplicitUnrelatedProperty)
-			$PropertyNameSourceContext = $PropertySourceContext -and
-				$Property.Name -cnotmatch (
-					'(?i)(?:^|_)(?:rule|instructions?|step|mechanism|continuation|' +
-					'implementation|verification|checks?)$'
-				)
-			if ((Test-DeliveryContainsUnsupportedSourceArgument `
-					-Value $Property.Name -SourceContext $PropertyNameSourceContext) -or
-				(Test-DeliveryContainsUnsupportedSourceArgument `
-					-Value $Property.Value -SourceContext $PropertySourceContext)) {
+			if (($SourceContext -or $ContainsExactSourceCall) -and
+				$Property.Name -cmatch `
+				'(?i)(?:^|_)(?:request_)?(?:arguments|members|fields)(?:_|$)' -and
+				-not (Test-DeliverySourceMemberContainerIsCanonical `
+					-Value $Property.Value)) {
+				return $true
+			}
+			$PropertySourceContext = ($SourceContext -or $ContainsExactSourceCall) -and
+				(Test-DeliverySourceInstructionSibling `
+					-Name $Property.Name -Value $Property.Value)
+			if (Test-DeliveryContainsUnsupportedSourceArgument `
+					-Value $Property.Value -SourceContext $PropertySourceContext) {
 				return $true
 			}
 		}
 		return $false
 	}
 	if ($Value -is [System.Collections.IDictionary]) {
-		$DictionaryContainsSourceReference =
-			Test-DeliveryContainsSourceInspectionReference -Value $Value
-		$IsExplicitSourceToolDictionary = (
-			@($Value.Keys | Where-Object {
-				$Value[$_] -is [string] -and $Value[$_] -ieq 'read_allowed_source_file'
-			}).Count -gt 0
-		)
-		if ($IsExplicitSourceToolDictionary) {
-			return $true
+		if (Test-DeliveryLooksLikeSourceCallObject -Value $Value) {
+			return -not (Test-DeliverySourceCallObjectIsCanonical -Value $Value)
 		}
+		$ContainsExactSourceCall = @($Value.Keys | Where-Object {
+			Test-DeliveryIsExactSourceCallObject -Value $Value[$_]
+		}).Count -gt 0
 		foreach ($Key in $Value.Keys) {
-			$IsExplicitUnrelatedKey = (
-				[string]$Key -cmatch (
-					'(?i)^(?:backend|database|network|cache|output|artifact|bundle|' +
-					'logging|telemetry)(?:_|$)'
-				) -or
-				($Value[$Key] -is [string] -and $Value[$Key] -cmatch (
-					'(?i)^\s*(?:the\s+)?(?:backend|database|network|cache|output|' +
-					'artifact|bundle|logging|telemetry)\b'
-				))
-			)
-			$KeySourceContext = $SourceContext -or
-				(Test-DeliveryContainsSourceInspectionReference -Value $Key) -or
-				($DictionaryContainsSourceReference -and -not $IsExplicitUnrelatedKey)
-			$KeyNameSourceContext = $KeySourceContext -and
-				[string]$Key -cnotmatch (
-					'(?i)(?:^|_)(?:rule|instructions?|step|mechanism|continuation|' +
-					'implementation|verification|checks?)$'
-				)
-			if ((Test-DeliveryContainsUnsupportedSourceArgument `
-					-Value $Key -SourceContext $KeyNameSourceContext) -or
-				(Test-DeliveryContainsUnsupportedSourceArgument `
-					-Value $Value[$Key] -SourceContext $KeySourceContext)) {
+			if (($SourceContext -or $ContainsExactSourceCall) -and
+				[string]$Key -cmatch `
+				'(?i)(?:^|_)(?:request_)?(?:arguments|members|fields)(?:_|$)' -and
+				-not (Test-DeliverySourceMemberContainerIsCanonical `
+					-Value $Value[$Key])) {
+				return $true
+			}
+			$PropertySourceContext = ($SourceContext -or $ContainsExactSourceCall) -and
+				(Test-DeliverySourceInstructionSibling `
+					-Name ([string]$Key) -Value $Value[$Key])
+			if (Test-DeliveryContainsUnsupportedSourceArgument `
+					-Value $Value[$Key] -SourceContext $PropertySourceContext) {
 				return $true
 			}
 		}
@@ -662,7 +972,59 @@ function Test-DeliveryContainsUnsupportedSourceArgument {
 	if ($Value -is [System.Collections.IEnumerable]) {
 		foreach ($Entry in $Value) {
 			if (Test-DeliveryContainsUnsupportedSourceArgument `
-				-Value $Entry -SourceContext $EffectiveSourceContext) {
+					-Value $Entry -SourceContext $SourceContext) {
+				return $true
+			}
+		}
+	}
+	return $false
+}
+
+function Test-DeliveryEstablishesCanonicalSourceContext {
+	param(
+		[AllowNull()]
+		[object]$Value
+	)
+
+	if ($null -eq $Value) {
+		return $false
+	}
+	if ($Value -is [string]) {
+		foreach ($Clause in ([string]$Value -csplit '[.;\r\n]+')) {
+			if (-not [string]::IsNullOrWhiteSpace($Clause) -and
+				(Test-DeliverySourceClauseEstablishesContext -Clause $Clause)) {
+				return $true
+			}
+		}
+		return $false
+	}
+	if ($Value -is [pscustomobject]) {
+		if ((Test-DeliveryLooksLikeSourceCallObject -Value $Value) -and
+			(Test-DeliverySourceCallObjectIsCanonical -Value $Value)) {
+			return $true
+		}
+		foreach ($Property in $Value.PSObject.Properties) {
+			if (Test-DeliveryEstablishesCanonicalSourceContext -Value $Property.Value) {
+				return $true
+			}
+		}
+		return $false
+	}
+	if ($Value -is [System.Collections.IDictionary]) {
+		if ((Test-DeliveryLooksLikeSourceCallObject -Value $Value) -and
+			(Test-DeliverySourceCallObjectIsCanonical -Value $Value)) {
+			return $true
+		}
+		foreach ($Key in $Value.Keys) {
+			if (Test-DeliveryEstablishesCanonicalSourceContext -Value $Value[$Key]) {
+				return $true
+			}
+		}
+		return $false
+	}
+	if ($Value -is [System.Collections.IEnumerable]) {
+		foreach ($Entry in $Value) {
+			if (Test-DeliveryEstablishesCanonicalSourceContext -Value $Entry) {
 				return $true
 			}
 		}
@@ -682,34 +1044,42 @@ function Assert-DeliverySourceInspectionProtocol {
 		return
 	}
 
-	$OperationalFields = switch ($Stage) {
+	# Ticket and acceptance criteria are task evidence. They do not instruct the
+	# producer and therefore cannot establish source-tool context for other fields.
+	$CommonOperationalFields = @('output_contract')
+	$StageOperationalFields = switch ($Stage) {
 		'worker' {
-			@(
-				'output_contract', 'classifier_evidence', 'work_package', 'required_checks'
-			)
+			@('work_package', 'non_goals', 'required_checks')
 		}
 		'integrator' {
-			@(
-				'output_contract', 'integration_order', 'required_checks'
-			)
+			@('integration_order', 'non_goals', 'required_checks')
 		}
 		'fixer' {
-			@(
-				'output_contract', 'accepted_findings', 'required_checks'
-			)
+			@('accepted_findings', 'non_goals', 'required_checks')
 		}
 	}
+	$OperationalFields = @($CommonOperationalFields) + @($StageOperationalFields)
+	$HandoffNames = Get-PropertyNames -Value $Handoff
+	$SourceContext = $false
 	foreach ($FieldName in $OperationalFields) {
-		if ((Get-PropertyNames -Value $Handoff) -ccontains $FieldName -and
-			(Test-DeliveryContainsUnsupportedSourceArgument -Value $Handoff.$FieldName)) {
+		$FieldEstablishesSourceContext = $HandoffNames -ccontains $FieldName -and
+			(Test-DeliveryEstablishesCanonicalSourceContext `
+				-Value $Handoff.$FieldName)
+		$FieldSourceContext = $SourceContext -or $FieldEstablishesSourceContext
+		if ($HandoffNames -ccontains $FieldName -and
+			(Test-DeliveryContainsUnsupportedSourceArgument `
+				-Value $Handoff.$FieldName `
+				-SourceContext $FieldSourceContext)) {
 			throw (
 				'[source_protocol_invalid] source_inspection_protocol operational instructions ' +
 				'contain an unsupported source-reader request member.'
 			)
 		}
+		if ($FieldEstablishesSourceContext) {
+			$SourceContext = $true
+		}
 	}
 
-	$HandoffNames = Get-PropertyNames -Value $Handoff
 	if ($HandoffNames -cnotcontains 'source_inspection_protocol') {
 		return
 	}

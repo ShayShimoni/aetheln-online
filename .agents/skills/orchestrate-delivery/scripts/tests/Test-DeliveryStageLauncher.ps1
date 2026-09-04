@@ -1271,43 +1271,495 @@ $WorkerHandoffPath = Join-Path $TestRoot 'worker.json'
 	baseline_diff = $WorkerBaselineDiff
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $WorkerHandoffPath -Encoding UTF8
 
-$ConflictingSourceProtocolHandoffPath = Join-Path $TestRoot 'worker-source-protocol-conflict.json'
-$ConflictingSourceProtocolHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
-	ConvertFrom-Json
-$ConflictingSourceProtocolHandoff.run_id = 'test-worker-source-protocol-conflict'
-$ConflictingSourceProtocolHandoff.work_package = (
-	'Require limit_bytes 2048 private-source-protocol-value.'
-)
-$ConflictingSourceProtocolHandoff | ConvertTo-Json -Depth 8 | Set-Content `
-	-LiteralPath $ConflictingSourceProtocolHandoffPath -Encoding UTF8
-$ConflictingSourceProtocolCarrier = @()
-$ConflictingSourceProtocolFailure = try {
-	& $LaunchScript `
-		-HandoffPath $ConflictingSourceProtocolHandoffPath `
-		-OutVariable ConflictingSourceProtocolCarrier |
-		Out-Null
-	$false
+$SupportedLauncherSourceProtocol = [pscustomobject][ordered]@{
+	schema_version = 1
+	tool = 'read_allowed_source_file'
+	request_arguments = @('path', 'offset_bytes')
+	path_source = 'allowed_paths'
+	initial_offset_bytes = 0
+	next_offset_field = 'end_offset_bytes'
+	completion_field = 'eof'
+	maximum_page_bytes = 8192
 }
-catch {
-	$_.Exception.Message -match 'source_protocol_invalid'
-}
-$RetryNeutralSourceProtocolCarrier = @(
-	$ConflictingSourceProtocolCarrier | Where-Object {
+
+function Invoke-SourceProtocolPreflightRejection {
+	param(
+		[Parameter(Mandatory)][string]$Name,
+		[Parameter(Mandatory)][object]$Handoff,
+		[Parameter(Mandatory)][string]$PrivateMarker
+	)
+
+	$Path = Join-Path $TestRoot ($Handoff.run_id + '.json')
+	$Handoff | ConvertTo-Json -Depth 10 | Set-Content `
+		-LiteralPath $Path -Encoding UTF8
+	$Carrier = @()
+	$Failed = try {
+		& $LaunchScript -HandoffPath $Path -OutVariable Carrier | Out-Null
+		$false
+	}
+	catch {
+		$_.Exception.Message -match 'source_protocol_invalid' -and
+		$_.Exception.Message -notmatch [regex]::Escape($PrivateMarker)
+	}
+	$RetryNeutral = @($Carrier | Where-Object {
 		$_.phase -ceq 'preflight' -and
 		$_.code -ceq 'source_protocol_invalid' -and
 		$_.field -ceq 'source_inspection_protocol' -and
 		$_.child_launched -eq $false -and
 		$_.attempt_consumed -eq $false
+	})
+	Add-Result -Name $Name -Passed ($Failed -and $RetryNeutral.Count -eq 1)
+}
+
+$RetainedConflictHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$RetainedConflictHandoff.run_id = 'test-worker-retained-source-conflict'
+$RetainedConflictHandoff.work_package =
+	'Use read_allowed_source_file. Require `limit_bytes: 2048` for each source read. private-retained-preflight'
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Retained source-reader requirement is retry-neutrally rejected before launch' `
+	-Handoff $RetainedConflictHandoff `
+	-PrivateMarker 'private-retained-preflight'
+
+$AdjacentClauseConflictHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$AdjacentClauseConflictHandoff.run_id = 'test-worker-adjacent-clause-source-conflict'
+$AdjacentClauseConflictHandoff.work_package =
+	'Inspect with read_allowed_source_file. Pass limit_bytes: 4096 on every call.'
+$AdjacentClauseConflictHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Adjacent exact source context is retry-neutrally rejected before launch' `
+	-Handoff $AdjacentClauseConflictHandoff `
+	-PrivateMarker 'private-adjacent-clause-preflight'
+
+$AdjacentSetClauseConflictHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$AdjacentSetClauseConflictHandoff.run_id =
+	'test-worker-adjacent-set-clause-source-conflict'
+$AdjacentSetClauseConflictHandoff.work_package =
+	'Use read_allowed_source_file. Set limit_bytes to 2048 on every call.'
+$AdjacentSetClauseConflictHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Adjacent set directive is retry-neutrally rejected before launch' `
+	-Handoff $AdjacentSetClauseConflictHandoff `
+	-PrivateMarker 'private-adjacent-set-clause-preflight'
+
+$AdjacentPlainMemberConflictHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$AdjacentPlainMemberConflictHandoff.run_id =
+	'test-worker-adjacent-plain-member-source-conflict'
+$AdjacentPlainMemberConflictHandoff.work_package =
+	'Use read_allowed_source_file. Set limit to 2048 on every call.'
+$AdjacentPlainMemberConflictHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Adjacent plain member directive is retry-neutrally rejected before launch' `
+	-Handoff $AdjacentPlainMemberConflictHandoff `
+	-PrivateMarker 'private-adjacent-plain-member-preflight'
+
+$ActiveReplaceSourceConflictHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$ActiveReplaceSourceConflictHandoff.run_id =
+	'test-worker-active-replace-source-conflict'
+$ActiveReplaceSourceConflictHandoff.work_package =
+	'Replace source after calling read_allowed_source_file(path, offset_bytes, limit_bytes).'
+$ActiveReplaceSourceConflictHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Leading active replace is retry-neutrally rejected before launch' `
+	-Handoff $ActiveReplaceSourceConflictHandoff `
+	-PrivateMarker 'private-active-replace-source-preflight'
+
+$UnrelatedLimitRecordHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$UnrelatedLimitRecordHandoff.run_id = 'test-worker-unrelated-limit-record-control'
+$UnrelatedLimitRecordHandoff.work_package =
+	'Write a configuration record named limit_bytes: 2048; do not call any source tool.'
+$UnrelatedLimitRecordHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+$UnrelatedLimitRecordPath = Join-Path $TestRoot 'worker-unrelated-limit-record.json'
+$UnrelatedLimitRecordHandoff | ConvertTo-Json -Depth 10 | Set-Content `
+	-LiteralPath $UnrelatedLimitRecordPath -Encoding UTF8
+try {
+	$UnrelatedLimitRecordDryRun = & $LaunchScript `
+		-HandoffPath $UnrelatedLimitRecordPath -DryRun -PassThru
+	Add-Result `
+		-Name 'Unrelated limit record passes launcher preflight' `
+		-Passed ($UnrelatedLimitRecordDryRun.Stage -ceq 'worker')
+}
+catch {
+	Add-Result `
+		-Name 'Unrelated limit record passes launcher preflight' `
+		-Passed $false `
+		-Detail $_.Exception.Message
+}
+
+$NegativeClauseLauncherCases = @(
+	@('No calls with limit_bytes.', 'No-call negative clause'),
+	@('Check that calls with limit_bytes are rejected.', 'Check rejection clause'),
+	@('Do not pass limit_bytes; use path and offset_bytes.', 'Corrective source clause'),
+	@('Verify calls containing limit_bytes are rejected.', 'Verification rejection clause')
+)
+for ($NegativeClauseIndex = 0;
+	$NegativeClauseIndex -lt $NegativeClauseLauncherCases.Count;
+	$NegativeClauseIndex++) {
+	$NegativeClauseHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+		ConvertFrom-Json
+	$NegativeClauseHandoff.run_id = "test-worker-negative-source-clause-$NegativeClauseIndex"
+	$NegativeClauseHandoff.work_package = 'Use read_allowed_source_file.'
+	if ($NegativeClauseIndex -eq 0) {
+		$NegativeClauseHandoff.non_goals = @(
+			$NegativeClauseLauncherCases[$NegativeClauseIndex][0]
+		)
+	}
+	else {
+		$NegativeClauseHandoff.required_checks = @(
+			$NegativeClauseLauncherCases[$NegativeClauseIndex][0]
+		)
+	}
+	$NegativeClauseHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	$NegativeClausePath = Join-Path $TestRoot ($NegativeClauseHandoff.run_id + '.json')
+	$NegativeClauseHandoff | ConvertTo-Json -Depth 10 | Set-Content `
+		-LiteralPath $NegativeClausePath -Encoding UTF8
+	try {
+		$NegativeClauseDryRun = & $LaunchScript `
+			-HandoffPath $NegativeClausePath -DryRun -PassThru
+		Add-Result `
+			-Name "$($NegativeClauseLauncherCases[$NegativeClauseIndex][1]) passes launcher preflight" `
+			-Passed ($NegativeClauseDryRun.Stage -ceq 'worker')
+	}
+	catch {
+		Add-Result `
+			-Name "$($NegativeClauseLauncherCases[$NegativeClauseIndex][1]) passes launcher preflight" `
+			-Passed $false `
+			-Detail $_.Exception.Message
+	}
+}
+
+$NegativeClauseContinuationCases = @(
+	'No calls with limit_bytes. Then set limit_bytes to 2048 on every call.',
+	'Check that calls with limit_bytes are rejected. Require timeout_seconds on each call.',
+	'Use read_allowed_source_file. Do not pass path.',
+	'Use read_allowed_source_file. Do not pass offset_bytes.'
+)
+for ($ContinuationIndex = 0;
+	$ContinuationIndex -lt $NegativeClauseContinuationCases.Count;
+	$ContinuationIndex++) {
+	$ContinuationHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+		ConvertFrom-Json
+	$ContinuationHandoff.run_id =
+		"test-worker-negative-source-clause-continuation-$ContinuationIndex"
+	$ContinuationHandoff.work_package = 'Use read_allowed_source_file.'
+	$ContinuationHandoff.required_checks = @(
+		$NegativeClauseContinuationCases[$ContinuationIndex]
+	)
+	$ContinuationHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	Invoke-SourceProtocolPreflightRejection `
+		-Name "Negative source clause continuation $($ContinuationIndex + 1) is retry-neutrally rejected" `
+		-Handoff $ContinuationHandoff `
+		-PrivateMarker 'private-negative-clause-continuation-preflight'
+}
+
+$RetainedEvidenceInvocationHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$RetainedEvidenceInvocationHandoff.run_id = 'test-worker-retained-evidence-invocation-conflict'
+$RetainedEvidenceInvocationHandoff.work_package =
+	'Reproduce the retained raw evidence by invoking read_allowed_source_file with limit_bytes: 2048.'
+$RetainedEvidenceInvocationHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Active retained-evidence invocation is retry-neutrally rejected before launch' `
+	-Handoff $RetainedEvidenceInvocationHandoff `
+	-PrivateMarker 'private-retained-evidence-preflight'
+
+$ExactToolShapingPreflightCases = @(
+	'Do not stop before invoking read_allowed_source_file with limit_bytes: 2048.',
+	'No incomplete reads are allowed when calling read_allowed_source_file with timeout_seconds.',
+	'Call read_allowed_source_file and cap each request at 2048 bytes.',
+	'Use read_allowed_source_file. Cap each page at 2048 bytes.',
+	'Use read_allowed_source_file, specifying timeout_seconds: 30 on every request.',
+	'Use read_allowed_source_file and specify limit_bytes on each request.',
+	'Remove ambiguity by invoking read_allowed_source_file with timeout_seconds: 30.',
+	'Previous attempts failed, so invoke read_allowed_source_file with timeout_seconds: 30.'
+)
+for ($ShapingPreflightIndex = 0;
+	$ShapingPreflightIndex -lt $ExactToolShapingPreflightCases.Count;
+	$ShapingPreflightIndex++) {
+	$ShapingHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath | ConvertFrom-Json
+	$ShapingHandoff.run_id = "test-worker-exact-source-shaping-$ShapingPreflightIndex"
+	$ShapingHandoff.work_package = $ExactToolShapingPreflightCases[$ShapingPreflightIndex]
+	$ShapingHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	Invoke-SourceProtocolPreflightRejection `
+		-Name "Exact source shaping case $($ShapingPreflightIndex + 1) is retry-neutrally rejected" `
+		-Handoff $ShapingHandoff `
+		-PrivateMarker 'private-exact-source-shaping-preflight'
+}
+
+$SplitSourceContextPreflightCases = @(
+	[pscustomobject]@{
+		Value = @(
+			'Use read_allowed_source_file.',
+			'Pass timeout_seconds on every source request.'
+		)
+	},
+	[pscustomobject]@{
+		Value = [ordered]@{
+			procedure = 'Use read_allowed_source_file.'
+			instructions = 'Pass timeout_seconds on every source request.'
+		}
 	}
 )
-Add-Result `
-	-Name 'Conflicting source-reader requirement is retry-neutrally rejected before launch' `
-	-Passed (
-		$ConflictingSourceProtocolFailure -and
-		$RetryNeutralSourceProtocolCarrier.Count -eq 1
-	)
+for ($SplitPreflightIndex = 0;
+	$SplitPreflightIndex -lt $SplitSourceContextPreflightCases.Count;
+	$SplitPreflightIndex++) {
+	$SplitHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath | ConvertFrom-Json
+	$SplitHandoff.run_id = "test-worker-split-source-context-$SplitPreflightIndex"
+	$SplitHandoff.work_package =
+		$SplitSourceContextPreflightCases[$SplitPreflightIndex].Value
+	$SplitHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	Invoke-SourceProtocolPreflightRejection `
+		-Name "Split source context case $($SplitPreflightIndex + 1) is retry-neutrally rejected" `
+		-Handoff $SplitHandoff `
+		-PrivateMarker 'private-split-source-context-preflight'
+}
 
-$MalformedSourceProtocolHandoffPath = Join-Path $TestRoot 'worker-source-protocol-extra.json'
+$MemberBeforeToolPreflightVerbs = @('Supply', 'Attach', 'Append', 'Send', 'Provide', 'Assign')
+foreach ($MemberBeforeToolVerb in $MemberBeforeToolPreflightVerbs) {
+	$MemberBeforeToolHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+		ConvertFrom-Json
+	$MemberBeforeToolHandoff.run_id =
+		"test-worker-member-before-tool-$($MemberBeforeToolVerb.ToLowerInvariant())"
+	$MemberBeforeToolHandoff.work_package =
+		"$MemberBeforeToolVerb timeout_seconds to read_allowed_source_file."
+	$MemberBeforeToolHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	Invoke-SourceProtocolPreflightRejection `
+		-Name "$MemberBeforeToolVerb member-before-tool case is retry-neutrally rejected" `
+		-Handoff $MemberBeforeToolHandoff `
+		-PrivateMarker 'private-member-before-source-tool-preflight'
+}
+
+$VerbIndependentPreflightCases = @(
+	'Use read_allowed_source_file. Each request must carry path, offset_bytes, and timeout_seconds.',
+	'Use read_allowed_source_file. Each request has path, offset_bytes, and timeout_seconds.',
+	'Use read_allowed_source_file. Each request is required to carry path, offset_bytes, and timeout_seconds.'
+)
+for ($VerbIndependentIndex = 0;
+	$VerbIndependentIndex -lt $VerbIndependentPreflightCases.Count;
+	$VerbIndependentIndex++) {
+	$VerbIndependentHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+		ConvertFrom-Json
+	$VerbIndependentHandoff.run_id =
+		"test-worker-verb-independent-source-members-$VerbIndependentIndex"
+	$VerbIndependentHandoff.work_package =
+		$VerbIndependentPreflightCases[$VerbIndependentIndex]
+	$VerbIndependentHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	Invoke-SourceProtocolPreflightRejection `
+		-Name "Verb-independent source member case $($VerbIndependentIndex + 1) is retry-neutrally rejected" `
+		-Handoff $VerbIndependentHandoff `
+		-PrivateMarker 'private-verb-independent-source-member-preflight'
+}
+
+$ObjectSourceMemberPreflightCases = @(
+	[ordered]@{
+		procedure = 'Use read_allowed_source_file.'
+		request_arguments = @('path', 'offset_bytes', 'timeout_seconds')
+	},
+	[ordered]@{
+		procedure = 'Use read_allowed_source_file.'
+		arguments = [ordered]@{
+			path = 'AGENTS.md'
+			offset_bytes = 0
+			timeout_seconds = 30
+		}
+	}
+)
+for ($ObjectMemberIndex = 0;
+	$ObjectMemberIndex -lt $ObjectSourceMemberPreflightCases.Count;
+	$ObjectMemberIndex++) {
+	$ObjectMemberHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+		ConvertFrom-Json
+	$ObjectMemberHandoff.run_id = "test-worker-object-source-members-$ObjectMemberIndex"
+	$ObjectMemberHandoff.work_package = $ObjectSourceMemberPreflightCases[$ObjectMemberIndex]
+	$ObjectMemberHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	Invoke-SourceProtocolPreflightRejection `
+		-Name "Object source member case $($ObjectMemberIndex + 1) is retry-neutrally rejected" `
+		-Handoff $ObjectMemberHandoff `
+		-PrivateMarker 'private-object-source-member-preflight'
+}
+
+$CanonicalOnlyMembersHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$CanonicalOnlyMembersHandoff.run_id = 'test-worker-canonical-only-source-members'
+$CanonicalOnlyMembersHandoff.work_package =
+	'Use read_allowed_source_file. Pass only path and offset_bytes in every source call.'
+$CanonicalOnlyMembersHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+$CanonicalOnlyMembersPath = Join-Path $TestRoot 'worker-canonical-only-source-members.json'
+$CanonicalOnlyMembersHandoff | ConvertTo-Json -Depth 10 | Set-Content `
+	-LiteralPath $CanonicalOnlyMembersPath -Encoding UTF8
+try {
+	$CanonicalOnlyMembersDryRun = & $LaunchScript `
+		-HandoffPath $CanonicalOnlyMembersPath -DryRun -PassThru
+	Add-Result `
+		-Name 'Canonical only-members source instruction passes launcher preflight' `
+		-Passed ($CanonicalOnlyMembersDryRun.Stage -ceq 'worker')
+}
+catch {
+	Add-Result `
+		-Name 'Canonical only-members source instruction passes launcher preflight' `
+		-Passed $false `
+		-Detail $_.Exception.Message
+}
+
+$CanonicalPagingInstructionCases = @(
+	'Use read_allowed_source_file. Use end_offset_bytes from each response as the next offset.',
+	'Use read_allowed_source_file with exactly path and offset_bytes.'
+)
+for ($CanonicalPagingIndex = 0;
+	$CanonicalPagingIndex -lt $CanonicalPagingInstructionCases.Count;
+	$CanonicalPagingIndex++) {
+	$CanonicalPagingHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+		ConvertFrom-Json
+	$CanonicalPagingHandoff.run_id = "test-worker-canonical-paging-$CanonicalPagingIndex"
+	$CanonicalPagingHandoff.work_package =
+		$CanonicalPagingInstructionCases[$CanonicalPagingIndex]
+	$CanonicalPagingHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	$CanonicalPagingPath = Join-Path $TestRoot ($CanonicalPagingHandoff.run_id + '.json')
+	$CanonicalPagingHandoff | ConvertTo-Json -Depth 10 | Set-Content `
+		-LiteralPath $CanonicalPagingPath -Encoding UTF8
+	try {
+		$CanonicalPagingDryRun = & $LaunchScript `
+			-HandoffPath $CanonicalPagingPath -DryRun -PassThru
+		Add-Result `
+			-Name "Canonical paging instruction $($CanonicalPagingIndex + 1) passes launcher preflight" `
+			-Passed ($CanonicalPagingDryRun.Stage -ceq 'worker')
+	}
+	catch {
+		Add-Result `
+			-Name "Canonical paging instruction $($CanonicalPagingIndex + 1) passes launcher preflight" `
+			-Passed $false `
+			-Detail $_.Exception.Message
+	}
+}
+
+$ExactToolConflictHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$ExactToolConflictHandoff.run_id = 'test-worker-exact-source-conflict'
+$ExactToolConflictHandoff.work_package =
+	'Every read_allowed_source_file call must include timeout_seconds. private-exact-preflight'
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Exact source-tool member is retry-neutrally rejected before launch' `
+	-Handoff $ExactToolConflictHandoff `
+	-PrivateMarker 'private-exact-preflight'
+
+$ExactArgumentListConflictHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$ExactArgumentListConflictHandoff.run_id =
+	'test-worker-exact-source-argument-list-conflict'
+$ExactArgumentListConflictHandoff.work_package =
+	'Use read_allowed_source_file(path, offset_bytes, limit) for every source page. private-exact-argument-list-preflight'
+$ExactArgumentListConflictHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Exact source-tool argument list is retry-neutrally rejected before launch' `
+	-Handoff $ExactArgumentListConflictHandoff `
+	-PrivateMarker 'private-exact-argument-list-preflight'
+
+$CrossFieldConflictHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$CrossFieldConflictHandoff.run_id = 'test-worker-cross-field-source-conflict'
+$CrossFieldConflictHandoff.work_package =
+	'Use read_allowed_source_file with path and offset_bytes.'
+$CrossFieldConflictHandoff.required_checks = @(
+	'Every call must include timeout_seconds 30. private-cross-field-preflight'
+)
+$CrossFieldConflictHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Cross-field exact source context is retry-neutrally rejected before launch' `
+	-Handoff $CrossFieldConflictHandoff `
+	-PrivateMarker 'private-cross-field-preflight'
+
+$StructuredSourceInstructionHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$StructuredSourceInstructionHandoff.run_id = 'test-worker-structured-source-instruction-conflict'
+$StructuredSourceInstructionHandoff.work_package = [ordered]@{
+	source_call = [ordered]@{
+		tool = 'read_allowed_source_file'
+		arguments = [ordered]@{
+			path = 'AGENTS.md'
+			offset_bytes = 0
+		}
+	}
+	instructions = 'Every call must include timeout_seconds 30.'
+}
+$StructuredSourceInstructionHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Structured source instruction is retry-neutrally rejected before launch' `
+	-Handoff $StructuredSourceInstructionHandoff `
+	-PrivateMarker 'private-structured-instruction-preflight'
+
+$InvalidStructuredSourcePreflightCases = @(
+	[ordered]@{
+		tool = 'read_allowed_source_file'
+		arguments = [ordered]@{ path = 'AGENTS.md'; offset_bytes = '0' }
+	},
+	[ordered]@{
+		tool = 'read_allowed_source_file'
+		arguments = [ordered]@{ path = 'AGENTS.md'; offset_bytes = -1 }
+	},
+	[ordered]@{
+		tool = 'Read_Allowed_Source_File'
+		arguments = [ordered]@{ path = 'AGENTS.md'; offset_bytes = 0; limit_bytes = 2048 }
+	}
+)
+for ($StructuredPreflightIndex = 0;
+	$StructuredPreflightIndex -lt $InvalidStructuredSourcePreflightCases.Count;
+	$StructuredPreflightIndex++) {
+	$InvalidStructuredHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+		ConvertFrom-Json
+	$InvalidStructuredHandoff.run_id =
+		"test-worker-invalid-structured-source-$StructuredPreflightIndex"
+	$InvalidStructuredHandoff.work_package =
+		$InvalidStructuredSourcePreflightCases[$StructuredPreflightIndex]
+	$InvalidStructuredHandoff | Add-Member `
+		-NotePropertyName source_inspection_protocol `
+		-NotePropertyValue $SupportedLauncherSourceProtocol
+	Invoke-SourceProtocolPreflightRejection `
+		-Name "Invalid structured source call $($StructuredPreflightIndex + 1) is retry-neutrally rejected" `
+		-Handoff $InvalidStructuredHandoff `
+		-PrivateMarker 'private-invalid-structured-source-preflight'
+}
+
 $MalformedSourceProtocolHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
 	ConvertFrom-Json
 $MalformedSourceProtocolHandoff.run_id = 'test-worker-source-protocol-extra'
@@ -1324,34 +1776,41 @@ $MalformedSourceProtocolHandoff | Add-Member `
 		maximum_page_bytes = 8192
 		timeout_seconds = 30
 	})
-$MalformedSourceProtocolHandoff | ConvertTo-Json -Depth 8 | Set-Content `
-	-LiteralPath $MalformedSourceProtocolHandoffPath -Encoding UTF8
-$MalformedSourceProtocolCarrier = @()
-$MalformedSourceProtocolFailure = try {
-	& $LaunchScript `
-		-HandoffPath $MalformedSourceProtocolHandoffPath `
-		-OutVariable MalformedSourceProtocolCarrier |
-		Out-Null
-	$false
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Malformed source protocol emits retry-neutral preflight evidence' `
+	-Handoff $MalformedSourceProtocolHandoff `
+	-PrivateMarker 'private-malformed-protocol'
+
+$DescriptiveSourceHandoffPath = Join-Path $TestRoot 'worker-source-description.json'
+$DescriptiveSourceHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
+	ConvertFrom-Json
+$DescriptiveSourceHandoff.run_id = 'test-worker-source-description'
+$DescriptiveSourceHandoff.work_package =
+	'Descriptive source reader note: keep each response compact.'
+$DescriptiveSourceHandoff.required_checks = @(
+	'Retry an unrelated API request with timeout_seconds 30.'
+)
+$DescriptiveSourceHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+$DescriptiveSourceHandoff | ConvertTo-Json -Depth 10 | Set-Content `
+	-LiteralPath $DescriptiveSourceHandoffPath -Encoding UTF8
+try {
+	$DescriptiveDryRun = & $LaunchScript `
+		-HandoffPath $DescriptiveSourceHandoffPath -DryRun -PassThru
+	Add-Result `
+		-Name 'Descriptive source prose does not alter the typed preflight contract' `
+		-Passed (
+			$DescriptiveDryRun.Stage -ceq 'worker' -and
+			$DescriptiveDryRun.SandboxMode -ceq 'read-only'
+		)
 }
 catch {
-	$_.Exception.Message -match 'source_protocol_invalid'
+	Add-Result `
+		-Name 'Descriptive source prose does not alter the typed preflight contract' `
+		-Passed $false `
+		-Detail $_.Exception.Message
 }
-$RetryNeutralMalformedProtocolCarrier = @(
-	$MalformedSourceProtocolCarrier | Where-Object {
-		$_.phase -ceq 'preflight' -and
-		$_.code -ceq 'source_protocol_invalid' -and
-		$_.field -ceq 'source_inspection_protocol' -and
-		$_.child_launched -eq $false -and
-		$_.attempt_consumed -eq $false
-	}
-)
-Add-Result `
-	-Name 'Malformed source protocol emits retry-neutral preflight evidence' `
-	-Passed (
-		$MalformedSourceProtocolFailure -and
-		$RetryNeutralMalformedProtocolCarrier.Count -eq 1
-	)
 
 $MismatchedWorkerPath = Join-Path $TestRoot 'worker-baseline-mismatch.json'
 $MismatchedWorker = Get-Content -Raw -LiteralPath $WorkerHandoffPath | ConvertFrom-Json
@@ -1460,7 +1919,10 @@ public static class FixtureCodex
 			Console.WriteLine("MALFORMED_EVENT_FIXTURE");
 			return 0;
 		}
-		if (scenario == "passed-bundle")
+		if (scenario != null && scenario.StartsWith(
+			"passed-bundle",
+			StringComparison.Ordinal
+		))
 		{
 			string agentsBaseSha256 = Environment.GetEnvironmentVariable(
 				"DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256"
@@ -1484,11 +1946,17 @@ public static class FixtureCodex
 				"Attested existing allowed-path SHA-256 map:",
 				StringComparison.Ordinal
 			);
+			int descriptiveSourceIndex = normalizedPrompt.IndexOf(
+				"Descriptive source reader note: keep each response compact.",
+				StringComparison.Ordinal
+			);
 			if (String.IsNullOrWhiteSpace(agentsBaseSha256) ||
 				String.IsNullOrWhiteSpace(readmeBaseSha256) ||
 				agentsHashIndex < 0 ||
 				readmeHashIndex <= agentsHashIndex ||
 				producerContractIndex < 0 ||
+				descriptiveSourceIndex < 0 ||
+				descriptiveSourceIndex >= producerContractIndex ||
 				normalizedPrompt.IndexOf(
 					"Return the delivery_file_bundle_v1 object directly as your " +
 					"structured final output.",
@@ -1516,6 +1984,12 @@ public static class FixtureCodex
 				normalizedPrompt.IndexOf(
 					"Inspect allowed source files only with the required " +
 					"read_allowed_source_file tool.",
+					producerContractIndex,
+					StringComparison.Ordinal
+				) < 0 ||
+				normalizedPrompt.IndexOf(
+					"This launcher-owned protocol overrides conflicting " +
+					"source-reader prose in the frozen handoff.",
 					producerContractIndex,
 					StringComparison.Ordinal
 				) < 0 ||
@@ -1592,26 +2066,55 @@ public static class FixtureCodex
 				readmeBaseBytes.Length,
 				readmeSuffix.Length
 			);
-			string bundleOutput = "{\"stage\":\"worker\",\"status\":\"passed\"," +
-				"\"summary\":\"fixture passed\",\"evidence\":[]," +
-				"\"changed_paths\":[\"AGENTS.md\",\"README.md\"],\"findings\":[]," +
-				"\"artifact\":{\"format\":\"delivery_file_bundle_v1\"," +
-				"\"files\":[{\"path\":\"AGENTS.md\",\"operation\":\"replace\"," +
+			string replacementAgents =
+				"{\"path\":\"AGENTS.md\",\"operation\":\"replace\"," +
 				"\"base_sha256\":\"" + agentsBaseSha256 +
 				"\",\"encoding\":\"utf8\",\"content\":\"" +
 				new UTF8Encoding(false, true).GetString(agentsCandidateBytes)
 					.Replace("\\", "\\\\").Replace("\"", "\\\"")
-					.Replace("\r", "\\r").Replace("\n", "\\n") +
-				"\"},{\"path\":\"README.md\",\"operation\":\"replace\"," +
+					.Replace("\r", "\\r").Replace("\n", "\\n") + "\"}";
+			string replacementReadme =
+				"{\"path\":\"README.md\",\"operation\":\"replace\"," +
 				"\"base_sha256\":\"" + readmeBaseSha256 +
 				"\",\"encoding\":\"utf8\",\"content\":\"" +
 				new UTF8Encoding(false, true).GetString(readmeCandidateBytes)
 					.Replace("\\", "\\\\").Replace("\"", "\\\"")
-					.Replace("\r", "\\r").Replace("\n", "\\n") + "\"}]}}";
+					.Replace("\r", "\\r").Replace("\n", "\\n") + "\"}";
+			string createdFile =
+				"{\"path\":\"docs/source-created.md\",\"operation\":\"create\"," +
+				"\"base_sha256\":null,\"encoding\":\"utf8\"," +
+				"\"content\":\"created fixture\\n\"}";
+			string changedPaths;
+			string bundleFiles;
+			if (scenario == "passed-bundle-create-only")
+			{
+				changedPaths = "[\"docs/source-created.md\"]";
+				bundleFiles = createdFile;
+			}
+			else if (scenario == "passed-bundle-mixed-create-replace")
+			{
+				changedPaths = "[\"AGENTS.md\",\"docs/source-created.md\"]";
+				bundleFiles = replacementAgents + "," + createdFile;
+			}
+			else
+			{
+				changedPaths = "[\"AGENTS.md\",\"README.md\"]";
+				bundleFiles = replacementAgents + "," + replacementReadme;
+			}
+			string bundleOutput = "{\"stage\":\"worker\",\"status\":\"passed\"," +
+				"\"summary\":\"fixture passed\",\"evidence\":[]," +
+				"\"changed_paths\":" + changedPaths + ",\"findings\":[]," +
+				"\"artifact\":{\"format\":\"delivery_file_bundle_v1\"," +
+				"\"files\":[" + bundleFiles + "]}}";
 			File.WriteAllText(outputPath, bundleOutput, new UTF8Encoding(false));
 			Console.Error.WriteLine("IGNORED_FIXTURE_DIAGNOSTIC");
 			Console.WriteLine(
 				"{\"type\":\"thread.started\",\"thread_id\":\"fixture-session\"}"
+			);
+			WriteBundleSourceEvents(
+				scenario,
+				agentsBaseSha256,
+				readmeBaseSha256
 			);
 			Console.WriteLine("{\"type\":\"turn.completed\",\"usage\":{" +
 				"\"input_tokens\":100,\"cached_input_tokens\":40," +
@@ -1752,10 +2255,22 @@ public static class FixtureCodex
 				string toolBaseSha256 = null;
 				StringBuilder escapedToolContent = new StringBuilder();
 				MemoryStream reconstructedSource = new MemoryStream();
+				List<string> observedSourceEvents = new List<string>();
 				int requestId = 3;
 				bool reachedEof = false;
 				while (!reachedEof)
 				{
+					string callId = "source-call-" + requestId;
+					string requestArguments =
+						"{\"path\":\"AGENTS.md\",\"offset_bytes\":" +
+						expectedOffsetBytes + "}";
+					observedSourceEvents.Add(
+						"{\"type\":\"item.started\",\"item\":{\"id\":\"" + callId +
+						"\",\"type\":\"mcp_tool_call\",\"server\":" +
+						"\"source_inspection\",\"tool\":\"read_allowed_source_file\"," +
+						"\"arguments\":" + requestArguments +
+						",\"status\":\"in_progress\"}}"
+					);
 					serverProcess.StandardInput.WriteLine(
 						"{\"jsonrpc\":\"2.0\",\"id\":" + requestId +
 						",\"method\":\"tools/call\",\"params\":{\"name\":" +
@@ -1859,6 +2374,16 @@ public static class FixtureCodex
 						Console.Error.WriteLine("SOURCE_INSPECTION_RESULT_INVALID");
 						return 27;
 					}
+					observedSourceEvents.Add(
+						"{\"type\":\"item.completed\",\"item\":{\"id\":\"" + callId +
+						"\",\"type\":\"mcp_tool_call\",\"server\":" +
+						"\"source_inspection\",\"tool\":\"read_allowed_source_file\"," +
+						"\"arguments\":" + requestArguments + ",\"result\":{" +
+						"\"content\":[{\"type\":\"text\",\"text\":\"" +
+						canonicalText.Replace("\\", "\\\\").Replace("\"", "\\\"") +
+						"\"}],\"structured_content\":" + canonicalText +
+						",\"isError\":false},\"error\":null,\"status\":\"completed\"}}"
+					);
 					escapedToolContent.Append(pageContent);
 					reconstructedSource.Write(pageBytes, 0, pageBytes.Length);
 					expectedOffsetBytes = pageEndOffsetBytes;
@@ -1899,6 +2424,10 @@ public static class FixtureCodex
 					escapedToolContent.ToString() +
 					"\n# delivery source inspection fixture candidate\n\"}]}}";
 				File.WriteAllText(outputPath, correctedOutput, new UTF8Encoding(false));
+				foreach (string observedSourceEvent in observedSourceEvents)
+				{
+					Console.WriteLine(observedSourceEvent);
+				}
 			}
 			Console.WriteLine(
 				"{\"type\":\"thread.started\",\"thread_id\":\"fixture-session\"}"
@@ -1940,6 +2469,149 @@ public static class FixtureCodex
 			"\"cache_write_input_tokens\":0,\"output_tokens\":20," +
 			"\"reasoning_output_tokens\":5}}");
 		return 0;
+	}
+	private static void WriteCompletedSourceFile(
+		string path,
+		string baseSha256,
+		byte[] bytes,
+		string callPrefix
+	)
+	{
+		int offset = 0;
+		int pageIndex = 0;
+		do
+		{
+			int contentBytes = Math.Min(8192, bytes.Length - offset);
+			byte[] pageBytes = new byte[contentBytes];
+			Buffer.BlockCopy(bytes, offset, pageBytes, 0, contentBytes);
+			int endOffset = offset + contentBytes;
+			bool eof = endOffset == bytes.Length;
+			string arguments = "{\"path\":\"" + path +
+				"\",\"offset_bytes\":" + offset + "}";
+			string page = "{\"path\":\"" + path +
+				"\",\"encoding\":\"base64\",\"content\":\"" +
+				Convert.ToBase64String(pageBytes) + "\",\"base_sha256\":\"" +
+				baseSha256 + "\",\"offset_bytes\":" + offset +
+				",\"content_bytes\":" + contentBytes +
+				",\"end_offset_bytes\":" + endOffset +
+				",\"file_size_bytes\":" + bytes.Length +
+				",\"eof\":" + (eof ? "true" : "false") + "}";
+			string callId = callPrefix + "-" + pageIndex;
+			Console.WriteLine("{\"type\":\"item.started\",\"item\":{" +
+				"\"id\":\"" + callId + "\",\"type\":\"mcp_tool_call\"," +
+				"\"server\":\"source_inspection\"," +
+				"\"tool\":\"read_allowed_source_file\",\"arguments\":" +
+				arguments + ",\"status\":\"in_progress\"}}");
+			Console.WriteLine("{\"type\":\"item.completed\",\"item\":{" +
+				"\"id\":\"" + callId + "\",\"type\":\"mcp_tool_call\"," +
+				"\"server\":\"source_inspection\"," +
+				"\"tool\":\"read_allowed_source_file\",\"arguments\":" +
+				arguments + ",\"result\":{\"content\":[{\"type\":\"text\"," +
+				"\"text\":\"" + page.Replace("\\", "\\\\").Replace("\"", "\\\"") +
+				"\"}],\"structured_content\":" + page +
+				",\"isError\":false},\"error\":null,\"status\":\"completed\"}}");
+			offset = endOffset;
+			pageIndex++;
+		}
+		while (offset < bytes.Length);
+	}
+	private static void WriteBundleSourceEvents(
+		string scenario,
+		string agentsBaseSha256,
+		string readmeBaseSha256
+	)
+	{
+		const string hash =
+			"3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7";
+		string arguments = "{\"path\":\"AGENTS.md\",\"offset_bytes\":0}";
+		string started = "{\"type\":\"item.started\",\"item\":{" +
+			"\"id\":\"bundle-source\",\"type\":\"mcp_tool_call\"," +
+			"\"server\":\"source_inspection\"," +
+			"\"tool\":\"read_allowed_source_file\",\"arguments\":" + arguments +
+			",\"status\":\"in_progress\"}}";
+		string page = "{\"path\":\"AGENTS.md\",\"encoding\":\"utf8\"," +
+			"\"content\":\"data\",\"base_sha256\":\"" + hash +
+			"\",\"offset_bytes\":0,\"content_bytes\":4," +
+			"\"end_offset_bytes\":4,\"file_size_bytes\":4,\"eof\":true}";
+		string completed = "{\"type\":\"item.completed\",\"item\":{" +
+			"\"id\":\"bundle-source\",\"type\":\"mcp_tool_call\"," +
+			"\"server\":\"source_inspection\"," +
+			"\"tool\":\"read_allowed_source_file\",\"arguments\":" + arguments +
+			",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" +
+			page.Replace("\\", "\\\\").Replace("\"", "\\\"") +
+			"\"}],\"structured_content\":" + page +
+			",\"isError\":false},\"error\":null,\"status\":\"completed\"}}";
+
+		if (scenario == "passed-bundle-complete-pagination")
+		{
+			WriteCompletedSourceFile(
+				"AGENTS.md", agentsBaseSha256, File.ReadAllBytes("AGENTS.md"), "agents"
+			);
+			WriteCompletedSourceFile(
+				"README.md", readmeBaseSha256, File.ReadAllBytes("README.md"), "readme"
+			);
+		}
+		else if (scenario == "passed-bundle-missing-replacement-source")
+		{
+			WriteCompletedSourceFile(
+				"AGENTS.md", agentsBaseSha256, File.ReadAllBytes("AGENTS.md"), "agents"
+			);
+		}
+		else if (scenario == "passed-bundle-mismatched-replacement-source")
+		{
+			WriteCompletedSourceFile(
+				"AGENTS.md", agentsBaseSha256, File.ReadAllBytes("AGENTS.md"), "agents"
+			);
+			Console.WriteLine(started.Replace("AGENTS.md", "README.md"));
+			Console.WriteLine(completed.Replace("AGENTS.md", "README.md"));
+		}
+		else if (scenario == "passed-bundle-mixed-create-replace")
+		{
+			WriteCompletedSourceFile(
+				"AGENTS.md", agentsBaseSha256, File.ReadAllBytes("AGENTS.md"), "agents"
+			);
+		}
+		else if (scenario == "passed-bundle-incomplete-pagination")
+		{
+			string incompletePage = page.Replace(
+				"\"file_size_bytes\":4,\"eof\":true",
+				"\"file_size_bytes\":8,\"eof\":false"
+			);
+			Console.WriteLine(started);
+			Console.WriteLine(completed.Replace(
+				page.Replace("\\", "\\\\").Replace("\"", "\\\""),
+				incompletePage.Replace("\\", "\\\\").Replace("\"", "\\\"")
+			).Replace(page, incompletePage));
+		}
+		else if (scenario == "passed-bundle-argument-validation-failed")
+		{
+			string invalidArguments =
+				"{\"path\":\"AGENTS.md\",\"offset_bytes\":0,\"limit_bytes\":2048}";
+			Console.WriteLine(started.Replace(arguments, invalidArguments));
+			Console.WriteLine("{\"type\":\"item.completed\",\"item\":{" +
+				"\"id\":\"bundle-source\",\"type\":\"mcp_tool_call\"," +
+				"\"server\":\"source_inspection\"," +
+				"\"tool\":\"read_allowed_source_file\",\"arguments\":" +
+				invalidArguments + ",\"result\":null,\"error\":{" +
+				"\"message\":\"private-invalid-argument\"},\"status\":\"failed\"}}"
+			);
+		}
+		else if (scenario == "passed-bundle-source-policy-rejected")
+		{
+			Console.WriteLine(started);
+			Console.WriteLine("{\"type\":\"item.completed\",\"item\":{" +
+				"\"id\":\"bundle-source\",\"type\":\"mcp_tool_call\"," +
+				"\"server\":\"source_inspection\"," +
+				"\"tool\":\"read_allowed_source_file\",\"arguments\":" + arguments +
+				",\"result\":{\"content\":[{\"type\":\"text\",\"text\":" +
+				"\"[source_path_sensitive] private-policy-detail\"}],\"isError\":true}," +
+				"\"error\":null,\"status\":\"completed\"}}"
+			);
+		}
+		else if (scenario == "passed-bundle-protocol-rejected")
+		{
+			Console.WriteLine(completed);
+		}
 	}
 	private static long ExtractJsonInt64(
 		string source,
@@ -2359,7 +3031,13 @@ $AcceptedBundleHandoff.output_contract = (
 	'Return a delivery_file_bundle_v1 full-file artifact.'
 )
 $AcceptedBundleHandoff.allowed_paths = @('AGENTS.md', 'README.md')
-$AcceptedBundleHandoff.work_package = 'Propose AGENTS.md and README.md changes.'
+$AcceptedBundleHandoff.work_package = (
+	'Propose AGENTS.md and README.md changes. ' +
+	'Descriptive source reader note: keep each response compact.'
+)
+$AcceptedBundleHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
 $AcceptedBundleHandoff | ConvertTo-Json -Depth 8 | Set-Content `
 	-LiteralPath $AcceptedBundleHandoffPath -Encoding UTF8
 $AcceptedBundleArtifactRoot = Join-Path (
@@ -2395,7 +3073,7 @@ $OriginalExpectedAgentsSha256 = $env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256
 $OriginalExpectedReadmeSha256 = $env:DELIVERY_FIXTURE_EXPECTED_README_SHA256
 try {
 	$env:PATH = $FixtureBin + [System.IO.Path]::PathSeparator + $OriginalPath
-	$env:DELIVERY_FIXTURE_SCENARIO = 'passed-bundle'
+	$env:DELIVERY_FIXTURE_SCENARIO = 'passed-bundle-complete-pagination'
 	$env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256 = (
 		$AcceptedBundleBaseSha256['AGENTS.md']
 	)
@@ -2443,6 +3121,13 @@ if ($null -ne $AcceptedBundleResult) {
 			@($AcceptedBundlePatchValidation.ProposedPaths).Count -eq 2 -and
 			$AcceptedBundlePatchValidation.ProposedPaths -contains 'AGENTS.md' -and
 			$AcceptedBundlePatchValidation.ProposedPaths -contains 'README.md' -and
+			$AcceptedBundleAudit.SourceInspection.Outcome -ceq 'complete_pagination' -and
+			@($AcceptedBundleAudit.SourceInspection.CompletedSources).Count -eq 2 -and
+			@($AcceptedBundleAudit.SourceInspection.CompletedSources | Where-Object {
+				$AcceptedBundleBaseSha256.Contains([string]$_.Path) -and
+				[string]$_.BaseSha256 -ceq
+				[string]$AcceptedBundleBaseSha256[[string]$_.Path]
+			}).Count -eq 2 -and
 			$AcceptedBundleEvidence.Disposition -eq 'accepted'
 		)
 	}
@@ -2454,6 +3139,149 @@ Add-Result `
 	-Name 'Attested hash prompt enables direct structured replacement bundle output' `
 	-Passed $AcceptedBundlePassed `
 	-Detail $AcceptedBundleError
+
+$RejectedSourceOutcomeCases = @(
+	@('no-tool-call', 'no_tool_call'),
+	@('incomplete-pagination', 'incomplete_pagination'),
+	@('argument-validation-failed', 'argument_validation_failed'),
+	@('source-policy-rejected', 'source_policy_rejected'),
+	@('protocol-rejected', 'protocol_rejected'),
+	@('missing-replacement-source', 'complete_pagination'),
+	@('mismatched-replacement-source', 'complete_pagination')
+)
+foreach ($RejectedSourceOutcomeCase in $RejectedSourceOutcomeCases) {
+	$RejectedSourceSlug = [string]$RejectedSourceOutcomeCase[0]
+	$ExpectedSourceOutcome = [string]$RejectedSourceOutcomeCase[1]
+	$RejectedSourceRunId = "test-worker-bundle-$RejectedSourceSlug"
+	$RejectedSourceHandoffPath = Join-Path $TestRoot "$RejectedSourceRunId.json"
+	$RejectedSourceHandoff = $AcceptedBundleHandoff | ConvertTo-Json -Depth 8 |
+		ConvertFrom-Json
+	$RejectedSourceHandoff.run_id = $RejectedSourceRunId
+	$RejectedSourceHandoff | ConvertTo-Json -Depth 8 | Set-Content `
+		-LiteralPath $RejectedSourceHandoffPath -Encoding UTF8
+	$RejectedSourceArtifactRoot = Join-Path $TestRoot "$RejectedSourceRunId-artifacts"
+	$RejectedSourceAuditPath = Join-Path $RejectedSourceArtifactRoot `
+		"delivery-stage-$RejectedSourceRunId-audit.json"
+	$RejectedSourceTelemetryPath = Join-Path $RejectedSourceArtifactRoot `
+		"delivery-stage-$RejectedSourceRunId-telemetry.json"
+	$RejectedSourceManifestPath = Join-Path $RejectedSourceArtifactRoot `
+		"delivery-stage-$RejectedSourceRunId-evidence.json"
+	$RejectedSourceError = ''
+	$OriginalPath = $env:PATH
+	$OriginalScenario = $env:DELIVERY_FIXTURE_SCENARIO
+	$OriginalExpectedAgentsSha256 = $env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256
+	$OriginalExpectedReadmeSha256 = $env:DELIVERY_FIXTURE_EXPECTED_README_SHA256
+	try {
+		$env:PATH = $FixtureBin + [System.IO.Path]::PathSeparator + $OriginalPath
+		$env:DELIVERY_FIXTURE_SCENARIO = "passed-bundle-$RejectedSourceSlug"
+		$env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256 = (
+			$AcceptedBundleBaseSha256['AGENTS.md']
+		)
+		$env:DELIVERY_FIXTURE_EXPECTED_README_SHA256 = (
+			$AcceptedBundleBaseSha256['README.md']
+		)
+		try {
+			& $LaunchScript `
+				-HandoffPath $RejectedSourceHandoffPath `
+				-ArtifactRoot $RejectedSourceArtifactRoot | Out-Null
+		}
+		catch {
+			$RejectedSourceError = $_.Exception.Message
+		}
+	}
+	finally {
+		$env:PATH = $OriginalPath
+		$env:DELIVERY_FIXTURE_SCENARIO = $OriginalScenario
+		$env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256 = $OriginalExpectedAgentsSha256
+		$env:DELIVERY_FIXTURE_EXPECTED_README_SHA256 = $OriginalExpectedReadmeSha256
+	}
+	$RejectedSourceAudit = Get-Content -Raw -LiteralPath $RejectedSourceAuditPath |
+		ConvertFrom-Json
+	$RejectedSourceTelemetry = Get-Content -Raw -LiteralPath $RejectedSourceTelemetryPath |
+		ConvertFrom-Json
+	$RejectedSourceManifest = Get-Content -Raw -LiteralPath $RejectedSourceManifestPath |
+		ConvertFrom-Json
+	Add-Result `
+		-Name "Valid bundle cannot override source outcome $ExpectedSourceOutcome" `
+		-Passed (
+			$RejectedSourceError -match 'required source inspection did not complete' -and
+			$RejectedSourceError -notmatch 'private-invalid-argument|private-policy-detail' -and
+			$RejectedSourceTelemetry.ExitClass -ceq 'source_inspection_invalid' -and
+			$RejectedSourceTelemetry.SourceInspection.Outcome -ceq $ExpectedSourceOutcome -and
+			$RejectedSourceAudit.SourceInspection.Outcome -ceq $ExpectedSourceOutcome -and
+			$RejectedSourceManifest.Disposition -ceq 'rejected'
+		) `
+		-Detail $RejectedSourceError
+}
+
+foreach ($SupportedBundleSourceCase in @(
+	@('create-only', 'no_tool_call', 1),
+	@('mixed-create-replace', 'complete_pagination', 2)
+)) {
+	$SupportedBundleSourceSlug = [string]$SupportedBundleSourceCase[0]
+	$SupportedBundleSourceOutcome = [string]$SupportedBundleSourceCase[1]
+	$SupportedBundlePathCount = [int]$SupportedBundleSourceCase[2]
+	$SupportedBundleRunId = "test-worker-bundle-$SupportedBundleSourceSlug"
+	$SupportedBundleHandoffPath = Join-Path $TestRoot "$SupportedBundleRunId.json"
+	$SupportedBundleHandoff = $AcceptedBundleHandoff | ConvertTo-Json -Depth 8 |
+		ConvertFrom-Json
+	$SupportedBundleHandoff.run_id = $SupportedBundleRunId
+	$SupportedBundleHandoff.allowed_paths = @(
+		'AGENTS.md', 'README.md', 'docs/source-created.md'
+	)
+	$SupportedBundleHandoff | ConvertTo-Json -Depth 8 | Set-Content `
+		-LiteralPath $SupportedBundleHandoffPath -Encoding UTF8
+	$SupportedBundleArtifactRoot = Join-Path $TestRoot `
+		"$SupportedBundleRunId-artifacts"
+	$SupportedBundleAuditPath = Join-Path $SupportedBundleArtifactRoot `
+		"delivery-stage-$SupportedBundleRunId-audit.json"
+	$SupportedBundleError = ''
+	$OriginalPath = $env:PATH
+	$OriginalScenario = $env:DELIVERY_FIXTURE_SCENARIO
+	$OriginalExpectedAgentsSha256 = $env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256
+	$OriginalExpectedReadmeSha256 = $env:DELIVERY_FIXTURE_EXPECTED_README_SHA256
+	try {
+		$env:PATH = $FixtureBin + [System.IO.Path]::PathSeparator + $OriginalPath
+		$env:DELIVERY_FIXTURE_SCENARIO = "passed-bundle-$SupportedBundleSourceSlug"
+		$env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256 = (
+			$AcceptedBundleBaseSha256['AGENTS.md']
+		)
+		$env:DELIVERY_FIXTURE_EXPECTED_README_SHA256 = (
+			$AcceptedBundleBaseSha256['README.md']
+		)
+		try {
+			& $LaunchScript `
+				-HandoffPath $SupportedBundleHandoffPath `
+				-ArtifactRoot $SupportedBundleArtifactRoot | Out-Null
+		}
+		catch {
+			$SupportedBundleError = $_.Exception.Message
+		}
+	}
+	finally {
+		$env:PATH = $OriginalPath
+		$env:DELIVERY_FIXTURE_SCENARIO = $OriginalScenario
+		$env:DELIVERY_FIXTURE_EXPECTED_AGENTS_SHA256 = $OriginalExpectedAgentsSha256
+		$env:DELIVERY_FIXTURE_EXPECTED_README_SHA256 = $OriginalExpectedReadmeSha256
+	}
+	$SupportedBundleAudit = Get-Content -Raw -LiteralPath $SupportedBundleAuditPath |
+		ConvertFrom-Json
+	$SupportedBundleTelemetry = Get-Content -Raw -LiteralPath (
+		[string]$SupportedBundleAudit.TelemetryPath
+	) | ConvertFrom-Json
+	Add-Result `
+		-Name "Bundle source policy supports $SupportedBundleSourceSlug artifacts" `
+		-Passed (
+			[string]::IsNullOrWhiteSpace($SupportedBundleError) -and
+			$SupportedBundleTelemetry.ExitClass -ceq 'completed' -and
+			$SupportedBundleTelemetry.SourceInspection.Outcome -ceq
+				$SupportedBundleSourceOutcome -and
+			@($SupportedBundleTelemetry.SourceInspection.CompletedSources).Count -eq
+				$(if ($SupportedBundleSourceSlug -ceq 'create-only') { 0 } else { 1 }) -and
+			@($SupportedBundleAudit.ProposedPaths).Count -eq $SupportedBundlePathCount
+		) `
+		-Detail $SupportedBundleError
+}
 $CorrectedRunId = 'test-worker-issue141-corrected'
 $CorrectedHandoffPath = Join-Path $TestRoot "$CorrectedRunId.json"
 $CorrectedHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath |
@@ -2668,6 +3496,21 @@ $ProducerSurfaceCases = @(
 		}
 	}
 )
+
+$IntegratorSourceConflictHandoff = $ProducerSurfaceCases[0].Handoff |
+	ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$IntegratorSourceConflictHandoff.run_id = 'test-integrator-source-protocol-conflict'
+$IntegratorSourceConflictHandoff.integration_order = @(
+	'Use read_allowed_source_file with path, offset_bytes, and limit_bytes: 2048.'
+)
+$IntegratorSourceConflictHandoff | Add-Member `
+	-NotePropertyName source_inspection_protocol `
+	-NotePropertyValue $SupportedLauncherSourceProtocol
+Invoke-SourceProtocolPreflightRejection `
+	-Name 'Integrator integration order source conflict is retry-neutrally rejected' `
+	-Handoff $IntegratorSourceConflictHandoff `
+	-PrivateMarker 'private-integrator-source-member'
+
 foreach ($ProducerSurfaceCase in $ProducerSurfaceCases) {
 	$ProducerSurfaceName = (
 		"Artifact-producing $($ProducerSurfaceCase.Stage) receives the " +
@@ -4476,7 +5319,8 @@ $TelemetryRootProperties = @(
 	'SourceInspection', 'EvidenceManifestPath', 'EvidenceManifestHash', 'TelemetryError'
 )
 $SourceInspectionTelemetryProperties = @(
-	'Outcome', 'CallCount', 'CompletedPageCount', 'CompletedPathCount'
+	'Outcome', 'CallCount', 'CompletedPageCount', 'CompletedPathCount',
+	'CompletedSources'
 )
 $TelemetryLimitsProperties = @(
 	'TotalTokens', 'ElapsedMilliseconds', 'ConcurrentStages', 'ExecutionRetries',
