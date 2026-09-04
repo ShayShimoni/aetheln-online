@@ -9,11 +9,13 @@ open-world-PvP direction.
 Faction and Order names are working names. Character loyalties describe their
 current position and may change through the story.
 
-Under Issue #104, Crowned Ledger and Hundred Witnesses supersede the earlier
-Dawn Concordat and Unbound Flame as the provisional faction display names.
-Both remain provisional working names; final faction naming is owned by
-Issue #54. Historical research and completed evidence that use the earlier
-names remain unchanged.
+Under Issue #104, Crowned Ledger (`faction.crowned_ledger`) and Hundred
+Witnesses (`faction.hundred_witnesses`) supersede the earlier Dawn Concordat
+and Unbound Flame as the provisional faction display names. The semantic IDs
+are stable even when the display names change. Both display names remain
+provisional working names; final faction naming is owned by Issue #54.
+Historical research and completed evidence that use the earlier names remain
+unchanged.
 
 Playable anatomy, visual identity, culture, and presentation contracts are
 defined in [Playable Peoples](playable-peoples.md).
