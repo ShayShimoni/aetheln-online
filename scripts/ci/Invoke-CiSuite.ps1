@@ -33,6 +33,7 @@ $DefaultChecks = @(
 	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
 	@{ name = 'unreal-automation-tests'; tier = 'required'; script = 'tests/ci/Invoke-UnrealAutomationTests.Tests.ps1' },
 	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
+	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'

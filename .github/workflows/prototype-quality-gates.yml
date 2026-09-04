@@ -41,6 +41,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     concurrency:
       group: aetheln-engine-runner
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -67,12 +68,22 @@ jobs:
           path: TestResults/engine-runner-report.json
           if-no-files-found: error
 
-  scheduled-packaged-smoke:
+  # Issue #150 scheduled milestone phases. The daily packaging and smoke
+  # milestone is split into four bounded jobs that reacquire the shared
+  # aetheln-engine-runner concurrency group at every phase boundary, so a queued
+  # trusted-candidate-compile job (FIFO under queue: max) waits at most one
+  # phase bound instead of the whole milestone. Packaged bytes move between
+  # phases only through the durable AETHELN_HANDOFF_ROOT store with fail-closed
+  # integrity manifests; nothing under it is deleted by CI. Job timeout-minutes
+  # is a platform backstop 15 minutes above each script-enforced phase limit so
+  # a phase_timeout failure is recorded and uploaded before cancellation.
+  scheduled-client-package:
     if: github.event_name == 'schedule'
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    timeout-minutes: 1440
+    timeout-minutes: 495
     concurrency:
       group: aetheln-engine-runner
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -81,16 +92,127 @@ jobs:
       - name: Fetch Unreal Content LFS objects
         shell: powershell
         run: git lfs pull --include "Content/**"
-      - name: Run packaged smoke gate
+      - name: Run scheduled client packaging phase
         shell: powershell
         run: |
           $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
           powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
-            -Mode PackagedSmoke `
+            -Mode PackageClient `
             -RepositoryRoot '${{ github.workspace }}' `
             -SourceRevision '${{ github.sha }}' `
-            -ArchiveRoot (Join-Path $RunRoot 'archives') `
-            -LogRoot (Join-Path $RunRoot 'logs')
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 480
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-client-package-report
+          path: TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  scheduled-server-package:
+    if: github.event_name == 'schedule'
+    needs: scheduled-client-package
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 735
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Fetch Unreal Content LFS objects
+        shell: powershell
+        run: git lfs pull --include "Content/**"
+      - name: Run scheduled server packaging phase
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode PackageServer `
+            -RepositoryRoot '${{ github.workspace }}' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 720
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-server-package-report
+          path: TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  scheduled-provenance-validation:
+    if: github.event_name == 'schedule'
+    needs: scheduled-server-package
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 75
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Run scheduled registry and provenance validation phase
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode ValidateProvenance `
+            -RepositoryRoot '${{ github.workspace }}' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 60
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-provenance-validation-report
+          path: TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  scheduled-packaged-smoke:
+    if: github.event_name == 'schedule'
+    needs: scheduled-provenance-validation
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 120
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Run scheduled packaged smoke phase
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode SmokePhase `
+            -RepositoryRoot '${{ github.workspace }}' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}'
       - name: Upload engine-runner report
         if: always()
         uses: actions/upload-artifact@v4
@@ -107,6 +229,7 @@ jobs:
     timeout-minutes: 1440
     concurrency:
       group: aetheln-engine-runner
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4

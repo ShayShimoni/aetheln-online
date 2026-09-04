@@ -5,7 +5,7 @@ $RepositoryRoot = Split-Path (Split-Path $PSScriptRoot)
 $SourceScript = Join-Path $RepositoryRoot 'scripts/ci/Invoke-EngineRunnerGate.ps1'
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid())
 $PowerShell = (Get-Process -Id $PID).Path
-$Original = @{ PATH = $env:PATH; Engine = $env:AETHELN_ENGINE_ROOT; Toolchain = $env:AETHELN_LINUX_TOOLCHAIN_ROOT }
+$Original = @{ PATH = $env:PATH; Engine = $env:AETHELN_ENGINE_ROOT; Toolchain = $env:AETHELN_LINUX_TOOLCHAIN_ROOT; Handoff = $env:AETHELN_HANDOFF_ROOT }
 
 function Assert-True($Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
@@ -32,12 +32,14 @@ function New-Fixture([string] $Name) {
 	Write-Fixture (Join-Path $Repository 'AethelnOnline.uproject') '{}'
 	Write-Fixture (Join-Path $Repository '.gitignore') "Intermediate/`nTestResults/"
 	Write-Fixture (Join-Path $Repository 'tracked') 'x'
+	New-Item -ItemType Directory -Force -Path (Join-Path $Root 'handoff') | Out-Null
 	$Fixture = @{
 		Root = $Root; Repository = $Repository; Engine = $Engine; Toolchain = Join-Path $Root 'toolchain'
 		BuildBatch = Join-Path $BatchRoot 'Build.bat'; Bin = Join-Path $Root 'bin'
 		Archive = Join-Path $Root 'archive'; Logs = Join-Path $Root 'logs'
 		BuildCapture = Join-Path $Root 'build.txt'; PackageCapture = Join-Path $Root 'package.jsonl'
 		SmokeCapture = Join-Path $Root 'smoke.json'; WslCapture = Join-Path $Root 'wsl.jsonl'
+		Handoff = Join-Path $Root 'handoff'
 	}
 	Invoke-FixtureGit $Fixture @('init', '-q')
 	Invoke-FixtureGit $Fixture @('add', '.')
@@ -66,8 +68,31 @@ echo CLIENT_SECRET build_client_secret_marker
 exit /b 9
 )
 exit /b 0'
-	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map)
-@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
+	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot)
+@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
+if($env:RUNNER_TEST_PHASE_SLEEP){Start-Sleep -Seconds ([int]$env:RUNNER_TEST_PHASE_SLEEP)}
+if($Stage){
+New-Item -ItemType Directory -Force -Path $LogRoot|Out-Null
+if($env:RUNNER_TEST_PHASE_FAIL -eq $Stage){Write-Output "error P1234 phase fixture failure";exit 9}
+if($Stage -eq "Client"){
+New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "WindowsClient/AethelnOnline/Binaries/Win64")|Out-Null
+Set-Content (Join-Path $ArchiveRoot "WindowsClient/AethelnOnlineClient.exe") launcher
+Set-Content (Join-Path $ArchiveRoot "WindowsClient/AethelnOnline/Binaries/Win64/AethelnOnlineClient.exe") binary
+Set-Content (Join-Path $ArchiveRoot "phase-client.json") ''{"schemaVersion":1,"stage":"client"}''
+}
+if($Stage -eq "Server"){
+New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "LinuxServer/Linux"),(Join-Path $ArchiveRoot "RegistryDumps/server-dependency-registry-dump"),(Join-Path $ArchiveRoot "RegistryDumps/server-cooked-inventory-dump")|Out-Null
+Set-Content (Join-Path $ArchiveRoot "LinuxServer/Linux/AethelnOnlineServer.sh") server
+Set-Content (Join-Path $ArchiveRoot "RegistryDumps/server-dependency-registry-dump/Page_0.txt") dep
+Set-Content (Join-Path $ArchiveRoot "RegistryDumps/server-cooked-inventory-dump/Page_0.txt") inv
+Set-Content (Join-Path $ArchiveRoot "phase-server.json") ''{"schemaVersion":1,"stage":"server"}''
+}
+if($Stage -eq "Provenance"){
+New-Item -ItemType Directory -Force -Path $ArchiveRoot|Out-Null
+Set-Content (Join-Path $ArchiveRoot "build-provenance.json") ''{"fixture":true}''
+}
+exit 0
+}
 New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "w/AethelnOnline/Binaries/Win64"),(Join-Path $ArchiveRoot "l"),$LogRoot|Out-Null
 Set-Content (Join-Path $ArchiveRoot "w/AethelnOnlineClient.exe") launcher
 if($env:RUNNER_TEST_INTERNAL -ne "missing"){
@@ -111,6 +136,9 @@ throw "revealing failure"
 	$env:RUNNER_TEST_AMBIGUOUS = ''
 	$env:RUNNER_TEST_INTERNAL = ''
 	$env:RUNNER_TEST_SMOKE_FAIL = ''
+	$env:RUNNER_TEST_PHASE_SLEEP = ''
+	$env:RUNNER_TEST_PHASE_FAIL = ''
+	$env:AETHELN_HANDOFF_ROOT = $Fixture.Handoff
 	$env:RUNNER_TEST_WSLPATH_OUTPUT = '/mnt/d/archive/LinuxServer/Linux/AethelnOnlineServer.sh'
 	$env:RUNNER_TEST_HOSTNAME_OUTPUT = '172.25.32.7 '
 	$env:RUNNER_TEST_WSLPATH_EXIT = '0'
@@ -119,14 +147,29 @@ throw "revealing failure"
 	$env:AETHELN_ENGINE_ROOT = $Fixture.Engine
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $Fixture.Toolchain
 }
-function Invoke-Gate($Fixture, [string] $Mode = 'Compile', [string] $Revision = $Fixture.Revision) {
+function Invoke-Gate($Fixture, [string] $Mode = 'Compile', [string] $Revision = $Fixture.Revision, [string[]] $ExtraArguments = @()) {
 	$Previous = $ErrorActionPreference
 	try {
 		$ErrorActionPreference = 'Continue'
-		$Output = @(& $PowerShell -NoProfile -File (Join-Path $Fixture.Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1') -Mode $Mode -RepositoryRoot $Fixture.Repository -SourceRevision $Revision -ArchiveRoot $Fixture.Archive -LogRoot $Fixture.Logs 2>&1)
+		$Output = @(& $PowerShell -NoProfile -File (Join-Path $Fixture.Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1') -Mode $Mode -RepositoryRoot $Fixture.Repository -SourceRevision $Revision -ArchiveRoot $Fixture.Archive -LogRoot $Fixture.Logs @ExtraArguments 2>&1)
 		$ExitCode = $LASTEXITCODE
 	} finally { $ErrorActionPreference = $Previous }
 	return @{ ExitCode = $ExitCode; Output = $Output -join "`n"; Report = Join-Path $Fixture.Repository 'TestResults/engine-runner-report.json' }
+}
+function Invoke-PhaseGate($Fixture, [string] $Mode, [string[]] $ExtraArguments = @(), [string] $RunId = '12345', [string] $RunnerName = 'fixture-runner', [string] $TimeoutMinutes = '5') {
+	$Arguments = @('-Repository', 'owner/repo', '-RunId', $RunId, '-RunAttempt', '1', '-RunnerName', $RunnerName, '-PhaseTimeoutMinutes', $TimeoutMinutes) + $ExtraArguments
+	$Previous = $ErrorActionPreference
+	try {
+		$ErrorActionPreference = 'Continue'
+		$Output = @(& $PowerShell -NoProfile -File (Join-Path $Fixture.Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1') -Mode $Mode -RepositoryRoot $Fixture.Repository -SourceRevision $Fixture.Revision -LogRoot (Join-Path $Fixture.Root ('logs-' + [guid]::NewGuid().ToString('N'))) @Arguments 2>&1)
+		$ExitCode = $LASTEXITCODE
+	} finally { $ErrorActionPreference = $Previous }
+	return @{ ExitCode = $ExitCode; Output = $Output -join "`n"; Report = Join-Path $Fixture.Repository 'TestResults/engine-runner-report.json' }
+}
+function Get-PhaseRunDirectory($Fixture) { return Join-Path $Fixture.Handoff 'owner-repo\run-12345-attempt-1' }
+function Assert-ReportReason($Result, [string] $Reason, [string] $Message) {
+	Assert-True ($Result.ExitCode -ne 0) "$Message (exit code)."
+	Assert-True (@((Read-Report $Result).checks | Where-Object message -like ($Reason + '*')).Count -ge 1) "$Message (report must carry $Reason)."
 }
 function Read-Report($Result) { Get-Content -LiteralPath $Result.Report -Raw | ConvertFrom-Json }
 function New-Case([string] $Name) { $Fixture = New-Fixture $Name; Install-Fakes $Fixture; return $Fixture }
@@ -272,11 +315,105 @@ try {
 	foreach ($Value in @($Fixture.Engine,$Fixture.Toolchain,'/mnt/d/archive/LinuxServer/Linux/AethelnOnlineServer.sh','smoke_bearer_marker','smoke_assignment_marker','smoke_table_marker','AKIA1234567890ABCDEF','smoke_connection_marker','unlabelledSmokeBearer')) { Assert-True (-not $Disclosure.Contains($Value)) "Smoke disclosure must redact $Value." }
 	Assert-True ($Result.Output -notmatch 'NET001') 'Captured smoke diagnostics must not reach console output.'
 
+	$Fixture = New-Case 'phase-root-unset'
+	Remove-Item Env:AETHELN_HANDOFF_ROOT -ErrorAction Ignore
+	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
+	Assert-ReportReason $Result 'handoff_root_unset' 'An unset handoff root must fail only the phase job with its stable code'
+	Assert-True (-not (Test-Path $Fixture.PackageCapture)) 'An unset handoff root must fail before any packaging work.'
+
+	$Fixture = New-Case 'phase-root-inside-repository'
+	$InsideRoot = Join-Path $Fixture.Repository 'handoff-inside'
+	New-Item -ItemType Directory -Path $InsideRoot | Out-Null
+	$env:AETHELN_HANDOFF_ROOT = $InsideRoot
+	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
+	Assert-ReportReason $Result 'handoff_root_invalid' 'A handoff root inside the repository must be rejected'
+
+	$Fixture = New-Case 'phase-context-invalid'
+	$Result = Invoke-PhaseGate $Fixture 'PackageClient' @() 'abc'
+	Assert-ReportReason $Result 'handoff_context_invalid' 'A non-numeric run id must be rejected'
+
+	$Fixture = New-Case 'phase-milestone-success'
+	$RunDirectory = Get-PhaseRunDirectory $Fixture
+	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
+	Assert-True ($Result.ExitCode -eq 0) "PackageClient must pass. Output: $($Result.Output)"
+	$PackageCalls = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })
+	Assert-True ($PackageCalls.Count -eq 1 -and $PackageCalls[0].Stage -eq 'Client' -and $PackageCalls[0].ArchiveRoot -eq (Join-Path $RunDirectory 'client')) 'PackageClient must run the Client stage into the run-scoped handoff payload directory.'
+	$ClientManifest = Get-Content (Join-Path $RunDirectory 'manifest-client.json') -Raw | ConvertFrom-Json
+	Assert-True ($ClientManifest.schemaVersion -eq 1 -and $ClientManifest.repository -eq 'owner/repo' -and $ClientManifest.runId -eq '12345' -and $ClientManifest.runAttempt -eq '1' -and $ClientManifest.runnerName -eq 'fixture-runner' -and $ClientManifest.sourceRevision -eq $Fixture.Revision) 'The client integrity manifest must bind the exact producing context.'
+	Assert-True (@($ClientManifest.files).Count -eq 3 -and $ClientManifest.producingPhase -eq 'client' -and (@($ClientManifest.expectedConsumingPhases) -contains 'smoke')) 'The client integrity manifest must inventory the payload and its consumers.'
+	foreach ($Entry in @($ClientManifest.files)) { Assert-True ($Entry.sha256 -match '^[0-9a-f]{64}$' -and [long] $Entry.bytes -gt 0) 'Every manifest entry must carry a SHA-256 digest and byte size.' }
+	Assert-True (@(Get-ChildItem (Join-Path $Fixture.Handoff 'owner-repo\cleanup-requests') -File).Count -eq 1) 'PackageClient must write exactly one cleanup-request record.'
+	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
+	Assert-ReportReason $Result 'handoff_conflict' 'A repeated PackageClient for the same run attempt must not overwrite or reuse the run directory'
+	$Result = Invoke-PhaseGate $Fixture 'PackageServer'
+	Assert-True ($Result.ExitCode -eq 0) "PackageServer must pass. Output: $($Result.Output)"
+	Assert-True (Test-Path (Join-Path $RunDirectory 'manifest-server.json')) 'PackageServer must publish its integrity manifest.'
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance'
+	Assert-True ($Result.ExitCode -eq 0) "ValidateProvenance must pass. Output: $($Result.Output)"
+	$Report = Read-Report $Result
+	foreach ($Name in @('handoff-consume-client', 'handoff-consume-server', 'registry-provenance-validation', 'handoff-publish-provenance')) {
+		Assert-True (@($Report.checks | Where-Object { $_.name -eq $Name -and $_.status -eq 'passed' }).Count -eq 1) "ValidateProvenance must record a passed $Name check."
+	}
+	$ProvenanceCall = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })[-1]
+	Assert-True ($ProvenanceCall.Stage -eq 'Provenance' -and $ProvenanceCall.ClientStageRoot -eq (Join-Path $RunDirectory 'client') -and $ProvenanceCall.ServerStageRoot -eq (Join-Path $RunDirectory 'server')) 'ValidateProvenance must consume the exact verified stage payload directories.'
+	$Result = Invoke-PhaseGate $Fixture 'SmokePhase'
+	Assert-True ($Result.ExitCode -eq 0) "SmokePhase must pass. Output: $($Result.Output)"
+	$Smoke = Get-Content $Fixture.SmokeCapture -Raw | ConvertFrom-Json
+	Assert-True ($Smoke.ClientExecutable -eq (Join-Path $RunDirectory 'client\WindowsClient\AethelnOnlineClient.exe')) 'SmokePhase must run the packaged client from the verified handoff payload.'
+	$Report = Read-Report $Result
+	Assert-True (@($Report.checks | Where-Object { $_.name -like 'handoff-consume-*' -and $_.status -eq 'passed' }).Count -eq 3) 'SmokePhase must verify every producing phase manifest before use.'
+	Assert-True (Test-Path (Join-Path $RunDirectory 'milestone-complete.json')) 'SmokePhase must record milestone completion.'
+	Assert-True (@(Get-ChildItem (Join-Path $Fixture.Handoff 'owner-repo\cleanup-requests') -File).Count -eq 3) 'SmokePhase must write its own cleanup-request record without deleting anything.'
+	Assert-True (Test-Path (Join-Path $RunDirectory 'client\WindowsClient\AethelnOnlineClient.exe')) 'No handoff payload may be deleted by CI.'
+
+	$Fixture = New-Case 'phase-smoke-missing-handoff'
+	$Result = Invoke-PhaseGate $Fixture 'SmokePhase'
+	Assert-ReportReason $Result 'handoff_missing' 'SmokePhase without a produced run directory must fail closed'
+	Assert-True (-not (Test-Path $Fixture.SmokeCapture)) 'SmokePhase must not run smoke without verified handoff payloads.'
+
+	$Fixture = New-Case 'phase-digest-tamper'
+	$RunDirectory = Get-PhaseRunDirectory $Fixture
+	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
+	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
+	Add-Content (Join-Path $RunDirectory 'server\LinuxServer\Linux\AethelnOnlineServer.sh') 'tampered'
+	$CallsBeforeTamper = @(Get-Content $Fixture.PackageCapture).Count
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance'
+	Assert-ReportReason $Result 'handoff_digest_mismatch' 'A tampered payload must fail digest verification'
+	Assert-True (@(Get-Content $Fixture.PackageCapture).Count -eq $CallsBeforeTamper) 'A digest mismatch must stop the phase before any validation work.'
+
+	$Fixture = New-Case 'phase-runner-mismatch'
+	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
+	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' @() '12345' 'other-runner'
+	Assert-ReportReason $Result 'handoff_runner_mismatch' 'A consumer on a different runner name must fail closed'
+
+	$Fixture = New-Case 'phase-timeout'
+	$env:RUNNER_TEST_PHASE_SLEEP = '25'
+	$TimeoutStarted = [DateTime]::UtcNow
+	$Result = Invoke-PhaseGate $Fixture 'PackageClient' @() '12345' 'fixture-runner' '0.05'
+	$TimeoutElapsed = ([DateTime]::UtcNow - $TimeoutStarted).TotalSeconds
+	Assert-ReportReason $Result 'phase_timeout' 'A phase exceeding its recorded limit must fail as phase_timeout'
+	Assert-True ($TimeoutElapsed -lt 22) "The timed-out phase process tree must be stopped promptly, took ${TimeoutElapsed}s."
+	Assert-True (-not (Test-Path (Join-Path (Get-PhaseRunDirectory $Fixture) 'manifest-client.json'))) 'A timed-out phase must not publish partial outputs.'
+	$env:RUNNER_TEST_PHASE_SLEEP = ''
+
+	$Fixture = New-Case 'phase-storage-exhausted'
+	$Result = Invoke-PhaseGate $Fixture 'PackageClient' @('-HandoffPayloadCapBytes', '500000', '-HandoffRootCapBytes', '400000')
+	Assert-ReportReason $Result 'handoff_storage_exhausted' 'A full handoff root must fail closed before packaging'
+	Assert-True (@(Get-ChildItem (Join-Path $Fixture.Handoff 'owner-repo\cleanup-requests') -File).Count -eq 1) 'Storage exhaustion must retain its cleanup-request evidence.'
+	Assert-True (-not (Test-Path (Get-PhaseRunDirectory $Fixture))) 'Storage exhaustion must not create the run directory.'
+
+	$Fixture = New-Case 'phase-size-exceeded'
+	$Result = Invoke-PhaseGate $Fixture 'PackageClient' @('-HandoffPayloadCapBytes', '10')
+	Assert-ReportReason $Result 'handoff_size_exceeded' 'A payload above the per-attempt cap must fail closed'
+	Assert-True (-not (Test-Path (Join-Path (Get-PhaseRunDirectory $Fixture) 'manifest-client.json'))) 'An oversized payload must not publish its manifest.'
+
 	Write-Output 'PASS: engine runner wrapper contracts are completely covered'
 } finally {
 	$env:PATH = $Original.PATH
 	$env:AETHELN_ENGINE_ROOT = $Original.Engine
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $Original.Toolchain
-	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
+	$env:AETHELN_HANDOFF_ROOT = $Original.Handoff
+	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_PHASE_SLEEP','RUNNER_TEST_PHASE_FAIL','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
 	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 }

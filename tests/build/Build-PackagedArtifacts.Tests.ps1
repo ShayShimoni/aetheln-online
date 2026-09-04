@@ -157,6 +157,38 @@ public static class FakeEditor {
 	}
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeDirtyChecks) 'Dirty source should fail before any UAT invocation.'
 	Write-Output 'PASS: modified and untracked build inputs fail before UAT'
+
+	$env:AETHELN_TEST_GIT_STATUS = ''
+	$StagedClientRoot = Join-Path $FixtureRoot 'StagedClient'
+	$StagedServerRoot = Join-Path $FixtureRoot 'StagedServer'
+	$StagedProvenanceRoot = Join-Path $FixtureRoot 'StagedProvenance'
+
+	$env:AETHELN_TEST_ARCHIVE_ROOT = $StagedClientRoot
+	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedClientRoot -LogRoot (Join-Path $FixtureRoot 'StagedClientLogs') -SourceRevision $Revision -Stage Client
+	$ClientRecord = Get-Content -LiteralPath (Join-Path $StagedClientRoot 'phase-client.json') -Raw | ConvertFrom-Json
+	Assert-True ($ClientRecord.schemaVersion -eq 1 -and $ClientRecord.stage -eq 'client' -and $ClientRecord.sourceRevision -eq $Revision) 'The client stage record must bind schema, stage, and source revision.'
+	Assert-True ($ClientRecord.compilerPath -eq $SelectedCompiler -and $ClientRecord.resourceCompilerPath -eq $SelectedResourceCompiler) 'The client stage record must carry the exact UBT-selected toolchain.'
+	Assert-True ((@($ClientRecord.clientArguments) -contains '-target=AethelnOnlineClient') -and (@($ClientRecord.clientArguments) -contains '-clean')) 'The client stage record must preserve the exact clean client UAT arguments.'
+	Assert-True (-not (Test-Path -LiteralPath (Join-Path $StagedClientRoot 'LinuxServer'))) 'The client stage must not produce server output.'
+
+	$env:AETHELN_TEST_ARCHIVE_ROOT = $StagedServerRoot
+	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedServerRoot -LogRoot (Join-Path $FixtureRoot 'StagedServerLogs') -SourceRevision $Revision -Stage Server
+	$ServerRecord = Get-Content -LiteralPath (Join-Path $StagedServerRoot 'phase-server.json') -Raw | ConvertFrom-Json
+	Assert-True ($ServerRecord.stage -eq 'server' -and (@($ServerRecord.serverArguments) -contains '-serverplatform=Linux')) 'The server stage record must preserve the exact server UAT arguments.'
+	Assert-True (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'RegistryDumps/server-dependency-registry-dump/Page_0.txt')) 'The server stage must publish its dependency registry dump as payload.'
+	Assert-True (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'RegistryDumps/server-cooked-inventory-dump/Page_0.txt')) 'The server stage must publish its cooked inventory dump as payload.'
+	Assert-True (-not (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'WindowsClient'))) 'The server stage must not produce client output.'
+
+	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedProvenanceRoot -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceLogs') -SourceRevision $Revision -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot
+	$StagedProvenance = Get-Content -LiteralPath (Join-Path $StagedProvenanceRoot 'build-provenance.json') -Raw | ConvertFrom-Json
+	Assert-True ($StagedProvenance.tools.compiler.path -eq $SelectedCompiler -and $StagedProvenance.tools.compiler.version -eq '14.44.35207') 'Staged provenance must use the client stage record toolchain.'
+	Assert-True ($StagedProvenance.build.uatInvocations.server.arguments -contains '-serverplatform=Linux') 'Staged provenance must preserve the exact recorded server UAT arguments.'
+	Assert-True ($StagedProvenance.artifacts.inventory.Count -eq 2) 'Staged provenance must inventory every packaged file from both stage payloads.'
+
+	$Failure = $null
+	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'StagedProvenanceMismatch') -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceMismatchLogs') -SourceRevision ('1' * 40) -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot } catch { $Failure = $_.Exception.Message }
+	Assert-True ($Failure -match 'produced from source revision') 'Provenance over stage records from a different revision must fail closed.'
+	Write-Output 'PASS: staged client, server, and provenance phases exchange exact records and fail closed on revision mismatch'
 }
 finally {
 	if ($null -ne $OriginalPath) { $env:PATH = $OriginalPath }

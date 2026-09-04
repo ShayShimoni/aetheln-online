@@ -108,22 +108,104 @@ real engine automation tests.
 
 Engine-dependent jobs use a repository-scoped Windows self-hosted runner with
 labels `[self-hosted, Windows, X64, aetheln-engine]` and serialize through the
-`aetheln-engine-runner` concurrency group without cancelling an active engine
-job. Before compiling, packaging, or cooking, each selected engine job fetches
-all Unreal Content LFS objects with `git lfs pull --include "Content/**"`.
-Their event and trust contract is:
+`aetheln-engine-runner` concurrency group with `queue: max` and
+`cancel-in-progress: false`, so queued engine jobs wait in FIFO order (by when
+each entered the concurrency queue) and never cancel a pending or in-progress
+engine job. Before compiling, packaging, or cooking, each engine job that
+builds fetches all Unreal Content LFS objects with
+`git lfs pull --include "Content/**"`. Their event and trust contract is:
 
 | Job | Event | Trust predicate | Gate |
 | --- | --- | --- | --- |
 | `trusted-candidate-compile` | `pull_request` | The head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
-| `scheduled-packaged-smoke` | `schedule` at `02:00 UTC` daily | The schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Clean-package both supported targets once and smoke those packaged outputs. |
-| `manual-packaged-smoke` | `workflow_dispatch` | `github.triggering_actor` is the repository owner. | Owner-requested clean package and packaged smoke. |
+| `scheduled-client-package` | `schedule` at `02:00 UTC` daily | The schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
+| `scheduled-server-package` | `schedule`, after `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
+| `scheduled-provenance-validation` | `schedule`, after `scheduled-server-package` | Same as phase 1. | Milestone phase 3: verify both handoff payloads, validate server cook references, and write bound provenance. |
+| `scheduled-packaged-smoke` | `schedule`, after `scheduled-provenance-validation` | Same as phase 1. | Milestone phase 4: verify every handoff payload and smoke the packaged client/server pair. |
+| `manual-packaged-smoke` | `workflow_dispatch` | `github.triggering_actor` is the repository owner. | Owner-requested single-job clean package and packaged smoke. |
 
 `develop` remains the integration branch. Merely adding the schedule on a
 feature or `develop` branch does not activate it; GitHub schedules run from the
 default branch. Fork pull requests, collaborator-authored pull requests, and
 collaborator-triggered reruns cannot select the engine jobs. Future collaborator
 access requires a separate security and topology review.
+
+## Engine-Runner Scheduling Policy (Issue #150)
+
+Recorded priority: `trusted-candidate-compile` outranks *starting* the next
+scheduled milestone phase; it never cancels an in-progress phase merely because
+a pull request queued. The recorded maximum trusted-compile queue delay is
+**12 hours**, measured from entering the engine concurrency queue, subject to
+GitHub runner-assignment latency and the documented 24-hour platform queue
+failure limit. These bounds are revisited only from retained phase evidence and
+are never silently raised.
+
+The mechanism: each scheduled phase job reacquires the `aetheln-engine-runner`
+concurrency group, and `queue: max` orders waiting jobs FIFO by
+queue-entry time, so a trusted compile that queued during phase *k* starts
+before phase *k+1*. The maximum wait is therefore the longest single phase
+bound rather than the whole milestone:
+
+| Phase | Script-enforced limit | Job `timeout-minutes` backstop |
+| --- | --- | --- |
+| Client package | 480 minutes (8 hours) | 495 |
+| Server package | 720 minutes (12 hours) | 735 |
+| Registry/provenance validation | 60 minutes (1 hour) | 75 |
+| Packaged smoke | 120 minutes (2 hours), job-enforced | 120 |
+
+Reaching a limit is an explicit `phase_timeout` failure: the gate stops the
+phase's process tree, rejects partial outputs (an unpublished integrity
+manifest can never be consumed), retains the bounded report through the
+`if: always()` upload, and the next scheduled attempt restarts the complete
+milestone from clean inputs. A newly queued pull request never cancels healthy
+in-progress work, and a later phase can never convert an earlier phase's
+failure or timeout into success.
+
+### Durable run-scoped handoff store
+
+`runner.temp` is emptied at the beginning and end of every job, so milestone
+phases exchange packaged bytes only through a durable store under the
+non-secret user-level variable `AETHELN_HANDOFF_ROOT` (provisioned once by the
+owner exactly like the engine and toolchain variables; the runner service must
+be restarted after defining it). The configured absolute path is never printed
+in uploaded evidence. The root must be an existing local directory outside the
+repository, engine root, toolchain root, `runner.temp`, and workspace, with no
+reparse points, accessible only to the runner account.
+
+Each run attempt owns exactly one directory,
+`<root>/<owner>-<repo>/run-<run id>-attempt-<run attempt>`, never reused or
+overwritten. Every producing phase writes its payload and then an atomic
+schema-v1 **integrity manifest** binding the exact repository, source SHA, run
+id, run attempt, producing phase, expected consuming phases, producing runner
+name, normalized relative file paths, byte sizes, total bytes, and SHA-256
+digests. Every consumer revalidates the complete manifest and payload before
+any use and fails closed with stable reason codes (`handoff_root_unset`,
+`handoff_root_invalid`, `handoff_context_invalid`, `handoff_conflict`,
+`handoff_missing`, `handoff_schema_invalid`, `handoff_context_mismatch`,
+`handoff_runner_mismatch`, `handoff_digest_mismatch`, `handoff_size_exceeded`,
+`handoff_payload_invalid`, `handoff_storage_exhausted`, `phase_timeout`). The
+runner-name binding makes a future second matching runner fail closed instead
+of silently missing or accepting foreign state. An unset or invalid
+`AETHELN_HANDOFF_ROOT` fails only the scheduled phase jobs with a stable
+redacted setup code; portable checks and `trusted-candidate-compile` are
+unaffected.
+
+Bounds: at most **64 GiB** of payload per run attempt (`handoff_size_exceeded`
+above it), and before creating a new run directory the first phase computes
+committed handoff bytes plus the 64 GiB reservation against the configured
+total-root cap (default **256 GiB**) and fails closed as
+`handoff_storage_exhausted` when exceeded, retaining the cleanup-request
+evidence.
+
+CI never deletes anything under the handoff root. Instead the first and last
+phases write bounded **cleanup-request** records under
+`<root>/<owner>-<repo>/cleanup-requests/`, listing each exact resolved run
+directory with its state (`completed`, `abandoned` after 48 hours, `active`,
+or `invalid`), age, measured bytes, manifest digests, and cleanup eligibility.
+Directories younger than 48 hours that are not complete, and directories with
+invalid context or reparse concerns, are never marked eligible. Acting on a
+cleanup request is an external operational action, exactly like provisioning
+the runner variable itself.
 
 Failures are actionable from the job log and uploaded report without exposing
 raw local output: checks record a stable command label and reason code plus a
@@ -147,7 +229,8 @@ nonzero when a required check fails.
   Studio toolchain, Windows SDK, Linux cross-toolchain, WSL distribution
   `Ubuntu`, WSL user `aethelnqa`, Git, and Git LFS before live execution.
 - The current account must define non-secret user-level variables
-  `AETHELN_ENGINE_ROOT` and `AETHELN_LINUX_TOOLCHAIN_ROOT`. The runner process
+  `AETHELN_ENGINE_ROOT`, `AETHELN_LINUX_TOOLCHAIN_ROOT`, and (for the scheduled
+  milestone phases) `AETHELN_HANDOFF_ROOT`. The runner process
   must be restarted after variable changes so they are inherited as process
   variables. Values are local absolute paths and must never be committed,
   uploaded, or printed as credentials.
@@ -276,8 +359,10 @@ incremental compile policy.
 ## Artifact Policy
 
 - The portable workflow uploads `TestResults/ci-report.json`. Each selected
-  engine job uploads only `TestResults/engine-runner-report.json`, with distinct
-  compile, scheduled-smoke, and manual-smoke artifact names.
+  engine job uploads only `TestResults/engine-runner-report.json`, with a
+  distinct artifact name per job: compile, the four scheduled milestone phases
+  (client package, server package, provenance validation, scheduled smoke), and
+  manual smoke.
 - Headless Unreal automation generates
   `TestResults/UnrealAutomation/index.json`,
   `TestResults/unreal-automation-report.json`, and
@@ -347,12 +432,15 @@ and log remain repository-local ignored output unless Issue #16 separately
 selects and redacts evidence for publication.
 
 `TestResults/engine-runner-report.json` uses schema version 1 and contains
-`mode` (`Compile` or `PackagedSmoke`), `policy`
+`mode` (`Compile`, `PackagedSmoke`, `PackageClient`, `PackageServer`,
+`ValidateProvenance`, or `SmokePhase`), `policy`
 (`incremental-target-compilation` or `clean-package-and-smoke`), `revision`,
 `startedUtc`, `finishedUtc`, a `checks` array, and `summary`. Each check contains
 `name`, the required `tier`, `status`, `durationSeconds`, a stable `command`,
 and a redacted `message`. The summary contains `total`, `passed`, `failed`,
 `skipped`, and `requiredFailed`. Input validation and repository-state checks
-are present in both modes. `Compile` records separate incremental client and
+are present in every mode. `Compile` records separate incremental client and
 server build checks; `PackagedSmoke` records one clean packaged client/server
-build and one packaged-smoke check.
+build and one packaged-smoke check. The scheduled phase modes additionally
+record handoff validation, storage accounting or manifest consume/publish
+checks, the phase gate itself, and (for `SmokePhase`) milestone completion.

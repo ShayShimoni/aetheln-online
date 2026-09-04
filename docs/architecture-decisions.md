@@ -260,6 +260,59 @@ Every accepted decision records:
   reproduce the pinned toolchain, or measured cost, reliability, isolation, or
   capacity requires a different topology.
 
+### TA-012 - Bounded Engine-Runner Scheduling with Phased Milestone and Durable Handoff
+
+- **Status:** Accepted
+- **Scope:** Issue #150 engine-runner scheduling for the prototype quality
+  gates workflow
+- **Decision:** `trusted-candidate-compile` outranks starting the next
+  scheduled milestone phase and never cancels in-progress work. The shared
+  `aetheln-engine-runner` concurrency group uses `queue: max` with
+  `cancel-in-progress: false`. The scheduled clean-package plus packaged-smoke
+  milestone is split into four bounded phases (client package 8 h, server
+  package 12 h, registry/provenance validation 1 h, packaged smoke 2 h), each
+  reacquiring the concurrency group, giving a recorded maximum trusted-compile
+  queue delay of 12 hours measured from entering the concurrency queue.
+  Phases exchange outputs only through a durable run-scoped handoff store under
+  the non-secret `AETHELN_HANDOFF_ROOT` user variable, with atomic schema-v1
+  integrity manifests (repository, source SHA, run id, run attempt, producing
+  phase, expected consumers, producing runner name, sizes, SHA-256 digests)
+  that every consumer revalidates fail-closed. Payload is capped at 64 GiB per
+  run attempt against a 256 GiB default total-root cap. CI never deletes
+  handoff content; it writes bounded cleanup-request records (48-hour
+  abandonment threshold) for external operational cleanup.
+- **Context:** On 2026-09-01 a healthy scheduled packaged-smoke run held the
+  sole engine runner for more than 13 hours while the required PR compile for
+  PR #147 stayed queued, and GitHub's default single pending slot per
+  concurrency group could silently cancel a pending trusted compile. GitHub
+  Actions has no job priority; FIFO wait order under `queue: max` plus phase
+  boundaries is the only cancellation-free bounding mechanism. `runner.temp`
+  is emptied at the start and end of every job, so cross-phase state needs a
+  durable documented medium.
+- **Evidence:** Issue
+  [#150](https://github.com/ShayShimoni/aetheln-online/issues/150) and its
+  recorded lead decisions; current GitHub concurrency and variables
+  documentation; focused fixture suites
+  `tests/ci/Invoke-EngineRunnerGate.Tests.ps1`,
+  `tests/build/Build-PackagedArtifacts.Tests.ps1`, and
+  `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1`.
+- **Alternatives:** `queue: max` alone (leaves the full 24-hour starvation);
+  shrinking the single job timeout (cancels healthy packaging); cooperative
+  mid-run yielding via the GitHub API (credentials and checkpoint machinery on
+  the runner); GitHub Actions artifacts as the handoff medium (multi-gigabyte
+  packaged bytes are policy-bound to stay runner-local); relying on residual
+  workspace state between jobs (dirty-workspace dependency).
+- **Consequences:** The owner provisions `AETHELN_HANDOFF_ROOT` once and
+  restarts the runner service; the first live scheduled run after merge is the
+  independent operational proof. Phase evidence stays separate per job; a
+  timeout is an explicit `phase_timeout` failure and the next scheduled attempt
+  restarts the milestone from clean inputs. Handoff cleanup is an external
+  operational action driven by cleanup-request records.
+- **Revisit trigger:** Retained phase evidence shows a bound is materially
+  wrong, a second matching runner is registered, GitHub ships native job
+  priority or changes concurrency queue semantics, or the milestone moves off
+  the single-runner topology.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |
