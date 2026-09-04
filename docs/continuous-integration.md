@@ -109,9 +109,9 @@ real engine automation tests.
 Engine-dependent jobs use a repository-scoped Windows self-hosted runner with
 labels `[self-hosted, Windows, X64, aetheln-engine]` and serialize through the
 `aetheln-engine-runner` concurrency group with `queue: max` and
-`cancel-in-progress: false`, so queued engine jobs wait in FIFO order (by when
-each entered the concurrency queue) and never cancel a pending or in-progress
-engine job. Before compiling, packaging, or cooking, each engine job that
+`cancel-in-progress: false`, so queued engine jobs wait in FIFO order by
+wait-start time (GitHub documents this ordering without guaranteeing it
+absolutely) and never cancel a pending or in-progress engine job. Before compiling, packaging, or cooking, each engine job that
 builds fetches all Unreal Content LFS objects with
 `git lfs pull --include "Content/**"`. Their event and trust contract is:
 
@@ -133,33 +133,49 @@ access requires a separate security and topology review.
 ## Engine-Runner Scheduling Policy (Issue #150)
 
 Recorded priority: `trusted-candidate-compile` outranks *starting* the next
-scheduled milestone phase; it never cancels an in-progress phase merely because
-a pull request queued. The recorded maximum trusted-compile queue delay is
-**12 hours**, measured from entering the engine concurrency queue, subject to
-GitHub runner-assignment latency and the documented 24-hour platform queue
-failure limit. These bounds are revisited only from retained phase evidence and
-are never silently raised.
+dependent scheduled milestone phase; it never cancels an in-progress phase
+merely because a pull request queued, and it does not jump ahead of an older
+queued manual or pull-request job. This topology has **no absolute priority
+guarantee**: GitHub Actions has no job priority, `queue: max` orders waiting
+jobs FIFO by wait-start time while GitHub does not guarantee overall ordering,
+and runner assignment adds platform latency.
+
+The recorded **12-hour** value is therefore precise: it is the maximum
+trusted-compile queue delay **attributable to one currently running scheduled
+phase** (the longest total phase bound, the 720-minute server package),
+subject to platform assignment latency. Total queue time can be longer when
+older jobs are already ahead in the queue (for example an owner-dispatched
+24-hour manual milestone, or earlier pull-request compiles). These bounds are
+revisited only from retained phase evidence and are never silently raised.
 
 The mechanism: each scheduled phase job reacquires the `aetheln-engine-runner`
-concurrency group, and `queue: max` orders waiting jobs FIFO by
-queue-entry time, so a trusted compile that queued during phase *k* starts
-before phase *k+1*. The maximum wait is therefore the longest single phase
-bound rather than the whole milestone:
+concurrency group, so a trusted compile that queued during phase *k* starts
+before the dependent phase *k+1*, whose queue wait starts only when phase *k*
+completes. Each job `timeout-minutes` is the **total concurrency-holding
+bound** for that phase — checkout, LFS materialization, phase work, and
+evidence upload all fit inside it — and the gate's script-enforced watchdog is
+set below it so a `phase_timeout` report is written and uploaded before the
+platform cancels the job:
 
-| Phase | Script-enforced limit | Job `timeout-minutes` backstop |
+| Phase | Total job bound (`timeout-minutes`) | Script watchdog (`-PhaseTimeoutMinutes`) |
 | --- | --- | --- |
-| Client package | 480 minutes (8 hours) | 495 |
-| Server package | 720 minutes (12 hours) | 735 |
-| Registry/provenance validation | 60 minutes (1 hour) | 75 |
-| Packaged smoke | 120 minutes (2 hours), job-enforced | 120 |
+| Client package | 480 minutes (8 hours) | 450 |
+| Server package | 720 minutes (12 hours) | 690 |
+| Registry/provenance validation | 60 minutes (1 hour) | 45 |
+| Packaged smoke | 120 minutes (2 hours) | 105 |
 
-Reaching a limit is an explicit `phase_timeout` failure: the gate stops the
-phase's process tree, rejects partial outputs (an unpublished integrity
-manifest can never be consumed), retains the bounded report through the
-`if: always()` upload, and the next scheduled attempt restarts the complete
-milestone from clean inputs. A newly queued pull request never cancels healthy
-in-progress work, and a later phase can never convert an earlier phase's
-failure or timeout into success.
+Reaching a watchdog limit is an explicit `phase_timeout` failure: the gate
+runs each phase's work in a child process tree owned by a kill-on-close
+Windows Job Object, disposes the Job Object on timeout, verifies the tree
+ended (bounded `taskkill /T /F` is only a fallback), rejects partial outputs
+(an unpublished integrity manifest can never be consumed, and a timed-out
+smoke never publishes a completion marker), retains the bounded report through
+the `if: always()` upload, and the next scheduled attempt restarts the
+complete milestone from clean inputs. If the gate cannot prove the process
+tree ended, it fails closed as `phase_cleanup_failed` instead of releasing the
+concurrency group as a plain timeout. A newly queued pull request never
+cancels healthy in-progress work, and a later phase can never convert an
+earlier phase's failure or timeout into success.
 
 ### Durable run-scoped handoff store
 
@@ -168,44 +184,66 @@ phases exchange packaged bytes only through a durable store under the
 non-secret user-level variable `AETHELN_HANDOFF_ROOT` (provisioned once by the
 owner exactly like the engine and toolchain variables; the runner service must
 be restarted after defining it). The configured absolute path is never printed
-in uploaded evidence. The root must be an existing local directory outside the
-repository, engine root, toolchain root, `runner.temp`, and workspace, with no
-reparse points, accessible only to the runner account.
+in uploaded evidence. The root must be an existing directory on a local fixed
+drive — UNC, network, mapped, and other non-local roots are rejected — outside
+the repository, engine root, toolchain root, `runner.temp`, and workspace,
+with no reparse points, accessible only to the runner account. Before every
+create, read, hash, write, consume, or cleanup traversal the gate revalidates
+each existing path component from the configured root down (resolved
+containment plus no reparse point anywhere on the chain), and every recursive
+walk refuses to follow reparse points.
 
 Each run attempt owns exactly one directory,
-`<root>/<owner>-<repo>/run-<run id>-attempt-<run attempt>`, never reused or
-overwritten. Every producing phase writes its payload and then an atomic
-schema-v1 **integrity manifest** binding the exact repository, source SHA, run
-id, run attempt, producing phase, expected consuming phases, producing runner
-name, normalized relative file paths, byte sizes, total bytes, and SHA-256
-digests. Every consumer revalidates the complete manifest and payload before
-any use and fails closed with stable reason codes (`handoff_root_unset`,
-`handoff_root_invalid`, `handoff_context_invalid`, `handoff_conflict`,
-`handoff_missing`, `handoff_schema_invalid`, `handoff_context_mismatch`,
-`handoff_runner_mismatch`, `handoff_digest_mismatch`, `handoff_size_exceeded`,
-`handoff_payload_invalid`, `handoff_storage_exhausted`, `phase_timeout`). The
+`<root>/<owner>/<repo>/run-<run id>-attempt-<run attempt>` (owner and
+repository are separate validated path components, so distinct repositories
+can never collide), never reused or overwritten. When the first phase reserves
+the run directory it atomically writes a closed schema-v1 **run-context
+record** binding the exact repository, source SHA, run id, run attempt, and
+producing runner name; every later phase validates that record fail-closed
+before any work. Every producing phase writes its payload and then an atomic
+schema-v1 **integrity manifest** binding the same context plus expected
+consuming phases, normalized relative file paths, byte sizes, total bytes, and
+lowercase SHA-256 digests. Manifests, run-context records, and completion
+markers are validated as **closed** documents: exactly the allowed properties
+with validated types and ranges, duplicate JSON properties rejected, unique
+canonical relative paths with no duplicate or case-colliding entries, and
+overflow-safe byte accounting. Every consumer revalidates the complete
+manifest and payload before any use — including exact path-set equality
+between the manifest and the actual payload files, so an omitted, extra,
+duplicated, or substituted file always fails — with stable reason codes
+(`handoff_root_unset`, `handoff_root_invalid`, `handoff_context_invalid`,
+`handoff_conflict`, `handoff_missing`, `handoff_schema_invalid`,
+`handoff_context_mismatch`, `handoff_runner_mismatch`,
+`handoff_digest_mismatch`, `handoff_size_exceeded`, `handoff_payload_invalid`,
+`handoff_storage_exhausted`, `phase_timeout`, `phase_cleanup_failed`). The
 runner-name binding makes a future second matching runner fail closed instead
 of silently missing or accepting foreign state. An unset or invalid
 `AETHELN_HANDOFF_ROOT` fails only the scheduled phase jobs with a stable
 redacted setup code; portable checks and `trusted-candidate-compile` are
 unaffected.
 
-Bounds: at most **64 GiB** of payload per run attempt (`handoff_size_exceeded`
-above it), and before creating a new run directory the first phase computes
-committed handoff bytes plus the 64 GiB reservation against the configured
-total-root cap (default **256 GiB**) and fails closed as
-`handoff_storage_exhausted` when exceeded, retaining the cleanup-request
-evidence.
+Bounds: at most **64 GiB** of payload per run attempt, enforced during both
+publication and consumption (`handoff_size_exceeded` above it). Before
+creating a new run directory the first phase measures the **complete
+validated handoff root** — every repository scope counts, reparse points are
+never traversed or counted — and fails closed as `handoff_storage_exhausted`
+when the committed bytes plus the 64 GiB reservation exceed the configured
+total-root cap (default **256 GiB**), retaining the cleanup-request evidence.
 
 CI never deletes anything under the handoff root. Instead the first and last
 phases write bounded **cleanup-request** records under
-`<root>/<owner>-<repo>/cleanup-requests/`, listing each exact resolved run
-directory with its state (`completed`, `abandoned` after 48 hours, `active`,
-or `invalid`), age, measured bytes, manifest digests, and cleanup eligibility.
-Directories younger than 48 hours that are not complete, and directories with
-invalid context or reparse concerns, are never marked eligible. Acting on a
-cleanup request is an external operational action, exactly like provisioning
-the runner variable itself.
+`<root>/<owner>/<repo>/cleanup-requests/`, listing each exact resolved run
+directory with its state (`completed` with its terminal `passed`/`failed`
+completion state, `abandoned` after 48 hours, `active`, or `invalid`), age,
+measured bytes, manifest digests, and cleanup eligibility. Eligibility always
+requires a valid run-context record: `completed` additionally requires a
+closed, context-matching completion marker with a terminal state, and
+`abandoned` requires a valid context plus the age threshold. Directories with
+a missing, malformed, mismatched, or duplicate-property context, marker, or
+manifest, and directories with any descendant reparse or containment concern
+(classified without traversing them), are marked `invalid` and never
+cleanup-eligible. Acting on a cleanup request is an external operational
+action, exactly like provisioning the runner variable itself.
 
 Failures are actionable from the job log and uploaded report without exposing
 raw local output: checks record a stable command label and reason code plus a

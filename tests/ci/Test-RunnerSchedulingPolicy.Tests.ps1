@@ -41,13 +41,15 @@ Assert-MatchCount $Workflow '(?m)^\s+cancel-in-progress: false\r?$' 6 'Every eng
 Assert-True ($Workflow -notmatch '(?m)^\s+cancel-in-progress: true\r?$') 'No engine job may cancel in-progress work.'
 
 # The scheduled milestone is split into four bounded phases. Job
-# timeout-minutes is the platform backstop 15 minutes above the script-enforced
-# phase limit (480/720/60), and exactly the phase limit for the smoke phase.
+# timeout-minutes is the total concurrency-holding bound for the phase
+# (480/720/60/120), and every phase runs its work under a script-enforced
+# watchdog (450/690/45/105) that expires early enough inside the job bound to
+# record and upload phase_timeout evidence before platform cancellation.
 $PhaseContract = @(
-	@{ Job = 'scheduled-client-package'; Needs = $null; JobTimeout = 495; Mode = 'PackageClient'; PhaseTimeout = '480'; Artifact = 'engine-runner-client-package-report' },
-	@{ Job = 'scheduled-server-package'; Needs = 'scheduled-client-package'; JobTimeout = 735; Mode = 'PackageServer'; PhaseTimeout = '720'; Artifact = 'engine-runner-server-package-report' },
-	@{ Job = 'scheduled-provenance-validation'; Needs = 'scheduled-server-package'; JobTimeout = 75; Mode = 'ValidateProvenance'; PhaseTimeout = '60'; Artifact = 'engine-runner-provenance-validation-report' },
-	@{ Job = 'scheduled-packaged-smoke'; Needs = 'scheduled-provenance-validation'; JobTimeout = 120; Mode = 'SmokePhase'; PhaseTimeout = $null; Artifact = 'engine-runner-scheduled-smoke-report' }
+	@{ Job = 'scheduled-client-package'; Needs = $null; JobTimeout = 480; Mode = 'PackageClient'; PhaseTimeout = '450'; Artifact = 'engine-runner-client-package-report' },
+	@{ Job = 'scheduled-server-package'; Needs = 'scheduled-client-package'; JobTimeout = 720; Mode = 'PackageServer'; PhaseTimeout = '690'; Artifact = 'engine-runner-server-package-report' },
+	@{ Job = 'scheduled-provenance-validation'; Needs = 'scheduled-server-package'; JobTimeout = 60; Mode = 'ValidateProvenance'; PhaseTimeout = '45'; Artifact = 'engine-runner-provenance-validation-report' },
+	@{ Job = 'scheduled-packaged-smoke'; Needs = 'scheduled-provenance-validation'; JobTimeout = 120; Mode = 'SmokePhase'; PhaseTimeout = '105'; Artifact = 'engine-runner-scheduled-smoke-report' }
 )
 foreach ($Phase in $PhaseContract) {
 	$Body = [string] $JobBodies[$Phase.Job]
@@ -59,11 +61,8 @@ foreach ($Phase in $PhaseContract) {
 	}
 	Assert-True ($Body -match ('(?m)^\s+timeout-minutes: ' + $Phase.JobTimeout + '\r?$')) "$($Phase.Job) must be bounded by timeout-minutes $($Phase.JobTimeout)."
 	Assert-MatchCount $Body ('(?m)^\s+-Mode ' + [regex]::Escape($Phase.Mode) + ' `\r?$') 1 "$($Phase.Job) must select mode $($Phase.Mode) exactly once."
-	if ($Phase.PhaseTimeout) {
-		Assert-True ($Body -match ('(?m)^\s+-PhaseTimeoutMinutes ' + $Phase.PhaseTimeout + '\r?$')) "$($Phase.Job) must enforce the recorded $($Phase.PhaseTimeout)-minute phase limit in the gate script."
-	} else {
-		Assert-True ($Body -notmatch '-PhaseTimeoutMinutes') "$($Phase.Job) is bounded by its job timeout and must not pass a script phase limit."
-	}
+	Assert-True ($Body -match ('(?m)^\s+-PhaseTimeoutMinutes ' + $Phase.PhaseTimeout + '\r?$')) "$($Phase.Job) must enforce the recorded $($Phase.PhaseTimeout)-minute script watchdog inside its job bound."
+	Assert-True ([int] $Phase.PhaseTimeout -lt $Phase.JobTimeout) "$($Phase.Job) watchdog must expire before the total job bound so evidence is uploaded."
 	Assert-MatchCount $Body ('(?m)^\s+name: ' + [regex]::Escape($Phase.Artifact) + '\r?$') 1 "$($Phase.Job) must upload its own distinct report artifact."
 	Assert-True ($Body -match '(?m)^\s+if: always\(\)\r?$') "$($Phase.Job) must retain its report evidence even on failure or timeout."
 	Assert-True ($Body -notmatch '(?m)^\s+-Mode (Compile|PackagedSmoke) `\r?$') "$($Phase.Job) must not select a non-phase gate mode."
@@ -93,14 +92,23 @@ foreach ($UploadPath in $UploadPaths) {
 }
 Assert-True ($Workflow -notmatch '(?m)^\s+path:\s*.*(?:archives?|logs?|Saved|StagedBuilds)') 'Workflow must not upload packages, archives, logs, or generated Unreal output.'
 
-# The decided scheduling policy values are recorded in canonical documentation.
-Assert-True ($CiDocumentation -match '(?i)maximum trusted-compile queue delay') 'CI documentation must record the trusted-compile queue-delay policy.'
-Assert-True ($CiDocumentation -match '(?i)12\s*hours') 'CI documentation must record the 12-hour maximum queue delay.'
+# The decided scheduling policy values are recorded in canonical documentation
+# with truthful semantics: the 12-hour value is the maximum delay attributable
+# to one currently running scheduled phase, not an absolute guarantee.
+Assert-True ($CiDocumentation -match '(?i)maximum\s+trusted-compile\s+queue\s+delay') 'CI documentation must record the trusted-compile queue-delay policy.'
+Assert-True ($CiDocumentation -match '(?i)12-hour|12\s*hours') 'CI documentation must record the 12-hour queue-delay value.'
+Assert-True ($CiDocumentation -match '(?i)attributable\s+to\s+one\s+currently\s+running\s+scheduled\s+phase') 'CI documentation must scope the 12-hour value to a single running scheduled phase.'
+Assert-True ($CiDocumentation -match '(?i)no\s+absolute\s+priority\s+guarantee') 'CI documentation must state that this topology has no absolute priority guarantee.'
+Assert-True ($CiDocumentation -match '(?i)total\s+queue\s+time\s+can\s+be\s+longer') 'CI documentation must state that older queued jobs can extend the total wait.'
 Assert-True ($CiDocumentation -match 'AETHELN_HANDOFF_ROOT') 'CI documentation must document the durable handoff root provisioning.'
 foreach ($Value in @('480', '720', '60', '120')) {
-	Assert-True ($CiDocumentation -match $Value) "CI documentation must record the $Value-minute phase bound."
+	Assert-True ($CiDocumentation -match $Value) "CI documentation must record the $Value-minute total phase bound."
+}
+foreach ($Value in @('450', '690', '45', '105')) {
+	Assert-True ($CiDocumentation -match $Value) "CI documentation must record the $Value-minute script watchdog."
 }
 Assert-True ($CiDocumentation -match 'phase_timeout') 'CI documentation must record the phase_timeout failure semantics.'
+Assert-True ($CiDocumentation -match 'phase_cleanup_failed') 'CI documentation must record the fail-closed process-tree cleanup semantics.'
 Assert-True ($CiDocumentation -match '(?i)cleanup-request') 'CI documentation must record the no-deletion cleanup-request model.'
 
 Write-Output 'PASS: scheduled milestone phases are bounded, FIFO-queued, evidence-separated, and cannot starve trusted compile for 24 hours'

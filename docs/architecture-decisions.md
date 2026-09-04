@@ -266,21 +266,38 @@ Every accepted decision records:
 - **Scope:** Issue #150 engine-runner scheduling for the prototype quality
   gates workflow
 - **Decision:** `trusted-candidate-compile` outranks starting the next
-  scheduled milestone phase and never cancels in-progress work. The shared
-  `aetheln-engine-runner` concurrency group uses `queue: max` with
-  `cancel-in-progress: false`. The scheduled clean-package plus packaged-smoke
-  milestone is split into four bounded phases (client package 8 h, server
-  package 12 h, registry/provenance validation 1 h, packaged smoke 2 h), each
-  reacquiring the concurrency group, giving a recorded maximum trusted-compile
-  queue delay of 12 hours measured from entering the concurrency queue.
-  Phases exchange outputs only through a durable run-scoped handoff store under
-  the non-secret `AETHELN_HANDOFF_ROOT` user variable, with atomic schema-v1
-  integrity manifests (repository, source SHA, run id, run attempt, producing
-  phase, expected consumers, producing runner name, sizes, SHA-256 digests)
-  that every consumer revalidates fail-closed. Payload is capped at 64 GiB per
-  run attempt against a 256 GiB default total-root cap. CI never deletes
+  dependent scheduled milestone phase and never cancels in-progress work; it
+  carries no absolute priority and never jumps ahead of an older queued manual
+  or pull-request job. The shared `aetheln-engine-runner` concurrency group
+  uses `queue: max` with `cancel-in-progress: false` (FIFO by wait-start time,
+  which GitHub documents without guaranteeing overall ordering). The scheduled
+  clean-package plus packaged-smoke milestone is split into four bounded
+  phases whose job `timeout-minutes` are the total concurrency-holding bounds
+  (client package 8 h, server package 12 h, registry/provenance validation
+  1 h, packaged smoke 2 h), each reacquiring the concurrency group, with a
+  script-enforced watchdog (450/690/45/105 minutes) below each bound so
+  timeout evidence is recorded before platform cancellation. The recorded
+  12-hour value is the maximum trusted-compile queue delay attributable to one
+  currently running scheduled phase, subject to platform assignment latency;
+  total queue time can be longer when older jobs are already ahead.
+  Phases exchange outputs only through a durable run-scoped handoff store
+  under the non-secret `AETHELN_HANDOFF_ROOT` user variable (a local
+  fixed-drive directory; UNC and network roots rejected), namespaced
+  `<root>/<owner>/<repo>` with separate validated path components so distinct
+  repositories cannot collide. The first phase atomically writes a closed
+  run-context record binding repository, source SHA, run id/attempt, and
+  runner name; later phases and cleanup validate it fail-closed. Atomic
+  schema-v1 integrity manifests (same context plus expected consumers,
+  normalized relative paths, sizes, lowercase SHA-256 digests) are validated
+  as closed documents — exact property sets, duplicate-JSON-property and
+  case-colliding-path rejection, exact manifest/actual path-set equality,
+  overflow-safe totals — with reparse-point and containment revalidation of
+  every path chain before use. Payload is capped at 64 GiB per run attempt
+  (enforced at publication and consumption) against a 256 GiB default
+  total-root cap measured over the complete validated root. CI never deletes
   handoff content; it writes bounded cleanup-request records (48-hour
-  abandonment threshold) for external operational cleanup.
+  abandonment threshold, eligibility only with a valid context and, for
+  completion, a validated terminal marker) for external operational cleanup.
 - **Context:** On 2026-09-01 a healthy scheduled packaged-smoke run held the
   sole engine runner for more than 13 hours while the required PR compile for
   PR #147 stayed queued, and GitHub's default single pending slot per
@@ -305,9 +322,12 @@ Every accepted decision records:
 - **Consequences:** The owner provisions `AETHELN_HANDOFF_ROOT` once and
   restarts the runner service; the first live scheduled run after merge is the
   independent operational proof. Phase evidence stays separate per job; a
-  timeout is an explicit `phase_timeout` failure and the next scheduled attempt
-  restarts the milestone from clean inputs. Handoff cleanup is an external
-  operational action driven by cleanup-request records.
+  watchdog expiry is an explicit `phase_timeout` failure with an owned,
+  verified process-tree stop (kill-on-close Job Object first, bounded taskkill
+  only as fallback, `phase_cleanup_failed` when the tree cannot be proven
+  ended), and the next scheduled attempt restarts the milestone from clean
+  inputs. Handoff cleanup is an external operational action driven by
+  cleanup-request records.
 - **Revisit trigger:** Retained phase evidence shows a bound is materially
   wrong, a second matching runner is registered, GitHub ships native job
   priority or changes concurrency queue semantics, or the milestone moves off

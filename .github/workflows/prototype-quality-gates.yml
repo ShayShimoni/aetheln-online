@@ -70,17 +70,21 @@ jobs:
 
   # Issue #150 scheduled milestone phases. The daily packaging and smoke
   # milestone is split into four bounded jobs that reacquire the shared
-  # aetheln-engine-runner concurrency group at every phase boundary, so a queued
-  # trusted-candidate-compile job (FIFO under queue: max) waits at most one
-  # phase bound instead of the whole milestone. Packaged bytes move between
-  # phases only through the durable AETHELN_HANDOFF_ROOT store with fail-closed
-  # integrity manifests; nothing under it is deleted by CI. Job timeout-minutes
-  # is a platform backstop 15 minutes above each script-enforced phase limit so
-  # a phase_timeout failure is recorded and uploaded before cancellation.
+  # aetheln-engine-runner concurrency group at every phase boundary. queue: max
+  # keeps waiting jobs FIFO by wait-start time, so a queued
+  # trusted-candidate-compile job can enter at the next phase boundary; this is
+  # not an absolute priority and older queued jobs stay ahead of it. Job
+  # timeout-minutes is the total concurrency-holding bound for each phase
+  # (checkout, LFS, phase work, and evidence upload all fit inside it); the
+  # gate's script watchdog expires early enough within that bound to record
+  # the phase_timeout report before the platform cancels the job.
+  # Packaged bytes move between phases only through the durable
+  # AETHELN_HANDOFF_ROOT store with fail-closed integrity manifests; nothing
+  # under it is deleted by CI.
   scheduled-client-package:
     if: github.event_name == 'schedule'
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    timeout-minutes: 495
+    timeout-minutes: 480
     concurrency:
       group: aetheln-engine-runner
       queue: max
@@ -105,7 +109,7 @@ jobs:
             -RunId '${{ github.run_id }}' `
             -RunAttempt '${{ github.run_attempt }}' `
             -RunnerName '${{ runner.name }}' `
-            -PhaseTimeoutMinutes 480
+            -PhaseTimeoutMinutes 450
       - name: Upload engine-runner report
         if: always()
         uses: actions/upload-artifact@v4
@@ -118,7 +122,7 @@ jobs:
     if: github.event_name == 'schedule'
     needs: scheduled-client-package
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    timeout-minutes: 735
+    timeout-minutes: 720
     concurrency:
       group: aetheln-engine-runner
       queue: max
@@ -143,7 +147,7 @@ jobs:
             -RunId '${{ github.run_id }}' `
             -RunAttempt '${{ github.run_attempt }}' `
             -RunnerName '${{ runner.name }}' `
-            -PhaseTimeoutMinutes 720
+            -PhaseTimeoutMinutes 690
       - name: Upload engine-runner report
         if: always()
         uses: actions/upload-artifact@v4
@@ -156,7 +160,7 @@ jobs:
     if: github.event_name == 'schedule'
     needs: scheduled-server-package
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    timeout-minutes: 75
+    timeout-minutes: 60
     concurrency:
       group: aetheln-engine-runner
       queue: max
@@ -178,7 +182,7 @@ jobs:
             -RunId '${{ github.run_id }}' `
             -RunAttempt '${{ github.run_attempt }}' `
             -RunnerName '${{ runner.name }}' `
-            -PhaseTimeoutMinutes 60
+            -PhaseTimeoutMinutes 45
       - name: Upload engine-runner report
         if: always()
         uses: actions/upload-artifact@v4
@@ -212,7 +216,8 @@ jobs:
             -Repository '${{ github.repository }}' `
             -RunId '${{ github.run_id }}' `
             -RunAttempt '${{ github.run_attempt }}' `
-            -RunnerName '${{ runner.name }}'
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 105
       - name: Upload engine-runner report
         if: always()
         uses: actions/upload-artifact@v4
