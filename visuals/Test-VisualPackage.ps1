@@ -21,6 +21,8 @@ $GovernancePaths = @(
 	'tests/Test-VisualPackageValidation.ps1'
 )
 $GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
+$ReadmeExpectedProvenance = 'Owner-supplied legacy visual-package guidance; repository governance and current owner-approved concept direction updated under issues #94 and #95 after attested ingest.'
+$ReadmeExpectedAuthorship = 'Repository-authored modifications under issues #94 and #95 recorded in git history; authorship of the underlying legacy material is **Pending/TBD**.'
 $AcceptedGovernanceValues = [ordered]@{
 	'Provenance/custody' = @(
 		'Owner-directed concept generated through the built-in image-generation workflow for issue #114; frozen external ingest.',
@@ -28,12 +30,14 @@ $AcceptedGovernanceValues = [ordered]@{
 		'Owner-supplied legacy visual package; byte-preserved through attested external ingest.',
 		'Owner-supplied legacy visual-package guidance; repository governance and current owner-approved concept direction updated by issue #94 after attested ingest.',
 		'Owner-supplied legacy visual-package guidance; repository references and governance handoff updated by issue #94 after attested ingest.',
+		$ReadmeExpectedProvenance,
 		'Repository-authored Issue #95 visual-review and CommonUI planning report derived from canonical and imported-package evidence.'
 	)
 	'Authorship' = @(
 		'**Pending/TBD**: no author identification is retained for the legacy package.',
 		'Owner-directed generation through the built-in OpenAI image workflow, recorded by issue #114, `generation-prompts.md`, and C2PA `caBX` metadata.',
 		'Repository-authored issue #94 modifications recorded in git history; authorship of the underlying legacy material is **Pending/TBD**.',
+		$ReadmeExpectedAuthorship,
 		'Repository-authored under issue #95 and recorded in git history.'
 	)
 	'Permission' = @(
@@ -47,6 +51,16 @@ $AcceptedGovernanceValues = [ordered]@{
 		'Not approved: no product approval is recorded; non-canonical reference/source asset.'
 	)
 }
+$AcceptedNotApprovedAllowedCurrentUseValues = @(
+	'Reference-only; replacement or rights clearance required before publication/runtime.',
+	'Reference-only; potential internal prototype only after owner approval; replacement or rights clearance required before publication/runtime.',
+	'Reference-only; potential internal prototype only after owner approval; replacement or clearance required for direct reuse.',
+	'Reference-only styling guide; potential internal prototype only after owner approval; replacement or clearance required for direct reuse.',
+	'Reference-only; never direct runtime import without clearance.',
+	'Reference-only; potential internal prototype only after owner approval; replacement or rights clearance required.',
+	'Reference-only; potential internal-prototype comparison only after owner approval; replacement or rights clearance required.',
+	'Reference-only; potential internal-prototype styling guide only after owner approval; replacement or rights clearance required for reuse.'
+)
 $MojibakeEmDash = ([string][char]0x00E2) + [char]0x20AC + [char]0x201D
 $EscapedBackslash = [regex]::Escape([string][char]92)
 $MachinePathPattern = '(?i)(?:[A-' + 'Z]:' + $EscapedBackslash + '|/Use' + 'rs/|' + $EscapedBackslash + 'Use' + 'rs' + $EscapedBackslash + ')'
@@ -81,12 +95,13 @@ function Split-MarkdownTableRow {
 	@($Trimmed.Substring(1, $Trimmed.Length - 2) -split '\|' | ForEach-Object { $_.Trim() })
 }
 
-function Find-TableHeaderIndex {
+function Find-TableHeaderIndices {
 	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $Lines, [Parameter(Mandatory)][string] $FirstColumn)
+	$Indices = [System.Collections.Generic.List[int]]::new()
 	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
-		if ($Lines[$Index].TrimEnd() -match ('^\|\s*' + [regex]::Escape($FirstColumn) + '\s*\|')) { return $Index }
+		if ($Lines[$Index].TrimEnd() -match ('^\|\s*' + [regex]::Escape($FirstColumn) + '\s*\|')) { $Indices.Add($Index) }
 	}
-	-1
+	@($Indices)
 }
 
 function Assert-GovernanceHeader {
@@ -154,6 +169,20 @@ function ConvertTo-NormalizedGovernanceValue {
 		$Normalized = $Normalized -replace '\bnon canonical reference/source asset\b', ''
 	}
 	($Normalized -replace '\s+', ' ').Trim()
+}
+
+function Assert-AllowedCurrentUse {
+	param(
+		[Parameter(Mandatory)][string] $Label,
+		[Parameter(Mandatory)][AllowEmptyString()][string] $Value,
+		[Parameter(Mandatory)][AllowEmptyString()][string] $ProductApproval,
+		[Parameter(Mandatory)][string] $Table
+	)
+
+	$NormalizedProductApproval = ConvertTo-NormalizedGovernanceValue -Field 'Product approval' -Value $ProductApproval
+	if ($NormalizedProductApproval -match '^not approved\b') {
+		Assert-Condition (Test-OrdinalStringCollectionContains -Values $AcceptedNotApprovedAllowedCurrentUseValues -Value $Value) "Field 'Allowed current use' is contradictory for reviewed asset $Label in ${Table}: '$Value'. Product approval is Not approved, so allowed use must remain one of the reviewed bounded non-production values."
+	}
 }
 
 function Get-JsonDepth {
@@ -309,8 +338,9 @@ foreach ($Required in @(
 # another.
 $ProvenanceLines = @($Provenance -split "`r?`n")
 $RegisterTable = 'Per-asset governance table in asset-provenance.md'
-$RegisterHeaderIndex = Find-TableHeaderIndex -Lines $ProvenanceLines -FirstColumn 'Path'
-Assert-Condition ($RegisterHeaderIndex -ge 0) "$RegisterTable is missing; expected a header row starting with '| Path |'."
+$RegisterHeaderIndices = @(Find-TableHeaderIndices -Lines $ProvenanceLines -FirstColumn 'Path')
+Assert-Condition ($RegisterHeaderIndices.Count -eq 1) "$RegisterTable must declare exactly one applicable header; found $($RegisterHeaderIndices.Count). Expected one header row starting with '| Path |'."
+$RegisterHeaderIndex = $RegisterHeaderIndices[0]
 
 $RegisterHeader = @('Path') + $GovernanceFields
 Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ProvenanceLines[$RegisterHeaderIndex]) -ExpectedHeader $RegisterHeader -Table $RegisterTable
@@ -343,6 +373,12 @@ foreach ($RelativePath in $ManifestPaths) {
 	$Cells = $GovernanceRows[$RelativePath]
 	Assert-Condition ($Cells.Count -eq $RegisterHeader.Count) "$RegisterTable row for $RelativePath has $($Cells.Count) cells; expected $($RegisterHeader.Count) (Path plus $($GovernanceFields -join ', ')). Governance states must not be collapsed or omitted."
 	Assert-GovernanceStates -Label $RelativePath -Values $Cells[1..($Cells.Count - 1)] -Table $RegisterTable
+}
+
+if (Test-OrdinalStringCollectionContains -Values $ManifestPaths -Value 'README.md') {
+	$ReadmeGovernanceValues = $GovernanceRows['README.md'][1..($RegisterHeader.Count - 1)]
+	Assert-Condition ([string]::Equals($ReadmeGovernanceValues[0], $ReadmeExpectedProvenance, [System.StringComparison]::Ordinal)) "Governance state 'Provenance/custody' for README.md must record repository modifications under issues #94 and #95; found '$($ReadmeGovernanceValues[0])'."
+	Assert-Condition ([string]::Equals($ReadmeGovernanceValues[1], $ReadmeExpectedAuthorship, [System.StringComparison]::Ordinal)) "Governance state 'Authorship' for README.md must record repository modifications under issues #94 and #95; found '$($ReadmeGovernanceValues[1])'."
 }
 
 if ($HasIssue95Report) {
@@ -405,6 +441,19 @@ if ($HasIssue95Report) {
 	)) {
 		Assert-Condition ($Issue95Report.Contains($Required)) "Issue #95 report contract missing: $Required"
 	}
+	foreach ($StalePattern in @(
+		'(?i)the one supported initial class once canonically selected',
+		'(?i)exact (?:supported )?initial class[^.\r\n]*remain(?:s)? TBD'
+	)) {
+		Assert-Condition ($Issue95Report -notmatch $StalePattern) "Issue #95 report contains stale initial Order/class wording matching '$StalePattern'; Oathscar (`order.oathscar`) is the active initial Order working label."
+	}
+	$NormalizedIssue95Report = ($Issue95Report -replace '\s+', ' ').Trim()
+	foreach ($CurrentInitialOrderContract in @(
+		'Oathscar (`order.oathscar`) is the active initial Order/class working label',
+		'The Oathscar display name remains working and non-final'
+	)) {
+		Assert-Condition ($NormalizedIssue95Report.Contains($CurrentInitialOrderContract)) "Issue #95 report current initial Order/class contract missing: $CurrentInitialOrderContract"
+	}
 	foreach ($Screen in @(
 	'Main menu',
 	'Character roster/selection',
@@ -422,8 +471,9 @@ if ($HasIssue95Report) {
 	# governance state independently for every reviewed asset.
 	$ReportLines = @($Issue95Report -split "`r?`n")
 	$ReportTable = 'Per-asset classification table in issue-95-opening-screen-commonui-validation.md'
-	$ReportHeaderIndex = Find-TableHeaderIndex -Lines $ReportLines -FirstColumn 'Reviewed asset'
-	Assert-Condition ($ReportHeaderIndex -ge 0) "$ReportTable is missing; expected a header row starting with '| Reviewed asset |'."
+	$ReportHeaderIndices = @(Find-TableHeaderIndices -Lines $ReportLines -FirstColumn 'Reviewed asset')
+	Assert-Condition ($ReportHeaderIndices.Count -eq 1) "$ReportTable must declare exactly one applicable header; found $($ReportHeaderIndices.Count). Expected one header row starting with '| Reviewed asset |'."
+	$ReportHeaderIndex = $ReportHeaderIndices[0]
 
 	$ReportHeader = @('Reviewed asset', 'Visual suitability') + $GovernanceFields + @('Allowed current use')
 	Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ReportLines[$ReportHeaderIndex]) -ExpectedHeader $ReportHeader -Table $ReportTable
@@ -477,6 +527,7 @@ if ($HasIssue95Report) {
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[1])) "Visual suitability is blank for $Label in $ReportTable."
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[$ReportHeader.Count - 1])) "Allowed current use is blank for $Label in $ReportTable."
 		Assert-GovernanceStates -Label $Label -Values $Cells[2..($Cells.Count - 2)] -Table $ReportTable
+		Assert-AllowedCurrentUse -Label $Label -Value $Cells[$Cells.Count - 1] -ProductApproval $Cells[$Cells.Count - 2] -Table $ReportTable
 		$ReviewedAssetRows.Add($Label, $Cells)
 	}
 	foreach ($Label in $RequiredReviewedAssetRecords.Keys) {

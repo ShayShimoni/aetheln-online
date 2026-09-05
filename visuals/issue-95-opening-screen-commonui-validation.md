@@ -71,18 +71,23 @@ replacement or documented rights clearance. The package remains
 Identity, race, sex, appearance, class/Skein, faction/Doctrine, permanent
 Character Level, seasonal Ember Rank, inventory/equipment, cosmetics, and
 session state remain separate data concerns. Aurin, Kell, and Vesh each support
-male and female characters, every supported class, and eventually either
+male and female characters, every supported Order/class, and eventually either
 faction. Race, sex, and appearance never alter statistics, authoritative
 hitboxes, reach, timing, collision, traces, or loot probability.
+
+Orders are the game's classes. Oathscar (`order.oathscar`) is the active initial
+Order/class working label, superseding Skeinblade. The stable ID remains the
+durable implementation contract if the display name changes. The Oathscar
+display name remains working and non-final.
 
 Before the 2.0 faction stage, persist `Faction = Unassigned` and expose no
 Doctrine selection. Do not infer final faction names, heraldry, colors, tuning,
 customization depth, or unsupported options from concept art. Every unresolved
 choice remains TBD.
 
-Issue #3 owns minimal initial entry: name, one supported initial class,
-server-owned deferred defaults, and safe-hub entry. Issue #53 later owns the
-full Aurin/Kell/Vesh, male/female, and appearance editor. Issue #95 only reviews
+Issue #3 owns minimal initial entry: name, the Oathscar stable ID, server-owned
+deferred defaults, and safe-hub entry. Issue #53 later owns the full
+Aurin/Kell/Vesh, male/female, and appearance editor. Issue #95 only reviews
 visuals and proposes CommonUI structure; it implements neither flow.
 
 ## Opening-screen assessment
@@ -91,7 +96,7 @@ visuals and proposes CommonUI structure; it implements neither flow.
 | --- | --- | --- | --- | --- | --- | --- |
 | Main menu | Strong dark-fantasy identity, clear vertical grouping, and conspicuous orange focus. `CONTINUE` appears disabled. | Primary actions read clearly; small build text and bottom input hints are marginal. State must not depend on orange alone. | Proposed initial focus is `PLAY`, never a disabled action. Explicit up/down order; Accept activates; Back follows the root exit policy; mouse hover must not steal controller focus. Disabled actions are skipped and expose a reason. | Keep logo, actions, build text, and prompts inside `SafeZone`. Localize every label; allow multiline expansion and avoid baked text and forced spacing. | Use a bounded responsive content column over aspect-preserving background crop/fill. Do not stretch the baked 16:9 composition; unused ultrawide space is preferable to distortion. | Verify visible focus, device switching, disabled reasons, text scaling, longest translations, safe-zone clipping, and contrast at all target resolutions. |
 | Character roster/selection | Roster cards, central preview, details, and bottom actions are distinct. Highlight and `ENTER WORLD` focus are clear. The concepts wrongly risk treating race cards as saved-character records. | Level, details, and faction presentation require readable scrims. The V2 sample's `FACTION UNASSIGNED` display aligns with the pre-2.0 state, but its `LEVEL 1` display conflicts with the 1.0 slice: Character Level begins in 1.1/#50, and Levels 1-3 are excluded from 1.0. Remove or replace that level display for 1.0; any later use requires confirmation in its governed Character Level scope. The sample does not prove state separation. | Initial focus restores the selected character's `ENTER WORLD` action or first valid roster item. Use explicit list/action-bar transitions. `DELETE` requires a modal confirmation; Back never deletes. | Replace the fixed bottom row with wrapping or adaptive actions. Roster cards and details must grow or scroll at large text sizes and under longer translations. | Switch between columns and stacked regions based on available width. Background and character render are presentation layers, not geometry authorities. | Verify empty/full roster states, focus restoration, destructive confirmation, long names, bidirectional text, safe zones, and controller reachability. |
-| Minimal character entry (#3) | No concept may redefine this as the full editor. A restrained name/class form can reuse the visual vocabulary. | Labels, validation errors, deferred values, and server responses need persistent readable presentation. | Initial focus is the name field or first valid action. Accept submits only valid allowed fields; Back confirms abandonment when dirty. Pending requests disable duplicate submission and preserve focus. | Rows grow vertically, error text wraps, and the action footer remains reachable in a scroll container. | Use a centered bounded form that stacks at narrow widths and remains independent from background crop. | Verify only name and the one supported initial class are submitted, server-owned defaults are displayed accurately, and no faction/Doctrine or #53 controls appear. |
+| Minimal character entry (#3) | No concept may redefine this as the full editor. A restrained name/Oathscar form can reuse the visual vocabulary. | Labels, validation errors, deferred values, and server responses need persistent readable presentation. | Initial focus is the name field or first valid action. Accept submits only valid allowed fields; Back confirms abandonment when dirty. Pending requests disable duplicate submission and preserve focus. | Rows grow vertically, error text wraps, and the action footer remains reachable in a scroll container. | Use a centered bounded form that stacks at narrow widths and remains independent from background crop. | Verify only name and the Oathscar stable ID (`order.oathscar`) are submitted, server-owned defaults are displayed accurately, and no faction/Doctrine or #53 controls appear. |
 | Settings | Modal framing and row separation are legible; the orange focus and cyan state indicators are redundant. Exact settings and values are TBD. | Small slider handles, footer copy, and hue-heavy state treatment need stronger shape/text cues and contrast validation. | Deterministic order is category navigation, rows, then footer. Up/down changes rows; left/right changes tabs, sliders, and segmented values. Apply/Reset/Back behavior must be explicit. | Descriptions wrap; rows grow; large text uses scrolling while persistent footer actions remain accessible. All labels and values are localized. | Responsive panel width and capped line length replace fixed coordinates. Ornamental panels use validated nine-slice margins. | Verify focus traps, dirty-state confirmation, device prompts, values, persistence, reset behavior, resolution rollback, contrast, and text scaling. |
 | Accessibility | Editable studies provide useful text-size, high-contrast focus, reduced-motion, color-vision, and subtitle-background references. Available features and defaults remain TBD. | Controls cannot rely on color; explanatory copy and current values must remain readable at large text scale. V2 preview discoverability is weaker because it omits descriptions. | Same explicit settings navigation; every toggle and slider has a semantic label and state. Focus remains visible under high-contrast and color-vision modes. | Permit substantial expansion, multiline descriptions, font fallback, bidirectional layout, and vertically growing rows. | Use responsive rows and scrolling; preserve controls within safe zones without shrinking text below policy. | Verify supported features in Unreal, contrast, screen-readable labels/status where available, reduced motion, subtitles, large text, and no navigation traps. |
 | Dialog/tooltip and errors | Panel and ornament vocabulary can produce clear overlays. The V2 preview visibly gives `LEAVE` the orange keyboard/controller focus treatment while `CANCEL` remains visually normal; runtime focus/default semantics are unconfirmed. | Dialog title, consequence, error, and button labels require a contrast scrim and clear hierarchy. Tooltips cannot be the sole source of required information. | A destructive initial focus or default is unsafe. A modal's initial focus and default action must both be non-destructive; destructive `LEAVE` requires deliberate navigation and confirmation. Accept confirms the focused action; Back cancels when safe; closing restores the invoking control. | Dialog text wraps and scrolls if necessary. Buttons reflow instead of clipping. Keep all content inside `SafeZone`. | Size to content within bounded minimum/maximum dimensions; do not scale a raster panel uniformly. | Verify focus containment/restoration, destructive wording, async error states, device prompts, long translations, and assistive labels. |
@@ -132,16 +137,18 @@ distribution, runtime use, or `Content/` promotion.
 ## Issue #3 minimal entry contract
 
 The proposed Issue #3 screen contains only a localized character-name field,
-the one supported initial class once canonically selected, validation/status
-text, and Back/Create actions. The server owns all deferred defaults and the
-safe-hub entry result. Read-only presentation may say appearance is deferred
-and `Faction = Unassigned`, but must not imply selectable race, sex, appearance,
-faction, Doctrine, progression, equipment, or cosmetic options.
+the active initial Order/class, Oathscar (`order.oathscar`), validation/status
+text, and Back/Create actions. The UI persists and submits the stable ID rather
+than treating the working display name as identity. The server owns all
+deferred defaults and the safe-hub entry result. Read-only presentation may say
+appearance is deferred and `Faction = Unassigned`, but must not imply selectable
+race, sex, appearance, faction, Doctrine, progression, equipment, or cosmetic
+options.
 
 Submission is idempotent from the UI perspective: one pending request disables
-duplicate submission and displays server response or recoverable error. Exact
-initial class, initial appearance/default presentation, name rules, and error
-copy remain TBD.
+duplicate submission and displays server response or recoverable error. Initial
+appearance/default presentation, name rules, error copy, and the final display
+name associated with `order.oathscar` remain TBD.
 
 ## Issue #53 later editor contract
 
@@ -254,7 +261,8 @@ No mapping grants import or runtime approval.
 - [ ] Contrast is validated in Unreal and state never relies on color alone.
 - [ ] Loading supports determinate, indeterminate, failure, and reduced-motion
       states, plus cancel behavior only if later approved.
-- [ ] Issue #3 submits only allowed fields and displays server-owned defaults.
+- [ ] Issue #3 submits only the allowed name field and Oathscar stable ID
+      (`order.oathscar`) and displays server-owned defaults.
 - [ ] No faction/Doctrine or Issue #53 appearance controls leak into the minimal
       flow; faction remains Unassigned before 2.0.
 - [ ] Race, sex, and appearance remain combat-neutral and separate from class,
@@ -265,7 +273,7 @@ No mapping grants import or runtime approval.
       does not lift any of these blocks.
 - [ ] Visual package, regression, formatting, Markdown-link, full CI, and
       `git diff --check` checks pass after all sequential packages are applied.
-- [ ] Final scope contains only the five Issue #95 governance/report paths, and
+- [ ] Final scope contains only the six Issue #95 governance/report paths, and
       the manifest remains non-canonical with exact hashes, byte lengths, and
       counts.
 
@@ -281,8 +289,9 @@ No mapping grants import or runtime approval.
   asset currently holds.
 - Final logo/wordmark, production backgrounds, typography licensing, and font
   fallback coverage.
-- The exact supported initial class and initial appearance/default presentation
-  for Issue #3.
+- The final display name for the active initial Order/class stable ID
+  `order.oathscar`, initial appearance/default presentation, character-name
+  rules, and error copy for Issue #3.
 - Character-slot count, roster empty/full states, deletion policy and wording,
   Continue semantics, and account/session error behavior.
 - Settings inventory, defaults, ranges, persistence, reset behavior, and

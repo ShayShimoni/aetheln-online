@@ -126,6 +126,11 @@ try {
 	Set-Content -LiteralPath $FixtureProvenance -Value $KnownCustodyProvenance -NoNewline -Encoding utf8
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
 
+	$ConflictingRegisterRow = Set-MarkdownTableCell -Row $FirstGovernanceRow -Index 2 -Value 'Repository-authored under issue #95 and recorded in git history.'
+	$SeparatedDuplicateRegister = "$PristineProvenance$ProvenanceNewLine$ProvenanceNewLine## Conflicting duplicate governance table$ProvenanceNewLine$ProvenanceNewLine$GovernanceHeader$ProvenanceNewLine$GovernanceSeparator$ProvenanceNewLine$ConflictingRegisterRow$ProvenanceNewLine"
+	Set-Content -LiteralPath $FixtureProvenance -Value $SeparatedDuplicateRegister -NoNewline -Encoding utf8
+	Assert-Throws -Pattern 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 2' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
+
 	$UnrecognizedCustodyPattern = "Governance state 'Provenance/custody' has unrecognized value for $([regex]::Escape($FirstAssetPath))"
 	foreach ($Case in @(
 		@{
@@ -311,7 +316,9 @@ try {
 	$CollapsedCustodyRow = Set-MarkdownTableCell -Row $MainReportRow -Index 2 -Value 'Pending/TBD: authorship, permission, and license evidence unresolved.'
 	$AuthorshipMismatchRow = Set-MarkdownTableCell -Row $MainReportRow -Index 3 -Value 'Repository-authored under issue #95 and recorded in git history.'
 	$PermissionUnrecognizedRow = Set-MarkdownTableCell -Row $MainReportRow -Index 4 -Value 'Authorized for runtime use.'
+	$ContradictoryAllowedUseRow = Set-MarkdownTableCell -Row $MainReportRow -Index 7 -Value 'Approved for runtime and Content promotion.'
 	$CaseVariantReportRow = Set-MarkdownTableCell -Row $MainReportRow -Index 0 -Value '`01-Main-menu-concept.png`'
+	$SeparatedDuplicateReport = "$PristineReport$ReportNewLine$ReportNewLine## Conflicting duplicate classification table$ReportNewLine$ReportNewLine$ReportHeader$ReportNewLine$ReportSeparator$ReportNewLine$AuthorshipMismatchRow$ReportNewLine"
 
 	Set-FixtureReport -Content $PristineReport
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
@@ -354,6 +361,10 @@ try {
 			Pattern = 'Duplicate reviewed-asset record.*01-main-menu-concept\.png'
 		},
 		@{
+			Report  = $SeparatedDuplicateReport
+			Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md must declare exactly one applicable header; found 2'
+		},
+		@{
 			Report  = $PristineReport.Replace($MainReportRow, $CaseVariantReportRow)
 			Pattern = 'Unexpected reviewed-asset record.*`01-Main-menu-concept\.png`'
 		},
@@ -368,6 +379,10 @@ try {
 		@{
 			Report  = $PristineReport.Replace($MainReportRow, $PermissionUnrecognizedRow)
 			Pattern = "Governance state 'Permission' has unrecognized value for ``01-main-menu-concept\.png``"
+		},
+		@{
+			Report  = $PristineReport.Replace($MainReportRow, $ContradictoryAllowedUseRow)
+			Pattern = "Field 'Allowed current use' is contradictory for reviewed asset ``01-main-menu-concept\.png``.*Product approval is Not approved"
 		}
 	)) {
 		Set-FixtureReport -Content $Case.Report
