@@ -22,9 +22,8 @@ $GovernancePaths = @(
 )
 $GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
 $GovernanceKeywords = @('provenance', 'authorship', 'permission', 'license', 'approval')
-# Owner-approved concept direction is custody context, not Product approval for
-# an asset; all standalone approval language remains reserved to that state.
-$GovernanceKeywordPatterns = @('\b(?:provenance|custody)\b', '\bauthorship\b', '\bpermission\b', '\blicen[cs](?:e|ed|ing)\b', '\bapproval\b|(?<!owner-)\bapproved\b')
+$GovernanceKeywordPatterns = @('\b(?:provenance|custod(?:y|ies))\b', '\b(?:author|authors|authorship)\b', '\bpermissions?\b', '\blicen[cs](?:e|es|ed|ing)\b', '\bapprov(?:e|es|ed|ing|als?)\b')
+$AllowedCustodyPhrasePattern = '(?i)\bowner-approved concept direction\b'
 $EscapedBackslash = [regex]::Escape([string][char]92)
 $MachinePathPattern = '(?i)(?:[A-' + 'Z]:' + $EscapedBackslash + '|/Use' + 'rs/|' + $EscapedBackslash + 'Use' + 'rs' + $EscapedBackslash + ')'
 
@@ -77,9 +76,10 @@ function Assert-GovernanceStates {
 		$Field = $GovernanceFields[$Index]
 		$Value = $Values[$Index]
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Value)) "Governance state '$Field' is blank for $Label in $Table; record the known value, or record '**Pending/TBD**' when it is unknown."
+		$ValueForKeywordScan = if ($Index -eq 0) { $Value -replace $AllowedCustodyPhrasePattern, '' } else { $Value }
 		$Foreign = @(
 			for ($KeywordIndex = 0; $KeywordIndex -lt $GovernanceKeywords.Count; $KeywordIndex++) {
-				if ($KeywordIndex -ne $Index -and $Value -match "(?i)$($GovernanceKeywordPatterns[$KeywordIndex])") {
+				if ($KeywordIndex -ne $Index -and $ValueForKeywordScan -match "(?i)$($GovernanceKeywordPatterns[$KeywordIndex])") {
 					$GovernanceKeywords[$KeywordIndex]
 				}
 			}

@@ -87,6 +87,10 @@ try {
 		throw "Provenance is missing a per-asset governance row for $($FirstAssetPath)."
 	}
 
+	$KnownCustodyProvenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; owner-approved concept direction. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+	Set-Content -LiteralPath $FixtureProvenance -Value $KnownCustodyProvenance -NoNewline -Encoding utf8
+	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
+
 	foreach ($Case in @(
 		@{
 			Provenance = $PristineProvenance.Replace($GovernanceHeader, '| Path | Provenance/custody | Authorship | Permission | License |')
@@ -95,6 +99,34 @@ try {
 		@{
 			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded. |  | Permission recorded. | License recorded. | Not approved. |")
 			Pattern    = "Governance state 'Authorship' is blank for $([regex]::Escape($FirstAssetPath))"
+		},
+		@{
+			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; owner-approved for production. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states \(approval\)"
+		},
+		@{
+			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; approve runtime use. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states \(approval\)"
+		},
+		@{
+			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; approves runtime use. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states \(approval\)"
+		},
+		@{
+			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; approving runtime use. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states \(approval\)"
+		},
+		@{
+			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; approval is Pending/TBD. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states \(approval\)"
+		},
+		@{
+			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; permissions are Pending/TBD. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states \(permission\)"
+		},
+		@{
+			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; author is Pending/TBD. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states \(authorship\)"
 		},
 		@{
 			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; permission is Pending/TBD. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
