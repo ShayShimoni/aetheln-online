@@ -222,9 +222,12 @@ Every accepted decision records:
 - **Decision:** Use one repository-scoped GitHub Actions self-hosted runner on
   the current Windows development PC under the current owner account, labeled
   `[self-hosted, Windows, X64, aetheln-engine]`. Owner-authored, owner-triggered
-  same-repository pull requests may run the supported-target compile gate. A
-  packaged-smoke gate runs at `02:00 UTC` from the protected default branch
-  `main`, and the repository owner may request the same gate manually.
+  same-repository pull requests may run the supported-target compile gate,
+  after the portable gates pass and only when the exact base/head change
+  classification in TA-012 requires the engine. The packaged-smoke milestone
+  runs at `02:00 UTC` from the protected default branch `main` as the four
+  schedule-only phases decided in TA-012; the workflow declares no manual
+  trigger.
 - **Rationale:** The pinned Unreal source build, Visual Studio and Linux
   cross-toolchains, WSL topology, disk capacity, and local build paths are not
   available on ordinary GitHub-hosted runners. Repository scope and explicit
@@ -238,7 +241,7 @@ Every accepted decision records:
   `6f2e01204b6c76b9134d4a9fe0acc88320ecd680`, head
   `3f61f86feef3b8abe283845660eab92140588315`); the engine report SHA-256 is
   `BA69A43008B7E99CDEE257EC66B29CE600982AB46E71D7EE15FAD6D031E81253`.
-  Scheduled and manual packaged-smoke evidence remains outstanding.
+  Scheduled phased packaged-smoke evidence remains outstanding.
 - **Rejected alternatives:** Assuming `windows-latest` contains the pinned
   engine/toolchains; running engine jobs for fork or collaborator-authored
   pull requests; granting future collaborators runner access without a new
@@ -267,10 +270,38 @@ Every accepted decision records:
   gates workflow
 - **Decision:** `trusted-candidate-compile` outranks starting the next
   dependent scheduled milestone phase and never cancels in-progress work; it
-  carries no absolute priority and never jumps ahead of an older queued manual
-  or pull-request job. The shared `aetheln-engine-runner` concurrency group
+  carries no absolute priority and never jumps ahead of an older queued
+  pull-request job. The shared `aetheln-engine-runner` concurrency group
   uses `queue: max` with `cancel-in-progress: false` (FIFO by wait-start time,
-  which GitHub documents without guaranteeing overall ordering). The scheduled
+  which GitHub documents without guaranteeing overall ordering). Expensive
+  engine work starts only after the portable gates pass: milestone phase 1
+  and `trusted-candidate-compile` both need `quality-gates` with the implicit
+  success condition and no status-function bypass, so a portable failure,
+  cancellation, or skip keeps every engine job off the runner. The workflow
+  declares no manual trigger of any kind and the four phases are
+  schedule-only: a manual trigger on this workflow identity would let an
+  operator select an older branch that still carries the retired
+  1,440-minute single-job gate, and no replacement manual workflow is
+  provided. `trusted-candidate-compile` additionally needs the GitHub-hosted
+  `change-impact` classifier (`actions/checkout@v4` plus repository-owned
+  PowerShell, no third-party action), which compares the exact pull-request
+  base SHA and head SHA with a rename-free name-status diff and publishes
+  `engine_required`. Compile is exempted only when every changed path is in
+  the closed, case-sensitive portable-only set — `docs/**`, `visuals/**`,
+  `output/pdf/**`, `tests/**` limited to `.ps1` and `.md` files, top-level
+  `.md` files, and GitHub issue or pull-request template Markdown or YAML
+  files, never `.github/workflows/**`; everything else, including
+  `Source/**`, `Config/**`, `Content/**`, `Plugins/**`, `scripts/**`, any
+  workflow file, and `AethelnOnline.uproject`, and any mixed change, requires
+  compile. Every classifier uncertainty — invalid, missing, or identical SHAs,
+  an unavailable commit, a Git error, an empty diff, or a quoted, rename, or
+  copy entry — fails closed to `engine_required=true`; uncertainty can never
+  become a successful exemption. A classifier infrastructure failure before
+  the decision is published (a lost runner or a checkout error) is a red
+  `change-impact` check that skips the compile rather than exempting it, and
+  is not portable-exemption evidence. The owner, same-repository, and
+  triggering-actor trust predicates stay enforced in addition to these
+  prerequisites. The scheduled
   clean-package plus packaged-smoke milestone is split into four bounded
   phases whose job `timeout-minutes` are the total concurrency-holding bounds
   (client package 8 h, server package 12 h, registry/provenance validation
@@ -325,9 +356,18 @@ Every accepted decision records:
   recorded lead decisions; current GitHub concurrency and variables
   documentation; focused fixture suites
   `tests/ci/Invoke-EngineRunnerGate.Tests.ps1`,
-  `tests/build/Build-PackagedArtifacts.Tests.ps1`, and
-  `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1`.
+  `tests/build/Build-PackagedArtifacts.Tests.ps1`,
+  `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1`, and
+  `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1` (the classifier
+  portable, engine-impact, fail-closed, and shallow fetch-then-classify
+  matrix executed against fixture commits).
 - **Alternatives:** `queue: max` alone (leaves the full 24-hour starvation);
+  keeping an owner manual trigger on the same workflow identity (lets an
+  older branch with the retired 1,440-minute job be selected); starting
+  engine jobs in parallel with the portable gates (spends the sole runner on
+  candidates that fail portable checks); a third-party path-filter action
+  (unreviewed code deciding engine execution); a permissive or heuristic
+  exemption list (an unclassified path must compile);
   shrinking the single job timeout (cancels healthy packaging); cooperative
   mid-run yielding via the GitHub API (credentials and checkpoint machinery on
   the runner); GitHub Actions artifacts as the handoff medium (multi-gigabyte
@@ -335,7 +375,12 @@ Every accepted decision records:
   workspace state between jobs (dirty-workspace dependency).
 - **Consequences:** The owner provisions `AETHELN_HANDOFF_ROOT` once and
   restarts the runner service; the first live scheduled run after merge is the
-  independent operational proof. Phase evidence stays separate per job; a
+  independent operational proof, and the first live pull-request run of the
+  merged workflow is the operational proof for the classifier path (a
+  portable-only pull request must show `change-impact` green with
+  `engine_required=false` and `trusted-candidate-compile` skipped). Trusted
+  compile now waits for the portable suite (about 13 minutes) before it can
+  queue for the runner. Phase evidence stays separate per job; a
   phase-deadline expiry — between controlled pre-work operations (the
   build/smoke grandchild is then never started), inside a single blocking
   synchronous operation or the timeout finalization (the supervisor hard bound

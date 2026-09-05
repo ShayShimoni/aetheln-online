@@ -179,6 +179,43 @@ foreach ($Path in @('docs/\*\*', 'visuals/\*\*', 'output/pdf/\*\*', 'tests/\*\*'
 	Assert-True ($CiDocumentation -match $Path) "CI documentation must record the classifier path rule for $Path."
 }
 
+# The accepted architecture decisions must describe the same current policy as
+# the workflow and CI documentation: no manual entry point, portable gates
+# before selected engine work, exact base/head classification with the closed
+# portable-only exemption, uncertainty never becoming a successful exemption,
+# a classifier infrastructure failure distinguished from an exemption, and the
+# trust checks still enforced. Historical context (the 2026-09-01 starvation)
+# stays historical.
+$ArchitectureDecisions = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\architecture-decisions.md') -Raw
+function Get-DecisionSection([string] $Id) {
+	$Match = [regex]::Match($ArchitectureDecisions, "(?ms)^### $Id .*?(?=^### |^## )")
+	Assert-True $Match.Success "Architecture decisions must contain an accepted $Id entry."
+	return $Match.Value
+}
+$RunnerDecision = Get-DecisionSection 'TA-011'
+$SchedulingDecision = Get-DecisionSection 'TA-012'
+Assert-True ($SchedulingDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$' -and $RunnerDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$') 'TA-011 and TA-012 must remain accepted decisions.'
+Assert-True ($ArchitectureDecisions -notmatch 'workflow_dispatch' -and $ArchitectureDecisions -notmatch '(?i)owner-dispatched|owner\s+dispatch') 'Architecture decisions must not describe a manual dispatch entry point.'
+Assert-True ($ArchitectureDecisions -notmatch '(?i)queued\s+manual') 'TA-012 must not describe older queued manual jobs; no manual job can exist.'
+Assert-True ($RunnerDecision -notmatch '(?i)request\s+the\s+same\s+gate\s+manually' -and $RunnerDecision -notmatch '(?i)manual\s+packaged-smoke') 'TA-011 must not offer or await a manual packaged-smoke gate.'
+Assert-True ($SchedulingDecision -match '(?i)schedule-only' -and $SchedulingDecision -match '(?i)no\s+manual') 'TA-012 must record that the milestone phases are schedule-only with no manual trigger.'
+Assert-True ($SchedulingDecision -match '(?i)older\s+branch') 'TA-012 must record why no manual trigger may exist on this workflow identity.'
+Assert-True ($SchedulingDecision -match '`quality-gates`' -and $SchedulingDecision -match '(?i)portable') 'TA-012 must record that portable gates run before selected engine work.'
+Assert-True ($SchedulingDecision -match '`change-impact`' -and $SchedulingDecision -match '`engine_required`') 'TA-012 must record the change-impact classifier and its engine_required output.'
+Assert-True ($SchedulingDecision -match '(?i)exact\s+(pull-request\s+)?base\s+(SHA\s+)?and\s+head') 'TA-012 must record the exact base/head SHA comparison.'
+foreach ($Path in @('docs/\*\*', 'visuals/\*\*', 'output/pdf/\*\*', 'tests/\*\*', '\.github/workflows/\*\*', 'AethelnOnline\.uproject')) {
+	Assert-True ($SchedulingDecision -match $Path) "TA-012 must record the classifier path rule for $Path."
+}
+Assert-True ($SchedulingDecision -match '(?i)uncertainty[^.]*engine_required=true|engine_required=true[^.]*uncertainty') 'TA-012 must record that classifier uncertainty selects compile, never a successful exemption.'
+Assert-True ($SchedulingDecision -match '(?i)infrastructure\s+failure|classifier\s+job\s+(itself\s+)?fails') 'TA-012 must distinguish a classifier infrastructure failure from a portable exemption.'
+Assert-True ($SchedulingDecision -match '(?i)trust\s+(predicate|checks?)') 'TA-012 must record that the trust checks remain enforced.'
+Assert-True ($SchedulingDecision -match '2026-09-01') 'TA-012 must preserve the historical starvation context.'
+foreach ($Value in @('8 h', '12 h', '1 h', '2 h', '450/690/45/105', '64 GiB', 'AETHELN_HANDOFF_ROOT', 'queue: max', 'cancel-in-progress: false')) {
+	Assert-True ($SchedulingDecision -match [regex]::Escape($Value)) "TA-012 must preserve the accepted value '$Value'."
+}
+Assert-True ($SchedulingDecision -match 'Test-PrototypeQualityWorkflow\.Tests\.ps1') 'TA-012 must cite the classifier fixture suite as evidence.'
+
 Write-Output 'PASS: milestone phases are bounded, FIFO-queued, evidence-separated, schedule-only, gated behind portable success, and cannot starve trusted compile for 24 hours'
 Write-Output 'PASS: trusted compile requires portable success and an engine-impacting change; no manual or monolithic package/smoke entry point remains'
+Write-Output 'PASS: accepted decisions TA-011 and TA-012 describe the same schedule-only, portable-first, fail-closed selective gates as the workflow and CI documentation'
 exit 0
