@@ -97,6 +97,10 @@ try {
 			Pattern    = "Governance state 'Authorship' is blank for $([regex]::Escape($FirstAssetPath))"
 		},
 		@{
+			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Custody recorded; permission is Pending/TBD. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
+			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states \(permission\)"
+		},
+		@{
 			Provenance = [regex]::Replace($PristineProvenance, $RowPattern, "| ``$($FirstAssetPath)`` | Pending/TBD: authorship, permission, and license evidence unresolved. | Author recorded. | Permission recorded. | License recorded. | Not approved. |")
 			Pattern    = "Governance state 'Provenance/custody' for $([regex]::Escape($FirstAssetPath)) .* aggregates other states"
 		}

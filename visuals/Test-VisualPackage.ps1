@@ -21,7 +21,10 @@ $GovernancePaths = @(
 	'tests/Test-VisualPackageValidation.ps1'
 )
 $GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
-$GovernanceKeywords = @('provenance', 'authorship', 'permission', 'license', 'approv')
+$GovernanceKeywords = @('provenance', 'authorship', 'permission', 'license', 'approval')
+# Owner-approved concept direction is custody context, not Product approval for
+# an asset; all standalone approval language remains reserved to that state.
+$GovernanceKeywordPatterns = @('\b(?:provenance|custody)\b', '\bauthorship\b', '\bpermission\b', '\blicen[cs](?:e|ed|ing)\b', '\bapproval\b|(?<!owner-)\bapproved\b')
 $EscapedBackslash = [regex]::Escape([string][char]92)
 $MachinePathPattern = '(?i)(?:[A-' + 'Z]:' + $EscapedBackslash + '|/Use' + 'rs/|' + $EscapedBackslash + 'Use' + 'rs' + $EscapedBackslash + ')'
 
@@ -74,8 +77,14 @@ function Assert-GovernanceStates {
 		$Field = $GovernanceFields[$Index]
 		$Value = $Values[$Index]
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Value)) "Governance state '$Field' is blank for $Label in $Table; record the known value, or record '**Pending/TBD**' when it is unknown."
-		$Foreign = @($GovernanceKeywords | Where-Object { $_ -ne $GovernanceKeywords[$Index] -and $Value -match "(?i)$_" })
-		Assert-Condition ($Foreign.Count -lt 2) "Governance state '$Field' for $Label in $Table aggregates other states ($($Foreign -join ', ')); record $($GovernanceFields -join ', ') independently, each in its own column."
+		$Foreign = @(
+			for ($KeywordIndex = 0; $KeywordIndex -lt $GovernanceKeywords.Count; $KeywordIndex++) {
+				if ($KeywordIndex -ne $Index -and $Value -match "(?i)$($GovernanceKeywordPatterns[$KeywordIndex])") {
+					$GovernanceKeywords[$KeywordIndex]
+				}
+			}
+		)
+		Assert-Condition ($Foreign.Count -eq 0) "Governance state '$Field' for $Label in $Table aggregates other states ($($Foreign -join ', ')); record $($GovernanceFields -join ', ') independently, each in its own column."
 	}
 }
 
