@@ -28,13 +28,18 @@ function Get-JobBody([string] $JobName, [string] $NextJobName) {
 
 $QualityGates = Get-JobBody 'quality-gates' 'trusted-candidate-compile'
 $TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'scheduled-client-package'
-$ScheduledSmoke = Get-JobBody 'scheduled-packaged-smoke' 'manual-packaged-smoke'
-$ManualSmokeStart = $Workflow.IndexOf('  manual-packaged-smoke:', [StringComparison]::Ordinal)
-Assert-True ($ManualSmokeStart -ge 0) "Workflow job 'manual-packaged-smoke' should exist."
-$ManualSmoke = $Workflow.Substring($ManualSmokeStart)
+$ScheduledSmokeStart = $Workflow.IndexOf('  scheduled-packaged-smoke:', [StringComparison]::Ordinal)
+Assert-True ($ScheduledSmokeStart -ge 0) "Workflow job 'scheduled-packaged-smoke' should exist."
+$ScheduledSmoke = $Workflow.Substring($ScheduledSmokeStart)
+
+# Issue #150: the only engine entry points are the trusted pull-request compile
+# and the four bounded milestone phases (schedule or owner workflow_dispatch).
+# A single opaque 16-24 hour package/smoke job must never return.
+$PhaseTrigger = "if: >-\r?\n\s+github\.event_name == 'schedule' \|\|\r?\n\s+\(github\.event_name == 'workflow_dispatch' &&\r?\n\s+github\.triggering_actor == github\.repository_owner\)\r?\n"
 
 Assert-True ($Workflow -match '(?m)^permissions:\r?\n  contents: read\r?$') 'Workflow permissions must remain contents read.'
 Assert-True ($Workflow -notmatch '\$\{\{\s*secrets\.' -and $Workflow -notmatch '(?m)^\s*secrets\s*:') 'Workflow must not consume or declare secrets.'
+Assert-True ($Workflow -match '(?m)^  workflow_dispatch:\r?$') 'Workflow must keep the workflow_dispatch trigger for owner-requested phased runs.'
 Assert-True ($QualityGates -match 'git lfs pull --include "Content/Maps/StarterMap\.umap"') 'The portable job must materialize the StarterMap LFS fixture.'
 
 Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Trusted compile must remain limited to pull requests.'
@@ -45,26 +50,24 @@ Assert-MatchCount $TrustedCompile '(?m)^\s+-Mode Compile `\r?$' 1 'Trusted owner
 Assert-True ($TrustedCompile -notmatch '(?m)^\s+-Mode PackagedSmoke `\r?$') 'Trusted owner pull-request validation must not select PackagedSmoke.'
 Assert-True ($TrustedCompile -notmatch 'timeout-minutes:\s*1440') 'Routine trusted compile must not be configured as a 24-hour job.'
 Assert-True ($TrustedCompile -notmatch '(?i)clean[^\r\n]*packag|packag[^\r\n]*clean') 'Routine trusted compile must not be described as a clean package gate.'
+Assert-True ($TrustedCompile -notmatch "github\.event_name == 'workflow_dispatch'") 'Trusted compile must not be selectable by workflow dispatch.'
 
-Assert-True ($ScheduledSmoke -match "if:\s*github\.event_name == 'schedule'") 'Scheduled packaged smoke must remain limited to the schedule event.'
-Assert-True ($ManualSmoke -match "github\.event_name == 'workflow_dispatch'") 'Manual packaged smoke must remain limited to workflow dispatch.'
-Assert-True ($ManualSmoke -match 'github\.triggering_actor == github\.repository_owner') 'Manual packaged smoke must require the repository owner as triggering actor.'
-# Issue #150: the scheduled milestone is phased; its smoke phase selects
-# SmokePhase over the verified handoff payload with a bounded timeout, while the
-# owner-dispatched manual job keeps the single-job PackagedSmoke milestone. The
-# phase jobs themselves are validated by Test-RunnerSchedulingPolicy.Tests.ps1.
+# The monolithic manual milestone is retired: no job, no PackagedSmoke mode, no
+# 24-hour bound anywhere in the workflow.
+Assert-True ($Workflow -notmatch 'manual-packaged-smoke') 'Workflow must not define the retired manual-packaged-smoke job.'
+Assert-True ($Workflow -notmatch 'engine-runner-manual-smoke-report') 'Workflow must not publish the retired manual smoke artifact.'
+Assert-True ($Workflow -notmatch '-Mode PackagedSmoke') 'Workflow must not select the monolithic PackagedSmoke gate anywhere.'
+Assert-True ($Workflow -notmatch 'timeout-minutes:\s*1440') 'Workflow must not contain a 24-hour job bound.'
+
+Assert-True ($ScheduledSmoke -match $PhaseTrigger) 'scheduled-packaged-smoke must accept only the schedule event or an owner-triggered workflow dispatch.'
+Assert-True ($ScheduledSmoke -notmatch 'pull_request' -and $ScheduledSmoke -notmatch "'push'") 'scheduled-packaged-smoke must not be selectable by pull requests or pushes.'
 Assert-MatchCount $ScheduledSmoke '(?m)^\s+-Mode SmokePhase `\r?$' 1 'scheduled-packaged-smoke must select the SmokePhase gate exactly once.'
 Assert-True ($ScheduledSmoke -notmatch '(?m)^\s+-Mode (Compile|PackagedSmoke) `\r?$') 'scheduled-packaged-smoke must not select Compile or the single-job PackagedSmoke gate.'
 Assert-True ($ScheduledSmoke -match 'timeout-minutes:\s*120') 'scheduled-packaged-smoke must be bounded by its recorded phase limit.'
-Assert-True ($ScheduledSmoke -notmatch 'timeout-minutes:\s*1440') 'scheduled-packaged-smoke must not hold the runner for a 24-hour bound.'
-Assert-MatchCount $ManualSmoke '(?m)^\s+-Mode PackagedSmoke `\r?$' 1 'manual-packaged-smoke must select PackagedSmoke exactly once.'
-Assert-True ($ManualSmoke -notmatch '(?m)^\s+-Mode Compile `\r?$') 'manual-packaged-smoke must not select Compile.'
-Assert-True ($ManualSmoke -match 'timeout-minutes:\s*1440') 'manual-packaged-smoke must retain the milestone gate timeout.'
 
 foreach ($Job in @(
 	@{ Name = 'trusted-candidate-compile'; Body = $TrustedCompile; RequiresContentLfs = $true },
-	@{ Name = 'scheduled-packaged-smoke'; Body = $ScheduledSmoke; RequiresContentLfs = $false },
-	@{ Name = 'manual-packaged-smoke'; Body = $ManualSmoke; RequiresContentLfs = $true }
+	@{ Name = 'scheduled-packaged-smoke'; Body = $ScheduledSmoke; RequiresContentLfs = $false }
 )) {
 	if ($Job.RequiresContentLfs) {
 		Assert-True ($Job.Body -match 'git lfs pull --include "Content/\*\*"') "$($Job.Name) must materialize every Unreal Content LFS object before build or cook."
@@ -76,12 +79,12 @@ foreach ($Job in @(
 }
 
 $UploadPaths = @([regex]::Matches($Workflow, '(?m)^\s+path:\s*(TestResults/[^\r\n]+)\r?$') | ForEach-Object { $_.Groups[1].Value.Trim() })
-Assert-True ($UploadPaths.Count -eq 7) 'Workflow must publish exactly one JSON report for each portable or selected engine job.'
+Assert-True ($UploadPaths.Count -eq 6) 'Workflow must publish exactly one JSON report for each portable or selected engine job.'
 foreach ($UploadPath in $UploadPaths) {
 	Assert-True ($UploadPath -match '^TestResults/(ci-report|engine-runner-report)\.json$') "Upload path '$UploadPath' must be an approved JSON report."
 }
 Assert-True ($Workflow -notmatch '(?m)^\s+path:\s*.*(?:archives?|logs?|Saved|StagedBuilds)') 'Workflow must not upload packages, archives, logs, or generated Unreal output.'
 
-Write-Output 'PASS: workflow preserves trusted incremental compile and milestone packaged-smoke selection'
+Write-Output 'PASS: workflow preserves trusted incremental compile and retires the monolithic packaged-smoke job'
 Write-Output 'PASS: workflow preserves LFS, serialization, report-only upload, and no-secret policy'
 exit 0

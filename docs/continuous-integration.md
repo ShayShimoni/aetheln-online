@@ -118,11 +118,17 @@ builds fetches all Unreal Content LFS objects with
 | Job | Event | Trust predicate | Gate |
 | --- | --- | --- | --- |
 | `trusted-candidate-compile` | `pull_request` | The head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
-| `scheduled-client-package` | `schedule` at `02:00 UTC` daily | The schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
-| `scheduled-server-package` | `schedule`, after `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
-| `scheduled-provenance-validation` | `schedule`, after `scheduled-server-package` | Same as phase 1. | Milestone phase 3: verify both handoff payloads, validate server cook references, and write bound provenance. |
-| `scheduled-packaged-smoke` | `schedule`, after `scheduled-provenance-validation` | Same as phase 1. | Milestone phase 4: verify every handoff payload and smoke the packaged client/server pair. |
-| `manual-packaged-smoke` | `workflow_dispatch` | `github.triggering_actor` is the repository owner. | Owner-requested single-job clean package and packaged smoke. |
+| `scheduled-client-package` | `schedule` at `02:00 UTC` daily, or `workflow_dispatch` | The schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow; a `workflow_dispatch` run requires `github.triggering_actor` to be the repository owner. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
+| `scheduled-server-package` | `schedule` or owner `workflow_dispatch`, after `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
+| `scheduled-provenance-validation` | `schedule` or owner `workflow_dispatch`, after `scheduled-server-package` | Same as phase 1. | Milestone phase 3: verify both handoff payloads, validate server cook references, and write bound provenance. |
+| `scheduled-packaged-smoke` | `schedule` or owner `workflow_dispatch`, after `scheduled-provenance-validation` | Same as phase 1. | Milestone phase 4: verify every handoff payload and smoke the packaged client/server pair. |
+
+An owner-triggered `workflow_dispatch` runs the same four bounded phases as
+the schedule, with the same `needs` chain, job bounds, concurrency block,
+handoff contract, and per-phase artifacts. There is no single-job package and
+smoke entry point: no workflow job selects the gate's `PackagedSmoke` mode or
+holds the engine runner for a 24-hour bound. Pull requests, pushes, and
+non-owner dispatches cannot start any of the four phases.
 
 `develop` remains the integration branch. Merely adding the schedule on a
 feature or `develop` branch does not activate it; GitHub schedules run from the
@@ -145,7 +151,8 @@ trusted-compile queue delay **attributable to one currently running scheduled
 phase** (the longest total phase bound, the 720-minute server package),
 subject to platform assignment latency. Total queue time can be longer when
 older jobs are already ahead in the queue (for example an owner-dispatched
-24-hour manual milestone, or earlier pull-request compiles). These bounds are
+phased milestone whose next phase queued earlier, or earlier pull-request
+compiles). These bounds are
 revisited only from retained phase evidence and are never silently raised.
 
 The mechanism: each scheduled phase job reacquires the `aetheln-engine-runner`
@@ -294,7 +301,7 @@ nonzero when a required check fails.
   Studio toolchain, Windows SDK, Linux cross-toolchain, WSL distribution
   `Ubuntu`, WSL user `aethelnqa`, Git, and Git LFS before live execution.
 - The current account must define non-secret user-level variables
-  `AETHELN_ENGINE_ROOT`, `AETHELN_LINUX_TOOLCHAIN_ROOT`, and (for the scheduled
+  `AETHELN_ENGINE_ROOT`, `AETHELN_LINUX_TOOLCHAIN_ROOT`, and (for the
   milestone phases) `AETHELN_HANDOFF_ROOT`. The runner process
   must be restarted after variable changes so they are inherited as process
   variables. Values are local absolute paths and must never be committed,
@@ -354,13 +361,21 @@ powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
   -LogRoot (Join-Path $RunRoot 'logs')
 ```
 
+Each milestone phase invokes the gate with its phase mode (`PackageClient`,
+`PackageServer`, `ValidateProvenance`, or `SmokePhase`), the handoff context,
+and its recorded watchdog; phase 1 is:
+
 ```powershell
 powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
-  -Mode PackagedSmoke `
+  -Mode PackageClient `
   -RepositoryRoot '${{ github.workspace }}' `
   -SourceRevision '${{ github.sha }}' `
-  -ArchiveRoot (Join-Path $RunRoot 'archives') `
-  -LogRoot (Join-Path $RunRoot 'logs')
+  -LogRoot (Join-Path $RunRoot 'logs') `
+  -Repository '${{ github.repository }}' `
+  -RunId '${{ github.run_id }}' `
+  -RunAttempt '${{ github.run_attempt }}' `
+  -RunnerName '${{ runner.name }}' `
+  -PhaseTimeoutMinutes 450
 ```
 
 ### Compile Policy
@@ -397,8 +412,10 @@ be reused by the incremental compiler and are never deleted by this gate.
 
 ### PackagedSmoke Policy
 
-`PackagedSmoke` is the explicit scheduled or owner-requested milestone policy.
-It reports `policy = clean-package-and-smoke` and invokes
+`PackagedSmoke` is a retained gate-script mode with no workflow entry point:
+no job in `prototype-quality-gates.yml` selects it, and the milestone runs
+only as the four bounded phases above. When invoked directly, it reports
+`policy = clean-package-and-smoke` and invokes
 `scripts/build/Build-PackagedArtifacts.ps1` exactly once for the Development
 Windows client and Linux server, using `/Game/Maps/StarterMap` and the supplied
 `ArchiveRoot`. That packaging entry point owns its clean build, cook, stage,
@@ -425,9 +442,8 @@ incremental compile policy.
 
 - The portable workflow uploads `TestResults/ci-report.json`. Each selected
   engine job uploads only `TestResults/engine-runner-report.json`, with a
-  distinct artifact name per job: compile, the four scheduled milestone phases
-  (client package, server package, provenance validation, scheduled smoke), and
-  manual smoke.
+  distinct artifact name per job: compile and the four milestone phases
+  (client package, server package, provenance validation, scheduled smoke).
 - Headless Unreal automation generates
   `TestResults/UnrealAutomation/index.json`,
   `TestResults/unreal-automation-report.json`, and
@@ -472,8 +488,8 @@ The repository-scoped self-hosted topology and `02:00 UTC` cadence are accepted
 in [Architecture Decisions](architecture-decisions.md). A compile-capable
 runner is registered, and commit-specific live compile evidence exists for
 GitHub Actions run `33161041115`. Ongoing runner maintenance, packaging-only
-prerequisites, and scheduled or manual packaged-smoke evidence remain
-outstanding operational responsibilities, not architecture decisions.
+prerequisites, and scheduled or owner-dispatched phased packaged-smoke evidence
+remain outstanding operational responsibilities, not architecture decisions.
 
 ## Relationship to Visual Package Validation
 

@@ -68,9 +68,11 @@ jobs:
           path: TestResults/engine-runner-report.json
           if-no-files-found: error
 
-  # Issue #150 scheduled milestone phases. The daily packaging and smoke
-  # milestone is split into four bounded jobs that reacquire the shared
-  # aetheln-engine-runner concurrency group at every phase boundary. queue: max
+  # Issue #150 milestone phases. The packaging and smoke milestone is split
+  # into four bounded jobs (daily schedule, or owner-triggered
+  # workflow_dispatch; no single-job package/smoke entry point exists) that
+  # reacquire the shared aetheln-engine-runner concurrency group at every
+  # phase boundary. queue: max
   # keeps waiting jobs FIFO by wait-start time, so a queued
   # trusted-candidate-compile job can enter at the next phase boundary; this is
   # not an absolute priority and older queued jobs stay ahead of it. Job
@@ -96,7 +98,10 @@ jobs:
   # AETHELN_HANDOFF_ROOT store with fail-closed integrity manifests; nothing
   # under it is deleted by CI.
   scheduled-client-package:
-    if: github.event_name == 'schedule'
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.triggering_actor == github.repository_owner)
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     timeout-minutes: 480
     concurrency:
@@ -133,7 +138,10 @@ jobs:
           if-no-files-found: error
 
   scheduled-server-package:
-    if: github.event_name == 'schedule'
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.triggering_actor == github.repository_owner)
     needs: scheduled-client-package
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     timeout-minutes: 720
@@ -171,7 +179,10 @@ jobs:
           if-no-files-found: error
 
   scheduled-provenance-validation:
-    if: github.event_name == 'schedule'
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.triggering_actor == github.repository_owner)
     needs: scheduled-server-package
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     timeout-minutes: 60
@@ -206,7 +217,10 @@ jobs:
           if-no-files-found: error
 
   scheduled-packaged-smoke:
-    if: github.event_name == 'schedule'
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.triggering_actor == github.repository_owner)
     needs: scheduled-provenance-validation
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     timeout-minutes: 120
@@ -237,40 +251,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: engine-runner-scheduled-smoke-report
-          path: TestResults/engine-runner-report.json
-          if-no-files-found: error
-
-  manual-packaged-smoke:
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      github.triggering_actor == github.repository_owner
-    runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    timeout-minutes: 1440
-    concurrency:
-      group: aetheln-engine-runner
-      queue: max
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: false
-      - name: Fetch Unreal Content LFS objects
-        shell: powershell
-        run: git lfs pull --include "Content/**"
-      - name: Run packaged smoke gate
-        shell: powershell
-        run: |
-          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
-          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
-            -Mode PackagedSmoke `
-            -RepositoryRoot '${{ github.workspace }}' `
-            -SourceRevision '${{ github.sha }}' `
-            -ArchiveRoot (Join-Path $RunRoot 'archives') `
-            -LogRoot (Join-Path $RunRoot 'logs')
-      - name: Upload engine-runner report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: engine-runner-manual-smoke-report
           path: TestResults/engine-runner-report.json
           if-no-files-found: error
