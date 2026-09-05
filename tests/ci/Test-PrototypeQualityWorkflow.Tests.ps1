@@ -27,7 +27,7 @@ function Get-JobBody([string] $JobName, [string] $NextJobName) {
 }
 
 $QualityGates = Get-JobBody 'quality-gates' 'trusted-candidate-compile'
-$TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'scheduled-packaged-smoke'
+$TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'scheduled-client-package'
 $ScheduledSmoke = Get-JobBody 'scheduled-packaged-smoke' 'manual-packaged-smoke'
 $ManualSmokeStart = $Workflow.IndexOf('  manual-packaged-smoke:', [StringComparison]::Ordinal)
 Assert-True ($ManualSmokeStart -ge 0) "Workflow job 'manual-packaged-smoke' should exist."
@@ -49,21 +49,26 @@ Assert-True ($TrustedCompile -notmatch '(?i)clean[^\r\n]*packag|packag[^\r\n]*cl
 Assert-True ($ScheduledSmoke -match "if:\s*github\.event_name == 'schedule'") 'Scheduled packaged smoke must remain limited to the schedule event.'
 Assert-True ($ManualSmoke -match "github\.event_name == 'workflow_dispatch'") 'Manual packaged smoke must remain limited to workflow dispatch.'
 Assert-True ($ManualSmoke -match 'github\.triggering_actor == github\.repository_owner') 'Manual packaged smoke must require the repository owner as triggering actor.'
-foreach ($Job in @(
-	@{ Name = 'scheduled-packaged-smoke'; Body = $ScheduledSmoke },
-	@{ Name = 'manual-packaged-smoke'; Body = $ManualSmoke }
-)) {
-	Assert-MatchCount $Job.Body '(?m)^\s+-Mode PackagedSmoke `\r?$' 1 "$($Job.Name) must select PackagedSmoke exactly once."
-	Assert-True ($Job.Body -notmatch '(?m)^\s+-Mode Compile `\r?$') "$($Job.Name) must not select Compile."
-	Assert-True ($Job.Body -match 'timeout-minutes:\s*1440') "$($Job.Name) must retain the milestone gate timeout."
-}
+# Issue #150: the scheduled milestone is phased; its smoke phase selects
+# SmokePhase over the verified handoff payload with a bounded timeout, while the
+# owner-dispatched manual job keeps the single-job PackagedSmoke milestone. The
+# phase jobs themselves are validated by Test-RunnerSchedulingPolicy.Tests.ps1.
+Assert-MatchCount $ScheduledSmoke '(?m)^\s+-Mode SmokePhase `\r?$' 1 'scheduled-packaged-smoke must select the SmokePhase gate exactly once.'
+Assert-True ($ScheduledSmoke -notmatch '(?m)^\s+-Mode (Compile|PackagedSmoke) `\r?$') 'scheduled-packaged-smoke must not select Compile or the single-job PackagedSmoke gate.'
+Assert-True ($ScheduledSmoke -match 'timeout-minutes:\s*120') 'scheduled-packaged-smoke must be bounded by its recorded phase limit.'
+Assert-True ($ScheduledSmoke -notmatch 'timeout-minutes:\s*1440') 'scheduled-packaged-smoke must not hold the runner for a 24-hour bound.'
+Assert-MatchCount $ManualSmoke '(?m)^\s+-Mode PackagedSmoke `\r?$' 1 'manual-packaged-smoke must select PackagedSmoke exactly once.'
+Assert-True ($ManualSmoke -notmatch '(?m)^\s+-Mode Compile `\r?$') 'manual-packaged-smoke must not select Compile.'
+Assert-True ($ManualSmoke -match 'timeout-minutes:\s*1440') 'manual-packaged-smoke must retain the milestone gate timeout.'
 
 foreach ($Job in @(
-	@{ Name = 'trusted-candidate-compile'; Body = $TrustedCompile },
-	@{ Name = 'scheduled-packaged-smoke'; Body = $ScheduledSmoke },
-	@{ Name = 'manual-packaged-smoke'; Body = $ManualSmoke }
+	@{ Name = 'trusted-candidate-compile'; Body = $TrustedCompile; RequiresContentLfs = $true },
+	@{ Name = 'scheduled-packaged-smoke'; Body = $ScheduledSmoke; RequiresContentLfs = $false },
+	@{ Name = 'manual-packaged-smoke'; Body = $ManualSmoke; RequiresContentLfs = $true }
 )) {
-	Assert-True ($Job.Body -match 'git lfs pull --include "Content/\*\*"') "$($Job.Name) must materialize every Unreal Content LFS object before build or cook."
+	if ($Job.RequiresContentLfs) {
+		Assert-True ($Job.Body -match 'git lfs pull --include "Content/\*\*"') "$($Job.Name) must materialize every Unreal Content LFS object before build or cook."
+	}
 	Assert-True ($Job.Body -notmatch 'git lfs pull --include "Content/Maps/StarterMap\.umap"') "$($Job.Name) must not fetch only StarterMap."
 	Assert-True ($Job.Body -match '(?m)^\s+group: aetheln-engine-runner\r?$') "$($Job.Name) must use the shared engine-runner concurrency group."
 	Assert-True ($Job.Body -match '(?m)^\s+cancel-in-progress: false\r?$') "$($Job.Name) must serialize without cancelling an active engine job."
@@ -71,7 +76,7 @@ foreach ($Job in @(
 }
 
 $UploadPaths = @([regex]::Matches($Workflow, '(?m)^\s+path:\s*(TestResults/[^\r\n]+)\r?$') | ForEach-Object { $_.Groups[1].Value.Trim() })
-Assert-True ($UploadPaths.Count -eq 4) 'Workflow must publish exactly one JSON report for each portable or selected engine job.'
+Assert-True ($UploadPaths.Count -eq 7) 'Workflow must publish exactly one JSON report for each portable or selected engine job.'
 foreach ($UploadPath in $UploadPaths) {
 	Assert-True ($UploadPath -match '^TestResults/(ci-report|engine-runner-report)\.json$') "Upload path '$UploadPath' must be an approved JSON report."
 }
