@@ -21,9 +21,32 @@ $GovernancePaths = @(
 	'tests/Test-VisualPackageValidation.ps1'
 )
 $GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
-$GovernanceKeywords = @('provenance', 'authorship', 'permission', 'license', 'approval')
-$GovernanceKeywordPatterns = @('\b(?:provenance|custod(?:y|ies))\b', '\b(?:author|authors|authorship)\b', '\bpermissions?\b', '\blicen[cs](?:e|es|ed|ing)\b', '\bapprov(?:e|es|ed|ing|als?)\b')
-$AllowedCustodyPhrasePattern = '(?i)\bowner-approved concept direction\b'
+$AcceptedGovernanceValues = [ordered]@{
+	'Provenance/custody' = @(
+		'Owner-directed concept generated through the built-in image-generation workflow for issue #114; frozen external ingest.',
+		'Owner-supplied authoring utility; imported through attested external ingest and repository-hardened by issue #94.',
+		'Owner-supplied legacy visual package; byte-preserved through attested external ingest.',
+		'Owner-supplied legacy visual-package guidance; repository governance and current owner-approved concept direction updated by issue #94 after attested ingest.',
+		'Owner-supplied legacy visual-package guidance; repository references and governance handoff updated by issue #94 after attested ingest.',
+		'Repository-authored Issue #95 visual-review and CommonUI planning report derived from canonical and imported-package evidence.'
+	)
+	'Authorship' = @(
+		'**Pending/TBD**: no author identification is retained for the legacy package.',
+		'Owner-directed generation through the built-in OpenAI image workflow, recorded by issue #114, `generation-prompts.md`, and C2PA `caBX` metadata.',
+		'Repository-authored issue #94 modifications recorded in git history; authorship of the underlying legacy material is **Pending/TBD**.',
+		'Repository-authored under issue #95 and recorded in git history.'
+	)
+	'Permission' = @(
+		'**Pending/TBD**: no permission grant is retained in this repository.'
+	)
+	'License' = @(
+		'**Pending/TBD**: no license instrument is retained in this repository.'
+	)
+	'Product approval' = @(
+		'Not approved: no product approval is recorded; non-canonical planning/governance artifact that grants no asset rights, runtime approval, publication approval, or `Content/` promotion.',
+		'Not approved: no product approval is recorded; non-canonical reference/source asset.'
+	)
+}
 $MojibakeEmDash = ([string][char]0x00E2) + [char]0x20AC + [char]0x201D
 $EscapedBackslash = [regex]::Escape([string][char]92)
 $MachinePathPattern = '(?i)(?:[A-' + 'Z]:' + $EscapedBackslash + '|/Use' + 'rs/|' + $EscapedBackslash + 'Use' + 'rs' + $EscapedBackslash + ')'
@@ -64,8 +87,8 @@ function Assert-GovernanceHeader {
 }
 
 # Provenance/custody, authorship, permission, license, and product approval are
-# five independent states. A cell may be a known value or an explicit
-# '**Pending/TBD**', but never blank and never a summary of its neighbours.
+# five independent states. Each field has a closed contract derived from the
+# reviewed register values; a new value requires an explicit validator update.
 function Assert-GovernanceStates {
 	param(
 		[Parameter(Mandatory)][string] $Label,
@@ -77,15 +100,9 @@ function Assert-GovernanceStates {
 		$Field = $GovernanceFields[$Index]
 		$Value = $Values[$Index]
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Value)) "Governance state '$Field' is blank for $Label in $Table; record the known value, or record '**Pending/TBD**' when it is unknown."
-		$ValueForKeywordScan = if ($Index -eq 0) { $Value -replace $AllowedCustodyPhrasePattern, '' } else { $Value }
-		$Foreign = @(
-			for ($KeywordIndex = 0; $KeywordIndex -lt $GovernanceKeywords.Count; $KeywordIndex++) {
-				if ($KeywordIndex -ne $Index -and $ValueForKeywordScan -match "(?i)$($GovernanceKeywordPatterns[$KeywordIndex])") {
-					$GovernanceKeywords[$KeywordIndex]
-				}
-			}
-		)
-		Assert-Condition ($Foreign.Count -eq 0) "Governance state '$Field' for $Label in $Table aggregates other states ($($Foreign -join ', ')); record $($GovernanceFields -join ', ') independently, each in its own column."
+		$NormalizedValue = ConvertTo-NormalizedGovernanceValue -Field $Field -Value $Value
+		$NormalizedAcceptedValues = @($AcceptedGovernanceValues[$Field] | ForEach-Object { ConvertTo-NormalizedGovernanceValue -Field $Field -Value $_ })
+		Assert-Condition ($NormalizedAcceptedValues -contains $NormalizedValue) "Governance state '$Field' has unrecognized value for $Label in ${Table}: '$Value'. Update the explicit accepted-value contract only after governance review."
 	}
 }
 
@@ -277,6 +294,10 @@ foreach ($Line in $ProvenanceLines[($RegisterHeaderIndex + 1)..($ProvenanceLines
 	$GovernanceRows[$RowPath] = Split-MarkdownTableRow -Row $Line
 }
 
+foreach ($RowPath in $GovernanceRows.Keys) {
+	Assert-Condition ($ManifestPaths -ccontains $RowPath) "Unexpected per-asset governance row: $RowPath is not listed in package-manifest.json."
+}
+
 foreach ($RelativePath in $ManifestPaths) {
 	Assert-Condition ($GovernanceRows.ContainsKey($RelativePath)) "Per-asset governance row missing for ${RelativePath}: every manifested asset must record $($GovernanceFields -join ', ') independently."
 	$Cells = $GovernanceRows[$RelativePath]
@@ -310,6 +331,10 @@ if ($HasIssue95Report) {
 	'Identity, race, sex, appearance, class/Skein, faction/Doctrine',
 	'class/Skein, faction/Doctrine, permanent',
 	'Character Level, seasonal Ember Rank, inventory/equipment, cosmetics',
+	'its `LEVEL 1` display conflicts with the 1.0 slice',
+	'Character Level begins in 1.1/#50',
+	'Levels 1-3 are excluded from 1.0',
+	'Remove or replace that level display for 1.0',
 	'session state remain separate data concerns',
 	'Race, sex, and appearance never alter statistics',
 	'hitboxes, reach, timing, collision, traces, or loot probability',
