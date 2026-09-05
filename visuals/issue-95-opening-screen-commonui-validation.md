@@ -15,6 +15,17 @@ come from `docs/game-design-bible.md`, `docs/playable-peoples.md`, and
 listed below. Recommendations are proposed implementation contracts, not proof
 of Unreal behavior.
 
+The cumulative Issue #95 delivery history contains six governance/report paths:
+the repository README, visual-package validator, provenance register, this
+report, package manifest, and validator tests. The current bounded corrective
+wave permits four paths: the validator, validator tests, this report, and the
+manifest. This Package B artifact replaces only this report; Package A owns the
+validator and tests, and a later dependent Package C will bind the final report
+bytes in the manifest. These narrower package boundaries do not redefine the
+cumulative six-path ticket scope. A five-path comparison that includes the
+provenance register describes a different comparison boundary and must not be
+reported as the four-path corrective wave or this one-file package.
+
 Sources reviewed:
 
 - `01-main-menu-concept.png` through `07-ui-style-system.png`.
@@ -94,9 +105,9 @@ visuals and proposes CommonUI structure; it implements neither flow.
 
 | Screen | Observed visual suitability | Legibility and contrast | Focus order and keyboard/controller navigation | Safe zones and localization expansion | Ultrawide and scalable layout | Required Unreal validation |
 | --- | --- | --- | --- | --- | --- | --- |
-| Main menu | Strong dark-fantasy identity, clear vertical grouping, and conspicuous orange focus. `CONTINUE` appears disabled. | Primary actions read clearly; small build text and bottom input hints are marginal. State must not depend on orange alone. | Proposed initial focus is `PLAY`, never a disabled action. Explicit up/down order; Accept activates; Back follows the root exit policy; mouse hover must not steal controller focus. Disabled actions are skipped and expose a reason. | Keep logo, actions, build text, and prompts inside `SafeZone`. Localize every label; allow multiline expansion and avoid baked text and forced spacing. | Use a bounded responsive content column over aspect-preserving background crop/fill. Do not stretch the baked 16:9 composition; unused ultrawide space is preferable to distortion. | Verify visible focus, device switching, disabled reasons, text scaling, longest translations, safe-zone clipping, and contrast at all target resolutions. |
+| Main menu | Strong dark-fantasy identity, clear vertical grouping, and conspicuous orange focus. `CONTINUE` appears disabled. | Primary actions read clearly; small build text and bottom input hints are marginal. State must not depend on orange alone. | Proposed initial focus is `CONTINUE` when it is enabled for a resumable character; otherwise disabled `CONTINUE` is skipped and `PLAY` receives initial focus. Explicit up/down order; Accept activates; Back follows the root exit policy; mouse hover must not steal controller focus. Disabled actions are skipped and expose a reason. | Keep logo, actions, build text, and prompts inside `SafeZone`. Localize every label; allow multiline expansion and avoid baked text and forced spacing. | Use a bounded responsive content column over aspect-preserving background crop/fill. Do not stretch the baked 16:9 composition; unused ultrawide space is preferable to distortion. | Verify visible focus, device switching, disabled reasons, text scaling, longest translations, safe-zone clipping, and contrast at all target resolutions. |
 | Character roster/selection | Roster cards, central preview, details, and bottom actions are distinct. Highlight and `ENTER WORLD` focus are clear. The concepts wrongly risk treating race cards as saved-character records. | Level, details, and faction presentation require readable scrims. The V2 sample's `FACTION UNASSIGNED` display aligns with the pre-2.0 state, but its `LEVEL 1` display conflicts with the 1.0 slice: Character Level begins in 1.1/#50, and Levels 1-3 are excluded from 1.0. Remove or replace that level display for 1.0; any later use requires confirmation in its governed Character Level scope. The sample does not prove state separation. | Initial focus restores the selected character's `ENTER WORLD` action or first valid roster item. Use explicit list/action-bar transitions. `DELETE` requires a modal confirmation; Back never deletes. | Replace the fixed bottom row with wrapping or adaptive actions. Roster cards and details must grow or scroll at large text sizes and under longer translations. | Switch between columns and stacked regions based on available width. Background and character render are presentation layers, not geometry authorities. | Verify empty/full roster states, focus restoration, destructive confirmation, long names, bidirectional text, safe zones, and controller reachability. |
-| Minimal character entry (#3) | No concept may redefine this as the full editor. A restrained name/Oathscar form can reuse the visual vocabulary. | Labels, validation errors, deferred values, and server responses need persistent readable presentation. | Initial focus is the name field or first valid action. Accept submits only valid allowed fields; Back confirms abandonment when dirty. Pending requests disable duplicate submission and preserve focus. | Rows grow vertically, error text wraps, and the action footer remains reachable in a scroll container. | Use a centered bounded form that stacks at narrow widths and remains independent from background crop. | Verify only name and the Oathscar stable ID (`order.oathscar`) are submitted, server-owned defaults are displayed accurately, and no faction/Doctrine or #53 controls appear. |
+| Minimal character entry (#3) | No concept may redefine this as the full editor. A restrained name/Oathscar form can reuse the visual vocabulary. | Labels, validation errors, deferred values, and server responses need persistent readable presentation. | Initial focus is the name field or first valid action. Accept submits only valid allowed fields; Back confirms abandonment when dirty. A pending logical creation request disables duplicate submission and preserves focus; recoverable retries reuse that request's stable idempotency key, and concurrent duplicate submissions remain suppressed. | Rows grow vertically, error text wraps, and the action footer remains reachable in a scroll container. | Use a centered bounded form that stacks at narrow widths and remains independent from background crop. | Verify only name and the Oathscar stable ID (`order.oathscar`) are submitted, server-owned defaults are displayed accurately, no faction/Doctrine or #53 controls appear, recoverable retries retain the same logical request identity, concurrent duplicates are suppressed, and one auditable character results. |
 | Settings | Modal framing and row separation are legible; the orange focus and cyan state indicators are redundant. Exact settings and values are TBD. | Small slider handles, footer copy, and hue-heavy state treatment need stronger shape/text cues and contrast validation. | Deterministic order is category navigation, rows, then footer. Up/down changes rows; left/right changes tabs, sliders, and segmented values. Apply/Reset/Back behavior must be explicit. | Descriptions wrap; rows grow; large text uses scrolling while persistent footer actions remain accessible. All labels and values are localized. | Responsive panel width and capped line length replace fixed coordinates. Ornamental panels use validated nine-slice margins. | Verify focus traps, dirty-state confirmation, device prompts, values, persistence, reset behavior, resolution rollback, contrast, and text scaling. |
 | Accessibility | Editable studies provide useful text-size, high-contrast focus, reduced-motion, color-vision, and subtitle-background references. Available features and defaults remain TBD. | Controls cannot rely on color; explanatory copy and current values must remain readable at large text scale. V2 preview discoverability is weaker because it omits descriptions. | Same explicit settings navigation; every toggle and slider has a semantic label and state. Focus remains visible under high-contrast and color-vision modes. | Permit substantial expansion, multiline descriptions, font fallback, bidirectional layout, and vertically growing rows. | Use responsive rows and scrolling; preserve controls within safe zones without shrinking text below policy. | Verify supported features in Unreal, contrast, screen-readable labels/status where available, reduced motion, subtitles, large text, and no navigation traps. |
 | Dialog/tooltip and errors | Panel and ornament vocabulary can produce clear overlays. The V2 preview visibly gives `LEAVE` the orange keyboard/controller focus treatment while `CANCEL` remains visually normal; runtime focus/default semantics are unconfirmed. | Dialog title, consequence, error, and button labels require a contrast scrim and clear hierarchy. Tooltips cannot be the sole source of required information. | A destructive initial focus or default is unsafe. A modal's initial focus and default action must both be non-destructive; destructive `LEAVE` requires deliberate navigation and confirmation. Accept confirms the focused action; Back cancels when safe; closing restores the invoking control. | Dialog text wraps and scrolls if necessary. Buttons reflow instead of clipping. Keep all content inside `SafeZone`. | Size to content within bounded minimum/maximum dimensions; do not scale a raster panel uniformly. | Verify focus containment/restoration, destructive wording, async error states, device prompts, long translations, and assistive labels. |
@@ -122,7 +133,7 @@ distribution, runtime use, or `Content/` promotion.
 | `ui-production/screens/accessibility.svg` | Useful functional reference for text size, focus, reduced motion, color vision, and subtitle background; options remain TBD. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
 | `ui-production/screens/settings.svg` | Useful row/tab/layout reference; settings, defaults, ranges, and confirmation behavior remain TBD. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
 | `main-menu-v2-preview.png` | Polished visual target but baked and non-responsive. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; potential internal-prototype comparison only after owner approval; replacement or rights clearance required. |
-| `character-selection-v2-preview.png` | Polished roster-stage reference; fixed portraits and Kell presentation cannot define supported creation options. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
+| `character-selection-v2-preview.png` | Polished roster-stage reference; fixed portraits and Kell presentation cannot define supported creation options. The current Kell render reads too uniformly stone and needs a later anatomy correction before suitability: the intended Kell is living organic-mineral, with living skin over most of the body and mineral anatomy concentrated in the canonically specified areas. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
 | `accessibility-v2-preview.png` | Useful density/state preview; settings and navigation are unconfirmed. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
 | `settings-v2-preview.png` | Useful modal treatment; mixes unconfirmed display, audio, and accessibility values. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
 | Dialog/tooltip V2 preview | Useful overlay hierarchy reference; no proof of focus capture, restoration, or accessible semantics. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
@@ -132,7 +143,7 @@ distribution, runtime use, or `Content/` promotion.
 | Normal, hover, focused, pressed, and disabled buttons | Orange outline and corner markers are a useful reusable focus language; text/state semantics must be rebuilt. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only styling guide; potential internal prototype only after owner approval; replacement or clearance required for direct reuse. |
 | Panel and selection-card frame | Natural CommonUI style references; require validated nine-slice/material treatment. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; potential internal prototype only after owner approval; replacement or clearance required for direct reuse. |
 | Loading indicator, slider, and toggles | Useful state vocabulary; motion, hit targets, values, contrast, and semantics need runtime design. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; potential internal prototype only after owner approval; replacement or clearance required for direct reuse. |
-| Kell selection render | Useful composition sample only; cannot define default race, sex, appearance, class, or combat properties. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
+| Kell selection render | Useful composition sample only; cannot define default race, sex, appearance, class, or combat properties. It currently reads too uniformly stone and needs a later anatomy correction to present a living organic-mineral Kell, with living skin over most of the body and mineral anatomy concentrated in the canonically specified areas. This limitation does not approve or redesign the asset. | Owner-supplied legacy visual package; byte-preserved through attested external ingest. | **Pending/TBD** — no author identification is retained. | **Pending/TBD** — no permission grant is retained. | **Pending/TBD** — no license instrument is retained. | Not approved — no product approval recorded. | Reference-only; replacement or rights clearance required before publication/runtime. |
 
 ## Issue #3 minimal entry contract
 
@@ -145,10 +156,20 @@ appearance is deferred and `Faction = Unassigned`, but must not imply selectable
 race, sex, appearance, faction, Doctrine, progression, equipment, or cosmetic
 options.
 
-Submission is idempotent from the UI perspective: one pending request disables
-duplicate submission and displays server response or recoverable error. Initial
-appearance/default presentation, name rules, error copy, and the final display
-name associated with `order.oathscar` remain TBD.
+The server authorizes creation to the authenticated account.
+The client does not supply or select authoritative account ownership.
+Authorization failures receive a clear, safe server response.
+
+Each logical creation request uses a stable idempotency key. A recoverable retry
+reuses the same logical request identity and key rather than creating a new
+request identity. While that request is pending, the UI disables duplicate
+submission, and concurrent duplicate attempts remain suppressed. The server
+remains authoritative and interrupted, concurrent, or repeated requests must
+produce one auditable character outcome. The UI displays the authoritative
+server response or a recoverable error without inventing transport or
+persistence behavior. Initial appearance/default presentation, name rules,
+error copy, and the final display name associated with `order.oathscar` remain
+TBD.
 
 ## Issue #53 later editor contract
 
@@ -190,8 +211,10 @@ indeterminate status semantically.
 
 ## Interaction contract
 
-- Default focus is deterministic: `PLAY`, the selected character's
-  `ENTER WORLD`, or the first valid field/action. It is never disabled.
+- Main-menu initial focus is deterministic: `CONTINUE` receives focus when it
+  is enabled for a resumable character; otherwise it is skipped and `PLAY`
+  receives focus. Other screens restore the selected character's `ENTER WORLD`
+  action or use the first valid field/action. Initial focus is never disabled.
 - Up/down traverses vertical lists. Left/right changes tabs, sliders, and
   segmented values. Focus wraps only where later documented; wrap policy is
   TBD.
@@ -204,7 +227,10 @@ indeterminate status semantically.
   active device without moving focus.
 - Disabled actions are skipped and provide a visible, localizable reason.
 - Pending server requests prevent duplicate actions, preserve context, and
-  return focus to the actionable error/retry path.
+  return focus to the actionable error/retry path. Minimal-character-entry
+  recoverable retries reuse the stable idempotency key for the same logical
+  request, concurrent duplicates remain suppressed, and the authoritative
+  result is one auditable character.
 
 ## Scaling, safe zones, localization, and accessibility
 
@@ -238,13 +264,15 @@ status where Unreal support permits.
 | Panel and selection-card frame | Nine-slice/material panel and roster-card style | Uniform raster scaling will distort ornament; margins and DPI behavior require validation; authorship, permission, and license are Pending/TBD and product approval remains Not approved. |
 | Slider and toggles | CommonUI settings controls | Rebuild semantics, input increments, hit targets, labels, and disabled state; artwork is not behavior. |
 | Loading indicator | Loading-status presentation | Provide reduced-motion and determinate/indeterminate alternatives; motion remains TBD; authorship, permission, and license are Pending/TBD and product approval remains Not approved. |
-| Kell render | Replaceable preview presentation | Cannot establish supported options or combat geometry; final character asset remains TBD; authorship, permission, and license are Pending/TBD and product approval remains Not approved. |
+| Kell render | Replaceable preview presentation | Cannot establish supported options or combat geometry; it reads too uniformly stone and needs later anatomy correction to a living organic-mineral Kell; final character asset remains TBD; authorship, permission, and license are Pending/TBD and product approval remains Not approved. |
 
 No mapping grants import or runtime approval.
 
 ## Testable acceptance checklist
 
 - [ ] Keyboard and controller reach every enabled control with no focus trap.
+- [ ] Main-menu initial focus selects enabled `CONTINUE` for a resumable
+      character; otherwise disabled `CONTINUE` is skipped and `PLAY` is focused.
 - [ ] Focus remains visible and restores to the invoking control after overlays.
 - [ ] Accept, Back, dirty-settings prompts, and destructive confirmations behave
       consistently.
@@ -263,19 +291,32 @@ No mapping grants import or runtime approval.
       states, plus cancel behavior only if later approved.
 - [ ] Issue #3 submits only the allowed name field and Oathscar stable ID
       (`order.oathscar`) and displays server-owned defaults.
+- [ ] Creation is authorized to the authenticated account; the client does not
+      supply or select authoritative account ownership, and authorization
+      failures receive a clear, safe server response.
+- [ ] Each logical Issue #3 creation request uses a stable idempotency key;
+      recoverable retries reuse the same request identity and key, concurrent
+      duplicate submissions are suppressed, and interrupted, concurrent, or
+      repeated requests produce one auditable character outcome under server
+      authority.
 - [ ] No faction/Doctrine or Issue #53 appearance controls leak into the minimal
       flow; faction remains Unassigned before 2.0.
 - [ ] Race, sex, and appearance remain combat-neutral and separate from class,
       progression, equipment, cosmetics, and session state.
+- [ ] The Kell selection render remains reference-only and marked for later
+      anatomy correction because it reads too uniformly stone rather than as a
+      living organic-mineral Kell.
 - [ ] No reviewed asset enters `Content/` or runtime while authorship is
       Pending/TBD, permission is Pending/TBD, license is Pending/TBD, or
       product approval remains Not approved. Provenance/custody is known and
       does not lift any of these blocks.
 - [ ] Visual package, regression, formatting, Markdown-link, full CI, and
       `git diff --check` checks pass after all sequential packages are applied.
-- [ ] Final scope contains only the six Issue #95 governance/report paths, and
-      the manifest remains non-canonical with exact hashes, byte lengths, and
-      counts.
+- [ ] Cumulative final ticket scope contains only the six Issue #95
+      governance/report paths, the current corrective wave remains bounded to
+      its four allowed paths, this Package B replacement contains only this
+      report, and the manifest remains non-canonical with exact hashes, byte
+      lengths, and counts after the dependent package binds the final bytes.
 
 ## Blockers and unresolved TBD decisions
 
@@ -293,7 +334,8 @@ No mapping grants import or runtime approval.
   `order.oathscar`, initial appearance/default presentation, character-name
   rules, and error copy for Issue #3.
 - Character-slot count, roster empty/full states, deletion policy and wording,
-  Continue semantics, and account/session error behavior.
+  Continue semantics beyond the documented resumable-character focus condition,
+  and account/session error behavior.
 - Settings inventory, defaults, ranges, persistence, reset behavior, and
   resolution-confirmation timeout.
 - Accessibility feature support and defaults.

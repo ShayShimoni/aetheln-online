@@ -197,11 +197,55 @@ function Test-OrdinalStringCollectionContains {
 	$false
 }
 
+function Test-MarkdownIndentedCodeLine {
+	param([Parameter(Mandatory)][AllowEmptyString()][string] $Line)
+
+	$Column = 0
+	foreach ($Character in $Line.ToCharArray()) {
+		if ($Character -eq ' ') { $Column++ }
+		elseif ($Character -eq "`t") { $Column += 4 - ($Column % 4) }
+		else { break }
+		if ($Column -ge 4) { return $true }
+	}
+	$false
+}
+
 function Split-MarkdownTableRow {
 	param([Parameter(Mandatory)][string] $Row)
+	Assert-Condition (-not (Test-MarkdownIndentedCodeLine -Line $Row)) "Malformed Markdown table row: indentation must stay before the four-column code boundary: $Row"
 	$Trimmed = $Row.Trim()
-	Assert-Condition ($Trimmed.StartsWith('|') -and $Trimmed.EndsWith('|') -and $Trimmed.Length -ge 2) "Malformed Markdown table row: $Row"
-	@($Trimmed.Substring(1, $Trimmed.Length - 2) -split '\|' | ForEach-Object { $_.Trim() })
+	Assert-Condition (-not [string]::IsNullOrWhiteSpace($Trimmed)) "Malformed Markdown table row: $Row"
+
+	$Start = if ($Trimmed.StartsWith('|')) { 1 } else { 0 }
+	$End = $Trimmed.Length
+	if ($End -gt $Start -and $Trimmed[$End - 1] -eq '|') {
+		$BackslashCount = 0
+		for ($Index = $End - 2; $Index -ge $Start -and $Trimmed[$Index] -eq '\'; $Index--) { $BackslashCount++ }
+		if (($BackslashCount % 2) -eq 0) { $End-- }
+	}
+
+	$Cells = [System.Collections.Generic.List[string]]::new()
+	$Cell = [System.Text.StringBuilder]::new()
+	$BackslashRun = 0
+	for ($Index = $Start; $Index -lt $End; $Index++) {
+		$Character = $Trimmed[$Index]
+		if ($Character -eq '\') {
+			$null = $Cell.Append($Character)
+			$BackslashRun++
+			continue
+		}
+		if ($Character -eq '|' -and ($BackslashRun % 2) -eq 0) {
+			$Cells.Add($Cell.ToString().Trim())
+			$null = $Cell.Clear()
+		}
+		else {
+			if ($Character -eq '|' -and ($BackslashRun % 2) -eq 1) { $Cell.Length-- }
+			$null = $Cell.Append($Character)
+		}
+		$BackslashRun = 0
+	}
+	$Cells.Add($Cell.ToString().Trim())
+	@($Cells)
 }
 
 function Find-TableHeaderIndices {
@@ -231,7 +275,9 @@ function Find-TableHeaderIndices {
 			continue
 		}
 
-		if ($Line.TrimEnd() -cmatch ('^[ ]{0,3}\|[ \t]*' + [regex]::Escape($FirstColumn) + '[ \t]*\|')) { $Indices.Add($Index) }
+		if ((Test-MarkdownIndentedCodeLine -Line $Line) -or $Line -notmatch '\|') { continue }
+		$Cells = @(Split-MarkdownTableRow -Row $Line)
+		if ($Cells.Count -ge 2 -and [string]::Equals($Cells[0], $FirstColumn, [System.StringComparison]::Ordinal)) { $Indices.Add($Index) }
 	}
 	@($Indices)
 }
@@ -251,9 +297,7 @@ function Assert-MarkdownTableSeparator {
 		[Parameter(Mandatory)][string] $Table
 	)
 
-	$Trimmed = $Row.Trim()
-	Assert-Condition ($Trimmed.StartsWith('|') -and $Trimmed.EndsWith('|') -and $Trimmed.Length -ge 2) "$Table separator row immediately after its header is missing or malformed: $Row"
-	$Cells = @(Split-MarkdownTableRow -Row $Trimmed)
+	$Cells = @(Split-MarkdownTableRow -Row $Row)
 	Assert-Condition ($Cells.Count -eq $ExpectedCellCount) "$Table separator row immediately after its header must have exactly $ExpectedCellCount cells; found $($Cells.Count)."
 	for ($Index = 0; $Index -lt $Cells.Count; $Index++) {
 		Assert-Condition ($Cells[$Index] -cmatch '^:?-{3,}:?$') "$Table separator row immediately after its header has invalid cell $($Index + 1) '$($Cells[$Index])'; expected at least three hyphens with optional alignment colons."
@@ -500,8 +544,8 @@ if ($RegisterSeparatorIndex + 1 -lt $ProvenanceLines.Count) {
 }
 foreach ($Line in $RegisterDataLines) {
 	$Trimmed = $Line.Trim()
-	if ([string]::IsNullOrWhiteSpace($Trimmed) -or -not $Trimmed.StartsWith('|')) { break }
-	$Cells = Split-MarkdownTableRow -Row $Trimmed
+	if ([string]::IsNullOrWhiteSpace($Trimmed) -or $Line -notmatch '\|') { break }
+	$Cells = Split-MarkdownTableRow -Row $Line
 	$PathCell = $Cells[0]
 	Assert-Condition ($PathCell -cmatch '^`([^`]+)`$') "Malformed per-asset governance path cell in asset-provenance.md: expected a single backtick-wrapped path; found '$PathCell'."
 	$RowPath = $Matches[1]
@@ -662,8 +706,8 @@ if ($HasIssue95Report) {
 	}
 	foreach ($Line in $ReportDataLines) {
 		$Trimmed = $Line.Trim()
-		if (-not $Trimmed.StartsWith('|')) { break }
-		$Cells = Split-MarkdownTableRow -Row $Trimmed
+		if ([string]::IsNullOrWhiteSpace($Trimmed) -or $Line -notmatch '\|') { break }
+		$Cells = Split-MarkdownTableRow -Row $Line
 		$Label = $Cells[0]
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Label)) "$ReportTable contains a row with no reviewed-asset name: $Trimmed"
 		Assert-Condition ($RequiredReviewedAssetRecords.Contains($Label)) "Unexpected reviewed-asset record in ${ReportTable}: $Label"

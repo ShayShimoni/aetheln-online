@@ -25,6 +25,42 @@ function Assert-Throws {
 	throw "Expected failure matching '$Pattern', but the action succeeded."
 }
 
+function Split-GfmFixtureRow {
+	param([Parameter(Mandatory)][string] $Row)
+
+	$Trimmed = $Row.Trim()
+	$Start = if ($Trimmed.StartsWith('|')) { 1 } else { 0 }
+	$End = $Trimmed.Length
+	if ($End -gt $Start -and $Trimmed[$End - 1] -eq '|') {
+		$BackslashCount = 0
+		for ($Index = $End - 2; $Index -ge $Start -and $Trimmed[$Index] -eq '\'; $Index--) { $BackslashCount++ }
+		if (($BackslashCount % 2) -eq 0) { $End-- }
+	}
+
+	$Cells = [System.Collections.Generic.List[string]]::new()
+	$Cell = [System.Text.StringBuilder]::new()
+	$BackslashRun = 0
+	for ($Index = $Start; $Index -lt $End; $Index++) {
+		$Character = $Trimmed[$Index]
+		if ($Character -eq '\') {
+			$null = $Cell.Append($Character)
+			$BackslashRun++
+			continue
+		}
+		if ($Character -eq '|' -and ($BackslashRun % 2) -eq 0) {
+			$Cells.Add($Cell.ToString().Trim())
+			$null = $Cell.Clear()
+		}
+		else {
+			if ($Character -eq '|' -and ($BackslashRun % 2) -eq 1) { $Cell.Length-- }
+			$null = $Cell.Append($Character)
+		}
+		$BackslashRun = 0
+	}
+	$Cells.Add($Cell.ToString().Trim())
+	@($Cells)
+}
+
 function Set-MarkdownTableCell {
 	param(
 		[Parameter(Mandatory)][string] $Row,
@@ -32,16 +68,13 @@ function Set-MarkdownTableCell {
 		[Parameter(Mandatory)][AllowEmptyString()][string] $Value
 	)
 
-	$Trimmed = $Row.Trim()
-	if (-not $Trimmed.StartsWith('|') -or -not $Trimmed.EndsWith('|')) {
-		throw "Malformed Markdown table fixture row: $Row"
-	}
-	$Cells = @($Trimmed.Substring(1, $Trimmed.Length - 2) -split '\|' | ForEach-Object { $_.Trim() })
+	$Cells = @(Split-GfmFixtureRow -Row $Row)
 	if ($Index -lt 0 -or $Index -ge $Cells.Count) {
 		throw "Markdown table fixture cell index $Index is outside the $($Cells.Count)-cell row."
 	}
 	$Cells[$Index] = $Value
-	'| ' + ($Cells -join ' | ') + ' |'
+	$SerializedCells = @($Cells | ForEach-Object { $_ -replace '(?<!\\)\|', '\|' })
+	'| ' + ($SerializedCells -join ' | ') + ' |'
 }
 
 function Copy-MarkdownTableCells {
@@ -53,11 +86,7 @@ function Copy-MarkdownTableCells {
 		[Parameter(Mandatory)][int] $Count
 	)
 
-	$SourceTrimmed = $SourceRow.Trim()
-	if (-not $SourceTrimmed.StartsWith('|') -or -not $SourceTrimmed.EndsWith('|')) {
-		throw "Malformed Markdown table fixture source row: $SourceRow"
-	}
-	$SourceCells = @($SourceTrimmed.Substring(1, $SourceTrimmed.Length - 2) -split '\|' | ForEach-Object { $_.Trim() })
+	$SourceCells = @(Split-GfmFixtureRow -Row $SourceRow)
 	$Result = $TargetRow
 	for ($Offset = 0; $Offset -lt $Count; $Offset++) {
 		$Result = Set-MarkdownTableCell -Row $Result -Index ($TargetStartIndex + $Offset) -Value $SourceCells[$SourceStartIndex + $Offset]
@@ -75,6 +104,61 @@ function Get-ProvenanceRow {
 	$Match = [regex]::Match($Content, $Pattern)
 	if (-not $Match.Success) { throw "Provenance fixture row is missing for $Path." }
 	$Match.Value
+}
+
+function Set-GfmTableRowEdges {
+	param(
+		[Parameter(Mandatory)][string] $Row,
+		[Parameter(Mandatory)][bool] $LeadingPipe,
+		[Parameter(Mandatory)][bool] $TrailingPipe,
+		[ValidateRange(0, 3)][int] $Indent = 0
+	)
+
+	$Content = $Row.Trim()
+	if ($Content.StartsWith('|')) { $Content = $Content.Substring(1) }
+	if ($Content.EndsWith('|')) { $Content = $Content.Substring(0, $Content.Length - 1) }
+	$Content = $Content.Trim()
+	(' ' * $Indent) + $(if ($LeadingPipe) { '| ' } else { '' }) + $Content + $(if ($TrailingPipe) { ' |' } else { '' })
+}
+
+function Convert-GfmTableBlock {
+	param(
+		[Parameter(Mandatory)][string] $Content,
+		[Parameter(Mandatory)][string] $Header,
+		[Parameter(Mandatory)][string] $NewLine,
+		[Parameter(Mandatory)][hashtable[]] $Styles,
+		[Parameter(Mandatory)][string] $AlignedSeparator
+	)
+
+	$Start = $Content.IndexOf($Header, [System.StringComparison]::Ordinal)
+	if ($Start -lt 0) { throw "GFM fixture header not found: $Header" }
+	$End = $Content.IndexOf("$NewLine$NewLine", $Start, [System.StringComparison]::Ordinal)
+	if ($End -lt 0) { $End = $Content.Length }
+	$Block = $Content.Substring($Start, $End - $Start)
+	$Rows = @($Block -split [regex]::Escape($NewLine))
+	$Rows[1] = $AlignedSeparator
+	for ($Index = 0; $Index -lt $Rows.Count; $Index++) {
+		$Style = $Styles[$Index % $Styles.Count]
+		$Rows[$Index] = Set-GfmTableRowEdges -Row $Rows[$Index] -LeadingPipe $Style.Leading -TrailingPipe $Style.Trailing -Indent $Style.Indent
+	}
+	$Content.Substring(0, $Start) + ($Rows -join $NewLine) + $Content.Substring($End)
+}
+
+function Add-GfmTableCodeIndent {
+	param(
+		[Parameter(Mandatory)][string] $Content,
+		[Parameter(Mandatory)][string] $Header,
+		[Parameter(Mandatory)][string] $NewLine,
+		[Parameter(Mandatory)][string] $Prefix
+	)
+
+	$Start = $Content.IndexOf($Header, [System.StringComparison]::Ordinal)
+	if ($Start -lt 0) { throw "GFM fixture header not found: $Header" }
+	$End = $Content.IndexOf("$NewLine$NewLine", $Start, [System.StringComparison]::Ordinal)
+	if ($End -lt 0) { $End = $Content.Length }
+	$Block = $Content.Substring($Start, $End - $Start)
+	$IndentedBlock = (@($Block -split [regex]::Escape($NewLine)) | ForEach-Object { $Prefix + $_ }) -join $NewLine
+	$Content.Substring(0, $Start) + $IndentedBlock + $Content.Substring($End)
 }
 
 if (-not (Test-Path -LiteralPath $Validator -PathType Leaf)) {
@@ -156,6 +240,17 @@ try {
 	$GovernanceTablePrefix = "$GovernanceHeader$ProvenanceNewLine$GovernanceSeparator"
 	$BacktickFence = '```'
 	$Issue94GuidanceRow = Get-ProvenanceRow -Content $SourceProvenance -Path 'FUTURE-VISUALS-PLAN.md'
+	$PromptGovernanceRow = Get-ProvenanceRow -Content $PristineProvenance -Path ([string]$PromptAsset.path)
+	$GfmStyles = @(
+		@{ Leading = $false; Trailing = $false; Indent = 0 },
+		@{ Leading = $true; Trailing = $false; Indent = 1 },
+		@{ Leading = $false; Trailing = $true; Indent = 2 },
+		@{ Leading = $true; Trailing = $true; Indent = 3 }
+	)
+	$GfmRegister = Convert-GfmTableBlock -Content $PristineProvenance -Header $GovernanceHeader -NewLine $ProvenanceNewLine -Styles $GfmStyles -AlignedSeparator '| :--- | ---: | :---: | --- | :--- | ---: |'
+	Set-Content -LiteralPath $FixtureProvenance -Value $GfmRegister -NoNewline -Encoding utf8
+	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
+
 	$CrossAssignedLegacyRow = Copy-MarkdownTableCells -TargetRow $FirstGovernanceRow -TargetStartIndex 1 -SourceRow $Issue94GuidanceRow -SourceStartIndex 1 -Count 5
 	$CrossAssignedLegacyProvenance = $PristineProvenance.Replace($FirstGovernanceRow, $CrossAssignedLegacyRow)
 	Set-Content -LiteralPath $FixtureProvenance -Value $CrossAssignedLegacyProvenance -NoNewline -Encoding utf8
@@ -181,8 +276,17 @@ try {
 		Set-Content -LiteralPath $FixtureProvenance -Value $CodeBlockRegister -NoNewline -Encoding utf8
 		& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
 	}
+	foreach ($SpaceCount in 1..3) {
+		$CodeIndent = (' ' * $SpaceCount) + "`t"
+		$RegisterCodeExample = "$PristineProvenance$ProvenanceNewLine$ProvenanceNewLine## Indented code example$ProvenanceNewLine$ProvenanceNewLine$CodeIndent$GovernanceHeader$ProvenanceNewLine$CodeIndent$GovernanceSeparator$ProvenanceNewLine$CodeIndent$ConflictingRegisterRow$ProvenanceNewLine"
+		Set-Content -LiteralPath $FixtureProvenance -Value $RegisterCodeExample -NoNewline -Encoding utf8
+		& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
 
-	$PromptGovernanceRow = Get-ProvenanceRow -Content $PristineProvenance -Path ([string]$PromptAsset.path)
+		$CodeOnlyRegister = Add-GfmTableCodeIndent -Content $PristineProvenance -Header $GovernanceHeader -NewLine $ProvenanceNewLine -Prefix $CodeIndent
+		Set-Content -LiteralPath $FixtureProvenance -Value $CodeOnlyRegister -NoNewline -Encoding utf8
+		Assert-Throws -Pattern 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 0' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
+	}
+
 	$FencedOnlyRegister = $PristineProvenance.Replace($GovernanceHeader, "${BacktickFence}markdown$ProvenanceNewLine$GovernanceHeader").Replace($PromptGovernanceRow, "$PromptGovernanceRow$ProvenanceNewLine$BacktickFence")
 	Set-Content -LiteralPath $FixtureProvenance -Value $FencedOnlyRegister -NoNewline -Encoding utf8
 	Assert-Throws -Pattern 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 0' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
@@ -410,6 +514,13 @@ try {
 	Set-FixtureReport -Content $PristineReport
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
 
+	$EscapedPipeReportRow = Set-MarkdownTableCell -Row $MainReportRow -Index 1 -Value 'Suitable visual reference with a literal A \| B label.'
+	$GfmReportSource = $PristineReport.Replace($MainReportRow, $EscapedPipeReportRow)
+	$GfmReport = Convert-GfmTableBlock -Content $GfmReportSource -Header $ReportHeader -NewLine $ReportNewLine -Styles $GfmStyles -AlignedSeparator ':--- | ---: | :---: | --- | :--- | ---: | :---: | ---:'
+	Set-FixtureReport -Content $GfmReport
+	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
+	Set-FixtureReport -Content $PristineReport
+
 	foreach ($ClassCase in @(
 		@{
 			TargetPath  = '01-overall-mood-key.png'
@@ -477,6 +588,16 @@ try {
 		Set-FixtureReport -Content $CodeBlockReport
 		& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
 	}
+	foreach ($SpaceCount in 1..3) {
+		$CodeIndent = (' ' * $SpaceCount) + "`t"
+		$ReportCodeExample = "$PristineReport$ReportNewLine$ReportNewLine## Indented code example$ReportNewLine$ReportNewLine$CodeIndent$ReportHeader$ReportNewLine$CodeIndent$ReportSeparator$ReportNewLine$CodeIndent$AuthorshipMismatchRow$ReportNewLine"
+		Set-FixtureReport -Content $ReportCodeExample
+		& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
+
+		$CodeOnlyReport = Add-GfmTableCodeIndent -Content $PristineReport -Header $ReportHeader -NewLine $ReportNewLine -Prefix $CodeIndent
+		Set-FixtureReport -Content $CodeOnlyReport
+		Assert-Throws -Pattern 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md must declare exactly one applicable header; found 0' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+	}
 
 	$LastReportRow = [regex]::Match($PristineReport, '(?m)^\| Kell selection render \|.*$').Value
 	if ([string]::IsNullOrWhiteSpace($LastReportRow)) { throw 'Issue #95 report is missing the final reviewed-asset row.' }
@@ -512,6 +633,10 @@ try {
 		@{
 			Report  = $PristineReport.Replace($MainReportRow, $BlankPermissionRow)
 			Pattern = "Governance state 'Permission' is blank for ``01-main-menu-concept\.png``"
+		},
+		@{
+			Report  = $PristineReport.Replace($MainReportRow, ($MainReportRow.Substring(0, $MainReportRow.Length - 1) + '| unexpected |'))
+			Pattern = 'row for `01-main-menu-concept\.png` has 9 cells; expected 8'
 		},
 		@{
 			Report  = $PristineReport.Replace($MainReportRow, $CollapsedCustodyRow)
