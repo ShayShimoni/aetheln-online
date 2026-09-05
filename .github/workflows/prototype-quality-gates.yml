@@ -7,7 +7,6 @@ on:
       - develop
   schedule:
     - cron: '0 2 * * *'
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,6 +14,7 @@ permissions:
 jobs:
   quality-gates:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,9 +32,123 @@ jobs:
           name: ci-report
           path: TestResults/ci-report.json
 
+  # Issue #150 pull-request change-impact classifier. GitHub-hosted, checkout
+  # plus repository-owned PowerShell only. It compares the exact pull-request
+  # base and head SHAs (passed through env, never interpolated into the
+  # script) and skips trusted Unreal compilation only when every changed path
+  # belongs to the closed portable-only set. Every uncertainty — invalid or
+  # missing SHAs, unreachable commits, Git errors, an empty diff, a quoted or
+  # rename/copy diff entry — fails closed to engine_required=true, and the
+  # step always exits 0 so the decision is always published.
+  change-impact:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      engine_required: ${{ steps.classify.outputs.engine_required }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Classify changed paths
+        id: classify
+        shell: powershell
+        env:
+          AETHELN_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          AETHELN_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          $EngineRequired = $true
+          $Reason = 'classifier_error'
+          $Detail = ''
+
+          function Invoke-GitRaw([string[]] $Arguments) {
+            $Previous = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+              $Output = @(& git @Arguments 2>&1 | ForEach-Object { "$_" })
+              $ExitCode = $LASTEXITCODE
+            }
+            finally {
+              $ErrorActionPreference = $Previous
+            }
+            return @{ Output = $Output; ExitCode = $ExitCode }
+          }
+
+          function Test-PortablePath([string] $Path) {
+            # Closed portable-only set (case-sensitive). Anything else, including
+            # Source/**, Config/**, Content/**, Plugins/**, scripts/**,
+            # .github/workflows/**, and AethelnOnline.uproject, requires compile.
+            if ($Path -cmatch '^docs/.+') { return $true }
+            if ($Path -cmatch '^visuals/.+') { return $true }
+            if ($Path -cmatch '^output/pdf/.+') { return $true }
+            if ($Path -cmatch '^tests/.+\.(ps1|md)$') { return $true }
+            if ($Path -cmatch '^[^/]+\.md$') { return $true }
+            if ($Path -cmatch '^\.github/(ISSUE_TEMPLATE|PULL_REQUEST_TEMPLATE)/[^/]+\.(md|yml|yaml)$') { return $true }
+            if ($Path -cmatch '^\.github/(PULL_REQUEST_TEMPLATE|pull_request_template)\.md$') { return $true }
+            return $false
+          }
+
+          try {
+            $BaseSha = [string] $env:AETHELN_PR_BASE_SHA
+            $HeadSha = [string] $env:AETHELN_PR_HEAD_SHA
+            if ($BaseSha -cnotmatch '^[0-9a-f]{40}$' -or $HeadSha -cnotmatch '^[0-9a-f]{40}$') { throw 'invalid_sha' }
+            if ($BaseSha -eq $HeadSha) { throw 'identical_shas' }
+            foreach ($Revision in @($BaseSha, $HeadSha)) {
+              if ((Invoke-GitRaw @('cat-file', '-e', "$Revision^{commit}")).ExitCode -ne 0) {
+                $null = Invoke-GitRaw @('fetch', '--no-tags', '--depth=1', 'origin', $Revision)
+                if ((Invoke-GitRaw @('cat-file', '-e', "$Revision^{commit}")).ExitCode -ne 0) { throw 'commit_unavailable' }
+              }
+            }
+            $Diff = Invoke-GitRaw @('diff', '--name-status', '--no-renames', $BaseSha, $HeadSha)
+            if ($Diff.ExitCode -ne 0) { throw 'diff_failed' }
+            $Entries = @($Diff.Output | Where-Object { $_ -ne '' })
+            if ($Entries.Count -eq 0) { throw 'empty_diff' }
+            $EnginePaths = @()
+            foreach ($Entry in $Entries) {
+              if ($Entry -cnotmatch '^[AMDT]\t([^\t"]+)$') { throw 'unexpected_diff_entry' }
+              if (-not (Test-PortablePath $Matches[1])) { $EnginePaths += $Matches[1] }
+            }
+            if ($EnginePaths.Count -gt 0) {
+              $Reason = 'engine_paths_changed'
+              $Detail = (@($EnginePaths | Select-Object -First 20) -join ', ')
+            }
+            else {
+              $EngineRequired = $false
+              $Reason = 'portable_paths_only'
+              $Detail = "$($Entries.Count) portable path(s)"
+            }
+          }
+          catch {
+            $EngineRequired = $true
+            $Message = [string] $_.Exception.Message
+            $Known = @('invalid_sha', 'identical_shas', 'commit_unavailable', 'diff_failed', 'empty_diff', 'unexpected_diff_entry')
+            if ($Known -contains $Message) { $Reason = $Message } else { $Reason = 'classifier_error' }
+          }
+
+          $Flag = if ($EngineRequired) { 'true' } else { 'false' }
+          $Utf8 = New-Object System.Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "engine_required=$Flag`nreason=$Reason`n", $Utf8)
+          $Summary = "Change impact: engine_required=$Flag (reason: $Reason)."
+          if ($Detail) { $Summary = "Change impact: engine_required=$Flag (reason: ${Reason}; $Detail)." }
+          [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$Summary`n", $Utf8)
+          Write-Output $Summary
+          exit 0
+
+  # Trusted compile starts only after the portable gates passed and the
+  # classifier demanded the engine (implicit success on both needs edges; no
+  # status-function bypass). A portable failure, a cancellation, or a skipped
+  # prerequisite keeps it off the engine runner.
   trusted-candidate-compile:
+    needs:
+      - quality-gates
+      - change-impact
     if: >-
       github.event_name == 'pull_request' &&
+      needs.change-impact.outputs.engine_required == 'true' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == github.repository_owner &&
       github.triggering_actor == github.repository_owner
@@ -69,10 +183,12 @@ jobs:
           if-no-files-found: error
 
   # Issue #150 milestone phases. The packaging and smoke milestone is split
-  # into four bounded jobs (daily schedule, or owner-triggered
-  # workflow_dispatch; no single-job package/smoke entry point exists) that
-  # reacquire the shared aetheln-engine-runner concurrency group at every
-  # phase boundary. queue: max
+  # into four bounded, schedule-only jobs (no manual trigger exists on this
+  # workflow identity, so an older branch carrying the retired 1,440-minute
+  # PackagedSmoke job can never be selected; no single-job package/smoke entry
+  # point exists) that reacquire the shared aetheln-engine-runner concurrency
+  # group at every phase boundary. Phase 1 needs quality-gates, so a portable
+  # failure, cancellation, or skip keeps every phase off the runner. queue: max
   # keeps waiting jobs FIFO by wait-start time, so a queued
   # trusted-candidate-compile job can enter at the next phase boundary; this is
   # not an absolute priority and older queued jobs stay ahead of it. Job
@@ -98,10 +214,8 @@ jobs:
   # AETHELN_HANDOFF_ROOT store with fail-closed integrity manifests; nothing
   # under it is deleted by CI.
   scheduled-client-package:
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' &&
-      github.triggering_actor == github.repository_owner)
+    if: github.event_name == 'schedule'
+    needs: quality-gates
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     timeout-minutes: 480
     concurrency:
@@ -138,10 +252,7 @@ jobs:
           if-no-files-found: error
 
   scheduled-server-package:
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' &&
-      github.triggering_actor == github.repository_owner)
+    if: github.event_name == 'schedule'
     needs: scheduled-client-package
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     timeout-minutes: 720
@@ -179,10 +290,7 @@ jobs:
           if-no-files-found: error
 
   scheduled-provenance-validation:
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' &&
-      github.triggering_actor == github.repository_owner)
+    if: github.event_name == 'schedule'
     needs: scheduled-server-package
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     timeout-minutes: 60
@@ -217,10 +325,7 @@ jobs:
           if-no-files-found: error
 
   scheduled-packaged-smoke:
-    if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' &&
-      github.triggering_actor == github.repository_owner)
+    if: github.event_name == 'schedule'
     needs: scheduled-provenance-validation
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
     timeout-minutes: 120

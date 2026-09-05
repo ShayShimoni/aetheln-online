@@ -96,15 +96,76 @@ The suite deliberately excludes two existing test groups:
 
 ## Workflow Execution
 
-`.github/workflows/prototype-quality-gates.yml` runs the portable suite on every
-pull request and on pushes to `develop`, on a GitHub-hosted `windows-latest`
-runner. That job checks out without LFS smudge, fetches only the
+`.github/workflows/prototype-quality-gates.yml` accepts exactly three events:
+`pull_request`, `push` to `develop`, and the daily `schedule`. It declares no
+manual trigger: a manual trigger on this workflow identity would let an
+operator select an older branch that still carries the retired 1,440-minute
+`PackagedSmoke` job, so none exists and no replacement manual workflow is
+provided. The `quality-gates` job runs the portable suite on every event, on a
+GitHub-hosted `windows-latest` runner bounded at 60 minutes (the suite takes
+about 13 minutes). That job checks out without LFS smudge, fetches only the
 `Content/Maps/StarterMap.umap` LFS object required by the source-control policy
 check, runs the local invocation above, and always uploads
 `TestResults/ci-report.json` as the `ci-report` artifact.
 The required `unreal-automation-tests` check exercises portable fixtures and
 does not launch Unreal Engine. The GitHub-hosted portable job does not run the
 real engine automation tests.
+
+Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
+milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
+with the implicit success condition and no status-function bypass, so a
+portable failure, cancellation, or skip keeps every engine job off the
+self-hosted runner. Phases 2 to 4 chain through phase 1.
+
+### Pull-request change-impact classifier
+
+The `change-impact` job (GitHub-hosted `windows-latest`, `pull_request` only,
+bounded at 10 minutes) decides whether a pull request needs trusted Unreal
+compilation. It uses `actions/checkout@v4` and repository-owned PowerShell
+only; no third-party action. The exact pull-request base SHA and head SHA
+enter the script through `env` (never interpolated into the script body), the
+script verifies both commits are present (fetching each by SHA from `origin`
+only when missing), and diffs the two trees with
+`git diff --name-status --no-renames <base> <head>` so every entry is an
+add, modify, delete, or type change. It publishes the job output
+`engine_required` (`true` or `false`) plus a stable `reason` code and one
+concise `GITHUB_STEP_SUMMARY` line.
+
+`engine_required=false` is emitted only when every changed path belongs to
+this closed, case-sensitive portable-only set:
+
+- `docs/**`
+- `visuals/**`
+- `output/pdf/**`
+- `tests/**` when every changed file there is `.ps1` or `.md`
+- top-level `.md` files
+- GitHub issue or pull-request template Markdown or YAML files under
+  `.github/ISSUE_TEMPLATE/` or `.github/PULL_REQUEST_TEMPLATE/`, or the
+  top-level `.github/PULL_REQUEST_TEMPLATE.md`; never `.github/workflows/**`
+
+Everything else requires compile, including `Source/**`, `Config/**`,
+`Content/**`, `Plugins/**`, `scripts/**`, every workflow file, and
+`AethelnOnline.uproject`. Mixed changes require compile. The step always exits
+0 so the decision is always published, and every uncertainty fails closed to
+`engine_required=true`:
+
+| `reason` | `engine_required` | Meaning |
+| --- | --- | --- |
+| `portable_paths_only` | `false` | Every changed path is in the portable-only set. |
+| `engine_paths_changed` | `true` | At least one changed path is outside the set (the summary lists up to 20). |
+| `invalid_sha` | `true` | A SHA is missing or is not exactly 40 lowercase hex characters. |
+| `identical_shas` | `true` | Base and head SHAs are equal. |
+| `commit_unavailable` | `true` | A commit is absent locally and could not be fetched from `origin`. |
+| `diff_failed` | `true` | Git returned a nonzero exit code for the diff. |
+| `empty_diff` | `true` | The diff produced no entries. |
+| `unexpected_diff_entry` | `true` | An entry was not `A`/`M`/`D`/`T` with a plain path (quoted, rename, or copy entries). |
+| `classifier_error` | `true` | Any other exception inside the classifier. |
+
+If the classifier job itself fails before the script publishes an output (a
+lost runner or a checkout error), `trusted-candidate-compile` is skipped, not
+run; the failed `change-impact` check is visible on the pull request and a
+rerun restores the decision. This is the one path where uncertainty does not
+produce a compile, and it never bypasses the portable gates.
 
 Engine-dependent jobs use a repository-scoped Windows self-hosted runner with
 labels `[self-hosted, Windows, X64, aetheln-engine]` and serialize through the
@@ -113,22 +174,31 @@ labels `[self-hosted, Windows, X64, aetheln-engine]` and serialize through the
 wait-start time (GitHub documents this ordering without guaranteeing it
 absolutely) and never cancel a pending or in-progress engine job. Before compiling, packaging, or cooking, each engine job that
 builds fetches all Unreal Content LFS objects with
-`git lfs pull --include "Content/**"`. Their event and trust contract is:
+`git lfs pull --include "Content/**"`. Their event, dependency, and trust
+contract is:
 
-| Job | Event | Trust predicate | Gate |
-| --- | --- | --- | --- |
-| `trusted-candidate-compile` | `pull_request` | The head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
-| `scheduled-client-package` | `schedule` at `02:00 UTC` daily, or `workflow_dispatch` | The schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow; a `workflow_dispatch` run requires `github.triggering_actor` to be the repository owner. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
-| `scheduled-server-package` | `schedule` or owner `workflow_dispatch`, after `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
-| `scheduled-provenance-validation` | `schedule` or owner `workflow_dispatch`, after `scheduled-server-package` | Same as phase 1. | Milestone phase 3: verify both handoff payloads, validate server cook references, and write bound provenance. |
-| `scheduled-packaged-smoke` | `schedule` or owner `workflow_dispatch`, after `scheduled-provenance-validation` | Same as phase 1. | Milestone phase 4: verify every handoff payload and smoke the packaged client/server pair. |
+| Job | Event | `needs` | Trust predicate | Gate |
+| --- | --- | --- | --- | --- |
+| `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
+| `scheduled-client-package` | `schedule` at `02:00 UTC` daily | `quality-gates` | Schedule-only; the schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
+| `scheduled-server-package` | `schedule` | `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
+| `scheduled-provenance-validation` | `schedule` | `scheduled-server-package` | Same as phase 1. | Milestone phase 3: verify both handoff payloads, validate server cook references, and write bound provenance. |
+| `scheduled-packaged-smoke` | `schedule` | `scheduled-provenance-validation` | Same as phase 1. | Milestone phase 4: verify every handoff payload and smoke the packaged client/server pair. |
 
-An owner-triggered `workflow_dispatch` runs the same four bounded phases as
-the schedule, with the same `needs` chain, job bounds, concurrency block,
-handoff contract, and per-phase artifacts. There is no single-job package and
-smoke entry point: no workflow job selects the gate's `PackagedSmoke` mode or
-holds the engine runner for a 24-hour bound. Pull requests, pushes, and
-non-owner dispatches cannot start any of the four phases.
+The four phases are schedule-only and keep the same `needs` chain, job
+bounds, concurrency block, handoff contract, and per-phase artifacts. There is
+no single-job package and smoke entry point: no workflow job selects the
+gate's `PackagedSmoke` mode or holds the engine runner for a 24-hour bound.
+Pull requests and pushes cannot start any of the four phases, and no manual
+trigger exists.
+
+Per event, the jobs that can run are:
+
+| Event | `quality-gates` | `change-impact` | `trusted-candidate-compile` | Phases 1 to 4 |
+| --- | --- | --- | --- | --- |
+| `pull_request` | Runs | Runs | Only after both prerequisites succeed, `engine_required == 'true'`, and the trust predicate holds | Skipped |
+| `push` to `develop` | Runs | Skipped | Skipped | Skipped |
+| `schedule` | Runs | Skipped | Skipped | Phase 1 only after `quality-gates` succeeds; each later phase only after its predecessor succeeds |
 
 `develop` remains the integration branch. Merely adding the schedule on a
 feature or `develop` branch does not activate it; GitHub schedules run from the
@@ -141,7 +211,7 @@ access requires a separate security and topology review.
 Recorded priority: `trusted-candidate-compile` outranks *starting* the next
 dependent scheduled milestone phase; it never cancels an in-progress phase
 merely because a pull request queued, and it does not jump ahead of an older
-queued manual or pull-request job. This topology has **no absolute priority
+queued pull-request job. This topology has **no absolute priority
 guarantee**: GitHub Actions has no job priority, `queue: max` orders waiting
 jobs FIFO by wait-start time while GitHub does not guarantee overall ordering,
 and runner assignment adds platform latency.
@@ -150,9 +220,9 @@ The recorded **12-hour** value is therefore precise: it is the maximum
 trusted-compile queue delay **attributable to one currently running scheduled
 phase** (the longest total phase bound, the 720-minute server package),
 subject to platform assignment latency. Total queue time can be longer when
-older jobs are already ahead in the queue (for example an owner-dispatched
-phased milestone whose next phase queued earlier, or earlier pull-request
-compiles). These bounds are
+older jobs are already ahead in the queue (for example earlier pull-request
+compiles, or a scheduled milestone whose next phase queued earlier). These
+bounds are
 revisited only from retained phase evidence and are never silently raised.
 
 The mechanism: each scheduled phase job reacquires the `aetheln-engine-runner`
@@ -291,9 +361,10 @@ nonzero when a required check fails.
 
 ## Runner Constraints
 
-- Portable checks use GitHub-hosted `windows-latest`; engine jobs require the
-  repository-scoped self-hosted runner on the current Windows development PC,
-  running under the current owner account.
+- Portable checks and the pull-request change-impact classifier use
+  GitHub-hosted `windows-latest` with explicit job bounds (60 and 10 minutes);
+  engine jobs require the repository-scoped self-hosted runner on the current
+  Windows development PC, running under the current owner account.
 - All CI scripts target Windows PowerShell 5.1 as the compatibility floor.
   `pwsh` (PowerShell 7) is not assumed on hosted runners or contributor
   machines.
@@ -488,8 +559,8 @@ The repository-scoped self-hosted topology and `02:00 UTC` cadence are accepted
 in [Architecture Decisions](architecture-decisions.md). A compile-capable
 runner is registered, and commit-specific live compile evidence exists for
 GitHub Actions run `33161041115`. Ongoing runner maintenance, packaging-only
-prerequisites, and scheduled or owner-dispatched phased packaged-smoke evidence
-remain outstanding operational responsibilities, not architecture decisions.
+prerequisites, and scheduled phased packaged-smoke evidence remain outstanding
+operational responsibilities, not architecture decisions.
 
 ## Relationship to Visual Package Validation
 

@@ -2,10 +2,11 @@
 param()
 
 # Sole purpose: validate the Issue #150 engine-runner scheduling contract —
-# bounded milestone phases (schedule or owner workflow_dispatch), FIFO queueing
-# that cannot cancel pending or in-progress work, recorded trusted-compile
-# queue-delay policy, evidence separation per phase, and the absence of any
-# monolithic single-job package/smoke entry point.
+# bounded schedule-only milestone phases that start only after the portable
+# gates pass, FIFO queueing that cannot cancel pending or in-progress work,
+# recorded trusted-compile queue-delay policy, trusted compile gated behind both
+# the portable gates and the change-impact classifier, evidence separation per
+# phase, and the absence of any manual or monolithic package/smoke entry point.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -23,7 +24,7 @@ function Assert-MatchCount([string] $Text, [string] $Pattern, [int] $Expected, [
 	Assert-True ($Actual -eq $Expected) "$Message Expected $Expected match(es), found $Actual."
 }
 
-$JobOrder = @('quality-gates', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke')
+$JobOrder = @('quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke')
 $JobBodies = @{}
 for ($Index = 1; $Index -lt $JobOrder.Count; $Index++) {
 	$Start = $Workflow.IndexOf("  $($JobOrder[$Index - 1]):", [StringComparison]::Ordinal)
@@ -33,13 +34,18 @@ for ($Index = 1; $Index -lt $JobOrder.Count; $Index++) {
 }
 $JobBodies['scheduled-packaged-smoke'] = $Workflow.Substring($Workflow.IndexOf('  scheduled-packaged-smoke:', [StringComparison]::Ordinal))
 
-# The monolithic owner-dispatched milestone is retired. No job may select the
-# single-job PackagedSmoke gate or hold the runner for a 24-hour bound.
+# No manual entry point exists on this workflow identity. Keeping a
+# workflow_dispatch trigger would let an operator select an older branch that
+# still carries the retired 1,440-minute PackagedSmoke job; the four phases are
+# therefore schedule-only, and the monolithic gate is unreachable.
+Assert-True ($Workflow -notmatch 'workflow_dispatch') 'Workflow must not declare or reference workflow_dispatch anywhere.'
+Assert-True ($Workflow -match "(?m)^on:\r?\n  pull_request:\r?\n  push:\r?\n    branches:\r?\n      - develop\r?\n  schedule:\r?\n    - cron: '0 2 \* \* \*'\r?\n\r?\n") 'Workflow events must be exactly pull_request, push to develop, and the daily schedule.'
 Assert-True ($Workflow -notmatch 'manual-packaged-smoke') 'Workflow must not define the retired manual-packaged-smoke job.'
 Assert-True ($Workflow -notmatch 'engine-runner-manual-smoke-report') 'Workflow must not publish the retired manual smoke artifact.'
 Assert-True ($Workflow -notmatch '-Mode PackagedSmoke') 'Workflow must not select the monolithic PackagedSmoke gate anywhere.'
 Assert-MatchCount $Workflow 'timeout-minutes:\s*1440' 0 'No job may hold the engine runner for a 24-hour bound.'
 Assert-MatchCount $Workflow '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$' 5 'Exactly five jobs (trusted compile plus four phases) may target the engine runner.'
+Assert-MatchCount $Workflow '(?m)^\s+runs-on: windows-latest\r?$' 2 'Exactly two jobs (portable gates and the classifier) run on the GitHub-hosted runner.'
 
 # Every engine-runner concurrency block queues FIFO without cancelling pending
 # or in-progress work. queue: single would silently cancel a pending trusted
@@ -49,33 +55,42 @@ Assert-MatchCount $Workflow '(?m)^\s+queue: max\r?$' 5 'Every engine-runner conc
 Assert-MatchCount $Workflow '(?m)^\s+cancel-in-progress: false\r?$' 5 'Every engine-runner concurrency block must keep cancel-in-progress: false.'
 Assert-True ($Workflow -notmatch '(?m)^\s+cancel-in-progress: true\r?$') 'No engine job may cancel in-progress work.'
 
-# The milestone is split into four bounded phases that run on the daily
-# schedule or on an owner-triggered workflow_dispatch; pull requests, pushes,
-# and non-owner dispatches cannot enter them. Job timeout-minutes is the total
-# concurrency-holding bound for the phase (480/720/60/120), and every phase runs
-# its work under a cooperative script deadline (450/690/45/105) plus the gate's
-# supervisor hard bound (deadline plus a finalization grace capped at 600
-# seconds) that together expire early enough inside the job bound to record and
-# upload phase_timeout evidence before platform cancellation.
-$PhaseTrigger = "if: >-\r?\n\s+github\.event_name == 'schedule' \|\|\r?\n\s+\(github\.event_name == 'workflow_dispatch' &&\r?\n\s+github\.triggering_actor == github\.repository_owner\)\r?\n"
+# No job-level predicate may bypass a failed, cancelled, or skipped
+# prerequisite: needs edges use the implicit success() only. always() is
+# permitted solely as the bare step-level predicate on report uploads.
+Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)' -and $Workflow -notmatch 'success\(\)') 'Workflow must not use explicit status functions in job predicates.'
+Assert-MatchCount $Workflow 'always\(\)' ([regex]::Matches($Workflow, '(?m)^\s+if: always\(\)\r?$').Count) 'always() may appear only as the bare step-level upload predicate.'
+Assert-True ($Workflow -notmatch 'needs\.[a-z-]+\.result') 'Workflow must not inspect needs results to run after a failed or skipped prerequisite.'
+
+# GitHub-hosted jobs carry explicit conservative bounds.
+Assert-True (([string] $JobBodies['quality-gates']) -match '(?m)^\s+timeout-minutes: 60\r?$') 'quality-gates must declare an explicit 60-minute bound.'
+Assert-True (([string] $JobBodies['change-impact']) -match '(?m)^\s+timeout-minutes: 10\r?$') 'change-impact must declare an explicit 10-minute bound.'
+Assert-True (([string] $JobBodies['change-impact']) -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$") 'change-impact must run only for pull requests.'
+Assert-True (([string] $JobBodies['change-impact']) -notmatch 'aetheln-engine-runner') 'change-impact must never hold the engine-runner concurrency group.'
+
+# The milestone is split into four bounded phases that run only on the daily
+# schedule and only after the portable gates pass; pull requests and pushes
+# cannot enter them and no manual trigger exists. Job timeout-minutes is the
+# total concurrency-holding bound for the phase (480/720/60/120), and every
+# phase runs its work under a cooperative script deadline (450/690/45/105) plus
+# the gate's supervisor hard bound (deadline plus a finalization grace capped at
+# 600 seconds) that together expire early enough inside the job bound to record
+# and upload phase_timeout evidence before platform cancellation.
+$PhaseTrigger = "(?m)^\s+if: github\.event_name == 'schedule'\r?$"
 $PhaseContract = @(
-	@{ Job = 'scheduled-client-package'; Needs = $null; JobTimeout = 480; Mode = 'PackageClient'; PhaseTimeout = '450'; Artifact = 'engine-runner-client-package-report' },
+	@{ Job = 'scheduled-client-package'; Needs = 'quality-gates'; JobTimeout = 480; Mode = 'PackageClient'; PhaseTimeout = '450'; Artifact = 'engine-runner-client-package-report' },
 	@{ Job = 'scheduled-server-package'; Needs = 'scheduled-client-package'; JobTimeout = 720; Mode = 'PackageServer'; PhaseTimeout = '690'; Artifact = 'engine-runner-server-package-report' },
 	@{ Job = 'scheduled-provenance-validation'; Needs = 'scheduled-server-package'; JobTimeout = 60; Mode = 'ValidateProvenance'; PhaseTimeout = '45'; Artifact = 'engine-runner-provenance-validation-report' },
 	@{ Job = 'scheduled-packaged-smoke'; Needs = 'scheduled-provenance-validation'; JobTimeout = 120; Mode = 'SmokePhase'; PhaseTimeout = '105'; Artifact = 'engine-runner-scheduled-smoke-report' }
 )
 foreach ($Phase in $PhaseContract) {
 	$Body = [string] $JobBodies[$Phase.Job]
-	Assert-MatchCount $Body '(?m)^\s+if: >-\r?$' 1 "$($Phase.Job) must declare exactly one job-level trigger predicate."
-	Assert-True ($Body -match $PhaseTrigger) "$($Phase.Job) must run only on the schedule event or an owner-triggered workflow dispatch."
-	Assert-MatchCount $Body 'workflow_dispatch' 1 "$($Phase.Job) must reference workflow_dispatch only inside the owner-guarded predicate."
-	Assert-True ($Body -notmatch 'pull_request' -and $Body -notmatch "'push'") "$($Phase.Job) must not be selectable by pull requests or pushes."
-	Assert-True ($Body -notmatch 'always\(\)\s*&&' -and $Body -notmatch '(?m)^\s+if:\s*always\(\)\s*\|\|') "$($Phase.Job) must not bypass a skipped or failed predecessor."
-	if ($Phase.Needs) {
-		Assert-True ($Body -match ('(?m)^\s+needs: ' + [regex]::Escape($Phase.Needs) + '\r?$')) "$($Phase.Job) must run strictly after $($Phase.Needs) and release the runner between phases."
-	} else {
-		Assert-True ($Body -notmatch '(?m)^\s+needs:') "$($Phase.Job) must be the first milestone phase."
-	}
+	Assert-MatchCount $Body '(?m)^\s+if: ' 2 "$($Phase.Job) must declare exactly one job-level trigger predicate plus the report-upload predicate."
+	Assert-True ($Body -match $PhaseTrigger) "$($Phase.Job) must run only on the schedule event."
+	Assert-True ($Body -notmatch 'workflow_dispatch' -and $Body -notmatch 'pull_request' -and $Body -notmatch "'push'") "$($Phase.Job) must not be selectable by dispatch, pull requests, or pushes."
+	Assert-True ($Body -notmatch 'always\(\)\s*&&' -and $Body -notmatch '(?m)^\s+if:\s*always\(\)\s*\|\|' -and $Body -notmatch 'cancelled\(\)' -and $Body -notmatch 'failure\(\)') "$($Phase.Job) must not bypass a skipped, cancelled, or failed predecessor."
+	Assert-True ($Body -match ('(?m)^\s+needs: ' + [regex]::Escape($Phase.Needs) + '\r?$')) "$($Phase.Job) must run strictly after $($Phase.Needs) and release the runner between phases."
+	Assert-MatchCount $Body '(?m)^\s+needs:' 1 "$($Phase.Job) must declare exactly one predecessor."
 	Assert-True ($Body -match ('(?m)^\s+timeout-minutes: ' + $Phase.JobTimeout + '\r?$')) "$($Phase.Job) must be bounded by timeout-minutes $($Phase.JobTimeout)."
 	Assert-MatchCount $Body '(?m)^\s+timeout-minutes: ' 1 "$($Phase.Job) must declare exactly one job bound."
 	Assert-MatchCount $Body ('(?m)^\s+-Mode ' + [regex]::Escape($Phase.Mode) + ' `\r?$') 1 "$($Phase.Job) must select mode $($Phase.Mode) exactly once."
@@ -93,18 +108,31 @@ foreach ($Phase in $PhaseContract) {
 	}
 }
 
+# Phase 1 is the only phase that depends on the portable job; the portable job
+# itself runs on every event and depends on nothing, so a portable failure,
+# cancellation, or skip stops the whole engine chain before it touches the
+# runner.
+Assert-True (([string] $JobBodies['quality-gates']) -notmatch '(?m)^\s+needs:') 'quality-gates must depend on nothing.'
+Assert-MatchCount ([string] $JobBodies['quality-gates']) '(?m)^\s+if: ' 1 'quality-gates must run unconditionally on every event; its only predicate is the report-upload always().'
+
 # Package phases need full Content LFS; the later phases consume only verified
 # handoff payloads and must not depend on residual workspace or LFS state.
 foreach ($Job in @('scheduled-client-package', 'scheduled-server-package')) {
 	Assert-True (([string] $JobBodies[$Job]) -match 'git lfs pull --include "Content/\*\*"') "$Job must materialize every Unreal Content LFS object before packaging."
 }
 
-# The trusted compile lane keeps its own contract: pull requests only, no
-# 24-hour bound, no handoff coupling, so an unset AETHELN_HANDOFF_ROOT can never
-# affect it.
+# The trusted compile lane keeps its own contract: pull requests only, owner and
+# same-repository trust, gated behind both the portable gates and the classifier
+# (implicit success() on both), no 24-hour bound, no handoff coupling, so an
+# unset AETHELN_HANDOFF_ROOT can never affect it.
 $TrustedCompile = [string] $JobBodies['trusted-candidate-compile']
+Assert-True ($TrustedCompile -match '(?m)^\s+needs:\r?\n\s+- quality-gates\r?\n\s+- change-impact\r?$') 'Trusted compile must depend on exactly the portable gates and the change-impact classifier.'
+Assert-True ($TrustedCompile -match "needs\.change-impact\.outputs\.engine_required == 'true'") 'Trusted compile must require the classifier to demand the engine.'
 Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Trusted compile must remain a pull-request lane.'
-Assert-True ($TrustedCompile -notmatch "github\.event_name == 'workflow_dispatch'" -and $TrustedCompile -notmatch "github\.event_name == 'schedule'") 'Trusted compile must not be selectable by dispatch or schedule.'
+Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $TrustedCompile -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $TrustedCompile -match 'github\.triggering_actor == github\.repository_owner') 'Trusted compile must keep the owner and same-repository trust checks.'
+Assert-True ($TrustedCompile -notmatch "github\.event_name == 'schedule'") 'Trusted compile must not be selectable by schedule.'
+Assert-MatchCount $TrustedCompile 'always\(\)' 1 'Trusted compile may use always() only on its report upload, never to bypass a failed, cancelled, or skipped prerequisite.'
+Assert-True ($TrustedCompile -match '(?m)^\s+if: always\(\)\r?$') 'Trusted compile must retain its report evidence on failure.'
 Assert-True ($TrustedCompile -notmatch 'timeout-minutes:\s*1440') 'Trusted compile must not be a 24-hour job.'
 Assert-True ($TrustedCompile -notmatch '-PhaseTimeoutMinutes' -and $TrustedCompile -notmatch '-RunId') 'Trusted compile must not depend on the scheduled handoff contract.'
 
@@ -135,14 +163,22 @@ Assert-True ($CiDocumentation -match 'phase_timeout') 'CI documentation must rec
 Assert-True ($CiDocumentation -match 'phase_cleanup_failed') 'CI documentation must record the fail-closed process-tree cleanup semantics.'
 Assert-True ($CiDocumentation -match '(?i)cleanup-request') 'CI documentation must record the no-deletion cleanup-request model.'
 
-# Documentation must not advertise the retired monolithic entry point, and must
-# record that owner dispatch runs the same four bounded phases.
+# Documentation must not advertise any manual or monolithic entry point, and
+# must record the portable-first dependency chain and the classifier contract.
 Assert-True ($CiDocumentation -notmatch 'manual-packaged-smoke') 'CI documentation must not advertise the retired manual-packaged-smoke job.'
 Assert-True ($CiDocumentation -notmatch '(?i)24-hour\s+manual|manual\s+24-hour|owner-dispatched\s+24-hour') 'CI documentation must not advertise a 24-hour manual milestone.'
 Assert-True ($CiDocumentation -notmatch 'engine-runner-manual-smoke-report') 'CI documentation must not advertise the retired manual smoke artifact.'
-Assert-True ($CiDocumentation -match '(?i)workflow_dispatch') 'CI documentation must record the owner workflow_dispatch trigger.'
-Assert-True ($CiDocumentation -match '(?i)same\s+four\s+(bounded\s+)?phases') 'CI documentation must state that owner dispatch runs the same four bounded phases.'
+Assert-True ($CiDocumentation -notmatch 'workflow_dispatch' -and $CiDocumentation -notmatch '(?i)owner-dispatched|owner\s+dispatch') 'CI documentation must not advertise a manual dispatch entry point.'
+Assert-True ($CiDocumentation -match '(?i)schedule-only') 'CI documentation must record that the four phases are schedule-only.'
+Assert-True ($CiDocumentation -match '(?i)needs:?\s*`?quality-gates`?') 'CI documentation must record that phase 1 depends on the portable gates.'
+Assert-True ($CiDocumentation -match 'change-impact' -and $CiDocumentation -match 'engine_required') 'CI documentation must record the change-impact classifier and its engine_required output.'
+foreach ($Reason in @('portable_paths_only', 'engine_paths_changed', 'invalid_sha', 'identical_shas', 'commit_unavailable', 'diff_failed', 'empty_diff', 'unexpected_diff_entry', 'classifier_error')) {
+	Assert-True ($CiDocumentation -match [regex]::Escape($Reason)) "CI documentation must record the classifier reason code $Reason."
+}
+foreach ($Path in @('docs/\*\*', 'visuals/\*\*', 'output/pdf/\*\*', 'tests/\*\*', '\.github/workflows/\*\*', 'AethelnOnline\.uproject')) {
+	Assert-True ($CiDocumentation -match $Path) "CI documentation must record the classifier path rule for $Path."
+}
 
-Write-Output 'PASS: milestone phases are bounded, FIFO-queued, evidence-separated, owner-or-schedule gated, and cannot starve trusted compile for 24 hours'
-Write-Output 'PASS: no monolithic package/smoke entry point remains; queue-delay policy, handoff provisioning, and cleanup-request model are documented'
+Write-Output 'PASS: milestone phases are bounded, FIFO-queued, evidence-separated, schedule-only, gated behind portable success, and cannot starve trusted compile for 24 hours'
+Write-Output 'PASS: trusted compile requires portable success and an engine-impacting change; no manual or monolithic package/smoke entry point remains'
 exit 0
