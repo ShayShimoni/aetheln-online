@@ -24,6 +24,7 @@ $GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License
 $GovernanceKeywords = @('provenance', 'authorship', 'permission', 'license', 'approval')
 $GovernanceKeywordPatterns = @('\b(?:provenance|custod(?:y|ies))\b', '\b(?:author|authors|authorship)\b', '\bpermissions?\b', '\blicen[cs](?:e|es|ed|ing)\b', '\bapprov(?:e|es|ed|ing|als?)\b')
 $AllowedCustodyPhrasePattern = '(?i)\bowner-approved concept direction\b'
+$MojibakeEmDash = ([string][char]0x00E2) + [char]0x20AC + [char]0x201D
 $EscapedBackslash = [regex]::Escape([string][char]92)
 $MachinePathPattern = '(?i)(?:[A-' + 'Z]:' + $EscapedBackslash + '|/Use' + 'rs/|' + $EscapedBackslash + 'Use' + 'rs' + $EscapedBackslash + ')'
 
@@ -86,6 +87,29 @@ function Assert-GovernanceStates {
 		)
 		Assert-Condition ($Foreign.Count -eq 0) "Governance state '$Field' for $Label in $Table aggregates other states ($($Foreign -join ', ')); record $($GovernanceFields -join ', ') independently, each in its own column."
 	}
+}
+
+function ConvertTo-NormalizedGovernanceValue {
+	param(
+		[Parameter(Mandatory)][string] $Field,
+		[Parameter(Mandatory)][string] $Value
+	)
+
+	$Normalized = $Value.ToLowerInvariant()
+	$Normalized = $Normalized.Replace($MojibakeEmDash, ' ')
+	$Normalized = $Normalized -replace '\*', ''
+	$Normalized = $Normalized -replace '[\p{Pd}:;.]', ' '
+	if ($Field -eq 'Authorship') {
+		$Normalized = $Normalized -replace '\bfor the legacy package\b', ''
+	}
+	elseif ($Field -eq 'Permission' -or $Field -eq 'License') {
+		$Normalized = $Normalized -replace '\bin this repository\b', ''
+	}
+	elseif ($Field -eq 'Product approval') {
+		$Normalized = $Normalized -replace '\bapproval is recorded\b', 'approval recorded'
+		$Normalized = $Normalized -replace '\bnon canonical reference/source asset\b', ''
+	}
+	($Normalized -replace '\s+', ' ').Trim()
 }
 
 function Get-JsonDepth {
@@ -333,7 +357,32 @@ if ($HasIssue95Report) {
 	$ReportHeader = @('Reviewed asset', 'Visual suitability') + $GovernanceFields + @('Allowed current use')
 	Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ReportLines[$ReportHeaderIndex]) -ExpectedHeader $ReportHeader -Table $ReportTable
 
-	$ReviewedAssets = @()
+	$RequiredReviewedAssetRecords = [ordered]@{
+		'`01-main-menu-concept.png`' = @('01-main-menu-concept.png')
+		'`02-playable-peoples-lineup.png`' = @('02-playable-peoples-lineup.png')
+		'`03-aurin-bulwark-equipment.png`' = @('03-aurin-bulwark-equipment.png')
+		'`04-branmark-settlement.png`' = @('04-branmark-settlement.png')
+		'`05-glasswake-reach.png`' = @('05-glasswake-reach.png')
+		'`06-character-selection-concept.png`' = @('06-character-selection-concept.png')
+		'`07-ui-style-system.png`' = @('07-ui-style-system.png')
+		'`ui-production/screens/main-menu.svg`' = @('ui-production/screens/main-menu.svg')
+		'`ui-production/screens/character-selection.svg`' = @('ui-production/screens/character-selection.svg')
+		'`ui-production/screens/accessibility.svg`' = @('ui-production/screens/accessibility.svg')
+		'`ui-production/screens/settings.svg`' = @('ui-production/screens/settings.svg')
+		'`main-menu-v2-preview.png`' = @('ui-production-v2/previews/main-menu-v2-preview.png')
+		'`character-selection-v2-preview.png`' = @('ui-production-v2/previews/character-selection-v2-preview.png')
+		'`accessibility-v2-preview.png`' = @('ui-production-v2/previews/accessibility-v2-preview.png')
+		'`settings-v2-preview.png`' = @('ui-production-v2/previews/settings-v2-preview.png')
+		'Dialog/tooltip V2 preview' = @('ui-production-v2/previews/dialog-tooltip-v2-preview.png')
+		'`loading-v2-preview.png`' = @('ui-production-v2/previews/loading-v2-preview.png')
+		'Menu/selection backgrounds' = @('ui-production-v2/assets/main-menu-background.png', 'ui-production-v2/assets/character-selection-stage.png')
+		'Logo/wordmark' = @('ui-production-v2/assets/logo.png')
+		'Normal, hover, focused, pressed, and disabled buttons' = @('ui-production-v2/assets/button-normal.png', 'ui-production-v2/assets/button-hover.png', 'ui-production-v2/assets/button-focused.png', 'ui-production-v2/assets/button-disabled.png')
+		'Panel and selection-card frame' = @('ui-production-v2/assets/panel-large.png', 'ui-production-v2/assets/selection-card-frame.png')
+		'Loading indicator, slider, and toggles' = @('ui-production-v2/assets/loading-indicator.png', 'ui-production-v2/assets/slider-cyan-65.png', 'ui-production-v2/assets/toggle-off.png', 'ui-production-v2/assets/toggle-on.png')
+		'Kell selection render' = @('ui-production-v2/assets/kell-female-selection.png')
+	}
+	$ReviewedAssetRows = @{}
 	foreach ($Line in $ReportLines[($ReportHeaderIndex + 1)..($ReportLines.Count - 1)]) {
 		$Trimmed = $Line.Trim()
 		if (-not $Trimmed.StartsWith('|')) { break }
@@ -341,14 +390,28 @@ if ($HasIssue95Report) {
 		$Cells = Split-MarkdownTableRow -Row $Trimmed
 		$Label = $Cells[0]
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Label)) "$ReportTable contains a row with no reviewed-asset name: $Trimmed"
+		Assert-Condition ($RequiredReviewedAssetRecords.Contains($Label)) "Unexpected reviewed-asset record in ${ReportTable}: $Label"
+		Assert-Condition (-not $ReviewedAssetRows.ContainsKey($Label)) "Duplicate reviewed-asset record in ${ReportTable}: $Label"
 		Assert-Condition ($Cells.Count -eq $ReportHeader.Count) "$ReportTable row for $Label has $($Cells.Count) cells; expected $($ReportHeader.Count) ($($ReportHeader -join ', ')). Governance states must not be collapsed or omitted."
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[1])) "Visual suitability is blank for $Label in $ReportTable."
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[$ReportHeader.Count - 1])) "Allowed current use is blank for $Label in $ReportTable."
 		Assert-GovernanceStates -Label $Label -Values $Cells[2..($Cells.Count - 2)] -Table $ReportTable
-		$ReviewedAssets += $Label
+		$ReviewedAssetRows[$Label] = $Cells
 	}
-	Assert-Condition ($ReviewedAssets.Count -gt 0) "$ReportTable records no reviewed assets."
-	Assert-Condition ($ReviewedAssets -contains '`01-main-menu-concept.png`') "$ReportTable is missing the reviewed-asset row for 01-main-menu-concept.png."
+	foreach ($Label in $RequiredReviewedAssetRecords.Keys) {
+		Assert-Condition ($ReviewedAssetRows.ContainsKey($Label)) "Required reviewed-asset record missing from ${ReportTable}: $Label"
+		$ReportGovernanceValues = $ReviewedAssetRows[$Label][2..($ReportHeader.Count - 2)]
+		foreach ($RegisterPath in @($RequiredReviewedAssetRecords[$Label])) {
+			Assert-Condition ($GovernanceRows.ContainsKey($RegisterPath)) "Provenance register row missing for reviewed asset ${Label}: $RegisterPath"
+			$RegisterGovernanceValues = $GovernanceRows[$RegisterPath][1..($RegisterHeader.Count - 1)]
+			for ($Index = 0; $Index -lt $GovernanceFields.Count; $Index++) {
+				$Field = $GovernanceFields[$Index]
+				$ReportValue = ConvertTo-NormalizedGovernanceValue -Field $Field -Value $ReportGovernanceValues[$Index]
+				$RegisterValue = ConvertTo-NormalizedGovernanceValue -Field $Field -Value $RegisterGovernanceValues[$Index]
+				Assert-Condition ($ReportValue -eq $RegisterValue) "Governance state '$Field' mismatch for reviewed asset $Label against register path ${RegisterPath}: report '$($ReportGovernanceValues[$Index])'; register '$($RegisterGovernanceValues[$Index])'."
+			}
+		}
+	}
 }
 
 $Prompts = Get-Content -Raw -LiteralPath $PromptPath

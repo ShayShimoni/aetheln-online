@@ -164,11 +164,24 @@ try {
 
 	$ReportHeader = '| Reviewed asset | Visual suitability | Provenance/custody | Authorship | Permission | License | Product approval | Allowed current use |'
 	$ReportRowPattern = '(?m)^\| `01-main-menu-concept\.png` \|.*$'
+	$SecondReportRowPattern = '(?m)^\| `02-playable-peoples-lineup\.png` \|.*(?:\r?\n)?'
 	if (-not $PristineReport.Contains($ReportHeader)) {
 		throw "Issue #95 report is missing the eight-column classification header: $ReportHeader"
 	}
 	if ($PristineReport -notmatch $ReportRowPattern) {
 		throw 'Issue #95 report is missing the reviewed-asset row for 01-main-menu-concept.png.'
+	}
+	if ($PristineReport -notmatch $SecondReportRowPattern) {
+		throw 'Issue #95 report is missing the reviewed-asset row for 02-playable-peoples-lineup.png.'
+	}
+
+	$MainReportRow = [regex]::Match($PristineReport, $ReportRowPattern).Value
+	$ReportNewLine = if ($PristineReport.Contains("`r`n")) { "`r`n" } else { "`n" }
+	$DuplicateMainReport = $PristineReport.Replace($MainReportRow, "$MainReportRow$ReportNewLine$MainReportRow")
+	$AuthorshipMismatchRow = $MainReportRow.Replace('**Pending/TBD** — no author identification is retained.', 'Named author recorded.')
+	$PermissionMismatchRow = $MainReportRow.Replace('**Pending/TBD** — no permission grant is retained.', 'Authorized for runtime use.')
+	if ($AuthorshipMismatchRow -eq $MainReportRow -or $PermissionMismatchRow -eq $MainReportRow) {
+		throw 'Issue #95 report governance fixtures could not replace the expected main-menu values.'
 	}
 
 	Set-FixtureReport -Content $PristineReport
@@ -186,11 +199,30 @@ try {
 		@{
 			Report  = [regex]::Replace($PristineReport, $ReportRowPattern, '| `01-main-menu-concept.png` | Suitable reference. | Pending/TBD: authorship, permission, and license evidence unresolved. | Author recorded. | Permission recorded. | License recorded. | Not approved. | Reference-only. |')
 			Pattern = "Governance state 'Provenance/custody' for ``01-main-menu-concept\.png`` .* aggregates other states"
+		},
+		@{
+			Report  = $DuplicateMainReport
+			Pattern = 'Duplicate reviewed-asset record.*01-main-menu-concept\.png'
+		},
+		@{
+			Report  = [regex]::Replace($PristineReport, $SecondReportRowPattern, '')
+			Pattern = 'Required reviewed-asset record missing.*02-playable-peoples-lineup\.png'
+		},
+		@{
+			Report  = $PristineReport.Replace($MainReportRow, $AuthorshipMismatchRow)
+			Pattern = "Governance state 'Authorship' mismatch for reviewed asset ``01-main-menu-concept\.png``.*register path 01-main-menu-concept\.png"
+		},
+		@{
+			Report  = $PristineReport.Replace($MainReportRow, $PermissionMismatchRow)
+			Pattern = "Governance state 'Permission' mismatch for reviewed asset ``01-main-menu-concept\.png``.*register path 01-main-menu-concept\.png"
 		}
 	)) {
 		Set-FixtureReport -Content $Case.Report
 		Assert-Throws -Pattern $Case.Pattern -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 3 -RequiredTotalFileCount 7 }
 	}
+
+	Set-FixtureReport -Content $PristineReport
+	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 3 -RequiredTotalFileCount 7
 }
 finally {
 	if (Test-Path -LiteralPath $FixtureRoot) {
