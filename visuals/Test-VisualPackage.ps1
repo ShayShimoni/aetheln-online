@@ -20,6 +20,8 @@ $GovernancePaths = @(
 	'Test-VisualPackage.ps1',
 	'tests/Test-VisualPackageValidation.ps1'
 )
+$GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
+$GovernanceKeywords = @('provenance', 'authorship', 'permission', 'license', 'approv')
 $EscapedBackslash = [regex]::Escape([string][char]92)
 $MachinePathPattern = '(?i)(?:[A-' + 'Z]:' + $EscapedBackslash + '|/Use' + 'rs/|' + $EscapedBackslash + 'Use' + 'rs' + $EscapedBackslash + ')'
 
@@ -35,11 +37,46 @@ function Assert-Condition {
 	if (-not $Condition) { throw $Message }
 }
 
-function Split-ProvenanceRow {
+function Split-MarkdownTableRow {
 	param([Parameter(Mandatory)][string] $Row)
 	$Trimmed = $Row.Trim()
-	Assert-Condition ($Trimmed.StartsWith('|') -and $Trimmed.EndsWith('|') -and $Trimmed.Length -ge 2) "Malformed provenance table row: $Row"
+	Assert-Condition ($Trimmed.StartsWith('|') -and $Trimmed.EndsWith('|') -and $Trimmed.Length -ge 2) "Malformed Markdown table row: $Row"
 	@($Trimmed.Substring(1, $Trimmed.Length - 2) -split '\|' | ForEach-Object { $_.Trim() })
+}
+
+function Find-TableHeaderIndex {
+	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $Lines, [Parameter(Mandatory)][string] $FirstColumn)
+	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
+		if ($Lines[$Index].TrimEnd() -match ('^\|\s*' + [regex]::Escape($FirstColumn) + '\s*\|')) { return $Index }
+	}
+	-1
+}
+
+function Assert-GovernanceHeader {
+	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $HeaderCells, [Parameter(Mandatory)][AllowEmptyString()][string[]] $ExpectedHeader, [Parameter(Mandatory)][string] $Table)
+	Assert-Condition ($HeaderCells.Count -eq $ExpectedHeader.Count) "$Table must declare $($ExpectedHeader.Count) columns ('$($ExpectedHeader -join "', '")'); found $($HeaderCells.Count) ('$($HeaderCells -join "', '")'). The five governance states must each keep their own column."
+	for ($Index = 0; $Index -lt $ExpectedHeader.Count; $Index++) {
+		Assert-Condition ($HeaderCells[$Index] -eq $ExpectedHeader[$Index]) "$Table column $($Index + 1) must be '$($ExpectedHeader[$Index])'; found '$($HeaderCells[$Index])'. The five governance states must each keep their own column."
+	}
+}
+
+# Provenance/custody, authorship, permission, license, and product approval are
+# five independent states. A cell may be a known value or an explicit
+# '**Pending/TBD**', but never blank and never a summary of its neighbours.
+function Assert-GovernanceStates {
+	param(
+		[Parameter(Mandatory)][string] $Label,
+		[Parameter(Mandatory)][AllowEmptyString()][string[]] $Values,
+		[Parameter(Mandatory)][string] $Table
+	)
+	Assert-Condition ($Values.Count -eq $GovernanceFields.Count) "$Table row for $Label exposes $($Values.Count) governance states; expected $($GovernanceFields.Count) ($($GovernanceFields -join ', ')). Governance states must not be collapsed or omitted."
+	for ($Index = 0; $Index -lt $GovernanceFields.Count; $Index++) {
+		$Field = $GovernanceFields[$Index]
+		$Value = $Values[$Index]
+		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Value)) "Governance state '$Field' is blank for $Label in $Table; record the known value, or record '**Pending/TBD**' when it is unknown."
+		$Foreign = @($GovernanceKeywords | Where-Object { $_ -ne $GovernanceKeywords[$Index] -and $Value -match "(?i)$_" })
+		Assert-Condition ($Foreign.Count -lt 2) "Governance state '$Field' for $Label in $Table aggregates other states ($($Foreign -join ', ')); record $($GovernanceFields -join ', ') independently, each in its own column."
+	}
 }
 
 function Get-JsonDepth {
@@ -188,45 +225,30 @@ foreach ($Required in @(
 	Assert-Condition ($Provenance.Contains($Required)) "Provenance permission coverage missing: $Required"
 }
 
-# Provenance/custody, authorship, permission, license, and product approval are
-# five independent states. Every manifested asset must record all five in its
-# own column so no state is inferred from, collapsed into, or omitted alongside
+# Every manifested asset must record all five governance states in its own
+# column so no state is inferred from, collapsed into, or omitted alongside
 # another.
-$GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
-$GovernanceKeywords = @('provenance', 'authorship', 'permission', 'license', 'approv')
 $ProvenanceLines = @($Provenance -split "`r?`n")
-$GovernanceHeaderIndex = -1
-for ($Index = 0; $Index -lt $ProvenanceLines.Count; $Index++) {
-	if ($ProvenanceLines[$Index].TrimEnd() -match '^\|\s*Path\s*\|') { $GovernanceHeaderIndex = $Index; break }
-}
-Assert-Condition ($GovernanceHeaderIndex -ge 0) 'Provenance is missing the per-asset governance table; expected a header row starting with "| Path |".'
+$RegisterTable = 'Per-asset governance table in asset-provenance.md'
+$RegisterHeaderIndex = Find-TableHeaderIndex -Lines $ProvenanceLines -FirstColumn 'Path'
+Assert-Condition ($RegisterHeaderIndex -ge 0) "$RegisterTable is missing; expected a header row starting with '| Path |'."
 
-$HeaderCells = Split-ProvenanceRow -Row $ProvenanceLines[$GovernanceHeaderIndex]
-$ExpectedHeader = @('Path') + $GovernanceFields
-Assert-Condition ($HeaderCells.Count -eq $ExpectedHeader.Count) "Per-asset governance table must declare $($ExpectedHeader.Count) columns ('$($ExpectedHeader -join "', '")'); found $($HeaderCells.Count) ('$($HeaderCells -join "', '")'). The five governance states must each keep their own column."
-for ($Index = 0; $Index -lt $ExpectedHeader.Count; $Index++) {
-	Assert-Condition ($HeaderCells[$Index] -eq $ExpectedHeader[$Index]) "Per-asset governance column $($Index + 1) must be '$($ExpectedHeader[$Index])'; found '$($HeaderCells[$Index])'. The five governance states must each keep their own column."
-}
+$RegisterHeader = @('Path') + $GovernanceFields
+Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ProvenanceLines[$RegisterHeaderIndex]) -ExpectedHeader $RegisterHeader -Table $RegisterTable
 
 $GovernanceRows = @{}
-foreach ($Line in $ProvenanceLines[($GovernanceHeaderIndex + 1)..($ProvenanceLines.Count - 1)]) {
+foreach ($Line in $ProvenanceLines[($RegisterHeaderIndex + 1)..($ProvenanceLines.Count - 1)]) {
 	if ($Line.Trim() -notmatch '^\|\s*`([^`]+)`\s*\|') { continue }
 	$RowPath = $Matches[1]
 	Assert-Condition (-not $GovernanceRows.ContainsKey($RowPath)) "Duplicate per-asset governance row: $RowPath"
-	$GovernanceRows[$RowPath] = Split-ProvenanceRow -Row $Line
+	$GovernanceRows[$RowPath] = Split-MarkdownTableRow -Row $Line
 }
 
 foreach ($RelativePath in $ManifestPaths) {
 	Assert-Condition ($GovernanceRows.ContainsKey($RelativePath)) "Per-asset governance row missing for ${RelativePath}: every manifested asset must record $($GovernanceFields -join ', ') independently."
 	$Cells = $GovernanceRows[$RelativePath]
-	Assert-Condition ($Cells.Count -eq $ExpectedHeader.Count) "Per-asset governance row for $RelativePath has $($Cells.Count) cells; expected $($ExpectedHeader.Count) (Path plus $($GovernanceFields -join ', ')). Governance states must not be collapsed or omitted."
-	for ($Index = 0; $Index -lt $GovernanceFields.Count; $Index++) {
-		$Field = $GovernanceFields[$Index]
-		$Value = $Cells[$Index + 1]
-		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Value)) "Governance state '$Field' is blank for ${RelativePath}: record the known value, or record '**Pending/TBD**' when it is unknown."
-		$Foreign = @($GovernanceKeywords | Where-Object { $_ -ne $GovernanceKeywords[$Index] -and $Value -match "(?i)$_" })
-		Assert-Condition ($Foreign.Count -lt 2) "Governance state '$Field' for $RelativePath aggregates other states ($($Foreign -join ', ')): record $($GovernanceFields -join ', ') independently, each in its own column."
-	}
+	Assert-Condition ($Cells.Count -eq $RegisterHeader.Count) "$RegisterTable row for $RelativePath has $($Cells.Count) cells; expected $($RegisterHeader.Count) (Path plus $($GovernanceFields -join ', ')). Governance states must not be collapsed or omitted."
+	Assert-GovernanceStates -Label $RelativePath -Values $Cells[1..($Cells.Count - 1)] -Table $RegisterTable
 }
 
 if ($HasIssue95Report) {
@@ -240,12 +262,15 @@ if ($HasIssue95Report) {
 	'Ultrawide and scalable layout',
 	'## Per-asset classification',
 	'Visual suitability',
-	'Rights/provenance state',
 	'Allowed current use',
 	'Reference-only',
 	'Potential internal prototype',
 	'Replacement/clearance required',
-	'Pending/TBD provenance prohibits production',
+	'Provenance/custody, authorship, permission, license, and product approval are',
+	'five independent states',
+	'Provenance/custody is **known**',
+	'Product approval is a recorded negative',
+	'each independently prohibit production',
 	'packageStatus: non-canonical',
 	'## Issue #3 minimal entry contract',
 	'## Issue #53 later editor contract',
@@ -287,6 +312,34 @@ if ($HasIssue95Report) {
 	)) {
 		Assert-Condition ($Issue95Report.Contains("| $Screen |")) "Issue #95 screen assessment missing: $Screen"
 	}
+
+	# The per-asset classification table must keep visual suitability and allowed
+	# current use separate from the five governance states, and must record each
+	# governance state independently for every reviewed asset.
+	$ReportLines = @($Issue95Report -split "`r?`n")
+	$ReportTable = 'Per-asset classification table in issue-95-opening-screen-commonui-validation.md'
+	$ReportHeaderIndex = Find-TableHeaderIndex -Lines $ReportLines -FirstColumn 'Reviewed asset'
+	Assert-Condition ($ReportHeaderIndex -ge 0) "$ReportTable is missing; expected a header row starting with '| Reviewed asset |'."
+
+	$ReportHeader = @('Reviewed asset', 'Visual suitability') + $GovernanceFields + @('Allowed current use')
+	Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ReportLines[$ReportHeaderIndex]) -ExpectedHeader $ReportHeader -Table $ReportTable
+
+	$ReviewedAssets = @()
+	foreach ($Line in $ReportLines[($ReportHeaderIndex + 1)..($ReportLines.Count - 1)]) {
+		$Trimmed = $Line.Trim()
+		if (-not $Trimmed.StartsWith('|')) { break }
+		if ($Trimmed -match '^\|[\s|-]*$') { continue }
+		$Cells = Split-MarkdownTableRow -Row $Trimmed
+		$Label = $Cells[0]
+		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Label)) "$ReportTable contains a row with no reviewed-asset name: $Trimmed"
+		Assert-Condition ($Cells.Count -eq $ReportHeader.Count) "$ReportTable row for $Label has $($Cells.Count) cells; expected $($ReportHeader.Count) ($($ReportHeader -join ', ')). Governance states must not be collapsed or omitted."
+		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[1])) "Visual suitability is blank for $Label in $ReportTable."
+		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[$ReportHeader.Count - 1])) "Allowed current use is blank for $Label in $ReportTable."
+		Assert-GovernanceStates -Label $Label -Values $Cells[2..($Cells.Count - 2)] -Table $ReportTable
+		$ReviewedAssets += $Label
+	}
+	Assert-Condition ($ReviewedAssets.Count -gt 0) "$ReportTable records no reviewed assets."
+	Assert-Condition ($ReviewedAssets -contains '`01-main-menu-concept.png`') "$ReportTable is missing the reviewed-asset row for 01-main-menu-concept.png."
 }
 
 $Prompts = Get-Content -Raw -LiteralPath $PromptPath

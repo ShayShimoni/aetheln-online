@@ -4,7 +4,7 @@ This register covers every frozen package asset. Importing an item records custo
 
 Provenance/custody, authorship, permission, license, and product approval are
 five independent states. A recorded value for one state never establishes,
-imply, or substitute for any other. Each state is recorded separately for every
+implies, or substitutes for any other. Each state is recorded separately for every
 asset in the per-asset register below; a state with no retained evidence is
 recorded as **Pending/TBD** on its own and is never inferred from a neighbouring
 state that happens to be known.
