@@ -225,13 +225,13 @@ status where Unreal support permits.
 
 | Visual source | Proposed widget/style mapping | Import risk and gate |
 | --- | --- | --- |
-| Menu and selection backgrounds | Non-interactive background brush/material behind scrim | Baked 16:9 crop, contrast, resolution, rights, and memory require validation; no import while Pending/TBD. |
+| Menu and selection backgrounds | Non-interactive background brush/material behind scrim | Baked 16:9 crop, contrast, resolution, and memory require validation; no import while authorship, permission, or license is Pending/TBD or product approval remains Not approved. |
 | Logo | Main-menu image slot with replaceable brush | Final wordmark and font/license are TBD; never bake layout around it. |
-| Button states | `CommonButtonBase` style and semantic state cues | Validate focus versus hover, disabled reason, nine-slice margins, contrast, and rights. |
-| Panel and selection-card frame | Nine-slice/material panel and roster-card style | Uniform raster scaling will distort ornament; margins, DPI behavior, and rights require validation. |
+| Button states | `CommonButtonBase` style and semantic state cues | Validate focus versus hover, disabled reason, nine-slice margins, and contrast; authorship, permission, and license are Pending/TBD and product approval remains Not approved. |
+| Panel and selection-card frame | Nine-slice/material panel and roster-card style | Uniform raster scaling will distort ornament; margins and DPI behavior require validation; authorship, permission, and license are Pending/TBD and product approval remains Not approved. |
 | Slider and toggles | CommonUI settings controls | Rebuild semantics, input increments, hit targets, labels, and disabled state; artwork is not behavior. |
-| Loading indicator | Loading-status presentation | Provide reduced-motion and determinate/indeterminate alternatives; motion and rights remain TBD. |
-| Kell render | Replaceable preview presentation | Cannot establish supported options or combat geometry; rights and final character asset remain TBD. |
+| Loading indicator | Loading-status presentation | Provide reduced-motion and determinate/indeterminate alternatives; motion remains TBD; authorship, permission, and license are Pending/TBD and product approval remains Not approved. |
+| Kell render | Replaceable preview presentation | Cannot establish supported options or combat geometry; final character asset remains TBD; authorship, permission, and license are Pending/TBD and product approval remains Not approved. |
 
 No mapping grants import or runtime approval.
 
@@ -259,8 +259,10 @@ No mapping grants import or runtime approval.
       flow; faction remains Unassigned before 2.0.
 - [ ] Race, sex, and appearance remain combat-neutral and separate from class,
       progression, equipment, cosmetics, and session state.
-- [ ] No reviewed asset enters `Content/` or runtime while provenance is
-      Pending/TBD.
+- [ ] No reviewed asset enters `Content/` or runtime while authorship is
+      Pending/TBD, permission is Pending/TBD, license is Pending/TBD, or
+      product approval remains Not approved. Provenance/custody is known and
+      does not lift any of these blocks.
 - [ ] Visual package, regression, formatting, Markdown-link, full CI, and
       `git diff --check` checks pass after all sequential packages are applied.
 - [ ] Final scope contains only the five Issue #95 governance/report paths, and
