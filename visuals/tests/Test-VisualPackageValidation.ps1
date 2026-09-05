@@ -63,17 +63,17 @@ try {
 	$Manifest = Get-Content -Raw -LiteralPath (Join-Path $FixtureRoot 'package-manifest.json') | ConvertFrom-Json
 	$FirstAsset = $Manifest.assets[0]
 	$FirstAssetPath = [string]$FirstAsset.path
-	$PromptAsset = @($Manifest.assets | Where-Object path -eq 'generation-prompts.md')[0]
+	$PromptAsset = @($Manifest.assets | Where-Object { [string]$_.path -ceq 'generation-prompts.md' })[0]
 	$ReportRelativePath = 'issue-95-opening-screen-commonui-validation.md'
-	$ReportAsset = @($Manifest.assets | Where-Object path -eq $ReportRelativePath)[0]
+	$ReportAsset = @($Manifest.assets | Where-Object { [string]$_.path -ceq $ReportRelativePath })[0]
 	$AssetPath = Join-Path $VisualRoot ($FirstAsset.path -replace '/', [System.IO.Path]::DirectorySeparatorChar)
 	$FixtureAssetPath = Join-Path $FixtureRoot ($FirstAsset.path -replace '/', [System.IO.Path]::DirectorySeparatorChar)
 	$FixtureProvenance = Join-Path $FixtureRoot 'asset-provenance.md'
 	$SourceProvenance = Get-Content -Raw -LiteralPath (Join-Path $VisualRoot 'asset-provenance.md')
 	$FixtureRegisterPaths = @($FirstAssetPath, [string]$PromptAsset.path)
 	$PristineProvenance = $SourceProvenance
-	foreach ($RegisterMatch in [regex]::Matches($SourceProvenance, '(?m)^\| `([^`]+)` \|.*$')) {
-		if ($FixtureRegisterPaths -notcontains $RegisterMatch.Groups[1].Value) {
+	foreach ($RegisterMatch in [regex]::Matches($SourceProvenance, '(?m)^\| `([^`]+)` \|[^\r\n]*(?:\r?\n)?')) {
+		if ($FixtureRegisterPaths -cnotcontains $RegisterMatch.Groups[1].Value) {
 			$PristineProvenance = $PristineProvenance.Replace($RegisterMatch.Value, '')
 		}
 	}
@@ -216,8 +216,18 @@ try {
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
 
 	$UnexpectedRegisterRow = Set-MarkdownTableCell -Row $FirstGovernanceRow -Index 0 -Value '`unexpected-governance-record.png`'
-	Set-Content -LiteralPath $FixtureProvenance -Value "$PristineProvenance$ProvenanceNewLine$UnexpectedRegisterRow$ProvenanceNewLine" -NoNewline -Encoding utf8
+	$UnexpectedRegisterProvenance = $PristineProvenance.Replace($FirstGovernanceRow, "$FirstGovernanceRow$ProvenanceNewLine$UnexpectedRegisterRow")
+	Set-Content -LiteralPath $FixtureProvenance -Value $UnexpectedRegisterProvenance -NoNewline -Encoding utf8
 	Assert-Throws -Pattern 'Unexpected per-asset governance row: unexpected-governance-record\.png is not listed in package-manifest\.json' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
+
+	$UnquotedRegisterRow = Set-MarkdownTableCell -Row $FirstGovernanceRow -Index 0 -Value 'unexpected-governance-record.png'
+	$UnquotedRegisterRow = Set-MarkdownTableCell -Row $UnquotedRegisterRow -Index 2 -Value 'Named creator.'
+	$UnquotedRegisterRow = Set-MarkdownTableCell -Row $UnquotedRegisterRow -Index 3 -Value 'Authorized for runtime use.'
+	$UnquotedRegisterRow = Set-MarkdownTableCell -Row $UnquotedRegisterRow -Index 4 -Value 'Production license.'
+	$UnquotedRegisterRow = Set-MarkdownTableCell -Row $UnquotedRegisterRow -Index 5 -Value 'Approved for production.'
+	$UnquotedRegisterProvenance = $PristineProvenance.Replace($FirstGovernanceRow, "$FirstGovernanceRow$ProvenanceNewLine$UnquotedRegisterRow")
+	Set-Content -LiteralPath $FixtureProvenance -Value $UnquotedRegisterProvenance -NoNewline -Encoding utf8
+	Assert-Throws -Pattern "Malformed per-asset governance path cell in asset-provenance\.md: expected a single backtick-wrapped path; found 'unexpected-governance-record\.png'\." -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
 
 	Set-Content -LiteralPath $FixtureProvenance -Value $PristineProvenance -NoNewline -Encoding utf8
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
@@ -229,7 +239,7 @@ try {
 	$FixtureReport = Join-Path $FixtureRoot $ReportRelativePath
 	$PristineReport = Get-Content -Raw -LiteralPath (Join-Path $VisualRoot $ReportRelativePath)
 	$Manifest = Get-Content -Raw -LiteralPath (Join-Path $VisualRoot 'package-manifest.json') | ConvertFrom-Json
-	$ReportAsset = @($Manifest.assets | Where-Object path -eq $ReportRelativePath)[0]
+	$ReportAsset = @($Manifest.assets | Where-Object { [string]$_.path -ceq $ReportRelativePath })[0]
 	foreach ($Asset in $Manifest.assets) {
 		$SourceAssetPath = Join-Path $VisualRoot ($Asset.path -replace '/', [System.IO.Path]::DirectorySeparatorChar)
 		$FixtureFullAssetPath = Join-Path $FixtureRoot ($Asset.path -replace '/', [System.IO.Path]::DirectorySeparatorChar)
@@ -267,6 +277,7 @@ try {
 	$CollapsedCustodyRow = Set-MarkdownTableCell -Row $MainReportRow -Index 2 -Value 'Pending/TBD: authorship, permission, and license evidence unresolved.'
 	$AuthorshipMismatchRow = Set-MarkdownTableCell -Row $MainReportRow -Index 3 -Value 'Repository-authored under issue #95 and recorded in git history.'
 	$PermissionUnrecognizedRow = Set-MarkdownTableCell -Row $MainReportRow -Index 4 -Value 'Authorized for runtime use.'
+	$CaseVariantReportRow = Set-MarkdownTableCell -Row $MainReportRow -Index 0 -Value '`01-Main-menu-concept.png`'
 
 	Set-FixtureReport -Content $PristineReport
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
@@ -287,6 +298,10 @@ try {
 		@{
 			Report  = $DuplicateMainReport
 			Pattern = 'Duplicate reviewed-asset record.*01-main-menu-concept\.png'
+		},
+		@{
+			Report  = $PristineReport.Replace($MainReportRow, $CaseVariantReportRow)
+			Pattern = 'Unexpected reviewed-asset record.*`01-Main-menu-concept\.png`'
 		},
 		@{
 			Report  = [regex]::Replace($PristineReport, $SecondReportRowPattern, '')

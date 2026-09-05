@@ -63,6 +63,17 @@ function Assert-Condition {
 	if (-not $Condition) { throw $Message }
 }
 
+function Test-OrdinalStringCollectionContains {
+	param(
+		[Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Values,
+		[Parameter(Mandatory)][AllowEmptyString()][string] $Value
+	)
+	foreach ($Candidate in $Values) {
+		if ([string]::Equals($Candidate, $Value, [System.StringComparison]::Ordinal)) { return $true }
+	}
+	$false
+}
+
 function Split-MarkdownTableRow {
 	param([Parameter(Mandatory)][string] $Row)
 	$Trimmed = $Row.Trim()
@@ -82,7 +93,7 @@ function Assert-GovernanceHeader {
 	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $HeaderCells, [Parameter(Mandatory)][AllowEmptyString()][string[]] $ExpectedHeader, [Parameter(Mandatory)][string] $Table)
 	Assert-Condition ($HeaderCells.Count -eq $ExpectedHeader.Count) "$Table must declare $($ExpectedHeader.Count) columns ('$($ExpectedHeader -join "', '")'); found $($HeaderCells.Count) ('$($HeaderCells -join "', '")'). The five governance states must each keep their own column."
 	for ($Index = 0; $Index -lt $ExpectedHeader.Count; $Index++) {
-		Assert-Condition ($HeaderCells[$Index] -eq $ExpectedHeader[$Index]) "$Table column $($Index + 1) must be '$($ExpectedHeader[$Index])'; found '$($HeaderCells[$Index])'. The five governance states must each keep their own column."
+		Assert-Condition ([string]::Equals($HeaderCells[$Index], $ExpectedHeader[$Index], [System.StringComparison]::Ordinal)) "$Table column $($Index + 1) must be '$($ExpectedHeader[$Index])'; found '$($HeaderCells[$Index])'. The five governance states must each keep their own column."
 	}
 }
 
@@ -174,15 +185,17 @@ Assert-Condition ($Manifest.expectedTotalFileCount -eq $RequiredTotalFileCount) 
 Assert-Condition (@($Manifest.assets).Count -eq $Manifest.expectedAssetCount) 'Manifest asset count does not match expectedAssetCount.'
 
 $ManifestPaths = @($Manifest.assets | ForEach-Object { [string]$_.path })
-$HasIssue95Report = $ManifestPaths -contains 'issue-95-opening-screen-commonui-validation.md'
-Assert-Condition (@($ManifestPaths | Sort-Object -Unique).Count -eq @($ManifestPaths).Count) 'Manifest contains duplicate paths.'
+$HasIssue95Report = Test-OrdinalStringCollectionContains -Values $ManifestPaths -Value 'issue-95-opening-screen-commonui-validation.md'
+$ManifestPathSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 foreach ($RelativePath in $ManifestPaths) {
+	Assert-Condition ($ManifestPathSet.Add($RelativePath)) "Manifest contains duplicate path: $RelativePath"
 	Assert-Condition ($RelativePath -notmatch '^[A-Za-z]:[/\\]' -and $RelativePath -notmatch '^[/\\]' -and $RelativePath -notmatch '(^|/)\.\.(/|$)' -and $RelativePath -notmatch '\\') "Manifest paths must be normalized relative paths: $RelativePath"
 }
 
-$ActualAssetPaths = @(Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object { Get-RelativeVisualPath $_.FullName } | Where-Object { $_ -notin $GovernancePaths } | Sort-Object)
-$ExpectedAssetPaths = @($ManifestPaths | Sort-Object)
-Assert-Condition (($ActualAssetPaths -join "`n") -eq ($ExpectedAssetPaths -join "`n")) 'Package inventory differs from the manifest inventory.'
+$ActualAssetPaths = @(Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object { Get-RelativeVisualPath $_.FullName } | Where-Object { -not (Test-OrdinalStringCollectionContains -Values $GovernancePaths -Value $_) })
+$MissingAssetPaths = @($ManifestPaths | Where-Object { -not (Test-OrdinalStringCollectionContains -Values $ActualAssetPaths -Value $_) })
+$UnexpectedAssetPaths = @($ActualAssetPaths | Where-Object { -not (Test-OrdinalStringCollectionContains -Values $ManifestPaths -Value $_) })
+Assert-Condition ($MissingAssetPaths.Count -eq 0 -and $UnexpectedAssetPaths.Count -eq 0 -and $ActualAssetPaths.Count -eq $ManifestPaths.Count) "Package inventory differs from the manifest inventory. Missing: $($MissingAssetPaths -join ', '); unexpected: $($UnexpectedAssetPaths -join ', ')."
 $ActualTotal = @(Get-ChildItem -LiteralPath $Root -Recurse -File).Count
 Assert-Condition ($ActualTotal -eq $Manifest.expectedTotalFileCount) "Package contains $ActualTotal files; expected $($Manifest.expectedTotalFileCount)."
 if ($HasIssue95Report) {
@@ -286,16 +299,21 @@ Assert-Condition ($RegisterHeaderIndex -ge 0) "$RegisterTable is missing; expect
 $RegisterHeader = @('Path') + $GovernanceFields
 Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ProvenanceLines[$RegisterHeaderIndex]) -ExpectedHeader $RegisterHeader -Table $RegisterTable
 
-$GovernanceRows = @{}
+$GovernanceRows = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
 foreach ($Line in $ProvenanceLines[($RegisterHeaderIndex + 1)..($ProvenanceLines.Count - 1)]) {
-	if ($Line.Trim() -notmatch '^\|\s*`([^`]+)`\s*\|') { continue }
+	$Trimmed = $Line.Trim()
+	if ([string]::IsNullOrWhiteSpace($Trimmed) -or -not $Trimmed.StartsWith('|')) { break }
+	if ($Trimmed -match '^\|[\s|-]*\|$') { continue }
+	$Cells = Split-MarkdownTableRow -Row $Trimmed
+	$PathCell = $Cells[0]
+	Assert-Condition ($PathCell -cmatch '^`([^`]+)`$') "Malformed per-asset governance path cell in asset-provenance.md: expected a single backtick-wrapped path; found '$PathCell'."
 	$RowPath = $Matches[1]
 	Assert-Condition (-not $GovernanceRows.ContainsKey($RowPath)) "Duplicate per-asset governance row: $RowPath"
-	$GovernanceRows[$RowPath] = Split-MarkdownTableRow -Row $Line
+	$GovernanceRows.Add($RowPath, $Cells)
 }
 
 foreach ($RowPath in $GovernanceRows.Keys) {
-	Assert-Condition ($ManifestPaths -ccontains $RowPath) "Unexpected per-asset governance row: $RowPath is not listed in package-manifest.json."
+	Assert-Condition (Test-OrdinalStringCollectionContains -Values $ManifestPaths -Value $RowPath) "Unexpected per-asset governance row: $RowPath is not listed in package-manifest.json."
 }
 
 foreach ($RelativePath in $ManifestPaths) {
@@ -335,6 +353,10 @@ if ($HasIssue95Report) {
 	'Character Level begins in 1.1/#50',
 	'Levels 1-3 are excluded from 1.0',
 	'Remove or replace that level display for 1.0',
+	'`LEAVE` the orange keyboard/controller focus treatment',
+	'`CANCEL` remains visually normal',
+	'destructive initial focus or default is unsafe',
+	'initial focus and default action must both be non-destructive',
 	'session state remain separate data concerns',
 	'Race, sex, and appearance never alter statistics',
 	'hitboxes, reach, timing, collision, traces, or loot probability',
@@ -346,6 +368,8 @@ if ($HasIssue95Report) {
 	'Modal layer',
 	'Notification layer',
 	'Loading layer',
+	'Full-viewport presentation container',
+	"scrim → ``SafeZone`` → responsive scale/container",
 	'focus',
 	'Accept',
 	'Back',
@@ -382,7 +406,7 @@ if ($HasIssue95Report) {
 	$ReportHeader = @('Reviewed asset', 'Visual suitability') + $GovernanceFields + @('Allowed current use')
 	Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ReportLines[$ReportHeaderIndex]) -ExpectedHeader $ReportHeader -Table $ReportTable
 
-	$RequiredReviewedAssetRecords = [ordered]@{
+	$RequiredReviewedAssetRecordDefinitions = [ordered]@{
 		'`01-main-menu-concept.png`' = @('01-main-menu-concept.png')
 		'`02-playable-peoples-lineup.png`' = @('02-playable-peoples-lineup.png')
 		'`03-aurin-bulwark-equipment.png`' = @('03-aurin-bulwark-equipment.png')
@@ -407,7 +431,11 @@ if ($HasIssue95Report) {
 		'Loading indicator, slider, and toggles' = @('ui-production-v2/assets/loading-indicator.png', 'ui-production-v2/assets/slider-cyan-65.png', 'ui-production-v2/assets/toggle-off.png', 'ui-production-v2/assets/toggle-on.png')
 		'Kell selection render' = @('ui-production-v2/assets/kell-female-selection.png')
 	}
-	$ReviewedAssetRows = @{}
+	$RequiredReviewedAssetRecords = [System.Collections.Specialized.OrderedDictionary]::new([System.StringComparer]::Ordinal)
+	foreach ($Definition in $RequiredReviewedAssetRecordDefinitions.GetEnumerator()) {
+		$RequiredReviewedAssetRecords.Add([string]$Definition.Key, $Definition.Value)
+	}
+	$ReviewedAssetRows = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
 	foreach ($Line in $ReportLines[($ReportHeaderIndex + 1)..($ReportLines.Count - 1)]) {
 		$Trimmed = $Line.Trim()
 		if (-not $Trimmed.StartsWith('|')) { break }
@@ -421,7 +449,7 @@ if ($HasIssue95Report) {
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[1])) "Visual suitability is blank for $Label in $ReportTable."
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[$ReportHeader.Count - 1])) "Allowed current use is blank for $Label in $ReportTable."
 		Assert-GovernanceStates -Label $Label -Values $Cells[2..($Cells.Count - 2)] -Table $ReportTable
-		$ReviewedAssetRows[$Label] = $Cells
+		$ReviewedAssetRows.Add($Label, $Cells)
 	}
 	foreach ($Label in $RequiredReviewedAssetRecords.Keys) {
 		Assert-Condition ($ReviewedAssetRows.ContainsKey($Label)) "Required reviewed-asset record missing from ${ReportTable}: $Label"
