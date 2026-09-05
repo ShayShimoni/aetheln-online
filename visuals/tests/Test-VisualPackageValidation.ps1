@@ -106,9 +106,13 @@ try {
 	$Manifest.assets[0].path = $FirstAssetPath
 	$Manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $FixtureRoot 'package-manifest.json') -Encoding utf8
 	$GovernanceHeader = '| Path | Provenance/custody | Authorship | Permission | License | Product approval |'
+	$GovernanceSeparator = '| --- | --- | --- | --- | --- | --- |'
 	$RowPattern = '(?m)^\| `' + [regex]::Escape($FirstAssetPath) + '` \|.*$'
 	if (-not $PristineProvenance.Contains($GovernanceHeader)) {
 		throw "Provenance is missing the five-state governance header: $GovernanceHeader"
+	}
+	if (-not $PristineProvenance.Contains($GovernanceSeparator)) {
+		throw "Provenance is missing the expected governance separator: $GovernanceSeparator"
 	}
 	if ($PristineProvenance -notmatch $RowPattern) {
 		throw "Provenance is missing a per-asset governance row for $($FirstAssetPath)."
@@ -116,6 +120,7 @@ try {
 
 	$FirstGovernanceRow = [regex]::Match($PristineProvenance, $RowPattern).Value
 	$ProvenanceNewLine = if ($PristineProvenance.Contains("`r`n")) { "`r`n" } else { "`n" }
+	$GovernanceTablePrefix = "$GovernanceHeader$ProvenanceNewLine$GovernanceSeparator"
 	$KnownCustodyRow = Set-MarkdownTableCell -Row $FirstGovernanceRow -Index 1 -Value 'Owner-supplied legacy visual-package guidance; repository governance and current owner-approved concept direction updated by issue #94 after attested ingest.'
 	$KnownCustodyProvenance = $PristineProvenance.Replace($FirstGovernanceRow, $KnownCustodyRow)
 	Set-Content -LiteralPath $FixtureProvenance -Value $KnownCustodyProvenance -NoNewline -Encoding utf8
@@ -123,6 +128,30 @@ try {
 
 	$UnrecognizedCustodyPattern = "Governance state 'Provenance/custody' has unrecognized value for $([regex]::Escape($FirstAssetPath))"
 	foreach ($Case in @(
+		@{
+			Provenance = $PristineProvenance.Replace($GovernanceTablePrefix, "$GovernanceHeader$ProvenanceNewLine| -- | --- | --- | --- | --- | --- |")
+			Pattern    = 'Per-asset governance table in asset-provenance\.md separator row immediately after its header has invalid cell 1'
+		},
+		@{
+			Provenance = $PristineProvenance.Replace($GovernanceTablePrefix, "$GovernanceHeader$ProvenanceNewLine| |")
+			Pattern    = 'Per-asset governance table in asset-provenance\.md separator row immediately after its header must have exactly 6 cells; found 1'
+		},
+		@{
+			Provenance = $PristineProvenance.Replace($GovernanceTablePrefix, "$GovernanceHeader$ProvenanceNewLine| --- |")
+			Pattern    = 'Per-asset governance table in asset-provenance\.md separator row immediately after its header must have exactly 6 cells; found 1'
+		},
+		@{
+			Provenance = $PristineProvenance.Replace($GovernanceTablePrefix, "$GovernanceHeader$ProvenanceNewLine||||")
+			Pattern    = 'Per-asset governance table in asset-provenance\.md separator row immediately after its header must have exactly 6 cells; found 3'
+		},
+		@{
+			Provenance = $PristineProvenance.Replace($GovernanceTablePrefix, "$GovernanceHeader$ProvenanceNewLine| --- | --- | --- | --- | --- | --- | --- |")
+			Pattern    = 'Per-asset governance table in asset-provenance\.md separator row immediately after its header must have exactly 6 cells; found 7'
+		},
+		@{
+			Provenance = $PristineProvenance.Replace("$GovernanceTablePrefix$ProvenanceNewLine", "$GovernanceHeader$ProvenanceNewLine")
+			Pattern    = 'Per-asset governance table in asset-provenance\.md separator row immediately after its header has invalid cell 1'
+		},
 		@{
 			Provenance = $PristineProvenance.Replace($GovernanceHeader, '| Path | Provenance/custody | Authorship | Permission | License |')
 			Pattern    = 'governance table in asset-provenance.md must declare 6 columns'
@@ -258,10 +287,14 @@ try {
 	}
 
 	$ReportHeader = '| Reviewed asset | Visual suitability | Provenance/custody | Authorship | Permission | License | Product approval | Allowed current use |'
+	$ReportSeparator = '| --- | --- | --- | --- | --- | --- | --- | --- |'
 	$ReportRowPattern = '(?m)^\| `01-main-menu-concept\.png` \|.*$'
 	$SecondReportRowPattern = '(?m)^\| `02-playable-peoples-lineup\.png` \|.*(?:\r?\n)?'
 	if (-not $PristineReport.Contains($ReportHeader)) {
 		throw "Issue #95 report is missing the eight-column classification header: $ReportHeader"
+	}
+	if (-not $PristineReport.Contains($ReportSeparator)) {
+		throw "Issue #95 report is missing the expected classification separator: $ReportSeparator"
 	}
 	if ($PristineReport -notmatch $ReportRowPattern) {
 		throw 'Issue #95 report is missing the reviewed-asset row for 01-main-menu-concept.png.'
@@ -272,6 +305,7 @@ try {
 
 	$MainReportRow = [regex]::Match($PristineReport, $ReportRowPattern).Value
 	$ReportNewLine = if ($PristineReport.Contains("`r`n")) { "`r`n" } else { "`n" }
+	$ReportTablePrefix = "$ReportHeader$ReportNewLine$ReportSeparator"
 	$DuplicateMainReport = $PristineReport.Replace($MainReportRow, "$MainReportRow$ReportNewLine$MainReportRow")
 	$BlankPermissionRow = Set-MarkdownTableCell -Row $MainReportRow -Index 4 -Value ''
 	$CollapsedCustodyRow = Set-MarkdownTableCell -Row $MainReportRow -Index 2 -Value 'Pending/TBD: authorship, permission, and license evidence unresolved.'
@@ -283,6 +317,26 @@ try {
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
 
 	foreach ($Case in @(
+		@{
+			Report  = $PristineReport.Replace($ReportTablePrefix, "$ReportHeader$ReportNewLine| -- | --- | --- | --- | --- | --- | --- | --- |")
+			Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md separator row immediately after its header has invalid cell 1'
+		},
+		@{
+			Report  = $PristineReport.Replace($ReportTablePrefix, "$ReportHeader$ReportNewLine| |")
+			Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md separator row immediately after its header must have exactly 8 cells; found 1'
+		},
+		@{
+			Report  = $PristineReport.Replace($ReportTablePrefix, "$ReportHeader$ReportNewLine||||")
+			Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md separator row immediately after its header must have exactly 8 cells; found 3'
+		},
+		@{
+			Report  = $PristineReport.Replace($ReportTablePrefix, "$ReportHeader$ReportNewLine| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+			Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md separator row immediately after its header must have exactly 8 cells; found 9'
+		},
+		@{
+			Report  = $PristineReport.Replace("$ReportTablePrefix$ReportNewLine", "$ReportHeader$ReportNewLine")
+			Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md separator row immediately after its header has invalid cell 1'
+		},
 		@{
 			Report  = $PristineReport.Replace($ReportHeader, '| Reviewed asset | Visual suitability | Provenance/custody | Authorship | Permission | Product approval | Allowed current use |')
 			Pattern = 'classification table in issue-95-opening-screen-commonui-validation\.md must declare 8 columns'

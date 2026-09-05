@@ -97,6 +97,22 @@ function Assert-GovernanceHeader {
 	}
 }
 
+function Assert-MarkdownTableSeparator {
+	param(
+		[Parameter(Mandatory)][AllowEmptyString()][string] $Row,
+		[Parameter(Mandatory)][int] $ExpectedCellCount,
+		[Parameter(Mandatory)][string] $Table
+	)
+
+	$Trimmed = $Row.Trim()
+	Assert-Condition ($Trimmed.StartsWith('|') -and $Trimmed.EndsWith('|') -and $Trimmed.Length -ge 2) "$Table separator row immediately after its header is missing or malformed: $Row"
+	$Cells = @(Split-MarkdownTableRow -Row $Trimmed)
+	Assert-Condition ($Cells.Count -eq $ExpectedCellCount) "$Table separator row immediately after its header must have exactly $ExpectedCellCount cells; found $($Cells.Count)."
+	for ($Index = 0; $Index -lt $Cells.Count; $Index++) {
+		Assert-Condition ($Cells[$Index] -cmatch '^:?-{3,}:?$') "$Table separator row immediately after its header has invalid cell $($Index + 1) '$($Cells[$Index])'; expected at least three hyphens with optional alignment colons."
+	}
+}
+
 # Provenance/custody, authorship, permission, license, and product approval are
 # five independent states. Each field has a closed contract derived from the
 # reviewed register values; a new value requires an explicit validator update.
@@ -298,12 +314,18 @@ Assert-Condition ($RegisterHeaderIndex -ge 0) "$RegisterTable is missing; expect
 
 $RegisterHeader = @('Path') + $GovernanceFields
 Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ProvenanceLines[$RegisterHeaderIndex]) -ExpectedHeader $RegisterHeader -Table $RegisterTable
+$RegisterSeparatorIndex = $RegisterHeaderIndex + 1
+Assert-Condition ($RegisterSeparatorIndex -lt $ProvenanceLines.Count) "$RegisterTable separator row immediately after its header is missing."
+Assert-MarkdownTableSeparator -Row $ProvenanceLines[$RegisterSeparatorIndex] -ExpectedCellCount $RegisterHeader.Count -Table $RegisterTable
 
 $GovernanceRows = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
-foreach ($Line in $ProvenanceLines[($RegisterHeaderIndex + 1)..($ProvenanceLines.Count - 1)]) {
+$RegisterDataLines = @()
+if ($RegisterSeparatorIndex + 1 -lt $ProvenanceLines.Count) {
+	$RegisterDataLines = @($ProvenanceLines[($RegisterSeparatorIndex + 1)..($ProvenanceLines.Count - 1)])
+}
+foreach ($Line in $RegisterDataLines) {
 	$Trimmed = $Line.Trim()
 	if ([string]::IsNullOrWhiteSpace($Trimmed) -or -not $Trimmed.StartsWith('|')) { break }
-	if ($Trimmed -match '^\|[\s|-]*\|$') { continue }
 	$Cells = Split-MarkdownTableRow -Row $Trimmed
 	$PathCell = $Cells[0]
 	Assert-Condition ($PathCell -cmatch '^`([^`]+)`$') "Malformed per-asset governance path cell in asset-provenance.md: expected a single backtick-wrapped path; found '$PathCell'."
@@ -405,6 +427,9 @@ if ($HasIssue95Report) {
 
 	$ReportHeader = @('Reviewed asset', 'Visual suitability') + $GovernanceFields + @('Allowed current use')
 	Assert-GovernanceHeader -HeaderCells (Split-MarkdownTableRow -Row $ReportLines[$ReportHeaderIndex]) -ExpectedHeader $ReportHeader -Table $ReportTable
+	$ReportSeparatorIndex = $ReportHeaderIndex + 1
+	Assert-Condition ($ReportSeparatorIndex -lt $ReportLines.Count) "$ReportTable separator row immediately after its header is missing."
+	Assert-MarkdownTableSeparator -Row $ReportLines[$ReportSeparatorIndex] -ExpectedCellCount $ReportHeader.Count -Table $ReportTable
 
 	$RequiredReviewedAssetRecordDefinitions = [ordered]@{
 		'`01-main-menu-concept.png`' = @('01-main-menu-concept.png')
@@ -436,10 +461,13 @@ if ($HasIssue95Report) {
 		$RequiredReviewedAssetRecords.Add([string]$Definition.Key, $Definition.Value)
 	}
 	$ReviewedAssetRows = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
-	foreach ($Line in $ReportLines[($ReportHeaderIndex + 1)..($ReportLines.Count - 1)]) {
+	$ReportDataLines = @()
+	if ($ReportSeparatorIndex + 1 -lt $ReportLines.Count) {
+		$ReportDataLines = @($ReportLines[($ReportSeparatorIndex + 1)..($ReportLines.Count - 1)])
+	}
+	foreach ($Line in $ReportDataLines) {
 		$Trimmed = $Line.Trim()
 		if (-not $Trimmed.StartsWith('|')) { break }
-		if ($Trimmed -match '^\|[\s|-]*$') { continue }
 		$Cells = Split-MarkdownTableRow -Row $Trimmed
 		$Label = $Cells[0]
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Label)) "$ReportTable contains a row with no reviewed-asset name: $Trimmed"
