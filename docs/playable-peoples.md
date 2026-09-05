@@ -45,8 +45,17 @@ Each people has recognizable heritage materials, motifs, naming traditions,
 and movement language. Those roots do not prescribe personality, profession,
 class, homeland, or faction.
 
-- Aurin are not biologically aligned with the Dawn Concordat.
-- Kell are not biologically aligned with the Unbound Flame.
+Each people's heritage identity carries a stable semantic ID with a working
+display name (Issue #104): Aurin use `heritage.menders_brace` (Mender's Brace),
+Kell use `heritage.memory_nail` (Memory Nail), and Vesh use
+`heritage.foreseen_path` (Foreseen Path). IDs remain stable when display names
+change. Heritage is narrative and presentation identity only; it never changes
+combat statistics, hitboxes, reach, timing, or loot.
+
+- Aurin are not biologically aligned with the Crowned Ledger (the provisional
+  faction display name superseding Dawn Concordat under Issue #104).
+- Kell are not biologically aligned with the Hundred Witnesses (superseding
+  Unbound Flame under Issue #104).
 - Vesh are not biologically neutral.
 - Any people may live within, inherit, learn, or wear another people's culture.
 - Cultural equipment and cosmetics must have fitted visual variants for every
