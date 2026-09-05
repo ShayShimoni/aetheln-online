@@ -23,34 +23,127 @@ $GovernancePaths = @(
 $GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
 $ReadmeExpectedProvenance = 'Owner-supplied legacy visual-package guidance; repository governance and current owner-approved concept direction updated under issues #94 and #95 after attested ingest.'
 $ReadmeExpectedAuthorship = 'Repository-authored modifications under issues #94 and #95 recorded in git history; authorship of the underlying legacy material is **Pending/TBD**.'
-$AcceptedGovernanceValues = [ordered]@{
-	'Provenance/custody' = @(
-		'Owner-directed concept generated through the built-in image-generation workflow for issue #114; frozen external ingest.',
-		'Owner-supplied authoring utility; imported through attested external ingest and repository-hardened by issue #94.',
-		'Owner-supplied legacy visual package; byte-preserved through attested external ingest.',
-		'Owner-supplied legacy visual-package guidance; repository governance and current owner-approved concept direction updated by issue #94 after attested ingest.',
-		'Owner-supplied legacy visual-package guidance; repository references and governance handoff updated by issue #94 after attested ingest.',
-		$ReadmeExpectedProvenance,
-		'Repository-authored Issue #95 visual-review and CommonUI planning report derived from canonical and imported-package evidence.'
-	)
-	'Authorship' = @(
-		'**Pending/TBD**: no author identification is retained for the legacy package.',
-		'Owner-directed generation through the built-in OpenAI image workflow, recorded by issue #114, `generation-prompts.md`, and C2PA `caBX` metadata.',
-		'Repository-authored issue #94 modifications recorded in git history; authorship of the underlying legacy material is **Pending/TBD**.',
-		$ReadmeExpectedAuthorship,
-		'Repository-authored under issue #95 and recorded in git history.'
-	)
-	'Permission' = @(
-		'**Pending/TBD**: no permission grant is retained in this repository.'
-	)
-	'License' = @(
-		'**Pending/TBD**: no license instrument is retained in this repository.'
-	)
-	'Product approval' = @(
-		'Not approved: no product approval is recorded; non-canonical planning/governance artifact that grants no asset rights, runtime approval, publication approval, or `Content/` promotion.',
-		'Not approved: no product approval is recorded; non-canonical reference/source asset.'
-	)
+$PendingPermissionState = '**Pending/TBD**: no permission grant is retained in this repository.'
+$PendingLicenseState = '**Pending/TBD**: no license instrument is retained in this repository.'
+$NotApprovedReferenceState = 'Not approved: no product approval is recorded; non-canonical reference/source asset.'
+$NotApprovedGovernanceState = 'Not approved: no product approval is recorded; non-canonical planning/governance artifact that grants no asset rights, runtime approval, publication approval, or `Content/` promotion.'
+
+$LegacyGovernancePaths = @(
+	'01-main-menu-concept.png',
+	'02-playable-peoples-lineup.png',
+	'03-aurin-bulwark-equipment.png',
+	'04-branmark-settlement.png',
+	'05-glasswake-reach.png',
+	'06-character-selection-concept.png',
+	'07-ui-style-system.png',
+	'generation-prompts.md',
+	'ui-production/font-recommendations.md',
+	'ui-production/README.md',
+	'ui-production/screen-flow.md',
+	'ui-production/ui-tokens.json',
+	'ui-production/unreal-commonui-spec.md',
+	'ui-production-v2/README.md'
+)
+foreach ($Name in @('controls', 'divider', 'logo-aetheln-online', 'panel-nine-slice', 'primary-button-disabled', 'primary-button-focused', 'primary-button-hover', 'primary-button-normal', 'primary-button-pressed')) {
+	$LegacyGovernancePaths += "ui-production/assets/$Name.svg"
 }
+foreach ($Name in @('character-selection-stage', 'main-menu-background')) {
+	$LegacyGovernancePaths += "ui-production/backgrounds/$Name.png"
+}
+foreach ($Name in @('accessibility', 'character-selection', 'main-menu', 'settings')) {
+	$LegacyGovernancePaths += "ui-production/screens/$Name.svg"
+}
+foreach ($Name in @('button-disabled', 'button-focused', 'button-hover', 'button-normal', 'character-selection-stage', 'hud-status-frame', 'icon-basic-attack', 'icon-block', 'icon-buff', 'icon-debuff', 'icon-dodge', 'icon-health-consumable', 'kell-female-selection', 'loading-indicator', 'logo', 'main-menu-background', 'marker-interact', 'marker-objective', 'panel-large', 'playable-peoples-reference', 'reticle-free-aim', 'selection-card-frame', 'slider-cyan-65', 'slot-frame', 'toggle-off', 'toggle-on')) {
+	$LegacyGovernancePaths += "ui-production-v2/assets/$Name.png"
+}
+foreach ($Name in @('button-disabled', 'button-focused', 'button-hover', 'button-normal', 'hud-status-frame', 'icon-basic-attack', 'icon-block', 'icon-buff', 'icon-debuff', 'icon-dodge', 'icon-health-consumable', 'kell-female-selection', 'loading-indicator', 'logo', 'marker-interact', 'marker-objective', 'panel-large', 'reticle-free-aim', 'selection-card-frame', 'slider-cyan-65', 'slot-frame', 'toggle-off', 'toggle-on')) {
+	$LegacyGovernancePaths += "ui-production-v2/chroma-sources/$Name-source.png"
+}
+foreach ($Name in @('accessibility', 'character-selection', 'dialog-tooltip', 'gameplay-icons', 'hud', 'inventory', 'loading', 'main-menu', 'settings')) {
+	$LegacyGovernancePaths += "ui-production-v2/previews/$Name-v2-preview.png"
+}
+
+$Issue114GovernancePaths = @(
+	'01-overall-mood-key.png',
+	'02-aurin-playable-study.png',
+	'03-kell-playable-study.png',
+	'04-vesh-playable-study.png',
+	'05-oathscar-combat-sheet.png',
+	'06-nullwright-combat-sheet.png',
+	'07-hushblade-combat-sheet.png',
+	'08-gravecant-combat-sheet.png',
+	'09-blackfletch-combat-sheet.png',
+	'10-combat-readability-scene.png'
+)
+
+$GovernanceSourceClassContracts = @(
+	[pscustomobject]@{
+		Name = 'Owner-supplied legacy package'
+		Paths = $LegacyGovernancePaths
+		States = [ordered]@{
+			'Provenance/custody' = 'Owner-supplied legacy visual package; byte-preserved through attested external ingest.'
+			'Authorship' = '**Pending/TBD**: no author identification is retained for the legacy package.'
+			'Permission' = $PendingPermissionState
+			'License' = $PendingLicenseState
+			'Product approval' = $NotApprovedReferenceState
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Owner-directed issue #114 generation'
+		Paths = $Issue114GovernancePaths
+		States = [ordered]@{
+			'Provenance/custody' = 'Owner-directed concept generated through the built-in image-generation workflow for issue #114; frozen external ingest.'
+			'Authorship' = 'Owner-directed generation through the built-in OpenAI image workflow, recorded by issue #114, `generation-prompts.md`, and C2PA `caBX` metadata.'
+			'Permission' = $PendingPermissionState
+			'License' = $PendingLicenseState
+			'Product approval' = $NotApprovedReferenceState
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Repository-hardened issue #94 authoring utility'
+		Paths = @('ui-production-v2/build-gameplay-assets-preview.ps1', 'ui-production-v2/build-preview.ps1', 'ui-production-v2/build-screen-previews.ps1', 'ui-production-v2/remove-chroma.ps1')
+		States = [ordered]@{
+			'Provenance/custody' = 'Owner-supplied authoring utility; imported through attested external ingest and repository-hardened by issue #94.'
+			'Authorship' = 'Repository-authored issue #94 modifications recorded in git history; authorship of the underlying legacy material is **Pending/TBD**.'
+			'Permission' = $PendingPermissionState
+			'License' = $PendingLicenseState
+			'Product approval' = $NotApprovedReferenceState
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Repository-hardened issue #94 guidance'
+		Paths = @('FUTURE-VISUALS-PLAN.md')
+		States = [ordered]@{
+			'Provenance/custody' = 'Owner-supplied legacy visual-package guidance; repository references and governance handoff updated by issue #94 after attested ingest.'
+			'Authorship' = 'Repository-authored issue #94 modifications recorded in git history; authorship of the underlying legacy material is **Pending/TBD**.'
+			'Permission' = $PendingPermissionState
+			'License' = $PendingLicenseState
+			'Product approval' = $NotApprovedReferenceState
+		}
+	},
+	[pscustomobject]@{
+		Name = 'README issues #94/#95 guidance'
+		Paths = @('README.md')
+		States = [ordered]@{
+			'Provenance/custody' = $ReadmeExpectedProvenance
+			'Authorship' = $ReadmeExpectedAuthorship
+			'Permission' = $PendingPermissionState
+			'License' = $PendingLicenseState
+			'Product approval' = $NotApprovedReferenceState
+		}
+	},
+	[pscustomobject]@{
+		Name = 'Repository-authored Issue #95 report'
+		Paths = @('issue-95-opening-screen-commonui-validation.md')
+		States = [ordered]@{
+			'Provenance/custody' = 'Repository-authored Issue #95 visual-review and CommonUI planning report derived from canonical and imported-package evidence.'
+			'Authorship' = 'Repository-authored under issue #95 and recorded in git history.'
+			'Permission' = $PendingPermissionState
+			'License' = $PendingLicenseState
+			'Product approval' = $NotApprovedGovernanceState
+		}
+	}
+)
 $AcceptedNotApprovedAllowedCurrentUseValues = @(
 	'Reference-only; replacement or rights clearance required before publication/runtime.',
 	'Reference-only; potential internal prototype only after owner approval; replacement or rights clearance required before publication/runtime.',
@@ -77,6 +170,22 @@ function Assert-Condition {
 	if (-not $Condition) { throw $Message }
 }
 
+$GovernanceSourceClassByPath = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+foreach ($Contract in $GovernanceSourceClassContracts) {
+	Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$Contract.Name)) 'Governance source-class contract has a blank name.'
+	Assert-Condition (@($Contract.Paths).Count -gt 0) "Governance source-class contract '$($Contract.Name)' has no paths."
+	Assert-Condition ($Contract.States.Count -eq $GovernanceFields.Count) "Governance source-class contract '$($Contract.Name)' must define exactly $($GovernanceFields.Count) states."
+	foreach ($Field in $GovernanceFields) {
+		Assert-Condition ($Contract.States.Contains($Field)) "Governance source-class contract '$($Contract.Name)' is missing state '$Field'."
+		Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$Contract.States[$Field])) "Governance source-class contract '$($Contract.Name)' has a blank state '$Field'."
+	}
+	foreach ($ContractPath in @($Contract.Paths)) {
+		Assert-Condition (-not [string]::IsNullOrWhiteSpace([string]$ContractPath)) "Governance source-class contract '$($Contract.Name)' has a blank path."
+		Assert-Condition (-not $GovernanceSourceClassByPath.ContainsKey([string]$ContractPath)) "Governance path '$ContractPath' is assigned to more than one source class."
+		$GovernanceSourceClassByPath.Add([string]$ContractPath, $Contract)
+	}
+}
+
 function Test-OrdinalStringCollectionContains {
 	param(
 		[Parameter(Mandatory)][AllowEmptyCollection()][string[]] $Values,
@@ -98,8 +207,31 @@ function Split-MarkdownTableRow {
 function Find-TableHeaderIndices {
 	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $Lines, [Parameter(Mandatory)][string] $FirstColumn)
 	$Indices = [System.Collections.Generic.List[int]]::new()
+	$FenceCharacter = $null
+	$FenceLength = 0
 	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
-		if ($Lines[$Index].TrimEnd() -match ('^\|\s*' + [regex]::Escape($FirstColumn) + '\s*\|')) { $Indices.Add($Index) }
+		$Line = $Lines[$Index]
+		if ($null -ne $FenceCharacter) {
+			$ClosingFencePattern = '^[ ]{0,3}' + [regex]::Escape([string]$FenceCharacter) + "{$FenceLength,}[ \t]*$"
+			if ($Line -cmatch $ClosingFencePattern) {
+				$FenceCharacter = $null
+				$FenceLength = 0
+			}
+			continue
+		}
+
+		$OpeningFence = [regex]::Match($Line, '^[ ]{0,3}(?<Fence>`{3,})[^`]*$')
+		if (-not $OpeningFence.Success) {
+			$OpeningFence = [regex]::Match($Line, '^[ ]{0,3}(?<Fence>~{3,}).*$')
+		}
+		if ($OpeningFence.Success) {
+			$Fence = $OpeningFence.Groups['Fence'].Value
+			$FenceCharacter = $Fence[0]
+			$FenceLength = $Fence.Length
+			continue
+		}
+
+		if ($Line.TrimEnd() -cmatch ('^[ ]{0,3}\|[ \t]*' + [regex]::Escape($FirstColumn) + '[ \t]*\|')) { $Indices.Add($Index) }
 	}
 	@($Indices)
 }
@@ -129,22 +261,29 @@ function Assert-MarkdownTableSeparator {
 }
 
 # Provenance/custody, authorship, permission, license, and product approval are
-# five independent states. Each field has a closed contract derived from the
-# reviewed register values; a new value requires an explicit validator update.
+# five independent states. The expected whole tuple is selected by an explicit
+# manifested-path contract, never by values asserted in the register or report.
 function Assert-GovernanceStates {
 	param(
 		[Parameter(Mandatory)][string] $Label,
 		[Parameter(Mandatory)][AllowEmptyString()][string[]] $Values,
-		[Parameter(Mandatory)][string] $Table
+		[Parameter(Mandatory)][string] $Table,
+		[Parameter(Mandatory)] $Contract,
+		[switch] $AllowEquivalentWording
 	)
 	Assert-Condition ($Values.Count -eq $GovernanceFields.Count) "$Table row for $Label exposes $($Values.Count) governance states; expected $($GovernanceFields.Count) ($($GovernanceFields -join ', ')). Governance states must not be collapsed or omitted."
 	for ($Index = 0; $Index -lt $GovernanceFields.Count; $Index++) {
 		$Field = $GovernanceFields[$Index]
 		$Value = $Values[$Index]
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Value)) "Governance state '$Field' is blank for $Label in $Table; record the known value, or record '**Pending/TBD**' when it is unknown."
-		$NormalizedValue = ConvertTo-NormalizedGovernanceValue -Field $Field -Value $Value
-		$NormalizedAcceptedValues = @($AcceptedGovernanceValues[$Field] | ForEach-Object { ConvertTo-NormalizedGovernanceValue -Field $Field -Value $_ })
-		Assert-Condition ($NormalizedAcceptedValues -contains $NormalizedValue) "Governance state '$Field' has unrecognized value for $Label in ${Table}: '$Value'. Update the explicit accepted-value contract only after governance review."
+		$ExpectedValue = [string]$Contract.States[$Field]
+		$MatchesExpected = [string]::Equals($Value, $ExpectedValue, [System.StringComparison]::Ordinal)
+		if ($AllowEquivalentWording) {
+			$NormalizedValue = ConvertTo-NormalizedGovernanceValue -Field $Field -Value $Value
+			$NormalizedExpectedValue = ConvertTo-NormalizedGovernanceValue -Field $Field -Value $ExpectedValue
+			$MatchesExpected = [string]::Equals($NormalizedValue, $NormalizedExpectedValue, [System.StringComparison]::Ordinal)
+		}
+		Assert-Condition $MatchesExpected "Governance state '$Field' has unrecognized value for $Label in ${Table}: '$Value'. It does not match source class '$($Contract.Name)' expected value '$ExpectedValue'. Update the explicit path/source-class contract only after governance review."
 	}
 }
 
@@ -235,6 +374,12 @@ $ManifestPathSet = [System.Collections.Generic.HashSet[string]]::new([System.Str
 foreach ($RelativePath in $ManifestPaths) {
 	Assert-Condition ($ManifestPathSet.Add($RelativePath)) "Manifest contains duplicate path: $RelativePath"
 	Assert-Condition ($RelativePath -notmatch '^[A-Za-z]:[/\\]' -and $RelativePath -notmatch '^[/\\]' -and $RelativePath -notmatch '(^|/)\.\.(/|$)' -and $RelativePath -notmatch '\\') "Manifest paths must be normalized relative paths: $RelativePath"
+}
+
+$GovernanceContractByManifestPath = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::Ordinal)
+foreach ($RelativePath in $ManifestPaths) {
+	Assert-Condition ($GovernanceSourceClassByPath.ContainsKey($RelativePath)) "Manifest path '$RelativePath' does not resolve to a reviewed governance source class. Unknown, new, or reclassified paths require an explicit path/source-class contract and governance review."
+	$GovernanceContractByManifestPath.Add($RelativePath, $GovernanceSourceClassByPath[$RelativePath])
 }
 
 $ActualAssetPaths = @(Get-ChildItem -LiteralPath $Root -Recurse -File | ForEach-Object { Get-RelativeVisualPath $_.FullName } | Where-Object { -not (Test-OrdinalStringCollectionContains -Values $GovernancePaths -Value $_) })
@@ -372,7 +517,7 @@ foreach ($RelativePath in $ManifestPaths) {
 	Assert-Condition ($GovernanceRows.ContainsKey($RelativePath)) "Per-asset governance row missing for ${RelativePath}: every manifested asset must record $($GovernanceFields -join ', ') independently."
 	$Cells = $GovernanceRows[$RelativePath]
 	Assert-Condition ($Cells.Count -eq $RegisterHeader.Count) "$RegisterTable row for $RelativePath has $($Cells.Count) cells; expected $($RegisterHeader.Count) (Path plus $($GovernanceFields -join ', ')). Governance states must not be collapsed or omitted."
-	Assert-GovernanceStates -Label $RelativePath -Values $Cells[1..($Cells.Count - 1)] -Table $RegisterTable
+	Assert-GovernanceStates -Label $RelativePath -Values $Cells[1..($Cells.Count - 1)] -Table $RegisterTable -Contract $GovernanceContractByManifestPath[$RelativePath]
 }
 
 if (Test-OrdinalStringCollectionContains -Values $ManifestPaths -Value 'README.md') {
@@ -526,7 +671,6 @@ if ($HasIssue95Report) {
 		Assert-Condition ($Cells.Count -eq $ReportHeader.Count) "$ReportTable row for $Label has $($Cells.Count) cells; expected $($ReportHeader.Count) ($($ReportHeader -join ', ')). Governance states must not be collapsed or omitted."
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[1])) "Visual suitability is blank for $Label in $ReportTable."
 		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Cells[$ReportHeader.Count - 1])) "Allowed current use is blank for $Label in $ReportTable."
-		Assert-GovernanceStates -Label $Label -Values $Cells[2..($Cells.Count - 2)] -Table $ReportTable
 		Assert-AllowedCurrentUse -Label $Label -Value $Cells[$Cells.Count - 1] -ProductApproval $Cells[$Cells.Count - 2] -Table $ReportTable
 		$ReviewedAssetRows.Add($Label, $Cells)
 	}
@@ -535,6 +679,8 @@ if ($HasIssue95Report) {
 		$ReportGovernanceValues = $ReviewedAssetRows[$Label][2..($ReportHeader.Count - 2)]
 		foreach ($RegisterPath in @($RequiredReviewedAssetRecords[$Label])) {
 			Assert-Condition ($GovernanceRows.ContainsKey($RegisterPath)) "Provenance register row missing for reviewed asset ${Label}: $RegisterPath"
+			Assert-Condition ($GovernanceContractByManifestPath.ContainsKey($RegisterPath)) "Reviewed asset $Label references unclassified manifest path ${RegisterPath}."
+			Assert-GovernanceStates -Label $Label -Values $ReportGovernanceValues -Table $ReportTable -Contract $GovernanceContractByManifestPath[$RegisterPath] -AllowEquivalentWording
 			$RegisterGovernanceValues = $GovernanceRows[$RegisterPath][1..($RegisterHeader.Count - 1)]
 			for ($Index = 0; $Index -lt $GovernanceFields.Count; $Index++) {
 				$Field = $GovernanceFields[$Index]

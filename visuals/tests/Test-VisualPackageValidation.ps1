@@ -44,6 +44,39 @@ function Set-MarkdownTableCell {
 	'| ' + ($Cells -join ' | ') + ' |'
 }
 
+function Copy-MarkdownTableCells {
+	param(
+		[Parameter(Mandatory)][string] $TargetRow,
+		[Parameter(Mandatory)][int] $TargetStartIndex,
+		[Parameter(Mandatory)][string] $SourceRow,
+		[Parameter(Mandatory)][int] $SourceStartIndex,
+		[Parameter(Mandatory)][int] $Count
+	)
+
+	$SourceTrimmed = $SourceRow.Trim()
+	if (-not $SourceTrimmed.StartsWith('|') -or -not $SourceTrimmed.EndsWith('|')) {
+		throw "Malformed Markdown table fixture source row: $SourceRow"
+	}
+	$SourceCells = @($SourceTrimmed.Substring(1, $SourceTrimmed.Length - 2) -split '\|' | ForEach-Object { $_.Trim() })
+	$Result = $TargetRow
+	for ($Offset = 0; $Offset -lt $Count; $Offset++) {
+		$Result = Set-MarkdownTableCell -Row $Result -Index ($TargetStartIndex + $Offset) -Value $SourceCells[$SourceStartIndex + $Offset]
+	}
+	$Result
+}
+
+function Get-ProvenanceRow {
+	param(
+		[Parameter(Mandatory)][string] $Content,
+		[Parameter(Mandatory)][string] $Path
+	)
+
+	$Pattern = '(?m)^\| `' + [regex]::Escape($Path) + '` \|.*$'
+	$Match = [regex]::Match($Content, $Pattern)
+	if (-not $Match.Success) { throw "Provenance fixture row is missing for $Path." }
+	$Match.Value
+}
+
 if (-not (Test-Path -LiteralPath $Validator -PathType Leaf)) {
 	throw "Validator is missing: $Validator"
 }
@@ -121,15 +154,38 @@ try {
 	$FirstGovernanceRow = [regex]::Match($PristineProvenance, $RowPattern).Value
 	$ProvenanceNewLine = if ($PristineProvenance.Contains("`r`n")) { "`r`n" } else { "`n" }
 	$GovernanceTablePrefix = "$GovernanceHeader$ProvenanceNewLine$GovernanceSeparator"
-	$KnownCustodyRow = Set-MarkdownTableCell -Row $FirstGovernanceRow -Index 1 -Value 'Owner-supplied legacy visual-package guidance; repository governance and current owner-approved concept direction updated by issue #94 after attested ingest.'
-	$KnownCustodyProvenance = $PristineProvenance.Replace($FirstGovernanceRow, $KnownCustodyRow)
-	Set-Content -LiteralPath $FixtureProvenance -Value $KnownCustodyProvenance -NoNewline -Encoding utf8
-	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
+	$BacktickFence = '```'
+	$Issue94GuidanceRow = Get-ProvenanceRow -Content $SourceProvenance -Path 'FUTURE-VISUALS-PLAN.md'
+	$CrossAssignedLegacyRow = Copy-MarkdownTableCells -TargetRow $FirstGovernanceRow -TargetStartIndex 1 -SourceRow $Issue94GuidanceRow -SourceStartIndex 1 -Count 5
+	$CrossAssignedLegacyProvenance = $PristineProvenance.Replace($FirstGovernanceRow, $CrossAssignedLegacyRow)
+	Set-Content -LiteralPath $FixtureProvenance -Value $CrossAssignedLegacyProvenance -NoNewline -Encoding utf8
+	Assert-Throws -Pattern "Governance state 'Provenance/custody'.*$([regex]::Escape($FirstAssetPath)).*does not match source class 'Owner-supplied legacy package'" -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
 
 	$ConflictingRegisterRow = Set-MarkdownTableCell -Row $FirstGovernanceRow -Index 2 -Value 'Repository-authored under issue #95 and recorded in git history.'
 	$SeparatedDuplicateRegister = "$PristineProvenance$ProvenanceNewLine$ProvenanceNewLine## Conflicting duplicate governance table$ProvenanceNewLine$ProvenanceNewLine$GovernanceHeader$ProvenanceNewLine$GovernanceSeparator$ProvenanceNewLine$ConflictingRegisterRow$ProvenanceNewLine"
 	Set-Content -LiteralPath $FixtureProvenance -Value $SeparatedDuplicateRegister -NoNewline -Encoding utf8
 	Assert-Throws -Pattern 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 2' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
+
+	foreach ($IndentWidth in 1..3) {
+		$Indent = ' ' * $IndentWidth
+		$IndentedDuplicateRegister = "$PristineProvenance$ProvenanceNewLine$ProvenanceNewLine## Indented duplicate governance table$ProvenanceNewLine$ProvenanceNewLine$Indent$GovernanceHeader$ProvenanceNewLine$Indent$GovernanceSeparator$ProvenanceNewLine$Indent$ConflictingRegisterRow$ProvenanceNewLine"
+		Set-Content -LiteralPath $FixtureProvenance -Value $IndentedDuplicateRegister -NoNewline -Encoding utf8
+		Assert-Throws -Pattern 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 2' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
+	}
+
+	foreach ($CodeBlockRegister in @(
+		"$PristineProvenance$ProvenanceNewLine$ProvenanceNewLine${BacktickFence}markdown$ProvenanceNewLine$GovernanceHeader$ProvenanceNewLine$GovernanceSeparator$ProvenanceNewLine$ConflictingRegisterRow$ProvenanceNewLine$BacktickFence$ProvenanceNewLine",
+		"$PristineProvenance$ProvenanceNewLine$ProvenanceNewLine   ~~~markdown$ProvenanceNewLine$GovernanceHeader$ProvenanceNewLine$GovernanceSeparator$ProvenanceNewLine$ConflictingRegisterRow$ProvenanceNewLine   ~~~$ProvenanceNewLine",
+		"$PristineProvenance$ProvenanceNewLine$ProvenanceNewLine    $GovernanceHeader$ProvenanceNewLine    $GovernanceSeparator$ProvenanceNewLine    $ConflictingRegisterRow$ProvenanceNewLine"
+	)) {
+		Set-Content -LiteralPath $FixtureProvenance -Value $CodeBlockRegister -NoNewline -Encoding utf8
+		& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
+	}
+
+	$PromptGovernanceRow = Get-ProvenanceRow -Content $PristineProvenance -Path ([string]$PromptAsset.path)
+	$FencedOnlyRegister = $PristineProvenance.Replace($GovernanceHeader, "${BacktickFence}markdown$ProvenanceNewLine$GovernanceHeader").Replace($PromptGovernanceRow, "$PromptGovernanceRow$ProvenanceNewLine$BacktickFence")
+	Set-Content -LiteralPath $FixtureProvenance -Value $FencedOnlyRegister -NoNewline -Encoding utf8
+	Assert-Throws -Pattern 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 0' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6 }
 
 	$UnrecognizedCustodyPattern = "Governance state 'Provenance/custody' has unrecognized value for $([regex]::Escape($FirstAssetPath))"
 	foreach ($Case in @(
@@ -266,6 +322,37 @@ try {
 	Set-Content -LiteralPath $FixtureProvenance -Value $PristineProvenance -NoNewline -Encoding utf8
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 2 -RequiredTotalFileCount 6
 
+	$UnknownRelativePath = 'unclassified/new-legacy-copy.png'
+	$UnknownAssetPath = Join-Path $FixtureRoot ($UnknownRelativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+	$UnknownAssetDirectory = Split-Path -Parent $UnknownAssetPath
+	$OriginalFixtureC2paCount = [int]$Manifest.expectedC2paPngCount
+	try {
+		[System.IO.Directory]::CreateDirectory($UnknownAssetDirectory) | Out-Null
+		Copy-Item -LiteralPath $AssetPath -Destination $UnknownAssetPath
+		(Get-Item -LiteralPath $UnknownAssetPath).IsReadOnly = $false
+		$UnknownAsset = $FirstAsset | Select-Object *
+		$UnknownAsset.path = $UnknownRelativePath
+		$Manifest.assets = @($FirstAsset, $PromptAsset, $UnknownAsset)
+		$Manifest.expectedAssetCount = 3
+		$Manifest.expectedTotalFileCount = 7
+		$Manifest.expectedC2paPngCount = $OriginalFixtureC2paCount + $(if ($FirstAsset.PSObject.Properties.Name -contains 'c2pa' -and $FirstAsset.c2pa) { 1 } else { 0 })
+		$Manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $FixtureRoot 'package-manifest.json') -Encoding utf8
+		$UnknownGovernanceRow = Set-MarkdownTableCell -Row $FirstGovernanceRow -Index 0 -Value "``$UnknownRelativePath``"
+		$UnknownGovernanceProvenance = $PristineProvenance.Replace($FirstGovernanceRow, "$FirstGovernanceRow$ProvenanceNewLine$UnknownGovernanceRow")
+		Set-Content -LiteralPath $FixtureProvenance -Value $UnknownGovernanceProvenance -NoNewline -Encoding utf8
+		Assert-Throws -Pattern "Manifest path '$([regex]::Escape($UnknownRelativePath))' does not resolve to a reviewed governance source class" -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot -RequiredAssetCount 3 -RequiredTotalFileCount 7 }
+	}
+	finally {
+		$Manifest.assets = @($FirstAsset, $PromptAsset)
+		$Manifest.expectedAssetCount = 2
+		$Manifest.expectedTotalFileCount = 6
+		$Manifest.expectedC2paPngCount = $OriginalFixtureC2paCount
+		$Manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $FixtureRoot 'package-manifest.json') -Encoding utf8
+		Set-Content -LiteralPath $FixtureProvenance -Value $PristineProvenance -NoNewline -Encoding utf8
+		if ([System.IO.File]::Exists($UnknownAssetPath)) { [System.IO.File]::Delete($UnknownAssetPath) }
+		if ([System.IO.Directory]::Exists($UnknownAssetDirectory)) { [System.IO.Directory]::Delete($UnknownAssetDirectory) }
+	}
+
 	# The Issue #95 report must keep visual suitability and allowed current use
 	# separate from the five governance states, and record each governance state
 	# independently for every reviewed asset. The report is a manifested asset, so
@@ -323,6 +410,80 @@ try {
 	Set-FixtureReport -Content $PristineReport
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
 
+	foreach ($ClassCase in @(
+		@{
+			TargetPath  = '01-overall-mood-key.png'
+			SourcePath  = 'generation-prompts.md'
+			SourceClass = 'Owner-directed issue #114 generation'
+		},
+		@{
+			TargetPath  = 'ui-production-v2/build-preview.ps1'
+			SourcePath  = 'generation-prompts.md'
+			SourceClass = 'Repository-hardened issue #94 authoring utility'
+		},
+		@{
+			TargetPath  = 'FUTURE-VISUALS-PLAN.md'
+			SourcePath  = 'generation-prompts.md'
+			SourceClass = 'Repository-hardened issue #94 guidance'
+		},
+		@{
+			TargetPath  = 'README.md'
+			SourcePath  = 'generation-prompts.md'
+			SourceClass = 'README issues #94/#95 guidance'
+		},
+		@{
+			TargetPath  = $ReportRelativePath
+			SourcePath  = 'generation-prompts.md'
+			SourceClass = 'Repository-authored Issue #95 report'
+		}
+	)) {
+		$TargetClassRow = Get-ProvenanceRow -Content $SourceProvenance -Path $ClassCase.TargetPath
+		$SourceClassRow = Get-ProvenanceRow -Content $SourceProvenance -Path $ClassCase.SourcePath
+		$CrossAssignedClassRow = Copy-MarkdownTableCells -TargetRow $TargetClassRow -TargetStartIndex 1 -SourceRow $SourceClassRow -SourceStartIndex 1 -Count 5
+		$CrossAssignedClassProvenance = $SourceProvenance.Replace($TargetClassRow, $CrossAssignedClassRow)
+		Set-Content -LiteralPath $FixtureProvenance -Value $CrossAssignedClassProvenance -NoNewline -Encoding utf8
+		Assert-Throws -Pattern "Governance state 'Provenance/custody'.*$([regex]::Escape($ClassCase.TargetPath)).*does not match source class '$([regex]::Escape($ClassCase.SourceClass))'" -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+	}
+
+	$GeneratedGovernanceRow = Get-ProvenanceRow -Content $SourceProvenance -Path '01-overall-mood-key.png'
+	$MainRegisterRow = Get-ProvenanceRow -Content $SourceProvenance -Path '01-main-menu-concept.png'
+	$CrossAssignedMainRegisterRow = Copy-MarkdownTableCells -TargetRow $MainRegisterRow -TargetStartIndex 1 -SourceRow $GeneratedGovernanceRow -SourceStartIndex 1 -Count 5
+	$CrossAssignedMainReportRow = Copy-MarkdownTableCells -TargetRow $MainReportRow -TargetStartIndex 2 -SourceRow $GeneratedGovernanceRow -SourceStartIndex 1 -Count 5
+	$CrossAssignedMainProvenance = $SourceProvenance.Replace($MainRegisterRow, $CrossAssignedMainRegisterRow)
+	$CrossAssignedMainReport = $PristineReport.Replace($MainReportRow, $CrossAssignedMainReportRow)
+	Set-Content -LiteralPath $FixtureProvenance -Value $CrossAssignedMainProvenance -NoNewline -Encoding utf8
+	Set-FixtureReport -Content $CrossAssignedMainReport
+	Assert-Throws -Pattern "Governance state 'Provenance/custody'.*01-main-menu-concept\.png.*does not match source class 'Owner-supplied legacy package'" -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+
+	Set-Content -LiteralPath $FixtureProvenance -Value $SourceProvenance -NoNewline -Encoding utf8
+	Set-FixtureReport -Content $CrossAssignedMainReport
+	Assert-Throws -Pattern "Governance state 'Provenance/custody'.*``01-main-menu-concept\.png``.*does not match source class 'Owner-supplied legacy package'" -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+
+	Set-Content -LiteralPath $FixtureProvenance -Value $SourceProvenance -NoNewline -Encoding utf8
+	Set-FixtureReport -Content $PristineReport
+
+	foreach ($IndentWidth in 1..3) {
+		$Indent = ' ' * $IndentWidth
+		$IndentedDuplicateReport = "$PristineReport$ReportNewLine$ReportNewLine## Indented duplicate classification table$ReportNewLine$ReportNewLine$Indent$ReportHeader$ReportNewLine$Indent$ReportSeparator$ReportNewLine$Indent$AuthorshipMismatchRow$ReportNewLine"
+		Set-FixtureReport -Content $IndentedDuplicateReport
+		Assert-Throws -Pattern 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md must declare exactly one applicable header; found 2' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+	}
+
+	foreach ($CodeBlockReport in @(
+		"$PristineReport$ReportNewLine$ReportNewLine~~~markdown$ReportNewLine$ReportHeader$ReportNewLine$ReportSeparator$ReportNewLine$AuthorshipMismatchRow$ReportNewLine~~~$ReportNewLine",
+		"$PristineReport$ReportNewLine$ReportNewLine   ~~~markdown$ReportNewLine$ReportHeader$ReportNewLine$ReportSeparator$ReportNewLine$AuthorshipMismatchRow$ReportNewLine   ~~~$ReportNewLine",
+		"$PristineReport$ReportNewLine$ReportNewLine    $ReportHeader$ReportNewLine    $ReportSeparator$ReportNewLine    $AuthorshipMismatchRow$ReportNewLine"
+	)) {
+		Set-FixtureReport -Content $CodeBlockReport
+		& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
+	}
+
+	$LastReportRow = [regex]::Match($PristineReport, '(?m)^\| Kell selection render \|.*$').Value
+	if ([string]::IsNullOrWhiteSpace($LastReportRow)) { throw 'Issue #95 report is missing the final reviewed-asset row.' }
+	$FencedOnlyReport = $PristineReport.Replace($ReportHeader, "~~~markdown$ReportNewLine$ReportHeader").Replace($LastReportRow, "$LastReportRow$ReportNewLine~~~")
+	Set-FixtureReport -Content $FencedOnlyReport
+	Assert-Throws -Pattern 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md must declare exactly one applicable header; found 0' -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+
 	foreach ($Case in @(
 		@{
 			Report  = $PristineReport.Replace($ReportTablePrefix, "$ReportHeader$ReportNewLine| -- | --- | --- | --- | --- | --- | --- | --- |")
@@ -374,7 +535,7 @@ try {
 		},
 		@{
 			Report  = $PristineReport.Replace($MainReportRow, $AuthorshipMismatchRow)
-			Pattern = "Governance state 'Authorship' mismatch for reviewed asset ``01-main-menu-concept\.png``.*register path 01-main-menu-concept\.png"
+			Pattern = "Governance state 'Authorship'.*``01-main-menu-concept\.png``.*does not match source class 'Owner-supplied legacy package'"
 		},
 		@{
 			Report  = $PristineReport.Replace($MainReportRow, $PermissionUnrecognizedRow)
