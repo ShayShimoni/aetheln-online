@@ -35,6 +35,13 @@ function Assert-Condition {
 	if (-not $Condition) { throw $Message }
 }
 
+function Split-ProvenanceRow {
+	param([Parameter(Mandatory)][string] $Row)
+	$Trimmed = $Row.Trim()
+	Assert-Condition ($Trimmed.StartsWith('|') -and $Trimmed.EndsWith('|') -and $Trimmed.Length -ge 2) "Malformed provenance table row: $Row"
+	@($Trimmed.Substring(1, $Trimmed.Length - 2) -split '\|' | ForEach-Object { $_.Trim() })
+}
+
 function Get-JsonDepth {
 	param($Value, [int] $Depth = 1)
 	if ($null -eq $Value -or $Value -is [string] -or $Value -is [ValueType]) { return $Depth }
@@ -171,7 +178,7 @@ foreach ($RelativePath in $ManifestPaths) {
 	Assert-Condition ($Provenance.Contains("``$RelativePath``")) "Provenance coverage missing: $RelativePath"
 }
 foreach ($Required in @(
-	'License or permission evidence by source class',
+	'Permission, license, and approval evidence by source class',
 	'Owner-supplied legacy package',
 	'Owner-directed issue #114 generation',
 	'Repository-hardened text derivatives',
@@ -179,6 +186,47 @@ foreach ($Required in @(
 	'No row in this register grants public distribution'
 )) {
 	Assert-Condition ($Provenance.Contains($Required)) "Provenance permission coverage missing: $Required"
+}
+
+# Provenance/custody, authorship, permission, license, and product approval are
+# five independent states. Every manifested asset must record all five in its
+# own column so no state is inferred from, collapsed into, or omitted alongside
+# another.
+$GovernanceFields = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
+$GovernanceKeywords = @('provenance', 'authorship', 'permission', 'license', 'approv')
+$ProvenanceLines = @($Provenance -split "`r?`n")
+$GovernanceHeaderIndex = -1
+for ($Index = 0; $Index -lt $ProvenanceLines.Count; $Index++) {
+	if ($ProvenanceLines[$Index].TrimEnd() -match '^\|\s*Path\s*\|') { $GovernanceHeaderIndex = $Index; break }
+}
+Assert-Condition ($GovernanceHeaderIndex -ge 0) 'Provenance is missing the per-asset governance table; expected a header row starting with "| Path |".'
+
+$HeaderCells = Split-ProvenanceRow -Row $ProvenanceLines[$GovernanceHeaderIndex]
+$ExpectedHeader = @('Path') + $GovernanceFields
+Assert-Condition ($HeaderCells.Count -eq $ExpectedHeader.Count) "Per-asset governance table must declare $($ExpectedHeader.Count) columns ('$($ExpectedHeader -join "', '")'); found $($HeaderCells.Count) ('$($HeaderCells -join "', '")'). The five governance states must each keep their own column."
+for ($Index = 0; $Index -lt $ExpectedHeader.Count; $Index++) {
+	Assert-Condition ($HeaderCells[$Index] -eq $ExpectedHeader[$Index]) "Per-asset governance column $($Index + 1) must be '$($ExpectedHeader[$Index])'; found '$($HeaderCells[$Index])'. The five governance states must each keep their own column."
+}
+
+$GovernanceRows = @{}
+foreach ($Line in $ProvenanceLines[($GovernanceHeaderIndex + 1)..($ProvenanceLines.Count - 1)]) {
+	if ($Line.Trim() -notmatch '^\|\s*`([^`]+)`\s*\|') { continue }
+	$RowPath = $Matches[1]
+	Assert-Condition (-not $GovernanceRows.ContainsKey($RowPath)) "Duplicate per-asset governance row: $RowPath"
+	$GovernanceRows[$RowPath] = Split-ProvenanceRow -Row $Line
+}
+
+foreach ($RelativePath in $ManifestPaths) {
+	Assert-Condition ($GovernanceRows.ContainsKey($RelativePath)) "Per-asset governance row missing for ${RelativePath}: every manifested asset must record $($GovernanceFields -join ', ') independently."
+	$Cells = $GovernanceRows[$RelativePath]
+	Assert-Condition ($Cells.Count -eq $ExpectedHeader.Count) "Per-asset governance row for $RelativePath has $($Cells.Count) cells; expected $($ExpectedHeader.Count) (Path plus $($GovernanceFields -join ', ')). Governance states must not be collapsed or omitted."
+	for ($Index = 0; $Index -lt $GovernanceFields.Count; $Index++) {
+		$Field = $GovernanceFields[$Index]
+		$Value = $Cells[$Index + 1]
+		Assert-Condition (-not [string]::IsNullOrWhiteSpace($Value)) "Governance state '$Field' is blank for ${RelativePath}: record the known value, or record '**Pending/TBD**' when it is unknown."
+		$Foreign = @($GovernanceKeywords | Where-Object { $_ -ne $GovernanceKeywords[$Index] -and $Value -match "(?i)$_" })
+		Assert-Condition ($Foreign.Count -lt 2) "Governance state '$Field' for $RelativePath aggregates other states ($($Foreign -join ', ')): record $($GovernanceFields -join ', ') independently, each in its own column."
+	}
 }
 
 if ($HasIssue95Report) {
