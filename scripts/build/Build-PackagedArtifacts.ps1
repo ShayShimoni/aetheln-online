@@ -21,7 +21,18 @@ rebuilding the host editor/engine tools only after fail-closed proof that they
 belong to the exact clean pinned engine revision; the client and server
 project targets always build with -clean.
 .EXAMPLE
-./scripts/build/Build-PackagedArtifacts.ps1 -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -ArchiveRoot D:/Builds/aetheln-e5798da -LogRoot D:/BuildLogs/aetheln-e5798da -SourceRevision e5798da01cc8dddb70c0a586843ddd2294dbfef3
+$AethelnRevision = git rev-parse HEAD
+$AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
+./scripts/build/Build-PackagedArtifacts.ps1 -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -ArchiveRoot D:/Builds/aetheln-run-001 -LogRoot D:/BuildLogs/aetheln-run-001 -SourceRevision $AethelnRevision -HostToolsBoundary Prebuilt -EngineRevision 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43 -HostToolsAttestationPath $AethelnHostToolsAttestationPath
+
+Selects Prebuilt explicitly. Enter the path to an existing external attestation
+record produced with -Stage AttestHostTools after an authorized successful
+provisioning build, referencing its retained evidence. See the host-tools
+attestation procedure in docs/developer-environment-and-ddc.md. Substitute local
+roots and use absent or empty archive/log directories for each run. For a
+separately operator-authorized full host-tools rebuild, replace the three
+host-tools arguments with -HostToolsBoundary Rebuild. An omitted selection or
+unverified prebuilt attestation fails closed; there is no rebuild fallback.
 #>
 [CmdletBinding()]
 param(
