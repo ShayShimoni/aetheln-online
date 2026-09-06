@@ -22,6 +22,10 @@ $DefaultChecks = @(
 	@{ name = 'build-packaged-artifacts-tests'; tier = 'required'; script = 'tests/build/Build-PackagedArtifacts.Tests.ps1' },
 	@{ name = 'packaged-smoke-test-tests'; tier = 'required'; script = 'tests/build/Invoke-PackagedSmokeTest.Tests.ps1' },
 	@{ name = 'network-authority-spike-tests'; tier = 'required'; script = 'tests/build/Invoke-NetworkAuthoritySpike.Tests.ps1' },
+	# Keep independently isolated expensive fixtures consecutive so the two slots
+	# can be reused; every other manifest identity remains a serial barrier.
+	@{ name = 'engine-runner-gate-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerGate.Tests.ps1' },
+	@{ name = 'unreal-automation-tests'; tier = 'required'; script = 'tests/ci/Invoke-UnrealAutomationTests.Tests.ps1' },
 	@{ name = 'server-cook-reference-tests'; tier = 'required'; script = 'tests/build/Validate-ServerCookReferences.Tests.ps1' },
 	@{ name = 'target-composition-tests'; tier = 'required'; script = 'tests/build/Validate-TargetComposition.Tests.ps1' },
 	@{ name = 'build-provenance-tests'; tier = 'required'; script = 'tests/build/Write-BuildProvenance.Tests.ps1' },
@@ -29,11 +33,10 @@ $DefaultChecks = @(
 	@{ name = 'formatting-policy-tests'; tier = 'required'; script = 'tests/ci/Test-FormattingPolicy.Tests.ps1' },
 	@{ name = 'observability-contract-tests'; tier = 'required'; script = 'tests/ci/Test-ObservabilityContract.Tests.ps1' },
 	@{ name = 'ci-suite-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiSuite.Tests.ps1' },
-	@{ name = 'engine-runner-gate-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerGate.Tests.ps1' },
 	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
-	@{ name = 'unreal-automation-tests'; tier = 'required'; script = 'tests/ci/Invoke-UnrealAutomationTests.Tests.ps1' },
 	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
 	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1' },
+	@{ name = 'compile-workspace-tests'; tier = 'required'; script = 'tests/ci/Initialize-CompileWorkspace.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'
@@ -75,39 +78,201 @@ function Get-OutputTail {
 	return ($Lines -join "`n")
 }
 
-function Invoke-HiddenPowerShell {
+# A private kill-on-close job owns each check tree, including grandchildren.
+# The bootstrap waits until assignment before it can execute the actual check.
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+namespace AethelnCi {
+	public sealed class CheckJob : IDisposable {
+		IntPtr handle;
+		[StructLayout(LayoutKind.Sequential)] struct IoCounters { public ulong a,b,c,d,e,f; }
+		[StructLayout(LayoutKind.Sequential)] struct BasicLimits { public long processTime,jobTime; public uint flags; public UIntPtr minimum,maximum; public uint active; public UIntPtr affinity; public uint priority,scheduling; }
+		[StructLayout(LayoutKind.Sequential)] struct ExtendedLimits { public BasicLimits basic; public IoCounters io; public UIntPtr processMemory,jobMemory,peakProcess,peakJob; }
+		[StructLayout(LayoutKind.Sequential)] struct Accounting { public long userTime,kernelTime,periodUser,periodKernel; public uint faults,total,active,terminated; }
+		[DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr attributes,string name);
+		[DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job,int kind,ref ExtendedLimits limits,uint size);
+		[DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int kind,out Accounting info,uint size,IntPtr returned);
+		[DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job,IntPtr process);
+		[DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr value);
+		public CheckJob() {
+			handle=CreateJobObject(IntPtr.Zero,null);
+			if(handle==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"CreateJobObject failed");
+			ExtendedLimits limits=new ExtendedLimits(); limits.basic.flags=0x2000;
+			if(!SetInformationJobObject(handle,9,ref limits,(uint)Marshal.SizeOf(typeof(ExtendedLimits)))) {
+				int error=Marshal.GetLastWin32Error(); Dispose(); throw new Win32Exception(error,"SetInformationJobObject failed");
+			}
+		}
+		public void Assign(IntPtr process) {
+			if(!AssignProcessToJobObject(handle,process)) throw new Win32Exception(Marshal.GetLastWin32Error(),"AssignProcessToJobObject failed");
+		}
+		public uint ActiveProcesses() {
+			Accounting info;
+			if(!QueryInformationJobObject(handle,1,out info,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error(),"QueryInformationJobObject failed");
+			return info.active;
+		}
+		public void Dispose() { IntPtr current=handle; handle=IntPtr.Zero; if(current!=IntPtr.Zero) CloseHandle(current); GC.SuppressFinalize(this); }
+		~CheckJob() { Dispose(); }
+	}
+}
+'@
+
+function Start-HiddenPowerShell {
 	param(
 		[Parameter(Mandatory)][string] $Arguments,
 		[Parameter(Mandatory)][string] $WorkingDirectory
 	)
 
+	$PowerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
+	$GateName = 'Local\AethelnCiCheck-' + [guid]::NewGuid().ToString('N')
+	$Gate = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::ManualReset, $GateName)
+	$ResultGate = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::ManualReset, ($GateName + '-result'))
+	$Job = $null
+	$Process = $null
+	$Started = $false
+	$Bootstrap = @"
+`$ErrorActionPreference = 'Stop'
+`$Gate = [System.Threading.EventWaitHandle]::OpenExisting('$GateName')
+try { if (-not `$Gate.WaitOne(30000)) { throw 'CI process ownership handshake timed out.' } }
+finally { `$Gate.Dispose() }
+`$Info = [Diagnostics.ProcessStartInfo]::new()
+`$Info.FileName = '$($PowerShell.Replace("'", "''"))'
+`$Info.Arguments = '$($Arguments.Replace("'", "''"))'
+`$Info.UseShellExecute = `$false
+`$Info.CreateNoWindow = `$true
+`$Info.RedirectStandardOutput = `$true
+`$Info.RedirectStandardError = `$true
+`$Child = [Diagnostics.Process]::Start(`$Info)
+try {
+	# Forward incrementally so an infrastructure failure cannot discard output
+	# already written by the check. Both OS streams remain separate and raw.
+	`$Output = `$Child.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())
+	`$ErrorOutput = `$Child.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())
+	`$Child.WaitForExit()
+	if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]] @(`$Output, `$ErrorOutput), 5000)) {
+		[Console]::Error.WriteLine('CI output pipes remained open after the check exited.')
+		exit 1
+	}
+	`$Result = [Threading.EventWaitHandle]::OpenExisting('$GateName-result')
+	try { [void] `$Result.Set() } finally { `$Result.Dispose() }
+	exit `$Child.ExitCode
+}
+finally { `$Child.Dispose() }
+"@
 	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-	$StartInfo.FileName = (Get-Command powershell.exe -ErrorAction Stop).Source
-	$StartInfo.Arguments = $Arguments
+	$StartInfo.FileName = $PowerShell
+	$StartInfo.Arguments = '-NoProfile -EncodedCommand ' + [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Bootstrap))
 	$StartInfo.WorkingDirectory = $WorkingDirectory
 	$StartInfo.UseShellExecute = $false
 	$StartInfo.CreateNoWindow = $true
 	$StartInfo.RedirectStandardOutput = $true
 	$StartInfo.RedirectStandardError = $true
 
-	$Process = [System.Diagnostics.Process]::new()
-	$Process.StartInfo = $StartInfo
 	try {
+		$Job = [AethelnCi.CheckJob]::new()
+		$Process = [System.Diagnostics.Process]::new()
+		$Process.StartInfo = $StartInfo
 		if (-not $Process.Start()) {
 			throw 'Could not start the CI child PowerShell process.'
 		}
+		$Started = $true
 		$StandardOutput = $Process.StandardOutput.ReadToEndAsync()
 		$StandardError = $Process.StandardError.ReadToEndAsync()
-		$Process.WaitForExit()
+		$Job.Assign($Process.Handle)
+		[void] $Gate.Set()
+		return @{ Process = $Process; StandardOutput = $StandardOutput; StandardError = $StandardError; Job = $Job; Gate = $Gate; ResultGate = $ResultGate }
+	}
+	catch {
+		$PrimaryFailure = $_
+		if ($null -ne $Job) { $Job.Dispose() }
+		if ($null -ne $Process) {
+			try { if ($Started -and -not $Process.HasExited) { $Process.Kill(); [void] $Process.WaitForExit(5000) } }
+			catch { Write-Warning "CI launch cleanup failed: $($_.Exception.Message)" }
+			$Process.Dispose()
+		}
+		$Gate.Dispose()
+		$ResultGate.Dispose()
+		throw $PrimaryFailure
+	}
+}
+
+function Wait-CiJobQuiescence {
+	param([Parameter(Mandatory)] $Job)
+	# Root process signaling can precede job accounting becoming empty. Observe
+	# termination for at most five seconds using a monotonic clock; do not rerun
+	# the check or replace its exit/result. This is separate from the bootstrap's
+	# five-second post-exit pipe drain. Persistent descendants still fail closed.
+	$GraceMilliseconds = 5000
+	$Quiescence = [Diagnostics.Stopwatch]::StartNew()
+	do {
+		$Remaining = $Job.ActiveProcesses()
+		if ($Remaining -eq 0) { return $Remaining }
+		$WaitMilliseconds = $GraceMilliseconds - $Quiescence.ElapsedMilliseconds
+		if ($WaitMilliseconds -le 0) { return $Remaining }
+		Start-Sleep -Milliseconds ([int] [Math]::Min(25, $WaitMilliseconds))
+	} while ($true)
+}
+
+function Complete-CiCheck {
+	param([Parameter(Mandatory)] $Running)
+	$Check = $Running.Check
+	$Status = 'failed'
+	$Message = ''
+	try {
+		$Running.Child.Process.WaitForExit()
+		$ExitCode = $Running.Child.Process.ExitCode
+		$Remaining = Wait-CiJobQuiescence -Job $Running.Child.Job
+		# Close the owned tree before draining streams: a leaked descendant can
+		# otherwise retain pipe handles after the check process has exited.
+		$Running.Child.Job.Dispose()
 		$Output = @(
-			@($StandardOutput.GetAwaiter().GetResult() -split "`r?`n")
-			@($StandardError.GetAwaiter().GetResult() -split "`r?`n")
+			@($Running.Child.StandardOutput.GetAwaiter().GetResult() -split "`r?`n")
+			@($Running.Child.StandardError.GetAwaiter().GetResult() -split "`r?`n")
 		) | Where-Object { -not [string]::IsNullOrEmpty($_) }
-		return @{ Output = @($Output); ExitCode = $Process.ExitCode }
+		$Message = Get-OutputTail -Lines @($Output)
+		$HasResult = $Running.Child.ResultGate.WaitOne(0)
+		if (-not $HasResult) {
+			$script:InfrastructureFailed = $true
+			$Message += "`nCI bootstrap did not return a complete check result."
+		}
+		if ($Remaining -gt 0) {
+			$script:InfrastructureFailed = $true
+			$Message += "`nCI check left $Remaining owned process(es) running after the 5-second quiescence grace; terminated its process tree."
+		}
+		elseif ($HasResult -and $ExitCode -eq 0) { $Status = 'passed' }
+	}
+	catch {
+		$script:InfrastructureFailed = $true
+		$Message += "`nCI result capture failed: $($_.Exception.Message)"
 	}
 	finally {
-		$Process.Dispose()
+		$Running.Child.Job.Dispose()
+		$Running.Child.Gate.Dispose()
+		$Running.Child.ResultGate.Dispose()
+		$Running.Child.Process.Dispose()
+		$Running.Stopwatch.Stop()
 	}
+	$script:Results[$Check.Index] = [ordered]@{
+		name = $Check.Name; tier = $Check.Tier; status = $Status
+		durationSeconds = [Math]::Round($Running.Stopwatch.Elapsed.TotalSeconds, 3)
+		command = $Check.CommandText; message = $Message
+	}
+	Write-Output "[$($Check.Tier)] $($Check.Name): $Status ($([Math]::Round($Running.Stopwatch.Elapsed.TotalSeconds, 1))s)"
+}
+
+function Wait-CiSlot {
+	param([switch] $Drain)
+	do {
+		foreach ($Running in @($script:Active.ToArray())) {
+			if ($Running.Child.Process.HasExited) {
+				Complete-CiCheck -Running $Running
+				[void] $script:Active.Remove($Running)
+			}
+		}
+		if ($script:Active.Count -eq 0 -or (-not $Drain -and $script:Active.Count -lt 2)) { return }
+		Start-Sleep -Milliseconds 25
+	} while ($true)
 }
 
 if ($ChecksPath) {
@@ -130,9 +295,17 @@ finally {
 $Revision = if ($RevisionExitCode -eq 0) { $RevisionOutput[0] } else { 'unknown' }
 
 $StartedUtc = [DateTime]::UtcNow.ToString('o')
-$Results = @()
+$Results = [object[]]::new($Checks.Count)
 $FailureDetails = @()
+$Prepared = @()
+$Names = @{}
+$InfrastructureFailed = $false
+$Active = [System.Collections.Generic.List[object]]::new()
+# Keep smoke serial: its package-process quiescence fixture has an unresolved
+# concurrent-run failure. It remains required, with all deadlines unchanged.
+$ConcurrentChecks = @('build-packaged-artifacts-tests', 'network-authority-spike-tests', 'engine-runner-gate-tests', 'unreal-automation-tests')
 
+# Validate the entire manifest before allowing any child to run.
 foreach ($Check in $Checks) {
 	$Name = Get-CheckField -Check $Check -Name 'name'
 	$Tier = Get-CheckField -Check $Check -Name 'tier'
@@ -142,6 +315,8 @@ foreach ($Check in $Checks) {
 	if (-not $Name -or $Tier -notin @('required', 'advisory') -or (-not $Script -and -not $Command)) {
 		throw "Check manifest entry is invalid: every check needs a name, a tier of 'required' or 'advisory', and a script or command."
 	}
+	if ($Names.ContainsKey($Name)) { throw "Duplicate check name: '$Name'." }
+	$Names[$Name] = $true
 
 	if ($Script) {
 		$ScriptPath = if ([IO.Path]::IsPathRooted($Script)) { $Script } else { Join-Path $RepositoryRoot ($Script -replace '/', [IO.Path]::DirectorySeparatorChar) }
@@ -154,38 +329,58 @@ foreach ($Check in $Checks) {
 		$CommandText = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command `"$Command`""
 	}
 
-	if ($RequiredModule -and -not (Get-Module -ListAvailable -Name $RequiredModule)) {
-		$Results += [ordered]@{
-			name = $Name
-			tier = $Tier
-			status = 'skipped'
-			durationSeconds = 0
-			command = $CommandText
-			message = "Skipped: module '$RequiredModule' is not available on this runner."
+	$Prepared += @{
+		Index = $Prepared.Count; Name = $Name; Tier = $Tier
+		Arguments = $ProcessArguments; CommandText = $CommandText; RequiredModule = $RequiredModule
+	}
+}
+
+try {
+	foreach ($Check in $Prepared) {
+		$Concurrent = $Check.Name -in $ConcurrentChecks
+		if ($Concurrent) { Wait-CiSlot } else { Wait-CiSlot -Drain }
+		if ($Check.RequiredModule -and -not (Get-Module -ListAvailable -Name $Check.RequiredModule)) {
+			$Results[$Check.Index] = [ordered]@{
+				name = $Check.Name; tier = $Check.Tier; status = 'skipped'; durationSeconds = 0
+				command = $Check.CommandText; message = "Skipped: module '$($Check.RequiredModule)' is not available on this runner."
+			}
+			Write-Output "[$($Check.Tier)] $($Check.Name): skipped (module '$($Check.RequiredModule)' unavailable)"
+			continue
 		}
-		Write-Output "[$Tier] ${Name}: skipped (module '$RequiredModule' unavailable)"
-		continue
+		$Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+		try {
+			$Child = Start-HiddenPowerShell -Arguments $Check.Arguments -WorkingDirectory $RepositoryRoot
+			$Active.Add(@{ Check = $Check; Child = $Child; Stopwatch = $Stopwatch })
+		}
+		catch {
+			$InfrastructureFailed = $true
+			$Stopwatch.Stop()
+			$Results[$Check.Index] = [ordered]@{
+				name = $Check.Name; tier = $Check.Tier; status = 'failed'
+				durationSeconds = [Math]::Round($Stopwatch.Elapsed.TotalSeconds, 3)
+				command = $Check.CommandText; message = "CI child launch failed: $($_.Exception.Message)"
+			}
+		}
+		if (-not $Concurrent) { Wait-CiSlot -Drain }
 	}
-
-	$Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-	$ChildResult = Invoke-HiddenPowerShell -Arguments $ProcessArguments -WorkingDirectory $RepositoryRoot
-	$Output = @($ChildResult.Output)
-	$ExitCode = $ChildResult.ExitCode
-	$Stopwatch.Stop()
-
-	$Status = if ($ExitCode -eq 0) { 'passed' } else { 'failed' }
-	$Message = Get-OutputTail -Lines $Output
-	$Results += [ordered]@{
-		name = $Name
-		tier = $Tier
-		status = $Status
-		durationSeconds = [Math]::Round($Stopwatch.Elapsed.TotalSeconds, 3)
-		command = $CommandText
-		message = $Message
+	Wait-CiSlot -Drain
+}
+finally {
+	# Abrupt parent termination also closes its job handles in the OS.
+	foreach ($Running in $Active) {
+		$Running.Child.Job.Dispose()
+		$Running.Child.Gate.Dispose()
+		$Running.Child.ResultGate.Dispose()
+		$Running.Child.Process.Dispose()
 	}
-	Write-Output "[$Tier] ${Name}: $Status ($([Math]::Round($Stopwatch.Elapsed.TotalSeconds, 1))s)"
-	if ($Status -eq 'failed') {
-		$FailureDetails += "FAILED [$Tier] ${Name}`nCommand: $CommandText`nOutput tail:`n$Message"
+}
+
+if (@($Results | Where-Object { $null -eq $_ }).Count -gt 0 -or $Results.Count -ne $Checks.Count) {
+	throw 'CI result accounting failed: missing check result.'
+}
+foreach ($Result in $Results) {
+	if ($Result.status -eq 'failed') {
+		$FailureDetails += "FAILED [$($Result.tier)] $($Result.name)`nCommand: $($Result.command)`nOutput tail:`n$($Result.message)"
 	}
 }
 
@@ -222,9 +417,9 @@ foreach ($Detail in $FailureDetails) {
 	Write-Output $Detail
 }
 
-if ($Summary.requiredFailed -gt 0) {
+if ($Summary.requiredFailed -gt 0 -or $InfrastructureFailed) {
 	Write-Output ''
-	Write-Output "CI suite failed: $($Summary.requiredFailed) required check(s) failed."
+	Write-Output "CI suite failed: $($Summary.requiredFailed) required check(s) failed; infrastructure failure: $InfrastructureFailed."
 	exit 1
 }
 

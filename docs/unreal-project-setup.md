@@ -123,6 +123,35 @@ powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
 [Unreal Automation](unreal-automation.md) for the exact filter, output paths,
 normalized report schema, and all nonzero exit conditions.
 
+## Derived Data Cache
+
+Cooking and packaged builds can reuse a persistent local Derived Data Cache
+to avoid re-deriving unchanged content. The cache is opt-in, bound to the
+exact clean pinned engine revision, toolchain content, repository, project,
+configuration, and targets through an explicit identity record, and fails
+closed (or takes a documented clean fallback) when its identity cannot be
+verified. See
+[Developer Environment and DDC](developer-environment-and-ddc.md) for the
+identity model, path contract, fallback behavior, capacity and recovery
+guidance, and the `build-timing.json` measurement record.
+
+## Prebuilt host-tools boundary
+
+Every packaged build must choose its host-tools behavior explicitly:
+`-HostToolsBoundary Rebuild` (the explicit operator-authorized full rebuild)
+or `-HostToolsBoundary Prebuilt -EngineRevision <canonical pinned commit>
+-HostToolsAttestationPath <record>`; a missing selection fails closed. The
+prebuilt boundary skips rebuilding the host editor/engine tools only after a
+fail-closed proof: the engine root must be a clean Git checkout at exactly
+the canonical approved engine revision recorded in this document's version
+table, and every required host tool must match the size and SHA-256 recorded
+in the external attestation record, which is produced only by the explicit
+operator attestation step (`-Stage AttestHostTools`) after an authorized
+provisioning build. The client and server project targets always build with
+`-clean`. See
+[Developer Environment and DDC](developer-environment-and-ddc.md) for the
+attestation and boundary contract.
+
 ## Repository hygiene and delivery boundary
 
 Keep `Binaries/`, `DerivedDataCache/`, `Intermediate/`, `Saved/`, generated
