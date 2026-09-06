@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Script = Join-Path $RepositoryRoot 'scripts/build/Invoke-NetworkAuthoritySpike.ps1'
 $FixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AethelnAuthoritySpikeTests-{0}" -f [guid]::NewGuid().ToString('N'))
+$FixtureSucceeded = $false
 
 function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
@@ -226,18 +227,38 @@ Start-Sleep -Seconds 30
 '@
 	$FakeLauncher = Join-Path $FixtureRoot 'fake-launcher.ps1'
 Set-Content -LiteralPath $FakeLauncher -Encoding UTF8 -Value @'
-param([string] $Mode, [string] $Target, [Parameter(ValueFromRemainingArguments)] [string[]] $Remaining)
+param([string] $Mode, [string] $Target, [string] $StatePath, [Parameter(ValueFromRemainingArguments)] [string[]] $Remaining)
+$ErrorActionPreference = 'Stop'
 if ($Mode -eq 'identity') {
 	Write-Output ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $Target)
 	exit 0
 }
 if ($Mode -eq 'cleanup') {
-	$TargetProcess = Get-Process -Id ([int] $Target) -ErrorAction SilentlyContinue
-	if ($TargetProcess) {
-		Stop-Process -Id $TargetProcess.Id -Force
-		$TargetProcess.WaitForExit()
+	$TargetProcess = $null
+	try {
+		$IdentityText = Get-Content -LiteralPath $StatePath -Raw
+		$Identity = $IdentityText | ConvertFrom-Json
+		if ($Identity.pid -ne [int] $Target -or $Identity.start_ticks -le 0) { throw 'Fixture process identity mismatch.' }
+		$ExitReceiptPath = "$StatePath.exited"
+		if (Test-Path -LiteralPath $ExitReceiptPath) {
+			if ((Get-Content -LiteralPath $ExitReceiptPath -Raw) -cne $IdentityText) { throw 'Fixture exit receipt identity mismatch.' }
+		} else {
+			$TargetProcess = Get-Process -Id ([int] $Target) -ErrorAction Stop
+			# Retain the handle before reading identity or terminating: a later PID
+			# lookup can refer to a different process and cannot prove an owned leak.
+			$null = $TargetProcess.Handle
+			if ($TargetProcess.Id -ne $Identity.pid -or $TargetProcess.StartTime.ToUniversalTime().Ticks -ne $Identity.start_ticks) { throw 'Fixture live process identity mismatch.' }
+			if (-not $TargetProcess.HasExited) {
+				try { $TargetProcess.Kill() } catch { if (-not $TargetProcess.HasExited) { throw } }
+			}
+			if (-not $TargetProcess.WaitForExit(2000) -or -not $TargetProcess.HasExited) { throw 'Fixture owned process did not exit.' }
+		}
+	} catch {
+		[Console]::Error.WriteLine($_.Exception.Message)
+		exit 43
+	} finally {
+		if ($null -ne $TargetProcess) { $TargetProcess.Dispose() }
 	}
-	if (Get-Process -Id ([int] $Target) -ErrorAction SilentlyContinue) { exit 43 }
 	if ($env:AETHELN_TEST_CLEANUP_FAIL -eq 'true') { exit 42 }
 	Write-Output "AETHELN_SERVER_DESCENDANT_EXITED=$Target"
 	exit 0
@@ -245,10 +266,114 @@ if ($Mode -eq 'cleanup') {
 if ($Mode -ne 'launch') { throw "Unsupported launcher mode '$Mode'." }
 if ($env:AETHELN_TEST_LAUNCHER_FAIL -eq 'true') { exit 41 }
 $Child = Start-Process -FilePath $Target -ArgumentList $Remaining -PassThru -NoNewWindow
+$null = $Child.Handle
+$IdentityText = [ordered]@{ pid = $Child.Id; start_ticks = $Child.StartTime.ToUniversalTime().Ticks } | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText($StatePath, $IdentityText)
 Write-Output "AETHELN_SERVER_DESCENDANT_PID=$($Child.Id)"
 $Child.WaitForExit()
+[System.IO.File]::WriteAllText("$StatePath.exited", $IdentityText)
 exit $Child.ExitCode
 '@
+
+	# Exercise cleanup against real owned processes while deterministically making
+	# a second PID lookup observe a different process after the first has exited.
+	$CleanupProbe = Join-Path $FixtureRoot 'cleanup-probe.ps1'
+	Set-Content -LiteralPath $CleanupProbe -Encoding UTF8 -Value @'
+param([string] $Launcher, [int] $TargetId, [int] $SentinelId, [string] $StatePath, [string] $Behavior = 'second-lookup')
+$script:LookupCount = 0
+function Get-Process {
+	param([int] $Id, [string] $ErrorAction)
+	$script:LookupCount++
+	if ($Behavior -eq 'first-unrelated' -or $script:LookupCount -gt 1) { return Microsoft.PowerShell.Management\Get-Process -Id $SentinelId }
+	if ($Behavior -eq 'first-reused') {
+		$Actual = Microsoft.PowerShell.Management\Get-Process -Id $SentinelId
+		$Original = Microsoft.PowerShell.Management\Get-Process -Id $Id
+		$Reused = [pscustomobject]@{ Id = $Id; StartTime = $Original.StartTime.AddTicks(1); Handle = $Actual.Handle; HasExited = $false; Actual = $Actual }
+		$Reused | Add-Member ScriptMethod Kill { $this.Actual.Kill() }
+		$Reused | Add-Member ScriptMethod Dispose { $this.Actual.Dispose() }
+		return $Reused
+	}
+	if ($Behavior -eq 'termination-refused') {
+		$Actual = Microsoft.PowerShell.Management\Get-Process -Id $Id
+		$Refused = [pscustomobject]@{ Id = $Actual.Id; StartTime = $Actual.StartTime; Handle = $Actual.Handle; HasExited = $false }
+		$Refused | Add-Member ScriptMethod Kill { }
+		$Refused | Add-Member ScriptMethod WaitForExit { param($Milliseconds) return $false }
+		$Refused | Add-Member ScriptMethod Dispose { }
+		return $Refused
+	}
+	return Microsoft.PowerShell.Management\Get-Process -Id $Id -ErrorAction Stop
+}
+& $Launcher cleanup $TargetId $StatePath
+exit $LASTEXITCODE
+'@
+	function Invoke-CleanupProbe([string[]] $ProbeArguments, [string] $Name) {
+		$StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+		$StartInfo.FileName = $PowerShellExecutable
+		$StartInfo.Arguments = (@('-NoProfile', '-File') + $ProbeArguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' '
+		$StartInfo.UseShellExecute = $false
+		$StartInfo.CreateNoWindow = $true
+		$StartInfo.RedirectStandardOutput = $true
+		$StartInfo.RedirectStandardError = $true
+		$Probe = [System.Diagnostics.Process]::Start($StartInfo)
+		try {
+			$OutputRead = $Probe.StandardOutput.ReadToEndAsync()
+			$ErrorRead = $Probe.StandardError.ReadToEndAsync()
+			if (-not $Probe.WaitForExit(8000)) { throw 'Fixture cleanup probe timed out.' }
+			$OutputText = $OutputRead.GetAwaiter().GetResult()
+			$ErrorText = $ErrorRead.GetAwaiter().GetResult()
+			[System.IO.File]::WriteAllText((Join-Path $FixtureRoot "$Name.stdout.log"), $OutputText)
+			[System.IO.File]::WriteAllText((Join-Path $FixtureRoot "$Name.stderr.log"), $ErrorText)
+			return [pscustomobject]@{ ExitCode = $Probe.ExitCode; Output = $OutputText; Error = $ErrorText }
+		} finally {
+			if (-not $Probe.HasExited) { $Probe.Kill(); $Probe.WaitForExit() }
+			$Probe.Dispose()
+		}
+	}
+	$CleanupTarget = $null
+	$CleanupSentinel = $null
+	try {
+		$CleanupTarget = Start-Process -FilePath $PowerShellExecutable -ArgumentList @('-NoProfile', '-Command', 'while ($true) { Start-Sleep -Seconds 1 }') -PassThru -WindowStyle Hidden
+		$CleanupSentinel = Start-Process -FilePath $PowerShellExecutable -ArgumentList @('-NoProfile', '-Command', 'while ($true) { Start-Sleep -Seconds 1 }') -PassThru -WindowStyle Hidden
+		# Retain the exact original process handle through cleanup and its assertions.
+		$null = $CleanupTarget.Handle
+		$CleanupStatePath = Join-Path $FixtureRoot 'cleanup-probe-identity.json'
+		$CleanupIdentityText = [ordered]@{ pid = $CleanupTarget.Id; start_ticks = $CleanupTarget.StartTime.ToUniversalTime().Ticks } | ConvertTo-Json -Compress
+		[System.IO.File]::WriteAllText($CleanupStatePath, $CleanupIdentityText)
+		foreach ($ProbeBehavior in @('first-unrelated', 'first-reused', 'termination-refused')) {
+			$ProbeResult = Invoke-CleanupProbe @($CleanupProbe, $FakeLauncher, $CleanupTarget.Id, $CleanupSentinel.Id, $CleanupStatePath, $ProbeBehavior) $ProbeBehavior
+			Assert-True ($ProbeResult.ExitCode -eq 43) "Cleanup must report $ProbeBehavior as failure. Actual: $($ProbeResult.ExitCode) $($ProbeResult.Error)"
+			Assert-True (-not $CleanupTarget.HasExited -and -not $CleanupSentinel.HasExited) 'Rejected cleanup must not terminate the target or unrelated process.'
+		}
+		$ProbeResult = Invoke-CleanupProbe @($CleanupProbe, $FakeLauncher, $CleanupTarget.Id, $CleanupSentinel.Id, $CleanupStatePath) 'second-lookup'
+		$CleanupOutput = $ProbeResult.Output
+		$CleanupExitCode = $ProbeResult.ExitCode
+		Write-Output "Cleanup identity probe: exit=$CleanupExitCode target_exited=$($CleanupTarget.HasExited) sentinel_exited=$($CleanupSentinel.HasExited) output=$CleanupOutput"
+		Assert-True $CleanupTarget.HasExited 'Launcher cleanup must actually terminate the owned process.'
+		Assert-True (-not $CleanupSentinel.HasExited) 'Launcher cleanup must preserve an unrelated process observed through a reused PID.'
+		Assert-True ($CleanupExitCode -eq 0) 'A later PID lookup must not turn confirmed owned-process termination into cleanup failure.'
+		$MissingStatePath = Join-Path $FixtureRoot 'missing-cleanup-identity.json'
+		$ProbeResult = Invoke-CleanupProbe @($FakeLauncher, 'cleanup', $CleanupTarget.Id, $MissingStatePath) 'missing-identity'
+		Assert-True ($ProbeResult.ExitCode -eq 43) 'Missing launch identity cannot establish cleanup success.'
+		$ProbeResult = Invoke-CleanupProbe @($FakeLauncher, 'cleanup', $CleanupTarget.Id, $CleanupStatePath) 'missing-exit-receipt'
+		Assert-True ($ProbeResult.ExitCode -eq 43) 'An absent PID without a launcher exit receipt cannot establish cleanup success.'
+		[System.IO.File]::WriteAllText("$CleanupStatePath.exited", $CleanupIdentityText)
+		$ProbeResult = Invoke-CleanupProbe @($CleanupProbe, $FakeLauncher, $CleanupTarget.Id, $CleanupSentinel.Id, $CleanupStatePath, 'first-unrelated') 'already-exited'
+		Assert-True ($ProbeResult.ExitCode -eq 0 -and -not $CleanupSentinel.HasExited) 'An identity-matched exit receipt must accept an already-exited target without touching a reused PID.'
+		$MismatchStatePath = Join-Path $FixtureRoot 'mismatched-cleanup-identity.json'
+		[System.IO.File]::WriteAllText($MismatchStatePath, $CleanupIdentityText)
+		[System.IO.File]::WriteAllText("$MismatchStatePath.exited", '{"pid":1,"start_ticks":1}')
+		$ProbeResult = Invoke-CleanupProbe @($FakeLauncher, 'cleanup', $CleanupTarget.Id, $MismatchStatePath) 'mismatched-exit-receipt'
+		Assert-True ($ProbeResult.ExitCode -eq 43) 'Mismatched exit receipts must fail cleanup.'
+	}
+	finally {
+		foreach ($ProbeProcess in @($CleanupTarget, $CleanupSentinel)) {
+			if ($null -ne $ProbeProcess) {
+				if (-not $ProbeProcess.HasExited) { $ProbeProcess.Kill(); $ProbeProcess.WaitForExit() }
+				$ProbeProcess.Dispose()
+			}
+		}
+	}
+	Write-Output 'PASS: launcher cleanup confirms owned-process exit without interpreting a later PID occupant as a leak'
 
 	function Invoke-FixtureRun(
 		[string] $FixtureLogRoot,
@@ -349,10 +474,11 @@ exit $Child.ExitCode
 		if ($JoinInProgressPatternOverride) { $Arguments.JoinInProgressPattern = $JoinInProgressPatternOverride }
 		if ($DamagePatternOverride) { $Arguments.DamagePattern = $DamagePatternOverride }
 		if ($UseLauncher) {
+			$LauncherStatePath = Join-Path $FixtureRoot "launcher-identity-$FixtureRunId.json"
 			$Arguments.ServerLauncherExecutable = $PowerShellExecutable
-			$Arguments.ServerLauncherArguments = @('-NoProfile', '-File', $FakeLauncher, 'launch', '{ServerExecutable}', '{ServerArguments}')
+			$Arguments.ServerLauncherArguments = @('-NoProfile', '-File', $FakeLauncher, 'launch', '{ServerExecutable}', $LauncherStatePath, '{ServerArguments}')
 			$Arguments.ServerIdentityArguments = @('-NoProfile', '-File', $FakeLauncher, 'identity', '{ServerExecutable}')
-			$Arguments.ServerCleanupArguments = @('-NoProfile', '-File', $FakeLauncher, 'cleanup', '{ServerProcessId}')
+			$Arguments.ServerCleanupArguments = @('-NoProfile', '-File', $FakeLauncher, 'cleanup', '{ServerProcessId}', $LauncherStatePath)
 			$Arguments.ServerProcessIdPattern = 'AETHELN_SERVER_DESCENDANT_PID=(?<ProcessId>[1-9][0-9]*)'
 		}
 		if ($PackagedBuildProvenancePath) { $Arguments.PackagedBuildProvenancePath = $PackagedBuildProvenancePath }
@@ -1137,6 +1263,7 @@ exit $Child.ExitCode
 	} catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'ServerArguments must contain.*ScenarioId') 'Missing correlation placeholders must fail before launch.'
 	Write-Output 'PASS: incomplete launch correlation fails closed'
+	$FixtureSucceeded = $true
 }
 finally {
 	foreach ($FixtureProcess in @(Get-Process -ErrorAction SilentlyContinue)) {
@@ -1145,5 +1272,9 @@ finally {
 			Stop-Process -Id $FixtureProcess.Id -Force -ErrorAction SilentlyContinue
 		}
 	}
-	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	if ($FixtureSucceeded) {
+		if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	} else {
+		Write-Output "Failed network-authority fixtures retained at '$FixtureRoot'."
+	}
 }
