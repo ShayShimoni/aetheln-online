@@ -7,7 +7,6 @@ on:
       - develop
   schedule:
     - cron: '0 2 * * *'
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,6 +14,7 @@ permissions:
 jobs:
   quality-gates:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,20 +32,156 @@ jobs:
           name: ci-report
           path: TestResults/ci-report.json
 
+  # Issue #150 pull-request change-impact classifier. GitHub-hosted, checkout
+  # plus repository-owned PowerShell only. It compares the exact pull-request
+  # base and head SHAs (passed through env, never interpolated into the
+  # script) and skips trusted Unreal compilation only when every changed path
+  # belongs to the closed portable-only set. Every uncertainty — invalid or
+  # missing SHAs, unreachable commits, Git errors, an empty diff, a quoted or
+  # rename/copy diff entry — fails closed to engine_required=true, and the
+  # step always exits 0 so the decision is always published.
+  change-impact:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      engine_required: ${{ steps.classify.outputs.engine_required }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+      - name: Classify changed paths
+        id: classify
+        shell: powershell
+        env:
+          AETHELN_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          AETHELN_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          $EngineRequired = $true
+          $Reason = 'classifier_error'
+          $Detail = ''
+
+          function Invoke-GitRaw([string[]] $Arguments) {
+            $Previous = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+              $Output = @(& git @Arguments 2>&1 | ForEach-Object { "$_" })
+              $ExitCode = $LASTEXITCODE
+            }
+            finally {
+              $ErrorActionPreference = $Previous
+            }
+            return @{ Output = $Output; ExitCode = $ExitCode }
+          }
+
+          function Test-PortablePath([string] $Path) {
+            # Closed portable-only set (case-sensitive). These exact CI files
+            # are checked by the required portable suites and independent review;
+            # an Unreal compile does not validate their scheduling or YAML logic.
+            # Other scripts/workflows and all engine inputs still require compile.
+            $PortableCiPaths = @(
+              'scripts/ci/Invoke-CiSuite.ps1',
+              'scripts/ci/Test-FormattingPolicy.ps1',
+              'scripts/ci/Test-MarkdownLinks.ps1',
+              'scripts/build/Build-PackagedArtifacts.ps1',
+              'scripts/build/Invoke-PackagedSmokeTest.ps1',
+              'scripts/ci/Invoke-EngineRunnerGate.ps1',
+              'scripts/ci/Initialize-CompileWorkspace.ps1',
+              '.github/workflows/prototype-quality-gates.yml'
+            )
+            if ($PortableCiPaths -ccontains $Path) { return $true }
+            if ($Path -cmatch '^docs/.+') { return $true }
+            if ($Path -cmatch '^visuals/.+') { return $true }
+            if ($Path -cmatch '^output/pdf/.+') { return $true }
+            if ($Path -cmatch '^tests/.+\.(ps1|md)$') { return $true }
+            if ($Path -cmatch '^[^/]+\.md$') { return $true }
+            if ($Path -cmatch '^\.github/(ISSUE_TEMPLATE|PULL_REQUEST_TEMPLATE)/[^/]+\.(md|yml|yaml)$') { return $true }
+            if ($Path -cmatch '^\.github/(PULL_REQUEST_TEMPLATE|pull_request_template)\.md$') { return $true }
+            return $false
+          }
+
+          try {
+            $BaseSha = [string] $env:AETHELN_PR_BASE_SHA
+            $HeadSha = [string] $env:AETHELN_PR_HEAD_SHA
+            if ($BaseSha -cnotmatch '^[0-9a-f]{40}$' -or $HeadSha -cnotmatch '^[0-9a-f]{40}$') { throw 'invalid_sha' }
+            if ($BaseSha -eq $HeadSha) { throw 'identical_shas' }
+            foreach ($Revision in @($BaseSha, $HeadSha)) {
+              if ((Invoke-GitRaw @('cat-file', '-e', "$Revision^{commit}")).ExitCode -ne 0) {
+                $null = Invoke-GitRaw @('fetch', '--no-tags', '--depth=1', 'origin', $Revision)
+                if ((Invoke-GitRaw @('cat-file', '-e', "$Revision^{commit}")).ExitCode -ne 0) { throw 'commit_unavailable' }
+              }
+            }
+            $Diff = Invoke-GitRaw @('diff', '--name-status', '--no-renames', $BaseSha, $HeadSha)
+            if ($Diff.ExitCode -ne 0) { throw 'diff_failed' }
+            $Entries = @($Diff.Output | Where-Object { $_ -ne '' })
+            if ($Entries.Count -eq 0) { throw 'empty_diff' }
+            $EnginePaths = @()
+            foreach ($Entry in $Entries) {
+              if ($Entry -cnotmatch '^[AMDT]\t([^\t"]+)$') { throw 'unexpected_diff_entry' }
+              if (-not (Test-PortablePath $Matches[1])) { $EnginePaths += $Matches[1] }
+            }
+            if ($EnginePaths.Count -gt 0) {
+              $Reason = 'engine_paths_changed'
+              $Detail = (@($EnginePaths | Select-Object -First 20) -join ', ')
+            }
+            else {
+              $EngineRequired = $false
+              $Reason = 'portable_paths_only'
+              $Detail = "$($Entries.Count) portable path(s)"
+            }
+          }
+          catch {
+            $EngineRequired = $true
+            $Message = [string] $_.Exception.Message
+            $Known = @('invalid_sha', 'identical_shas', 'commit_unavailable', 'diff_failed', 'empty_diff', 'unexpected_diff_entry')
+            if ($Known -contains $Message) { $Reason = $Message } else { $Reason = 'classifier_error' }
+          }
+
+          $Flag = if ($EngineRequired) { 'true' } else { 'false' }
+          $Utf8 = New-Object System.Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "engine_required=$Flag`nreason=$Reason`n", $Utf8)
+          $Summary = "Change impact: engine_required=$Flag (reason: $Reason)."
+          if ($Detail) { $Summary = "Change impact: engine_required=$Flag (reason: ${Reason}; $Detail)." }
+          [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$Summary`n", $Utf8)
+          Write-Output $Summary
+          exit 0
+
+  # Trusted compile starts only after the portable gates passed and the
+  # classifier demanded the engine (implicit success on both needs edges; no
+  # status-function bypass). A portable failure, a cancellation, or a skipped
+  # prerequisite keeps it off the engine runner.
   trusted-candidate-compile:
+    needs:
+      - quality-gates
+      - change-impact
     if: >-
       github.event_name == 'pull_request' &&
+      needs.change-impact.outputs.engine_required == 'true' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == github.repository_owner &&
       github.triggering_actor == github.repository_owner
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: compile
     concurrency:
       group: aetheln-engine-runner
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
+          path: compile
+          clean: false
+      - name: Prepare exact retained compile outputs
+        shell: powershell
+        run: powershell -NoProfile -File scripts/ci/Initialize-CompileWorkspace.ps1 -RepositoryRoot '${{ github.workspace }}/compile'
       - name: Fetch Unreal Content LFS objects
         shell: powershell
         run: git lfs pull --include "Content/**"
@@ -55,80 +191,214 @@ jobs:
           $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
           powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
             -Mode Compile `
-            -RepositoryRoot '${{ github.workspace }}' `
+            -RepositoryRoot '${{ github.workspace }}/compile' `
             -SourceRevision '${{ github.sha }}' `
             -ArchiveRoot (Join-Path $RunRoot 'archives') `
-            -LogRoot (Join-Path $RunRoot 'logs')
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -CompileTimeoutMinutes 30 `
+            -ReportPath (Join-Path $RunRoot 'engine-runner-report.json')
       - name: Upload engine-runner report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: engine-runner-compile-report
-          path: TestResults/engine-runner-report.json
+          path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json
           if-no-files-found: error
 
-  scheduled-packaged-smoke:
+  # Issue #150 milestone phases. The packaging and smoke milestone is split
+  # into four bounded, schedule-only jobs (no manual trigger exists on this
+  # workflow identity, so an older branch carrying the retired 1,440-minute
+  # PackagedSmoke job can never be selected; no single-job package/smoke entry
+  # point exists) that reacquire the shared aetheln-engine-runner concurrency
+  # group at every phase boundary. Phase 1 needs quality-gates, so a portable
+  # failure, cancellation, or skip keeps every phase off the runner. queue: max
+  # keeps waiting jobs FIFO by wait-start time, so a queued
+  # trusted-candidate-compile job can enter at the next phase boundary; this is
+  # not an absolute priority and older queued jobs stay ahead of it. Job
+  # timeout-minutes is the total concurrency-holding bound for each phase
+  # (checkout, LFS, the gate script, and evidence upload all fit inside it).
+  # The gate enforces a hard bound over its whole controlled script interval:
+  # a supervising parent re-invokes the gate as a kill-on-close child tree
+  # that runs the complete phase body — setup, handoff validation, cleanup
+  # scanning, root accounting, manifest reads, payload hashing, smoke
+  # discovery, the build/smoke work, and timeout finalization. The child keeps
+  # the cooperative absolute script-phase deadline (every operation consumes
+  # remaining time from it); if any synchronous operation or finalization
+  # blocks across that deadline, the parent stops and verifies the whole tree
+  # at the deadline plus a bounded finalization grace (default 120 s, capped
+  # at 600 s), classifies phase_timeout (or phase_cleanup_failed when tree
+  # termination cannot be verified), and writes the bounded report itself —
+  # Report publication is best effort within the remaining job time: checkout,
+  # LFS and finalization consume the same platform budget. Platform cancellation
+  # or runner loss can prevent a report; missing evidence never means success.
+  # Checkout/LFS and the report upload sit only inside the job bound: no
+  # report can be preserved if the platform kills the job before the gate
+  # script starts.
+  # Packaged bytes move between phases only through the durable
+  # AETHELN_HANDOFF_ROOT store with fail-closed integrity manifests; nothing
+  # under it is deleted by CI.
+  scheduled-client-package:
     if: github.event_name == 'schedule'
+    needs: quality-gates
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    timeout-minutes: 1440
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: milestone
     concurrency:
       group: aetheln-engine-runner
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
           lfs: false
+          path: milestone
+          fetch-depth: 0
       - name: Fetch Unreal Content LFS objects
         shell: powershell
         run: git lfs pull --include "Content/**"
-      - name: Run packaged smoke gate
+      - name: Run scheduled client packaging phase
         shell: powershell
         run: |
           $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
           powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
-            -Mode PackagedSmoke `
-            -RepositoryRoot '${{ github.workspace }}' `
+            -Mode PackageClient `
+            -RepositoryRoot '${{ github.workspace }}/milestone' `
             -SourceRevision '${{ github.sha }}' `
-            -ArchiveRoot (Join-Path $RunRoot 'archives') `
-            -LogRoot (Join-Path $RunRoot 'logs')
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 30
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-client-package-report
+          path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  scheduled-server-package:
+    if: github.event_name == 'schedule'
+    needs: scheduled-client-package
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: milestone
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          path: milestone
+          fetch-depth: 0
+      - name: Fetch Unreal Content LFS objects
+        shell: powershell
+        run: git lfs pull --include "Content/**"
+      - name: Run scheduled server packaging phase
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode PackageServer `
+            -RepositoryRoot '${{ github.workspace }}/milestone' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 30
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-server-package-report
+          path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  scheduled-provenance-validation:
+    if: github.event_name == 'schedule'
+    needs: scheduled-server-package
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: milestone
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          path: milestone
+          fetch-depth: 0
+      - name: Run scheduled registry and provenance validation phase
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode ValidateProvenance `
+            -RepositoryRoot '${{ github.workspace }}/milestone' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 10
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-runner-provenance-validation-report
+          path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  scheduled-packaged-smoke:
+    if: github.event_name == 'schedule'
+    needs: scheduled-provenance-validation
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: milestone
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+          path: milestone
+          fetch-depth: 0
+      - name: Run scheduled packaged smoke phase
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode SmokePhase `
+            -RepositoryRoot '${{ github.workspace }}/milestone' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 10
       - name: Upload engine-runner report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: engine-runner-scheduled-smoke-report
-          path: TestResults/engine-runner-report.json
-          if-no-files-found: error
-
-  manual-packaged-smoke:
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      github.triggering_actor == github.repository_owner
-    runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    timeout-minutes: 1440
-    concurrency:
-      group: aetheln-engine-runner
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: false
-      - name: Fetch Unreal Content LFS objects
-        shell: powershell
-        run: git lfs pull --include "Content/**"
-      - name: Run packaged smoke gate
-        shell: powershell
-        run: |
-          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
-          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
-            -Mode PackagedSmoke `
-            -RepositoryRoot '${{ github.workspace }}' `
-            -SourceRevision '${{ github.sha }}' `
-            -ArchiveRoot (Join-Path $RunRoot 'archives') `
-            -LogRoot (Join-Path $RunRoot 'logs')
-      - name: Upload engine-runner report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: engine-runner-manual-smoke-report
-          path: TestResults/engine-runner-report.json
+          path: milestone/TestResults/engine-runner-report.json
           if-no-files-found: error
