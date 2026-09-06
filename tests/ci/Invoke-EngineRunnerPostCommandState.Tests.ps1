@@ -107,6 +107,9 @@ function Invoke-Case([string] $Name, [string] $Mode, [string] $Case) {
 	$env:RUNNER_POST_ALT_REVISION = $Fixture.AlternateRevision
 	$env:AETHELN_ENGINE_ROOT = $Fixture.Engine
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $Fixture.Toolchain
+	# Packaging modes require an explicit host-tools selection; these cases
+	# exercise post-command state, so use the explicit authorized rebuild.
+	$env:AETHELN_HOST_TOOLS = 'rebuild-authorized'
 	$env:PATH = $Fixture.Bin + [IO.Path]::PathSeparator + $Original.PATH
 	$Previous = $ErrorActionPreference
 	try {
@@ -138,6 +141,7 @@ try {
 
 	$Report = Invoke-Case 'client-dirty' 'Compile' 'client-dirty'
 	Assert-FailedPair $Report 'incremental-client-build' 'incremental-client-build-repository-state' 'repository_drift_detected'
+	Assert-True ($Report.supervisor.childExitCode -ne 0 -and -not $Report.supervisor.timedOut -and $Report.supervisor.cleanupVerified) 'An ordinary compile failure must retain the actual child failure receipt with verified descendant cleanup.'
 
 	$Report = Invoke-Case 'server-revision' 'Compile' 'server-revision'
 	$Client = @($Report.checks | Where-Object name -eq 'incremental-client-build')
@@ -155,7 +159,7 @@ try {
 	$env:PATH = $Original.PATH
 	$env:AETHELN_ENGINE_ROOT = $Original.Engine
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $Original.Toolchain
-	@('RUNNER_POST_CASE','RUNNER_POST_REPOSITORY','RUNNER_POST_ALT_REVISION') | ForEach-Object {
+	@('RUNNER_POST_CASE','RUNNER_POST_REPOSITORY','RUNNER_POST_ALT_REVISION','AETHELN_HOST_TOOLS') | ForEach-Object {
 		Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore
 	}
 	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
