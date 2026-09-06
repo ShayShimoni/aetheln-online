@@ -109,7 +109,7 @@ param(
 	[string] $Behavior = 'normal',
 	[string] $RejectionReason = 'duplicate-sequence',
 	[string] $ExitAfterMarkers = 'false',
-	[int] $ControlledExitAfterSeconds = 0,
+	[string] $ControlledExitSignalPath = 'none',
 	[Parameter(ValueFromRemainingArguments)] [string[]] $Remaining
 )
 if ($Role -eq 'server') {
@@ -196,8 +196,8 @@ if ($Role -eq 'server') {
 		Start-Sleep -Seconds 1
 		exit 0
 	}
-	if ($ControlledExitAfterSeconds -gt 0) {
-		Start-Sleep -Seconds $ControlledExitAfterSeconds
+	if ($ControlledExitSignalPath -ne 'none') {
+		while (-not (Test-Path -LiteralPath $ControlledExitSignalPath -PathType Leaf)) { Start-Sleep -Milliseconds 50 }
 		exit 0
 	}
 	while ($true) { Start-Sleep -Milliseconds 50 }
@@ -265,12 +265,14 @@ exit $Child.ExitCode
 		[string[]] $ServerArgumentsOverride,
 		[string[]] $ClientArgumentsOverride,
 		[string] $JoinInProgressPatternOverride,
-		[string] $DamagePatternOverride
+		[string] $DamagePatternOverride,
+		[int] $ObservationStartDelaySeconds = 0,
+		[bool] $WithholdShutdownRelease = $false
 	) {
-		$ControlledExitAfterSeconds = if ($UseContracts -and $Behavior -in @('normal','literal-profile-token','adversarial-public-lines','duplicate-death','duplicate-respawn','duplicate-shutdown')) { $DurationSeconds + 2 } else { 0 }
+		$ControlledExitSignalPath = if ($UseContracts -and -not $ExitAfterMarkers -and $Behavior -in @('normal','literal-profile-token','adversarial-public-lines','duplicate-death','duplicate-respawn','duplicate-shutdown')) { Join-Path $FixtureRoot ("shutdown-release-$FixtureRunId") } else { 'none' }
 		$Arguments = @{
 			ServerExecutable = $PowerShellExecutable
-			ServerArguments = @('-NoProfile', '-File', $FakeRuntime, 'server', 'server', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', '{Environment}', $Behavior, $RejectionReason, $ExitAfterMarkers.ToString().ToLowerInvariant(), $ControlledExitAfterSeconds.ToString())
+			ServerArguments = @('-NoProfile', '-File', $FakeRuntime, 'server', 'server', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', '{Environment}', $Behavior, $RejectionReason, $ExitAfterMarkers.ToString().ToLowerInvariant(), $ControlledExitSignalPath)
 			ClientExecutable = $PowerShellExecutable
 			ClientArguments = @('-NoProfile', '-File', $FakeRuntime, 'client', '{ClientId}', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', '{Environment}', $Behavior)
 			ServerEndpoint = '127.0.0.1:7777'
@@ -347,7 +349,26 @@ exit $Child.ExitCode
 		}
 		if ($PackagedBuildProvenancePath) { $Arguments.PackagedBuildProvenancePath = $PackagedBuildProvenancePath }
 		if ($ServerProvenanceExecutable) { $Arguments.ServerProvenanceExecutable = $ServerProvenanceExecutable }
-		& $Script @Arguments
+		$ObservationDelayBreakpoint = $null
+		$ShutdownReleaseBreakpoint = $null
+		try {
+			if ($ObservationStartDelaySeconds -gt 0) {
+				$DelayObservation = { Start-Sleep -Seconds $ObservationStartDelaySeconds }.GetNewClosure()
+				$ObservationDelayBreakpoint = Set-PSBreakpoint -Script $Script -Command Wait-ForObservationInterval -Action $DelayObservation
+			}
+			if ($ControlledExitSignalPath -ne 'none' -and -not $WithholdShutdownRelease) {
+				# A non-breaking, script-scoped action releases only the fake server, after
+				# the real observation interval and shutdown-marker validation complete.
+				# Production health checks, exit timeout, and cleanup remain unchanged.
+				$ReleaseShutdown = { [System.IO.File]::WriteAllText($ControlledExitSignalPath, 'release') }.GetNewClosure()
+				$ShutdownReleaseBreakpoint = Set-PSBreakpoint -Script $Script -Command Wait-ForSuccessfulProcessExit -Action $ReleaseShutdown
+			}
+			& $Script @Arguments
+		}
+		finally {
+			if ($null -ne $ObservationDelayBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationDelayBreakpoint }
+			if ($null -ne $ShutdownReleaseBreakpoint) { Remove-PSBreakpoint -Breakpoint $ShutdownReleaseBreakpoint }
+		}
 	}
 
 	$LogRoot = Join-Path $FixtureRoot 'success'
@@ -479,6 +500,20 @@ exit $Child.ExitCode
 	Assert-True ($ContractEvidenceJson.IndexOf($FixtureRoot, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) 'Normalized v2 evidence must not expose the fixture or log root.'
 	Assert-True ($ContractEvidenceJson -notmatch '--fixture-(server|client)-profile') 'Normalized v2 evidence must not expose raw opaque profile arguments.'
 	Write-Output 'PASS: versioned fixture contracts produce exact lifecycle, profile, rejection, cleanup, and path-safe schema-v2 evidence'
+
+	$DelayedObservationRoot = Join-Path $FixtureRoot 'delayed-observation-start'
+	Invoke-FixtureRun -FixtureLogRoot $DelayedObservationRoot -FixtureRunId 'fixture-delayed-observation-start' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseContracts $true -ObservationStartDelaySeconds 4
+	$DelayedObservationEvidence = Get-Content -LiteralPath (Join-Path $DelayedObservationRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($DelayedObservationEvidence.result -eq 'fixture-passed' -and $DelayedObservationEvidence.cleanup.succeeded) 'Delaying observation beyond the former server-relative exit timer must still complete observation, controlled shutdown, and cleanup.'
+	Write-Output 'PASS: delayed observation entry does not race controlled fixture shutdown'
+
+	$WithheldReleaseRoot = Join-Path $FixtureRoot 'withheld-shutdown-release'
+	$WithheldReleaseFailure = $null
+	try { Invoke-FixtureRun -FixtureLogRoot $WithheldReleaseRoot -FixtureRunId 'fixture-withheld-shutdown-release' -RejectionReason 'malformed-intent' -DurationSeconds 1 -TimeoutSeconds 2 -UseContracts $true -WithholdShutdownRelease $true } catch { $WithheldReleaseFailure = $_.Exception.Message }
+	Assert-True ($WithheldReleaseFailure -match 'waiting for authoritative server exit after controlled shutdown') 'A withheld fixture shutdown release must reach the production exit timeout.'
+	$WithheldReleaseEvidence = Get-Content -LiteralPath (Join-Path $WithheldReleaseRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($WithheldReleaseEvidence.result -eq 'failed' -and $WithheldReleaseEvidence.failure_details.observed_stage -eq 'shutdown' -and $WithheldReleaseEvidence.cleanup.succeeded) 'A withheld fixture shutdown release must fail at shutdown and clean up owned runtime processes.'
+	Write-Output 'PASS: withheld fixture shutdown release times out and cleans up owned processes'
 
 	function Write-ContractCatalog([string] $Path, [object[]] $Profiles, [string] $SelectedProfileId = 'network-profile.clean') {
 		[ordered]@{ schema_id = 'aetheln.network-profile-catalog'; schema_version = 1; selected_profile_id = $SelectedProfileId; profiles = @($Profiles) } |

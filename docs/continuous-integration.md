@@ -62,7 +62,11 @@ finish out of order. No check or existing fixture deadline is removed.
 
 Each hidden check process tree belongs to a private kill-on-close Windows Job
 Object before the check starts. Parent termination closes its owned trees,
-not unrelated PowerShell processes. A leaked descendant, incomplete result,
+not unrelated PowerShell processes. After the root exits, job accounting has a
+bounded five-second monotonic quiescence grace; a transient termination count
+does not replace the check's actual exit code or completed-result requirement.
+This grace is separate from the bootstrap's five-second post-exit pipe drain.
+A persistent descendant, incomplete result,
 or launch/capture failure fails the suite even for an advisory check. Both
 output streams are drained concurrently; diagnostics written before a
 post-exit pipe failure are retained. Module-unavailable skips keep their

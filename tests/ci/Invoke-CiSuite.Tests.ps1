@@ -80,6 +80,58 @@ function Assert-CheckShape {
 try {
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
 	$RunnerSource = Get-Content -LiteralPath $Runner -Raw
+	# Drive the real completion boundary with deterministic job-accounting
+	# samples. A signaled root handle need not mean its job is already empty.
+	$RunnerAst = [Management.Automation.Language.Parser]::ParseInput($RunnerSource, [ref] $null, [ref] $null)
+	foreach ($FunctionName in @('Get-OutputTail', 'Wait-CiJobQuiescence', 'Complete-CiCheck')) {
+		$Definition = $RunnerAst.Find({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq $FunctionName }, $false)
+		if ($null -ne $Definition) { . ([scriptblock]::Create($Definition.Extent.Text)) }
+	}
+	function Invoke-CompletionFixture {
+		param([int] $ExitCode = 0, [bool] $HasResult = $true, [switch] $Persistent, [switch] $QueryFailure, [switch] $CleanupFailure)
+		$Job = [pscustomobject]@{ Samples = 0; Disposals = 0; Persistent = $Persistent.IsPresent; QueryFailure = $QueryFailure.IsPresent; CleanupFailure = $CleanupFailure.IsPresent }
+		$Job | Add-Member ScriptMethod ActiveProcesses {
+			$this.Samples++
+			if ($this.QueryFailure) { throw 'fixture job accounting failure' }
+			if ($this.Persistent -or $this.Samples -le 2) { return 1 }
+			return 0
+		}
+		$Job | Add-Member ScriptMethod Dispose {
+			$this.Disposals++
+			if ($this.CleanupFailure -and $this.Disposals -eq 1) { throw 'fixture job cleanup failure' }
+		}
+		$Process = [pscustomobject]@{ ExitCode = $ExitCode }
+		$Process | Add-Member ScriptMethod WaitForExit {}
+		$Process | Add-Member ScriptMethod Dispose {}
+		$Output = [Threading.Tasks.TaskCompletionSource[string]]::new()
+		$Output.SetResult('fixture completed output')
+		$ErrorOutput = [Threading.Tasks.TaskCompletionSource[string]]::new()
+		$ErrorOutput.SetResult('')
+		$ResultGate = [Threading.EventWaitHandle]::new($HasResult, [Threading.EventResetMode]::ManualReset)
+		$Gate = [Threading.EventWaitHandle]::new($true, [Threading.EventResetMode]::ManualReset)
+		$script:Results = [object[]]::new(1)
+		$script:InfrastructureFailed = $false
+		$Elapsed = [Diagnostics.Stopwatch]::StartNew()
+		Complete-CiCheck -Running @{
+			Check = @{ Index = 0; Name = 'completion-fixture'; Tier = 'advisory'; CommandText = 'fixture' }
+			Child = @{ Process = $Process; Job = $Job; StandardOutput = $Output.Task; StandardError = $ErrorOutput.Task; Gate = $Gate; ResultGate = $ResultGate }
+			Stopwatch = $Elapsed
+		} | Out-Null
+		return @{ Result = $script:Results[0]; InfrastructureFailed = $script:InfrastructureFailed; Job = $Job; Elapsed = $Elapsed.Elapsed.TotalSeconds }
+	}
+	$Transient = Invoke-CompletionFixture
+	Assert-True -Condition ($Transient.Result.status -eq 'passed' -and -not $Transient.InfrastructureFailed -and $Transient.Job.Samples -eq 3) -Message 'A completed check must allow transient owned-process accounting to reach zero before classifying a leak.'
+	$Nonzero = Invoke-CompletionFixture -ExitCode 7
+	Assert-True -Condition ($Nonzero.Result.status -eq 'failed' -and -not $Nonzero.InfrastructureFailed) -Message 'Quiescence must preserve the actual nonzero check exit without inventing an infrastructure failure.'
+	$Missing = Invoke-CompletionFixture -HasResult $false
+	Assert-True -Condition ($Missing.Result.status -eq 'failed' -and $Missing.InfrastructureFailed -and $Missing.Result.message -match 'did not return a complete check result') -Message 'Quiescence must not turn an incomplete bootstrap result into success.'
+	$Persistent = Invoke-CompletionFixture -Persistent
+	Assert-True -Condition ($Persistent.Result.status -eq 'failed' -and $Persistent.InfrastructureFailed -and $Persistent.Job.Disposals -gt 0 -and $Persistent.Elapsed -lt 10 -and $Persistent.Result.message -match 'owned process') -Message 'A persistent owned descendant must fail and be cleaned within the bounded quiescence grace.'
+	$QueryFailure = Invoke-CompletionFixture -QueryFailure
+	Assert-True -Condition ($QueryFailure.Result.status -eq 'failed' -and $QueryFailure.InfrastructureFailed -and $QueryFailure.Job.Disposals -gt 0 -and $QueryFailure.Result.message -match 'fixture job accounting failure') -Message 'Job-accounting failure must fail closed and still clean the owned tree.'
+	$CleanupFailure = Invoke-CompletionFixture -CleanupFailure
+	Assert-True -Condition ($CleanupFailure.Result.status -eq 'failed' -and $CleanupFailure.InfrastructureFailed -and $CleanupFailure.Result.message -match 'fixture job cleanup failure') -Message 'Job cleanup failure must never publish a passing result.'
+	Write-Output 'PASS: bounded job quiescence separates transient termination from persistent leaks and preserves failures'
 	Assert-True -Condition ($RunnerSource -match 'CreateNoWindow\s*=\s*\$true') -Message 'CI child PowerShell processes must be created without windows.'
 	Assert-True -Condition ($RunnerSource -notmatch '&\s+powershell\.exe\s+@ArgumentList') -Message 'CI checks must not use direct visible powershell.exe child invocation.'
 	$AnalyzerCommandMatch = [regex]::Match(

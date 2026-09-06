@@ -197,6 +197,23 @@ finally { `$Child.Dispose() }
 	}
 }
 
+function Wait-CiJobQuiescence {
+	param([Parameter(Mandatory)] $Job)
+	# Root process signaling can precede job accounting becoming empty. Observe
+	# termination for at most five seconds using a monotonic clock; do not rerun
+	# the check or replace its exit/result. This is separate from the bootstrap's
+	# five-second post-exit pipe drain. Persistent descendants still fail closed.
+	$GraceMilliseconds = 5000
+	$Quiescence = [Diagnostics.Stopwatch]::StartNew()
+	do {
+		$Remaining = $Job.ActiveProcesses()
+		if ($Remaining -eq 0) { return $Remaining }
+		$WaitMilliseconds = $GraceMilliseconds - $Quiescence.ElapsedMilliseconds
+		if ($WaitMilliseconds -le 0) { return $Remaining }
+		Start-Sleep -Milliseconds ([int] [Math]::Min(25, $WaitMilliseconds))
+	} while ($true)
+}
+
 function Complete-CiCheck {
 	param([Parameter(Mandatory)] $Running)
 	$Check = $Running.Check
@@ -205,7 +222,7 @@ function Complete-CiCheck {
 	try {
 		$Running.Child.Process.WaitForExit()
 		$ExitCode = $Running.Child.Process.ExitCode
-		$Remaining = $Running.Child.Job.ActiveProcesses()
+		$Remaining = Wait-CiJobQuiescence -Job $Running.Child.Job
 		# Close the owned tree before draining streams: a leaked descendant can
 		# otherwise retain pipe handles after the check process has exited.
 		$Running.Child.Job.Dispose()
@@ -221,7 +238,7 @@ function Complete-CiCheck {
 		}
 		if ($Remaining -gt 0) {
 			$script:InfrastructureFailed = $true
-			$Message += "`nCI check left $Remaining owned process(es) running; terminated its process tree."
+			$Message += "`nCI check left $Remaining owned process(es) running after the 5-second quiescence grace; terminated its process tree."
 		}
 		elseif ($HasResult -and $ExitCode -eq 0) { $Status = 'passed' }
 	}
