@@ -26,6 +26,47 @@ Assert-True (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4242; St
 Assert-True (-not (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4242; StartTime = $ReusedStart }) $IdentityBaseline)) 'A reused PID with a different start time must be treated as a new process.'
 Assert-True (-not (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4343; StartTime = $OriginalStart }) $IdentityBaseline)) 'An unknown PID must be treated as a new process.'
 
+function Test-EvidenceWriter {
+	$EvidenceFunction = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Write-Evidence' }, $true))
+	Assert-True ($EvidenceFunction.Count -eq 1) 'The production evidence writer must be uniquely testable.'
+	Invoke-Expression $EvidenceFunction[0].Extent.Text
+	$EvidencePath = Join-Path $FixtureRoot 'writer-evidence.jsonl'
+	$UnicodeDetail = 'Detail ' + [char] 0x00e9 + [char] 0x05e9 + [char] 0x4e16 + [char]::ConvertFromUtf32(0x1f525) + "`nsecond line"
+	Write-Evidence 'writer' 'fixture' 'record-0' 'fixture' $UnicodeDetail 'connection-0'
+	# This live reader permits append but denies read access to the writer. The
+	# Windows PowerShell Add-Content provider can fail its sharing open or fall
+	# back to a write-only stream and throw "Stream was not readable".
+	$Reader = [System.IO.File]::Open($EvidencePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Write)
+	try {
+		foreach ($Index in 1..20) { Write-Evidence 'writer' 'fixture' "record-$Index" 'fixture' $UnicodeDetail "connection-$Index" }
+	} finally { $Reader.Dispose() }
+	$Bytes = [System.IO.File]::ReadAllBytes($EvidencePath)
+	Assert-True ($Bytes.Length -gt 3 -and $Bytes[0] -eq 0xef -and $Bytes[1] -eq 0xbb -and $Bytes[2] -eq 0xbf) 'The writer must preserve the Windows PowerShell UTF-8 BOM contract.'
+	$StrictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+	$Text = $StrictUtf8.GetString($Bytes, 3, $Bytes.Length - 3)
+	Assert-True (-not $Text.Contains([string] [char] 0xfeff)) 'Appending must never insert another BOM into JSONL records.'
+	$Lines = @([System.IO.File]::ReadAllLines($EvidencePath, $StrictUtf8))
+	Assert-True ($Lines.Count -eq 21) 'Concurrent readers must not cause missing, duplicate, or split records.'
+	$Records = @($Lines | ForEach-Object { $_ | ConvertFrom-Json })
+	Assert-True (@($Records.event | Sort-Object -Unique).Count -eq 21) 'Every evidence event must occur exactly once.'
+	foreach ($Index in 0..20) {
+		Assert-True ($Records[$Index].event -eq "record-$Index" -and $Records[$Index].connection_id -eq "connection-$Index" -and $Records[$Index].detail -ceq $UnicodeDetail) 'The writer must preserve event order, connection identity, Unicode, and escaped newlines.'
+	}
+	$Lock = [System.IO.File]::Open($EvidencePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+	$Timer = [System.Diagnostics.Stopwatch]::StartNew()
+	$Failure = $null
+	try {
+		try { Write-Evidence 'writer' 'fixture' 'locked-record' 'fixture' 'must not append' } catch { $Failure = $_ }
+	} finally { $Timer.Stop(); $Lock.Dispose() }
+	Assert-True ($null -ne $Failure) 'An exclusive evidence lock must fail closed.'
+	Assert-True ($Timer.Elapsed.TotalSeconds -lt 5) 'Sharing retries must fail within a bounded interval.'
+	Assert-True ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($EvidencePath)) -ceq [Convert]::ToBase64String($Bytes)) 'A failed append open must preserve every existing byte.'
+	Write-Evidence 'writer' 'fixture' 'record-21' 'fixture' $UnicodeDetail 'connection-21'
+	$AfterLock = @([System.IO.File]::ReadAllLines($EvidencePath, $StrictUtf8) | ForEach-Object { $_ | ConvertFrom-Json })
+	Assert-True ($AfterLock.Count -eq 22 -and $AfterLock[-1].event -eq 'record-21') 'Releasing the lock must permit the next append without replaying the failed record.'
+	Write-Output 'PASS: actual evidence writer preserves UTF-8 JSONL under concurrent readers and fails closed under a bounded exclusive lock'
+}
+
 function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSeconds = 8, [string] $ServerConnectionPattern = 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)', [string] $ClientExecutable = '', [string[]] $ClientArguments = @()) {
 	$SelectedClientExecutable = if ($ClientExecutable) { $ClientExecutable } else { $PackagedLauncher }
 	$SelectedClientArguments = if ($ClientArguments.Count) { $ClientArguments } else { @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', $Scenario) }
@@ -48,6 +89,7 @@ function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSecon
 
 try {
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
+	Test-EvidenceWriter
 	$PowerShellExecutable = (Get-Process -Id $PID).Path
 	$LauncherCommandName = Split-Path -Leaf $PowerShellExecutable
 	$FakeLauncher = Join-Path $FixtureRoot 'fake-launcher.ps1'

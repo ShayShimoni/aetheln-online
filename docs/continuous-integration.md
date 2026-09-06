@@ -58,7 +58,15 @@ does not establish the cause of that failure. Every other check is also a serial
 barrier: preceding checks
 finish before it starts, and subsequent checks wait for it to finish. Checks
 launch in manifest order, and report rows retain that order even when checks
-finish out of order. No check or existing fixture deadline is removed.
+finish out of order. No required check is removed.
+
+Timing fixtures distinguish process initialization from the boundary under test.
+Network negative waits keep their short deadline local to the selected wait;
+observation and cleanup still execute the production code. Compile and phase
+fixtures use a deterministic clock to test shared-budget accounting, together
+with real process termination, bounded stage handshakes, and separate
+uninstrumented whole-launch deadline probes. These are fixture controls, not
+changes to production watchdogs or evidence of engine performance.
 
 Each hidden check process tree belongs to a private kill-on-close Windows Job
 Object before the check starts. Parent termination closes its owned trees,
@@ -178,6 +186,7 @@ this closed, case-sensitive portable-only set:
   `scripts/ci/Test-MarkdownLinks.ps1`, and
   `.github/workflows/prototype-quality-gates.yml`
 - Exactly `scripts/build/Build-PackagedArtifacts.ps1`,
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`,
   `scripts/ci/Invoke-EngineRunnerGate.ps1`, and
   `scripts/ci/Initialize-CompileWorkspace.ps1`
 
@@ -191,11 +200,12 @@ exemption: matching uses exact case-sensitive paths, not prefixes, filename
 lookalikes, or extension substitutions. Passing local fixtures does not prove
 live workflow activation, engine execution, or scheduled milestone completion.
 
-The three exact orchestration additions follow the owner's CI-redesign
+The four exact orchestration additions follow the owner's CI-redesign
 authorization and independent applicability review on 2026-09-06. Their PR
-gates are the full required portable suite (including packaging, gate,
+gates are the full required portable suite (including packaging, smoke, gate,
 post-command-state and retention fixtures) plus independent review. Compile
-does not execute the packaging controller; it does exercise the wrapper and
+does not execute the packaging controller or smoke evidence writer; it does
+exercise the wrapper and
 retention helper against a real engine, so that integration coverage remains
 an explicitly separate bounded operational proof, not an asserted pass.
 Revisit these exceptions if an orchestration script begins generating engine

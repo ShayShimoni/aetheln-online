@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path (Split-Path $PSScriptRoot)
 $SourceScript = Join-Path $RepositoryRoot 'scripts/ci/Invoke-EngineRunnerGate.ps1'
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid())
+$RetainFixtureEvidence = $false
 $PowerShell = (Get-Process -Id $PID).Path
 $Original = @{ PATH = $env:PATH; Engine = $env:AETHELN_ENGINE_ROOT; Toolchain = $env:AETHELN_LINUX_TOOLCHAIN_ROOT; Handoff = $env:AETHELN_HANDOFF_ROOT }
 
@@ -47,6 +48,128 @@ function Test-HandoffPrimitiveContracts {
 function Write-Fixture([string] $Path, [string] $Value) {
 	Set-Content -LiteralPath $Path -Value $Value -Encoding UTF8
 }
+function Replace-FixtureText([string] $Source, [string] $Before, [string] $After) {
+	Assert-True (($Source.Split(@($Before), [StringSplitOptions]::None).Count - 1) -eq 1) 'A fixture instrumentation anchor must match exactly once.'
+	return $Source.Replace($Before, $After)
+}
+function Install-CompileClockFixture($Fixture, [switch] $BlockDiagnostics, [switch] $Cooperative, [switch] $PhaseProbe) {
+	# Inject only the clock and OS wait boundary in a disposable source copy.
+	# Deadline construction, shared Started context, stage checks, real Job Object
+	# termination and report publication remain the production implementations.
+	# Virtual startup/diagnostics/client/server cost 3/3/3/4 seconds, each less
+	# than the 10.2 second budget, but jointly beyond its 2 second hard grace.
+	# The cooperative variant completes the server at second 11, before hard
+	# grace, so a fresh per-target budget cannot be masked by the hard watchdog.
+	# Phase probes advance only at the required blocked child/hash/smoke stage.
+	$Fixture.Clock = Join-Path $Fixture.Root 'clock'
+	New-Item -ItemType Directory -Path $Fixture.Clock | Out-Null
+	$env:RUNNER_TEST_CLOCK_ROOT = $Fixture.Clock
+	$ClockSupport = @'
+function Get-FixtureUtcNow {
+	$Seconds = 0
+	foreach ($Stage in @('003-startup', '006-diagnostics', '009-client', '011-server', '013-server', '013-diagnostics', '007-phase', '021-hash', '025-smoke')) {
+		if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TEST_CLOCK_ROOT $Stage)) { $Seconds = [Math]::Max($Seconds, [int] $Stage.Substring(0, 3)) }
+	}
+	return ([datetime] '2026-01-01T00:00:00Z').ToUniversalTime().AddSeconds($Seconds)
+}
+function Get-FixtureWaitStart {
+	$script:FixtureWaitStart = Get-FixtureUtcNow
+	return $script:FixtureWaitStart
+}
+function Wait-FixtureProcess($Process, [datetime] $Deadline, [double] $WaitMilliseconds, [datetime] $LaunchTime) {
+	# The OS still supplies real process exit/timeout and cleanup behavior.
+	# A missing stage is a fixture failure, never successful timeout coverage.
+	$Guard = [Diagnostics.Stopwatch]::StartNew()
+	if ($Deadline -eq [datetime]::MaxValue) { $Deadline = $LaunchTime.AddMilliseconds($WaitMilliseconds) }
+	else {
+		$ExpectedRemaining = [Math]::Max(0, ($Deadline - $script:FixtureWaitStart).TotalMilliseconds)
+		if ($WaitMilliseconds -ne $ExpectedRemaining) { throw 'fixture_remaining_budget_mismatch' }
+	}
+	@{ deadline = $Deadline.ToString('o'); remainingMilliseconds = $WaitMilliseconds } | ConvertTo-Json | Set-Content (Join-Path $env:RUNNER_TEST_CLOCK_ROOT ("wait-$PID.json"))
+	while (-not $Process.WaitForExit(25)) {
+		if ((Get-FixtureUtcNow) -ge $Deadline) { return $false }
+		if ($Guard.Elapsed.TotalSeconds -ge 90) { throw 'fixture_stage_handshake_timeout' }
+	}
+	return $true
+}
+'@
+	$Path = Join-Path $Fixture.Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1'
+	$Source = Get-Content -LiteralPath $Path -Raw
+	$Source = $Source.Replace('[DateTime]::UtcNow', '(Get-FixtureUtcNow)')
+	$Source = Replace-FixtureText $Source '$Started = (Get-FixtureUtcNow)' ($ClockSupport + "`r`n" + '$Started = (Get-FixtureUtcNow)')
+	$Source = Replace-FixtureText $Source '($AbsoluteDeadlineUtc - (Get-FixtureUtcNow)).TotalMilliseconds' '($AbsoluteDeadlineUtc - (Get-FixtureWaitStart)).TotalMilliseconds'
+	$Source = Replace-FixtureText $Source '$ChildJob = New-Object Aetheln.EngineGateJob' ('$FixtureLaunchTime = Get-FixtureUtcNow' + "`r`n" + '$ChildJob = New-Object Aetheln.EngineGateJob')
+	$Source = Replace-FixtureText $Source '$ChildProcess.WaitForExit([int][Math]::Ceiling($WaitMilliseconds))' '(Wait-FixtureProcess $ChildProcess $AbsoluteDeadlineUtc $WaitMilliseconds $FixtureLaunchTime)'
+	$Source = Replace-FixtureText $Source '$CompileDeadlineUtc = $Started.AddMinutes($CompileTimeoutMinutes)' @'
+$CompileDeadlineUtc = $Started.AddMinutes($CompileTimeoutMinutes)
+		@{ started = $Started.ToString('o'); deadline = $CompileDeadlineUtc.ToString('o') } | ConvertTo-Json | Set-Content (Join-Path $env:RUNNER_TEST_CLOCK_ROOT ("deadline-$IsCompileChild.json"))
+'@
+	$Source = Replace-FixtureText $Source '$HardDeadline = $Started.AddMinutes($CompileTimeoutMinutes).AddSeconds(2)' @'
+New-Item -ItemType File (Join-Path $env:RUNNER_TEST_CLOCK_ROOT '003-startup') | Out-Null
+	$HardDeadline = $Started.AddMinutes($CompileTimeoutMinutes).AddSeconds(2)
+'@
+	$DiagnosticBody = if ($PhaseProbe) { 'function Resolve-CompileEvidenceIdentity {' } elseif ($BlockDiagnostics) { @'
+function Resolve-CompileEvidenceIdentity {
+	& $env:RUNNER_TEST_CLOCK_BUILD 'diagnostics'
+'@ } else { @'
+function Resolve-CompileEvidenceIdentity {
+	New-Item -ItemType File (Join-Path $env:RUNNER_TEST_CLOCK_ROOT '006-diagnostics') | Out-Null
+'@ }
+	$Source = Replace-FixtureText $Source 'function Resolve-CompileEvidenceIdentity {' $DiagnosticBody
+	if ($PhaseProbe) {
+		$Source = Replace-FixtureText $Source 'Start-Sleep -Seconds ([int] $HashBlockSeconds)' "& `$env:RUNNER_TEST_CLOCK_BUILD 'hash'"
+	}
+	Write-Fixture $Path $Source
+	Install-Fakes $Fixture
+	$env:RUNNER_TEST_CLOCK_BUILD = Join-Path $Fixture.Root 'clock-build.ps1'
+	Write-Fixture $env:RUNNER_TEST_CLOCK_BUILD @'
+param([string] $Target)
+$Stage = switch ($Target) { 'AethelnOnlineClient' { '009-client' }; 'AethelnOnlineServer' { '013-server' }; 'diagnostics' { '013-diagnostics' }; 'phase' { '007-phase' }; 'hash' { '021-hash' }; 'smoke' { '025-smoke' }; default { throw 'unknown_fixture_target' } }
+$Descendant = Start-Process -FilePath $env:RUNNER_TEST_DESCENDANT_EXE -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 120') -WindowStyle Hidden -PassThru
+@{ id = $Descendant.Id; startTicks = $Descendant.StartTime.ToUniversalTime().Ticks } | ConvertTo-Json | Set-Content (Join-Path $env:RUNNER_TEST_CLOCK_ROOT ($Stage + '.json'))
+New-Item -ItemType File (Join-Path $env:RUNNER_TEST_CLOCK_ROOT $Stage) | Out-Null
+if ($Stage -notin @('009-client', '011-server')) { Start-Sleep -Seconds 120 }
+'@
+	if ($Cooperative) {
+		Write-Fixture $env:RUNNER_TEST_CLOCK_BUILD ((Get-Content $env:RUNNER_TEST_CLOCK_BUILD -Raw).Replace("'013-server'", "'011-server'"))
+	}
+	if ($PhaseProbe) {
+		$PackagePath = Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1'
+		Write-Fixture $PackagePath (Replace-FixtureText (Get-Content $PackagePath -Raw) 'Start-Sleep -Seconds ([int]$env:RUNNER_TEST_PHASE_SLEEP)' "& `$env:RUNNER_TEST_CLOCK_BUILD 'phase'")
+		$SmokePath = Join-Path $Fixture.Repository 'scripts/build/Invoke-PackagedSmokeTest.ps1'
+		Write-Fixture $SmokePath (Replace-FixtureText (Get-Content $SmokePath -Raw) 'Start-Sleep -Seconds ([int]$env:RUNNER_TEST_SMOKE_HANG)' "& `$env:RUNNER_TEST_CLOCK_BUILD 'smoke'")
+		Invoke-FixtureGit $Fixture @('add', '.')
+		& git -C $Fixture.Repository -c user.name=test -c user.email=test@invalid commit -qm clock-fixtures
+		$Fixture.Revision = Get-FixtureRevision $Fixture
+	}
+	Write-Fixture $Fixture.BuildBatch '@echo off
+>>"%RUNNER_TEST_BUILD_CAPTURE%" echo %*
+powershell -NoProfile -File "%RUNNER_TEST_CLOCK_BUILD%" %1
+exit /b %ERRORLEVEL%'
+}
+function Assert-CompileClockFixture($Fixture, $Result, [int] $ExpectedBuilds, [string[]] $Stages, [bool] $HardTimeout = $true) {
+	$ObservedBuilds = if (Test-Path $Fixture.BuildCapture) { @(Get-Content $Fixture.BuildCapture).Count } else { 0 }
+	$ObservedStages = @(Get-ChildItem $Fixture.Clock -File | ForEach-Object Name) -join ', '
+	Assert-ReportReason $Result 'compile_timeout' "Shared virtual clock must expire (builds=$ObservedBuilds; stages=$ObservedStages)"
+	Assert-True ($ObservedBuilds -eq $ExpectedBuilds) "Expected $ExpectedBuilds builds; observed $ObservedBuilds; stages=$ObservedStages"
+	foreach ($Stage in $Stages) {
+		Assert-True (Test-Path (Join-Path $Fixture.Clock $Stage)) "Required stage $Stage must be reached; observed=$ObservedStages"
+		$Receipt = Get-Content (Join-Path $Fixture.Clock ($Stage + '.json')) -Raw | ConvertFrom-Json
+		$Process = Get-Process -Id $Receipt.id -ErrorAction SilentlyContinue
+		Assert-True ($null -eq $Process -or $Process.StartTime.ToUniversalTime().Ticks -ne $Receipt.startTicks) "The exact owned descendant at $Stage must be gone before reporting."
+	}
+	$Anchor = ([datetime] '2026-01-01T00:00:00Z').ToUniversalTime()
+	foreach ($Role in @('False', 'True')) {
+		$Deadline = Get-Content (Join-Path $Fixture.Clock ("deadline-$Role.json")) -Raw | ConvertFrom-Json
+		Assert-True ([datetime]::Parse($Deadline.started).ToUniversalTime() -eq $Anchor -and [datetime]::Parse($Deadline.deadline).ToUniversalTime() -eq $Anchor.AddSeconds(10.2)) "Parent and child must share the original startup anchor and entire work budget (role=$Role; started=$($Deadline.started); deadline=$($Deadline.deadline))."
+	}
+	$WaitFiles = @(Get-ChildItem $Fixture.Clock -Filter 'wait-*.json')
+	Assert-True ($WaitFiles.Count -eq 1) 'Both native targets must share exactly one supervisor wait.'
+	$Wait = Get-Content $WaitFiles[0].FullName -Raw | ConvertFrom-Json
+	Assert-True ([datetime]::Parse($Wait.deadline).ToUniversalTime() -eq $Anchor.AddSeconds(12.2)) 'The hard watchdog must use the original whole-work deadline plus exactly bounded grace.'
+	$Report = Read-Report $Result
+	Assert-True ($Report.summary.requiredFailed -gt 0 -and $Report.supervisor.timedOut -eq $HardTimeout -and $Report.supervisor.cleanupVerified) 'Clock-driven timeout must preserve the expected hard/cooperative receipt and verified real owned-tree cleanup.'
+}
 function Invoke-FixtureGit($Fixture, [string[]] $Arguments) {
 	& git -C $Fixture.Repository @Arguments | Out-Null
 	if ($LASTEXITCODE -ne 0) { throw 'git fixture failed' }
@@ -84,7 +207,6 @@ function New-Fixture([string] $Name) {
 function Install-Fakes($Fixture) {
 	Write-Fixture $Fixture.BuildBatch '@echo off
 >>"%RUNNER_TEST_BUILD_CAPTURE%" echo %*
-if defined RUNNER_TEST_COMPILE_BLOCK powershell -NoProfile -Command "Start-Process -FilePath $env:RUNNER_TEST_DESCENDANT_EXE -ArgumentList @(''-NoProfile'',''-Command'',''Start-Sleep -Seconds 120'') -WindowStyle Hidden; Start-Sleep -Seconds 6"
 if defined RUNNER_TEST_UBT_OUTPUT_%1 call type "%%RUNNER_TEST_UBT_OUTPUT_%1%%"
 if "%RUNNER_TEST_MUTATION%"=="ignored" (mkdir "%RUNNER_TEST_REPOSITORY%\Intermediate" 2>nul&echo x>"%RUNNER_TEST_REPOSITORY%\Intermediate\x")
 if "%RUNNER_TEST_MUTATION%"=="dirty" echo y>"%RUNNER_TEST_REPOSITORY%\tracked"
@@ -283,33 +405,29 @@ try {
 		$Result = Invoke-Gate $Fixture -ExtraArguments @('-CompileTimeoutMinutes', $InvalidTimeout)
 		Assert-True ($Result.ExitCode -ne 0 -and -not (Test-Path $Fixture.BuildCapture)) 'Nonfinite, nonpositive, and above-30-minute compile budgets must reject before build.'
 	}
-	$Fixture = New-Case 'compile-shared-deadline'
-	$env:RUNNER_TEST_COMPILE_BLOCK = '1'
-	$env:AETHELN_HANDOFF_ROOT = ''
+	# This uninstrumented probe tests the real whole-launch wall-clock bound.
+	# It intentionally requires no particular preflight/build stage to be reached.
+	$Fixture = New-Case 'compile-whole-launch-deadline'
 	$CompileClock = [Diagnostics.Stopwatch]::StartNew()
-	try { $Result = Invoke-Gate $Fixture -ExtraArguments @('-CompileTimeoutMinutes', '0.17') } finally { $env:RUNNER_TEST_COMPILE_BLOCK = '' }
+	$Result = Invoke-Gate $Fixture -ExtraArguments @('-CompileTimeoutMinutes', '0.0001')
 	$CompileClock.Stop()
-	Assert-ReportReason $Result 'compile_timeout' 'Two individually short targets must consume a single compile budget'
-	$TimeoutReport = Read-Report $Result
-	Assert-True (@(Get-Content $Fixture.BuildCapture).Count -eq 2) 'The shared-budget fixture must reach both builds before the second is stopped.'
-	Assert-True ($CompileClock.Elapsed.TotalSeconds -lt 20) 'The whole compile including finalization must return within the shared budget plus bounded cleanup.'
-	Assert-True ($TimeoutReport.summary.requiredFailed -gt 0 -and $TimeoutReport.supervisor.timedOut -and $TimeoutReport.supervisor.cleanupVerified) 'A hard timeout must preserve a failed report with its supervisor receipt.'
-	Assert-True (@(Get-Process -Name 'FakeAethelnDescendant' -ErrorAction SilentlyContinue).Count -eq 0) 'Compile hard-stop must terminate descendants of both targets before returning.'
+	Assert-ReportReason $Result 'compile_timeout' 'An exhausted startup budget must fail under the real whole-launch watchdog'
+	Assert-True ($CompileClock.Elapsed.TotalSeconds -lt 20) 'The whole launch and finalization must return within bounded cleanup time.'
+	Assert-True (-not (Test-Path $Fixture.BuildCapture)) 'An exhausted startup budget must never start either build.'
+
+	$Fixture = New-Fixture 'compile-shared-deadline'
+	Install-CompileClockFixture $Fixture
+	$Result = Invoke-Gate $Fixture -ExtraArguments @('-CompileTimeoutMinutes', '0.17')
+	Assert-CompileClockFixture $Fixture $Result 2 @('009-client', '013-server')
+	$Fixture = New-Fixture 'compile-cooperative-shared-deadline'
+	Install-CompileClockFixture $Fixture -Cooperative
+	$Result = Invoke-Gate $Fixture -ExtraArguments @('-CompileTimeoutMinutes', '0.17')
+	Assert-CompileClockFixture $Fixture $Result 2 @('009-client', '011-server') $false
 
 	$Fixture = New-Fixture 'compile-blocked-diagnostics'
-	$FixtureScript = Join-Path $Fixture.Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1'
-	$FixtureSource = Get-Content -LiteralPath $FixtureScript -Raw
-	$FixtureSource = $FixtureSource.Replace('function Resolve-CompileEvidenceIdentity {', 'function Resolve-CompileEvidenceIdentity {
-	Set-Content -LiteralPath $env:RUNNER_TEST_SMOKE_CAPTURE -Value diagnostic-block-started
-	Start-Process -FilePath $env:RUNNER_TEST_DESCENDANT_EXE -ArgumentList @("-NoProfile", "-Command", "Start-Sleep -Seconds 120") -WindowStyle Hidden | Out-Null
-	Start-Sleep -Seconds 120')
-	Write-Fixture $FixtureScript $FixtureSource
-	Install-Fakes $Fixture
-	$Result = Invoke-Gate $Fixture -ExtraArguments @('-CompileTimeoutMinutes', '0.07')
-	Assert-ReportReason $Result 'compile_timeout' 'Blocking identity diagnostics must be covered by the same hard supervisor'
-	Assert-True (Test-Path -LiteralPath $Fixture.SmokeCapture) 'The timeout fixture must actually enter the blocking identity diagnostics.'
-	Assert-True (-not (Test-Path $Fixture.BuildCapture)) 'Blocked pre-build diagnostics must never reach either target.'
-	Assert-True (@(Get-Process -Name 'FakeAethelnDescendant' -ErrorAction SilentlyContinue).Count -eq 0) 'The diagnostics descendant must be stopped before timeout reporting returns.'
+	Install-CompileClockFixture $Fixture -BlockDiagnostics
+	$Result = Invoke-Gate $Fixture -ExtraArguments @('-CompileTimeoutMinutes', '0.17')
+	Assert-CompileClockFixture $Fixture $Result 0 @('013-diagnostics')
 	if ($CompileWatchdogOnly) { Write-Output 'PASS: compile fresh reports, finite shared deadline, and descendant supervision'; return }
 
 	$Fixture = New-Case 'compile-success'
@@ -638,13 +756,15 @@ try {
 	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' @() '12345' 'other-runner'
 	Assert-ReportReason $Result 'handoff_runner_mismatch' 'A consumer on a different runner name must fail closed'
 
-	$Fixture = New-Case 'phase-timeout'
+	$Fixture = New-Fixture 'phase-timeout'
+	Install-CompileClockFixture $Fixture -PhaseProbe
 	$env:RUNNER_TEST_PHASE_SLEEP = '25'
 	$TimeoutStarted = [DateTime]::UtcNow
 	$Result = Invoke-PhaseGate $Fixture 'PackageClient' @() '12345' 'fixture-runner' '0.05'
 	$TimeoutElapsed = ([DateTime]::UtcNow - $TimeoutStarted).TotalSeconds
 	Assert-ReportReason $Result 'phase_timeout' 'A phase exceeding its recorded limit must fail as phase_timeout'
-	Assert-True ($TimeoutElapsed -lt 22) "The timed-out phase process tree must be stopped promptly, took ${TimeoutElapsed}s."
+	Assert-True (Test-Path (Join-Path $Fixture.Clock '007-phase')) 'The packaging timeout must actually reach its controlled child.'
+	Assert-True ($TimeoutElapsed -lt 100) "The clock-driven phase must finish within its readiness guard and cleanup allowance, took ${TimeoutElapsed}s."
 	Assert-True (-not (Test-Path (Join-Path (Get-PhaseRunDirectory $Fixture) 'manifest-client.json'))) 'A timed-out phase must not publish partial outputs.'
 	$TimeoutBuilds = @((Read-Report $Result).compileEvidence.builds)
 	Assert-True ($TimeoutBuilds.Count -eq 1 -and $TimeoutBuilds[0].outputState -eq 'unavailable' -and $TimeoutBuilds[0].actionCounterState -eq 'not_observed' -and $null -eq $TimeoutBuilds[0].lastObservedAction) 'A timed-out packaging child leaves its compile observations explicitly unavailable, never fabricated.'
@@ -686,8 +806,11 @@ try {
 	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
 	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
 	$CallsBeforeDeadline = @(Get-Content $Fixture.PackageCapture).Count
+	$PreworkClock = [Diagnostics.Stopwatch]::StartNew()
 	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' @() '12345' 'fixture-runner' '0.0001'
+	$PreworkClock.Stop()
 	Assert-ReportReason $Result 'phase_timeout' 'A script-phase deadline expiring during controlled pre-work must fail as phase_timeout with a retained report'
+	Assert-True ($PreworkClock.Elapsed.TotalSeconds -lt 90) 'The uninstrumented whole-phase deadline must bound launch and finalization without requiring a specific stage.'
 	Assert-True (@(Get-Content $Fixture.PackageCapture).Count -eq $CallsBeforeDeadline) 'The phase child must never start after the script-phase deadline.'
 
 	foreach ($HardCase in @(
@@ -697,7 +820,8 @@ try {
 		# A synchronous payload hash blocked across the script-phase deadline
 		# must be interrupted by the supervisor hard bound: bounded return, no
 		# consumer start, no surviving descendant, retained bounded report.
-		$Fixture = New-Case $HardCase.Name
+		$Fixture = New-Fixture $HardCase.Name
+		Install-CompileClockFixture $Fixture -PhaseProbe
 		[void] (Invoke-PhaseGate $Fixture 'PackageClient')
 		[void] (Invoke-PhaseGate $Fixture 'PackageServer')
 		$CallsBeforeBlock = @(Get-Content $Fixture.PackageCapture).Count
@@ -709,6 +833,7 @@ try {
 		$env:RUNNER_TEST_HASH_BLOCK_SECONDS = ''
 		$env:RUNNER_TEST_KILL_FAULT = ''
 		Assert-ReportReason $Result $HardCase.Reason "$($HardCase.Name) must classify the blocked pre-work hash as $($HardCase.Reason)"
+		Assert-True (Test-Path (Join-Path $Fixture.Clock '021-hash')) 'The hard hash timeout must reach the synchronous hashing block.'
 		Assert-True (@((Read-Report $Result).checks | Where-Object { $_.name -eq 'phase-hard-deadline' -and $_.message -like ($HardCase.Reason + '*') }).Count -eq 1) "$($HardCase.Name) must be enforced by the supervisor hard bound, not the cooperative deadline."
 		Assert-True ($null -eq (Read-Report $Result).compileEvidence) "$($HardCase.Name) parent-written hard-timeout report carries no compile evidence rather than a guessed one."
 		Assert-True ($BlockElapsed -lt 90) "$($HardCase.Name) must return within the bounded interval including timeout finalization, took ${BlockElapsed}s."
@@ -728,7 +853,8 @@ try {
 	$Result = Invoke-PhaseGate $Fixture 'SmokePhase' @() '12345' 'fixture-runner' '0'
 	Assert-ReportReason $Result 'handoff_context_invalid' 'SmokePhase without a positive phase-work timeout must be rejected'
 
-	$Fixture = New-Case 'phase-smoke-hang'
+	$Fixture = New-Fixture 'phase-smoke-hang'
+	Install-CompileClockFixture $Fixture -PhaseProbe
 	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
 	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
 	[void] (Invoke-PhaseGate $Fixture 'ValidateProvenance')
@@ -738,6 +864,7 @@ try {
 	$HangElapsed = ([DateTime]::UtcNow - $HangStarted).TotalSeconds
 	$env:RUNNER_TEST_SMOKE_HANG = ''
 	Assert-ReportReason $Result 'phase_timeout' 'A hanging smoke must fail as phase_timeout under the script watchdog'
+	Assert-True (Test-Path (Join-Path $Fixture.Clock '025-smoke')) 'The smoke timeout must actually reach the hanging smoke child.'
 	Assert-True ($HangElapsed -lt 100) "The hanging smoke tree must be stopped by the watchdog, took ${HangElapsed}s."
 	Assert-True (-not (Test-Path (Join-Path (Get-PhaseRunDirectory $Fixture) 'milestone-complete.json'))) 'A timed-out smoke must not publish a completion marker.'
 	Assert-True (@(Get-ChildItem (Get-CleanupRequestRoot $Fixture) -File).Count -eq 2) 'A timed-out smoke must still retain its cleanup-request evidence.'
@@ -762,7 +889,8 @@ try {
 		@{ Name = 'phase-kill-fallback'; Fault = 'skip-job'; Reason = 'phase_timeout' },
 		@{ Name = 'phase-cleanup-failure'; Fault = 'skip-all'; Reason = 'phase_cleanup_failed' }
 	)) {
-		$Fixture = New-Case $KillCase.Name
+		$Fixture = New-Fixture $KillCase.Name
+		Install-CompileClockFixture $Fixture -PhaseProbe
 		$env:RUNNER_TEST_PHASE_SPAWN = '1'
 		$env:RUNNER_TEST_PHASE_SLEEP = '90'
 		$env:RUNNER_TEST_KILL_FAULT = $KillCase.Fault
@@ -771,6 +899,7 @@ try {
 		$env:RUNNER_TEST_PHASE_SLEEP = ''
 		$env:RUNNER_TEST_KILL_FAULT = ''
 		Assert-ReportReason $Result $KillCase.Reason "$($KillCase.Name) must report $($KillCase.Reason)"
+		Assert-True (Test-Path (Join-Path $Fixture.Clock '007-phase')) 'Every cleanup fault case must reach its real packaging child and descendant.'
 		$Survivors = @()
 		foreach ($Attempt in 1..20) {
 			$Survivors = @(Get-Process -Name 'FakeAethelnDescendant' -ErrorAction SilentlyContinue)
@@ -1021,6 +1150,10 @@ try {
 	Remove-Item Env:AETHELN_HOST_TOOLS_ATTESTATION
 
 	Write-Output 'PASS: engine runner wrapper contracts are completely covered'
+} catch {
+	$RetainFixtureEvidence = $true
+	Write-Output "Failed fixture evidence retained at: $FixtureRoot"
+	throw
 } finally {
 	$env:PATH = $Original.PATH
 	$env:AETHELN_ENGINE_ROOT = $Original.Engine
@@ -1031,6 +1164,8 @@ try {
 	Remove-Item Env:AETHELN_HOST_TOOLS -ErrorAction Ignore
 	Remove-Item Env:AETHELN_ENGINE_REVISION -ErrorAction Ignore
 	Remove-Item Env:AETHELN_HOST_TOOLS_ATTESTATION -ErrorAction Ignore
+	Remove-Item Env:RUNNER_TEST_CLOCK_ROOT -ErrorAction Ignore
+	Remove-Item Env:RUNNER_TEST_CLOCK_BUILD -ErrorAction Ignore
 	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_SMOKE_HANG','RUNNER_TEST_PHASE_SLEEP','RUNNER_TEST_PHASE_FAIL','RUNNER_TEST_PHASE_SPAWN','RUNNER_TEST_KILL_FAULT','RUNNER_TEST_HASH_BLOCK_SECONDS','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineClient','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineServer','RUNNER_TEST_UBT_OUTPUT_PACKAGE','RUNNER_TEST_DESCENDANT_EXE','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
-	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	if (-not $RetainFixtureEvidence -and (Test-Path -LiteralPath $FixtureRoot)) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 }

@@ -132,15 +132,31 @@ function Write-Evidence([string] $Process, [string] $Role, [string] $Event, [str
 	}
 	if ($ConnectionId) { $Record['connection_id'] = $ConnectionId }
 	$SerializedRecord = $Record | ConvertTo-Json -Compress
+	$Encoding = [System.Text.UTF8Encoding]::new($true)
+	$RecordBytes = $Encoding.GetBytes($SerializedRecord + [Environment]::NewLine)
+	$Stream = $null
+	# One orchestrator owns writes; observers may read concurrently. Opening with
+	# write access avoids Add-Content's encoding-read fallback on a write-only
+	# stream. Retry only sharing/lock failures before any record bytes are written.
 	for ($Attempt = 1; $Attempt -le 50; $Attempt++) {
 		try {
-			Add-Content -LiteralPath $EvidencePath -Value $SerializedRecord -Encoding UTF8
-			return
+			$Stream = [System.IO.File]::Open($EvidencePath, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+			break
 		} catch [System.IO.IOException] {
-			if ($Attempt -eq 50) { throw }
+			$ErrorCode = $_.Exception.GetBaseException().HResult -band 0xffff
+			if ($ErrorCode -notin @(32, 33) -or $Attempt -eq 50) { throw }
 			Start-Sleep -Milliseconds 20
 		}
 	}
+	try {
+		# Preserve Windows PowerShell's UTF-8 BOM, once at the start of a new file.
+		if ($Stream.Length -eq 0) {
+			$Preamble = $Encoding.GetPreamble()
+			$Stream.Write($Preamble, 0, $Preamble.Length)
+		}
+		$Stream.Write($RecordBytes, 0, $RecordBytes.Length)
+		$Stream.Flush()
+	} finally { $Stream.Dispose() }
 }
 
 function Wait-ForEvidence([string] $ProcessName, [string] $Role, [System.Diagnostics.Process] $Process, [string] $Description, [string] $Path, [string] $ErrorPath, [string] $Pattern, [string] $Event) {

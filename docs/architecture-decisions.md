@@ -307,7 +307,11 @@ Every accepted decision records:
   the full portable suite and independent review. Compile never executes the
   packaging controller. Real Compile can validate wrapper and retention
   integration, so bounded live operational proof remains separately required;
-  an exemption does not claim that proof passed. Revisit these exact exceptions
+  an exemption does not claim that proof passed. The same CI repair also adds
+  exactly `scripts/build/Invoke-PackagedSmokeTest.ps1`: a compile does not execute
+  its process supervision or JSONL evidence writer. Its mandatory portable smoke
+  fixture suite and independent review cover those changes; real packaged-smoke
+  evidence remains a separate required milestone. Revisit these exact exceptions
   if these scripts start generating engine inputs. Everything else,
   including `Source/**`, `Config/**`, `Content/**`, `Plugins/**`, other
   `scripts/**`, other `.github/workflows/**`, and `AethelnOnline.uproject`,

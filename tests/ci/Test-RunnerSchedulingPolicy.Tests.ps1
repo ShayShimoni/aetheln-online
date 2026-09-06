@@ -254,7 +254,7 @@ Assert-True ($SchedulingDecision -match 'Test-PrototypeQualityWorkflow\.Tests\.p
 
 # The portable CI exemption is a closed applicability decision, not a blanket
 # scripts/workflows exemption or a replacement for independent review.
-foreach ($Path in @('scripts/ci/Invoke-CiSuite.ps1', 'scripts/ci/Test-FormattingPolicy.ps1', 'scripts/ci/Test-MarkdownLinks.ps1', '.github/workflows/prototype-quality-gates.yml', 'scripts/build/Build-PackagedArtifacts.ps1', 'scripts/ci/Invoke-EngineRunnerGate.ps1', 'scripts/ci/Initialize-CompileWorkspace.ps1')) {
+foreach ($Path in @('scripts/ci/Invoke-CiSuite.ps1', 'scripts/ci/Test-FormattingPolicy.ps1', 'scripts/ci/Test-MarkdownLinks.ps1', '.github/workflows/prototype-quality-gates.yml', 'scripts/build/Build-PackagedArtifacts.ps1', 'scripts/build/Invoke-PackagedSmokeTest.ps1', 'scripts/ci/Invoke-EngineRunnerGate.ps1', 'scripts/ci/Initialize-CompileWorkspace.ps1')) {
 	Assert-True ($SchedulingDecision.Contains('`' + $Path + '`')) "TA-012 must record the exact portable CI exemption '$Path'."
 	Assert-True ($CiDocumentation.Contains('`' + $Path + '`')) "CI documentation must record the exact portable CI exemption '$Path'."
 }
