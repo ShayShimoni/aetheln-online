@@ -66,6 +66,11 @@ subordinate to the specialized canonical product and technical documents.
 - [Unreal Automation](unreal-automation.md) records the pinned headless harness,
   exact Issue #85 tests and discovery contract, fail-closed behavior, local
   invocation, and normalized evidence schema.
+- [Developer Environment and DDC](developer-environment-and-ddc.md) records the
+  Issue #81 clean-package timing and identity evidence (`build-timing.json`),
+  the identity-bound persistent Derived Data Cache contract, the attested
+  fail-closed prebuilt host-tools boundary and its operator attestation step,
+  and capacity and recovery ownership.
 - [GitHub Issues](https://github.com/ShayShimoni/aetheln-online/issues) govern
   work status, ownership, priority, and target version.
 

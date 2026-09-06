@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Script = Join-Path $RepositoryRoot 'scripts/build/Invoke-PackagedSmokeTest.ps1'
 $FixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AethelnSmokeTests-{0}" -f [guid]::NewGuid().ToString('N'))
+$SuiteCompleted = $false
 
 function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
@@ -26,8 +27,9 @@ Assert-True (-not (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 42
 Assert-True (-not (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4343; StartTime = $OriginalStart }) $IdentityBaseline)) 'An unknown PID must be treated as a new process.'
 
 function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSeconds = 8, [string] $ServerConnectionPattern = 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)', [string] $ClientExecutable = '', [string[]] $ClientArguments = @()) {
-	$SelectedClientExecutable = if ($ClientExecutable) { $ClientExecutable } else { $PowerShellExecutable }
-	$SelectedClientArguments = if ($ClientArguments.Count) { $ClientArguments } else { @('-NoProfile', '-File', $FakeClient, '{ClientId}', '{ServerEndpoint}', '{ServerMap}', $Scenario) }
+	$SelectedClientExecutable = if ($ClientExecutable) { $ClientExecutable } else { $PackagedLauncher }
+	$SelectedClientArguments = if ($ClientArguments.Count) { $ClientArguments } else { @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', $Scenario) }
+	Assert-True ($SelectedClientExecutable.StartsWith($PackageRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) 'Every smoke fixture client must live inside its GUID-scoped package root before cleanup can run.'
 	& $Script `
 		-ServerExecutable '/package/AethelnOnlineServer.sh' `
 		-ServerLauncherExecutable $LauncherCommandName `
@@ -49,7 +51,6 @@ try {
 	$PowerShellExecutable = (Get-Process -Id $PID).Path
 	$LauncherCommandName = Split-Path -Leaf $PowerShellExecutable
 	$FakeLauncher = Join-Path $FixtureRoot 'fake-launcher.ps1'
-	$FakeClient = Join-Path $FixtureRoot 'fake-client.ps1'
 	Set-Content -LiteralPath $FakeLauncher -Value @'
 param([Alias('d')] [string] $Distribution, [Alias('u')] [string] $User, [Alias('exec')] [string] $ServerExecutable, [string] $Map, [string] $Scenario, [Parameter(ValueFromRemainingArguments)] [string[]] $Ignored)
 Write-Output "Listening on 127.0.0.1:7777 map $Map"
@@ -60,14 +61,6 @@ if ($Scenario -ne 'missing-second') {
 	Write-Output 'AddClientConnection: RemoteAddr: 127.0.0.1:51001, Name: overridden'
 	Write-Output 'AddClientConnection: RemoteAddr: 127.0.0.1:51001, Name: overridden duplicate'
 }
-Start-Sleep -Seconds 20
-'@ -Encoding UTF8
-	Set-Content -LiteralPath $FakeClient -Value @'
-param([string] $ClientId, [string] $Endpoint, [string] $Map, [string] $Scenario, [Parameter(ValueFromRemainingArguments)] [string[]] $Ignored)
-if ($Scenario -eq 'early-exit' -and $ClientId -eq 'client-2') { exit 17 }
-if ($Scenario -eq 'logged-error' -and $ClientId -eq 'client-1') { Write-Output 'Connection TIMED OUT while joining server' }
-Write-Output "Connected $ClientId to $Endpoint"
-Write-Output "Loaded $Map"
 Start-Sleep -Seconds 20
 '@ -Encoding UTF8
 	$PackageRoot = Join-Path $FixtureRoot 'package'
@@ -116,8 +109,12 @@ public static class CLASS {
 	public static int Main(string[] args) {
 		string clientId = args[0], endpoint = args[1], map = args[2], scenario = args[3];
 		string root = AppDomain.CurrentDomain.BaseDirectory;
-		Process child = Process.Start(Path.Combine(root, "Binaries", "ClientRuntime.exe"));
-		File.WriteAllText(Path.Combine(root, clientId + "-" + scenario + "-child.pid"), child.Id.ToString());
+		if (scenario == "early-exit" && clientId == "client-2") return 17;
+		if (scenario == "logged-error" && clientId == "client-1") Console.WriteLine("Connection TIMED OUT while joining server");
+		if (scenario == "child-process" || scenario == "child-process-failure") {
+			Process child = Process.Start(Path.Combine(root, "Binaries", "ClientRuntime.exe"));
+			File.WriteAllText(Path.Combine(root, clientId + "-" + scenario + "-child.pid"), child.Id.ToString());
+		}
 		if (scenario != "child-process-failure") {
 			Console.WriteLine("Connected " + clientId + " to " + endpoint);
 			Console.WriteLine("Loaded " + map);
@@ -147,13 +144,14 @@ public static class CLASS {
 
 	$ChildLogRoot = Join-Path $FixtureRoot 'child-process'
 	$DelayedMarker = Join-Path $PackageRoot 'success-delayed-child.pid'
-	$PreexistingRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $ChildLogRoot 'smoke-evidence.jsonl'), $DelayedMarker) -WindowStyle Hidden -PassThru
+	$PreexistingRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $ChildLogRoot 'smoke-evidence.jsonl'), $DelayedMarker) -RedirectStandardOutput (Join-Path $FixtureRoot 'success-watcher.stdout.log') -RedirectStandardError (Join-Path $FixtureRoot 'success-watcher.stderr.log') -WindowStyle Hidden -PassThru
 	try {
 		$ReadyDeadline = [DateTime]::UtcNow.AddSeconds(5)
 		while (-not (Test-Path -LiteralPath "$DelayedMarker.ready") -and [DateTime]::UtcNow -lt $ReadyDeadline) { Start-Sleep -Milliseconds 50 }
 		Assert-True (Test-Path -LiteralPath "$DelayedMarker.ready") 'The preexisting watcher fixture must be ready before smoke process ownership is captured.'
 		$ChildArguments = @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', 'child-process')
 		Invoke-Smoke -Scenario child-process -LogRoot $ChildLogRoot -ClientExecutable $PackagedLauncher -ClientArguments $ChildArguments
+		Assert-True (Test-Path -LiteralPath $DelayedMarker -PathType Leaf) "The success watcher must publish its delayed descendant PID before cleanup returns; retained evidence: $FixtureRoot."
 		$ChildProcessIds = @(Get-ChildItem -LiteralPath $PackageRoot -Filter 'client-*-child-process-child.pid' | ForEach-Object { [int] (Get-Content -LiteralPath $_.FullName -Raw) })
 		$DelayedProcessId = [int] (Get-Content -LiteralPath $DelayedMarker -Raw)
 		Assert-True ($ChildProcessIds.Count -eq 2) 'The fixture must launch one differently named packaged runtime per client.'
@@ -168,7 +166,7 @@ public static class CLASS {
 
 	$FailureLogRoot = Join-Path $FixtureRoot 'child-process-failure'
 	$FailureDelayedMarker = Join-Path $PackageRoot 'failure-delayed-child.pid'
-	$PreexistingFailureRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $FailureLogRoot 'smoke-evidence.jsonl'), $FailureDelayedMarker) -WindowStyle Hidden -PassThru
+	$PreexistingFailureRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $FailureLogRoot 'smoke-evidence.jsonl'), $FailureDelayedMarker) -RedirectStandardOutput (Join-Path $FixtureRoot 'failure-watcher.stdout.log') -RedirectStandardError (Join-Path $FixtureRoot 'failure-watcher.stderr.log') -WindowStyle Hidden -PassThru
 	try {
 		$ReadyDeadline = [DateTime]::UtcNow.AddSeconds(5)
 		while (-not (Test-Path -LiteralPath "$FailureDelayedMarker.ready") -and [DateTime]::UtcNow -lt $ReadyDeadline) { Start-Sleep -Milliseconds 50 }
@@ -176,9 +174,10 @@ public static class CLASS {
 		$Failure = $null
 		$FailureArguments = @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', 'child-process-failure')
 		try { Invoke-Smoke -Scenario child-process-failure -LogRoot $FailureLogRoot -TimeoutSeconds 3 -ClientExecutable $PackagedLauncher -ClientArguments $FailureArguments } catch { $Failure = $_.Exception.Message }
+		Assert-True ($Failure -match 'Timed out.*client connection confirmation') "The failure fixture must reach client evidence timeout after spawning packaged runtimes. Actual failure: $Failure"
+		Assert-True (Test-Path -LiteralPath $FailureDelayedMarker -PathType Leaf) "The failure watcher must publish its delayed descendant PID before cleanup returns; retained evidence: $FixtureRoot."
 		$FailureChildProcessIds = @(Get-ChildItem -LiteralPath $PackageRoot -Filter 'client-*-child-process-failure-child.pid' | ForEach-Object { [int] (Get-Content -LiteralPath $_.FullName -Raw) })
 		$FailureDelayedProcessId = [int] (Get-Content -LiteralPath $FailureDelayedMarker -Raw)
-		Assert-True ($Failure -match 'Timed out.*client connection confirmation') 'The failure fixture must reach client evidence timeout after spawning packaged runtimes.'
 		Assert-True ($FailureChildProcessIds.Count -eq 2 -and -not @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -in $FailureChildProcessIds }).Count) 'Failed smoke cleanup must terminate differently named packaged client child processes.'
 		Assert-True (-not (Get-Process -Id $FailureDelayedProcessId -ErrorAction SilentlyContinue)) 'Failed smoke cleanup must rescan and terminate a package process created during cleanup.'
 		Assert-True (-not $PreexistingFailureRuntime.HasExited) 'Failed smoke cleanup must preserve a preexisting process under the package root.'
@@ -218,6 +217,11 @@ public static class CLASS {
 	try { Invoke-Smoke -Scenario logged-error -LogRoot (Join-Path $FixtureRoot 'error') -TimeoutSeconds 10 } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'client-1 reported an error.*Connection TIMED OUT') 'A connection timeout log event should fail even when readiness text is present.'
 	Write-Output 'PASS: connection-timeout source-log events fail the smoke'
+	$ClientStarts = @(Get-ChildItem -LiteralPath $FixtureRoot -Filter 'smoke-evidence.jsonl' -Recurse | ForEach-Object { Get-Content -LiteralPath $_.FullName | ForEach-Object { $_ | ConvertFrom-Json } } | Where-Object { $_.event -eq 'process_started' -and $_.role -eq 'client' })
+	Assert-True ($ClientStarts.Count -ge 12) 'Isolation evidence must include client launches across success and failure scenarios.'
+	Assert-True (-not @($ClientStarts | Where-Object { -not $_.source.StartsWith($PackageRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) }).Count) 'Every actual smoke client launch must remain inside this GUID-scoped package root.'
+	Write-Output 'PASS: all smoke fixture client launches use an isolated package root'
+	$SuiteCompleted = $true
 }
 finally {
 	foreach ($FixtureProcess in @(Get-Process -ErrorAction SilentlyContinue)) {
@@ -228,5 +232,6 @@ finally {
 			$FixtureProcess.Dispose()
 		}
 	}
-	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	if ($SuiteCompleted -and (Test-Path -LiteralPath $FixtureRoot)) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	elseif (Test-Path -LiteralPath $FixtureRoot) { Write-Output "Failed smoke fixture evidence retained: $FixtureRoot" }
 }
