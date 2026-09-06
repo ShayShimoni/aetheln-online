@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch] $CommentTagGrammarOnly)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -164,6 +164,78 @@ function Add-GfmTableCodeIndent {
 if (-not (Test-Path -LiteralPath $Validator -PathType Leaf)) {
 	throw "Validator is missing: $Validator"
 }
+
+function Test-CommentTagGrammar {
+	# Exercise the actual production header scanner without hashing the package
+	# for each lexical case. The default full suite always runs these checks.
+	$ParseTokens = $null
+	$ParseErrors = $null
+	$ValidatorAst = [System.Management.Automation.Language.Parser]::ParseFile($Validator, [ref] $ParseTokens, [ref] $ParseErrors)
+	if ($ParseErrors.Count -gt 0) { throw ($ParseErrors | Out-String) }
+	foreach ($FunctionName in @('Assert-Condition', 'Test-MarkdownIndentedCodeLine', 'Split-MarkdownTableRow', 'Find-TableHeaderIndices')) {
+		$Definitions = @($ValidatorAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -ceq $FunctionName }, $true))
+		if ($Definitions.Count -ne 1) { throw "Expected one production function: $FunctionName" }
+		. ([scriptblock]::Create($Definitions[0].Extent.Text))
+	}
+	$GrammarFailures = [System.Collections.Generic.List[string]]::new()
+	$GrammarPasses = 0
+	$InvalidTags = @(
+		'<span "><!--">', "<span '><!--'>",
+		'<span title"<!--">', "<span title'<!--'>",
+		'</span title="<!--">', '</span/>',
+		'<span title=>', '<span title=one=two>',
+		'<span title=abc"<!--">', '<span title="<!--"next=x>',
+		'<span / >', '<33 title="<!--">', '<span foo/ bar>',
+		'<?thing>', '<!DOCTYPE html>', "<span title=`"first`nsecond`">",
+		'<span a=x"><!--">', '<span 1name=x>', '<span na*me=x>',
+		'<span a=`bad>', '<span a=<bad>', '</span "><!--">', "</span '><!--'>",
+		'<![CDATA[<!--]]>'
+	)
+	$ValidTags = @(
+		'<span>', '</span >', '<span hidden>', '<span hidden data-mode=demo/>',
+		'<span title="<!--"></span>', "<span title='<!--'></span>",
+		'<span title="> <!--" disabled>', "<span title='> <!--' _flag :flag=plain data.key=`"a`">",
+		"<x-1`tflag`tkey`t=`t'value' />", '<span title="" data-empty=''''>',
+		'<span hidden/><x-1 a=plain></x-1><span title="<!--"></span>'
+	)
+	foreach ($FirstColumn in @('Path', 'Reviewed asset')) {
+		$Header = "| $FirstColumn | Other |"
+		foreach ($Continued in @($false, $true)) {
+			$Prefix = if ($Continued) { "<!-- note`n--> " } else { '<!-- note --> ' }
+			for ($CaseIndex = 0; $CaseIndex -lt $InvalidTags.Count; $CaseIndex++) {
+				$Name = "$FirstColumn/invalid-$CaseIndex/continued-$Continued"
+				try {
+					$Lines = @(($Prefix + $InvalidTags[$CaseIndex] + "`n`n$Header") -split "`n")
+					Assert-Throws -Pattern 'Unsupported trailing HTML construct after a comment on line [0-9]+; use complete single-line tags' -Action { Find-TableHeaderIndices -Lines $Lines -FirstColumn $FirstColumn }
+					$GrammarPasses++
+					Write-Host "HTML tag grammar PASS: $Name"
+				}
+				catch { $GrammarFailures.Add("${Name}: $($_.Exception.Message)") }
+			}
+			for ($CaseIndex = 0; $CaseIndex -lt $ValidTags.Count; $CaseIndex++) {
+				foreach ($Suffix in @('', ' <!-- real -->', ' <!-- real')) {
+					$Name = "$FirstColumn/valid-$CaseIndex/continued-$Continued/suffix-$Suffix"
+					try {
+						$Body = $Prefix + $ValidTags[$CaseIndex] + $Suffix + "`n`n$Header"
+						$Expected = if ($Suffix -ceq ' <!-- real') { 0 } else { 1 }
+						$Indices = @(Find-TableHeaderIndices -Lines @($Body -split "`n") -FirstColumn $FirstColumn)
+						if ($Indices.Count -ne $Expected) { throw "Expected $Expected visible headers; found $($Indices.Count)." }
+						$DuplicateIndices = @(Find-TableHeaderIndices -Lines @(("$Header`n`n" + $Body) -split "`n") -FirstColumn $FirstColumn)
+						if ($DuplicateIndices.Count -ne ($Expected + 1)) { throw "Expected $($Expected + 1) headers including the original; found $($DuplicateIndices.Count)." }
+						$GrammarPasses++
+						Write-Host "HTML tag grammar PASS: $Name"
+					}
+					catch { $GrammarFailures.Add("${Name}: $($_.Exception.Message)") }
+				}
+			}
+		}
+	}
+	Write-Host "HTML tag grammar totals: $GrammarPasses passed, $($GrammarFailures.Count) failed."
+	if ($GrammarFailures.Count -gt 0) { throw "HTML tag grammar failures:`n$($GrammarFailures -join "`n")" }
+}
+
+Test-CommentTagGrammar
+if ($CommentTagGrammarOnly) { return }
 
 & $Validator -Root $VisualRoot
 
@@ -675,6 +747,131 @@ try {
 		Assert-Throws -Pattern $Case.Pattern -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
 	}
 
+	Set-FixtureReport -Content $PristineReport
+	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
+
+	# Governance records must be visible Markdown tables. Exercise both source
+	# documents with the same comment boundaries; only fixture report bytes are
+	# re-stamped, never the source report or manifest.
+	$CommentFailures = [System.Collections.Generic.List[string]]::new()
+	foreach ($Document in @(
+		@{ Name = 'register'; Content = $SourceProvenance; Header = $GovernanceHeader; NewLine = $ProvenanceNewLine; Pattern = 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 0' },
+		@{ Name = 'report'; Content = $PristineReport; Header = $ReportHeader; NewLine = $ReportNewLine; Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md must declare exactly one applicable header; found 0' }
+	)) {
+		$Content = $Document.Content
+		$NewLine = $Document.NewLine
+		$Start = $Content.IndexOf($Document.Header, [System.StringComparison]::Ordinal)
+		$End = $Content.IndexOf("$NewLine$NewLine", $Start, [System.StringComparison]::Ordinal)
+		if ($End -lt 0) { $End = $Content.Length }
+		$TableBlock = $Content.Substring($Start, $End - $Start)
+		$CommentCases = [System.Collections.Generic.List[object]]::new()
+		foreach ($IndentWidth in @(0, 3)) {
+			foreach ($Closed in @($true, $false)) {
+				$Opening = (' ' * $IndentWidth) + '<!--' + $NewLine
+				$Closing = if ($Closed) { "$NewLine-->" } else { '' }
+				$CommentCases.Add(@{
+					Name = "hidden-table-indent-$IndentWidth-closed-$Closed"
+					Content = $Content.Substring(0, $Start) + $Opening + $TableBlock + $Closing + $Content.Substring($End)
+					Hidden = $true
+				})
+			}
+		}
+		# A closed comment does not make a later opener on the same line visible.
+		# Cover both the opening line and a continued comment's closing line.
+		$AdjacentOpenings = @(
+			'<!-- note --> <!--',
+			'   <!-- first --><!-- second --><!--',
+			"<!-- first$NewLine--> <!--",
+			"<!-- first$NewLine    --> <!-- second --> <!--"
+		)
+		for ($OpeningIndex = 0; $OpeningIndex -lt $AdjacentOpenings.Count; $OpeningIndex++) {
+			foreach ($Closed in @($true, $false)) {
+				$Closing = if ($Closed) { "$NewLine$NewLine-->" } else { '' }
+				$CommentCases.Add(@{
+					Name = "adjacent-hidden-table-opening-$OpeningIndex-closed-$Closed"
+					Content = $Content.Substring(0, $Start) + $AdjacentOpenings[$OpeningIndex] + $NewLine + $TableBlock + $Closing + $Content.Substring($End)
+					Hidden = $true
+				})
+			}
+			$CommentCases.Add(@{
+				Name = "visible-table-after-adjacent-comments-$OpeningIndex"
+				Content = $AdjacentOpenings[$OpeningIndex] + " closed -->$NewLine$NewLine" + $Content
+				Hidden = $false
+			})
+		}
+		$Prefixes = @(
+			"<!-- closed on the opening line -->$NewLine$NewLine",
+			"<!--$NewLine$TableBlock$NewLine-->$NewLine$NewLine",
+			"<!--$NewLine~~~markdown$NewLine$TableBlock$NewLine    -->$NewLine$NewLine",
+			"${BacktickFence}markdown$NewLine<!--$NewLine$BacktickFence$NewLine$NewLine",
+			"~~~markdown$NewLine<!--$NewLine~~~$NewLine$NewLine",
+			"    <!--$NewLine$NewLine",
+			"`t<!--$NewLine$NewLine"
+		)
+		foreach ($SpaceCount in 1..3) { $Prefixes += (' ' * $SpaceCount) + "`t<!--$NewLine$NewLine" }
+		for ($PrefixIndex = 0; $PrefixIndex -lt $Prefixes.Count; $PrefixIndex++) {
+			$CommentCases.Add(@{ Name = "visible-table-after-prefix-$PrefixIndex"; Content = $Prefixes[$PrefixIndex] + $Content; Hidden = $false })
+		}
+		# Quoted tag attributes on a comment's closing line are literal text.
+		# They must neither hide the sole table nor conceal a conflicting duplicate.
+		$DuplicateRow = if ($Document.Name -eq 'register') { $MainRegisterRow } else { $MainReportRow }
+		$PermissionIndex = if ($Document.Name -eq 'register') { 3 } else { 4 }
+		$ContradictoryRow = Set-MarkdownTableCell -Row $DuplicateRow -Index $PermissionIndex -Value 'Approved for runtime use.'
+		$ContradictoryTable = $TableBlock.Replace($DuplicateRow, $ContradictoryRow)
+		foreach ($Quote in @('"', "'")) {
+			foreach ($Continued in @($false, $true)) {
+				$CommentStart = if ($Continued) { "<!-- note$NewLine--> " } else { '<!-- note --> ' }
+				$TagPrefix = $CommentStart + '<span title=' + $Quote + '<!--' + $Quote + '></span>'
+				$CaseSuffix = "quote-$([int][char]$Quote)-continued-$Continued"
+				$CommentCases.Add(@{
+					Name = "visible-table-after-quoted-attribute-$CaseSuffix"
+					Content = "$TagPrefix$NewLine$NewLine$Content"
+					Hidden = $false
+				})
+				$CommentCases.Add(@{
+					Name = "visible-duplicate-after-quoted-attribute-$CaseSuffix"
+					Content = "$Content$NewLine$NewLine$TagPrefix$NewLine$NewLine$ContradictoryTable$NewLine"
+					ExpectedPattern = ($Document.Pattern -replace 'found 0$', 'found 2')
+				})
+				$CommentCases.Add(@{
+					Name = "real-comment-after-quoted-attribute-$CaseSuffix"
+					Content = "$TagPrefix <!--$NewLine$NewLine$Content"
+					Hidden = $true
+				})
+				$CommentCases.Add(@{
+					Name = "unsupported-tag-after-comment-$CaseSuffix"
+					Content = $CommentStart + '<span title=' + $Quote + "<!--$NewLine$NewLine$Content"
+					ExpectedPattern = 'Unsupported trailing HTML construct after a comment on line [0-9]+; use complete single-line tags'
+				})
+			}
+		}
+
+		foreach ($CommentCase in $CommentCases) {
+			Set-Content -LiteralPath $FixtureProvenance -Value $SourceProvenance -NoNewline -Encoding utf8
+			Set-FixtureReport -Content $PristineReport
+			if ($Document.Name -eq 'register') {
+				Set-Content -LiteralPath $FixtureProvenance -Value $CommentCase.Content -NoNewline -Encoding utf8
+			}
+			else { Set-FixtureReport -Content $CommentCase.Content }
+			try {
+				if ($CommentCase.ContainsKey('ExpectedPattern')) {
+					Assert-Throws -Pattern $CommentCase.ExpectedPattern -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+				}
+				elseif ($CommentCase.Hidden) {
+					Assert-Throws -Pattern $Document.Pattern -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+				}
+				else { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+				Write-Host "HTML comment regression PASS: $($Document.Name)/$($CommentCase.Name)"
+			}
+			catch {
+				$Failure = "$($Document.Name)/$($CommentCase.Name): $($_.Exception.Message)"
+				$CommentFailures.Add($Failure)
+				Write-Host "HTML comment regression FAIL: $Failure"
+			}
+		}
+	}
+	if ($CommentFailures.Count -gt 0) { throw "HTML comment regression failures ($($CommentFailures.Count)):`n$($CommentFailures -join "`n")" }
+	Set-Content -LiteralPath $FixtureProvenance -Value $SourceProvenance -NoNewline -Encoding utf8
 	Set-FixtureReport -Content $PristineReport
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
 }

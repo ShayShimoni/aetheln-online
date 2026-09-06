@@ -86,10 +86,18 @@ Skein Weaving replaces a conventional talent tree. It is a loadout of
 interacting combat rules, not a sequence of rows filled with small percentage
 bonuses.
 
+In lore, the Skein is how an Emberbound draws on the Deepwake's unrealized
+histories: a Form is an alternate history of a technique, a Thread binds a
+remembered cause to its consequence, and a Keystone accepts one defining
+contradiction into the character. The lore framing never changes the
+server-authoritative mechanics below.
+
 Every class first receives a complete, functional base kit. Skein choices then
 change how that kit behaves and how one successful action can lead into another.
 No class should require a specific Skein choice merely to perform its basic
-role.
+role. Classes are the five Orders defined in
+[Characters and Factions](characters-and-factions.md); Oathscar is the active
+initial Order working label, superseding Skeinblade.
 
 ### Ability Forms
 
@@ -99,13 +107,13 @@ function rather than only adding a small statistic.
 
 Illustrative examples:
 
-- A Bulwark thrust becomes a short advancing strike or a stationary guard-break
-  tool.
-- A Skeinblade dodge favors repositioning behind a target or preserves momentum
+- An Oathscar thrust becomes a short advancing strike or a stationary
+  guard-break tool.
+- A Hushblade dodge favors repositioning behind a target or preserves momentum
   for the next combo.
-- An Embercaller projectile becomes a direct burst or a delayed area-control
+- A Nullwright projectile becomes a direct burst or a delayed area-control
   effect.
-- A Lumen ward becomes stronger on one ally or weaker across a wider area.
+- A Gravecant ward becomes stronger on one ally or weaker across a wider area.
 
 Only one selected Form may modify a given ability at a time unless a later
 system explicitly supports compatible combinations.
@@ -139,6 +147,23 @@ Possible design spaces include:
 - Turning direct healing into prepared wards or the reverse.
 
 Keystone effects, acquisition, and compatibility are TBD.
+
+### Order Specializations and Peaks
+
+Each Order carries two specializations and one Peak with stable semantic IDs,
+recorded in [Characters and Factions](characters-and-factions.md). A
+specialization selects the dominant interpretation of the Order's oath and
+shapes which Forms, Threads, and Keystones suit a build; a Peak briefly
+realizes a forbidden version of the character.
+
+Each Order also names one combat resource: Grudge (Oathscar), Proof
+(Nullwright), Tempo (Hushblade), Cadence (Gravecant), and Tension
+(Blackfletch). All display names are working names. Specialization mechanics,
+Peak mechanics, resource behavior, and every numeric value are tuning TBDs; the
+prototype combat resource identity remains owned by its existing decision
+record and is not resolved here. Specializations and Peaks extend the Order
+layer and do not replace the Forms, Threads, Keystone, and Faction Doctrine
+structure.
 
 ### Faction Doctrine
 

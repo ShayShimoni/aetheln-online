@@ -251,8 +251,16 @@ function Split-MarkdownTableRow {
 function Find-TableHeaderIndices {
 	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $Lines, [Parameter(Mandatory)][string] $FirstColumn)
 	$Indices = [System.Collections.Generic.List[int]]::new()
+	# Single-line subset of CommonMark's raw HTML tag grammar. Quotes are
+	# values only after '='; closing tags cannot carry attributes or a slash.
+	$TagNamePattern = '[A-Za-z][A-Za-z0-9-]*'
+	$AttributeNamePattern = '[A-Za-z_:][A-Za-z0-9_.:-]*'
+	$AttributeValuePattern = '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^ \t\r\n"''=<>`]+)'
+	$AttributePattern = '[ \t]+' + $AttributeNamePattern + '(?:[ \t]*=[ \t]*' + $AttributeValuePattern + ')?'
+	$HtmlTagPattern = '^(?:<' + $TagNamePattern + '(?:' + $AttributePattern + ')*[ \t]*/?>|</' + $TagNamePattern + '[ \t]*>)'
 	$FenceCharacter = $null
 	$FenceLength = 0
+	$InHtmlComment = $false
 	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
 		$Line = $Lines[$Index]
 		if ($null -ne $FenceCharacter) {
@@ -260,6 +268,39 @@ function Find-TableHeaderIndices {
 			if ($Line -cmatch $ClosingFencePattern) {
 				$FenceCharacter = $null
 				$FenceLength = 0
+			}
+			continue
+		}
+
+		# CommonMark comment blocks begin before column four and include the
+		# closing line (or all remaining lines when unclosed). Fences/indentation
+		# inside comments are literal, just as comment markers inside code are.
+		if ($InHtmlComment -or $Line -cmatch '^[ ]{0,3}<!--') {
+			# A closing delimiter may be followed by another comment on this
+			# same raw HTML line. Track each transition, including on continued
+			# comments' closing lines; openers inside an open comment are literal.
+			$CommentOffset = 0
+			while ($CommentOffset -lt $Line.Length) {
+				$Delimiter = if ($InHtmlComment) { '-->' } else { '<' }
+				$DelimiterIndex = $Line.IndexOf($Delimiter, $CommentOffset, [System.StringComparison]::Ordinal)
+				if ($DelimiterIndex -lt 0) { break }
+				if ($InHtmlComment) {
+					$InHtmlComment = $false
+					$CommentOffset = $DelimiterIndex + 3
+				}
+				elseif ($Line.Substring($DelimiterIndex).StartsWith('<!--', [System.StringComparison]::Ordinal)) {
+					$InHtmlComment = $true
+					$CommentOffset = $DelimiterIndex + 4
+				}
+				else {
+					# Skip complete tags as lexical units: comment markers inside
+					# single/double-quoted attributes cannot open a comment. This
+					# bounded scanner rejects other trailing HTML constructs,
+					# including multiline/unterminated tags, rather than guessing.
+					$Tag = [regex]::Match($Line.Substring($DelimiterIndex), $HtmlTagPattern)
+					Assert-Condition $Tag.Success "Unsupported trailing HTML construct after a comment on line $($Index + 1); use complete single-line tags or move the construct outside the comment-closing line."
+					$CommentOffset = $DelimiterIndex + $Tag.Length
+				}
 			}
 			continue
 		}

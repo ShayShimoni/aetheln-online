@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Script = Join-Path $RepositoryRoot 'scripts/build/Invoke-NetworkAuthoritySpike.ps1'
 $FixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AethelnAuthoritySpikeTests-{0}" -f [guid]::NewGuid().ToString('N'))
+$FixtureSucceeded = $false
 
 function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
@@ -109,10 +110,13 @@ param(
 	[string] $Behavior = 'normal',
 	[string] $RejectionReason = 'duplicate-sequence',
 	[string] $ExitAfterMarkers = 'false',
-	[int] $ControlledExitAfterSeconds = 0,
+	[string] $ControlledExitSignalPath = 'none',
+	[int] $StartupDelaySeconds = 0,
+	[string] $ObservationExitSignalPath = 'none',
 	[Parameter(ValueFromRemainingArguments)] [string[]] $Remaining
 )
 if ($Role -eq 'server') {
+	Start-Sleep -Seconds $StartupDelaySeconds
 	if ($Behavior -eq 'literal-profile-token') {
 		if (@($Remaining | Where-Object { $_ -ceq '{RunId}' }).Count -ne 1) { throw 'Opaque profile argument was not delivered literally to the server.' }
 		Write-Output 'FIXTURE_OPAQUE_ARGUMENT value={RunId}'
@@ -193,15 +197,17 @@ if ($Role -eq 'server') {
 		Write-Output "AUTHORITY rejection category=disconnected-command reason=connection-closed client=client-1 $Identity"
 	}
 	if ($ExitAfterMarkers -eq 'true') {
-		Start-Sleep -Seconds 1
+		if ($ObservationExitSignalPath -eq 'none') { throw 'The early-exit fixture requires an observation-entry signal.' }
+		while (-not (Test-Path -LiteralPath $ObservationExitSignalPath -PathType Leaf)) { Start-Sleep -Milliseconds 50 }
 		exit 0
 	}
-	if ($ControlledExitAfterSeconds -gt 0) {
-		Start-Sleep -Seconds $ControlledExitAfterSeconds
+	if ($ControlledExitSignalPath -ne 'none') {
+		while (-not (Test-Path -LiteralPath $ControlledExitSignalPath -PathType Leaf)) { Start-Sleep -Milliseconds 50 }
 		exit 0
 	}
 	while ($true) { Start-Sleep -Milliseconds 50 }
 }
+if ($Behavior -eq 'slow-client-start') { Start-Sleep -Seconds 3 }
 if ($Behavior -eq 'literal-profile-token') {
 	if (@($Remaining | Where-Object { $_ -ceq '{RunId}' }).Count -ne 1) { throw "Opaque profile argument was not delivered literally to '$ClientId'." }
 	Write-Output 'FIXTURE_OPAQUE_ARGUMENT value={RunId}'
@@ -221,18 +227,38 @@ Start-Sleep -Seconds 30
 '@
 	$FakeLauncher = Join-Path $FixtureRoot 'fake-launcher.ps1'
 Set-Content -LiteralPath $FakeLauncher -Encoding UTF8 -Value @'
-param([string] $Mode, [string] $Target, [Parameter(ValueFromRemainingArguments)] [string[]] $Remaining)
+param([string] $Mode, [string] $Target, [string] $StatePath, [Parameter(ValueFromRemainingArguments)] [string[]] $Remaining)
+$ErrorActionPreference = 'Stop'
 if ($Mode -eq 'identity') {
 	Write-Output ((Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $Target)
 	exit 0
 }
 if ($Mode -eq 'cleanup') {
-	$TargetProcess = Get-Process -Id ([int] $Target) -ErrorAction SilentlyContinue
-	if ($TargetProcess) {
-		Stop-Process -Id $TargetProcess.Id -Force
-		$TargetProcess.WaitForExit()
+	$TargetProcess = $null
+	try {
+		$IdentityText = Get-Content -LiteralPath $StatePath -Raw
+		$Identity = $IdentityText | ConvertFrom-Json
+		if ($Identity.pid -ne [int] $Target -or $Identity.start_ticks -le 0) { throw 'Fixture process identity mismatch.' }
+		$ExitReceiptPath = "$StatePath.exited"
+		if (Test-Path -LiteralPath $ExitReceiptPath) {
+			if ((Get-Content -LiteralPath $ExitReceiptPath -Raw) -cne $IdentityText) { throw 'Fixture exit receipt identity mismatch.' }
+		} else {
+			$TargetProcess = Get-Process -Id ([int] $Target) -ErrorAction Stop
+			# Retain the handle before reading identity or terminating: a later PID
+			# lookup can refer to a different process and cannot prove an owned leak.
+			$null = $TargetProcess.Handle
+			if ($TargetProcess.Id -ne $Identity.pid -or $TargetProcess.StartTime.ToUniversalTime().Ticks -ne $Identity.start_ticks) { throw 'Fixture live process identity mismatch.' }
+			if (-not $TargetProcess.HasExited) {
+				try { $TargetProcess.Kill() } catch { if (-not $TargetProcess.HasExited) { throw } }
+			}
+			if (-not $TargetProcess.WaitForExit(2000) -or -not $TargetProcess.HasExited) { throw 'Fixture owned process did not exit.' }
+		}
+	} catch {
+		[Console]::Error.WriteLine($_.Exception.Message)
+		exit 43
+	} finally {
+		if ($null -ne $TargetProcess) { $TargetProcess.Dispose() }
 	}
-	if (Get-Process -Id ([int] $Target) -ErrorAction SilentlyContinue) { exit 43 }
 	if ($env:AETHELN_TEST_CLEANUP_FAIL -eq 'true') { exit 42 }
 	Write-Output "AETHELN_SERVER_DESCENDANT_EXITED=$Target"
 	exit 0
@@ -240,10 +266,114 @@ if ($Mode -eq 'cleanup') {
 if ($Mode -ne 'launch') { throw "Unsupported launcher mode '$Mode'." }
 if ($env:AETHELN_TEST_LAUNCHER_FAIL -eq 'true') { exit 41 }
 $Child = Start-Process -FilePath $Target -ArgumentList $Remaining -PassThru -NoNewWindow
+$null = $Child.Handle
+$IdentityText = [ordered]@{ pid = $Child.Id; start_ticks = $Child.StartTime.ToUniversalTime().Ticks } | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText($StatePath, $IdentityText)
 Write-Output "AETHELN_SERVER_DESCENDANT_PID=$($Child.Id)"
 $Child.WaitForExit()
+[System.IO.File]::WriteAllText("$StatePath.exited", $IdentityText)
 exit $Child.ExitCode
 '@
+
+	# Exercise cleanup against real owned processes while deterministically making
+	# a second PID lookup observe a different process after the first has exited.
+	$CleanupProbe = Join-Path $FixtureRoot 'cleanup-probe.ps1'
+	Set-Content -LiteralPath $CleanupProbe -Encoding UTF8 -Value @'
+param([string] $Launcher, [int] $TargetId, [int] $SentinelId, [string] $StatePath, [string] $Behavior = 'second-lookup')
+$script:LookupCount = 0
+function Get-Process {
+	param([int] $Id, [string] $ErrorAction)
+	$script:LookupCount++
+	if ($Behavior -eq 'first-unrelated' -or $script:LookupCount -gt 1) { return Microsoft.PowerShell.Management\Get-Process -Id $SentinelId }
+	if ($Behavior -eq 'first-reused') {
+		$Actual = Microsoft.PowerShell.Management\Get-Process -Id $SentinelId
+		$Original = Microsoft.PowerShell.Management\Get-Process -Id $Id
+		$Reused = [pscustomobject]@{ Id = $Id; StartTime = $Original.StartTime.AddTicks(1); Handle = $Actual.Handle; HasExited = $false; Actual = $Actual }
+		$Reused | Add-Member ScriptMethod Kill { $this.Actual.Kill() }
+		$Reused | Add-Member ScriptMethod Dispose { $this.Actual.Dispose() }
+		return $Reused
+	}
+	if ($Behavior -eq 'termination-refused') {
+		$Actual = Microsoft.PowerShell.Management\Get-Process -Id $Id
+		$Refused = [pscustomobject]@{ Id = $Actual.Id; StartTime = $Actual.StartTime; Handle = $Actual.Handle; HasExited = $false }
+		$Refused | Add-Member ScriptMethod Kill { }
+		$Refused | Add-Member ScriptMethod WaitForExit { param($Milliseconds) return $false }
+		$Refused | Add-Member ScriptMethod Dispose { }
+		return $Refused
+	}
+	return Microsoft.PowerShell.Management\Get-Process -Id $Id -ErrorAction Stop
+}
+& $Launcher cleanup $TargetId $StatePath
+exit $LASTEXITCODE
+'@
+	function Invoke-CleanupProbe([string[]] $ProbeArguments, [string] $Name) {
+		$StartInfo = New-Object System.Diagnostics.ProcessStartInfo
+		$StartInfo.FileName = $PowerShellExecutable
+		$StartInfo.Arguments = (@('-NoProfile', '-File') + $ProbeArguments | ForEach-Object { '"' + $_.Replace('"', '\"') + '"' }) -join ' '
+		$StartInfo.UseShellExecute = $false
+		$StartInfo.CreateNoWindow = $true
+		$StartInfo.RedirectStandardOutput = $true
+		$StartInfo.RedirectStandardError = $true
+		$Probe = [System.Diagnostics.Process]::Start($StartInfo)
+		try {
+			$OutputRead = $Probe.StandardOutput.ReadToEndAsync()
+			$ErrorRead = $Probe.StandardError.ReadToEndAsync()
+			if (-not $Probe.WaitForExit(8000)) { throw 'Fixture cleanup probe timed out.' }
+			$OutputText = $OutputRead.GetAwaiter().GetResult()
+			$ErrorText = $ErrorRead.GetAwaiter().GetResult()
+			[System.IO.File]::WriteAllText((Join-Path $FixtureRoot "$Name.stdout.log"), $OutputText)
+			[System.IO.File]::WriteAllText((Join-Path $FixtureRoot "$Name.stderr.log"), $ErrorText)
+			return [pscustomobject]@{ ExitCode = $Probe.ExitCode; Output = $OutputText; Error = $ErrorText }
+		} finally {
+			if (-not $Probe.HasExited) { $Probe.Kill(); $Probe.WaitForExit() }
+			$Probe.Dispose()
+		}
+	}
+	$CleanupTarget = $null
+	$CleanupSentinel = $null
+	try {
+		$CleanupTarget = Start-Process -FilePath $PowerShellExecutable -ArgumentList @('-NoProfile', '-Command', 'while ($true) { Start-Sleep -Seconds 1 }') -PassThru -WindowStyle Hidden
+		$CleanupSentinel = Start-Process -FilePath $PowerShellExecutable -ArgumentList @('-NoProfile', '-Command', 'while ($true) { Start-Sleep -Seconds 1 }') -PassThru -WindowStyle Hidden
+		# Retain the exact original process handle through cleanup and its assertions.
+		$null = $CleanupTarget.Handle
+		$CleanupStatePath = Join-Path $FixtureRoot 'cleanup-probe-identity.json'
+		$CleanupIdentityText = [ordered]@{ pid = $CleanupTarget.Id; start_ticks = $CleanupTarget.StartTime.ToUniversalTime().Ticks } | ConvertTo-Json -Compress
+		[System.IO.File]::WriteAllText($CleanupStatePath, $CleanupIdentityText)
+		foreach ($ProbeBehavior in @('first-unrelated', 'first-reused', 'termination-refused')) {
+			$ProbeResult = Invoke-CleanupProbe @($CleanupProbe, $FakeLauncher, $CleanupTarget.Id, $CleanupSentinel.Id, $CleanupStatePath, $ProbeBehavior) $ProbeBehavior
+			Assert-True ($ProbeResult.ExitCode -eq 43) "Cleanup must report $ProbeBehavior as failure. Actual: $($ProbeResult.ExitCode) $($ProbeResult.Error)"
+			Assert-True (-not $CleanupTarget.HasExited -and -not $CleanupSentinel.HasExited) 'Rejected cleanup must not terminate the target or unrelated process.'
+		}
+		$ProbeResult = Invoke-CleanupProbe @($CleanupProbe, $FakeLauncher, $CleanupTarget.Id, $CleanupSentinel.Id, $CleanupStatePath) 'second-lookup'
+		$CleanupOutput = $ProbeResult.Output
+		$CleanupExitCode = $ProbeResult.ExitCode
+		Write-Output "Cleanup identity probe: exit=$CleanupExitCode target_exited=$($CleanupTarget.HasExited) sentinel_exited=$($CleanupSentinel.HasExited) output=$CleanupOutput"
+		Assert-True $CleanupTarget.HasExited 'Launcher cleanup must actually terminate the owned process.'
+		Assert-True (-not $CleanupSentinel.HasExited) 'Launcher cleanup must preserve an unrelated process observed through a reused PID.'
+		Assert-True ($CleanupExitCode -eq 0) 'A later PID lookup must not turn confirmed owned-process termination into cleanup failure.'
+		$MissingStatePath = Join-Path $FixtureRoot 'missing-cleanup-identity.json'
+		$ProbeResult = Invoke-CleanupProbe @($FakeLauncher, 'cleanup', $CleanupTarget.Id, $MissingStatePath) 'missing-identity'
+		Assert-True ($ProbeResult.ExitCode -eq 43) 'Missing launch identity cannot establish cleanup success.'
+		$ProbeResult = Invoke-CleanupProbe @($FakeLauncher, 'cleanup', $CleanupTarget.Id, $CleanupStatePath) 'missing-exit-receipt'
+		Assert-True ($ProbeResult.ExitCode -eq 43) 'An absent PID without a launcher exit receipt cannot establish cleanup success.'
+		[System.IO.File]::WriteAllText("$CleanupStatePath.exited", $CleanupIdentityText)
+		$ProbeResult = Invoke-CleanupProbe @($CleanupProbe, $FakeLauncher, $CleanupTarget.Id, $CleanupSentinel.Id, $CleanupStatePath, 'first-unrelated') 'already-exited'
+		Assert-True ($ProbeResult.ExitCode -eq 0 -and -not $CleanupSentinel.HasExited) 'An identity-matched exit receipt must accept an already-exited target without touching a reused PID.'
+		$MismatchStatePath = Join-Path $FixtureRoot 'mismatched-cleanup-identity.json'
+		[System.IO.File]::WriteAllText($MismatchStatePath, $CleanupIdentityText)
+		[System.IO.File]::WriteAllText("$MismatchStatePath.exited", '{"pid":1,"start_ticks":1}')
+		$ProbeResult = Invoke-CleanupProbe @($FakeLauncher, 'cleanup', $CleanupTarget.Id, $MismatchStatePath) 'mismatched-exit-receipt'
+		Assert-True ($ProbeResult.ExitCode -eq 43) 'Mismatched exit receipts must fail cleanup.'
+	}
+	finally {
+		foreach ($ProbeProcess in @($CleanupTarget, $CleanupSentinel)) {
+			if ($null -ne $ProbeProcess) {
+				if (-not $ProbeProcess.HasExited) { $ProbeProcess.Kill(); $ProbeProcess.WaitForExit() }
+				$ProbeProcess.Dispose()
+			}
+		}
+	}
+	Write-Output 'PASS: launcher cleanup confirms owned-process exit without interpreting a later PID occupant as a leak'
 
 	function Invoke-FixtureRun(
 		[string] $FixtureLogRoot,
@@ -265,12 +395,17 @@ exit $Child.ExitCode
 		[string[]] $ServerArgumentsOverride,
 		[string[]] $ClientArgumentsOverride,
 		[string] $JoinInProgressPatternOverride,
-		[string] $DamagePatternOverride
+		[string] $DamagePatternOverride,
+		[int] $ObservationStartDelaySeconds = 0,
+		[bool] $WithholdShutdownRelease = $false,
+		[int] $ServerStartupDelaySeconds = 0,
+		[string] $BoundaryTimeoutDescription
 	) {
-		$ControlledExitAfterSeconds = if ($UseContracts -and $Behavior -in @('normal','literal-profile-token','adversarial-public-lines','duplicate-death','duplicate-respawn','duplicate-shutdown')) { $DurationSeconds + 2 } else { 0 }
+		$ControlledExitSignalPath = if ($UseContracts -and -not $ExitAfterMarkers -and $Behavior -in @('normal','literal-profile-token','adversarial-public-lines','duplicate-death','duplicate-respawn','duplicate-shutdown')) { Join-Path $FixtureRoot ("shutdown-release-$FixtureRunId") } else { 'none' }
+		$ObservationExitSignalPath = if ($ExitAfterMarkers) { Join-Path $FixtureRoot ("observation-exit-$FixtureRunId") } else { 'none' }
 		$Arguments = @{
 			ServerExecutable = $PowerShellExecutable
-			ServerArguments = @('-NoProfile', '-File', $FakeRuntime, 'server', 'server', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', '{Environment}', $Behavior, $RejectionReason, $ExitAfterMarkers.ToString().ToLowerInvariant(), $ControlledExitAfterSeconds.ToString())
+			ServerArguments = @('-NoProfile', '-File', $FakeRuntime, 'server', 'server', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', '{Environment}', $Behavior, $RejectionReason, $ExitAfterMarkers.ToString().ToLowerInvariant(), $ControlledExitSignalPath, $ServerStartupDelaySeconds, $ObservationExitSignalPath)
 			ClientExecutable = $PowerShellExecutable
 			ClientArguments = @('-NoProfile', '-File', $FakeRuntime, 'client', '{ClientId}', '{ServerEndpoint}', '{ServerMap}', '{ScenarioId}', '{ProfileId}', '{RunId}', '{NetworkConfigIdentity}', '{Environment}', $Behavior)
 			ServerEndpoint = '127.0.0.1:7777'
@@ -339,15 +474,59 @@ exit $Child.ExitCode
 		if ($JoinInProgressPatternOverride) { $Arguments.JoinInProgressPattern = $JoinInProgressPatternOverride }
 		if ($DamagePatternOverride) { $Arguments.DamagePattern = $DamagePatternOverride }
 		if ($UseLauncher) {
+			$LauncherStatePath = Join-Path $FixtureRoot "launcher-identity-$FixtureRunId.json"
 			$Arguments.ServerLauncherExecutable = $PowerShellExecutable
-			$Arguments.ServerLauncherArguments = @('-NoProfile', '-File', $FakeLauncher, 'launch', '{ServerExecutable}', '{ServerArguments}')
+			$Arguments.ServerLauncherArguments = @('-NoProfile', '-File', $FakeLauncher, 'launch', '{ServerExecutable}', $LauncherStatePath, '{ServerArguments}')
 			$Arguments.ServerIdentityArguments = @('-NoProfile', '-File', $FakeLauncher, 'identity', '{ServerExecutable}')
-			$Arguments.ServerCleanupArguments = @('-NoProfile', '-File', $FakeLauncher, 'cleanup', '{ServerProcessId}')
+			$Arguments.ServerCleanupArguments = @('-NoProfile', '-File', $FakeLauncher, 'cleanup', '{ServerProcessId}', $LauncherStatePath)
 			$Arguments.ServerProcessIdPattern = 'AETHELN_SERVER_DESCENDANT_PID=(?<ProcessId>[1-9][0-9]*)'
 		}
 		if ($PackagedBuildProvenancePath) { $Arguments.PackagedBuildProvenancePath = $PackagedBuildProvenancePath }
 		if ($ServerProvenanceExecutable) { $Arguments.ServerProvenanceExecutable = $ServerProvenanceExecutable }
-		& $Script @Arguments
+		$ObservationDelayBreakpoint = $null
+		$ShutdownReleaseBreakpoint = $null
+		$ObservationExitBreakpoint = $null
+		$BoundaryTimeoutBreakpoints = @()
+		try {
+			if ($BoundaryTimeoutDescription) {
+				# Command breakpoint actions run in a child scope of the invoked function,
+				# after parameter binding. Shadow the runner's timeout only in that wait's
+				# local scope; initialization, other markers, and cleanup retain their allowance.
+				# The real production wait body and its wall-clock deadline still execute.
+				# Do not bind a module closure: Scope 1 must be the actual wait invocation.
+				$BoundaryActionSource = {
+					if ((Get-Variable -Name Description -Scope 1 -ValueOnly) -ceq '__BOUNDARY_DESCRIPTION__') {
+						Set-Variable -Name TimeoutSeconds -Value 2 -Scope 1
+					}
+				}.ToString().Replace('__BOUNDARY_DESCRIPTION__', $BoundaryTimeoutDescription.Replace("'", "''"))
+				$SetBoundaryTimeout = [scriptblock]::Create($BoundaryActionSource)
+				$BoundaryTimeoutBreakpoints = @(Set-PSBreakpoint -Script $Script -Command @('Wait-ForMatch','Wait-ForSuccessfulProcessExit') -Action $SetBoundaryTimeout)
+			}
+			if ($ObservationStartDelaySeconds -gt 0) {
+				$DelayObservation = { Start-Sleep -Seconds $ObservationStartDelaySeconds }.GetNewClosure()
+				$ObservationDelayBreakpoint = Set-PSBreakpoint -Script $Script -Command Wait-ForObservationInterval -Action $DelayObservation
+			}
+			if ($ExitAfterMarkers) {
+				# Deliberately exit a real required process when observation starts, even
+				# after slow client initialization. The production health check must fail.
+				$ReleaseObservationExit = { [System.IO.File]::WriteAllText($ObservationExitSignalPath, 'exit') }.GetNewClosure()
+				$ObservationExitBreakpoint = Set-PSBreakpoint -Script $Script -Command Wait-ForObservationInterval -Action $ReleaseObservationExit
+			}
+			if ($ControlledExitSignalPath -ne 'none' -and -not $WithholdShutdownRelease) {
+				# A non-breaking, script-scoped action releases only the fake server, after
+				# the real observation interval and shutdown-marker validation complete.
+				# Production health checks, exit timeout, and cleanup remain unchanged.
+				$ReleaseShutdown = { [System.IO.File]::WriteAllText($ControlledExitSignalPath, 'release') }.GetNewClosure()
+				$ShutdownReleaseBreakpoint = Set-PSBreakpoint -Script $Script -Command Wait-ForSuccessfulProcessExit -Action $ReleaseShutdown
+			}
+			& $Script @Arguments
+		}
+		finally {
+			foreach ($Breakpoint in $BoundaryTimeoutBreakpoints) { Remove-PSBreakpoint -Breakpoint $Breakpoint }
+			if ($null -ne $ObservationDelayBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationDelayBreakpoint }
+			if ($null -ne $ShutdownReleaseBreakpoint) { Remove-PSBreakpoint -Breakpoint $ShutdownReleaseBreakpoint }
+			if ($null -ne $ObservationExitBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationExitBreakpoint }
+		}
 	}
 
 	$LogRoot = Join-Path $FixtureRoot 'success'
@@ -479,6 +658,21 @@ exit $Child.ExitCode
 	Assert-True ($ContractEvidenceJson.IndexOf($FixtureRoot, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) 'Normalized v2 evidence must not expose the fixture or log root.'
 	Assert-True ($ContractEvidenceJson -notmatch '--fixture-(server|client)-profile') 'Normalized v2 evidence must not expose raw opaque profile arguments.'
 	Write-Output 'PASS: versioned fixture contracts produce exact lifecycle, profile, rejection, cleanup, and path-safe schema-v2 evidence'
+
+	$DelayedObservationRoot = Join-Path $FixtureRoot 'delayed-observation-start'
+	Invoke-FixtureRun -FixtureLogRoot $DelayedObservationRoot -FixtureRunId 'fixture-delayed-observation-start' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseContracts $true -ObservationStartDelaySeconds 4
+	$DelayedObservationEvidence = Get-Content -LiteralPath (Join-Path $DelayedObservationRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($DelayedObservationEvidence.result -eq 'fixture-passed' -and $DelayedObservationEvidence.cleanup.succeeded) 'Delaying observation beyond the former server-relative exit timer must still complete observation, controlled shutdown, and cleanup.'
+	Write-Output 'PASS: delayed observation entry does not race controlled fixture shutdown'
+
+	$WithheldReleaseRoot = Join-Path $FixtureRoot 'withheld-shutdown-release'
+	$WithheldReleaseFailure = $null
+	try { Invoke-FixtureRun -FixtureLogRoot $WithheldReleaseRoot -FixtureRunId 'fixture-withheld-shutdown-release' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseContracts $true -WithholdShutdownRelease $true -ServerStartupDelaySeconds 3 -BoundaryTimeoutDescription 'authoritative server exit after controlled shutdown' } catch { $WithheldReleaseFailure = $_.Exception.Message }
+	Assert-True ($WithheldReleaseFailure -match '^Timed out after 2 seconds waiting for authoritative server exit after controlled shutdown\.$') "A withheld fixture shutdown release must reach the production exit timeout after slow initialization. Actual: $WithheldReleaseFailure"
+	$WithheldReleaseEvidence = Get-Content -LiteralPath (Join-Path $WithheldReleaseRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($WithheldReleaseEvidence.result -eq 'failed' -and $WithheldReleaseEvidence.failure_details.observed_stage -eq 'shutdown' -and $WithheldReleaseEvidence.cleanup.succeeded) 'A withheld fixture shutdown release must fail at shutdown and clean up owned runtime processes.'
+	Assert-True ($WithheldReleaseEvidence.failure_details.timed_out -and $WithheldReleaseEvidence.failure_details.process_role -eq 'server') 'The withheld release must record an actual server exit timeout.'
+	Write-Output 'PASS: slow initialization preserves the two-second withheld-release timeout and owned-process cleanup'
 
 	function Write-ContractCatalog([string] $Path, [object[]] $Profiles, [string] $SelectedProfileId = 'network-profile.clean') {
 		[ordered]@{ schema_id = 'aetheln.network-profile-catalog'; schema_version = 1; selected_profile_id = $SelectedProfileId; profiles = @($Profiles) } |
@@ -717,8 +911,13 @@ exit $Child.ExitCode
 	foreach ($FailureCase in $ContractFailureCases) {
 		$ContractFailure = $null
 		$FailureRoot = Join-Path $FixtureRoot $FailureCase.Name
-		try { Invoke-FixtureRun -FixtureLogRoot $FailureRoot -FixtureRunId ("fixture-$($FailureCase.Name)") -RejectionReason 'malformed-intent' -DurationSeconds 1 -Behavior $FailureCase.Behavior -TimeoutSeconds 2 -UseContracts $true } catch { $ContractFailure = $_.Exception.Message }
+		$BoundaryDescription = if ($FailureCase.TimedOut) { $FailureCase.Failure -replace '^waiting for ', '' } else { '' }
+		$StartupDelay = if ($FailureCase.Name -eq 'contract-missing-death') { 3 } else { 0 }
+		try { Invoke-FixtureRun -FixtureLogRoot $FailureRoot -FixtureRunId ("fixture-$($FailureCase.Name)") -RejectionReason 'malformed-intent' -DurationSeconds 1 -Behavior $FailureCase.Behavior -UseContracts $true -BoundaryTimeoutDescription $BoundaryDescription -ServerStartupDelaySeconds $StartupDelay } catch { $ContractFailure = $_.Exception.Message }
 		Assert-True ($ContractFailure -match [regex]::Escape($FailureCase.Failure)) "$($FailureCase.Name) must fail closed with its expected reason. Actual: $ContractFailure"
+		if ($FailureCase.TimedOut) {
+			Assert-True ($ContractFailure -match '^Timed out after 2 seconds waiting for ') "$($FailureCase.Name) must retain the two-second negative boundary. Actual: $ContractFailure"
+		}
 		$FailedContractJson = Get-Content -LiteralPath (Join-Path $FailureRoot 'network-authority-spike-evidence.json') -Raw
 		$FailedContractEvidence = $FailedContractJson | ConvertFrom-Json
 		Assert-True ($FailedContractEvidence.schema_version -eq 2 -and $FailedContractEvidence.result -eq 'failed') "$($FailureCase.Name) must emit failed v2 evidence."
@@ -729,8 +928,9 @@ exit $Child.ExitCode
 	}
 	$ContractServerExitRoot = Join-Path $FixtureRoot 'contract-server-exit'
 	$ContractServerExitFailure = $null
-	try { Invoke-FixtureRun -FixtureLogRoot $ContractServerExitRoot -FixtureRunId 'fixture-contract-server-exit' -RejectionReason 'malformed-intent' -DurationSeconds 3 -ExitAfterMarkers $true -TimeoutSeconds 4 -UseContracts $true } catch { $ContractServerExitFailure = $_.Exception.Message }
-	Assert-True ($ContractServerExitFailure -match "Required process 'server' exited unexpectedly with code 0") 'A contract-mode server exit must fail during observation.'
+	try { Invoke-FixtureRun -FixtureLogRoot $ContractServerExitRoot -FixtureRunId 'fixture-contract-server-exit' -RejectionReason 'malformed-intent' -DurationSeconds 3 -ExitAfterMarkers $true -Behavior 'slow-client-start' -UseContracts $true } catch { $ContractServerExitFailure = $_.Exception.Message }
+	Assert-True (Test-Path -LiteralPath (Join-Path $FixtureRoot 'observation-exit-fixture-contract-server-exit') -PathType Leaf) "The early-exit regression must reach observation after slow client initialization. Actual: $ContractServerExitFailure"
+	Assert-True ($ContractServerExitFailure -match "Required process 'server' exited unexpectedly with code 0") "A contract-mode server exit must fail during observation. Actual: $ContractServerExitFailure"
 	$ContractServerExitEvidence = Get-Content -LiteralPath (Join-Path $ContractServerExitRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
 	Assert-True ($ContractServerExitEvidence.failure_details.process_role -eq 'server' -and $ContractServerExitEvidence.failure_details.observed_stage -eq 'observation' -and $ContractServerExitEvidence.failure_details.exit_code -eq 0) 'Server exit evidence must normalize server role, observation stage, and exit code.'
 	Write-Output 'PASS: lifecycle, identity, timeout, and role-specific contract failures produce normalized evidence'
@@ -775,7 +975,7 @@ exit $Child.ExitCode
 	$env:AETHELN_TEST_CLEANUP_FAIL = 'true'
 	$CombinedFailure = $null
 	try {
-		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'combined-primary-and-cleanup-failure') -FixtureRunId 'fixture-combined-primary-and-cleanup-failure' -RejectionReason 'malformed-intent' -DurationSeconds 1 -Behavior 'missing-death' -TimeoutSeconds 2 -UseLauncher $true -UseContracts $true
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'combined-primary-and-cleanup-failure') -FixtureRunId 'fixture-combined-primary-and-cleanup-failure' -RejectionReason 'malformed-intent' -DurationSeconds 1 -Behavior 'missing-death' -BoundaryTimeoutDescription 'authoritative death' -UseLauncher $true -UseContracts $true
 	} catch { $CombinedFailure = $_.Exception.Message }
 	Remove-Item -LiteralPath Env:AETHELN_TEST_CLEANUP_FAIL -ErrorAction Ignore
 	Assert-True ($CombinedFailure -match 'waiting for authoritative death') "The combined failure fixture must preserve the primary execution exception. Actual: $CombinedFailure"
@@ -1024,7 +1224,7 @@ exit $Child.ExitCode
 
 	$env:AETHELN_TEST_LAUNCHER_FAIL = 'true'
 	$LauncherFailure = $null
-	try { Invoke-FixtureRun (Join-Path $FixtureRoot 'launcher-failure') 'fixture-launcher-failure' 'malformed-intent' 1 $false $true 'normal' 2 } catch { $LauncherFailure = $_.Exception.Message }
+	try { Invoke-FixtureRun (Join-Path $FixtureRoot 'launcher-failure') 'fixture-launcher-failure' 'malformed-intent' 1 $false $true 'normal' } catch { $LauncherFailure = $_.Exception.Message }
 	Remove-Item -LiteralPath Env:AETHELN_TEST_LAUNCHER_FAIL -ErrorAction Ignore
 	Assert-True ($LauncherFailure -match 'Process exited with code 41 while waiting for server descendant process identity') "A launcher failure must fail before gameplay evidence can pass. Actual: $LauncherFailure"
 	Write-Output 'PASS: launcher failure cannot fabricate a successful authority capture'
@@ -1063,6 +1263,7 @@ exit $Child.ExitCode
 	} catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'ServerArguments must contain.*ScenarioId') 'Missing correlation placeholders must fail before launch.'
 	Write-Output 'PASS: incomplete launch correlation fails closed'
+	$FixtureSucceeded = $true
 }
 finally {
 	foreach ($FixtureProcess in @(Get-Process -ErrorAction SilentlyContinue)) {
@@ -1071,5 +1272,9 @@ finally {
 			Stop-Process -Id $FixtureProcess.Id -Force -ErrorAction SilentlyContinue
 		}
 	}
-	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	if ($FixtureSucceeded) {
+		if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	} else {
+		Write-Output "Failed network-authority fixtures retained at '$FixtureRoot'."
+	}
 }
