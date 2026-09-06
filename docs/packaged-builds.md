@@ -61,11 +61,18 @@ evidence from separate runs cannot be mixed. They should remain outside
 tracked source paths. Never commit machine-specific engine paths, build
 artifacts, logs, or credentials.
 
-The following is a complete Development build invocation. Substitute only the
-local roots and the actual full repository `HEAD` recorded for the run:
+Every build requires an explicit host-tools choice. The following Development
+build invocation selects `Prebuilt`, which requires the canonical engine
+revision and an existing external host-tools attestation record. That record
+must have been produced with `-Stage AttestHostTools` after an authorized,
+successful provisioning build, referencing its retained evidence; see
+[Host-tools attestation record](developer-environment-and-ddc.md#host-tools-attestation-record).
+Substitute the local roots, enter that existing record's path when prompted,
+and capture the actual full repository `HEAD` for the run:
 
 ```powershell
 $AethelnRevision = git rev-parse HEAD
+$AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
 .\scripts\build\Build-PackagedArtifacts.ps1 `
   -ProjectPath .\AethelnOnline.uproject `
   -EngineRoot 'D:\UnrealEngine\UE-5.8.1-source' `
@@ -73,9 +80,17 @@ $AethelnRevision = git rev-parse HEAD
   -ArchiveRoot 'D:\Builds\aetheln-run-001' `
   -LogRoot 'D:\BuildLogs\aetheln-run-001' `
   -SourceRevision $AethelnRevision `
+  -HostToolsBoundary Prebuilt `
+  -EngineRevision '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' `
+  -HostToolsAttestationPath $AethelnHostToolsAttestationPath `
   -Configuration Development `
   -Map /Game/Maps/StarterMap
 ```
+
+For a separately operator-authorized full host-tools rebuild, replace the
+three host-tools arguments with `-HostToolsBoundary Rebuild`. There is no
+default or automatic rebuild fallback: an omitted selection or an unverified
+prebuilt attestation stops the build.
 
 The script produces `WindowsClient` and `LinuxServer` below `ArchiveRoot` and
 writes `build-provenance.json` beside them. Provenance generation is part of
