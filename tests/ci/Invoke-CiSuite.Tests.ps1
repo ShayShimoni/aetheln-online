@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch] $ProcessObservationOnly)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -20,6 +20,181 @@ function Assert-True {
 		throw "Assertion failed: $Message"
 	}
 }
+
+function Open-CancellationDescendant {
+	param(
+		[Parameter(Mandatory)] $Identity,
+		[scriptblock] $Lookup = { param($ProcessId) Get-Process -Id $ProcessId -ErrorAction Stop }
+	)
+
+	$Descendant = $null
+	try {
+		$Descendant = & $Lookup $Identity.id
+		if ($null -eq $Descendant) { throw 'Cancellation descendant lookup returned no process.' }
+		# Open and retain the handle while the child is still live, before killing
+		# the runner. All later exit observation is bound to this exact process.
+		$Handle = $Descendant.Handle
+		if ($null -eq $Handle -or $Handle -eq [IntPtr]::Zero) { throw 'Cancellation descendant handle is unavailable.' }
+		$Started = $Descendant.StartTime
+		if ($Started -isnot [DateTime]) { throw 'Cancellation descendant start time is unavailable.' }
+		if ($Descendant.Id -ne $Identity.id -or $Started.ToUniversalTime().Ticks -ne $Identity.startTicks) {
+			throw 'Cancellation descendant identity mismatch.'
+		}
+		if ($Descendant.HasExited -ne $false) { throw 'Cancellation descendant is not live before parent termination.' }
+		return $Descendant
+	}
+	catch {
+		if ($null -ne $Descendant) { $Descendant.Dispose() }
+		throw
+	}
+}
+
+function Test-CancellationDescendantExited {
+	param([Parameter(Mandatory)] $Descendant)
+	return ($Descendant.WaitForExit(5000) -eq $true -and $Descendant.HasExited -eq $true)
+}
+
+function Publish-CancellationMarker {
+	param(
+		[Parameter(Mandatory)][string] $MarkerPath,
+		[Parameter(Mandatory)] $Identity,
+		[scriptblock] $WriteMarker = { param($Path, $Json) [IO.File]::WriteAllText($Path, $Json) }
+	)
+
+	$ErrorActionPreference = 'Stop'
+	# The reader treats existence as readiness. Publish only after the sibling
+	# file is complete and closed; Move fails if the final marker already exists.
+	$PendingPath = $MarkerPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+	& $WriteMarker $PendingPath (ConvertTo-Json -InputObject $Identity -Compress)
+	[IO.File]::Move($PendingPath, $MarkerPath)
+}
+
+function Test-MarkerPublication {
+	$MarkerRoot = Join-Path ([IO.Path]::GetTempPath()) ('AethelnCiMarkerTests-' + [guid]::NewGuid().ToString('N'))
+	New-Item -ItemType Directory -Path $MarkerRoot | Out-Null
+	try {
+		$MarkerPath = Join-Path $MarkerRoot 'descendant.json'
+		$Identity = @{ id = 123; startTicks = [DateTime]::UtcNow.Ticks }
+		$State = @{ ObservedPartialWrite = $false; PendingPath = $null }
+		$PartialWriter = {
+			param($Path, $Json)
+			$State.PendingPath = $Path
+			$Stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew)
+			try {
+				$Bytes = [Text.Encoding]::UTF8.GetBytes($Json)
+				$Stream.Write($Bytes, 0, 1)
+				$Stream.Flush()
+				$State.ObservedPartialWrite = $true
+				Assert-True -Condition (-not (Test-Path -LiteralPath $MarkerPath)) -Message 'The final cancellation marker must be absent during a partial JSON write.'
+				$Stream.Write($Bytes, 1, $Bytes.Length - 1)
+			}
+			finally { $Stream.Dispose() }
+		}.GetNewClosure()
+		Publish-CancellationMarker -MarkerPath $MarkerPath -Identity $Identity -WriteMarker $PartialWriter
+		$Published = Get-Content -LiteralPath $MarkerPath -Raw | ConvertFrom-Json
+		Assert-True -Condition ($State.ObservedPartialWrite -and $Published.id -eq $Identity.id -and $Published.startTicks -eq $Identity.startTicks) -Message 'Publication must expose the complete marker identity after the writer closes.'
+		Assert-True -Condition ((Split-Path -Parent $State.PendingPath) -eq $MarkerRoot -and $State.PendingPath -ne $MarkerPath -and -not (Test-Path -LiteralPath $State.PendingPath)) -Message 'Atomic publication must move its unique sibling temporary file to the final marker.'
+		Write-Output 'PASS: cancellation marker stays absent during partial write and publishes complete identity'
+		$FailedMarkerPath = Join-Path $MarkerRoot 'failed.json'
+		$WriteFailure = $null
+		try {
+			& {
+				$ErrorActionPreference = 'Continue'
+				Publish-CancellationMarker -MarkerPath $FailedMarkerPath -Identity $Identity -WriteMarker {
+					param($Path, $Json)
+					[IO.File]::WriteAllText($Path, $Json.Substring(0, 1))
+					Write-Error 'fixture marker write failure'
+				}
+			}
+		}
+		catch { $WriteFailure = $_.Exception.Message }
+		Assert-True -Condition ($WriteFailure -match 'fixture marker write failure' -and -not (Test-Path -LiteralPath $FailedMarkerPath)) -Message 'A failed partial write must propagate without publishing readiness.'
+		$OriginalMarker = Get-Content -LiteralPath $MarkerPath -Raw
+		$Collision = $null
+		try { Publish-CancellationMarker -MarkerPath $MarkerPath -Identity @{ id = 124; startTicks = 1 } }
+		catch { $Collision = $_.Exception }
+		Assert-True -Condition ($null -ne $Collision -and (Get-Content -LiteralPath $MarkerPath -Raw) -ceq $OriginalMarker) -Message 'Publication must fail closed without overwriting an existing marker.'
+		Write-Output 'PASS: marker write failure and publication collision preserve readiness and existing identity'
+	}
+	finally { Remove-Item -LiteralPath $MarkerRoot -Recurse -Force }
+}
+
+function Test-ProcessObservation {
+	$Started = [DateTime]::UtcNow
+	$Identity = [pscustomobject]@{ id = 123; startTicks = $Started.Ticks }
+	foreach ($Case in @('live-owned', 'timestamp-lost-after-read', 'null-timestamp', 'pid-reuse', 'unrelated', 'already-exited', 'missing-process', 'lookup-failure', 'handle-failure', 'wait-failure', 'persistent', 'unsignaled-exit', 'exit-observation-failure')) {
+		$State = [pscustomobject]@{ Case = $Case; Lookups = 0; Reads = 0; Disposals = 0; Waits = 0; Bound = 0; Kills = 0 }
+		$Observed = [pscustomobject]@{ Id = 123; Handle = [IntPtr] 1; HasExited = $false; State = $State; Started = $Started }
+		$Observed | Add-Member ScriptProperty StartTime {
+			$this.State.Reads++
+			if ($this.State.Case -eq 'null-timestamp' -or ($this.State.Case -eq 'timestamp-lost-after-read' -and $this.State.Reads -gt 1)) { return $null }
+			return $this.Started
+		}
+		$Observed | Add-Member ScriptMethod Dispose { $this.State.Disposals++ }
+		$Observed | Add-Member ScriptMethod Kill { $this.State.Kills++; throw 'Observation must not terminate a process.' }
+		$Observed | Add-Member ScriptMethod WaitForExit {
+			param($Milliseconds)
+			$this.State.Waits++
+			$this.State.Bound = $Milliseconds
+			if ($this.State.Case -eq 'wait-failure') { throw 'fixture wait failure' }
+			if ($this.State.Case -eq 'persistent') { return $false }
+			if ($this.State.Case -eq 'unsignaled-exit') { return $true }
+			if ($this.State.Case -eq 'exit-observation-failure') { $this.HasExited = $null; return $true }
+			$this.HasExited = $true
+			return $true
+		}
+		if ($Case -eq 'pid-reuse') { $Observed.Started = $Started.AddTicks(1) }
+		if ($Case -eq 'unrelated') { $Observed.Id = 124 }
+		if ($Case -eq 'already-exited') { $Observed.HasExited = $true }
+		if ($Case -eq 'handle-failure') { $Observed.Handle = [IntPtr]::Zero }
+		$Lookup = {
+			param($ProcessId)
+			$State.Lookups++
+			if ($ProcessId -ne $Identity.id -or $State.Lookups -ne 1) { throw 'Process lookup must happen once for the marker identity.' }
+			if ($Case -eq 'lookup-failure') { throw 'fixture lookup failure' }
+			if ($Case -eq 'missing-process') { return $null }
+			return $Observed
+		}.GetNewClosure()
+		$Retained = $null
+		$Failure = $null
+		$Exited = $false
+		try {
+			$Retained = Open-CancellationDescendant -Identity $Identity -Lookup $Lookup
+			$Exited = Test-CancellationDescendantExited -Descendant $Retained
+		}
+		catch { $Failure = $_.Exception.Message }
+		finally { if ($null -ne $Retained) { $Retained.Dispose() } }
+		if ($Case -in @('live-owned', 'timestamp-lost-after-read')) {
+			Assert-True -Condition ($null -eq $Failure -and $Exited -and $State.Reads -eq 1) -Message "$Case must observe exact-handle exit without rereading identity: $Failure"
+		}
+		elseif ($Case -in @('persistent', 'unsignaled-exit', 'exit-observation-failure')) {
+			Assert-True -Condition ($null -eq $Failure -and -not $Exited) -Message "$Case must not establish descendant exit."
+		}
+		else {
+			$Expected = switch ($Case) {
+				'null-timestamp' { 'start time is unavailable' }
+				'pid-reuse' { 'identity mismatch' }
+				'unrelated' { 'identity mismatch' }
+				'already-exited' { 'not live before parent termination' }
+				'missing-process' { 'lookup returned no process' }
+				'lookup-failure' { 'fixture lookup failure' }
+				'handle-failure' { 'handle is unavailable' }
+				'wait-failure' { 'fixture wait failure' }
+			}
+			Assert-True -Condition ($null -ne $Failure -and $Failure -match $Expected -and -not $Exited) -Message "$Case must fail closed with its observation diagnostic: $Failure"
+		}
+		$ExpectedDisposals = if ($Case -in @('missing-process', 'lookup-failure')) { 0 } else { 1 }
+		Assert-True -Condition ($State.Lookups -eq 1 -and $State.Disposals -eq $ExpectedDisposals -and $State.Kills -eq 0) -Message "$Case must release acquired handles without touching unrelated processes or looking up a reused PID."
+		if ($State.Waits -gt 0) {
+			Assert-True -Condition ($State.Waits -eq 1 -and $State.Bound -eq 5000) -Message "$Case must retain the five-second exit bound."
+		}
+		Write-Output "PASS: cancellation process observation $Case"
+	}
+}
+
+Test-MarkerPublication
+Test-ProcessObservation
+if ($ProcessObservationOnly) { return }
 
 function Invoke-Runner {
 	param(
@@ -42,6 +217,8 @@ function Invoke-Runner {
 	$StartInfo.RedirectStandardError = $true
 	$Process = [System.Diagnostics.Process]::new()
 	$Process.StartInfo = $StartInfo
+	$Descendant = $null
+	$DescendantExited = $false
 	try {
 		if (-not $Process.Start()) { throw 'Could not start the CI runner fixture.' }
 		$StandardOutput = $Process.StandardOutput.ReadToEndAsync()
@@ -50,7 +227,10 @@ function Invoke-Runner {
 			$Deadline = [DateTime]::UtcNow.AddSeconds(15)
 			while (-not (Test-Path -LiteralPath $StopAfterMarker) -and -not $Process.HasExited -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 20 }
 			Assert-True -Condition (Test-Path -LiteralPath $StopAfterMarker) -Message 'The cancellation fixture must launch its descendant before the parent is stopped.'
+			$Identity = Get-Content -LiteralPath $StopAfterMarker -Raw | ConvertFrom-Json
+			$Descendant = Open-CancellationDescendant -Identity $Identity
 			$Process.Kill()
+			$DescendantExited = Test-CancellationDescendantExited -Descendant $Descendant
 		}
 		Assert-True -Condition ($Process.WaitForExit(90000)) -Message 'The synthetic runner fixture exceeded its 90-second guard.'
 		$Output = @(
@@ -62,9 +242,10 @@ function Invoke-Runner {
 	finally {
 		if (-not $Process.HasExited) { $Process.Kill(); [void] $Process.WaitForExit(5000) }
 		$Process.Dispose()
+		if ($null -ne $Descendant) { $Descendant.Dispose() }
 		$ErrorActionPreference = $PreviousPreference
 	}
-	return @{ Output = $Output; ExitCode = $ExitCode }
+	return @{ Output = $Output; ExitCode = $ExitCode; DescendantExited = $DescendantExited }
 }
 
 function Assert-CheckShape {
@@ -333,8 +514,11 @@ exit 17
 	$DescendantMarker = Join-Path $FixtureRoot 'descendant.json'
 	$DescendantCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('Start-Sleep -Seconds 60'))
 	$DescendantBody = @"
+function Publish-CancellationMarker {
+$(${function:Publish-CancellationMarker}.ToString())
+}
 `$Child = Start-Process -FilePath '$((Get-Command powershell.exe).Source)' -ArgumentList '-NoProfile -EncodedCommand $DescendantCommand' -WindowStyle Hidden -PassThru
-[IO.File]::WriteAllText('$DescendantMarker', (ConvertTo-Json @{ id = `$Child.Id; startTicks = `$Child.StartTime.ToUniversalTime().Ticks }))
+Publish-CancellationMarker -MarkerPath '$DescendantMarker' -Identity @{ id = `$Child.Id; startTicks = `$Child.StartTime.ToUniversalTime().Ticks }
 Start-Sleep -Seconds 60
 "@
 	[IO.File]::WriteAllText($DescendantScript, $DescendantBody)
@@ -344,14 +528,7 @@ Start-Sleep -Seconds 60
 	try {
 		$CancellationRun = Invoke-Runner -ManifestPath $CancellationManifest -ReportPath (Join-Path $FixtureRoot 'cancellation-report.json') -StopAfterMarker $DescendantMarker
 		Assert-True -Condition ($CancellationRun.ExitCode -ne 0) -Message 'A cancelled parent must not report success.'
-		$Identity = Get-Content -LiteralPath $DescendantMarker -Raw | ConvertFrom-Json
-		$CleanupDeadline = [DateTime]::UtcNow.AddSeconds(5)
-		do {
-			$Remaining = Get-Process -Id $Identity.id -ErrorAction SilentlyContinue
-			if ($null -eq $Remaining -or $Remaining.StartTime.ToUniversalTime().Ticks -ne $Identity.startTicks) { break }
-			Start-Sleep -Milliseconds 20
-		} while ([DateTime]::UtcNow -lt $CleanupDeadline)
-		Assert-True -Condition ($null -eq $Remaining -or $Remaining.StartTime.ToUniversalTime().Ticks -ne $Identity.startTicks) -Message 'Parent termination must stop its exact owned descendant.'
+		Assert-True -Condition $CancellationRun.DescendantExited -Message 'Parent termination must stop its exact owned descendant.'
 		Assert-True -Condition (-not $Unrelated.HasExited) -Message 'Parent termination must preserve unrelated PowerShell processes.'
 	}
 	finally {
