@@ -133,6 +133,27 @@ The suite deliberately excludes two existing test groups:
   workflow described below and only needs to run when the visual package
   changes.
 
+### Historical Issue #151 compile applicability
+
+[TA-016](architecture-decisions.md#ta-016---revision-bound-compile-applicability-for-issue-151)
+records the proposed acceptance boundary for the exact ten-path
+[PR #152](https://github.com/ShayShimoni/aetheln-online/pull/152) change:
+base `085932aa31856041a9c5544ba4f838a2f5e66e24`,
+head `278e334fda22a74f3aed9bff7128d358c7f315e1`,
+merge `2919ceaaf30d89bd374c4124b7e1fe76e0c778cf`.
+It takes effect only after independent review and merge of the decision.
+For that historical protocol change, focused source-inspection, handoff, and
+launcher regressions, retained-event reproduction, and independent
+installed-Codex replacement-path QA establish the relevant behavior. Unreal
+compilation does not exercise it, and ordinary portable CI excludes its
+delivery harness. Final independent acceptance and pre-publication event-history
+reconciliation remain required; this record does not close Issue #151.
+
+Earlier failed or missing compile evidence retains that status. TA-016 adds
+no `.agents/` directory exemption, alters no classifier or future gate, and
+cannot waive compilation for a future revision, including the same paths.
+The closed classifier below remains unchanged.
+
 ## Workflow Execution
 
 `.github/workflows/prototype-quality-gates.yml` accepts exactly three events:

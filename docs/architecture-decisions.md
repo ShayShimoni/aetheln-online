@@ -567,6 +567,68 @@ Every accepted decision records:
   measured evidence shows the boundary does not reduce the dominant cost, or
   the milestone moves to an installed engine build distribution.
 
+### TA-016 - Revision-Bound Compile Applicability for Issue #151
+
+- **Status:** Accepted upon independent review and merge of this decision;
+  proposed until then.
+- **Scope:** Only [Issue #151](https://github.com/ShayShimoni/aetheln-online/issues/151)
+  as delivered by [PR #152](https://github.com/ShayShimoni/aetheln-online/pull/152),
+  base `085932aa31856041a9c5544ba4f838a2f5e66e24`,
+  head `278e334fda22a74f3aed9bff7128d358c7f315e1`, and
+  merge `2919ceaaf30d89bd374c4124b7e1fe76e0c778cf`.
+  The exact ten changed paths are below; every path is relative to
+  `.agents/skills/orchestrate-delivery/`:
+
+  - `SKILL.md`
+  - `references/handoff-schemas.json`
+  - `references/operating-contract.md`
+  - `scripts/Get-DeliveryEventTelemetry.ps1`
+  - `scripts/Invoke-DeliverySourceInspectionServer.ps1`
+  - `scripts/Invoke-DeliveryStage.ps1`
+  - `scripts/Validate-DeliveryHandoff.ps1`
+  - `scripts/tests/Test-DeliveryHandoffValidation.ps1`
+  - `scripts/tests/Test-DeliverySourceInspection.ps1`
+  - `scripts/tests/Test-DeliveryStageLauncher.ps1`
+
+- **Decision:** Under the owner's 2026-09-06 authorization to remove
+  unnecessary CI work, successful Unreal target compilation is not an
+  acceptance requirement for this exact historical change. Applicable proof
+  comprises focused source-inspection, handoff-validation, and stage-launcher
+  regressions; reproduction from retained initial/replacement events; and
+  independent post-merge QA of the installed-Codex replacement path.
+- **Rationale:** These protocol, PowerShell, documentation, and test changes
+  neither supply nor generate Unreal compilation inputs. Compiling client and
+  server targets does not exercise the closed source-reader schema,
+  retry-neutral preflight rejection, pagination telemetry, or restricted
+  replacement launch. The normal portable CI suite excludes this `.agents/`
+  test harness, so a green portable report alone is also insufficient.
+- **Owner/evidence:** Issue #151 and PR #152 bind the historical change and
+  pre-publication focused regression/replay reports. Retained post-merge QA
+  for the merge above records 33 source-inspection, 231 handoff-validation,
+  and 275 stage-launcher passing rows, each with exit code zero. The retained
+  supported-replacement evidence manifest has SHA-256
+  `de3ca2563a68472fd02b5546714f0bd563967ebbf00a7753b14126f0c0fd0e6a`.
+  These suite results and manifest do not by themselves establish
+  installed-Codex acceptance. Final independent acceptance must reconcile the
+  retained replacement-path events,
+  audit evidence, and source identity; publication must also reconcile the
+  current issue/PR event history. This decision does not declare Issue #151
+  Done or unblock #139.
+- **Alternatives:** Requiring an unrelated Unreal compile for these exact
+  protocol changes; accepting ordinary portable CI without the delivery
+  harness; exempting the entire `.agents/` directory or future changes to
+  these paths. The latter two leave the relevant behavior unproven.
+- **Consequences:** Earlier failed compilation remains failed operational
+  evidence, and absent compilation evidence remains missing; neither becomes
+  a pass. This decision changes no workflow, TA-012 closed classifier, future
+  gate, trust predicate, retry budget, isolation rule, or packaged milestone.
+  It creates no directory exemption or automatic waiver for a later revision,
+  even at the same paths. Unreal/build infrastructure operational failures
+  remain separately actionable, and this decision claims no measured speedup.
+- **Revisit trigger:** Any different base/head/merge, path set, behavior that
+  supplies engine inputs, or contradictory retained evidence requires a new
+  applicability review. Future changes continue through the existing gates.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |

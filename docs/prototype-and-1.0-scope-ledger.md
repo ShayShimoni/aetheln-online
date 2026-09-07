@@ -27,6 +27,7 @@ Every ledger row uses exactly one of these values:
 
 - `canonical fact`
 - `accepted architecture`
+- `accepted project decision`
 - `proposed product decision`
 - `evidence-gated technical candidate`
 - `tuning candidate`
@@ -47,10 +48,10 @@ separate rows so they cannot be silently absorbed into another contract.
 | Combat epic #6 | #6, #4, #17, #18, #19, #20, #21, #60, #61 | 9 | P10-009-P10-017 |
 | Cooperative-world epic #7 | #7, #3, #22, #23, #24, #25, #26, #31 | 8 | P10-018-P10-025 |
 | Backend epic #10 | #10, #27, #30, #35, #36, #37, #38, #40 | 8 | P10-026-P10-033 |
-| Quality and gate owners | #12, #44, #45, #46, #48, #62 | 6 | P10-034-P10-038, P10-054 |
+| Quality and gate owners | #12, #44, #45, #46, #47, #48, #62 | 7 | P10-034-P10-038, P10-054, P10-055 |
 | Explicit later ownership | #50 | 1 | P10-039 |
 | Issue #71 conflicts/TBDs | #1, #2, #7, #13, #15, #22-#25, #36, #40, #45, #48, #50, #59, #60, #62, canonical documents | 13 | P10-041-P10-053 |
-| **Total** | **41 unique board items** | **54** | **P10-001-P10-054** |
+| **Total** | **42 unique board items** | **55** | **P10-001-P10-055** |
 
 ## Exactly-one-disposition ledger
 
@@ -105,11 +106,12 @@ separate rows so they cannot be silently absorbed into another contract.
 | P10-047 | Issue #71 conflict; combat architecture and #60 | Prototype Gate | Proposed `CombatIntent` request and server-record `CombatActivation` split. | rejected contradiction | `docs/combat-and-networking-architecture.md`; #60 | Rejected because the accepted public contract remains `CombatActivation`; reconsider only through a synchronized contract/architecture decision. |
 | P10-048 | Issue #71 conflict; technical architecture/ADR and #13 | Prototype Gate | Proposed `GamePresentation` ownership and delayed `GameNet`. | rejected contradiction | `docs/technical-architecture.md`, ADR module decision, #13 | Rejected because the accepted baseline is `GameCore`, `GameCombat`, `GameUI`, `GameNet`, and server-only `GameServer`; revisit through ADR review. |
 | P10-049 | Issue #71 conflict; canonical lore documents and #24/#54 | Cross-stage | Hollow Choirhouse, Hollow Choir, Ashen Choir, Lucent Choir, and Concord terminology or new lore. | deferred follow-up | Canonical lore documents; #24 for the dungeon and #54 for unresolved faction-world lore | Preserve each canonical term's existing meaning; do not conflate names or add lore. Any ambiguity blocks the affected content ticket, not unrelated prototype work. |
-| P10-050 | Issue #71 conflict; AGENTS.md and canonical product documents | Cross-stage | Dawn Concordat and Skeinblade naming status. | deferred follow-up | Canonical product documents and accountable future naming owner | Treat recorded working names as non-final; do not invent a rename deadline or final replacement. |
+| P10-050 | Issue #71 conflict; AGENTS.md and canonical product documents | Cross-stage | Faction and Order working-name status. Under Issue #104, Crowned Ledger and Hundred Witnesses supersede Dawn Concordat and Unbound Flame as provisional faction display names, and Oathscar supersedes Skeinblade as the active initial Order working label. | deferred follow-up | Canonical product documents; final faction naming owned by #54 | Treat all recorded working names as non-final; do not invent a rename deadline or final replacement. Historical evidence keeps the earlier labels unchanged. |
 | P10-051 | Issue #71 conflict; #13/#15/#36 | Prototype / 1.0 | Exact engine revision, compilers/SDKs/toolchains, plugins, backend/database/hosting stack, and deployment mechanics. | evidence-gated technical candidate | #13, #15, and #36; accepted ADR when evidence exists | Remains TBD until each owner records reproducible evidence and approval; examples do not select a tool or vendor. |
 | P10-052 | Issue #71 conflict; #2/#40/#45/#48/#62 and related tickets | Cross-stage | Exact combat values, network profiles, tick/performance/hardware targets, rewards, retention, capacity, schedules, and go/no-go percentages. | tuning candidate | #2, #40, #45, #48, #62, and the applicable feature owner | Remains TBD until measured or explicitly approved with scenario, owner, evidence, and revisit trigger. |
 | P10-053 | Issue #71 conflict; security/operations canon | Cross-stage | Legal/privacy conclusions, jurisdictions, processing locations, access, retention, and regional requirements. | legal/privacy dependency | Qualified legal/privacy review; #40 and applicable service/data owner | No planning prose is legal approval; blocks collection or operation requiring an unresolved policy and revisits when jurisdiction, data, or provider changes. |
 | P10-054 | #46 | 1.0 Cooperative Slice | Produce controlled external-test distribution with access control, identified build provenance, privacy guidance, update and rollback behavior, uninstall behavior, and clean-machine install/run validation. | accepted architecture | #46; `docs/performance-quality-and-delivery.md`; `docs/security-and-operations.md` | The 1.0 external playtest is not ready until the implemented distribution path has recorded lifecycle and clean-machine evidence; provider and delivery mechanics remain evidence-owned. |
+| P10-055 | #47 | 1.1 Character Development | Standardize versioned playtest feedback intake, defect classification, duplicate linkage, severity and ownership assignment, privacy-safe handling, templates, triage cadence, and traceability. | deferred follow-up | #47 | Revisit in 1.1; #47 does not expand the prototype or 1.0 scope, and its cadence, response-time, severity, privacy, and retention values remain owned TBDs of #47. |
 
 ## Owned TBD register
 

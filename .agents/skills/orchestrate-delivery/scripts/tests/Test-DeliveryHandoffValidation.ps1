@@ -295,6 +295,616 @@ $BaseWorkerHandoff = @{
 	baseline_diff = ''
 }
 
+$SupportedSourceInspectionProtocol = [ordered]@{
+	schema_version = 1
+	tool = 'read_allowed_source_file'
+	request_arguments = @('path', 'offset_bytes')
+	path_source = 'allowed_paths'
+	initial_offset_bytes = 0
+	next_offset_field = 'end_offset_bytes'
+	completion_field = 'eof'
+	maximum_page_bytes = 8192
+}
+
+$ProtocolWorker = $BaseWorkerHandoff.Clone()
+$ProtocolWorker.execution_route = 'planned'
+$ProtocolWorker.work_package = 'Explicit protocol package.'
+$ProtocolWorker.source_inspection_protocol = $SupportedSourceInspectionProtocol
+Invoke-AcceptanceCase `
+	-Name 'Exact source-inspection protocol is accepted' `
+	-Handoff $ProtocolWorker
+
+$ProtocolIntegrator = [ordered]@{
+	schema_version = 1
+	stage = 'integrator'
+	run_id = 'integrator-source-protocol-conflict'
+	workspace_root = $RepositoryRoot
+	source_commit = '0000000000000000000000000000000000000000'
+	ticket = 'Issue #70'
+	acceptance_criteria = @('Validate the integrator source protocol.')
+	canonical_sources = @('AGENTS.md')
+	output_contract = 'Return a delivery_file_bundle_v1 full-file artifact.'
+	candidate_artifacts = @(
+		New-EvidenceRecord -Kind artifact -Provenance launcher `
+			-Source 'candidate-a' -Text 'candidate a'
+	)
+	integration_order = @(
+		'Use read_allowed_source_file with path, offset_bytes, and limit_bytes: 2048.'
+	)
+	conflict_locations = New-EvidenceRecord -Kind text -Provenance control_plane `
+		-Source 'conflicts' -Text 'none'
+	allowed_paths = @('docs/example.md')
+	non_goals = @('Production changes')
+	required_checks = @('Parse the test.')
+	baseline_status = New-EvidenceRecord -Kind status -Provenance launcher `
+		-Source 'baseline-status' -Text 'clean'
+	baseline_diff = New-EvidenceRecord -Kind diff -Provenance launcher `
+		-Source 'baseline-diff' -Text ''
+	source_inspection_protocol = $SupportedSourceInspectionProtocol
+}
+Invoke-RejectionCase `
+	-Name 'Integrator integration order rejects unsupported source member' `
+	-Json ($ProtocolIntegrator | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-integrator-source-member'
+
+$InvalidProtocolCases = @(
+	@('schema-version', 'schema_version', 2),
+	@('tool', 'tool', 'source_reader'),
+	@('request-arguments', 'request_arguments', @('offset_bytes', 'path')),
+	@('path-source', 'path_source', 'canonical_sources'),
+	@('initial-offset', 'initial_offset_bytes', 1),
+	@('next-offset', 'next_offset_field', 'offset_bytes'),
+	@('completion', 'completion_field', 'complete'),
+	@('maximum-page', 'maximum_page_bytes', 2048)
+)
+foreach ($InvalidProtocolCase in $InvalidProtocolCases) {
+	$InvalidProtocolWorker = Copy-JsonObject -Value $ProtocolWorker
+	$InvalidProtocolWorker.run_id = "invalid-protocol-$($InvalidProtocolCase[0])"
+	$InvalidProtocolWorker.source_inspection_protocol.($InvalidProtocolCase[1]) =
+		$InvalidProtocolCase[2]
+	Invoke-RejectionCase `
+		-Name "Source protocol $($InvalidProtocolCase[0]) mismatch is rejected" `
+		-Json ($InvalidProtocolWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-invalid-protocol'
+}
+
+$ExtraProtocolMemberWorker = Copy-JsonObject -Value $ProtocolWorker
+$ExtraProtocolMemberWorker.source_inspection_protocol | Add-Member `
+	-NotePropertyName timeout_seconds -NotePropertyValue 30
+Invoke-RejectionCase `
+	-Name 'Extra source protocol member uses sanitized protocol rejection' `
+	-Json ($ExtraProtocolMemberWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-extra-protocol-value'
+
+$RetainedReplacementWorker = Copy-JsonObject -Value $ProtocolWorker
+$RetainedReplacementWorker.run_id = 'retained-replacement-conflict'
+$RetainedReplacementWorker.work_package =
+	'Use read_allowed_source_file. Require `limit_bytes: 2048` for each source read. private-retained-value'
+Invoke-RejectionCase `
+	-Name 'Exact retained replacement limit_bytes requirement is rejected' `
+	-Json ($RetainedReplacementWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-retained-value'
+
+$AdjacentClauseSourceWorker = Copy-JsonObject -Value $ProtocolWorker
+$AdjacentClauseSourceWorker.run_id = 'adjacent-clause-source-member-conflict'
+$AdjacentClauseSourceWorker.work_package =
+	'Inspect with read_allowed_source_file. Pass limit_bytes: 4096 on every call.'
+Invoke-RejectionCase `
+	-Name 'Exact source-tool context continues into an adjacent operational clause' `
+	-Json ($AdjacentClauseSourceWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-adjacent-clause-marker'
+
+$AdjacentSetClauseSourceWorker = Copy-JsonObject -Value $ProtocolWorker
+$AdjacentSetClauseSourceWorker.run_id = 'adjacent-set-clause-source-member-conflict'
+$AdjacentSetClauseSourceWorker.work_package =
+	'Use read_allowed_source_file. Set limit_bytes to 2048 on every call.'
+Invoke-RejectionCase `
+	-Name 'Exact source-tool context scopes an adjacent set directive' `
+	-Json ($AdjacentSetClauseSourceWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-adjacent-set-clause-marker'
+
+$AdjacentPlainMemberSourceWorker = Copy-JsonObject -Value $ProtocolWorker
+$AdjacentPlainMemberSourceWorker.run_id =
+	'adjacent-plain-member-source-conflict'
+$AdjacentPlainMemberSourceWorker.work_package =
+	'Use read_allowed_source_file. Set limit to 2048 on every call.'
+Invoke-RejectionCase `
+	-Name 'Exact source-tool context scopes an adjacent plain member directive' `
+	-Json ($AdjacentPlainMemberSourceWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-adjacent-plain-member-marker'
+
+$AdjacentPlainMemberDirectiveVerbs = @('assign', 'add', 'include', 'pass', 'require')
+foreach ($DirectiveVerb in $AdjacentPlainMemberDirectiveVerbs) {
+	$PlainMemberDirectiveWorker = Copy-JsonObject -Value $ProtocolWorker
+	$PlainMemberDirectiveWorker.run_id =
+		"adjacent-plain-member-$DirectiveVerb-conflict"
+	$PlainMemberDirectiveWorker.work_package =
+		("Use read_allowed_source_file. $DirectiveVerb limit to every request. " +
+		"private-adjacent-$DirectiveVerb-plain-member-marker")
+	Invoke-RejectionCase `
+		-Name "Exact source-tool context scopes adjacent $DirectiveVerb plain member directive" `
+		-Json ($PlainMemberDirectiveWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker "private-adjacent-$DirectiveVerb-plain-member-marker"
+}
+
+$ActiveReplaceSourceWorker = Copy-JsonObject -Value $ProtocolWorker
+$ActiveReplaceSourceWorker.run_id = 'active-replace-source-conflict'
+$ActiveReplaceSourceWorker.work_package =
+	'Replace source after calling read_allowed_source_file(path, offset_bytes, limit_bytes).'
+Invoke-RejectionCase `
+	-Name 'Leading replace with an active unsupported source call is rejected' `
+	-Json ($ActiveReplaceSourceWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-active-replace-source-marker'
+
+$UnrelatedLimitRecordWorker = Copy-JsonObject -Value $ProtocolWorker
+$UnrelatedLimitRecordWorker.run_id = 'unrelated-limit-record-control'
+$UnrelatedLimitRecordWorker.work_package =
+	'Write a configuration record named limit_bytes: 2048; do not call any source tool.'
+Invoke-AcceptanceCase `
+	-Name 'Unrelated limit record without exact source context is accepted' `
+	-Handoff $UnrelatedLimitRecordWorker
+
+$AdjacentSetControlWorker = Copy-JsonObject -Value $ProtocolWorker
+$AdjacentSetControlWorker.run_id = 'adjacent-set-clause-unrelated-control'
+$AdjacentSetControlWorker.work_package =
+	'Use read_allowed_source_file. Set response_limit_bytes to 2048 for the output response.'
+Invoke-AcceptanceCase `
+	-Name 'Adjacent source context does not scope an unrelated set directive' `
+	-Handoff $AdjacentSetControlWorker
+
+$AdjacentCanonicalMemberWorker = Copy-JsonObject -Value $ProtocolWorker
+$AdjacentCanonicalMemberWorker.run_id = 'adjacent-canonical-member-control'
+$AdjacentCanonicalMemberWorker.work_package =
+	'Use read_allowed_source_file. Set offset_bytes to each returned end_offset_bytes on every call.'
+Invoke-AcceptanceCase `
+	-Name 'Adjacent canonical offset continuation remains accepted' `
+	-Handoff $AdjacentCanonicalMemberWorker
+
+$RetainedEvidenceInvocationWorker = Copy-JsonObject -Value $ProtocolWorker
+$RetainedEvidenceInvocationWorker.run_id = 'retained-evidence-invocation-conflict'
+$RetainedEvidenceInvocationWorker.work_package =
+	'Reproduce the retained raw evidence by invoking read_allowed_source_file with limit_bytes: 2048.'
+Invoke-RejectionCase `
+	-Name 'Active source-tool invocation is not exempted as retained evidence prose' `
+	-Json ($RetainedEvidenceInvocationWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-retained-evidence-marker'
+
+$ExactToolShapingCases = @(
+	'Do not stop before invoking read_allowed_source_file with limit_bytes: 2048.',
+	'No incomplete reads are allowed when calling read_allowed_source_file with timeout_seconds.',
+	'Call read_allowed_source_file and cap each request at 2048 bytes.',
+	'Use read_allowed_source_file. Cap each page at 2048 bytes.',
+	'Use read_allowed_source_file, specifying timeout_seconds: 30 on every request.',
+	'Use read_allowed_source_file and specify limit_bytes on each request.',
+	'Remove ambiguity by invoking read_allowed_source_file with timeout_seconds: 30.',
+	'Previous attempts failed, so invoke read_allowed_source_file with timeout_seconds: 30.'
+)
+for ($ShapingIndex = 0; $ShapingIndex -lt $ExactToolShapingCases.Count; $ShapingIndex++) {
+	$ShapingWorker = Copy-JsonObject -Value $ProtocolWorker
+	$ShapingWorker.run_id = "exact-source-shaping-$ShapingIndex"
+	$ShapingWorker.work_package = $ExactToolShapingCases[$ShapingIndex]
+	Invoke-RejectionCase `
+		-Name "Exact source-tool shaping case $($ShapingIndex + 1) is rejected" `
+		-Json ($ShapingWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-exact-source-shaping'
+}
+
+$SplitSourceContextCases = @(
+	[pscustomobject]@{
+		Value = @(
+			'Use read_allowed_source_file.',
+			'Pass timeout_seconds on every source request.'
+		)
+	},
+	[pscustomobject]@{
+		Value = [ordered]@{
+			procedure = 'Use read_allowed_source_file.'
+			instructions = 'Pass timeout_seconds on every source request.'
+		}
+	}
+)
+for ($SplitContextIndex = 0;
+	$SplitContextIndex -lt $SplitSourceContextCases.Count;
+	$SplitContextIndex++) {
+	$SplitContextWorker = Copy-JsonObject -Value $ProtocolWorker
+	$SplitContextWorker.run_id = "split-source-context-$SplitContextIndex"
+	$SplitContextWorker.work_package = $SplitSourceContextCases[$SplitContextIndex].Value
+	Invoke-RejectionCase `
+		-Name "Split source context case $($SplitContextIndex + 1) is rejected" `
+		-Json ($SplitContextWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-split-source-context'
+}
+
+$MemberBeforeToolVerbs = @('Supply', 'Attach', 'Append', 'Send', 'Provide', 'Assign')
+foreach ($MemberBeforeToolVerb in $MemberBeforeToolVerbs) {
+	$MemberBeforeToolWorker = Copy-JsonObject -Value $ProtocolWorker
+	$MemberBeforeToolWorker.run_id =
+		"member-before-source-tool-$($MemberBeforeToolVerb.ToLowerInvariant())"
+	$MemberBeforeToolWorker.work_package =
+		"$MemberBeforeToolVerb timeout_seconds to read_allowed_source_file."
+	Invoke-RejectionCase `
+		-Name "$MemberBeforeToolVerb member before exact source tool is rejected" `
+		-Json ($MemberBeforeToolWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-member-before-source-tool'
+}
+
+$CanonicalMemberBeforeToolWorker = Copy-JsonObject -Value $ProtocolWorker
+$CanonicalMemberBeforeToolWorker.run_id = 'canonical-members-before-source-tool'
+$CanonicalMemberBeforeToolWorker.work_package =
+	'Supply path and offset_bytes to read_allowed_source_file.'
+Invoke-AcceptanceCase `
+	-Name 'Canonical members before exact source tool remain accepted' `
+	-Handoff $CanonicalMemberBeforeToolWorker
+
+$VerbIndependentMemberCases = @(
+	'Use read_allowed_source_file. Each request must carry path, offset_bytes, and timeout_seconds.',
+	'Use read_allowed_source_file. Each request has path, offset_bytes, and timeout_seconds.',
+	'Use read_allowed_source_file. Each request is required to carry path, offset_bytes, and timeout_seconds.'
+)
+for ($VerbIndependentIndex = 0;
+	$VerbIndependentIndex -lt $VerbIndependentMemberCases.Count;
+	$VerbIndependentIndex++) {
+	$VerbIndependentWorker = Copy-JsonObject -Value $ProtocolWorker
+	$VerbIndependentWorker.run_id = "verb-independent-source-members-$VerbIndependentIndex"
+	$VerbIndependentWorker.work_package = $VerbIndependentMemberCases[$VerbIndependentIndex]
+	Invoke-RejectionCase `
+		-Name "Verb-independent source member case $($VerbIndependentIndex + 1) is rejected" `
+		-Json ($VerbIndependentWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-verb-independent-source-member'
+}
+
+$ObjectSourceMemberCases = @(
+	[ordered]@{
+		procedure = 'Use read_allowed_source_file.'
+		request_arguments = @('path', 'offset_bytes', 'timeout_seconds')
+	},
+	[ordered]@{
+		procedure = 'Use read_allowed_source_file.'
+		arguments = [ordered]@{
+			path = 'docs/example.md'
+			offset_bytes = 0
+			timeout_seconds = 30
+		}
+	}
+)
+for ($ObjectMemberIndex = 0;
+	$ObjectMemberIndex -lt $ObjectSourceMemberCases.Count;
+	$ObjectMemberIndex++) {
+	$ObjectMemberWorker = Copy-JsonObject -Value $ProtocolWorker
+	$ObjectMemberWorker.run_id = "object-source-members-$ObjectMemberIndex"
+	$ObjectMemberWorker.work_package = $ObjectSourceMemberCases[$ObjectMemberIndex]
+	Invoke-RejectionCase `
+		-Name "Object source member case $($ObjectMemberIndex + 1) is rejected" `
+		-Json ($ObjectMemberWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-object-source-member'
+}
+
+$ExplicitSourceMemberCases = @(
+	'Every read_allowed_source_file call must include timeout_seconds. private-call-value',
+	'Use read_allowed_source_file(path, offset_bytes, timeout_seconds). private-signature-value',
+	'Use read_allowed_source_file(path, offset_bytes, limit). private-signature-limit',
+	'Use read_allowed_source_file(path, offset_bytes, foo). private-signature-foo',
+	'Use read_allowed_source_file(path, offset_bytes, x). private-signature-x',
+	'Use read_allowed_source_file(path). private-signature-missing-offset',
+	'Use read_allowed_source_file(offset_bytes). private-signature-missing-path',
+	'Use read_allowed_source_file(path, path, offset_bytes). private-signature-duplicate-path',
+	'Use read_allowed_source_file(path, offset_bytes, offset_bytes). private-signature-duplicate-offset',
+	'Use read_allowed_source_file(offset_bytes, path). private-signature-reordered',
+	'Use read_allowed_source_file(). private-signature-empty',
+	'Use read_allowed_source_file(path,, offset_bytes). private-signature-malformed',
+	'Use read_allowed_source_file with path and offset_bytes and limit. private-with-limit',
+	'Use read_allowed_source_file using path, offset_bytes, foo. private-using-foo',
+	'The read_allowed_source_file arguments are path, offset_bytes, and x. private-arguments-x',
+	'The read_allowed_source_file members are path and offset_bytes and limit. private-members-limit',
+	'The read_allowed_source_file fields are path, offset_bytes, foo. private-fields-foo'
+)
+$ExplicitSourcePrivateMarkers = @(
+	'private-call-value',
+	'private-signature-value',
+	'private-signature-limit',
+	'private-signature-foo',
+	'private-signature-x',
+	'private-signature-missing-offset',
+	'private-signature-missing-path',
+	'private-signature-duplicate-path',
+	'private-signature-duplicate-offset',
+	'private-signature-reordered',
+	'private-signature-empty',
+	'private-signature-malformed',
+	'private-with-limit',
+	'private-using-foo',
+	'private-arguments-x',
+	'private-members-limit',
+	'private-fields-foo'
+)
+for ($ExplicitMemberIndex = 0; $ExplicitMemberIndex -lt $ExplicitSourceMemberCases.Count; $ExplicitMemberIndex++) {
+	$ExplicitMemberWorker = Copy-JsonObject -Value $ProtocolWorker
+	$ExplicitMemberWorker.run_id = "explicit-source-member-$ExplicitMemberIndex"
+	$ExplicitMemberWorker.work_package = $ExplicitSourceMemberCases[$ExplicitMemberIndex]
+	Invoke-RejectionCase `
+		-Name "Exact source-tool request member case $($ExplicitMemberIndex + 1) is rejected" `
+		-Json ($ExplicitMemberWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker $ExplicitSourcePrivateMarkers[$ExplicitMemberIndex]
+}
+
+$CanonicalSourceEnumerationCases = @(
+	'Use read_allowed_source_file(path, offset_bytes) for every source page.',
+	'Use `read_allowed_source_file(path, offset_bytes)` for every source page.',
+	'Use read_allowed_source_file with path and offset_bytes.',
+	'Use read_allowed_source_file. Pass only path and offset_bytes in every source call.',
+	'Use read_allowed_source_file. Use end_offset_bytes from each response as the next offset.',
+	'Use read_allowed_source_file with exactly path and offset_bytes.',
+	'Use read_allowed_source_file using path, offset_bytes.',
+	'The read_allowed_source_file arguments are path and offset_bytes.',
+	'The read_allowed_source_file members are path, offset_bytes.',
+	'The read_allowed_source_file fields are path, and offset_bytes.',
+	'Historical evidence records read_allowed_source_file(path, offset_bytes, limit).',
+	'Remove read_allowed_source_file(path, offset_bytes, limit) from prior instructions.',
+	'Replace read_allowed_source_file(path, offset_bytes, limit_bytes) with read_allowed_source_file(path, offset_bytes).'
+)
+for ($CanonicalEnumerationIndex = 0;
+	$CanonicalEnumerationIndex -lt $CanonicalSourceEnumerationCases.Count;
+	$CanonicalEnumerationIndex++) {
+	$CanonicalEnumerationWorker = Copy-JsonObject -Value $ProtocolWorker
+	$CanonicalEnumerationWorker.run_id =
+		"canonical-source-enumeration-$CanonicalEnumerationIndex"
+	$CanonicalEnumerationWorker.work_package =
+		$CanonicalSourceEnumerationCases[$CanonicalEnumerationIndex]
+	Invoke-AcceptanceCase `
+		-Name "Canonical source enumeration case $($CanonicalEnumerationIndex + 1) is accepted" `
+		-Handoff $CanonicalEnumerationWorker
+}
+
+$StructuredSourceCallWorker = Copy-JsonObject -Value $ProtocolWorker
+$StructuredSourceCallWorker.run_id = 'structured-source-member-conflict'
+$StructuredSourceCallWorker.work_package = [ordered]@{
+	tool = 'read_allowed_source_file'
+	arguments = [ordered]@{
+		path = 'docs/example.md'
+		offset_bytes = 0
+		timeout_seconds = 30
+	}
+}
+Invoke-RejectionCase `
+	-Name 'Structured exact source-tool call rejects unsupported argument member' `
+	-Json ($StructuredSourceCallWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-structured-source-member'
+
+$InvalidStructuredSourceCallCases = @(
+	[ordered]@{
+		tool = 'read_allowed_source_file'
+		arguments = [ordered]@{ path = 'AGENTS.md'; offset_bytes = '0' }
+	},
+	[ordered]@{
+		tool = 'read_allowed_source_file'
+		arguments = [ordered]@{ path = 'AGENTS.md'; offset_bytes = -1 }
+	},
+	[ordered]@{
+		tool = 'Read_Allowed_Source_File'
+		arguments = [ordered]@{ path = 'AGENTS.md'; offset_bytes = 0; limit_bytes = 2048 }
+	}
+)
+for ($StructuredCaseIndex = 0;
+	$StructuredCaseIndex -lt $InvalidStructuredSourceCallCases.Count;
+	$StructuredCaseIndex++) {
+	$InvalidStructuredWorker = Copy-JsonObject -Value $ProtocolWorker
+	$InvalidStructuredWorker.run_id = "invalid-structured-source-call-$StructuredCaseIndex"
+	$InvalidStructuredWorker.work_package = $InvalidStructuredSourceCallCases[$StructuredCaseIndex]
+	Invoke-RejectionCase `
+		-Name "Invalid structured source call case $($StructuredCaseIndex + 1) is rejected" `
+		-Json ($InvalidStructuredWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-invalid-structured-source-call'
+}
+
+$StructuredSourceInstructionWorker = Copy-JsonObject -Value $ProtocolWorker
+$StructuredSourceInstructionWorker.run_id = 'structured-source-instruction-conflict'
+$StructuredSourceInstructionWorker.work_package = [ordered]@{
+	source_call = [ordered]@{
+		tool = 'read_allowed_source_file'
+		arguments = [ordered]@{
+			path = 'docs/example.md'
+			offset_bytes = 0
+		}
+	}
+	instructions = 'Every call must include timeout_seconds 30.'
+}
+Invoke-RejectionCase `
+	-Name 'Structured exact source-tool call scopes an instruction sibling' `
+	-Json ($StructuredSourceInstructionWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-structured-instruction-marker'
+
+$StructuredSourceCompanionWorker = Copy-JsonObject -Value $ProtocolWorker
+$StructuredSourceCompanionWorker.run_id = 'structured-source-companion-control'
+$StructuredSourceCompanionWorker.work_package = [ordered]@{
+	source_call = [ordered]@{
+		tool = 'read_allowed_source_file'
+		arguments = [ordered]@{
+			path = 'docs/example.md'
+			offset_bytes = 0
+		}
+	}
+	instructions = 'Continue with each returned end_offset_bytes until eof.'
+	evidence = 'A prior API call included timeout_seconds 30.'
+	artifact_hash = 'The unrelated digest includes response_hash_token.'
+	output_path = 'docs/source_timeout_seconds.md'
+	baseline = 'The old API call required baseline_timeout_seconds.'
+}
+Invoke-AcceptanceCase `
+	-Name 'Structured source call does not scope inert companion values' `
+	-Handoff $StructuredSourceCompanionWorker
+
+$CrossFieldSourceWorker = Copy-JsonObject -Value $ProtocolWorker
+$CrossFieldSourceWorker.run_id = 'cross-field-source-member-conflict'
+$CrossFieldSourceWorker.work_package =
+	'Use read_allowed_source_file with path and offset_bytes.'
+$CrossFieldSourceWorker.required_checks = @(
+	'Every call must include timeout_seconds 30. private-cross-field-value'
+)
+Invoke-RejectionCase `
+	-Name 'Exact source-tool context rejects later explicit request member' `
+	-Json ($CrossFieldSourceWorker | ConvertTo-Json -Depth 12 -Compress) `
+	-ExpectedPattern 'source_protocol_invalid' `
+	-PrivateMarker 'private-cross-field-value'
+
+$NegativeSourceClauseCases = @(
+	@('No calls with limit_bytes.', 'No-call negative clause'),
+	@('Check that calls with limit_bytes are rejected.', 'Check rejection clause'),
+	@('Do not pass limit_bytes; use path and offset_bytes.', 'Corrective source clause'),
+	@('Verify calls containing limit_bytes are rejected.', 'Verification rejection clause')
+)
+for ($NegativeClauseIndex = 0;
+	$NegativeClauseIndex -lt $NegativeSourceClauseCases.Count;
+	$NegativeClauseIndex++) {
+	$NegativeClauseWorker = Copy-JsonObject -Value $ProtocolWorker
+	$NegativeClauseWorker.run_id = "negative-source-clause-$NegativeClauseIndex"
+	$NegativeClauseWorker.work_package = 'Use read_allowed_source_file.'
+	if ($NegativeClauseIndex -eq 0) {
+		$NegativeClauseWorker.non_goals = @($NegativeSourceClauseCases[$NegativeClauseIndex][0])
+	}
+	else {
+		$NegativeClauseWorker.required_checks = @($NegativeSourceClauseCases[$NegativeClauseIndex][0])
+	}
+	Invoke-AcceptanceCase `
+		-Name "$($NegativeSourceClauseCases[$NegativeClauseIndex][1]) remains accepted" `
+		-Handoff $NegativeClauseWorker
+}
+
+$NegativeClauseContinuationCases = @(
+	'No calls with limit_bytes. Then set limit_bytes to 2048 on every call.',
+	'Check that calls with limit_bytes are rejected. Require timeout_seconds on each call.',
+	'Use read_allowed_source_file. Do not pass path.',
+	'Use read_allowed_source_file. Do not pass offset_bytes.'
+)
+for ($ContinuationIndex = 0;
+	$ContinuationIndex -lt $NegativeClauseContinuationCases.Count;
+	$ContinuationIndex++) {
+	$ContinuationWorker = Copy-JsonObject -Value $ProtocolWorker
+	$ContinuationWorker.run_id = "negative-source-clause-continuation-$ContinuationIndex"
+	$ContinuationWorker.work_package = 'Use read_allowed_source_file.'
+	$ContinuationWorker.required_checks = @(
+		$NegativeClauseContinuationCases[$ContinuationIndex]
+	)
+	Invoke-RejectionCase `
+		-Name "Negative source clause continuation $($ContinuationIndex + 1) rejects a later directive" `
+		-Json ($ContinuationWorker | ConvertTo-Json -Depth 12 -Compress) `
+		-ExpectedPattern 'source_protocol_invalid' `
+		-PrivateMarker 'private-negative-clause-continuation'
+}
+
+$LiveIssueBody = @'
+## Problem
+
+Issue #139's fresh planned worker consumed its initial attempt after source inspection stopped with multi-page files still at `eof:false`. The one permitted replacement was instructed to use `limit_bytes: 2048`, but the closed `read_allowed_source_file` schema accepts only `path` and `offset_bytes`. The replacement launched, made no MCP tool call, returned no artifact, and consumed the replacement budget.
+
+The retained artifacts do not establish response-artifact capacity overflow or a cause for the missing replacement tool call. They do establish a control-plane contract defect: replacement instructions can require unsupported source-reader arguments, while the launcher does not reject that mismatch before child launch.
+
+## Objective
+
+Make restricted producer replacement handoffs mechanically consistent with the closed source-reader schema and preserve actionable evidence for incomplete pagination without weakening isolation or retry bounds.
+
+## Acceptance criteria
+
+- [ ] Reproduce the real restricted-launcher replacement path from retained raw events without consuming an unbounded producer retry.
+- [ ] Ensure producer and replacement instructions use only arguments supported by the closed runtime `read_allowed_source_file` input schema, or reject unsupported requirements before child launch with retry-neutral evidence.
+- [ ] Distinguish no-tool-call, tool argument-validation, and incomplete-pagination outcomes in retained launcher evidence without trusting producer narrative as the cause.
+- [ ] Prove a restricted producer can read one large allowed file through exact sequential `end_offset_bytes` calls until `eof: true`, with stable metadata, no gaps, overlaps, reordering, duplication, or transcript truncation.
+- [ ] Preserve read-only sandboxing, exact path/source attestation, sensitive/reparse/drift rejection, text/structured parity, complete full-file bundles, exact base hashes, snapshot equality, strict patch validation, and the initial-plus-one-replacement budget.
+- [ ] Add focused source-reader and launcher/handoff regression coverage and align the operating contract and producer instructions with the supported paging protocol.
+- [ ] Complete fresh verification, review and approval before publication; after merge, independently QA the installed-Codex replacement path before unblocking #139.
+
+## Evidence
+
+- Initial handoff and artifacts: `C:\Users\shais\AppData\Local\Temp\aetheln-issue139-wave-20260902\worker-initial-handoff.json` and `worker-initial-artifacts`
+- Replacement handoff and artifacts: `C:\Users\shais\AppData\Local\Temp\aetheln-issue139-wave-20260902\worker-replacement-handoff.json` and `worker-replacement-artifacts`
+- Source commit: `085932aa31856041a9c5544ba4f838a2f5e66e24`
+- The replacement handoff requires `limit_bytes: 2048`; `Invoke-DeliverySourceInspectionServer.ps1` declares only `path` and `offset_bytes` with `additionalProperties: false`.
+
+## Relationship
+
+Immediate prerequisite for #139. After this bug is independently merged and QA-passed, #139 must restart as a new planned wave from the new `develop` source; the exhausted attempts are not reusable.
+
+## Non-goals
+
+- No third #139 producer attempt before this prerequisite is delivered.
+- No partial files, hand-authored patches, weakened snapshot/hash/scope gates, or bypass of the restricted launcher.
+- No numeric response-capacity claim without measured evidence.
+- No gameplay, Unreal, CI runner, packaging, deployment, migration, #44 behavior, or unrelated #143/#145/#146 scope.
+'@
+$LiveIssueAcceptanceCriteria = @(
+	'Reproduce the real restricted-launcher replacement path from retained raw events without consuming an unbounded producer retry.',
+	'Ensure producer and replacement instructions use only arguments supported by the closed runtime `read_allowed_source_file` input schema, or reject unsupported requirements before child launch with retry-neutral evidence.',
+	'Distinguish no-tool-call, tool argument-validation, and incomplete-pagination outcomes in retained launcher evidence without trusting producer narrative as the cause.',
+	'Prove a restricted producer can read one large allowed file through exact sequential `end_offset_bytes` calls until `eof: true`, with stable metadata, no gaps, overlaps, reordering, duplication, or transcript truncation.',
+	'Preserve read-only sandboxing, exact path/source attestation, sensitive/reparse/drift rejection, text/structured parity, complete full-file bundles, exact base hashes, snapshot equality, strict patch validation, and the initial-plus-one-replacement budget.',
+	'Add focused source-reader and launcher/handoff regression coverage and align the operating contract and producer instructions with the supported paging protocol.',
+	'Complete fresh verification, review and approval before publication; after merge, independently QA the installed-Codex replacement path before unblocking #139.'
+)
+$LiveIssueWorker = Copy-JsonObject -Value $ProtocolWorker
+$LiveIssueWorker.run_id = 'live-issue-151-context'
+$LiveIssueWorker.ticket = $LiveIssueBody
+$LiveIssueWorker.acceptance_criteria = $LiveIssueAcceptanceCriteria
+$LiveIssueWorker.work_package = 'Apply the bounded typed-protocol validation change.'
+$LiveIssueWorker.required_checks = @(
+	'Retry an unrelated API request with timeout_seconds 30.'
+)
+Invoke-AcceptanceCase `
+	-Name 'Exact live Issue 151 body and seven acceptance criteria remain valid' `
+	-Handoff $LiveIssueWorker
+
+$DescriptiveContextCases = @(
+	'Retry the deployment API request with timeout_seconds 30.',
+	'Keep the output response_limit_bytes at 2048.',
+	'Return the delivery_file_bundle_v1 full-file contract with base_sha256.',
+	'Edit docs/source_reader_timeout_seconds.md.',
+	'Document `timeout_seconds` in the Markdown issue history.',
+	'Historical evidence records that read_allowed_source_file once accepted limit_bytes: 2048.',
+	'Remove limit_bytes from read_allowed_source_file requests.',
+	'Document read_allowed_source_file behavior. Retry an unrelated API request with timeout_seconds 30.',
+	'Use the source reader with a timeout of thirty seconds.',
+	'Keep source inspection results bounded and compact.',
+	'Set limit to 2048 on every call.'
+)
+for ($ContextIndex = 0; $ContextIndex -lt $DescriptiveContextCases.Count; $ContextIndex++) {
+	$ContextWorker = Copy-JsonObject -Value $ProtocolWorker
+	$ContextWorker.run_id = "descriptive-context-$ContextIndex"
+	$ContextWorker.work_package = $DescriptiveContextCases[$ContextIndex]
+	Invoke-AcceptanceCase `
+		-Name "Descriptive non-protocol context case $($ContextIndex + 1) remains accepted" `
+		-Handoff $ContextWorker
+}
+
+$TicketIsolationWorker = Copy-JsonObject -Value $ProtocolWorker
+$TicketIsolationWorker.run_id = 'ticket-criteria-source-context-isolation'
+$TicketIsolationWorker.ticket =
+	'Every read_allowed_source_file call must include timeout_seconds.'
+$TicketIsolationWorker.acceptance_criteria = @(
+	'Use read_allowed_source_file with path and offset_bytes.',
+	'Every call must include timeout_seconds 30.'
+)
+$TicketIsolationWorker.work_package =
+	'Retry an unrelated API request with timeout_seconds 30.'
+Invoke-AcceptanceCase `
+	-Name 'Ticket and acceptance criteria do not establish operational source context' `
+	-Handoff $TicketIsolationWorker
 $LegacyPlanned = $BaseWorkerHandoff.Clone()
 $LegacyPlanned.work_package = 'Legacy planned package.'
 Invoke-AcceptanceCase -Name 'Legacy planned worker is accepted' -Handoff $LegacyPlanned
