@@ -147,8 +147,14 @@ the canonical approved engine revision recorded in this document's version
 table, and every required host tool must match the size and SHA-256 recorded
 in the external attestation record, which is produced only by the explicit
 operator attestation step (`-Stage AttestHostTools`) after an authorized
-provisioning build. The client and server project targets always build with
-`-clean`. See
+provisioning build. Under `Prebuilt` UAT runs without its build agenda
+(`-skipbuild`); the controller first builds the project editor modules the
+cook loads (`AethelnOnlineEditor Win64 Development` with `-NoEngineChanges`,
+never `-Clean`), proves their BuildId matches the attested engine, then
+cleans and builds the client and server project targets (and the Win64
+client's bootstrap launcher) with separate UnrealBuildTool invocations, and
+re-verifies the attestation before and after packaging. Under `Rebuild` UAT
+keeps `-build -clean` and rebuilds everything. See
 [Developer Environment and DDC](developer-environment-and-ddc.md) for the
 attestation and boundary contract.
 

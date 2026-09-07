@@ -11,7 +11,9 @@ A clean milestone run spends its time in a small set of categories. Do not
 attribute the duration to any of them without evidence:
 
 - C++ compilation of the client and dedicated-server targets by
-  UnrealBuildTool (engine modules plus project modules under `-clean`).
+  UnrealBuildTool (engine modules plus project modules under `-clean`), and,
+  under the prebuilt host-tools boundary, the project editor modules the cook
+  loads (built by the controller against the attested engine, never cleaned).
 - Cooking, which derives platform content through the Derived Data Cache
   (DDC).
 - Staging, pak creation, and archiving.
@@ -57,17 +59,27 @@ Two evidence sources make the split measurable per run:
 - `hostTools`: `mode` (`rebuild`, `prebuilt`, `attest`, `not_applicable`, or
   `unresolved` on a run that failed before resolution), `status`
   (`authorized_rebuild`, `verified`, `written`, `no_build_phase`, or
-  `not_configured`), and `engineRevision` (the verified canonical pinned
-  engine commit, null otherwise). A failed boundary stops the run with the
-  `host-tools-boundary` substep recorded as failed.
+  `not_configured`), `engineRevision` (the verified canonical pinned
+  engine commit, null otherwise), and, once a prebuilt run has passed the
+  project editor identity check, `projectEditorBuildId` (the BuildId shared
+  by the project and engine editor manifests). A failed boundary stops the
+  run with the `host-tools-boundary` substep recorded as failed.
 - `substeps`: bounded list of controller steps
   (`evidence-identity-resolution`, `host-tools-boundary`,
   `derived-data-cache-resolution`, `target-composition-gate`,
   `client-uat-build-cook-package`, `client-output-validation`,
   `server-uat-build-cook-package`, `server-output-validation`,
   `server-dependency-registry-dump`, `server-cooked-inventory-dump`,
-  `server-cook-reference-gate`, `provenance-write`) with `startedUtc`,
-  `durationSeconds`, and `status`.
+  `server-cook-reference-gate`, `provenance-write`; under the prebuilt
+  boundary additionally `project-editor-preparation`,
+  `project-editor-identity`, `host-tools-postpreparation-verification`,
+  `client-project-clean`, `client-project-build`, `client-bootstrap-clean`,
+  `client-bootstrap-build`, `server-project-clean`, `server-project-build`,
+  and `host-tools-final-verification`) with `startedUtc`,
+  `durationSeconds`, and `status`. Under the prebuilt boundary UAT runs no
+  build, so C++ compilation time lives in the `*-project-*` and
+  `project-editor-*` substeps and the `uatSteps` list carries no `BUILD`
+  entry; under Rebuild it stays inside the UAT invocation's `BUILD` marker.
 - `uatSteps`: bounded list (at most 64 captured marker events) of paired UAT
   step boundaries with `invocation`, `step`, `startedUtc`, `completedUtc`,
   and `durationSeconds`. Absent markers simply produce no entry; nothing is
@@ -229,12 +241,22 @@ editor/engine rebuild:
   host-tools rebuild (the host editor/engine tools rebuild as part of the
   UAT invocation). It is never a default or an automatic fallback.
 - `-HostToolsBoundary Prebuilt -EngineRevision <canonical sha>
-  -HostToolsAttestationPath <file>` — skip rebuilding the host editor/engine
-  tools by passing `-nocompileeditor`, which the pinned UE 5.8.1 source maps
-  to `SkipBuildEditor` and which omits the editor targets from
-  `BuildProjectCommand`. The client and server project targets still build
-  with `-clean`, and every cook, stage, package, archive,
-  registry-validation, provenance, and smoke phase still runs.
+  -HostToolsAttestationPath <file>` — keep the attested host editor/engine
+  tools and run UAT without its build agenda (`-skipbuild`, which the pinned
+  UE 5.8.1 `ProjectParams` maps to `Build = false`, so `Project.Build`
+  returns before assembling any target). The controller itself then owns
+  every build the milestone needs (see the sequence below): the project
+  editor modules the cook loads, the clean client and server project
+  targets, and the Win64 client's `BootstrapPackagedGame` launcher. Every
+  cook, stage, package, archive, registry-validation, provenance, and smoke
+  phase still runs, and `-clean` stays on the UAT command line for the cook.
+  `-nocompileeditor` alone was not sufficient: it only removed the editor
+  targets from the agenda, so (a) nothing built the project editor modules
+  the cook loads on a clean milestone checkout, and (b) the remaining agenda
+  still cleaned and relinked `UnrealPak` (and `BootstrapPackagedGame`) on
+  every run, rewriting its version and manifest files with a new BuildId and
+  deleting the engine `UnrealPak.target` receipt, so the next prebuilt run
+  failed closed against its own attestation.
 - An unset selection fails closed with `host_tools_configuration_required`
   (`Stage Provenance` runs no build phase and takes no host-tools
   parameters).
@@ -271,20 +293,26 @@ engine's generated Unreal target receipts — the exact
 `Engine/Binaries/Win64` — whose validated non-symbol build products
 (executables, dynamic libraries, module/resource manifests, and the receipts
 themselves, including engine-plugin products outside `Engine/Binaries/Win64`)
-form the complete closure `-nocompileeditor` would skip. Symbol/debug and
+form the complete closure the prebuilt boundary preserves. Symbol/debug and
 link-time-only products are excluded; unknown product types, receipt metadata
 mismatches, paths escaping the engine root, reparse-mediated paths, and
 duplicate or case-colliding products fail closed, and receipt size, product
 count, per-file size, and overflow-checked aggregate size are all bounded.
-Run it once after an explicit authorized provisioning/rebuild — the retained
-evidence of the authorized legacy build qualifies as the one-time host-tool
-source; never start a full rebuild merely to create the record.
+Run it once after an explicit authorized provisioning build that produced
+all three engine receipts; never start a full rebuild merely to create the
+record. The retained legacy outputs do not provide that receipt set: every
+retained editor build was the project target `AethelnOnlineEditor`, whose
+receipt lands under the project's `Binaries/Win64`, and no retained evidence
+shows the engine `Engine/Binaries/Win64/UnrealEditor.target` ever existed.
+Provisioning therefore has to build the engine `UnrealEditor`, `UnrealPak`,
+and `ShaderCompileWorker` targets explicitly before the attestation step can
+succeed (Issue #81 records the readiness evidence).
 
 ### Prebuilt consumption proofs
 
-`-nocompileeditor` is added only after every proof passes; any failure stops
-the run with an actionable error — the boundary never falls back silently to
-another monolithic engine rebuild:
+UAT is invoked with `-skipbuild` only after every proof passes; any failure
+stops the run with an actionable error — the boundary never falls back
+silently to another monolithic engine rebuild:
 
 1. `-EngineRevision` equals the repository's canonical pinned engine
    revision — any other 40-character SHA fails closed as noncanonical, even
@@ -307,10 +335,98 @@ another monolithic engine rebuild:
    reparse points, and matches its attested size and SHA-256 exactly — an
    arbitrary binary with a matching version JSON fails here.
 
+### Prebuilt build sequence
+
+With the boundary verified, the controller runs this sequence for `-Stage
+All`, `Client`, and `Server` (each scheduled job runs it on its own clean
+`milestone/` checkout, so the editor preparation happens once per job):
+
+1. **Project editor preparation** — `Engine/Build/BatchFiles/Build.bat
+   AethelnOnlineEditor Win64 Development <project> -WaitMutex
+   -NoHotReloadFromIDE -NoEngineChanges`, never `-Clean`. The cook runs in
+   `UnrealEditor-Cmd.exe`, which loads every `.uproject` module compiled into
+   a Win64 editor target; only this build produces them on a clean checkout.
+   `-NoEngineChanges` makes UnrealBuildTool refuse, before executing any
+   action, a graph that would modify an existing engine file (engine module
+   relinks, engine manifest or version rewrites), so the attested products
+   stay byte-identical by construction; new engine files and UnrealHeaderTool
+   header generation are outside that guard and outside the attested closure.
+   A `-Clean` here would be the engine-wiping path: a Shared-environment
+   editor clean deletes `UnrealEditor*` products under the engine directory.
+2. **Project editor identity** — the project `Binaries/Win64/UnrealEditor.modules`
+   must exist, list at least one module, carry the same BuildId as the
+   attested `Engine/Binaries/Win64/UnrealEditor.modules` (the module manager
+   ignores manifests with another BuildId), name only existing product files,
+   and contain every `.uproject` module whose descriptor type, target
+   allow/deny lists, and platform allow/deny lists compile it into a Win64
+   editor target (`Runtime`, `ServerOnly`, `ClientOnly`, `Editor`, and the
+   other editor-loaded host types; `CookedOnly` and `Program` are excluded;
+   an unknown type fails closed). `bBuildAllModules` on the engine target is
+   not treated as a compatibility guarantee — this check is.
+3. **Post-preparation attestation re-verification** — the same record is
+   re-verified against the binaries on disk (contract-level proof, not UBT's
+   claim).
+4. **Per selected target: clean, then build** — two separate
+   UnrealBuildTool invocations mirroring the pinned UAT cooked-target shapes
+   (the editor preparation above carries no `-remoteini`, matching UAT's
+   editor agenda): `<Target> <Platform> <Configuration> <project>
+   -remoteini=<project dir> -Clean -NoHotReload -NoUBTMakefiles -WaitMutex`,
+   then the same target without `-Clean`. The clean is a delete operation
+   and proves no build:
+   the controller asserts the target receipt is absent after the clean and
+   present, parseable, and describing exactly the requested target, platform,
+   configuration, and type — with its executable product on disk — after the
+   build. Clean-mode scope (pinned `CleanMode.cs`): build products prefixed by
+   the target name and its shared application name (`UnrealClient`,
+   `UnrealServer`, `BootstrapPackagedGame`) under the engine, every plugin,
+   and the project directory, plus their intermediate folders, makefiles,
+   and `Intermediate/Build/SourceFileCache.bin`. None of those prefixes match
+   `UnrealEditor*`, `UnrealPak*`, or `ShaderCompileWorker*`, but
+   `-NoEngineChanges` does not guard clean deletions at all; the final
+   re-verification below is the actual proof.
+5. **Client bootstrap** (Client and All only) — `BootstrapPackagedGame Win64
+   Shipping` is cleaned and built the same way (an engine program outside the
+   attested closure). Windows staging wraps the client in this launcher only
+   when `Engine/Binaries/Win64/BootstrapPackagedGame-Win64-Shipping.exe`
+   exists; the UAT agenda used to build it, and staging would silently omit
+   the launcher otherwise, so the controller asserts the executable is absent
+   after the clean and present after the build. The server job does not
+   build it: the old agenda did so there only because UAT defaults the client
+   platform list to the host platform, and Linux staging never consumed it.
+6. **UAT** — `BuildCookRun ... -skipbuild -cook -clean -stage -pak -archive`
+   with the same target, platform, configuration, archive, and server
+   never-cook arguments as before. Staging reads the receipts written in
+   step 4.
+7. **Final attestation re-verification** — after output validation (and the
+   server registry dumps), before any `phase-*.json` or provenance is
+   written. A host tool changed by anything in steps 4-6, UAT included, stops
+   the run; the attestation is never regenerated to make changed products
+   pass.
+
+Compiler evidence moves with the build: under the prebuilt boundary the
+`Compiler:` and `Resource Compiler:` lines are read from the controller's
+client build log (`<LogRoot>/ubt/UBT-AethelnOnlineClient-Win64-<config>.txt`,
+written through UBT's `-Log=`), because UAT never initializes a toolchain
+without its build agenda; under Rebuild they still come from UAT's
+`UBA-*.txt` sidecars. Each explicit invocation is recorded (label, executable,
+exact arguments, console and UBT log names, start, duration, exit code) in
+`build-timing.json`'s substeps, in the split-stage records (`phase-client.json`
+and `phase-server.json`, schema version 2, `hostToolsMode` and
+`buildInvocations`), and in `build-provenance.json` (schema version 3,
+`build.hostToolsMode` and `build.explicitBuildInvocations`); the provenance
+writer refuses a prebuilt record without invocations, a rebuild record with
+them, or any invocation whose exit code is not zero. A cook or package that
+passes is never reported as a successful build on its own.
+
 The verified boundary is recorded in `build-timing.json` under `hostTools`,
-and the exact UAT arguments (including `-nocompileeditor`) flow into the
-stage records and provenance unchanged. Attestation and timing evidence keep
-host-tool paths engine-relative.
+and the exact UAT arguments (including `-skipbuild`) flow into the stage
+records and provenance unchanged. Attestation and timing evidence keep
+host-tool paths engine-relative. Runtime facts this sequence has not yet
+measured on the engine runner: whether the preparation passes
+`-NoEngineChanges` against the attested engine build, the duration of the
+preparation, the two clean/build pairs, and the three attestation hash
+passes inside each job's 30-minute watchdog, and whether the cook then
+succeeds with the prepared modules.
 
 ## Runner configuration
 
@@ -358,11 +474,12 @@ In the authorized evaluation order, the states of the remaining options:
    measured evidence that the plain local cache is the bottleneck. Runner
    service configuration is an owner/operator action, never performed by CI.
 3. **Unreal-supported engine-binary boundary** — implemented as the explicit
-   fail-closed prebuilt host-tools boundary above (`-nocompileeditor` /
-   `SkipBuildEditor` in the pinned UE 5.8.1 source, gated on proof that the
-   host tools belong to the exact clean pinned engine revision). The pinned
-   engine artifact the runner consumes is unchanged; before/after proof
-   requires the lead-authorized measured engine runs.
+   fail-closed prebuilt host-tools boundary above (UAT `-skipbuild` with
+   controller-owned project builds in the pinned UE 5.8.1 source, gated on
+   proof that the host tools belong to the exact clean pinned engine
+   revision and re-verified after every build step). The pinned engine
+   artifact the runner consumes is unchanged; before/after proof requires
+   the lead-authorized measured engine runs.
 4. **Build acceleration or hardware** — a later owner decision, justified
    only by measured evidence the earlier rungs cannot address.
 

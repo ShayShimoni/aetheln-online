@@ -746,16 +746,27 @@ as `-HostToolsBoundary Prebuilt -EngineRevision <sha>
 `-HostToolsBoundary Rebuild`; the gate also forwards its validated runner
 name as `-RunnerName`. The build controller owns the fail-closed attestation
 proof that the host editor/tools belong to the exact clean canonical pinned
-engine revision before skipping their rebuild. See
+engine revision. Under `Prebuilt` it then runs UAT without its build agenda
+(`-skipbuild`) and owns every build itself in each packaging job: the project
+editor modules the cook loads (`-NoEngineChanges`, never `-Clean`), a
+separate clean and build of the job's project target (plus the Win64
+client's bootstrap launcher), and attestation re-verification after the
+preparation and again before the stage record is published. Under
+`rebuild-authorized` UAT keeps `-build -clean`. See
 [Developer Environment and DDC](developer-environment-and-ddc.md).
 
 Every `Build-PackagedArtifacts.ps1` run that resolves a valid `LogRoot` also
 writes a bounded machine-readable substep timing and cache-state record to
 `<LogRoot>/build-timing.json` — including runs that fail closed on
 host-tools or cache-identity validation before any UAT process starts —
-separating C++ compilation, cook, stage, package, and archive time inside
-each UAT invocation from the controller's validation and provenance
-substeps.
+separating cook, stage, package, and archive time inside each UAT invocation
+from the controller's validation, build (under `Prebuilt`), and provenance
+substeps; under `rebuild-authorized` the C++ compilation time stays inside
+the UAT invocation's `BUILD` marker. The split-stage records
+(`phase-client.json`, `phase-server.json`; schema version 2) and
+`build-provenance.json` (schema version 3) carry the host-tools mode and the
+exact explicit build invocations, so a passing cook is never reported as a
+proven build.
 
 Archive and log roots for both modes must be empty or absent, outside the
 repository, and unique to the workflow run/job. These commands implement the

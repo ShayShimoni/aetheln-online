@@ -999,9 +999,9 @@ exit $LASTEXITCODE
 	Assert-True ($ComparisonResult.Windows -eq [System.StringComparison]::OrdinalIgnoreCase) 'Windows provenance containment must be case-insensitive.'
 	Assert-True ($ComparisonResult.Posix -eq [System.StringComparison]::Ordinal) 'Case-sensitive hosts must use ordinal provenance containment.'
 	Write-Output 'PASS: provenance containment selects OS-appropriate case sensitivity'
-	function Write-ProvenanceFixture([string] $Path, [object[]] $Inventory, [string] $ClientArchive = $PowerShellArchive, [string] $ServerArchive = $PowerShellArchive) {
-		[ordered]@{
-			schemaVersion = 2
+	function Write-ProvenanceFixture([string] $Path, [object[]] $Inventory, [string] $ClientArchive = $PowerShellArchive, [string] $ServerArchive = $PowerShellArchive, [object] $SchemaVersion = 2, [object] $Build = $null) {
+		$Document = [ordered]@{
+			schemaVersion = $SchemaVersion
 			source = [ordered]@{ revision = 'fixture-revision'; clean = $true }
 			host = [ordered]@{ buildIdentity = 'fixture-build' }
 			artifacts = [ordered]@{
@@ -1009,7 +1009,16 @@ exit $LASTEXITCODE
 				serverArchive = $ServerArchive
 				inventory = @($Inventory)
 			}
-		} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding UTF8
+		}
+		if ($null -ne $Build) { $Document['build'] = $Build }
+		$Document | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding UTF8
+	}
+	function New-ProvenanceInvocation([hashtable] $Overrides = @{}, [string[]] $Without = @()) {
+		# Mirrors the seven-property entry Write-BuildProvenance.ps1 records under build.explicitBuildInvocations.
+		$Invocation = [ordered]@{ label = 'client-project-build'; executable = 'Build.bat'; arguments = @('AethelnOnlineClient', 'Win64', 'Development'); log = 'client-project-build.log'; startedUtc = '2026-09-07T00:00:00.0000000Z'; durationSeconds = 12.5; exitCode = 0 }
+		foreach ($Key in $Overrides.Keys) { $Invocation[$Key] = $Overrides[$Key] }
+		foreach ($Key in $Without) { $Invocation.Remove($Key) }
+		return $Invocation
 	}
 
 	$MissingHostPathProvenance = Join-Path $FixtureRoot 'missing-host-path-provenance.json'
@@ -1193,6 +1202,61 @@ exit $LASTEXITCODE
 	Assert-True ($SelfAuthoredEvidence.result -eq 'packaged-candidate') 'Even matching caller-authored provenance can produce only a candidate awaiting independent gates.'
 	Assert-True ($SelfAuthoredEvidence.result -ne 'passed') 'The runner must never self-award packaged success.'
 	Write-Output 'PASS: self-authored matching provenance cannot self-award packaged success'
+
+	$MatchingInventory = @(
+		[ordered]@{ kind = 'client'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 },
+		[ordered]@{ kind = 'server'; path = $PowerShellInventoryPath; sha256 = $ClientSha256 }
+	)
+	foreach ($Schema3Case in @(
+		@{ Name = 'rebuild'; Build = [ordered]@{ hostToolsMode = 'rebuild'; explicitBuildInvocations = @() } },
+		@{ Name = 'prebuilt'; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation)) } }
+	)) {
+		$Schema3Path = Join-Path $FixtureRoot ("schema3-$($Schema3Case.Name)-provenance.json")
+		Write-ProvenanceFixture $Schema3Path $MatchingInventory $PowerShellArchive $PowerShellArchive 3 $Schema3Case.Build
+		$Schema3Root = Join-Path $FixtureRoot ("schema3-$($Schema3Case.Name)-packaged")
+		Invoke-FixtureRun -FixtureLogRoot $Schema3Root -FixtureRunId "fixture-schema3-$($Schema3Case.Name)" -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $Schema3Path -ServerProvenanceExecutable $PowerShellExecutable
+		$Schema3Evidence = Get-Content -LiteralPath (Join-Path $Schema3Root 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+		Assert-True ($Schema3Evidence.result -eq 'packaged-candidate') "Schema-3 $($Schema3Case.Name) provenance with matching bindings must be accepted as a packaged candidate."
+	}
+	Write-Output 'PASS: schema-3 provenance with host-tools mode and explicit build invocations is accepted alongside schema 2'
+
+	$SchemaVersionExpect = 'schema version must be the JSON integer 2 or 3'
+	$BuildEvidenceExpect = 'must record build.hostToolsMode and build.explicitBuildInvocations'
+	$InvocationCouplingExpect = 'must be non-empty exactly when hostToolsMode is prebuilt'
+	$InvocationExitCodeExpect = 'must each record the JSON integer exit code 0'
+	foreach ($InvalidSchemaCase in @(
+		@{ Name = 'version-1'; Version = 1; Build = $null; Expect = $SchemaVersionExpect },
+		@{ Name = 'version-4'; Version = 4; Build = [ordered]@{ hostToolsMode = 'rebuild'; explicitBuildInvocations = @() }; Expect = $SchemaVersionExpect },
+		@{ Name = 'version-string-2'; Version = '2'; Build = $null; Expect = $SchemaVersionExpect },
+		@{ Name = 'version-string-3'; Version = '3'; Build = [ordered]@{ hostToolsMode = 'rebuild'; explicitBuildInvocations = @() }; Expect = $SchemaVersionExpect },
+		@{ Name = 'version-fraction'; Version = 2.5; Build = $null; Expect = $SchemaVersionExpect },
+		@{ Name = 'version-boolean'; Version = $true; Build = $null; Expect = $SchemaVersionExpect },
+		@{ Name = 'version-null'; Version = $null; Build = $null; Expect = $SchemaVersionExpect },
+		@{ Name = 'missing-build'; Version = 3; Build = $null; Expect = $BuildEvidenceExpect },
+		@{ Name = 'missing-mode'; Version = 3; Build = [ordered]@{ explicitBuildInvocations = @() }; Expect = $BuildEvidenceExpect },
+		@{ Name = 'missing-invocations'; Version = 3; Build = [ordered]@{ hostToolsMode = 'rebuild' }; Expect = $BuildEvidenceExpect },
+		@{ Name = 'invalid-mode'; Version = 3; Build = [ordered]@{ hostToolsMode = 'cached'; explicitBuildInvocations = @() }; Expect = "hostToolsMode must be 'rebuild' or 'prebuilt'" },
+		@{ Name = 'uppercase-mode'; Version = 3; Build = [ordered]@{ hostToolsMode = 'Prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation)) }; Expect = "hostToolsMode must be 'rebuild' or 'prebuilt'" },
+		@{ Name = 'rebuild-with-invocations'; Version = 3; Build = [ordered]@{ hostToolsMode = 'rebuild'; explicitBuildInvocations = @((New-ProvenanceInvocation)) }; Expect = $InvocationCouplingExpect },
+		@{ Name = 'prebuilt-without-invocations'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @() }; Expect = $InvocationCouplingExpect },
+		@{ Name = 'invocations-not-array'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = 'Build.bat' }; Expect = 'explicitBuildInvocations must be a JSON array' },
+		@{ Name = 'invocation-missing-arguments'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation -Without @('arguments'))) }; Expect = "missing required property 'arguments'" },
+		@{ Name = 'invocation-exit-1'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation @{ exitCode = 1 })) }; Expect = $InvocationExitCodeExpect },
+		@{ Name = 'invocation-exit-null'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation @{ exitCode = $null })) }; Expect = $InvocationExitCodeExpect },
+		@{ Name = 'invocation-exit-string'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation @{ exitCode = '0' })) }; Expect = $InvocationExitCodeExpect },
+		@{ Name = 'invocation-exit-fraction'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation @{ exitCode = 0.4 })) }; Expect = $InvocationExitCodeExpect },
+		@{ Name = 'invocation-exit-boolean'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation @{ exitCode = $true })) }; Expect = $InvocationExitCodeExpect },
+		@{ Name = 'second-invocation-exit-1'; Version = 3; Build = [ordered]@{ hostToolsMode = 'prebuilt'; explicitBuildInvocations = @((New-ProvenanceInvocation), (New-ProvenanceInvocation @{ label = 'server-project-build'; exitCode = 1 })) }; Expect = $InvocationExitCodeExpect }
+	)) {
+		$InvalidSchemaPath = Join-Path $FixtureRoot ("invalid-schema-$($InvalidSchemaCase.Name)-provenance.json")
+		Write-ProvenanceFixture $InvalidSchemaPath $MatchingInventory $PowerShellArchive $PowerShellArchive $InvalidSchemaCase.Version $InvalidSchemaCase.Build
+		$InvalidSchemaFailure = $null
+		try {
+			Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot "invalid-schema-$($InvalidSchemaCase.Name)") -FixtureRunId "fixture-invalid-schema-$($InvalidSchemaCase.Name)" -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -EvidenceMode 'packaged' -PackagedBuildProvenancePath $InvalidSchemaPath -ServerProvenanceExecutable $PowerShellExecutable
+		} catch { $InvalidSchemaFailure = $_.Exception.Message }
+		Assert-True ($null -ne $InvalidSchemaFailure -and $InvalidSchemaFailure -match [regex]::Escape([string] $InvalidSchemaCase.Expect)) "Provenance case '$($InvalidSchemaCase.Name)' must fail closed with '$($InvalidSchemaCase.Expect)'; observed: $InvalidSchemaFailure"
+	}
+	Write-Output 'PASS: unsupported and malformed provenance schema versions and incomplete schema-3 build evidence fail closed'
 
 	$PackagedLocalFailure = $null
 	try {

@@ -16,10 +16,17 @@ record matches the exact clean pinned engine revision, toolchain content,
 repository, project, configuration, and targets; a mismatched, corrupt, or
 unverifiable cache fails closed or, with -CacheFallback CleanIsolated,
 re-derives everything in a fresh run-scoped cache. An optional prebuilt
-host-tools boundary (-HostToolsBoundary Prebuilt -EngineRevision <sha>) skips
-rebuilding the host editor/engine tools only after fail-closed proof that they
-belong to the exact clean pinned engine revision; the client and server
-project targets always build with -clean.
+host-tools boundary (-HostToolsBoundary Prebuilt -EngineRevision <sha>) keeps
+the attested host editor/engine tools only after fail-closed proof that they
+belong to the exact clean pinned engine revision. Under that boundary UAT runs
+without its build agenda (-skipbuild): the controller first builds the project
+editor modules the cook loads (AethelnOnlineEditor, -NoEngineChanges, never
+-Clean), proves their BuildId matches the attested engine, re-verifies the
+attestation, then cleans and builds each selected project target (and the
+Win64 client's BootstrapPackagedGame launcher) with UnrealBuildTool before
+cooking, staging, packaging, and archiving, and re-verifies the attestation
+again before publishing any stage record or provenance. Under Rebuild UAT keeps
+its full build agenda with -build -clean.
 .EXAMPLE
 $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
@@ -63,8 +70,16 @@ $script:TimingStarted = [DateTime]::UtcNow
 $script:TimingSteps = New-Object System.Collections.ArrayList
 $script:UatMarkerEvents = New-Object System.Collections.ArrayList
 $script:TimingRecordPath = $null
+$script:BuildInvocations = New-Object System.Collections.ArrayList
+$script:HostToolsAttestationFull = $null
 $script:CacheState = [ordered]@{ mode = 'engine-default'; status = 'not_configured'; appliedPath = $null }
 $script:HostToolsState = [ordered]@{ mode = 'unresolved'; status = 'not_configured'; engineRevision = $null }
+# Module descriptor host types the pinned engine compiles into a Win64 Editor
+# target (ModuleDescriptor::IsCompiledInConfiguration); the cook's editor
+# process loads every such .uproject module, so each must be built.
+$script:EditorCompiledModuleTypes = @('Runtime', 'RuntimeNoCommandlet', 'RuntimeAndProgram', 'UncookedOnly', 'Developer', 'DeveloperTool', 'Editor', 'EditorNoCommandlet', 'EditorAndProgram', 'ServerOnly', 'ClientOnly', 'ClientOnlyNoCommandlet')
+$script:EditorExcludedModuleTypes = @('CookedOnly', 'Program')
+$script:ModuleManifestMaxBytes = 16777216
 $script:DdcIdentityFieldNames = @('engineGitRevision', 'engineBuildVersionSha256', 'linuxToolchain', 'linuxToolchainCompilerSha256', 'projectRepository', 'project', 'configuration', 'targets')
 # The repository's canonical pinned engine revision (docs/unreal-project-setup.md).
 $script:CanonicalEngineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
@@ -145,8 +160,11 @@ function Assert-PackagedExecutable([string] $Label, [string] $Root, [string[]] $
 	$Match = @(Get-ChildItem -LiteralPath $Root -Recurse -File | Where-Object { $Names -contains $_.Name })
 	if ($Match.Count -eq 0) { throw "$Label completed but no expected packaged executable ($($Names -join ', ')) exists under '$Root'." }
 }
-function Resolve-UbtSelectedTool([string] $LogDirectory, [string] $Label, [string] $ExecutableName) {
-	$Sidecars = @(Get-ChildItem -LiteralPath $LogDirectory -File -Filter 'UBA-*.txt' | Sort-Object FullName)
+function Resolve-UbtSelectedTool([string] $LogDirectory, [string] $Label, [string] $ExecutableName, [string] $Filter = 'UBA-*.txt') {
+	# UnrealBuildTool logs the selected toolchain as 'Compiler:' and 'Resource
+	# Compiler:' lines in its log file: the UBA-*.txt sidecars UAT names for its
+	# own UBT runs, or the -Log= files of the controller-owned builds.
+	$Sidecars = @(Get-ChildItem -LiteralPath $LogDirectory -File -Filter $Filter | Sort-Object FullName)
 	$Candidates = @($Sidecars | ForEach-Object {
 		Get-Content -LiteralPath $_.FullName | ForEach-Object {
 			if ($_ -match "^$([regex]::Escape($Label)):\s+(?<Path>.+$([regex]::Escape($ExecutableName)))\s*$") { $Matches.Path.Trim() }
@@ -158,7 +176,7 @@ function Resolve-UbtSelectedTool([string] $LogDirectory, [string] $Label, [strin
 	if ($UniqueCandidates.Count -ne 1) {
 		$Searched = if ($Sidecars.Count -eq 0) { '<none>' } else { $Sidecars.FullName -join ', ' }
 		$Found = if ($UniqueCandidates.Count -eq 0) { '<none>' } else { $UniqueCandidates -join ', ' }
-		throw "AutomationTool log directory '$LogDirectory' must identify exactly one UBT-selected $Label path ending in '$ExecutableName'; found $($UniqueCandidates.Count). Searched UBA sidecars: $Searched. Candidates: $Found."
+		throw "Build log directory '$LogDirectory' must identify exactly one UBT-selected $Label path ending in '$ExecutableName'; found $($UniqueCandidates.Count). Searched UBT logs: $Searched. Candidates: $Found."
 	}
 	Resolve-RequiredPath $Label $UniqueCandidates[0] 'Leaf'
 }
@@ -659,16 +677,169 @@ function Resolve-HostToolsBoundary {
 	$AttestationFull = Assert-SafeExternalPath 'HostToolsAttestationPath' $HostToolsAttestationPath
 	if (-not (Test-Path -LiteralPath $AttestationFull -PathType Leaf)) { throw "HostToolsAttestationPath '$HostToolsAttestationPath' does not exist; produce it with -Stage AttestHostTools after an explicit authorized provisioning build." }
 	Test-HostToolsAttestation $AttestationFull
+	# The same record is re-verified after the project editor preparation and
+	# again after packaging; it is never regenerated by a build.
+	$script:HostToolsAttestationFull = $AttestationFull
 	return [ordered]@{ mode = 'prebuilt'; status = 'verified'; engineRevision = $NormalizedRevision }
+}
+function Get-DescriptorList($Object, [string] $Name) {
+	$Property = $Object.PSObject.Properties[$Name]
+	if ($null -eq $Property -or $null -eq $Property.Value) { return ,@() }
+	return ,@($Property.Value | ForEach-Object { [string] $_ })
+}
+function Get-EditorRequiredModules {
+	# The cook runs inside the editor process, which loads every .uproject
+	# module whose descriptor is compiled into a Win64 Editor target (the
+	# pinned engine's ModuleDescriptor::IsCompiledInConfiguration host-type,
+	# target, and platform rules). UnrealBuildTool adds exactly those modules
+	# to the AethelnOnlineEditor build, so each one must have been produced.
+	$Descriptor = Get-Content -LiteralPath $ResolvedProject -Raw | ConvertFrom-Json
+	if ($null -eq $Descriptor -or $null -eq $Descriptor.PSObject.Properties['Modules'] -or $Descriptor.Modules -isnot [array]) { throw "Project descriptor '$ResolvedProject' carries no Modules array; the project editor identity check fails closed." }
+	$Required = New-Object System.Collections.ArrayList
+	foreach ($Module in @($Descriptor.Modules)) {
+		if ($null -eq $Module -or $Module.Name -isnot [string] -or [string]::IsNullOrWhiteSpace([string] $Module.Name) -or $Module.Type -isnot [string]) { throw "Project descriptor '$ResolvedProject' carries a module without string Name and Type; the project editor identity check fails closed." }
+		$Type = [string] $Module.Type
+		if ($script:EditorExcludedModuleTypes -ccontains $Type) { continue }
+		if ($script:EditorCompiledModuleTypes -cnotcontains $Type) { throw "Project descriptor module '$($Module.Name)' has unknown Type '$Type'; the project editor identity check fails closed instead of guessing whether the editor loads it." }
+		$TargetAllowList = Get-DescriptorList $Module 'TargetAllowList'
+		if ($TargetAllowList.Count -gt 0 -and $TargetAllowList -cnotcontains 'Editor') { continue }
+		if ((Get-DescriptorList $Module 'TargetDenyList') -ccontains 'Editor') { continue }
+		$PlatformAllowList = Get-DescriptorList $Module 'PlatformAllowList'
+		if ($PlatformAllowList.Count -gt 0 -and $PlatformAllowList -cnotcontains 'Win64') { continue }
+		if ((Get-DescriptorList $Module 'PlatformDenyList') -ccontains 'Win64') { continue }
+		[void] $Required.Add([string] $Module.Name)
+	}
+	if ($Required.Count -eq 0) { throw "Project descriptor '$ResolvedProject' declares no module compiled into the Win64 editor; the project editor identity check fails closed." }
+	return $Required.ToArray()
+}
+function Read-ModuleManifest([string] $Label, [string] $Path) {
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Label '$Path' does not exist; the project editor identity check fails closed." }
+	if ((Get-Item -LiteralPath $Path -Force).Length -gt $script:ModuleManifestMaxBytes) { throw "$Label '$Path' exceeds the $($script:ModuleManifestMaxBytes)-byte manifest bound; the project editor identity check fails closed." }
+	$Manifest = $null
+	try { $Manifest = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { throw "$Label '$Path' is not a parseable Unreal module manifest; the project editor identity check fails closed." }
+	if ($null -eq $Manifest -or $null -eq $Manifest.PSObject.Properties['BuildId'] -or $null -eq $Manifest.PSObject.Properties['Modules']) { throw "$Label '$Path' is missing BuildId or Modules; the project editor identity check fails closed." }
+	if ($Manifest.BuildId -isnot [string] -or [string]::IsNullOrWhiteSpace([string] $Manifest.BuildId)) { throw "$Label '$Path' carries an empty BuildId; the project editor identity check fails closed." }
+	if ($null -eq $Manifest.Modules -or $Manifest.Modules -isnot [System.Management.Automation.PSCustomObject]) { throw "$Label '$Path' Modules must be a JSON object; the project editor identity check fails closed." }
+	return $Manifest
+}
+function Assert-ProjectEditorIdentity {
+	# The editor process loads only module manifests whose BuildId equals the
+	# engine's UnrealEditor.modules BuildId (FModuleManager), so a project
+	# manifest with another BuildId means the prepared modules would be
+	# ignored and the cook would fail to find them. Every listed product and
+	# every descriptor module the editor loads must exist under the project.
+	$ProjectManifestPath = Join-Path $ProjectRoot 'Binaries/Win64/UnrealEditor.modules'
+	$EngineManifestPath = Join-Path $ResolvedEngine 'Engine/Binaries/Win64/UnrealEditor.modules'
+	$ProjectManifest = Read-ModuleManifest 'Project editor manifest' $ProjectManifestPath
+	$EngineManifest = Read-ModuleManifest 'Attested engine editor manifest' $EngineManifestPath
+	if ([string] $ProjectManifest.BuildId -cne [string] $EngineManifest.BuildId) { throw "Project editor manifest '$ProjectManifestPath' BuildId '$($ProjectManifest.BuildId)' does not match the attested engine manifest BuildId '$($EngineManifest.BuildId)'; the attested editor would not load the prepared project modules. Packaging fails closed." }
+	$ModuleProperties = @($ProjectManifest.Modules.PSObject.Properties)
+	if ($ModuleProperties.Count -eq 0) { throw "Project editor manifest '$ProjectManifestPath' lists no modules; the project editor preparation produced nothing the cook can load. Packaging fails closed." }
+	foreach ($Property in $ModuleProperties) {
+		$ProductName = [string] $Property.Value
+		if ([string]::IsNullOrWhiteSpace($ProductName) -or $ProductName -match '[\\/:]' -or $ProductName -in @('.', '..')) { throw "Project editor manifest '$ProjectManifestPath' module '$($Property.Name)' names an unsafe product '$ProductName'; the project editor identity check fails closed." }
+		if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "Binaries/Win64/$ProductName") -PathType Leaf)) { throw "Project editor module '$($Property.Name)' product '$ProductName' does not exist under the project Binaries/Win64 directory; the manifest promises a module the cook cannot load. Packaging fails closed." }
+	}
+	$ModuleNames = @($ModuleProperties | ForEach-Object { $_.Name })
+	foreach ($RequiredModule in Get-EditorRequiredModules) {
+		if ($ModuleNames -cnotcontains $RequiredModule) { throw "Required project editor module '$RequiredModule' (declared in the project descriptor for the editor target) is missing from the project editor manifest '$ProjectManifestPath'; the cook would fail to load it. Packaging fails closed." }
+	}
+	return [string] $ProjectManifest.BuildId
+}
+function Get-UbtLogName([string] $Target, [string] $Platform, [string] $Configuration, [string] $Mode) {
+	$Suffix = if ($Mode -eq 'clean') { '-clean' } else { '' }
+	return "ubt/UBT-$Target-$Platform-$Configuration$Suffix.txt"
+}
+function Invoke-ControllerBuildTool([string] $Name, [string[]] $Arguments) {
+	# Controller-owned UnrealBuildTool invocation through the engine's Build.bat
+	# entry point. The exact executed arguments, logs, duration, and exit code
+	# are recorded as explicit build evidence for the stage record and
+	# provenance; UAT no longer supplies compiler-log evidence under Prebuilt.
+	$Label = $Name.Replace('-', ' ')
+	$LogName = "$Name.log"
+	$Started = [DateTime]::UtcNow
+	$ExitCode = $null
+	try {
+		Invoke-LoggedCommand $Label $script:BuildBat $Arguments (Join-Path $ResolvedLogs $LogName)
+		$ExitCode = 0
+	} catch {
+		$ExitCode = $LASTEXITCODE
+		throw
+	} finally {
+		[void] $script:BuildInvocations.Add([ordered]@{
+			label = $Name
+			executable = $script:BuildBat
+			arguments = @($Arguments)
+			log = $LogName
+			startedUtc = $Started.ToString('o')
+			durationSeconds = [Math]::Round(([DateTime]::UtcNow - $Started).TotalSeconds, 3)
+			exitCode = $ExitCode
+		})
+	}
+}
+function Invoke-ControllerClean([string] $Name, [string] $Target, [string] $Platform, [string] $TargetConfiguration, [string] $Project, [string[]] $ExtraArguments) {
+	# Mirrors the pinned UAT clean (UnrealBuild.CleanWithUBT: '-Clean
+	# -NoHotReload <project> -NoUBTMakefiles' plus the target's UBT arguments).
+	# A -Clean run is a separate delete operation and proves no build; it
+	# deletes products by the UnrealClient/UnrealServer/BootstrapPackagedGame
+	# and target-name prefixes under the engine, plugin, and project
+	# directories, which -NoEngineChanges never guards - the attestation is
+	# re-verified after packaging instead.
+	$Arguments = @($Target, $Platform, $TargetConfiguration)
+	if (-not [string]::IsNullOrWhiteSpace($Project)) { $Arguments += $Project }
+	$Arguments += @($ExtraArguments) + @('-Clean', '-NoHotReload', '-NoUBTMakefiles', '-WaitMutex', "-Log=$(Join-Path $ResolvedLogs (Get-UbtLogName $Target $Platform $TargetConfiguration 'clean'))")
+	Invoke-ControllerBuildTool $Name $Arguments
+}
+function Invoke-ControllerTargetBuild([string] $Name, [string] $Target, [string] $Platform, [string] $TargetConfiguration, [string] $Project, [string[]] $ExtraArguments) {
+	# Build shape: target, platform, configuration, optional project, then the
+	# caller's target-specific arguments (the pinned UAT cooked-target agenda
+	# adds -remoteini=<project dir>; its editor agenda does not).
+	$Arguments = @($Target, $Platform, $TargetConfiguration)
+	if (-not [string]::IsNullOrWhiteSpace($Project)) { $Arguments += $Project }
+	$Arguments += @($ExtraArguments) + @('-WaitMutex', "-Log=$(Join-Path $ResolvedLogs (Get-UbtLogName $Target $Platform $TargetConfiguration 'build'))")
+	Invoke-ControllerBuildTool $Name $Arguments
+}
+function Get-ProjectReceiptPath([string] $Target, [string] $Platform, [string] $TargetConfiguration) {
+	# UnrealBuildTool writes an undecorated receipt for the Development
+	# configuration and a decorated <Target>-<Platform>-<Configuration>.target
+	# otherwise; project-target receipts land under the project directory.
+	$Name = if ($TargetConfiguration -eq 'Development') { "$Target.target" } else { "$Target-$Platform-$TargetConfiguration.target" }
+	return Join-Path $ProjectRoot "Binaries/$Platform/$Name"
+}
+function Assert-BuildProductAbsent([string] $Label, [string] $Path) {
+	if (Test-Path -LiteralPath $Path) { throw "$Label left '$Path' in place; the previous build products were not removed, so this run cannot be treated as a clean build." }
+}
+function Assert-ProjectReceipt([string] $Label, [string] $Target, [string] $Platform, [string] $TargetConfiguration, [string] $TargetType) {
+	# A zero exit code alone is not build evidence: the receipt this build
+	# wrote must describe exactly the requested target and its executable
+	# product must exist.
+	$ReceiptPath = Get-ProjectReceiptPath $Target $Platform $TargetConfiguration
+	if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) { throw "$Label did not produce its target receipt '$ReceiptPath'; the build cannot be treated as successful." }
+	$Receipt = $null
+	try { $Receipt = Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json } catch { throw "$Label produced an unparseable target receipt '$ReceiptPath'." }
+	foreach ($Property in @('TargetName', 'Platform', 'Configuration', 'TargetType', 'BuildProducts')) {
+		if ($null -eq $Receipt -or $null -eq $Receipt.PSObject.Properties[$Property]) { throw "$Label produced a target receipt '$ReceiptPath' missing '$Property'." }
+	}
+	if ([string] $Receipt.TargetName -cne $Target -or [string] $Receipt.Platform -cne $Platform -or [string] $Receipt.Configuration -cne $TargetConfiguration -or [string] $Receipt.TargetType -cne $TargetType) { throw "$Label produced a target receipt '$ReceiptPath' that does not describe $Target $Platform $TargetConfiguration ($TargetType)." }
+	$Executables = @(@($Receipt.BuildProducts) | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties['Type'] -and [string] $_.Type -ceq 'Executable' })
+	if ($Executables.Count -eq 0) { throw "$Label produced a target receipt '$ReceiptPath' without an Executable build product." }
+	foreach ($Executable in $Executables) {
+		$ProductPath = [string] $Executable.Path
+		if ($ProductPath -cnotmatch '^\$\(ProjectDir\)/') { throw "$Label receipt '$ReceiptPath' executable '$ProductPath' does not resolve under the project directory." }
+		$Relative = $ProductPath.Substring(14)
+		if (@(($Relative -split '[\\/]') | Where-Object { $_ -in @('', '.', '..') }).Count -ne 0 -or $Relative.Contains(':')) { throw "$Label receipt '$ReceiptPath' executable '$ProductPath' is not a safe project-relative path." }
+		if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $Relative) -PathType Leaf)) { throw "$Label receipt '$ReceiptPath' lists executable '$ProductPath' but it does not exist." }
+	}
 }
 function Read-StageRecord([string] $Root, [string] $ExpectedStage) {
 	$RecordPath = Join-Path $Root ('phase-{0}.json' -f $ExpectedStage.ToLowerInvariant())
 	if (-not (Test-Path -LiteralPath $RecordPath -PathType Leaf)) { throw "Stage record '$RecordPath' does not exist; run the $ExpectedStage stage first." }
 	$Record = Get-Content -LiteralPath $RecordPath -Raw | ConvertFrom-Json
-	foreach ($Property in @('schemaVersion', 'stage', 'sourceRevision', 'configuration', 'map')) {
+	foreach ($Property in @('schemaVersion', 'stage', 'sourceRevision', 'configuration', 'map', 'hostToolsMode', 'buildInvocations')) {
 		if ($null -eq $Record.PSObject.Properties[$Property]) { throw "Stage record '$RecordPath' is missing required property '$Property'." }
 	}
-	if ([int] $Record.schemaVersion -ne 1) { throw "Stage record '$RecordPath' has unsupported schema version '$($Record.schemaVersion)'." }
+	if ([int] $Record.schemaVersion -ne 2) { throw "Stage record '$RecordPath' has unsupported schema version '$($Record.schemaVersion)'." }
+	if ([string] $Record.hostToolsMode -notin @('rebuild', 'prebuilt')) { throw "Stage record '$RecordPath' records unknown host-tools mode '$($Record.hostToolsMode)'." }
 	if ([string] $Record.stage -ne $ExpectedStage.ToLowerInvariant()) { throw "Stage record '$RecordPath' records stage '$($Record.stage)' instead of '$($ExpectedStage.ToLowerInvariant())'." }
 	if (-not ([string] $Record.sourceRevision).Equals($SourceRevision, [StringComparison]::OrdinalIgnoreCase)) { throw "Stage record '$RecordPath' was produced from source revision '$($Record.sourceRevision)', not the requested '$SourceRevision'." }
 	if ([string] $Record.configuration -ne $Configuration -or [string] $Record.map -ne $Map) { throw "Stage record '$RecordPath' was produced with a different configuration or map than requested." }
@@ -686,6 +857,7 @@ $ResolvedEngine = Resolve-RequiredPath 'EngineRoot' $EngineRoot 'Container'
 $ResolvedToolchain = Resolve-RequiredPath 'LinuxToolchainRoot' $LinuxToolchainRoot 'Container'
 $script:RunUat = Join-Path $ResolvedEngine 'Engine/Build/BatchFiles/RunUAT.bat'
 if (-not (Test-Path -LiteralPath $script:RunUat -PathType Leaf)) { throw "EngineRoot '$ResolvedEngine' does not contain RunUAT.bat at '$script:RunUat'." }
+$script:BuildBat = Join-Path $ResolvedEngine 'Engine/Build/BatchFiles/Build.bat'
 $UnrealEditorCmd = Join-Path $ResolvedEngine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
 if (-not (Test-Path -LiteralPath $UnrealEditorCmd -PathType Leaf)) { throw "EngineRoot '$ResolvedEngine' does not contain UnrealEditor-Cmd.exe at '$UnrealEditorCmd'." }
 $ResolvedArchive = Initialize-EmptyDirectory 'ArchiveRoot' $ArchiveRoot
@@ -727,13 +899,21 @@ try {
 	if (-not (Test-Path -LiteralPath $CookGate -PathType Leaf)) { throw "Required server-cook validation gate '$CookGate' is missing." }
 	if ($Stage -ne 'Provenance') { Invoke-TimedStep 'target-composition-gate' { & $TargetGate -ProjectRoot $ProjectRoot } }
 
-	$CommonArguments = @('BuildCookRun', "-project=$ResolvedProject", '-nop4', '-utf8output', '-unattended', '-build', '-cook', '-clean', '-stage', '-pak', '-archive', "-map=$Map")
-	if ($script:HostToolsState.mode -eq 'prebuilt') {
-		# Pinned UE 5.8.1 maps -nocompileeditor to SkipBuildEditor: UAT omits
-		# the host editor/engine targets from BuildProjectCommand while the
-		# client and server project targets still build with -clean.
-		$CommonArguments += '-nocompileeditor'
+	$Prebuilt = $script:HostToolsState.mode -eq 'prebuilt'
+	$CommonArguments = @('BuildCookRun', "-project=$ResolvedProject", '-nop4', '-utf8output', '-unattended')
+	if ($Prebuilt) {
+		# Pinned UE 5.8.1: -skipbuild sets Build=false, so Project.Build returns
+		# before assembling any agenda. The agenda would otherwise clean and
+		# rebuild UnrealPak (and BootstrapPackagedGame) on every run regardless
+		# of -nocompileeditor, destroying the attested host tools. The project
+		# editor, project targets, and bootstrap are built by the controller
+		# below; -clean still governs UAT's cook (CookCommand) as before.
+		$CommonArguments += '-skipbuild'
+		if (-not (Test-Path -LiteralPath $script:BuildBat -PathType Leaf)) { throw "EngineRoot '$ResolvedEngine' does not contain Build.bat at '$script:BuildBat'; the prebuilt boundary cannot build the project targets." }
+	} else {
+		$CommonArguments += '-build'
 	}
+	$CommonArguments += @('-cook', '-clean', '-stage', '-pak', '-archive', "-map=$Map")
 	$ClientArguments = $CommonArguments + @('-target=AethelnOnlineClient', '-platform=Win64', "-clientconfig=$Configuration", '-client', "-archivedirectory=$ClientArchive")
 	$ServerArguments = $null
 	if ($Stage -in @('All', 'Server')) {
@@ -766,15 +946,68 @@ try {
 	try {
 		[Environment]::SetEnvironmentVariable('LINUX_MULTIARCH_ROOT', $ResolvedToolchain, 'Process')
 		if ($null -ne $script:CacheState.appliedPath) { [Environment]::SetEnvironmentVariable('UE-LocalDataCachePath', $script:CacheState.appliedPath, 'Process') }
+		$UbtLogDirectory = Join-Path $ResolvedLogs 'ubt'
+		if ($Prebuilt) {
+			New-Item -ItemType Directory -Path $UbtLogDirectory | Out-Null
+			# The cook loads the project's editor modules, which -skipbuild no
+			# longer produces. Build them against the attested engine without
+			# -Clean (a Shared-environment editor clean deletes engine products)
+			# and with -NoEngineChanges, so UnrealBuildTool refuses to execute
+			# any action that would modify an existing engine file. Then prove
+			# the identity the runtime checks and re-verify the attestation.
+			Invoke-TimedStep 'project-editor-preparation' { Invoke-ControllerTargetBuild 'project-editor-preparation' 'AethelnOnlineEditor' 'Win64' 'Development' $ResolvedProject @('-NoHotReloadFromIDE', '-NoEngineChanges') }
+			Invoke-TimedStep 'project-editor-identity' { $script:HostToolsState['projectEditorBuildId'] = Assert-ProjectEditorIdentity }
+			Invoke-TimedStep 'host-tools-postpreparation-verification' { Test-HostToolsAttestation $script:HostToolsAttestationFull }
+		}
 		if ($Stage -in @('All', 'Client')) {
+			if ($Prebuilt) {
+				$ClientReceipt = Get-ProjectReceiptPath 'AethelnOnlineClient' 'Win64' $Configuration
+				Invoke-TimedStep 'client-project-clean' {
+					Invoke-ControllerClean 'client-project-clean' 'AethelnOnlineClient' 'Win64' $Configuration $ResolvedProject @("-remoteini=$ProjectRoot")
+					Assert-BuildProductAbsent 'client project clean' $ClientReceipt
+				}
+				Invoke-TimedStep 'client-project-build' {
+					Invoke-ControllerTargetBuild 'client-project-build' 'AethelnOnlineClient' 'Win64' $Configuration $ResolvedProject @("-remoteini=$ProjectRoot")
+					Assert-ProjectReceipt 'client project build' 'AethelnOnlineClient' 'Win64' $Configuration 'Client'
+					$script:SelectedCompiler = Resolve-UbtSelectedTool $UbtLogDirectory 'Compiler' 'cl.exe' "UBT-AethelnOnlineClient-Win64-$Configuration*.txt"
+					$script:SelectedResourceCompiler = Resolve-UbtSelectedTool $UbtLogDirectory 'Resource Compiler' 'rc.exe' "UBT-AethelnOnlineClient-Win64-$Configuration*.txt"
+				}
+				# Windows staging wraps the client in the BootstrapPackagedGame
+				# launcher only when Engine/Binaries/Win64/BootstrapPackagedGame-
+				# Win64-Shipping.exe exists; the UAT agenda used to clean and
+				# rebuild it, so the controller does so explicitly. It is an
+				# engine program outside the attested closure.
+				$BootstrapExecutable = Join-Path $ResolvedEngine 'Engine/Binaries/Win64/BootstrapPackagedGame-Win64-Shipping.exe'
+				Invoke-TimedStep 'client-bootstrap-clean' {
+					Invoke-ControllerClean 'client-bootstrap-clean' 'BootstrapPackagedGame' 'Win64' 'Shipping' $null @()
+					Assert-BuildProductAbsent 'client bootstrap clean' $BootstrapExecutable
+				}
+				Invoke-TimedStep 'client-bootstrap-build' {
+					Invoke-ControllerTargetBuild 'client-bootstrap-build' 'BootstrapPackagedGame' 'Win64' 'Shipping' $null @()
+					if (-not (Test-Path -LiteralPath $BootstrapExecutable -PathType Leaf)) { throw "client bootstrap build did not produce '$BootstrapExecutable'; the client would be staged without its launcher. Packaging fails closed." }
+				}
+			}
 			Invoke-TimedStep 'client-uat-build-cook-package' { Invoke-UatBuild 'Windows x64 client build/cook/package' $ClientArguments (Join-Path $ResolvedLogs 'client-uat.log') $ClientAutomationToolLogs }
 			Invoke-TimedStep 'client-output-validation' {
 				Assert-PackagedExecutable 'Windows client packaging' $ClientArchive @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
-				$script:SelectedCompiler = Resolve-UbtSelectedTool $ClientAutomationToolLogs 'Compiler' 'cl.exe'
-				$script:SelectedResourceCompiler = Resolve-UbtSelectedTool $ClientAutomationToolLogs 'Resource Compiler' 'rc.exe'
+				if (-not $Prebuilt) {
+					$script:SelectedCompiler = Resolve-UbtSelectedTool $ClientAutomationToolLogs 'Compiler' 'cl.exe'
+					$script:SelectedResourceCompiler = Resolve-UbtSelectedTool $ClientAutomationToolLogs 'Resource Compiler' 'rc.exe'
+				}
 			}
 		}
 		if ($Stage -in @('All', 'Server')) {
+			if ($Prebuilt) {
+				$ServerReceipt = Get-ProjectReceiptPath 'AethelnOnlineServer' 'Linux' $Configuration
+				Invoke-TimedStep 'server-project-clean' {
+					Invoke-ControllerClean 'server-project-clean' 'AethelnOnlineServer' 'Linux' $Configuration $ResolvedProject @("-remoteini=$ProjectRoot")
+					Assert-BuildProductAbsent 'server project clean' $ServerReceipt
+				}
+				Invoke-TimedStep 'server-project-build' {
+					Invoke-ControllerTargetBuild 'server-project-build' 'AethelnOnlineServer' 'Linux' $Configuration $ResolvedProject @("-remoteini=$ProjectRoot")
+					Assert-ProjectReceipt 'server project build' 'AethelnOnlineServer' 'Linux' $Configuration 'Server'
+				}
+			}
 			Invoke-TimedStep 'server-uat-build-cook-package' { Invoke-UatBuild 'Linux x86-64 dedicated server build/cook/package' $ServerArguments (Join-Path $ResolvedLogs 'server-uat.log') $ServerAutomationToolLogs }
 			Invoke-TimedStep 'server-output-validation' { Assert-PackagedExecutable 'Linux server packaging' $ServerArchive @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping') }
 			Invoke-TimedStep 'server-dependency-registry-dump' { Invoke-LoggedCommand 'dedicated-server dependency registry dump' $UnrealEditorCmd $DependencyRegistryArguments (Join-Path $ResolvedLogs 'server-dependency-registry-dump.log') }
@@ -785,34 +1018,44 @@ try {
 		[Environment]::SetEnvironmentVariable('LINUX_MULTIARCH_ROOT', $PreviousToolchain, 'Process')
 		[Environment]::SetEnvironmentVariable('UE-LocalDataCachePath', $PreviousLocalDdc, 'Process')
 	}
+	if ($Prebuilt -and $Stage -ne 'Provenance') {
+		# Nothing between the boundary proof and publication may have changed
+		# an attested host tool: not the project builds, not UAT. The record
+		# is re-verified, never regenerated.
+		Invoke-TimedStep 'host-tools-final-verification' { Test-HostToolsAttestation $script:HostToolsAttestationFull }
+	}
 
 	switch ($Stage) {
 		'Client' {
 			[ordered]@{
-				schemaVersion = 1
+				schemaVersion = 2
 				stage = 'client'
 				sourceRevision = $SourceRevision
 				configuration = $Configuration
 				map = $Map
+				hostToolsMode = $script:HostToolsState.mode
+				buildInvocations = @($script:BuildInvocations)
 				clientArguments = $ClientArguments
 				compilerPath = $SelectedCompiler
 				resourceCompilerPath = $SelectedResourceCompiler
-			} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-client.json') -Encoding UTF8
+			} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-client.json') -Encoding UTF8
 			Write-Output "Client packaging stage completed under '$ResolvedArchive'."
 		}
 		'Server' {
 			[ordered]@{
-				schemaVersion = 1
+				schemaVersion = 2
 				stage = 'server'
 				sourceRevision = $SourceRevision
 				configuration = $Configuration
 				map = $Map
+				hostToolsMode = $script:HostToolsState.mode
+				buildInvocations = @($script:BuildInvocations)
 				serverArguments = $ServerArguments
 				dependencyRegistryDumpArguments = $DependencyRegistryArguments
 				cookedInventoryDumpArguments = $CookedInventoryArguments
 				dependencyReportDirectory = 'RegistryDumps/server-dependency-registry-dump'
 				cookedInventoryDirectory = 'RegistryDumps/server-cooked-inventory-dump'
-			} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-server.json') -Encoding UTF8
+			} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-server.json') -Encoding UTF8
 			Write-Output "Server packaging stage completed under '$ResolvedArchive'."
 		}
 		'Provenance' {
@@ -827,13 +1070,16 @@ try {
 			$DependencyReportDirectory = Resolve-RecordDirectory $ResolvedServerStage ([string] $ServerRecord.dependencyReportDirectory) 'Dependency report directory'
 			$CookedInventoryDirectory = Resolve-RecordDirectory $ResolvedServerStage ([string] $ServerRecord.cookedInventoryDirectory) 'Cooked inventory directory'
 			Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyReportDirectory -CookedInventoryDirectory $CookedInventoryDirectory }
+			if ([string] $ClientRecord.hostToolsMode -cne [string] $ServerRecord.hostToolsMode) { throw "Client stage record host-tools mode '$($ClientRecord.hostToolsMode)' differs from the server stage record '$($ServerRecord.hostToolsMode)'; provenance cannot describe one build." }
 			$UatArgumentsJson = [ordered]@{ client = @($ClientRecord.clientArguments); server = @($ServerRecord.serverArguments); dependencyRegistryDump = @($ServerRecord.dependencyRegistryDumpArguments); cookedInventoryDump = @($ServerRecord.cookedInventoryDumpArguments) } | ConvertTo-Json -Compress
-			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson }
+			$BuildInvocationsJson = ConvertTo-Json -InputObject @(@($ClientRecord.buildInvocations) + @($ServerRecord.buildInvocations)) -Compress -Depth 4
+			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson -HostToolsMode ([string] $ClientRecord.hostToolsMode) -BuildInvocationsJson $BuildInvocationsJson }
 			Write-Output "Provenance validation stage completed under '$ResolvedArchive'."
 		}
 		default {
 			$UatArgumentsJson = [ordered]@{ client = $ClientArguments; server = $ServerArguments; dependencyRegistryDump = $DependencyRegistryArguments; cookedInventoryDump = $CookedInventoryArguments } | ConvertTo-Json -Compress
-			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath $SelectedCompiler -ResourceCompilerPath $SelectedResourceCompiler -UatArgumentsJson $UatArgumentsJson }
+			$BuildInvocationsJson = ConvertTo-Json -InputObject @($script:BuildInvocations) -Compress -Depth 4
+			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath $SelectedCompiler -ResourceCompilerPath $SelectedResourceCompiler -UatArgumentsJson $UatArgumentsJson -HostToolsMode $script:HostToolsState.mode -BuildInvocationsJson $BuildInvocationsJson }
 			Write-Output "Packaged artifacts completed under '$ResolvedArchive'."
 		}
 	}

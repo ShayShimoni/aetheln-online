@@ -38,9 +38,10 @@ try {
 	$Args = [ordered]@{ client = @('BuildCookRun', '-platform=Win64'); server = @('BuildCookRun', '-serverplatform=Linux'); dependencyRegistryDump = @('-run=DumpAssetRegistry', '-DependencyDetails'); cookedInventoryDump = @('-run=DumpAssetRegistry', '-PackageName') } | ConvertTo-Json -Compress
 	$OutputPath = Join-Path $FixtureRoot 'provenance/build.json'
 
-	& $Script -OutputPath $OutputPath -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $Args
+	& $Script -OutputPath $OutputPath -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $Args -HostToolsMode rebuild -BuildInvocationsJson '[]'
 	$Provenance = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
-	Assert-True ($Provenance.schemaVersion -eq 2) 'Schema version should identify complete provenance.'
+	Assert-True ($Provenance.schemaVersion -eq 3) 'Schema version should identify complete provenance.'
+	Assert-True ($Provenance.build.hostToolsMode -eq 'rebuild' -and @($Provenance.build.explicitBuildInvocations).Count -eq 0) 'A rebuild records its host-tools mode and no controller build invocations.'
 	Assert-True ($Provenance.source.revision -eq $Revision) 'Verified repository HEAD should be recorded.'
 	Assert-True ($Provenance.source.clean -eq $true) 'Verified clean source state should be recorded.'
 	Assert-True (($Provenance.source.statusCommand -join ' ') -match 'status --porcelain=v1 --untracked-files=all') 'Exact clean-worktree command should be recorded.'
@@ -64,9 +65,36 @@ try {
 	Write-Output 'PASS: provenance records verified revisions, exact tools/arguments/plugins/host, and hashed inventory'
 
 	$Failure = $null
-	try { & $Script -OutputPath (Join-Path $FixtureRoot 'bad.json') -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision ('0' * 40) -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $Args } catch { $Failure = $_.Exception.Message }
+	try { & $Script -OutputPath (Join-Path $FixtureRoot 'bad.json') -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision ('0' * 40) -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $Args -HostToolsMode rebuild -BuildInvocationsJson '[]' } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'does not match repository HEAD') 'A requested revision not matching actual HEAD must fail.'
 	Write-Output 'PASS: provenance refuses an unproven source revision'
+
+	$Invocation = [ordered]@{ label = 'client-project-build'; executable = 'D:\UE\Engine\Build\BatchFiles\Build.bat'; arguments = @('AethelnOnlineClient', 'Win64', 'Development', 'D:\Project\AethelnOnline.uproject', '-remoteini=D:\Project', '-WaitMutex'); log = 'client-project-build.log'; startedUtc = '2026-09-07T00:00:00.0000000Z'; durationSeconds = 12.5; exitCode = 0 }
+	$PrebuiltOutput = Join-Path $FixtureRoot 'provenance/prebuilt.json'
+	& $Script -OutputPath $PrebuiltOutput -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $Args -HostToolsMode prebuilt -BuildInvocationsJson (ConvertTo-Json -InputObject @($Invocation) -Compress -Depth 4)
+	$PrebuiltProvenance = Get-Content -LiteralPath $PrebuiltOutput -Raw | ConvertFrom-Json
+	$Recorded = @($PrebuiltProvenance.build.explicitBuildInvocations)
+	Assert-True ($PrebuiltProvenance.build.hostToolsMode -eq 'prebuilt' -and $Recorded.Count -eq 1 -and $Recorded[0].label -eq 'client-project-build' -and $Recorded[0].arguments[4] -eq '-remoteini=D:\Project' -and $Recorded[0].exitCode -eq 0 -and $Recorded[0].log -eq 'client-project-build.log') 'Prebuilt provenance must preserve every explicit build invocation with its exact argument order.'
+	Assert-True ($Recorded[0].exitCode -is [int] -and $Recorded[0].exitCode -eq 0) 'A JSON integer zero exit code must be recorded as the integer 0.'
+	Write-Output 'PASS: prebuilt provenance records the explicit controller build invocations'
+
+	foreach ($InvalidCase in @(
+		@{ Label = 'prebuilt without invocations'; Mode = 'prebuilt'; Json = '[]'; Expect = 'requires the controller''s explicit build invocations' },
+		@{ Label = 'rebuild with invocations'; Mode = 'rebuild'; Json = (ConvertTo-Json -InputObject @($Invocation) -Compress -Depth 4); Expect = 'must be empty' },
+		@{ Label = 'failed invocation'; Mode = 'prebuilt'; Json = (ConvertTo-Json -InputObject @(([ordered]@{ label = 'client-project-build'; executable = 'Build.bat'; arguments = @('x'); log = 'l'; startedUtc = 's'; durationSeconds = 1; exitCode = 1 })) -Compress -Depth 4); Expect = 'records exit code 1' },
+		@{ Label = 'null exit code'; Mode = 'prebuilt'; Json = '[{"label":"x","executable":"Build.bat","arguments":["x"],"log":"l","startedUtc":"s","durationSeconds":1,"exitCode":null}]'; Expect = 'exitCode must be a JSON integer' },
+		@{ Label = 'boolean exit code'; Mode = 'prebuilt'; Json = '[{"label":"x","executable":"Build.bat","arguments":["x"],"log":"l","startedUtc":"s","durationSeconds":1,"exitCode":true}]'; Expect = 'exitCode must be a JSON integer' },
+		@{ Label = 'string exit code'; Mode = 'prebuilt'; Json = '[{"label":"x","executable":"Build.bat","arguments":["x"],"log":"l","startedUtc":"s","durationSeconds":1,"exitCode":"0"}]'; Expect = 'exitCode must be a JSON integer' },
+		@{ Label = 'fractional exit code'; Mode = 'prebuilt'; Json = '[{"label":"x","executable":"Build.bat","arguments":["x"],"log":"l","startedUtc":"s","durationSeconds":1,"exitCode":0.4}]'; Expect = 'exitCode must be a JSON integer' },
+		@{ Label = 'fractional zero exit code'; Mode = 'prebuilt'; Json = '[{"label":"x","executable":"Build.bat","arguments":["x"],"log":"l","startedUtc":"s","durationSeconds":1,"exitCode":0.0}]'; Expect = 'exitCode must be a JSON integer' },
+		@{ Label = 'invocation missing arguments'; Mode = 'prebuilt'; Json = '[{"label":"x","executable":"Build.bat","log":"l","startedUtc":"s","durationSeconds":1,"exitCode":0}]'; Expect = "missing required property 'arguments'" },
+		@{ Label = 'malformed json'; Mode = 'prebuilt'; Json = 'not-json'; Expect = 'invalid JSON' }
+	)) {
+		$Failure = $null
+		try { & $Script -OutputPath (Join-Path $FixtureRoot 'invalid.json') -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $Args -HostToolsMode ([string] $InvalidCase.Mode) -BuildInvocationsJson ([string] $InvalidCase.Json) } catch { $Failure = $_.Exception.Message }
+		Assert-True ($null -ne $Failure -and $Failure -match [regex]::Escape([string] $InvalidCase.Expect)) "Provenance must refuse $($InvalidCase.Label); observed: $Failure"
+	}
+	Write-Output 'PASS: provenance refuses build evidence that contradicts the host-tools mode or records a failed build'
 }
 finally {
 	if ($null -ne $OriginalPath) { $env:PATH = $OriginalPath }

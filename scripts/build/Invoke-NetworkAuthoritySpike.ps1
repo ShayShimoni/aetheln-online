@@ -797,11 +797,32 @@ function Resolve-ProvenanceExecutable([string] $Name, [string] $Path, [string] $
 	}
 }
 
+function Assert-PackagedProvenanceBuildEvidence($Provenance) {
+	# Schema 3 (Write-BuildProvenance.ps1) adds build.hostToolsMode and build.explicitBuildInvocations.
+	$Build = if ($null -ne $Provenance.PSObject.Properties['build']) { $Provenance.build } else { $null }
+	if ($null -eq $Build -or $null -eq $Build.PSObject.Properties['hostToolsMode'] -or $null -eq $Build.PSObject.Properties['explicitBuildInvocations']) { throw 'Packaged build provenance schema 3 must record build.hostToolsMode and build.explicitBuildInvocations.' }
+	$HostToolsMode = $Build.hostToolsMode
+	if ($HostToolsMode -cne 'rebuild' -and $HostToolsMode -cne 'prebuilt') { throw "Packaged build provenance hostToolsMode must be 'rebuild' or 'prebuilt'." }
+	$Invocations = $Build.explicitBuildInvocations
+	if ($Invocations -isnot [array]) { throw 'Packaged build provenance explicitBuildInvocations must be a JSON array.' }
+	if (($HostToolsMode -ceq 'prebuilt') -ne ($Invocations.Count -gt 0)) { throw 'Packaged build provenance explicitBuildInvocations must be non-empty exactly when hostToolsMode is prebuilt.' }
+	foreach ($Invocation in $Invocations) {
+		foreach ($Property in @('label', 'executable', 'arguments', 'log', 'startedUtc', 'durationSeconds', 'exitCode')) {
+			if ($null -eq $Invocation -or $null -eq $Invocation.PSObject.Properties[$Property]) { throw "Packaged build provenance explicit build invocation is missing required property '$Property'." }
+		}
+		$ExitCode = $Invocation.exitCode
+		if (($ExitCode -isnot [int] -and $ExitCode -isnot [long]) -or $ExitCode -ne 0) { throw 'Packaged build provenance explicit build invocations must each record the JSON integer exit code 0.' }
+	}
+}
+
 function Test-PackagedBuildProvenance([string] $Path, [string] $ActualServerSha256) {
 	if (-not $Path) { throw 'PackagedBuildProvenancePath is required for packaged evidence.' }
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Packaged build provenance '$Path' does not exist." }
 	try { $Provenance = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json } catch { throw "Packaged build provenance '$Path' is invalid JSON: $($_.Exception.Message)" }
-	if ($Provenance.schemaVersion -ne 2 -or $Provenance.source.revision -cne $SourceRevision -or $Provenance.source.clean -ne $true) { throw 'Packaged build provenance does not bind a clean exact source revision.' }
+	$SchemaVersion = if ($null -ne $Provenance.PSObject.Properties['schemaVersion']) { $Provenance.schemaVersion } else { $null }
+	if (($SchemaVersion -isnot [int] -and $SchemaVersion -isnot [long]) -or $SchemaVersion -notin @(2, 3)) { throw 'Packaged build provenance schema version must be the JSON integer 2 or 3.' }
+	if ($Provenance.source.revision -cne $SourceRevision -or $Provenance.source.clean -ne $true) { throw 'Packaged build provenance does not bind a clean exact source revision.' }
+	if ($SchemaVersion -eq 3) { Assert-PackagedProvenanceBuildEvidence $Provenance }
 	if ($Provenance.host.buildIdentity -cne $BuildIdentity) { throw 'BuildIdentity does not match packaged build provenance.' }
 	$ClientArchive = Resolve-ProvenanceArchiveRoot 'artifacts.clientArchive' ([string] $Provenance.artifacts.clientArchive)
 	$ServerArchive = Resolve-ProvenanceArchiveRoot 'artifacts.serverArchive' ([string] $Provenance.artifacts.serverArchive)

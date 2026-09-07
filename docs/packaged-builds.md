@@ -92,11 +92,32 @@ three host-tools arguments with `-HostToolsBoundary Rebuild`. There is no
 default or automatic rebuild fallback: an omitted selection or an unverified
 prebuilt attestation stops the build.
 
+Under `Prebuilt` UAT is invoked with `-skipbuild` and the script owns every
+build: it first builds the project editor modules the cook loads
+(`Build.bat AethelnOnlineEditor Win64 Development <project> -WaitMutex
+-NoHotReloadFromIDE -NoEngineChanges`, never `-Clean`), checks that their
+`Binaries/Win64/UnrealEditor.modules` carries the attested engine BuildId and
+every editor-loaded project module, re-verifies the attestation, then for
+each selected target runs a separate UnrealBuildTool `-Clean` and a build
+(`AethelnOnlineClient Win64 <config>` and/or `AethelnOnlineServer Linux
+<config>`, plus `BootstrapPackagedGame Win64 Shipping` for the client),
+asserts each target receipt is gone after the clean and exact after the
+build, cooks/stages/packages/archives through UAT, and re-verifies the
+attestation once more before writing any stage record or provenance. The
+console log of every explicit build is `<LogRoot>/<step>.log` and the
+UnrealBuildTool log is `<LogRoot>/ubt/UBT-<Target>-<Platform>-<Config>[-clean].txt`;
+the client build log is the source of the compiler and resource-compiler
+evidence. Under `Rebuild` UAT keeps `-build -clean` and builds everything.
+
 The script produces `WindowsClient` and `LinuxServer` below `ArchiveRoot` and
-writes `build-provenance.json` beside them. Provenance generation is part of
-the build entry point; `Write-BuildProvenance.ps1` remains independently
-callable for validation and focused testing but is not an extra normal build
-step.
+writes `build-provenance.json` beside them (schema version 3, including
+`build.hostToolsMode` and `build.explicitBuildInvocations`; the split-stage
+`phase-client.json`/`phase-server.json` records are schema version 2 and
+carry the same evidence). Provenance generation is part of the build entry
+point; `Write-BuildProvenance.ps1` remains independently callable for
+validation and focused testing but is not an extra normal build step, and it
+refuses evidence that contradicts the host-tools mode or records a failed
+build.
 
 For Linux cooking, the proven UAT invocation requires this exact cooker
 override:

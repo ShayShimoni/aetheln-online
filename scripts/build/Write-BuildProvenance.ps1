@@ -2,7 +2,13 @@
 .SYNOPSIS
 Writes verified, file-level provenance for packaged Aetheln artifacts.
 .EXAMPLE
-./scripts/build/Write-BuildProvenance.ps1 -OutputPath D:/Builds/run/build-provenance.json -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -SourceRevision e5798da01cc8dddb70c0a586843ddd2294dbfef3 -BuildConfiguration Development -ClientArchivePath D:/Builds/run/WindowsClient -ServerArchivePath D:/Builds/run/LinuxServer -CompilerPath 'C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe' -ResourceCompilerPath 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe' -UatArgumentsJson '{"client":["BuildCookRun"],"server":["BuildCookRun"],"dependencyRegistryDump":["-run=DumpAssetRegistry","-DependencyDetails"],"cookedInventoryDump":["-run=DumpAssetRegistry","-PackageName"]}'
+./scripts/build/Write-BuildProvenance.ps1 -OutputPath D:/Builds/run/build-provenance.json -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -SourceRevision e5798da01cc8dddb70c0a586843ddd2294dbfef3 -BuildConfiguration Development -ClientArchivePath D:/Builds/run/WindowsClient -ServerArchivePath D:/Builds/run/LinuxServer -CompilerPath 'C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe' -ResourceCompilerPath 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe' -UatArgumentsJson '{"client":["BuildCookRun"],"server":["BuildCookRun"],"dependencyRegistryDump":["-run=DumpAssetRegistry","-DependencyDetails"],"cookedInventoryDump":["-run=DumpAssetRegistry","-PackageName"]}' -HostToolsMode rebuild -BuildInvocationsJson '[]'
+
+Under the prebuilt host-tools boundary UAT builds nothing, so -HostToolsMode
+prebuilt requires -BuildInvocationsJson to carry the controller's explicit
+UnrealBuildTool invocations (label, executable, exact arguments, log, exit
+code); under rebuild UAT built everything and the list must be empty. This
+script only records evidence; it never starts a build.
 #>
 [CmdletBinding()]
 param(
@@ -16,7 +22,9 @@ param(
 	[Parameter(Mandatory)] [string] $ServerArchivePath,
 	[Parameter(Mandatory)] [string] $CompilerPath,
 	[Parameter(Mandatory)] [string] $ResourceCompilerPath,
-	[Parameter(Mandatory)] [string] $UatArgumentsJson
+	[Parameter(Mandatory)] [string] $UatArgumentsJson,
+	[Parameter(Mandatory)] [ValidateSet('rebuild', 'prebuilt')] [string] $HostToolsMode,
+	[Parameter(Mandatory)] [string] $BuildInvocationsJson
 )
 
 Set-StrictMode -Version Latest
@@ -68,6 +76,27 @@ $RecordedUatInvocations = [ordered]@{
 	dependencyRegistryDump = [ordered]@{ arguments = @($UatInvocations.dependencyRegistryDump) }
 	cookedInventoryDump = [ordered]@{ arguments = @($UatInvocations.cookedInventoryDump) }
 }
+$ParsedBuildInvocations = $null
+try { $ParsedBuildInvocations = ConvertFrom-Json -InputObject $BuildInvocationsJson } catch { throw "BuildInvocationsJson is invalid JSON: $($_.Exception.Message)" }
+# Windows PowerShell returns an empty JSON array as an array object; wrapping
+# it in @() would nest it and miscount, so the array is used as parsed.
+if ($ParsedBuildInvocations -isnot [array]) { throw 'BuildInvocationsJson must be a JSON array.' }
+$BuildInvocations = $ParsedBuildInvocations
+if ($HostToolsMode -eq 'prebuilt' -and $BuildInvocations.Count -eq 0) { throw "HostToolsMode 'prebuilt' requires the controller's explicit build invocations; an empty BuildInvocationsJson means no project target was provably built." }
+if ($HostToolsMode -eq 'rebuild' -and $BuildInvocations.Count -ne 0) { throw "HostToolsMode 'rebuild' builds everything through UAT; BuildInvocationsJson must be empty." }
+$RecordedBuildInvocations = @(foreach ($Invocation in $BuildInvocations) {
+	foreach ($Property in @('label', 'executable', 'arguments', 'log', 'startedUtc', 'durationSeconds', 'exitCode')) {
+		if ($null -eq $Invocation -or $null -eq $Invocation.PSObject.Properties[$Property]) { throw "BuildInvocationsJson entry is missing required property '$Property'." }
+	}
+	# Validate before any conversion: [int] would coerce null, booleans, strings and fractions to a passing 0.
+	$ExitCode = $Invocation.exitCode
+	if ($ExitCode -isnot [int] -and $ExitCode -isnot [long]) {
+		$Observed = if ($null -eq $ExitCode) { 'null' } else { "$($ExitCode.GetType().Name) '$ExitCode'" }
+		throw "BuildInvocationsJson entry '$($Invocation.label)' exitCode must be a JSON integer; observed $Observed. Provenance is only written for a fully successful build."
+	}
+	if ($ExitCode -ne 0) { throw "BuildInvocationsJson entry '$($Invocation.label)' records exit code $ExitCode; provenance is only written for a fully successful build." }
+	[ordered]@{ label = [string] $Invocation.label; executable = [string] $Invocation.executable; arguments = @($Invocation.arguments); log = [string] $Invocation.log; startedUtc = [string] $Invocation.startedUtc; durationSeconds = [double] $Invocation.durationSeconds; exitCode = $ExitCode }
+})
 $ProjectDescriptor = Get-Content -LiteralPath $ResolvedProject -Raw | ConvertFrom-Json
 
 $EngineRevision = Invoke-IdentityCommand 'git' @('-C', $ResolvedEngine, 'rev-parse', 'HEAD')
@@ -88,9 +117,9 @@ $Inventory = foreach ($Archive in @(@{ Kind = 'client'; Root = $ResolvedClient }
 }
 
 $Document = [ordered]@{
-	schemaVersion = 2; createdUtc = [DateTime]::UtcNow.ToString('o'); host = $HostIdentity
+	schemaVersion = 3; createdUtc = [DateTime]::UtcNow.ToString('o'); host = $HostIdentity
 	source = [ordered]@{ revision = $ActualRevision; repositoryRoot = $RepositoryRoot; clean = $true; statusCommand = $StatusCommand; project = $ResolvedProject; projectSha256 = (Get-FileHash -LiteralPath $ResolvedProject -Algorithm SHA256).Hash.ToLowerInvariant(); plugins = @($ProjectDescriptor.Plugins | ForEach-Object { [ordered]@{ name = $_.Name; enabled = $_.Enabled; targetAllowList = @(Get-OptionalProperty $_ 'TargetAllowList'); targetDenyList = @(Get-OptionalProperty $_ 'TargetDenyList'); descriptor = $_ } }) }
-	build = [ordered]@{ configuration = $BuildConfiguration; clientPlatform = 'Win64'; serverPlatform = 'Linux'; clientTarget = 'AethelnOnlineClient'; serverTarget = 'AethelnOnlineServer'; uatInvocations = $RecordedUatInvocations }
+	build = [ordered]@{ configuration = $BuildConfiguration; clientPlatform = 'Win64'; serverPlatform = 'Linux'; clientTarget = 'AethelnOnlineClient'; serverTarget = 'AethelnOnlineServer'; hostToolsMode = $HostToolsMode; explicitBuildInvocations = @($RecordedBuildInvocations); uatInvocations = $RecordedUatInvocations }
 	tools = [ordered]@{ unreal = [ordered]@{ root = $ResolvedEngine; repositoryRevision = $EngineRevision; build = $BuildVersion; buildVersionSha256 = (Get-FileHash -LiteralPath $BuildVersionPath -Algorithm SHA256).Hash.ToLowerInvariant() }; compiler = $CompilerIdentity; windowsSdk = $WindowsSdk; linuxCrossToolchain = [ordered]@{ identity = $ToolchainRootIdentity; root = $ResolvedToolchain; compilerPath = $ToolchainCompiler.FullName; compilerBanner = $ToolchainCompilerBanner; compilerFileVersion = $ToolchainCompiler.VersionInfo.FileVersion; compilerSha256 = (Get-FileHash -LiteralPath $ToolchainCompiler.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); versionMarker = if ($ToolchainMarker) { [ordered]@{ path = $ToolchainMarker.FullName; sha256 = (Get-FileHash -LiteralPath $ToolchainMarker.FullName -Algorithm SHA256).Hash.ToLowerInvariant() } } else { $null } } }
 	artifacts = [ordered]@{ clientArchive = $ResolvedClient; serverArchive = $ResolvedServer; inventory = @($Inventory) }
 }
