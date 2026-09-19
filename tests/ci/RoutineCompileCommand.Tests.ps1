@@ -39,15 +39,17 @@ public static class RoutineCommandFixture {
     }
 }
 '@ -OutputAssembly $FixtureExe -OutputType ConsoleApplication
-$Clock = [Diagnostics.Stopwatch]::StartNew()
-$Progress = { if ($Clock.Elapsed.TotalSeconds -gt 15) { throw 'fixture_deadline' } }.GetNewClosure()
-$Result = Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('stderr') -WorkingDirectory $FixtureRoot -OnProgress $Progress
+function Get-FixtureProgress {
+	$Clock = [Diagnostics.Stopwatch]::StartNew()
+	return { if ($Clock.Elapsed.TotalSeconds -gt 15) { throw 'fixture_deadline' } }.GetNewClosure()
+}
+$Result = Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('stderr') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress)
 Assert-True -Condition ($Result.exitCode -eq 0) -Message 'Legitimate stderr does not rewrite native success'
 Assert-True -Condition ($Result.output -contains 'normal stdout' -and $Result.output -contains 'legitimate stderr') -Message 'Both streams retained'
-$Result = Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('exit') -WorkingDirectory $FixtureRoot -OnProgress $Progress
+$Result = Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('exit') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress)
 Assert-True -Condition ($Result.exitCode -eq 23) -Message 'Native nonzero exit remains exact'
 $Expected = @('', 'space value', 'double"quote', 'end slash\', 'two\\"quotes', "single'quote", [string][char]0x03A9, 'literal&%|<>!')
-$Result = Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments (@('args') + $Expected) -WorkingDirectory $FixtureRoot -OnProgress $Progress
+$Result = Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments (@('args') + $Expected) -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress)
 Assert-True -Condition ($Result.output.Count -eq $Expected.Count) -Message 'Empty argument retained'
 for ($Index = 0; $Index -lt $Expected.Count; $Index++) {
 	$Actual = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Result.output[$Index]))
@@ -56,7 +58,10 @@ for ($Index = 0; $Index -lt $Expected.Count; $Index++) {
 $Marker = Join-Path $FixtureRoot 'not-launched.txt'
 Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('marker', $Marker) -WorkingDirectory $FixtureRoot -OnProgress { throw 'fixture_before_launch' } } -Reason 'fixture_before_launch'
 Assert-True -Condition (-not (Test-Path -LiteralPath $Marker)) -Message 'Callback denial precedes launch'
-Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable (Join-Path $FixtureRoot 'missing.exe') -Arguments @() -WorkingDirectory $FixtureRoot -OnProgress $Progress } -Reason 'routine_command_start_failed'
+Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable (Join-Path $FixtureRoot 'missing.exe') -Arguments @() -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress) } -Reason 'routine_command_start_failed'
+$InvalidExe = Join-Path $FixtureRoot 'invalid.exe'
+[IO.File]::WriteAllBytes($InvalidExe, [byte[]] @(0, 1, 2, 3))
+Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $InvalidExe -Arguments @() -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress) } -Reason 'routine_command_start_failed'
 $SleepingId = Join-Path $FixtureRoot 'sleep.pid'
 $StopClock = [Diagnostics.Stopwatch]::StartNew()
 $StopProgress = { if ($StopClock.Elapsed.TotalMilliseconds -gt 600) { throw 'fixture_running_deadline' } }.GetNewClosure()
@@ -65,11 +70,11 @@ Assert-True -Condition ($StopClock.Elapsed.TotalSeconds -lt 3) -Message 'Active 
 Assert-True -Condition (Test-Path -LiteralPath $SleepingId) -Message 'Cancellation fixture really started'
 $OwnedProcess = Get-Process -Id ([int][IO.File]::ReadAllText($SleepingId)) -ErrorAction SilentlyContinue
 Assert-True -Condition ($null -eq $OwnedProcess) -Message 'Exact direct process was terminated'
-Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('flood') -WorkingDirectory $FixtureRoot -OnProgress $Progress } -Reason 'routine_command_output_limit'
-Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('lines') -WorkingDirectory $FixtureRoot -OnProgress $Progress } -Reason 'routine_command_output_limit'
+Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('flood') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress) } -Reason 'routine_command_output_limit'
+Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $FixtureExe -Arguments @('lines') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress) } -Reason 'routine_command_output_limit'
 $ScriptFixture = Join-Path $FixtureRoot 'fixture script.ps1'
 [IO.File]::WriteAllText($ScriptFixture, 'param([string] $Value) [Console]::WriteLine($Value); [Console]::Error.WriteLine("script stderr"); exit 17')
-$Result = Invoke-RoutineCompileCommand -Executable $ScriptFixture -Arguments @("space ' quote " + [char]0x03A9) -WorkingDirectory $FixtureRoot -OnProgress $Progress
+$Result = Invoke-RoutineCompileCommand -Executable $ScriptFixture -Arguments @("space ' quote " + [char]0x03A9) -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress)
 Assert-True -Condition ($Result.exitCode -eq 17 -and $Result.output -contains "space ' quote $([char]0x03A9)" -and $Result.output -contains 'script stderr') -Message 'Encoded script arguments, stderr and exit preserved'
 $NamedFixture = Join-Path $FixtureRoot 'named script.ps1'
 [IO.File]::WriteAllText($NamedFixture, @'
@@ -85,23 +90,23 @@ param(
 exit 31
 '@)
 $NamedValue = "space ' double`" quote &|% " + [char]0x03A9
-$Result = Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target', 'AethelnOnlineClient', '-Platform', 'Win64', '-ActionLimit', '4', '-Value', $NamedValue) -WorkingDirectory $FixtureRoot -OnProgress $Progress
+$Result = Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target', 'AethelnOnlineClient', '-Platform', 'Win64', '-ActionLimit', '4', '-Value', $NamedValue) -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress)
 Assert-True -Condition ($Result.exitCode -eq 31 -and $Result.output -contains 'AethelnOnlineClient|Win64|4') -Message 'Mandatory ValidateSet parameters bind by name, not as positional dash tokens'
 Assert-True -Condition ($Result.output -contains $NamedValue -and $Result.output -contains 'named stderr') -Message 'Named values preserve quotes, Unicode, metacharacters and stderr'
-$Result = Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target', 'AethelnOnlineClient', '-Platform', 'Win64', '-ActionLimit', '4', '-Value', '-literal-dash-value') -WorkingDirectory $FixtureRoot -OnProgress $Progress
+$Result = Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target', 'AethelnOnlineClient', '-Platform', 'Win64', '-ActionLimit', '4', '-Value', '-literal-dash-value') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress)
 Assert-True -Condition ($Result.exitCode -eq 31 -and $Result.output -contains '-literal-dash-value') -Message 'A named parameter value may itself start with a dash'
-Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target') -WorkingDirectory $FixtureRoot -OnProgress $Progress } -Reason 'routine_command_arguments_invalid'
-Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target', 'AethelnOnlineClient', '-target', 'AethelnOnlineServer') -WorkingDirectory $FixtureRoot -OnProgress $Progress } -Reason 'routine_command_arguments_invalid'
-Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target:$(throw)') -WorkingDirectory $FixtureRoot -OnProgress $Progress } -Reason 'routine_command_arguments_invalid'
+Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress) } -Reason 'routine_command_arguments_invalid'
+Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target', 'AethelnOnlineClient', '-target', 'AethelnOnlineServer') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress) } -Reason 'routine_command_arguments_invalid'
+Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $NamedFixture -Arguments @('-Target:$(throw)') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress) } -Reason 'routine_command_arguments_invalid'
 $ThrowFixture = Join-Path $FixtureRoot 'throw.ps1'
 [IO.File]::WriteAllText($ThrowFixture, 'throw "fixture powershell failure"')
-$Result = Invoke-RoutineCompileCommand -Executable $ThrowFixture -Arguments @() -WorkingDirectory $FixtureRoot -OnProgress $Progress
+$Result = Invoke-RoutineCompileCommand -Executable $ThrowFixture -Arguments @() -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress)
 Assert-True -Condition ($Result.exitCode -ne 0 -and $Result.output -contains 'routine_command_script_failed') -Message 'PowerShell failure cannot become exit zero'
 $BatchFixture = Join-Path $FixtureRoot 'fixture batch.bat'
 [IO.File]::WriteAllText($BatchFixture, "@echo off`r`necho %~1`r`nexit /b 19`r`n")
-$Result = Invoke-RoutineCompileCommand -Executable $BatchFixture -Arguments @('two words') -WorkingDirectory $FixtureRoot -OnProgress $Progress
+$Result = Invoke-RoutineCompileCommand -Executable $BatchFixture -Arguments @('two words') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress)
 Assert-True -Condition ($Result.exitCode -eq 19 -and $Result.output -contains 'two words') -Message 'Batch spaces and native exit preserved'
-Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $BatchFixture -Arguments @('" & echo injected') -WorkingDirectory $FixtureRoot -OnProgress $Progress } -Reason 'routine_command_arguments_invalid'
+Assert-Rejected -Action { Invoke-RoutineCompileCommand -Executable $BatchFixture -Arguments @('" & echo injected') -WorkingDirectory $FixtureRoot -OnProgress (Get-FixtureProgress) } -Reason 'routine_command_arguments_invalid'
 $PipeId = Join-Path $FixtureRoot 'pipe.pid'
 $PipeClock = [Diagnostics.Stopwatch]::StartNew()
 $PipeProgress = { if ($PipeClock.Elapsed.TotalMilliseconds -gt 700) { throw 'fixture_pipe_deadline' } }.GetNewClosure()

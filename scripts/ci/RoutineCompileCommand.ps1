@@ -14,6 +14,7 @@ namespace Aetheln {
         private long total;
         private int overflow;
         private int stopped;
+        private bool started;
         private Process process;
         private Task<string> stdout;
         private Task<string> stderr;
@@ -47,6 +48,7 @@ namespace Aetheln {
                 StandardOutputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false)
             };
             if(!process.Start()) throw new InvalidOperationException("routine_command_start_failed");
+            started = true;
             stdout = Pump(process.StandardOutput.BaseStream);
             stderr = Pump(process.StandardError.BaseStream);
         }
@@ -70,7 +72,16 @@ namespace Aetheln {
             if(process == null) return;
             // Kill only our retained direct process handle. The outer Job Object
             // must independently terminate and verify any descendants.
-            try { if(!process.HasExited) process.Kill(); } catch(InvalidOperationException) { }
+            try {
+                if(started && !process.HasExited) {
+                    process.Kill();
+                    if(!process.WaitForExit(2000)) throw new InvalidOperationException("routine_command_cleanup_failed");
+                }
+            } catch(InvalidOperationException) {
+                // Kill races with natural exit. Suppress only that benign case;
+                // never return while the direct child is still running.
+                if(started && !process.HasExited) throw;
+            }
             finally {
                 try { if(stdout != null) process.StandardOutput.Close(); }
                 finally {
