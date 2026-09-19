@@ -116,6 +116,14 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `prototype-quality-workflow-tests` (`tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`) | Required | Workflow event, trust, dependency, artifact, checkout, and change-impact classification contracts. |
 | `runner-scheduling-policy-tests` (`tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1`) | Required | Bounded runner scheduling, milestone phase, and retained Compile workspace policy contracts. |
 | `compile-workspace-tests` (`tests/ci/Initialize-CompileWorkspace.Tests.ps1`) | Required | Exact output retention across revisions, scoped cleanup, unsafe-path rejection and preserved tracked source. Runs as a serial barrier. |
+| `engine-host-lease-tests` (`tests/ci/EngineRunnerHostLease.Tests.ps1`) | Required | Exclusive shared-host ownership, cleanup-bound release, stale-owner recovery, and deadline/resource propagation contracts. |
+| `managed-compile-registration-tests` (`tests/ci/ManagedCompileRegistration.Tests.ps1`) | Required | Bounded, hash-bound operator registration parsing and retained path-handle validation. |
+| `managed-compile-workspace-tests` (`tests/ci/ManagedCompileWorkspace.Tests.ps1`) | Required | Exact-revision retained-workspace synchronization, selected LFS materialization, input/path safety, and original-budget propagation. |
+| `managed-compile-integration-tests` (`tests/ci/ManagedCompileIntegration.Tests.ps1`) | Required | Supervisor, lease, managed-workspace, resource-proof, cleanup, and fail-closed report integration contracts. |
+| `routine-compile-deadline-tests` (`tests/ci/RoutineCompileDeadline.Tests.ps1`) | Required | Pre-checkout monotonic deadline construction, clock validation, grace, and non-resetting child-budget contracts. |
+| `routine-compile-resources-tests` (`tests/ci/RoutineCompileResources.Tests.ps1`) | Required | Physical-volume recovery floors, sustained memory pressure, sampling, and per-target action admission. |
+| `routine-compile-command-tests` (`tests/ci/RoutineCompileCommand.Tests.ps1`) | Required | Bounded asynchronous native/script command capture, literal argument binding, progress callbacks, and output limits. |
+| `routine-compile-gate-tests` (`tests/ci/RoutineCompileGate.Tests.ps1`) | Required | Actual managed entrypoint against disposable Git fixtures, native receipt validation, deadline rejection before build, and cleanup proof. |
 | `unreal-automation-tests` (`tests/ci/Invoke-UnrealAutomationTests.Tests.ps1`) | Required | Portable fixture regression tests for the headless Unreal runner's engine pin, discovery, repository-state, timeout, report validation, and fail-closed exit behavior. |
 | `psscriptanalyzer` (`Invoke-ScriptAnalyzer` over `scripts/` and `tests/`) | Advisory | PowerShell static analysis. Advisory because the module is not guaranteed on contributor machines (the check reports `skipped` when it is absent) and the pre-existing finding baseline has not been triaged into a gate. |
 
@@ -512,15 +520,30 @@ satisfy Issue #48's prototype exit decision, or authorize packaged smoke.
 
 ## Engine-Dependent Gates
 
-The Compile workflow step runs from the `compile/` checkout with this exact
-wrapper command and run-scoped evidence destination:
+The Compile workflow step runs from a fresh, exact-revision
+`compile-control-<run>-<attempt>/` checkout. The operator registers a separate
+retained compile workspace; `actions/checkout` never manages that directory.
+Immediately before that checkout, the workflow records UTC evidence and the
+host's monotonic timestamp in `AETHELN_COMPILE_STARTED_UTC` and
+`AETHELN_COMPILE_STARTED_TIMESTAMP`. A manual equivalent must capture both on
+the same host before staging; a launch-time replacement is not evidence that
+checkout time was charged. The command uses run-scoped evidence and explicit
+operator configuration:
 
 ```powershell
 $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
 powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
   -Mode Compile `
-  -RepositoryRoot '${{ github.workspace }}/compile' `
+  -RepositoryRoot '${{ github.workspace }}/compile-control-${{ github.run_id }}-${{ github.run_attempt }}' `
   -SourceRevision '${{ github.sha }}' `
+  -Repository '${{ github.repository }}' `
+  -RunnerName '${{ runner.name }}' `
+  -ManagedWorkspaceRoot $env:AETHELN_MANAGED_COMPILE_ROOT `
+  -ManagedWorkspaceRegistrationPath $env:AETHELN_MANAGED_COMPILE_REGISTRATION `
+  -ManagedWorkspaceRegistrationSha256 $env:AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256 `
+  -HostLeasePath $env:AETHELN_ENGINE_HOST_LEASE `
+  -CompileStartedUtc $env:AETHELN_COMPILE_STARTED_UTC `
+  -CompileStartedTimestamp $env:AETHELN_COMPILE_STARTED_TIMESTAMP `
   -ArchiveRoot (Join-Path $RunRoot 'archives') `
   -LogRoot (Join-Path $RunRoot 'logs') `
   -CompileTimeoutMinutes 30 `
@@ -582,24 +605,92 @@ be reused by the incremental compiler and are never deleted by this gate.
 The 2026-09-06 owner-directed CI redesign selects operational safety limits,
 not measured performance budgets. Portable CI has a 30-minute job cap.
 Compile has a 40-minute job cap and one 30-minute controlled-work deadline
-covering input discovery, both targets and diagnostics. The supervisor owns
+covering checkout, input discovery, both targets and diagnostics. The workflow
+captures UTC evidence and the host's monotonic timestamp before control checkout;
+the parent, lease acquisition, synchronization and build child retain that same
+anchor. Wall-clock adjustments cannot grant more time or prematurely expire the
+managed budget. The supervisor owns
 and stops its child tree on expiry; a timeout is failure, never compile
 success or clean-package evidence. No automatic timeout increase or cold-build
 retry is permitted.
 
-All self-hosted checkouts are siblings: `compile/` for trusted PR compilation
-and `milestone/` for the four scheduled phases. Every milestone checkout uses
+Issue #167 separates disposable control source, the operator-registered retained
+compile workspace, and `milestone/` for the four scheduled phases. A prepared
+linked worktree has a `.git` file, not a clone's `.git` directory; pointing
+`actions/checkout` at it can delete its prepared outputs even with cleaning
+disabled. The workflow therefore checks out only a fresh run/attempt control
+directory, with exact `github.sha`, LFS disabled, no persisted credentials and
+a five-minute checkout limit. Every milestone checkout uses
 `fetch-depth: 0` so the DDC repository identity from
 `git rev-list --max-parents=0 HEAD` resolves the actual root-commit set across
 source revisions instead of a shallow checkout boundary. This preserves the
 identity input; it does not prove cache reuse or a runtime improvement.
 Milestone checkout retains default cleaning and packaging retains `-clean`.
-It cannot erase Compile outputs. Compile alone uses `clean: false`, then
-`Initialize-CompileWorkspace.ps1` before LFS or engine use. That helper
-preserves tracked files and only the exact root `Binaries/` and
-`Intermediate/Build/` generated trees. It rejects unsafe paths and cleans
-other untracked/ignored debris; nested directories merely named Binaries are
-not exceptions. Repository status alone cannot inspect ignored inputs.
+It cannot erase Compile outputs. The managed path acquires the same exclusive
+host lease as preparation before synchronization and holds it until the owned
+child tree is proven quiescent. Registration validation, exact local Git
+import/non-force detached checkout, input validation and both native builds
+run inside the compile supervisor's original deadline. A missing or false
+cleanup proof never releases the lease; handles close but the held journal
+remains for explicit recovery. No implicit cleanup, reset, output copying or
+cold-workspace fallback is performed. `Initialize-CompileWorkspace.ps1` remains
+a separately tested legacy helper, not an automatic managed-workspace step.
+
+Before synchronization, routine admission resolves the control, target, engine,
+toolchain, evidence, temporary and Git-common roots to unique physical volumes.
+Each volume must retain more than its known allocations plus a 20 GiB recovery
+floor. Five-second monotonic samples stop on disk-floor failure or three
+consecutive samples below 2 GiB available RAM or commit headroom. Each target
+refreshes admission and limits local-only UBA actions to the minimum of four,
+physical cores, and the RAM/commit capacities after a 6 GiB reserve at 3 GiB per
+action. Invalid or unavailable measurements fail closed. The outer supervisor
+still bounds a stalled resource probe; sampling is not a replacement watchdog.
+
+Managed commands use asynchronous, bounded output capture with deadline/resource
+callbacks while running and draining streams. Each native build must produce a
+bounded, validated receipt and log, and its recorded exit must match the wrapper
+exit. A successful parent report requires unique passed client and server checks,
+the revision/registration-bound synchronized workspace proof, two healthy target
+admissions and verified child-tree cleanup. Missing, skipped, duplicate or
+contradictory success evidence fails the gate; a partial failure report remains
+available for diagnosis.
+
+Provision these repository variables explicitly; the workflow maps them into
+only the compile step, and none is a secret:
+
+| Variable | Meaning |
+| --- | --- |
+| `AETHELN_MANAGED_COMPILE_ROOT` | Absolute prepared local target directory |
+| `AETHELN_MANAGED_COMPILE_REGISTRATION` | Absolute operator-owned JSON registration outside `.git` |
+| `AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256` | Exact lowercase SHA-256 of that registration |
+| `AETHELN_ENGINE_HOST_LEASE` | The same absolute `.lease` file used by preparation |
+
+Registration schema 1 is closed: `schemaVersion`, `registrationId` (32 lowercase
+hex characters), `repository`, `targetRoot`, `gitCommonDirectory`, and
+`preparationReceiptSha256` (64 lowercase hex characters). Its bounded reader
+retains the file and directory handles and verifies the configured hash and
+repository/root tuple. The synchronizer independently verifies the actual Git
+common directory, exact control and resulting target revisions, clean index,
+tracked bytes, selected input collisions and unsafe paths. Operator registration
+authorizes the existing trusted Git contexts, including normal hooks/filters;
+it is not candidate self-certification or permission to adopt a new LFS endpoint.
+
+Selected compile-input LFS files must already contain the committed OID and
+size; missing hydration fails `managed_workspace_lfs_hydration_required`.
+Unrelated LFS assets may remain exact committed pointers. No endpoint fallback
+or network hydration is inferred. Changed LFS material requiring provisioning
+therefore remains an explicit recovery condition until bounded trusted hydration
+is operationally verified. Retained tracked text must preserve committed bytes;
+the prepared target uses byte-preserving checkout settings.
+
+Required serial fixtures cover `engine-host-lease-tests`,
+`managed-compile-registration-tests`, `managed-compile-workspace-tests`,
+`managed-compile-integration-tests`, `routine-compile-deadline-tests`,
+`routine-compile-resources-tests`, `routine-compile-command-tests`, and
+`routine-compile-gate-tests`. The latter includes the real managed entrypoint
+against disposable Git fixtures and a fake native build wrapper. These passes do not certify registration
+deployment or an actual hosted compile. Initial preparation measurements and
+future routine runs remain separate evidence.
 
 Retained outputs belong to the trusted owner-only runner workspace; their
 presence is not proof of provenance, identity or speedup. UBT remains
@@ -784,9 +875,11 @@ incremental compile policy.
   never uploaded by default. The owner may inspect or remove the per-run paths
   locally after evidence review.
 - The portable job's LFS fetch is limited to
-  `Content/Maps/StarterMap.umap`. Compile and the client/server packaging jobs
-  fetch `Content/**` so Unreal Content required by compilation, cooking, and
-  packaging is materialized. Provenance validation and scheduled smoke consume
+  `Content/Maps/StarterMap.umap`. Client/server packaging jobs fetch `Content/**`.
+  The compile control checkout does not fetch LFS; its registered retained
+  workspace must supply verified, materialized compile inputs. Missing selected
+  LFS inputs fail closed and require explicit provisioning. Provenance validation
+  and scheduled smoke consume
   the verified handoff payloads and do not fetch LFS Content.
 - Artifact retention periods remain an open decision and are not configured.
 

@@ -168,31 +168,49 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        working-directory: compile
+        working-directory: compile-control-${{ github.run_id }}-${{ github.run_attempt }}
     concurrency:
       group: aetheln-engine-runner
       queue: max
       cancel-in-progress: false
     steps:
+      - name: Capture routine compile deadline
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $StartedTimestamp = [Diagnostics.Stopwatch]::GetTimestamp()
+          $StartedUtc = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+          $Utf8 = New-Object System.Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "AETHELN_COMPILE_STARTED_UTC=$StartedUtc`nAETHELN_COMPILE_STARTED_TIMESTAMP=$StartedTimestamp`n", $Utf8)
       - uses: actions/checkout@v4
+        timeout-minutes: 5
         with:
           lfs: false
-          path: compile
-          clean: false
-      - name: Prepare exact retained compile outputs
-        shell: powershell
-        run: powershell -NoProfile -File scripts/ci/Initialize-CompileWorkspace.ps1 -RepositoryRoot '${{ github.workspace }}/compile'
-      - name: Fetch Unreal Content LFS objects
-        shell: powershell
-        run: git lfs pull --include "Content/**"
+          ref: ${{ github.sha }}
+          path: compile-control-${{ github.run_id }}-${{ github.run_attempt }}
+          persist-credentials: false
       - name: Compile supported client and server targets
         shell: powershell
+        env:
+          AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+          AETHELN_MANAGED_COMPILE_REGISTRATION: ${{ vars.AETHELN_MANAGED_COMPILE_REGISTRATION }}
+          AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256: ${{ vars.AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256 }}
+          AETHELN_ENGINE_HOST_LEASE: ${{ vars.AETHELN_ENGINE_HOST_LEASE }}
         run: |
           $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
           powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
             -Mode Compile `
-            -RepositoryRoot '${{ github.workspace }}/compile' `
+            -RepositoryRoot '${{ github.workspace }}/compile-control-${{ github.run_id }}-${{ github.run_attempt }}' `
             -SourceRevision '${{ github.sha }}' `
+            -Repository '${{ github.repository }}' `
+            -RunnerName '${{ runner.name }}' `
+            -ManagedWorkspaceRoot $env:AETHELN_MANAGED_COMPILE_ROOT `
+            -ManagedWorkspaceRegistrationPath $env:AETHELN_MANAGED_COMPILE_REGISTRATION `
+            -ManagedWorkspaceRegistrationSha256 $env:AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256 `
+            -HostLeasePath $env:AETHELN_ENGINE_HOST_LEASE `
+            -CompileStartedUtc $env:AETHELN_COMPILE_STARTED_UTC `
+            -CompileStartedTimestamp $env:AETHELN_COMPILE_STARTED_TIMESTAMP `
             -ArchiveRoot (Join-Path $RunRoot 'archives') `
             -LogRoot (Join-Path $RunRoot 'logs') `
             -CompileTimeoutMinutes 30 `
