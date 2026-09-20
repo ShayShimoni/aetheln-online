@@ -64,7 +64,8 @@ function Get-VerifierContractFailure {
 	$Configuration = $Normalized.Remove($Body.Index, $Body.Length).Insert(
 		$Body.Index, '__INSTRUCTIONS__'
 	)
-	if ($Configuration.Trim() -cne $ConfigurationTemplate.Trim()) {
+	$ExpectedConfiguration = $ConfigurationTemplate.Replace("`r`n", "`n").Trim()
+	if ($Configuration.Trim() -cne $ExpectedConfiguration) {
 		'isolation_configuration'
 	}
 	$InstructionLines = @($Body.Value -split "`n" | ForEach-Object { $_.Trim() })
