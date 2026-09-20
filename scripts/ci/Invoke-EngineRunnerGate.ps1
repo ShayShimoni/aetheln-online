@@ -1392,9 +1392,34 @@ function Invoke-PhaseChildWithinDeadline([string] $InvocationText) {
 	return Invoke-PhaseChildScript -InvocationText $InvocationText -TimeoutMinutes $RemainingMinutes
 }
 
-function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [string] $ExpectedRevision) {
+function Assert-ExactPhaseReportObject($Value, [string[]] $PropertyNames) {
+	if ($null -eq $Value -or $Value -isnot [System.Management.Automation.PSCustomObject]) { throw 'phase_report_invalid' }
+	$ActualNames = @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+	if ($ActualNames.Count -ne $PropertyNames.Count) { throw 'phase_report_invalid' }
+	for ($Index = 0; $Index -lt $PropertyNames.Count; $Index++) {
+		if ($ActualNames[$Index] -cne $PropertyNames[$Index]) { throw 'phase_report_invalid' }
+	}
+}
+
+function ConvertFrom-PhaseReportTimestamp($Value) {
+	if ($Value -isnot [string] -or $Value -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$') { throw 'phase_report_invalid' }
+	$Parsed = [DateTime]::MinValue
+	if (-not [DateTime]::TryParseExact($Value, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref] $Parsed) -or
+		$Parsed.Kind -ne [DateTimeKind]::Utc) { throw 'phase_report_invalid' }
+	return $Parsed
+}
+
+function Test-PhaseReportNumber($Value) {
+	if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [double] -and $Value -isnot [decimal]) { return $false }
+	$Number = [double] $Value
+	return -not [double]::IsNaN($Number) -and -not [double]::IsInfinity($Number) -and $Number -ge 0
+}
+
+function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [string] $ExpectedRevision, [string] $ExpectedRunnerName) {
 	# The child report is private input to the outer supervisor, not published
-	# evidence. Bound and validate it before any field can reach the final report.
+	# evidence. Bound and validate its exact producer schema before any field can
+	# reach the final report. A nominal result is not trusted merely because it
+	# contains all expected check names.
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'phase_report_invalid' }
 	$Item = Get-Item -LiteralPath $Path
 	if ($Item.Length -le 0 -or $Item.Length -gt 1MB) { throw 'phase_report_invalid' }
@@ -1402,25 +1427,116 @@ function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [str
 		$Utf8 = New-Object System.Text.UTF8Encoding($false, $true)
 		$Raw = [IO.File]::ReadAllText($Path, $Utf8)
 		Assert-UniqueJsonProperty $Raw 'phase_report_invalid'
-		$Report = $Raw | ConvertFrom-Json
+		$ConvertFromJson = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+		$Report = if ($ConvertFromJson.Parameters.ContainsKey('DateKind')) { $Raw | ConvertFrom-Json -DateKind String } else { $Raw | ConvertFrom-Json }
+		Assert-ExactPhaseReportObject $Report @(
+			'schemaVersion', 'mode', 'policy', 'revision', 'runnerName', 'startedUtc',
+			'finishedUtc', 'checks', 'summary', 'compileEvidence'
+		)
 		if ($Report.schemaVersion -isnot [int] -or $Report.schemaVersion -ne 1 -or
-			$Report.mode -cne $ExpectedMode -or $Report.revision -cne $ExpectedRevision -or
-			$Report.checks -isnot [array] -or $null -eq $Report.summary -or
-			$Report.PSObject.Properties.Name -ccontains 'supervisor') { throw 'phase_report_invalid' }
+			@('PackageClient', 'PackageServer', 'ValidateProvenance', 'SmokePhase') -cnotcontains $ExpectedMode -or
+			$Report.mode -isnot [string] -or $Report.mode -cne $ExpectedMode -or
+			$Report.policy -isnot [string] -or $Report.policy -cne 'clean-package-and-smoke' -or
+			$Report.revision -isnot [string] -or $Report.revision -cne $ExpectedRevision -or
+			$ExpectedRevision -cnotmatch '^[0-9a-fA-F]{40}$' -or $Report.checks -isnot [array]) { throw 'phase_report_invalid' }
+		$BoundRunnerName = if ($ExpectedRunnerName -match '^[^\\/:*?"<>|\x00-\x1f]{1,128}$') { $ExpectedRunnerName } else { $null }
+		if (($null -eq $BoundRunnerName -and $null -ne $Report.runnerName) -or
+			($null -ne $BoundRunnerName -and ($Report.runnerName -isnot [string] -or $Report.runnerName -cne $BoundRunnerName))) { throw 'phase_report_invalid' }
+		$StartedUtc = ConvertFrom-PhaseReportTimestamp $Report.startedUtc
+		$FinishedUtc = ConvertFrom-PhaseReportTimestamp $Report.finishedUtc
+		if ($FinishedUtc -lt $StartedUtc) { throw 'phase_report_invalid' }
+		if ($Report.checks.Count -lt 1 -or $Report.checks.Count -gt 128) { throw 'phase_report_invalid' }
 		$Counts = @{ total = $Report.checks.Count; passed = 0; failed = 0; skipped = 0; requiredFailed = 0 }
 		$Names = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 		$Statuses = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
 		foreach ($Check in $Report.checks) {
-			if ($Check.name -isnot [string] -or [string]::IsNullOrWhiteSpace($Check.name) -or -not $Names.Add($Check.name) -or
+			Assert-ExactPhaseReportObject $Check @('name', 'tier', 'status', 'durationSeconds', 'command', 'message')
+			if ($Check.name -isnot [string] -or $Check.name -cnotmatch '^[a-z0-9][a-z0-9-]{0,127}$' -or -not $Names.Add($Check.name) -or
 				$Check.tier -cne 'required' -or $Check.status -isnot [string] -or
-				@('passed', 'failed', 'skipped') -cnotcontains $Check.status) { throw 'phase_report_invalid' }
+				@('passed', 'failed', 'skipped') -cnotcontains $Check.status -or -not (Test-PhaseReportNumber $Check.durationSeconds) -or
+				$Check.command -isnot [string] -or [string]::IsNullOrWhiteSpace($Check.command) -or $Check.command.Length -gt 256 -or
+				$Check.message -isnot [string] -or [string]::IsNullOrWhiteSpace($Check.message) -or $Check.message.Length -gt 8192) { throw 'phase_report_invalid' }
 			$Statuses.Add($Check.name, $Check.status)
 			$Counts[$Check.status]++
 		}
 		$Counts.requiredFailed = $Counts.failed
+		Assert-ExactPhaseReportObject $Report.summary @('total', 'passed', 'failed', 'skipped', 'requiredFailed')
 		foreach ($Name in $Counts.Keys) {
 			$Value = $Report.summary.$Name
 			if (($Value -isnot [int] -and $Value -isnot [long]) -or [long] $Value -ne $Counts[$Name]) { throw 'phase_report_invalid' }
+		}
+
+		if ($null -eq $Report.compileEvidence) {
+			# The child can fail before compile-identity resolution if an input that
+			# the parent already checked disappears before the supervised re-entry.
+			# A successful child can never omit this canonical evidence object.
+			if ($Counts.requiredFailed -eq 0) { throw 'phase_report_invalid' }
+		} else {
+			Assert-ExactPhaseReportObject $Report.compileEvidence @('schemaVersion', 'identity', 'builds')
+			if ($Report.compileEvidence.schemaVersion -isnot [int] -or $Report.compileEvidence.schemaVersion -ne 1 -or
+				$Report.compileEvidence.builds -isnot [array]) { throw 'phase_report_invalid' }
+			$Identity = $Report.compileEvidence.identity
+			Assert-ExactPhaseReportObject $Identity @(
+				'engineGitRevision', 'engineGitRevisionStatus', 'engineBuildVersionSha256', 'engineBuildVersionSha256Status',
+				'linuxToolchainCompilerSha256', 'linuxToolchainCompilerSha256Status', 'runnerName', 'durationSeconds'
+			)
+			if ($Identity.engineGitRevisionStatus -isnot [string] -or @('verified', 'dirty', 'unavailable') -cnotcontains $Identity.engineGitRevisionStatus -or
+				($Identity.engineGitRevisionStatus -ceq 'unavailable' -and $null -ne $Identity.engineGitRevision) -or
+				($Identity.engineGitRevisionStatus -cne 'unavailable' -and ($Identity.engineGitRevision -isnot [string] -or $Identity.engineGitRevision -cnotmatch '^[0-9a-f]{40}$'))) { throw 'phase_report_invalid' }
+			foreach ($HashEvidence in @(
+				[ordered]@{ hash = $Identity.engineBuildVersionSha256; status = $Identity.engineBuildVersionSha256Status },
+				[ordered]@{ hash = $Identity.linuxToolchainCompilerSha256; status = $Identity.linuxToolchainCompilerSha256Status }
+			)) {
+				$Hash = $HashEvidence.hash
+				$Status = $HashEvidence.status
+				if ($Status -isnot [string] -or @('verified', 'unavailable') -cnotcontains $Status -or
+					($Status -ceq 'unavailable' -and $null -ne $Hash) -or
+					($Status -ceq 'verified' -and ($Hash -isnot [string] -or $Hash -cnotmatch '^[0-9a-f]{64}$'))) { throw 'phase_report_invalid' }
+			}
+			if (($null -eq $BoundRunnerName -and $null -ne $Identity.runnerName) -or
+				($null -ne $BoundRunnerName -and ($Identity.runnerName -isnot [string] -or $Identity.runnerName -cne $BoundRunnerName)) -or
+				-not (Test-PhaseReportNumber $Identity.durationSeconds)) { throw 'phase_report_invalid' }
+
+			$Builds = @($Report.compileEvidence.builds)
+			$ExpectedBuildCheck = if ($ExpectedMode -eq 'PackageClient') { 'scheduled-client-package' } elseif ($ExpectedMode -eq 'PackageServer') { 'scheduled-server-package' } else { $null }
+			$ExpectedBuildTarget = if ($ExpectedMode -eq 'PackageClient') { 'AethelnOnlineClient' } elseif ($ExpectedMode -eq 'PackageServer') { 'AethelnOnlineServer' } else { $null }
+			$ExpectedBuildPlatform = if ($ExpectedMode -eq 'PackageClient') { 'Win64' } elseif ($ExpectedMode -eq 'PackageServer') { 'Linux' } else { $null }
+			if ($null -eq $ExpectedBuildCheck -and $Builds.Count -ne 0) { throw 'phase_report_invalid' }
+			if ($null -ne $ExpectedBuildCheck -and ($Builds.Count -gt 1 -or ($Counts.requiredFailed -eq 0 -and $Builds.Count -ne 1))) { throw 'phase_report_invalid' }
+			foreach ($Build in $Builds) {
+				Assert-ExactPhaseReportObject $Build @(
+					'check', 'target', 'platform', 'configuration', 'intermediateBuildDirectoryPresentBeforeRun',
+					'makefilePresentBeforeRun', 'outputState', 'lastObservedAction', 'observedTotalActions',
+					'actionCounterState', 'plannedActionCount', 'observedTargetNames', 'makefileObservation',
+					'makefileReason', 'makefileCreationCount', 'upToDateObserved', 'executorSummaryCount'
+				)
+				if ($Build.check -isnot [string] -or $Build.check -cne $ExpectedBuildCheck -or
+					$Build.target -isnot [string] -or $Build.target -cne $ExpectedBuildTarget -or
+					$Build.platform -isnot [string] -or $Build.platform -cne $ExpectedBuildPlatform -or
+					$Build.configuration -isnot [string] -or $Build.configuration -cne 'Development' -or
+					$Build.intermediateBuildDirectoryPresentBeforeRun -isnot [bool] -or $Build.makefilePresentBeforeRun -isnot [bool] -or
+					$Build.outputState -isnot [string] -or @('captured', 'unavailable') -cnotcontains $Build.outputState -or
+					$Build.actionCounterState -isnot [string] -or @('observed', 'not_observed') -cnotcontains $Build.actionCounterState -or
+					$Build.makefileObservation -isnot [string] -or @('created', 'not_observed') -cnotcontains $Build.makefileObservation -or
+					$Build.upToDateObserved -isnot [bool]) { throw 'phase_report_invalid' }
+				foreach ($IntegerField in @('makefileCreationCount', 'executorSummaryCount')) {
+					if (($Build.$IntegerField -isnot [int] -and $Build.$IntegerField -isnot [long]) -or [long] $Build.$IntegerField -lt 0) { throw 'phase_report_invalid' }
+				}
+				if ($Build.actionCounterState -ceq 'observed') {
+					if (($Build.lastObservedAction -isnot [int] -and $Build.lastObservedAction -isnot [long]) -or
+						($Build.observedTotalActions -isnot [int] -and $Build.observedTotalActions -isnot [long]) -or
+						[long] $Build.lastObservedAction -lt 1 -or [long] $Build.lastObservedAction -gt [long] $Build.observedTotalActions -or
+						[long] $Build.observedTotalActions -gt 10000000) { throw 'phase_report_invalid' }
+				} elseif ($null -ne $Build.lastObservedAction -or $null -ne $Build.observedTotalActions) { throw 'phase_report_invalid' }
+				if ($null -ne $Build.plannedActionCount -and (($Build.plannedActionCount -isnot [int] -and $Build.plannedActionCount -isnot [long]) -or
+					[long] $Build.plannedActionCount -lt 0 -or [long] $Build.plannedActionCount -gt 10000000)) { throw 'phase_report_invalid' }
+				if ($null -ne $Build.observedTargetNames -and ($Build.observedTargetNames -isnot [string] -or
+					$Build.observedTargetNames -cnotmatch '^(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other)(?:,(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other))*$')) { throw 'phase_report_invalid' }
+				if ($Build.makefileObservation -ceq 'created') {
+					if ($Build.makefileReason -isnot [string] -or $Build.makefileReason -cnotmatch '^[a-z0-9_]{1,64}$' -or [long] $Build.makefileCreationCount -lt 1) { throw 'phase_report_invalid' }
+				} elseif ($null -ne $Build.makefileReason -or [long] $Build.makefileCreationCount -ne 0) { throw 'phase_report_invalid' }
+				if (-not $Statuses.ContainsKey($Build.check)) { throw 'phase_report_invalid' }
+			}
 		}
 		if ($Counts.requiredFailed -eq 0) {
 			# A zero exit may be relayed only when the child reached every required
@@ -1918,7 +2034,7 @@ try {
 			throw $HardReason
 		}
 		try {
-			$ChildReport = Read-PhaseSupervisorReport -Path ([string] $SupervisorResult.childReportPath) -ExpectedMode $Mode -ExpectedRevision $SourceRevision
+			$ChildReport = Read-PhaseSupervisorReport -Path ([string] $SupervisorResult.childReportPath) -ExpectedMode $Mode -ExpectedRevision $SourceRevision -ExpectedRunnerName $RunnerName
 			$ChildFailed = [long] $ChildReport.summary.requiredFailed -gt 0
 			if (($SupervisorResult.exitCode -eq 0 -and $ChildFailed) -or ($SupervisorResult.exitCode -ne 0 -and -not $ChildFailed)) { throw 'phase_report_invalid' }
 			$script:RelayedReport = $ChildReport

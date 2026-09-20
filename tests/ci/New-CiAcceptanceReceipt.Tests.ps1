@@ -40,7 +40,7 @@ function Get-TestActionManifest {
 }
 
 function Get-TestReceiptInput {
-	param([string] $EvidenceSha256, [long] $EvidenceSize, [string] $PortableSha256, [long] $PortableSize)
+	param([string] $VisualSha256, [long] $VisualSize)
 	return [pscustomobject][ordered]@{
 		repository = [pscustomobject][ordered]@{ fullName = 'ShayShimoni/aetheln-online' }
 		event = [pscustomobject][ordered]@{ kind = 'pull_request'; classification = 'pull_request_acceptance'; actor = 'owner'; triggeringActor = 'owner' }
@@ -50,19 +50,39 @@ function Get-TestReceiptInput {
 		policy = [pscustomobject][ordered]@{ version = 'shadow-v1'; digest = ('1' * 64) }
 		actions = Get-TestActionManifest
 		run = [pscustomobject][ordered]@{ id = '35533038331'; attempt = 2 }
-		selection = [pscustomobject][ordered]@{ checks = @('native-client-server-compile', 'portable') }
+		selection = [pscustomobject][ordered]@{ checks = @('visual-package') }
 		results = [pscustomobject][ordered]@{ checks = @(
 			[pscustomobject][ordered]@{
-				id = 'native-client-server-compile'; jobName = 'trusted-candidate-compile'; conclusion = 'success'; nativeExitCode = 0
-				infrastructureFailure = $null; terminal = $true; cleanupVerified = $true
-				evidence = @([pscustomobject][ordered]@{ name = 'native/report.json'; sha256 = $EvidenceSha256; sizeBytes = $EvidenceSize })
-			},
-			[pscustomobject][ordered]@{
-				id = 'portable'; jobName = 'trusted-candidate-compile'; conclusion = 'success'; nativeExitCode = $null
+				id = 'visual-package'; jobName = 'visual-package-proof'; conclusion = 'success'; nativeExitCode = $null
 				infrastructureFailure = $null; terminal = $true; cleanupVerified = $null
-				evidence = @([pscustomobject][ordered]@{ name = 'portable/report.json'; sha256 = $PortableSha256; sizeBytes = $PortableSize })
+				evidence = @([pscustomobject][ordered]@{ name = 'visual-package-report.json'; sha256 = $VisualSha256; sizeBytes = $VisualSize })
 			}
 		) }
+	}
+}
+
+function New-TestVisualReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture.')]
+	param([string] $Conclusion = 'success', [string] $Revision = ('c' * 40))
+	$Output = @('stdout: fixture pass')
+	$CapturedBytes = $Utf8.GetByteCount($Output[0])
+	$Results = @(
+		[pscustomobject][ordered]@{
+			id='visual-package'; path='.\visuals\Test-VisualPackage.ps1'; startedUtc='2026-09-20T20:00:00.0000000Z'; finishedUtc='2026-09-20T20:00:01.0000000Z'
+			nativeExitCode=0; conclusion='success'
+			capture=[pscustomobject][ordered]@{ maxLineUtf8Bytes=4096; maxLines=200; maxAggregateUtf8Bytes=131072; observedLineCount=1; capturedLineCount=1; capturedUtf8Bytes=$CapturedBytes; truncatedLineCount=0; droppedLineCount=0 }
+			output=$Output
+		},
+		[pscustomobject][ordered]@{
+			id='visual-package-regressions'; path='.\visuals\tests\Test-VisualPackageValidation.ps1'; startedUtc='2026-09-20T20:00:01.0000000Z'; finishedUtc='2026-09-20T20:00:02.0000000Z'
+			nativeExitCode=0; conclusion='success'
+			capture=[pscustomobject][ordered]@{ maxLineUtf8Bytes=4096; maxLines=200; maxAggregateUtf8Bytes=131072; observedLineCount=1; capturedLineCount=1; capturedUtf8Bytes=$CapturedBytes; truncatedLineCount=0; droppedLineCount=0 }
+			output=$Output
+		}
+	)
+	return [pscustomobject][ordered]@{
+		schemaVersion='aetheln.visual-package-report/v1'; repository='ShayShimoni/aetheln-online'; revision=$Revision
+		run=[pscustomobject][ordered]@{ id='35533038331'; attempt=2 }; results=$Results; conclusion=$Conclusion
 	}
 }
 
@@ -71,17 +91,12 @@ function Write-Input($Value, [string] $Path = $InputPath) {
 }
 
 try {
-	[void] (New-Item -ItemType Directory -Path (Join-Path $EvidenceRoot 'native') -Force)
-	$EvidencePath = Join-Path $EvidenceRoot 'native\report.json'
-	[IO.File]::WriteAllText($EvidencePath, '{"ok":true}', $Utf8)
-	$EvidenceSize = (Get-Item -LiteralPath $EvidencePath).Length
-	$EvidenceSha256 = Get-Sha256 $EvidencePath
-	[void] (New-Item -ItemType Directory -Path (Join-Path $EvidenceRoot 'portable') -Force)
-	$PortablePath = Join-Path $EvidenceRoot 'portable\report.json'
-	[IO.File]::WriteAllText($PortablePath, '{"requiredFailed":0}', $Utf8)
-	$PortableSize = (Get-Item -LiteralPath $PortablePath).Length
-	$PortableSha256 = Get-Sha256 $PortablePath
-	$ReceiptInput = Get-TestReceiptInput -EvidenceSha256 $EvidenceSha256 -EvidenceSize $EvidenceSize -PortableSha256 $PortableSha256 -PortableSize $PortableSize
+	[void] (New-Item -ItemType Directory -Path $EvidenceRoot -Force)
+	$VisualPath = Join-Path $EvidenceRoot 'visual-package-report.json'
+	[IO.File]::WriteAllText($VisualPath, ((New-TestVisualReport | ConvertTo-Json -Depth 10 -Compress) + "`n"), $Utf8)
+	$VisualSize = (Get-Item -LiteralPath $VisualPath).Length
+	$VisualSha256 = Get-Sha256 $VisualPath
+	$ReceiptInput = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
 	Write-Input $ReceiptInput
 
 	$Receipt = New-CiAcceptanceReceipt -InputPath $InputPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath
@@ -95,7 +110,7 @@ try {
 	Assert-True (($Parsed.actions.PSObject.Properties.Name -join ',') -ceq 'manifestSha256,items' -and ($Parsed.actions.items[0].PSObject.Properties.Name -join ',') -ceq 'uses,revision') 'Action schema must bind the deterministic full-SHA pin manifest.'
 	Assert-True (($Parsed.results.checks[0].PSObject.Properties.Name -join ',') -ceq 'id,jobName,conclusion,nativeExitCode,infrastructureFailure,terminal,cleanupVerified,evidence') 'Result schema must bind native, infrastructure, terminal, cleanup, and evidence outcomes.'
 	Assert-True (-not $Parsed.acceptance.authoritative -and -not $Parsed.acceptance.grantsAcceptance -and $Parsed.acceptance.shadow) 'Package 3A receipts must remain shadow-only and non-authoritative.'
-	Assert-True ($Parsed.acceptance.terminal -and -not $Parsed.acceptance.infrastructureFailure -and $Parsed.acceptance.cleanupVerified) 'Aggregate outcome should derive successful terminal infrastructure and applicable cleanup.'
+	Assert-True ($Parsed.acceptance.terminal -and -not $Parsed.acceptance.infrastructureFailure -and $null -eq $Parsed.acceptance.cleanupVerified) 'A visual-only receipt should record terminal success without claiming native cleanup.'
 	Assert-True ($Receipt.run.id -ceq '35533038331' -and $Receipt.run.attempt -eq 2) 'Run and attempt identity must round-trip exactly.'
 
 	# The consumer must accept the producer's exact boundary output. This is a
@@ -107,17 +122,16 @@ try {
 		actions = $Parsed.actions; controller = $Parsed.controller; policy = $Parsed.policy; run = $Parsed.run
 	}
 	$ConsumerRequirement = [pscustomobject][ordered]@{
-		key = 'trusted-compile'; jobName = 'trusted-candidate-compile'; selected = $true
-		artifactName = 'ci-receipt-trusted-compile-35533038331-2'; checks = @('native-client-server-compile','portable')
+		key = 'visual'; jobName = 'visual-package-proof'; selected = $true
+		artifactName = 'ci-receipt-visual-35533038331-2'; checks = @('visual-package')
 	}
 	$ConsumerArchive = [pscustomobject][ordered]@{ entries = @(
 		[pscustomobject][ordered]@{ name='ci-acceptance-receipt.json'; bytes=$Bytes; sizeBytes=[long]$Bytes.Length; sha256=(Get-AcceptanceSha256 $Bytes) },
-		[pscustomobject][ordered]@{ name='native/report.json'; bytes=[IO.File]::ReadAllBytes($EvidencePath); sizeBytes=[long]$EvidenceSize; sha256=$EvidenceSha256 },
-		[pscustomobject][ordered]@{ name='portable/report.json'; bytes=[IO.File]::ReadAllBytes($PortablePath); sizeBytes=[long]$PortableSize; sha256=$PortableSha256 }
+		[pscustomobject][ordered]@{ name='visual-package-report.json'; bytes=[IO.File]::ReadAllBytes($VisualPath); sizeBytes=[long]$VisualSize; sha256=$VisualSha256 }
 	) }
 	Assert-AcceptanceContext $ConsumerContext
 	$ConsumerResultEnvelope = @(Assert-CiAcceptanceReceipt -Receipt $Parsed -Context $ConsumerContext -Requirement $ConsumerRequirement -Archive $ConsumerArchive)
-	Assert-True ($ConsumerResultEnvelope.Count -eq 1 -and @($ConsumerResultEnvelope[0]).Count -eq 2) 'The aggregate consumer must accept the producer receipt and exact raw evidence at their shared boundary.'
+	Assert-True ($ConsumerResultEnvelope.Count -eq 1 -and @($ConsumerResultEnvelope[0]).Count -eq 1) 'The aggregate consumer must accept the producer receipt and exact semantic evidence at their shared boundary.'
 	$OutputPath = Join-Path $FixtureRoot 'ci-acceptance-receipt.json'
 
 	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $InputPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_exists'
@@ -145,44 +159,90 @@ try {
 		@{ name='run-id-overflow'; action={ param($x) $x.run.id = '99999999999999999999' } },
 		@{ name='uppercase-policy'; action={ param($x) $x.policy.version = 'Shadow-v1' } },
 		@{ name='invalid-actor'; action={ param($x) $x.event.triggeringActor = 'bad actor' } },
-		@{ name='duplicate-selection'; action={ param($x) $x.selection.checks = @('portable','portable') } },
-		@{ name='unexpected-result'; action={ param($x) $x.results.checks[1].id = 'visual-package' } },
-		@{ name='mixed-producer-jobs'; action={ param($x) $x.results.checks[1].jobName = 'quality-gates' } },
-		@{ name='failed-result'; action={ param($x) $x.results.checks[1].conclusion = 'failure' } },
-		@{ name='nonterminal'; action={ param($x) $x.results.checks[1].terminal = $false } },
+		@{ name='duplicate-selection'; action={ param($x) $x.selection.checks = @('visual-package','visual-package') } },
+		@{ name='unexpected-result'; action={ param($x) $x.results.checks[0].id = 'portable' } },
+		@{ name='invalid-producer-job'; action={ param($x) $x.results.checks[0].jobName = '' } },
+		@{ name='failed-result'; action={ param($x) $x.results.checks[0].conclusion = 'failure' } },
+		@{ name='nonterminal'; action={ param($x) $x.results.checks[0].terminal = $false } },
 		@{ name='native-summary-lie'; action={ param($x) $x.results.checks[0].nativeExitCode = 7 } },
 		@{ name='infrastructure-summary-lie'; action={ param($x) $x.results.checks[0].infrastructureFailure = 'runner_lost' } },
 		@{ name='cleanup-summary-lie'; action={ param($x) $x.results.checks[0].cleanupVerified = $false } },
 		@{ name='evidence-digest'; action={ param($x) $x.results.checks[0].evidence[0].sha256 = ('0' * 64) } },
 		@{ name='evidence-size'; action={ param($x) $x.results.checks[0].evidence[0].sizeBytes++ } },
 		@{ name='evidence-traversal'; action={ param($x) $x.results.checks[0].evidence[0].name = '../report.json' } },
-		@{ name='evidence-absolute'; action={ param($x) $x.results.checks[0].evidence[0].name = 'C:/report.json' } },
-		@{ name='evidence-per-result-limit'; action={ param($x) $x.results.checks[0].evidence = @(1..17 | ForEach-Object { [pscustomobject][ordered]@{name=('native/proof-{0:D2}.json' -f $_);sha256=$EvidenceSha256;sizeBytes=$EvidenceSize} }) } },
-		@{ name='evidence-case-collision'; action={ param($x) $x.results.checks[1].evidence = @([pscustomobject][ordered]@{name='NATIVE/REPORT.JSON';sha256=$EvidenceSha256;sizeBytes=$EvidenceSize}) } }
+		@{ name='evidence-absolute'; action={ param($x) $x.results.checks[0].evidence[0].name = 'C:/report.json' } }
 	)) {
-		$Candidate = Get-TestReceiptInput -EvidenceSha256 $EvidenceSha256 -EvidenceSize $EvidenceSize -PortableSha256 $PortableSha256 -PortableSize $PortableSize
+		$Candidate = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
 		& $Mutation.action $Candidate
 		$Path = Join-Path $FixtureRoot ($Mutation.name + '.json'); Write-Input $Candidate $Path
 		Assert-Rejected { New-CiAcceptanceReceipt -InputPath $Path -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_invalid'
 		Assert-True (-not (Test-Path -LiteralPath $OutputPath)) "Invalid case '$($Mutation.name)' must not publish output."
 	}
 
-	$Missing = Get-TestReceiptInput -EvidenceSha256 $EvidenceSha256 -EvidenceSize $EvidenceSize -PortableSha256 $PortableSha256 -PortableSize $PortableSize; $Missing.results.checks[1].PSObject.Properties.Remove('terminal')
+	$Missing = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize; $Missing.results.checks[0].PSObject.Properties.Remove('terminal')
 	$MissingPath = Join-Path $FixtureRoot 'missing.json'; Write-Input $Missing $MissingPath
 	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $MissingPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_invalid'
 
 	$OversizePath = Join-Path $FixtureRoot 'oversize.json'; [IO.File]::WriteAllBytes($OversizePath, [byte[]]::new(65537))
 	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $OversizePath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_input_limit'
 
-	$OversizeEvidencePath = Join-Path $EvidenceRoot 'portable\oversize.bin'
+	$OversizeEvidenceRoot = Join-Path $FixtureRoot 'oversize-evidence-root'; [void] (New-Item -ItemType Directory -Path $OversizeEvidenceRoot)
+	$OversizeEvidencePath = Join-Path $OversizeEvidenceRoot 'visual-package-report.json'
 	$OversizeEvidenceStream = New-Object IO.FileStream($OversizeEvidencePath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
 	try { $OversizeEvidenceStream.SetLength(4MB + 1) } finally { $OversizeEvidenceStream.Dispose() }
-	$OversizeEvidence = Get-TestReceiptInput -EvidenceSha256 $EvidenceSha256 -EvidenceSize $EvidenceSize -PortableSha256 (Get-Sha256 $OversizeEvidencePath) -PortableSize (4MB + 1)
-	$OversizeEvidence.results.checks[1].evidence[0].name = 'portable/oversize.bin'
+	$OversizeEvidence = Get-TestReceiptInput -VisualSha256 (Get-Sha256 $OversizeEvidencePath) -VisualSize (4MB + 1)
 	$OversizeEvidenceInput = Join-Path $FixtureRoot 'oversize-evidence.json'; Write-Input $OversizeEvidence $OversizeEvidenceInput
-	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $OversizeEvidenceInput -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_invalid'
+	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $OversizeEvidenceInput -EvidenceRoot $OversizeEvidenceRoot -OutputPath $OutputPath } 'receipt_invalid'
 
-	$Push = Get-TestReceiptInput -EvidenceSha256 $EvidenceSha256 -EvidenceSize $EvidenceSize -PortableSha256 $PortableSha256 -PortableSize $PortableSize
+	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','native-client-server-compile','portable','unreal-editor-automation')) {
+		$Unsupported = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
+		$Unsupported.selection.checks[0] = $UnsupportedId; $Unsupported.results.checks[0].id = $UnsupportedId
+		if ($UnsupportedId -in @('clean-package-provenance-smoke','native-client-server-compile')) { $Unsupported.results.checks[0].nativeExitCode=0; $Unsupported.results.checks[0].cleanupVerified=$true }
+		$UnsupportedPath = Join-Path $FixtureRoot ('unsupported-' + $UnsupportedId + '.json'); Write-Input $Unsupported $UnsupportedPath
+		Assert-Rejected { New-CiAcceptanceReceipt -InputPath $UnsupportedPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } ('receipt_semantic_evidence_unsupported:' + $UnsupportedId)
+	}
+	$VisualSummaryLie = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
+	$VisualSummaryLie.results.checks[0].nativeExitCode = 0
+	$VisualSummaryLiePath = Join-Path $FixtureRoot 'visual-native-summary-lie.json'; Write-Input $VisualSummaryLie $VisualSummaryLiePath
+	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $VisualSummaryLiePath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_semantic_evidence_invalid:visual-package'
+
+	$WrongNamePath = Join-Path $EvidenceRoot 'wrong-visual-report.json'
+	[IO.File]::WriteAllBytes($WrongNamePath, [IO.File]::ReadAllBytes($VisualPath))
+	foreach ($SemanticCase in @(
+		@{ name='report-failure'; reason='receipt_semantic_evidence_failure:visual-package'; mutate={ param($r) $r.conclusion='failure' } },
+		@{ name='validator-failure'; reason='receipt_semantic_evidence_failure:visual-package'; mutate={ param($r) $r.results[0].nativeExitCode=7; $r.results[0].conclusion='failure' } },
+		@{ name='wrong-repository'; reason='receipt_semantic_evidence_invalid:visual-package'; mutate={ param($r) $r.repository='evil/repository' } },
+		@{ name='wrong-revision'; reason='receipt_semantic_evidence_invalid:visual-package'; mutate={ param($r) $r.revision=('9' * 40) } },
+		@{ name='wrong-run'; reason='receipt_semantic_evidence_invalid:visual-package'; mutate={ param($r) $r.run.id='9002' } },
+		@{ name='duplicate-validator'; reason='receipt_semantic_evidence_failure:visual-package'; mutate={ param($r) $r.results[1].id='visual-package' } },
+		@{ name='capture-count-lie'; reason='receipt_semantic_evidence_invalid:visual-package'; mutate={ param($r) $r.results[0].capture.capturedLineCount=0 } },
+		@{ name='capture-byte-lie'; reason='receipt_semantic_evidence_invalid:visual-package'; mutate={ param($r) $r.results[0].capture.capturedUtf8Bytes++ } }
+	)) {
+		$SemanticReport = New-TestVisualReport
+		& $SemanticCase.mutate $SemanticReport
+		[IO.File]::WriteAllText($VisualPath, (($SemanticReport | ConvertTo-Json -Depth 10 -Compress) + "`n"), $Utf8)
+		$SemanticSize = (Get-Item -LiteralPath $VisualPath).Length
+		$SemanticDigest = Get-Sha256 $VisualPath
+		$SemanticInput = Get-TestReceiptInput -VisualSha256 $SemanticDigest -VisualSize $SemanticSize
+		$SemanticInputPath = Join-Path $FixtureRoot ($SemanticCase.name + '.json'); Write-Input $SemanticInput $SemanticInputPath
+		Assert-Rejected { New-CiAcceptanceReceipt -InputPath $SemanticInputPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } $SemanticCase.reason
+		Assert-True (-not (Test-Path -LiteralPath $OutputPath)) "Semantic contradiction '$($SemanticCase.name)' must not publish a receipt."
+	}
+
+	[IO.File]::WriteAllText($VisualPath, ((New-TestVisualReport | ConvertTo-Json -Depth 10 -Compress) + "`n"), $Utf8)
+	$VisualSize = (Get-Item -LiteralPath $VisualPath).Length; $VisualSha256 = Get-Sha256 $VisualPath
+	$MissingSemantic = Get-TestReceiptInput -VisualSha256 (Get-Sha256 $WrongNamePath) -VisualSize ((Get-Item $WrongNamePath).Length)
+	$MissingSemantic.results.checks[0].evidence[0].name = 'wrong-visual-report.json'
+	$MissingSemanticPath = Join-Path $FixtureRoot 'missing-semantic.json'; Write-Input $MissingSemantic $MissingSemanticPath
+	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $MissingSemanticPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_semantic_evidence_missing:visual-package'
+	$DuplicateSemantic = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
+	$DuplicateSemantic.results.checks[0].evidence = @($DuplicateSemantic.results.checks[0].evidence[0], $DuplicateSemantic.results.checks[0].evidence[0])
+	$DuplicateSemanticPath = Join-Path $FixtureRoot 'duplicate-semantic.json'; Write-Input $DuplicateSemantic $DuplicateSemanticPath
+	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $DuplicateSemanticPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_semantic_evidence_duplicate:visual-package'
+
+	[IO.File]::WriteAllText($VisualPath, ((New-TestVisualReport -Revision ('b' * 40) | ConvertTo-Json -Depth 10 -Compress) + "`n"), $Utf8)
+	$VisualSize = (Get-Item -LiteralPath $VisualPath).Length; $VisualSha256 = Get-Sha256 $VisualPath
+	$Push = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
 	$Push.event.kind = 'push'; $Push.event.classification = 'post_merge_hosted_health'
 	$Push.event.actor = 'github-actions[bot]'; $Push.event.triggeringActor = 'github-actions[bot]'
 	$Push.source.testedRevision = $Push.source.headRevision; $Push.workflow.revision = $Push.source.headRevision

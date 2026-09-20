@@ -80,7 +80,7 @@ function Test-PhaseSupervisorPublicationContract {
 	foreach ($Contract in @('Read-PhaseSupervisorReport', 'phase_report_invalid', 'childExitCode = $SupervisorResult.exitCode', 'cleanupVerified = $OuterCleanupVerified', 'RandomNumberGenerator', 'AETHELN_PHASE_SUPERVISOR_NONCE', 'AETHELN_PHASE_SUPERVISOR_PARENT_PROCESS_ID', 'AETHELN_PHASE_SUPERVISOR_PARENT_START_TICKS')) {
 		Assert-True ($Source.Contains($Contract)) "The outer supervisor publication contract must contain '$Contract'."
 	}
-	foreach ($Name in @('Assert-UniqueJsonProperty', 'Read-PhaseSupervisorReport', 'Test-PhaseSupervisorAuthentication')) {
+	foreach ($Name in @('Assert-UniqueJsonProperty', 'Assert-ExactPhaseReportObject', 'ConvertFrom-PhaseReportTimestamp', 'Test-PhaseReportNumber', 'Read-PhaseSupervisorReport', 'Test-PhaseSupervisorAuthentication')) {
 		$Function = @($Ast.FindAll({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq $Name }, $true))
 		Assert-True ($Function.Count -eq 1) "The gate must have exactly one $Name function."
 		. ([scriptblock]::Create($Function[0].Extent.Text))
@@ -112,17 +112,112 @@ function Test-PhaseSupervisorPublicationContract {
 		}
 		foreach ($ExpectedMode in $ModeSuccessChecks.Keys) {
 			$ExpectedChecks = @($ModeSuccessChecks[$ExpectedMode])
+			$ExpectedBuilds = @()
+			if ($ExpectedMode -in @('PackageClient', 'PackageServer')) {
+				$IsClient = $ExpectedMode -eq 'PackageClient'
+				$ExpectedBuilds = @([ordered]@{
+					check = $(if ($IsClient) { 'scheduled-client-package' } else { 'scheduled-server-package' })
+					target = $(if ($IsClient) { 'AethelnOnlineClient' } else { 'AethelnOnlineServer' })
+					platform = $(if ($IsClient) { 'Win64' } else { 'Linux' })
+					configuration = 'Development'
+					intermediateBuildDirectoryPresentBeforeRun = $false
+					makefilePresentBeforeRun = $false
+					outputState = 'captured'
+					lastObservedAction = $null
+					observedTotalActions = $null
+					actionCounterState = 'not_observed'
+					plannedActionCount = $null
+					observedTargetNames = $null
+					makefileObservation = 'not_observed'
+					makefileReason = $null
+					makefileCreationCount = 0
+					upToDateObserved = $false
+					executorSummaryCount = 0
+				})
+			}
 			$ValidPath = Join-Path $ReportRoot ($ExpectedMode + '-valid.json')
-			$Valid = [ordered]@{
+			$ValidObject = [ordered]@{
 				schemaVersion = 1; mode = $ExpectedMode; policy = 'clean-package-and-smoke'; revision = ('a' * 40)
-				runnerName = 'fixture'; startedUtc = '2026-01-01T00:00:00Z'; finishedUtc = '2026-01-01T00:00:01Z'
+				runnerName = 'fixture'; startedUtc = '2026-01-01T00:00:00.0000000Z'; finishedUtc = '2026-01-01T00:00:01.0000000Z'
 				checks = @($ExpectedChecks | ForEach-Object { [ordered]@{ name = $_; tier = 'required'; status = 'passed'; durationSeconds = 0; command = 'fixture'; message = 'passed' } })
 				summary = [ordered]@{ total = $ExpectedChecks.Count; passed = $ExpectedChecks.Count; failed = 0; skipped = 0; requiredFailed = 0 }
-				compileEvidence = $null
-			} | ConvertTo-Json -Depth 5 -Compress
+				compileEvidence = [ordered]@{
+					schemaVersion = 1
+					identity = [ordered]@{
+						engineGitRevision = $null; engineGitRevisionStatus = 'unavailable'
+						engineBuildVersionSha256 = $null; engineBuildVersionSha256Status = 'unavailable'
+						linuxToolchainCompilerSha256 = $null; linuxToolchainCompilerSha256Status = 'unavailable'
+						runnerName = 'fixture'; durationSeconds = 0
+					}
+					builds = $ExpectedBuilds
+				}
+			}
+			$Valid = $ValidObject | ConvertTo-Json -Depth 8 -Compress
 			[IO.File]::WriteAllText($ValidPath, $Valid, (New-Object Text.UTF8Encoding($false)))
-			$Parsed = Read-PhaseSupervisorReport -Path $ValidPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40)
+			$Parsed = Read-PhaseSupervisorReport -Path $ValidPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture'
 			Assert-True ($Parsed.summary.requiredFailed -eq 0) "A complete $ExpectedMode private report must validate."
+
+			$SchemaMutations = @(
+				@{ Name = 'missing-policy'; Apply = { param($Report) $Report.PSObject.Properties.Remove('policy') } },
+				@{ Name = 'wrong-policy'; Apply = { param($Report) $Report.policy = 'incremental-target-compilation' } },
+				@{ Name = 'reordered-policy'; Apply = { param($Report) $Value = $Report.policy; $Report.PSObject.Properties.Remove('policy'); $Report | Add-Member -NotePropertyName policy -NotePropertyValue $Value } },
+				@{ Name = 'wrong-runner'; Apply = { param($Report) $Report.runnerName = 'other-runner' } },
+				@{ Name = 'invalid-started'; Apply = { param($Report) $Report.startedUtc = 'not-a-timestamp' } },
+				@{ Name = 'reversed-timing'; Apply = { param($Report) $Report.finishedUtc = '2025-12-31T23:59:59.0000000Z' } },
+				@{ Name = 'missing-compile-evidence'; Apply = { param($Report) $Report.PSObject.Properties.Remove('compileEvidence') } },
+				@{ Name = 'null-success-compile-evidence'; Apply = { param($Report) $Report.compileEvidence = $null } },
+				@{ Name = 'extra-root-property'; Apply = { param($Report) $Report | Add-Member -NotePropertyName unexpected -NotePropertyValue $true } },
+				@{ Name = 'missing-check-duration'; Apply = { param($Report) $Report.checks[0].PSObject.Properties.Remove('durationSeconds') } },
+				@{ Name = 'negative-check-duration'; Apply = { param($Report) $Report.checks[0].durationSeconds = -1 } },
+				@{ Name = 'reordered-check-tier'; Apply = { param($Report) $Value = $Report.checks[0].tier; $Report.checks[0].PSObject.Properties.Remove('tier'); $Report.checks[0] | Add-Member -NotePropertyName tier -NotePropertyValue $Value } },
+				@{ Name = 'extra-check-property'; Apply = { param($Report) $Report.checks[0] | Add-Member -NotePropertyName unexpected -NotePropertyValue $true } },
+				@{ Name = 'reordered-summary-total'; Apply = { param($Report) $Value = $Report.summary.total; $Report.summary.PSObject.Properties.Remove('total'); $Report.summary | Add-Member -NotePropertyName total -NotePropertyValue $Value } },
+				@{ Name = 'extra-summary-property'; Apply = { param($Report) $Report.summary | Add-Member -NotePropertyName unexpected -NotePropertyValue 0 } },
+				@{ Name = 'wrong-identity-runner'; Apply = { param($Report) $Report.compileEvidence.identity.runnerName = 'other-runner' } },
+				@{ Name = 'inconsistent-engine-identity'; Apply = { param($Report) $Report.compileEvidence.identity.engineGitRevisionStatus = 'verified' } },
+				@{ Name = 'extra-identity-property'; Apply = { param($Report) $Report.compileEvidence.identity | Add-Member -NotePropertyName unexpected -NotePropertyValue $true } },
+				@{ Name = 'extra-compile-property'; Apply = { param($Report) $Report.compileEvidence | Add-Member -NotePropertyName unexpected -NotePropertyValue $true } }
+			)
+			if ($ExpectedMode -in @('PackageClient', 'PackageServer')) {
+				$SchemaMutations += @(
+					@{ Name = 'extra-build-property'; Apply = { param($Report) $Report.compileEvidence.builds[0] | Add-Member -NotePropertyName unexpected -NotePropertyValue $true } },
+					@{ Name = 'inconsistent-build-counter'; Apply = { param($Report) $Report.compileEvidence.builds[0].lastObservedAction = 1 } }
+				)
+			}
+			foreach ($Mutation in $SchemaMutations) {
+				$Mutated = $Valid | ConvertFrom-Json
+				& $Mutation.Apply $Mutated
+				$MutationPath = Join-Path $ReportRoot ($ExpectedMode + '-' + $Mutation.Name + '.json')
+				[IO.File]::WriteAllText($MutationPath, ($Mutated | ConvertTo-Json -Depth 8 -Compress), (New-Object Text.UTF8Encoding($false)))
+				$Rejected = $false
+				try { [void] (Read-PhaseSupervisorReport -Path $MutationPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture') } catch { $Rejected = $_.Exception.Message -eq 'phase_report_invalid' }
+				Assert-True $Rejected "A required-check-complete $ExpectedMode report with $($Mutation.Name) must fail closed as phase_report_invalid."
+			}
+
+			$Failure = $Valid | ConvertFrom-Json
+			$Failure.checks[0].status = 'failed'
+			$Failure.checks[0].message = 'fixture_failed'
+			$Failure.summary.passed = $ExpectedChecks.Count - 1
+			$Failure.summary.failed = 1
+			$Failure.summary.requiredFailed = 1
+			$FailurePath = Join-Path $ReportRoot ($ExpectedMode + '-failure.json')
+			[IO.File]::WriteAllText($FailurePath, ($Failure | ConvertTo-Json -Depth 8 -Compress), (New-Object Text.UTF8Encoding($false)))
+			$ParsedFailure = Read-PhaseSupervisorReport -Path $FailurePath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture'
+			Assert-True ($ParsedFailure.summary.requiredFailed -eq 1) "A canonical $ExpectedMode child failure report must remain relayable."
+
+			$EarlyFailure = $Valid | ConvertFrom-Json
+			$EarlyFailure.checks = @($EarlyFailure.checks[0])
+			$EarlyFailure.checks[0].status = 'failed'
+			$EarlyFailure.checks[0].message = 'fixture_failed'
+			$EarlyFailure.summary.total = 1
+			$EarlyFailure.summary.passed = 0
+			$EarlyFailure.summary.failed = 1
+			$EarlyFailure.summary.requiredFailed = 1
+			$EarlyFailure.compileEvidence = $null
+			$EarlyFailurePath = Join-Path $ReportRoot ($ExpectedMode + '-early-failure.json')
+			[IO.File]::WriteAllText($EarlyFailurePath, ($EarlyFailure | ConvertTo-Json -Depth 8 -Compress), (New-Object Text.UTF8Encoding($false)))
+			$ParsedEarlyFailure = Read-PhaseSupervisorReport -Path $EarlyFailurePath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture'
+			Assert-True ($ParsedEarlyFailure.summary.requiredFailed -eq 1 -and $null -eq $ParsedEarlyFailure.compileEvidence) "A canonical pre-identity $ExpectedMode child failure report must remain relayable."
 
 			foreach ($Incomplete in @(
 				@{ Name = 'empty'; Checks = @() },
@@ -137,7 +232,7 @@ function Test-PhaseSupervisorPublicationContract {
 				} | ConvertTo-Json -Depth 5 -Compress
 				[IO.File]::WriteAllText($IncompletePath, $IncompleteReport, (New-Object Text.UTF8Encoding($false)))
 				$Rejected = $false
-				try { [void] (Read-PhaseSupervisorReport -Path $IncompletePath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40)) } catch { $Rejected = $_.Exception.Message -eq 'phase_report_invalid' }
+				try { [void] (Read-PhaseSupervisorReport -Path $IncompletePath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture') } catch { $Rejected = $_.Exception.Message -eq 'phase_report_invalid' }
 				Assert-True $Rejected "$ExpectedMode $($Incomplete.Name) success report must fail closed as phase_report_invalid."
 			}
 		}
@@ -148,7 +243,7 @@ function Test-PhaseSupervisorPublicationContract {
 			$Path = Join-Path $ReportRoot ($Invalid.Name + '.json')
 			& $Invalid.Write $Path
 			$Rejected = $false
-			try { [void] (Read-PhaseSupervisorReport -Path $Path -ExpectedMode 'PackageClient' -ExpectedRevision ('a' * 40)) } catch { $Rejected = $_.Exception.Message -eq 'phase_report_invalid' }
+			try { [void] (Read-PhaseSupervisorReport -Path $Path -ExpectedMode 'PackageClient' -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture') } catch { $Rejected = $_.Exception.Message -eq 'phase_report_invalid' }
 			Assert-True $Rejected "$($Invalid.Name) private report must fail closed as phase_report_invalid."
 		}
 	} finally { if (Test-Path -LiteralPath $ReportRoot) { Remove-Item -LiteralPath $ReportRoot -Recurse -Force } }

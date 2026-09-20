@@ -1004,7 +1004,15 @@ incremental compile policy.
   `ci-acceptance-receipt.json` plus only the bounded raw files named by that
   receipt. Package 3A implements and fixture-tests the producer and aggregate,
   but does not emit those artifacts or execute the aggregate while the shadow
-  gap report names missing producers/receipts. No future receipt or aggregate
+  gap report names missing producers/receipts. Its only currently supported
+  semantic receipt obligation is `visual-package`: both producer and aggregate
+  parse the bounded `aetheln.visual-package-report/v1` evidence and require the
+  exact repository, tested revision, run/attempt, validator identities, capture
+  accounting, zero native exits, and success conclusions. Native/clean,
+  portable, controller, delivery, editor, and content obligations reject as
+  `receipt_semantic_evidence_unsupported` until their own raw schemas receive
+  equivalent validators; declared exits plus opaque hashes are insufficient.
+  No future receipt or aggregate
   may override a native exit, infrastructure failure, missing producer,
   skipped selected job, partial rerun, newer attempt, or cleanup failure.
 - Headless Unreal automation generates
@@ -1114,7 +1122,11 @@ policy, reviewed full-SHA action manifest, run/attempt, selected obligation
 IDs, normalized result state, native exit, infrastructure and cleanup state,
 and SHA-256/length of every raw evidence file. One receipt belongs to one
 producer job and may contain multiple results from that job. Every Package 3A
-receipt remains shadow-only and cannot grant acceptance.
+receipt remains shadow-only and cannot grant acceptance. In the current
+not-yet-wired contract, only `visual-package` can produce a semantically valid
+receipt. Its exact typed raw report is revalidated independently by both the
+producer and aggregate. Every other obligation fails closed as unsupported
+until a reviewed schema-aware validator is implemented.
 
 `aetheln.ci-acceptance-aggregate/v1` is the fixture-tested future hosted shadow
 reconciliation record. Once all producers are wired, it cross-checks the newest matching workflow run, exact attempt, direct
@@ -1143,6 +1155,13 @@ build and one packaged-smoke check. The packaging modes record one
 The scheduled phase modes additionally
 record handoff validation, storage accounting or manifest consume/publish
 checks, the phase gate itself, and (for `SmokePhase`) milestone completion.
+Before relaying a private scheduled-phase child report, the supervisor parent
+requires the exact ordered, closed report/check/summary/compile-evidence schema;
+binds mode, policy, revision, runner and timestamps; and verifies the
+mode-specific build/check relationships. Missing, extra, reordered, mistyped,
+or inconsistent fields reject as `phase_report_invalid`, including an otherwise
+complete list of successful checkpoints. Canonical failure reports remain
+relayable for diagnosis.
 
 The report additionally carries `compileEvidence` (schema version 1 of that
 object; the report schema version is unchanged): `identity`

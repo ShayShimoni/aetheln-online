@@ -93,10 +93,28 @@ function New-FixtureRequirements {
 	return [pscustomobject][ordered]@{
 		schemaVersion = 'aetheln.ci-acceptance-requirements/v1'
 		jobs = @(
-			[pscustomobject][ordered]@{ key = 'native'; jobName = 'trusted-candidate-compile'; selected = $true; artifactName = 'ci-receipt-native-9001-2'; checks = @('clean-package-provenance-smoke','native-client-server-compile') },
-			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; selected = $true; artifactName = 'ci-receipt-quality-9001-2'; checks = @('content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','portable','unreal-editor-automation','visual-package') }
+			[pscustomobject][ordered]@{ key = 'native'; jobName = 'trusted-candidate-compile'; selected = $false; artifactName = 'ci-receipt-native-9001-2'; checks = @('clean-package-provenance-smoke','native-client-server-compile') },
+			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; selected = $false; artifactName = 'ci-receipt-quality-9001-2'; checks = @('content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','portable','unreal-editor-automation','visual-package') }
 		)
 	}
+}
+
+function New-FixtureVisualReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture.')]
+	param($Context)
+	$Output = @('stdout: fixture pass')
+	$CapturedBytes = $script:Utf8.GetByteCount($Output[0])
+	$Results = @(
+		[pscustomobject][ordered]@{
+			id='visual-package'; path='.\visuals\Test-VisualPackage.ps1'; startedUtc='2026-09-20T20:00:00.0000000Z'; finishedUtc='2026-09-20T20:00:01.0000000Z'; nativeExitCode=0; conclusion='success'
+			capture=[pscustomobject][ordered]@{maxLineUtf8Bytes=4096;maxLines=200;maxAggregateUtf8Bytes=131072;observedLineCount=1;capturedLineCount=1;capturedUtf8Bytes=$CapturedBytes;truncatedLineCount=0;droppedLineCount=0}; output=$Output
+		},
+		[pscustomobject][ordered]@{
+			id='visual-package-regressions'; path='.\visuals\tests\Test-VisualPackageValidation.ps1'; startedUtc='2026-09-20T20:00:01.0000000Z'; finishedUtc='2026-09-20T20:00:02.0000000Z'; nativeExitCode=0; conclusion='success'
+			capture=[pscustomobject][ordered]@{maxLineUtf8Bytes=4096;maxLines=200;maxAggregateUtf8Bytes=131072;observedLineCount=1;capturedLineCount=1;capturedUtf8Bytes=$CapturedBytes;truncatedLineCount=0;droppedLineCount=0}; output=$Output
+		}
+	)
+	return [pscustomobject][ordered]@{schemaVersion='aetheln.visual-package-report/v1';repository=$Context.repository.fullName;revision=$Context.source.testedRevision;run=[pscustomobject][ordered]@{id=$Context.run.id;attempt=$Context.run.attempt};results=$Results;conclusion='success'}
 }
 
 function New-FixtureReceipt {
@@ -104,10 +122,11 @@ function New-FixtureReceipt {
 	param($Context, $Requirement, [byte[]] $EvidenceBytes = $script:Utf8.GetBytes('raw-proof'))
 	$Results = @($Requirement.checks | ForEach-Object {
 		$RequiresNativeProof = $_ -cin @('clean-package-provenance-smoke','native-client-server-compile')
+		$EvidenceName = if ($_ -ceq 'visual-package') { 'visual-package-report.json' } else { 'evidence/' + $_ + '.json' }
 		[pscustomobject][ordered]@{
 			id = [string] $_; jobName = [string] $Requirement.jobName; conclusion = 'success'; nativeExitCode = if ($RequiresNativeProof) { 0 } else { $null }
 			infrastructureFailure = $null; terminal = $true; cleanupVerified = if ($RequiresNativeProof) { $true } else { $null }
-			evidence = @([pscustomobject][ordered]@{ name = ('evidence/' + $_ + '.json'); sha256 = (Get-Sha256 $EvidenceBytes); sizeBytes = [long] $EvidenceBytes.Length })
+			evidence = @([pscustomobject][ordered]@{ name = $EvidenceName; sha256 = (Get-Sha256 $EvidenceBytes); sizeBytes = [long] $EvidenceBytes.Length })
 		}
 	})
 	return [pscustomobject][ordered]@{
@@ -122,8 +141,23 @@ function New-FixtureReceipt {
 		run = $Context.run
 		selection = [pscustomobject][ordered]@{ checks = @($Requirement.checks) }
 		results = [pscustomobject][ordered]@{ checks = $Results }
-		acceptance = [pscustomobject][ordered]@{ shadow = $true; authoritative = $false; grantsAcceptance = $false; terminal = $true; infrastructureFailure = $false; cleanupVerified = $true }
+		acceptance = [pscustomobject][ordered]@{ shadow = $true; authoritative = $false; grantsAcceptance = $false; terminal = $true; infrastructureFailure = $false; cleanupVerified = $(if (@($Requirement.checks | Where-Object { $_ -cin @('clean-package-provenance-smoke','native-client-server-compile') }).Count -gt 0) { $true } else { $null }) }
 	}
+}
+
+function New-FixtureVisualBoundary {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture.')]
+	param($Context, $Report = $null)
+	if ($null -eq $Report) { $Report = New-FixtureVisualReport -Context $Context }
+	$EvidenceBytes = ConvertTo-FixtureBytes $Report
+	$Requirement = [pscustomobject][ordered]@{ key='visual';jobName='visual-package-proof';selected=$true;artifactName='ci-receipt-visual-9001-2';checks=@('visual-package') }
+	$Receipt = New-FixtureReceipt -Context $Context -Requirement $Requirement -EvidenceBytes $EvidenceBytes
+	$ReceiptBytes = ConvertTo-FixtureBytes $Receipt
+	$Archive = [pscustomobject][ordered]@{ entries=@(
+		[pscustomobject][ordered]@{name='ci-acceptance-receipt.json';bytes=$ReceiptBytes;sizeBytes=[long]$ReceiptBytes.Length;sha256=(Get-Sha256 $ReceiptBytes)},
+		[pscustomobject][ordered]@{name='visual-package-report.json';bytes=$EvidenceBytes;sizeBytes=[long]$EvidenceBytes.Length;sha256=(Get-Sha256 $EvidenceBytes)}
+	) }
+	return [pscustomobject][ordered]@{ requirement=$Requirement;receipt=$Receipt;archive=$Archive }
 }
 
 function New-FixtureApi {
@@ -173,7 +207,62 @@ $Aggregate = New-CiAcceptanceAggregate -Context $Context -Requirements $Requirem
 Assert-True ($Aggregate.schemaVersion -ceq 'aetheln.ci-acceptance-aggregate/v1') 'Aggregate schema identity changed.'
 Assert-True ($Aggregate.decision.shadow -and -not $Aggregate.decision.authoritative -and -not $Aggregate.decision.grantsAcceptance) 'Aggregate must remain shadow-only and non-authoritative.'
 Assert-True ($Aggregate.decision.evidenceClass -ceq 'pull_request_acceptance_candidate' -and $Aggregate.decision.complete) 'Complete PR evidence must remain only a candidate observation.'
-Assert-True (@($Aggregate.receipts).Count -eq 2 -and @($Aggregate.jobs).Count -eq 2) 'Every required job and receipt should be reconciled.'
+Assert-True (@($Aggregate.receipts).Count -eq 0 -and @($Aggregate.jobs | Where-Object { -not $_.selected -and $_.conclusion -ceq 'skipped' }).Count -eq 2) 'Unsupported obligations must remain unselected and emit no opaque receipts.'
+
+$VisualBoundary = New-FixtureVisualBoundary -Context $Context
+$VisualResults = @(Assert-CiAcceptanceReceipt -Receipt $VisualBoundary.receipt -Context $Context -Requirement $VisualBoundary.requirement -Archive $VisualBoundary.archive)
+Assert-True ($VisualResults.Count -eq 1 -and @($VisualResults[0]).Count -eq 1) 'The aggregate must accept exact, identity-bound visual semantic evidence.'
+$VisualExitLie = New-FixtureVisualBoundary -Context $Context
+$VisualExitLie.receipt.results.checks[0].nativeExitCode = 0
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $VisualExitLie.receipt -Context $Context -Requirement $VisualExitLie.requirement -Archive $VisualExitLie.archive } 'receipt_semantic_evidence_invalid:visual-package'
+$VisualCleanupLie = New-FixtureVisualBoundary -Context $Context
+$VisualCleanupLie.receipt.results.checks[0].cleanupVerified = $true
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $VisualCleanupLie.receipt -Context $Context -Requirement $VisualCleanupLie.requirement -Archive $VisualCleanupLie.archive } 'receipt_semantic_evidence_invalid:visual-package'
+$VisualAcceptanceCleanupLie = New-FixtureVisualBoundary -Context $Context
+$VisualAcceptanceCleanupLie.receipt.acceptance.cleanupVerified = $true
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $VisualAcceptanceCleanupLie.receipt -Context $Context -Requirement $VisualAcceptanceCleanupLie.requirement -Archive $VisualAcceptanceCleanupLie.archive } 'receipt_cleanup_invalid'
+
+foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','native-client-server-compile','portable','unreal-editor-automation')) {
+	$UnsupportedRequirement = [pscustomobject][ordered]@{key='unsupported';jobName='unsupported-proof';selected=$true;artifactName='ci-receipt-unsupported-9001-2';checks=@($UnsupportedId)}
+	$UnsupportedBytes = $script:Utf8.GetBytes('opaque-proof')
+	$UnsupportedReceipt = New-FixtureReceipt -Context $Context -Requirement $UnsupportedRequirement -EvidenceBytes $UnsupportedBytes
+	$UnsupportedReceiptBytes = ConvertTo-FixtureBytes $UnsupportedReceipt
+	$UnsupportedArchive = [pscustomobject][ordered]@{entries=@(
+		[pscustomobject][ordered]@{name='ci-acceptance-receipt.json';bytes=$UnsupportedReceiptBytes;sizeBytes=[long]$UnsupportedReceiptBytes.Length;sha256=(Get-Sha256 $UnsupportedReceiptBytes)},
+		[pscustomobject][ordered]@{name=$UnsupportedReceipt.results.checks[0].evidence[0].name;bytes=$UnsupportedBytes;sizeBytes=[long]$UnsupportedBytes.Length;sha256=(Get-Sha256 $UnsupportedBytes)}
+	)}
+	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $UnsupportedReceipt -Context $Context -Requirement $UnsupportedRequirement -Archive $UnsupportedArchive } ('receipt_semantic_evidence_unsupported:' + $UnsupportedId)
+}
+
+foreach ($SemanticCase in @(
+	@{reason='receipt_semantic_evidence_failure:visual-package';mutate={param($r)$r.conclusion='failure'}},
+	@{reason='receipt_semantic_evidence_failure:visual-package';mutate={param($r)$r.results[0].nativeExitCode=13;$r.results[0].conclusion='failure'}},
+	@{reason='receipt_semantic_evidence_invalid:visual-package';mutate={param($r)$r.repository='other/repository'}},
+	@{reason='receipt_semantic_evidence_invalid:visual-package';mutate={param($r)$r.revision=('9' * 40)}},
+	@{reason='receipt_semantic_evidence_invalid:visual-package';mutate={param($r)$r.run.attempt=3}},
+	@{reason='receipt_semantic_evidence_failure:visual-package';mutate={param($r)$r.results[1].id='visual-package'}},
+	@{reason='receipt_semantic_evidence_invalid:visual-package';mutate={param($r)$r.results[0].capture.capturedUtf8Bytes++}},
+	@{reason='receipt_semantic_evidence_invalid:visual-package';mutate={param($r)$r.results[0].output=@('x' * 4097)}}
+)) {
+	$BadReport = New-FixtureVisualReport -Context $Context
+	& $SemanticCase.mutate $BadReport
+	$BadBoundary = New-FixtureVisualBoundary -Context $Context -Report $BadReport
+	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadBoundary.receipt -Context $Context -Requirement $BadBoundary.requirement -Archive $BadBoundary.archive } $SemanticCase.reason
+}
+
+$MalformedBoundary = New-FixtureVisualBoundary -Context $Context
+$MalformedBytes = $script:Utf8.GetBytes('{"schemaVersion":')
+$MalformedBoundary.receipt.results.checks[0].evidence[0].sha256 = Get-Sha256 $MalformedBytes
+$MalformedBoundary.receipt.results.checks[0].evidence[0].sizeBytes = [long] $MalformedBytes.Length
+$MalformedBoundary.archive.entries[1].bytes = $MalformedBytes; $MalformedBoundary.archive.entries[1].sha256 = Get-Sha256 $MalformedBytes; $MalformedBoundary.archive.entries[1].sizeBytes = [long] $MalformedBytes.Length
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $MalformedBoundary.receipt -Context $Context -Requirement $MalformedBoundary.requirement -Archive $MalformedBoundary.archive } 'receipt_semantic_evidence_invalid:visual-package'
+
+$MissingBoundary = New-FixtureVisualBoundary -Context $Context
+$MissingBoundary.receipt.results.checks[0].evidence[0].name='other-report.json'; $MissingBoundary.archive.entries[1].name='other-report.json'
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $MissingBoundary.receipt -Context $Context -Requirement $MissingBoundary.requirement -Archive $MissingBoundary.archive } 'receipt_semantic_evidence_missing:visual-package'
+$DuplicateBoundary = New-FixtureVisualBoundary -Context $Context
+$DuplicateBoundary.receipt.results.checks[0].evidence=@($DuplicateBoundary.receipt.results.checks[0].evidence[0],$DuplicateBoundary.receipt.results.checks[0].evidence[0])
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $DuplicateBoundary.receipt -Context $Context -Requirement $DuplicateBoundary.requirement -Archive $DuplicateBoundary.archive } 'receipt_semantic_evidence_duplicate:visual-package'
 
 $Push = New-FixtureContext 'push'
 $Push.source.testedRevision = $Push.source.headRevision
@@ -185,7 +274,7 @@ $PushRequirements.jobs[0].selected = $false
 $PushApi = New-FixtureApi -Context $Push -Requirements $PushRequirements
 $PushAggregate = New-CiAcceptanceAggregate -Context $Push -Requirements $PushRequirements -ApiRequest $PushApi -DeadlineSeconds 30
 Assert-True ($PushAggregate.decision.evidenceClass -ceq 'post_merge_hosted_health' -and -not $PushAggregate.decision.grantsAcceptance) 'Push evidence must be health-only and never source acceptance.'
-Assert-True (@($PushAggregate.receipts).Count -eq 1 -and @($PushAggregate.jobs | Where-Object { -not $_.selected -and $_.conclusion -ceq 'skipped' }).Count -eq 1) 'Unselected push work must be API-verified as skipped and emit no receipt.'
+Assert-True (@($PushAggregate.receipts).Count -eq 0 -and @($PushAggregate.jobs | Where-Object { -not $_.selected -and $_.conclusion -ceq 'skipped' }).Count -eq 2) 'Unselected push work must be API-verified as skipped and emit no receipt.'
 $PushWithoutBase = New-FixtureContext 'push'
 $PushWithoutBase.source.baseRevision = $null
 Assert-Rejected { New-CiAcceptanceAggregate -Context $PushWithoutBase -Requirements $PushRequirements -ApiRequest (New-FixtureApi -Context $PushWithoutBase -Requirements $PushRequirements) -DeadlineSeconds 30 } 'context_revision_invalid'

@@ -674,7 +674,11 @@ Every accepted decision records:
   diagnostic as the sole job allowed a job-level `always()`. Package 3A does
   not emit receipts or execute the aggregate while truthful producers are
   missing; it publishes and fails closed on that exact inventory instead.
-  Future receipt archives bind only their named raw evidence and stay
+  The only Package 3A obligation with a supported semantic receipt is
+  `visual-package`; producer and aggregate both validate its exact bounded raw
+  report. Every other obligation rejects as unsupported until its own raw
+  schema validator exists, so claimed exits plus opaque hashes cannot establish
+  success. Future receipt archives bind only their named raw evidence and stay
   `shadow=true`, `authoritative=false`, and `grantsAcceptance=false`. Missing
   producers are not mapped to unrelated portable fixtures. The accepted-base
   selector may expose only the visual obligation to an additive reusable

@@ -29,6 +29,18 @@ $script:AcceptanceCheckIds = @(
 	'unreal-editor-automation',
 	'visual-package'
 )
+# Opaque hashes and caller-declared summaries are not success evidence. Keep an
+# obligation unsupported until this producer can parse its exact report schema.
+$script:AcceptanceUnsupportedCheckIds = @(
+	'clean-package-provenance-smoke',
+	'content-reference-validation',
+	'controller-contract',
+	'controller-operational-proof',
+	'delivery-harness',
+	'native-client-server-compile',
+	'portable',
+	'unreal-editor-automation'
+)
 
 function Assert-AcceptanceClosedObject {
 	param($Value, [string[]] $PropertyNames)
@@ -93,6 +105,100 @@ function Read-AcceptanceJson {
 	}
 	Assert-AcceptanceUniqueJsonProperties -Raw $Raw
 	try { return ConvertFrom-Json -InputObject $Raw } catch { throw 'receipt_json_invalid' }
+}
+
+function ConvertFrom-AcceptanceEvidenceJson {
+	param([byte[]] $Bytes)
+	if ($null -eq $Bytes -or $Bytes.Length -eq 0 -or $Bytes.Length -gt $script:AcceptanceEvidenceFileLimit) { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	try { $Raw = $script:AcceptanceUtf8.GetString($Bytes) }
+	catch { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	try { Assert-AcceptanceUniqueJsonProperties -Raw $Raw }
+	catch { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	try {
+		$ConvertCommand = Get-Command -Name ConvertFrom-Json -ErrorAction Stop
+		if ($ConvertCommand.Parameters.ContainsKey('DateKind')) { return ConvertFrom-Json -InputObject $Raw -DateKind String }
+		return ConvertFrom-Json -InputObject $Raw
+	}
+	catch { throw 'receipt_semantic_evidence_invalid:visual-package' }
+}
+
+function Test-AcceptanceBoundedInteger {
+	param($Value, [long] $Minimum, [long] $Maximum)
+	return ($Value -is [int] -or $Value -is [long]) -and [long] $Value -ge $Minimum -and [long] $Value -le $Maximum
+}
+
+function Test-AcceptanceCanonicalValidatorPath {
+	param($Value, [string] $Expected)
+	if ($Value -isnot [string] -or $Value.Length -gt 4096) { return $false }
+	$Normalized = $Value.Replace('\', '/')
+	if ($Normalized.StartsWith('./', [StringComparison]::Ordinal)) { $Normalized = $Normalized.Substring(2) }
+	return $Normalized -ceq $Expected
+}
+
+function Assert-AcceptanceVisualPackageEvidence {
+	param([byte[]] $Bytes, $Identity)
+	$Report = ConvertFrom-AcceptanceEvidenceJson -Bytes $Bytes
+	try {
+		Assert-AcceptanceClosedObject -Value $Report -PropertyNames @('schemaVersion','repository','revision','run','results','conclusion')
+		Assert-AcceptanceClosedObject -Value $Report.run -PropertyNames @('id','attempt')
+	} catch { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	if ($Report.schemaVersion -cne 'aetheln.visual-package-report/v1' -or
+		$Report.repository -cne $Identity.repository.fullName -or
+		$Report.revision -cne $Identity.source.testedRevision -or
+		$Report.run.id -cne $Identity.run.id -or
+		-not (Test-AcceptanceBoundedInteger -Value $Report.run.attempt -Minimum 1 -Maximum ([int]::MaxValue)) -or $Report.run.attempt -ne $Identity.run.attempt -or
+		$Report.results -isnot [array] -or @($Report.results).Count -ne 2) {
+		throw 'receipt_semantic_evidence_invalid:visual-package'
+	}
+
+	$ExpectedValidators = @(
+		[pscustomobject]@{ id='visual-package'; path='visuals/Test-VisualPackage.ps1' },
+		[pscustomobject]@{ id='visual-package-regressions'; path='visuals/tests/Test-VisualPackageValidation.ps1' }
+	)
+	[long] $TotalCapturedLines = 0
+	for ($Index = 0; $Index -lt $ExpectedValidators.Count; $Index++) {
+		$Result = $Report.results[$Index]
+		try {
+			Assert-AcceptanceClosedObject -Value $Result -PropertyNames @('id','path','startedUtc','finishedUtc','nativeExitCode','conclusion','capture','output')
+			Assert-AcceptanceClosedObject -Value $Result.capture -PropertyNames @('maxLineUtf8Bytes','maxLines','maxAggregateUtf8Bytes','observedLineCount','capturedLineCount','capturedUtf8Bytes','truncatedLineCount','droppedLineCount')
+		} catch { throw 'receipt_semantic_evidence_invalid:visual-package' }
+		$Expected = $ExpectedValidators[$Index]
+		[datetime] $Started = [datetime]::MinValue
+		[datetime] $Finished = [datetime]::MinValue
+		$TimestampStyle = [Globalization.DateTimeStyles]::RoundtripKind
+		if ($Result.id -cne $Expected.id -or -not (Test-AcceptanceCanonicalValidatorPath -Value $Result.path -Expected $Expected.path) -or
+			$Result.startedUtc -isnot [string] -or $Result.finishedUtc -isnot [string] -or
+			-not [datetime]::TryParseExact($Result.startedUtc, 'o', [Globalization.CultureInfo]::InvariantCulture, $TimestampStyle, [ref] $Started) -or
+			-not [datetime]::TryParseExact($Result.finishedUtc, 'o', [Globalization.CultureInfo]::InvariantCulture, $TimestampStyle, [ref] $Finished) -or
+			$Finished -lt $Started -or -not (Test-AcceptanceBoundedInteger -Value $Result.nativeExitCode -Minimum 0 -Maximum 0) -or
+			$Result.conclusion -cne 'success' -or $Result.output -isnot [array]) {
+			throw 'receipt_semantic_evidence_failure:visual-package'
+		}
+		$Capture = $Result.capture
+		if (-not (Test-AcceptanceBoundedInteger -Value $Capture.maxLineUtf8Bytes -Minimum 1 -Maximum 16384) -or
+			-not (Test-AcceptanceBoundedInteger -Value $Capture.maxLines -Minimum 1 -Maximum 1000) -or
+			-not (Test-AcceptanceBoundedInteger -Value $Capture.maxAggregateUtf8Bytes -Minimum 1 -Maximum 1048576) -or
+			-not (Test-AcceptanceBoundedInteger -Value $Capture.observedLineCount -Minimum 0 -Maximum ([int]::MaxValue)) -or
+			-not (Test-AcceptanceBoundedInteger -Value $Capture.capturedLineCount -Minimum 0 -Maximum $Capture.maxLines) -or
+			-not (Test-AcceptanceBoundedInteger -Value $Capture.capturedUtf8Bytes -Minimum 0 -Maximum $Capture.maxAggregateUtf8Bytes) -or
+			-not (Test-AcceptanceBoundedInteger -Value $Capture.truncatedLineCount -Minimum 0 -Maximum $Capture.capturedLineCount) -or
+			-not (Test-AcceptanceBoundedInteger -Value $Capture.droppedLineCount -Minimum 0 -Maximum $Capture.observedLineCount) -or
+			[long] $Capture.observedLineCount -ne ([long] $Capture.capturedLineCount + [long] $Capture.droppedLineCount) -or
+			@($Result.output).Count -ne [long] $Capture.capturedLineCount) {
+			throw 'receipt_semantic_evidence_invalid:visual-package'
+		}
+		[long] $CapturedBytes = 0
+		foreach ($Line in @($Result.output)) {
+			if ($Line -isnot [string]) { throw 'receipt_semantic_evidence_invalid:visual-package' }
+			$LineBytes = $script:AcceptanceUtf8NoBom.GetByteCount($Line)
+			if ($LineBytes -gt [long] $Capture.maxLineUtf8Bytes) { throw 'receipt_semantic_evidence_invalid:visual-package' }
+			$CapturedBytes += $LineBytes
+		}
+		if ($CapturedBytes -ne [long] $Capture.capturedUtf8Bytes) { throw 'receipt_semantic_evidence_invalid:visual-package' }
+		$TotalCapturedLines += [long] $Capture.capturedLineCount
+		if ($TotalCapturedLines -gt 1000) { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	}
+	if ($Report.conclusion -cne 'success') { throw 'receipt_semantic_evidence_failure:visual-package' }
 }
 
 function Test-AcceptanceRevision($Value) {
@@ -241,7 +347,9 @@ function New-CiAcceptanceReceipt {
 			$Result.conclusion -cne 'success' -or $Result.terminal -isnot [bool] -or -not $Result.terminal -or $null -ne $Result.infrastructureFailure) { throw 'receipt_invalid' }
 		if ($null -eq $ReceiptJobName) { $ReceiptJobName = [string] $Result.jobName }
 		elseif ([string] $Result.jobName -cne $ReceiptJobName) { throw 'receipt_invalid' }
+		if ($script:AcceptanceUnsupportedCheckIds -ccontains $Result.id) { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) }
 		if ($null -ne $Result.nativeExitCode -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_invalid' }
+		if ($Result.id -ceq 'visual-package' -and $null -ne $Result.nativeExitCode) { throw 'receipt_semantic_evidence_invalid:visual-package' }
 		$RequiresCleanup = $Result.id -in @('native-client-server-compile','clean-package-provenance-smoke')
 		if ($Result.id -in @('native-client-server-compile','clean-package-provenance-smoke') -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_invalid' }
 		if ($RequiresCleanup) {
@@ -249,8 +357,10 @@ function New-CiAcceptanceReceipt {
 			$CleanupApplicable = $true
 		} elseif ($null -ne $Result.cleanupVerified) { throw 'receipt_invalid' }
 		if ($Result.evidence -isnot [Array] -or $Result.evidence.Count -lt 1 -or $Result.evidence.Count -gt $script:AcceptanceEvidencePerResultLimit) { throw 'receipt_invalid' }
+		if ($Result.id -ceq 'visual-package' -and $Result.evidence.Count -ne 1) { throw 'receipt_semantic_evidence_duplicate:visual-package' }
 		$EvidenceCopies = New-Object System.Collections.Generic.List[object]
 		$PreviousEvidenceName = $null
+		$VisualEvidenceBytes = $null
 		foreach ($Evidence in $Result.evidence) {
 			Assert-AcceptanceClosedObject -Value $Evidence -PropertyNames @('name','sha256','sizeBytes')
 			if (-not (Test-AcceptanceEvidenceName -Value $Evidence.name) -or -not (Test-AcceptanceDigest -Value $Evidence.sha256) -or
@@ -264,10 +374,19 @@ function New-CiAcceptanceReceipt {
 			if ($EvidenceCount -gt $script:AcceptanceEvidenceLimit -or $EvidenceBytes -gt $script:AcceptanceEvidenceAggregateLimit) { throw 'receipt_invalid' }
 			$File = Get-AcceptanceEvidenceFile -Root $EvidenceRoot -Name $Evidence.name
 			if ($File.Length -ne $DeclaredSize) { throw 'receipt_invalid' }
-			$ActualDigest = (Get-FileHash -LiteralPath $File.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+			$FileBytes = [IO.File]::ReadAllBytes($File.FullName)
+			$ActualDigest = Get-AcceptanceSha256 -Bytes $FileBytes
 			$After = Get-Item -LiteralPath $File.FullName
-			if ($After.Length -ne $DeclaredSize -or $ActualDigest -cne $Evidence.sha256) { throw 'receipt_invalid' }
+			if ($FileBytes.Length -ne $DeclaredSize -or $After.Length -ne $DeclaredSize -or $ActualDigest -cne $Evidence.sha256) { throw 'receipt_invalid' }
+			if ($Result.id -ceq 'visual-package') {
+				if ($Evidence.name -cne 'visual-package-report.json') { throw 'receipt_semantic_evidence_missing:visual-package' }
+				$VisualEvidenceBytes = $FileBytes
+			}
 			$EvidenceCopies.Add([pscustomobject][ordered]@{ name=[string]$Evidence.name; sha256=[string]$Evidence.sha256; sizeBytes=$DeclaredSize })
+		}
+		if ($Result.id -ceq 'visual-package') {
+			if ($null -eq $VisualEvidenceBytes) { throw 'receipt_semantic_evidence_missing:visual-package' }
+			Assert-AcceptanceVisualPackageEvidence -Bytes $VisualEvidenceBytes -Identity $ReceiptInput
 		}
 		$ResultCopies.Add([pscustomobject][ordered]@{
 			id=[string]$Result.id; jobName=[string]$Result.jobName; conclusion='success'; nativeExitCode=$Result.nativeExitCode
