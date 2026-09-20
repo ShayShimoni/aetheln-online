@@ -678,14 +678,24 @@ Every accepted decision records:
   `visual-package`; producer and aggregate both validate its exact bounded raw
   report. Every other obligation rejects as unsupported until its own raw
   schema validator exists, so claimed exits plus opaque hashes cannot establish
-  success. Future receipt archives bind only their named raw evidence and stay
+  success. The aggregate does not accept caller-declared selection booleans: it
+  obtains the exact same-attempt selector job/artifact through GitHub, validates
+  the single accepted-selector report against controller, policy, source and
+  workflow identities, and derives each producer's selected receipt subset.
+  Run actors and downloaded artifact lengths are independently reconciled.
+  Absolute archive, entry and expanded-byte ceilings remain authoritative;
+  bounded valid evidence is not rejected solely for a high compression ratio.
+  Future receipt archives bind only their named raw evidence and stay
   `shadow=true`, `authoritative=false`, and `grantsAcceptance=false`. Missing
   producers are not mapped to unrelated portable fixtures. The accepted-base
   selector may expose only the visual obligation to an additive reusable
   visual proof. Existing legacy selection and required gates remain
   authoritative. Because Package 3A changes selector bytes, a later
   no-controller-change observation must bind this corrected digest before any
-  producer wiring or Package 3B authority activation.
+  producer wiring or Package 3B authority activation. Package 3B must also pin
+  the accepted workflow/action/requirements identities, preserve the external
+  checker, and wire the event-specific selector producer before the shadow
+  aggregate can run; Package 3A's fixture proof grants no authority.
 - **Policy identity:** The policy digest is SHA-256 over the accepted selector
   source after deterministic LF normalization, covering mappings, contexts,
   limits, uncertainty behavior, and attribute rules. The controller digest

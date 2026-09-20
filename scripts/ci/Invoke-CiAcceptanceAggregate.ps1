@@ -23,7 +23,6 @@ $script:AggregateLimits = [ordered]@{
 	archiveEntries = 64
 	archiveEntryBytes = 4MB
 	archiveExpandedBytes = 16MB
-	archiveCompressionRatio = 100
 	jsonBytes = 4MB
 	jsonDepth = 16
 	jsonProperties = 2048
@@ -35,6 +34,7 @@ $script:AggregateLimits = [ordered]@{
 $script:StrictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
 $script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $script:AcceptanceCheckIds = @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','native-client-server-compile','portable','unreal-editor-automation','visual-package')
+$script:SelectorCheckIds = @('portable','visual-package','delivery-harness','native-client-server-compile','unreal-editor-automation','content-reference-validation','controller-contract','controller-operational-proof','clean-package-provenance-smoke')
 # Opaque hashes and receipt summaries never establish success. Add an
 # obligation from here only after its evidence bytes have an exact semantic parser.
 $script:AcceptanceUnsupportedCheckIds = @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','native-client-server-compile','portable','unreal-editor-automation')
@@ -169,8 +169,7 @@ function Read-StrictCiArchive {
 		[int] $MaximumBytes = $script:AggregateLimits.archiveBytes,
 		[int] $MaximumEntries = $script:AggregateLimits.archiveEntries,
 		[int] $MaximumEntryBytes = $script:AggregateLimits.archiveEntryBytes,
-		[int] $MaximumExpandedBytes = $script:AggregateLimits.archiveExpandedBytes,
-		[int] $MaximumCompressionRatio = $script:AggregateLimits.archiveCompressionRatio
+		[int] $MaximumExpandedBytes = $script:AggregateLimits.archiveExpandedBytes
 	)
 	if ($Bytes.Length -eq 0 -or $Bytes.Length -gt $MaximumBytes) { throw 'archive_size_limit' }
 	Add-Type -AssemblyName System.IO.Compression
@@ -194,7 +193,6 @@ function Read-StrictCiArchive {
 			if ($Entry.Length -lt 0 -or $Entry.Length -gt $MaximumEntryBytes) { throw 'archive_entry_size_limit' }
 			if ($Expanded -gt ([long] $MaximumExpandedBytes - [long] $Entry.Length)) { throw 'archive_expanded_size_limit' }
 			$Expanded += [long] $Entry.Length
-			if ($Entry.Length -gt 0 -and ($Entry.CompressedLength -le 0 -or ([double] $Entry.Length / [double] $Entry.CompressedLength) -gt $MaximumCompressionRatio)) { throw 'archive_compression_ratio_limit' }
 			$EntryStream = $Entry.Open()
 			$Output = New-Object IO.MemoryStream
 			try {
@@ -258,9 +256,55 @@ function Assert-AcceptanceContext {
 	if (-not (Test-DecimalIdentity $Context.run.id) -or $Context.run.attempt -isnot [int] -or $Context.run.attempt -lt 1) { throw 'context_run_invalid' }
 }
 
+function Read-AcceptedSelectorReport {
+	param([Parameter(Mandatory)] [byte[]] $ReportBytes, $Context)
+	if ($ReportBytes.Length -eq 0 -or $ReportBytes.Length -gt $script:AggregateLimits.jsonBytes) { throw 'selector_evidence_report_invalid' }
+	try { $Report = ConvertFrom-StrictBoundedJson -Bytes $ReportBytes -MaximumBytes $script:AggregateLimits.jsonBytes -MaximumDepth 16 -MaximumProperties 65536 -MaximumArrayItems 32768 }
+	catch { throw 'selector_evidence_report_invalid' }
+	Assert-ClosedObject -Value $Report -Names @('schemaVersion','policy','source','execution','classification','selection','legacyAuthority','comparison') -Reason 'selector_evidence_report_invalid'
+	Assert-ClosedObject -Value $Report.policy -Names @('version','digest','checkIds') -Reason 'selector_evidence_report_invalid'
+	Assert-ClosedObject -Value $Report.source -Names @('kind','callerKind','baseRevision','headRevision','workflowRevision','revision') -Reason 'selector_evidence_report_invalid'
+	Assert-ClosedObject -Value $Report.execution -Names @('mode','controllerRevision','controllerBlobOid','controllerSha256','checkoutAllowed','complete','reason') -Reason 'selector_evidence_report_invalid'
+	Assert-ClosedObject -Value $Report.classification -Names @('changedPaths','entries','uncertainties') -Reason 'selector_evidence_report_invalid'
+	Assert-ClosedObject -Value $Report.selection -Names @('shadow','authoritative','obligations') -Reason 'selector_evidence_report_invalid'
+	Assert-ClosedObject -Value $Report.legacyAuthority -Names @('authoritative','engineRequired','reason') -Reason 'selector_evidence_report_invalid'
+	Assert-ClosedObject -Value $Report.comparison -Names @('status','differences') -Reason 'selector_evidence_report_invalid'
+	$ExpectedWorkflowRevision = if ($Context.event.kind -ceq 'pull_request') { $Context.workflow.revision } else { $null }
+	if ($Report.schemaVersion -cne 'aetheln.ci-selection/v1' -or
+		$Report.policy.version -cne $Context.policy.version -or $Report.policy.digest -cne $Context.policy.digest -or
+		$Report.policy.checkIds -isnot [array] -or (@($Report.policy.checkIds) -join "`n") -cne ($script:SelectorCheckIds -join "`n") -or
+		$Report.source.kind -cne $Context.event.kind -or $null -ne $Report.source.callerKind -or
+		$Report.source.baseRevision -cne $Context.source.baseRevision -or $Report.source.headRevision -cne $Context.source.headRevision -or
+		$Report.source.workflowRevision -cne $ExpectedWorkflowRevision -or $null -ne $Report.source.revision -or
+		$Report.execution.mode -cne 'accepted-base' -or $Report.execution.controllerRevision -cne $Context.controller.revision -or
+		$Report.execution.controllerBlobOid -cne $Context.controller.blobOid -or $Report.execution.controllerSha256 -cne $Context.controller.sha256 -or
+		$Report.execution.checkoutAllowed -ne $false -or $Report.execution.complete -ne $true -or
+		$Report.execution.reason -isnot [string] -or $Report.execution.reason -cnotmatch '^[a-z0-9_]{1,100}$' -or
+		$Report.selection.shadow -ne $true -or $Report.selection.authoritative -ne $false -or $Report.selection.obligations -isnot [array] -or
+		$Report.classification.changedPaths -isnot [array] -or $Report.classification.entries -isnot [array] -or $Report.classification.uncertainties -isnot [array] -or
+		$Report.legacyAuthority.authoritative -ne $true -or ($null -ne $Report.legacyAuthority.engineRequired -and $Report.legacyAuthority.engineRequired -isnot [bool]) -or
+		$Report.legacyAuthority.reason -isnot [string] -or $Report.comparison.status -isnot [string] -or $Report.comparison.differences -isnot [array]) {
+		throw 'selector_evidence_report_invalid'
+	}
+	$Selected = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	$Obligations = @($Report.selection.obligations)
+	if ($Obligations.Count -ne $script:SelectorCheckIds.Count) { throw 'selector_evidence_obligations_invalid' }
+	for ($Index = 0; $Index -lt $Obligations.Count; $Index++) {
+		$Obligation = $Obligations[$Index]
+		Assert-ClosedObject -Value $Obligation -Names @('id','selected','reasons') -Reason 'selector_evidence_obligations_invalid'
+		if ($Obligation.id -cne $script:SelectorCheckIds[$Index] -or $Obligation.selected -isnot [bool] -or $Obligation.reasons -isnot [array] -or
+			@($Obligation.reasons).Count -gt 64 -or @($Obligation.reasons | Where-Object { $_ -isnot [string] -or $_.Length -eq 0 -or $_.Length -gt 4096 }).Count -ne 0 -or
+			($Obligation.selected -and @($Obligation.reasons).Count -eq 0) -or (-not $Obligation.selected -and @($Obligation.reasons).Count -ne 0)) {
+			throw 'selector_evidence_obligations_invalid'
+		}
+		if ($Obligation.selected) { [void] $Selected.Add([string] $Obligation.id) }
+	}
+	return ,$Selected
+}
+
 function Assert-AcceptanceRequirements {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function validates the complete requirements collection.')]
-	param($Requirements)
+	param($Requirements, $Context)
 	Assert-ClosedObject -Value $Requirements -Names @('schemaVersion','jobs') -Reason 'requirements_schema_invalid'
 	if ($Requirements.schemaVersion -cne 'aetheln.ci-acceptance-requirements/v1' -or $Requirements.jobs -isnot [array]) { throw 'requirements_schema_invalid' }
 	$JobRequirements = @($Requirements.jobs)
@@ -271,8 +315,11 @@ function Assert-AcceptanceRequirements {
 	$Artifacts = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 	$PreviousKey = $null
 	foreach ($Job in $JobRequirements) {
-		Assert-ClosedObject -Value $Job -Names @('key','jobName','selected','artifactName','checks') -Reason 'requirements_schema_invalid'
-		if ($Job.key -isnot [string] -or $Job.key -cnotmatch '^[a-z0-9][a-z0-9-]{0,63}$' -or $Job.jobName -isnot [string] -or $Job.jobName.Length -lt 1 -or $Job.jobName.Length -gt 100 -or $Job.selected -isnot [bool] -or $Job.artifactName -isnot [string] -or $Job.artifactName -cnotmatch '^[A-Za-z0-9._-]{1,200}$' -or $Job.checks -isnot [array]) { throw 'requirements_identity_invalid' }
+		Assert-ClosedObject -Value $Job -Names @('key','jobName','artifactName','checks') -Reason 'requirements_schema_invalid'
+		if ($Job.key -isnot [string] -or $Job.key -cnotmatch '^[a-z0-9][a-z0-9-]{0,63}$' -or $Job.jobName -isnot [string] -or $Job.jobName.Length -lt 1 -or $Job.jobName.Length -gt 100 -or $Job.artifactName -isnot [string] -or $Job.artifactName -cnotmatch '^[A-Za-z0-9._-]{1,200}$' -or $Job.checks -isnot [array]) { throw 'requirements_identity_invalid' }
+		if ($Job.jobName -ceq 'ci-selection-shadow' -or $Job.artifactName -ceq ('ci-selection-shadow-' + $Context.run.id + '-' + $Context.run.attempt)) { throw 'requirements_selector_identity_reserved' }
+		$ExpectedArtifactName = 'ci-receipt-' + $Job.key + '-' + $Context.run.id + '-' + $Context.run.attempt
+		if ($Job.artifactName -cne $ExpectedArtifactName) { throw 'requirements_artifact_name_invalid' }
 		if ($null -ne $PreviousKey -and [StringComparer]::Ordinal.Compare($PreviousKey, [string] $Job.key) -ge 0) { throw 'requirements_not_sorted' }
 		$PreviousKey = [string] $Job.key
 		if (-not $Keys.Add([string] $Job.key) -or -not $Jobs.Add(([string] $Job.jobName).Normalize([Text.NormalizationForm]::FormC)) -or -not $Artifacts.Add(([string] $Job.artifactName).Normalize([Text.NormalizationForm]::FormC))) { throw 'requirements_identity_collision' }
@@ -514,14 +561,18 @@ function New-CiAcceptanceAggregate {
 		[Parameter(Mandatory)] [scriptblock] $ApiRequest,
 		[ValidateRange(10, 300)] [int] $DeadlineSeconds = 120
 	)
-	Assert-AcceptanceContext $Context
-	Assert-AcceptanceRequirements $Requirements
+	Assert-AcceptanceContext -Context $Context
+	Assert-AcceptanceRequirements -Requirements $Requirements -Context $Context
 	$Clock = [Diagnostics.Stopwatch]::StartNew()
 	$RepositoryPath = $Context.repository.fullName
 	$RunPath = '/repos/' + $RepositoryPath + '/actions/runs/' + $Context.run.id
 	$RunBytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri $RunPath -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.apiResponseBytes
 	$Run = ConvertFrom-StrictBoundedJson -Bytes $RunBytes -MaximumBytes $script:AggregateLimits.apiResponseBytes -MaximumDepth 32 -MaximumProperties 8192 -MaximumArrayItems $script:AggregateLimits.apiItems
-	foreach ($Name in @('id','run_attempt','workflow_id','event','head_sha')) { if ($Run.PSObject.Properties.Name -cnotcontains $Name) { throw 'api_schema_invalid' } }
+	foreach ($Name in @('id','run_attempt','workflow_id','event','head_sha','actor','triggering_actor')) { if ($Run.PSObject.Properties.Name -cnotcontains $Name) { throw 'api_schema_invalid' } }
+	if ($null -eq $Run.actor -or $Run.actor -isnot [pscustomobject] -or $Run.actor.PSObject.Properties.Name -cnotcontains 'login' -or
+		$null -eq $Run.triggering_actor -or $Run.triggering_actor -isnot [pscustomobject] -or $Run.triggering_actor.PSObject.Properties.Name -cnotcontains 'login') { throw 'api_run_actor_invalid' }
+	if (-not (Test-GitHubLogin $Run.actor.login) -or -not (Test-GitHubLogin $Run.triggering_actor.login) -or
+		$Run.actor.login -cne $Context.event.actor -or $Run.triggering_actor.login -cne $Context.event.triggeringActor) { throw 'run_actor_mismatch' }
 	if ([string] $Run.id -cne $Context.run.id -or [string] $Run.workflow_id -cne $Context.workflow.id -or $Run.event -cne $Context.event.kind -or $Run.head_sha -cne $Context.source.headRevision) { throw 'run_identity_mismatch' }
 	if ($Run.run_attempt -isnot [int] -or $Run.run_attempt -gt $Context.run.attempt) { throw 'run_attempt_stale' }
 	if ($Run.run_attempt -lt $Context.run.attempt) { throw 'run_attempt_unavailable' }
@@ -537,29 +588,66 @@ function New-CiAcceptanceAggregate {
 	$AttemptJobs = Get-PagedApiItems -ApiRequest $ApiRequest -BaseUri $AttemptJobsBase -PropertyName 'jobs' -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	$AllJobs = Get-PagedApiItems -ApiRequest $ApiRequest -BaseUri ($RunPath + '/jobs?filter=all') -PropertyName 'jobs' -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	foreach ($HistoricalJob in $AllJobs) { Assert-ApiJob -Job $HistoricalJob }
+	$SelectorJobs = @($AttemptJobs | Where-Object { $_.name -ceq 'ci-selection-shadow' })
+	if ($SelectorJobs.Count -ne 1) { throw 'selector_job_identity_ambiguous' }
+	$SelectorJob = $SelectorJobs[0]
+	Assert-ApiJob -Job $SelectorJob
+	if ($SelectorJob.run_attempt -ne $Context.run.attempt) { throw 'selector_job_attempt_mismatch' }
+	if ($SelectorJob.status -cne 'completed' -or $SelectorJob.conclusion -cne 'success') { throw 'selector_job_not_success' }
+	$SelectorHistory = @($AllJobs | Where-Object { $_.name -ceq 'ci-selection-shadow' })
+	if ($SelectorHistory.Count -eq 0) { throw 'selector_job_history_missing' }
+	if (@($SelectorHistory | Where-Object { $_.run_attempt -eq $Context.run.attempt }).Count -ne 1) { throw 'selector_job_history_ambiguous' }
+	$SelectorHighestAttempt = ($SelectorHistory | Measure-Object -Property run_attempt -Maximum).Maximum
+	if ($SelectorHighestAttempt -gt $Context.run.attempt) { throw 'newer_selector_attempt_observed' }
+	if ($SelectorHighestAttempt -lt $Context.run.attempt) { throw 'selector_job_attempt_missing' }
+
+	$Artifacts = Get-PagedApiItems -ApiRequest $ApiRequest -BaseUri ($RunPath + '/artifacts') -PropertyName 'artifacts' -Clock $Clock -DeadlineSeconds $DeadlineSeconds
+	$SelectorArtifactName = 'ci-selection-shadow-' + $Context.run.id + '-' + $Context.run.attempt
+	$SelectorArtifacts = @($Artifacts | Where-Object { $_.name -ceq $SelectorArtifactName })
+	if ($SelectorArtifacts.Count -ne 1) { throw 'selector_artifact_identity_ambiguous' }
+	$SelectorArtifact = $SelectorArtifacts[0]
+	foreach ($Name in @('id','name','size_in_bytes','archive_download_url','expired','workflow_run')) { if ($SelectorArtifact.PSObject.Properties.Name -cnotcontains $Name) { throw 'api_schema_invalid' } }
+	if ($SelectorArtifact.expired -ne $false -or $null -eq $SelectorArtifact.workflow_run -or $SelectorArtifact.workflow_run -isnot [pscustomobject] -or
+		$SelectorArtifact.workflow_run.PSObject.Properties.Name -cnotcontains 'id' -or $SelectorArtifact.workflow_run.PSObject.Properties.Name -cnotcontains 'head_sha' -or
+		[string]$SelectorArtifact.workflow_run.id -cne $Context.run.id -or $SelectorArtifact.workflow_run.head_sha -cne $Context.source.headRevision) { throw 'selector_artifact_identity_mismatch' }
+	if (($SelectorArtifact.id -isnot [int] -and $SelectorArtifact.id -isnot [long]) -or [long]$SelectorArtifact.id -le 0 -or
+		($SelectorArtifact.size_in_bytes -isnot [int] -and $SelectorArtifact.size_in_bytes -isnot [long]) -or [long]$SelectorArtifact.size_in_bytes -le 0 -or [long]$SelectorArtifact.size_in_bytes -gt $script:AggregateLimits.archiveBytes) { throw 'selector_artifact_size_invalid' }
+	if ($SelectorArtifact.archive_download_url -isnot [string] -or $SelectorArtifact.archive_download_url -cnotmatch '^https://') { throw 'selector_artifact_url_invalid' }
+	$SelectorArchiveBytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri ([string]$SelectorArtifact.archive_download_url) -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.archiveBytes
+	if ($SelectorArchiveBytes.Length -ne [long]$SelectorArtifact.size_in_bytes) { throw 'selector_artifact_size_mismatch' }
+	$SelectorArchive = Read-StrictCiArchive -Bytes $SelectorArchiveBytes
+	if ($SelectorArchive.entries.Count -ne 1 -or $SelectorArchive.entries[0].name -cne 'ci-selection-shadow.json') { throw 'selector_archive_entries_invalid' }
+	$SelectorReportEntry = $SelectorArchive.entries[0]
+	$SelectedChecks = Read-AcceptedSelectorReport -ReportBytes $SelectorReportEntry.bytes -Context $Context
+	$SelectedCheckList = @($script:SelectorCheckIds | Where-Object { $SelectedChecks.Contains($_) })
+
 	$ObservedJobs = New-Object System.Collections.Generic.List[object]
+	$SelectedByKey = @{}
 	foreach ($Requirement in $Requirements.jobs) {
+		$SelectedSubset = @($Requirement.checks | Where-Object { $SelectedChecks.Contains([string]$_) })
+		$SelectedByKey[[string]$Requirement.key] = $SelectedSubset
+		$IsSelected = $SelectedSubset.Count -gt 0
 		$JobMatches = @($AttemptJobs | Where-Object { $_.name -ceq $Requirement.jobName })
 		if ($JobMatches.Count -eq 0) { throw 'partial_rerun_missing_job' }
 		if ($JobMatches.Count -ne 1) { throw 'job_identity_ambiguous' }
 		$Job = $JobMatches[0]
 		Assert-ApiJob -Job $Job
 		if ($Job.run_attempt -ne $Context.run.attempt) { throw 'job_attempt_mismatch' }
-		$ExpectedConclusion = if ($Requirement.selected) { 'success' } else { 'skipped' }
+		$ExpectedConclusion = if ($IsSelected) { 'success' } else { 'skipped' }
 		if ($Job.status -cne 'completed' -or $Job.conclusion -cne $ExpectedConclusion) { throw 'job_conclusion_not_expected' }
 		$Historical = @($AllJobs | Where-Object { $_.name -ceq $Requirement.jobName })
 		if ($Historical.Count -eq 0) { throw 'job_history_missing' }
 		$Highest = ($Historical | Measure-Object -Property run_attempt -Maximum).Maximum
 		if ($Highest -gt $Context.run.attempt) { throw 'newer_job_attempt_observed' }
 		if ($Highest -lt $Context.run.attempt) { throw 'partial_rerun_missing_job' }
-		$ObservedJobs.Add([pscustomobject][ordered]@{ key = [string] $Requirement.key; id = [string] $Job.id; name = [string] $Job.name; selected = [bool] $Requirement.selected; checks = @($Requirement.checks); attempt = [int] $Job.run_attempt; conclusion = [string] $Job.conclusion })
+		$ObservedJobs.Add([pscustomobject][ordered]@{ key = [string] $Requirement.key; id = [string] $Job.id; name = [string] $Job.name; selected = $IsSelected; capabilityChecks = @($Requirement.checks); selectedChecks = $SelectedSubset; attempt = [int] $Job.run_attempt; conclusion = [string] $Job.conclusion })
 	}
 
-	$Artifacts = Get-PagedApiItems -ApiRequest $ApiRequest -BaseUri ($RunPath + '/artifacts') -PropertyName 'artifacts' -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	$Receipts = New-Object System.Collections.Generic.List[object]
 	foreach ($Requirement in $Requirements.jobs) {
+		$SelectedSubset = @($SelectedByKey[[string]$Requirement.key])
 		$ArtifactMatches = @($Artifacts | Where-Object { $_.name -ceq $Requirement.artifactName })
-		if (-not $Requirement.selected) {
+		if ($SelectedSubset.Count -eq 0) {
 			if ($ArtifactMatches.Count -ne 0) { throw 'unselected_artifact_observed' }
 			continue
 		}
@@ -570,14 +658,17 @@ function New-CiAcceptanceAggregate {
 		if ($Artifact.size_in_bytes -isnot [int] -and $Artifact.size_in_bytes -isnot [long] -or [long] $Artifact.size_in_bytes -le 0 -or [long] $Artifact.size_in_bytes -gt $script:AggregateLimits.archiveBytes) { throw 'artifact_size_invalid' }
 		if ($Artifact.archive_download_url -isnot [string] -or $Artifact.archive_download_url -cnotmatch '^https://') { throw 'artifact_url_invalid' }
 		$ArchiveBytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri ([string] $Artifact.archive_download_url) -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.archiveBytes
+		if ($ArchiveBytes.Length -ne [long]$Artifact.size_in_bytes) { throw 'artifact_size_mismatch' }
 		$Archive = Read-StrictCiArchive -Bytes $ArchiveBytes
 		$ReceiptEntries = @($Archive.entries | Where-Object { $_.name -ceq 'ci-acceptance-receipt.json' })
 		if ($ReceiptEntries.Count -ne 1) { throw 'receipt_entry_missing' }
 		$Receipt = ConvertFrom-StrictBoundedJson -Bytes $ReceiptEntries[0].bytes
-		$Results = Assert-CiAcceptanceReceipt -Receipt $Receipt -Context $Context -Requirement $Requirement -Archive $Archive
+		$SelectedRequirement = [pscustomobject][ordered]@{ key=[string]$Requirement.key; jobName=[string]$Requirement.jobName; artifactName=[string]$Requirement.artifactName; checks=$SelectedSubset }
+		$Results = Assert-CiAcceptanceReceipt -Receipt $Receipt -Context $Context -Requirement $SelectedRequirement -Archive $Archive
 		$Receipts.Add([pscustomobject][ordered]@{
 			jobKey = [string] $Requirement.key
-			checks = @($Requirement.checks)
+			capabilityChecks = @($Requirement.checks)
+			selectedChecks = $SelectedSubset
 			artifactId = [string] $Artifact.id
 			artifactName = [string] $Artifact.name
 			archiveSha256 = [string] $Archive.sha256
@@ -597,6 +688,12 @@ function New-CiAcceptanceAggregate {
 		actions = $Context.actions
 		controller = $Context.controller
 		policy = $Context.policy
+		selectorEvidence = [pscustomobject][ordered]@{
+			job=[pscustomobject][ordered]@{id=[string]$SelectorJob.id;name=[string]$SelectorJob.name;attempt=[int]$SelectorJob.run_attempt;conclusion=[string]$SelectorJob.conclusion}
+			artifact=[pscustomobject][ordered]@{id=[string]$SelectorArtifact.id;name=[string]$SelectorArtifact.name;archiveSha256=[string]$SelectorArchive.sha256;archiveSizeBytes=[long]$SelectorArchive.sizeBytes}
+			reportSha256=[string]$SelectorReportEntry.sha256
+			selectedChecks=$SelectedCheckList
+		}
 		run = $Context.run
 		jobs = $ObservedJobs.ToArray()
 		receipts = $Receipts.ToArray()

@@ -118,7 +118,7 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `runner-scheduling-policy-tests` (`tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1`) | Required | Bounded runner scheduling, milestone phase, and retained Compile workspace policy contracts. |
 | `ci-selection-tests` (`tests/ci/Get-CiSelection.Tests.ps1`) | Required | Closed schema, raw rename/copy classification, revision attributes, checkout safety, conservative uncertainty, and bounded-output contracts for the non-authoritative selector. Runs as a serial barrier. |
 | `ci-acceptance-receipt-tests` (`tests/ci/New-CiAcceptanceReceipt.Tests.ps1`) | Required | Closed, bounded, create-only shadow receipt production with exact source, workflow, controller, policy, action, run, result, cleanup, and raw-evidence bindings. |
-| `ci-acceptance-aggregate-tests` (`tests/ci/Invoke-CiAcceptanceAggregate.Tests.ps1`) | Required | Same-attempt GitHub run/job/artifact reconciliation, strict JSON/archive parsing, complete obligation coverage, and fail-closed rerun and missing-producer behavior. |
+| `ci-acceptance-aggregate-tests` (`tests/ci/Invoke-CiAcceptanceAggregate.Tests.ps1`) | Required | Same-attempt GitHub run/job/artifact and accepted-selector reconciliation, strict JSON/archive parsing, derived obligation coverage, actor binding, and fail-closed rerun and missing-producer behavior. |
 | `compile-workspace-tests` (`tests/ci/Initialize-CompileWorkspace.Tests.ps1`) | Required | Exact output retention across revisions, scoped cleanup, unsafe-path rejection and preserved tracked source. Runs as a serial barrier. |
 | `engine-host-lease-tests` (`tests/ci/EngineRunnerHostLease.Tests.ps1`) | Required | Exclusive shared-host ownership, cleanup-bound release, stale-owner recovery, and deadline/resource propagation contracts. |
 | `managed-compile-registration-tests` (`tests/ci/ManagedCompileRegistration.Tests.ps1`) | Required | Bounded, hash-bound operator registration parsing and retained path-handle validation. |
@@ -1129,12 +1129,32 @@ producer and aggregate. Every other obligation fails closed as unsupported
 until a reviewed schema-aware validator is implemented.
 
 `aetheln.ci-acceptance-aggregate/v1` is the fixture-tested future hosted shadow
-reconciliation record. Once all producers are wired, it cross-checks the newest matching workflow run, exact attempt, direct
-producer job conclusions, attempt-specific artifacts, receipt identities, and
-raw archive contents through bounded GitHub API reads. Missing truthful
-producers, partial reruns, newer attempts, malformed or contradictory evidence,
-and selected jobs that are skipped are no acceptance. PR output is only an
-acceptance candidate; push output is only post-merge hosted health.
+reconciliation record. It does not trust caller-supplied job-selection booleans.
+Instead, it requires the exact successful current-attempt
+`ci-selection-shadow` job, downloads the uniquely named
+`ci-selection-shadow-<run-id>-<run-attempt>` artifact through bounded GitHub API
+reads, requires that archive to contain only `ci-selection-shadow.json`, and
+cross-binds that report to the accepted controller, policy, source and workflow
+identities. Producer-job selection and receipt check IDs are derived from that
+report. A producer job may cover multiple obligations; only its selected subset
+is required in the receipt. The aggregate also cross-checks both run actors,
+the newest matching workflow run, exact attempt, direct producer conclusions,
+attempt-specific artifact identities and byte lengths, receipt identities, and
+raw archive contents. Archive safety uses absolute 32 MiB compressed, 64-entry,
+4 MiB per-entry and 16 MiB total-expanded ceilings plus exact streamed lengths;
+it does not reject valid bounded evidence merely for a high compression ratio.
+Missing truthful producers or selector evidence, partial reruns, newer attempts,
+malformed or contradictory evidence, and selected jobs that are skipped are no
+acceptance. PR output is only an acceptance candidate; push output is only
+post-merge hosted health.
+
+Package 3A does not execute this aggregate or emit producer receipts. Package
+3B must pin the observed accepted controller, policy, workflow, action and
+requirements identities, preserve the external workflow checker, and add the
+minimum `actions: read` permission before activation. The current selector job
+is pull-request-only; push or scheduled aggregation is not operationally
+supported until an accepted selector producer for that event is wired and
+observed.
 
 `engine-runner-report.json` uses schema version 1 at the per-job locations
 listed in [Artifact Policy](#artifact-policy). Without an explicit `ReportPath`,
