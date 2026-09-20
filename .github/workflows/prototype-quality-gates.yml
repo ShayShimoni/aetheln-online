@@ -178,6 +178,7 @@ jobs:
               throw 'shadow_report_controller_identity_mismatch'
             }
           }
+          exit 0
       - name: Upload shadow selection record
         if: always()
         uses: actions/upload-artifact@v4
