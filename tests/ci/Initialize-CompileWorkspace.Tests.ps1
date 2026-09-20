@@ -19,12 +19,17 @@ function Invoke-FixtureGit([string] $Root, [string[]] $Arguments) {
 	& git -C $Root @Arguments | Out-Null
 	if ($LASTEXITCODE -ne 0) { throw 'Fixture git command failed.' }
 }
-function New-Fixture([string] $Name) {
+function New-Fixture {
+	[CmdletBinding(SupportsShouldProcess)]
+	param([string] $Name)
 	$Root = Join-Path $FixtureRoot $Name
+	# Git and [IO.File] writes ignore $WhatIfPreference, so one guard covers every mutation
+	# below. A previewed fixture returns nothing rather than a root that was never built.
+	if (-not $PSCmdlet.ShouldProcess($Root, 'Create compile-workspace Git fixture')) { return }
 	New-Item -ItemType Directory -Path $Root -Force | Out-Null
 	Invoke-FixtureGit $Root @('init', '-q')
-	Write-Fixture $Root '.gitignore' "Binaries/`nIntermediate/`nSaved/`nTestResults/`n" | Out-Null
-	Write-Fixture $Root 'Source/tracked.cpp' 'tracked-original' | Out-Null
+	Write-Fixture -Root $Root -Relative '.gitignore' -Value "Binaries/`nIntermediate/`nSaved/`nTestResults/`n" | Out-Null
+	Write-Fixture -Root $Root -Relative 'Source/tracked.cpp' -Value 'tracked-original' | Out-Null
 	Invoke-FixtureGit $Root @('add', '.')
 	Invoke-FixtureGit $Root @('-c', 'user.name=Fixture', '-c', 'user.email=fixture@invalid', 'commit', '-qm', 'fixture baseline')
 	return $Root
@@ -36,10 +41,13 @@ function Assert-Rejected([string] $Root, [string] $Reason, [switch] $CheckOnly) 
 }
 
 Assert-True (Test-Path -LiteralPath $Helper -PathType Leaf) 'Compile workspace helper must exist.'
+$WhatIfRoot = New-Fixture 'whatif-preview' -WhatIf
+Assert-True ($null -eq $WhatIfRoot) 'WhatIf must not return a fixture root that was never built.'
+Assert-True (-not (Test-Path -LiteralPath $FixtureRoot)) 'WhatIf must not create directories, files, or a Git repository.'
 $Root = New-Fixture 'exact retention with spaces'
 $Retained = @(
-	(Write-Fixture $Root 'Binaries/Win64/client.dll' 'binary-bytes'),
-	(Write-Fixture $Root 'Intermediate/Build/Win64/client.obj' 'object-bytes')
+	(Write-Fixture -Root $Root -Relative 'Binaries/Win64/client.dll' -Value 'binary-bytes'),
+	(Write-Fixture -Root $Root -Relative 'Intermediate/Build/Win64/client.obj' -Value 'object-bytes')
 )
 $Snapshots = @($Retained | ForEach-Object {
 	[IO.File]::SetLastWriteTimeUtc($_, [datetime]'2024-01-02T03:04:05Z')
@@ -100,7 +108,7 @@ Assert-True (Test-Path -LiteralPath $SafeDebris) 'Preflight rejection happens be
 
 $Linked = New-Fixture 'reparse-point'
 $Outside = Join-Path $FixtureRoot 'outside'
-$Sentinel = Write-Fixture $Outside 'sentinel.txt' 'outside-original'
+$Sentinel = Write-Fixture -Root $Outside -Relative 'sentinel.txt' -Value 'outside-original'
 if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
 	New-Item -ItemType Junction -Path (Join-Path $Linked 'Saved') -Target $Outside | Out-Null
 } else {

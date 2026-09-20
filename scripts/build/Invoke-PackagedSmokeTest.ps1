@@ -80,7 +80,7 @@ function Resolve-Executable([string] $Name, [string] $Path) {
 function Get-ProcessesUnderPath([string] $Root) {
 	$ResolvedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
 	$Prefix = $ResolvedRoot + [System.IO.Path]::DirectorySeparatorChar
-	foreach ($Process in @(Get-Process -ErrorAction SilentlyContinue)) {
+	foreach ($Process in @(Get-Process -ErrorAction Stop)) {
 		try { $ProcessPath = [string] $Process.Path } catch { continue }
 		if ([string]::IsNullOrWhiteSpace($ProcessPath)) { continue }
 		try { $FullProcessPath = [System.IO.Path]::GetFullPath($ProcessPath) } catch { continue }
@@ -88,11 +88,37 @@ function Get-ProcessesUnderPath([string] $Root) {
 	}
 }
 
-function Test-IsPreexistingProcessIdentity($Process, [hashtable] $Baseline) {
+function Resolve-ProcessIdentity($Process, [hashtable] $Baseline, [long] $BaselineTicks = 0) {
+	# Baseline absence is not ownership proof: enumeration/path observation can miss
+	# a pre-launch process. Require a readable start time beyond the captured boundary.
+	# An observed PID with an unreadable baseline identity remains protected even if
+	# its current identity becomes readable; an unknown identity never permits a kill.
 	$ProcessId = [string] $Process.Id
-	if (-not $Baseline.ContainsKey($ProcessId)) { return $false }
-	try { $StartTicks = [long] $Process.StartTime.ToUniversalTime().Ticks } catch { return $false }
-	return $StartTicks -eq [long] $Baseline[$ProcessId]
+	$Observed = $Baseline.ContainsKey($ProcessId)
+	if ($Observed -and $null -eq $Baseline[$ProcessId]) { return 'unresolved' }
+	try { $StartTicks = [long] $Process.StartTime.ToUniversalTime().Ticks } catch [System.SystemException] { return 'unresolved' }
+	if ($Observed -and $StartTicks -eq [long] $Baseline[$ProcessId]) { return 'preexisting' }
+	if (-not $Observed) {
+		if ($BaselineTicks -le 0) { return 'unresolved' }
+		if ($StartTicks -le $BaselineTicks) { return 'preexisting' }
+	}
+	return 'new'
+}
+
+function Test-IsPreexistingProcessIdentity($Process, [hashtable] $Baseline, [long] $BaselineTicks = 0) {
+	# True when the process must not be terminated: proven preexisting or unresolved.
+	return (Resolve-ProcessIdentity -Process $Process -Baseline $Baseline -BaselineTicks $BaselineTicks) -ne 'new'
+}
+
+function Get-PreexistingProcessIdentityBaseline([object[]] $Processes) {
+	$Baseline = @{}
+	foreach ($Process in @($Processes)) {
+		# StartTime throws Win32Exception (access denied) or InvalidOperationException
+		# (exited between enumeration and read). Record the PID with an unknown identity
+		# so cleanup protects it instead of treating it as smoke-owned.
+		try { $Baseline[[string] $Process.Id] = [long] $Process.StartTime.ToUniversalTime().Ticks } catch [System.SystemException] { $Baseline[[string] $Process.Id] = $null }
+	}
+	return $Baseline
 }
 
 function Initialize-EmptyLogRoot([string] $Path) {
@@ -109,7 +135,7 @@ function Assert-Placeholder([string[]] $Arguments, [string] $Placeholder, [strin
 	if (-not (($Arguments -join ' ') -like "*$Placeholder*")) { throw "$Name must contain $Placeholder so the smoke target is explicit." }
 }
 
-function Expand-Arguments([string[]] $Arguments, [string] $ClientId, [string] $LogPath) {
+function Expand-ArgumentList([string[]] $Arguments, [string] $ClientId, [string] $LogPath, [string] $ServerExecutable) {
 	$LogReplacement = if ($null -eq $LogPath) { '' } else { $LogPath }
 	return @($Arguments | ForEach-Object {
 		$_.Replace('{ClientId}', $ClientId).Replace('{LogPath}', $LogReplacement).Replace('{ServerExecutable}', $ServerExecutable).Replace('{ServerEndpoint}', $ServerEndpoint).Replace('{ServerMap}', $ServerMap)
@@ -120,13 +146,13 @@ function Expand-Pattern([string] $Pattern, [string] $ClientId) {
 	return $Pattern.Replace('{ClientId}', [regex]::Escape($ClientId)).Replace('{ServerEndpoint}', [regex]::Escape($ServerEndpoint)).Replace('{ServerMap}', [regex]::Escape($ServerMap))
 }
 
-function Write-Evidence([string] $Process, [string] $Role, [string] $Event, [string] $Source, [string] $Detail, [string] $ConnectionId = '') {
+function Write-Evidence([string] $Process, [string] $Role, [string] $EventName, [string] $Source, [string] $Detail, [string] $ConnectionId = '') {
 	$Record = [ordered]@{
 		schema = 'aetheln.packaged-smoke.evidence/v1'
 		timestamp = [DateTime]::UtcNow.ToString('o')
 		process = $Process
 		role = $Role
-		event = $Event
+		event = $EventName
 		source = $Source
 		detail = $Detail
 	}
@@ -159,7 +185,7 @@ function Write-Evidence([string] $Process, [string] $Role, [string] $Event, [str
 	} finally { $Stream.Dispose() }
 }
 
-function Wait-ForEvidence([string] $ProcessName, [string] $Role, [System.Diagnostics.Process] $Process, [string] $Description, [string] $Path, [string] $ErrorPath, [string] $Pattern, [string] $Event) {
+function Wait-ForEvidence([string] $ProcessName, [string] $Role, [System.Diagnostics.Process] $Process, [string] $Description, [string] $Path, [string] $ErrorPath, [string] $Pattern, [string] $EventName, [string] $ErrorPattern, [int] $TimeoutSeconds) {
 	$Deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 	do {
 		if (Test-Path -LiteralPath $Path -PathType Leaf) {
@@ -168,7 +194,7 @@ function Wait-ForEvidence([string] $ProcessName, [string] $Role, [System.Diagnos
 			if ($ErrorLine) { throw "$ProcessName reported an error while waiting for $Description in '$Path': $ErrorLine" }
 			$Match = $Lines | Where-Object { $_ -match $Pattern } | Select-Object -First 1
 			if ($Match) {
-				Write-Evidence $ProcessName $Role $Event $Path $Match
+				Write-Evidence -Process $ProcessName -Role $Role -EventName $EventName -Source $Path -Detail $Match
 				return
 			}
 		}
@@ -184,7 +210,7 @@ function Wait-ForEvidence([string] $ProcessName, [string] $Role, [System.Diagnos
 	throw "Timed out after $TimeoutSeconds seconds waiting for $Description for $ProcessName in '$Path' (pattern '$Pattern')."
 }
 
-function Wait-ForUniqueServerConnections([System.Diagnostics.Process] $Process, [string] $Path, [string] $ErrorPath, [string] $Pattern) {
+function Wait-ForUniqueServerConnectionPair([System.Diagnostics.Process] $Process, [string] $Path, [string] $ErrorPath, [string] $Pattern, [string] $ErrorPattern, [int] $TimeoutSeconds) {
 	$Expression = [regex]::new($Pattern)
 	if ($Expression.GetGroupNames() -notcontains 'ConnectionId') {
 		throw 'ServerClientConnectedPattern must contain a named regex capture (?<ConnectionId>...).'
@@ -205,7 +231,7 @@ function Wait-ForUniqueServerConnections([System.Diagnostics.Process] $Process, 
 			}
 			if ($Connections.Count -ge 2) {
 				foreach ($ConnectionId in @($Connections.Keys | Sort-Object | Select-Object -First 2)) {
-					Write-Evidence 'server' 'server-observation' 'server_observed_connection' $Path $Connections[$ConnectionId] $ConnectionId
+					Write-Evidence -Process 'server' -Role 'server-observation' -EventName 'server_observed_connection' -Source $Path -Detail $Connections[$ConnectionId] -ConnectionId $ConnectionId
 				}
 				return
 			}
@@ -222,9 +248,23 @@ function Wait-ForUniqueServerConnections([System.Diagnostics.Process] $Process, 
 	throw "Timed out after $TimeoutSeconds seconds waiting for two unique server connections; observed only $($Connections.Count) unique in '$Path' (pattern '$Pattern')."
 }
 
-Assert-Placeholder $ServerLauncherArguments '{ServerExecutable}' 'ServerLauncherArguments'
-Assert-Placeholder $ServerLauncherArguments '{ServerMap}' 'ServerLauncherArguments'
-Assert-Placeholder $ClientBaseArguments '{ServerEndpoint}' 'ClientBaseArguments'
+function Wait-ForOwnedProcessExit($Process, [int] $TimeoutMilliseconds, [string] $Source) {
+	# WaitForExit throws Win32Exception (handle could not be opened) or a SystemException
+	# when no process is associated any more. Neither decides cleanup: the bounded rescan
+	# loop does. Record the failure as evidence with PID and exception type only.
+	try {
+		if ($Process.WaitForExit($TimeoutMilliseconds)) { return $true }
+		Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_wait_failed' -Source $Source -Detail "PID $($Process.Id): exit not confirmed within $TimeoutMilliseconds milliseconds."
+	}
+	catch [System.SystemException] {
+		Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_wait_failed' -Source $Source -Detail "PID $($Process.Id): $($_.Exception.GetBaseException().GetType().Name)"
+	}
+	return $false
+}
+
+Assert-Placeholder -Arguments $ServerLauncherArguments -Placeholder '{ServerExecutable}' -Name 'ServerLauncherArguments'
+Assert-Placeholder -Arguments $ServerLauncherArguments -Placeholder '{ServerMap}' -Name 'ServerLauncherArguments'
+Assert-Placeholder -Arguments $ClientBaseArguments -Placeholder '{ServerEndpoint}' -Name 'ClientBaseArguments'
 if (($ServerLauncherArguments -join ' ') -like '*{LogPath}*' -and [string]::IsNullOrWhiteSpace($ServerLogPath)) {
 	throw 'ServerLogPath must be supplied with a Linux/WSL-compatible path when ServerLauncherArguments contains {LogPath}.'
 }
@@ -236,21 +276,25 @@ $ResolvedLauncher = Resolve-Executable 'ServerLauncherExecutable' $ServerLaunche
 $ResolvedClient = Resolve-Executable 'ClientExecutable' $ClientExecutable
 $ResolvedLogs = Initialize-EmptyLogRoot $LogRoot
 $ClientPackageRoot = Split-Path -Parent $ResolvedClient
-$PreexistingClientProcessIdentities = @{}
-foreach ($Process in @(Get-ProcessesUnderPath $ClientPackageRoot)) {
-	try { $PreexistingClientProcessIdentities[[string] $Process.Id] = [long] $Process.StartTime.ToUniversalTime().Ticks } catch { }
-}
 $EvidencePath = Join-Path $ResolvedLogs 'smoke-evidence.jsonl'
+# Capture identities before filtering by executable path. A process whose Path is
+# unreadable now may be visible under the package root later and must stay protected.
+# Enumeration errors fail before any smoke process is launched.
+$PreexistingClientProcessIdentities = Get-PreexistingProcessIdentityBaseline -Processes @(Get-Process -ErrorAction Stop)
+$ClientProcessBaselineTicks = [DateTime]::UtcNow.Ticks
+foreach ($UnknownProcessId in @($PreexistingClientProcessIdentities.Keys | Where-Object { $null -eq $PreexistingClientProcessIdentities[$_] })) {
+	Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'preexisting_identity_unknown' -Source $ClientPackageRoot -Detail "PID $UnknownProcessId start time unreadable; protected from cleanup."
+}
 $ServerStdOutLog = Join-Path $ResolvedLogs 'server.stdout.log'
 $ServerStdErrLog = Join-Path $ResolvedLogs 'server.stderr.log'
 $Processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
 
 try {
-	$ExpandedServerArguments = Expand-Arguments $ServerLauncherArguments 'server' $ServerLogPath
+	$ExpandedServerArguments = Expand-ArgumentList -Arguments $ServerLauncherArguments -ClientId 'server' -LogPath $ServerLogPath -ServerExecutable $ServerExecutable
 	$ServerProcess = Start-Process -FilePath $ResolvedLauncher -ArgumentList $ExpandedServerArguments -RedirectStandardOutput $ServerStdOutLog -RedirectStandardError $ServerStdErrLog -WindowStyle Hidden -PassThru
 	$Processes.Add($ServerProcess)
-	Write-Evidence 'server' 'server' 'process_started' $ResolvedLauncher ($ExpandedServerArguments -join ' ')
-	Wait-ForEvidence 'server' 'server' $ServerProcess 'server listen readiness' $ServerStdOutLog $ServerStdErrLog (Expand-Pattern $ServerReadyPattern 'server') 'server_listening'
+	Write-Evidence -Process 'server' -Role 'server' -EventName 'process_started' -Source $ResolvedLauncher -Detail ($ExpandedServerArguments -join ' ')
+	Wait-ForEvidence -ProcessName 'server' -Role 'server' -Process $ServerProcess -Description 'server listen readiness' -Path $ServerStdOutLog -ErrorPath $ServerStdErrLog -Pattern (Expand-Pattern $ServerReadyPattern 'server') -EventName 'server_listening' -ErrorPattern $ErrorPattern -TimeoutSeconds $TimeoutSeconds
 
 	$Clients = @{}
 	foreach ($ClientNumber in 1..2) {
@@ -258,43 +302,57 @@ try {
 		$ClientStdOutLog = Join-Path $ResolvedLogs "$ClientId.stdout.log"
 		$ClientStdErrLog = Join-Path $ResolvedLogs "$ClientId.stderr.log"
 		$ResolvedClientLogPath = if ($null -eq $ClientLogPath) { $null } else { $ClientLogPath.Replace('{ClientId}', $ClientId) }
-		$ExpandedClientArguments = Expand-Arguments $ClientBaseArguments $ClientId $ResolvedClientLogPath
+		$ExpandedClientArguments = Expand-ArgumentList -Arguments $ClientBaseArguments -ClientId $ClientId -LogPath $ResolvedClientLogPath -ServerExecutable $ServerExecutable
 		$ClientProcess = Start-Process -FilePath $ResolvedClient -ArgumentList $ExpandedClientArguments -RedirectStandardOutput $ClientStdOutLog -RedirectStandardError $ClientStdErrLog -WindowStyle Hidden -PassThru
 		$Processes.Add($ClientProcess)
 		$Clients[$ClientId] = $ClientProcess
-		Write-Evidence $ClientId 'client' 'process_started' $ResolvedClient ($ExpandedClientArguments -join ' ')
+		Write-Evidence -Process $ClientId -Role 'client' -EventName 'process_started' -Source $ResolvedClient -Detail ($ExpandedClientArguments -join ' ')
 	}
-	Wait-ForUniqueServerConnections $ServerProcess $ServerStdOutLog $ServerStdErrLog (Expand-Pattern $ServerClientConnectedPattern 'server')
+	Wait-ForUniqueServerConnectionPair -Process $ServerProcess -Path $ServerStdOutLog -ErrorPath $ServerStdErrLog -Pattern (Expand-Pattern $ServerClientConnectedPattern 'server') -ErrorPattern $ErrorPattern -TimeoutSeconds $TimeoutSeconds
 
 	foreach ($ClientNumber in 1..2) {
 		$ClientId = "client-$ClientNumber"
 		$ClientProcess = $Clients[$ClientId]
 		$ClientStdOutLog = Join-Path $ResolvedLogs "$ClientId.stdout.log"
 		$ClientStdErrLog = Join-Path $ResolvedLogs "$ClientId.stderr.log"
-		Wait-ForEvidence $ClientId 'client' $ClientProcess 'client connection confirmation' $ClientStdOutLog $ClientStdErrLog (Expand-Pattern $ClientConnectedPattern $ClientId) 'client_connected'
-		Wait-ForEvidence $ClientId 'client' $ClientProcess 'client map confirmation' $ClientStdOutLog $ClientStdErrLog (Expand-Pattern $ClientMapPattern $ClientId) 'client_map_confirmed'
+		Wait-ForEvidence -ProcessName $ClientId -Role 'client' -Process $ClientProcess -Description 'client connection confirmation' -Path $ClientStdOutLog -ErrorPath $ClientStdErrLog -Pattern (Expand-Pattern $ClientConnectedPattern $ClientId) -EventName 'client_connected' -ErrorPattern $ErrorPattern -TimeoutSeconds $TimeoutSeconds
+		Wait-ForEvidence -ProcessName $ClientId -Role 'client' -Process $ClientProcess -Description 'client map confirmation' -Path $ClientStdOutLog -ErrorPath $ClientStdErrLog -Pattern (Expand-Pattern $ClientMapPattern $ClientId) -EventName 'client_map_confirmed' -ErrorPattern $ErrorPattern -TimeoutSeconds $TimeoutSeconds
 	}
-	Write-Evidence 'orchestrator' 'smoke' 'smoke_passed' $EvidencePath "Two distinct clients connected to $ServerEndpoint on $ServerMap."
+	Write-Evidence -Process 'orchestrator' -Role 'smoke' -EventName 'smoke_passed' -Source $EvidencePath -Detail "Two distinct clients connected to $ServerEndpoint on $ServerMap."
 	Write-Output "Packaged smoke test passed: the Linux server listened on '$ServerEndpoint' and observed two unique connections; both packaged Windows clients confirmed '$ServerMap'. Evidence: '$EvidencePath'."
 }
 finally {
-	foreach ($Process in $Processes) {
-		if (-not $Process.HasExited) { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
-		$Process.WaitForExit()
-		$Process.Dispose()
-	}
-	Write-Evidence 'orchestrator' 'cleanup' 'process_cleanup_started' $EvidencePath 'Scanning for smoke-owned package processes.'
 	$CleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
+	$DirectCleanupFailures = [System.Collections.Generic.List[string]]::new()
+	foreach ($Process in $Processes) {
+		try {
+			try {
+				if (-not $Process.HasExited) { Stop-Process -Id $Process.Id -Force -ErrorAction Stop }
+			} catch [System.SystemException] {
+				Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_stop_failed' -Source $EvidencePath -Detail "PID $($Process.Id): $($_.Exception.GetBaseException().GetType().Name)"
+			}
+			$WaitMilliseconds = [int] [Math]::Max(0, [Math]::Min(5000, ($CleanupDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+			if (-not (Wait-ForOwnedProcessExit -Process $Process -TimeoutMilliseconds $WaitMilliseconds -Source $EvidencePath)) { $DirectCleanupFailures.Add([string] $Process.Id) }
+		} finally { $Process.Dispose() }
+	}
+	Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_started' -Source $EvidencePath -Detail 'Scanning for smoke-owned package processes.'
 	$QuiescentSince = $null
 	do {
-		$NewPackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot | Where-Object { -not (Test-IsPreexistingProcessIdentity $_ $PreexistingClientProcessIdentities) })
+		$PackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot)
+		$NewPackageProcesses = @($PackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'new' })
+		$UnresolvedPackageProcesses = @($PackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'unresolved' })
 		if ($NewPackageProcesses.Count -gt 0) {
 			$QuiescentSince = $null
 			foreach ($Process in $NewPackageProcesses) {
 				Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-				try { [void] $Process.WaitForExit(5000) } catch { }
+				$WaitMilliseconds = [int] [Math]::Max(0, [Math]::Min(5000, ($CleanupDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+				[void] (Wait-ForOwnedProcessExit -Process $Process -TimeoutMilliseconds $WaitMilliseconds -Source $ClientPackageRoot)
 				$Process.Dispose()
 			}
+		} elseif ($UnresolvedPackageProcesses.Count -gt 0) {
+			# Never terminate an unresolved process. Keep waiting, inside the same deadline,
+			# for its identity to resolve or for it to vanish; quiescence cannot start yet.
+			$QuiescentSince = $null
 		} elseif ($null -eq $QuiescentSince) {
 			$QuiescentSince = [DateTime]::UtcNow
 		} elseif (([DateTime]::UtcNow - $QuiescentSince).TotalSeconds -ge 2) {
@@ -302,9 +360,20 @@ finally {
 		}
 		Start-Sleep -Milliseconds 100
 	} while ([DateTime]::UtcNow -lt $CleanupDeadline)
-	$RemainingPackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot | Where-Object { -not (Test-IsPreexistingProcessIdentity $_ $PreexistingClientProcessIdentities) })
+	$FinalPackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot)
+	$UnresolvedProcessIds = @($FinalPackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'unresolved' } | ForEach-Object { [string] $_.Id })
+	if ($UnresolvedProcessIds.Count -gt 0) {
+		foreach ($UnresolvedProcessId in $UnresolvedProcessIds) {
+			Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_unresolved' -Source $ClientPackageRoot -Detail "PID $UnresolvedProcessId identity unresolved; not terminated."
+		}
+		throw "Packaged client process cleanup found $($UnresolvedProcessIds.Count) process(es) with unresolved identity under the package root (PID $($UnresolvedProcessIds -join ', ')) within 10 seconds; they were not terminated and cleanup is not complete."
+	}
+	$RemainingPackageProcesses = @($FinalPackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'new' })
+	if ($DirectCleanupFailures.Count -gt 0) {
+		throw "Packaged smoke direct process cleanup could not confirm exit for PID $($DirectCleanupFailures -join ', ') within the bounded cleanup window; cleanup is not complete."
+	}
 	if ($RemainingPackageProcesses.Count -gt 0 -or $null -eq $QuiescentSince -or ([DateTime]::UtcNow - $QuiescentSince).TotalSeconds -lt 2) {
 		throw 'Packaged client process cleanup did not reach quiescence within 10 seconds.'
 	}
-	Write-Evidence 'orchestrator' 'cleanup' 'process_cleanup_complete' $EvidencePath 'No smoke-owned package processes remained after the quiescence window.'
+	Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_complete' -Source $EvidencePath -Detail 'No smoke-owned package processes remained after the quiescence window.'
 }

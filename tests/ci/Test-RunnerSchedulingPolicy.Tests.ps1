@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param()
 
-# Sole purpose: validate the Issue #150 engine-runner scheduling contract —
+# Sole purpose: validate the Issue #150 engine-runner scheduling contract:
 # bounded schedule-only milestone phases that start only after the portable
 # gates pass, FIFO queueing that cannot cancel pending or in-progress work,
 # recorded trusted-compile queue-delay policy, trusted compile gated behind both
@@ -43,23 +43,23 @@ Assert-True ($Workflow -match "(?m)^on:\r?\n  pull_request:\r?\n  push:\r?\n    
 Assert-True ($Workflow -notmatch 'manual-packaged-smoke') 'Workflow must not define the retired manual-packaged-smoke job.'
 Assert-True ($Workflow -notmatch 'engine-runner-manual-smoke-report') 'Workflow must not publish the retired manual smoke artifact.'
 Assert-True ($Workflow -notmatch '-Mode PackagedSmoke') 'Workflow must not select the monolithic PackagedSmoke gate anywhere.'
-Assert-MatchCount $Workflow 'timeout-minutes:\s*1440' 0 'No job may hold the engine runner for a 24-hour bound.'
-Assert-MatchCount $Workflow '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$' 5 'Exactly five jobs (trusted compile plus four phases) may target the engine runner.'
-Assert-MatchCount $Workflow '(?m)^\s+runs-on: windows-latest\r?$' 2 'Exactly two jobs (portable gates and the classifier) run on the GitHub-hosted runner.'
+Assert-MatchCount -Text $Workflow -Pattern 'timeout-minutes:\s*1440' -Expected 0 -Message 'No job may hold the engine runner for a 24-hour bound.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$' -Expected 5 -Message 'Exactly five jobs (trusted compile plus four phases) may target the engine runner.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: windows-latest\r?$' -Expected 2 -Message 'Exactly two jobs (portable gates and the classifier) run on the GitHub-hosted runner.'
 
 # Every engine-runner concurrency block queues FIFO without cancelling pending
 # or in-progress work. queue: single would silently cancel a pending trusted
 # compile; cancel-in-progress: true would cancel healthy milestone work.
-Assert-MatchCount $Workflow '(?m)^\s+group: aetheln-engine-runner\r?$' 5 'Exactly five jobs must share the engine-runner concurrency group.'
-Assert-MatchCount $Workflow '(?m)^\s+queue: max\r?$' 5 'Every engine-runner concurrency block must use queue: max so pending jobs wait FIFO instead of being replaced.'
-Assert-MatchCount $Workflow '(?m)^\s+cancel-in-progress: false\r?$' 5 'Every engine-runner concurrency block must keep cancel-in-progress: false.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+group: aetheln-engine-runner\r?$' -Expected 5 -Message 'Exactly five jobs must share the engine-runner concurrency group.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+queue: max\r?$' -Expected 5 -Message 'Every engine-runner concurrency block must use queue: max so pending jobs wait FIFO instead of being replaced.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+cancel-in-progress: false\r?$' -Expected 5 -Message 'Every engine-runner concurrency block must keep cancel-in-progress: false.'
 Assert-True ($Workflow -notmatch '(?m)^\s+cancel-in-progress: true\r?$') 'No engine job may cancel in-progress work.'
 
 # No job-level predicate may bypass a failed, cancelled, or skipped
 # prerequisite: needs edges use the implicit success() only. always() is
 # permitted solely as the bare step-level predicate on report uploads.
 Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)' -and $Workflow -notmatch 'success\(\)') 'Workflow must not use explicit status functions in job predicates.'
-Assert-MatchCount $Workflow 'always\(\)' ([regex]::Matches($Workflow, '(?m)^\s+if: always\(\)\r?$').Count) 'always() may appear only as the bare step-level upload predicate.'
+Assert-MatchCount -Text $Workflow -Pattern 'always\(\)' -Expected ([regex]::Matches($Workflow, '(?m)^\s+if: always\(\)\r?$').Count) -Message 'always() may appear only as the bare step-level upload predicate.'
 Assert-True ($Workflow -notmatch 'needs\.[a-z-]+\.result') 'Workflow must not inspect needs results to run after a failed or skipped prerequisite.'
 
 # GitHub-hosted jobs carry explicit conservative bounds.
@@ -85,19 +85,19 @@ $PhaseContract = @(
 )
 foreach ($Phase in $PhaseContract) {
 	$Body = [string] $JobBodies[$Phase.Job]
-	Assert-MatchCount $Body '(?m)^\s+if: ' 2 "$($Phase.Job) must declare exactly one job-level trigger predicate plus the report-upload predicate."
+	Assert-MatchCount -Text $Body -Pattern '(?m)^\s+if: ' -Expected 2 -Message "$($Phase.Job) must declare exactly one job-level trigger predicate plus the report-upload predicate."
 	Assert-True ($Body -match $PhaseTrigger) "$($Phase.Job) must run only on the schedule event."
 	Assert-True ($Body -notmatch 'workflow_dispatch' -and $Body -notmatch 'pull_request' -and $Body -notmatch "'push'") "$($Phase.Job) must not be selectable by dispatch, pull requests, or pushes."
 	Assert-True ($Body -notmatch 'always\(\)\s*&&' -and $Body -notmatch '(?m)^\s+if:\s*always\(\)\s*\|\|' -and $Body -notmatch 'cancelled\(\)' -and $Body -notmatch 'failure\(\)') "$($Phase.Job) must not bypass a skipped, cancelled, or failed predecessor."
 	Assert-True ($Body -match ('(?m)^\s+needs: ' + [regex]::Escape($Phase.Needs) + '\r?$')) "$($Phase.Job) must run strictly after $($Phase.Needs) and release the runner between phases."
-	Assert-MatchCount $Body '(?m)^\s+needs:' 1 "$($Phase.Job) must declare exactly one predecessor."
+	Assert-MatchCount -Text $Body -Pattern '(?m)^\s+needs:' -Expected 1 -Message "$($Phase.Job) must declare exactly one predecessor."
 	Assert-True ($Body -match ('(?m)^\s+timeout-minutes: ' + $Phase.JobTimeout + '\r?$')) "$($Phase.Job) must be bounded by timeout-minutes $($Phase.JobTimeout)."
-	Assert-MatchCount $Body '(?m)^\s+timeout-minutes: ' 1 "$($Phase.Job) must declare exactly one job bound."
-	Assert-MatchCount $Body ('(?m)^\s+-Mode ' + [regex]::Escape($Phase.Mode) + ' `\r?$') 1 "$($Phase.Job) must select mode $($Phase.Mode) exactly once."
-	Assert-MatchCount $Body '(?m)^\s+-Mode ' 1 "$($Phase.Job) must invoke the gate exactly once."
+	Assert-MatchCount -Text $Body -Pattern '(?m)^\s+timeout-minutes: ' -Expected 1 -Message "$($Phase.Job) must declare exactly one job bound."
+	Assert-MatchCount -Text $Body -Pattern ('(?m)^\s+-Mode ' + [regex]::Escape($Phase.Mode) + ' `\r?$') -Expected 1 -Message "$($Phase.Job) must select mode $($Phase.Mode) exactly once."
+	Assert-MatchCount -Text $Body -Pattern '(?m)^\s+-Mode ' -Expected 1 -Message "$($Phase.Job) must invoke the gate exactly once."
 	Assert-True ($Body -match ('(?m)^\s+-PhaseTimeoutMinutes ' + $Phase.PhaseTimeout + '\r?$')) "$($Phase.Job) must enforce the recorded $($Phase.PhaseTimeout)-minute script watchdog inside its job bound."
 	Assert-True ([int] $Phase.PhaseTimeout -lt $Phase.JobTimeout) "$($Phase.Job) watchdog must expire before the total job bound so evidence is uploaded."
-	Assert-MatchCount $Body ('(?m)^\s+name: ' + [regex]::Escape($Phase.Artifact) + '\r?$') 1 "$($Phase.Job) must upload its own distinct report artifact."
+	Assert-MatchCount -Text $Body -Pattern ('(?m)^\s+name: ' + [regex]::Escape($Phase.Artifact) + '\r?$') -Expected 1 -Message "$($Phase.Job) must upload its own distinct report artifact."
 	Assert-True ($Body -match '(?m)^\s+if: always\(\)\r?$') "$($Phase.Job) must retain its report evidence even on failure or timeout."
 	Assert-True ($Body -match '(?m)^\s+if-no-files-found: error\r?$') "$($Phase.Job) must fail closed when its report is missing."
 	Assert-True ($Body -notmatch '(?m)^\s+-Mode (Compile|PackagedSmoke) `\r?$') "$($Phase.Job) must not select a non-phase gate mode."
@@ -113,7 +113,7 @@ foreach ($Phase in $PhaseContract) {
 # cancellation, or skip stops the whole engine chain before it touches the
 # runner.
 Assert-True (([string] $JobBodies['quality-gates']) -notmatch '(?m)^\s+needs:') 'quality-gates must depend on nothing.'
-Assert-MatchCount ([string] $JobBodies['quality-gates']) '(?m)^\s+if: ' 1 'quality-gates must run unconditionally on every event; its only predicate is the report-upload always().'
+Assert-MatchCount -Text ([string] $JobBodies['quality-gates']) -Pattern '(?m)^\s+if: ' -Expected 1 -Message 'quality-gates must run unconditionally on every event; its only predicate is the report-upload always().'
 
 # Package phases need full Content LFS; the later phases consume only verified
 # handoff payloads and must not depend on residual workspace or LFS state.
@@ -131,7 +131,7 @@ Assert-True ($TrustedCompile -match "needs\.change-impact\.outputs\.engine_requi
 Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Trusted compile must remain a pull-request lane.'
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $TrustedCompile -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $TrustedCompile -match 'github\.triggering_actor == github\.repository_owner') 'Trusted compile must keep the owner and same-repository trust checks.'
 Assert-True ($TrustedCompile -notmatch "github\.event_name == 'schedule'") 'Trusted compile must not be selectable by schedule.'
-Assert-MatchCount $TrustedCompile 'always\(\)' 1 'Trusted compile may use always() only on its report upload, never to bypass a failed, cancelled, or skipped prerequisite.'
+Assert-MatchCount -Text $TrustedCompile -Pattern 'always\(\)' -Expected 1 -Message 'Trusted compile may use always() only on its report upload, never to bypass a failed, cancelled, or skipped prerequisite.'
 Assert-True ($TrustedCompile -match '(?m)^\s+if: always\(\)\r?$') 'Trusted compile must retain its report evidence on failure.'
 Assert-True ($TrustedCompile -notmatch 'timeout-minutes:\s*1440') 'Trusted compile must not be a 24-hour job.'
 Assert-True ($TrustedCompile -notmatch '-PhaseTimeoutMinutes' -and $TrustedCompile -notmatch '-RunId') 'Trusted compile must not depend on the scheduled handoff contract.'
@@ -203,7 +203,7 @@ Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Artifact paths mu
 
 # The decided scheduling policy values are recorded in canonical documentation
 
-function Assert-ReportOnlyUploads([string] $Text) {
+function Assert-ReportOnlyUpload([string] $Text) {
 	$Blocks = @([regex]::Split($Text, '(?m)^      - ') | Where-Object { $_ -match '(?m)^\s*uses: actions/upload-artifact@' })
 	Assert-True ($Blocks.Count -eq 6) 'Exactly six artifact-upload steps must exist.'
 	$Allowed = @(
@@ -217,14 +217,14 @@ function Assert-ReportOnlyUploads([string] $Text) {
 		Assert-True ($Allowed -ccontains $Paths[0].Groups[1].Value) 'Every uploaded artifact must be an exact approved report path.'
 	}
 }
-Assert-ReportOnlyUploads $Workflow
+Assert-ReportOnlyUpload $Workflow
 $ExtraUpload = $Workflow + [Environment]::NewLine + (@('      - uses: actions/upload-artifact@v4', '        with:', '          name: unexpected-payload', '          path: Saved') -join [Environment]::NewLine)
 $ExtraRejected = $false
-try { Assert-ReportOnlyUploads $ExtraUpload } catch { $ExtraRejected = $true }
+try { Assert-ReportOnlyUpload $ExtraUpload } catch { $ExtraRejected = $true }
 Assert-True $ExtraRejected 'An added directory upload must fail even while all six reports remain.'
 $WrongUpload = $Workflow.Replace('path: milestone/TestResults/engine-runner-report.json', 'path: Saved')
 $WrongRejected = $false
-try { Assert-ReportOnlyUploads $WrongUpload } catch { $WrongRejected = $true }
+try { Assert-ReportOnlyUpload $WrongUpload } catch { $WrongRejected = $true }
 Assert-True $WrongRejected 'Replacing a report with a generated directory must fail.'
 # with truthful semantics: the 40-minute value is the maximum delay attributable
 # to one currently running scheduled phase, not an absolute guarantee.

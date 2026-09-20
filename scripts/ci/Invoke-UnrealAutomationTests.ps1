@@ -120,17 +120,30 @@ function ConvertTo-ProcessArgument([AllowEmptyString()][string] $Value) {
 	if($Value.Length-eq 0-or $Value-match '\s'){return '"'+$Value+'"'}
 	return $Value
 }
-function Stop-ProcessTree([Diagnostics.Process] $TargetProcess,$TargetJob) {
+function Stop-ProcessTree {
+	[CmdletBinding(SupportsShouldProcess)]
+	param([Diagnostics.Process] $TargetProcess,$TargetJob)
+	# Disposing the kill-on-close job already terminates the owned tree, so the
+	# decision precedes it. The target text stays generic: no command line or
+	# environment data belongs in a confirmation prompt.
+	if(-not $PSCmdlet.ShouldProcess('the owned Unreal editor process tree','Terminate')){return}
 	if($null-ne $TargetJob){$TargetJob.Dispose()}
-	try{[void]$TargetProcess.WaitForExit(5000)}catch{}
-	$Alive=$false;try{$Alive=-not $TargetProcess.HasExited}catch{}
-	if($Alive){Invoke-BoundedTaskKill $TargetProcess.Id;try{if(-not $TargetProcess.HasExited){$TargetProcess.Kill()}}catch{};try{[void]$TargetProcess.WaitForExit(5000)}catch{}}
+	# Cleanup runs after the outcome is already decided, so each failure below is
+	# recorded and stepped over: none may replace the original failure reason.
+	try{[void]$TargetProcess.WaitForExit(5000)}catch{Write-Verbose "Bounded wait for the owned process tree failed: $($_.Exception.Message)"}
+	# Property access yields $null instead of throwing when no process is
+	# associated, and -not $null is $true, so escalation must require an observed
+	# boolean. Otherwise an unobservable handle escalates against a bogus id.
+	$Alive=$false;try{$Exited=$TargetProcess.HasExited;if($Exited-is [bool]){$Alive=-not $Exited}else{Write-Verbose 'Owned process state is unobservable, so termination is not escalated.'}}catch{Write-Verbose "Reading owned process state failed, so termination is not escalated: $($_.Exception.Message)"}
+	if($Alive){Invoke-BoundedTaskKill $TargetProcess.Id;try{if(-not $TargetProcess.HasExited){$TargetProcess.Kill()}}catch{Write-Verbose "Direct termination of the owned process failed: $($_.Exception.Message)"};try{[void]$TargetProcess.WaitForExit(5000)}catch{Write-Verbose "Bounded wait after termination failed: $($_.Exception.Message)"}}
 }
 function Invoke-BoundedTaskKill([int] $ProcessId) {
 	$TaskKill=Get-Command 'taskkill.exe' -ErrorAction SilentlyContinue;if($null-eq $TaskKill){return}
 	$Info=New-Object Diagnostics.ProcessStartInfo;$Info.FileName=$TaskKill.Source;$Info.Arguments="/PID $ProcessId /T /F";$Info.UseShellExecute=$false;$Info.CreateNoWindow=$true
 	$TaskKillProcess=New-Object Diagnostics.Process;$TaskKillProcess.StartInfo=$Info
-	try{if($TaskKillProcess.Start()-and -not $TaskKillProcess.WaitForExit(5000)){try{$TaskKillProcess.Kill()}catch{};try{[void]$TaskKillProcess.WaitForExit(1000)}catch{}}}catch{}finally{$TaskKillProcess.Dispose()}
+	# The fallback is best effort and strictly bounded; every failure is recorded
+	# rather than discarded, and none of them changes the run's failure reason.
+	try{if($TaskKillProcess.Start()-and -not $TaskKillProcess.WaitForExit(5000)){try{$TaskKillProcess.Kill()}catch{Write-Verbose "Terminating the unresponsive taskkill fallback failed: $($_.Exception.Message)"};try{[void]$TaskKillProcess.WaitForExit(1000)}catch{Write-Verbose "Bounded wait for the terminated taskkill fallback failed: $($_.Exception.Message)"}}}catch{Write-Verbose "The bounded taskkill fallback could not run: $($_.Exception.Message)"}finally{$TaskKillProcess.Dispose()}
 }
 function Read-UnrealReport {
 	$Raw=Get-Content $UnrealReportPath -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop

@@ -26,7 +26,7 @@ function Resolve-RequiredPath([string] $Name, [string] $Path, [string] $PathType
 	(Resolve-Path -LiteralPath $Path).Path
 }
 function Invoke-IdentityCommand([string] $File, [string[]] $Arguments) {
-	try { $Value = (& $File @Arguments 2>&1 | Out-String).Trim(); if ($LASTEXITCODE -eq 0 -and $Value) { return $Value } } catch { }
+	try { $Value = (& $File @Arguments 2>&1 | Out-String).Trim(); if ($LASTEXITCODE -eq 0 -and $Value) { return $Value } } catch { Write-Verbose "Identity command probe failed, so that provenance field stays unavailable: $($_.Exception.Message)" }
 	return $null
 }
 function Get-OptionalProperty($Object, [string] $Name) {
@@ -35,14 +35,14 @@ function Get-OptionalProperty($Object, [string] $Name) {
 	return @($Property.Value)
 }
 
-$ResolvedProject = Resolve-RequiredPath 'ProjectPath' $ProjectPath 'Leaf'
+$ResolvedProject = Resolve-RequiredPath -Name 'ProjectPath' -Path $ProjectPath -PathType 'Leaf'
 $RepositoryRoot = Split-Path -Parent $ResolvedProject
-$ResolvedEngine = Resolve-RequiredPath 'EngineRoot' $EngineRoot 'Container'
-$ResolvedToolchain = Resolve-RequiredPath 'LinuxToolchainRoot' $LinuxToolchainRoot 'Container'
-$ResolvedClient = Resolve-RequiredPath 'ClientArchivePath' $ClientArchivePath 'Container'
-$ResolvedServer = Resolve-RequiredPath 'ServerArchivePath' $ServerArchivePath 'Container'
-$ResolvedCompiler = Resolve-RequiredPath 'CompilerPath' $CompilerPath 'Leaf'
-$ResolvedResourceCompiler = Resolve-RequiredPath 'ResourceCompilerPath' $ResourceCompilerPath 'Leaf'
+$ResolvedEngine = Resolve-RequiredPath -Name 'EngineRoot' -Path $EngineRoot -PathType 'Container'
+$ResolvedToolchain = Resolve-RequiredPath -Name 'LinuxToolchainRoot' -Path $LinuxToolchainRoot -PathType 'Container'
+$ResolvedClient = Resolve-RequiredPath -Name 'ClientArchivePath' -Path $ClientArchivePath -PathType 'Container'
+$ResolvedServer = Resolve-RequiredPath -Name 'ServerArchivePath' -Path $ServerArchivePath -PathType 'Container'
+$ResolvedCompiler = Resolve-RequiredPath -Name 'CompilerPath' -Path $CompilerPath -PathType 'Leaf'
+$ResolvedResourceCompiler = Resolve-RequiredPath -Name 'ResourceCompilerPath' -Path $ResourceCompilerPath -PathType 'Leaf'
 $ActualRevision = Invoke-IdentityCommand 'git' @('-C', $RepositoryRoot, 'rev-parse', 'HEAD')
 if (-not $ActualRevision) { throw "Could not determine repository HEAD for '$RepositoryRoot'." }
 if ($ActualRevision -ne $SourceRevision) { throw "Requested SourceRevision '$SourceRevision' does not match repository HEAD '$ActualRevision'." }
@@ -52,10 +52,10 @@ if ($LASTEXITCODE -ne 0) { throw "Could not verify repository cleanliness with '
 $SourceChanges = @($SourceStatus | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 if ($SourceChanges.Count -gt 0) { throw "Provenance requires a clean repository but found $($SourceChanges.Count) modified or untracked path(s):`n - $($SourceChanges -join "`n - ")" }
 
-$BuildVersionPath = Resolve-RequiredPath 'Unreal Build.version' (Join-Path $ResolvedEngine 'Engine/Build/Build.version') 'Leaf'
+$BuildVersionPath = Resolve-RequiredPath -Name 'Unreal Build.version' -Path (Join-Path $ResolvedEngine 'Engine/Build/Build.version') -PathType 'Leaf'
 try { $BuildVersion = Get-Content -LiteralPath $BuildVersionPath -Raw | ConvertFrom-Json } catch { throw "Unreal identity file '$BuildVersionPath' is not valid JSON: $($_.Exception.Message)" }
 $ToolchainRootIdentity = Split-Path -Leaf $ResolvedToolchain
-$ToolchainCompilerRoot = Resolve-RequiredPath 'Linux cross-toolchain x86_64-unknown-linux-gnu directory' (Join-Path $ResolvedToolchain 'x86_64-unknown-linux-gnu') 'Container'
+$ToolchainCompilerRoot = Resolve-RequiredPath -Name 'Linux cross-toolchain x86_64-unknown-linux-gnu directory' -Path (Join-Path $ResolvedToolchain 'x86_64-unknown-linux-gnu') -PathType 'Container'
 $ToolchainCompiler = Get-ChildItem -LiteralPath $ToolchainCompilerRoot -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('clang++.exe', 'clang.exe', 'clang++.bat', 'clang.bat') } | Sort-Object FullName | Select-Object -First 1
 if (-not $ToolchainCompiler) { throw "Linux cross-toolchain identity could not find clang under '$ToolchainCompilerRoot'." }
 $ToolchainCompilerBanner = Invoke-IdentityCommand $ToolchainCompiler.FullName @('--version')
