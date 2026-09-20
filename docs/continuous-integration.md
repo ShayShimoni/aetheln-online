@@ -115,6 +115,7 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `engine-runner-post-command-state-tests` (`tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1`) | Required | Fixture regression tests for repository-state checks after engine commands, including command failures. |
 | `prototype-quality-workflow-tests` (`tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`) | Required | Workflow event, trust, dependency, artifact, checkout, and change-impact classification contracts. |
 | `runner-scheduling-policy-tests` (`tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1`) | Required | Bounded runner scheduling, milestone phase, and retained Compile workspace policy contracts. |
+| `ci-selection-tests` (`tests/ci/Get-CiSelection.Tests.ps1`) | Required | Closed schema, raw rename/copy classification, revision attributes, checkout safety, conservative uncertainty, and bounded-output contracts for the non-authoritative selector. Runs as a serial barrier. |
 | `compile-workspace-tests` (`tests/ci/Initialize-CompileWorkspace.Tests.ps1`) | Required | Exact output retention across revisions, scoped cleanup, unsafe-path rejection and preserved tracked source. Runs as a serial barrier. |
 | `engine-host-lease-tests` (`tests/ci/EngineRunnerHostLease.Tests.ps1`) | Required | Exclusive shared-host ownership, cleanup-bound release, stale-owner recovery, and deadline/resource propagation contracts. |
 | `managed-compile-registration-tests` (`tests/ci/ManagedCompileRegistration.Tests.ps1`) | Required | Bounded, hash-bound operator registration parsing and retained path-handle validation. |
@@ -178,6 +179,19 @@ check, runs the local invocation above, and always uploads
 The required `unreal-automation-tests` check exercises portable fixtures and
 does not launch Unreal Engine. The GitHub-hosted portable job does not run the
 real engine automation tests.
+
+The independent `ci-selection-shadow` job runs only for pull requests on
+GitHub-hosted `windows-latest` and is bounded at 10 minutes. It has no `needs`,
+job outputs, self-hosted labels, engine concurrency, or consumer. Its result
+cannot start, skip, cancel, or change the conclusion of any existing job. A
+shadow failure or missing artifact is visible on that diagnostic job, while
+job-level `continue-on-error` prevents it from failing the authoritative
+workflow result. The legacy
+`change-impact` job remains the sole selection authority; after LF
+normalization its unchanged block from `change-impact:` through the
+`trusted-candidate-compile` explanatory comment is exactly 5,595 UTF-8 bytes
+with SHA-256
+`b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -264,6 +278,98 @@ run; the failed `change-impact` check is visible on the pull request and a
 rerun restores the decision. This is the one path where uncertainty does not
 produce a compile, and it never bypasses the portable gates.
 
+### Pull-request shadow selector (Issue #167 Package 2)
+
+The shadow job first fetches the exact pull-request base, head, and synthetic
+workflow merge objects into a fresh bare/no-checkout control repository. Only
+after all three identities match their event SHAs does `actions/checkout@v4`
+sparsely check out `scripts/ci/Get-CiSelection.ps1` from the exact accepted
+base into a separate run/attempt control path. No candidate selector,
+repository script, filter, or hook is checked out or executed. When the
+accepted-base controller exists, its Git blob OID and SHA-256 are recorded and
+the checked-out bytes must match that blob before PowerShell executes them.
+The controller reads the candidate trees from the bare object database;
+`execution.checkoutAllowed` is always `false`.
+Private-repository fetches use the ephemeral per-run `github.token` only as a
+masked, per-command HTTP authorization header. The token is not embedded in a
+remote URL, persisted by checkout, written to Git configuration, or included
+in the report.
+
+The Package 2 bootstrap base does not contain the selector. That expected case
+writes a closed `aetheln.ci-selection/v1` record with
+`execution.mode=accepted_controller_unavailable`, null controller OID/SHA-256,
+every check conservatively selected, `selection.shadow=true`,
+`selection.authoritative=false`, legacy authority `not_observed`, and
+comparison `unavailable`; its policy digest is 64 zeroes because no accepted
+policy/controller exists at that base. This is a diagnostic bootstrap boundary, not a
+comparison, equivalence, or selector-acceptance claim. A later pull request is
+the first meaningful live comparison after this controller is accepted-base
+code.
+
+The CLI accepts `-ContextJson`, `-OutputPath`, and `-RepositoryRoot`. A pull
+request context has exactly `kind`, `baseRevision`, `headRevision`,
+`workflowRevision`, and `controllerRevision`; revisions are 40 lowercase hex
+Git IDs, the controller equals the base, and the workflow revision is a
+two-parent commit ordered base then head. The closed output roots are
+`schemaVersion`, `policy`, `source`, `execution`, `classification`,
+`selection`, `legacyAuthority`, and `comparison`. Policy `shadow-v1` has
+canonical digest
+`07bb90760bf493e25e40ac781143d07e701a113db3ede8bc7380490f6b85e9b6`
+and exactly these check IDs: `portable`, `visual-package`, `delivery-harness`,
+`native-client-server-compile`, `unreal-editor-automation`,
+`content-reference-validation`, `controller-contract`,
+`controller-operational-proof`, and `clean-package-provenance-smoke`.
+Obligations contain exactly `id`, `selected`, and `reasons`. Success reasons
+are `path:<path>`, `attribute:<path>`, or `scheduled_event`; uncertainty keeps
+the fail-closed reason token that caused it, never an empty successful result.
+Reusable-call contexts additionally preserve the closed `callerKind` plus the
+caller workflow revision. A called pull request validates the same ordered
+base/head merge parents; called pushes bind workflow/controller revision to
+the head; called schedules bind both to the scheduled revision. The `source`
+record retains `callerKind` instead of collapsing called events into an
+ambiguous generic context.
+
+Paths outside the closed documented/controller/visual/delivery/engine/build
+families fail closed as `path_unclassified`, producing an all-obligations
+conservative report. Adding a new repository root therefore cannot silently
+inherit portable-only treatment. Build scripts and build tests select delivery
+harness proof; production CI scripts and workflows select both controller
+contract and operational proof; plugin Content also selects content-reference
+validation.
+The digest is SHA-256 over the accepted selector source after deterministic LF
+normalization, so changes to mappings, contexts, limits, uncertainty behavior,
+or attribute rules change the policy identity. `controllerSha256` separately
+binds the exact unnormalized blob bytes that executed.
+
+Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
+--no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
+both paths and preserve status, score, modes, OIDs, and paths. The head tree
+allows regular blob modes `100644` and `100755` only. Submodules, symlinks,
+absolute/backslash/traversal paths, Windows reserved/invalid components,
+trailing dot/space, overlong components, and ordinal case-insensitive or
+Unicode-NFC collisions fail closed before any runner can consume the result.
+
+Attributes are read from each exact revision with `git check-attr --source`
+for `filter`, `diff`, `merge`, and `text`. System attributes are disabled, an
+empty explicit attributes file is used, and repository `info/attributes` is
+rejected. A `.gitattributes` change compares effective attributes across every
+bounded base/head path. LFS Content selects content-reference and native
+compile; LFS visuals select visual validation. `.lfsconfig` changes are
+unsupported and conservative.
+
+Each Git operation is bounded to two minutes, stdin and stdout to 8 MiB, stderr to
+64 KiB, raw diff and tree entries to 4,096 each, one path to 4,096 UTF-8 bytes,
+and the final JSON to 4 MiB at maximum JSON depth 16. One artifact producer
+uploads exactly `ci-selection-shadow.json` as
+`ci-selection-shadow-<run-id>-<run-attempt>` with no `retention-days` override.
+Evidence unavailable outside this controlled process/artifact boundary is
+unavailable evidence, never an implicit selector pass.
+Because the shadow job has no dependency on `change-impact`, its own record
+uses `legacyAuthority.reason=not_observed`, a null legacy engine decision, and
+`comparison.status=unavailable`. Package 2 never fabricates an in-job legacy
+comparison; later receipt aggregation may compare actual same-attempt job
+evidence without granting the shadow selector authority.
+
 Engine-dependent jobs use a repository-scoped Windows self-hosted runner with
 labels `[self-hosted, Windows, X64, aetheln-engine]` and serialize through the
 `aetheln-engine-runner` concurrency group with `queue: max` and
@@ -276,6 +382,7 @@ contract is:
 
 | Job | Event | `needs` | Trust predicate | Gate |
 | --- | --- | --- | --- | --- |
+| `ci-selection-shadow` | `pull_request` | None | Diagnostic only; exact accepted-base controller bytes, never candidate selector bytes. | Produce a non-authoritative comparison artifact; no job consumes it. |
 | `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
 | `scheduled-client-package` | `schedule` at `02:00 UTC` daily | `quality-gates` | Schedule-only; the schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
 | `scheduled-server-package` | `schedule` | `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
@@ -291,11 +398,11 @@ trigger exists.
 
 Per event, the jobs that can run are:
 
-| Event | `quality-gates` | `change-impact` | `trusted-candidate-compile` | Phases 1 to 4 |
-| --- | --- | --- | --- | --- |
-| `pull_request` | Runs | Runs | Only after both prerequisites succeed, `engine_required == 'true'`, and the trust predicate holds | Skipped |
-| `push` to `develop` | Runs | Skipped | Skipped | Skipped |
-| `schedule` | Runs | Skipped | Skipped | Phase 1 only after `quality-gates` succeeds; each later phase only after its predecessor succeeds |
+| Event | `ci-selection-shadow` | `quality-gates` | `change-impact` | `trusted-candidate-compile` | Phases 1 to 4 |
+| --- | --- | --- | --- | --- | --- |
+| `pull_request` | Runs independently; diagnostic only | Runs | Runs | Only after both authoritative prerequisites succeed, `engine_required == 'true'`, and the trust predicate holds | Skipped |
+| `push` to `develop` | Skipped | Runs | Skipped | Skipped | Skipped |
+| `schedule` | Skipped | Runs | Skipped | Skipped | Phase 1 only after `quality-gates` succeeds; each later phase only after its predecessor succeeds |
 
 `develop` remains the integration branch. Merely adding the schedule on a
 feature or `develop` branch does not activate it; GitHub schedules run from the
@@ -917,10 +1024,13 @@ operational responsibilities, not architecture decisions.
 
 ## Relationship to Visual Package Validation
 
-`.github/workflows/visual-package-validation.yml` is unchanged and continues
-to own validation of the non-canonical visual package. The prototype quality
-gates workflow does not run the visuals validation scripts, and the visual
-workflow does not run this suite.
+`.github/workflows/visual-package-validation.yml` continues to own validation
+of the non-canonical visual package. It retains its path-filtered pull-request
+and `develop` push triggers and both validators unchanged, and now exposes an
+additive `workflow_call` entry point for a later policy consumer. Package 2
+does not call it: the prototype quality gates workflow still does not run the
+visual scripts, and the visual workflow still does not run this suite. Adding
+`workflow_call` removes no existing authority and creates no bypass.
 
 ## Machine-Readable Evidence
 
@@ -935,6 +1045,13 @@ counts.
 documented in [Unreal Automation](unreal-automation.md). Its raw Unreal report
 and log remain repository-local ignored output unless Issue #16 separately
 selects and redacts evidence for publication.
+
+`ci-selection-shadow.json` uses the closed `aetheln.ci-selection/v1` schema
+documented under
+[Pull-request shadow selector](#pull-request-shadow-selector-issue-167-package-2).
+It is diagnostic, non-authoritative evidence. Only a later reviewed activation
+may consume an accepted policy/controller digest; Package 2 publishes no
+selection outputs and no existing job reads this artifact.
 
 `engine-runner-report.json` uses schema version 1 at the per-job locations
 listed in [Artifact Policy](#artifact-policy). Without an explicit `ReportPath`,

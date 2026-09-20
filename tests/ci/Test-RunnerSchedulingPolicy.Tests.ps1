@@ -24,7 +24,7 @@ function Assert-MatchCount([string] $Text, [string] $Pattern, [int] $Expected, [
 	Assert-True ($Actual -eq $Expected) "$Message Expected $Expected match(es), found $Actual."
 }
 
-$JobOrder = @('quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke')
+$JobOrder = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke')
 $JobBodies = @{}
 for ($Index = 1; $Index -lt $JobOrder.Count; $Index++) {
 	$Start = $Workflow.IndexOf("  $($JobOrder[$Index - 1]):", [StringComparison]::Ordinal)
@@ -45,7 +45,7 @@ Assert-True ($Workflow -notmatch 'engine-runner-manual-smoke-report') 'Workflow 
 Assert-True ($Workflow -notmatch '-Mode PackagedSmoke') 'Workflow must not select the monolithic PackagedSmoke gate anywhere.'
 Assert-MatchCount -Text $Workflow -Pattern 'timeout-minutes:\s*1440' -Expected 0 -Message 'No job may hold the engine runner for a 24-hour bound.'
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$' -Expected 5 -Message 'Exactly five jobs (trusted compile plus four phases) may target the engine runner.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: windows-latest\r?$' -Expected 2 -Message 'Exactly two jobs (portable gates and the classifier) run on the GitHub-hosted runner.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: windows-latest\r?$' -Expected 3 -Message 'Exactly three jobs (shadow selection, portable gates, and the classifier) run on the GitHub-hosted runner.'
 
 # Every engine-runner concurrency block queues FIFO without cancelling pending
 # or in-progress work. queue: single would silently cancel a pending trusted
@@ -67,6 +67,13 @@ Assert-True (([string] $JobBodies['quality-gates']) -match '(?m)^\s+timeout-minu
 Assert-True (([string] $JobBodies['change-impact']) -match '(?m)^\s+timeout-minutes: 10\r?$') 'change-impact must declare an explicit 10-minute bound.'
 Assert-True (([string] $JobBodies['change-impact']) -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$") 'change-impact must run only for pull requests.'
 Assert-True (([string] $JobBodies['change-impact']) -notmatch 'aetheln-engine-runner') 'change-impact must never hold the engine-runner concurrency group.'
+$ShadowSelection = [string] $JobBodies['ci-selection-shadow']
+Assert-True ($ShadowSelection -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$" -and $ShadowSelection -match '(?m)^\s+timeout-minutes: 10\r?$') 'Shadow selection must be pull-request-only and bounded to ten minutes.'
+Assert-True ($ShadowSelection -match '(?m)^\s+continue-on-error: true\r?$') 'Shadow evidence must not change the authoritative workflow conclusion.'
+Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:' -and $ShadowSelection -notmatch '(?m)^\s+outputs:' -and $ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner') 'Shadow selection must have no authority, predecessor, or engine-runner admission surface.'
+Assert-True ($ShadowSelection -match 'accepted_controller_unavailable' -and $ShadowSelection -match 'authoritative = \$false' -and $ShadowSelection -match 'checkoutAllowed = \$false') 'Bootstrap evidence must fail closed without pretending to be equivalence evidence.'
+Assert-True ($ShadowSelection -match 'name: ci-selection-shadow-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}' -and $ShadowSelection -notmatch 'retention-days:') 'Shadow evidence must be attempt-specific and use default retention.'
+Assert-True ($ShadowSelection -match 'path: \$\{\{ runner\.temp \}\}/ci-selection-shadow\.json' -and $ShadowSelection -notmatch '(?m)^\s+path: .*\*') 'Shadow selection must upload exactly one bounded report file.'
 
 # The milestone is split into four bounded phases that run only on the daily
 # schedule and only after the portable gates pass; pull requests and pushes
@@ -205,11 +212,12 @@ Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Artifact paths mu
 
 function Assert-ReportOnlyUpload([string] $Text) {
 	$Blocks = @([regex]::Split($Text, '(?m)^      - ') | Where-Object { $_ -match '(?m)^\s*uses: actions/upload-artifact@' })
-	Assert-True ($Blocks.Count -eq 6) 'Exactly six artifact-upload steps must exist.'
+	Assert-True ($Blocks.Count -eq 7) 'Exactly six established report uploads plus one shadow-selection upload must exist.'
 	$Allowed = @(
 		'TestResults/ci-report.json',
 		'milestone/TestResults/engine-runner-report.json',
-		'${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json'
+		'${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json',
+		'${{ runner.temp }}/ci-selection-shadow.json'
 	)
 	foreach ($Block in $Blocks) {
 		$Paths = @([regex]::Matches($Block, '(?m)^          path: ([^\r\n]+)\r?$'))
@@ -275,7 +283,16 @@ function Get-DecisionSection([string] $Id) {
 }
 $RunnerDecision = Get-DecisionSection 'TA-011'
 $SchedulingDecision = Get-DecisionSection 'TA-012'
+$SelectionDecision = Get-DecisionSection 'TA-017'
 Assert-True ($SchedulingDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$' -and $RunnerDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$') 'TA-011 and TA-012 must remain accepted decisions.'
+Assert-True ($SelectionDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$') 'TA-017 must record the accepted shadow-first selector decision.'
+foreach ($Contract in @('shadow-first', 'accepted-base', '07bb90760bf493e25e40ac781143d07e701a113db3ede8bc7380490f6b85e9b6', 'wiring-only', 'external checker', 'before any self-hosted runner queues')) {
+	Assert-True ($SelectionDecision -match [regex]::Escape($Contract)) "TA-017 must record the selector activation contract '$Contract'."
+}
+Assert-True ($CiDocumentation -match 'accepted_controller_unavailable' -and $CiDocumentation -match '5,595' -and $CiDocumentation -match 'b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c') 'CI documentation must record the bootstrap boundary and exact legacy block identity.'
+foreach ($Limit in @('two minutes', '8 MiB', '64 KiB', '4,096', '4 MiB')) {
+	Assert-True ($CiDocumentation -match [regex]::Escape($Limit)) "CI documentation must record selector limit '$Limit'."
+}
 Assert-True ($ArchitectureDecisions -notmatch 'workflow_dispatch' -and $ArchitectureDecisions -notmatch '(?i)owner-dispatched|owner\s+dispatch') 'Architecture decisions must not describe a manual dispatch entry point.'
 Assert-True ($ArchitectureDecisions -notmatch '(?i)queued\s+manual') 'TA-012 must not describe older queued manual jobs; no manual job can exist.'
 Assert-True ($RunnerDecision -notmatch '(?i)request\s+the\s+same\s+gate\s+manually' -and $RunnerDecision -notmatch '(?i)manual\s+packaged-smoke') 'TA-011 must not offer or await a manual packaged-smoke gate.'

@@ -26,6 +26,7 @@ function Get-JobBody([string] $JobName, [string] $NextJobName) {
 	return $Workflow.Substring($StartIndex, $EndIndex - $StartIndex)
 }
 
+$ShadowSelection = Get-JobBody 'ci-selection-shadow' 'quality-gates'
 $QualityGates = Get-JobBody 'quality-gates' 'change-impact'
 $ChangeImpact = Get-JobBody 'change-impact' 'trusted-candidate-compile'
 $TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'scheduled-client-package'
@@ -58,6 +59,48 @@ Assert-True ($Workflow -notmatch 'workflow_dispatch') 'Workflow must not expose 
 Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)') 'Workflow must not use status functions that bypass a failed or skipped prerequisite.'
 Assert-MatchCount -Text $Workflow -Pattern 'always\(\)' -Expected ([regex]::Matches($Workflow, '(?m)^\s+if: always\(\)\r?$').Count) -Message 'always() may appear only as the bare step-level predicate that preserves report uploads.'
 
+# Issue #167 Package 2: an independent pull-request-only shadow computes the
+# future selection record without controlling any existing job. It fetches the
+# exact immutable graph before the only checkout, and that checkout is the
+# accepted base sparse control path rather than candidate executable bytes.
+Assert-True ($ShadowSelection -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$") 'The shadow selector must run only for pull requests.'
+Assert-True ($ShadowSelection -match '(?m)^\s+continue-on-error: true\r?$') 'Shadow evidence must remain observational and cannot fail the authoritative workflow result.'
+Assert-True ($ShadowSelection -match '(?m)^\s+runs-on: windows-latest\r?$' -and $ShadowSelection -match '(?m)^\s+timeout-minutes: 10\r?$') 'The shadow selector must be a bounded GitHub-hosted job.'
+Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:' -and $ShadowSelection -notmatch '(?m)^\s+outputs:') 'The shadow selector must expose no authority or dependency edge.'
+Assert-True ($ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner|needs\.') 'The shadow selector must not admit or influence engine work.'
+Assert-MatchCount -Text $ShadowSelection -Pattern '(?m)^\s+- uses: actions/checkout@v4\r?$' -Expected 1 -Message 'The shadow selector must perform exactly one checkout.'
+Assert-True ($ShadowSelection -match 'ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}' -and $ShadowSelection -match 'sparse-checkout: scripts/ci/Get-CiSelection\.ps1' -and $ShadowSelection -match 'persist-credentials: false') 'The only shadow checkout must sparsely materialize the exact accepted-base selector without credentials.'
+$FetchPosition = $ShadowSelection.IndexOf('name: Fetch immutable comparison objects', [StringComparison]::Ordinal)
+$CheckoutPosition = $ShadowSelection.IndexOf('uses: actions/checkout@v4', [StringComparison]::Ordinal)
+Assert-True ($FetchPosition -ge 0 -and $CheckoutPosition -gt $FetchPosition) 'Base, head and workflow objects must enter the bare control repository before any checkout.'
+foreach ($Binding in @('github.event.pull_request.base.sha', 'github.event.pull_request.head.sha', 'github.sha')) {
+	Assert-True ($ShadowSelection.Contains($Binding)) "Shadow selection must bind exact immutable identity $Binding."
+}
+Assert-True ($ShadowSelection -match 'git init --bare' -and $ShadowSelection -match 'accepted_controller_unavailable') 'Bootstrap must use a bare control repository and explicitly diagnose an unavailable accepted controller.'
+Assert-True ($ShadowSelection -match 'AETHELN_GITHUB_TOKEN: \$\{\{ github\.token \}\}' -and $ShadowSelection -match "GIT_CONFIG_KEY_0 = 'http\.extraheader'" -and $ShadowSelection -match 'GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic \$Authorization"' -and $ShadowSelection -match '::add-mask::\$Authorization') 'Private-repository object fetches must use the ephemeral GitHub token through a masked environment-backed authorization header.'
+Assert-True ($ShadowSelection -notmatch 'persist-credentials: true' -and $ShadowSelection -notmatch 'https://x-access-token:') 'Shadow bootstrap credentials must not persist in the checkout or remote URL.'
+Assert-True ($ShadowSelection -match 'Get-CiSelection\.ps1' -and $ShadowSelection -match '-ContextJson' -and $ShadowSelection -match '-OutputPath' -and $ShadowSelection -match '-RepositoryRoot') 'Only the accepted-base selector entry point may produce a live shadow record.'
+Assert-True ($ShadowSelection -match 'controllerBlobOid' -and $ShadowSelection -match 'controllerSha256') 'Shadow evidence must record the accepted controller blob OID and SHA-256 when available.'
+Assert-True ($ShadowSelection -match 'selection\.shadow|shadow = \$true' -and $ShadowSelection -match 'authoritative = \$false' -and $ShadowSelection -match 'checkoutAllowed = \$false') 'Bootstrap evidence must be explicitly shadow-only, non-authoritative, and unable to authorize checkout.'
+Assert-MatchCount -Text $ShadowSelection -Pattern '(?m)^\s+uses: actions/upload-artifact@v4\r?$' -Expected 1 -Message 'The shadow job must have one artifact producer.'
+Assert-True ($ShadowSelection -match 'name: ci-selection-shadow-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}' -and $ShadowSelection -match 'path: \$\{\{ runner\.temp \}\}/ci-selection-shadow\.json') 'The shadow artifact must be run/attempt-specific and contain the exact report path.'
+Assert-True ($ShadowSelection -notmatch 'retention-days:' -and $ShadowSelection -notmatch '(?m)^\s+path: .*\*') 'The shadow artifact must use default retention and an exact single-file path.'
+$ShadowRunBlocks = @([regex]::Matches($ShadowSelection, '(?ms)^        run: \|\r?\n(?<body>.*?)(?=^      - |\z)'))
+Assert-True ($ShadowRunBlocks.Count -eq 2) 'Shadow selection must keep exactly two repository-owned PowerShell run blocks.'
+foreach ($RunBlock in $ShadowRunBlocks) {
+	$Body = (($RunBlock.Groups['body'].Value -split "`r?`n") | ForEach-Object { if ($_.Length -ge 10) { $_.Substring(10) } else { $_ } }) -join "`n"
+	$ShadowParseErrors = $null
+	$null = [Management.Automation.Language.Parser]::ParseInput($Body, [ref] $null, [ref] $ShadowParseErrors)
+	Assert-True ($ShadowParseErrors.Count -eq 0) "Shadow PowerShell must parse under Windows PowerShell 5.1: $($ShadowParseErrors | Select-Object -First 1 | ForEach-Object Message)"
+}
+
+$VisualWorkflow = Get-Content -LiteralPath (Join-Path $RepositoryRoot '.github\workflows\visual-package-validation.yml') -Raw
+Assert-True ($VisualWorkflow -match '(?m)^  workflow_call:\r?$') 'Visual validation must expose an additive reusable workflow entry point.'
+Assert-True ($VisualWorkflow -match '(?ms)^  pull_request:\r?\n    paths:.*?^  push:\r?\n    branches:\r?\n      - develop\r?\n    paths:') 'Visual validation must preserve its path-filtered pull-request and develop-push triggers.'
+foreach ($Validator in @('.\visuals\Test-VisualPackage.ps1', '.\visuals\tests\Test-VisualPackageValidation.ps1')) {
+	Assert-MatchCount -Text $VisualWorkflow -Pattern ([regex]::Escape($Validator)) -Expected 1 -Message "Visual workflow must preserve validator $Validator exactly once."
+}
+
 # Portable job: GitHub-hosted, explicitly bounded, StarterMap-only LFS.
 Assert-True ($QualityGates -match '(?m)^\s+runs-on: windows-latest\r?$') 'The portable job must stay on the GitHub-hosted Windows runner.'
 Assert-True ($QualityGates -match '(?m)^\s+timeout-minutes: 30\r?$') 'The portable job must declare an explicit conservative bound.'
@@ -77,6 +120,15 @@ Assert-True ($ChangeImpact -match '(?m)^\s+engine_required: \$\{\{ steps\.classi
 Assert-True ($ChangeImpact -match '(?m)^\s+AETHELN_PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\r?$') 'The classifier must receive the exact pull-request base SHA through env.'
 Assert-True ($ChangeImpact -match '(?m)^\s+AETHELN_PR_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\r?$') 'The classifier must receive the exact pull-request head SHA through env.'
 Assert-True ($ChangeImpact -notmatch 'upload-artifact' -and $ChangeImpact -notmatch '-Mode ') 'The classifier must not upload artifacts or invoke the engine gate.'
+$NormalizedWorkflow = $Workflow.Replace("`r`n", "`n")
+$LegacyStart = $NormalizedWorkflow.IndexOf('  change-impact:', [StringComparison]::Ordinal)
+$LegacyEnd = $NormalizedWorkflow.IndexOf('  trusted-candidate-compile:', $LegacyStart, [StringComparison]::Ordinal)
+Assert-True ($LegacyStart -ge 0 -and $LegacyEnd -gt $LegacyStart) 'The authoritative legacy classifier block must remain addressable by exact job markers.'
+$LegacyBytes = [Text.Encoding]::UTF8.GetBytes($NormalizedWorkflow.Substring($LegacyStart, $LegacyEnd - $LegacyStart))
+$LegacyHasher = [Security.Cryptography.SHA256]::Create()
+try { $LegacyDigest = ([BitConverter]::ToString($LegacyHasher.ComputeHash($LegacyBytes)) -replace '-', '').ToLowerInvariant() }
+finally { $LegacyHasher.Dispose() }
+Assert-True ($LegacyBytes.Length -eq 5595 -and $LegacyDigest -ceq 'b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c') 'The existing change-impact block and its explanatory trust boundary must remain byte-for-byte unchanged after LF normalization.'
 
 function Get-ClassifierScript {
 	$Lines = $Workflow -split "\r?\n"
@@ -161,7 +213,7 @@ Assert-True ($ReportUploads.Count -eq 6) 'Exactly six report uploads remain.'
 Assert-True ($TrustedCompile.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json')) 'Compile artifact is unique to this run, attempt and job.'
 Assert-True ($TrustedCompile -match 'timeout-minutes: 40' -and $TrustedCompile -match '-CompileTimeoutMinutes 30') 'Routine compile has a whole-job and controlled-work limit.'
 Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Uploads cannot contain wildcard payload paths.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 6 -Message 'No extra artifact upload step is permitted.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 7 -Message 'Only the six existing report uploads and one shadow-selection upload are permitted.'
 Assert-True ($Workflow -notmatch '(?m)^\s+path:\s*.*(?:archives?|logs?|Saved|StagedBuilds)') 'Generated payload directories must never be uploaded.'
 
 # Classifier behavior matrix: run the extracted script against fixture commits.

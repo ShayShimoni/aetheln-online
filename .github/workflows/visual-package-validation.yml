@@ -1,6 +1,7 @@
 name: Visual package validation
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - '.gitattributes'
