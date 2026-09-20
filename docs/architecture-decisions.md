@@ -633,6 +633,69 @@ Every accepted decision records:
   supplies engine inputs, or contradictory retained evidence requires a new
   applicability review. Future changes continue through the existing gates.
 
+### TA-017 - Shadow-First CI Selection with Accepted-Base Control
+
+- **Status:** Accepted
+- **Scope:** Issue #167 CI selection, receipts, and later authority activation.
+- **Decision:** Introduce selection shadow-first. Package 2 adds one independent
+  pull-request-only hosted job and the reusable selector while preserving the
+  existing `change-impact` authority exactly. The shadow has no dependency,
+  outputs, consumer, self-hosted label, engine concurrency, or conclusion
+  effect. Fetch exact base, head, and synthetic merge objects into a
+  bare/no-checkout repository before the only sparse checkout, then execute
+  only accepted-base controller bytes after verifying their Git blob OID and
+  SHA-256. Never execute a candidate selector. Accepted policy `shadow-v1` has
+  exact canonical digest
+  `07bb90760bf493e25e40ac781143d07e701a113db3ede8bc7380490f6b85e9b6`;
+  every live report also binds the exact accepted controller revision, blob
+  OID, and blob-byte SHA-256. The bootstrap
+  `accepted_controller_unavailable` record selects all checks and is not
+  equivalence evidence. The first meaningful later live comparison must use
+  Package 2 as its accepted base. Receipt/aggregate work is additive and
+  nonblocking first. Authority may move only in a subsequent wiring-only change
+  that pins the exact observed accepted digests, changes no policy/controller
+  bytes simultaneously, and passes an external checker not supplied by the
+  candidate. Hosted uncertainty, unsupported obligations, or checkout-safety
+  rejection must stop before any self-hosted runner queues. Private-repository
+  object fetches use the ephemeral `github.token` only through a masked
+  per-command header and never persist it. Unrecognized paths fail closed to
+  every obligation. Reusable invocations preserve caller kind and workflow
+  revision and apply the same ordered merge-parent validation as direct pull
+  requests.
+- **Policy identity:** The policy digest is SHA-256 over the accepted selector
+  source after deterministic LF normalization, covering mappings, contexts,
+  limits, uncertainty behavior, and attribute rules. The controller digest
+  separately binds exact raw blob bytes.
+- **Context:** Candidate-controlled path filters can suppress their own checks;
+  combining selector edits with activation prevents comparison against accepted
+  behavior. Paths also require raw rename/copy, revision attributes, LFS,
+  case/Unicode collision, and Windows checkout analysis before expensive work
+  is admitted. Current runs exposed an action-runtime Node 20 deprecation
+  warning. That observation is an input for Package 3A's separately reviewed
+  full-action-SHA pinning; Package 2 does not invent a replacement version.
+- **Evidence:** `tests/ci/Get-CiSelection.Tests.ps1` covers closed schemas,
+  raw NUL diff records, rename/copy sides, attributes, LFS routing, unsafe
+  modes/paths, case/NFC collisions, bounds, accepted controller identity, and
+  conservative output. Workflow fixtures prove the legacy normalized
+  5,595-byte block remains SHA-256
+  `b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c`
+  and the shadow is independent with one attempt-bound artifact. Fixtures do
+  not replace the first later live accepted-base comparison.
+- **Alternatives:** Candidate-tree selector execution; third-party path-filter
+  authority; direct Package 2 replacement; simultaneous policy and activation
+  edits; treating bootstrap/missing evidence as equivalence; letting unsafe or
+  unsupported hosted classification fail only after engine admission.
+- **Consequences:** Package 2 adds diagnostic pull-request work and may fail
+  independently without suppressing established checks. Evidence exists only
+  inside the controlled process/artifact boundary. Visual validation gains
+  `workflow_call` without losing existing triggers or validators. Receipt
+  aggregation and activation remain separate reviewed packages. Artifact
+  retention remains undecided and omitted.
+- **Owner:** Issue #167.
+- **Revisit trigger:** Pull-request merge identity or checkout semantics change,
+  the accepted policy/check set changes, a required obligation gains a real
+  producer, or live comparison contradicts this contract.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |

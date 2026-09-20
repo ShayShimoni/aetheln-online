@@ -36,6 +36,7 @@ $DefaultChecks = @(
 	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
 	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
 	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1' },
+	@{ name = 'ci-selection-tests'; tier = 'required'; script = 'tests/ci/Get-CiSelection.Tests.ps1' },
 	@{ name = 'compile-workspace-tests'; tier = 'required'; script = 'tests/ci/Initialize-CompileWorkspace.Tests.ps1' },
 	@{ name = 'engine-host-lease-tests'; tier = 'required'; script = 'tests/ci/EngineRunnerHostLease.Tests.ps1' },
 	@{ name = 'managed-compile-registration-tests'; tier = 'required'; script = 'tests/ci/ManagedCompileRegistration.Tests.ps1' },
