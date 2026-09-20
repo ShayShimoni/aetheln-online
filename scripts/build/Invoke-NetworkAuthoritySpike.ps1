@@ -61,6 +61,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Compiled once at entry so a malformed -ErrorPattern fails before any
+# process starts. IgnoreCase reproduces the -match semantics this default
+# pattern and its callers were written against.
+$ErrorRegex = [regex]::new($ErrorPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+
 Add-Type -TypeDefinition @'
 using System;
 using System.Diagnostics;
@@ -143,14 +148,14 @@ function Assert-Placeholder([string[]] $Arguments, [string] $Placeholder, [strin
 	if (($Arguments -join ' ') -notlike "*$Placeholder*") { throw "$Name must contain $Placeholder so scenario correlation is explicit." }
 }
 
-function Expand-Values([string] $Value, [string] $ClientId) {
+function Expand-Value([string] $Value, [string] $ClientId) {
 	return $Value.Replace('{ClientId}', $ClientId).Replace('{ServerEndpoint}', $ServerEndpoint).Replace('{ServerMap}', $ServerMap).Replace('{ScenarioId}', $ScenarioId).Replace('{ProfileId}', $ProfileId).Replace('{NetworkConfigIdentity}', $NetworkConfigIdentity).Replace('{RunId}', $RunId).Replace('{Environment}', $Environment)
 }
 
-function Expand-Arguments([string[]] $Arguments, [string] $ClientId) {
+function Expand-Argument([string[]] $Arguments, [string] $ClientId) {
 	$Expanded = [System.Collections.Generic.List[string]]::new()
 	foreach ($Argument in $Arguments) {
-		$Expanded.Add((Expand-Values $Argument $ClientId))
+		$Expanded.Add((Expand-Value $Argument $ClientId))
 	}
 	foreach ($IdentityArgument in @(
 		"-AethelnSourceRevision=$SourceRevision",
@@ -166,21 +171,21 @@ function Expand-Pattern([string] $Pattern, [string] $ClientId) {
 	return $Pattern.Replace('{ClientId}', [regex]::Escape($ClientId)).Replace('{ServerEndpoint}', [regex]::Escape($ServerEndpoint)).Replace('{ServerMap}', [regex]::Escape($ServerMap)).Replace('{ScenarioId}', [regex]::Escape($ScenarioId)).Replace('{ProfileId}', [regex]::Escape($ProfileId)).Replace('{NetworkConfigIdentity}', [regex]::Escape($NetworkConfigIdentity)).Replace('{RunId}', [regex]::Escape($RunId))
 }
 
-function Expand-ServerLauncherArguments([string[]] $Arguments, [string] $ResolvedServerExecutable, [string[]] $ExpandedServerArguments) {
+function Expand-ServerLauncherArgument([string[]] $Arguments, [string] $ResolvedServerExecutable, [string[]] $ExpandedServerArguments) {
 	$Expanded = [System.Collections.Generic.List[string]]::new()
 	foreach ($Argument in $Arguments) {
 		if ($Argument -eq '{ServerArguments}') {
 			foreach ($ServerArgument in $ExpandedServerArguments) { $Expanded.Add($ServerArgument) }
 		} else {
-			$Expanded.Add((Expand-Values $Argument 'server').Replace('{ServerExecutable}', $ResolvedServerExecutable))
+			$Expanded.Add((Expand-Value $Argument 'server').Replace('{ServerExecutable}', $ResolvedServerExecutable))
 		}
 	}
 	return @($Expanded)
 }
 
-function Expand-ServerControlArguments([string[]] $Arguments, [string] $ResolvedServerExecutable, [string] $ServerProcessId = '') {
+function Expand-ServerControlArgument([string[]] $Arguments, [string] $ResolvedServerExecutable, [string] $ServerProcessId = '') {
 	return @($Arguments | ForEach-Object {
-		(Expand-Values $_ 'server').Replace('{ServerExecutable}', $ResolvedServerExecutable).Replace('{ServerProcessId}', $ServerProcessId)
+		(Expand-Value $_ 'server').Replace('{ServerExecutable}', $ResolvedServerExecutable).Replace('{ServerProcessId}', $ServerProcessId)
 	})
 }
 
@@ -190,7 +195,19 @@ function ConvertTo-ProcessArgument([string] $Argument) {
 	return '"' + $Quoted + '"'
 }
 
-function Start-HiddenProcess([string] $Executable, [string[]] $Arguments, [string] $StandardOutputPath, [string] $StandardErrorPath) {
+function Start-HiddenProcess {
+	[CmdletBinding(SupportsShouldProcess)]
+	[OutputType([pscustomobject])]
+	param(
+		[string] $Executable,
+		[string[]] $Arguments,
+		[string] $StandardOutputPath,
+		[string] $StandardErrorPath
+	)
+	# Decide before allocating: a declined launch prepares no command line,
+	# creates no redirected capture files, starts no child, and returns no
+	# handle a caller could mistake for a running process.
+	if (-not $PSCmdlet.ShouldProcess($Executable, 'Start a hidden runtime process')) { return }
 	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
 	$StartInfo.FileName = $Executable
 	$StartInfo.Arguments = (($Arguments | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' ')
@@ -218,7 +235,7 @@ function Start-HiddenProcess([string] $Executable, [string[]] $Arguments, [strin
 function Get-RuntimeError([string[]] $Paths) {
 	foreach ($Path in $Paths) {
 		if (Test-Path -LiteralPath $Path -PathType Leaf) {
-			$ErrorLine = Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue | Where-Object { $_ -match $ErrorPattern } | Select-Object -First 1
+			$ErrorLine = Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue | Where-Object { $ErrorRegex.IsMatch([string] $_) } | Select-Object -First 1
 			if ($ErrorLine) { return [string] $ErrorLine }
 		}
 	}
@@ -256,7 +273,7 @@ function Wait-ForSuccessfulProcessExit([System.Diagnostics.Process] $Process, [s
 }
 
 function Invoke-HiddenCommand([string] $Executable, [string[]] $Arguments, [string] $StandardOutputPath, [string] $StandardErrorPath, [string] $Description) {
-	$Handle = Start-HiddenProcess $Executable $Arguments $StandardOutputPath $StandardErrorPath
+	$Handle = Start-HiddenProcess -Executable $Executable -Arguments $Arguments -StandardOutputPath $StandardOutputPath -StandardErrorPath $StandardErrorPath
 	$Process = $Handle.Process
 	try {
 		if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
@@ -275,8 +292,8 @@ function Invoke-HiddenCommand([string] $Executable, [string[]] $Arguments, [stri
 		}
 	}
 	finally {
-		try { $Process.CancelOutputRead() } catch { }
-		try { $Process.CancelErrorRead() } catch { }
+		try { $Process.CancelOutputRead() } catch { Write-Verbose "Cancelling asynchronous standard-output capture failed during process cleanup: $($_.Exception.Message)" }
+		try { $Process.CancelErrorRead() } catch { Write-Verbose "Cancelling asynchronous standard-error capture failed during process cleanup: $($_.Exception.Message)" }
 		$Handle.Capture.Dispose()
 		$Process.Dispose()
 	}
@@ -366,8 +383,7 @@ function Assert-ExactRejectionInventory([string[]] $Lines, [regex] $Regex, [Syst
 		if (-not $RequiredCategories.Contains($Category)) {
 			throw "Unexpected authority rejection category '$Category'."
 		}
-		$Reason = $Match.Groups['Reason'].Value
-		Assert-StructuredRejectionMatch $Match $Category $RequiredCategories[$Category] $ExpectedConnectionId
+		Assert-StructuredRejectionMatch -Match $Match -ExpectedCategory $Category -ExpectedReason $RequiredCategories[$Category] -ExpectedConnectionId $ExpectedConnectionId
 		$ObservedCounts[$Category] = 1 + [int] $ObservedCounts[$Category]
 		++$ObservedTotal
 	}
@@ -406,19 +422,19 @@ function Wait-ForObservationInterval {
 	}
 }
 
-function New-Observation([string] $Event, [string] $Source, [string] $Detail, [string] $ClientId = '') {
+function ConvertTo-Observation([string] $EventName, [string] $Source, [string] $Detail, [string] $ClientId = '') {
 	$EvidenceSource = if ($script:UseScenarioContract) {
 		[System.IO.Path]::GetFileName($Source)
 	} else {
 		$Source
 	}
-	$EvidenceDetail = if ($script:UseScenarioContract) { $Event } else { $Detail }
-	$Record = [ordered]@{ event = $Event; source = $EvidenceSource; detail = $EvidenceDetail }
+	$EvidenceDetail = if ($script:UseScenarioContract) { $EventName } else { $Detail }
+	$Record = [ordered]@{ event = $EventName; source = $EvidenceSource; detail = $EvidenceDetail }
 	if ($ClientId) { $Record.client_id = $ClientId }
 	return [pscustomobject] $Record
 }
 
-function New-ScenarioStage(
+function ConvertTo-ScenarioStage(
 	[int] $Ordinal,
 	[string] $Stage,
 	[string] $AuthoritativeResult,
@@ -459,7 +475,7 @@ function Get-RequiredSequenceId([string] $Line, [regex] $Pattern, [string] $Desc
 	return $SequenceId
 }
 
-function New-ProcessOutcome([string] $ProcessRole, [string] $TerminationState, [int] $ExitCode) {
+function ConvertTo-ProcessOutcome([string] $ProcessRole, [string] $TerminationState, [int] $ExitCode) {
 	return [pscustomobject] [ordered]@{
 		process_role = $ProcessRole
 		client_id = if ($ProcessRole -in @('client-1','client-2','client-1-reconnect')) { $ProcessRole } else { $null }
@@ -469,7 +485,7 @@ function New-ProcessOutcome([string] $ProcessRole, [string] $TerminationState, [
 	}
 }
 
-function New-FailureDetails(
+function ConvertTo-FailureDetail(
 	[string] $Message,
 	[string] $PublishedReason,
 	[string] $Stage,
@@ -528,7 +544,7 @@ function Assert-RecordToken([string] $Name, [string] $Value) {
 	if ($Value -notmatch '^\S+$') { throw "$Name must be one non-empty structured-record token without whitespace." }
 }
 
-function Assert-ClosedProperties([object] $Value, [string[]] $Expected, [string] $Name) {
+function Assert-ClosedProperty([object] $Value, [string[]] $Expected, [string] $Name) {
 	if ($null -eq $Value -or $null -eq $Value.PSObject) { throw "$Name must be one JSON object." }
 	$Actual = @($Value.PSObject.Properties.Name)
 	if ($Actual.Count -ne $Expected.Count -or
@@ -609,7 +625,7 @@ function Assert-NoDuplicateJsonPropertiesValue([string] $Json, [ref] $Index) {
 	if ($Index.Value -eq $Start) { throw 'Expected a JSON value.' }
 }
 
-function Assert-NoDuplicateJsonProperties([string] $Json) {
+function Assert-NoDuplicateJsonProperty([string] $Json) {
 	$Index = 0
 	Assert-NoDuplicateJsonPropertiesValue $Json ([ref] $Index)
 	Move-PastJsonWhitespace $Json ([ref] $Index)
@@ -621,7 +637,7 @@ function Read-ContractJson([string] $Name, [string] $Path) {
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Name '$Path' does not exist or is not a file." }
 	try {
 		$Json = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
-		Assert-NoDuplicateJsonProperties $Json
+		Assert-NoDuplicateJsonProperty $Json
 		return $Json | ConvertFrom-Json -ErrorAction Stop
 	}
 	catch {
@@ -629,7 +645,7 @@ function Read-ContractJson([string] $Name, [string] $Path) {
 	}
 }
 
-function Assert-OpaqueArguments([string] $Name, [object] $Value) {
+function Assert-OpaqueArgument([string] $Name, [object] $Value) {
 	if ($null -eq $Value -or $Value -is [string] -or $Value -isnot [System.Collections.IEnumerable]) {
 		throw "$Name must be a JSON array of argument strings."
 	}
@@ -657,7 +673,7 @@ function Get-Sha256Text([string] $Text) {
 
 function Resolve-NetworkProfileCatalog([string] $Path) {
 	$Catalog = Read-ContractJson 'NetworkProfileCatalog' $Path
-	Assert-ClosedProperties $Catalog @('schema_id','schema_version','selected_profile_id','profiles') 'NetworkProfileCatalog'
+	Assert-ClosedProperty -Value $Catalog -Expected @('schema_id','schema_version','selected_profile_id','profiles') -Name 'NetworkProfileCatalog'
 	if ($Catalog.schema_id -cne 'aetheln.network-profile-catalog' -or [long] $Catalog.schema_version -ne 1) {
 		throw 'NetworkProfileCatalog must use aetheln.network-profile-catalog schema version 1.'
 	}
@@ -669,20 +685,20 @@ function Resolve-NetworkProfileCatalog([string] $Path) {
 	}
 	$Ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 	$Kinds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-	foreach ($Profile in $Profiles) {
-		Assert-ClosedProperties $Profile @('id','version','kind','runtime_config_identity','server_arguments','client_arguments') 'NetworkProfileCatalog profile'
-		Assert-RecordToken 'Network profile id' ([string] $Profile.id)
-		Assert-RecordToken 'Network profile version' ([string] $Profile.version)
-		Assert-RecordToken 'Network profile runtime_config_identity' ([string] $Profile.runtime_config_identity)
-		if ([string] $Profile.kind -cnotin $RequiredKinds) { throw "Unsupported network profile kind '$($Profile.kind)'." }
-		if (-not $Ids.Add([string] $Profile.id)) { throw "Duplicate network profile id '$($Profile.id)'." }
-		if (-not $Kinds.Add([string] $Profile.kind)) { throw "Duplicate network profile kind '$($Profile.kind)'." }
-		$ExpectedProfileId = "network-profile.$($Profile.kind)"
-		if ([string] $Profile.id -cne $ExpectedProfileId) {
-			throw "Network profile kind '$($Profile.kind)' must use exact id '$ExpectedProfileId'."
+	foreach ($ProfileRecord in $Profiles) {
+		Assert-ClosedProperty -Value $ProfileRecord -Expected @('id','version','kind','runtime_config_identity','server_arguments','client_arguments') -Name 'NetworkProfileCatalog profile'
+		Assert-RecordToken 'Network profile id' ([string] $ProfileRecord.id)
+		Assert-RecordToken 'Network profile version' ([string] $ProfileRecord.version)
+		Assert-RecordToken 'Network profile runtime_config_identity' ([string] $ProfileRecord.runtime_config_identity)
+		if ([string] $ProfileRecord.kind -cnotin $RequiredKinds) { throw "Unsupported network profile kind '$($ProfileRecord.kind)'." }
+		if (-not $Ids.Add([string] $ProfileRecord.id)) { throw "Duplicate network profile id '$($ProfileRecord.id)'." }
+		if (-not $Kinds.Add([string] $ProfileRecord.kind)) { throw "Duplicate network profile kind '$($ProfileRecord.kind)'." }
+		$ExpectedProfileId = "network-profile.$($ProfileRecord.kind)"
+		if ([string] $ProfileRecord.id -cne $ExpectedProfileId) {
+			throw "Network profile kind '$($ProfileRecord.kind)' must use exact id '$ExpectedProfileId'."
 		}
-		Assert-OpaqueArguments 'Network profile server_arguments' $Profile.server_arguments
-		Assert-OpaqueArguments 'Network profile client_arguments' $Profile.client_arguments
+		Assert-OpaqueArgument 'Network profile server_arguments' $ProfileRecord.server_arguments
+		Assert-OpaqueArgument 'Network profile client_arguments' $ProfileRecord.client_arguments
 	}
 	if (@($RequiredKinds | Where-Object { -not $Kinds.Contains($_) }).Count -ne 0) {
 		throw 'NetworkProfileCatalog is missing one or more required profile kinds.'
@@ -698,7 +714,7 @@ function Resolve-NetworkProfileCatalog([string] $Path) {
 
 function Resolve-ScenarioContract([string] $Path) {
 	$Contract = Read-ContractJson 'ScenarioContract' $Path
-	Assert-ClosedProperties $Contract @('schema_id','schema_version','id','version','lifecycle_stages') 'ScenarioContract'
+	Assert-ClosedProperty -Value $Contract -Expected @('schema_id','schema_version','id','version','lifecycle_stages') -Name 'ScenarioContract'
 	if ($Contract.schema_id -cne 'aetheln.network-authority-scenario' -or [long] $Contract.schema_version -ne 1) {
 		throw 'ScenarioContract must use aetheln.network-authority-scenario schema version 1.'
 	}
@@ -751,7 +767,7 @@ function Resolve-ArchiveInventoryPath([string] $ArchiveRoot, [string] $Inventory
 	if ($NormalizedInventoryPath -cne $ResolvedRelativePath) {
 		throw 'Packaged provenance inventory path must be an exact canonical archive-relative path.'
 	}
-	Assert-NoProvenanceReparsePoint 'Packaged provenance inventory path' $ArchiveRoot $ResolvedPath -AllowMissing
+	Assert-NoProvenanceReparsePoint -Name 'Packaged provenance inventory path' -ArchiveRoot $ArchiveRoot -ResolvedPath $ResolvedPath -AllowMissing
 	return [pscustomobject]@{
 		FullPath = $ResolvedPath
 		RelativePath = $ResolvedRelativePath
@@ -789,7 +805,7 @@ function Resolve-ProvenanceExecutable([string] $Name, [string] $Path, [string] $
 	if (-not $ResolvedPath.StartsWith($ArchivePrefix, (Get-ProvenancePathComparison))) {
 		throw "$Name must resolve beneath packaged $ArchiveName."
 	}
-	Assert-NoProvenanceReparsePoint $Name $ArchiveRoot $ResolvedPath
+	Assert-NoProvenanceReparsePoint -Name $Name -ArchiveRoot $ArchiveRoot -ResolvedPath $ResolvedPath
 	return [pscustomobject]@{
 		FullPath = $ResolvedPath
 		RelativePath = $ResolvedPath.Substring($ArchivePrefix.Length).Replace('\', '/')
@@ -806,8 +822,8 @@ function Test-PackagedBuildProvenance([string] $Path, [string] $ActualServerSha2
 	$ClientArchive = Resolve-ProvenanceArchiveRoot 'artifacts.clientArchive' ([string] $Provenance.artifacts.clientArchive)
 	$ServerArchive = Resolve-ProvenanceArchiveRoot 'artifacts.serverArchive' ([string] $Provenance.artifacts.serverArchive)
 	$ServerHostExecutable = if ($ServerLauncherExecutable) { $ServerProvenanceExecutable } else { $ResolvedServer }
-	$ClientBinding = Resolve-ProvenanceExecutable 'ClientExecutable' $ResolvedClient 'clientArchive' $ClientArchive
-	$ServerBinding = Resolve-ProvenanceExecutable 'ServerProvenanceExecutable' $ServerHostExecutable 'serverArchive' $ServerArchive
+	$ClientBinding = Resolve-ProvenanceExecutable -Name 'ClientExecutable' -Path $ResolvedClient -ArchiveName 'clientArchive' -ArchiveRoot $ClientArchive
+	$ServerBinding = Resolve-ProvenanceExecutable -Name 'ServerProvenanceExecutable' -Path $ServerHostExecutable -ArchiveName 'serverArchive' -ArchiveRoot $ServerArchive
 	if ($ServerBinding.Sha256 -cne $ActualServerSha256) { throw 'Packaged executable identity is not uniquely bound by build provenance.' }
 	$Inventory = @($Provenance.artifacts.inventory | ForEach-Object {
 		$Kind = [string] $_.kind
@@ -845,9 +861,9 @@ $ScenarioVersion = $null
 $ProfileArgumentsSha256 = $null
 $ProfileServerArgumentCount = 0
 $ProfileClientArgumentCount = 0
-foreach ($Placeholder in @('{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}','{Environment}')) { Assert-Placeholder $ServerArguments $Placeholder 'ServerArguments' }
-Assert-Placeholder $ServerArguments '{NetworkConfigIdentity}' 'ServerArguments'
-foreach ($Placeholder in @('{ClientId}','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{NetworkConfigIdentity}','{RunId}','{Environment}')) { Assert-Placeholder $ClientArguments $Placeholder 'ClientArguments' }
+foreach ($Placeholder in @('{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{RunId}','{Environment}')) { Assert-Placeholder -Arguments $ServerArguments -Placeholder $Placeholder -Name 'ServerArguments' }
+Assert-Placeholder -Arguments $ServerArguments -Placeholder '{NetworkConfigIdentity}' -Name 'ServerArguments'
+foreach ($Placeholder in @('{ClientId}','{ServerEndpoint}','{ServerMap}','{ScenarioId}','{ProfileId}','{NetworkConfigIdentity}','{RunId}','{Environment}')) { Assert-Placeholder -Arguments $ClientArguments -Placeholder $Placeholder -Name 'ClientArguments' }
 if ($script:UseScenarioContract) {
 	$SelectedNetworkProfile = Resolve-NetworkProfileCatalog $NetworkProfileCatalogPath
 	$ResolvedScenarioContract = Resolve-ScenarioContract $ScenarioContractPath
@@ -876,14 +892,14 @@ if ($script:UseScenarioContract) {
 
 if ($EvidenceMode -ceq 'packaged' -and $Environment -cne 'development') { throw 'Packaged authority evidence must use the development environment.' }
 if ($ServerLauncherExecutable) {
-	Assert-Placeholder $ServerLauncherArguments '{ServerExecutable}' 'ServerLauncherArguments'
-	Assert-Placeholder $ServerLauncherArguments '{ServerArguments}' 'ServerLauncherArguments'
-	Assert-Placeholder $ServerCleanupArguments '{ServerProcessId}' 'ServerCleanupArguments'
+	Assert-Placeholder -Arguments $ServerLauncherArguments -Placeholder '{ServerExecutable}' -Name 'ServerLauncherArguments'
+	Assert-Placeholder -Arguments $ServerLauncherArguments -Placeholder '{ServerArguments}' -Name 'ServerLauncherArguments'
+	Assert-Placeholder -Arguments $ServerCleanupArguments -Placeholder '{ServerProcessId}' -Name 'ServerCleanupArguments'
 	if (-not $ServerProcessIdPattern) { throw 'ServerProcessIdPattern is required when ServerLauncherExecutable is supplied.' }
 	$ServerProcessIdRegex = [regex]::new($ServerProcessIdPattern)
 	if ($ServerProcessIdRegex.GetGroupNames() -notcontains 'ProcessId') { throw 'ServerProcessIdPattern must contain a named ProcessId capture.' }
 	if ($EvidenceMode -ceq 'packaged') {
-		Assert-Placeholder $ServerIdentityArguments '{ServerExecutable}' 'ServerIdentityArguments'
+		Assert-Placeholder -Arguments $ServerIdentityArguments -Placeholder '{ServerExecutable}' -Name 'ServerIdentityArguments'
 		if (-not $ServerProvenanceExecutable) { throw 'ServerProvenanceExecutable is required for packaged evidence when ServerLauncherExecutable is supplied.' }
 	}
 } elseif ($ServerLauncherArguments.Count -gt 0) {
@@ -899,7 +915,7 @@ foreach ($PatternEntry in @(
 	@('DisconnectPattern', $DisconnectPattern), @('ReconnectPattern', $ReconnectPattern),
 	@('NetworkConfigPattern', $NetworkConfigPattern)
 )) {
-	foreach ($IdentityPlaceholder in @('{ScenarioId}','{ProfileId}','{RunId}')) { Assert-Placeholder @([string] $PatternEntry[1]) $IdentityPlaceholder ([string] $PatternEntry[0]) }
+	foreach ($IdentityPlaceholder in @('{ScenarioId}','{ProfileId}','{RunId}')) { Assert-Placeholder -Arguments @([string] $PatternEntry[1]) -Placeholder $IdentityPlaceholder -Name ([string] $PatternEntry[0]) }
 }
 if ($script:UseScenarioContract) {
 	foreach ($PatternEntry in @(
@@ -908,7 +924,7 @@ if ($script:UseScenarioContract) {
 		@('ShutdownPattern', $ShutdownPattern)
 	)) {
 		foreach ($IdentityPlaceholder in @('{ScenarioId}','{ProfileId}','{RunId}')) {
-			Assert-Placeholder @([string] $PatternEntry[1]) $IdentityPlaceholder ([string] $PatternEntry[0])
+			Assert-Placeholder -Arguments @([string] $PatternEntry[1]) -Placeholder $IdentityPlaceholder -Name ([string] $PatternEntry[0])
 		}
 	}
 	$JoinSequenceRegex = [regex]::new((Expand-Pattern $JoinInProgressPattern 'client-2'))
@@ -957,11 +973,11 @@ $ResolvedLogs = Initialize-EmptyLogRoot $LogRoot
 $ActualServerSha256 = if ($EvidenceMode -ceq 'packaged') {
 	if ($ServerLauncherExecutable) {
 		$IdentityCommand = Invoke-HiddenCommand `
-			$ResolvedServerLauncher `
-			(Expand-ServerControlArguments $ServerIdentityArguments $ResolvedServer) `
-			(Join-Path $ResolvedLogs 'server.identity.stdout.log') `
-			(Join-Path $ResolvedLogs 'server.identity.stderr.log') `
-			'server executable identity probe'
+			-Executable $ResolvedServerLauncher `
+			-Arguments (Expand-ServerControlArgument $ServerIdentityArguments $ResolvedServer) `
+			-StandardOutputPath (Join-Path $ResolvedLogs 'server.identity.stdout.log') `
+			-StandardErrorPath (Join-Path $ResolvedLogs 'server.identity.stderr.log') `
+			-Description 'server executable identity probe'
 		$IdentityMatches = @([regex]::Matches($IdentityCommand.Output, '(?im)^(?<Sha256>[0-9a-f]{64})(?:\s+|\s+\*)'))
 		if ($IdentityMatches.Count -ne 1) { throw 'Server identity probe must emit exactly one SHA-256 record.' }
 		$IdentityMatches[0].Groups['Sha256'].Value.ToLowerInvariant()
@@ -999,23 +1015,23 @@ try {
 	$CurrentProcessRole = 'server'
 	$ServerStdOut = Join-Path $ResolvedLogs 'server.stdout.log'
 	$ServerStdErr = Join-Path $ResolvedLogs 'server.stderr.log'
-	$ExpandedServerArguments = @(Expand-Arguments $ServerArguments 'server') + @($ProfileServerArguments)
-	$ServerProcessArguments = if ($ServerLauncherExecutable) { Expand-ServerLauncherArguments $ServerLauncherArguments $ResolvedServer $ExpandedServerArguments } else { $ExpandedServerArguments }
-	$ServerHandle = Start-HiddenProcess $ResolvedServerLauncher $ServerProcessArguments $ServerStdOut $ServerStdErr
+	$ExpandedServerArguments = @(Expand-Argument $ServerArguments 'server') + @($ProfileServerArguments)
+	$ServerProcessArguments = if ($ServerLauncherExecutable) { Expand-ServerLauncherArgument -Arguments $ServerLauncherArguments -ResolvedServerExecutable $ResolvedServer -ExpandedServerArguments $ExpandedServerArguments } else { $ExpandedServerArguments }
+	$ServerHandle = Start-HiddenProcess -Executable $ResolvedServerLauncher -Arguments $ServerProcessArguments -StandardOutputPath $ServerStdOut -StandardErrorPath $ServerStdErr
 	$ServerHandle | Add-Member -NotePropertyName Role -NotePropertyValue 'server'
 	$ServerHandle | Add-Member -NotePropertyName TerminationState -NotePropertyValue $null
 	$Processes.Add($ServerHandle)
 	$ServerProcess = $ServerHandle.Process
 	if ($ServerLauncherExecutable) {
-		$ProcessIdLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'server descendant process identity' $ServerProcessIdPattern
+		$ProcessIdLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'server descendant process identity' -Pattern $ServerProcessIdPattern
 		$ProcessIdMatch = $ServerProcessIdRegex.Match($ProcessIdLine)
 		$ServerDescendantProcessId = $ProcessIdMatch.Groups['ProcessId'].Value
 		if ($ServerDescendantProcessId -notmatch '^[1-9][0-9]*$') { throw 'Server launcher emitted an invalid descendant process identity.' }
 	}
-	$ReadyLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'server readiness' (Expand-Pattern $ServerReadyPattern 'server')
-	$Lifecycle.Add((New-Observation 'server_ready' $ServerStdOut $ReadyLine))
-	$NetworkConfigLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'network emulation configuration confirmation' (Expand-Pattern $NetworkConfigPattern 'server')
-	$Lifecycle.Add((New-Observation 'network_config_confirmed' $ServerStdOut $NetworkConfigLine))
+	$ReadyLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'server readiness' -Pattern (Expand-Pattern $ServerReadyPattern 'server')
+	$Lifecycle.Add((ConvertTo-Observation -EventName 'server_ready' -Source $ServerStdOut -Detail $ReadyLine))
+	$NetworkConfigLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'network emulation configuration confirmation' -Pattern (Expand-Pattern $NetworkConfigPattern 'server')
+	$Lifecycle.Add((ConvertTo-Observation -EventName 'network_config_confirmed' -Source $ServerStdOut -Detail $NetworkConfigLine))
 
 	$ClientProcesses = @{}
 	foreach ($ClientId in @('client-1','client-2')) {
@@ -1024,8 +1040,8 @@ try {
 		$CurrentClientId = $ClientId
 		$StdOut = Join-Path $ResolvedLogs "$ClientId.stdout.log"
 		$StdErr = Join-Path $ResolvedLogs "$ClientId.stderr.log"
-		$ExpandedClientArguments = @(Expand-Arguments $ClientArguments $ClientId) + @($ProfileClientArguments)
-		$Handle = Start-HiddenProcess $ResolvedClient $ExpandedClientArguments $StdOut $StdErr
+		$ExpandedClientArguments = @(Expand-Argument $ClientArguments $ClientId) + @($ProfileClientArguments)
+		$Handle = Start-HiddenProcess -Executable $ResolvedClient -Arguments $ExpandedClientArguments -StandardOutputPath $StdOut -StandardErrorPath $StdErr
 		$Handle | Add-Member -NotePropertyName Role -NotePropertyValue $ClientId
 		$Handle | Add-Member -NotePropertyName TerminationState -NotePropertyValue $null
 		$Processes.Add($Handle)
@@ -1039,26 +1055,26 @@ try {
 		$CurrentClientId = $ClientId
 		$StdOut = Join-Path $ResolvedLogs "$ClientId.stdout.log"
 		$StdErr = Join-Path $ResolvedLogs "$ClientId.stderr.log"
-		$Line = Wait-ForMatch $ClientProcesses[$ClientId] $StdOut $StdErr "$ClientId readiness" (Expand-Pattern $ClientReadyPattern $ClientId)
-		$Lifecycle.Add((New-Observation 'client_ready' $StdOut $Line $ClientId))
+		$Line = Wait-ForMatch -Process $ClientProcesses[$ClientId] -Path $StdOut -ErrorPath $StdErr -Description "$ClientId readiness" -Pattern (Expand-Pattern $ClientReadyPattern $ClientId)
+		$Lifecycle.Add((ConvertTo-Observation -EventName 'client_ready' -Source $StdOut -Detail $Line -ClientId $ClientId))
 	}
 
 	$CurrentStage = 'join'
 	$CurrentProcessRole = 'client-2'
 	$CurrentClientId = 'client-2'
-	$JoinLine = Wait-ForMatch $ClientProcesses['client-2'] (Join-Path $ResolvedLogs 'client-2.stdout.log') (Join-Path $ResolvedLogs 'client-2.stderr.log') 'join-in-progress state' (Expand-Pattern $JoinInProgressPattern 'client-2')
-	$Lifecycle.Add((New-Observation 'join_in_progress' (Join-Path $ResolvedLogs 'client-2.stdout.log') $JoinLine 'client-2'))
+	$JoinLine = Wait-ForMatch -Process $ClientProcesses['client-2'] -Path (Join-Path $ResolvedLogs 'client-2.stdout.log') -ErrorPath (Join-Path $ResolvedLogs 'client-2.stderr.log') -Description 'join-in-progress state' -Pattern (Expand-Pattern $JoinInProgressPattern 'client-2')
+	$Lifecycle.Add((ConvertTo-Observation -EventName 'join_in_progress' -Source (Join-Path $ResolvedLogs 'client-2.stdout.log') -Detail $JoinLine -ClientId 'client-2'))
 	if ($script:UseScenarioContract) {
-		$JoinSequenceId = Get-RequiredSequenceId $JoinLine $JoinSequenceRegex 'join-in-progress'
-		$ScenarioLifecycle.Add((New-ScenarioStage 1 'join' 'joined' 'client-2' (Join-Path $ResolvedLogs 'client-2.stdout.log') $JoinLine 'client-2' $JoinSequenceId))
+		$JoinSequenceId = Get-RequiredSequenceId -Line $JoinLine -Pattern $JoinSequenceRegex -Description 'join-in-progress'
+		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 1 -Stage 'join' -AuthoritativeResult 'joined' -ProcessRole 'client-2' -Source (Join-Path $ResolvedLogs 'client-2.stdout.log') -Detail $JoinLine -ClientId 'client-2' -SequenceId $JoinSequenceId))
 	}
 
 	foreach ($ClientId in @('client-1','client-2')) {
 		$CurrentStage = 'play'
 		$CurrentProcessRole = 'server'
 		$CurrentClientId = $ClientId
-		$MovementLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr "$ClientId movement" (Expand-Pattern $MovementPattern $ClientId)
-		$Observations.Add((New-Observation 'movement' $ServerStdOut $MovementLine $ClientId))
+		$MovementLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description "$ClientId movement" -Pattern (Expand-Pattern $MovementPattern $ClientId)
+		$Observations.Add((ConvertTo-Observation -EventName 'movement' -Source $ServerStdOut -Detail $MovementLine -ClientId $ClientId))
 	}
 
 	$ServerLines = @(Get-Content -LiteralPath $ServerStdOut -ErrorAction SilentlyContinue)
@@ -1069,27 +1085,27 @@ try {
 	}
 	if (@($Connections.Keys | Where-Object { $_ -in @('client-1','client-2') }).Count -ne 2) { throw 'Server did not expose distinct connection identities for both initial clients.' }
 
-	$EnemyLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'authoritative enemy spawn' (Expand-Pattern $EnemyPattern 'server')
-	$Observations.Add((New-Observation 'enemy_spawned' $ServerStdOut $EnemyLine))
-	$MeleeLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'server-resolved melee' (Expand-Pattern $MeleePattern 'server')
-	$Observations.Add((New-Observation 'melee_resolved' $ServerStdOut $MeleeLine))
+	$EnemyLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'authoritative enemy spawn' -Pattern (Expand-Pattern $EnemyPattern 'server')
+	$Observations.Add((ConvertTo-Observation -EventName 'enemy_spawned' -Source $ServerStdOut -Detail $EnemyLine))
+	$MeleeLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'server-resolved melee' -Pattern (Expand-Pattern $MeleePattern 'server')
+	$Observations.Add((ConvertTo-Observation -EventName 'melee_resolved' -Source $ServerStdOut -Detail $MeleeLine))
 	$CurrentClientId = 'client-1'
-	$DamageLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'authoritative damage' (Expand-Pattern $DamagePattern 'server')
-	$Observations.Add((New-Observation 'damage_applied' $ServerStdOut $DamageLine))
+	$DamageLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'authoritative damage' -Pattern (Expand-Pattern $DamagePattern 'server')
+	$Observations.Add((ConvertTo-Observation -EventName 'damage_applied' -Source $ServerStdOut -Detail $DamageLine))
 	if ($script:UseScenarioContract) {
-		$PlaySequenceId = Get-RequiredSequenceId $DamageLine $PlaySequenceRegex 'authoritative damage'
+		$PlaySequenceId = Get-RequiredSequenceId -Line $DamageLine -Pattern $PlaySequenceRegex -Description 'authoritative damage'
 		if ($JoinSequenceId -ge $PlaySequenceId) { throw 'Contract join sequence must precede authoritative play sequence.' }
-		$ScenarioLifecycle.Add((New-ScenarioStage 2 'play' 'damage-applied' 'server' $ServerStdOut $DamageLine 'client-1' $PlaySequenceId))
+		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 2 -Stage 'play' -AuthoritativeResult 'damage-applied' -ProcessRole 'server' -Source $ServerStdOut -Detail $DamageLine -ClientId 'client-1' -SequenceId $PlaySequenceId))
 	}
 	foreach ($Category in $RequiredRejectionCategories.Keys) {
 		$CurrentStage = 'play'
 		$CurrentProcessRole = 'server'
 		$CurrentClientId = 'client-2'
-		$Observed = Wait-ForRejection $ServerProcess $ServerStdOut $ServerStdErr $RejectionRegex $Category
+		$Observed = Wait-ForRejection -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Regex $RejectionRegex -Category $Category
 		$Reason = $Observed.Match.Groups['Reason'].Value
 		if ($Reason -cnotin $StableRejectionReasons) { throw "Unsupported rejection reason '$Reason'." }
 		if ($Reason -cne $RequiredRejectionCategories[$Category]) { throw "Rejection category '$Category' used '$Reason' instead of '$($RequiredRejectionCategories[$Category])'." }
-		Assert-StructuredRejectionMatch $Observed.Match $Category $Reason $Connections['client-2']
+		Assert-StructuredRejectionMatch -Match $Observed.Match -ExpectedCategory $Category -ExpectedReason $Reason -ExpectedConnectionId $Connections['client-2']
 		if ($script:UseScenarioContract) {
 			$Rejections.Add([pscustomobject]@{
 				category = $Category
@@ -1116,14 +1132,14 @@ try {
 		$CurrentStage = 'death'
 		$CurrentProcessRole = 'server'
 		$CurrentClientId = 'client-2'
-		$DeathLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'authoritative death' (Expand-Pattern $DeathPattern 'client-2')
-		$Lifecycle.Add((New-Observation 'death' $ServerStdOut $DeathLine 'client-2'))
-		$ScenarioLifecycle.Add((New-ScenarioStage 3 'death' 'dead' 'server' $ServerStdOut $DeathLine 'client-2'))
+		$DeathLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'authoritative death' -Pattern (Expand-Pattern $DeathPattern 'client-2')
+		$Lifecycle.Add((ConvertTo-Observation -EventName 'death' -Source $ServerStdOut -Detail $DeathLine -ClientId 'client-2'))
+		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 3 -Stage 'death' -AuthoritativeResult 'dead' -ProcessRole 'server' -Source $ServerStdOut -Detail $DeathLine -ClientId 'client-2'))
 
 		$CurrentStage = 'respawn'
-		$RespawnLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'authoritative respawn' (Expand-Pattern $RespawnPattern 'client-2')
-		$Lifecycle.Add((New-Observation 'respawn' $ServerStdOut $RespawnLine 'client-2'))
-		$ScenarioLifecycle.Add((New-ScenarioStage 4 'respawn' 'respawned' 'server' $ServerStdOut $RespawnLine 'client-2'))
+		$RespawnLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'authoritative respawn' -Pattern (Expand-Pattern $RespawnPattern 'client-2')
+		$Lifecycle.Add((ConvertTo-Observation -EventName 'respawn' -Source $ServerStdOut -Detail $RespawnLine -ClientId 'client-2'))
+		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 4 -Stage 'respawn' -AuthoritativeResult 'respawned' -ProcessRole 'server' -Source $ServerStdOut -Detail $RespawnLine -ClientId 'client-2'))
 	}
 
 	$CurrentStage = 'disconnect'
@@ -1132,10 +1148,10 @@ try {
 	Stop-Process -Id $ClientProcesses['client-1'].Id -Force
 	$ClientProcesses['client-1'].WaitForExit()
 	@($Processes | Where-Object { $_.Role -ceq 'client-1' })[0].TerminationState = 'runner-terminated'
-	$DisconnectLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'disconnect cleanup' (Expand-Pattern $DisconnectPattern 'client-1')
-	$Lifecycle.Add((New-Observation 'disconnect' $ServerStdOut $DisconnectLine 'client-1'))
+	$DisconnectLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'disconnect cleanup' -Pattern (Expand-Pattern $DisconnectPattern 'client-1')
+	$Lifecycle.Add((ConvertTo-Observation -EventName 'disconnect' -Source $ServerStdOut -Detail $DisconnectLine -ClientId 'client-1'))
 	if ($script:UseScenarioContract) {
-		$ScenarioLifecycle.Add((New-ScenarioStage 5 'disconnect' 'disconnected' 'server' $ServerStdOut $DisconnectLine 'client-1'))
+		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 5 -Stage 'disconnect' -AuthoritativeResult 'disconnected' -ProcessRole 'server' -Source $ServerStdOut -Detail $DisconnectLine -ClientId 'client-1'))
 	}
 
 	$ReconnectId = 'client-1-reconnect'
@@ -1144,34 +1160,34 @@ try {
 	$CurrentClientId = $ReconnectId
 	$ReconnectStdOut = Join-Path $ResolvedLogs "$ReconnectId.stdout.log"
 	$ReconnectStdErr = Join-Path $ResolvedLogs "$ReconnectId.stderr.log"
-	$ExpandedReconnectArguments = @(Expand-Arguments $ClientArguments $ReconnectId) + @($ProfileClientArguments)
-	$ReconnectHandle = Start-HiddenProcess $ResolvedClient $ExpandedReconnectArguments $ReconnectStdOut $ReconnectStdErr
+	$ExpandedReconnectArguments = @(Expand-Argument $ClientArguments $ReconnectId) + @($ProfileClientArguments)
+	$ReconnectHandle = Start-HiddenProcess -Executable $ResolvedClient -Arguments $ExpandedReconnectArguments -StandardOutputPath $ReconnectStdOut -StandardErrorPath $ReconnectStdErr
 	$ReconnectHandle | Add-Member -NotePropertyName Role -NotePropertyValue $ReconnectId
 	$ReconnectHandle | Add-Member -NotePropertyName TerminationState -NotePropertyValue $null
 	$Processes.Add($ReconnectHandle)
 	$ReconnectProcess = $ReconnectHandle.Process
 	$Clients.Add([pscustomobject]@{ id = $ReconnectId; role = 'reconnect_client' })
-	[void] (Wait-ForMatch $ReconnectProcess $ReconnectStdOut $ReconnectStdErr 'reconnect client readiness' (Expand-Pattern $ClientReadyPattern $ReconnectId))
-	$ReconnectLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'new reconnect identity' (Expand-Pattern $ReconnectPattern $ReconnectId)
+	[void] (Wait-ForMatch -Process $ReconnectProcess -Path $ReconnectStdOut -ErrorPath $ReconnectStdErr -Description 'reconnect client readiness' -Pattern (Expand-Pattern $ClientReadyPattern $ReconnectId))
+	$ReconnectLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'new reconnect identity' -Pattern (Expand-Pattern $ReconnectPattern $ReconnectId)
 	$ReconnectMatch = $ReconnectRegex.Match($ReconnectLine)
 	if ($ReconnectMatch.Groups['ConnectionId'].Value -eq $Connections['client-1']) { throw 'Reconnect reused the disconnected connection identity.' }
-	$ReconnectObservation = New-Observation 'reconnect' $ServerStdOut $ReconnectLine $ReconnectId
+	$ReconnectObservation = ConvertTo-Observation -EventName 'reconnect' -Source $ServerStdOut -Detail $ReconnectLine -ClientId $ReconnectId
 	$ReconnectObservation | Add-Member -NotePropertyName connection_id -NotePropertyValue $ReconnectMatch.Groups['ConnectionId'].Value
 	$Lifecycle.Add($ReconnectObservation)
 	if ($script:UseScenarioContract) {
-		$ScenarioLifecycle.Add((New-ScenarioStage 6 'reconnect' 'reconnected' 'server' $ServerStdOut $ReconnectLine $ReconnectId))
+		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 6 -Stage 'reconnect' -AuthoritativeResult 'reconnected' -ProcessRole 'server' -Source $ServerStdOut -Detail $ReconnectLine -ClientId $ReconnectId))
 	}
 
 	$ServerLines = @(Get-Content -LiteralPath $ServerStdOut -ErrorAction Stop)
-	$ReadyIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $ServerReadyPattern 'server') 'server-ready'
-	$NetworkConfigIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $NetworkConfigPattern 'server') 'network-config'
-	[void] (Get-SingleMatchIndex $ServerLines (Expand-Pattern $EnemyPattern 'server') 'enemy-spawn')
-	$MeleeIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $MeleePattern 'server') 'melee-resolution'
-	$DamageIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $DamagePattern 'server') 'damage-application'
-	$DisconnectIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $DisconnectPattern 'client-1') 'disconnect'
-	$ReconnectIndex = Get-SingleMatchIndex $ServerLines (Expand-Pattern $ReconnectPattern 'client-1-reconnect') 'reconnect'
+	$ReadyIndex = Get-SingleMatchIndex -Lines $ServerLines -Pattern (Expand-Pattern $ServerReadyPattern 'server') -Description 'server-ready'
+	$NetworkConfigIndex = Get-SingleMatchIndex -Lines $ServerLines -Pattern (Expand-Pattern $NetworkConfigPattern 'server') -Description 'network-config'
+	[void] (Get-SingleMatchIndex -Lines $ServerLines -Pattern (Expand-Pattern $EnemyPattern 'server') -Description 'enemy-spawn')
+	$MeleeIndex = Get-SingleMatchIndex -Lines $ServerLines -Pattern (Expand-Pattern $MeleePattern 'server') -Description 'melee-resolution'
+	$DamageIndex = Get-SingleMatchIndex -Lines $ServerLines -Pattern (Expand-Pattern $DamagePattern 'server') -Description 'damage-application'
+	$DisconnectIndex = Get-SingleMatchIndex -Lines $ServerLines -Pattern (Expand-Pattern $DisconnectPattern 'client-1') -Description 'disconnect'
+	$ReconnectIndex = Get-SingleMatchIndex -Lines $ServerLines -Pattern (Expand-Pattern $ReconnectPattern 'client-1-reconnect') -Description 'reconnect'
 	$MovementIndexes = @{}
-	foreach ($ClientId in @('client-1','client-2')) { $MovementIndexes[$ClientId] = Get-SingleMatchIndex $ServerLines (Expand-Pattern $MovementPattern $ClientId) "$ClientId movement" }
+	foreach ($ClientId in @('client-1','client-2')) { $MovementIndexes[$ClientId] = Get-SingleMatchIndex -Lines $ServerLines -Pattern (Expand-Pattern $MovementPattern $ClientId) -Description "$ClientId movement" }
 	$ConnectionIndexes = @{}
 	for ($Index = 0; $Index -lt $ServerLines.Count; $Index++) {
 		$Match = $ConnectionRegex.Match($ServerLines[$Index])
@@ -1195,12 +1211,12 @@ try {
 		$RejectionIndexes[$Category] = $CategoryIndexes[0]
 	}
 	$ServerErrorLines = @(Get-Content -LiteralPath $ServerStdErr -ErrorAction Stop)
-	Assert-ExactRejectionInventory @($ServerLines + $ServerErrorLines) $RejectionRegex $RequiredRejectionCategories $Connections['client-2']
-	Assert-MetricEnvironmentInventory @($ServerLines + $ServerErrorLines) $MetricRegex $Environment
+	Assert-ExactRejectionInventory -Lines @($ServerLines + $ServerErrorLines) -Regex $RejectionRegex -RequiredCategories $RequiredRejectionCategories -ExpectedConnectionId $Connections['client-2']
+	Assert-MetricEnvironmentInventory -Lines @($ServerLines + $ServerErrorLines) -Regex $MetricRegex -ExpectedEnvironment $Environment
 	foreach ($ClientId in @('client-1','client-2','client-1-reconnect')) {
 		$ClientLines = @(Get-Content -LiteralPath (Join-Path $ResolvedLogs "$ClientId.stdout.log") -ErrorAction Stop)
-		[void] (Get-SingleMatchIndex $ClientLines (Expand-Pattern $ClientReadyPattern $ClientId) "$ClientId ready")
-		if ($ClientId -eq 'client-2') { [void] (Get-SingleMatchIndex $ClientLines (Expand-Pattern $JoinInProgressPattern $ClientId) 'client-2 join-in-progress') }
+		[void] (Get-SingleMatchIndex -Lines $ClientLines -Pattern (Expand-Pattern $ClientReadyPattern $ClientId) -Description "$ClientId ready")
+		if ($ClientId -eq 'client-2') { [void] (Get-SingleMatchIndex -Lines $ClientLines -Pattern (Expand-Pattern $JoinInProgressPattern $ClientId) -Description 'client-2 join-in-progress') }
 	}
 	$GameplayOrderInvalid = $ReadyIndex -ge $NetworkConfigIndex -or
 		$ReadyIndex -ge $ConnectionIndexes['client-1'] -or
@@ -1237,18 +1253,18 @@ try {
 		$CurrentStage = 'shutdown'
 		$CurrentProcessRole = 'server'
 		$CurrentClientId = $null
-		$ShutdownLine = Wait-ForMatch $ServerProcess $ServerStdOut $ServerStdErr 'controlled shutdown' (Expand-Pattern $ShutdownPattern 'server')
+		$ShutdownLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'controlled shutdown' -Pattern (Expand-Pattern $ShutdownPattern 'server')
 		[void] (Wait-ForSuccessfulProcessExit $ServerProcess 'authoritative server exit after controlled shutdown')
 		$ServerHandle.TerminationState = 'exited'
-		$Lifecycle.Add((New-Observation 'shutdown' $ServerStdOut $ShutdownLine))
-		$ScenarioLifecycle.Add((New-ScenarioStage 7 'shutdown' 'shutdown-complete' 'server' $ServerStdOut $ShutdownLine))
+		$Lifecycle.Add((ConvertTo-Observation -EventName 'shutdown' -Source $ServerStdOut -Detail $ShutdownLine))
+		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 7 -Stage 'shutdown' -AuthoritativeResult 'shutdown-complete' -ProcessRole 'server' -Source $ServerStdOut -Detail $ShutdownLine))
 
 		$ContractServerLines = @(Get-Content -LiteralPath $ServerStdOut -ErrorAction Stop)
-		$DeathIndex = Get-SingleMatchIndex $ContractServerLines (Expand-Pattern $DeathPattern 'client-2') 'authoritative death'
-		$RespawnIndex = Get-SingleMatchIndex $ContractServerLines (Expand-Pattern $RespawnPattern 'client-2') 'authoritative respawn'
-		$ContractDisconnectIndex = Get-SingleMatchIndex $ContractServerLines (Expand-Pattern $DisconnectPattern 'client-1') 'contract disconnect'
-		$ContractReconnectIndex = Get-SingleMatchIndex $ContractServerLines (Expand-Pattern $ReconnectPattern 'client-1-reconnect') 'contract reconnect'
-		$ShutdownIndex = Get-SingleMatchIndex $ContractServerLines (Expand-Pattern $ShutdownPattern 'server') 'controlled shutdown'
+		$DeathIndex = Get-SingleMatchIndex -Lines $ContractServerLines -Pattern (Expand-Pattern $DeathPattern 'client-2') -Description 'authoritative death'
+		$RespawnIndex = Get-SingleMatchIndex -Lines $ContractServerLines -Pattern (Expand-Pattern $RespawnPattern 'client-2') -Description 'authoritative respawn'
+		$ContractDisconnectIndex = Get-SingleMatchIndex -Lines $ContractServerLines -Pattern (Expand-Pattern $DisconnectPattern 'client-1') -Description 'contract disconnect'
+		$ContractReconnectIndex = Get-SingleMatchIndex -Lines $ContractServerLines -Pattern (Expand-Pattern $ReconnectPattern 'client-1-reconnect') -Description 'contract reconnect'
+		$ShutdownIndex = Get-SingleMatchIndex -Lines $ContractServerLines -Pattern (Expand-Pattern $ShutdownPattern 'server') -Description 'controlled shutdown'
 		if ($LastGameplayRejectionIndex -ge $DeathIndex -or
 			$DeathIndex -ge $RespawnIndex -or
 			$RespawnIndex -ge $ContractDisconnectIndex -or
@@ -1275,11 +1291,11 @@ finally {
 	if ($ServerLauncherExecutable -and $ServerDescendantProcessId) {
 		try {
 			[void] (Invoke-HiddenCommand `
-				$ResolvedServerLauncher `
-				(Expand-ServerControlArguments $ServerCleanupArguments $ResolvedServer $ServerDescendantProcessId) `
-				(Join-Path $ResolvedLogs 'server.cleanup.stdout.log') `
-				(Join-Path $ResolvedLogs 'server.cleanup.stderr.log') `
-				"server descendant cleanup for process $ServerDescendantProcessId")
+				-Executable $ResolvedServerLauncher `
+				-Arguments (Expand-ServerControlArgument -Arguments $ServerCleanupArguments -ResolvedServerExecutable $ResolvedServer -ServerProcessId $ServerDescendantProcessId) `
+				-StandardOutputPath (Join-Path $ResolvedLogs 'server.cleanup.stdout.log') `
+				-StandardErrorPath (Join-Path $ResolvedLogs 'server.cleanup.stderr.log') `
+				-Description "server descendant cleanup for process $ServerDescendantProcessId")
 		}
 		catch {
 			$CleanupFailure = $_.Exception.Message
@@ -1307,10 +1323,10 @@ finally {
 			}
 			$Process.WaitForExit()
 			if (-not $Handle.TerminationState) { $Handle.TerminationState = 'exited' }
-			try { $Process.CancelOutputRead() } catch { }
-			try { $Process.CancelErrorRead() } catch { }
+			try { $Process.CancelOutputRead() } catch { Write-Verbose "Cancelling asynchronous standard-output capture failed during runtime cleanup: $($_.Exception.Message)" }
+			try { $Process.CancelErrorRead() } catch { Write-Verbose "Cancelling asynchronous standard-error capture failed during runtime cleanup: $($_.Exception.Message)" }
 			if ($script:UseScenarioContract) {
-				$ProcessOutcomes.Add((New-ProcessOutcome ([string] $Handle.Role) ([string] $Handle.TerminationState) ([int] $Process.ExitCode)))
+				$ProcessOutcomes.Add((ConvertTo-ProcessOutcome -ProcessRole ([string] $Handle.Role) -TerminationState ([string] $Handle.TerminationState) -ExitCode ([int] $Process.ExitCode)))
 			}
 		}
 		catch {
@@ -1335,8 +1351,8 @@ finally {
 		try {
 			$FinalServerLines = @(Get-Content -LiteralPath $ServerStdOut -ErrorAction Stop)
 			$FinalServerErrorLines = @(Get-Content -LiteralPath $ServerStdErr -ErrorAction Stop)
-			Assert-ExactRejectionInventory @($FinalServerLines + $FinalServerErrorLines) $RejectionRegex $RequiredRejectionCategories $Connections['client-2']
-			Assert-MetricEnvironmentInventory @($FinalServerLines + $FinalServerErrorLines) $MetricRegex $Environment
+			Assert-ExactRejectionInventory -Lines @($FinalServerLines + $FinalServerErrorLines) -Regex $RejectionRegex -RequiredCategories $RequiredRejectionCategories -ExpectedConnectionId $Connections['client-2']
+			Assert-MetricEnvironmentInventory -Lines @($FinalServerLines + $FinalServerErrorLines) -Regex $MetricRegex -ExpectedEnvironment $Environment
 			$Result = if ($EvidenceMode -ceq 'packaged') { 'packaged-candidate' } else { 'fixture-passed' }
 		}
 		catch {
@@ -1389,7 +1405,7 @@ finally {
 		"stage=cleanup;role=$PublishedCleanupFailureRole;reason=cleanup-failed"
 	} else { $CleanupFailure }
 	$FailureDetails = if ($script:UseScenarioContract -and $PublishedFailure) {
-		New-FailureDetails $Failure $PublishedFailure $PublishedFailureStage $PublishedFailureRole $PublishedFailureClientId $CleanupAttempted $CleanupSucceeded $PublishedCleanupFailure
+		ConvertTo-FailureDetail -Message $Failure -PublishedReason $PublishedFailure -Stage $PublishedFailureStage -ProcessRole $PublishedFailureRole -ClientId $PublishedFailureClientId -CleanupWasAttempted $CleanupAttempted -CleanupWasSuccessful $CleanupSucceeded -CleanupError $PublishedCleanupFailure
 	} else { $null }
 	$Evidence = [ordered]@{
 		schema_id = 'aetheln.network-authority-evidence'

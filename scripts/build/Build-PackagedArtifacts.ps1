@@ -160,7 +160,7 @@ function Resolve-UbtSelectedTool([string] $LogDirectory, [string] $Label, [strin
 		$Found = if ($UniqueCandidates.Count -eq 0) { '<none>' } else { $UniqueCandidates -join ', ' }
 		throw "AutomationTool log directory '$LogDirectory' must identify exactly one UBT-selected $Label path ending in '$ExecutableName'; found $($UniqueCandidates.Count). Searched UBA sidecars: $Searched. Candidates: $Found."
 	}
-	Resolve-RequiredPath $Label $UniqueCandidates[0] 'Leaf'
+	Resolve-RequiredPath -Name $Label -Path $UniqueCandidates[0] -PathType 'Leaf'
 }
 function Assert-CleanRepository([string] $Root) {
 	$StatusArguments = @('-C', $Root, 'status', '--porcelain=v1', '--untracked-files=all')
@@ -169,7 +169,7 @@ function Assert-CleanRepository([string] $Root) {
 	$Changes = @($Status | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 	if ($Changes.Count -gt 0) { throw "Packaged builds require a clean repository; git status found $($Changes.Count) modified or untracked path(s):`n - $($Changes -join "`n - ")`nCommit or otherwise resolve these inputs, then run the build again." }
 }
-function Get-GitLines([string] $Root, [string[]] $Arguments) {
+function Get-GitLine([string] $Root, [string[]] $Arguments) {
 	$Output = @(& git -C $Root @Arguments 2>&1)
 	if ($LASTEXITCODE -ne 0) { return $null }
 	return ,@($Output | ForEach-Object { ([string] $_).Trim() } | Where-Object { $_ -ne '' })
@@ -261,6 +261,7 @@ function Get-ToolchainCompilerPath {
 	return $null
 }
 function Resolve-EvidenceIdentity {
+	param([string] $RunnerName)
 	# Bounded non-sensitive identity of this run's inputs so before/after
 	# comparisons can prove identical engine, toolchain, source, targets,
 	# configuration, and runner. Values are normalized identifiers only
@@ -278,29 +279,29 @@ function Resolve-EvidenceIdentity {
 		runnerName = $(if ([string]::IsNullOrWhiteSpace($RunnerName)) { $null } else { $RunnerName })
 	}
 	try {
-		$RevisionLines = Get-GitLines $ResolvedEngine @('rev-parse', 'HEAD')
+		$RevisionLines = Get-GitLine $ResolvedEngine @('rev-parse', 'HEAD')
 		if ($null -ne $RevisionLines -and $RevisionLines.Count -eq 1 -and $RevisionLines[0] -match '^[0-9a-f]{40}$') {
-			$EngineStatus = Get-GitLines $ResolvedEngine @('status', '--porcelain=v1', '--untracked-files=all')
+			$EngineStatus = Get-GitLine $ResolvedEngine @('status', '--porcelain=v1', '--untracked-files=all')
 			if ($null -ne $EngineStatus) {
 				$Identity.engineGitRevision = $RevisionLines[0]
 				$Identity.engineGitRevisionStatus = if ($EngineStatus.Count -eq 0) { 'verified' } else { 'dirty' }
 			}
 		}
-	} catch { }
+	} catch { Write-Verbose "Engine Git identity probe failed, so the engine revision fields stay unavailable: $($_.Exception.Message)" }
 	try {
 		$VersionPath = Join-Path $ResolvedEngine 'Engine/Build/Build.version'
 		if (Test-Path -LiteralPath $VersionPath -PathType Leaf) {
 			$Identity.engineBuildVersionSha256 = (Get-FileHash -LiteralPath $VersionPath -Algorithm SHA256).Hash.ToLowerInvariant()
 			$Identity.engineBuildVersionSha256Status = 'verified'
 		}
-	} catch { }
+	} catch { Write-Verbose "Engine Build.version hash probe failed, so that identity field stays unavailable: $($_.Exception.Message)" }
 	try {
 		$CompilerPath = Get-ToolchainCompilerPath
 		if ($null -ne $CompilerPath) {
 			$Identity.linuxToolchainCompilerSha256 = (Get-FileHash -LiteralPath $CompilerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 			$Identity.linuxToolchainCompilerSha256Status = 'verified'
 		}
-	} catch { }
+	} catch { Write-Verbose "Linux toolchain compiler hash probe failed, so that identity field stays unavailable: $($_.Exception.Message)" }
 	return $Identity
 }
 function Get-DdcExpectedIdentity {
@@ -314,14 +315,14 @@ function Get-DdcExpectedIdentity {
 	# platform, and settings per entry.
 	$VersionPath = Join-Path $ResolvedEngine 'Engine/Build/Build.version'
 	if (-not (Test-Path -LiteralPath $VersionPath -PathType Leaf)) { return @{ failure = 'fallback_engine_identity_unverifiable'; detail = "EngineRoot '$ResolvedEngine' has no Engine/Build/Build.version, so the cache identity cannot be bound to the pinned engine" } }
-	$EngineRevisionLines = Get-GitLines $ResolvedEngine @('rev-parse', 'HEAD')
+	$EngineRevisionLines = Get-GitLine $ResolvedEngine @('rev-parse', 'HEAD')
 	if ($null -eq $EngineRevisionLines -or $EngineRevisionLines.Count -ne 1 -or $EngineRevisionLines[0] -notmatch '^[0-9a-f]{40}$') { return @{ failure = 'fallback_engine_identity_unverifiable'; detail = "EngineRoot '$ResolvedEngine' is not a Git checkout whose exact source revision can be verified" } }
-	$EngineStatus = Get-GitLines $ResolvedEngine @('status', '--porcelain=v1', '--untracked-files=all')
+	$EngineStatus = Get-GitLine $ResolvedEngine @('status', '--porcelain=v1', '--untracked-files=all')
 	if ($null -eq $EngineStatus) { return @{ failure = 'fallback_engine_identity_unverifiable'; detail = "EngineRoot '$ResolvedEngine' cleanliness could not be verified" } }
 	if ($EngineStatus.Count -ne 0) { return @{ failure = 'fallback_engine_identity_unverifiable'; detail = "EngineRoot '$ResolvedEngine' has local modifications; the cache identity requires a clean pinned engine checkout" } }
 	$CompilerPath = Get-ToolchainCompilerPath
 	if ($null -eq $CompilerPath) { return @{ failure = 'fallback_toolchain_identity_unverifiable'; detail = "LinuxToolchainRoot '$ResolvedToolchain' holds no clang compiler whose content identity can be recorded" } }
-	$RootCommits = Get-GitLines $ProjectRoot @('rev-list', '--max-parents=0', 'HEAD')
+	$RootCommits = Get-GitLine $ProjectRoot @('rev-list', '--max-parents=0', 'HEAD')
 	if ($null -eq $RootCommits -or $RootCommits.Count -eq 0 -or @($RootCommits | Where-Object { $_ -notmatch '^[0-9a-f]{40}$' }).Count -ne 0) { return @{ failure = 'fallback_project_identity_unverifiable'; detail = 'the project repository root-commit identity could not be determined' } }
 	return @{ identity = [ordered]@{
 		schemaVersion = 2
@@ -335,7 +336,7 @@ function Get-DdcExpectedIdentity {
 		targets = $script:BuildTargetsContract
 	} }
 }
-function Get-DdcFallbackState([string] $Status, [string] $Detail) {
+function Get-DdcFallbackState([string] $Status, [string] $Detail, [string] $CacheFallback, [string] $DerivedDataCachePath) {
 	if ($CacheFallback -ne 'CleanIsolated') {
 		$script:CacheState = [ordered]@{ mode = 'persistent'; status = ($Status -replace '^fallback_', 'failed_'); appliedPath = $null }
 		throw "DerivedDataCachePath '$DerivedDataCachePath' failed identity validation and cannot be reused safely: $Detail. Repair or replace the cache root, or pass -CacheFallback CleanIsolated to run a full clean re-derive in a fresh run-scoped cache instead."
@@ -345,6 +346,7 @@ function Get-DdcFallbackState([string] $Status, [string] $Detail) {
 	return [ordered]@{ mode = 'clean-isolated-fallback'; status = $Status; appliedPath = $IsolatedPath }
 }
 function Resolve-DerivedDataCache {
+	param([string] $DerivedDataCachePath, [string] $CacheFallback)
 	# Reused cache state is accepted only when the explicit identity record
 	# matches this invocation exactly. Anything unverifiable fails closed or
 	# takes the documented clean-isolated fallback; entries inside the cache
@@ -357,10 +359,10 @@ function Resolve-DerivedDataCache {
 		throw
 	}
 	$Expected = Get-DdcExpectedIdentity
-	if ($Expected.ContainsKey('failure')) { return Get-DdcFallbackState ([string] $Expected.failure) ([string] $Expected.detail) }
+	if ($Expected.ContainsKey('failure')) { return Get-DdcFallbackState ([string] $Expected.failure) ([string] $Expected.detail) -CacheFallback $CacheFallback -DerivedDataCachePath $DerivedDataCachePath }
 	$ExpectedIdentity = $Expected.identity
 	if (Test-Path -LiteralPath $FullCachePath) {
-		if (-not (Test-Path -LiteralPath $FullCachePath -PathType Container)) { return Get-DdcFallbackState 'fallback_unavailable' 'the configured path exists but is not a directory' }
+		if (-not (Test-Path -LiteralPath $FullCachePath -PathType Container)) { return Get-DdcFallbackState 'fallback_unavailable' 'the configured path exists but is not a directory' -CacheFallback $CacheFallback -DerivedDataCachePath $DerivedDataCachePath }
 		$CacheRoot = (Resolve-Path -LiteralPath $FullCachePath).Path
 	} else {
 		$CacheRoot = (New-Item -ItemType Directory -Path $FullCachePath).FullName
@@ -381,10 +383,10 @@ function Resolve-DerivedDataCache {
 				if ([string] $Identity.$Name -cne [string] $ExpectedIdentity[$Name]) { $FallbackStatus = 'fallback_mismatch' }
 			}
 		}
-		if ($null -ne $FallbackStatus) { return Get-DdcFallbackState $FallbackStatus "the cache-identity.json record is $(if ($FallbackStatus -eq 'fallback_corrupt') { 'corrupt, incomplete, or from an older identity schema' } else { 'bound to a different engine revision, toolchain, repository, project, configuration, or target set' })" }
+		if ($null -ne $FallbackStatus) { return Get-DdcFallbackState $FallbackStatus "the cache-identity.json record is $(if ($FallbackStatus -eq 'fallback_corrupt') { 'corrupt, incomplete, or from an older identity schema' } else { 'bound to a different engine revision, toolchain, repository, project, configuration, or target set' })" -CacheFallback $CacheFallback -DerivedDataCachePath $DerivedDataCachePath }
 		return [ordered]@{ mode = 'persistent'; status = 'reused'; appliedPath = $CacheRoot }
 	}
-	if (@(Get-ChildItem -LiteralPath $CacheRoot -Force).Count -ne 0) { return Get-DdcFallbackState 'fallback_unverifiable' 'the directory already holds content but carries no cache-identity.json record' }
+	if (@(Get-ChildItem -LiteralPath $CacheRoot -Force).Count -ne 0) { return Get-DdcFallbackState 'fallback_unverifiable' 'the directory already holds content but carries no cache-identity.json record' -CacheFallback $CacheFallback -DerivedDataCachePath $DerivedDataCachePath }
 	$InitialRecord = [ordered]@{}
 	foreach ($Name in @('schemaVersion') + $script:DdcIdentityFieldNames) { $InitialRecord[$Name] = $ExpectedIdentity[$Name] }
 	$InitialRecord['schemaVersion'] = 2
@@ -393,17 +395,17 @@ function Resolve-DerivedDataCache {
 	return [ordered]@{ mode = 'persistent'; status = 'initialized'; appliedPath = $CacheRoot }
 }
 function Assert-CanonicalCleanEngine {
-	$RevisionLines = Get-GitLines $ResolvedEngine @('rev-parse', 'HEAD')
+	$RevisionLines = Get-GitLine $ResolvedEngine @('rev-parse', 'HEAD')
 	if ($null -eq $RevisionLines -or $RevisionLines.Count -ne 1 -or $RevisionLines[0] -notmatch '^[0-9a-f]{40}$') { throw "EngineRoot '$ResolvedEngine' is not a Git checkout whose exact revision can be verified; host-tools validation fails closed instead of guessing." }
 	if ($RevisionLines[0] -cne $script:CanonicalEngineRevision) { throw "EngineRoot '$ResolvedEngine' is at engine revision '$($RevisionLines[0])', not the canonical pinned '$script:CanonicalEngineRevision'; host-tools validation fails closed." }
-	$EngineStatus = Get-GitLines $ResolvedEngine @('status', '--porcelain=v1', '--untracked-files=all')
+	$EngineStatus = Get-GitLine $ResolvedEngine @('status', '--porcelain=v1', '--untracked-files=all')
 	if ($null -eq $EngineStatus) { throw "EngineRoot '$ResolvedEngine' cleanliness could not be verified; host-tools validation fails closed." }
 	if ($EngineStatus.Count -ne 0) { throw "EngineRoot '$ResolvedEngine' has $($EngineStatus.Count) modified or untracked engine source path(s); host-tools validation requires a clean canonical pinned engine checkout." }
 }
 function Assert-SafeEngineRelativePath([string] $Label, [string] $Value) {
 	if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains(':') -or [System.IO.Path]::IsPathRooted($Value) -or @(($Value -split '[\\/]') | Where-Object { $_ -in @('', '.', '..') }).Count -ne 0) { throw "$Label '$Value' must be a safe engine-relative path; host-tools validation fails closed." }
 }
-function Get-HostToolReceiptProductPaths {
+function Get-HostToolReceiptProductPath {
 	# Derives the exact host build-product closure from the pinned engine's
 	# generated Unreal target receipts. The set is re-derived fresh on every
 	# attestation write and every prebuilt verification, so a caller-supplied
@@ -448,8 +450,8 @@ function Get-HostToolReceiptProductPaths {
 	}
 	return ,@($Paths)
 }
-function Assert-UniqueAttestationJsonProperties([string] $Raw) {
-	# Ported from Assert-UniqueJsonProperties in Invoke-EngineRunnerGate.ps1:
+function Assert-UniqueAttestationJsonProperty([string] $Raw) {
+	# Ported from Assert-UniqueJsonProperty in Invoke-EngineRunnerGate.ps1:
 	# ConvertFrom-Json silently keeps one value for duplicated properties, so a
 	# tampered document could carry two conflicting definitions. Scope-aware
 	# scan of the raw text; name tracking is case-insensitive here so
@@ -515,7 +517,7 @@ function Test-AttestationTimestamp($Value) {
 	if (-not [DateTime]::TryParse([string] $Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref] $Parsed)) { return $false }
 	return $Parsed.Kind -eq [System.DateTimeKind]::Utc
 }
-function Assert-AttestedSizeBounds([long[]] $Sizes) {
+function Assert-AttestedSizeBound([long[]] $Sizes) {
 	$Aggregate = [long] 0
 	foreach ($Size in $Sizes) {
 		if ($Size -lt 0) { throw 'Attested file sizes must be nonnegative JSON integers; host-tools validation fails closed.' }
@@ -556,7 +558,7 @@ function Test-HostToolsAttestation([string] $AttestationFull) {
 	# ConvertFrom-Json reports case-colliding keys as a generic parse failure,
 	# and newer PowerShell keeps one value silently.
 	if ([string]::IsNullOrWhiteSpace($Raw)) { throw "HostToolsAttestationPath '$HostToolsAttestationPath' is empty; host-tools validation fails closed." }
-	Assert-UniqueAttestationJsonProperties $Raw
+	Assert-UniqueAttestationJsonProperty $Raw
 	$Record = $null
 	try { $Record = $Raw | ConvertFrom-Json } catch { throw "HostToolsAttestationPath '$HostToolsAttestationPath' is not a parseable attestation record; host-tools validation fails closed." }
 	if ($null -eq $Record) { throw "HostToolsAttestationPath '$HostToolsAttestationPath' is empty; host-tools validation fails closed." }
@@ -572,7 +574,7 @@ function Test-HostToolsAttestation([string] $AttestationFull) {
 	if ($Record.provisioningEvidence -isnot [string] -or [string]::IsNullOrWhiteSpace([string] $Record.provisioningEvidence) -or ([string] $Record.provisioningEvidence) -cnotmatch '^[^\x00-\x1f]{1,512}$') { throw 'Attestation record provisioningEvidence must be a nonempty bounded string; host-tools validation fails closed.' }
 	if (-not (Test-AttestationTimestamp $Record.createdUtc)) { throw 'Attestation record createdUtc must be a bounded round-trip UTC timestamp; host-tools validation fails closed.' }
 	if ($Record.files -isnot [array]) { throw "Attestation record 'files' must be a JSON array; host-tools validation fails closed." }
-	$DerivedPaths = Get-HostToolReceiptProductPaths
+	$DerivedPaths = Get-HostToolReceiptProductPath
 	$Entries = @($Record.files)
 	if ($Entries.Count -ne $DerivedPaths.Count) { throw "Attestation record must list exactly the $($DerivedPaths.Count) receipt-derived host build products; found $($Entries.Count) entries. Host-tools validation fails closed." }
 	$SeenPaths = @{}
@@ -589,7 +591,7 @@ function Test-HostToolsAttestation([string] $AttestationFull) {
 		if ([string] $Entry.sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "Attestation entry for '$EntryPath' must carry a lowercase 64-character SHA-256; host-tools validation fails closed." }
 		if (-not (Test-AttestationJsonInteger $Entry.sizeBytes)) { throw "Attestation entry for '$EntryPath' must carry sizeBytes as a nonnegative JSON integer; host-tools validation fails closed." }
 	}
-	Assert-AttestedSizeBounds @($Entries | ForEach-Object { [long] $_.sizeBytes })
+	Assert-AttestedSizeBound @($Entries | ForEach-Object { [long] $_.sizeBytes })
 	foreach ($RequiredPath in $DerivedPaths) {
 		if (-not $SeenPaths.ContainsKey((($RequiredPath -replace '\\', '/').ToLowerInvariant()))) { throw "Attestation record is missing receipt-derived host build product '$RequiredPath'; host-tools validation fails closed." }
 	}
@@ -600,6 +602,7 @@ function Test-HostToolsAttestation([string] $AttestationFull) {
 	}
 }
 function Write-HostToolsAttestation {
+	param([string] $HostToolsBoundary, [string] $EngineRevision, [string] $ProvisioningEvidence)
 	# Explicit operator attestation step: run only after a successful,
 	# authorized host-tools provisioning/rebuild, with -ProvisioningEvidence
 	# referencing that build's retained evidence. This step builds nothing.
@@ -612,9 +615,9 @@ function Write-HostToolsAttestation {
 	$AttestationParent = Split-Path -Parent $AttestationFull
 	if (-not (Test-Path -LiteralPath $AttestationParent -PathType Container)) { throw "HostToolsAttestationPath parent directory '$AttestationParent' does not exist." }
 	Assert-CanonicalCleanEngine
-	$DerivedPaths = Get-HostToolReceiptProductPaths
+	$DerivedPaths = Get-HostToolReceiptProductPath
 	$Files = @($DerivedPaths | ForEach-Object { Get-RequiredHostToolRecord $_ })
-	Assert-AttestedSizeBounds @($Files | ForEach-Object { [long] $_.sizeBytes })
+	Assert-AttestedSizeBound @($Files | ForEach-Object { [long] $_.sizeBytes })
 	# Written to a temporary sibling and moved into place: File.Move is atomic
 	# on the same volume and throws if the destination exists, so a concurrent
 	# writer can never overwrite or interleave an existing attestation.
@@ -629,12 +632,13 @@ function Write-HostToolsAttestation {
 	try {
 		[System.IO.File]::Move($TemporaryPath, $AttestationFull)
 	} catch {
-		try { Remove-Item -LiteralPath $TemporaryPath -Force -ErrorAction SilentlyContinue } catch { }
+		try { Remove-Item -LiteralPath $TemporaryPath -Force -ErrorAction SilentlyContinue } catch { Write-Verbose "The temporary attestation file could not be removed after the record move failed: $($_.Exception.Message)" }
 		throw "HostToolsAttestationPath '$HostToolsAttestationPath' could not be written as a new record; an attestation never overwrites an existing record. $($_.Exception.Message)"
 	}
 	return [ordered]@{ mode = 'attest'; status = 'written'; engineRevision = $script:CanonicalEngineRevision }
 }
 function Resolve-HostToolsBoundary {
+	param([string] $HostToolsBoundary, [string] $EngineRevision, [string] $ProvisioningEvidence)
 	if ($Stage -eq 'Provenance') {
 		if (-not [string]::IsNullOrWhiteSpace($HostToolsBoundary) -or -not [string]::IsNullOrWhiteSpace($EngineRevision) -or -not [string]::IsNullOrWhiteSpace($HostToolsAttestationPath)) { throw "Stage 'Provenance' runs no build phase and does not accept host-tools parameters." }
 		return [ordered]@{ mode = 'not_applicable'; status = 'no_build_phase'; engineRevision = $null }
@@ -676,14 +680,14 @@ function Read-StageRecord([string] $Root, [string] $ExpectedStage) {
 }
 function Resolve-RecordDirectory([string] $Root, [string] $Relative, [string] $Label) {
 	if ([string]::IsNullOrWhiteSpace($Relative) -or [System.IO.Path]::IsPathRooted($Relative) -or (($Relative -split '[\\/]') -contains '..')) { throw "$Label must be a safe stage-relative directory path." }
-	Resolve-RequiredPath $Label (Join-Path $Root $Relative) 'Container'
+	Resolve-RequiredPath -Name $Label -Path (Join-Path $Root $Relative) -PathType 'Container'
 }
 
-$ResolvedProject = Resolve-RequiredPath 'ProjectPath' $ProjectPath 'Leaf'
+$ResolvedProject = Resolve-RequiredPath -Name 'ProjectPath' -Path $ProjectPath -PathType 'Leaf'
 $ProjectRoot = Split-Path -Parent $ResolvedProject
 Assert-CleanRepository $ProjectRoot
-$ResolvedEngine = Resolve-RequiredPath 'EngineRoot' $EngineRoot 'Container'
-$ResolvedToolchain = Resolve-RequiredPath 'LinuxToolchainRoot' $LinuxToolchainRoot 'Container'
+$ResolvedEngine = Resolve-RequiredPath -Name 'EngineRoot' -Path $EngineRoot -PathType 'Container'
+$ResolvedToolchain = Resolve-RequiredPath -Name 'LinuxToolchainRoot' -Path $LinuxToolchainRoot -PathType 'Container'
 $script:RunUat = Join-Path $ResolvedEngine 'Engine/Build/BatchFiles/RunUAT.bat'
 if (-not (Test-Path -LiteralPath $script:RunUat -PathType Leaf)) { throw "EngineRoot '$ResolvedEngine' does not contain RunUAT.bat at '$script:RunUat'." }
 $UnrealEditorCmd = Join-Path $ResolvedEngine 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe'
@@ -691,26 +695,32 @@ if (-not (Test-Path -LiteralPath $UnrealEditorCmd -PathType Leaf)) { throw "Engi
 $ResolvedArchive = Initialize-EmptyDirectory 'ArchiveRoot' $ArchiveRoot
 $ResolvedLogs = Initialize-EmptyDirectory 'LogRoot' $LogRoot
 $script:TimingRecordPath = Join-Path $ResolvedLogs 'build-timing.json'
+# Bound here rather than captured implicitly inside the timed-step script
+# blocks below, so each helper's dependency on the run's parameters stays
+# visible at its call site.
+$EvidenceIdentityArguments = @{ RunnerName = $RunnerName }
+$HostToolsArguments = @{ HostToolsBoundary = $HostToolsBoundary; EngineRevision = $EngineRevision; ProvisioningEvidence = $ProvisioningEvidence }
+$DerivedDataCacheArguments = @{ DerivedDataCachePath = $DerivedDataCachePath; CacheFallback = $CacheFallback }
 # From here on a valid LogRoot exists, so every later validation and phase --
 # including fail-closed host-tools and cache-identity errors that stop the run
 # before any UAT process starts -- still finalizes bounded timing evidence.
 try {
-	Invoke-TimedStep 'evidence-identity-resolution' { $script:EvidenceIdentity = Resolve-EvidenceIdentity }
+	Invoke-TimedStep 'evidence-identity-resolution' { $script:EvidenceIdentity = Resolve-EvidenceIdentity @EvidenceIdentityArguments }
 	if ($Stage -eq 'AttestHostTools') {
-		Invoke-TimedStep 'host-tools-attestation-write' { $script:HostToolsState = Write-HostToolsAttestation }
+		Invoke-TimedStep 'host-tools-attestation-write' { $script:HostToolsState = Write-HostToolsAttestation @HostToolsArguments }
 		Write-Output "Host-tools attestation for canonical engine revision '$script:CanonicalEngineRevision' written to '$HostToolsAttestationPath'."
 		return
 	}
-	Invoke-TimedStep 'host-tools-boundary' { $script:HostToolsState = Resolve-HostToolsBoundary }
-	Invoke-TimedStep 'derived-data-cache-resolution' { $script:CacheState = Resolve-DerivedDataCache }
+	Invoke-TimedStep 'host-tools-boundary' { $script:HostToolsState = Resolve-HostToolsBoundary @HostToolsArguments }
+	Invoke-TimedStep 'derived-data-cache-resolution' { $script:CacheState = Resolve-DerivedDataCache @DerivedDataCacheArguments }
 	$ResolvedClientStage = $null
 	$ResolvedServerStage = $null
 	if ($Stage -eq 'Provenance') {
 		if ([string]::IsNullOrWhiteSpace($ClientStageRoot) -or [string]::IsNullOrWhiteSpace($ServerStageRoot)) { throw "Stage 'Provenance' requires -ClientStageRoot and -ServerStageRoot." }
-		$ResolvedClientStage = Resolve-RequiredPath 'ClientStageRoot' $ClientStageRoot 'Container'
-		$ResolvedServerStage = Resolve-RequiredPath 'ServerStageRoot' $ServerStageRoot 'Container'
-		$ClientArchive = Resolve-RequiredPath 'ClientStageRoot WindowsClient archive' (Join-Path $ResolvedClientStage 'WindowsClient') 'Container'
-		$ServerArchive = Resolve-RequiredPath 'ServerStageRoot LinuxServer archive' (Join-Path $ResolvedServerStage 'LinuxServer') 'Container'
+		$ResolvedClientStage = Resolve-RequiredPath -Name 'ClientStageRoot' -Path $ClientStageRoot -PathType 'Container'
+		$ResolvedServerStage = Resolve-RequiredPath -Name 'ServerStageRoot' -Path $ServerStageRoot -PathType 'Container'
+		$ClientArchive = Resolve-RequiredPath -Name 'ClientStageRoot WindowsClient archive' -Path (Join-Path $ResolvedClientStage 'WindowsClient') -PathType 'Container'
+		$ServerArchive = Resolve-RequiredPath -Name 'ServerStageRoot LinuxServer archive' -Path (Join-Path $ResolvedServerStage 'LinuxServer') -PathType 'Container'
 	} else {
 		$ClientArchive = Join-Path $ResolvedArchive 'WindowsClient'
 		$ServerArchive = Join-Path $ResolvedArchive 'LinuxServer'
@@ -767,18 +777,18 @@ try {
 		[Environment]::SetEnvironmentVariable('LINUX_MULTIARCH_ROOT', $ResolvedToolchain, 'Process')
 		if ($null -ne $script:CacheState.appliedPath) { [Environment]::SetEnvironmentVariable('UE-LocalDataCachePath', $script:CacheState.appliedPath, 'Process') }
 		if ($Stage -in @('All', 'Client')) {
-			Invoke-TimedStep 'client-uat-build-cook-package' { Invoke-UatBuild 'Windows x64 client build/cook/package' $ClientArguments (Join-Path $ResolvedLogs 'client-uat.log') $ClientAutomationToolLogs }
+			Invoke-TimedStep 'client-uat-build-cook-package' { Invoke-UatBuild -Label 'Windows x64 client build/cook/package' -Arguments $ClientArguments -LogPath (Join-Path $ResolvedLogs 'client-uat.log') -AutomationToolLogDirectory $ClientAutomationToolLogs }
 			Invoke-TimedStep 'client-output-validation' {
-				Assert-PackagedExecutable 'Windows client packaging' $ClientArchive @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
-				$script:SelectedCompiler = Resolve-UbtSelectedTool $ClientAutomationToolLogs 'Compiler' 'cl.exe'
-				$script:SelectedResourceCompiler = Resolve-UbtSelectedTool $ClientAutomationToolLogs 'Resource Compiler' 'rc.exe'
+				Assert-PackagedExecutable -Label 'Windows client packaging' -Root $ClientArchive -Names @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
+				$script:SelectedCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Compiler' -ExecutableName 'cl.exe'
+				$script:SelectedResourceCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Resource Compiler' -ExecutableName 'rc.exe'
 			}
 		}
 		if ($Stage -in @('All', 'Server')) {
-			Invoke-TimedStep 'server-uat-build-cook-package' { Invoke-UatBuild 'Linux x86-64 dedicated server build/cook/package' $ServerArguments (Join-Path $ResolvedLogs 'server-uat.log') $ServerAutomationToolLogs }
-			Invoke-TimedStep 'server-output-validation' { Assert-PackagedExecutable 'Linux server packaging' $ServerArchive @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping') }
-			Invoke-TimedStep 'server-dependency-registry-dump' { Invoke-LoggedCommand 'dedicated-server dependency registry dump' $UnrealEditorCmd $DependencyRegistryArguments (Join-Path $ResolvedLogs 'server-dependency-registry-dump.log') }
-			Invoke-TimedStep 'server-cooked-inventory-dump' { Invoke-LoggedCommand 'dedicated-server cooked inventory dump' $UnrealEditorCmd $CookedInventoryArguments (Join-Path $ResolvedLogs 'server-cooked-inventory-dump.log') }
+			Invoke-TimedStep 'server-uat-build-cook-package' { Invoke-UatBuild -Label 'Linux x86-64 dedicated server build/cook/package' -Arguments $ServerArguments -LogPath (Join-Path $ResolvedLogs 'server-uat.log') -AutomationToolLogDirectory $ServerAutomationToolLogs }
+			Invoke-TimedStep 'server-output-validation' { Assert-PackagedExecutable -Label 'Linux server packaging' -Root $ServerArchive -Names @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping') }
+			Invoke-TimedStep 'server-dependency-registry-dump' { Invoke-LoggedCommand -Label 'dedicated-server dependency registry dump' -Executable $UnrealEditorCmd -Arguments $DependencyRegistryArguments -LogPath (Join-Path $ResolvedLogs 'server-dependency-registry-dump.log') }
+			Invoke-TimedStep 'server-cooked-inventory-dump' { Invoke-LoggedCommand -Label 'dedicated-server cooked inventory dump' -Executable $UnrealEditorCmd -Arguments $CookedInventoryArguments -LogPath (Join-Path $ResolvedLogs 'server-cooked-inventory-dump.log') }
 			if ($Stage -eq 'All') { Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyRegistryDump -CookedInventoryDirectory $CookedInventoryDump } }
 		}
 	} finally {
@@ -824,8 +834,8 @@ try {
 			foreach ($Property in @('serverArguments', 'dependencyRegistryDumpArguments', 'cookedInventoryDumpArguments', 'dependencyReportDirectory', 'cookedInventoryDirectory')) {
 				if ($null -eq $ServerRecord.PSObject.Properties[$Property]) { throw "Server stage record is missing required property '$Property'." }
 			}
-			$DependencyReportDirectory = Resolve-RecordDirectory $ResolvedServerStage ([string] $ServerRecord.dependencyReportDirectory) 'Dependency report directory'
-			$CookedInventoryDirectory = Resolve-RecordDirectory $ResolvedServerStage ([string] $ServerRecord.cookedInventoryDirectory) 'Cooked inventory directory'
+			$DependencyReportDirectory = Resolve-RecordDirectory -Root $ResolvedServerStage -Relative ([string] $ServerRecord.dependencyReportDirectory) -Label 'Dependency report directory'
+			$CookedInventoryDirectory = Resolve-RecordDirectory -Root $ResolvedServerStage -Relative ([string] $ServerRecord.cookedInventoryDirectory) -Label 'Cooked inventory directory'
 			Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyReportDirectory -CookedInventoryDirectory $CookedInventoryDirectory }
 			$UatArgumentsJson = [ordered]@{ client = @($ClientRecord.clientArguments); server = @($ServerRecord.serverArguments); dependencyRegistryDump = @($ServerRecord.dependencyRegistryDumpArguments); cookedInventoryDump = @($ServerRecord.cookedInventoryDumpArguments) } | ConvertTo-Json -Compress
 			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson }

@@ -127,10 +127,18 @@ namespace AethelnCi {
 '@
 
 function Start-HiddenPowerShell {
+	[CmdletBinding(SupportsShouldProcess)]
+	[OutputType([hashtable])]
 	param(
 		[Parameter(Mandatory)][string] $Arguments,
 		[Parameter(Mandatory)][string] $WorkingDirectory
 	)
+
+	# Decide before allocating: a declined launch must leave no named gate, job
+	# object, handle, or child behind, and must not look like a running check.
+	if (-not $PSCmdlet.ShouldProcess($WorkingDirectory, "Start a hidden CI check process: powershell.exe $Arguments")) {
+		return
+	}
 
 	$PowerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
 	$GateName = 'Local\AethelnCiCheck-' + [guid]::NewGuid().ToString('N')

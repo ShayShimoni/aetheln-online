@@ -36,9 +36,9 @@ function Invoke-ExpectedFailure([string] $Directory, [string] $Inventory, [strin
 try {
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
 	$BaseInventory = Join-Path $FixtureRoot 'base-inventory'; Write-Inventory $BaseInventory @('/Game/Gameplay/BP_ServerPawn')
-	Invoke-ExpectedFailure (Join-Path $FixtureRoot 'missing') $BaseInventory 'dependency report directory is missing'
-	$BaseDependency = Join-Path $FixtureRoot 'base-dependency'; Write-Dump $BaseDependency @() @{}
-	Invoke-ExpectedFailure $BaseDependency (Join-Path $FixtureRoot 'missing-inventory') 'inventory directory is missing'
+	Invoke-ExpectedFailure -Directory (Join-Path $FixtureRoot 'missing') -Inventory $BaseInventory -Pattern 'dependency report directory is missing'
+	$BaseDependency = Join-Path $FixtureRoot 'base-dependency'; Write-Dump -Directory $BaseDependency -Dependencies @() -Classes @{}
+	Invoke-ExpectedFailure -Directory $BaseDependency -Inventory (Join-Path $FixtureRoot 'missing-inventory') -Pattern 'inventory directory is missing'
 	Write-Output 'PASS: either missing dump fails closed'
 	$Cases = @(
 		@{ Name='UI'; Asset='/Game/UI/WBP_HUD'; Class='/Script/UMG.WidgetBlueprint' },
@@ -49,9 +49,9 @@ try {
 	)
 	foreach ($Case in $Cases) {
 		$Dir = Join-Path $FixtureRoot ($Case.Name -replace '[^A-Za-z]', '')
-		Write-Dump $Dir @(@{Source='/Game/Gameplay/BP_ServerPawn';Target=$Case.Asset;Properties='Hard,Game,Build'}) @{ $Case.Class = $Case.Asset }
+		Write-Dump -Directory $Dir -Dependencies @(@{Source='/Game/Gameplay/BP_ServerPawn';Target=$Case.Asset;Properties='Hard,Game,Build'}) -Classes @{ $Case.Class = $Case.Asset }
 		$Inventory = "$Dir-inventory"; Write-Inventory $Inventory @('/Game/Gameplay/BP_ServerPawn', $Case.Asset)
-		Invoke-ExpectedFailure $Dir $Inventory ("{0}.*BP_ServerPawn.*{1}.*{2}" -f [regex]::Escape($Case.Name), [regex]::Escape($Case.Asset), [regex]::Escape($Case.Class))
+		Invoke-ExpectedFailure -Directory $Dir -Inventory $Inventory -Pattern ("{0}.*BP_ServerPawn.*{1}.*{2}" -f [regex]::Escape($Case.Name), [regex]::Escape($Case.Asset), [regex]::Escape($Case.Class))
 		Write-Output "PASS: $($Case.Name) hard dependency rejected with evidence"
 	}
 	$Valid = Join-Path $FixtureRoot 'valid'
@@ -61,33 +61,33 @@ try {
 		@{Source='/Game/Abilities/GA_Strike';Target='/Game/ServerData/Gameplay/CT_Damage';Properties='Hard,Game,Build'},
 		@{Source='/Game/Abilities/GA_Strike';Target='/Game/Icons/T_PrototypeIcon';Properties='Soft,Game,NotBuild'}
 	)
-	Write-Dump $Valid $Deps @{ '/Script/Engine.StaticMesh'='/Game/ServerData/Collision/SM_Collision'; '/Script/Engine.DataTable'='/Game/ServerData/Navigation/DT_Nav'; '/Script/Engine.CurveTable'='/Game/ServerData/Gameplay/CT_Damage'; '/Script/Engine.Texture2D'='/Game/Icons/T_PrototypeIcon' }
+	Write-Dump -Directory $Valid -Dependencies $Deps -Classes @{ '/Script/Engine.StaticMesh'='/Game/ServerData/Collision/SM_Collision'; '/Script/Engine.DataTable'='/Game/ServerData/Navigation/DT_Nav'; '/Script/Engine.CurveTable'='/Game/ServerData/Gameplay/CT_Damage'; '/Script/Engine.Texture2D'='/Game/Icons/T_PrototypeIcon' }
 	$ValidInventory = "$Valid-inventory"; Write-Inventory $ValidInventory @('/Game/Maps/CombatMap','/Game/Abilities/GA_Strike','/Game/ServerData/Collision/SM_Collision','/Game/ServerData/Navigation/DT_Nav','/Game/ServerData/Gameplay/CT_Damage','/Game/Icons/T_PrototypeIcon')
 	$Output = & $Validator -DependencyReportDirectory $Valid -CookedInventoryDirectory $ValidInventory | Out-String
 	Assert-True ($Output -match '3 allowlisted server-required') 'Allowlisted hard dependencies should pass.'
 	Write-Output 'PASS: collision, navigation, gameplay allowlist and soft presentation pass'
-	$EditorOnly = Join-Path $FixtureRoot 'editor-only'; Write-Dump $EditorOnly @(@{Source='/Game/Editor/BP_Preview';Target='/Game/UI/W_Editor';Properties='Hard,Game,Build'}) @{ '/Script/UMG.WidgetBlueprint'='/Game/UI/W_Editor' }
+	$EditorOnly = Join-Path $FixtureRoot 'editor-only'; Write-Dump -Directory $EditorOnly -Dependencies @(@{Source='/Game/Editor/BP_Preview';Target='/Game/UI/W_Editor';Properties='Hard,Game,Build'}) -Classes @{ '/Script/UMG.WidgetBlueprint'='/Game/UI/W_Editor' }
 	$EditorOutput = & $Validator -DependencyReportDirectory $EditorOnly -CookedInventoryDirectory $BaseInventory | Out-String
 	Assert-True ($EditorOutput -match 'Validated 0 cooked hard') 'Dependencies outside cooked inventory must be ignored.'
 	Write-Output 'PASS: full development-registry editor universe is filtered by cooked inventory'
-	$EngineSource = Join-Path $FixtureRoot 'engine-source'; Write-Dump $EngineSource @(@{Source='/Engine/Runtime/BP_Engine';Target='/Engine/UI/W_Runtime';Properties='Hard,Game,Build'}) @{ '/Script/UMG.WidgetBlueprint'='/Engine/UI/W_Runtime' }
+	$EngineSource = Join-Path $FixtureRoot 'engine-source'; Write-Dump -Directory $EngineSource -Dependencies @(@{Source='/Engine/Runtime/BP_Engine';Target='/Engine/UI/W_Runtime';Properties='Hard,Game,Build'}) -Classes @{ '/Script/UMG.WidgetBlueprint'='/Engine/UI/W_Runtime' }
 	$EngineInventory = "$EngineSource-inventory"; Write-Inventory $EngineInventory @('/Engine/Runtime/BP_Engine','/Engine/UI/W_Runtime')
 	$EngineOutput = & $Validator -DependencyReportDirectory $EngineSource -CookedInventoryDirectory $EngineInventory | Out-String
 	Assert-True ($EngineOutput -match 'Validated 0 cooked hard') 'Engine/plugin sources are outside the project-authored gate.'
 	Write-Output 'PASS: cooked engine-owned source graphs are ignored'
 	$PrototypeArt = Join-Path $FixtureRoot 'prototype-art'
-	Write-Dump $PrototypeArt @(
+	Write-Dump -Directory $PrototypeArt -Dependencies @(
 		@{Source='/Game/Maps/Prototype';Target='/Game/Art/SM_BlockoutWall';Properties='Hard,Game,Build'},
 		@{Source='/Game/Maps/Prototype';Target='/Game/Art/M_Blockout';Properties='Hard,Game,Build'},
 		@{Source='/Game/Maps/Prototype';Target='/Game/Art/T_Blockout';Properties='Hard,Game,Build'}
-	) @{ '/Script/Engine.StaticMesh'='/Game/Art/SM_BlockoutWall'; '/Script/Engine.Material'='/Game/Art/M_Blockout'; '/Script/Engine.Texture2D'='/Game/Art/T_Blockout' }
+	) -Classes @{ '/Script/Engine.StaticMesh'='/Game/Art/SM_BlockoutWall'; '/Script/Engine.Material'='/Game/Art/M_Blockout'; '/Script/Engine.Texture2D'='/Game/Art/T_Blockout' }
 	$PrototypeInventory = "$PrototypeArt-inventory"; Write-Inventory $PrototypeInventory @('/Game/Maps/Prototype','/Game/Art/SM_BlockoutWall','/Game/Art/M_Blockout','/Game/Art/T_Blockout')
 	$PrototypeOutput = & $Validator -DependencyReportDirectory $PrototypeArt -CookedInventoryDirectory $PrototypeInventory | Out-String
 	Assert-True ($PrototypeOutput -match 'Validated 3 cooked hard') 'Ordinary low-detail prototype art should pass.'
 	Write-Output 'PASS: ordinary prototype meshes, materials, and textures are not classified as high-detail'
-	$Orphan = Join-Path $FixtureRoot 'orphan'; Write-Dump $Orphan @() @{ '/Script/UMG.WidgetBlueprint'='/Game/UI/W_Orphan' }
+	$Orphan = Join-Path $FixtureRoot 'orphan'; Write-Dump -Directory $Orphan -Dependencies @() -Classes @{ '/Script/UMG.WidgetBlueprint'='/Game/UI/W_Orphan' }
 	$OrphanInventory = "$Orphan-inventory"; Write-Inventory $OrphanInventory @('/Game/UI/W_Orphan')
-	Invoke-ExpectedFailure $Orphan $OrphanInventory 'UI.*cooked inventory.*W_Orphan.*WidgetBlueprint'
+	Invoke-ExpectedFailure -Directory $Orphan -Inventory $OrphanInventory -Pattern 'UI.*cooked inventory.*W_Orphan.*WidgetBlueprint'
 	Write-Output 'PASS: forbidden cooked project package is rejected without a dependency edge'
 	$ClientFamilies = @(
 		@{ Asset='/Script/UMG'; Category='UI' }, @{ Asset='/Script/Slate'; Category='UI' },
@@ -98,41 +98,41 @@ try {
 	foreach ($Family in $ClientFamilies) {
 		$Name = $Family.Asset -replace '[^A-Za-z]', ''
 		$Dir = Join-Path $FixtureRoot "family-$Name"
-		Write-Dump $Dir @(@{Source='/Game/Gameplay/BP_Server';Target=$Family.Asset;Properties='Hard,Game,Build'}) @{}
+		Write-Dump -Directory $Dir -Dependencies @(@{Source='/Game/Gameplay/BP_Server';Target=$Family.Asset;Properties='Hard,Game,Build'}) -Classes @{}
 		$InventoryPackages = @('/Game/Gameplay/BP_Server')
 		if ($Family.Asset -notlike '/Script/*') { $InventoryPackages += $Family.Asset }
 		$Inventory = "$Dir-inventory"; Write-Inventory $Inventory $InventoryPackages
-		Invoke-ExpectedFailure $Dir $Inventory ("{0}.*{1}.*class unavailable" -f [regex]::Escape($Family.Category), [regex]::Escape($Family.Asset))
+		Invoke-ExpectedFailure -Directory $Dir -Inventory $Inventory -Pattern ("{0}.*{1}.*class unavailable" -f [regex]::Escape($Family.Category), [regex]::Escape($Family.Asset))
 	}
 	Write-Output 'PASS: client-only script and plugin content families fail without class metadata'
 	foreach ($PluginPackage in @('/CommonUI/WBP_Orphan', '/EnhancedInput/IMC_Orphan')) {
 		$Name = $PluginPackage -replace '[^A-Za-z]', ''
-		$Dir = Join-Path $FixtureRoot "inventory-$Name"; Write-Dump $Dir @() @{}
+		$Dir = Join-Path $FixtureRoot "inventory-$Name"; Write-Dump -Directory $Dir -Dependencies @() -Classes @{}
 		$Inventory = "$Dir-inventory"; Write-Inventory $Inventory @($PluginPackage)
-		Invoke-ExpectedFailure $Dir $Inventory ("cooked inventory.*{0}.*class unavailable" -f [regex]::Escape($PluginPackage))
+		Invoke-ExpectedFailure -Directory $Dir -Inventory $Inventory -Pattern ("cooked inventory.*{0}.*class unavailable" -f [regex]::Escape($PluginPackage))
 	}
 	Write-Output 'PASS: inventory-only CommonUI and EnhancedInput plugin content is rejected'
 	$PluginSource = Join-Path $FixtureRoot 'project-plugin-source'
-	Write-Dump $PluginSource @(@{Source='/AethelnCombat/BP_PluginServer';Target='/CommonUI/WBP_PluginHUD';Properties='Hard,Game,Build'}) @{}
+	Write-Dump -Directory $PluginSource -Dependencies @(@{Source='/AethelnCombat/BP_PluginServer';Target='/CommonUI/WBP_PluginHUD';Properties='Hard,Game,Build'}) -Classes @{}
 	$PluginSourceInventory = "$PluginSource-inventory"; Write-Inventory $PluginSourceInventory @('/AethelnCombat/BP_PluginServer','/CommonUI/WBP_PluginHUD')
-	Invoke-ExpectedFailure $PluginSource $PluginSourceInventory 'UI.*BP_PluginServer.*CommonUI/WBP_PluginHUD.*class unavailable'
+	Invoke-ExpectedFailure -Directory $PluginSource -Inventory $PluginSourceInventory -Pattern 'UI.*BP_PluginServer.*CommonUI/WBP_PluginHUD.*class unavailable'
 	Write-Output 'PASS: non-/Game project-plugin source dependency graph is validated'
 	$AllowlistPresentation = Join-Path $FixtureRoot 'allowlist-presentation'
 	$AllowlistAssets = @('/Game/ServerData/Collision/WBP_Admin','/Game/ServerData/Navigation/S_Admin','/Game/ServerData/Gameplay/NS_Admin','/Game/ServerData/Collision/CA_Admin','/Game/ServerData/Navigation/SK_Hero')
-	Write-Dump $AllowlistPresentation @(
+	Write-Dump -Directory $AllowlistPresentation -Dependencies @(
 		@{Source='/Game/Gameplay/BP_Server';Target=$AllowlistAssets[0];Properties='Hard,Game,Build'},
 		@{Source='/Game/Gameplay/BP_Server';Target=$AllowlistAssets[1];Properties='Hard,Game,Build'},
 		@{Source='/Game/Gameplay/BP_Server';Target=$AllowlistAssets[2];Properties='Hard,Game,Build'},
 		@{Source='/Game/Gameplay/BP_Server';Target=$AllowlistAssets[3];Properties='Hard,Game,Build'},
 		@{Source='/Game/Gameplay/BP_Server';Target=$AllowlistAssets[4];Properties='Hard,Game,Build'}
-	) @{ '/Script/UMG.WidgetBlueprint'=$AllowlistAssets[0]; '/Script/Engine.SoundWave'=$AllowlistAssets[1]; '/Script/Niagara.NiagaraSystem'=$AllowlistAssets[2]; '/Script/Engine.CameraAnimationSequence'=$AllowlistAssets[3]; '/Script/Engine.SkeletalMesh'=$AllowlistAssets[4] }
+	) -Classes @{ '/Script/UMG.WidgetBlueprint'=$AllowlistAssets[0]; '/Script/Engine.SoundWave'=$AllowlistAssets[1]; '/Script/Niagara.NiagaraSystem'=$AllowlistAssets[2]; '/Script/Engine.CameraAnimationSequence'=$AllowlistAssets[3]; '/Script/Engine.SkeletalMesh'=$AllowlistAssets[4] }
 	$AllowlistInventory = "$AllowlistPresentation-inventory"; Write-Inventory $AllowlistInventory (@('/Game/Gameplay/BP_Server') + $AllowlistAssets)
 	$AllowlistFailure = $null; try { & $Validator -DependencyReportDirectory $AllowlistPresentation -CookedInventoryDirectory $AllowlistInventory | Out-Null } catch { $AllowlistFailure = $_.Exception.Message }
 	foreach ($Asset in $AllowlistAssets) { Assert-True ($AllowlistFailure -match [regex]::Escape($Asset)) "Forbidden presentation package '$Asset' must not be exempted by a ServerData prefix." }
 	Write-Output 'PASS: every server-required prefix still rejects forbidden presentation assets'
-	$Malformed = Join-Path $FixtureRoot 'malformed'; Write-Dump $Malformed @(@{Source='/Game/A';Target='/Game/UI/W';Properties='Unknown'}) @{ '/Script/UMG.WidgetBlueprint'='/Game/UI/W' }
+	$Malformed = Join-Path $FixtureRoot 'malformed'; Write-Dump -Directory $Malformed -Dependencies @(@{Source='/Game/A';Target='/Game/UI/W';Properties='Unknown'}) -Classes @{ '/Script/UMG.WidgetBlueprint'='/Game/UI/W' }
 	$MalformedInventory = "$Malformed-inventory"; Write-Inventory $MalformedInventory @('/Game/A','/Game/UI/W')
-	Invoke-ExpectedFailure $Malformed $MalformedInventory 'malformed package properties'
+	Invoke-ExpectedFailure -Directory $Malformed -Inventory $MalformedInventory -Pattern 'malformed package properties'
 	Write-Output 'PASS: malformed dependency properties fail closed'
 	Write-Output 'All server cook reference tests passed.'
 }

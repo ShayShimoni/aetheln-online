@@ -22,6 +22,7 @@ function Assert-True {
 }
 
 function New-TargetFixture {
+	[CmdletBinding(SupportsShouldProcess)]
 	param(
 		[Parameter(Mandatory)]
 		[string] $Root,
@@ -32,6 +33,10 @@ function New-TargetFixture {
 		[string] $EngineConfig = "[/Script/Engine.Engine]`nGameViewportClientClassName=/Script/Engine.GameViewportClient",
 		[string] $InputConfig = $null
 	)
+
+	if (-not $PSCmdlet.ShouldProcess($Root, 'Create target source and configuration fixture files')) {
+		return
+	}
 
 	$SourceDirectory = Join-Path $Root 'Source'
 	New-Item -ItemType Directory -Path $SourceDirectory -Force | Out-Null
@@ -90,6 +95,11 @@ function Invoke-ExpectedFailure {
 
 try {
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
+
+	$DeclinedRoot = Join-Path $FixtureRoot 'declined'
+	New-TargetFixture -Root $DeclinedRoot -ClientModules @('GameCore', 'GameUI') -ServerModules @('GameCore', 'GameServer') -WhatIf
+	Assert-True -Condition (-not (Test-Path -LiteralPath $DeclinedRoot)) -Message 'A declined fixture must not create its target sources or configuration files.'
+	Write-Output 'PASS: target fixture creation is declined without mutating the filesystem'
 
 	$ValidRoot = Join-Path $FixtureRoot 'valid'
 	New-TargetFixture -Root $ValidRoot -ClientModules @('GameCore', 'GameCombat', 'GameUI', 'GameNet') -ServerModules @('GameCore', 'GameCombat', 'GameNet', 'GameServer')

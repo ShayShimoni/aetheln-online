@@ -16,20 +16,60 @@ function Assert-True([bool] $Condition, [string] $Message) {
 $ParseErrors = $null
 $Tokens = $null
 $ScriptAst = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref] $Tokens, [ref] $ParseErrors)
-$IdentityFunction = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Test-IsPreexistingProcessIdentity' }, $true))
-Assert-True ($ParseErrors.Count -eq 0 -and $IdentityFunction.Count -eq 1) 'The process-identity helper must be parseable and uniquely testable.'
-Invoke-Expression $IdentityFunction[0].Extent.Text
+$IdentityFunction = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -in @('Resolve-ProcessIdentity', 'Test-IsPreexistingProcessIdentity') }, $true))
+Assert-True ($ParseErrors.Count -eq 0 -and $IdentityFunction.Count -eq 2) 'The process-identity helpers must be parseable and uniquely testable.'
+foreach ($Definition in $IdentityFunction) { . ([scriptblock]::Create($Definition.Extent.Text)) }
 $OriginalStart = [DateTime]::UtcNow.AddMinutes(-5)
 $ReusedStart = $OriginalStart.AddMinutes(1)
+$BaselineTicks = $OriginalStart.AddSeconds(30).Ticks
 $IdentityBaseline = @{ '4242' = [long] $OriginalStart.Ticks }
 Assert-True (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4242; StartTime = $OriginalStart }) $IdentityBaseline) 'A matching PID and start time must remain preexisting.'
 Assert-True (-not (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4242; StartTime = $ReusedStart }) $IdentityBaseline)) 'A reused PID with a different start time must be treated as a new process.'
-Assert-True (-not (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4343; StartTime = $OriginalStart }) $IdentityBaseline)) 'An unknown PID must be treated as a new process.'
+Assert-True (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4343; StartTime = $OriginalStart }) $IdentityBaseline $BaselineTicks) 'A pre-launch process omitted from a path-filtered baseline must never become a termination target.'
+Assert-True (-not (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4343; StartTime = $ReusedStart }) $IdentityBaseline $BaselineTicks)) 'A baseline-absent process needs a readable post-baseline start time before it can be new.'
+Assert-True (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4343; StartTime = $ReusedStart }) $IdentityBaseline) 'An absent PID without a captured time boundary must remain unresolved.'
+# Unreadable identity (access denied, or the process exited mid-read) must never
+# turn into permission to terminate a process that was present before the smoke.
+$UnreadableBaselineProcess = [pscustomobject]@{ Id = 4242 } | Add-Member -MemberType ScriptProperty -Name StartTime -Value { throw [System.ComponentModel.Win32Exception]::new(5) } -PassThru
+$UnreadableUnknownProcess = [pscustomobject]@{ Id = 4343 } | Add-Member -MemberType ScriptProperty -Name StartTime -Value { throw [System.ComponentModel.Win32Exception]::new(5) } -PassThru
+Assert-True (Test-IsPreexistingProcessIdentity $UnreadableBaselineProcess $IdentityBaseline) 'A baseline PID whose start time cannot be read must stay protected.'
+Assert-True (Test-IsPreexistingProcessIdentity $UnreadableUnknownProcess $IdentityBaseline $BaselineTicks) 'A PID absent from the baseline with unreadable start time must remain protected.'
+Assert-True (Test-IsPreexistingProcessIdentity ([pscustomobject]@{ Id = 4444; StartTime = $ReusedStart }) @{ '4444' = $null }) 'A baseline entry recorded without identity must remain preexisting.'
+foreach ($HelperName in @('Get-PreexistingProcessIdentityBaseline', 'Wait-ForOwnedProcessExit')) {
+	$Helper = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq $HelperName }, $true))
+	Assert-True ($Helper.Count -eq 1) "The $HelperName helper must be uniquely testable."
+	. ([scriptblock]::Create($Helper[0].Extent.Text))
+}
+$Baseline = Get-PreexistingProcessIdentityBaseline -Processes @(([pscustomobject]@{ Id = 5151; StartTime = $OriginalStart }), $UnreadableUnknownProcess)
+Assert-True ($Baseline.Count -eq 2 -and $Baseline['5151'] -eq [long] $OriginalStart.Ticks -and $Baseline.ContainsKey('4343') -and $null -eq $Baseline['4343']) 'The baseline must keep every observed PID and mark unreadable identities as unknown instead of dropping them.'
+Write-Output 'PASS: unreadable process identity is recorded as protected, never as a termination target'
+
+function Test-BaselineSnapshot {
+	$Observation = @{ PathReads = 0; FailInventory = $false }
+	$HiddenPathProcess = [pscustomobject]@{ Id = 7777; StartTime = $OriginalStart } | Add-Member -MemberType ScriptProperty -Name Path -Value { $Observation.PathReads++; throw [System.ComponentModel.Win32Exception]::new(5) } -PassThru
+	function Invoke-FakeProcessInventory {
+		[CmdletBinding()] param()
+		if ($Observation.FailInventory) { Write-Error 'Synthetic process inventory failure'; return }
+		$HiddenPathProcess
+		$UnreadableUnknownProcess
+	}
+	Set-Alias -Name Get-Process -Value Invoke-FakeProcessInventory -Scope Local
+	$Assignment = @($ScriptAst.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -ceq '$PreexistingClientProcessIdentities' })
+	Assert-True ($Assignment.Count -eq 1) 'The production process-baseline capture must be uniquely executable.'
+	$PreexistingClientProcessIdentities = $null
+	. ([scriptblock]::Create($Assignment[0].Extent.Text))
+	Assert-True ($Observation.PathReads -eq 0 -and $PreexistingClientProcessIdentities.Count -eq 2 -and $PreexistingClientProcessIdentities['7777'] -eq $OriginalStart.Ticks -and $PreexistingClientProcessIdentities.ContainsKey('4343')) 'Actual baseline capture must retain all observed identities without excluding unreadable executable paths.'
+	$Observation.FailInventory = $true
+	$InventoryFailure = $null
+	try { . ([scriptblock]::Create($Assignment[0].Extent.Text)) } catch { $InventoryFailure = $_.Exception.Message }
+	Assert-True ($InventoryFailure -match 'Synthetic process inventory failure') 'Incomplete process enumeration must fail before smoke launch instead of producing a successful partial baseline.'
+	Write-Output 'PASS: actual baseline capture preserves unreadable-path identities and rejects incomplete enumeration before launch'
+}
 
 function Test-EvidenceWriter {
 	$EvidenceFunction = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Write-Evidence' }, $true))
 	Assert-True ($EvidenceFunction.Count -eq 1) 'The production evidence writer must be uniquely testable.'
-	Invoke-Expression $EvidenceFunction[0].Extent.Text
+	. ([scriptblock]::Create($EvidenceFunction[0].Extent.Text))
 	$EvidencePath = Join-Path $FixtureRoot 'writer-evidence.jsonl'
 	$UnicodeDetail = 'Detail ' + [char] 0x00e9 + [char] 0x05e9 + [char] 0x4e16 + [char]::ConvertFromUtf32(0x1f525) + "`nsecond line"
 	Write-Evidence 'writer' 'fixture' 'record-0' 'fixture' $UnicodeDetail 'connection-0'
@@ -67,12 +107,108 @@ function Test-EvidenceWriter {
 	Write-Output 'PASS: actual evidence writer preserves UTF-8 JSONL under concurrent readers and fails closed under a bounded exclusive lock'
 }
 
-function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSeconds = 8, [string] $ServerConnectionPattern = 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)', [string] $ClientExecutable = '', [string[]] $ClientArguments = @()) {
+function Test-CleanupWaitEvidence {
+	$EvidenceFunction = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Write-Evidence' }, $true))
+	. ([scriptblock]::Create($EvidenceFunction[0].Extent.Text))
+	$EvidencePath = Join-Path $FixtureRoot 'cleanup-wait-evidence.jsonl'
+	$ThrowingProcess = [pscustomobject]@{ Id = 6161 } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { throw [System.ComponentModel.Win32Exception]::new(5, 'sensitive handle detail') } -PassThru
+	$ExitedProcess = [pscustomobject]@{ Id = 6262 } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { return $true } -PassThru
+	Assert-True (-not (Wait-ForOwnedProcessExit -Process $ThrowingProcess -TimeoutMilliseconds 10 -Source (Join-Path $FixtureRoot 'package'))) 'An unreadable process wait must not confirm exit.'
+	Assert-True (Wait-ForOwnedProcessExit -Process $ExitedProcess -TimeoutMilliseconds 10 -Source (Join-Path $FixtureRoot 'package')) 'A successful bounded wait must confirm exit.'
+	$Records = @(Get-Content -LiteralPath $EvidencePath | ForEach-Object { $_ | ConvertFrom-Json })
+	Assert-True ($Records.Count -eq 1 -and $Records[0].event -eq 'process_cleanup_wait_failed' -and $Records[0].role -eq 'cleanup') 'A failed cleanup wait must leave exactly one evidence record and a clean wait must leave none.'
+	Assert-True ($Records[0].detail -like '*6161*' -and $Records[0].detail -like '*Win32Exception*' -and $Records[0].detail -notlike '*sensitive handle detail*') 'Cleanup wait evidence must name the PID and exception type without raw exception text.'
+	Write-Output 'PASS: cleanup wait failures are recorded as sanitized evidence instead of being swallowed'
+}
+
+function Invoke-CleanupFixture([string] $Name, [hashtable] $Baseline, [scriptblock] $ScanScript, [object[]] $DirectProcesses = @()) {
+	# Run the production finally block verbatim against fakes: the real evidence writer
+	# appends to an isolated fixture file; process scanning and termination are faked.
+	foreach ($Definition in @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false))) {
+		. ([scriptblock]::Create($Definition.Extent.Text))
+	}
+	$Stopped = [System.Collections.Generic.List[int]]::new()
+	function Get-ProcessesUnderPath([string] $Root) { & $ScanScript }
+	function Invoke-FakeProcessStop {
+		[CmdletBinding()] param([int] $Id, [switch] $Force)
+		if (-not $Force) { throw 'Cleanup must terminate smoke-owned processes with -Force.' }
+		$Stopped.Add($Id)
+	}
+	Set-Alias -Name Stop-Process -Value Invoke-FakeProcessStop -Scope Local
+	$EvidenceFile = Join-Path $FixtureRoot "cleanup-decision-$Name.jsonl"
+	# Script-scope state the production finally block reads.
+	$CleanupState = @{
+		Processes = $DirectProcesses
+		EvidencePath = $EvidenceFile
+		ClientPackageRoot = Join-Path $FixtureRoot 'package'
+		PreexistingClientProcessIdentities = $Baseline
+		ClientProcessBaselineTicks = $BaselineTicks
+	}
+	foreach ($Variable in $CleanupState.Keys) { Set-Variable -Name $Variable -Value $CleanupState[$Variable] }
+	$TryStatements = @($ScriptAst.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.TryStatementAst] })
+	Assert-True ($TryStatements.Count -eq 1 -and $null -ne $TryStatements[0].Finally) 'The smoke script must own exactly one top-level try/finally cleanup block.'
+	$FinallyText = $TryStatements[0].Finally.Extent.Text
+	$FinallyBody = $FinallyText.Substring(1, $FinallyText.Length - 2)
+	$Failure = $null
+	$Timer = [System.Diagnostics.Stopwatch]::StartNew()
+	try { . ([scriptblock]::Create($FinallyBody)) } catch { $Failure = $_.Exception.Message }
+	$Timer.Stop()
+	$Events = @(if (Test-Path -LiteralPath $EvidenceFile) { Get-Content -LiteralPath $EvidenceFile | ForEach-Object { $Record = $_ | ConvertFrom-Json; "$($Record.event)|$($Record.detail)" } })
+	return [pscustomobject]@{ Events = $Events; Stopped = @($Stopped); Failure = $Failure; Seconds = $Timer.Elapsed.TotalSeconds }
+}
+
+function Test-DirectCleanupWait {
+	$WaitCalls = [System.Collections.Generic.List[int]]::new()
+	$Disposal = @{ Count = 0 }
+	$Stubborn = [pscustomobject]@{ Id = 6565; HasExited = $false } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value {
+		param($TimeoutMilliseconds)
+		if ($null -eq $TimeoutMilliseconds) { throw 'Unbounded direct wait attempted.' }
+		$WaitCalls.Add([int] $TimeoutMilliseconds)
+		return $false
+	} -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $Disposal.Count++ } -PassThru
+	$Timeout = Invoke-CleanupFixture -Name direct-timeout -Baseline @{} -ScanScript { } -DirectProcesses @($Stubborn)
+	Assert-True ($WaitCalls.Count -eq 1 -and $WaitCalls[0] -ge 0 -and $WaitCalls[0] -le 5000) "A direct-process wait must always receive a bounded timeout. Actual: $($Timeout.Failure)"
+	Assert-True ($Timeout.Failure -match 'direct process' -and $Timeout.Stopped.Count -eq 1 -and $Timeout.Stopped[0] -eq 6565 -and $Disposal.Count -eq 1 -and $Timeout.Seconds -lt 15) 'An ineffective direct termination must dispose its handle, continue bounded cleanup and fail explicitly.'
+	Assert-True (@($Timeout.Events | Where-Object { $_ -like 'process_cleanup_wait_failed|*6565*' }).Count -eq 1 -and -not @($Timeout.Events | Where-Object { $_ -like 'process_cleanup_complete|*' }).Count) 'A direct-process timeout must retain bounded evidence and prohibit successful cleanup completion.'
+	$Exited = [pscustomobject]@{ Id = 6666; HasExited = $true } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($TimeoutMilliseconds) if ($null -eq $TimeoutMilliseconds) { throw 'Unbounded direct wait attempted.' }; return $true } -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $Disposal.Count++ } -PassThru
+	$Complete = Invoke-CleanupFixture -Name direct-exited -Baseline @{} -ScanScript { } -DirectProcesses @($Exited)
+	Assert-True ($null -eq $Complete.Failure -and $Complete.Stopped.Count -eq 0 -and $Disposal.Count -eq 2 -and $Complete.Events[-1] -like 'process_cleanup_complete|*') 'An already-exited direct process must be disposed without termination and allow quiescent cleanup success.'
+	Write-Output 'PASS: direct-process waits are bounded and ineffective termination fails cleanup without completion evidence'
+}
+
+function Test-CleanupDecision {
+	$Ambiguous = [pscustomobject]@{ Id = 4242; StartTime = $OriginalStart }
+	$Persisting = Invoke-CleanupFixture -Name persisting -Baseline @{ '4242' = $null } -ScanScript { $Ambiguous }
+	Assert-True ($Persisting.Stopped.Count -eq 0) 'A process with unresolved identity must never be terminated.'
+	Assert-True ($null -ne $Persisting.Failure -and $Persisting.Failure -match 'unresolved identity' -and $Persisting.Failure -notmatch 'quiescence') "Persisting identity ambiguity must fail cleanup explicitly instead of claiming completion. Actual: $($Persisting.Failure)"
+	Assert-True (@($Persisting.Events | Where-Object { $_ -like 'process_cleanup_unresolved|*4242*' }).Count -eq 1 -and -not @($Persisting.Events | Where-Object { $_ -like 'process_cleanup_complete|*' }).Count) 'Persisting ambiguity must leave sanitized unresolved evidence and no completion evidence.'
+	Assert-True ($Persisting.Seconds -lt 15) 'Unresolved-identity failure must stay inside the bounded cleanup window.'
+	$ScanState = @{ Calls = 0 }
+	$Vanishing = Invoke-CleanupFixture -Name vanishing -Baseline @{ '4242' = $null } -ScanScript { $ScanState.Calls++; if ($ScanState.Calls -le 3) { $Ambiguous } }
+	Assert-True ($null -eq $Vanishing.Failure -and $Vanishing.Stopped.Count -eq 0 -and $Vanishing.Events[-1] -like 'process_cleanup_complete|*') "Ambiguity that vanishes inside the window must permit success without termination. Actual: $($Vanishing.Failure)"
+	$Preexisting = Invoke-CleanupFixture -Name preexisting -Baseline @{ '4242' = [long] $OriginalStart.Ticks } -ScanScript { $Ambiguous }
+	Assert-True ($null -eq $Preexisting.Failure -and $Preexisting.Stopped.Count -eq 0 -and $Preexisting.Events[-1] -like 'process_cleanup_complete|*') "A proven preexisting process must stay protected without blocking success. Actual: $($Preexisting.Failure)"
+	$Omitted = Invoke-CleanupFixture -Name omitted -Baseline @{} -ScanScript { $Ambiguous }
+	Assert-True ($null -eq $Omitted.Failure -and $Omitted.Stopped.Count -eq 0 -and $Omitted.Events[-1] -like 'process_cleanup_complete|*') 'A baseline-omitted process whose start predates launch must remain protected when its path becomes visible.'
+	$UnreadableOmitted = Invoke-CleanupFixture -Name omitted-unreadable -Baseline @{} -ScanScript { $UnreadableUnknownProcess }
+	Assert-True ($UnreadableOmitted.Stopped.Count -eq 0 -and $UnreadableOmitted.Failure -match 'unresolved identity' -and $UnreadableOmitted.Seconds -lt 15) 'An omitted process with unreadable current identity must fail closed inside the bounded window without termination.'
+	Assert-True (@($UnreadableOmitted.Events | Where-Object { $_ -like 'process_cleanup_unresolved|*4343*' }).Count -eq 1 -and -not @($UnreadableOmitted.Events | Where-Object { $_ -like 'process_cleanup_complete|*' }).Count) 'Unknown baseline-absent identity must produce sanitized evidence, never cleanup completion.'
+	$NewProcess = [pscustomobject]@{ Id = 9999; StartTime = $ReusedStart } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { return $true } -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { } -PassThru
+	$Owned = Invoke-CleanupFixture -Name owned -Baseline @{ '4242' = [long] $OriginalStart.Ticks } -ScanScript { if ($Stopped.Count -eq 0) { $NewProcess } }
+	Assert-True ($null -eq $Owned.Failure -and @($Owned.Stopped) -join ',' -eq '9999' -and $Owned.Events[-1] -like 'process_cleanup_complete|*') "A proven new process must be terminated exactly once before success. Actual: $($Owned.Failure)"
+	foreach ($Definition in @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Resolve-ProcessIdentity' }, $false))) { . ([scriptblock]::Create($Definition.Extent.Text)) }
+	Assert-True ((Resolve-ProcessIdentity $Ambiguous @{ '4242' = [long] $OriginalStart.Ticks }) -ceq 'preexisting' -and (Resolve-ProcessIdentity $Ambiguous @{ '4242' = $null }) -ceq 'unresolved' -and (Resolve-ProcessIdentity $UnreadableBaselineProcess $IdentityBaseline) -ceq 'unresolved' -and (Resolve-ProcessIdentity $NewProcess @{} $BaselineTicks) -ceq 'new' -and (Resolve-ProcessIdentity ([pscustomobject]@{ Id = 4242; StartTime = $ReusedStart }) $IdentityBaseline) -ceq 'new') 'Identity resolution must distinguish proven preexisting, proven new, and unresolved.'
+	Write-Output 'PASS: cleanup decision protects unresolved identities and refuses to claim completion while ambiguity persists'
+}
+
+function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSeconds = 8, [string] $ServerConnectionPattern = 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)', [string] $ClientExecutable = '', [string[]] $ClientArguments = @(), [string] $ServerExecutable = '/package/AethelnOnlineServer.sh', [string] $ErrorPattern = '') {
 	$SelectedClientExecutable = if ($ClientExecutable) { $ClientExecutable } else { $PackagedLauncher }
 	$SelectedClientArguments = if ($ClientArguments.Count) { $ClientArguments } else { @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', $Scenario) }
+	$OptionalArguments = @{}
+	if ($ErrorPattern) { $OptionalArguments['ErrorPattern'] = $ErrorPattern }
 	Assert-True ($SelectedClientExecutable.StartsWith($PackageRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) 'Every smoke fixture client must live inside its GUID-scoped package root before cleanup can run.'
-	& $Script `
-		-ServerExecutable '/package/AethelnOnlineServer.sh' `
+	& $Script @OptionalArguments `
+		-ServerExecutable $ServerExecutable `
 		-ServerLauncherExecutable $LauncherCommandName `
 		-ServerLauncherArguments @('-NoProfile', '-File', $FakeLauncher, '-d', 'Ubuntu', '-u', 'aethelnqa', '--exec', '{ServerExecutable}', '{ServerMap}', '-port=7777', '-stdout', '-FullStdOutLogOutput', '-Scenario', $Scenario) `
 		-ClientExecutable $SelectedClientExecutable `
@@ -89,7 +225,11 @@ function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSecon
 
 try {
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
+	Test-BaselineSnapshot
+	Test-DirectCleanupWait
 	Test-EvidenceWriter
+	Test-CleanupWaitEvidence
+	Test-CleanupDecision
 	$PowerShellExecutable = (Get-Process -Id $PID).Path
 	$LauncherCommandName = Split-Path -Leaf $PowerShellExecutable
 	$FakeLauncher = Join-Path $FixtureRoot 'fake-launcher.ps1'
@@ -169,8 +309,10 @@ public static class CLASS {
 	Add-Type -TypeDefinition $LauncherSource -OutputAssembly $PackagedLauncher -OutputType ConsoleApplication
 
 	$LogRoot = Join-Path $FixtureRoot 'success'
-	Invoke-Smoke -Scenario success -LogRoot $LogRoot
+	Invoke-Smoke -Scenario success -LogRoot $LogRoot -ServerExecutable '/package/custom/AethelnOnlineServer.sh'
 	$Evidence = @(Get-Content -LiteralPath (Join-Path $LogRoot 'smoke-evidence.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+	$ServerStart = @($Evidence | Where-Object { $_.event -eq 'process_started' -and $_.process -eq 'server' })
+	Assert-True ($ServerStart.Count -eq 1 -and $ServerStart[0].detail -like '*--exec /package/custom/AethelnOnlineServer.sh /Game/Maps/StarterMap*' -and $ServerStart[0].detail -notlike '*{ServerExecutable}*') 'The caller-supplied ServerExecutable must replace its placeholder in the launched server arguments.'
 	Assert-True ($Evidence.Count -ge 9) 'Evidence should include launch and correlated readiness observations.'
 	Assert-True (-not @($Evidence | Where-Object { -not $_.schema -or -not $_.timestamp -or -not $_.process -or -not $_.role -or -not $_.event -or -not $_.source }).Count) 'Every evidence line should use the smoke evidence schema.'
 	$ServerConnections = @($Evidence | Where-Object { $_.event -eq 'server_observed_connection' })
@@ -202,7 +344,7 @@ public static class CLASS {
 		Assert-True (-not $PreexistingRuntime.HasExited) 'Smoke cleanup must preserve a preexisting process under the package root.'
 	} finally {
 		if (-not $PreexistingRuntime.HasExited) { Stop-Process -Id $PreexistingRuntime.Id -Force -ErrorAction SilentlyContinue }
-		try { [void] $PreexistingRuntime.WaitForExit(5000) } catch { }
+		try { [void] $PreexistingRuntime.WaitForExit(5000) } catch { Write-Warning "Fixture cleanup could not wait for PID $($PreexistingRuntime.Id): $($_.Exception.GetType().Name)" }
 		$PreexistingRuntime.Dispose()
 	}
 
@@ -216,7 +358,7 @@ public static class CLASS {
 		$Failure = $null
 		$FailureArguments = @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', 'child-process-failure')
 		try { Invoke-Smoke -Scenario child-process-failure -LogRoot $FailureLogRoot -TimeoutSeconds 3 -ClientExecutable $PackagedLauncher -ClientArguments $FailureArguments } catch { $Failure = $_.Exception.Message }
-		Assert-True ($Failure -match 'Timed out.*client connection confirmation') "The failure fixture must reach client evidence timeout after spawning packaged runtimes. Actual failure: $Failure"
+		Assert-True ($Failure -match 'Timed out after 3 seconds.*client connection confirmation') "The failure fixture must reach client evidence timeout with the caller-supplied bound after spawning packaged runtimes. Actual failure: $Failure"
 		Assert-True (Test-Path -LiteralPath $FailureDelayedMarker -PathType Leaf) "The failure watcher must publish its delayed descendant PID before cleanup returns; retained evidence: $FixtureRoot."
 		$FailureChildProcessIds = @(Get-ChildItem -LiteralPath $PackageRoot -Filter 'client-*-child-process-failure-child.pid' | ForEach-Object { [int] (Get-Content -LiteralPath $_.FullName -Raw) })
 		$FailureDelayedProcessId = [int] (Get-Content -LiteralPath $FailureDelayedMarker -Raw)
@@ -226,7 +368,7 @@ public static class CLASS {
 		Write-Output 'PASS: bounded cleanup rescans remove delayed package processes without touching preexisting package processes'
 	} finally {
 		if (-not $PreexistingFailureRuntime.HasExited) { Stop-Process -Id $PreexistingFailureRuntime.Id -Force -ErrorAction SilentlyContinue }
-		try { [void] $PreexistingFailureRuntime.WaitForExit(5000) } catch { }
+		try { [void] $PreexistingFailureRuntime.WaitForExit(5000) } catch { Write-Warning "Fixture cleanup could not wait for PID $($PreexistingFailureRuntime.Id): $($_.Exception.GetType().Name)" }
 		$PreexistingFailureRuntime.Dispose()
 	}
 
@@ -259,6 +401,11 @@ public static class CLASS {
 	try { Invoke-Smoke -Scenario logged-error -LogRoot (Join-Path $FixtureRoot 'error') -TimeoutSeconds 10 } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'client-1 reported an error.*Connection TIMED OUT') 'A connection timeout log event should fail even when readiness text is present.'
 	Write-Output 'PASS: connection-timeout source-log events fail the smoke'
+
+	$Failure = $null
+	try { Invoke-Smoke -Scenario success -LogRoot (Join-Path $FixtureRoot 'error-pattern') -TimeoutSeconds 10 -ErrorPattern 'Connected client-2 to' } catch { $Failure = $_.Exception.Message }
+	Assert-True ($Failure -match 'client-2 reported an error while waiting for client connection confirmation.*Connected client-2 to') "A caller-supplied ErrorPattern must reach the client evidence wait instead of the default pattern. Actual failure: $Failure"
+	Write-Output 'PASS: nondefault ErrorPattern flows into evidence waits'
 	$ClientStarts = @(Get-ChildItem -LiteralPath $FixtureRoot -Filter 'smoke-evidence.jsonl' -Recurse | ForEach-Object { Get-Content -LiteralPath $_.FullName | ForEach-Object { $_ | ConvertFrom-Json } } | Where-Object { $_.event -eq 'process_started' -and $_.role -eq 'client' })
 	Assert-True ($ClientStarts.Count -ge 12) 'Isolation evidence must include client launches across success and failure scenarios.'
 	Assert-True (-not @($ClientStarts | Where-Object { -not $_.source.StartsWith($PackageRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) }).Count) 'Every actual smoke client launch must remain inside this GUID-scoped package root.'
@@ -270,7 +417,7 @@ finally {
 		try { $FixtureProcessPath = [string] $FixtureProcess.Path } catch { continue }
 		if ($FixtureProcessPath -and $FixtureProcessPath.StartsWith($FixtureRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
 			Stop-Process -Id $FixtureProcess.Id -Force -ErrorAction SilentlyContinue
-			try { [void] $FixtureProcess.WaitForExit(5000) } catch { }
+			try { [void] $FixtureProcess.WaitForExit(5000) } catch { Write-Warning "Fixture cleanup could not wait for PID $($FixtureProcess.Id): $($_.Exception.GetType().Name)" }
 			$FixtureProcess.Dispose()
 		}
 	}

@@ -315,6 +315,21 @@ try {
 	Write-Output 'PASS: bounded job quiescence separates transient termination from persistent leaks and preserves failures'
 	Assert-True -Condition ($RunnerSource -match 'CreateNoWindow\s*=\s*\$true') -Message 'CI child PowerShell processes must be created without windows.'
 	Assert-True -Condition ($RunnerSource -notmatch '&\s+powershell\.exe\s+@ArgumentList') -Message 'CI checks must not use direct visible powershell.exe child invocation.'
+
+	# A declined launch must be decided before any handle, named gate, or child
+	# exists, so nothing can leak and no caller can mistake it for a live check.
+	$LauncherDefinition = $RunnerAst.Find({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Start-HiddenPowerShell' }, $false)
+	Assert-True -Condition ($null -ne $LauncherDefinition) -Message 'The hidden CI launcher must remain discoverable in the runner.'
+	$LauncherFirstStatement = @($LauncherDefinition.Body.EndBlock.Statements)[0]
+	Assert-True -Condition ($LauncherFirstStatement -is [Management.Automation.Language.IfStatementAst] -and $LauncherFirstStatement.Clauses[0].Item1.Extent.Text -match 'ShouldProcess') -Message 'The launcher must decide ShouldProcess before it allocates any launch resource.'
+	. ([scriptblock]::Create($LauncherDefinition.Extent.Text))
+	$LauncherMarker = Join-Path $FixtureRoot 'declined-launch.txt'
+	$DeclinedLaunch = Start-HiddenPowerShell -Arguments "-NoProfile -ExecutionPolicy Bypass -Command `"[IO.File]::WriteAllText('$LauncherMarker', 'launched')`"" -WorkingDirectory $RepositoryRoot -WhatIf
+	Assert-True -Condition ($null -eq $DeclinedLaunch) -Message 'A declined launch must not fabricate a running check handle.'
+	Start-Sleep -Seconds 3
+	Assert-True -Condition (-not (Test-Path -LiteralPath $LauncherMarker)) -Message 'A declined launch must not start a check process.'
+	Write-Output 'PASS: a declined hidden launch allocates nothing, starts no process, and returns no handle'
+
 	$AnalyzerCommandMatch = [regex]::Match(
 		$RunnerSource,
 		"(?m)^\s*command\s*=\s*'(?<command>.*)'\s*$"

@@ -27,7 +27,13 @@ function Get-FixtureRevision($Fixture) {
 	return $Revision
 }
 
-function New-Fixture([string] $Name) {
+function New-Fixture {
+	[CmdletBinding(SupportsShouldProcess)]
+	[OutputType([hashtable])]
+	param([string] $Name)
+	# Decide before the first directory: a declined build creates no fixture
+	# tree, no repository copy, and no Git history.
+	if (-not $PSCmdlet.ShouldProcess($Name, 'Create an isolated gate fixture tree')) { return }
 	$Root = Join-Path $FixtureRoot $Name
 	$Repository = Join-Path $Root 'repo'
 	$Engine = Join-Path $Root 'engine'
@@ -57,7 +63,7 @@ function New-Fixture([string] $Name) {
 	return $Fixture
 }
 
-function Install-Fakes($Fixture) {
+function Install-FakeTool($Fixture) {
 	Write-Fixture $Fixture.BuildBatch '@echo off
 if "%RUNNER_POST_CASE%"=="client-dirty" if "%1"=="AethelnOnlineClient" (
   echo changed>"%RUNNER_POST_REPOSITORY%\tracked"
@@ -101,7 +107,7 @@ if ($env:RUNNER_POST_CASE -eq "smoke-revision") {
 
 function Invoke-Case([string] $Name, [string] $Mode, [string] $Case) {
 	$Fixture = New-Fixture $Name
-	Install-Fakes $Fixture
+	Install-FakeTool $Fixture
 	$env:RUNNER_POST_CASE = $Case
 	$env:RUNNER_POST_REPOSITORY = $Fixture.Repository
 	$env:RUNNER_POST_ALT_REVISION = $Fixture.AlternateRevision
@@ -139,20 +145,26 @@ function Assert-FailedPair($Report, [string] $CommandName, [string] $StateName, 
 try {
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
 
-	$Report = Invoke-Case 'client-dirty' 'Compile' 'client-dirty'
-	Assert-FailedPair $Report 'incremental-client-build' 'incremental-client-build-repository-state' 'repository_drift_detected'
+	# A declined fixture build must leave no fixture tree and no fake tooling.
+	$DeclinedFixtureRoot = Join-Path $FixtureRoot 'whatif-declined-fixture'
+	New-Fixture 'whatif-declined-fixture' -WhatIf | Out-Null
+	Assert-True (-not (Test-Path -LiteralPath $DeclinedFixtureRoot)) 'A declined New-Fixture must create no fixture tree.'
+	Write-Output 'PASS: declined fixture construction leaves no fixture tree'
+
+	$Report = Invoke-Case -Name 'client-dirty' -Mode 'Compile' -Case 'client-dirty'
+	Assert-FailedPair -Report $Report -CommandName 'incremental-client-build' -StateName 'incremental-client-build-repository-state' -StateReason 'repository_drift_detected'
 	Assert-True ($Report.supervisor.childExitCode -ne 0 -and -not $Report.supervisor.timedOut -and $Report.supervisor.cleanupVerified) 'An ordinary compile failure must retain the actual child failure receipt with verified descendant cleanup.'
 
-	$Report = Invoke-Case 'server-revision' 'Compile' 'server-revision'
+	$Report = Invoke-Case -Name 'server-revision' -Mode 'Compile' -Case 'server-revision'
 	$Client = @($Report.checks | Where-Object name -eq 'incremental-client-build')
 	Assert-True ($Client.Count -eq 1 -and $Client[0].status -eq 'passed') 'Client compile must pass before the failed server compile.'
-	Assert-FailedPair $Report 'incremental-server-build' 'incremental-server-build-repository-state' 'revision_changed'
+	Assert-FailedPair -Report $Report -CommandName 'incremental-server-build' -StateName 'incremental-server-build-repository-state' -StateReason 'revision_changed'
 
-	$Report = Invoke-Case 'package-dirty' 'PackagedSmoke' 'package-dirty'
-	Assert-FailedPair $Report 'clean-packaged-client-server-build' 'repository-state-after-package' 'repository_drift_detected'
+	$Report = Invoke-Case -Name 'package-dirty' -Mode 'PackagedSmoke' -Case 'package-dirty'
+	Assert-FailedPair -Report $Report -CommandName 'clean-packaged-client-server-build' -StateName 'repository-state-after-package' -StateReason 'repository_drift_detected'
 
-	$Report = Invoke-Case 'smoke-revision' 'PackagedSmoke' 'smoke-revision'
-	Assert-FailedPair $Report 'packaged-build-smoke' 'repository-state-at-completion' 'revision_changed'
+	$Report = Invoke-Case -Name 'smoke-revision' -Mode 'PackagedSmoke' -Case 'smoke-revision'
+	Assert-FailedPair -Report $Report -CommandName 'packaged-build-smoke' -StateName 'repository-state-at-completion' -StateReason 'revision_changed'
 
 	Write-Output 'PASS: child-command failures retain their following repository-state failures'
 } finally {

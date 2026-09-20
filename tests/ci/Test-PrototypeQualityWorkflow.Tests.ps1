@@ -43,7 +43,7 @@ foreach ($Job in @(
 )) {
 	$Checkout = [regex]::Match($Job.Body, '(?m)^      - uses: actions/checkout@v4\r?\n        with:\r?\n(?<Inputs>(?:          [^\r\n]+\r?\n)+)')
 	Assert-True ($Checkout.Success) "$($Job.Name) must declare its checkout inputs."
-	Assert-MatchCount $Checkout.Groups['Inputs'].Value '(?m)^          fetch-depth: 0\r?$' 1 "$($Job.Name) must fetch complete ancestry for stable DDC repository identity."
+	Assert-MatchCount -Text $Checkout.Groups['Inputs'].Value -Pattern '(?m)^          fetch-depth: 0\r?$' -Expected 1 -Message "$($Job.Name) must fetch complete ancestry for stable DDC repository identity."
 }
 
 # Issue #150: the only engine entry points are the trusted pull-request compile
@@ -56,7 +56,7 @@ Assert-True ($Workflow -match '(?m)^permissions:\r?\n  contents: read\r?$') 'Wor
 Assert-True ($Workflow -notmatch '\$\{\{\s*secrets\.' -and $Workflow -notmatch '(?m)^\s*secrets\s*:') 'Workflow must not consume or declare secrets.'
 Assert-True ($Workflow -notmatch 'workflow_dispatch') 'Workflow must not expose any manual workflow_dispatch entry point.'
 Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)') 'Workflow must not use status functions that bypass a failed or skipped prerequisite.'
-Assert-MatchCount $Workflow 'always\(\)' ([regex]::Matches($Workflow, '(?m)^\s+if: always\(\)\r?$').Count) 'always() may appear only as the bare step-level predicate that preserves report uploads.'
+Assert-MatchCount -Text $Workflow -Pattern 'always\(\)' -Expected ([regex]::Matches($Workflow, '(?m)^\s+if: always\(\)\r?$').Count) -Message 'always() may appear only as the bare step-level predicate that preserves report uploads.'
 
 # Portable job: GitHub-hosted, explicitly bounded, StarterMap-only LFS.
 Assert-True ($QualityGates -match '(?m)^\s+runs-on: windows-latest\r?$') 'The portable job must stay on the GitHub-hosted Windows runner.'
@@ -71,7 +71,7 @@ Assert-True ($ChangeImpact -match "(?m)^\s+if: github\.event_name == 'pull_reque
 Assert-True ($ChangeImpact -match '(?m)^\s+runs-on: windows-latest\r?$') 'The classifier must run on the GitHub-hosted Windows runner, never the engine runner.'
 Assert-True ($ChangeImpact -match '(?m)^\s+timeout-minutes: 10\r?$') 'The classifier must declare an explicit short bound.'
 Assert-True ($ChangeImpact -notmatch 'self-hosted' -and $ChangeImpact -notmatch 'aetheln-engine') 'The classifier must never touch the engine runner or its concurrency group.'
-Assert-MatchCount $ChangeImpact '(?m)^\s+-?\s*uses: ' 1 'The classifier must use exactly one action.'
+Assert-MatchCount -Text $ChangeImpact -Pattern '(?m)^\s+-?\s*uses: ' -Expected 1 -Message 'The classifier must use exactly one action.'
 Assert-True ($ChangeImpact -match '(?m)^\s+- uses: actions/checkout@v4\r?$') 'The classifier''s only action must be actions/checkout@v4.'
 Assert-True ($ChangeImpact -match '(?m)^\s+engine_required: \$\{\{ steps\.classify\.outputs\.engine_required \}\}\r?$') 'The classifier must publish engine_required as a job output.'
 Assert-True ($ChangeImpact -match '(?m)^\s+AETHELN_PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}\r?$') 'The classifier must receive the exact pull-request base SHA through env.'
@@ -117,9 +117,9 @@ Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Tru
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository') 'Trusted compile must require the head repository to match this repository.'
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.user\.login == github\.repository_owner') 'Trusted compile must require the pull request author to be the repository owner.'
 Assert-True ($TrustedCompile -match 'github\.triggering_actor == github\.repository_owner') 'Trusted compile must require the triggering actor to be the repository owner.'
-Assert-MatchCount $TrustedCompile 'always\(\)' 1 'Trusted compile may use always() only on its report upload, never to bypass a failed, cancelled, or skipped prerequisite.'
+Assert-MatchCount -Text $TrustedCompile -Pattern 'always\(\)' -Expected 1 -Message 'Trusted compile may use always() only on its report upload, never to bypass a failed, cancelled, or skipped prerequisite.'
 Assert-True ($TrustedCompile -match '(?m)^\s+if: always\(\)\r?$') 'Trusted compile must retain its report evidence on failure.'
-Assert-MatchCount $TrustedCompile '(?m)^\s+-Mode Compile `\r?$' 1 'Trusted owner pull-request validation must select Compile exactly once.'
+Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^\s+-Mode Compile `\r?$' -Expected 1 -Message 'Trusted owner pull-request validation must select Compile exactly once.'
 Assert-True ($TrustedCompile -notmatch '(?m)^\s+-Mode PackagedSmoke `\r?$') 'Trusted owner pull-request validation must not select PackagedSmoke.'
 Assert-True ($TrustedCompile -notmatch 'timeout-minutes:\s*1440') 'Routine trusted compile must not be configured as a 24-hour job.'
 Assert-True ($TrustedCompile -notmatch '(?i)clean[^\r\n]*packag|packag[^\r\n]*clean') 'Routine trusted compile must not be described as a clean package gate.'
@@ -133,7 +133,7 @@ Assert-True ($Workflow -notmatch 'timeout-minutes:\s*1440') 'Workflow must not c
 
 Assert-True ($ScheduledSmoke -match $PhaseTrigger) 'scheduled-packaged-smoke must accept only the schedule event.'
 Assert-True ($ScheduledSmoke -notmatch 'pull_request' -and $ScheduledSmoke -notmatch "'push'") 'scheduled-packaged-smoke must not be selectable by pull requests or pushes.'
-Assert-MatchCount $ScheduledSmoke '(?m)^\s+-Mode SmokePhase `\r?$' 1 'scheduled-packaged-smoke must select the SmokePhase gate exactly once.'
+Assert-MatchCount -Text $ScheduledSmoke -Pattern '(?m)^\s+-Mode SmokePhase `\r?$' -Expected 1 -Message 'scheduled-packaged-smoke must select the SmokePhase gate exactly once.'
 Assert-True ($ScheduledSmoke -notmatch '(?m)^\s+-Mode (Compile|PackagedSmoke) `\r?$') 'scheduled-packaged-smoke must not select Compile or the single-job PackagedSmoke gate.'
 Assert-True ($ScheduledSmoke -match 'timeout-minutes:\s*20') 'scheduled-packaged-smoke must be bounded by its recorded phase limit.'
 
@@ -161,7 +161,7 @@ Assert-True ($ReportUploads.Count -eq 6) 'Exactly six report uploads remain.'
 Assert-True ($TrustedCompile.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json')) 'Compile artifact is unique to this run, attempt and job.'
 Assert-True ($TrustedCompile -match 'timeout-minutes: 40' -and $TrustedCompile -match '-CompileTimeoutMinutes 30') 'Routine compile has a whole-job and controlled-work limit.'
 Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Uploads cannot contain wildcard payload paths.'
-Assert-MatchCount $Workflow '(?m)^\s*uses: actions/upload-artifact@' 6 'No extra artifact upload step is permitted.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 6 -Message 'No extra artifact upload step is permitted.'
 Assert-True ($Workflow -notmatch '(?m)^\s+path:\s*.*(?:archives?|logs?|Saved|StagedBuilds)') 'Generated payload directories must never be uploaded.'
 
 # Classifier behavior matrix: run the extracted script against fixture commits.
@@ -329,24 +329,24 @@ try {
 		$Delete = if ($Entry.ContainsKey('Delete')) { $Entry.Delete } else { @() }
 		$IndexOnly = if ($Entry.ContainsKey('IndexOnly')) { $Entry.IndexOnly } else { @() }
 		$HeadSha = Add-FixtureCommit -Write $Entry.Write -Delete $Delete -Message $Entry.Case -IndexOnly $IndexOnly
-		Assert-Classification $Entry.Case (Invoke-Classifier $BaseSha $HeadSha) $Entry.Expect $Entry.Reason
+		Assert-Classification -Case $Entry.Case -Result (Invoke-Classifier $BaseSha $HeadSha) -EngineRequired $Entry.Expect -Reason $Entry.Reason
 	}
 
 	# Fail-closed uncertainty cases.
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$DocsHead = Add-FixtureCommit -Write @('docs/a.md') -Delete @() -Message 'docs for uncertainty cases'
-	Assert-Classification 'short base sha' (Invoke-Classifier $BaseSha.Substring(0, 12) $DocsHead) 'true' 'invalid_sha'
-	Assert-Classification 'uppercase head sha' (Invoke-Classifier $BaseSha $DocsHead.ToUpperInvariant()) 'true' 'invalid_sha'
-	Assert-Classification 'missing base sha' (Invoke-Classifier '' $DocsHead -OmitBase) 'true' 'invalid_sha'
-	Assert-Classification 'identical shas' (Invoke-Classifier $DocsHead $DocsHead) 'true' 'identical_shas'
-	Assert-Classification 'unreachable base sha' (Invoke-Classifier ('0' * 40) $DocsHead) 'true' 'commit_unavailable'
-	Assert-Classification 'unreachable head sha' (Invoke-Classifier $BaseSha ('f' * 40)) 'true' 'commit_unavailable'
+	Assert-Classification -Case 'short base sha' -Result (Invoke-Classifier $BaseSha.Substring(0, 12) $DocsHead) -EngineRequired 'true' -Reason 'invalid_sha'
+	Assert-Classification -Case 'uppercase head sha' -Result (Invoke-Classifier $BaseSha $DocsHead.ToUpperInvariant()) -EngineRequired 'true' -Reason 'invalid_sha'
+	Assert-Classification -Case 'missing base sha' -Result (Invoke-Classifier '' $DocsHead -OmitBase) -EngineRequired 'true' -Reason 'invalid_sha'
+	Assert-Classification -Case 'identical shas' -Result (Invoke-Classifier $DocsHead $DocsHead) -EngineRequired 'true' -Reason 'identical_shas'
+	Assert-Classification -Case 'unreachable base sha' -Result (Invoke-Classifier ('0' * 40) $DocsHead) -EngineRequired 'true' -Reason 'commit_unavailable'
+	Assert-Classification -Case 'unreachable head sha' -Result (Invoke-Classifier $BaseSha ('f' * 40)) -EngineRequired 'true' -Reason 'commit_unavailable'
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$EmptyHead = Add-FixtureCommit -Write @() -Delete @() -Message 'empty'
-	Assert-Classification 'empty diff' (Invoke-Classifier $BaseSha $EmptyHead) 'true' 'empty_diff'
+	Assert-Classification -Case 'empty diff' -Result (Invoke-Classifier $BaseSha $EmptyHead) -EngineRequired 'true' -Reason 'empty_diff'
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$QuotedHead = Add-FixtureCommit -Write @([string]::Concat('docs/', [char] 0x00FC, 'ber.md')) -Delete @() -Message 'quoted path'
-	Assert-Classification 'quoted non-ascii path' (Invoke-Classifier $BaseSha $QuotedHead) 'true' 'unexpected_diff_entry'
+	Assert-Classification -Case 'quoted non-ascii path' -Result (Invoke-Classifier $BaseSha $QuotedHead) -EngineRequired 'true' -Reason 'unexpected_diff_entry'
 
 	# Production path: actions/checkout on pull_request materializes only the
 	# depth-1 merge commit, so both SHAs are absent locally and must be fetched
@@ -365,11 +365,11 @@ try {
 		$Missing = Invoke-FixtureGit @('-C', $ShallowRoot, 'rev-list', '--all')
 		Assert-True ($Missing -notcontains $Revision) "shallow fixture must not already contain $Revision."
 	}
-	Assert-Classification 'shallow clone fetches both shas then classifies portable' (Invoke-Classifier $BaseSha $DocsHead -WorkingDirectory $ShallowRoot) 'false' 'portable_paths_only'
+	Assert-Classification -Case 'shallow clone fetches both shas then classifies portable' -Result (Invoke-Classifier $BaseSha $DocsHead -WorkingDirectory $ShallowRoot) -EngineRequired 'false' -Reason 'portable_paths_only'
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$SourceHead = Add-FixtureCommit -Write @('Source/AethelnOnline/A.cpp') -Delete @() -Message 'source for shallow case'
 	$null = Invoke-FixtureGit @('-C', $BareRoot, 'fetch', '-q', $RepoRoot, "${SourceHead}:refs/heads/fixture-source")
-	Assert-Classification 'shallow clone fetches both shas then classifies engine' (Invoke-Classifier $BaseSha $SourceHead -WorkingDirectory $ShallowRoot) 'true' 'engine_paths_changed'
+	Assert-Classification -Case 'shallow clone fetches both shas then classifies engine' -Result (Invoke-Classifier $BaseSha $SourceHead -WorkingDirectory $ShallowRoot) -EngineRequired 'true' -Reason 'engine_paths_changed'
 
 	# Reproduce DDC identity drift across consecutive shallow checkouts, then
 	# prove that complete ancestry restores the same root set at both revisions.

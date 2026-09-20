@@ -44,12 +44,17 @@ function Invoke-FixtureGit {
 }
 
 function New-FixtureRepository {
+	[CmdletBinding(SupportsShouldProcess)]
 	param(
 		[Parameter(Mandatory)]
 		[string] $Root,
 		[Parameter(Mandatory)]
 		[hashtable] $Files
 	)
+
+	if (-not $PSCmdlet.ShouldProcess($Root, 'Create a Git fixture repository and its working files')) {
+		return
+	}
 
 	New-Item -ItemType Directory -Path $Root -Force | Out-Null
 	Invoke-FixtureGit -Root $Root -Arguments @('init', '-q')
@@ -89,6 +94,11 @@ $ConflictMarker = ('<' * 7) + ' HEAD'
 
 try {
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
+
+	$DeclinedRoot = Join-Path $FixtureRoot 'declined'
+	New-FixtureRepository -Root $DeclinedRoot -Files @{ 'docs/declined.md' = "# Declined`n" } -WhatIf
+	Assert-True -Condition (-not (Test-Path -LiteralPath $DeclinedRoot)) -Message 'A declined fixture must not create its directory, its Git repository, or its files.'
+	Write-Output 'PASS: fixture repository creation is declined without mutating the filesystem'
 
 	$CleanRoot = Join-Path $FixtureRoot 'clean'
 	New-FixtureRepository -Root $CleanRoot -Files @{

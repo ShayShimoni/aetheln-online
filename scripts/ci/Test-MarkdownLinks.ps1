@@ -37,7 +37,7 @@ function Get-AnchorSlug {
 	return ($Slug -replace ' ', '-')
 }
 
-function Get-HeadingSlugs {
+function Get-HeadingSlugTable {
 	param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]] $Lines)
 
 	$Slugs = @{}
@@ -72,7 +72,7 @@ function Get-HeadingSlugsForFile {
 
 	if (-not $HeadingCache.ContainsKey($FullPath)) {
 		$Lines = @(Get-Content -LiteralPath $FullPath -Encoding UTF8)
-		$HeadingCache[$FullPath] = Get-HeadingSlugs -Lines $Lines
+		$HeadingCache[$FullPath] = Get-HeadingSlugTable -Lines $Lines
 	}
 	return $HeadingCache[$FullPath]
 }
