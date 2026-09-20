@@ -141,9 +141,53 @@ $SuiteSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts/ci/I
 Assert-True ($SuiteSource -match "name = 'compile-workspace-tests'; tier = 'required'; script = 'tests/ci/Initialize-CompileWorkspace.Tests.ps1'") 'Retention helper fixtures must be a required serial CI gate.'
 Assert-True ($TrustedCompile -match '(?m)^    timeout-minutes: 40\r?$') 'Compile must have a 40-minute whole-job cap.'
 Assert-True ($TrustedCompile -match '-CompileTimeoutMinutes 30') 'Both compile targets must share the 30-minute watchdog.'
-Assert-True ($TrustedCompile -match '(?m)^          path: compile\r?$' -and $TrustedCompile -match '(?m)^          clean: false\r?$') 'Only the dedicated compile checkout may retain outputs.'
-Assert-True ($TrustedCompile -match 'Initialize-CompileWorkspace.ps1' -and $TrustedCompile -match 'working-directory: compile') 'Compile must execute the exact-retention helper inside its own checkout.'
-Assert-True ($TrustedCompile.IndexOf('Initialize-CompileWorkspace.ps1') -lt $TrustedCompile.IndexOf('git lfs pull')) 'Retention preflight must run before engine inputs are used.'
+function Assert-ManagedCompileWorkflow([string] $Body) {
+	$Control = 'compile-control-${{ github.run_id }}-${{ github.run_attempt }}'
+	$CaptureMatch = [regex]::Match($Body, '(?ms)^      - name: Capture routine compile deadline\r?\n(?<capture>.*?)(?=^      - |\z)')
+	Assert-True $CaptureMatch.Success 'Compile must capture its original budget before checkout.'
+	$Capture = $CaptureMatch.Groups['capture'].Value
+	$CheckoutPosition = $Body.IndexOf('uses: actions/checkout@v4')
+	Assert-True ($CheckoutPosition -gt $CaptureMatch.Index) 'Checkout must consume the original compile budget.'
+	Assert-True ($Capture.Contains('working-directory: ${{ runner.temp }}')) 'Before checkout the capture step must use existing runner.temp, not the absent control checkout.'
+	Assert-True ($Capture.Contains('[Diagnostics.Stopwatch]::GetTimestamp()') -and $Capture.Contains('[DateTime]::UtcNow.ToString(''o'', [Globalization.CultureInfo]::InvariantCulture)')) 'Capture must include both monotonic and UTC anchors.'
+	Assert-True ($Capture.Contains('[IO.File]::AppendAllText($env:GITHUB_ENV,') -and $Capture.Contains('AETHELN_COMPILE_STARTED_UTC=') -and $Capture.Contains('AETHELN_COMPILE_STARTED_TIMESTAMP=')) 'Both nonsecret original anchors must be published for the gate.'
+	Assert-True ($Body.Contains('-CompileStartedUtc $env:AETHELN_COMPILE_STARTED_UTC') -and $Body.Contains('-CompileStartedTimestamp $env:AETHELN_COMPILE_STARTED_TIMESTAMP')) 'Gate must receive both original anchors without resetting staging time.'
+	Assert-True ($Body.Contains('path: ' + $Control) -and $Body.Contains('working-directory: ' + $Control)) 'Only a fresh run/attempt control checkout may be managed by actions/checkout.'
+	Assert-True ($Body.Contains('ref: ${{ github.sha }}') -and $Body.Contains('persist-credentials: false') -and $Body.Contains('lfs: false')) 'Control checkout must be exact-revision, LFS-disabled and without persisted credentials.'
+	Assert-True ($Body -match '(?m)^        timeout-minutes: 5\r?$') 'Control checkout must have a bounded staging interval.'
+	Assert-True ($Body -notmatch 'Initialize-CompileWorkspace|git lfs pull|clean: false') 'Retained preparation must stay inside the supervised gate, never workflow cleanup or hydration.'
+	foreach ($Binding in @(
+		@('ManagedWorkspaceRoot', 'AETHELN_MANAGED_COMPILE_ROOT'),
+		@('ManagedWorkspaceRegistrationPath', 'AETHELN_MANAGED_COMPILE_REGISTRATION'),
+		@('ManagedWorkspaceRegistrationSha256', 'AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256'),
+		@('HostLeasePath', 'AETHELN_ENGINE_HOST_LEASE')
+	)) {
+		Assert-True ($Body.Contains('-' + $Binding[0] + ' $env:' + $Binding[1])) 'Managed workspace parameters must bind operator configuration through environment values.'
+		Assert-True ($Body.Contains($Binding[1] + ': ${{ vars.' + $Binding[1] + ' }}')) 'Every managed-workspace value must have an explicit repository-variable binding.'
+	}
+	Assert-True ($Body.Contains('-Repository ''${{ github.repository }}''')) 'The managed registration must bind the exact repository.'
+}
+Assert-ManagedCompileWorkflow $TrustedCompile
+foreach ($Mutation in @(
+	@('path: compile-control-', 'path: compile-'),
+	@('ref: ${{ github.sha }}', 'ref: develop'),
+	@('persist-credentials: false', 'persist-credentials: true'),
+	@('-HostLeasePath $env:AETHELN_ENGINE_HOST_LEASE', '-HostLeasePath omitted'),
+	@('name: Capture routine compile deadline', 'name: Missing capture'),
+	@('working-directory: ${{ runner.temp }}', 'working-directory: missing-control'),
+	@('[Diagnostics.Stopwatch]::GetTimestamp()', '0'),
+	@('-CompileStartedTimestamp $env:AETHELN_COMPILE_STARTED_TIMESTAMP', '-CompileStartedTimestamp 0'),
+	@('-CompileStartedUtc $env:AETHELN_COMPILE_STARTED_UTC', '-CompileStartedUtc missing')
+)) {
+	$Rejected = $false
+	try { Assert-ManagedCompileWorkflow ($TrustedCompile.Replace($Mutation[0], $Mutation[1])) } catch { $Rejected = $true }
+	Assert-True $Rejected 'Unsafe control checkout or missing ownership binding must be rejected.'
+}
+$CaptureBlock = [regex]::Match($TrustedCompile, '(?ms)^      - name: Capture routine compile deadline\r?\n.*?(?=^      - )').Value
+$ReorderedCapture = $TrustedCompile.Replace($CaptureBlock, '').Replace('      - name: Compile supported client and server targets', $CaptureBlock + '      - name: Compile supported client and server targets')
+$Rejected = $false
+try { Assert-ManagedCompileWorkflow $ReorderedCapture } catch { $Rejected = $true }
+Assert-True $Rejected 'Capturing after checkout must be rejected even when both anchors and arguments remain present.'
 Assert-True ($TrustedCompile -match '-ReportPath \(Join-Path \$RunRoot') 'Compile must write fresh run-scoped evidence.'
 foreach ($Phase in $PhaseContract) {
 	$Body = [string] $JobBodies[$Phase.Job]

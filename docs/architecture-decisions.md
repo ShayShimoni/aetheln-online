@@ -434,9 +434,13 @@ Every accepted decision records:
   10-minute watchdogs. These are operational ceilings, not measured budgets.
   Supersede the former multi-hour TA-012 phase ceilings. Timeouts fail with
   retained evidence and owned-tree cleanup; no silent retry or longer fallback.
-  Keep dedicated sibling `compile/` and `milestone/` checkouts. Only Compile
-  retains the exact root `Binaries/` and `Intermediate/Build/` outputs after
-  scoped preflight; milestone checkout and packaging keep clean semantics.
+  Under the approved Issue #167 recovery, use a fresh exact-revision control
+  checkout and an explicitly registered retained compile workspace, disjoint
+  from `milestone/`. Never direct `actions/checkout` at a prepared linked
+  worktree. Retained synchronization and input validation run under the shared
+  host lease and compile supervisor; release requires verified child cleanup.
+  Preserve compile outputs without an implicit cold fallback or arbitrary
+  artifact transplant; milestone checkout and packaging keep clean semantics.
   Use a fresh run/attempt/job report outside the retained Compile checkout.
 - **Rationale:** Routine cleanup repeatedly destroys useful C++ outputs, while
   DDC does not cache those object files. A bounded, isolated incremental lane

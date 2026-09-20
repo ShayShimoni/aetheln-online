@@ -138,9 +138,15 @@ Assert-True ($ScheduledSmoke -notmatch '(?m)^\s+-Mode (Compile|PackagedSmoke) `\
 Assert-True ($ScheduledSmoke -match 'timeout-minutes:\s*20') 'scheduled-packaged-smoke must be bounded by its recorded phase limit.'
 
 foreach ($Job in @(
-	@{ Name = 'trusted-candidate-compile'; Body = $TrustedCompile; RequiresContentLfs = $true },
+	@{ Name = 'trusted-candidate-compile'; Body = $TrustedCompile; RequiresContentLfs = $false },
 	@{ Name = 'scheduled-packaged-smoke'; Body = $ScheduledSmoke; RequiresContentLfs = $false }
 )) {
+	if ($Job.Name -eq 'trusted-candidate-compile') {
+		Assert-True ($Job.Body -match '-ManagedWorkspaceRoot' -and $Job.Body -match '-HostLeasePath') 'Compile must validate selected materialized inputs inside the owned managed workspace operation.'
+		Assert-True ($Job.Body -notmatch 'git lfs pull') 'Compile must not hydrate retained inputs outside supervised ownership.'
+		Assert-True ($Job.Body.IndexOf('name: Capture routine compile deadline') -ge 0 -and $Job.Body.IndexOf('name: Capture routine compile deadline') -lt $Job.Body.IndexOf('uses: actions/checkout@v4')) 'Compile must start its controlled budget before checkout.'
+		Assert-True ($Job.Body.Contains('-CompileStartedUtc $env:AETHELN_COMPILE_STARTED_UTC') -and $Job.Body.Contains('-CompileStartedTimestamp $env:AETHELN_COMPILE_STARTED_TIMESTAMP')) 'Compile must pass the original UTC and monotonic anchors into the gate.'
+	}
 	if ($Job.RequiresContentLfs) {
 		Assert-True ($Job.Body -match 'git lfs pull --include "Content/\*\*"') "$($Job.Name) must materialize every Unreal Content LFS object before build or cook."
 	}
