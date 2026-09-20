@@ -37,6 +37,14 @@ $DefaultChecks = @(
 	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
 	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1' },
 	@{ name = 'compile-workspace-tests'; tier = 'required'; script = 'tests/ci/Initialize-CompileWorkspace.Tests.ps1' },
+	@{ name = 'engine-host-lease-tests'; tier = 'required'; script = 'tests/ci/EngineRunnerHostLease.Tests.ps1' },
+	@{ name = 'managed-compile-registration-tests'; tier = 'required'; script = 'tests/ci/ManagedCompileRegistration.Tests.ps1' },
+	@{ name = 'managed-compile-workspace-tests'; tier = 'required'; script = 'tests/ci/ManagedCompileWorkspace.Tests.ps1' },
+	@{ name = 'managed-compile-integration-tests'; tier = 'required'; script = 'tests/ci/ManagedCompileIntegration.Tests.ps1' },
+	@{ name = 'routine-compile-deadline-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileDeadline.Tests.ps1' },
+	@{ name = 'routine-compile-resources-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileResources.Tests.ps1' },
+	@{ name = 'routine-compile-command-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileCommand.Tests.ps1' },
+	@{ name = 'routine-compile-gate-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileGate.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'
