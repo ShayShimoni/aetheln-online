@@ -321,7 +321,10 @@ function Sync-ManagedCompileWorkspace {
 				$null = Invoke-ManagedWorkspaceGit -Root $TargetRoot -Arguments ('fetch --no-tags --no-recurse-submodules "' + $ControlRoot + '" ' + $SourceRevision) -Context $Context
 				$Imported = $true
 			}
-			$null = Invoke-ManagedWorkspaceGit -Root $TargetRoot -Arguments ('checkout --detach ' + $SourceRevision) -Context $Context
+			# Managed workspaces are verified against raw Git blob bytes. Never let
+			# a machine-level core.autocrlf setting rewrite tracked inputs while
+			# advancing the prepared target to the candidate revision.
+			$null = Invoke-ManagedWorkspaceGit -Root $TargetRoot -Arguments ('-c core.autocrlf=false -c core.eol=lf checkout --detach ' + $SourceRevision) -Context $Context
 		}
 		$FinalHead = (Invoke-ManagedWorkspaceGit -Root $TargetRoot -Arguments 'rev-parse --verify HEAD' -Context $Context).Trim()
 		if ($FinalHead -cne $SourceRevision) { throw 'managed_workspace_revision_mismatch' }

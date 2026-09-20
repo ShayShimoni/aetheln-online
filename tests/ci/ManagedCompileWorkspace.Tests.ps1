@@ -42,7 +42,7 @@ foreach ($Reason in @('compile_timeout', 'resource_pressure', 'disk_floor_reache
 	Assert-ManagedRejection -Action { Sync-ManagedCompileWorkspace @EarlyParameters } -Reason $Reason
 }
 Write-Output 'PASS monotonic-admission-and-progress-reasons'
-foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'dirty', 'index', 'collision', 'ignored-collision', 'untracked-input', 'lfs-pointer', 'expired', 'wrong-control', 'trust', 'generated', 'symlink-mode', 'case-collision', 'wrong-common', 'same-root', 'volume-root', 'relative-root', 'reparse-root', 'hydrated-lfs', 'nonselected-lfs-pointer', 'external-descriptor', 'newline-revision', 'monotonic-forward-utc')) {
+foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'autocrlf', 'dirty', 'index', 'collision', 'ignored-collision', 'untracked-input', 'lfs-pointer', 'expired', 'wrong-control', 'trust', 'generated', 'symlink-mode', 'case-collision', 'wrong-common', 'same-root', 'volume-root', 'relative-root', 'reparse-root', 'hydrated-lfs', 'nonselected-lfs-pointer', 'external-descriptor', 'newline-revision', 'monotonic-forward-utc')) {
 	$Control = Join-Path $FixtureRoot ($Case + '-control')
 	$Target = Join-Path $FixtureRoot ($Case + '-target')
 	$null = New-Item -ItemType Directory -Path $Control
@@ -63,10 +63,12 @@ foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'dirty', 'index'
 	if ($Case -ceq 'linked') {
 		$null = Invoke-ManagedFixtureGit -Root $Control -Arguments @('worktree', 'add', '--quiet', '--detach', $Target, $Old)
 	} else { $null = Invoke-ManagedFixtureGit -Root $FixtureRoot -Arguments @('clone', '--quiet', '--no-hardlinks', $Control, $Target) }
+	if ($Case -eq 'autocrlf') { $null = Invoke-ManagedFixtureGit -Root $Target -Arguments @('config', 'core.autocrlf', 'true') }
 	Set-ManagedFixtureFile -Root $Target -Path 'Binaries/sentinel.bin' -Value 'binary sentinel'
 	Set-ManagedFixtureFile -Root $Target -Path 'Intermediate/Build/sentinel.obj' -Value 'object sentinel'
 	if ($Case -eq 'hydrated-lfs') { Set-ManagedFixtureFile -Root $Target -Path $LfsPath -Value $Payload }
 	if ($Case -in @('different', 'linked', 'collision')) { Set-ManagedFixtureFile -Root $Control -Path 'Source/new.cpp' -Value '// new' }
+	if ($Case -eq 'autocrlf') { Set-ManagedFixtureFile -Root $Control -Path 'Source/new.cpp' -Value "// new`n" }
 	if ($Case -eq 'ignored-collision') { Set-ManagedFixtureFile -Root $Control -Path 'ignored.txt' -Value 'tracked'; $null = Invoke-ManagedFixtureGit -Root $Control -Arguments @('add', '-f', 'ignored.txt') }
 	if ($Case -eq 'lfs-pointer') { Set-ManagedFixtureFile -Root $Control -Path 'Content/test.uasset' -Value ("version https://git-lfs.github.com/spec/v1`noid sha256:" + ('a' * 64) + "`nsize 500`n") }
 	if ($Case -eq 'generated') { Set-ManagedFixtureFile -Root $Control -Path 'Binaries/tracked.bin' -Value 'bad'; $null = Invoke-ManagedFixtureGit -Root $Control -Arguments @('add', '-f', 'Binaries/tracked.bin') }
@@ -120,6 +122,11 @@ foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'dirty', 'index'
 		$Result = Sync-ManagedCompileWorkspace @SyncParameters
 		Assert-ManagedFixture -Condition ($Result.sourceRevision -ceq $Revision -and (Invoke-ManagedFixtureGit -Root $Target -Arguments @('rev-parse', 'HEAD')) -ceq $Revision) -Message 'Exact commit was not synchronized'
 		Assert-ManagedFixture -Condition ($Result.changed -eq ($Case -ne 'same')) -Message 'Change classification wrong'
+		if ($Case -eq 'autocrlf') {
+			$ExpectedBytes = [Text.Encoding]::UTF8.GetBytes("// new`n")
+			$ActualBytes = [IO.File]::ReadAllBytes((Join-Path $Target 'Source/new.cpp'))
+			Assert-ManagedFixture -Condition ([Linq.Enumerable]::SequenceEqual([byte[]] $ActualBytes, [byte[]] $ExpectedBytes)) -Message 'Managed checkout applied core.autocrlf transformation'
+		}
 	}
 	Assert-ManagedFixture -Condition ([IO.File]::ReadAllText((Join-Path $Target 'Binaries/sentinel.bin')) -ceq 'binary sentinel') -Message 'Binaries changed'
 	Assert-ManagedFixture -Condition ([IO.File]::ReadAllText((Join-Path $Target 'Intermediate/Build/sentinel.obj')) -ceq 'object sentinel') -Message 'Intermediates changed'
