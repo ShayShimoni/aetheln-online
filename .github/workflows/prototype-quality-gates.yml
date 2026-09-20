@@ -30,14 +30,13 @@ jobs:
       AETHELN_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       AETHELN_WORKFLOW_SHA: ${{ github.sha }}
       AETHELN_REMOTE_URL: ${{ github.server_url }}/${{ github.repository }}.git
-      AETHELN_CONTROL_REPO: ${{ runner.temp }}/ci-selection-objects-${{ github.run_id }}-${{ github.run_attempt }}.git
       AETHELN_ACCEPTED_CONTROL: ${{ github.workspace }}/ci-selection-control-${{ github.run_id }}-${{ github.run_attempt }}
-      AETHELN_SHADOW_REPORT: ${{ runner.temp }}/ci-selection-shadow.json
     steps:
       - name: Fetch immutable comparison objects
         shell: powershell
         env:
           AETHELN_GITHUB_TOKEN: ${{ github.token }}
+          AETHELN_CONTROL_REPO: ${{ runner.temp }}/ci-selection-objects-${{ github.run_id }}-${{ github.run_attempt }}.git
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -90,6 +89,9 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Produce shadow selection record
         shell: powershell
+        env:
+          AETHELN_CONTROL_REPO: ${{ runner.temp }}/ci-selection-objects-${{ github.run_id }}-${{ github.run_attempt }}.git
+          AETHELN_SHADOW_REPORT: ${{ runner.temp }}/ci-selection-shadow.json
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
