@@ -141,8 +141,8 @@ $NativeContext = @{ deadline = [DateTime]::UtcNow.AddMilliseconds(300); seconds 
 Assert-ManagedRejection -Action { Invoke-ManagedWorkspaceGit -Root $Control -Arguments '-c "alias.managedwait=!sleep 2" managedwait' -Context $NativeContext } -Reason 'managed_workspace_deadline'
 Assert-ManagedFixture -Condition ($NativeContext.clock.Elapsed.TotalSeconds -lt 1.5) -Message 'Native timeout extended deadline'
 Write-Output 'PASS native-deadline'
-$NativeContext.deadline = [DateTime]::UtcNow.AddSeconds(10); $NativeContext.seconds = 10; $NativeContext.clock.Restart()
-Assert-ManagedRejection -Action { Invoke-ManagedWorkspaceGit -Root $Control -Arguments 'not-a-real-command' -Context $NativeContext } -Reason 'managed_workspace_git_failed'
+$NativeFailureContext = @{ remainingBudget = { 30000 }; milliseconds = [double]::PositiveInfinity; clock = [Diagnostics.Stopwatch]::StartNew(); progress = $null; git = $NativeContext.git; pins = @{} }
+Assert-ManagedRejection -Action { Invoke-ManagedWorkspaceGit -Root $Control -Arguments 'rev-parse --verify refs/heads/aetheln-managed-workspace-missing' -Context $NativeFailureContext } -Reason 'managed_workspace_git_failed'
 Write-Output 'PASS native-failure-closed'
 $MonotonicContext = @{ deadline = [DateTime]::UtcNow.AddDays(-1); seconds = -1; clock = [pscustomobject]@{ Elapsed = [TimeSpan]::Zero }; progress = $null; remainingBudget = { 1000 }; milliseconds = [double]::PositiveInfinity }
 Assert-ManagedWorkspaceProgress -Context $MonotonicContext
