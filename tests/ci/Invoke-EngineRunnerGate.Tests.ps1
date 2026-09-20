@@ -6,7 +6,16 @@ $SourceScript = Join-Path $RepositoryRoot 'scripts/ci/Invoke-EngineRunnerGate.ps
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid())
 $RetainFixtureEvidence = $false
 $PowerShell = (Get-Process -Id $PID).Path
-$Original = @{ PATH = $env:PATH; Engine = $env:AETHELN_ENGINE_ROOT; Toolchain = $env:AETHELN_LINUX_TOOLCHAIN_ROOT; Handoff = $env:AETHELN_HANDOFF_ROOT }
+$Original = @{
+	PATH = $env:PATH
+	Engine = $env:AETHELN_ENGINE_ROOT
+	Toolchain = $env:AETHELN_LINUX_TOOLCHAIN_ROOT
+	Handoff = $env:AETHELN_HANDOFF_ROOT
+	PhaseSupervised = $env:AETHELN_PHASE_SUPERVISED
+	PhaseSupervisorNonce = $env:AETHELN_PHASE_SUPERVISOR_NONCE
+	PhaseSupervisorParentProcessId = $env:AETHELN_PHASE_SUPERVISOR_PARENT_PROCESS_ID
+	PhaseSupervisorParentStartTicks = $env:AETHELN_PHASE_SUPERVISOR_PARENT_START_TICKS
+}
 
 function Assert-True($Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
@@ -56,6 +65,94 @@ function Test-HandoffPrimitiveContract {
 		Assert-True ($DeclinedJob.Attempts -eq 0) 'A declined cleanup must not use owned Job Object termination accounting.'
 	} finally { $env:RUNNER_TEST_KILL_FAULT = $PreviousFault }
 	Write-Output 'PASS: decoded handoff keys and owned-tree cleanup accounting contracts'
+}
+function Test-PhaseSupervisorPublicationContract {
+	$ParseErrors = $null
+	$Tokens = $null
+	$Ast = [Management.Automation.Language.Parser]::ParseFile($SourceScript, [ref] $Tokens, [ref] $ParseErrors)
+	Assert-True ($ParseErrors.Count -eq 0) 'The gate source must parse before the phase supervisor contract is tested.'
+	$Supervisor = @($Ast.FindAll({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Invoke-PhaseSupervisor' }, $true))
+	Assert-True ($Supervisor.Count -eq 1) 'The gate must have exactly one phase supervisor.'
+	$Body = $Supervisor[0].Extent.Text
+	Assert-True ($Body.Contains("`$ChildReportPath = Join-Path `$WatchdogRoot 'child-report.json'") -and $Body.Contains("`$ChildParameters['ReportPath'] = `$ChildReportPath")) 'The phase child must write only a private run-scoped report.'
+	Assert-True (-not $Body.Contains("`$ChildParameters['ReportPath'] = `$ResolvedReportPath")) 'The phase child must never publish the final evidence path.'
+	$Source = Get-Content -LiteralPath $SourceScript -Raw
+	foreach ($Contract in @('Read-PhaseSupervisorReport', 'phase_report_invalid', 'childExitCode = $SupervisorResult.exitCode', 'cleanupVerified = $OuterCleanupVerified', 'RandomNumberGenerator', 'AETHELN_PHASE_SUPERVISOR_NONCE', 'AETHELN_PHASE_SUPERVISOR_PARENT_PROCESS_ID', 'AETHELN_PHASE_SUPERVISOR_PARENT_START_TICKS')) {
+		Assert-True ($Source.Contains($Contract)) "The outer supervisor publication contract must contain '$Contract'."
+	}
+	foreach ($Name in @('Assert-UniqueJsonProperty', 'Read-PhaseSupervisorReport', 'Test-PhaseSupervisorAuthentication')) {
+		$Function = @($Ast.FindAll({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq $Name }, $true))
+		Assert-True ($Function.Count -eq 1) "The gate must have exactly one $Name function."
+		. ([scriptblock]::Create($Function[0].Extent.Text))
+	}
+	$Nonce = 'a' * 64
+	$ParentId = '1234'
+	$ParentStartTicks = '639000000000000000'
+	Assert-True (Test-PhaseSupervisorAuthentication -Marker '1' -EnvironmentNonce $Nonce -EnvironmentParentProcessId $ParentId -EnvironmentParentStartTicks $ParentStartTicks -ParameterNonce $Nonce -ParameterParentProcessId $ParentId -ParameterParentStartTicks $ParentStartTicks -ActualParentProcessId 1234 -ActualParentStartTicks 639000000000000000) 'A run-scoped nonce bound to the actual parent identity must authenticate the supervised child.'
+	foreach ($RejectedCredential in @(
+		@{ Name = 'inherited marker alone'; Marker = '1'; EnvironmentNonce = $null; EnvironmentParentProcessId = $null; EnvironmentParentStartTicks = $null; ParameterNonce = $null; ParameterParentProcessId = $null; ParameterParentStartTicks = $null; ActualParentProcessId = 1234; ActualParentStartTicks = 639000000000000000 },
+		@{ Name = 'missing nonce'; Marker = '1'; EnvironmentNonce = $null; EnvironmentParentProcessId = $ParentId; EnvironmentParentStartTicks = $ParentStartTicks; ParameterNonce = $Nonce; ParameterParentProcessId = $ParentId; ParameterParentStartTicks = $ParentStartTicks; ActualParentProcessId = 1234; ActualParentStartTicks = 639000000000000000 },
+		@{ Name = 'wrong nonce'; Marker = '1'; EnvironmentNonce = ('b' * 64); EnvironmentParentProcessId = $ParentId; EnvironmentParentStartTicks = $ParentStartTicks; ParameterNonce = $Nonce; ParameterParentProcessId = $ParentId; ParameterParentStartTicks = $ParentStartTicks; ActualParentProcessId = 1234; ActualParentStartTicks = 639000000000000000 },
+		@{ Name = 'uppercase nonce'; Marker = '1'; EnvironmentNonce = ('A' * 64); EnvironmentParentProcessId = $ParentId; EnvironmentParentStartTicks = $ParentStartTicks; ParameterNonce = ('A' * 64); ParameterParentProcessId = $ParentId; ParameterParentStartTicks = $ParentStartTicks; ActualParentProcessId = 1234; ActualParentStartTicks = 639000000000000000 },
+		@{ Name = 'noncanonical parent id'; Marker = '1'; EnvironmentNonce = $Nonce; EnvironmentParentProcessId = '01234'; EnvironmentParentStartTicks = $ParentStartTicks; ParameterNonce = $Nonce; ParameterParentProcessId = '01234'; ParameterParentStartTicks = $ParentStartTicks; ActualParentProcessId = 1234; ActualParentStartTicks = 639000000000000000 },
+		@{ Name = 'wrong actual parent'; Marker = '1'; EnvironmentNonce = $Nonce; EnvironmentParentProcessId = $ParentId; EnvironmentParentStartTicks = $ParentStartTicks; ParameterNonce = $Nonce; ParameterParentProcessId = $ParentId; ParameterParentStartTicks = $ParentStartTicks; ActualParentProcessId = 4321; ActualParentStartTicks = 639000000000000000 },
+		@{ Name = 'stale replay after parent restart'; Marker = '1'; EnvironmentNonce = $Nonce; EnvironmentParentProcessId = $ParentId; EnvironmentParentStartTicks = $ParentStartTicks; ParameterNonce = $Nonce; ParameterParentProcessId = $ParentId; ParameterParentStartTicks = $ParentStartTicks; ActualParentProcessId = 1234; ActualParentStartTicks = 639000000000000001 }
+	)) {
+		$Authenticated = Test-PhaseSupervisorAuthentication -Marker $RejectedCredential.Marker -EnvironmentNonce $RejectedCredential.EnvironmentNonce -EnvironmentParentProcessId $RejectedCredential.EnvironmentParentProcessId -EnvironmentParentStartTicks $RejectedCredential.EnvironmentParentStartTicks -ParameterNonce $RejectedCredential.ParameterNonce -ParameterParentProcessId $RejectedCredential.ParameterParentProcessId -ParameterParentStartTicks $RejectedCredential.ParameterParentStartTicks -ActualParentProcessId $RejectedCredential.ActualParentProcessId -ActualParentStartTicks $RejectedCredential.ActualParentStartTicks
+		Assert-True (-not $Authenticated) "The phase supervisor must reject $($RejectedCredential.Name)."
+	}
+	$ReportRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-phase-report-' + [guid]::NewGuid().ToString('N'))
+	try {
+		New-Item -ItemType Directory -Path $ReportRoot | Out-Null
+		$ModeSuccessChecks = [ordered]@{
+			PackageClient = @('runner-input-validation', 'ddc-cache-configuration', 'host-tools-configuration', 'handoff-validation', 'handoff-storage-accounting', 'repository-state-before-work', 'scheduled-client-package', 'repository-state-after-client-package', 'handoff-publish-client', 'repository-state-at-completion')
+			PackageServer = @('runner-input-validation', 'ddc-cache-configuration', 'host-tools-configuration', 'handoff-validation', 'handoff-run-directory', 'repository-state-before-work', 'scheduled-server-package', 'repository-state-after-server-package', 'handoff-publish-server', 'repository-state-at-completion')
+			ValidateProvenance = @('runner-input-validation', 'handoff-validation', 'handoff-run-directory', 'repository-state-before-work', 'handoff-consume-client', 'handoff-consume-server', 'registry-provenance-validation', 'repository-state-after-provenance-validation', 'handoff-publish-provenance', 'repository-state-at-completion')
+			SmokePhase = @('runner-input-validation', 'handoff-validation', 'handoff-run-directory', 'repository-state-before-work', 'handoff-consume-client', 'handoff-consume-server', 'handoff-consume-provenance', 'packaged-build-smoke', 'handoff-milestone-completion', 'repository-state-at-completion')
+		}
+		foreach ($ExpectedMode in $ModeSuccessChecks.Keys) {
+			$ExpectedChecks = @($ModeSuccessChecks[$ExpectedMode])
+			$ValidPath = Join-Path $ReportRoot ($ExpectedMode + '-valid.json')
+			$Valid = [ordered]@{
+				schemaVersion = 1; mode = $ExpectedMode; policy = 'clean-package-and-smoke'; revision = ('a' * 40)
+				runnerName = 'fixture'; startedUtc = '2026-01-01T00:00:00Z'; finishedUtc = '2026-01-01T00:00:01Z'
+				checks = @($ExpectedChecks | ForEach-Object { [ordered]@{ name = $_; tier = 'required'; status = 'passed'; durationSeconds = 0; command = 'fixture'; message = 'passed' } })
+				summary = [ordered]@{ total = $ExpectedChecks.Count; passed = $ExpectedChecks.Count; failed = 0; skipped = 0; requiredFailed = 0 }
+				compileEvidence = $null
+			} | ConvertTo-Json -Depth 5 -Compress
+			[IO.File]::WriteAllText($ValidPath, $Valid, (New-Object Text.UTF8Encoding($false)))
+			$Parsed = Read-PhaseSupervisorReport -Path $ValidPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40)
+			Assert-True ($Parsed.summary.requiredFailed -eq 0) "A complete $ExpectedMode private report must validate."
+
+			foreach ($Incomplete in @(
+				@{ Name = 'empty'; Checks = @() },
+				@{ Name = 'partial'; Checks = @($ExpectedChecks | Select-Object -First ($ExpectedChecks.Count - 1)) }
+			)) {
+				$IncompletePath = Join-Path $ReportRoot ($ExpectedMode + '-' + $Incomplete.Name + '.json')
+				$IncompleteChecks = @($Incomplete.Checks)
+				$IncompleteReport = [ordered]@{
+					schemaVersion = 1; mode = $ExpectedMode; revision = ('a' * 40)
+					checks = @($IncompleteChecks | ForEach-Object { [ordered]@{ name = $_; tier = 'required'; status = 'passed' } })
+					summary = [ordered]@{ total = $IncompleteChecks.Count; passed = $IncompleteChecks.Count; failed = 0; skipped = 0; requiredFailed = 0 }
+				} | ConvertTo-Json -Depth 5 -Compress
+				[IO.File]::WriteAllText($IncompletePath, $IncompleteReport, (New-Object Text.UTF8Encoding($false)))
+				$Rejected = $false
+				try { [void] (Read-PhaseSupervisorReport -Path $IncompletePath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40)) } catch { $Rejected = $_.Exception.Message -eq 'phase_report_invalid' }
+				Assert-True $Rejected "$ExpectedMode $($Incomplete.Name) success report must fail closed as phase_report_invalid."
+			}
+		}
+		foreach ($Invalid in @(
+			@{ Name = 'malformed'; Write = { param($Path) [IO.File]::WriteAllText($Path, '{bad', (New-Object Text.UTF8Encoding($false))) } },
+			@{ Name = 'oversized'; Write = { param($Path) $Stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew); try { $Stream.SetLength(1MB + 1) } finally { $Stream.Dispose() } } }
+		)) {
+			$Path = Join-Path $ReportRoot ($Invalid.Name + '.json')
+			& $Invalid.Write $Path
+			$Rejected = $false
+			try { [void] (Read-PhaseSupervisorReport -Path $Path -ExpectedMode 'PackageClient' -ExpectedRevision ('a' * 40)) } catch { $Rejected = $_.Exception.Message -eq 'phase_report_invalid' }
+			Assert-True $Rejected "$($Invalid.Name) private report must fail closed as phase_report_invalid."
+		}
+	} finally { if (Test-Path -LiteralPath $ReportRoot) { Remove-Item -LiteralPath $ReportRoot -Recurse -Force } }
+	Write-Output 'PASS: phase child uses private evidence and parent owns validation, cleanup proof, and final publication'
 }
 function Write-Fixture([string] $Path, [string] $Value) {
 	Set-Content -LiteralPath $Path -Value $Value -Encoding UTF8
@@ -158,6 +255,22 @@ if ($Stage -notin @('009-client', '011-server')) { Start-Sleep -Seconds 120 }
 >>"%RUNNER_TEST_BUILD_CAPTURE%" echo %*
 powershell -NoProfile -File "%RUNNER_TEST_CLOCK_BUILD%" %1
 exit /b %ERRORLEVEL%'
+}
+function Install-PhasePrivateReportFaultFixture($Fixture, [ValidateSet('malformed', 'oversized', 'empty', 'partial')] [string] $Fault) {
+	$Path = Join-Path $Fixture.Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1'
+	$Source = Get-Content -LiteralPath $Path -Raw
+	$FaultBody = switch ($Fault) {
+		'malformed' { "`$Result['childReportPath'] = `$ChildReportPath`r`n`t`t[IO.File]::WriteAllText(`$ChildReportPath, '{bad', (New-Object Text.UTF8Encoding(`$false)))" }
+		'oversized' { "`$Result['childReportPath'] = `$ChildReportPath`r`n`t`t`$FaultStream = [IO.File]::Open(`$ChildReportPath, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::None); try { `$FaultStream.SetLength(1MB + 1) } finally { `$FaultStream.Dispose() }" }
+		'empty' { "`$Result['childReportPath'] = `$ChildReportPath`r`n`t`t`$FaultReport = [ordered]@{ schemaVersion = 1; mode = `$Mode; revision = `$SourceRevision; checks = @(); summary = [ordered]@{ total = 0; passed = 0; failed = 0; skipped = 0; requiredFailed = 0 } } | ConvertTo-Json -Depth 4 -Compress`r`n`t`t[IO.File]::WriteAllText(`$ChildReportPath, `$FaultReport, (New-Object Text.UTF8Encoding(`$false)))" }
+		'partial' { "`$Result['childReportPath'] = `$ChildReportPath`r`n`t`t`$FaultReport = [ordered]@{ schemaVersion = 1; mode = `$Mode; revision = `$SourceRevision; checks = @([ordered]@{ name = 'scheduled-client-package'; tier = 'required'; status = 'passed' }); summary = [ordered]@{ total = 1; passed = 1; failed = 0; skipped = 0; requiredFailed = 0 } } | ConvertTo-Json -Depth 4 -Compress`r`n`t`t[IO.File]::WriteAllText(`$ChildReportPath, `$FaultReport, (New-Object Text.UTF8Encoding(`$false)))" }
+	}
+	$Source = Edit-FixtureText -Source $Source -Before "`$Result['childReportPath'] = `$ChildReportPath" -After $FaultBody
+	Write-Fixture $Path $Source
+	Invoke-FixtureGit $Fixture @('add', '.')
+	& git -C $Fixture.Repository -c user.name=test -c user.email=test@invalid commit --amend --no-edit -q
+	if ($LASTEXITCODE -ne 0) { throw 'phase report fault fixture amend failed' }
+	$Fixture.Revision = Get-FixtureRevision $Fixture
 }
 function Assert-CompileClockFixture($Fixture, $Result, [int] $ExpectedBuilds, [string[]] $Stages, [bool] $HardTimeout = $true) {
 	$ObservedBuilds = if (Test-Path $Fixture.BuildCapture) { @(Get-Content $Fixture.BuildCapture).Count } else { 0 }
@@ -352,14 +465,22 @@ function Invoke-Gate($Fixture, [string] $Mode = 'Compile', [string] $Revision = 
 	return @{ ExitCode = $ExitCode; Output = $Output -join "`n"; Report = Join-Path $Fixture.Repository 'TestResults/engine-runner-report.json' }
 }
 function Invoke-PhaseGate($Fixture, [string] $Mode, [string[]] $ExtraArguments = @(), [string] $RunId = '12345', [string] $RunnerName = 'fixture-runner', [string] $TimeoutMinutes = '5', [string] $Repository = 'owner/repo') {
-	$Arguments = @('-Repository', $Repository, '-RunId', $RunId, '-RunAttempt', '1', '-RunnerName', $RunnerName, '-PhaseTimeoutMinutes', $TimeoutMinutes) + $ExtraArguments
+	$ReportPath = Join-Path $Fixture.Root ('phase-report-' + [guid]::NewGuid().ToString('N') + '.json')
+	$ReportIndex = [array]::IndexOf($ExtraArguments, '-ReportPath')
+	if ($ReportIndex -ge 0) {
+		Assert-True ($ReportIndex + 1 -lt $ExtraArguments.Count) 'An explicit phase report fixture path needs a value.'
+		$ReportPath = [string] $ExtraArguments[$ReportIndex + 1]
+		$Arguments = @('-Repository', $Repository, '-RunId', $RunId, '-RunAttempt', '1', '-RunnerName', $RunnerName, '-PhaseTimeoutMinutes', $TimeoutMinutes) + $ExtraArguments
+	} else {
+		$Arguments = @('-Repository', $Repository, '-RunId', $RunId, '-RunAttempt', '1', '-RunnerName', $RunnerName, '-PhaseTimeoutMinutes', $TimeoutMinutes, '-ReportPath', $ReportPath) + $ExtraArguments
+	}
 	$Previous = $ErrorActionPreference
 	try {
 		$ErrorActionPreference = 'Continue'
 		$Output = @(& $PowerShell -NoProfile -File (Join-Path $Fixture.Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1') -Mode $Mode -RepositoryRoot $Fixture.Repository -SourceRevision $Fixture.Revision -LogRoot (Join-Path $Fixture.Root ('logs-' + [guid]::NewGuid().ToString('N'))) @Arguments 2>&1)
 		$ExitCode = $LASTEXITCODE
 	} finally { $ErrorActionPreference = $Previous }
-	return @{ ExitCode = $ExitCode; Output = $Output -join "`n"; Report = Join-Path $Fixture.Repository 'TestResults/engine-runner-report.json' }
+	return @{ ExitCode = $ExitCode; Output = $Output -join "`n"; Report = $ReportPath }
 }
 function Get-PhaseRunDirectory($Fixture) { return Join-Path $Fixture.Handoff 'owner\repo\run-12345-attempt-1' }
 function Get-CleanupRequestRoot($Fixture) { return Join-Path $Fixture.Handoff 'owner\repo\cleanup-requests' }
@@ -376,6 +497,12 @@ function Assert-ReportReason($Result, [string] $Reason, [string] $Message) {
 	Assert-True (@((Read-Report $Result).checks | Where-Object message -like ($Reason + '*')).Count -ge 1) "$Message (report must carry $Reason). Actual: $(@((Read-Report $Result).checks | ForEach-Object message) -join '; ')"
 }
 function Read-Report($Result) { Get-Content -LiteralPath $Result.Report -Raw | ConvertFrom-Json }
+function Assert-PhaseSupervisorProof($Report, [int] $ChildExitCode, [bool] $TimedOut, [bool] $CleanupVerified, [string] $Message) {
+	Assert-True ($null -ne $Report.supervisor) "$Message (missing outer-supervisor receipt)."
+	Assert-True (($Report.supervisor.childExitCode -is [int] -or $Report.supervisor.childExitCode -is [long]) -and [int] $Report.supervisor.childExitCode -eq $ChildExitCode) "$Message (child exit code)."
+	Assert-True ($Report.supervisor.timedOut -is [bool] -and $Report.supervisor.timedOut -eq $TimedOut) "$Message (timeout proof)."
+	Assert-True ($Report.supervisor.cleanupVerified -is [bool] -and $Report.supervisor.cleanupVerified -eq $CleanupVerified) "$Message (cleanup proof)."
+}
 function New-Case {
 	[CmdletBinding(SupportsShouldProcess)]
 	[OutputType([hashtable])]
@@ -433,9 +560,17 @@ function Write-UbtOutput($Fixture, [string] $Name, [string[]] $Lines) {
 
 try {
 	Test-HandoffPrimitiveContract
+	Test-PhaseSupervisorPublicationContract
 	if ($HandoffContractsOnly) { return }
 	New-Item -ItemType Directory -Path $FixtureRoot | Out-Null
 	Test-FixtureHelperGuard
+
+	$Fixture = New-Case 'phase-inherited-supervisor-marker'
+	$env:AETHELN_PHASE_SUPERVISED = '1'
+	try { $Result = Invoke-PhaseGate $Fixture 'PackageClient' }
+	finally { $env:AETHELN_PHASE_SUPERVISED = $Original.PhaseSupervised }
+	Assert-ReportReason -Result $Result -Reason 'phase_supervisor_auth_invalid' -Message 'An inherited supervised marker without a parent-issued credential must fail closed'
+	Assert-True (-not (Test-Path $Fixture.PackageCapture)) 'An inherited supervised marker must be rejected before packaging starts.'
 
 	$Fixture = New-Case 'compile-fresh-report'
 	$FreshReport = Join-Path $Fixture.Root 'fresh-report.json'
@@ -737,10 +872,28 @@ try {
 	$Result = Invoke-PhaseGate -Fixture $Fixture -Mode 'PackageClient' -ExtraArguments @() -RunId 'abc'
 	Assert-ReportReason -Result $Result -Reason 'handoff_context_invalid' -Message 'A non-numeric run id must be rejected'
 
+	$Fixture = New-Case 'phase-final-report-preexists'
+	$PreexistingReport = Join-Path $Fixture.Root 'preexisting-phase-report.json'
+	$PreexistingBytes = [Text.Encoding]::UTF8.GetBytes('{"preserved":true}')
+	[IO.File]::WriteAllBytes($PreexistingReport, $PreexistingBytes)
+	$Result = Invoke-PhaseGate -Fixture $Fixture -Mode 'PackageClient' -ExtraArguments @('-ReportPath', $PreexistingReport)
+	Assert-True ($Result.ExitCode -ne 0 -and $Result.Output -match 'report_path_exists') 'A preexisting final phase report must fail before the child starts.'
+	Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($PreexistingReport)) -ceq [Convert]::ToBase64String($PreexistingBytes)) 'Final phase publication must never overwrite preexisting evidence.'
+	Assert-True (-not (Test-Path $Fixture.PackageCapture)) 'A preexisting final report must stop before phase work.'
+
+	foreach ($PrivateFault in @('malformed', 'oversized', 'empty', 'partial')) {
+		$Fixture = New-Case ('phase-private-report-' + $PrivateFault)
+		Install-PhasePrivateReportFaultFixture -Fixture $Fixture -Fault $PrivateFault
+		$Result = Invoke-PhaseGate $Fixture 'PackageClient'
+		Assert-ReportReason -Result $Result -Reason 'phase_report_invalid' -Message "A $PrivateFault private child report must fail closed"
+		Assert-PhaseSupervisorProof -Report (Read-Report $Result) -ChildExitCode 0 -TimedOut $false -CleanupVerified $true -Message "A $PrivateFault private report rejection must retain outer cleanup proof"
+	}
+
 	$Fixture = New-Case 'phase-milestone-success'
 	$RunDirectory = Get-PhaseRunDirectory $Fixture
 	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
 	Assert-True ($Result.ExitCode -eq 0) "PackageClient must pass. Output: $($Result.Output)"
+	Assert-PhaseSupervisorProof -Report (Read-Report $Result) -ChildExitCode 0 -TimedOut $false -CleanupVerified $true -Message 'A successful phase must publish explicit outer-supervisor proof'
 	$PackageCalls = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })
 	Assert-True ($PackageCalls.Count -eq 1 -and $PackageCalls[0].Stage -eq 'Client' -and $PackageCalls[0].ArchiveRoot -eq (Join-Path $RunDirectory 'client')) 'PackageClient must run the Client stage into the run-scoped handoff payload directory.'
 	$ClientManifest = Get-Content (Join-Path $RunDirectory 'manifest-client.json') -Raw | ConvertFrom-Json
@@ -755,6 +908,7 @@ try {
 	Assert-True ((Read-Report $Result).compileEvidence.identity.runnerName -eq 'fixture-runner') 'Phase compile evidence must carry the validated runner identity.'
 	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
 	Assert-ReportReason -Result $Result -Reason 'handoff_conflict' -Message 'A repeated PackageClient for the same run attempt must not overwrite or reuse the run directory'
+	Assert-PhaseSupervisorProof -Report (Read-Report $Result) -ChildExitCode 1 -TimedOut $false -CleanupVerified $true -Message 'An ordinary child failure must publish its actual outer-supervisor proof'
 	$env:RUNNER_TEST_UBT_OUTPUT_PACKAGE = Write-UbtOutput -Fixture $Fixture -Name 'package' -Lines @('UATHelper: Creating makefile for AethelnOnlineServer (command line arguments changed)', 'UATHelper: [4000/5561][AethelnOnlineServer Linux Development] Compile [x86_64] Server.cpp', 'UATHelper: [4001/5561][AethelnOnlineEditor Win64 Development] Compile [x64] Editor.cpp')
 	$Result = Invoke-PhaseGate $Fixture 'PackageServer'
 	$env:RUNNER_TEST_UBT_OUTPUT_PACKAGE = ''
@@ -883,6 +1037,8 @@ try {
 		$env:RUNNER_TEST_HASH_BLOCK_SECONDS = ''
 		$env:RUNNER_TEST_KILL_FAULT = ''
 		Assert-ReportReason -Result $Result -Reason $HardCase.Reason -Message "$($HardCase.Name) must classify the blocked pre-work hash as $($HardCase.Reason)"
+		$HardReport = Read-Report $Result
+		Assert-True ($null -ne $HardReport.supervisor -and $HardReport.supervisor.timedOut -and $HardReport.supervisor.cleanupVerified -eq ($HardCase.Fault -ne 'skip-all')) "$($HardCase.Name) must publish explicit outer timeout and cleanup proof."
 		Assert-True (Test-Path (Join-Path $Fixture.Clock '021-hash')) 'The hard hash timeout must reach the synchronous hashing block.'
 		Assert-True (@((Read-Report $Result).checks | Where-Object { $_.name -eq 'phase-hard-deadline' -and $_.message -like ($HardCase.Reason + '*') }).Count -eq 1) "$($HardCase.Name) must be enforced by the supervisor hard bound, not the cooperative deadline."
 		Assert-True ($null -eq (Read-Report $Result).compileEvidence) "$($HardCase.Name) parent-written hard-timeout report carries no compile evidence rather than a guessed one."
@@ -935,9 +1091,9 @@ try {
 	Assert-True ($FailedMarker.state -eq 'failed') 'A normal smoke failure is terminal and must record a failed completion marker.'
 
 	foreach ($KillCase in @(
-		@{ Name = 'phase-descendant-kill'; Fault = ''; Reason = 'phase_timeout' },
-		@{ Name = 'phase-kill-fallback'; Fault = 'skip-job'; Reason = 'phase_timeout' },
-		@{ Name = 'phase-cleanup-failure'; Fault = 'skip-all'; Reason = 'phase_cleanup_failed' }
+		@{ Name = 'phase-descendant-kill'; Fault = ''; Reason = 'phase_timeout'; OuterTimedOut = $false; CleanupVerified = $true },
+		@{ Name = 'phase-kill-fallback'; Fault = 'skip-job'; Reason = 'phase_timeout'; OuterTimedOut = $false; CleanupVerified = $true },
+		@{ Name = 'phase-cleanup-failure'; Fault = 'skip-all'; Reason = 'phase_cleanup_failed'; OuterTimedOut = $true; CleanupVerified = $false }
 	)) {
 		$Fixture = New-Fixture $KillCase.Name
 		Install-CompileClockFixture $Fixture -PhaseProbe
@@ -949,6 +1105,12 @@ try {
 		$env:RUNNER_TEST_PHASE_SLEEP = ''
 		$env:RUNNER_TEST_KILL_FAULT = ''
 		Assert-ReportReason -Result $Result -Reason $KillCase.Reason -Message "$($KillCase.Name) must report $($KillCase.Reason)"
+		$KillReport = Read-Report $Result
+		Assert-True ($null -ne $KillReport.supervisor -and
+			$KillReport.supervisor.PSObject.Properties.Name -contains 'childExitCode' -and
+			$KillReport.supervisor.childExitCode -eq 1 -and
+			$KillReport.supervisor.timedOut -is [bool] -and $KillReport.supervisor.timedOut -eq $KillCase.OuterTimedOut -and
+			$KillReport.supervisor.cleanupVerified -is [bool] -and $KillReport.supervisor.cleanupVerified -eq $KillCase.CleanupVerified) "$($KillCase.Name) must distinguish child failure, outer timeout, and descendant cleanup exactly."
 		Assert-True (Test-Path (Join-Path $Fixture.Clock '007-phase')) 'Every cleanup fault case must reach its real packaging child and descendant.'
 		$Survivors = @()
 		foreach ($Attempt in 1..20) {
@@ -1209,6 +1371,10 @@ try {
 	$env:AETHELN_ENGINE_ROOT = $Original.Engine
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $Original.Toolchain
 	$env:AETHELN_HANDOFF_ROOT = $Original.Handoff
+	$env:AETHELN_PHASE_SUPERVISED = $Original.PhaseSupervised
+	$env:AETHELN_PHASE_SUPERVISOR_NONCE = $Original.PhaseSupervisorNonce
+	$env:AETHELN_PHASE_SUPERVISOR_PARENT_PROCESS_ID = $Original.PhaseSupervisorParentProcessId
+	$env:AETHELN_PHASE_SUPERVISOR_PARENT_START_TICKS = $Original.PhaseSupervisorParentStartTicks
 	Remove-Item Env:AETHELN_DDC_ROOT -ErrorAction Ignore
 	Remove-Item Env:AETHELN_DDC_FALLBACK -ErrorAction Ignore
 	Remove-Item Env:AETHELN_HOST_TOOLS -ErrorAction Ignore

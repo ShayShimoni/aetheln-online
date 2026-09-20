@@ -13,7 +13,8 @@ permissions:
 
 jobs:
   # Issue #167 Package 2 shadow selector. This independent PR-only diagnostic
-  # never publishes outputs and no job consumes it. The immutable base, head,
+  # exposes only its visual_required boolean to the additive Package 3A visual
+  # proof; no authoritative job consumes it. The immutable base, head,
   # and synthetic merge objects enter a bare control repository before the
   # only checkout, which sparsely materializes the accepted-base controller.
   # Candidate selector bytes are never checked out or executed. During the
@@ -25,6 +26,8 @@ jobs:
     continue-on-error: true
     runs-on: windows-latest
     timeout-minutes: 10
+    outputs:
+      visual_required: ${{ steps.selection.outputs.visual_required }}
     env:
       AETHELN_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       AETHELN_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -78,7 +81,7 @@ jobs:
             $env:GIT_CONFIG_KEY_0 = $null
             $env:GIT_CONFIG_VALUE_0 = $null
           }
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: ci-selection-control-${{ github.run_id }}-${{ github.run_attempt }}
@@ -88,6 +91,7 @@ jobs:
           sparse-checkout: scripts/ci/Get-CiSelection.ps1
           sparse-checkout-cone-mode: false
       - name: Produce shadow selection record
+        id: selection
         shell: powershell
         env:
           AETHELN_CONTROL_REPO: ${{ runner.temp }}/ci-selection-objects-${{ github.run_id }}-${{ github.run_attempt }}.git
@@ -178,10 +182,14 @@ jobs:
               throw 'shadow_report_controller_identity_mismatch'
             }
           }
+          $VisualObligation = @($Parsed.selection.obligations | Where-Object { [string] $_.id -ceq 'visual-package' })
+          if ($VisualObligation.Count -ne 1 -or $VisualObligation[0].selected -isnot [bool]) { throw 'shadow_visual_selection_invalid' }
+          $VisualRequired = ([bool] $VisualObligation[0].selected).ToString().ToLowerInvariant()
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "visual_required=$VisualRequired`n", $Utf8)
           exit 0
       - name: Upload shadow selection record
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ci-selection-shadow-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-selection-shadow.json
@@ -191,7 +199,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
       - name: Fetch StarterMap LFS object
@@ -202,7 +210,7 @@ jobs:
         run: powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1
       - name: Upload machine-readable report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ci-report
           path: TestResults/ci-report.json
@@ -223,7 +231,7 @@ jobs:
       engine_required: ${{ steps.classify.outputs.engine_required }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
       - name: Classify changed paths
@@ -358,7 +366,7 @@ jobs:
           $StartedUtc = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
           $Utf8 = New-Object System.Text.UTF8Encoding $false
           [IO.File]::AppendAllText($env:GITHUB_ENV, "AETHELN_COMPILE_STARTED_UTC=$StartedUtc`nAETHELN_COMPILE_STARTED_TIMESTAMP=$StartedTimestamp`n", $Utf8)
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         timeout-minutes: 5
         with:
           lfs: false
@@ -392,7 +400,7 @@ jobs:
             -ReportPath (Join-Path $RunRoot 'engine-runner-report.json')
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-compile-report
           path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json
@@ -443,7 +451,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
           path: milestone
@@ -467,7 +475,7 @@ jobs:
             -PhaseTimeoutMinutes 30
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-client-package-report
           path: milestone/TestResults/engine-runner-report.json
@@ -486,7 +494,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
           path: milestone
@@ -510,7 +518,7 @@ jobs:
             -PhaseTimeoutMinutes 30
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-server-package-report
           path: milestone/TestResults/engine-runner-report.json
@@ -529,7 +537,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
           path: milestone
@@ -550,7 +558,7 @@ jobs:
             -PhaseTimeoutMinutes 10
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-provenance-validation-report
           path: milestone/TestResults/engine-runner-report.json
@@ -569,7 +577,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
           path: milestone
@@ -590,8 +598,88 @@ jobs:
             -PhaseTimeoutMinutes 10
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-scheduled-smoke-report
           path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  # Package 3A additive proof only. The accepted-base selector controls this
+  # diagnostic call, while the reusable workflow keeps its direct triggers
+  # authoritative and treats this invocation as non-authoritative evidence.
+  visual-proof:
+    needs: ci-selection-shadow
+    if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.visual_required == 'true'
+    uses: ./.github/workflows/visual-package-validation.yml
+    with:
+      non_authoritative: true
+
+  # Package 3A reconciliation remains deliberately non-authoritative. It has a
+  # direct edge to every current producer so same-attempt omissions are visible.
+  # Four of the nine accepted obligations still have no pull-request producer;
+  # until those jobs and all per-job receipt artifacts exist, this diagnostic
+  # writes the exact gap and fails closed without granting acceptance.
+  ci-acceptance-shadow:
+    needs:
+      - ci-selection-shadow
+      - quality-gates
+      - change-impact
+      - trusted-candidate-compile
+      - scheduled-client-package
+      - scheduled-server-package
+      - scheduled-provenance-validation
+      - scheduled-packaged-smoke
+      - visual-proof
+    if: always()
+    continue-on-error: true
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Reconcile shadow acceptance evidence
+        shell: powershell
+        env:
+          AETHELN_ACCEPTANCE_REPORT: ${{ runner.temp }}/ci-acceptance-shadow.json
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $Utf8 = New-Object System.Text.UTF8Encoding $false
+
+          # These are contract gaps, not inferred successes. Existing raw
+          # artifacts are intentionally not relabelled as receipts.
+          $MissingProducerJobs = @(
+            'clean-package-provenance-smoke',
+            'content-reference-validation',
+            'delivery-harness',
+            'unreal-editor-automation'
+          )
+          $MissingReceiptArtifacts = @(
+            'controller-contract-and-operational-proof',
+            'native-client-server-compile',
+            'portable',
+            'visual-package'
+          )
+          $Report = [ordered]@{
+            schemaVersion = 'aetheln.ci-acceptance-shadow-gap/v1'
+            repository = '${{ github.repository }}'
+            revision = '${{ github.sha }}'
+            run = [ordered]@{ id = '${{ github.run_id }}'; attempt = [int] '${{ github.run_attempt }}' }
+            missingProducerJobs = $MissingProducerJobs
+            missingReceiptArtifacts = $MissingReceiptArtifacts
+            decision = [ordered]@{
+              complete = $false
+              shadow = $true
+              authoritative = $false
+              grantsAcceptance = $false
+              reason = 'producer_contract_incomplete'
+            }
+          }
+          [IO.File]::WriteAllText($env:AETHELN_ACCEPTANCE_REPORT, (ConvertTo-Json -InputObject $Report -Depth 8), $Utf8)
+          $Gap = (@($MissingProducerJobs) + @($MissingReceiptArtifacts)) -join ','
+          throw "acceptance_producer_gap:$Gap"
+      - name: Upload shadow acceptance diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-acceptance-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-acceptance-shadow.json
           if-no-files-found: error

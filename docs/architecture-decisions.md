@@ -283,7 +283,7 @@ Every accepted decision records:
   operator select an older branch that still carries the retired
   1,440-minute single-job gate, and no replacement manual workflow is
   provided. `trusted-candidate-compile` additionally needs the GitHub-hosted
-  `change-impact` classifier (`actions/checkout@v4` plus repository-owned
+  `change-impact` classifier (the reviewed full-SHA checkout action plus repository-owned
   PowerShell, no third-party action), which compares the exact pull-request
   base SHA and head SHA with a rename-free name-status diff and publishes
   `engine_required`. Compile is exempted only when every changed path is in
@@ -333,7 +333,10 @@ Every accepted decision records:
   parent runs the complete phase body — setup, handoff validation, cleanup
   scanning, root accounting, manifest reads, payload hashing, smoke discovery,
   build/smoke work, and timeout finalization — in an owned kill-on-close child
-  tree. The child keeps the cooperative absolute phase deadline (30/30/10/10
+  tree. Child mode requires a fresh 256-bit parent-issued nonce bound to the
+  direct parent process ID and start time; inherited, partial, mismatched, or
+  replayed credentials reject before phase work rather than bypassing the
+  supervisor. The child keeps the cooperative absolute phase deadline (30/30/10/10
   minutes, every operation consuming remaining time from that one deadline);
   if any synchronous operation or the timeout finalization blocks across it,
   the parent stops and verifies the whole tree at the deadline plus a bounded
@@ -644,9 +647,12 @@ Every accepted decision records:
   effect. Fetch exact base, head, and synthetic merge objects into a
   bare/no-checkout repository before the only sparse checkout, then execute
   only accepted-base controller bytes after verifying their Git blob OID and
-  SHA-256. Never execute a candidate selector. Accepted policy `shadow-v1` has
-  exact canonical digest
-  `07bb90760bf493e25e40ac781143d07e701a113db3ede8bc7380490f6b85e9b6`;
+  SHA-256. Never execute a candidate selector. Package 2 accepted policy
+  `shadow-v1` had canonical digest
+  `07bb90760bf493e25e40ac781143d07e701a113db3ede8bc7380490f6b85e9b6`.
+  Package 3A corrects the overbroad clean-milestone mapping while remaining
+  shadow-only; its candidate policy digest is
+  `52f43ef45d9515bae76315026674ac0e052823b6dc63ec9ed008d093774c90a4`;
   every live report also binds the exact accepted controller revision, blob
   OID, and blob-byte SHA-256. The bootstrap
   `accepted_controller_unavailable` record selects all checks and is not
@@ -662,6 +668,20 @@ Every accepted decision records:
   every obligation. Reusable invocations preserve caller kind and workflow
   revision and apply the same ordered merge-parent validation as direct pull
   requests.
+- **Package 3A amendment:** Pin every approved remote action to its reviewed
+  full commit SHA, implement and fixture-test exact per-job shadow receipt and
+  bounded same-attempt aggregate contracts, and add a hosted direct-needs gap
+  diagnostic as the sole job allowed a job-level `always()`. Package 3A does
+  not emit receipts or execute the aggregate while truthful producers are
+  missing; it publishes and fails closed on that exact inventory instead.
+  Future receipt archives bind only their named raw evidence and stay
+  `shadow=true`, `authoritative=false`, and `grantsAcceptance=false`. Missing
+  producers are not mapped to unrelated portable fixtures. The accepted-base
+  selector may expose only the visual obligation to an additive reusable
+  visual proof. Existing legacy selection and required gates remain
+  authoritative. Because Package 3A changes selector bytes, a later
+  no-controller-change observation must bind this corrected digest before any
+  producer wiring or Package 3B authority activation.
 - **Policy identity:** The policy digest is SHA-256 over the accepted selector
   source after deterministic LF normalization, covering mappings, contexts,
   limits, uncertainty behavior, and attribute rules. The controller digest
@@ -676,11 +696,19 @@ Every accepted decision records:
 - **Evidence:** `tests/ci/Get-CiSelection.Tests.ps1` covers closed schemas,
   raw NUL diff records, rename/copy sides, attributes, LFS routing, unsafe
   modes/paths, case/NFC collisions, bounds, accepted controller identity, and
-  conservative output. Workflow fixtures prove the legacy normalized
-  5,595-byte block remains SHA-256
-  `b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c`
+  conservative output. Package 2 workflow fixtures proved the legacy normalized
+  5,595-byte block at SHA-256
+  `b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c`.
+  Package 3A changes only the reviewed checkout action identity in that block;
+  its current normalized identity is 5,633 bytes at SHA-256
+  `f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df`,
   and the shadow is independent with one attempt-bound artifact. Fixtures do
-  not replace the first later live accepted-base comparison.
+  not replace the first later live accepted-base comparison. Package 3A adds
+  `New-CiAcceptanceReceipt.Tests.ps1` and
+  `Invoke-CiAcceptanceAggregate.Tests.ps1` for identity, outcome, rerun,
+  pagination, bounded JSON/archive, action-manifest, cleanup, and raw-evidence
+  negative cases. Its reviewed action manifest contains only full-SHA pins for
+  `actions/checkout` and `actions/upload-artifact`.
 - **Alternatives:** Candidate-tree selector execution; third-party path-filter
   authority; direct Package 2 replacement; simultaneous policy and activation
   edits; treating bootstrap/missing evidence as equivalence; letting unsafe or

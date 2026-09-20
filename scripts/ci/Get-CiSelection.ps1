@@ -344,9 +344,10 @@ function Get-PathCheckSelection {
 		$Path -cmatch '^\.github/(PULL_REQUEST_TEMPLATE|pull_request_template)\.md$') { $Recognized = $true }
 	if ($Path -ceq '.gitattributes' -or $Path.EndsWith('/.gitattributes', [StringComparison]::Ordinal)) { $Ids.Add('controller-contract'); $Ids.Add('controller-operational-proof'); $Recognized = $true }
 	if ($Path.StartsWith('visuals/', [StringComparison]::Ordinal)) { $Ids.Add('visual-package'); $Recognized = $true }
+	if ($Path -ceq 'scripts/ci/Invoke-VisualPackageValidation.ps1') { $Ids.Add('visual-package'); $Recognized = $true }
 	if ($Path.StartsWith('.agents/', [StringComparison]::Ordinal) -or $Path.StartsWith('tests/build/', [StringComparison]::Ordinal)) { $Ids.Add('delivery-harness'); $Recognized = $true }
 	if ($Path -match '^(Source|Config|Content|Plugins)/' -or $Path -eq 'AethelnOnline.uproject') {
-		$Ids.Add('native-client-server-compile'); $Ids.Add('unreal-editor-automation'); $Ids.Add('clean-package-provenance-smoke'); $Recognized = $true
+		$Ids.Add('native-client-server-compile'); $Ids.Add('unreal-editor-automation'); $Recognized = $true
 	}
 	if ($Path.StartsWith('Content/', [StringComparison]::Ordinal) -or $Path.StartsWith('Config/', [StringComparison]::Ordinal) -or $Path -cmatch '^Plugins/[^/]+/Content/.+') { $Ids.Add('content-reference-validation') }
 	if ($Path.StartsWith('.github/workflows/', [StringComparison]::Ordinal) -or $Path.StartsWith('scripts/ci/', [StringComparison]::Ordinal) -or $Path.StartsWith('tests/ci/', [StringComparison]::Ordinal)) { $Ids.Add('controller-contract'); $Recognized = $true }
