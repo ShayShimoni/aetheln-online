@@ -91,6 +91,7 @@ Assert-True ($ShadowSelection -match 'git init --bare' -and $ShadowSelection -ma
 Assert-True ($ShadowSelection -match 'AETHELN_GITHUB_TOKEN: \$\{\{ github\.token \}\}' -and $ShadowSelection -match "GIT_CONFIG_KEY_0 = 'http\.extraheader'" -and $ShadowSelection -match 'GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic \$Authorization"' -and $ShadowSelection -match '::add-mask::\$Authorization') 'Private-repository object fetches must use the ephemeral GitHub token through a masked environment-backed authorization header.'
 Assert-True ($ShadowSelection -notmatch 'persist-credentials: true' -and $ShadowSelection -notmatch 'https://x-access-token:') 'Shadow bootstrap credentials must not persist in the checkout or remote URL.'
 Assert-True ($ShadowSelection -match 'Get-CiSelection\.ps1' -and $ShadowSelection -match '-ContextJson' -and $ShadowSelection -match '-OutputPath' -and $ShadowSelection -match '-RepositoryRoot') 'Only the accepted-base selector entry point may produce a live shadow record.'
+Assert-True ($ShadowSelection -match 'cat-file blob \$ControllerBlobOid' -and $ShadowSelection -match 'StandardOutput\.BaseStream\.CopyToAsync\(\$OutputStream\)' -and $ShadowSelection -match 'StandardError\.ReadToEndAsync\(\)' -and $ShadowSelection -match 'WaitForExit\(\$TimeoutMilliseconds\)' -and $ShadowSelection -match 'bounded_process_timeout' -and $ShadowSelection -match 'hash-object --no-filters') 'The accepted selector must be rematerialized from the verified Git blob with concurrent drains and a bounded process before its raw identity check and execution.'
 Assert-True ($ShadowSelection -match 'controllerBlobOid' -and $ShadowSelection -match 'controllerSha256') 'Shadow evidence must record the accepted controller blob OID and SHA-256 when available.'
 Assert-True ($ShadowSelection -match 'selection\.shadow|shadow = \$true' -and $ShadowSelection -match 'authoritative = \$false' -and $ShadowSelection -match 'checkoutAllowed = \$false') 'Bootstrap evidence must be explicitly shadow-only, non-authoritative, and unable to authorize checkout.'
 Assert-True ($ShadowSelection -match '(?m)^          exit 0\r?$') 'A handled unavailable base controller must clear its expected native Git failure before the runner wrapper exits.'
@@ -104,6 +105,35 @@ foreach ($RunBlock in $ShadowRunBlocks) {
 	$ShadowParseErrors = $null
 	$null = [Management.Automation.Language.Parser]::ParseInput($Body, [ref] $null, [ref] $ShadowParseErrors)
 	Assert-True ($ShadowParseErrors.Count -eq 0) "Shadow PowerShell must parse under Windows PowerShell 5.1: $($ShadowParseErrors | Select-Object -First 1 | ForEach-Object Message)"
+}
+$SelectionRunBody = (($ShadowRunBlocks[1].Groups['body'].Value -split "`r?`n") | ForEach-Object { if ($_.Length -ge 10) { $_.Substring(10) } else { $_ } }) -join "`n"
+$SelectionTokens = $null
+$SelectionErrors = $null
+$SelectionAst = [Management.Automation.Language.Parser]::ParseInput($SelectionRunBody, [ref] $SelectionTokens, [ref] $SelectionErrors)
+$BoundedProcessFunction = $SelectionAst.Find({ param($Node) $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -ceq 'Invoke-BoundedProcessToFile' }, $true)
+Assert-True ($null -ne $BoundedProcessFunction) 'The accepted-controller run block must define the bounded binary materializer.'
+. ([scriptblock]::Create($BoundedProcessFunction.Extent.Text))
+$MaterializeFixture = Join-Path ([IO.Path]::GetTempPath()) ('AethelnBlobMaterialize-' + [guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($MaterializeFixture)
+try {
+	$SuccessScript = Join-Path $MaterializeFixture 'success.ps1'
+	$TimeoutScript = Join-Path $MaterializeFixture 'timeout.ps1'
+	$OutputFile = Join-Path $MaterializeFixture 'output.bin'
+	$TimeoutOutput = Join-Path $MaterializeFixture 'timeout.bin'
+	$ExpectedBytes = [byte[]](0, 10, 13, 26, 127, 128, 255)
+	$EncodedBytes = [Convert]::ToBase64String($ExpectedBytes)
+	$SuccessSource = "[Console]::Error.WriteLine(('e' * 131072)); [byte[]]`$Bytes=[Convert]::FromBase64String('$EncodedBytes'); [Console]::OpenStandardOutput().Write(`$Bytes,0,`$Bytes.Length)"
+	[IO.File]::WriteAllText($SuccessScript, $SuccessSource, (New-Object Text.UTF8Encoding($false)))
+	[IO.File]::WriteAllText($TimeoutScript, 'Start-Sleep -Seconds 5', (New-Object Text.UTF8Encoding($false)))
+	Invoke-BoundedProcessToFile -FileName 'powershell.exe' -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$SuccessScript`"" -OutputPath $OutputFile -TimeoutMilliseconds 5000
+	$ActualBytes = [IO.File]::ReadAllBytes($OutputFile)
+	Assert-True ([Convert]::ToBase64String($ExpectedBytes) -ceq [Convert]::ToBase64String($ActualBytes)) 'The bounded materializer must preserve exact binary stdout while concurrently draining large stderr.'
+	$TimeoutFailure = $null
+	try { Invoke-BoundedProcessToFile -FileName 'powershell.exe' -Arguments "-NoProfile -ExecutionPolicy Bypass -File `"$TimeoutScript`"" -OutputPath $TimeoutOutput -TimeoutMilliseconds 100 }
+	catch { $TimeoutFailure = $_.Exception.Message }
+	Assert-True ($TimeoutFailure -ceq 'bounded_process_timeout' -and -not (Test-Path -LiteralPath $TimeoutOutput)) 'The bounded materializer must terminate a timed-out child and publish no output.'
+} finally {
+	if (Test-Path -LiteralPath $MaterializeFixture) { Remove-Item -LiteralPath $MaterializeFixture -Recurse -Force }
 }
 
 $VisualWorkflow = Get-Content -LiteralPath (Join-Path $RepositoryRoot '.github\workflows\visual-package-validation.yml') -Raw

@@ -109,6 +109,54 @@ jobs:
           $ControllerBlobOid = $null
           $ControllerSha256 = $null
 
+          function Invoke-BoundedProcessToFile {
+            param(
+              [Parameter(Mandatory)] [string] $FileName,
+              [Parameter(Mandatory)] [string] $Arguments,
+              [Parameter(Mandatory)] [string] $OutputPath,
+              [ValidateRange(100, 120000)] [int] $TimeoutMilliseconds = 120000
+            )
+            $FullOutputPath = [IO.Path]::GetFullPath($OutputPath)
+            $OutputParent = Split-Path -Parent $FullOutputPath
+            if (-not (Test-Path -LiteralPath $OutputParent -PathType Container)) { throw 'bounded_process_output_parent_missing' }
+            $TemporaryPath = Join-Path $OutputParent ('.accepted-controller-' + [guid]::NewGuid().ToString('N') + '.tmp')
+            $StartInfo = New-Object Diagnostics.ProcessStartInfo
+            $StartInfo.FileName = $FileName
+            $StartInfo.Arguments = $Arguments
+            $StartInfo.UseShellExecute = $false
+            $StartInfo.CreateNoWindow = $true
+            $StartInfo.RedirectStandardOutput = $true
+            $StartInfo.RedirectStandardError = $true
+            $Process = New-Object Diagnostics.Process
+            $Process.StartInfo = $StartInfo
+            $OutputStream = $null
+            try {
+              $OutputStream = New-Object IO.FileStream($TemporaryPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+              if (-not $Process.Start()) { throw 'bounded_process_start_failed' }
+              $OutputCopy = $Process.StandardOutput.BaseStream.CopyToAsync($OutputStream)
+              $ErrorRead = $Process.StandardError.ReadToEndAsync()
+              if (-not $Process.WaitForExit($TimeoutMilliseconds)) {
+                try { $Process.Kill() } catch { }
+                if (-not $Process.WaitForExit(5000)) { throw 'bounded_process_termination_failed' }
+                try { [void] $OutputCopy.GetAwaiter().GetResult() } catch { }
+                try { [void] $ErrorRead.GetAwaiter().GetResult() } catch { }
+                throw 'bounded_process_timeout'
+              }
+              [void] $OutputCopy.GetAwaiter().GetResult()
+              $ErrorText = $ErrorRead.GetAwaiter().GetResult()
+              if ($Process.ExitCode -ne 0) { throw "bounded_process_failed:$($Process.ExitCode):$ErrorText" }
+              $OutputStream.Flush($true)
+              $OutputStream.Dispose()
+              $OutputStream = $null
+              [IO.File]::Copy($TemporaryPath, $FullOutputPath, $true)
+            }
+            finally {
+              if ($null -ne $OutputStream) { $OutputStream.Dispose() }
+              $Process.Dispose()
+              if (Test-Path -LiteralPath $TemporaryPath -PathType Leaf) { Remove-Item -LiteralPath $TemporaryPath -Force }
+            }
+          }
+
           $Context = [ordered]@{
             kind = 'pull_request'
             baseRevision = $BaseSha
@@ -130,6 +178,9 @@ jobs:
 
           if ($BlobExitCode -eq 0 -and $ControllerBlobOid -cmatch '^[0-9a-f]{40,64}$') {
             if (-not (Test-Path -LiteralPath $SelectorPath -PathType Leaf)) { throw 'accepted_controller_checkout_missing' }
+            if ($env:AETHELN_CONTROL_REPO.Contains('"')) { throw 'control_repository_path_invalid' }
+            $MaterializeArguments = "--git-dir=`"$env:AETHELN_CONTROL_REPO`" cat-file blob $ControllerBlobOid"
+            Invoke-BoundedProcessToFile -FileName 'git' -Arguments $MaterializeArguments -OutputPath $SelectorPath -TimeoutMilliseconds 120000
             $CheckedOutBlob = [string] @(& git -C $env:AETHELN_ACCEPTED_CONTROL hash-object --no-filters -- scripts/ci/Get-CiSelection.ps1)[0]
             if ($LASTEXITCODE -ne 0 -or $CheckedOutBlob -cne $ControllerBlobOid) { throw 'accepted_controller_byte_mismatch' }
             $ControllerSha256 = (Get-FileHash -LiteralPath $SelectorPath -Algorithm SHA256).Hash.ToLowerInvariant()
