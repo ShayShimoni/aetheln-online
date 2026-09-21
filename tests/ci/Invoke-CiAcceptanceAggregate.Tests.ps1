@@ -391,6 +391,53 @@ Assert-Rejected { New-CiAcceptanceAggregate -Context $UnsafeAction -Requirements
 $PaginationBytes = ConvertTo-FixtureBytes ([pscustomobject][ordered]@{ total_count = 0; jobs = @([pscustomobject][ordered]@{ id = 1 }) })
 $PaginationApi = { param([string] $Uri, [int] $RemainingMilliseconds, [int] $MaximumBytes) if ($Uri -cne '/fixture?per_page=100&page=1' -or $RemainingMilliseconds -le 0 -or $PaginationBytes.Length -gt $MaximumBytes) { throw 'pagination_fixture_invalid' }; return ,$PaginationBytes }.GetNewClosure()
 Assert-Rejected { Get-PagedApiItems -ApiRequest $PaginationApi -BaseUri '/fixture' -PropertyName 'jobs' -Clock ([Diagnostics.Stopwatch]::StartNew()) -DeadlineSeconds 30 } 'api_pagination_count_mismatch'
+$SlowDeadlineApi = { param([string] $Uri, [int] $RemainingMilliseconds, [int] $MaximumBytes) if ([string]::IsNullOrWhiteSpace($Uri) -or $RemainingMilliseconds -le 0 -or $MaximumBytes -lt 3) { throw 'deadline_fixture_invalid' }; Start-Sleep -Milliseconds 1100; return ,([byte[]](1,2,3)) }
+$ExpiredDeadlineClock = [Diagnostics.Stopwatch]::StartNew()
+Assert-Rejected { Invoke-AggregateApi -ApiRequest $SlowDeadlineApi -Uri '/slow' -Clock $ExpiredDeadlineClock -DeadlineSeconds 1 -MaximumBytes 16 } 'api_deadline_exceeded'
+$DeadlineArchive = New-FixtureZip @([pscustomobject]@{name='deadline.txt';bytes='bounded'})
+Assert-Rejected { Read-StrictCiArchive -Bytes $DeadlineArchive -Clock $ExpiredDeadlineClock -DeadlineSeconds 1 } 'api_deadline_exceeded'
+$OriginalContextJson = $ContextJson
+$OriginalRequirementsJson = $RequirementsJson
+$OriginalOutputPath = $OutputPath
+$OriginalDeadlineSeconds = $DeadlineSeconds
+$MainOutputPath = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-ci-acceptance-main-' + [guid]::NewGuid().ToString('N') + '.json')
+$ExpiredOutputPath = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-ci-acceptance-expired-' + [guid]::NewGuid().ToString('N') + '.json')
+$ExpiredDuringWriteOutputPath = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-ci-acceptance-write-expired-' + [guid]::NewGuid().ToString('N') + '.json')
+$ExpiredAfterWriteOutputPath = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-ci-acceptance-after-write-expired-' + [guid]::NewGuid().ToString('N') + '.json')
+try {
+	$ContextJson = $Context | ConvertTo-Json -Depth 20 -Compress
+	$RequirementsJson = $Requirements | ConvertTo-Json -Depth 20 -Compress
+	$OutputPath = $MainOutputPath
+	$DeadlineSeconds = 10
+	$MainClock = [Diagnostics.Stopwatch]::StartNew()
+	$MainAggregate = Invoke-CiAcceptanceAggregateMain -ApiRequest $Api -Clock $MainClock
+	Assert-True ((Test-Path -LiteralPath $MainOutputPath -PathType Leaf) -and $MainAggregate.decision.complete -and $MainClock.ElapsedMilliseconds -lt 10000) 'The real entrypoint must use one caller-visible clock through bounded parsing, aggregation, and final output.'
+	$OutputPath = $ExpiredOutputPath
+	$ExpiredMainClock = [Diagnostics.Stopwatch]::StartNew()
+	Start-Sleep -Milliseconds 1100
+	Assert-Rejected { Invoke-CiAcceptanceAggregateMain -ApiRequest $Api -Clock $ExpiredMainClock -OperationDeadlineSeconds 1 } 'api_deadline_exceeded'
+	Assert-True (-not (Test-Path -LiteralPath $ExpiredOutputPath)) 'An entrypoint whose operation deadline has already expired must not publish output.'
+	Assert-Rejected { Write-BoundedAggregate -Aggregate $Aggregate -Path $ExpiredOutputPath -Clock $ExpiredMainClock -DeadlineSeconds 1 } 'api_deadline_exceeded'
+	Assert-True (-not (Test-Path -LiteralPath $ExpiredOutputPath)) 'An expired final-output deadline must be rejected before creating the output file.'
+	$SlowFileWriter = { param([string] $TemporaryPath, [byte[]] $Bytes) [IO.File]::WriteAllBytes($TemporaryPath, $Bytes); Start-Sleep -Milliseconds 1100 }
+	$WriteClock = [Diagnostics.Stopwatch]::StartNew()
+	Assert-Rejected { Write-BoundedAggregate -Aggregate $Aggregate -Path $ExpiredDuringWriteOutputPath -Clock $WriteClock -DeadlineSeconds 1 -FileWriter $SlowFileWriter } 'api_deadline_exceeded'
+	Assert-True (-not (Test-Path -LiteralPath $ExpiredDuringWriteOutputPath)) 'Crossing the deadline during output flush must not publish a complete-looking aggregate.'
+	$TemporaryPattern = '.' + [IO.Path]::GetFileName($ExpiredDuringWriteOutputPath) + '.*.tmp'
+	Assert-True (@(Get-ChildItem -LiteralPath ([IO.Path]::GetDirectoryName($ExpiredDuringWriteOutputPath)) -Filter $TemporaryPattern -File).Count -eq 0) 'A failed final-output deadline must clean its private temporary file.'
+	$OutputPath = $ExpiredAfterWriteOutputPath
+	$AfterWriteDelay = { Start-Sleep -Milliseconds 10100 }
+	Assert-Rejected { Invoke-CiAcceptanceAggregateMain -ApiRequest $Api -Clock ([Diagnostics.Stopwatch]::StartNew()) -AfterWrite $AfterWriteDelay -OperationDeadlineSeconds 10 } 'api_deadline_exceeded'
+	Assert-True (-not (Test-Path -LiteralPath $ExpiredAfterWriteOutputPath)) 'Crossing the operation deadline after atomic publication but before entrypoint return must revoke that output.'
+} finally {
+	$ContextJson = $OriginalContextJson
+	$RequirementsJson = $OriginalRequirementsJson
+	$OutputPath = $OriginalOutputPath
+	$DeadlineSeconds = $OriginalDeadlineSeconds
+	foreach ($TemporaryPath in @($MainOutputPath, $ExpiredOutputPath, $ExpiredDuringWriteOutputPath, $ExpiredAfterWriteOutputPath)) {
+		if (Test-Path -LiteralPath $TemporaryPath -PathType Leaf) { Remove-Item -LiteralPath $TemporaryPath -Force }
+	}
+}
 
 $StaleRun = [pscustomobject][ordered]@{ id = 9001; run_attempt = 3; workflow_id = 1234; event = 'pull_request'; head_sha = $Context.source.headRevision; status = 'in_progress'; conclusion = $null; actor=[pscustomobject]@{login=$Context.event.actor}; triggering_actor=[pscustomobject]@{login=$Context.event.triggeringActor} }
 $StaleApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{ '/repos/ShayShimoni/aetheln-online/actions/runs/9001' = (ConvertTo-FixtureBytes $StaleRun) }

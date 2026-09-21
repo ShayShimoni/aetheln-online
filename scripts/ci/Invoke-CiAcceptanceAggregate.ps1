@@ -169,8 +169,11 @@ function Read-StrictCiArchive {
 		[int] $MaximumBytes = $script:AggregateLimits.archiveBytes,
 		[int] $MaximumEntries = $script:AggregateLimits.archiveEntries,
 		[int] $MaximumEntryBytes = $script:AggregateLimits.archiveEntryBytes,
-		[int] $MaximumExpandedBytes = $script:AggregateLimits.archiveExpandedBytes
+		[int] $MaximumExpandedBytes = $script:AggregateLimits.archiveExpandedBytes,
+		[Diagnostics.Stopwatch] $Clock,
+		[int] $DeadlineSeconds = 0
 	)
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	if ($Bytes.Length -eq 0 -or $Bytes.Length -gt $MaximumBytes) { throw 'archive_size_limit' }
 	Add-Type -AssemblyName System.IO.Compression
 	Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -183,6 +186,7 @@ function Read-StrictCiArchive {
 	try {
 		if ($Archive.Entries.Count -eq 0 -or $Archive.Entries.Count -gt $MaximumEntries) { throw 'archive_entry_count_limit' }
 		foreach ($Entry in $Archive.Entries) {
+			Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 			$Name = [string] $Entry.FullName
 			Assert-SafeArchivePath $Name
 			$CollisionKey = $Name.Normalize([Text.NormalizationForm]::FormC)
@@ -198,6 +202,7 @@ function Read-StrictCiArchive {
 			try {
 				$Buffer = New-Object byte[] 8192
 				while (($Read = $EntryStream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+					Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 					if ($Output.Length + $Read -gt $MaximumEntryBytes -or $Output.Length + $Read -gt $Entry.Length) { throw 'archive_entry_size_limit' }
 					$Output.Write($Buffer, 0, $Read)
 				}
@@ -207,6 +212,7 @@ function Read-StrictCiArchive {
 			$Entries.Add([pscustomobject][ordered]@{ name = $Name; bytes = $EntryBytes; sizeBytes = [long] $EntryBytes.Length; sha256 = Get-Sha256Hex $EntryBytes })
 		}
 	} finally { $Archive.Dispose(); $ArchiveStream.Dispose() }
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	return [pscustomobject][ordered]@{ sha256 = Get-Sha256Hex $Bytes; sizeBytes = [long] $Bytes.Length; entries = $Entries.ToArray() }
 }
 
@@ -481,6 +487,7 @@ function Assert-CiAcceptanceReceipt {
 function Invoke-DefaultBoundedApiRequest {
 	param([string] $Uri, [int] $RemainingMilliseconds, [int] $MaximumBytes, [string] $ApiBaseUri)
 	if ($RemainingMilliseconds -le 0) { throw 'api_deadline_exceeded' }
+	$RequestClock = [Diagnostics.Stopwatch]::StartNew()
 	$Target = if ($Uri -cmatch '^https://') { $Uri } else { $ApiBaseUri.TrimEnd('/') + $Uri }
 	if ($Target -cnotmatch '^https://') { throw 'api_uri_invalid' }
 	$Request = [Net.HttpWebRequest]::CreateHttp($Target)
@@ -494,13 +501,27 @@ function Invoke-DefaultBoundedApiRequest {
 	if ([string]::IsNullOrWhiteSpace($Token)) { throw 'github_token_unavailable' }
 	$Request.Headers['Authorization'] = 'Bearer ' + $Token
 	try { $Response = $Request.GetResponse() }
-	catch { throw 'api_request_failed' }
+	catch {
+		if ($RequestClock.ElapsedMilliseconds -ge $RemainingMilliseconds) { throw 'api_deadline_exceeded' }
+		throw 'api_request_failed'
+	}
+	if ($RequestClock.ElapsedMilliseconds -ge $RemainingMilliseconds) { $Response.Dispose(); throw 'api_deadline_exceeded' }
 	try {
 		$Stream = $Response.GetResponseStream()
 		$Output = New-Object IO.MemoryStream
 		try {
 			$Buffer = New-Object byte[] 8192
-			while (($Read = $Stream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+			while ($true) {
+				$ReadRemaining = [long]$RemainingMilliseconds - $RequestClock.ElapsedMilliseconds
+				if ($ReadRemaining -le 0) { throw 'api_deadline_exceeded' }
+				if ($Stream.CanTimeout) { $Stream.ReadTimeout = [int][Math]::Min($ReadRemaining, [int]::MaxValue) }
+				try { $Read = $Stream.Read($Buffer, 0, $Buffer.Length) }
+				catch {
+					if ($RequestClock.ElapsedMilliseconds -ge $RemainingMilliseconds) { throw 'api_deadline_exceeded' }
+					throw 'api_request_failed'
+				}
+				if ($RequestClock.ElapsedMilliseconds -ge $RemainingMilliseconds) { throw 'api_deadline_exceeded' }
+				if ($Read -le 0) { break }
 				if ($Output.Length + $Read -gt $MaximumBytes) { throw 'api_response_size_limit' }
 				$Output.Write($Buffer, 0, $Read)
 			}
@@ -517,10 +538,18 @@ function Get-RemainingMilliseconds {
 	return [int] [Math]::Min($Remaining, [int]::MaxValue)
 }
 
+function Assert-AggregateDeadline {
+	param([Diagnostics.Stopwatch] $Clock, [int] $DeadlineSeconds)
+	if ($null -ne $Clock -and $DeadlineSeconds -gt 0) {
+		[void](Get-RemainingMilliseconds -Clock $Clock -DeadlineSeconds $DeadlineSeconds)
+	}
+}
+
 function Invoke-AggregateApi {
 	param([scriptblock] $ApiRequest, [string] $Uri, [Diagnostics.Stopwatch] $Clock, [int] $DeadlineSeconds, [int] $MaximumBytes)
 	$Remaining = Get-RemainingMilliseconds $Clock $DeadlineSeconds
 	$Bytes = & $ApiRequest $Uri $Remaining $MaximumBytes
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	if ($Bytes -isnot [byte[]]) { throw 'api_response_type_invalid' }
 	if ($Bytes.Length -gt $MaximumBytes) { throw 'api_response_size_limit' }
 	return ,$Bytes
@@ -535,6 +564,7 @@ function Get-PagedApiItems {
 		$Uri = $BaseUri + $Separator + 'per_page=100&page=' + $Page
 		$Bytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri $Uri -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.apiResponseBytes
 		$Document = ConvertFrom-StrictBoundedJson -Bytes $Bytes -MaximumBytes $script:AggregateLimits.apiResponseBytes -MaximumDepth 32 -MaximumProperties 8192 -MaximumArrayItems $script:AggregateLimits.apiItems
+		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 		if ($null -eq $Document -or $Document.PSObject.Properties.Name -cnotcontains 'total_count' -or $Document.PSObject.Properties.Name -cnotcontains $PropertyName) { throw 'api_schema_invalid' }
 		if ($Document.total_count -isnot [int] -and $Document.total_count -isnot [long] -or [long] $Document.total_count -lt 0 -or [long] $Document.total_count -gt $script:AggregateLimits.apiItems) { throw 'api_item_count_limit' }
 		$PageItems = @($Document.$PropertyName)
@@ -559,15 +589,20 @@ function New-CiAcceptanceAggregate {
 		[Parameter(Mandatory)] $Context,
 		[Parameter(Mandatory)] $Requirements,
 		[Parameter(Mandatory)] [scriptblock] $ApiRequest,
-		[ValidateRange(10, 300)] [int] $DeadlineSeconds = 120
+		[ValidateRange(10, 300)] [int] $DeadlineSeconds = 120,
+		[Diagnostics.Stopwatch] $Clock
 	)
+	if ($null -eq $Clock) { $Clock = [Diagnostics.Stopwatch]::StartNew() }
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	Assert-AcceptanceContext -Context $Context
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	Assert-AcceptanceRequirements -Requirements $Requirements -Context $Context
-	$Clock = [Diagnostics.Stopwatch]::StartNew()
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	$RepositoryPath = $Context.repository.fullName
 	$RunPath = '/repos/' + $RepositoryPath + '/actions/runs/' + $Context.run.id
 	$RunBytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri $RunPath -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.apiResponseBytes
 	$Run = ConvertFrom-StrictBoundedJson -Bytes $RunBytes -MaximumBytes $script:AggregateLimits.apiResponseBytes -MaximumDepth 32 -MaximumProperties 8192 -MaximumArrayItems $script:AggregateLimits.apiItems
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	foreach ($Name in @('id','run_attempt','workflow_id','event','head_sha','actor','triggering_actor')) { if ($Run.PSObject.Properties.Name -cnotcontains $Name) { throw 'api_schema_invalid' } }
 	if ($null -eq $Run.actor -or $Run.actor -isnot [pscustomobject] -or $Run.actor.PSObject.Properties.Name -cnotcontains 'login' -or
 		$null -eq $Run.triggering_actor -or $Run.triggering_actor -isnot [pscustomobject] -or $Run.triggering_actor.PSObject.Properties.Name -cnotcontains 'login') { throw 'api_run_actor_invalid' }
@@ -602,6 +637,7 @@ function New-CiAcceptanceAggregate {
 	if ($SelectorHighestAttempt -lt $Context.run.attempt) { throw 'selector_job_attempt_missing' }
 
 	$Artifacts = Get-PagedApiItems -ApiRequest $ApiRequest -BaseUri ($RunPath + '/artifacts') -PropertyName 'artifacts' -Clock $Clock -DeadlineSeconds $DeadlineSeconds
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	$SelectorArtifactName = 'ci-selection-shadow-' + $Context.run.id + '-' + $Context.run.attempt
 	$SelectorArtifacts = @($Artifacts | Where-Object { $_.name -ceq $SelectorArtifactName })
 	if ($SelectorArtifacts.Count -ne 1) { throw 'selector_artifact_identity_ambiguous' }
@@ -615,15 +651,17 @@ function New-CiAcceptanceAggregate {
 	if ($SelectorArtifact.archive_download_url -isnot [string] -or $SelectorArtifact.archive_download_url -cnotmatch '^https://') { throw 'selector_artifact_url_invalid' }
 	$SelectorArchiveBytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri ([string]$SelectorArtifact.archive_download_url) -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.archiveBytes
 	if ($SelectorArchiveBytes.Length -ne [long]$SelectorArtifact.size_in_bytes) { throw 'selector_artifact_size_mismatch' }
-	$SelectorArchive = Read-StrictCiArchive -Bytes $SelectorArchiveBytes
+	$SelectorArchive = Read-StrictCiArchive -Bytes $SelectorArchiveBytes -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	if ($SelectorArchive.entries.Count -ne 1 -or $SelectorArchive.entries[0].name -cne 'ci-selection-shadow.json') { throw 'selector_archive_entries_invalid' }
 	$SelectorReportEntry = $SelectorArchive.entries[0]
 	$SelectedChecks = Read-AcceptedSelectorReport -ReportBytes $SelectorReportEntry.bytes -Context $Context
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	$SelectedCheckList = @($script:SelectorCheckIds | Where-Object { $SelectedChecks.Contains($_) })
 
 	$ObservedJobs = New-Object System.Collections.Generic.List[object]
 	$SelectedByKey = @{}
 	foreach ($Requirement in $Requirements.jobs) {
+		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 		$SelectedSubset = @($Requirement.checks | Where-Object { $SelectedChecks.Contains([string]$_) })
 		$SelectedByKey[[string]$Requirement.key] = $SelectedSubset
 		$IsSelected = $SelectedSubset.Count -gt 0
@@ -645,6 +683,7 @@ function New-CiAcceptanceAggregate {
 
 	$Receipts = New-Object System.Collections.Generic.List[object]
 	foreach ($Requirement in $Requirements.jobs) {
+		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 		$SelectedSubset = @($SelectedByKey[[string]$Requirement.key])
 		$ArtifactMatches = @($Artifacts | Where-Object { $_.name -ceq $Requirement.artifactName })
 		if ($SelectedSubset.Count -eq 0) {
@@ -659,12 +698,14 @@ function New-CiAcceptanceAggregate {
 		if ($Artifact.archive_download_url -isnot [string] -or $Artifact.archive_download_url -cnotmatch '^https://') { throw 'artifact_url_invalid' }
 		$ArchiveBytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri ([string] $Artifact.archive_download_url) -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.archiveBytes
 		if ($ArchiveBytes.Length -ne [long]$Artifact.size_in_bytes) { throw 'artifact_size_mismatch' }
-		$Archive = Read-StrictCiArchive -Bytes $ArchiveBytes
+		$Archive = Read-StrictCiArchive -Bytes $ArchiveBytes -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 		$ReceiptEntries = @($Archive.entries | Where-Object { $_.name -ceq 'ci-acceptance-receipt.json' })
 		if ($ReceiptEntries.Count -ne 1) { throw 'receipt_entry_missing' }
 		$Receipt = ConvertFrom-StrictBoundedJson -Bytes $ReceiptEntries[0].bytes
+		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 		$SelectedRequirement = [pscustomobject][ordered]@{ key=[string]$Requirement.key; jobName=[string]$Requirement.jobName; artifactName=[string]$Requirement.artifactName; checks=$SelectedSubset }
 		$Results = Assert-CiAcceptanceReceipt -Receipt $Receipt -Context $Context -Requirement $SelectedRequirement -Archive $Archive
+		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 		$Receipts.Add([pscustomobject][ordered]@{
 			jobKey = [string] $Requirement.key
 			capabilityChecks = @($Requirement.checks)
@@ -678,8 +719,9 @@ function New-CiAcceptanceAggregate {
 			cleanupVerified = @($Results | ForEach-Object { $_.cleanupVerified })
 		})
 	}
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	$EvidenceClass = if ($Context.event.kind -ceq 'push') { 'post_merge_hosted_health' } else { 'pull_request_acceptance_candidate' }
-	return [pscustomobject][ordered]@{
+	$Aggregate = [pscustomobject][ordered]@{
 		schemaVersion = 'aetheln.ci-acceptance-aggregate/v1'
 		repository = $Context.repository
 		event = $Context.event
@@ -699,30 +741,72 @@ function New-CiAcceptanceAggregate {
 		receipts = $Receipts.ToArray()
 		decision = [pscustomobject][ordered]@{ evidenceClass = $EvidenceClass; complete = $true; shadow = $true; authoritative = $false; grantsAcceptance = $false; reason = 'shadow_evidence_reconciled' }
 	}
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
+	return $Aggregate
 }
 
 function Write-BoundedAggregate {
-	param($Aggregate, [string] $Path)
+	param($Aggregate, [string] $Path, [Diagnostics.Stopwatch] $Clock, [int] $DeadlineSeconds = 0, [scriptblock] $FileWriter)
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	if ([string]::IsNullOrWhiteSpace($Path)) { throw 'output_path_required' }
 	$FullPath = [IO.Path]::GetFullPath($Path)
 	$Parent = Split-Path -Parent $FullPath
 	if (-not (Test-Path -LiteralPath $Parent -PathType Container)) { throw 'output_parent_missing' }
+	if (Test-Path -LiteralPath $FullPath) { throw 'output_exists' }
 	$Raw = $Aggregate | ConvertTo-Json -Depth 16 -Compress
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	$Bytes = $script:Utf8NoBom.GetBytes($Raw)
 	if ($Bytes.Length -gt $script:AggregateLimits.jsonBytes) { throw 'aggregate_size_limit' }
-	$Stream = New-Object IO.FileStream($FullPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-	try { $Stream.Write($Bytes, 0, $Bytes.Length); $Stream.Flush($true) }
-	finally { $Stream.Dispose() }
+	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
+	$TemporaryPath = Join-Path $Parent ('.' + [IO.Path]::GetFileName($FullPath) + '.' + [guid]::NewGuid().ToString('N') + '.tmp')
+	$Published = $false
+	try {
+		if ($null -eq $FileWriter) {
+			$Stream = New-Object IO.FileStream($TemporaryPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+			try { $Stream.Write($Bytes, 0, $Bytes.Length); $Stream.Flush($true) }
+			finally { $Stream.Dispose() }
+		} else { & $FileWriter $TemporaryPath $Bytes }
+		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
+		[IO.File]::Move($TemporaryPath, $FullPath)
+		$Published = $true
+		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
+	} catch {
+		if ($Published -and (Test-Path -LiteralPath $FullPath -PathType Leaf)) { Remove-Item -LiteralPath $FullPath -Force }
+		throw
+	} finally {
+		if (Test-Path -LiteralPath $TemporaryPath -PathType Leaf) { Remove-Item -LiteralPath $TemporaryPath -Force }
+	}
 	return [long] $Bytes.Length
 }
 
 function Invoke-CiAcceptanceAggregateMain {
+	param(
+		[scriptblock] $ApiRequest,
+		[Diagnostics.Stopwatch] $Clock,
+		[scriptblock] $AfterWrite,
+		[int] $OperationDeadlineSeconds = $DeadlineSeconds
+	)
 	if ([string]::IsNullOrWhiteSpace($ContextJson) -or [string]::IsNullOrWhiteSpace($RequirementsJson) -or [string]::IsNullOrWhiteSpace($OutputPath)) { throw 'aggregate_arguments_required' }
+	if ($OperationDeadlineSeconds -le 0) { throw 'api_deadline_invalid' }
+	$OperationClock = if ($null -eq $Clock) { [Diagnostics.Stopwatch]::StartNew() } else { $Clock }
+	Assert-AggregateDeadline -Clock $OperationClock -DeadlineSeconds $OperationDeadlineSeconds
 	$Context = ConvertFrom-StrictBoundedJson -Bytes $script:StrictUtf8.GetBytes($ContextJson)
+	Assert-AggregateDeadline -Clock $OperationClock -DeadlineSeconds $OperationDeadlineSeconds
 	$Requirements = ConvertFrom-StrictBoundedJson -Bytes $script:StrictUtf8.GetBytes($RequirementsJson)
-	$Request = { param([string] $Uri, [int] $RemainingMilliseconds, [int] $MaximumBytes) Invoke-DefaultBoundedApiRequest -Uri $Uri -RemainingMilliseconds $RemainingMilliseconds -MaximumBytes $MaximumBytes -ApiBaseUri $ApiBaseUri }.GetNewClosure()
-	$Aggregate = New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $Request -DeadlineSeconds $DeadlineSeconds
-	[void] (Write-BoundedAggregate $Aggregate $OutputPath)
+	Assert-AggregateDeadline -Clock $OperationClock -DeadlineSeconds $OperationDeadlineSeconds
+	$Request = if ($null -eq $ApiRequest) { { param([string] $Uri, [int] $RemainingMilliseconds, [int] $MaximumBytes) Invoke-DefaultBoundedApiRequest -Uri $Uri -RemainingMilliseconds $RemainingMilliseconds -MaximumBytes $MaximumBytes -ApiBaseUri $ApiBaseUri }.GetNewClosure() } else { $ApiRequest }
+	$Aggregate = New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $Request -DeadlineSeconds $OperationDeadlineSeconds -Clock $OperationClock
+	Assert-AggregateDeadline -Clock $OperationClock -DeadlineSeconds $OperationDeadlineSeconds
+	$OutputPublished = $false
+	try {
+		[void] (Write-BoundedAggregate -Aggregate $Aggregate -Path $OutputPath -Clock $OperationClock -DeadlineSeconds $OperationDeadlineSeconds)
+		$OutputPublished = $true
+		if ($null -ne $AfterWrite) { & $AfterWrite }
+		Assert-AggregateDeadline -Clock $OperationClock -DeadlineSeconds $OperationDeadlineSeconds
+	} catch {
+		if ($OutputPublished -and (Test-Path -LiteralPath $OutputPath -PathType Leaf)) { Remove-Item -LiteralPath $OutputPath -Force }
+		throw
+	}
 	return $Aggregate
 }
 

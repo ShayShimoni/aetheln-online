@@ -685,6 +685,8 @@ Every accepted decision records:
   Run actors and downloaded artifact lengths are independently reconciled.
   Absolute archive, entry and expanded-byte ceilings remain authoritative;
   bounded valid evidence is not rejected solely for a high compression ratio.
+  A monotonic aggregate deadline is enforced during streaming/decompression
+  and after every request or bounded parse; progress cannot reset it.
   Future receipt archives bind only their named raw evidence and stay
   `shadow=true`, `authoritative=false`, and `grantsAcceptance=false`. Missing
   producers are not mapped to unrelated portable fixtures. The accepted-base

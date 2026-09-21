@@ -1143,6 +1143,9 @@ attempt-specific artifact identities and byte lengths, receipt identities, and
 raw archive contents. Archive safety uses absolute 32 MiB compressed, 64-entry,
 4 MiB per-entry and 16 MiB total-expanded ceilings plus exact streamed lengths;
 it does not reject valid bounded evidence merely for a high compression ratio.
+One monotonic aggregate deadline is rechecked during API streaming and archive
+expansion and immediately after every request and bounded parse; incremental
+progress cannot reset that deadline.
 Missing truthful producers or selector evidence, partial reruns, newer attempts,
 malformed or contradictory evidence, and selected jobs that are skipped are no
 acceptance. PR output is only an acceptance candidate; push output is only
