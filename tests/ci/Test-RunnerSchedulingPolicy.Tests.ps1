@@ -14,6 +14,8 @@ $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Workflow = Get-Content -LiteralPath (Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml') -Raw
 $CiDocumentation = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\continuous-integration.md') -Raw
+$CheckoutAction = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
+$UploadAction = 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
 
 function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
@@ -24,7 +26,7 @@ function Assert-MatchCount([string] $Text, [string] $Pattern, [int] $Expected, [
 	Assert-True ($Actual -eq $Expected) "$Message Expected $Expected match(es), found $Actual."
 }
 
-$JobOrder = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke')
+$JobOrder = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke', 'visual-proof', 'ci-acceptance-shadow')
 $JobBodies = @{}
 for ($Index = 1; $Index -lt $JobOrder.Count; $Index++) {
 	$Start = $Workflow.IndexOf("  $($JobOrder[$Index - 1]):", [StringComparison]::Ordinal)
@@ -32,7 +34,7 @@ for ($Index = 1; $Index -lt $JobOrder.Count; $Index++) {
 	Assert-True ($Start -ge 0 -and $End -gt $Start) "Workflow must define job '$($JobOrder[$Index - 1])' before '$($JobOrder[$Index])'."
 	$JobBodies[$JobOrder[$Index - 1]] = $Workflow.Substring($Start, $End - $Start)
 }
-$JobBodies['scheduled-packaged-smoke'] = $Workflow.Substring($Workflow.IndexOf('  scheduled-packaged-smoke:', [StringComparison]::Ordinal))
+$JobBodies['ci-acceptance-shadow'] = $Workflow.Substring($Workflow.IndexOf('  ci-acceptance-shadow:', [StringComparison]::Ordinal))
 
 # No manual entry point exists on this workflow identity. Keeping a
 # workflow_dispatch trigger would let an operator select an older branch that
@@ -45,7 +47,7 @@ Assert-True ($Workflow -notmatch 'engine-runner-manual-smoke-report') 'Workflow 
 Assert-True ($Workflow -notmatch '-Mode PackagedSmoke') 'Workflow must not select the monolithic PackagedSmoke gate anywhere.'
 Assert-MatchCount -Text $Workflow -Pattern 'timeout-minutes:\s*1440' -Expected 0 -Message 'No job may hold the engine runner for a 24-hour bound.'
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$' -Expected 5 -Message 'Exactly five jobs (trusted compile plus four phases) may target the engine runner.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: windows-latest\r?$' -Expected 3 -Message 'Exactly three jobs (shadow selection, portable gates, and the classifier) run on the GitHub-hosted runner.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: windows-latest\r?$' -Expected 4 -Message 'Exactly four jobs (selector shadow, portable gates, classifier, and acceptance shadow) run on the GitHub-hosted runner.'
 
 # Every engine-runner concurrency block queues FIFO without cancelling pending
 # or in-progress work. queue: single would silently cancel a pending trusted
@@ -55,11 +57,17 @@ Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+queue: max\r?$' -Expected 5 
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+cancel-in-progress: false\r?$' -Expected 5 -Message 'Every engine-runner concurrency block must keep cancel-in-progress: false.'
 Assert-True ($Workflow -notmatch '(?m)^\s+cancel-in-progress: true\r?$') 'No engine job may cancel in-progress work.'
 
-# No job-level predicate may bypass a failed, cancelled, or skipped
-# prerequisite: needs edges use the implicit success() only. always() is
-# permitted solely as the bare step-level predicate on report uploads.
+# No authoritative job-level predicate may bypass a failed, cancelled, or
+# skipped prerequisite. The one additive hosted aggregate is the only job that
+# may use always() so it can diagnose every dependency conclusion; it remains
+# non-authoritative and never joins engine concurrency. Step-level always()
+# remains limited to bounded evidence publication.
 Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)' -and $Workflow -notmatch 'success\(\)') 'Workflow must not use explicit status functions in job predicates.'
-Assert-MatchCount -Text $Workflow -Pattern 'always\(\)' -Expected ([regex]::Matches($Workflow, '(?m)^\s+if: always\(\)\r?$').Count) -Message 'always() may appear only as the bare step-level upload predicate.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^    if: always\(\)\r?$' -Expected 1 -Message 'The hosted acceptance shadow must own the sole job-level always() predicate.'
+Assert-True (([string] $JobBodies['ci-acceptance-shadow']) -match '(?m)^    if: always\(\)\r?$') 'The sole job-level always() predicate must belong to ci-acceptance-shadow.'
+foreach ($JobName in $JobOrder | Where-Object { $_ -ne 'ci-acceptance-shadow' }) {
+	Assert-True (([string] $JobBodies[$JobName]) -notmatch '(?m)^    if: always\(\)\r?$') "$JobName must not bypass prerequisite status with job-level always()."
+}
 Assert-True ($Workflow -notmatch 'needs\.[a-z-]+\.result') 'Workflow must not inspect needs results to run after a failed or skipped prerequisite.'
 
 # GitHub-hosted jobs carry explicit conservative bounds.
@@ -70,10 +78,33 @@ Assert-True (([string] $JobBodies['change-impact']) -notmatch 'aetheln-engine-ru
 $ShadowSelection = [string] $JobBodies['ci-selection-shadow']
 Assert-True ($ShadowSelection -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$" -and $ShadowSelection -match '(?m)^\s+timeout-minutes: 10\r?$') 'Shadow selection must be pull-request-only and bounded to ten minutes.'
 Assert-True ($ShadowSelection -match '(?m)^\s+continue-on-error: true\r?$') 'Shadow evidence must not change the authoritative workflow conclusion.'
-Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:' -and $ShadowSelection -notmatch '(?m)^\s+outputs:' -and $ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner') 'Shadow selection must have no authority, predecessor, or engine-runner admission surface.'
+Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:' -and $ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner') 'Shadow selection must have no predecessor or engine-runner admission surface.'
+Assert-True ($ShadowSelection -match '(?m)^    outputs:\r?$' -and $ShadowSelection -match '(?m)^      visual_required: \$\{\{ steps\.selection\.outputs\.visual_required \}\}\r?$') 'Shadow selection may expose only the accepted-base visual decision to the non-authoritative reusable proof.'
 Assert-True ($ShadowSelection -match 'accepted_controller_unavailable' -and $ShadowSelection -match 'authoritative = \$false' -and $ShadowSelection -match 'checkoutAllowed = \$false') 'Bootstrap evidence must fail closed without pretending to be equivalence evidence.'
 Assert-True ($ShadowSelection -match 'name: ci-selection-shadow-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}' -and $ShadowSelection -notmatch 'retention-days:') 'Shadow evidence must be attempt-specific and use default retention.'
 Assert-True ($ShadowSelection -match 'path: \$\{\{ runner\.temp \}\}/ci-selection-shadow\.json' -and $ShadowSelection -notmatch '(?m)^\s+path: .*\*') 'Shadow selection must upload exactly one bounded report file.'
+
+# Package 3A adds one hosted, non-authoritative gap diagnostic that waits on
+# every current producer directly. Receipt publication and aggregate execution
+# remain disabled until every truthful producer exists.
+$AggregateShadow = [string] $JobBodies['ci-acceptance-shadow']
+Assert-True ($AggregateShadow -match '(?m)^    if: always\(\)\r?$' -and $AggregateShadow -match '(?m)^    continue-on-error: true\r?$') 'Acceptance aggregation must always diagnose dependencies without becoming an authoritative workflow failure.'
+Assert-True ($AggregateShadow -match '(?m)^    runs-on: windows-latest\r?$' -and $AggregateShadow -match '(?m)^    timeout-minutes: 10\r?$') 'Acceptance aggregation must be bounded on GitHub-hosted Windows.'
+Assert-True ($AggregateShadow -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') 'Acceptance aggregation must never hold or target the engine runner.'
+$AggregateNeedsMatch = [regex]::Match($AggregateShadow, '(?ms)^    needs:\r?\n(?<needs>(?:      - [a-z0-9-]+\r?\n)+)')
+Assert-True $AggregateNeedsMatch.Success 'Acceptance aggregation must declare an explicit direct-needs list.'
+$ActualAggregateNeeds = @([regex]::Matches($AggregateNeedsMatch.Groups['needs'].Value, '(?m)^      - (?<job>[a-z0-9-]+)\r?$') | ForEach-Object { [string] $_.Groups['job'].Value })
+$ExpectedAggregateNeeds = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke', 'visual-proof')
+Assert-True (($ActualAggregateNeeds -join ',') -ceq ($ExpectedAggregateNeeds -join ',')) 'Acceptance aggregation must directly need every producer exactly once in the reviewed order.'
+Assert-True ($AggregateShadow -notmatch 'Invoke-CiAcceptanceAggregate\.ps1|New-CiAcceptanceReceipt\.ps1|acceptanceGranted') 'The incomplete shadow must not execute or advertise dormant receipt/aggregate authority.'
+foreach ($Gap in @('clean-package-provenance-smoke','content-reference-validation','delivery-harness','unreal-editor-automation')) {
+	Assert-True ($AggregateShadow -match [regex]::Escape("'$Gap'")) "Acceptance shadow must name missing producer '$Gap' rather than fabricating coverage."
+}
+foreach ($ReceiptGap in @('controller-contract-and-operational-proof','native-client-server-compile','portable','visual-package')) {
+	Assert-True ($AggregateShadow -match [regex]::Escape("'$ReceiptGap'")) "Acceptance shadow must name missing receipt '$ReceiptGap' rather than relabelling raw evidence."
+}
+Assert-True ($AggregateShadow -match 'complete = \$false' -and $AggregateShadow -match 'shadow = \$true' -and $AggregateShadow -match 'authoritative = \$false' -and $AggregateShadow -match 'grantsAcceptance = \$false') 'Incomplete Package 3A aggregation must be explicitly shadow-only and non-granting.'
+Assert-True ($AggregateShadow -match 'producer_contract_incomplete' -and $AggregateShadow -match 'acceptance_producer_gap:') 'Incomplete aggregation must publish and raise the exact producer contract gap.'
 
 # The milestone is split into four bounded phases that run only on the daily
 # schedule and only after the portable gates pass; pull requests and pushes
@@ -153,7 +184,7 @@ function Assert-ManagedCompileWorkflow([string] $Body) {
 	$CaptureMatch = [regex]::Match($Body, '(?ms)^      - name: Capture routine compile deadline\r?\n(?<capture>.*?)(?=^      - |\z)')
 	Assert-True $CaptureMatch.Success 'Compile must capture its original budget before checkout.'
 	$Capture = $CaptureMatch.Groups['capture'].Value
-	$CheckoutPosition = $Body.IndexOf('uses: actions/checkout@v4')
+	$CheckoutPosition = $Body.IndexOf("uses: $CheckoutAction")
 	Assert-True ($CheckoutPosition -gt $CaptureMatch.Index) 'Checkout must consume the original compile budget.'
 	Assert-True ($Capture.Contains('working-directory: ${{ runner.temp }}')) 'Before checkout the capture step must use existing runner.temp, not the absent control checkout.'
 	Assert-True ($Capture.Contains('[Diagnostics.Stopwatch]::GetTimestamp()') -and $Capture.Contains('[DateTime]::UtcNow.ToString(''o'', [Globalization.CultureInfo]::InvariantCulture)')) 'Capture must include both monotonic and UTC anchors.'
@@ -212,12 +243,13 @@ Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Artifact paths mu
 
 function Assert-ReportOnlyUpload([string] $Text) {
 	$Blocks = @([regex]::Split($Text, '(?m)^      - ') | Where-Object { $_ -match '(?m)^\s*uses: actions/upload-artifact@' })
-	Assert-True ($Blocks.Count -eq 7) 'Exactly six established report uploads plus one shadow-selection upload must exist.'
+	Assert-True ($Blocks.Count -eq 8) 'Exactly six established report uploads plus selection and acceptance shadow diagnostics must exist.'
 	$Allowed = @(
 		'TestResults/ci-report.json',
 		'milestone/TestResults/engine-runner-report.json',
 		'${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json',
-		'${{ runner.temp }}/ci-selection-shadow.json'
+		'${{ runner.temp }}/ci-selection-shadow.json',
+		'${{ runner.temp }}/ci-acceptance-shadow.json'
 	)
 	foreach ($Block in $Blocks) {
 		$Paths = @([regex]::Matches($Block, '(?m)^          path: ([^\r\n]+)\r?$'))
@@ -226,7 +258,7 @@ function Assert-ReportOnlyUpload([string] $Text) {
 	}
 }
 Assert-ReportOnlyUpload $Workflow
-$ExtraUpload = $Workflow + [Environment]::NewLine + (@('      - uses: actions/upload-artifact@v4', '        with:', '          name: unexpected-payload', '          path: Saved') -join [Environment]::NewLine)
+$ExtraUpload = $Workflow + [Environment]::NewLine + (@("      - uses: $UploadAction", '        with:', '          name: unexpected-payload', '          path: Saved') -join [Environment]::NewLine)
 $ExtraRejected = $false
 try { Assert-ReportOnlyUpload $ExtraUpload } catch { $ExtraRejected = $true }
 Assert-True $ExtraRejected 'An added directory upload must fail even while all six reports remain.'
@@ -289,7 +321,7 @@ Assert-True ($SelectionDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$') 'T
 foreach ($Contract in @('shadow-first', 'accepted-base', '07bb90760bf493e25e40ac781143d07e701a113db3ede8bc7380490f6b85e9b6', 'wiring-only', 'external checker', 'before any self-hosted runner queues')) {
 	Assert-True ($SelectionDecision -match [regex]::Escape($Contract)) "TA-017 must record the selector activation contract '$Contract'."
 }
-Assert-True ($CiDocumentation -match 'accepted_controller_unavailable' -and $CiDocumentation -match '5,595' -and $CiDocumentation -match 'b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c') 'CI documentation must record the bootstrap boundary and exact legacy block identity.'
+Assert-True ($CiDocumentation -match 'accepted_controller_unavailable' -and $CiDocumentation -match '5,633' -and $CiDocumentation -match 'f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df') 'CI documentation must record the bootstrap boundary and exact Package 3A action-pin-only legacy block identity.'
 foreach ($Limit in @('two minutes', '8 MiB', '64 KiB', '4,096', '4 MiB')) {
 	Assert-True ($CiDocumentation -match [regex]::Escape($Limit)) "CI documentation must record selector limit '$Limit'."
 }

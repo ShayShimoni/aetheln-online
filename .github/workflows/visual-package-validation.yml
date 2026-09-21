@@ -2,10 +2,17 @@ name: Visual package validation
 
 on:
   workflow_call:
+    inputs:
+      non_authoritative:
+        description: Run as additive shadow evidence without controlling the caller result.
+        required: false
+        type: boolean
+        default: false
   pull_request:
     paths:
       - '.gitattributes'
       - 'visuals/**'
+      - 'scripts/ci/Invoke-VisualPackageValidation.ps1'
       - '.github/workflows/visual-package-validation.yml'
   push:
     branches:
@@ -13,6 +20,7 @@ on:
     paths:
       - '.gitattributes'
       - 'visuals/**'
+      - 'scripts/ci/Invoke-VisualPackageValidation.ps1'
       - '.github/workflows/visual-package-validation.yml'
 
 permissions:
@@ -20,14 +28,33 @@ permissions:
 
 jobs:
   validate:
+    continue-on-error: ${{ inputs.non_authoritative == true }}
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: true
-      - name: Validate visual package
+      - name: Validate visual package and write bounded evidence
         shell: powershell
-        run: .\visuals\Test-VisualPackage.ps1
-      - name: Run visual validation regressions
-        shell: powershell
-        run: .\visuals\tests\Test-VisualPackageValidation.ps1
+        run: |
+          $EvidenceRoot = Join-Path '${{ runner.temp }}' 'aetheln-visual-${{ github.run_id }}-${{ github.run_attempt }}'
+          .\scripts\ci\Invoke-VisualPackageValidation.ps1 `
+            -EvidenceRoot $EvidenceRoot `
+            -Repository '${{ github.repository }}' `
+            -Revision '${{ github.sha }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt ${{ github.run_attempt }} `
+            -VisualValidatorPath '.\visuals\Test-VisualPackage.ps1' `
+            -RegressionValidatorPath '.\visuals\tests\Test-VisualPackageValidation.ps1' `
+            -MaxCapturedLinesPerValidator 200 `
+            -MaxCapturedLineUtf8Bytes 4096 `
+            -MaxCapturedUtf8BytesPerValidator 131072 `
+            -MaxReportUtf8Bytes 4194304
+      - name: Upload visual package evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: visual-package-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/aetheln-visual-${{ github.run_id }}-${{ github.run_attempt }}/visual-package-report.json
+          if-no-files-found: error

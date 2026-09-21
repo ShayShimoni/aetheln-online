@@ -110,9 +110,21 @@ Assert-Rejected { Test-WindowsCheckoutTree @($TreeBoundary + [pscustomobject]@{t
 $Visual = @(Get-PathCheckSelection 'visuals/a.png' @{filter='lfs'})
 Assert-True ($Visual -ccontains 'portable' -and $Visual -ccontains 'visual-package') 'Visual LFS should select portable and visual validation.'
 $Content = @(Get-PathCheckSelection 'Content/a.uasset' @{filter='lfs'})
-Assert-True ($Content -ccontains 'native-client-server-compile' -and $Content -ccontains 'unreal-editor-automation' -and $Content -ccontains 'content-reference-validation') 'Content LFS should select every applicable engine/content check.'
+Assert-True ($Content -ccontains 'native-client-server-compile' -and $Content -ccontains 'unreal-editor-automation' -and $Content -ccontains 'content-reference-validation' -and $Content -cnotcontains 'clean-package-provenance-smoke') 'Content LFS should select applicable engine/content checks without turning an ordinary change into a clean milestone.'
+$Source = @(Get-PathCheckSelection 'Source/GameCore/Foo.cpp' @{})
+Assert-True ($Source -ccontains 'native-client-server-compile' -and $Source -ccontains 'unreal-editor-automation' -and $Source -cnotcontains 'content-reference-validation' -and $Source -cnotcontains 'clean-package-provenance-smoke') 'Ordinary source should select native and Editor checks, but not content or clean-milestone work.'
+$PluginSource = @(Get-PathCheckSelection 'Plugins/Foo/Source/Foo.cpp' @{})
+Assert-True ($PluginSource -ccontains 'native-client-server-compile' -and $PluginSource -ccontains 'unreal-editor-automation' -and $PluginSource -cnotcontains 'content-reference-validation' -and $PluginSource -cnotcontains 'clean-package-provenance-smoke') 'Plugin source should select native and Editor checks without a clean milestone.'
+$Config = @(Get-PathCheckSelection 'Config/DefaultGame.ini' @{})
+Assert-True ($Config -ccontains 'native-client-server-compile' -and $Config -ccontains 'unreal-editor-automation' -and $Config -ccontains 'content-reference-validation' -and $Config -cnotcontains 'clean-package-provenance-smoke') 'Runtime configuration should add content-reference validation without a clean milestone.'
+$Project = @(Get-PathCheckSelection 'AethelnOnline.uproject' @{})
+Assert-True ($Project -ccontains 'native-client-server-compile' -and $Project -ccontains 'unreal-editor-automation' -and $Project -cnotcontains 'clean-package-provenance-smoke') 'The project descriptor should select native and Editor checks without a clean milestone.'
 $Controller = @(Get-PathCheckSelection 'scripts/ci/Get-CiSelection.ps1' @{})
 Assert-True ($Controller -ccontains 'controller-contract' -and $Controller -ccontains 'controller-operational-proof') 'Production controller changes should select contract and operational proof.'
+$VisualController = @(Get-PathCheckSelection 'scripts/ci/Invoke-VisualPackageValidation.ps1' @{})
+Assert-True ($VisualController -ccontains 'visual-package' -and $VisualController -ccontains 'controller-contract' -and $VisualController -ccontains 'controller-operational-proof') 'The production visual controller must select real visual execution plus contract and operational proof.'
+$VisualControllerLookalike = @(Get-PathCheckSelection 'scripts/ci/Invoke-VisualPackageValidation.ps1.bak' @{})
+Assert-True ($VisualControllerLookalike -cnotcontains 'visual-package' -and $VisualControllerLookalike -ccontains 'controller-contract' -and $VisualControllerLookalike -ccontains 'controller-operational-proof') 'A visual-controller lookalike must not inherit the exact production visual obligation.'
 $WorkflowController = @(Get-PathCheckSelection '.github/workflows/prototype-quality-gates.yml' @{})
 Assert-True ($WorkflowController -ccontains 'controller-contract' -and $WorkflowController -ccontains 'controller-operational-proof') 'Workflow controller changes should select contract and operational proof.'
 $ControllerTest = @(Get-PathCheckSelection 'tests/ci/Get-CiSelection.Tests.ps1' @{})
@@ -125,7 +137,7 @@ Assert-True ($BuildHarness -ccontains 'delivery-harness' -and $BuildHarness -cco
 $BuildTest = @(Get-PathCheckSelection 'tests/build/X.Tests.ps1' @{})
 Assert-True ($BuildTest -ccontains 'delivery-harness') 'Build harness tests should select delivery proof in addition to portable checks.'
 $PluginContent = @(Get-PathCheckSelection 'Plugins/Foo/Content/A.uasset' @{filter='lfs'})
-Assert-True ($PluginContent -ccontains 'content-reference-validation' -and $PluginContent -ccontains 'native-client-server-compile') 'Plugin content and LFS materialization should select content validation and native compile.'
+Assert-True ($PluginContent -ccontains 'content-reference-validation' -and $PluginContent -ccontains 'native-client-server-compile' -and $PluginContent -ccontains 'unreal-editor-automation' -and $PluginContent -cnotcontains 'clean-package-provenance-smoke') 'Plugin content and LFS materialization should select content, native, and Editor checks without a clean milestone.'
 
 # Build an object-only fixture with accepted controller bytes, a nested
 # attribute rule, an unchanged copy source, a cross-root rename, and an exact
@@ -173,6 +185,9 @@ try {
 	$MergeRevision=(@("synthetic merge" | & git -C $FixtureRepo commit-tree $Tree -p $BaseRevision -p $HeadRevision) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Synthetic merge creation should succeed.'
 	$Context=[pscustomobject][ordered]@{kind='pull_request';baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;controllerRevision=$BaseRevision}
 	$Report=New-CiSelectionReport $Context $FixtureRepo
+	$ScheduleReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='schedule';revision=$HeadRevision;controllerRevision=$HeadRevision}) $FixtureRepo
+	$ScheduledClean=@($ScheduleReport.selection.obligations | Where-Object id -eq 'clean-package-provenance-smoke')[0]
+	Assert-True ($ScheduledClean.selected -and $ScheduledClean.reasons -ccontains 'scheduled_event') 'Scheduled runs must retain the clean milestone after ordinary source/content changes stop selecting it.'
 	Assert-True ($Report.execution.checkoutAllowed -eq $false -and $Report.selection.shadow -and -not $Report.selection.authoritative) 'Selector should remain no-checkout, shadow-only, and non-authoritative.'
 	Assert-True ($null -eq $Report.legacyAuthority.engineRequired -and $Report.legacyAuthority.reason -ceq 'not_observed' -and $Report.comparison.status -ceq 'unavailable' -and $Report.comparison.differences -ccontains 'legacy_authority_not_observed') 'An independent shadow job must not claim it observed or compared a legacy classifier result.'
 	$CalledReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='workflow_call';callerKind='pull_request';baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;revision=$null;controllerRevision=$BaseRevision}) $FixtureRepo
@@ -217,7 +232,8 @@ try {
 	$LfsMerge=(@("merge" | & git -C $FixtureRepo commit-tree $LfsTree -p $HeadRevision -p $LfsHead) -join '').Trim()
 	Assert-Rejected { New-CiSelectionReport ([pscustomobject][ordered]@{kind='pull_request';baseRevision=$HeadRevision;headRevision=$LfsHead;workflowRevision=$LfsMerge;controllerRevision=$HeadRevision}) $FixtureRepo } 'lfsconfig_changed'
 	$Bootstrap=New-ConservativeSelection 'accepted_controller_unavailable' ([pscustomobject][ordered]@{kind='pull_request';baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;controllerRevision=$BaseRevision})
-	Assert-True ($null -eq $Bootstrap.execution.controllerBlobOid -and $Bootstrap.execution.checkoutAllowed -eq $false -and $Bootstrap.source.baseRevision -ceq $BaseRevision -and @($Bootstrap.selection.obligations | Where-Object {-not $_.selected}).Count -eq 0) 'Bootstrap fallback should preserve known revisions and select every obligation without checkout.'
+	$BootstrapClean=@($Bootstrap.selection.obligations | Where-Object id -eq 'clean-package-provenance-smoke')[0]
+	Assert-True ($null -eq $Bootstrap.execution.controllerBlobOid -and $Bootstrap.execution.checkoutAllowed -eq $false -and $Bootstrap.source.baseRevision -ceq $BaseRevision -and @($Bootstrap.selection.obligations | Where-Object {-not $_.selected}).Count -eq 0 -and $BootstrapClean.selected) 'Bootstrap fallback should preserve known revisions and select every obligation, including the clean milestone, without checkout.'
 
 	# Binary stdout is accepted exactly at the limit and rejected at +1. This
 	# also proves no line-oriented or text decoding path touches object bytes.

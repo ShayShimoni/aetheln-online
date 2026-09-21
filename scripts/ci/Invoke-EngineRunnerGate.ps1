@@ -57,7 +57,10 @@ param(
 	[long] $HandoffPayloadCapBytes = 68719476736,
 	[long] $HandoffRootCapBytes = 274877906944,
 	[double] $HandoffStaleHours = 48,
-	[double] $PhaseFinalizeGraceSeconds = 120
+	[double] $PhaseFinalizeGraceSeconds = 120,
+	[Parameter(DontShow)] [string] $PhaseSupervisorNonce,
+	[Parameter(DontShow)] [string] $PhaseSupervisorParentProcessId,
+	[Parameter(DontShow)] [string] $PhaseSupervisorParentStartTicks
 )
 
 Set-StrictMode -Version Latest
@@ -84,6 +87,19 @@ $FailureCode = $null
 $ResolvedRepository = $null
 $PhaseByMode = @{ PackageClient = 'client'; PackageServer = 'server'; ValidateProvenance = 'provenance'; SmokePhase = 'smoke' }
 $IsPhaseMode = $PhaseByMode.ContainsKey($Mode)
+$PhaseSupervisorMarker = [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', 'Process')
+$PhaseSupervisorEnvironmentNonce = [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISOR_NONCE', 'Process')
+$PhaseSupervisorEnvironmentParentProcessId = [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISOR_PARENT_PROCESS_ID', 'Process')
+$PhaseSupervisorEnvironmentParentStartTicks = [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISOR_PARENT_START_TICKS', 'Process')
+$HasPhaseSupervisorAuthenticationSignal = $null -ne $PhaseSupervisorMarker -or
+	$null -ne $PhaseSupervisorEnvironmentNonce -or
+	$null -ne $PhaseSupervisorEnvironmentParentProcessId -or
+	$null -ne $PhaseSupervisorEnvironmentParentStartTicks -or
+	$PSBoundParameters.ContainsKey('PhaseSupervisorNonce') -or
+	$PSBoundParameters.ContainsKey('PhaseSupervisorParentProcessId') -or
+	$PSBoundParameters.ContainsKey('PhaseSupervisorParentStartTicks')
+$IsAuthenticatedPhaseChild = $false
+$PhaseSupervisorAuthenticationInvalid = $false
 $Policy = if ($Mode -eq 'Compile') { 'incremental-target-compilation' } else { 'clean-package-and-smoke' }
 $RepositoryPattern = '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$'
 $RunnerNamePattern = '^[^\\/:*?"<>|\x00-\x1f]{1,128}$'
@@ -144,8 +160,18 @@ namespace Aetheln {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint exitCode);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, uint exitCode);
   [StructLayout(LayoutKind.Sequential)] struct BasicAccountingInformation { public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime; public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses; }
+  [StructLayout(LayoutKind.Sequential)] struct ProcessBasicInformation { public IntPtr Reserved1, PebBaseAddress, Reserved2_0, Reserved2_1, UniqueProcessId, InheritedFromUniqueProcessId; }
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int informationClass, out BasicAccountingInformation information, uint length, IntPtr returnLength);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process, int informationClass, out ProcessBasicInformation information, uint length, IntPtr returnLength);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  public static int GetCurrentParentProcessId() {
+   using(System.Diagnostics.Process process=System.Diagnostics.Process.GetCurrentProcess()) {
+    ProcessBasicInformation information; int status=NtQueryInformationProcess(process.Handle,0,out information,(uint)Marshal.SizeOf(typeof(ProcessBasicInformation)),IntPtr.Zero);
+    if(status!=0) throw new InvalidOperationException("Parent process identity is unavailable.");
+    long parent=information.InheritedFromUniqueProcessId.ToInt64(); if(parent<=0 || parent>Int32.MaxValue) throw new InvalidOperationException("Parent process identity is invalid.");
+    return (int)parent;
+   }
+  }
   public EngineGateJob() {
    handle=CreateJobObject(IntPtr.Zero,null); if(handle==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"CreateJobObject failed.");
    ExtendedLimitInformation information=new ExtendedLimitInformation(); information.BasicLimitInformation.LimitFlags=KillOnJobClose;
@@ -184,6 +210,34 @@ namespace Aetheln {
 
 function Initialize-EngineGateJobType {
 	if ($null -eq ('Aetheln.EngineGateJob' -as [type])) { Add-Type -TypeDefinition $EngineGateJobSource -Language CSharp }
+}
+
+function Test-PhaseSupervisorAuthentication(
+	[string] $Marker,
+	[string] $EnvironmentNonce,
+	[string] $EnvironmentParentProcessId,
+	[string] $EnvironmentParentStartTicks,
+	[string] $ParameterNonce,
+	[string] $ParameterParentProcessId,
+	[string] $ParameterParentStartTicks,
+	[long] $ActualParentProcessId,
+	[long] $ActualParentStartTicks
+) {
+	# Child admission is a closed, run-scoped contract. The nonce prevents an
+	# inherited marker from acting as authority, while PID plus process start
+	# time binds that nonce to the direct parent and rejects stale PID reuse.
+	if ($Marker -cne '1' -or
+		$EnvironmentNonce -cnotmatch '^[0-9a-f]{64}$' -or $ParameterNonce -cnotmatch '^[0-9a-f]{64}$' -or
+		$EnvironmentParentProcessId -cnotmatch '^[1-9][0-9]{0,9}$' -or $ParameterParentProcessId -cnotmatch '^[1-9][0-9]{0,9}$' -or
+		$EnvironmentParentStartTicks -cnotmatch '^[1-9][0-9]{0,18}$' -or $ParameterParentStartTicks -cnotmatch '^[1-9][0-9]{0,18}$' -or
+		$EnvironmentNonce -cne $ParameterNonce -or
+		$EnvironmentParentProcessId -cne $ParameterParentProcessId -or
+		$EnvironmentParentStartTicks -cne $ParameterParentStartTicks) { return $false }
+	$ExpectedParentProcessId = 0
+	$ExpectedParentStartTicks = [long] 0
+	if (-not [int]::TryParse($ParameterParentProcessId, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $ExpectedParentProcessId) -or
+		-not [long]::TryParse($ParameterParentStartTicks, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $ExpectedParentStartTicks)) { return $false }
+	return $ActualParentProcessId -eq $ExpectedParentProcessId -and $ActualParentStartTicks -eq $ExpectedParentStartTicks
 }
 
 function Assert-PhaseDeadline {
@@ -1338,6 +1392,192 @@ function Invoke-PhaseChildWithinDeadline([string] $InvocationText) {
 	return Invoke-PhaseChildScript -InvocationText $InvocationText -TimeoutMinutes $RemainingMinutes
 }
 
+function Assert-ExactPhaseReportObject($Value, [string[]] $PropertyNames) {
+	if ($null -eq $Value -or $Value -isnot [System.Management.Automation.PSCustomObject]) { throw 'phase_report_invalid' }
+	$ActualNames = @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+	if ($ActualNames.Count -ne $PropertyNames.Count) { throw 'phase_report_invalid' }
+	for ($Index = 0; $Index -lt $PropertyNames.Count; $Index++) {
+		if ($ActualNames[$Index] -cne $PropertyNames[$Index]) { throw 'phase_report_invalid' }
+	}
+}
+
+function ConvertFrom-PhaseReportTimestamp($Value) {
+	if ($Value -isnot [string] -or $Value -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$') { throw 'phase_report_invalid' }
+	$Parsed = [DateTime]::MinValue
+	if (-not [DateTime]::TryParseExact($Value, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref] $Parsed) -or
+		$Parsed.Kind -ne [DateTimeKind]::Utc) { throw 'phase_report_invalid' }
+	return $Parsed
+}
+
+function Test-PhaseReportNumber($Value) {
+	if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [double] -and $Value -isnot [decimal]) { return $false }
+	$Number = [double] $Value
+	return -not [double]::IsNaN($Number) -and -not [double]::IsInfinity($Number) -and $Number -ge 0
+}
+
+function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [string] $ExpectedRevision, [string] $ExpectedRunnerName) {
+	# The child report is private input to the outer supervisor, not published
+	# evidence. Bound and validate its exact producer schema before any field can
+	# reach the final report. A nominal result is not trusted merely because it
+	# contains all expected check names.
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'phase_report_invalid' }
+	$Item = Get-Item -LiteralPath $Path
+	if ($Item.Length -le 0 -or $Item.Length -gt 1MB) { throw 'phase_report_invalid' }
+	try {
+		$Utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+		$Raw = [IO.File]::ReadAllText($Path, $Utf8)
+		Assert-UniqueJsonProperty $Raw 'phase_report_invalid'
+		$ConvertFromJson = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+		$Report = if ($ConvertFromJson.Parameters.ContainsKey('DateKind')) { $Raw | ConvertFrom-Json -DateKind String } else { $Raw | ConvertFrom-Json }
+		Assert-ExactPhaseReportObject $Report @(
+			'schemaVersion', 'mode', 'policy', 'revision', 'runnerName', 'startedUtc',
+			'finishedUtc', 'checks', 'summary', 'compileEvidence'
+		)
+		if ($Report.schemaVersion -isnot [int] -or $Report.schemaVersion -ne 1 -or
+			@('PackageClient', 'PackageServer', 'ValidateProvenance', 'SmokePhase') -cnotcontains $ExpectedMode -or
+			$Report.mode -isnot [string] -or $Report.mode -cne $ExpectedMode -or
+			$Report.policy -isnot [string] -or $Report.policy -cne 'clean-package-and-smoke' -or
+			$Report.revision -isnot [string] -or $Report.revision -cne $ExpectedRevision -or
+			$ExpectedRevision -cnotmatch '^[0-9a-fA-F]{40}$' -or $Report.checks -isnot [array]) { throw 'phase_report_invalid' }
+		$BoundRunnerName = if ($ExpectedRunnerName -match '^[^\\/:*?"<>|\x00-\x1f]{1,128}$') { $ExpectedRunnerName } else { $null }
+		if (($null -eq $BoundRunnerName -and $null -ne $Report.runnerName) -or
+			($null -ne $BoundRunnerName -and ($Report.runnerName -isnot [string] -or $Report.runnerName -cne $BoundRunnerName))) { throw 'phase_report_invalid' }
+		$StartedUtc = ConvertFrom-PhaseReportTimestamp $Report.startedUtc
+		$FinishedUtc = ConvertFrom-PhaseReportTimestamp $Report.finishedUtc
+		if ($FinishedUtc -lt $StartedUtc) { throw 'phase_report_invalid' }
+		if ($Report.checks.Count -lt 1 -or $Report.checks.Count -gt 128) { throw 'phase_report_invalid' }
+		$Counts = @{ total = $Report.checks.Count; passed = 0; failed = 0; skipped = 0; requiredFailed = 0 }
+		$Names = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+		$Statuses = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
+		foreach ($Check in $Report.checks) {
+			Assert-ExactPhaseReportObject $Check @('name', 'tier', 'status', 'durationSeconds', 'command', 'message')
+			if ($Check.name -isnot [string] -or $Check.name -cnotmatch '^[a-z0-9][a-z0-9-]{0,127}$' -or -not $Names.Add($Check.name) -or
+				$Check.tier -cne 'required' -or $Check.status -isnot [string] -or
+				@('passed', 'failed', 'skipped') -cnotcontains $Check.status -or -not (Test-PhaseReportNumber $Check.durationSeconds) -or
+				$Check.command -isnot [string] -or [string]::IsNullOrWhiteSpace($Check.command) -or $Check.command.Length -gt 256 -or
+				$Check.message -isnot [string] -or [string]::IsNullOrWhiteSpace($Check.message) -or $Check.message.Length -gt 8192) { throw 'phase_report_invalid' }
+			$Statuses.Add($Check.name, $Check.status)
+			$Counts[$Check.status]++
+		}
+		$Counts.requiredFailed = $Counts.failed
+		Assert-ExactPhaseReportObject $Report.summary @('total', 'passed', 'failed', 'skipped', 'requiredFailed')
+		foreach ($Name in $Counts.Keys) {
+			$Value = $Report.summary.$Name
+			if (($Value -isnot [int] -and $Value -isnot [long]) -or [long] $Value -ne $Counts[$Name]) { throw 'phase_report_invalid' }
+		}
+
+		if ($null -eq $Report.compileEvidence) {
+			# The child can fail before compile-identity resolution if an input that
+			# the parent already checked disappears before the supervised re-entry.
+			# A successful child can never omit this canonical evidence object.
+			if ($Counts.requiredFailed -eq 0) { throw 'phase_report_invalid' }
+		} else {
+			Assert-ExactPhaseReportObject $Report.compileEvidence @('schemaVersion', 'identity', 'builds')
+			if ($Report.compileEvidence.schemaVersion -isnot [int] -or $Report.compileEvidence.schemaVersion -ne 1 -or
+				$Report.compileEvidence.builds -isnot [array]) { throw 'phase_report_invalid' }
+			$Identity = $Report.compileEvidence.identity
+			Assert-ExactPhaseReportObject $Identity @(
+				'engineGitRevision', 'engineGitRevisionStatus', 'engineBuildVersionSha256', 'engineBuildVersionSha256Status',
+				'linuxToolchainCompilerSha256', 'linuxToolchainCompilerSha256Status', 'runnerName', 'durationSeconds'
+			)
+			if ($Identity.engineGitRevisionStatus -isnot [string] -or @('verified', 'dirty', 'unavailable') -cnotcontains $Identity.engineGitRevisionStatus -or
+				($Identity.engineGitRevisionStatus -ceq 'unavailable' -and $null -ne $Identity.engineGitRevision) -or
+				($Identity.engineGitRevisionStatus -cne 'unavailable' -and ($Identity.engineGitRevision -isnot [string] -or $Identity.engineGitRevision -cnotmatch '^[0-9a-f]{40}$'))) { throw 'phase_report_invalid' }
+			foreach ($HashEvidence in @(
+				[ordered]@{ hash = $Identity.engineBuildVersionSha256; status = $Identity.engineBuildVersionSha256Status },
+				[ordered]@{ hash = $Identity.linuxToolchainCompilerSha256; status = $Identity.linuxToolchainCompilerSha256Status }
+			)) {
+				$Hash = $HashEvidence.hash
+				$Status = $HashEvidence.status
+				if ($Status -isnot [string] -or @('verified', 'unavailable') -cnotcontains $Status -or
+					($Status -ceq 'unavailable' -and $null -ne $Hash) -or
+					($Status -ceq 'verified' -and ($Hash -isnot [string] -or $Hash -cnotmatch '^[0-9a-f]{64}$'))) { throw 'phase_report_invalid' }
+			}
+			if (($null -eq $BoundRunnerName -and $null -ne $Identity.runnerName) -or
+				($null -ne $BoundRunnerName -and ($Identity.runnerName -isnot [string] -or $Identity.runnerName -cne $BoundRunnerName)) -or
+				-not (Test-PhaseReportNumber $Identity.durationSeconds)) { throw 'phase_report_invalid' }
+
+			$Builds = @($Report.compileEvidence.builds)
+			$ExpectedBuildCheck = if ($ExpectedMode -eq 'PackageClient') { 'scheduled-client-package' } elseif ($ExpectedMode -eq 'PackageServer') { 'scheduled-server-package' } else { $null }
+			$ExpectedBuildTarget = if ($ExpectedMode -eq 'PackageClient') { 'AethelnOnlineClient' } elseif ($ExpectedMode -eq 'PackageServer') { 'AethelnOnlineServer' } else { $null }
+			$ExpectedBuildPlatform = if ($ExpectedMode -eq 'PackageClient') { 'Win64' } elseif ($ExpectedMode -eq 'PackageServer') { 'Linux' } else { $null }
+			if ($null -eq $ExpectedBuildCheck -and $Builds.Count -ne 0) { throw 'phase_report_invalid' }
+			if ($null -ne $ExpectedBuildCheck -and ($Builds.Count -gt 1 -or ($Counts.requiredFailed -eq 0 -and $Builds.Count -ne 1))) { throw 'phase_report_invalid' }
+			foreach ($Build in $Builds) {
+				Assert-ExactPhaseReportObject $Build @(
+					'check', 'target', 'platform', 'configuration', 'intermediateBuildDirectoryPresentBeforeRun',
+					'makefilePresentBeforeRun', 'outputState', 'lastObservedAction', 'observedTotalActions',
+					'actionCounterState', 'plannedActionCount', 'observedTargetNames', 'makefileObservation',
+					'makefileReason', 'makefileCreationCount', 'upToDateObserved', 'executorSummaryCount'
+				)
+				if ($Build.check -isnot [string] -or $Build.check -cne $ExpectedBuildCheck -or
+					$Build.target -isnot [string] -or $Build.target -cne $ExpectedBuildTarget -or
+					$Build.platform -isnot [string] -or $Build.platform -cne $ExpectedBuildPlatform -or
+					$Build.configuration -isnot [string] -or $Build.configuration -cne 'Development' -or
+					$Build.intermediateBuildDirectoryPresentBeforeRun -isnot [bool] -or $Build.makefilePresentBeforeRun -isnot [bool] -or
+					$Build.outputState -isnot [string] -or @('captured', 'unavailable') -cnotcontains $Build.outputState -or
+					$Build.actionCounterState -isnot [string] -or @('observed', 'not_observed') -cnotcontains $Build.actionCounterState -or
+					$Build.makefileObservation -isnot [string] -or @('created', 'not_observed') -cnotcontains $Build.makefileObservation -or
+					$Build.upToDateObserved -isnot [bool]) { throw 'phase_report_invalid' }
+				foreach ($IntegerField in @('makefileCreationCount', 'executorSummaryCount')) {
+					if (($Build.$IntegerField -isnot [int] -and $Build.$IntegerField -isnot [long]) -or [long] $Build.$IntegerField -lt 0) { throw 'phase_report_invalid' }
+				}
+				if ($Build.actionCounterState -ceq 'observed') {
+					if (($Build.lastObservedAction -isnot [int] -and $Build.lastObservedAction -isnot [long]) -or
+						($Build.observedTotalActions -isnot [int] -and $Build.observedTotalActions -isnot [long]) -or
+						[long] $Build.lastObservedAction -lt 1 -or [long] $Build.lastObservedAction -gt [long] $Build.observedTotalActions -or
+						[long] $Build.observedTotalActions -gt 10000000) { throw 'phase_report_invalid' }
+				} elseif ($null -ne $Build.lastObservedAction -or $null -ne $Build.observedTotalActions) { throw 'phase_report_invalid' }
+				if ($null -ne $Build.plannedActionCount -and (($Build.plannedActionCount -isnot [int] -and $Build.plannedActionCount -isnot [long]) -or
+					[long] $Build.plannedActionCount -lt 0 -or [long] $Build.plannedActionCount -gt 10000000)) { throw 'phase_report_invalid' }
+				if ($null -ne $Build.observedTargetNames -and ($Build.observedTargetNames -isnot [string] -or
+					$Build.observedTargetNames -cnotmatch '^(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other)(?:,(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other))*$')) { throw 'phase_report_invalid' }
+				if ($Build.makefileObservation -ceq 'created') {
+					if ($Build.makefileReason -isnot [string] -or $Build.makefileReason -cnotmatch '^[a-z0-9_]{1,64}$' -or [long] $Build.makefileCreationCount -lt 1) { throw 'phase_report_invalid' }
+				} elseif ($null -ne $Build.makefileReason -or [long] $Build.makefileCreationCount -ne 0) { throw 'phase_report_invalid' }
+				if (-not $Statuses.ContainsKey($Build.check)) { throw 'phase_report_invalid' }
+			}
+		}
+		if ($Counts.requiredFailed -eq 0) {
+			# A zero exit may be relayed only when the child reached every required
+			# terminal checkpoint for its phase. JSON and summary consistency alone
+			# cannot turn an empty or prematurely finalized report into success.
+			$RequiredSuccessChecks = switch ($ExpectedMode) {
+				'PackageClient' { @(
+					'runner-input-validation', 'ddc-cache-configuration', 'host-tools-configuration',
+					'handoff-validation', 'handoff-storage-accounting', 'repository-state-before-work',
+					'scheduled-client-package', 'repository-state-after-client-package',
+					'handoff-publish-client', 'repository-state-at-completion'
+				) }
+				'PackageServer' { @(
+					'runner-input-validation', 'ddc-cache-configuration', 'host-tools-configuration',
+					'handoff-validation', 'handoff-run-directory', 'repository-state-before-work',
+					'scheduled-server-package', 'repository-state-after-server-package',
+					'handoff-publish-server', 'repository-state-at-completion'
+				) }
+				'ValidateProvenance' { @(
+					'runner-input-validation', 'handoff-validation', 'handoff-run-directory',
+					'repository-state-before-work', 'handoff-consume-client', 'handoff-consume-server',
+					'registry-provenance-validation', 'repository-state-after-provenance-validation',
+					'handoff-publish-provenance', 'repository-state-at-completion'
+				) }
+				'SmokePhase' { @(
+					'runner-input-validation', 'handoff-validation', 'handoff-run-directory',
+					'repository-state-before-work', 'handoff-consume-client', 'handoff-consume-server',
+					'handoff-consume-provenance', 'packaged-build-smoke',
+					'handoff-milestone-completion', 'repository-state-at-completion'
+				) }
+				default { throw 'phase_report_invalid' }
+			}
+			if ($Counts.skipped -ne 0) { throw 'phase_report_invalid' }
+			foreach ($RequiredCheck in $RequiredSuccessChecks) {
+				if (-not $Statuses.ContainsKey($RequiredCheck) -or $Statuses[$RequiredCheck] -cne 'passed') { throw 'phase_report_invalid' }
+			}
+		}
+		return $Report
+	} catch { throw 'phase_report_invalid' }
+}
+
 function Invoke-PhaseSupervisor {
 	# Hard bound for the whole controlled gate interval: the parent owns the
 	# absolute deadline and the report, while the complete phase body - handoff
@@ -1348,6 +1588,17 @@ function Invoke-PhaseSupervisor {
 	# evidence; the parent stops and verifies the whole tree at
 	# PhaseTimeoutMinutes plus a bounded finalization grace, so no synchronous
 	# operation and no post-timeout finalization can outlive the bound.
+	$WatchdogRoot = Join-Path $ResolvedLogs ('phase-supervisor-' + [guid]::NewGuid().ToString('N'))
+	$ChildReportPath = Join-Path $WatchdogRoot 'child-report.json'
+	try {
+		$NonceBytes = New-Object byte[] 32
+		$Random = [Security.Cryptography.RandomNumberGenerator]::Create()
+		try { $Random.GetBytes($NonceBytes) } finally { $Random.Dispose() }
+		$SupervisorNonce = [BitConverter]::ToString($NonceBytes).Replace('-', '').ToLowerInvariant()
+		$SupervisorParentProcess = Get-Process -Id $PID -ErrorAction Stop
+		$SupervisorParentProcessId = $PID.ToString([Globalization.CultureInfo]::InvariantCulture)
+		$SupervisorParentStartTicks = $SupervisorParentProcess.StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)
+	} catch { throw 'phase_supervisor_auth_invalid' }
 	$ChildParameters = [ordered]@{
 		Mode = $Mode
 		RepositoryRoot = $ResolvedRepository
@@ -1362,17 +1613,36 @@ function Invoke-PhaseSupervisor {
 		HandoffRootCapBytes = [string] $HandoffRootCapBytes
 		HandoffStaleHours = [string] $HandoffStaleHours
 		PhaseFinalizeGraceSeconds = [string] $PhaseFinalizeGraceSeconds
+		PhaseSupervisorNonce = $SupervisorNonce
+		PhaseSupervisorParentProcessId = $SupervisorParentProcessId
+		PhaseSupervisorParentStartTicks = $SupervisorParentStartTicks
 	}
-	if ($ExplicitReportRequested) { $ChildParameters['ReportPath'] = $ResolvedReportPath }
+	$ChildParameters['ReportPath'] = $ChildReportPath
 	$BoundedGraceSeconds = [Math]::Min([Math]::Max($PhaseFinalizeGraceSeconds, 1), 600)
 	$HardDeadlineUtc = $Started.AddMinutes($PhaseTimeoutMinutes).AddSeconds($BoundedGraceSeconds)
 	$RemainingMinutes = ($HardDeadlineUtc - [DateTime]::UtcNow).TotalMinutes
 	if ($RemainingMinutes -le 0) { return [ordered]@{ timedOut = $true; exitCode = -1; output = @(); cleanupFailure = $null } }
-	[Environment]::SetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', '1', 'Process')
+	$AuthenticationEnvironment = [ordered]@{
+		AETHELN_PHASE_SUPERVISED = '1'
+		AETHELN_PHASE_SUPERVISOR_NONCE = $SupervisorNonce
+		AETHELN_PHASE_SUPERVISOR_PARENT_PROCESS_ID = $SupervisorParentProcessId
+		AETHELN_PHASE_SUPERVISOR_PARENT_START_TICKS = $SupervisorParentStartTicks
+	}
+	$PreviousAuthenticationEnvironment = @{}
+	foreach ($Name in $AuthenticationEnvironment.Keys) {
+		$PreviousAuthenticationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
+	}
 	try {
-		return Invoke-PhaseChildScript -InvocationText (ConvertTo-NamedInvocationText $PSCommandPath $ChildParameters) -TimeoutMinutes $RemainingMinutes -UseNativeExitCode $true -WatchdogRoot (Join-Path $ResolvedLogs 'supervisor-watchdog')
+		foreach ($Name in $AuthenticationEnvironment.Keys) {
+			[Environment]::SetEnvironmentVariable($Name, $AuthenticationEnvironment[$Name], 'Process')
+		}
+		$Result = Invoke-PhaseChildScript -InvocationText (ConvertTo-NamedInvocationText $PSCommandPath $ChildParameters) -TimeoutMinutes $RemainingMinutes -UseNativeExitCode $true -WatchdogRoot $WatchdogRoot
+		$Result['childReportPath'] = $ChildReportPath
+		return $Result
 	} finally {
-		[Environment]::SetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', $null, 'Process')
+		foreach ($Name in $AuthenticationEnvironment.Keys) {
+			[Environment]::SetEnvironmentVariable($Name, $PreviousAuthenticationEnvironment[$Name], 'Process')
+		}
 	}
 }
 
@@ -1539,9 +1809,31 @@ try {
 		$ManagedWorkspaceRegistrationSha256 -cnotmatch '^[0-9a-f]{64}$' -or
 		$Repository -cnotmatch $RepositoryPattern)) { throw 'managed_workspace_configuration_invalid' }
 	$ResolvedRepository = Resolve-RequiredDirectory $RepositoryRoot 'repository_root_invalid'
-	if ($ExplicitReportRequested) {
-		if ($ReportPath -notmatch '^[A-Za-z]:[\\/]' -or $ReportPath -match '^[\\/]{2}' -or $ReportPath.Substring(2).Contains(':')) { throw 'report_path_invalid' }
-		$CandidateReport = [IO.Path]::GetFullPath($ReportPath)
+	if ($HasPhaseSupervisorAuthenticationSignal) {
+		try {
+			if (-not $IsPhaseMode) { throw 'phase_supervisor_auth_invalid' }
+			Initialize-EngineGateJobType
+			$ActualParentProcessId = [Aetheln.EngineGateJob]::GetCurrentParentProcessId()
+			$ActualParentProcess = Get-Process -Id $ActualParentProcessId -ErrorAction Stop
+			$ActualParentStartTicks = $ActualParentProcess.StartTime.ToUniversalTime().Ticks
+			$IsAuthenticatedPhaseChild = Test-PhaseSupervisorAuthentication `
+				-Marker $PhaseSupervisorMarker `
+				-EnvironmentNonce $PhaseSupervisorEnvironmentNonce `
+				-EnvironmentParentProcessId $PhaseSupervisorEnvironmentParentProcessId `
+				-EnvironmentParentStartTicks $PhaseSupervisorEnvironmentParentStartTicks `
+				-ParameterNonce $PhaseSupervisorNonce `
+				-ParameterParentProcessId $PhaseSupervisorParentProcessId `
+				-ParameterParentStartTicks $PhaseSupervisorParentStartTicks `
+				-ActualParentProcessId $ActualParentProcessId `
+				-ActualParentStartTicks $ActualParentStartTicks
+			if (-not $IsAuthenticatedPhaseChild) { throw 'phase_supervisor_auth_invalid' }
+		} catch { $PhaseSupervisorAuthenticationInvalid = $true }
+	}
+	$IsPhaseSupervisorParent = $IsPhaseMode -and -not $IsAuthenticatedPhaseChild
+	if ($ExplicitReportRequested -or $IsPhaseSupervisorParent) {
+		$RequestedReport = if ($ExplicitReportRequested) { $ReportPath } else { Join-Path $ResolvedRepository 'TestResults\engine-runner-report.json' }
+		if ($RequestedReport -notmatch '^[A-Za-z]:[\\/]' -or $RequestedReport -match '^[\\/]{2}' -or $RequestedReport.Substring(2).Contains(':')) { throw 'report_path_invalid' }
+		$CandidateReport = [IO.Path]::GetFullPath($RequestedReport)
 		if (Test-Path -LiteralPath $CandidateReport) { throw 'report_path_exists' }
 		$Ancestor = Split-Path $CandidateReport
 		while ($Ancestor) {
@@ -1549,6 +1841,10 @@ try {
 			$Ancestor = Split-Path $Ancestor
 		}
 		$ResolvedReportPath = $CandidateReport
+	}
+	if ($PhaseSupervisorAuthenticationInvalid) {
+		Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-phase-supervisor-authentication' -Message 'phase_supervisor_auth_invalid'
+		throw 'phase_supervisor_auth_invalid'
 	}
 	if ($Mode -eq 'Compile') {
 		if ([double]::IsNaN($CompileTimeoutMinutes) -or [double]::IsInfinity($CompileTimeoutMinutes) -or $CompileTimeoutMinutes -le 0 -or $CompileTimeoutMinutes -gt 30) {
@@ -1715,19 +2011,41 @@ try {
 		if ($RunnerName -match $RunnerNamePattern) { $HostToolsArguments['RunnerName'] = $RunnerName }
 	}
 
-	if ($IsPhaseMode -and $PhaseTimeoutMinutes -gt 0 -and $PhaseTimeoutMinutes -le 1440 -and [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', 'Process') -ne '1') {
-		# Supervisor (parent) path: run the complete phase body in an owned
-		# kill-on-close child tree; on a normal child exit relay its captured
-		# output and exit code (the child already wrote the report), on hard
-		# expiry classify and let the finally block write the bounded report.
+	if ($IsPhaseMode -and $PhaseTimeoutMinutes -gt 0 -and $PhaseTimeoutMinutes -le 1440 -and -not $IsAuthenticatedPhaseChild) {
+		# Supervisor (parent) path: the child writes only a private bounded report.
+		# After the owned Job Object proves quiescence, this parent validates that
+		# report, attaches its own cleanup receipt, and create-only publishes the
+		# final evidence exactly once. Child exit can never imply descendant cleanup.
 		$SupervisorStarted = [DateTime]::UtcNow
 		$SupervisorResult = Invoke-PhaseSupervisor
-		if ($SupervisorResult.timedOut) {
-			$HardReason = if ([string]::IsNullOrWhiteSpace([string] $SupervisorResult.cleanupFailure)) { 'phase_timeout' } else { 'phase_cleanup_failed' }
+		$OuterCleanupVerified = $SupervisorResult.Contains('cleanupVerified') -and
+			$SupervisorResult.cleanupVerified -is [bool] -and $SupervisorResult.cleanupVerified -and
+			$SupervisorResult.Contains('cleanupFailure') -and [string]::IsNullOrWhiteSpace([string] $SupervisorResult.cleanupFailure)
+		$script:SupervisorReceipt = [ordered]@{
+			childExitCode = $SupervisorResult.exitCode
+			timedOut = [bool] $SupervisorResult.timedOut
+			cleanupVerified = $OuterCleanupVerified
+		}
+		if (-not $OuterCleanupVerified -or $SupervisorResult.timedOut) {
+			$HardReason = if ($OuterCleanupVerified) { 'phase_timeout' } else { 'phase_cleanup_failed' }
 			Add-Check -Name 'phase-hard-deadline' -Status 'failed' -CheckStarted $SupervisorStarted -Command 'supervise-phase-child-tree' -Message $HardReason
+			$SupervisedChildExited = $true
+			Write-RunnerReport
 			throw $HardReason
 		}
+		try {
+			$ChildReport = Read-PhaseSupervisorReport -Path ([string] $SupervisorResult.childReportPath) -ExpectedMode $Mode -ExpectedRevision $SourceRevision -ExpectedRunnerName $RunnerName
+			$ChildFailed = [long] $ChildReport.summary.requiredFailed -gt 0
+			if (($SupervisorResult.exitCode -eq 0 -and $ChildFailed) -or ($SupervisorResult.exitCode -ne 0 -and -not $ChildFailed)) { throw 'phase_report_invalid' }
+			$script:RelayedReport = $ChildReport
+		} catch {
+			Add-Check -Name 'phase-supervisor-report' -Status 'failed' -CheckStarted $SupervisorStarted -Command 'validate-private-phase-report' -Message 'phase_report_invalid'
+			$SupervisedChildExited = $true
+			Write-RunnerReport
+			throw 'phase_report_invalid'
+		}
 		$SupervisedChildExited = $true
+		Write-RunnerReport
 		foreach ($Line in @($SupervisorResult.output)) { Write-Output ([string] $Line) }
 		if ($SupervisorResult.exitCode -ne 0) { exit 1 }
 		exit 0
@@ -2007,9 +2325,9 @@ try {
 			Add-Check -Name 'managed-compile-registration' -Status 'failed' -CheckStarted $Started -Command 'close-registration-proof' -Message $FailureCode
 		}
 	}
-	# A supervised child that exited on its own already wrote the report;
-	# overwriting it here would replace rich per-check evidence with the
-	# parent's minimal view.
+	# A supervised parent publishes exactly once after validating private child
+	# evidence and proving owned-tree cleanup. Its explicit publication path sets
+	# this flag before control reaches the common finalizer.
 	if (-not $SupervisedChildExited) {
 		try { Write-RunnerReport } catch { $RequiredFailed = $true; $FailureCode = 'report_write_failed' }
 	}
