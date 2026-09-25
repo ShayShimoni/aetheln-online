@@ -306,9 +306,11 @@ function ConvertFrom-MarkdownLinks {
 			$Cursor++
 		}
 		if ($BracketDepth -ne 0) {
-			$null = $Output.Append($Text[$Index])
-			$Index++
-			continue
+			# No later bracket can close a nested link without also closing this
+			# opener. Preserve the malformed suffix literally and stop, avoiding a
+			# suffix rescan for every unmatched '['.
+			$null = $Output.Append($Text.Substring($Index))
+			break
 		}
 
 		$CloseIndex = $Cursor - 1
@@ -339,9 +341,8 @@ function ConvertFrom-MarkdownLinks {
 				$Cursor++
 			}
 			if ($ParenthesisDepth -ne 0 -or $Quote -ne [char]0 -or $InAngleDestination) {
-				$null = $Output.Append($Text[$Index])
-				$Index++
-				continue
+				$null = $Output.Append($Text.Substring($Index))
+				break
 			}
 			$EndIndex = $Cursor
 		}
@@ -353,9 +354,8 @@ function ConvertFrom-MarkdownLinks {
 				$ReferenceEnd++
 			}
 			if ($ReferenceEnd -ge $Text.Length) {
-				$null = $Output.Append($Text[$Index])
-				$Index++
-				continue
+				$null = $Output.Append($Text.Substring($Index))
+				break
 			}
 			$EndIndex = $ReferenceEnd + 1
 		}
@@ -402,8 +402,10 @@ function ConvertTo-VisibleCellText {
 	# literal, so an unrecognized spelling never matches a header.
 	param([Parameter(Mandatory)][AllowEmptyString()][string] $Cell)
 	$Text = [regex]::Replace($Cell, '<!--.*?-->', '')
-	$Text = ConvertFrom-MarkdownLinks -Text $Text
 	$Text = [regex]::Replace($Text, (Get-HtmlTagPattern), '')
+	# Remove valid tags first so brackets inside quoted attributes cannot stop
+	# the bounded Markdown-link scan before it reaches later visible labels.
+	$Text = ConvertFrom-MarkdownLinks -Text $Text
 	$Text = [System.Net.WebUtility]::HtmlDecode($Text)
 	$Text = [regex]::Replace($Text, '\\(.)', '$1')
 	$Text = [regex]::Replace($Text, '[*_~`]|\p{Cf}', '')
@@ -430,14 +432,18 @@ function Find-TableHeaderIndices {
 	$ThematicBreakPattern = '^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$'
 	$BlockStartPattern = '^ {0,3}(?:>|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|#{1,6}(?:[ \t]|$)|(?:-[ \t]*){3,}$|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$|`{3,}[^`]*$|~{3,}|<!--)'
 	$Containers = [System.Collections.Generic.List[object]]::new()
+	$NextContainerIdentity = 0
 	$InParagraph = $false
 	$FenceCharacter = $null
 	$FenceLength = 0
 	$InHtmlComment = $false
 	$PendingHeader = $null
 	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
+		$PreviousHeader = $PendingHeader
+		$PendingHeader = $null
 		$Rest = $Lines[$Index]
 		$Column = 0
+		$IsIndentedCodeCandidate = $false
 
 		# Continue the open containers in order: a blockquote needs its marker
 		# (plus one optional space); a list item needs its content column, or a
@@ -474,18 +480,6 @@ function Find-TableHeaderIndices {
 			}
 		}
 
-		# A GFM table exists only when its header is immediately followed by a
-		# compatible delimiter row. Delay recording a candidate until this line
-		# proves that grammar; pipe-delimited prose must not create a false table.
-		if ($null -ne $PendingHeader) {
-			if ($null -eq $FenceCharacter -and -not $InHtmlComment -and
-				((Test-MarkdownTableDelimiterRow -Row $Rest -ExpectedCellCount $PendingHeader.CellCount) -or
-				(Test-MarkdownTableDelimiterCandidate -Row $Rest))) {
-				$Indices.Add($PendingHeader.Index)
-			}
-			$PendingHeader = $null
-		}
-
 		if ($null -ne $FenceCharacter) {
 			$ClosingFencePattern = '^[ ]{0,3}' + [regex]::Escape([string]$FenceCharacter) + "{$FenceLength,}[ \t]*$"
 			if ($Rest -cmatch $ClosingFencePattern) {
@@ -499,7 +493,8 @@ function Find-TableHeaderIndices {
 			# Open new containers on the remaining text before classifying it.
 			while ((Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -lt 4) {
 				if ($Rest -cmatch $BlockquotePattern) {
-					$Containers.Add(@{ Kind = 'quote' })
+					$NextContainerIdentity++
+					$Containers.Add(@{ Kind = 'quote'; Identity = $NextContainerIdentity })
 					$Rest = $Rest.Substring($Matches[0].Length)
 					$Column += $Matches[0].Length
 					if ((Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -ge 1) {
@@ -516,7 +511,8 @@ function Find-TableHeaderIndices {
 					# Content begins after one to four spaces; an empty item or five
 					# or more spaces leave the remainder indented after a single space.
 					$Width = if ([string]::IsNullOrWhiteSpace($After) -or $Spacing.Columns -ge 5) { 1 } else { $Spacing.Columns }
-					$Containers.Add(@{ Kind = 'list'; Offset = $Marker.Length + $Width })
+					$NextContainerIdentity++
+					$Containers.Add(@{ Kind = 'list'; Offset = $Marker.Length + $Width; Identity = $NextContainerIdentity })
 					$Rest = if ([string]::IsNullOrWhiteSpace($After)) { '' } else { Remove-MarkdownIndent -Text $After -StartColumn ($Column + $Marker.Length) -Columns $Width }
 					$Column += $Marker.Length + $Width
 					$InParagraph = $false
@@ -529,7 +525,8 @@ function Find-TableHeaderIndices {
 				$InParagraph = $false
 				continue
 			}
-			if ((Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -ge 4) {
+			$IsIndentedCodeCandidate = (Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -ge 4
+			if ($IsIndentedCodeCandidate) {
 				# Four-column indentation is code unless it continues a paragraph.
 				if (-not $InParagraph) { continue }
 			}
@@ -588,6 +585,21 @@ function Find-TableHeaderIndices {
 			continue
 		}
 
+		# A GFM table exists only when its header is immediately followed by a
+		# compatible delimiter row in the same rendered container. Validate only
+		# after this line's container, lazy-continuation, indentation, fence, and
+		# comment classification is known; otherwise a delimiter in another block
+		# could incorrectly bless the prior paragraph as a table.
+		$ContainerSignature = (($Containers | ForEach-Object {
+			"$($_.Kind):$($_.Identity)"
+		}) -join '/')
+		if ($null -ne $PreviousHeader -and -not $Lazy -and -not $IsIndentedCodeCandidate -and
+			[string]::Equals($ContainerSignature, $PreviousHeader.ContainerSignature, [System.StringComparison]::Ordinal) -and
+			((Test-MarkdownTableDelimiterRow -Row $Rest -ExpectedCellCount $PreviousHeader.CellCount) -or
+			(Test-MarkdownTableDelimiterCandidate -Row $Rest))) {
+			$Indices.Add($PreviousHeader.Index)
+		}
+
 		# Paragraph or table text. The header is matched on the container-free
 		# remainder; callers still re-read the raw line, so a governance table
 		# written inside a container fails explicitly instead of being ignored.
@@ -601,7 +613,7 @@ function Find-TableHeaderIndices {
 		if (-not $IsHeader -and $RequiredColumns.Count -gt 0) {
 			$IsHeader = @($RequiredColumns | Where-Object { -not $VisibleCells.Contains($_) }).Count -eq 0
 		}
-		if ($IsHeader) { $PendingHeader = @{ Index = $Index; CellCount = $Cells.Count } }
+		if ($IsHeader) { $PendingHeader = @{ Index = $Index; CellCount = $Cells.Count; ContainerSignature = $ContainerSignature } }
 	}
 	@($Indices)
 }

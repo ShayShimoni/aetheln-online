@@ -248,6 +248,14 @@ function Test-CommentTagGrammar {
 			'harmless-code-in-blockquote'    = @{ Body = ">     $GovernanceHeaderForContainer`n>     $GovernanceDelimiterForContainer"; Count = 0 }
 			'harmless-comment-in-blockquote' = @{ Body = "> <!--`n> $GovernanceHeaderForContainer`n> $GovernanceDelimiterForContainer`n> -->"; Count = 0 }
 			'harmless-full-column-prose'     = @{ Body = "$GovernanceHeaderForContainer`nThis is prose, not a delimiter row."; Count = 0 }
+			'harmless-delimiter-enters-quote' = @{ Body = "$GovernanceHeaderForContainer`n> $GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-delimiter-leaves-quote' = @{ Body = "> $GovernanceHeaderForContainer`n$GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-delimiter-leaves-list'  = @{ Body = "- $GovernanceHeaderForContainer`n$GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-indented-delimiter'     = @{ Body = "$GovernanceHeaderForContainer`n    $GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-tabbed-delimiter'       = @{ Body = "$GovernanceHeaderForContainer`n`t$GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-sibling-list-items'     = @{ Body = "- $GovernanceHeaderForContainer`n- $GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-sibling-ordered-items'  = @{ Body = "1. $GovernanceHeaderForContainer`n2. $GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-sibling-nested-items'   = @{ Body = "> - $GovernanceHeaderForContainer`n> - $GovernanceDelimiterForContainer"; Count = 0 }
 		}
 		foreach ($CaseName in $ContainerCases.Keys) {
 			$Case = $ContainerCases[$CaseName]
@@ -266,7 +274,8 @@ function Test-CommentTagGrammar {
 	foreach ($LinkHeader in @(
 		'| [Path](https://example.test/a(b)) | [Provenance/custody](https://example.test/a(b)) | Authorship | Permission | License | Product approval |',
 		'| [Path](https://example.test/a\(b\) "title") | [Provenance/custody](https://example.test/a\(b\) ''title'') | Authorship | Permission | License | Product approval |',
-		'| [Path](<https://example.test/a(b>) | [Provenance/custody](<https://example.test/a(b>) | Authorship | Permission | License | Product approval |'
+		'| [Path](<https://example.test/a(b>) | [Provenance/custody](<https://example.test/a(b>) | Authorship | Permission | License | Product approval |',
+		'| <span title="[">[Path](#x)</span> | <span title="[">[Provenance/custody](#x)</span> | Authorship | Permission | License | Product approval |'
 	)) {
 		$Indices = @(Find-TableHeaderIndices -Lines @($LinkHeader, $GovernanceDelimiter) -FirstColumn 'Path' -RequiredColumns $GovernanceColumns)
 		if ($Indices.Count -ne 1) { $GrammarFailures.Add("balanced-link-header: expected 1 visible header; found $($Indices.Count).") }
@@ -277,6 +286,12 @@ function Test-CommentTagGrammar {
 	)
 	$PipeProseIndices = @(Find-TableHeaderIndices -Lines $PipeProse -FirstColumn 'Path' -RequiredColumns $GovernanceColumns)
 	if ($PipeProseIndices.Count -ne 0) { $GrammarFailures.Add("pipe-prose: expected 0 rendered table headers; found $($PipeProseIndices.Count).") }
+	$MalformedBrackets = '[' * 16384
+	$BracketStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+	$MalformedBracketResult = ConvertFrom-MarkdownLinks -Text $MalformedBrackets
+	$BracketStopwatch.Stop()
+	if ($MalformedBracketResult -cne $MalformedBrackets) { $GrammarFailures.Add('malformed-bracket-budget: malformed text was not preserved literally.') }
+	if ($BracketStopwatch.ElapsedMilliseconds -ge 3000) { $GrammarFailures.Add("malformed-bracket-budget: linear scan exceeded 3000 ms ($($BracketStopwatch.ElapsedMilliseconds) ms).") }
 	Write-Host "HTML tag grammar totals: $GrammarPasses passed, $($GrammarFailures.Count) failed."
 	if ($GrammarFailures.Count -gt 0) { throw "HTML tag grammar failures:`n$($GrammarFailures -join "`n")" }
 }
