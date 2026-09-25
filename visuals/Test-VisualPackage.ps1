@@ -248,77 +248,360 @@ function Split-MarkdownTableRow {
 	@($Cells)
 }
 
-function Find-TableHeaderIndices {
-	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $Lines, [Parameter(Mandatory)][string] $FirstColumn)
-	$Indices = [System.Collections.Generic.List[int]]::new()
+function Measure-MarkdownIndent {
+	# Leading whitespace of $Text in columns, measured from the absolute
+	# $StartColumn with CommonMark four-column tab stops.
+	param([Parameter(Mandatory)][AllowEmptyString()][string] $Text, [Parameter(Mandatory)][int] $StartColumn)
+	$Column = $StartColumn
+	$Chars = 0
+	foreach ($Character in $Text.ToCharArray()) {
+		if ($Character -eq ' ') { $Column++ }
+		elseif ($Character -eq "`t") { $Column += 4 - ($Column % 4) }
+		else { break }
+		$Chars++
+	}
+	@{ Columns = $Column - $StartColumn; Chars = $Chars }
+}
+
+function Remove-MarkdownIndent {
+	# Strip exactly $Columns of leading whitespace. A tab that overshoots is
+	# re-expanded as spaces so the remainder keeps its rendered indentation.
+	param([Parameter(Mandatory)][AllowEmptyString()][string] $Text, [Parameter(Mandatory)][int] $StartColumn, [Parameter(Mandatory)][int] $Columns)
+	$Indent = Measure-MarkdownIndent -Text $Text -StartColumn $StartColumn
+	(' ' * ($Indent.Columns - $Columns)) + $Text.Substring($Indent.Chars)
+}
+
+function Get-HtmlTagPattern {
 	# Single-line subset of CommonMark's raw HTML tag grammar. Quotes are
 	# values only after '='; closing tags cannot carry attributes or a slash.
 	$TagNamePattern = '[A-Za-z][A-Za-z0-9-]*'
 	$AttributeNamePattern = '[A-Za-z_:][A-Za-z0-9_.:-]*'
 	$AttributeValuePattern = '(?:"[^"\r\n]*"|''[^''\r\n]*''|[^ \t\r\n"''=<>`]+)'
 	$AttributePattern = '[ \t]+' + $AttributeNamePattern + '(?:[ \t]*=[ \t]*' + $AttributeValuePattern + ')?'
-	$HtmlTagPattern = '^(?:<' + $TagNamePattern + '(?:' + $AttributePattern + ')*[ \t]*/?>|</' + $TagNamePattern + '[ \t]*>)'
+	'(?:<' + $TagNamePattern + '(?:' + $AttributePattern + ')*[ \t]*/?>|</' + $TagNamePattern + '[ \t]*>)'
+}
+
+function ConvertFrom-MarkdownLinks {
+	# Replace bounded inline, reference, shortcut-link, and image syntax with
+	# the visible label text. Inline destinations are scanned instead of matched
+	# with a flat regex so balanced or escaped parentheses and quoted titles do
+	# not conceal a rendered governance header.
+	param([Parameter(Mandatory)][AllowEmptyString()][string] $Text)
+	$Output = [System.Text.StringBuilder]::new()
+	$Index = 0
+	while ($Index -lt $Text.Length) {
+		$OpenIndex = if ($Text[$Index] -eq '[') { $Index } elseif ($Text[$Index] -eq '!' -and $Index + 1 -lt $Text.Length -and $Text[$Index + 1] -eq '[') { $Index + 1 } else { -1 }
+		if ($OpenIndex -lt 0) {
+			$null = $Output.Append($Text[$Index])
+			$Index++
+			continue
+		}
+
+		$Cursor = $OpenIndex + 1
+		$BracketDepth = 1
+		while ($Cursor -lt $Text.Length -and $BracketDepth -gt 0) {
+			if ($Text[$Cursor] -eq '\\' -and $Cursor + 1 -lt $Text.Length) { $Cursor += 2; continue }
+			if ($Text[$Cursor] -eq '[') { $BracketDepth++ }
+			elseif ($Text[$Cursor] -eq ']') { $BracketDepth-- }
+			$Cursor++
+		}
+		if ($BracketDepth -ne 0) {
+			$null = $Output.Append($Text[$Index])
+			$Index++
+			continue
+		}
+
+		$CloseIndex = $Cursor - 1
+		$EndIndex = $Cursor
+		if ($Cursor -lt $Text.Length -and $Text[$Cursor] -eq '(') {
+			$ParenthesisDepth = 1
+			$Quote = [char]0
+			$InAngleDestination = $false
+			$SeenDestinationContent = $false
+			$Cursor++
+			while ($Cursor -lt $Text.Length -and $ParenthesisDepth -gt 0) {
+				$Character = $Text[$Cursor]
+				if ($Character -eq '\\' -and $Cursor + 1 -lt $Text.Length) { $Cursor += 2; continue }
+				if ($InAngleDestination) {
+					if ($Character -eq '>') { $InAngleDestination = $false }
+					$Cursor++
+					continue
+				}
+				if ($Quote -ne [char]0) {
+					if ($Character -eq $Quote) { $Quote = [char]0 }
+				}
+				elseif (-not $SeenDestinationContent -and [char]::IsWhiteSpace($Character)) { }
+				elseif (-not $SeenDestinationContent -and $Character -eq '<') { $SeenDestinationContent = $true; $InAngleDestination = $true }
+				elseif ($Character -eq '"' -or $Character -eq "'") { $SeenDestinationContent = $true; $Quote = $Character }
+				elseif ($Character -eq '(') { $ParenthesisDepth++ }
+				elseif ($Character -eq ')') { $ParenthesisDepth-- }
+				else { $SeenDestinationContent = $true }
+				$Cursor++
+			}
+			if ($ParenthesisDepth -ne 0 -or $Quote -ne [char]0 -or $InAngleDestination) {
+				$null = $Output.Append($Text[$Index])
+				$Index++
+				continue
+			}
+			$EndIndex = $Cursor
+		}
+		elseif ($Cursor -lt $Text.Length -and $Text[$Cursor] -eq '[') {
+			$ReferenceEnd = $Cursor + 1
+			while ($ReferenceEnd -lt $Text.Length) {
+				if ($Text[$ReferenceEnd] -eq '\\' -and $ReferenceEnd + 1 -lt $Text.Length) { $ReferenceEnd += 2; continue }
+				if ($Text[$ReferenceEnd] -eq ']') { break }
+				$ReferenceEnd++
+			}
+			if ($ReferenceEnd -ge $Text.Length) {
+				$null = $Output.Append($Text[$Index])
+				$Index++
+				continue
+			}
+			$EndIndex = $ReferenceEnd + 1
+		}
+
+		$Label = $Text.Substring($OpenIndex + 1, $CloseIndex - $OpenIndex - 1)
+		$null = $Output.Append($Label)
+		$Index = $EndIndex
+	}
+	$Output.ToString()
+}
+
+function Test-MarkdownTableDelimiterRow {
+	param([Parameter(Mandatory)][AllowEmptyString()][string] $Row, [Parameter(Mandatory)][int] $ExpectedCellCount)
+	if ($Row -notmatch '\|') { return $false }
+	$Cells = @(Split-MarkdownTableRow -Row $Row.TrimStart())
+	if ($Cells.Count -ne $ExpectedCellCount) { return $false }
+	foreach ($Cell in $Cells) {
+		if ($Cell -cnotmatch '^:?-{3,}:?$') { return $false }
+	}
+	$true
+}
+
+function Test-MarkdownTableDelimiterCandidate {
+	# Keep malformed delimiter-shaped rows attached to their header so the
+	# caller can emit its precise cell-count/alignment diagnostic. Ordinary
+	# pipe prose is not delimiter-shaped and therefore cannot create a header.
+	param([Parameter(Mandatory)][AllowEmptyString()][string] $Row)
+	if ($Row -notmatch '\|') { return $false }
+	$Cells = @(Split-MarkdownTableRow -Row $Row.TrimStart())
+	if ($Cells.Count -lt 1) { return $false }
+	foreach ($Cell in $Cells) {
+		if ($Cell -cnotmatch '^:?-*:?$') { return $false }
+	}
+	$true
+}
+
+function ConvertTo-VisibleCellText {
+	# Bounded approximation of the text GitHub shows for one table cell, used
+	# only to recognize governance headers. Supported grammar: inline HTML
+	# comments; inline, reference, and shortcut links or images (their text);
+	# single-line HTML tags; character entities; emphasis, strikethrough, and
+	# code delimiters; backslash escapes; zero-width format characters. This is
+	# not a Markdown or HTML renderer: anything outside this grammar stays
+	# literal, so an unrecognized spelling never matches a header.
+	param([Parameter(Mandatory)][AllowEmptyString()][string] $Cell)
+	$Text = [regex]::Replace($Cell, '<!--.*?-->', '')
+	$Text = ConvertFrom-MarkdownLinks -Text $Text
+	$Text = [regex]::Replace($Text, (Get-HtmlTagPattern), '')
+	$Text = [System.Net.WebUtility]::HtmlDecode($Text)
+	$Text = [regex]::Replace($Text, '\\(.)', '$1')
+	$Text = [regex]::Replace($Text, '[*_~`]|\p{Cf}', '')
+	([regex]::Replace($Text, '\s+', ' ')).Trim()
+}
+
+function Find-TableHeaderIndices {
+	# Returns the indices of rows that GitHub renders as a governance header:
+	# the identifying cell reads as $FirstColumn, or the row carries every
+	# $RequiredColumns name whatever its identifying cell says. Callers require
+	# exactly one such row and then check the raw row for the canonical header,
+	# so a formatted, renamed, or duplicated governance table fails explicitly.
+	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $Lines, [Parameter(Mandatory)][string] $FirstColumn, [string[]] $RequiredColumns = @())
+	$Indices = [System.Collections.Generic.List[int]]::new()
+	$HtmlTagPattern = '^' + (Get-HtmlTagPattern)
+	# Blockquotes and list items are CommonMark containers: GitHub renders a
+	# table written inside them, so their markers are stripped before the row is
+	# inspected. Only paragraph text may continue a container lazily; a blank
+	# line, heading, thematic break, fence, comment block, or new container ends
+	# the paragraph, and indented code never interrupts one.
+	$BlockquotePattern = '^ {0,3}>'
+	$ListMarkerPattern = '^ {0,3}(?:[-+*]|\d{1,9}[.)])(?=[ \t]|$)'
+	$HeadingPattern = '^ {0,3}#{1,6}(?:[ \t]|$)'
+	$ThematicBreakPattern = '^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$'
+	$BlockStartPattern = '^ {0,3}(?:>|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|#{1,6}(?:[ \t]|$)|(?:-[ \t]*){3,}$|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$|`{3,}[^`]*$|~{3,}|<!--)'
+	$Containers = [System.Collections.Generic.List[object]]::new()
+	$InParagraph = $false
 	$FenceCharacter = $null
 	$FenceLength = 0
 	$InHtmlComment = $false
+	$PendingHeader = $null
 	for ($Index = 0; $Index -lt $Lines.Count; $Index++) {
-		$Line = $Lines[$Index]
+		$Rest = $Lines[$Index]
+		$Column = 0
+
+		# Continue the open containers in order: a blockquote needs its marker
+		# (plus one optional space); a list item needs its content column, or a
+		# blank line.
+		$Matched = 0
+		foreach ($Container in $Containers) {
+			if ($Container.Kind -eq 'quote') {
+				if (-not ($Rest -cmatch $BlockquotePattern)) { break }
+				$Rest = $Rest.Substring($Matches[0].Length)
+				$Column += $Matches[0].Length
+				if ((Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -ge 1) {
+					$Rest = Remove-MarkdownIndent -Text $Rest -StartColumn $Column -Columns 1
+					$Column++
+				}
+			}
+			elseif (-not [string]::IsNullOrWhiteSpace($Rest)) {
+				if ((Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -lt $Container.Offset) { break }
+				$Rest = Remove-MarkdownIndent -Text $Rest -StartColumn $Column -Columns $Container.Offset
+				$Column += $Container.Offset
+			}
+			$Matched++
+		}
+		$Lazy = $false
+		if ($Matched -lt $Containers.Count) {
+			$Lazy = $InParagraph -and -not [string]::IsNullOrWhiteSpace($Rest) -and $Rest -cnotmatch $BlockStartPattern
+			if (-not $Lazy) {
+				# Unmatched containers close, taking any fence or comment block
+				# they contain with them; the line is then read at the outer level.
+				$Containers.RemoveRange($Matched, $Containers.Count - $Matched)
+				$InParagraph = $false
+				$FenceCharacter = $null
+				$FenceLength = 0
+				$InHtmlComment = $false
+			}
+		}
+
+		# A GFM table exists only when its header is immediately followed by a
+		# compatible delimiter row. Delay recording a candidate until this line
+		# proves that grammar; pipe-delimited prose must not create a false table.
+		if ($null -ne $PendingHeader) {
+			if ($null -eq $FenceCharacter -and -not $InHtmlComment -and
+				((Test-MarkdownTableDelimiterRow -Row $Rest -ExpectedCellCount $PendingHeader.CellCount) -or
+				(Test-MarkdownTableDelimiterCandidate -Row $Rest))) {
+				$Indices.Add($PendingHeader.Index)
+			}
+			$PendingHeader = $null
+		}
+
 		if ($null -ne $FenceCharacter) {
 			$ClosingFencePattern = '^[ ]{0,3}' + [regex]::Escape([string]$FenceCharacter) + "{$FenceLength,}[ \t]*$"
-			if ($Line -cmatch $ClosingFencePattern) {
+			if ($Rest -cmatch $ClosingFencePattern) {
 				$FenceCharacter = $null
 				$FenceLength = 0
 			}
 			continue
 		}
 
+		if (-not $InHtmlComment -and -not $Lazy) {
+			# Open new containers on the remaining text before classifying it.
+			while ((Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -lt 4) {
+				if ($Rest -cmatch $BlockquotePattern) {
+					$Containers.Add(@{ Kind = 'quote' })
+					$Rest = $Rest.Substring($Matches[0].Length)
+					$Column += $Matches[0].Length
+					if ((Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -ge 1) {
+						$Rest = Remove-MarkdownIndent -Text $Rest -StartColumn $Column -Columns 1
+						$Column++
+					}
+					$InParagraph = $false
+					continue
+				}
+				if ($Rest -cmatch $ListMarkerPattern) {
+					$Marker = $Matches[0]
+					$After = $Rest.Substring($Marker.Length)
+					$Spacing = Measure-MarkdownIndent -Text $After -StartColumn ($Column + $Marker.Length)
+					# Content begins after one to four spaces; an empty item or five
+					# or more spaces leave the remainder indented after a single space.
+					$Width = if ([string]::IsNullOrWhiteSpace($After) -or $Spacing.Columns -ge 5) { 1 } else { $Spacing.Columns }
+					$Containers.Add(@{ Kind = 'list'; Offset = $Marker.Length + $Width })
+					$Rest = if ([string]::IsNullOrWhiteSpace($After)) { '' } else { Remove-MarkdownIndent -Text $After -StartColumn ($Column + $Marker.Length) -Columns $Width }
+					$Column += $Marker.Length + $Width
+					$InParagraph = $false
+					continue
+				}
+				break
+			}
+
+			if ([string]::IsNullOrWhiteSpace($Rest)) {
+				$InParagraph = $false
+				continue
+			}
+			if ((Measure-MarkdownIndent -Text $Rest -StartColumn $Column).Columns -ge 4) {
+				# Four-column indentation is code unless it continues a paragraph.
+				if (-not $InParagraph) { continue }
+			}
+			else {
+				if ($Rest -cmatch $HeadingPattern -or $Rest -cmatch $ThematicBreakPattern) {
+					$InParagraph = $false
+					continue
+				}
+				$OpeningFence = [regex]::Match($Rest, '^[ ]{0,3}(?<Fence>`{3,})[^`]*$')
+				if (-not $OpeningFence.Success) {
+					$OpeningFence = [regex]::Match($Rest, '^[ ]{0,3}(?<Fence>~{3,}).*$')
+				}
+				if ($OpeningFence.Success) {
+					$Fence = $OpeningFence.Groups['Fence'].Value
+					$FenceCharacter = $Fence[0]
+					$FenceLength = $Fence.Length
+					$InParagraph = $false
+					continue
+				}
+			}
+		}
+
 		# CommonMark comment blocks begin before column four and include the
 		# closing line (or all remaining lines when unclosed). Fences/indentation
 		# inside comments are literal, just as comment markers inside code are.
-		if ($InHtmlComment -or $Line -cmatch '^[ ]{0,3}<!--') {
+		if ($InHtmlComment -or $Rest -cmatch '^[ ]{0,3}<!--') {
 			# A closing delimiter may be followed by another comment on this
 			# same raw HTML line. Track each transition, including on continued
 			# comments' closing lines; openers inside an open comment are literal.
+			# The closer may reuse the opener's dashes (`<!-->`, `<!--->`), so the
+			# search for `-->` resumes right after `<!`.
 			$CommentOffset = 0
-			while ($CommentOffset -lt $Line.Length) {
+			while ($CommentOffset -lt $Rest.Length) {
 				$Delimiter = if ($InHtmlComment) { '-->' } else { '<' }
-				$DelimiterIndex = $Line.IndexOf($Delimiter, $CommentOffset, [System.StringComparison]::Ordinal)
+				$DelimiterIndex = $Rest.IndexOf($Delimiter, $CommentOffset, [System.StringComparison]::Ordinal)
 				if ($DelimiterIndex -lt 0) { break }
 				if ($InHtmlComment) {
 					$InHtmlComment = $false
 					$CommentOffset = $DelimiterIndex + 3
 				}
-				elseif ($Line.Substring($DelimiterIndex).StartsWith('<!--', [System.StringComparison]::Ordinal)) {
+				elseif ($Rest.Substring($DelimiterIndex).StartsWith('<!--', [System.StringComparison]::Ordinal)) {
 					$InHtmlComment = $true
-					$CommentOffset = $DelimiterIndex + 4
+					$CommentOffset = $DelimiterIndex + 2
 				}
 				else {
 					# Skip complete tags as lexical units: comment markers inside
 					# single/double-quoted attributes cannot open a comment. This
 					# bounded scanner rejects other trailing HTML constructs,
 					# including multiline/unterminated tags, rather than guessing.
-					$Tag = [regex]::Match($Line.Substring($DelimiterIndex), $HtmlTagPattern)
+					$Tag = [regex]::Match($Rest.Substring($DelimiterIndex), $HtmlTagPattern)
 					Assert-Condition $Tag.Success "Unsupported trailing HTML construct after a comment on line $($Index + 1); use complete single-line tags or move the construct outside the comment-closing line."
 					$CommentOffset = $DelimiterIndex + $Tag.Length
 				}
 			}
+			$InParagraph = $false
 			continue
 		}
 
-		$OpeningFence = [regex]::Match($Line, '^[ ]{0,3}(?<Fence>`{3,})[^`]*$')
-		if (-not $OpeningFence.Success) {
-			$OpeningFence = [regex]::Match($Line, '^[ ]{0,3}(?<Fence>~{3,}).*$')
+		# Paragraph or table text. The header is matched on the container-free
+		# remainder; callers still re-read the raw line, so a governance table
+		# written inside a container fails explicitly instead of being ignored.
+		$InParagraph = $true
+		if ($Rest -notmatch '\|') { continue }
+		$Cells = @(Split-MarkdownTableRow -Row $Rest.TrimStart())
+		if ($Cells.Count -lt 2) { continue }
+		$VisibleCells = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+		foreach ($Cell in $Cells) { $null = $VisibleCells.Add((ConvertTo-VisibleCellText -Cell $Cell)) }
+		$IsHeader = [string]::Equals((ConvertTo-VisibleCellText -Cell $Cells[0]), $FirstColumn, [System.StringComparison]::Ordinal)
+		if (-not $IsHeader -and $RequiredColumns.Count -gt 0) {
+			$IsHeader = @($RequiredColumns | Where-Object { -not $VisibleCells.Contains($_) }).Count -eq 0
 		}
-		if ($OpeningFence.Success) {
-			$Fence = $OpeningFence.Groups['Fence'].Value
-			$FenceCharacter = $Fence[0]
-			$FenceLength = $Fence.Length
-			continue
-		}
-
-		if ((Test-MarkdownIndentedCodeLine -Line $Line) -or $Line -notmatch '\|') { continue }
-		$Cells = @(Split-MarkdownTableRow -Row $Line)
-		if ($Cells.Count -ge 2 -and [string]::Equals($Cells[0], $FirstColumn, [System.StringComparison]::Ordinal)) { $Indices.Add($Index) }
+		if ($IsHeader) { $PendingHeader = @{ Index = $Index; CellCount = $Cells.Count } }
 	}
 	@($Indices)
 }
@@ -568,7 +851,7 @@ foreach ($Required in @(
 # another.
 $ProvenanceLines = @($Provenance -split "`r?`n")
 $RegisterTable = 'Per-asset governance table in asset-provenance.md'
-$RegisterHeaderIndices = @(Find-TableHeaderIndices -Lines $ProvenanceLines -FirstColumn 'Path')
+$RegisterHeaderIndices = @(Find-TableHeaderIndices -Lines $ProvenanceLines -FirstColumn 'Path' -RequiredColumns $GovernanceFields)
 Assert-Condition ($RegisterHeaderIndices.Count -eq 1) "$RegisterTable must declare exactly one applicable header; found $($RegisterHeaderIndices.Count). Expected one header row starting with '| Path |'."
 $RegisterHeaderIndex = $RegisterHeaderIndices[0]
 
@@ -701,7 +984,7 @@ if ($HasIssue95Report) {
 	# governance state independently for every reviewed asset.
 	$ReportLines = @($Issue95Report -split "`r?`n")
 	$ReportTable = 'Per-asset classification table in issue-95-opening-screen-commonui-validation.md'
-	$ReportHeaderIndices = @(Find-TableHeaderIndices -Lines $ReportLines -FirstColumn 'Reviewed asset')
+	$ReportHeaderIndices = @(Find-TableHeaderIndices -Lines $ReportLines -FirstColumn 'Reviewed asset' -RequiredColumns $GovernanceFields)
 	Assert-Condition ($ReportHeaderIndices.Count -eq 1) "$ReportTable must declare exactly one applicable header; found $($ReportHeaderIndices.Count). Expected one header row starting with '| Reviewed asset |'."
 	$ReportHeaderIndex = $ReportHeaderIndices[0]
 

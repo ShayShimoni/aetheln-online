@@ -15,16 +15,15 @@ come from `docs/game-design-bible.md`, `docs/playable-peoples.md`, and
 listed below. Recommendations are proposed implementation contracts, not proof
 of Unreal behavior.
 
-The cumulative Issue #95 delivery history contains six governance/report paths:
-the repository README, visual-package validator, provenance register, this
-report, package manifest, and validator tests. The current bounded corrective
-wave permits four paths: the validator, validator tests, this report, and the
-manifest. This Package B artifact replaces only this report; Package A owns the
-validator and tests, and a later dependent Package C will bind the final report
-bytes in the manifest. These narrower package boundaries do not redefine the
-cumulative six-path ticket scope. A five-path comparison that includes the
-provenance register describes a different comparison boundary and must not be
-reported as the four-path corrective wave or this one-file package.
+Issue #95 governance and report records live in six repository paths: the
+visual-package README, the validator, the provenance register, this report, the
+package manifest, and the validator regression tests. This report is one of
+those paths and is itself a manifested asset. Its manifest record binds the
+exact committed bytes of this file, so every wording change here is accompanied
+by a restamp of that single record's SHA-256 and byte length; no other manifest
+record, count, or metadata changes with it. The validator and its regression
+tests verify the report's structure, its governance records, and their agreement
+with the provenance register and manifest on every run.
 
 Sources reviewed:
 
@@ -311,12 +310,10 @@ No mapping grants import or runtime approval.
       product approval remains Not approved. Provenance/custody is known and
       does not lift any of these blocks.
 - [ ] Visual package, regression, formatting, Markdown-link, full CI, and
-      `git diff --check` checks pass after all sequential packages are applied.
-- [ ] Cumulative final ticket scope contains only the six Issue #95
-      governance/report paths, the current corrective wave remains bounded to
-      its four allowed paths, this Package B replacement contains only this
-      report, and the manifest remains non-canonical with exact hashes, byte
-      lengths, and counts after the dependent package binds the final bytes.
+      `git diff --check` checks pass for the committed report bytes.
+- [ ] Issue #95 changes remain within the six governance/report paths, and the
+      manifest remains non-canonical with an exact SHA-256, byte length, and
+      counts for the committed report bytes.
 
 ## Blockers and unresolved TBD decisions
 

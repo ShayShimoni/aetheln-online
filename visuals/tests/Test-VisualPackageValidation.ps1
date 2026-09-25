@@ -172,7 +172,7 @@ function Test-CommentTagGrammar {
 	$ParseErrors = $null
 	$ValidatorAst = [System.Management.Automation.Language.Parser]::ParseFile($Validator, [ref] $ParseTokens, [ref] $ParseErrors)
 	if ($ParseErrors.Count -gt 0) { throw ($ParseErrors | Out-String) }
-	foreach ($FunctionName in @('Assert-Condition', 'Test-MarkdownIndentedCodeLine', 'Split-MarkdownTableRow', 'Find-TableHeaderIndices')) {
+	foreach ($FunctionName in @('Assert-Condition', 'Test-MarkdownIndentedCodeLine', 'Split-MarkdownTableRow', 'Measure-MarkdownIndent', 'Remove-MarkdownIndent', 'Get-HtmlTagPattern', 'ConvertFrom-MarkdownLinks', 'Test-MarkdownTableDelimiterRow', 'Test-MarkdownTableDelimiterCandidate', 'ConvertTo-VisibleCellText', 'Find-TableHeaderIndices')) {
 		$Definitions = @($ValidatorAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -ceq $FunctionName }, $true))
 		if ($Definitions.Count -ne 1) { throw "Expected one production function: $FunctionName" }
 		. ([scriptblock]::Create($Definitions[0].Extent.Text))
@@ -200,6 +200,7 @@ function Test-CommentTagGrammar {
 	)
 	foreach ($FirstColumn in @('Path', 'Reviewed asset')) {
 		$Header = "| $FirstColumn | Other |"
+		$Delimiter = '| --- | --- |'
 		foreach ($Continued in @($false, $true)) {
 			$Prefix = if ($Continued) { "<!-- note`n--> " } else { '<!-- note --> ' }
 			for ($CaseIndex = 0; $CaseIndex -lt $InvalidTags.Count; $CaseIndex++) {
@@ -216,11 +217,11 @@ function Test-CommentTagGrammar {
 				foreach ($Suffix in @('', ' <!-- real -->', ' <!-- real')) {
 					$Name = "$FirstColumn/valid-$CaseIndex/continued-$Continued/suffix-$Suffix"
 					try {
-						$Body = $Prefix + $ValidTags[$CaseIndex] + $Suffix + "`n`n$Header"
+						$Body = $Prefix + $ValidTags[$CaseIndex] + $Suffix + "`n`n$Header`n$Delimiter"
 						$Expected = if ($Suffix -ceq ' <!-- real') { 0 } else { 1 }
 						$Indices = @(Find-TableHeaderIndices -Lines @($Body -split "`n") -FirstColumn $FirstColumn)
 						if ($Indices.Count -ne $Expected) { throw "Expected $Expected visible headers; found $($Indices.Count)." }
-						$DuplicateIndices = @(Find-TableHeaderIndices -Lines @(("$Header`n`n" + $Body) -split "`n") -FirstColumn $FirstColumn)
+						$DuplicateIndices = @(Find-TableHeaderIndices -Lines @(("$Header`n$Delimiter`n`n" + $Body) -split "`n") -FirstColumn $FirstColumn)
 						if ($DuplicateIndices.Count -ne ($Expected + 1)) { throw "Expected $($Expected + 1) headers including the original; found $($DuplicateIndices.Count)." }
 						$GrammarPasses++
 						Write-Host "HTML tag grammar PASS: $Name"
@@ -229,7 +230,53 @@ function Test-CommentTagGrammar {
 				}
 			}
 		}
+
+		$GovernanceColumnsForContainer = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
+		$GovernanceHeaderForContainer = "| $FirstColumn | Provenance/custody | Authorship | Permission | License | Product approval |"
+		$GovernanceDelimiterForContainer = '| --- | --- | --- | --- | --- | --- |'
+		$BoldHeader = $GovernanceHeaderForContainer.Replace($FirstColumn, "**$FirstColumn**")
+		$Fence = '```'
+		$ContainerCases = [ordered]@{
+			'visible-blockquote'             = @{ Body = "> $GovernanceHeaderForContainer`n> $GovernanceDelimiterForContainer"; Count = 1 }
+			'visible-list-item'              = @{ Body = "- $GovernanceHeaderForContainer`n  $GovernanceDelimiterForContainer"; Count = 1 }
+			'visible-nested-quote-list'      = @{ Body = "> - $GovernanceHeaderForContainer`n>   $GovernanceDelimiterForContainer"; Count = 1 }
+			'visible-bold-header-in-quote'   = @{ Body = "> $BoldHeader`n> $GovernanceDelimiterForContainer"; Count = 1 }
+			'visible-lazy-continuation'      = @{ Body = "Introductory paragraph text.`n    $GovernanceHeaderForContainer`n$GovernanceDelimiterForContainer"; Count = 1 }
+			'harmless-fence-in-blockquote'   = @{ Body = "> ${Fence}markdown`n> $GovernanceHeaderForContainer`n> $GovernanceDelimiterForContainer`n> $Fence"; Count = 0 }
+			'harmless-fence-in-list-item'    = @{ Body = "- ${Fence}markdown`n  $GovernanceHeaderForContainer`n  $GovernanceDelimiterForContainer`n  $Fence"; Count = 0 }
+			'harmless-code-in-list-item'     = @{ Body = "- Example:`n`n      $GovernanceHeaderForContainer`n      $GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-code-in-blockquote'    = @{ Body = ">     $GovernanceHeaderForContainer`n>     $GovernanceDelimiterForContainer"; Count = 0 }
+			'harmless-comment-in-blockquote' = @{ Body = "> <!--`n> $GovernanceHeaderForContainer`n> $GovernanceDelimiterForContainer`n> -->"; Count = 0 }
+			'harmless-full-column-prose'     = @{ Body = "$GovernanceHeaderForContainer`nThis is prose, not a delimiter row."; Count = 0 }
+		}
+		foreach ($CaseName in $ContainerCases.Keys) {
+			$Case = $ContainerCases[$CaseName]
+			try {
+				$Found = @(Find-TableHeaderIndices -Lines @($Case.Body -split "`n") -FirstColumn $FirstColumn -RequiredColumns $GovernanceColumnsForContainer)
+				if ($Found.Count -ne $Case.Count) { throw "Expected $($Case.Count) visible headers; found $($Found.Count)." }
+				$GrammarPasses++
+				Write-Host "Container grammar PASS: $FirstColumn/$CaseName"
+			}
+			catch { $GrammarFailures.Add("$FirstColumn/${CaseName}: $($_.Exception.Message)") }
+		}
 	}
+
+	$GovernanceColumns = @('Provenance/custody', 'Authorship', 'Permission', 'License', 'Product approval')
+	$GovernanceDelimiter = '| --- | --- | --- | --- | --- | --- |'
+	foreach ($LinkHeader in @(
+		'| [Path](https://example.test/a(b)) | [Provenance/custody](https://example.test/a(b)) | Authorship | Permission | License | Product approval |',
+		'| [Path](https://example.test/a\(b\) "title") | [Provenance/custody](https://example.test/a\(b\) ''title'') | Authorship | Permission | License | Product approval |',
+		'| [Path](<https://example.test/a(b>) | [Provenance/custody](<https://example.test/a(b>) | Authorship | Permission | License | Product approval |'
+	)) {
+		$Indices = @(Find-TableHeaderIndices -Lines @($LinkHeader, $GovernanceDelimiter) -FirstColumn 'Path' -RequiredColumns $GovernanceColumns)
+		if ($Indices.Count -ne 1) { $GrammarFailures.Add("balanced-link-header: expected 1 visible header; found $($Indices.Count).") }
+	}
+	$PipeProse = @(
+		'Path | Provenance/custody | Authorship | Permission | License | Product approval',
+		'This is ordinary prose, not a GFM delimiter row.'
+	)
+	$PipeProseIndices = @(Find-TableHeaderIndices -Lines $PipeProse -FirstColumn 'Path' -RequiredColumns $GovernanceColumns)
+	if ($PipeProseIndices.Count -ne 0) { $GrammarFailures.Add("pipe-prose: expected 0 rendered table headers; found $($PipeProseIndices.Count).") }
 	Write-Host "HTML tag grammar totals: $GrammarPasses passed, $($GrammarFailures.Count) failed."
 	if ($GrammarFailures.Count -gt 0) { throw "HTML tag grammar failures:`n$($GrammarFailures -join "`n")" }
 }
@@ -387,7 +434,7 @@ try {
 		},
 		@{
 			Provenance = $PristineProvenance.Replace("$GovernanceTablePrefix$ProvenanceNewLine", "$GovernanceHeader$ProvenanceNewLine")
-			Pattern    = 'Per-asset governance table in asset-provenance\.md separator row immediately after its header has invalid cell 1'
+			Pattern    = 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 0'
 		},
 		@{
 			Provenance = $PristineProvenance.Replace($GovernanceHeader, '| Path | Provenance/custody | Authorship | Permission | License |')
@@ -696,7 +743,7 @@ try {
 		},
 		@{
 			Report  = $PristineReport.Replace("$ReportTablePrefix$ReportNewLine", "$ReportHeader$ReportNewLine")
-			Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md separator row immediately after its header has invalid cell 1'
+			Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md must declare exactly one applicable header; found 0'
 		},
 		@{
 			Report  = $PristineReport.Replace($ReportHeader, '| Reviewed asset | Visual suitability | Provenance/custody | Authorship | Permission | Product approval | Allowed current use |')
@@ -749,6 +796,119 @@ try {
 
 	Set-FixtureReport -Content $PristineReport
 	& (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot
+
+	# GitHub renders governance tables inside blockquotes, list items, and lazy
+	# paragraph continuations (retained GFM-rendered fixtures, issue #95), so a
+	# conflicting duplicate in any of those containers must be counted. Fenced,
+	# commented, and genuinely indented code inside the same containers must not.
+	$ContainerFailures = [System.Collections.Generic.List[string]]::new()
+	foreach ($Document in @(
+		@{ Name = 'register'; Content = $SourceProvenance; Header = $GovernanceHeader; Separator = $GovernanceSeparator; Row = $MainRegisterRow; PermissionIndex = 3; NewLine = $ProvenanceNewLine; Pattern = 'Per-asset governance table in asset-provenance\.md must declare exactly one applicable header; found 2' },
+		@{ Name = 'report'; Content = $PristineReport; Header = $ReportHeader; Separator = $ReportSeparator; Row = $MainReportRow; PermissionIndex = 4; NewLine = $ReportNewLine; Pattern = 'Per-asset classification table in issue-95-opening-screen-commonui-validation\.md must declare exactly one applicable header; found 2' }
+	)) {
+		$NewLine = $Document.NewLine
+		$ConflictingRow = Set-MarkdownTableCell -Row $Document.Row -Index $Document.PermissionIndex -Value 'Approved for runtime use.'
+		# GitHub renders emphasis or code delimiters around the identifying header
+		# cell as the same visible header (retained GFM API renders of full
+		# packages, issue #95), so such duplicates must be counted; the canonical
+		# table itself still needs the exact unformatted header.
+		$FirstHeaderCell = @(Split-GfmFixtureRow -Row $Document.Header)[0]
+		$BoldHeader = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "**$FirstHeaderCell**"
+		$UnderscoreHeader = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "__${FirstHeaderCell}__"
+		$CodeHeader = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "``$FirstHeaderCell``"
+		$StrikeHeader = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "~~$FirstHeaderCell~~"
+		# Inline HTML, links, character entities, inline comments, nested formatting,
+		# and zero-width characters in the identifying cell also render as the same
+		# visible header (retained GFM API renders of full register packages, issue
+		# #95), and a header whose other cells are the five governance columns is a
+		# governance table whatever its first cell says. All of these must be
+		# counted; a table that merely shares a word or some columns must not.
+		$EntityCell = $FirstHeaderCell.Substring(0, 1) + '&#' + [int][char]$FirstHeaderCell[1] + ';' + $FirstHeaderCell.Substring(2)
+		$Variants = [ordered]@{
+			'{HB}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "<b>$FirstHeaderCell</b>"
+			'{HS}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "<span class=`"x`">$FirstHeaderCell</span>"
+			'{LI}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "[$FirstHeaderCell](#x)"
+			'{LR}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "[$FirstHeaderCell][ref]"
+			'{LS}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "[$FirstHeaderCell]"
+			'{EN}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value $EntityCell
+			'{IC}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value ($FirstHeaderCell.Substring(0, 2) + '<!-- c -->' + $FirstHeaderCell.Substring(2))
+			'{NE}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "**_${FirstHeaderCell}_**"
+			'{NH}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value "<b>*$FirstHeaderCell*</b>"
+			'{ZW}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value ($FirstHeaderCell.Substring(0, 2) + '&#8203;' + $FirstHeaderCell.Substring(2))
+			'{SR}' = Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value 'Asset'
+			'{SB}' = Set-MarkdownTableCell -Row (Set-MarkdownTableCell -Row $Document.Header -Index 0 -Value 'Asset') -Index $Document.PermissionIndex -Value '<b>Permission</b>'
+		}
+		$ContainerCases = [ordered]@{
+			'visible-html-b-header'           = @{ Body = '{HB}{N}{S}{N}{R}'; Visible = $true }
+			'visible-html-span-header'        = @{ Body = '{HS}{N}{S}{N}{R}'; Visible = $true }
+			'visible-inline-link-header'      = @{ Body = '{LI}{N}{S}{N}{R}'; Visible = $true }
+			'visible-reference-link-header'   = @{ Body = '{LR}{N}{S}{N}{R}{N}{N}[ref]: #x'; Visible = $true }
+			'visible-shortcut-link-header'    = @{ Body = '{LS}{N}{S}{N}{R}{N}{N}[' + $FirstHeaderCell + ']: #x'; Visible = $true }
+			'visible-entity-header'           = @{ Body = '{EN}{N}{S}{N}{R}'; Visible = $true }
+			'visible-inline-comment-header'   = @{ Body = '{IC}{N}{S}{N}{R}'; Visible = $true }
+			'visible-nested-emphasis-header'  = @{ Body = '{NE}{N}{S}{N}{R}'; Visible = $true }
+			'visible-nested-html-header'      = @{ Body = '{NH}{N}{S}{N}{R}'; Visible = $true }
+			'visible-zero-width-header'       = @{ Body = '{ZW}{N}{S}{N}{R}'; Visible = $true }
+			'visible-structural-rename'       = @{ Body = '{SR}{N}{S}{N}{R}'; Visible = $true }
+			'visible-structural-html-column'  = @{ Body = '{SB}{N}{S}{N}{R}'; Visible = $true }
+			'harmless-html-b-header-in-fence' = @{ Body = '```markdown{N}{HB}{N}{S}{N}{R}{N}```'; Visible = $false }
+			'harmless-shared-word-table'      = @{ Body = '| ' + $FirstHeaderCell + ' count | Value |{N}| --- | --- |{N}| 1 | 2 |'; Visible = $false }
+			'harmless-partial-columns-table'  = @{ Body = '| State | Authorship | Permission |{N}| --- | --- | --- |{N}| a | b | c |'; Visible = $false }
+			'visible-bold-header'            = @{ Body = '{B}{N}{S}{N}{R}'; Visible = $true }
+			'visible-underscore-header'      = @{ Body = '{U}{N}{S}{N}{R}'; Visible = $true }
+			'visible-code-header'            = @{ Body = '{C}{N}{S}{N}{R}'; Visible = $true }
+			'visible-strike-header'          = @{ Body = '{K}{N}{S}{N}{R}'; Visible = $true }
+			'visible-bold-header-in-quote'   = @{ Body = '> {B}{N}> {S}{N}> {R}'; Visible = $true }
+			'harmless-bold-header-in-fence'  = @{ Body = '```markdown{N}{B}{N}{S}{N}{R}{N}```'; Visible = $false }
+			'harmless-bold-header-in-code'   = @{ Body = '    {B}{N}    {S}{N}    {R}'; Visible = $false }
+			'visible-blockquote'             = @{ Body = '> {H}{N}> {S}{N}> {R}'; Visible = $true }
+			'visible-list-item'              = @{ Body = '- {H}{N}  {S}{N}  {R}'; Visible = $true }
+			'visible-star-list-item'         = @{ Body = '* {H}{N}  {S}{N}  {R}'; Visible = $true }
+			'visible-lazy-continuation'      = @{ Body = 'Introductory paragraph text.{N}    {H}{N}{S}{N}{R}'; Visible = $true }
+			'visible-nested-quote-list'      = @{ Body = '> - {H}{N}>   {S}{N}>   {R}'; Visible = $true }
+			'visible-ordered-list-4-space'   = @{ Body = '10. {H}{N}    {S}{N}    {R}'; Visible = $true }
+			'visible-list-blank-4-space'     = @{ Body = '- Item{N}{N}    {H}{N}    {S}{N}    {R}'; Visible = $true }
+			'visible-blockquote-tab'         = @{ Body = '>{T}{H}{N}>{T}{S}{N}>{T}{R}'; Visible = $true }
+			'harmless-fence-in-blockquote'   = @{ Body = '> ```markdown{N}> {H}{N}> {S}{N}> {R}{N}> ```'; Visible = $false }
+			'harmless-fence-in-list-item'    = @{ Body = '- ```markdown{N}  {H}{N}  {S}{N}  {R}{N}  ```'; Visible = $false }
+			'harmless-code-in-list-item'     = @{ Body = '- Example:{N}{N}      {H}{N}      {S}{N}      {R}'; Visible = $false }
+			'harmless-code-in-blockquote'    = @{ Body = '>     {H}{N}>     {S}{N}>     {R}'; Visible = $false }
+			'harmless-comment-in-blockquote' = @{ Body = '> <!--{N}> {H}{N}> {S}{N}> {R}{N}> -->'; Visible = $false }
+			'harmless-heading-then-code'     = @{ Body = '## Example{N}{N}    {H}{N}    {S}{N}    {R}'; Visible = $false }
+			'harmless-break-then-code'       = @{ Body = 'Intro{N}{N}---{N}    {H}{N}    {S}{N}    {R}'; Visible = $false }
+		}
+		# The lexical/container matrix runs directly against the extracted
+		# production scanner in Test-CommentTagGrammar. Keep only one rendered
+		# container and one rendered-code integration case per governed document;
+		# do not rehash the complete 108-file package for every lexical variant.
+		$ContainerCases = [ordered]@{
+			'visible-blockquote' = $ContainerCases['visible-blockquote']
+			'harmless-code-in-list-item' = $ContainerCases['harmless-code-in-list-item']
+		}
+		foreach ($CaseName in $ContainerCases.Keys) {
+			$Case = $ContainerCases[$CaseName]
+			$Body = $Case.Body.Replace('{H}', $Document.Header).Replace('{B}', $BoldHeader).Replace('{U}', $UnderscoreHeader).Replace('{C}', $CodeHeader).Replace('{K}', $StrikeHeader).Replace('{S}', $Document.Separator).Replace('{R}', $ConflictingRow).Replace('{N}', $NewLine).Replace('{T}', "`t")
+			foreach ($Token in $Variants.Keys) { $Body = $Body.Replace($Token, $Variants[$Token]) }
+			$Content = "$($Document.Content)$NewLine$NewLine## Container case$NewLine$NewLine$Body$NewLine"
+			Set-Content -LiteralPath $FixtureProvenance -Value $SourceProvenance -NoNewline -Encoding utf8
+			Set-FixtureReport -Content $PristineReport
+			if ($Document.Name -eq 'register') { Set-Content -LiteralPath $FixtureProvenance -Value $Content -NoNewline -Encoding utf8 }
+			else { Set-FixtureReport -Content $Content }
+			try {
+				if ($Case.Visible) { Assert-Throws -Pattern $Document.Pattern -Action { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot } }
+				else { & (Join-Path $FixtureRoot 'Test-VisualPackage.ps1') -Root $FixtureRoot }
+				Write-Host "Container regression PASS: $($Document.Name)/$CaseName"
+			}
+			catch {
+				$Failure = "$($Document.Name)/${CaseName}: $($_.Exception.Message)"
+				$ContainerFailures.Add($Failure)
+				Write-Host "Container regression FAIL: $Failure"
+			}
+		}
+	}
+	if ($ContainerFailures.Count -gt 0) { throw "Container regression failures ($($ContainerFailures.Count)):`n$($ContainerFailures -join "`n")" }
+	Set-Content -LiteralPath $FixtureProvenance -Value $SourceProvenance -NoNewline -Encoding utf8
+	Set-FixtureReport -Content $PristineReport
 
 	# Governance records must be visible Markdown tables. Exercise both source
 	# documents with the same comment boundaries; only fixture report bytes are
@@ -844,6 +1004,22 @@ try {
 					ExpectedPattern = 'Unsupported trailing HTML construct after a comment on line [0-9]+; use complete single-line tags'
 				})
 			}
+		}
+		# Comments whose closer reuses the opener's dashes (`<!-->`, `<!--->`) end on
+		# their own line, like `<!---->` and ordinary comments: alone they hide
+		# nothing, and a visible duplicate table after them must still conflict.
+		foreach ($ShortComment in @('<!-->', '<!--->', '<!---->', '<!-- note -->')) {
+			$CaseSuffix = "length-$($ShortComment.Length)"
+			$CommentCases.Add(@{
+				Name = "visible-table-after-short-comment-$CaseSuffix"
+				Content = "$ShortComment$NewLine$NewLine$Content"
+				Hidden = $false
+			})
+			$CommentCases.Add(@{
+				Name = "visible-duplicate-after-short-comment-$CaseSuffix"
+				Content = "$Content$NewLine$NewLine$ShortComment$NewLine$NewLine$ContradictoryTable$NewLine"
+				ExpectedPattern = ($Document.Pattern -replace 'found 0$', 'found 2')
+			})
 		}
 
 		foreach ($CommentCase in $CommentCases) {
