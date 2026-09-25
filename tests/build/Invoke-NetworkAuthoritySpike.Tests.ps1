@@ -49,7 +49,9 @@ try {
 		param([string] $FunctionSource)
 
 		function Get-RuntimeError([string[]] $Paths) { return $null }
-		Invoke-Expression $FunctionSource
+		# Dot-sourced so the extracted runner function lands in this isolated
+		# scriptblock scope exactly as Invoke-Expression placed it.
+		. ([scriptblock]::Create($FunctionSource))
 
 		$Clock = [pscustomobject]@{ UtcNow = [DateTime]::Parse('2026-08-12T00:00:00Z').ToUniversalTime() }
 		$ProcessState = [pscustomobject]@{ HasExited = $false; ExitCode = 0 }
@@ -84,8 +86,31 @@ try {
 	Assert-True ($BoundaryFailure.Message -match "Required process 'boundary-runtime' exited unexpectedly with code 0 during the 1-second observation interval") 'A required process that exits during the final polling sleep must be rejected by the post-sleep health check.'
 	Write-Output 'PASS: final polling-sleep exits are rejected by a deterministic post-sleep health check'
 
+	# A declined hidden launch must decide before it allocates anything: no
+	# command-line preparation, no redirected capture files, no child process,
+	# and no fabricated handle for the caller to treat as running.
+	$LaunchFunctionAst = $RunnerAst.Find({
+		param($Ast)
+		$Ast -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+		$Ast.Name -eq 'Start-HiddenProcess'
+	}, $true)
+	Assert-True ($null -ne $LaunchFunctionAst) 'The runner must define Start-HiddenProcess.'
+	$DeclinedStandardOutput = Join-Path $FixtureRoot 'declined-launch.stdout.log'
+	$DeclinedStandardError = Join-Path $FixtureRoot 'declined-launch.stderr.log'
+	$DeclinedLaunch = & {
+		param([string] $FunctionSource, [string] $StandardOutputPath, [string] $StandardErrorPath)
+
+		function ConvertTo-ProcessArgument([string] $Argument) { throw 'A declined hidden launch must not prepare a child command line.' }
+		. ([scriptblock]::Create($FunctionSource))
+		return Start-HiddenProcess -Executable (Join-Path $StandardOutputPath 'never-launched.exe') -Arguments @('-run') -StandardOutputPath $StandardOutputPath -StandardErrorPath $StandardErrorPath -WhatIf
+	} $LaunchFunctionAst.Extent.Text $DeclinedStandardOutput $DeclinedStandardError
+	Assert-True ($null -eq $DeclinedLaunch) 'A declined hidden launch must return no handle.'
+	Assert-True (-not (Test-Path -LiteralPath $DeclinedStandardOutput)) 'A declined hidden launch must create no redirected standard-output capture.'
+	Assert-True (-not (Test-Path -LiteralPath $DeclinedStandardError)) 'A declined hidden launch must create no redirected standard-error capture.'
+	Write-Output 'PASS: a declined hidden launch starts no process and allocates no capture'
+
 	$CaptureDisposeIndex = $RunnerSource.LastIndexOf('$Handle.Capture.Dispose()', [System.StringComparison]::Ordinal)
-	$FinalInventoryIndex = $RunnerSource.LastIndexOf('Assert-ExactRejectionInventory @($FinalServerLines + $FinalServerErrorLines)', [System.StringComparison]::Ordinal)
+	$FinalInventoryIndex = $RunnerSource.LastIndexOf('Assert-ExactRejectionInventory -Lines @($FinalServerLines + $FinalServerErrorLines)', [System.StringComparison]::Ordinal)
 	$SuccessfulResultIndex = $RunnerSource.LastIndexOf("`$Result = if (`$EvidenceMode -ceq 'packaged')", [System.StringComparison]::Ordinal)
 	$EvidenceWriteIndex = $RunnerSource.LastIndexOf('$Evidence | ConvertTo-Json', [System.StringComparison]::Ordinal)
 	Assert-True ($CaptureDisposeIndex -ge 0) 'The runner must close and drain process captures.'
@@ -531,7 +556,7 @@ exit $LASTEXITCODE
 
 	$LogRoot = Join-Path $FixtureRoot 'success'
 	$SuccessStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-	Invoke-FixtureRun $LogRoot 'fixture-run-001' 'malformed-intent'
+	Invoke-FixtureRun -FixtureLogRoot $LogRoot -FixtureRunId 'fixture-run-001' -RejectionReason 'malformed-intent'
 	$SuccessStopwatch.Stop()
 	Assert-True ($SuccessStopwatch.Elapsed.TotalSeconds -ge 5) 'The successful fixture must sustain execution for the requested five-second observation interval.'
 
@@ -678,13 +703,13 @@ exit $LASTEXITCODE
 		[ordered]@{ schema_id = 'aetheln.network-profile-catalog'; schema_version = 1; selected_profile_id = $SelectedProfileId; profiles = @($Profiles) } |
 			ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $Path -Encoding UTF8
 	}
-	function New-ContractProfiles {
+	function Get-ContractProfile {
 		return @('clean','representative','harsh','loss','duplication','reordering') | ForEach-Object {
 			[ordered]@{ id = "network-profile.$_"; version = 'fixture-v1'; kind = $_; runtime_config_identity = "network-emulation.$_"; server_arguments = @("--server-$_"); client_arguments = @("--client-$_") }
 		}
 	}
 	$LiteralProfileCatalog = Join-Path $FixtureRoot 'literal-profile-token.json'
-	$LiteralProfiles = @(New-ContractProfiles)
+	$LiteralProfiles = @(Get-ContractProfile)
 	$LiteralProfiles[0].server_arguments = @('{RunId}')
 	$LiteralProfiles[0].client_arguments = @('{RunId}')
 	Write-ContractCatalog $LiteralProfileCatalog $LiteralProfiles
@@ -729,29 +754,29 @@ exit $LASTEXITCODE
 	Write-Output 'PASS: opaque profile arguments remain literal, correlate exact launched values, and cannot satisfy caller-owned runner placeholders'
 	$InvalidCatalogRoot = Join-Path $FixtureRoot 'invalid-contract-catalogs'
 	New-Item -ItemType Directory -Path $InvalidCatalogRoot -Force | Out-Null
-	$MissingVersionProfiles = @(New-ContractProfiles)
+	$MissingVersionProfiles = @(Get-ContractProfile)
 	$MissingVersionProfiles[0].Remove('version')
 	$MissingVersionCatalog = Join-Path $InvalidCatalogRoot 'missing-version.json'
 	Write-ContractCatalog $MissingVersionCatalog $MissingVersionProfiles
-	$DuplicateKindProfiles = @(New-ContractProfiles)
+	$DuplicateKindProfiles = @(Get-ContractProfile)
 	$DuplicateKindProfiles[1].kind = 'clean'
 	$DuplicateKindCatalog = Join-Path $InvalidCatalogRoot 'duplicate-kind.json'
 	Write-ContractCatalog $DuplicateKindCatalog $DuplicateKindProfiles
 	$UnselectedCatalog = Join-Path $InvalidCatalogRoot 'unselected.json'
-	Write-ContractCatalog $UnselectedCatalog @(New-ContractProfiles) 'network-profile.absent'
-	$ArbitraryIdProfiles = @(New-ContractProfiles)
+	Write-ContractCatalog -Path $UnselectedCatalog -Profiles @(Get-ContractProfile) -SelectedProfileId 'network-profile.absent'
+	$ArbitraryIdProfiles = @(Get-ContractProfile)
 	$ArbitraryIdProfiles[0].id = 'network-profile.custom'
 	$ArbitraryIdCatalog = Join-Path $InvalidCatalogRoot 'arbitrary-id.json'
-	Write-ContractCatalog $ArbitraryIdCatalog $ArbitraryIdProfiles 'network-profile.custom'
-	$CaseVariantIdProfiles = @(New-ContractProfiles)
+	Write-ContractCatalog -Path $ArbitraryIdCatalog -Profiles $ArbitraryIdProfiles -SelectedProfileId 'network-profile.custom'
+	$CaseVariantIdProfiles = @(Get-ContractProfile)
 	$CaseVariantIdProfiles[0].id = 'network-profile.Clean'
 	$CaseVariantIdCatalog = Join-Path $InvalidCatalogRoot 'case-variant-id.json'
-	Write-ContractCatalog $CaseVariantIdCatalog $CaseVariantIdProfiles 'network-profile.Clean'
-	$EmptyServerArgumentsProfiles = @(New-ContractProfiles)
+	Write-ContractCatalog -Path $CaseVariantIdCatalog -Profiles $CaseVariantIdProfiles -SelectedProfileId 'network-profile.Clean'
+	$EmptyServerArgumentsProfiles = @(Get-ContractProfile)
 	$EmptyServerArgumentsProfiles[0].server_arguments = @()
 	$EmptyServerArgumentsCatalog = Join-Path $InvalidCatalogRoot 'empty-server-arguments.json'
 	Write-ContractCatalog $EmptyServerArgumentsCatalog $EmptyServerArgumentsProfiles
-	$EmptyClientArgumentsProfiles = @(New-ContractProfiles)
+	$EmptyClientArgumentsProfiles = @(Get-ContractProfile)
 	$EmptyClientArgumentsProfiles[0].client_arguments = @()
 	$EmptyClientArgumentsCatalog = Join-Path $InvalidCatalogRoot 'empty-client-arguments.json'
 	Write-ContractCatalog $EmptyClientArgumentsCatalog $EmptyClientArgumentsProfiles
@@ -810,7 +835,7 @@ exit $LASTEXITCODE
 	Write-Output 'PASS: profile catalog JSON rejects duplicate top-level and nested profile properties before conversion'
 
 	function Write-SensitiveContractCatalog([string] $Path, [string] $SensitiveServerArgument, [string] $SensitiveClientArgument) {
-		$SensitiveProfiles = @(New-ContractProfiles)
+		$SensitiveProfiles = @(Get-ContractProfile)
 		$SensitiveProfiles[0].server_arguments = @($SensitiveServerArgument)
 		$SensitiveProfiles[0].client_arguments = @($SensitiveClientArgument)
 		Write-ContractCatalog $Path $SensitiveProfiles
@@ -820,7 +845,7 @@ exit $LASTEXITCODE
 	$AdversarialServerArgument = "--opaque-server=$AdversarialLogRootVariant"
 	$AdversarialClientArgument = "--opaque-client=$AdversarialLogRootVariant"
 	$AdversarialCatalog = Join-Path $InvalidCatalogRoot 'adversarial-public-lines.json'
-	Write-SensitiveContractCatalog $AdversarialCatalog $AdversarialServerArgument $AdversarialClientArgument
+	Write-SensitiveContractCatalog -Path $AdversarialCatalog -SensitiveServerArgument $AdversarialServerArgument -SensitiveClientArgument $AdversarialClientArgument
 	Invoke-FixtureRun -FixtureLogRoot $AdversarialLogRoot -FixtureRunId 'fixture-adversarial-public-lines' -RejectionReason 'malformed-intent' -DurationSeconds 1 -Behavior 'adversarial-public-lines' -UseContracts $true -ProfileCatalogOverridePath $AdversarialCatalog
 	$AdversarialEvidenceJson = Get-Content -LiteralPath (Join-Path $AdversarialLogRoot 'network-authority-spike-evidence.json') -Raw
 	$AdversarialEvidence = $AdversarialEvidenceJson | ConvertFrom-Json
@@ -837,7 +862,7 @@ exit $LASTEXITCODE
 	$PathFailureLogRootVariant = $PathFailureLogRoot.ToUpperInvariant().Replace('\', '/')
 	$PathFailureArgument = "--opaque-failure=$PathFailureLogRootVariant"
 	$PathFailureCatalog = Join-Path $InvalidCatalogRoot 'path-bearing-failure.json'
-	Write-SensitiveContractCatalog $PathFailureCatalog $PathFailureArgument $PathFailureArgument
+	Write-SensitiveContractCatalog -Path $PathFailureCatalog -SensitiveServerArgument $PathFailureArgument -SensitiveClientArgument $PathFailureArgument
 	$PathFailure = $null
 	try { Invoke-FixtureRun -FixtureLogRoot $PathFailureLogRoot -FixtureRunId 'fixture-path-bearing-failure' -RejectionReason 'malformed-intent' -DurationSeconds 1 -Behavior 'path-bearing-runtime-error' -UseContracts $true -ProfileCatalogOverridePath $PathFailureCatalog } catch { $PathFailure = $_.Exception.Message }
 	Assert-True ($PathFailure -match 'Runtime reported an error') 'The adversarial path-bearing runtime error fixture must exercise contract failure publication.'
@@ -938,7 +963,7 @@ exit $LASTEXITCODE
 	$EarlyExitLogRoot = Join-Path $FixtureRoot 'early-exit-after-markers'
 	$EarlyExitFailure = $null
 	try {
-		Invoke-FixtureRun $EarlyExitLogRoot 'fixture-early-exit' 'malformed-intent' 3 $true
+		Invoke-FixtureRun -FixtureLogRoot $EarlyExitLogRoot -FixtureRunId 'fixture-early-exit' -RejectionReason 'malformed-intent' -DurationSeconds 3 -ExitAfterMarkers $true
 	} catch { $EarlyExitFailure = $_.Exception.Message }
 	Assert-True ($EarlyExitFailure -match "(Process exited with code 0 while waiting|Required process 'server' exited unexpectedly with code 0)") 'A server that exits after emitting all markers must fail before the run can pass.'
 	$EarlyExitEvidencePath = Join-Path $EarlyExitLogRoot 'network-authority-spike-evidence.json'
@@ -949,7 +974,7 @@ exit $LASTEXITCODE
 	Write-Output 'PASS: a runtime child that exits after all markers is rejected during the observation interval'
 
 	$LauncherLogRoot = Join-Path $FixtureRoot 'launcher-success'
-	Invoke-FixtureRun $LauncherLogRoot 'fixture-launcher' 'malformed-intent' 1 $false $true
+	Invoke-FixtureRun -FixtureLogRoot $LauncherLogRoot -FixtureRunId 'fixture-launcher' -RejectionReason 'malformed-intent' -DurationSeconds 1 -ExitAfterMarkers $false -UseLauncher $true
 	$LauncherEvidence = Get-Content -LiteralPath (Join-Path $LauncherLogRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
 	Assert-True ($LauncherEvidence.result -eq 'fixture-passed') 'The explicit server launcher topology must preserve fixture validation without claiming packaged success.'
 	$LauncherDescendants = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
@@ -1217,14 +1242,14 @@ exit $LASTEXITCODE
 	)
 	foreach ($Scenario in $NegativeScenarios) {
 		$NegativeFailure = $null
-		try { Invoke-FixtureRun (Join-Path $FixtureRoot $Scenario.Name) ("fixture-" + $Scenario.Name) 'malformed-intent' 1 $false $false $Scenario.Behavior } catch { $NegativeFailure = $_.Exception.Message }
+		try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot $Scenario.Name) -FixtureRunId ("fixture-" + $Scenario.Name) -RejectionReason 'malformed-intent' -DurationSeconds 1 -ExitAfterMarkers $false -UseLauncher $false -Behavior $Scenario.Behavior } catch { $NegativeFailure = $_.Exception.Message }
 		Assert-True ($NegativeFailure -match [regex]::Escape($Scenario.Failure)) "$($Scenario.Name) evidence must fail closed. Actual: $NegativeFailure"
 	}
 	Write-Output 'PASS: missing, duplicate, mismatched-run, reordered, lifecycle, reused-connection, and fabricated-command evidence fails closed'
 
 	$env:AETHELN_TEST_LAUNCHER_FAIL = 'true'
 	$LauncherFailure = $null
-	try { Invoke-FixtureRun (Join-Path $FixtureRoot 'launcher-failure') 'fixture-launcher-failure' 'malformed-intent' 1 $false $true 'normal' } catch { $LauncherFailure = $_.Exception.Message }
+	try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'launcher-failure') -FixtureRunId 'fixture-launcher-failure' -RejectionReason 'malformed-intent' -DurationSeconds 1 -ExitAfterMarkers $false -UseLauncher $true -Behavior 'normal' } catch { $LauncherFailure = $_.Exception.Message }
 	Remove-Item -LiteralPath Env:AETHELN_TEST_LAUNCHER_FAIL -ErrorAction Ignore
 	Assert-True ($LauncherFailure -match 'Process exited with code 41 while waiting for server descendant process identity') "A launcher failure must fail before gameplay evidence can pass. Actual: $LauncherFailure"
 	Write-Output 'PASS: launcher failure cannot fabricate a successful authority capture'
@@ -1248,7 +1273,7 @@ exit $LASTEXITCODE
 		$InvalidReasonLogRoot = Join-Path $FixtureRoot "invalid-rejection-$InvalidReason"
 		$RejectionFailure = $null
 		try {
-			Invoke-FixtureRun $InvalidReasonLogRoot "fixture-$InvalidReason" $InvalidReason
+			Invoke-FixtureRun -FixtureLogRoot $InvalidReasonLogRoot -FixtureRunId "fixture-$InvalidReason" -RejectionReason $InvalidReason
 		} catch { $RejectionFailure = $_.Exception.Message }
 		Assert-True ($RejectionFailure -match [regex]::Escape("Unsupported rejection reason '$InvalidReason'.")) "Rejection reason '$InvalidReason' must fail closed."
 		$InvalidEvidence = Get-Content -LiteralPath (Join-Path $InvalidReasonLogRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json

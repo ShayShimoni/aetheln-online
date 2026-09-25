@@ -15,9 +15,9 @@ fail-closed integrity manifests and a run-context record binding each run
 directory to its producing context. Every phase runs under a hard-bounded
 supervisor: after input validation the parent process re-invokes this script as
 a supervised child inside an owned kill-on-close Windows Job Object, so the
-complete controlled gate interval — handoff validation, cleanup scanning, root
+complete controlled gate interval - handoff validation, cleanup scanning, root
 accounting, manifest reads, payload hashing, smoke discovery, the build/smoke
-grandchild, and timeout finalization — runs in that child tree. The child keeps
+grandchild, and timeout finalization - runs in that child tree. The child keeps
 the cooperative absolute script-phase deadline (established immediately after
 input validation and sized below the job timeout; every operation consumes
 remaining time from it rather than receiving a fresh watchdog duration) for
@@ -25,7 +25,7 @@ precise per-check evidence, and its post-timeout finalization is itself bounded
 by PhaseFinalizeGraceSeconds: if any synchronous operation blocks across the
 deadline, the parent stops and verifies the whole child tree at deadline plus
 grace, classifies phase_timeout (or phase_cleanup_failed when tree termination
-cannot be verified), and writes the bounded report itself — so evidence is
+cannot be verified), and writes the bounded report itself - so evidence is
 published only while platform job time remains; cancellation or runner loss
 can prevent publication and missing evidence never establishes success. The bound covers
 only the gate-script interval: checkout/LFS and report upload sit inside the
@@ -45,13 +45,22 @@ param(
 	[string] $RunId,
 	[string] $RunAttempt,
 	[string] $RunnerName,
+	[string] $ManagedWorkspaceRoot,
+	[string] $ManagedWorkspaceRegistrationPath,
+	[string] $ManagedWorkspaceRegistrationSha256,
+	[string] $HostLeasePath,
+	[string] $CompileStartedUtc,
+	[long] $CompileStartedTimestamp = 0,
 	[double] $CompileTimeoutMinutes = 30,
 	[string] $ReportPath,
 	[double] $PhaseTimeoutMinutes = 0,
 	[long] $HandoffPayloadCapBytes = 68719476736,
 	[long] $HandoffRootCapBytes = 274877906944,
 	[double] $HandoffStaleHours = 48,
-	[double] $PhaseFinalizeGraceSeconds = 120
+	[double] $PhaseFinalizeGraceSeconds = 120,
+	[Parameter(DontShow)] [string] $PhaseSupervisorNonce,
+	[Parameter(DontShow)] [string] $PhaseSupervisorParentProcessId,
+	[Parameter(DontShow)] [string] $PhaseSupervisorParentStartTicks
 )
 
 Set-StrictMode -Version Latest
@@ -65,6 +74,11 @@ if ($IsCompileChild) { $Started = [DateTime]::Parse($CompileSupervisorContext.st
 $ResolvedReportPath = $null
 $RelayedReport = $null
 $SupervisorReceipt = $null
+$ManagedRegistration = $null
+$ManagedWorkspaceEvidence = $null
+$RoutineResourceMonitor = $null
+$RoutineDeadline = $null
+$ManagedCompile = $PSBoundParameters.ContainsKey('ManagedWorkspaceRoot')
 $CompileDeadlineUtc = [DateTime]::MaxValue
 $Checks = New-Object System.Collections.ArrayList
 $RequiredFailed = $false
@@ -73,6 +87,19 @@ $FailureCode = $null
 $ResolvedRepository = $null
 $PhaseByMode = @{ PackageClient = 'client'; PackageServer = 'server'; ValidateProvenance = 'provenance'; SmokePhase = 'smoke' }
 $IsPhaseMode = $PhaseByMode.ContainsKey($Mode)
+$PhaseSupervisorMarker = [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', 'Process')
+$PhaseSupervisorEnvironmentNonce = [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISOR_NONCE', 'Process')
+$PhaseSupervisorEnvironmentParentProcessId = [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISOR_PARENT_PROCESS_ID', 'Process')
+$PhaseSupervisorEnvironmentParentStartTicks = [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISOR_PARENT_START_TICKS', 'Process')
+$HasPhaseSupervisorAuthenticationSignal = $null -ne $PhaseSupervisorMarker -or
+	$null -ne $PhaseSupervisorEnvironmentNonce -or
+	$null -ne $PhaseSupervisorEnvironmentParentProcessId -or
+	$null -ne $PhaseSupervisorEnvironmentParentStartTicks -or
+	$PSBoundParameters.ContainsKey('PhaseSupervisorNonce') -or
+	$PSBoundParameters.ContainsKey('PhaseSupervisorParentProcessId') -or
+	$PSBoundParameters.ContainsKey('PhaseSupervisorParentStartTicks')
+$IsAuthenticatedPhaseChild = $false
+$PhaseSupervisorAuthenticationInvalid = $false
 $Policy = if ($Mode -eq 'Compile') { 'incremental-target-compilation' } else { 'clean-package-and-smoke' }
 $RepositoryPattern = '^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$'
 $RunnerNamePattern = '^[^\\/:*?"<>|\x00-\x1f]{1,128}$'
@@ -133,8 +160,18 @@ namespace Aetheln {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint exitCode);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, uint exitCode);
   [StructLayout(LayoutKind.Sequential)] struct BasicAccountingInformation { public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime; public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses; }
+  [StructLayout(LayoutKind.Sequential)] struct ProcessBasicInformation { public IntPtr Reserved1, PebBaseAddress, Reserved2_0, Reserved2_1, UniqueProcessId, InheritedFromUniqueProcessId; }
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int informationClass, out BasicAccountingInformation information, uint length, IntPtr returnLength);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process, int informationClass, out ProcessBasicInformation information, uint length, IntPtr returnLength);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  public static int GetCurrentParentProcessId() {
+   using(System.Diagnostics.Process process=System.Diagnostics.Process.GetCurrentProcess()) {
+    ProcessBasicInformation information; int status=NtQueryInformationProcess(process.Handle,0,out information,(uint)Marshal.SizeOf(typeof(ProcessBasicInformation)),IntPtr.Zero);
+    if(status!=0) throw new InvalidOperationException("Parent process identity is unavailable.");
+    long parent=information.InheritedFromUniqueProcessId.ToInt64(); if(parent<=0 || parent>Int32.MaxValue) throw new InvalidOperationException("Parent process identity is invalid.");
+    return (int)parent;
+   }
+  }
   public EngineGateJob() {
    handle=CreateJobObject(IntPtr.Zero,null); if(handle==IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(),"CreateJobObject failed.");
    ExtendedLimitInformation information=new ExtendedLimitInformation(); information.BasicLimitInformation.LimitFlags=KillOnJobClose;
@@ -173,6 +210,34 @@ namespace Aetheln {
 
 function Initialize-EngineGateJobType {
 	if ($null -eq ('Aetheln.EngineGateJob' -as [type])) { Add-Type -TypeDefinition $EngineGateJobSource -Language CSharp }
+}
+
+function Test-PhaseSupervisorAuthentication(
+	[string] $Marker,
+	[string] $EnvironmentNonce,
+	[string] $EnvironmentParentProcessId,
+	[string] $EnvironmentParentStartTicks,
+	[string] $ParameterNonce,
+	[string] $ParameterParentProcessId,
+	[string] $ParameterParentStartTicks,
+	[long] $ActualParentProcessId,
+	[long] $ActualParentStartTicks
+) {
+	# Child admission is a closed, run-scoped contract. The nonce prevents an
+	# inherited marker from acting as authority, while PID plus process start
+	# time binds that nonce to the direct parent and rejects stale PID reuse.
+	if ($Marker -cne '1' -or
+		$EnvironmentNonce -cnotmatch '^[0-9a-f]{64}$' -or $ParameterNonce -cnotmatch '^[0-9a-f]{64}$' -or
+		$EnvironmentParentProcessId -cnotmatch '^[1-9][0-9]{0,9}$' -or $ParameterParentProcessId -cnotmatch '^[1-9][0-9]{0,9}$' -or
+		$EnvironmentParentStartTicks -cnotmatch '^[1-9][0-9]{0,18}$' -or $ParameterParentStartTicks -cnotmatch '^[1-9][0-9]{0,18}$' -or
+		$EnvironmentNonce -cne $ParameterNonce -or
+		$EnvironmentParentProcessId -cne $ParameterParentProcessId -or
+		$EnvironmentParentStartTicks -cne $ParameterParentStartTicks) { return $false }
+	$ExpectedParentProcessId = 0
+	$ExpectedParentStartTicks = [long] 0
+	if (-not [int]::TryParse($ParameterParentProcessId, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $ExpectedParentProcessId) -or
+		-not [long]::TryParse($ParameterParentStartTicks, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $ExpectedParentStartTicks)) { return $false }
+	return $ActualParentProcessId -eq $ExpectedParentProcessId -and $ActualParentStartTicks -eq $ExpectedParentStartTicks
 }
 
 function Assert-PhaseDeadline {
@@ -249,7 +314,75 @@ function Get-SafeDiagnosticMessage([string] $Reason, [System.Collections.IEnumer
 	return $Reason + "`n" + $Diagnostic
 }
 
+function Assert-RoutineCompileProgress {
+	$null = Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline
+	if ($null -ne $RoutineResourceMonitor) { $null = Update-RoutineCompileResources -Monitor $RoutineResourceMonitor }
+}
+
+function Initialize-ManagedCompileResourceMonitor {
+	# Discovery and all probes run in the already supervised, lease-owned child.
+	$script:EngineRoot = Resolve-RequiredDirectory ([Environment]::GetEnvironmentVariable('AETHELN_ENGINE_ROOT', 'Process')) 'engine_root_invalid'
+	$script:ToolchainRoot = Resolve-RequiredDirectory ([Environment]::GetEnvironmentVariable('AETHELN_LINUX_TOOLCHAIN_ROOT', 'Process')) 'toolchain_root_invalid'
+	$script:ResolvedLogs = Resolve-OutputRoot -Value $LogRoot -Repository $ResolvedRepository -ReasonCode 'log_root_invalid'
+	if (-not (Test-Path -LiteralPath $ResolvedLogs)) { $null = New-Item -ItemType Directory -Path $ResolvedLogs }
+	$Roots = [ordered]@{
+		control = $RepositoryRoot; target = $ManagedWorkspaceRoot
+		engine = $EngineRoot; toolchain = $ToolchainRoot
+		evidence = $ResolvedLogs; temporary = [IO.Path]::GetTempPath()
+		git = $ManagedRegistration.record.gitCommonDirectory
+	}
+	$script:RoutineResourceMonitor = New-RoutineCompileResourceMonitor -Roots $Roots
+	Assert-RoutineCompileProgress
+}
+
+function Invoke-RoutineManagedBuild {
+	param([Parameter(Mandatory)] $Target)
+	Assert-RoutineCompileProgress
+	$Limit = Get-RoutineCompileActionLimit -Monitor $RoutineResourceMonitor
+	$EvidenceRoot = Join-Path $ResolvedLogs ('routine-' + $Target.target + '-' + [guid]::NewGuid().ToString('N'))
+	$null = New-Item -ItemType Directory -Path $EvidenceRoot
+	$Invocation = Join-Path $PSScriptRoot 'InitialPreparation.BuildInvocation.ps1'
+	$Parameters = @('-Target', $Target.target, '-Platform', $Target.platform, '-ActionLimit', $Limit.ToString([Globalization.CultureInfo]::InvariantCulture),
+		'-EngineRoot', $EngineRoot, '-TargetRoot', $ResolvedRepository, '-LinuxToolchainRoot', $ToolchainRoot, '-EvidenceRoot', $EvidenceRoot)
+	$Result = Invoke-RoutineCompileCommand -Executable $Invocation -Arguments $Parameters -WorkingDirectory $ResolvedRepository -OnProgress { Assert-RoutineCompileProgress }
+	Assert-RoutineCompileProgress
+	$Pins = @()
+	try {
+		$ReceiptPath = Join-Path $EvidenceRoot 'native-result.json'
+		$BuildLog = Join-Path $EvidenceRoot 'build.log'
+		Initialize-ManagedWorkspaceNative
+		foreach ($Path in @($ReceiptPath, $BuildLog)) {
+			$Pins += [Aetheln.ManagedWorkspaceGit]::OpenPlain($Path, $false)
+		}
+		if ((Get-Item -LiteralPath $ReceiptPath).Length -gt 8192 -or (Get-Item -LiteralPath $BuildLog).Length -gt 16777216) { throw 'routine_build_evidence_oversized' }
+		$Receipt = Read-JsonStrict -Path $ReceiptPath -ReasonCode 'routine_build_receipt_invalid'
+		Assert-ClosedObject -Value $Receipt -PropertyNames @('schemaVersion', 'target', 'platform', 'nativeExitCode', 'infrastructureFailure') -ReasonCode 'routine_build_receipt_invalid'
+		if ($Receipt.schemaVersion -isnot [int] -or $Receipt.schemaVersion -ne 1 -or
+			$Receipt.target -cne $Target.target -or $Receipt.platform -cne $Target.platform -or
+			$Receipt.nativeExitCode -isnot [int] -or $null -ne $Receipt.infrastructureFailure -or
+			$Result.exitCode -isnot [int] -or $Receipt.nativeExitCode -ne $Result.exitCode) { throw 'routine_build_receipt_invalid' }
+		$Output = New-Object 'Collections.Generic.List[string]'
+		$Reader = New-Object IO.StreamReader($BuildLog, [Text.Encoding]::UTF8)
+		try {
+			while ($null -ne ($Line = $Reader.ReadLine())) {
+				if ($Output.Count -ge 65536) { throw 'routine_build_evidence_oversized' }
+				$Output.Add($Line)
+				if (($Output.Count % 256) -eq 0) { Assert-RoutineCompileProgress }
+			}
+		} finally { $Reader.Dispose() }
+		Assert-RoutineCompileProgress
+		return [ordered]@{ exitCode = $Receipt.nativeExitCode; output = [string[]] $Output.ToArray() }
+	} catch {
+		if ($_.Exception.Message -cmatch '^(routine_build_|resource_|disk_|compile_)[a-z_]+$') { throw }
+		throw 'routine_build_evidence_invalid'
+	} finally { foreach ($Pin in $Pins) { $Pin.Dispose() } }
+}
+
 function Invoke-Captured([string] $Executable, [string[]] $Arguments) {
+	if ($ManagedCompile -and $IsCompileChild) {
+		if (-not [IO.Path]::IsPathRooted($Executable)) { $Executable = (Get-Command -Name $Executable -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }
+		return Invoke-RoutineCompileCommand -Executable $Executable -Arguments $Arguments -WorkingDirectory $ResolvedRepository -OnProgress { Assert-RoutineCompileProgress }
+	}
 	$PreviousErrorActionPreference = $ErrorActionPreference
 	try {
 		$ErrorActionPreference = 'Continue'
@@ -274,11 +407,11 @@ function Assert-RepositoryState([string] $Name) {
 		if ($StatusResult.exitCode -ne 0) { throw 'repository_status_failed' }
 		$Changes = @($StatusResult.output | Where-Object { -not [string]::IsNullOrWhiteSpace([string] $_) })
 		if ($Changes.Count -ne 0) { throw 'repository_drift_detected' }
-		Add-Check $Name 'passed' $CheckStarted 'git-revision-and-status' 'repository_state_valid'
+		Add-Check -Name $Name -Status 'passed' -CheckStarted $CheckStarted -Command 'git-revision-and-status' -Message 'repository_state_valid'
 	} catch {
 		$Reason = [string] $_.Exception.Message
 		if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'repository_state_invalid' }
-		Add-Check $Name 'failed' $CheckStarted 'git-revision-and-status' $Reason
+		Add-Check -Name $Name -Status 'failed' -CheckStarted $CheckStarted -Command 'git-revision-and-status' -Message $Reason
 		throw $Reason
 	}
 }
@@ -320,14 +453,14 @@ function Resolve-CompileEvidenceIdentity {
 				$Identity.engineGitRevisionStatus = if (@($StatusResult.output | Where-Object { -not [string]::IsNullOrWhiteSpace([string] $_) }).Count -eq 0) { 'verified' } else { 'dirty' }
 			}
 		}
-	} catch { }
+	} catch { Write-Verbose "Engine Git identity probe failed, so the engine revision fields stay unavailable: $($_.Exception.Message)" }
 	try {
 		$VersionPath = Join-Path $EngineRoot 'Engine/Build/Build.version'
 		if (Test-Path -LiteralPath $VersionPath -PathType Leaf) {
 			$Identity.engineBuildVersionSha256 = (Get-FileHash -LiteralPath $VersionPath -Algorithm SHA256).Hash.ToLowerInvariant()
 			$Identity.engineBuildVersionSha256Status = 'verified'
 		}
-	} catch { }
+	} catch { Write-Verbose "Engine Build.version hash probe failed, so that identity field stays unavailable: $($_.Exception.Message)" }
 	try {
 		foreach ($Candidate in @('x86_64-unknown-linux-gnu/bin/clang++.exe', 'x86_64-unknown-linux-gnu/bin/clang.exe', 'x86_64-unknown-linux-gnu/bin/clang.bat')) {
 			$CompilerPath = Join-Path $ToolchainRoot $Candidate
@@ -337,7 +470,7 @@ function Resolve-CompileEvidenceIdentity {
 				break
 			}
 		}
-	} catch { }
+	} catch { Write-Verbose "Linux toolchain compiler hash probe failed, so that identity field stays unavailable: $($_.Exception.Message)" }
 	$Identity.durationSeconds = [Math]::Round(([DateTime]::UtcNow - $IdentityStarted).TotalSeconds, 3)
 	return $Identity
 }
@@ -444,7 +577,29 @@ function Write-RunnerReport {
 		}
 		compileEvidence = $(if ($null -eq $CompileEvidenceIdentity) { $null } else { [ordered]@{ schemaVersion = 1; identity = $CompileEvidenceIdentity; builds = @($CompileBuilds) } })
 	}
-	if ($null -ne $RelayedReport) { $Report = $RelayedReport }
+	if ($null -ne $RelayedReport) {
+		$Report = $RelayedReport
+		# Parent-owned failures (including lease release) cannot disappear behind
+		# a successful child report. Native exit and report must agree on failure.
+		$ParentFailures = @($Checks | Where-Object status -eq 'failed')
+		if ($ParentFailures.Count -gt 0) {
+			$Report.checks = @($Report.checks) + $ParentFailures
+			$Report.summary.total = $Report.checks.Count
+			$Report.summary.passed = @($Report.checks | Where-Object status -eq 'passed').Count
+			$Report.summary.failed = @($Report.checks | Where-Object status -eq 'failed').Count
+			$Report.summary.skipped = @($Report.checks | Where-Object status -eq 'skipped').Count
+			$Report.summary.requiredFailed = $Report.summary.failed
+		}
+	}
+	if ($null -ne $ManagedWorkspaceEvidence) {
+		if ($Report -is [Collections.IDictionary]) { $Report['managedWorkspace'] = $ManagedWorkspaceEvidence }
+		else { $Report | Add-Member -NotePropertyName managedWorkspace -NotePropertyValue $ManagedWorkspaceEvidence -Force }
+	}
+	if ($null -ne $RoutineResourceMonitor) {
+		$ResourceProof = Get-RoutineCompileResourceProof -Monitor $RoutineResourceMonitor
+		if ($Report -is [Collections.IDictionary]) { $Report['compileResources'] = $ResourceProof }
+		else { $Report | Add-Member -NotePropertyName compileResources -NotePropertyValue $ResourceProof -Force }
+	}
 	if ($null -ne $SupervisorReceipt) {
 		if ($Report -is [Collections.IDictionary]) { $Report['supervisor'] = $SupervisorReceipt }
 		else { $Report | Add-Member -NotePropertyName supervisor -NotePropertyValue $SupervisorReceipt -Force }
@@ -487,9 +642,9 @@ function Get-ChildEntriesSafe([string] $Root, [string] $ReasonCode, [bool] $Skip
 	return @($Files)
 }
 
-function Get-DirectoryBytes([string] $Root, [string] $ReasonCode, [bool] $SkipReparse = $false) {
+function Get-DirectoryByteCount([string] $Root, [string] $ReasonCode, [bool] $SkipReparse = $false) {
 	$Total = [long] 0
-	foreach ($File in @(Get-ChildEntriesSafe $Root $ReasonCode $SkipReparse)) {
+	foreach ($File in @(Get-ChildEntriesSafe -Root $Root -ReasonCode $ReasonCode -SkipReparse $SkipReparse)) {
 		$Total += [long] $File.Length
 		if ($Total -lt 0) { throw $ReasonCode }
 	}
@@ -513,7 +668,7 @@ function Assert-PathChainSafe([string] $Root, [string] $Leaf, [string] $ReasonCo
 	}
 }
 
-function Assert-UniqueJsonProperties([string] $Raw, [string] $ReasonCode) {
+function Assert-UniqueJsonProperty([string] $Raw, [string] $ReasonCode) {
 	# ConvertFrom-Json silently keeps one value for duplicated properties, so a
 	# tampered document could carry two conflicting definitions. Scope-aware
 	# scan of the raw text rejects any duplicate property name per object.
@@ -538,6 +693,56 @@ function Assert-UniqueJsonProperties([string] $Raw, [string] $ReasonCode) {
 			if ($Index -ge $Length) { throw $ReasonCode }
 			# Compare decoded names: escaped spellings can identify the same key
 			# and ConvertFrom-Json otherwise silently keeps one conflicting value.
+			try { $PendingName = [string] (('"' + $Builder.ToString() + '"') | ConvertFrom-Json) } catch { throw $ReasonCode }
+			$Index++
+			continue
+		}
+		if ($Character -eq '{') {
+			$Scopes.Push((New-Object 'System.Collections.Generic.HashSet[string]'))
+			$PendingName = $null
+		} elseif ($Character -eq '}') {
+			if ($Scopes.Count -eq 0) { throw $ReasonCode }
+			[void] $Scopes.Pop()
+			$PendingName = $null
+		} elseif ($Character -eq ':') {
+			if ($null -ne $PendingName -and $Scopes.Count -gt 0) {
+				if (-not $Scopes.Peek().Add($PendingName)) { throw $ReasonCode }
+			}
+			$PendingName = $null
+		} elseif ($Character -eq ',' -or $Character -eq '[' -or $Character -eq ']') {
+			$PendingName = $null
+		}
+		$Index++
+	}
+	if ($Scopes.Count -ne 0) { throw $ReasonCode }
+}
+
+function Assert-UniqueJsonProperties {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Retains the current-base managed-compile fixture seam while the canonical helper uses the singular name.')]
+	param([string] $Raw, [string] $ReasonCode)
+
+	# Compatibility seam for current-base #167 fixtures that extract this
+	# function in isolation. Keep it self-contained so those fixtures validate
+	# the same duplicate-property behavior as the canonical singular helper.
+	$Scopes = New-Object System.Collections.Stack
+	$PendingName = $null
+	$Index = 0
+	$Length = $Raw.Length
+	while ($Index -lt $Length) {
+		$Character = $Raw[$Index]
+		if ($Character -eq '"') {
+			$Builder = New-Object System.Text.StringBuilder
+			$Index++
+			while ($Index -lt $Length -and $Raw[$Index] -ne '"') {
+				if ($Raw[$Index] -eq '\') {
+					[void] $Builder.Append($Raw[$Index])
+					$Index++
+					if ($Index -ge $Length) { throw $ReasonCode }
+				}
+				[void] $Builder.Append($Raw[$Index])
+				$Index++
+			}
+			if ($Index -ge $Length) { throw $ReasonCode }
 			try { $PendingName = [string] (('"' + $Builder.ToString() + '"') | ConvertFrom-Json) } catch { throw $ReasonCode }
 			$Index++
 			continue
@@ -656,7 +861,7 @@ function Test-RunContextRecord([string] $Directory, [bool] $RequireCurrentContex
 	$Path = Join-Path $Directory 'run-context.json'
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'handoff_context_invalid' }
 	$Record = Read-JsonStrict $Path 'handoff_context_invalid'
-	Assert-ClosedObject $Record $RunContextPropertyNames 'handoff_context_invalid'
+	Assert-ClosedObject -Value $Record -PropertyNames $RunContextPropertyNames -ReasonCode 'handoff_context_invalid'
 	if (-not (Test-JsonInteger $Record.schemaVersion 1)) { throw 'handoff_context_invalid' }
 	if ($Record.repository -isnot [string] -or $Record.repository -notmatch $RepositoryPattern) { throw 'handoff_context_invalid' }
 	if ($Record.sourceRevision -isnot [string] -or $Record.sourceRevision -notmatch '^[0-9a-fA-F]{40}$') { throw 'handoff_context_invalid' }
@@ -676,7 +881,7 @@ function Test-RunContextRecord([string] $Directory, [bool] $RequireCurrentContex
 }
 
 function Test-HandoffManifestShape($Manifest) {
-	Assert-ClosedObject $Manifest $ManifestPropertyNames 'handoff_schema_invalid'
+	Assert-ClosedObject -Value $Manifest -PropertyNames $ManifestPropertyNames -ReasonCode 'handoff_schema_invalid'
 	if (-not (Test-JsonInteger $Manifest.schemaVersion 1)) { throw 'handoff_schema_invalid' }
 	if ($Manifest.repository -isnot [string] -or $Manifest.repository -notmatch $RepositoryPattern) { throw 'handoff_schema_invalid' }
 	if ($Manifest.sourceRevision -isnot [string] -or $Manifest.sourceRevision -notmatch '^[0-9a-fA-F]{40}$') { throw 'handoff_schema_invalid' }
@@ -696,7 +901,7 @@ function Test-HandoffManifestShape($Manifest) {
 	$PathSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 	$Total = [long] 0
 	foreach ($Entry in $Entries) {
-		Assert-ClosedObject $Entry @('path', 'bytes', 'sha256') 'handoff_schema_invalid'
+		Assert-ClosedObject -Value $Entry -PropertyNames @('path', 'bytes', 'sha256') -ReasonCode 'handoff_schema_invalid'
 		$EntryPath = $Entry.path
 		if ($EntryPath -isnot [string] -or [string]::IsNullOrWhiteSpace($EntryPath)) { throw 'handoff_schema_invalid' }
 		if ($EntryPath -match '^([A-Za-z]:|[\\/])' -or $EntryPath.Contains(':') -or $EntryPath.Contains('\')) { throw 'handoff_schema_invalid' }
@@ -716,7 +921,7 @@ function Test-HandoffManifestShape($Manifest) {
 	return [ordered]@{ pathSet = $PathSet; totalBytes = $Total }
 }
 
-function Get-HandoffRelativeFiles([string] $PhaseDirectory) {
+function Get-HandoffRelativeFile([string] $PhaseDirectory) {
 	$Prefix = [System.IO.Path]::GetFullPath($PhaseDirectory).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
 	$Seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 	return @(Get-ChildEntriesSafe $PhaseDirectory 'handoff_payload_invalid' | Sort-Object FullName | ForEach-Object {
@@ -760,7 +965,7 @@ function Write-CleanupRequest([string] $ScopeRoot, [string] $RequestingPhase) {
 			# directory invalid before any recursive size or hash work.
 			[void] (Get-ChildEntriesSafe $Directory.FullName 'invalid')
 			$Context = Test-RunContextRecord $Directory.FullName $false
-			$MeasuredBytes = Get-DirectoryBytes $Directory.FullName 'invalid'
+			$MeasuredBytes = Get-DirectoryByteCount $Directory.FullName 'invalid'
 			$ManifestDigests = @(Get-ChildItem -LiteralPath $Directory.FullName -Force -File -Filter 'manifest-*.json' | Sort-Object Name | ForEach-Object {
 				if ($_.Name -notmatch '^manifest-(client|server|provenance)\.json$') { throw 'invalid' }
 				$ManifestPhase = $Matches[1]
@@ -775,7 +980,7 @@ function Write-CleanupRequest([string] $ScopeRoot, [string] $RequestingPhase) {
 			$MarkerPath = Join-Path $Directory.FullName 'milestone-complete.json'
 			if (Test-Path -LiteralPath $MarkerPath -PathType Leaf) {
 				$Marker = Read-JsonStrict $MarkerPath 'invalid'
-				Assert-ClosedObject $Marker $MarkerPropertyNames 'invalid'
+				Assert-ClosedObject -Value $Marker -PropertyNames $MarkerPropertyNames -ReasonCode 'invalid'
 				if (-not (Test-JsonInteger $Marker.schemaVersion 1)) { throw 'invalid' }
 				if ($Marker.state -isnot [string] -or $Marker.state -cnotin @('passed', 'failed')) { throw 'invalid' }
 				if (-not (Test-JsonTimestamp $Marker.finishedUtc)) { throw 'invalid' }
@@ -808,7 +1013,7 @@ function Write-CleanupRequest([string] $ScopeRoot, [string] $RequestingPhase) {
 		})
 	}
 	$RequestRoot = Join-Path $ScopeRoot 'cleanup-requests'
-	Assert-PathChainSafe $HandoffRoot $RequestRoot 'handoff_root_invalid'
+	Assert-PathChainSafe -Root $HandoffRoot -Leaf $RequestRoot -ReasonCode 'handoff_root_invalid'
 	if (-not (Test-Path -LiteralPath $RequestRoot)) { New-Item -ItemType Directory -Path $RequestRoot | Out-Null }
 	$RequestName = 'request-{0}-run-{1}-attempt-{2}-{3}.json' -f ([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')), $RunId, $RunAttempt, $RequestingPhase
 	$Request = [ordered]@{
@@ -825,9 +1030,9 @@ function Write-CleanupRequest([string] $ScopeRoot, [string] $RequestingPhase) {
 }
 
 function Write-HandoffManifest([string] $RunDirectory, [string] $Phase, [string[]] $Consumers) {
-	$PhaseDirectory = Get-HandoffChildPath $RunDirectory $Phase 'handoff_payload_invalid'
-	Assert-PathChainSafe $HandoffRoot $PhaseDirectory 'handoff_payload_invalid'
-	$Files = @(Get-HandoffRelativeFiles $PhaseDirectory)
+	$PhaseDirectory = Get-HandoffChildPath -Parent $RunDirectory -Child $Phase -ReasonCode 'handoff_payload_invalid'
+	Assert-PathChainSafe -Root $HandoffRoot -Leaf $PhaseDirectory -ReasonCode 'handoff_payload_invalid'
+	$Files = @(Get-HandoffRelativeFile $PhaseDirectory)
 	if ($Files.Count -lt 1) { throw 'handoff_payload_invalid' }
 	$TotalBytes = [long] 0
 	foreach ($File in $Files) {
@@ -859,7 +1064,7 @@ function Write-HandoffManifest([string] $RunDirectory, [string] $Phase, [string[
 
 function Test-HandoffManifest([string] $RunDirectory, [string] $Phase, [string] $ConsumingPhase) {
 	$ManifestPath = Join-Path $RunDirectory ('manifest-{0}.json' -f $Phase)
-	Assert-PathChainSafe $HandoffRoot $ManifestPath 'handoff_payload_invalid'
+	Assert-PathChainSafe -Root $HandoffRoot -Leaf $ManifestPath -ReasonCode 'handoff_payload_invalid'
 	if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) { throw 'handoff_missing' }
 	$Manifest = Read-JsonStrict $ManifestPath 'handoff_schema_invalid'
 	$Shape = Test-HandoffManifestShape $Manifest
@@ -869,10 +1074,10 @@ function Test-HandoffManifest([string] $RunDirectory, [string] $Phase, [string] 
 	if ([string] $Manifest.producingPhase -ne $Phase) { throw 'handoff_context_mismatch' }
 	if (@($Manifest.expectedConsumingPhases) -notcontains $ConsumingPhase) { throw 'handoff_context_mismatch' }
 	if ([string] $Manifest.runnerName -cne $RunnerName) { throw 'handoff_runner_mismatch' }
-	$PhaseDirectory = Get-HandoffChildPath $RunDirectory $Phase 'handoff_missing'
-	Assert-PathChainSafe $HandoffRoot $PhaseDirectory 'handoff_payload_invalid'
+	$PhaseDirectory = Get-HandoffChildPath -Parent $RunDirectory -Child $Phase -ReasonCode 'handoff_missing'
+	Assert-PathChainSafe -Root $HandoffRoot -Leaf $PhaseDirectory -ReasonCode 'handoff_payload_invalid'
 	if (-not (Test-Path -LiteralPath $PhaseDirectory -PathType Container)) { throw 'handoff_missing' }
-	$ActualFiles = @(Get-HandoffRelativeFiles $PhaseDirectory)
+	$ActualFiles = @(Get-HandoffRelativeFile $PhaseDirectory)
 	$ManifestByPath = @{}
 	foreach ($Entry in @($Manifest.files)) { $ManifestByPath[[string] $Entry.path] = $Entry }
 	if ($ActualFiles.Count -ne $ManifestByPath.Count) { throw 'handoff_digest_mismatch' }
@@ -896,7 +1101,7 @@ function ConvertTo-DriverValueText($Value) {
 	return ConvertTo-DriverLiteral ([string] $Value)
 }
 
-function New-NamedInvocationText([string] $Target, $Parameters) {
+function ConvertTo-NamedInvocationText([string] $Target, $Parameters) {
 	$Segments = New-Object System.Collections.ArrayList
 	[void] $Segments.Add('&')
 	[void] $Segments.Add((ConvertTo-DriverLiteral $Target))
@@ -907,11 +1112,25 @@ function New-NamedInvocationText([string] $Target, $Parameters) {
 	return (@($Segments) -join ' ')
 }
 
-function New-PositionalInvocationText([string] $Target, [string[]] $Arguments) {
+function New-NamedInvocationText {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Retains the current-base managed-compile fixture seam; the helper only formats an in-memory command string.')]
+	param([string] $Target, $Parameters)
+
+	$Segments = New-Object System.Collections.ArrayList
+	[void] $Segments.Add('&')
+	[void] $Segments.Add((ConvertTo-DriverLiteral $Target))
+	foreach ($Key in $Parameters.Keys) {
+		[void] $Segments.Add('-' + $Key)
+		[void] $Segments.Add((ConvertTo-DriverValueText $Parameters[$Key]))
+	}
+	return (@($Segments) -join ' ')
+}
+
+function ConvertTo-PositionalInvocationText([string] $Target, [string[]] $Arguments) {
 	return ('& ' + (ConvertTo-DriverLiteral $Target) + ' ' + (@($Arguments | ForEach-Object { ConvertTo-DriverLiteral $_ }) -join ' ')).TrimEnd()
 }
 
-function New-PhaseDriverBody([string] $InvocationText, [string] $CapturePath, [bool] $UseNativeExitCode) {
+function ConvertTo-PhaseDriverBody([string] $InvocationText, [string] $CapturePath, [bool] $UseNativeExitCode) {
 	$CaptureLiteral = ConvertTo-DriverLiteral $CapturePath
 	$ExitCapture = if ($UseNativeExitCode) { 'if ($null -ne $LASTEXITCODE) { $GateExitCode = $LASTEXITCODE }' } else { '' }
 	$Lines = @(
@@ -929,7 +1148,9 @@ function New-PhaseDriverBody([string] $InvocationText, [string] $CapturePath, [b
 	return ($Lines -join "`r`n")
 }
 
-function Stop-PhaseProcessTree($TargetProcess, $TargetJob) {
+function Stop-PhaseProcessTree {
+	[CmdletBinding(SupportsShouldProcess)]
+	param($TargetProcess, $TargetJob)
 	# RUNNER_TEST_KILL_FAULT is a fault-injection seam used only by the focused
 	# fixture suite to force the taskkill fallback ('skip-job') or the
 	# fail-closed cleanup-verification branch ('skip-all'); real CI never sets
@@ -937,11 +1158,16 @@ function Stop-PhaseProcessTree($TargetProcess, $TargetJob) {
 	# owned process stopped; root exit alone cannot prove descendant cleanup.
 	# Bounded taskkill and Process.Kill remain fallbacks, followed by the same
 	# owned-job proof. An unverifiable tree is phase_cleanup_failed.
+	# The decision precedes every cleanup action below, so a declined call
+	# terminates nothing, disposes no owned Job Object, and reports no cleanup.
+	# The target text stays generic: no command line or environment data
+	# belongs in a confirmation prompt.
+	if (-not $PSCmdlet.ShouldProcess('the owned phase process tree', 'Terminate')) { return }
 	$KillFault = [Environment]::GetEnvironmentVariable('RUNNER_TEST_KILL_FAULT', 'Process')
 	if ($KillFault -ne 'skip-job' -and $KillFault -ne 'skip-all' -and $null -ne $TargetJob) {
-		try { $TargetJob.TerminateAndWait(5000); return } catch { }
+		try { $TargetJob.TerminateAndWait(5000); return } catch { Write-Verbose "Owned Job Object termination accounting was unavailable, so cleanup continues with bounded termination: $($_.Exception.Message)" }
 	}
-	try { [void] $TargetProcess.WaitForExit(5000) } catch {}
+	try { [void] $TargetProcess.WaitForExit(5000) } catch { Write-Verbose "Bounded wait for the owned phase process failed: $($_.Exception.Message)" }
 	$Alive = $true
 	try { $Alive = -not $TargetProcess.HasExited } catch { $Alive = $true }
 	if ($Alive -and $KillFault -ne 'skip-all') {
@@ -956,13 +1182,13 @@ function Stop-PhaseProcessTree($TargetProcess, $TargetJob) {
 			$KillProcess.StartInfo = $KillInfo
 			try {
 				if ($KillProcess.Start() -and -not $KillProcess.WaitForExit(5000)) {
-					try { $KillProcess.Kill() } catch {}
-					try { [void] $KillProcess.WaitForExit(1000) } catch {}
+					try { $KillProcess.Kill() } catch { Write-Verbose "Terminating the bounded taskkill helper failed: $($_.Exception.Message)" }
+					try { [void] $KillProcess.WaitForExit(1000) } catch { Write-Verbose "Bounded wait for the taskkill helper to exit failed: $($_.Exception.Message)" }
 				}
-			} catch {} finally { $KillProcess.Dispose() }
+			} catch { Write-Verbose "The bounded taskkill helper could not be run, so cleanup continues with direct termination: $($_.Exception.Message)" } finally { $KillProcess.Dispose() }
 		}
-		try { if (-not $TargetProcess.HasExited) { $TargetProcess.Kill() } } catch {}
-		try { [void] $TargetProcess.WaitForExit(5000) } catch {}
+		try { if (-not $TargetProcess.HasExited) { $TargetProcess.Kill() } } catch { Write-Verbose "Direct termination of the owned phase process failed: $($_.Exception.Message)" }
+		try { [void] $TargetProcess.WaitForExit(5000) } catch { Write-Verbose "Bounded wait after terminating the owned phase process failed: $($_.Exception.Message)" }
 	}
 	$StillAlive = $true
 	try { $StillAlive = -not $TargetProcess.HasExited } catch { $StillAlive = $true }
@@ -970,14 +1196,14 @@ function Stop-PhaseProcessTree($TargetProcess, $TargetJob) {
 	try { $TargetJob.TerminateAndWait(5000) } catch { throw 'phase_cleanup_failed' }
 }
 
-function Invoke-PhaseChildScript([string] $InvocationText, [double] $TimeoutMinutes, [bool] $UseNativeExitCode = $false, [string] $WatchdogRoot = '', [datetime] $AbsoluteDeadlineUtc = [DateTime]::MaxValue) {
+function Invoke-PhaseChildScript([string] $InvocationText, [double] $TimeoutMinutes, [bool] $UseNativeExitCode = $false, [string] $WatchdogRoot = '', [datetime] $AbsoluteDeadlineUtc = [DateTime]::MaxValue, [scriptblock] $RemainingBudget) {
 	Initialize-EngineGateJobType
 	if ([string]::IsNullOrWhiteSpace($WatchdogRoot)) { $WatchdogRoot = Join-Path $ResolvedLogs 'phase-watchdog' }
 	if (-not (Test-Path -LiteralPath $WatchdogRoot)) { New-Item -ItemType Directory -Path $WatchdogRoot -Force | Out-Null }
 	$Token = [guid]::NewGuid().ToString('N')
 	$DriverPath = Join-Path $WatchdogRoot ('driver-' + $Token + '.ps1')
 	$CapturePath = Join-Path $WatchdogRoot ('capture-' + $Token + '.txt')
-	Set-Content -LiteralPath $DriverPath -Value (New-PhaseDriverBody $InvocationText $CapturePath $UseNativeExitCode) -Encoding UTF8
+	Set-Content -LiteralPath $DriverPath -Value (ConvertTo-PhaseDriverBody -InvocationText $InvocationText -CapturePath $CapturePath -UseNativeExitCode $UseNativeExitCode) -Encoding UTF8
 	$PowerShellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
 	$CommandLine = ('"{0}" -NoProfile -ExecutionPolicy Bypass -File "{1}"' -f $PowerShellPath, $DriverPath)
 	$ChildJob = $null
@@ -986,6 +1212,10 @@ function Invoke-PhaseChildScript([string] $InvocationText, [double] $TimeoutMinu
 		$ChildJob = New-Object Aetheln.EngineGateJob
 		$ChildProcess = $ChildJob.StartSuspended($PowerShellPath, $CommandLine, $ResolvedRepository)
 		$WaitMilliseconds = if ($AbsoluteDeadlineUtc -eq [DateTime]::MaxValue) { $TimeoutMinutes * 60000 } else { [Math]::Max(0, ($AbsoluteDeadlineUtc - [DateTime]::UtcNow).TotalMilliseconds) }
+		if ($null -ne $RemainingBudget) {
+			try { $WaitMilliseconds = & $RemainingBudget }
+			catch { if ($_.Exception.Message -eq 'compile_timeout') { $WaitMilliseconds = 0 } else { throw } }
+		}
 		if (-not $ChildProcess.WaitForExit([int][Math]::Ceiling($WaitMilliseconds))) {
 			$CleanupFailure = $null
 			try {
@@ -993,8 +1223,8 @@ function Invoke-PhaseChildScript([string] $InvocationText, [double] $TimeoutMinu
 				else { Stop-PhaseProcessTree $ChildProcess $ChildJob }
 			} catch { $CleanupFailure = 'phase_cleanup_failed' }
 			$ExitReceipt = $null
-			try { if ($ChildProcess.HasExited) { $ExitReceipt = $ChildProcess.ExitCode } } catch { }
-			return [ordered]@{ timedOut = $true; exitCode = $ExitReceipt; output = @(); cleanupFailure = $CleanupFailure }
+			try { if ($ChildProcess.HasExited) { $ExitReceipt = $ChildProcess.ExitCode } } catch { Write-Verbose "The timed-out child exit code could not be read, so the exit receipt stays unavailable: $($_.Exception.Message)" }
+			return [ordered]@{ timedOut = $true; exitCode = $ExitReceipt; output = @(); cleanupFailure = $CleanupFailure; cleanupVerified = ($null -eq $CleanupFailure) }
 		}
 		$ChildProcess.WaitForExit()
 		# Normal root exit can leave detached descendants for Compile or phases.
@@ -1002,10 +1232,10 @@ function Invoke-PhaseChildScript([string] $InvocationText, [double] $TimeoutMinu
 		try {
 			if ($AbsoluteDeadlineUtc -ne [DateTime]::MaxValue) { $ChildJob.TerminateAndWait(5000) }
 			else { Stop-PhaseProcessTree $ChildProcess $ChildJob }
-		} catch { return [ordered]@{ timedOut = $true; exitCode = $ChildProcess.ExitCode; output = @(); cleanupFailure = 'phase_cleanup_failed' } }
+		} catch { return [ordered]@{ timedOut = $true; exitCode = $ChildProcess.ExitCode; output = @(); cleanupFailure = 'phase_cleanup_failed'; cleanupVerified = $false } }
 		$Output = @()
 		if ($AbsoluteDeadlineUtc -eq [DateTime]::MaxValue -and (Test-Path -LiteralPath $CapturePath -PathType Leaf)) { $Output = @(Get-Content -LiteralPath $CapturePath) }
-		return [ordered]@{ timedOut = $false; exitCode = $ChildProcess.ExitCode; output = @($Output); cleanupFailure = $null }
+		return [ordered]@{ timedOut = $false; exitCode = $ChildProcess.ExitCode; output = @($Output); cleanupFailure = $null; cleanupVerified = $true }
 	} finally {
 		if ($null -ne $ChildProcess) { $ChildProcess.Dispose() }
 		if ($null -ne $ChildJob) { $ChildJob.Dispose() }
@@ -1024,19 +1254,124 @@ function Invoke-CompileSupervisor {
 		RunnerName = $RunnerName; CompileTimeoutMinutes = $CompileTimeoutMinutes
 		ReportPath = $ChildReportPath
 	}
+	if ($ManagedCompile) {
+		$ChildParameters['Repository'] = $Repository
+		$ChildParameters['ManagedWorkspaceRoot'] = $ManagedWorkspaceRoot
+		$ChildParameters['ManagedWorkspaceRegistrationPath'] = $ManagedWorkspaceRegistrationPath
+		$ChildParameters['ManagedWorkspaceRegistrationSha256'] = $ManagedWorkspaceRegistrationSha256
+		$ChildParameters['HostLeasePath'] = $HostLeasePath
+	}
 	$Context = '$global:AethelnCompileGateContext = @{ startedUtc = ' + (ConvertTo-DriverLiteral $Started.ToString('o')) + ' }; '
 	$HardDeadline = $Started.AddMinutes($CompileTimeoutMinutes).AddSeconds(2)
-	$Result = Invoke-PhaseChildScript ($Context + (New-NamedInvocationText $PSCommandPath $ChildParameters)) $CompileTimeoutMinutes $true $WatchdogRoot $HardDeadline
-	$script:SupervisorReceipt = [ordered]@{ childExitCode = $Result.exitCode; timedOut = $Result.timedOut; cleanupVerified = [string]::IsNullOrWhiteSpace([string] $Result.cleanupFailure) }
+	$RemainingBudget = $null
+	if ($ManagedCompile) {
+		$Context = '$global:AethelnCompileGateContext = @{ startedUtc = ' + (ConvertTo-DriverLiteral $Started.ToString('o')) +
+			'; startedTimestamp = ' + $CompileStartedTimestamp.ToString([Globalization.CultureInfo]::InvariantCulture) + ' }; '
+		$HardDeadline = Get-RoutineCompileDeadlineUtc -Deadline $RoutineDeadline -GraceMilliseconds 2000
+		$RemainingBudget = { Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline -GraceMilliseconds 2000 }
+	}
+	$HostLease = $null
+	$Result = $null
+	$OwnedCleanupVerified = $false
+	try {
+		if ($ManagedCompile) {
+			. (Join-Path $PSScriptRoot 'EngineRunnerHostLease.ps1')
+			$LeaseDeadline = Get-RoutineCompileDeadlineUtc -Deadline $RoutineDeadline
+			$HostLease = Enter-EngineRunnerHostLease -LeasePath $HostLeasePath -OwnerId ('compile-' + [guid]::NewGuid().ToString('N')) -DeadlineUtc $LeaseDeadline -RemainingBudget { Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline } -OnProgress { $null = Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline }
+		}
+		# Synchronization belongs to this same child and original deadline. The
+		# parent holds the shared host lease until all owned descendants end.
+		if ($ManagedCompile) {
+			$Result = Invoke-PhaseChildScript -InvocationText ($Context + (New-NamedInvocationText $PSCommandPath $ChildParameters)) -TimeoutMinutes $CompileTimeoutMinutes -UseNativeExitCode $true -WatchdogRoot $WatchdogRoot -AbsoluteDeadlineUtc $HardDeadline -RemainingBudget $RemainingBudget
+		} else {
+			$Result = Invoke-PhaseChildScript -InvocationText ($Context + (New-NamedInvocationText $PSCommandPath $ChildParameters)) -TimeoutMinutes $CompileTimeoutMinutes -UseNativeExitCode $true -WatchdogRoot $WatchdogRoot -AbsoluteDeadlineUtc $HardDeadline
+		}
+		# Only the process owner can prove quiescence. Missing/loosely typed
+		# fields cannot release the host or turn a partial result into success.
+		if ($null -ne $Result -and $Result.Contains('cleanupVerified')) {
+			$OwnedCleanupVerified = $Result.cleanupVerified -is [bool] -and $Result.cleanupVerified -and
+				$Result.Contains('cleanupFailure') -and [string]::IsNullOrWhiteSpace([string] $Result.cleanupFailure)
+		}
+		if (-not $OwnedCleanupVerified) { throw 'compile_cleanup_failed' }
+	} finally {
+		if ($null -ne $HostLease) {
+			try {
+				if ($OwnedCleanupVerified) { Exit-EngineRunnerHostLease -Lease $HostLease -CleanupVerified $true }
+				else { Close-EngineRunnerHostLease -Lease $HostLease }
+				$HostLease = $null
+			}
+			catch {
+				Add-Check -Name 'compile-host-lease' -Status 'failed' -CheckStarted $Started -Command 'release-shared-host-lease' -Message 'compile_lease_release_failed'
+				throw 'compile_lease_release_failed'
+			} finally {
+				# Closing does not append a release receipt. If release failed,
+				# retain the held journal for explicit recovery without leaking handles.
+				if ($null -ne $HostLease) { Close-EngineRunnerHostLease -Lease $HostLease }
+			}
+		}
+	}
+	$script:SupervisorReceipt = [ordered]@{ childExitCode = $Result.exitCode; timedOut = $Result.timedOut; cleanupVerified = $OwnedCleanupVerified }
 	if ($Result.timedOut) {
 		$Reason = if ($SupervisorReceipt.cleanupVerified) { 'compile_timeout' } else { 'compile_cleanup_failed' }
-		Add-Check 'compile-hard-deadline' 'failed' $Started 'supervise-compile-child-tree' $Reason
+		Add-Check -Name 'compile-hard-deadline' -Status 'failed' -CheckStarted $Started -Command 'supervise-compile-child-tree' -Message $Reason
 		throw $Reason
 	}
 	# The internal child report is bounded, normalized evidence. Never relay
 	# raw driver output: its local capture may contain implementation paths.
 	if (-not (Test-Path -LiteralPath $ChildReportPath -PathType Leaf) -or (Get-Item -LiteralPath $ChildReportPath).Length -gt 1048576) { throw 'compile_report_missing' }
-	$script:RelayedReport = Get-Content -LiteralPath $ChildReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+	# Validate before assigning the relay: a malformed child must not prevent
+	# the parent from publishing its own well-formed failure report.
+	try {
+		$ChildReport = Get-Content -LiteralPath $ChildReportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+		if ($ChildReport.schemaVersion -isnot [int] -or $ChildReport.schemaVersion -ne 1 -or
+			$ChildReport.mode -cne 'Compile' -or $ChildReport.revision -cne $SourceRevision -or
+			$ChildReport.checks -isnot [array] -or $null -eq $ChildReport.summary) { throw 'compile_report_invalid' }
+		$Counts = @{ total = $ChildReport.checks.Count; passed = 0; failed = 0; skipped = 0; requiredFailed = 0 }
+		$ChecksByName = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+		foreach ($ChildCheck in $ChildReport.checks) {
+			if ($ChildCheck.name -isnot [string] -or [string]::IsNullOrWhiteSpace($ChildCheck.name) -or
+				$ChecksByName.ContainsKey($ChildCheck.name) -or $ChildCheck.tier -cne 'required' -or
+				$ChildCheck.status -isnot [string] -or @('passed', 'failed', 'skipped') -cnotcontains $ChildCheck.status) { throw 'compile_report_invalid' }
+			$ChecksByName.Add($ChildCheck.name, $ChildCheck)
+			$Counts[$ChildCheck.status]++
+		}
+		$Counts.requiredFailed = $Counts.failed
+		foreach ($CountName in $Counts.Keys) {
+			$CountValue = $ChildReport.summary.$CountName
+			if (($CountValue -isnot [int] -and $CountValue -isnot [long]) -or $CountValue -ne $Counts[$CountName]) { throw 'compile_report_invalid' }
+		}
+		# Partial failure reports remain useful evidence. Success, however, must
+		# prove both actual targets completed and the managed admission remained healthy.
+		if ($Result.exitCode -eq 0 -and $Counts.requiredFailed -eq 0) {
+			foreach ($RequiredTarget in @('incremental-client-build', 'incremental-server-build')) {
+				if (-not $ChecksByName.ContainsKey($RequiredTarget) -or $ChecksByName[$RequiredTarget].status -cne 'passed') { throw 'compile_report_invalid' }
+			}
+			if ($ManagedCompile) {
+				if (-not $ChecksByName.ContainsKey('managed-compile-workspace') -or $ChecksByName['managed-compile-workspace'].status -cne 'passed') { throw 'compile_report_invalid' }
+				$WorkspaceProof = $ChildReport.managedWorkspace
+				if ($null -eq $WorkspaceProof -or $WorkspaceProof.schemaVersion -isnot [int] -or $WorkspaceProof.schemaVersion -ne 1 -or
+					$WorkspaceProof.registrationId -cnotmatch '^[a-f0-9]{32}$' -or
+					$WorkspaceProof.registrationSha256 -cne $ManagedWorkspaceRegistrationSha256 -or
+					$WorkspaceProof.preparationReceiptSha256 -cnotmatch '^[a-f0-9]{64}$' -or
+					$WorkspaceProof.revision -cne $SourceRevision -or $WorkspaceProof.synchronized -isnot [bool] -or -not $WorkspaceProof.synchronized) { throw 'compile_report_invalid' }
+				$ResourceProof = $ChildReport.compileResources
+				if ($null -eq $ResourceProof -or $ResourceProof.schemaVersion -isnot [int] -or $ResourceProof.schemaVersion -ne 1 -or
+					$null -ne $ResourceProof.failureReason -or $ResourceProof.volumes -isnot [array] -or $ResourceProof.volumes.Count -lt 1) { throw 'compile_report_invalid' }
+				foreach ($IntegerField in @('sampleCount', 'measurementCount', 'targetAdmissionCount', 'minimumActionLimit', 'maximumActionLimit')) {
+					if (($ResourceProof.$IntegerField -isnot [int] -and $ResourceProof.$IntegerField -isnot [long]) -or $ResourceProof.$IntegerField -lt 1) { throw 'compile_report_invalid' }
+				}
+				if ($ResourceProof.targetAdmissionCount -ne 2 -or $ResourceProof.measurementCount -lt $ResourceProof.sampleCount -or
+					$ResourceProof.maximumActionLimit -gt 4 -or $ResourceProof.minimumActionLimit -gt $ResourceProof.maximumActionLimit) { throw 'compile_report_invalid' }
+				foreach ($VolumeProof in $ResourceProof.volumes) {
+					if ($VolumeProof.volumeId -isnot [string] -or [string]::IsNullOrWhiteSpace($VolumeProof.volumeId) -or
+					($VolumeProof.knownAllocationBytes -isnot [long] -and $VolumeProof.knownAllocationBytes -isnot [int]) -or $VolumeProof.knownAllocationBytes -lt 0 -or
+					($VolumeProof.minimumAvailableBytes -isnot [long] -and $VolumeProof.minimumAvailableBytes -isnot [int]) -or
+					[decimal]$VolumeProof.minimumAvailableBytes -le ([decimal]$VolumeProof.knownAllocationBytes + 20GB)) { throw 'compile_report_invalid' }
+				}
+			}
+		}
+	} catch { throw 'compile_report_invalid' }
+	$script:RelayedReport = $ChildReport
 	if ($Result.exitCode -ne 0) {
 		$ChildFailures = @($RelayedReport.checks | Where-Object status -eq 'failed')
 		if ($ChildFailures.Count -gt 0) {
@@ -1054,19 +1389,216 @@ function Invoke-PhaseChildWithinDeadline([string] $InvocationText) {
 	# never started once that deadline has expired.
 	$RemainingMinutes = ($script:PhaseDeadlineUtc - [DateTime]::UtcNow).TotalMinutes
 	if ($RemainingMinutes -le 0) { return [ordered]@{ timedOut = $true; exitCode = -1; output = @(); cleanupFailure = $null } }
-	return Invoke-PhaseChildScript $InvocationText $RemainingMinutes
+	return Invoke-PhaseChildScript -InvocationText $InvocationText -TimeoutMinutes $RemainingMinutes
+}
+
+function Assert-ExactPhaseReportObject($Value, [string[]] $PropertyNames) {
+	if ($null -eq $Value -or $Value -isnot [System.Management.Automation.PSCustomObject]) { throw 'phase_report_invalid' }
+	$ActualNames = @($Value.PSObject.Properties | ForEach-Object { $_.Name })
+	if ($ActualNames.Count -ne $PropertyNames.Count) { throw 'phase_report_invalid' }
+	for ($Index = 0; $Index -lt $PropertyNames.Count; $Index++) {
+		if ($ActualNames[$Index] -cne $PropertyNames[$Index]) { throw 'phase_report_invalid' }
+	}
+}
+
+function ConvertFrom-PhaseReportTimestamp($Value) {
+	if ($Value -isnot [string] -or $Value -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$') { throw 'phase_report_invalid' }
+	$Parsed = [DateTime]::MinValue
+	if (-not [DateTime]::TryParseExact($Value, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref] $Parsed) -or
+		$Parsed.Kind -ne [DateTimeKind]::Utc) { throw 'phase_report_invalid' }
+	return $Parsed
+}
+
+function Test-PhaseReportNumber($Value) {
+	if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [double] -and $Value -isnot [decimal]) { return $false }
+	$Number = [double] $Value
+	return -not [double]::IsNaN($Number) -and -not [double]::IsInfinity($Number) -and $Number -ge 0
+}
+
+function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [string] $ExpectedRevision, [string] $ExpectedRunnerName) {
+	# The child report is private input to the outer supervisor, not published
+	# evidence. Bound and validate its exact producer schema before any field can
+	# reach the final report. A nominal result is not trusted merely because it
+	# contains all expected check names.
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'phase_report_invalid' }
+	$Item = Get-Item -LiteralPath $Path
+	if ($Item.Length -le 0 -or $Item.Length -gt 1MB) { throw 'phase_report_invalid' }
+	try {
+		$Utf8 = New-Object System.Text.UTF8Encoding($false, $true)
+		$Raw = [IO.File]::ReadAllText($Path, $Utf8)
+		Assert-UniqueJsonProperty $Raw 'phase_report_invalid'
+		$ConvertFromJson = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
+		$Report = if ($ConvertFromJson.Parameters.ContainsKey('DateKind')) { $Raw | ConvertFrom-Json -DateKind String } else { $Raw | ConvertFrom-Json }
+		Assert-ExactPhaseReportObject $Report @(
+			'schemaVersion', 'mode', 'policy', 'revision', 'runnerName', 'startedUtc',
+			'finishedUtc', 'checks', 'summary', 'compileEvidence'
+		)
+		if ($Report.schemaVersion -isnot [int] -or $Report.schemaVersion -ne 1 -or
+			@('PackageClient', 'PackageServer', 'ValidateProvenance', 'SmokePhase') -cnotcontains $ExpectedMode -or
+			$Report.mode -isnot [string] -or $Report.mode -cne $ExpectedMode -or
+			$Report.policy -isnot [string] -or $Report.policy -cne 'clean-package-and-smoke' -or
+			$Report.revision -isnot [string] -or $Report.revision -cne $ExpectedRevision -or
+			$ExpectedRevision -cnotmatch '^[0-9a-fA-F]{40}$' -or $Report.checks -isnot [array]) { throw 'phase_report_invalid' }
+		$BoundRunnerName = if ($ExpectedRunnerName -match '^[^\\/:*?"<>|\x00-\x1f]{1,128}$') { $ExpectedRunnerName } else { $null }
+		if (($null -eq $BoundRunnerName -and $null -ne $Report.runnerName) -or
+			($null -ne $BoundRunnerName -and ($Report.runnerName -isnot [string] -or $Report.runnerName -cne $BoundRunnerName))) { throw 'phase_report_invalid' }
+		$StartedUtc = ConvertFrom-PhaseReportTimestamp $Report.startedUtc
+		$FinishedUtc = ConvertFrom-PhaseReportTimestamp $Report.finishedUtc
+		if ($FinishedUtc -lt $StartedUtc) { throw 'phase_report_invalid' }
+		if ($Report.checks.Count -lt 1 -or $Report.checks.Count -gt 128) { throw 'phase_report_invalid' }
+		$Counts = @{ total = $Report.checks.Count; passed = 0; failed = 0; skipped = 0; requiredFailed = 0 }
+		$Names = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+		$Statuses = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
+		foreach ($Check in $Report.checks) {
+			Assert-ExactPhaseReportObject $Check @('name', 'tier', 'status', 'durationSeconds', 'command', 'message')
+			if ($Check.name -isnot [string] -or $Check.name -cnotmatch '^[a-z0-9][a-z0-9-]{0,127}$' -or -not $Names.Add($Check.name) -or
+				$Check.tier -cne 'required' -or $Check.status -isnot [string] -or
+				@('passed', 'failed', 'skipped') -cnotcontains $Check.status -or -not (Test-PhaseReportNumber $Check.durationSeconds) -or
+				$Check.command -isnot [string] -or [string]::IsNullOrWhiteSpace($Check.command) -or $Check.command.Length -gt 256 -or
+				$Check.message -isnot [string] -or [string]::IsNullOrWhiteSpace($Check.message) -or $Check.message.Length -gt 8192) { throw 'phase_report_invalid' }
+			$Statuses.Add($Check.name, $Check.status)
+			$Counts[$Check.status]++
+		}
+		$Counts.requiredFailed = $Counts.failed
+		Assert-ExactPhaseReportObject $Report.summary @('total', 'passed', 'failed', 'skipped', 'requiredFailed')
+		foreach ($Name in $Counts.Keys) {
+			$Value = $Report.summary.$Name
+			if (($Value -isnot [int] -and $Value -isnot [long]) -or [long] $Value -ne $Counts[$Name]) { throw 'phase_report_invalid' }
+		}
+
+		if ($null -eq $Report.compileEvidence) {
+			# The child can fail before compile-identity resolution if an input that
+			# the parent already checked disappears before the supervised re-entry.
+			# A successful child can never omit this canonical evidence object.
+			if ($Counts.requiredFailed -eq 0) { throw 'phase_report_invalid' }
+		} else {
+			Assert-ExactPhaseReportObject $Report.compileEvidence @('schemaVersion', 'identity', 'builds')
+			if ($Report.compileEvidence.schemaVersion -isnot [int] -or $Report.compileEvidence.schemaVersion -ne 1 -or
+				$Report.compileEvidence.builds -isnot [array]) { throw 'phase_report_invalid' }
+			$Identity = $Report.compileEvidence.identity
+			Assert-ExactPhaseReportObject $Identity @(
+				'engineGitRevision', 'engineGitRevisionStatus', 'engineBuildVersionSha256', 'engineBuildVersionSha256Status',
+				'linuxToolchainCompilerSha256', 'linuxToolchainCompilerSha256Status', 'runnerName', 'durationSeconds'
+			)
+			if ($Identity.engineGitRevisionStatus -isnot [string] -or @('verified', 'dirty', 'unavailable') -cnotcontains $Identity.engineGitRevisionStatus -or
+				($Identity.engineGitRevisionStatus -ceq 'unavailable' -and $null -ne $Identity.engineGitRevision) -or
+				($Identity.engineGitRevisionStatus -cne 'unavailable' -and ($Identity.engineGitRevision -isnot [string] -or $Identity.engineGitRevision -cnotmatch '^[0-9a-f]{40}$'))) { throw 'phase_report_invalid' }
+			foreach ($HashEvidence in @(
+				[ordered]@{ hash = $Identity.engineBuildVersionSha256; status = $Identity.engineBuildVersionSha256Status },
+				[ordered]@{ hash = $Identity.linuxToolchainCompilerSha256; status = $Identity.linuxToolchainCompilerSha256Status }
+			)) {
+				$Hash = $HashEvidence.hash
+				$Status = $HashEvidence.status
+				if ($Status -isnot [string] -or @('verified', 'unavailable') -cnotcontains $Status -or
+					($Status -ceq 'unavailable' -and $null -ne $Hash) -or
+					($Status -ceq 'verified' -and ($Hash -isnot [string] -or $Hash -cnotmatch '^[0-9a-f]{64}$'))) { throw 'phase_report_invalid' }
+			}
+			if (($null -eq $BoundRunnerName -and $null -ne $Identity.runnerName) -or
+				($null -ne $BoundRunnerName -and ($Identity.runnerName -isnot [string] -or $Identity.runnerName -cne $BoundRunnerName)) -or
+				-not (Test-PhaseReportNumber $Identity.durationSeconds)) { throw 'phase_report_invalid' }
+
+			$Builds = @($Report.compileEvidence.builds)
+			$ExpectedBuildCheck = if ($ExpectedMode -eq 'PackageClient') { 'scheduled-client-package' } elseif ($ExpectedMode -eq 'PackageServer') { 'scheduled-server-package' } else { $null }
+			$ExpectedBuildTarget = if ($ExpectedMode -eq 'PackageClient') { 'AethelnOnlineClient' } elseif ($ExpectedMode -eq 'PackageServer') { 'AethelnOnlineServer' } else { $null }
+			$ExpectedBuildPlatform = if ($ExpectedMode -eq 'PackageClient') { 'Win64' } elseif ($ExpectedMode -eq 'PackageServer') { 'Linux' } else { $null }
+			if ($null -eq $ExpectedBuildCheck -and $Builds.Count -ne 0) { throw 'phase_report_invalid' }
+			if ($null -ne $ExpectedBuildCheck -and ($Builds.Count -gt 1 -or ($Counts.requiredFailed -eq 0 -and $Builds.Count -ne 1))) { throw 'phase_report_invalid' }
+			foreach ($Build in $Builds) {
+				Assert-ExactPhaseReportObject $Build @(
+					'check', 'target', 'platform', 'configuration', 'intermediateBuildDirectoryPresentBeforeRun',
+					'makefilePresentBeforeRun', 'outputState', 'lastObservedAction', 'observedTotalActions',
+					'actionCounterState', 'plannedActionCount', 'observedTargetNames', 'makefileObservation',
+					'makefileReason', 'makefileCreationCount', 'upToDateObserved', 'executorSummaryCount'
+				)
+				if ($Build.check -isnot [string] -or $Build.check -cne $ExpectedBuildCheck -or
+					$Build.target -isnot [string] -or $Build.target -cne $ExpectedBuildTarget -or
+					$Build.platform -isnot [string] -or $Build.platform -cne $ExpectedBuildPlatform -or
+					$Build.configuration -isnot [string] -or $Build.configuration -cne 'Development' -or
+					$Build.intermediateBuildDirectoryPresentBeforeRun -isnot [bool] -or $Build.makefilePresentBeforeRun -isnot [bool] -or
+					$Build.outputState -isnot [string] -or @('captured', 'unavailable') -cnotcontains $Build.outputState -or
+					$Build.actionCounterState -isnot [string] -or @('observed', 'not_observed') -cnotcontains $Build.actionCounterState -or
+					$Build.makefileObservation -isnot [string] -or @('created', 'not_observed') -cnotcontains $Build.makefileObservation -or
+					$Build.upToDateObserved -isnot [bool]) { throw 'phase_report_invalid' }
+				foreach ($IntegerField in @('makefileCreationCount', 'executorSummaryCount')) {
+					if (($Build.$IntegerField -isnot [int] -and $Build.$IntegerField -isnot [long]) -or [long] $Build.$IntegerField -lt 0) { throw 'phase_report_invalid' }
+				}
+				if ($Build.actionCounterState -ceq 'observed') {
+					if (($Build.lastObservedAction -isnot [int] -and $Build.lastObservedAction -isnot [long]) -or
+						($Build.observedTotalActions -isnot [int] -and $Build.observedTotalActions -isnot [long]) -or
+						[long] $Build.lastObservedAction -lt 1 -or [long] $Build.lastObservedAction -gt [long] $Build.observedTotalActions -or
+						[long] $Build.observedTotalActions -gt 10000000) { throw 'phase_report_invalid' }
+				} elseif ($null -ne $Build.lastObservedAction -or $null -ne $Build.observedTotalActions) { throw 'phase_report_invalid' }
+				if ($null -ne $Build.plannedActionCount -and (($Build.plannedActionCount -isnot [int] -and $Build.plannedActionCount -isnot [long]) -or
+					[long] $Build.plannedActionCount -lt 0 -or [long] $Build.plannedActionCount -gt 10000000)) { throw 'phase_report_invalid' }
+				if ($null -ne $Build.observedTargetNames -and ($Build.observedTargetNames -isnot [string] -or
+					$Build.observedTargetNames -cnotmatch '^(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other)(?:,(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other))*$')) { throw 'phase_report_invalid' }
+				if ($Build.makefileObservation -ceq 'created') {
+					if ($Build.makefileReason -isnot [string] -or $Build.makefileReason -cnotmatch '^[a-z0-9_]{1,64}$' -or [long] $Build.makefileCreationCount -lt 1) { throw 'phase_report_invalid' }
+				} elseif ($null -ne $Build.makefileReason -or [long] $Build.makefileCreationCount -ne 0) { throw 'phase_report_invalid' }
+				if (-not $Statuses.ContainsKey($Build.check)) { throw 'phase_report_invalid' }
+			}
+		}
+		if ($Counts.requiredFailed -eq 0) {
+			# A zero exit may be relayed only when the child reached every required
+			# terminal checkpoint for its phase. JSON and summary consistency alone
+			# cannot turn an empty or prematurely finalized report into success.
+			$RequiredSuccessChecks = switch ($ExpectedMode) {
+				'PackageClient' { @(
+					'runner-input-validation', 'ddc-cache-configuration', 'host-tools-configuration',
+					'handoff-validation', 'handoff-storage-accounting', 'repository-state-before-work',
+					'scheduled-client-package', 'repository-state-after-client-package',
+					'handoff-publish-client', 'repository-state-at-completion'
+				) }
+				'PackageServer' { @(
+					'runner-input-validation', 'ddc-cache-configuration', 'host-tools-configuration',
+					'handoff-validation', 'handoff-run-directory', 'repository-state-before-work',
+					'scheduled-server-package', 'repository-state-after-server-package',
+					'handoff-publish-server', 'repository-state-at-completion'
+				) }
+				'ValidateProvenance' { @(
+					'runner-input-validation', 'handoff-validation', 'handoff-run-directory',
+					'repository-state-before-work', 'handoff-consume-client', 'handoff-consume-server',
+					'registry-provenance-validation', 'repository-state-after-provenance-validation',
+					'handoff-publish-provenance', 'repository-state-at-completion'
+				) }
+				'SmokePhase' { @(
+					'runner-input-validation', 'handoff-validation', 'handoff-run-directory',
+					'repository-state-before-work', 'handoff-consume-client', 'handoff-consume-server',
+					'handoff-consume-provenance', 'packaged-build-smoke',
+					'handoff-milestone-completion', 'repository-state-at-completion'
+				) }
+				default { throw 'phase_report_invalid' }
+			}
+			if ($Counts.skipped -ne 0) { throw 'phase_report_invalid' }
+			foreach ($RequiredCheck in $RequiredSuccessChecks) {
+				if (-not $Statuses.ContainsKey($RequiredCheck) -or $Statuses[$RequiredCheck] -cne 'passed') { throw 'phase_report_invalid' }
+			}
+		}
+		return $Report
+	} catch { throw 'phase_report_invalid' }
 }
 
 function Invoke-PhaseSupervisor {
 	# Hard bound for the whole controlled gate interval: the parent owns the
-	# absolute deadline and the report, while the complete phase body — handoff
+	# absolute deadline and the report, while the complete phase body - handoff
 	# validation, cleanup/root scans, manifest reads, payload hashing, smoke
-	# discovery, build/smoke work, and timeout finalization — runs as this same
+	# discovery, build/smoke work, and timeout finalization - runs as this same
 	# script re-invoked inside an owned kill-on-close child tree. The child
 	# keeps the cooperative script-phase deadline for precise per-check
 	# evidence; the parent stops and verifies the whole tree at
 	# PhaseTimeoutMinutes plus a bounded finalization grace, so no synchronous
 	# operation and no post-timeout finalization can outlive the bound.
+	$WatchdogRoot = Join-Path $ResolvedLogs ('phase-supervisor-' + [guid]::NewGuid().ToString('N'))
+	$ChildReportPath = Join-Path $WatchdogRoot 'child-report.json'
+	try {
+		$NonceBytes = New-Object byte[] 32
+		$Random = [Security.Cryptography.RandomNumberGenerator]::Create()
+		try { $Random.GetBytes($NonceBytes) } finally { $Random.Dispose() }
+		$SupervisorNonce = [BitConverter]::ToString($NonceBytes).Replace('-', '').ToLowerInvariant()
+		$SupervisorParentProcess = Get-Process -Id $PID -ErrorAction Stop
+		$SupervisorParentProcessId = $PID.ToString([Globalization.CultureInfo]::InvariantCulture)
+		$SupervisorParentStartTicks = $SupervisorParentProcess.StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)
+	} catch { throw 'phase_supervisor_auth_invalid' }
 	$ChildParameters = [ordered]@{
 		Mode = $Mode
 		RepositoryRoot = $ResolvedRepository
@@ -1081,24 +1613,43 @@ function Invoke-PhaseSupervisor {
 		HandoffRootCapBytes = [string] $HandoffRootCapBytes
 		HandoffStaleHours = [string] $HandoffStaleHours
 		PhaseFinalizeGraceSeconds = [string] $PhaseFinalizeGraceSeconds
+		PhaseSupervisorNonce = $SupervisorNonce
+		PhaseSupervisorParentProcessId = $SupervisorParentProcessId
+		PhaseSupervisorParentStartTicks = $SupervisorParentStartTicks
 	}
-	if ($ExplicitReportRequested) { $ChildParameters['ReportPath'] = $ResolvedReportPath }
+	$ChildParameters['ReportPath'] = $ChildReportPath
 	$BoundedGraceSeconds = [Math]::Min([Math]::Max($PhaseFinalizeGraceSeconds, 1), 600)
 	$HardDeadlineUtc = $Started.AddMinutes($PhaseTimeoutMinutes).AddSeconds($BoundedGraceSeconds)
 	$RemainingMinutes = ($HardDeadlineUtc - [DateTime]::UtcNow).TotalMinutes
 	if ($RemainingMinutes -le 0) { return [ordered]@{ timedOut = $true; exitCode = -1; output = @(); cleanupFailure = $null } }
-	[Environment]::SetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', '1', 'Process')
+	$AuthenticationEnvironment = [ordered]@{
+		AETHELN_PHASE_SUPERVISED = '1'
+		AETHELN_PHASE_SUPERVISOR_NONCE = $SupervisorNonce
+		AETHELN_PHASE_SUPERVISOR_PARENT_PROCESS_ID = $SupervisorParentProcessId
+		AETHELN_PHASE_SUPERVISOR_PARENT_START_TICKS = $SupervisorParentStartTicks
+	}
+	$PreviousAuthenticationEnvironment = @{}
+	foreach ($Name in $AuthenticationEnvironment.Keys) {
+		$PreviousAuthenticationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
+	}
 	try {
-		return Invoke-PhaseChildScript (New-NamedInvocationText $PSCommandPath $ChildParameters) $RemainingMinutes $true (Join-Path $ResolvedLogs 'supervisor-watchdog')
+		foreach ($Name in $AuthenticationEnvironment.Keys) {
+			[Environment]::SetEnvironmentVariable($Name, $AuthenticationEnvironment[$Name], 'Process')
+		}
+		$Result = Invoke-PhaseChildScript -InvocationText (ConvertTo-NamedInvocationText $PSCommandPath $ChildParameters) -TimeoutMinutes $RemainingMinutes -UseNativeExitCode $true -WatchdogRoot $WatchdogRoot
+		$Result['childReportPath'] = $ChildReportPath
+		return $Result
 	} finally {
-		[Environment]::SetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', $null, 'Process')
+		foreach ($Name in $AuthenticationEnvironment.Keys) {
+			[Environment]::SetEnvironmentVariable($Name, $PreviousAuthenticationEnvironment[$Name], 'Process')
+		}
 	}
 }
 
 function Invoke-BoundedGateCommand([string] $InvocationText, [datetime] $DeadlineUtc, [bool] $UseNativeExitCode = $false) {
 	$RemainingMinutes = ($DeadlineUtc - [DateTime]::UtcNow).TotalMinutes
 	if ($RemainingMinutes -le 0) { throw 'phase_timeout' }
-	$Result = Invoke-PhaseChildScript $InvocationText $RemainingMinutes $UseNativeExitCode
+	$Result = Invoke-PhaseChildScript -InvocationText $InvocationText -TimeoutMinutes $RemainingMinutes -UseNativeExitCode $UseNativeExitCode
 	if (-not [string]::IsNullOrWhiteSpace([string] $Result.cleanupFailure)) { throw 'phase_cleanup_failed' }
 	if ($Result.timedOut) { throw 'phase_timeout' }
 	return $Result
@@ -1106,7 +1657,7 @@ function Invoke-BoundedGateCommand([string] $InvocationText, [datetime] $Deadlin
 
 function Invoke-GateCommand([string] $Executable, [string[]] $Arguments) {
 	if ($script:SmokeDeadlineUtc -eq [DateTime]::MaxValue) { return Invoke-Captured $Executable $Arguments }
-	$Result = Invoke-BoundedGateCommand (New-PositionalInvocationText $Executable $Arguments) $script:SmokeDeadlineUtc $true
+	$Result = Invoke-BoundedGateCommand -InvocationText (ConvertTo-PositionalInvocationText $Executable $Arguments) -DeadlineUtc $script:SmokeDeadlineUtc -UseNativeExitCode $true
 	return [ordered]@{ output = @($Result.output); exitCode = $Result.exitCode }
 }
 
@@ -1174,7 +1725,7 @@ function Invoke-SmokeGateWork([string] $SearchRoot, [datetime] $DeadlineUtc = [D
 				ClientMapPattern = 'LoadMap:.*StarterMap'
 				TimeoutSeconds = '120'
 			}
-			$SmokeChild = Invoke-BoundedGateCommand (New-NamedInvocationText $SmokeScript $SmokeParameters) $script:SmokeDeadlineUtc $false
+			$SmokeChild = Invoke-BoundedGateCommand -InvocationText (ConvertTo-NamedInvocationText $SmokeScript $SmokeParameters) -DeadlineUtc $script:SmokeDeadlineUtc -UseNativeExitCode $false
 			foreach ($Line in @($SmokeChild.output)) { [void] $SmokeOutput.Add($Line) }
 			if ($SmokeChild.exitCode -ne 0) { throw 'smoke_failed' }
 		} else {
@@ -1193,13 +1744,13 @@ function Invoke-SmokeGateWork([string] $SearchRoot, [datetime] $DeadlineUtc = [D
 				-ClientMapPattern 'LoadMap:.*StarterMap' `
 				-TimeoutSeconds 120 *>&1 | ForEach-Object { [void] $SmokeOutput.Add($_) }
 		}
-		Add-Check 'packaged-build-smoke' 'passed' $SmokeStarted 'Invoke-PackagedSmokeTest.ps1' 'smoke_passed'
+		Add-Check -Name 'packaged-build-smoke' -Status 'passed' -CheckStarted $SmokeStarted -Command 'Invoke-PackagedSmokeTest.ps1' -Message 'smoke_passed'
 	} catch {
 		[void] $SmokeOutput.Add($_)
 		$SafeReason = [string] $_.Exception.Message
 		if ($SafeReason -notmatch '^[a-z0-9_]+$') { $SafeReason = 'smoke_failed' }
-		$SmokeMessage = Get-SafeDiagnosticMessage $SafeReason $SmokeOutput $SmokeProtectedValues
-		Add-Check 'packaged-build-smoke' 'failed' $SmokeStarted 'Invoke-PackagedSmokeTest.ps1' $SmokeMessage
+		$SmokeMessage = Get-SafeDiagnosticMessage -Reason $SafeReason -Output $SmokeOutput -ProtectedValues $SmokeProtectedValues
+		Add-Check -Name 'packaged-build-smoke' -Status 'failed' -CheckStarted $SmokeStarted -Command 'Invoke-PackagedSmokeTest.ps1' -Message $SmokeMessage
 		$SmokeFailure = $SafeReason
 	} finally {
 		$script:SmokeDeadlineUtc = [DateTime]::MaxValue
@@ -1210,12 +1761,12 @@ function Invoke-SmokeGateWork([string] $SearchRoot, [datetime] $DeadlineUtc = [D
 function Invoke-HandoffPublish([string] $PublishRunDirectory, [string] $Phase, [string[]] $Consumers) {
 	$CheckStarted = [DateTime]::UtcNow
 	try {
-		Write-HandoffManifest $PublishRunDirectory $Phase $Consumers
-		Add-Check ('handoff-publish-{0}' -f $Phase) 'passed' $CheckStarted 'write-handoff-manifest' 'handoff_published'
+		Write-HandoffManifest -RunDirectory $PublishRunDirectory -Phase $Phase -Consumers $Consumers
+		Add-Check -Name ('handoff-publish-{0}' -f $Phase) -Status 'passed' -CheckStarted $CheckStarted -Command 'write-handoff-manifest' -Message 'handoff_published'
 	} catch {
 		$Reason = [string] $_.Exception.Message
 		if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'handoff_payload_invalid' }
-		Add-Check ('handoff-publish-{0}' -f $Phase) 'failed' $CheckStarted 'write-handoff-manifest' $Reason
+		Add-Check -Name ('handoff-publish-{0}' -f $Phase) -Status 'failed' -CheckStarted $CheckStarted -Command 'write-handoff-manifest' -Message $Reason
 		throw $Reason
 	}
 }
@@ -1232,15 +1783,15 @@ function Invoke-HandoffConsumeSet([string] $ConsumeRunDirectory, [string[]] $Pha
 		$CheckStarted = [DateTime]::UtcNow
 		try {
 			Assert-PhaseDeadline
-			$Verified = Test-HandoffManifest $ConsumeRunDirectory $Phase $ConsumingPhase
+			$Verified = Test-HandoffManifest -RunDirectory $ConsumeRunDirectory -Phase $Phase -ConsumingPhase $ConsumingPhase
 			$AggregateBytes += [long] $Verified.totalBytes
 			if ($AggregateBytes -lt 0 -or $AggregateBytes -gt $HandoffPayloadCapBytes) { throw 'handoff_size_exceeded' }
 			$Directories[$Phase] = $Verified.phaseDirectory
-			Add-Check ('handoff-consume-{0}' -f $Phase) 'passed' $CheckStarted 'verify-handoff-manifest' 'handoff_verified'
+			Add-Check -Name ('handoff-consume-{0}' -f $Phase) -Status 'passed' -CheckStarted $CheckStarted -Command 'verify-handoff-manifest' -Message 'handoff_verified'
 		} catch {
 			$Reason = [string] $_.Exception.Message
 			if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'handoff_schema_invalid' }
-			Add-Check ('handoff-consume-{0}' -f $Phase) 'failed' $CheckStarted 'verify-handoff-manifest' $Reason
+			Add-Check -Name ('handoff-consume-{0}' -f $Phase) -Status 'failed' -CheckStarted $CheckStarted -Command 'verify-handoff-manifest' -Message $Reason
 			throw $Reason
 		}
 	}
@@ -1248,10 +1799,41 @@ function Invoke-HandoffConsumeSet([string] $ConsumeRunDirectory, [string[]] $Pha
 }
 
 try {
+	if (($ManagedCompile -and $Mode -ne 'Compile') -or
+		(-not $ManagedCompile -and (-not [string]::IsNullOrWhiteSpace($HostLeasePath) -or
+			-not [string]::IsNullOrWhiteSpace($ManagedWorkspaceRegistrationPath) -or
+			-not [string]::IsNullOrWhiteSpace($ManagedWorkspaceRegistrationSha256)))) { throw 'managed_workspace_configuration_invalid' }
+	if ($ManagedCompile -and ([string]::IsNullOrWhiteSpace($ManagedWorkspaceRoot) -or
+		[string]::IsNullOrWhiteSpace($HostLeasePath) -or
+		[string]::IsNullOrWhiteSpace($ManagedWorkspaceRegistrationPath) -or
+		$ManagedWorkspaceRegistrationSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+		$Repository -cnotmatch $RepositoryPattern)) { throw 'managed_workspace_configuration_invalid' }
 	$ResolvedRepository = Resolve-RequiredDirectory $RepositoryRoot 'repository_root_invalid'
-	if ($ExplicitReportRequested) {
-		if ($ReportPath -notmatch '^[A-Za-z]:[\\/]' -or $ReportPath -match '^[\\/]{2}' -or $ReportPath.Substring(2).Contains(':')) { throw 'report_path_invalid' }
-		$CandidateReport = [IO.Path]::GetFullPath($ReportPath)
+	if ($HasPhaseSupervisorAuthenticationSignal) {
+		try {
+			if (-not $IsPhaseMode) { throw 'phase_supervisor_auth_invalid' }
+			Initialize-EngineGateJobType
+			$ActualParentProcessId = [Aetheln.EngineGateJob]::GetCurrentParentProcessId()
+			$ActualParentProcess = Get-Process -Id $ActualParentProcessId -ErrorAction Stop
+			$ActualParentStartTicks = $ActualParentProcess.StartTime.ToUniversalTime().Ticks
+			$IsAuthenticatedPhaseChild = Test-PhaseSupervisorAuthentication `
+				-Marker $PhaseSupervisorMarker `
+				-EnvironmentNonce $PhaseSupervisorEnvironmentNonce `
+				-EnvironmentParentProcessId $PhaseSupervisorEnvironmentParentProcessId `
+				-EnvironmentParentStartTicks $PhaseSupervisorEnvironmentParentStartTicks `
+				-ParameterNonce $PhaseSupervisorNonce `
+				-ParameterParentProcessId $PhaseSupervisorParentProcessId `
+				-ParameterParentStartTicks $PhaseSupervisorParentStartTicks `
+				-ActualParentProcessId $ActualParentProcessId `
+				-ActualParentStartTicks $ActualParentStartTicks
+			if (-not $IsAuthenticatedPhaseChild) { throw 'phase_supervisor_auth_invalid' }
+		} catch { $PhaseSupervisorAuthenticationInvalid = $true }
+	}
+	$IsPhaseSupervisorParent = $IsPhaseMode -and -not $IsAuthenticatedPhaseChild
+	if ($ExplicitReportRequested -or $IsPhaseSupervisorParent) {
+		$RequestedReport = if ($ExplicitReportRequested) { $ReportPath } else { Join-Path $ResolvedRepository 'TestResults\engine-runner-report.json' }
+		if ($RequestedReport -notmatch '^[A-Za-z]:[\\/]' -or $RequestedReport -match '^[\\/]{2}' -or $RequestedReport.Substring(2).Contains(':')) { throw 'report_path_invalid' }
+		$CandidateReport = [IO.Path]::GetFullPath($RequestedReport)
 		if (Test-Path -LiteralPath $CandidateReport) { throw 'report_path_exists' }
 		$Ancestor = Split-Path $CandidateReport
 		while ($Ancestor) {
@@ -1260,19 +1842,62 @@ try {
 		}
 		$ResolvedReportPath = $CandidateReport
 	}
+	if ($PhaseSupervisorAuthenticationInvalid) {
+		Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-phase-supervisor-authentication' -Message 'phase_supervisor_auth_invalid'
+		throw 'phase_supervisor_auth_invalid'
+	}
 	if ($Mode -eq 'Compile') {
 		if ([double]::IsNaN($CompileTimeoutMinutes) -or [double]::IsInfinity($CompileTimeoutMinutes) -or $CompileTimeoutMinutes -le 0 -or $CompileTimeoutMinutes -gt 30) {
-			Add-Check 'runner-input-validation' 'failed' $Started 'validate-runner-inputs' 'compile_timeout_invalid'
+			Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-runner-inputs' -Message 'compile_timeout_invalid'
 			throw 'compile_timeout_invalid'
 		}
-		$CompileDeadlineUtc = $Started.AddMinutes($CompileTimeoutMinutes)
+		if ($ManagedCompile) {
+			. (Join-Path $PSScriptRoot 'RoutineCompileDeadline.ps1')
+			if ($IsCompileChild) {
+				$CompileStartedUtc = $CompileSupervisorContext.startedUtc
+				$CompileStartedTimestamp = $CompileSupervisorContext.startedTimestamp
+			}
+			$RoutineDeadline = New-RoutineCompileDeadline -StartedUtc $CompileStartedUtc -StartedTimestamp $CompileStartedTimestamp -TimeoutMinutes $CompileTimeoutMinutes
+			$Started = [DateTime]::ParseExact($CompileStartedUtc, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)
+			$CompileDeadlineUtc = Get-RoutineCompileDeadlineUtc -Deadline $RoutineDeadline
+		} else { $CompileDeadlineUtc = $Started.AddMinutes($CompileTimeoutMinutes) }
 		if (-not $IsCompileChild) {
-			$ResolvedLogs = Resolve-OutputRoot $LogRoot $ResolvedRepository 'log_root_invalid'
+			$ResolvedLogs = Resolve-OutputRoot -Value $LogRoot -Repository $ResolvedRepository -ReasonCode 'log_root_invalid'
 			Invoke-CompileSupervisor
 			Write-RunnerReport
 			$SupervisedChildExited = $true
 			Write-Output 'engine_runner_passed'
 			exit 0
+		}
+	}
+	if ($ManagedCompile) {
+		$WorkspaceStarted = [DateTime]::UtcNow
+		try {
+			. (Join-Path $PSScriptRoot 'ManagedCompileRegistration.ps1')
+			. (Join-Path $PSScriptRoot 'ManagedCompileWorkspace.ps1')
+			$ManagedRegistration = Get-ManagedCompileRegistration -Path $ManagedWorkspaceRegistrationPath -ExpectedSha256 $ManagedWorkspaceRegistrationSha256 -Repository $Repository -TargetRoot $ManagedWorkspaceRoot
+			. (Join-Path $PSScriptRoot 'RoutineCompileResources.ps1')
+			. (Join-Path $PSScriptRoot 'RoutineCompileCommand.ps1')
+			Initialize-ManagedCompileResourceMonitor
+			$ControlRoot = $ResolvedRepository
+			$Registered = $ManagedRegistration.record
+			# Authorization comes from the separately registered operator tuple;
+			# this is not endpoint/filter/hook certification by candidate code.
+			$TrustRegisteredWorkspace = {
+				param($ProposedControl, $ProposedTarget, $ProposedRepository, $ProposedRevision)
+				return ($ProposedControl -ceq $ControlRoot -and
+					[string]::Equals([IO.Path]::GetFullPath($ProposedTarget).TrimEnd('\', '/'), [IO.Path]::GetFullPath($Registered.targetRoot).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -and
+					$ProposedRepository -ceq $Registered.repository -and $ProposedRevision -ceq $SourceRevision)
+			}
+			$null = Sync-ManagedCompileWorkspace -ControlRoot $ControlRoot -TargetRoot $ManagedWorkspaceRoot -SourceRevision $SourceRevision -Repository $Repository -ExpectedGitCommonDirectory $Registered.gitCommonDirectory -DeadlineUtc $CompileDeadlineUtc -RemainingBudget { Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline } -AssertRepositoryTrust $TrustRegisteredWorkspace -OnProgress { Assert-RoutineCompileProgress }
+			$ResolvedRepository = Resolve-RequiredDirectory $ManagedWorkspaceRoot 'managed_workspace_root_invalid'
+			$ManagedWorkspaceEvidence = [ordered]@{ schemaVersion = 1; registrationId = $Registered.registrationId;
+				registrationSha256 = $ManagedWorkspaceRegistrationSha256; preparationReceiptSha256 = $Registered.preparationReceiptSha256;
+				revision = $SourceRevision; synchronized = $true }
+			Add-Check -Name 'managed-compile-workspace' -Status 'passed' -CheckStarted $WorkspaceStarted -Command 'synchronize-registered-workspace' -Message 'managed_workspace_synchronized'
+		} catch {
+			Add-Check -Name 'managed-compile-workspace' -Status 'failed' -CheckStarted $WorkspaceStarted -Command 'synchronize-registered-workspace' -Message 'managed_workspace_failed'
+			throw
 		}
 	}
 	$ValidationStarted = [DateTime]::UtcNow
@@ -1287,15 +1912,15 @@ try {
 		if ($Mode -eq 'Compile' -and -not (Test-Path -LiteralPath $BuildBatch -PathType Leaf)) { throw 'build_batch_missing' }
 		if ($Mode -in @('PackagedSmoke', 'PackageClient', 'PackageServer', 'ValidateProvenance') -and -not (Test-Path -LiteralPath $BuildScript -PathType Leaf)) { throw 'build_script_missing' }
 		if ($Mode -in @('PackagedSmoke', 'SmokePhase') -and -not (Test-Path -LiteralPath $SmokeScript -PathType Leaf)) { throw 'smoke_script_missing' }
-		$ResolvedArchive = if ($IsPhaseMode) { $null } else { Resolve-OutputRoot $ArchiveRoot $ResolvedRepository 'archive_root_invalid' }
-		$ResolvedLogs = Resolve-OutputRoot $LogRoot $ResolvedRepository 'log_root_invalid'
+		$ResolvedArchive = if ($IsPhaseMode) { $null } else { Resolve-OutputRoot -Value $ArchiveRoot -Repository $ResolvedRepository -ReasonCode 'archive_root_invalid' }
+		$ResolvedLogs = Resolve-OutputRoot -Value $LogRoot -Repository $ResolvedRepository -ReasonCode 'log_root_invalid'
 		if ($SourceRevision -notmatch '^[0-9a-fA-F]{40}$') { throw 'revision_invalid' }
-		Add-Check 'runner-input-validation' 'passed' $ValidationStarted 'validate-runner-inputs' 'validation_passed'
+		Add-Check -Name 'runner-input-validation' -Status 'passed' -CheckStarted $ValidationStarted -Command 'validate-runner-inputs' -Message 'validation_passed'
 	} catch {
-		Add-Check 'runner-input-validation' 'failed' $ValidationStarted 'validate-runner-inputs' ([string] $_.Exception.Message)
+		Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $ValidationStarted -Command 'validate-runner-inputs' -Message ([string] $_.Exception.Message)
 		throw
 	}
-	$ProtectedValues = @($ResolvedRepository, $ProjectPath, $BuildScript, $SmokeScript, $BuildBatch, $EngineRoot, $ToolchainRoot, $ResolvedArchive, $ResolvedLogs)
+	$ProtectedValues = @($ResolvedRepository, $RepositoryRoot, $ManagedWorkspaceRegistrationPath, $HostLeasePath, $ProjectPath, $BuildScript, $SmokeScript, $BuildBatch, $EngineRoot, $ToolchainRoot, $ResolvedArchive, $ResolvedLogs)
 
 	$DdcRoot = $null
 	$DdcFallback = 'FailClosed'
@@ -1308,7 +1933,7 @@ try {
 		try {
 			$DdcValue = [Environment]::GetEnvironmentVariable('AETHELN_DDC_ROOT', 'Process')
 			if ([string]::IsNullOrWhiteSpace($DdcValue)) {
-				Add-Check 'ddc-cache-configuration' 'passed' $DdcStarted 'resolve-ddc-configuration' 'ddc_not_configured'
+				Add-Check -Name 'ddc-cache-configuration' -Status 'passed' -CheckStarted $DdcStarted -Command 'resolve-ddc-configuration' -Message 'ddc_not_configured'
 			} else {
 				if ($DdcValue -match '^[\\/]{2}') { throw 'ddc_root_invalid' }
 				if (-not [System.IO.Path]::IsPathRooted($DdcValue)) { throw 'ddc_root_invalid' }
@@ -1329,12 +1954,12 @@ try {
 					default { throw 'ddc_fallback_invalid' }
 				}
 				$DdcRoot = $DdcFull
-				Add-Check 'ddc-cache-configuration' 'passed' $DdcStarted 'resolve-ddc-configuration' 'ddc_configured'
+				Add-Check -Name 'ddc-cache-configuration' -Status 'passed' -CheckStarted $DdcStarted -Command 'resolve-ddc-configuration' -Message 'ddc_configured'
 			}
 		} catch {
 			$Reason = [string] $_.Exception.Message
 			if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'ddc_root_invalid' }
-			Add-Check 'ddc-cache-configuration' 'failed' $DdcStarted 'resolve-ddc-configuration' $Reason
+			Add-Check -Name 'ddc-cache-configuration' -Status 'failed' -CheckStarted $DdcStarted -Command 'resolve-ddc-configuration' -Message $Reason
 			throw $Reason
 		}
 		if ($null -ne $DdcRoot) { $ProtectedValues += @($DdcRoot) }
@@ -1354,7 +1979,7 @@ try {
 			if ([string]::IsNullOrWhiteSpace($HostToolsValue)) { throw 'host_tools_configuration_required' }
 			if ($HostToolsValue -eq 'rebuild-authorized') {
 				$HostToolsArguments = @{ HostToolsBoundary = 'Rebuild' }
-				Add-Check 'host-tools-configuration' 'passed' $HostToolsStarted 'resolve-host-tools-configuration' 'host_tools_rebuild_authorized'
+				Add-Check -Name 'host-tools-configuration' -Status 'passed' -CheckStarted $HostToolsStarted -Command 'resolve-host-tools-configuration' -Message 'host_tools_rebuild_authorized'
 			} elseif ($HostToolsValue -eq 'prebuilt') {
 				$EngineRevisionValue = [Environment]::GetEnvironmentVariable('AETHELN_ENGINE_REVISION', 'Process')
 				if ([string]::IsNullOrWhiteSpace($EngineRevisionValue) -or $EngineRevisionValue -notmatch '^[0-9a-fA-F]{40}$') { throw 'engine_revision_invalid' }
@@ -1372,12 +1997,12 @@ try {
 					if ((Test-IsWithin $AttestationFull $ForbiddenFull) -or (Test-IsWithin $ForbiddenFull $AttestationFull)) { throw 'host_tools_attestation_invalid' }
 				}
 				$HostToolsArguments = @{ HostToolsBoundary = 'Prebuilt'; EngineRevision = $EngineRevisionValue.ToLowerInvariant(); HostToolsAttestationPath = $AttestationFull }
-				Add-Check 'host-tools-configuration' 'passed' $HostToolsStarted 'resolve-host-tools-configuration' 'host_tools_prebuilt'
+				Add-Check -Name 'host-tools-configuration' -Status 'passed' -CheckStarted $HostToolsStarted -Command 'resolve-host-tools-configuration' -Message 'host_tools_prebuilt'
 			} else { throw 'host_tools_invalid' }
 		} catch {
 			$Reason = [string] $_.Exception.Message
 			if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'host_tools_invalid' }
-			Add-Check 'host-tools-configuration' 'failed' $HostToolsStarted 'resolve-host-tools-configuration' $Reason
+			Add-Check -Name 'host-tools-configuration' -Status 'failed' -CheckStarted $HostToolsStarted -Command 'resolve-host-tools-configuration' -Message $Reason
 			throw $Reason
 		}
 		if ($HostToolsArguments.ContainsKey('HostToolsAttestationPath')) { $ProtectedValues += @($HostToolsArguments['HostToolsAttestationPath']) }
@@ -1386,19 +2011,41 @@ try {
 		if ($RunnerName -match $RunnerNamePattern) { $HostToolsArguments['RunnerName'] = $RunnerName }
 	}
 
-	if ($IsPhaseMode -and $PhaseTimeoutMinutes -gt 0 -and $PhaseTimeoutMinutes -le 1440 -and [Environment]::GetEnvironmentVariable('AETHELN_PHASE_SUPERVISED', 'Process') -ne '1') {
-		# Supervisor (parent) path: run the complete phase body in an owned
-		# kill-on-close child tree; on a normal child exit relay its captured
-		# output and exit code (the child already wrote the report), on hard
-		# expiry classify and let the finally block write the bounded report.
+	if ($IsPhaseMode -and $PhaseTimeoutMinutes -gt 0 -and $PhaseTimeoutMinutes -le 1440 -and -not $IsAuthenticatedPhaseChild) {
+		# Supervisor (parent) path: the child writes only a private bounded report.
+		# After the owned Job Object proves quiescence, this parent validates that
+		# report, attaches its own cleanup receipt, and create-only publishes the
+		# final evidence exactly once. Child exit can never imply descendant cleanup.
 		$SupervisorStarted = [DateTime]::UtcNow
 		$SupervisorResult = Invoke-PhaseSupervisor
-		if ($SupervisorResult.timedOut) {
-			$HardReason = if ([string]::IsNullOrWhiteSpace([string] $SupervisorResult.cleanupFailure)) { 'phase_timeout' } else { 'phase_cleanup_failed' }
-			Add-Check 'phase-hard-deadline' 'failed' $SupervisorStarted 'supervise-phase-child-tree' $HardReason
+		$OuterCleanupVerified = $SupervisorResult.Contains('cleanupVerified') -and
+			$SupervisorResult.cleanupVerified -is [bool] -and $SupervisorResult.cleanupVerified -and
+			$SupervisorResult.Contains('cleanupFailure') -and [string]::IsNullOrWhiteSpace([string] $SupervisorResult.cleanupFailure)
+		$script:SupervisorReceipt = [ordered]@{
+			childExitCode = $SupervisorResult.exitCode
+			timedOut = [bool] $SupervisorResult.timedOut
+			cleanupVerified = $OuterCleanupVerified
+		}
+		if (-not $OuterCleanupVerified -or $SupervisorResult.timedOut) {
+			$HardReason = if ($OuterCleanupVerified) { 'phase_timeout' } else { 'phase_cleanup_failed' }
+			Add-Check -Name 'phase-hard-deadline' -Status 'failed' -CheckStarted $SupervisorStarted -Command 'supervise-phase-child-tree' -Message $HardReason
+			$SupervisedChildExited = $true
+			Write-RunnerReport
 			throw $HardReason
 		}
+		try {
+			$ChildReport = Read-PhaseSupervisorReport -Path ([string] $SupervisorResult.childReportPath) -ExpectedMode $Mode -ExpectedRevision $SourceRevision -ExpectedRunnerName $RunnerName
+			$ChildFailed = [long] $ChildReport.summary.requiredFailed -gt 0
+			if (($SupervisorResult.exitCode -eq 0 -and $ChildFailed) -or ($SupervisorResult.exitCode -ne 0 -and -not $ChildFailed)) { throw 'phase_report_invalid' }
+			$script:RelayedReport = $ChildReport
+		} catch {
+			Add-Check -Name 'phase-supervisor-report' -Status 'failed' -CheckStarted $SupervisorStarted -Command 'validate-private-phase-report' -Message 'phase_report_invalid'
+			$SupervisedChildExited = $true
+			Write-RunnerReport
+			throw 'phase_report_invalid'
+		}
 		$SupervisedChildExited = $true
+		Write-RunnerReport
 		foreach ($Line in @($SupervisorResult.output)) { Write-Output ([string] $Line) }
 		if ($SupervisorResult.exitCode -ne 0) { exit 1 }
 		exit 0
@@ -1432,16 +2079,16 @@ try {
 			Assert-PhaseContext
 			$HandoffRoot = Resolve-HandoffRoot @($ResolvedRepository, $EngineRoot, $ToolchainRoot, [Environment]::GetEnvironmentVariable('RUNNER_TEMP', 'Process'), [Environment]::GetEnvironmentVariable('GITHUB_WORKSPACE', 'Process'))
 			$RepositoryParts = $Repository -split '/'
-			$OwnerRoot = Get-HandoffChildPath $HandoffRoot $RepositoryParts[0] 'handoff_root_invalid'
-			$ScopeRoot = Get-HandoffChildPath $OwnerRoot $RepositoryParts[1] 'handoff_root_invalid'
-			$RunDirectory = Get-HandoffChildPath $ScopeRoot ('run-{0}-attempt-{1}' -f $RunId, $RunAttempt) 'handoff_root_invalid'
-			Assert-PathChainSafe $HandoffRoot $RunDirectory 'handoff_root_invalid'
+			$OwnerRoot = Get-HandoffChildPath -Parent $HandoffRoot -Child $RepositoryParts[0] -ReasonCode 'handoff_root_invalid'
+			$ScopeRoot = Get-HandoffChildPath -Parent $OwnerRoot -Child $RepositoryParts[1] -ReasonCode 'handoff_root_invalid'
+			$RunDirectory = Get-HandoffChildPath -Parent $ScopeRoot -Child ('run-{0}-attempt-{1}' -f $RunId, $RunAttempt) -ReasonCode 'handoff_root_invalid'
+			Assert-PathChainSafe -Root $HandoffRoot -Leaf $RunDirectory -ReasonCode 'handoff_root_invalid'
 			if (-not (Test-Path -LiteralPath $ScopeRoot)) { New-Item -ItemType Directory -Path $ScopeRoot -Force | Out-Null }
-			Add-Check 'handoff-validation' 'passed' $HandoffStarted 'validate-handoff-context' 'handoff_context_valid'
+			Add-Check -Name 'handoff-validation' -Status 'passed' -CheckStarted $HandoffStarted -Command 'validate-handoff-context' -Message 'handoff_context_valid'
 		} catch {
 			$Reason = [string] $_.Exception.Message
 			if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'handoff_root_invalid' }
-			Add-Check 'handoff-validation' 'failed' $HandoffStarted 'validate-handoff-context' $Reason
+			Add-Check -Name 'handoff-validation' -Status 'failed' -CheckStarted $HandoffStarted -Command 'validate-handoff-context' -Message $Reason
 			throw $Reason
 		}
 		$ProtectedValues += @($HandoffRoot, $ScopeRoot, $RunDirectory)
@@ -1455,16 +2102,16 @@ try {
 				# root, so every repository scope counts toward the total cap.
 				# Reparse points are never traversed or counted: their content
 				# does not live under the root.
-				$CommittedBytes = Get-DirectoryBytes $HandoffRoot 'handoff_storage_exhausted' $true
+				$CommittedBytes = Get-DirectoryByteCount -Root $HandoffRoot -ReasonCode 'handoff_storage_exhausted' -SkipReparse $true
 				if ($CommittedBytes -gt ($HandoffRootCapBytes - $HandoffPayloadCapBytes)) { throw 'handoff_storage_exhausted' }
 				if (Test-Path -LiteralPath $RunDirectory) { throw 'handoff_conflict' }
 				New-Item -ItemType Directory -Path $RunDirectory | Out-Null
 				Write-RunContextRecord
-				Add-Check 'handoff-storage-accounting' 'passed' $StorageStarted 'reserve-handoff-storage' 'handoff_storage_reserved'
+				Add-Check -Name 'handoff-storage-accounting' -Status 'passed' -CheckStarted $StorageStarted -Command 'reserve-handoff-storage' -Message 'handoff_storage_reserved'
 			} catch {
 				$Reason = [string] $_.Exception.Message
 				if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'handoff_storage_exhausted' }
-				Add-Check 'handoff-storage-accounting' 'failed' $StorageStarted 'reserve-handoff-storage' $Reason
+				Add-Check -Name 'handoff-storage-accounting' -Status 'failed' -CheckStarted $StorageStarted -Command 'reserve-handoff-storage' -Message $Reason
 				throw $Reason
 			}
 		} else {
@@ -1473,11 +2120,11 @@ try {
 				Assert-PhaseDeadline
 				if (-not (Test-Path -LiteralPath $RunDirectory -PathType Container)) { throw 'handoff_missing' }
 				[void] (Test-RunContextRecord $RunDirectory $true)
-				Add-Check 'handoff-run-directory' 'passed' $RunContextStarted 'validate-handoff-run-context' 'handoff_run_context_valid'
+				Add-Check -Name 'handoff-run-directory' -Status 'passed' -CheckStarted $RunContextStarted -Command 'validate-handoff-run-context' -Message 'handoff_run_context_valid'
 			} catch {
 				$Reason = [string] $_.Exception.Message
 				if ($Reason -notmatch '^[a-z0-9_]+$') { $Reason = 'handoff_context_invalid' }
-				Add-Check 'handoff-run-directory' 'failed' $RunContextStarted 'validate-handoff-run-context' $Reason
+				Add-Check -Name 'handoff-run-directory' -Status 'failed' -CheckStarted $RunContextStarted -Command 'validate-handoff-run-context' -Message $Reason
 				throw $Reason
 			}
 		}
@@ -1491,24 +2138,27 @@ try {
 			[ordered]@{ name = 'incremental-server-build'; label = 'AethelnOnlineServer Linux Development'; target = 'AethelnOnlineServer'; platform = 'Linux'; arguments = @('AethelnOnlineServer', 'Linux', 'Development', $ProjectPath, '-WaitMutex', '-NoHotReloadFromIDE') }
 		)
 		foreach ($Target in $Targets) {
-			if ([DateTime]::UtcNow -ge $CompileDeadlineUtc) { throw 'compile_timeout' }
+			if ($ManagedCompile) { Assert-RoutineCompileProgress }
+			elseif ([DateTime]::UtcNow -ge $CompileDeadlineUtc) { throw 'compile_timeout' }
 			$Presence = Get-IntermediatePresence $Target.platform $Target.target
 			$BuildStarted = [DateTime]::UtcNow
-			$BuildResult = Invoke-Captured $BuildBatch $Target.arguments
-			if ([DateTime]::UtcNow -ge $CompileDeadlineUtc) { throw 'compile_timeout' }
-			Add-CompileBuildEvidence $Target.name $Target.target $Target.platform $Presence $BuildResult.output $true
+			$BuildResult = if ($ManagedCompile) { Invoke-RoutineManagedBuild -Target $Target } else { Invoke-Captured $BuildBatch $Target.arguments }
+			if ($ManagedCompile) { Assert-RoutineCompileProgress }
+			elseif ([DateTime]::UtcNow -ge $CompileDeadlineUtc) { throw 'compile_timeout' }
+			Add-CompileBuildEvidence -Check $Target.name -Target $Target.target -Platform $Target.platform -Presence $Presence -Output $BuildResult.output -OutputAvailable $true
 			$BuildFailure = $null
 			if ($BuildResult.exitCode -ne 0) {
-				$BuildMessage = Get-SafeDiagnosticMessage 'build_failed' $BuildResult.output $ProtectedValues
-				Add-Check $Target.name 'failed' $BuildStarted $Target.label $BuildMessage
+				$BuildMessage = Get-SafeDiagnosticMessage -Reason 'build_failed' -Output $BuildResult.output -ProtectedValues $ProtectedValues
+				Add-Check -Name $Target.name -Status 'failed' -CheckStarted $BuildStarted -Command $Target.label -Message $BuildMessage
 				$BuildFailure = 'build_failed'
 			} else {
-				Add-Check $Target.name 'passed' $BuildStarted $Target.label 'build_passed'
+				Add-Check -Name $Target.name -Status 'passed' -CheckStarted $BuildStarted -Command $Target.label -Message 'build_passed'
 			}
 			Complete-CommandStateCheck ($Target.name + '-repository-state') $BuildFailure
 		}
 		Assert-RepositoryState 'repository-state-at-completion'
-		if ([DateTime]::UtcNow -ge $CompileDeadlineUtc) { throw 'compile_timeout' }
+		if ($ManagedCompile) { Assert-RoutineCompileProgress }
+		elseif ([DateTime]::UtcNow -ge $CompileDeadlineUtc) { throw 'compile_timeout' }
 	} elseif ($Mode -eq 'PackagedSmoke') {
 		$BuildStarted = [DateTime]::UtcNow
 		$BuildOutput = New-Object System.Collections.ArrayList
@@ -1517,16 +2167,16 @@ try {
 			$DdcArguments = @{}
 			if ($null -ne $DdcRoot) { $DdcArguments['DerivedDataCachePath'] = $DdcRoot; $DdcArguments['CacheFallback'] = $DdcFallback }
 			& $BuildScript -ProjectPath $ProjectPath -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $ResolvedArchive -LogRoot $ResolvedLogs -SourceRevision $SourceRevision -Configuration Development -Map '/Game/Maps/StarterMap' @DdcArguments @HostToolsArguments *>&1 | ForEach-Object { [void] $BuildOutput.Add($_) }
-			Add-Check 'clean-packaged-client-server-build' 'passed' $BuildStarted 'Build-PackagedArtifacts.ps1' 'build_passed'
+			Add-Check -Name 'clean-packaged-client-server-build' -Status 'passed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message 'build_passed'
 		} catch {
 			[void] $BuildOutput.Add($_)
-			$BuildMessage = Get-SafeDiagnosticMessage 'build_failed' $BuildOutput $ProtectedValues
-			Add-Check 'clean-packaged-client-server-build' 'failed' $BuildStarted 'Build-PackagedArtifacts.ps1' $BuildMessage
+			$BuildMessage = Get-SafeDiagnosticMessage -Reason 'build_failed' -Output $BuildOutput -ProtectedValues $ProtectedValues
+			Add-Check -Name 'clean-packaged-client-server-build' -Status 'failed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message $BuildMessage
 			$BuildFailure = 'build_failed'
 		}
 		# Both targets build in one controller invocation, so pre-run presence
 		# is not attributable to one platform and stays explicitly null.
-		Add-CompileBuildEvidence 'clean-packaged-client-server-build' 'AethelnOnlineClient+AethelnOnlineServer' 'Win64+Linux' $null $BuildOutput $true
+		Add-CompileBuildEvidence -Check 'clean-packaged-client-server-build' -Target 'AethelnOnlineClient+AethelnOnlineServer' -Platform 'Win64+Linux' -Presence $null -Output $BuildOutput -OutputAvailable $true
 
 		Complete-CommandStateCheck 'repository-state-after-package' $BuildFailure
 
@@ -1534,10 +2184,10 @@ try {
 
 		Complete-CommandStateCheck 'repository-state-at-completion' $SmokeFailure
 	} elseif ($Mode -eq 'PackageClient' -or $Mode -eq 'PackageServer') {
-		$PhaseDirectory = Get-HandoffChildPath $RunDirectory $PhaseName 'handoff_conflict'
+		$PhaseDirectory = Get-HandoffChildPath -Parent $RunDirectory -Child $PhaseName -ReasonCode 'handoff_conflict'
 		$CheckName = 'scheduled-{0}-package' -f $PhaseName
 		if ((Test-Path -LiteralPath $PhaseDirectory) -or (Test-Path -LiteralPath (Join-Path $RunDirectory ('manifest-{0}.json' -f $PhaseName)))) {
-			Add-Check $CheckName 'failed' ([DateTime]::UtcNow) 'Build-PackagedArtifacts.ps1' 'handoff_conflict'
+			Add-Check -Name $CheckName -Status 'failed' -CheckStarted ([DateTime]::UtcNow) -Command 'Build-PackagedArtifacts.ps1' -Message 'handoff_conflict'
 			throw 'handoff_conflict'
 		}
 		$Stage = if ($Mode -eq 'PackageClient') { 'Client' } else { 'Server' }
@@ -1558,31 +2208,31 @@ try {
 		if ($null -ne $DdcRoot) { $PhaseParameters['DerivedDataCachePath'] = $DdcRoot; $PhaseParameters['CacheFallback'] = $DdcFallback }
 		foreach ($HostToolsKey in @($HostToolsArguments.Keys)) { $PhaseParameters[$HostToolsKey] = $HostToolsArguments[$HostToolsKey] }
 		$BuildStarted = [DateTime]::UtcNow
-		$PhaseResult = Invoke-PhaseChildWithinDeadline (New-NamedInvocationText $BuildScript $PhaseParameters)
-		Add-CompileBuildEvidence $CheckName $StageTarget $StagePlatform $Presence $PhaseResult.output (-not $PhaseResult.timedOut)
+		$PhaseResult = Invoke-PhaseChildWithinDeadline (ConvertTo-NamedInvocationText $BuildScript $PhaseParameters)
+		Add-CompileBuildEvidence -Check $CheckName -Target $StageTarget -Platform $StagePlatform -Presence $Presence -Output $PhaseResult.output -OutputAvailable (-not $PhaseResult.timedOut)
 		$BuildFailure = $null
 		if ($PhaseResult.timedOut) {
 			$TimeoutReason = if ([string]::IsNullOrWhiteSpace([string] $PhaseResult.cleanupFailure)) { 'phase_timeout' } else { 'phase_cleanup_failed' }
-			Add-Check $CheckName 'failed' $BuildStarted 'Build-PackagedArtifacts.ps1' $TimeoutReason
+			Add-Check -Name $CheckName -Status 'failed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message $TimeoutReason
 			$BuildFailure = $TimeoutReason
 		} elseif ($PhaseResult.exitCode -ne 0) {
-			$BuildMessage = Get-SafeDiagnosticMessage 'build_failed' $PhaseResult.output $ProtectedValues
-			Add-Check $CheckName 'failed' $BuildStarted 'Build-PackagedArtifacts.ps1' $BuildMessage
+			$BuildMessage = Get-SafeDiagnosticMessage -Reason 'build_failed' -Output $PhaseResult.output -ProtectedValues $ProtectedValues
+			Add-Check -Name $CheckName -Status 'failed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message $BuildMessage
 			$BuildFailure = 'build_failed'
 		} else {
-			Add-Check $CheckName 'passed' $BuildStarted 'Build-PackagedArtifacts.ps1' 'build_passed'
+			Add-Check -Name $CheckName -Status 'passed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message 'build_passed'
 		}
 		Complete-CommandStateCheck ('repository-state-after-{0}-package' -f $PhaseName) $BuildFailure
 
-		Invoke-HandoffPublish $RunDirectory $PhaseName @('provenance', 'smoke')
+		Invoke-HandoffPublish -PublishRunDirectory $RunDirectory -Phase $PhaseName -Consumers @('provenance', 'smoke')
 		Assert-RepositoryState 'repository-state-at-completion'
 	} elseif ($Mode -eq 'ValidateProvenance') {
-		$ConsumedDirectories = Invoke-HandoffConsumeSet $RunDirectory @('client', 'server') 'provenance'
+		$ConsumedDirectories = Invoke-HandoffConsumeSet -ConsumeRunDirectory $RunDirectory -Phases @('client', 'server') -ConsumingPhase 'provenance'
 		$ClientDirectory = $ConsumedDirectories['client']
 		$ServerDirectory = $ConsumedDirectories['server']
-		$PhaseDirectory = Get-HandoffChildPath $RunDirectory $PhaseName 'handoff_conflict'
+		$PhaseDirectory = Get-HandoffChildPath -Parent $RunDirectory -Child $PhaseName -ReasonCode 'handoff_conflict'
 		if ((Test-Path -LiteralPath $PhaseDirectory) -or (Test-Path -LiteralPath (Join-Path $RunDirectory ('manifest-{0}.json' -f $PhaseName)))) {
-			Add-Check 'registry-provenance-validation' 'failed' ([DateTime]::UtcNow) 'Build-PackagedArtifacts.ps1' 'handoff_conflict'
+			Add-Check -Name 'registry-provenance-validation' -Status 'failed' -CheckStarted ([DateTime]::UtcNow) -Command 'Build-PackagedArtifacts.ps1' -Message 'handoff_conflict'
 			throw 'handoff_conflict'
 		}
 		$PhaseParameters = [ordered]@{
@@ -1599,25 +2249,25 @@ try {
 			ServerStageRoot = $ServerDirectory
 		}
 		$BuildStarted = [DateTime]::UtcNow
-		$PhaseResult = Invoke-PhaseChildWithinDeadline (New-NamedInvocationText $BuildScript $PhaseParameters)
+		$PhaseResult = Invoke-PhaseChildWithinDeadline (ConvertTo-NamedInvocationText $BuildScript $PhaseParameters)
 		$BuildFailure = $null
 		if ($PhaseResult.timedOut) {
 			$TimeoutReason = if ([string]::IsNullOrWhiteSpace([string] $PhaseResult.cleanupFailure)) { 'phase_timeout' } else { 'phase_cleanup_failed' }
-			Add-Check 'registry-provenance-validation' 'failed' $BuildStarted 'Build-PackagedArtifacts.ps1' $TimeoutReason
+			Add-Check -Name 'registry-provenance-validation' -Status 'failed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message $TimeoutReason
 			$BuildFailure = $TimeoutReason
 		} elseif ($PhaseResult.exitCode -ne 0) {
-			$BuildMessage = Get-SafeDiagnosticMessage 'validation_failed' $PhaseResult.output $ProtectedValues
-			Add-Check 'registry-provenance-validation' 'failed' $BuildStarted 'Build-PackagedArtifacts.ps1' $BuildMessage
+			$BuildMessage = Get-SafeDiagnosticMessage -Reason 'validation_failed' -Output $PhaseResult.output -ProtectedValues $ProtectedValues
+			Add-Check -Name 'registry-provenance-validation' -Status 'failed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message $BuildMessage
 			$BuildFailure = 'validation_failed'
 		} else {
-			Add-Check 'registry-provenance-validation' 'passed' $BuildStarted 'Build-PackagedArtifacts.ps1' 'validation_passed'
+			Add-Check -Name 'registry-provenance-validation' -Status 'passed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message 'validation_passed'
 		}
 		Complete-CommandStateCheck 'repository-state-after-provenance-validation' $BuildFailure
 
-		Invoke-HandoffPublish $RunDirectory $PhaseName @('smoke')
+		Invoke-HandoffPublish -PublishRunDirectory $RunDirectory -Phase $PhaseName -Consumers @('smoke')
 		Assert-RepositoryState 'repository-state-at-completion'
 	} else {
-		[void] (Invoke-HandoffConsumeSet $RunDirectory @('client', 'server', 'provenance') 'smoke')
+		[void] (Invoke-HandoffConsumeSet -ConsumeRunDirectory $RunDirectory -Phases @('client', 'server', 'provenance') -ConsumingPhase 'smoke')
 
 		$SmokeFailure = Invoke-SmokeGateWork $RunDirectory $script:PhaseDeadlineUtc
 		# Marker, cleanup-request, and report finalization run after the
@@ -1633,7 +2283,7 @@ try {
 				# work is unfinished and must not become cleanup-eligible as a
 				# completed milestone. Evidence is still recorded.
 				Write-CleanupRequest $ScopeRoot $PhaseName
-				Add-Check 'handoff-milestone-completion' 'failed' $MarkerStarted 'write-milestone-marker' 'milestone_incomplete'
+				Add-Check -Name 'handoff-milestone-completion' -Status 'failed' -CheckStarted $MarkerStarted -Command 'write-milestone-marker' -Message 'milestone_incomplete'
 			} else {
 				Write-JsonAtomic ([ordered]@{
 					schemaVersion = 1
@@ -1646,10 +2296,10 @@ try {
 					finishedUtc = [DateTime]::UtcNow.ToString('o')
 				}) (Join-Path $RunDirectory 'milestone-complete.json')
 				Write-CleanupRequest $ScopeRoot $PhaseName
-				Add-Check 'handoff-milestone-completion' 'passed' $MarkerStarted 'write-milestone-marker' 'milestone_recorded'
+				Add-Check -Name 'handoff-milestone-completion' -Status 'passed' -CheckStarted $MarkerStarted -Command 'write-milestone-marker' -Message 'milestone_recorded'
 			}
 		} catch {
-			Add-Check 'handoff-milestone-completion' 'failed' $MarkerStarted 'write-milestone-marker' 'milestone_record_failed'
+			Add-Check -Name 'handoff-milestone-completion' -Status 'failed' -CheckStarted $MarkerStarted -Command 'write-milestone-marker' -Message 'milestone_record_failed'
 			if ([string]::IsNullOrWhiteSpace($SmokeFailure)) { $SmokeFailure = 'milestone_record_failed' }
 		}
 
@@ -1659,13 +2309,25 @@ try {
 	$RequiredFailed = $true
 	$FailureCode = [string] $_.Exception.Message
 	if ($FailureCode -notmatch '^[a-z0-9_]+$') { $FailureCode = 'engine_runner_failed' }
-	if ($Mode -eq 'Compile' -and $null -eq $RelayedReport -and @($Checks | Where-Object status -eq 'failed').Count -eq 0) {
-		Add-Check 'compile-gate' 'failed' $Started 'compile-gate' $FailureCode
+	# A validated child already owns its failure row. Preserve that evidence
+	# once; add a parent row only for a failure the child did not report.
+	$RelayedFailureRecorded = $null -ne $RelayedReport -and @($RelayedReport.checks | Where-Object {
+		$_.status -eq 'failed' -and ([string] $_.message -split '[\r\n]')[0] -ceq $FailureCode
+	}).Count -gt 0
+	if ($Mode -eq 'Compile' -and -not $RelayedFailureRecorded -and @($Checks | Where-Object status -eq 'failed').Count -eq 0) {
+		Add-Check -Name 'compile-gate' -Status 'failed' -CheckStarted $Started -Command 'compile-gate' -Message $FailureCode
 	}
 } finally {
-	# A supervised child that exited on its own already wrote the report;
-	# overwriting it here would replace rich per-check evidence with the
-	# parent's minimal view.
+	if ($null -ne $ManagedRegistration) {
+		try { Close-ManagedCompileRegistration -Registration $ManagedRegistration }
+		catch {
+			$RequiredFailed = $true; $FailureCode = 'managed_registration_cleanup_failed'
+			Add-Check -Name 'managed-compile-registration' -Status 'failed' -CheckStarted $Started -Command 'close-registration-proof' -Message $FailureCode
+		}
+	}
+	# A supervised parent publishes exactly once after validating private child
+	# evidence and proving owned-tree cleanup. Its explicit publication path sets
+	# this flag before control reaches the common finalizer.
 	if (-not $SupervisedChildExited) {
 		try { Write-RunnerReport } catch { $RequiredFailed = $true; $FailureCode = 'report_write_failed' }
 	}

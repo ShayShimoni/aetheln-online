@@ -283,7 +283,7 @@ Every accepted decision records:
   operator select an older branch that still carries the retired
   1,440-minute single-job gate, and no replacement manual workflow is
   provided. `trusted-candidate-compile` additionally needs the GitHub-hosted
-  `change-impact` classifier (`actions/checkout@v4` plus repository-owned
+  `change-impact` classifier (the reviewed full-SHA checkout action plus repository-owned
   PowerShell, no third-party action), which compares the exact pull-request
   base SHA and head SHA with a rename-free name-status diff and publishes
   `engine_required`. Compile is exempted only when every changed path is in
@@ -333,7 +333,10 @@ Every accepted decision records:
   parent runs the complete phase body — setup, handoff validation, cleanup
   scanning, root accounting, manifest reads, payload hashing, smoke discovery,
   build/smoke work, and timeout finalization — in an owned kill-on-close child
-  tree. The child keeps the cooperative absolute phase deadline (30/30/10/10
+  tree. Child mode requires a fresh 256-bit parent-issued nonce bound to the
+  direct parent process ID and start time; inherited, partial, mismatched, or
+  replayed credentials reject before phase work rather than bypassing the
+  supervisor. The child keeps the cooperative absolute phase deadline (30/30/10/10
   minutes, every operation consuming remaining time from that one deadline);
   if any synchronous operation or the timeout finalization blocks across it,
   the parent stops and verifies the whole tree at the deadline plus a bounded
@@ -434,9 +437,13 @@ Every accepted decision records:
   10-minute watchdogs. These are operational ceilings, not measured budgets.
   Supersede the former multi-hour TA-012 phase ceilings. Timeouts fail with
   retained evidence and owned-tree cleanup; no silent retry or longer fallback.
-  Keep dedicated sibling `compile/` and `milestone/` checkouts. Only Compile
-  retains the exact root `Binaries/` and `Intermediate/Build/` outputs after
-  scoped preflight; milestone checkout and packaging keep clean semantics.
+  Under the approved Issue #167 recovery, use a fresh exact-revision control
+  checkout and an explicitly registered retained compile workspace, disjoint
+  from `milestone/`. Never direct `actions/checkout` at a prepared linked
+  worktree. Retained synchronization and input validation run under the shared
+  host lease and compile supervisor; release requires verified child cleanup.
+  Preserve compile outputs without an implicit cold fallback or arbitrary
+  artifact transplant; milestone checkout and packaging keep clean semantics.
   Use a fresh run/attempt/job report outside the retained Compile checkout.
 - **Rationale:** Routine cleanup repeatedly destroys useful C++ outputs, while
   DDC does not cache those object files. A bounded, isolated incremental lane
@@ -566,6 +573,172 @@ Every accepted decision records:
   update the controller's canonical pin and `AETHELN_ENGINE_REVISION`),
   measured evidence shows the boundary does not reduce the dominant cost, or
   the milestone moves to an installed engine build distribution.
+
+### TA-016 - Revision-Bound Compile Applicability for Issue #151
+
+- **Status:** Accepted upon independent review and merge of this decision;
+  proposed until then.
+- **Scope:** Only [Issue #151](https://github.com/ShayShimoni/aetheln-online/issues/151)
+  as delivered by [PR #152](https://github.com/ShayShimoni/aetheln-online/pull/152),
+  base `085932aa31856041a9c5544ba4f838a2f5e66e24`,
+  head `278e334fda22a74f3aed9bff7128d358c7f315e1`, and
+  merge `2919ceaaf30d89bd374c4124b7e1fe76e0c778cf`.
+  The exact ten changed paths are below; every path is relative to
+  `.agents/skills/orchestrate-delivery/`:
+
+  - `SKILL.md`
+  - `references/handoff-schemas.json`
+  - `references/operating-contract.md`
+  - `scripts/Get-DeliveryEventTelemetry.ps1`
+  - `scripts/Invoke-DeliverySourceInspectionServer.ps1`
+  - `scripts/Invoke-DeliveryStage.ps1`
+  - `scripts/Validate-DeliveryHandoff.ps1`
+  - `scripts/tests/Test-DeliveryHandoffValidation.ps1`
+  - `scripts/tests/Test-DeliverySourceInspection.ps1`
+  - `scripts/tests/Test-DeliveryStageLauncher.ps1`
+
+- **Decision:** Under the owner's 2026-09-06 authorization to remove
+  unnecessary CI work, successful Unreal target compilation is not an
+  acceptance requirement for this exact historical change. Applicable proof
+  comprises focused source-inspection, handoff-validation, and stage-launcher
+  regressions; reproduction from retained initial/replacement events; and
+  independent post-merge QA of the installed-Codex replacement path.
+- **Rationale:** These protocol, PowerShell, documentation, and test changes
+  neither supply nor generate Unreal compilation inputs. Compiling client and
+  server targets does not exercise the closed source-reader schema,
+  retry-neutral preflight rejection, pagination telemetry, or restricted
+  replacement launch. The normal portable CI suite excludes this `.agents/`
+  test harness, so a green portable report alone is also insufficient.
+- **Owner/evidence:** Issue #151 and PR #152 bind the historical change and
+  pre-publication focused regression/replay reports. Retained post-merge QA
+  for the merge above records 33 source-inspection, 231 handoff-validation,
+  and 275 stage-launcher passing rows, each with exit code zero. The retained
+  supported-replacement evidence manifest has SHA-256
+  `de3ca2563a68472fd02b5546714f0bd563967ebbf00a7753b14126f0c0fd0e6a`.
+  These suite results and manifest do not by themselves establish
+  installed-Codex acceptance. Final independent acceptance must reconcile the
+  retained replacement-path events,
+  audit evidence, and source identity; publication must also reconcile the
+  current issue/PR event history. This decision does not declare Issue #151
+  Done or unblock #139.
+- **Alternatives:** Requiring an unrelated Unreal compile for these exact
+  protocol changes; accepting ordinary portable CI without the delivery
+  harness; exempting the entire `.agents/` directory or future changes to
+  these paths. The latter two leave the relevant behavior unproven.
+- **Consequences:** Earlier failed compilation remains failed operational
+  evidence, and absent compilation evidence remains missing; neither becomes
+  a pass. This decision changes no workflow, TA-012 closed classifier, future
+  gate, trust predicate, retry budget, isolation rule, or packaged milestone.
+  It creates no directory exemption or automatic waiver for a later revision,
+  even at the same paths. Unreal/build infrastructure operational failures
+  remain separately actionable, and this decision claims no measured speedup.
+- **Revisit trigger:** Any different base/head/merge, path set, behavior that
+  supplies engine inputs, or contradictory retained evidence requires a new
+  applicability review. Future changes continue through the existing gates.
+
+### TA-017 - Shadow-First CI Selection with Accepted-Base Control
+
+- **Status:** Accepted
+- **Scope:** Issue #167 CI selection, receipts, and later authority activation.
+- **Decision:** Introduce selection shadow-first. Package 2 adds one independent
+  pull-request-only hosted job and the reusable selector while preserving the
+  existing `change-impact` authority exactly. The shadow has no dependency,
+  outputs, consumer, self-hosted label, engine concurrency, or conclusion
+  effect. Fetch exact base, head, and synthetic merge objects into a
+  bare/no-checkout repository before the only sparse checkout, then execute
+  only accepted-base controller bytes after verifying their Git blob OID and
+  SHA-256. Never execute a candidate selector. Package 2 accepted policy
+  `shadow-v1` had canonical digest
+  `07bb90760bf493e25e40ac781143d07e701a113db3ede8bc7380490f6b85e9b6`.
+  Package 3A corrects the overbroad clean-milestone mapping while remaining
+  shadow-only; its candidate policy digest is
+  `52f43ef45d9515bae76315026674ac0e052823b6dc63ec9ed008d093774c90a4`;
+  every live report also binds the exact accepted controller revision, blob
+  OID, and blob-byte SHA-256. The bootstrap
+  `accepted_controller_unavailable` record selects all checks and is not
+  equivalence evidence. The first meaningful later live comparison must use
+  Package 2 as its accepted base. Receipt/aggregate work is additive and
+  nonblocking first. Authority may move only in a subsequent wiring-only change
+  that pins the exact observed accepted digests, changes no policy/controller
+  bytes simultaneously, and passes an external checker not supplied by the
+  candidate. Hosted uncertainty, unsupported obligations, or checkout-safety
+  rejection must stop before any self-hosted runner queues. Private-repository
+  object fetches use the ephemeral `github.token` only through a masked
+  per-command header and never persist it. Unrecognized paths fail closed to
+  every obligation. Reusable invocations preserve caller kind and workflow
+  revision and apply the same ordered merge-parent validation as direct pull
+  requests.
+- **Package 3A amendment:** Pin every approved remote action to its reviewed
+  full commit SHA, implement and fixture-test exact per-job shadow receipt and
+  bounded same-attempt aggregate contracts, and add a hosted direct-needs gap
+  diagnostic as the sole job allowed a job-level `always()`. Package 3A does
+  not emit receipts or execute the aggregate while truthful producers are
+  missing; it publishes and fails closed on that exact inventory instead.
+  The only Package 3A obligation with a supported semantic receipt is
+  `visual-package`; producer and aggregate both validate its exact bounded raw
+  report. Every other obligation rejects as unsupported until its own raw
+  schema validator exists, so claimed exits plus opaque hashes cannot establish
+  success. The aggregate does not accept caller-declared selection booleans: it
+  obtains the exact same-attempt selector job/artifact through GitHub, validates
+  the single accepted-selector report against controller, policy, source and
+  workflow identities, and derives each producer's selected receipt subset.
+  Run actors and downloaded artifact lengths are independently reconciled.
+  Absolute archive, entry and expanded-byte ceilings remain authoritative;
+  bounded valid evidence is not rejected solely for a high compression ratio.
+  A monotonic aggregate deadline is enforced during streaming/decompression
+  and after every request or bounded parse; progress cannot reset it.
+  Future receipt archives bind only their named raw evidence and stay
+  `shadow=true`, `authoritative=false`, and `grantsAcceptance=false`. Missing
+  producers are not mapped to unrelated portable fixtures. The accepted-base
+  selector may expose only the visual obligation to an additive reusable
+  visual proof. Existing legacy selection and required gates remain
+  authoritative. Because Package 3A changes selector bytes, a later
+  no-controller-change observation must bind this corrected digest before any
+  producer wiring or Package 3B authority activation. Package 3B must also pin
+  the accepted workflow/action/requirements identities, preserve the external
+  checker, and wire the event-specific selector producer before the shadow
+  aggregate can run; Package 3A's fixture proof grants no authority.
+- **Policy identity:** The policy digest is SHA-256 over the accepted selector
+  source after deterministic LF normalization, covering mappings, contexts,
+  limits, uncertainty behavior, and attribute rules. The controller digest
+  separately binds exact raw blob bytes.
+- **Context:** Candidate-controlled path filters can suppress their own checks;
+  combining selector edits with activation prevents comparison against accepted
+  behavior. Paths also require raw rename/copy, revision attributes, LFS,
+  case/Unicode collision, and Windows checkout analysis before expensive work
+  is admitted. Current runs exposed an action-runtime Node 20 deprecation
+  warning. That observation is an input for Package 3A's separately reviewed
+  full-action-SHA pinning; Package 2 does not invent a replacement version.
+- **Evidence:** `tests/ci/Get-CiSelection.Tests.ps1` covers closed schemas,
+  raw NUL diff records, rename/copy sides, attributes, LFS routing, unsafe
+  modes/paths, case/NFC collisions, bounds, accepted controller identity, and
+  conservative output. Package 2 workflow fixtures proved the legacy normalized
+  5,595-byte block at SHA-256
+  `b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c`.
+  Package 3A changes only the reviewed checkout action identity in that block;
+  its current normalized identity is 5,633 bytes at SHA-256
+  `f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df`,
+  and the shadow is independent with one attempt-bound artifact. Fixtures do
+  not replace the first later live accepted-base comparison. Package 3A adds
+  `New-CiAcceptanceReceipt.Tests.ps1` and
+  `Invoke-CiAcceptanceAggregate.Tests.ps1` for identity, outcome, rerun,
+  pagination, bounded JSON/archive, action-manifest, cleanup, and raw-evidence
+  negative cases. Its reviewed action manifest contains only full-SHA pins for
+  `actions/checkout` and `actions/upload-artifact`.
+- **Alternatives:** Candidate-tree selector execution; third-party path-filter
+  authority; direct Package 2 replacement; simultaneous policy and activation
+  edits; treating bootstrap/missing evidence as equivalence; letting unsafe or
+  unsupported hosted classification fail only after engine admission.
+- **Consequences:** Package 2 adds diagnostic pull-request work and may fail
+  independently without suppressing established checks. Evidence exists only
+  inside the controlled process/artifact boundary. Visual validation gains
+  `workflow_call` without losing existing triggers or validators. Receipt
+  aggregation and activation remain separate reviewed packages. Artifact
+  retention remains undecided and omitted.
+- **Owner:** Issue #167.
+- **Revisit trigger:** Pull-request merge identity or checkout semantics change,
+  the accepted policy/check set changes, a required obligation gains a real
+  producer, or live comparison contradicts this contract.
 
 ## Candidate Decisions
 

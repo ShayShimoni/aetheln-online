@@ -12,11 +12,245 @@ permissions:
   contents: read
 
 jobs:
+  # Issue #167 Package 2 shadow selector. This independent PR-only diagnostic
+  # exposes only its visual_required boolean to the additive Package 3A visual
+  # proof; no authoritative job consumes it. The immutable base, head,
+  # and synthetic merge objects enter a bare control repository before the
+  # only checkout, which sparsely materializes the accepted-base controller.
+  # Candidate selector bytes are never checked out or executed. During the
+  # bootstrap PR the accepted base has no controller, so a bounded,
+  # conservative accepted_controller_unavailable record selects every check
+  # without claiming equivalence or authorizing any later checkout.
+  ci-selection-shadow:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      visual_required: ${{ steps.selection.outputs.visual_required }}
+    env:
+      AETHELN_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      AETHELN_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      AETHELN_WORKFLOW_SHA: ${{ github.sha }}
+      AETHELN_REMOTE_URL: ${{ github.server_url }}/${{ github.repository }}.git
+      AETHELN_ACCEPTED_CONTROL: ${{ github.workspace }}/ci-selection-control-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Fetch immutable comparison objects
+        shell: powershell
+        env:
+          AETHELN_GITHUB_TOKEN: ${{ github.token }}
+          AETHELN_CONTROL_REPO: ${{ runner.temp }}/ci-selection-objects-${{ github.run_id }}-${{ github.run_attempt }}.git
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          $BaseSha = [string] $env:AETHELN_PR_BASE_SHA
+          $HeadSha = [string] $env:AETHELN_PR_HEAD_SHA
+          $WorkflowSha = [string] $env:AETHELN_WORKFLOW_SHA
+          foreach ($Revision in @($BaseSha, $HeadSha, $WorkflowSha)) {
+            if ($Revision -cnotmatch '^[0-9a-f]{40}$') { throw 'invalid_revision' }
+          }
+          if (Test-Path -LiteralPath $env:AETHELN_CONTROL_REPO) { throw 'control_repository_preexists' }
+
+          if ([string]::IsNullOrWhiteSpace($env:AETHELN_GITHUB_TOKEN)) { throw 'github_token_unavailable' }
+          $Authorization = [Convert]::ToBase64String(
+            [Text.Encoding]::UTF8.GetBytes("x-access-token:$env:AETHELN_GITHUB_TOKEN")
+          )
+          Write-Output "::add-mask::$Authorization"
+          $env:GIT_CONFIG_COUNT = '1'
+          $env:GIT_CONFIG_KEY_0 = 'http.extraheader'
+          $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $Authorization"
+
+          & git init --bare $env:AETHELN_CONTROL_REPO
+          if ($LASTEXITCODE -ne 0) { throw 'control_repository_init_failed' }
+          $Remote = [string] $env:AETHELN_REMOTE_URL
+          try {
+            foreach ($Fetch in @(
+              @($BaseSha, 'refs/aetheln/base'),
+              @($HeadSha, 'refs/aetheln/head'),
+              @($WorkflowSha, 'refs/aetheln/workflow')
+            )) {
+              & git --git-dir=$env:AETHELN_CONTROL_REPO fetch --no-tags --depth=2 $Remote "+$($Fetch[0]):$($Fetch[1])"
+              if ($LASTEXITCODE -ne 0) { throw 'immutable_object_fetch_failed' }
+              $ResolvedOutput = @(& git --git-dir=$env:AETHELN_CONTROL_REPO rev-parse $Fetch[1] | ForEach-Object { "$_" })
+              if ($LASTEXITCODE -ne 0 -or $ResolvedOutput.Count -ne 1 -or [string] $ResolvedOutput[0] -cne $Fetch[0]) { throw 'immutable_object_identity_mismatch' }
+            }
+          }
+          finally {
+            $env:GIT_CONFIG_COUNT = $null
+            $env:GIT_CONFIG_KEY_0 = $null
+            $env:GIT_CONFIG_VALUE_0 = $null
+          }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: ci-selection-control-${{ github.run_id }}-${{ github.run_attempt }}
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+          sparse-checkout: scripts/ci/Get-CiSelection.ps1
+          sparse-checkout-cone-mode: false
+      - name: Produce shadow selection record
+        id: selection
+        shell: powershell
+        env:
+          AETHELN_CONTROL_REPO: ${{ runner.temp }}/ci-selection-objects-${{ github.run_id }}-${{ github.run_attempt }}.git
+          AETHELN_SHADOW_REPORT: ${{ runner.temp }}/ci-selection-shadow.json
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+
+          $BaseSha = [string] $env:AETHELN_PR_BASE_SHA
+          $HeadSha = [string] $env:AETHELN_PR_HEAD_SHA
+          $WorkflowSha = [string] $env:AETHELN_WORKFLOW_SHA
+          $SelectorPath = Join-Path $env:AETHELN_ACCEPTED_CONTROL 'scripts/ci/Get-CiSelection.ps1'
+          $ContextPath = Join-Path '${{ runner.temp }}' 'ci-selection-context.json'
+          $Utf8 = New-Object System.Text.UTF8Encoding $false
+          $ControllerBlobOid = $null
+          $ControllerSha256 = $null
+
+          function Invoke-BoundedProcessToFile {
+            param(
+              [Parameter(Mandatory)] [string] $FileName,
+              [Parameter(Mandatory)] [string] $Arguments,
+              [Parameter(Mandatory)] [string] $OutputPath,
+              [ValidateRange(100, 120000)] [int] $TimeoutMilliseconds = 120000
+            )
+            $FullOutputPath = [IO.Path]::GetFullPath($OutputPath)
+            $OutputParent = Split-Path -Parent $FullOutputPath
+            if (-not (Test-Path -LiteralPath $OutputParent -PathType Container)) { throw 'bounded_process_output_parent_missing' }
+            $TemporaryPath = Join-Path $OutputParent ('.accepted-controller-' + [guid]::NewGuid().ToString('N') + '.tmp')
+            $StartInfo = New-Object Diagnostics.ProcessStartInfo
+            $StartInfo.FileName = $FileName
+            $StartInfo.Arguments = $Arguments
+            $StartInfo.UseShellExecute = $false
+            $StartInfo.CreateNoWindow = $true
+            $StartInfo.RedirectStandardOutput = $true
+            $StartInfo.RedirectStandardError = $true
+            $Process = New-Object Diagnostics.Process
+            $Process.StartInfo = $StartInfo
+            $OutputStream = $null
+            try {
+              $OutputStream = New-Object IO.FileStream($TemporaryPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+              if (-not $Process.Start()) { throw 'bounded_process_start_failed' }
+              $OutputCopy = $Process.StandardOutput.BaseStream.CopyToAsync($OutputStream)
+              $ErrorRead = $Process.StandardError.ReadToEndAsync()
+              if (-not $Process.WaitForExit($TimeoutMilliseconds)) {
+                try { $Process.Kill() } catch { }
+                if (-not $Process.WaitForExit(5000)) { throw 'bounded_process_termination_failed' }
+                try { [void] $OutputCopy.GetAwaiter().GetResult() } catch { }
+                try { [void] $ErrorRead.GetAwaiter().GetResult() } catch { }
+                throw 'bounded_process_timeout'
+              }
+              [void] $OutputCopy.GetAwaiter().GetResult()
+              $ErrorText = $ErrorRead.GetAwaiter().GetResult()
+              if ($Process.ExitCode -ne 0) { throw "bounded_process_failed:$($Process.ExitCode):$ErrorText" }
+              $OutputStream.Flush($true)
+              $OutputStream.Dispose()
+              $OutputStream = $null
+              [IO.File]::Copy($TemporaryPath, $FullOutputPath, $true)
+            }
+            finally {
+              if ($null -ne $OutputStream) { $OutputStream.Dispose() }
+              $Process.Dispose()
+              if (Test-Path -LiteralPath $TemporaryPath -PathType Leaf) { Remove-Item -LiteralPath $TemporaryPath -Force }
+            }
+          }
+
+          $Context = [ordered]@{
+            kind = 'pull_request'
+            baseRevision = $BaseSha
+            headRevision = $HeadSha
+            workflowRevision = $WorkflowSha
+            controllerRevision = $BaseSha
+          }
+          [IO.File]::WriteAllText($ContextPath, (ConvertTo-Json -InputObject $Context -Compress), $Utf8)
+
+          $BlobQuery = "${BaseSha}:scripts/ci/Get-CiSelection.ps1"
+          $PreviousPreference = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          try {
+            $BlobOutput = @(& git --git-dir=$env:AETHELN_CONTROL_REPO rev-parse $BlobQuery 2>$null | ForEach-Object { "$_" })
+            $BlobExitCode = $LASTEXITCODE
+          }
+          finally { $ErrorActionPreference = $PreviousPreference }
+          if ($BlobExitCode -eq 0 -and $BlobOutput.Count -eq 1) { $ControllerBlobOid = [string] $BlobOutput[0] }
+
+          if ($BlobExitCode -eq 0 -and $ControllerBlobOid -cmatch '^[0-9a-f]{40,64}$') {
+            if (-not (Test-Path -LiteralPath $SelectorPath -PathType Leaf)) { throw 'accepted_controller_checkout_missing' }
+            if ($env:AETHELN_CONTROL_REPO.Contains('"')) { throw 'control_repository_path_invalid' }
+            $MaterializeArguments = "--git-dir=`"$env:AETHELN_CONTROL_REPO`" cat-file blob $ControllerBlobOid"
+            Invoke-BoundedProcessToFile -FileName 'git' -Arguments $MaterializeArguments -OutputPath $SelectorPath -TimeoutMilliseconds 120000
+            $CheckedOutBlob = [string] @(& git -C $env:AETHELN_ACCEPTED_CONTROL hash-object --no-filters -- scripts/ci/Get-CiSelection.ps1)[0]
+            if ($LASTEXITCODE -ne 0 -or $CheckedOutBlob -cne $ControllerBlobOid) { throw 'accepted_controller_byte_mismatch' }
+            $ControllerSha256 = (Get-FileHash -LiteralPath $SelectorPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            powershell -NoProfile -File $SelectorPath -ContextJson $ContextPath -OutputPath $env:AETHELN_SHADOW_REPORT -RepositoryRoot $env:AETHELN_CONTROL_REPO
+            if ($LASTEXITCODE -ne 0) { throw 'accepted_controller_failed' }
+          }
+          else {
+            $CheckIds = @(
+              'portable',
+              'visual-package',
+              'delivery-harness',
+              'native-client-server-compile',
+              'unreal-editor-automation',
+              'content-reference-validation',
+              'controller-contract',
+              'controller-operational-proof',
+              'clean-package-provenance-smoke'
+            )
+            $Obligations = @($CheckIds | ForEach-Object {
+              [ordered]@{ id = $_; selected = $true; reasons = @('accepted_controller_unavailable') }
+            })
+            $Report = [ordered]@{
+              schemaVersion = 'aetheln.ci-selection/v1'
+              policy = [ordered]@{ version = 'shadow-v1'; digest = ('0' * 64); checkIds = $CheckIds }
+              source = [ordered]@{ kind = 'pull_request'; callerKind = $null; baseRevision = $BaseSha; headRevision = $HeadSha; workflowRevision = $WorkflowSha; revision = $null }
+              execution = [ordered]@{
+                mode = 'accepted_controller_unavailable'
+                controllerRevision = $BaseSha
+                controllerBlobOid = $null
+                controllerSha256 = $null
+                checkoutAllowed = $false
+                complete = $true
+                reason = 'accepted_controller_unavailable'
+              }
+              classification = [ordered]@{ changedPaths = @(); entries = @(); uncertainties = @('accepted_controller_unavailable') }
+              selection = [ordered]@{ shadow = $true; authoritative = $false; obligations = $Obligations }
+              legacyAuthority = [ordered]@{ authoritative = $true; engineRequired = $null; reason = 'not_observed' }
+              comparison = [ordered]@{ status = 'unavailable'; differences = @('accepted_controller_unavailable') }
+            }
+            [IO.File]::WriteAllText($env:AETHELN_SHADOW_REPORT, (ConvertTo-Json -InputObject $Report -Depth 8), $Utf8)
+          }
+
+          if (-not (Test-Path -LiteralPath $env:AETHELN_SHADOW_REPORT -PathType Leaf)) { throw 'shadow_report_missing' }
+          $ReportInfo = Get-Item -LiteralPath $env:AETHELN_SHADOW_REPORT
+          if ($ReportInfo.Length -le 0 -or $ReportInfo.Length -gt 4MB) { throw 'shadow_report_size_invalid' }
+          $Parsed = Get-Content -LiteralPath $env:AETHELN_SHADOW_REPORT -Raw | ConvertFrom-Json
+          if ($Parsed.selection.shadow -ne $true -or $Parsed.selection.authoritative -ne $false) { throw 'shadow_report_authority_invalid' }
+          if ($null -ne $ControllerBlobOid) {
+            if ([string] $Parsed.execution.controllerBlobOid -cne $ControllerBlobOid -or [string] $Parsed.execution.controllerSha256 -cne $ControllerSha256) {
+              throw 'shadow_report_controller_identity_mismatch'
+            }
+          }
+          $VisualObligation = @($Parsed.selection.obligations | Where-Object { [string] $_.id -ceq 'visual-package' })
+          if ($VisualObligation.Count -ne 1 -or $VisualObligation[0].selected -isnot [bool]) { throw 'shadow_visual_selection_invalid' }
+          $VisualRequired = ([bool] $VisualObligation[0].selected).ToString().ToLowerInvariant()
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "visual_required=$VisualRequired`n", $Utf8)
+          exit 0
+      - name: Upload shadow selection record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-selection-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-selection-shadow.json
+          if-no-files-found: error
+
   quality-gates:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
       - name: Fetch StarterMap LFS object
@@ -27,7 +261,7 @@ jobs:
         run: powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1
       - name: Upload machine-readable report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ci-report
           path: TestResults/ci-report.json
@@ -48,7 +282,7 @@ jobs:
       engine_required: ${{ steps.classify.outputs.engine_required }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
       - name: Classify changed paths
@@ -168,38 +402,56 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        working-directory: compile
+        working-directory: compile-control-${{ github.run_id }}-${{ github.run_attempt }}
     concurrency:
       group: aetheln-engine-runner
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - name: Capture routine compile deadline
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $StartedTimestamp = [Diagnostics.Stopwatch]::GetTimestamp()
+          $StartedUtc = [DateTime]::UtcNow.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+          $Utf8 = New-Object System.Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "AETHELN_COMPILE_STARTED_UTC=$StartedUtc`nAETHELN_COMPILE_STARTED_TIMESTAMP=$StartedTimestamp`n", $Utf8)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        timeout-minutes: 5
         with:
           lfs: false
-          path: compile
-          clean: false
-      - name: Prepare exact retained compile outputs
-        shell: powershell
-        run: powershell -NoProfile -File scripts/ci/Initialize-CompileWorkspace.ps1 -RepositoryRoot '${{ github.workspace }}/compile'
-      - name: Fetch Unreal Content LFS objects
-        shell: powershell
-        run: git lfs pull --include "Content/**"
+          ref: ${{ github.sha }}
+          path: compile-control-${{ github.run_id }}-${{ github.run_attempt }}
+          persist-credentials: false
       - name: Compile supported client and server targets
         shell: powershell
+        env:
+          AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+          AETHELN_MANAGED_COMPILE_REGISTRATION: ${{ vars.AETHELN_MANAGED_COMPILE_REGISTRATION }}
+          AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256: ${{ vars.AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256 }}
+          AETHELN_ENGINE_HOST_LEASE: ${{ vars.AETHELN_ENGINE_HOST_LEASE }}
         run: |
           $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
           powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
             -Mode Compile `
-            -RepositoryRoot '${{ github.workspace }}/compile' `
+            -RepositoryRoot '${{ github.workspace }}/compile-control-${{ github.run_id }}-${{ github.run_attempt }}' `
             -SourceRevision '${{ github.sha }}' `
+            -Repository '${{ github.repository }}' `
+            -RunnerName '${{ runner.name }}' `
+            -ManagedWorkspaceRoot $env:AETHELN_MANAGED_COMPILE_ROOT `
+            -ManagedWorkspaceRegistrationPath $env:AETHELN_MANAGED_COMPILE_REGISTRATION `
+            -ManagedWorkspaceRegistrationSha256 $env:AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256 `
+            -HostLeasePath $env:AETHELN_ENGINE_HOST_LEASE `
+            -CompileStartedUtc $env:AETHELN_COMPILE_STARTED_UTC `
+            -CompileStartedTimestamp $env:AETHELN_COMPILE_STARTED_TIMESTAMP `
             -ArchiveRoot (Join-Path $RunRoot 'archives') `
             -LogRoot (Join-Path $RunRoot 'logs') `
             -CompileTimeoutMinutes 30 `
             -ReportPath (Join-Path $RunRoot 'engine-runner-report.json')
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-compile-report
           path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json
@@ -250,7 +502,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
           path: milestone
@@ -274,7 +526,7 @@ jobs:
             -PhaseTimeoutMinutes 30
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-client-package-report
           path: milestone/TestResults/engine-runner-report.json
@@ -293,7 +545,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
           path: milestone
@@ -317,7 +569,7 @@ jobs:
             -PhaseTimeoutMinutes 30
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-server-package-report
           path: milestone/TestResults/engine-runner-report.json
@@ -336,7 +588,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
           path: milestone
@@ -357,7 +609,7 @@ jobs:
             -PhaseTimeoutMinutes 10
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-provenance-validation-report
           path: milestone/TestResults/engine-runner-report.json
@@ -376,7 +628,7 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           lfs: false
           path: milestone
@@ -397,8 +649,88 @@ jobs:
             -PhaseTimeoutMinutes 10
       - name: Upload engine-runner report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-scheduled-smoke-report
           path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+
+  # Package 3A additive proof only. The accepted-base selector controls this
+  # diagnostic call, while the reusable workflow keeps its direct triggers
+  # authoritative and treats this invocation as non-authoritative evidence.
+  visual-proof:
+    needs: ci-selection-shadow
+    if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.visual_required == 'true'
+    uses: ./.github/workflows/visual-package-validation.yml
+    with:
+      non_authoritative: true
+
+  # Package 3A reconciliation remains deliberately non-authoritative. It has a
+  # direct edge to every current producer so same-attempt omissions are visible.
+  # Four of the nine accepted obligations still have no pull-request producer;
+  # until those jobs and all per-job receipt artifacts exist, this diagnostic
+  # writes the exact gap and fails closed without granting acceptance.
+  ci-acceptance-shadow:
+    needs:
+      - ci-selection-shadow
+      - quality-gates
+      - change-impact
+      - trusted-candidate-compile
+      - scheduled-client-package
+      - scheduled-server-package
+      - scheduled-provenance-validation
+      - scheduled-packaged-smoke
+      - visual-proof
+    if: always()
+    continue-on-error: true
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Reconcile shadow acceptance evidence
+        shell: powershell
+        env:
+          AETHELN_ACCEPTANCE_REPORT: ${{ runner.temp }}/ci-acceptance-shadow.json
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $Utf8 = New-Object System.Text.UTF8Encoding $false
+
+          # These are contract gaps, not inferred successes. Existing raw
+          # artifacts are intentionally not relabelled as receipts.
+          $MissingProducerJobs = @(
+            'clean-package-provenance-smoke',
+            'content-reference-validation',
+            'delivery-harness',
+            'unreal-editor-automation'
+          )
+          $MissingReceiptArtifacts = @(
+            'controller-contract-and-operational-proof',
+            'native-client-server-compile',
+            'portable',
+            'visual-package'
+          )
+          $Report = [ordered]@{
+            schemaVersion = 'aetheln.ci-acceptance-shadow-gap/v1'
+            repository = '${{ github.repository }}'
+            revision = '${{ github.sha }}'
+            run = [ordered]@{ id = '${{ github.run_id }}'; attempt = [int] '${{ github.run_attempt }}' }
+            missingProducerJobs = $MissingProducerJobs
+            missingReceiptArtifacts = $MissingReceiptArtifacts
+            decision = [ordered]@{
+              complete = $false
+              shadow = $true
+              authoritative = $false
+              grantsAcceptance = $false
+              reason = 'producer_contract_incomplete'
+            }
+          }
+          [IO.File]::WriteAllText($env:AETHELN_ACCEPTANCE_REPORT, (ConvertTo-Json -InputObject $Report -Depth 8), $Utf8)
+          $Gap = (@($MissingProducerJobs) + @($MissingReceiptArtifacts)) -join ','
+          throw "acceptance_producer_gap:$Gap"
+      - name: Upload shadow acceptance diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ci-acceptance-shadow-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-acceptance-shadow.json
           if-no-files-found: error

@@ -35,8 +35,20 @@ $DefaultChecks = @(
 	@{ name = 'ci-suite-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiSuite.Tests.ps1' },
 	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
 	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
+	@{ name = 'visual-package-evidence-tests'; tier = 'required'; script = 'tests/ci/Invoke-VisualPackageValidation.Tests.ps1' },
 	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1' },
+	@{ name = 'ci-selection-tests'; tier = 'required'; script = 'tests/ci/Get-CiSelection.Tests.ps1' },
+	@{ name = 'ci-acceptance-receipt-tests'; tier = 'required'; script = 'tests/ci/New-CiAcceptanceReceipt.Tests.ps1' },
+	@{ name = 'ci-acceptance-aggregate-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiAcceptanceAggregate.Tests.ps1' },
 	@{ name = 'compile-workspace-tests'; tier = 'required'; script = 'tests/ci/Initialize-CompileWorkspace.Tests.ps1' },
+	@{ name = 'engine-host-lease-tests'; tier = 'required'; script = 'tests/ci/EngineRunnerHostLease.Tests.ps1' },
+	@{ name = 'managed-compile-registration-tests'; tier = 'required'; script = 'tests/ci/ManagedCompileRegistration.Tests.ps1' },
+	@{ name = 'managed-compile-workspace-tests'; tier = 'required'; script = 'tests/ci/ManagedCompileWorkspace.Tests.ps1' },
+	@{ name = 'managed-compile-integration-tests'; tier = 'required'; script = 'tests/ci/ManagedCompileIntegration.Tests.ps1' },
+	@{ name = 'routine-compile-deadline-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileDeadline.Tests.ps1' },
+	@{ name = 'routine-compile-resources-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileResources.Tests.ps1' },
+	@{ name = 'routine-compile-command-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileCommand.Tests.ps1' },
+	@{ name = 'routine-compile-gate-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileGate.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'
@@ -119,10 +131,18 @@ namespace AethelnCi {
 '@
 
 function Start-HiddenPowerShell {
+	[CmdletBinding(SupportsShouldProcess)]
+	[OutputType([hashtable])]
 	param(
 		[Parameter(Mandatory)][string] $Arguments,
 		[Parameter(Mandatory)][string] $WorkingDirectory
 	)
+
+	# Decide before allocating: a declined launch must leave no named gate, job
+	# object, handle, or child behind, and must not look like a running check.
+	if (-not $PSCmdlet.ShouldProcess($WorkingDirectory, "Start a hidden CI check process: powershell.exe $Arguments")) {
+		return
+	}
 
 	$PowerShell = (Get-Command powershell.exe -ErrorAction Stop).Source
 	$GateName = 'Local\AethelnCiCheck-' + [guid]::NewGuid().ToString('N')

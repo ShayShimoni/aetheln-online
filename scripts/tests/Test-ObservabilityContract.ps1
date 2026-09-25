@@ -39,14 +39,14 @@ foreach ($Category in @(
 	'Resource', 'Death', 'Respawn', 'Correction', 'Rejection',
 	'ServerLifecycle', 'ServerHealth', 'CrashContext'
 )) {
-	Assert-ContainsLiteral $Contract $Category "Closed observability category '$Category' is missing."
+	Assert-ContainsLiteral -Text $Contract -Literal $Category -Message "Closed observability category '$Category' is missing."
 }
 
 foreach ($Flow in @(
 	'Admission', 'Lease', 'PersistentCommand', 'Transaction', 'Outbox',
 	'Reward', 'Transfer', 'Allocation', 'Dependency', 'Restore', 'Reconciliation'
 )) {
-	Assert-ContainsLiteral $Contract $Flow "Versioned 1.0 flow extension '$Flow' is missing."
+	Assert-ContainsLiteral -Text $Contract -Literal $Flow -Message "Versioned 1.0 flow extension '$Flow' is missing."
 }
 
 $CorrelationMatch = [regex]::Match(
@@ -64,17 +64,17 @@ foreach ($Forbidden in @('TMap<', 'Metadata', 'Payload', 'CommandBody', 'Account
 }
 
 foreach ($Required in @('MaxIdentifierLength', 'MaxPendingDispatchItems', 'IsSafeIdentifier', 'IsValidForEvent', 'SchemaId == AethelnObservability::SchemaId', 'SchemaVersion == AethelnObservability::SchemaVersion', 'Sequence != 0', 'IsBounded()', 'MakePublicCopy()', 'FAethelnNoOpObservabilitySink', 'FAethelnStructuredLogObservabilitySink', 'FAethelnInMemoryObservabilitySink', 'IAethelnRestrictedAuditSink', 'FAethelnBoundedRestrictedAuditSink', 'FDispatchState', 'WaitForIdleForTests', 'PawnCount', 'ControllerCount', 'PlayerStateCount', 'OtherActorCount')) {
-	Assert-ContainsLiteral $Contract $Required "Required bounded/failure-safe contract '$Required' is missing."
+	Assert-ContainsLiteral -Text $Contract -Literal $Required -Message "Required bounded/failure-safe contract '$Required' is missing."
 }
-Assert-ContainsLiteral $Subsystem 'UGameInstanceSubsystem' 'Observability service must remain GameInstance-owned.'
-Assert-ContainsLiteral $Subsystem 'SetTestRestrictedSink' 'Restricted audit injection must remain separate from the public sink.'
-Assert-ContainsLiteral $Operator '| `local` |' 'Local environment boundary is missing.'
-Assert-ContainsLiteral $Operator '| `development` |' 'Development environment boundary is missing.'
-Assert-ContainsLiteral $Operator 'retention is `TBD`' 'Unresolved retention must remain explicit.'
-Assert-ContainsLiteral $Operator 'process-local restricted audit buffer' 'Restricted diagnostic retention boundary is missing.'
-Assert-ContainsLiteral $Operator 'control-character-bearing record is' 'Malformed identifier rejection boundary is missing.'
-Assert-ContainsLiteral $Operator 'independently scheduled background workers' 'Non-blocking independent dispatch boundary is missing.'
-Assert-ContainsLiteral $Operator 'Issue #44 owns' 'Packaged orchestration ownership boundary is missing.'
-Assert-ContainsLiteral $Operator 'Issue #45 owns' 'Performance-budget ownership boundary is missing.'
+Assert-ContainsLiteral -Text $Subsystem -Literal 'UGameInstanceSubsystem' -Message 'Observability service must remain GameInstance-owned.'
+Assert-ContainsLiteral -Text $Subsystem -Literal 'SetTestRestrictedSink' -Message 'Restricted audit injection must remain separate from the public sink.'
+Assert-ContainsLiteral -Text $Operator -Literal '| `local` |' -Message 'Local environment boundary is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal '| `development` |' -Message 'Development environment boundary is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'retention is `TBD`' -Message 'Unresolved retention must remain explicit.'
+Assert-ContainsLiteral -Text $Operator -Literal 'process-local restricted audit buffer' -Message 'Restricted diagnostic retention boundary is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'control-character-bearing record is' -Message 'Malformed identifier rejection boundary is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'independently scheduled background workers' -Message 'Non-blocking independent dispatch boundary is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'Issue #44 owns' -Message 'Packaged orchestration ownership boundary is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'Issue #45 owns' -Message 'Performance-budget ownership boundary is missing.'
 
 Write-Output 'Observability contract and redaction checks passed.'

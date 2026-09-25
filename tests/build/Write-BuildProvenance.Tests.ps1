@@ -35,10 +35,10 @@ try {
 	$DecoyResourceCompiler = Join-Path $FixtureRoot 'Windows Kits/10/bin/10.0.30000.0/x64/rc.exe'
 	foreach ($Tool in @($Compiler, $DecoyCompiler, $ResourceCompiler, $DecoyResourceCompiler)) { New-Item -ItemType Directory -Path (Split-Path -Parent $Tool) -Force | Out-Null; Set-Content -LiteralPath $Tool -Value $Tool -Encoding Ascii }
 	$Revision = $RealRevision
-	$Args = [ordered]@{ client = @('BuildCookRun', '-platform=Win64'); server = @('BuildCookRun', '-serverplatform=Linux'); dependencyRegistryDump = @('-run=DumpAssetRegistry', '-DependencyDetails'); cookedInventoryDump = @('-run=DumpAssetRegistry', '-PackageName') } | ConvertTo-Json -Compress
+	$UatArguments = [ordered]@{ client = @('BuildCookRun', '-platform=Win64'); server = @('BuildCookRun', '-serverplatform=Linux'); dependencyRegistryDump = @('-run=DumpAssetRegistry', '-DependencyDetails'); cookedInventoryDump = @('-run=DumpAssetRegistry', '-PackageName') } | ConvertTo-Json -Compress
 	$OutputPath = Join-Path $FixtureRoot 'provenance/build.json'
 
-	& $Script -OutputPath $OutputPath -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $Args
+	& $Script -OutputPath $OutputPath -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $UatArguments
 	$Provenance = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
 	Assert-True ($Provenance.schemaVersion -eq 2) 'Schema version should identify complete provenance.'
 	Assert-True ($Provenance.source.revision -eq $Revision) 'Verified repository HEAD should be recorded.'
@@ -64,7 +64,7 @@ try {
 	Write-Output 'PASS: provenance records verified revisions, exact tools/arguments/plugins/host, and hashed inventory'
 
 	$Failure = $null
-	try { & $Script -OutputPath (Join-Path $FixtureRoot 'bad.json') -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision ('0' * 40) -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $Args } catch { $Failure = $_.Exception.Message }
+	try { & $Script -OutputPath (Join-Path $FixtureRoot 'bad.json') -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision ('0' * 40) -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $UatArguments } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'does not match repository HEAD') 'A requested revision not matching actual HEAD must fail.'
 	Write-Output 'PASS: provenance refuses an unproven source revision'
 }

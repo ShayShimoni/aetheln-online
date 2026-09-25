@@ -18,7 +18,7 @@ try {
 		return @($Output)
 	}
 
-	function Get-Attributes {
+	function Get-AttributeTable {
 		param([Parameter(Mandatory)][string] $Path)
 
 		$Result = @{}
@@ -51,24 +51,24 @@ try {
 
 	foreach ($Extension in $LfsExtensions) {
 		$Path = "PolicyProbe/asset.$Extension"
-		$Attributes = Get-Attributes -Path $Path
+		$Attributes = Get-AttributeTable -Path $Path
 		foreach ($Attribute in @('filter', 'diff', 'merge')) {
-			Assert-Equal $Attributes[$Attribute] 'lfs' "$Path $Attribute mismatch."
+			Assert-Equal -Actual $Attributes[$Attribute] -Expected 'lfs' -Message "$Path $Attribute mismatch."
 		}
-		Assert-Equal $Attributes['text'] 'unset' "$Path text mismatch."
-		Assert-Equal $Attributes['lockable'] 'set' "$Path lockable mismatch."
+		Assert-Equal -Actual $Attributes['text'] -Expected 'unset' -Message "$Path text mismatch."
+		Assert-Equal -Actual $Attributes['lockable'] -Expected 'set' -Message "$Path lockable mismatch."
 	}
 
 	$HistoricalRoadmap = 'docs/research/mmorpg-development-roadmap.png'
 	$ExpectedRoadmapHash = '359cabc4dbeda76ab251ac01e3936c011ed5a111169d0986b754e53ff4db42dd'
 	$ActualRoadmapHash = (Get-FileHash -LiteralPath $HistoricalRoadmap -Algorithm SHA256).Hash.ToLowerInvariant()
-	Assert-Equal $ActualRoadmapHash $ExpectedRoadmapHash 'Historical roadmap PNG SHA-256 mismatch.'
-	$HistoricalAttributes = Get-Attributes -Path $HistoricalRoadmap
+	Assert-Equal -Actual $ActualRoadmapHash -Expected $ExpectedRoadmapHash -Message 'Historical roadmap PNG SHA-256 mismatch.'
+	$HistoricalAttributes = Get-AttributeTable -Path $HistoricalRoadmap
 	foreach ($Attribute in @('filter', 'diff', 'merge')) {
-		Assert-Equal $HistoricalAttributes[$Attribute] 'unspecified' "Historical roadmap PNG $Attribute must remain unspecified."
+		Assert-Equal -Actual $HistoricalAttributes[$Attribute] -Expected 'unspecified' -Message "Historical roadmap PNG $Attribute must remain unspecified."
 	}
-	Assert-Equal $HistoricalAttributes['text'] 'unset' 'Historical roadmap PNG text mismatch.'
-	Assert-Equal $HistoricalAttributes['lockable'] 'unset' 'Historical roadmap PNG must not be lockable.'
+	Assert-Equal -Actual $HistoricalAttributes['text'] -Expected 'unset' -Message 'Historical roadmap PNG text mismatch.'
+	Assert-Equal -Actual $HistoricalAttributes['lockable'] -Expected 'unset' -Message 'Historical roadmap PNG must not be lockable.'
 
 	$TextMatrix = @(
 		@{ Path = 'Source/PolicyProbe.h'; Eol = 'lf' },
@@ -83,23 +83,23 @@ try {
 	)
 
 	foreach ($Case in $TextMatrix) {
-		$Attributes = Get-Attributes -Path $Case.Path
-		Assert-Equal $Attributes['text'] 'set' "$($Case.Path) text mismatch."
-		Assert-Equal $Attributes['eol'] $Case.Eol "$($Case.Path) EOL mismatch."
-		Assert-Equal $Attributes['filter'] 'unspecified' "$($Case.Path) must not use LFS."
-		Assert-Equal $Attributes['lockable'] 'unspecified' "$($Case.Path) must not be lockable."
+		$Attributes = Get-AttributeTable -Path $Case.Path
+		Assert-Equal -Actual $Attributes['text'] -Expected 'set' -Message "$($Case.Path) text mismatch."
+		Assert-Equal -Actual $Attributes['eol'] -Expected $Case.Eol -Message "$($Case.Path) EOL mismatch."
+		Assert-Equal -Actual $Attributes['filter'] -Expected 'unspecified' -Message "$($Case.Path) must not use LFS."
+		Assert-Equal -Actual $Attributes['lockable'] -Expected 'unspecified' -Message "$($Case.Path) must not be lockable."
 	}
 
 	foreach ($Path in @(
 		'Content/Maps/__ExternalActors__/A/B/Actor.uasset',
 		'Content/Maps/__ExternalObjects__/A/B/Object.uasset'
 	)) {
-		$Attributes = Get-Attributes -Path $Path
+		$Attributes = Get-AttributeTable -Path $Path
 		foreach ($Attribute in @('filter', 'diff', 'merge')) {
-			Assert-Equal $Attributes[$Attribute] 'lfs' "$Path $Attribute mismatch."
+			Assert-Equal -Actual $Attributes[$Attribute] -Expected 'lfs' -Message "$Path $Attribute mismatch."
 		}
-		Assert-Equal $Attributes['text'] 'unset' "$Path text mismatch."
-		Assert-Equal $Attributes['lockable'] 'unset' "$Path must be exempt from mandatory locks."
+		Assert-Equal -Actual $Attributes['text'] -Expected 'unset' -Message "$Path text mismatch."
+		Assert-Equal -Actual $Attributes['lockable'] -Expected 'unset' -Message "$Path must be exempt from mandatory locks."
 	}
 
 	$IgnoredPaths = @(
@@ -153,7 +153,7 @@ try {
 	$StarterMap = 'Content/Maps/StarterMap.umap'
 	$ExpectedHash = '2a2b755b0feee3035b6c84fcd1eacebb67505d9344e66d0fb578b7804044b49a'
 	$ActualHash = (Get-FileHash -LiteralPath $StarterMap -Algorithm SHA256).Hash.ToLowerInvariant()
-	Assert-Equal $ActualHash $ExpectedHash 'StarterMap SHA-256 mismatch.'
+	Assert-Equal -Actual $ActualHash -Expected $ExpectedHash -Message 'StarterMap SHA-256 mismatch.'
 
 	$LfsVersion = & git lfs version 2>&1
 	if ($LASTEXITCODE -ne 0) {
@@ -164,7 +164,7 @@ try {
 		throw 'StarterMap must remain an LFS-owned object with object prefix 2a2b755b0f.'
 	}
 
-	Write-Host 'Source-control policy checks passed.'
+	Write-Output 'Source-control policy checks passed.'
 }
 finally {
 	Pop-Location
