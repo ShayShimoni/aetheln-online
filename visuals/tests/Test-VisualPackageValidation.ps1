@@ -274,6 +274,7 @@ function Test-CommentTagGrammar {
 	foreach ($LinkHeader in @(
 		'| [Path](https://example.test/a(b)) | [Provenance/custody](https://example.test/a(b)) | Authorship | Permission | License | Product approval |',
 		'| [Path](https://example.test/a\(b\) "title") | [Provenance/custody](https://example.test/a\(b\) ''title'') | Authorship | Permission | License | Product approval |',
+		'| [Path](x\)) | [Provenance/custody](x\)) | Authorship | Permission | License | Product approval |',
 		'| [Path](<https://example.test/a(b>) | [Provenance/custody](<https://example.test/a(b>) | Authorship | Permission | License | Product approval |',
 		'| <span title="[">[Path](#x)</span> | <span title="[">[Provenance/custody](#x)</span> | Authorship | Permission | License | Product approval |'
 	)) {

@@ -300,7 +300,7 @@ function ConvertFrom-MarkdownLinks {
 		$Cursor = $OpenIndex + 1
 		$BracketDepth = 1
 		while ($Cursor -lt $Text.Length -and $BracketDepth -gt 0) {
-			if ($Text[$Cursor] -eq '\\' -and $Cursor + 1 -lt $Text.Length) { $Cursor += 2; continue }
+			if ($Text[$Cursor] -eq '\' -and $Cursor + 1 -lt $Text.Length) { $Cursor += 2; continue }
 			if ($Text[$Cursor] -eq '[') { $BracketDepth++ }
 			elseif ($Text[$Cursor] -eq ']') { $BracketDepth-- }
 			$Cursor++
@@ -323,7 +323,7 @@ function ConvertFrom-MarkdownLinks {
 			$Cursor++
 			while ($Cursor -lt $Text.Length -and $ParenthesisDepth -gt 0) {
 				$Character = $Text[$Cursor]
-				if ($Character -eq '\\' -and $Cursor + 1 -lt $Text.Length) { $Cursor += 2; continue }
+				if ($Character -eq '\' -and $Cursor + 1 -lt $Text.Length) { $Cursor += 2; continue }
 				if ($InAngleDestination) {
 					if ($Character -eq '>') { $InAngleDestination = $false }
 					$Cursor++
@@ -349,7 +349,7 @@ function ConvertFrom-MarkdownLinks {
 		elseif ($Cursor -lt $Text.Length -and $Text[$Cursor] -eq '[') {
 			$ReferenceEnd = $Cursor + 1
 			while ($ReferenceEnd -lt $Text.Length) {
-				if ($Text[$ReferenceEnd] -eq '\\' -and $ReferenceEnd + 1 -lt $Text.Length) { $ReferenceEnd += 2; continue }
+				if ($Text[$ReferenceEnd] -eq '\' -and $ReferenceEnd + 1 -lt $Text.Length) { $ReferenceEnd += 2; continue }
 				if ($Text[$ReferenceEnd] -eq ']') { break }
 				$ReferenceEnd++
 			}
