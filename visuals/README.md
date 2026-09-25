@@ -49,6 +49,11 @@ material: clean background plates, SVG logo and controls, four 1920x1080 screen
 layouts, design tokens, navigation flow, font guidance, and an Unreal CommonUI
 implementation specification.
 
+The [Issue #95 opening-screen visual review and CommonUI plan](issue-95-opening-screen-commonui-validation.md)
+records per-screen and per-asset assessments, canonical delivery boundaries,
+and a proposed testable implementation contract. It is non-canonical and does
+not grant asset promotion, runtime use, publication, or rights approval.
+
 ## Palette
 
 - Charcoal black: `#101419`
