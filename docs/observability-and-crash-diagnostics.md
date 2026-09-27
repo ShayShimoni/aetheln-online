@@ -165,21 +165,22 @@ key. There is no free-form payload.
 | `AethelnNetworkProfileVersion` | Network-profile schema version. |
 | `AethelnNetworkProfileId` | Always the literal `network-profile.unset`: no in-process verification exists. |
 | `AethelnFlowKind` | Closed flow kind, for example `prototype-authority`. |
-| `AethelnRunId` | Server-generated opaque crash run ID: 32 lowercase hexadecimal digits from `FGuid::NewGuid`. It is never the launcher run identity. |
+| `AethelnCrashRunId` | Opaque crash run ID in 32 lowercase hexadecimal digits. The production path generates it with `FGuid::NewGuid`. It is never the launcher run identity and does not by itself identify an external run or package. |
 | `AethelnServerInstance` | Always the closed server role `game-server`, never a caller-supplied instance identity. |
 | `AethelnConnectionPseudonym` | Always the literal `excluded`: crash context is process-wide and never carries a connection identity. |
 
-Design choice: the `AethelnRunId` key name is unchanged, but its value is now
-the generated crash run ID rather than the launcher-supplied run. The key set
-and count are unchanged. A consumer that expects the launcher run in this key
-must use the evidence marker below instead.
+The crash key is named `AethelnCrashRunId` so it cannot be confused with the
+`-AethelnRunId=` launch argument or the event correlation run. The key count
+is unchanged.
 
 Every snapshot value is compared exactly and case-sensitively against its
-closed sentinel, engine-owned value, or generated format; a hand-built
-snapshot that carries anything else is not bounded, so registration clears it
-to `missing`. This check applies at the registration boundary itself, not
-only in GameServer's default setup, because any caller can set the subsystem
-context. The flow kind must be a known closed value, and the observability and
+closed sentinel, its engine-owned value, or the crash run ID format. A
+hand-built snapshot that carries anything else is not bounded, so
+registration clears it to `missing`. This check applies at the registration
+boundary itself, not only in GameServer's default setup, because any caller
+can set the subsystem context. The crash run ID check bounds only the value's
+shape, so it cannot carry printable personal or credential text. A format check alone is not provenance:
+it does not prove that a caller-provided value was generated. The flow kind must be a known closed value, and the observability and
 network-profile schema identity and version must match their constants.
 Unset network numerics are never registered. The connection pseudonym must
 equal `excluded` exactly; any other value, including a printable
@@ -191,7 +192,7 @@ maps, metadata bags, arbitrary labels, paths, raw commands or arguments,
 payloads, account or character identities, credentials, and unrestricted
 text. The system-error callback never reads the command line.
 
-Generated crash correlation and external provenance are separate:
+The generated crash run ID and external provenance are separate:
 
 - External run and build provenance is event correlation only. Unless an
   earlier authority path already set the context, GameServer seeds the event
@@ -203,7 +204,7 @@ Generated crash correlation and external provenance are separate:
   event behavior is unchanged. The server process cannot verify these
   caller-supplied values; their content trust rests on the launcher. Character validation bounds these values but does not prove they are free of personal or secret text.
   None of them reaches crash GameData.
-- Generated crash correlation is server-owned. Every accepted runtime context
+- The crash run ID is server-owned. Every accepted runtime context
   generates a new crash run ID, including a replacement that reuses the same
   launcher run text, so an omitted run that falls back to `run-local` on every
   ordinary launch still registers a distinct ID. A runtime reset clears it,
@@ -216,13 +217,24 @@ Generated crash correlation and external provenance are separate:
 
 Evidence marker: before registration first becomes `active` with a new crash
 run ID, the owner writes one Display line to the server log,
-`AethelnCrashContextMarker run=<id>`, carrying only that generated ID. The
-line is written during registration on the game thread, never from the
-system-error callback. To correlate a crash, match `AethelnRunId` from the
-crash report to the marker in the same process's server log, then use that
-log's event stream for the launcher-supplied run and build values. The marker
-depends on the engine log being enabled for the build; this package does not
-change the runner to capture or parse it.
+`AethelnCrashContextMarker crash-run=<id>`, carrying only that ID. The line is
+written during registration on the game thread, never from the system-error
+callback. The marker requires engine logging to be enabled in the build.
+
+External attribution is not established by reading the event stream alone.
+Events carry the launcher run, and the marker and crash GameData carry only
+the crash run ID. No record joins the two. After an accepted runtime
+replacement, the crash run ID rotates immediately. A crash before the next
+event therefore has a marker and crash GameData for the new ID, but no event
+for the replacement run. This package does not change the #38 event schema
+to close that gap.
+
+The future local-only controlled-capture runner must establish attribution
+itself. It must observe the marker before it triggers the failure, and it must
+bind that marker's crash run ID, in an allowlisted manifest, to independently
+verified process, package, source, engine, and profile evidence. It must fail closed on missing, stale, or ambiguous binding.
+Until that runner exists, a crash run ID is unattributed. This package
+provides neither the runner nor the manifest.
 
 Registration transitions:
 
@@ -315,8 +327,9 @@ crash-context snapshot, registration state transitions, immediate refresh after
 accepted context changes, multi-world ambiguity including worlds without a
 subsystem, the excluded process pseudonym, exclusion of printable personal or
 credential-like launcher text from every crash GameData key, generated crash
-run rotation across omitted-run launches and world or runtime replacement, and
-the lifecycle-only system-error handler. The evidence-marker test expects a
+run rotation across omitted-run launches and world or runtime replacement, a
+runtime replacement followed by failure before another event (which stays
+unattributed), and the lifecycle-only system-error handler. The evidence-marker test expects a
 Display log line; that capture path has not yet run natively.
 
 Crash-context ownership (`FAethelnCrashContextOwner`: the fourteen crash-context

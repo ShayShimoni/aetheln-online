@@ -254,7 +254,7 @@ bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Param
 
 	FAethelnCrashContextSnapshot Snapshot;
 	TestFalse(TEXT("A default crash-context snapshot is not bounded"), Snapshot.IsBounded());
-	TestTrue(TEXT("A generated run has the closed crash run format"), FAethelnCrashContextSnapshot::IsGeneratedRunId(RunId));
+	TestTrue(TEXT("A generated run has the closed crash run format"), FAethelnCrashContextSnapshot::HasCrashRunIdFormat(RunId));
 	TestTrue(
 		TEXT("Closed build, profile, and generated run form a snapshot"),
 		FAethelnCrashContextSnapshot::TryMakeValidated(
@@ -277,7 +277,7 @@ bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Param
 	TestEqual(TEXT("Snapshot maps the network-profile version"), Snapshot.NetworkProfileSchemaVersion, AethelnNetworkSpike::NetworkProfileSchemaVersion);
 	TestEqual(TEXT("Snapshot keeps the unset network-profile sentinel"), Snapshot.NetworkProfileId, FString(AethelnNetworkSpike::UnsetNetworkProfileId));
 	TestEqual(TEXT("Snapshot maps the flow kind"), Snapshot.FlowKind, EAethelnFlowKind::PrototypeAuthority);
-	TestEqual(TEXT("Snapshot maps the generated run"), Snapshot.RunId, RunId);
+	TestEqual(TEXT("Snapshot maps the generated run"), Snapshot.CrashRunId, RunId);
 	TestEqual(TEXT("Snapshot maps the closed server role"), Snapshot.ServerInstanceId, Role);
 	TestEqual(TEXT("Snapshot keeps the excluded connection marker"), Snapshot.ConnectionPseudonym, FString(AethelnObservability::ExcludedIdentifier));
 
@@ -301,7 +301,7 @@ bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Param
 				InInstanceId,
 				InConnectionPseudonym,
 				Snapshot));
-		TestEqual(TEXT("Rejected snapshot leaves the prior run unchanged"), Snapshot.RunId, Accepted.RunId);
+		TestEqual(TEXT("Rejected snapshot leaves the prior run unchanged"), Snapshot.CrashRunId, Accepted.CrashRunId);
 		TestEqual(TEXT("Rejected snapshot leaves the prior build unchanged"), Snapshot.BuildIdentity, Accepted.BuildIdentity);
 		TestEqual(TEXT("Rejected snapshot leaves the prior profile unchanged"), Snapshot.NetworkProfileId, Accepted.NetworkProfileId);
 		TestEqual(TEXT("Rejected snapshot leaves the prior instance unchanged"), Snapshot.ServerInstanceId, Accepted.ServerInstanceId);

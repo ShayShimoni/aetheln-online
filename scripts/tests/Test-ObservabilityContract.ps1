@@ -104,7 +104,7 @@ foreach ($Closed in @(
 	'ServerInstanceId.Equals(AethelnObservability::CrashServerRole, ESearchCase::CaseSensitive)',
 	'BuildConfiguration.Equals(LexToString(FApp::GetBuildConfiguration()), ESearchCase::CaseSensitive)',
 	'EngineRevision.Equals(FEngineVersion::Current().ToString(), ESearchCase::CaseSensitive)',
-	'IsGeneratedRunId(RunId)'
+	'HasCrashRunIdFormat(CrashRunId)'
 )) {
 	Assert-ContainsLiteral -Text $CrashSnapshot -Literal $Closed -Message "Crash-context snapshot must accept only closed, engine-owned, or generated values ('$Closed')."
 }
@@ -133,7 +133,7 @@ if (-not $RegisterMatch.Success) {
 	throw 'Could not isolate crash-context registration.'
 }
 $Register = $RegisterMatch.Groups['body'].Value
-$MarkerIndex = $Register.IndexOf('TEXT("AethelnCrashContextMarker run=%s"), *Snapshot->RunId);', [StringComparison]::Ordinal)
+$MarkerIndex = $Register.IndexOf('TEXT("AethelnCrashContextMarker crash-run=%s"), *Snapshot->CrashRunId);', [StringComparison]::Ordinal)
 $ActiveIndex = $Register.IndexOf('SetState(EState::Active);', [StringComparison]::Ordinal)
 if ($MarkerIndex -lt 0 -or $ActiveIndex -lt 0 -or $MarkerIndex -gt $ActiveIndex) {
 	throw 'The generated crash run ID must be bound to its evidence marker before registration becomes active.'
@@ -158,9 +158,14 @@ foreach ($Key in @(
 	'AethelnCrashContextSchemaVersion', 'AethelnSourceRevision', 'AethelnBuildIdentity',
 	'AethelnBuildConfiguration', 'AethelnEngineRevision', 'AethelnToolchainIdentity',
 	'AethelnNetworkProfileSchema', 'AethelnNetworkProfileVersion', 'AethelnNetworkProfileId',
-	'AethelnFlowKind', 'AethelnRunId', 'AethelnServerInstance', 'AethelnConnectionPseudonym'
+	'AethelnFlowKind', 'AethelnCrashRunId', 'AethelnServerInstance', 'AethelnConnectionPseudonym'
 )) {
 	Assert-ContainsLiteral -Text $Subsystem -Literal "TEXT(`"$Key`")" -Message "Stable crash GameData key '$Key' is missing."
+}
+foreach ($Text in @($Subsystem, $SubsystemImplementation, $Server)) {
+	if ($Text.IndexOf('TEXT("AethelnRunId")', [StringComparison]::Ordinal) -ge 0) {
+		throw 'The crash run key is AethelnCrashRunId; AethelnRunId must not name crash GameData.'
+	}
 }
 foreach ($State in @('missing', 'updating', 'active', 'ambiguous', 'stale')) {
 	Assert-ContainsLiteral -Text $SubsystemImplementation -Literal "TEXT(`"$State`")" -Message "Closed crash-context state '$State' is missing."
@@ -205,7 +210,8 @@ foreach ($Name in @(
 	'Aetheln.Observability.CrashContext.WorldOwnership',
 	'Aetheln.Observability.CrashContext.FollowsAcceptedChanges',
 	'Aetheln.Observability.CrashContext.CountsWorldsWithoutSubsystem',
-	'Aetheln.Observability.CrashContext.ExcludesLauncherText'
+	'Aetheln.Observability.CrashContext.ExcludesLauncherText',
+	'Aetheln.Observability.CrashContext.ReplacementBeforeEventIsUnattributed'
 )) {
 	if (-not $GameNetTests.ContainsKey($Name) -or
 		$GameNetTests[$Name].IndexOf('EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext', [StringComparison]::Ordinal) -lt 0) {
@@ -244,6 +250,12 @@ Assert-ContainsLiteral -Text $Operator -Literal 'No CrashReportClient, uploader,
 Assert-ContainsLiteral -Text $Operator -Literal 'must never be opened, parsed, hashed, copied, or published' -Message 'Raw crash artifact handling boundary is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'Character validation bounds these values but does not prove they are free of personal or secret text' -Message 'Command-line provenance limitation is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'The `unknown` and `network-profile.unset` crash values are closed sentinels, not verified provenance' -Message 'Crash sentinel provenance limitation is missing.'
-Assert-ContainsLiteral -Text $Operator -Literal 'AethelnCrashContextMarker run=' -Message 'Generated crash run evidence marker is undocumented.'
+Assert-ContainsLiteral -Text $Operator -Literal 'AethelnCrashContextMarker crash-run=' -Message 'Generated crash run evidence marker is undocumented.'
+Assert-ContainsLiteral -Text $Operator -Literal 'External attribution is not established by reading the event stream alone' -Message 'Crash attribution limitation is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'fail closed on missing, stale, or ambiguous binding' -Message 'Controlled-capture binding requirement is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'A format check alone is not provenance' -Message 'Crash run format limitation is missing.'
+if ($Operator.IndexOf("use that log's event stream", [StringComparison]::Ordinal) -ge 0) {
+	throw 'Documentation must not claim the event stream attributes a crash run.'
+}
 
 Write-Output 'Observability contract and redaction checks passed.'

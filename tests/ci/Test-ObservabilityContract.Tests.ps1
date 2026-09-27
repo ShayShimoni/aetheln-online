@@ -100,8 +100,12 @@ try {
 	}
 
 	Initialize-Fixture
-	Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservabilitySubsystem.h' -Anchor 'TEXT("AethelnRunId")' -Replacement 'TEXT("AethelnRun")'
-	Assert-FailsClosed -Name 'missing stable crash key' -ExpectedPattern 'AethelnRunId'
+	Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservabilitySubsystem.h' -Anchor 'TEXT("AethelnCrashRunId")' -Replacement 'TEXT("AethelnCrashRun")'
+	Assert-FailsClosed -Name 'missing stable crash key' -ExpectedPattern 'AethelnCrashRunId'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservabilitySubsystem.h' -Anchor 'inline constexpr TCHAR CrashRunIdKey[]' -Replacement "inline constexpr TCHAR LegacyRunIdKey[] = TEXT(`"AethelnRunId`");`n`tinline constexpr TCHAR CrashRunIdKey[]"
+	Assert-FailsClosed -Name 'ambiguous legacy crash run key' -ExpectedPattern 'AethelnRunId must not name crash GameData'
 
 	Initialize-Fixture
 	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'TEXT("AethelnServerLifecycle")' -Replacement 'TEXT("AethelnLifecycle")'
@@ -173,7 +177,7 @@ try {
 		@{ Name = 'launcher profile in crash snapshot'; Anchor = 'NetworkProfileId.Equals(AethelnNetworkSpike::UnsetNetworkProfileId, ESearchCase::CaseSensitive)'; Replacement = '!NetworkProfileId.IsEmpty()' },
 		@{ Name = 'caller engine revision in crash snapshot'; Anchor = 'EngineRevision.Equals(FEngineVersion::Current().ToString(), ESearchCase::CaseSensitive)'; Replacement = '!EngineRevision.IsEmpty()' },
 		@{ Name = 'caller instance in crash snapshot'; Anchor = 'ServerInstanceId.Equals(AethelnObservability::CrashServerRole, ESearchCase::CaseSensitive)'; Replacement = '!ServerInstanceId.IsEmpty()' },
-		@{ Name = 'launcher run in crash snapshot'; Anchor = 'IsGeneratedRunId(RunId)'; Replacement = '!RunId.IsEmpty()' }
+		@{ Name = 'launcher run in crash snapshot'; Anchor = 'HasCrashRunIdFormat(CrashRunId)'; Replacement = '!CrashRunId.IsEmpty()' }
 	)) {
 		Initialize-Fixture
 		Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor $Entry.Anchor -Replacement $Entry.Replacement
@@ -199,7 +203,7 @@ try {
 	}
 
 	Initialize-Fixture
-	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'UE_LOG(LogAethelnCrashContext, Display, TEXT("AethelnCrashContextMarker run=%s"), *Snapshot->RunId);' -Replacement '(void)0;'
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'UE_LOG(LogAethelnCrashContext, Display, TEXT("AethelnCrashContextMarker crash-run=%s"), *Snapshot->CrashRunId);' -Replacement '(void)0;'
 	Assert-FailsClosed -Name 'unbound crash run evidence marker' -ExpectedPattern 'evidence marker before registration becomes active'
 
 	Initialize-Fixture
@@ -211,8 +215,23 @@ try {
 	Assert-FailsClosed -Name 'crash sentinels claimed as provenance' -ExpectedPattern 'Crash sentinel provenance limitation'
 
 	Initialize-Fixture
-	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'AethelnCrashContextMarker run=' -Replacement 'crash marker'
+	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'AethelnCrashContextMarker crash-run=' -Replacement 'crash marker'
 	Assert-FailsClosed -Name 'undocumented crash run evidence marker' -ExpectedPattern 'evidence marker is undocumented'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor '"Aetheln.Observability.CrashContext.ReplacementBeforeEventIsUnattributed"' -Replacement '"Aetheln.Observability.CrashContext.Other"'
+	Assert-FailsClosed -Name 'missing replacement-before-event regression' -ExpectedPattern 'ReplacementBeforeEventIsUnattributed'
+
+	foreach ($Entry in @(
+		@{ Name = 'event stream claimed as crash attribution'; Anchor = 'External attribution is not established by reading the event stream alone'; Replacement = 'The event stream attributes the crash'; Pattern = 'Crash attribution limitation' },
+		@{ Name = 'unbound controlled-capture manifest'; Anchor = 'fail closed on missing, stale, or ambiguous binding'; Replacement = 'best-effort binding'; Pattern = 'Controlled-capture binding requirement' },
+		@{ Name = 'format check claimed as provenance'; Anchor = 'A format check alone is not provenance'; Replacement = 'The format proves generation'; Pattern = 'Crash run format limitation' },
+		@{ Name = 'restored event-stream join claim'; Anchor = 'Until that runner exists'; Replacement = "Otherwise use that log's event stream. Until that runner exists"; Pattern = 'must not claim the event stream attributes' }
+	)) {
+		Initialize-Fixture
+		Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor $Entry.Anchor -Replacement $Entry.Replacement
+		Assert-FailsClosed -Name $Entry.Name -ExpectedPattern $Entry.Pattern
+	}
 
 	Write-Output 'All observability contract fixture tests passed.'
 }

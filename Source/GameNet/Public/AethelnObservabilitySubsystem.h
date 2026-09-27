@@ -145,7 +145,7 @@ namespace AethelnCrashContext
 	inline constexpr TCHAR NetworkProfileVersionKey[] = TEXT("AethelnNetworkProfileVersion");
 	inline constexpr TCHAR NetworkProfileIdKey[] = TEXT("AethelnNetworkProfileId");
 	inline constexpr TCHAR FlowKindKey[] = TEXT("AethelnFlowKind");
-	inline constexpr TCHAR RunIdKey[] = TEXT("AethelnRunId");
+	inline constexpr TCHAR CrashRunIdKey[] = TEXT("AethelnCrashRunId");
 	inline constexpr TCHAR ServerInstanceKey[] = TEXT("AethelnServerInstance");
 	inline constexpr TCHAR ConnectionPseudonymKey[] = TEXT("AethelnConnectionPseudonym");
 	inline constexpr const TCHAR* IdentityKeys[] = {
@@ -159,7 +159,7 @@ namespace AethelnCrashContext
 		NetworkProfileVersionKey,
 		NetworkProfileIdKey,
 		FlowKindKey,
-		RunIdKey,
+		CrashRunIdKey,
 		ServerInstanceKey,
 		ConnectionPseudonymKey
 	};
@@ -216,6 +216,6 @@ private:
 	TSet<TWeakObjectPtr<const UWorld>> TrackedWorlds;
 	AethelnCrashContext::EState State = AethelnCrashContext::EState::Missing;
 	/** Last crash run ID bound to the evidence marker, so each generated ID is logged once. */
-	FString LastMarkedRunId;
+	FString LastMarkedCrashRunId;
 	FDelegateHandle ChangedHandle;
 };
