@@ -422,6 +422,8 @@ exit $LASTEXITCODE
 		[string] $JoinInProgressPatternOverride,
 		[string] $DamagePatternOverride,
 		[string] $PerformanceContractPath,
+		[bool] $ProbePerformanceContractReplacement = $false,
+		[string] $PerformanceArtifactProbeResultPath,
 		[int] $ObservationStartDelaySeconds = 0,
 		[bool] $WithholdShutdownRelease = $false,
 		[int] $ServerStartupDelaySeconds = 0,
@@ -513,8 +515,26 @@ exit $LASTEXITCODE
 		$ObservationDelayBreakpoint = $null
 		$ShutdownReleaseBreakpoint = $null
 		$ObservationExitBreakpoint = $null
+		$PerformanceArtifactProbeBreakpoint = $null
 		$BoundaryTimeoutBreakpoints = @()
 		try {
+			if ($ProbePerformanceContractReplacement) {
+				if (-not $PerformanceContractPath -or -not $PerformanceArtifactProbeResultPath) { throw 'Performance artifact replacement probe requires a contract path and result path.' }
+				$PerformanceArtifactPath = Join-Path $FixtureLogRoot 'performance-contract.json'
+				$ProbePerformanceArtifact = {
+					if (-not (Test-Path -LiteralPath $PerformanceArtifactProbeResultPath)) {
+						try {
+							[System.IO.File]::WriteAllBytes($PerformanceArtifactPath, [byte[]] @(1,2,3))
+							[System.IO.File]::WriteAllText($PerformanceArtifactProbeResultPath, 'replaced')
+						} catch {
+							$BaseException = $_.Exception.GetBaseException()
+							$ProbeResult = if ($BaseException -is [System.IO.IOException] -or $BaseException -is [System.UnauthorizedAccessException]) { 'denied' } else { "unexpected:$($BaseException.GetType().FullName)" }
+							[System.IO.File]::WriteAllText($PerformanceArtifactProbeResultPath, $ProbeResult)
+						}
+					}
+				}.GetNewClosure()
+				$PerformanceArtifactProbeBreakpoint = Set-PSBreakpoint -Script $Script -Command Start-HiddenProcess -Action $ProbePerformanceArtifact
+			}
 			if ($BoundaryTimeoutDescription) {
 				# Command breakpoint actions run in a child scope of the invoked function,
 				# after parameter binding. Shadow the runner's timeout only in that wait's
@@ -553,6 +573,7 @@ exit $LASTEXITCODE
 			if ($null -ne $ObservationDelayBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationDelayBreakpoint }
 			if ($null -ne $ShutdownReleaseBreakpoint) { Remove-PSBreakpoint -Breakpoint $ShutdownReleaseBreakpoint }
 			if ($null -ne $ObservationExitBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationExitBreakpoint }
+			if ($null -ne $PerformanceArtifactProbeBreakpoint) { Remove-PSBreakpoint -Breakpoint $PerformanceArtifactProbeBreakpoint }
 		}
 	}
 
@@ -1330,6 +1351,7 @@ exit $LASTEXITCODE
 				scenario_id = 'network-authority.baseline.v1'
 				profile_id = 'network-profile.unset'
 				network_config_identity = 'network-emulation.caller-supplied'
+				run_id = 'fixture-performance-success'
 				scenario_version = $null
 				profile_version = $null
 				profile_arguments_sha256 = $null
@@ -1364,7 +1386,8 @@ exit $LASTEXITCODE
 	$PerformanceSuccessContractPath = Join-Path $PerformanceContractRoot 'performance-success.json'
 	Write-PerformanceContract $PerformanceSuccessContractPath $PerformanceSuccessContract
 	$PerformanceSuccessRoot = Join-Path $FixtureRoot 'performance-success'
-	Invoke-FixtureRun -FixtureLogRoot $PerformanceSuccessRoot -FixtureRunId 'fixture-performance-success' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceSuccessContractPath
+	$PerformanceArtifactProbeResultPath = Join-Path $FixtureRoot 'performance-artifact-probe-result.txt'
+	Invoke-FixtureRun -FixtureLogRoot $PerformanceSuccessRoot -FixtureRunId 'fixture-performance-success' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceSuccessContractPath -ProbePerformanceContractReplacement $true -PerformanceArtifactProbeResultPath $PerformanceArtifactProbeResultPath
 	$PerformanceEvidenceJson = Get-Content -LiteralPath (Join-Path $PerformanceSuccessRoot 'network-authority-spike-evidence.json') -Raw
 	$PerformanceEvidence = $PerformanceEvidenceJson | ConvertFrom-Json
 	Assert-True ($PerformanceEvidence.result -eq 'fixture-passed' -and $PerformanceEvidence.schema_version -eq 1) 'The opt-in performance contract must not change the legacy evidence schema version or fixture result.'
@@ -1374,6 +1397,7 @@ exit $LASTEXITCODE
 	Assert-True (Test-Path -LiteralPath $RetainedPerformanceContractPath -PathType Leaf) 'Validated performance-contract evidence must retain the exact contract artifact.'
 	Assert-True ((Get-FileHash -LiteralPath $RetainedPerformanceContractPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $PerformanceEvidence.performance_contract.contract_sha256) 'The retained performance-contract artifact must match the published SHA-256.'
 	Assert-True ((Get-FileHash -LiteralPath $PerformanceSuccessContractPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $PerformanceEvidence.performance_contract.contract_sha256) 'The published SHA-256 must bind the exact supplied contract bytes.'
+	Assert-True ((Test-Path -LiteralPath $PerformanceArtifactProbeResultPath -PathType Leaf) -and (Get-Content -LiteralPath $PerformanceArtifactProbeResultPath -Raw) -ceq 'denied') 'The retained performance-contract artifact must deny replacement while runtime evidence is being captured.'
 	Assert-True ($PerformanceEvidence.performance_contract.budget_count -eq 10) 'Validated performance-contract evidence must record exactly one budget per version-1 network-authority-runner subset metric.'
 	Assert-True (-not $PerformanceEvidence.performance_contract.targets_defined -and $PerformanceEvidence.performance_contract.approval_status -eq 'unapproved') 'Validated performance-contract evidence must remain target-free and unapproved in this wave.'
 	Assert-True ($PerformanceEvidence.performance_contract.evidence_reference_count -eq 2) 'Validated performance-contract evidence must count declared capture evidence references.'
@@ -1387,8 +1411,12 @@ exit $LASTEXITCODE
 	Assert-True ($PerformanceEvidenceJson.IndexOf('evidence-ref.fixture-capture-log', [System.StringComparison]::Ordinal) -lt 0) 'Performance-contract evidence must publish only counts, never raw evidence-reference values.'
 	Assert-True ($ContractEvidence.PSObject.Properties.Name -notcontains 'performance_contract') 'Schema-v2 evidence without the opt-in performance contract must not gain a performance_contract field.'
 	$PerformanceContractMaximumBytes = 1MB
+	$PerformanceExactLimitSourceContract = Get-PerformanceContractObject
+	$PerformanceExactLimitSourceContract.capture.run_id = 'fixture-performance-exact-size-limit'
+	$PerformanceExactLimitSourcePath = Join-Path $PerformanceContractRoot 'performance-exact-size-limit-source.json'
+	Write-PerformanceContract $PerformanceExactLimitSourcePath $PerformanceExactLimitSourceContract
 	$PerformanceExactLimitPath = Join-Path $PerformanceContractRoot 'performance-exact-size-limit.json'
-	Write-PaddedPerformanceContract -SourcePath $PerformanceSuccessContractPath -TargetPath $PerformanceExactLimitPath -TargetBytes $PerformanceContractMaximumBytes
+	Write-PaddedPerformanceContract -SourcePath $PerformanceExactLimitSourcePath -TargetPath $PerformanceExactLimitPath -TargetBytes $PerformanceContractMaximumBytes
 	$PerformanceExactLimitRoot = Join-Path $FixtureRoot 'performance-exact-size-limit'
 	Invoke-FixtureRun -FixtureLogRoot $PerformanceExactLimitRoot -FixtureRunId 'fixture-performance-exact-size-limit' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceExactLimitPath
 	$PerformanceExactLimitEvidence = Get-Content -LiteralPath (Join-Path $PerformanceExactLimitRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
@@ -1403,6 +1431,7 @@ exit $LASTEXITCODE
 	$PerformanceVariantContract.budgets[0].evidence_classification = 'hypothetical'
 	$PerformanceVariantContract.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log')
 	$PerformanceVariantContract.budgets[0].owner = 'issue-45-independent-review'
+	$PerformanceVariantContract.capture.run_id = 'fixture-performance-valid-variant'
 	$PerformanceVariantContractPath = Join-Path $PerformanceContractRoot 'performance-valid-variant.json'
 	Write-PerformanceContract $PerformanceVariantContractPath $PerformanceVariantContract
 	$PerformanceVariantRoot = Join-Path $FixtureRoot 'performance-valid-variant'
@@ -1413,6 +1442,7 @@ exit $LASTEXITCODE
 	$CombinedContract = Get-PerformanceContractObject
 	$CombinedContract.capture.profile_id = 'network-profile.clean'
 	$CombinedContract.capture.network_config_identity = 'network-emulation.clean'
+	$CombinedContract.capture.run_id = 'fixture-performance-schema-v2-combined'
 	$CombinedContract.capture.scenario_version = [string] $ContractEvidence.scenario.version
 	$CombinedContract.capture.profile_version = [string] $ContractEvidence.network_profile.version
 	$CombinedContract.capture.profile_arguments_sha256 = [string] $ContractEvidence.network_profile.arguments_sha256
@@ -1437,6 +1467,7 @@ exit $LASTEXITCODE
 		@{ Name = 'mismatched-actor-mix'; Mutate = { param($C) $C.capture.actor_mix = 'network-authority.actor-mix.v2' }; Failure = "capture 'actor_mix' must equal" },
 		@{ Name = 'mismatched-profile'; Mutate = { param($C) $C.capture.profile_id = 'network-profile.clean' }; Failure = "capture 'profile_id' must equal" },
 		@{ Name = 'mismatched-network-config'; Mutate = { param($C) $C.capture.network_config_identity = 'network-emulation.other' }; Failure = "capture 'network_config_identity' must equal" },
+		@{ Name = 'mismatched-run-id'; Mutate = { param($C) $C.capture.run_id = 'fixture-performance-other-run' }; Failure = "capture 'run_id' must equal" },
 		@{ Name = 'unexpected-scenario-version'; Mutate = { param($C) $C.capture.scenario_version = 'fixture-v1' }; Failure = "capture 'scenario_version' must be null" },
 		@{ Name = 'unexpected-profile-version'; Mutate = { param($C) $C.capture.profile_version = 'fixture-v1' }; Failure = "capture 'profile_version' must be null" },
 		@{ Name = 'unexpected-profile-arguments-digest'; Mutate = { param($C) $C.capture.profile_arguments_sha256 = ('a' * 64) }; Failure = "capture 'profile_arguments_sha256' must be null" },
@@ -1453,11 +1484,13 @@ exit $LASTEXITCODE
 		@{ Name = 'populated-failure-threshold'; Mutate = { param($C) $C.budgets[1].failure_threshold = 100 }; Failure = 'must remain null' },
 		@{ Name = 'self-approved-budget'; Mutate = { param($C) $C.budgets[0].approval_status = 'approved' }; Failure = 'cannot self-approve' },
 		@{ Name = 'invented-classification'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'estimated' }; Failure = 'measured, modeled, hypothetical, or unset' },
+		@{ Name = 'fixture-measured-classification'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'measured'; $C.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log') }; Failure = 'measured classification requires packaged evidence mode' },
 		@{ Name = 'unset-with-references'; Mutate = { param($C) $C.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log') }; Failure = 'unset classification must declare no evidence references' },
-		@{ Name = 'undeclared-evidence-reference'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'measured'; $C.budgets[0].evidence_references = @('evidence-ref.unknown') }; Failure = 'declared capture evidence references' },
+		@{ Name = 'undeclared-evidence-reference'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'modeled'; $C.budgets[0].evidence_references = @('evidence-ref.unknown') }; Failure = 'declared capture evidence references' },
 		@{ Name = 'duplicate-budget-metric'; Mutate = { param($C) $C.budgets[1].metric_id = $C.budgets[0].metric_id; $C.budgets[1].domain = $C.budgets[0].domain }; Failure = 'exactly one budget' },
 		@{ Name = 'missing-budget-metric'; Mutate = { param($C) $C.budgets = @($C.budgets | Select-Object -Skip 1) }; Failure = 'exactly one budget' },
 		@{ Name = 'unknown-budget-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'frames_per_second' }; Failure = 'Unsupported performance budget metric' },
+		@{ Name = 'case-variant-budget-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'CLIENT_MEMORY_BYTES' }; Failure = 'Unsupported performance budget metric' },
 		@{ Name = 'wrong-budget-domain'; Mutate = { param($C) $C.budgets[0].domain = 'server' }; Failure = 'domain must be' },
 		@{ Name = 'boolean-budget-domain'; Mutate = { param($C) $C.budgets[0].domain = $true }; Failure = 'domain must be a JSON string' },
 		@{ Name = 'numeric-measurement-method'; Mutate = { param($C) $C.budgets[0].measurement_method = 45 }; Failure = 'measurement_method must be a JSON string' },
@@ -1469,11 +1502,13 @@ exit $LASTEXITCODE
 	)
 	foreach ($PerformanceFailureCase in $PerformanceFailureCases) {
 		$MutatedContract = Get-PerformanceContractObject
+		$FailureRunId = "fixture-performance-$($PerformanceFailureCase.Name)"
+		$MutatedContract.capture.run_id = $FailureRunId
 		& $PerformanceFailureCase.Mutate $MutatedContract
 		$MutatedContractPath = Join-Path $PerformanceContractRoot ("performance-$($PerformanceFailureCase.Name).json")
 		Write-PerformanceContract $MutatedContractPath $MutatedContract
 		$PerformanceFailure = $null
-		try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot ("performance-$($PerformanceFailureCase.Name)")) -FixtureRunId ("fixture-performance-$($PerformanceFailureCase.Name)") -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $MutatedContractPath } catch { $PerformanceFailure = $_.Exception.Message }
+		try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot ("performance-$($PerformanceFailureCase.Name)")) -FixtureRunId $FailureRunId -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $MutatedContractPath } catch { $PerformanceFailure = $_.Exception.Message }
 		Assert-True ($PerformanceFailure -match [regex]::Escape($PerformanceFailureCase.Failure)) "$($PerformanceFailureCase.Name) performance contract must fail closed before launch. Actual: $PerformanceFailure"
 	}
 	$DuplicatePerformancePropertyPath = Join-Path $PerformanceContractRoot 'performance-duplicate-property.json'

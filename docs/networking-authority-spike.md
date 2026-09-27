@@ -179,8 +179,8 @@ schema `aetheln.performance-capture-contract` version 1 containing exactly one
 The `capture` object binds future performance evidence to the exact run
 identity. Its `source_revision`, `build`, `toolchain`, `hardware`, `topology`,
 `environment`, `map`, `duration_seconds`, `actor_mix`, `scenario_id`, and
-`profile_id`, and `network_config_identity` values must equal the corresponding
-runner inputs exactly and case-sensitively. When the Issue #44 scenario/profile
+`profile_id`, `network_config_identity`, and `run_id` values must equal the
+corresponding runner inputs exactly and case-sensitively. When the Issue #44 scenario/profile
 contracts are supplied, `scenario_version`, `profile_version`, and
 `profile_arguments_sha256` must bind the exact selected versions and opaque
 argument digest; without those contracts, all three fields must be JSON `null`.
@@ -219,6 +219,8 @@ a populated value fails closed because no measurement authority exists yet.
 classification must reference only tokens declared in the capture
 `evidence_references`. `approval_status` must be exactly `unapproved`; the
 contract and the fixture runner cannot approve or canonicalize a budget.
+Metric IDs are exact and case-sensitive. A `measured` classification is rejected
+for fixture evidence and requires packaged evidence mode.
 
 Contract input is limited to 1,048,576 bytes. Malformed JSON, oversized input,
 duplicate JSON properties, missing or extra fields, unknown or duplicate
@@ -231,6 +233,11 @@ name of the exact validated
 contract bytes, the budget count, `targets_defined = false`, `approval_status =
 "unapproved"`, the evidence-reference count, and classification counts. Those
 exact bytes are retained as `performance-contract.json` in the run log root.
+The artifact is created without overwrite, held read-only to other processes
+throughout capture, and rehashed through both its retained handle and published
+path before the evidence document is written. Replacement attempts during the
+run therefore fail closed, while later consumers can compare the published
+digest to detect post-run drift.
 Raw evidence-reference values, paths, and every numeric performance value are
 excluded from the summary; the `measurements` object continues to publish
 explicit `null` values only.

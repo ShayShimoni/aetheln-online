@@ -696,6 +696,58 @@ function Read-ExactContractJsonRecord([string] $Name, [string] $Path) {
 	}
 }
 
+function Get-Sha256Stream([System.IO.Stream] $Stream) {
+	if ($null -eq $Stream -or -not $Stream.CanRead -or -not $Stream.CanSeek) { throw 'Exact contract artifact stream must remain readable and seekable.' }
+	$OriginalPosition = $Stream.Position
+	$Hasher = [System.Security.Cryptography.SHA256]::Create()
+	try {
+		$Stream.Position = 0
+		return [System.BitConverter]::ToString($Hasher.ComputeHash($Stream)).Replace('-', '').ToLowerInvariant()
+	}
+	finally {
+		$Stream.Position = $OriginalPosition
+		$Hasher.Dispose()
+	}
+}
+
+function Open-ExactContractArtifact([string] $Path, [byte[]] $Bytes, [string] $ExpectedSha256) {
+	$Stream = $null
+	try {
+		$Stream = [System.IO.FileStream]::new(
+			$Path,
+			[System.IO.FileMode]::CreateNew,
+			[System.IO.FileAccess]::ReadWrite,
+			[System.IO.FileShare]::Read,
+			4096,
+			[System.IO.FileOptions]::WriteThrough)
+		$Stream.Write($Bytes, 0, $Bytes.Length)
+		$Stream.Flush($true)
+		if ((Get-Sha256Stream -Stream $Stream) -cne $ExpectedSha256) { throw 'Exact contract artifact digest mismatch after create-only publication.' }
+		return $Stream
+	}
+	catch {
+		if ($null -ne $Stream) { $Stream.Dispose() }
+		throw
+	}
+}
+
+function Assert-ExactContractArtifact([System.IO.Stream] $Stream, [string] $Path, [string] $ExpectedSha256) {
+	$Stream.Flush($true)
+	if ((Get-Sha256Stream -Stream $Stream) -cne $ExpectedSha256) { throw 'Retained performance-contract handle no longer matches its validated digest.' }
+	$PathStream = $null
+	try {
+		$PathStream = [System.IO.FileStream]::new(
+			$Path,
+			[System.IO.FileMode]::Open,
+			[System.IO.FileAccess]::Read,
+			[System.IO.FileShare]::ReadWrite)
+		if ((Get-Sha256Stream -Stream $PathStream) -cne $ExpectedSha256) { throw 'Retained performance-contract path no longer matches its validated digest.' }
+	}
+	finally {
+		if ($null -ne $PathStream) { $PathStream.Dispose() }
+	}
+}
+
 function Assert-OpaqueArgument([string] $Name, [object] $Value) {
 	if ($null -eq $Value -or $Value -is [string] -or $Value -isnot [System.Collections.IEnumerable]) {
 		throw "$Name must be a JSON array of argument strings."
@@ -795,12 +847,12 @@ function Resolve-PerformanceContract([string] $Path) {
 		throw 'PerformanceContract must use aetheln.performance-capture-contract schema version 1.'
 	}
 	$Capture = $Contract.capture
-	Assert-ClosedProperty -Value $Capture -Expected @('source_revision','build','toolchain','hardware','topology','environment','map','duration_seconds','actor_mix','scenario_id','profile_id','network_config_identity','scenario_version','profile_version','profile_arguments_sha256','evidence_references','measurement_domains','sampling') -Name 'PerformanceContract capture'
+	Assert-ClosedProperty -Value $Capture -Expected @('source_revision','build','toolchain','hardware','topology','environment','map','duration_seconds','actor_mix','scenario_id','profile_id','network_config_identity','run_id','scenario_version','profile_version','profile_arguments_sha256','evidence_references','measurement_domains','sampling') -Name 'PerformanceContract capture'
 	foreach ($IdentityEntry in @(
 		@('source_revision', $SourceRevision), @('build', $BuildIdentity), @('toolchain', $ToolchainIdentity),
 		@('hardware', $HardwareIdentity), @('topology', $TopologyIdentity), @('environment', $Environment),
 		@('map', $ServerMap), @('actor_mix', $ActorMixIdentity), @('scenario_id', $ScenarioId), @('profile_id', $ProfileId),
-		@('network_config_identity', $NetworkConfigIdentity)
+		@('network_config_identity', $NetworkConfigIdentity), @('run_id', $RunId)
 	)) {
 		Assert-JsonString -Name "PerformanceContract capture '$($IdentityEntry[0])'" -Value $Capture.($IdentityEntry[0])
 		if ([string] $Capture.($IdentityEntry[0]) -cne [string] $IdentityEntry[1]) {
@@ -854,16 +906,16 @@ function Resolve-PerformanceContract([string] $Path) {
 	foreach ($SamplingField in @('sampling_rate_hz','server_tick_hz','bandwidth_limit_kbps','capacity_players')) {
 		if ($null -ne $Capture.sampling.$SamplingField) { throw "PerformanceContract sampling '$SamplingField' must remain null in this wave." }
 	}
-	$MetricDomains = @{}
+	$MetricDomains = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
 	foreach ($DomainName in $RequiredDomains.Keys) {
-		foreach ($MetricId in $RequiredDomains[$DomainName]) { $MetricDomains[$MetricId] = $DomainName }
+		foreach ($MetricId in $RequiredDomains[$DomainName]) { $MetricDomains.Add($MetricId, $DomainName) }
 	}
 	$Budgets = $Contract.budgets
 	if ($null -eq $Budgets -or $Budgets -is [string] -or $Budgets -isnot [System.Collections.IEnumerable]) {
 		throw 'PerformanceContract budgets must be a JSON array of budget records.'
 	}
 	$ClassificationCounts = [ordered]@{ measured = 0; modeled = 0; hypothetical = 0; unset = 0 }
-	$BudgetCounts = @{}
+	$BudgetMetricIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 	foreach ($Budget in @($Budgets)) {
 		Assert-ClosedProperty -Value $Budget -Expected @('metric_id','domain','target','warning_threshold','failure_threshold','measurement_method','scenario_id','owner','evidence_references','evidence_classification','approval_status') -Name 'Performance budget'
 		Assert-JsonString -Name 'Performance budget metric_id' -Value $Budget.metric_id
@@ -885,6 +937,9 @@ function Resolve-PerformanceContract([string] $Path) {
 		if ($Classification -cnotin @('measured','modeled','hypothetical','unset')) {
 			throw "Performance budget '$MetricId' evidence_classification must be measured, modeled, hypothetical, or unset."
 		}
+		if ($Classification -ceq 'measured' -and $EvidenceMode -cne 'packaged') {
+			throw "Performance budget '$MetricId' measured classification requires packaged evidence mode."
+		}
 		Assert-JsonString -Name "Performance budget '$MetricId' approval_status" -Value $Budget.approval_status
 		if ([string] $Budget.approval_status -cne 'unapproved') {
 			throw "Performance budget '$MetricId' must remain 'unapproved'; contracts cannot self-approve budgets."
@@ -905,10 +960,10 @@ function Resolve-PerformanceContract([string] $Path) {
 			}
 		}
 		$ClassificationCounts[$Classification] = 1 + [int] $ClassificationCounts[$Classification]
-		$BudgetCounts[$MetricId] = 1 + [int] $BudgetCounts[$MetricId]
+		if (-not $BudgetMetricIds.Add($MetricId)) { throw 'PerformanceContract budgets must declare exactly one budget for every version-1 network-authority-runner metric.' }
 	}
 	foreach ($MetricId in $MetricDomains.Keys) {
-		if ([int] $BudgetCounts[$MetricId] -ne 1) { throw 'PerformanceContract budgets must declare exactly one budget for every canonical metric.' }
+		if (-not $BudgetMetricIds.Contains($MetricId)) { throw 'PerformanceContract budgets must declare exactly one budget for every version-1 network-authority-runner metric.' }
 	}
 	return [pscustomobject]@{
 		Summary = [ordered]@{
@@ -1166,11 +1221,6 @@ $ResolvedServer = if ($ServerLauncherExecutable) { $ServerExecutable } else { Re
 $ResolvedServerLauncher = if ($ServerLauncherExecutable) { Resolve-Executable 'ServerLauncherExecutable' $ServerLauncherExecutable } else { $ResolvedServer }
 $ResolvedClient = Resolve-Executable 'ClientExecutable' $ClientExecutable
 $ResolvedLogs = Initialize-EmptyLogRoot $LogRoot
-if ($script:PerformanceContractRecord) {
-	[System.IO.File]::WriteAllBytes(
-		(Join-Path $ResolvedLogs $script:PerformanceContractRecord.Summary.contract_artifact),
-		[byte[]] $script:PerformanceContractRecord.Bytes)
-}
 $ActualServerSha256 = if ($EvidenceMode -ceq 'packaged') {
 	if ($ServerLauncherExecutable) {
 		$IdentityCommand = Invoke-HiddenCommand `
@@ -1210,6 +1260,13 @@ $CurrentProcessRole = 'server'
 $CurrentClientId = $null
 $CleanupAttempted = $false
 $CleanupSucceeded = $null
+$PerformanceContractArtifactPath = if ($script:PerformanceContractRecord) { Join-Path $ResolvedLogs $script:PerformanceContractRecord.Summary.contract_artifact } else { $null }
+$PerformanceContractArtifactStream = if ($script:PerformanceContractRecord) {
+	Open-ExactContractArtifact `
+		-Path $PerformanceContractArtifactPath `
+		-Bytes ([byte[]] $script:PerformanceContractRecord.Bytes) `
+		-ExpectedSha256 ([string] $script:PerformanceContractRecord.Summary.contract_sha256)
+} else { $null }
 
 try {
 	$CurrentStage = 'server-start'
@@ -1565,6 +1622,24 @@ finally {
 			$Result = 'failed'
 		}
 	}
+	if ($script:PerformanceContractRecord) {
+		try {
+			Assert-ExactContractArtifact `
+				-Stream $PerformanceContractArtifactStream `
+				-Path $PerformanceContractArtifactPath `
+				-ExpectedSha256 ([string] $script:PerformanceContractRecord.Summary.contract_sha256)
+		}
+		catch {
+			if (-not $PostCaptureValidationFailure) { $PostCaptureValidationFailure = $_.Exception.Message }
+			if (-not $Failure) {
+				$Failure = $_.Exception.Message
+				$FailureStage = 'performance-contract-retention'
+				$FailureProcessRole = 'runner'
+				$FailureClientId = $null
+			}
+			$Result = 'failed'
+		}
+	}
 	$EvidenceSchemaVersion = if ($script:UseScenarioContract) { 2 } else { 1 }
 	$PackagedProvenanceEvidence = if ($PackagedProvenance) {
 		[ordered]@{
@@ -1646,7 +1721,12 @@ finally {
 		$Evidence.cleanup = [ordered]@{ attempted = $CleanupAttempted; succeeded = $CleanupSucceeded; failure = $PublishedCleanupFailure }
 	}
 	if ($script:PerformanceContractRecord) { $Evidence.performance_contract = $script:PerformanceContractRecord.Summary }
-	$Evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
+	try {
+		$Evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
+	}
+	finally {
+		if ($null -ne $PerformanceContractArtifactStream) { $PerformanceContractArtifactStream.Dispose() }
+	}
 	if ($PostCaptureValidationFailure) { throw "Post-capture evidence validation failed: $PostCaptureValidationFailure" }
 	if ($CleanupFailure -and $FailureStage -ceq 'cleanup') { throw "Server cleanup failed: $CleanupFailure" }
 }

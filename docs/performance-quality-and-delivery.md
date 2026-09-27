@@ -88,7 +88,7 @@ specified in
 [Networking Authority Spike](networking-authority-spike.md#issue-45-opt-in-performance-capture-and-budget-contract).
 The contract binds future capture evidence to the exact source revision,
 packaged-build identity, toolchain, hardware, topology, environment, map,
-duration, actor mix, scenario ID/version, network profile ID/version, runtime
+duration, actor mix, run ID, scenario ID/version, network profile ID/version, runtime
 network-configuration identity, opaque profile-argument digest, and evidence
 references, and
 carries one budget record per version-1 network-authority-runner subset metric
@@ -108,6 +108,10 @@ in the summary. This bounded subset does not replace or complete the broader
 Issue #45 registry above; the remaining client timing, frame-pacing, hitch,
 loading/streaming, server worker/tick-overrun/failure, and network burst/loss
 domains require later representative capture work.
+Metric identities remain case-sensitive, and fixture evidence cannot classify a
+budget as `measured`. The exact contract artifact is created without overwrite,
+kept protected from replacement during capture, and rehashed immediately before
+evidence publication.
 
 ## Evidence Record
 
