@@ -517,7 +517,7 @@ namespace AethelnServerObservabilityTests
 	private:
 		void Save(const TCHAR* Key)
 		{
-			const FString* Value = FGenericCrashContext::GetGameData(Key);
+			const FString* Value = FGenericCrashContext::GetGameData().Find(Key);
 			Saved.Add(Key, Value != nullptr ? TOptional<FString>(*Value) : TOptional<FString>());
 		}
 
@@ -526,7 +526,7 @@ namespace AethelnServerObservabilityTests
 
 	FString ReadKey(const TCHAR* Key)
 	{
-		const FString* Value = FGenericCrashContext::GetGameData(Key);
+		const FString* Value = FGenericCrashContext::GetGameData().Find(Key);
 		return Value != nullptr ? *Value : FString();
 	}
 
@@ -534,7 +534,7 @@ namespace AethelnServerObservabilityTests
 	{
 		for (const TCHAR* Key : AethelnServerObservability::CrashContextIdentityKeys)
 		{
-			if (FGenericCrashContext::GetGameData(Key) != nullptr)
+			if (FGenericCrashContext::GetGameData().Find(Key) != nullptr)
 			{
 				return true;
 			}
