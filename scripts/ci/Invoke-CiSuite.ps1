@@ -40,6 +40,7 @@ $DefaultChecks = @(
 	@{ name = 'ci-selection-tests'; tier = 'required'; script = 'tests/ci/Get-CiSelection.Tests.ps1' },
 	@{ name = 'ci-acceptance-receipt-tests'; tier = 'required'; script = 'tests/ci/New-CiAcceptanceReceipt.Tests.ps1' },
 	@{ name = 'ci-acceptance-aggregate-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiAcceptanceAggregate.Tests.ps1' },
+	@{ name = 'ci-activation-candidate-tests'; tier = 'required'; script = 'tests/ci/Test-CiActivationCandidate.Tests.ps1' },
 	@{ name = 'compile-workspace-tests'; tier = 'required'; script = 'tests/ci/Initialize-CompileWorkspace.Tests.ps1' },
 	@{ name = 'engine-host-lease-tests'; tier = 'required'; script = 'tests/ci/EngineRunnerHostLease.Tests.ps1' },
 	@{ name = 'managed-compile-registration-tests'; tier = 'required'; script = 'tests/ci/ManagedCompileRegistration.Tests.ps1' },

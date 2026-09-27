@@ -45,20 +45,65 @@ function New-RawRecord {
 # The four event variants are strict discriminated unions. Unknown properties,
 # ambiguous caller identities, and an unaccepted PR controller are rejected.
 $Base = '1' * 40; $Head = '2' * 40; $Merge = '3' * 40
+$RunId = '35484524291'; $RunAttempt = [long] 2
 foreach ($Context in @(
-	[pscustomobject][ordered]@{kind='pull_request';baseRevision=$Base;headRevision=$Head;workflowRevision=$Merge;controllerRevision=$Base},
-	[pscustomobject][ordered]@{kind='push';beforeRevision=$Base;afterRevision=$Head;controllerRevision=$Head},
-	[pscustomobject][ordered]@{kind='schedule';revision=$Head;controllerRevision=$Head},
-	[pscustomobject][ordered]@{kind='workflow_call';callerKind='pull_request';baseRevision=$Base;headRevision=$Head;workflowRevision=$Merge;revision=$null;controllerRevision=$Base},
-	[pscustomobject][ordered]@{kind='workflow_call';callerKind='push';baseRevision=$Base;headRevision=$Head;workflowRevision=$Head;revision=$null;controllerRevision=$Head},
-	[pscustomobject][ordered]@{kind='workflow_call';callerKind='schedule';baseRevision=$null;headRevision=$null;workflowRevision=$Head;revision=$Head;controllerRevision=$Head}
+	[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$Base;headRevision=$Head;workflowRevision=$Merge;controllerRevision=$Base},
+	[pscustomobject][ordered]@{kind='push';runId=$RunId;runAttempt=$RunAttempt;beforeRevision=$Base;afterRevision=$Head;controllerRevision=$Head},
+	[pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=$RunAttempt;revision=$Head;controllerRevision=$Head},
+	[pscustomobject][ordered]@{kind='workflow_call';runId=$RunId;runAttempt=$RunAttempt;callerKind='pull_request';baseRevision=$Base;headRevision=$Head;workflowRevision=$Merge;revision=$null;controllerRevision=$Base},
+	[pscustomobject][ordered]@{kind='workflow_call';runId=$RunId;runAttempt=$RunAttempt;callerKind='push';baseRevision=$Base;headRevision=$Head;workflowRevision=$Head;revision=$null;controllerRevision=$Head},
+	[pscustomobject][ordered]@{kind='workflow_call';runId=$RunId;runAttempt=$RunAttempt;callerKind='schedule';baseRevision=$null;headRevision=$null;workflowRevision=$Head;revision=$Head;controllerRevision=$Head}
 )) { Assert-CiSelectionContext $Context | Out-Null }
-Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='pull_request';baseRevision=$Base;headRevision=$Head;workflowRevision=$Merge;controllerRevision=$Head}) } 'context_controller_not_accepted_base'
-Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='push';beforeRevision=$Base;afterRevision=$Head;controllerRevision=$Head;extra=$true}) } 'context_schema_invalid'
-Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='workflow_call';callerKind='schedule';baseRevision=$Base;headRevision=$null;workflowRevision=$Head;revision=$Head;controllerRevision=$Head}) } 'context_revision_relationship_invalid'
-Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='workflow_call';callerKind='pull_request';baseRevision=$Base;headRevision=$Head;workflowRevision=$null;revision=$null;controllerRevision=$Base}) } 'context_revision_relationship_invalid'
+Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$Base;headRevision=$Head;workflowRevision=$Merge;controllerRevision=$Head}) } 'context_controller_not_accepted_base'
+Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='push';runId=$RunId;runAttempt=$RunAttempt;beforeRevision=$Base;afterRevision=$Head;controllerRevision=$Head;extra=$true}) } 'context_schema_invalid'
+Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='workflow_call';runId=$RunId;runAttempt=$RunAttempt;callerKind='schedule';baseRevision=$Base;headRevision=$null;workflowRevision=$Head;revision=$Head;controllerRevision=$Head}) } 'context_revision_relationship_invalid'
+Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='workflow_call';runId=$RunId;runAttempt=$RunAttempt;callerKind='pull_request';baseRevision=$Base;headRevision=$Head;workflowRevision=$null;revision=$null;controllerRevision=$Base}) } 'context_revision_relationship_invalid'
+Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='schedule';runAttempt=$RunAttempt;revision=$Head;controllerRevision=$Head}) } 'context_schema_invalid'
+Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='schedule';runId=$RunId;revision=$Head;controllerRevision=$Head}) } 'context_schema_invalid'
+foreach ($InvalidRunId in @('', '0', '01', 'abc', ('9' * 20), [long] 1)) {
+	Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='schedule';runId=$InvalidRunId;runAttempt=$RunAttempt;revision=$Head;controllerRevision=$Head}) } 'context_run_identity_invalid'
+}
+foreach ($InvalidRunAttempt in @([long] 0, [long] -1, '1', 1.0)) {
+	Assert-Rejected { Assert-CiSelectionContext ([pscustomobject]@{kind='schedule';runId=$RunId;runAttempt=$InvalidRunAttempt;revision=$Head;controllerRevision=$Head}) } 'context_run_identity_invalid'
+}
 Assert-UniqueJsonProperties '{"kind":"push","beforeRevision":null}'
 Assert-Rejected { Assert-UniqueJsonProperties '{"kind":"push","\u006bind":"schedule"}' } 'context_schema_invalid'
+
+# The current-attempt anchor is generated from exactly 32 random bytes, is
+# closed and canonical, and cannot be replayed against another run attempt.
+$AnchorContext = [pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=$RunAttempt;revision=$Head;controllerRevision=$Head}
+$Anchor = New-CiSelectionAttemptAnchor $AnchorContext { return ,([byte[]] (1..32)) }
+Assert-True (($Anchor.PSObject.Properties.Name -join ',') -ceq 'schemaVersion,runId,runAttempt,nonce') 'Attempt-anchor schema should be exact and ordered.'
+Assert-True ($Anchor.schemaVersion -ceq 'aetheln.current-attempt-anchor/v1' -and $Anchor.runId -ceq $RunId -and $Anchor.runAttempt -eq $RunAttempt) 'Attempt anchor should bind the canonical current run identity.'
+Assert-True ($Anchor.nonce -ceq '0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20') 'Injected focused-test bytes should produce the exact lowercase nonce.'
+Assert-CiSelectionAttemptAnchor $Anchor $AnchorContext | Out-Null
+Assert-Rejected { New-CiSelectionAttemptAnchor $AnchorContext { throw 'fixture_rng_failure' } } 'attempt_anchor_rng_failed'
+Assert-Rejected { New-CiSelectionAttemptAnchor $AnchorContext { return ,([byte[]]::new(31)) } } 'attempt_anchor_rng_invalid'
+Assert-Rejected { New-CiSelectionAttemptAnchor $AnchorContext { return ,([byte[]]::new(33)) } } 'attempt_anchor_rng_invalid'
+Assert-Rejected { New-CiSelectionAttemptAnchor $AnchorContext { return ,([byte[]]::new(32)) } } 'attempt_anchor_nonce_invalid'
+Assert-Rejected { Assert-CiSelectionAttemptAnchor ([pscustomobject][ordered]@{runId=$RunId;runAttempt=$RunAttempt;nonce=$Anchor.nonce}) $AnchorContext } 'attempt_anchor_schema_invalid'
+Assert-Rejected { Assert-CiSelectionAttemptAnchor ([pscustomobject][ordered]@{schemaVersion='aetheln.current-attempt-anchor/v2';runId=$RunId;runAttempt=$RunAttempt;nonce=$Anchor.nonce}) $AnchorContext } 'attempt_anchor_schema_invalid'
+Assert-Rejected { Assert-CiSelectionAttemptAnchor ([pscustomobject][ordered]@{schemaVersion='aetheln.current-attempt-anchor/v1';runId=$RunId;runAttempt=$RunAttempt;nonce=('1' * 62)}) $AnchorContext } 'attempt_anchor_nonce_invalid'
+Assert-Rejected { Assert-CiSelectionAttemptAnchor ([pscustomobject][ordered]@{schemaVersion='aetheln.current-attempt-anchor/v1';runId=$RunId;runAttempt=$RunAttempt;nonce=('0' * 64)}) $AnchorContext } 'attempt_anchor_nonce_invalid'
+Assert-Rejected { Assert-CiSelectionAttemptAnchor ([pscustomobject][ordered]@{schemaVersion='aetheln.current-attempt-anchor/v1';runId=$RunId;runAttempt=$RunAttempt;nonce=$Anchor.nonce.ToUpperInvariant()}) $AnchorContext } 'attempt_anchor_nonce_invalid'
+Assert-Rejected { Assert-CiSelectionAttemptAnchor ([pscustomobject][ordered]@{schemaVersion='aetheln.current-attempt-anchor/v1';runId=$RunId;runAttempt=$RunAttempt;nonce=(('g' * 63) + '1')}) $AnchorContext } 'attempt_anchor_nonce_invalid'
+$ReplayContext = [pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=([long] $RunAttempt + 1);revision=$Head;controllerRevision=$Head}
+Assert-Rejected { Assert-CiSelectionAttemptAnchor $Anchor $ReplayContext } 'attempt_anchor_context_mismatch'
+Assert-Rejected { New-CiSelectionReport $ReplayContext $RepositoryRoot -AttemptAnchor $Anchor } 'attempt_anchor_context_mismatch'
+
+$RejectedContextRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-ci-selector-context-' + [guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $RejectedContextRoot -Force
+try {
+	$RejectedContextPath = Join-Path $RejectedContextRoot 'context.json'
+	$RejectedOutputPath = Join-Path $RejectedContextRoot 'report.json'
+	[IO.File]::WriteAllText($RejectedContextPath, '{"kind":"schedule","runAttempt":2,"revision":"2222222222222222222222222222222222222222","controllerRevision":"2222222222222222222222222222222222222222"}', $script:Utf8NoBom)
+	$PreviousErrorAction = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+	try { $RejectedOutput = @(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SourceScript -ContextJson $RejectedContextPath -OutputPath $RejectedOutputPath -RepositoryRoot $RepositoryRoot 2>&1 | ForEach-Object { "$_" }); $RejectedExitCode = $LASTEXITCODE }
+	finally { $ErrorActionPreference = $PreviousErrorAction }
+	Assert-True ($RejectedExitCode -ne 0 -and -not (Test-Path -LiteralPath $RejectedOutputPath)) "A missing current-run identity must fail without publishing a conservative report: $($RejectedOutput -join ' ')"
+} finally {
+	if (Test-Path -LiteralPath $RejectedContextRoot) { Remove-Item -LiteralPath $RejectedContextRoot -Recurse -Force }
+}
 
 # Raw -z parsing never applies C-style quoting and therefore preserves every
 # legal byte sequence exactly, including whitespace and leading dashes.
@@ -183,14 +228,14 @@ try {
 	Write-Fixture 'docs/readme.md' "head`n"; $null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','head'); $HeadRevision=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
 	$Tree=[string]@(Invoke-FixtureGit @('rev-parse',"$HeadRevision`^{tree}"))[0]
 	$MergeRevision=(@("synthetic merge" | & git -C $FixtureRepo commit-tree $Tree -p $BaseRevision -p $HeadRevision) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Synthetic merge creation should succeed.'
-	$Context=[pscustomobject][ordered]@{kind='pull_request';baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;controllerRevision=$BaseRevision}
+	$Context=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;controllerRevision=$BaseRevision}
 	$Report=New-CiSelectionReport $Context $FixtureRepo
-	$ScheduleReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='schedule';revision=$HeadRevision;controllerRevision=$HeadRevision}) $FixtureRepo
+	$ScheduleReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=$RunAttempt;revision=$HeadRevision;controllerRevision=$HeadRevision}) $FixtureRepo
 	$ScheduledClean=@($ScheduleReport.selection.obligations | Where-Object id -eq 'clean-package-provenance-smoke')[0]
 	Assert-True ($ScheduledClean.selected -and $ScheduledClean.reasons -ccontains 'scheduled_event') 'Scheduled runs must retain the clean milestone after ordinary source/content changes stop selecting it.'
 	Assert-True ($Report.execution.checkoutAllowed -eq $false -and $Report.selection.shadow -and -not $Report.selection.authoritative) 'Selector should remain no-checkout, shadow-only, and non-authoritative.'
 	Assert-True ($null -eq $Report.legacyAuthority.engineRequired -and $Report.legacyAuthority.reason -ceq 'not_observed' -and $Report.comparison.status -ceq 'unavailable' -and $Report.comparison.differences -ccontains 'legacy_authority_not_observed') 'An independent shadow job must not claim it observed or compared a legacy classifier result.'
-	$CalledReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='workflow_call';callerKind='pull_request';baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;revision=$null;controllerRevision=$BaseRevision}) $FixtureRepo
+	$CalledReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='workflow_call';runId=$RunId;runAttempt=$RunAttempt;callerKind='pull_request';baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;revision=$null;controllerRevision=$BaseRevision}) $FixtureRepo
 	Assert-True ($CalledReport.source.kind -ceq 'workflow_call' -and $CalledReport.source.callerKind -ceq 'pull_request' -and $CalledReport.source.workflowRevision -ceq $MergeRevision) 'Reusable invocation reports must preserve caller kind and bind the caller workflow revision.'
 	$HeadControllerOid=[string]@(Invoke-FixtureGit @('rev-parse',"$HeadRevision`:$ControllerPath"))[0]
 	Assert-True ($Report.execution.controllerRevision -ceq $BaseRevision -and $Report.execution.controllerBlobOid -ceq $BaseControllerOid -and $Report.execution.controllerBlobOid -cne $HeadControllerOid -and $Report.execution.controllerSha256 -cmatch '^[0-9a-f]{64}$') 'Accepted controller identity should remain bound to base bytes when head modifies the selector.'
@@ -213,7 +258,8 @@ try {
 	$JsonPath=Join-Path $FixtureRoot 'report.json'; $Length=Write-BoundedUtf8Json $Report $JsonPath
 	$JsonBytes=[IO.File]::ReadAllBytes($JsonPath); Assert-True ($JsonBytes[0] -ne 0xEF -and $JsonBytes[1] -ne 0xBB -and $JsonBytes[2] -ne 0xBF) 'Report should be UTF-8 without BOM.'
 	$ParsedReport=([Text.Encoding]::UTF8.GetString($JsonBytes) | ConvertFrom-Json)
-	Assert-True ((@($ParsedReport.PSObject.Properties.Name) -join ',') -ceq 'schemaVersion,policy,source,execution,classification,selection,legacyAuthority,comparison') 'Root schema should be exact and ordered.'
+	Assert-True ((@($ParsedReport.PSObject.Properties.Name) -join ',') -ceq 'schemaVersion,attemptAnchor,policy,source,execution,classification,selection,legacyAuthority,comparison') 'Root schema should be exact and ordered.'
+	Assert-CiSelectionAttemptAnchor $ParsedReport.attemptAnchor $Context | Out-Null
 	Assert-True (($ParsedReport.source.PSObject.Properties.Name -join ',') -ceq 'kind,callerKind,baseRevision,headRevision,workflowRevision,revision') 'Source schema should preserve the closed caller discriminant and revisions.'
 	Assert-True (($ParsedReport.execution.PSObject.Properties.Name -join ',') -ceq 'mode,controllerRevision,controllerBlobOid,controllerSha256,checkoutAllowed,complete,reason') 'Execution schema should be exact and ordered.'
 	Assert-True (($ParsedReport.selection.obligations[0].PSObject.Properties.Name -join ',') -ceq 'id,selected,reasons') 'Obligation schema should be exact and ordered.'
@@ -230,9 +276,10 @@ try {
 	Assert-True ($BaseAttributes['Content/source.bin'].filter -ceq 'lfs' -and $HeadAttributes['Content/copy.bin'].filter -ceq 'lfs') 'Revision attributes should preserve LFS classification on both sides.'
 	Write-Fixture '.lfsconfig' "[lfs]`nurl = https://invalid.example`n"; $null=Invoke-FixtureGit @('add','.lfsconfig'); $null=Invoke-FixtureGit @('commit','-qm','lfsconfig unsupported'); $LfsHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]; $LfsTree=[string]@(Invoke-FixtureGit @('rev-parse',"$LfsHead`^{tree}"))[0]
 	$LfsMerge=(@("merge" | & git -C $FixtureRepo commit-tree $LfsTree -p $HeadRevision -p $LfsHead) -join '').Trim()
-	Assert-Rejected { New-CiSelectionReport ([pscustomobject][ordered]@{kind='pull_request';baseRevision=$HeadRevision;headRevision=$LfsHead;workflowRevision=$LfsMerge;controllerRevision=$HeadRevision}) $FixtureRepo } 'lfsconfig_changed'
-	$Bootstrap=New-ConservativeSelection 'accepted_controller_unavailable' ([pscustomobject][ordered]@{kind='pull_request';baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;controllerRevision=$BaseRevision})
+	Assert-Rejected { New-CiSelectionReport ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$HeadRevision;headRevision=$LfsHead;workflowRevision=$LfsMerge;controllerRevision=$HeadRevision}) $FixtureRepo } 'lfsconfig_changed'
+	$Bootstrap=New-ConservativeSelection 'accepted_controller_unavailable' ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;controllerRevision=$BaseRevision})
 	$BootstrapClean=@($Bootstrap.selection.obligations | Where-Object id -eq 'clean-package-provenance-smoke')[0]
+	Assert-CiSelectionAttemptAnchor $Bootstrap.attemptAnchor $Context | Out-Null
 	Assert-True ($null -eq $Bootstrap.execution.controllerBlobOid -and $Bootstrap.execution.checkoutAllowed -eq $false -and $Bootstrap.source.baseRevision -ceq $BaseRevision -and @($Bootstrap.selection.obligations | Where-Object {-not $_.selected}).Count -eq 0 -and $BootstrapClean.selected) 'Bootstrap fallback should preserve known revisions and select every obligation, including the clean milestone, without checkout.'
 
 	# Binary stdout is accepted exactly at the limit and rejected at +1. This

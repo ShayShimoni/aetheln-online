@@ -50,6 +50,7 @@ function Get-TestReceiptInput {
 		policy = [pscustomobject][ordered]@{ version = 'shadow-v1'; digest = ('1' * 64) }
 		actions = Get-TestActionManifest
 		run = [pscustomobject][ordered]@{ id = '35533038331'; attempt = 2 }
+		attemptAnchor = [pscustomobject][ordered]@{ schemaVersion='aetheln.current-attempt-anchor/v1'; runId='35533038331'; runAttempt=2; nonce=('6' * 64) }
 		selection = [pscustomobject][ordered]@{ checks = @('visual-package') }
 		results = [pscustomobject][ordered]@{ checks = @(
 			[pscustomobject][ordered]@{
@@ -86,6 +87,42 @@ function New-TestVisualReport {
 	}
 }
 
+function New-TestPortableReport {
+	$Names = @(
+		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
+		'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
+		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
+		'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
+		'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
+		'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
+		'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
+		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
+		'psscriptanalyzer'
+	)
+	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
+	return [pscustomobject][ordered]@{schemaVersion=1;revision=('c'*40);startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';checks=$Checks;summary=[pscustomobject][ordered]@{total=$Checks.Count;passed=$Checks.Count;failed=0;skipped=0;requiredFailed=0}}
+}
+
+function New-TestEngineReport {
+	$Names = @('runner-input-validation','managed-compile-workspace','repository-state-before-work','incremental-client-build','incremental-client-build-repository-state','incremental-server-build','incremental-server-build-repository-state','repository-state-at-completion')
+	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier='required';status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
+	$Builds = @(
+		[pscustomobject][ordered]@{check='incremental-client-build';target='AethelnOnlineClient';platform='Win64';configuration='Development';intermediateBuildDirectoryPresentBeforeRun=$true;makefilePresentBeforeRun=$true;outputState='captured';lastObservedAction=1;observedTotalActions=1;actionCounterState='observed';plannedActionCount=1;observedTargetNames='AethelnOnlineClient';makefileObservation='not_observed';makefileReason=$null;makefileCreationCount=0;upToDateObserved=$false;executorSummaryCount=1},
+		[pscustomobject][ordered]@{check='incremental-server-build';target='AethelnOnlineServer';platform='Linux';configuration='Development';intermediateBuildDirectoryPresentBeforeRun=$true;makefilePresentBeforeRun=$true;outputState='captured';lastObservedAction=1;observedTotalActions=1;actionCounterState='observed';plannedActionCount=1;observedTargetNames='AethelnOnlineServer';makefileObservation='not_observed';makefileReason=$null;makefileCreationCount=0;upToDateObserved=$false;executorSummaryCount=1}
+	)
+	$Workspace = [pscustomobject][ordered]@{schemaVersion=1;registrationId=('6'*32);registrationSha256=('4'*64);preparationReceiptSha256=('5'*64);revision=('c'*40);synchronized=$true}
+	$Resources = [pscustomobject][ordered]@{schemaVersion=1;sampleIntervalMilliseconds=5000;recoveryFloorBytes=20GB;pressureThresholdBytes=2GB;sampleCount=2;measurementCount=4;maximumSampleGapMilliseconds=5000;consecutivePressureSamples=0;maximumConsecutivePressureSamples=0;minimumAvailableRamBytes=16GB;minimumCommitHeadroomBytes=16GB;physicalCores=8;targetAdmissionCount=2;minimumActionLimit=2;maximumActionLimit=4;failureReason=$null;volumes=@([pscustomobject][ordered]@{volumeId='volume-fixture';knownAllocationBytes=0;minimumAvailableBytes=50GB})}
+	return [pscustomobject][ordered]@{schemaVersion=1;mode='Compile';policy='incremental-target-compilation';revision=('c'*40);runnerName='fixture-runner';startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';checks=$Checks;summary=[pscustomobject][ordered]@{total=$Checks.Count;passed=$Checks.Count;failed=0;skipped=0;requiredFailed=0};compileEvidence=[pscustomobject][ordered]@{schemaVersion=1;identity=[pscustomobject][ordered]@{engineGitRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';engineGitRevisionStatus='verified';engineBuildVersionSha256=('2'*64);engineBuildVersionSha256Status='verified';linuxToolchainCompilerSha256=('3'*64);linuxToolchainCompilerSha256Status='verified';runnerName='fixture-runner';durationSeconds=0.01};builds=$Builds};managedWorkspace=$Workspace;compileResources=$Resources;supervisor=[pscustomobject][ordered]@{childExitCode=0;timedOut=$false;cleanupVerified=$true}}
+}
+
+function New-TestUnrealReport {
+	$Tests = @(
+		[pscustomobject][ordered]@{fullTestPath='Aetheln.GameCombat.NetworkSpike.Authority';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0},
+		[pscustomobject][ordered]@{fullTestPath='Aetheln.Harness.ProjectAndModuleLoad';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0}
+	)
+	return [pscustomobject][ordered]@{schemaId='aetheln.unreal-automation';schemaVersion=1;mode='production';sourceRevision=('c'*40);engineRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';projectName='AethelnOnline';filter='^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$';timeoutSeconds=600;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';processExitCode=0;repositoryCleanBefore=$true;repositoryCleanAfter=$true;outputs=[pscustomobject][ordered]@{unrealReport='TestResults/UnrealAutomation/index.json';log='Saved/Logs/AethelnUnrealAutomation.log'};tests=$Tests;summary=[pscustomobject][ordered]@{total=2;passed=2;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=0};result='passed';failureReason='none'}
+}
+
 function Write-Input($Value, [string] $Path = $InputPath) {
 	[IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 12 -Compress) + "`n"), $Utf8)
 }
@@ -104,7 +141,7 @@ try {
 	$Bytes = [IO.File]::ReadAllBytes($OutputPath)
 	Assert-True ($Bytes.Length -le 65536 -and $Bytes[0] -ne 0xEF) 'Receipt must be bounded UTF-8 without BOM.'
 	$Parsed = [Text.Encoding]::UTF8.GetString($Bytes) | ConvertFrom-Json
-	Assert-True (($Parsed.PSObject.Properties.Name -join ',') -ceq 'schemaVersion,repository,event,source,workflow,controller,policy,actions,run,selection,results,acceptance') 'Root receipt schema must be closed and ordered.'
+	Assert-True (($Parsed.PSObject.Properties.Name -join ',') -ceq 'schemaVersion,repository,event,source,workflow,controller,policy,actions,run,attemptAnchor,selection,results,acceptance') 'Root receipt schema must be closed and ordered.'
 	Assert-True ($Parsed.schemaVersion -ceq 'aetheln.ci-acceptance-receipt/v1') 'Receipt schema version should be exact.'
 	Assert-True (($Parsed.workflow.PSObject.Properties.Name -join ',') -ceq 'id,revision,parents,sha256') 'Workflow schema must bind the API workflow identity and exact revision bytes.'
 	Assert-True (($Parsed.actions.PSObject.Properties.Name -join ',') -ceq 'manifestSha256,items' -and ($Parsed.actions.items[0].PSObject.Properties.Name -join ',') -ceq 'uses,revision') 'Action schema must bind the deterministic full-SHA pin manifest.'
@@ -112,6 +149,7 @@ try {
 	Assert-True (-not $Parsed.acceptance.authoritative -and -not $Parsed.acceptance.grantsAcceptance -and $Parsed.acceptance.shadow) 'Package 3A receipts must remain shadow-only and non-authoritative.'
 	Assert-True ($Parsed.acceptance.terminal -and -not $Parsed.acceptance.infrastructureFailure -and $null -eq $Parsed.acceptance.cleanupVerified) 'A visual-only receipt should record terminal success without claiming native cleanup.'
 	Assert-True ($Receipt.run.id -ceq '35533038331' -and $Receipt.run.attempt -eq 2) 'Run and attempt identity must round-trip exactly.'
+	Assert-True ($Receipt.attemptAnchor.runId -ceq $Receipt.run.id -and $Receipt.attemptAnchor.runAttempt -eq $Receipt.run.attempt -and $Receipt.attemptAnchor.nonce -ceq ('6' * 64)) 'The receipt must bind the exact nonzero current-attempt nonce.'
 
 	# The consumer must accept the producer's exact boundary output. This is a
 	# real cross-script compatibility check, not two independent schema fixtures.
@@ -119,11 +157,11 @@ try {
 	$ConsumerContext = [pscustomobject][ordered]@{
 		schemaVersion = 'aetheln.ci-acceptance-context/v1'
 		repository = $Parsed.repository; event = $Parsed.event; source = $Parsed.source; workflow = $Parsed.workflow
-		actions = $Parsed.actions; controller = $Parsed.controller; policy = $Parsed.policy; run = $Parsed.run
+		actions = $Parsed.actions; controller = $Parsed.controller; policy = $Parsed.policy; run = $Parsed.run; attemptAnchor = $Parsed.attemptAnchor
 	}
 	$ConsumerRequirement = [pscustomobject][ordered]@{
 		key = 'visual'; jobName = 'visual-package-proof'; selected = $true
-		artifactName = 'ci-receipt-visual-35533038331-2'; checks = @('visual-package')
+		artifactName = ('ci-receipt-visual-35533038331-2-' + ('6' * 64)); checks = @('visual-package')
 	}
 	$ConsumerArchive = [pscustomobject][ordered]@{ entries = @(
 		[pscustomobject][ordered]@{ name='ci-acceptance-receipt.json'; bytes=$Bytes; sizeBytes=[long]$Bytes.Length; sha256=(Get-AcceptanceSha256 $Bytes) },
@@ -157,6 +195,15 @@ try {
 		@{ name='action-duplicate'; action={ param($x) $x.actions.items[1].uses = $x.actions.items[0].uses } },
 		@{ name='wrong-attempt'; action={ param($x) $x.run.attempt = '2' } },
 		@{ name='run-id-overflow'; action={ param($x) $x.run.id = '99999999999999999999' } },
+		@{ name='anchor-missing'; action={ param($x) $x.PSObject.Properties.Remove('attemptAnchor') } },
+		@{ name='anchor-legacy-property'; action={ param($x) $Anchor=$x.attemptAnchor; $x.PSObject.Properties.Remove('attemptAnchor'); $x | Add-Member -NotePropertyName currentAttemptAnchor -NotePropertyValue $Anchor } },
+		@{ name='anchor-null'; action={ param($x) $x.attemptAnchor = $null } },
+		@{ name='anchor-short'; action={ param($x) $x.attemptAnchor.nonce = ('6' * 63) } },
+		@{ name='anchor-uppercase'; action={ param($x) $x.attemptAnchor.nonce = ('A' * 64) } },
+		@{ name='anchor-nonhex'; action={ param($x) $x.attemptAnchor.nonce = ('g' * 64) } },
+		@{ name='anchor-all-zero'; action={ param($x) $x.attemptAnchor.nonce = ('0' * 64) } },
+		@{ name='anchor-run-replay'; action={ param($x) $x.attemptAnchor.runId = '35533038330' } },
+		@{ name='anchor-attempt-replay'; action={ param($x) $x.attemptAnchor.runAttempt = 1 } },
 		@{ name='uppercase-policy'; action={ param($x) $x.policy.version = 'Shadow-v1' } },
 		@{ name='invalid-actor'; action={ param($x) $x.event.triggeringActor = 'bad actor' } },
 		@{ name='duplicate-selection'; action={ param($x) $x.selection.checks = @('visual-package','visual-package') } },
@@ -194,7 +241,125 @@ try {
 	$OversizeEvidenceInput = Join-Path $FixtureRoot 'oversize-evidence.json'; Write-Input $OversizeEvidence $OversizeEvidenceInput
 	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $OversizeEvidenceInput -EvidenceRoot $OversizeEvidenceRoot -OutputPath $OutputPath } 'receipt_invalid'
 
-	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','native-client-server-compile','portable','unreal-editor-automation')) {
+	foreach ($SemanticFixture in @(
+		@{id='portable';name='ci-report.json';report=(New-TestPortableReport);native=$null;cleanup=$null},
+		@{id='native-client-server-compile';name='engine-runner-report.json';report=(New-TestEngineReport);native=0;cleanup=$true},
+		@{id='unreal-editor-automation';name='unreal-automation-report.json';report=(New-TestUnrealReport);native=0;cleanup=$null}
+	)) {
+		$SemanticPath = Join-Path $EvidenceRoot $SemanticFixture.name
+		[IO.File]::WriteAllText($SemanticPath, (($SemanticFixture.report | ConvertTo-Json -Depth 12 -Compress) + "`n"), $Utf8)
+		$SemanticInput = Get-TestReceiptInput -VisualSha256 (Get-Sha256 $SemanticPath) -VisualSize ((Get-Item $SemanticPath).Length)
+		$SemanticInput.selection.checks[0] = $SemanticFixture.id
+		$SemanticInput.results.checks[0].id = $SemanticFixture.id
+		$SemanticInput.results.checks[0].nativeExitCode = $SemanticFixture.native
+		$SemanticInput.results.checks[0].cleanupVerified = $SemanticFixture.cleanup
+		$SemanticInput.results.checks[0].evidence[0].name = $SemanticFixture.name
+		$SemanticInputPath = Join-Path $FixtureRoot ('supported-' + $SemanticFixture.id + '.json'); Write-Input $SemanticInput $SemanticInputPath
+		$SemanticOutput = Join-Path $FixtureRoot ($SemanticFixture.id + '\ci-acceptance-receipt.json')
+		$SemanticReceipt = New-CiAcceptanceReceipt -InputPath $SemanticInputPath -EvidenceRoot $EvidenceRoot -OutputPath $SemanticOutput
+		Assert-True ($SemanticReceipt.results.checks[0].id -ceq $SemanticFixture.id -and $SemanticReceipt.acceptance.shadow -and -not $SemanticReceipt.acceptance.authoritative -and -not $SemanticReceipt.acceptance.grantsAcceptance) "Supported semantic receipt '$($SemanticFixture.id)' must stay shadow-only."
+		$BadReport = $SemanticFixture.report | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+		if ($SemanticFixture.id -ceq 'portable') { $BadReport.summary.requiredFailed = 1 }
+		elseif ($SemanticFixture.id -ceq 'native-client-server-compile') { $BadReport.supervisor.cleanupVerified = $false }
+		else { $BadReport.tests[0].status = 'failed' }
+		[IO.File]::WriteAllText($SemanticPath, (($BadReport | ConvertTo-Json -Depth 12 -Compress) + "`n"), $Utf8)
+		$SemanticInput.results.checks[0].evidence[0].sha256 = Get-Sha256 $SemanticPath
+		$SemanticInput.results.checks[0].evidence[0].sizeBytes = (Get-Item $SemanticPath).Length
+		Write-Input $SemanticInput $SemanticInputPath
+		$FailureKind = if ($SemanticFixture.id -ceq 'portable') { 'failure' } else { 'invalid' }
+		Assert-Rejected { New-CiAcceptanceReceipt -InputPath $SemanticInputPath -EvidenceRoot $EvidenceRoot -OutputPath (Join-Path $FixtureRoot ('bad-' + $SemanticFixture.id + '\ci-acceptance-receipt.json')) } ('receipt_semantic_evidence_' + $FailureKind + ':' + $SemanticFixture.id)
+	}
+
+	foreach ($PortableTypeCase in @(
+		@{name='schema-string';mutate={param($x)$x.schemaVersion='1'}},
+		@{name='check-duration-boolean';mutate={param($x)$x.checks[0].durationSeconds=$true}},
+		@{name='check-duration-string';mutate={param($x)$x.checks[0].durationSeconds='0.01'}},
+		@{name='summary-total-string';mutate={param($x)$x.summary.total=[string]$x.summary.total}},
+		@{name='summary-passed-string';mutate={param($x)$x.summary.passed=[string]$x.summary.passed}},
+		@{name='summary-failed-string';mutate={param($x)$x.summary.failed='0'}},
+		@{name='summary-skipped-string';mutate={param($x)$x.summary.skipped='0'}},
+		@{name='summary-required-failed-string';mutate={param($x)$x.summary.requiredFailed='0'}}
+	)) {
+		$BadPortable = New-TestPortableReport; & $PortableTypeCase.mutate $BadPortable
+		$BadPortableBytes = $Utf8.GetBytes(($BadPortable | ConvertTo-Json -Depth 12 -Compress) + "`n")
+		try { Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $BadPortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:portable' }
+		catch { throw "Portable type fixture '$($PortableTypeCase.name)' failed: $($_.Exception.Message)" }
+	}
+
+	foreach ($NativeTypeCase in @(
+		@{name='schema-string';mutate={param($x)$x.schemaVersion='1'}},
+		@{name='managed-check-omitted';mutate={param($x)$x.checks=@($x.checks|Where-Object name -cne 'managed-compile-workspace');$x.summary.total--;$x.summary.passed--}},
+		@{name='workspace-omitted';mutate={param($x)$x.PSObject.Properties.Remove('managedWorkspace')}},
+		@{name='workspace-extra-field';mutate={param($x)$x.managedWorkspace|Add-Member -NotePropertyName extra -NotePropertyValue $true}},
+		@{name='workspace-schema-string';mutate={param($x)$x.managedWorkspace.schemaVersion='1'}},
+		@{name='workspace-registration-id';mutate={param($x)$x.managedWorkspace.registrationId='not-a-registration'}},
+		@{name='workspace-registration-sha-type';mutate={param($x)$x.managedWorkspace.registrationSha256=$true}},
+		@{name='workspace-preparation-sha';mutate={param($x)$x.managedWorkspace.preparationReceiptSha256='bad'}},
+		@{name='workspace-revision';mutate={param($x)$x.managedWorkspace.revision=('d'*40)}},
+		@{name='workspace-synchronized-type';mutate={param($x)$x.managedWorkspace.synchronized='true'}},
+		@{name='resources-omitted';mutate={param($x)$x.PSObject.Properties.Remove('compileResources')}},
+		@{name='resources-extra-field';mutate={param($x)$x.compileResources|Add-Member -NotePropertyName extra -NotePropertyValue 1}},
+		@{name='resources-schema-string';mutate={param($x)$x.compileResources.schemaVersion='1'}},
+		@{name='resources-sample-interval';mutate={param($x)$x.compileResources.sampleIntervalMilliseconds=4999}},
+		@{name='resources-recovery-floor-string';mutate={param($x)$x.compileResources.recoveryFloorBytes='21474836480'}},
+		@{name='resources-pressure-threshold';mutate={param($x)$x.compileResources.pressureThresholdBytes=1GB}},
+		@{name='resources-failure';mutate={param($x)$x.compileResources.failureReason='resource_pressure'}},
+		@{name='resources-sample-count-string';mutate={param($x)$x.compileResources.sampleCount='2'}},
+		@{name='resources-measurement-string';mutate={param($x)$x.compileResources.measurementCount='4'}},
+		@{name='resources-measurement-relationship';mutate={param($x)$x.compileResources.measurementCount=1}},
+		@{name='resources-gap-string';mutate={param($x)$x.compileResources.maximumSampleGapMilliseconds='5000'}},
+		@{name='resources-pressure';mutate={param($x)$x.compileResources.consecutivePressureSamples=3;$x.compileResources.maximumConsecutivePressureSamples=3}},
+		@{name='resources-maximum-pressure-string';mutate={param($x)$x.compileResources.maximumConsecutivePressureSamples='0'}},
+		@{name='resources-pressure-relationship';mutate={param($x)$x.compileResources.consecutivePressureSamples=1}},
+		@{name='resources-ram-string';mutate={param($x)$x.compileResources.minimumAvailableRamBytes='17179869184'}},
+		@{name='resources-commit-string';mutate={param($x)$x.compileResources.minimumCommitHeadroomBytes='17179869184'}},
+		@{name='resources-cores-string';mutate={param($x)$x.compileResources.physicalCores='8'}},
+		@{name='resources-admissions';mutate={param($x)$x.compileResources.targetAdmissionCount=1}},
+		@{name='resources-min-action-string';mutate={param($x)$x.compileResources.minimumActionLimit='2'}},
+		@{name='resources-max-action-string';mutate={param($x)$x.compileResources.maximumActionLimit='4'}},
+		@{name='resources-action-relationship';mutate={param($x)$x.compileResources.minimumActionLimit=4;$x.compileResources.maximumActionLimit=2}},
+		@{name='resources-volumes-empty';mutate={param($x)$x.compileResources.volumes=@()}},
+		@{name='resources-volume-extra-field';mutate={param($x)$x.compileResources.volumes[0]|Add-Member -NotePropertyName extra -NotePropertyValue 1}},
+		@{name='resources-volume-id-empty';mutate={param($x)$x.compileResources.volumes[0].volumeId=''}},
+		@{name='resources-volume-duplicate';mutate={param($x)$x.compileResources.volumes=@($x.compileResources.volumes[0],($x.compileResources.volumes[0]|ConvertTo-Json|ConvertFrom-Json))}},
+		@{name='resources-volume-allocation-string';mutate={param($x)$x.compileResources.volumes[0].knownAllocationBytes='0'}},
+		@{name='resources-volume-minimum-string';mutate={param($x)$x.compileResources.volumes[0].minimumAvailableBytes='53687091200'}},
+		@{name='resources-disk-floor';mutate={param($x)$x.compileResources.volumes[0].minimumAvailableBytes=20GB}},
+		@{name='check-duration-boolean';mutate={param($x)$x.checks[0].durationSeconds=$true}},
+		@{name='check-duration-string';mutate={param($x)$x.checks[0].durationSeconds='0.01'}},
+		@{name='summary-total-string';mutate={param($x)$x.summary.total=[string]$x.summary.total}},
+		@{name='supervisor-exit-string';mutate={param($x)$x.supervisor.childExitCode='0'}},
+		@{name='supervisor-timeout-string';mutate={param($x)$x.supervisor.timedOut='false'}},
+		@{name='build-presence-string';mutate={param($x)$x.compileEvidence.builds[0].intermediateBuildDirectoryPresentBeforeRun='true'}},
+		@{name='build-action-counter-string';mutate={param($x)$x.compileEvidence.builds[0].lastObservedAction='1'}},
+		@{name='build-action-state-contradiction';mutate={param($x)$x.compileEvidence.builds[0].actionCounterState='not_observed'}},
+		@{name='build-makefile-contradiction';mutate={param($x)$x.compileEvidence.builds[0].makefileObservation='created'}},
+		@{name='build-up-to-date-string';mutate={param($x)$x.compileEvidence.builds[0].upToDateObserved='false'}},
+		@{name='build-executor-count-string';mutate={param($x)$x.compileEvidence.builds[0].executorSummaryCount='1'}}
+	)) {
+		$BadNative = New-TestEngineReport; & $NativeTypeCase.mutate $BadNative
+		$BadNativeBytes = $Utf8.GetBytes(($BadNative | ConvertTo-Json -Depth 12 -Compress) + "`n")
+		try { Assert-Rejected { Assert-AcceptanceEngineRunnerEvidence -Bytes $BadNativeBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+		catch { throw "Native type fixture '$($NativeTypeCase.name)' failed: $($_.Exception.Message)" }
+	}
+
+	foreach ($UnrealTypeCase in @(
+		@{name='schema-string';mutate={param($x)$x.schemaVersion='1'}},
+		@{name='timeout-string';mutate={param($x)$x.timeoutSeconds='600'}},
+		@{name='exit-string';mutate={param($x)$x.processExitCode='0'}},
+		@{name='clean-before-string';mutate={param($x)$x.repositoryCleanBefore='true'}},
+		@{name='test-duration-string';mutate={param($x)$x.tests[0].durationSeconds='0.1'}},
+		@{name='warning-count-string';mutate={param($x)$x.tests[0].warningCount='0'}},
+		@{name='summary-passed-string';mutate={param($x)$x.summary.passed='2'}},
+		@{name='summary-relationship';mutate={param($x)$x.summary.total=3}}
+	)) {
+		$BadUnreal = New-TestUnrealReport; & $UnrealTypeCase.mutate $BadUnreal
+		$BadUnrealBytes = $Utf8.GetBytes(($BadUnreal | ConvertTo-Json -Depth 12 -Compress) + "`n")
+		try { Assert-Rejected { Assert-AcceptanceUnrealAutomationEvidence -Bytes $BadUnrealBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
+		catch { throw "Unreal type fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
+	}
+
+	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness')) {
 		$Unsupported = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
 		$Unsupported.selection.checks[0] = $UnsupportedId; $Unsupported.results.checks[0].id = $UnsupportedId
 		if ($UnsupportedId -in @('clean-package-provenance-smoke','native-client-server-compile')) { $Unsupported.results.checks[0].nativeExitCode=0; $Unsupported.results.checks[0].cleanupVerified=$true }

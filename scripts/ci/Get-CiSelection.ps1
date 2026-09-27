@@ -9,6 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:CiSelectionSchema = 'aetheln.ci-selection/v1'
+$script:CiSelectionAttemptAnchorSchema = 'aetheln.current-attempt-anchor/v1'
 $script:CiSelectionPolicyVersion = 'shadow-v1'
 $script:CiSelectionCheckIds = @(
 	'portable',
@@ -77,29 +78,38 @@ function Test-Revision([object] $Value) {
 	return $Value -is [string] -and $Value -cmatch '^[0-9a-f]{40}$'
 }
 
+function Test-CiRunIdentity {
+	param($Context)
+	if ($Context.PSObject.Properties.Name -cnotcontains 'runId' -or $Context.runId -isnot [string] -or $Context.runId -cnotmatch '^[1-9][0-9]{0,18}$') { return $false }
+	$ParsedRunId = [long] 0
+	if (-not [long]::TryParse($Context.runId, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $ParsedRunId) -or $ParsedRunId -le 0) { return $false }
+	if ($Context.PSObject.Properties.Name -cnotcontains 'runAttempt' -or ($Context.runAttempt -isnot [int] -and $Context.runAttempt -isnot [long]) -or [long] $Context.runAttempt -le 0) { return $false }
+	return $true
+}
+
 function Assert-CiSelectionContext {
 	param($Context)
 	if ($null -eq $Context -or $Context -isnot [System.Management.Automation.PSCustomObject]) { throw 'context_schema_invalid' }
 	if ($Context.PSObject.Properties.Name -cnotcontains 'kind' -or $Context.kind -isnot [string]) { throw 'context_schema_invalid' }
 	switch -CaseSensitive ([string] $Context.kind) {
 		'pull_request' {
-			Assert-ClosedObject $Context @('kind', 'baseRevision', 'headRevision', 'workflowRevision', 'controllerRevision')
+			Assert-ClosedObject $Context @('kind', 'runId', 'runAttempt', 'baseRevision', 'headRevision', 'workflowRevision', 'controllerRevision')
 			foreach ($Name in @('baseRevision', 'headRevision', 'workflowRevision', 'controllerRevision')) { if (-not (Test-Revision $Context.$Name)) { throw 'context_revision_invalid' } }
 			if ($Context.baseRevision -ceq $Context.headRevision) { throw 'context_revision_relationship_invalid' }
 			if ($Context.controllerRevision -cne $Context.baseRevision) { throw 'context_controller_not_accepted_base' }
 		}
 		'push' {
-			Assert-ClosedObject $Context @('kind', 'beforeRevision', 'afterRevision', 'controllerRevision')
+			Assert-ClosedObject $Context @('kind', 'runId', 'runAttempt', 'beforeRevision', 'afterRevision', 'controllerRevision')
 			if (-not (Test-Revision $Context.afterRevision) -or -not (Test-Revision $Context.controllerRevision)) { throw 'context_revision_invalid' }
 			if ($null -ne $Context.beforeRevision -and ($Context.beforeRevision -isnot [string] -or $Context.beforeRevision -notmatch '^[0-9a-f]{40}$')) { throw 'context_revision_invalid' }
 			if ($Context.controllerRevision -cne $Context.afterRevision) { throw 'context_controller_revision_invalid' }
 		}
 		'schedule' {
-			Assert-ClosedObject $Context @('kind', 'revision', 'controllerRevision')
+			Assert-ClosedObject $Context @('kind', 'runId', 'runAttempt', 'revision', 'controllerRevision')
 			if (-not (Test-Revision $Context.revision) -or $Context.controllerRevision -cne $Context.revision) { throw 'context_revision_invalid' }
 		}
 		'workflow_call' {
-			Assert-ClosedObject $Context @('kind', 'callerKind', 'baseRevision', 'headRevision', 'workflowRevision', 'revision', 'controllerRevision')
+			Assert-ClosedObject $Context @('kind', 'runId', 'runAttempt', 'callerKind', 'baseRevision', 'headRevision', 'workflowRevision', 'revision', 'controllerRevision')
 			if ($Context.callerKind -isnot [string] -or $Context.callerKind -cnotin @('pull_request', 'push', 'schedule')) { throw 'context_caller_invalid' }
 			foreach ($Name in @('baseRevision', 'headRevision', 'workflowRevision', 'revision')) { if ($null -ne $Context.$Name -and -not (Test-Revision $Context.$Name)) { throw 'context_revision_invalid' } }
 			if (-not (Test-Revision $Context.controllerRevision)) { throw 'context_revision_invalid' }
@@ -111,7 +121,41 @@ function Assert-CiSelectionContext {
 		}
 		default { throw 'context_kind_unsupported' }
 	}
+	if (-not (Test-CiRunIdentity $Context)) { throw 'context_run_identity_invalid' }
 	return $Context
+}
+
+function Assert-CiSelectionAttemptAnchor {
+	param($AttemptAnchor, $Context)
+	Assert-CiSelectionContext $Context | Out-Null
+	Assert-ClosedObject $AttemptAnchor @('schemaVersion', 'runId', 'runAttempt', 'nonce') 'attempt_anchor_schema_invalid'
+	if ($AttemptAnchor.schemaVersion -isnot [string] -or $AttemptAnchor.schemaVersion -cne $script:CiSelectionAttemptAnchorSchema) { throw 'attempt_anchor_schema_invalid' }
+	if ($AttemptAnchor.runId -isnot [string] -or $AttemptAnchor.runId -cnotmatch '^[1-9][0-9]{0,18}$' -or ($AttemptAnchor.runAttempt -isnot [int] -and $AttemptAnchor.runAttempt -isnot [long]) -or [long] $AttemptAnchor.runAttempt -le 0) { throw 'attempt_anchor_run_identity_invalid' }
+	if ($AttemptAnchor.nonce -isnot [string] -or $AttemptAnchor.nonce -cnotmatch '^[0-9a-f]{64}$' -or $AttemptAnchor.nonce -ceq ('0' * 64)) { throw 'attempt_anchor_nonce_invalid' }
+	if ($AttemptAnchor.runId -cne $Context.runId -or [long] $AttemptAnchor.runAttempt -ne [long] $Context.runAttempt) { throw 'attempt_anchor_context_mismatch' }
+	return $AttemptAnchor
+}
+
+function New-CiSelectionAttemptAnchor {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory current-attempt anchor and changes no external state.')]
+	param($Context, [scriptblock] $TestRandomBytesProvider)
+	Assert-CiSelectionContext $Context | Out-Null
+	if ($null -ne $TestRandomBytesProvider) {
+		try { $RandomBytes = & $TestRandomBytesProvider } catch { throw 'attempt_anchor_rng_failed' }
+	} else {
+		$RandomBytes = [byte[]]::new(32)
+		$Generator = $null
+		try {
+			$Generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+			$Generator.GetBytes($RandomBytes)
+		} catch { throw 'attempt_anchor_rng_failed' }
+		finally { if ($null -ne $Generator) { $Generator.Dispose() } }
+	}
+	if ($RandomBytes -isnot [byte[]] -or $RandomBytes.Length -ne 32) { throw 'attempt_anchor_rng_invalid' }
+	$Nonce = [BitConverter]::ToString($RandomBytes).Replace('-', '').ToLowerInvariant()
+	$AttemptAnchor = [pscustomobject][ordered]@{ schemaVersion=$script:CiSelectionAttemptAnchorSchema; runId=$Context.runId; runAttempt=[long]$Context.runAttempt; nonce=$Nonce }
+	Assert-CiSelectionAttemptAnchor $AttemptAnchor $Context | Out-Null
+	return $AttemptAnchor
 }
 
 function ConvertTo-ProcessArgument([string] $Value) {
@@ -384,10 +428,13 @@ function New-Obligations {
 
 function New-ConservativeSelection {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory report value and changes no external state.')]
-	param([string] $Reason, $Context = $null, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed')
+	param([string] $Reason, $Context, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null)
+	Assert-CiSelectionContext $Context | Out-Null
+	if ($null -eq $AttemptAnchor) { $AttemptAnchor = New-CiSelectionAttemptAnchor $Context }
+	else { Assert-CiSelectionAttemptAnchor $AttemptAnchor $Context | Out-Null }
 	$All = @{}; foreach ($Id in $script:CiSelectionCheckIds) { $All[$Id] = @($Reason) }
-	$Kind = if ($null -ne $Context -and $Context.PSObject.Properties.Name -ccontains 'kind') { [string]$Context.kind } else { 'unknown' }
-	$Controller = if ($null -ne $Context -and $Context.PSObject.Properties.Name -ccontains 'controllerRevision') { [string]$Context.controllerRevision } else { $null }
+	$Kind = [string] $Context.kind
+	$Controller = [string] $Context.controllerRevision
 	$ExecutionMode = if ($Reason -eq 'accepted_controller_unavailable') { 'accepted_controller_unavailable' } else { 'accepted-base' }
 	$Source = [ordered]@{ kind=$Kind; callerKind=$null; baseRevision=$null; headRevision=$null; workflowRevision=$null; revision=$null }
 	if ($null -ne $Context) {
@@ -401,6 +448,7 @@ function New-ConservativeSelection {
 	}
 	return [pscustomobject][ordered]@{
 		schemaVersion=$script:CiSelectionSchema
+		attemptAnchor=$AttemptAnchor
 		policy=[pscustomobject][ordered]@{ version=$script:CiSelectionPolicyVersion; digest=(Get-PolicyDigest); checkIds=@($script:CiSelectionCheckIds) }
 		source=[pscustomobject]$Source
 		execution=[pscustomobject][ordered]@{ mode=$ExecutionMode; controllerRevision=$Controller; controllerBlobOid=$null; controllerSha256=$null; checkoutAllowed=$false; complete=$true; reason=$Reason }
@@ -413,14 +461,16 @@ function New-ConservativeSelection {
 
 function New-CiSelectionReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory report value and changes no external state.')]
-	param($Context, [string] $Repository, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed')
+	param($Context, [string] $Repository, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null)
 	Assert-CiSelectionContext $Context | Out-Null
+	if ($null -eq $AttemptAnchor) { $AttemptAnchor = New-CiSelectionAttemptAnchor $Context }
+	else { Assert-CiSelectionAttemptAnchor $AttemptAnchor $Context | Out-Null }
 	$ControllerIdentity = Get-ControllerIdentity $Repository $Context.controllerRevision
 	if ($Context.kind -eq 'schedule' -or ($Context.kind -eq 'workflow_call' -and $Context.callerKind -eq 'schedule')) {
 		$Revision = if ($Context.kind -eq 'schedule') { $Context.revision } else { $Context.revision }
 		$CallerKind = if ($Context.kind -eq 'workflow_call') { $Context.callerKind } else { $null }
 		$Selected=@{ portable=@('scheduled_event'); 'native-client-server-compile'=@('scheduled_event'); 'content-reference-validation'=@('scheduled_event'); 'controller-operational-proof'=@('scheduled_event'); 'clean-package-provenance-smoke'=@('scheduled_event') }
-		return [pscustomobject][ordered]@{ schemaVersion=$script:CiSelectionSchema; policy=[pscustomobject][ordered]@{version=$script:CiSelectionPolicyVersion;digest=(Get-PolicyDigest);checkIds=@($script:CiSelectionCheckIds)};source=[pscustomobject][ordered]@{kind=$Context.kind;callerKind=$CallerKind;baseRevision=$null;headRevision=$null;workflowRevision=$Context.controllerRevision;revision=$Revision};execution=[pscustomobject][ordered]@{mode='accepted-base';controllerRevision=$Context.controllerRevision;controllerBlobOid=$ControllerIdentity.oid;controllerSha256=$ControllerIdentity.sha256;checkoutAllowed=$false;complete=$true;reason='scheduled_fixed_obligations'};classification=[pscustomobject][ordered]@{changedPaths=@();entries=@();uncertainties=@()};selection=[pscustomobject][ordered]@{shadow=$true;authoritative=$false;obligations=(New-Obligations $Selected $null)};legacyAuthority=[pscustomobject][ordered]@{authoritative=$true;engineRequired=$LegacyEngineRequired;reason=$LegacyReason};comparison=[pscustomobject][ordered]@{status='unavailable';differences=@('legacy_authority_not_observed')} }
+		return [pscustomobject][ordered]@{ schemaVersion=$script:CiSelectionSchema; attemptAnchor=$AttemptAnchor; policy=[pscustomobject][ordered]@{version=$script:CiSelectionPolicyVersion;digest=(Get-PolicyDigest);checkIds=@($script:CiSelectionCheckIds)};source=[pscustomobject][ordered]@{kind=$Context.kind;callerKind=$CallerKind;baseRevision=$null;headRevision=$null;workflowRevision=$Context.controllerRevision;revision=$Revision};execution=[pscustomobject][ordered]@{mode='accepted-base';controllerRevision=$Context.controllerRevision;controllerBlobOid=$ControllerIdentity.oid;controllerSha256=$ControllerIdentity.sha256;checkoutAllowed=$false;complete=$true;reason='scheduled_fixed_obligations'};classification=[pscustomobject][ordered]@{changedPaths=@();entries=@();uncertainties=@()};selection=[pscustomobject][ordered]@{shadow=$true;authoritative=$false;obligations=(New-Obligations $Selected $null)};legacyAuthority=[pscustomobject][ordered]@{authoritative=$true;engineRequired=$LegacyEngineRequired;reason=$LegacyReason};comparison=[pscustomobject][ordered]@{status='unavailable';differences=@('legacy_authority_not_observed')} }
 	}
 	$Base = if ($Context.kind -eq 'pull_request') { $Context.baseRevision } elseif ($Context.kind -eq 'push') { $Context.beforeRevision } else { $Context.baseRevision }
 	$Head = if ($Context.kind -eq 'pull_request') { $Context.headRevision } elseif ($Context.kind -eq 'push') { $Context.afterRevision } else { $Context.headRevision }
@@ -462,7 +512,7 @@ function New-CiSelectionReport {
 	$WorkflowRevision = if ($Context.PSObject.Properties.Name -ccontains 'workflowRevision') { $Context.workflowRevision } else { $null }
 	$CallerKind = if ($Context.PSObject.Properties.Name -ccontains 'callerKind') { $Context.callerKind } else { $null }
 	return [pscustomobject][ordered]@{
-		schemaVersion=$script:CiSelectionSchema; policy=[pscustomobject][ordered]@{version=$script:CiSelectionPolicyVersion;digest=(Get-PolicyDigest);checkIds=@($script:CiSelectionCheckIds)}
+		schemaVersion=$script:CiSelectionSchema; attemptAnchor=$AttemptAnchor; policy=[pscustomobject][ordered]@{version=$script:CiSelectionPolicyVersion;digest=(Get-PolicyDigest);checkIds=@($script:CiSelectionCheckIds)}
 		source=[pscustomobject][ordered]@{kind=$Context.kind;callerKind=$CallerKind;baseRevision=$Base;headRevision=$Head;workflowRevision=$WorkflowRevision;revision=$null}
 		execution=[pscustomobject][ordered]@{mode='accepted-base';controllerRevision=$Context.controllerRevision;controllerBlobOid=$ControllerIdentity.oid;controllerSha256=$ControllerIdentity.sha256;checkoutAllowed=$false;complete=$true;reason='classified'}
 		classification=[pscustomobject][ordered]@{changedPaths=@($Changed | Sort-Object);entries=@($Classified | Sort-Object oldPath,newPath,status);uncertainties=@()}
@@ -485,18 +535,24 @@ function Write-BoundedUtf8Json {
 if ($ContextJson -or $OutputPath) {
 	if (-not $ContextJson -or -not $OutputPath) { throw 'ContextJson and OutputPath are required together.' }
 	$Context=$null
+	$AttemptAnchor=$null
+	$ContextAccepted=$false
 	try {
 		$Raw=[IO.File]::ReadAllText((Resolve-Path -LiteralPath $ContextJson),$script:StrictUtf8)
 		Assert-UniqueJsonProperties $Raw
 		$Context=$Raw | ConvertFrom-Json
-		$Report=New-CiSelectionReport $Context (Resolve-Path -LiteralPath $RepositoryRoot).Path
+		Assert-CiSelectionContext $Context | Out-Null
+		$ContextAccepted=$true
+		$AttemptAnchor=New-CiSelectionAttemptAnchor $Context
+		$Report=New-CiSelectionReport $Context (Resolve-Path -LiteralPath $RepositoryRoot).Path -AttemptAnchor $AttemptAnchor
 	} catch {
 		$Reason=($_.Exception.Message -split ':')[0]
+		if (-not $ContextAccepted -or $null -eq $AttemptAnchor -or $Reason.StartsWith('attempt_anchor_', [StringComparison]::Ordinal)) { throw }
 		if ($Reason -cnotmatch '^[a-z0-9_]+$') { $Reason='selector_internal_error' }
-		$Report=New-ConservativeSelection $Reason $Context
+		$Report=New-ConservativeSelection $Reason $Context -AttemptAnchor $AttemptAnchor
 	}
 	try { [void](Write-BoundedUtf8Json $Report $OutputPath) } catch {
-		$Fallback=New-ConservativeSelection 'report_size_limit' $Context
+		$Fallback=New-ConservativeSelection 'report_size_limit' $Context -AttemptAnchor $AttemptAnchor
 		[void](Write-BoundedUtf8Json $Fallback $OutputPath)
 	}
 }
