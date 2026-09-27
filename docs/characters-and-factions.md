@@ -207,17 +207,19 @@ remain tuning `TBD`.
 
 Oathbreak (`order.oathscar.peak.oathbreak`) briefly realizes the forbidden
 Oathscar who abandons the sworn line to force an ending. An accepted activation
-commits a spend of all currently available Grudge without a later refund,
-suppresses new Grudge grants for the Peak's authoritative lifetime, and
-replaces compatible Oathscar actions with explicitly authored aggressive
-variants. It does not convert Guard into damage, grant invulnerability, bypass
+enters a server-owned temporary Peak state whose compatible Oathscar actions
+use explicitly authored aggressive variants. If an authored rule spends or
+grants Grudge, the server validates and commits that resource transition;
+presentation cannot create or refund it. Oathbreak does not convert Guard into
+damage, grant invulnerability, bypass
 Wrought/Cinder/Wake mitigation, erase costs or recovery, or make presentation
 authoritative. Opponents must receive a distinct activation tell, readable
 active state, and readable ending/recovery. Their counterplay is to evade the
 free-aim commitments, break contact, force poor facing, interrupt only where
 the authored window permits, or punish the defensive actions that Oathbreak
-replaces. Eligibility, duration, action replacements, cancellation, final
-recovery, and all numeric values remain `TBD`.
+replaces. Eligibility, Grudge cost and grant/refund policy during the Peak,
+duration, action replacements, cancellation, final recovery, and all numeric
+values remain `TBD`.
 
 The complete base kit must support solo play before specialization or build
 choices: the Oathscar can approach, apply Wrought damage, defend directionally,
