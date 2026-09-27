@@ -81,6 +81,32 @@ Every budget includes target, warning threshold, failure threshold, capture
 method, scenario, owner, evidence link, and approval status. Until measured, the
 entry is explicitly `TBD`.
 
+The first executable Issue #45 wave adds an opt-in, versioned
+`aetheln.performance-capture-contract` (version 1) to the network-authority
+runner via `PerformanceContractPath`; its exact shape and fail-closed rules are
+specified in
+[Networking Authority Spike](networking-authority-spike.md#issue-45-opt-in-performance-capture-and-budget-contract).
+The contract binds future capture evidence to the exact source revision,
+packaged-build identity, toolchain, hardware, topology, environment, map,
+duration, actor mix, scenario, network profile, and evidence references, and
+carries one budget record per version-1 network-authority-runner subset metric
+with metric identity and domain, target, warning threshold, failure threshold,
+measurement method, scenario, accountable owner, evidence references, an
+evidence classification (`measured`, `modeled`, `hypothetical`, or `unset`),
+and an approval status. In this wave every target, warning threshold, failure
+threshold, capacity, tick rate, sampling rate, bandwidth value, and
+player-count value remains `null`/`TBD`, and every budget remains
+`unapproved`: fixture evidence validates the contract but cannot approve or
+canonicalize any budget. Mismatched identity, populated numeric values,
+duplicate or missing budgets, undeclared evidence references, and self-approved
+entries fail closed before launch. Each accepted run retains the exact validated
+contract bytes and publishes their SHA-256 plus the fixed artifact name so later
+review can detect replacement or drift without exposing raw evidence references
+in the summary. This bounded subset does not replace or complete the broader
+Issue #45 registry above; the remaining client timing, frame-pacing, hitch,
+loading/streaming, server worker/tick-overrun/failure, and network burst/loss
+domains require later representative capture work.
+
 ## Evidence Record
 
 Each performance or scalability result records:

@@ -421,6 +421,7 @@ exit $LASTEXITCODE
 		[string[]] $ClientArgumentsOverride,
 		[string] $JoinInProgressPatternOverride,
 		[string] $DamagePatternOverride,
+		[string] $PerformanceContractPath,
 		[int] $ObservationStartDelaySeconds = 0,
 		[bool] $WithholdShutdownRelease = $false,
 		[int] $ServerStartupDelaySeconds = 0,
@@ -508,6 +509,7 @@ exit $LASTEXITCODE
 		}
 		if ($PackagedBuildProvenancePath) { $Arguments.PackagedBuildProvenancePath = $PackagedBuildProvenancePath }
 		if ($ServerProvenanceExecutable) { $Arguments.ServerProvenanceExecutable = $ServerProvenanceExecutable }
+		if ($PerformanceContractPath) { $Arguments.PerformanceContractPath = $PerformanceContractPath }
 		$ObservationDelayBreakpoint = $null
 		$ShutdownReleaseBreakpoint = $null
 		$ObservationExitBreakpoint = $null
@@ -565,7 +567,7 @@ exit $LASTEXITCODE
 	$Evidence = Get-Content -LiteralPath $EvidencePath -Raw | ConvertFrom-Json
 	Assert-True ($Evidence.schema_id -eq 'aetheln.network-authority-evidence') 'Evidence must use the canonical schema identity.'
 	Assert-True ($Evidence.schema_version -eq 1) 'Evidence must use schema version 1.'
-	foreach ($ContractOnlyField in @('failure_details','scenario_lifecycle','scenario_lifecycle_summary','process_outcomes','cleanup')) {
+	foreach ($ContractOnlyField in @('failure_details','scenario_lifecycle','scenario_lifecycle_summary','process_outcomes','cleanup','performance_contract')) {
 		Assert-True ($Evidence.PSObject.Properties.Name -notcontains $ContractOnlyField) "Legacy version-1 evidence must not gain contract-only field '$ContractOnlyField'."
 	}
 	Assert-True ($Evidence.scenario.id -eq 'network-authority.baseline.v1') 'Evidence must preserve immutable scenario identity.'
@@ -1288,6 +1290,180 @@ exit $LASTEXITCODE
 	} catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'ServerArguments must contain.*ScenarioId') 'Missing correlation placeholders must fail before launch.'
 	Write-Output 'PASS: incomplete launch correlation fails closed'
+
+	$NetworkAuthorityPerformanceDomains = [ordered]@{
+		client = @('client_memory_bytes','correction_count','correction_magnitude_centimeters')
+		server = @('server_game_thread_milliseconds','server_replication_cpu_milliseconds','server_memory_bytes','relevant_actor_count','destruction_event_count')
+		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second')
+	}
+	function Get-PerformanceContractObject {
+		$Budgets = foreach ($DomainName in $NetworkAuthorityPerformanceDomains.Keys) {
+			foreach ($MetricId in $NetworkAuthorityPerformanceDomains[$DomainName]) {
+				[ordered]@{
+					metric_id = $MetricId
+					domain = $DomainName
+					target = $null
+					warning_threshold = $null
+					failure_threshold = $null
+					measurement_method = 'packaged-representative-capture-pending'
+					scenario_id = 'network-authority.baseline.v1'
+					owner = 'issue-45'
+					evidence_references = @()
+					evidence_classification = 'unset'
+					approval_status = 'unapproved'
+				}
+			}
+		}
+		return [ordered]@{
+			schema_id = 'aetheln.performance-capture-contract'
+			schema_version = 1
+			capture = [ordered]@{
+				source_revision = 'fixture-revision'
+				build = 'fixture-build'
+				toolchain = 'UE-5.8.1-fixture'
+				hardware = 'fixture-host'
+				topology = 'one-server-two-clients-local-fixture'
+				environment = 'local'
+				map = '/Game/Maps/StarterMap'
+				duration_seconds = 1
+				actor_mix = 'network-authority.actor-mix.v1'
+				scenario_id = 'network-authority.baseline.v1'
+				profile_id = 'network-profile.unset'
+				evidence_references = @('evidence-ref.fixture-capture-log','evidence-ref.fixture-capture-json')
+				measurement_domains = [ordered]@{
+					client = @($NetworkAuthorityPerformanceDomains.client)
+					server = @($NetworkAuthorityPerformanceDomains.server)
+					network = @($NetworkAuthorityPerformanceDomains.network)
+				}
+				sampling = [ordered]@{ sampling_rate_hz = $null; server_tick_hz = $null; bandwidth_limit_kbps = $null; capacity_players = $null }
+			}
+			budgets = @($Budgets)
+		}
+	}
+	function Write-PerformanceContract([string] $Path, [object] $Contract) {
+		$Contract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
+	}
+	function Write-PaddedPerformanceContract([string] $SourcePath, [string] $TargetPath, [int] $TargetBytes) {
+		$SourceBytes = [System.IO.File]::ReadAllBytes($SourcePath)
+		if ($SourceBytes.Length -gt $TargetBytes) { throw 'Source contract exceeds requested padded size.' }
+		$OutputBytes = [byte[]]::new($TargetBytes)
+		[Array]::Copy($SourceBytes, $OutputBytes, $SourceBytes.Length)
+		for ($Index = $SourceBytes.Length; $Index -lt $OutputBytes.Length; $Index++) { $OutputBytes[$Index] = 0x20 }
+		[System.IO.File]::WriteAllBytes($TargetPath, $OutputBytes)
+	}
+
+	$PerformanceContractRoot = Join-Path $FixtureRoot 'performance-contracts'
+	New-Item -ItemType Directory -Path $PerformanceContractRoot -Force | Out-Null
+	$PerformanceSuccessContract = Get-PerformanceContractObject
+	$PerformanceSuccessContract.budgets[0].evidence_classification = 'hypothetical'
+	$PerformanceSuccessContract.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log')
+	$PerformanceSuccessContractPath = Join-Path $PerformanceContractRoot 'performance-success.json'
+	Write-PerformanceContract $PerformanceSuccessContractPath $PerformanceSuccessContract
+	$PerformanceSuccessRoot = Join-Path $FixtureRoot 'performance-success'
+	Invoke-FixtureRun -FixtureLogRoot $PerformanceSuccessRoot -FixtureRunId 'fixture-performance-success' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceSuccessContractPath
+	$PerformanceEvidenceJson = Get-Content -LiteralPath (Join-Path $PerformanceSuccessRoot 'network-authority-spike-evidence.json') -Raw
+	$PerformanceEvidence = $PerformanceEvidenceJson | ConvertFrom-Json
+	Assert-True ($PerformanceEvidence.result -eq 'fixture-passed' -and $PerformanceEvidence.schema_version -eq 1) 'The opt-in performance contract must not change the legacy evidence schema version or fixture result.'
+	Assert-True ($PerformanceEvidence.performance_contract.schema_id -eq 'aetheln.performance-capture-contract' -and $PerformanceEvidence.performance_contract.schema_version -eq 1) 'Validated performance-contract evidence must carry its versioned schema identity.'
+	Assert-True ($PerformanceEvidence.performance_contract.contract_sha256 -match '^[0-9a-f]{64}$' -and $PerformanceEvidence.performance_contract.contract_artifact -eq 'performance-contract.json') 'Validated performance-contract evidence must bind the exact retained contract bytes by SHA-256 and fixed artifact name.'
+	$RetainedPerformanceContractPath = Join-Path $PerformanceSuccessRoot $PerformanceEvidence.performance_contract.contract_artifact
+	Assert-True (Test-Path -LiteralPath $RetainedPerformanceContractPath -PathType Leaf) 'Validated performance-contract evidence must retain the exact contract artifact.'
+	Assert-True ((Get-FileHash -LiteralPath $RetainedPerformanceContractPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $PerformanceEvidence.performance_contract.contract_sha256) 'The retained performance-contract artifact must match the published SHA-256.'
+	Assert-True ((Get-FileHash -LiteralPath $PerformanceSuccessContractPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $PerformanceEvidence.performance_contract.contract_sha256) 'The published SHA-256 must bind the exact supplied contract bytes.'
+	Assert-True ($PerformanceEvidence.performance_contract.budget_count -eq 10) 'Validated performance-contract evidence must record exactly one budget per version-1 network-authority-runner subset metric.'
+	Assert-True (-not $PerformanceEvidence.performance_contract.targets_defined -and $PerformanceEvidence.performance_contract.approval_status -eq 'unapproved') 'Validated performance-contract evidence must remain target-free and unapproved in this wave.'
+	Assert-True ($PerformanceEvidence.performance_contract.evidence_reference_count -eq 2) 'Validated performance-contract evidence must count declared capture evidence references.'
+	Assert-True ($PerformanceEvidence.performance_contract.classification_counts.hypothetical -eq 1 -and $PerformanceEvidence.performance_contract.classification_counts.unset -eq 9 -and $PerformanceEvidence.performance_contract.classification_counts.measured -eq 0 -and $PerformanceEvidence.performance_contract.classification_counts.modeled -eq 0) 'Validated performance-contract evidence must classify every budget without invention.'
+	foreach ($DomainName in @('client','server','network')) {
+		Assert-True ((@($PerformanceEvidence.performance_contract.measurement_domains.$DomainName) -join ',') -eq (@($NetworkAuthorityPerformanceDomains[$DomainName]) -join ',')) "Performance-contract evidence must publish the exact version-1 network-authority-runner $DomainName measurement subset."
+	}
+	foreach ($Field in $MeasurementFields) {
+		Assert-True ($null -eq $PerformanceEvidence.measurements.$Field) "$Field must remain null even when the performance contract is supplied."
+	}
+	Assert-True ($PerformanceEvidenceJson.IndexOf('evidence-ref.fixture-capture-log', [System.StringComparison]::Ordinal) -lt 0) 'Performance-contract evidence must publish only counts, never raw evidence-reference values.'
+	Assert-True ($ContractEvidence.PSObject.Properties.Name -notcontains 'performance_contract') 'Schema-v2 evidence without the opt-in performance contract must not gain a performance_contract field.'
+	$PerformanceContractMaximumBytes = 1MB
+	$PerformanceExactLimitPath = Join-Path $PerformanceContractRoot 'performance-exact-size-limit.json'
+	Write-PaddedPerformanceContract -SourcePath $PerformanceSuccessContractPath -TargetPath $PerformanceExactLimitPath -TargetBytes $PerformanceContractMaximumBytes
+	$PerformanceExactLimitRoot = Join-Path $FixtureRoot 'performance-exact-size-limit'
+	Invoke-FixtureRun -FixtureLogRoot $PerformanceExactLimitRoot -FixtureRunId 'fixture-performance-exact-size-limit' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceExactLimitPath
+	$PerformanceExactLimitEvidence = Get-Content -LiteralPath (Join-Path $PerformanceExactLimitRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($PerformanceExactLimitEvidence.performance_contract.contract_sha256 -eq (Get-FileHash -LiteralPath $PerformanceExactLimitPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'A performance contract at the exact input limit must validate and retain its exact-byte identity.'
+	$PerformanceOverLimitPath = Join-Path $PerformanceContractRoot 'performance-over-size-limit.json'
+	Write-PaddedPerformanceContract -SourcePath $PerformanceSuccessContractPath -TargetPath $PerformanceOverLimitPath -TargetBytes ($PerformanceContractMaximumBytes + 1)
+	$PerformanceOverLimitFailure = $null
+	try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'performance-over-size-limit') -FixtureRunId 'fixture-performance-over-size-limit' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceOverLimitPath } catch { $PerformanceOverLimitFailure = $_.Exception.Message }
+	Assert-True ($PerformanceOverLimitFailure -match [regex]::Escape('PerformanceContract exceeds the 1048576-byte input limit.')) "A performance contract above the input limit must fail closed before launch. Actual: $PerformanceOverLimitFailure"
+	Write-Output 'PASS: performance-contract exact input limit is accepted and an oversized contract fails closed'
+	$PerformanceVariantContract = Get-PerformanceContractObject
+	$PerformanceVariantContract.budgets[0].evidence_classification = 'hypothetical'
+	$PerformanceVariantContract.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log')
+	$PerformanceVariantContract.budgets[0].owner = 'issue-45-independent-review'
+	$PerformanceVariantContractPath = Join-Path $PerformanceContractRoot 'performance-valid-variant.json'
+	Write-PerformanceContract $PerformanceVariantContractPath $PerformanceVariantContract
+	$PerformanceVariantRoot = Join-Path $FixtureRoot 'performance-valid-variant'
+	Invoke-FixtureRun -FixtureLogRoot $PerformanceVariantRoot -FixtureRunId 'fixture-performance-valid-variant' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceVariantContractPath
+	$PerformanceVariantEvidence = Get-Content -LiteralPath (Join-Path $PerformanceVariantRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($PerformanceVariantEvidence.performance_contract.budget_count -eq $PerformanceEvidence.performance_contract.budget_count -and $PerformanceVariantEvidence.performance_contract.classification_counts.hypothetical -eq $PerformanceEvidence.performance_contract.classification_counts.hypothetical) 'Materially different valid contracts may retain the same safe aggregate summary.'
+	Assert-True ($PerformanceVariantEvidence.performance_contract.contract_sha256 -ne $PerformanceEvidence.performance_contract.contract_sha256) 'Materially different valid contracts must publish different exact-byte evidence identities.'
+	Write-Output 'PASS: opt-in performance capture and budget contract validates and publishes null-only unapproved summary evidence'
+
+	$PerformanceFailureCases = @(
+		@{ Name = 'wrong-schema-version'; Mutate = { param($C) $C.schema_version = 2 }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'string-schema-version'; Mutate = { param($C) $C.schema_version = '1' }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'fractional-schema-version'; Mutate = { param($C) $C.schema_version = 1.1 }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'boolean-schema-version'; Mutate = { param($C) $C.schema_version = $true }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'extra-top-level-field'; Mutate = { param($C) $C.extra = 'x' }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'missing-capture-field'; Mutate = { param($C) $C.capture.Remove('map') }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'numeric-capture-identity'; Mutate = { param($C) $C.capture.source_revision = 45 }; Failure = "capture 'source_revision' must be a JSON string" },
+		@{ Name = 'mismatched-map'; Mutate = { param($C) $C.capture.map = '/Game/Maps/OtherMap' }; Failure = "capture 'map' must equal" },
+		@{ Name = 'mismatched-duration'; Mutate = { param($C) $C.capture.duration_seconds = 2 }; Failure = 'duration_seconds must equal' },
+		@{ Name = 'mismatched-actor-mix'; Mutate = { param($C) $C.capture.actor_mix = 'network-authority.actor-mix.v2' }; Failure = "capture 'actor_mix' must equal" },
+		@{ Name = 'mismatched-profile'; Mutate = { param($C) $C.capture.profile_id = 'network-profile.clean' }; Failure = "capture 'profile_id' must equal" },
+		@{ Name = 'mismatched-environment'; Mutate = { param($C) $C.capture.environment = 'development' }; Failure = "capture 'environment' must equal" },
+		@{ Name = 'mismatched-source-revision'; Mutate = { param($C) $C.capture.source_revision = 'other-revision' }; Failure = "capture 'source_revision' must equal" },
+		@{ Name = 'mismatched-topology'; Mutate = { param($C) $C.capture.topology = 'other-topology' }; Failure = "capture 'topology' must equal" },
+		@{ Name = 'empty-evidence-references'; Mutate = { param($C) $C.capture.evidence_references = @() }; Failure = 'evidence_references must' },
+		@{ Name = 'duplicate-evidence-references'; Mutate = { param($C) $C.capture.evidence_references = @('evidence-ref.dup','evidence-ref.dup') }; Failure = 'evidence_references must' },
+		@{ Name = 'missing-network-domain'; Mutate = { param($C) $C.capture.measurement_domains.Remove('network') }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'incomplete-client-domain'; Mutate = { param($C) $C.capture.measurement_domains.client = @('client_memory_bytes') }; Failure = 'canonical' },
+		@{ Name = 'populated-tick-rate'; Mutate = { param($C) $C.capture.sampling.server_tick_hz = 30 }; Failure = 'must remain null' },
+		@{ Name = 'populated-capacity'; Mutate = { param($C) $C.capture.sampling.capacity_players = 32 }; Failure = 'must remain null' },
+		@{ Name = 'populated-target'; Mutate = { param($C) $C.budgets[0].target = 16 }; Failure = 'must remain null' },
+		@{ Name = 'populated-failure-threshold'; Mutate = { param($C) $C.budgets[1].failure_threshold = 100 }; Failure = 'must remain null' },
+		@{ Name = 'self-approved-budget'; Mutate = { param($C) $C.budgets[0].approval_status = 'approved' }; Failure = 'cannot self-approve' },
+		@{ Name = 'invented-classification'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'estimated' }; Failure = 'measured, modeled, hypothetical, or unset' },
+		@{ Name = 'unset-with-references'; Mutate = { param($C) $C.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log') }; Failure = 'unset classification must declare no evidence references' },
+		@{ Name = 'undeclared-evidence-reference'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'measured'; $C.budgets[0].evidence_references = @('evidence-ref.unknown') }; Failure = 'declared capture evidence references' },
+		@{ Name = 'duplicate-budget-metric'; Mutate = { param($C) $C.budgets[1].metric_id = $C.budgets[0].metric_id; $C.budgets[1].domain = $C.budgets[0].domain }; Failure = 'exactly one budget' },
+		@{ Name = 'missing-budget-metric'; Mutate = { param($C) $C.budgets = @($C.budgets | Select-Object -Skip 1) }; Failure = 'exactly one budget' },
+		@{ Name = 'unknown-budget-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'frames_per_second' }; Failure = 'Unsupported performance budget metric' },
+		@{ Name = 'wrong-budget-domain'; Mutate = { param($C) $C.budgets[0].domain = 'server' }; Failure = 'domain must be' },
+		@{ Name = 'boolean-budget-domain'; Mutate = { param($C) $C.budgets[0].domain = $true }; Failure = 'domain must be a JSON string' },
+		@{ Name = 'numeric-measurement-method'; Mutate = { param($C) $C.budgets[0].measurement_method = 45 }; Failure = 'measurement_method must be a JSON string' },
+		@{ Name = 'mismatched-budget-scenario'; Mutate = { param($C) $C.budgets[0].scenario_id = 'network-authority.other.v1' }; Failure = 'scenario_id must equal' },
+		@{ Name = 'boolean-budget-owner'; Mutate = { param($C) $C.budgets[0].owner = $true }; Failure = 'owner must be a JSON string' },
+		@{ Name = 'numeric-evidence-classification'; Mutate = { param($C) $C.budgets[0].evidence_classification = 1 }; Failure = 'evidence_classification must be a JSON string' },
+		@{ Name = 'boolean-approval-status'; Mutate = { param($C) $C.budgets[0].approval_status = $true }; Failure = 'approval_status must be a JSON string' },
+		@{ Name = 'extra-budget-field'; Mutate = { param($C) $C.budgets[0].notes = 'x' }; Failure = 'unsupported or missing fields' }
+	)
+	foreach ($PerformanceFailureCase in $PerformanceFailureCases) {
+		$MutatedContract = Get-PerformanceContractObject
+		& $PerformanceFailureCase.Mutate $MutatedContract
+		$MutatedContractPath = Join-Path $PerformanceContractRoot ("performance-$($PerformanceFailureCase.Name).json")
+		Write-PerformanceContract $MutatedContractPath $MutatedContract
+		$PerformanceFailure = $null
+		try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot ("performance-$($PerformanceFailureCase.Name)")) -FixtureRunId ("fixture-performance-$($PerformanceFailureCase.Name)") -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $MutatedContractPath } catch { $PerformanceFailure = $_.Exception.Message }
+		Assert-True ($PerformanceFailure -match [regex]::Escape($PerformanceFailureCase.Failure)) "$($PerformanceFailureCase.Name) performance contract must fail closed before launch. Actual: $PerformanceFailure"
+	}
+	$DuplicatePerformancePropertyPath = Join-Path $PerformanceContractRoot 'performance-duplicate-property.json'
+	@'
+{ "schema_id": "aetheln.performance-capture-contract", "schema_version": 1, "schema_version": 1 }
+'@ | Set-Content -LiteralPath $DuplicatePerformancePropertyPath -Encoding UTF8
+	$DuplicatePerformanceFailure = $null
+	try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'performance-duplicate-property') -FixtureRunId 'fixture-performance-duplicate-property' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $DuplicatePerformancePropertyPath } catch { $DuplicatePerformanceFailure = $_.Exception.Message }
+	Assert-True ($DuplicatePerformanceFailure -match [regex]::Escape("duplicate JSON property 'schema_version'")) "A duplicate performance-contract JSON property must fail closed before launch. Actual: $DuplicatePerformanceFailure"
+	Write-Output 'PASS: malformed, duplicate, missing, extra, mismatched, populated, and self-approved performance contracts fail closed before launch'
 	$FixtureSucceeded = $true
 }
 finally {

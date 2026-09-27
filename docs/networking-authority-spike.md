@@ -166,6 +166,71 @@ filenames. Absolute executable and log-root paths and raw profile arguments are
 not published in version-2 evidence. Successful evidence sets
 `failure_details` to JSON `null` and records successful controlled cleanup.
 
+## Issue #45 Opt-In Performance Capture and Budget Contract
+
+`PerformanceContractPath` is a separate opt-in input owned by
+[Issue #45](https://github.com/ShayShimoni/aetheln-online/issues/45). It may be
+supplied with or without the Issue #44 scenario/profile contracts, and calls
+that omit it retain the existing version-1 and version-2 interfaces and
+evidence shapes unchanged. The contract is a closed, versioned JSON object with
+schema `aetheln.performance-capture-contract` version 1 containing exactly one
+`capture` object and one `budgets` array.
+
+The `capture` object binds future performance evidence to the exact run
+identity. Its `source_revision`, `build`, `toolchain`, `hardware`, `topology`,
+`environment`, `map`, `duration_seconds`, `actor_mix`, `scenario_id`, and
+`profile_id` values must equal the corresponding runner inputs exactly and
+case-sensitively. `evidence_references` must be a non-empty array of unique
+whitespace-free tokens. `measurement_domains` must declare exactly the three
+version-1 network-authority-runner subset domains with exactly these ordered
+metrics:
+
+- `client`: `client_memory_bytes`, `correction_count`,
+  `correction_magnitude_centimeters`
+- `server`: `server_game_thread_milliseconds`,
+  `server_replication_cpu_milliseconds`, `server_memory_bytes`,
+  `relevant_actor_count`, `destruction_event_count`
+- `network`: `bandwidth_per_connection_bits_per_second`,
+  `aggregate_bandwidth_bits_per_second`
+
+This ten-metric subset is limited to fields the current network-authority
+runner can bind. It does not replace or complete Issue #45's full performance
+budget registry, which still requires client game/render/GPU timing, frame
+pacing and hitches, loading and streaming, server worker and tick-overrun
+behavior, failure shape, and network send/receive bursts and loss impact.
+
+The `sampling` object must declare `sampling_rate_hz`, `server_tick_hz`,
+`bandwidth_limit_kbps`, and `capacity_players`, and every one of those values
+must remain JSON `null` in this wave.
+
+The `budgets` array must contain exactly one closed record per version-1
+network-authority-runner subset metric with `metric_id`, `domain`, `target`,
+`warning_threshold`,
+`failure_threshold`, `measurement_method`, `scenario_id`, `owner`,
+`evidence_references`, `evidence_classification`, and `approval_status`.
+`target`, `warning_threshold`, and `failure_threshold` must remain JSON `null`;
+a populated value fails closed because no measurement authority exists yet.
+`evidence_classification` must be `measured`, `modeled`, `hypothetical`, or
+`unset`; an `unset` budget must declare no evidence references, and any other
+classification must reference only tokens declared in the capture
+`evidence_references`. `approval_status` must be exactly `unapproved`; the
+contract and the fixture runner cannot approve or canonicalize a budget.
+
+Contract input is limited to 1,048,576 bytes. Malformed JSON, oversized input,
+duplicate JSON properties, missing or extra fields, unknown or duplicate
+metrics, mismatched identities, populated numeric values, undeclared
+evidence references, and self-approved budgets all fail closed before any
+process launch. A validated contract adds one `performance_contract` summary
+to the evidence document containing only the schema identity, the version-1
+network-authority-runner measurement subset, the SHA-256 and fixed artifact
+name of the exact validated
+contract bytes, the budget count, `targets_defined = false`, `approval_status =
+"unapproved"`, the evidence-reference count, and classification counts. Those
+exact bytes are retained as `performance-contract.json` in the run log root.
+Raw evidence-reference values, paths, and every numeric performance value are
+excluded from the summary; the `measurements` object continues to publish
+explicit `null` values only.
+
 ### Fixture flake policy
 
 The runner performs no automatic retry. Every attempt uses a unique run ID and
