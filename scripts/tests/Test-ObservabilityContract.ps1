@@ -12,9 +12,10 @@ if (-not $RepositoryRoot) {
 
 $ContractPath = Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservability.h'
 $SubsystemPath = Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservabilitySubsystem.h'
+$SubsystemImplementationPath = Join-Path $RepositoryRoot 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp'
 $ServerPath = Join-Path $RepositoryRoot 'Source\GameServer\Private\GameServer.cpp'
 $OperatorPath = Join-Path $RepositoryRoot 'docs\observability-and-crash-diagnostics.md'
-foreach ($Path in @($ContractPath, $SubsystemPath, $ServerPath, $OperatorPath)) {
+foreach ($Path in @($ContractPath, $SubsystemPath, $SubsystemImplementationPath, $ServerPath, $OperatorPath)) {
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
 		throw "Required observability contract '$Path' is missing."
 	}
@@ -22,6 +23,7 @@ foreach ($Path in @($ContractPath, $SubsystemPath, $ServerPath, $OperatorPath)) 
 
 $Contract = Get-Content -LiteralPath $ContractPath -Raw
 $Subsystem = Get-Content -LiteralPath $SubsystemPath -Raw
+$SubsystemImplementation = Get-Content -LiteralPath $SubsystemImplementationPath -Raw
 $Server = Get-Content -LiteralPath $ServerPath -Raw
 $Operator = Get-Content -LiteralPath $OperatorPath -Raw
 
@@ -93,22 +95,89 @@ foreach ($Required in @(
 )) {
 	Assert-ContainsLiteral -Text $CrashSnapshot -Literal $Required -Message "Required crash-context snapshot field or validation '$Required' is missing."
 }
+Assert-ContainsLiteral -Text $CrashSnapshot -Literal 'ConnectionPseudonym.Equals(AethelnObservability::ExcludedIdentifier, ESearchCase::CaseSensitive)' -Message 'Process-wide crash-context snapshot must require the literal excluded connection pseudonym.'
 Assert-ContainsLiteral -Text $Subsystem -Literal 'TryGetCrashContextSnapshot(FAethelnCrashContextSnapshot& OutSnapshot) const' -Message 'Crash-context snapshot must be exposed only as a validated copy.'
+Assert-ContainsLiteral -Text $Subsystem -Literal 'static FAethelnCrashContextChanged& OnCrashContextChanged();' -Message 'Accepted crash-context changes must be observable without a world tick.'
+foreach ($Mutation in @('SetRuntimeContext(', 'ResetRuntimeContext()', 'SetBuildContext(', 'ResetBuildContext()')) {
+	$MutationMatch = [regex]::Match(
+		$SubsystemImplementation,
+		'UAethelnObservabilitySubsystem::' + [regex]::Escape($Mutation) + '(?<body>.*?)\n\}',
+		[Text.RegularExpressions.RegexOptions]::Singleline)
+	if (-not $MutationMatch.Success -or $MutationMatch.Groups['body'].Value.IndexOf('OnCrashContextChanged().Broadcast(*this);', [StringComparison]::Ordinal) -lt 0) {
+		throw "Accepted crash-context mutation '$Mutation' must broadcast the change."
+	}
+}
 
+foreach ($Key in @('AethelnObservabilitySchema', 'AethelnServerLifecycle')) {
+	Assert-ContainsLiteral -Text $Server -Literal "TEXT(`"$Key`")" -Message "Stable crash GameData key '$Key' is missing."
+}
 foreach ($Key in @(
-	'AethelnObservabilitySchema', 'AethelnServerLifecycle', 'AethelnCrashContextState',
+	'AethelnCrashContextState',
 	'AethelnCrashContextSchemaVersion', 'AethelnSourceRevision', 'AethelnBuildIdentity',
 	'AethelnBuildConfiguration', 'AethelnEngineRevision', 'AethelnToolchainIdentity',
 	'AethelnNetworkProfileSchema', 'AethelnNetworkProfileVersion', 'AethelnNetworkProfileId',
 	'AethelnFlowKind', 'AethelnRunId', 'AethelnServerInstance', 'AethelnConnectionPseudonym'
 )) {
-	Assert-ContainsLiteral -Text $Server -Literal "TEXT(`"$Key`")" -Message "Stable crash GameData key '$Key' is missing."
+	Assert-ContainsLiteral -Text $Subsystem -Literal "TEXT(`"$Key`")" -Message "Stable crash GameData key '$Key' is missing."
 }
 foreach ($State in @('missing', 'updating', 'active', 'ambiguous', 'stale')) {
-	Assert-ContainsLiteral -Text $Server -Literal "TEXT(`"$State`")" -Message "Closed crash-context state '$State' is missing."
+	Assert-ContainsLiteral -Text $SubsystemImplementation -Literal "TEXT(`"$State`")" -Message "Closed crash-context state '$State' is missing."
 }
-if ($Server.IndexOf('ResetGameData', [StringComparison]::Ordinal) -ge 0) {
-	throw 'GameServer must remove only its owned crash keys and never call ResetGameData.'
+Assert-ContainsLiteral -Text $SubsystemImplementation -Literal 'UAethelnObservabilitySubsystem::OnCrashContextChanged().AddRaw(' -Message 'The crash-context owner must refresh when accepted context changes.'
+Assert-ContainsLiteral -Text $SubsystemImplementation -Literal 'UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(' -Message 'The crash-context owner must unbind its change handler.'
+Assert-ContainsLiteral -Text $Server -Literal 'FAethelnCrashContextOwner CrashContext;' -Message 'GameServer must delegate crash-context ownership to the GameNet owner.'
+
+$TrackMatch = [regex]::Match($SubsystemImplementation, 'FAethelnCrashContextOwner::TrackWorldTick\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $TrackMatch.Success) {
+	throw 'Could not isolate the crash-context world tracking handler.'
+}
+$Track = $TrackMatch.Groups['body'].Value
+$TrackAddIndex = $Track.IndexOf('TrackedWorlds.Add(World);', [StringComparison]::Ordinal)
+if ($TrackAddIndex -lt 0 -or $Track.Substring(0, $TrackAddIndex) -match 'FindObservabilitySubsystem\(|GetSubsystem|GetGameInstance') {
+	throw 'Observable worlds must be counted before their observability subsystem is looked up.'
+}
+$TickStartMatch = [regex]::Match($Server, 'void OnWorldTickStart\((?<body>.*?)\n\t\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $TickStartMatch.Success) {
+	throw 'Could not isolate the world tick-start handler.'
+}
+$TickStart = $TickStartMatch.Groups['body'].Value
+$WorldCountIndex = $TickStart.IndexOf('CrashContext.TrackWorldTick(World)', [StringComparison]::Ordinal)
+$SubsystemLookupIndex = $TickStart.IndexOf('FindObservabilitySubsystem(', [StringComparison]::Ordinal)
+if ($WorldCountIndex -lt 0 -or $SubsystemLookupIndex -lt 0 -or $WorldCountIndex -gt $SubsystemLookupIndex) {
+	throw 'Observable worlds must be counted before their observability subsystem is looked up.'
+}
+
+function Get-AutomationDeclarations([string] $Text) {
+	$Result = @{}
+	foreach ($Match in [regex]::Matches($Text, 'IMPLEMENT_SIMPLE_AUTOMATION_TEST\((?<body>[^)]*)\)')) {
+		$NameMatch = [regex]::Match($Match.Groups['body'].Value, '"(?<name>[^"]+)"')
+		if ($NameMatch.Success) {
+			$Result[$NameMatch.Groups['name'].Value] = $Match.Groups['body'].Value
+		}
+	}
+	return $Result
+}
+$GameNetTests = Get-AutomationDeclarations $SubsystemImplementation
+foreach ($Name in @(
+	'Aetheln.Observability.CrashContext.Registration',
+	'Aetheln.Observability.CrashContext.WorldOwnership',
+	'Aetheln.Observability.CrashContext.FollowsAcceptedChanges',
+	'Aetheln.Observability.CrashContext.CountsWorldsWithoutSubsystem'
+)) {
+	if (-not $GameNetTests.ContainsKey($Name) -or
+		$GameNetTests[$Name].IndexOf('EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext', [StringComparison]::Ordinal) -lt 0) {
+		throw "Crash-context test '$Name' must live in GameNet and declare EditorContext | ServerContext."
+	}
+}
+$GameServerTests = Get-AutomationDeclarations $Server
+if (-not $GameServerTests.ContainsKey('Aetheln.Observability.Server.SystemErrorLifecycleOnly') -or
+	$GameServerTests['Aetheln.Observability.Server.SystemErrorLifecycleOnly'].IndexOf('EAutomationTestFlags::ServerContext', [StringComparison]::Ordinal) -lt 0) {
+	throw 'The GameServer system-error test must be discoverable in the Server target (ServerContext).'
+}
+foreach ($Text in @($Server, $SubsystemImplementation)) {
+	if ($Text.IndexOf('ResetGameData', [StringComparison]::Ordinal) -ge 0) {
+		throw 'Crash-context owners must remove only their owned crash keys and never call ResetGameData.'
+	}
 }
 $SystemErrorMatch = [regex]::Match($Server, 'void HandleSystemError\(\)\s*\{(?<body>[^}]*)\}')
 if (-not $SystemErrorMatch.Success) {
@@ -130,5 +199,6 @@ Assert-ContainsLiteral -Text $Operator -Literal 'Issue #44 owns' -Message 'Packa
 Assert-ContainsLiteral -Text $Operator -Literal 'Issue #45 owns' -Message 'Performance-budget ownership boundary is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'No CrashReportClient, uploader, vendor, endpoint, or external submission is configured' -Message 'Crash-report submission boundary is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'must never be opened, parsed, hashed, copied, or published' -Message 'Raw crash artifact handling boundary is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'Character validation bounds these values but does not prove they are free of personal or secret text' -Message 'Command-line provenance limitation is missing.'
 
 Write-Output 'Observability contract and redaction checks passed.'

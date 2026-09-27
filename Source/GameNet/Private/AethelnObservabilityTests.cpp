@@ -354,6 +354,9 @@ bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Param
 	FAethelnNetworkProfile WrongVersion = Profile;
 	WrongVersion.SchemaVersion = AethelnNetworkSpike::NetworkProfileSchemaVersion + 1;
 	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile version fails closed"), Build, WrongVersion, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+	ExpectRejectedAndUnchanged(TEXT("Printable personal text is never a process-wide connection pseudonym"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), TEXT("user@example.com"));
+	ExpectRejectedAndUnchanged(TEXT("An authority per-connection pseudonym is never process-wide crash context"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), TEXT("connection-148"));
+	ExpectRejectedAndUnchanged(TEXT("The excluded marker is matched case-sensitively"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), TEXT("EXCLUDED"));
 
 	FAethelnCrashContextSnapshot Tampered = Accepted;
 	Tampered.ObservabilitySchemaVersion = AethelnObservability::SchemaVersion + 1;
@@ -361,6 +364,9 @@ bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Param
 	Tampered = Accepted;
 	Tampered.FlowKind = static_cast<EAethelnFlowKind>(200);
 	TestFalse(TEXT("Snapshot with an unknown flow kind is not bounded"), Tampered.IsBounded());
+	Tampered = Accepted;
+	Tampered.ConnectionPseudonym = TEXT("user@example.com");
+	TestFalse(TEXT("Snapshot with a non-excluded connection pseudonym is not bounded"), Tampered.IsBounded());
 	return true;
 }
 

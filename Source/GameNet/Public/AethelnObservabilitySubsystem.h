@@ -62,6 +62,8 @@ struct GAMENET_API FAethelnObservabilityEventContext
 	}
 };
 
+DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCrashContextChanged, const class UAethelnObservabilitySubsystem&);
+
 UCLASS()
 class GAMENET_API UAethelnObservabilitySubsystem final : public UGameInstanceSubsystem
 {
@@ -70,6 +72,9 @@ class GAMENET_API UAethelnObservabilitySubsystem final : public UGameInstanceSub
 public:
 	using FSinkPtr = FAethelnObservabilityService::FSinkPtr;
 	using FRestrictedSinkPtr = FAethelnObservabilityService::FRestrictedSinkPtr;
+
+	/** Game-thread broadcast after an accepted runtime/build context change or reset; rejected changes never broadcast. */
+	static FAethelnCrashContextChanged& OnCrashContextChanged();
 
 	virtual void Deinitialize() override;
 
@@ -117,4 +122,92 @@ private:
 	bool bHasRuntimeContext = false;
 	bool bHasBuildContext = false;
 	bool bHasValidEnvironment = true;
+};
+
+class UWorld;
+
+namespace AethelnCrashContext
+{
+	inline constexpr TCHAR StateKey[] = TEXT("AethelnCrashContextState");
+	inline constexpr TCHAR SchemaVersionKey[] = TEXT("AethelnCrashContextSchemaVersion");
+	inline constexpr TCHAR SourceRevisionKey[] = TEXT("AethelnSourceRevision");
+	inline constexpr TCHAR BuildIdentityKey[] = TEXT("AethelnBuildIdentity");
+	inline constexpr TCHAR BuildConfigurationKey[] = TEXT("AethelnBuildConfiguration");
+	inline constexpr TCHAR EngineRevisionKey[] = TEXT("AethelnEngineRevision");
+	inline constexpr TCHAR ToolchainIdentityKey[] = TEXT("AethelnToolchainIdentity");
+	inline constexpr TCHAR NetworkProfileSchemaKey[] = TEXT("AethelnNetworkProfileSchema");
+	inline constexpr TCHAR NetworkProfileVersionKey[] = TEXT("AethelnNetworkProfileVersion");
+	inline constexpr TCHAR NetworkProfileIdKey[] = TEXT("AethelnNetworkProfileId");
+	inline constexpr TCHAR FlowKindKey[] = TEXT("AethelnFlowKind");
+	inline constexpr TCHAR RunIdKey[] = TEXT("AethelnRunId");
+	inline constexpr TCHAR ServerInstanceKey[] = TEXT("AethelnServerInstance");
+	inline constexpr TCHAR ConnectionPseudonymKey[] = TEXT("AethelnConnectionPseudonym");
+	inline constexpr const TCHAR* IdentityKeys[] = {
+		SchemaVersionKey,
+		SourceRevisionKey,
+		BuildIdentityKey,
+		BuildConfigurationKey,
+		EngineRevisionKey,
+		ToolchainIdentityKey,
+		NetworkProfileSchemaKey,
+		NetworkProfileVersionKey,
+		NetworkProfileIdKey,
+		FlowKindKey,
+		RunIdKey,
+		ServerInstanceKey,
+		ConnectionPseudonymKey
+	};
+
+	enum class EState : uint8
+	{
+		Missing,
+		Updating,
+		Active,
+		Ambiguous,
+		Stale
+	};
+
+	GAMENET_API const TCHAR* StateToString(EState State);
+	GAMENET_API UAethelnObservabilitySubsystem* FindObservabilitySubsystem(const UWorld* World);
+}
+
+/**
+ * Owns the Issue #148 crash GameData keys and the set of observable worlds.
+ * Every value is registered before failure; the state key is written first on
+ * clear and last on registration so an interrupted update never reads as active.
+ * Game thread only.
+ */
+class GAMENET_API FAethelnCrashContextOwner
+{
+public:
+	FAethelnCrashContextOwner() = default;
+	FAethelnCrashContextOwner(const FAethelnCrashContextOwner&) = delete;
+	FAethelnCrashContextOwner& operator=(const FAethelnCrashContextOwner&) = delete;
+	~FAethelnCrashContextOwner();
+
+	/** Clears to missing and refreshes on every accepted context change of the sole tracked world. */
+	void Initialize();
+	/** Unbinds, forgets every world, and clears to stale. */
+	void Shutdown();
+	/** Counts an observable world before any subsystem lookup; returns true on first sight. */
+	bool TrackWorldTick(const UWorld* World);
+	/** Stops tracking a world and clears to stale. */
+	void EndTracking(const UWorld* World);
+	bool IsTracked(const UWorld* World) const;
+	int32 NumTrackedWorlds() const;
+	void Register(const FAethelnCrashContextSnapshot* Snapshot);
+	void MarkStale();
+	void MarkAmbiguous();
+	AethelnCrashContext::EState GetState() const;
+
+private:
+	void Refresh();
+	void OnContextChanged(const UAethelnObservabilitySubsystem& Changed);
+	const UWorld* GetSoleTrackedWorld() const;
+	void SetState(AethelnCrashContext::EState NewState);
+	void ClearIdentity(AethelnCrashContext::EState NewState);
+
+	TSet<TWeakObjectPtr<const UWorld>> TrackedWorlds;
+	AethelnCrashContext::EState State = AethelnCrashContext::EState::Missing;
+	FDelegateHandle ChangedHandle;
 };

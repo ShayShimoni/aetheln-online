@@ -1,6 +1,15 @@
 #include "AethelnObservabilitySubsystem.h"
 
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "GenericPlatform/GenericPlatformCrashContext.h"
 #include "HAL/PlatformTLS.h"
+
+FAethelnCrashContextChanged& UAethelnObservabilitySubsystem::OnCrashContextChanged()
+{
+	static FAethelnCrashContextChanged Delegate;
+	return Delegate;
+}
 
 void UAethelnObservabilitySubsystem::Deinitialize()
 {
@@ -38,6 +47,7 @@ bool UAethelnObservabilitySubsystem::SetRuntimeContext(
 
 	RuntimeContext = MoveTemp(Candidate);
 	bHasRuntimeContext = true;
+	OnCrashContextChanged().Broadcast(*this);
 	return true;
 }
 
@@ -52,6 +62,7 @@ void UAethelnObservabilitySubsystem::ResetRuntimeContext()
 	bHasRuntimeContext = false;
 	MetricEnvironment = EAethelnEnvironment::Local;
 	bHasValidEnvironment = true;
+	OnCrashContextChanged().Broadcast(*this);
 }
 
 bool UAethelnObservabilitySubsystem::HasRuntimeContext() const
@@ -85,6 +96,7 @@ bool UAethelnObservabilitySubsystem::SetBuildContext(
 	BuildIdentity = InBuildIdentity;
 	NetworkProfile = InNetworkProfile;
 	bHasBuildContext = true;
+	OnCrashContextChanged().Broadcast(*this);
 	return true;
 }
 
@@ -98,6 +110,7 @@ void UAethelnObservabilitySubsystem::ResetBuildContext()
 	BuildIdentity = FAethelnBuildIdentity();
 	NetworkProfile = FAethelnNetworkProfile();
 	bHasBuildContext = false;
+	OnCrashContextChanged().Broadcast(*this);
 }
 
 bool UAethelnObservabilitySubsystem::HasBuildContext() const
@@ -258,8 +271,182 @@ void UAethelnObservabilitySubsystem::EmitMetric(const FAethelnMetricSample& Samp
 	}
 }
 
+const TCHAR* AethelnCrashContext::StateToString(EState State)
+{
+	switch (State)
+	{
+	case EState::Missing: return TEXT("missing");
+	case EState::Updating: return TEXT("updating");
+	case EState::Active: return TEXT("active");
+	case EState::Ambiguous: return TEXT("ambiguous");
+	case EState::Stale: return TEXT("stale");
+	default: return TEXT("missing");
+	}
+}
+
+UAethelnObservabilitySubsystem* AethelnCrashContext::FindObservabilitySubsystem(const UWorld* World)
+{
+	UGameInstance* GameInstance = World != nullptr ? World->GetGameInstance() : nullptr;
+	return GameInstance != nullptr
+		? GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>()
+		: nullptr;
+}
+
+FAethelnCrashContextOwner::~FAethelnCrashContextOwner()
+{
+	if (ChangedHandle.IsValid())
+	{
+		UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(ChangedHandle);
+	}
+}
+
+void FAethelnCrashContextOwner::Initialize()
+{
+	if (!ChangedHandle.IsValid())
+	{
+		ChangedHandle = UAethelnObservabilitySubsystem::OnCrashContextChanged().AddRaw(this, &FAethelnCrashContextOwner::OnContextChanged);
+	}
+	ClearIdentity(AethelnCrashContext::EState::Missing);
+}
+
+void FAethelnCrashContextOwner::Shutdown()
+{
+	UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(ChangedHandle);
+	ChangedHandle.Reset();
+	TrackedWorlds.Reset();
+	MarkStale();
+}
+
+bool FAethelnCrashContextOwner::TrackWorldTick(const UWorld* World)
+{
+	if (World == nullptr)
+	{
+		return false;
+	}
+	if (TrackedWorlds.Contains(World))
+	{
+		// A later tick from a sole remaining world recovers stale or ambiguous context.
+		if (TrackedWorlds.Num() == 1
+			&& (State == AethelnCrashContext::EState::Stale || State == AethelnCrashContext::EState::Ambiguous))
+		{
+			Refresh();
+		}
+		return false;
+	}
+	// Every observable world counts toward ownership, with or without a subsystem.
+	TrackedWorlds.Add(World);
+	Refresh();
+	return true;
+}
+
+void FAethelnCrashContextOwner::EndTracking(const UWorld* World)
+{
+	TrackedWorlds.Remove(World);
+	MarkStale();
+}
+
+bool FAethelnCrashContextOwner::IsTracked(const UWorld* World) const
+{
+	return TrackedWorlds.Contains(World);
+}
+
+int32 FAethelnCrashContextOwner::NumTrackedWorlds() const
+{
+	return TrackedWorlds.Num();
+}
+
+void FAethelnCrashContextOwner::Register(const FAethelnCrashContextSnapshot* Snapshot)
+{
+	using namespace AethelnCrashContext;
+	if (Snapshot == nullptr || !Snapshot->IsBounded())
+	{
+		ClearIdentity(EState::Missing);
+		return;
+	}
+
+	SetState(EState::Updating);
+	FGenericCrashContext::SetGameData(SchemaVersionKey, FString::Printf(TEXT("%u"), Snapshot->ObservabilitySchemaVersion));
+	FGenericCrashContext::SetGameData(SourceRevisionKey, Snapshot->SourceRevision);
+	FGenericCrashContext::SetGameData(BuildIdentityKey, Snapshot->BuildIdentity);
+	FGenericCrashContext::SetGameData(BuildConfigurationKey, Snapshot->BuildConfiguration);
+	FGenericCrashContext::SetGameData(EngineRevisionKey, Snapshot->EngineRevision);
+	FGenericCrashContext::SetGameData(ToolchainIdentityKey, Snapshot->ToolchainIdentity);
+	FGenericCrashContext::SetGameData(NetworkProfileSchemaKey, Snapshot->NetworkProfileSchemaId);
+	FGenericCrashContext::SetGameData(NetworkProfileVersionKey, FString::Printf(TEXT("%u"), Snapshot->NetworkProfileSchemaVersion));
+	FGenericCrashContext::SetGameData(NetworkProfileIdKey, Snapshot->NetworkProfileId);
+	FGenericCrashContext::SetGameData(FlowKindKey, LexToString(Snapshot->FlowKind));
+	FGenericCrashContext::SetGameData(RunIdKey, Snapshot->RunId);
+	FGenericCrashContext::SetGameData(ServerInstanceKey, Snapshot->ServerInstanceId);
+	FGenericCrashContext::SetGameData(ConnectionPseudonymKey, Snapshot->ConnectionPseudonym);
+	SetState(EState::Active);
+}
+
+void FAethelnCrashContextOwner::MarkStale()
+{
+	ClearIdentity(AethelnCrashContext::EState::Stale);
+}
+
+void FAethelnCrashContextOwner::MarkAmbiguous()
+{
+	ClearIdentity(AethelnCrashContext::EState::Ambiguous);
+}
+
+AethelnCrashContext::EState FAethelnCrashContextOwner::GetState() const
+{
+	return State;
+}
+
+void FAethelnCrashContextOwner::Refresh()
+{
+	// No tracked world: startup or cleanup already owns the missing/stale state.
+	if (TrackedWorlds.IsEmpty())
+	{
+		return;
+	}
+	// ponytail: dead weak entries still count, so a leaked world keeps the process ambiguous (fail-safe) until cleanup.
+	if (TrackedWorlds.Num() != 1)
+	{
+		MarkAmbiguous();
+		return;
+	}
+	const UAethelnObservabilitySubsystem* Subsystem = AethelnCrashContext::FindObservabilitySubsystem(GetSoleTrackedWorld());
+	FAethelnCrashContextSnapshot Snapshot;
+	Register(Subsystem != nullptr && Subsystem->TryGetCrashContextSnapshot(Snapshot) ? &Snapshot : nullptr);
+}
+
+void FAethelnCrashContextOwner::OnContextChanged(const UAethelnObservabilitySubsystem& Changed)
+{
+	// Only the sole tracked world's own game instance can change process crash context.
+	const UWorld* World = GetSoleTrackedWorld();
+	const UGameInstance* GameInstance = World != nullptr ? World->GetGameInstance() : nullptr;
+	if (GameInstance != nullptr && GameInstance == Changed.GetGameInstance())
+	{
+		Refresh();
+	}
+}
+
+const UWorld* FAethelnCrashContextOwner::GetSoleTrackedWorld() const
+{
+	return TrackedWorlds.Num() == 1 ? TrackedWorlds.CreateConstIterator()->Get() : nullptr;
+}
+
+void FAethelnCrashContextOwner::SetState(AethelnCrashContext::EState NewState)
+{
+	State = NewState;
+	FGenericCrashContext::SetGameData(AethelnCrashContext::StateKey, AethelnCrashContext::StateToString(NewState));
+}
+
+void FAethelnCrashContextOwner::ClearIdentity(AethelnCrashContext::EState NewState)
+{
+	SetState(NewState);
+	for (const TCHAR* Key : AethelnCrashContext::IdentityKeys)
+	{
+		FGenericCrashContext::SetGameData(Key, TEXT(""));
+	}
+}
+
 #if WITH_DEV_AUTOMATION_TESTS
-#include "Engine/GameInstance.h"
+#include "Engine/Engine.h"
 #include "Misc/AutomationTest.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -428,12 +615,22 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 {
 	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
 	UAethelnObservabilitySubsystem* Subsystem = NewObject<UAethelnObservabilitySubsystem>(GameInstance);
+	int32 Changes = 0;
+	const FDelegateHandle ChangeHandle = UAethelnObservabilitySubsystem::OnCrashContextChanged().AddLambda(
+		[&Changes, Subsystem](const UAethelnObservabilitySubsystem& Changed)
+		{
+			if (&Changed == Subsystem)
+			{
+				++Changes;
+			}
+		});
 
 	FAethelnCrashContextSnapshot Sentinel;
 	Sentinel.RunId = TEXT("sentinel-run");
 	FAethelnCrashContextSnapshot Snapshot = Sentinel;
 	TestFalse(TEXT("Missing runtime and build context yields no snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
 	TestEqual(TEXT("Failed accessor leaves the caller's output unchanged"), Snapshot.RunId, Sentinel.RunId);
+	TestEqual(TEXT("Reading context never broadcasts a change"), Changes, 0);
 
 	TestTrue(
 		TEXT("Runtime context is accepted"),
@@ -442,10 +639,12 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 			TEXT("run-148"),
 			TEXT("instance-148"),
 			AethelnObservability::ExcludedIdentifier));
+	TestEqual(TEXT("Accepted runtime context broadcasts one change"), Changes, 1);
 	TestFalse(TEXT("Missing build context yields no snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
 	TestEqual(TEXT("Missing build context leaves output unchanged"), Snapshot.RunId, Sentinel.RunId);
 
 	Subsystem->ResetRuntimeContext();
+	TestEqual(TEXT("Runtime reset broadcasts one change"), Changes, 2);
 	FAethelnBuildIdentity Build;
 	Build.SourceRevision = TEXT("revision-148");
 	Build.BuildIdentity = TEXT("build-148");
@@ -455,6 +654,7 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 	FAethelnNetworkProfile Profile;
 	Profile.ProfileId = TEXT("network-profile.test");
 	TestTrue(TEXT("Build context is accepted"), Subsystem->SetBuildContext(Build, Profile));
+	TestEqual(TEXT("Accepted build context broadcasts one change"), Changes, 3);
 	TestFalse(TEXT("Missing runtime context yields no snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
 	TestEqual(TEXT("Missing runtime context leaves output unchanged"), Snapshot.RunId, Sentinel.RunId);
 
@@ -478,6 +678,7 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 	TestTrue(TEXT("Snapshot remains available after caller mutation"), Subsystem->TryGetCrashContextSnapshot(Fresh));
 	TestEqual(TEXT("Caller mutation cannot reach subsystem state"), Fresh.RunId, FString(TEXT("run-148")));
 
+	const int32 ChangesBeforeRejected = Changes;
 	const FString Oversized = FString::ChrN(AethelnObservability::MaxIdentifierLength + 1, TCHAR('x'));
 	TestFalse(
 		TEXT("Invalid runtime replacement is rejected"),
@@ -488,6 +689,7 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 	FAethelnNetworkProfile InvalidProfile = Profile;
 	InvalidProfile.SchemaVersion = AethelnNetworkSpike::NetworkProfileSchemaVersion + 1;
 	TestFalse(TEXT("Invalid profile replacement is rejected"), Subsystem->SetBuildContext(Build, InvalidProfile));
+	TestEqual(TEXT("Rejected replacements never broadcast a change"), Changes, ChangesBeforeRejected);
 	TestTrue(TEXT("Prior accepted context still yields a snapshot"), Subsystem->TryGetCrashContextSnapshot(Fresh));
 	TestEqual(TEXT("Invalid runtime replacement preserves the prior run"), Fresh.RunId, FString(TEXT("run-148")));
 	TestEqual(TEXT("Invalid runtime replacement preserves the prior instance"), Fresh.ServerInstanceId, FString(TEXT("instance-148")));
@@ -501,10 +703,20 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 	TestTrue(
 		TEXT("Runtime context is restored after reset"),
 		Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-149"), TEXT("instance-149"), AethelnObservability::ExcludedIdentifier));
+	const int32 ChangesBeforeBuildReset = Changes;
 	Subsystem->ResetBuildContext();
+	TestEqual(TEXT("Build reset broadcasts one change"), Changes, ChangesBeforeBuildReset + 1);
 	TestFalse(TEXT("Build reset cannot return stale identity"), Subsystem->TryGetCrashContextSnapshot(AfterReset));
 	TestEqual(TEXT("Build reset leaves output unchanged"), AfterReset.RunId, Sentinel.RunId);
+
+	TestTrue(TEXT("Build context is restored"), Subsystem->SetBuildContext(Build, Profile));
+	Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-150"), TEXT("instance-150"), TEXT("user@example.com"));
+	TestFalse(TEXT("A printable non-excluded runtime pseudonym never yields process-wide crash context"), Subsystem->TryGetCrashContextSnapshot(AfterReset));
+	TestEqual(TEXT("Rejected pseudonym leaves output unchanged"), AfterReset.RunId, Sentinel.RunId);
+
+	UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(ChangeHandle);
 	Subsystem->ResetRuntimeContext();
+	Subsystem->ResetBuildContext();
 	return true;
 }
 
@@ -679,6 +891,493 @@ bool FAethelnObservabilitySubsystemSinkTest::RunTest(const FString& Parameters)
 	Subsystem->EmitMetric(FAethelnMetricSample());
 	TestTrue(TEXT("Reset default dispatch drains"), Subsystem->WaitForIdleForTests());
 	TestTrue(TEXT("Reset restores bounded structured-log emission"), true);
+	return true;
+}
+
+namespace AethelnCrashContextTests
+{
+	using namespace AethelnCrashContext;
+
+	/** Restores only the crash GameData keys the crash-context owner writes. */
+	class FScopedOwnedCrashKeyRestore
+	{
+	public:
+		FScopedOwnedCrashKeyRestore()
+		{
+			Save(StateKey);
+			for (const TCHAR* Key : IdentityKeys)
+			{
+				Save(Key);
+			}
+		}
+
+		~FScopedOwnedCrashKeyRestore()
+		{
+			for (const TPair<FString, TOptional<FString>>& Entry : Saved)
+			{
+				FGenericCrashContext::SetGameData(Entry.Key, Entry.Value.IsSet() ? Entry.Value.GetValue() : FString());
+			}
+		}
+
+	private:
+		void Save(const TCHAR* Key)
+		{
+			const FString* Value = FGenericCrashContext::GetGameData().Find(Key);
+			Saved.Add(Key, Value != nullptr ? TOptional<FString>(*Value) : TOptional<FString>());
+		}
+
+		TMap<FString, TOptional<FString>> Saved;
+	};
+
+	FString ReadKey(const TCHAR* Key)
+	{
+		const FString* Value = FGenericCrashContext::GetGameData().Find(Key);
+		return Value != nullptr ? *Value : FString();
+	}
+
+	bool HasAnyIdentityKey()
+	{
+		for (const TCHAR* Key : IdentityKeys)
+		{
+			if (FGenericCrashContext::GetGameData().Find(Key) != nullptr)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool AnyOwnedKeyContains(const FString& Needle)
+	{
+		for (const TCHAR* Key : IdentityKeys)
+		{
+			if (ReadKey(Key).Contains(Needle))
+			{
+				return true;
+			}
+		}
+		return ReadKey(StateKey).Contains(Needle);
+	}
+
+	FAethelnCrashContextSnapshot MakeSnapshot(const TCHAR* Suffix)
+	{
+		FAethelnBuildIdentity Build;
+		Build.SourceRevision = FString::Printf(TEXT("revision-%s"), Suffix);
+		Build.BuildIdentity = FString::Printf(TEXT("build-%s"), Suffix);
+		Build.BuildConfiguration = FString::Printf(TEXT("configuration-%s"), Suffix);
+		Build.EngineRevision = FString::Printf(TEXT("engine-%s"), Suffix);
+		Build.ToolchainIdentity = FString::Printf(TEXT("toolchain-%s"), Suffix);
+		FAethelnNetworkProfile Profile;
+		Profile.ProfileId = FString::Printf(TEXT("network-profile.%s"), Suffix);
+		FAethelnCrashContextSnapshot Snapshot;
+		FAethelnCrashContextSnapshot::TryMakeValidated(
+			Build,
+			Profile,
+			EAethelnFlowKind::PrototypeAuthority,
+			FString::Printf(TEXT("run-%s"), Suffix),
+			FString::Printf(TEXT("instance-%s"), Suffix),
+			AethelnObservability::ExcludedIdentifier,
+			Snapshot);
+		return Snapshot;
+	}
+
+	FAethelnBuildIdentity MakeBuild(const TCHAR* BuildIdentity)
+	{
+		FAethelnBuildIdentity Build;
+		Build.SourceRevision = TEXT("revision-owner");
+		Build.BuildIdentity = BuildIdentity;
+		Build.BuildConfiguration = TEXT("Development");
+		Build.EngineRevision = TEXT("5.8.1");
+		Build.ToolchainIdentity = TEXT("toolchain-owner");
+		return Build;
+	}
+
+	/** Game world plus owning game instance, created and destroyed by the test. */
+	struct FTestGameWorld
+	{
+		UWorld* World = nullptr;
+		UGameInstance* GameInstance = nullptr;
+		UAethelnObservabilitySubsystem* Subsystem = nullptr;
+
+		bool Create(const TCHAR* RunId, const TCHAR* InstanceId)
+		{
+			World = UWorld::CreateWorld(EWorldType::Game, false);
+			if (World == nullptr || GEngine == nullptr)
+			{
+				return false;
+			}
+			FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+			GameInstance = NewObject<UGameInstance>(GEngine);
+			WorldContext.OwningGameInstance = GameInstance;
+			World->SetGameInstance(GameInstance);
+			WorldContext.SetCurrentWorld(World);
+			GameInstance->Init();
+			Subsystem = GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>();
+			FAethelnNetworkProfile Profile;
+			Profile.ProfileId = TEXT("network-profile.owner");
+			return Subsystem != nullptr
+				&& Subsystem->SetRuntimeContext(
+					EAethelnFlowKind::PrototypeAuthority,
+					RunId,
+					InstanceId,
+					AethelnObservability::ExcludedIdentifier)
+				&& Subsystem->SetBuildContext(MakeBuild(TEXT("build-owner")), Profile);
+		}
+
+		void Destroy()
+		{
+			if (GameInstance != nullptr)
+			{
+				GameInstance->Shutdown();
+			}
+			if (World != nullptr)
+			{
+				World->DestroyWorld(false);
+				if (GEngine != nullptr)
+				{
+					GEngine->DestroyWorldContext(World);
+				}
+			}
+			World = nullptr;
+			GameInstance = nullptr;
+			Subsystem = nullptr;
+		}
+	};
+}
+
+// Crash-context tests own their FAethelnCrashContextOwner instead of broadcasting to a
+// live module, so a Server target's own map world cannot make them ambiguous.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextRegistrationTest,
+	"Aetheln.Observability.CrashContext.Registration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+
+	TArray<TPair<FString, FString>> Writes;
+	TSet<FString> OwnedKeys;
+	OwnedKeys.Add(StateKey);
+	for (const TCHAR* Key : IdentityKeys)
+	{
+		OwnedKeys.Add(Key);
+	}
+	const FDelegateHandle WriteHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&Writes, &OwnedKeys](const FString& Key, const FString& Value)
+		{
+			if (OwnedKeys.Contains(Key))
+			{
+				Writes.Emplace(Key, Value);
+			}
+		});
+
+	TestEqual(TEXT("State key is stable"), FString(StateKey), FString(TEXT("AethelnCrashContextState")));
+	TestEqual(TEXT("Crash context owns exactly thirteen identity keys"), static_cast<int32>(UE_ARRAY_COUNT(IdentityKeys)), 13);
+
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	TestEqual(TEXT("Initialization claims no run"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("Initialization leaves no identity key"), HasAnyIdentityKey());
+
+	const FAethelnCrashContextSnapshot First = MakeSnapshot(TEXT("first"));
+	TestTrue(TEXT("First fixture snapshot is bounded"), First.IsBounded());
+	Writes.Reset();
+	Owner.Register(&First);
+	TestTrue(TEXT("First registration writes state, thirteen values, and state"), Writes.Num() == 15);
+	if (Writes.Num() == 15)
+	{
+		TestEqual(TEXT("Registration begins with the updating state"), Writes[0].Key, FString(StateKey));
+		TestEqual(TEXT("Registration begins in updating"), Writes[0].Value, FString(TEXT("updating")));
+		TestEqual(TEXT("Registration ends with the state key"), Writes.Last().Key, FString(StateKey));
+		TestEqual(TEXT("Registration ends in active"), Writes.Last().Value, FString(TEXT("active")));
+	}
+	TestEqual(TEXT("Active state is registered"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Schema version is registered"), ReadKey(SchemaVersionKey), FString(TEXT("1")));
+	TestEqual(TEXT("Source revision is registered"), ReadKey(SourceRevisionKey), First.SourceRevision);
+	TestEqual(TEXT("Build identity is registered"), ReadKey(BuildIdentityKey), First.BuildIdentity);
+	TestEqual(TEXT("Build configuration is registered"), ReadKey(BuildConfigurationKey), First.BuildConfiguration);
+	TestEqual(TEXT("Engine revision is registered"), ReadKey(EngineRevisionKey), First.EngineRevision);
+	TestEqual(TEXT("Toolchain identity is registered"), ReadKey(ToolchainIdentityKey), First.ToolchainIdentity);
+	TestEqual(TEXT("Network-profile schema is registered"), ReadKey(NetworkProfileSchemaKey), FString(AethelnNetworkSpike::NetworkProfileSchemaId));
+	TestEqual(TEXT("Network-profile version is registered"), ReadKey(NetworkProfileVersionKey), FString(TEXT("1")));
+	TestEqual(TEXT("Network-profile identity is registered"), ReadKey(NetworkProfileIdKey), First.NetworkProfileId);
+	TestEqual(TEXT("Flow kind is registered"), ReadKey(FlowKindKey), FString(TEXT("prototype-authority")));
+	TestEqual(TEXT("Run is registered"), ReadKey(RunIdKey), First.RunId);
+	TestEqual(TEXT("Server instance is registered"), ReadKey(ServerInstanceKey), First.ServerInstanceId);
+	TestEqual(TEXT("Connection pseudonym is the excluded marker"), ReadKey(ConnectionPseudonymKey), FString(AethelnObservability::ExcludedIdentifier));
+
+	const FAethelnCrashContextSnapshot Second = MakeSnapshot(TEXT("second"));
+	Owner.Register(&Second);
+	TestEqual(TEXT("Valid replacement is active"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Valid replacement registers the new run"), ReadKey(RunIdKey), Second.RunId);
+	TestFalse(TEXT("Valid replacement leaves no prior unique value"), AnyOwnedKeyContains(TEXT("first")));
+
+	FAethelnCrashContextSnapshot Invalid = MakeSnapshot(TEXT("third"));
+	Invalid.RunId = FString::Printf(TEXT("run%cthird"), TCHAR(0x2028));
+	TestFalse(TEXT("Tampered snapshot is not bounded"), Invalid.IsBounded());
+	Owner.Register(&Invalid);
+	TestEqual(TEXT("Invalid snapshot marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("Invalid snapshot clears every identity key"), HasAnyIdentityKey());
+	TestFalse(TEXT("Invalid snapshot never partially overwrites"), AnyOwnedKeyContains(TEXT("third")));
+	TestFalse(TEXT("Invalid snapshot leaves no prior value"), AnyOwnedKeyContains(TEXT("second")));
+
+	FAethelnCrashContextSnapshot Personal = MakeSnapshot(TEXT("fourth"));
+	Personal.ConnectionPseudonym = TEXT("user@example.com");
+	Owner.Register(&Personal);
+	TestEqual(TEXT("A non-excluded pseudonym marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("A non-excluded pseudonym never reaches crash GameData"), AnyOwnedKeyContains(TEXT("example.com")));
+
+	Owner.Register(&First);
+	Owner.Register(nullptr);
+	TestEqual(TEXT("Missing snapshot marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("Missing snapshot clears every identity key"), HasAnyIdentityKey());
+
+	Owner.Register(&First);
+	Owner.MarkStale();
+	TestEqual(TEXT("Stale context is explicit"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Stale context clears every identity key"), HasAnyIdentityKey());
+	Owner.Register(&Second);
+	TestEqual(TEXT("A later valid owner replaces stale context"), ReadKey(StateKey), FString(TEXT("active")));
+
+	Owner.MarkAmbiguous();
+	TestEqual(TEXT("Ambiguous ownership is explicit"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestFalse(TEXT("Ambiguous ownership clears every identity key"), HasAnyIdentityKey());
+	Owner.Register(&First);
+	TestEqual(TEXT("A later valid owner replaces ambiguous context"), ReadKey(StateKey), FString(TEXT("active")));
+
+	Owner.Shutdown();
+	TestEqual(TEXT("Shutdown marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Shutdown clears every identity key"), HasAnyIdentityKey());
+
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(WriteHandle);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextWorldOwnershipTest,
+	"Aetheln.Observability.CrashContext.WorldOwnership",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextWorldOwnershipTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+
+	FTestGameWorld First;
+	FTestGameWorld Second;
+	const bool bCreated = First.Create(TEXT("run-world-alpha"), TEXT("instance-world-alpha"))
+		&& Second.Create(TEXT("run-world-beta"), TEXT("instance-world-beta"));
+	TestTrue(TEXT("Two independent game worlds were created"), bCreated);
+	if (!bCreated)
+	{
+		First.Destroy();
+		Second.Destroy();
+		return false;
+	}
+
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	TestTrue(TEXT("The first world is new"), Owner.TrackWorldTick(First.World));
+	TestEqual(TEXT("A single observable world registers active context"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("The single owner supplies the run"), ReadKey(RunIdKey), FString(TEXT("run-world-alpha")));
+	TestEqual(TEXT("The single owner supplies the server instance"), ReadKey(ServerInstanceKey), FString(TEXT("instance-world-alpha")));
+	TestEqual(TEXT("Process-wide context keeps the connection excluded"), ReadKey(ConnectionPseudonymKey), FString(AethelnObservability::ExcludedIdentifier));
+
+	TestTrue(TEXT("The second world is new"), Owner.TrackWorldTick(Second.World));
+	TestEqual(TEXT("Two observable worlds mark the context ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestFalse(TEXT("Ambiguous context clears every identity key"), HasAnyIdentityKey());
+	TestFalse(TEXT("A later tick is not a new world"), Owner.TrackWorldTick(First.World));
+	TestFalse(TEXT("Ambiguous context never attributes the first run"), AnyOwnedKeyContains(TEXT("alpha")));
+	TestFalse(TEXT("Ambiguous context never attributes the second run"), AnyOwnedKeyContains(TEXT("beta")));
+
+	Owner.EndTracking(First.World);
+	TestEqual(TEXT("World cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("World cleanup clears every identity key"), HasAnyIdentityKey());
+	TestEqual(TEXT("One world remains tracked"), Owner.NumTrackedWorlds(), 1);
+
+	Owner.TrackWorldTick(Second.World);
+	TestEqual(TEXT("A later single owner replaces stale context"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("The later single owner supplies its run"), ReadKey(RunIdKey), FString(TEXT("run-world-beta")));
+	TestFalse(TEXT("The cleaned-up owner leaves no identity"), AnyOwnedKeyContains(TEXT("alpha")));
+
+	Owner.EndTracking(Second.World);
+	TestEqual(TEXT("Final cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Final cleanup clears every identity key"), HasAnyIdentityKey());
+
+	Owner.Shutdown();
+	First.Destroy();
+	Second.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextAcceptedChangeTest,
+	"Aetheln.Observability.CrashContext.FollowsAcceptedChanges",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextAcceptedChangeTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-change-first"), TEXT("instance-change-first")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	UAethelnObservabilitySubsystem& Subsystem = *World.Subsystem;
+	FAethelnNetworkProfile Profile;
+	Profile.ProfileId = TEXT("network-profile.change");
+
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	TestEqual(TEXT("The sole world registers active context"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("The first run is registered"), ReadKey(RunIdKey), FString(TEXT("run-change-first")));
+
+	TestTrue(
+		TEXT("Valid runtime replacement is accepted"),
+		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-second"), TEXT("instance-change-second"), AethelnObservability::ExcludedIdentifier));
+	TestEqual(TEXT("Runtime replacement refreshes before another tick"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Runtime replacement registers the new run"), ReadKey(RunIdKey), FString(TEXT("run-change-second")));
+	TestEqual(TEXT("Runtime replacement registers the new instance"), ReadKey(ServerInstanceKey), FString(TEXT("instance-change-second")));
+	TestFalse(TEXT("Runtime replacement leaves no prior run"), AnyOwnedKeyContains(TEXT("change-first")));
+
+	const FString Oversized = FString::ChrN(AethelnObservability::MaxIdentifierLength + 1, TCHAR('x'));
+	TestFalse(
+		TEXT("Invalid runtime replacement is rejected"),
+		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-third"), Oversized, AethelnObservability::ExcludedIdentifier));
+	TestEqual(TEXT("Invalid runtime replacement keeps the registration active"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Invalid runtime replacement keeps the last valid run"), ReadKey(RunIdKey), FString(TEXT("run-change-second")));
+	TestFalse(TEXT("Invalid runtime replacement never reaches crash GameData"), AnyOwnedKeyContains(TEXT("change-third")));
+
+	const bool bPrintableAccepted = Subsystem.SetRuntimeContext(
+		EAethelnFlowKind::PrototypeAuthority,
+		TEXT("run-change-personal"),
+		TEXT("instance-change-personal"),
+		TEXT("user@example.com"));
+	TestFalse(TEXT("Printable personal text never reaches crash GameData"), AnyOwnedKeyContains(TEXT("example.com")));
+	if (bPrintableAccepted)
+	{
+		TestEqual(TEXT("A non-excluded process pseudonym marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
+		TestFalse(TEXT("A non-excluded process pseudonym clears every identity key"), HasAnyIdentityKey());
+	}
+
+	TestTrue(
+		TEXT("Valid runtime context is restored"),
+		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-fourth"), TEXT("instance-change-fourth"), AethelnObservability::ExcludedIdentifier));
+	TestEqual(TEXT("Restored runtime context is active before another tick"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Restored runtime context registers its run"), ReadKey(RunIdKey), FString(TEXT("run-change-fourth")));
+
+	Subsystem.ResetRuntimeContext();
+	TestEqual(TEXT("Runtime reset marks the context missing before another tick"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("Runtime reset clears every identity key"), HasAnyIdentityKey());
+	TestTrue(
+		TEXT("Runtime context is set after reset"),
+		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-fifth"), TEXT("instance-change-fifth"), AethelnObservability::ExcludedIdentifier));
+	TestEqual(TEXT("Runtime context after reset is active"), ReadKey(StateKey), FString(TEXT("active")));
+
+	TestTrue(TEXT("Valid build replacement is accepted"), Subsystem.SetBuildContext(MakeBuild(TEXT("build-change-replacement")), Profile));
+	TestEqual(TEXT("Build replacement registers before another tick"), ReadKey(BuildIdentityKey), FString(TEXT("build-change-replacement")));
+	TestEqual(TEXT("Build replacement registers the new profile"), ReadKey(NetworkProfileIdKey), FString(TEXT("network-profile.change")));
+	TestEqual(TEXT("Build replacement keeps the registration active"), ReadKey(StateKey), FString(TEXT("active")));
+	FAethelnBuildIdentity InvalidBuild = MakeBuild(TEXT("build-change-invalid"));
+	InvalidBuild.BuildIdentity = FString::Printf(TEXT("build%cunsafe"), TCHAR(0x2029));
+	TestFalse(TEXT("Invalid build replacement is rejected"), Subsystem.SetBuildContext(InvalidBuild, Profile));
+	TestEqual(TEXT("Invalid build replacement keeps the last valid build"), ReadKey(BuildIdentityKey), FString(TEXT("build-change-replacement")));
+	TestEqual(TEXT("Invalid build replacement keeps the registration active"), ReadKey(StateKey), FString(TEXT("active")));
+
+	Subsystem.ResetBuildContext();
+	TestEqual(TEXT("Build reset marks the context missing before another tick"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("Build reset clears every identity key"), HasAnyIdentityKey());
+	TestTrue(TEXT("Build context is restored"), Subsystem.SetBuildContext(MakeBuild(TEXT("build-change-restored")), Profile));
+	TestEqual(TEXT("Restored build context is active"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Restored build context registers the run"), ReadKey(RunIdKey), FString(TEXT("run-change-fifth")));
+
+	Owner.EndTracking(World.World);
+	TestEqual(TEXT("Cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestTrue(
+		TEXT("Changes after cleanup are accepted by the subsystem"),
+		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-after"), TEXT("instance-change-after"), AethelnObservability::ExcludedIdentifier));
+	TestEqual(TEXT("An untracked world cannot re-register crash context"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("An untracked world leaves no identity"), HasAnyIdentityKey());
+
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextWorldCountTest,
+	"Aetheln.Observability.CrashContext.CountsWorldsWithoutSubsystem",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextWorldCountTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+
+	FTestGameWorld Valid;
+	UWorld* Bare = UWorld::CreateWorld(EWorldType::Game, false);
+	const bool bCreated = Valid.Create(TEXT("run-count-alpha"), TEXT("instance-count-alpha")) && Bare != nullptr;
+	TestTrue(TEXT("A subsystem-owning world and a bare world were created"), bCreated);
+	if (!bCreated)
+	{
+		Valid.Destroy();
+		if (Bare != nullptr)
+		{
+			Bare->DestroyWorld(false);
+		}
+		return false;
+	}
+	TestNull(TEXT("The bare observable world has no observability subsystem"), FindObservabilitySubsystem(Bare));
+
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(Valid.World);
+	TestEqual(TEXT("The sole world registers active context"), ReadKey(StateKey), FString(TEXT("active")));
+
+	TestTrue(TEXT("A world without a subsystem is counted"), Owner.TrackWorldTick(Bare));
+	TestEqual(TEXT("Two worlds are tracked"), Owner.NumTrackedWorlds(), 2);
+	TestEqual(TEXT("A second world without a subsystem marks the context ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestFalse(TEXT("Ambiguous context clears every identity key"), HasAnyIdentityKey());
+	Owner.TrackWorldTick(Valid.World);
+	TestTrue(
+		TEXT("A change while ambiguous is accepted by the subsystem"),
+		Valid.Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-count-beta"), TEXT("instance-count-beta"), AethelnObservability::ExcludedIdentifier));
+	TestEqual(TEXT("Ambiguous context stays ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestFalse(TEXT("Ambiguous context never attributes the first run"), AnyOwnedKeyContains(TEXT("count-alpha")));
+	TestFalse(TEXT("Ambiguous context never attributes a changed run"), AnyOwnedKeyContains(TEXT("count-beta")));
+
+	Owner.EndTracking(Bare);
+	TestEqual(TEXT("Bare-world cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	Owner.TrackWorldTick(Valid.World);
+	TestEqual(TEXT("The remaining valid world recovers active context"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("The recovered context registers the current run"), ReadKey(RunIdKey), FString(TEXT("run-count-beta")));
+
+	Owner.TrackWorldTick(Bare);
+	TestEqual(TEXT("A re-entering bare world marks the context ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	Owner.EndTracking(Valid.World);
+	TestEqual(TEXT("Valid-world cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	Owner.TrackWorldTick(Bare);
+	TestEqual(TEXT("A sole world without a subsystem marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("A sole world without a subsystem leaves no identity"), HasAnyIdentityKey());
+
+	Owner.EndTracking(Bare);
+	TestEqual(TEXT("Final cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestEqual(TEXT("No world remains tracked"), Owner.NumTrackedWorlds(), 0);
+
+	Owner.Shutdown();
+	Valid.Destroy();
+	Bare->DestroyWorld(false);
 	return true;
 }
 #endif

@@ -478,7 +478,7 @@ struct GAMENET_API FAethelnCrashContextSnapshot
 	EAethelnFlowKind FlowKind = EAethelnFlowKind::PrototypeAuthority;
 	FString RunId;
 	FString ServerInstanceId;
-	/** Authority-owned pseudonym or the literal excluded marker. */
+	/** Crash context is process-wide, so this is always the literal excluded marker. */
 	FString ConnectionPseudonym;
 
 	bool IsBounded() const
@@ -497,6 +497,7 @@ struct GAMENET_API FAethelnCrashContextSnapshot
 			&& ObservabilitySchemaVersion == AethelnObservability::SchemaVersion
 			&& NetworkProfileSchemaId == AethelnNetworkSpike::NetworkProfileSchemaId
 			&& NetworkProfileSchemaVersion == AethelnNetworkSpike::NetworkProfileSchemaVersion
+			&& ConnectionPseudonym.Equals(AethelnObservability::ExcludedIdentifier, ESearchCase::CaseSensitive)
 			&& IsKnown(FlowKind);
 	}
 

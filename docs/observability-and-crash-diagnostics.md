@@ -132,8 +132,8 @@ an external service.
 ### Bounded crash build and correlation context
 
 Issue [#148](https://github.com/ShayShimoni/aetheln-online/issues/148) adds a
-closed `FAethelnCrashContextSnapshot` that GameServer registers with Unreal's
-crash context before failure. The snapshot is built only from the already
+closed `FAethelnCrashContextSnapshot` that GameServer's crash-context owner
+registers with Unreal's crash context before failure. The snapshot is built only from the already
 validated runtime correlation and build/profile contexts owned by
 `UAethelnObservabilitySubsystem`. The subsystem exposes it through
 `TryGetCrashContextSnapshot`, which runs only on the game thread, requires both
@@ -141,7 +141,9 @@ contexts, returns a validated copy rather than a reference to subsystem state,
 and leaves the caller's output unchanged on failure. An invalid runtime,
 build, or profile replacement is rejected before it reaches the subsystem, so
 the prior accepted context remains the snapshot source; a reset context yields
-no snapshot.
+no snapshot. After every accepted runtime or build/profile change or reset, the
+subsystem broadcasts `OnCrashContextChanged` on the game thread; a rejected
+change never broadcasts.
 
 Each value is written to an individual, stable `FGenericCrashContext` GameData
 key. There is no free-form payload.
@@ -163,7 +165,7 @@ key. There is no free-form payload.
 | `AethelnFlowKind` | Closed flow kind, for example `prototype-authority`. |
 | `AethelnRunId` | Runtime run identity. |
 | `AethelnServerInstance` | Runtime server-instance identity. |
-| `AethelnConnectionPseudonym` | The process default authority-owned pseudonym. The dedicated server registers the literal `excluded`. |
+| `AethelnConnectionPseudonym` | Always the literal `excluded`: crash context is process-wide and never carries a connection identity. |
 
 Every identifier must be non-empty and pass the existing length bound and
 control-character, line-separator, and paragraph-separator rejection. The flow
@@ -171,28 +173,53 @@ kind must be a known closed value, and the observability and network-profile
 schema identity and version must match their constants. Explicit `unknown`
 provenance and `network-profile.unset` are valid registered values: they mean
 the runner did not supply that identity, not that registration is absent.
-Unset network numerics are never registered.
+Unset network numerics are never registered. The connection pseudonym must
+equal `excluded` exactly (case-sensitive); any other value, including a
+printable per-connection pseudonym or personal text such as an email address,
+makes the snapshot invalid, so the state becomes `missing`.
 
 The snapshot excludes activation and ability identities, event sequence,
 maps, metadata bags, arbitrary labels, paths, raw commands or arguments,
 payloads, account or character identities, credentials, and unrestricted
-text. GameServer never reads the command line for crash registration.
+text. The system-error callback never reads the command line.
+
+Value provenance: `AethelnBuildConfiguration` and `AethelnEngineRevision` come
+from the engine (`FApp::GetBuildConfiguration` and `FEngineVersion`). Unless an
+earlier authority path already set the context, GameServer seeds the run,
+source revision, build identity, toolchain identity, and network-profile
+identity from the `-AethelnRunId=`, `-AethelnSourceRevision=`,
+`-AethelnBuildIdentity=`, `-AethelnToolchainIdentity=`, and
+`-AethelnProfileId=` launch arguments, falling back to `run-local`, `unknown`,
+and `network-profile.unset`. The server process cannot verify these
+caller-supplied values; their content trust rests on the launcher, such as the
+packaged authority runner that binds them to build provenance and the network
+profile registry. Character validation bounds these values but does not prove they are free of personal or secret text.
+Launchers must pass only generated run identities and build provenance values.
 
 Registration transitions:
 
 - Module startup keeps the existing schema and `module-started` lifecycle keys,
   sets state `missing`, and removes every identity key without claiming a run.
-- The first tick of an observable world configures context, sets lifecycle
-  `world-running`, and refreshes crash context. With exactly one observable
-  world and a valid snapshot, state becomes `updating`, all thirteen identity
-  keys are written, and state becomes `active`.
-- A valid replacement follows the same `updating`-to-`active` sequence and
-  overwrites every identity key, so no prior run, build, or profile value
-  remains.
+- The first tick of an observable Game or PIE world counts that world before
+  its observability subsystem is looked up, configures context when the
+  subsystem exists, sets lifecycle `world-running`, and refreshes crash
+  context. With exactly one observable world and a valid snapshot, state
+  becomes `updating`, all thirteen identity keys are written, and state
+  becomes `active`.
+- An accepted runtime or build/profile change or reset on the sole tracked
+  world's game instance refreshes crash context immediately, without waiting
+  for another world tick. A valid replacement follows the same
+  `updating`-to-`active` sequence and overwrites every identity key, so no
+  prior run, build, or profile value remains. A reset sets `missing`. A
+  rejected replacement changes nothing, so the last valid registration stays
+  `active`.
 - A missing or invalid snapshot sets state `missing` and removes every
-  identity key. It never partially overwrites a valid registration.
-- When more than one observable world is tracked, state becomes `ambiguous`
-  and every identity key is removed. The server never selects one world.
+  identity key. It never partially overwrites a valid registration. A sole
+  observable world without an observability subsystem is `missing`.
+- When more than one observable world is tracked, including a world without an
+  observability subsystem, state becomes `ambiguous` and every identity key is
+  removed. Context changes are ignored while ambiguous. The server never
+  selects one world.
 - World cleanup and module shutdown set state `stale` and remove every identity
   key. Lifecycle transitions remain `world-running` or `controlled-shutdown`
   after cleanup, and `module-stopped` at shutdown.
@@ -205,7 +232,7 @@ Registration transitions:
   provider, network, or file I/O, wait on telemetry, or alter gameplay truth.
 
 The state key is written before identity keys are removed and after they are
-written, so an interrupted update never reads as `active`. GameServer removes
+written, so an interrupted update never reads as `active`. The owner removes
 only its owned keys with `FGenericCrashContext::SetGameData(Key, TEXT(""))` and
 never calls `FGenericCrashContext::ResetGameData`. A destroyed world that was
 never cleaned up still counts as tracked, so the process stays `ambiguous`
@@ -255,8 +282,21 @@ Focused Unreal automation covers schema/version stability, bounded correlation,
 build/profile attachment, public/internal separation, sink capacity and
 failure, GameInstance ownership, authority outcome invariance, representative
 rejection families, server health metrics, crash-context keys, the closed
-crash-context snapshot, registration state transitions, multi-world
-ambiguity, and the lifecycle-only system-error handler.
+crash-context snapshot, registration state transitions, immediate refresh after
+accepted context changes, multi-world ambiguity including worlds without a
+subsystem, the excluded process pseudonym, and the lifecycle-only system-error
+handler.
+
+Crash-context ownership (`FAethelnCrashContextOwner`: the fourteen crash-context
+keys, the closed states, observable-world counting, and accepted-change
+refresh) lives in GameNet, which both `AethelnOnlineEditor.Target.cs` and
+`AethelnOnlineServer.Target.cs` list. Its `Aetheln.Observability.CrashContext.*`
+tests create their own owner and worlds rather than broadcasting to the loaded
+GameServer module, so a server's own map world cannot make them ambiguous; they
+declare `EditorContext | ServerContext`. GameServer keeps only the lifecycle
+keys, context seeding, and the system-error handler; its
+`Aetheln.Observability.Server.SystemErrorLifecycleOnly` test declares
+`EditorContext | ServerContext`.
 
 For a claim family whose gameplay system is not yet implemented, the opt-in
 packaged authority scenario provides a server-authoritative, fail-closed
