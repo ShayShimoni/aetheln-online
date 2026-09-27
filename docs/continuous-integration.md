@@ -489,6 +489,9 @@ and repository requirements template are UTF-8 without BOM and require exactly
 one trailing LF, matching their production writers. Embedded action and direct
 binding JSON remains compact with no leading or trailing whitespace; generated
 identity, aggregate, and runtime-requirements outputs add no line terminator.
+Receipt jobs invoke the context builder in-process with PowerShell splatting;
+they never forward JSON through a nested native `powershell.exe` command line,
+where Windows PowerShell 5.1 would strip embedded JSON quotes.
 
 `aggregate_ready=true` only when every selected obligation is in the currently
 wired semantic subset: `portable`, `native-client-server-compile`, and

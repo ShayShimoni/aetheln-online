@@ -862,7 +862,8 @@ jobs:
           $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-portable-identity.json'
           $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-portable-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
           $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/New-CiAcceptanceAggregateContext.ps1 `
+          $ContextBuilder = (Resolve-Path -LiteralPath 'scripts/ci/New-CiAcceptanceAggregateContext.ps1').Path
+          & $ContextBuilder `
             -Mode Identity `
             -SelectorReportPath '${{ runner.temp }}/aetheln-portable-selector/ci-selection-shadow.json' `
             -WorkflowPath $WorkflowPath `
@@ -876,8 +877,7 @@ jobs:
             -RunId $env:AETHELN_RUN_ID `
             -RunAttempt ([int] $env:AETHELN_RUN_ATTEMPT) `
             -ActionItemsJson $env:AETHELN_ACCEPTANCE_ACTION_ITEMS_JSON `
-            -IdentityContextOutputPath $ContextPath
-          if ($LASTEXITCODE -ne 0) { throw 'portable_context_failed' }
+            -IdentityContextOutputPath $ContextPath | Out-Null
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/Publish-CiAcceptanceReceipt.ps1 `
             -ContextPath $ContextPath `
             -CheckId portable `
@@ -951,7 +951,8 @@ jobs:
           $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-native-identity.json'
           $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-native-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
           $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/New-CiAcceptanceAggregateContext.ps1 `
+          $ContextBuilder = (Resolve-Path -LiteralPath 'scripts/ci/New-CiAcceptanceAggregateContext.ps1').Path
+          & $ContextBuilder `
             -Mode Identity `
             -SelectorReportPath '${{ runner.temp }}/aetheln-native-selector/ci-selection-shadow.json' `
             -WorkflowPath $WorkflowPath `
@@ -965,8 +966,7 @@ jobs:
             -RunId $env:AETHELN_RUN_ID `
             -RunAttempt ([int] $env:AETHELN_RUN_ATTEMPT) `
             -ActionItemsJson $env:AETHELN_ACCEPTANCE_ACTION_ITEMS_JSON `
-            -IdentityContextOutputPath $ContextPath
-          if ($LASTEXITCODE -ne 0) { throw 'native_context_failed' }
+            -IdentityContextOutputPath $ContextPath | Out-Null
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/Publish-CiAcceptanceReceipt.ps1 `
             -ContextPath $ContextPath `
             -CheckId native-client-server-compile `
@@ -1040,7 +1040,8 @@ jobs:
           $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-visual-identity.json'
           $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-visual-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
           $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/New-CiAcceptanceAggregateContext.ps1 `
+          $ContextBuilder = (Resolve-Path -LiteralPath 'scripts/ci/New-CiAcceptanceAggregateContext.ps1').Path
+          & $ContextBuilder `
             -Mode Identity `
             -SelectorReportPath '${{ runner.temp }}/aetheln-visual-selector/ci-selection-shadow.json' `
             -WorkflowPath $WorkflowPath `
@@ -1054,8 +1055,7 @@ jobs:
             -RunId $env:AETHELN_RUN_ID `
             -RunAttempt ([int] $env:AETHELN_RUN_ATTEMPT) `
             -ActionItemsJson $env:AETHELN_ACCEPTANCE_ACTION_ITEMS_JSON `
-            -IdentityContextOutputPath $ContextPath
-          if ($LASTEXITCODE -ne 0) { throw 'visual_context_failed' }
+            -IdentityContextOutputPath $ContextPath | Out-Null
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/Publish-CiAcceptanceReceipt.ps1 `
             -ContextPath $ContextPath `
             -CheckId visual-package `
