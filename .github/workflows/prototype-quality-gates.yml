@@ -585,7 +585,10 @@ jobs:
           if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) { throw 'engine_report_missing' }
           $Report = Get-Item -LiteralPath $ReportPath
           if ($Report.Length -le 0 -or $Report.Length -gt 4MB) { throw 'engine_report_size_invalid' }
-          $Digest = (Get-FileHash -LiteralPath $ReportPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $ReportStream = [IO.File]::OpenRead($ReportPath)
+          $Hasher = [Security.Cryptography.SHA256]::Create()
+          try { $Digest = ([BitConverter]::ToString($Hasher.ComputeHash($ReportStream))).Replace('-', '').ToLowerInvariant() }
+          finally { $Hasher.Dispose(); $ReportStream.Dispose() }
           $Utf8 = New-Object Text.UTF8Encoding $false
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "artifact_name=engine-runner-compile-report`nevidence_sha256=$Digest`nevidence_size_bytes=$($Report.Length)`n", $Utf8)
       - name: Upload engine-runner report
@@ -593,7 +596,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ steps.report_identity.outputs.artifact_name }}
+          name: engine-runner-compile-report
           path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json
           if-no-files-found: error
 

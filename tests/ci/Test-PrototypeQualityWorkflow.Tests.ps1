@@ -288,6 +288,7 @@ foreach ($RawProducer in @(
 	}
 	Assert-True ($Body -match '(?m)^        id: report_identity\r?$' -and $Body -match '(?m)^        id: report_artifact\r?$' -and $Body -match [regex]::Escape('artifact_name=' + $RawProducer.ArtifactName)) "$($RawProducer.Name) must bind the exact raw file before exposing the upload action outputs."
 }
+Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $TrustedCompile -match '\.ComputeHash\(\$ReportStream\)' -and $TrustedCompile -match '(?m)^          name: engine-runner-compile-report\r?$') 'The self-hosted compile report must use the portable .NET SHA-256 implementation and preserve its static artifact name even if binding fails.'
 
 # Package 3C receipt publishers are additive PR-only hosted jobs. Each consumes
 # the selector and exactly one raw producer through immutable artifact IDs,
