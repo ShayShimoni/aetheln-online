@@ -795,15 +795,33 @@ function Resolve-PerformanceContract([string] $Path) {
 		throw 'PerformanceContract must use aetheln.performance-capture-contract schema version 1.'
 	}
 	$Capture = $Contract.capture
-	Assert-ClosedProperty -Value $Capture -Expected @('source_revision','build','toolchain','hardware','topology','environment','map','duration_seconds','actor_mix','scenario_id','profile_id','evidence_references','measurement_domains','sampling') -Name 'PerformanceContract capture'
+	Assert-ClosedProperty -Value $Capture -Expected @('source_revision','build','toolchain','hardware','topology','environment','map','duration_seconds','actor_mix','scenario_id','profile_id','network_config_identity','scenario_version','profile_version','profile_arguments_sha256','evidence_references','measurement_domains','sampling') -Name 'PerformanceContract capture'
 	foreach ($IdentityEntry in @(
 		@('source_revision', $SourceRevision), @('build', $BuildIdentity), @('toolchain', $ToolchainIdentity),
 		@('hardware', $HardwareIdentity), @('topology', $TopologyIdentity), @('environment', $Environment),
-		@('map', $ServerMap), @('actor_mix', $ActorMixIdentity), @('scenario_id', $ScenarioId), @('profile_id', $ProfileId)
+		@('map', $ServerMap), @('actor_mix', $ActorMixIdentity), @('scenario_id', $ScenarioId), @('profile_id', $ProfileId),
+		@('network_config_identity', $NetworkConfigIdentity)
 	)) {
 		Assert-JsonString -Name "PerformanceContract capture '$($IdentityEntry[0])'" -Value $Capture.($IdentityEntry[0])
 		if ([string] $Capture.($IdentityEntry[0]) -cne [string] $IdentityEntry[1]) {
 			throw "PerformanceContract capture '$($IdentityEntry[0])' must equal the exact correlated runner identity."
+		}
+	}
+	foreach ($VersionEntry in @(
+		@('scenario_version', $ScenarioVersion),
+		@('profile_version', $ProfileVersion),
+		@('profile_arguments_sha256', $ProfileArgumentsSha256)
+	)) {
+		$FieldName = [string] $VersionEntry[0]
+		$ExpectedValue = $VersionEntry[1]
+		$ActualValue = $Capture.$FieldName
+		if ($null -eq $ExpectedValue) {
+			if ($null -ne $ActualValue) { throw "PerformanceContract capture '$FieldName' must be null when versioned scenario/profile contracts are omitted." }
+		} else {
+			Assert-JsonString -Name "PerformanceContract capture '$FieldName'" -Value $ActualValue
+			if ([string] $ActualValue -cne [string] $ExpectedValue) {
+				throw "PerformanceContract capture '$FieldName' must equal the exact selected scenario/profile identity."
+			}
 		}
 	}
 	if (($Capture.duration_seconds -isnot [int] -and $Capture.duration_seconds -isnot [long]) -or [long] $Capture.duration_seconds -ne $DurationSeconds) {
@@ -826,7 +844,7 @@ function Resolve-PerformanceContract([string] $Path) {
 	foreach ($DomainName in $RequiredDomains.Keys) {
 		$DeclaredMetrics = @($Capture.measurement_domains.$DomainName)
 		$ExpectedMetrics = @($RequiredDomains[$DomainName])
-		$DomainFailure = "PerformanceContract measurement_domains '$DomainName' must declare exactly the canonical ordered metrics."
+		$DomainFailure = "PerformanceContract measurement_domains '$DomainName' must declare exactly the version-1 network-authority-runner ordered metrics."
 		if ($DeclaredMetrics.Count -ne $ExpectedMetrics.Count) { throw $DomainFailure }
 		for ($Index = 0; $Index -lt $ExpectedMetrics.Count; $Index++) {
 			if ($DeclaredMetrics[$Index] -isnot [string] -or [string] $DeclaredMetrics[$Index] -cne $ExpectedMetrics[$Index]) { throw $DomainFailure }

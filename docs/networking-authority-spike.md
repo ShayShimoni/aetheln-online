@@ -179,8 +179,12 @@ schema `aetheln.performance-capture-contract` version 1 containing exactly one
 The `capture` object binds future performance evidence to the exact run
 identity. Its `source_revision`, `build`, `toolchain`, `hardware`, `topology`,
 `environment`, `map`, `duration_seconds`, `actor_mix`, `scenario_id`, and
-`profile_id` values must equal the corresponding runner inputs exactly and
-case-sensitively. `evidence_references` must be a non-empty array of unique
+`profile_id`, and `network_config_identity` values must equal the corresponding
+runner inputs exactly and case-sensitively. When the Issue #44 scenario/profile
+contracts are supplied, `scenario_version`, `profile_version`, and
+`profile_arguments_sha256` must bind the exact selected versions and opaque
+argument digest; without those contracts, all three fields must be JSON `null`.
+`evidence_references` must be a non-empty array of unique
 whitespace-free tokens. `measurement_domains` must declare exactly the three
 version-1 network-authority-runner subset domains with exactly these ordered
 metrics:

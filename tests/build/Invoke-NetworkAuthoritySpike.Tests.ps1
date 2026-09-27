@@ -1329,6 +1329,10 @@ exit $LASTEXITCODE
 				actor_mix = 'network-authority.actor-mix.v1'
 				scenario_id = 'network-authority.baseline.v1'
 				profile_id = 'network-profile.unset'
+				network_config_identity = 'network-emulation.caller-supplied'
+				scenario_version = $null
+				profile_version = $null
+				profile_arguments_sha256 = $null
 				evidence_references = @('evidence-ref.fixture-capture-log','evidence-ref.fixture-capture-json')
 				measurement_domains = [ordered]@{
 					client = @($NetworkAuthorityPerformanceDomains.client)
@@ -1406,6 +1410,18 @@ exit $LASTEXITCODE
 	$PerformanceVariantEvidence = Get-Content -LiteralPath (Join-Path $PerformanceVariantRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
 	Assert-True ($PerformanceVariantEvidence.performance_contract.budget_count -eq $PerformanceEvidence.performance_contract.budget_count -and $PerformanceVariantEvidence.performance_contract.classification_counts.hypothetical -eq $PerformanceEvidence.performance_contract.classification_counts.hypothetical) 'Materially different valid contracts may retain the same safe aggregate summary.'
 	Assert-True ($PerformanceVariantEvidence.performance_contract.contract_sha256 -ne $PerformanceEvidence.performance_contract.contract_sha256) 'Materially different valid contracts must publish different exact-byte evidence identities.'
+	$CombinedContract = Get-PerformanceContractObject
+	$CombinedContract.capture.profile_id = 'network-profile.clean'
+	$CombinedContract.capture.network_config_identity = 'network-emulation.clean'
+	$CombinedContract.capture.scenario_version = [string] $ContractEvidence.scenario.version
+	$CombinedContract.capture.profile_version = [string] $ContractEvidence.network_profile.version
+	$CombinedContract.capture.profile_arguments_sha256 = [string] $ContractEvidence.network_profile.arguments_sha256
+	$CombinedContractPath = Join-Path $PerformanceContractRoot 'performance-schema-v2-combined.json'
+	Write-PerformanceContract $CombinedContractPath $CombinedContract
+	$CombinedContractRoot = Join-Path $FixtureRoot 'performance-schema-v2-combined'
+	Invoke-FixtureRun -FixtureLogRoot $CombinedContractRoot -FixtureRunId 'fixture-performance-schema-v2-combined' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseContracts $true -PerformanceContractPath $CombinedContractPath
+	$CombinedEvidence = Get-Content -LiteralPath (Join-Path $CombinedContractRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($CombinedEvidence.schema_version -eq 2 -and $CombinedEvidence.performance_contract.contract_sha256 -eq (Get-FileHash -LiteralPath $CombinedContractPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'Combined schema-v2 and performance-contract evidence must bind exact scenario and network-profile configuration identities.'
 	Write-Output 'PASS: opt-in performance capture and budget contract validates and publishes null-only unapproved summary evidence'
 
 	$PerformanceFailureCases = @(
@@ -1420,13 +1436,17 @@ exit $LASTEXITCODE
 		@{ Name = 'mismatched-duration'; Mutate = { param($C) $C.capture.duration_seconds = 2 }; Failure = 'duration_seconds must equal' },
 		@{ Name = 'mismatched-actor-mix'; Mutate = { param($C) $C.capture.actor_mix = 'network-authority.actor-mix.v2' }; Failure = "capture 'actor_mix' must equal" },
 		@{ Name = 'mismatched-profile'; Mutate = { param($C) $C.capture.profile_id = 'network-profile.clean' }; Failure = "capture 'profile_id' must equal" },
+		@{ Name = 'mismatched-network-config'; Mutate = { param($C) $C.capture.network_config_identity = 'network-emulation.other' }; Failure = "capture 'network_config_identity' must equal" },
+		@{ Name = 'unexpected-scenario-version'; Mutate = { param($C) $C.capture.scenario_version = 'fixture-v1' }; Failure = "capture 'scenario_version' must be null" },
+		@{ Name = 'unexpected-profile-version'; Mutate = { param($C) $C.capture.profile_version = 'fixture-v1' }; Failure = "capture 'profile_version' must be null" },
+		@{ Name = 'unexpected-profile-arguments-digest'; Mutate = { param($C) $C.capture.profile_arguments_sha256 = ('a' * 64) }; Failure = "capture 'profile_arguments_sha256' must be null" },
 		@{ Name = 'mismatched-environment'; Mutate = { param($C) $C.capture.environment = 'development' }; Failure = "capture 'environment' must equal" },
 		@{ Name = 'mismatched-source-revision'; Mutate = { param($C) $C.capture.source_revision = 'other-revision' }; Failure = "capture 'source_revision' must equal" },
 		@{ Name = 'mismatched-topology'; Mutate = { param($C) $C.capture.topology = 'other-topology' }; Failure = "capture 'topology' must equal" },
 		@{ Name = 'empty-evidence-references'; Mutate = { param($C) $C.capture.evidence_references = @() }; Failure = 'evidence_references must' },
 		@{ Name = 'duplicate-evidence-references'; Mutate = { param($C) $C.capture.evidence_references = @('evidence-ref.dup','evidence-ref.dup') }; Failure = 'evidence_references must' },
 		@{ Name = 'missing-network-domain'; Mutate = { param($C) $C.capture.measurement_domains.Remove('network') }; Failure = 'unsupported or missing fields' },
-		@{ Name = 'incomplete-client-domain'; Mutate = { param($C) $C.capture.measurement_domains.client = @('client_memory_bytes') }; Failure = 'canonical' },
+		@{ Name = 'incomplete-client-domain'; Mutate = { param($C) $C.capture.measurement_domains.client = @('client_memory_bytes') }; Failure = 'version-1 network-authority-runner' },
 		@{ Name = 'populated-tick-rate'; Mutate = { param($C) $C.capture.sampling.server_tick_hz = 30 }; Failure = 'must remain null' },
 		@{ Name = 'populated-capacity'; Mutate = { param($C) $C.capture.sampling.capacity_players = 32 }; Failure = 'must remain null' },
 		@{ Name = 'populated-target'; Mutate = { param($C) $C.budgets[0].target = 16 }; Failure = 'must remain null' },

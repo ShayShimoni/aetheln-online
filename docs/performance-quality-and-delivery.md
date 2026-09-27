@@ -88,7 +88,9 @@ specified in
 [Networking Authority Spike](networking-authority-spike.md#issue-45-opt-in-performance-capture-and-budget-contract).
 The contract binds future capture evidence to the exact source revision,
 packaged-build identity, toolchain, hardware, topology, environment, map,
-duration, actor mix, scenario, network profile, and evidence references, and
+duration, actor mix, scenario ID/version, network profile ID/version, runtime
+network-configuration identity, opaque profile-argument digest, and evidence
+references, and
 carries one budget record per version-1 network-authority-runner subset metric
 with metric identity and domain, target, warning threshold, failure threshold,
 measurement method, scenario, accountable owner, evidence references, an
