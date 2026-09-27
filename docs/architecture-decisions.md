@@ -668,7 +668,7 @@ Every accepted decision records:
   every obligation. Reusable invocations preserve caller kind and workflow
   revision and apply the same ordered merge-parent validation as direct pull
   requests.
-- **Package 3A amendment:** Pin every approved remote action to its reviewed
+- **Historical Package 3A amendment:** Pin every approved remote action to its reviewed
   full commit SHA, implement and fixture-test exact per-job shadow receipt and
   bounded same-attempt aggregate contracts, and add a hosted direct-needs gap
   diagnostic as the sole job allowed a job-level `always()`. Package 3A does
@@ -690,17 +690,15 @@ Every accepted decision records:
   bounded valid evidence is not rejected solely for a high compression ratio.
   A monotonic aggregate deadline is enforced during streaming/decompression
   and after every request or bounded parse; progress cannot reset it.
-  Future receipt archives bind only their named raw evidence and stay
+  The planned receipt archives bound only their named raw evidence and stayed
   `shadow=true`, `authoritative=false`, and `grantsAcceptance=false`. Missing
-  producers are not mapped to unrelated portable fixtures. The accepted-base
-  selector may expose only the visual obligation to an additive reusable
-  visual proof. Existing legacy selection and required gates remain
-  authoritative. Because Package 3A changes selector bytes, a later
-  no-controller-change observation must bind this corrected digest before any
-  producer wiring or Package 3B authority activation. Package 3B must also pin
-  the accepted workflow/action/requirements identities, preserve the external
-  checker, and wire the event-specific selector producer before the shadow
-  aggregate can run; Package 3A's fixture proof grants no authority.
+  producers were not mapped to unrelated portable fixtures. At that stage the
+  accepted-base selector exposed only the visual obligation to an additive
+  reusable visual proof. Existing legacy selection and required gates remained
+  authoritative. Because Package 3A changed selector bytes, it required a
+  later no-controller-change observation before producer wiring or activation;
+  Package 3A's fixture proof granted no authority. Package 3C below records the
+  current receipt and aggregate wiring.
 - **Package 3B pre-activation amendment:** A run/attempt suffix is routing
   metadata, not current-job provenance. GitHub's artifact record identifies the
   workflow run and head revision but does not identify the producing job or run
@@ -718,38 +716,105 @@ Every accepted decision records:
   `605a3fc7a16e2664492a51bc44a3d267ee6e9955043811c1be4ce4c988f2fe4b`;
   it is not an accepted activation pin until this foundation is merged and a
   fresh accepted-base live shadow observation binds it.
-- Artifact run/head/attempt identity and `created_at` inside an expected job
-  interval prove attempt identity and temporal correlation, not which job
-  uploaded the artifact. The shared attempt nonce is visible to overlapping
-  jobs. Before any receipt can grant authority, wiring must add a distinct
-  producer-job binding through pinned `needs` outputs, a job-identity
-  attestation, or verified non-overlapping producer execution. The current
-  shared-nonce aggregate remains shadow-only for this reason.
+- **Historical Package 3B shadow-wiring amendment:** The pull-request workflow
+  supplied canonical run and attempt fields to the accepted-base selector,
+  validated the returned closed anchor, exposed only its nonce as
+  non-authoritative routing metadata, and uploaded the exact selector report
+  under the nonce-suffixed artifact identity. The unavailable-controller
+  fallback also used a fresh 32-byte CSPRNG nonce and had no deterministic
+  fallback. That package deliberately did not emit receipts, execute the
+  aggregate, add `actions: read`, or grant acceptance. Package 3C supersedes
+  those wiring limitations and strengthens the run-identity anchor regexes to
+  whole-input `\A...\z` matches. That changes the exact selector policy bytes:
+  its 39,853-byte LF-normalized candidate digest is
+  `a6467d16f19f3db86bdddee76d065abd50dff7953173b7bc93f79ddae487203a`,
+  which requires new accepted-base observations after merge.
+- **Package 3C receipt and aggregate wiring amendment:**
+  `ci-selection-shadow` now exposes the validated nonce, aggregate readiness,
+  all nine exact obligation decisions, and its artifact ID/name/API digest as
+  direct `needs` outputs. The portable, trusted native client/server compile,
+  and reusable visual jobs expose their truthful raw artifact ID/name/digest
+  plus inner report SHA-256/length. Three hosted receipt-publisher jobs download
+  those exact artifacts by ID, validate the raw typed reports, and publish
+  nonce-bound shadow receipts for `portable`,
+  `native-client-server-compile`, and `visual-package` only.
+  `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
+  when the selector's chosen checks are a subset of those three live
+  producers, nonce-specific requirements with an exact selector binding and
+  sorted producer bindings. Each binding carries the job name and exact
+  artifact ID/name/digest from the named direct dependency. The aggregate
+  independently reconciles those bindings with the current attempt's GitHub
+  job/artifact API and downloaded bytes. Missing, duplicate, extra, unselected,
+  swapped, replayed, malformed, unsorted, or digest-mismatched bindings fail
+  closed. This direct producer binding resolves the earlier shared-nonce
+  uploader ambiguity; interval checks remain additional temporal evidence.
+- **Known producer-gap behavior:** When any selected obligation is outside the
+  live portable/native/visual subset, the aggregate is not called. The workflow
+  still validates the selector identity and emits the exact selected
+  unsupported set as a green `producer_contract_incomplete` record with
+  `complete=false`, `shadow=true`, `authoritative=false`, and
+  `grantsAcceptance=false`. The green result prevents a known incomplete shadow
+  migration from making healthy pull requests permanently red; it is never an
+  acceptance result. Any unexpected identity, semantic, reconciliation, or
+  publication error remains red. `unreal-editor-automation`,
+  `clean-package-provenance-smoke`, `content-reference-validation`,
+  `controller-contract`, `controller-operational-proof`, and
+  `delivery-harness` remain unsupported live obligations.
 - The delivery harness is also diagnostic-only in this package. It checks the
   declared revision against `HEAD` but executes writable worktree files and
   does not yet bind every test/dependency byte or reject mid-run mutation.
   `delivery-harness` remains an unsupported receipt obligation until a clean,
   immutable source contract and dirty/mutation negative fixtures exist.
-- Authority activation remains a later change. Its checker executes from
-  accepted-base bytes outside the candidate checkout and requires the trusted
-  caller to provide the independently accepted base revision and policy
-  SHA-256. It compares both pins before parsing the closed policy from the
-  accepted Git object database, uses fixed absolute identities for Git and
-  process-tree cleanup rather than candidate-influenced `PATH`, disables
-  replacement-object and Git configuration redirection, validates the exact
-  base/head/tested-merge tree relation, and accepts only one live-workflow file
-  whose bytes equal a pinned, pre-reviewed template. Controller, receipt,
-  aggregate, requirements, checker, template, and action identities cannot
-  change in that activation candidate. The checker emits bounded JSON only; it
-  does not read a candidate policy or write through candidate-controlled
-  filesystem paths. Because the current-attempt anchor changes selector bytes,
-  a new accepted-base live shadow observation is mandatory before the separate
-  activation candidate. Push and schedule evidence remains non-authoritative.
-  This foundation adds only the checker and its adversarial fixtures. The fixed
-  activation policy, pre-reviewed workflow template, requirements manifest,
-  trusted caller wiring, and independently accepted pins are deliberately
-  absent, so the checker cannot approve a real repository activation from this
-  package.
+- Authority activation remains a later change. Package 3C includes a dormant
+  `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
+  the exact predicate
+  `always() && github.event_name == 'pull_request' && false`. When later
+  activated, `always()` ensures a failed or cancelled aggregate executes this
+  boundary rather than producing a skipped required check; the first guard and
+  the authority validator both require the direct aggregate result to equal
+  `success`. Its body accepts only a complete, nonce-bound, non-authoritative
+  shadow aggregate and would emit a separate authority receipt, but it cannot run or grant
+  acceptance in the Package 3C workflow. A workflow-only change selects
+  `controller-contract` and `controller-operational-proof`, which have no
+  truthful live Package 3C receipts. Merely flipping the dormant predicate
+  would therefore receive an incomplete aggregate and fail closed. Package 3C
+  deliberately publishes no activation policy or pre-reviewed activation
+  template. A separate reviewed package must first implement and shadow-observe
+  those controller producers, or independently replace the selection boundary
+  with an equally fail-closed contract. Only a later accepted base may pin the
+  exact one-workflow-file template and immutable controller, publisher,
+  aggregate, requirements, checker, policy, and action identities.
+- The activation checker executes from accepted-base bytes outside the
+  candidate checkout and requires the trusted caller to provide the
+  independently accepted base revision and policy SHA-256. It compares both
+  pins before parsing the closed policy from the accepted Git object database,
+  uses fixed absolute identities for Git and process-tree cleanup rather than
+  candidate-influenced `PATH`, disables replacement-object and Git
+  configuration redirection, validates the exact base/head/tested-merge tree
+  relation, and accepts only the one live-workflow file whose bytes equal that
+  pinned template. It emits bounded JSON only; it does not read a candidate
+  policy or write through candidate-controlled filesystem paths. A fresh
+  accepted-base observation after Package 3C merges must use two distinct pull
+  requests. A supported-only change must exercise the exact selector, every
+  selected raw producer and receipt publisher, the direct bindings, and a real
+  complete shadow aggregate. A separate unsupported-selection change must
+  exercise the exact green `producer_contract_incomplete` branch. Each record
+  must bind the run/attempt, accepted base, head/tested-merge revisions,
+  selector, raw, and receipt artifact IDs/names/API digests, aggregate or gap
+  report SHA-256, attempt nonce, and final non-authority flags. Both are
+  prerequisites for the next producer package, not proof that the current
+  one-line activation is executable.
+  Push and schedule emit `event_not_applicable` because they have no accepted
+  event-specific selector producer and remain non-authoritative.
+- Package 3C pins the workflow identity as `326989724` and the complete action
+  manifest as
+  `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1`,
+  `actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093`,
+  and
+  `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`.
+  Workflow-wide permission remains `contents: read`; only the live aggregate
+  and dormant authority jobs receive job-scoped `actions: read` plus
+  `contents: read`.
 - **Policy identity:** The policy digest is SHA-256 over the accepted selector
   source after deterministic LF normalization, covering mappings, contexts,
   limits, uncertainty behavior, and attribute rules. The controller digest
@@ -767,7 +832,8 @@ Every accepted decision records:
   conservative output. Package 2 workflow fixtures proved the legacy normalized
   5,595-byte block at SHA-256
   `b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c`.
-  Package 3A changes only the reviewed checkout action identity in that block;
+  Historically, Package 3A changed only the reviewed checkout action identity
+  in that block;
   its current normalized identity is 5,633 bytes at SHA-256
   `f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df`,
   and the shadow is independent with one attempt-bound artifact. Fixtures do
@@ -775,17 +841,25 @@ Every accepted decision records:
   `New-CiAcceptanceReceipt.Tests.ps1` and
   `Invoke-CiAcceptanceAggregate.Tests.ps1` for identity, outcome, rerun,
   pagination, bounded JSON/archive, action-manifest, cleanup, and raw-evidence
-  negative cases. Its reviewed action manifest contains only full-SHA pins for
-  `actions/checkout` and `actions/upload-artifact`.
+  negative cases. Package 3C adds
+  `Publish-CiAcceptanceReceipt.Tests.ps1` and
+  `New-CiAcceptanceAggregateContext.Tests.ps1` for truthful publisher input,
+  create-only output, selector/context identity, runtime requirements, and
+  direct-binding adversarial coverage. Its reviewed action manifest contains
+  full-SHA pins for `actions/checkout`, `actions/download-artifact`, and
+  `actions/upload-artifact`.
 - **Alternatives:** Candidate-tree selector execution; third-party path-filter
   authority; direct Package 2 replacement; simultaneous policy and activation
   edits; treating bootstrap/missing evidence as equivalence; letting unsafe or
   unsupported hosted classification fail only after engine admission.
-- **Consequences:** Package 2 adds diagnostic pull-request work and may fail
-  independently without suppressing established checks. Evidence exists only
-  inside the controlled process/artifact boundary. Visual validation gains
-  `workflow_call` without losing existing triggers or validators. Receipt
-  aggregation and activation remain separate reviewed packages. Artifact
+- **Consequences:** Package 2 added diagnostic pull-request work without
+  suppressing established checks. Package 3C adds hosted receipt publication
+  and shadow aggregation for the supported subset; it does not replace legacy
+  selection or required gates. Unsupported selections produce an explicit
+  no-acceptance gap instead of a false aggregate. Visual validation retains its
+  existing triggers and validators while exposing additive raw-evidence
+  outputs through `workflow_call`. Activation remains a separate exact
+  one-workflow-file reviewed package after fresh live observation. Artifact
   retention remains undecided and omitted.
 - **Owner:** Issue #167.
 - **Revisit trigger:** Pull-request merge identity or checkout semantics change,

@@ -337,8 +337,18 @@ try {
 	Assert-True -Condition $AnalyzerCommandMatch.Success -Message 'The default PSScriptAnalyzer command must be discoverable.'
 	$AnalyzerCommand = $AnalyzerCommandMatch.Groups['command'].Value -replace "''", "'"
 	Assert-True -Condition ($AnalyzerCommand -notmatch '-Path\s+scripts,\s*tests') -Message 'PSScriptAnalyzer must receive one path at a time.'
+	Assert-True -Condition ($RunnerSource -match "requiredModuleVersion\s*=\s*'1\.25\.0'" -and $AnalyzerCommand -match 'Import-Module PSScriptAnalyzer -RequiredVersion 1\.25\.0' -and $AnalyzerCommand -match 'psscriptanalyzer_version_invalid') -Message 'The hosted analyzer must load and verify exact PSScriptAnalyzer 1.25.0.'
 
 	$AnalyzerFixtureCommand = @"
+function Import-Module {
+	param([string] `$Name, [version] `$RequiredVersion, [switch] `$Force, `$ErrorAction)
+	if (`$Name -cne 'PSScriptAnalyzer' -or `$RequiredVersion.ToString() -cne '1.25.0') { throw 'fixture module pin mismatch' }
+}
+function Get-Module {
+	param([string] `$Name)
+	if (`$Name -cne 'PSScriptAnalyzer') { return }
+	return [pscustomobject]@{ Version = [version] '1.25.0' }
+}
 function Invoke-ScriptAnalyzer {
 	[CmdletBinding()]
 	param(

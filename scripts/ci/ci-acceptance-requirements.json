@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "aetheln.ci-acceptance-requirements-template/v1",
+  "jobs": [
+    {
+      "key": "native",
+      "jobName": "native-receipt-shadow",
+      "checks": [
+        "clean-package-provenance-smoke",
+        "native-client-server-compile"
+      ]
+    },
+    {
+      "key": "portable",
+      "jobName": "portable-receipt-shadow",
+      "checks": [
+        "content-reference-validation",
+        "controller-contract",
+        "controller-operational-proof",
+        "delivery-harness",
+        "portable",
+        "unreal-editor-automation"
+      ]
+    },
+    {
+      "key": "visual",
+      "jobName": "visual-receipt-shadow",
+      "checks": [
+        "visual-package"
+      ]
+    }
+  ]
+}

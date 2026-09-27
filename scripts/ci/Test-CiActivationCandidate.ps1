@@ -22,12 +22,12 @@ $script:ActivationTrustedExecutables = $null
 
 function Test-ActivationRevision {
 	param($Value)
-	return $Value -is [string] -and $Value -cmatch '^[0-9a-f]{40}$'
+	return $Value -is [string] -and $Value -cmatch '\A[0-9a-f]{40}\z'
 }
 
 function Test-ActivationSha256 {
 	param($Value)
-	return $Value -is [string] -and $Value -cmatch '^[0-9a-f]{64}$'
+	return $Value -is [string] -and $Value -cmatch '\A[0-9a-f]{64}\z'
 }
 
 function Assert-ActivationClosedObject {
@@ -43,7 +43,7 @@ function Assert-ActivationClosedObject {
 function Assert-ActivationSafePath {
 	param($Value, [string] $Reason)
 	if ($Value -isnot [string] -or $Value.Length -lt 1 -or $Value.Length -gt 240 -or
-		$Value -cnotmatch '^[A-Za-z0-9._/-]+$' -or $Value.StartsWith('/') -or
+		$Value -cnotmatch '\A[A-Za-z0-9._/-]+\z' -or $Value.StartsWith('/') -or
 		$Value.EndsWith('/') -or $Value.Contains('//') -or $Value.Contains('..') -or
 		$Value.Contains(':') -or $Value.Contains('\') -or
 		$Value.Normalize([Text.NormalizationForm]::FormC) -cne $Value) {
@@ -52,6 +52,7 @@ function Assert-ActivationSafePath {
 }
 
 function Assert-ActivationUniqueJsonProperties {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function validates the complete JSON property set across all nested object scopes; the plural noun is semantically intentional.')]
 	param([string] $Raw)
 	$Scopes = New-Object Collections.Stack
 	$PendingName = $null
@@ -314,7 +315,7 @@ function ConvertFrom-CiActivationPolicyBytes {
 	try { $Policy = ConvertFrom-Json -InputObject $Raw }
 	catch { throw 'activation_policy_json_invalid' }
 	Assert-ActivationClosedObject -Value $Policy -Properties @('schemaVersion','repository','policyPath','workflowPath','templatePath','pinnedFiles') -Reason 'activation_policy_schema_invalid'
-	if ($Policy.schemaVersion -cne 'aetheln.ci-activation-policy/v1' -or $Policy.repository -isnot [string] -or $Policy.repository -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$') { throw 'activation_policy_schema_invalid' }
+	if ($Policy.schemaVersion -cne 'aetheln.ci-activation-policy/v1' -or $Policy.repository -isnot [string] -or $Policy.repository -cnotmatch '\A[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*\z') { throw 'activation_policy_schema_invalid' }
 	Assert-ActivationSafePath -Value $Policy.policyPath -Reason 'activation_policy_schema_invalid'
 	Assert-ActivationSafePath -Value $Policy.workflowPath -Reason 'activation_policy_schema_invalid'
 	Assert-ActivationSafePath -Value $Policy.templatePath -Reason 'activation_policy_schema_invalid'
