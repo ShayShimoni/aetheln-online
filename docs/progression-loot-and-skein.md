@@ -210,6 +210,75 @@ substitutes for Health, Endurance, Guard, or Ward. Specializations and Peaks
 extend the Order layer and do not replace the Forms, Threads, Keystone, and
 Faction Doctrine structure.
 
+#### Order Choice, Specialization Rite, and Changes
+
+The player sees and selects one Order at character creation. That choice is
+permanent; choosing a specialization later never changes the Order. Before
+specialization, the character has the Order's functional shared base kit and
+the weapon actions they have learned, without a specialization-dependent
+ability, resource loop, or mandatory Skein choice. Weapon traditions are
+learned as discrete, server-validated unlocks compatible with the selected
+Order; they have no weapon XP or weapon-level track. The acquisition conditions
+and weapon-specific tuning remain `TBD`.
+
+The initial specialization choice is made in a solo rite. For each available
+specialization the rite supplies a fixed, authored temporary kit so the choice
+tests its actual play, not the character's inventory, equipment power, or
+unlocked weave. The server owns entry, trial state, and exit. The rite is
+`Peaceful`: no PvP or outside hostile interference, reward grant or receipt,
+currency, experience, loot, inventory/equipment mutation, or trade can occur
+inside it. Trial-kit feedback may explain practice results without granting
+anything. Rite entry is a server-atomic safe transition: fence new outside
+actions, resolve already accepted hits and effects, then capture the exact
+pre-entry state that the trial may override, including loadout, combat state,
+and temporary effects. If pending outcomes, effect expiry, or cooldown state
+cannot be resolved or preserved, entry fails closed. On completion,
+abandonment, failure, disconnect, or interrupted recovery, the server restores
+the trial-overridden state from its snapshot before ordinary play resumes;
+restoration cannot erase a committed hit or revive an effect expired under the
+approved time policy. Temporary trial abilities and effects cannot escape the
+rite. Whether an engaged character may enter, whether rite time pauses outside
+durations, and the treatment of absolute expiry and cooldown clocks remain
+`TBD`; an undefined policy never authorizes entry that would lose elapsed
+authoritative state. The chosen specialization is a separate, validated
+persistent decision after successful exit, not a way to persist trial equipment
+or grants. A missing or uncertain
+snapshot fails closed rather than guessing a restoration or granting a choice.
+
+Exactly one early specialization reset is free per character. The server
+records and consumes that entitlement atomically with the validated reset so
+retries and reconnects cannot spend it twice or create extra free changes.
+The early eligibility boundary is `TBD`; no level, time, or quest threshold is
+assumed here. After that entitlement is used or no longer eligible, changes
+require the approved trainer and currency rules. Trainer identity/location,
+currency type, cost, and other later restrictions are `TBD`; no client may
+infer a free change from an undefined rule. Resets change specialization and
+compatible loadout state, never the permanent Order, learned weapon unlocks,
+or past progression.
+
+#### Heritage and Order Mastery
+
+Mender's Brace (`heritage.menders_brace`), Memory Nail
+(`heritage.memory_nail`), and Foreseen Path
+(`heritage.foreseen_path`) are learnable traditions, not racial abilities.
+Every race and sex can learn all three under equivalent nonracial rules. An
+originating people's cultural framing may change presentation, but it cannot
+change a learned tradition's authoritative behavior or opportunity. Whether
+Order, specialization, or faction imposes any eligibility or loadout rule is
+`TBD`; none may create a race or sex exception. The server validates learning
+and any equipped Heritage state independently from ancestry and appearance.
+Exact acquisition, effects, loadout limits, and tuning are
+`TBD`; there is no implicit racial starter grant.
+
+Order mastery records verified unlocks and accomplishments in a server-owned
+ledger. It is not a second experience bar, Order level, specialization XP, or
+weapon XP. Each unlock has a stable identity and versioned, auditable
+eligibility; a retry cannot duplicate an unlock. Mastery may make an authored
+option available but does not directly grant an unbounded stat increase or
+replace Character Level. Exact conditions and rewards remain `TBD`. Encounter
+reward-mastery modifiers below are a separate, event-specific concept and do
+not turn this ledger into XP.
+
 ### Faction Doctrine
 
 Faction Doctrine supplies faction-specific skills and utilities that influence
@@ -582,9 +651,16 @@ Character
 |   `-- Experience
 |-- Seasonal Progression
 |   `-- Ember Rank and Ember Cycle
-|-- Class and Skein
-|   |-- Class
+|-- Order and Specialization
+|   |-- Permanent Order Choice
+|   |-- Current Specialization and One-Free-Reset Entitlement
 |   |-- Learned Abilities
+|   |-- Learned Order-Compatible Weapons
+|   `-- Order Mastery Unlock Ledger
+|-- Heritage
+|   |-- Learned Traditions
+|   `-- Equipped Heritage State
+|-- Skein
 |   |-- Unlocked Forms, Threads, and Keystones
 |   `-- Equipped Skein Weave
 |-- Faction and Doctrine
@@ -624,12 +700,18 @@ marking, or equipment layers rather than a race-restricted appearance field.
 The prototype may use one fixed character, but gameplay code and persistent data
 must not embed that character's race, sex, appearance, or faction inside class
 abilities. Separating these concerns now preserves future character creation.
+The fixed prototype character remains Oathscar with sword and shield; this
+future-state model does not add a specialization rite, Heritage, weapon-learning
+system, Order-mastery ledger, inventory, or new persistence requirement to the
+prototype.
 
 ## Data and Security Boundaries
 
 The server owns and validates:
 
 - Experience, levels, Ember Rank, and unlocks.
+- Order, specialization and reset entitlement, weapon learning, Heritage, and
+  Order-mastery ledger entries.
 - Equipped Forms, Threads, Keystones, and Doctrine.
 - Item creation, affixes, power, ownership, and equipment state.
 - Encounter eligibility, mastery, contested risk, and PvP contribution.
@@ -654,6 +736,19 @@ canonical technical rules live in
 
 - Character Level survives reconnects, season changes, deaths, and equipment
   changes.
+- Creation-time Order remains visible and unchanged by a specialization reset;
+  an unspecialized character can play with their shared and learned-weapon kit.
+- The solo rite uses only fixed temporary kits under `Peaceful` policy; every
+  exit restores trial-overridden state from the server-owned pre-entry snapshot
+  without inventory or reward changes, including after disconnect or
+  interruption. Entry and recovery tests cover a pending accepted hit, an
+  expiring effect/cooldown, and disconnect or process failure without erasing
+  committed outcomes or reviving expired state.
+- The single early free reset cannot be duplicated; later changes reject
+  requests unless the approved trainer and currency policy is satisfied.
+- Order mastery is a deduplicated unlock ledger, with no specialization or
+  weapon XP. Every race and sex can learn all three Heritages with equivalent
+  authoritative behavior and no origin-only grant.
 - The base class remains functional with no Skein choices equipped.
 - Each implemented Form or Thread changes an observable combat decision.
 - Invalid combinations and unavailable options are rejected by the server.
@@ -691,6 +786,12 @@ canonical technical rules live in
 - Ember Rank names, rewards, and any seasonal rules.
 - Exact Form, Thread, Keystone, and Doctrine collections.
 - Number of equipped choices and loadout-change rules.
+- Early free-reset eligibility boundary; later specialization trainer,
+  currency, cost, and restriction policy.
+- Weapon-learning and Heritage acquisition, loadout, effects, and tuning;
+  Order-mastery unlock conditions and rewards.
+- Rite entry eligibility while engaged, whether rite time pauses outside
+  durations, and absolute-expiry/cooldown treatment across entry and recovery.
 - Item tiers, quality names, stat budgets, caps, and stacking groups.
 - Loot-table weights, smart-loot weighting, and duplicate handling.
 - Bad-luck thresholds, caps, source currencies, and reset behavior.

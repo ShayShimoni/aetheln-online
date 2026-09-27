@@ -49,8 +49,15 @@ Each people's heritage identity carries a stable semantic ID with a working
 display name (Issue #104): Aurin use `heritage.menders_brace` (Mender's Brace),
 Kell use `heritage.memory_nail` (Memory Nail), and Vesh use
 `heritage.foreseen_path` (Foreseen Path). IDs remain stable when display names
-change. Heritage is narrative and presentation identity only; it never changes
-combat statistics, hitboxes, reach, timing, or loot.
+change. These are cultural origins and working names for learnable Heritage
+traditions, not innate racial traits. Any character of any people or sex can
+learn all three under the same eligibility and gameplay rules; originating from
+a culture grants no automatic unlock, stronger version, or altered cost.
+Learning and equipping a tradition is separate from race and appearance.
+Neither ancestry nor presentation changes combat statistics, hitboxes, reach,
+timing, loot, or the authoritative behavior of a learned Heritage. The
+acquisition and loadout contract is defined in
+[Progression, Loot, and Skein Weaving](progression-loot-and-skein.md).
 
 - Aurin are not biologically aligned with the Crowned Ledger (the provisional
   faction display name superseding Dawn Concordat under Issue #104).

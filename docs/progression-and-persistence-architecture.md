@@ -90,21 +90,26 @@ essential services.
 
 The logical model separates:
 
-| Aggregate | Examples | Independent concerns |
+| Logical concern | Examples | Independent concerns |
 | --- | --- | --- |
 | Identity | Character ID, account link, name | Ownership and naming policy |
-| Appearance | Race, sex, body, constrained visual height, age presentation, face, skin, markings, voice, race features | Presentation only |
-| Permanent progression | Character Level, experience, unlocks | Never seasonal |
+| Appearance | Separately typed race and sex choices, body, constrained visual height, age presentation, face, skin, markings, voice, race features | Presentation only; race and sex never grant combat or Heritage access |
+| Permanent progression | Character Level, experience, progression unlocks | Never seasonal; no specialization or weapon XP |
 | Seasonal progression | Ember Rank and cycle identity | Compression/reset policy |
-| Class and Skein | Class, learned abilities, Forms, Threads, Keystone, equipped weave | Loadout validation |
+| Order and specialization | Permanent Order, current specialization, free-reset entitlement, learned abilities and compatible weapons, Order-mastery unlock ledger | Order and weapon access, rite choice, and atomic reset validation; mastery is not XP |
+| Heritage | Learned traditions and equipped Heritage state | Race-independent unlock and effect validation |
+| Skein | Forms, Threads, Keystone, equipped weave | Loadout validation independent of Order-choice persistence |
 | Faction and Doctrine | `Unassigned` or faction identity, Doctrine unlocks/loadout | One-time choice and faction rules |
 | Inventory and equipment | Item instances, containers, equipped slots | Begins in 1.1 |
 | Cosmetics | Owned and equipped presentation | No combat authority |
 | Session and location | Admission, instance, checkpoint, transfer | Ephemeral and recoverable |
 
 Separation does not require a database or service per row. It requires explicit
-ownership, versioning, validation, and the ability to evolve one concern without
-silently changing another.
+ownership, independently versioned logical concerns, validation, and the
+ability to evolve one concern without silently changing another, even when
+several concerns are physically co-stored. A command changing more than one
+concern checks their expected versions and commits their new state and versions
+atomically; co-storage is not permission to overwrite unrelated concerns.
 
 Race, sex, appearance, and cosmetics never feed authoritative attributes,
 collision, reach, timing, loot probability, faction eligibility, or class
@@ -126,6 +131,61 @@ and equipment authority.
 
 Portable cultural pigments and adornment styles use shared marking, cosmetic,
 or equipment data rather than a race-restricted feature field.
+
+### Order, Specialization, and Heritage Commands
+
+Order is a visible, permanent creation-time choice. The owner validates it at
+creation and never treats a specialization reset or session transfer as an
+Order change. Before specialization, the character's shared Order/learned
+weapon kit remains valid without a selected specialization. Weapon traditions
+are discrete compatible unlocks, not a weapon XP counter. Order mastery is an
+idempotent, versioned unlock ledger, not a parallel experience or level track;
+specialization has no XP track either. Unlock eligibility and learned Heritage
+state are server-owned. Mender's Brace, Memory Nail, and Foreseen Path have the
+same learnability and authoritative behavior for every race and sex; cultural
+origin or appearance cannot grant an unlock or select a stronger effect.
+Potential Order, specialization, or faction eligibility rules remain `TBD` and
+must never create a race- or sex-specific exception.
+
+The solo specialization rite is `Peaceful` and uses fixed temporary kits. Its
+temporary equipment view and trial actions cannot write inventory, currency,
+progression, any reward grant or receipt, or Order-mastery entries; practice
+feedback is non-granting. Entry is a server-atomic safe transition that fences
+new outside actions and resolves already accepted hits, effects, and other
+consequential outcomes before capturing the exact pre-entry values for state
+the trial may override, including loadout, combat state, and temporary effects.
+If pending outcomes, expiry, or cooldown state cannot be resolved or preserved,
+entry fails closed. Every terminal path, including success, abandonment,
+failure, disconnect, and process recovery, restores trial-overridden state
+before normal admission; it cannot erase committed outcomes or revive effects
+expired under the approved time policy. No trial-only state may escape or be
+accepted as a durable item or unlock. The snapshot and recovery mechanism must
+survive the relevant failure modes, or fail closed while the pre-entry
+authoritative state is recovered. A missing snapshot never licenses a guessed
+restore or a specialization grant. Whether engaged players may enter, whether
+rite time pauses outside durations, and absolute expiry/cooldown treatment are
+product `TBD`s. Until approved, the server cannot admit a state whose elapsed
+authoritative outcomes it cannot preserve. Tests must cover a pending accepted
+hit, an effect or cooldown expiring across entry/exit, and disconnect and crash
+recovery. The committed specialization choice follows validated successful exit
+as a separate durable decision; it cannot implicitly commit trial state.
+
+The owner records one early free-specialization-reset entitlement and consumes
+it in the same fenced, version-checked, idempotent transaction that changes the
+specialization and compatible loadout, including all affected logical versions
+even if their records are co-stored. A duplicate command returns its recorded
+result; concurrent or stale commands cannot obtain another free reset. The
+early eligibility boundary is `TBD`. Once the free entitlement is spent or
+ineligible, a later change requires an approved trainer and currency policy;
+the trainer/location, currency, cost, and restrictions remain `TBD`, so no
+undefined default authorizes a change. Order, weapon unlocks, Heritage,
+Character Level, and prior mastery entries remain unchanged by a reset.
+
+These are target-state contracts, not a new prototype persistence dependency.
+The prototype stays a fixed Oathscar sword-and-shield character without the
+rite, weapon-learning or Heritage persistence, Order-mastery ledger, or
+inventory. The release stage that first enables each durable command must
+specify its migration, authority checks, and recovery evidence before use.
 
 ## Versioning Model
 
