@@ -673,7 +673,10 @@ Every accepted decision records:
   bounded same-attempt aggregate contracts, and add a hosted direct-needs gap
   diagnostic as the sole job allowed a job-level `always()`. Package 3A does
   not emit receipts or execute the aggregate while truthful producers are
-  missing; it publishes and fails closed on that exact inventory instead.
+  missing; it publishes an explicit incomplete, non-authoritative,
+  no-acceptance inventory instead. The known gap completes as a green
+  diagnostic so healthy PRs are not permanently red, while unexpected
+  reconciliation or publication errors still fail the job.
   The only Package 3A obligation with a supported semantic receipt is
   `visual-package`; producer and aggregate both validate its exact bounded raw
   report. Every other obligation rejects as unsupported until its own raw

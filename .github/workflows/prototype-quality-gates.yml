@@ -669,7 +669,8 @@ jobs:
   # direct edge to every current producer so same-attempt omissions are visible.
   # Four of the nine accepted obligations still have no pull-request producer;
   # until those jobs and all per-job receipt artifacts exist, this diagnostic
-  # writes the exact gap and fails closed without granting acceptance.
+  # writes the exact no-acceptance gap as a green diagnostic. Unexpected
+  # reconciliation or publication errors still fail the job.
   ci-acceptance-shadow:
     needs:
       - ci-selection-shadow
@@ -682,7 +683,6 @@ jobs:
       - scheduled-packaged-smoke
       - visual-proof
     if: always()
-    continue-on-error: true
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -726,7 +726,7 @@ jobs:
           }
           [IO.File]::WriteAllText($env:AETHELN_ACCEPTANCE_REPORT, (ConvertTo-Json -InputObject $Report -Depth 8), $Utf8)
           $Gap = (@($MissingProducerJobs) + @($MissingReceiptArtifacts)) -join ','
-          throw "acceptance_producer_gap:$Gap"
+          Write-Warning "acceptance_producer_gap:$Gap"
       - name: Upload shadow acceptance diagnostic
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
