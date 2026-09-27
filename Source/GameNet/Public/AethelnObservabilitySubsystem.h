@@ -84,6 +84,8 @@ public:
 	void ResetBuildContext();
 	bool HasBuildContext() const;
 	bool SetEnvironment(const FString& EnvironmentName);
+	/** Game-thread copy of the validated runtime and build/profile context; leaves output unchanged on failure. */
+	bool TryGetCrashContextSnapshot(FAethelnCrashContextSnapshot& OutSnapshot) const;
 
 	bool TryComposeCorrelation(
 		EAethelnObservabilityCategory Category,

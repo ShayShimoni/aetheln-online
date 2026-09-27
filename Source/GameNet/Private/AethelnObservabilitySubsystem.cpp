@@ -129,6 +129,23 @@ bool UAethelnObservabilitySubsystem::SetEnvironment(const FString& EnvironmentNa
 	return false;
 }
 
+bool UAethelnObservabilitySubsystem::TryGetCrashContextSnapshot(FAethelnCrashContextSnapshot& OutSnapshot) const
+{
+	if (!HasRuntimeContext() || !HasBuildContext())
+	{
+		return false;
+	}
+
+	return FAethelnCrashContextSnapshot::TryMakeValidated(
+		BuildIdentity,
+		NetworkProfile,
+		RuntimeContext.FlowKind,
+		RuntimeContext.RunId,
+		RuntimeContext.InstanceId,
+		RuntimeContext.ConnectionPseudonym,
+		OutSnapshot);
+}
+
 bool UAethelnObservabilitySubsystem::TryComposeCorrelation(
 	EAethelnObservabilityCategory Category,
 	const FAethelnObservabilityEventContext& EventContext,
@@ -399,6 +416,95 @@ bool FAethelnObservabilitySubsystemContextTest::RunTest(const FString& Parameter
 	TestFalse(
 		TEXT("Reset context suppresses later composition"),
 		Subsystem->TryComposeCorrelation(EAethelnObservabilityCategory::Ability, Overlay, Correlation));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnObservabilitySubsystemCrashContextTest,
+	"Aetheln.Observability.Subsystem.CrashContextSnapshot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Parameters)
+{
+	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+	UAethelnObservabilitySubsystem* Subsystem = NewObject<UAethelnObservabilitySubsystem>(GameInstance);
+
+	FAethelnCrashContextSnapshot Sentinel;
+	Sentinel.RunId = TEXT("sentinel-run");
+	FAethelnCrashContextSnapshot Snapshot = Sentinel;
+	TestFalse(TEXT("Missing runtime and build context yields no snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
+	TestEqual(TEXT("Failed accessor leaves the caller's output unchanged"), Snapshot.RunId, Sentinel.RunId);
+
+	TestTrue(
+		TEXT("Runtime context is accepted"),
+		Subsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-148"),
+			TEXT("instance-148"),
+			AethelnObservability::ExcludedIdentifier));
+	TestFalse(TEXT("Missing build context yields no snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
+	TestEqual(TEXT("Missing build context leaves output unchanged"), Snapshot.RunId, Sentinel.RunId);
+
+	Subsystem->ResetRuntimeContext();
+	FAethelnBuildIdentity Build;
+	Build.SourceRevision = TEXT("revision-148");
+	Build.BuildIdentity = TEXT("build-148");
+	Build.BuildConfiguration = TEXT("Development");
+	Build.EngineRevision = TEXT("5.8.1");
+	Build.ToolchainIdentity = TEXT("toolchain-148");
+	FAethelnNetworkProfile Profile;
+	Profile.ProfileId = TEXT("network-profile.test");
+	TestTrue(TEXT("Build context is accepted"), Subsystem->SetBuildContext(Build, Profile));
+	TestFalse(TEXT("Missing runtime context yields no snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
+	TestEqual(TEXT("Missing runtime context leaves output unchanged"), Snapshot.RunId, Sentinel.RunId);
+
+	TestTrue(
+		TEXT("Runtime context is restored"),
+		Subsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-148"),
+			TEXT("instance-148"),
+			AethelnObservability::ExcludedIdentifier));
+	TestTrue(TEXT("Valid runtime and build context yields a snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
+	TestTrue(TEXT("Returned snapshot is bounded"), Snapshot.IsBounded());
+	TestEqual(TEXT("Returned snapshot maps the run"), Snapshot.RunId, FString(TEXT("run-148")));
+	TestEqual(TEXT("Returned snapshot maps the server instance"), Snapshot.ServerInstanceId, FString(TEXT("instance-148")));
+	TestEqual(TEXT("Returned snapshot maps the build"), Snapshot.BuildIdentity, Build.BuildIdentity);
+	TestEqual(TEXT("Returned snapshot maps the profile"), Snapshot.NetworkProfileId, Profile.ProfileId);
+	TestEqual(TEXT("Returned snapshot keeps the excluded connection marker"), Snapshot.ConnectionPseudonym, FString(AethelnObservability::ExcludedIdentifier));
+
+	Snapshot.RunId = TEXT("caller-mutation");
+	FAethelnCrashContextSnapshot Fresh;
+	TestTrue(TEXT("Snapshot remains available after caller mutation"), Subsystem->TryGetCrashContextSnapshot(Fresh));
+	TestEqual(TEXT("Caller mutation cannot reach subsystem state"), Fresh.RunId, FString(TEXT("run-148")));
+
+	const FString Oversized = FString::ChrN(AethelnObservability::MaxIdentifierLength + 1, TCHAR('x'));
+	TestFalse(
+		TEXT("Invalid runtime replacement is rejected"),
+		Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-replacement"), Oversized, AethelnObservability::ExcludedIdentifier));
+	FAethelnBuildIdentity InvalidBuild = Build;
+	InvalidBuild.BuildIdentity = FString::Printf(TEXT("build%cunsafe"), TCHAR(0x2029));
+	TestFalse(TEXT("Invalid build replacement is rejected"), Subsystem->SetBuildContext(InvalidBuild, Profile));
+	FAethelnNetworkProfile InvalidProfile = Profile;
+	InvalidProfile.SchemaVersion = AethelnNetworkSpike::NetworkProfileSchemaVersion + 1;
+	TestFalse(TEXT("Invalid profile replacement is rejected"), Subsystem->SetBuildContext(Build, InvalidProfile));
+	TestTrue(TEXT("Prior accepted context still yields a snapshot"), Subsystem->TryGetCrashContextSnapshot(Fresh));
+	TestEqual(TEXT("Invalid runtime replacement preserves the prior run"), Fresh.RunId, FString(TEXT("run-148")));
+	TestEqual(TEXT("Invalid runtime replacement preserves the prior instance"), Fresh.ServerInstanceId, FString(TEXT("instance-148")));
+	TestEqual(TEXT("Invalid build replacement preserves the prior build"), Fresh.BuildIdentity, Build.BuildIdentity);
+	TestEqual(TEXT("Invalid profile replacement preserves the prior profile version"), Fresh.NetworkProfileSchemaVersion, AethelnNetworkSpike::NetworkProfileSchemaVersion);
+
+	Subsystem->ResetRuntimeContext();
+	FAethelnCrashContextSnapshot AfterReset = Sentinel;
+	TestFalse(TEXT("Runtime reset cannot return stale identity"), Subsystem->TryGetCrashContextSnapshot(AfterReset));
+	TestEqual(TEXT("Runtime reset leaves output unchanged"), AfterReset.RunId, Sentinel.RunId);
+	TestTrue(
+		TEXT("Runtime context is restored after reset"),
+		Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-149"), TEXT("instance-149"), AethelnObservability::ExcludedIdentifier));
+	Subsystem->ResetBuildContext();
+	TestFalse(TEXT("Build reset cannot return stale identity"), Subsystem->TryGetCrashContextSnapshot(AfterReset));
+	TestEqual(TEXT("Build reset leaves output unchanged"), AfterReset.RunId, Sentinel.RunId);
+	Subsystem->ResetRuntimeContext();
 	return true;
 }
 

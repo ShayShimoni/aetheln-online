@@ -462,6 +462,77 @@ struct GAMENET_API FAethelnObservabilityEvent
 	}
 };
 
+/** Closed process-wide crash correlation registered before failure. */
+struct GAMENET_API FAethelnCrashContextSnapshot
+{
+	FString ObservabilitySchemaId;
+	uint32 ObservabilitySchemaVersion = 0;
+	FString SourceRevision;
+	FString BuildIdentity;
+	FString BuildConfiguration;
+	FString EngineRevision;
+	FString ToolchainIdentity;
+	FString NetworkProfileSchemaId;
+	uint32 NetworkProfileSchemaVersion = 0;
+	FString NetworkProfileId;
+	EAethelnFlowKind FlowKind = EAethelnFlowKind::PrototypeAuthority;
+	FString RunId;
+	FString ServerInstanceId;
+	/** Authority-owned pseudonym or the literal excluded marker. */
+	FString ConnectionPseudonym;
+
+	bool IsBounded() const
+	{
+		for (const FString* Value : {
+			&ObservabilitySchemaId, &SourceRevision, &BuildIdentity, &BuildConfiguration,
+			&EngineRevision, &ToolchainIdentity, &NetworkProfileSchemaId, &NetworkProfileId,
+			&RunId, &ServerInstanceId, &ConnectionPseudonym })
+		{
+			if (Value->IsEmpty() || !AethelnObservability::IsSafeIdentifier(*Value))
+			{
+				return false;
+			}
+		}
+		return ObservabilitySchemaId == AethelnObservability::SchemaId
+			&& ObservabilitySchemaVersion == AethelnObservability::SchemaVersion
+			&& NetworkProfileSchemaId == AethelnNetworkSpike::NetworkProfileSchemaId
+			&& NetworkProfileSchemaVersion == AethelnNetworkSpike::NetworkProfileSchemaVersion
+			&& IsKnown(FlowKind);
+	}
+
+	static bool TryMakeValidated(
+		const FAethelnBuildIdentity& InBuild,
+		const FAethelnNetworkProfile& InProfile,
+		EAethelnFlowKind InFlowKind,
+		const FString& InRunId,
+		const FString& InServerInstanceId,
+		const FString& InConnectionPseudonym,
+		FAethelnCrashContextSnapshot& OutSnapshot)
+	{
+		FAethelnCrashContextSnapshot Candidate;
+		Candidate.ObservabilitySchemaId = AethelnObservability::SchemaId;
+		Candidate.ObservabilitySchemaVersion = AethelnObservability::SchemaVersion;
+		Candidate.SourceRevision = InBuild.SourceRevision;
+		Candidate.BuildIdentity = InBuild.BuildIdentity;
+		Candidate.BuildConfiguration = InBuild.BuildConfiguration;
+		Candidate.EngineRevision = InBuild.EngineRevision;
+		Candidate.ToolchainIdentity = InBuild.ToolchainIdentity;
+		Candidate.NetworkProfileSchemaId = InProfile.SchemaId;
+		Candidate.NetworkProfileSchemaVersion = InProfile.SchemaVersion;
+		Candidate.NetworkProfileId = InProfile.ProfileId;
+		Candidate.FlowKind = InFlowKind;
+		Candidate.RunId = InRunId;
+		Candidate.ServerInstanceId = InServerInstanceId;
+		Candidate.ConnectionPseudonym = InConnectionPseudonym;
+		if (!Candidate.IsBounded())
+		{
+			return false;
+		}
+		OutSnapshot = MoveTemp(Candidate);
+		return true;
+	}
+};
+
 struct GAMENET_API FAethelnMetricSample
 {
 	EAethelnMetricKind Metric = EAethelnMetricKind::EventCount;

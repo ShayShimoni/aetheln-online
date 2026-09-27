@@ -238,6 +238,133 @@ bool FAethelnObservabilityCorrelationContextTest::RunTest(const FString& Paramet
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnObservabilityCrashContextSnapshotTest,
+	"Aetheln.Observability.Contracts.CrashContextSnapshot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Parameters)
+{
+	FAethelnBuildIdentity Build;
+	Build.SourceRevision = TEXT("revision-148");
+	Build.BuildIdentity = TEXT("build-148");
+	Build.BuildConfiguration = TEXT("Development");
+	Build.EngineRevision = TEXT("5.8.1");
+	Build.ToolchainIdentity = TEXT("toolchain-148");
+	FAethelnNetworkProfile Profile;
+	Profile.ProfileId = TEXT("network-profile.test");
+
+	FAethelnCrashContextSnapshot Snapshot;
+	TestFalse(TEXT("A default crash-context snapshot is not bounded"), Snapshot.IsBounded());
+	TestTrue(
+		TEXT("Valid build, profile, and runtime identities form a snapshot"),
+		FAethelnCrashContextSnapshot::TryMakeValidated(
+			Build,
+			Profile,
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-148"),
+			TEXT("instance-148"),
+			AethelnObservability::ExcludedIdentifier,
+			Snapshot));
+	TestTrue(TEXT("Accepted snapshot remains bounded"), Snapshot.IsBounded());
+	TestEqual(TEXT("Snapshot carries the observability schema"), Snapshot.ObservabilitySchemaId, FString(AethelnObservability::SchemaId));
+	TestEqual(TEXT("Snapshot carries the observability schema version"), Snapshot.ObservabilitySchemaVersion, AethelnObservability::SchemaVersion);
+	TestEqual(TEXT("Snapshot maps the source revision"), Snapshot.SourceRevision, Build.SourceRevision);
+	TestEqual(TEXT("Snapshot maps the build identity"), Snapshot.BuildIdentity, Build.BuildIdentity);
+	TestEqual(TEXT("Snapshot maps the build configuration"), Snapshot.BuildConfiguration, Build.BuildConfiguration);
+	TestEqual(TEXT("Snapshot maps the engine revision"), Snapshot.EngineRevision, Build.EngineRevision);
+	TestEqual(TEXT("Snapshot maps the toolchain identity"), Snapshot.ToolchainIdentity, Build.ToolchainIdentity);
+	TestEqual(TEXT("Snapshot maps the network-profile schema"), Snapshot.NetworkProfileSchemaId, FString(AethelnNetworkSpike::NetworkProfileSchemaId));
+	TestEqual(TEXT("Snapshot maps the network-profile version"), Snapshot.NetworkProfileSchemaVersion, AethelnNetworkSpike::NetworkProfileSchemaVersion);
+	TestEqual(TEXT("Snapshot maps the network-profile identity"), Snapshot.NetworkProfileId, Profile.ProfileId);
+	TestEqual(TEXT("Snapshot maps the flow kind"), Snapshot.FlowKind, EAethelnFlowKind::PrototypeAuthority);
+	TestEqual(TEXT("Snapshot maps the run"), Snapshot.RunId, FString(TEXT("run-148")));
+	TestEqual(TEXT("Snapshot maps the server instance"), Snapshot.ServerInstanceId, FString(TEXT("instance-148")));
+	TestEqual(TEXT("Snapshot keeps the excluded connection marker"), Snapshot.ConnectionPseudonym, FString(AethelnObservability::ExcludedIdentifier));
+
+	FAethelnBuildIdentity UnknownBuild;
+	FAethelnNetworkProfile UnsetProfile;
+	FAethelnCrashContextSnapshot UnknownSnapshot;
+	TestTrue(
+		TEXT("Explicit unknown provenance and unset profile remain valid registered values"),
+		FAethelnCrashContextSnapshot::TryMakeValidated(
+			UnknownBuild,
+			UnsetProfile,
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-unknown"),
+			TEXT("instance-unknown"),
+			AethelnObservability::ExcludedIdentifier,
+			UnknownSnapshot));
+	TestEqual(TEXT("Unknown source revision stays explicit"), UnknownSnapshot.SourceRevision, FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Unset network profile stays explicit"), UnknownSnapshot.NetworkProfileId, FString(AethelnNetworkSpike::UnsetNetworkProfileId));
+
+	const FAethelnCrashContextSnapshot Accepted = Snapshot;
+	auto ExpectRejectedAndUnchanged = [this, &Snapshot, &Accepted](
+		const TCHAR* What,
+		const FAethelnBuildIdentity& InBuild,
+		const FAethelnNetworkProfile& InProfile,
+		EAethelnFlowKind InFlowKind,
+		const FString& InRunId,
+		const FString& InInstanceId,
+		const FString& InConnectionPseudonym)
+	{
+		TestFalse(
+			What,
+			FAethelnCrashContextSnapshot::TryMakeValidated(
+				InBuild,
+				InProfile,
+				InFlowKind,
+				InRunId,
+				InInstanceId,
+				InConnectionPseudonym,
+				Snapshot));
+		TestEqual(TEXT("Rejected snapshot leaves the prior run unchanged"), Snapshot.RunId, Accepted.RunId);
+		TestEqual(TEXT("Rejected snapshot leaves the prior build unchanged"), Snapshot.BuildIdentity, Accepted.BuildIdentity);
+		TestEqual(TEXT("Rejected snapshot leaves the prior profile unchanged"), Snapshot.NetworkProfileId, Accepted.NetworkProfileId);
+		TestEqual(TEXT("Rejected snapshot leaves the prior instance unchanged"), Snapshot.ServerInstanceId, Accepted.ServerInstanceId);
+	};
+
+	const FString Oversized = FString::ChrN(AethelnObservability::MaxIdentifierLength + 1, TCHAR('x'));
+	TArray<FString> UnsafeValues;
+	UnsafeValues.Add(FString());
+	UnsafeValues.Add(Oversized);
+	for (const TCHAR UnsafeCharacter : { TCHAR(0x08), TCHAR(0x1b), TCHAR(0x7f), TCHAR(0x85), TCHAR(0x2028), TCHAR(0x2029) })
+	{
+		UnsafeValues.Add(FString::Printf(TEXT("value%cunsafe"), UnsafeCharacter));
+	}
+	for (const FString& Unsafe : UnsafeValues)
+	{
+		ExpectRejectedAndUnchanged(TEXT("Unsafe run identity fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, Unsafe, TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Unsafe server instance fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), Unsafe, AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Unsafe connection pseudonym fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), Unsafe);
+		FAethelnBuildIdentity UnsafeBuild = Build;
+		UnsafeBuild.SourceRevision = Unsafe;
+		ExpectRejectedAndUnchanged(TEXT("Unsafe source revision fails closed"), UnsafeBuild, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+		UnsafeBuild = Build;
+		UnsafeBuild.ToolchainIdentity = Unsafe;
+		ExpectRejectedAndUnchanged(TEXT("Unsafe toolchain identity fails closed"), UnsafeBuild, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+		FAethelnNetworkProfile UnsafeProfile = Profile;
+		UnsafeProfile.ProfileId = Unsafe;
+		ExpectRejectedAndUnchanged(TEXT("Unsafe network-profile identity fails closed"), Build, UnsafeProfile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+	}
+
+	ExpectRejectedAndUnchanged(TEXT("Unknown flow kind fails closed"), Build, Profile, static_cast<EAethelnFlowKind>(200), TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+	FAethelnNetworkProfile WrongSchema = Profile;
+	WrongSchema.SchemaId = TEXT("aetheln.other-profile");
+	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile schema fails closed"), Build, WrongSchema, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+	FAethelnNetworkProfile WrongVersion = Profile;
+	WrongVersion.SchemaVersion = AethelnNetworkSpike::NetworkProfileSchemaVersion + 1;
+	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile version fails closed"), Build, WrongVersion, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+
+	FAethelnCrashContextSnapshot Tampered = Accepted;
+	Tampered.ObservabilitySchemaVersion = AethelnObservability::SchemaVersion + 1;
+	TestFalse(TEXT("Snapshot with a foreign observability schema version is not bounded"), Tampered.IsBounded());
+	Tampered = Accepted;
+	Tampered.FlowKind = static_cast<EAethelnFlowKind>(200);
+	TestFalse(TEXT("Snapshot with an unknown flow kind is not bounded"), Tampered.IsBounded());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnObservabilityBoundedSinkTest,
 	"Aetheln.Observability.Contracts.BoundedSinkAndFailure",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
