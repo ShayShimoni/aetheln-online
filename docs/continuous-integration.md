@@ -484,7 +484,11 @@ by each receipt publisher. Aggregate mode additionally combines the static
 the direct selector binding and sorted direct producer bindings, and writes
 both the aggregate context and nonce-specific runtime requirements. The
 template maps all nine obligations to their intended receipt jobs; it does not
-claim that every mapped semantic producer is implemented.
+claim that every mapped semantic producer is implemented. The selector report
+and repository requirements template are UTF-8 without BOM and require exactly
+one trailing LF, matching their production writers. Embedded action and direct
+binding JSON remains compact with no leading or trailing whitespace; generated
+identity, aggregate, and runtime-requirements outputs add no line terminator.
 
 `aggregate_ready=true` only when every selected obligation is in the currently
 wired semantic subset: `portable`, `native-client-server-compile`, and

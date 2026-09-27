@@ -21,7 +21,7 @@ $script:CheckIds = @('portable','visual-package','delivery-harness','native-clie
 $script:Nonce = '6' * 64
 
 function Write-FixtureJson([string] $Path, $Value) {
-	[IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 16 -Compress), $script:ContextUtf8)
+	[IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 16 -Compress) + "`n"), $script:ContextUtf8)
 }
 
 function New-SelectorFixture {
@@ -158,7 +158,8 @@ foreach ($Case in @(
 	@{name='selector-replay';reason='selector_identity_mismatch';mutate={param($f)$x=Get-Content -Raw $f.SelectorPath|ConvertFrom-Json;$x.attemptAnchor.runId='9000';Write-FixtureJson $f.SelectorPath $x}},
 	@{name='selector-type';reason='selector_identity_invalid';mutate={param($f)$x=Get-Content -Raw $f.SelectorPath|ConvertFrom-Json;$x.attemptAnchor.runAttempt='2';Write-FixtureJson $f.SelectorPath $x}},
 	@{name='selector-open';reason='selector_schema_invalid';mutate={param($f)$x=Get-Content -Raw $f.SelectorPath|ConvertFrom-Json;$x|Add-Member extra $true;Write-FixtureJson $f.SelectorPath $x}},
-	@{name='selector-trailing-lf';reason='json_canonical_bytes_invalid';mutate={param($f)[IO.File]::AppendAllText($f.SelectorPath,"`n",$script:ContextUtf8)}},
+	@{name='selector-missing-lf';reason='json_canonical_bytes_invalid';mutate={param($f)$raw=[IO.File]::ReadAllText($f.SelectorPath,$script:ContextUtf8);[IO.File]::WriteAllText($f.SelectorPath,$raw.Substring(0,$raw.Length-1),$script:ContextUtf8)}},
+	@{name='selector-extra-lf';reason='json_canonical_bytes_invalid';mutate={param($f)[IO.File]::AppendAllText($f.SelectorPath,"`n",$script:ContextUtf8)}},
 	@{name='selector-duplicate-json';reason='json_duplicate_property';mutate={param($f)$raw=[IO.File]::ReadAllText($f.SelectorPath,$script:ContextUtf8);$raw=$raw -replace '^\{','{"schemaVersion":"evil",';[IO.File]::WriteAllText($f.SelectorPath,$raw,$script:ContextUtf8)}},
 	@{name='incomplete-coverage';reason='requirements_check_coverage_incomplete';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks|Where-Object{$_ -cne 'portable'});Write-FixtureJson $f.TemplatePath $x}},
 	@{name='unsorted-template';reason='requirements_not_sorted';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs=@($x.jobs[1],$x.jobs[0],$x.jobs[2]);Write-FixtureJson $f.TemplatePath $x}},

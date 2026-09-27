@@ -187,10 +187,14 @@ function Read-BoundedAggregateContextFileBytes {
 }
 
 function Read-StrictAggregateContextFileJson {
-	param([string] $Path, [ValidateSet('Object','Array')] [string] $RootKind)
+	param([string] $Path, [ValidateSet('Object','Array')] [string] $RootKind, [switch] $RequireSingleTrailingLf)
 	$Bytes = Read-BoundedAggregateContextFileBytes $Path
 	try { $Raw = $script:AggregateContextUtf8Strict.GetString($Bytes) }
 	catch { throw 'input_utf8_invalid' }
+	if ($RequireSingleTrailingLf) {
+		if (-not $Raw.EndsWith("`n", [StringComparison]::Ordinal)) { throw 'json_canonical_bytes_invalid' }
+		$Raw = $Raw.Substring(0, $Raw.Length - 1)
+	}
 	return ConvertFrom-StrictAggregateContextJson -Raw $Raw -RootKind $RootKind
 }
 
@@ -205,7 +209,7 @@ function Assert-AggregateContextArguments {
 
 function Read-AndAssertAggregateContextSelector {
 	param([string] $Path,[string] $Base,[string] $Head,[string] $Tested,[string] $ExpectedRunId,[int] $ExpectedRunAttempt)
-	$Report = Read-StrictAggregateContextFileJson -Path $Path -RootKind Object
+	$Report = Read-StrictAggregateContextFileJson -Path $Path -RootKind Object -RequireSingleTrailingLf
 	Assert-ClosedAggregateContextObject -Value $Report -Names @('schemaVersion','attemptAnchor','policy','source','execution','classification','selection','legacyAuthority','comparison') -Reason 'selector_schema_invalid'
 	if ($Report.schemaVersion -isnot [string] -or $Report.schemaVersion -cne 'aetheln.ci-selection/v1') { throw 'selector_schema_invalid' }
 	Assert-ClosedAggregateContextObject -Value $Report.attemptAnchor -Names @('schemaVersion','runId','runAttempt','nonce') -Reason 'selector_identity_invalid'
@@ -272,7 +276,7 @@ function Read-AndAssertAggregateContextActions {
 
 function Read-AndAssertAggregateContextTemplate {
 	param([string] $Path)
-	$Template=Read-StrictAggregateContextFileJson -Path $Path -RootKind Object
+	$Template=Read-StrictAggregateContextFileJson -Path $Path -RootKind Object -RequireSingleTrailingLf
 	Assert-ClosedAggregateContextObject -Value $Template -Names @('schemaVersion','jobs') -Reason 'requirements_schema_invalid'
 	if ($Template.schemaVersion -cne 'aetheln.ci-acceptance-requirements-template/v1' -or $Template.jobs -isnot [array]) { throw 'requirements_schema_invalid' }
 	$Jobs=@($Template.jobs)
