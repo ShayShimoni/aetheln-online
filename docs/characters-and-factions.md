@@ -729,6 +729,143 @@ resource, Cadence, is the measured breath of that song.
   edge: his glass preservation is either the perfect witness or the refusal
   to let a record close, and the Unison claims him as precedent either way.
 
+#### Gravecant Canonical Intent
+
+This shard has maturity **Canonical Intent** only. Gravecant, Dirge, Refrain,
+Cadence, Last Chorus, and the techniques below have working display names;
+their semantic IDs are stable. This is a design and compatibility contract,
+not Evidence Validated or Implementation Ready content. It does not add
+Gravecant, healing, or Ward to the Oathscar-only prototype runtime.
+
+The Gravecant fights by keeping a readable measure: an aimed strike or
+supportive phrase commits, then its witnessed result can change the next
+phrase. Support is an authored free-aim volume, line, or placement resolved
+against the current server-owned relation and world policy, not a roster
+selection, homing effect, client-declared ally, or automatic repair of everyone
+nearby. The base kit must provide damage, survival, and useful restoration or
+protection before specialization, Cadence, a Skein choice, equipment,
+Doctrine, or an ally supplies a missing verb.
+
+Dirge (`order.gravecant.spec.dirge`) interprets the oath as carrying an ending
+to its truthful conclusion. It favors committed aimed pressure and eligible
+interruption at the cost of a longer, visible exposure; its harmful phrases
+cannot turn healing into damage, force death, or end another character's
+record outside ordinary combat rules. Refrain
+(`order.gravecant.spec.refrain`) interprets the oath as preserving continuity
+for those still living. It favors aimed Health restoration and prepared Ward
+protection, but must choose timing and angle while exposed to interruption.
+Neither interpretation erases the other's base combat and support verbs,
+grants passive invulnerability, or makes a player accept unwanted control.
+
+One authoritative weapon discipline is active in combat. The server validates
+its compatible abilities and any permitted transition; an instrument model,
+sound, animation, or client request cannot combine disciplines or establish
+contact. Learning, changing, and persisting disciplines remain with Issues
+[#112](https://github.com/ShayShimoni/aetheln-online/issues/112) and
+[#113](https://github.com/ShayShimoni/aetheln-online/issues/113).
+
+| Weapon discipline | Stable ID | Mechanical identity and exposure |
+| --- | --- | --- |
+| Chime-staff | `order.gravecant.weapon.chime_staff` | Aimed measured lines reach an ally or enemy through a declared lane; position or eligible interruption can deny the long commitment. |
+| Mace-reliquary | `order.gravecant.weapon.mace_reliquary` | Short Wrought arcs pair close protection with contact pressure; the wielder must enter threat range rather than healing from safety. |
+| Chain-censer | `order.gravecant.weapon.chain_censer` | Authored sweeps and visibly placed, bounded vigil areas contest space; smoke and chain presentation neither seek targets nor hide dangerous contact. |
+| Tome-rod | `order.gravecant.weapon.tome_rod` | Aimed inscriptions trade immediate reach for a prepared support or pressure point; the opponent can leave or disrupt the readable setup. |
+
+Cadence (`order.gravecant.resource.cadence`) presents the shared
+`combat.resource.order` slot, not Health, Endurance, Guard, or Ward. It is
+earned only from explicitly eligible, server-committed outcomes of authored
+actions, such as actual missing-Health restoration, eligible Ward absorption,
+or confirmed attack contact, as later definitions permit. Casting, predicted
+contact, placing an unused Ward, ordinary overheal, duplicate delivery, and
+refreshing an unchanged effect do not earn it. Each qualifying result may
+grant at most once under its root activation or effect identity; each accepted
+compatible spend commits at most once. Cadence cannot buy automatic contact,
+unbounded healing, a resurrection, or another Order's resource. Qualifying
+result sets, gain, spend, cap, decay, refund, and every value remain
+evidence-owned tuning `TBD`.
+
+Representative base actions are Witness Blow
+(`order.gravecant.ability.witness_blow`), an aimed Wrought contact; Refrain
+Line (`order.gravecant.ability.refrain_line`), an aimed Health-restoring line
+that applies only to an eligible living recipient it actually contacts; and
+Vigil Ward (`order.gravecant.ability.vigil_ward`), an aimed placement that
+supplies explicit temporary Ward to eligible living recipients inside its
+authored volume. A deliberate self-use, if authored, resolves against the
+server's own source identity rather than a client-selected target. These are
+Canonical Intent references for the weave, not a final ability count or
+prototype kit. Healing cannot exceed the recipient's missing Health under
+its versioned bound: ordinary overheal is lost, not converted to Ward,
+Cadence, damage, or a hidden reserve. Healing has no default random critical
+spike; any future exceptional restoration rule needs separate explicit design
+and evidence. Ward absorbs only its authored eligible post-mitigation damage,
+has a finite lifetime and stacking rule, and remains separate from active
+Guard and Health. Every harmful component declares Wrought, Cinder, or Wake
+and follows shared avoidance, defense, mitigation, and life-state policy.
+
+Last Chorus (`order.gravecant.peak.last_chorus`) briefly realizes the
+forbidden Gravecant who already died, as a server-owned temporary combat
+state with explicitly compatible phrases. Its visible activation lets the
+Gravecant risk a committed final measure of aimed pressure, with a punishable
+ending and no free second cast. Singing it over someone who can still be
+saved remains the Order's taboo, not a routine support mode. It does not
+change the Gravecant's actual life state, prevent an otherwise valid
+death, reverse a committed result, preserve a lethal target, restore a dead
+recipient, or resurrect anyone. The normal death, cancellation, and respawn
+flow always wins when Health reaches zero. Opponents can break the declared
+line, leave an area, interrupt an eligible phrase, deny contact through
+defense, or punish recovery. Eligibility, Cadence policy, compatible phrases,
+cancellation, duration, and every numeric value remain `TBD`.
+
+An unspecialized Gravecant must aim and commit damage, use shared defense or
+dodge, recover, and defeat a representative ordinary enemy alone without an
+ally to heal, prebanked Cadence, a specialization, or a particular Form,
+Thread, or Keystone. In a group, the healer/warder contribution comes from
+actual Health restored to living allies and Ward protection consumed by
+eligible harm, not a claimed cast, proximity, overheal, or an untested Ward.
+Committed support involving an engaged participant may affect engagement
+and eligible PvE threat under server rules; a rejected, wasted, or predicted
+result does not. This is not a passive taunt or a way to control player input.
+
+Counterplay is visible and spatial: opponents see a meaningful wind-up,
+support lane or placement, active phrase, and recovery where detection policy
+allows; they can deny an angle, pressure the supporter's position,
+interrupt an eligible commitment, contest a bounded support area, or punish the
+short-range discipline. The server rechecks source and recipient life state,
+relation, sanctuary and protected-target policy, contact, and effect
+eligibility when each result applies, including delayed or periodic work.
+No friendly label bypasses a future faction or territory rule. Triggered
+healing, Ward, damage, and construct work retain their originating root and
+finite depth, listener, event, target, and construct budgets across branches,
+delays, and periodic ticks. They cannot self-trigger, recursively renew a
+Ward, mint Cadence through a loop, or reset their ancestry via a new actor.
+
+These are representative weave definitions at **Canonical Intent**, not a
+final collection, slot count, unlock schedule, or tuned loadout:
+
+| Kind | Working name and stable ID | Decision changed |
+| --- | --- | --- |
+| Form | Held Vigil (`order.gravecant.form.vigil_ward.held_vigil`) | Narrows Vigil Ward to one aimed eligible living recipient for stronger authored protection, trading area coverage for a single committed line. |
+| Form | Open Vigil (`order.gravecant.form.vigil_ward.open_vigil`) | Widens Vigil Ward's visible placement for weaker protection per eligible recipient; it is mutually exclusive with Held Vigil and does not auto-select allies. |
+| Form | Closing Phrase (`order.gravecant.form.witness_blow.closing_phrase`) | Trades Witness Blow's immediate aimed contact for a more telegraphed interruption attempt against an eligible commitment. |
+| Thread | Witnessed Need (`order.gravecant.thread.witnessed_need`) | Actual missing-Health restoration changes the next compatible Vigil Ward's aimed placement, not its recipient eligibility or contact authority. |
+| Thread | Kept Measure (`order.gravecant.thread.kept_measure`) | Eligible Ward absorption changes the next compatible Refrain Line's timing, without generating healing from the absorption itself. |
+| Thread | Answered Dirge (`order.gravecant.thread.answered_dirge`) | A committed Witness Blow result changes the next compatible aimed Refrain Line's release; a predicted strike or missed contact primes nothing. |
+| Keystone | Living Record (`order.gravecant.keystone.living_record`) | Favors direct aimed restoration on a living recipient over prepared Ward, preserving ordinary overheal loss and exposure. |
+| Keystone | Held Memory (`order.gravecant.keystone.held_memory`) | Favors prepared, finite Ward over immediate restoration without converting overheal or renewing protection recursively. |
+
+Forms modify only their named action, with one Form per action unless later
+compatibility evidence approves more. Threads consume bounded, visible,
+server-committed results; one Keystone changes the build's central choice.
+No weave supplies a target, resurrects, creates random healing spikes by
+default, alters the defense order, or escapes a root work budget. Issue
+[#106](https://github.com/ShayShimoni/aetheln-online/issues/106) owns registry
+versions, compatibility, proc/listener validation, and generation; Issue
+[#113](https://github.com/ShayShimoni/aetheln-online/issues/113) owns compiled
+loadouts, persistence, and atomic changes. No part of this shard is runtime,
+packaged, balance, performance, readability, accessibility, or QA evidence.
+Gravecant implementation remains future work; all exact tuning and finite
+budget values remain evidence-owned `TBD`.
+
 ### Blackfletch - Working Name
 
 The Blackfletch swear to see the path before it is walked. They are wardens of
