@@ -559,6 +559,141 @@ their resource, Tempo, is the rhythm they steal from a fight.
   Hushblade manner under scrutiny from both factions; Kaelen trained her early
   guard and knows what the Concord's demands are doing to her.
 
+#### Hushblade Canonical Intent
+
+This shard has maturity **Canonical Intent** only. Hushblade, Red Echo,
+Hollow Guard, Tempo, Missing Second, and the techniques below have working
+display names; their semantic IDs are stable. This is a design and
+compatibility contract, not Evidence Validated or Implementation Ready
+content. Hushblade is not part of the Oathscar-only prototype runtime.
+
+The Hushblade wins by reading an opponent's commitment, moving through its
+opening, and making a short aimed answer before recovery closes. Speed does
+not erase wind-up, contact, or recovery, and evasion grants no blanket
+invulnerability. The unspecialized base kit must function with any equipped
+supported weapon discipline, without Tempo, a Skein choice, equipment,
+Doctrine, or an ally. Stealth is not required for its basic attack, defense,
+or solo loop.
+
+Red Echo (`order.hushblade.spec.red_echo`) interprets the oath as ending a
+fight by pursuing the aggressor. An eligible, server-confirmed attack may
+leave a visibly signaled echo that attempts one separately authored, delayed
+free-aim contact along its recorded attack lane. It is not a target-seeking
+duplicate of the original hit. A miss, valid dodge, line break, or changed
+world policy can deny that contact. Hollow Guard
+(`order.hushblade.spec.hollow_guard`) instead ends the fight by moving a
+threat away from its victim: correctly timed evasions and interceptions
+create an authored opening for the Hushblade or an ally. It contributes to
+eligible PvE threat and protection through server-observed avoidance,
+interception, and ally safety, not a passive taunt, permanent immunity, or
+control of a player's target or input. Neither specialization is required for
+solo damage or survival.
+
+One authoritative weapon discipline is active in combat. The server checks
+the selected discipline, compatible actions, and any permitted transition;
+an animation, client request, or weapon presentation cannot combine
+disciplines or decide contact. Learning, changing, and persisting disciplines
+remain with Issues [#112](https://github.com/ShayShimoni/aetheln-online/issues/112)
+and [#113](https://github.com/ShayShimoni/aetheln-online/issues/113).
+
+| Weapon discipline | Stable ID | Mechanical identity and exposure |
+| --- | --- | --- |
+| Twin knives | `order.hushblade.weapon.twin_knives` | Alternating short, aimed commitments reward close reads and recovery punishment; the wielder must enter an opponent's immediate threat range. |
+| Sheathed blade | `order.hushblade.weapon.sheathed_blade` | A declared draw concentrates pressure in one committed aimed answer, then exposes a distinct recovery; the sheath is no instant or hidden hit. |
+| Chain-sickle | `order.hushblade.weapon.chain_sickle` | Authored sweeps and a bounded tether contest spacing; the chain is neither homing nor a permanent movement lock, and crossing its active lane defeats the setup. |
+| Needle fan | `order.hushblade.weapon.needle_fan` | A visible aimed spread contests a narrow approach from shorter commitments; each authored needle contact and its falloff or mitigation remain server resolved. |
+
+Tempo (`order.hushblade.resource.tempo`) presents the shared
+`combat.resource.order` slot, never Endurance, Guard, Ward, or Health. It
+represents an earned opening, not raw movement speed. Only explicitly authored
+and eligible, server-committed timing results can grant it; a client-reported
+perfect dodge, attack animation, repeated result, whiff, or passive movement
+cannot. The server records each grant at most once against its stable
+activation or effect identity, and accepts a compatible spend at most once
+for its action. Tempo cannot purchase automatic contact, immunity, an
+unreadable recovery skip, or another Order's resource. Qualifying events,
+gain, spend, cap, decay, refund, and all numeric values remain evidence-owned
+tuning `TBD`.
+
+Representative base actions are Measured Cut
+(`order.hushblade.ability.measured_cut`), a committed aimed Wrought attack;
+Slip Line (`order.hushblade.ability.slip_line`), an authored directional
+evasion with an exposed ending; and Sever Beat
+(`order.hushblade.ability.sever_beat`), an aimed attempt to interrupt an
+eligible commitment during its authored window. These are Canonical Intent
+references for the weave, not a final ability count, weapon-independent
+animation set, or prototype kit. Any damaging component names its Wrought,
+Cinder, or Wake family and follows the shared defense order. Dodge costs,
+contact volumes, movement, interrupt eligibility, cooldowns, recovery, and
+effect behavior remain authored and tuning `TBD`.
+
+An echo is child work of one accepted root activation, never a fresh player
+activation. The root pays its authored costs and resolves its eligible Tempo
+transition once; the echo pays no second cost, grants no Tempo, creates no
+proc or Thread trigger, cannot activate another echo, and cannot generate or
+extend Missing Second. Its own authored contact and damage may resolve once
+only after the server rechecks current source, target relation, sanctuary and
+protected-target policy, life state, avoidance, defense, and mitigation. It
+inherits the root's finite depth, listener, event, target, and construct
+budgets, even if delayed or emitted by a temporary construct. Replay,
+reconnect, cancellation, and duplicate delivery cannot restart the echo or
+double-commit any cost or result. The visible echo cue must be timely enough
+to support avoidance without disclosing an opponent whom the observer is not
+authorized to detect.
+
+Missing Second (`order.hushblade.peak.missing_second`) briefly realizes the
+forbidden Hushblade who was never seen. An accepted activation enters a
+server-owned temporary Peak state with explicitly compatible movement and
+attack variants; it does not rewind time, erase an accepted hit, create a
+second attack from a prior input, or guarantee concealment, contact, escape,
+or immunity. Stealth and detection remain server decisions: an observer sees
+only cues the current detection policy authorizes, while a detected opponent
+receives readable activation, dangerous commitment, and ending/recovery
+cues. Opponents can deny a predicted lane, cover an ally, dodge a revealed
+attack, interrupt an eligible commitment, or punish its recovery. Peak
+eligibility, Tempo policy, detection interaction, compatible variants,
+cancellation, duration, and every numeric value remain `TBD`.
+
+An unspecialized Hushblade can approach, aim and commit Wrought damage, use
+shared defense or a correctly timed evasion, recover, and defeat a
+representative ordinary enemy alone. No prebanked Tempo, echo, concealment,
+party protection, specific weave, or allied target is required to start or
+finish that loop. In groups, Hollow Guard can take a risk to redirect an
+eligible PvE attack or create a safe exit for an ally; the server credits
+actual protection and threat rather than proximity or a claimed dodge.
+Red Echo contributes pressure through readable follow-ups, not unavoidable
+bursts. Both lines remain counterable through timing, spacing, facing, Guard,
+eligible interruption, Resolve and immunity policy, and normal resource and
+cooldown limits. The server resolves every contact from authored free-aim
+geometry; no client-selected target, claimed hit, or presentation socket is
+authoritative.
+
+These are representative weave definitions at **Canonical Intent**, not a
+final collection, slot count, unlock schedule, or tuned loadout:
+
+| Kind | Working name and stable ID | Decision changed |
+| --- | --- | --- |
+| Form | Crossing Line (`order.hushblade.form.slip_line.crossing_line`) | Changes Slip Line into a more committed lateral crossing that favors an angle for the next aimed action but exposes its end position. |
+| Form | Held Line (`order.hushblade.form.slip_line.held_line`) | Trades Slip Line's travel for a shorter, precisely timed evasion and held facing; it is mutually exclusive with Crossing Line. |
+| Form | Open Cut (`order.hushblade.form.measured_cut.open_cut`) | Trades Measured Cut's immediate pressure for a declared delayed contact lane and a longer punishable commitment. |
+| Thread | Read the Gap (`order.hushblade.thread.read_the_gap`) | A server-confirmed eligible evasion changes the next compatible Measured Cut's approach, not its contact authority; prediction alone grants nothing. |
+| Thread | Quiet Interruption (`order.hushblade.thread.quiet_interruption`) | A committed Sever Beat interruption changes the next compatible Slip Line's route, without a free movement action or duplicate cost. |
+| Thread | Covered Exit (`order.hushblade.thread.covered_exit`) | A server-confirmed ally protection result changes the next compatible Sever Beat into a clearer interception lane, not an automatic interrupt. |
+| Keystone | Relentless Answer (`order.hushblade.keystone.relentless_answer`) | Makes committed Tempo spends favor pursuit after an aimed answer, preserving wind-up, recovery, and all contact checks. |
+| Keystone | Leave No Opening (`order.hushblade.keystone.leave_no_opening`) | Makes committed Tempo spends favor an ally's safe withdrawal over pursuit, without passive Guard or permanent threat control. |
+
+Forms modify only their named action, with one Form per action unless later
+compatibility evidence approves more. Threads use visible, bounded,
+server-owned results and cannot trigger from echo child work. One Keystone
+changes the build's central choice without removing costs or counterplay.
+Issue [#106](https://github.com/ShayShimoni/aetheln-online/issues/106) owns
+registry versions, compatibility, proc/listener validation, and generation;
+Issue [#113](https://github.com/ShayShimoni/aetheln-online/issues/113) owns
+compiled loadouts, persistence, and atomic changes. No part of this shard is
+runtime, packaged, balance, performance, readability, accessibility, or QA
+evidence. Hushblade implementation remains future work; all exact tuning and
+finite budget values remain evidence-owned `TBD`.
+
 ### Gravecant - Working Name
 
 The Gravecant swear that nothing true should end unwitnessed. They sing the
