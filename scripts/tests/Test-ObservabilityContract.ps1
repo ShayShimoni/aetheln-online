@@ -96,6 +96,48 @@ foreach ($Required in @(
 	Assert-ContainsLiteral -Text $CrashSnapshot -Literal $Required -Message "Required crash-context snapshot field or validation '$Required' is missing."
 }
 Assert-ContainsLiteral -Text $CrashSnapshot -Literal 'ConnectionPseudonym.Equals(AethelnObservability::ExcludedIdentifier, ESearchCase::CaseSensitive)' -Message 'Process-wide crash-context snapshot must require the literal excluded connection pseudonym.'
+foreach ($Closed in @(
+	'SourceRevision.Equals(AethelnObservability::UnknownValue, ESearchCase::CaseSensitive)',
+	'BuildIdentity.Equals(AethelnObservability::UnknownValue, ESearchCase::CaseSensitive)',
+	'ToolchainIdentity.Equals(AethelnObservability::UnknownValue, ESearchCase::CaseSensitive)',
+	'NetworkProfileId.Equals(AethelnNetworkSpike::UnsetNetworkProfileId, ESearchCase::CaseSensitive)',
+	'ServerInstanceId.Equals(AethelnObservability::CrashServerRole, ESearchCase::CaseSensitive)',
+	'BuildConfiguration.Equals(LexToString(FApp::GetBuildConfiguration()), ESearchCase::CaseSensitive)',
+	'EngineRevision.Equals(FEngineVersion::Current().ToString(), ESearchCase::CaseSensitive)',
+	'IsGeneratedRunId(RunId)'
+)) {
+	Assert-ContainsLiteral -Text $CrashSnapshot -Literal $Closed -Message "Crash-context snapshot must accept only closed, engine-owned, or generated values ('$Closed')."
+}
+$CrashAccessorMatch = [regex]::Match(
+	$SubsystemImplementation,
+	'UAethelnObservabilitySubsystem::TryGetCrashContextSnapshot\((?<body>.*?)\n\}',
+	[Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $CrashAccessorMatch.Success) {
+	throw 'Could not isolate the crash-context snapshot accessor.'
+}
+$CrashAccessor = $CrashAccessorMatch.Groups['body'].Value
+if ($CrashAccessor -cmatch 'RuntimeContext\.(RunId|InstanceId|ConnectionPseudonym)|\bBuildIdentity\b|\bNetworkProfile\b' -or
+	$CrashAccessor.IndexOf('CrashRunId', [StringComparison]::Ordinal) -lt 0) {
+	throw 'Crash-context snapshot must not copy launcher or caller identity text; it uses the generated crash run ID.'
+}
+$RuntimeSetMatch = [regex]::Match($SubsystemImplementation, 'UAethelnObservabilitySubsystem::SetRuntimeContext\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+$RuntimeResetMatch = [regex]::Match($SubsystemImplementation, 'UAethelnObservabilitySubsystem::ResetRuntimeContext\(\)(?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $RuntimeSetMatch.Success -or
+	$RuntimeSetMatch.Groups['body'].Value.IndexOf('CrashRunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsLower);', [StringComparison]::Ordinal) -lt 0 -or
+	-not $RuntimeResetMatch.Success -or
+	$RuntimeResetMatch.Groups['body'].Value.IndexOf('CrashRunId.Reset();', [StringComparison]::Ordinal) -lt 0) {
+	throw 'Every accepted runtime context must rotate the generated crash run ID, and a reset must clear it.'
+}
+$RegisterMatch = [regex]::Match($SubsystemImplementation, 'FAethelnCrashContextOwner::Register\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $RegisterMatch.Success) {
+	throw 'Could not isolate crash-context registration.'
+}
+$Register = $RegisterMatch.Groups['body'].Value
+$MarkerIndex = $Register.IndexOf('TEXT("AethelnCrashContextMarker run=%s"), *Snapshot->RunId);', [StringComparison]::Ordinal)
+$ActiveIndex = $Register.IndexOf('SetState(EState::Active);', [StringComparison]::Ordinal)
+if ($MarkerIndex -lt 0 -or $ActiveIndex -lt 0 -or $MarkerIndex -gt $ActiveIndex) {
+	throw 'The generated crash run ID must be bound to its evidence marker before registration becomes active.'
+}
 Assert-ContainsLiteral -Text $Subsystem -Literal 'TryGetCrashContextSnapshot(FAethelnCrashContextSnapshot& OutSnapshot) const' -Message 'Crash-context snapshot must be exposed only as a validated copy.'
 Assert-ContainsLiteral -Text $Subsystem -Literal 'static FAethelnCrashContextChanged& OnCrashContextChanged();' -Message 'Accepted crash-context changes must be observable without a world tick.'
 foreach ($Mutation in @('SetRuntimeContext(', 'ResetRuntimeContext()', 'SetBuildContext(', 'ResetBuildContext()')) {
@@ -147,7 +189,7 @@ if ($WorldCountIndex -lt 0 -or $SubsystemLookupIndex -lt 0 -or $WorldCountIndex 
 	throw 'Observable worlds must be counted before their observability subsystem is looked up.'
 }
 
-function Get-AutomationDeclarations([string] $Text) {
+function Get-AutomationDeclaration([string] $Text) {
 	$Result = @{}
 	foreach ($Match in [regex]::Matches($Text, 'IMPLEMENT_SIMPLE_AUTOMATION_TEST\((?<body>[^)]*)\)')) {
 		$NameMatch = [regex]::Match($Match.Groups['body'].Value, '"(?<name>[^"]+)"')
@@ -157,19 +199,20 @@ function Get-AutomationDeclarations([string] $Text) {
 	}
 	return $Result
 }
-$GameNetTests = Get-AutomationDeclarations $SubsystemImplementation
+$GameNetTests = Get-AutomationDeclaration $SubsystemImplementation
 foreach ($Name in @(
 	'Aetheln.Observability.CrashContext.Registration',
 	'Aetheln.Observability.CrashContext.WorldOwnership',
 	'Aetheln.Observability.CrashContext.FollowsAcceptedChanges',
-	'Aetheln.Observability.CrashContext.CountsWorldsWithoutSubsystem'
+	'Aetheln.Observability.CrashContext.CountsWorldsWithoutSubsystem',
+	'Aetheln.Observability.CrashContext.ExcludesLauncherText'
 )) {
 	if (-not $GameNetTests.ContainsKey($Name) -or
 		$GameNetTests[$Name].IndexOf('EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext', [StringComparison]::Ordinal) -lt 0) {
 		throw "Crash-context test '$Name' must live in GameNet and declare EditorContext | ServerContext."
 	}
 }
-$GameServerTests = Get-AutomationDeclarations $Server
+$GameServerTests = Get-AutomationDeclaration $Server
 if (-not $GameServerTests.ContainsKey('Aetheln.Observability.Server.SystemErrorLifecycleOnly') -or
 	$GameServerTests['Aetheln.Observability.Server.SystemErrorLifecycleOnly'].IndexOf('EAutomationTestFlags::ServerContext', [StringComparison]::Ordinal) -lt 0) {
 	throw 'The GameServer system-error test must be discoverable in the Server target (ServerContext).'
@@ -200,5 +243,7 @@ Assert-ContainsLiteral -Text $Operator -Literal 'Issue #45 owns' -Message 'Perfo
 Assert-ContainsLiteral -Text $Operator -Literal 'No CrashReportClient, uploader, vendor, endpoint, or external submission is configured' -Message 'Crash-report submission boundary is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'must never be opened, parsed, hashed, copied, or published' -Message 'Raw crash artifact handling boundary is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'Character validation bounds these values but does not prove they are free of personal or secret text' -Message 'Command-line provenance limitation is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'The `unknown` and `network-profile.unset` crash values are closed sentinels, not verified provenance' -Message 'Crash sentinel provenance limitation is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'AethelnCrashContextMarker run=' -Message 'Generated crash run evidence marker is undocumented.'
 
 Write-Output 'Observability contract and redaction checks passed.'

@@ -27,7 +27,7 @@ function Invoke-Check {
 	}
 }
 
-function Reset-Fixture {
+function Initialize-Fixture {
 	foreach ($RelativePath in $FixtureFiles) {
 		$Destination = Join-Path $FixtureRoot $RelativePath
 		New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
@@ -35,7 +35,7 @@ function Reset-Fixture {
 	}
 }
 
-function Set-FixtureText {
+function Edit-FixtureText {
 	param(
 		[Parameter(Mandatory)][string] $RelativePath,
 		[Parameter(Mandatory)][string] $Anchor,
@@ -62,14 +62,14 @@ function Assert-FailsClosed {
 }
 
 try {
-	Reset-Fixture
+	Initialize-Fixture
 	$Pass = Invoke-Check
 	if ($Pass.ExitCode -ne 0) {
 		throw "Valid observability fixture failed: $($Pass.Output -join [Environment]::NewLine)"
 	}
 	Write-Output 'PASS: valid bounded observability fixture is accepted'
 
-	Set-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor 'uint64 Sequence = 0;' -Replacement "uint64 Sequence = 0;`n`tFString RawIdentifier;"
+	Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor 'uint64 Sequence = 0;' -Replacement "uint64 Sequence = 0;`n`tFString RawIdentifier;"
 	Assert-FailsClosed -Name 'sensitive free-form identifier' -ExpectedPattern 'RawIdentifier'
 
 	$CrashSnapshotAnchor = 'FString ServerInstanceId;'
@@ -94,37 +94,37 @@ try {
 		'network profile tuning'     = 'TOptional<double> LatencyMilliseconds;'
 	}
 	foreach ($Entry in $ForbiddenCrashFields.GetEnumerator()) {
-		Reset-Fixture
-		Set-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor $CrashSnapshotAnchor -Replacement "$CrashSnapshotAnchor`n`t$($Entry.Value)"
+		Initialize-Fixture
+		Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor $CrashSnapshotAnchor -Replacement "$CrashSnapshotAnchor`n`t$($Entry.Value)"
 		Assert-FailsClosed -Name "crash snapshot $($Entry.Key)" -ExpectedPattern 'crash-context snapshot'
 	}
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservabilitySubsystem.h' -Anchor 'TEXT("AethelnRunId")' -Replacement 'TEXT("AethelnRun")'
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservabilitySubsystem.h' -Anchor 'TEXT("AethelnRunId")' -Replacement 'TEXT("AethelnRun")'
 	Assert-FailsClosed -Name 'missing stable crash key' -ExpectedPattern 'AethelnRunId'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'TEXT("AethelnServerLifecycle")' -Replacement 'TEXT("AethelnLifecycle")'
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'TEXT("AethelnServerLifecycle")' -Replacement 'TEXT("AethelnLifecycle")'
 	Assert-FailsClosed -Name 'missing stable lifecycle key' -ExpectedPattern 'AethelnServerLifecycle'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'void HandleSystemError()' -Replacement "void ResetAll() { FGenericCrashContext::ResetGameData(); }`n`tvoid HandleSystemError()"
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'void HandleSystemError()' -Replacement "void ResetAll() { FGenericCrashContext::ResetGameData(); }`n`tvoid HandleSystemError()"
 	Assert-FailsClosed -Name 'global crash data reset' -ExpectedPattern 'ResetGameData'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'void FAethelnCrashContextOwner::MarkStale()' -Replacement "void ResetAll() { FGenericCrashContext::ResetGameData(); }`nvoid FAethelnCrashContextOwner::MarkStale()"
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'void FAethelnCrashContextOwner::MarkStale()' -Replacement "void ResetAll() { FGenericCrashContext::ResetGameData(); }`nvoid FAethelnCrashContextOwner::MarkStale()"
 	Assert-FailsClosed -Name 'owner global crash data reset' -ExpectedPattern 'ResetGameData'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'FGenericCrashContext::SetGameData(CrashLifecycleKey, TEXT("crashing"));' -Replacement "FGenericCrashContext::SetGameData(CrashLifecycleKey, TEXT(`"crashing`"));`n`t`tFGenericCrashContext::SetGameData(CrashRunIdKey, FCommandLine::Get());"
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'FGenericCrashContext::SetGameData(CrashLifecycleKey, TEXT("crashing"));' -Replacement "FGenericCrashContext::SetGameData(CrashLifecycleKey, TEXT(`"crashing`"));`n`t`tFGenericCrashContext::SetGameData(CrashRunIdKey, FCommandLine::Get());"
 	Assert-FailsClosed -Name 'crash-time work expansion' -ExpectedPattern 'System-error handler'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor 'ConnectionPseudonym.Equals(AethelnObservability::ExcludedIdentifier, ESearchCase::CaseSensitive)' -Replacement '!ConnectionPseudonym.IsEmpty()'
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor 'ConnectionPseudonym.Equals(AethelnObservability::ExcludedIdentifier, ESearchCase::CaseSensitive)' -Replacement '!ConnectionPseudonym.IsEmpty()'
 	Assert-FailsClosed -Name 'printable process-wide connection pseudonym' -ExpectedPattern 'excluded connection pseudonym'
 
 	foreach ($Mutation in @('ResetRuntimeContext()', 'SetBuildContext(')) {
-		Reset-Fixture
+		Initialize-Fixture
 		$Path = Join-Path $FixtureRoot 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp'
 		$Text = Get-Content -LiteralPath $Path -Raw
 		$Start = $Text.IndexOf("UAethelnObservabilitySubsystem::$Mutation", [StringComparison]::Ordinal)
@@ -136,37 +136,83 @@ try {
 		Assert-FailsClosed -Name "unbroadcast $Mutation" -ExpectedPattern 'must broadcast the change'
 	}
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'UAethelnObservabilitySubsystem::OnCrashContextChanged().AddRaw(' -Replacement 'UAethelnObservabilitySubsystem::OnCrashContextChanged().AddLambda('
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'UAethelnObservabilitySubsystem::OnCrashContextChanged().AddRaw(' -Replacement 'UAethelnObservabilitySubsystem::OnCrashContextChanged().AddLambda('
 	Assert-FailsClosed -Name 'unbound crash-context change handler' -ExpectedPattern 'refresh when accepted context changes'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'FAethelnCrashContextOwner CrashContext;' -Replacement 'FCrashContextRegistration CrashContext;'
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'FAethelnCrashContextOwner CrashContext;' -Replacement 'FCrashContextRegistration CrashContext;'
 	Assert-FailsClosed -Name 'GameServer-local crash-context ownership' -ExpectedPattern 'GameNet owner'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)' -Replacement 'EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)'
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)' -Replacement 'EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)'
 	Assert-FailsClosed -Name 'editor-only crash-context automation' -ExpectedPattern 'must live in GameNet'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor '"Aetheln.Observability.CrashContext.CountsWorldsWithoutSubsystem"' -Replacement '"Aetheln.Observability.CrashContext.Other"'
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor '"Aetheln.Observability.CrashContext.CountsWorldsWithoutSubsystem"' -Replacement '"Aetheln.Observability.CrashContext.Other"'
 	Assert-FailsClosed -Name 'missing world-count automation' -ExpectedPattern 'CountsWorldsWithoutSubsystem'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)' -Replacement 'EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)'
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)' -Replacement 'EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)'
 	Assert-FailsClosed -Name 'editor-only GameServer system-error automation' -ExpectedPattern 'ServerContext'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor "`tTrackedWorlds.Add(World);" -Replacement "`tAethelnCrashContext::FindObservabilitySubsystem(World);`n`tTrackedWorlds.Add(World);"
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor "`tTrackedWorlds.Add(World);" -Replacement "`tAethelnCrashContext::FindObservabilitySubsystem(World);`n`tTrackedWorlds.Add(World);"
 	Assert-FailsClosed -Name 'owner subsystem-gated world counting' -ExpectedPattern 'counted before'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'if (CrashContext.TrackWorldTick(World))' -Replacement "AethelnCrashContext::FindObservabilitySubsystem(World);`n`t`tif (CrashContext.TrackWorldTick(World))"
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'if (CrashContext.TrackWorldTick(World))' -Replacement "AethelnCrashContext::FindObservabilitySubsystem(World);`n`t`tif (CrashContext.TrackWorldTick(World))"
 	Assert-FailsClosed -Name 'GameServer subsystem-gated world counting' -ExpectedPattern 'counted before'
 
-	Reset-Fixture
-	Set-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'Character validation bounds these values but does not prove they are free of personal or secret text' -Replacement 'Character validation proves these values are safe'
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'Character validation bounds these values but does not prove they are free of personal or secret text' -Replacement 'Character validation proves these values are safe'
 	Assert-FailsClosed -Name 'overclaimed command-line provenance' -ExpectedPattern 'provenance limitation'
+
+	foreach ($Entry in @(
+		@{ Name = 'launcher source revision in crash snapshot'; Anchor = 'SourceRevision.Equals(AethelnObservability::UnknownValue, ESearchCase::CaseSensitive)'; Replacement = '!SourceRevision.IsEmpty()' },
+		@{ Name = 'launcher profile in crash snapshot'; Anchor = 'NetworkProfileId.Equals(AethelnNetworkSpike::UnsetNetworkProfileId, ESearchCase::CaseSensitive)'; Replacement = '!NetworkProfileId.IsEmpty()' },
+		@{ Name = 'caller engine revision in crash snapshot'; Anchor = 'EngineRevision.Equals(FEngineVersion::Current().ToString(), ESearchCase::CaseSensitive)'; Replacement = '!EngineRevision.IsEmpty()' },
+		@{ Name = 'caller instance in crash snapshot'; Anchor = 'ServerInstanceId.Equals(AethelnObservability::CrashServerRole, ESearchCase::CaseSensitive)'; Replacement = '!ServerInstanceId.IsEmpty()' },
+		@{ Name = 'launcher run in crash snapshot'; Anchor = 'IsGeneratedRunId(RunId)'; Replacement = '!RunId.IsEmpty()' }
+	)) {
+		Initialize-Fixture
+		Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor $Entry.Anchor -Replacement $Entry.Replacement
+		Assert-FailsClosed -Name $Entry.Name -ExpectedPattern 'closed, engine-owned, or generated'
+	}
+
+	foreach ($Entry in @(
+		@{ Name = 'crash accessor copying the launcher run'; Anchor = "`t`tCrashRunId,"; Replacement = "`t`tRuntimeContext.RunId," },
+		@{ Name = 'crash accessor copying the launcher build'; Anchor = "`t`tCrashBuild,"; Replacement = "`t`tBuildIdentity," }
+	)) {
+		Initialize-Fixture
+		Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor $Entry.Anchor -Replacement $Entry.Replacement
+		Assert-FailsClosed -Name $Entry.Name -ExpectedPattern 'must not copy launcher or caller identity text'
+	}
+
+	foreach ($Entry in @(
+		@{ Name = 'unrotated crash run'; Anchor = 'CrashRunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsLower);'; Replacement = 'CrashRunId = RunId;' },
+		@{ Name = 'crash run surviving reset'; Anchor = 'CrashRunId.Reset();'; Replacement = '(void)0;' }
+	)) {
+		Initialize-Fixture
+		Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor $Entry.Anchor -Replacement $Entry.Replacement
+		Assert-FailsClosed -Name $Entry.Name -ExpectedPattern 'rotate the generated crash run ID'
+	}
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'UE_LOG(LogAethelnCrashContext, Display, TEXT("AethelnCrashContextMarker run=%s"), *Snapshot->RunId);' -Replacement '(void)0;'
+	Assert-FailsClosed -Name 'unbound crash run evidence marker' -ExpectedPattern 'evidence marker before registration becomes active'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor '"Aetheln.Observability.CrashContext.ExcludesLauncherText"' -Replacement '"Aetheln.Observability.CrashContext.Other"'
+	Assert-FailsClosed -Name 'missing launcher-text exclusion automation' -ExpectedPattern 'ExcludesLauncherText'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'crash values are closed sentinels, not verified provenance' -Replacement 'crash values prove provenance'
+	Assert-FailsClosed -Name 'crash sentinels claimed as provenance' -ExpectedPattern 'Crash sentinel provenance limitation'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'AethelnCrashContextMarker run=' -Replacement 'crash marker'
+	Assert-FailsClosed -Name 'undocumented crash run evidence marker' -ExpectedPattern 'evidence marker is undocumented'
 
 	Write-Output 'All observability contract fixture tests passed.'
 }

@@ -4,6 +4,9 @@
 #include "Engine/World.h"
 #include "GenericPlatform/GenericPlatformCrashContext.h"
 #include "HAL/PlatformTLS.h"
+#include "Misc/Guid.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogAethelnCrashContext, Log, All);
 
 FAethelnCrashContextChanged& UAethelnObservabilitySubsystem::OnCrashContextChanged()
 {
@@ -46,6 +49,8 @@ bool UAethelnObservabilitySubsystem::SetRuntimeContext(
 	}
 
 	RuntimeContext = MoveTemp(Candidate);
+	// Every accepted runtime context is a new crash run, even when a launcher reuses its run text.
+	CrashRunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsLower);
 	bHasRuntimeContext = true;
 	OnCrashContextChanged().Broadcast(*this);
 	return true;
@@ -59,6 +64,7 @@ void UAethelnObservabilitySubsystem::ResetRuntimeContext()
 	}
 
 	RuntimeContext = FAethelnObservabilityRuntimeContext();
+	CrashRunId.Reset();
 	bHasRuntimeContext = false;
 	MetricEnvironment = EAethelnEnvironment::Local;
 	bHasValidEnvironment = true;
@@ -149,13 +155,18 @@ bool UAethelnObservabilitySubsystem::TryGetCrashContextSnapshot(FAethelnCrashCon
 		return false;
 	}
 
+	// The server cannot verify launcher-supplied run, build, toolchain, or profile text, so crash
+	// context uses closed sentinels, engine-owned values, and the generated run ID instead.
+	FAethelnBuildIdentity CrashBuild;
+	CrashBuild.BuildConfiguration = LexToString(FApp::GetBuildConfiguration());
+	CrashBuild.EngineRevision = FEngineVersion::Current().ToString();
 	return FAethelnCrashContextSnapshot::TryMakeValidated(
-		BuildIdentity,
-		NetworkProfile,
+		CrashBuild,
+		FAethelnNetworkProfile(),
 		RuntimeContext.FlowKind,
-		RuntimeContext.RunId,
-		RuntimeContext.InstanceId,
-		RuntimeContext.ConnectionPseudonym,
+		CrashRunId,
+		AethelnObservability::CrashServerRole,
+		AethelnObservability::ExcludedIdentifier,
 		OutSnapshot);
 }
 
@@ -378,6 +389,12 @@ void FAethelnCrashContextOwner::Register(const FAethelnCrashContextSnapshot* Sna
 	FGenericCrashContext::SetGameData(RunIdKey, Snapshot->RunId);
 	FGenericCrashContext::SetGameData(ServerInstanceKey, Snapshot->ServerInstanceId);
 	FGenericCrashContext::SetGameData(ConnectionPseudonymKey, Snapshot->ConnectionPseudonym);
+	if (!Snapshot->RunId.Equals(LastMarkedRunId, ESearchCase::CaseSensitive))
+	{
+		// Binds the generated ID to this process's server log before it can be active; never at crash time.
+		UE_LOG(LogAethelnCrashContext, Display, TEXT("AethelnCrashContextMarker run=%s"), *Snapshot->RunId);
+		LastMarkedRunId = Snapshot->RunId;
+	}
 	SetState(EState::Active);
 }
 
@@ -667,16 +684,25 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 			AethelnObservability::ExcludedIdentifier));
 	TestTrue(TEXT("Valid runtime and build context yields a snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
 	TestTrue(TEXT("Returned snapshot is bounded"), Snapshot.IsBounded());
-	TestEqual(TEXT("Returned snapshot maps the run"), Snapshot.RunId, FString(TEXT("run-148")));
-	TestEqual(TEXT("Returned snapshot maps the server instance"), Snapshot.ServerInstanceId, FString(TEXT("instance-148")));
-	TestEqual(TEXT("Returned snapshot maps the build"), Snapshot.BuildIdentity, Build.BuildIdentity);
-	TestEqual(TEXT("Returned snapshot maps the profile"), Snapshot.NetworkProfileId, Profile.ProfileId);
+	const FString FirstRunId = Snapshot.RunId;
+	TestTrue(TEXT("Returned snapshot carries a generated crash run ID"), FAethelnCrashContextSnapshot::IsGeneratedRunId(FirstRunId));
+	TestNotEqual(TEXT("Returned snapshot never carries the caller run"), FirstRunId, FString(TEXT("run-148")));
+	TestEqual(TEXT("Returned snapshot carries the closed server role"), Snapshot.ServerInstanceId, FString(AethelnObservability::CrashServerRole));
+	TestEqual(TEXT("Returned snapshot never carries the caller source revision"), Snapshot.SourceRevision, FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Returned snapshot never carries the caller build"), Snapshot.BuildIdentity, FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Returned snapshot never carries the caller toolchain"), Snapshot.ToolchainIdentity, FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Returned snapshot never carries the caller profile"), Snapshot.NetworkProfileId, FString(AethelnNetworkSpike::UnsetNetworkProfileId));
+	TestEqual(TEXT("Returned snapshot uses the engine build configuration"), Snapshot.BuildConfiguration, FString(LexToString(FApp::GetBuildConfiguration())));
+	TestEqual(TEXT("Returned snapshot uses the engine revision"), Snapshot.EngineRevision, FEngineVersion::Current().ToString());
 	TestEqual(TEXT("Returned snapshot keeps the excluded connection marker"), Snapshot.ConnectionPseudonym, FString(AethelnObservability::ExcludedIdentifier));
 
 	Snapshot.RunId = TEXT("caller-mutation");
 	FAethelnCrashContextSnapshot Fresh;
 	TestTrue(TEXT("Snapshot remains available after caller mutation"), Subsystem->TryGetCrashContextSnapshot(Fresh));
-	TestEqual(TEXT("Caller mutation cannot reach subsystem state"), Fresh.RunId, FString(TEXT("run-148")));
+	TestEqual(TEXT("Caller mutation cannot reach subsystem state"), Fresh.RunId, FirstRunId);
+	TestTrue(TEXT("Build replacement is accepted"), Subsystem->SetBuildContext(Build, Profile));
+	TestTrue(TEXT("Snapshot remains available after build replacement"), Subsystem->TryGetCrashContextSnapshot(Fresh));
+	TestEqual(TEXT("Build replacement is not a new crash run"), Fresh.RunId, FirstRunId);
 
 	const int32 ChangesBeforeRejected = Changes;
 	const FString Oversized = FString::ChrN(AethelnObservability::MaxIdentifierLength + 1, TCHAR('x'));
@@ -691,10 +717,15 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 	TestFalse(TEXT("Invalid profile replacement is rejected"), Subsystem->SetBuildContext(Build, InvalidProfile));
 	TestEqual(TEXT("Rejected replacements never broadcast a change"), Changes, ChangesBeforeRejected);
 	TestTrue(TEXT("Prior accepted context still yields a snapshot"), Subsystem->TryGetCrashContextSnapshot(Fresh));
-	TestEqual(TEXT("Invalid runtime replacement preserves the prior run"), Fresh.RunId, FString(TEXT("run-148")));
-	TestEqual(TEXT("Invalid runtime replacement preserves the prior instance"), Fresh.ServerInstanceId, FString(TEXT("instance-148")));
-	TestEqual(TEXT("Invalid build replacement preserves the prior build"), Fresh.BuildIdentity, Build.BuildIdentity);
+	TestEqual(TEXT("Invalid runtime replacement preserves the prior crash run"), Fresh.RunId, FirstRunId);
 	TestEqual(TEXT("Invalid profile replacement preserves the prior profile version"), Fresh.NetworkProfileSchemaVersion, AethelnNetworkSpike::NetworkProfileSchemaVersion);
+
+	TestTrue(
+		TEXT("An identical runtime replacement is accepted"),
+		Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier));
+	TestTrue(TEXT("Replacement still yields a snapshot"), Subsystem->TryGetCrashContextSnapshot(Fresh));
+	TestTrue(TEXT("Replacement carries a generated crash run ID"), FAethelnCrashContextSnapshot::IsGeneratedRunId(Fresh.RunId));
+	TestNotEqual(TEXT("A reused launcher run never inherits the prior crash run"), Fresh.RunId, FirstRunId);
 
 	Subsystem->ResetRuntimeContext();
 	FAethelnCrashContextSnapshot AfterReset = Sentinel;
@@ -709,10 +740,29 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 	TestFalse(TEXT("Build reset cannot return stale identity"), Subsystem->TryGetCrashContextSnapshot(AfterReset));
 	TestEqual(TEXT("Build reset leaves output unchanged"), AfterReset.RunId, Sentinel.RunId);
 
-	TestTrue(TEXT("Build context is restored"), Subsystem->SetBuildContext(Build, Profile));
-	Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-150"), TEXT("instance-150"), TEXT("user@example.com"));
-	TestFalse(TEXT("A printable non-excluded runtime pseudonym never yields process-wide crash context"), Subsystem->TryGetCrashContextSnapshot(AfterReset));
-	TestEqual(TEXT("Rejected pseudonym leaves output unchanged"), AfterReset.RunId, Sentinel.RunId);
+	FAethelnBuildIdentity LauncherBuild = Build;
+	LauncherBuild.SourceRevision = TEXT("source=user@example.com");
+	LauncherBuild.BuildIdentity = TEXT("password=hunter2");
+	LauncherBuild.BuildConfiguration = TEXT("config=operator@corp.example");
+	LauncherBuild.EngineRevision = TEXT("engine=api_key-148");
+	LauncherBuild.ToolchainIdentity = TEXT("Bearer token-148");
+	FAethelnNetworkProfile LauncherProfile = Profile;
+	LauncherProfile.ProfileId = TEXT("profile=secret-148");
+	TestTrue(TEXT("Printable launcher build text stays valid for event correlation"), Subsystem->SetBuildContext(LauncherBuild, LauncherProfile));
+	TestTrue(
+		TEXT("Printable launcher runtime text stays valid for event correlation"),
+		Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run=user@example.com"), TEXT("instance=hunter2"), TEXT("user@example.com")));
+	TestTrue(TEXT("Printable caller text still yields closed crash context"), Subsystem->TryGetCrashContextSnapshot(Fresh));
+	TestTrue(TEXT("Closed crash context stays bounded"), Fresh.IsBounded());
+	for (const FString* Value : {
+		&Fresh.SourceRevision, &Fresh.BuildIdentity, &Fresh.BuildConfiguration, &Fresh.EngineRevision,
+		&Fresh.ToolchainIdentity, &Fresh.NetworkProfileId, &Fresh.RunId, &Fresh.ServerInstanceId, &Fresh.ConnectionPseudonym })
+	{
+		for (const TCHAR* Needle : { TEXT("example"), TEXT("hunter2"), TEXT("api_key"), TEXT("token"), TEXT("secret"), TEXT("=") })
+		{
+			TestFalse(TEXT("No caller text reaches the crash snapshot"), Value->Contains(Needle));
+		}
+	}
 
 	UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(ChangeHandle);
 	Subsystem->ResetRuntimeContext();
@@ -959,26 +1009,41 @@ namespace AethelnCrashContextTests
 		return ReadKey(StateKey).Contains(Needle);
 	}
 
-	FAethelnCrashContextSnapshot MakeSnapshot(const TCHAR* Suffix)
+	bool AnyGameDataContains(const FString& Needle)
+	{
+		for (const TPair<FString, FString>& Entry : FGenericCrashContext::GetGameData())
+		{
+			if (Entry.Key.Contains(Needle) || Entry.Value.Contains(Needle))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** A closed snapshot with a fresh generated run ID. */
+	FAethelnCrashContextSnapshot MakeSnapshot()
 	{
 		FAethelnBuildIdentity Build;
-		Build.SourceRevision = FString::Printf(TEXT("revision-%s"), Suffix);
-		Build.BuildIdentity = FString::Printf(TEXT("build-%s"), Suffix);
-		Build.BuildConfiguration = FString::Printf(TEXT("configuration-%s"), Suffix);
-		Build.EngineRevision = FString::Printf(TEXT("engine-%s"), Suffix);
-		Build.ToolchainIdentity = FString::Printf(TEXT("toolchain-%s"), Suffix);
-		FAethelnNetworkProfile Profile;
-		Profile.ProfileId = FString::Printf(TEXT("network-profile.%s"), Suffix);
+		Build.BuildConfiguration = LexToString(FApp::GetBuildConfiguration());
+		Build.EngineRevision = FEngineVersion::Current().ToString();
 		FAethelnCrashContextSnapshot Snapshot;
 		FAethelnCrashContextSnapshot::TryMakeValidated(
 			Build,
-			Profile,
+			FAethelnNetworkProfile(),
 			EAethelnFlowKind::PrototypeAuthority,
-			FString::Printf(TEXT("run-%s"), Suffix),
-			FString::Printf(TEXT("instance-%s"), Suffix),
+			FGuid::NewGuid().ToString(EGuidFormats::DigitsLower),
+			AethelnObservability::CrashServerRole,
 			AethelnObservability::ExcludedIdentifier,
 			Snapshot);
 		return Snapshot;
+	}
+
+	/** Registered crash run ID after a valid registration. */
+	FString CurrentRunId(const UAethelnObservabilitySubsystem& Subsystem)
+	{
+		FAethelnCrashContextSnapshot Snapshot;
+		return Subsystem.TryGetCrashContextSnapshot(Snapshot) ? Snapshot.RunId : FString();
 	}
 
 	FAethelnBuildIdentity MakeBuild(const TCHAR* BuildIdentity)
@@ -1082,7 +1147,9 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Initialization claims no run"), ReadKey(StateKey), FString(TEXT("missing")));
 	TestFalse(TEXT("Initialization leaves no identity key"), HasAnyIdentityKey());
 
-	const FAethelnCrashContextSnapshot First = MakeSnapshot(TEXT("first"));
+	// The marker binds each newly registered crash run ID to the server log before failure.
+	AddExpectedMessage(TEXT("AethelnCrashContextMarker run=[0-9a-f]{32}"), ELogVerbosity::Display, EAutomationExpectedMessageFlags::Contains, 0);
+	const FAethelnCrashContextSnapshot First = MakeSnapshot();
 	TestTrue(TEXT("First fixture snapshot is bounded"), First.IsBounded());
 	Writes.Reset();
 	Owner.Register(&First);
@@ -1096,39 +1163,58 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("Active state is registered"), ReadKey(StateKey), FString(TEXT("active")));
 	TestEqual(TEXT("Schema version is registered"), ReadKey(SchemaVersionKey), FString(TEXT("1")));
-	TestEqual(TEXT("Source revision is registered"), ReadKey(SourceRevisionKey), First.SourceRevision);
-	TestEqual(TEXT("Build identity is registered"), ReadKey(BuildIdentityKey), First.BuildIdentity);
-	TestEqual(TEXT("Build configuration is registered"), ReadKey(BuildConfigurationKey), First.BuildConfiguration);
-	TestEqual(TEXT("Engine revision is registered"), ReadKey(EngineRevisionKey), First.EngineRevision);
-	TestEqual(TEXT("Toolchain identity is registered"), ReadKey(ToolchainIdentityKey), First.ToolchainIdentity);
+	TestEqual(TEXT("Source revision is the closed unknown sentinel"), ReadKey(SourceRevisionKey), FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Build identity is the closed unknown sentinel"), ReadKey(BuildIdentityKey), FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Build configuration is engine-owned"), ReadKey(BuildConfigurationKey), FString(LexToString(FApp::GetBuildConfiguration())));
+	TestEqual(TEXT("Engine revision is engine-owned"), ReadKey(EngineRevisionKey), FEngineVersion::Current().ToString());
+	TestEqual(TEXT("Toolchain identity is the closed unknown sentinel"), ReadKey(ToolchainIdentityKey), FString(AethelnObservability::UnknownValue));
 	TestEqual(TEXT("Network-profile schema is registered"), ReadKey(NetworkProfileSchemaKey), FString(AethelnNetworkSpike::NetworkProfileSchemaId));
 	TestEqual(TEXT("Network-profile version is registered"), ReadKey(NetworkProfileVersionKey), FString(TEXT("1")));
-	TestEqual(TEXT("Network-profile identity is registered"), ReadKey(NetworkProfileIdKey), First.NetworkProfileId);
+	TestEqual(TEXT("Network-profile identity is the closed unset sentinel"), ReadKey(NetworkProfileIdKey), FString(AethelnNetworkSpike::UnsetNetworkProfileId));
 	TestEqual(TEXT("Flow kind is registered"), ReadKey(FlowKindKey), FString(TEXT("prototype-authority")));
-	TestEqual(TEXT("Run is registered"), ReadKey(RunIdKey), First.RunId);
-	TestEqual(TEXT("Server instance is registered"), ReadKey(ServerInstanceKey), First.ServerInstanceId);
+	TestEqual(TEXT("Generated crash run is registered"), ReadKey(RunIdKey), First.RunId);
+	TestEqual(TEXT("Server instance is the closed server role"), ReadKey(ServerInstanceKey), FString(AethelnObservability::CrashServerRole));
 	TestEqual(TEXT("Connection pseudonym is the excluded marker"), ReadKey(ConnectionPseudonymKey), FString(AethelnObservability::ExcludedIdentifier));
 
-	const FAethelnCrashContextSnapshot Second = MakeSnapshot(TEXT("second"));
+	const FAethelnCrashContextSnapshot Second = MakeSnapshot();
+	TestNotEqual(TEXT("Generated crash runs are unique"), Second.RunId, First.RunId);
 	Owner.Register(&Second);
 	TestEqual(TEXT("Valid replacement is active"), ReadKey(StateKey), FString(TEXT("active")));
 	TestEqual(TEXT("Valid replacement registers the new run"), ReadKey(RunIdKey), Second.RunId);
-	TestFalse(TEXT("Valid replacement leaves no prior unique value"), AnyOwnedKeyContains(TEXT("first")));
+	TestFalse(TEXT("Valid replacement leaves no prior run"), AnyOwnedKeyContains(First.RunId));
 
-	FAethelnCrashContextSnapshot Invalid = MakeSnapshot(TEXT("third"));
+	FAethelnCrashContextSnapshot Invalid = MakeSnapshot();
 	Invalid.RunId = FString::Printf(TEXT("run%cthird"), TCHAR(0x2028));
 	TestFalse(TEXT("Tampered snapshot is not bounded"), Invalid.IsBounded());
 	Owner.Register(&Invalid);
 	TestEqual(TEXT("Invalid snapshot marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
 	TestFalse(TEXT("Invalid snapshot clears every identity key"), HasAnyIdentityKey());
 	TestFalse(TEXT("Invalid snapshot never partially overwrites"), AnyOwnedKeyContains(TEXT("third")));
-	TestFalse(TEXT("Invalid snapshot leaves no prior value"), AnyOwnedKeyContains(TEXT("second")));
+	TestFalse(TEXT("Invalid snapshot leaves no prior value"), AnyOwnedKeyContains(Second.RunId));
 
-	FAethelnCrashContextSnapshot Personal = MakeSnapshot(TEXT("fourth"));
-	Personal.ConnectionPseudonym = TEXT("user@example.com");
-	Owner.Register(&Personal);
-	TestEqual(TEXT("A non-excluded pseudonym marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
-	TestFalse(TEXT("A non-excluded pseudonym never reaches crash GameData"), AnyOwnedKeyContains(TEXT("example.com")));
+	// Registration is itself a boundary: a hand-built snapshot carrying printable
+	// personal or credential-like text in any field never reaches crash GameData.
+	const TCHAR* const Adversarial[] = {
+		TEXT("user@example.com"), TEXT("password=hunter2"), TEXT("Bearer abc.def"), TEXT("0123456789abcdef0123456789abcdeg") };
+	for (FString FAethelnCrashContextSnapshot::* Field : {
+		&FAethelnCrashContextSnapshot::SourceRevision, &FAethelnCrashContextSnapshot::BuildIdentity,
+		&FAethelnCrashContextSnapshot::BuildConfiguration, &FAethelnCrashContextSnapshot::EngineRevision,
+		&FAethelnCrashContextSnapshot::ToolchainIdentity, &FAethelnCrashContextSnapshot::NetworkProfileId,
+		&FAethelnCrashContextSnapshot::RunId, &FAethelnCrashContextSnapshot::ServerInstanceId,
+		&FAethelnCrashContextSnapshot::ConnectionPseudonym })
+	{
+		for (const TCHAR* Text : Adversarial)
+		{
+			FAethelnCrashContextSnapshot Tampered = MakeSnapshot();
+			Tampered.*Field = Text;
+			TestFalse(TEXT("A snapshot carrying caller text is not bounded"), Tampered.IsBounded());
+			Owner.Register(&Second);
+			Owner.Register(&Tampered);
+			TestEqual(TEXT("Caller text marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
+			TestFalse(TEXT("Caller text clears every identity key"), HasAnyIdentityKey());
+			TestFalse(TEXT("Caller text never reaches any crash GameData key"), AnyGameDataContains(Text));
+		}
+	}
 
 	Owner.Register(&First);
 	Owner.Register(nullptr);
@@ -1183,16 +1269,20 @@ bool FAethelnCrashContextWorldOwnershipTest::RunTest(const FString& Parameters)
 	Owner.Initialize();
 	TestTrue(TEXT("The first world is new"), Owner.TrackWorldTick(First.World));
 	TestEqual(TEXT("A single observable world registers active context"), ReadKey(StateKey), FString(TEXT("active")));
-	TestEqual(TEXT("The single owner supplies the run"), ReadKey(RunIdKey), FString(TEXT("run-world-alpha")));
-	TestEqual(TEXT("The single owner supplies the server instance"), ReadKey(ServerInstanceKey), FString(TEXT("instance-world-alpha")));
+	const FString AlphaRun = ReadKey(RunIdKey);
+	TestTrue(TEXT("The single owner registers a generated crash run"), FAethelnCrashContextSnapshot::IsGeneratedRunId(AlphaRun));
+	TestEqual(TEXT("The registered crash run is the owner's generated run"), AlphaRun, CurrentRunId(*First.Subsystem));
+	TestFalse(TEXT("The launcher run never reaches crash GameData"), AnyGameDataContains(TEXT("run-world-alpha")));
+	TestEqual(TEXT("The single owner registers the closed server role"), ReadKey(ServerInstanceKey), FString(AethelnObservability::CrashServerRole));
+	TestFalse(TEXT("The caller instance never reaches crash GameData"), AnyGameDataContains(TEXT("instance-world-alpha")));
 	TestEqual(TEXT("Process-wide context keeps the connection excluded"), ReadKey(ConnectionPseudonymKey), FString(AethelnObservability::ExcludedIdentifier));
 
 	TestTrue(TEXT("The second world is new"), Owner.TrackWorldTick(Second.World));
 	TestEqual(TEXT("Two observable worlds mark the context ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
 	TestFalse(TEXT("Ambiguous context clears every identity key"), HasAnyIdentityKey());
 	TestFalse(TEXT("A later tick is not a new world"), Owner.TrackWorldTick(First.World));
-	TestFalse(TEXT("Ambiguous context never attributes the first run"), AnyOwnedKeyContains(TEXT("alpha")));
-	TestFalse(TEXT("Ambiguous context never attributes the second run"), AnyOwnedKeyContains(TEXT("beta")));
+	TestFalse(TEXT("Ambiguous context never attributes the first run"), AnyOwnedKeyContains(AlphaRun));
+	TestFalse(TEXT("Ambiguous context never attributes the second run"), AnyOwnedKeyContains(CurrentRunId(*Second.Subsystem)));
 
 	Owner.EndTracking(First.World);
 	TestEqual(TEXT("World cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
@@ -1201,8 +1291,9 @@ bool FAethelnCrashContextWorldOwnershipTest::RunTest(const FString& Parameters)
 
 	Owner.TrackWorldTick(Second.World);
 	TestEqual(TEXT("A later single owner replaces stale context"), ReadKey(StateKey), FString(TEXT("active")));
-	TestEqual(TEXT("The later single owner supplies its run"), ReadKey(RunIdKey), FString(TEXT("run-world-beta")));
-	TestFalse(TEXT("The cleaned-up owner leaves no identity"), AnyOwnedKeyContains(TEXT("alpha")));
+	TestEqual(TEXT("The later single owner registers its own generated run"), ReadKey(RunIdKey), CurrentRunId(*Second.Subsystem));
+	TestNotEqual(TEXT("A later world never inherits the earlier world's crash run"), ReadKey(RunIdKey), AlphaRun);
+	TestFalse(TEXT("The cleaned-up owner leaves no identity"), AnyOwnedKeyContains(AlphaRun));
 
 	Owner.EndTracking(Second.World);
 	TestEqual(TEXT("Final cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
@@ -1240,41 +1331,33 @@ bool FAethelnCrashContextAcceptedChangeTest::RunTest(const FString& Parameters)
 	Owner.Initialize();
 	Owner.TrackWorldTick(World.World);
 	TestEqual(TEXT("The sole world registers active context"), ReadKey(StateKey), FString(TEXT("active")));
-	TestEqual(TEXT("The first run is registered"), ReadKey(RunIdKey), FString(TEXT("run-change-first")));
+	const FString FirstRun = ReadKey(RunIdKey);
+	TestTrue(TEXT("The first crash run is generated"), FAethelnCrashContextSnapshot::IsGeneratedRunId(FirstRun));
 
 	TestTrue(
 		TEXT("Valid runtime replacement is accepted"),
 		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-second"), TEXT("instance-change-second"), AethelnObservability::ExcludedIdentifier));
 	TestEqual(TEXT("Runtime replacement refreshes before another tick"), ReadKey(StateKey), FString(TEXT("active")));
-	TestEqual(TEXT("Runtime replacement registers the new run"), ReadKey(RunIdKey), FString(TEXT("run-change-second")));
-	TestEqual(TEXT("Runtime replacement registers the new instance"), ReadKey(ServerInstanceKey), FString(TEXT("instance-change-second")));
-	TestFalse(TEXT("Runtime replacement leaves no prior run"), AnyOwnedKeyContains(TEXT("change-first")));
+	const FString SecondRun = ReadKey(RunIdKey);
+	TestEqual(TEXT("Runtime replacement registers the rotated crash run"), SecondRun, CurrentRunId(Subsystem));
+	TestNotEqual(TEXT("Runtime replacement rotates the crash run"), SecondRun, FirstRun);
+	TestFalse(TEXT("Runtime replacement leaves no prior crash run"), AnyOwnedKeyContains(FirstRun));
+	TestFalse(TEXT("The launcher run never reaches crash GameData"), AnyGameDataContains(TEXT("change-second")));
 
 	const FString Oversized = FString::ChrN(AethelnObservability::MaxIdentifierLength + 1, TCHAR('x'));
 	TestFalse(
 		TEXT("Invalid runtime replacement is rejected"),
 		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-third"), Oversized, AethelnObservability::ExcludedIdentifier));
 	TestEqual(TEXT("Invalid runtime replacement keeps the registration active"), ReadKey(StateKey), FString(TEXT("active")));
-	TestEqual(TEXT("Invalid runtime replacement keeps the last valid run"), ReadKey(RunIdKey), FString(TEXT("run-change-second")));
-	TestFalse(TEXT("Invalid runtime replacement never reaches crash GameData"), AnyOwnedKeyContains(TEXT("change-third")));
-
-	const bool bPrintableAccepted = Subsystem.SetRuntimeContext(
-		EAethelnFlowKind::PrototypeAuthority,
-		TEXT("run-change-personal"),
-		TEXT("instance-change-personal"),
-		TEXT("user@example.com"));
-	TestFalse(TEXT("Printable personal text never reaches crash GameData"), AnyOwnedKeyContains(TEXT("example.com")));
-	if (bPrintableAccepted)
-	{
-		TestEqual(TEXT("A non-excluded process pseudonym marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
-		TestFalse(TEXT("A non-excluded process pseudonym clears every identity key"), HasAnyIdentityKey());
-	}
+	TestEqual(TEXT("Invalid runtime replacement keeps the last crash run"), ReadKey(RunIdKey), SecondRun);
+	TestFalse(TEXT("Invalid runtime replacement never reaches crash GameData"), AnyGameDataContains(TEXT("change-third")));
 
 	TestTrue(
-		TEXT("Valid runtime context is restored"),
-		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-fourth"), TEXT("instance-change-fourth"), AethelnObservability::ExcludedIdentifier));
-	TestEqual(TEXT("Restored runtime context is active before another tick"), ReadKey(StateKey), FString(TEXT("active")));
-	TestEqual(TEXT("Restored runtime context registers its run"), ReadKey(RunIdKey), FString(TEXT("run-change-fourth")));
+		TEXT("A printable caller pseudonym stays valid for event correlation"),
+		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-personal"), TEXT("instance-change-personal"), TEXT("user@example.com")));
+	TestEqual(TEXT("Process crash context stays active with the excluded marker"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Process crash context never carries the caller pseudonym"), ReadKey(ConnectionPseudonymKey), FString(AethelnObservability::ExcludedIdentifier));
+	TestFalse(TEXT("Printable personal text never reaches crash GameData"), AnyGameDataContains(TEXT("example.com")));
 
 	Subsystem.ResetRuntimeContext();
 	TestEqual(TEXT("Runtime reset marks the context missing before another tick"), ReadKey(StateKey), FString(TEXT("missing")));
@@ -1283,23 +1366,28 @@ bool FAethelnCrashContextAcceptedChangeTest::RunTest(const FString& Parameters)
 		TEXT("Runtime context is set after reset"),
 		Subsystem.SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-change-fifth"), TEXT("instance-change-fifth"), AethelnObservability::ExcludedIdentifier));
 	TestEqual(TEXT("Runtime context after reset is active"), ReadKey(StateKey), FString(TEXT("active")));
+	const FString FifthRun = ReadKey(RunIdKey);
+	TestTrue(TEXT("A reset run never reuses an earlier crash run"), FifthRun != FirstRun && FifthRun != SecondRun);
 
 	TestTrue(TEXT("Valid build replacement is accepted"), Subsystem.SetBuildContext(MakeBuild(TEXT("build-change-replacement")), Profile));
-	TestEqual(TEXT("Build replacement registers before another tick"), ReadKey(BuildIdentityKey), FString(TEXT("build-change-replacement")));
-	TestEqual(TEXT("Build replacement registers the new profile"), ReadKey(NetworkProfileIdKey), FString(TEXT("network-profile.change")));
 	TestEqual(TEXT("Build replacement keeps the registration active"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Build replacement is not a new crash run"), ReadKey(RunIdKey), FifthRun);
+	TestEqual(TEXT("Build replacement keeps the closed build sentinel"), ReadKey(BuildIdentityKey), FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Build replacement keeps the closed profile sentinel"), ReadKey(NetworkProfileIdKey), FString(AethelnNetworkSpike::UnsetNetworkProfileId));
+	TestFalse(TEXT("The launcher build never reaches crash GameData"), AnyGameDataContains(TEXT("build-change-replacement")));
+	TestFalse(TEXT("The launcher profile never reaches crash GameData"), AnyGameDataContains(TEXT("network-profile.change")));
 	FAethelnBuildIdentity InvalidBuild = MakeBuild(TEXT("build-change-invalid"));
 	InvalidBuild.BuildIdentity = FString::Printf(TEXT("build%cunsafe"), TCHAR(0x2029));
 	TestFalse(TEXT("Invalid build replacement is rejected"), Subsystem.SetBuildContext(InvalidBuild, Profile));
-	TestEqual(TEXT("Invalid build replacement keeps the last valid build"), ReadKey(BuildIdentityKey), FString(TEXT("build-change-replacement")));
 	TestEqual(TEXT("Invalid build replacement keeps the registration active"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Invalid build replacement keeps the crash run"), ReadKey(RunIdKey), FifthRun);
 
 	Subsystem.ResetBuildContext();
 	TestEqual(TEXT("Build reset marks the context missing before another tick"), ReadKey(StateKey), FString(TEXT("missing")));
 	TestFalse(TEXT("Build reset clears every identity key"), HasAnyIdentityKey());
 	TestTrue(TEXT("Build context is restored"), Subsystem.SetBuildContext(MakeBuild(TEXT("build-change-restored")), Profile));
 	TestEqual(TEXT("Restored build context is active"), ReadKey(StateKey), FString(TEXT("active")));
-	TestEqual(TEXT("Restored build context registers the run"), ReadKey(RunIdKey), FString(TEXT("run-change-fifth")));
+	TestEqual(TEXT("Restored build context registers the current crash run"), ReadKey(RunIdKey), FifthRun);
 
 	Owner.EndTracking(World.World);
 	TestEqual(TEXT("Cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
@@ -1344,6 +1432,7 @@ bool FAethelnCrashContextWorldCountTest::RunTest(const FString& Parameters)
 	Owner.Initialize();
 	Owner.TrackWorldTick(Valid.World);
 	TestEqual(TEXT("The sole world registers active context"), ReadKey(StateKey), FString(TEXT("active")));
+	const FString AlphaRun = ReadKey(RunIdKey);
 
 	TestTrue(TEXT("A world without a subsystem is counted"), Owner.TrackWorldTick(Bare));
 	TestEqual(TEXT("Two worlds are tracked"), Owner.NumTrackedWorlds(), 2);
@@ -1354,14 +1443,16 @@ bool FAethelnCrashContextWorldCountTest::RunTest(const FString& Parameters)
 		TEXT("A change while ambiguous is accepted by the subsystem"),
 		Valid.Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-count-beta"), TEXT("instance-count-beta"), AethelnObservability::ExcludedIdentifier));
 	TestEqual(TEXT("Ambiguous context stays ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
-	TestFalse(TEXT("Ambiguous context never attributes the first run"), AnyOwnedKeyContains(TEXT("count-alpha")));
-	TestFalse(TEXT("Ambiguous context never attributes a changed run"), AnyOwnedKeyContains(TEXT("count-beta")));
+	TestFalse(TEXT("Ambiguous context never attributes the first run"), AnyOwnedKeyContains(AlphaRun));
+	const FString BetaRun = CurrentRunId(*Valid.Subsystem);
+	TestNotEqual(TEXT("The change while ambiguous rotates the crash run"), BetaRun, AlphaRun);
+	TestFalse(TEXT("Ambiguous context never attributes a changed run"), AnyOwnedKeyContains(BetaRun));
 
 	Owner.EndTracking(Bare);
 	TestEqual(TEXT("Bare-world cleanup marks the context stale"), ReadKey(StateKey), FString(TEXT("stale")));
 	Owner.TrackWorldTick(Valid.World);
 	TestEqual(TEXT("The remaining valid world recovers active context"), ReadKey(StateKey), FString(TEXT("active")));
-	TestEqual(TEXT("The recovered context registers the current run"), ReadKey(RunIdKey), FString(TEXT("run-count-beta")));
+	TestEqual(TEXT("The recovered context registers the current crash run"), ReadKey(RunIdKey), BetaRun);
 
 	Owner.TrackWorldTick(Bare);
 	TestEqual(TEXT("A re-entering bare world marks the context ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
@@ -1378,6 +1469,92 @@ bool FAethelnCrashContextWorldCountTest::RunTest(const FString& Parameters)
 	Owner.Shutdown();
 	Valid.Destroy();
 	Bare->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextLauncherTextTest,
+	"Aetheln.Observability.CrashContext.ExcludesLauncherText",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextLauncherTextTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+
+	// Printable personal or credential-like text passes the event identifier bound in
+	// every launcher-derived field, yet must never reach crash GameData.
+	FAethelnBuildIdentity LauncherBuild;
+	LauncherBuild.SourceRevision = TEXT("source=password-hunter2");
+	LauncherBuild.BuildIdentity = TEXT("build=api_key-sk-148");
+	LauncherBuild.BuildConfiguration = TEXT("config=auth-token-148");
+	LauncherBuild.EngineRevision = TEXT("engine=secret-148");
+	LauncherBuild.ToolchainIdentity = TEXT("toolchain=Bearer-abc-148");
+	FAethelnNetworkProfile LauncherProfile;
+	LauncherProfile.ProfileId = TEXT("profile=credential@example.org");
+	const TCHAR* const Needles[] = {
+		TEXT("user@example.com"), TEXT("operator@corp.example"), TEXT("member@example.net"), TEXT("hunter2"),
+		TEXT("api_key"), TEXT("auth-token"), TEXT("secret-148"), TEXT("Bearer"), TEXT("credential@example.org") };
+
+	FTestGameWorld World;
+	const bool bCreated = World.Create(TEXT("run-launcher"), TEXT("instance-launcher"))
+		&& World.Subsystem->SetBuildContext(LauncherBuild, LauncherProfile)
+		&& World.Subsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run=user@example.com"),
+			TEXT("instance=operator@corp.example"),
+			TEXT("member@example.net"));
+	TestTrue(TEXT("Printable launcher text is accepted for event correlation"), bCreated);
+	if (!bCreated)
+	{
+		World.Destroy();
+		return false;
+	}
+
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	TestEqual(TEXT("Closed crash context registers active"), ReadKey(StateKey), FString(TEXT("active")));
+	for (const TCHAR* Needle : Needles)
+	{
+		TestFalse(TEXT("Launcher text never reaches any crash GameData key"), AnyGameDataContains(Needle));
+	}
+	TestEqual(TEXT("Source revision is unknown without in-process verification"), ReadKey(SourceRevisionKey), FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Build identity is unknown without in-process verification"), ReadKey(BuildIdentityKey), FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Toolchain identity is unknown without in-process verification"), ReadKey(ToolchainIdentityKey), FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Network profile is unset without in-process verification"), ReadKey(NetworkProfileIdKey), FString(AethelnNetworkSpike::UnsetNetworkProfileId));
+	TestEqual(TEXT("Build configuration stays engine-owned"), ReadKey(BuildConfigurationKey), FString(LexToString(FApp::GetBuildConfiguration())));
+	TestEqual(TEXT("Engine revision stays engine-owned"), ReadKey(EngineRevisionKey), FEngineVersion::Current().ToString());
+	TestTrue(TEXT("Run is a generated crash run"), FAethelnCrashContextSnapshot::IsGeneratedRunId(ReadKey(RunIdKey)));
+	TestEqual(TEXT("Server instance is the closed server role"), ReadKey(ServerInstanceKey), FString(AethelnObservability::CrashServerRole));
+	TestEqual(TEXT("Connection pseudonym stays excluded"), ReadKey(ConnectionPseudonymKey), FString(AethelnObservability::ExcludedIdentifier));
+	Owner.EndTracking(World.World);
+	World.Destroy();
+
+	// An omitted run falls back to the same launcher text on every ordinary launch;
+	// each launch must still register its own crash run.
+	FTestGameWorld FirstLaunch;
+	TestTrue(TEXT("First omitted-run launch is created"), FirstLaunch.Create(TEXT("run-local"), TEXT("game-server")));
+	Owner.TrackWorldTick(FirstLaunch.World);
+	TestEqual(TEXT("First omitted-run launch is active"), ReadKey(StateKey), FString(TEXT("active")));
+	const FString FirstRun = ReadKey(RunIdKey);
+	TestTrue(TEXT("First omitted-run launch registers a generated crash run"), FAethelnCrashContextSnapshot::IsGeneratedRunId(FirstRun));
+	TestFalse(TEXT("The run-local fallback never reaches crash GameData"), AnyGameDataContains(TEXT("run-local")));
+	Owner.EndTracking(FirstLaunch.World);
+	FirstLaunch.Destroy();
+	TestFalse(TEXT("Cleanup clears the first launch's crash run"), AnyGameDataContains(FirstRun));
+
+	FTestGameWorld SecondLaunch;
+	TestTrue(TEXT("Second omitted-run launch is created"), SecondLaunch.Create(TEXT("run-local"), TEXT("game-server")));
+	Owner.TrackWorldTick(SecondLaunch.World);
+	TestEqual(TEXT("Second omitted-run launch is active"), ReadKey(StateKey), FString(TEXT("active")));
+	const FString SecondRun = ReadKey(RunIdKey);
+	TestTrue(TEXT("Second omitted-run launch registers a generated crash run"), FAethelnCrashContextSnapshot::IsGeneratedRunId(SecondRun));
+	TestNotEqual(TEXT("A later launch never inherits an earlier crash run"), SecondRun, FirstRun);
+
+	Owner.Shutdown();
+	SecondLaunch.Destroy();
 	return true;
 }
 #endif

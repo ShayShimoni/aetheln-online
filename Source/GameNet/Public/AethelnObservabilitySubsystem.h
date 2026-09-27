@@ -89,7 +89,11 @@ public:
 	void ResetBuildContext();
 	bool HasBuildContext() const;
 	bool SetEnvironment(const FString& EnvironmentName);
-	/** Game-thread copy of the validated runtime and build/profile context; leaves output unchanged on failure. */
+	/**
+	 * Game-thread closed crash snapshot, available once runtime and build/profile context are set; leaves
+	 * output unchanged on failure. Carries only closed, engine-owned, and generated values, never the
+	 * caller-supplied run, instance, build, or profile text that event correlation keeps.
+	 */
 	bool TryGetCrashContextSnapshot(FAethelnCrashContextSnapshot& OutSnapshot) const;
 
 	bool TryComposeCorrelation(
@@ -116,6 +120,8 @@ public:
 private:
 	FAethelnObservabilityService Service;
 	FAethelnObservabilityRuntimeContext RuntimeContext;
+	/** Opaque crash run ID generated on every accepted runtime context; empty after reset. */
+	FString CrashRunId;
 	FAethelnBuildIdentity BuildIdentity;
 	FAethelnNetworkProfile NetworkProfile;
 	EAethelnEnvironment MetricEnvironment = EAethelnEnvironment::Local;
@@ -209,5 +215,7 @@ private:
 
 	TSet<TWeakObjectPtr<const UWorld>> TrackedWorlds;
 	AethelnCrashContext::EState State = AethelnCrashContext::EState::Missing;
+	/** Last crash run ID bound to the evidence marker, so each generated ID is logged once. */
+	FString LastMarkedRunId;
 	FDelegateHandle ChangedHandle;
 };

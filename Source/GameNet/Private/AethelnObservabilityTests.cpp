@@ -244,58 +244,42 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Parameters)
 {
+	// Only closed sentinels, engine-owned build values, and a generated run form a snapshot.
 	FAethelnBuildIdentity Build;
-	Build.SourceRevision = TEXT("revision-148");
-	Build.BuildIdentity = TEXT("build-148");
-	Build.BuildConfiguration = TEXT("Development");
-	Build.EngineRevision = TEXT("5.8.1");
-	Build.ToolchainIdentity = TEXT("toolchain-148");
+	Build.BuildConfiguration = LexToString(FApp::GetBuildConfiguration());
+	Build.EngineRevision = FEngineVersion::Current().ToString();
 	FAethelnNetworkProfile Profile;
-	Profile.ProfileId = TEXT("network-profile.test");
+	const FString RunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsLower);
+	const FString Role = AethelnObservability::CrashServerRole;
 
 	FAethelnCrashContextSnapshot Snapshot;
 	TestFalse(TEXT("A default crash-context snapshot is not bounded"), Snapshot.IsBounded());
+	TestTrue(TEXT("A generated run has the closed crash run format"), FAethelnCrashContextSnapshot::IsGeneratedRunId(RunId));
 	TestTrue(
-		TEXT("Valid build, profile, and runtime identities form a snapshot"),
+		TEXT("Closed build, profile, and generated run form a snapshot"),
 		FAethelnCrashContextSnapshot::TryMakeValidated(
 			Build,
 			Profile,
 			EAethelnFlowKind::PrototypeAuthority,
-			TEXT("run-148"),
-			TEXT("instance-148"),
+			RunId,
+			Role,
 			AethelnObservability::ExcludedIdentifier,
 			Snapshot));
 	TestTrue(TEXT("Accepted snapshot remains bounded"), Snapshot.IsBounded());
 	TestEqual(TEXT("Snapshot carries the observability schema"), Snapshot.ObservabilitySchemaId, FString(AethelnObservability::SchemaId));
 	TestEqual(TEXT("Snapshot carries the observability schema version"), Snapshot.ObservabilitySchemaVersion, AethelnObservability::SchemaVersion);
-	TestEqual(TEXT("Snapshot maps the source revision"), Snapshot.SourceRevision, Build.SourceRevision);
-	TestEqual(TEXT("Snapshot maps the build identity"), Snapshot.BuildIdentity, Build.BuildIdentity);
-	TestEqual(TEXT("Snapshot maps the build configuration"), Snapshot.BuildConfiguration, Build.BuildConfiguration);
+	TestEqual(TEXT("Snapshot keeps the unknown source revision sentinel"), Snapshot.SourceRevision, FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Snapshot keeps the unknown build identity sentinel"), Snapshot.BuildIdentity, FString(AethelnObservability::UnknownValue));
+	TestEqual(TEXT("Snapshot maps the engine build configuration"), Snapshot.BuildConfiguration, Build.BuildConfiguration);
 	TestEqual(TEXT("Snapshot maps the engine revision"), Snapshot.EngineRevision, Build.EngineRevision);
-	TestEqual(TEXT("Snapshot maps the toolchain identity"), Snapshot.ToolchainIdentity, Build.ToolchainIdentity);
+	TestEqual(TEXT("Snapshot keeps the unknown toolchain sentinel"), Snapshot.ToolchainIdentity, FString(AethelnObservability::UnknownValue));
 	TestEqual(TEXT("Snapshot maps the network-profile schema"), Snapshot.NetworkProfileSchemaId, FString(AethelnNetworkSpike::NetworkProfileSchemaId));
 	TestEqual(TEXT("Snapshot maps the network-profile version"), Snapshot.NetworkProfileSchemaVersion, AethelnNetworkSpike::NetworkProfileSchemaVersion);
-	TestEqual(TEXT("Snapshot maps the network-profile identity"), Snapshot.NetworkProfileId, Profile.ProfileId);
+	TestEqual(TEXT("Snapshot keeps the unset network-profile sentinel"), Snapshot.NetworkProfileId, FString(AethelnNetworkSpike::UnsetNetworkProfileId));
 	TestEqual(TEXT("Snapshot maps the flow kind"), Snapshot.FlowKind, EAethelnFlowKind::PrototypeAuthority);
-	TestEqual(TEXT("Snapshot maps the run"), Snapshot.RunId, FString(TEXT("run-148")));
-	TestEqual(TEXT("Snapshot maps the server instance"), Snapshot.ServerInstanceId, FString(TEXT("instance-148")));
+	TestEqual(TEXT("Snapshot maps the generated run"), Snapshot.RunId, RunId);
+	TestEqual(TEXT("Snapshot maps the closed server role"), Snapshot.ServerInstanceId, Role);
 	TestEqual(TEXT("Snapshot keeps the excluded connection marker"), Snapshot.ConnectionPseudonym, FString(AethelnObservability::ExcludedIdentifier));
-
-	FAethelnBuildIdentity UnknownBuild;
-	FAethelnNetworkProfile UnsetProfile;
-	FAethelnCrashContextSnapshot UnknownSnapshot;
-	TestTrue(
-		TEXT("Explicit unknown provenance and unset profile remain valid registered values"),
-		FAethelnCrashContextSnapshot::TryMakeValidated(
-			UnknownBuild,
-			UnsetProfile,
-			EAethelnFlowKind::PrototypeAuthority,
-			TEXT("run-unknown"),
-			TEXT("instance-unknown"),
-			AethelnObservability::ExcludedIdentifier,
-			UnknownSnapshot));
-	TestEqual(TEXT("Unknown source revision stays explicit"), UnknownSnapshot.SourceRevision, FString(AethelnObservability::UnknownValue));
-	TestEqual(TEXT("Unset network profile stays explicit"), UnknownSnapshot.NetworkProfileId, FString(AethelnNetworkSpike::UnsetNetworkProfileId));
 
 	const FAethelnCrashContextSnapshot Accepted = Snapshot;
 	auto ExpectRejectedAndUnchanged = [this, &Snapshot, &Accepted](
@@ -333,30 +317,61 @@ bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Param
 	}
 	for (const FString& Unsafe : UnsafeValues)
 	{
-		ExpectRejectedAndUnchanged(TEXT("Unsafe run identity fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, Unsafe, TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
-		ExpectRejectedAndUnchanged(TEXT("Unsafe server instance fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), Unsafe, AethelnObservability::ExcludedIdentifier);
-		ExpectRejectedAndUnchanged(TEXT("Unsafe connection pseudonym fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), Unsafe);
+		ExpectRejectedAndUnchanged(TEXT("Unsafe run identity fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, Unsafe, Role, AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Unsafe server instance fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Unsafe, AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Unsafe connection pseudonym fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, Unsafe);
 		FAethelnBuildIdentity UnsafeBuild = Build;
 		UnsafeBuild.SourceRevision = Unsafe;
-		ExpectRejectedAndUnchanged(TEXT("Unsafe source revision fails closed"), UnsafeBuild, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Unsafe source revision fails closed"), UnsafeBuild, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
 		UnsafeBuild = Build;
 		UnsafeBuild.ToolchainIdentity = Unsafe;
-		ExpectRejectedAndUnchanged(TEXT("Unsafe toolchain identity fails closed"), UnsafeBuild, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Unsafe toolchain identity fails closed"), UnsafeBuild, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
 		FAethelnNetworkProfile UnsafeProfile = Profile;
 		UnsafeProfile.ProfileId = Unsafe;
-		ExpectRejectedAndUnchanged(TEXT("Unsafe network-profile identity fails closed"), Build, UnsafeProfile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Unsafe network-profile identity fails closed"), Build, UnsafeProfile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
 	}
 
-	ExpectRejectedAndUnchanged(TEXT("Unknown flow kind fails closed"), Build, Profile, static_cast<EAethelnFlowKind>(200), TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+	ExpectRejectedAndUnchanged(TEXT("Unknown flow kind fails closed"), Build, Profile, static_cast<EAethelnFlowKind>(200), RunId, Role, AethelnObservability::ExcludedIdentifier);
 	FAethelnNetworkProfile WrongSchema = Profile;
 	WrongSchema.SchemaId = TEXT("aetheln.other-profile");
-	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile schema fails closed"), Build, WrongSchema, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
+	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile schema fails closed"), Build, WrongSchema, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
 	FAethelnNetworkProfile WrongVersion = Profile;
 	WrongVersion.SchemaVersion = AethelnNetworkSpike::NetworkProfileSchemaVersion + 1;
-	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile version fails closed"), Build, WrongVersion, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), AethelnObservability::ExcludedIdentifier);
-	ExpectRejectedAndUnchanged(TEXT("Printable personal text is never a process-wide connection pseudonym"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), TEXT("user@example.com"));
-	ExpectRejectedAndUnchanged(TEXT("An authority per-connection pseudonym is never process-wide crash context"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), TEXT("connection-148"));
-	ExpectRejectedAndUnchanged(TEXT("The excluded marker is matched case-sensitively"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-148"), TEXT("instance-148"), TEXT("EXCLUDED"));
+	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile version fails closed"), Build, WrongVersion, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
+	ExpectRejectedAndUnchanged(TEXT("Printable personal text is never a process-wide connection pseudonym"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, TEXT("user@example.com"));
+	ExpectRejectedAndUnchanged(TEXT("An authority per-connection pseudonym is never process-wide crash context"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, TEXT("connection-148"));
+	ExpectRejectedAndUnchanged(TEXT("The excluded marker is matched case-sensitively"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, TEXT("EXCLUDED"));
+
+	// Printable personal or credential-like text passes the identifier bound but is
+	// never a closed, engine-owned, or generated crash value in any field.
+	const FString Adversarial[] = {
+		TEXT("user@example.com"), TEXT("password=hunter2"), TEXT("Bearer abc.def"), TEXT("UNKNOWN"),
+		TEXT("0123456789ABCDEF0123456789ABCDEF"), TEXT("0123456789abcdef0123456789abcdeg") };
+	for (const FString& Text : Adversarial)
+	{
+		FAethelnBuildIdentity LauncherBuild = Build;
+		LauncherBuild.SourceRevision = Text;
+		ExpectRejectedAndUnchanged(TEXT("Launcher source revision text fails closed"), LauncherBuild, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
+		LauncherBuild = Build;
+		LauncherBuild.BuildIdentity = Text;
+		ExpectRejectedAndUnchanged(TEXT("Launcher build identity text fails closed"), LauncherBuild, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
+		LauncherBuild = Build;
+		LauncherBuild.ToolchainIdentity = Text;
+		ExpectRejectedAndUnchanged(TEXT("Launcher toolchain text fails closed"), LauncherBuild, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
+		LauncherBuild = Build;
+		LauncherBuild.BuildConfiguration = Text;
+		ExpectRejectedAndUnchanged(TEXT("Caller build configuration text fails closed"), LauncherBuild, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
+		LauncherBuild = Build;
+		LauncherBuild.EngineRevision = Text;
+		ExpectRejectedAndUnchanged(TEXT("Caller engine revision text fails closed"), LauncherBuild, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
+		FAethelnNetworkProfile LauncherProfile = Profile;
+		LauncherProfile.ProfileId = Text;
+		ExpectRejectedAndUnchanged(TEXT("Launcher network-profile text fails closed"), Build, LauncherProfile, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Launcher run text fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, Text, Role, AethelnObservability::ExcludedIdentifier);
+		ExpectRejectedAndUnchanged(TEXT("Caller instance text fails closed"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, Text, AethelnObservability::ExcludedIdentifier);
+	}
+	ExpectRejectedAndUnchanged(TEXT("The omitted-run fallback is never a crash run"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, TEXT("run-local"), Role, AethelnObservability::ExcludedIdentifier);
+	ExpectRejectedAndUnchanged(TEXT("A caller instance identity is never the crash server role"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, TEXT("network-authority-server"), AethelnObservability::ExcludedIdentifier);
 
 	FAethelnCrashContextSnapshot Tampered = Accepted;
 	Tampered.ObservabilitySchemaVersion = AethelnObservability::SchemaVersion + 1;
