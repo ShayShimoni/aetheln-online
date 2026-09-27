@@ -397,6 +397,133 @@ their resource, Proof, accumulates as their claims survive contact.
   Nine-Dreams, is the Order's living cautionary text: her journal is a
   Nullwright record of a self she can no longer demonstrate.
 
+#### Nullwright Canonical Intent
+
+This shard has maturity **Canonical Intent** only. Nullwright, Ashscript,
+Black Geometry, Proof, Contradiction, and all named techniques below have
+working display names; their semantic IDs are stable. This is a design and
+compatibility contract, not Evidence Validated or Implementation Ready content.
+It does not add Nullwright to the Oathscar-only prototype runtime.
+
+The Nullwright's combat identity is a readable demonstration: aim a claim,
+commit an authored contact or prepared area, then use a server-confirmed result
+to press or revise that argument. Setup must be visible and disruptible. A
+claim is not a client-selected target, an automatic hit, or permission to
+rewrite a committed combat result. The base kit must work before a
+specialization, Skein choice, prebanked Proof, equipment bonus, Doctrine, or
+ally supplies a missing combat verb.
+
+Ashscript (`order.nullwright.spec.ashscript`) interprets the oath as closing a
+failed account. It favors aimed, committed bursts and eligible unmaking after
+a demonstrable result, at the cost of exposing its setup or recovery. Erasure
+means an authored effect or construct is removed only when current server
+eligibility permits it; Ashscript cannot undo damage, death, a reward, or a
+world record already committed. Black Geometry
+(`order.nullwright.spec.black_geometry`) instead preserves the unresolved
+argument as visible, server-owned seals and areas. It favors position control
+and ally openings over immediate pressure, but an opponent can leave, avoid,
+or disrupt an eligible setup. Neither specialization grants hidden contact,
+permanent denial, free immunity, or a different shared-resource identity.
+
+One authoritative weapon discipline is active in combat. The server validates
+its compatible abilities and any permitted transition; a model, animation,
+orbit effect, or client request cannot combine disciplines or choose contacts.
+Learning, changing, and persisting disciplines remain with Issues
+[#112](https://github.com/ShayShimoni/aetheln-online/issues/112) and
+[#113](https://github.com/ShayShimoni/aetheln-online/issues/113).
+
+| Weapon discipline | Stable ID | Mechanical identity and exposure |
+| --- | --- | --- |
+| Staff | `order.nullwright.weapon.staff` | Aimed linear projections contest a lane from deliberate range; a missed line or crossed wind-up gives the opponent room to close. |
+| Focus gauntlet | `order.nullwright.weapon.focus_gauntlet` | Short-range, facing-dependent assertions reward precise interruption or burst windows; the wielder risks contact while committing. |
+| Grimoire-blade | `order.nullwright.weapon.grimoire_blade` | Close aimed cuts alternate with explicitly authored projected citations; neither a blade animation nor a cited opponent grants automatic contact. |
+| Orbiting seals | `order.nullwright.weapon.orbiting_seals` | Prepared, visibly placed seals create bounded angles for delayed aimed pressure; orbiting presentation cannot select a target or prolong a construct. |
+
+Proof (`order.nullwright.resource.proof`) is the Nullwright presentation of the
+shared `combat.resource.order` slot, not Guard, Ward, Endurance, Health, or a
+second currency. A qualifying demonstration must be an explicitly authored,
+eligible combat result that has committed on the server; aim, prediction,
+placing an untested seal, a reported hit, or repeatedly delivered results grant
+nothing by themselves. A grant records at most once per committed result's
+stable activation or effect identity. A compatible spend is server-validated,
+idempotent for its accepted action, and bound to the current Order. It can
+favor an authored burst, unmaking, or prepared control choice, but it
+cannot buy a hit, override relation or defense policy, or use another Order's
+resource. The qualifying result set, gain, cost, cap, decay, refund, and all
+numeric rules remain tuning `TBD` with their implementation and evidence owners.
+
+Representative base actions are Axiom Bolt
+(`order.nullwright.ability.axiom_bolt`), an aimed proposition with an authored
+contact; Doubt Seal (`order.nullwright.ability.doubt_seal`), an aimed placement
+whose visible area contests a bounded location; and Counterexample
+(`order.nullwright.ability.counterexample`), a committed aimed attempt to
+interrupt or unmake an eligible authored effect or construct. These are
+Canonical Intent references for the weave below, not a final ability count or
+prototype kit. Contact, area eligibility, effect family, control participation,
+construct lifetime, and interruption windows remain authored and tuning `TBD`.
+Failed eligibility never silently becomes damage, a cleanse, or Proof.
+Every damaging component declares Wrought, Cinder, or Wake and follows the
+shared defense and resolution order; a claim never creates true damage.
+
+Contradiction (`order.nullwright.peak.contradiction`) briefly realizes the
+forbidden Nullwright whose premises are false. An accepted activation enters a
+server-owned temporary state in which only explicitly compatible actions use
+authored inverted variants, trading a direct assertion for prepared control or
+the reverse. It does not retroactively falsify a hit, reverse death or a grant,
+duplicate a result, create a free second cast, bypass Wrought/Cinder/Wake
+mitigation, or make a client claim authoritative. Opponents receive a distinct
+activation tell, legible active state, and ending/recovery cue. They can break
+line, leave a declared area, contest a seal, interrupt a permitted setup, or
+punish the exposed recovery. Eligibility, Proof spend or grant policy,
+compatible variants, cancellation, duration, and every value remain `TBD`.
+
+The unspecialized Nullwright must be able to aim, commit damage, defend or
+dodge through the shared rules, recover, and defeat a representative ordinary
+enemy without an ally, preloaded Proof, a construct already in place, or a
+specific Form, Thread, or Keystone. Group contribution comes from readable
+lane control, eligible interruption or unmaking, and safe openings allies can
+choose to exploit; it never requires a party to complete the solo loop. Any
+control obeys relation, immunity, Resolve, cleanse, and life-state policy.
+Neither a seal nor a named claim overrides another player's movement or input.
+
+Counterplay is structural: visible placement and wind-up can be avoided or
+interrupted where authored, persistent areas can be left or contested, short
+reach can be punished, and missed projections expose recovery. The server
+resolves every contact from authored free-aim geometry. Seals and other
+constructs carry their originating source, current relation policy, lifetime,
+and destruction rules; they never aim themselves at an unseen opponent.
+Delayed, periodic, reflected, or construct-emitted work retains the same root
+activation and finite aggregate depth, listener, event, target, and construct
+budgets. No cycle or fresh construct can reset those bounds. Dangerous setup,
+control, and state changes need readable cues without leaking secure stealth.
+
+These are representative weave definitions at **Canonical Intent**, not a
+final collection, slot count, unlock schedule, or tuned loadout:
+
+| Kind | Working name and stable ID | Decision changed |
+| --- | --- | --- |
+| Form | Direct Demonstration (`order.nullwright.form.axiom_bolt.direct_demonstration`) | Narrows Axiom Bolt into a more committed direct aimed line, trading flexibility and recovery safety for immediate pressure. |
+| Form | Deferred Demonstration (`order.nullwright.form.axiom_bolt.deferred_demonstration`) | Changes Axiom Bolt into a telegraphed delayed result at a server-validated aim point; it is mutually exclusive with Direct Demonstration. |
+| Form | Closed Diagram (`order.nullwright.form.doubt_seal.closed_diagram`) | Trades Doubt Seal's persistent area contest for a shorter, visibly committed interruption attempt against eligible actions. |
+| Thread | Proven Premise (`order.nullwright.thread.proven_premise`) | A committed Axiom Bolt contact lets the next compatible Doubt Seal follow that verified attack lane instead of choosing a free placement; predicted contact cannot prime it. |
+| Thread | Broken Argument (`order.nullwright.thread.broken_argument`) | A committed eligible Counterexample interruption changes the next compatible Axiom Bolt into a visibly held aimed release, not an automatic follow-up hit. |
+| Thread | Recovered Margin (`order.nullwright.thread.recovered_margin`) | A server-confirmed dodge changes the next compatible Doubt Seal to a moving, telegraphed placement; a local dodge animation grants nothing. |
+| Keystone | Closed Proof (`order.nullwright.keystone.closed_proof`) | Makes committed Proof spends favor immediate aimed pressure over sustained area control, without granting automatic contact. |
+| Keystone | Open Question (`order.nullwright.keystone.open_question`) | Makes committed Proof spends favor prepared positional support over immediate burst, without granting extra unbounded seals. |
+
+Forms modify only their named ability, and only one Form may modify that
+ability unless later compatibility evidence permits more. Threads consume
+bounded, visible server-owned triggers; one Keystone changes the build's
+central rhythm. None can invent a target, grant Proof from a predicted event,
+or escape the root work budget. Issue
+[#106](https://github.com/ShayShimoni/aetheln-online/issues/106) owns registry
+versions, compatibility, proc/listener validation, and generation; Issue
+[#113](https://github.com/ShayShimoni/aetheln-online/issues/113) owns compiled
+loadouts, presets, persistence, and atomic changes. No part of this shard is
+runtime, packaged, balance, performance, readability, accessibility, or QA
+evidence. Nullwright implementation remains future work, and all exact tuning
+and finite budget values remain evidence-owned `TBD`.
+
 ### Hushblade - Working Name
 
 The Hushblade swear to end violence in the least time possible. Their art is
