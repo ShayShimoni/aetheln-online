@@ -66,7 +66,8 @@ Assert-True ($Workflow -notmatch '\$\{\{\s*secrets\.' -and $Workflow -notmatch '
 Assert-True ($Workflow -notmatch 'workflow_dispatch') 'Workflow must not expose any manual workflow_dispatch entry point.'
 Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)') 'Workflow must not use status functions that bypass a failed or skipped prerequisite.'
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^    if: always\(\)\r?$' -Expected 1 -Message 'Only the hosted acceptance shadow may use job-level always().'
-Assert-True ($AcceptanceShadow -match '(?m)^    if: always\(\)\r?$' -and $AcceptanceShadow -match '(?m)^    continue-on-error: true\r?$') 'The acceptance aggregate must remain an always-running non-authoritative diagnostic.'
+Assert-True ($AcceptanceShadow -match '(?m)^    if: always\(\)\r?$' -and $AcceptanceShadow -notmatch '(?m)^    continue-on-error:') 'The acceptance shadow must run after every dependency while unexpected diagnostic failures remain visible.'
+Assert-True ($AcceptanceShadow -match 'Write-Warning "acceptance_producer_gap:\$Gap"' -and $AcceptanceShadow -notmatch 'throw "acceptance_producer_gap:') 'A known incomplete producer inventory must publish a green no-acceptance diagnostic rather than fail every healthy PR.'
 Assert-True ($AcceptanceShadow -notmatch '(?m)^\s+- uses: actions/checkout@') 'The static incomplete-producer diagnostic must not pay for or trust an unnecessary candidate checkout.'
 
 # Issue #167 Package 2: an independent pull-request-only shadow computes the

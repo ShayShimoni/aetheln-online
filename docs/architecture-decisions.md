@@ -673,7 +673,10 @@ Every accepted decision records:
   bounded same-attempt aggregate contracts, and add a hosted direct-needs gap
   diagnostic as the sole job allowed a job-level `always()`. Package 3A does
   not emit receipts or execute the aggregate while truthful producers are
-  missing; it publishes and fails closed on that exact inventory instead.
+  missing; it publishes an explicit incomplete, non-authoritative,
+  no-acceptance inventory instead. The known gap completes as a green
+  diagnostic so healthy PRs are not permanently red, while unexpected
+  reconciliation or publication errors still fail the job.
   The only Package 3A obligation with a supported semantic receipt is
   `visual-package`; producer and aggregate both validate its exact bounded raw
   report. Every other obligation rejects as unsupported until its own raw
@@ -698,6 +701,55 @@ Every accepted decision records:
   the accepted workflow/action/requirements identities, preserve the external
   checker, and wire the event-specific selector producer before the shadow
   aggregate can run; Package 3A's fixture proof grants no authority.
+- **Package 3B pre-activation amendment:** A run/attempt suffix is routing
+  metadata, not current-job provenance. GitHub's artifact record identifies the
+  workflow run and head revision but does not identify the producing job or run
+  attempt. The accepted-base selector must therefore generate a fresh 256-bit
+  CSPRNG correlation nonce bound to the canonical run ID and attempt. Selector
+  and receipt artifact names, reports, contexts, and aggregate output bind that
+  same closed current-attempt anchor. The aggregate also requires each
+  artifact's `created_at` to fall inside the exact successful current-attempt
+  job interval, reconciles the job's run/head/attempt and native runner
+  identity, and compares the API `sha256:` digest with the downloaded archive
+  bytes. Missing, malformed, all-zero, replayed, duplicated, pre-job,
+  post-job, or digest-mismatched evidence fails closed. Producer receipts and
+  the aggregate remain shadow-only in this package. The normalized selector
+  candidate for this amendment has SHA-256
+  `605a3fc7a16e2664492a51bc44a3d267ee6e9955043811c1be4ce4c988f2fe4b`;
+  it is not an accepted activation pin until this foundation is merged and a
+  fresh accepted-base live shadow observation binds it.
+- Artifact run/head/attempt identity and `created_at` inside an expected job
+  interval prove attempt identity and temporal correlation, not which job
+  uploaded the artifact. The shared attempt nonce is visible to overlapping
+  jobs. Before any receipt can grant authority, wiring must add a distinct
+  producer-job binding through pinned `needs` outputs, a job-identity
+  attestation, or verified non-overlapping producer execution. The current
+  shared-nonce aggregate remains shadow-only for this reason.
+- The delivery harness is also diagnostic-only in this package. It checks the
+  declared revision against `HEAD` but executes writable worktree files and
+  does not yet bind every test/dependency byte or reject mid-run mutation.
+  `delivery-harness` remains an unsupported receipt obligation until a clean,
+  immutable source contract and dirty/mutation negative fixtures exist.
+- Authority activation remains a later change. Its checker executes from
+  accepted-base bytes outside the candidate checkout and requires the trusted
+  caller to provide the independently accepted base revision and policy
+  SHA-256. It compares both pins before parsing the closed policy from the
+  accepted Git object database, uses fixed absolute identities for Git and
+  process-tree cleanup rather than candidate-influenced `PATH`, disables
+  replacement-object and Git configuration redirection, validates the exact
+  base/head/tested-merge tree relation, and accepts only one live-workflow file
+  whose bytes equal a pinned, pre-reviewed template. Controller, receipt,
+  aggregate, requirements, checker, template, and action identities cannot
+  change in that activation candidate. The checker emits bounded JSON only; it
+  does not read a candidate policy or write through candidate-controlled
+  filesystem paths. Because the current-attempt anchor changes selector bytes,
+  a new accepted-base live shadow observation is mandatory before the separate
+  activation candidate. Push and schedule evidence remains non-authoritative.
+  This foundation adds only the checker and its adversarial fixtures. The fixed
+  activation policy, pre-reviewed workflow template, requirements manifest,
+  trusted caller wiring, and independently accepted pins are deliberately
+  absent, so the checker cannot approve a real repository activation from this
+  package.
 - **Policy identity:** The policy digest is SHA-256 over the accepted selector
   source after deterministic LF normalization, covering mappings, contexts,
   limits, uncertainty behavior, and attribute rules. The controller digest

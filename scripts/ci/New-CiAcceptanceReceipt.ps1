@@ -9,6 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $script:AcceptanceReceiptSchema = 'aetheln.ci-acceptance-receipt/v1'
+$script:AttemptAnchorSchema = 'aetheln.current-attempt-anchor/v1'
 $script:AcceptanceInputLimit = 64KB
 $script:AcceptanceReceiptLimit = 64KB
 $script:AcceptanceEvidenceFileLimit = 4MB
@@ -31,15 +32,23 @@ $script:AcceptanceCheckIds = @(
 )
 # Opaque hashes and caller-declared summaries are not success evidence. Keep an
 # obligation unsupported until this producer can parse its exact report schema.
-$script:AcceptanceUnsupportedCheckIds = @(
+$script:AcceptanceReceiptUnsupportedCheckIds = @(
 	'clean-package-provenance-smoke',
 	'content-reference-validation',
 	'controller-contract',
 	'controller-operational-proof',
-	'delivery-harness',
-	'native-client-server-compile',
-	'portable',
-	'unreal-editor-automation'
+	'delivery-harness'
+)
+$script:AcceptancePortableCheckNames = @(
+	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
+	'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
+	'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
+	'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
+	'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
+	'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
+	'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
+	'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
+	'psscriptanalyzer'
 )
 
 function Assert-AcceptanceClosedObject {
@@ -108,23 +117,84 @@ function Read-AcceptanceJson {
 }
 
 function ConvertFrom-AcceptanceEvidenceJson {
-	param([byte[]] $Bytes)
-	if ($null -eq $Bytes -or $Bytes.Length -eq 0 -or $Bytes.Length -gt $script:AcceptanceEvidenceFileLimit) { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	param([byte[]] $Bytes, [string] $CheckId)
+	$Reason = 'receipt_semantic_evidence_invalid:' + $CheckId
+	if ($null -eq $Bytes -or $Bytes.Length -eq 0 -or $Bytes.Length -gt $script:AcceptanceEvidenceFileLimit) { throw $Reason }
 	try { $Raw = $script:AcceptanceUtf8.GetString($Bytes) }
-	catch { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	catch { throw $Reason }
 	try { Assert-AcceptanceUniqueJsonProperties -Raw $Raw }
-	catch { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	catch { throw $Reason }
 	try {
 		$ConvertCommand = Get-Command -Name ConvertFrom-Json -ErrorAction Stop
 		if ($ConvertCommand.Parameters.ContainsKey('DateKind')) { return ConvertFrom-Json -InputObject $Raw -DateKind String }
 		return ConvertFrom-Json -InputObject $Raw
 	}
-	catch { throw 'receipt_semantic_evidence_invalid:visual-package' }
+	catch { throw $Reason }
 }
 
 function Test-AcceptanceBoundedInteger {
 	param($Value, [long] $Minimum, [long] $Maximum)
 	return ($Value -is [int] -or $Value -is [long]) -and [long] $Value -ge $Minimum -and [long] $Value -le $Maximum
+}
+
+function Test-AcceptanceBoundedNumber {
+	param($Value, [double]$Minimum, [double]$Maximum)
+	if ($Value -isnot [int] -and $Value -isnot [long] -and $Value -isnot [double] -and $Value -isnot [decimal]) { return $false }
+	$Number = [double]$Value
+	return -not [double]::IsNaN($Number) -and -not [double]::IsInfinity($Number) -and $Number -ge $Minimum -and $Number -le $Maximum
+}
+
+function Assert-AcceptanceCompileBuildRecord {
+	param($Build, [string]$ExpectedCheck, [string]$ExpectedTarget, [string]$ExpectedPlatform)
+	$Reason = 'receipt_semantic_evidence_invalid:native-client-server-compile'
+	Assert-AcceptanceClosedObject $Build @('check','target','platform','configuration','intermediateBuildDirectoryPresentBeforeRun','makefilePresentBeforeRun','outputState','lastObservedAction','observedTotalActions','actionCounterState','plannedActionCount','observedTargetNames','makefileObservation','makefileReason','makefileCreationCount','upToDateObserved','executorSummaryCount')
+	if ($Build.check -isnot [string] -or $Build.check -cne $ExpectedCheck -or $Build.target -isnot [string] -or $Build.target -cne $ExpectedTarget -or
+		$Build.platform -isnot [string] -or $Build.platform -cne $ExpectedPlatform -or $Build.configuration -isnot [string] -or $Build.configuration -cne 'Development' -or
+		$Build.intermediateBuildDirectoryPresentBeforeRun -isnot [bool] -or $Build.makefilePresentBeforeRun -isnot [bool] -or
+		$Build.outputState -isnot [string] -or $Build.outputState -cne 'captured' -or $Build.actionCounterState -isnot [string] -or
+		$Build.actionCounterState -cnotin @('observed','not_observed') -or $Build.makefileObservation -isnot [string] -or
+		$Build.makefileObservation -cnotin @('created','not_observed') -or $Build.upToDateObserved -isnot [bool] -or
+		-not (Test-AcceptanceBoundedInteger $Build.makefileCreationCount 0 10000000) -or -not (Test-AcceptanceBoundedInteger $Build.executorSummaryCount 0 10000000)) { throw $Reason }
+	if ($Build.actionCounterState -ceq 'observed') {
+		if (-not (Test-AcceptanceBoundedInteger $Build.lastObservedAction 1 10000000) -or -not (Test-AcceptanceBoundedInteger $Build.observedTotalActions 1 10000000) -or $Build.lastObservedAction -gt $Build.observedTotalActions) { throw $Reason }
+	} elseif ($null -ne $Build.lastObservedAction -or $null -ne $Build.observedTotalActions) { throw $Reason }
+	if ($null -ne $Build.plannedActionCount -and -not (Test-AcceptanceBoundedInteger $Build.plannedActionCount 0 10000000)) { throw $Reason }
+	if ($null -ne $Build.observedTargetNames -and ($Build.observedTargetNames -isnot [string] -or $Build.observedTargetNames.Length -gt 512 -or $Build.observedTargetNames -cnotmatch '^(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other)(?:,(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other))*$')) { throw $Reason }
+	if ($Build.makefileObservation -ceq 'created') {
+		if ($Build.makefileCreationCount -lt 1 -or $Build.makefileReason -isnot [string] -or $Build.makefileReason -cnotmatch '^[a-z0-9_]{1,128}$') { throw $Reason }
+	} elseif ($Build.makefileCreationCount -ne 0 -or $null -ne $Build.makefileReason) { throw $Reason }
+}
+
+function Assert-AcceptanceManagedCompileProof {
+	param($Report, $Identity)
+	$Reason = 'receipt_semantic_evidence_invalid:native-client-server-compile'
+	try {
+		Assert-AcceptanceClosedObject $Report.managedWorkspace @('schemaVersion','registrationId','registrationSha256','preparationReceiptSha256','revision','synchronized')
+		Assert-AcceptanceClosedObject $Report.compileResources @('schemaVersion','sampleIntervalMilliseconds','recoveryFloorBytes','pressureThresholdBytes','sampleCount','measurementCount','maximumSampleGapMilliseconds','consecutivePressureSamples','maximumConsecutivePressureSamples','minimumAvailableRamBytes','minimumCommitHeadroomBytes','physicalCores','targetAdmissionCount','minimumActionLimit','maximumActionLimit','failureReason','volumes')
+	} catch { throw $Reason }
+	$Workspace = $Report.managedWorkspace
+	if (-not (Test-AcceptanceBoundedInteger $Workspace.schemaVersion 1 1) -or $Workspace.registrationId -isnot [string] -or $Workspace.registrationId -cnotmatch '^[a-f0-9]{32}$' -or
+		-not (Test-AcceptanceDigest $Workspace.registrationSha256) -or -not (Test-AcceptanceDigest $Workspace.preparationReceiptSha256) -or
+		$Workspace.revision -isnot [string] -or $Workspace.revision -cne $Identity.source.testedRevision -or $Workspace.synchronized -isnot [bool] -or -not $Workspace.synchronized) { throw $Reason }
+	$Resources = $Report.compileResources
+	if (-not (Test-AcceptanceBoundedInteger $Resources.schemaVersion 1 1) -or -not (Test-AcceptanceBoundedInteger $Resources.sampleIntervalMilliseconds 5000 5000) -or
+		-not (Test-AcceptanceBoundedInteger $Resources.recoveryFloorBytes 20GB 20GB) -or -not (Test-AcceptanceBoundedInteger $Resources.pressureThresholdBytes 2GB 2GB) -or
+		-not (Test-AcceptanceBoundedInteger $Resources.sampleCount 1 10000000) -or -not (Test-AcceptanceBoundedInteger $Resources.measurementCount 1 10000000) -or $Resources.measurementCount -lt $Resources.sampleCount -or
+		-not (Test-AcceptanceBoundedInteger $Resources.maximumSampleGapMilliseconds 0 3600000) -or
+		-not (Test-AcceptanceBoundedInteger $Resources.consecutivePressureSamples 0 2) -or -not (Test-AcceptanceBoundedInteger $Resources.maximumConsecutivePressureSamples 0 2) -or
+		$Resources.consecutivePressureSamples -gt $Resources.maximumConsecutivePressureSamples -or -not (Test-AcceptanceBoundedInteger $Resources.minimumAvailableRamBytes 0 ([long]::MaxValue)) -or
+		-not (Test-AcceptanceBoundedInteger $Resources.minimumCommitHeadroomBytes 0 ([long]::MaxValue)) -or -not (Test-AcceptanceBoundedInteger $Resources.physicalCores 1 ([int]::MaxValue)) -or
+		-not (Test-AcceptanceBoundedInteger $Resources.targetAdmissionCount 2 2) -or -not (Test-AcceptanceBoundedInteger $Resources.minimumActionLimit 1 4) -or
+		-not (Test-AcceptanceBoundedInteger $Resources.maximumActionLimit 1 4) -or $Resources.minimumActionLimit -gt $Resources.maximumActionLimit -or
+		$null -ne $Resources.failureReason -or $Resources.volumes -isnot [array] -or @($Resources.volumes).Count -lt 1 -or @($Resources.volumes).Count -gt 7) { throw $Reason }
+	$VolumeIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	foreach ($Volume in $Resources.volumes) {
+		try { Assert-AcceptanceClosedObject $Volume @('volumeId','knownAllocationBytes','minimumAvailableBytes') } catch { throw $Reason }
+		if ($Volume.volumeId -isnot [string] -or $Volume.volumeId -cnotmatch '^[^\x00-\x1f]{1,256}$' -or -not $VolumeIds.Add($Volume.volumeId) -or
+			-not (Test-AcceptanceBoundedInteger $Volume.knownAllocationBytes 0 ([long]::MaxValue - 20GB)) -or
+			-not (Test-AcceptanceBoundedInteger $Volume.minimumAvailableBytes 0 ([long]::MaxValue)) -or
+			[decimal] $Volume.minimumAvailableBytes -le ([decimal] $Volume.knownAllocationBytes + 20GB)) { throw $Reason }
+	}
 }
 
 function Test-AcceptanceCanonicalValidatorPath {
@@ -135,9 +205,144 @@ function Test-AcceptanceCanonicalValidatorPath {
 	return $Normalized -ceq $Expected
 }
 
+function Test-AcceptanceTimestampRange {
+	param($StartedValue, $FinishedValue)
+	if ($StartedValue -isnot [string] -or $FinishedValue -isnot [string]) { return $false }
+	[datetime] $Started = [datetime]::MinValue
+	[datetime] $Finished = [datetime]::MinValue
+	$Style = [Globalization.DateTimeStyles]::RoundtripKind
+	return [datetime]::TryParseExact($StartedValue, 'o', [Globalization.CultureInfo]::InvariantCulture, $Style, [ref]$Started) -and
+		[datetime]::TryParseExact($FinishedValue, 'o', [Globalization.CultureInfo]::InvariantCulture, $Style, [ref]$Finished) -and $Finished -ge $Started
+}
+
+function Assert-AcceptancePortableEvidence {
+	param([byte[]] $Bytes, $Identity)
+	$CheckId = 'portable'
+	$Report = ConvertFrom-AcceptanceEvidenceJson -Bytes $Bytes -CheckId $CheckId
+	try {
+		Assert-AcceptanceClosedObject -Value $Report -PropertyNames @('schemaVersion','revision','startedUtc','finishedUtc','checks','summary')
+		Assert-AcceptanceClosedObject -Value $Report.summary -PropertyNames @('total','passed','failed','skipped','requiredFailed')
+	} catch { throw 'receipt_semantic_evidence_invalid:portable' }
+	if (-not (Test-AcceptanceBoundedInteger $Report.schemaVersion 1 1) -or $Report.revision -cne $Identity.source.testedRevision -or
+		-not (Test-AcceptanceTimestampRange $Report.startedUtc $Report.finishedUtc) -or $Report.checks -isnot [array] -or
+		@($Report.checks).Count -ne $script:AcceptancePortableCheckNames.Count) { throw 'receipt_semantic_evidence_invalid:portable' }
+	$Passed = 0; $Skipped = 0
+	for ($Index = 0; $Index -lt $script:AcceptancePortableCheckNames.Count; $Index++) {
+		$Check = $Report.checks[$Index]
+		try { Assert-AcceptanceClosedObject -Value $Check -PropertyNames @('name','tier','status','durationSeconds','command','message') }
+		catch { throw 'receipt_semantic_evidence_invalid:portable' }
+		$ExpectedName = $script:AcceptancePortableCheckNames[$Index]
+		$ExpectedTier = if ($ExpectedName -ceq 'psscriptanalyzer') { 'advisory' } else { 'required' }
+		if ($Check.name -isnot [string] -or $Check.name -cne $ExpectedName -or $Check.tier -isnot [string] -or $Check.tier -cne $ExpectedTier -or
+			$Check.status -isnot [string] -or -not (Test-AcceptanceBoundedNumber $Check.durationSeconds 0 86400) -or
+			$Check.command -isnot [string] -or $Check.command.Length -gt 32768 -or $Check.message -isnot [string] -or $Check.message.Length -gt 131072) {
+			throw 'receipt_semantic_evidence_invalid:portable'
+		}
+		if ($Check.status -cnotin @('passed','skipped') -or ($ExpectedTier -ceq 'required' -and $Check.status -cne 'passed')) {
+			throw 'receipt_semantic_evidence_failure:portable'
+		}
+		if ($Check.status -ceq 'passed') { $Passed++ } else { $Skipped++ }
+	}
+	if (-not (Test-AcceptanceBoundedInteger $Report.summary.total 0 1024) -or -not (Test-AcceptanceBoundedInteger $Report.summary.passed 0 1024) -or
+		-not (Test-AcceptanceBoundedInteger $Report.summary.failed 0 1024) -or
+		-not (Test-AcceptanceBoundedInteger $Report.summary.skipped 0 1024) -or -not (Test-AcceptanceBoundedInteger $Report.summary.requiredFailed 0 1024)) { throw 'receipt_semantic_evidence_invalid:portable' }
+	if ($Report.summary.total -ne $Report.checks.Count -or $Report.summary.passed -ne $Passed -or $Report.summary.failed -ne 0 -or
+		$Report.summary.skipped -ne $Skipped -or $Report.summary.requiredFailed -ne 0) { throw 'receipt_semantic_evidence_failure:portable' }
+}
+
+function Assert-AcceptanceEngineRunnerEvidence {
+	param([byte[]] $Bytes, $Identity)
+	$Report = ConvertFrom-AcceptanceEvidenceJson -Bytes $Bytes -CheckId 'native-client-server-compile'
+	$RequiredProperties = @('schemaVersion','mode','policy','revision','runnerName','startedUtc','finishedUtc','checks','summary','compileEvidence','managedWorkspace','compileResources','supervisor')
+	foreach ($Name in $RequiredProperties) { if ($Report -isnot [pscustomobject] -or $Report.PSObject.Properties.Name -cnotcontains $Name) { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' } }
+	if (@($Report.PSObject.Properties.Name | Where-Object { $RequiredProperties -cnotcontains $_ }).Count -ne 0) { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	try {
+		Assert-AcceptanceClosedObject $Report.summary @('total','passed','failed','skipped','requiredFailed')
+		Assert-AcceptanceClosedObject $Report.supervisor @('childExitCode','timedOut','cleanupVerified')
+	} catch { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	if (-not (Test-AcceptanceBoundedInteger $Report.schemaVersion 1 1) -or $Report.mode -isnot [string] -or $Report.mode -cne 'Compile' -or
+		$Report.policy -isnot [string] -or $Report.policy -cne 'incremental-target-compilation' -or $Report.revision -isnot [string] -or
+		$Report.revision -cne $Identity.source.testedRevision -or $Report.runnerName -isnot [string] -or [string]::IsNullOrWhiteSpace($Report.runnerName) -or $Report.runnerName.Length -gt 128 -or
+		-not (Test-AcceptanceTimestampRange $Report.startedUtc $Report.finishedUtc) -or $Report.checks -isnot [array] -or @($Report.checks).Count -lt 8 -or @($Report.checks).Count -gt 32 -or
+		-not (Test-AcceptanceBoundedInteger $Report.supervisor.childExitCode 0 0) -or $Report.supervisor.timedOut -isnot [bool] -or $Report.supervisor.timedOut -or
+		$Report.supervisor.cleanupVerified -isnot [bool] -or -not $Report.supervisor.cleanupVerified) {
+		throw 'receipt_semantic_evidence_invalid:native-client-server-compile'
+	}
+	$Names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	foreach ($Check in $Report.checks) {
+		try { Assert-AcceptanceClosedObject $Check @('name','tier','status','durationSeconds','command','message') } catch { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+		if ($Check.name -isnot [string] -or $Check.name.Length -lt 1 -or $Check.name.Length -gt 128 -or -not $Names.Add($Check.name) -or
+			$Check.tier -isnot [string] -or $Check.status -isnot [string] -or -not (Test-AcceptanceBoundedNumber $Check.durationSeconds 0 86400) -or
+			$Check.command -isnot [string] -or $Check.command.Length -gt 32768 -or $Check.message -isnot [string] -or $Check.message.Length -gt 131072) {
+			throw 'receipt_semantic_evidence_invalid:native-client-server-compile'
+		}
+		if ($Check.tier -cne 'required' -or $Check.status -cne 'passed') { throw 'receipt_semantic_evidence_failure:native-client-server-compile' }
+	}
+	foreach ($Expected in @('runner-input-validation','managed-compile-workspace','repository-state-before-work','incremental-client-build','incremental-client-build-repository-state','incremental-server-build','incremental-server-build-repository-state','repository-state-at-completion')) {
+		if (-not $Names.Contains($Expected)) { throw 'receipt_semantic_evidence_failure:native-client-server-compile' }
+	}
+	if (-not (Test-AcceptanceBoundedInteger $Report.summary.total 0 32) -or $Report.summary.total -ne $Report.checks.Count -or
+		-not (Test-AcceptanceBoundedInteger $Report.summary.passed 0 32) -or $Report.summary.passed -ne $Report.checks.Count -or
+		-not (Test-AcceptanceBoundedInteger $Report.summary.failed 0 0) -or -not (Test-AcceptanceBoundedInteger $Report.summary.skipped 0 0) -or
+		-not (Test-AcceptanceBoundedInteger $Report.summary.requiredFailed 0 0)) { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	Assert-AcceptanceManagedCompileProof -Report $Report -Identity $Identity
+	if ($Report.compileEvidence -isnot [pscustomobject] -or -not (Test-AcceptanceBoundedInteger $Report.compileEvidence.schemaVersion 1 1) -or $Report.compileEvidence.builds -isnot [array] -or @($Report.compileEvidence.builds).Count -ne 2) { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	try {
+		Assert-AcceptanceClosedObject $Report.compileEvidence @('schemaVersion','identity','builds')
+		Assert-AcceptanceClosedObject $Report.compileEvidence.identity @('engineGitRevision','engineGitRevisionStatus','engineBuildVersionSha256','engineBuildVersionSha256Status','linuxToolchainCompilerSha256','linuxToolchainCompilerSha256Status','runnerName','durationSeconds')
+	} catch { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	$CompileIdentity = $Report.compileEvidence.identity
+	if ($CompileIdentity.engineGitRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or $CompileIdentity.engineGitRevisionStatus -cne 'verified' -or
+		-not (Test-AcceptanceDigest $CompileIdentity.engineBuildVersionSha256) -or $CompileIdentity.engineBuildVersionSha256Status -cne 'verified' -or
+		-not (Test-AcceptanceDigest $CompileIdentity.linuxToolchainCompilerSha256) -or $CompileIdentity.linuxToolchainCompilerSha256Status -cne 'verified' -or
+		$CompileIdentity.runnerName -isnot [string] -or $CompileIdentity.runnerName -cne $Report.runnerName -or -not (Test-AcceptanceBoundedNumber $CompileIdentity.durationSeconds 0 3600)) {
+		throw 'receipt_semantic_evidence_invalid:native-client-server-compile'
+	}
+	$ExpectedBuilds = @(@('incremental-client-build','AethelnOnlineClient','Win64'),@('incremental-server-build','AethelnOnlineServer','Linux'))
+	for ($Index = 0; $Index -lt 2; $Index++) {
+		$Build = $Report.compileEvidence.builds[$Index]; $Expected = $ExpectedBuilds[$Index]
+		try { Assert-AcceptanceCompileBuildRecord -Build $Build -ExpectedCheck $Expected[0] -ExpectedTarget $Expected[1] -ExpectedPlatform $Expected[2] }
+		catch { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	}
+}
+
+function Assert-AcceptanceUnrealAutomationEvidence {
+	param([byte[]] $Bytes, $Identity)
+	$Report = ConvertFrom-AcceptanceEvidenceJson -Bytes $Bytes -CheckId 'unreal-editor-automation'
+	try {
+		Assert-AcceptanceClosedObject $Report @('schemaId','schemaVersion','mode','sourceRevision','engineRevision','projectName','filter','timeoutSeconds','startedUtc','finishedUtc','processExitCode','repositoryCleanBefore','repositoryCleanAfter','outputs','tests','summary','result','failureReason')
+		Assert-AcceptanceClosedObject $Report.outputs @('unrealReport','log')
+		Assert-AcceptanceClosedObject $Report.summary @('total','passed','passedWithWarnings','failed','notRun','missing','requiredFailed')
+	} catch { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
+	if ($Report.schemaId -isnot [string] -or $Report.schemaId -cne 'aetheln.unreal-automation' -or -not (Test-AcceptanceBoundedInteger $Report.schemaVersion 1 1) -or
+		$Report.mode -isnot [string] -or $Report.mode -cne 'production' -or $Report.sourceRevision -isnot [string] -or $Report.sourceRevision -cne $Identity.source.testedRevision -or
+		$Report.engineRevision -isnot [string] -or $Report.engineRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or
+		$Report.projectName -isnot [string] -or $Report.projectName -cne 'AethelnOnline' -or $Report.filter -isnot [string] -or $Report.filter -cne '^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$' -or
+		-not (Test-AcceptanceBoundedInteger $Report.timeoutSeconds 1 86400) -or -not (Test-AcceptanceTimestampRange $Report.startedUtc $Report.finishedUtc) -or
+		-not (Test-AcceptanceBoundedInteger $Report.processExitCode 0 0) -or $Report.repositoryCleanBefore -isnot [bool] -or -not $Report.repositoryCleanBefore -or
+		$Report.repositoryCleanAfter -isnot [bool] -or -not $Report.repositoryCleanAfter -or $Report.outputs.unrealReport -isnot [string] -or
+		$Report.outputs.unrealReport -cne 'TestResults/UnrealAutomation/index.json' -or $Report.outputs.log -isnot [string] -or $Report.outputs.log -cne 'Saved/Logs/AethelnUnrealAutomation.log' -or
+		$Report.result -isnot [string] -or $Report.result -cne 'passed' -or $Report.failureReason -isnot [string] -or $Report.failureReason -cne 'none' -or
+		$Report.tests -isnot [array] -or @($Report.tests).Count -ne 2) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
+	$ExpectedTests = @('Aetheln.GameCombat.NetworkSpike.Authority','Aetheln.Harness.ProjectAndModuleLoad')
+	for ($Index = 0; $Index -lt 2; $Index++) {
+		$Test = $Report.tests[$Index]
+		try { Assert-AcceptanceClosedObject $Test @('fullTestPath','state','status','durationSeconds','warningCount','errorCount') } catch { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
+		if ($Test.fullTestPath -isnot [string] -or $Test.fullTestPath -cne $ExpectedTests[$Index] -or $Test.state -isnot [string] -or $Test.state -cne 'Success' -or
+			$Test.status -isnot [string] -or $Test.status -cne 'passed' -or -not (Test-AcceptanceBoundedNumber $Test.durationSeconds 0 86400) -or
+			-not (Test-AcceptanceBoundedInteger $Test.warningCount 0 0) -or -not (Test-AcceptanceBoundedInteger $Test.errorCount 0 0)) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
+	}
+	if (-not (Test-AcceptanceBoundedInteger $Report.summary.total 2 2) -or $Report.summary.total -ne $Report.tests.Count -or
+		-not (Test-AcceptanceBoundedInteger $Report.summary.passed 2 2) -or -not (Test-AcceptanceBoundedInteger $Report.summary.passedWithWarnings 0 0) -or
+		-not (Test-AcceptanceBoundedInteger $Report.summary.failed 0 0) -or -not (Test-AcceptanceBoundedInteger $Report.summary.notRun 0 0) -or
+		-not (Test-AcceptanceBoundedInteger $Report.summary.missing 0 0) -or -not (Test-AcceptanceBoundedInteger $Report.summary.requiredFailed 0 0)) {
+		throw 'receipt_semantic_evidence_invalid:unreal-editor-automation'
+	}
+}
+
 function Assert-AcceptanceVisualPackageEvidence {
 	param([byte[]] $Bytes, $Identity)
-	$Report = ConvertFrom-AcceptanceEvidenceJson -Bytes $Bytes
+	$Report = ConvertFrom-AcceptanceEvidenceJson -Bytes $Bytes -CheckId 'visual-package'
 	try {
 		Assert-AcceptanceClosedObject -Value $Report -PropertyNames @('schemaVersion','repository','revision','run','results','conclusion')
 		Assert-AcceptanceClosedObject -Value $Report.run -PropertyNames @('id','attempt')
@@ -215,6 +420,15 @@ function Test-AcceptanceDecimalIdentity($Value) {
 	return [long]::TryParse($Value, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $Parsed) -and $Parsed -gt 0
 }
 
+function Assert-AcceptanceAttemptAnchor {
+	param($Anchor, $Run)
+	Assert-AcceptanceClosedObject -Value $Anchor -PropertyNames @('schemaVersion','runId','runAttempt','nonce')
+	if ($Anchor.schemaVersion -isnot [string] -or $Anchor.schemaVersion -cne $script:AttemptAnchorSchema -or
+		-not (Test-AcceptanceDecimalIdentity $Anchor.runId) -or $Anchor.runAttempt -isnot [int] -or $Anchor.runAttempt -lt 1 -or
+		$Anchor.nonce -isnot [string] -or $Anchor.nonce -cnotmatch '^[0-9a-f]{64}$' -or $Anchor.nonce -cmatch '^0{64}$' -or
+		$Anchor.runId -cne $Run.id -or $Anchor.runAttempt -ne $Run.attempt) { throw 'receipt_invalid' }
+}
+
 function Get-AcceptanceSha256 {
 	param([byte[]] $Bytes)
 	$Hash = [Security.Cryptography.SHA256]::Create()
@@ -275,7 +489,7 @@ function New-CiAcceptanceReceipt {
 	if (Test-Path -LiteralPath $OutputPath) { throw 'receipt_exists' }
 	if ((Split-Path -Path $OutputPath -Leaf) -cne 'ci-acceptance-receipt.json') { throw 'receipt_output_name_invalid' }
 	$ReceiptInput = Read-AcceptanceJson -Path $InputPath
-	Assert-AcceptanceClosedObject -Value $ReceiptInput -PropertyNames @('repository','event','source','workflow','controller','policy','actions','run','selection','results')
+	Assert-AcceptanceClosedObject -Value $ReceiptInput -PropertyNames @('repository','event','source','workflow','controller','policy','actions','run','attemptAnchor','selection','results')
 	Assert-AcceptanceClosedObject -Value $ReceiptInput.repository -PropertyNames @('fullName')
 	Assert-AcceptanceClosedObject -Value $ReceiptInput.event -PropertyNames @('kind','classification','actor','triggeringActor')
 	Assert-AcceptanceClosedObject -Value $ReceiptInput.source -PropertyNames @('baseRevision','headRevision','testedRevision')
@@ -284,6 +498,7 @@ function New-CiAcceptanceReceipt {
 	Assert-AcceptanceClosedObject -Value $ReceiptInput.policy -PropertyNames @('version','digest')
 	Assert-AcceptanceClosedObject -Value $ReceiptInput.actions -PropertyNames @('manifestSha256','items')
 	Assert-AcceptanceClosedObject -Value $ReceiptInput.run -PropertyNames @('id','attempt')
+	Assert-AcceptanceClosedObject -Value $ReceiptInput.attemptAnchor -PropertyNames @('schemaVersion','runId','runAttempt','nonce')
 	Assert-AcceptanceClosedObject -Value $ReceiptInput.selection -PropertyNames @('checks')
 	Assert-AcceptanceClosedObject -Value $ReceiptInput.results -PropertyNames @('checks')
 
@@ -320,6 +535,7 @@ function New-CiAcceptanceReceipt {
 	}
 	if ((Get-AcceptanceSha256 -Bytes $script:AcceptanceUtf8NoBom.GetBytes($ActionLines.ToString())) -cne $ReceiptInput.actions.manifestSha256) { throw 'receipt_invalid' }
 	if (-not (Test-AcceptanceDecimalIdentity -Value $ReceiptInput.run.id) -or $ReceiptInput.run.attempt -isnot [int] -or $ReceiptInput.run.attempt -lt 1) { throw 'receipt_invalid' }
+	Assert-AcceptanceAttemptAnchor -Anchor $ReceiptInput.attemptAnchor -Run $ReceiptInput.run
 
 	if ($ReceiptInput.event.kind -ceq 'pull_request') {
 		if ($ReceiptInput.source.testedRevision -cne $ReceiptInput.workflow.revision -or $ReceiptInput.controller.revision -cne $ReceiptInput.source.baseRevision -or
@@ -347,9 +563,11 @@ function New-CiAcceptanceReceipt {
 			$Result.conclusion -cne 'success' -or $Result.terminal -isnot [bool] -or -not $Result.terminal -or $null -ne $Result.infrastructureFailure) { throw 'receipt_invalid' }
 		if ($null -eq $ReceiptJobName) { $ReceiptJobName = [string] $Result.jobName }
 		elseif ([string] $Result.jobName -cne $ReceiptJobName) { throw 'receipt_invalid' }
-		if ($script:AcceptanceUnsupportedCheckIds -ccontains $Result.id) { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) }
+		if ($script:AcceptanceReceiptUnsupportedCheckIds -ccontains $Result.id) { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) }
 		if ($null -ne $Result.nativeExitCode -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_invalid' }
 		if ($Result.id -ceq 'visual-package' -and $null -ne $Result.nativeExitCode) { throw 'receipt_semantic_evidence_invalid:visual-package' }
+		if ($Result.id -ceq 'portable' -and $null -ne $Result.nativeExitCode) { throw 'receipt_semantic_evidence_invalid:portable' }
+		if ($Result.id -ceq 'unreal-editor-automation' -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
 		$RequiresCleanup = $Result.id -in @('native-client-server-compile','clean-package-provenance-smoke')
 		if ($Result.id -in @('native-client-server-compile','clean-package-provenance-smoke') -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_invalid' }
 		if ($RequiresCleanup) {
@@ -357,10 +575,17 @@ function New-CiAcceptanceReceipt {
 			$CleanupApplicable = $true
 		} elseif ($null -ne $Result.cleanupVerified) { throw 'receipt_invalid' }
 		if ($Result.evidence -isnot [Array] -or $Result.evidence.Count -lt 1 -or $Result.evidence.Count -gt $script:AcceptanceEvidencePerResultLimit) { throw 'receipt_invalid' }
-		if ($Result.id -ceq 'visual-package' -and $Result.evidence.Count -ne 1) { throw 'receipt_semantic_evidence_duplicate:visual-package' }
+		if ($Result.id -in @('portable','native-client-server-compile','unreal-editor-automation','visual-package') -and $Result.evidence.Count -ne 1) { throw ('receipt_semantic_evidence_duplicate:' + $Result.id) }
 		$EvidenceCopies = New-Object System.Collections.Generic.List[object]
 		$PreviousEvidenceName = $null
-		$VisualEvidenceBytes = $null
+		$SemanticEvidenceBytes = $null
+		$SemanticEvidenceName = switch ($Result.id) {
+			'portable' { 'ci-report.json' }
+			'native-client-server-compile' { 'engine-runner-report.json' }
+			'unreal-editor-automation' { 'unreal-automation-report.json' }
+			'visual-package' { 'visual-package-report.json' }
+			default { $null }
+		}
 		foreach ($Evidence in $Result.evidence) {
 			Assert-AcceptanceClosedObject -Value $Evidence -PropertyNames @('name','sha256','sizeBytes')
 			if (-not (Test-AcceptanceEvidenceName -Value $Evidence.name) -or -not (Test-AcceptanceDigest -Value $Evidence.sha256) -or
@@ -378,15 +603,20 @@ function New-CiAcceptanceReceipt {
 			$ActualDigest = Get-AcceptanceSha256 -Bytes $FileBytes
 			$After = Get-Item -LiteralPath $File.FullName
 			if ($FileBytes.Length -ne $DeclaredSize -or $After.Length -ne $DeclaredSize -or $ActualDigest -cne $Evidence.sha256) { throw 'receipt_invalid' }
-			if ($Result.id -ceq 'visual-package') {
-				if ($Evidence.name -cne 'visual-package-report.json') { throw 'receipt_semantic_evidence_missing:visual-package' }
-				$VisualEvidenceBytes = $FileBytes
+			if ($null -ne $SemanticEvidenceName) {
+				if ($Evidence.name -cne $SemanticEvidenceName) { throw ('receipt_semantic_evidence_missing:' + $Result.id) }
+				$SemanticEvidenceBytes = $FileBytes
 			}
 			$EvidenceCopies.Add([pscustomobject][ordered]@{ name=[string]$Evidence.name; sha256=[string]$Evidence.sha256; sizeBytes=$DeclaredSize })
 		}
-		if ($Result.id -ceq 'visual-package') {
-			if ($null -eq $VisualEvidenceBytes) { throw 'receipt_semantic_evidence_missing:visual-package' }
-			Assert-AcceptanceVisualPackageEvidence -Bytes $VisualEvidenceBytes -Identity $ReceiptInput
+		if ($null -ne $SemanticEvidenceName) {
+			if ($null -eq $SemanticEvidenceBytes) { throw ('receipt_semantic_evidence_missing:' + $Result.id) }
+			switch ($Result.id) {
+				'portable' { Assert-AcceptancePortableEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput }
+				'native-client-server-compile' { Assert-AcceptanceEngineRunnerEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput }
+				'unreal-editor-automation' { Assert-AcceptanceUnrealAutomationEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput }
+				'visual-package' { Assert-AcceptanceVisualPackageEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput }
+			}
 		}
 		$ResultCopies.Add([pscustomobject][ordered]@{
 			id=[string]$Result.id; jobName=[string]$Result.jobName; conclusion='success'; nativeExitCode=$Result.nativeExitCode
@@ -404,6 +634,7 @@ function New-CiAcceptanceReceipt {
 		policy = [pscustomobject][ordered]@{ version=[string]$ReceiptInput.policy.version; digest=[string]$ReceiptInput.policy.digest }
 		actions = [pscustomobject][ordered]@{ manifestSha256=[string]$ReceiptInput.actions.manifestSha256; items=$ActionCopies.ToArray() }
 		run = [pscustomobject][ordered]@{ id=[string]$ReceiptInput.run.id; attempt=[int]$ReceiptInput.run.attempt }
+		attemptAnchor = [pscustomobject][ordered]@{ schemaVersion=$script:AttemptAnchorSchema; runId=[string]$ReceiptInput.attemptAnchor.runId; runAttempt=[int]$ReceiptInput.attemptAnchor.runAttempt; nonce=[string]$ReceiptInput.attemptAnchor.nonce }
 		selection = [pscustomobject][ordered]@{ checks=@($ReceiptInput.selection.checks) }
 		results = [pscustomobject][ordered]@{ checks=$ResultCopies.ToArray() }
 		acceptance = [pscustomobject][ordered]@{ shadow=$true; authoritative=$false; grantsAcceptance=$false; terminal=$true; infrastructureFailure=$false; cleanupVerified=$(if ($CleanupApplicable) { $true } else { $null }) }

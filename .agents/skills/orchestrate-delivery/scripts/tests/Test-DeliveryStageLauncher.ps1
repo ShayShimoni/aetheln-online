@@ -1271,6 +1271,20 @@ $WorkerHandoffPath = Join-Path $TestRoot 'worker.json'
 	baseline_diff = $WorkerBaselineDiff
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $WorkerHandoffPath -Encoding UTF8
 
+function Get-WorkerHandoffWithCurrentBaseline {
+	param(
+		[Parameter(Mandatory)]
+		[object]$Handoff
+	)
+
+	$CurrentHandoff = $Handoff.PSObject.Copy()
+	$CurrentHandoff.baseline_status = Invoke-TestGitText `
+		-Arguments 'status --short --untracked-files=all'
+	$CurrentHandoff.baseline_diff = Invoke-TestGitText `
+		-Arguments 'diff --binary --no-ext-diff'
+	return $CurrentHandoff
+}
+
 $SupportedLauncherSourceProtocol = [pscustomobject][ordered]@{
 	schema_version = 1
 	tool = 'read_allowed_source_file'
@@ -1290,6 +1304,9 @@ function Invoke-SourceProtocolPreflightRejection {
 	)
 
 	$Path = Join-Path $TestRoot ($Handoff.run_id + '.json')
+	if ([string]$Handoff.stage -ceq 'worker') {
+		$Handoff = Get-WorkerHandoffWithCurrentBaseline -Handoff $Handoff
+	}
 	$Handoff | ConvertTo-Json -Depth 10 | Set-Content `
 		-LiteralPath $Path -Encoding UTF8
 	$Carrier = @()
@@ -2789,6 +2806,11 @@ function Invoke-FailureEvidenceCase {
 	$HandoffPath = Join-Path $TestRoot "$RunId.json"
 	$Handoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath | ConvertFrom-Json
 	$Handoff.run_id = $RunId
+	# The worker fixture is created much earlier in this long-running suite. Bind
+	# each real launcher case to the current bytes immediately before launch so
+	# unrelated, parallel worktree edits cannot turn the intended stage failure
+	# into a stale-baseline preflight rejection.
+	$Handoff = Get-WorkerHandoffWithCurrentBaseline -Handoff $Handoff
 	$Handoff | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $HandoffPath -Encoding UTF8
 	$ArtifactRoot = Join-Path $TestRoot "$RunId-artifacts"
 	$AuditPath = Join-Path $ArtifactRoot "delivery-stage-$RunId-audit.json"
@@ -2895,27 +2917,43 @@ foreach ($FailureEvidenceCase in $FailureEvidenceCases) {
 		-Passed $FailureEvidenceResult.Passed `
 		-Detail $FailureEvidenceResult.Detail
 }
-$Issue45InitialAudit = Get-Content -Raw -LiteralPath (
-	Join-Path $TestRoot (
-		'test-worker-issue45-initial-artifacts\' +
-		'delivery-stage-test-worker-issue45-initial-audit.json'
-	)
-) | ConvertFrom-Json
-$Issue45InitialTelemetry = Get-Content -Raw -LiteralPath (
-	[string]$Issue45InitialAudit.TelemetryPath
-) | ConvertFrom-Json
-$Issue45ReplacementAudit = Get-Content -Raw -LiteralPath (
-	Join-Path $TestRoot (
-		'test-worker-issue45-replacement-artifacts\' +
-		'delivery-stage-test-worker-issue45-replacement-audit.json'
-	)
-) | ConvertFrom-Json
-$Issue45ReplacementTelemetry = Get-Content -Raw -LiteralPath (
-	[string]$Issue45ReplacementAudit.TelemetryPath
-) | ConvertFrom-Json
+$Issue45InitialAuditPath = Join-Path $TestRoot (
+	'test-worker-issue45-initial-artifacts\' +
+	'delivery-stage-test-worker-issue45-initial-audit.json'
+)
+$Issue45InitialAudit = if (Test-Path -LiteralPath $Issue45InitialAuditPath -PathType Leaf) {
+	Get-Content -Raw -LiteralPath $Issue45InitialAuditPath | ConvertFrom-Json
+}
+$Issue45InitialTelemetry = if (
+	$null -ne $Issue45InitialAudit -and
+	(Test-Path -LiteralPath ([string]$Issue45InitialAudit.TelemetryPath) -PathType Leaf)
+) {
+	Get-Content -Raw -LiteralPath ([string]$Issue45InitialAudit.TelemetryPath) |
+		ConvertFrom-Json
+}
+$Issue45ReplacementAuditPath = Join-Path $TestRoot (
+	'test-worker-issue45-replacement-artifacts\' +
+	'delivery-stage-test-worker-issue45-replacement-audit.json'
+)
+$Issue45ReplacementAudit = if (
+	Test-Path -LiteralPath $Issue45ReplacementAuditPath -PathType Leaf
+) {
+	Get-Content -Raw -LiteralPath $Issue45ReplacementAuditPath | ConvertFrom-Json
+}
+$Issue45ReplacementTelemetry = if (
+	$null -ne $Issue45ReplacementAudit -and
+	(Test-Path -LiteralPath ([string]$Issue45ReplacementAudit.TelemetryPath) -PathType Leaf)
+) {
+	Get-Content -Raw -LiteralPath ([string]$Issue45ReplacementAudit.TelemetryPath) |
+		ConvertFrom-Json
+}
 Add-Result `
 	-Name 'Issue #45 reproductions retain zero changed paths and exact exit classes' `
 	-Passed (
+		$null -ne $Issue45InitialAudit -and
+		$null -ne $Issue45InitialTelemetry -and
+		$null -ne $Issue45ReplacementAudit -and
+		$null -ne $Issue45ReplacementTelemetry -and
 		@($Issue45InitialAudit.ChangedPaths).Count -eq 0 -and
 		$null -eq $Issue45InitialAudit.PatchPath -and
 		[string]$Issue45InitialAudit.BeforeSnapshotHash -eq
@@ -2935,6 +2973,7 @@ $RejectedRunId = 'test-worker-passed-nonapplying-patch'
 $RejectedHandoffPath = Join-Path $TestRoot "$RejectedRunId.json"
 $RejectedHandoff = Get-Content -Raw -LiteralPath $WorkerHandoffPath | ConvertFrom-Json
 $RejectedHandoff.run_id = $RejectedRunId
+$RejectedHandoff = Get-WorkerHandoffWithCurrentBaseline -Handoff $RejectedHandoff
 $RejectedHandoff | ConvertTo-Json -Depth 8 | Set-Content `
 	-LiteralPath $RejectedHandoffPath -Encoding UTF8
 $RejectedArtifactRoot = Join-Path $TestRoot "$RejectedRunId-artifacts"
@@ -3038,6 +3077,8 @@ $AcceptedBundleHandoff.work_package = (
 $AcceptedBundleHandoff | Add-Member `
 	-NotePropertyName source_inspection_protocol `
 	-NotePropertyValue $SupportedLauncherSourceProtocol
+$AcceptedBundleHandoff = Get-WorkerHandoffWithCurrentBaseline `
+	-Handoff $AcceptedBundleHandoff
 $AcceptedBundleHandoff | ConvertTo-Json -Depth 8 | Set-Content `
 	-LiteralPath $AcceptedBundleHandoffPath -Encoding UTF8
 $AcceptedBundleArtifactRoot = Join-Path (
@@ -3157,6 +3198,8 @@ foreach ($RejectedSourceOutcomeCase in $RejectedSourceOutcomeCases) {
 	$RejectedSourceHandoff = $AcceptedBundleHandoff | ConvertTo-Json -Depth 8 |
 		ConvertFrom-Json
 	$RejectedSourceHandoff.run_id = $RejectedSourceRunId
+	$RejectedSourceHandoff = Get-WorkerHandoffWithCurrentBaseline `
+		-Handoff $RejectedSourceHandoff
 	$RejectedSourceHandoff | ConvertTo-Json -Depth 8 | Set-Content `
 		-LiteralPath $RejectedSourceHandoffPath -Encoding UTF8
 	$RejectedSourceArtifactRoot = Join-Path $TestRoot "$RejectedSourceRunId-artifacts"
@@ -3229,6 +3272,8 @@ foreach ($SupportedBundleSourceCase in @(
 	$SupportedBundleHandoff.allowed_paths = @(
 		'AGENTS.md', 'README.md', 'docs/source-created.md'
 	)
+	$SupportedBundleHandoff = Get-WorkerHandoffWithCurrentBaseline `
+		-Handoff $SupportedBundleHandoff
 	$SupportedBundleHandoff | ConvertTo-Json -Depth 8 | Set-Content `
 		-LiteralPath $SupportedBundleHandoffPath -Encoding UTF8
 	$SupportedBundleArtifactRoot = Join-Path $TestRoot `
@@ -3293,6 +3338,7 @@ $CorrectedHandoff.output_contract = (
 $CorrectedHandoff.work_package = (
 	'Propose an AGENTS.md change from tool-read source.'
 )
+$CorrectedHandoff = Get-WorkerHandoffWithCurrentBaseline -Handoff $CorrectedHandoff
 $CorrectedHandoff | ConvertTo-Json -Depth 8 | Set-Content `
 	-LiteralPath $CorrectedHandoffPath -Encoding UTF8
 $CorrectedArtifactRoot = Join-Path $TestRoot "$CorrectedRunId-artifacts"

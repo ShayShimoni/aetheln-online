@@ -88,7 +88,7 @@ Assert-True ($ShadowSelection -match 'path: \$\{\{ runner\.temp \}\}/ci-selectio
 # every current producer directly. Receipt publication and aggregate execution
 # remain disabled until every truthful producer exists.
 $AggregateShadow = [string] $JobBodies['ci-acceptance-shadow']
-Assert-True ($AggregateShadow -match '(?m)^    if: always\(\)\r?$' -and $AggregateShadow -match '(?m)^    continue-on-error: true\r?$') 'Acceptance aggregation must always diagnose dependencies without becoming an authoritative workflow failure.'
+Assert-True ($AggregateShadow -match '(?m)^    if: always\(\)\r?$' -and $AggregateShadow -notmatch '(?m)^    continue-on-error:') 'Acceptance aggregation must always diagnose dependencies while unexpected diagnostic failures remain visible.'
 Assert-True ($AggregateShadow -match '(?m)^    runs-on: windows-latest\r?$' -and $AggregateShadow -match '(?m)^    timeout-minutes: 10\r?$') 'Acceptance aggregation must be bounded on GitHub-hosted Windows.'
 Assert-True ($AggregateShadow -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') 'Acceptance aggregation must never hold or target the engine runner.'
 $AggregateNeedsMatch = [regex]::Match($AggregateShadow, '(?ms)^    needs:\r?\n(?<needs>(?:      - [a-z0-9-]+\r?\n)+)')
@@ -104,7 +104,7 @@ foreach ($ReceiptGap in @('controller-contract-and-operational-proof','native-cl
 	Assert-True ($AggregateShadow -match [regex]::Escape("'$ReceiptGap'")) "Acceptance shadow must name missing receipt '$ReceiptGap' rather than relabelling raw evidence."
 }
 Assert-True ($AggregateShadow -match 'complete = \$false' -and $AggregateShadow -match 'shadow = \$true' -and $AggregateShadow -match 'authoritative = \$false' -and $AggregateShadow -match 'grantsAcceptance = \$false') 'Incomplete Package 3A aggregation must be explicitly shadow-only and non-granting.'
-Assert-True ($AggregateShadow -match 'producer_contract_incomplete' -and $AggregateShadow -match 'acceptance_producer_gap:') 'Incomplete aggregation must publish and raise the exact producer contract gap.'
+Assert-True ($AggregateShadow -match 'producer_contract_incomplete' -and $AggregateShadow -match 'Write-Warning "acceptance_producer_gap:\$Gap"' -and $AggregateShadow -notmatch 'throw "acceptance_producer_gap:') 'Incomplete aggregation must publish the exact green no-acceptance gap without hiding unexpected failures.'
 
 # The milestone is split into four bounded phases that run only on the daily
 # schedule and only after the portable gates pass; pull requests and pushes
