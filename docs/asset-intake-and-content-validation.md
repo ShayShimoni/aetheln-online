@@ -355,8 +355,11 @@ and file index) as a cooked-inventory input directory, reached for example
 through a substituted drive letter or an 8.3 name, is rejected before anything
 is created. The pending evidence bytes are verified before the rename. It rechecks
 the complete source file set before validation and again after the evidence is
-written but before the rename, so a failed comparison never replaces a
-preexisting output or leaves new evidence behind, and it emits
+written but before the rename. Input or source-identity drift, and any
+publication-safety failure, therefore never replace a preexisting output or
+leave new evidence behind. A deterministic cook-boundary failure is different:
+it intentionally publishes `result: failed` evidence (replacing an earlier
+output at the same path) and then exits with an error. It emits
 version-3 evidence carrying both registry attestations. Neither capture nor
 comparison builds, cooks, packages, downloads content, or accepts terms.
 Fixture success is not representative cook evidence.
