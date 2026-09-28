@@ -23,8 +23,23 @@ ambiguous folders, oversized files, and detected identity or content changes,
 then returns at most 1 MiB of bytes. Its focused synthetic tests are
 `tests/build/test_controlled_crash_acquire.py`. The caller must still prove
 local-filesystem residency, stable trusted ancestors, root ownership and
-freshness. There is no capture runner or byte handoff to the separate
-PowerShell validator yet; neither seam demonstrates a live crash.
+freshness.
+
+`scripts/build/controlled_crash_capture.py` supplies only non-launching
+preflight checks for schema-v2 package metadata, independently observed
+executable size and digest, Linux PID/start/executable identity, and an
+unambiguous marker plus readiness. A supplied event identity or shared stdout
+pipe does not by itself authenticate the marker's writer. The companion
+`scripts/build/controlled_crash_xml.py` is a pure validator for already
+acquired XML, intended to run inside that restricted Python process against
+the closed allowlist; it does not acquire a file or prove that the XML came
+from the owned child. Their synthetic fixtures
+are in `tests/build/test_controlled_crash_capture.py` and
+`tests/build/test_controlled_crash_xml.py`. No component here launches or
+signals a server, establishes no-egress or CrashReportClient suppression, or
+publishes a capture. Do not pass raw XML from the restricted process to the
+separate PowerShell validator. There is still no live capture runner or
+controlled-crash proof.
 
 The XML `CrashGUID` is an engine-generated `UECC-...` identity. A launch
 `-CrashGUID=` override names the separate crash-info folder. Neither is the
@@ -43,8 +58,9 @@ all of the following on one exact packaged Linux Development server:
    acquisition; XML is opened by an anchored, no-follow handle and size-bound
    before bytes reach the parser.
 3. The direct Linux PID **and start identity** are recorded and rechecked
-   immediately before a signal. An observed, exact marker from that child
-   follows readiness; no replacement, missing, or ambiguous marker is accepted.
+   immediately before a signal. The child must have reached readiness and
+   emitted exactly one observed marker before the trigger; either event may
+   occur first. No replacement, missing, or ambiguous marker is accepted.
 4. The child is isolated from egress, CrashReportClient is absent, local-only
    report-generation suppression overrides are verified against pinned engine
    source, `RLIMIT_CORE=0` is effective in the child, and `core_pattern` is not
