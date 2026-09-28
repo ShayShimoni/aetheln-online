@@ -44,9 +44,29 @@ controlled-crash proof.
 The XML `CrashGUID` is an engine-generated `UECC-...` identity. A launch
 `-CrashGUID=` override names the separate crash-info folder. Neither is the
 server-generated `AethelnCrashRunId`. Do not require these three identities to
-match. `RuntimeProperties/ProcessId` must instead match the verified **Linux
-server child**, not a Windows `wsl.exe` launcher PID; `GameData/AethelnCrashRunId`
-must equal the last unambiguous marker observed before any trigger.
+match. `RuntimeProperties/ProcessId` must identify the verified Linux server
+child, never the Windows `wsl.exe` launcher. If the sandbox uses a separate PID
+namespace, Unreal records the child's **inner** PID while the supervisor owns
+and signals its **outer** WSL Linux PID. The future runner must bind those IDs
+through a trusted, contemporaneous `/proc/<outer-pid>/status` `NSpid` mapping
+and reject a missing or ambiguous mapping. `GameData/AethelnCrashRunId` must
+equal the last unambiguous marker observed before any trigger.
+
+Pinned UE source makes local XML generation a conditional, separate gate. In
+`UnixPlatformCrashContext.cpp`, unattended server defaults leave both
+`bSendUnattendedBugReports` and `bAgreeToCrashUpload` false; the resulting
+`bSkipCRC` skips the entire report directory and XML, not just an uploader.
+For a **nonlicensee** Linux Development server, an effective Engine
+`[CrashReportClient] bAgreeToCrashUpload=true` permits XML generation while
+an effective `bStartCRCFromEngineHandler=false` prevents the engine's two
+CrashReportClient launch branches. A noneditor licensee build forcibly clears
+both report-permission flags, so this config-only route cannot produce the XML.
+The pinned source also generates Diagnostics and may copy a log and
+crash-report config beside XML; any such files remain restricted and must not
+be opened or published by this procedure.
+Command-line or config text alone does not prove the compiled licensee flag,
+effective runtime values, or local-only behavior. The runner must attest them
+from the owned child and independently deny egress and CrashReportClient.
 
 Before a capture runner can call the parser or trigger a failure, it must prove
 all of the following on one exact packaged Linux Development server:
@@ -57,14 +77,17 @@ all of the following on one exact packaged Linux Development server:
    by that child. No symlink/reparse-point or ancestor substitution can redirect
    acquisition; XML is opened by an anchored, no-follow handle and size-bound
    before bytes reach the parser.
-3. The direct Linux PID **and start identity** are recorded and rechecked
-   immediately before a signal. The child must have reached readiness and
-   emitted exactly one observed marker before the trigger; either event may
-   occur first. No replacement, missing, or ambiguous marker is accepted.
-4. The child is isolated from egress, CrashReportClient is absent, local-only
-   report-generation suppression overrides are verified against pinned engine
-   source, `RLIMIT_CORE=0` is effective in the child, and `core_pattern` is not
-   a pipe. These are preconditions, not assumptions from config text alone.
+3. The direct outer Linux PID **and start identity** are recorded and rechecked
+   immediately before a signal. If PID namespaces differ, the XML's inner PID
+   is bound through a verified `NSpid` mapping to that same outer child. The
+   child must have reached readiness and emitted exactly one observed marker
+   before the trigger; either event may occur first. No replacement, missing,
+   or ambiguous marker is accepted.
+4. The child is isolated from egress; its nonlicensee/server identity and
+   effective report-generation and CrashReportClient-launch flags are
+   attested. CrashReportClient is absent, `RLIMIT_CORE=0` is effective in the
+   child, and `core_pattern` is not a pipe. These are preconditions, not
+   assumptions from source or config text alone.
 5. An owner-approved signal/trigger targets only that verified child, with
    bounded startup, readiness, signal, report, and cleanup deadlines. Failure
    at any gate leaves the original restricted evidence intact and unpublished.
