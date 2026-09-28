@@ -191,6 +191,31 @@ function Test-PathInsideDirectory([string] $Path, [string] $Directory) {
 		$ResolvedPath.StartsWith(($ResolvedDirectory + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Assert-OutputPathHasNoReparsePoint([string] $Path) {
+	# Lexical containment cannot see junctions or symbolic links, so every
+	# existing component of the output path must be a plain file or directory.
+	for ($Current = $Path; -not [string]::IsNullOrEmpty($Current); $Current = [IO.Path]::GetDirectoryName($Current)) {
+		if (-not (Test-Path -LiteralPath $Current)) { continue }
+		if (([IO.File]::GetAttributes($Current) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+			throw "OutputPath '$Path' traverses reparse point '$Current'; validation fails closed."
+		}
+	}
+}
+
+function Open-InputLocks([object[]] $Identities) {
+	# Read handles without write/delete sharing make the input bytes unwritable
+	# through any alias (hardlink, junction, or later swap) until release.
+	$Locks = [System.Collections.Generic.List[IO.FileStream]]::new()
+	try {
+		foreach ($Identity in $Identities) { $Locks.Add([IO.File]::Open($Identity.Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)) }
+	}
+	catch {
+		foreach ($Lock in $Locks) { $Lock.Dispose() }
+		throw
+	}
+	return ,$Locks
+}
+
 function Get-StringSha256([string] $Value) {
 	$Bytes = [Text.Encoding]::UTF8.GetBytes($Value)
 	$Hasher = [Security.Cryptography.SHA256]::Create()
@@ -430,6 +455,7 @@ if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
 	if ((Test-PathInsideDirectory $ResolvedOutput $SourceClientCookedInventoryDirectory) -or (Test-PathInsideDirectory $ResolvedOutput $SourceServerCookedInventoryDirectory)) {
 		throw "OutputPath '$ResolvedOutput' must not overwrite or alter a cooked-inventory input evidence directory."
 	}
+	Assert-OutputPathHasNoReparsePoint $ResolvedOutput
 }
 
 $InputSnapshotRoot = Join-Path ([IO.Path]::GetTempPath()) ("AethelnContentCookInput-{0}" -f [guid]::NewGuid().ToString('N'))
@@ -893,13 +919,38 @@ if ($null -ne $ResolvedOutput) {
 	$OutputDirectory = Split-Path -Parent $ResolvedOutput
 	if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) { New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null }
 	$PendingOutputPath = Join-Path $OutputDirectory (".{0}.{1}.tmp" -f ([IO.Path]::GetFileName($ResolvedOutput)), [guid]::NewGuid().ToString('N'))
-	[System.IO.File]::WriteAllText($PendingOutputPath, (($Evidence | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+	$EvidenceBytes = [System.Text.UTF8Encoding]::new($false).GetBytes((($Evidence | ConvertTo-Json -Depth 8) + [Environment]::NewLine))
+	[System.IO.File]::WriteAllBytes($PendingOutputPath, $EvidenceBytes)
 }
 
-Assert-AllValidationInputsUnchanged
-if ($null -ne $PendingOutputPath) {
-	Move-Item -LiteralPath $PendingOutputPath -Destination $ResolvedOutput -Force
-	$PendingOutputPath = $null
+$InputLocks = Open-InputLocks (@($ContentReportSource, $PolicySource, $IntakeSource, $BuildProvenanceSource) + @($ClientInventorySnapshot.SourceFiles) + @($ServerInventorySnapshot.SourceFiles))
+try {
+	Assert-AllValidationInputsUnchanged
+	if ($null -ne $PendingOutputPath) {
+		Assert-OutputPathHasNoReparsePoint $ResolvedOutput
+		# A write-open of any hardlink alias of a locked input fails, so the probe
+		# rejects aliases; delete-then-move never writes through an existing name,
+		# and File.Move refuses any destination that still exists.
+		try {
+			if (Test-Path -LiteralPath $ResolvedOutput) {
+				([IO.File]::Open($ResolvedOutput, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::None)).Dispose()
+				[IO.File]::Delete($ResolvedOutput)
+			}
+			[IO.File]::Move($PendingOutputPath, $ResolvedOutput)
+		}
+		catch [IO.IOException], [UnauthorizedAccessException] {
+			throw "OutputPath '$ResolvedOutput' could not be published because it aliases protected input evidence or is otherwise locked; validation fails closed. $($_.Exception.Message)"
+		}
+		$PendingOutputPath = $null
+		$Hasher = [Security.Cryptography.SHA256]::Create()
+		try { $ExpectedEvidenceSha256 = ([BitConverter]::ToString($Hasher.ComputeHash($EvidenceBytes))).Replace('-', '').ToLowerInvariant() }
+		finally { $Hasher.Dispose() }
+		if ((Get-LowerSha256 $ResolvedOutput) -cne $ExpectedEvidenceSha256) { throw "OutputPath '$ResolvedOutput' does not contain the exact published evidence bytes; validation fails closed." }
+	}
+	Assert-AllValidationInputsUnchanged
+}
+finally {
+	foreach ($Lock in $InputLocks) { $Lock.Dispose() }
 }
 
 if ($Findings.Count -gt 0) {

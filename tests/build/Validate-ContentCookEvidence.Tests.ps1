@@ -993,6 +993,57 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$Client } 'OutputPath.*must identify a file|must not overwrite or alter a cooked-inventory'
 	Write-Output 'PASS: validator refuses same-path input/output mutation'
 
+	$ReportDirectory = Split-Path -Parent $Report
+	$ReportLeaf = Split-Path -Leaf $Report
+	$ClientManifestPath = Join-Path $Client 'inventory-manifest.json'
+	$OriginalClientManifestBytes = [IO.File]::ReadAllBytes($ClientManifestPath)
+	$JunctionOutputParent = Join-Path $FixtureRoot 'alias-junction-output'
+	New-Item -ItemType Junction -Path $JunctionOutputParent -Target $ReportDirectory | Out-Null
+	try {
+		Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=(Join-Path $JunctionOutputParent $ReportLeaf) } 'OutputPath.*reparse point'
+	}
+	finally { [IO.Directory]::Delete($JunctionOutputParent) }
+	Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($Report)) -ceq [Convert]::ToBase64String($OriginalReportBytes)) 'A junction-aliased output must leave the input report bytes unchanged.'
+	$HardLinkOutput = Join-Path $FixtureRoot 'alias-hardlink-report.json'
+	New-Item -ItemType HardLink -Path $HardLinkOutput -Target $Report | Out-Null
+	try {
+		Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$HardLinkOutput } 'OutputPath.*protected input evidence'
+	}
+	finally { if (Test-Path -LiteralPath $HardLinkOutput) { Remove-Item -LiteralPath $HardLinkOutput -Force } }
+	Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($Report)) -ceq [Convert]::ToBase64String($OriginalReportBytes)) 'A hardlink-aliased output must leave the input report bytes unchanged.'
+	$ManifestHardLinkOutput = Join-Path $FixtureRoot 'alias-hardlink-manifest.json'
+	New-Item -ItemType HardLink -Path $ManifestHardLinkOutput -Target $ClientManifestPath | Out-Null
+	try {
+		Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$ManifestHardLinkOutput } 'OutputPath.*protected input evidence'
+	}
+	finally { if (Test-Path -LiteralPath $ManifestHardLinkOutput) { Remove-Item -LiteralPath $ManifestHardLinkOutput -Force } }
+	Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($ClientManifestPath)) -ceq [Convert]::ToBase64String($OriginalClientManifestBytes)) 'A hardlink-aliased output must leave cooked-inventory input bytes unchanged.'
+	Write-Output 'PASS: junction and hardlink output aliases are rejected with input bytes preserved'
+
+	$SwapMarker = '$StartedUtc = [DateTime]::UtcNow'
+	$SwapCases = @(
+		@{ name='hardlink'; output=(Join-Path $FixtureRoot 'swap-hardlink-evidence.json'); mutation="New-Item -ItemType HardLink -Path `$ResolvedOutput -Target `$SourceContentValidationReportPath | Out-Null"; pattern='OutputPath.*protected input evidence' },
+		@{ name='junction'; output=(Join-Path (Join-Path $FixtureRoot 'swap-junction-output') $ReportLeaf); mutation="[IO.Directory]::Delete((Split-Path -Parent `$ResolvedOutput)); New-Item -ItemType Junction -Path (Split-Path -Parent `$ResolvedOutput) -Target (Split-Path -Parent `$SourceContentValidationReportPath) | Out-Null"; pattern='OutputPath.*reparse point' }
+	)
+	foreach ($SwapCase in $SwapCases) {
+		$SwapValidator = Join-Path $FixtureRoot ("Validate-ContentCookEvidence-{0}-swap.ps1" -f $SwapCase.name)
+		$ValidatorSource = [IO.File]::ReadAllText($Validator)
+		Assert-True ($ValidatorSource.IndexOf($SwapMarker, [StringComparison]::Ordinal) -ge 0) 'The deterministic post-preflight swap marker must exist after output preflight.'
+		[IO.File]::WriteAllText($SwapValidator, $ValidatorSource.Replace($SwapMarker, ([string]$SwapCase.mutation + "`n" + $SwapMarker)), [Text.UTF8Encoding]::new($false))
+		$SwapParent = Split-Path -Parent ([string]$SwapCase.output)
+		if (-not (Test-Path -LiteralPath $SwapParent)) { New-Item -ItemType Directory -Path $SwapParent | Out-Null }
+		try {
+			Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=[string]$SwapCase.output } ([string]$SwapCase.pattern) $SwapValidator
+			Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($Report)) -ceq [Convert]::ToBase64String($OriginalReportBytes)) "A post-preflight $($SwapCase.name) output swap must leave the input report bytes unchanged."
+			Assert-True (@(Get-ChildItem -LiteralPath $ReportDirectory -Force -Filter '*.tmp').Count -eq 0) "A post-preflight $($SwapCase.name) output swap must not leave pending evidence beside the input report."
+		}
+		finally {
+			if ([string]$SwapCase.name -ceq 'junction') { if (Test-Path -LiteralPath $SwapParent) { [IO.Directory]::Delete($SwapParent) } }
+			elseif (Test-Path -LiteralPath ([string]$SwapCase.output)) { Remove-Item -LiteralPath ([string]$SwapCase.output) -Force }
+		}
+	}
+	Write-Output 'PASS: post-preflight hardlink and junction output swaps are rejected with input bytes preserved'
+
 	$DriftMarker = '$StartedUtc = [DateTime]::UtcNow'
 	$DriftCases = @(
 		@{ name='report'; target=$Report; mutation="Add-Content -LiteralPath `$SourceContentValidationReportPath -Value 'same-path report drift' -Encoding UTF8"; pattern='Content validation report changed during validation' },
