@@ -1,11 +1,264 @@
 [CmdletBinding()]
-param()
+param(
+	[ValidateSet('RunSuite', 'LockAssertions', 'AcquireOnly', 'ReportAbandoned', 'FailureRelease', 'HoldUntilKilled')]
+	[string]$SuiteLockProbeMode = 'RunSuite',
+
+	[string]$SuiteLockProbeRoot
+)
 
 $ErrorActionPreference = 'Stop'
 
 $ScriptRoot = Split-Path -Parent $PSScriptRoot
 $SkillRoot = Split-Path -Parent $ScriptRoot
 $RepositoryRoot = (Resolve-Path (Join-Path $SkillRoot '..\..\..')).Path
+
+if (
+	$SuiteLockProbeMode -in @('RunSuite', 'LockAssertions') -and
+	$PSBoundParameters.ContainsKey('SuiteLockProbeRoot')
+) {
+	throw '-SuiteLockProbeRoot is valid only for a suite-lock probe mode.'
+}
+
+function Get-CanonicalDeliveryLauncherWorktreeRoot {
+	param(
+		[Parameter(Mandatory)]
+		[string]$WorktreeRoot
+	)
+
+	$ResolvedRoot = Resolve-Path -LiteralPath $WorktreeRoot -ErrorAction Stop
+	if ($ResolvedRoot.Provider.Name -cne 'FileSystem') {
+		throw "Delivery launcher worktree root '$WorktreeRoot' is not a file-system path."
+	}
+	$RootItem = Get-Item -LiteralPath $ResolvedRoot.ProviderPath -Force
+	if (-not $RootItem.PSIsContainer) {
+		throw "Delivery launcher worktree root '$WorktreeRoot' is not a directory."
+	}
+
+	$CanonicalRoot = [System.IO.Path]::GetFullPath($ResolvedRoot.ProviderPath)
+	$CanonicalRoot = $CanonicalRoot.Replace(
+		[System.IO.Path]::AltDirectorySeparatorChar,
+		[System.IO.Path]::DirectorySeparatorChar
+	)
+	$VolumeRoot = [System.IO.Path]::GetPathRoot($CanonicalRoot)
+	if ($CanonicalRoot.Length -gt $VolumeRoot.Length) {
+		$CanonicalRoot = $CanonicalRoot.TrimEnd(
+			[char[]]@(
+				[System.IO.Path]::DirectorySeparatorChar,
+				[System.IO.Path]::AltDirectorySeparatorChar
+			)
+		)
+	}
+	if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+		$CanonicalRoot = $CanonicalRoot.ToUpperInvariant()
+	}
+
+	return $CanonicalRoot
+}
+
+if (-not ('AethelnDeliveryLauncherDirectoryIdentity' -as [type])) {
+	Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class AethelnDeliveryLauncherDirectoryIdentity
+{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileIdInfo
+    {
+        public ulong VolumeSerialNumber;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+        public byte[] FileId;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(
+        string path, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
+        uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(
+        SafeFileHandle handle, int informationClass, out FileIdInfo information,
+        uint bufferSize);
+
+    public static string Get(string path)
+    {
+        const uint ShareReadWriteDelete = 0x00000007;
+        const uint OpenExisting = 3;
+        const uint BackupSemantics = 0x02000000;
+        const int FileIdInfoClass = 18;
+        using (SafeFileHandle handle = CreateFile(
+            path, 0, ShareReadWriteDelete, IntPtr.Zero, OpenExisting,
+            BackupSemantics, IntPtr.Zero))
+        {
+            if (handle.IsInvalid)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "Could not open the worktree directory for suite-lock identity.");
+            }
+            FileIdInfo information;
+            if (!GetFileInformationByHandleEx(handle, FileIdInfoClass,
+                out information, (uint)Marshal.SizeOf(typeof(FileIdInfo))))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    "Could not read the physical worktree directory identity.");
+            }
+            return information.VolumeSerialNumber.ToString("X16") + "-" +
+                BitConverter.ToString(information.FileId).Replace("-", "");
+        }
+    }
+}
+'@
+}
+
+function Get-DeliveryLauncherSuiteMutexName {
+	param(
+		[Parameter(Mandatory)]
+		[string]$WorktreeRoot
+	)
+
+	$DirectoryIdentity = [AethelnDeliveryLauncherDirectoryIdentity]::Get(
+		(Get-CanonicalDeliveryLauncherWorktreeRoot -WorktreeRoot $WorktreeRoot)
+	)
+	$Hasher = [System.Security.Cryptography.SHA256]::Create()
+	try {
+		$HashBytes = $Hasher.ComputeHash(
+			[System.Text.Encoding]::UTF8.GetBytes($DirectoryIdentity)
+		)
+	}
+	finally {
+		$Hasher.Dispose()
+	}
+	$Suffix = [System.BitConverter]::ToString($HashBytes).Replace('-', '')
+	return 'Global\AethelnOnline_DeliveryLauncherSuite_' + $Suffix
+}
+
+function New-DeliveryLauncherSuiteMutexSecurity {
+	$Security = [System.Security.AccessControl.MutexSecurity]::new()
+	$AuthenticatedUsers = [System.Security.Principal.SecurityIdentifier]::new(
+		[System.Security.Principal.WellKnownSidType]::AuthenticatedUserSid,
+		$null
+	)
+	$Rights = [System.Security.AccessControl.MutexRights]::Modify -bor
+		[System.Security.AccessControl.MutexRights]::Synchronize
+	$Rule = [System.Security.AccessControl.MutexAccessRule]::new(
+		$AuthenticatedUsers,
+		$Rights,
+		[System.Security.AccessControl.AccessControlType]::Allow
+	)
+	$Security.AddAccessRule($Rule)
+	return $Security
+}
+
+function Get-DeliveryLauncherSuiteLockDiagnostic {
+	param(
+		[Parameter(Mandatory)]
+		[string]$WorktreeRoot
+	)
+
+	return (
+		'Test-DeliveryStageLauncher.ps1: another instance owns the delivery ' +
+		"launcher suite lock for worktree '$WorktreeRoot'. This suite " +
+		'baselines and mutates repository state; run it serialized per worktree.'
+	)
+}
+
+# Interprocess per-worktree suite lock (#146). This suite baselines live Git
+# state and deliberately mutates in-repository fixtures, so two instances in
+# the same physical worktree contaminate each other's assertions. The machine-
+# global named mutex is outside the repository and is keyed by the directory's
+# volume/file ID, not an aliasable path or per-user temp location. Its live OS
+# ownership is released on ordinary exit and process termination. The ACL
+# grants authenticated Windows users the minimal wait/release rights; failure
+# to create or access this single namespace fails closed without fallback.
+$RequestedSuiteLockRoot = if ($PSBoundParameters.ContainsKey('SuiteLockProbeRoot')) {
+	$SuiteLockProbeRoot
+}
+else {
+	$RepositoryRoot
+}
+$SuiteLockRoot = Get-CanonicalDeliveryLauncherWorktreeRoot -WorktreeRoot $RequestedSuiteLockRoot
+$SuiteLockMutex = $null
+$SuiteLockOwned = $false
+$SuiteLockAbandoned = $false
+try {
+	$SuiteLockName = Get-DeliveryLauncherSuiteMutexName -WorktreeRoot $SuiteLockRoot
+	$MinimalRights = [System.Security.AccessControl.MutexRights]::Modify -bor
+		[System.Security.AccessControl.MutexRights]::Synchronize
+	try {
+		# An existing cross-user object may deny FullControl while granting
+		# precisely the rights required to wait and release.
+		$SuiteLockMutex = [System.Threading.Mutex]::OpenExisting(
+			$SuiteLockName, $MinimalRights
+		)
+	}
+	catch [System.Threading.WaitHandleCannotBeOpenedException] {
+		$CreatedNew = $false
+		try {
+			$SuiteLockMutex = [System.Threading.Mutex]::new(
+				$false,
+				$SuiteLockName,
+				[ref]$CreatedNew,
+				(New-DeliveryLauncherSuiteMutexSecurity)
+			)
+		}
+		catch [System.UnauthorizedAccessException] {
+			# Another user may have created the same object in the race after
+			# OpenExisting. Retry only the exact global name with minimal rights.
+			$SuiteLockMutex = [System.Threading.Mutex]::OpenExisting(
+				$SuiteLockName, $MinimalRights
+			)
+		}
+	}
+	try {
+		$SuiteLockOwned = $SuiteLockMutex.WaitOne(0)
+	}
+	catch [System.Threading.AbandonedMutexException] {
+		# WaitOne grants ownership even when it reports an abandoned owner.
+		$SuiteLockOwned = $true
+		$SuiteLockAbandoned = $true
+	}
+}
+catch {
+	if ($null -ne $SuiteLockMutex) { $SuiteLockMutex.Dispose() }
+	[Console]::Error.WriteLine((
+		'Test-DeliveryStageLauncher.ps1: cannot establish the machine-global ' +
+		"suite lock for worktree '$SuiteLockRoot'; refusing to run."
+	))
+	exit 1
+}
+if (-not $SuiteLockOwned) {
+	$SuiteLockMutex.Dispose()
+	[Console]::Error.WriteLine((
+		Get-DeliveryLauncherSuiteLockDiagnostic -WorktreeRoot $SuiteLockRoot
+	))
+	exit 1
+}
+
+$FailureReleaseProbeMessage = 'Intentional suite-lock failure-release probe.'
+$FailureReleaseProbeError = $null
+try {
+	if ($SuiteLockProbeMode -eq 'FailureRelease') {
+		throw $FailureReleaseProbeMessage
+	}
+	if ($SuiteLockProbeMode -eq 'AcquireOnly') {
+		return
+	}
+	if ($SuiteLockProbeMode -eq 'ReportAbandoned') {
+		if (-not $SuiteLockAbandoned) {
+			throw 'The abandoned-mutex probe did not observe an abandoned owner.'
+		}
+		[Console]::Out.WriteLine('suite-lock-abandoned')
+		return
+	}
+	if ($SuiteLockProbeMode -eq 'HoldUntilKilled') {
+		[Console]::Out.WriteLine('suite-lock-held')
+		while ($true) {
+			[System.Threading.Thread]::Sleep(1000)
+		}
+	}
 $SourceCommit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
 $ValidateScript = Join-Path $ScriptRoot 'Validate-DeliveryHandoff.ps1'
 $LaunchScript = Join-Path $ScriptRoot 'Invoke-DeliveryStage.ps1'
@@ -353,6 +606,500 @@ function New-FrozenAuthoritativeEvidenceManifest {
 		Bytes = [byte[]]$Bytes
 		Sha256 = Get-TestSha256 -Bytes $Bytes
 	}
+}
+
+function Invoke-DeliveryLauncherSuiteLockProbe {
+	param(
+		[Parameter(Mandatory)]
+		[ValidateSet('AcquireOnly', 'ReportAbandoned', 'FailureRelease')]
+		[string]$Mode,
+
+		[string]$LockRoot,
+
+		[hashtable]$ProcessEnvironment = @{},
+
+		[ValidateRange(1, 60000)]
+		[int]$TimeoutMilliseconds = 10000
+	)
+
+	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+	$StartInfo.FileName = (Get-Command powershell.exe -ErrorAction Stop).Source
+	$StartInfo.Arguments = (
+		'-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+		$PSCommandPath + '" -SuiteLockProbeMode ' + $Mode
+	)
+	if ($PSBoundParameters.ContainsKey('LockRoot')) {
+		$StartInfo.Arguments += ' -SuiteLockProbeRoot "' + $LockRoot + '"'
+	}
+	$StartInfo.UseShellExecute = $false
+	$StartInfo.CreateNoWindow = $true
+	$StartInfo.RedirectStandardOutput = $true
+	$StartInfo.RedirectStandardError = $true
+	$StartInfo.WorkingDirectory = $RepositoryRoot
+	foreach ($Name in $ProcessEnvironment.Keys) {
+		$StartInfo.EnvironmentVariables[[string]$Name] =
+			[string]$ProcessEnvironment[$Name]
+	}
+
+	$Process = [System.Diagnostics.Process]::new()
+	$Process.StartInfo = $StartInfo
+	$Started = $false
+	$CompletedWithinTimeout = $false
+	try {
+		$Started = $Process.Start()
+		if (-not $Started) {
+			throw 'Could not start the delivery launcher suite-lock probe.'
+		}
+
+		$OutputTask = $Process.StandardOutput.ReadToEndAsync()
+		$ErrorTask = $Process.StandardError.ReadToEndAsync()
+		$CompletedWithinTimeout = $Process.WaitForExit($TimeoutMilliseconds)
+		if (-not $CompletedWithinTimeout) {
+			try {
+				$Process.Kill()
+			}
+			catch {
+				throw (
+					'Delivery launcher suite-lock probe timed out and could not be ' +
+					"terminated: $($_.Exception.Message)"
+				)
+			}
+			if (-not $Process.WaitForExit(5000)) {
+				throw (
+					'Delivery launcher suite-lock probe remained active after its ' +
+					'timeout cleanup.'
+				)
+			}
+		}
+
+		$StandardOutput = $OutputTask.GetAwaiter().GetResult()
+		$StandardError = $ErrorTask.GetAwaiter().GetResult()
+		$ExitCode = $Process.ExitCode
+	}
+	finally {
+		if ($Started) {
+			try {
+				if (-not $Process.HasExited) {
+					$Process.Kill()
+					[void]$Process.WaitForExit(5000)
+				}
+			}
+			catch {
+				# The bounded probe never spawns children. Best-effort cleanup here
+				# is a fallback for exceptions in the primary timeout path above.
+			}
+		}
+		$Process.Dispose()
+	}
+
+	return [pscustomobject]@{
+		CompletedWithinTimeout = $CompletedWithinTimeout
+		ExitCode = $ExitCode
+		StandardOutput = $StandardOutput
+		StandardError = $StandardError
+	}
+}
+
+function Invoke-DeliveryLauncherForcedOwnerExitProbe {
+	param(
+		[Parameter(Mandatory)]
+		[string]$LockRoot
+	)
+
+	$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+	$StartInfo.FileName = (Get-Command powershell.exe -ErrorAction Stop).Source
+	$StartInfo.Arguments = (
+		'-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+		$PSCommandPath + '" -SuiteLockProbeMode HoldUntilKilled ' +
+		'-SuiteLockProbeRoot "' + $LockRoot + '"'
+	)
+	$StartInfo.UseShellExecute = $false
+	$StartInfo.CreateNoWindow = $true
+	$StartInfo.RedirectStandardOutput = $true
+	$StartInfo.RedirectStandardError = $true
+	$StartInfo.WorkingDirectory = $RepositoryRoot
+	$Process = [System.Diagnostics.Process]::new()
+	$Process.StartInfo = $StartInfo
+	$Started = $false
+	$HolderExited = $false
+	$ObserverMutex = $null
+	try {
+		$Started = $Process.Start()
+		if (-not $Started) {
+			throw 'Could not start the forced-owner-exit suite-lock probe.'
+		}
+		$ReadyTask = $Process.StandardOutput.ReadLineAsync()
+		$ErrorTask = $Process.StandardError.ReadToEndAsync()
+		if (-not $ReadyTask.Wait(10000) -or $ReadyTask.Result -cne 'suite-lock-held') {
+			throw 'Forced-owner-exit probe did not report lock acquisition.'
+		}
+		$ObserverRights = [System.Security.AccessControl.MutexRights]::Modify -bor
+			[System.Security.AccessControl.MutexRights]::Synchronize
+		$ObserverMutex = [System.Threading.Mutex]::OpenExisting(
+			(Get-DeliveryLauncherSuiteMutexName -WorktreeRoot $LockRoot),
+			$ObserverRights
+		)
+		$BlockedProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+			-Mode AcquireOnly -LockRoot $LockRoot -TimeoutMilliseconds 10000
+		$Process.Kill()
+		$HolderExited = $Process.WaitForExit(5000)
+		if (-not $HolderExited) {
+			throw 'Forced-owner-exit suite-lock holder remained active after cleanup.'
+		}
+		$HolderError = $ErrorTask.GetAwaiter().GetResult()
+		$ReleasedProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+			-Mode ReportAbandoned -LockRoot $LockRoot -TimeoutMilliseconds 10000
+		return [pscustomobject]@{
+			HolderExited = $HolderExited
+			HolderError = $HolderError
+			BlockedProbe = $BlockedProbe
+			ReleasedProbe = $ReleasedProbe
+		}
+	}
+	finally {
+		if ($Started -and -not $Process.HasExited) {
+			$Process.Kill()
+			[void]$Process.WaitForExit(5000)
+		}
+		if ($null -ne $ObserverMutex) {
+			$ObserverMutex.Dispose()
+		}
+		$Process.Dispose()
+	}
+}
+
+$SuiteLockProbeTimeoutMilliseconds = 10000
+
+# While this process holds the suite lock, a bounded non-recursive probe for
+# the same worktree must return exactly one stable diagnostic and no stdout.
+$ConcurrentSuiteProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+	-Mode AcquireOnly `
+	-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+$ExpectedSuiteLockError = (
+	Get-DeliveryLauncherSuiteLockDiagnostic -WorktreeRoot $SuiteLockRoot
+) + [Environment]::NewLine
+Add-Result `
+	-Name 'Concurrent suite invocation in the same worktree fails fast on the lock' `
+	-Passed (
+		$ConcurrentSuiteProbe.CompletedWithinTimeout -and
+		$ConcurrentSuiteProbe.ExitCode -eq 1 -and
+		$ConcurrentSuiteProbe.StandardOutput -ceq '' -and
+		$ConcurrentSuiteProbe.StandardError -ceq $ExpectedSuiteLockError
+	) `
+	-Detail (
+		'completed=' + $ConcurrentSuiteProbe.CompletedWithinTimeout +
+		'; exit=' + $ConcurrentSuiteProbe.ExitCode +
+		'; stdoutLength=' + $ConcurrentSuiteProbe.StandardOutput.Length +
+		'; stderrLength=' + $ConcurrentSuiteProbe.StandardError.Length
+	)
+
+$AlternateTempProbeRoot = Join-Path $TestRoot 'alternate-process-temp'
+New-Item -ItemType Directory -Path $AlternateTempProbeRoot | Out-Null
+$AlternateTempSuiteProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+	-Mode AcquireOnly `
+	-LockRoot $RepositoryRoot `
+	-ProcessEnvironment @{
+		TEMP = $AlternateTempProbeRoot
+		TMP = $AlternateTempProbeRoot
+		LOCALAPPDATA = $AlternateTempProbeRoot
+	} `
+	-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+Add-Result `
+	-Name 'Same worktree lock identity is independent of user temp and app-data variables' `
+	-Passed (
+		$AlternateTempSuiteProbe.CompletedWithinTimeout -and
+		$AlternateTempSuiteProbe.ExitCode -eq 1 -and
+		$AlternateTempSuiteProbe.StandardOutput -ceq '' -and
+		$AlternateTempSuiteProbe.StandardError -ceq $ExpectedSuiteLockError
+	) `
+	-Detail (
+		'completed=' + $AlternateTempSuiteProbe.CompletedWithinTimeout +
+		'; exit=' + $AlternateTempSuiteProbe.ExitCode +
+		'; stdoutLength=' + $AlternateTempSuiteProbe.StandardOutput.Length +
+		'; stderrLength=' + $AlternateTempSuiteProbe.StandardError.Length
+	)
+
+$EquivalentSuiteLockRoot = $RepositoryRoot.ToUpperInvariant().Replace('\', '/') + '/'
+$EquivalentRootSuiteProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+	-Mode AcquireOnly `
+	-LockRoot $EquivalentSuiteLockRoot `
+	-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+Add-Result `
+	-Name 'Equivalent case-separator worktree spelling shares the suite lock' `
+	-Passed (
+		$EquivalentRootSuiteProbe.CompletedWithinTimeout -and
+		$EquivalentRootSuiteProbe.ExitCode -eq 1 -and
+		$EquivalentRootSuiteProbe.StandardOutput -ceq '' -and
+		$EquivalentRootSuiteProbe.StandardError -ceq $ExpectedSuiteLockError
+	) `
+	-Detail (
+		'completed=' + $EquivalentRootSuiteProbe.CompletedWithinTimeout +
+		'; exit=' + $EquivalentRootSuiteProbe.ExitCode +
+		'; stdoutLength=' + $EquivalentRootSuiteProbe.StandardOutput.Length +
+		'; stderrLength=' + $EquivalentRootSuiteProbe.StandardError.Length
+	)
+
+$JunctionSuiteLockRoot = Join-Path $TestRoot 'junction-worktree-alias'
+$null = New-Item -ItemType Junction -Path $JunctionSuiteLockRoot `
+	-Target $RepositoryRoot -ErrorAction Stop
+try {
+	$JunctionRootSuiteProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+		-Mode AcquireOnly `
+		-LockRoot $JunctionSuiteLockRoot `
+		-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+}
+finally {
+	$JunctionItem = Get-Item -LiteralPath $JunctionSuiteLockRoot -Force -ErrorAction Stop
+	if (
+		$JunctionItem.LinkType -cne 'Junction' -or
+		-not ($JunctionItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+		[IO.Path]::GetFullPath([string]$JunctionItem.Target) -ine
+			[IO.Path]::GetFullPath($RepositoryRoot)
+	) {
+		throw 'Junction suite-lock probe cannot safely remove its temporary alias.'
+	}
+	[IO.Directory]::Delete($JunctionSuiteLockRoot, $false)
+}
+Add-Result `
+	-Name 'Junction alias of the same physical worktree shares the suite lock' `
+	-Passed (
+		$JunctionRootSuiteProbe.CompletedWithinTimeout -and
+		$JunctionRootSuiteProbe.ExitCode -eq 1 -and
+		$JunctionRootSuiteProbe.StandardOutput -ceq '' -and
+		$JunctionRootSuiteProbe.StandardError -like `
+			'Test-DeliveryStageLauncher.ps1: another instance owns the delivery*' -and
+		-not (Test-Path -LiteralPath $JunctionSuiteLockRoot)
+	) `
+	-Detail (
+		'completed=' + $JunctionRootSuiteProbe.CompletedWithinTimeout +
+		'; exit=' + $JunctionRootSuiteProbe.ExitCode +
+		'; stdoutLength=' + $JunctionRootSuiteProbe.StandardOutput.Length +
+		'; stderrLength=' + $JunctionRootSuiteProbe.StandardError.Length
+	)
+
+$DistinctLockProbeRoot = Join-Path $TestRoot 'distinct-worktree-lock-probe'
+New-Item -ItemType Directory -Path $DistinctLockProbeRoot | Out-Null
+& git init --quiet -- $DistinctLockProbeRoot | Out-Null
+if ($LASTEXITCODE -ne 0) {
+	throw 'Could not initialize distinct temporary Git checkout for suite-lock test.'
+}
+$DistinctLockProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+	-Mode AcquireOnly `
+	-LockRoot $DistinctLockProbeRoot `
+	-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+Add-Result `
+	-Name 'Distinct worktree lock identity remains independently available' `
+	-Passed (
+		$DistinctLockProbe.CompletedWithinTimeout -and
+		$DistinctLockProbe.ExitCode -eq 0 -and
+		$DistinctLockProbe.StandardOutput -ceq '' -and
+		$DistinctLockProbe.StandardError -ceq ''
+	) `
+	-Detail (
+		'completed=' + $DistinctLockProbe.CompletedWithinTimeout +
+		'; exit=' + $DistinctLockProbe.ExitCode
+	)
+
+$DeniedLockProbeRoot = Join-Path $TestRoot 'access-denied-lock-probe'
+New-Item -ItemType Directory -Path $DeniedLockProbeRoot | Out-Null
+$DeniedMutexName = Get-DeliveryLauncherSuiteMutexName `
+	-WorktreeRoot $DeniedLockProbeRoot
+$DeniedMutexSecurity = [System.Security.AccessControl.MutexSecurity]::new()
+$Everyone = [System.Security.Principal.SecurityIdentifier]::new(
+	[System.Security.Principal.WellKnownSidType]::WorldSid,
+	$null
+)
+$DenyRule = [System.Security.AccessControl.MutexAccessRule]::new(
+	$Everyone,
+	[System.Security.AccessControl.MutexRights]::FullControl,
+	[System.Security.AccessControl.AccessControlType]::Deny
+)
+$DeniedMutexSecurity.AddAccessRule($DenyRule)
+$DeniedMutexCreated = $false
+$DeniedMutex = [System.Threading.Mutex]::new(
+	$false, $DeniedMutexName, [ref]$DeniedMutexCreated, $DeniedMutexSecurity
+)
+try {
+	$DeniedLockProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+		-Mode AcquireOnly -LockRoot $DeniedLockProbeRoot `
+		-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+}
+finally {
+	$DeniedMutex.Dispose()
+}
+Add-Result `
+	-Name 'Access-denied global mutex fails closed without alternate namespace' `
+	-Passed (
+		$DeniedLockProbe.CompletedWithinTimeout -and
+		$DeniedLockProbe.ExitCode -eq 1 -and
+		$DeniedLockProbe.StandardOutput -ceq '' -and
+		$DeniedLockProbe.StandardError -like `
+			'Test-DeliveryStageLauncher.ps1: cannot establish the machine-global*'
+	) `
+	-Detail (
+		'completed=' + $DeniedLockProbe.CompletedWithinTimeout +
+		'; exit=' + $DeniedLockProbe.ExitCode +
+		'; stdoutLength=' + $DeniedLockProbe.StandardOutput.Length +
+		'; stderrLength=' + $DeniedLockProbe.StandardError.Length
+	)
+
+$LimitedRightsProbeRoot = Join-Path $TestRoot 'limited-rights-lock-probe'
+New-Item -ItemType Directory -Path $LimitedRightsProbeRoot | Out-Null
+$LimitedRightsMutexName = Get-DeliveryLauncherSuiteMutexName `
+	-WorktreeRoot $LimitedRightsProbeRoot
+$LimitedRightsSecurity = New-DeliveryLauncherSuiteMutexSecurity
+$DeniedAdministrationRights =
+	[System.Security.AccessControl.MutexRights]::ReadPermissions -bor
+	[System.Security.AccessControl.MutexRights]::ChangePermissions -bor
+	[System.Security.AccessControl.MutexRights]::TakeOwnership -bor
+	[System.Security.AccessControl.MutexRights]::Delete
+$LimitedRightsSecurity.AddAccessRule(
+	[System.Security.AccessControl.MutexAccessRule]::new(
+		$Everyone,
+		$DeniedAdministrationRights,
+		[System.Security.AccessControl.AccessControlType]::Deny
+	)
+)
+$LimitedRightsCreated = $false
+$LimitedRightsMutex = [System.Threading.Mutex]::new(
+	$false, $LimitedRightsMutexName, [ref]$LimitedRightsCreated,
+	$LimitedRightsSecurity
+)
+$LimitedRightsOwned = $false
+try {
+	$LimitedRightsOwned = $LimitedRightsMutex.WaitOne(0)
+	if (-not $LimitedRightsOwned) {
+		throw 'Limited-rights mutex fixture could not be acquired.'
+	}
+	$LimitedRightsProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+		-Mode AcquireOnly -LockRoot $LimitedRightsProbeRoot `
+		-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+}
+finally {
+	if ($LimitedRightsOwned) { $LimitedRightsMutex.ReleaseMutex() }
+	$LimitedRightsMutex.Dispose()
+}
+Add-Result `
+	-Name 'Limited-rights existing global mutex still rejects a contender as owned' `
+	-Passed (
+		$LimitedRightsProbe.CompletedWithinTimeout -and
+		$LimitedRightsProbe.ExitCode -eq 1 -and
+		$LimitedRightsProbe.StandardOutput -ceq '' -and
+		$LimitedRightsProbe.StandardError -like `
+			'Test-DeliveryStageLauncher.ps1: another instance owns the delivery*'
+	) `
+	-Detail (
+		'completed=' + $LimitedRightsProbe.CompletedWithinTimeout +
+		'; exit=' + $LimitedRightsProbe.ExitCode +
+		'; stdoutLength=' + $LimitedRightsProbe.StandardOutput.Length +
+		'; stderrLength=' + $LimitedRightsProbe.StandardError.Length
+	)
+
+$GitOverrideSuiteProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+	-Mode AcquireOnly `
+	-LockRoot $RepositoryRoot `
+	-ProcessEnvironment @{
+		GIT_DIR = (Join-Path $DistinctLockProbeRoot '.git')
+		GIT_WORK_TREE = $DistinctLockProbeRoot
+		GIT_COMMON_DIR = (Join-Path $DistinctLockProbeRoot '.git')
+	} `
+	-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+Add-Result `
+	-Name 'Inherited Git directory overrides cannot redirect the worktree suite lock' `
+	-Passed (
+		$GitOverrideSuiteProbe.CompletedWithinTimeout -and
+		$GitOverrideSuiteProbe.ExitCode -eq 1 -and
+		$GitOverrideSuiteProbe.StandardOutput -ceq '' -and
+		$GitOverrideSuiteProbe.StandardError -ceq $ExpectedSuiteLockError
+	) `
+	-Detail (
+		'completed=' + $GitOverrideSuiteProbe.CompletedWithinTimeout +
+		'; exit=' + $GitOverrideSuiteProbe.ExitCode +
+		'; stdoutLength=' + $GitOverrideSuiteProbe.StandardOutput.Length +
+		'; stderrLength=' + $GitOverrideSuiteProbe.StandardError.Length
+	)
+
+$StaleLockProbeRoot = Join-Path $TestRoot 'stale-owner-lock-probe'
+New-Item -ItemType Directory -Path $StaleLockProbeRoot | Out-Null
+$ExitedOwnerProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+	-Mode AcquireOnly `
+	-LockRoot $StaleLockProbeRoot `
+	-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+$StaleLockProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+	-Mode AcquireOnly `
+	-LockRoot $StaleLockProbeRoot `
+	-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+Add-Result `
+	-Name 'Exited suite-lock owner does not block later acquisition' `
+	-Passed (
+		$ExitedOwnerProbe.CompletedWithinTimeout -and
+		$ExitedOwnerProbe.ExitCode -eq 0 -and
+		$StaleLockProbe.CompletedWithinTimeout -and
+		$StaleLockProbe.ExitCode -eq 0 -and
+		$StaleLockProbe.StandardOutput -ceq '' -and
+		$StaleLockProbe.StandardError -ceq ''
+	) `
+	-Detail (
+		'completed=' + $StaleLockProbe.CompletedWithinTimeout +
+		'; exit=' + $StaleLockProbe.ExitCode
+	)
+
+$ForcedExitLockRoot = Join-Path $TestRoot 'forced-owner-exit-lock-probe'
+New-Item -ItemType Directory -Path $ForcedExitLockRoot | Out-Null
+$ForcedOwnerExitProbe = Invoke-DeliveryLauncherForcedOwnerExitProbe `
+	-LockRoot $ForcedExitLockRoot
+Add-Result `
+	-Name 'Forced owner termination transfers abandoned mutex ownership safely' `
+	-Passed (
+		$ForcedOwnerExitProbe.HolderExited -and
+		$ForcedOwnerExitProbe.HolderError -ceq '' -and
+		$ForcedOwnerExitProbe.BlockedProbe.CompletedWithinTimeout -and
+		$ForcedOwnerExitProbe.BlockedProbe.ExitCode -eq 1 -and
+		$ForcedOwnerExitProbe.BlockedProbe.StandardOutput -ceq '' -and
+		$ForcedOwnerExitProbe.BlockedProbe.StandardError -like `
+			'Test-DeliveryStageLauncher.ps1: another instance owns the delivery*' -and
+		$ForcedOwnerExitProbe.ReleasedProbe.CompletedWithinTimeout -and
+		$ForcedOwnerExitProbe.ReleasedProbe.ExitCode -eq 0 -and
+		$ForcedOwnerExitProbe.ReleasedProbe.StandardOutput -ceq `
+			('suite-lock-abandoned' + [Environment]::NewLine) -and
+		$ForcedOwnerExitProbe.ReleasedProbe.StandardError -ceq ''
+	) `
+	-Detail (
+		'holderExited=' + $ForcedOwnerExitProbe.HolderExited +
+		'; blockedExit=' + $ForcedOwnerExitProbe.BlockedProbe.ExitCode +
+		'; reacquireExit=' + $ForcedOwnerExitProbe.ReleasedProbe.ExitCode
+	)
+
+$FailureReleaseProbeRoot = Join-Path $TestRoot 'failure-release-lock-probe'
+New-Item -ItemType Directory -Path $FailureReleaseProbeRoot | Out-Null
+& git init --quiet -- $FailureReleaseProbeRoot | Out-Null
+if ($LASTEXITCODE -ne 0) {
+	throw 'Could not initialize failure-release temporary Git checkout for suite-lock test.'
+}
+$FailureReleaseProbe = Invoke-DeliveryLauncherSuiteLockProbe `
+	-Mode FailureRelease `
+	-LockRoot $FailureReleaseProbeRoot `
+	-TimeoutMilliseconds $SuiteLockProbeTimeoutMilliseconds
+Add-Result `
+	-Name 'Post-acquisition failure releases the suite lock in the same process' `
+	-Passed (
+		$FailureReleaseProbe.CompletedWithinTimeout -and
+		$FailureReleaseProbe.ExitCode -eq 0 -and
+		$FailureReleaseProbe.StandardOutput -ceq '' -and
+		$FailureReleaseProbe.StandardError -ceq ''
+	) `
+	-Detail (
+		'completed=' + $FailureReleaseProbe.CompletedWithinTimeout +
+		'; exit=' + $FailureReleaseProbe.ExitCode
+	)
+
+if ($SuiteLockProbeMode -eq 'LockAssertions') {
+	$Results | Format-Table -AutoSize
+	$Failed = @($Results | Where-Object { -not $_.Passed })
+	if ($Failed.Count -gt 0) {
+		throw "$($Failed.Count) delivery launcher suite-lock assertion(s) failed."
+	}
+	return
 }
 
 try {
@@ -1109,6 +1856,10 @@ Add-Result `
 	-Passed ([string]::IsNullOrEmpty($ReviewerUtf8Error)) `
 	-Detail $ReviewerUtf8Error
 
+# Deliberate in-repo fixture (#146): this untracked file must live inside the
+# repository under test so it appears in the live `git status` the reviewer
+# stage compares against; a temp path would not exercise that detection. Its
+# lifetime is the try/finally below only, under the suite lock.
 $StaleFixtureRelativePath = 'reviewer-stale-fixture-' +
 	[guid]::NewGuid().ToString('N') + '.txt'
 $StaleFixturePath = Join-Path $RepositoryRoot $StaleFixtureRelativePath
@@ -3962,6 +4713,10 @@ Add-Result `
 	-Name 'Evidence manifest detects attribute-bypass tampering' `
 	-Passed $EvidenceTamperDetected
 
+# Deliberate in-repo fixture (#146): the sentinel must be a tracked file so
+# the snapshot proves detection of tracked-tree mutation; it cannot move to
+# temp. Its mutation window is the try/finally below only, restored on every
+# path, and the suite lock guarantees no concurrent reader of this worktree.
 $MutationSentinelPath = Join-Path (
 	$ScriptRoot
 ) 'tests\fixtures\mutation-sentinel.txt'
@@ -5795,3 +6550,45 @@ if ($Failed.Count -gt 0) {
 }
 
 Write-Host "All delivery-stage launcher tests passed. Test artifacts: $TestRoot"
+}
+catch {
+	if (
+		$SuiteLockProbeMode -ne 'FailureRelease' -or
+		$_.Exception.Message -cne $FailureReleaseProbeMessage
+	) {
+		throw
+	}
+	$FailureReleaseProbeError = $_.Exception
+}
+finally {
+	# Every path after successful acquisition, including assertion failures and
+	# probe returns, deterministically releases machine-global mutex ownership.
+	if ($SuiteLockOwned) {
+		$SuiteLockMutex.ReleaseMutex()
+	}
+	$SuiteLockMutex.Dispose()
+}
+
+if ($SuiteLockProbeMode -eq 'FailureRelease') {
+	if ($null -eq $FailureReleaseProbeError) {
+		throw 'The suite-lock failure-release probe did not exercise its throw path.'
+	}
+
+	$ReacquiredSuiteLockMutex = [System.Threading.Mutex]::new(
+		$false,
+		$SuiteLockName
+	)
+	$ReacquiredSuiteLockOwned = $false
+	try {
+		$ReacquiredSuiteLockOwned = $ReacquiredSuiteLockMutex.WaitOne(0)
+		if (-not $ReacquiredSuiteLockOwned) {
+			throw 'The suite mutex remained owned after the failure-release probe.'
+		}
+	}
+	finally {
+		if ($ReacquiredSuiteLockOwned) {
+			$ReacquiredSuiteLockMutex.ReleaseMutex()
+		}
+		$ReacquiredSuiteLockMutex.Dispose()
+	}
+}
