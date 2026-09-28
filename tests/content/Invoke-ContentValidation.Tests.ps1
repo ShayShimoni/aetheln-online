@@ -1522,4 +1522,14 @@ foreach ($Phrase in @('Git LFS','reimport','Data Layers','PCG','output preserves
 }
 Write-Output 'PASS: contributor contract covers class ownership, reimport, world content, recovery, and deferred gates'
 
+# No live producer binds navigation packages to cook evidence yet, so the live
+# scanner must never emit the facts that would let navigation audience pass.
+foreach ($AudienceFact in @('navigation_audience_evidence_recorded','client_audience_valid','server_audience_valid')) {
+	$EmitPattern = '(?:\{\s*|\.Add\(\s*|\.Emplace\(\s*)TEXT\("' + [regex]::Escape($AudienceFact) + '"\)'
+	Assert-True ($ScannerSource -notmatch $EmitPattern) "The live scanner must not emit '$AudienceFact' until governed navigation cook evidence exists."
+	Assert-True ($ScannerSource -match ('RequiredBool\(TEXT\("' + [regex]::Escape($AudienceFact) + '"\)\)')) "The navigation evaluator must still require '$AudienceFact'."
+}
+Assert-True ($ScannerSource -match 'navigation_audience_evidence=unavailable') 'The live scanner must record navigation audience evidence as unavailable.'
+Write-Output 'PASS: the live scanner never emits navigation audience evidence, so navigation stays non-promotion'
+
 Write-Output 'All content validation policy and report-contract tests passed.'

@@ -782,7 +782,8 @@ try {
 	foreach ($ReceiptCase in @(
 		@{ name='missing'; mutate={ param($Build) $Build.build.PSObject.Properties.Remove('cookedRegistries') }; pattern='cookedRegistries' },
 		@{ name='cross-target'; mutate={ param($Build) $Build.build.cookedRegistries.client.cookPlatform = 'LinuxServer' }; pattern='client producer registry receipt cookPlatform' },
-		@{ name='cross-revision'; mutate={ param($Build) $Build.build.cookedRegistries.client.sourceRevision = ('9' * 40) }; pattern='client producer registry receipt sourceRevision' }
+		@{ name='cross-revision'; mutate={ param($Build) $Build.build.cookedRegistries.client.sourceRevision = ('9' * 40) }; pattern='client producer registry receipt sourceRevision' },
+		@{ name='extra-field'; mutate={ param($Build) $Build.build.cookedRegistries.client | Add-Member -NotePropertyName stale -NotePropertyValue $true }; pattern="client producer registry receipt contains unsupported field 'stale'" }
 	)) {
 		$ReceiptBuildPath = Join-Path $FixtureRoot "receipt-$($ReceiptCase.name)-build-provenance.json"
 		$ReceiptBuild = Get-Content -LiteralPath $BuildProvenancePath -Raw | ConvertFrom-Json

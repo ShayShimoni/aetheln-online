@@ -241,7 +241,8 @@ Set-Content -LiteralPath (Join-Path $OutDir 'Page_00000.txt') -Value $Lines -Enc
 		@{ name='missing'; mutate={ param($Build) $Build.build.PSObject.Properties.Remove('cookedRegistries') }; pattern='cookedRegistries' },
 		@{ name='changed'; mutate={ param($Build) $Build.build.cookedRegistries.client.sha256 = ('f' * 64) }; pattern='client cooked registry bytes do not match the producer receipt' },
 		@{ name='cross-target'; mutate={ param($Build) $Build.build.cookedRegistries.client = $Build.build.cookedRegistries.server }; pattern='client producer registry receipt' },
-		@{ name='cross-revision'; mutate={ param($Build) $Build.build.cookedRegistries.client.sourceRevision = ('9' * 40) }; pattern='client producer registry receipt sourceRevision' }
+		@{ name='cross-revision'; mutate={ param($Build) $Build.build.cookedRegistries.client.sourceRevision = ('9' * 40) }; pattern='client producer registry receipt sourceRevision' },
+		@{ name='extra-field'; mutate={ param($Build) $Build.build.cookedRegistries.client | Add-Member -NotePropertyName stale -NotePropertyValue $true }; pattern='client producer registry receipt fields' }
 	)) {
 		$ReceiptBuildPath = Join-Path $FixtureRoot "receipt-$($ReceiptCase.name)-build-provenance.json"
 		$ReceiptBuild = Get-Content -LiteralPath $BuildProvenance -Raw | ConvertFrom-Json

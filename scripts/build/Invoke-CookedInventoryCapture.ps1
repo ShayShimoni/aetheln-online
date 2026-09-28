@@ -151,7 +151,9 @@ function Assert-ProducerRegistryReceipt([string] $Kind, [object] $RegistryIdenti
 	$Receipts = Get-JsonProperty $Build.build 'cookedRegistries' 'Build provenance build'
 	$Receipt = Get-JsonProperty $Receipts $Kind 'Build provenance build.cookedRegistries'
 	$Context = "$Kind producer registry receipt"
-	$Expected = if ($Kind -ceq 'client') { [ordered]@{ target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient' } } else { [ordered]@{ target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer' } }
+	$ReceiptFields = @('relativePath','sizeBytes','sha256','target','platform','cookPlatform','sourceRevision')
+	if ((@($Receipt.PSObject.Properties.Name | Sort-Object) -join ',') -cne (@($ReceiptFields | Sort-Object) -join ',')) { throw "$Context fields must be exactly $($ReceiptFields -join ', ')." }
+	$Expected =if ($Kind -ceq 'client') { [ordered]@{ target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient' } } else { [ordered]@{ target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer' } }
 	foreach ($Field in $Expected.Keys) {
 		if ((Get-JsonProperty $Receipt $Field $Context) -cne $Expected[$Field]) { throw "$Context $Field '$($Receipt.$Field)' does not match '$($Expected[$Field])'." }
 	}
