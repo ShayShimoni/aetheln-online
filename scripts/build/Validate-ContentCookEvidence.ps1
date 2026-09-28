@@ -285,6 +285,14 @@ public static class AethelnOutputPublicationNative {
 		return path.ToString();
 	}
 
+	// Volume serial plus file index identifies a directory regardless of the
+	// drive letter, 8.3 name, or share path used to reach it.
+	public static string FileIdentity(SafeFileHandle handle) {
+		FileInformation information;
+		if (!GetFileInformationByHandle(handle, out information)) { throw new IOException("file identity is unavailable (Win32 error " + Marshal.GetLastWin32Error() + ")"); }
+		return information.VolumeSerialNumber.ToString("X8") + ":" + information.FileIndexHigh.ToString("X8") + information.FileIndexLow.ToString("X8");
+	}
+
 	static void RequirePlainDirectory(SafeFileHandle handle) {
 		FileInformation information;
 		if (!GetFileInformationByHandle(handle, out information)) { throw new IOException("held output parent identity is unavailable (Win32 error " + Marshal.GetLastWin32Error() + ")"); }
@@ -355,15 +363,17 @@ public static class AethelnOutputPublicationNative {
 			RequireLocation(pending, parentFinalPath, pendingName);
 			stream.Write(bytes, 0, bytes.Length);
 			stream.Flush(true);
+			// Verify the flushed bytes before the rename, so every check that can
+			// fail runs while a preexisting output is still untouched.
+			stream.Position = 0;
+			byte[] written;
+			using (SHA256 hasher = SHA256.Create()) { written = hasher.ComputeHash(stream); }
+			if (Convert.ToBase64String(written) != Convert.ToBase64String(Sha256(bytes))) { throw new IOException("pending evidence bytes differ from the validated evidence"); }
 			RequirePlainDirectory(parent);
 			RequireLocation(pending, parentFinalPath, pendingName);
 			if (beforeRename != null) { beforeRename(); }
 			RenameInPlace(pending, parent, outputName);
 			RequireLocation(pending, parentFinalPath, outputName);
-			stream.Position = 0;
-			byte[] published;
-			using (SHA256 hasher = SHA256.Create()) { published = hasher.ComputeHash(stream); }
-			if (Convert.ToBase64String(published) != Convert.ToBase64String(Sha256(bytes))) { throw new IOException("published evidence bytes differ from the validated evidence"); }
 		}
 		catch (Exception failure) {
 			string cleanupFailure = RemoveCreatedFile(pending);
@@ -671,7 +681,7 @@ $ResolvedOutput = $null
 if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
 	# Check the raw text first: GetFullPath can already query a UNC server,
 	# including mixed-separator forms such as '/\host\share'.
-	if ($OutputPath -match '^[\\/]{2}') { throw "OutputPath '$OutputPath' is a network or device path; cook evidence must be published to a local volume." }
+	if ($OutputPath -match '^\s*[\\/]{2}') { throw "OutputPath '$OutputPath' is a network or device path; cook evidence must be published to a local volume." }
 	$ResolvedOutput = [IO.Path]::GetFullPath($OutputPath)
 	if ($ResolvedOutput.StartsWith('\\')) { throw "OutputPath '$ResolvedOutput' is a network or device path; cook evidence must be published to a local volume." }
 	# Mapped and substituted drives are caught from the volume root's final path
@@ -1190,15 +1200,20 @@ try {
 		catch [IO.IOException], [UnauthorizedAccessException] {
 			throw "OutputPath '$PublicationTarget' could not be published because it aliases protected input evidence or is otherwise locked; validation fails closed. $($_.Exception.Message)"
 		}
-		# Lexical containment misses drive-letter and 8.3 aliases, so compare the
-		# held parent's resolved identity with each cooked-inventory input directory.
-		$HeldParentFinalPath = [AethelnOutputPublicationNative]::FinalPath($OutputAncestorHolds[$OutputAncestorHolds.Count - 1])
+		# Lexical containment misses drive-letter, 8.3, and share aliases, so compare
+		# the file identity of the held parent and every held ancestor with each
+		# cooked-inventory input directory; inventory evidence must also be local.
+		$HeldIdentities = @($OutputAncestorHolds | ForEach-Object { [AethelnOutputPublicationNative]::FileIdentity($_) })
 		foreach ($InventoryDirectory in @($ClientInventorySnapshot.SourceDirectory, $ServerInventorySnapshot.SourceDirectory)) {
 			$InventoryHandle = [AethelnOutputPublicationNative]::CreateFileW($InventoryDirectory, 0x80, 0x7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
 			if ($InventoryHandle.IsInvalid) { throw "Cooked-inventory input directory '$InventoryDirectory' could not be opened to verify output isolation (Win32 error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())); validation fails closed." }
-			try { $InventoryFinalPath = [AethelnOutputPublicationNative]::FinalPath($InventoryHandle).TrimEnd('\') }
+			try {
+				$InventoryFinalPath = [AethelnOutputPublicationNative]::FinalPath($InventoryHandle)
+				$InventoryIdentity = [AethelnOutputPublicationNative]::FileIdentity($InventoryHandle)
+			}
 			finally { $InventoryHandle.Dispose() }
-			if ([string]::Equals($HeldParentFinalPath.TrimEnd('\'), $InventoryFinalPath, [StringComparison]::OrdinalIgnoreCase) -or $HeldParentFinalPath.StartsWith($InventoryFinalPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+			if ($InventoryFinalPath.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) { throw "Cooked-inventory input directory '$InventoryDirectory' resolves to network share '$InventoryFinalPath'; cook evidence must be compared on a local volume." }
+			if ($HeldIdentities -contains $InventoryIdentity) {
 				throw "OutputPath '$ResolvedOutput' resolves inside cooked-inventory input directory '$InventoryFinalPath'; validation fails closed."
 			}
 		}
@@ -1227,5 +1242,7 @@ Write-Output 'Content cook evidence validation passed.'
 }
 finally {
 	foreach ($Hold in $OutputAncestorHolds) { $Hold.Dispose() }
-	if (Test-Path -LiteralPath $InputSnapshotRoot) { Remove-Item -LiteralPath $InputSnapshotRoot -Recurse -Force }
+	# Snapshot cleanup must not turn published evidence into a failed exit.
+	try { if (Test-Path -LiteralPath $InputSnapshotRoot) { Remove-Item -LiteralPath $InputSnapshotRoot -Recurse -Force } }
+	catch { Write-Warning "Input snapshot cleanup failed for '$InputSnapshotRoot': $($_.Exception.Message)" }
 }

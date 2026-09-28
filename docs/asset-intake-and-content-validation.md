@@ -337,8 +337,8 @@ including one that traverses a junction or other reparse point, holds
 deny-write locks on every input while it publishes, refuses to publish over a
 hardlink alias of an input, and holds every output ancestor unrenameable until
 publication is verified. Evidence must be published to a local volume: network
-and device output paths (including mixed `\` and `/` prefixes) are rejected
-from their raw text before path resolution, a drive whose root resolves to a
+and device output paths (including mixed `\` and `/` prefixes and leading
+whitespace) are rejected from their raw text before path resolution, a drive whose root resolves to a
 network share (such as a mapped or substituted drive) is rejected at preflight,
 and a held parent that resolves to a
 network share is rejected again before publication. It creates the pending evidence relative to the
@@ -349,9 +349,11 @@ file object into place relative to the same parent handle. It never deletes a
 path. A failed publication deletes only the file object it created; if even
 that cleanup fails, the error names the leftover pending file's resolved
 location. The earlier alias probe is path-based and opens but never writes
-bytes. A held parent whose resolved identity is, or lies inside, a
-cooked-inventory input directory (for example through a substituted drive
-letter or an 8.3 name) is rejected before anything is created. It rechecks
+bytes. Cooked-inventory input directories must also resolve to a local volume,
+and a held parent or held ancestor with the same file identity (volume serial
+and file index) as a cooked-inventory input directory, reached for example
+through a substituted drive letter or an 8.3 name, is rejected before anything
+is created. The pending evidence bytes are verified before the rename. It rechecks
 the complete source file set before validation and again after the evidence is
 written but before the rename, so a failed comparison never replaces a
 preexisting output or leaves new evidence behind, and it emits

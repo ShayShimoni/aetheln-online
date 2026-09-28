@@ -1086,7 +1086,7 @@ try {
 	Write-Output 'PASS: validator refuses same-path input/output mutation'
 
 	# The '|' makes GetFullPath throw, so only the raw-text check yields this message.
-	foreach ($RawNetworkPath in @('\\localhost\aetheln-no-such-share\a|b.json', '/\localhost\aetheln-no-such-share\a|b.json', '\/localhost/aetheln-no-such-share/a|b.json')) {
+	foreach ($RawNetworkPath in @(' \\localhost\aetheln-no-such-share\a|b.json', '\\localhost\aetheln-no-such-share\a|b.json', '/\localhost\aetheln-no-such-share\a|b.json', '\/localhost/aetheln-no-such-share/a|b.json')) {
 		Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$RawNetworkPath } 'OutputPath.*network or device path.*local volume'
 	}
 	Write-Output 'PASS: network output paths are rejected from their raw text before path resolution'
@@ -1129,6 +1129,9 @@ using System.Runtime.InteropServices;
 public static class AethelnFixtureDosDevice {
 	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 	public static extern bool DefineDosDeviceW(uint flags, string device, string target);
+	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	public static extern uint QueryDosDeviceW(string device, System.Text.StringBuilder target, int length);
+	public static string Query(string device) { System.Text.StringBuilder target = new System.Text.StringBuilder(4096); return QueryDosDeviceW(device, target, target.Capacity) == 0 ? null : target.ToString(); }
 }
 '@
 	}
@@ -1137,6 +1140,7 @@ public static class AethelnFixtureDosDevice {
 		$MappedTarget = "\??\UNC\localhost\$ShareDrive`$" + $ShareParent.Substring(2)
 		Assert-True ([AethelnFixtureDosDevice]::DefineDosDeviceW(1, "$($MappedLetter):", $MappedTarget)) 'The mapped-drive fixture must define its per-session drive letter.'
 		try {
+			Assert-True ([AethelnFixtureDosDevice]::Query("$($MappedLetter):") -ceq $MappedTarget) 'The mapped-drive fixture letter must resolve to its own target, not a concurrent definition.'
 			Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath="$($MappedLetter):\nested\cook-evidence.json" } 'OutputPath.*resolves to network share'
 			Assert-True (@(Get-ChildItem -LiteralPath $ShareParent -Force).Count -eq 0) 'A mapped-drive output must be rejected before any directory is created.'
 		}
@@ -1153,6 +1157,7 @@ public static class AethelnFixtureDosDevice {
 		$ClientNamesBefore = (@(Get-ChildItem -LiteralPath $Client -Force | ForEach-Object Name) | Sort-Object) -join ','
 		Assert-True ([AethelnFixtureDosDevice]::DefineDosDeviceW(0, "$($AliasLetter):", $Client)) 'The inventory-alias fixture must define its per-session drive letter.'
 		try {
+			Assert-True ([AethelnFixtureDosDevice]::Query("$($AliasLetter):") -ceq ('\??\' + $Client)) 'The inventory-alias fixture letter must resolve to its own target, not a concurrent definition.'
 			Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath="$($AliasLetter):\alias-evidence.json" } 'OutputPath.*resolves inside cooked-inventory input directory'
 		}
 		finally {
@@ -1166,6 +1171,29 @@ public static class AethelnFixtureDosDevice {
 		Write-Output 'PASS: an output parent aliased onto a cooked-inventory input directory is rejected by resolved identity'
 	}
 	else { Write-Output 'SKIP: no free drive letter, so inventory-alias output rejection was not exercised' }
+
+	# Reaching the inventory through a loopback share gives it a different final
+	# path from the local output parent; network inventory input is rejected.
+	$LoopbackLetter = @('Z','Y','X','W','V','U','T','S') | Where-Object { -not (Test-Path -LiteralPath "$($_):\") } | Select-Object -First 1
+	$LoopbackShareRoot = "\\localhost\$ShareDrive`$"
+	if ((Test-Path -LiteralPath $LoopbackShareRoot) -and $null -ne $LoopbackLetter) {
+		$LoopbackTarget = "\??\UNC\localhost\$ShareDrive`$" + $FixtureRoot.Substring(2)
+		$ClientNamesBefore = (@(Get-ChildItem -LiteralPath $Client -Force | ForEach-Object Name) | Sort-Object) -join ','
+		Assert-True ([AethelnFixtureDosDevice]::DefineDosDeviceW(1, "$($LoopbackLetter):", $LoopbackTarget)) 'The loopback-inventory fixture must define its per-session drive letter.'
+		try {
+			Assert-True ([AethelnFixtureDosDevice]::Query("$($LoopbackLetter):") -ceq $LoopbackTarget) 'The loopback-inventory fixture letter must resolve to its own target, not a concurrent definition.'
+			Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory="$($LoopbackLetter):\$(Split-Path -Leaf $Client)"; ServerCookedInventoryDirectory=$Server; OutputPath=(Join-Path $Client 'loopback-evidence.json') } 'Cooked-inventory input directory .* resolves to network share'
+		}
+		finally {
+			[void][AethelnFixtureDosDevice]::DefineDosDeviceW(7, "$($LoopbackLetter):", $LoopbackTarget)
+			$ClientNamesAfter = (@(Get-ChildItem -LiteralPath $Client -Force | ForEach-Object Name) | Sort-Object) -join ','
+			Get-ChildItem -LiteralPath $Client -Force -Filter '*loopback-evidence*' | Remove-Item -Force
+		}
+		Assert-True (-not (Test-Path -LiteralPath "$($LoopbackLetter):\")) 'The loopback-inventory fixture must remove its drive letter.'
+		Assert-True ($ClientNamesAfter -ceq $ClientNamesBefore) "A loopback-aliased inventory must not receive pending or published evidence; found '$ClientNamesAfter'."
+		Write-Output 'PASS: an inventory reached through a network share is rejected before any output is created'
+	}
+	else { Write-Output 'SKIP: no administrative share or free drive letter, so loopback-inventory rejection was not exercised' }
 
 	# Input drift after the pre-publication check but before the rename must
 	# fail without replacing a preexisting output or publishing new evidence.
