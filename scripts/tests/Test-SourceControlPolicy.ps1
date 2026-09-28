@@ -143,8 +143,7 @@ try {
 	}
 	$TrackedViolations += @(Invoke-Git -Arguments @('ls-files', '--', ':(glob)**/signing-material/**', ':(glob)**/signing-materials/**', ':(glob)**/service-account/**', ':(glob)**/service-accounts/**'))
 	$TrackedViolations = @($TrackedViolations | Where-Object {
-		$_ -and $_ -notmatch '(^|/)(service-account|service_account)\.redacted\.example\.json$' -and
-		$_ -ne '.agents/skills/orchestrate-delivery/scripts/tests/fixtures/snapshot-sensitive-test.pem'
+		$_ -and $_ -notmatch '(^|/)(service-account|service_account)\.redacted\.example\.json$'
 	} | Sort-Object -Unique)
 	if ($TrackedViolations.Count -gt 0) {
 		throw "Prohibited sensitive-pattern paths are tracked: $($TrackedViolations -join ', ')"

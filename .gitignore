@@ -59,7 +59,6 @@ Coverage/
 *.coverage
 *.coveragexml
 .codex/delivery-workspaces/
-.agents/skills/orchestrate-delivery/scripts/tests/fixtures/snapshot-sensitive-test.pem
 
 # Local planning artifacts
 /todos/

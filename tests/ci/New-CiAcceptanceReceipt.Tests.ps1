@@ -207,6 +207,7 @@ try {
 		@{ name='uppercase-policy'; action={ param($x) $x.policy.version = 'Shadow-v1' } },
 		@{ name='invalid-actor'; action={ param($x) $x.event.triggeringActor = 'bad actor' } },
 		@{ name='duplicate-selection'; action={ param($x) $x.selection.checks = @('visual-package','visual-package') } },
+		@{ name='retired-delivery-harness'; action={ param($x) $x.selection.checks = @('delivery-harness'); $x.results.checks[0].id = 'delivery-harness' } },
 		@{ name='unexpected-result'; action={ param($x) $x.results.checks[0].id = 'portable' } },
 		@{ name='invalid-producer-job'; action={ param($x) $x.results.checks[0].jobName = '' } },
 		@{ name='failed-result'; action={ param($x) $x.results.checks[0].conclusion = 'failure' } },
@@ -359,7 +360,7 @@ try {
 		catch { throw "Unreal type fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 	}
 
-	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness')) {
+	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof')) {
 		$Unsupported = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
 		$Unsupported.selection.checks[0] = $UnsupportedId; $Unsupported.results.checks[0].id = $UnsupportedId
 		if ($UnsupportedId -in @('clean-package-provenance-smoke','native-client-server-compile')) { $Unsupported.results.checks[0].nativeExitCode=0; $Unsupported.results.checks[0].cleanupVerified=$true }

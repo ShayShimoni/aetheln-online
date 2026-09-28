@@ -167,18 +167,11 @@ During prototype, use only:
 
 Keep `QA` as a board status, not an environment. Add `staging` for external playtests or release candidates and `production` only for a public service. Isolate endpoints, credentials, databases, and logs. Commit example configuration only; keep secrets outside the repository.
 
-## Delivery Orchestrator Shortcuts
+## Direct Delivery Requests
 
-When the user's entire request is one of these short commands, invoke
-`$orchestrate-delivery` in the corresponding mode:
-
-- `next` or `next wave` - select and run the next ready delivery wave.
-- `resume` or `continue` - reconcile and continue the active delivery wave.
-- `audit` or `status` - inspect and report without changing repository or
-  external state.
-- `work #<number>` or `issue #<number>` - run the targeted issue.
-
-These shortcuts authorize only the named orchestration mode. They do not
+Handle `next`, `resume`, `continue`, `audit`, `status`, and targeted issue
+requests directly under the repository guidance. Use independent subagents for
+bounded, parallel work when appropriate. A short request does not itself
 authorize a commit, push, pull-request publication, merge, branch change, pull,
 deployment, deletion, or migration.
 

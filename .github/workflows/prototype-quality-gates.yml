@@ -191,7 +191,6 @@ jobs:
             $CheckIds = @(
               'portable',
               'visual-package',
-              'delivery-harness',
               'native-client-server-compile',
               'unreal-editor-automation',
               'content-reference-validation',
@@ -700,7 +699,6 @@ jobs:
           $MissingProducerJobs = @(
             'clean-package-provenance-smoke',
             'content-reference-validation',
-            'delivery-harness',
             'unreal-editor-automation'
           )
           $MissingReceiptArtifacts = @(
