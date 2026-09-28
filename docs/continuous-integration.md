@@ -1316,7 +1316,7 @@ each exact artifact identity from its named producer through `needs`, and the
 aggregate independently confirms that identity against GitHub. Interval checks
 remain additional temporal correlation, not the sole job binding. The result is
 still shadow-only because authority activation is a separate accepted-base,
-one-workflow-file decision and six selector obligations still have no live
+one-workflow-file decision and five selector obligations still have no live
 receipt contract.
 
 When any unsupported obligation is selected, Package 3C deliberately does not
