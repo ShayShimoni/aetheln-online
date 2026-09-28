@@ -202,11 +202,7 @@ function Assert-OutputPathHasNoReparsePoint([string] $Path) {
 	}
 }
 
-function Open-OutputAncestorHolds([string] $Directory) {
-	# Directory handles with list access and no delete sharing make every
-	# ancestor unrenameable until release. An empty held directory can still be
-	# converted to a mount point in place, so publication additionally proves the
-	# pending file's location through its own handle (see PublishInHeldDirectory).
+function Initialize-OutputPublicationNative {
 	if (-not ('AethelnOutputPublicationNative' -as [type])) {
 		Add-Type -TypeDefinition @'
 using System;
@@ -282,7 +278,7 @@ public static class AethelnOutputPublicationNative {
 		}
 	}
 
-	static string FinalPath(SafeFileHandle handle) {
+	public static string FinalPath(SafeFileHandle handle) {
 		StringBuilder path = new StringBuilder(32768);
 		uint length = GetFinalPathNameByHandleW(handle, path, (uint)path.Capacity, 0);
 		if (length == 0 || length >= path.Capacity) { throw new IOException("final path is unavailable (Win32 error " + Marshal.GetLastWin32Error() + ")"); }
@@ -380,6 +376,26 @@ public static class AethelnOutputPublicationNative {
 }
 '@
 	}
+}
+
+function Assert-OutputOnLocalVolume([string] $Path) {
+	# A mapped or substituted drive letter looks local; its root's final path
+	# reveals a network share before any output directory is created.
+	Initialize-OutputPublicationNative
+	$Root = [IO.Path]::GetPathRoot($Path)
+	$Handle = [AethelnOutputPublicationNative]::CreateFileW($Root, 0x80, 0x7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
+	if ($Handle.IsInvalid) { throw "OutputPath volume root '$Root' could not be opened (Win32 error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())); validation fails closed." }
+	try { $RootFinalPath = [AethelnOutputPublicationNative]::FinalPath($Handle) }
+	finally { $Handle.Dispose() }
+	if ($RootFinalPath.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) { throw "OutputPath '$Path' resolves to network share '$RootFinalPath'; cook evidence must be published to a local volume." }
+}
+
+function Open-OutputAncestorHolds([string] $Directory) {
+	# Directory handles with list access and no delete sharing make every
+	# ancestor unrenameable until release. An empty held directory can still be
+	# converted to a mount point in place, so publication additionally proves the
+	# pending file's location through its own handle (see PublishInHeldDirectory).
+	Initialize-OutputPublicationNative
 	$Components = [System.Collections.Generic.List[string]]::new()
 	for ($Current = [IO.Path]::GetFullPath($Directory); -not [string]::IsNullOrEmpty([IO.Path]::GetDirectoryName($Current)); $Current = [IO.Path]::GetDirectoryName($Current)) { $Components.Insert(0, $Current) }
 	if ($Components.Count -eq 0) { $Components.Add([IO.Path]::GetFullPath($Directory)) }
@@ -652,9 +668,13 @@ $SourceClientCookedInventoryDirectory = [IO.Path]::GetFullPath($ClientCookedInve
 $SourceServerCookedInventoryDirectory = [IO.Path]::GetFullPath($ServerCookedInventoryDirectory)
 $ResolvedOutput = $null
 if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+	# Check the raw text first: GetFullPath can already query a UNC server.
+	if ($OutputPath.StartsWith('\\') -or $OutputPath.StartsWith('//')) { throw "OutputPath '$OutputPath' is a network or device path; cook evidence must be published to a local volume." }
 	$ResolvedOutput = [IO.Path]::GetFullPath($OutputPath)
-	# Mapped drives are rejected later from the held parent's final path.
 	if ($ResolvedOutput.StartsWith('\\')) { throw "OutputPath '$ResolvedOutput' is a network or device path; cook evidence must be published to a local volume." }
+	# Mapped and substituted drives are caught from the volume root's final path
+	# here and again from the held parent's final path at publication.
+	Assert-OutputOnLocalVolume $ResolvedOutput
 	if (Test-Path -LiteralPath $ResolvedOutput -PathType Container) { throw "OutputPath '$ResolvedOutput' must identify a file, not a directory." }
 	foreach ($InputPath in @($SourceContentValidationReportPath,$SourcePolicyPath,$SourceRuntimeIntakePath,$SourceBuildProvenancePath)) {
 		if ([string]::Equals($ResolvedOutput, $InputPath, [StringComparison]::OrdinalIgnoreCase)) { throw "OutputPath '$ResolvedOutput' must not overwrite input evidence." }

@@ -304,6 +304,17 @@ function Invoke-ExpectedFailure([hashtable] $Arguments, [string] $Pattern, [stri
 	Assert-True ($Failure -match $Pattern) "Failure '$Failure' did not match '$Pattern'."
 }
 
+# A directory holding no open handles (on itself or its children) can be
+# renamed; a leaked output-folder hold or pending handle blocks the rename.
+function Assert-DirectoryReleased([string] $Directory, [string] $Context) {
+	if (-not (Test-Path -LiteralPath $Directory)) { return }
+	if (([IO.File]::GetAttributes($Directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return }
+	$Probe = $Directory + '-release-probe'
+	try { [IO.Directory]::Move($Directory, $Probe) }
+	catch { throw "Assertion failed: $Context must release every output-folder and pending handle; $($_.Exception.Message)" }
+	[IO.Directory]::Move($Probe, $Directory)
+}
+
 function Invoke-TestValidator([string] $ReportPath, [string] $ClientDirectory, [string] $ServerDirectory, [string] $EvidencePath, [string] $EffectivePolicyPath = $PolicyPath) {
 	$Arguments = @{ ContentValidationReportPath=$ReportPath; ClientCookedInventoryDirectory=$ClientDirectory; ServerCookedInventoryDirectory=$ServerDirectory; PolicyPath=$EffectivePolicyPath; RuntimeIntakePath=$RuntimeIntakePath; BuildProvenancePath=$BuildProvenancePath; AllowTestEvidence=$true }
 	if (-not [string]::IsNullOrWhiteSpace($EvidencePath)) { $Arguments.OutputPath = $EvidencePath }
@@ -1058,7 +1069,29 @@ try {
 	Write-Output 'PASS: validator refuses same-path input/output mutation'
 
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath='\\localhost\aetheln-no-such-share\cook-evidence.json' } 'OutputPath.*network or device path.*local volume'
-	Write-Output 'PASS: network output paths are rejected before any filesystem access'
+	Write-Output 'PASS: network output paths are rejected from their raw text before path resolution'
+
+	# A mapped drive passes the text check, so publication must also reject a
+	# held parent whose final path is a network share, before creating anything.
+	$ShareParent = Join-Path $FixtureRoot 'network-share-parent'
+	New-Item -ItemType Directory -Path $ShareParent | Out-Null
+	$ShareDrive = [IO.Path]::GetPathRoot($ShareParent).TrimEnd('\').TrimEnd(':')
+	$ShareView = "\\localhost\$ShareDrive`$" + $ShareParent.Substring(2)
+	if ((Test-Path -LiteralPath "\\localhost\$ShareDrive`$") -and (Test-Path -LiteralPath $ShareView -PathType Container)) {
+		Assert-True ($null -ne ('AethelnOutputPublicationNative' -as [type])) 'Publication helpers must be loaded by the preceding validator runs.'
+		$ShareHold = [AethelnOutputPublicationNative]::CreateFileW($ShareView, 0x81, 0x3, [IntPtr]::Zero, 3, 0x02200000, [IntPtr]::Zero)
+		try {
+			Assert-True (-not $ShareHold.IsInvalid) 'The network-share fixture must hold its parent through the administrative share.'
+			$ShareFailure = $null
+			try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($ShareHold, 'network-share.tmp', 'network-share.json', [Text.Encoding]::UTF8.GetBytes('network evidence')) }
+			catch { $ShareFailure = $_.Exception.InnerException.Message }
+			Assert-True ($null -ne $ShareFailure -and $ShareFailure -match 'is on a network share') "Publication must reject a held parent on a network share; observed '$ShareFailure'."
+			Assert-True (@(Get-ChildItem -LiteralPath $ShareParent -Force).Count -eq 0) 'A network-share parent must be rejected before anything is created.'
+		}
+		finally { $ShareHold.Dispose() }
+		Write-Output 'PASS: a held parent that resolves to a network share is rejected before creation'
+	}
+	else { Write-Output "SKIP: administrative share '\\localhost\$ShareDrive`$' is unavailable, so the held-parent network-share rejection was not exercised" }
 
 	$ReportDirectory = Split-Path -Parent $Report
 	$ReportLeaf = Split-Path -Leaf $Report
@@ -1192,6 +1225,7 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 		try {
 			try { & $AfterCheckValidator -ContentValidationReportPath $Report -ClientCookedInventoryDirectory $Client -ServerCookedInventoryDirectory $Server -OutputPath $AfterCheckOutput -PolicyPath $PolicyPath -RuntimeIntakePath $RuntimeIntakePath -BuildProvenancePath $BuildProvenancePath -AllowTestEvidence | Out-Null }
 			catch { $AfterCheckFailure = $_.Exception.Message }
+			Assert-DirectoryReleased $AfterCheckParent "After-check $($AfterCheckCase.name) publication"
 			Assert-True (Test-Path -LiteralPath $SwapMarkerPath) "The after-check $($AfterCheckCase.name) swap must have been attempted."
 			Assert-True (Test-Path -LiteralPath $VictimPath -PathType Leaf) "An after-check $($AfterCheckCase.name) swap must not delete the unrelated victim file."
 			Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($VictimPath)) -ceq [Convert]::ToBase64String($OriginalVictimBytes)) "An after-check $($AfterCheckCase.name) swap must leave the unrelated victim bytes unchanged."
@@ -1207,11 +1241,15 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 			}
 		}
 		finally {
-			foreach ($Candidate in @((Split-Path -Parent $AfterCheckOutput), $AfterCheckOutput)) {
-				if ((Test-Path -LiteralPath $Candidate) -and (([IO.File]::GetAttributes($Candidate) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { [IO.Directory]::Delete($Candidate) }
+			# Cleanup must never replace a failing assertion; handle release is asserted above.
+			try {
+				foreach ($Candidate in @((Split-Path -Parent $AfterCheckOutput), $AfterCheckOutput)) {
+					if ((Test-Path -LiteralPath $Candidate) -and (([IO.File]::GetAttributes($Candidate) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { [IO.Directory]::Delete($Candidate) }
+				}
+				$Displaced = Join-Path $FixtureRoot 'after-check-parent-displaced'
+				if (Test-Path -LiteralPath $Displaced) { Rename-Item -LiteralPath $Displaced -NewName (Split-Path -Leaf $AfterCheckParent) }
 			}
-			$Displaced = Join-Path $FixtureRoot 'after-check-parent-displaced'
-			if (Test-Path -LiteralPath $Displaced) { Rename-Item -LiteralPath $Displaced -NewName (Split-Path -Leaf $AfterCheckParent) }
+			catch { Write-Warning "After-check '$($AfterCheckCase.name)' cleanup failed: $($_.Exception.Message)" }
 		}
 	}
 	Write-Output 'PASS: after-check parent, name, and in-place mount-point swaps never delete or alter an unrelated victim'
@@ -1249,6 +1287,7 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 		try {
 			try { & $FaultValidator -ContentValidationReportPath $Report -ClientCookedInventoryDirectory $Client -ServerCookedInventoryDirectory $Server -OutputPath $FaultOutput -PolicyPath $PolicyPath -RuntimeIntakePath $RuntimeIntakePath -BuildProvenancePath $BuildProvenancePath -AllowTestEvidence | Out-Null }
 			catch { $FaultFailure = $_.Exception.Message }
+			Assert-DirectoryReleased $FaultParent "Publication fault $($FaultCase.name)"
 			Assert-True ($null -ne $FaultFailure -and $FaultFailure -match [string]$FaultCase.pattern) "Publication fault '$($FaultCase.name)' must fail closed with '$($FaultCase.pattern)'; observed '$FaultFailure'."
 			if ($FaultCase.mount) { Assert-True ([IO.File]::ReadAllText($SwapMarkerPath) -ceq 'swapped') 'The converted-before-create fixture must convert the empty held parent in place.' }
 			Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($VictimPath)) -ceq [Convert]::ToBase64String($OriginalVictimBytes)) "Publication fault '$($FaultCase.name)' must leave the victim bytes unchanged."
