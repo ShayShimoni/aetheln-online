@@ -334,7 +334,7 @@ public static class AethelnOutputPublicationNative {
 			int error = Marshal.GetLastWin32Error();
 			string location;
 			try { location = FinalPath(handle); } catch (IOException) { location = "<unresolved>"; }
-			return "pending evidence '" + location + "' inside the held output parent could not be removed (Win32 error " + error + "); remove it manually";
+			return "pending evidence at resolved location '" + location + "' could not be removed (Win32 error " + error + "); remove it manually";
 		}
 		finally { Marshal.FreeHGlobal(buffer); }
 	}
@@ -349,6 +349,9 @@ public static class AethelnOutputPublicationNative {
 	public static void PublishInHeldDirectory(SafeFileHandle parent, string pendingName, string outputName, byte[] bytes) {
 		RequirePlainDirectory(parent);
 		string parentFinalPath = FinalPath(parent);
+		// Over SMB the server resolves a junction on the held parent itself, so a
+		// relative create could be redirected; evidence is local-volume only.
+		if (parentFinalPath.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) { throw new IOException("held output parent '" + parentFinalPath + "' is on a network share; cook evidence must be published to a local volume"); }
 		SafeFileHandle pending = CreatePendingInHeldDirectory(parent, pendingName);
 		FileStream stream = null;
 		try {
@@ -650,6 +653,8 @@ $SourceServerCookedInventoryDirectory = [IO.Path]::GetFullPath($ServerCookedInve
 $ResolvedOutput = $null
 if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
 	$ResolvedOutput = [IO.Path]::GetFullPath($OutputPath)
+	# Mapped drives are rejected later from the held parent's final path.
+	if ($ResolvedOutput.StartsWith('\\')) { throw "OutputPath '$ResolvedOutput' is a network or device path; cook evidence must be published to a local volume." }
 	if (Test-Path -LiteralPath $ResolvedOutput -PathType Container) { throw "OutputPath '$ResolvedOutput' must identify a file, not a directory." }
 	foreach ($InputPath in @($SourceContentValidationReportPath,$SourcePolicyPath,$SourceRuntimeIntakePath,$SourceBuildProvenancePath)) {
 		if ([string]::Equals($ResolvedOutput, $InputPath, [StringComparison]::OrdinalIgnoreCase)) { throw "OutputPath '$ResolvedOutput' must not overwrite input evidence." }

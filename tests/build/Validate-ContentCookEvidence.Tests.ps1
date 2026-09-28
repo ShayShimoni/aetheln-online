@@ -1057,6 +1057,9 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$Client } 'OutputPath.*must identify a file|must not overwrite or alter a cooked-inventory'
 	Write-Output 'PASS: validator refuses same-path input/output mutation'
 
+	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath='\\localhost\aetheln-no-such-share\cook-evidence.json' } 'OutputPath.*network or device path.*local volume'
+	Write-Output 'PASS: network output paths are rejected before any filesystem access'
+
 	$ReportDirectory = Split-Path -Parent $Report
 	$ReportLeaf = Split-Path -Leaf $Report
 	$ClientManifestPath = Join-Path $Client 'inventory-manifest.json'
@@ -1259,8 +1262,12 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 			else { Assert-True (@($Leftovers | Where-Object { $_.Name -like '*.tmp' }).Count -eq 0) "Publication fault '$($FaultCase.name)' must delete its own pending file." }
 		}
 		finally {
-			if ((Test-Path -LiteralPath $FaultParent) -and (([IO.File]::GetAttributes($FaultParent) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { [IO.Directory]::Delete($FaultParent) }
-			elseif (Test-Path -LiteralPath $FaultParent) { Remove-Item -LiteralPath $FaultParent -Recurse -Force }
+			# Cleanup must never replace a failing assertion (for example a leaked pending handle).
+			try {
+				if ((Test-Path -LiteralPath $FaultParent) -and (([IO.File]::GetAttributes($FaultParent) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { [IO.Directory]::Delete($FaultParent) }
+				elseif (Test-Path -LiteralPath $FaultParent) { Remove-Item -LiteralPath $FaultParent -Recurse -Force }
+			}
+			catch { Write-Warning "Publication fault '$($FaultCase.name)' cleanup failed: $($_.Exception.Message)" }
 		}
 	}
 	Write-Output 'PASS: in-place conversion before create, stream-open failure, and cleanup failure all fail closed without touching a victim'
@@ -1289,5 +1296,7 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 	Write-Output 'All content cook-evidence tests passed.'
 }
 finally {
-	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	# A leaked handle must surface as its assertion, not as a fixture-cleanup error.
+	try { if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force } }
+	catch { Write-Warning "Fixture cleanup failed: $($_.Exception.Message)" }
 }

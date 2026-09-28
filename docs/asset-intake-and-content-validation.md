@@ -333,14 +333,17 @@ pages before parsing. It rejects an output path that could overwrite an input,
 including one that traverses a junction or other reparse point, holds
 deny-write locks on every input while it publishes, refuses to publish over a
 hardlink alias of an input, and holds every output ancestor unrenameable until
-publication is verified. It creates the pending evidence relative to the held
-parent handle (an empty parent converted to a mount point in place makes that
-create fail rather than redirect), proves through the file's own handle that it
-sits inside the held parent, and renames that exact file object into place
-relative to the same parent handle. It never deletes a path. A failed
-publication deletes only the file object it created; if even that cleanup
-fails, the error names the leftover pending file inside the held parent. The
-earlier alias probe is path-based but writes no bytes. It rechecks
+publication is verified. Evidence must be published to a local volume: network
+and device output paths, and parents that resolve to a network share (such as a
+mapped drive), are rejected. It creates the pending evidence relative to the
+held parent handle (on a local NTFS volume, an empty parent converted to a mount
+point in place makes that create fail rather than redirect), proves through the
+file's own handle that it sits inside the held parent, and renames that exact
+file object into place relative to the same parent handle. It never deletes a
+path. A failed publication deletes only the file object it created; if even
+that cleanup fails, the error names the leftover pending file's resolved
+location. The earlier alias probe is path-based and opens but never writes
+bytes. It rechecks
 the complete source file set before and after validation, and emits
 version-3 evidence carrying both registry attestations. Neither capture nor
 comparison builds, cooks, packages, downloads content, or accepts terms.
