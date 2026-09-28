@@ -333,12 +333,15 @@ unattributed), and the lifecycle-only system-error handler.
 
 The evidence-marker test,
 `Aetheln.Observability.CrashContext.MarkerMatchesRegisteredRun`, drives the
-production rotation path. Each distinct crash run ID written to
-`AethelnCrashRunId` must appear in exactly one whole-line Display marker. The
-test covers a refresh of the same ID, which must not log again, and a runtime
-replacement, which must log its own ID and never the prior one. The test
-cannot rule out an extra marker that carries an ID never written to crash
-GameData. That capture path has not yet run natively.
+production rotation path. The test registers its own unbuffered log device for
+the `LogAethelnCrashContext` category, which receives every line in that
+category. It does not rely on the framework's expected-message matching.
+After registration, after a refresh of the same ID, and after a runtime
+replacement, the captured lines must be exactly the Display markers for the
+crash run IDs written to `AethelnCrashRunId`, in order, compared
+case-sensitively. A refresh must not log again. A replacement logs its own
+ID and never the prior one. The capture covers the in-process log route only,
+not the packaged server log file. It has not yet run natively.
 
 Crash-context ownership (`FAethelnCrashContextOwner`: the fourteen crash-context
 keys, the closed states, observable-world counting, and accepted-change

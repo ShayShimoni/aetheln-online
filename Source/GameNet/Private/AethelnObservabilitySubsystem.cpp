@@ -465,6 +465,9 @@ void FAethelnCrashContextOwner::ClearIdentity(AethelnCrashContext::EState NewSta
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Engine/Engine.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/OutputDevice.h"
+#include "Misc/OutputDeviceRedirector.h"
+#include "Misc/ScopeLock.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnObservabilitySubsystemContextTest,
@@ -1045,6 +1048,51 @@ namespace AethelnCrashContextTests
 		FAethelnCrashContextSnapshot Snapshot;
 		return Subsystem.TryGetCrashContextSnapshot(Snapshot) ? Snapshot.CrashRunId : FString();
 	}
+
+	/** Test-owned capture of every crash-context log line with its severity. */
+	class FScopedCrashMarkerCapture final : public FOutputDevice
+	{
+	public:
+		FScopedCrashMarkerCapture()
+		{
+			if (GLog != nullptr)
+			{
+				GLog->AddOutputDevice(this);
+				bRegistered = true;
+			}
+		}
+
+		virtual ~FScopedCrashMarkerCapture() override
+		{
+			if (bRegistered && GLog != nullptr)
+			{
+				GLog->RemoveOutputDevice(this);
+			}
+		}
+
+		// Unbuffered: the redirector delivers each line synchronously, so no flush is needed.
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+
+		virtual void Serialize(const TCHAR* Message, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (Category == LogAethelnCrashContext.GetCategoryName())
+			{
+				FScopeLock Lock(&LinesLock);
+				Lines.Emplace(static_cast<ELogVerbosity::Type>(Verbosity & ELogVerbosity::VerbosityMask), Message);
+			}
+		}
+
+		TArray<TPair<ELogVerbosity::Type, FString>> GetLines() const
+		{
+			FScopeLock Lock(&LinesLock);
+			return Lines;
+		}
+
+	private:
+		mutable FCriticalSection LinesLock;
+		TArray<TPair<ELogVerbosity::Type, FString>> Lines;
+		bool bRegistered = false;
+	};
 
 	FAethelnBuildIdentity MakeBuild(const TCHAR* BuildIdentity)
 	{
@@ -1653,38 +1701,34 @@ bool FAethelnCrashContextMarkerTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// Registration writes the crash run ID before its marker, so each newly written ID gets a
-	// whole-line expectation that the framework requires to match exactly once by test end.
-	// The optional prefix covers the structured-log route, which formats "Category: Message".
-	TArray<FString> WrittenRuns;
-	const FDelegateHandle WriteHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
-		[this, &WrittenRuns](const FString& Key, const FString& Value)
+	// The capture sees every crash-context line from here on, so after each stage the lines
+	// must be exactly one Display marker per crash run ID written to crash GameData, in order.
+	FScopedCrashMarkerCapture Capture;
+	auto ExpectMarkers = [this, &Capture](const TArray<FString>& Runs)
+	{
+		const TArray<TPair<ELogVerbosity::Type, FString>> Lines = Capture.GetLines();
+		TestEqual(TEXT("Captured marker count matches"), Lines.Num(), Runs.Num());
+		for (int32 Index = 0; Index < Lines.Num() && Index < Runs.Num(); ++Index)
 		{
-			if (!Key.Equals(FString(CrashRunIdKey), ESearchCase::CaseSensitive) || Value.IsEmpty())
-			{
-				return;
-			}
-			const bool bGenerated = TestTrue(TEXT("Crash GameData receives only a generated-format crash run"), FAethelnCrashContextSnapshot::HasCrashRunIdFormat(Value));
-			if (bGenerated && !WrittenRuns.Contains(Value))
-			{
-				WrittenRuns.Add(Value);
-				AddExpectedMessage(
-					FString::Printf(TEXT("(LogAethelnCrashContext: )?AethelnCrashContextMarker crash-run=%s"), *Value),
-					ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 1);
-			}
-		});
+			const TPair<ELogVerbosity::Type, FString>& Line = Lines[Index];
+			TestTrue(TEXT("The marker keeps Display severity"), Line.Key == ELogVerbosity::Display);
+			TestTrue(TEXT("The marker carries exactly the written crash run"), Line.Value.Equals(TEXT("AethelnCrashContextMarker crash-run=") + Runs[Index], ESearchCase::CaseSensitive));
+		}
+	};
 
 	FAethelnCrashContextOwner Owner;
 	Owner.Initialize();
 	Owner.TrackWorldTick(World.World);
 	const FString FirstRun = ReadKey(CrashRunIdKey);
 	TestTrue(TEXT("Registration writes the generated crash run"), FirstRun.Equals(CurrentCrashRunId(*World.Subsystem), ESearchCase::CaseSensitive));
+	ExpectMarkers({ FirstRun });
 
-	// Re-registering the same ID after the sole world recovers keeps its single marker.
+	// Re-registering the same ID after the sole world recovers must not log it again.
 	Owner.MarkStale();
 	Owner.TrackWorldTick(World.World);
 	TestEqual(TEXT("The recovered world registers active"), ReadKey(StateKey), FString(TEXT("active")));
 	TestTrue(TEXT("Recovery re-registers the same crash run"), ReadKey(CrashRunIdKey).Equals(FirstRun, ESearchCase::CaseSensitive));
+	ExpectMarkers({ FirstRun });
 
 	// A runtime replacement logs its own marker; the prior ID is never logged again.
 	TestTrue(
@@ -1693,12 +1737,13 @@ bool FAethelnCrashContextMarkerTest::RunTest(const FString& Parameters)
 	const FString SecondRun = ReadKey(CrashRunIdKey);
 	TestTrue(TEXT("Replacement writes the rotated crash run"), SecondRun.Equals(CurrentCrashRunId(*World.Subsystem), ESearchCase::CaseSensitive));
 	TestFalse(TEXT("Replacement rotates the crash run"), SecondRun.Equals(FirstRun, ESearchCase::CaseSensitive));
+	ExpectMarkers({ FirstRun, SecondRun });
+
 	Owner.MarkStale();
 	Owner.TrackWorldTick(World.World);
 	TestTrue(TEXT("Recovery keeps the replacement crash run"), ReadKey(CrashRunIdKey).Equals(SecondRun, ESearchCase::CaseSensitive));
-	TestEqual(TEXT("Exactly two crash runs were written"), WrittenRuns.Num(), 2);
+	ExpectMarkers({ FirstRun, SecondRun });
 
-	FGenericCrashContext::OnGameDataSetDelegate().Remove(WriteHandle);
 	Owner.Shutdown();
 	World.Destroy();
 	return true;

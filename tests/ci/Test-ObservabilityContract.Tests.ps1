@@ -228,21 +228,32 @@ try {
 
 	Initialize-Fixture
 	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor '	const FAethelnCrashContextSnapshot First = MakeSnapshot();' -Replacement "	AddExpectedMessage(TEXT(`"AethelnCrashContextMarker crash-run=[0-9a-f]{32}`"), ELogVerbosity::Display, EAutomationExpectedMessageFlags::Contains, 0);`n	const FAethelnCrashContextSnapshot First = MakeSnapshot();"
-	Assert-FailsClosed -Name 'restored generic marker expectation' -ExpectedPattern 'generic marker expectation'
+	Assert-FailsClosed -Name 'restored expected-message marker assertion' -ExpectedPattern 'test-owned Display capture'
 
 	foreach ($Entry in @(
-		@{ Name = 'unbounded marker occurrence count'; Anchor = 'ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 1);'; Replacement = 'ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 0);' },
-		@{ Name = 'partial-line marker match'; Anchor = 'ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 1);'; Replacement = 'ELogVerbosity::Display, EAutomationExpectedMessageFlags::Contains, 1);' },
-		@{ Name = 'marker expectation unbound from crash GameData'; Anchor = 'Key.Equals(FString(CrashRunIdKey), ESearchCase::CaseSensitive)'; Replacement = 'Key.Equals(FString(StateKey), ESearchCase::CaseSensitive)' },
-		@{ Name = 'marker expectation not taken from the written ID'; Anchor = 'AethelnCrashContextMarker crash-run=%s"), *Value),'; Replacement = 'AethelnCrashContextMarker crash-run=%s"), *FString()),' }
+		@{ Name = 'buffered marker capture'; Anchor = 'virtual bool CanBeUsedOnMultipleThreads() const override { return true; }'; Replacement = 'virtual bool CanBeUsedOnMultipleThreads() const override { return false; }' },
+		@{ Name = 'marker capture not bound to its category'; Anchor = 'if (Category == LogAethelnCrashContext.GetCategoryName())'; Replacement = 'if (true)' },
+		@{ Name = 'marker capture left registered'; Anchor = 'GLog->RemoveOutputDevice(this);'; Replacement = '(void)0;' }
 	)) {
 		Initialize-Fixture
 		Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor $Entry.Anchor -Replacement $Entry.Replacement
-		Assert-FailsClosed -Name $Entry.Name -ExpectedPattern 'exactly one exact marker for each crash run ID'
+		Assert-FailsClosed -Name $Entry.Name -ExpectedPattern 'scoped, unbuffered, category-bound log device'
+	}
+
+	foreach ($Entry in @(
+		@{ Name = 'unbounded marker count'; Anchor = 'TestEqual(TEXT("Captured marker count matches"), Lines.Num(), Runs.Num());'; Replacement = 'TestTrue(TEXT("Captured marker count matches"), Lines.Num() >= Runs.Num());' },
+		@{ Name = 'marker severity unchecked'; Anchor = 'Line.Key == ELogVerbosity::Display'; Replacement = 'true' },
+		@{ Name = 'partial marker match'; Anchor = 'Line.Value.Equals(TEXT("AethelnCrashContextMarker crash-run=") + Runs[Index], ESearchCase::CaseSensitive)'; Replacement = 'Line.Value.Contains(Runs[Index])' },
+		@{ Name = 'missing same-ID refresh stage'; Anchor = "ReadKey(CrashRunIdKey).Equals(FirstRun, ESearchCase::CaseSensitive));`n`tExpectMarkers({ FirstRun });"; Replacement = 'ReadKey(CrashRunIdKey).Equals(FirstRun, ESearchCase::CaseSensitive));' },
+		@{ Name = 'missing replacement stage'; Anchor = "SecondRun.Equals(FirstRun, ESearchCase::CaseSensitive));`n`tExpectMarkers({ FirstRun, SecondRun });"; Replacement = 'SecondRun.Equals(FirstRun, ESearchCase::CaseSensitive));' }
+	)) {
+		Initialize-Fixture
+		Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor $Entry.Anchor -Replacement $Entry.Replacement
+		Assert-FailsClosed -Name $Entry.Name -ExpectedPattern 'exactly one exact Display marker per written crash run ID'
 	}
 
 	Initialize-Fixture
-	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'cannot rule out an extra marker that carries an ID never written to crash' -Replacement 'proves every marker'
+	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'The capture covers the in-process log route only' -Replacement 'The capture proves the packaged log'
 	Assert-FailsClosed -Name 'overclaimed evidence-marker coverage' -ExpectedPattern 'Evidence-marker test limitation'
 
 	foreach ($Entry in @(
