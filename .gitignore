@@ -58,6 +58,8 @@ TestResults/
 Coverage/
 *.coverage
 *.coveragexml
+__pycache__/
+*.pyc
 .codex/delivery-workspaces/
 .agents/skills/orchestrate-delivery/scripts/tests/fixtures/snapshot-sensitive-test.pem
 

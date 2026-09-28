@@ -15,6 +15,17 @@ out-of-contract fields, and emits only the approved bounded identity subset.
 It never opens a path, prints XML, reads a log, or touches a dump. The focused
 synthetic fixture is `tests/build/Read-BoundedCrashContext.Tests.ps1`.
 
+`scripts/build/controlled_crash_acquire.py` is a separate Linux-only,
+in-process acquisition seam. Given a caller-verified fresh, exclusive root and
+one expected report-folder name, it opens only `CrashContext.runtime-xml` with
+anchored directory handles, rejects symlinks, nonregular or hard-linked XML,
+ambiguous folders, oversized files, and detected identity or content changes,
+then returns at most 1 MiB of bytes. Its focused synthetic tests are
+`tests/build/test_controlled_crash_acquire.py`. The caller must still prove
+local-filesystem residency, stable trusted ancestors, root ownership and
+freshness. There is no capture runner or byte handoff to the separate
+PowerShell validator yet; neither seam demonstrates a live crash.
+
 The XML `CrashGUID` is an engine-generated `UECC-...` identity. A launch
 `-CrashGUID=` override names the separate crash-info folder. Neither is the
 server-generated `AethelnCrashRunId`. Do not require these three identities to
