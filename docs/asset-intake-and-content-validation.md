@@ -322,6 +322,9 @@ powershell -NoProfile -File scripts/build/Validate-ContentCookEvidence.ps1 `
   -OutputPath TestResults/content-cook-evidence.json
 ```
 
+The `OutputPath` parent directory (here `TestResults`) must already exist; the
+comparator never creates output directories.
+
 The comparator accepts a policy-consistent `non_promotion` report so deterministic
 client/server boundaries can still be measured while quantitative budgets remain
 `TBD`. Its output preserves `non_promotion`; it never converts that result into a

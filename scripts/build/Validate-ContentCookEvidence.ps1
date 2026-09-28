@@ -675,6 +675,10 @@ if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
 	# Mapped and substituted drives are caught from the volume root's final path
 	# here and again from the held parent's final path at publication.
 	Assert-OutputOnLocalVolume $ResolvedOutput
+	# Path-based directory creation before the holds could follow a concurrent
+	# ancestor swap, so the output parent must already exist.
+	$OutputParent = Split-Path -Parent $ResolvedOutput
+	if ([string]::IsNullOrWhiteSpace($OutputParent) -or -not (Test-Path -LiteralPath $OutputParent -PathType Container)) { throw "OutputPath parent '$OutputParent' must already exist; the comparator does not create output directories." }
 	if (Test-Path -LiteralPath $ResolvedOutput -PathType Container) { throw "OutputPath '$ResolvedOutput' must identify a file, not a directory." }
 	foreach ($InputPath in @($SourceContentValidationReportPath,$SourcePolicyPath,$SourceRuntimeIntakePath,$SourceBuildProvenancePath)) {
 		if ([string]::Equals($ResolvedOutput, $InputPath, [StringComparison]::OrdinalIgnoreCase)) { throw "OutputPath '$ResolvedOutput' must not overwrite input evidence." }
@@ -1163,7 +1167,6 @@ $Evidence = [ordered]@{
 
 if ($null -ne $ResolvedOutput) {
 	$OutputDirectory = Split-Path -Parent $ResolvedOutput
-	if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) { New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null }
 	$OutputAncestorHolds = Open-OutputAncestorHolds $OutputDirectory
 	$EvidenceBytes = [System.Text.UTF8Encoding]::new($false).GetBytes((($Evidence | ConvertTo-Json -Depth 8) + [Environment]::NewLine))
 }

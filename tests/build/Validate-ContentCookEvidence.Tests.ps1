@@ -1071,6 +1071,13 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath='\\localhost\aetheln-no-such-share\cook-evidence.json' } 'OutputPath.*network or device path.*local volume'
 	Write-Output 'PASS: network output paths are rejected from their raw text before path resolution'
 
+	# Path-based directory creation before the holds could follow a concurrent
+	# ancestor swap, so the comparator never creates output directories.
+	$MissingOutputParent = Join-Path $FixtureRoot 'missing-output-parent'
+	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=(Join-Path (Join-Path $MissingOutputParent 'nested') 'cook-evidence.json') } 'OutputPath parent .* must already exist'
+	Assert-True (-not (Test-Path -LiteralPath $MissingOutputParent)) 'A missing output parent must fail closed without creating any directory.'
+	Write-Output 'PASS: a missing output parent fails closed without creating directories'
+
 	# A mapped drive passes the text check, so publication must also reject a
 	# held parent whose final path is a network share, before creating anything.
 	$ShareParent = Join-Path $FixtureRoot 'network-share-parent'
@@ -1207,7 +1214,8 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 		$AfterCheckParent = Join-Path $FixtureRoot "after-check-$($AfterCheckCase.name)"
 		$AfterCheckOutput = Join-Path $AfterCheckParent $VictimLeaf
 		if ($AfterCheckCase.ContainsKey('precreate') -and -not $AfterCheckCase.precreate) {
-			Assert-True (-not (Test-Path -LiteralPath $AfterCheckParent)) 'The in-place mount-point case must let the validator create an empty parent.'
+			# The in-place mount-point case needs an existing but empty parent.
+			New-Item -ItemType Directory -Path $AfterCheckParent | Out-Null
 		}
 		else {
 			New-Item -ItemType Directory -Path $AfterCheckParent | Out-Null
@@ -1270,6 +1278,7 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 		$FaultIndex++
 		$FaultParent = Join-Path $FixtureRoot "publication-fault-$($FaultCase.name)"
 		$FaultOutput = Join-Path $FaultParent $VictimLeaf
+		New-Item -ItemType Directory -Path $FaultParent | Out-Null
 		$FaultSource = [IO.File]::ReadAllText($Validator).Replace('AethelnOutputPublicationNative', "AethelnOutputPublicationNativeFault$FaultIndex")
 		foreach ($Edit in $FaultCase.edits) {
 			$Edited = [regex]::Replace($FaultSource, [string]$Edit.pattern, [string]$Edit.replacement)
