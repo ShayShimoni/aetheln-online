@@ -40,6 +40,7 @@ function New-FixtureZip {
 	try {
 		foreach ($Spec in $Entries) {
 			$Entry = $Archive.CreateEntry([string] $Spec.name, [IO.Compression.CompressionLevel]::Optimal)
+			$Entry.LastWriteTime = [DateTimeOffset]::new(2026, 9, 20, 20, 0, 0, [TimeSpan]::Zero)
 			if ($Spec.PSObject.Properties.Name -ccontains 'externalAttributes') { $Entry.ExternalAttributes = [int] $Spec.externalAttributes }
 			$Stream = $Entry.Open()
 			try {
@@ -51,6 +52,16 @@ function New-FixtureZip {
 		}
 	} finally { $Archive.Dispose() }
 	return $Buffer.ToArray()
+}
+
+$ArchiveClockProbe = New-FixtureZip @([pscustomobject]@{ name = 'clock.txt'; bytes = 'x' })
+$ArchiveClockStream = [IO.MemoryStream]::new($ArchiveClockProbe, $false)
+$ArchiveClockReader = [IO.Compression.ZipArchive]::new($ArchiveClockStream, [IO.Compression.ZipArchiveMode]::Read)
+try {
+	Assert-True ($ArchiveClockReader.Entries[0].LastWriteTime.ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture) -ceq '2026-09-20T20:00:00') 'Fixture archive timestamp must be deterministic.'
+} finally {
+	$ArchiveClockReader.Dispose()
+	$ArchiveClockStream.Dispose()
 }
 
 function Get-Sha256([byte[]] $Bytes) {
