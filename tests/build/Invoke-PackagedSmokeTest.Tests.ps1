@@ -13,6 +13,40 @@ function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
 }
 
+function Set-FixtureMountPoint([string] $Directory, [string] $Target) {
+	if ($null -eq ('AethelnSmokeFixtureMountPoint' -as [type])) {
+		Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class AethelnSmokeFixtureMountPoint {
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+ public static extern SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
+ [DllImport("kernel32.dll",SetLastError=true)]
+ public static extern bool DeviceIoControl(SafeFileHandle handle,uint code,byte[] input,int inputSize,IntPtr output,int outputSize,out int returned,IntPtr overlapped);
+}
+'@
+	}
+	$Substitute = [Text.Encoding]::Unicode.GetBytes('\??\' + $Target.TrimEnd('\') + '\')
+	$Print = [Text.Encoding]::Unicode.GetBytes($Target)
+	$DataLength = 8 + $Substitute.Length + 2 + $Print.Length + 2
+	$Buffer = New-Object byte[] (8 + $DataLength)
+	[BitConverter]::GetBytes([uint32] 2684354563).CopyTo($Buffer, 0)
+	[BitConverter]::GetBytes([uint16] $DataLength).CopyTo($Buffer, 4)
+	[BitConverter]::GetBytes([uint16] 0).CopyTo($Buffer, 8)
+	[BitConverter]::GetBytes([uint16] $Substitute.Length).CopyTo($Buffer, 10)
+	[BitConverter]::GetBytes([uint16] ($Substitute.Length + 2)).CopyTo($Buffer, 12)
+	[BitConverter]::GetBytes([uint16] $Print.Length).CopyTo($Buffer, 14)
+	$Substitute.CopyTo($Buffer, 16)
+	$Print.CopyTo($Buffer, 16 + $Substitute.Length + 2)
+	$Handle = [AethelnSmokeFixtureMountPoint]::CreateFileW($Directory, 0x100, 0x7, [IntPtr]::Zero, 3, 0x02200000, [IntPtr]::Zero)
+	try {
+		if ($Handle.IsInvalid) { throw "fixture_mount_open_failed_$([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+		$Returned = 0
+		if (-not [AethelnSmokeFixtureMountPoint]::DeviceIoControl($Handle, 0x900A4, $Buffer, $Buffer.Length, [IntPtr]::Zero, 0, [ref] $Returned, [IntPtr]::Zero)) { throw "fixture_mount_set_failed_$([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+	} finally { $Handle.Dispose() }
+}
+
 $ParseErrors = $null
 $Tokens = $null
 $ScriptAst = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref] $Tokens, [ref] $ParseErrors)
@@ -201,14 +235,20 @@ function Test-CleanupDecision {
 	Write-Output 'PASS: cleanup decision protects unresolved identities and refuses to claim completion while ambiguity persists'
 }
 
-function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSeconds = 8, [string] $ServerConnectionPattern = 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)', [string] $ClientExecutable = '', [string[]] $ClientArguments = @(), [string] $ServerExecutable = '/package/AethelnOnlineServer.sh', [string] $ErrorPattern = '') {
+function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSeconds = 8, [string] $ServerConnectionPattern = 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)', [string] $ClientExecutable = '', [string[]] $ClientArguments = @(), [string] $ServerExecutable = '/package/AethelnOnlineServer.sh', [string] $ErrorPattern = '', [switch] $CaptureStartup, [string] $BuildProvenancePath = '', [string] $ServerProvenanceExecutable = '') {
 	$SelectedClientExecutable = if ($ClientExecutable) { $ClientExecutable } else { $PackagedLauncher }
 	$SelectedClientArguments = if ($ClientArguments.Count) { $ClientArguments } else { @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', $Scenario) }
 	$OptionalArguments = @{}
 	if ($ErrorPattern) { $OptionalArguments['ErrorPattern'] = $ErrorPattern }
+	if ($CaptureStartup) {
+		$OptionalArguments['CaptureStartup'] = $true
+		$OptionalArguments['BuildProvenancePath'] = $BuildProvenancePath
+		$OptionalArguments['ServerProvenanceExecutable'] = $ServerProvenanceExecutable
+	}
+	$SelectedServerExecutable = if ($CaptureStartup -and $ServerExecutable -ceq '/package/AethelnOnlineServer.sh') { $HostServerWslPath } else { $ServerExecutable }
 	Assert-True ($SelectedClientExecutable.StartsWith($PackageRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) 'Every smoke fixture client must live inside its GUID-scoped package root before cleanup can run.'
 	& $Script @OptionalArguments `
-		-ServerExecutable $ServerExecutable `
+		-ServerExecutable $SelectedServerExecutable `
 		-ServerLauncherExecutable $LauncherCommandName `
 		-ServerLauncherArguments @('-NoProfile', '-File', $FakeLauncher, '-d', 'Ubuntu', '-u', 'aethelnqa', '--exec', '{ServerExecutable}', '{ServerMap}', '-port=7777', '-stdout', '-FullStdOutLogOutput', '-Scenario', $Scenario) `
 		-ClientExecutable $SelectedClientExecutable `
@@ -249,6 +289,8 @@ Start-Sleep -Seconds 20
 	$RuntimeRoot = Join-Path $PackageRoot 'Binaries'
 	New-Item -ItemType Directory -Path $RuntimeRoot | Out-Null
 	$PackagedLauncher = Join-Path $PackageRoot 'ClientLauncher.exe'
+	$CaptureClientRoot = Join-Path $PackageRoot 'AethelnOnline\Binaries\Win64'
+	$CaptureClientExecutable = Join-Path $CaptureClientRoot 'AethelnOnlineClient.exe'
 	$PackagedRuntime = Join-Path $RuntimeRoot 'ClientRuntime.exe'
 	$RuntimeClass = 'Runtime' + [guid]::NewGuid().ToString('N')
 	$RuntimeSource = @'
@@ -307,6 +349,30 @@ public static class CLASS {
 }
 '@.Replace('CLASS', $LauncherClass)
 	Add-Type -TypeDefinition $LauncherSource -OutputAssembly $PackagedLauncher -OutputType ConsoleApplication
+	New-Item -ItemType Directory -Path $CaptureClientRoot | Out-Null
+	Copy-Item -LiteralPath $PackagedLauncher -Destination $CaptureClientExecutable
+	$ServerPackageRoot = Join-Path $FixtureRoot 'server-package'
+	New-Item -ItemType Directory -Path $ServerPackageRoot | Out-Null
+	$HostServerLauncher = Join-Path $ServerPackageRoot 'AethelnOnlineServer.sh'
+	Set-Content -LiteralPath $HostServerLauncher -Value '# synthetic packaged server launcher' -Encoding UTF8
+	$HostServerWslPath = '/mnt/' + $HostServerLauncher.Substring(0, 1).ToLowerInvariant() + '/' + $HostServerLauncher.Substring(3).Replace('\', '/')
+	$SourceRevision = 'a' * 40
+	$BuildProvenancePath = Join-Path $FixtureRoot 'build-provenance.json'
+	$BuildProvenance = [ordered]@{
+		schemaVersion = 2
+		source = [ordered]@{ revision = $SourceRevision; clean = $true }
+		host = [ordered]@{ buildIdentity = "AethelnOnline@$SourceRevision/Development" }
+		build = [ordered]@{ configuration = 'Development'; clientPlatform = 'Win64'; serverPlatform = 'Linux' }
+		artifacts = [ordered]@{
+			clientArchive = $PackageRoot
+			serverArchive = $ServerPackageRoot
+			inventory = @(
+				[ordered]@{ kind = 'client'; path = 'AethelnOnline/Binaries/Win64/AethelnOnlineClient.exe'; sizeBytes = (Get-Item -LiteralPath $CaptureClientExecutable).Length; sha256 = (Get-FileHash -LiteralPath $CaptureClientExecutable -Algorithm SHA256).Hash.ToLowerInvariant() },
+				[ordered]@{ kind = 'server'; path = 'AethelnOnlineServer.sh'; sizeBytes = (Get-Item -LiteralPath $HostServerLauncher).Length; sha256 = (Get-FileHash -LiteralPath $HostServerLauncher -Algorithm SHA256).Hash.ToLowerInvariant() }
+			)
+		}
+	}
+	$BuildProvenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $BuildProvenancePath -Encoding UTF8
 
 	$LogRoot = Join-Path $FixtureRoot 'success'
 	Invoke-Smoke -Scenario success -LogRoot $LogRoot -ServerExecutable '/package/custom/AethelnOnlineServer.sh'
@@ -324,7 +390,172 @@ public static class CLASS {
 	Assert-True (-not (Test-Path -LiteralPath (Join-Path $LogRoot 'client-1.log'))) 'Client launch should not depend on Unreal accepting a Windows -log path.'
 	Assert-True (@($Evidence | Where-Object { $_.event -eq 'server_listening' -and $_.source -like '*server.stdout.log' }).Count -eq 1) 'Server readiness evidence should come from redirected WSL stdout.'
 	Assert-True (@($Evidence | Where-Object { $_.event -eq 'process_started' -and $_.process -eq 'server' -and $_.source -eq $PowerShellExecutable }).Count -eq 1) 'PATH launcher resolution should produce one concrete executable string.'
+	Assert-True (-not (Test-Path -LiteralPath (Join-Path $LogRoot 'startup-capture.json'))) 'The default packaged smoke must not create an Issue #45 startup capture.'
 	Write-Output 'PASS: correlated packaged connection evidence is emitted as JSONL'
+
+	$CaptureLogRoot = Join-Path $FixtureRoot 'capture-success'
+	Invoke-Smoke -Scenario success -LogRoot $CaptureLogRoot -ClientExecutable $CaptureClientExecutable -CaptureStartup -BuildProvenancePath $BuildProvenancePath -ServerProvenanceExecutable $HostServerLauncher
+	$CapturePath = Join-Path $CaptureLogRoot 'startup-capture.json'
+	Assert-True (Test-Path -LiteralPath $CapturePath -PathType Leaf) 'An opted-in successful smoke must produce a startup capture.'
+	$Capture = Get-Content -LiteralPath $CapturePath -Raw | ConvertFrom-Json
+	Assert-True ($Capture.schema -ceq 'aetheln.packaged-smoke.startup-capture/v1' -and $Capture.classification -ceq 'measured' -and $Capture.method -ceq 'windows_host_launch_to_stdout_map_observation_upper_bound' -and $Capture.sourceRevision -ceq $SourceRevision) 'Capture must label the observed upper-bound method and bind the exact source revision.'
+	Assert-True ($Capture.provenance.sha256 -ceq (Get-FileHash -LiteralPath $BuildProvenancePath -Algorithm SHA256).Hash.ToLowerInvariant() -and $Capture.package.client.sha256 -ceq (Get-FileHash -LiteralPath $CaptureClientExecutable -Algorithm SHA256).Hash.ToLowerInvariant() -and $Capture.package.client.relativePath -ceq 'AethelnOnline/Binaries/Win64/AethelnOnlineClient.exe' -and $Capture.package.server.sha256 -ceq (Get-FileHash -LiteralPath $HostServerLauncher -Algorithm SHA256).Hash.ToLowerInvariant()) 'Capture must bind provenance, the inner game executable, and the packaged server launcher bytes.'
+	Assert-True (@($Capture.clients).Count -eq 2 -and $Capture.clients[0].id -ceq 'client-1' -and $Capture.clients[1].id -ceq 'client-2') 'Capture must include the exact two launched Windows clients.'
+	Assert-True (@($Capture.clients | Where-Object { $_.launchToMapObservationMilliseconds -ge 0 -and $_.workingSetBytes -gt 0 -and $_.peakWorkingSetBytes -gt 0 -and $_.privateMemoryBytes -gt 0 -and $_.pid -gt 0 }).Count -eq 2) 'Both live clients must have nonnegative launch-to-map observation upper bounds and measured Windows process memory.'
+	Assert-True ($Capture.serverMetrics.status -ceq 'unknown' -and $Capture.serverMetrics.reason -ceq 'linux_server_not_observed_by_windows_process_snapshot' -and $Capture.combatMetrics.status -ceq 'unknown') 'WSL launcher observations must never be promoted to Linux server or representative combat measurements.'
+	Assert-True ($Capture.scenario.topology.status -ceq 'unknown' -and $Capture.serverLauncher.path -ceq $PowerShellExecutable -and $Capture.serverExecution.status -ceq 'unknown' -and $Capture.package.server.identityBasis -ceq 'declared_provenance_inventory') 'A configurable fake launcher must be recorded without claiming verified WSL topology or Linux server execution.'
+	Assert-True ($Capture.smokeEvidence.cleanup -ceq 'complete' -and $Capture.smokeEvidence.sha256 -ceq (Get-FileHash -LiteralPath (Join-Path $CaptureLogRoot 'smoke-evidence.jsonl') -Algorithm SHA256).Hash.ToLowerInvariant()) 'Successful capture must bind the final smoke evidence only after cleanup completes.'
+	Write-Output 'PASS: opt-in startup capture binds provenance and measures both live Windows clients without inferring unsupported metrics'
+	foreach ($CaptureHelperName in @('Assert-NoReparsePath', 'Get-PackagedExecutableBinding', 'Get-StartupProvenance', 'Assert-StableStartupProvenance', 'Initialize-CaptureDirectoryPin', 'Get-CaptureDirectoryPins', 'Assert-CaptureDirectoryPins', 'Write-StartupCapture')) {
+		$CaptureHelper = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq $CaptureHelperName }, $true))
+		Assert-True ($CaptureHelper.Count -eq 1) "The $CaptureHelperName helper must be uniquely testable."
+		. ([scriptblock]::Create($CaptureHelper[0].Extent.Text))
+	}
+	$CaptureBytes = [System.IO.File]::ReadAllBytes($CapturePath)
+	$OverwriteFailure = $null
+	try { Write-StartupCapture -Path $CapturePath -Document @{ schema = 'overwrite-attempt' } } catch { $OverwriteFailure = $_.Exception.Message }
+	Assert-True ($OverwriteFailure -and [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($CapturePath)) -ceq [Convert]::ToBase64String($CaptureBytes)) 'Create-only capture publication must preserve an existing record byte-for-byte.'
+	Write-Output 'PASS: startup capture publication refuses overwrite'
+	$InterruptedCapturePath = Join-Path $CaptureLogRoot 'interrupted-startup-capture.json'
+	$PublishFailure = $null
+	try { Write-StartupCapture -Path $InterruptedCapturePath -Document @{ schema = 'synthetic-partial-write' } -AfterTempWrite { throw 'synthetic interrupted publication' } } catch { $PublishFailure = $_.Exception.Message }
+	Assert-True ($PublishFailure -match 'synthetic interrupted publication' -and -not (Test-Path -LiteralPath $InterruptedCapturePath) -and -not @(Get-ChildItem -LiteralPath $CaptureLogRoot -Filter '.startup-capture-*.tmp' -Force).Count) 'An interrupted write must leave neither final-named evidence nor a temporary file.'
+	Write-Output 'PASS: interrupted startup publication leaves no final or temporary evidence'
+	$PreSwapAncestor = Join-Path $FixtureRoot 'pre-swap-ancestor'
+	$PreSwapOutput = Join-Path $PreSwapAncestor 'output'
+	$PreParkedAncestor = Join-Path $FixtureRoot 'pre-parked-ancestor'
+	$PreVictimAncestor = Join-Path $FixtureRoot 'pre-victim-ancestor'
+	$PreVictimOutput = Join-Path $PreVictimAncestor 'output'
+	New-Item -ItemType Directory -Path $PreSwapOutput | Out-Null
+	New-Item -ItemType Directory -Path $PreVictimOutput | Out-Null
+	$PreVictimFinal = Join-Path $PreVictimOutput 'startup-capture.json'
+	Set-Content -LiteralPath $PreVictimFinal -Value 'pre-open unrelated victim final bytes' -Encoding UTF8
+	$PreVictimBefore = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($PreVictimFinal))
+	$PreSwapState = @{ MoveSucceeded = $false; MoveDenied = $false }
+	$PreSwapFailure = $null
+	try {
+		Write-StartupCapture -Path (Join-Path $PreSwapOutput 'startup-capture.json') -Document @{ schema = 'synthetic-pre-open-swap' } -AfterDirectoryPin {
+			try { Move-Item -LiteralPath $PreSwapAncestor -Destination $PreParkedAncestor -ErrorAction Stop; $PreSwapState.MoveSucceeded = $true } catch { $PreSwapState.MoveDenied = $true; throw 'synthetic pre-open ancestor move denied' }
+			New-Item -ItemType Junction -Path $PreSwapAncestor -Target $PreVictimAncestor -ErrorAction Stop | Out-Null
+		}
+	} catch { $PreSwapFailure = $_.Exception.Message }
+	$PreActualOutput = if ($PreSwapState.MoveSucceeded) { Join-Path $PreParkedAncestor 'output' } else { $PreSwapOutput }
+	Assert-True (($PreSwapState.MoveDenied -or $PreSwapState.MoveSucceeded) -and (($PreSwapState.MoveDenied -and $PreSwapFailure -match 'synthetic pre-open ancestor move denied') -or ($PreSwapState.MoveSucceeded -and $PreSwapFailure -match 'capture_output_ancestor_changed')) -and -not @(Get-ChildItem -LiteralPath $PreVictimOutput -Filter '.startup-capture-*.tmp' -Force).Count -and [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($PreVictimFinal)) -ceq $PreVictimBefore -and -not @(Get-ChildItem -LiteralPath $PreActualOutput -Force).Count) 'A pre-open ancestor swap must be denied or fail before writing bytes, preserving victim files and discarding only its own empty temporary file.'
+	$FixturePrefix = [System.IO.Path]::GetFullPath($FixtureRoot).TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+	Assert-True ([System.IO.Path]::GetFullPath($PreSwapAncestor).StartsWith($FixturePrefix, [System.StringComparison]::OrdinalIgnoreCase) -and [System.IO.Path]::GetFullPath($PreParkedAncestor).StartsWith($FixturePrefix, [System.StringComparison]::OrdinalIgnoreCase)) 'The pre-open swap fixture paths must stay within the isolated root.'
+	if ($PreSwapState.MoveSucceeded) {
+		$PreSwapJunction = Get-Item -LiteralPath $PreSwapAncestor -Force
+		Assert-True (($PreSwapJunction.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and $PreSwapJunction.LinkType -ceq 'Junction' -and [System.IO.Path]::GetFullPath([string] $PreSwapJunction.Target) -ceq [System.IO.Path]::GetFullPath($PreVictimAncestor)) 'Only the exact pre-open fixture junction may be removed.'
+		[System.IO.Directory]::Delete($PreSwapAncestor)
+		Move-Item -LiteralPath $PreParkedAncestor -Destination $PreSwapAncestor -ErrorAction Stop
+	}
+	Write-Output 'PASS: pre-open ancestor swap is denied or fails closed, with victim bytes preserved'
+	$MountOutput = Join-Path $FixtureRoot 'mount-output'
+	$MountVictim = Join-Path $FixtureRoot 'mount-victim'
+	New-Item -ItemType Directory -Path $MountOutput | Out-Null
+	New-Item -ItemType Directory -Path $MountVictim | Out-Null
+	$MountVictimFinal = Join-Path $MountVictim 'startup-capture.json'
+	Set-Content -LiteralPath $MountVictimFinal -Value 'mount-point victim final bytes' -Encoding UTF8
+	$MountVictimBefore = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($MountVictimFinal))
+	$MountState = @{ Swapped = $false }
+	$MountFailure = $null
+	try {
+		Write-StartupCapture -Path (Join-Path $MountOutput 'startup-capture.json') -Document @{ schema = 'synthetic-in-place-mount-swap' } -AfterDirectoryPin {
+			Set-FixtureMountPoint -Directory $MountOutput -Target $MountVictim
+			$MountState.Swapped = $true
+		}
+	} catch { $MountFailure = $_.Exception.Message }
+	Assert-True ($MountState.Swapped -and $MountFailure -match 'capture_(output_ancestor_changed|temp_create_failed)' -and [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($MountVictimFinal)) -ceq $MountVictimBefore -and @((Get-ChildItem -LiteralPath $MountVictim -Force)).Count -eq 1) 'An in-place output mount-point swap must fail closed without creating or deleting any victim entry.'
+	$MountItem = Get-Item -LiteralPath $MountOutput -Force
+	Assert-True ([System.IO.Path]::GetFullPath($MountOutput).StartsWith($FixturePrefix, [System.StringComparison]::OrdinalIgnoreCase) -and ($MountItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) 'Only the exact fixture-owned mount point may be removed.'
+	[System.IO.Directory]::Delete($MountOutput)
+	Write-Output 'PASS: in-place mount-point swap leaves victim directory byte-for-byte unchanged'
+	$SwapAncestor = Join-Path $FixtureRoot 'swap-ancestor'
+	$SwapOutput = Join-Path $SwapAncestor 'output'
+	$ParkedAncestor = Join-Path $FixtureRoot 'parked-swap-ancestor'
+	New-Item -ItemType Directory -Path $SwapOutput | Out-Null
+	$VictimAncestor = Join-Path $FixtureRoot 'victim-ancestor'
+	$VictimOutput = Join-Path $VictimAncestor 'output'
+	New-Item -ItemType Directory -Path $VictimOutput | Out-Null
+	$VictimFinal = Join-Path $VictimOutput 'startup-capture.json'
+	Set-Content -LiteralPath $VictimFinal -Value 'unrelated victim final bytes' -Encoding UTF8
+	$VictimFinalBefore = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($VictimFinal))
+	$SwapState = @{ MoveSucceeded = $false; MoveDenied = $false; VictimTemp = ''; VictimTempBefore = '' }
+	$SwapFailure = $null
+	try {
+		Write-StartupCapture -Path (Join-Path $SwapOutput 'startup-capture.json') -Document @{ schema = 'synthetic-ancestor-swap' } -AfterTempWrite {
+			$TempName = (Get-ChildItem -LiteralPath $SwapOutput -Filter '.startup-capture-*.tmp' -Force | Select-Object -First 1).Name
+			$VictimTemp = Join-Path $VictimOutput $TempName
+			Set-Content -LiteralPath $VictimTemp -Value 'unrelated victim temporary bytes' -Encoding UTF8
+			$SwapState.VictimTemp = $VictimTemp
+			$SwapState.VictimTempBefore = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($VictimTemp))
+			try { Move-Item -LiteralPath $SwapAncestor -Destination $ParkedAncestor -ErrorAction Stop; $SwapState.MoveSucceeded = $true } catch { $SwapState.MoveDenied = $true; throw 'synthetic ancestor move denied' }
+			# A replaced junction would route both File.Move and temp cleanup to
+			# unrelated same-named victim files if ancestor identity were unpinned.
+			New-Item -ItemType Junction -Path $SwapAncestor -Target $VictimAncestor -ErrorAction Stop | Out-Null
+		}
+	} catch { $SwapFailure = $_.Exception.Message }
+	$ActualOutput = if ($SwapState.MoveSucceeded) { Join-Path $ParkedAncestor 'output' } else { $SwapOutput }
+	Assert-True (($SwapState.MoveDenied -or $SwapState.MoveSucceeded) -and (($SwapState.MoveDenied -and $SwapFailure -match 'synthetic ancestor move denied') -or ($SwapState.MoveSucceeded -and $SwapFailure -match 'capture_output_ancestor_changed')) -and -not (Test-Path -LiteralPath (Join-Path $ActualOutput 'startup-capture.json')) -and -not @(Get-ChildItem -LiteralPath $ActualOutput -Filter '.startup-capture-*.tmp' -Force).Count -and [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($VictimFinal)) -ceq $VictimFinalBefore -and [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($SwapState.VictimTemp)) -ceq $SwapState.VictimTempBefore) 'After temp open, ancestor swap must either be denied or fail closed with handle-only cleanup, leaving victim files unchanged.'
+	Assert-True ([System.IO.Path]::GetFullPath($SwapAncestor).StartsWith($FixturePrefix, [System.StringComparison]::OrdinalIgnoreCase) -and [System.IO.Path]::GetFullPath($ParkedAncestor).StartsWith($FixturePrefix, [System.StringComparison]::OrdinalIgnoreCase)) 'The post-publication rename probe must stay within its isolated fixture root.'
+	if ($SwapState.MoveSucceeded) {
+		$SwapJunction = Get-Item -LiteralPath $SwapAncestor -Force
+		Assert-True (($SwapJunction.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and $SwapJunction.LinkType -ceq 'Junction' -and [System.IO.Path]::GetFullPath([string] $SwapJunction.Target) -ceq [System.IO.Path]::GetFullPath($VictimAncestor)) 'Only the exact fixture-owned junction may be removed.'
+		[System.IO.Directory]::Delete($SwapAncestor)
+		Move-Item -LiteralPath $ParkedAncestor -Destination $SwapAncestor -ErrorAction Stop
+	}
+	Write-Output 'PASS: open-temp ancestor swap is denied or fails closed, with victim bytes preserved'
+	$MissingProvenanceRoot = Join-Path $FixtureRoot 'capture-missing-provenance'
+	$CaptureFailure = $null
+	try { Invoke-Smoke -Scenario success -LogRoot $MissingProvenanceRoot -CaptureStartup } catch { $CaptureFailure = $_.Exception.Message }
+	Assert-True ($CaptureFailure -match 'CaptureStartup requires BuildProvenancePath' -and -not (Test-Path -LiteralPath $MissingProvenanceRoot)) 'Opt-in without both identity inputs must fail before launch or log-root creation.'
+	$RootBootstrapProvenancePath = Join-Path $FixtureRoot 'root-bootstrap-provenance.json'
+	$RootBootstrapProvenance = $BuildProvenance | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+	$RootBootstrapProvenance.artifacts.inventory[0].path = 'ClientLauncher.exe'
+	$RootBootstrapProvenance.artifacts.inventory[0].sizeBytes = (Get-Item -LiteralPath $PackagedLauncher).Length
+	$RootBootstrapProvenance.artifacts.inventory[0].sha256 = (Get-FileHash -LiteralPath $PackagedLauncher -Algorithm SHA256).Hash.ToLowerInvariant()
+	$RootBootstrapProvenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $RootBootstrapProvenancePath -Encoding UTF8
+	$RootBootstrapLogRoot = Join-Path $FixtureRoot 'capture-root-bootstrap'
+	$CaptureFailure = $null
+	try { Invoke-Smoke -Scenario success -LogRoot $RootBootstrapLogRoot -ClientExecutable $PackagedLauncher -CaptureStartup -BuildProvenancePath $RootBootstrapProvenancePath -ServerProvenanceExecutable $HostServerLauncher } catch { $CaptureFailure = $_.Exception.Message }
+	Assert-True ($CaptureFailure -match 'inner packaged Win64 game executable' -and -not (Test-Path -LiteralPath $RootBootstrapLogRoot)) 'An inventory-valid root bootstrap must be rejected before smoke launch rather than measured as a client game process.'
+	Write-Output 'PASS: capture requires provenance-bound inner packaged game executable, not root bootstrap'
+	$OriginalProvenanceBytes = [System.IO.File]::ReadAllBytes($BuildProvenancePath)
+	$OriginalProvenanceHash = (Get-FileHash -LiteralPath $BuildProvenancePath -Algorithm SHA256).Hash.ToLowerInvariant()
+	$ChangedProvenance = $BuildProvenance | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+	$ChangedProvenance.source.revision = 'b' * 40
+	$ChangedProvenance.host.buildIdentity = "AethelnOnline@$($ChangedProvenance.source.revision)/Development"
+	try {
+		$ReadBinding = Get-StartupProvenance -Path $BuildProvenancePath -ClientPath $CaptureClientExecutable -ServerPath $HostServerLauncher -AfterProvenanceRead {
+			$ChangedProvenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $BuildProvenancePath -Encoding UTF8
+		}
+		$StableFailure = $null
+		try { Assert-StableStartupProvenance -Binding $ReadBinding } catch { $StableFailure = $_.Exception.Message }
+		Assert-True ($ReadBinding.sha256 -ceq $OriginalProvenanceHash -and $ReadBinding.sourceRevision -ceq $SourceRevision -and $StableFailure -match 'provenance changed during smoke') 'Provenance source fields and SHA must bind the same read bytes, then detect a path swap.'
+	} finally { [System.IO.File]::WriteAllBytes($BuildProvenancePath, $OriginalProvenanceBytes) }
+	Write-Output 'PASS: provenance parser and SHA bind the same BOM-bearing bytes across a deterministic path swap'
+
+	$BadProvenancePath = Join-Path $FixtureRoot 'bad-build-provenance.json'
+	$BadProvenance = $BuildProvenance | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+	$BadProvenance.artifacts.inventory[0].sha256 = '0' * 64
+	$BadProvenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $BadProvenancePath -Encoding UTF8
+	$BadLogRoot = Join-Path $FixtureRoot 'capture-bad-provenance'
+	$CaptureFailure = $null
+	try { Invoke-Smoke -Scenario success -LogRoot $BadLogRoot -ClientExecutable $CaptureClientExecutable -CaptureStartup -BuildProvenancePath $BadProvenancePath -ServerProvenanceExecutable $HostServerLauncher } catch { $CaptureFailure = $_.Exception.Message }
+	Assert-True ($CaptureFailure -match 'provenance.*client.*identity' -and -not (Test-Path -LiteralPath (Join-Path $BadLogRoot 'startup-capture.json'))) "Tampered client inventory must reject capture before launch. Actual: $CaptureFailure"
+	$DuplicateProvenancePath = Join-Path $FixtureRoot 'duplicate-build-provenance.json'
+	$DuplicateProvenance = $BuildProvenance | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+	$DuplicateProvenance.artifacts.inventory = @($DuplicateProvenance.artifacts.inventory) + @($DuplicateProvenance.artifacts.inventory[0])
+	$DuplicateProvenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $DuplicateProvenancePath -Encoding UTF8
+	$DuplicateLogRoot = Join-Path $FixtureRoot 'capture-duplicate-provenance'
+	$CaptureFailure = $null
+	try { Invoke-Smoke -Scenario success -LogRoot $DuplicateLogRoot -ClientExecutable $CaptureClientExecutable -CaptureStartup -BuildProvenancePath $DuplicateProvenancePath -ServerProvenanceExecutable $HostServerLauncher } catch { $CaptureFailure = $_.Exception.Message }
+	Assert-True ($CaptureFailure -match 'provenance.*client.*not unique' -and -not (Test-Path -LiteralPath $DuplicateLogRoot)) 'Duplicate executable inventory entries must fail before launch.'
+	$WrongServerRoot = Join-Path $FixtureRoot 'capture-wrong-server-mapping'
+	$CaptureFailure = $null
+	try { Invoke-Smoke -Scenario success -LogRoot $WrongServerRoot -ClientExecutable $CaptureClientExecutable -CaptureStartup -BuildProvenancePath $BuildProvenancePath -ServerProvenanceExecutable $HostServerLauncher -ServerExecutable '/mnt/z/other/AethelnOnlineServer.sh' } catch { $CaptureFailure = $_.Exception.Message }
+	Assert-True ($CaptureFailure -match 'does not map.*default WSL drive mount' -and -not (Test-Path -LiteralPath $WrongServerRoot)) 'The launched Linux path must match the exact host-visible provenance-bound server file before launch.'
+	Write-Output 'PASS: invalid packaged provenance fails before startup capture'
 
 	$ChildLogRoot = Join-Path $FixtureRoot 'child-process'
 	$DelayedMarker = Join-Path $PackageRoot 'success-delayed-child.pid'
