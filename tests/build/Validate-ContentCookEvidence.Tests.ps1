@@ -457,6 +457,35 @@ try {
 	Assert-True ($UnavailableEvidence.inputs.content_validation_report.sha256 -ceq (Get-FileHash -LiteralPath $UnavailableReport -Algorithm SHA256).Hash.ToLowerInvariant()) 'Unavailable evidence must retain the exact source report hash.'
 	Write-Output 'PASS: evidence_unavailable aggregates before passed and retains non-promotion through cook comparison'
 
+	# The live scanner cannot bind navigation observations to governed navigation
+	# packages or exact cook evidence, so navigation audience stays unavailable.
+	$NavigationReport = Join-Path $FixtureRoot 'navigation-unavailable-content-report.json'
+	$NavigationOutput = Join-Path $FixtureRoot 'navigation-unavailable-cook-evidence.json'
+	$NavigationAssets = @((Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json).assets)
+	$NavigationFamily = @($NavigationAssets[0].family_results | Where-Object { $_.policy_id -ceq 'navigation' })[0]
+	$NavigationCheck = @($NavigationFamily.check_results | Where-Object { $_.check_id -ceq 'navigation_data_audience' })[0]
+	Assert-True ($null -ne $NavigationCheck -and $NavigationCheck.applicability -ceq 'applicable') 'The navigation audience fixture must start from an applicable check.'
+	$NavigationCheck.deterministic_status = 'evidence_unavailable'
+	$NavigationCheck.promotion_status = 'non_promotion'
+	$NavigationFamily.deterministic_status = 'evidence_unavailable'
+	$NavigationFamily.promotion_status = 'non_promotion'
+	Write-PolicyOutcomeReport $NavigationReport $NavigationAssets $PolicyPath
+	$ActiveReportPath = $NavigationReport
+	Write-InventoryManifest $Client 2
+	Write-InventoryManifest $Server 2
+	Invoke-TestValidator $NavigationReport $Client $Server $NavigationOutput
+	$NavigationEvidence = Get-Content -LiteralPath $NavigationOutput -Raw | ConvertFrom-Json
+	Assert-True ($NavigationEvidence.result -ceq 'non_promotion' -and $NavigationEvidence.inputs.content_validation_report.result -ceq 'non_promotion') 'Unavailable navigation audience evidence must keep cook evidence non-promotion.'
+	$ForgedNavigation = Get-Content -LiteralPath $NavigationReport -Raw | ConvertFrom-Json
+	@(@($ForgedNavigation.assets[0].family_results | Where-Object { $_.policy_id -ceq 'navigation' })[0].check_results | Where-Object { $_.check_id -ceq 'navigation_data_audience' })[0].promotion_status = 'eligible'
+	$ForgedNavigationReport = Join-Path $FixtureRoot 'navigation-unavailable-eligible-report.json'
+	$ForgedNavigation | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $ForgedNavigationReport -Encoding UTF8
+	$ActiveReportPath = $ForgedNavigationReport
+	Write-InventoryManifest $Client 2
+	Write-InventoryManifest $Server 2
+	Invoke-ExpectedFailure @{ ContentValidationReportPath=$ForgedNavigationReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'navigation\.navigation_data_audience.*unavailable evidence must be non_promotion'
+	Write-Output 'PASS: unavailable navigation audience evidence stays non-promotion and cannot be forged eligible'
+
 	$UnavailableCases = @(
 		@{ Name='unavailable-eligible-check'; Pattern='check.*unavailable evidence must be non_promotion'; Mutate={ param($Value) $Value.assets[0].family_results[0].check_results[0].promotion_status = 'eligible' } }
 		@{ Name='unavailable-hidden-as-passed-eligible'; Pattern='check.*unavailable evidence must be non_promotion'; Mutate={ param($Value) $Family = $Value.assets[0].family_results[0]; $Family.check_results[0].promotion_status = 'eligible'; $Family.deterministic_status = 'passed'; $Family.promotion_status = 'eligible'; $Value.findings = @(); $Value.counts.findings = 0; $Value.counts.non_promotion = 0; $Value.result = 'passed' } }

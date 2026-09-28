@@ -209,6 +209,10 @@ identity, references, runtime/editor separation, Data Layer declarations, PCG
 authority and version evidence, navigation audience, and cook reachability; it
 does not choose per-map World Partition, HLOD, PCG, navigation, or gameplay
 design. World Partition remains per-map streaming and never server distribution.
+The live scanner records navigation audience as `evidence_unavailable`, so the
+`navigation` family stays `non_promotion` until a producer binds governed
+navigation packages to exact client/server cook evidence and the pinned-Editor
+tests have run. Authored C++ fact tests do not establish that evidence.
 
 No numeric limit is invented. A quantitative threshold is accepted evidence or
 literal TBD with an owner and revisit trigger. TBD produces a non-promotion
