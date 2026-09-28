@@ -144,6 +144,26 @@ function Get-JsonProperty([object] $Value, [string] $Name, [string] $Context) {
 	return $Value.$Name
 }
 
+# A self-consistent manifest proves nothing about which cook produced the
+# registry, so the bytes must match the receipt the packaging producer recorded
+# right after that exact target's cook.
+function Assert-ProducerRegistryReceipt([string] $Kind, [object] $RegistryIdentity) {
+	$Receipts = Get-JsonProperty $Build.build 'cookedRegistries' 'Build provenance build'
+	$Receipt = Get-JsonProperty $Receipts $Kind 'Build provenance build.cookedRegistries'
+	$Context = "$Kind producer registry receipt"
+	$Expected = if ($Kind -ceq 'client') { [ordered]@{ target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient' } } else { [ordered]@{ target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer' } }
+	foreach ($Field in $Expected.Keys) {
+		if ((Get-JsonProperty $Receipt $Field $Context) -cne $Expected[$Field]) { throw "$Context $Field '$($Receipt.$Field)' does not match '$($Expected[$Field])'." }
+	}
+	if ((Get-JsonProperty $Receipt 'relativePath' $Context) -cne "Saved/Cooked/$($Expected.cookPlatform)/AethelnOnline/AssetRegistry.bin") { throw "$Context relativePath '$($Receipt.relativePath)' is not the canonical $($Expected.cookPlatform) registry." }
+	$ReceiptRevision = Get-JsonProperty $Receipt 'sourceRevision' $Context
+	if ($ReceiptRevision -isnot [string] -or -not $ReceiptRevision.Equals([string]$Build.source.revision, [StringComparison]::OrdinalIgnoreCase)) { throw "$Context sourceRevision '$ReceiptRevision' does not match build revision '$($Build.source.revision)'." }
+	Assert-LowerSha256 (Get-JsonProperty $Receipt 'sha256' $Context) "$Context sha256"
+	if ([long](Get-JsonProperty $Receipt 'sizeBytes' $Context) -ne $RegistryIdentity.SizeBytes -or $Receipt.sha256 -cne $RegistryIdentity.Sha256) {
+		throw "$Kind cooked registry bytes do not match the producer receipt recorded at cook time; capture fails closed."
+	}
+}
+
 function Assert-LowerSha256([object] $Value, [string] $Context) {
 	if ($Value -isnot [string] -or $Value -cnotmatch '^[0-9a-f]{64}$') { throw "$Context must be a lowercase SHA-256 digest." }
 }
@@ -337,6 +357,8 @@ if (-not $AllowTestCommand) { Assert-LiveCaptureIdentity }
 foreach ($Digest in @([string]$Build.tools.compiler.sha256, [string]$Build.tools.linuxCrossToolchain.compilerSha256)) { Assert-LowerSha256 $Digest 'Build toolchain digest' }
 $ClientRegistryIdentity = Read-StableFileSnapshot 'Client cooked registry source' $ResolvedClientRegistry
 $ServerRegistryIdentity = Read-StableFileSnapshot 'Server cooked registry source' $ResolvedServerRegistry
+Assert-ProducerRegistryReceipt 'client' $ClientRegistryIdentity
+Assert-ProducerRegistryReceipt 'server' $ServerRegistryIdentity
 
 New-Item -ItemType Directory -Path $ResolvedOutputRoot -Force | Out-Null
 $ClientDestination = Join-Path $ResolvedOutputRoot 'client'

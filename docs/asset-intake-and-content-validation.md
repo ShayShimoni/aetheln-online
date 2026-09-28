@@ -296,6 +296,17 @@ project, policy, intake, report, engine build identity, and executing dump
 command are checked before and after capture; any same-path mutation or drift
 fails the run.
 
+The packaging producer (`Build-PackagedArtifacts.ps1`) hashes each canonical
+`AssetRegistry.bin` immediately after that target's own cook and records the
+receipt (relative path, byte size, SHA-256, target, platform, cook platform, and
+source revision) in its stage record and in `build.cookedRegistries` of
+`build-provenance.json`. Capture refuses registry bytes that differ from the
+matching receipt, and the comparator refuses a manifest whose registry size or
+digest differs from it, so a stale, substituted, cross-target, or cross-revision
+registry cannot be attested by a self-consistent manifest. If a registry is
+missing or was rewritten after its receipt (for example by a later cook in the
+same workspace), live capture fails closed rather than accepting other bytes.
+
 Compare those immutable captures with:
 
 ```powershell
@@ -315,7 +326,9 @@ promotion-capable pass. A report containing a deterministic error remains blocke
 The comparator creates private immutable snapshots of the report, policy,
 intake registry, build provenance, staged cooked registries, manifests, and
 pages before parsing. It rejects an output path that could overwrite an input,
-rechecks the complete source file set before and after validation, and emits
+including one that traverses a junction or other reparse point, holds
+deny-write locks on every input while it publishes, refuses to publish over a
+hardlink alias of an input, rechecks the complete source file set before and after validation, and emits
 version-3 evidence carrying both registry attestations. Neither capture nor
 comparison builds, cooks, packages, downloads content, or accepts terms.
 Fixture success is not representative cook evidence.

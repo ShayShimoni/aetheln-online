@@ -421,6 +421,10 @@ function Read-InventoryManifest([object] $Inventory, [string] $TargetName, [hash
 	$StagedRegistry = Read-StableFileSnapshot "$TargetName staged cooked registry" $StagedRegistryPath
 	Assert-Equal ([long]$Manifest.cooked_registry.size_bytes) ([long]$StagedRegistry.SizeBytes) "$TargetName manifest cooked_registry.size_bytes"
 	Assert-Equal $Manifest.cooked_registry.sha256 $StagedRegistry.Sha256 "$TargetName manifest cooked_registry.sha256"
+	$ProducerReceipt = $ProducerRegistryReceipts[$TargetName.ToLowerInvariant()]
+	if ([long]$Manifest.cooked_registry.size_bytes -ne [long]$ProducerReceipt.sizeBytes -or [string]$Manifest.cooked_registry.sha256 -cne [string]$ProducerReceipt.sha256) {
+		throw "$TargetName manifest cooked_registry bytes do not match the producer registry receipt recorded at cook time; validation fails closed."
+	}
 	$Started = ConvertFrom-RequiredUtcTimestamp $Manifest.started_utc "$TargetName manifest started_utc"
 	$Finished = ConvertFrom-RequiredUtcTimestamp $Manifest.finished_utc "$TargetName manifest finished_utc"
 	if ($Finished -lt $Started) { throw "$TargetName manifest finished_utc precedes started_utc." }
@@ -626,6 +630,25 @@ Assert-Equal $Report.execution_provenance.engine_tag '5.8.1-release' 'Content va
 Assert-Equal $Report.engine_identity ("$($Report.execution_provenance.engine_tag)@$($Report.execution_provenance.engine_revision)") 'Content validation engine_identity'
 if ($Report.execution_provenance.registry_source -cne 'live_asset_registry' -and -not ($AllowTestEvidence -and $Report.execution_provenance.registry_source -ceq 'test_snapshot')) { throw "Content validation registry_source '$($Report.execution_provenance.registry_source)' is not admissible for cook evidence." }
 Assert-Equal $BuildProvenance.source.revision $Report.revision 'Build/content-validation source revision'
+# Producer receipts are recorded right after each target's own cook; manifests
+# must match them so a self-consistent manifest cannot vouch for other bytes.
+if (@($BuildProvenance.build.PSObject.Properties.Name) -cnotcontains 'cookedRegistries') { throw 'Build provenance build.cookedRegistries producer registry receipts are missing; validation fails closed.' }
+Assert-ClosedProperties $BuildProvenance.build.cookedRegistries @('client','server') 'Build provenance build.cookedRegistries' -CaseSensitive
+$ProducerRegistryReceipts = @{}
+foreach ($Kind in @('client','server')) {
+	$Receipt = $BuildProvenance.build.cookedRegistries.$Kind
+	$Context = "$Kind producer registry receipt"
+	Assert-ClosedProperties $Receipt @('relativePath','sizeBytes','sha256','target','platform','cookPlatform','sourceRevision') $Context -CaseSensitive
+	$ExpectedCookPlatform = if ($Kind -ceq 'client') { 'WindowsClient' } else { 'LinuxServer' }
+	Assert-Equal $Receipt.cookPlatform $ExpectedCookPlatform "$Context cookPlatform"
+	Assert-Equal $Receipt.target $(if ($Kind -ceq 'client') { 'AethelnOnlineClient' } else { 'AethelnOnlineServer' }) "$Context target"
+	Assert-Equal $Receipt.platform $(if ($Kind -ceq 'client') { 'Win64' } else { 'Linux' }) "$Context platform"
+	Assert-Equal $Receipt.relativePath "Saved/Cooked/$ExpectedCookPlatform/AethelnOnline/AssetRegistry.bin" "$Context relativePath"
+	if ($Receipt.sourceRevision -isnot [string] -or -not $Receipt.sourceRevision.Equals([string]$BuildProvenance.source.revision, [StringComparison]::OrdinalIgnoreCase)) { throw "$Context sourceRevision '$($Receipt.sourceRevision)' does not match build revision '$($BuildProvenance.source.revision)'." }
+	Assert-LowerSha256 $Receipt.sha256 "$Context sha256"
+	if (-not (Test-JsonInteger $Receipt.sizeBytes) -or $Receipt.sizeBytes -lt 1) { throw "$Context sizeBytes must be a positive JSON integer." }
+	$ProducerRegistryReceipts[$Kind] = $Receipt
+}
 Assert-Equal $BuildProvenance.source.projectSha256 $Report.execution_provenance.project_sha256 'Build/content-validation project_sha256'
 Assert-Equal $BuildProvenance.build.configuration $Report.execution_provenance.configuration 'Build/content-validation configuration'
 Assert-Equal $BuildProvenance.tools.unreal.repositoryRevision $Report.execution_provenance.engine_revision 'Build/content-validation engine_revision'

@@ -97,6 +97,10 @@ Set-Content -LiteralPath (Join-Path $OutDir 'Page_00000.txt') -Value $Lines -Enc
 		build=[ordered]@{
 			configuration='Development'; clientTarget='AethelnOnlineClient'; clientPlatform='Win64'; serverTarget='AethelnOnlineServer'; serverPlatform='Linux'
 			uatInvocations=[ordered]@{ client=[ordered]@{arguments=@('BuildCookRun','-platform=Win64')}; server=[ordered]@{arguments=@('BuildCookRun','-serverplatform=Linux')} }
+			cookedRegistries=[ordered]@{
+				client=[ordered]@{ relativePath='Saved/Cooked/WindowsClient/AethelnOnline/AssetRegistry.bin'; sizeBytes=(Get-Item -LiteralPath $ClientRegistry).Length; sha256=(Get-FileHash -LiteralPath $ClientRegistry -Algorithm SHA256).Hash.ToLowerInvariant(); target='AethelnOnlineClient'; platform='Win64'; cookPlatform='WindowsClient'; sourceRevision=$Revision }
+				server=[ordered]@{ relativePath='Saved/Cooked/LinuxServer/AethelnOnline/AssetRegistry.bin'; sizeBytes=(Get-Item -LiteralPath $ServerRegistry).Length; sha256=(Get-FileHash -LiteralPath $ServerRegistry -Algorithm SHA256).Hash.ToLowerInvariant(); target='AethelnOnlineServer'; platform='Linux'; cookPlatform='LinuxServer'; sourceRevision=$Revision }
+			}
 		}
 		tools=[ordered]@{
 			unreal=[ordered]@{ repositoryRevision=$EngineRevision; buildVersionSha256=$BuildVersionSha }
@@ -232,6 +236,24 @@ Set-Content -LiteralPath (Join-Path $OutDir 'Page_00000.txt') -Value $Lines -Enc
 	$BadPolicyArguments.OutputRoot = Join-Path $FixtureRoot 'bad-policy-capture'
 	Invoke-ExpectedFailure $BadPolicyArguments 'policy identity does not match'
 	Write-Output 'PASS: policy and intake identity mismatch fails closed'
+
+	foreach ($ReceiptCase in @(
+		@{ name='missing'; mutate={ param($Build) $Build.build.PSObject.Properties.Remove('cookedRegistries') }; pattern='cookedRegistries' },
+		@{ name='changed'; mutate={ param($Build) $Build.build.cookedRegistries.client.sha256 = ('f' * 64) }; pattern='client cooked registry bytes do not match the producer receipt' },
+		@{ name='cross-target'; mutate={ param($Build) $Build.build.cookedRegistries.client = $Build.build.cookedRegistries.server }; pattern='client producer registry receipt' },
+		@{ name='cross-revision'; mutate={ param($Build) $Build.build.cookedRegistries.client.sourceRevision = ('9' * 40) }; pattern='client producer registry receipt sourceRevision' }
+	)) {
+		$ReceiptBuildPath = Join-Path $FixtureRoot "receipt-$($ReceiptCase.name)-build-provenance.json"
+		$ReceiptBuild = Get-Content -LiteralPath $BuildProvenance -Raw | ConvertFrom-Json
+		& $ReceiptCase.mutate $ReceiptBuild
+		Write-Json $ReceiptBuildPath $ReceiptBuild
+		$ReceiptArguments = @{} + $Arguments
+		$ReceiptArguments.BuildProvenancePath = $ReceiptBuildPath
+		$ReceiptArguments.OutputRoot = Join-Path $FixtureRoot "receipt-$($ReceiptCase.name)-capture"
+		Invoke-ExpectedFailure $ReceiptArguments ([string]$ReceiptCase.pattern)
+		Assert-True (-not (Test-Path -LiteralPath (Join-Path $ReceiptArguments.OutputRoot 'client/inventory-manifest.json'))) "A $($ReceiptCase.name) producer receipt must not emit a manifest."
+	}
+	Write-Output 'PASS: missing, changed, cross-target, and cross-revision producer registry receipts fail closed'
 
 	Write-Output 'All cooked inventory capture tests passed.'
 }

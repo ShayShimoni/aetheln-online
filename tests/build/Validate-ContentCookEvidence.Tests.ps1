@@ -410,6 +410,19 @@ try {
 		build=[ordered]@{ configuration='Development'; clientTarget='AethelnOnlineClient'; clientPlatform='Win64'; serverTarget='AethelnOnlineServer'; serverPlatform='Linux'; uatInvocations=[ordered]@{client=[ordered]@{arguments=@('BuildCookRun','-platform=Win64')};server=[ordered]@{arguments=@('BuildCookRun','-serverplatform=Linux')}} }
 		tools=[ordered]@{ unreal=[ordered]@{repositoryRevision=$FixtureEngineRevision;buildVersionSha256=$FixtureBuildVersionSha256}; compiler=[ordered]@{version=$FixtureBuildCompilerVersion;sha256=$FixtureCompilerSha256}; windowsSdk=[ordered]@{version=$FixtureResourceCompilerVersion;resourceCompilerSha256=$FixtureResourceCompilerSha256}; linuxCrossToolchain=[ordered]@{identity='v26_clang-20.1.8-rockylinux8';compilerSha256=$FixtureLinuxCompilerSha256} }
 	}
+	# Producer receipts bind the exact bytes Write-Inventory stages for each kind.
+	$ReceiptProbe = Join-Path $FixtureRoot 'receipt-probe.bin'
+	$BuildProvenance.build.cookedRegistries = [ordered]@{}
+	foreach ($Kind in @('client', 'server')) {
+		Set-Content -LiteralPath $ReceiptProbe -Value "$Kind staged registry fixture" -Encoding UTF8
+		$CookPlatform = if ($Kind -ceq 'server') { 'LinuxServer' } else { 'WindowsClient' }
+		$BuildProvenance.build.cookedRegistries[$Kind] = [ordered]@{
+			relativePath="Saved/Cooked/$CookPlatform/AethelnOnline/AssetRegistry.bin"; sizeBytes=(Get-Item -LiteralPath $ReceiptProbe).Length
+			sha256=(Get-FileHash -LiteralPath $ReceiptProbe -Algorithm SHA256).Hash.ToLowerInvariant()
+			target=$(if ($Kind -ceq 'server') { 'AethelnOnlineServer' } else { 'AethelnOnlineClient' }); platform=$(if ($Kind -ceq 'server') { 'Linux' } else { 'Win64' }); cookPlatform=$CookPlatform; sourceRevision=$FixtureRevision
+		}
+	}
+	Remove-Item -LiteralPath $ReceiptProbe -Force
 	[IO.File]::WriteAllText($BuildProvenancePath, (($BuildProvenance | ConvertTo-Json -Depth 12) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
 	Write-Output 'PASS: cook-boundary behavior uses an isolated resolved-budget fixture policy'
 	$Report = Join-Path $FixtureRoot 'content-report.json'
@@ -736,6 +749,27 @@ try {
 	$WrongRevisionBuild | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $WrongRevisionBuildPath -Encoding UTF8
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; BuildProvenancePath=$WrongRevisionBuildPath } 'source revision mismatch'
 	Write-Output 'PASS: dirty or cross-revision build provenance cannot back cook evidence'
+
+	foreach ($ReceiptCase in @(
+		@{ name='missing'; mutate={ param($Build) $Build.build.PSObject.Properties.Remove('cookedRegistries') }; pattern='cookedRegistries' },
+		@{ name='cross-target'; mutate={ param($Build) $Build.build.cookedRegistries.client.cookPlatform = 'LinuxServer' }; pattern='client producer registry receipt cookPlatform' },
+		@{ name='cross-revision'; mutate={ param($Build) $Build.build.cookedRegistries.client.sourceRevision = ('9' * 40) }; pattern='client producer registry receipt sourceRevision' }
+	)) {
+		$ReceiptBuildPath = Join-Path $FixtureRoot "receipt-$($ReceiptCase.name)-build-provenance.json"
+		$ReceiptBuild = Get-Content -LiteralPath $BuildProvenancePath -Raw | ConvertFrom-Json
+		& $ReceiptCase.mutate $ReceiptBuild
+		$ReceiptBuild | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $ReceiptBuildPath -Encoding UTF8
+		Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; BuildProvenancePath=$ReceiptBuildPath } ([string]$ReceiptCase.pattern)
+	}
+	$SubstitutedClient = Join-Path $FixtureRoot 'substituted-registry-client'
+	Copy-Item -LiteralPath $Client -Destination $SubstitutedClient -Recurse
+	Set-Content -LiteralPath (Join-Path $SubstitutedClient 'AssetRegistry.bin') -Value 'stale or substituted client registry' -Encoding UTF8
+	$PreviousActiveReportPath = $ActiveReportPath
+	$ActiveReportPath = $Report
+	try { Write-InventoryManifest $SubstitutedClient ([int](Get-Content -LiteralPath (Join-Path $Client 'inventory-manifest.json') -Raw | ConvertFrom-Json).package_count) 'client' }
+	finally { $ActiveReportPath = $PreviousActiveReportPath }
+	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$SubstitutedClient; ServerCookedInventoryDirectory=$Server } 'Client manifest cooked_registry.*producer registry receipt'
+	Write-Output 'PASS: missing, cross-target, cross-revision, and self-consistent substituted registry receipts fail closed'
 
 	$ProductionModeFailure = $null
 	try {
