@@ -46,6 +46,10 @@ powershell -NoProfile -File scripts/ci/Test-FormattingPolicy.ps1
 powershell -NoProfile -File scripts/ci/Test-MarkdownLinks.ps1
 powershell -NoProfile -File scripts/tests/Test-SourceControlPolicy.ps1
 powershell -NoProfile -File scripts/tests/Test-ObservabilityContract.ps1
+powershell -NoProfile -File tests/content/Invoke-ContentValidation.Tests.ps1
+powershell -NoProfile -File tests/content/Invoke-ContentValidationCommand.Tests.ps1
+powershell -NoProfile -File tests/build/Invoke-CookedInventoryCapture.Tests.ps1
+powershell -NoProfile -File tests/build/Validate-ContentCookEvidence.Tests.ps1
 ```
 
 The portable runner uses at most two concurrent checks from this closed set:
@@ -101,7 +105,11 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `markdown-links` (`scripts/ci/Test-MarkdownLinks.ps1`) | Required | Relative links and heading anchors in tracked Markdown resolve. Deterministic documentation gate. |
 | `source-control-policy` (`scripts/tests/Test-SourceControlPolicy.ps1`) | Required | LFS ownership, generated-artifact exclusions, and sensitive-path (dependency/secret) tracking policy. |
 | `observability-contract` (`scripts/tests/Test-ObservabilityContract.ps1`) | Required | Closed observability vocabulary, bounded/redacted event shape, explicit environment/retention boundaries, and downstream ownership. |
+| `content-validation-policy-tests` (`tests/content/Invoke-ContentValidation.Tests.ps1`) | Required | Closed asset-intake policy, runtime registry, lifecycle, provenance, stable identity, audience, validation-family, and unresolved-`TBD` behavior. |
+| `content-validation-command-tests` (`tests/content/Invoke-ContentValidationCommand.Tests.ps1`) | Required | Portable fixtures for the local content-validation producer, its command contract, provenance binding, and fail-closed input validation. |
 | `build-packaged-artifacts-tests` (`tests/build/Build-PackagedArtifacts.Tests.ps1`) | Required | Focused automation for the packaging entry point. |
+| `cooked-inventory-capture-tests` (`tests/build/Invoke-CookedInventoryCapture.Tests.ps1`) | Required | Portable fixtures proving canonical client/server registry selection, immutable staging, exact build-provenance binding, and pre/post input stability. |
+| `content-cook-evidence-tests` (`tests/build/Validate-ContentCookEvidence.Tests.ps1`) | Required | Portable fixtures proving closed cooked-registry provenance, complete page parsing, `Content/` root agreement, and client/server audience separation. |
 | `packaged-smoke-test-tests` (`tests/build/Invoke-PackagedSmokeTest.Tests.ps1`) | Required | Focused automation for the smoke orchestrator logic. |
 | `server-cook-reference-tests` (`tests/build/Validate-ServerCookReferences.Tests.ps1`) | Required | Focused automation for server cook reference rules. |
 | `target-composition-tests` (`tests/build/Validate-TargetComposition.Tests.ps1`) | Required | Focused automation for client/server module composition rules. |
@@ -136,7 +144,10 @@ Required checks fail the suite and the workflow. Ordinary advisory-check
 failures are reported in the same machine-readable evidence without failing
 the suite; runner infrastructure failures always fail closed. The live
 supported-target compile and packaged-smoke jobs are also required gates when
-their event and trust predicates select them.
+their event and trust predicates select them. The four content-validation
+fixture suites above run through the existing default portable entry point; no
+separate workflow registration is required. Their passing results do not
+substitute for an exact-revision Editor scan or real client/server cook evidence.
 
 The suite deliberately excludes `visuals/tests/`, which is owned by the frozen
 `visual-package-validation.yml` workflow described below and only needs to run

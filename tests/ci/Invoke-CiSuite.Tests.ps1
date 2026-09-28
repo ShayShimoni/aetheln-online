@@ -330,6 +330,21 @@ try {
 	Assert-True -Condition (-not (Test-Path -LiteralPath $LauncherMarker)) -Message 'A declined launch must not start a check process.'
 	Write-Output 'PASS: a declined hidden launch allocates nothing, starts no process, and returns no handle'
 
+	$RequiredContentChecks = [ordered]@{
+		'content-validation-policy-tests' = 'tests/content/Invoke-ContentValidation.Tests.ps1'
+		'content-validation-command-tests' = 'tests/content/Invoke-ContentValidationCommand.Tests.ps1'
+		'cooked-inventory-capture-tests' = 'tests/build/Invoke-CookedInventoryCapture.Tests.ps1'
+		'content-cook-evidence-tests' = 'tests/build/Validate-ContentCookEvidence.Tests.ps1'
+	}
+	foreach ($Entry in $RequiredContentChecks.GetEnumerator()) {
+		$NamePattern = "name\s*=\s*'$([regex]::Escape($Entry.Key))'"
+		$PathPattern = "script\s*=\s*'$([regex]::Escape($Entry.Value))'"
+		$PairPattern = "(?m)^\s*@\{\s*name\s*=\s*'$([regex]::Escape($Entry.Key))';\s*tier\s*=\s*'required';\s*script\s*=\s*'$([regex]::Escape($Entry.Value))'\s*\},?\s*$"
+		Assert-True -Condition ([regex]::Matches($RunnerSource, $NamePattern).Count -eq 1) -Message "Default CI must register '$($Entry.Key)' exactly once."
+		Assert-True -Condition ([regex]::Matches($RunnerSource, $PathPattern).Count -eq 1) -Message "Default CI must register '$($Entry.Value)' exactly once."
+		Assert-True -Condition ([regex]::Matches($RunnerSource, $PairPattern).Count -eq 1) -Message "Default CI must pair '$($Entry.Key)' with '$($Entry.Value)' exactly once as required."
+	}
+	Write-Output 'PASS: all four content-validation suites are required exactly once in default CI'
 	$AnalyzerCommandMatch = [regex]::Match(
 		$RunnerSource,
 		"(?m)^\s*command\s*=\s*'(?<command>.*)'\s*$"

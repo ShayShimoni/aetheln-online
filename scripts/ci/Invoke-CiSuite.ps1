@@ -19,7 +19,11 @@ $DefaultChecks = @(
 	@{ name = 'markdown-links'; tier = 'required'; script = 'scripts/ci/Test-MarkdownLinks.ps1' },
 	@{ name = 'source-control-policy'; tier = 'required'; script = 'scripts/tests/Test-SourceControlPolicy.ps1' },
 	@{ name = 'observability-contract'; tier = 'required'; script = 'scripts/tests/Test-ObservabilityContract.ps1' },
+	@{ name = 'content-validation-policy-tests'; tier = 'required'; script = 'tests/content/Invoke-ContentValidation.Tests.ps1' },
+	@{ name = 'content-validation-command-tests'; tier = 'required'; script = 'tests/content/Invoke-ContentValidationCommand.Tests.ps1' },
 	@{ name = 'build-packaged-artifacts-tests'; tier = 'required'; script = 'tests/build/Build-PackagedArtifacts.Tests.ps1' },
+	@{ name = 'cooked-inventory-capture-tests'; tier = 'required'; script = 'tests/build/Invoke-CookedInventoryCapture.Tests.ps1' },
+	@{ name = 'content-cook-evidence-tests'; tier = 'required'; script = 'tests/build/Validate-ContentCookEvidence.Tests.ps1' },
 	@{ name = 'packaged-smoke-test-tests'; tier = 'required'; script = 'tests/build/Invoke-PackagedSmokeTest.Tests.ps1' },
 	@{ name = 'network-authority-spike-tests'; tier = 'required'; script = 'tests/build/Invoke-NetworkAuthoritySpike.Tests.ps1' },
 	# Keep independently isolated expensive fixtures consecutive so the two slots
