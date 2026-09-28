@@ -147,7 +147,7 @@ function New-FixtureVisualReport {
 function New-FixturePortableReport {
 	param($Context)
 	$Names = @(
-		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
+		'formatting-policy','markdown-links','source-control-policy','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests','cooked-inventory-capture-tests','content-cook-evidence-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
 	)
 	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
 	return [pscustomobject][ordered]@{schemaVersion=1;revision=$Context.source.testedRevision;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';checks=$Checks;summary=[pscustomobject][ordered]@{total=$Checks.Count;passed=$Checks.Count;failed=0;skipped=0;requiredFailed=0}}
@@ -430,6 +430,26 @@ foreach ($PortableTypeCase in @(
 	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'portable' -Report $BadPortable
 	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:portable' }
 	catch { throw "Aggregate portable fixture '$($PortableTypeCase.name)' failed: $($_.Exception.Message)" }
+}
+
+$SuiteCheckNames = @([regex]::Matches([IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts/ci/Invoke-CiSuite.ps1')), "(?m)^\s*@\{\s*name\s*=\s*'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+Assert-True (($SuiteCheckNames -join "`n") -ceq (@($script:AcceptancePortableCheckNames) -join "`n")) 'The aggregate portable check list must equal the default Invoke-CiSuite check order.'
+$ExtraSuiteCheckNames = @($SuiteCheckNames[0..($SuiteCheckNames.Count - 2)]) + @('unregistered-extra-tests', $SuiteCheckNames[-1])
+foreach ($SuiteListCase in @(
+	@{name='exact';names=$SuiteCheckNames;reason=$null},
+	@{name='missing';names=@($SuiteCheckNames | Where-Object { $_ -cne 'content-cook-evidence-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+	@{name='reordered';names=@($SuiteCheckNames | ForEach-Object { if ($_ -ceq 'content-validation-policy-tests') { 'content-validation-command-tests' } elseif ($_ -ceq 'content-validation-command-tests') { 'content-validation-policy-tests' } else { $_ } });reason='receipt_semantic_evidence_invalid:portable'},
+	@{name='extra';names=$ExtraSuiteCheckNames;reason='receipt_semantic_evidence_invalid:portable'}
+)) {
+	$SuitePortable=New-FixturePortableReport $Context
+	$SuitePortable.checks=@($SuiteListCase.names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
+	$SuitePortable.summary.total=$SuitePortable.checks.Count;$SuitePortable.summary.passed=$SuitePortable.checks.Count
+	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'portable' -Report $SuitePortable
+	try {
+		if ($null -eq $SuiteListCase.reason) { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive | Out-Null; $script:Assertions++ }
+		else { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } $SuiteListCase.reason }
+	}
+	catch { throw "Aggregate default-suite list fixture '$($SuiteListCase.name)' failed: $($_.Exception.Message)" }
 }
 
 foreach ($NativeTypeCase in @(

@@ -89,7 +89,7 @@ function New-TestVisualReport {
 
 function New-TestPortableReport {
 	$Names = @(
-		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
+		'formatting-policy','markdown-links','source-control-policy','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests','cooked-inventory-capture-tests','content-cook-evidence-tests',
 		'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
 		'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
@@ -285,6 +285,26 @@ try {
 		$BadPortableBytes = $Utf8.GetBytes(($BadPortable | ConvertTo-Json -Depth 12 -Compress) + "`n")
 		try { Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $BadPortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:portable' }
 		catch { throw "Portable type fixture '$($PortableTypeCase.name)' failed: $($_.Exception.Message)" }
+	}
+
+	$SuiteCheckNames = @([regex]::Matches([IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiSuite.ps1')), "(?m)^\s*@\{\s*name\s*=\s*'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+	Assert-True (($SuiteCheckNames -join "`n") -ceq (@($script:AcceptancePortableCheckNames) -join "`n")) 'The receipt portable check list must equal the default Invoke-CiSuite check order.'
+	$ExtraSuiteCheckNames = @($SuiteCheckNames[0..($SuiteCheckNames.Count - 2)]) + @('unregistered-extra-tests', $SuiteCheckNames[-1])
+	foreach ($SuiteListCase in @(
+		@{name='exact';names=$SuiteCheckNames;reason=$null},
+		@{name='missing';names=@($SuiteCheckNames | Where-Object { $_ -cne 'content-cook-evidence-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='reordered';names=@($SuiteCheckNames | ForEach-Object { if ($_ -ceq 'content-validation-policy-tests') { 'content-validation-command-tests' } elseif ($_ -ceq 'content-validation-command-tests') { 'content-validation-policy-tests' } else { $_ } });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='extra';names=$ExtraSuiteCheckNames;reason='receipt_semantic_evidence_invalid:portable'}
+	)) {
+		$SuitePortable = New-TestPortableReport
+		$SuitePortable.checks = @($SuiteListCase.names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
+		$SuitePortable.summary.total = $SuitePortable.checks.Count; $SuitePortable.summary.passed = $SuitePortable.checks.Count
+		$SuitePortableBytes = $Utf8.GetBytes(($SuitePortable | ConvertTo-Json -Depth 12 -Compress) + "`n")
+		try {
+			if ($null -eq $SuiteListCase.reason) { Assert-AcceptancePortableEvidence -Bytes $SuitePortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) | Out-Null }
+			else { Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $SuitePortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } $SuiteListCase.reason }
+		}
+		catch { throw "Receipt default-suite list fixture '$($SuiteListCase.name)' failed: $($_.Exception.Message)" }
 	}
 
 	foreach ($NativeTypeCase in @(
