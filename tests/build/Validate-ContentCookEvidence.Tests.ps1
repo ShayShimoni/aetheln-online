@@ -1213,6 +1213,30 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 	}
 	Write-Output 'PASS: after-check parent, name, and in-place mount-point swaps never delete or alter an unrelated victim'
 
+	# Create-time window: the held parent is plain, but the pending path resolves
+	# elsewhere (as if the parent were converted between the check and the create).
+	Assert-True ($null -ne ('AethelnOutputPublicationNative' -as [type])) 'Publication helpers must be loaded by the preceding validator runs.'
+	$RaceParent = Join-Path $FixtureRoot 'create-race-parent'
+	$RaceRedirect = Join-Path $FixtureRoot 'create-race-redirect'
+	New-Item -ItemType Directory -Path $RaceParent | Out-Null
+	New-Item -ItemType Junction -Path $RaceRedirect -Target $VictimRoot | Out-Null
+	$RaceHold = [AethelnOutputPublicationNative]::CreateFileW($RaceParent, 0x81, 0x3, [IntPtr]::Zero, 3, 0x02200000, [IntPtr]::Zero)
+	try {
+		Assert-True (-not $RaceHold.IsInvalid) 'The create-race fixture must hold its real parent.'
+		$RaceFailure = $null
+		try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($RaceHold, $RaceRedirect, 'create-race.tmp', $VictimLeaf, [Text.Encoding]::UTF8.GetBytes('attacker-directed evidence')) }
+		catch { $RaceFailure = $_.Exception.InnerException.Message }
+		Assert-True ($null -ne $RaceFailure -and $RaceFailure -match 'evidence handle resolves to .* instead of') "A pending file created outside the held parent must be rejected by handle location; observed '$RaceFailure'."
+		Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($VictimPath)) -ceq [Convert]::ToBase64String($OriginalVictimBytes)) 'A create-time redirect must leave the victim bytes unchanged.'
+		Assert-True (@(Get-ChildItem -LiteralPath $VictimRoot -Force).Count -eq 1) 'A create-time redirect must delete its own pending file from the redirected directory.'
+		Assert-True (@(Get-ChildItem -LiteralPath $RaceParent -Force).Count -eq 0) 'A create-time redirect must not publish into the held parent.'
+	}
+	finally {
+		$RaceHold.Dispose()
+		[IO.Directory]::Delete($RaceRedirect)
+	}
+	Write-Output 'PASS: a pending file created outside the held parent is rejected and removed by handle'
+
 	$DriftMarker = '$StartedUtc = [DateTime]::UtcNow'
 	$DriftCases = @(
 		@{ name='report'; target=$Report; mutation="Add-Content -LiteralPath `$SourceContentValidationReportPath -Value 'same-path report drift' -Encoding UTF8"; pattern='Content validation report changed during validation' },

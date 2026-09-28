@@ -1096,10 +1096,10 @@ try {
 	Assert-AllValidationInputsUnchanged
 	if ($null -ne $ResolvedOutput) {
 		$PublicationTarget = $ResolvedOutput
-		# A write-open of any hardlink alias of a locked input fails, so the probe
-		# rejects aliases. Publication then works only through handles: it
-		# replaces the output entry inside the held parent and never deletes a
-		# separate path.
+		# A write-open of any hardlink alias of a locked input fails, so this
+		# path-based probe rejects aliases without writing any bytes. The
+		# publication itself then works through handles: it replaces the output
+		# entry inside the held parent and never deletes a separate path.
 		try {
 			if (Test-Path -LiteralPath $PublicationTarget -PathType Leaf) {
 				([IO.File]::Open($PublicationTarget, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::None)).Dispose()
