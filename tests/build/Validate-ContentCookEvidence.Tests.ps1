@@ -306,13 +306,30 @@ function Invoke-ExpectedFailure([hashtable] $Arguments, [string] $Pattern, [stri
 
 # A directory holding no open handles (on itself or its children) can be
 # renamed; a leaked output-folder hold or pending handle blocks the rename.
+# Renaming a mount point renames its own entry, so converted parents are
+# probed too; a short retry tolerates transient scanner handles only.
 function Assert-DirectoryReleased([string] $Directory, [string] $Context) {
 	if (-not (Test-Path -LiteralPath $Directory)) { return }
-	if (([IO.File]::GetAttributes($Directory) -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return }
 	$Probe = $Directory + '-release-probe'
-	try { [IO.Directory]::Move($Directory, $Probe) }
-	catch { throw "Assertion failed: $Context must release every output-folder and pending handle; $($_.Exception.Message)" }
+	$LastFailure = $null
+	for ($Attempt = 0; $Attempt -lt 5; $Attempt++) {
+		try { [IO.Directory]::Move($Directory, $Probe); $LastFailure = $null; break }
+		catch { $LastFailure = $_.Exception.Message; Start-Sleep -Milliseconds 100 }
+	}
+	if ($null -ne $LastFailure) { throw "Assertion failed: $Context must release every output-folder and pending handle; $LastFailure" }
 	[IO.Directory]::Move($Probe, $Directory)
+}
+
+# Instrumented validator copies report how many ancestor holds remain open
+# after their final cleanup, independent of garbage-collection timing.
+$HoldReleaseMarker = 'foreach ($Hold in $OutputAncestorHolds) { $Hold.Dispose() }'
+function Add-HoldReleaseProbe([string] $Source) {
+	Assert-True ($Source.IndexOf($HoldReleaseMarker, [StringComparison]::Ordinal) -ge 0) 'The validator must release its ancestor holds at a single discoverable point.'
+	return $Source.Replace($HoldReleaseMarker, ($HoldReleaseMarker + "`n`t`$global:AethelnOpenHoldCount = @(`$OutputAncestorHolds | Where-Object { -not `$_.IsClosed }).Count"))
+}
+function Assert-HoldsClosed([string] $Context) {
+	Assert-True ($null -ne $global:AethelnOpenHoldCount) "$Context must reach its ancestor-hold cleanup."
+	Assert-True ([int]$global:AethelnOpenHoldCount -eq 0) "$Context left $($global:AethelnOpenHoldCount) ancestor hold(s) open."
 }
 
 function Invoke-TestValidator([string] $ReportPath, [string] $ClientDirectory, [string] $ServerDirectory, [string] $EvidencePath, [string] $EffectivePolicyPath = $PolicyPath) {
@@ -1068,7 +1085,10 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$Client } 'OutputPath.*must identify a file|must not overwrite or alter a cooked-inventory'
 	Write-Output 'PASS: validator refuses same-path input/output mutation'
 
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath='\\localhost\aetheln-no-such-share\cook-evidence.json' } 'OutputPath.*network or device path.*local volume'
+	# The '|' makes GetFullPath throw, so only the raw-text check yields this message.
+	foreach ($RawNetworkPath in @('\\localhost\aetheln-no-such-share\a|b.json', '/\localhost\aetheln-no-such-share\a|b.json', '\/localhost/aetheln-no-such-share/a|b.json')) {
+		Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$RawNetworkPath } 'OutputPath.*network or device path.*local volume'
+	}
 	Write-Output 'PASS: network output paths are rejected from their raw text before path resolution'
 
 	# Path-based directory creation before the holds could follow a concurrent
@@ -1099,6 +1119,32 @@ try {
 		Write-Output 'PASS: a held parent that resolves to a network share is rejected before creation'
 	}
 	else { Write-Output "SKIP: administrative share '\\localhost\$ShareDrive`$' is unavailable, so the held-parent network-share rejection was not exercised" }
+
+	# A drive letter mapped to a share must be rejected from its volume root
+	# before any output directory is created. The per-session DOS device is
+	# defined here and removed in finally.
+	if (-not ('AethelnFixtureDosDevice' -as [type])) {
+		Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class AethelnFixtureDosDevice {
+	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	public static extern bool DefineDosDeviceW(uint flags, string device, string target);
+}
+'@
+	}
+	$MappedLetter = @('Z','Y','X','W','V','U','T','S') | Where-Object { -not (Test-Path -LiteralPath "$($_):\") } | Select-Object -First 1
+	if ((Test-Path -LiteralPath $ShareView -PathType Container) -and $null -ne $MappedLetter) {
+		$MappedTarget = "\??\UNC\localhost\$ShareDrive`$" + $ShareParent.Substring(2)
+		Assert-True ([AethelnFixtureDosDevice]::DefineDosDeviceW(1, "$($MappedLetter):", $MappedTarget)) 'The mapped-drive fixture must define its per-session drive letter.'
+		try {
+			Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath="$($MappedLetter):\nested\cook-evidence.json" } 'OutputPath.*resolves to network share'
+			Assert-True (@(Get-ChildItem -LiteralPath $ShareParent -Force).Count -eq 0) 'A mapped-drive output must be rejected before any directory is created.'
+		}
+		finally { [void][AethelnFixtureDosDevice]::DefineDosDeviceW(7, "$($MappedLetter):", $MappedTarget) }
+		Assert-True (-not (Test-Path -LiteralPath "$($MappedLetter):\")) 'The mapped-drive fixture must remove its drive letter.'
+		Write-Output 'PASS: an output drive mapped to a network share is rejected before any directory is created'
+	}
+	else { Write-Output 'SKIP: no administrative share or free drive letter, so mapped-drive output rejection was not exercised' }
 
 	$ReportDirectory = Split-Path -Parent $Report
 	$ReportLeaf = Split-Path -Leaf $Report
@@ -1227,12 +1273,14 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 		Assert-True ($ValidatorSource.IndexOf($CaseMarker, [StringComparison]::Ordinal) -ge 0) "The deterministic after-check marker '$CaseMarker' must exist in the validator."
 		$Mutation = ([string]$AfterCheckCase.mutation).Replace('__VICTIM_ROOT__', $VictimRoot).Replace('__SWAP_MARKER__', $SwapMarkerPath).Replace('__MOUNT_HELPER__', $MountPointHelper)
 		$Instrumented = if ($AfterCheckCase.ContainsKey('after') -and $AfterCheckCase.after) { $ValidatorSource.Replace($CaseMarker, ($CaseMarker + "`n" + $Mutation)) } else { $ValidatorSource.Replace($CaseMarker, ($Mutation + "`n" + $CaseMarker)) }
-		[IO.File]::WriteAllText($AfterCheckValidator, $Instrumented, [Text.UTF8Encoding]::new($false))
+		$global:AethelnOpenHoldCount = $null
+		[IO.File]::WriteAllText($AfterCheckValidator, (Add-HoldReleaseProbe $Instrumented), [Text.UTF8Encoding]::new($false))
 		if (Test-Path -LiteralPath $SwapMarkerPath) { Remove-Item -LiteralPath $SwapMarkerPath -Force }
 		$AfterCheckFailure = $null
 		try {
 			try { & $AfterCheckValidator -ContentValidationReportPath $Report -ClientCookedInventoryDirectory $Client -ServerCookedInventoryDirectory $Server -OutputPath $AfterCheckOutput -PolicyPath $PolicyPath -RuntimeIntakePath $RuntimeIntakePath -BuildProvenancePath $BuildProvenancePath -AllowTestEvidence | Out-Null }
 			catch { $AfterCheckFailure = $_.Exception.Message }
+			Assert-HoldsClosed "After-check $($AfterCheckCase.name) publication"
 			Assert-DirectoryReleased $AfterCheckParent "After-check $($AfterCheckCase.name) publication"
 			Assert-True (Test-Path -LiteralPath $SwapMarkerPath) "The after-check $($AfterCheckCase.name) swap must have been attempted."
 			Assert-True (Test-Path -LiteralPath $VictimPath -PathType Leaf) "An after-check $($AfterCheckCase.name) swap must not delete the unrelated victim file."
@@ -1290,12 +1338,14 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 			$FaultSource = $FaultSource.Replace($HoldMarker, ($HoldMarker + "`n" + $Mutation))
 		}
 		$FaultValidator = Join-Path $FixtureRoot ("Validate-ContentCookEvidence-fault-{0}.ps1" -f $FaultCase.name)
-		[IO.File]::WriteAllText($FaultValidator, $FaultSource, [Text.UTF8Encoding]::new($false))
+		$global:AethelnOpenHoldCount = $null
+		[IO.File]::WriteAllText($FaultValidator, (Add-HoldReleaseProbe $FaultSource), [Text.UTF8Encoding]::new($false))
 		if (Test-Path -LiteralPath $SwapMarkerPath) { Remove-Item -LiteralPath $SwapMarkerPath -Force }
 		$FaultFailure = $null
 		try {
 			try { & $FaultValidator -ContentValidationReportPath $Report -ClientCookedInventoryDirectory $Client -ServerCookedInventoryDirectory $Server -OutputPath $FaultOutput -PolicyPath $PolicyPath -RuntimeIntakePath $RuntimeIntakePath -BuildProvenancePath $BuildProvenancePath -AllowTestEvidence | Out-Null }
 			catch { $FaultFailure = $_.Exception.Message }
+			Assert-HoldsClosed "Publication fault $($FaultCase.name)"
 			Assert-DirectoryReleased $FaultParent "Publication fault $($FaultCase.name)"
 			Assert-True ($null -ne $FaultFailure -and $FaultFailure -match [string]$FaultCase.pattern) "Publication fault '$($FaultCase.name)' must fail closed with '$($FaultCase.pattern)'; observed '$FaultFailure'."
 			if ($FaultCase.mount) { Assert-True ([IO.File]::ReadAllText($SwapMarkerPath) -ceq 'swapped') 'The converted-before-create fixture must convert the empty held parent in place.' }

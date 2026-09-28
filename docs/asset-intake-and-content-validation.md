@@ -337,9 +337,10 @@ including one that traverses a junction or other reparse point, holds
 deny-write locks on every input while it publishes, refuses to publish over a
 hardlink alias of an input, and holds every output ancestor unrenameable until
 publication is verified. Evidence must be published to a local volume: network
-and device output paths are rejected from their text, a drive whose root
-resolves to a network share (such as a mapped or substituted drive) is rejected
-before any output directory is created, and a held parent that resolves to a
+and device output paths (including mixed `\` and `/` prefixes) are rejected
+from their raw text before path resolution, a drive whose root resolves to a
+network share (such as a mapped or substituted drive) is rejected at preflight,
+and a held parent that resolves to a
 network share is rejected again before publication. It creates the pending evidence relative to the
 held parent handle (on a local NTFS volume, an empty parent converted to a mount
 point in place makes that create fail rather than redirect), proves through the

@@ -668,8 +668,9 @@ $SourceClientCookedInventoryDirectory = [IO.Path]::GetFullPath($ClientCookedInve
 $SourceServerCookedInventoryDirectory = [IO.Path]::GetFullPath($ServerCookedInventoryDirectory)
 $ResolvedOutput = $null
 if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
-	# Check the raw text first: GetFullPath can already query a UNC server.
-	if ($OutputPath.StartsWith('\\') -or $OutputPath.StartsWith('//')) { throw "OutputPath '$OutputPath' is a network or device path; cook evidence must be published to a local volume." }
+	# Check the raw text first: GetFullPath can already query a UNC server,
+	# including mixed-separator forms such as '/\host\share'.
+	if ($OutputPath -match '^[\\/]{2}') { throw "OutputPath '$OutputPath' is a network or device path; cook evidence must be published to a local volume." }
 	$ResolvedOutput = [IO.Path]::GetFullPath($OutputPath)
 	if ($ResolvedOutput.StartsWith('\\')) { throw "OutputPath '$ResolvedOutput' is a network or device path; cook evidence must be published to a local volume." }
 	# Mapped and substituted drives are caught from the volume root's final path
