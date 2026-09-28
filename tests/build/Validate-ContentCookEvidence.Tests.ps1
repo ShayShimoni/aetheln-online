@@ -1118,7 +1118,48 @@ try {
 	[IO.File]::WriteAllText($VictimPath, 'unrelated victim bytes', [Text.UTF8Encoding]::new($false))
 	$OriginalVictimBytes = [IO.File]::ReadAllBytes($VictimPath)
 	$SwapMarkerPath = Join-Path $FixtureRoot 'publication-swap-result.txt'
+	$HoldMarker = '$OutputAncestorHolds = Open-OutputAncestorHolds $OutputDirectory'
+	# Converts an empty directory into a mount point in place, without renaming
+	# it, using only FILE_WRITE_ATTRIBUTES, which directory hold sharing admits.
+	$MountPointHelper = Join-Path $FixtureRoot 'Set-FixtureMountPoint.ps1'
+	[IO.File]::WriteAllText($MountPointHelper, @'
+param([string] $Directory, [string] $Target, [string] $ResultPath)
+if (-not ('AethelnFixtureMountPoint' -as [type])) {
+	Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class AethelnFixtureMountPoint {
+	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	public static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+	[DllImport("kernel32.dll", SetLastError = true)]
+	public static extern bool DeviceIoControl(SafeFileHandle handle, uint code, byte[] input, int inputSize, IntPtr output, int outputSize, out int returned, IntPtr overlapped);
+}
+"@
+}
+$Substitute = [Text.Encoding]::Unicode.GetBytes('\??\' + $Target.TrimEnd('\') + '\')
+$Print = [Text.Encoding]::Unicode.GetBytes($Target)
+$DataLength = 8 + $Substitute.Length + 2 + $Print.Length + 2
+$Buffer = New-Object byte[] (8 + $DataLength)
+[BitConverter]::GetBytes([uint32] 2684354563).CopyTo($Buffer, 0)
+[BitConverter]::GetBytes([uint16] $DataLength).CopyTo($Buffer, 4)
+[BitConverter]::GetBytes([uint16] 0).CopyTo($Buffer, 8)
+[BitConverter]::GetBytes([uint16] $Substitute.Length).CopyTo($Buffer, 10)
+[BitConverter]::GetBytes([uint16] ($Substitute.Length + 2)).CopyTo($Buffer, 12)
+[BitConverter]::GetBytes([uint16] $Print.Length).CopyTo($Buffer, 14)
+$Substitute.CopyTo($Buffer, 16)
+$Print.CopyTo($Buffer, 16 + $Substitute.Length + 2)
+$Handle = [AethelnFixtureMountPoint]::CreateFileW($Directory, 0x100, 0x7, [IntPtr]::Zero, 3, 0x02200000, [IntPtr]::Zero)
+$Returned = 0
+$Converted = (-not $Handle.IsInvalid) -and [AethelnFixtureMountPoint]::DeviceIoControl($Handle, 0x900A4, $Buffer, $Buffer.Length, [IntPtr]::Zero, 0, [ref] $Returned, [IntPtr]::Zero)
+$ErrorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+$Handle.Dispose()
+[IO.File]::WriteAllText($ResultPath, $(if ($Converted) { 'swapped' } else { "blocked:$ErrorCode" }))
+'@, [Text.UTF8Encoding]::new($false))
 	$AfterCheckCases = @(
+		@{ name='in-place-mount-point'; expected='swapped'; precreate=$false; marker=$HoldMarker; after=$true; mutation=@'
+& '__MOUNT_HELPER__' -Directory (Split-Path -Parent $ResolvedOutput) -Target '__VICTIM_ROOT__' -ResultPath '__SWAP_MARKER__'
+'@ },
 		@{ name='parent'; expected='blocked'; mutation=@'
 try { Rename-Item -LiteralPath (Split-Path -Parent $ResolvedOutput) -NewName 'after-check-parent-displaced' -ErrorAction Stop; New-Item -ItemType Junction -Path (Split-Path -Parent $ResolvedOutput) -Target '__VICTIM_ROOT__' | Out-Null; [IO.File]::WriteAllText('__SWAP_MARKER__', 'swapped') } catch { [IO.File]::WriteAllText('__SWAP_MARKER__', 'blocked') }
 '@ },
@@ -1129,13 +1170,20 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 	foreach ($AfterCheckCase in $AfterCheckCases) {
 		$AfterCheckParent = Join-Path $FixtureRoot "after-check-$($AfterCheckCase.name)"
 		$AfterCheckOutput = Join-Path $AfterCheckParent $VictimLeaf
-		New-Item -ItemType Directory -Path $AfterCheckParent | Out-Null
-		[IO.File]::WriteAllText($AfterCheckOutput, 'previous evidence', [Text.UTF8Encoding]::new($false))
+		if ($AfterCheckCase.ContainsKey('precreate') -and -not $AfterCheckCase.precreate) {
+			Assert-True (-not (Test-Path -LiteralPath $AfterCheckParent)) 'The in-place mount-point case must let the validator create an empty parent.'
+		}
+		else {
+			New-Item -ItemType Directory -Path $AfterCheckParent | Out-Null
+			[IO.File]::WriteAllText($AfterCheckOutput, 'previous evidence', [Text.UTF8Encoding]::new($false))
+		}
 		$AfterCheckValidator = Join-Path $FixtureRoot ("Validate-ContentCookEvidence-after-check-{0}.ps1" -f $AfterCheckCase.name)
 		$ValidatorSource = [IO.File]::ReadAllText($Validator)
-		Assert-True ($ValidatorSource.IndexOf($PublicationMarker, [StringComparison]::Ordinal) -ge 0) 'The deterministic after-check publication marker must exist immediately before publication.'
-		$Mutation = ([string]$AfterCheckCase.mutation).Replace('__VICTIM_ROOT__', $VictimRoot).Replace('__SWAP_MARKER__', $SwapMarkerPath)
-		[IO.File]::WriteAllText($AfterCheckValidator, $ValidatorSource.Replace($PublicationMarker, ($Mutation + "`n" + $PublicationMarker)), [Text.UTF8Encoding]::new($false))
+		$CaseMarker = if ($AfterCheckCase.ContainsKey('marker')) { [string]$AfterCheckCase.marker } else { $PublicationMarker }
+		Assert-True ($ValidatorSource.IndexOf($CaseMarker, [StringComparison]::Ordinal) -ge 0) "The deterministic after-check marker '$CaseMarker' must exist in the validator."
+		$Mutation = ([string]$AfterCheckCase.mutation).Replace('__VICTIM_ROOT__', $VictimRoot).Replace('__SWAP_MARKER__', $SwapMarkerPath).Replace('__MOUNT_HELPER__', $MountPointHelper)
+		$Instrumented = if ($AfterCheckCase.ContainsKey('after') -and $AfterCheckCase.after) { $ValidatorSource.Replace($CaseMarker, ($CaseMarker + "`n" + $Mutation)) } else { $ValidatorSource.Replace($CaseMarker, ($Mutation + "`n" + $CaseMarker)) }
+		[IO.File]::WriteAllText($AfterCheckValidator, $Instrumented, [Text.UTF8Encoding]::new($false))
 		if (Test-Path -LiteralPath $SwapMarkerPath) { Remove-Item -LiteralPath $SwapMarkerPath -Force }
 		$AfterCheckFailure = $null
 		try {
@@ -1163,7 +1211,7 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 			if (Test-Path -LiteralPath $Displaced) { Rename-Item -LiteralPath $Displaced -NewName (Split-Path -Leaf $AfterCheckParent) }
 		}
 	}
-	Write-Output 'PASS: after-check parent and name junction swaps never delete or alter an unrelated victim'
+	Write-Output 'PASS: after-check parent, name, and in-place mount-point swaps never delete or alter an unrelated victim'
 
 	$DriftMarker = '$StartedUtc = [DateTime]::UtcNow'
 	$DriftCases = @(

@@ -204,12 +204,16 @@ function Assert-OutputPathHasNoReparsePoint([string] $Path) {
 
 function Open-OutputAncestorHolds([string] $Directory) {
 	# Directory handles with list access and no delete sharing make every
-	# ancestor unrenameable until release, so no parent can be swapped for a
-	# junction after these handle-based reparse checks.
+	# ancestor unrenameable until release. An empty held directory can still be
+	# converted to a mount point in place, so publication additionally proves the
+	# pending file's location through its own handle (see PublishInHeldDirectory).
 	if (-not ('AethelnOutputPublicationNative' -as [type])) {
 		Add-Type -TypeDefinition @'
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 public static class AethelnOutputPublicationNative {
 	[StructLayout(LayoutKind.Sequential)]
@@ -230,12 +234,100 @@ public static class AethelnOutputPublicationNative {
 	[DllImport("kernel32.dll", SetLastError = true)]
 	public static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInformation information);
 	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-	public static extern bool MoveFileExW(string existing, string replacement, uint flags);
+	static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint length, uint flags);
+	[DllImport("kernel32.dll", SetLastError = true)]
+	static extern bool SetFileInformationByHandle(SafeFileHandle handle, int informationClass, IntPtr information, uint size);
+	[StructLayout(LayoutKind.Sequential)]
+	struct IoStatusBlock { public IntPtr Status; public UIntPtr Information; }
+	[DllImport("ntdll.dll")]
+	static extern int NtSetInformationFile(SafeFileHandle handle, out IoStatusBlock status, IntPtr information, uint length, int informationClass);
+
+	static string FinalPath(SafeFileHandle handle) {
+		StringBuilder path = new StringBuilder(32768);
+		uint length = GetFinalPathNameByHandleW(handle, path, (uint)path.Capacity, 0);
+		if (length == 0 || length >= path.Capacity) { throw new IOException("final path is unavailable (Win32 error " + Marshal.GetLastWin32Error() + ")"); }
+		return path.ToString();
+	}
+
+	static void RequirePlainDirectory(SafeFileHandle handle) {
+		FileInformation information;
+		if (!GetFileInformationByHandle(handle, out information)) { throw new IOException("held output parent identity is unavailable (Win32 error " + Marshal.GetLastWin32Error() + ")"); }
+		if ((information.FileAttributes & 0x400) != 0 || (information.FileAttributes & 0x10) == 0) { throw new IOException("held output parent is no longer a plain directory"); }
+	}
+
+	static void RequireLocation(SafeFileHandle handle, string parentFinalPath, string name) {
+		string expected = parentFinalPath.TrimEnd('\\') + "\\" + name;
+		string actual = FinalPath(handle);
+		if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) { throw new IOException("evidence handle resolves to '" + actual + "' instead of '" + expected + "'"); }
+	}
+
+	// FileRenameInformation with the held parent as RootDirectory and a bare
+	// name renames the open file object relative to that directory object; no
+	// path is resolved through any ancestor or the process current directory.
+	static void RenameInPlace(SafeFileHandle handle, SafeFileHandle root, string name) {
+		int rootOffset = IntPtr.Size;
+		int lengthOffset = rootOffset + IntPtr.Size;
+		int nameOffset = lengthOffset + 4;
+		byte[] nameBytes = Encoding.Unicode.GetBytes(name);
+		int size = nameOffset + nameBytes.Length + 2;
+		IntPtr buffer = Marshal.AllocHGlobal(size);
+		try {
+			for (int index = 0; index < size; index++) { Marshal.WriteByte(buffer, index, 0); }
+			Marshal.WriteByte(buffer, 0, 1);
+			Marshal.WriteIntPtr(buffer, rootOffset, root.DangerousGetHandle());
+			Marshal.WriteInt32(buffer, lengthOffset, nameBytes.Length);
+			Marshal.Copy(nameBytes, 0, IntPtr.Add(buffer, nameOffset), nameBytes.Length);
+			IoStatusBlock status;
+			int result = NtSetInformationFile(handle, out status, buffer, (uint)size, 10);
+			if (result != 0) { throw new IOException("rename by handle failed (NTSTATUS 0x" + result.ToString("X8") + ")"); }
+		}
+		finally { Marshal.FreeHGlobal(buffer); }
+	}
+
+	static void DeleteByHandle(SafeFileHandle handle) {
+		IntPtr buffer = Marshal.AllocHGlobal(4);
+		try { Marshal.WriteInt32(buffer, 1); SetFileInformationByHandle(handle, 4, buffer, 4); }
+		finally { Marshal.FreeHGlobal(buffer); }
+	}
+
+	static byte[] Sha256(byte[] bytes) { using (SHA256 hasher = SHA256.Create()) { return hasher.ComputeHash(bytes); } }
+
+	// Creates the pending file by handle inside the held parent, proves its
+	// location through that handle, and renames that exact file object into
+	// place. A non-empty directory cannot become a mount point, and any failure
+	// deletes only the file object this call created.
+	public static void PublishInHeldDirectory(SafeFileHandle parent, string parentPath, string pendingName, string outputName, byte[] bytes) {
+		RequirePlainDirectory(parent);
+		string parentFinalPath = FinalPath(parent);
+		// GENERIC_READ|GENERIC_WRITE|DELETE, share read only, CREATE_NEW, normal attributes.
+		SafeFileHandle pending = CreateFileW(Path.Combine(parentPath, pendingName), 0xC0010000, 0x1, IntPtr.Zero, 1, 0x80, IntPtr.Zero);
+		if (pending.IsInvalid) { throw new IOException("pending evidence could not be created (Win32 error " + Marshal.GetLastWin32Error() + ")"); }
+		using (FileStream stream = new FileStream(pending, FileAccess.ReadWrite)) {
+			try {
+				RequireLocation(stream.SafeFileHandle, parentFinalPath, pendingName);
+				stream.Write(bytes, 0, bytes.Length);
+				stream.Flush(true);
+				RequirePlainDirectory(parent);
+				RequireLocation(stream.SafeFileHandle, parentFinalPath, pendingName);
+				RenameInPlace(stream.SafeFileHandle, parent, outputName);
+				RequireLocation(stream.SafeFileHandle, parentFinalPath, outputName);
+				stream.Position = 0;
+				byte[] published;
+				using (SHA256 hasher = SHA256.Create()) { published = hasher.ComputeHash(stream); }
+				if (Convert.ToBase64String(published) != Convert.ToBase64String(Sha256(bytes))) { throw new IOException("published evidence bytes differ from the validated evidence"); }
+			}
+			catch {
+				DeleteByHandle(stream.SafeFileHandle);
+				throw;
+			}
+		}
+	}
 }
 '@
 	}
 	$Components = [System.Collections.Generic.List[string]]::new()
 	for ($Current = [IO.Path]::GetFullPath($Directory); -not [string]::IsNullOrEmpty([IO.Path]::GetDirectoryName($Current)); $Current = [IO.Path]::GetDirectoryName($Current)) { $Components.Insert(0, $Current) }
+	if ($Components.Count -eq 0) { $Components.Add([IO.Path]::GetFullPath($Directory)) }
 	$Holds = [System.Collections.Generic.List[Microsoft.Win32.SafeHandles.SafeFileHandle]]::new()
 	try {
 		foreach ($Component in $Components) {
@@ -517,7 +609,6 @@ if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
 }
 
 $InputSnapshotRoot = Join-Path ([IO.Path]::GetTempPath()) ("AethelnContentCookInput-{0}" -f [guid]::NewGuid().ToString('N'))
-$PendingOutputPath = $null
 $OutputAncestorHolds = @()
 New-Item -ItemType Directory -Path $InputSnapshotRoot | Out-Null
 try {
@@ -997,19 +1088,18 @@ if ($null -ne $ResolvedOutput) {
 	$OutputDirectory = Split-Path -Parent $ResolvedOutput
 	if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) { New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null }
 	$OutputAncestorHolds = Open-OutputAncestorHolds $OutputDirectory
-	$PendingOutputPath = Join-Path $OutputDirectory (".{0}.{1}.tmp" -f ([IO.Path]::GetFileName($ResolvedOutput)), [guid]::NewGuid().ToString('N'))
 	$EvidenceBytes = [System.Text.UTF8Encoding]::new($false).GetBytes((($Evidence | ConvertTo-Json -Depth 8) + [Environment]::NewLine))
-	[System.IO.File]::WriteAllBytes($PendingOutputPath, $EvidenceBytes)
 }
 
 $InputLocks = Open-InputLocks (@($ContentReportSource, $PolicySource, $IntakeSource, $BuildProvenanceSource) + @($ClientInventorySnapshot.SourceFiles) + @($ServerInventorySnapshot.SourceFiles))
 try {
 	Assert-AllValidationInputsUnchanged
-	if ($null -ne $PendingOutputPath) {
+	if ($null -ne $ResolvedOutput) {
 		$PublicationTarget = $ResolvedOutput
 		# A write-open of any hardlink alias of a locked input fails, so the probe
-		# rejects aliases. Publication is one rename inside the held parent: it
-		# replaces only that directory entry and never deletes a separate path.
+		# rejects aliases. Publication then works only through handles: it
+		# replaces the output entry inside the held parent and never deletes a
+		# separate path.
 		try {
 			if (Test-Path -LiteralPath $PublicationTarget -PathType Leaf) {
 				([IO.File]::Open($PublicationTarget, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::None)).Dispose()
@@ -1018,15 +1108,12 @@ try {
 		catch [IO.IOException], [UnauthorizedAccessException] {
 			throw "OutputPath '$PublicationTarget' could not be published because it aliases protected input evidence or is otherwise locked; validation fails closed. $($_.Exception.Message)"
 		}
-		# MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
-		if (-not [AethelnOutputPublicationNative]::MoveFileExW($PendingOutputPath, $PublicationTarget, 0x9)) {
-			throw "OutputPath '$PublicationTarget' could not be published (Win32 error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())); validation fails closed."
+		$PendingOutputName = ".{0}.{1}.tmp" -f ([IO.Path]::GetFileName($ResolvedOutput)), [guid]::NewGuid().ToString('N')
+		try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($OutputAncestorHolds[$OutputAncestorHolds.Count - 1], $OutputDirectory, $PendingOutputName, [IO.Path]::GetFileName($ResolvedOutput), $EvidenceBytes) }
+		catch {
+			$Reason = if ($null -ne $_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+			throw "OutputPath '$PublicationTarget' could not be published inside its held parent: $Reason; validation fails closed."
 		}
-		$PendingOutputPath = $null
-		$Hasher = [Security.Cryptography.SHA256]::Create()
-		try { $ExpectedEvidenceSha256 = ([BitConverter]::ToString($Hasher.ComputeHash($EvidenceBytes))).Replace('-', '').ToLowerInvariant() }
-		finally { $Hasher.Dispose() }
-		if ((Get-LowerSha256 $ResolvedOutput) -cne $ExpectedEvidenceSha256) { throw "OutputPath '$ResolvedOutput' does not contain the exact published evidence bytes; validation fails closed." }
 	}
 	Assert-AllValidationInputsUnchanged
 }
@@ -1043,7 +1130,6 @@ Write-Output "Validated $($Assets.Count) governed assets across $($ClientPackage
 Write-Output 'Content cook evidence validation passed.'
 }
 finally {
-	if ($null -ne $PendingOutputPath -and (Test-Path -LiteralPath $PendingOutputPath)) { Remove-Item -LiteralPath $PendingOutputPath -Force }
 	foreach ($Hold in $OutputAncestorHolds) { $Hold.Dispose() }
 	if (Test-Path -LiteralPath $InputSnapshotRoot) { Remove-Item -LiteralPath $InputSnapshotRoot -Recurse -Force }
 }
