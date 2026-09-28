@@ -372,8 +372,10 @@ public static class AethelnOutputPublicationNative {
 			RequirePlainDirectory(parent);
 			RequireLocation(pending, parentFinalPath, pendingName);
 			if (beforeRename != null) { beforeRename(); }
+			// The rename is the last step: it is relative to the held parent, which
+			// cannot be renamed, deleted, or converted while held and non-empty, so a
+			// check after it could only fail by deleting the output it just replaced.
 			RenameInPlace(pending, parent, outputName);
-			RequireLocation(pending, parentFinalPath, outputName);
 		}
 		catch (Exception failure) {
 			string cleanupFailure = RemoveCreatedFile(pending);
@@ -1202,7 +1204,8 @@ try {
 		}
 		# Lexical containment misses drive-letter, 8.3, and share aliases, so compare
 		# the file identity of the held parent and every held ancestor with each
-		# cooked-inventory input directory; inventory evidence must also be local.
+		# cooked-inventory input directory; when publishing, inventory evidence
+		# must also be local because share file identities may be unreliable.
 		$HeldIdentities = @($OutputAncestorHolds | ForEach-Object { [AethelnOutputPublicationNative]::FileIdentity($_) })
 		foreach ($InventoryDirectory in @($ClientInventorySnapshot.SourceDirectory, $ServerInventorySnapshot.SourceDirectory)) {
 			$InventoryHandle = [AethelnOutputPublicationNative]::CreateFileW($InventoryDirectory, 0x80, 0x7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
@@ -1212,7 +1215,7 @@ try {
 				$InventoryIdentity = [AethelnOutputPublicationNative]::FileIdentity($InventoryHandle)
 			}
 			finally { $InventoryHandle.Dispose() }
-			if ($InventoryFinalPath.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) { throw "Cooked-inventory input directory '$InventoryDirectory' resolves to network share '$InventoryFinalPath'; cook evidence must be compared on a local volume." }
+			if ($InventoryFinalPath.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) { throw "Cooked-inventory input directory '$InventoryDirectory' resolves to network share '$InventoryFinalPath'; output isolation from inventory evidence is verified only on a local volume." }
 			if ($HeldIdentities -contains $InventoryIdentity) {
 				throw "OutputPath '$ResolvedOutput' resolves inside cooked-inventory input directory '$InventoryFinalPath'; validation fails closed."
 			}

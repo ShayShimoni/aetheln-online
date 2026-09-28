@@ -349,8 +349,8 @@ file object into place relative to the same parent handle. It never deletes a
 path. A failed publication deletes only the file object it created; if even
 that cleanup fails, the error names the leftover pending file's resolved
 location. The earlier alias probe is path-based and opens but never writes
-bytes. Cooked-inventory input directories must also resolve to a local volume,
-and a held parent or held ancestor with the same file identity (volume serial
+bytes. When `-OutputPath` is supplied, cooked-inventory input directories must
+also resolve to a local volume, and a held parent or held ancestor with the same file identity (volume serial
 and file index) as a cooked-inventory input directory, reached for example
 through a substituted drive letter or an 8.3 name, is rejected before anything
 is created. The pending evidence bytes are verified before the rename. It rechecks
