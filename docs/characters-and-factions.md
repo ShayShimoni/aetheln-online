@@ -905,6 +905,144 @@ is the drawn stillness between sighting and release.
   chartered Blackfletch trackers in his hunt for Ashen Choir survivors - a
   charter the Waykeeper line publicly protests.
 
+#### Blackfletch Canonical Intent
+
+This shard has maturity **Canonical Intent** only. Blackfletch, Far Thorn,
+Waykeeper, Tension, Narrowed Horizon, and the techniques below have working
+display names; their semantic IDs are stable. This is a design and
+compatibility contract, not Evidence Validated or Implementation Ready
+content. It does not add Blackfletch, ranged weapons, traps, or scouting to
+the Oathscar-only prototype runtime.
+
+The Blackfletch contests a route by choosing an exposed aim corridor, then
+committing an arrow or visible placement that others can avoid or challenge.
+The oath to name a target is an intention the archer must own, never a
+selected victim in an activation request, target lock, homing rule, contact
+claim, or exception to pure free aim. The server resolves authored projectile
+and area geometry from bounded aim and current world state. A readable
+wind-up, travel or placement, active hazard, and recovery leave spatial
+counterplay; foresight never guarantees the future. The base kit must work
+without a specialization, prebanked Tension, a Skein choice, equipment bonus,
+Doctrine, or an ally supplying a missing combat verb.
+
+Far Thorn (`order.blackfletch.spec.far_thorn`) interprets the oath as
+intervening from deliberate distance. It favors committed aimed pressure
+through a declared lane, with longer exposure and a punishable miss or
+blocked sightline; range does not widen the server's accepted aim or grant
+contact beyond an authored volume. Waykeeper
+(`order.blackfletch.spec.waykeeper`) interprets it as keeping a traveled route
+safe. It favors visible, finite traps and eligible control that create an
+opening for retreat or escort, without hidden permanent denial, automatic
+capture, or control of another player's input. Neither interpretation removes
+the other's base damage and survival verbs or changes the shared resource
+grammar.
+
+One authoritative weapon discipline is active in combat. The server validates
+compatible abilities and any permitted transition; a bow model, string
+animation, tether visual, or client request cannot combine disciplines or
+establish a hit. Learning, changing, and persisting disciplines remain with
+Issues [#112](https://github.com/ShayShimoni/aetheln-online/issues/112) and
+[#113](https://github.com/ShayShimoni/aetheln-online/issues/113).
+
+| Weapon discipline | Stable ID | Mechanical identity and exposure |
+| --- | --- | --- |
+| Longbow | `order.blackfletch.weapon.longbow` | Deliberate aimed flight contests a longer open lane; drawing and arrow travel advertise the line to authorized observers, and a missed or obstructed release leaves recovery. |
+| Recurve bow | `order.blackfletch.weapon.recurve_bow` | Mobile aimed shots trade the longbow's deliberate reach for repositioning while escorting; movement does not erase authored commitment or grant automatic aim correction. |
+| Greatbow | `order.blackfletch.weapon.greatbow` | A heavily committed aimed shot pressures an authored corridor, including eligible large threats; preparation is visible to authorized observers, and recovery invites interruption or flank. |
+| Tether/trap bow | `order.blackfletch.weapon.tether_trap_bow` | Aimed anchors and visibly placed finite snares contest a route; a tether or trap must validate its actual contact and eligible control rather than select or follow a victim. |
+
+Tension (`order.blackfletch.resource.tension`) presents the shared
+`combat.resource.order` slot, not Endurance, Guard, Ward, Health, or a second
+charge meter. Only explicitly eligible, server-committed results of authored
+arrows, route contests, or other compatible actions may earn it. Holding aim,
+client-predicted travel or contact, placing an untested trap, an ignored
+hazard, and duplicate result delivery grant nothing by themselves. A
+qualifying result grants at most once under its root activation or effect
+identity; an accepted compatible spend commits at most once and cannot buy a
+hit, reveal a concealed actor, override world policy, or borrow another
+Order's resource. Qualifying results, gain, cost, cap, decay, refund, and
+recovery remain evidence-owned tuning `TBD`.
+
+Representative base actions are Path Arrow
+(`order.blackfletch.ability.path_arrow`), an aimed server-simulated projectile;
+Anchor Snare (`order.blackfletch.ability.anchor_snare`), an aimed, visibly
+placed finite route hazard with an eligible control attempt; and Watchline
+(`order.blackfletch.ability.watchline`), a committed scouting corridor that
+reports only cues the observer is authorized to perceive. Watchline never
+lists or locks a target and cannot reveal a concealed actor through client
+UI, replication, audio, or a proxy effect without an eligible server-owned
+detection result. These references are Canonical Intent,
+not a final ability count or prototype kit. Actual contact shapes, projectile
+flight, control and Resolve participation, detection eligibility, trap
+lifetime, and interruption windows remain authored and tuning `TBD`. Each
+harmful component declares Wrought, Cinder, or Wake and follows the shared
+defense order; an arrow's name grants no armor bypass or true damage.
+
+Narrowed Horizon (`order.blackfletch.peak.narrowed_horizon`) briefly realizes
+the forbidden archer who sees only one future. An accepted activation enters
+a server-owned temporary state that favors explicitly compatible committed
+shots through a visibly narrowed aim corridor, trading flexibility and
+escape for pressure when an authored line actually connects. It does not
+select a victim, bend a projectile toward one, bypass cover or avoidance,
+prevalidate future contact, or guarantee a hit. The archer and an authorized
+opponent receive distinct activation, active-corridor, ending, and recovery
+cues; the opponent can break the line, dodge, block where eligible, interrupt
+an authored draw, or flank the exposed archer. The taboo against holding the
+Peak after the shot remains lore and must not be turned into an unbounded
+state. Eligibility, Tension policy, compatible shots, cancellation, duration,
+and every value remain `TBD`.
+
+An unspecialized Blackfletch must aim and commit damage, use shared defense
+or dodge, recover, and defeat a representative ordinary enemy alone without
+an ally, a preset trap, prebanked Tension, a specialization, or a particular
+Form, Thread, or Keystone. A group gains route scouting, visible corridor
+control, and openings allies may choose to exploit; neither scouting nor
+control is required to complete the solo loop. A marked route is never a
+global reveal or a client-declared safe path. Control obeys current relation,
+territory, life state, immunity, Resolve, and cleanse rules and never dictates
+another player's input.
+
+The server owns arrow flight, trap placement and activation, and every
+contact or observer-specific detection result. Arrows, tethers, traps, and
+other proxies retain their originating source identity and recheck source
+and affected-actor life state, relation, sanctuary and protected-target
+policy, contact, and effect eligibility when each result would apply. A trap
+cannot become neutral or valid because its owner leaves, disconnects, or
+dies; its versioned lifecycle decides whether it ends or can continue.
+Delayed, periodic, reflected, and construct-emitted work retains the same
+root activation and finite aggregate depth, listener, event, target, and
+construct budgets. A new arrow, tether, trap, or actor cannot reset those
+bounds or award Tension twice. Hazard, control, and aim-corridor tells remain
+readable to authorized observers without leaking secure stealth or hidden
+anti-abuse state.
+
+These are representative weave definitions at **Canonical Intent**, not a
+final collection, slot count, unlock schedule, or tuned loadout:
+
+| Kind | Working name and stable ID | Decision changed |
+| --- | --- | --- |
+| Form | Far Flight (`order.blackfletch.form.path_arrow.far_flight`) | Makes Path Arrow a more deliberate aimed lane with greater exposure, trading mobile release for committed distance; contact still follows actual flight. |
+| Form | Passing Flight (`order.blackfletch.form.path_arrow.passing_flight`) | Favors an aimed release while repositioning, trading the Far Flight commitment for a narrower pressure opportunity; it is mutually exclusive with Far Flight. |
+| Form | Open Anchor (`order.blackfletch.form.anchor_snare.open_anchor`) | Expands Anchor Snare across a broader visibly declared route, trading concentrated control for more exposed placement and weaker eligible control per contact; it neither drags an ineligible actor nor adds an unseen trap. |
+| Thread | Read the Lane (`order.blackfletch.thread.read_the_lane`) | A committed Path Arrow contact changes the next compatible Watchline's declared corridor; a predicted or missed arrow cannot prime it. |
+| Thread | Held Route (`order.blackfletch.thread.held_route`) | An eligible Anchor Snare control result changes the next compatible aimed Path Arrow's release, without auto-aiming at the controlled actor. |
+| Thread | Clear Crossing (`order.blackfletch.thread.clear_crossing`) | A server-confirmed dodge changes the next compatible Anchor Snare placement, without turning local dodge presentation into a trap grant. |
+| Keystone | Distant Answer (`order.blackfletch.keystone.distant_answer`) | Favors committed aimed pressure over prepared route control when spending Tension, preserving sightline and recovery exposure. |
+| Keystone | Kept Passage (`order.blackfletch.keystone.kept_passage`) | Favors finite, readable route protection over distant pressure when spending Tension, without maintaining traps recursively. |
+
+Forms modify only their named action, with one Form per action unless later
+compatibility evidence approves more. Threads consume bounded, visible,
+server-committed triggers; one Keystone changes the build's central choice.
+No weave supplies a selected target, an unauthorized reveal, an unearned
+Tension result, or an escape from the root work budget. Issue
+[#106](https://github.com/ShayShimoni/aetheln-online/issues/106) owns registry
+versions, compatibility, proc/listener validation, and generation; Issue
+[#113](https://github.com/ShayShimoni/aetheln-online/issues/113) owns compiled
+loadouts, persistence, and atomic changes. No part of this shard is runtime,
+packaged, balance, performance, readability, accessibility, or QA evidence.
+Blackfletch implementation remains future work; all exact tuning and finite
+budget values remain evidence-owned `TBD`.
+
 ## The Emberbound Table
 
 The Emberbound Table contains champions whose loyalties divide the world. They

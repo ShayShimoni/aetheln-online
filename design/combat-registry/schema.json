@@ -1,0 +1,56 @@
+{
+  "schemaId": "aetheln.combat-design-registry.schema",
+  "schemaVersion": 1,
+  "registryId": "aetheln.combat-design-registry",
+  "supportedRegistryVersion": 1,
+  "maturities": [
+    "Canonical Intent",
+    "Prototype Candidate",
+    "Evidence Validated",
+    "Implementation Ready",
+    "Superseded"
+  ],
+  "kinds": [
+    "order",
+    "specialization",
+    "weapon",
+    "ability",
+    "peak",
+    "form",
+    "thread",
+    "keystone",
+    "heritage",
+    "resource",
+    "damageFamily",
+    "effect",
+    "construct",
+    "visibility",
+    "recovery",
+    "preset",
+    "manifest"
+  ],
+  "budgetKinds": ["depth", "listeners", "procs", "targets", "constructs"],
+  "requiredReferenceKinds": {
+    "specialization": ["order"],
+    "weapon": ["order"],
+    "peak": ["order"],
+    "form": ["ability"],
+    "thread": ["ability"],
+    "keystone": ["order", "resource", "ability"]
+  },
+  "referenceKindPolicy": "any-of",
+  "executionPolicy": "manifest-only",
+  "prototypeCandidateIds": [
+    "combat.resource.health",
+    "combat.resource.endurance",
+    "combat.resource.guard",
+    "combat.damage.wrought",
+    "order.oathscar.weapon.sword_and_shield",
+    "order.oathscar.ability.sword_shield_basic_chain",
+    "order.oathscar.ability.gate_step",
+    "order.oathscar.ability.sworn_rebuke",
+    "order.oathscar.ability.hold_the_line"
+  ],
+  "idPattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9_]*)+$",
+  "sourcePattern": "^docs/[a-z0-9-]+\\.md$"
+}
