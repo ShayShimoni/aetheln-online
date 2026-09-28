@@ -523,9 +523,9 @@ struct GAMENET_API FAethelnCrashContextSnapshot
 				return false;
 			}
 		}
-		return ObservabilitySchemaId == AethelnObservability::SchemaId
+		return ObservabilitySchemaId.Equals(AethelnObservability::SchemaId, ESearchCase::CaseSensitive)
 			&& ObservabilitySchemaVersion == AethelnObservability::SchemaVersion
-			&& NetworkProfileSchemaId == AethelnNetworkSpike::NetworkProfileSchemaId
+			&& NetworkProfileSchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)
 			&& NetworkProfileSchemaVersion == AethelnNetworkSpike::NetworkProfileSchemaVersion
 			&& SourceRevision.Equals(AethelnObservability::UnknownValue, ESearchCase::CaseSensitive)
 			&& BuildIdentity.Equals(AethelnObservability::UnknownValue, ESearchCase::CaseSensitive)

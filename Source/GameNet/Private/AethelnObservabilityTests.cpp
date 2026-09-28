@@ -335,6 +335,9 @@ bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Param
 	FAethelnNetworkProfile WrongSchema = Profile;
 	WrongSchema.SchemaId = TEXT("aetheln.other-profile");
 	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile schema fails closed"), Build, WrongSchema, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
+	FAethelnNetworkProfile WrongCaseSchema = Profile;
+	WrongCaseSchema.SchemaId = Profile.SchemaId.ToUpper();
+	ExpectRejectedAndUnchanged(TEXT("Case-variant network-profile schema fails closed"), Build, WrongCaseSchema, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
 	FAethelnNetworkProfile WrongVersion = Profile;
 	WrongVersion.SchemaVersion = AethelnNetworkSpike::NetworkProfileSchemaVersion + 1;
 	ExpectRejectedAndUnchanged(TEXT("Wrong network-profile version fails closed"), Build, WrongVersion, EAethelnFlowKind::PrototypeAuthority, RunId, Role, AethelnObservability::ExcludedIdentifier);
@@ -374,6 +377,12 @@ bool FAethelnObservabilityCrashContextSnapshotTest::RunTest(const FString& Param
 	ExpectRejectedAndUnchanged(TEXT("A caller instance identity is never the crash server role"), Build, Profile, EAethelnFlowKind::PrototypeAuthority, RunId, TEXT("network-authority-server"), AethelnObservability::ExcludedIdentifier);
 
 	FAethelnCrashContextSnapshot Tampered = Accepted;
+	Tampered.ObservabilitySchemaId = FString(AethelnObservability::SchemaId).ToUpper();
+	TestFalse(TEXT("Snapshot with a case-variant observability schema is not bounded"), Tampered.IsBounded());
+	Tampered = Accepted;
+	Tampered.NetworkProfileSchemaId = FString(AethelnNetworkSpike::NetworkProfileSchemaId).ToUpper();
+	TestFalse(TEXT("Snapshot with a case-variant network-profile schema is not bounded"), Tampered.IsBounded());
+	Tampered = Accepted;
 	Tampered.ObservabilitySchemaVersion = AethelnObservability::SchemaVersion + 1;
 	TestFalse(TEXT("Snapshot with a foreign observability schema version is not bounded"), Tampered.IsBounded());
 	Tampered = Accepted;

@@ -86,7 +86,7 @@ bool UAethelnObservabilitySubsystem::SetBuildContext(
 		|| InBuildIdentity.BuildConfiguration.IsEmpty()
 		|| InBuildIdentity.EngineRevision.IsEmpty()
 		|| InBuildIdentity.ToolchainIdentity.IsEmpty()
-		|| InNetworkProfile.SchemaId != AethelnNetworkSpike::NetworkProfileSchemaId
+		|| !InNetworkProfile.SchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)
 		|| InNetworkProfile.SchemaVersion != AethelnNetworkSpike::NetworkProfileSchemaVersion
 		|| InNetworkProfile.ProfileId.IsEmpty())
 	{
@@ -726,7 +726,11 @@ bool FAethelnObservabilitySubsystemCrashContextTest::RunTest(const FString& Para
 	FAethelnNetworkProfile InvalidProfile = Profile;
 	InvalidProfile.SchemaVersion = AethelnNetworkSpike::NetworkProfileSchemaVersion + 1;
 	TestFalse(TEXT("Invalid profile replacement is rejected"), Subsystem->SetBuildContext(Build, InvalidProfile));
+	FAethelnNetworkProfile CaseVariantProfile = Profile;
+	CaseVariantProfile.SchemaId = Profile.SchemaId.ToUpper();
+	TestFalse(TEXT("Case-variant profile schema cannot replace accepted build context"), Subsystem->SetBuildContext(Build, CaseVariantProfile));
 	TestEqual(TEXT("Rejected replacements never broadcast a change"), Changes, ChangesBeforeRejected);
+	TestTrue(TEXT("Case-variant profile rejection preserves the accepted build context"), Subsystem->HasBuildContext());
 	TestTrue(TEXT("Prior accepted context still yields a snapshot"), Subsystem->TryGetCrashContextSnapshot(Fresh));
 	TestEqual(TEXT("Invalid runtime replacement preserves the prior crash run"), Fresh.CrashRunId, FirstRunId);
 	TestEqual(TEXT("Invalid profile replacement preserves the prior profile version"), Fresh.NetworkProfileSchemaVersion, AethelnNetworkSpike::NetworkProfileSchemaVersion);
