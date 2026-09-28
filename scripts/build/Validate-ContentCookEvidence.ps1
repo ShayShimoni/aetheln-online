@@ -241,6 +241,46 @@ public static class AethelnOutputPublicationNative {
 	struct IoStatusBlock { public IntPtr Status; public UIntPtr Information; }
 	[DllImport("ntdll.dll")]
 	static extern int NtSetInformationFile(SafeFileHandle handle, out IoStatusBlock status, IntPtr information, uint length, int informationClass);
+	[StructLayout(LayoutKind.Sequential)]
+	struct UnicodeString { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+	[StructLayout(LayoutKind.Sequential)]
+	struct ObjectAttributes { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public uint Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+	[DllImport("ntdll.dll")]
+	static extern int NtCreateFile(out SafeFileHandle handle, uint access, ref ObjectAttributes attributes, out IoStatusBlock status, IntPtr allocationSize, uint fileAttributes, uint share, uint disposition, uint options, IntPtr extendedAttributes, uint extendedAttributesLength);
+
+	// Opens the name relative to the held parent directory object, so creation
+	// never resolves a path; an in-place reparse conversion of the parent makes
+	// this fail instead of redirecting the file.
+	static SafeFileHandle CreatePendingInHeldDirectory(SafeFileHandle parent, string name) {
+		IntPtr nameBuffer = Marshal.StringToHGlobalUni(name);
+		IntPtr unicodeName = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));
+		try {
+			UnicodeString value = new UnicodeString();
+			value.Length = (ushort)(name.Length * 2);
+			value.MaximumLength = (ushort)(name.Length * 2 + 2);
+			value.Buffer = nameBuffer;
+			Marshal.StructureToPtr(value, unicodeName, false);
+			ObjectAttributes attributes = new ObjectAttributes();
+			attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
+			attributes.RootDirectory = parent.DangerousGetHandle();
+			attributes.ObjectName = unicodeName;
+			attributes.Attributes = 0x40;
+			IoStatusBlock status;
+			SafeFileHandle handle;
+			// GENERIC_READ|GENERIC_WRITE|DELETE|SYNCHRONIZE, normal file, share read only,
+			// FILE_CREATE, FILE_NON_DIRECTORY_FILE|FILE_SYNCHRONOUS_IO_NONALERT.
+			int result = NtCreateFile(out handle, 0xC0110000, ref attributes, out status, IntPtr.Zero, 0x80, 0x1, 2, 0x60, IntPtr.Zero, 0);
+			if (result != 0) {
+				if (handle != null) { handle.Dispose(); }
+				throw new IOException("pending evidence could not be created inside the held parent (NTSTATUS 0x" + result.ToString("X8") + ")");
+			}
+			return handle;
+		}
+		finally {
+			Marshal.FreeHGlobal(unicodeName);
+			Marshal.FreeHGlobal(nameBuffer);
+		}
+	}
 
 	static string FinalPath(SafeFileHandle handle) {
 		StringBuilder path = new StringBuilder(32768);
@@ -284,42 +324,54 @@ public static class AethelnOutputPublicationNative {
 		finally { Marshal.FreeHGlobal(buffer); }
 	}
 
-	static void DeleteByHandle(SafeFileHandle handle) {
+	// Sets delete disposition on the file object this call created; returns a
+	// diagnostic naming the leftover file when that fails, or null on success.
+	static string RemoveCreatedFile(SafeFileHandle handle) {
 		IntPtr buffer = Marshal.AllocHGlobal(4);
-		try { Marshal.WriteInt32(buffer, 1); SetFileInformationByHandle(handle, 4, buffer, 4); }
+		try {
+			Marshal.WriteInt32(buffer, 1);
+			if (SetFileInformationByHandle(handle, 4, buffer, 4)) { return null; }
+			int error = Marshal.GetLastWin32Error();
+			string location;
+			try { location = FinalPath(handle); } catch (IOException) { location = "<unresolved>"; }
+			return "pending evidence '" + location + "' inside the held output parent could not be removed (Win32 error " + error + "); remove it manually";
+		}
 		finally { Marshal.FreeHGlobal(buffer); }
 	}
 
 	static byte[] Sha256(byte[] bytes) { using (SHA256 hasher = SHA256.Create()) { return hasher.ComputeHash(bytes); } }
 
-	// Creates the pending file by handle inside the held parent, proves its
-	// location through that handle, and renames that exact file object into
-	// place. A non-empty directory cannot become a mount point, and any failure
-	// deletes only the file object this call created.
-	public static void PublishInHeldDirectory(SafeFileHandle parent, string parentPath, string pendingName, string outputName, byte[] bytes) {
+	// Creates the pending file relative to the held parent handle, proves its
+	// location through its own handle, and renames that exact file object into
+	// place relative to the same parent. Every step after creation runs inside
+	// cleanup that deletes only this file object, and a cleanup failure is
+	// reported with the leftover path instead of being ignored.
+	public static void PublishInHeldDirectory(SafeFileHandle parent, string pendingName, string outputName, byte[] bytes) {
 		RequirePlainDirectory(parent);
 		string parentFinalPath = FinalPath(parent);
-		// GENERIC_READ|GENERIC_WRITE|DELETE, share read only, CREATE_NEW, normal attributes.
-		SafeFileHandle pending = CreateFileW(Path.Combine(parentPath, pendingName), 0xC0010000, 0x1, IntPtr.Zero, 1, 0x80, IntPtr.Zero);
-		if (pending.IsInvalid) { throw new IOException("pending evidence could not be created (Win32 error " + Marshal.GetLastWin32Error() + ")"); }
-		using (FileStream stream = new FileStream(pending, FileAccess.ReadWrite)) {
-			try {
-				RequireLocation(stream.SafeFileHandle, parentFinalPath, pendingName);
-				stream.Write(bytes, 0, bytes.Length);
-				stream.Flush(true);
-				RequirePlainDirectory(parent);
-				RequireLocation(stream.SafeFileHandle, parentFinalPath, pendingName);
-				RenameInPlace(stream.SafeFileHandle, parent, outputName);
-				RequireLocation(stream.SafeFileHandle, parentFinalPath, outputName);
-				stream.Position = 0;
-				byte[] published;
-				using (SHA256 hasher = SHA256.Create()) { published = hasher.ComputeHash(stream); }
-				if (Convert.ToBase64String(published) != Convert.ToBase64String(Sha256(bytes))) { throw new IOException("published evidence bytes differ from the validated evidence"); }
-			}
-			catch {
-				DeleteByHandle(stream.SafeFileHandle);
-				throw;
-			}
+		SafeFileHandle pending = CreatePendingInHeldDirectory(parent, pendingName);
+		FileStream stream = null;
+		try {
+			stream = new FileStream(pending, FileAccess.ReadWrite);
+			RequireLocation(pending, parentFinalPath, pendingName);
+			stream.Write(bytes, 0, bytes.Length);
+			stream.Flush(true);
+			RequirePlainDirectory(parent);
+			RequireLocation(pending, parentFinalPath, pendingName);
+			RenameInPlace(pending, parent, outputName);
+			RequireLocation(pending, parentFinalPath, outputName);
+			stream.Position = 0;
+			byte[] published;
+			using (SHA256 hasher = SHA256.Create()) { published = hasher.ComputeHash(stream); }
+			if (Convert.ToBase64String(published) != Convert.ToBase64String(Sha256(bytes))) { throw new IOException("published evidence bytes differ from the validated evidence"); }
+		}
+		catch (Exception failure) {
+			string cleanupFailure = RemoveCreatedFile(pending);
+			if (cleanupFailure != null) { throw new IOException(failure.Message + "; " + cleanupFailure, failure); }
+			throw;
+		}
+		finally {
+			if (stream != null) { stream.Dispose(); } else { pending.Dispose(); }
 		}
 	}
 }
@@ -1109,7 +1161,7 @@ try {
 			throw "OutputPath '$PublicationTarget' could not be published because it aliases protected input evidence or is otherwise locked; validation fails closed. $($_.Exception.Message)"
 		}
 		$PendingOutputName = ".{0}.{1}.tmp" -f ([IO.Path]::GetFileName($ResolvedOutput)), [guid]::NewGuid().ToString('N')
-		try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($OutputAncestorHolds[$OutputAncestorHolds.Count - 1], $OutputDirectory, $PendingOutputName, [IO.Path]::GetFileName($ResolvedOutput), $EvidenceBytes) }
+		try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($OutputAncestorHolds[$OutputAncestorHolds.Count - 1], $PendingOutputName, [IO.Path]::GetFileName($ResolvedOutput), $EvidenceBytes) }
 		catch {
 			$Reason = if ($null -ne $_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
 			throw "OutputPath '$PublicationTarget' could not be published inside its held parent: $Reason; validation fails closed."

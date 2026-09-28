@@ -1213,29 +1213,57 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 	}
 	Write-Output 'PASS: after-check parent, name, and in-place mount-point swaps never delete or alter an unrelated victim'
 
-	# Create-time window: the held parent is plain, but the pending path resolves
-	# elsewhere (as if the parent were converted between the check and the create).
-	Assert-True ($null -ne ('AethelnOutputPublicationNative' -as [type])) 'Publication helpers must be loaded by the preceding validator runs.'
-	$RaceParent = Join-Path $FixtureRoot 'create-race-parent'
-	$RaceRedirect = Join-Path $FixtureRoot 'create-race-redirect'
-	New-Item -ItemType Directory -Path $RaceParent | Out-Null
-	New-Item -ItemType Junction -Path $RaceRedirect -Target $VictimRoot | Out-Null
-	$RaceHold = [AethelnOutputPublicationNative]::CreateFileW($RaceParent, 0x81, 0x3, [IntPtr]::Zero, 3, 0x02200000, [IntPtr]::Zero)
-	try {
-		Assert-True (-not $RaceHold.IsInvalid) 'The create-race fixture must hold its real parent.'
-		$RaceFailure = $null
-		try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($RaceHold, $RaceRedirect, 'create-race.tmp', $VictimLeaf, [Text.Encoding]::UTF8.GetBytes('attacker-directed evidence')) }
-		catch { $RaceFailure = $_.Exception.InnerException.Message }
-		Assert-True ($null -ne $RaceFailure -and $RaceFailure -match 'evidence handle resolves to .* instead of') "A pending file created outside the held parent must be rejected by handle location; observed '$RaceFailure'."
-		Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($VictimPath)) -ceq [Convert]::ToBase64String($OriginalVictimBytes)) 'A create-time redirect must leave the victim bytes unchanged.'
-		Assert-True (@(Get-ChildItem -LiteralPath $VictimRoot -Force).Count -eq 1) 'A create-time redirect must delete its own pending file from the redirected directory.'
-		Assert-True (@(Get-ChildItem -LiteralPath $RaceParent -Force).Count -eq 0) 'A create-time redirect must not publish into the held parent.'
+	# Publication fault fixtures run instrumented copies whose native type is
+	# renamed, so each compiles its own injected behavior in this process.
+	$FaultCases = @(
+		@{ name='converted-before-create'; mount=$true; debris=$false; pattern='could not be created inside the held parent'; edits=@(
+			@{ pattern='RequirePlainDirectory\(parent\);\r?\n(\s*)string parentFinalPath'; replacement='$1string parentFinalPath' }) },
+		@{ name='stream-open-failure'; mount=$false; debris=$false; pattern='injected FileStream failure'; edits=@(
+			@{ pattern=[regex]::Escape('stream = new FileStream(pending, FileAccess.ReadWrite);'); replacement='if (bytes != null) { throw new IOException("injected FileStream failure"); }' }) },
+		@{ name='disposition-failure'; mount=$false; debris=$true; pattern='injected FileStream failure; pending evidence .* could not be removed'; edits=@(
+			@{ pattern=[regex]::Escape('stream = new FileStream(pending, FileAccess.ReadWrite);'); replacement='if (bytes != null) { throw new IOException("injected FileStream failure"); }' },
+			@{ pattern=[regex]::Escape('if (SetFileInformationByHandle(handle, 4, buffer, 4)) { return null; }'); replacement='if (handle == null && SetFileInformationByHandle(handle, 4, buffer, 4)) { return null; }' }) }
+	)
+	$FaultIndex = 0
+	foreach ($FaultCase in $FaultCases) {
+		$FaultIndex++
+		$FaultParent = Join-Path $FixtureRoot "publication-fault-$($FaultCase.name)"
+		$FaultOutput = Join-Path $FaultParent $VictimLeaf
+		$FaultSource = [IO.File]::ReadAllText($Validator).Replace('AethelnOutputPublicationNative', "AethelnOutputPublicationNativeFault$FaultIndex")
+		foreach ($Edit in $FaultCase.edits) {
+			$Edited = [regex]::Replace($FaultSource, [string]$Edit.pattern, [string]$Edit.replacement)
+			Assert-True ($Edited -cne $FaultSource) "Fault fixture '$($FaultCase.name)' must change the validator at '$($Edit.pattern)'."
+			$FaultSource = $Edited
+		}
+		if ($FaultCase.mount) {
+			$Mutation = "& '$MountPointHelper' -Directory (Split-Path -Parent `$ResolvedOutput) -Target '$VictimRoot' -ResultPath '$SwapMarkerPath'"
+			$FaultSource = $FaultSource.Replace($HoldMarker, ($HoldMarker + "`n" + $Mutation))
+		}
+		$FaultValidator = Join-Path $FixtureRoot ("Validate-ContentCookEvidence-fault-{0}.ps1" -f $FaultCase.name)
+		[IO.File]::WriteAllText($FaultValidator, $FaultSource, [Text.UTF8Encoding]::new($false))
+		if (Test-Path -LiteralPath $SwapMarkerPath) { Remove-Item -LiteralPath $SwapMarkerPath -Force }
+		$FaultFailure = $null
+		try {
+			try { & $FaultValidator -ContentValidationReportPath $Report -ClientCookedInventoryDirectory $Client -ServerCookedInventoryDirectory $Server -OutputPath $FaultOutput -PolicyPath $PolicyPath -RuntimeIntakePath $RuntimeIntakePath -BuildProvenancePath $BuildProvenancePath -AllowTestEvidence | Out-Null }
+			catch { $FaultFailure = $_.Exception.Message }
+			Assert-True ($null -ne $FaultFailure -and $FaultFailure -match [string]$FaultCase.pattern) "Publication fault '$($FaultCase.name)' must fail closed with '$($FaultCase.pattern)'; observed '$FaultFailure'."
+			if ($FaultCase.mount) { Assert-True ([IO.File]::ReadAllText($SwapMarkerPath) -ceq 'swapped') 'The converted-before-create fixture must convert the empty held parent in place.' }
+			Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($VictimPath)) -ceq [Convert]::ToBase64String($OriginalVictimBytes)) "Publication fault '$($FaultCase.name)' must leave the victim bytes unchanged."
+			Assert-True (@(Get-ChildItem -LiteralPath $VictimRoot -Force).Count -eq 1) "Publication fault '$($FaultCase.name)' must not create anything in the victim directory."
+			$Leftovers = if ($FaultCase.mount) { @() } else { @(Get-ChildItem -LiteralPath $FaultParent -Force) }
+			Assert-True (@($Leftovers | Where-Object { $_.Name -ceq $VictimLeaf }).Count -eq 0) "Publication fault '$($FaultCase.name)' must not publish evidence."
+			if ($FaultCase.debris) {
+				Assert-True (@($Leftovers | Where-Object { $_.Name -like '*.tmp' }).Count -eq 1) 'A failed disposition must leave exactly one reported pending file inside the held parent.'
+				Assert-True ($FaultFailure -match [regex]::Escape($Leftovers[0].Name)) 'A failed disposition must name the leftover pending file.'
+			}
+			else { Assert-True (@($Leftovers | Where-Object { $_.Name -like '*.tmp' }).Count -eq 0) "Publication fault '$($FaultCase.name)' must delete its own pending file." }
+		}
+		finally {
+			if ((Test-Path -LiteralPath $FaultParent) -and (([IO.File]::GetAttributes($FaultParent) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { [IO.Directory]::Delete($FaultParent) }
+			elseif (Test-Path -LiteralPath $FaultParent) { Remove-Item -LiteralPath $FaultParent -Recurse -Force }
+		}
 	}
-	finally {
-		$RaceHold.Dispose()
-		[IO.Directory]::Delete($RaceRedirect)
-	}
-	Write-Output 'PASS: a pending file created outside the held parent is rejected and removed by handle'
+	Write-Output 'PASS: in-place conversion before create, stream-open failure, and cleanup failure all fail closed without touching a victim'
 
 	$DriftMarker = '$StartedUtc = [DateTime]::UtcNow'
 	$DriftCases = @(
