@@ -187,6 +187,151 @@ rite, weapon-learning or Heritage persistence, Order-mastery ledger, or
 inventory. The release stage that first enables each durable command must
 specify its migration, authority checks, and recovery evidence before use.
 
+## Skein Build Compilation and Saved Presets
+
+This is a target-state server contract for the 1.1 character-development path,
+not a prototype runtime requirement or permission to activate unfinished
+content. The character owner persists choices and owned items; the authoritative
+game server compiles their executable meaning from an approved, immutable
+content snapshot. Clients submit stable IDs and requested changes, never an
+effect graph, stat total, hit rule, compiled plan, or claimed validation result.
+
+### Durable Choices and Transient Execution Plan
+
+Durable character truth contains the permanent Order, current specialization,
+learned abilities and compatible weapons, unlock ledgers, unlocked Forms,
+Threads, Keystones and later Doctrine, selected weave and Heritage state,
+saved preset definitions, item-instance ownership and equipped references,
+and the independent aggregate versions. It also records the content/manifest
+version references needed to interpret a committed choice. It does **not**
+store a compiled `BuildExecutionPlan`, temporary GAS handles, active effects,
+cooldowns, combat-resource values, pending activations, or client predictions
+as durable choices. Runtime recovery reconstructs from committed truth and
+authoritative lifecycle records; a client cache cannot repair either.
+
+For the initial implementation, a character may save at most **three** named
+presets. This is a bounded implementation limit, not an assertion that three
+weaves are simultaneously active or that the eventual product limit is final.
+A preset stores selected IDs and explicit item-instance references where the
+approved preset policy allows equipment changes, plus its own version; it is
+not a copy of owned items, unlocks, entitlement, or an executable plan. A saved
+preset can become stale as ownership, unlocks, compatibility, content, or
+policy changes. Saving or selecting it is a fenced, idempotent, version-checked
+command; selection recompiles and revalidates the entire resulting build.
+Missing or invalid references preserve the prior active build. The active
+Form, Thread, Heritage, and other slot counts, preset-change location/cost,
+and equipment-preset policy remain `TBD` until their owners approve them.
+
+`BuildExecutionPlan` is an immutable, server-only snapshot for one committed
+character state and content epoch. It binds the character and relevant state
+versions, exact registry/manifest and definition versions, authorized Order,
+specialization, learned weapon actions, selected Forms and Keystone,
+restricted Threads and Heritage hooks, equipped item effects, and later
+Doctrine only when faction choice and eligibility permit it. It contains the
+resolved ability and effect definitions, declared writers/listeners, proc
+ancestry and finite root budgets, and the activation permissions the server
+will enforce. It never grants a missing unlock or changes a permanent Order.
+An unspecialized character with an empty weave must still compile its valid
+shared Order and learned-weapon base kit; no optional Skein choice may be
+required just to play that base kit.
+
+Compilation consumes one closed, versioned registry/content snapshot. The
+server resolves each submitted ID and compatible version, checks ownership,
+unlock and maturity, specialization and weapon compatibility, equipment
+instance ownership and equip rules, unique authoritative writers, listener
+targets, cycles, and every aggregate root budget. It permits at most one
+selected Form for each ability unless a later explicitly approved
+compatible-Form system governs that ability; this rule is independent of the
+still-`TBD` total active-slot count. Executable combinations
+must be named by a versioned manifest containing the root and **all** attached
+members, including Threads, with exactly matching participant references; a
+valid individual definition does not authorize an unlisted combination.
+Definitions and manifests lacking approved finite limits or the required
+implementation maturity cannot become executable.
+`TBD` budgets, missing manifests, mixed-version references, unresolved
+Heritage/Doctrine eligibility, or unsupported item hooks reject compilation
+for the affected choice rather than defaulting to permission. The registry's
+design intent alone is not implementation or runtime evidence.
+
+### Atomic ChangeEquipmentAndBuild
+
+`ChangeEquipmentAndBuild` is one semantic durable command for any operation
+that must change equipment and the active build together, including preset
+selection that changes both. Its request binds character, authenticated
+issuer, current lease/fencing epoch, stable idempotency key, expected versions
+of **every** affected logical concern, exact proposed IDs/item instances, and
+the accepted content epoch. The owner verifies account/character authority,
+safe-service and combat-state eligibility under approved policy, item ownership
+and equip legality, all unlocks and compatibility, and the fully compiled
+candidate before commit. The durable owner revalidates the candidate against
+its accepted content snapshot or a verifiable trusted compiler result; it does
+not trust a caller's `ValidatedPayload` or claimed plan digest. A client cannot
+split one intended equipment/build change into independent writes and observe
+an intermediate executable mix.
+
+The game server fences new activations and reaches a server-owned safe switch
+boundary before changing the active plan. Already accepted activations and
+effects finish or cancel only under their pinned, authored lifecycle rules;
+their results cannot be reinterpreted under the proposed plan or erased by a
+disconnect. If safe quiescence cannot be established under an approved policy,
+the command rejects or defers without changing the durable choices. The
+logical owner then atomically commits equipped references, active weave,
+selected preset if any, each affected next version, idempotency response,
+audit and outbox. A failed validation or transaction leaves the prior durable
+state and active plan unchanged. Concurrent proposals with stale expected
+versions or stale fencing epochs fail; a duplicate completed key returns its
+recorded result, not a second switch.
+
+After a successful commit, the server activates only the candidate matching
+the **committed** versions and content epoch, then retires the old plan once
+its authorized in-flight work is drained. No activation runs with newly
+committed equipment under the old plan, or with old equipment under the new
+plan. If the server crashes or loses authority between commit and activation,
+admission and combat remain fenced until the current holder reloads the
+recorded command result and recompiles from committed truth. A commit is not
+silently undone because a local plan swap failed; any reversal is a new
+authorized, versioned command. Client disconnect cannot turn a pending
+request into a second commit or release an old plan's accepted result.
+
+### Admission Pins, Deny Overlay, and Recovery
+
+Admission pins one mutually compatible schema, registry/manifest, content,
+item-rule, and policy version set for the holder's executable plan. The server
+checks that set against the durable choices before allowing activation. A
+mixed deployment does not silently reinterpret old IDs under new definitions.
+Version migration must specify source/target mappings, eligibility,
+idempotent per-character progress, dual-read/write window where supported,
+and negative tests for changed or removed options before enabling the new
+content. No production legacy mapping is assumed here. An unmapped or lossy
+choice is quarantined for approved migration or explicitly rejected; it is
+never converted into a stronger or free choice by guesswork.
+
+A versioned emergency activation-deny overlay is evaluated by the server at
+admission and each new activation, even for a previously pinned plan. It can
+remove permission immediately but never add an unlock or rewrite durable
+state. Already accepted work follows its authored cancellation and policy
+rules; emergency handling must not erase a committed hit or grant. If a pinned
+definition becomes denied, the server fences affected activations and tries
+only an explicitly approved, fully compilable safe base-kit plan under the
+current policy. That degraded plan is transient and cannot mutate presets or
+equipment. If no such plan exists, admission or further combat is denied with
+a safe reason, while durable choices remain intact for repair. A rollback of
+code or content repeats version compatibility and deny checks; it does not
+assume that newer committed data can be read by older code or downgrade data
+in place.
+
+Required implementation tests cover duplicate and stale keys, two concurrent
+equipment/build proposals, stale lease or authority loss before and after
+commit, disconnect during an accepted activation, invalid/missing and
+cross-version IDs, cyclic or over-budget manifests, conflicting writers,
+two Forms selected for one ability without an approved combination rule,
+removed item ownership, stale preset selection, denied content during an
+in-flight activation, crash between commit and plan activation, migration
+failure, and rollback with newer durable data. Each case checks that the
+visible committed choice, active plan, recorded response, and accepted combat
+results agree. These are test contracts, not a claim that a runtime compiler,
+migrations, or packaged tests already exist.
+
 ## Versioning Model
 
 Every durable aggregate has:
