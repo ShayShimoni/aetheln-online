@@ -329,8 +329,16 @@ subsystem, the excluded process pseudonym, exclusion of printable personal or
 credential-like launcher text from every crash GameData key, generated crash
 run rotation across omitted-run launches and world or runtime replacement, a
 runtime replacement followed by failure before another event (which stays
-unattributed), and the lifecycle-only system-error handler. The evidence-marker test expects a
-Display log line; that capture path has not yet run natively.
+unattributed), and the lifecycle-only system-error handler.
+
+The evidence-marker test,
+`Aetheln.Observability.CrashContext.MarkerMatchesRegisteredRun`, drives the
+production rotation path. Each distinct crash run ID written to
+`AethelnCrashRunId` must appear in exactly one whole-line Display marker. The
+test covers a refresh of the same ID, which must not log again, and a runtime
+replacement, which must log its own ID and never the prior one. The test
+cannot rule out an extra marker that carries an ID never written to crash
+GameData. That capture path has not yet run natively.
 
 Crash-context ownership (`FAethelnCrashContextOwner`: the fourteen crash-context
 keys, the closed states, observable-world counting, and accepted-change

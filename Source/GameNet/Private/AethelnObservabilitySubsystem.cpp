@@ -1147,8 +1147,6 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Initialization claims no run"), ReadKey(StateKey), FString(TEXT("missing")));
 	TestFalse(TEXT("Initialization leaves no identity key"), HasAnyIdentityKey());
 
-	// The marker binds each newly registered crash run ID to the server log before failure.
-	AddExpectedMessage(TEXT("AethelnCrashContextMarker crash-run=[0-9a-f]{32}"), ELogVerbosity::Display, EAutomationExpectedMessageFlags::Contains, 0);
 	const FAethelnCrashContextSnapshot First = MakeSnapshot();
 	TestTrue(TEXT("First fixture snapshot is bounded"), First.IsBounded());
 	Writes.Reset();
@@ -1632,6 +1630,76 @@ bool FAethelnCrashContextReplacementBeforeEventTest::RunTest(const FString& Para
 
 	Owner.Shutdown();
 	World.Subsystem->ResetSink();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextMarkerTest,
+	"Aetheln.Observability.CrashContext.MarkerMatchesRegisteredRun",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextMarkerTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-marker-first"), TEXT("instance-marker")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+
+	// Registration writes the crash run ID before its marker, so each newly written ID gets a
+	// whole-line expectation that the framework requires to match exactly once by test end.
+	// The optional prefix covers the structured-log route, which formats "Category: Message".
+	TArray<FString> WrittenRuns;
+	const FDelegateHandle WriteHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[this, &WrittenRuns](const FString& Key, const FString& Value)
+		{
+			if (!Key.Equals(FString(CrashRunIdKey), ESearchCase::CaseSensitive) || Value.IsEmpty())
+			{
+				return;
+			}
+			const bool bGenerated = TestTrue(TEXT("Crash GameData receives only a generated-format crash run"), FAethelnCrashContextSnapshot::HasCrashRunIdFormat(Value));
+			if (bGenerated && !WrittenRuns.Contains(Value))
+			{
+				WrittenRuns.Add(Value);
+				AddExpectedMessage(
+					FString::Printf(TEXT("(LogAethelnCrashContext: )?AethelnCrashContextMarker crash-run=%s"), *Value),
+					ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 1);
+			}
+		});
+
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	const FString FirstRun = ReadKey(CrashRunIdKey);
+	TestTrue(TEXT("Registration writes the generated crash run"), FirstRun.Equals(CurrentCrashRunId(*World.Subsystem), ESearchCase::CaseSensitive));
+
+	// Re-registering the same ID after the sole world recovers keeps its single marker.
+	Owner.MarkStale();
+	Owner.TrackWorldTick(World.World);
+	TestEqual(TEXT("The recovered world registers active"), ReadKey(StateKey), FString(TEXT("active")));
+	TestTrue(TEXT("Recovery re-registers the same crash run"), ReadKey(CrashRunIdKey).Equals(FirstRun, ESearchCase::CaseSensitive));
+
+	// A runtime replacement logs its own marker; the prior ID is never logged again.
+	TestTrue(
+		TEXT("A runtime replacement is accepted"),
+		World.Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-marker-second"), TEXT("instance-marker"), AethelnObservability::ExcludedIdentifier));
+	const FString SecondRun = ReadKey(CrashRunIdKey);
+	TestTrue(TEXT("Replacement writes the rotated crash run"), SecondRun.Equals(CurrentCrashRunId(*World.Subsystem), ESearchCase::CaseSensitive));
+	TestFalse(TEXT("Replacement rotates the crash run"), SecondRun.Equals(FirstRun, ESearchCase::CaseSensitive));
+	Owner.MarkStale();
+	Owner.TrackWorldTick(World.World);
+	TestTrue(TEXT("Recovery keeps the replacement crash run"), ReadKey(CrashRunIdKey).Equals(SecondRun, ESearchCase::CaseSensitive));
+	TestEqual(TEXT("Exactly two crash runs were written"), WrittenRuns.Num(), 2);
+
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(WriteHandle);
+	Owner.Shutdown();
 	World.Destroy();
 	return true;
 }

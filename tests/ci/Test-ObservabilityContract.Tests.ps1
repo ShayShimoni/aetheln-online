@@ -222,6 +222,29 @@ try {
 	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor '"Aetheln.Observability.CrashContext.ReplacementBeforeEventIsUnattributed"' -Replacement '"Aetheln.Observability.CrashContext.Other"'
 	Assert-FailsClosed -Name 'missing replacement-before-event regression' -ExpectedPattern 'ReplacementBeforeEventIsUnattributed'
 
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor '"Aetheln.Observability.CrashContext.MarkerMatchesRegisteredRun"' -Replacement '"Aetheln.Observability.CrashContext.Other"'
+	Assert-FailsClosed -Name 'missing exact evidence-marker test' -ExpectedPattern 'MarkerMatchesRegisteredRun'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor '	const FAethelnCrashContextSnapshot First = MakeSnapshot();' -Replacement "	AddExpectedMessage(TEXT(`"AethelnCrashContextMarker crash-run=[0-9a-f]{32}`"), ELogVerbosity::Display, EAutomationExpectedMessageFlags::Contains, 0);`n	const FAethelnCrashContextSnapshot First = MakeSnapshot();"
+	Assert-FailsClosed -Name 'restored generic marker expectation' -ExpectedPattern 'generic marker expectation'
+
+	foreach ($Entry in @(
+		@{ Name = 'unbounded marker occurrence count'; Anchor = 'ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 1);'; Replacement = 'ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 0);' },
+		@{ Name = 'partial-line marker match'; Anchor = 'ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 1);'; Replacement = 'ELogVerbosity::Display, EAutomationExpectedMessageFlags::Contains, 1);' },
+		@{ Name = 'marker expectation unbound from crash GameData'; Anchor = 'Key.Equals(FString(CrashRunIdKey), ESearchCase::CaseSensitive)'; Replacement = 'Key.Equals(FString(StateKey), ESearchCase::CaseSensitive)' },
+		@{ Name = 'marker expectation not taken from the written ID'; Anchor = 'AethelnCrashContextMarker crash-run=%s"), *Value),'; Replacement = 'AethelnCrashContextMarker crash-run=%s"), *FString()),' }
+	)) {
+		Initialize-Fixture
+		Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor $Entry.Anchor -Replacement $Entry.Replacement
+		Assert-FailsClosed -Name $Entry.Name -ExpectedPattern 'exactly one exact marker for each crash run ID'
+	}
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'cannot rule out an extra marker that carries an ID never written to crash' -Replacement 'proves every marker'
+	Assert-FailsClosed -Name 'overclaimed evidence-marker coverage' -ExpectedPattern 'Evidence-marker test limitation'
+
 	foreach ($Entry in @(
 		@{ Name = 'event stream claimed as crash attribution'; Anchor = 'External attribution is not established by reading the event stream alone'; Replacement = 'The event stream attributes the crash'; Pattern = 'Crash attribution limitation' },
 		@{ Name = 'unbound controlled-capture manifest'; Anchor = 'fail closed on missing, stale, or ambiguous binding'; Replacement = 'best-effort binding'; Pattern = 'Controlled-capture binding requirement' },

@@ -138,6 +138,16 @@ $ActiveIndex = $Register.IndexOf('SetState(EState::Active);', [StringComparison]
 if ($MarkerIndex -lt 0 -or $ActiveIndex -lt 0 -or $MarkerIndex -gt $ActiveIndex) {
 	throw 'The generated crash run ID must be bound to its evidence marker before registration becomes active.'
 }
+if ($SubsystemImplementation -cmatch 'crash-run=\[0-9a-f\]') {
+	throw 'A generic marker expectation cannot prove the logged crash run ID matches crash GameData.'
+}
+$MarkerTestMatch = [regex]::Match($SubsystemImplementation, 'bool FAethelnCrashContextMarkerTest::RunTest\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $MarkerTestMatch.Success -or
+	$MarkerTestMatch.Groups['body'].Value.IndexOf('Key.Equals(FString(CrashRunIdKey), ESearchCase::CaseSensitive)', [StringComparison]::Ordinal) -lt 0 -or
+	$MarkerTestMatch.Groups['body'].Value.IndexOf('AethelnCrashContextMarker crash-run=%s"), *Value),', [StringComparison]::Ordinal) -lt 0 -or
+	$MarkerTestMatch.Groups['body'].Value.IndexOf('ELogVerbosity::Display, EAutomationExpectedMessageFlags::Exact, 1);', [StringComparison]::Ordinal) -lt 0) {
+	throw 'The evidence-marker test must expect exactly one exact marker for each crash run ID written to crash GameData.'
+}
 Assert-ContainsLiteral -Text $Subsystem -Literal 'TryGetCrashContextSnapshot(FAethelnCrashContextSnapshot& OutSnapshot) const' -Message 'Crash-context snapshot must be exposed only as a validated copy.'
 Assert-ContainsLiteral -Text $Subsystem -Literal 'static FAethelnCrashContextChanged& OnCrashContextChanged();' -Message 'Accepted crash-context changes must be observable without a world tick.'
 foreach ($Mutation in @('SetRuntimeContext(', 'ResetRuntimeContext()', 'SetBuildContext(', 'ResetBuildContext()')) {
@@ -211,7 +221,8 @@ foreach ($Name in @(
 	'Aetheln.Observability.CrashContext.FollowsAcceptedChanges',
 	'Aetheln.Observability.CrashContext.CountsWorldsWithoutSubsystem',
 	'Aetheln.Observability.CrashContext.ExcludesLauncherText',
-	'Aetheln.Observability.CrashContext.ReplacementBeforeEventIsUnattributed'
+	'Aetheln.Observability.CrashContext.ReplacementBeforeEventIsUnattributed',
+	'Aetheln.Observability.CrashContext.MarkerMatchesRegisteredRun'
 )) {
 	if (-not $GameNetTests.ContainsKey($Name) -or
 		$GameNetTests[$Name].IndexOf('EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext', [StringComparison]::Ordinal) -lt 0) {
@@ -254,6 +265,7 @@ Assert-ContainsLiteral -Text $Operator -Literal 'AethelnCrashContextMarker crash
 Assert-ContainsLiteral -Text $Operator -Literal 'External attribution is not established by reading the event stream alone' -Message 'Crash attribution limitation is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'fail closed on missing, stale, or ambiguous binding' -Message 'Controlled-capture binding requirement is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'A format check alone is not provenance' -Message 'Crash run format limitation is missing.'
+Assert-ContainsLiteral -Text $Operator -Literal 'cannot rule out an extra marker that carries an ID never written to crash' -Message 'Evidence-marker test limitation is missing.'
 if ($Operator.IndexOf("use that log's event stream", [StringComparison]::Ordinal) -ge 0) {
 	throw 'Documentation must not claim the event stream attributes a crash run.'
 }
