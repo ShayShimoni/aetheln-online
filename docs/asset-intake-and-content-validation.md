@@ -349,8 +349,12 @@ file object into place relative to the same parent handle. It never deletes a
 path. A failed publication deletes only the file object it created; if even
 that cleanup fails, the error names the leftover pending file's resolved
 location. The earlier alias probe is path-based and opens but never writes
-bytes. It rechecks
-the complete source file set before and after validation, and emits
+bytes. A held parent whose resolved identity is, or lies inside, a
+cooked-inventory input directory (for example through a substituted drive
+letter or an 8.3 name) is rejected before anything is created. It rechecks
+the complete source file set before validation and again after the evidence is
+written but before the rename, so a failed comparison never replaces a
+preexisting output or leaves new evidence behind, and it emits
 version-3 evidence carrying both registry attestations. Neither capture nor
 comparison builds, cooks, packages, downloads content, or accepts terms.
 Fixture success is not representative cook evidence.

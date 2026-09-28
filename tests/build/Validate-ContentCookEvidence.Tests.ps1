@@ -1110,7 +1110,7 @@ try {
 		try {
 			Assert-True (-not $ShareHold.IsInvalid) 'The network-share fixture must hold its parent through the administrative share.'
 			$ShareFailure = $null
-			try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($ShareHold, 'network-share.tmp', 'network-share.json', [Text.Encoding]::UTF8.GetBytes('network evidence')) }
+			try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($ShareHold, 'network-share.tmp', 'network-share.json', [Text.Encoding]::UTF8.GetBytes('network evidence'), $null) }
 			catch { $ShareFailure = $_.Exception.InnerException.Message }
 			Assert-True ($null -ne $ShareFailure -and $ShareFailure -match 'is on a network share') "Publication must reject a held parent on a network share; observed '$ShareFailure'."
 			Assert-True (@(Get-ChildItem -LiteralPath $ShareParent -Force).Count -eq 0) 'A network-share parent must be rejected before anything is created.'
@@ -1145,6 +1145,47 @@ public static class AethelnFixtureDosDevice {
 		Write-Output 'PASS: an output drive mapped to a network share is rejected before any directory is created'
 	}
 	else { Write-Output 'SKIP: no administrative share or free drive letter, so mapped-drive output rejection was not exercised' }
+
+	# A drive letter substituted onto a cooked-inventory input directory hides it
+	# from lexical containment; the held parent's resolved identity must not.
+	$AliasLetter = @('Z','Y','X','W','V','U','T','S') | Where-Object { -not (Test-Path -LiteralPath "$($_):\") } | Select-Object -First 1
+	if ($null -ne $AliasLetter) {
+		$ClientNamesBefore = (@(Get-ChildItem -LiteralPath $Client -Force | ForEach-Object Name) | Sort-Object) -join ','
+		Assert-True ([AethelnFixtureDosDevice]::DefineDosDeviceW(0, "$($AliasLetter):", $Client)) 'The inventory-alias fixture must define its per-session drive letter.'
+		try {
+			Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath="$($AliasLetter):\alias-evidence.json" } 'OutputPath.*resolves inside cooked-inventory input directory'
+		}
+		finally {
+			[void][AethelnFixtureDosDevice]::DefineDosDeviceW(6, "$($AliasLetter):", $Client)
+			$Stray = Join-Path $Client 'alias-evidence.json'
+			$ClientNamesAfter = (@(Get-ChildItem -LiteralPath $Client -Force | ForEach-Object Name) | Sort-Object) -join ','
+			if (Test-Path -LiteralPath $Stray) { Remove-Item -LiteralPath $Stray -Force }
+		}
+		Assert-True (-not (Test-Path -LiteralPath "$($AliasLetter):\")) 'The inventory-alias fixture must remove its drive letter.'
+		Assert-True ($ClientNamesAfter -ceq $ClientNamesBefore) "An aliased inventory output must not add files to the protected input directory; found '$ClientNamesAfter'."
+		Write-Output 'PASS: an output parent aliased onto a cooked-inventory input directory is rejected by resolved identity'
+	}
+	else { Write-Output 'SKIP: no free drive letter, so inventory-alias output rejection was not exercised' }
+
+	# Input drift after the pre-publication check but before the rename must
+	# fail without replacing a preexisting output or publishing new evidence.
+	$DriftOutputParent = Join-Path $FixtureRoot 'late-drift-output'
+	New-Item -ItemType Directory -Path $DriftOutputParent | Out-Null
+	$LateDriftOutput = Join-Path $DriftOutputParent 'cook-evidence.json'
+	[IO.File]::WriteAllText($LateDriftOutput, 'previous accepted evidence', [Text.UTF8Encoding]::new($false))
+	$PreviousOutputBytes = [IO.File]::ReadAllBytes($LateDriftOutput)
+	$LateDriftFile = Join-Path $Client 'late-drift.txt'
+	$LateDriftValidator = Join-Path $FixtureRoot 'Validate-ContentCookEvidence-late-drift.ps1'
+	$LateDriftSource = [IO.File]::ReadAllText($Validator)
+	Assert-True ($LateDriftSource.IndexOf('$PublicationTarget = $ResolvedOutput', [StringComparison]::Ordinal) -ge 0) 'The late-drift fixture needs the publication marker.'
+	[IO.File]::WriteAllText($LateDriftValidator, $LateDriftSource.Replace('$PublicationTarget = $ResolvedOutput', ("[IO.File]::WriteAllText('$LateDriftFile', 'late drift')`n" + '$PublicationTarget = $ResolvedOutput')), [Text.UTF8Encoding]::new($false))
+	try {
+		Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$LateDriftOutput } 'Client cooked inventory.*(changed|unsupported file)' $LateDriftValidator
+		Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($LateDriftOutput)) -ceq [Convert]::ToBase64String($PreviousOutputBytes)) 'Late input drift must leave the preexisting output unchanged.'
+		Assert-True (@(Get-ChildItem -LiteralPath $DriftOutputParent -Force).Count -eq 1) 'Late input drift must not leave pending or new evidence.'
+	}
+	finally { if (Test-Path -LiteralPath $LateDriftFile) { Remove-Item -LiteralPath $LateDriftFile -Force } }
+	Write-Output 'PASS: input drift before the rename fails without replacing a preexisting output'
 
 	$ReportDirectory = Split-Path -Parent $Report
 	$ReportLeaf = Split-Path -Leaf $Report

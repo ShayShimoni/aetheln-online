@@ -342,7 +342,7 @@ public static class AethelnOutputPublicationNative {
 	// place relative to the same parent. Every step after creation runs inside
 	// cleanup that deletes only this file object, and a cleanup failure is
 	// reported with the leftover path instead of being ignored.
-	public static void PublishInHeldDirectory(SafeFileHandle parent, string pendingName, string outputName, byte[] bytes) {
+	public static void PublishInHeldDirectory(SafeFileHandle parent, string pendingName, string outputName, byte[] bytes, Action beforeRename) {
 		RequirePlainDirectory(parent);
 		string parentFinalPath = FinalPath(parent);
 		// Over SMB the server resolves a junction on the held parent itself, so a
@@ -357,6 +357,7 @@ public static class AethelnOutputPublicationNative {
 			stream.Flush(true);
 			RequirePlainDirectory(parent);
 			RequireLocation(pending, parentFinalPath, pendingName);
+			if (beforeRename != null) { beforeRename(); }
 			RenameInPlace(pending, parent, outputName);
 			RequireLocation(pending, parentFinalPath, outputName);
 			stream.Position = 0;
@@ -1189,14 +1190,28 @@ try {
 		catch [IO.IOException], [UnauthorizedAccessException] {
 			throw "OutputPath '$PublicationTarget' could not be published because it aliases protected input evidence or is otherwise locked; validation fails closed. $($_.Exception.Message)"
 		}
+		# Lexical containment misses drive-letter and 8.3 aliases, so compare the
+		# held parent's resolved identity with each cooked-inventory input directory.
+		$HeldParentFinalPath = [AethelnOutputPublicationNative]::FinalPath($OutputAncestorHolds[$OutputAncestorHolds.Count - 1])
+		foreach ($InventoryDirectory in @($ClientInventorySnapshot.SourceDirectory, $ServerInventorySnapshot.SourceDirectory)) {
+			$InventoryHandle = [AethelnOutputPublicationNative]::CreateFileW($InventoryDirectory, 0x80, 0x7, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
+			if ($InventoryHandle.IsInvalid) { throw "Cooked-inventory input directory '$InventoryDirectory' could not be opened to verify output isolation (Win32 error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())); validation fails closed." }
+			try { $InventoryFinalPath = [AethelnOutputPublicationNative]::FinalPath($InventoryHandle).TrimEnd('\') }
+			finally { $InventoryHandle.Dispose() }
+			if ([string]::Equals($HeldParentFinalPath.TrimEnd('\'), $InventoryFinalPath, [StringComparison]::OrdinalIgnoreCase) -or $HeldParentFinalPath.StartsWith($InventoryFinalPath + '\', [StringComparison]::OrdinalIgnoreCase)) {
+				throw "OutputPath '$ResolvedOutput' resolves inside cooked-inventory input directory '$InventoryFinalPath'; validation fails closed."
+			}
+		}
 		$PendingOutputName = ".{0}.{1}.tmp" -f ([IO.Path]::GetFileName($ResolvedOutput)), [guid]::NewGuid().ToString('N')
-		try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($OutputAncestorHolds[$OutputAncestorHolds.Count - 1], $PendingOutputName, [IO.Path]::GetFileName($ResolvedOutput), $EvidenceBytes) }
+		# The final input check runs after the evidence is written but before the
+		# rename, so a failed comparison never replaces a preexisting output.
+		$BeforeRename = [Action] { Assert-AllValidationInputsUnchanged }
+		try { [AethelnOutputPublicationNative]::PublishInHeldDirectory($OutputAncestorHolds[$OutputAncestorHolds.Count - 1], $PendingOutputName, [IO.Path]::GetFileName($ResolvedOutput), $EvidenceBytes, $BeforeRename) }
 		catch {
 			$Reason = if ($null -ne $_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
 			throw "OutputPath '$PublicationTarget' could not be published inside its held parent: $Reason; validation fails closed."
 		}
 	}
-	Assert-AllValidationInputsUnchanged
 }
 finally {
 	foreach ($Lock in $InputLocks) { $Lock.Dispose() }
