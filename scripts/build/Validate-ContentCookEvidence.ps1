@@ -202,6 +202,60 @@ function Assert-OutputPathHasNoReparsePoint([string] $Path) {
 	}
 }
 
+function Open-OutputAncestorHolds([string] $Directory) {
+	# Directory handles with list access and no delete sharing make every
+	# ancestor unrenameable until release, so no parent can be swapped for a
+	# junction after these handle-based reparse checks.
+	if (-not ('AethelnOutputPublicationNative' -as [type])) {
+		Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class AethelnOutputPublicationNative {
+	[StructLayout(LayoutKind.Sequential)]
+	public struct FileInformation {
+		public uint FileAttributes;
+		public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+		public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+		public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+		public uint VolumeSerialNumber;
+		public uint FileSizeHigh;
+		public uint FileSizeLow;
+		public uint NumberOfLinks;
+		public uint FileIndexHigh;
+		public uint FileIndexLow;
+	}
+	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	public static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+	[DllImport("kernel32.dll", SetLastError = true)]
+	public static extern bool GetFileInformationByHandle(SafeFileHandle handle, out FileInformation information);
+	[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	public static extern bool MoveFileExW(string existing, string replacement, uint flags);
+}
+'@
+	}
+	$Components = [System.Collections.Generic.List[string]]::new()
+	for ($Current = [IO.Path]::GetFullPath($Directory); -not [string]::IsNullOrEmpty([IO.Path]::GetDirectoryName($Current)); $Current = [IO.Path]::GetDirectoryName($Current)) { $Components.Insert(0, $Current) }
+	$Holds = [System.Collections.Generic.List[Microsoft.Win32.SafeHandles.SafeFileHandle]]::new()
+	try {
+		foreach ($Component in $Components) {
+			# FILE_LIST_DIRECTORY|FILE_READ_ATTRIBUTES, share read|write only, backup semantics, open the reparse point itself.
+			$Handle = [AethelnOutputPublicationNative]::CreateFileW($Component, 0x81, 0x3, [IntPtr]::Zero, 3, 0x02200000, [IntPtr]::Zero)
+			if ($Handle.IsInvalid) { throw "OutputPath ancestor '$Component' could not be held for publication (Win32 error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())); validation fails closed." }
+			$Holds.Add($Handle)
+			$Information = New-Object AethelnOutputPublicationNative+FileInformation
+			if (-not [AethelnOutputPublicationNative]::GetFileInformationByHandle($Handle, [ref] $Information)) { throw "OutputPath ancestor '$Component' identity could not be read; validation fails closed." }
+			if (($Information.FileAttributes -band 0x400) -ne 0) { throw "OutputPath traverses reparse point '$Component'; validation fails closed." }
+			if (($Information.FileAttributes -band 0x10) -eq 0) { throw "OutputPath ancestor '$Component' is not a directory; validation fails closed." }
+		}
+	}
+	catch {
+		foreach ($Hold in $Holds) { $Hold.Dispose() }
+		throw
+	}
+	return ,$Holds
+}
+
 function Open-InputLocks([object[]] $Identities) {
 	# Read handles without write/delete sharing make the input bytes unwritable
 	# through any alias (hardlink, junction, or later swap) until release.
@@ -464,6 +518,7 @@ if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
 
 $InputSnapshotRoot = Join-Path ([IO.Path]::GetTempPath()) ("AethelnContentCookInput-{0}" -f [guid]::NewGuid().ToString('N'))
 $PendingOutputPath = $null
+$OutputAncestorHolds = @()
 New-Item -ItemType Directory -Path $InputSnapshotRoot | Out-Null
 try {
 $ContentReportSource = Read-StableFileSnapshot 'Content validation report' $SourceContentValidationReportPath
@@ -941,6 +996,7 @@ $Evidence = [ordered]@{
 if ($null -ne $ResolvedOutput) {
 	$OutputDirectory = Split-Path -Parent $ResolvedOutput
 	if (-not [string]::IsNullOrWhiteSpace($OutputDirectory)) { New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null }
+	$OutputAncestorHolds = Open-OutputAncestorHolds $OutputDirectory
 	$PendingOutputPath = Join-Path $OutputDirectory (".{0}.{1}.tmp" -f ([IO.Path]::GetFileName($ResolvedOutput)), [guid]::NewGuid().ToString('N'))
 	$EvidenceBytes = [System.Text.UTF8Encoding]::new($false).GetBytes((($Evidence | ConvertTo-Json -Depth 8) + [Environment]::NewLine))
 	[System.IO.File]::WriteAllBytes($PendingOutputPath, $EvidenceBytes)
@@ -950,19 +1006,21 @@ $InputLocks = Open-InputLocks (@($ContentReportSource, $PolicySource, $IntakeSou
 try {
 	Assert-AllValidationInputsUnchanged
 	if ($null -ne $PendingOutputPath) {
-		Assert-OutputPathHasNoReparsePoint $ResolvedOutput
+		$PublicationTarget = $ResolvedOutput
 		# A write-open of any hardlink alias of a locked input fails, so the probe
-		# rejects aliases; delete-then-move never writes through an existing name,
-		# and File.Move refuses any destination that still exists.
+		# rejects aliases. Publication is one rename inside the held parent: it
+		# replaces only that directory entry and never deletes a separate path.
 		try {
-			if (Test-Path -LiteralPath $ResolvedOutput) {
-				([IO.File]::Open($ResolvedOutput, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::None)).Dispose()
-				[IO.File]::Delete($ResolvedOutput)
+			if (Test-Path -LiteralPath $PublicationTarget -PathType Leaf) {
+				([IO.File]::Open($PublicationTarget, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::None)).Dispose()
 			}
-			[IO.File]::Move($PendingOutputPath, $ResolvedOutput)
 		}
 		catch [IO.IOException], [UnauthorizedAccessException] {
-			throw "OutputPath '$ResolvedOutput' could not be published because it aliases protected input evidence or is otherwise locked; validation fails closed. $($_.Exception.Message)"
+			throw "OutputPath '$PublicationTarget' could not be published because it aliases protected input evidence or is otherwise locked; validation fails closed. $($_.Exception.Message)"
+		}
+		# MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+		if (-not [AethelnOutputPublicationNative]::MoveFileExW($PendingOutputPath, $PublicationTarget, 0x9)) {
+			throw "OutputPath '$PublicationTarget' could not be published (Win32 error $([Runtime.InteropServices.Marshal]::GetLastWin32Error())); validation fails closed."
 		}
 		$PendingOutputPath = $null
 		$Hasher = [Security.Cryptography.SHA256]::Create()
@@ -986,5 +1044,6 @@ Write-Output 'Content cook evidence validation passed.'
 }
 finally {
 	if ($null -ne $PendingOutputPath -and (Test-Path -LiteralPath $PendingOutputPath)) { Remove-Item -LiteralPath $PendingOutputPath -Force }
+	foreach ($Hold in $OutputAncestorHolds) { $Hold.Dispose() }
 	if (Test-Path -LiteralPath $InputSnapshotRoot) { Remove-Item -LiteralPath $InputSnapshotRoot -Recurse -Force }
 }

@@ -332,7 +332,10 @@ intake registry, build provenance, staged cooked registries, manifests, and
 pages before parsing. It rejects an output path that could overwrite an input,
 including one that traverses a junction or other reparse point, holds
 deny-write locks on every input while it publishes, refuses to publish over a
-hardlink alias of an input, rechecks the complete source file set before and after validation, and emits
+hardlink alias of an input, holds every output ancestor unrenameable from before
+the pending write until publication is verified, and publishes with one
+replacing rename inside that held parent (never delete-then-move). It rechecks
+the complete source file set before and after validation, and emits
 version-3 evidence carrying both registry attestations. Neither capture nor
 comparison builds, cooks, packages, downloads content, or accepts terms.
 Fixture success is not representative cook evidence.

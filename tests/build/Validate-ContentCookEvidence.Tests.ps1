@@ -1108,6 +1108,63 @@ try {
 	}
 	Write-Output 'PASS: post-preflight hardlink and junction output swaps are rejected with input bytes preserved'
 
+	# After the final publication check, an attacker may try to swap the output
+	# parent or the output name for a junction into an unrelated victim directory.
+	$PublicationMarker = '$PublicationTarget = $ResolvedOutput'
+	$VictimRoot = Join-Path $FixtureRoot 'publication-victim'
+	$VictimLeaf = 'victim-evidence.json'
+	$VictimPath = Join-Path $VictimRoot $VictimLeaf
+	New-Item -ItemType Directory -Path $VictimRoot | Out-Null
+	[IO.File]::WriteAllText($VictimPath, 'unrelated victim bytes', [Text.UTF8Encoding]::new($false))
+	$OriginalVictimBytes = [IO.File]::ReadAllBytes($VictimPath)
+	$SwapMarkerPath = Join-Path $FixtureRoot 'publication-swap-result.txt'
+	$AfterCheckCases = @(
+		@{ name='parent'; expected='blocked'; mutation=@'
+try { Rename-Item -LiteralPath (Split-Path -Parent $ResolvedOutput) -NewName 'after-check-parent-displaced' -ErrorAction Stop; New-Item -ItemType Junction -Path (Split-Path -Parent $ResolvedOutput) -Target '__VICTIM_ROOT__' | Out-Null; [IO.File]::WriteAllText('__SWAP_MARKER__', 'swapped') } catch { [IO.File]::WriteAllText('__SWAP_MARKER__', 'blocked') }
+'@ },
+		@{ name='name'; expected='swapped'; mutation=@'
+try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $ResolvedOutput -Force -ErrorAction Stop }; New-Item -ItemType Junction -Path $ResolvedOutput -Target '__VICTIM_ROOT__' | Out-Null; [IO.File]::WriteAllText('__SWAP_MARKER__', 'swapped') } catch { [IO.File]::WriteAllText('__SWAP_MARKER__', 'blocked') }
+'@ }
+	)
+	foreach ($AfterCheckCase in $AfterCheckCases) {
+		$AfterCheckParent = Join-Path $FixtureRoot "after-check-$($AfterCheckCase.name)"
+		$AfterCheckOutput = Join-Path $AfterCheckParent $VictimLeaf
+		New-Item -ItemType Directory -Path $AfterCheckParent | Out-Null
+		[IO.File]::WriteAllText($AfterCheckOutput, 'previous evidence', [Text.UTF8Encoding]::new($false))
+		$AfterCheckValidator = Join-Path $FixtureRoot ("Validate-ContentCookEvidence-after-check-{0}.ps1" -f $AfterCheckCase.name)
+		$ValidatorSource = [IO.File]::ReadAllText($Validator)
+		Assert-True ($ValidatorSource.IndexOf($PublicationMarker, [StringComparison]::Ordinal) -ge 0) 'The deterministic after-check publication marker must exist immediately before publication.'
+		$Mutation = ([string]$AfterCheckCase.mutation).Replace('__VICTIM_ROOT__', $VictimRoot).Replace('__SWAP_MARKER__', $SwapMarkerPath)
+		[IO.File]::WriteAllText($AfterCheckValidator, $ValidatorSource.Replace($PublicationMarker, ($Mutation + "`n" + $PublicationMarker)), [Text.UTF8Encoding]::new($false))
+		if (Test-Path -LiteralPath $SwapMarkerPath) { Remove-Item -LiteralPath $SwapMarkerPath -Force }
+		$AfterCheckFailure = $null
+		try {
+			try { & $AfterCheckValidator -ContentValidationReportPath $Report -ClientCookedInventoryDirectory $Client -ServerCookedInventoryDirectory $Server -OutputPath $AfterCheckOutput -PolicyPath $PolicyPath -RuntimeIntakePath $RuntimeIntakePath -BuildProvenancePath $BuildProvenancePath -AllowTestEvidence | Out-Null }
+			catch { $AfterCheckFailure = $_.Exception.Message }
+			Assert-True (Test-Path -LiteralPath $SwapMarkerPath) "The after-check $($AfterCheckCase.name) swap must have been attempted."
+			Assert-True (Test-Path -LiteralPath $VictimPath -PathType Leaf) "An after-check $($AfterCheckCase.name) swap must not delete the unrelated victim file."
+			Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($VictimPath)) -ceq [Convert]::ToBase64String($OriginalVictimBytes)) "An after-check $($AfterCheckCase.name) swap must leave the unrelated victim bytes unchanged."
+			Assert-True (@(Get-ChildItem -LiteralPath $VictimRoot -Force).Count -eq 1) "An after-check $($AfterCheckCase.name) swap must not leave publication debris in the victim directory."
+			$SwapResult = [IO.File]::ReadAllText($SwapMarkerPath)
+			Assert-True ($SwapResult -ceq [string]$AfterCheckCase.expected) "The after-check $($AfterCheckCase.name) swap must be $($AfterCheckCase.expected); observed '$SwapResult'."
+			if ($SwapResult -ceq 'blocked') {
+				Assert-True ($null -eq $AfterCheckFailure) "A blocked $($AfterCheckCase.name) swap must still publish into the verified parent; observed '$AfterCheckFailure'."
+				Assert-True ((Get-Content -LiteralPath $AfterCheckOutput -Raw | ConvertFrom-Json).result -ceq 'passed') "A blocked $($AfterCheckCase.name) swap must publish the exact evidence."
+			}
+			else {
+				Assert-True ($null -ne $AfterCheckFailure -and $AfterCheckFailure -match 'OutputPath') "A completed $($AfterCheckCase.name) swap must fail publication closed; observed '$AfterCheckFailure'."
+			}
+		}
+		finally {
+			foreach ($Candidate in @((Split-Path -Parent $AfterCheckOutput), $AfterCheckOutput)) {
+				if ((Test-Path -LiteralPath $Candidate) -and (([IO.File]::GetAttributes($Candidate) -band [IO.FileAttributes]::ReparsePoint) -ne 0)) { [IO.Directory]::Delete($Candidate) }
+			}
+			$Displaced = Join-Path $FixtureRoot 'after-check-parent-displaced'
+			if (Test-Path -LiteralPath $Displaced) { Rename-Item -LiteralPath $Displaced -NewName (Split-Path -Leaf $AfterCheckParent) }
+		}
+	}
+	Write-Output 'PASS: after-check parent and name junction swaps never delete or alter an unrelated victim'
+
 	$DriftMarker = '$StartedUtc = [DateTime]::UtcNow'
 	$DriftCases = @(
 		@{ name='report'; target=$Report; mutation="Add-Content -LiteralPath `$SourceContentValidationReportPath -Value 'same-path report drift' -Encoding UTF8"; pattern='Content validation report changed during validation' },
