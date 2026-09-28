@@ -90,7 +90,7 @@ Assert-True ($ShadowSelection -match '(?m)^\s+runs-on: windows-latest\r?$' -and 
 Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:') 'The accepted-base shadow selector must remain dependency-free.'
 $ExpectedSelectorOutputs = @(
 	'attempt_nonce','aggregate_ready','clean_package_provenance_smoke_required','content_reference_validation_required',
-	'controller_contract_required','controller_operational_proof_required','delivery_harness_required',
+	'controller_contract_required','controller_operational_proof_required',
 	'native_client_server_compile_required','portable_required','unreal_editor_automation_required','visual_package_required',
 	'selector_artifact_id','selector_artifact_name','selector_artifact_digest'
 )
@@ -118,7 +118,6 @@ Assert-True ($ShadowSelection -match 'controllerBlobOid' -and $ShadowSelection -
 $CanonicalObligationOrder = @(
 	'portable',
 	'visual-package',
-	'delivery-harness',
 	'native-client-server-compile',
 	'unreal-editor-automation',
 	'content-reference-validation',

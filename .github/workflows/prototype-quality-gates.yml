@@ -18,7 +18,7 @@ env:
 
 jobs:
   # Issue #167 accepted-base shadow selector with Package 3C current-attempt
-  # wiring. This independent PR-only diagnostic exposes all nine decisions,
+  # wiring. This independent PR-only diagnostic exposes all eight decisions,
   # the validated nonce, aggregate readiness, and direct selector artifact
   # identity to additive visual, receipt, and aggregate jobs only. Every
   # consumer remains non-authoritative; the authority boundary is hard-skipped.
@@ -41,7 +41,6 @@ jobs:
       content_reference_validation_required: ${{ steps.selection.outputs.content_reference_validation_required }}
       controller_contract_required: ${{ steps.selection.outputs.controller_contract_required }}
       controller_operational_proof_required: ${{ steps.selection.outputs.controller_operational_proof_required }}
-      delivery_harness_required: ${{ steps.selection.outputs.delivery_harness_required }}
       native_client_server_compile_required: ${{ steps.selection.outputs.native_client_server_compile_required }}
       portable_required: ${{ steps.selection.outputs.portable_required }}
       unreal_editor_automation_required: ${{ steps.selection.outputs.unreal_editor_automation_required }}
@@ -244,7 +243,6 @@ jobs:
             $CheckIds = @(
               'portable',
               'visual-package',
-              'delivery-harness',
               'native-client-server-compile',
               'unreal-editor-automation',
               'content-reference-validation',
@@ -298,7 +296,6 @@ jobs:
           $ExpectedObligations = [ordered]@{
             'portable' = 'portable_required'
             'visual-package' = 'visual_package_required'
-            'delivery-harness' = 'delivery_harness_required'
             'native-client-server-compile' = 'native_client_server_compile_required'
             'unreal-editor-automation' = 'unreal_editor_automation_required'
             'content-reference-validation' = 'content_reference_validation_required'

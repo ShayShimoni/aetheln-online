@@ -32,7 +32,6 @@ $script:AggregateContextMaximumOutputBytes = 1MB
 $script:AggregateContextCheckIds = @(
 	'portable',
 	'visual-package',
-	'delivery-harness',
 	'native-client-server-compile',
 	'unreal-editor-automation',
 	'content-reference-validation',

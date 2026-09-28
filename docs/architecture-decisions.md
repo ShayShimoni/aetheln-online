@@ -725,13 +725,22 @@ Every accepted decision records:
   fallback. That package deliberately did not emit receipts, execute the
   aggregate, add `actions: read`, or grant acceptance. Package 3C supersedes
   those wiring limitations and strengthens the run-identity anchor regexes to
-  whole-input `\A...\z` matches. That changes the exact selector policy bytes:
-  its 39,853-byte LF-normalized candidate digest is
-  `a6467d16f19f3db86bdddee76d065abd50dff7953173b7bc93f79ddae487203a`,
-  which requires new accepted-base observations after merge.
+  whole-input `\A...\z` matches. Its current-base eight-obligation selector
+  is 39,772 LF-normalized bytes with digest
+  `913411858dae63ff48de296ef59d4f5d84aeb43dc55759874f6cb4d03bb0a55d`.
+  This changes the policy identity and requires new accepted-base observations
+  after merge.
+- **Direct-delivery retirement amendment:** The earlier delivery harness was
+  diagnostic only: it executed writable worktree files without complete
+  source-byte or mid-run mutation protection. The harness and its unsupported
+  `delivery-harness` obligation were retired on develop; the other CI
+  obligations and evidence gates remain intact. The retirement selector's
+  normalized digest is
+  `a1be534a661508fdccae17ea7623b2c3f215119a07cdc66ef7ab8653a9925536`.
+  It is historical identity, not a Package 3C activation pin.
 - **Package 3C receipt and aggregate wiring amendment:**
   `ci-selection-shadow` now exposes the validated nonce, aggregate readiness,
-  all nine exact obligation decisions, and its artifact ID/name/API digest as
+  all eight exact obligation decisions, and its artifact ID/name/API digest as
   direct `needs` outputs. The portable, trusted native client/server compile,
   and reusable visual jobs expose their truthful raw artifact ID/name/digest
   plus inner report SHA-256/length. Three hosted receipt-publisher jobs download
@@ -758,13 +767,8 @@ Every accepted decision records:
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `unreal-editor-automation`,
   `clean-package-provenance-smoke`, `content-reference-validation`,
-  `controller-contract`, `controller-operational-proof`, and
-  `delivery-harness` remain unsupported live obligations.
-- The delivery harness is also diagnostic-only in this package. It checks the
-  declared revision against `HEAD` but executes writable worktree files and
-  does not yet bind every test/dependency byte or reject mid-run mutation.
-  `delivery-harness` remains an unsupported receipt obligation until a clean,
-  immutable source contract and dirty/mutation negative fixtures exist.
+  `controller-contract`, and `controller-operational-proof` remain unsupported
+  live obligations.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate

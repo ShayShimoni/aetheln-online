@@ -100,7 +100,7 @@ Assert-True ($ShadowSelection -match '(?m)^\s+continue-on-error: true\r?$') 'The
 Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:' -and $ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner') 'Shadow selection must have no predecessor or engine-runner admission surface.'
 $ExpectedSelectorOutputs = @(
 	'attempt_nonce','aggregate_ready','clean_package_provenance_smoke_required','content_reference_validation_required',
-	'controller_contract_required','controller_operational_proof_required','delivery_harness_required',
+	'controller_contract_required','controller_operational_proof_required',
 	'native_client_server_compile_required','portable_required','unreal_editor_automation_required','visual_package_required',
 	'selector_artifact_id','selector_artifact_name','selector_artifact_digest'
 )
@@ -140,6 +140,7 @@ foreach ($Receipt in $ReceiptContracts) {
 }
 
 $AggregateShadow = [string] $JobBodies['ci-acceptance-shadow']
+Assert-True ($Workflow -notmatch 'delivery-harness|delivery_harness_required' -and $AggregateShadow -notmatch 'delivery-harness') 'Retired delivery harness must not be a live selector or aggregate obligation.'
 Assert-True ($AggregateShadow -match '(?m)^    if: always\(\)\r?$' -and $AggregateShadow -notmatch '(?m)^    continue-on-error:') 'Acceptance aggregation must always diagnose dependencies while unexpected diagnostic failures remain visible.'
 Assert-True ($AggregateShadow -match '(?m)^    runs-on: windows-latest\r?$' -and $AggregateShadow -match '(?m)^    timeout-minutes: 10\r?$') 'Acceptance aggregation must be bounded on GitHub-hosted Windows.'
 Assert-True ($AggregateShadow -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') 'Acceptance aggregation must never hold or target the engine runner.'

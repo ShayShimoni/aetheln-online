@@ -178,9 +178,11 @@ $AttributesPolicy = @(Get-PathCheckSelection '.gitattributes' @{})
 Assert-True ($AttributesPolicy -ccontains 'controller-contract' -and $AttributesPolicy -ccontains 'controller-operational-proof') 'Attribute policy changes should remain classifiable while triggering global attribute evaluation.'
 Assert-Rejected { Get-PathCheckSelection 'Setup.ps1' @{} } 'path_unclassified'
 $BuildHarness = @(Get-PathCheckSelection 'scripts/build/Build-PackagedArtifacts.ps1' @{})
-Assert-True ($BuildHarness -ccontains 'delivery-harness' -and $BuildHarness -ccontains 'controller-operational-proof' -and $BuildHarness -ccontains 'clean-package-provenance-smoke') 'Build harness paths should select delivery, operational, and clean-package proof.'
+Assert-True ($BuildHarness -cnotcontains 'delivery-harness' -and $BuildHarness -ccontains 'controller-operational-proof' -and $BuildHarness -ccontains 'clean-package-provenance-smoke') 'Build paths should retain operational and clean-package proof without the retired delivery harness.'
 $BuildTest = @(Get-PathCheckSelection 'tests/build/X.Tests.ps1' @{})
-Assert-True ($BuildTest -ccontains 'delivery-harness') 'Build harness tests should select delivery proof in addition to portable checks.'
+Assert-True ($BuildTest -cnotcontains 'delivery-harness' -and $BuildTest -ccontains 'portable') 'Build tests should retain portable proof without the retired delivery harness.'
+$RetiredSkill = @(Get-PathCheckSelection '.agents/skills/orchestrate-delivery/SKILL.md' @{})
+Assert-True ($RetiredSkill -cnotcontains 'delivery-harness' -and $RetiredSkill -ccontains 'portable') 'Retired skill paths should remain classified without selecting a nonexistent harness.'
 $PluginContent = @(Get-PathCheckSelection 'Plugins/Foo/Content/A.uasset' @{filter='lfs'})
 Assert-True ($PluginContent -ccontains 'content-reference-validation' -and $PluginContent -ccontains 'native-client-server-compile' -and $PluginContent -ccontains 'unreal-editor-automation' -and $PluginContent -cnotcontains 'clean-package-provenance-smoke') 'Plugin content and LFS materialization should select content, native, and Editor checks without a clean milestone.'
 

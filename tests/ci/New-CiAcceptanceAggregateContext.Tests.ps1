@@ -17,8 +17,11 @@ function Assert-Rejected([scriptblock] $Action, [string] $Reason) {
 }
 
 $script:ContextUtf8 = New-Object Text.UTF8Encoding($false)
-$script:CheckIds = @('portable','visual-package','delivery-harness','native-client-server-compile','unreal-editor-automation','content-reference-validation','controller-contract','controller-operational-proof','clean-package-provenance-smoke')
+$script:CheckIds = @('portable','visual-package','native-client-server-compile','unreal-editor-automation','content-reference-validation','controller-contract','controller-operational-proof','clean-package-provenance-smoke')
 $script:Nonce = '6' * 64
+$RepositoryTemplate = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ci-acceptance-requirements.json') -Raw | ConvertFrom-Json
+$RepositoryCheckIds = @($RepositoryTemplate.jobs | ForEach-Object { $_.checks } | ForEach-Object { $_ })
+Assert-True ($RepositoryCheckIds.Count -eq 8 -and $RepositoryCheckIds -cnotcontains 'delivery-harness' -and (@($script:CheckIds | Where-Object { $RepositoryCheckIds -cnotcontains $_ }).Count -eq 0)) 'Live requirements template must cover exactly the eight supported selector IDs without the retired harness.'
 
 function Write-FixtureJson([string] $Path, $Value) {
 	[IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 16 -Compress) + "`n"), $script:ContextUtf8)
@@ -49,7 +52,7 @@ function New-RequirementsTemplateFixture {
 		schemaVersion='aetheln.ci-acceptance-requirements-template/v1'
 		jobs=@(
 			[pscustomobject][ordered]@{key='native';jobName='native-receipt-shadow';checks=@('clean-package-provenance-smoke','native-client-server-compile')},
-			[pscustomobject][ordered]@{key='portable';jobName='portable-receipt-shadow';checks=@('content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','portable','unreal-editor-automation')},
+			[pscustomobject][ordered]@{key='portable';jobName='portable-receipt-shadow';checks=@('content-reference-validation','controller-contract','controller-operational-proof','portable','unreal-editor-automation')},
 			[pscustomobject][ordered]@{key='visual';jobName='visual-receipt-shadow';checks=@('visual-package')}
 		)
 	}
@@ -158,10 +161,12 @@ foreach ($Case in @(
 	@{name='selector-replay';reason='selector_identity_mismatch';mutate={param($f)$x=Get-Content -Raw $f.SelectorPath|ConvertFrom-Json;$x.attemptAnchor.runId='9000';Write-FixtureJson $f.SelectorPath $x}},
 	@{name='selector-type';reason='selector_identity_invalid';mutate={param($f)$x=Get-Content -Raw $f.SelectorPath|ConvertFrom-Json;$x.attemptAnchor.runAttempt='2';Write-FixtureJson $f.SelectorPath $x}},
 	@{name='selector-open';reason='selector_schema_invalid';mutate={param($f)$x=Get-Content -Raw $f.SelectorPath|ConvertFrom-Json;$x|Add-Member extra $true;Write-FixtureJson $f.SelectorPath $x}},
+	@{name='retired-selector-id';reason='selector_policy_invalid';mutate={param($f)$x=Get-Content -Raw $f.SelectorPath|ConvertFrom-Json;$x.policy.checkIds=@($x.policy.checkIds[0..1])+@('delivery-harness')+@($x.policy.checkIds[2..7]);Write-FixtureJson $f.SelectorPath $x}},
 	@{name='selector-missing-lf';reason='json_canonical_bytes_invalid';mutate={param($f)$raw=[IO.File]::ReadAllText($f.SelectorPath,$script:ContextUtf8);[IO.File]::WriteAllText($f.SelectorPath,$raw.Substring(0,$raw.Length-1),$script:ContextUtf8)}},
 	@{name='selector-extra-lf';reason='json_canonical_bytes_invalid';mutate={param($f)[IO.File]::AppendAllText($f.SelectorPath,"`n",$script:ContextUtf8)}},
 	@{name='selector-duplicate-json';reason='json_duplicate_property';mutate={param($f)$raw=[IO.File]::ReadAllText($f.SelectorPath,$script:ContextUtf8);$raw=$raw -replace '^\{','{"schemaVersion":"evil",';[IO.File]::WriteAllText($f.SelectorPath,$raw,$script:ContextUtf8)}},
 	@{name='incomplete-coverage';reason='requirements_check_coverage_incomplete';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks|Where-Object{$_ -cne 'portable'});Write-FixtureJson $f.TemplatePath $x}},
+	@{name='retired-template-id';reason='requirements_check_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks[0..2])+@('delivery-harness')+@($x.jobs[1].checks[3..4]);Write-FixtureJson $f.TemplatePath $x}},
 	@{name='unsorted-template';reason='requirements_not_sorted';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs=@($x.jobs[1],$x.jobs[0],$x.jobs[2]);Write-FixtureJson $f.TemplatePath $x}},
 	@{name='template-open';reason='requirements_schema_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x|Add-Member extra $true;Write-FixtureJson $f.TemplatePath $x}},
 	@{name='workflow-reparse';reason='input_reparse_rejected';mutate={param($f)$targetRoot=Join-Path $f.Root 'actual';$linkRoot=Join-Path $f.Root 'linked';New-Item -ItemType Directory -Path $targetRoot|Out-Null;Move-Item $f.WorkflowPath (Join-Path $targetRoot 'workflow.yml');New-Item -ItemType Junction -Path $linkRoot -Target $targetRoot|Out-Null;$f.WorkflowPath=Join-Path $linkRoot 'workflow.yml'}}

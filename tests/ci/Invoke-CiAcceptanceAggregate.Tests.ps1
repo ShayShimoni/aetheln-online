@@ -139,7 +139,7 @@ function New-FixtureRequirements {
 		schemaVersion = 'aetheln.ci-acceptance-requirements/v1'
 		jobs = @(
 			[pscustomobject][ordered]@{ key = 'native'; jobName = 'trusted-candidate-compile'; artifactName = ('ci-receipt-native-9001-2-' + $script:FixtureNonce); checks = @('clean-package-provenance-smoke','native-client-server-compile') },
-			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; artifactName = ('ci-receipt-quality-9001-2-' + $script:FixtureNonce); checks = @('content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','portable','unreal-editor-automation','visual-package') }
+			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; artifactName = ('ci-receipt-quality-9001-2-' + $script:FixtureNonce); checks = @('content-reference-validation','controller-contract','controller-operational-proof','portable','unreal-editor-automation','visual-package') }
 		)
 	}
 }
@@ -625,7 +625,7 @@ foreach ($UnrealTypeCase in @(
 	catch { throw "Aggregate Unreal fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 }
 
-foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness')) {
+foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof')) {
 	$UnsupportedRequirement = [pscustomobject][ordered]@{key='unsupported';jobName='unsupported-proof';selected=$true;artifactName=('ci-receipt-unsupported-9001-2-' + $Context.attemptAnchor.nonce);checks=@($UnsupportedId)}
 	$UnsupportedBytes = $script:Utf8.GetBytes('opaque-proof')
 	$UnsupportedReceipt = New-FixtureReceipt -Context $Context -Requirement $UnsupportedRequirement -EvidenceBytes $UnsupportedBytes
@@ -1004,6 +1004,9 @@ Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Req
 $BadRequirement = New-FixtureRequirements
 $BadRequirement.jobs[0].jobName = $BadRequirement.jobs[1].jobName
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $BadRequirement -ApiRequest (New-FixtureApi -Context $Context -Requirements $BadRequirement) -DeadlineSeconds 30 } 'requirements_identity_collision'
+$RetiredRequirement = New-FixtureRequirements
+$RetiredRequirement.jobs[1].checks += 'delivery-harness'
+Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $RetiredRequirement -ApiRequest (New-FixtureApi -Context $Context -Requirements $RetiredRequirement) -DeadlineSeconds 30 } 'requirements_check_invalid'
 $ReservedSelectorJob = New-FixtureRequirements
 $ReservedSelectorJob.jobs[0].jobName = 'ci-selection-shadow'
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $ReservedSelectorJob -ApiRequest (New-FixtureApi -Context $Context -Requirements $ReservedSelectorJob) -DeadlineSeconds 30 } 'requirements_selector_identity_reserved'

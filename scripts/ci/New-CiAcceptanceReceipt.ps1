@@ -24,7 +24,6 @@ $script:AcceptanceCheckIds = @(
 	'content-reference-validation',
 	'controller-contract',
 	'controller-operational-proof',
-	'delivery-harness',
 	'native-client-server-compile',
 	'portable',
 	'unreal-editor-automation',
@@ -36,8 +35,7 @@ $script:AcceptanceReceiptUnsupportedCheckIds = @(
 	'clean-package-provenance-smoke',
 	'content-reference-validation',
 	'controller-contract',
-	'controller-operational-proof',
-	'delivery-harness'
+	'controller-operational-proof'
 )
 $script:AcceptancePortableCheckNames = @(
 	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
