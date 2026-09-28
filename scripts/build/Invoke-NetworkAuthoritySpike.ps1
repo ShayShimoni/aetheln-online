@@ -1139,7 +1139,14 @@ if ($script:UseScenarioContract) {
 	} | ConvertTo-Json -Depth 4 -Compress
 	$ProfileArgumentsSha256 = Get-Sha256Text $ProfileArgumentsJson
 }
-$script:PerformanceContractRecord = if ([string]::IsNullOrWhiteSpace($PerformanceContractPath)) { $null } else { Resolve-PerformanceContract -Path $PerformanceContractPath }
+$script:PerformanceContractRecord = if ($PSBoundParameters.ContainsKey('PerformanceContractPath')) {
+	if ([string]::IsNullOrWhiteSpace($PerformanceContractPath)) {
+		throw 'PerformanceContractPath must not be empty or whitespace when supplied.'
+	}
+	Resolve-PerformanceContract -Path $PerformanceContractPath
+} else {
+	$null
+}
 
 if ($EvidenceMode -ceq 'packaged' -and $Environment -cne 'development') { throw 'Packaged authority evidence must use the development environment.' }
 if ($ServerLauncherExecutable) {

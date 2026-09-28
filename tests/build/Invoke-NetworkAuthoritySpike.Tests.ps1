@@ -511,7 +511,7 @@ exit $LASTEXITCODE
 		}
 		if ($PackagedBuildProvenancePath) { $Arguments.PackagedBuildProvenancePath = $PackagedBuildProvenancePath }
 		if ($ServerProvenanceExecutable) { $Arguments.ServerProvenanceExecutable = $ServerProvenanceExecutable }
-		if ($PerformanceContractPath) { $Arguments.PerformanceContractPath = $PerformanceContractPath }
+		if ($PSBoundParameters.ContainsKey('PerformanceContractPath')) { $Arguments.PerformanceContractPath = $PerformanceContractPath }
 		$ObservationDelayBreakpoint = $null
 		$ShutdownReleaseBreakpoint = $null
 		$ObservationExitBreakpoint = $null
@@ -1385,6 +1385,20 @@ exit $LASTEXITCODE
 	$PerformanceSuccessContract.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log')
 	$PerformanceSuccessContractPath = Join-Path $PerformanceContractRoot 'performance-success.json'
 	Write-PerformanceContract $PerformanceSuccessContractPath $PerformanceSuccessContract
+	foreach ($InvalidPath in @(
+		@{ Name = 'empty'; Value = '' },
+		@{ Name = 'spaces'; Value = '   ' },
+		@{ Name = 'tab-newline'; Value = "`t`n" }
+	)) {
+		$InvalidRoot = Join-Path $FixtureRoot "performance-path-$($InvalidPath.Name)"
+		$InvalidFailure = $null
+		try {
+			Invoke-FixtureRun -FixtureLogRoot $InvalidRoot -FixtureRunId "fixture-performance-path-$($InvalidPath.Name)" -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $InvalidPath.Value
+		} catch { $InvalidFailure = $_.Exception.Message }
+		Assert-True ($InvalidFailure -match [regex]::Escape('PerformanceContractPath must not be empty or whitespace when supplied.')) "A supplied $($InvalidPath.Name) performance path must fail closed. Actual: $InvalidFailure"
+		Assert-True (-not (Test-Path -LiteralPath $InvalidRoot)) "A supplied $($InvalidPath.Name) performance path must fail before creating the evidence root."
+	}
+	Write-Output 'PASS: bound blank performance-contract paths fail before evidence creation'
 	$PerformanceSuccessRoot = Join-Path $FixtureRoot 'performance-success'
 	$PerformanceArtifactProbeResultPath = Join-Path $FixtureRoot 'performance-artifact-probe-result.txt'
 	Invoke-FixtureRun -FixtureLogRoot $PerformanceSuccessRoot -FixtureRunId 'fixture-performance-success' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceSuccessContractPath -ProbePerformanceContractReplacement $true -PerformanceArtifactProbeResultPath $PerformanceArtifactProbeResultPath
