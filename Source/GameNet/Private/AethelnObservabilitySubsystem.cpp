@@ -356,6 +356,14 @@ void FAethelnCrashContextOwner::EndTracking(const UWorld* World)
 	MarkStale();
 }
 
+void FAethelnCrashContextOwner::RefreshForTrackedWorld(const UWorld* World)
+{
+	if (World != nullptr && TrackedWorlds.Contains(World))
+	{
+		Refresh();
+	}
+}
+
 bool FAethelnCrashContextOwner::IsTracked(const UWorld* World) const
 {
 	return TrackedWorlds.Contains(World);

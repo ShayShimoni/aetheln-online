@@ -246,6 +246,16 @@ Registration transitions:
   context. With exactly one observable world and a valid snapshot, state
   becomes `updating`, all thirteen identity keys are written, and state
   becomes `active`.
+- If that first tick has no game instance or subsystem, later ticks retry only
+  subsystem configuration, not world counting. A newly available or replaced
+  subsystem is configured once and emits its lifecycle start event; its
+  accepted-change broadcast refreshes crash registration for that world.
+- When a tracked world's configured subsystem disappears or changes, the
+  server first marks the process crash context stale, then re-reads the tracked
+  world. No subsystem clears the old crash run to `missing`; a replacement is
+  registered explicitly after configuration even if it was preconfigured and
+  emits no new change broadcast. Repeated ticks with the same subsystem do not
+  emit duplicate lifecycle starts.
 - An accepted runtime or build/profile change or reset on the sole tracked
   world's game instance refreshes crash context immediately, without waiting
   for another world tick. A valid replacement follows the same
@@ -266,7 +276,8 @@ Registration transitions:
   after cleanup, and `module-stopped` at shutdown.
 - A later tick from a single remaining observable world replaces `stale` or
   `ambiguous` context through the same `updating`-to-`active` sequence. A
-  refresh that yields `missing` is not retried every tick.
+  refresh that yields `missing` is not retried every tick by the crash owner;
+  the server still checks for a previously absent subsystem on later ticks.
 - The engine system-error callback only changes lifecycle to `crashing`. It
   does not inspect worlds or actors, query the subsystem, serialize gameplay,
   read the command line, allocate an unbounded payload, perform sink,

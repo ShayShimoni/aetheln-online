@@ -217,6 +217,16 @@ $SubsystemLookupIndex = $TickStart.IndexOf('FindObservabilitySubsystem(', [Strin
 if ($WorldCountIndex -lt 0 -or $SubsystemLookupIndex -lt 0 -or $WorldCountIndex -gt $SubsystemLookupIndex) {
 	throw 'Observable worlds must be counted before their observability subsystem is looked up.'
 }
+$FirstWorldBlock = [regex]::Match($TickStart, 'if\s*\(CrashContext\.TrackWorldTick\(World\)\)\s*\{(?<body>.*?)\n\t\t\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $FirstWorldBlock.Success) {
+	throw 'Could not isolate the first-world tracking block.'
+}
+if ($FirstWorldBlock.Groups['body'].Value.Contains('FindObservabilitySubsystem(')) {
+	throw 'A subsystem appearing after the first world tick must still be configured.'
+}
+if (-not $TickStart.Contains('CrashContext.RefreshForTrackedWorld(World)') -or -not $TickStart.Contains('ConfiguredSubsystems.Remove(World)')) {
+	throw 'World subsystem removal or replacement must refresh process crash context.'
+}
 
 function Get-AutomationDeclaration([string] $Text) {
 	$Result = @{}

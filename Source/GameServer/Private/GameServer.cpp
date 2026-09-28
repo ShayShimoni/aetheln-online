@@ -180,6 +180,7 @@ public:
 		FCoreDelegates::OnHandleSystemError.Remove(CrashHandle);
 		NextHealthSampleTimes.Reset();
 		WorldTickStartTimes.Reset();
+		ConfiguredSubsystems.Reset();
 		FGenericCrashContext::SetGameData(AethelnServerObservability::CrashLifecycleKey, TEXT("module-stopped"));
 		CrashContext.Shutdown();
 	}
@@ -195,21 +196,38 @@ private:
 		(void)DeltaSeconds;
 		WorldTickStartTimes.Add(World, FPlatformTime::Seconds());
 
-		// The world is counted before its subsystem is looked up; configuring context
-		// afterwards refreshes crash registration through the accepted-change broadcast.
+		// Count even a world whose game instance is not ready on its first tick.
 		if (CrashContext.TrackWorldTick(World))
 		{
 			NextHealthSampleTimes.Add(World, 0.0);
-			if (UAethelnObservabilitySubsystem* Subsystem = AethelnCrashContext::FindObservabilitySubsystem(World))
-			{
-				AethelnServerObservability::ConfigureContext(*Subsystem);
-				AethelnServerObservability::EmitEvent(
-					*Subsystem,
-					EAethelnObservabilityCategory::ServerLifecycle,
-					EAethelnSafeReason::Accepted,
-					NextSequence++);
-			}
 			FGenericCrashContext::SetGameData(AethelnServerObservability::CrashLifecycleKey, TEXT("world-running"));
+		}
+		// A subsystem may appear, disappear, or be replaced after the first tick.
+		// A changed association must invalidate process-wide crash attribution.
+		UAethelnObservabilitySubsystem* Subsystem = AethelnCrashContext::FindObservabilitySubsystem(World);
+		const TWeakObjectPtr<UAethelnObservabilitySubsystem>* Configured = ConfiguredSubsystems.Find(World);
+		const bool bChangedSubsystem = Configured != nullptr && (Subsystem == nullptr || Configured->Get() != Subsystem);
+		if (bChangedSubsystem)
+		{
+			CrashContext.MarkStale();
+			ConfiguredSubsystems.Remove(World);
+		}
+		if (Subsystem != nullptr && !ConfiguredSubsystems.Contains(World))
+		{
+			AethelnServerObservability::ConfigureContext(*Subsystem);
+			ConfiguredSubsystems.Add(World, Subsystem);
+			// Preconfigured replacements need this even when ConfigureContext has
+			// nothing to change and therefore emits no accepted-change broadcast.
+			CrashContext.RefreshForTrackedWorld(World);
+			AethelnServerObservability::EmitEvent(
+				*Subsystem,
+				EAethelnObservabilityCategory::ServerLifecycle,
+				EAethelnSafeReason::Accepted,
+				NextSequence++);
+		}
+		else if (bChangedSubsystem)
+		{
+			CrashContext.RefreshForTrackedWorld(World);
 		}
 	}
 
@@ -316,6 +334,7 @@ private:
 		}
 		NextHealthSampleTimes.Remove(World);
 		WorldTickStartTimes.Remove(World);
+		ConfiguredSubsystems.Remove(World);
 		FGenericCrashContext::SetGameData(
 			AethelnServerObservability::CrashLifecycleKey,
 			AethelnServerObservability::GetLifecycleAfterWorldCleanup(RemainingObservableWorldCount));
@@ -333,6 +352,7 @@ private:
 	FDelegateHandle CrashHandle;
 	TMap<TWeakObjectPtr<UWorld>, double> NextHealthSampleTimes;
 	TMap<TWeakObjectPtr<UWorld>, double> WorldTickStartTimes;
+	TMap<TWeakObjectPtr<UWorld>, TWeakObjectPtr<UAethelnObservabilitySubsystem>> ConfiguredSubsystems;
 	FAethelnCrashContextOwner CrashContext;
 	uint64 NextSequence = 1;
 };
@@ -487,6 +507,10 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 	}
 
 	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+	WorldContext.SetCurrentWorld(World);
+	// Reproduce a world ticking before its game instance and subsystem exist.
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
 	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
 	TestNotNull(TEXT("Server lifecycle game instance was created"), GameInstance);
 	if (GameInstance == nullptr)
@@ -506,13 +530,7 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> Sink =
 		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(16);
 	TestNotNull(TEXT("Server lifecycle runtime owns the observability subsystem"), Subsystem);
-	if (Subsystem == nullptr
-		|| !Subsystem->SetRuntimeContext(
-			EAethelnFlowKind::PrototypeAuthority,
-			TEXT("run-server-runtime"),
-			TEXT("instance-server-runtime"),
-			AethelnObservability::ExcludedIdentifier)
-		|| !Subsystem->SetTestSink(Sink))
+	if (Subsystem == nullptr || !Subsystem->SetTestSink(Sink))
 	{
 		GameInstance->Shutdown();
 		World->DestroyWorld(false);
@@ -520,23 +538,108 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	TestFalse(TEXT("Late subsystem begins without server runtime context"), Subsystem->HasRuntimeContext());
+	TestFalse(TEXT("Late subsystem begins without server build context"), Subsystem->HasBuildContext());
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	TestTrue(TEXT("Late subsystem receives server runtime context"), Subsystem->HasRuntimeContext());
+	TestTrue(TEXT("Late subsystem receives server build context"), Subsystem->HasBuildContext());
+	FAethelnCrashContextSnapshot Snapshot;
+	TestTrue(TEXT("Late subsystem exposes a bounded crash snapshot"), Subsystem->TryGetCrashContextSnapshot(Snapshot));
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
 	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
 	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	const FString* FirstState = FGenericCrashContext::GetGameData().Find(AethelnCrashContext::StateKey);
+	const FString* FirstRun = FGenericCrashContext::GetGameData().Find(AethelnCrashContext::CrashRunIdKey);
+	TestTrue(TEXT("First subsystem registers active crash context"), FirstState != nullptr && *FirstState == TEXT("active"));
+	TestTrue(TEXT("First subsystem registers its generated crash run"), FirstRun != nullptr && *FirstRun == Snapshot.CrashRunId);
+	const FString FirstRunId = FirstRun != nullptr ? *FirstRun : FString();
+
+	UGameInstance* ReplacementGameInstance = NewObject<UGameInstance>(GEngine);
+	TestNotNull(TEXT("Replacement game instance was created"), ReplacementGameInstance);
+	if (ReplacementGameInstance == nullptr)
+	{
+		Subsystem->ResetSink();
+		GameInstance->Shutdown();
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		return false;
+	}
+	WorldContext.OwningGameInstance = ReplacementGameInstance;
+	ReplacementGameInstance->Init();
+	UAethelnObservabilitySubsystem* ReplacementSubsystem = ReplacementGameInstance->GetSubsystem<UAethelnObservabilitySubsystem>();
+	TestNotNull(TEXT("Replacement observability subsystem was created"), ReplacementSubsystem);
+	if (ReplacementSubsystem == nullptr)
+	{
+		ReplacementGameInstance->Shutdown();
+		Subsystem->ResetSink();
+		GameInstance->Shutdown();
+		World->DestroyWorld(false);
+		GEngine->DestroyWorldContext(World);
+		return false;
+	}
+	AethelnServerObservability::ConfigureContext(*ReplacementSubsystem);
+	TestTrue(TEXT("Replacement runtime context is accepted before attachment"), ReplacementSubsystem->SetRuntimeContext(
+		EAethelnFlowKind::PrototypeAuthority,
+		TEXT("run-server-replacement"),
+		TEXT("game-server"),
+		AethelnObservability::ExcludedIdentifier));
+	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> ReplacementSink =
+		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(16);
+	TestTrue(TEXT("Replacement sink is accepted"), ReplacementSubsystem->SetTestSink(ReplacementSink));
+	FAethelnCrashContextSnapshot ReplacementSnapshot;
+	TestTrue(TEXT("Preconfigured replacement has a bounded snapshot"), ReplacementSubsystem->TryGetCrashContextSnapshot(ReplacementSnapshot));
+	World->SetGameInstance(ReplacementGameInstance);
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	const FString* ReplacementState = FGenericCrashContext::GetGameData().Find(AethelnCrashContext::StateKey);
+	const FString* ReplacementRun = FGenericCrashContext::GetGameData().Find(AethelnCrashContext::CrashRunIdKey);
+	TestTrue(TEXT("Preconfigured replacement refreshes active crash context"), ReplacementState != nullptr && *ReplacementState == TEXT("active"));
+	TestTrue(TEXT("Replacement crash run is exact and not stale"), ReplacementRun != nullptr
+		&& *ReplacementRun == ReplacementSnapshot.CrashRunId && *ReplacementRun != FirstRunId);
+	TestTrue(TEXT("Direct replacement drains its first lifecycle event"), ReplacementSubsystem->WaitForIdleForTests());
+	TestEqual(TEXT("Repeated ticks after direct replacement do not duplicate startup"), ReplacementSink->GetEvents().Num(), 1);
+
+	// A later absent association must clear process-wide attribution as well.
+	World->SetGameInstance(nullptr);
+	WorldContext.OwningGameInstance = nullptr;
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	const FString* MissingState = FGenericCrashContext::GetGameData().Find(AethelnCrashContext::StateKey);
+	const FString* MissingRun = FGenericCrashContext::GetGameData().Find(AethelnCrashContext::CrashRunIdKey);
+	TestTrue(TEXT("Detached subsystem clears crash context"), MissingState != nullptr && *MissingState == TEXT("missing"));
+	TestTrue(TEXT("Detached subsystem clears replacement crash run"), MissingRun == nullptr || MissingRun->IsEmpty());
+	WorldContext.OwningGameInstance = ReplacementGameInstance;
+	World->SetGameInstance(ReplacementGameInstance);
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+
 	FWorldDelegates::OnWorldCleanup.Broadcast(World, true, true);
-	TestTrue(TEXT("Actual server world delegates drain lifecycle and health evidence"), Subsystem->WaitForIdleForTests());
+	TestTrue(TEXT("Original subsystem drains lifecycle and health evidence"), Subsystem->WaitForIdleForTests());
+	TestTrue(TEXT("Replacement subsystem drains lifecycle evidence"), ReplacementSubsystem->WaitForIdleForTests());
 	const TArray<FAethelnObservabilityEvent> RuntimeEvents = Sink->GetEvents();
-	TestEqual(TEXT("Actual server world delegates emit start, health, and shutdown events"), RuntimeEvents.Num(), 3);
-	if (RuntimeEvents.Num() == 3)
+	TestEqual(TEXT("Original subsystem emits start and health only"), RuntimeEvents.Num(), 2);
+	if (RuntimeEvents.Num() == 2)
 	{
 		TestEqual(TEXT("World-start delegate emits server lifecycle"), RuntimeEvents[0].Category, EAethelnObservabilityCategory::ServerLifecycle);
 		TestEqual(TEXT("World-tick delegate emits server health"), RuntimeEvents[1].Category, EAethelnObservabilityCategory::ServerHealth);
-		TestEqual(TEXT("World-cleanup delegate emits server lifecycle"), RuntimeEvents[2].Category, EAethelnObservabilityCategory::ServerLifecycle);
-		TestEqual(TEXT("World-cleanup delegate emits controlled shutdown"), RuntimeEvents[2].SafeReason, EAethelnSafeReason::ControlledShutdown);
 	}
 	TestEqual(TEXT("Actual server health delegate emits seven metrics"), Sink->GetMetrics().Num(), 7);
+	const TArray<FAethelnObservabilityEvent> ReplacementEvents = ReplacementSink->GetEvents();
+	TestEqual(TEXT("Replacement emits one start per association and one shutdown"), ReplacementEvents.Num(), 3);
+	if (ReplacementEvents.Num() == 3)
+	{
+		TestEqual(TEXT("Direct replacement starts once"), ReplacementEvents[0].Category, EAethelnObservabilityCategory::ServerLifecycle);
+		TestEqual(TEXT("Reattached replacement starts once"), ReplacementEvents[1].Category, EAethelnObservabilityCategory::ServerLifecycle);
+		TestEqual(TEXT("Replacement shuts down"), ReplacementEvents[2].SafeReason, EAethelnSafeReason::ControlledShutdown);
+	}
 
 	Subsystem->ResetSink();
 	Subsystem->ResetRuntimeContext();
+	ReplacementSubsystem->ResetSink();
+	ReplacementSubsystem->ResetRuntimeContext();
+	ReplacementGameInstance->Shutdown();
 	GameInstance->Shutdown();
 	World->DestroyWorld(false);
 	GEngine->DestroyWorldContext(World);

@@ -169,6 +169,14 @@ try {
 	Assert-FailsClosed -Name 'GameServer subsystem-gated world counting' -ExpectedPattern 'counted before'
 
 	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'if (CrashContext.TrackWorldTick(World))' -Replacement 'if (CrashContext.TrackWorldTick(World)) /* variant */'
+	Assert-FailsClosed -Name 'unrecognized first-world block' -ExpectedPattern 'Could not isolate the first-world tracking block'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'CrashContext.RefreshForTrackedWorld(World);' -Replacement '(void)World;'
+	Assert-FailsClosed -Name 'missing subsystem-transition refresh' -ExpectedPattern 'must refresh process crash context'
+
+	Initialize-Fixture
 	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'Character validation bounds these values but does not prove they are free of personal or secret text' -Replacement 'Character validation proves these values are safe'
 	Assert-FailsClosed -Name 'overclaimed command-line provenance' -ExpectedPattern 'provenance limitation'
 

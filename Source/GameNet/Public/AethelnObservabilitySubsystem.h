@@ -199,6 +199,8 @@ public:
 	bool TrackWorldTick(const UWorld* World);
 	/** Stops tracking a world and clears to stale. */
 	void EndTracking(const UWorld* World);
+	/** Re-reads only a tracked world's current subsystem after its association changes. */
+	void RefreshForTrackedWorld(const UWorld* World);
 	bool IsTracked(const UWorld* World) const;
 	int32 NumTrackedWorlds() const;
 	void Register(const FAethelnCrashContextSnapshot* Snapshot);
