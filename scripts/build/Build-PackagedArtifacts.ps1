@@ -682,6 +682,25 @@ function Resolve-RecordDirectory([string] $Root, [string] $Relative, [string] $L
 	if ([string]::IsNullOrWhiteSpace($Relative) -or [System.IO.Path]::IsPathRooted($Relative) -or (($Relative -split '[\\/]') -contains '..')) { throw "$Label must be a safe stage-relative directory path." }
 	Resolve-RequiredPath -Name $Label -Path (Join-Path $Root $Relative) -PathType 'Container'
 }
+# Hashed immediately after each target's own cook so later consumers can reject
+# stale, substituted, or cross-target registry bytes against producer evidence.
+function Get-CookedRegistryReceipt([string] $Kind) {
+	$Identity = if ($Kind -eq 'client') { @{ target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient' } } else { @{ target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer' } }
+	$RelativePath = "Saved/Cooked/$($Identity.cookPlatform)/AethelnOnline/AssetRegistry.bin"
+	$RegistryPath = Join-Path $ProjectRoot $RelativePath
+	if (-not (Test-Path -LiteralPath $RegistryPath -PathType Leaf)) { throw "The $Kind cooked registry '$RegistryPath' is missing after the cook; packaging fails closed." }
+	$Registry = Get-Item -LiteralPath $RegistryPath
+	if ($Registry.Length -le 0) { throw "The $Kind cooked registry '$RegistryPath' is empty; packaging fails closed." }
+	return [ordered]@{
+		relativePath = $RelativePath
+		sizeBytes = $Registry.Length
+		sha256 = (Get-FileHash -LiteralPath $RegistryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+		target = $Identity.target
+		platform = $Identity.platform
+		cookPlatform = $Identity.cookPlatform
+		sourceRevision = $SourceRevision
+	}
+}
 
 $ResolvedProject = Resolve-RequiredPath -Name 'ProjectPath' -Path $ProjectPath -PathType 'Leaf'
 $ProjectRoot = Split-Path -Parent $ResolvedProject
@@ -771,6 +790,8 @@ try {
 	$CookedInventoryArguments = @($ResolvedProject, '-run=DumpAssetRegistry', "-Path=$CookedInventoryPath", "-OutDir=$CookedInventoryDump", '-PackageName', '-unattended', '-nop4')
 	$SelectedCompiler = $null
 	$SelectedResourceCompiler = $null
+	$ClientRegistryReceipt = $null
+	$ServerRegistryReceipt = $null
 	$PreviousToolchain = [Environment]::GetEnvironmentVariable('LINUX_MULTIARCH_ROOT', 'Process')
 	$PreviousLocalDdc = [Environment]::GetEnvironmentVariable('UE-LocalDataCachePath', 'Process')
 	try {
@@ -782,11 +803,15 @@ try {
 				Assert-PackagedExecutable -Label 'Windows client packaging' -Root $ClientArchive -Names @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
 				$script:SelectedCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Compiler' -ExecutableName 'cl.exe'
 				$script:SelectedResourceCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Resource Compiler' -ExecutableName 'rc.exe'
+				$script:ClientRegistryReceipt = Get-CookedRegistryReceipt 'client'
 			}
 		}
 		if ($Stage -in @('All', 'Server')) {
 			Invoke-TimedStep 'server-uat-build-cook-package' { Invoke-UatBuild -Label 'Linux x86-64 dedicated server build/cook/package' -Arguments $ServerArguments -LogPath (Join-Path $ResolvedLogs 'server-uat.log') -AutomationToolLogDirectory $ServerAutomationToolLogs }
-			Invoke-TimedStep 'server-output-validation' { Assert-PackagedExecutable -Label 'Linux server packaging' -Root $ServerArchive -Names @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping') }
+			Invoke-TimedStep 'server-output-validation' {
+				Assert-PackagedExecutable -Label 'Linux server packaging' -Root $ServerArchive -Names @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping')
+				$script:ServerRegistryReceipt = Get-CookedRegistryReceipt 'server'
+			}
 			Invoke-TimedStep 'server-dependency-registry-dump' { Invoke-LoggedCommand -Label 'dedicated-server dependency registry dump' -Executable $UnrealEditorCmd -Arguments $DependencyRegistryArguments -LogPath (Join-Path $ResolvedLogs 'server-dependency-registry-dump.log') }
 			Invoke-TimedStep 'server-cooked-inventory-dump' { Invoke-LoggedCommand -Label 'dedicated-server cooked inventory dump' -Executable $UnrealEditorCmd -Arguments $CookedInventoryArguments -LogPath (Join-Path $ResolvedLogs 'server-cooked-inventory-dump.log') }
 			if ($Stage -eq 'All') { Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyRegistryDump -CookedInventoryDirectory $CookedInventoryDump } }
@@ -807,6 +832,7 @@ try {
 				clientArguments = $ClientArguments
 				compilerPath = $SelectedCompiler
 				resourceCompilerPath = $SelectedResourceCompiler
+				cookedRegistry = $ClientRegistryReceipt
 			} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-client.json') -Encoding UTF8
 			Write-Output "Client packaging stage completed under '$ResolvedArchive'."
 		}
@@ -822,28 +848,31 @@ try {
 				cookedInventoryDumpArguments = $CookedInventoryArguments
 				dependencyReportDirectory = 'RegistryDumps/server-dependency-registry-dump'
 				cookedInventoryDirectory = 'RegistryDumps/server-cooked-inventory-dump'
+				cookedRegistry = $ServerRegistryReceipt
 			} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-server.json') -Encoding UTF8
 			Write-Output "Server packaging stage completed under '$ResolvedArchive'."
 		}
 		'Provenance' {
 			$ClientRecord = Read-StageRecord $ResolvedClientStage 'Client'
 			$ServerRecord = Read-StageRecord $ResolvedServerStage 'Server'
-			foreach ($Property in @('clientArguments', 'compilerPath', 'resourceCompilerPath')) {
+			foreach ($Property in @('clientArguments', 'compilerPath', 'resourceCompilerPath', 'cookedRegistry')) {
 				if ($null -eq $ClientRecord.PSObject.Properties[$Property]) { throw "Client stage record is missing required property '$Property'." }
 			}
-			foreach ($Property in @('serverArguments', 'dependencyRegistryDumpArguments', 'cookedInventoryDumpArguments', 'dependencyReportDirectory', 'cookedInventoryDirectory')) {
+			foreach ($Property in @('serverArguments', 'dependencyRegistryDumpArguments', 'cookedInventoryDumpArguments', 'dependencyReportDirectory', 'cookedInventoryDirectory', 'cookedRegistry')) {
 				if ($null -eq $ServerRecord.PSObject.Properties[$Property]) { throw "Server stage record is missing required property '$Property'." }
 			}
 			$DependencyReportDirectory = Resolve-RecordDirectory -Root $ResolvedServerStage -Relative ([string] $ServerRecord.dependencyReportDirectory) -Label 'Dependency report directory'
 			$CookedInventoryDirectory = Resolve-RecordDirectory -Root $ResolvedServerStage -Relative ([string] $ServerRecord.cookedInventoryDirectory) -Label 'Cooked inventory directory'
 			Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyReportDirectory -CookedInventoryDirectory $CookedInventoryDirectory }
 			$UatArgumentsJson = [ordered]@{ client = @($ClientRecord.clientArguments); server = @($ServerRecord.serverArguments); dependencyRegistryDump = @($ServerRecord.dependencyRegistryDumpArguments); cookedInventoryDump = @($ServerRecord.cookedInventoryDumpArguments) } | ConvertTo-Json -Compress
-			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson }
+			$CookedRegistryReceiptsJson = [ordered]@{ client = $ClientRecord.cookedRegistry; server = $ServerRecord.cookedRegistry } | ConvertTo-Json -Depth 4 -Compress
+			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson -CookedRegistryReceiptsJson $CookedRegistryReceiptsJson }
 			Write-Output "Provenance validation stage completed under '$ResolvedArchive'."
 		}
 		default {
 			$UatArgumentsJson = [ordered]@{ client = $ClientArguments; server = $ServerArguments; dependencyRegistryDump = $DependencyRegistryArguments; cookedInventoryDump = $CookedInventoryArguments } | ConvertTo-Json -Compress
-			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath $SelectedCompiler -ResourceCompilerPath $SelectedResourceCompiler -UatArgumentsJson $UatArgumentsJson }
+			$CookedRegistryReceiptsJson = [ordered]@{ client = $ClientRegistryReceipt; server = $ServerRegistryReceipt } | ConvertTo-Json -Depth 4 -Compress
+			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath $SelectedCompiler -ResourceCompilerPath $SelectedResourceCompiler -UatArgumentsJson $UatArgumentsJson -CookedRegistryReceiptsJson $CookedRegistryReceiptsJson }
 			Write-Output "Packaged artifacts completed under '$ResolvedArchive'."
 		}
 	}

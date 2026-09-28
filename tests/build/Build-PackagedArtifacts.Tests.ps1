@@ -21,6 +21,24 @@ try {
 	foreach ($ProjectItem in @('AethelnOnline.uproject', 'Source', 'Config')) { Copy-Item -LiteralPath (Join-Path $RepositoryRoot $ProjectItem) -Destination $FixtureProjectRoot -Recurse }
 	$FixtureProject = Join-Path $FixtureProjectRoot 'AethelnOnline.uproject'
 	$env:AETHELN_TEST_PROJECT_ROOT = $FixtureProjectRoot
+	$env:AETHELN_TEST_REGISTRY_NONCE = 'fixture'
+	function Assert-RegistryReceipt($Actual, [string] $Kind, [string] $Context) {
+		$CookPlatform = if ($Kind -ceq 'client') { 'WindowsClient' } else { 'LinuxServer' }
+		$RelativePath = "Saved/Cooked/$CookPlatform/AethelnOnline/AssetRegistry.bin"
+		$RegistryPath = Join-Path $FixtureProjectRoot $RelativePath
+		$Expected = [ordered]@{
+			relativePath = $RelativePath
+			sizeBytes = (Get-Item -LiteralPath $RegistryPath).Length
+			sha256 = (Get-FileHash -LiteralPath $RegistryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+			target = if ($Kind -ceq 'client') { 'AethelnOnlineClient' } else { 'AethelnOnlineServer' }
+			platform = if ($Kind -ceq 'client') { 'Win64' } else { 'Linux' }
+			cookPlatform = $CookPlatform
+			sourceRevision = $Revision
+		}
+		Assert-True ($null -ne $Actual) "$Context must carry the producer $Kind cooked-registry receipt."
+		Assert-True ((@($Actual.PSObject.Properties.Name) -join ',') -ceq (@($Expected.Keys) -join ',')) "$Context $Kind receipt must use the closed field set."
+		foreach ($Field in $Expected.Keys) { Assert-True ($Actual.$Field -eq $Expected[$Field]) "$Context $Kind receipt $Field must bind the exact cooked registry." }
+	}
 	$OriginalPath = $env:PATH
 	$GitBin = Join-Path $FixtureRoot 'GitBin'
 	New-Item -ItemType Directory -Path $GitBin -Force | Out-Null
@@ -91,9 +109,14 @@ echo %* | findstr /c:"-serverplatform=Linux" >nul
 if %errorlevel%==0 (
 	mkdir "%AETHELN_TEST_ARCHIVE_ROOT%\LinuxServer" 2>nul
 	echo server>"%AETHELN_TEST_ARCHIVE_ROOT%\LinuxServer\AethelnOnlineServer"
+	mkdir "%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\LinuxServer\AethelnOnline" 2>nul
+	echo server registry %AETHELN_TEST_REGISTRY_NONCE%>"%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\LinuxServer\AethelnOnline\AssetRegistry.bin"
 ) else (
 	mkdir "%AETHELN_TEST_ARCHIVE_ROOT%\WindowsClient" 2>nul
 	echo client>"%AETHELN_TEST_ARCHIVE_ROOT%\WindowsClient\AethelnOnlineClient.exe"
+	mkdir "%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\WindowsClient\AethelnOnline" 2>nul
+	del "%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\WindowsClient\AethelnOnline\AssetRegistry.bin" 2>nul
+	if not "%AETHELN_TEST_SKIP_CLIENT_REGISTRY%"=="1" echo client registry %AETHELN_TEST_REGISTRY_NONCE%>"%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\WindowsClient\AethelnOnline\AssetRegistry.bin"
 	mkdir "%uebp_LogFolder%" 2>nul
 	>"%uebp_LogFolder%\UBA-client.txt" echo Compiler: $SelectedCompiler
 	>>"%uebp_LogFolder%\UBA-client.txt" echo Compiler: $SelectedCompiler
@@ -169,6 +192,8 @@ public static class FakeEditor {
 	Assert-True (-not $Calls[1].Contains('-platform=Linux')) 'The server must use serverplatform rather than the ambiguous platform switch.'
 	$Provenance = Get-Content -LiteralPath (Join-Path $ArchiveRoot 'build-provenance.json') -Raw | ConvertFrom-Json
 	Assert-True ($Provenance.build.uatInvocations.server.arguments -contains '-serverplatform=Linux') 'Provenance should preserve exact UAT arguments.'
+	Assert-RegistryReceipt $Provenance.build.cookedRegistries.client 'client' 'Build provenance'
+	Assert-RegistryReceipt $Provenance.build.cookedRegistries.server 'server' 'Build provenance'
 	Assert-True ($Provenance.source.clean -eq $true) 'Provenance should record the clean-worktree gate result.'
 	Assert-True ($Provenance.tools.compiler.path -eq $SelectedCompiler) 'Provenance must use the compiler selected in this UBT invocation.'
 	Assert-True ($Provenance.tools.compiler.version -eq '14.44.35207') 'The selected MSVC version should be correlated from its exact path.'
@@ -235,6 +260,7 @@ public static class FakeEditor {
 	Assert-True ($ClientRecord.compilerPath -eq $SelectedCompiler -and $ClientRecord.resourceCompilerPath -eq $SelectedResourceCompiler) 'The client stage record must carry the exact UBT-selected toolchain.'
 	Assert-True ((@($ClientRecord.clientArguments) -contains '-target=AethelnOnlineClient') -and (@($ClientRecord.clientArguments) -contains '-clean')) 'The client stage record must preserve the exact clean client UAT arguments.'
 	Assert-True (-not (Test-Path -LiteralPath (Join-Path $StagedClientRoot 'LinuxServer'))) 'The client stage must not produce server output.'
+	Assert-RegistryReceipt $ClientRecord.cookedRegistry 'client' 'The client stage record'
 
 	$env:AETHELN_TEST_ARCHIVE_ROOT = $StagedServerRoot
 	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedServerRoot -LogRoot (Join-Path $FixtureRoot 'StagedServerLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -Stage Server
@@ -243,6 +269,7 @@ public static class FakeEditor {
 	Assert-True (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'RegistryDumps/server-dependency-registry-dump/Page_0.txt')) 'The server stage must publish its dependency registry dump as payload.'
 	Assert-True (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'RegistryDumps/server-cooked-inventory-dump/Page_0.txt')) 'The server stage must publish its cooked inventory dump as payload.'
 	Assert-True (-not (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'WindowsClient'))) 'The server stage must not produce client output.'
+	Assert-RegistryReceipt $ServerRecord.cookedRegistry 'server' 'The server stage record'
 
 	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedProvenanceRoot -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceLogs') -SourceRevision $Revision -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot
 	$StagedProvenance = Get-Content -LiteralPath (Join-Path $StagedProvenanceRoot 'build-provenance.json') -Raw | ConvertFrom-Json
@@ -254,6 +281,34 @@ public static class FakeEditor {
 	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'StagedProvenanceMismatch') -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceMismatchLogs') -SourceRevision ('1' * 40) -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'produced from source revision') 'Provenance over stage records from a different revision must fail closed.'
 	Write-Output 'PASS: staged client, server, and provenance phases exchange exact records and fail closed on revision mismatch'
+
+	Assert-RegistryReceipt $StagedProvenance.build.cookedRegistries.client 'client' 'Staged build provenance'
+	Assert-RegistryReceipt $StagedProvenance.build.cookedRegistries.server 'server' 'Staged build provenance'
+	foreach ($ReceiptCase in @(
+		@{ name = 'CrossTarget'; field = 'cookPlatform'; value = 'LinuxServer' },
+		@{ name = 'CrossRevision'; field = 'sourceRevision'; value = ('1' * 40) },
+		@{ name = 'ForeignTarget'; field = 'target'; value = 'AethelnOnlineServer' }
+	)) {
+		$TamperedClientRoot = Join-Path $FixtureRoot "StagedClient$($ReceiptCase.name)"
+		Copy-Item -LiteralPath $StagedClientRoot -Destination $TamperedClientRoot -Recurse
+		$TamperedRecordPath = Join-Path $TamperedClientRoot 'phase-client.json'
+		$TamperedRecord = Get-Content -LiteralPath $TamperedRecordPath -Raw | ConvertFrom-Json
+		$TamperedRecord.cookedRegistry.($ReceiptCase.field) = $ReceiptCase.value
+		$TamperedRecord | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $TamperedRecordPath -Encoding UTF8
+		$Failure = $null
+		try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot "StagedProvenance$($ReceiptCase.name)") -LogRoot (Join-Path $FixtureRoot "StagedProvenance$($ReceiptCase.name)Logs") -SourceRevision $Revision -Stage Provenance -ClientStageRoot $TamperedClientRoot -ServerStageRoot $StagedServerRoot } catch { $Failure = $_.Exception.Message }
+		Assert-True ($null -ne $Failure -and $Failure -match 'client cooked-registry receipt') "A $($ReceiptCase.name) client stage receipt must fail provenance closed; observed '$Failure'."
+		Assert-True (-not (Test-Path -LiteralPath (Join-Path $FixtureRoot "StagedProvenance$($ReceiptCase.name)/build-provenance.json"))) "A $($ReceiptCase.name) client stage receipt must not produce provenance."
+	}
+	$env:AETHELN_TEST_SKIP_CLIENT_REGISTRY = '1'
+	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'MissingRegistryClient'
+	$Failure = $null
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'MissingRegistryClient') -LogRoot (Join-Path $FixtureRoot 'MissingRegistryClientLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -Stage Client } catch { $Failure = $_.Exception.Message }
+	Remove-Item Env:AETHELN_TEST_SKIP_CLIENT_REGISTRY
+	$env:AETHELN_TEST_ARCHIVE_ROOT = $ArchiveRoot
+	Assert-True ($null -ne $Failure -and $Failure -match 'client cooked registry') "A cook that leaves no client registry must fail closed; observed '$Failure'."
+	Assert-True (-not (Test-Path -LiteralPath (Join-Path $FixtureRoot 'MissingRegistryClient/phase-client.json'))) 'A cook without a registry must not publish a client stage record.'
+	Write-Output 'PASS: producer-owned registry receipts bind stage records and provenance, and missing, cross-target, and cross-revision receipts fail closed'
 
 	$Timing = Get-Content -LiteralPath (Join-Path $LogRoot 'build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($Timing.schemaVersion -eq 3 -and $Timing.stage -eq 'all' -and $Timing.sourceRevision -eq $Revision -and $Timing.configuration -eq 'Development') 'The timing record must bind schema, stage, source revision, and configuration.'
@@ -606,6 +661,8 @@ finally {
 	Remove-Item Env:AETHELN_TEST_ARCHIVE_ROOT -ErrorAction SilentlyContinue
 	Remove-Item Env:AETHELN_TEST_DDC_CAPTURE -ErrorAction SilentlyContinue
 	Remove-Item Env:AETHELN_TEST_PROJECT_ROOT -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_TEST_REGISTRY_NONCE -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_TEST_SKIP_CLIENT_REGISTRY -ErrorAction SilentlyContinue
 	[Environment]::SetEnvironmentVariable('uebp_LogFolder', $OriginalUebpLogFolder, 'Process')
 	[Environment]::SetEnvironmentVariable('uebp_FinalLogFolder', $OriginalUebpFinalLogFolder, 'Process')
 	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }

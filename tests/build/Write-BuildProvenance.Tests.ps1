@@ -37,8 +37,15 @@ try {
 	$Revision = $RealRevision
 	$UatArguments = [ordered]@{ client = @('BuildCookRun', '-platform=Win64'); server = @('BuildCookRun', '-serverplatform=Linux'); dependencyRegistryDump = @('-run=DumpAssetRegistry', '-DependencyDetails'); cookedInventoryDump = @('-run=DumpAssetRegistry', '-PackageName') } | ConvertTo-Json -Compress
 	$OutputPath = Join-Path $FixtureRoot 'provenance/build.json'
+	function New-RegistryReceipts([string] $ReceiptRevision = $Revision) {
+		[ordered]@{
+			client = [ordered]@{ relativePath = 'Saved/Cooked/WindowsClient/AethelnOnline/AssetRegistry.bin'; sizeBytes = 17; sha256 = ('a' * 64); target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient'; sourceRevision = $ReceiptRevision }
+			server = [ordered]@{ relativePath = 'Saved/Cooked/LinuxServer/AethelnOnline/AssetRegistry.bin'; sizeBytes = 23; sha256 = ('b' * 64); target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer'; sourceRevision = $ReceiptRevision }
+		}
+	}
+	$CookedRegistryReceipts = New-RegistryReceipts | ConvertTo-Json -Compress
 
-	& $Script -OutputPath $OutputPath -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $UatArguments
+	& $Script -OutputPath $OutputPath -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $UatArguments -CookedRegistryReceiptsJson $CookedRegistryReceipts
 	$Provenance = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
 	Assert-True ($Provenance.schemaVersion -eq 2) 'Schema version should identify complete provenance.'
 	Assert-True ($Provenance.source.revision -eq $Revision) 'Verified repository HEAD should be recorded.'
@@ -63,10 +70,35 @@ try {
 	Assert-True (-not ($Provenance.PSObject.Properties.Name -contains 'environment')) 'Process environment must not be captured.'
 	Write-Output 'PASS: provenance records verified revisions, exact tools/arguments/plugins/host, and hashed inventory'
 
+	foreach ($Kind in @('client', 'server')) {
+		$Expected = (New-RegistryReceipts).$Kind
+		$Recorded = $Provenance.build.cookedRegistries.$Kind
+		foreach ($Field in $Expected.Keys) { Assert-True ($Recorded.$Field -ceq $Expected[$Field]) "Provenance must record the producer $Kind registry receipt $Field." }
+	}
+	Write-Output 'PASS: provenance records the producer-owned client and server cooked-registry receipts'
+
 	$Failure = $null
-	try { & $Script -OutputPath (Join-Path $FixtureRoot 'bad.json') -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision ('0' * 40) -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $UatArguments } catch { $Failure = $_.Exception.Message }
+	try { & $Script -OutputPath (Join-Path $FixtureRoot 'bad.json') -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision ('0' * 40) -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $UatArguments -CookedRegistryReceiptsJson $CookedRegistryReceipts } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'does not match repository HEAD') 'A requested revision not matching actual HEAD must fail.'
 	Write-Output 'PASS: provenance refuses an unproven source revision'
+
+	$CrossTarget = New-RegistryReceipts; $CrossTarget.client.cookPlatform = 'LinuxServer'
+	$BadDigest = New-RegistryReceipts; $BadDigest.server.sha256 = ('B' * 64)
+	$MissingServer = New-RegistryReceipts; $MissingServer.Remove('server')
+	$ExtraField = New-RegistryReceipts; $ExtraField.client.stale = $true
+	foreach ($ReceiptCase in @(
+		@{ name = 'cross-target'; receipts = $CrossTarget; pattern = 'client cooked-registry receipt cookPlatform' },
+		@{ name = 'cross-revision'; receipts = (New-RegistryReceipts ('1' * 40)); pattern = 'client cooked-registry receipt sourceRevision' },
+		@{ name = 'bad-digest'; receipts = $BadDigest; pattern = 'server cooked-registry receipt sha256' },
+		@{ name = 'missing-server'; receipts = $MissingServer; pattern = 'exactly client and server' },
+		@{ name = 'extra-field'; receipts = $ExtraField; pattern = 'client cooked-registry receipt fields' }
+	)) {
+		$Failure = $null
+		try { & $Script -OutputPath (Join-Path $FixtureRoot "bad-$($ReceiptCase.name).json") -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $UatArguments -CookedRegistryReceiptsJson ($ReceiptCase.receipts | ConvertTo-Json -Compress) } catch { $Failure = $_.Exception.Message }
+		Assert-True ($null -ne $Failure -and $Failure -match $ReceiptCase.pattern) "A $($ReceiptCase.name) cooked-registry receipt must fail closed; observed '$Failure'."
+		Assert-True (-not (Test-Path -LiteralPath (Join-Path $FixtureRoot "bad-$($ReceiptCase.name).json"))) "A $($ReceiptCase.name) cooked-registry receipt must not write provenance."
+	}
+	Write-Output 'PASS: missing, extra, malformed, cross-target, and cross-revision registry receipts fail closed'
 }
 finally {
 	if ($null -ne $OriginalPath) { $env:PATH = $OriginalPath }
