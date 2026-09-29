@@ -95,8 +95,14 @@ For each authoritative contact, the server performs this order:
    delayed effect ticks; activation-time permission does not survive a policy
    change automatically.
 2. Validate authored contact from the server-owned volume or simulation and
-   reject any duplicate activation/contact identity or actor already present in
-   the activation's bounded already-hit set.
+   reject any duplicate activation/contact identity. Enforce the versioned
+   definition's per-target result allowance: a one-result-per-activation rule
+   rejects an actor already in the activation's bounded already-hit set, while
+   authored repeat-result rules use bounded actor/result-slot identities and
+   per-target counts to reject duplicate deliveries or results beyond the
+   authored allowance. If the applicable record is full,
+   reject new contacts for that activation; do not evict or clear recorded
+   identities while the activation remains live.
 3. Resolve avoidance and explicit immunity, including the server-owned dodge
    window. An avoided contact cannot be reintroduced by later presentation.
 4. Resolve directional block from authoritative facing and contact geometry,
@@ -109,11 +115,14 @@ For each authoritative contact, the server performs this order:
 6. Consume eligible Ward capacity from the post-mitigation component in its
    stable authored Ward order. Depletion affects the next eligible component;
    a Ward cannot consume damage twice or become negative.
-7. Apply remaining damage to Health and record the component result. After all
-   declared components for the contact resolve, apply eligible secondary
-   effects, interruption, and control. Ordinary control does not attach to a
-   target whose Health made the contact lethal unless the effect explicitly
-   declares an on-death lifecycle rule.
+7. Apply remaining damage to Health and record the component result. Health
+   reaching zero latches the contact's death transition before secondary
+   effects. After all declared components for the contact resolve, apply
+   eligible secondary effects, interruption, and control. Ordinary secondary
+   Health restoration or control is ineligible for a target whose Health made
+   the contact lethal. An explicitly authored on-death lifecycle effect may
+   still run under its declared rule but does not cancel the latched death;
+   death prevention must resolve before the zero-Health result.
 8. Commit death and cancellation once, then emit authoritative presentation,
    audit, threat, engagement, and proc events from the committed result.
 
@@ -469,18 +478,26 @@ The authoritative timeline defines a deterministic order for:
 1. Validate activation and territory policy.
 2. Commit authoritative costs and cooldown rules.
 3. Advance movement and combat windows using the server clock.
-4. Revalidate contact eligibility, relation, and current territory policy.
+4. Revalidate authored contact, eligibility, relation, and current territory
+   policy; reject duplicate activation/contact identities and enforce the
+   versioned per-target result allowance with bounded records, then record the
+   accepted contact.
 5. Resolve avoidance/immunity, directional block and Guard, family mitigation,
-   Ward, and Health in the shared defense order.
-6. Apply eligible effects, interruption, control/Resolve, already-hit state,
-   threat, engagement, and bounded procs.
-7. Resolve death and cancellation once.
-8. Emit authoritative presentation and audit events.
+   Ward, and Health in the shared defense order; Health reaching zero latches
+   death and makes ordinary secondary Health restoration or control ineligible
+   for that target.
+6. Apply eligible secondary effects, interruption, and control/Resolve after
+   all declared components resolve.
+7. Commit death and cancellation once.
+8. Emit threat, engagement, bounded proc, authoritative presentation, and audit
+   events only from the committed result.
 
 The exact rule between simultaneous events is content data or an explicit combat
 decision, never frame-order accident. Tests must cover boundary timestamps,
 multi-family contacts, same-timestamp Guard/Ward/Health/control transitions,
-repeated or reordered packets, policy changes while an effect is in flight,
+repeated or reordered packets, authored repeat-contact allowances, already-hit
+capacity saturation and replay, lethal-contact secondary restoration,
+policy changes while an effect is in flight,
 stack refresh/replacement, periodic ticks, cleanse eligibility, proc cycles,
 actor destruction, disconnect, and death during an active window.
 
