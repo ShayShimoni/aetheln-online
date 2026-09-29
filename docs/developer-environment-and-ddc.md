@@ -290,6 +290,24 @@ generated .NET `bin`/`obj` products: the pinned engine's `Build.bat` calls
 Normal `Setup.bat` hydration is not mistaken for a prior host build: only
 manifest-listed Win64 engine/plugin files with matching content hashes pass;
 unlisted, changed, case-colliding, or reparse-mediated files fail closed.
+If the bounded fresh-host-tool attempt intentionally omits `Setup.bat`'s
+machine setup, hydrate dependencies directly from the pinned engine checkout:
+
+```powershell
+& (Join-Path $AethelnEngineRoot 'Engine\Binaries\DotNET\GitDependencies\win-x64\GitDependencies.exe') `
+  "--root=$AethelnEngineRoot" --no-cache --prompt
+```
+
+This explicit-root, no-download-cache invocation hydrates source dependencies
+only. It does not perform `Setup.bat`'s Git-hook installation, redistributable
+installation, or engine registration; record those omissions and verify any
+needed machine prerequisites separately before claiming Editor reproduction.
+For this optional fresh-checkout path, hydrate source dependencies first, then
+run the provisioner before `GenerateProjectFiles.bat` or another build step.
+Project generation may create UBT products that fail this preflight; it is not
+assumed to do so on every host. The normal contributor project-generation and
+Development Editor sequence remains documented in
+[Unreal Project Setup](unreal-project-setup.md).
 
 From a clean committed controller checkout, an authorized operator supplies
 existing validated paths and a *new* F: evidence root:
@@ -314,7 +332,13 @@ performs zero actions, the provisioner does not relabel that incremental result
 as newly provisioned; use independently retained successful build evidence or
 escalate the non-clean provisioning gap. A successful provisioner fixture test
 does not prove a real engine run, clean Editor reproduction, packaged build,
-cache speedup, or Issue #81 completion.
+cache speedup, or Issue #81 completion. The provisioner receipt is local
+host-tool evidence only. For Issue #81's separate-workspace reproduction,
+retain the exact project-generation and Development Editor command, timing,
+exit status, and failures independently as described in
+[Unreal Project Setup](unreal-project-setup.md#second-workspace-reproduction-record-for-issue-81).
+Keep the raw receipt and logs local; publish only redacted summaries and
+references that omit machine-specific paths and sensitive content.
 
 ### Host-tools attestation record
 

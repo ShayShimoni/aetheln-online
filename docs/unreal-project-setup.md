@@ -39,21 +39,40 @@ broader UI design.
 
 1. Obtain Epic's Unreal Engine source and check out the exact tag and commit.
 2. Install Visual Studio 2022 17.14 with the pinned MSVC toolset and Windows SDK.
-3. Run the normal source-engine dependency and project-file setup.
-4. Install the pinned Linux cross-toolchain before Linux server packaging.
-5. Initialize Git LFS for this repository before editing Unreal assets.
+3. Hydrate the pinned source engine's dependencies with its normal `Setup.bat`
+   before generating project files or building. Hydration supplies source
+   dependencies; it is not evidence that host tools have been built. For a
+   bounded fresh-host-tool attempt that intentionally omits `Setup.bat`'s
+   machine setup, use the [direct GitDependencies hydration path](developer-environment-and-ddc.md#explicit-non-clean-host-tool-provisioning)
+   and record the skipped setup steps.
+4. If an operator has authorized the optional fresh host-tool provisioner,
+   follow [its prerequisites and command](developer-environment-and-ddc.md#explicit-non-clean-host-tool-provisioning)
+   after dependency hydration and **before** `GenerateProjectFiles.bat` or
+   `Build.bat`. Project generation can create UnrealBuildTool outputs that make
+   that provisioner's fresh-output preflight ineligible; do not assume every
+   project-generation run creates them. Otherwise continue with project
+   generation and the Development Editor build below.
+5. Install the pinned Linux cross-toolchain before Linux server packaging.
+6. Initialize Git LFS for this repository before editing Unreal assets.
 
 Engine and repository locations differ between contributors. Keep those paths
 in the current shell or another local, untracked configuration. Never commit
 machine-specific paths, endpoints, credentials, access tokens, or other
 secrets.
 
+| Local data | Examples | Created by | Repository disposition |
+| --- | --- | --- | --- |
+| Engine source dependencies | Pinned, manifest-listed engine support files | Source-engine `Setup.bat` or direct GitDependencies hydration | Remain in the local engine checkout; hydration is not a host-tool build. |
+| Engine host build products | UnrealBuildTool, UnrealPak, ShaderCompileWorker, UnrealEditor products and engine intermediates | Pinned source-engine build steps; project generation may also produce UnrealBuildTool outputs | Remain in the local engine checkout; the fresh provisioner checks their provenance before a build. |
+| Project generated files | `Binaries/`, `Intermediate/`, generated solutions and IDE state | Project generation, Editor builds, and Unreal tools | Keep ignored and untracked in the project checkout. |
+| Local Derived Data Cache | Derived shaders, textures, and cook content | Unreal's derivation during Editor use or cooking | Keep local and untracked; the optional persistent cache has a separate identity and recovery contract. |
+
 ## Verify the source revision
 
 Set explicit local roots from a PowerShell session at the repository root:
 
 ```powershell
-$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnEngineRoot = (Resolve-Path -LiteralPath (Read-Host 'Pinned Unreal Engine source checkout')).Path
 $AethelnRepoRoot = (Resolve-Path '.').Path
 $AethelnProject = Join-Path $AethelnRepoRoot 'AethelnOnline.uproject'
 
@@ -105,6 +124,32 @@ For issue #13 evidence, confirm project generation completes, the Development
 Editor build completes, the Editor loads `/Game/Maps/StarterMap`, the map uses
 `AAethelnGameModeBase`, and the initial launch reports no bootstrap-blocking
 errors.
+
+### Second-workspace reproduction record for Issue #81
+
+From a separate clean workspace or contributor machine, retain a local record
+of the following sequence. Publish only a redacted summary and evidence
+references; keep exact local paths and raw command output outside tracked docs.
+
+1. Record the committed project SHA and pinned engine SHA, plus clean Git
+   status for both checkouts. Record OS/build, CPU, memory, available disk, and
+   the observed Visual Studio, MSVC, and Windows SDK versions as host facts,
+   not canonical minimum hardware requirements.
+2. Record source dependency hydration and whether optional fresh host-tool
+   provisioning was used. If used, retain its receipt and logs locally and
+   record its outcome; a successful provisioner receipt does not prove project
+   generation, the Development Editor build, or Editor launch.
+3. Run the project-generation and Development Editor commands above. For each,
+   retain the exact resolved command, start/end times or elapsed time, exit
+   code, and a concise failure summary when applicable. Confirm the Editor
+   load separately if it was attempted.
+4. Record whether DDC was engine-default, a verified persistent local cache,
+   or not applicable to the measured step; note cold/warm state when known.
+   Confirm generated project directories and solutions remain ignored and
+   untracked. Keep any failed step and the next required action explicit.
+
+The second-workspace record does not substitute for Issue #15 packaged
+client/server evidence or Issue #16 CI runner feasibility.
 
 ## Headless Unreal automation
 
