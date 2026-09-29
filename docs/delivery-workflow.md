@@ -69,6 +69,30 @@ distinct acceptance evidence; it is not a shortcut for missing verification.
 [GitHub's issue-linking documentation](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)
 defines the default-branch keyword and manual-link behavior.
 
+## Parallel work
+
+One lead retains board state, integration, PR publication, and merge
+authority. Parallel agents, whether subagents or separate sessions, each own
+one bounded lane and never move the board, merge, or edit another lane.
+
+- Before a lane starts, record its issue, exact base revision, branch and
+  isolated worktree, owned paths, prohibited paths, dependencies with the
+  evidence level each requires, and the shared resources it will use.
+- Run lanes concurrently only when their owned paths are disjoint and their
+  dependencies are satisfied or explicitly stacked on an exact revision.
+  Overlapping paths are serialized or integrated by the lead.
+- Treat shared resources as gates: an engine checkout, host lease, runner,
+  derived-data cache, full CI slot, or worktree has one owner at a time. Use
+  the existing lease or lock where one exists; otherwise the lead names the
+  owner. Mutation-sensitive suites run serially per worktree.
+- Size parallelism to available capacity, not a fixed agent count. Start
+  another lane only when a bounded, independent, ready lane exists and the
+  machine, shared resources, and review capacity can serve it without delaying
+  a gate; run fewer lanes when those are contended.
+- A lane hands back its exact head, changed paths, raw check results, and
+  limitations. The lead verifies them independently before integrating; a
+  lane's own report is not review evidence for its own work.
+
 ## Checks, protection, and merge
 
 Run the applicable, attainable [Issue #16 CI baseline](continuous-integration.md)

@@ -122,6 +122,31 @@ short-lived ticket branch is merged into `develop`. The rule does not authorize
 a deletion; follow repository operation-permission and Git-safety requirements.
 Never infer a target from a wildcard or broad prune operation.
 
+Decide each ref separately, and record the evidence for every step:
+
+1. Identify the exact PR and its merge commit SHA on the target branch.
+2. Prove the branch tip is contained in that target:
+   `git merge-base --is-ancestor <tip> <merge-sha>` succeeds, or, for a squash
+   or rebase merge, show that the merged change is equivalent to the reviewed
+   PR head and that the branch has no commits after that head.
+3. Confirm no unique work remains: no other open PR uses the branch as its head
+   or base, no stacked branch depends on it, and `git worktree list` shows no
+   worktree that has it checked out.
+4. Immediately before acting, read the current local and remote object IDs
+   (`git rev-parse refs/heads/<branch>` and
+   `git ls-remote origin refs/heads/<branch>`); both must equal the verified
+   tip.
+5. Act only with explicit authorization that names that exact ref. Delete one
+   ref at a time and bind it to the verified object ID, for example
+   `git update-ref -d refs/heads/<branch> <tip>` locally and
+   `git push --force-with-lease=refs/heads/<branch>:<tip> origin :refs/heads/<branch>`
+   remotely.
+
+Retain the ref and record why whenever any step is uncertain or its evidence
+changes. Never delete `main` or `develop`, and never treat a `develop` to
+`main` merge as routine cleanup; that is a separately authorized release
+decision.
+
 ## Verification
 
 Run the focused, provider-neutral check locally and in the CI execution path
