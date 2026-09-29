@@ -1,7 +1,7 @@
 ---
 name: Technical task
 about: Track engineering, tooling, infrastructure, or research work
-labels: documentation
+labels: "type: task"
 ---
 
 ## Objective

@@ -1,7 +1,7 @@
 ---
 name: User story
 about: Describe a player or product outcome
-labels: enhancement
+labels: "type: story"
 ---
 
 ## User story

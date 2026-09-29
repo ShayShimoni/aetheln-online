@@ -1,7 +1,7 @@
 ---
 name: Bug report
 about: Report incorrect or unstable behavior
-labels: bug
+labels: "type: bug"
 ---
 
 ## Summary
