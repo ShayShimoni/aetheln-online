@@ -20,6 +20,7 @@ $DefaultChecks = @(
 	@{ name = 'source-control-policy'; tier = 'required'; script = 'scripts/tests/Test-SourceControlPolicy.ps1' },
 	@{ name = 'observability-contract'; tier = 'required'; script = 'scripts/tests/Test-ObservabilityContract.ps1' },
 	@{ name = 'build-packaged-artifacts-tests'; tier = 'required'; script = 'tests/build/Build-PackagedArtifacts.Tests.ps1' },
+	@{ name = 'host-tool-provisioning-tests'; tier = 'required'; script = 'tests/build/Invoke-HostToolProvisioning.Tests.ps1' },
 	@{ name = 'packaged-smoke-test-tests'; tier = 'required'; script = 'tests/build/Invoke-PackagedSmokeTest.Tests.ps1' },
 	@{ name = 'network-authority-spike-tests'; tier = 'required'; script = 'tests/build/Invoke-NetworkAuthoritySpike.Tests.ps1' },
 	# Keep independently isolated expensive fixtures consecutive so the two slots

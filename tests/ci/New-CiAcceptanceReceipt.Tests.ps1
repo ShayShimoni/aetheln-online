@@ -90,7 +90,7 @@ function New-TestVisualReport {
 function New-TestPortableReport {
 	$Names = @(
 		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
-		'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
+		'host-tool-provisioning-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
 		'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
 		'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
