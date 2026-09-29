@@ -480,7 +480,7 @@ from the selector report, requires the corresponding direct `needs` binding,
 and verifies each binding's job name and exact artifact ID/name/digest against
 the same-attempt GitHub API record and downloaded archive. Missing, duplicate,
 extra, unselected, swapped, replayed, malformed, unsorted, or digest-mismatched
-bindings fail the job. If the selector chooses any of the other six
+bindings fail the job. If the selector chooses any of the other five
 obligations, `aggregate_ready=false` and the workflow validates the selector
 identity before publishing a green, explicitly incomplete
 `producer_contract_incomplete` record with
