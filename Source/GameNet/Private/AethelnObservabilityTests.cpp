@@ -316,6 +316,27 @@ bool FAethelnObservabilityBoundedSinkTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Unsafe events never leave pending dispatch work"), Service.WaitForIdleForTests());
 	TestEqual(TEXT("Unsafe identifiers never reach the public sink"), PublicSink->GetEvents().Num(), 3);
 	TestEqual(TEXT("Unsafe identifiers never reach the restricted sink"), RestrictedSink->GetEvents().Num(), 2);
+
+	// Fresh sinks with spare capacity, so a leaked case variant would be counted.
+	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> SchemaPublicSink = MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(4);
+	TSharedPtr<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe> SchemaRestrictedSink = MakeShared<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe>(4);
+	FAethelnObservabilityService SchemaService(SchemaPublicSink, SchemaRestrictedSink);
+	FAethelnObservabilityEvent EventSchemaVariant = Event;
+	EventSchemaVariant.SchemaId = FString(AethelnObservability::SchemaId).ToUpper();
+	TestFalse(TEXT("Case-variant event schema is rejected"), EventSchemaVariant.IsBounded());
+	FAethelnObservabilityEvent ProfileSchemaVariant = Event;
+	ProfileSchemaVariant.NetworkProfile.SchemaId = FString(AethelnNetworkSpike::NetworkProfileSchemaId).ToUpper();
+	TestFalse(TEXT("Case-variant network-profile schema is rejected"), ProfileSchemaVariant.IsBounded());
+	SchemaService.EmitEvent(EventSchemaVariant);
+	SchemaService.EmitEvent(ProfileSchemaVariant);
+	TestTrue(TEXT("Case-variant schemas leave both dispatch queues idle"), SchemaService.WaitForIdleForTests());
+	TestEqual(TEXT("Case-variant schemas never reach the public sink"), SchemaPublicSink->GetEvents().Num(), 0);
+	TestEqual(TEXT("Case-variant schemas never reach the restricted sink"), SchemaRestrictedSink->GetEvents().Num(), 0);
+	TestTrue(TEXT("Exact schemas remain bounded"), Event.IsBounded());
+	SchemaService.EmitEvent(Event);
+	TestTrue(TEXT("Exact-schema event drains"), SchemaService.WaitForIdleForTests());
+	TestEqual(TEXT("Exact-schema event reaches the public sink"), SchemaPublicSink->GetEvents().Num(), 1);
+	TestEqual(TEXT("Exact-schema event reaches the restricted sink"), SchemaRestrictedSink->GetEvents().Num(), 1);
 	return true;
 }
 
