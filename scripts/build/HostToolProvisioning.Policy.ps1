@@ -415,7 +415,7 @@ function Get-HostToolBuildCommand {
 
 function Get-HostToolBuildProof {
 	[CmdletBinding()]
-	param([Parameter(Mandatory)][string[]] $Lines, [Parameter(Mandatory)][string] $ToolDirectory,
+	param([Parameter(Mandatory)][AllowEmptyString()][string[]] $Lines, [Parameter(Mandatory)][string] $ToolDirectory,
 		[Parameter(Mandatory)][string] $SdkDirectory)
 	if ($Lines.Count -lt 1 -or $Lines.Count -gt 200000) { throw 'actions_unproven' }
 	$Selected = 0; $Plan = $null; $Progress = 0

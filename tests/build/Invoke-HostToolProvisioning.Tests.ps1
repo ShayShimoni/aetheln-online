@@ -396,6 +396,10 @@ $Observed = Get-HostToolBuildProof -Lines @(
 	'Using Visual Studio 2022 14.44.35228 toolchain (C:\VS\VC\Tools\MSVC\14.44.35207) and Windows 10.0.26100.0 SDK (C:\Kits\10).',
 	'Using Parallel executor to run 12 action(s)', '[1/12] Compile Module.Core.cpp') -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10'
 Assert-HostFixture ($Observed.actionCount -eq 12 -and $Observed.progressCount -eq 1) 'Positive action proof failed.'
+$ObservedWithBlankLines = Get-HostToolBuildProof -Lines @(
+	'', 'Using Visual Studio 2022 14.44.35228 toolchain (C:\VS\VC\Tools\MSVC\14.44.35207) and Windows 10.0.26100.0 SDK (C:\Kits\10).',
+	'', 'Using Parallel executor to run 12 action(s)', '', '[1/12] Compile Module.Core.cpp', '') -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10'
+Assert-HostFixture ($ObservedWithBlankLines.actionCount -eq 12 -and $ObservedWithBlankLines.progressCount -eq 1) 'Build proof must accept normal blank log lines without relaxing nonblank evidence.'
 Assert-HostFailure { Get-HostToolBuildProof -Lines @('Target is up to date') -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10' } 'tool_selection_unproven'
 Assert-HostFailure { Get-HostToolBuildProof -Lines @('Using Visual Studio 2022 14.44.35228 toolchain (C:\VS\VC\Tools\MSVC\14.44.35207) and Windows 10.0.26100.0 SDK (C:\Kits\10).', 'Using Parallel executor to run 0 action(s)') -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10' } 'actions_unproven'
 Assert-HostFailure { Get-HostToolBuildProof -Lines @('Using Parallel executor to run 12 action(s)', '[1/12] Compile') -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10' } 'tool_selection_unproven'
