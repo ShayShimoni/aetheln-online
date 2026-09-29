@@ -1851,7 +1851,10 @@ FAethelnContentFamilyResult FAethelnContentValidationScanner::EvaluateFamilyFact
 			const bool* ConfigPresent = RequiredBool(TEXT("navigation_config_present"));
 			const int64* DataCount = RequiredInt(TEXT("navigation_data_count"));
 			if (ConfigPresent == nullptr || DataCount == nullptr) { return Unavailable(TEXT("navigation_config_or_data")); }
-			if (!*ConfigPresent || *DataCount <= 0) { return Derived(TEXT("failed"), TEXT("navigation_config_or_data_invalid")); }
+			// Navigation ownership is explicit per map, and the intake schema cannot yet declare a
+			// requirement; the engine-default enabled flag alone never proves one, so no data stays unproven.
+			if (*DataCount <= 0) { return Unavailable(TEXT("navigation_intent_undeclared")); }
+			if (!*ConfigPresent) { return Derived(TEXT("failed"), TEXT("navigation_config_invalid")); }
 			// A producer must bind these observations to the governed navigation packages and build provenance.
 			// The live world collector cannot set this evidence marker from the map's intake audience.
 			const bool* AudienceEvidence = RequiredBool(TEXT("navigation_audience_evidence_recorded"));

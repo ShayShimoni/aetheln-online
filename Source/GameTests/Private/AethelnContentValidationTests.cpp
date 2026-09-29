@@ -413,9 +413,17 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 	Navigation.BooleanFacts.Remove(TEXT("navigation_audience_evidence_recorded"));
 	Navigation.BooleanFacts[TEXT("navigation_config_present")] = false;
 	CheckFactStatus(TEXT("Missing navigation config fails before missing provenance"), TEXT("navigation"), Navigation, TEXT("failed"));
+	// The engine-default enabled flag is not a per-map navigation requirement, so a
+	// world with no navigation data has undeclared intent rather than a failure.
 	Navigation.BooleanFacts[TEXT("navigation_config_present")] = true;
 	Navigation.IntegerFacts[TEXT("navigation_data_count")] = 0;
-	CheckFactStatus(TEXT("Missing navigation data fails before missing provenance"), TEXT("navigation"), Navigation, TEXT("failed"));
+	CheckFactStatus(TEXT("Default-config world without navigation data stays unavailable"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
+	Navigation.BooleanFacts[TEXT("navigation_config_present")] = false;
+	CheckFactStatus(TEXT("World without navigation config or data stays unavailable"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
+	Navigation.BooleanFacts[TEXT("navigation_audience_evidence_recorded")] = true;
+	Navigation.BooleanFacts[TEXT("navigation_config_present")] = true;
+	CheckFactStatus(TEXT("Audience evidence cannot promote a world without navigation data"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
+	Navigation.BooleanFacts.Remove(TEXT("navigation_audience_evidence_recorded"));
 
 	FAethelnContentCheckFacts Equivalence = MakeFact(TEXT("presentation_equivalence"));
 	Equivalence.BooleanFacts.Add(TEXT("authoritative_geometry_present"), true);
