@@ -132,22 +132,24 @@ Decide each ref separately, and record the evidence for every step:
 3. Confirm no unique work remains: no other open PR uses the branch as its head
    or base, no stacked branch depends on it, and `git worktree list` shows no
    worktree that has it checked out.
-4. Immediately before each deletion, repeat the step 3 checks live: a new PR,
-   stacked branch, or worktree can appear without changing the branch's object
-   ID. Then read the current local and remote object IDs
+4. Immediately before the first deletion, repeat the step 3 checks live: a new
+   PR, stacked branch, or worktree can appear without changing the branch's
+   object ID. Then read the current local and remote object IDs
    (`git rev-parse refs/heads/<branch>` and
-   `git ls-remote origin refs/heads/<branch>`); both must equal the verified
-   tip.
+   `git ls-remote origin refs/heads/<branch>`); each ref that exists must equal
+   the verified tip.
 5. Act only with explicit authorization that names that exact ref. Delete one
    ref at a time and bind it to the verified object ID, for example
    `git update-ref -d refs/heads/<branch> <tip>` locally and
    `git push --force-with-lease=refs/heads/<branch>:<tip> origin :refs/heads/<branch>`
-   remotely. Repeat step 4 before the second of those deletions rather than
-   reusing the first check.
+   remotely.
+6. Immediately before the second deletion, repeat the step 3 checks live again
+   rather than reusing the first result. Confirm that the remaining ref still
+   equals the verified tip and that the ref deleted first is still absent, not
+   recreated.
 
 Retain the ref and record why whenever any step is uncertain, its evidence
-changes, or the final recheck finds a dependent PR, stacked branch, or
-worktree. Never delete `main` or `develop`, and never treat a `develop` to
+changes, or a live recheck finds a dependent PR, stacked branch, or worktree. Never delete `main` or `develop`, and never treat a `develop` to
 `main` merge as routine cleanup; that is a separately authorized release
 decision.
 
