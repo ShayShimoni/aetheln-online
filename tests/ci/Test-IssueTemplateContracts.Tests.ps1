@@ -75,17 +75,33 @@ function Assert-IssueTemplate {
 	$VisibleBody = [System.Collections.Generic.List[string]]::new()
 	$FenceCharacter = ''
 	$FenceWidth = 0
+	$InHtmlComment = $false
 	foreach ($Line in $Body) {
-		if ($FenceWidth -eq 0 -and $Line -match '^ {0,3}(`{3,}|~{3,}).*$') {
-			$FenceCharacter = [string] $Matches[1][0]
-			$FenceWidth = $Matches[1].Length
-			continue
-		}
 		if ($FenceWidth -gt 0) {
 			if ($Line -match '^ {0,3}(`{3,}|~{3,})[ \t]*$' -and [string] $Matches[1][0] -ceq $FenceCharacter -and $Matches[1].Length -ge $FenceWidth) {
 				$FenceWidth = 0
 			}
 			continue
+		}
+		if ($InHtmlComment) {
+			if ($Line.Contains('-->')) { $InHtmlComment = $false }
+			continue
+		}
+		if ($Line -match '^ {0,3}(`{3,}|~{3,})(.*)$') {
+			$CandidateCharacter = [string] $Matches[1][0]
+			if ($CandidateCharacter -cne '`' -or $Matches[2] -cnotmatch '`') {
+				$FenceCharacter = $CandidateCharacter
+				$FenceWidth = $Matches[1].Length
+				continue
+			}
+		}
+		$CommentStart = $Line.IndexOf('<!--', [StringComparison]::Ordinal)
+		if ($CommentStart -ge 0) {
+			$CommentEnd = $Line.IndexOf('-->', $CommentStart + 4, [StringComparison]::Ordinal)
+			if ($CommentEnd -lt 0) { $InHtmlComment = $true }
+			# A comment opener at the start of a line begins a raw HTML block;
+			# only visible text before an inline comment can satisfy this contract.
+			$Line = $Line.Substring(0, $CommentStart)
 		}
 		[void] $VisibleBody.Add($Line)
 	}
@@ -166,6 +182,17 @@ try {
 	Assert-TemplateFailure 'unclosed-front-matter' { param($R) Set-TemplateText $R 'technical-task.md' "labels: `"type: task`"`n---`n" "labels: `"type: task`"`n" } 'front matter is not closed'
 	Assert-TemplateFailure 'missing-section' { param($R) Set-TemplateText $R 'spike.md' '## Evidence and decision boundaries' '## Notes' } "missing section '## Evidence and decision boundaries'"
 	Assert-TemplateFailure 'section-only-in-fence' { param($R) Set-TemplateText $R 'technical-task.md' '## Validation' "~~~markdown`n## Validation`n~~~" } "missing section '## Validation'"
+	Assert-TemplateFailure 'section-only-in-comment' { param($R) Set-TemplateText $R 'technical-task.md' '## Validation' "<!--`n## Validation`n-->" } "missing section '## Validation'"
+	$InvalidFenceRoot = Join-Path $FixtureRoot 'backtick-in-info-is-not-fence'
+	Copy-Item -LiteralPath $TemplateRoot -Destination $InvalidFenceRoot -Recurse
+	Set-TemplateText $InvalidFenceRoot 'technical-task.md' '## Validation' ('```bad`info' + "`n## Validation")
+	Assert-IssueTemplateSet -Root $InvalidFenceRoot
+	Write-Output 'PASS: backtick in fence info does not hide a real section'
+	$VisibleBeforeCommentRoot = Join-Path $FixtureRoot 'visible-before-inline-comment'
+	Copy-Item -LiteralPath $TemplateRoot -Destination $VisibleBeforeCommentRoot -Recurse
+	Set-TemplateText $VisibleBeforeCommentRoot 'technical-task.md' '## Validation' '## Validation <!-- maintainer note -->'
+	Assert-IssueTemplateSet -Root $VisibleBeforeCommentRoot
+	Write-Output 'PASS: visible heading before inline comment remains valid'
 	Assert-TemplateFailure 'empty-definition-of-done' { param($R) $P = Join-Path $R 'epic.md'; $T = [System.IO.File]::ReadAllText($P); [System.IO.File]::WriteAllText($P, $T.Substring(0, $T.IndexOf('## Definition of done')) + "## Definition of done`n`nTBD`n") } 'Definition of done has no checklist items'
 	Assert-TemplateFailure 'checklist-only-in-fence' {
 		param($R)
@@ -173,6 +200,13 @@ try {
 		$T = [System.IO.File]::ReadAllText($P)
 		$Fenced = "## Definition of done`n`n" + '```markdown' + "`n- [ ] Example, not a real completion criterion`n" + '```' + "`n"
 		[System.IO.File]::WriteAllText($P, $T.Substring(0, $T.IndexOf('## Definition of done')) + $Fenced)
+	} 'Definition of done has no checklist items'
+	Assert-TemplateFailure 'checklist-only-in-comment' {
+		param($R)
+		$P = Join-Path $R 'epic.md'
+		$T = [System.IO.File]::ReadAllText($P)
+		$Commented = "## Definition of done`n`n<!--`n- [ ] Example, not a real completion criterion`n-->`n"
+		[System.IO.File]::WriteAllText($P, $T.Substring(0, $T.IndexOf('## Definition of done')) + $Commented)
 	} 'Definition of done has no checklist items'
 	Assert-TemplateFailure 'crlf' { param($R) $P = Join-Path $R 'user-story.md'; [System.IO.File]::WriteAllText($P, ([System.IO.File]::ReadAllText($P)).Replace("`n", "`r`n")) } 'CRLF line endings'
 	Assert-TemplateFailure 'missing-template' { param($R) Remove-Item -LiteralPath (Join-Path $R 'spike.md') } 'does not match'
