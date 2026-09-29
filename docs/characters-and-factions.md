@@ -152,6 +152,37 @@ The Oathscar swear to stand where a promise was made. Their oath binds a sworn
 grievance to the body: an Oathscar carries every unresolved wrong as Grudge and
 spends it in combat.
 
+- **Recruitment:** the Order accepts petitioners who can name one wrong they
+  refuse to release. Veterans of broken sieges, disgraced guards, and survivors
+  of unpunished crimes are common; the rite of entry is the public statement of
+  the grudge before witnesses.
+- **Duties:** hold gates, escorts, and last lines; enforce sworn contracts of
+  protection; stand witness at executions and truces so neither side can later
+  deny what was promised.
+- **Taboos:** an Oathscar must not swear a grudge they do not personally hold,
+  abandon a sworn charge while alive, or invoke Oathbreak - the Peak that
+  briefly realizes the self who broke every oath - except when the sworn charge
+  is already lost.
+- **Internal conflicts:** the Ironwake interpretation reads the oath as
+  advancing punishment and argues grudges exist to be spent; the Last Gate
+  interpretation reads it as immovable protection and argues a spent grudge is
+  a failed vigil. The Order also disputes whether a lawful order can dissolve a
+  personal grudge.
+- **Weapon traditions:** greatsword, sword-and-shield, two-handed spear, and
+  dual wield. Each tradition is taught as a form of standing ground: the
+  greatsword answers many, the shield answers a line, the spear answers a
+  charge, and paired blades answer a single named enemy.
+- **Faction relationships:** the Crowned Ledger values Oathscar witness-duty
+  and hires them to guarantee its rulings, but distrusts grudges that outrank
+  the law. The Hundred Witnesses treat a personal grudge as the purest owned
+  truth, but fear the Order's habit of enforcing settlements no community
+  voted for.
+- **Named characters:** Kaelen Dross carries the Order's defining wound - his
+  sworn commission against his brother Maren - and his epithet, the Last Gate,
+  names the specialization he embodies. Vothram, the Forgedoor, is an Oathscar
+  of the Ironwake line whose falsified vault records are a live breach of the
+  Order's witness duty.
+
 #### Canonical Intent
 
 This full design shard has maturity **Canonical Intent**. Display names remain
@@ -330,37 +361,6 @@ No statement in this shard is runtime, packaged, balance, performance,
 security, readability, accessibility, or QA evidence. Only the bounded subset
 above is a Prototype Candidate; every broader Oathscar definition remains
 Canonical Intent.
-
-- **Recruitment:** the Order accepts petitioners who can name one wrong they
-  refuse to release. Veterans of broken sieges, disgraced guards, and survivors
-  of unpunished crimes are common; the rite of entry is the public statement of
-  the grudge before witnesses.
-- **Duties:** hold gates, escorts, and last lines; enforce sworn contracts of
-  protection; stand witness at executions and truces so neither side can later
-  deny what was promised.
-- **Taboos:** an Oathscar must not swear a grudge they do not personally hold,
-  abandon a sworn charge while alive, or invoke Oathbreak - the Peak that
-  briefly realizes the self who broke every oath - except when the sworn charge
-  is already lost.
-- **Internal conflicts:** the Ironwake interpretation reads the oath as
-  advancing punishment and argues grudges exist to be spent; the Last Gate
-  interpretation reads it as immovable protection and argues a spent grudge is
-  a failed vigil. The Order also disputes whether a lawful order can dissolve a
-  personal grudge.
-- **Weapon traditions:** greatsword, sword-and-shield, two-handed spear, and
-  dual wield. Each tradition is taught as a form of standing ground: the
-  greatsword answers many, the shield answers a line, the spear answers a
-  charge, and paired blades answer a single named enemy.
-- **Faction relationships:** the Crowned Ledger values Oathscar witness-duty
-  and hires them to guarantee its rulings, but distrusts grudges that outrank
-  the law. The Hundred Witnesses treat a personal grudge as the purest owned
-  truth, but fear the Order's habit of enforcing settlements no community
-  voted for.
-- **Named characters:** Kaelen Dross carries the Order's defining wound - his
-  sworn commission against his brother Maren - and his epithet, the Last Gate,
-  names the specialization he embodies. Vothram, the Forgedoor, is an Oathscar
-  of the Ironwake line whose falsified vault records are a live breach of the
-  Order's witness duty.
 
 ### Nullwright - Working Name
 
