@@ -99,6 +99,35 @@ try {
 	Remove-HostFixtureRoot -Root $NormalizedRoot -Parent $FixtureTempRoot
 }
 
+# A pinned engine can contain an intentionally CRLF-committed source file even
+# when local core.autocrlf=true makes Git's filtered worktree hash differ from
+# that exact committed blob. Only the raw bytes may resolve that mismatch.
+$CommittedCrLfRoot = Join-Path $FixtureTempRoot ('AethelnCommittedCrLf-' + [guid]::NewGuid().ToString('N'))
+try {
+	$null = New-Item -ItemType Directory -Path (Join-Path $CommittedCrLfRoot 'Engine') -Force
+	$CommittedCrLfFile = Join-Path $CommittedCrLfRoot 'Engine/CommittedCrLf.py'
+	[IO.File]::WriteAllBytes($CommittedCrLfFile, [Text.Encoding]::ASCII.GetBytes("first`r`nsecond`r`n"))
+	& git -C $CommittedCrLfRoot init -q
+	if ($LASTEXITCODE -ne 0) { throw 'committed_crlf_fixture_git_init_failed' }
+	& git -C $CommittedCrLfRoot config core.autocrlf false
+	if ($LASTEXITCODE -ne 0) { throw 'committed_crlf_fixture_git_config_failed' }
+	& git -C $CommittedCrLfRoot add -- Engine/CommittedCrLf.py
+	if ($LASTEXITCODE -ne 0) { throw 'committed_crlf_fixture_git_add_failed' }
+	& git -C $CommittedCrLfRoot -c user.name=Fixture -c user.email=fixture@example.invalid commit -q -m fixture
+	if ($LASTEXITCODE -ne 0) { throw 'committed_crlf_fixture_git_commit_failed' }
+	& git -C $CommittedCrLfRoot config core.autocrlf true
+	if ($LASTEXITCODE -ne 0) { throw 'committed_crlf_fixture_autocrlf_failed' }
+	$CommittedBlob = [string] (& git -C $CommittedCrLfRoot rev-parse 'HEAD:Engine/CommittedCrLf.py')
+	$FilteredBlob = [string] (& git -C $CommittedCrLfRoot hash-object --path=Engine/CommittedCrLf.py -- $CommittedCrLfFile)
+	$RawBlob = [string] (& git -C $CommittedCrLfRoot hash-object --no-filters -- $CommittedCrLfFile)
+	Assert-HostFixture ($FilteredBlob -cne $CommittedBlob -and $RawBlob -ceq $CommittedBlob) 'Fixture must expose only Git CRLF filtering, not changed worktree bytes.'
+	Assert-HostFixture (Assert-HostToolEngineInputIdentity -EngineRoot $CommittedCrLfRoot) 'Committed CRLF engine bytes must pass despite local autocrlf.'
+	[IO.File]::WriteAllBytes($CommittedCrLfFile, [Text.Encoding]::ASCII.GetBytes("altered`r`nsecond`r`n"))
+	Assert-HostFailure { Assert-HostToolEngineInputIdentity -EngineRoot $CommittedCrLfRoot } 'engine_input_identity_mismatch'
+} finally {
+	Remove-HostFixtureRoot -Root $CommittedCrLfRoot -Parent $FixtureTempRoot
+}
+
 # A real disposable index proves both flags can hide modified build inputs from
 # porcelain status. The production guard must reject the flags and raw bytes.
 $HiddenEngine = Join-Path $FixtureTempRoot ('AethelnHiddenHostTools-' + [guid]::NewGuid().ToString('N'))

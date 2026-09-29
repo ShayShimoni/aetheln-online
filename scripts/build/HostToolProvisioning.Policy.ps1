@@ -364,8 +364,38 @@ function Assert-HostToolEngineInputIdentity {
 	finally { [Console]::InputEncoding = $PreviousInputEncoding; if (-not $Process.HasExited) { try { $Process.Kill() } catch {} }; $Process.Dispose() }
 	$ActualBlobs = @($ActualText -split '\r?\n' | Where-Object { $_.Length -gt 0 })
 	if ($ActualBlobs.Count -ne $ExpectedBlobs.Count) { throw 'engine_input_identity_mismatch' }
+	$MismatchIndexes = New-Object 'Collections.Generic.List[int]'
 	for ($Index = 0; $Index -lt $ExpectedBlobs.Count; $Index++) {
-		if ([string] $ActualBlobs[$Index] -cne $ExpectedBlobs[$Index]) { throw 'engine_input_identity_mismatch' }
+		if ([string] $ActualBlobs[$Index] -cne $ExpectedBlobs[$Index]) { $MismatchIndexes.Add($Index) }
+	}
+	if ($MismatchIndexes.Count -eq 0) { return $true }
+	# Some pinned engine blobs intentionally contain CRLF. core.autocrlf can
+	# normalize their filtered hash even when worktree bytes equal HEAD exactly.
+	# Rehash only mismatches without filters; no other difference is accepted.
+	$Start.Arguments = '-c "' + $Safe + '" -C "' + $EngineRoot + '" hash-object --no-filters --stdin-paths'
+	$Process = New-Object Diagnostics.Process
+	$Process.StartInfo = $Start
+	try {
+		[Console]::InputEncoding = New-Object Text.UTF8Encoding($false)
+		try { if (-not $Process.Start()) { throw 'engine_input_identity_mismatch' } }
+		finally { [Console]::InputEncoding = $PreviousInputEncoding }
+		$OutputTask = $Process.StandardOutput.ReadToEndAsync()
+		$ErrorTask = $Process.StandardError.ReadToEndAsync()
+		foreach ($Index in $MismatchIndexes) {
+			$Bytes = $Utf8.GetBytes($RelativePaths[$Index] + "`n")
+			$Process.StandardInput.BaseStream.Write($Bytes, 0, $Bytes.Length)
+		}
+		$Process.StandardInput.Close()
+		if (-not $Process.WaitForExit(600000)) { $Process.Kill(); throw 'engine_input_identity_mismatch' }
+		$RawText = $OutputTask.Result
+		$null = $ErrorTask.Result
+		if ($Process.ExitCode -ne 0) { throw 'engine_input_identity_mismatch' }
+	} catch { throw 'engine_input_identity_mismatch' }
+	finally { [Console]::InputEncoding = $PreviousInputEncoding; if (-not $Process.HasExited) { try { $Process.Kill() } catch {} }; $Process.Dispose() }
+	$RawBlobs = @($RawText -split '\r?\n' | Where-Object { $_.Length -gt 0 })
+	if ($RawBlobs.Count -ne $MismatchIndexes.Count) { throw 'engine_input_identity_mismatch' }
+	for ($Mismatch = 0; $Mismatch -lt $MismatchIndexes.Count; $Mismatch++) {
+		if ([string] $RawBlobs[$Mismatch] -cne $ExpectedBlobs[$MismatchIndexes[$Mismatch]]) { throw 'engine_input_identity_mismatch' }
 	}
 	return $true
 }
