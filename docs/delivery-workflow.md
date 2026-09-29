@@ -89,6 +89,8 @@ one bounded lane and never move the board, merge, or edit another lane.
   another lane only when a bounded, independent, ready lane exists and the
   machine, shared resources, and review capacity can serve it without delaying
   a gate; run fewer lanes when those are contended.
+- When a ready independent lane is deferred, record the specific limiting
+  resource, dependency, or review-capacity gate and the condition for starting it.
 - A lane hands back its exact head, changed paths, raw check results, and
   limitations. The lead verifies them independently before integrating; a
   lane's own report is not review evidence for its own work.
