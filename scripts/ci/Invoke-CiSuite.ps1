@@ -31,6 +31,7 @@ $DefaultChecks = @(
 	@{ name = 'build-provenance-tests'; tier = 'required'; script = 'tests/build/Write-BuildProvenance.Tests.ps1' },
 	@{ name = 'markdown-link-tests'; tier = 'required'; script = 'tests/ci/Test-MarkdownLinks.Tests.ps1' },
 	@{ name = 'formatting-policy-tests'; tier = 'required'; script = 'tests/ci/Test-FormattingPolicy.Tests.ps1' },
+	@{ name = 'issue-template-contract-tests'; tier = 'required'; script = 'tests/ci/Test-IssueTemplateContracts.Tests.ps1' },
 	@{ name = 'observability-contract-tests'; tier = 'required'; script = 'tests/ci/Test-ObservabilityContract.Tests.ps1' },
 	@{ name = 'ci-suite-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiSuite.Tests.ps1' },
 	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
