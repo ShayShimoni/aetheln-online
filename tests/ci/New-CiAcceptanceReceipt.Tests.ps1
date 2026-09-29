@@ -5,6 +5,13 @@ $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $ScriptPath = Join-Path $RepositoryRoot 'scripts\ci\New-CiAcceptanceReceipt.ps1'
 . $ScriptPath
 
+# The acceptance contract must name exactly the portable suite's checks, in order.
+$SuiteSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiSuite.ps1') -Raw
+$SuiteCheckNames = @([regex]::Matches($SuiteSource, "(?m)^\s*(?:@\{\s*)?name = '([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+if (($SuiteCheckNames -join ',') -cne ($script:AcceptancePortableCheckNames -join ',')) {
+	throw "Receipt portable check names drift from Invoke-CiSuite.ps1: suite has $($SuiteCheckNames.Count), receipt has $($script:AcceptancePortableCheckNames.Count)"
+}
+
 function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw $Message }
 }
@@ -92,7 +99,7 @@ function New-TestPortableReport {
 		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
 		'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
-		'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
+		'formatting-policy-tests','issue-template-contract-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
 		'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
 		'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 		'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
@@ -285,6 +292,17 @@ try {
 		$BadPortableBytes = $Utf8.GetBytes(($BadPortable | ConvertTo-Json -Depth 12 -Compress) + "`n")
 		try { Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $BadPortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:portable' }
 		catch { throw "Portable type fixture '$($PortableTypeCase.name)' failed: $($_.Exception.Message)" }
+	}
+
+	foreach ($PortableNameCase in @(
+		@{name='missing-issue-template-contract';mutate={param($x)$x.checks=@($x.checks|Where-Object name -cne 'issue-template-contract-tests');$x.summary.total--;$x.summary.passed--}},
+		@{name='extra-check';mutate={param($x)$x.checks=@($x.checks)+@([pscustomobject][ordered]@{name='unlisted-check';tier='required';status='passed';durationSeconds=0.01;command='fixture';message='passed'});$x.summary.total++;$x.summary.passed++}},
+		@{name='misordered-issue-template-contract';mutate={param($x)$i=[Array]::IndexOf(@($x.checks|ForEach-Object name),'issue-template-contract-tests');$t=$x.checks[$i];$x.checks[$i]=$x.checks[$i-1];$x.checks[$i-1]=$t}}
+	)) {
+		$BadPortable = New-TestPortableReport; & $PortableNameCase.mutate $BadPortable
+		$BadPortableBytes = $Utf8.GetBytes(($BadPortable | ConvertTo-Json -Depth 12 -Compress) + "`n")
+		try { Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $BadPortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:portable' }
+		catch { throw "Portable name fixture '$($PortableNameCase.name)' failed: $($_.Exception.Message)" }
 	}
 
 	foreach ($NativeTypeCase in @(

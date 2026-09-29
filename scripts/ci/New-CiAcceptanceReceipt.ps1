@@ -41,7 +41,7 @@ $script:AcceptancePortableCheckNames = @(
 	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
 	'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 	'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
-	'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
+	'formatting-policy-tests','issue-template-contract-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
 	'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
 	'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 	'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
