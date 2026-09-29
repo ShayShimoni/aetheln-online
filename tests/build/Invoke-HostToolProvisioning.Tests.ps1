@@ -361,8 +361,8 @@ $null = New-Item -ItemType Directory -Path $ReceiptWin64 -Force
 foreach ($Name in @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe', 'UnrealPak.exe', 'ShaderCompileWorker.exe')) {
 	Set-Content -LiteralPath (Join-Path $ReceiptWin64 $Name) -Value 'fixture product' -Encoding Ascii
 }
-function Set-HostReceiptFixture([string] $Target, [string] $TargetType, [string[]] $Products) {
-	$BuildProducts = @($Products | ForEach-Object { [ordered]@{ Path = ('$(EngineDir)/Binaries/Win64/' + $_); Type = 'Executable' } })
+function Set-HostReceiptFixture([string] $Target, [string] $TargetType, [string[]] $Products, [object[]] $ExtraProducts = @()) {
+	$BuildProducts = @($Products | ForEach-Object { [ordered]@{ Path = ('$(EngineDir)/Binaries/Win64/' + $_); Type = 'Executable' } }) + @($ExtraProducts)
 	[ordered]@{ TargetName = $Target; Platform = 'Win64'; Configuration = 'Development'; TargetType = $TargetType;
 		BuildProducts = $BuildProducts } | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath (Join-Path $ReceiptWin64 ($Target + '.target')) -Encoding UTF8
 }
@@ -371,6 +371,30 @@ Set-HostReceiptFixture -Target UnrealPak -TargetType Program -Products @('Unreal
 Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe')
 $ReceiptProof = Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine
 Assert-HostFixture ($ReceiptProof.productCount -eq 7 -and $ReceiptProof.totalBytes -gt 0) 'Semantically valid target receipts should pass.'
+$SharedDirectory = Join-Path $ReceiptWin64 'D3D12/x64'
+$null = New-Item -ItemType Directory -Path $SharedDirectory -Force
+Set-Content -LiteralPath (Join-Path $SharedDirectory 'D3D12Core.dll') -Value 'shared runtime product' -Encoding Ascii
+$SharedProduct = [ordered]@{ Path = '$(EngineDir)/Binaries/Win64/D3D12/x64/D3D12Core.dll'; Type = 'DynamicLibrary' }
+Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe') -ExtraProducts @($SharedProduct)
+Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($SharedProduct)
+$ReceiptProof = Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine
+$ExpectedReceiptBytes = [long] 0
+foreach ($Name in @('UnrealPak.target', 'ShaderCompileWorker.target', 'UnrealEditor.target', 'UnrealPak.exe',
+	'ShaderCompileWorker.exe', 'UnrealEditor.exe', 'UnrealEditor-Cmd.exe', 'D3D12/x64/D3D12Core.dll')) {
+	$ExpectedReceiptBytes += [long] (Get-Item -LiteralPath (Join-Path $ReceiptWin64 $Name)).Length
+}
+Assert-HostFixture ($ReceiptProof.productCount -eq 8 -and $ReceiptProof.totalBytes -eq $ExpectedReceiptBytes) 'Shared identical target products should be counted once.'
+Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe') -ExtraProducts @($SharedProduct, $SharedProduct)
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_product_duplicate'
+Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe') -ExtraProducts @($SharedProduct)
+$ConflictingType = [ordered]@{ Path = $SharedProduct.Path; Type = 'RequiredResource' }
+Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ConflictingType)
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_product_duplicate'
+$ConflictingCase = [ordered]@{ Path = '$(EngineDir)/Binaries/Win64/D3D12/x64/d3d12core.dll'; Type = 'DynamicLibrary' }
+Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ConflictingCase)
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_product_duplicate'
+Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe')
+Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')
 $EditorTargetPath = Join-Path $ReceiptWin64 'UnrealEditor.target'
 Set-Content -LiteralPath $EditorTargetPath -Value '{invalid' -Encoding Ascii
 Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_receipt_invalid'

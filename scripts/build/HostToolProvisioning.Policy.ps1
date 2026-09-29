@@ -450,7 +450,7 @@ function Assert-HostToolProductChange {
 function Assert-HostToolReceiptSet {
 	[CmdletBinding()]
 	param([Parameter(Mandatory)][string] $EngineRoot)
-	$Seen = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+	$Seen = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
 	$TotalBytes = [long] 0
 	foreach ($Target in $script:HostToolTargets) {
 		$ReceiptRelative = 'Engine/Binaries/Win64/' + $Target + '.target'
@@ -471,7 +471,7 @@ function Assert-HostToolReceiptSet {
 			$Parsed.BuildProducts -isnot [array] -or $Parsed.BuildProducts.Count -lt 1 -or
 			$Parsed.BuildProducts.Count -gt 8192) { throw 'target_receipt_invalid' }
 		$Derived = New-Object Collections.ArrayList
-		[void] $Derived.Add($ReceiptRelative)
+		[void] $Derived.Add([pscustomobject]@{ path = $ReceiptRelative; type = 'TargetReceipt' })
 		$TargetProducts = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 		foreach ($Product in $Parsed.BuildProducts) {
 			if ($null -eq $Product -or $null -eq $Product.PSObject.Properties['Path'] -or
@@ -483,22 +483,33 @@ function Assert-HostToolReceiptSet {
 			$Relative = 'Engine/' + $Product.Path.Substring(13)
 			if ($Relative.Contains(':') -or [IO.Path]::IsPathRooted($Relative) -or
 				@(($Relative -split '[\\/]') | Where-Object { $_ -in @('', '.', '..') }).Count -ne 0) { throw 'target_receipt_invalid' }
-			[void] $Derived.Add($Relative)
-			[void] $TargetProducts.Add($Relative.Replace('\', '/'))
+			[void] $Derived.Add([pscustomobject]@{ path = $Relative; type = $Product.Type })
+			if (-not $TargetProducts.Add($Relative.Replace('\', '/'))) { throw 'target_product_duplicate' }
 		}
 		foreach ($Expected in $script:HostToolProducts[$Target]) {
 			if ($Expected.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase) -and
 				-not $TargetProducts.Contains($Expected)) { throw 'target_receipt_invalid' }
 		}
-		foreach ($Relative in $Derived) {
+		foreach ($Entry in $Derived) {
+			$Relative = [string] $Entry.path
 			$Normalized = $Relative.Replace('\', '/')
-			if (-not $Seen.Add($Normalized)) { throw 'target_product_duplicate' }
+			$IsNew = -not $Seen.ContainsKey($Normalized)
+			if ($IsNew) {
+				$Seen.Add($Normalized, [pscustomobject]@{ path = $Normalized; type = [string] $Entry.type })
+			} else {
+				$Previous = $Seen[$Normalized]
+				if ($Previous.path -cne $Normalized -or $Previous.type -cne [string] $Entry.type -or
+					$Entry.type -ceq 'TargetReceipt') { throw 'target_product_duplicate' }
+			}
 			$Path = Join-Path $EngineRoot $Relative
 			Assert-InitialPreparationPlainPath -Path $Path -Reason 'target_receipt_invalid'
 			if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'target_product_missing' }
 			$Size = [long] (Get-Item -LiteralPath $Path -Force).Length
-			if ($Size -lt 0 -or $Size -gt 4294967296L -or $TotalBytes -gt 137438953472L - $Size) { throw 'target_product_invalid' }
-			$TotalBytes += $Size
+			if ($Size -lt 0 -or $Size -gt 4294967296L) { throw 'target_product_invalid' }
+			if ($IsNew) {
+				if ($TotalBytes -gt 137438953472L - $Size) { throw 'target_product_invalid' }
+				$TotalBytes += $Size
+			}
 		}
 	}
 	return [pscustomobject]@{ productCount = $Seen.Count; totalBytes = $TotalBytes; semanticsVerified = $true }
