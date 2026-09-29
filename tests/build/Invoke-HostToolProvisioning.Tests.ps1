@@ -29,6 +29,18 @@ $FixtureParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $FixtureTempRoot = Join-Path $FixtureParent ('AethelnHostToolsFixture-' + [guid]::NewGuid().ToString('N'))
 try {
 $null = New-Item -ItemType Directory -Path $FixtureTempRoot -ErrorAction Stop
+$EntryFailure = $null
+try {
+	. $Entry -EngineRoot 'D:\unused' -EvidenceRoot 'F:\unused' -HostLeasePath 'D:\unused.lease' -CompilerPath 'C:\unused\cl.exe' -ResourceCompilerPath 'C:\unused\rc.exe'
+} catch { $EntryFailure = $_.Exception.Message }
+Assert-HostFixture ($EntryFailure -ceq 'execute_required') 'Definition-only child-path fixture unexpectedly executed the provisioner.'
+$ExpectedPowerShell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell/v1.0/powershell.exe'
+$ChildPowerShell = Resolve-HostToolChildPowerShellPath
+Assert-HostFixture ($ChildPowerShell -ceq $ExpectedPowerShell -and (Test-Path -LiteralPath $ChildPowerShell -PathType Leaf)) 'The child shell must be the existing absolute Windows PowerShell executable.'
+if (-not (Test-Path -LiteralPath (Join-Path $PSHOME 'powershell.exe') -PathType Leaf)) {
+	Assert-HostFixture ($ChildPowerShell -cne (Join-Path $PSHOME 'powershell.exe')) 'A pwsh host must not select a nonexistent child in PSHOME.'
+}
+Assert-HostFailure { Resolve-HostToolChildPowerShellPath -SystemDirectory (Join-Path $FixtureTempRoot 'MissingSystemDirectory') } 'child_powershell_unavailable'
 $SuccessCleanup = Join-Path $FixtureTempRoot 'success-cleanup'
 $null = New-Item -ItemType Directory -Path $SuccessCleanup -ErrorAction Stop
 Remove-HostFixtureRoot -Root $SuccessCleanup -Parent $FixtureTempRoot
@@ -176,6 +188,34 @@ Set-Content -LiteralPath (Join-Path $PluginGitdepsEngine 'Engine/Plugins/Fixture
 Set-Content -LiteralPath (Join-Path $PluginGitdepsBuild 'Commit.gitdeps.xml') -Value ('<DependencyManifest><Files><File Name="Binaries/Win64/Support.dll" Hash="' + $PluginSha1 + '" /></Files></DependencyManifest>') -Encoding UTF8
 $PluginGitdepsProof = Assert-HostToolFreshOutputState -EngineRoot $PluginGitdepsEngine -TrackedPaths @('Engine/Plugins/Fixture/Build/Commit.gitdeps.xml', 'Engine/Plugins/Fixture/Fixture.uplugin')
 Assert-HostFixture ($PluginGitdepsProof.manifestFilesVerified -eq 1) 'Tracked plugin manifest payload should pass.'
+
+# The pinned engine's GitDependencies manifest hydrates this one Programs/bin
+# executable before any host-tool build. It is not a stale generated product.
+$ProgramGitdepsEngine = Join-Path $FixtureTempRoot ('AethelnProgramGitdeps-' + [guid]::NewGuid().ToString('N'))
+$ProgramRelative = 'Engine/Source/Programs/UnrealGameSync/PostBadgeStatus/bin/Release/PostBadgeStatus.exe'
+$ProgramOutput = Join-Path $ProgramGitdepsEngine $ProgramRelative
+$ProgramBuild = Join-Path $ProgramGitdepsEngine 'Engine/Build'
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $ProgramOutput) -Force
+$null = New-Item -ItemType Directory -Path $ProgramBuild -Force
+Set-Content -LiteralPath $ProgramOutput -Value 'pinned program dependency' -Encoding Ascii
+$ProgramSha1 = (Get-FileHash -LiteralPath $ProgramOutput -Algorithm SHA1).Hash.ToLowerInvariant()
+$ProgramManifest = Join-Path $ProgramBuild 'Commit.gitdeps.xml'
+Set-Content -LiteralPath $ProgramManifest -Value ('<DependencyManifest><Files><File Name="' + $ProgramRelative + '" Hash="' + $ProgramSha1 + '" /></Files></DependencyManifest>') -Encoding UTF8
+$ProgramTracked = @('Engine/Build/Commit.gitdeps.xml')
+$ProgramProof = Assert-HostToolFreshOutputState -EngineRoot $ProgramGitdepsEngine -TrackedPaths $ProgramTracked
+Assert-HostFixture ($ProgramProof.manifestFilesVerified -eq 1) 'Exact SHA1-verified pinned Programs/bin dependency should pass.'
+Set-Content -LiteralPath $ProgramOutput -Value 'changed program dependency' -Encoding Ascii
+Assert-HostFailure { Assert-HostToolFreshOutputState -EngineRoot $ProgramGitdepsEngine -TrackedPaths $ProgramTracked } 'gitdeps_hash_mismatch'
+Set-Content -LiteralPath $ProgramOutput -Value 'pinned program dependency' -Encoding Ascii
+Set-Content -LiteralPath $ProgramManifest -Value ('<DependencyManifest><Files><File Name="' + $ProgramRelative.Replace('PostBadgeStatus.exe', 'postbadgestatus.exe') + '" Hash="' + $ProgramSha1 + '" /></Files></DependencyManifest>') -Encoding UTF8
+Assert-HostFailure { Assert-HostToolFreshOutputState -EngineRoot $ProgramGitdepsEngine -TrackedPaths $ProgramTracked } 'prior_host_outputs_present'
+Set-Content -LiteralPath $ProgramManifest -Value '<DependencyManifest><Files /></DependencyManifest>' -Encoding UTF8
+Assert-HostFailure { Assert-HostToolFreshOutputState -EngineRoot $ProgramGitdepsEngine -TrackedPaths $ProgramTracked } 'prior_host_outputs_present'
+$OtherProgram = Join-Path (Split-Path -Parent $ProgramOutput) 'Other.exe'
+Set-Content -LiteralPath $OtherProgram -Value 'another dependency' -Encoding Ascii
+$OtherProgramSha1 = (Get-FileHash -LiteralPath $OtherProgram -Algorithm SHA1).Hash.ToLowerInvariant()
+Set-Content -LiteralPath $ProgramManifest -Value ('<DependencyManifest><Files><File Name="' + $ProgramRelative + '" Hash="' + $ProgramSha1 + '" /><File Name="' + $ProgramRelative.Replace('PostBadgeStatus.exe', 'Other.exe') + '" Hash="' + $OtherProgramSha1 + '" /></Files></DependencyManifest>') -Encoding UTF8
+Assert-HostFailure { Assert-HostToolFreshOutputState -EngineRoot $ProgramGitdepsEngine -TrackedPaths $ProgramTracked } 'prior_host_outputs_present'
 
 # A clean Git tree does not prove ignored build products share this source pin.
 $FreshEngine = Join-Path $FixtureTempRoot ('AethelnFreshHostTools-' + [guid]::NewGuid().ToString('N'))

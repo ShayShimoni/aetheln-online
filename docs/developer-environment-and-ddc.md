@@ -288,8 +288,10 @@ preflight rejects a reusable `UnrealBuildTool.dll`, its dependency CSV, and
 generated .NET `bin`/`obj` products: the pinned engine's `Build.bat` calls
 `BuildUBT.bat`, which can otherwise skip rebuilding UBT from source.
 Normal `Setup.bat` hydration is not mistaken for a prior host build: only
-manifest-listed Win64 engine/plugin files with matching content hashes pass;
-unlisted, changed, case-colliding, or reparse-mediated files fail closed.
+manifest-listed Win64 engine/plugin files and the pinned
+`Engine/Source/Programs/UnrealGameSync/PostBadgeStatus/bin/Release/PostBadgeStatus.exe`
+payload pass with exact path case and matching SHA-1 hashes. Unlisted,
+changed, case-colliding, or reparse-mediated files fail closed.
 If the bounded fresh-host-tool attempt intentionally omits `Setup.bat`'s
 machine setup, hydrate dependencies directly from the pinned engine checkout:
 

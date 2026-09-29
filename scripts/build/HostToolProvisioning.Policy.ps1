@@ -123,7 +123,8 @@ function Get-HostToolGitDependencyAllowlist {
 				if ($FileCount -gt 200000) { throw 'gitdeps_manifest_invalid' }
 				$Name = $Prefix + $Reader.GetAttribute('Name')
 				$Hash = $Reader.GetAttribute('Hash')
-				if ($Name -cnotmatch '^Engine/(Binaries/Win64|Plugins/.+/Binaries/Win64)/') { continue }
+				if ($Name -cnotmatch '^Engine/(Binaries/Win64|Plugins/.+/Binaries/Win64)/' -and
+					$Name -cne 'Engine/Source/Programs/UnrealGameSync/PostBadgeStatus/bin/Release/PostBadgeStatus.exe') { continue }
 				if ($Name.Length -gt 512 -or $Hash -cnotmatch '^[0-9a-f]{40}$' -or
 					$Name.Contains(':') -or @(($Name -split '/') | Where-Object { $_ -in @('', '.', '..') }).Count -ne 0 -or
 					$Allowed.ContainsKey($Name)) { throw 'gitdeps_manifest_invalid' }

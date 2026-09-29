@@ -29,6 +29,17 @@ function Assert-HostToolPlainRoot {
 	return [IO.Path]::GetFullPath($Path)
 }
 
+function Resolve-HostToolChildPowerShellPath {
+	param([string] $SystemDirectory = [Environment]::SystemDirectory)
+	if ([string]::IsNullOrWhiteSpace($SystemDirectory)) { throw 'child_powershell_unavailable' }
+	# PSHOME is the pwsh installation under PowerShell 7, not Windows PowerShell.
+	$PlainSystemDirectory = Assert-HostToolPlainRoot -Path $SystemDirectory -Reason 'child_powershell_unavailable'
+	$Executable = Join-Path $PlainSystemDirectory 'WindowsPowerShell/v1.0/powershell.exe'
+	if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw 'child_powershell_unavailable' }
+	Assert-InitialPreparationPlainPath -Path $Executable -Reason 'child_powershell_unavailable'
+	return $Executable
+}
+
 function Get-HostToolGitState {
 	param([string] $Root)
 	$Safe = 'safe.directory=' + $Root.Replace('\', '/')
@@ -71,12 +82,13 @@ function Invoke-HostToolNativeBuild {
 	try {
 		$null = Assert-HostToolControllerInputIdentity -ControllerRoot $ResolvedController
 		$null = Assert-HostToolEngineInputIdentity -EngineRoot $ResolvedEngine
+		$ChildPowerShell = Resolve-HostToolChildPowerShellPath
 		Initialize-InitialPreparationJob
 		$Job = [Aetheln.PreparationJob]::new($UsefulDeadlineTicks)
 		$Arguments = @('-NoProfile', '-NonInteractive', '-File',
 			(Join-Path $PSScriptRoot 'HostToolProvisioning.BuildInvocation.ps1'), '-Target', $Target,
 			'-ActionLimit', [string] $ActionLimit, '-EngineRoot', $ResolvedEngine, '-EvidenceRoot', $TargetEvidence)
-		$Process = $Job.Start((Join-Path $PSHOME 'powershell.exe'), $Arguments, $ResolvedEngine)
+		$Process = $Job.Start($ChildPowerShell, $Arguments, $ResolvedEngine)
 		while (-not $Process.WaitForExit(200)) {
 			if ($Job.TimedOut -or (Get-InitialPreparationTick) -ge $UsefulDeadlineTicks) { throw 'useful_work_deadline' }
 			$null = Update-RoutineCompileResources -Monitor $ResourceMonitor

@@ -102,6 +102,7 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `source-control-policy` (`scripts/tests/Test-SourceControlPolicy.ps1`) | Required | LFS ownership, generated-artifact exclusions, and sensitive-path (dependency/secret) tracking policy. |
 | `observability-contract` (`scripts/tests/Test-ObservabilityContract.ps1`) | Required | Closed observability vocabulary, bounded/redacted event shape, explicit environment/retention boundaries, and downstream ownership. |
 | `build-packaged-artifacts-tests` (`tests/build/Build-PackagedArtifacts.Tests.ps1`) | Required | Focused automation for the packaging entry point. |
+| `host-tool-provisioning-tests` (`tests/build/Invoke-HostToolProvisioning.Tests.ps1`) | Required | Fixture coverage for the bounded, fail-closed source-engine host-tool provisioner; it does not run an engine build. |
 | `packaged-smoke-test-tests` (`tests/build/Invoke-PackagedSmokeTest.Tests.ps1`) | Required | Focused automation for the smoke orchestrator logic. |
 | `server-cook-reference-tests` (`tests/build/Validate-ServerCookReferences.Tests.ps1`) | Required | Focused automation for server cook reference rules. |
 | `target-composition-tests` (`tests/build/Validate-TargetComposition.Tests.ps1`) | Required | Focused automation for client/server module composition rules. |
