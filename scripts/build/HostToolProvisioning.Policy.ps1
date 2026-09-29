@@ -249,7 +249,7 @@ function Assert-HostToolControllerInputIdentity {
 	$FlagRecords = @($FlagsText.Split([char] 0) | Where-Object { $_.Length -gt 0 })
 	if ($TreeRecords.Count -ne $IndexRecords.Count -or $TreeRecords.Count -ne $FlagRecords.Count -or
 		$TreeRecords.Count -gt 10000) { throw 'controller_input_identity_mismatch' }
-	$AbsolutePaths = New-Object 'Collections.Generic.List[string]'
+	$RelativePaths = New-Object 'Collections.Generic.List[string]'
 	$ExpectedBlobs = New-Object 'Collections.Generic.List[string]'
 	for ($Index = 0; $Index -lt $TreeRecords.Count; $Index++) {
 		if ($TreeRecords[$Index] -cnotmatch '^(?<mode>100644|100755) blob (?<blob>[0-9a-f]{40})\t(?<path>.+)$') { throw 'controller_input_identity_mismatch' }
@@ -259,11 +259,12 @@ function Assert-HostToolControllerInputIdentity {
 			$Matches.mode -cne $Mode -or $Matches.blob -cne $Blob -or $Matches.path -cne $Relative) { throw 'controller_input_identity_mismatch' }
 		if ($FlagRecords[$Index] -cnotmatch '^H (.+)$') { throw 'controller_index_flags_present' }
 		if ($Matches[1] -cne $Relative) { throw 'controller_input_identity_mismatch' }
-		$AbsolutePaths.Add((Join-Path $ControllerRoot $Relative))
+		$RelativePaths.Add($Relative)
 		$ExpectedBlobs.Add($Blob)
 	}
-	# Hash the worktree, not cached stat/status data. Use the same Git clean
-	# filters as HEAD while writing UTF-8 paths without PowerShell's stdin BOM.
+	# Hash the worktree, not cached stat/status data. Repo-relative paths make
+	# Git apply the same path-specific clean filters as HEAD; absolute paths can
+	# fall back to a broader LFS rule. Write UTF-8 without PowerShell's stdin BOM.
 	$GitCommand = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 	$Start = New-Object Diagnostics.ProcessStartInfo
 	$Start.FileName = $GitCommand
@@ -283,7 +284,7 @@ function Assert-HostToolControllerInputIdentity {
 		$OutputTask = $Process.StandardOutput.ReadToEndAsync()
 		$ErrorTask = $Process.StandardError.ReadToEndAsync()
 		$Utf8 = New-Object Text.UTF8Encoding($false)
-		foreach ($Path in $AbsolutePaths) {
+		foreach ($Path in $RelativePaths) {
 			$Bytes = $Utf8.GetBytes($Path + "`n")
 			$Process.StandardInput.BaseStream.Write($Bytes, 0, $Bytes.Length)
 		}
@@ -313,7 +314,7 @@ function Assert-HostToolEngineInputIdentity {
 	if ($LASTEXITCODE -ne 0 -or $IndexText.Length -eq 0) { throw 'engine_input_identity_unavailable' }
 	$IndexRecords = @($IndexText.Split([char] 0) | Where-Object { $_.Length -gt 0 })
 	if ($TreeRecords.Count -ne $IndexRecords.Count -or $TreeRecords.Count -gt 250000) { throw 'engine_input_identity_mismatch' }
-	$AbsolutePaths = New-Object 'Collections.Generic.List[string]'
+	$RelativePaths = New-Object 'Collections.Generic.List[string]'
 	$ExpectedBlobs = New-Object 'Collections.Generic.List[string]'
 	for ($Index = 0; $Index -lt $TreeRecords.Count; $Index++) {
 		$TreeRecord = $TreeRecords[$Index]
@@ -324,11 +325,11 @@ function Assert-HostToolEngineInputIdentity {
 		$IndexRecord = $IndexRecords[$Index]
 		if ($IndexRecord -cnotmatch '^H (.+)$') { throw 'engine_index_flags_present' }
 		if ($Matches[1] -cne $Relative) { throw 'engine_input_identity_mismatch' }
-		$AbsolutePaths.Add((Join-Path $EngineRoot $Relative))
+		$RelativePaths.Add($Relative)
 		$ExpectedBlobs.Add($Blob)
 	}
-	# stdin-paths applies each path's Git clean filter (including Windows text
-	# normalization) while hashing the actual worktree bytes in one process.
+	# Repo-relative stdin-paths applies each path's Git clean filter (including
+	# Windows text normalization) while hashing actual bytes in one process.
 	# Windows PowerShell 5 prepends a BOM to native pipeline stdin, so write
 	# UTF-8 without a BOM directly to Git's process stream.
 	$GitCommand = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
@@ -350,7 +351,7 @@ function Assert-HostToolEngineInputIdentity {
 		$OutputTask = $Process.StandardOutput.ReadToEndAsync()
 		$ErrorTask = $Process.StandardError.ReadToEndAsync()
 		$Utf8 = New-Object Text.UTF8Encoding($false)
-		foreach ($Path in $AbsolutePaths) {
+		foreach ($Path in $RelativePaths) {
 			$Bytes = $Utf8.GetBytes($Path + "`n")
 			$Process.StandardInput.BaseStream.Write($Bytes, 0, $Bytes.Length)
 		}

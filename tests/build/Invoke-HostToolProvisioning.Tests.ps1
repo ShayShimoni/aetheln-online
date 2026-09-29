@@ -63,6 +63,42 @@ Assert-HostFixture ((Assert-HostToolGitState -Head $Pin -Status '' -Expected $Pi
 Assert-HostFailure { Assert-HostToolGitState -Head ('a' * 40) -Status '' -Expected $Pin } 'engine_revision_mismatch'
 Assert-HostFailure { Assert-HostToolGitState -Head $Pin -Status '?? Engine/Binaries/rogue.exe' -Expected $Pin } 'engine_dirty'
 
+# A clean checkout can override a broad LFS rule for one path and normalize
+# text in another. Both identity guards must hash repo-relative paths so Git
+# applies the same path-specific attributes as the index.
+$NormalizedRoot = Join-Path $FixtureTempRoot ('AethelnNormalizedInputs-' + [guid]::NewGuid().ToString('N'))
+try {
+	$null = New-Item -ItemType Directory -Path (Join-Path $NormalizedRoot 'Engine') -Force
+	$null = New-Item -ItemType Directory -Path (Join-Path $NormalizedRoot 'docs') -Force
+	[IO.File]::WriteAllText((Join-Path $NormalizedRoot '.gitattributes'), "*.txt text eol=lf`n*.png filter=lfs diff=lfs merge=lfs -text lockable`ndocs/Normalized.png !filter !diff !merge -text -lockable`nEngine/Normalized.png !filter !diff !merge -text -lockable`n", (New-Object Text.UTF8Encoding($false)))
+	$NormalizedBytes = [Text.Encoding]::ASCII.GetBytes("first`r`nsecond`r`n")
+	[IO.File]::WriteAllBytes((Join-Path $NormalizedRoot 'Engine/Normalized.txt'), $NormalizedBytes)
+	[IO.File]::WriteAllBytes((Join-Path $NormalizedRoot 'docs/Normalized.txt'), $NormalizedBytes)
+	[IO.File]::WriteAllBytes((Join-Path $NormalizedRoot 'Engine/Normalized.png'), $NormalizedBytes)
+	[IO.File]::WriteAllBytes((Join-Path $NormalizedRoot 'docs/Normalized.png'), $NormalizedBytes)
+	& git -C $NormalizedRoot init -q
+	if ($LASTEXITCODE -ne 0) { throw 'normalized_fixture_git_init_failed' }
+	& git -C $NormalizedRoot config core.autocrlf true
+	if ($LASTEXITCODE -ne 0) { throw 'normalized_fixture_git_config_failed' }
+	& git -C $NormalizedRoot add -- .gitattributes Engine docs
+	if ($LASTEXITCODE -ne 0) { throw 'normalized_fixture_git_add_failed' }
+	& git -C $NormalizedRoot -c user.name=Fixture -c user.email=fixture@example.invalid commit -q -m fixture
+	if ($LASTEXITCODE -ne 0) { throw 'normalized_fixture_git_commit_failed' }
+	Assert-HostFixture (@(& git -C $NormalizedRoot status --porcelain=v1).Count -eq 0) 'Normalized worktree must be Git-clean.'
+	$NormalizedImage = Join-Path $NormalizedRoot 'docs/Normalized.png'
+	$AbsoluteImageBlob = [string] (& git -C $NormalizedRoot hash-object --path=$NormalizedImage -- $NormalizedImage)
+	$RelativeImageBlob = [string] (& git -C $NormalizedRoot hash-object --path=docs/Normalized.png -- $NormalizedImage)
+	Assert-HostFixture ($AbsoluteImageBlob -cne $RelativeImageBlob) 'Fixture must expose the absolute-path attribute mismatch.'
+	$NormalizedEngineImage = Join-Path $NormalizedRoot 'Engine/Normalized.png'
+	$AbsoluteEngineBlob = [string] (& git -C $NormalizedRoot hash-object --path=$NormalizedEngineImage -- $NormalizedEngineImage)
+	$RelativeEngineBlob = [string] (& git -C $NormalizedRoot hash-object --path=Engine/Normalized.png -- $NormalizedEngineImage)
+	Assert-HostFixture ($AbsoluteEngineBlob -cne $RelativeEngineBlob) 'Engine fixture must expose the absolute-path attribute mismatch.'
+	Assert-HostFixture (Assert-HostToolControllerInputIdentity -ControllerRoot $NormalizedRoot) 'Clean normalized controller input must pass.'
+	Assert-HostFixture (Assert-HostToolEngineInputIdentity -EngineRoot $NormalizedRoot) 'Clean normalized engine input must pass.'
+} finally {
+	Remove-HostFixtureRoot -Root $NormalizedRoot -Parent $FixtureTempRoot
+}
+
 # A real disposable index proves both flags can hide modified build inputs from
 # porcelain status. The production guard must reject the flags and raw bytes.
 $HiddenEngine = Join-Path $FixtureTempRoot ('AethelnHiddenHostTools-' + [guid]::NewGuid().ToString('N'))
