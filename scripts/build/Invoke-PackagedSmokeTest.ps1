@@ -105,6 +105,31 @@ function Get-ProcessesUnderPath([string] $Root) {
 	}
 }
 
+function Get-PackageExecutableNames([string] $Root) {
+	# Bounded inventory of executable base names shipped under the package root.
+	$Names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+	$Count = 0
+	foreach ($File in [System.IO.Directory]::EnumerateFiles($Root, '*.exe', [System.IO.SearchOption]::AllDirectories)) {
+		if (++$Count -gt 10000) { throw "Package root '$Root' contains more than 10000 executables; opaque-process inventory is unbounded." }
+		[void] $Names.Add([System.IO.Path]::GetFileNameWithoutExtension($File))
+	}
+	return ,$Names
+}
+
+function Get-OpaquePackageNamedProcesses($Names) {
+	# A process whose path is unreadable or blank cannot be placed under the package
+	# root. When its image name matches a package executable, it may be a package
+	# process outside the smoke jobs; report it so cleanup can withhold completion.
+	# It is never a termination target. Other opaque processes are unrelated.
+	foreach ($Process in @(Get-Process -ErrorAction Stop)) {
+		$Readable = $false
+		try { $Readable = -not [string]::IsNullOrWhiteSpace([string] $Process.Path) } catch { $Readable = $false }
+		if ($Readable) { continue }
+		try { $ImageName = [string] $Process.ProcessName } catch { continue }
+		if ($Names.Contains($ImageName)) { Add-Member -InputObject $Process -NotePropertyName AethelnOpaque -NotePropertyValue $true -Force -PassThru }
+	}
+}
+
 function Resolve-ProcessIdentity($Process, [hashtable] $Baseline, [long] $BaselineTicks = 0) {
 	# Baseline absence is not ownership proof: enumeration/path observation can miss
 	# a pre-launch process. Require a readable start time beyond the captured boundary.
@@ -265,6 +290,141 @@ function Wait-ForUniqueServerConnectionPair([System.Diagnostics.Process] $Proces
 	throw "Timed out after $TimeoutSeconds seconds waiting for two unique server connections; observed only $($Connections.Count) unique in '$Path' (pattern '$Pattern')."
 }
 
+function Initialize-PackagedSmokeClientJobType {
+	# Each client runs in its own kill-on-close job, created suspended and assigned
+	# before it can start a descendant. Kernel job membership, not executable path or
+	# start time, is the ownership proof used by cleanup.
+	if ($null -ne ('Aetheln.PackagedSmokeClientJob' -as [type])) { return }
+	Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+namespace Aetheln {
+ public sealed class PackagedSmokeClientJob : IDisposable {
+  const uint KillOnJobClose = 0x00002000, CreateSuspended = 0x00000004, CreateNoWindow = 0x08000000, ExtendedStartupInfoPresent = 0x00080000;
+  // Readers may tail the live logs; no other writer, deleter, or renamer may open them.
+  const uint GenericWrite = 0x40000000, ShareRead = 0x00000001, CreateNew = 1, UseStdHandles = 0x00000100;
+  static readonly IntPtr HandleListAttribute = (IntPtr)0x00020002;
+  static readonly IntPtr InvalidHandle = new IntPtr(-1);
+  IntPtr handle;
+  [StructLayout(LayoutKind.Sequential)] struct IoCounters { public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount; }
+  [StructLayout(LayoutKind.Sequential)] struct BasicLimitInformation { public long PerProcessUserTimeLimit, PerJobUserTimeLimit; public uint LimitFlags; public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize; public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass, SchedulingClass; }
+  [StructLayout(LayoutKind.Sequential)] struct ExtendedLimitInformation { public BasicLimitInformation BasicLimitInformation; public IoCounters IoInfo; public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed; }
+  [StructLayout(LayoutKind.Sequential)] struct SecurityAttributes { public int Length; public IntPtr SecurityDescriptor; public bool InheritHandle; }
+  [StructLayout(LayoutKind.Sequential)] struct StartupInfo { public int cb; public IntPtr reserved, desktop, title; public int x, y, xSize, ySize, xCountChars, yCountChars, fillAttribute, flags; public short showWindow, reserved2Size; public IntPtr reserved2, stdInput, stdOutput, stdError; }
+  [StructLayout(LayoutKind.Sequential)] struct StartupInfoEx { public StartupInfo StartupInfo; public IntPtr AttributeList; }
+  [StructLayout(LayoutKind.Sequential)] struct ProcessInformation { public IntPtr process, thread; public uint processId, threadId; }
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, int informationClass, ref ExtendedLimitInformation information, uint length);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int informationClass, IntPtr information, uint length, out uint returned);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateFileW(string path, uint access, uint share, ref SecurityAttributes security, uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previous, IntPtr returned);
+  [DllImport("kernel32.dll")] static extern void DeleteProcThreadAttributeList(IntPtr list);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcessW(string applicationName, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags, IntPtr environment, string currentDirectory, ref StartupInfoEx startup, out ProcessInformation information);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint exitCode);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  public PackagedSmokeClientJob() {
+   handle = CreateJobObject(IntPtr.Zero, null);
+   if (handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject failed.");
+   ExtendedLimitInformation information = new ExtendedLimitInformation();
+   information.BasicLimitInformation.LimitFlags = KillOnJobClose;
+   if (!SetInformationJobObject(handle, 9, ref information, (uint)Marshal.SizeOf(typeof(ExtendedLimitInformation)))) { int error = Marshal.GetLastWin32Error(); CloseHandle(handle); handle = IntPtr.Zero; throw new Win32Exception(error, "SetInformationJobObject failed."); }
+  }
+  IntPtr Live() { if (handle == IntPtr.Zero) throw new ObjectDisposedException("PackagedSmokeClientJob"); return handle; }
+  static IntPtr OpenInheritableOutput(string path) {
+   SecurityAttributes security = new SecurityAttributes(); security.Length = Marshal.SizeOf(typeof(SecurityAttributes)); security.InheritHandle = true;
+   IntPtr file = CreateFileW(path, GenericWrite, ShareRead, ref security, CreateNew, 0x80, IntPtr.Zero);
+   if (file == InvalidHandle) throw new Win32Exception(Marshal.GetLastWin32Error(), "Client log could not be created.");
+   return file;
+  }
+  public System.Diagnostics.Process Start(string executable, string commandLine, string workingDirectory, string stdOutPath, string stdErrPath) {
+   IntPtr stdOut = IntPtr.Zero, stdErr = IntPtr.Zero, attributes = IntPtr.Zero, handles = IntPtr.Zero;
+   bool attributesInitialized = false;
+   ProcessInformation information = new ProcessInformation();
+   System.Diagnostics.Process managed = null;
+   try {
+    stdOut = OpenInheritableOutput(stdOutPath);
+    stdErr = OpenInheritableOutput(stdErrPath);
+    // Only the two log handles may be inherited, never other inheritable handles of this host.
+    IntPtr size = IntPtr.Zero;
+    InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+    attributes = Marshal.AllocHGlobal(size);
+    if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size)) throw new Win32Exception(Marshal.GetLastWin32Error(), "InitializeProcThreadAttributeList failed.");
+    attributesInitialized = true;
+    handles = Marshal.AllocHGlobal(IntPtr.Size * 2);
+    Marshal.WriteIntPtr(handles, 0, stdOut);
+    Marshal.WriteIntPtr(handles, IntPtr.Size, stdErr);
+    if (!UpdateProcThreadAttribute(attributes, 0, HandleListAttribute, handles, (IntPtr)(IntPtr.Size * 2), IntPtr.Zero, IntPtr.Zero)) throw new Win32Exception(Marshal.GetLastWin32Error(), "UpdateProcThreadAttribute failed.");
+    StartupInfoEx startup = new StartupInfoEx();
+    startup.StartupInfo.cb = Marshal.SizeOf(typeof(StartupInfoEx));
+    startup.StartupInfo.flags = (int)UseStdHandles;
+    startup.StartupInfo.stdOutput = stdOut;
+    startup.StartupInfo.stdError = stdErr;
+    startup.AttributeList = attributes;
+    if (!CreateProcessW(executable, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true, CreateSuspended | CreateNoWindow | ExtendedStartupInfoPresent, IntPtr.Zero, workingDirectory, ref startup, out information)) throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateProcess failed.");
+    try {
+     if (!AssignProcessToJobObject(Live(), information.process)) throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed.");
+     managed = System.Diagnostics.Process.GetProcessById((int)information.processId);
+     IntPtr managedHandle = managed.Handle;
+     if (ResumeThread(information.thread) == UInt32.MaxValue) throw new Win32Exception(Marshal.GetLastWin32Error(), "ResumeThread failed.");
+     return managed;
+    } catch {
+     // The suspended process never ran; stop it before surfacing the failure.
+     TerminateProcess(information.process, 1);
+     if (managed != null) managed.Dispose();
+     throw;
+    }
+   } finally {
+    if (information.thread != IntPtr.Zero) CloseHandle(information.thread);
+    if (information.process != IntPtr.Zero) CloseHandle(information.process);
+    if (attributesInitialized) DeleteProcThreadAttributeList(attributes);
+    if (attributes != IntPtr.Zero) Marshal.FreeHGlobal(attributes);
+    if (handles != IntPtr.Zero) Marshal.FreeHGlobal(handles);
+    if (stdOut != IntPtr.Zero) CloseHandle(stdOut);
+    if (stdErr != IntPtr.Zero) CloseHandle(stdErr);
+   }
+  }
+  public long[] GetProcessIds() {
+   int capacity = 4096, length = 8 + capacity * IntPtr.Size;
+   IntPtr buffer = Marshal.AllocHGlobal(length);
+   try {
+    uint returned;
+    if (!QueryInformationJobObject(Live(), 3, buffer, (uint)length, out returned)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Job process list query failed.");
+    int assigned = Marshal.ReadInt32(buffer, 0), listed = Marshal.ReadInt32(buffer, 4);
+    if (listed != assigned || listed > capacity) throw new InvalidOperationException("Job process list was incomplete.");
+    long[] ids = new long[listed];
+    for (int index = 0; index < listed; index++) ids[index] = Marshal.ReadIntPtr(buffer, 8 + index * IntPtr.Size).ToInt64();
+    return ids;
+   } finally { Marshal.FreeHGlobal(buffer); }
+  }
+  public int GetActiveProcessCount() {
+   IntPtr buffer = Marshal.AllocHGlobal(48);
+   try {
+    uint returned;
+    if (!QueryInformationJobObject(Live(), 1, buffer, 48, out returned)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Job accounting query failed.");
+    return Marshal.ReadInt32(buffer, 40);
+   } finally { Marshal.FreeHGlobal(buffer); }
+  }
+  public void Terminate() { if (!TerminateJobObject(Live(), 1)) throw new Win32Exception(Marshal.GetLastWin32Error(), "TerminateJobObject failed."); }
+  public void Dispose() { IntPtr current = handle; handle = IntPtr.Zero; if (current != IntPtr.Zero) CloseHandle(current); GC.SuppressFinalize(this); }
+  ~PackagedSmokeClientJob() { Dispose(); }
+ }
+}
+'@
+}
+
+function Start-OwnedClientProcess($Job, [string] $Executable, [string[]] $Arguments, [string] $StdOutPath, [string] $StdErrPath) {
+	# Match Start-Process: arguments joined with single spaces, current location as working directory.
+	$CommandLine = '"' + $Executable + '" ' + ($Arguments -join ' ')
+	return $Job.Start($Executable, $CommandLine, (Get-Location).ProviderPath, $StdOutPath, $StdErrPath)
+}
+
 function Wait-ForOwnedProcessExit($Process, [int] $TimeoutMilliseconds, [string] $Source) {
 	# WaitForExit throws Win32Exception (handle could not be opened) or a SystemException
 	# when no process is associated any more. Neither decides cleanup: the bounded rescan
@@ -327,6 +487,8 @@ function Get-StartupProvenance([string] $Path, [string] $ClientPath, [string] $S
 	if ($Inventory.Count -lt 2) { throw 'Packaged provenance inventory is incomplete.' }
 	$Client = Get-PackagedExecutableBinding -Name 'client' -Path $ClientPath -ArchiveRoot ([string] $Document.artifacts.clientArchive) -Inventory $Inventory -Kind 'client'
 	if ($Client.relativePath -ine 'AethelnOnline/Binaries/Win64/AethelnOnlineClient.exe') { throw 'CaptureStartup requires the inner packaged Win64 game executable, not a root bootstrap or unknown client layout.' }
+	$VolumeRoot = [System.IO.Path]::GetPathRoot($Client.archiveRoot).TrimEnd([char[]]@('\', '/'))
+	if ($Client.archiveRoot -ieq $VolumeRoot -or [System.IO.Path]::GetFileName($Client.archiveRoot) -cne 'WindowsClient') { throw 'CaptureStartup requires a WindowsClient client archive directory, not a volume root or broader path.' }
 	$Server = Get-PackagedExecutableBinding -Name 'server' -Path $ServerPath -ArchiveRoot ([string] $Document.artifacts.serverArchive) -Inventory $Inventory -Kind 'server'
 	return [ordered]@{ path = $ResolvedPath; sha256 = $ProvenanceHash; sourceRevision = $Revision; configuration = $Configuration; client = $Client; server = $Server }
 }
@@ -540,8 +702,9 @@ $ResolvedClient = Resolve-Executable 'ClientExecutable' $ClientExecutable
 $StartupProvenance = if ($CaptureStartup) { Get-StartupProvenance -Path $BuildProvenancePath -ClientPath $ResolvedClient -ServerPath $ServerProvenanceExecutable } else { $null }
 if ($CaptureStartup) { Assert-ServerWslMapping -LinuxPath $ServerExecutable -HostPath $ServerProvenanceExecutable }
 $ResolvedLogs = Initialize-EmptyLogRoot $LogRoot
-$ClientPackageRoot = Split-Path -Parent $ResolvedClient
+$ClientPackageRoot = if ($CaptureStartup) { $StartupProvenance.client.archiveRoot } else { Split-Path -Parent $ResolvedClient }
 $EvidencePath = Join-Path $ResolvedLogs 'smoke-evidence.jsonl'
+$PackageExecutableNames = Get-PackageExecutableNames $ClientPackageRoot
 # Capture identities before filtering by executable path. A process whose Path is
 # unreadable now may be visible under the package root later and must stay protected.
 # Enumeration errors fail before any smoke process is launched.
@@ -553,6 +716,8 @@ foreach ($UnknownProcessId in @($PreexistingClientProcessIdentities.Keys | Where
 $ServerStdOutLog = Join-Path $ResolvedLogs 'server.stdout.log'
 $ServerStdErrLog = Join-Path $ResolvedLogs 'server.stderr.log'
 $Processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+$ClientJobs = [System.Collections.Generic.List[object]]::new()
+Initialize-PackagedSmokeClientJobType
 $ClientLaunchUtc = @{}
 $ClientMapConfirmedUtc = @{}
 $StartupCapture = $null
@@ -573,7 +738,9 @@ try {
 		$ResolvedClientLogPath = if ($null -eq $ClientLogPath) { $null } else { $ClientLogPath.Replace('{ClientId}', $ClientId) }
 		$ExpandedClientArguments = Expand-ArgumentList -Arguments $ClientBaseArguments -ClientId $ClientId -LogPath $ResolvedClientLogPath -ServerExecutable $ServerExecutable
 		$ClientLaunchUtc[$ClientId] = [DateTime]::UtcNow
-		$ClientProcess = Start-Process -FilePath $ResolvedClient -ArgumentList $ExpandedClientArguments -RedirectStandardOutput $ClientStdOutLog -RedirectStandardError $ClientStdErrLog -WindowStyle Hidden -PassThru
+		$ClientJob = [pscustomobject]@{ Id = $ClientId; Job = [Aetheln.PackagedSmokeClientJob]::new() }
+		$ClientJobs.Add($ClientJob)
+		$ClientProcess = Start-OwnedClientProcess -Job $ClientJob.Job -Executable $ResolvedClient -Arguments $ExpandedClientArguments -StdOutPath $ClientStdOutLog -StdErrPath $ClientStdErrLog
 		$Processes.Add($ClientProcess)
 		$Clients[$ClientId] = $ClientProcess
 		Write-Evidence -Process $ClientId -Role 'client' -EventName 'process_started' -Source $ResolvedClient -Detail ($ExpandedClientArguments -join ' ')
@@ -624,60 +791,93 @@ try {
 	Write-Output "Packaged smoke test passed: the Linux server listened on '$ServerEndpoint' and observed two unique connections; both packaged Windows clients confirmed '$ServerMap'. Evidence: '$EvidencePath'."
 }
 finally {
-	$CleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
-	$DirectCleanupFailures = [System.Collections.Generic.List[string]]::new()
-	foreach ($Process in $Processes) {
-		try {
+	try {
+		$CleanupDeadline = [DateTime]::UtcNow.AddSeconds(10)
+		$DirectCleanupFailures = [System.Collections.Generic.List[string]]::new()
+		foreach ($Process in $Processes) {
 			try {
-				if (-not $Process.HasExited) { Stop-Process -Id $Process.Id -Force -ErrorAction Stop }
-			} catch [System.SystemException] {
-				Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_stop_failed' -Source $EvidencePath -Detail "PID $($Process.Id): $($_.Exception.GetBaseException().GetType().Name)"
-			}
-			$WaitMilliseconds = [int] [Math]::Max(0, [Math]::Min(5000, ($CleanupDeadline - [DateTime]::UtcNow).TotalMilliseconds))
-			if (-not (Wait-ForOwnedProcessExit -Process $Process -TimeoutMilliseconds $WaitMilliseconds -Source $EvidencePath)) { $DirectCleanupFailures.Add([string] $Process.Id) }
-		} finally { $Process.Dispose() }
-	}
-	Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_started' -Source $EvidencePath -Detail 'Scanning for smoke-owned package processes.'
-	$QuiescentSince = $null
-	do {
-		$PackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot)
-		$NewPackageProcesses = @($PackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'new' })
-		$UnresolvedPackageProcesses = @($PackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'unresolved' })
-		if ($NewPackageProcesses.Count -gt 0) {
-			$QuiescentSince = $null
-			foreach ($Process in $NewPackageProcesses) {
-				Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+				try {
+					# Terminate through the retained process handle: a PID-based stop after the
+					# HasExited check could reach an unrelated process that reused the PID.
+					if (-not $Process.HasExited) { $Process.Kill() }
+				} catch [System.SystemException] {
+					Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_stop_failed' -Source $EvidencePath -Detail "PID $($Process.Id): $($_.Exception.GetBaseException().GetType().Name)"
+				}
 				$WaitMilliseconds = [int] [Math]::Max(0, [Math]::Min(5000, ($CleanupDeadline - [DateTime]::UtcNow).TotalMilliseconds))
-				[void] (Wait-ForOwnedProcessExit -Process $Process -TimeoutMilliseconds $WaitMilliseconds -Source $ClientPackageRoot)
-				$Process.Dispose()
+				if (-not (Wait-ForOwnedProcessExit -Process $Process -TimeoutMilliseconds $WaitMilliseconds -Source $EvidencePath)) { $DirectCleanupFailures.Add([string] $Process.Id) }
+			} finally { $Process.Dispose() }
+		}
+		# Client descendants are owned only through their kernel job. Terminate each job and
+		# require the job itself to report no member process; a stranger started from the
+		# same package is never in the job, so it can never be terminated here.
+		$JobCleanupFailures = [System.Collections.Generic.List[string]]::new()
+		foreach ($ClientJob in $ClientJobs) {
+			try {
+				$Members = @($ClientJob.Job.GetProcessIds())
+				$ClientJob.Job.Terminate()
+				do {
+					$Active = [int] $ClientJob.Job.GetActiveProcessCount()
+					$Listed = @($ClientJob.Job.GetProcessIds()).Count
+					if ($Active -eq 0 -and $Listed -eq 0) { break }
+					Start-Sleep -Milliseconds 50
+				} while ([DateTime]::UtcNow -lt $CleanupDeadline)
+				Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_job' -Source $EvidencePath -Detail "$($ClientJob.Id) job members PID [$($Members -join ', ')]; activeProcesses=$Active; listedProcesses=$Listed."
+				if ($Active -ne 0 -or $Listed -ne 0) { $JobCleanupFailures.Add($ClientJob.Id) }
+			} catch [System.SystemException] {
+				Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_job_failed' -Source $EvidencePath -Detail "$($ClientJob.Id): $($_.Exception.GetBaseException().GetType().Name)"
+				$JobCleanupFailures.Add($ClientJob.Id)
+			} finally { $ClientJob.Job.Dispose() }
+		}
+		Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_started' -Source $EvidencePath -Detail 'Scanning the package for processes outside smoke-owned jobs.'
+		$QuiescentSince = $null
+		do {
+			$PackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot) + @(Get-OpaquePackageNamedProcesses $PackageExecutableNames)
+			$PendingPackageProcesses = @($PackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -ne 'preexisting' })
+			if ($PendingPackageProcesses.Count -gt 0) {
+				# Never terminate from a path scan. Keep waiting, inside the same deadline, for
+				# a new or unresolved package process to exit; quiescence cannot start yet.
+				$QuiescentSince = $null
+			} elseif ($null -eq $QuiescentSince) {
+				$QuiescentSince = [DateTime]::UtcNow
+			} elseif (([DateTime]::UtcNow - $QuiescentSince).TotalSeconds -ge 2) {
+				break
 			}
-		} elseif ($UnresolvedPackageProcesses.Count -gt 0) {
-			# Never terminate an unresolved process. Keep waiting, inside the same deadline,
-			# for its identity to resolve or for it to vanish; quiescence cannot start yet.
-			$QuiescentSince = $null
-		} elseif ($null -eq $QuiescentSince) {
-			$QuiescentSince = [DateTime]::UtcNow
-		} elseif (([DateTime]::UtcNow - $QuiescentSince).TotalSeconds -ge 2) {
-			break
+			Start-Sleep -Milliseconds 100
+		} while ([DateTime]::UtcNow -lt $CleanupDeadline)
+		$FinalPackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot) + @(Get-OpaquePackageNamedProcesses $PackageExecutableNames)
+		$UnresolvedProcessIds = @($FinalPackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'unresolved' } | ForEach-Object { [string] $_.Id })
+		if ($UnresolvedProcessIds.Count -gt 0) {
+			foreach ($UnresolvedProcessId in $UnresolvedProcessIds) {
+				Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_unresolved' -Source $ClientPackageRoot -Detail "PID $UnresolvedProcessId identity unresolved; not terminated."
+			}
+			throw "Packaged client process cleanup found $($UnresolvedProcessIds.Count) process(es) with unresolved identity under the package root (PID $($UnresolvedProcessIds -join ', ')) within 10 seconds; they were not terminated and cleanup is not complete."
 		}
-		Start-Sleep -Milliseconds 100
-	} while ([DateTime]::UtcNow -lt $CleanupDeadline)
-	$FinalPackageProcesses = @(Get-ProcessesUnderPath $ClientPackageRoot)
-	$UnresolvedProcessIds = @($FinalPackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'unresolved' } | ForEach-Object { [string] $_.Id })
-	if ($UnresolvedProcessIds.Count -gt 0) {
-		foreach ($UnresolvedProcessId in $UnresolvedProcessIds) {
-			Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_unresolved' -Source $ClientPackageRoot -Detail "PID $UnresolvedProcessId identity unresolved; not terminated."
+		$UntrackedProcesses = @($FinalPackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'new' })
+		$UntrackedProcessIds = @($UntrackedProcesses | ForEach-Object { [string] $_.Id })
+		if ($UntrackedProcessIds.Count -gt 0) {
+			foreach ($UntrackedProcess in $UntrackedProcesses) {
+				$Basis = if ($null -ne $UntrackedProcess.PSObject.Properties['AethelnOpaque']) { 'with an unreadable path and a package executable name' } else { 'from the package' }
+				Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_untracked' -Source $ClientPackageRoot -Detail "PID $($UntrackedProcess.Id) started $Basis after the baseline outside smoke-owned jobs; not terminated."
+			}
+			throw "Packaged client process cleanup found $($UntrackedProcessIds.Count) process(es) started from the package outside smoke-owned jobs (PID $($UntrackedProcessIds -join ', ')); they were not terminated and cleanup is not complete."
 		}
-		throw "Packaged client process cleanup found $($UnresolvedProcessIds.Count) process(es) with unresolved identity under the package root (PID $($UnresolvedProcessIds -join ', ')) within 10 seconds; they were not terminated and cleanup is not complete."
+		if ($DirectCleanupFailures.Count -gt 0) {
+			throw "Packaged smoke direct process cleanup could not confirm exit for PID $($DirectCleanupFailures -join ', ') within the bounded cleanup window; cleanup is not complete."
+		}
+		if ($JobCleanupFailures.Count -gt 0) {
+			throw "Packaged client job cleanup could not prove that no owned process remains for $($JobCleanupFailures -join ', '); cleanup is not complete."
+		}
+		if ($null -eq $QuiescentSince -or ([DateTime]::UtcNow - $QuiescentSince).TotalSeconds -lt 2) {
+			throw 'Packaged client process cleanup did not reach quiescence within 10 seconds.'
+		}
+		Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_complete' -Source $EvidencePath -Detail 'Every smoke-owned client job reported no member process, and no other new package process remained after the quiescence window.'
+	} finally {
+		# Fail-safe: even when cleanup evidence or a wait throws before or inside the job
+		# loop, close every kill-on-close client job so no owned descendant can outlive the smoke.
+		foreach ($ClientJob in $ClientJobs) {
+			try { $ClientJob.Job.Dispose() } catch [System.SystemException] { Write-Warning "Client job $($ClientJob.Id) could not be closed: $($_.Exception.GetType().Name)" }
+		}
 	}
-	$RemainingPackageProcesses = @($FinalPackageProcesses | Where-Object { (Resolve-ProcessIdentity -Process $_ -Baseline $PreexistingClientProcessIdentities -BaselineTicks $ClientProcessBaselineTicks) -eq 'new' })
-	if ($DirectCleanupFailures.Count -gt 0) {
-		throw "Packaged smoke direct process cleanup could not confirm exit for PID $($DirectCleanupFailures -join ', ') within the bounded cleanup window; cleanup is not complete."
-	}
-	if ($RemainingPackageProcesses.Count -gt 0 -or $null -eq $QuiescentSince -or ([DateTime]::UtcNow - $QuiescentSince).TotalSeconds -lt 2) {
-		throw 'Packaged client process cleanup did not reach quiescence within 10 seconds.'
-	}
-	Write-Evidence -Process 'orchestrator' -Role 'cleanup' -EventName 'process_cleanup_complete' -Source $EvidencePath -Detail 'No smoke-owned package processes remained after the quiescence window.'
 }
 if ($CaptureStartup -and $SmokeSucceeded) {
 	Assert-StableStartupProvenance -Binding $StartupProvenance

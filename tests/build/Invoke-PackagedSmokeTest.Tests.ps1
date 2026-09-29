@@ -47,6 +47,29 @@ public static class AethelnSmokeFixtureMountPoint {
 	} finally { $Handle.Dispose() }
 }
 
+function Stop-FixtureProcess($Process, [string] $Root) {
+	# Bind a handle first, then prove through that handle that the image lives under
+	# the fixture root before a handle-bound kill; a reused PID can never be targeted.
+	if ($null -eq ('AethelnSmokeFixtureProcessImage' -as [type])) {
+		Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class AethelnSmokeFixtureProcessImage {
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+ static extern bool QueryFullProcessImageNameW(IntPtr process,uint flags,StringBuilder name,ref int size);
+ public static string Get(IntPtr process) { StringBuilder name = new StringBuilder(32768); int size = name.Capacity; return QueryFullProcessImageNameW(process, 0, name, ref size) ? name.ToString(0, size) : null; }
+}
+'@
+	}
+	try { $Handle = $Process.Handle } catch { Write-Warning "Fixture process $($Process.Id) could not be opened; not terminated."; return }
+	$Image = [AethelnSmokeFixtureProcessImage]::Get($Handle)
+	$Prefix = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+	if ([string]::IsNullOrWhiteSpace($Image) -or -not [System.IO.Path]::GetFullPath($Image).StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)) { Write-Warning "Fixture process $($Process.Id) identity is not proven under the fixture root; not terminated."; return }
+	try { if (-not $Process.HasExited) { $Process.Kill() } } catch [System.InvalidOperationException] { }
+	try { [void] $Process.WaitForExit(5000) } catch { Write-Warning "Fixture cleanup could not wait for PID $($Process.Id): $($_.Exception.GetType().Name)" }
+}
+
 $ParseErrors = $null
 $Tokens = $null
 $ScriptAst = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref] $Tokens, [ref] $ParseErrors)
@@ -155,7 +178,18 @@ function Test-CleanupWaitEvidence {
 	Write-Output 'PASS: cleanup wait failures are recorded as sanitized evidence instead of being swallowed'
 }
 
-function Invoke-CleanupFixture([string] $Name, [hashtable] $Baseline, [scriptblock] $ScanScript, [object[]] $DirectProcesses = @()) {
+function New-FakeClientJob([string] $Id, [long[]] $Members, [scriptblock] $ActiveScript, [switch] $FailQuery) {
+	$State = @{ Terminated = $false; Disposed = $false; Members = $Members; FailQuery = [bool] $FailQuery }
+	$Job = [pscustomobject]@{ State = $State }
+	$Job | Add-Member -MemberType ScriptMethod -Name GetProcessIds -Value { if ($this.State.FailQuery) { throw [System.ComponentModel.Win32Exception]::new(5) }; if ($this.State.Terminated -and -not $this.State.Active) { return @() }; return $this.State.Members }
+	$Job | Add-Member -MemberType ScriptMethod -Name GetActiveProcessCount -Value { if ($this.State.Terminated -and -not $this.State.Active) { return 0 }; return @($this.State.Members).Count }
+	$Job | Add-Member -MemberType ScriptMethod -Name Terminate -Value { $this.State.Terminated = $true }
+	$Job | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $this.State.Disposed = $true }
+	$State.Active = if ($ActiveScript) { & $ActiveScript } else { $false }
+	return [pscustomobject]@{ Id = $Id; Job = $Job }
+}
+
+function Invoke-CleanupFixture([string] $Name, [hashtable] $Baseline, [scriptblock] $ScanScript, [object[]] $DirectProcesses = @(), [object[]] $Jobs = @(), [scriptblock] $OpaqueScript = { }, [switch] $FailEvidence) {
 	# Run the production finally block verbatim against fakes: the real evidence writer
 	# appends to an isolated fixture file; process scanning and termination are faked.
 	foreach ($Definition in @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false))) {
@@ -163,6 +197,8 @@ function Invoke-CleanupFixture([string] $Name, [hashtable] $Baseline, [scriptblo
 	}
 	$Stopped = [System.Collections.Generic.List[int]]::new()
 	function Get-ProcessesUnderPath([string] $Root) { & $ScanScript }
+	function Get-OpaquePackageNamedProcesses($Names) { & $OpaqueScript }
+	if ($FailEvidence) { function Write-Evidence { throw 'synthetic evidence append failure' } }
 	function Invoke-FakeProcessStop {
 		[CmdletBinding()] param([int] $Id, [switch] $Force)
 		if (-not $Force) { throw 'Cleanup must terminate smoke-owned processes with -Force.' }
@@ -173,6 +209,8 @@ function Invoke-CleanupFixture([string] $Name, [hashtable] $Baseline, [scriptblo
 	# Script-scope state the production finally block reads.
 	$CleanupState = @{
 		Processes = $DirectProcesses
+		ClientJobs = $Jobs
+		PackageExecutableNames = [System.Collections.Generic.HashSet[string]]::new([string[]] @('ClientRuntime'), [System.StringComparer]::OrdinalIgnoreCase)
 		EvidencePath = $EvidenceFile
 		ClientPackageRoot = Join-Path $FixtureRoot 'package'
 		PreexistingClientProcessIdentities = $Baseline
@@ -194,20 +232,26 @@ function Invoke-CleanupFixture([string] $Name, [hashtable] $Baseline, [scriptblo
 function Test-DirectCleanupWait {
 	$WaitCalls = [System.Collections.Generic.List[int]]::new()
 	$Disposal = @{ Count = 0 }
+	$Kills = [System.Collections.Generic.List[int]]::new()
 	$Stubborn = [pscustomobject]@{ Id = 6565; HasExited = $false } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value {
 		param($TimeoutMilliseconds)
 		if ($null -eq $TimeoutMilliseconds) { throw 'Unbounded direct wait attempted.' }
 		$WaitCalls.Add([int] $TimeoutMilliseconds)
 		return $false
-	} -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $Disposal.Count++ } -PassThru
+	} -PassThru | Add-Member -MemberType ScriptMethod -Name Kill -Value { $Kills.Add($this.Id) } -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $Disposal.Count++ } -PassThru
 	$Timeout = Invoke-CleanupFixture -Name direct-timeout -Baseline @{} -ScanScript { } -DirectProcesses @($Stubborn)
 	Assert-True ($WaitCalls.Count -eq 1 -and $WaitCalls[0] -ge 0 -and $WaitCalls[0] -le 5000) "A direct-process wait must always receive a bounded timeout. Actual: $($Timeout.Failure)"
-	Assert-True ($Timeout.Failure -match 'direct process' -and $Timeout.Stopped.Count -eq 1 -and $Timeout.Stopped[0] -eq 6565 -and $Disposal.Count -eq 1 -and $Timeout.Seconds -lt 15) 'An ineffective direct termination must dispose its handle, continue bounded cleanup and fail explicitly.'
+	# Direct termination must use the retained handle; a PID-based stop could reach a reused PID.
+	Assert-True ($Timeout.Failure -match 'direct process' -and $Timeout.Stopped.Count -eq 0 -and @($Kills) -join ',' -eq '6565' -and $Disposal.Count -eq 1 -and $Timeout.Seconds -lt 15) 'An ineffective direct termination must use the retained handle, dispose it, continue bounded cleanup and fail explicitly.'
+	$ExitedDuringKill = [pscustomobject]@{ Id = 6767; HasExited = $false } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($TimeoutMilliseconds) if ($null -eq $TimeoutMilliseconds) { throw 'Unbounded direct wait attempted.' }; return $true } -PassThru | Add-Member -MemberType ScriptMethod -Name Kill -Value { throw [System.InvalidOperationException]::new('No process is associated with this object.') } -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $Disposal.Count++ } -PassThru
+	$Raced = Invoke-CleanupFixture -Name direct-exited-during-kill -Baseline @{} -ScanScript { } -DirectProcesses @($ExitedDuringKill)
+	Assert-True ($null -eq $Raced.Failure -and $Raced.Stopped.Count -eq 0 -and @($Raced.Events | Where-Object { $_ -like 'process_cleanup_stop_failed|*6767*' }).Count -eq 1 -and $Raced.Events[-1] -like 'process_cleanup_complete|*') "A process that exits between the check and the handle kill must be recorded and still confirmed by the bounded wait. Actual: $($Raced.Failure)"
+	$Disposal.Count = 1
 	Assert-True (@($Timeout.Events | Where-Object { $_ -like 'process_cleanup_wait_failed|*6565*' }).Count -eq 1 -and -not @($Timeout.Events | Where-Object { $_ -like 'process_cleanup_complete|*' }).Count) 'A direct-process timeout must retain bounded evidence and prohibit successful cleanup completion.'
 	$Exited = [pscustomobject]@{ Id = 6666; HasExited = $true } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($TimeoutMilliseconds) if ($null -eq $TimeoutMilliseconds) { throw 'Unbounded direct wait attempted.' }; return $true } -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { $Disposal.Count++ } -PassThru
 	$Complete = Invoke-CleanupFixture -Name direct-exited -Baseline @{} -ScanScript { } -DirectProcesses @($Exited)
-	Assert-True ($null -eq $Complete.Failure -and $Complete.Stopped.Count -eq 0 -and $Disposal.Count -eq 2 -and $Complete.Events[-1] -like 'process_cleanup_complete|*') 'An already-exited direct process must be disposed without termination and allow quiescent cleanup success.'
-	Write-Output 'PASS: direct-process waits are bounded and ineffective termination fails cleanup without completion evidence'
+	Assert-True ($null -eq $Complete.Failure -and $Complete.Stopped.Count -eq 0 -and @($Kills).Count -eq 1 -and $Disposal.Count -eq 2 -and $Complete.Events[-1] -like 'process_cleanup_complete|*') 'An already-exited direct process must be disposed without termination and allow quiescent cleanup success.'
+	Write-Output 'PASS: direct-process waits are bounded, termination uses the retained handle, and ineffective termination fails cleanup without completion evidence'
 }
 
 function Test-CleanupDecision {
@@ -227,12 +271,177 @@ function Test-CleanupDecision {
 	$UnreadableOmitted = Invoke-CleanupFixture -Name omitted-unreadable -Baseline @{} -ScanScript { $UnreadableUnknownProcess }
 	Assert-True ($UnreadableOmitted.Stopped.Count -eq 0 -and $UnreadableOmitted.Failure -match 'unresolved identity' -and $UnreadableOmitted.Seconds -lt 15) 'An omitted process with unreadable current identity must fail closed inside the bounded window without termination.'
 	Assert-True (@($UnreadableOmitted.Events | Where-Object { $_ -like 'process_cleanup_unresolved|*4343*' }).Count -eq 1 -and -not @($UnreadableOmitted.Events | Where-Object { $_ -like 'process_cleanup_complete|*' }).Count) 'Unknown baseline-absent identity must produce sanitized evidence, never cleanup completion.'
+	# A new package process outside every smoke-owned job may belong to someone else:
+	# the path scan must never terminate it, and cleanup must not claim completion.
 	$NewProcess = [pscustomobject]@{ Id = 9999; StartTime = $ReusedStart } | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { return $true } -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { } -PassThru
-	$Owned = Invoke-CleanupFixture -Name owned -Baseline @{ '4242' = [long] $OriginalStart.Ticks } -ScanScript { if ($Stopped.Count -eq 0) { $NewProcess } }
-	Assert-True ($null -eq $Owned.Failure -and @($Owned.Stopped) -join ',' -eq '9999' -and $Owned.Events[-1] -like 'process_cleanup_complete|*') "A proven new process must be terminated exactly once before success. Actual: $($Owned.Failure)"
+	$Untracked = Invoke-CleanupFixture -Name untracked -Baseline @{ '4242' = [long] $OriginalStart.Ticks } -ScanScript { $NewProcess }
+	Assert-True ($Untracked.Stopped.Count -eq 0 -and $Untracked.Failure -match 'outside smoke-owned jobs' -and $Untracked.Seconds -lt 15) "A new package process outside the client jobs must never be terminated and must fail cleanup. Actual: $($Untracked.Failure)"
+	Assert-True (@($Untracked.Events | Where-Object { $_ -like 'process_cleanup_untracked|*9999*' }).Count -eq 1 -and -not @($Untracked.Events | Where-Object { $_ -like 'process_cleanup_complete|*' }).Count) 'An untracked package process must leave evidence and no completion record.'
+	$ScanState.Calls = 0
+	$TransientUntracked = Invoke-CleanupFixture -Name untracked-exits -Baseline @{ '4242' = [long] $OriginalStart.Ticks } -ScanScript { $ScanState.Calls++; if ($ScanState.Calls -le 3) { $NewProcess } }
+	Assert-True ($null -eq $TransientUntracked.Failure -and $TransientUntracked.Stopped.Count -eq 0 -and $TransientUntracked.Events[-1] -like 'process_cleanup_complete|*') "An untracked process that exits inside the window must permit success without termination. Actual: $($TransientUntracked.Failure)"
+	# A new process whose path is unreadable but whose image name matches a package
+	# executable cannot be proven unrelated: withhold completion, never terminate.
+	$OpaqueNamed = [pscustomobject]@{ Id = 9898; StartTime = $ReusedStart; ProcessName = 'ClientRuntime'; AethelnOpaque = $true }
+	$Opaque = Invoke-CleanupFixture -Name opaque-package-named -Baseline @{ '4242' = [long] $OriginalStart.Ticks } -ScanScript { } -OpaqueScript { $OpaqueNamed }
+	Assert-True ($Opaque.Stopped.Count -eq 0 -and $Opaque.Failure -match 'outside smoke-owned jobs' -and $Opaque.Seconds -lt 15) "An opaque package-named process must fail cleanup without termination. Actual: $($Opaque.Failure)"
+	Assert-True (@($Opaque.Events | Where-Object { $_ -like 'process_cleanup_untracked|PID 9898 started with an unreadable path and a package executable name*' }).Count -eq 1 -and -not @($Opaque.Events | Where-Object { $_ -like 'process_cleanup_complete|*' }).Count) 'An opaque package-named process must leave specific evidence and no completion record.'
+	$OpaqueUnrelated = Invoke-CleanupFixture -Name opaque-unrelated -Baseline @{ '4242' = [long] $OriginalStart.Ticks } -ScanScript { } -OpaqueScript { }
+	Assert-True ($null -eq $OpaqueUnrelated.Failure -and $OpaqueUnrelated.Events[-1] -like 'process_cleanup_complete|*') "No opaque package-named process must allow completion. Actual: $($OpaqueUnrelated.Failure)"
 	foreach ($Definition in @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'Resolve-ProcessIdentity' }, $false))) { . ([scriptblock]::Create($Definition.Extent.Text)) }
 	Assert-True ((Resolve-ProcessIdentity $Ambiguous @{ '4242' = [long] $OriginalStart.Ticks }) -ceq 'preexisting' -and (Resolve-ProcessIdentity $Ambiguous @{ '4242' = $null }) -ceq 'unresolved' -and (Resolve-ProcessIdentity $UnreadableBaselineProcess $IdentityBaseline) -ceq 'unresolved' -and (Resolve-ProcessIdentity $NewProcess @{} $BaselineTicks) -ceq 'new' -and (Resolve-ProcessIdentity ([pscustomobject]@{ Id = 4242; StartTime = $ReusedStart }) $IdentityBaseline) -ceq 'new') 'Identity resolution must distinguish proven preexisting, proven new, and unresolved.'
 	Write-Output 'PASS: cleanup decision protects unresolved identities and refuses to claim completion while ambiguity persists'
+}
+
+function Test-JobCleanupDecision {
+	$Draining = New-FakeClientJob -Id 'client-1' -Members @(1201, 1202)
+	$Drained = Invoke-CleanupFixture -Name job-drained -Baseline @{} -ScanScript { } -Jobs @($Draining)
+	Assert-True ($null -eq $Drained.Failure -and $Draining.Job.State.Terminated -and $Draining.Job.State.Disposed -and $Drained.Events[-1] -like 'process_cleanup_complete|*') "A terminated job that reports no member process must permit completion. Actual: $($Drained.Failure)"
+	Assert-True (@($Drained.Events | Where-Object { $_ -like 'process_cleanup_job|client-1 job members PID `[1201, 1202`]; activeProcesses=0; listedProcesses=0.' }).Count -eq 1) 'Job cleanup must record the owned member PIDs and the zero active/listed counts.'
+	# An owned process whose executable path is unreadable is invisible to the package
+	# path scan; job accounting must still block a false completion.
+	$Stuck = New-FakeClientJob -Id 'client-2' -Members @(1301) -ActiveScript { $true }
+	$StuckResult = Invoke-CleanupFixture -Name job-stuck -Baseline @{} -ScanScript { } -Jobs @($Stuck)
+	Assert-True ($StuckResult.Failure -match 'job cleanup could not prove.*client-2' -and $StuckResult.Stopped.Count -eq 0 -and $Stuck.Job.State.Disposed -and $StuckResult.Seconds -lt 15) "A job that still reports a member must fail cleanup within the bounded window. Actual: $($StuckResult.Failure)"
+	Assert-True (@($StuckResult.Events | Where-Object { $_ -like 'process_cleanup_job|client-2 job members PID `[1301`]; activeProcesses=1; listedProcesses=1.' }).Count -eq 1 -and -not @($StuckResult.Events | Where-Object { $_ -like 'process_cleanup_complete|*' }).Count) 'A stuck job must leave its counts as evidence and no completion record.'
+	$Unqueryable = New-FakeClientJob -Id 'client-1' -Members @(1401) -FailQuery
+	$UnqueryableResult = Invoke-CleanupFixture -Name job-unqueryable -Baseline @{} -ScanScript { } -Jobs @($Unqueryable)
+	Assert-True ($UnqueryableResult.Failure -match 'job cleanup could not prove.*client-1' -and $Unqueryable.Job.State.Disposed -and @($UnqueryableResult.Events | Where-Object { $_ -like 'process_cleanup_job_failed|client-1: Win32Exception' }).Count -eq 1) "An unqueryable job must fail closed with sanitized evidence. Actual: $($UnqueryableResult.Failure)"
+	Write-Output 'PASS: job cleanup requires zero active and listed members and fails closed on stuck or unqueryable jobs'
+}
+
+function Test-OpaqueInventory {
+	foreach ($Definition in @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -in @('Get-PackageExecutableNames', 'Get-OpaquePackageNamedProcesses') }, $true))) { . ([scriptblock]::Create($Definition.Extent.Text)) }
+	$InventoryRoot = Join-Path $FixtureRoot 'opaque-inventory'
+	New-Item -ItemType Directory -Path (Join-Path $InventoryRoot 'Nested') -Force | Out-Null
+	Set-Content -LiteralPath (Join-Path $InventoryRoot 'Nested\ClientRuntime.exe') -Value 'fixture' -Encoding ASCII
+	Set-Content -LiteralPath (Join-Path $InventoryRoot 'readme.txt') -Value 'fixture' -Encoding ASCII
+	$Names = Get-PackageExecutableNames $InventoryRoot
+	Assert-True ($Names.Count -eq 1 -and $Names.Contains('clientruntime')) 'The package inventory must record nested executable base names case-insensitively and nothing else.'
+	$SameNameOpaque = [pscustomobject]@{ Id = 7101; ProcessName = 'ClientRuntime' } | Add-Member -MemberType ScriptProperty -Name Path -Value { throw [System.ComponentModel.Win32Exception]::new(5) } -PassThru
+	$BlankPathSameName = [pscustomobject]@{ Id = 7102; ProcessName = 'ClientRuntime'; Path = '' }
+	$UnrelatedOpaque = [pscustomobject]@{ Id = 7103; ProcessName = 'svchost' } | Add-Member -MemberType ScriptProperty -Name Path -Value { throw [System.ComponentModel.Win32Exception]::new(5) } -PassThru
+	$ReadableSameName = [pscustomobject]@{ Id = 7104; ProcessName = 'ClientRuntime'; Path = 'C:\Elsewhere\ClientRuntime.exe' }
+	function Invoke-FakeOpaqueInventory { [CmdletBinding()] param() $SameNameOpaque; $BlankPathSameName; $UnrelatedOpaque; $ReadableSameName }
+	Set-Alias -Name Get-Process -Value Invoke-FakeOpaqueInventory -Scope Local
+	$Reported = @(Get-OpaquePackageNamedProcesses $Names)
+	Assert-True ((@($Reported | ForEach-Object { $_.Id }) -join ',') -ceq '7101,7102' -and -not @($Reported | Where-Object { -not $_.AethelnOpaque }).Count) 'Only unreadable- or blank-path processes with a package executable name may be reported; unrelated opaque and readable-path processes are excluded.'
+	Write-Output 'PASS: opaque inventory reports only unreadable-path processes named like package executables'
+}
+
+function Test-LiveLogSharing {
+	foreach ($Definition in @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -in @('Initialize-PackagedSmokeClientJobType', 'Start-OwnedClientProcess') }, $true))) { . ([scriptblock]::Create($Definition.Extent.Text)) }
+	Initialize-PackagedSmokeClientJobType
+	$ShareRoot = Join-Path $FixtureRoot 'log-sharing'
+	New-Item -ItemType Directory -Path $ShareRoot | Out-Null
+	$Writer = Join-Path $ShareRoot 'LogWriter.exe'
+	Add-Type -TypeDefinition ('public static class LogWriter' + [guid]::NewGuid().ToString('N') + ' { public static int Main() { System.Console.WriteLine("first live line"); System.Console.Out.Flush(); System.Threading.Thread.Sleep(15000); return 0; } }') -OutputAssembly $Writer -OutputType ConsoleApplication
+	$OutLog = Join-Path $ShareRoot 'writer.stdout.log'
+	$Job = [Aetheln.PackagedSmokeClientJob]::new()
+	try {
+		$Process = Start-OwnedClientProcess -Job $Job -Executable $Writer -Arguments @() -StdOutPath $OutLog -StdErrPath (Join-Path $ShareRoot 'writer.stderr.log')
+		try {
+			$Deadline = [DateTime]::UtcNow.AddSeconds(10)
+			$Tail = @()
+			while ([DateTime]::UtcNow -lt $Deadline -and -not ($Tail -contains 'first live line')) { $Tail = @(Get-Content -LiteralPath $OutLog -ErrorAction SilentlyContinue); Start-Sleep -Milliseconds 100 }
+			Assert-True ($Tail -contains 'first live line' -and -not $Process.HasExited) 'A reader must be able to tail a live client log while the client is running.'
+			$WriteDenied = $false
+			try { ([System.IO.File]::Open($OutLog, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)).Dispose() } catch [System.IO.IOException] { $WriteDenied = $true }
+			$DeleteDenied = $false
+			try { [System.IO.File]::Delete($OutLog) } catch [System.IO.IOException] { $DeleteDenied = $true } catch [System.UnauthorizedAccessException] { $DeleteDenied = $true }
+			$RenameDenied = $false
+			try { [System.IO.File]::Move($OutLog, "$OutLog.moved") } catch [System.IO.IOException] { $RenameDenied = $true } catch [System.UnauthorizedAccessException] { $RenameDenied = $true }
+			Assert-True ($WriteDenied -and $DeleteDenied -and $RenameDenied -and (Test-Path -LiteralPath $OutLog) -and -not (Test-Path -LiteralPath "$OutLog.moved")) 'While the client holds its log, no other writer, deleter, or renamer may open it.'
+		} finally {
+			$Job.Terminate()
+			[void] $Process.WaitForExit(5000)
+			$Process.Dispose()
+		}
+	} finally { $Job.Dispose() }
+	Write-Output 'PASS: live client logs can be tailed but not written, deleted, or renamed by others'
+}
+
+function Test-FailSafeJobDisposal {
+	foreach ($Definition in @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -in @('Initialize-PackagedSmokeClientJobType', 'Start-OwnedClientProcess') }, $true))) { . ([scriptblock]::Create($Definition.Extent.Text)) }
+	Initialize-PackagedSmokeClientJobType
+	$FailSafeRoot = Join-Path $FixtureRoot 'fail-safe-job'
+	New-Item -ItemType Directory -Path $FailSafeRoot | Out-Null
+	$Spawner = Join-Path $FailSafeRoot 'FailSafeSpawner.exe'
+	Add-Type -TypeDefinition ('public static class FailSafeSpawner' + [guid]::NewGuid().ToString('N') + ' { public static int Main(string[] args) { if (args.Length == 0) { System.Diagnostics.Process child = System.Diagnostics.Process.Start(System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName, "child"); System.IO.File.WriteAllText(System.AppDomain.CurrentDomain.BaseDirectory + "grandchild.pid", child.Id.ToString()); } System.Threading.Thread.Sleep(60000); return 0; } }') -OutputAssembly $Spawner -OutputType ConsoleApplication
+	$Job = [Aetheln.PackagedSmokeClientJob]::new()
+	$Client = Start-OwnedClientProcess -Job $Job -Executable $Spawner -Arguments @() -StdOutPath (Join-Path $FailSafeRoot 'out.log') -StdErrPath (Join-Path $FailSafeRoot 'err.log')
+	$ClientId = $Client.Id
+	$Client.Dispose()
+	$Marker = Join-Path $FailSafeRoot 'grandchild.pid'
+	$Deadline = [DateTime]::UtcNow.AddSeconds(10)
+	while (-not (Test-Path -LiteralPath $Marker) -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 50 }
+	Assert-True (Test-Path -LiteralPath $Marker) 'The fail-safe fixture must start a grandchild inside the client job.'
+	$GrandchildId = [int] (Get-Content -LiteralPath $Marker -Raw)
+	# A direct process whose termination fails forces an evidence append before the
+	# job loop; the evidence writer itself fails, so the job loop never runs.
+	$Throwing = [pscustomobject]@{ Id = 6868; HasExited = $false } | Add-Member -MemberType ScriptMethod -Name Kill -Value { throw [System.InvalidOperationException]::new('synthetic kill failure') } -PassThru | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($TimeoutMilliseconds) return $true } -PassThru | Add-Member -MemberType ScriptMethod -Name Dispose -Value { } -PassThru
+	$Result = Invoke-CleanupFixture -Name fail-safe-job -Baseline @{} -ScanScript { } -DirectProcesses @($Throwing) -Jobs @([pscustomobject]@{ Id = 'client-1'; Job = $Job }) -FailEvidence
+	$Deadline = [DateTime]::UtcNow.AddSeconds(10)
+	while (@(Get-Process -Id $ClientId, $GrandchildId -ErrorAction SilentlyContinue).Count -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 100 }
+	$Survivors = @(Get-Process -Id $ClientId, $GrandchildId -ErrorAction SilentlyContinue)
+	$Closed = $false
+	try { [void] $Job.GetActiveProcessCount() } catch [System.ObjectDisposedException] { $Closed = $true }
+	Assert-True ($Result.Failure -match 'synthetic evidence append failure' -and $Closed -and $Survivors.Count -eq 0) "An evidence failure before the job loop must still close every client job and leave no owned child or grandchild. Actual: $($Result.Failure); survivors: $(($Survivors | ForEach-Object { $_.Id }) -join ',')"
+	Write-Output 'PASS: the cleanup fail-safe closes every client job even when evidence writing fails first'
+}
+
+function Test-FixtureProcessIdentity {
+	# Fixture cleanup must refuse a process whose handle-bound image is outside the root.
+	$Outside = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru
+	try {
+		Stop-FixtureProcess $Outside $FixtureRoot 3>$null
+		Assert-True (-not $Outside.HasExited) 'Fixture cleanup must never kill a process whose image is outside the fixture root.'
+	} finally {
+		if (-not $Outside.HasExited) { $Outside.Kill() }
+		[void] $Outside.WaitForExit(5000)
+		$Outside.Dispose()
+	}
+	Write-Output 'PASS: fixture cleanup kills only handle-verified fixture-root processes'
+}
+
+function Test-JobAssignFailure {
+	$InitDefinition = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -in @('Initialize-PackagedSmokeClientJobType', 'Start-OwnedClientProcess') }, $true))
+	Assert-True ($InitDefinition.Count -eq 2) 'The client job helpers must be uniquely testable.'
+	foreach ($Definition in $InitDefinition) { . ([scriptblock]::Create($Definition.Extent.Text)) }
+	Initialize-PackagedSmokeClientJobType
+	$AssignRoot = Join-Path $FixtureRoot 'assign-failure'
+	New-Item -ItemType Directory -Path $AssignRoot | Out-Null
+	$Probe = Join-Path $AssignRoot 'AssignProbe.exe'
+	Add-Type -TypeDefinition ('public static class AssignProbe' + [guid]::NewGuid().ToString('N') + ' { public static int Main() { System.IO.File.WriteAllText(System.AppDomain.CurrentDomain.BaseDirectory + "ran.txt", "ran"); return 0; } }') -OutputAssembly $Probe -OutputType ConsoleApplication
+	# A disposed job cannot accept the suspended process: the assignment fails after
+	# CreateProcess, so the process must be terminated before it ever runs.
+	$Job = [Aetheln.PackagedSmokeClientJob]::new()
+	$Job.Dispose()
+	$AssignFailure = $null
+	try { [void] (Start-OwnedClientProcess -Job $Job -Executable $Probe -Arguments @() -StdOutPath (Join-Path $AssignRoot 'out.log') -StdErrPath (Join-Path $AssignRoot 'err.log')) } catch { $AssignFailure = $_.Exception.GetBaseException() }
+	Start-Sleep -Milliseconds 500
+	$Survivors = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { try { [string] $_.Path -ieq $Probe } catch { $false } })
+	Assert-True ($AssignFailure -is [System.ObjectDisposedException] -and $Survivors.Count -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $AssignRoot 'ran.txt'))) "A failed job assignment must terminate the suspended client before it runs. Actual: $AssignFailure"
+	$Owned = [Aetheln.PackagedSmokeClientJob]::new()
+	try {
+		$Process = Start-OwnedClientProcess -Job $Owned -Executable $Probe -Arguments @() -StdOutPath (Join-Path $AssignRoot 'owned-out.log') -StdErrPath (Join-Path $AssignRoot 'owned-err.log')
+		try { Assert-True ($Process.WaitForExit(10000) -and $Process.ExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $AssignRoot 'ran.txt'))) 'A successfully assigned client must run to completion with its exit code.' } finally { $Process.Dispose() }
+		# The job can still list a member for a few milliseconds while its process object
+		# is torn down after WaitForExit returns; production cleanup polls for the same
+		# reason. Allow a bounded settle, and require any member listed meanwhile to be
+		# an exited process, never a running descendant.
+		$Settle = [System.Diagnostics.Stopwatch]::StartNew()
+		$RunningMembers = [System.Collections.Generic.List[string]]::new()
+		while (($Owned.GetActiveProcessCount() -ne 0 -or @($Owned.GetProcessIds()).Count -ne 0) -and $Settle.ElapsedMilliseconds -lt 2000) {
+			foreach ($MemberId in @($Owned.GetProcessIds())) {
+				$Member = Get-Process -Id $MemberId -ErrorAction SilentlyContinue
+				if ($null -ne $Member) { try { if (-not $Member.HasExited -and $Member.ProcessName) { $RunningMembers.Add("$MemberId=$($Member.ProcessName)") } } finally { $Member.Dispose() } }
+			}
+			Start-Sleep -Milliseconds 10
+		}
+		Assert-True ($Owned.GetActiveProcessCount() -eq 0 -and @($Owned.GetProcessIds()).Count -eq 0 -and $RunningMembers.Count -eq 0) "An exited job member must leave zero active and listed processes within 2 seconds, with no running descendant meanwhile. Waited $($Settle.ElapsedMilliseconds) ms; running members: $($RunningMembers -join ',')"
+	} finally { $Owned.Dispose() }
+	Write-Output 'PASS: a failed job assignment terminates the suspended client before it runs'
 }
 
 function Invoke-Smoke([string] $Scenario, [string] $LogRoot, [int] $TimeoutSeconds = 8, [string] $ServerConnectionPattern = 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)', [string] $ClientExecutable = '', [string[]] $ClientArguments = @(), [string] $ServerExecutable = '/package/AethelnOnlineServer.sh', [string] $ErrorPattern = '', [switch] $CaptureStartup, [string] $BuildProvenancePath = '', [string] $ServerProvenanceExecutable = '') {
@@ -270,6 +479,12 @@ try {
 	Test-EvidenceWriter
 	Test-CleanupWaitEvidence
 	Test-CleanupDecision
+	Test-JobCleanupDecision
+	Test-JobAssignFailure
+	Test-OpaqueInventory
+	Test-LiveLogSharing
+	Test-FailSafeJobDisposal
+	Test-FixtureProcessIdentity
 	$PowerShellExecutable = (Get-Process -Id $PID).Path
 	$LauncherCommandName = Split-Path -Leaf $PowerShellExecutable
 	$FakeLauncher = Join-Path $FixtureRoot 'fake-launcher.ps1'
@@ -285,7 +500,7 @@ if ($Scenario -ne 'missing-second') {
 }
 Start-Sleep -Seconds 20
 '@ -Encoding UTF8
-	$PackageRoot = Join-Path $FixtureRoot 'package'
+	$PackageRoot = Join-Path $FixtureRoot 'WindowsClient'
 	$RuntimeRoot = Join-Path $PackageRoot 'Binaries'
 	New-Item -ItemType Directory -Path $RuntimeRoot | Out-Null
 	$PackagedLauncher = Join-Path $PackageRoot 'ClientLauncher.exe'
@@ -305,6 +520,12 @@ public static class CLASS {
 		using (StreamReader reader = new StreamReader(stream)) return reader.ReadToEnd().Contains("process_cleanup_started");
 	}
 	public static int Main(string[] args) {
+		if (args.Length == 2 && args[0] == "orphan") {
+			// Start a grandchild, publish its PID, and exit so the grandchild is orphaned.
+			Process orphan = Process.Start(Process.GetCurrentProcess().MainModule.FileName);
+			File.WriteAllText(args[1], orphan.Id.ToString());
+			return 0;
+		}
 		if (args.Length == 2) {
 			File.WriteAllText(args[1] + ".ready", Process.GetCurrentProcess().Id.ToString());
 			bool cleanupStarted = false;
@@ -335,9 +556,15 @@ public static class CLASS {
 		string root = AppDomain.CurrentDomain.BaseDirectory;
 		if (scenario == "early-exit" && clientId == "client-2") return 17;
 		if (scenario == "logged-error" && clientId == "client-1") Console.WriteLine("Connection TIMED OUT while joining server");
-		if (scenario == "child-process" || scenario == "child-process-failure") {
-			Process child = Process.Start(Path.Combine(root, "Binaries", "ClientRuntime.exe"));
-			File.WriteAllText(Path.Combine(root, clientId + "-" + scenario + "-child.pid"), child.Id.ToString());
+		if (scenario == "child-process" || scenario == "child-process-failure" || scenario == "capture-sibling-child") {
+			string archiveRoot = scenario == "capture-sibling-child" ? Path.GetFullPath(Path.Combine(root, "..", "..", "..")) : root;
+			Process child = Process.Start(Path.Combine(archiveRoot, "Binaries", "ClientRuntime.exe"));
+			File.WriteAllText(Path.Combine(archiveRoot, clientId + "-" + scenario + "-child.pid"), child.Id.ToString());
+		}
+		if (scenario == "orphan-grandchild") {
+			ProcessStartInfo intermediate = new ProcessStartInfo(Path.Combine(root, "Binaries", "ClientRuntime.exe"), "orphan \"" + Path.Combine(root, clientId + "-orphan-grandchild.pid") + "\"");
+			intermediate.UseShellExecute = false;
+			Process.Start(intermediate).WaitForExit();
 		}
 		if (scenario != "child-process-failure") {
 			Console.WriteLine("Connected " + clientId + " to " + endpoint);
@@ -406,6 +633,29 @@ public static class CLASS {
 	Assert-True ($Capture.scenario.topology.status -ceq 'unknown' -and $Capture.serverLauncher.path -ceq $PowerShellExecutable -and $Capture.serverExecution.status -ceq 'unknown' -and $Capture.package.server.identityBasis -ceq 'declared_provenance_inventory') 'A configurable fake launcher must be recorded without claiming verified WSL topology or Linux server execution.'
 	Assert-True ($Capture.smokeEvidence.cleanup -ceq 'complete' -and $Capture.smokeEvidence.sha256 -ceq (Get-FileHash -LiteralPath (Join-Path $CaptureLogRoot 'smoke-evidence.jsonl') -Algorithm SHA256).Hash.ToLowerInvariant()) 'Successful capture must bind the final smoke evidence only after cleanup completes.'
 	Write-Output 'PASS: opt-in startup capture binds provenance and measures both live Windows clients without inferring unsupported metrics'
+	$BroadClientRoot = Join-Path $FixtureRoot 'broad-client-archive'
+	$BroadClientExecutable = Join-Path $BroadClientRoot 'AethelnOnline\Binaries\Win64\AethelnOnlineClient.exe'
+	New-Item -ItemType Directory -Path (Split-Path -Parent $BroadClientExecutable) | Out-Null
+	Copy-Item -LiteralPath $CaptureClientExecutable -Destination $BroadClientExecutable
+	$BroadProvenancePath = Join-Path $FixtureRoot 'broad-client-provenance.json'
+	$BroadProvenance = $BuildProvenance | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+	$BroadProvenance.artifacts.clientArchive = $BroadClientRoot
+	$BroadProvenance | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $BroadProvenancePath -Encoding UTF8
+	$BroadLogRoot = Join-Path $FixtureRoot 'capture-broad-client-archive'
+	$BroadFailure = $null
+	try {
+		& $Script -ServerExecutable $HostServerWslPath -ServerLauncherExecutable $LauncherCommandName -ServerLauncherArguments @('-NoProfile', '-File', $FakeLauncher, '-d', 'Ubuntu', '-u', 'aethelnqa', '--exec', '{ServerExecutable}', '{ServerMap}', '-port=7777', '-stdout', '-FullStdOutLogOutput', '-Scenario', 'success') -ClientExecutable $BroadClientExecutable -ClientBaseArguments @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', 'success') -ServerEndpoint '127.0.0.1:7777' -ServerMap '/Game/Maps/StarterMap' -LogRoot $BroadLogRoot -ServerReadyPattern 'Listening on {ServerEndpoint}.*{ServerMap}' -ServerClientConnectedPattern 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)' -ClientConnectedPattern 'Connected {ClientId} to {ServerEndpoint}' -ClientMapPattern 'Loaded {ServerMap}' -TimeoutSeconds 8 -CaptureStartup -BuildProvenancePath $BroadProvenancePath -ServerProvenanceExecutable $HostServerLauncher
+	} catch { $BroadFailure = $_.Exception.Message }
+	Assert-True ($BroadFailure -match 'WindowsClient' -and -not (Test-Path -LiteralPath $BroadLogRoot)) "A valid inner executable and inventory under a noncanonical archive must fail before launch or log-root creation. Actual: $BroadFailure"
+	Write-Output 'PASS: capture rejects a broad client archive before launch'
+	$SiblingCaptureLogRoot = Join-Path $FixtureRoot 'capture-sibling-child'
+	Invoke-Smoke -Scenario capture-sibling-child -LogRoot $SiblingCaptureLogRoot -ClientExecutable $CaptureClientExecutable -CaptureStartup -BuildProvenancePath $BuildProvenancePath -ServerProvenanceExecutable $HostServerLauncher
+	$SiblingChildProcessIds = @(Get-ChildItem -LiteralPath $PackageRoot -Filter 'client-*-capture-sibling-child-child.pid' | ForEach-Object { [int] (Get-Content -LiteralPath $_.FullName -Raw) })
+	Assert-True ($SiblingChildProcessIds.Count -eq 2) 'The capture fixture must launch one packaged helper beside the inner game directory for each client.'
+	Assert-True (-not @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -in $SiblingChildProcessIds }).Count) 'Capture cleanup must terminate smoke-owned sibling helpers before recording completion.'
+	$SiblingCapture = Get-Content -LiteralPath (Join-Path $SiblingCaptureLogRoot 'startup-capture.json') -Raw | ConvertFrom-Json
+	Assert-True ($SiblingCapture.smokeEvidence.cleanup -ceq 'complete') 'Capture must record cleanup completion only after sibling helpers are gone.'
+	Write-Output 'PASS: capture cleanup covers smoke-owned helpers beside the inner game directory'
 	foreach ($CaptureHelperName in @('Assert-NoReparsePath', 'Get-PackagedExecutableBinding', 'Get-StartupProvenance', 'Assert-StableStartupProvenance', 'Initialize-CaptureDirectoryPin', 'Get-CaptureDirectoryPins', 'Assert-CaptureDirectoryPins', 'Write-StartupCapture')) {
 		$CaptureHelper = @($ScriptAst.FindAll({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq $CaptureHelperName }, $true))
 		Assert-True ($CaptureHelper.Count -eq 1) "The $CaptureHelperName helper must be uniquely testable."
@@ -558,48 +808,66 @@ public static class CLASS {
 	Write-Output 'PASS: invalid packaged provenance fails before startup capture'
 
 	$ChildLogRoot = Join-Path $FixtureRoot 'child-process'
-	$DelayedMarker = Join-Path $PackageRoot 'success-delayed-child.pid'
-	$PreexistingRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $ChildLogRoot 'smoke-evidence.jsonl'), $DelayedMarker) -RedirectStandardOutput (Join-Path $FixtureRoot 'success-watcher.stdout.log') -RedirectStandardError (Join-Path $FixtureRoot 'success-watcher.stderr.log') -WindowStyle Hidden -PassThru
+	$ChildArguments = @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', 'child-process')
+	Invoke-Smoke -Scenario child-process -LogRoot $ChildLogRoot -ClientExecutable $PackagedLauncher -ClientArguments $ChildArguments
+	$ChildProcessIds = @(Get-ChildItem -LiteralPath $PackageRoot -Filter 'client-*-child-process-child.pid' | ForEach-Object { [int] (Get-Content -LiteralPath $_.FullName -Raw) })
+	Assert-True ($ChildProcessIds.Count -eq 2) 'The fixture must launch one differently named packaged runtime per client.'
+	Assert-True (-not @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -in $ChildProcessIds }).Count) 'Successful smoke cleanup must terminate differently named packaged client child processes through the client jobs.'
+	$ChildJobEvidence = @(Get-Content -LiteralPath (Join-Path $ChildLogRoot 'smoke-evidence.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.event -eq 'process_cleanup_job' })
+	Assert-True ($ChildJobEvidence.Count -eq 2 -and -not @($ChildJobEvidence | Where-Object { $_.detail -notlike '*activeProcesses=0; listedProcesses=0.' }).Count) 'Each client job must record zero active and listed members after cleanup.'
+	foreach ($ChildProcessId in $ChildProcessIds) { Assert-True (@($ChildJobEvidence | Where-Object { $_.detail -match "\b$ChildProcessId\b" }).Count -eq 1) "Child PID $ChildProcessId must appear as exactly one client job member." }
+	Write-Output 'PASS: client jobs own and reap packaged client child processes'
+
+	$OrphanLogRoot = Join-Path $FixtureRoot 'orphan-grandchild'
+	Invoke-Smoke -Scenario orphan-grandchild -LogRoot $OrphanLogRoot -ClientExecutable $PackagedLauncher -ClientArguments @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', 'orphan-grandchild')
+	$OrphanProcessIds = @(Get-ChildItem -LiteralPath $PackageRoot -Filter 'client-*-orphan-grandchild.pid' | ForEach-Object { [int] (Get-Content -LiteralPath $_.FullName -Raw) })
+	Assert-True ($OrphanProcessIds.Count -eq 2) 'Each client must start an intermediate that orphans one grandchild.'
+	Assert-True (-not @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -in $OrphanProcessIds }).Count) 'An orphaned grandchild inside a client job must be terminated even though its parent exited.'
+	$OrphanJobEvidence = @(Get-Content -LiteralPath (Join-Path $OrphanLogRoot 'smoke-evidence.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.event -eq 'process_cleanup_job' })
+	foreach ($OrphanProcessId in $OrphanProcessIds) { Assert-True (@($OrphanJobEvidence | Where-Object { $_.detail -match "\b$OrphanProcessId\b" -and $_.detail -like '*activeProcesses=0; listedProcesses=0.' }).Count -eq 1) "Orphan PID $OrphanProcessId must be recorded as a reaped client job member." }
+	Write-Output 'PASS: client jobs reap orphaned grandchildren'
+
+	$UnrelatedLogRoot = Join-Path $FixtureRoot 'unrelated-archive-process'
+	$UnrelatedMarker = Join-Path $PackageRoot 'unrelated-delayed.pid'
+	# The watcher is not a smoke descendant. It starts a new process from the same
+	# package after the baseline, while cleanup runs; that process must survive.
+	$UnrelatedWatcher = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $UnrelatedLogRoot 'smoke-evidence.jsonl'), $UnrelatedMarker) -RedirectStandardOutput (Join-Path $FixtureRoot 'unrelated-watcher.stdout.log') -RedirectStandardError (Join-Path $FixtureRoot 'unrelated-watcher.stderr.log') -WindowStyle Hidden -PassThru
+	$UnrelatedDelayed = $null
 	try {
 		$ReadyDeadline = [DateTime]::UtcNow.AddSeconds(5)
-		while (-not (Test-Path -LiteralPath "$DelayedMarker.ready") -and [DateTime]::UtcNow -lt $ReadyDeadline) { Start-Sleep -Milliseconds 50 }
-		Assert-True (Test-Path -LiteralPath "$DelayedMarker.ready") 'The preexisting watcher fixture must be ready before smoke process ownership is captured.'
-		$ChildArguments = @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', 'child-process')
-		Invoke-Smoke -Scenario child-process -LogRoot $ChildLogRoot -ClientExecutable $PackagedLauncher -ClientArguments $ChildArguments
-		Assert-True (Test-Path -LiteralPath $DelayedMarker -PathType Leaf) "The success watcher must publish its delayed descendant PID before cleanup returns; retained evidence: $FixtureRoot."
-		$ChildProcessIds = @(Get-ChildItem -LiteralPath $PackageRoot -Filter 'client-*-child-process-child.pid' | ForEach-Object { [int] (Get-Content -LiteralPath $_.FullName -Raw) })
-		$DelayedProcessId = [int] (Get-Content -LiteralPath $DelayedMarker -Raw)
-		Assert-True ($ChildProcessIds.Count -eq 2) 'The fixture must launch one differently named packaged runtime per client.'
-		Assert-True (-not @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -in $ChildProcessIds }).Count) 'Successful smoke cleanup must terminate differently named packaged client child processes.'
-		Assert-True (-not (Get-Process -Id $DelayedProcessId -ErrorAction SilentlyContinue)) 'The bounded cleanup rescan must terminate a package process created during cleanup.'
-		Assert-True (-not $PreexistingRuntime.HasExited) 'Smoke cleanup must preserve a preexisting process under the package root.'
+		while (-not (Test-Path -LiteralPath "$UnrelatedMarker.ready") -and [DateTime]::UtcNow -lt $ReadyDeadline) { Start-Sleep -Milliseconds 50 }
+		Assert-True (Test-Path -LiteralPath "$UnrelatedMarker.ready") 'The unrelated watcher must be ready before the smoke baseline.'
+		$Failure = $null
+		try { Invoke-Smoke -Scenario success -LogRoot $UnrelatedLogRoot } catch { $Failure = $_.Exception.Message }
+		Assert-True (Test-Path -LiteralPath $UnrelatedMarker -PathType Leaf) "The unrelated watcher must publish its delayed process PID before cleanup returns; retained evidence: $FixtureRoot."
+		$UnrelatedDelayedId = [int] (Get-Content -LiteralPath $UnrelatedMarker -Raw)
+		$UnrelatedDelayed = Get-Process -Id $UnrelatedDelayedId -ErrorAction SilentlyContinue
+		Assert-True ($null -ne $UnrelatedDelayed -and -not $UnrelatedWatcher.HasExited) 'A process started from the same package outside the client jobs must never be terminated by smoke cleanup.'
+		Assert-True ($Failure -match 'outside smoke-owned jobs.*not terminated and cleanup is not complete') "An untracked same-package process must fail the smoke closed instead of claiming cleanup. Actual: $Failure"
+		$UnrelatedEvidence = @(Get-Content -LiteralPath (Join-Path $UnrelatedLogRoot 'smoke-evidence.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+		Assert-True (@($UnrelatedEvidence | Where-Object { $_.event -eq 'process_cleanup_untracked' -and $_.detail -match "\b$UnrelatedDelayedId\b" }).Count -eq 1 -and -not @($UnrelatedEvidence | Where-Object { $_.event -eq 'process_cleanup_complete' }).Count) 'The untracked process must be recorded without a cleanup completion record.'
+		Write-Output 'PASS: an unrelated same-package process started during the smoke survives and fails cleanup closed'
 	} finally {
-		if (-not $PreexistingRuntime.HasExited) { Stop-Process -Id $PreexistingRuntime.Id -Force -ErrorAction SilentlyContinue }
-		try { [void] $PreexistingRuntime.WaitForExit(5000) } catch { Write-Warning "Fixture cleanup could not wait for PID $($PreexistingRuntime.Id): $($_.Exception.GetType().Name)" }
-		$PreexistingRuntime.Dispose()
+		foreach ($FixtureOwned in @($UnrelatedDelayed, $UnrelatedWatcher)) {
+			if ($null -eq $FixtureOwned) { continue }
+			Stop-FixtureProcess $FixtureOwned $FixtureRoot
+			$FixtureOwned.Dispose()
+		}
 	}
 
 	$FailureLogRoot = Join-Path $FixtureRoot 'child-process-failure'
-	$FailureDelayedMarker = Join-Path $PackageRoot 'failure-delayed-child.pid'
-	$PreexistingFailureRuntime = Start-Process -FilePath $PackagedRuntime -ArgumentList @((Join-Path $FailureLogRoot 'smoke-evidence.jsonl'), $FailureDelayedMarker) -RedirectStandardOutput (Join-Path $FixtureRoot 'failure-watcher.stdout.log') -RedirectStandardError (Join-Path $FixtureRoot 'failure-watcher.stderr.log') -WindowStyle Hidden -PassThru
+	$PreexistingFailureRuntime = Start-Process -FilePath $PackagedRuntime -RedirectStandardOutput (Join-Path $FixtureRoot 'failure-preexisting.stdout.log') -RedirectStandardError (Join-Path $FixtureRoot 'failure-preexisting.stderr.log') -WindowStyle Hidden -PassThru
 	try {
-		$ReadyDeadline = [DateTime]::UtcNow.AddSeconds(5)
-		while (-not (Test-Path -LiteralPath "$FailureDelayedMarker.ready") -and [DateTime]::UtcNow -lt $ReadyDeadline) { Start-Sleep -Milliseconds 50 }
-		Assert-True (Test-Path -LiteralPath "$FailureDelayedMarker.ready") 'The failure watcher fixture must be ready before smoke process ownership is captured.'
 		$Failure = $null
 		$FailureArguments = @('{ClientId}', '{ServerEndpoint}', '{ServerMap}', 'child-process-failure')
 		try { Invoke-Smoke -Scenario child-process-failure -LogRoot $FailureLogRoot -TimeoutSeconds 3 -ClientExecutable $PackagedLauncher -ClientArguments $FailureArguments } catch { $Failure = $_.Exception.Message }
 		Assert-True ($Failure -match 'Timed out after 3 seconds.*client connection confirmation') "The failure fixture must reach client evidence timeout with the caller-supplied bound after spawning packaged runtimes. Actual failure: $Failure"
-		Assert-True (Test-Path -LiteralPath $FailureDelayedMarker -PathType Leaf) "The failure watcher must publish its delayed descendant PID before cleanup returns; retained evidence: $FixtureRoot."
 		$FailureChildProcessIds = @(Get-ChildItem -LiteralPath $PackageRoot -Filter 'client-*-child-process-failure-child.pid' | ForEach-Object { [int] (Get-Content -LiteralPath $_.FullName -Raw) })
-		$FailureDelayedProcessId = [int] (Get-Content -LiteralPath $FailureDelayedMarker -Raw)
-		Assert-True ($FailureChildProcessIds.Count -eq 2 -and -not @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -in $FailureChildProcessIds }).Count) 'Failed smoke cleanup must terminate differently named packaged client child processes.'
-		Assert-True (-not (Get-Process -Id $FailureDelayedProcessId -ErrorAction SilentlyContinue)) 'Failed smoke cleanup must rescan and terminate a package process created during cleanup.'
+		Assert-True ($FailureChildProcessIds.Count -eq 2 -and -not @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -in $FailureChildProcessIds }).Count) 'Failed smoke cleanup must terminate differently named packaged client child processes through the client jobs.'
 		Assert-True (-not $PreexistingFailureRuntime.HasExited) 'Failed smoke cleanup must preserve a preexisting process under the package root.'
-		Write-Output 'PASS: bounded cleanup rescans remove delayed package processes without touching preexisting package processes'
+		Write-Output 'PASS: failed smoke cleanup reaps job-owned children without touching preexisting package processes'
 	} finally {
-		if (-not $PreexistingFailureRuntime.HasExited) { Stop-Process -Id $PreexistingFailureRuntime.Id -Force -ErrorAction SilentlyContinue }
-		try { [void] $PreexistingFailureRuntime.WaitForExit(5000) } catch { Write-Warning "Fixture cleanup could not wait for PID $($PreexistingFailureRuntime.Id): $($_.Exception.GetType().Name)" }
+		Stop-FixtureProcess $PreexistingFailureRuntime $FixtureRoot
 		$PreexistingFailureRuntime.Dispose()
 	}
 
@@ -645,12 +913,13 @@ public static class CLASS {
 }
 finally {
 	foreach ($FixtureProcess in @(Get-Process -ErrorAction SilentlyContinue)) {
-		try { $FixtureProcessPath = [string] $FixtureProcess.Path } catch { continue }
+		try { $FixtureProcessPath = [string] $FixtureProcess.Path } catch { $FixtureProcess.Dispose(); continue }
+		# The enumerated path only selects candidates; Stop-FixtureProcess revalidates the
+		# image through a bound handle before any kill.
 		if ($FixtureProcessPath -and $FixtureProcessPath.StartsWith($FixtureRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-			Stop-Process -Id $FixtureProcess.Id -Force -ErrorAction SilentlyContinue
-			try { [void] $FixtureProcess.WaitForExit(5000) } catch { Write-Warning "Fixture cleanup could not wait for PID $($FixtureProcess.Id): $($_.Exception.GetType().Name)" }
-			$FixtureProcess.Dispose()
+			Stop-FixtureProcess $FixtureProcess $FixtureRoot
 		}
+		$FixtureProcess.Dispose()
 	}
 	if ($SuiteCompleted -and (Test-Path -LiteralPath $FixtureRoot)) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 	elseif (Test-Path -LiteralPath $FixtureRoot) { Write-Output "Failed smoke fixture evidence retained: $FixtureRoot" }
