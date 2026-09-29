@@ -72,6 +72,24 @@ function Assert-IssueTemplate {
 	}
 
 	$Body = @($Lines[($End + 1)..($Lines.Count - 1)])
+	$VisibleBody = [System.Collections.Generic.List[string]]::new()
+	$FenceCharacter = ''
+	$FenceWidth = 0
+	foreach ($Line in $Body) {
+		if ($FenceWidth -eq 0 -and $Line -match '^ {0,3}(`{3,}|~{3,}).*$') {
+			$FenceCharacter = [string] $Matches[1][0]
+			$FenceWidth = $Matches[1].Length
+			continue
+		}
+		if ($FenceWidth -gt 0) {
+			if ($Line -match '^ {0,3}(`{3,}|~{3,})[ \t]*$' -and [string] $Matches[1][0] -ceq $FenceCharacter -and $Matches[1].Length -ge $FenceWidth) {
+				$FenceWidth = 0
+			}
+			continue
+		}
+		[void] $VisibleBody.Add($Line)
+	}
+	$Body = @($VisibleBody.ToArray())
 	$Headings = @($Body | Where-Object { $_ -cmatch '^## ' } | ForEach-Object { $_.Substring(3).Trim() })
 	foreach ($Section in $Contract.Sections) {
 		if ($Headings -cnotcontains $Section) { throw "${Name}: missing section '## $Section'" }
@@ -147,7 +165,15 @@ try {
 	Assert-TemplateFailure 'duplicate-key' { param($R) Set-TemplateText $R 'epic.md' "name: Epic`n" "name: Epic`nname: Epic`n" } "duplicate front-matter key 'name'"
 	Assert-TemplateFailure 'unclosed-front-matter' { param($R) Set-TemplateText $R 'technical-task.md' "labels: `"type: task`"`n---`n" "labels: `"type: task`"`n" } 'front matter is not closed'
 	Assert-TemplateFailure 'missing-section' { param($R) Set-TemplateText $R 'spike.md' '## Evidence and decision boundaries' '## Notes' } "missing section '## Evidence and decision boundaries'"
+	Assert-TemplateFailure 'section-only-in-fence' { param($R) Set-TemplateText $R 'technical-task.md' '## Validation' "~~~markdown`n## Validation`n~~~" } "missing section '## Validation'"
 	Assert-TemplateFailure 'empty-definition-of-done' { param($R) $P = Join-Path $R 'epic.md'; $T = [System.IO.File]::ReadAllText($P); [System.IO.File]::WriteAllText($P, $T.Substring(0, $T.IndexOf('## Definition of done')) + "## Definition of done`n`nTBD`n") } 'Definition of done has no checklist items'
+	Assert-TemplateFailure 'checklist-only-in-fence' {
+		param($R)
+		$P = Join-Path $R 'epic.md'
+		$T = [System.IO.File]::ReadAllText($P)
+		$Fenced = "## Definition of done`n`n" + '```markdown' + "`n- [ ] Example, not a real completion criterion`n" + '```' + "`n"
+		[System.IO.File]::WriteAllText($P, $T.Substring(0, $T.IndexOf('## Definition of done')) + $Fenced)
+	} 'Definition of done has no checklist items'
 	Assert-TemplateFailure 'crlf' { param($R) $P = Join-Path $R 'user-story.md'; [System.IO.File]::WriteAllText($P, ([System.IO.File]::ReadAllText($P)).Replace("`n", "`r`n")) } 'CRLF line endings'
 	Assert-TemplateFailure 'missing-template' { param($R) Remove-Item -LiteralPath (Join-Path $R 'spike.md') } 'does not match'
 	Assert-TemplateFailure 'unexpected-template' { param($R) Copy-Item -LiteralPath (Join-Path $R 'epic.md') -Destination (Join-Path $R 'feature.md') } 'does not match'
