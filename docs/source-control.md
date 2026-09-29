@@ -132,7 +132,9 @@ Decide each ref separately, and record the evidence for every step:
 3. Confirm no unique work remains: no other open PR uses the branch as its head
    or base, no stacked branch depends on it, and `git worktree list` shows no
    worktree that has it checked out.
-4. Immediately before acting, read the current local and remote object IDs
+4. Immediately before each deletion, repeat the step 3 checks live: a new PR,
+   stacked branch, or worktree can appear without changing the branch's object
+   ID. Then read the current local and remote object IDs
    (`git rev-parse refs/heads/<branch>` and
    `git ls-remote origin refs/heads/<branch>`); both must equal the verified
    tip.
@@ -140,10 +142,12 @@ Decide each ref separately, and record the evidence for every step:
    ref at a time and bind it to the verified object ID, for example
    `git update-ref -d refs/heads/<branch> <tip>` locally and
    `git push --force-with-lease=refs/heads/<branch>:<tip> origin :refs/heads/<branch>`
-   remotely.
+   remotely. Repeat step 4 before the second of those deletions rather than
+   reusing the first check.
 
-Retain the ref and record why whenever any step is uncertain or its evidence
-changes. Never delete `main` or `develop`, and never treat a `develop` to
+Retain the ref and record why whenever any step is uncertain, its evidence
+changes, or the final recheck finds a dependent PR, stacked branch, or
+worktree. Never delete `main` or `develop`, and never treat a `develop` to
 `main` merge as routine cleanup; that is a separately authorized release
 decision.
 
