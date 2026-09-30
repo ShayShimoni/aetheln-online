@@ -41,6 +41,8 @@ try {
 	. $Entry -EngineRoot 'D:\unused' -EvidenceRoot 'F:\unused' -HostLeasePath 'D:\unused.lease' -CompilerPath 'C:\unused\cl.exe' -ResourceCompilerPath 'C:\unused\rc.exe'
 } catch { $EntryFailure = $_.Exception.Message }
 Assert-HostFixture ($EntryFailure -ceq 'execute_required') 'Definition-only child-path fixture unexpectedly executed the provisioner.'
+Write-HostToolDiskWarning -ResourceMonitor $null
+Assert-HostFixture ($script:HostToolDiskWarningSent -eq $false) 'Disk warning state must be initialized before supervised preflight sampling.'
 Assert-HostFixture ((Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 150 -NowTicks 100 -Frequency 1000) -eq 50 -and
 	(Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 100 -NowTicks 100 -Frequency 1000) -eq 0 -and
 	(Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 50 -NowTicks 100 -Frequency 1000) -eq 0 -and

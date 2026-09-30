@@ -28,6 +28,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'HostToolProvisioning.Policy.ps1')
 . (Join-Path $PSScriptRoot 'HostToolProvisioning.Publication.ps1')
 . (Join-Path $PSScriptRoot '../ci/EngineRunnerHostLease.ps1')
+$script:HostToolDiskWarningSent = $false
 
 function Assert-HostToolPlainRoot {
 	param([string] $Path, [string] $Reason)
