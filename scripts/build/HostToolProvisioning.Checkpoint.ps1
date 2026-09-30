@@ -91,14 +91,14 @@ function Invoke-HostToolCheckpointFile {
 				$Path = Join-Path $EngineRoot $Relative
 				$Item = Get-Item -LiteralPath $Path -Force
 				$Record = [ordered]@{ path = $Relative; sizeBytes = [long] $Item.Length;
-					sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+					sha256 = (Get-HostToolFileDigest -Path $Path -Algorithm SHA256) }
 				$Writer.WriteLine(($Record | ConvertTo-Json -Compress))
 				if ($Stream.Position -gt 512MB) { throw 'checkpoint_manifest_limit' }
 			}
 			$Writer.Flush(); $Stream.Flush($true)
 		} finally { $Writer.Dispose() }
 		if ((Get-Item -LiteralPath $ManifestPath).Length -gt 512MB) { throw 'checkpoint_manifest_limit' }
-		return [pscustomobject]@{ fileCount = $Paths.Count; manifestSha256 = (Get-FileHash -LiteralPath $ManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() }
+		return [pscustomobject]@{ fileCount = $Paths.Count; manifestSha256 = (Get-HostToolFileDigest -Path $ManifestPath -Algorithm SHA256) }
 	}
 	Assert-InitialPreparationPlainPath -Path $ManifestPath -Reason 'checkpoint_manifest_invalid'
 	# Keep this exact file object open while hashing and parsing. FileShare.Read
@@ -128,7 +128,7 @@ function Invoke-HostToolCheckpointFile {
 			$Path = Join-Path $EngineRoot $Relative
 			$Item = Get-Item -LiteralPath $Path -Force
 			if ($Item.Length -ne $Record.sizeBytes -or
-				(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Record.sha256) { throw 'checkpoint_manifest_mismatch' }
+				(Get-HostToolFileDigest -Path $Path -Algorithm SHA256) -cne $Record.sha256) { throw 'checkpoint_manifest_mismatch' }
 		}
 		if ($null -ne $Reader.ReadLine()) { throw 'checkpoint_manifest_mismatch' }
 		return $ParsedHeader

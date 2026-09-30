@@ -11,6 +11,19 @@ $script:HostToolProducts = @{
 $script:HostToolReceiptTypes = @{ UnrealEditor = 'Editor'; UnrealPak = 'Program'; ShaderCompileWorker = 'Program' }
 $script:HostToolIncludedProductTypes = @('Executable', 'DynamicLibrary', 'RequiredResource', 'BuildResource', 'Package')
 $script:HostToolExcludedProductTypes = @('SymbolFile', 'MapFile', 'StaticLibrary', 'ImportLibrary')
+
+function Get-HostToolFileDigest {
+	param([Parameter(Mandatory)][string] $Path,
+		[Parameter(Mandatory)][ValidateSet('SHA1', 'SHA256')][string] $Algorithm)
+	$Stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+	try {
+		$Hasher = if ($Algorithm -ceq 'SHA1') { [Security.Cryptography.SHA1]::Create() }
+			else { [Security.Cryptography.SHA256]::Create() }
+		try { return ([BitConverter]::ToString($Hasher.ComputeHash($Stream))).Replace('-', '').ToLowerInvariant() }
+		finally { $Hasher.Dispose() }
+	} finally { $Stream.Dispose() }
+}
+
 . (Join-Path $PSScriptRoot 'HostToolProvisioning.Checkpoint.ps1')
 
 function New-HostToolAttemptEnvelope {
@@ -89,7 +102,7 @@ function Assert-HostToolFreshOutputRoot {
 			if (-not $GitDependencies.ContainsKey($NormalizedRelative)) { throw 'prior_host_outputs_present' }
 			$Expected = $GitDependencies[$NormalizedRelative]
 			if ($NormalizedRelative -cne $Expected.path) { throw 'fresh_output_case_collision' }
-			$ActualHash = (Get-FileHash -LiteralPath $Item.FullName -Algorithm SHA1).Hash.ToLowerInvariant()
+			$ActualHash = Get-HostToolFileDigest -Path $Item.FullName -Algorithm SHA1
 			if ($ActualHash -cne $Expected.sha1) { throw 'gitdeps_hash_mismatch' }
 			$ManifestProof.filesVerified++
 		}
@@ -566,7 +579,7 @@ function Get-HostToolProductState {
 		if (-not (Test-Path -LiteralPath $Path)) { $State[$Relative] = $null; continue }
 		$Item = Get-Item -LiteralPath $Path -ErrorAction Stop
 		if ($Item.PSIsContainer -or $Item.Length -lt 1 -or $Item.Length -gt 8GB) { throw 'product_invalid' }
-		$State[$Relative] = [pscustomobject]@{ sizeBytes = [long] $Item.Length; sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+		$State[$Relative] = [pscustomobject]@{ sizeBytes = [long] $Item.Length; sha256 = (Get-HostToolFileDigest -Path $Path -Algorithm SHA256) }
 	}
 	return $State
 }

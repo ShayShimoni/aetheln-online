@@ -581,8 +581,8 @@ try {
 		}
 		$FreshOutputProof = Assert-HostToolFreshOutputState -EngineRoot $ResolvedEngine -TrackedPaths $TrackedOutputPaths
 	}
-	$CompilerSha256 = (Get-FileHash -LiteralPath $ResolvedCompiler -Algorithm SHA256).Hash.ToLowerInvariant()
-	$ResourceCompilerSha256 = (Get-FileHash -LiteralPath $ResolvedResourceCompiler -Algorithm SHA256).Hash.ToLowerInvariant()
+	$CompilerSha256 = Get-HostToolFileDigest -Path $ResolvedCompiler -Algorithm SHA256
+	$ResourceCompilerSha256 = Get-HostToolFileDigest -Path $ResolvedResourceCompiler -Algorithm SHA256
 	if ($Bootstrap) {
 		$ConfigurationSha256 = Get-HostToolConfigurationSha256 -EngineRoot $ResolvedEngine -UbaRootDir $ResolvedUba -TempRoot $ResolvedTemp -NativeLogRoot $ResolvedNativeLog
 	}
@@ -665,8 +665,8 @@ try {
 	$EngineAfter = Invoke-HostToolIdentityProbe -Mode Git -Root $ResolvedEngine -IgnoreUntrackedGenerated:$Bootstrap -Bootstrap $Bootstrap -SupervisorRoot $ResolvedSupervisor -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $VerificationDeadlineTicks
 	$null = Assert-HostToolGitState -Head $EngineAfter.head -Status $EngineAfter.status -Expected $script:HostToolEnginePin
 	$null = Invoke-HostToolIdentityProbe -Mode Engine -Root $ResolvedEngine -Bootstrap $Bootstrap -SupervisorRoot $ResolvedSupervisor -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $VerificationDeadlineTicks
-	if ((Get-FileHash -LiteralPath $ResolvedCompiler -Algorithm SHA256).Hash.ToLowerInvariant() -cne $CompilerSha256 -or
-		(Get-FileHash -LiteralPath $ResolvedResourceCompiler -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ResourceCompilerSha256) { throw 'tool_input_drift' }
+	if ((Get-HostToolFileDigest -Path $ResolvedCompiler -Algorithm SHA256) -cne $CompilerSha256 -or
+		(Get-HostToolFileDigest -Path $ResolvedResourceCompiler -Algorithm SHA256) -cne $ResourceCompilerSha256) { throw 'tool_input_drift' }
 	$null = Update-RoutineCompileResources -Monitor $ResourceMonitor
 	$null = Get-HostToolRemainingMilliseconds -DeadlineTicks $(if ($Bootstrap) { $VerificationDeadlineTicks } else { $CleanupDeadlineTicks })
 	$Completed = $true
@@ -693,8 +693,8 @@ finally {
 			$FinalEngineGit = Invoke-HostToolIdentityProbe -Mode Git -Root $ResolvedEngine -IgnoreUntrackedGenerated -Bootstrap $Bootstrap -SupervisorRoot $ResolvedSupervisor -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $VerificationDeadlineTicks
 			$null = Assert-HostToolGitState -Head $FinalEngineGit.head -Status $FinalEngineGit.status -Expected $EngineRevision
 			if (
-				(Get-FileHash -LiteralPath $ResolvedCompiler -Algorithm SHA256).Hash.ToLowerInvariant() -cne $CompilerSha256 -or
-				(Get-FileHash -LiteralPath $ResolvedResourceCompiler -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ResourceCompilerSha256 -or
+				(Get-HostToolFileDigest -Path $ResolvedCompiler -Algorithm SHA256) -cne $CompilerSha256 -or
+				(Get-HostToolFileDigest -Path $ResolvedResourceCompiler -Algorithm SHA256) -cne $ResourceCompilerSha256 -or
 				(Assert-HostToolExternalVolume -Path $ResolvedEngine -Reason 'external_volume_mismatch').UniqueId -cne $ExternalVolume.UniqueId) { throw 'checkpoint_final_identity_mismatch' }
 		} catch {
 			$CheckpointFailure = 'checkpoint_or_final_identity_failed:' + $_.Exception.Message

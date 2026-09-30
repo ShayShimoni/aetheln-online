@@ -43,6 +43,11 @@ try {
 Assert-HostFixture ($EntryFailure -ceq 'execute_required') 'Definition-only child-path fixture unexpectedly executed the provisioner.'
 Write-HostToolDiskWarning -ResourceMonitor $null
 Assert-HostFixture ($script:HostToolDiskWarningSent -eq $false) 'Disk warning state must be initialized before supervised preflight sampling.'
+$ExpectedInputSha256 = (Get-FileHash -LiteralPath $Entry -Algorithm SHA256).Hash.ToLowerInvariant()
+& {
+	function Get-FileHash { throw 'get_file_hash_unavailable' }
+	Assert-HostFixture ((Get-HostToolFileDigest -Path $Entry -Algorithm SHA256) -ceq $ExpectedInputSha256) 'Tool-input hashing must not depend on Get-FileHash module discovery in the supervisor.'
+}
 Assert-HostFixture ((Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 150 -NowTicks 100 -Frequency 1000) -eq 50 -and
 	(Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 100 -NowTicks 100 -Frequency 1000) -eq 0 -and
 	(Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 50 -NowTicks 100 -Frequency 1000) -eq 0 -and
@@ -386,6 +391,11 @@ Assert-HostFixture (Assert-HostToolGitDependencyManifestIdentity -ExpectedBlob (
 Assert-HostFailure { Assert-HostToolGitDependencyManifestIdentity -ExpectedBlob ('a' * 40) -ActualBlob ('b' * 40) } 'gitdeps_manifest_identity_mismatch'
 $GitdepsProof = Assert-HostToolFreshOutputState -EngineRoot $GitdepsEngine -TrackedPaths $GitdepsTracked
 Assert-HostFixture ($GitdepsProof.fresh -and $GitdepsProof.manifestFilesVerified -eq 1) 'Exact SHA1-verified Setup payload should pass.'
+& {
+	function Get-FileHash { throw 'get_file_hash_unavailable' }
+	$WorkerPathProof = Assert-HostToolFreshOutputState -EngineRoot $GitdepsEngine -TrackedPaths $GitdepsTracked
+	Assert-HostFixture ($WorkerPathProof.fresh -and $WorkerPathProof.manifestFilesVerified -eq 1) 'The Fresh worker policy path must verify dependency bytes without Get-FileHash.'
+}
 Set-Content -LiteralPath $GitdepsSupport -Value 'changed setup payload' -Encoding Ascii
 Assert-HostFailure { Assert-HostToolFreshOutputState -EngineRoot $GitdepsEngine -TrackedPaths $GitdepsTracked } 'gitdeps_hash_mismatch'
 Set-Content -LiteralPath $GitdepsSupport -Value 'setup payload fixture' -Encoding Ascii

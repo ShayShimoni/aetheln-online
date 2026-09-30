@@ -93,6 +93,13 @@ try {
 	[IO.File]::WriteAllText($PriorLogPath, 'verified build output', (New-Object Text.UTF8Encoding($false)))
 	$Verified = Invoke-HostToolCheckpointFile -Mode Verify -EngineRoot $Engine -ManifestPath $Manifest -ExpectedHeader $Header -ExpectedManifestSha256 $Created.manifestSha256 -RequiredDrive $Drive
 	Assert-Checkpoint ($Verified.engineRevision -ceq $Header.engineRevision) 'Checkpoint verification failed.'
+	& {
+		function Get-FileHash { throw 'get_file_hash_unavailable' }
+		$ModuleFreeManifest = Join-Path $Evidence 'module-free-checkpoint.jsonl'
+		$ModuleFreeCreated = Invoke-HostToolCheckpointFile -Mode Create -EngineRoot $Engine -ManifestPath $ModuleFreeManifest -Header $Header -RequiredDrive $Drive
+		$ModuleFreeVerified = Invoke-HostToolCheckpointFile -Mode Verify -EngineRoot $Engine -ManifestPath $ModuleFreeManifest -ExpectedHeader $Header -ExpectedManifestSha256 $ModuleFreeCreated.manifestSha256 -RequiredDrive $Drive
+		Assert-Checkpoint ($ModuleFreeCreated.fileCount -eq 1 -and $ModuleFreeVerified.engineRevision -ceq $Header.engineRevision) 'Checkpoint Create and Verify must not depend on Get-FileHash module discovery.'
+	}
 	$Pinned = Invoke-HostToolCheckpointFile -Mode Verify -EngineRoot $Engine -ManifestPath $Manifest -ExpectedHeader $Header -ExpectedManifestSha256 $Created.manifestSha256 -RequiredDrive $Drive
 	Assert-Checkpoint ($Pinned.engineRevision -ceq $Header.engineRevision) 'Pinned checkpoint verification failed.'
 	Assert-CheckpointFailure { Invoke-HostToolCheckpointFile -Mode Verify -EngineRoot $Engine -ManifestPath $Manifest -ExpectedHeader $Header -ExpectedManifestSha256 ('0' * 64) -RequiredDrive $Drive } 'resume_checkpoint_hash_mismatch'
