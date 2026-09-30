@@ -139,12 +139,24 @@ references; keep exact local paths and raw command output outside tracked docs.
    provisioning was used. If used, retain its receipt and logs locally and
    record its outcome; a successful provisioner receipt does not prove project
    generation, the Development Editor build, or Editor launch.
-3. Run the project-generation and Development Editor commands above. For each,
+   For the Issue #81 F: bootstrap, use the separately registered pinned engine
+   worktree and byte-verified dependency cache on the verified external NTFS
+   volume. Require at least 600 GiB free before that preparation and at least
+   300 GiB after hydration before compiling; these are operating thresholds,
+   not engine-size estimates. Do not import the failed D: native intermediates
+   or binaries.
+3. Use a separate, clean project workspace for this reproduction; keep its
+   generated project outputs and packages on F: as well. Run the
+   project-generation and Development Editor commands above. For each,
    retain the exact resolved command, start/end times or elapsed time, exit
-   code, and a concise failure summary when applicable. Confirm the Editor
-   load separately if it was attempted.
+   code, and a concise failure summary when applicable. Confirm the
+   `/Game/Maps/StarterMap` load separately if it was attempted.
 4. Record whether DDC was engine-default, a verified persistent local cache,
    or not applicable to the measured step; note cold/warm state when known.
+   Record D: and F: free space before and after each stage, the relevant
+   product/checkpoint identities, and whether the native build was fresh or a
+   verified continuation. Do not count host-tool provisioning, Editor build,
+   and launch as one undifferentiated success.
    Confirm generated project directories and solutions remain ignored and
    untracked. Keep any failed step and the next required action explicit.
 

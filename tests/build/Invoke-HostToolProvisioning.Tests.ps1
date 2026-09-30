@@ -23,6 +23,13 @@ function Remove-HostFixtureRoot([string] $Root, [string] $Parent) {
 $Pin = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
 $Envelope = New-HostToolAttemptEnvelope -StartTicks 1000L -Frequency 10L
 Assert-HostFixture ($Envelope.usefulDeadlineTicks -eq 199000L -and $Envelope.cleanupDeadlineTicks -eq 205000L -and $Envelope.publicationDeadlineTicks -eq 217000L) 'The 330/340/360 minute envelope drifted.'
+$BootstrapEnvelope = New-HostToolAttemptEnvelope -StartTicks 1000L -Frequency 10L -UsefulWorkMinutes 1440 -VerificationMinutes 120
+Assert-HostFixture ($BootstrapEnvelope.usefulDeadlineTicks -eq 865000L -and $BootstrapEnvelope.cleanupDeadlineTicks -eq 871000L -and
+	$BootstrapEnvelope.verificationDeadlineTicks -eq 943000L -and $BootstrapEnvelope.publicationDeadlineTicks -eq 955000L) 'The bootstrap envelope must derive every deadline from the selected useful-work budget.'
+Assert-HostFixture ((Get-HostToolProbeDeadlineReason -DeadlineTicks 100 -UsefulDeadlineTicks 100) -ceq 'useful_work_deadline' -and
+	(Get-HostToolProbeDeadlineReason -DeadlineTicks 120 -UsefulDeadlineTicks 100) -ceq 'identity_probe_deadline') 'Useful-phase probe expiry must retain resumable deadline reason.'
+Assert-HostFailure { New-HostToolAttemptEnvelope -StartTicks 1L -Frequency 10L -UsefulWorkMinutes 0 } 'useful_work_minutes_invalid'
+Assert-HostFailure { New-HostToolAttemptEnvelope -StartTicks 1L -Frequency 10L -UsefulWorkMinutes 1441 } 'useful_work_minutes_invalid'
 Assert-HostFailure { New-HostToolAttemptEnvelope -StartTicks ([long]::MaxValue) -Frequency ([long]::MaxValue) } 'monotonic_clock_unavailable'
 Assert-HostFailure { New-HostToolEvidenceDirectory -Path $PSScriptRoot } 'evidence_directory_exists_or_invalid'
 $FixtureParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
@@ -34,9 +41,39 @@ try {
 	. $Entry -EngineRoot 'D:\unused' -EvidenceRoot 'F:\unused' -HostLeasePath 'D:\unused.lease' -CompilerPath 'C:\unused\cl.exe' -ResourceCompilerPath 'C:\unused\rc.exe'
 } catch { $EntryFailure = $_.Exception.Message }
 Assert-HostFixture ($EntryFailure -ceq 'execute_required') 'Definition-only child-path fixture unexpectedly executed the provisioner.'
+Assert-HostFixture ((Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 150 -NowTicks 100 -Frequency 1000) -eq 50 -and
+	(Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 100 -NowTicks 100 -Frequency 1000) -eq 0 -and
+	(Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 50 -NowTicks 100 -Frequency 1000) -eq 0 -and
+	(Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 1000000 -NowTicks 0 -Frequency 1000) -eq 600000) 'Worker cleanup must use only the remaining phase budget.'
+Assert-HostFixture ((Assert-HostToolTargetDiskAdmission -FreeBytes 301GB -NativeTargetsStarted 0) -eq 300GB -and
+	(Assert-HostToolTargetDiskAdmission -FreeBytes 150GB -NativeTargetsStarted 1) -eq 100GB -and
+	(Assert-HostToolTargetDiskAdmission -FreeBytes 100GB -NativeTargetsStarted 2) -eq 100GB) 'Initial and subsequent native target disk thresholds drifted.'
+Assert-HostFailure { Assert-HostToolTargetDiskAdmission -FreeBytes 150GB -NativeTargetsStarted 0 } 'disk_warning_admission_refused'
+Assert-HostFailure { Assert-HostToolTargetDiskAdmission -FreeBytes (100GB - 1) -NativeTargetsStarted 1 } 'disk_warning_admission_refused'
 $ExpectedPowerShell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell/v1.0/powershell.exe'
 $ChildPowerShell = Resolve-HostToolChildPowerShellPath
 Assert-HostFixture ($ChildPowerShell -ceq $ExpectedPowerShell -and (Test-Path -LiteralPath $ChildPowerShell -PathType Leaf)) 'The child shell must be the existing absolute Windows PowerShell executable.'
+$QuietStart = [DateTime]::SpecifyKind([DateTime]::Parse('2026-09-30T00:00:00'), [DateTimeKind]::Utc)
+Assert-HostFixture (-not (Test-HostToolQuietAlert -NowUtc $QuietStart.AddSeconds(1799) -LastAlertUtc $QuietStart -LastOutputUtc $QuietStart) -and
+	(Test-HostToolQuietAlert -NowUtc $QuietStart.AddSeconds(1800) -LastAlertUtc $QuietStart -LastOutputUtc $QuietStart) -and
+	-not (Test-HostToolQuietAlert -NowUtc $QuietStart.AddSeconds(1800) -LastAlertUtc $QuietStart.AddMinutes(1) -LastOutputUtc $QuietStart) -and
+	-not (Test-HostToolQuietAlert -NowUtc $QuietStart.AddSeconds(1800) -LastAlertUtc $QuietStart -LastOutputUtc $QuietStart.AddMinutes(1))) 'Quiet alert must fire at 30:00, never at 29:59 or after recent output/alert.'
+Initialize-InitialPreparationJob
+$SilentDeadline = (Get-InitialPreparationTick) + 15L * [Diagnostics.Stopwatch]::Frequency
+$SilentJob = [Aetheln.PreparationJob]::new($SilentDeadline)
+$SilentProcess = $null
+try {
+	$SilentProcess = $SilentJob.Start($ChildPowerShell, @('-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 3'), $FixtureTempRoot)
+	Assert-HostFixture (-not $SilentProcess.WaitForExit(100) -and
+		(Test-HostToolQuietAlert -NowUtc $QuietStart.AddSeconds(1800) -LastAlertUtc $QuietStart -LastOutputUtc $QuietStart) -and
+		$SilentJob.ActiveCount -gt 0) 'A quiet supervised child must remain active when the alert fires.'
+	Assert-HostFixture ($SilentProcess.WaitForExit(5000) -and $SilentProcess.ExitCode -eq 0) 'Quiet alert must not cancel the supervised child.'
+} finally {
+	try { $SilentJob.StopAndWait(1000) } finally {
+		if ($null -ne $SilentProcess) { $SilentProcess.Dispose() }
+		$SilentJob.Dispose()
+	}
+}
 if (-not (Test-Path -LiteralPath (Join-Path $PSHOME 'powershell.exe') -PathType Leaf)) {
 	Assert-HostFixture ($ChildPowerShell -cne (Join-Path $PSHOME 'powershell.exe')) 'A pwsh host must not select a nonexistent child in PSHOME.'
 }
@@ -57,6 +94,118 @@ $CreateOnlyFixture = Join-Path $FixtureTempRoot ('AethelnHostTools-' + [guid]::N
 Assert-HostFixture ((New-HostToolEvidenceDirectory -Path $CreateOnlyFixture) -eq $CreateOnlyFixture -and
 	(Test-Path -LiteralPath $CreateOnlyFixture -PathType Container)) 'Create-only evidence directory failed.'
 Assert-HostFailure { New-HostToolEvidenceDirectory -Path $CreateOnlyFixture } 'evidence_directory_exists_or_invalid'
+$NativeLogFixture = Join-Path $FixtureTempRoot 'native-logs'
+$null = New-Item -ItemType Directory -Path $NativeLogFixture
+$NativeLogDrive = [IO.Path]::GetPathRoot($NativeLogFixture).Substring(0, 1).ToUpperInvariant()
+$NativeAttempt1 = New-HostToolNativeLogAttemptRoot -NativeLogRoot $NativeLogFixture -RequiredDrive $NativeLogDrive
+[IO.File]::WriteAllText((Join-Path $NativeAttempt1 'UnrealPak.ubt.log'), 'prior raw UBT log')
+$NativeAttempt2 = New-HostToolNativeLogAttemptRoot -NativeLogRoot $NativeLogFixture -RequiredDrive $NativeLogDrive
+Assert-HostFixture ($NativeAttempt1 -cne $NativeAttempt2 -and
+	[IO.File]::ReadAllText((Join-Path $NativeAttempt1 'UnrealPak.ubt.log')) -ceq 'prior raw UBT log') 'Continuation must never reuse or rotate the prior native UBT log path.'
+$PublishD = Join-Path $FixtureTempRoot 'publication-d'
+$PublishF = Join-Path $FixtureTempRoot 'publication-f'
+$null = New-Item -ItemType Directory -Path $PublishD, $PublishF
+$PublishReceipt = [ordered]@{ schemaVersion = 2; startedUtc = '2026-09-30T00:00:00Z'; success = $true; failure = $null }
+$PublishProof = Publish-HostToolProvisioningReceipts -SupervisorRoot $PublishD -EvidenceRoot $PublishF -Receipt $PublishReceipt
+$DPublished = Join-Path $PublishD 'host-tool-provisioning-receipt.json'
+$FPublished = Join-Path $PublishF 'host-tool-provisioning-receipt.json'
+$Completion = Get-Content -LiteralPath (Join-Path $PublishD 'publication-complete.json') -Raw | ConvertFrom-Json
+Assert-HostFixture ($Completion.complete -eq $true -and
+	$Completion.dReceiptSha256 -ceq (Get-FileHash -LiteralPath $DPublished -Algorithm SHA256).Hash.ToLowerInvariant() -and
+	$Completion.fReceiptSha256 -ceq (Get-FileHash -LiteralPath $FPublished -Algorithm SHA256).Hash.ToLowerInvariant() -and
+	(Get-Content -LiteralPath $FPublished -Raw | ConvertFrom-Json).dReceiptSha256 -ceq $PublishProof.dReceiptSha256) 'Completion marker must bind both create-only receipts.'
+$FailD = Join-Path $FixtureTempRoot 'publication-fail-d'
+$FailF = Join-Path $FixtureTempRoot 'publication-fail-f'
+$null = New-Item -ItemType Directory -Path $FailD, $FailF
+[IO.File]::WriteAllText((Join-Path $FailF 'host-tool-provisioning-receipt.json'), 'preexisting fixture')
+Assert-HostFailure { Publish-HostToolProvisioningReceipts -SupervisorRoot $FailD -EvidenceRoot $FailF -Receipt ([ordered]@{ schemaVersion = 2; startedUtc = '2026-09-30T00:00:00Z'; success = $true }) } 'f_receipt_publication_failed'
+Assert-HostFixture ((Test-Path -LiteralPath (Join-Path $FailD 'host-tool-provisioning-receipt.json') -PathType Leaf) -and
+	(Get-Content -LiteralPath (Join-Path $FailD 'publication-failed.json') -Raw | ConvertFrom-Json).reason -ceq 'f_receipt_publication_failed' -and
+	-not (Test-Path -LiteralPath (Join-Path $FailD 'publication-complete.json'))) 'F publication failure must leave D diagnostic and no completion marker.'
+$FailD2 = Join-Path $FixtureTempRoot 'publication-fail-d-first'
+$FailF2 = Join-Path $FixtureTempRoot 'publication-fail-f-second'
+$null = New-Item -ItemType Directory -Path $FailD2, $FailF2
+[IO.File]::WriteAllText((Join-Path $FailD2 'host-tool-provisioning-receipt.json'), 'preexisting fixture')
+Assert-HostFailure { Publish-HostToolProvisioningReceipts -SupervisorRoot $FailD2 -EvidenceRoot $FailF2 -Receipt ([ordered]@{ schemaVersion = 2; startedUtc = '2026-09-30T00:00:00Z'; success = $true }) } 'd_receipt_publication_failed'
+Assert-HostFixture (-not (Test-Path -LiteralPath (Join-Path $FailF2 'host-tool-provisioning-receipt.json'))) 'F success receipt must never precede proven D terminal publication.'
+$DeadlineD = Join-Path $FixtureTempRoot 'publication-deadline-d'
+$DeadlineF = Join-Path $FixtureTempRoot 'publication-deadline-f'
+$null = New-Item -ItemType Directory -Path $DeadlineD, $DeadlineF
+$script:DeadlineReads = 0
+Assert-HostFailure {
+	Publish-HostToolProvisioningReceipts -SupervisorRoot $DeadlineD -EvidenceRoot $DeadlineF -Receipt ([ordered]@{
+		schemaVersion = 2; startedUtc = '2026-09-30T00:00:00Z'; success = $true }) -DeadlineTicks 10 -ReadTicks {
+		$script:DeadlineReads++
+		if ($script:DeadlineReads -ge 4) { 10L } else { 0L }
+	}
+} 'publication_deadline'
+Assert-HostFixture ((Test-Path -LiteralPath (Join-Path $DeadlineF 'host-tool-provisioning-receipt.json') -PathType Leaf) -and
+	-not (Test-Path -LiteralPath (Join-Path $DeadlineD 'publication-complete.json') -PathType Leaf) -and
+	(Get-Content -LiteralPath (Join-Path $DeadlineD 'publication-failed.json') -Raw | ConvertFrom-Json).reason -ceq 'publication_deadline') 'Expiry after F publication must not create a completion marker.'
+$LateMarkerD = Join-Path $FixtureTempRoot 'publication-late-marker-d'
+$LateMarkerF = Join-Path $FixtureTempRoot 'publication-late-marker-f'
+$null = New-Item -ItemType Directory -Path $LateMarkerD, $LateMarkerF
+$LateResult = Join-Path $LateMarkerD 'publication-result-fixture.json'
+$script:LateMarkerReads = 0
+Assert-HostFailure {
+	Publish-HostToolProvisioningReceipts -SupervisorRoot $LateMarkerD -EvidenceRoot $LateMarkerF -Receipt ([ordered]@{
+		schemaVersion = 2; startedUtc = '2026-09-30T00:00:00Z'; success = $true }) -DeadlineTicks 10 -ResultPath $LateResult -ReadTicks {
+		$script:LateMarkerReads++
+		if ($script:LateMarkerReads -ge 5) { 10L } else { 0L }
+	}
+} 'publication_deadline'
+Assert-HostFixture ((Test-Path -LiteralPath (Join-Path $LateMarkerD 'publication-complete.json') -PathType Leaf) -and
+	(Test-Path -LiteralPath (Join-Path $LateMarkerD 'publication-failed.json') -PathType Leaf)) 'Late marker fixture must exercise physical marker presence after expiry.'
+Assert-HostFailure {
+	Assert-HostToolPublicationResult -SupervisorRoot $LateMarkerD -ResultPath $LateResult -DeadlineTicks 10
+} 'publication_proof_invalid'
+$SupervisedD = Join-Path $FixtureTempRoot 'publication-supervised-d'
+$SupervisedF = Join-Path $FixtureTempRoot 'publication-supervised-f'
+$null = New-Item -ItemType Directory -Path $SupervisedD, $SupervisedF
+$SupervisedDeadline = (Get-InitialPreparationTick) + 30L * [Diagnostics.Stopwatch]::Frequency
+$SupervisedProof = Invoke-HostToolPublicationWorker -SupervisorRoot $SupervisedD -EvidenceRoot $SupervisedF -Receipt ([ordered]@{
+	schemaVersion = 2; scope = 'bounded_host_tool_provisioning'; startedUtc = '2026-09-30T00:00:00Z'; success = $true }) -ControllerRoot ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))) -ResourceMonitor $null -DeadlineTicks $SupervisedDeadline
+Assert-HostFixture ($SupervisedProof.success -eq $true -and
+	$SupervisedProof.completedTicks -lt $SupervisedDeadline -and
+	(Test-Path -LiteralPath (Join-Path $SupervisedD 'publication-complete.json') -PathType Leaf) -and
+	(Test-Path -LiteralPath (Join-Path $SupervisedD 'publication-confirmed.json') -PathType Leaf)) 'D supervisor must confirm publication inside its deadline.'
+$SupervisedMarker = Get-Content -LiteralPath (Join-Path $SupervisedD 'publication-complete.json') -Raw | ConvertFrom-Json
+$ParentConfirmation = Get-Content -LiteralPath (Join-Path $SupervisedD 'publication-confirmed.json') -Raw | ConvertFrom-Json
+Assert-HostFixture ($ParentConfirmation.confirmed -eq $true -and
+	$ParentConfirmation.resultPath -cne $null -and
+	$ParentConfirmation.dReceiptSha256 -ceq $SupervisedProof.dReceiptSha256 -and
+	$ParentConfirmation.fReceiptSha256 -ceq $SupervisedProof.fReceiptSha256 -and
+	$ParentConfirmation.confirmedTicks -lt $SupervisedDeadline) 'Parent confirmation must bind the worker result and both receipt hashes.'
+Assert-HostFixture ((Assert-HostToolPublicationResult -SupervisorRoot $SupervisedD -ResultPath $SupervisedMarker.resultPath -DeadlineTicks $SupervisedDeadline).fReceiptSha256 -ceq
+	$SupervisedMarker.fReceiptSha256) 'Durable D result must cross-link the completion marker and both receipts.'
+Assert-HostToolPublishedReceiptBytes -SupervisorRoot $SupervisedD -EvidenceRoot $SupervisedF -DReceiptSha256 $SupervisedProof.dReceiptSha256 -FReceiptSha256 $SupervisedProof.fReceiptSha256
+$SupervisedFReceiptPath = Join-Path $SupervisedF 'host-tool-provisioning-receipt.json'
+$SupervisedFBytes = [IO.File]::ReadAllBytes($SupervisedFReceiptPath)
+[IO.File]::AppendAllText($SupervisedFReceiptPath, 'tampered')
+Assert-HostFailure {
+	Assert-HostToolPublishedReceiptBytes -SupervisorRoot $SupervisedD -EvidenceRoot $SupervisedF -DReceiptSha256 $SupervisedProof.dReceiptSha256 -FReceiptSha256 $SupervisedProof.fReceiptSha256
+} 'publication_receipt_mismatch'
+[IO.File]::WriteAllBytes($SupervisedFReceiptPath, $SupervisedFBytes)
+$SupervisedDReceiptPath = Join-Path $SupervisedD 'host-tool-provisioning-receipt.json'
+$SupervisedDBytes = [IO.File]::ReadAllBytes($SupervisedDReceiptPath)
+[IO.File]::AppendAllText($SupervisedDReceiptPath, 'tampered')
+Assert-HostFailure {
+	Assert-HostToolPublishedReceiptBytes -SupervisorRoot $SupervisedD -EvidenceRoot $SupervisedF -DReceiptSha256 $SupervisedProof.dReceiptSha256 -FReceiptSha256 $SupervisedProof.fReceiptSha256
+} 'publication_receipt_mismatch'
+[IO.File]::WriteAllBytes($SupervisedDReceiptPath, $SupervisedDBytes)
+$PublicationWorkerText = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../scripts/build/HostToolProvisioning.PublicationWorker.ps1') -Raw
+Assert-HostFixture ($PublicationWorkerText.Contains('Assert-HostToolPublishedReceiptBytes -SupervisorRoot $SupervisorRoot -EvidenceRoot $EvidenceRoot')) 'Supervised child must reopen and verify both exact receipt byte streams before its success result.'
+$SupervisedFailD = Join-Path $FixtureTempRoot 'publication-supervised-fail-d'
+$SupervisedFailF = Join-Path $FixtureTempRoot 'publication-supervised-fail-f'
+$null = New-Item -ItemType Directory -Path $SupervisedFailD, $SupervisedFailF
+[IO.File]::WriteAllText((Join-Path $SupervisedFailF 'host-tool-provisioning-receipt.json'), 'preexisting fixture')
+$SupervisedFailDeadline = (Get-InitialPreparationTick) + 30L * [Diagnostics.Stopwatch]::Frequency
+Assert-HostFailure {
+	Invoke-HostToolPublicationWorker -SupervisorRoot $SupervisedFailD -EvidenceRoot $SupervisedFailF -Receipt ([ordered]@{
+		schemaVersion = 2; scope = 'bounded_host_tool_provisioning'; startedUtc = '2026-09-30T00:00:00Z'; success = $true }) -ControllerRoot ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))) -ResourceMonitor $null -DeadlineTicks $SupervisedFailDeadline
+} 'publication_worker_failed'
+Assert-HostFixture ((Get-Content -LiteralPath (Join-Path $SupervisedFailD 'publication-failed.json') -Raw | ConvertFrom-Json).reason -ceq 'f_receipt_publication_failed' -and
+	-not (Test-Path -LiteralPath (Join-Path $SupervisedFailD 'publication-complete.json') -PathType Leaf)) 'Supervised F publication failure must remain non-authoritative.'
 Assert-HostFailure { & $Entry -EngineRoot 'D:\unused' -EvidenceRoot 'F:\unused' -HostLeasePath 'D:\unused.lease' -CompilerPath 'C:\unused\cl.exe' -ResourceCompilerPath 'C:\unused\rc.exe' } 'execute_required'
 Assert-HostFailure { & $Entry -Execute -WhatIf -EngineRoot 'D:\unused' -EvidenceRoot 'F:\unused' -HostLeasePath 'D:\unused.lease' -CompilerPath 'C:\unused\cl.exe' -ResourceCompilerPath 'C:\unused\rc.exe' } 'execute_declined'
 Assert-HostFixture ((Assert-HostToolGitState -Head $Pin -Status '' -Expected $Pin) -eq $Pin) 'Canonical clean engine must pass.'
@@ -348,34 +497,45 @@ foreach ($Relative in @(
 # rejected when preflight runs inside that lease window.
 $EntryText = Get-Content -LiteralPath $Entry -Raw
 $AcquireAt = $EntryText.IndexOf('$Lease = Enter-EngineRunnerHostLease', [StringComparison]::Ordinal)
-$EngineProbeAt = $EntryText.IndexOf('$EngineGit = Get-HostToolGitState', [StringComparison]::Ordinal)
-$InputProbeAt = $EntryText.IndexOf('$null = Assert-HostToolEngineInputIdentity', $EngineProbeAt, [StringComparison]::Ordinal)
+$EngineProbeAt = $EntryText.IndexOf('$EngineGit = Invoke-HostToolIdentityProbe -Mode Git', [StringComparison]::Ordinal)
+$InputProbeAt = $EntryText.IndexOf('$null = Invoke-HostToolIdentityProbe -Mode Engine', $EngineProbeAt, [StringComparison]::Ordinal)
 $FreshProbeAt = $EntryText.IndexOf('$FreshOutputProof = Assert-HostToolFreshOutputState', [StringComparison]::Ordinal)
 $BuildAt = $EntryText.IndexOf('$Sequence = Invoke-HostToolProvisioningSequence', [StringComparison]::Ordinal)
-$ReceiptProbeAt = $EntryText.IndexOf('$ReceiptClosureProof = Assert-HostToolReceiptSet', [StringComparison]::Ordinal)
+$ReceiptProbeAt = $EntryText.IndexOf('$ReceiptClosureProof = Invoke-HostToolIdentityProbe -Mode Receipt', [StringComparison]::Ordinal)
 $ReleaseAt = $EntryText.IndexOf('Exit-EngineRunnerHostLease -Lease $Lease -CleanupVerified $true', [StringComparison]::Ordinal)
 Assert-HostFixture ($AcquireAt -ge 0 -and $AcquireAt -lt $EngineProbeAt -and $EngineProbeAt -lt $InputProbeAt -and $InputProbeAt -lt $FreshProbeAt -and
 	$FreshProbeAt -lt $BuildAt -and $BuildAt -lt $ReceiptProbeAt -and $ReceiptProbeAt -lt $ReleaseAt) 'Host lease must enclose fresh preflight, build, and target-receipt verification.'
-$ControllerProbe = '$null = Assert-HostToolControllerInputIdentity -ControllerRoot $ResolvedController'
+$ControllerProbe = '$null = Invoke-HostToolIdentityProbe -Mode Controller'
 $PerTargetControllerAt = $EntryText.IndexOf($ControllerProbe, [StringComparison]::Ordinal)
 $ControllerPreflightAt = $EntryText.IndexOf($ControllerProbe, $AcquireAt, [StringComparison]::Ordinal)
 $ControllerCompletionAt = $EntryText.IndexOf($ControllerProbe, $ReceiptProbeAt, [StringComparison]::Ordinal)
-$ControllerGitAt = $EntryText.IndexOf('$ControllerGit = Get-HostToolGitState', [StringComparison]::Ordinal)
-$ProcessStartAt = $EntryText.IndexOf('$Process = $Job.Start', [StringComparison]::Ordinal)
+$ControllerGitAt = $EntryText.IndexOf('$ControllerGit = Invoke-HostToolIdentityProbe -Mode Git', [StringComparison]::Ordinal)
+$ProcessStartAt = $EntryText.IndexOf('$Process = $Job.Start($ChildPowerShell, $Arguments, $ResolvedEngine)', [StringComparison]::Ordinal)
 Assert-HostFixture ($PerTargetControllerAt -ge 0 -and $PerTargetControllerAt -lt $ProcessStartAt -and
 	$AcquireAt -lt $ControllerGitAt -and $ControllerGitAt -lt $ControllerPreflightAt -and $ControllerPreflightAt -lt $EngineProbeAt -and
 	$ReceiptProbeAt -lt $ControllerCompletionAt -and $ControllerCompletionAt -lt $ReleaseAt) 'Tracked controller identity must be checked under the lease before every build and at completion.'
-$PerTargetInputAt = $EntryText.IndexOf('$null = Assert-HostToolEngineInputIdentity', [StringComparison]::Ordinal)
+$PerTargetInputAt = $EntryText.IndexOf('$null = Invoke-HostToolIdentityProbe -Mode Engine', [StringComparison]::Ordinal)
 Assert-HostFixture ($PerTargetInputAt -ge 0 -and $PerTargetInputAt -lt $ProcessStartAt -and
 	$ProcessStartAt -lt $InputProbeAt) 'Engine inputs must be checked before each native target launch.'
-$PostChildInputAt = $EntryText.IndexOf('$null = Assert-HostToolEngineInputIdentity -EngineRoot $ResolvedEngine', $ProcessStartAt, [StringComparison]::Ordinal)
+$PostChildInputAt = $EntryText.IndexOf('$null = Invoke-HostToolIdentityProbe -Mode Engine', $ProcessStartAt, [StringComparison]::Ordinal)
 $ResultReadAt = $EntryText.IndexOf('$ResultPath = Join-Path $TargetEvidence', [StringComparison]::Ordinal)
-$ProductAfterAt = $EntryText.IndexOf('$After = Get-HostToolProductState', [StringComparison]::Ordinal)
-$FinalInputAt = $EntryText.IndexOf('$null = Assert-HostToolEngineInputIdentity -EngineRoot $ResolvedEngine', $ReceiptProbeAt, [StringComparison]::Ordinal)
-$EngineAfterAt = $EntryText.IndexOf('$EngineAfter = Get-HostToolGitState', [StringComparison]::Ordinal)
+$ProductAfterAt = $EntryText.IndexOf('$After = Invoke-HostToolIdentityProbe -Mode Product', [StringComparison]::Ordinal)
+$FinalInputAt = $EntryText.IndexOf('$null = Invoke-HostToolIdentityProbe -Mode Engine', $ReceiptProbeAt, [StringComparison]::Ordinal)
+$EngineAfterAt = $EntryText.IndexOf('$EngineAfter = Invoke-HostToolIdentityProbe -Mode Git', [StringComparison]::Ordinal)
+Assert-HostFixture (([regex]::Matches($EntryText, 'Get-HostToolGitState -Root')).Count -eq 1) 'Bootstrap git status must run only in the supervised identity worker.'
 Assert-HostFixture ($ProcessStartAt -lt $ResultReadAt -and $ResultReadAt -lt $PostChildInputAt -and $PostChildInputAt -lt $ProductAfterAt -and $ProductAfterAt -lt $InputProbeAt -and
 	$ReceiptProbeAt -lt $EngineAfterAt -and $EngineAfterAt -lt $FinalInputAt -and $FinalInputAt -lt $ReleaseAt) 'Raw engine identity must be rechecked after each child and before final success.'
 Assert-HostFixture ($EntryText.Contains('-AdmitTarget {') -and -not $EntryText.Contains('-ReadCapacity {')) 'Operator entry must use receipt-accounted routine target admission.'
+$AdmitAt = $EntryText.IndexOf('-AdmitTarget {', [StringComparison]::Ordinal)
+$AdmitAcAt = $EntryText.IndexOf('Assert-HostToolAcPower', $AdmitAt, [StringComparison]::Ordinal)
+$CapacityAt = $EntryText.IndexOf('Get-RoutineCompileActionLimit -Monitor $ResourceMonitor', $AdmitAt, [StringComparison]::Ordinal)
+$NativeBuildAt = $EntryText.IndexOf('function Invoke-HostToolNativeBuild {', [StringComparison]::Ordinal)
+$NativeInputAt = $EntryText.IndexOf('Invoke-HostToolIdentityProbe -Mode Engine', $NativeBuildAt, [StringComparison]::Ordinal)
+$NativeAcAt = $EntryText.IndexOf('Assert-HostToolAcPower', $NativeBuildAt, [StringComparison]::Ordinal)
+Assert-HostFixture ($AdmitAt -ge 0 -and $AdmitAcAt -gt $AdmitAt -and $AdmitAcAt -lt $CapacityAt -and
+	$NativeAcAt -gt $NativeInputAt -and $NativeAcAt -lt $ProcessStartAt) 'AC loss after preflight or during native identity verification must stop each target before child launch.'
+Assert-HostFixture ($EntryText.Contains('$LiveVolume = Assert-HostToolExternalVolume -Path $ResolvedEngine') -and
+	$EntryText.Contains('Assert-HostToolTargetDiskAdmission -FreeBytes ([IO.DriveInfo]::new(''F:\'')).AvailableFreeSpace -NativeTargetsStarted $InvocationRecords.Count')) 'Native admission must refresh F identity and free bytes after preflight.'
 $RaceEngine = Join-Path $FixtureTempRoot ('AethelnHostRace-' + [guid]::NewGuid().ToString('N'))
 $RaceOutput = Join-Path $RaceEngine 'Engine/Binaries/Win64'
 $null = New-Item -ItemType Directory -Path $RaceOutput -Force
@@ -390,6 +550,10 @@ Assert-HostFixture ($Command.arguments -contains '-MaxParallelActions=2') 'Actio
 Assert-HostFixture ($Command.arguments -contains '-CompilerVersion=14.44.35207') 'Compiler pin missing.'
 Assert-HostFixture ($Command.arguments -contains '-WindowsSDKVersion=10.0.26100.0') 'SDK pin missing.'
 Assert-HostFixture (-not (($Command.arguments -join ' ') -match '(?i)(^|\s)-clean(\s|$)|RunUAT|Rebuild')) 'Provisioner must not clean or use UAT/rebuild.'
+$ExternalCommand = Get-HostToolBuildCommand -Target 'UnrealPak' -ActionLimit 2 -BuildBatch 'F:\Engine\Engine\Build\BatchFiles\Build.bat' -UbaRootDir 'F:\Aetheln-BuildCache\UBA' -LogPath 'F:\Aetheln-BuildLogs\UnrealPak.ubt.log'
+Assert-HostFixture ($ExternalCommand.arguments -contains '-UBARootDir=F:\Aetheln-BuildCache\UBA' -and
+	$ExternalCommand.arguments -contains '-UBAStoreCapacityGb=40' -and
+	$ExternalCommand.arguments -contains '-Log=F:\Aetheln-BuildLogs\UnrealPak.ubt.log') 'F: UBA cap and native log route must reach UnrealBuildTool.'
 Assert-HostFailure { Get-HostToolBuildCommand -Target 'UnrealEditor' -ActionLimit 5 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat' } 'action_limit_invalid'
 
 $Observed = Get-HostToolBuildProof -Lines @(
@@ -437,6 +601,16 @@ function Set-HostReceiptFixture([string] $Target, [string] $TargetType, [string[
 }
 Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')
 Set-HostReceiptFixture -Target UnrealPak -TargetType Program -Products @('UnrealPak.exe')
+Assert-HostFixture ((Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -Targets @('UnrealPak')).semanticsVerified -eq $true) 'Single-target receipt semantics must be verifiable before recovered no-op acceptance.'
+$PakTargetPath = Join-Path $ReceiptWin64 'UnrealPak.target'
+$PakTargetOriginal = Get-Content -LiteralPath $PakTargetPath -Raw
+$MissingPakTarget = Join-Path $ReceiptWin64 'UnrealPak.target.missing'
+Move-Item -LiteralPath $PakTargetPath -Destination $MissingPakTarget
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -Targets @('UnrealPak') } 'target_receipt_invalid'
+Move-Item -LiteralPath $MissingPakTarget -Destination $PakTargetPath
+Set-Content -LiteralPath $PakTargetPath -Value '{invalid' -Encoding Ascii
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -Targets @('UnrealPak') } 'target_receipt_invalid'
+Set-Content -LiteralPath $PakTargetPath -Value $PakTargetOriginal -Encoding UTF8
 Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe')
 $ReceiptProof = Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine
 Assert-HostFixture ($ReceiptProof.productCount -eq 7 -and $ReceiptProof.totalBytes -gt 0) 'Semantically valid target receipts should pass.'
@@ -500,8 +674,42 @@ $Child = Join-Path $PSScriptRoot '../../scripts/build/HostToolProvisioning.Build
 Assert-HostFixture ($LASTEXITCODE -eq 0) 'Fixture Build.bat capture failed.'
 $ChildResult = Get-Content -LiteralPath (Join-Path $FakeEvidence 'native-result.json') -Raw | ConvertFrom-Json
 Assert-HostFixture ($ChildResult.nativeExitCode -eq 0 -and $null -eq $ChildResult.infrastructureFailure) 'Child result missing.'
+Assert-HostToolNativeResult -Result $ChildResult -Target UnrealPak -NativeExitCode 0
 $ChildProof = Get-HostToolBuildProof -Lines @(Get-Content -LiteralPath (Join-Path $FakeEvidence 'build.log')) -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10'
 Assert-HostFixture ($ChildProof.actionCount -eq 1) 'Captured fixture build proof missing.'
+$CapturedLogPath = Join-Path $FakeEvidence 'build.log'
+$BoundLogProof = Get-HostToolBuildLogProof -LogPath $CapturedLogPath -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10'
+Assert-HostFixture ($BoundLogProof.actionCount -eq $ChildProof.actionCount -and
+	$BoundLogProof.progressCount -eq $ChildProof.progressCount -and
+	$BoundLogProof.logSha256 -ceq (Get-FileHash -LiteralPath $CapturedLogPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'Action proof and digest must bind the same captured log bytes.'
+Add-Content -LiteralPath $CapturedLogPath -Value 'Extra captured output' -Encoding UTF8
+$ChangedLogProof = Get-HostToolBuildLogProof -LogPath $CapturedLogPath -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10'
+Assert-HostFixture ($ChangedLogProof.actionCount -eq 1 -and $ChangedLogProof.logSha256 -cne $BoundLogProof.logSha256) 'Changing captured bytes must change their digest without changing the action proof.'
+$NoOpLogPath = Join-Path $FakeEvidence 'no-op.log'
+[IO.File]::WriteAllText($NoOpLogPath, "Target is up to date`n", (New-Object Text.UTF8Encoding($false)))
+$NoOpLogProof = Get-HostToolBuildLogProof -LogPath $NoOpLogPath -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10' -AllowNoAction
+Assert-HostFixture ($NoOpLogProof.recoveredNoOp -eq $true -and $NoOpLogProof.actionCount -eq 0 -and
+	$NoOpLogProof.progressCount -eq 0 -and $NoOpLogProof.selectionVerified -eq $false) 'Pinned UBT up-to-date marker must be recorded as zero actions, not fabricated progress.'
+Assert-HostFailure { Get-HostToolBuildLogProof -LogPath $NoOpLogPath -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10' } 'tool_selection_unproven'
+[IO.File]::WriteAllText($NoOpLogPath, "Target is up to date`nUsing Parallel executor to run 1 action(s)`n", (New-Object Text.UTF8Encoding($false)))
+Assert-HostFailure { Get-HostToolBuildLogProof -LogPath $NoOpLogPath -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10' -AllowNoAction } 'actions_unproven'
+$BuildLogPolicy = (Get-Content -LiteralPath $Policy -Raw)
+Assert-HostFixture ($BuildLogPolicy.Contains('ComputeHash($LogStream)') -and $BuildLogPolicy.Contains('$LogStream.Position = 0')) 'Build log proof must hash and parse through one pinned read handle.'
+
+$OverflowEvidence = Join-Path $FakeEngine 'overflow-evidence'
+$null = New-Item -ItemType Directory -Path $OverflowEvidence
+$OverflowBatch = @'
+@echo off
+powershell.exe -NoProfile -NonInteractive -Command "[Console]::Out.Write('A' * 16777217)"
+exit /b 0
+'@
+Set-Content -LiteralPath (Join-Path $FakeBatchDir 'Build.bat') -Value $OverflowBatch -Encoding Ascii
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Child -Target UnrealPak -ActionLimit 1 -EngineRoot $FakeEngine -EvidenceRoot $OverflowEvidence
+Assert-HostFixture ($LASTEXITCODE -ne 0) 'The fixture must trigger the real 16 MiB capture limit.'
+$OverflowResult = Get-Content -LiteralPath (Join-Path $OverflowEvidence 'native-result.json') -Raw | ConvertFrom-Json
+Assert-HostFixture ($OverflowResult.infrastructureFailure -ceq 'build_output_limit' -and
+	(Get-Item -LiteralPath (Join-Path $OverflowEvidence 'build.log')).Length -le 16777216) 'Child must preserve explicit overflow and bounded captured bytes.'
+Assert-HostFailure { Assert-HostToolNativeResult -Result $OverflowResult -Target UnrealPak -NativeExitCode $LASTEXITCODE } 'build_output_limit'
 
 $States = @('UnrealPak', 'ShaderCompileWorker', 'UnrealEditor')
 $Now = 0L
@@ -513,6 +721,71 @@ $Sequence = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { $N
 	return [pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1; selectionVerified = $true; productsVerified = $true; cleanupVerified = $true; command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
 }
 Assert-HostFixture ($Sequence.Count -eq 3 -and $Calls.Count -eq 3 -and @($Sequence | Where-Object { $_.actionLimit -ne 4 }).Count -eq 0) 'Success sequence failed.'
+$PreflightFreeBytes = 301GB
+$null = Assert-HostToolTargetDiskAdmission -FreeBytes $PreflightFreeBytes -NativeTargetsStarted 0
+$AdmissionFreeBytes = 150GB
+$DiskGateBuilds = New-Object Collections.ArrayList
+Assert-HostFailure {
+	Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -AdmitTarget {
+		$null = Assert-HostToolTargetDiskAdmission -FreeBytes $AdmissionFreeBytes -NativeTargetsStarted $DiskGateBuilds.Count
+		1
+	} -InvokeBuild { param($Target, $Limit) [void] $DiskGateBuilds.Add($Target); throw 'must_not_start' }
+} 'disk_warning_admission_refused'
+Assert-HostFixture ($DiskGateBuilds.Count -eq 0) 'F dropping from 301 to 150 GiB before first admission must reject without starting any target.'
+foreach ($BadReceipt in @('malformed', 'missing')) {
+	$PakReceiptBytes = [IO.File]::ReadAllBytes($PakTargetPath)
+	$MissingPakReceiptPath = $PakTargetPath + '.fixture-missing'
+	try {
+		if ($BadReceipt -ceq 'missing') { Move-Item -LiteralPath $PakTargetPath -Destination $MissingPakReceiptPath }
+		else { [IO.File]::WriteAllText($PakTargetPath, '{invalid', (New-Object Text.UTF8Encoding($false))) }
+		$ReceiptGateCalls = New-Object Collections.ArrayList
+		Assert-HostFailure {
+			Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -AdmitTarget { 1 } -InvokeBuild {
+				param($Target, $Limit)
+				[void] $ReceiptGateCalls.Add($Target)
+				[pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1;
+					selectionVerified = $true; productsVerified = $true; cleanupVerified = $true;
+					command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
+			} -OnTargetCompleted {
+				param($Target, $Results)
+				$null = Assert-HostToolCompletedTargetReceipt -Target $Target -EngineRoot $ReceiptEngine -Bootstrap $false -SupervisorRoot $null -ControllerRoot $null -ResourceMonitor $null -DeadlineTicks 360
+			}
+		} 'target_receipt_invalid'
+		Assert-HostFixture (($ReceiptGateCalls -join ',') -ceq 'UnrealPak') "A $BadReceipt UnrealPak target receipt must stop before the next build starts."
+	} finally {
+		if ($BadReceipt -ceq 'missing') { Move-Item -LiteralPath $MissingPakReceiptPath -Destination $PakTargetPath }
+		else { [IO.File]::WriteAllBytes($PakTargetPath, $PakReceiptBytes) }
+	}
+}
+$CompletionGateAt = $EntryText.IndexOf('$PerTargetReceiptProof = Assert-HostToolCompletedTargetReceipt', [StringComparison]::Ordinal)
+$CompletionRecordAt = $EntryText.IndexOf("Write-HostToolProvisioningReceipt -Path (Join-Path `$ResolvedSupervisor ('completed-'", [StringComparison]::Ordinal)
+Assert-HostFixture ($CompletionGateAt -ge 0 -and $CompletionGateAt -lt $CompletionRecordAt) 'Supervised per-target receipt validation must precede the completion record.'
+$ResumeCalls = New-Object Collections.ArrayList
+$Resumed = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -InvokeBuild {
+	param($Target, $Limit)
+	[void] $ResumeCalls.Add($Target)
+	[pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1; selectionVerified = $true;
+		productsVerified = $true; cleanupVerified = $true; command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
+}
+Assert-HostFixture ($Resumed.Count -eq 3 -and ($ResumeCalls -join ',') -ceq 'ShaderCompileWorker,UnrealEditor') 'Verified target reuse must skip only the completed prefix.'
+$RecoveredNoOp = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -RecoverableTarget ShaderCompileWorker -InvokeBuild {
+	param($Target, $Limit)
+	if ($Target -ceq 'ShaderCompileWorker') {
+		return [pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 0; progressCount = 0;
+			selectionVerified = $false; productsVerified = $true; cleanupVerified = $true; recoveredNoOp = $true;
+			targetReceiptVerified = $true; recoverySourceReceiptSha256 = ('b' * 64);
+			command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
+	}
+	return [pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1;
+		selectionVerified = $true; productsVerified = $true; cleanupVerified = $true;
+		command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
+}
+Assert-HostFixture ($RecoveredNoOp[1].recoveredNoOp -eq $true -and $RecoveredNoOp[1].actionCount -eq 0 -and
+	$RecoveredNoOp[1].recoverySourceReceiptSha256 -ceq ('b' * 64) -and
+	$RecoveredNoOp[2].actionCount -eq 1) 'Only the verified interrupted target may recover via a zero-action native exit.'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -RecoverableTarget UnrealEditor -InvokeBuild { throw 'must_not_start' } } 'provisioning_plan_invalid'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -RecoverableTarget ShaderCompileWorker -InvokeBuild { param($Target,$Limit) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=0; progressCount=0; selectionVerified=$false; productsVerified=$true; cleanupVerified=$true; recoveredNoOp=$true; targetReceiptVerified=$false; command=@('Build.bat',$Target); logSha256=('a'*64) } } } 'recovered_noop_unproven'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @([pscustomobject]@{ target = 'UnrealEditor'; nativeExitCode = 0; cleanupVerified = $true; productsVerified = $true; logSha256 = ('a' * 64); actionCount = 1; progressCount = 1 }) -InvokeBuild { throw 'must_not_start' } } 'checkpoint_targets_invalid'
 $AdmissionState = [pscustomobject]@{ commit = [long] 24GB; ordinal = 0 }
 $AdmissionNow = 0L
 $AdmissionMonitor = New-RoutineCompileResourceMonitor -Roots @{ evidence = $PSScriptRoot } -ResolveVolume {
@@ -570,4 +843,5 @@ Assert-HostFailure { New-RoutineCompileResourceMonitor @ResourceArgs } 'disk_flo
 	Remove-HostFixtureRoot -Root $FixtureTempRoot -Parent $FixtureParent
 }
 Assert-HostFixture (-not (Test-Path -LiteralPath $FixtureTempRoot)) 'Fixture suite cleanup failed.'
+& (Join-Path $PSScriptRoot 'HostToolCheckpoint.Tests.ps1')
 'PASS Invoke-HostToolProvisioning fixtures'

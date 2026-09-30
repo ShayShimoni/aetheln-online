@@ -259,8 +259,17 @@ verified by SHA-1 against a pinned, tracked GitDependencies manifest are
 allowed; a clean Git tree alone does not prove ignored product provenance),
 the pinned MSVC/SDK paths, the existing shared engine-host `.lease`
 file, and a new external evidence directory on the current operator's **F:**
-volume. F: is a local operational constraint for this provisioner, not a
-canonical contributor-machine layout. It runs only pinned `Build.bat`
+volume. For the Issue #81 bootstrap on this host, the separately registered
+pinned engine worktree, dependency-download cache, UBA store, native logs,
+child temporary files, and subsequent project-build workspace also live on
+the verified NTFS F: volume. Verify its volume ID, NTFS format, and 4 KiB
+allocation units, then require at least 600 GiB free **before** preparing the
+engine worktree and dependency cache. Recheck for at least 300 GiB free after
+hydration and before native compilation; the controller enforces this latter
+admission gate. These are conservative operating thresholds, not estimates of
+the engine's eventual disk use. The failed D: engine attempt remains recovery
+evidence and its compiled outputs are never imported into F:. This is a local
+operational layout, not a canonical contributor-machine layout. It runs only pinned `Build.bat`
 `UnrealPak`, `ShaderCompileWorker`, and `UnrealEditor` Win64
 Development targets. It passes explicit local-only executor flags and at most
 `min(4, physical cores, floor((available RAM GiB - 6)/3),
@@ -270,18 +279,24 @@ rebuild. Each target is admitted through the shared resource monitor, so the
 receipt records three target admissions and the minimum/maximum admitted
 action limits on a completed three-target attempt.
 
-The attempt has one monotonic envelope: useful work stops by 330 minutes,
-owned-tree cleanup and lease release must be proven by 340 minutes, and the
-create-only local receipt must be written by 360 minutes. These are ceilings,
-not expected runtime or permission to launch an engine run. The existing
+The compatible default attempt retains 330 minutes of useful work. The
+explicit Issue #81 F: bootstrap selects 1,440 minutes (24 hours) of useful
+work, followed by up to 10 minutes for owned-process cleanup, up to 120
+minutes for final verification and checkpoint hashing, and up to 20 minutes
+for receipt publication and lease release. All deadlines are monotonic
+ceilings, not expected runtime or permission to launch an engine run. The
+shared lease covers validation through cleanup and checkpoint verification.
+The existing
 resource monitor samples at five-second intervals, rejects three consecutive
 low-RAM or low-commit samples, and maintains a 20 GiB free-space floor on each
 involved physical volume. Any missing product, unproven selected toolchain,
 nonzero exit, zero/unknown action plan, absent action progress, unchanged
 required executable, deadline, pressure, or unproven cleanup fails closed. No automatic retry is
-made; after a valid evidence root exists, failure logs/receipts remain on F:
-for diagnosis. The shared host lease is released only when owned-child cleanup
-is proven.
+made for compiler or resource failures; after a valid evidence root exists,
+failure logs, products, and receipts remain on F: for diagnosis. The D:
+supervisor keeps a small independent terminal receipt so loss of F: remains
+reportable. The shared host lease is released only after owned-child cleanup
+and final identity checks are proven.
 The shared lease is acquired **before** probing the engine source, tool inputs,
 and outputs, then held through the build. In particular, the fresh-output
 preflight rejects a reusable `UnrealBuildTool.dll`, its dependency CSV, and
@@ -293,15 +308,17 @@ manifest-listed Win64 engine/plugin files and the pinned
 payload pass with exact path case and matching SHA-1 hashes. Unlisted,
 changed, case-colliding, or reparse-mediated files fail closed.
 If the bounded fresh-host-tool attempt intentionally omits `Setup.bat`'s
-machine setup, hydrate dependencies directly from the pinned engine checkout:
+machine setup, hydrate dependencies directly from the pinned engine checkout.
+For this host, first copy and byte-verify the existing download cache to F:,
+then explicitly select it:
 
 ```powershell
 & (Join-Path $AethelnEngineRoot 'Engine\Binaries\DotNET\GitDependencies\win-x64\GitDependencies.exe') `
-  "--root=$AethelnEngineRoot" --no-cache --prompt
+  "--root=$AethelnEngineRoot" "--cache=$AethelnFDriveDependencyCache" --prompt
 ```
 
-This explicit-root, no-download-cache invocation hydrates source dependencies
-only. It does not perform `Setup.bat`'s Git-hook installation, redistributable
+This explicit-root invocation hydrates source dependencies only. It does not
+perform `Setup.bat`'s Git-hook installation, redistributable
 installation, or engine registration; record those omissions and verify any
 needed machine prerequisites separately before claiming Editor reproduction.
 For this optional fresh-checkout path, hydrate source dependencies first, then
@@ -312,7 +329,9 @@ Development Editor sequence remains documented in
 [Unreal Project Setup](unreal-project-setup.md).
 
 From a clean committed controller checkout, an authorized operator supplies
-existing validated paths and a *new* F: evidence root:
+existing validated paths and a *new* F: evidence root. The F: bootstrap uses
+the extended envelope and an independently registered, clean D: supervisor
+checkout at the same controller commit:
 
 ```powershell
 ./scripts/build/Invoke-HostToolProvisioning.ps1 -Execute `
@@ -320,19 +339,70 @@ existing validated paths and a *new* F: evidence root:
   -EvidenceRoot $AethelnNewFDriveEvidenceRoot `
   -HostLeasePath $AethelnExistingHostLeasePath `
   -CompilerPath $AethelnPinnedClExe `
-  -ResourceCompilerPath $AethelnPinnedRcExe
+  -ResourceCompilerPath $AethelnPinnedRcExe `
+  -UsefulWorkMinutes 1440 -VerificationMinutes 120 `
+  -SupervisorEvidenceRoot $AethelnNewDSupervisorEvidenceRoot `
+  -TempRoot $AethelnFDriveTempRoot `
+  -UbaRootDir $AethelnFDriveUbaRoot `
+  -NativeLogRoot $AethelnFDriveNativeLogRoot
 ```
 
-Review `host-tool-provisioning-receipt.json` and each target's local `build.log`
-before using a successful receipt as `-ProvisioningEvidence` for the **separate**
+The supervisor enforces AC power before launch and prevents only automatic
+idle sleep while the attempt runs. It samples resource headroom and the F:
+volume identity every five seconds, warns below 100 GiB free on F:, refuses
+another target below that threshold, and retains the 20 GiB emergency floor.
+Thirty minutes without log output is an alert, not proof that a compiler or
+linker has stalled. Each target's Unreal receipt and referenced-product
+closure are validated before its completion record and the next target. The
+controller creates a distinct, create-only child of the F: native-log root
+for each attempt; a continuation never rotates or overwrites an earlier
+attempt's UBT logs. The combined tool set is revalidated after all targets.
+
+A useful-work timeout can authorize **one** explicit continuation, not an
+automatic retry. Supply the prior D: receipt with its separately recorded
+SHA-256 using `-ResumeReceiptPath` and `-ResumeReceiptSha256`; both the prior
+D: and F: receipts, D: completion marker, publication result, and supervisor
+confirmation must cross-verify. Only a complete
+checkpoint created by this revised controller for the same F: engine path,
+source, controller, toolchain, configuration, and volume may be reused.
+Checkpoint hashing runs only after native children are quiescent. The
+continuation verifies the prior manifest through one pinned read handle,
+rehashes retained build logs and products for completed targets, and records
+which targets were reused. A verified continuation skips those completed
+targets and resumes unfinished work; interrupted actions may run again. If the
+first unfinished target already linked before interruption, a zero-action
+successful continuation is accepted only with the exact pinned UBT up-to-date
+signal, prior native-progress and log proof, valid target receipt, and complete
+product and identity checks; fresh targets still require positive actions.
+Compiler failures, resource pressure, F: loss, failed
+cleanup, and incomplete or damaged checkpoints require diagnosis rather than
+an automatic retry. Attempt 06 on D: is historical failure evidence, not a
+resumable checkpoint. Preserve outputs on failure; no clean rebuild or
+automatic deletion follows.
+
+Before attestation, require the controller's successful exit, no D:
+`publication-failed.json`, and the create-only D: `publication-confirmed.json`
+written by the supervisor after the publication worker exits successfully.
+The same-volume atomic rename to that final name is the durable publication
+commit point; a leftover temporary confirmation is not authoritative.
+Verify that confirmation against the D: `publication-result-*.json` whose
+`completedTicks` is before its `deadlineTicks`, the D: completion marker, and
+the SHA-256 values of both terminal receipts they name,
+as well as each target's local `build.log`. A completion marker can remain after
+a late write even when the controller rejects publication; neither that marker
+nor either receipt alone establishes success. The separate
+attestation command accepts `-ProvisioningEvidence` as an operator reference,
+so this cross-volume check is an explicit operator gate rather than a claim
+that attestation validates the marker itself. Only then use the successful
+evidence as `-ProvisioningEvidence` for the **separate**
 `Build-PackagedArtifacts.ps1 -Stage AttestHostTools` step below. The provisioner
 checks target-receipt metadata and referenced product closure before reporting
 success, but never creates an attestation. An existing mixed-output engine checkout is
 ineligible: use a separate fresh pinned checkout; this command never cleans or
-deletes those outputs. If the tools already exist unchanged and UBT
-performs zero actions, the provisioner does not relabel that incremental result
-as newly provisioned; use independently retained successful build evidence or
-escalate the non-clean provisioning gap. A successful provisioner fixture test
+deletes those outputs. On a fresh attempt, if the tools already exist unchanged
+and UBT performs zero actions, the provisioner does not relabel that
+incremental result as newly provisioned; use independently retained successful
+build evidence or escalate the non-clean provisioning gap. A successful provisioner fixture test
 does not prove a real engine run, clean Editor reproduction, packaged build,
 cache speedup, or Issue #81 completion. The provisioner receipt is local
 host-tool evidence only. For Issue #81's separate-workspace reproduction,

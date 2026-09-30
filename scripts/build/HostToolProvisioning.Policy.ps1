@@ -11,21 +11,31 @@ $script:HostToolProducts = @{
 $script:HostToolReceiptTypes = @{ UnrealEditor = 'Editor'; UnrealPak = 'Program'; ShaderCompileWorker = 'Program' }
 $script:HostToolIncludedProductTypes = @('Executable', 'DynamicLibrary', 'RequiredResource', 'BuildResource', 'Package')
 $script:HostToolExcludedProductTypes = @('SymbolFile', 'MapFile', 'StaticLibrary', 'ImportLibrary')
+. (Join-Path $PSScriptRoot 'HostToolProvisioning.Checkpoint.ps1')
 
 function New-HostToolAttemptEnvelope {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Returns immutable deadline values only; it changes no external state.')]
 	[CmdletBinding()]
-	param([Parameter(Mandatory)][long] $StartTicks, [Parameter(Mandatory)][long] $Frequency)
+	param([Parameter(Mandatory)][long] $StartTicks, [Parameter(Mandatory)][long] $Frequency,
+		[int] $UsefulWorkMinutes = 330, [int] $VerificationMinutes = 0)
+	if ($UsefulWorkMinutes -lt 1 -or $UsefulWorkMinutes -gt 1440 -or
+		$VerificationMinutes -lt 0 -or $VerificationMinutes -gt 120) { throw 'useful_work_minutes_invalid' }
 	if ($StartTicks -lt 0 -or $Frequency -lt 1) { throw 'monotonic_clock_unavailable' }
 	try {
-		# Match the accepted #167 supervisor scale: 330 useful, 340 cleanup,
-		# and 360 total minutes. The values are ceilings, not runtime estimates.
-		$Useful = [long] ([decimal] $StartTicks + [decimal] 19800 * [decimal] $Frequency)
-		$Cleanup = [long] ([decimal] $StartTicks + [decimal] 20400 * [decimal] $Frequency)
-		$Publication = [long] ([decimal] $StartTicks + [decimal] 21600 * [decimal] $Frequency)
+		$UsefulSeconds = [decimal] $UsefulWorkMinutes * 60
+		$CleanupSeconds = $UsefulSeconds + 600
+		$VerificationSeconds = $CleanupSeconds + [decimal] $VerificationMinutes * 60
+		$PublicationSeconds = $VerificationSeconds + 1200
+		$Useful = [long] ([decimal] $StartTicks + $UsefulSeconds * [decimal] $Frequency)
+		$Cleanup = [long] ([decimal] $StartTicks + $CleanupSeconds * [decimal] $Frequency)
+		$Verification = [long] ([decimal] $StartTicks + $VerificationSeconds * [decimal] $Frequency)
+		$Publication = [long] ([decimal] $StartTicks + $PublicationSeconds * [decimal] $Frequency)
 	} catch { throw 'monotonic_clock_unavailable' }
 	return [pscustomobject]@{ startTicks = $StartTicks; frequency = $Frequency;
-		usefulDeadlineTicks = $Useful; cleanupDeadlineTicks = $Cleanup; publicationDeadlineTicks = $Publication }
+		usefulSeconds = [long] $UsefulSeconds; cleanupSeconds = [long] $CleanupSeconds;
+		verificationSeconds = [long] $VerificationSeconds; publicationSeconds = [long] $PublicationSeconds;
+		usefulDeadlineTicks = $Useful; cleanupDeadlineTicks = $Cleanup;
+		verificationDeadlineTicks = $Verification; publicationDeadlineTicks = $Publication }
 }
 
 function New-HostToolEvidenceDirectory {
@@ -403,14 +413,64 @@ function Assert-HostToolEngineInputIdentity {
 function Get-HostToolBuildCommand {
 	[CmdletBinding()]
 	param([Parameter(Mandatory)][ValidateSet('UnrealEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
-		[Parameter(Mandatory)][int] $ActionLimit, [Parameter(Mandatory)][string] $BuildBatch)
+		[Parameter(Mandatory)][int] $ActionLimit, [Parameter(Mandatory)][string] $BuildBatch,
+		[string] $UbaRootDir, [string] $LogPath)
 	if ($ActionLimit -lt 1 -or $ActionLimit -gt 4) { throw 'action_limit_invalid' }
 	if ([string]::IsNullOrWhiteSpace($BuildBatch) -or $BuildBatch -match '["\x00-\x1f]') { throw 'build_path_invalid' }
-	return [pscustomobject]@{ executable = $BuildBatch; arguments = @(
+	if (($UbaRootDir.Length -gt 0) -ne ($LogPath.Length -gt 0)) { throw 'build_path_invalid' }
+	$Arguments = @(
 		$Target, 'Win64', 'Development', '-WaitMutex', '-NoHotReloadFromIDE',
 		'-UBA', '-UBADisableRemote', '-NoXGE', '-NoSNDBS', '-NoFASTBuild',
 		('-MaxParallelActions=' + $ActionLimit), '-Compiler=VisualStudio2022',
-		'-CompilerVersion=14.44.35207', '-WindowsSDKVersion=10.0.26100.0') }
+		'-CompilerVersion=14.44.35207', '-WindowsSDKVersion=10.0.26100.0')
+	if ($UbaRootDir.Length -gt 0) {
+		foreach ($Path in @($UbaRootDir, $LogPath)) {
+			if ($Path -cnotmatch '^[Ff]:\\' -or $Path -match '["\x00-\x1f]' -or $Path.Length -gt 240) { throw 'build_path_invalid' }
+		}
+		$Arguments += @(
+			('-UBARootDir=' + $UbaRootDir),
+			'-UBAStoreCapacityGb=40',
+			('-Log=' + $LogPath))
+	}
+	return [pscustomobject]@{ executable = $BuildBatch; arguments = $Arguments }
+}
+
+function Get-HostToolConfigurationSha256 {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)][string] $EngineRoot, [Parameter(Mandatory)][string] $UbaRootDir,
+		[Parameter(Mandatory)][string] $TempRoot, [Parameter(Mandatory)][string] $NativeLogRoot)
+	$Batch = Join-Path $EngineRoot 'Engine/Build/BatchFiles/Build.bat'
+	$Commands = @($script:HostToolTargets | ForEach-Object {
+		$Target = $_
+		$Log = Join-Path (Join-Path $NativeLogRoot '{ATTEMPT_ID}') ($Target + '.ubt.log')
+		$Command = Get-HostToolBuildCommand -Target $Target -ActionLimit 4 -BuildBatch $Batch -UbaRootDir $UbaRootDir -LogPath $Log
+		$Command.executable + ' ' + ($Command.arguments -join ' ')
+	})
+	$Text = @($EngineRoot, $UbaRootDir, $TempRoot, $NativeLogRoot,
+		'native-log-route-v2:create-only-per-attempt', 'TEMP=F', 'TMP=F', $Commands) -join "`n"
+	$Bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+	$Hasher = [Security.Cryptography.SHA256]::Create()
+	try { return ([BitConverter]::ToString($Hasher.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
+	finally { $Hasher.Dispose() }
+}
+
+function New-HostToolNativeLogAttemptRoot {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)][string] $NativeLogRoot,
+		[ValidatePattern('^[A-Z]$')][string] $RequiredDrive = 'F')
+	if ($NativeLogRoot -notmatch ('^' + $RequiredDrive + ':\\') -or
+		-not (Test-Path -LiteralPath $NativeLogRoot -PathType Container)) { throw 'native_log_root_invalid' }
+	Assert-InitialPreparationPlainPath -Path $NativeLogRoot -Reason 'native_log_root_invalid'
+	$AttemptRoot = Join-Path $NativeLogRoot ('attempt-' + [guid]::NewGuid().ToString('N'))
+	if ($AttemptRoot.Length + 1 + 'ShaderCompileWorker.ubt.log'.Length -gt 240) { throw 'native_log_root_invalid' }
+	Assert-InitialPreparationPlainPath -Path $AttemptRoot -Reason 'native_log_root_invalid'
+	return New-HostToolEvidenceDirectory -Path $AttemptRoot
+}
+
+function Get-HostToolProbeDeadlineReason {
+	param([long] $DeadlineTicks, [long] $UsefulDeadlineTicks)
+	if ($DeadlineTicks -eq $UsefulDeadlineTicks) { return 'useful_work_deadline' }
+	return 'identity_probe_deadline'
 }
 
 function Get-HostToolBuildProof {
@@ -443,6 +503,56 @@ function Get-HostToolBuildProof {
 	if ($Selected -ne 1) { throw 'tool_selection_unproven' }
 	if ($null -eq $Plan -or $Progress -lt 1) { throw 'actions_unproven' }
 	return [pscustomobject]@{ actionCount = [int] $Plan; progressCount = [int] $Progress; selectionVerified = $true }
+}
+
+function Get-HostToolBuildLogProof {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)][string] $LogPath, [Parameter(Mandatory)][string] $ToolDirectory,
+		[Parameter(Mandatory)][string] $SdkDirectory, [switch] $AllowNoAction)
+	Assert-InitialPreparationPlainPath -Path $LogPath -Reason 'build_log_invalid'
+	if (-not (Test-Path -LiteralPath $LogPath -PathType Leaf)) { throw 'build_log_invalid' }
+	$LogStream = [IO.File]::Open($LogPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+	try {
+		if ($LogStream.Length -lt 1 -or $LogStream.Length -gt 16777216) { throw 'build_log_invalid' }
+		$Hasher = [Security.Cryptography.SHA256]::Create()
+		try { $LogSha256 = ([BitConverter]::ToString($Hasher.ComputeHash($LogStream))).Replace('-', '').ToLowerInvariant() }
+		finally { $Hasher.Dispose() }
+		$LogStream.Position = 0
+		$Reader = New-Object IO.StreamReader($LogStream, (New-Object Text.UTF8Encoding($false, $true)), $true)
+		try {
+			$Lines = New-Object 'Collections.Generic.List[string]'
+			while ($null -ne ($Line = $Reader.ReadLine())) {
+				if ($Line.Length -gt 16384) { throw 'build_log_invalid' }
+				$Lines.Add($Line)
+				if ($Lines.Count -gt 200000) { throw 'actions_unproven' }
+			}
+			$NoActionMarker = @($Lines | Where-Object { $_ -ceq 'Target is up to date' }).Count
+			if ($AllowNoAction -and $NoActionMarker -eq 1) {
+				$Selected = 0; $ZeroPlan = 0
+				foreach ($Line in $Lines) {
+					if ($Line -cmatch '^Using Visual Studio 2022 14\.44\.35228 toolchain \((?<tool>[^\r\n]{1,4096})\) and Windows 10\.0\.26100\.0 SDK \((?<sdk>[^\r\n]{1,4096})\)\.$') {
+						$Selected++
+						if ($Selected -gt 1 -or
+							-not [string]::Equals([IO.Path]::GetFullPath($Matches.tool).TrimEnd('\', '/'), [IO.Path]::GetFullPath($ToolDirectory).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -or
+							-not [string]::Equals([IO.Path]::GetFullPath($Matches.sdk).TrimEnd('\', '/'), [IO.Path]::GetFullPath($SdkDirectory).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) { throw 'tool_selection_mismatch' }
+					} elseif ($Line.StartsWith('Using ', [StringComparison]::Ordinal) -and
+						($Line.Contains(' toolchain (') -or $Line.Contains(' SDK ('))) { throw 'tool_selection_mismatch' }
+					if ($Line -cmatch '^Using [^\r\n]{1,512} executor to run 0 action\(s\)$') { $ZeroPlan++ }
+					elseif ($Line.StartsWith('Using ', [StringComparison]::Ordinal) -and $Line.Contains(' executor to run ')) { throw 'actions_unproven' }
+					if ($Line -cmatch '^\[[0-9]+/[0-9]+\] ') { throw 'actions_unproven' }
+				}
+				if ($ZeroPlan -gt 1) { throw 'actions_unproven' }
+				$Proof = [pscustomobject]@{ actionCount = 0; progressCount = 0;
+					selectionVerified = ($Selected -eq 1); recoveredNoOp = $true }
+			} else {
+				$Proof = Get-HostToolBuildProof -Lines $Lines.ToArray() -ToolDirectory $ToolDirectory -SdkDirectory $SdkDirectory
+			}
+		} finally { $Reader.Dispose() }
+	} finally { $LogStream.Dispose() }
+	$RecoveredNoOp = $null -ne $Proof.PSObject.Properties['recoveredNoOp'] -and $Proof.recoveredNoOp -eq $true
+	return [pscustomobject]@{ actionCount = $Proof.actionCount; progressCount = $Proof.progressCount;
+		selectionVerified = $Proof.selectionVerified; recoveredNoOp = $RecoveredNoOp;
+		logSha256 = $LogSha256 }
 }
 
 function Get-HostToolProductState {
@@ -480,10 +590,13 @@ function Assert-HostToolProductChange {
 
 function Assert-HostToolReceiptSet {
 	[CmdletBinding()]
-	param([Parameter(Mandatory)][string] $EngineRoot)
+	param([Parameter(Mandatory)][string] $EngineRoot, [string[]] $Targets = $script:HostToolTargets)
+	if ($Targets.Count -lt 1 -or $Targets.Count -gt 3 -or
+		@($Targets | Where-Object { $script:HostToolTargets -cnotcontains $_ }).Count -gt 0 -or
+		(@($Targets | Select-Object -Unique).Count -ne $Targets.Count)) { throw 'target_receipt_invalid' }
 	$Seen = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
 	$TotalBytes = [long] 0
-	foreach ($Target in $script:HostToolTargets) {
+	foreach ($Target in $Targets) {
 		$ReceiptRelative = 'Engine/Binaries/Win64/' + $Target + '.target'
 		$ReceiptPath = Join-Path $EngineRoot $ReceiptRelative
 		Assert-InitialPreparationPlainPath -Path $ReceiptPath -Reason 'target_receipt_invalid'
@@ -550,12 +663,25 @@ function Invoke-HostToolProvisioningSequence {
 	[CmdletBinding()]
 	param([Parameter(Mandatory)][string[]] $Targets, [Parameter(Mandatory)][scriptblock] $ReadTicks,
 		[Parameter(Mandatory)][long] $UsefulDeadlineTicks, [Parameter(Mandatory)][long] $CleanupDeadlineTicks,
-		[scriptblock] $ReadCapacity, [scriptblock] $AdmitTarget, [Parameter(Mandatory)][scriptblock] $InvokeBuild)
+		[scriptblock] $ReadCapacity, [scriptblock] $AdmitTarget, [Parameter(Mandatory)][scriptblock] $InvokeBuild,
+		[object[]] $CompletedResults = @(), [string] $RecoverableTarget, [scriptblock] $OnTargetCompleted)
 	if ($Targets.Count -ne 3 -or ($Targets -join ',') -cne ($script:HostToolTargets -join ',') -or
 		$UsefulDeadlineTicks -le 0 -or $CleanupDeadlineTicks -le $UsefulDeadlineTicks -or
-		(($null -eq $ReadCapacity) -eq ($null -eq $AdmitTarget))) { throw 'provisioning_plan_invalid' }
+		(($null -eq $ReadCapacity) -eq ($null -eq $AdmitTarget)) -or $CompletedResults.Count -gt 3 -or
+		(-not [string]::IsNullOrWhiteSpace($RecoverableTarget) -and
+			($CompletedResults.Count -ge $Targets.Count -or $RecoverableTarget -cne $Targets[$CompletedResults.Count]))) { throw 'provisioning_plan_invalid' }
 	$Results = New-Object Collections.ArrayList
-	foreach ($Target in $Targets) {
+	for ($TargetIndex = 0; $TargetIndex -lt $Targets.Count; $TargetIndex++) {
+		$Target = $Targets[$TargetIndex]
+		if ($TargetIndex -lt $CompletedResults.Count) {
+			$Completed = $CompletedResults[$TargetIndex]
+			if ($Completed.target -cne $Target -or $Completed.nativeExitCode -ne 0 -or
+				$Completed.cleanupVerified -ne $true -or $Completed.productsVerified -ne $true -or
+				$Completed.logSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+				$Completed.actionCount -lt 1 -or $Completed.progressCount -lt 1) { throw 'checkpoint_targets_invalid' }
+			[void] $Results.Add($Completed)
+			continue
+		}
 		$Tick = & $ReadTicks
 		if ($Tick -isnot [long] -and $Tick -isnot [int]) { throw 'monotonic_clock_unavailable' }
 		if ([long] $Tick -ge $UsefulDeadlineTicks) { throw 'useful_work_deadline' }
@@ -565,14 +691,31 @@ function Invoke-HostToolProvisioningSequence {
 		$Result = & $InvokeBuild $Target $Limit
 		if ($null -eq $Result -or $Result.target -cne $Target -or $Result.cleanupVerified -isnot [bool] -or -not $Result.cleanupVerified) { throw 'cleanup_unproven' }
 		if (($Result.nativeExitCode -isnot [int] -and $Result.nativeExitCode -isnot [long]) -or $Result.nativeExitCode -ne 0) { throw 'native_build_failed' }
-		if ($Result.selectionVerified -isnot [bool] -or -not $Result.selectionVerified) { throw 'tool_selection_unproven' }
-		if (($Result.actionCount -isnot [int] -and $Result.actionCount -isnot [long]) -or $Result.actionCount -lt 1 -or
-			($Result.progressCount -isnot [int] -and $Result.progressCount -isnot [long]) -or $Result.progressCount -lt 1) { throw 'actions_unproven' }
+		$RecoveredNoOp = $null -ne $Result.PSObject.Properties['recoveredNoOp'] -and $Result.recoveredNoOp -eq $true
+		if ($RecoveredNoOp) {
+			$RecoverySource = if ($null -ne $Result.PSObject.Properties['recoverySourceReceiptSha256']) { $Result.recoverySourceReceiptSha256 } else { $null }
+			if ($Target -cne $RecoverableTarget -or $Result.actionCount -ne 0 -or $Result.progressCount -ne 0 -or
+				$Result.targetReceiptVerified -ne $true -or
+				($Result.selectionVerified -isnot [bool]) -or
+				$RecoverySource -cnotmatch '^[0-9a-f]{64}$' -or
+				($Result.actionCount -isnot [int] -and $Result.actionCount -isnot [long]) -or
+				($Result.progressCount -isnot [int] -and $Result.progressCount -isnot [long])) { throw 'recovered_noop_unproven' }
+		} else {
+			if ($Result.selectionVerified -isnot [bool] -or -not $Result.selectionVerified) { throw 'tool_selection_unproven' }
+			if (($Result.actionCount -isnot [int] -and $Result.actionCount -isnot [long]) -or $Result.actionCount -lt 1 -or
+				($Result.progressCount -isnot [int] -and $Result.progressCount -isnot [long]) -or $Result.progressCount -lt 1) { throw 'actions_unproven' }
+		}
 		if ($Result.productsVerified -isnot [bool] -or -not $Result.productsVerified) { throw 'products_unproven' }
 		if ($Result.logSha256 -isnot [string] -or $Result.logSha256 -cnotmatch '^[0-9a-f]{64}$' -or @($Result.command).Count -lt 2) { throw 'build_evidence_invalid' }
+		$LogPath = if ($null -ne $Result.PSObject.Properties['logPath']) { $Result.logPath } else { $null }
+		$RecoverySource = if ($null -ne $Result.PSObject.Properties['recoverySourceReceiptSha256']) { $Result.recoverySourceReceiptSha256 } else { $null }
 		[void] $Results.Add([pscustomobject]@{ target = $Target; actionLimit = [int] $Limit; nativeExitCode = 0;
 			actionCount = [int] $Result.actionCount; progressCount = [int] $Result.progressCount;
-			cleanupVerified = $true; productsVerified = $true; command = @($Result.command); logSha256 = $Result.logSha256 })
+			cleanupVerified = $true; productsVerified = $true; command = @($Result.command);
+			logPath = $LogPath; logSha256 = $Result.logSha256; recoveredNoOp = $RecoveredNoOp;
+			targetReceiptVerified = $(if ($RecoveredNoOp) { $true } else { $false });
+			recoverySourceReceiptSha256 = $RecoverySource })
+		if ($null -ne $OnTargetCompleted) { $null = & $OnTargetCompleted $Target @($Results) }
 	}
 	$Tick = & $ReadTicks
 	if (($Tick -isnot [long] -and $Tick -isnot [int]) -or [long] $Tick -ge $CleanupDeadlineTicks) { throw 'cleanup_deadline' }
