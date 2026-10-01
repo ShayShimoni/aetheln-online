@@ -40,6 +40,7 @@ function New-FixtureZip {
 	try {
 		foreach ($Spec in $Entries) {
 			$Entry = $Archive.CreateEntry([string] $Spec.name, [IO.Compression.CompressionLevel]::Optimal)
+			$Entry.LastWriteTime = [DateTimeOffset]'2000-01-01T00:00:00Z'
 			if ($Spec.PSObject.Properties.Name -ccontains 'externalAttributes') { $Entry.ExternalAttributes = [int] $Spec.externalAttributes }
 			$Stream = $Entry.Open()
 			try {
@@ -53,11 +54,21 @@ function New-FixtureZip {
 	return $Buffer.ToArray()
 }
 
+$TimestampFixture = New-FixtureZip @([pscustomobject]@{name='timestamp.txt';bytes='stable'})
+$TimestampBuffer = New-Object IO.MemoryStream(,$TimestampFixture)
+$TimestampArchive = New-Object IO.Compression.ZipArchive($TimestampBuffer, [IO.Compression.ZipArchiveMode]::Read)
+try {
+	Assert-True ($TimestampArchive.Entries[0].LastWriteTime.DateTime -eq [datetime]'2000-01-01T00:00:00') 'Fixture ZIP entries must use a fixed timestamp so artifact digests remain stable across API calls.'
+} finally { $TimestampArchive.Dispose(); $TimestampBuffer.Dispose() }
+
 function Get-Sha256([byte[]] $Bytes) {
 	$Algorithm = [Security.Cryptography.SHA256]::Create()
 	try { return ([BitConverter]::ToString($Algorithm.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
 	finally { $Algorithm.Dispose() }
 }
+
+Start-Sleep -Milliseconds 2100
+Assert-True ((Get-Sha256 $TimestampFixture) -ceq (Get-Sha256 (New-FixtureZip @([pscustomobject]@{name='timestamp.txt';bytes='stable'})))) 'Identical fixture ZIPs must have the same digest across a ZIP timestamp boundary.'
 
 function New-FixtureActions {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture.')]
