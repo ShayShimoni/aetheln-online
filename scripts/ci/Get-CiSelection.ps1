@@ -379,7 +379,9 @@ function Get-PathCheckSelection {
 	$PortableOnlyPaths = @(
 		'scripts/ci/Invoke-CiSuite.ps1',
 		'scripts/ci/Test-FormattingPolicy.ps1',
-		'scripts/ci/Test-MarkdownLinks.ps1'
+		'scripts/ci/Test-MarkdownLinks.ps1',
+		'scripts/tests/Test-ObservabilityContract.ps1',
+		'scripts/tests/Test-SourceControlPolicy.ps1'
 	)
 	if ($PortableOnlyPaths -ccontains $Path -or $Path -cmatch '^docs/.+' -or $Path -cmatch '^output/pdf/.+' -or
 		$Path -cmatch '^tests/.+\.(ps1|md)$' -or $Path -cmatch '^[^/]+\.md$' -or

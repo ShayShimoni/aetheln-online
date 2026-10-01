@@ -36,6 +36,7 @@ jobs:
       AETHELN_ACCEPTED_CONTROL: ${{ github.workspace }}/ci-selection-control-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Fetch immutable comparison objects
+        id: comparison
         shell: powershell
         env:
           AETHELN_GITHUB_TOKEN: ${{ github.token }}
@@ -70,7 +71,7 @@ jobs:
               @($HeadSha, 'refs/aetheln/head'),
               @($WorkflowSha, 'refs/aetheln/workflow')
             )) {
-              & git --git-dir=$env:AETHELN_CONTROL_REPO fetch --no-tags --depth=2 $Remote "+$($Fetch[0]):$($Fetch[1])"
+              & git --git-dir=$env:AETHELN_CONTROL_REPO fetch --no-tags $Remote "+$($Fetch[0]):$($Fetch[1])"
               if ($LASTEXITCODE -ne 0) { throw 'immutable_object_fetch_failed' }
               $ResolvedOutput = @(& git --git-dir=$env:AETHELN_CONTROL_REPO rev-parse $Fetch[1] | ForEach-Object { "$_" })
               if ($LASTEXITCODE -ne 0 -or $ResolvedOutput.Count -ne 1 -or [string] $ResolvedOutput[0] -cne $Fetch[0]) { throw 'immutable_object_identity_mismatch' }
@@ -81,9 +82,19 @@ jobs:
             $env:GIT_CONFIG_KEY_0 = $null
             $env:GIT_CONFIG_VALUE_0 = $null
           }
+          $Shallow = @(& git --git-dir=$env:AETHELN_CONTROL_REPO rev-parse --is-shallow-repository | ForEach-Object { "$_" })
+          if ($LASTEXITCODE -ne 0 -or $Shallow.Count -ne 1 -or $Shallow[0] -cne 'false') { throw 'comparison_ancestry_incomplete' }
+          $ParentOutput = @(& git --git-dir=$env:AETHELN_CONTROL_REPO show -s --format=%P $WorkflowSha | ForEach-Object { "$_" })
+          if ($LASTEXITCODE -ne 0 -or $ParentOutput.Count -ne 1 -or $ParentOutput[0] -cnotmatch '^[0-9a-f]{40} [0-9a-f]{40}$') { throw 'workflow_revision_parents_invalid' }
+          $Parents = $ParentOutput[0].Split(' ')
+          $AcceptedSha = [string] $Parents[0]
+          if ($AcceptedSha -ceq $HeadSha -or $Parents[1] -cne $HeadSha) { throw 'workflow_revision_parents_invalid' }
+          & git --git-dir=$env:AETHELN_CONTROL_REPO merge-base --is-ancestor $BaseSha $AcceptedSha
+          if ($LASTEXITCODE -ne 0) { throw 'event_base_not_accepted_ancestor' }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "accepted_base_sha=$AcceptedSha`n", (New-Object Text.UTF8Encoding($false)))
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ steps.comparison.outputs.accepted_base_sha }}
           path: ci-selection-control-${{ github.run_id }}-${{ github.run_attempt }}
           fetch-depth: 1
           lfs: false
@@ -96,6 +107,7 @@ jobs:
         env:
           AETHELN_CONTROL_REPO: ${{ runner.temp }}/ci-selection-objects-${{ github.run_id }}-${{ github.run_attempt }}.git
           AETHELN_SHADOW_REPORT: ${{ runner.temp }}/ci-selection-shadow.json
+          AETHELN_ACCEPTED_BASE_SHA: ${{ steps.comparison.outputs.accepted_base_sha }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -103,6 +115,8 @@ jobs:
           $BaseSha = [string] $env:AETHELN_PR_BASE_SHA
           $HeadSha = [string] $env:AETHELN_PR_HEAD_SHA
           $WorkflowSha = [string] $env:AETHELN_WORKFLOW_SHA
+          $AcceptedSha = [string] $env:AETHELN_ACCEPTED_BASE_SHA
+          if ($AcceptedSha -cnotmatch '^[0-9a-f]{40}$' -or $AcceptedSha -ceq $HeadSha) { throw 'accepted_base_invalid' }
           $SelectorPath = Join-Path $env:AETHELN_ACCEPTED_CONTROL 'scripts/ci/Get-CiSelection.ps1'
           $ContextPath = Join-Path '${{ runner.temp }}' 'ci-selection-context.json'
           $Utf8 = New-Object System.Text.UTF8Encoding $false
@@ -161,14 +175,14 @@ jobs:
             kind = 'pull_request'
             runId = '${{ github.run_id }}'
             runAttempt = [int] '${{ github.run_attempt }}'
-            baseRevision = $BaseSha
+            baseRevision = $AcceptedSha
             headRevision = $HeadSha
             workflowRevision = $WorkflowSha
-            controllerRevision = $BaseSha
+            controllerRevision = $AcceptedSha
           }
           [IO.File]::WriteAllText($ContextPath, (ConvertTo-Json -InputObject $Context -Compress), $Utf8)
 
-          $BlobQuery = "${BaseSha}:scripts/ci/Get-CiSelection.ps1"
+          $BlobQuery = "${AcceptedSha}:scripts/ci/Get-CiSelection.ps1"
           $PreviousPreference = $ErrorActionPreference
           $ErrorActionPreference = 'Continue'
           try {
@@ -190,6 +204,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'accepted_controller_failed' }
           }
           else {
+            $NonceBytes = [byte[]]::new(32)
+            $Generator = $null
+            try {
+              $Generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+              $Generator.GetBytes($NonceBytes)
+            }
+            catch { throw 'attempt_anchor_rng_failed' }
+            finally { if ($null -ne $Generator) { $Generator.Dispose() } }
+            $Nonce = [BitConverter]::ToString($NonceBytes).Replace('-', '').ToLowerInvariant()
+            if ($Nonce -ceq ('0' * 64)) { throw 'attempt_anchor_rng_invalid' }
             $CheckIds = @(
               'portable',
               'visual-package',
@@ -205,11 +229,12 @@ jobs:
             })
             $Report = [ordered]@{
               schemaVersion = 'aetheln.ci-selection/v1'
+              attemptAnchor = [ordered]@{ schemaVersion = 'aetheln.current-attempt-anchor/v1'; runId = '${{ github.run_id }}'; runAttempt = [int] '${{ github.run_attempt }}'; nonce = $Nonce }
               policy = [ordered]@{ version = 'shadow-v1'; digest = ('0' * 64); checkIds = $CheckIds }
-              source = [ordered]@{ kind = 'pull_request'; callerKind = $null; baseRevision = $BaseSha; headRevision = $HeadSha; workflowRevision = $WorkflowSha; revision = $null }
+              source = [ordered]@{ kind = 'pull_request'; callerKind = $null; baseRevision = $AcceptedSha; headRevision = $HeadSha; workflowRevision = $WorkflowSha; revision = $null }
               execution = [ordered]@{
                 mode = 'accepted_controller_unavailable'
-                controllerRevision = $BaseSha
+                controllerRevision = $AcceptedSha
                 controllerBlobOid = $null
                 controllerSha256 = $null
                 checkoutAllowed = $false
