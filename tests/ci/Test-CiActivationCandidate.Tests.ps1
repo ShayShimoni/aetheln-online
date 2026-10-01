@@ -44,6 +44,7 @@ function Get-FixtureSha256 {
 }
 
 function New-FixturePolicy {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory policy fixture.')]
 	param([string] $SelectorSha256 = (Get-FixtureSha256 'scripts/ci/Get-CiSelection.ps1'))
 	$Pinned = @(
 		[ordered]@{path='scripts/ci/Get-CiSelection.ps1';sha256=$SelectorSha256},
@@ -62,17 +63,17 @@ function New-FixturePolicy {
 	}
 }
 
-function New-CandidateCommit {
+function Invoke-FixtureCandidateCommit {
 	param([string] $WorkflowText, [switch] $WithExtraPath)
-	Invoke-FixtureGit checkout --detach $script:BaseRevision
+	Invoke-FixtureGit -Arguments @('checkout','--detach',$script:BaseRevision)
 	Write-FixtureFile '.github/workflows/prototype-quality-gates.yml' $WorkflowText
 	if ($WithExtraPath) { Write-FixtureFile 'unexpected.txt' 'unexpected' }
-	Invoke-FixtureGit add --all
-	Invoke-FixtureGit commit -m candidate
+	Invoke-FixtureGit -Arguments @('add','--all')
+	Invoke-FixtureGit -Arguments @('commit','-m','candidate')
 	return (& git -C $FixtureRepository rev-parse HEAD).Trim()
 }
 
-function New-TestedMergeCommit {
+function Invoke-FixtureTestedMergeCommit {
 	param([string] $Base, [string] $Head, [switch] $ReverseParents, [string] $TreeRevision = $Head)
 	$Tree = (& git -C $FixtureRepository rev-parse ($TreeRevision + '^{tree}')).Trim()
 	if ($LASTEXITCODE -ne 0) { throw 'Fixture tree resolution failed.' }
@@ -97,10 +98,10 @@ try {
 	[void] (New-Item -ItemType Directory -Path $FixtureRepository -Force)
 	& git -C $FixtureRepository init --quiet
 	if ($LASTEXITCODE -ne 0) { throw 'Fixture repository initialization failed.' }
-	Invoke-FixtureGit config user.name 'Activation Fixture'
-	Invoke-FixtureGit config user.email 'activation@example.invalid'
-	Invoke-FixtureGit config core.autocrlf false
-	Invoke-FixtureGit config advice.detachedHead false
+	Invoke-FixtureGit -Arguments @('config','user.name','Activation Fixture')
+	Invoke-FixtureGit -Arguments @('config','user.email','activation@example.invalid')
+	Invoke-FixtureGit -Arguments @('config','core.autocrlf','false')
+	Invoke-FixtureGit -Arguments @('config','advice.detachedHead','false')
 	Write-FixtureFile '.github/workflows/prototype-quality-gates.yml' "name: Shadow`njobs: {}`n"
 	Write-FixtureFile 'scripts/ci/activation/prototype-quality-gates.yml' "name: Active`njobs: {}`n"
 	Write-FixtureFile 'scripts/ci/Invoke-CiAcceptanceAggregate.ps1' "'aggregate'`n"
@@ -108,14 +109,14 @@ try {
 	Write-FixtureFile 'scripts/ci/ci-acceptance-requirements.json' "{`"schemaVersion`":`"fixture`"}`n"
 	Write-FixtureFile 'scripts/ci/Get-CiSelection.ps1' "'selector'`n"
 	Write-FixtureFile $PolicyRepositoryPath ((New-FixturePolicy | ConvertTo-Json -Depth 6) + "`n")
-	Invoke-FixtureGit add --all
-	Invoke-FixtureGit commit -m base
+	Invoke-FixtureGit -Arguments @('add','--all')
+	Invoke-FixtureGit -Arguments @('commit','-m','base')
 	$script:BaseRevision = (& git -C $FixtureRepository rev-parse HEAD).Trim()
 	$script:AcceptedPolicySha256 = Get-FixtureSha256 $PolicyRepositoryPath
 	$TemplateText = [IO.File]::ReadAllText((Join-Path $FixtureRepository 'scripts/ci/activation/prototype-quality-gates.yml'))
 
-	$ValidHead = New-CandidateCommit -WorkflowText $TemplateText
-	$ValidTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $ValidHead
+	$ValidHead = Invoke-FixtureCandidateCommit -WorkflowText $TemplateText
+	$ValidTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ValidHead
 	$Report = Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ValidHead -Tested $ValidTested
 	Assert-True ($Report.decision.approved -and $Report.decision.complete -and $Report.decision.reason -ceq 'exact_accepted_template') 'Exact accepted template should pass.'
 	Assert-True ($Report.changedPaths.Count -eq 1 -and $Report.changedPaths[0] -ceq '.github/workflows/prototype-quality-gates.yml') 'Activation scope should contain only the live workflow.'
@@ -133,12 +134,12 @@ try {
 	$Written = ($CliOutput -join "`n") | ConvertFrom-Json
 	Assert-True ($Written.headRevision -ceq $ValidHead -and $Written.testedRevision -ceq $ValidTested -and $Written.decision.approved) 'Stdout report should preserve the verified identity.'
 
-	$WrongTemplateHead = New-CandidateCommit -WorkflowText "name: Candidate-controlled`njobs: {}`n"
-	$WrongTemplateTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $WrongTemplateHead
+	$WrongTemplateHead = Invoke-FixtureCandidateCommit -WorkflowText "name: Candidate-controlled`njobs: {}`n"
+	$WrongTemplateTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $WrongTemplateHead
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $WrongTemplateHead -Tested $WrongTemplateTested } 'activation_template_mismatch'
 
-	$ExtraPathHead = New-CandidateCommit -WorkflowText $TemplateText -WithExtraPath
-	$ExtraPathTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $ExtraPathHead
+	$ExtraPathHead = Invoke-FixtureCandidateCommit -WorkflowText $TemplateText -WithExtraPath
+	$ExtraPathTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ExtraPathHead
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ExtraPathHead -Tested $ExtraPathTested } 'activation_scope_invalid'
 
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $script:BaseRevision -Tested $ValidTested } 'activation_revision_invalid'
@@ -148,10 +149,13 @@ try {
 	Assert-Rejected { ConvertFrom-CiActivationPolicyBytes -Bytes $Utf8.GetBytes($PolicyRaw) } 'activation_policy_duplicate_property'
 	$WrongPathRaw = $Utf8.GetString($PolicyBytes).Replace($PolicyRepositoryPath, 'attacker/policy.json')
 	Assert-Rejected { ConvertFrom-CiActivationPolicyBytes -Bytes $Utf8.GetBytes($WrongPathRaw) } 'activation_policy_schema_invalid'
+	$NewlineRepositoryRaw = $Utf8.GetString($PolicyBytes).Replace('ShayShimoni/aetheln-online', "ShayShimoni/aetheln-online`n")
+	Assert-Rejected { ConvertFrom-CiActivationPolicyBytes -Bytes $Utf8.GetBytes($NewlineRepositoryRaw) } 'activation_policy_schema_invalid'
+	Assert-True (-not (Test-ActivationRevision (('a' * 40) + "`n")) -and -not (Test-ActivationSha256 (('a' * 64) + "`n"))) 'Revision and SHA validators must reject trailing-newline bypasses.'
 
-	$WrongParentTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -ReverseParents
+	$WrongParentTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -ReverseParents
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ValidHead -Tested $WrongParentTested } 'activation_tested_parents_mismatch'
-	$WrongTreeTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -TreeRevision $script:BaseRevision
+	$WrongTreeTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -TreeRevision $script:BaseRevision
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ValidHead -Tested $WrongTreeTested } 'activation_tested_tree_mismatch'
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $ValidHead -Head $script:BaseRevision -Tested $ValidTested -ExpectedBase $ValidHead } 'activation_base_mismatch'
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base ('0' * 40) -Head $ValidHead -Tested $ValidTested -ExpectedBase ('0' * 40) } 'activation_revision_missing'
@@ -159,18 +163,18 @@ try {
 
 	# A different repository history cannot self-issue its own accepted policy:
 	# caller-supplied trusted pins are checked before any policy field is parsed.
-	Invoke-FixtureGit checkout --detach $script:BaseRevision
+	Invoke-FixtureGit -Arguments @('checkout','--detach',$script:BaseRevision)
 	$HostilePolicyPath = Join-Path $FixtureRepository ($PolicyRepositoryPath -replace '/','\')
 	$HostilePolicy = [IO.File]::ReadAllText($HostilePolicyPath).Replace('ShayShimoni/aetheln-online', 'attacker/self-issued')
 	[IO.File]::WriteAllText($HostilePolicyPath, $HostilePolicy, $Utf8)
-	Invoke-FixtureGit add --all
-	Invoke-FixtureGit commit -m hostile-base-policy
+	Invoke-FixtureGit -Arguments @('add','--all')
+	Invoke-FixtureGit -Arguments @('commit','-m','hostile-base-policy')
 	$HostileBase = (& git -C $FixtureRepository rev-parse HEAD).Trim()
 	Write-FixtureFile '.github/workflows/prototype-quality-gates.yml' $TemplateText
-	Invoke-FixtureGit add --all
-	Invoke-FixtureGit commit -m hostile-activation
+	Invoke-FixtureGit -Arguments @('add','--all')
+	Invoke-FixtureGit -Arguments @('commit','-m','hostile-activation')
 	$HostileHead = (& git -C $FixtureRepository rev-parse HEAD).Trim()
-	$HostileTested = New-TestedMergeCommit -Base $HostileBase -Head $HostileHead
+	$HostileTested = Invoke-FixtureTestedMergeCommit -Base $HostileBase -Head $HostileHead
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $HostileBase -Head $HostileHead -Tested $HostileTested } 'activation_accepted_base_mismatch'
 
 	# Executable discovery is machine-rooted and signed; PATH fakes must not run.
@@ -242,13 +246,13 @@ namespace AethelnPathFixture {
 	Assert-Rejected { Invoke-ActivationGitBytes -Root $FixtureRepository -Arguments @('cat-file','blob',$ExactBlobOid) -MaximumBytes 4095 -MaximumErrorBytes 1024 } 'activation_git_output_limit'
 	$StderrScript = Join-Path $FixtureRoot 'stderr.cmd'
 	[IO.File]::WriteAllText($StderrScript, "@echo off`r`npowershell.exe -NoProfile -Command `"[Console]::Error.Write('x' * 4096)`"`r`nexit /b 1`r`n", $Utf8)
-	Invoke-FixtureGit config alias.aetheln-stderr ('!' + $StderrScript.Replace('\','/'))
+	Invoke-FixtureGit -Arguments @('config','alias.aetheln-stderr',('!' + $StderrScript.Replace('\','/')))
 	Assert-Rejected { Invoke-ActivationGitBytes -Root $FixtureRepository -Arguments @('aetheln-stderr') -MaximumBytes 1024 -MaximumErrorBytes 1024 } 'activation_git_output_limit'
 	$TimeoutMarker = Join-Path $FixtureRoot 'timeout-marker.txt'
 	$TimeoutScript = Join-Path $FixtureRoot 'timeout.cmd'
 	$TimeoutCommand = "Start-Sleep -Seconds 3; [IO.File]::WriteAllText('$($TimeoutMarker.Replace("'","''"))','leaked')"
 	[IO.File]::WriteAllText($TimeoutScript, "@echo off`r`npowershell.exe -NoProfile -Command `"$TimeoutCommand`"`r`n", $Utf8)
-	Invoke-FixtureGit config alias.aetheln-timeout ('!' + $TimeoutScript.Replace('\','/'))
+	Invoke-FixtureGit -Arguments @('config','alias.aetheln-timeout',('!' + $TimeoutScript.Replace('\','/')))
 	$OriginalPath = [Environment]::GetEnvironmentVariable('PATH', [EnvironmentVariableTarget]::Process)
 	$OriginalFakeMarker = [Environment]::GetEnvironmentVariable('AETHELN_FAKE_EXEC_MARKER', [EnvironmentVariableTarget]::Process)
 	try {

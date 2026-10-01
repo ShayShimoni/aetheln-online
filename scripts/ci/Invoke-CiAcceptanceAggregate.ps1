@@ -44,7 +44,7 @@ $script:SelectorCheckIds = @('portable','visual-package','native-client-server-c
 # obligation from here only after its evidence bytes have an exact semantic parser.
 $script:AcceptanceUnsupportedCheckIds = @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof')
 $script:AcceptancePortableCheckNames = @(
-	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','host-tool-provisioning-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
+	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','host-tool-provisioning-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
 )
 
 function New-AggregateBudget {
@@ -168,10 +168,10 @@ function Assert-ClosedObject {
 	foreach ($Name in $Names) { if ($Actual -cnotcontains $Name) { throw $Reason } }
 }
 
-function Test-Revision($Value) { return $Value -is [string] -and $Value -cmatch '^[0-9a-f]{40}$' }
-function Test-Sha256($Value) { return $Value -is [string] -and $Value -cmatch '^[0-9a-f]{64}$' }
+function Test-Revision($Value) { return $Value -is [string] -and $Value -cmatch '\A[0-9a-f]{40}\z' }
+function Test-Sha256($Value) { return $Value -is [string] -and $Value -cmatch '\A[0-9a-f]{64}\z' }
 function Test-DecimalIdentity($Value) {
-	if ($Value -isnot [string] -or $Value -cnotmatch '^[1-9][0-9]{0,18}$') { return $false }
+	if ($Value -isnot [string] -or $Value -cnotmatch '\A[1-9][0-9]{0,18}\z') { return $false }
 	[long] $Parsed = 0
 	return [long]::TryParse($Value, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $Parsed) -and $Parsed -gt 0
 }
@@ -181,7 +181,7 @@ function Assert-AttemptAnchor {
 	Assert-ClosedObject -Value $Anchor -Names @('schemaVersion','runId','runAttempt','nonce') -Reason $Reason
 	if ($Anchor.schemaVersion -isnot [string] -or $Anchor.schemaVersion -cne $script:AttemptAnchorSchema -or
 		-not (Test-DecimalIdentity $Anchor.runId) -or $Anchor.runAttempt -isnot [int] -or $Anchor.runAttempt -lt 1 -or
-		$Anchor.nonce -isnot [string] -or $Anchor.nonce -cnotmatch '^[0-9a-f]{64}$' -or $Anchor.nonce -cmatch '^0{64}$' -or
+		$Anchor.nonce -isnot [string] -or $Anchor.nonce -cnotmatch '\A[0-9a-f]{64}\z' -or $Anchor.nonce -cmatch '\A0{64}\z' -or
 		$Anchor.runId -cne $Run.id -or $Anchor.runAttempt -ne $Run.attempt) { throw $Reason }
 }
 function Test-GitHubLogin($Value) { return $Value -is [string] -and $Value -cmatch '^[A-Za-z0-9][A-Za-z0-9_\-\[\]]{0,99}$' }
@@ -258,7 +258,7 @@ function Read-StrictCiArchive {
 	return [pscustomobject][ordered]@{ sha256 = Get-Sha256Hex $Bytes; sizeBytes = [long] $Bytes.Length; entries = $Entries.ToArray() }
 }
 
-function Assert-AcceptanceContext {
+function Assert-AcceptanceIdentityContext {
 	param($Context)
 	Assert-ClosedObject -Value $Context -Names @('schemaVersion','repository','event','source','workflow','actions','controller','policy','run','attemptAnchor') -Reason 'context_schema_invalid'
 	if ($Context.schemaVersion -cne 'aetheln.ci-acceptance-context/v1') { throw 'context_schema_invalid' }
@@ -303,6 +303,44 @@ function Assert-AcceptanceContext {
 	Assert-ClosedObject -Value $Context.run -Names @('id','attempt') -Reason 'context_schema_invalid'
 	if (-not (Test-DecimalIdentity $Context.run.id) -or $Context.run.attempt -isnot [int] -or $Context.run.attempt -lt 1) { throw 'context_run_invalid' }
 	Assert-AttemptAnchor -Anchor $Context.attemptAnchor -Run $Context.run -Reason 'context_attempt_anchor_invalid'
+}
+
+function Assert-AcceptanceContext {
+	param($Context)
+	Assert-ClosedObject -Value $Context -Names @('schemaVersion','repository','event','source','workflow','actions','controller','policy','run','attemptAnchor','selectorBinding','producerBindings') -Reason 'context_schema_invalid'
+	$IdentityContext = [pscustomobject][ordered]@{
+		schemaVersion=$Context.schemaVersion;repository=$Context.repository;event=$Context.event;source=$Context.source;workflow=$Context.workflow
+		actions=$Context.actions;controller=$Context.controller;policy=$Context.policy;run=$Context.run;attemptAnchor=$Context.attemptAnchor
+	}
+	Assert-AcceptanceIdentityContext -Context $IdentityContext
+
+	Assert-ClosedObject -Value $Context.selectorBinding -Names @('jobName','artifactId','artifactName','digest') -Reason 'selector_binding_schema_invalid'
+	$ExpectedSelectorArtifactName = 'ci-selection-shadow-' + $Context.run.id + '-' + $Context.run.attempt + '-' + $Context.attemptAnchor.nonce
+	if ($Context.selectorBinding.jobName -isnot [string] -or $Context.selectorBinding.jobName -cne 'ci-selection-shadow' -or
+		-not (Test-DecimalIdentity $Context.selectorBinding.artifactId) -or
+		$Context.selectorBinding.artifactName -isnot [string] -or $Context.selectorBinding.artifactName -cne $ExpectedSelectorArtifactName -or
+		$Context.selectorBinding.digest -isnot [string] -or $Context.selectorBinding.digest -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'selector_binding_invalid' }
+
+	if ($Context.producerBindings -isnot [array]) { throw 'producer_bindings_schema_invalid' }
+	$Bindings = @($Context.producerBindings)
+	if ($Bindings.Count -gt $script:AggregateLimits.requirements) { throw 'producer_bindings_count_invalid' }
+	$Keys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	$Jobs = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	$ArtifactIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	$ArtifactNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	$PreviousKey = $null
+	foreach ($Binding in $Bindings) {
+		Assert-ClosedObject -Value $Binding -Names @('key','jobName','artifactId','artifactName','digest') -Reason 'producer_binding_schema_invalid'
+		if ($Binding.key -isnot [string] -or $Binding.key -cnotmatch '^[a-z0-9][a-z0-9-]{0,63}$' -or
+			$Binding.jobName -isnot [string] -or $Binding.jobName.Length -lt 1 -or $Binding.jobName.Length -gt 100 -or
+			-not (Test-DecimalIdentity $Binding.artifactId) -or
+			$Binding.artifactName -isnot [string] -or $Binding.artifactName -cne ('ci-receipt-' + $Binding.key + '-' + $Context.run.id + '-' + $Context.run.attempt + '-' + $Context.attemptAnchor.nonce) -or
+			$Binding.digest -isnot [string] -or $Binding.digest -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'producer_binding_invalid' }
+		if ($null -ne $PreviousKey -and [StringComparer]::Ordinal.Compare($PreviousKey, [string]$Binding.key) -ge 0) { throw 'producer_bindings_not_sorted' }
+		$PreviousKey = [string]$Binding.key
+		if (-not $Keys.Add([string]$Binding.key) -or -not $Jobs.Add([string]$Binding.jobName) -or
+			-not $ArtifactIds.Add([string]$Binding.artifactId) -or -not $ArtifactNames.Add([string]$Binding.artifactName)) { throw 'producer_bindings_duplicate' }
+	}
 }
 
 function Read-AcceptedSelectorReport {
@@ -409,18 +447,18 @@ function Test-AggregateBoundedNumber {
 function Assert-AggregateCompileBuildRecord {
 	param($Build, [string] $ExpectedCheck, [string] $ExpectedTarget, [string] $ExpectedPlatform)
 	$Reason = 'receipt_semantic_evidence_invalid:native-client-server-compile'
-	Assert-ClosedObject $Build @('check','target','platform','configuration','intermediateBuildDirectoryPresentBeforeRun','makefilePresentBeforeRun','outputState','lastObservedAction','observedTotalActions','actionCounterState','plannedActionCount','observedTargetNames','makefileObservation','makefileReason','makefileCreationCount','upToDateObserved','executorSummaryCount') $Reason
+	Assert-ClosedObject -Value $Build -Names @('check','target','platform','configuration','intermediateBuildDirectoryPresentBeforeRun','makefilePresentBeforeRun','outputState','lastObservedAction','observedTotalActions','actionCounterState','plannedActionCount','observedTargetNames','makefileObservation','makefileReason','makefileCreationCount','upToDateObserved','executorSummaryCount') -Reason $Reason
 	if ($Build.check -isnot [string] -or $Build.check -cne $ExpectedCheck -or $Build.target -isnot [string] -or $Build.target -cne $ExpectedTarget -or
 		$Build.platform -isnot [string] -or $Build.platform -cne $ExpectedPlatform -or $Build.configuration -isnot [string] -or $Build.configuration -cne 'Development' -or
 		$Build.intermediateBuildDirectoryPresentBeforeRun -isnot [bool] -or $Build.makefilePresentBeforeRun -isnot [bool] -or
 		$Build.outputState -isnot [string] -or $Build.outputState -cne 'captured' -or $Build.actionCounterState -isnot [string] -or
 		$Build.actionCounterState -cnotin @('observed','not_observed') -or $Build.makefileObservation -isnot [string] -or
 		$Build.makefileObservation -cnotin @('created','not_observed') -or $Build.upToDateObserved -isnot [bool] -or
-		-not (Test-AggregateBoundedInteger $Build.makefileCreationCount 0 10000000) -or -not (Test-AggregateBoundedInteger $Build.executorSummaryCount 0 10000000)) { throw $Reason }
+		-not (Test-AggregateBoundedInteger -Value $Build.makefileCreationCount -Minimum 0 -Maximum 10000000) -or -not (Test-AggregateBoundedInteger -Value $Build.executorSummaryCount -Minimum 0 -Maximum 10000000)) { throw $Reason }
 	if ($Build.actionCounterState -ceq 'observed') {
-		if (-not (Test-AggregateBoundedInteger $Build.lastObservedAction 1 10000000) -or -not (Test-AggregateBoundedInteger $Build.observedTotalActions 1 10000000) -or $Build.lastObservedAction -gt $Build.observedTotalActions) { throw $Reason }
+		if (-not (Test-AggregateBoundedInteger -Value $Build.lastObservedAction -Minimum 1 -Maximum 10000000) -or -not (Test-AggregateBoundedInteger -Value $Build.observedTotalActions -Minimum 1 -Maximum 10000000) -or $Build.lastObservedAction -gt $Build.observedTotalActions) { throw $Reason }
 	} elseif ($null -ne $Build.lastObservedAction -or $null -ne $Build.observedTotalActions) { throw $Reason }
-	if ($null -ne $Build.plannedActionCount -and -not (Test-AggregateBoundedInteger $Build.plannedActionCount 0 10000000)) { throw $Reason }
+	if ($null -ne $Build.plannedActionCount -and -not (Test-AggregateBoundedInteger -Value $Build.plannedActionCount -Minimum 0 -Maximum 10000000)) { throw $Reason }
 	if ($null -ne $Build.observedTargetNames -and ($Build.observedTargetNames -isnot [string] -or $Build.observedTargetNames.Length -gt 512 -or $Build.observedTargetNames -cnotmatch '^(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other)(?:,(?:AethelnOnlineClient|AethelnOnlineServer|AethelnOnlineEditor|UnrealEditor|UnrealPak|ShaderCompileWorker|other))*$')) { throw $Reason }
 	if ($Build.makefileObservation -ceq 'created') {
 		if ($Build.makefileCreationCount -lt 1 -or $Build.makefileReason -isnot [string] -or $Build.makefileReason -cnotmatch '^[a-z0-9_]{1,128}$') { throw $Reason }
@@ -430,29 +468,29 @@ function Assert-AggregateCompileBuildRecord {
 function Assert-AggregateManagedCompileProof {
 	param($Report, $Context)
 	$Reason = 'receipt_semantic_evidence_invalid:native-client-server-compile'
-	Assert-ClosedObject $Report.managedWorkspace @('schemaVersion','registrationId','registrationSha256','preparationReceiptSha256','revision','synchronized') $Reason
-	Assert-ClosedObject $Report.compileResources @('schemaVersion','sampleIntervalMilliseconds','recoveryFloorBytes','pressureThresholdBytes','sampleCount','measurementCount','maximumSampleGapMilliseconds','consecutivePressureSamples','maximumConsecutivePressureSamples','minimumAvailableRamBytes','minimumCommitHeadroomBytes','physicalCores','targetAdmissionCount','minimumActionLimit','maximumActionLimit','failureReason','volumes') $Reason
+	Assert-ClosedObject -Value $Report.managedWorkspace -Names @('schemaVersion','registrationId','registrationSha256','preparationReceiptSha256','revision','synchronized') -Reason $Reason
+	Assert-ClosedObject -Value $Report.compileResources -Names @('schemaVersion','sampleIntervalMilliseconds','recoveryFloorBytes','pressureThresholdBytes','sampleCount','measurementCount','maximumSampleGapMilliseconds','consecutivePressureSamples','maximumConsecutivePressureSamples','minimumAvailableRamBytes','minimumCommitHeadroomBytes','physicalCores','targetAdmissionCount','minimumActionLimit','maximumActionLimit','failureReason','volumes') -Reason $Reason
 	$Workspace = $Report.managedWorkspace
-	if (-not (Test-AggregateBoundedInteger $Workspace.schemaVersion 1 1) -or $Workspace.registrationId -isnot [string] -or $Workspace.registrationId -cnotmatch '^[a-f0-9]{32}$' -or
+	if (-not (Test-AggregateBoundedInteger -Value $Workspace.schemaVersion -Minimum 1 -Maximum 1) -or $Workspace.registrationId -isnot [string] -or $Workspace.registrationId -cnotmatch '^[a-f0-9]{32}$' -or
 		-not (Test-Sha256 $Workspace.registrationSha256) -or -not (Test-Sha256 $Workspace.preparationReceiptSha256) -or
 		$Workspace.revision -isnot [string] -or $Workspace.revision -cne $Context.source.testedRevision -or $Workspace.synchronized -isnot [bool] -or -not $Workspace.synchronized) { throw $Reason }
 	$Resources = $Report.compileResources
-	if (-not (Test-AggregateBoundedInteger $Resources.schemaVersion 1 1) -or -not (Test-AggregateBoundedInteger $Resources.sampleIntervalMilliseconds 5000 5000) -or
-		-not (Test-AggregateBoundedInteger $Resources.recoveryFloorBytes 20GB 20GB) -or -not (Test-AggregateBoundedInteger $Resources.pressureThresholdBytes 2GB 2GB) -or
-		-not (Test-AggregateBoundedInteger $Resources.sampleCount 1 10000000) -or -not (Test-AggregateBoundedInteger $Resources.measurementCount 1 10000000) -or $Resources.measurementCount -lt $Resources.sampleCount -or
-		-not (Test-AggregateBoundedInteger $Resources.maximumSampleGapMilliseconds 0 3600000) -or
-		-not (Test-AggregateBoundedInteger $Resources.consecutivePressureSamples 0 2) -or -not (Test-AggregateBoundedInteger $Resources.maximumConsecutivePressureSamples 0 2) -or
-		$Resources.consecutivePressureSamples -gt $Resources.maximumConsecutivePressureSamples -or -not (Test-AggregateBoundedInteger $Resources.minimumAvailableRamBytes 0 ([long]::MaxValue)) -or
-		-not (Test-AggregateBoundedInteger $Resources.minimumCommitHeadroomBytes 0 ([long]::MaxValue)) -or -not (Test-AggregateBoundedInteger $Resources.physicalCores 1 ([int]::MaxValue)) -or
-		-not (Test-AggregateBoundedInteger $Resources.targetAdmissionCount 2 2) -or -not (Test-AggregateBoundedInteger $Resources.minimumActionLimit 1 4) -or
-		-not (Test-AggregateBoundedInteger $Resources.maximumActionLimit 1 4) -or $Resources.minimumActionLimit -gt $Resources.maximumActionLimit -or
+	if (-not (Test-AggregateBoundedInteger -Value $Resources.schemaVersion -Minimum 1 -Maximum 1) -or -not (Test-AggregateBoundedInteger -Value $Resources.sampleIntervalMilliseconds -Minimum 5000 -Maximum 5000) -or
+		-not (Test-AggregateBoundedInteger -Value $Resources.recoveryFloorBytes -Minimum 20GB -Maximum 20GB) -or -not (Test-AggregateBoundedInteger -Value $Resources.pressureThresholdBytes -Minimum 2GB -Maximum 2GB) -or
+		-not (Test-AggregateBoundedInteger -Value $Resources.sampleCount -Minimum 1 -Maximum 10000000) -or -not (Test-AggregateBoundedInteger -Value $Resources.measurementCount -Minimum 1 -Maximum 10000000) -or $Resources.measurementCount -lt $Resources.sampleCount -or
+		-not (Test-AggregateBoundedInteger -Value $Resources.maximumSampleGapMilliseconds -Minimum 0 -Maximum 3600000) -or
+		-not (Test-AggregateBoundedInteger -Value $Resources.consecutivePressureSamples -Minimum 0 -Maximum 2) -or -not (Test-AggregateBoundedInteger -Value $Resources.maximumConsecutivePressureSamples -Minimum 0 -Maximum 2) -or
+		$Resources.consecutivePressureSamples -gt $Resources.maximumConsecutivePressureSamples -or -not (Test-AggregateBoundedInteger -Value $Resources.minimumAvailableRamBytes -Minimum 0 -Maximum ([long]::MaxValue)) -or
+		-not (Test-AggregateBoundedInteger -Value $Resources.minimumCommitHeadroomBytes -Minimum 0 -Maximum ([long]::MaxValue)) -or -not (Test-AggregateBoundedInteger -Value $Resources.physicalCores -Minimum 1 -Maximum ([int]::MaxValue)) -or
+		-not (Test-AggregateBoundedInteger -Value $Resources.targetAdmissionCount -Minimum 2 -Maximum 2) -or -not (Test-AggregateBoundedInteger -Value $Resources.minimumActionLimit -Minimum 1 -Maximum 4) -or
+		-not (Test-AggregateBoundedInteger -Value $Resources.maximumActionLimit -Minimum 1 -Maximum 4) -or $Resources.minimumActionLimit -gt $Resources.maximumActionLimit -or
 		$null -ne $Resources.failureReason -or $Resources.volumes -isnot [array] -or @($Resources.volumes).Count -lt 1 -or @($Resources.volumes).Count -gt 7) { throw $Reason }
 	$VolumeIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 	foreach ($Volume in $Resources.volumes) {
-		Assert-ClosedObject $Volume @('volumeId','knownAllocationBytes','minimumAvailableBytes') $Reason
+		Assert-ClosedObject -Value $Volume -Names @('volumeId','knownAllocationBytes','minimumAvailableBytes') -Reason $Reason
 		if ($Volume.volumeId -isnot [string] -or $Volume.volumeId -cnotmatch '^[^\x00-\x1f]{1,256}$' -or -not $VolumeIds.Add($Volume.volumeId) -or
-			-not (Test-AggregateBoundedInteger $Volume.knownAllocationBytes 0 ([long]::MaxValue - 20GB)) -or
-			-not (Test-AggregateBoundedInteger $Volume.minimumAvailableBytes 0 ([long]::MaxValue)) -or
+			-not (Test-AggregateBoundedInteger -Value $Volume.knownAllocationBytes -Minimum 0 -Maximum ([long]::MaxValue - 20GB)) -or
+			-not (Test-AggregateBoundedInteger -Value $Volume.minimumAvailableBytes -Minimum 0 -Maximum ([long]::MaxValue)) -or
 			[decimal] $Volume.minimumAvailableBytes -le ([decimal] $Volume.knownAllocationBytes + 20GB)) { throw $Reason }
 	}
 }
@@ -476,24 +514,24 @@ function Assert-PortableSemanticEvidence {
 	param([byte[]]$Bytes,$Context)
 	try {
 		$Report=ConvertFrom-StrictBoundedJson -Bytes $Bytes -MaximumBytes $script:AggregateLimits.jsonBytes -MaximumDepth 8 -MaximumProperties 1024 -MaximumArrayItems 2048
-		Assert-ClosedObject $Report @('schemaVersion','revision','startedUtc','finishedUtc','checks','summary') 'receipt_semantic_evidence_invalid:portable'
-		Assert-ClosedObject $Report.summary @('total','passed','failed','skipped','requiredFailed') 'receipt_semantic_evidence_invalid:portable'
+		Assert-ClosedObject -Value $Report -Names @('schemaVersion','revision','startedUtc','finishedUtc','checks','summary') -Reason 'receipt_semantic_evidence_invalid:portable'
+		Assert-ClosedObject -Value $Report.summary -Names @('total','passed','failed','skipped','requiredFailed') -Reason 'receipt_semantic_evidence_invalid:portable'
 	} catch { if($_.Exception.Message -cmatch '^receipt_semantic_evidence_'){throw}; throw 'receipt_semantic_evidence_invalid:portable' }
-	if (-not (Test-AggregateBoundedInteger $Report.schemaVersion 1 1) -or $Report.revision -isnot [string] -or $Report.revision -cne $Context.source.testedRevision -or
+	if (-not (Test-AggregateBoundedInteger -Value $Report.schemaVersion -Minimum 1 -Maximum 1) -or $Report.revision -isnot [string] -or $Report.revision -cne $Context.source.testedRevision -or
 		-not (Test-AggregateTimestampRange $Report.startedUtc $Report.finishedUtc) -or $Report.checks -isnot [array] -or @($Report.checks).Count -ne $script:AcceptancePortableCheckNames.Count) { throw 'receipt_semantic_evidence_invalid:portable' }
 	$Passed=0;$Skipped=0
 	for($Index=0;$Index-lt$script:AcceptancePortableCheckNames.Count;$Index++){
-		$Check=$Report.checks[$Index]; Assert-ClosedObject $Check @('name','tier','status','durationSeconds','command','message') 'receipt_semantic_evidence_invalid:portable'
+		$Check=$Report.checks[$Index]; Assert-ClosedObject -Value $Check -Names @('name','tier','status','durationSeconds','command','message') -Reason 'receipt_semantic_evidence_invalid:portable'
 		$Expected=$script:AcceptancePortableCheckNames[$Index];$Tier=if($Expected-ceq'psscriptanalyzer'){'advisory'}else{'required'}
-		if($Check.name-isnot[string]-or$Check.name-cne$Expected-or$Check.tier-isnot[string]-or$Check.tier-cne$Tier-or$Check.status-isnot[string]-or-not(Test-AggregateBoundedNumber $Check.durationSeconds 0 86400)-or$Check.command-isnot[string]-or$Check.command.Length-gt 32768-or$Check.message-isnot[string]-or$Check.message.Length-gt 131072){throw 'receipt_semantic_evidence_invalid:portable'}
-		if($Check.status-cnotin@('passed','skipped')-or($Tier-ceq'required'-and$Check.status-cne'passed')){throw 'receipt_semantic_evidence_failure:portable'}
+		if($Check.name-isnot[string]-or$Check.name-cne$Expected-or$Check.tier-isnot[string]-or$Check.tier-cne$Tier-or$Check.status-isnot[string]-or-not(Test-AggregateBoundedNumber -Value $Check.durationSeconds -Minimum 0 -Maximum 86400)-or$Check.command-isnot[string]-or$Check.command.Length-gt 32768-or$Check.message-isnot[string]-or$Check.message.Length-gt 131072){throw 'receipt_semantic_evidence_invalid:portable'}
+		if($Check.status-cnotin@('passed','skipped')-or(($Tier-ceq'required'-or$Expected-ceq'psscriptanalyzer')-and$Check.status-cne'passed')){throw 'receipt_semantic_evidence_failure:portable'}
 		if($Check.status-ceq'passed'){$Passed++}else{$Skipped++}
 	}
-	if(-not(Test-AggregateBoundedInteger $Report.summary.total 0 1024)-or
-		-not(Test-AggregateBoundedInteger $Report.summary.passed 0 1024)-or
-		-not(Test-AggregateBoundedInteger $Report.summary.failed 0 1024)-or
-		-not(Test-AggregateBoundedInteger $Report.summary.skipped 0 1024)-or
-		-not(Test-AggregateBoundedInteger $Report.summary.requiredFailed 0 1024)){throw 'receipt_semantic_evidence_invalid:portable'}
+	if(-not(Test-AggregateBoundedInteger -Value $Report.summary.total -Minimum 0 -Maximum 1024)-or
+		-not(Test-AggregateBoundedInteger -Value $Report.summary.passed -Minimum 0 -Maximum 1024)-or
+		-not(Test-AggregateBoundedInteger -Value $Report.summary.failed -Minimum 0 -Maximum 1024)-or
+		-not(Test-AggregateBoundedInteger -Value $Report.summary.skipped -Minimum 0 -Maximum 1024)-or
+		-not(Test-AggregateBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 1024)){throw 'receipt_semantic_evidence_invalid:portable'}
 	if($Report.summary.total-ne$Report.checks.Count-or$Report.summary.passed-ne$Passed-or$Report.summary.failed-ne 0-or$Report.summary.skipped-ne$Skipped-or$Report.summary.requiredFailed-ne 0){throw 'receipt_semantic_evidence_failure:portable'}
 }
 
@@ -505,40 +543,40 @@ function Assert-EngineRunnerSemanticEvidence {
 	$Required = @('schemaVersion','mode','policy','revision','runnerName','startedUtc','finishedUtc','checks','summary','compileEvidence','managedWorkspace','compileResources','supervisor')
 	foreach ($Name in $Required) { if ($Report -isnot [pscustomobject] -or $Report.PSObject.Properties.Name -cnotcontains $Name) { throw $Reason } }
 	if (@($Report.PSObject.Properties.Name | Where-Object { $Required -cnotcontains $_ }).Count -ne 0) { throw $Reason }
-	Assert-ClosedObject $Report.summary @('total','passed','failed','skipped','requiredFailed') $Reason
-	Assert-ClosedObject $Report.supervisor @('childExitCode','timedOut','cleanupVerified') $Reason
-	if (-not (Test-AggregateBoundedInteger $Report.schemaVersion 1 1) -or $Report.mode -isnot [string] -or $Report.mode -cne 'Compile' -or
+	Assert-ClosedObject -Value $Report.summary -Names @('total','passed','failed','skipped','requiredFailed') -Reason $Reason
+	Assert-ClosedObject -Value $Report.supervisor -Names @('childExitCode','timedOut','cleanupVerified') -Reason $Reason
+	if (-not (Test-AggregateBoundedInteger -Value $Report.schemaVersion -Minimum 1 -Maximum 1) -or $Report.mode -isnot [string] -or $Report.mode -cne 'Compile' -or
 		$Report.policy -isnot [string] -or $Report.policy -cne 'incremental-target-compilation' -or $Report.revision -isnot [string] -or
 		$Report.revision -cne $Context.source.testedRevision -or $Report.runnerName -isnot [string] -or [string]::IsNullOrWhiteSpace($Report.runnerName) -or $Report.runnerName.Length -gt 128 -or
 		(-not [string]::IsNullOrEmpty($ExpectedRunnerName) -and $Report.runnerName -cne $ExpectedRunnerName) -or
 		-not (Test-AggregateTimestampRange $Report.startedUtc $Report.finishedUtc) -or $Report.checks -isnot [array] -or @($Report.checks).Count -lt 8 -or @($Report.checks).Count -gt 32 -or
-		-not (Test-AggregateBoundedInteger $Report.supervisor.childExitCode 0 0) -or $Report.supervisor.timedOut -isnot [bool] -or $Report.supervisor.timedOut -or
+		-not (Test-AggregateBoundedInteger -Value $Report.supervisor.childExitCode -Minimum 0 -Maximum 0) -or $Report.supervisor.timedOut -isnot [bool] -or $Report.supervisor.timedOut -or
 		$Report.supervisor.cleanupVerified -isnot [bool] -or -not $Report.supervisor.cleanupVerified) { throw $Reason }
 	$Names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 	foreach ($Check in $Report.checks) {
-		Assert-ClosedObject $Check @('name','tier','status','durationSeconds','command','message') $Reason
+		Assert-ClosedObject -Value $Check -Names @('name','tier','status','durationSeconds','command','message') -Reason $Reason
 		if ($Check.name -isnot [string] -or $Check.name.Length -lt 1 -or $Check.name.Length -gt 128 -or -not $Names.Add($Check.name) -or
-			$Check.tier -isnot [string] -or $Check.status -isnot [string] -or -not (Test-AggregateBoundedNumber $Check.durationSeconds 0 86400) -or
+			$Check.tier -isnot [string] -or $Check.status -isnot [string] -or -not (Test-AggregateBoundedNumber -Value $Check.durationSeconds -Minimum 0 -Maximum 86400) -or
 			$Check.command -isnot [string] -or $Check.command.Length -gt 32768 -or $Check.message -isnot [string] -or $Check.message.Length -gt 131072) { throw $Reason }
 		if ($Check.tier -cne 'required' -or $Check.status -cne 'passed') { throw 'receipt_semantic_evidence_failure:native-client-server-compile' }
 	}
 	foreach ($Expected in @('runner-input-validation','managed-compile-workspace','repository-state-before-work','incremental-client-build','incremental-client-build-repository-state','incremental-server-build','incremental-server-build-repository-state','repository-state-at-completion')) {
 		if (-not $Names.Contains($Expected)) { throw 'receipt_semantic_evidence_failure:native-client-server-compile' }
 	}
-	if (-not (Test-AggregateBoundedInteger $Report.summary.total 0 32) -or $Report.summary.total -ne $Report.checks.Count -or
-		-not (Test-AggregateBoundedInteger $Report.summary.passed 0 32) -or $Report.summary.passed -ne $Report.checks.Count -or
-		-not (Test-AggregateBoundedInteger $Report.summary.failed 0 0) -or -not (Test-AggregateBoundedInteger $Report.summary.skipped 0 0) -or
-		-not (Test-AggregateBoundedInteger $Report.summary.requiredFailed 0 0)) { throw $Reason }
+	if (-not (Test-AggregateBoundedInteger -Value $Report.summary.total -Minimum 0 -Maximum 32) -or $Report.summary.total -ne $Report.checks.Count -or
+		-not (Test-AggregateBoundedInteger -Value $Report.summary.passed -Minimum 0 -Maximum 32) -or $Report.summary.passed -ne $Report.checks.Count -or
+		-not (Test-AggregateBoundedInteger -Value $Report.summary.failed -Minimum 0 -Maximum 0) -or -not (Test-AggregateBoundedInteger -Value $Report.summary.skipped -Minimum 0 -Maximum 0) -or
+		-not (Test-AggregateBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 0)) { throw $Reason }
 	Assert-AggregateManagedCompileProof -Report $Report -Context $Context
-	if ($Report.compileEvidence -isnot [pscustomobject] -or -not (Test-AggregateBoundedInteger $Report.compileEvidence.schemaVersion 1 1) -or $Report.compileEvidence.builds -isnot [array] -or @($Report.compileEvidence.builds).Count -ne 2) { throw $Reason }
-	Assert-ClosedObject $Report.compileEvidence @('schemaVersion','identity','builds') $Reason
-	Assert-ClosedObject $Report.compileEvidence.identity @('engineGitRevision','engineGitRevisionStatus','engineBuildVersionSha256','engineBuildVersionSha256Status','linuxToolchainCompilerSha256','linuxToolchainCompilerSha256Status','runnerName','durationSeconds') $Reason
+	if ($Report.compileEvidence -isnot [pscustomobject] -or -not (Test-AggregateBoundedInteger -Value $Report.compileEvidence.schemaVersion -Minimum 1 -Maximum 1) -or $Report.compileEvidence.builds -isnot [array] -or @($Report.compileEvidence.builds).Count -ne 2) { throw $Reason }
+	Assert-ClosedObject -Value $Report.compileEvidence -Names @('schemaVersion','identity','builds') -Reason $Reason
+	Assert-ClosedObject -Value $Report.compileEvidence.identity -Names @('engineGitRevision','engineGitRevisionStatus','engineBuildVersionSha256','engineBuildVersionSha256Status','linuxToolchainCompilerSha256','linuxToolchainCompilerSha256Status','runnerName','durationSeconds') -Reason $Reason
 	$CompileIdentity = $Report.compileEvidence.identity
 	if ($CompileIdentity.engineGitRevision -isnot [string] -or $CompileIdentity.engineGitRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or
 		$CompileIdentity.engineGitRevisionStatus -isnot [string] -or $CompileIdentity.engineGitRevisionStatus -cne 'verified' -or
 		-not (Test-Sha256 $CompileIdentity.engineBuildVersionSha256) -or $CompileIdentity.engineBuildVersionSha256Status -isnot [string] -or $CompileIdentity.engineBuildVersionSha256Status -cne 'verified' -or
 		-not (Test-Sha256 $CompileIdentity.linuxToolchainCompilerSha256) -or $CompileIdentity.linuxToolchainCompilerSha256Status -isnot [string] -or $CompileIdentity.linuxToolchainCompilerSha256Status -cne 'verified' -or
-		$CompileIdentity.runnerName -isnot [string] -or $CompileIdentity.runnerName -cne $Report.runnerName -or -not (Test-AggregateBoundedNumber $CompileIdentity.durationSeconds 0 3600)) { throw $Reason }
+		$CompileIdentity.runnerName -isnot [string] -or $CompileIdentity.runnerName -cne $Report.runnerName -or -not (Test-AggregateBoundedNumber -Value $CompileIdentity.durationSeconds -Minimum 0 -Maximum 3600)) { throw $Reason }
 	$ExpectedBuilds = @(@('incremental-client-build','AethelnOnlineClient','Win64'),@('incremental-server-build','AethelnOnlineServer','Linux'))
 	for ($Index = 0; $Index -lt 2; $Index++) {
 		$Build = $Report.compileEvidence.builds[$Index]; $Expected = $ExpectedBuilds[$Index]
@@ -551,16 +589,16 @@ function Assert-UnrealAutomationSemanticEvidence {
 	$Reason = 'receipt_semantic_evidence_invalid:unreal-editor-automation'
 	try {
 		$Report = ConvertFrom-StrictBoundedJson -Bytes $Bytes -MaximumBytes $script:AggregateLimits.jsonBytes -MaximumDepth 8 -MaximumProperties 256 -MaximumArrayItems 64
-		Assert-ClosedObject $Report @('schemaId','schemaVersion','mode','sourceRevision','engineRevision','projectName','filter','timeoutSeconds','startedUtc','finishedUtc','processExitCode','repositoryCleanBefore','repositoryCleanAfter','outputs','tests','summary','result','failureReason') $Reason
-		Assert-ClosedObject $Report.outputs @('unrealReport','log') $Reason
-		Assert-ClosedObject $Report.summary @('total','passed','passedWithWarnings','failed','notRun','missing','requiredFailed') $Reason
+		Assert-ClosedObject -Value $Report -Names @('schemaId','schemaVersion','mode','sourceRevision','engineRevision','projectName','filter','timeoutSeconds','startedUtc','finishedUtc','processExitCode','repositoryCleanBefore','repositoryCleanAfter','outputs','tests','summary','result','failureReason') -Reason $Reason
+		Assert-ClosedObject -Value $Report.outputs -Names @('unrealReport','log') -Reason $Reason
+		Assert-ClosedObject -Value $Report.summary -Names @('total','passed','passedWithWarnings','failed','notRun','missing','requiredFailed') -Reason $Reason
 	} catch { if ($_.Exception.Message -cmatch '^receipt_semantic_evidence_') { throw }; throw $Reason }
-	if ($Report.schemaId -isnot [string] -or $Report.schemaId -cne 'aetheln.unreal-automation' -or -not (Test-AggregateBoundedInteger $Report.schemaVersion 1 1) -or
+	if ($Report.schemaId -isnot [string] -or $Report.schemaId -cne 'aetheln.unreal-automation' -or -not (Test-AggregateBoundedInteger -Value $Report.schemaVersion -Minimum 1 -Maximum 1) -or
 		$Report.mode -isnot [string] -or $Report.mode -cne 'production' -or $Report.sourceRevision -isnot [string] -or $Report.sourceRevision -cne $Context.source.testedRevision -or
 		$Report.engineRevision -isnot [string] -or $Report.engineRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or
 		$Report.projectName -isnot [string] -or $Report.projectName -cne 'AethelnOnline' -or $Report.filter -isnot [string] -or $Report.filter -cne '^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$' -or
-		-not (Test-AggregateBoundedInteger $Report.timeoutSeconds 1 86400) -or -not (Test-AggregateTimestampRange $Report.startedUtc $Report.finishedUtc) -or
-		-not (Test-AggregateBoundedInteger $Report.processExitCode 0 0) -or $Report.repositoryCleanBefore -isnot [bool] -or -not $Report.repositoryCleanBefore -or
+		-not (Test-AggregateBoundedInteger -Value $Report.timeoutSeconds -Minimum 1 -Maximum 86400) -or -not (Test-AggregateTimestampRange $Report.startedUtc $Report.finishedUtc) -or
+		-not (Test-AggregateBoundedInteger -Value $Report.processExitCode -Minimum 0 -Maximum 0) -or $Report.repositoryCleanBefore -isnot [bool] -or -not $Report.repositoryCleanBefore -or
 		$Report.repositoryCleanAfter -isnot [bool] -or -not $Report.repositoryCleanAfter -or $Report.outputs.unrealReport -isnot [string] -or
 		$Report.outputs.unrealReport -cne 'TestResults/UnrealAutomation/index.json' -or $Report.outputs.log -isnot [string] -or $Report.outputs.log -cne 'Saved/Logs/AethelnUnrealAutomation.log' -or
 		$Report.result -isnot [string] -or $Report.result -cne 'passed' -or $Report.failureReason -isnot [string] -or $Report.failureReason -cne 'none' -or
@@ -568,15 +606,15 @@ function Assert-UnrealAutomationSemanticEvidence {
 	$Expected = @('Aetheln.GameCombat.NetworkSpike.Authority','Aetheln.Harness.ProjectAndModuleLoad')
 	for ($Index = 0; $Index -lt 2; $Index++) {
 		$Test = $Report.tests[$Index]
-		Assert-ClosedObject $Test @('fullTestPath','state','status','durationSeconds','warningCount','errorCount') $Reason
+		Assert-ClosedObject -Value $Test -Names @('fullTestPath','state','status','durationSeconds','warningCount','errorCount') -Reason $Reason
 		if ($Test.fullTestPath -isnot [string] -or $Test.fullTestPath -cne $Expected[$Index] -or $Test.state -isnot [string] -or $Test.state -cne 'Success' -or
-			$Test.status -isnot [string] -or $Test.status -cne 'passed' -or -not (Test-AggregateBoundedNumber $Test.durationSeconds 0 86400) -or
-			-not (Test-AggregateBoundedInteger $Test.warningCount 0 0) -or -not (Test-AggregateBoundedInteger $Test.errorCount 0 0)) { throw $Reason }
+			$Test.status -isnot [string] -or $Test.status -cne 'passed' -or -not (Test-AggregateBoundedNumber -Value $Test.durationSeconds -Minimum 0 -Maximum 86400) -or
+			-not (Test-AggregateBoundedInteger -Value $Test.warningCount -Minimum 0 -Maximum 0) -or -not (Test-AggregateBoundedInteger -Value $Test.errorCount -Minimum 0 -Maximum 0)) { throw $Reason }
 	}
-	if (-not (Test-AggregateBoundedInteger $Report.summary.total 2 2) -or $Report.summary.total -ne $Report.tests.Count -or
-		-not (Test-AggregateBoundedInteger $Report.summary.passed 2 2) -or -not (Test-AggregateBoundedInteger $Report.summary.passedWithWarnings 0 0) -or
-		-not (Test-AggregateBoundedInteger $Report.summary.failed 0 0) -or -not (Test-AggregateBoundedInteger $Report.summary.notRun 0 0) -or
-		-not (Test-AggregateBoundedInteger $Report.summary.missing 0 0) -or -not (Test-AggregateBoundedInteger $Report.summary.requiredFailed 0 0)) { throw $Reason }
+	if (-not (Test-AggregateBoundedInteger -Value $Report.summary.total -Minimum 2 -Maximum 2) -or $Report.summary.total -ne $Report.tests.Count -or
+		-not (Test-AggregateBoundedInteger -Value $Report.summary.passed -Minimum 2 -Maximum 2) -or -not (Test-AggregateBoundedInteger -Value $Report.summary.passedWithWarnings -Minimum 0 -Maximum 0) -or
+		-not (Test-AggregateBoundedInteger -Value $Report.summary.failed -Minimum 0 -Maximum 0) -or -not (Test-AggregateBoundedInteger -Value $Report.summary.notRun -Minimum 0 -Maximum 0) -or
+		-not (Test-AggregateBoundedInteger -Value $Report.summary.missing -Minimum 0 -Maximum 0) -or -not (Test-AggregateBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 0)) { throw $Reason }
 }
 
 function Assert-VisualPackageSemanticEvidence {
@@ -650,7 +688,7 @@ function Assert-CiAcceptanceReceipt {
 	param($Receipt, $Context, $Requirement, $Archive, $ProducerJob)
 	Assert-ClosedObject -Value $Receipt -Names @('schemaVersion','repository','event','source','workflow','actions','controller','policy','run','attemptAnchor','selection','results','acceptance') -Reason 'receipt_schema_invalid'
 	if ($Receipt.schemaVersion -cne 'aetheln.ci-acceptance-receipt/v1') { throw 'receipt_schema_invalid' }
-	Assert-AcceptanceContext ([pscustomobject][ordered]@{ schemaVersion='aetheln.ci-acceptance-context/v1'; repository=$Receipt.repository; event=$Receipt.event; source=$Receipt.source; workflow=$Receipt.workflow; actions=$Receipt.actions; controller=$Receipt.controller; policy=$Receipt.policy; run=$Receipt.run; attemptAnchor=$Receipt.attemptAnchor })
+	Assert-AcceptanceIdentityContext ([pscustomobject][ordered]@{ schemaVersion='aetheln.ci-acceptance-context/v1'; repository=$Receipt.repository; event=$Receipt.event; source=$Receipt.source; workflow=$Receipt.workflow; actions=$Receipt.actions; controller=$Receipt.controller; policy=$Receipt.policy; run=$Receipt.run; attemptAnchor=$Receipt.attemptAnchor })
 	Assert-IdentityMatch $Receipt $Context
 	Assert-ClosedObject -Value $Receipt.selection -Names @('checks') -Reason 'receipt_schema_invalid'
 	if ($Receipt.selection.checks -isnot [array] -or (@($Receipt.selection.checks) -join "`n") -cne (@($Requirement.checks) -join "`n")) { throw 'receipt_selection_mismatch' }
@@ -690,7 +728,7 @@ function Assert-CiAcceptanceReceipt {
 		}
 		if ($null -ne $SemanticEvidenceName) {
 			if ($null -eq $SemanticEvidenceBytes) { throw ('receipt_semantic_evidence_missing:' + $Result.id) }
-			switch ($Result.id) { 'portable' {Assert-PortableSemanticEvidence $SemanticEvidenceBytes $Context} 'native-client-server-compile' {Assert-EngineRunnerSemanticEvidence $SemanticEvidenceBytes $Context $(if ($null -eq $ProducerJob) { $null } else { [string] $ProducerJob.runner_name })} 'unreal-editor-automation' {Assert-UnrealAutomationSemanticEvidence $SemanticEvidenceBytes $Context} 'visual-package' {Assert-VisualPackageSemanticEvidence $SemanticEvidenceBytes $Context} }
+			switch ($Result.id) { 'portable' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'native-client-server-compile' {Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName $(if ($null -eq $ProducerJob) { $null } else { [string] $ProducerJob.runner_name })} 'unreal-editor-automation' {Assert-UnrealAutomationSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'visual-package' {Assert-VisualPackageSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} }
 		}
 	}
 	if ($Archive.entries.Count -ne $ExpectedNames.Count -or @($Archive.entries | Where-Object { -not $ExpectedNames.Contains($_.name) }).Count -ne 0) { throw 'archive_unexpected_entry' }
@@ -863,7 +901,7 @@ function Assert-ArtifactApiProof {
 	foreach ($Name in @('created_at','digest')) { if ($Artifact.PSObject.Properties.Name -cnotcontains $Name) { throw 'api_schema_invalid' } }
 	$Created = ConvertFrom-AggregateApiTimestamp -Value $Artifact.created_at -Reason ($ReasonPrefix + '_created_at_invalid')
 	if ($Created -lt $JobInterval.started -or $Created -gt $JobInterval.completed) { throw ($ReasonPrefix + '_created_at_invalid') }
-	if ($Artifact.digest -isnot [string] -or $Artifact.digest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw ($ReasonPrefix + '_digest_invalid') }
+	if ($Artifact.digest -isnot [string] -or $Artifact.digest -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw ($ReasonPrefix + '_digest_invalid') }
 }
 
 function Assert-ArtifactWorkflowRunIdentity {
@@ -943,6 +981,9 @@ function New-CiAcceptanceAggregate {
 		($SelectorArtifact.size_in_bytes -isnot [int] -and $SelectorArtifact.size_in_bytes -isnot [long]) -or [long]$SelectorArtifact.size_in_bytes -le 0 -or [long]$SelectorArtifact.size_in_bytes -gt $script:AggregateLimits.archiveBytes) { throw 'selector_artifact_size_invalid' }
 	if ($SelectorArtifact.archive_download_url -isnot [string] -or $SelectorArtifact.archive_download_url -cnotmatch '^https://') { throw 'selector_artifact_url_invalid' }
 	Assert-ArtifactApiProof -Artifact $SelectorArtifact -JobInterval $SelectorJobInterval -ReasonPrefix 'selector_artifact'
+	if ([string]$SelectorArtifact.id -cne $Context.selectorBinding.artifactId -or
+		$SelectorArtifact.name -cne $Context.selectorBinding.artifactName -or
+		$SelectorArtifact.digest -cne $Context.selectorBinding.digest) { throw 'selector_binding_api_mismatch' }
 	$SelectorArchiveBytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri ([string]$SelectorArtifact.archive_download_url) -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.archiveBytes -Budget $Budget -RequestKind Artifact
 	if ($SelectorArchiveBytes.Length -ne [long]$SelectorArtifact.size_in_bytes) { throw 'selector_artifact_size_mismatch' }
 	if ($SelectorArtifact.digest.Substring(7) -cne (Get-Sha256Hex $SelectorArchiveBytes)) { throw 'selector_artifact_digest_mismatch' }
@@ -952,6 +993,20 @@ function New-CiAcceptanceAggregate {
 	$SelectedChecks = Read-AcceptedSelectorReport -ReportBytes $SelectorReportEntry.bytes -Context $Context
 	Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 	$SelectedCheckList = @($script:SelectorCheckIds | Where-Object { $SelectedChecks.Contains($_) })
+	$ProducerBindingsByKey = @{}
+	foreach ($Binding in $Context.producerBindings) {
+		$RequirementMatches = @($Requirements.jobs | Where-Object { $_.key -ceq $Binding.key })
+		if ($RequirementMatches.Count -ne 1) { throw 'producer_binding_unexpected' }
+		$BoundRequirement = $RequirementMatches[0]
+		$BoundSelectedSubset = @($BoundRequirement.checks | Where-Object { $SelectedChecks.Contains([string]$_) })
+		if ($BoundSelectedSubset.Count -eq 0) { throw 'producer_binding_unselected' }
+		if ($Binding.jobName -cne $BoundRequirement.jobName -or $Binding.artifactName -cne $BoundRequirement.artifactName) { throw 'producer_binding_requirement_mismatch' }
+		$ProducerBindingsByKey[[string]$Binding.key] = $Binding
+	}
+	foreach ($Requirement in $Requirements.jobs) {
+		$SelectedSubset = @($Requirement.checks | Where-Object { $SelectedChecks.Contains([string]$_) })
+		if ($SelectedSubset.Count -gt 0 -and -not $ProducerBindingsByKey.ContainsKey([string]$Requirement.key)) { throw 'producer_binding_missing' }
+	}
 
 	$ObservedJobs = New-Object System.Collections.Generic.List[object]
 	$SelectedByKey = @{}
@@ -991,14 +1046,19 @@ function New-CiAcceptanceAggregate {
 		}
 		if ($ArtifactMatches.Count -ne 1 -or $ArtifactMatches[0].name -cne $Requirement.artifactName) { throw 'artifact_identity_ambiguous' }
 		$Artifact = $ArtifactMatches[0]
+		$ProducerBinding = $ProducerBindingsByKey[[string]$Requirement.key]
 		$ProducerJob = $ProducerJobsByKey[[string]$Requirement.key]
 		$ProducerJobInterval = Get-CurrentApiJobInterval -Job $ProducerJob -Context $Context -ExpectedConclusion 'success'
 		foreach ($Name in @('id','name','size_in_bytes','archive_download_url','expired','workflow_run','created_at','digest')) { if ($Artifact.PSObject.Properties.Name -cnotcontains $Name) { throw 'api_schema_invalid' } }
 		if ($Artifact.expired -ne $false) { throw 'artifact_identity_mismatch' }
 		Assert-ArtifactWorkflowRunIdentity -WorkflowRun $Artifact.workflow_run -Context $Context -Reason 'artifact_identity_mismatch'
-		if ($Artifact.size_in_bytes -isnot [int] -and $Artifact.size_in_bytes -isnot [long] -or [long] $Artifact.size_in_bytes -le 0 -or [long] $Artifact.size_in_bytes -gt $script:AggregateLimits.archiveBytes) { throw 'artifact_size_invalid' }
+		if (($Artifact.id -isnot [int] -and $Artifact.id -isnot [long]) -or [long]$Artifact.id -le 0 -or
+			($Artifact.size_in_bytes -isnot [int] -and $Artifact.size_in_bytes -isnot [long]) -or [long]$Artifact.size_in_bytes -le 0 -or
+			[long]$Artifact.size_in_bytes -gt $script:AggregateLimits.archiveBytes) { throw 'artifact_size_invalid' }
 		if ($Artifact.archive_download_url -isnot [string] -or $Artifact.archive_download_url -cnotmatch '^https://') { throw 'artifact_url_invalid' }
 		Assert-ArtifactApiProof -Artifact $Artifact -JobInterval $ProducerJobInterval -ReasonPrefix 'artifact'
+		if ([string]$Artifact.id -cne $ProducerBinding.artifactId -or $Artifact.name -cne $ProducerBinding.artifactName -or
+			$Artifact.digest -cne $ProducerBinding.digest) { throw 'producer_binding_api_mismatch' }
 		$ArchiveBytes = Invoke-AggregateApi -ApiRequest $ApiRequest -Uri ([string] $Artifact.archive_download_url) -Clock $Clock -DeadlineSeconds $DeadlineSeconds -MaximumBytes $script:AggregateLimits.archiveBytes -Budget $Budget -RequestKind Artifact
 		if ($ArchiveBytes.Length -ne [long]$Artifact.size_in_bytes) { throw 'artifact_size_mismatch' }
 		if ($Artifact.digest.Substring(7) -cne (Get-Sha256Hex $ArchiveBytes)) { throw 'artifact_digest_mismatch' }
