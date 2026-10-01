@@ -27,8 +27,8 @@ function Remove-HostFixtureRoot {
 	if (Test-Path -LiteralPath $ResolvedRoot -PathType Container) { Remove-Item -LiteralPath $ResolvedRoot -Recurse -Force }
 }
 
-$Pin = '9ab6767ecaaa724d01371ffaea14317311ae8371'
-Assert-HostFixture ($script:HostToolEnginePin -ceq $Pin) 'Host-tool admission must require the approved custom engine commit.'
+$Pin = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
+Assert-HostFixture ($script:HostToolEnginePin -ceq $Pin) 'Host-tool admission must require the canonical Epic 5.8.1-release engine commit.'
 $Envelope = New-HostToolAttemptEnvelope -StartTicks 1000L -Frequency 10L
 Assert-HostFixture ($Envelope.usefulDeadlineTicks -eq 199000L -and $Envelope.cleanupDeadlineTicks -eq 205000L -and $Envelope.publicationDeadlineTicks -eq 217000L) 'The 330/340/360 minute envelope drifted.'
 $BootstrapEnvelope = New-HostToolAttemptEnvelope -StartTicks 1000L -Frequency 10L -UsefulWorkMinutes 1440 -VerificationMinutes 120
