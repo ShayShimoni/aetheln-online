@@ -906,5 +906,13 @@ Assert-HostFailure { New-RoutineCompileResourceMonitor @ResourceArgs } 'disk_flo
 	Remove-HostFixtureRoot -Root $FixtureTempRoot -Parent $FixtureParent
 }
 Assert-HostFixture (-not (Test-Path -LiteralPath $FixtureTempRoot)) 'Fixture suite cleanup failed.'
-& (Join-Path $PSScriptRoot 'HostToolCheckpoint.Tests.ps1')
+$CheckpointFixtureDrive = $null
+if (-not (Get-PSDrive -Name F -ErrorAction SilentlyContinue)) {
+	$CheckpointFixtureDrive = New-PSDrive -Name F -PSProvider FileSystem -Root $FixtureParent -Scope Script -ErrorAction Stop
+}
+try {
+	& (Join-Path $PSScriptRoot 'HostToolCheckpoint.Tests.ps1')
+} finally {
+	if ($null -ne $CheckpointFixtureDrive) { Remove-PSDrive -Name F -Scope Script -Force -ErrorAction Stop }
+}
 'PASS Invoke-HostToolProvisioning fixtures'
