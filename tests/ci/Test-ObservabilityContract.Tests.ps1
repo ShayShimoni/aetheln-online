@@ -124,6 +124,70 @@ try {
 	Assert-FailsClosed -Name 'crash-time work expansion' -ExpectedPattern 'System-error handler'
 
 	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'AethelnServerObservability::HandleSystemError();' -Replacement "CrashContext.MarkStale();`n`t`tAethelnServerObservability::HandleSystemError();"
+	Assert-FailsClosed -Name 'crash-time association inspection' -ExpectedPattern 'System-error callback must only transition'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'FWorldDelegates::OnWorldGameInstanceChanging.AddRaw(this, &FAethelnGameServerModule::OnWorldGameInstanceChanging)' -Replacement 'FWorldDelegates::OnWorldGameInstanceChanging.AddLambda([](UWorld*, UGameInstance*, UGameInstance*) {})'
+	Assert-FailsClosed -Name 'missing prechange binding' -ExpectedPattern 'must bind the engine OnWorldGameInstanceChanging'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'FWorldDelegates::OnWorldGameInstanceChanged.Remove(' -Replacement 'FWorldDelegates::OnWorldGameInstanceChanged.Clear('
+	Assert-FailsClosed -Name 'missing postchange unbinding' -ExpectedPattern 'must unbind the engine OnWorldGameInstanceChanged'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'CrashContext.BeginWorldGameInstanceTransition(World);' -Replacement '(void)World;'
+	Assert-FailsClosed -Name 'prechange does not revoke active attribution' -ExpectedPattern 'must invoke the owner transition gate'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp' -Anchor 'WorldsInGameInstanceTransition.Add(World);' -Replacement 'WorldsInGameInstanceTransition.Contains(World);'
+	Assert-FailsClosed -Name 'owner prechange does not establish transition gate' -ExpectedPattern 'must revoke active attribution synchronously'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'CrashContext.EndWorldGameInstanceTransition(World);' -Replacement '(void)World;'
+	Assert-FailsClosed -Name 'postchange does not close transition' -ExpectedPattern 'must invoke the owner transition gate'
+
+	Initialize-Fixture
+	$ServerFixturePath = Join-Path $FixtureRoot 'Source\GameServer\Private\GameServer.cpp'
+	$ServerFixture = Get-Content -LiteralPath $ServerFixturePath -Raw
+	$PrechangeStart = $ServerFixture.IndexOf('void OnWorldGameInstanceChanging(', [StringComparison]::Ordinal)
+	$CacheRemoval = $ServerFixture.IndexOf('ConfiguredSubsystems.Remove(World);', $PrechangeStart, [StringComparison]::Ordinal)
+	if ($PrechangeStart -lt 0 -or $CacheRemoval -lt 0) {
+		throw 'Prechange cache-invalidation fixture anchor is missing.'
+	}
+	[System.IO.File]::WriteAllText($ServerFixturePath, $ServerFixture.Remove($CacheRemoval, 'ConfiguredSubsystems.Remove(World);'.Length).Insert($CacheRemoval, 'ConfiguredSubsystems.Contains(World);'))
+	Assert-FailsClosed -Name 'missing notified cache invalidation' -ExpectedPattern 'must invoke the owner transition gate'
+
+	Initialize-Fixture
+	$ServerFixturePath = Join-Path $FixtureRoot 'Source\GameServer\Private\GameServer.cpp'
+	$ServerFixture = Get-Content -LiteralPath $ServerFixturePath -Raw
+	$PrechangeStart = $ServerFixture.IndexOf('void OnWorldGameInstanceChanging(', [StringComparison]::Ordinal)
+	$CacheRemoval = $ServerFixture.IndexOf('ConfiguredSubsystems.Remove(World);', $PrechangeStart, [StringComparison]::Ordinal)
+	if ($PrechangeStart -lt 0 -or $CacheRemoval -lt 0) {
+		throw 'Prechange extra-work fixture anchor is missing.'
+	}
+	[System.IO.File]::WriteAllText($ServerFixturePath, $ServerFixture.Insert($CacheRemoval, '(void)World->GetGameInstance();'))
+	Assert-FailsClosed -Name 'prechange extra world read' -ExpectedPattern 'must invoke the owner transition gate'
+
+	Initialize-Fixture
+	$ServerFixture = Get-Content -LiteralPath $ServerFixturePath -Raw
+	$PostchangeStart = $ServerFixture.IndexOf('void OnWorldGameInstanceChanged(', [StringComparison]::Ordinal)
+	$CacheRemoval = $ServerFixture.IndexOf('ConfiguredSubsystems.Remove(World);', $PostchangeStart, [StringComparison]::Ordinal)
+	if ($PostchangeStart -lt 0 -or $CacheRemoval -lt 0) {
+		throw 'Postchange extra-work fixture anchor is missing.'
+	}
+	[System.IO.File]::WriteAllText($ServerFixturePath, $ServerFixture.Insert($CacheRemoval, 'FGenericCrashContext::SetGameData(TEXT("extra"), TEXT("unsafe"));'))
+	Assert-FailsClosed -Name 'postchange extra crash-data write' -ExpectedPattern 'must invoke the owner transition gate'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'WorldGameInstanceChangeEpoch != AdmissionEpoch' -Replacement 'WorldGameInstanceChangeEpoch == AdmissionEpoch'
+	Assert-FailsClosed -Name 'missing reentrant epoch guard' -ExpectedPattern 'must recheck exact association and epoch'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'Configured->Get() != Subsystem' -Replacement 'Configured->Get() == Subsystem'
+	Assert-FailsClosed -Name 'unconfigured replacement health sample' -ExpectedPattern 'must not sample health'
+
+	Initialize-Fixture
 	Edit-FixtureText -RelativePath 'Source\GameNet\Public\AethelnObservability.h' -Anchor 'ConnectionPseudonym.Equals(AethelnObservability::ExcludedIdentifier, ESearchCase::CaseSensitive)' -Replacement '!ConnectionPseudonym.IsEmpty()'
 	Assert-FailsClosed -Name 'printable process-wide connection pseudonym' -ExpectedPattern 'excluded connection pseudonym'
 
@@ -165,20 +229,36 @@ try {
 	Assert-FailsClosed -Name 'owner subsystem-gated world counting' -ExpectedPattern 'counted before'
 
 	Initialize-Fixture
-	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'if (CrashContext.TrackWorldTick(World))' -Replacement "AethelnCrashContext::FindObservabilitySubsystem(World);`n`t`tif (CrashContext.TrackWorldTick(World))"
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'CrashContext.BeginWorldTickAdmission(World, Admission);' -Replacement "AethelnCrashContext::FindObservabilitySubsystem(World);`n`t`tCrashContext.BeginWorldTickAdmission(World, Admission);"
 	Assert-FailsClosed -Name 'GameServer subsystem-gated world counting' -ExpectedPattern 'counted before'
 
 	Initialize-Fixture
-	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'if (CrashContext.TrackWorldTick(World))' -Replacement 'if (CrashContext.TrackWorldTick(World)) /* variant */'
-	Assert-FailsClosed -Name 'unrecognized first-world block' -ExpectedPattern 'Could not isolate the first-world tracking block'
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'if (!NextHealthSampleTimes.Contains(World))' -Replacement 'if (AdmissionResult == FAethelnCrashContextOwner::EWorldTickAdmissionResult::NewWorld)'
+	Assert-FailsClosed -Name 'server initialization tied to first count' -ExpectedPattern 'Could not isolate first-admitted-tick server initialization'
 
 	Initialize-Fixture
-	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'CrashContext.RefreshForTrackedWorld(World);' -Replacement '(void)World;'
-	Assert-FailsClosed -Name 'missing subsystem-transition refresh' -ExpectedPattern 'must refresh process crash context'
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'AethelnServerObservability::ConfigureContext(*Subsystem);' -Replacement "CrashContext.RefreshForTrackedWorld(World);`n`t`t`tAethelnServerObservability::ConfigureContext(*Subsystem);"
+	Assert-FailsClosed -Name 'refresh before configuration' -ExpectedPattern 'must complete admission after configuration'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'AethelnServerObservability::ConfigureContext(*Subsystem);' -Replacement "CrashContext.CompleteWorldTickAdmission(Admission);`n`t`t`tAethelnServerObservability::ConfigureContext(*Subsystem);"
+	Assert-FailsClosed -Name 'admission completion before configuration' -ExpectedPattern 'must complete admission after configuration'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'CrashContext.CompleteWorldTickAdmission(Admission)' -Replacement '(void)World'
+	Assert-FailsClosed -Name 'missing subsystem-transition admission' -ExpectedPattern 'must complete admitted ticks'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'Source\GameServer\Private\GameServer.cpp' -Anchor 'CrashContext.AbortWorldTickAdmission(Admission);' -Replacement '(void)Admission;'
+	Assert-FailsClosed -Name 'unreleased failed world-tick admission' -ExpectedPattern 'must release its exact token'
 
 	Initialize-Fixture
 	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'Character validation bounds these values but does not prove they are free of personal or secret text' -Replacement 'Character validation proves these values are safe'
 	Assert-FailsClosed -Name 'overclaimed command-line provenance' -ExpectedPattern 'provenance limitation'
+
+	Initialize-Fixture
+	Edit-FixtureText -RelativePath 'docs\observability-and-crash-diagnostics.md' -Anchor 'A marker alone never authorizes attribution' -Replacement 'A marker alone authorizes attribution'
+	Assert-FailsClosed -Name 'tentative marker claimed as attribution' -ExpectedPattern 'tentative marker'
 
 	foreach ($Entry in @(
 		@{ Name = 'launcher source revision in crash snapshot'; Anchor = 'SourceRevision.Equals(AethelnObservability::UnknownValue, ESearchCase::CaseSensitive)'; Replacement = '!SourceRevision.IsEmpty()' },

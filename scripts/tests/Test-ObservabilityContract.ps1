@@ -122,10 +122,13 @@ if ($CrashAccessor -cmatch 'RuntimeContext\.(RunId|InstanceId|ConnectionPseudony
 }
 $RuntimeSetMatch = [regex]::Match($SubsystemImplementation, 'UAethelnObservabilitySubsystem::SetRuntimeContext\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
 $RuntimeResetMatch = [regex]::Match($SubsystemImplementation, 'UAethelnObservabilitySubsystem::ResetRuntimeContext\(\)(?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+$RuntimeClearMatch = [regex]::Match($SubsystemImplementation, 'UAethelnObservabilitySubsystem::ClearRuntimeContextWithoutBroadcast\(\)(?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
 if (-not $RuntimeSetMatch.Success -or
 	$RuntimeSetMatch.Groups['body'].Value.IndexOf('CrashRunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsLower);', [StringComparison]::Ordinal) -lt 0 -or
 	-not $RuntimeResetMatch.Success -or
-	$RuntimeResetMatch.Groups['body'].Value.IndexOf('CrashRunId.Reset();', [StringComparison]::Ordinal) -lt 0) {
+	$RuntimeResetMatch.Groups['body'].Value.IndexOf('ClearRuntimeContextWithoutBroadcast();', [StringComparison]::Ordinal) -lt 0 -or
+	-not $RuntimeClearMatch.Success -or
+	$RuntimeClearMatch.Groups['body'].Value.IndexOf('CrashRunId.Reset();', [StringComparison]::Ordinal) -lt 0) {
 	throw 'Every accepted runtime context must rotate the generated crash run ID, and a reset must clear it.'
 }
 $RegisterMatch = [regex]::Match($SubsystemImplementation, 'FAethelnCrashContextOwner::Register\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
@@ -198,34 +201,53 @@ Assert-ContainsLiteral -Text $SubsystemImplementation -Literal 'UAethelnObservab
 Assert-ContainsLiteral -Text $SubsystemImplementation -Literal 'UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(' -Message 'The crash-context owner must unbind its change handler.'
 Assert-ContainsLiteral -Text $Server -Literal 'FAethelnCrashContextOwner CrashContext;' -Message 'GameServer must delegate crash-context ownership to the GameNet owner.'
 
-$TrackMatch = [regex]::Match($SubsystemImplementation, 'FAethelnCrashContextOwner::TrackWorldTick\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+$TrackMatch = [regex]::Match($SubsystemImplementation, 'FAethelnCrashContextOwner::BeginWorldTickAdmission\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
 if (-not $TrackMatch.Success) {
-	throw 'Could not isolate the crash-context world tracking handler.'
+	throw 'Could not isolate the guarded crash-context world admission handler.'
 }
 $Track = $TrackMatch.Groups['body'].Value
 $TrackAddIndex = $Track.IndexOf('TrackedWorlds.Add(World);', [StringComparison]::Ordinal)
 if ($TrackAddIndex -lt 0 -or $Track.Substring(0, $TrackAddIndex) -match 'FindObservabilitySubsystem\(|GetSubsystem|GetGameInstance') {
 	throw 'Observable worlds must be counted before their observability subsystem is looked up.'
 }
+if ($Track -match 'FindObservabilitySubsystem\(|GetSubsystem|GetGameInstance|\bRefresh\(|\bRegister\(' -or
+	-not $Track.Contains('ERequestedUpdate::Missing') -or -not $Track.Contains('ERequestedUpdate::Ambiguous') -or
+	-not $Track.Contains('PendingWorldTickAdmissions.Add(World, Candidate.Serial)')) {
+	throw 'BeginWorldTickAdmission must count and gate without refreshing before configuration.'
+}
 $TickStartMatch = [regex]::Match($Server, 'void OnWorldTickStart\((?<body>.*?)\n\t\}', [Text.RegularExpressions.RegexOptions]::Singleline)
 if (-not $TickStartMatch.Success) {
 	throw 'Could not isolate the world tick-start handler.'
 }
 $TickStart = $TickStartMatch.Groups['body'].Value
-$WorldCountIndex = $TickStart.IndexOf('CrashContext.TrackWorldTick(World)', [StringComparison]::Ordinal)
+$WorldCountIndex = $TickStart.IndexOf('CrashContext.BeginWorldTickAdmission(World, Admission)', [StringComparison]::Ordinal)
 $SubsystemLookupIndex = $TickStart.IndexOf('FindObservabilitySubsystem(', [StringComparison]::Ordinal)
 if ($WorldCountIndex -lt 0 -or $SubsystemLookupIndex -lt 0 -or $WorldCountIndex -gt $SubsystemLookupIndex) {
 	throw 'Observable worlds must be counted before their observability subsystem is looked up.'
 }
-$FirstWorldBlock = [regex]::Match($TickStart, 'if\s*\(CrashContext\.TrackWorldTick\(World\)\)\s*\{(?<body>.*?)\n\t\t\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+$FirstWorldBlock = [regex]::Match($TickStart, 'if\s*\(!NextHealthSampleTimes\.Contains\(World\)\)\s*\{(?<body>.*?)\n\t\t\}', [Text.RegularExpressions.RegexOptions]::Singleline)
 if (-not $FirstWorldBlock.Success) {
-	throw 'Could not isolate the first-world tracking block.'
+	throw 'Could not isolate first-admitted-tick server initialization.'
 }
 if ($FirstWorldBlock.Groups['body'].Value.Contains('FindObservabilitySubsystem(')) {
 	throw 'A subsystem appearing after the first world tick must still be configured.'
 }
-if (-not $TickStart.Contains('CrashContext.RefreshForTrackedWorld(World)') -or -not $TickStart.Contains('ConfiguredSubsystems.Remove(World)')) {
-	throw 'World subsystem removal or replacement must refresh process crash context.'
+if ($TickStart.Contains('AdmissionResult == FAethelnCrashContextOwner::EWorldTickAdmissionResult::NewWorld')) {
+	throw 'GameServer initialization must not depend on the GameNet first-count result.'
+}
+if (-not $TickStart.Contains('CrashContext.CompleteWorldTickAdmission(Admission)') -or
+	-not $TickStart.Contains('ConfiguredSubsystems.Remove(World)')) {
+	throw 'GameServer must complete admitted ticks after subsystem changes.'
+}
+$AbortCount = [regex]::Matches($TickStart, 'CrashContext\.AbortWorldTickAdmission\(Admission\);').Count
+if ($AbortCount -ne 6) {
+	throw 'Every unsuccessful world-tick admission path must release its exact token.'
+}
+$FirstConfigureIndex = $TickStart.IndexOf('AethelnServerObservability::ConfigureContext(*Subsystem);', [StringComparison]::Ordinal)
+$FirstCompletionIndex = $TickStart.IndexOf('CrashContext.CompleteWorldTickAdmission(Admission)', [StringComparison]::Ordinal)
+if ($FirstConfigureIndex -lt 0 -or $FirstCompletionIndex -lt $FirstConfigureIndex -or
+	$TickStart.Contains('CrashContext.RefreshForTrackedWorld(World)')) {
+	throw 'GameServer must complete admission after configuration, never bypass its gate with direct refresh.'
 }
 
 function Get-AutomationDeclaration([string] $Text) {
@@ -270,6 +292,70 @@ if (-not $SystemErrorMatch.Success) {
 if ($SystemErrorMatch.Groups['body'].Value.Trim() -ne 'FGenericCrashContext::SetGameData(CrashLifecycleKey, TEXT("crashing"));') {
 	throw 'System-error handler may only transition the lifecycle key to crashing.'
 }
+$OnErrorMatch = [regex]::Match($Server, 'void OnSystemError\(\)\s*\{(?<body>[^}]*)\}')
+if (-not $OnErrorMatch.Success -or
+	$OnErrorMatch.Groups['body'].Value.Trim() -ne 'AethelnServerObservability::HandleSystemError();') {
+	throw 'System-error callback must only transition the crash lifecycle.'
+}
+if ($Server.Contains('RevalidateCrashAssociationBeforeSystemError')) {
+	throw 'System-error callback must not traverse the world association.'
+}
+foreach ($Name in @('OnWorldGameInstanceChanging', 'OnWorldGameInstanceChanged')) {
+	Assert-ContainsLiteral -Text $Server -Literal "FWorldDelegates::$Name.AddRaw(this, &FAethelnGameServerModule::$Name)" -Message "GameServer must bind the engine $Name notification."
+	Assert-ContainsLiteral -Text $Server -Literal "FWorldDelegates::$Name.Remove(" -Message "GameServer must unbind the engine $Name notification."
+	$Handler = [regex]::Match($Server, "void $Name\([^)]*\)\s*\{(?<body>.*?)\n\t\}", [Text.RegularExpressions.RegexOptions]::Singleline)
+	$ExpectedHandlerBody = if ($Name -eq 'OnWorldGameInstanceChanging') {
+		'(void)OldGameInstance;(void)NewGameInstance;if(AethelnServerObservability::IsObservableWorld(World)){constboolbWasTracked=CrashContext.IsTracked(World);CrashContext.BeginWorldGameInstanceTransition(World);if(bWasTracked){++WorldGameInstanceChangeEpoch;ConfiguredSubsystems.Remove(World);}}'
+	} else {
+		'(void)OldGameInstance;(void)NewGameInstance;if(AethelnServerObservability::IsObservableWorld(World)){if(CrashContext.IsTracked(World)){++WorldGameInstanceChangeEpoch;ConfiguredSubsystems.Remove(World);}CrashContext.EndWorldGameInstanceTransition(World);}'
+	}
+	if (-not $Handler.Success -or
+		[regex]::Replace($Handler.Groups['body'].Value, '\s+', '') -cne $ExpectedHandlerBody) {
+		throw "GameServer $Name must invoke the owner transition gate and invalidate its subsystem cache without independent crash-data work."
+	}
+}
+$OwnerPrechangeMatch = [regex]::Match($SubsystemImplementation, 'FAethelnCrashContextOwner::BeginWorldGameInstanceTransition\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+$OwnerPostchangeMatch = [regex]::Match($SubsystemImplementation, 'FAethelnCrashContextOwner::EndWorldGameInstanceTransition\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+$OwnerStaleMatch = [regex]::Match($SubsystemImplementation, 'FAethelnCrashContextOwner::MarkTransitionStaleIfNeeded\((?<body>.*?)\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $OwnerPrechangeMatch.Success -or -not $OwnerPostchangeMatch.Success -or -not $OwnerStaleMatch.Success -or
+	$OwnerPrechangeMatch.Groups['body'].Value.IndexOf('WorldsInGameInstanceTransition.Add(World);', [StringComparison]::Ordinal) -lt 0 -or
+	$OwnerPrechangeMatch.Groups['body'].Value.IndexOf('MarkTransitionStaleIfNeeded(World);', [StringComparison]::Ordinal) -lt 0 -or
+	$OwnerStaleMatch.Groups['body'].Value.IndexOf('MarkStale();', [StringComparison]::Ordinal) -lt 0 -or
+	$OwnerPostchangeMatch.Groups['body'].Value.Contains('Refresh(') -or
+	$OwnerPostchangeMatch.Groups['body'].Value.Contains('Register(')) {
+	throw 'The owner prechange gate must revoke active attribution synchronously; postchange must not reactivate it.'
+}
+Assert-ContainsLiteral -Text $Server -Literal 'A pre-tick replacement invalidates the configured subsystem cache' -Message 'GameServer must test engine-notified pre-tick cache invalidation.'
+Assert-ContainsLiteral -Text $Server -Literal 'A-to-B-to-A before a tick never revives the old crash run' -Message 'GameServer must test pre-tick A-to-B-to-A reassociation.'
+Assert-ContainsLiteral -Text $Server -Literal 'Reentrant B-to-C configuration cannot cache or emit B' -Message 'GameServer must test reentrant reassociation during configuration.'
+Assert-ContainsLiteral -Text $Server -Literal 'Nested prechange ticks stay stale without reactivating the old association' -Message 'GameServer must test a nested tick during the prechange StateKey callback.'
+Assert-ContainsLiteral -Text $Server -Literal 'Prechange cleanup does not strand the transition marker' -Message 'GameServer must test cleanup reentrancy during a GameInstance transition.'
+Assert-ContainsLiteral -Text $Server -Literal 'First admitted tick initializes once after rejected transition tick' -Message 'GameServer must test initialization after a transition-rejected nested tick.'
+Assert-ContainsLiteral -Text $Server -Literal 'First admitted second-world tick initializes once after nested rejection' -Message 'GameServer must test initialization after a second-world nested rejection.'
+Assert-ContainsLiteral -Text $Server -Literal 'Disappeared subsystem aborts its admitted tick' -Message 'GameServer must test disappearance abort and later recovery.'
+Assert-ContainsLiteral -Text $Server -Literal 'Reattached subsystem recovers after aborted disappearance' -Message 'GameServer must test recovery after an aborted disappearance.'
+$ConfigureIndex = $FirstConfigureIndex
+$CompleteIndex = $TickStart.IndexOf('CrashContext.CompleteWorldTickAdmission(Admission)', $ConfigureIndex, [StringComparison]::Ordinal)
+$CacheIndex = $TickStart.IndexOf('ConfiguredSubsystems.Add(World, Subsystem);', [StringComparison]::Ordinal)
+$EmitIndex = if ($CacheIndex -ge 0) { $TickStart.IndexOf('AethelnServerObservability::EmitEvent(', $CacheIndex, [StringComparison]::Ordinal) } else { -1 }
+$EpochGuards = @([regex]::Matches($TickStart, 'WorldGameInstanceChangeEpoch != AdmissionEpoch') | Where-Object { $_.Index -gt $ConfigureIndex -and $_.Index -lt $CacheIndex } | ForEach-Object { $_.Index })
+$AssociationGuards = @([regex]::Matches($TickStart, 'AethelnCrashContext::FindObservabilitySubsystem\(World\) != Subsystem') | Where-Object { $_.Index -gt $ConfigureIndex -and $_.Index -lt $CacheIndex } | ForEach-Object { $_.Index })
+if ($ConfigureIndex -lt 0 -or $CompleteIndex -lt 0 -or $CacheIndex -lt 0 -or $EmitIndex -lt 0 -or
+	$EpochGuards.Count -ne 2 -or $AssociationGuards.Count -ne 2 -or
+	$EpochGuards[0] -le $ConfigureIndex -or $EpochGuards[0] -ge $CompleteIndex -or
+	$AssociationGuards[0] -le $ConfigureIndex -or $AssociationGuards[0] -ge $CompleteIndex -or
+	$EpochGuards[1] -le $CompleteIndex -or $EpochGuards[1] -ge $CacheIndex -or
+	$AssociationGuards[1] -le $CompleteIndex -or $AssociationGuards[1] -ge $CacheIndex -or
+	$CacheIndex -ge $EmitIndex) {
+	throw 'GameServer must recheck exact association and epoch around admission completion before cache and lifecycle.'
+}
+$TickEndMatch = [regex]::Match($Server, 'void OnWorldTickEnd\((?<body>.*?)\n\t\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+if (-not $TickEndMatch.Success -or
+	-not $TickEndMatch.Groups['body'].Value.Contains('ConfiguredSubsystems.Find(World)') -or
+	-not $TickEndMatch.Groups['body'].Value.Contains('Configured->Get() != Subsystem')) {
+	throw 'GameServer must not sample health from an unconfigured replacement subsystem.'
+}
+Assert-ContainsLiteral -Text $Server -Literal 'Redirected tick does not sample C before configuration' -Message 'GameServer must test reentrant health-sampling suppression.'
 
 Assert-ContainsLiteral -Text $Subsystem -Literal 'UGameInstanceSubsystem' -Message 'Observability service must remain GameInstance-owned.'
 Assert-ContainsLiteral -Text $Subsystem -Literal 'SetTestRestrictedSink' -Message 'Restricted audit injection must remain separate from the public sink.'
@@ -286,6 +372,7 @@ Assert-ContainsLiteral -Text $Operator -Literal 'must never be opened, parsed, h
 Assert-ContainsLiteral -Text $Operator -Literal 'Character validation bounds these values but does not prove they are free of personal or secret text' -Message 'Command-line provenance limitation is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'The `unknown` and `network-profile.unset` crash values are closed sentinels, not verified provenance' -Message 'Crash sentinel provenance limitation is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'AethelnCrashContextMarker crash-run=' -Message 'Generated crash run evidence marker is undocumented.'
+Assert-ContainsLiteral -Text $Operator -Literal 'A marker alone never authorizes attribution' -Message 'A tentative marker must not be mistaken for active attribution.'
 Assert-ContainsLiteral -Text $Operator -Literal 'External attribution is not established by reading the event stream alone' -Message 'Crash attribution limitation is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'fail closed on missing, stale, or ambiguous binding' -Message 'Controlled-capture binding requirement is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'A format check alone is not provenance' -Message 'Crash run format limitation is missing.'

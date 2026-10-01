@@ -160,6 +160,9 @@ namespace AethelnServerObservability
 
 class FAethelnGameServerModule final : public IModuleInterface
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FAethelnServerObservabilityContractTest;
+#endif
 public:
 	virtual void StartupModule() override
 	{
@@ -169,6 +172,8 @@ public:
 		WorldTickHandle = FWorldDelegates::OnWorldTickStart.AddRaw(this, &FAethelnGameServerModule::OnWorldTickStart);
 		WorldTickEndHandle = FWorldDelegates::OnWorldTickEnd.AddRaw(this, &FAethelnGameServerModule::OnWorldTickEnd);
 		WorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddRaw(this, &FAethelnGameServerModule::OnWorldCleanup);
+		WorldGameInstanceChangingHandle = FWorldDelegates::OnWorldGameInstanceChanging.AddRaw(this, &FAethelnGameServerModule::OnWorldGameInstanceChanging);
+		WorldGameInstanceChangedHandle = FWorldDelegates::OnWorldGameInstanceChanged.AddRaw(this, &FAethelnGameServerModule::OnWorldGameInstanceChanged);
 		CrashHandle = FCoreDelegates::OnHandleSystemError.AddRaw(this, &FAethelnGameServerModule::OnSystemError);
 	}
 
@@ -177,6 +182,8 @@ public:
 		FWorldDelegates::OnWorldTickStart.Remove(WorldTickHandle);
 		FWorldDelegates::OnWorldTickEnd.Remove(WorldTickEndHandle);
 		FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
+		FWorldDelegates::OnWorldGameInstanceChanging.Remove(WorldGameInstanceChangingHandle);
+		FWorldDelegates::OnWorldGameInstanceChanged.Remove(WorldGameInstanceChangedHandle);
 		FCoreDelegates::OnHandleSystemError.Remove(CrashHandle);
 		NextHealthSampleTimes.Reset();
 		WorldTickStartTimes.Reset();
@@ -186,6 +193,37 @@ public:
 	}
 
 private:
+	void OnWorldGameInstanceChanging(UWorld* World, UGameInstance* OldGameInstance, UGameInstance* NewGameInstance)
+	{
+		(void)OldGameInstance;
+		(void)NewGameInstance;
+		if (AethelnServerObservability::IsObservableWorld(World))
+		{
+			const bool bWasTracked = CrashContext.IsTracked(World);
+			CrashContext.BeginWorldGameInstanceTransition(World);
+			if (bWasTracked)
+			{
+				++WorldGameInstanceChangeEpoch;
+				ConfiguredSubsystems.Remove(World);
+			}
+		}
+	}
+
+	void OnWorldGameInstanceChanged(UWorld* World, UGameInstance* OldGameInstance, UGameInstance* NewGameInstance)
+	{
+		(void)OldGameInstance;
+		(void)NewGameInstance;
+		if (AethelnServerObservability::IsObservableWorld(World))
+		{
+			if (CrashContext.IsTracked(World))
+			{
+				++WorldGameInstanceChangeEpoch;
+				ConfiguredSubsystems.Remove(World);
+			}
+			CrashContext.EndWorldGameInstanceTransition(World);
+		}
+	}
+
 	void OnWorldTickStart(UWorld* World, ELevelTick TickType, float DeltaSeconds)
 	{
 		if (!AethelnServerObservability::IsObservableWorld(World))
@@ -194,13 +232,28 @@ private:
 		}
 		(void)TickType;
 		(void)DeltaSeconds;
+		const uint64 AdmissionEpoch = WorldGameInstanceChangeEpoch;
+		FAethelnCrashContextOwner::FWorldTickAdmission Admission;
+		const FAethelnCrashContextOwner::EWorldTickAdmissionResult AdmissionResult =
+			CrashContext.BeginWorldTickAdmission(World, Admission);
+		if (AdmissionResult == FAethelnCrashContextOwner::EWorldTickAdmissionResult::Rejected)
+		{
+			return;
+		}
 		WorldTickStartTimes.Add(World, FPlatformTime::Seconds());
 
-		// Count even a world whose game instance is not ready on its first tick.
-		if (CrashContext.TrackWorldTick(World))
+		// A rejected nested tick may already have counted this world in GameNet.
+		// Initialize server-side state on its first admitted tick, not first count.
+		if (!NextHealthSampleTimes.Contains(World))
 		{
 			NextHealthSampleTimes.Add(World, 0.0);
 			FGenericCrashContext::SetGameData(AethelnServerObservability::CrashLifecycleKey, TEXT("world-running"));
+		}
+		if (!CrashContext.IsTracked(World) || WorldGameInstanceChangeEpoch != AdmissionEpoch)
+		{
+			ConfiguredSubsystems.Remove(World);
+			CrashContext.AbortWorldTickAdmission(Admission);
+			return;
 		}
 		// A subsystem may appear, disappear, or be replaced after the first tick.
 		// A changed association must invalidate process-wide crash attribution.
@@ -209,25 +262,60 @@ private:
 		const bool bChangedSubsystem = Configured != nullptr && (Subsystem == nullptr || Configured->Get() != Subsystem);
 		if (bChangedSubsystem)
 		{
-			CrashContext.MarkStale();
 			ConfiguredSubsystems.Remove(World);
+			CrashContext.AbortWorldTickAdmission(Admission);
+			return;
 		}
 		if (Subsystem != nullptr && !ConfiguredSubsystems.Contains(World))
 		{
 			AethelnServerObservability::ConfigureContext(*Subsystem);
+			if (!AethelnServerObservability::IsObservableWorld(World)
+				|| !CrashContext.IsTracked(World)
+				|| WorldGameInstanceChangeEpoch != AdmissionEpoch
+				|| AethelnCrashContext::FindObservabilitySubsystem(World) != Subsystem)
+			{
+				ConfiguredSubsystems.Remove(World);
+				CrashContext.AbortWorldTickAdmission(Admission);
+				return;
+			}
+			// Consume the one-use admission only after configuration. This also
+			// refreshes preconfigured replacements that broadcast no context change.
+			if (!CrashContext.CompleteWorldTickAdmission(Admission))
+			{
+				ConfiguredSubsystems.Remove(World);
+				CrashContext.AbortWorldTickAdmission(Admission);
+				return;
+			}
+			if (!AethelnServerObservability::IsObservableWorld(World)
+				|| !CrashContext.IsTracked(World)
+				|| WorldGameInstanceChangeEpoch != AdmissionEpoch
+				|| AethelnCrashContext::FindObservabilitySubsystem(World) != Subsystem)
+			{
+				ConfiguredSubsystems.Remove(World);
+				CrashContext.MarkStale();
+				return;
+			}
 			ConfiguredSubsystems.Add(World, Subsystem);
-			// Preconfigured replacements need this even when ConfigureContext has
-			// nothing to change and therefore emits no accepted-change broadcast.
-			CrashContext.RefreshForTrackedWorld(World);
 			AethelnServerObservability::EmitEvent(
 				*Subsystem,
 				EAethelnObservabilityCategory::ServerLifecycle,
 				EAethelnSafeReason::Accepted,
 				NextSequence++);
 		}
-		else if (bChangedSubsystem)
+		else
 		{
-			CrashContext.RefreshForTrackedWorld(World);
+			if (WorldGameInstanceChangeEpoch != AdmissionEpoch
+				|| AethelnCrashContext::FindObservabilitySubsystem(World) != Subsystem)
+			{
+				ConfiguredSubsystems.Remove(World);
+				CrashContext.AbortWorldTickAdmission(Admission);
+				return;
+			}
+			if (!CrashContext.CompleteWorldTickAdmission(Admission))
+			{
+				ConfiguredSubsystems.Remove(World);
+				CrashContext.AbortWorldTickAdmission(Admission);
+			}
 		}
 	}
 
@@ -250,7 +338,8 @@ private:
 		UAethelnObservabilitySubsystem* Subsystem = GameInstance != nullptr
 			? GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>()
 			: nullptr;
-		if (Subsystem == nullptr)
+		const TWeakObjectPtr<UAethelnObservabilitySubsystem>* Configured = ConfiguredSubsystems.Find(World);
+		if (Subsystem == nullptr || Configured == nullptr || Configured->Get() != Subsystem)
 		{
 			return;
 		}
@@ -349,11 +438,14 @@ private:
 	FDelegateHandle WorldTickHandle;
 	FDelegateHandle WorldTickEndHandle;
 	FDelegateHandle WorldCleanupHandle;
+	FDelegateHandle WorldGameInstanceChangingHandle;
+	FDelegateHandle WorldGameInstanceChangedHandle;
 	FDelegateHandle CrashHandle;
 	TMap<TWeakObjectPtr<UWorld>, double> NextHealthSampleTimes;
 	TMap<TWeakObjectPtr<UWorld>, double> WorldTickStartTimes;
 	TMap<TWeakObjectPtr<UWorld>, TWeakObjectPtr<UAethelnObservabilitySubsystem>> ConfiguredSubsystems;
 	FAethelnCrashContextOwner CrashContext;
+	uint64 WorldGameInstanceChangeEpoch = 0;
 	uint64 NextSequence = 1;
 };
 
@@ -588,7 +680,62 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Replacement sink is accepted"), ReplacementSubsystem->SetTestSink(ReplacementSink));
 	FAethelnCrashContextSnapshot ReplacementSnapshot;
 	TestTrue(TEXT("Preconfigured replacement has a bounded snapshot"), ReplacementSubsystem->TryGetCrashContextSnapshot(ReplacementSnapshot));
+	FAethelnGameServerModule& ServerModule = FModuleManager::GetModuleChecked<FAethelnGameServerModule>(TEXT("GameServer"));
+	TestTrue(TEXT("First subsystem is cached before direct replacement"), ServerModule.ConfiguredSubsystems.Contains(World));
+	UGameInstance* ExpectedPrechangeGameInstance = GameInstance;
+	bool bInNestedPrechangeTick = false;
+	bool bNestedTicksStayedStale = true;
+	bool bSawActiveDuringPrechange = false;
+	int32 NestedPrechangeTicks = 0;
+	const FDelegateHandle PrechangeStateHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (Key != AethelnCrashContext::StateKey)
+			{
+				return;
+			}
+			if (Value == TEXT("active"))
+			{
+				bSawActiveDuringPrechange = true;
+			}
+			if (Value == TEXT("stale") && !bInNestedPrechangeTick
+				&& World->IsGameInstanceTransitionInProgress()
+				&& World->GetGameInstance() == ExpectedPrechangeGameInstance)
+			{
+				bInNestedPrechangeTick = true;
+				++NestedPrechangeTicks;
+				FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+				bNestedTicksStayedStale = bNestedTicksStayedStale
+					&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale");
+				bInNestedPrechangeTick = false;
+			}
+		});
 	World->SetGameInstance(ReplacementGameInstance);
+	TestFalse(TEXT("A pre-tick replacement invalidates the configured subsystem cache"), ServerModule.ConfiguredSubsystems.Contains(World));
+	TestTrue(TEXT("A pre-tick replacement makes crash context stale immediately"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale"));
+	TestTrue(TEXT("A pre-tick replacement removes the old crash run immediately"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey).IsEmpty());
+	WorldContext.OwningGameInstance = GameInstance;
+	ExpectedPrechangeGameInstance = ReplacementGameInstance;
+	World->SetGameInstance(GameInstance);
+	TestTrue(TEXT("A-to-B-to-A before a tick never revives the old crash run"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey).IsEmpty());
+	WorldContext.OwningGameInstance = ReplacementGameInstance;
+	ExpectedPrechangeGameInstance = GameInstance;
+	World->SetGameInstance(ReplacementGameInstance);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(PrechangeStateHandle);
+	TestTrue(TEXT("Nested prechange ticks stay stale without reactivating the old association"),
+		NestedPrechangeTicks >= 1 && bNestedTicksStayedStale && !bSawActiveDuringPrechange);
+	TestTrue(TEXT("A-to-B-to-A-to-B stays stale until the next tick"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey).IsEmpty());
+	ServerModule.OnSystemError();
+	TestTrue(TEXT("System error leaves pre-invalidated attribution stale"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey).IsEmpty());
+	FGenericCrashContext::SetGameData(AethelnServerObservability::CrashLifecycleKey, TEXT("world-running"));
 	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
 	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
 	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
@@ -598,12 +745,34 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Preconfigured replacement refreshes active crash context"), ReplacementState != nullptr && *ReplacementState == TEXT("active"));
 	TestTrue(TEXT("Replacement crash run is exact and not stale"), ReplacementRun != nullptr
 		&& *ReplacementRun == ReplacementSnapshot.CrashRunId && *ReplacementRun != FirstRunId);
+	ServerModule.OnSystemError();
+	TestTrue(TEXT("An unchanged association remains attributable at system error"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("active")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey) == ReplacementSnapshot.CrashRunId);
+	FGenericCrashContext::SetGameData(AethelnServerObservability::CrashLifecycleKey, TEXT("world-running"));
 	TestTrue(TEXT("Direct replacement drains its first lifecycle event"), ReplacementSubsystem->WaitForIdleForTests());
 	TestEqual(TEXT("Repeated ticks after direct replacement do not duplicate startup"), ReplacementSink->GetEvents().Num(), 1);
 
 	// A later absent association must clear process-wide attribution as well.
 	World->SetGameInstance(nullptr);
 	WorldContext.OwningGameInstance = nullptr;
+	TestFalse(TEXT("Detachment invalidates the configured subsystem cache"), ServerModule.ConfiguredSubsystems.Contains(World));
+	TestTrue(TEXT("A pre-tick detachment invalidates attribution"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey).IsEmpty());
+	ServerModule.OnSystemError();
+	TestTrue(TEXT("System error leaves detached attribution stale"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey).IsEmpty());
+	FGenericCrashContext::SetGameData(AethelnServerObservability::CrashLifecycleKey, TEXT("world-running"));
+	// Simulate a subsystem disappearing after an association was cached. The
+	// rejected tick must release its admission so the next tick can recover.
+	ServerModule.ConfiguredSubsystems.Add(World, ReplacementSubsystem);
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	TestTrue(TEXT("Disappeared subsystem aborts its admitted tick"),
+		!ServerModule.ConfiguredSubsystems.Contains(World)
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale"));
 	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
 	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
 	const FString* MissingState = FGenericCrashContext::GetGameData().Find(AethelnCrashContext::StateKey);
@@ -614,6 +783,70 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 	World->SetGameInstance(ReplacementGameInstance);
 	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
 	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	TestTrue(TEXT("Reattached subsystem recovers after aborted disappearance"),
+		FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("active")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey) == ReplacementSnapshot.CrashRunId);
+
+	// A context broadcast can synchronously redirect this world while the old
+	// subsystem is being configured. Neither its cache entry nor lifecycle event
+	// may survive that reassociation, even when the new instance is preconfigured.
+	UGameInstance* ReentrantGameInstance = NewObject<UGameInstance>(GEngine);
+	TestNotNull(TEXT("Reentrant game instance was created"), ReentrantGameInstance);
+	bool bRanReentrantCase = false;
+	if (ReentrantGameInstance != nullptr)
+	{
+		ReentrantGameInstance->Init();
+		UAethelnObservabilitySubsystem* ReentrantSubsystem = ReentrantGameInstance->GetSubsystem<UAethelnObservabilitySubsystem>();
+		TestNotNull(TEXT("Reentrant observability subsystem was created"), ReentrantSubsystem);
+		if (ReentrantSubsystem != nullptr)
+		{
+			TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> ReentrantSink =
+				MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(16);
+			TestTrue(TEXT("Reentrant sink is accepted"), ReentrantSubsystem->SetTestSink(ReentrantSink));
+			WorldContext.OwningGameInstance = ReentrantGameInstance;
+			World->SetGameInstance(ReentrantGameInstance);
+			TestTrue(TEXT("Replacement events are drained before reentrant tick"), ReplacementSubsystem->WaitForIdleForTests());
+			const int32 ReplacementEventsBeforeReentrantTick = ReplacementSink->GetEvents().Num();
+			ServerModule.NextHealthSampleTimes.Add(World, 0.0);
+			bool bRedirectedToReplacement = false;
+			const FDelegateHandle ReassociateHandle = UAethelnObservabilitySubsystem::OnCrashContextChanged().AddLambda(
+				[&](const UAethelnObservabilitySubsystem& Changed)
+				{
+					if (&Changed == ReentrantSubsystem && !bRedirectedToReplacement)
+					{
+						bRedirectedToReplacement = true;
+						WorldContext.OwningGameInstance = ReplacementGameInstance;
+						World->SetGameInstance(ReplacementGameInstance);
+					}
+				});
+			FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+			FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+			UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(ReassociateHandle);
+			TestTrue(TEXT("Reentrant B-to-C configuration redirects the world"), bRedirectedToReplacement);
+			const bool bReentrantEventsDrained = ReentrantSubsystem->WaitForIdleForTests();
+			TestTrue(TEXT("Reentrant B-to-C configuration cannot cache or emit B"),
+				!ServerModule.ConfiguredSubsystems.Contains(World)
+				&& bReentrantEventsDrained
+				&& ReentrantSink->GetEvents().IsEmpty());
+			TestTrue(TEXT("Reentrant B-to-C configuration stays unattributed until C ticks"),
+				FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale")
+				&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey).IsEmpty());
+			TestTrue(TEXT("Replacement events are drained after redirected tick"), ReplacementSubsystem->WaitForIdleForTests());
+			TestEqual(TEXT("Redirected tick does not sample C before configuration"), ReplacementSink->GetEvents().Num(), ReplacementEventsBeforeReentrantTick);
+			ServerModule.NextHealthSampleTimes.Add(World, World->GetTimeSeconds() + AethelnServerObservability::PrototypeHealthSampleIntervalSeconds);
+			if (!bRedirectedToReplacement)
+			{
+				WorldContext.OwningGameInstance = ReplacementGameInstance;
+				World->SetGameInstance(ReplacementGameInstance);
+			}
+			FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+			FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+			TestTrue(TEXT("C is configured on the following tick"), ServerModule.ConfiguredSubsystems.FindRef(World).Get() == ReplacementSubsystem);
+			bRanReentrantCase = true;
+			ReentrantSubsystem->ResetSink();
+		}
+		ReentrantGameInstance->Shutdown();
+	}
 
 	FWorldDelegates::OnWorldCleanup.Broadcast(World, true, true);
 	TestTrue(TEXT("Original subsystem drains lifecycle and health evidence"), Subsystem->WaitForIdleForTests());
@@ -627,12 +860,131 @@ bool FAethelnServerObservabilityContractTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("Actual server health delegate emits seven metrics"), Sink->GetMetrics().Num(), 7);
 	const TArray<FAethelnObservabilityEvent> ReplacementEvents = ReplacementSink->GetEvents();
-	TestEqual(TEXT("Replacement emits one start per association and one shutdown"), ReplacementEvents.Num(), 3);
-	if (ReplacementEvents.Num() == 3)
+	TestEqual(TEXT("Replacement emits one start per association and one shutdown"), ReplacementEvents.Num(), bRanReentrantCase ? 4 : 3);
+	if (ReplacementEvents.Num() == 4 && bRanReentrantCase)
 	{
 		TestEqual(TEXT("Direct replacement starts once"), ReplacementEvents[0].Category, EAethelnObservabilityCategory::ServerLifecycle);
 		TestEqual(TEXT("Reattached replacement starts once"), ReplacementEvents[1].Category, EAethelnObservabilityCategory::ServerLifecycle);
+		TestEqual(TEXT("Post-redirect replacement starts once"), ReplacementEvents[2].Category, EAethelnObservabilityCategory::ServerLifecycle);
+		TestEqual(TEXT("Replacement shuts down"), ReplacementEvents[3].SafeReason, EAethelnSafeReason::ControlledShutdown);
+	}
+	else if (ReplacementEvents.Num() == 3 && !bRanReentrantCase)
+	{
 		TestEqual(TEXT("Replacement shuts down"), ReplacementEvents[2].SafeReason, EAethelnSafeReason::ControlledShutdown);
+	}
+
+	// A synchronous observer may end tracking while the pre-change hook is
+	// revoking the old association. The post-change hook must still close it.
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	bool bEndedTrackingDuringPrechange = false;
+	const FDelegateHandle PrechangeCleanupHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (!bEndedTrackingDuringPrechange && Key == AethelnCrashContext::StateKey
+				&& Value == TEXT("stale") && World->IsGameInstanceTransitionInProgress())
+			{
+				bEndedTrackingDuringPrechange = true;
+				ServerModule.CrashContext.EndTracking(World);
+			}
+		});
+	WorldContext.OwningGameInstance = GameInstance;
+	World->SetGameInstance(GameInstance);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(PrechangeCleanupHandle);
+	TestTrue(TEXT("Prechange cleanup does not strand the transition marker"),
+		bEndedTrackingDuringPrechange && !ServerModule.CrashContext.IsTracked(World)
+		&& !ServerModule.ConfiguredSubsystems.Contains(World)
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("stale")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey).IsEmpty());
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	TestTrue(TEXT("Later tick retracks the original subsystem after prechange cleanup"),
+		ServerModule.CrashContext.IsTracked(World)
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::StateKey) == TEXT("active")
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnCrashContext::CrashRunIdKey) == Snapshot.CrashRunId);
+	FWorldDelegates::OnWorldCleanup.Broadcast(World, true, true);
+
+	// GameNet may count an untracked world during a nested tick inside the
+	// engine's association transition, but GameServer must not initialize it
+	// until the first tick that actually receives an admission.
+	bool bNestedUntrackedTransitionTick = false;
+	const FDelegateHandle NestedTransitionHandle = FWorldDelegates::OnWorldGameInstanceChanging.AddLambda(
+		[&](UWorld* ChangedWorld, UGameInstance*, UGameInstance*)
+		{
+			if (ChangedWorld == World && !bNestedUntrackedTransitionTick)
+			{
+				bNestedUntrackedTransitionTick = true;
+				FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+			}
+		});
+	WorldContext.OwningGameInstance = ReplacementGameInstance;
+	World->SetGameInstance(ReplacementGameInstance);
+	FWorldDelegates::OnWorldGameInstanceChanging.Remove(NestedTransitionHandle);
+	TestTrue(TEXT("Untracked transition nested tick counts but does not initialize server lifecycle"),
+		bNestedUntrackedTransitionTick && ServerModule.CrashContext.IsTracked(World)
+		&& !ServerModule.NextHealthSampleTimes.Contains(World)
+		&& FGenericCrashContext::GetGameData().FindRef(AethelnServerObservability::CrashLifecycleKey) == TEXT("controlled-shutdown"));
+	int32 FirstAdmittedLifecycleWrites = 0;
+	const FDelegateHandle FirstAdmittedLifecycleHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (Key == AethelnServerObservability::CrashLifecycleKey && Value == TEXT("world-running"))
+			{
+				++FirstAdmittedLifecycleWrites;
+			}
+		});
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+	FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(FirstAdmittedLifecycleHandle);
+	TestTrue(TEXT("First admitted tick initializes once after rejected transition tick"),
+		ServerModule.NextHealthSampleTimes.Contains(World) && FirstAdmittedLifecycleWrites == 1);
+	FWorldDelegates::OnWorldCleanup.Broadcast(World, true, true);
+
+	UWorld* NestedOtherWorld = UWorld::CreateWorld(EWorldType::Game, false);
+	TestNotNull(TEXT("Nested second world was created"), NestedOtherWorld);
+	if (NestedOtherWorld != nullptr)
+	{
+		bool bNestedSecondWorldTick = false;
+		const FDelegateHandle NestedSecondHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+			[&](const FString& Key, const FString& Value)
+			{
+				if (!bNestedSecondWorldTick && Key == AethelnCrashContext::StateKey && Value == TEXT("missing"))
+				{
+					bNestedSecondWorldTick = true;
+					FWorldDelegates::OnWorldTickStart.Broadcast(NestedOtherWorld, LEVELTICK_All, 0.016f);
+				}
+			});
+		FWorldDelegates::OnWorldTickStart.Broadcast(World, LEVELTICK_All, 0.016f);
+		FWorldDelegates::OnWorldTickEnd.Broadcast(World, LEVELTICK_All, 0.016f);
+		FGenericCrashContext::OnGameDataSetDelegate().Remove(NestedSecondHandle);
+		TestTrue(TEXT("Nested second world is counted without premature server initialization"),
+			bNestedSecondWorldTick && ServerModule.CrashContext.IsTracked(NestedOtherWorld)
+			&& !ServerModule.NextHealthSampleTimes.Contains(NestedOtherWorld));
+		int32 SecondWorldLifecycleWrites = 0;
+		const FDelegateHandle SecondWorldLifecycleHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+			[&](const FString& Key, const FString& Value)
+			{
+				if (Key == AethelnServerObservability::CrashLifecycleKey && Value == TEXT("world-running"))
+				{
+					++SecondWorldLifecycleWrites;
+				}
+			});
+		FWorldDelegates::OnWorldTickStart.Broadcast(NestedOtherWorld, LEVELTICK_All, 0.016f);
+		FWorldDelegates::OnWorldTickEnd.Broadcast(NestedOtherWorld, LEVELTICK_All, 0.016f);
+		FWorldDelegates::OnWorldTickStart.Broadcast(NestedOtherWorld, LEVELTICK_All, 0.016f);
+		FWorldDelegates::OnWorldTickEnd.Broadcast(NestedOtherWorld, LEVELTICK_All, 0.016f);
+		FGenericCrashContext::OnGameDataSetDelegate().Remove(SecondWorldLifecycleHandle);
+		TestTrue(TEXT("First admitted second-world tick initializes once after nested rejection"),
+			ServerModule.NextHealthSampleTimes.Contains(NestedOtherWorld) && SecondWorldLifecycleWrites == 1);
+		FWorldDelegates::OnWorldCleanup.Broadcast(NestedOtherWorld, true, true);
+		NestedOtherWorld->DestroyWorld(false);
+		FWorldDelegates::OnWorldCleanup.Broadcast(World, true, true);
+	}
+	else
+	{
+		FWorldDelegates::OnWorldCleanup.Broadcast(World, true, true);
 	}
 
 	Subsystem->ResetSink();

@@ -67,7 +67,7 @@ function Invoke-InitialPreparationAdmittedWork {
 		$WorkPhase = 'host_evidence'
 		$HostRecord = [ordered]@{ schemaVersion = 1; scope = 'compile_host_file_identity';
 			attemptId = $Context.attempt.attemptId; targetRevision = $Context.attempt.targetRevision;
-			engineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'; digest = $HostProof.digest;
+			engineRevision = '9ab6767ecaaa724d01371ffaea14317311ae8371'; digest = $HostProof.digest;
 			invocationSha256 = $HostProof.invocationSha256; files = @($HostProof.records);
 			engineRoot = $EngineRoot; linuxToolchainRoot = $LinuxToolchainRoot;
 			compilerPath = $CompilerPath; resourceCompilerPath = $ResourceCompilerPath; dotnetPath = $HostProof.dotnetPath;

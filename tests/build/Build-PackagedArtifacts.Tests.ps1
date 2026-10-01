@@ -20,7 +20,7 @@ try {
 	$FakeGit = Join-Path $GitBin 'git.bat'
 	$EngineRoot = Join-Path $FixtureRoot 'UE'
 	$ToolchainRoot = Join-Path $FixtureRoot 'v26_clang-20.1.8-rockylinux8'
-	$CanonicalEnginePin = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
+	$CanonicalEnginePin = '9ab6767ecaaa724d01371ffaea14317311ae8371'
 	$FakeGitBody = @(
 		'@echo off',
 		'if not "%3"=="rev-parse" goto notrevparse',

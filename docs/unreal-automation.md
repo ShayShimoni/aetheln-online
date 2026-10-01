@@ -21,8 +21,8 @@ performance evidence and budgets.
 | --- | --- |
 | Runner | `scripts/ci/Invoke-UnrealAutomationTests.ps1` |
 | Compatibility floor | Windows PowerShell 5.1 |
-| Engine tag | `5.8.1-release` |
-| Engine commit | `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43` |
+| Epic base tag | `5.8.1-release` at `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43` |
+| Engine commit | `9ab6767ecaaa724d01371ffaea14317311ae8371` in the [private Aetheln fork](https://github.com/ShayShimoni/UnrealEngine) |
 | Project | `AethelnOnline` |
 | Mode | `production` |
 | Schema | `aetheln.unreal-automation`, version `1` |
@@ -51,7 +51,7 @@ path, not a credential; keep it outside tracked configuration.
 From the repository root:
 
 ```powershell
-$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnEngineRoot = 'F:\UnrealEngine\UE-5.8.1-source'
 powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
   -EngineRoot $AethelnEngineRoot
 ```
@@ -93,7 +93,7 @@ these top-level fields:
 | `schemaVersion` | Integer `1`. |
 | `mode` | Constant `production` for the real engine run. |
 | `sourceRevision` | Full repository revision tested. |
-| `engineRevision` | Exact engine commit `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`. |
+| `engineRevision` | Exact custom engine commit `9ab6767ecaaa724d01371ffaea14317311ae8371`. |
 | `projectName` | Constant `AethelnOnline`. |
 | `filter` | The exact frozen two-test filter. |
 | `timeoutSeconds` | Effective timeout, defaulting to `600`. |

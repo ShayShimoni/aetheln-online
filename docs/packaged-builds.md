@@ -10,7 +10,7 @@ Launcher engine binaries and Editor-only success do not satisfy this workflow.
 
 | Component | Supported value |
 | --- | --- |
-| Unreal Engine source | Epic tag `5.8.1-release`, commit `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43` |
+| Unreal Engine source | [Private Aetheln fork](https://github.com/ShayShimoni/UnrealEngine), commit `9ab6767ecaaa724d01371ffaea14317311ae8371`, descended from Epic tag `5.8.1-release` at `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43` |
 | Project | `AethelnOnline` |
 | Client target | `AethelnOnlineClient`, Win64, Development |
 | Dedicated-server target | `AethelnOnlineServer`, Linux x86-64, Development |
@@ -75,13 +75,13 @@ $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
 .\scripts\build\Build-PackagedArtifacts.ps1 `
   -ProjectPath .\AethelnOnline.uproject `
-  -EngineRoot 'D:\UnrealEngine\UE-5.8.1-source' `
+  -EngineRoot 'F:\UnrealEngine\UE-5.8.1-source' `
   -LinuxToolchainRoot 'C:\UnrealToolchains\v26_clang-20.1.8-rockylinux8' `
-  -ArchiveRoot 'D:\Builds\aetheln-run-001' `
-  -LogRoot 'D:\BuildLogs\aetheln-run-001' `
+  -ArchiveRoot 'F:\Builds\aetheln-run-001' `
+  -LogRoot 'F:\BuildLogs\aetheln-run-001' `
   -SourceRevision $AethelnRevision `
   -HostToolsBoundary Prebuilt `
-  -EngineRevision '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' `
+  -EngineRevision '9ab6767ecaaa724d01371ffaea14317311ae8371' `
   -HostToolsAttestationPath $AethelnHostToolsAttestationPath `
   -Configuration Development `
   -Map /Game/Maps/StarterMap
@@ -172,14 +172,14 @@ log signatures:
 
 ```powershell
 .\scripts\build\Invoke-PackagedSmokeTest.ps1 `
-  -ServerExecutable '/mnt/d/Builds/aetheln-run-001/LinuxServer/Linux/AethelnOnlineServer.sh' `
+  -ServerExecutable '/mnt/f/Builds/aetheln-run-001/LinuxServer/Linux/AethelnOnlineServer.sh' `
   -ServerLauncherExecutable 'wsl.exe' `
   -ServerLauncherArguments @('-d', 'Ubuntu', '-u', 'aethelnqa', '--exec', '{ServerExecutable}', '{ServerMap}', '-port=7777', '-stdout', '-FullStdOutLogOutput') `
-  -ClientExecutable 'D:\Builds\aetheln-run-001\WindowsClient\Windows\AethelnOnlineClient.exe' `
+  -ClientExecutable 'F:\Builds\aetheln-run-001\WindowsClient\Windows\AethelnOnlineClient.exe' `
   -ClientBaseArguments @('{ServerEndpoint}', '-stdout', '-FullStdOutLogOutput') `
   -ServerEndpoint $AethelnServerEndpoint `
   -ServerMap '/Game/Maps/StarterMap' `
-  -LogRoot 'D:\SmokeLogs\aetheln-run-001' `
+  -LogRoot 'F:\SmokeLogs\aetheln-run-001' `
   -ServerReadyPattern 'GameNetDriver.*Listening' `
   -ServerClientConnectedPattern 'AddClientConnection:.*RemoteAddr: (?<ConnectionId>[^,]+)' `
   -ClientConnectedPattern 'Welcomed by server' `

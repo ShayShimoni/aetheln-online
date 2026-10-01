@@ -73,7 +73,8 @@ public:
 	using FSinkPtr = FAethelnObservabilityService::FSinkPtr;
 	using FRestrictedSinkPtr = FAethelnObservabilityService::FRestrictedSinkPtr;
 
-	/** Game-thread broadcast after an accepted runtime/build context change or reset; rejected changes never broadcast. */
+	/** Game-thread broadcast after an accepted runtime/build context change or reset. Reentrant
+	 * setters during marker publication are rejected; resets are deferred until publication ends. */
 	static FAethelnCrashContextChanged& OnCrashContextChanged();
 
 	virtual void Deinitialize() override;
@@ -118,18 +119,37 @@ public:
 	void EmitMetric(const FAethelnMetricSample& Sample) const;
 
 private:
+	friend class FAethelnCrashContextOwner;
+	/** Claims the log marker once for the current generated crash run, including after world reassociation. */
+	bool TryClaimCrashRunMarker(const FString& CandidateCrashRunId);
+	/** Shields marker-before-active publication from synchronous log callback mutations. */
+	bool BeginCrashRunMarkerPublication(const FString& CandidateCrashRunId);
+	void EndCrashRunMarkerPublication();
+	void ClearRuntimeContextWithoutBroadcast();
+	void ClearBuildContextWithoutBroadcast();
+	enum class EDeferredCrashReset : uint8
+	{
+		Runtime,
+		Build
+	};
 	FAethelnObservabilityService Service;
 	FAethelnObservabilityRuntimeContext RuntimeContext;
 	/** Opaque crash run ID generated on every accepted runtime context; empty after reset. */
 	FString CrashRunId;
+	bool bCrashRunMarkerClaimed = false;
 	FAethelnBuildIdentity BuildIdentity;
 	FAethelnNetworkProfile NetworkProfile;
+	TArray<EDeferredCrashReset, TInlineAllocator<8>> DeferredCrashResets;
+	bool bDeferredCrashResetOverflow = false;
+	bool bPublishingCrashRunMarker = false;
+	bool bFailingClosedCrashReset = false;
 	EAethelnEnvironment MetricEnvironment = EAethelnEnvironment::Local;
 	bool bHasRuntimeContext = false;
 	bool bHasBuildContext = false;
 	bool bHasValidEnvironment = true;
 };
 
+class UGameInstance;
 class UWorld;
 
 namespace AethelnCrashContext
@@ -186,6 +206,24 @@ namespace AethelnCrashContext
 class GAMENET_API FAethelnCrashContextOwner
 {
 public:
+	enum class EWorldTickAdmissionResult : uint8
+	{
+		Rejected,
+		ExistingWorld,
+		NewWorld
+	};
+	class FWorldTickAdmission
+	{
+	public:
+		FWorldTickAdmission() = default;
+	private:
+		friend class FAethelnCrashContextOwner;
+		const FAethelnCrashContextOwner* Owner = nullptr;
+		TWeakObjectPtr<const UWorld> World;
+		uint64 Serial = 0;
+		bool bNewWorld = false;
+	};
+
 	FAethelnCrashContextOwner() = default;
 	FAethelnCrashContextOwner(const FAethelnCrashContextOwner&) = delete;
 	FAethelnCrashContextOwner& operator=(const FAethelnCrashContextOwner&) = delete;
@@ -195,6 +233,16 @@ public:
 	void Initialize();
 	/** Unbinds, forgets every world, and clears to stale. */
 	void Shutdown();
+	/** Called by the server's engine pre-change hook before the world association changes. */
+	void BeginWorldGameInstanceTransition(const UWorld* World);
+	/** Called by the server's engine post-change hook; denial remains until a new completed tick. */
+	void EndWorldGameInstanceTransition(const UWorld* World);
+	/** Count before configuration and mint one opaque, one-use capability per world tick. */
+	EWorldTickAdmissionResult BeginWorldTickAdmission(const UWorld* World, FWorldTickAdmission& OutAdmission);
+	/** Complete only the exact admitted tick after server configuration and stable association. */
+	bool CompleteWorldTickAdmission(const FWorldTickAdmission& Admission);
+	/** Abandon only the exact admitted tick and fail closed if server configuration cannot finish. */
+	bool AbortWorldTickAdmission(const FWorldTickAdmission& Admission);
 	/** Counts an observable world before any subsystem lookup; returns true on first sight. */
 	bool TrackWorldTick(const UWorld* World);
 	/** Stops tracking a world and clears to stale. */
@@ -203,21 +251,48 @@ public:
 	void RefreshForTrackedWorld(const UWorld* World);
 	bool IsTracked(const UWorld* World) const;
 	int32 NumTrackedWorlds() const;
+	/** Only the tracked-world refresh may register; direct calls fail missing without subsystem provenance. */
 	void Register(const FAethelnCrashContextSnapshot* Snapshot);
 	void MarkStale();
 	void MarkAmbiguous();
 	AethelnCrashContext::EState GetState() const;
 
 private:
+	enum class ERequestedUpdate : uint8
+	{
+		None,
+		Refresh,
+		Missing,
+		Stale,
+		Ambiguous
+	};
+	void RequestUpdate(ERequestedUpdate Update);
 	void Refresh();
 	void OnContextChanged(const UAethelnObservabilitySubsystem& Changed);
 	const UWorld* GetSoleTrackedWorld() const;
+	bool IsWorldGameInstanceTransitioning(const UWorld* World) const;
+	void MarkTransitionStaleIfNeeded(const UWorld* World);
+	void DenyTrackedWorldsUntilNextCompletion();
 	void SetState(AethelnCrashContext::EState NewState);
 	void ClearIdentity(AethelnCrashContext::EState NewState);
 
 	TSet<TWeakObjectPtr<const UWorld>> TrackedWorlds;
+	TMap<TWeakObjectPtr<const UWorld>, uint64> PendingWorldTickAdmissions;
+	/** An aborted tick cannot be refreshed into active before a later exact completion. */
+	TSet<TWeakObjectPtr<const UWorld>> DeniedWorldTickAdmissions;
+	TSet<TWeakObjectPtr<const UWorld>> WorldsInGameInstanceTransition;
+	uint64 NextWorldTickAdmissionSerial = 0;
 	AethelnCrashContext::EState State = AethelnCrashContext::EState::Missing;
-	/** Last crash run ID bound to the evidence marker, so each generated ID is logged once. */
-	FString LastMarkedCrashRunId;
+	TWeakObjectPtr<const UWorld> ActiveWorld;
+	TWeakObjectPtr<const UGameInstance> ActiveGameInstance;
+	TWeakObjectPtr<UAethelnObservabilitySubsystem> ActiveSubsystem;
+	FString ActiveCrashRunId;
+	TWeakObjectPtr<UAethelnObservabilitySubsystem> RegistrationSubsystem;
+	ERequestedUpdate PendingUpdate = ERequestedUpdate::None;
+	uint64 UpdateSerial = 0;
+	uint64 ApplyingSerial = 0;
+	bool bApplyingUpdate = false;
+	bool bInvalidatingReentrantActive = false;
+	bool bAllowRegistration = false;
 	FDelegateHandle ChangedHandle;
 };

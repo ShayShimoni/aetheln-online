@@ -660,8 +660,10 @@ has completed successfully.
 
 The production PowerShell 5.1 runner is
 `scripts/ci/Invoke-UnrealAutomationTests.ps1`. It requires an explicit
-`-EngineRoot` for the source engine pinned to tag `5.8.1-release` and commit
-`71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`; `-TimeoutSeconds` is optional and
+`-EngineRoot` for the clean custom source engine pinned to
+`9ab6767ecaaa724d01371ffaea14317311ae8371`, descended from Epic tag
+`5.8.1-release` at `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`;
+`-TimeoutSeconds` is optional and
 defaults to 600. It runs exactly the project/module-load smoke test and focused
 network-spike authority test under the frozen filter, validates exact discovery,
 and exits nonzero on every preflight, process, discovery, report, or test

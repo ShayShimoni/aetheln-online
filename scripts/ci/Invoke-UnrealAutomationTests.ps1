@@ -9,7 +9,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PinnedEngineTag = '5.8.1-release'
-$PinnedEngineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
+$PinnedEngineBaseRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
+$PinnedEngineRevision = '9ab6767ecaaa724d01371ffaea14317311ae8371'
 $ProjectName = 'AethelnOnline'
 $Filter = '^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$'
 $ExpectedTests = @('Aetheln.Harness.ProjectAndModuleLoad','Aetheln.GameCombat.NetworkSpike.Authority')
@@ -183,7 +184,7 @@ function Write-NormalizedReport {
 try {
 	try {if(-not(Test-Path $ProjectPath -PathType Leaf)){throw 'project_missing'};if(-not(Test-Path $EngineRoot -PathType Container)){throw 'engine_root_invalid'};$EngineRoot=(Resolve-Path $EngineRoot).Path;$EditorPath=Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe';if(-not(Test-Path $EditorPath -PathType Leaf)){throw 'editor_missing'};if($null-eq(Get-Command git -ErrorAction SilentlyContinue)){throw 'git_missing'};Initialize-JobObjectType}catch{$FailureReason='preflight'}
 	if($FailureReason-ceq 'none'){try{$SourceRevision=Get-SingleGitRevision $RepositoryRoot @('rev-parse','HEAD');$Before=Get-RepositoryState $SourceRevision;$RepositoryCleanBefore=$Before.clean;if(-not $RepositoryCleanBefore){$FailureReason='repository-dirty'}}catch{$FailureReason='preflight'}}
-	if($FailureReason-ceq 'none'){try{$EngineRevision=Get-SingleGitRevision $EngineRoot @('rev-parse','HEAD');$TagRevision=Get-SingleGitRevision $EngineRoot @('rev-parse','--verify',"refs/tags/$PinnedEngineTag^{commit}");if($EngineRevision-cne $PinnedEngineRevision-or $TagRevision-cne $PinnedEngineRevision){throw 'engine_pin_mismatch'}}catch{$FailureReason='engine-pin'}}
+	if($FailureReason-ceq 'none'){try{$EngineRevision=Get-SingleGitRevision $EngineRoot @('rev-parse','HEAD');$TagRevision=Get-SingleGitRevision $EngineRoot @('rev-parse','--verify',"refs/tags/$PinnedEngineTag^{commit}");if($EngineRevision-cne $PinnedEngineRevision-or $TagRevision-cne $PinnedEngineBaseRevision){throw 'engine_pin_mismatch'};$Ancestry=Invoke-NativeCommand 'git' @('-C',$EngineRoot,'merge-base','--is-ancestor',$PinnedEngineBaseRevision,$PinnedEngineRevision);if($Ancestry.exitCode-ne 0){throw 'engine_pin_ancestry_mismatch'};$EngineStatus=Invoke-NativeCommand 'git' @('-C',$EngineRoot,'status','--porcelain=v1','--untracked-files=all');if($EngineStatus.exitCode-ne 0-or @($EngineStatus.output|Where-Object{-not[string]::IsNullOrWhiteSpace($_)}).Count-ne 0){throw 'engine_source_dirty'}}catch{$FailureReason='engine-pin'}}
 	if($FailureReason-ceq 'none'){try{foreach($Directory in @($UnrealReportDirectory,(Split-Path -Parent $NormalizedReportPath),(Split-Path -Parent $LogPath))){if(-not(Test-Path $Directory)){New-Item -ItemType Directory $Directory -Force|Out-Null}};foreach($File in @($UnrealReportPath,$NormalizedReportPath,$LogPath)){if(Test-Path $File -PathType Leaf){Remove-Item $File -Force}}}catch{$FailureReason='preflight'}}
 	if($FailureReason-ceq 'none'){
 		$Arguments=@($ProjectPath,'-unattended','-nop4','-nullrhi',"-ExecCmds=Automation RunTests $Filter; Quit",'-TestExit=Automation Test Queue Empty',"-ReportExportPath=$UnrealReportDirectory","-abslog=$LogPath")

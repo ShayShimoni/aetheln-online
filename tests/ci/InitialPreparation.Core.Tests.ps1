@@ -513,7 +513,7 @@ function Test-LeaseSupervisionIntegration {
 function Test-RequestContract {
 	$Attempt = Get-TestAttempt -Id 'request-contract'
 	$Request = [ordered]@{ schemaVersion = 2; repository = 'owner/repository'; targetRevision = ('b' * 40);
-		engineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'; runnerId = 21; runnerName = 'aetheln-engine-pc';
+		engineRevision = '9ab6767ecaaa724d01371ffaea14317311ae8371'; runnerId = 21; runnerName = 'aetheln-engine-pc';
 		engineRoot = 'D:\engine'; targetRoot = 'D:\target'; leasePath = 'D:\control\host.lease'; yamlAssemblyPath = 'D:\control\YamlDotNet.dll'; linuxToolchainRoot = 'D:\toolchain';
 		sourceRoot = 'D:\source'; lfsStorageRoot = 'D:\lfs-cache'; mode = 'inspect'; authorizationReference = $null }
 	$Request['compilerPath'] = 'D:\tools\cl.exe'; $Request['resourceCompilerPath'] = 'D:\tools\rc.exe'

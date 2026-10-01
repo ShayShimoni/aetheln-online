@@ -219,7 +219,12 @@ Evidence marker: before registration first becomes `active` with a new crash
 run ID, the owner writes one Display line to the server log,
 `AethelnCrashContextMarker crash-run=<id>`, carrying only that ID. The line is
 written during registration on the game thread, never from the system-error
-callback. The marker requires engine logging to be enabled in the build.
+callback. The marker requires engine logging to be enabled in the build. It is
+tentative while GameData state is `updating`: a synchronous callback can end or
+replace the world before the owner publishes `active`.
+A marker alone never authorizes attribution. Only matching `active` crash
+GameData at failure may be bound to the independently verified local capture
+manifest.
 
 External attribution is not established by reading the event stream alone.
 Events carry the launcher run, and the marker and crash GameData carry only
@@ -233,6 +238,8 @@ The future local-only controlled-capture runner must establish attribution
 itself. It must observe the marker before it triggers the failure, and it must
 bind that marker's crash run ID, in an allowlisted manifest, to independently
 verified process, package, source, engine, and profile evidence. It must fail closed on missing, stale, or ambiguous binding.
+It must also reject a marker whose crash run ID does not match `active`
+`AethelnCrashRunId` GameData at the controlled failure.
 Until that runner exists, a crash run ID is unattributed. This package
 provides neither the runner nor the manifest.
 
@@ -245,17 +252,49 @@ Registration transitions:
   subsystem exists, sets lifecycle `world-running`, and refreshes crash
   context. With exactly one observable world and a valid snapshot, state
   becomes `updating`, all thirteen identity keys are written, and state
-  becomes `active`.
+  becomes `active`. GameNet may count a world during a transition-rejected or
+  nested-second-world tick. GameServer initializes its lifecycle and health
+  schedule only on that world's first admitted tick, even if GameNet already
+  counted it; rejected ticks never initialize them.
 - If that first tick has no game instance or subsystem, later ticks retry only
   subsystem configuration, not world counting. A newly available or replaced
   subsystem is configured once and emits its lifecycle start event; its
-  accepted-change broadcast refreshes crash registration for that world.
-- When a tracked world's configured subsystem disappears or changes, the
-  server first marks the process crash context stale, then re-reads the tracked
-  world. No subsystem clears the old crash run to `missing`; a replacement is
+  accepted-change broadcast cannot register it while the tick admission is
+  pending. Completing that admission refreshes crash registration only after
+  configuration and association validation.
+- A direct `UWorld::SetGameInstance` pointer change on a tracked Game or PIE
+  world requires synchronous, game-thread engine notifications before and
+  after assignment. GameServer's pre-change handler asks the GameNet owner to
+  begin a transition, synchronously setting crash context `stale` and removing
+  every identity key before the old association can be replaced. GameServer
+  clears its configured-subsystem cache on both notifications, and its
+  post-change handler asks the owner to end the transition without registering
+  either subsystem. Accepted context changes during the transition do not
+  re-activate attribution. The next world tick configures and validates the
+  current association before it may become `active` again. A-to-B-to-A before
+  that tick remains `stale`, as does detachment to no game instance.
+  State is written before the identity-key clear loop, so a synchronous state
+  callback may briefly see an old run ID with `stale`; consumers must reject
+  every non-`active` state. All identity keys are empty after the setter returns.
+  The post-change hook closes the local transition marker even if a pre-change
+  callback ended world tracking; a later tick may count and configure that
+  world again.
+- Configuration itself can synchronously broadcast an accepted context change
+  whose listener replaces the world game instance again. GameServer captures
+  the association epoch and rechecks the exact subsystem after configuration
+  and after completing the one-use admission. If either changed, it drops the
+  cache entry without emitting the superseded subsystem's lifecycle start event. A tick-end
+  health sample likewise requires the current subsystem to be configured.
+- If a later tick discovers a changed subsystem without an earlier engine
+  notification, GameServer marks crash context `stale` before re-reading the
+  tracked world. The direct-notification path is already stale before that
+  tick. No subsystem clears the old crash run to `missing`; a replacement is
   registered explicitly after configuration even if it was preconfigured and
   emits no new change broadcast. Repeated ticks with the same subsystem do not
   emit duplicate lifecycle starts.
+- Any unsuccessful tick before admission completion aborts its exact one-use
+  token and leaves attribution stale. A disappeared subsystem therefore cannot
+  strand admission and prevent a later tick from recovering.
 - An accepted runtime or build/profile change or reset on the sole tracked
   world's game instance refreshes crash context immediately, without waiting
   for another world tick. A valid replacement follows the same
@@ -340,7 +379,18 @@ subsystem, the excluded process pseudonym, exclusion of printable personal or
 credential-like launcher text from every crash GameData key, generated crash
 run rotation across omitted-run launches and world or runtime replacement, a
 runtime replacement followed by failure before another event (which stays
-unattributed), and the lifecycle-only system-error handler.
+unattributed), direct pre-tick world replacement, detachment, A-to-B-to-A
+reassociation, reentrant B-to-C configuration, and the lifecycle-only
+system-error handler. The direct-change guarantee depends on a new
+pinned-engine revision exposing the synchronous
+pre/post `SetGameInstance` notifications. The portable contract tests do not
+prove that engine patch compiles or runs; native Editor and Server evidence is
+  required before this guarantee is accepted. GameServer begins an opaque,
+  one-use world-tick admission before looking up the subsystem. GameNet counts
+  that world but defers active registration while the admission is pending;
+  GameServer configures and rechecks the exact association before completing
+  the admission. A changed association or rejected admission fails closed,
+  rather than activating a preconfigured replacement before server setup.
 
 The evidence-marker test,
 `Aetheln.Observability.CrashContext.MarkerMatchesRegisteredRun`, drives the
@@ -360,8 +410,10 @@ refresh) lives in GameNet, which both `AethelnOnlineEditor.Target.cs` and
 `AethelnOnlineServer.Target.cs` list. Its `Aetheln.Observability.CrashContext.*`
 tests create their own owner and worlds rather than broadcasting to the loaded
 GameServer module, so a server's own map world cannot make them ambiguous; they
-declare `EditorContext | ServerContext`. GameServer keeps only the lifecycle
-keys, context seeding, and the system-error handler; its
+declare `EditorContext | ServerContext`. GameServer keeps lifecycle keys,
+context seeding, the configured-subsystem cache, and the lifecycle-only
+system-error handler. It invalidates the cache at the engine's pre/post
+game-instance notifications but does not inspect worlds during a crash. Its
 `Aetheln.Observability.Server.SystemErrorLifecycleOnly` test declares
 `EditorContext | ServerContext`.
 

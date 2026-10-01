@@ -8,7 +8,7 @@ project-generation command, Development Editor build, and first launch.
 
 | Component | Pin |
 | --- | --- |
-| Unreal Engine source | Epic tag `5.8.1-release`, commit `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43` |
+| Unreal Engine source | [Private Aetheln fork](https://github.com/ShayShimoni/UnrealEngine), commit `9ab6767ecaaa724d01371ffaea14317311ae8371`, descended from Epic tag `5.8.1-release` at `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43` |
 | Project | `AethelnOnline` |
 | Template | Blank C++, no Starter Content |
 | Visual Studio | Visual Studio 2022 17.14 |
@@ -37,7 +37,7 @@ broader UI design.
 
 ## Local prerequisites
 
-1. Obtain Epic's Unreal Engine source and check out the exact tag and commit.
+1. Obtain authorized access to Epic's Unreal Engine source and the private Aetheln fork; check out the exact Aetheln engine commit. Do not move Epic's tag.
 2. Install Visual Studio 2022 17.14 with the pinned MSVC toolset and Windows SDK.
 3. Run the normal source-engine dependency and project-file setup.
 4. Install the pinned Linux cross-toolchain before Linux server packaging.
@@ -53,19 +53,26 @@ secrets.
 Set explicit local roots from a PowerShell session at the repository root:
 
 ```powershell
-$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnEngineRoot = 'F:\UnrealEngine\UE-5.8.1-source'
 $AethelnRepoRoot = (Resolve-Path '.').Path
 $AethelnProject = Join-Path $AethelnRepoRoot 'AethelnOnline.uproject'
 
-git -C $AethelnEngineRoot describe --tags --exact-match HEAD
-# Expected: 5.8.1-release
+git -C $AethelnEngineRoot rev-parse 'refs/tags/5.8.1-release^{commit}'
+# Expected Epic base: 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43
 
 git -C $AethelnEngineRoot rev-parse HEAD
-# Expected: 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43
+# Expected Aetheln pin: 9ab6767ecaaa724d01371ffaea14317311ae8371
+
+git -C $AethelnEngineRoot merge-base --is-ancestor 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43 HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Engine pin is not descended from the Epic 5.8.1-release base.' }
+
+git -C $AethelnEngineRoot status --porcelain=v1 --untracked-files=all
+# Expected: no output
 ```
 
-Stop if either value differs. Do not substitute a preview, launcher binary, or
-another UE 5.8 revision.
+Stop if either revision differs, ancestry fails, or the source checkout is dirty.
+Do not substitute a preview, launcher binary, or another UE 5.8 revision. Host
+tools built under the Epic base commit do not attest the custom engine pin.
 
 ## Generate and build
 

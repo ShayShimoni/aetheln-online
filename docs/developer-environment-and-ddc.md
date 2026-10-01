@@ -257,7 +257,7 @@ Build-PackagedArtifacts.ps1 -Stage AttestHostTools `
 
 The attestation step builds nothing. It requires the engine checkout to be
 clean and at exactly the canonical pinned engine revision
-(`71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`, the pin recorded in
+(`9ab6767ecaaa724d01371ffaea14317311ae8371`, the pin recorded in
 [Unreal Project Setup](unreal-project-setup.md) and enforced as a constant by
 the build controller), refuses to overwrite an existing record (the record is
 written atomically to a temporary sibling and moved into place), and writes

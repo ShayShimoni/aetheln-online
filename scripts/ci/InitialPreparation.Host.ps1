@@ -69,7 +69,7 @@ function Get-InitialPreparationHostProof {
 		$ResourceCompilerPath -notmatch '[\\/]bin[\\/]10\.0\.26100\.0[\\/]x64[\\/]rc\.exe$' -or
 		[IO.Path]::GetFileName($LinuxToolchainRoot) -cne 'v26_clang-20.1.8-rockylinux8') { throw 'host_tool_path_invalid' }
 	Invoke-InitialPreparationInputProgress -Attempt $Attempt -OnProgress $OnProgress
-	$Engine = Get-InitialPreparationCheckoutIdentity -Root $EngineRoot -ExpectedRevision '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
+	$Engine = Get-InitialPreparationCheckoutIdentity -Root $EngineRoot -ExpectedRevision '9ab6767ecaaa724d01371ffaea14317311ae8371'
 	if ($Engine.clean -isnot [bool] -or -not $Engine.clean) { throw 'host_engine_identity_invalid' }
 	$PublishRoot = Join-Path $EngineRoot 'Engine/Binaries/DotNET/UnrealBuildTool'
 	$Proof = [pscustomobject]@{ scope = 'compile_host_file_identity'; attempt = $Attempt; lease = $Lease;

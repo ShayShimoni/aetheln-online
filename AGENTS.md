@@ -96,7 +96,7 @@ toolchain, project-generation command, Development Editor build, and first
 launch. From the repository root in PowerShell:
 
 ```powershell
-$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnEngineRoot = 'F:\UnrealEngine\UE-5.8.1-source'
 $AethelnProject = (Resolve-Path '.\AethelnOnline.uproject').Path
 & (Join-Path $AethelnEngineRoot 'GenerateProjectFiles.bat') "-project=$AethelnProject" -game -engine -progress
 & (Join-Path $AethelnEngineRoot 'Engine\Build\BatchFiles\Build.bat') AethelnOnlineEditor Win64 Development $AethelnProject -WaitMutex -NoHotReloadFromIDE

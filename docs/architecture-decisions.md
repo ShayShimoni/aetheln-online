@@ -45,6 +45,16 @@ Every accepted decision records:
   editor-only server evidence; an unversioned launcher-only production
   baseline.
 - **Consequences:** Packaged target builds are part of the prototype gate.
+- **Engine-source extension for Issue #148:** Direct, pre-tick changes to a
+  `UWorld`'s owning `UGameInstance` must invalidate crash attribution without
+  crash-time world traversal. The approved source pin is the private Aetheln
+  fork commit `9ab6767ecaaa724d01371ffaea14317311ae8371`, descended from
+  Epic's unchanged `5.8.1-release` tag at
+  `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`. The custom commit adds
+  synchronous pre/post ownership-change notification and a transition guard.
+  Prior engine-product receipts and attestations cannot authorize this new pin;
+  clean source identity, rebuilt native targets, and project automation require
+  fresh evidence.
 - **Revisit trigger:** A blocking platform/toolchain fact or measured engine
   limitation that cannot be resolved within scope.
 

@@ -23,7 +23,7 @@ project targets always build with -clean.
 .EXAMPLE
 $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
-./scripts/build/Build-PackagedArtifacts.ps1 -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -ArchiveRoot D:/Builds/aetheln-run-001 -LogRoot D:/BuildLogs/aetheln-run-001 -SourceRevision $AethelnRevision -HostToolsBoundary Prebuilt -EngineRevision 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43 -HostToolsAttestationPath $AethelnHostToolsAttestationPath
+./scripts/build/Build-PackagedArtifacts.ps1 -ProjectPath ./AethelnOnline.uproject -EngineRoot F:/UnrealEngine/UE-5.8.1-source -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -ArchiveRoot F:/Builds/aetheln-run-001 -LogRoot F:/BuildLogs/aetheln-run-001 -SourceRevision $AethelnRevision -HostToolsBoundary Prebuilt -EngineRevision 9ab6767ecaaa724d01371ffaea14317311ae8371 -HostToolsAttestationPath $AethelnHostToolsAttestationPath
 
 Selects Prebuilt explicitly. Enter the path to an existing external attestation
 record produced with -Stage AttestHostTools after an authorized successful
@@ -67,7 +67,7 @@ $script:CacheState = [ordered]@{ mode = 'engine-default'; status = 'not_configur
 $script:HostToolsState = [ordered]@{ mode = 'unresolved'; status = 'not_configured'; engineRevision = $null }
 $script:DdcIdentityFieldNames = @('engineGitRevision', 'engineBuildVersionSha256', 'linuxToolchain', 'linuxToolchainCompilerSha256', 'projectRepository', 'project', 'configuration', 'targets')
 # The repository's canonical pinned engine revision (docs/unreal-project-setup.md).
-$script:CanonicalEngineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
+$script:CanonicalEngineRevision = '9ab6767ecaaa724d01371ffaea14317311ae8371'
 $script:BuildTargetsContract = 'AethelnOnlineClient:Win64+AethelnOnlineServer:Linux'
 # The pinned engine's generated Unreal target receipts are the authoritative
 # bounded source of the host build products -nocompileeditor would skip: the

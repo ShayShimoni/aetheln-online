@@ -534,7 +534,7 @@ function Assert-EngineRunnerSemanticEvidence {
 	Assert-ClosedObject $Report.compileEvidence @('schemaVersion','identity','builds') $Reason
 	Assert-ClosedObject $Report.compileEvidence.identity @('engineGitRevision','engineGitRevisionStatus','engineBuildVersionSha256','engineBuildVersionSha256Status','linuxToolchainCompilerSha256','linuxToolchainCompilerSha256Status','runnerName','durationSeconds') $Reason
 	$CompileIdentity = $Report.compileEvidence.identity
-	if ($CompileIdentity.engineGitRevision -isnot [string] -or $CompileIdentity.engineGitRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or
+	if ($CompileIdentity.engineGitRevision -isnot [string] -or $CompileIdentity.engineGitRevision -cne '9ab6767ecaaa724d01371ffaea14317311ae8371' -or
 		$CompileIdentity.engineGitRevisionStatus -isnot [string] -or $CompileIdentity.engineGitRevisionStatus -cne 'verified' -or
 		-not (Test-Sha256 $CompileIdentity.engineBuildVersionSha256) -or $CompileIdentity.engineBuildVersionSha256Status -isnot [string] -or $CompileIdentity.engineBuildVersionSha256Status -cne 'verified' -or
 		-not (Test-Sha256 $CompileIdentity.linuxToolchainCompilerSha256) -or $CompileIdentity.linuxToolchainCompilerSha256Status -isnot [string] -or $CompileIdentity.linuxToolchainCompilerSha256Status -cne 'verified' -or
@@ -557,7 +557,7 @@ function Assert-UnrealAutomationSemanticEvidence {
 	} catch { if ($_.Exception.Message -cmatch '^receipt_semantic_evidence_') { throw }; throw $Reason }
 	if ($Report.schemaId -isnot [string] -or $Report.schemaId -cne 'aetheln.unreal-automation' -or -not (Test-AggregateBoundedInteger $Report.schemaVersion 1 1) -or
 		$Report.mode -isnot [string] -or $Report.mode -cne 'production' -or $Report.sourceRevision -isnot [string] -or $Report.sourceRevision -cne $Context.source.testedRevision -or
-		$Report.engineRevision -isnot [string] -or $Report.engineRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or
+		$Report.engineRevision -isnot [string] -or $Report.engineRevision -cne '9ab6767ecaaa724d01371ffaea14317311ae8371' -or
 		$Report.projectName -isnot [string] -or $Report.projectName -cne 'AethelnOnline' -or $Report.filter -isnot [string] -or $Report.filter -cne '^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$' -or
 		-not (Test-AggregateBoundedInteger $Report.timeoutSeconds 1 86400) -or -not (Test-AggregateTimestampRange $Report.startedUtc $Report.finishedUtc) -or
 		-not (Test-AggregateBoundedInteger $Report.processExitCode 0 0) -or $Report.repositoryCleanBefore -isnot [bool] -or -not $Report.repositoryCleanBefore -or

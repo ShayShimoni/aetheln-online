@@ -47,10 +47,17 @@ bool UAethelnObservabilitySubsystem::SetRuntimeContext(
 	{
 		return false;
 	}
+	if (bPublishingCrashRunMarker)
+	{
+		// A boolean setter can reject reentrant log callbacks rather than returning
+		// success for a mutation that has not yet reached the subsystem.
+		return false;
+	}
 
 	RuntimeContext = MoveTemp(Candidate);
 	// Every accepted runtime context is a new crash run, even when a launcher reuses its run text.
 	CrashRunId = FGuid::NewGuid().ToString(EGuidFormats::DigitsLower);
+	bCrashRunMarkerClaimed = false;
 	bHasRuntimeContext = true;
 	OnCrashContextChanged().Broadcast(*this);
 	return true;
@@ -62,13 +69,36 @@ void UAethelnObservabilitySubsystem::ResetRuntimeContext()
 	{
 		return;
 	}
+	if (bPublishingCrashRunMarker)
+	{
+		if (bFailingClosedCrashReset)
+		{
+			// Both contexts are already clear; the terminal notification is non-reentrant.
+			return;
+		}
+		if (DeferredCrashResets.Num() < 8)
+		{
+			DeferredCrashResets.Add(EDeferredCrashReset::Runtime);
+		}
+		else
+		{
+			bDeferredCrashResetOverflow = true;
+		}
+		return;
+	}
 
+	ClearRuntimeContextWithoutBroadcast();
+	OnCrashContextChanged().Broadcast(*this);
+}
+
+void UAethelnObservabilitySubsystem::ClearRuntimeContextWithoutBroadcast()
+{
 	RuntimeContext = FAethelnObservabilityRuntimeContext();
 	CrashRunId.Reset();
+	bCrashRunMarkerClaimed = false;
 	bHasRuntimeContext = false;
 	MetricEnvironment = EAethelnEnvironment::Local;
 	bHasValidEnvironment = true;
-	OnCrashContextChanged().Broadcast(*this);
 }
 
 bool UAethelnObservabilitySubsystem::HasRuntimeContext() const
@@ -98,6 +128,10 @@ bool UAethelnObservabilitySubsystem::SetBuildContext(
 	{
 		return false;
 	}
+	if (bPublishingCrashRunMarker)
+	{
+		return false;
+	}
 
 	BuildIdentity = InBuildIdentity;
 	NetworkProfile = InNetworkProfile;
@@ -112,11 +146,32 @@ void UAethelnObservabilitySubsystem::ResetBuildContext()
 	{
 		return;
 	}
+	if (bPublishingCrashRunMarker)
+	{
+		if (bFailingClosedCrashReset)
+		{
+			return;
+		}
+		if (DeferredCrashResets.Num() < 8)
+		{
+			DeferredCrashResets.Add(EDeferredCrashReset::Build);
+		}
+		else
+		{
+			bDeferredCrashResetOverflow = true;
+		}
+		return;
+	}
 
+	ClearBuildContextWithoutBroadcast();
+	OnCrashContextChanged().Broadcast(*this);
+}
+
+void UAethelnObservabilitySubsystem::ClearBuildContextWithoutBroadcast()
+{
 	BuildIdentity = FAethelnBuildIdentity();
 	NetworkProfile = FAethelnNetworkProfile();
 	bHasBuildContext = false;
-	OnCrashContextChanged().Broadcast(*this);
 }
 
 bool UAethelnObservabilitySubsystem::HasBuildContext() const
@@ -168,6 +223,67 @@ bool UAethelnObservabilitySubsystem::TryGetCrashContextSnapshot(FAethelnCrashCon
 		AethelnObservability::CrashServerRole,
 		AethelnObservability::ExcludedIdentifier,
 		OutSnapshot);
+}
+
+bool UAethelnObservabilitySubsystem::TryClaimCrashRunMarker(const FString& CandidateCrashRunId)
+{
+	if (!IsInGameThread() || !bHasRuntimeContext || bCrashRunMarkerClaimed
+		|| !CrashRunId.Equals(CandidateCrashRunId, ESearchCase::CaseSensitive))
+	{
+		return false;
+	}
+	bCrashRunMarkerClaimed = true;
+	return true;
+}
+
+bool UAethelnObservabilitySubsystem::BeginCrashRunMarkerPublication(const FString& CandidateCrashRunId)
+{
+	if (!IsInGameThread() || bPublishingCrashRunMarker || !HasRuntimeContext()
+		|| !CrashRunId.Equals(CandidateCrashRunId, ESearchCase::CaseSensitive))
+	{
+		return false;
+	}
+	bPublishingCrashRunMarker = true;
+	return true;
+}
+
+void UAethelnObservabilitySubsystem::EndCrashRunMarkerPublication()
+{
+	if (!IsInGameThread() || !bPublishingCrashRunMarker)
+	{
+		return;
+	}
+	// Keep publication guarded while notifying observers: they may request another
+	// reset synchronously. Count applied resets, not just the initial queue length.
+	int32 AppliedResets = 0;
+	while (!bDeferredCrashResetOverflow && DeferredCrashResets.Num() > 0 && AppliedResets < 8)
+	{
+		const EDeferredCrashReset Reset = DeferredCrashResets[0];
+		DeferredCrashResets.RemoveAt(0);
+		++AppliedResets;
+		if (Reset == EDeferredCrashReset::Runtime)
+		{
+			ClearRuntimeContextWithoutBroadcast();
+		}
+		else
+		{
+			ClearBuildContextWithoutBroadcast();
+		}
+		OnCrashContextChanged().Broadcast(*this);
+	}
+	if (bDeferredCrashResetOverflow || DeferredCrashResets.Num() > 0)
+	{
+		// An observer can enqueue another reset on every broadcast. One terminal
+		// fail-closed notification is bounded, and its callbacks cannot re-enqueue.
+		bFailingClosedCrashReset = true;
+		ClearRuntimeContextWithoutBroadcast();
+		ClearBuildContextWithoutBroadcast();
+		DeferredCrashResets.Reset();
+		bDeferredCrashResetOverflow = false;
+		OnCrashContextChanged().Broadcast(*this);
+		bFailingClosedCrashReset = false;
+	}
+	bPublishingCrashRunMarker = false;
 }
 
 bool UAethelnObservabilitySubsystem::TryComposeCorrelation(
@@ -297,6 +413,10 @@ const TCHAR* AethelnCrashContext::StateToString(EState State)
 
 UAethelnObservabilitySubsystem* AethelnCrashContext::FindObservabilitySubsystem(const UWorld* World)
 {
+	if (World != nullptr && World->IsGameInstanceTransitionInProgress())
+	{
+		return nullptr;
+	}
 	UGameInstance* GameInstance = World != nullptr ? World->GetGameInstance() : nullptr;
 	return GameInstance != nullptr
 		? GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>()
@@ -317,7 +437,7 @@ void FAethelnCrashContextOwner::Initialize()
 	{
 		ChangedHandle = UAethelnObservabilitySubsystem::OnCrashContextChanged().AddRaw(this, &FAethelnCrashContextOwner::OnContextChanged);
 	}
-	ClearIdentity(AethelnCrashContext::EState::Missing);
+	RequestUpdate(ERequestedUpdate::Missing);
 }
 
 void FAethelnCrashContextOwner::Shutdown()
@@ -325,7 +445,134 @@ void FAethelnCrashContextOwner::Shutdown()
 	UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(ChangedHandle);
 	ChangedHandle.Reset();
 	TrackedWorlds.Reset();
+	PendingWorldTickAdmissions.Reset();
+	DeniedWorldTickAdmissions.Reset();
+	WorldsInGameInstanceTransition.Reset();
 	MarkStale();
+}
+
+void FAethelnCrashContextOwner::BeginWorldGameInstanceTransition(const UWorld* World)
+{
+	if (World != nullptr && TrackedWorlds.Contains(World))
+	{
+		WorldsInGameInstanceTransition.Add(World);
+		MarkTransitionStaleIfNeeded(World);
+	}
+}
+
+void FAethelnCrashContextOwner::EndWorldGameInstanceTransition(const UWorld* World)
+{
+	WorldsInGameInstanceTransition.Remove(World);
+	// The engine's transition flag stays set until SetGameInstance returns. No
+	// association refresh is allowed here, even for a preconfigured replacement.
+}
+
+FAethelnCrashContextOwner::EWorldTickAdmissionResult FAethelnCrashContextOwner::BeginWorldTickAdmission(
+	const UWorld* World,
+	FWorldTickAdmission& OutAdmission)
+{
+	if (World == nullptr)
+	{
+		return EWorldTickAdmissionResult::Rejected;
+	}
+	if (IsWorldGameInstanceTransitioning(World))
+	{
+		TrackedWorlds.Add(World);
+		MarkTransitionStaleIfNeeded(World);
+		return EWorldTickAdmissionResult::Rejected;
+	}
+	if (PendingWorldTickAdmissions.Contains(World)
+		|| NextWorldTickAdmissionSerial == MAX_uint64)
+	{
+		return EWorldTickAdmissionResult::Rejected;
+	}
+	const bool bNewWorld = !TrackedWorlds.Contains(World);
+	if (bNewWorld && !PendingWorldTickAdmissions.IsEmpty())
+	{
+		// A second world cannot be hidden by a reentrant callback during the first
+		// admission. Count it and fail closed before denying a second capability.
+		TrackedWorlds.Add(World);
+		RequestUpdate(ERequestedUpdate::Ambiguous);
+		return EWorldTickAdmissionResult::Rejected;
+	}
+	if (bNewWorld)
+	{
+		TrackedWorlds.Add(World);
+	}
+	FWorldTickAdmission Candidate;
+	Candidate.Owner = this;
+	Candidate.World = World;
+	Candidate.Serial = ++NextWorldTickAdmissionSerial;
+	Candidate.bNewWorld = bNewWorld;
+	PendingWorldTickAdmissions.Add(World, Candidate.Serial);
+	if (bNewWorld)
+	{
+		// Do not inspect even a preconfigured subsystem until server setup is done.
+		RequestUpdate(TrackedWorlds.Num() == 1 ? ERequestedUpdate::Missing : ERequestedUpdate::Ambiguous);
+	}
+	const uint64* PendingSerial = PendingWorldTickAdmissions.Find(World);
+	if (PendingSerial == nullptr || *PendingSerial != Candidate.Serial || !TrackedWorlds.Contains(World))
+	{
+		return EWorldTickAdmissionResult::Rejected;
+	}
+	// Assign only after synchronous GameData callbacks finish, so they cannot steal
+	// the capability from the caller before this method returns.
+	OutAdmission = Candidate;
+	return bNewWorld ? EWorldTickAdmissionResult::NewWorld : EWorldTickAdmissionResult::ExistingWorld;
+}
+
+bool FAethelnCrashContextOwner::CompleteWorldTickAdmission(const FWorldTickAdmission& Admission)
+{
+	const UWorld* World = Admission.World.Get();
+	if (World != nullptr && TrackedWorlds.Contains(World) && IsWorldGameInstanceTransitioning(World))
+	{
+		MarkTransitionStaleIfNeeded(World);
+		return false;
+	}
+	if (Admission.Owner != this || Admission.Serial == 0 || World == nullptr || !TrackedWorlds.Contains(World))
+	{
+		return false;
+	}
+	const uint64* PendingSerial = PendingWorldTickAdmissions.Find(World);
+	if (PendingSerial == nullptr || *PendingSerial != Admission.Serial)
+	{
+		return false;
+	}
+	PendingWorldTickAdmissions.Remove(World);
+	const bool bWasDenied = DeniedWorldTickAdmissions.Remove(World) > 0;
+	if (!bWasDenied && !Admission.bNewWorld && State == AethelnCrashContext::EState::Active
+		&& ActiveWorld.Get() == World
+		&& ActiveGameInstance.Get() == World->GetGameInstance()
+		&& ActiveSubsystem.IsValid()
+		&& AethelnCrashContext::FindObservabilitySubsystem(World) == ActiveSubsystem.Get()
+		&& ActiveSubsystem->HasRuntimeContext() && ActiveSubsystem->HasBuildContext()
+		&& ActiveSubsystem->CrashRunId.Equals(ActiveCrashRunId, ESearchCase::CaseSensitive))
+	{
+		// A steady tick does not rewrite the fourteen crash keys or repeat a marker.
+		return true;
+	}
+	RefreshForTrackedWorld(World);
+	return true;
+}
+
+bool FAethelnCrashContextOwner::AbortWorldTickAdmission(const FWorldTickAdmission& Admission)
+{
+	const UWorld* World = Admission.World.Get();
+	if (Admission.Owner != this || Admission.Serial == 0 || World == nullptr)
+	{
+		return false;
+	}
+	const uint64* PendingSerial = PendingWorldTickAdmissions.Find(World);
+	if (PendingSerial == nullptr || *PendingSerial != Admission.Serial)
+	{
+		return false;
+	}
+	DeniedWorldTickAdmissions.Add(World);
+	PendingWorldTickAdmissions.Remove(World);
+	// Do not revoke another world's capability; this failed tick can no longer
+	// authorize an active identity even if an earlier registration existed.
+	RequestUpdate(ERequestedUpdate::Stale);
+	return true;
 }
 
 bool FAethelnCrashContextOwner::TrackWorldTick(const UWorld* World)
@@ -333,6 +580,13 @@ bool FAethelnCrashContextOwner::TrackWorldTick(const UWorld* World)
 	if (World == nullptr)
 	{
 		return false;
+	}
+	if (IsWorldGameInstanceTransitioning(World))
+	{
+		const bool bNewWorld = !TrackedWorlds.Contains(World);
+		TrackedWorlds.Add(World);
+		MarkTransitionStaleIfNeeded(World);
+		return bNewWorld;
 	}
 	if (TrackedWorlds.Contains(World))
 	{
@@ -353,6 +607,9 @@ bool FAethelnCrashContextOwner::TrackWorldTick(const UWorld* World)
 void FAethelnCrashContextOwner::EndTracking(const UWorld* World)
 {
 	TrackedWorlds.Remove(World);
+	PendingWorldTickAdmissions.Remove(World);
+	DeniedWorldTickAdmissions.Remove(World);
+	WorldsInGameInstanceTransition.Remove(World);
 	MarkStale();
 }
 
@@ -377,43 +634,99 @@ int32 FAethelnCrashContextOwner::NumTrackedWorlds() const
 void FAethelnCrashContextOwner::Register(const FAethelnCrashContextSnapshot* Snapshot)
 {
 	using namespace AethelnCrashContext;
-	if (Snapshot == nullptr || !Snapshot->IsBounded())
+	if (!bAllowRegistration)
+	{
+		// A bounded snapshot alone does not prove which subsystem generated its run ID.
+		// Only the tracked-world refresh may publish active context and its marker.
+		RequestUpdate(ERequestedUpdate::Missing);
+		return;
+	}
+	bAllowRegistration = false;
+	if (IsWorldGameInstanceTransitioning(GetSoleTrackedWorld()))
+	{
+		RequestUpdate(ERequestedUpdate::Stale);
+		return;
+	}
+	if (Snapshot == nullptr || !Snapshot->IsBounded() || !RegistrationSubsystem.IsValid())
 	{
 		ClearIdentity(EState::Missing);
 		return;
 	}
 
 	SetState(EState::Updating);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(SchemaVersionKey, FString::Printf(TEXT("%u"), Snapshot->ObservabilitySchemaVersion));
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(SourceRevisionKey, Snapshot->SourceRevision);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(BuildIdentityKey, Snapshot->BuildIdentity);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(BuildConfigurationKey, Snapshot->BuildConfiguration);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(EngineRevisionKey, Snapshot->EngineRevision);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(ToolchainIdentityKey, Snapshot->ToolchainIdentity);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(NetworkProfileSchemaKey, Snapshot->NetworkProfileSchemaId);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(NetworkProfileVersionKey, FString::Printf(TEXT("%u"), Snapshot->NetworkProfileSchemaVersion));
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(NetworkProfileIdKey, Snapshot->NetworkProfileId);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(FlowKindKey, LexToString(Snapshot->FlowKind));
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(CrashRunIdKey, Snapshot->CrashRunId);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(ServerInstanceKey, Snapshot->ServerInstanceId);
+	if (UpdateSerial != ApplyingSerial) { return; }
 	FGenericCrashContext::SetGameData(ConnectionPseudonymKey, Snapshot->ConnectionPseudonym);
-	if (!Snapshot->CrashRunId.Equals(LastMarkedCrashRunId, ESearchCase::CaseSensitive))
+	if (UpdateSerial != ApplyingSerial) { return; }
+	UAethelnObservabilitySubsystem* Subsystem = RegistrationSubsystem.Get();
+	if (Subsystem == nullptr || !Subsystem->BeginCrashRunMarkerPublication(Snapshot->CrashRunId))
+	{
+		RequestUpdate(ERequestedUpdate::Missing);
+		return;
+	}
+	if (Subsystem->TryClaimCrashRunMarker(Snapshot->CrashRunId))
 	{
 		// Binds the generated ID to this process's server log before it can be active; never at crash time.
 		UE_LOG(LogAethelnCrashContext, Display, TEXT("AethelnCrashContextMarker crash-run=%s"), *Snapshot->CrashRunId);
-		LastMarkedCrashRunId = Snapshot->CrashRunId;
 	}
-	SetState(EState::Active);
+	// A log device can request a reset synchronously. Drain that bounded request
+	// before active is visible; a marker without active GameData is tentative.
+	Subsystem->EndCrashRunMarkerPublication();
+	if (IsWorldGameInstanceTransitioning(GetSoleTrackedWorld()))
+	{
+		RequestUpdate(ERequestedUpdate::Stale);
+	}
+	else if (UpdateSerial == ApplyingSerial)
+	{
+		SetState(EState::Active);
+	}
+	if (State == EState::Active && UpdateSerial == ApplyingSerial
+		&& !IsWorldGameInstanceTransitioning(GetSoleTrackedWorld()))
+	{
+		ActiveWorld = GetSoleTrackedWorld();
+		ActiveGameInstance = ActiveWorld.IsValid() ? ActiveWorld->GetGameInstance() : nullptr;
+		ActiveSubsystem = Subsystem;
+		ActiveCrashRunId = Snapshot->CrashRunId;
+	}
+	else if (State == EState::Active && IsWorldGameInstanceTransitioning(GetSoleTrackedWorld()))
+	{
+		RequestUpdate(ERequestedUpdate::Stale);
+	}
 }
 
 void FAethelnCrashContextOwner::MarkStale()
 {
-	ClearIdentity(AethelnCrashContext::EState::Stale);
+	PendingWorldTickAdmissions.Reset();
+	RequestUpdate(ERequestedUpdate::Stale);
 }
 
 void FAethelnCrashContextOwner::MarkAmbiguous()
 {
-	ClearIdentity(AethelnCrashContext::EState::Ambiguous);
+	PendingWorldTickAdmissions.Reset();
+	RequestUpdate(ERequestedUpdate::Ambiguous);
 }
 
 AethelnCrashContext::EState FAethelnCrashContextOwner::GetState() const
@@ -421,28 +734,133 @@ AethelnCrashContext::EState FAethelnCrashContextOwner::GetState() const
 	return State;
 }
 
+void FAethelnCrashContextOwner::RequestUpdate(ERequestedUpdate Update)
+{
+	if (Update == ERequestedUpdate::Stale || Update == ERequestedUpdate::Ambiguous)
+	{
+		DenyTrackedWorldsUntilNextCompletion();
+	}
+	PendingUpdate = Update;
+	++UpdateSerial;
+	if (bApplyingUpdate)
+	{
+		// SetGameData broadcasts synchronously. The outer writer will notice the new serial
+		// before publishing active, then settle the latest request without recursive writes.
+		if (State == AethelnCrashContext::EState::Active && !bInvalidatingReentrantActive)
+		{
+			// If a delegate ends or replaces the owner during the active write itself,
+			// invalidate it before that delegate returns to other observers.
+			bInvalidatingReentrantActive = true;
+			ClearIdentity(AethelnCrashContext::EState::Stale);
+			bInvalidatingReentrantActive = false;
+		}
+		return;
+	}
+
+	bApplyingUpdate = true;
+	constexpr int32 MaxSettlePasses = 3;
+	for (int32 Pass = 0; Pass < MaxSettlePasses && PendingUpdate != ERequestedUpdate::None; ++Pass)
+	{
+		const ERequestedUpdate Current = PendingUpdate;
+		PendingUpdate = ERequestedUpdate::None;
+		ApplyingSerial = UpdateSerial;
+		RegistrationSubsystem.Reset();
+		switch (Current)
+		{
+		case ERequestedUpdate::Refresh:
+		{
+			// Dead weak entries still count until explicit cleanup; never select a live world
+			// from an ambiguous set.
+			if (TrackedWorlds.IsEmpty())
+			{
+				break;
+			}
+			if (TrackedWorlds.Num() == 1 && IsWorldGameInstanceTransitioning(GetSoleTrackedWorld()))
+			{
+				ClearIdentity(AethelnCrashContext::EState::Stale);
+				break;
+			}
+			if (TrackedWorlds.Num() == 1 && DeniedWorldTickAdmissions.Contains(GetSoleTrackedWorld()))
+			{
+				ClearIdentity(AethelnCrashContext::EState::Stale);
+				break;
+			}
+			if (TrackedWorlds.Num() != 1)
+			{
+				ClearIdentity(AethelnCrashContext::EState::Ambiguous);
+				break;
+			}
+			UAethelnObservabilitySubsystem* Subsystem = AethelnCrashContext::FindObservabilitySubsystem(GetSoleTrackedWorld());
+			FAethelnCrashContextSnapshot Snapshot;
+			RegistrationSubsystem = Subsystem;
+			const bool bHasSnapshot = Subsystem != nullptr && Subsystem->TryGetCrashContextSnapshot(Snapshot);
+			bAllowRegistration = true;
+			Register(bHasSnapshot ? &Snapshot : nullptr);
+			RegistrationSubsystem.Reset();
+			break;
+		}
+		case ERequestedUpdate::Missing:
+			ClearIdentity(AethelnCrashContext::EState::Missing);
+			break;
+		case ERequestedUpdate::Stale:
+			ClearIdentity(AethelnCrashContext::EState::Stale);
+			break;
+		case ERequestedUpdate::Ambiguous:
+			ClearIdentity(AethelnCrashContext::EState::Ambiguous);
+			break;
+		default:
+			break;
+		}
+		bAllowRegistration = false;
+	}
+
+	if (PendingUpdate != ERequestedUpdate::None)
+	{
+		// A callback that keeps changing context on every pass cannot force an unbounded
+		// retry or leave a superseded identity active. A later tick/change may retry.
+		ClearIdentity(AethelnCrashContext::EState::Stale);
+		PendingUpdate = ERequestedUpdate::None;
+	}
+	RegistrationSubsystem.Reset();
+	bApplyingUpdate = false;
+}
+
 void FAethelnCrashContextOwner::Refresh()
 {
-	// No tracked world: startup or cleanup already owns the missing/stale state.
-	if (TrackedWorlds.IsEmpty())
+	const UWorld* World = GetSoleTrackedWorld();
+	if (World != nullptr && IsWorldGameInstanceTransitioning(World))
 	{
+		MarkTransitionStaleIfNeeded(World);
 		return;
 	}
-	// ponytail: dead weak entries still count, so a leaked world keeps the process ambiguous (fail-safe) until cleanup.
-	if (TrackedWorlds.Num() != 1)
+	if (World != nullptr && DeniedWorldTickAdmissions.Contains(World))
 	{
-		MarkAmbiguous();
+		if (State == AethelnCrashContext::EState::Active)
+		{
+			RequestUpdate(ERequestedUpdate::Stale);
+		}
 		return;
 	}
-	const UAethelnObservabilitySubsystem* Subsystem = AethelnCrashContext::FindObservabilitySubsystem(GetSoleTrackedWorld());
-	FAethelnCrashContextSnapshot Snapshot;
-	Register(Subsystem != nullptr && Subsystem->TryGetCrashContextSnapshot(Snapshot) ? &Snapshot : nullptr);
+	if (World != nullptr && PendingWorldTickAdmissions.Contains(World))
+	{
+		if (State == AethelnCrashContext::EState::Active)
+		{
+			RequestUpdate(ERequestedUpdate::Stale);
+		}
+		return;
+	}
+	RequestUpdate(ERequestedUpdate::Refresh);
 }
 
 void FAethelnCrashContextOwner::OnContextChanged(const UAethelnObservabilitySubsystem& Changed)
 {
 	// Only the sole tracked world's own game instance can change process crash context.
 	const UWorld* World = GetSoleTrackedWorld();
+	if (IsWorldGameInstanceTransitioning(World))
+	{
+		Refresh();
+		return;
+	}
 	const UGameInstance* GameInstance = World != nullptr ? World->GetGameInstance() : nullptr;
 	if (GameInstance != nullptr && GameInstance == Changed.GetGameInstance())
 	{
@@ -455,6 +873,31 @@ const UWorld* FAethelnCrashContextOwner::GetSoleTrackedWorld() const
 	return TrackedWorlds.Num() == 1 ? TrackedWorlds.CreateConstIterator()->Get() : nullptr;
 }
 
+bool FAethelnCrashContextOwner::IsWorldGameInstanceTransitioning(const UWorld* World) const
+{
+	return World != nullptr
+		&& (WorldsInGameInstanceTransition.Contains(World) || World->IsGameInstanceTransitionInProgress());
+}
+
+void FAethelnCrashContextOwner::MarkTransitionStaleIfNeeded(const UWorld* World)
+{
+	if (World != nullptr && TrackedWorlds.Contains(World)
+		&& (State != AethelnCrashContext::EState::Stale
+			|| !DeniedWorldTickAdmissions.Contains(World)
+			|| !PendingWorldTickAdmissions.IsEmpty()))
+	{
+		MarkStale();
+	}
+}
+
+void FAethelnCrashContextOwner::DenyTrackedWorldsUntilNextCompletion()
+{
+	for (const TWeakObjectPtr<const UWorld>& World : TrackedWorlds)
+	{
+		DeniedWorldTickAdmissions.Add(World);
+	}
+}
+
 void FAethelnCrashContextOwner::SetState(AethelnCrashContext::EState NewState)
 {
 	State = NewState;
@@ -463,6 +906,15 @@ void FAethelnCrashContextOwner::SetState(AethelnCrashContext::EState NewState)
 
 void FAethelnCrashContextOwner::ClearIdentity(AethelnCrashContext::EState NewState)
 {
+	if (NewState == AethelnCrashContext::EState::Stale || NewState == AethelnCrashContext::EState::Ambiguous)
+	{
+		// Establish the deny gate before StateKey broadcasts to synchronous listeners.
+		DenyTrackedWorldsUntilNextCompletion();
+	}
+	ActiveWorld.Reset();
+	ActiveGameInstance.Reset();
+	ActiveSubsystem.Reset();
+	ActiveCrashRunId.Reset();
 	SetState(NewState);
 	for (const TCHAR* Key : AethelnCrashContext::IdentityKeys)
 	{
@@ -1089,8 +1541,14 @@ namespace AethelnCrashContextTests
 		{
 			if (Category == LogAethelnCrashContext.GetCategoryName())
 			{
-				FScopeLock Lock(&LinesLock);
-				Lines.Emplace(static_cast<ELogVerbosity::Type>(Verbosity & ELogVerbosity::VerbosityMask), Message);
+				{
+					FScopeLock Lock(&LinesLock);
+					Lines.Emplace(static_cast<ELogVerbosity::Type>(Verbosity & ELogVerbosity::VerbosityMask), Message);
+				}
+				if (IsInGameThread() && MarkerCallback)
+				{
+					MarkerCallback(FString(Message));
+				}
 			}
 		}
 
@@ -1100,9 +1558,15 @@ namespace AethelnCrashContextTests
 			return Lines;
 		}
 
+		void SetMarkerCallback(TFunction<void(const FString&)> Callback)
+		{
+			MarkerCallback = MoveTemp(Callback);
+		}
+
 	private:
 		mutable FCriticalSection LinesLock;
 		TArray<TPair<ELogVerbosity::Type, FString>> Lines;
+		TFunction<void(const FString&)> MarkerCallback;
 		bool bRegistered = false;
 	};
 
@@ -1182,6 +1646,13 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 	using namespace AethelnCrashContext;
 	using namespace AethelnCrashContextTests;
 	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-registration-first"), TEXT("instance-registration")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
 
 	TArray<TPair<FString, FString>> Writes;
 	TSet<FString> OwnedKeys;
@@ -1207,10 +1678,11 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Initialization claims no run"), ReadKey(StateKey), FString(TEXT("missing")));
 	TestFalse(TEXT("Initialization leaves no identity key"), HasAnyIdentityKey());
 
-	const FAethelnCrashContextSnapshot First = MakeSnapshot();
+	FAethelnCrashContextSnapshot First;
+	TestTrue(TEXT("First subsystem snapshot is available"), World.Subsystem->TryGetCrashContextSnapshot(First));
 	TestTrue(TEXT("First fixture snapshot is bounded"), First.IsBounded());
 	Writes.Reset();
-	Owner.Register(&First);
+	Owner.TrackWorldTick(World.World);
 	TestTrue(TEXT("First registration writes state, thirteen values, and state"), Writes.Num() == 15);
 	if (Writes.Num() == 15)
 	{
@@ -1234,9 +1706,12 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Server instance is the closed server role"), ReadKey(ServerInstanceKey), FString(AethelnObservability::CrashServerRole));
 	TestEqual(TEXT("Connection pseudonym is the excluded marker"), ReadKey(ConnectionPseudonymKey), FString(AethelnObservability::ExcludedIdentifier));
 
-	const FAethelnCrashContextSnapshot Second = MakeSnapshot();
+	TestTrue(
+		TEXT("Runtime replacement is accepted"),
+		World.Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-registration-second"), TEXT("instance-registration"), AethelnObservability::ExcludedIdentifier));
+	FAethelnCrashContextSnapshot Second;
+	TestTrue(TEXT("Second subsystem snapshot is available"), World.Subsystem->TryGetCrashContextSnapshot(Second));
 	TestNotEqual(TEXT("Generated crash runs are unique"), Second.CrashRunId, First.CrashRunId);
-	Owner.Register(&Second);
 	TestEqual(TEXT("Valid replacement is active"), ReadKey(StateKey), FString(TEXT("active")));
 	TestEqual(TEXT("Valid replacement registers the new run"), ReadKey(CrashRunIdKey), Second.CrashRunId);
 	TestFalse(TEXT("Valid replacement leaves no prior run"), AnyOwnedKeyContains(First.CrashRunId));
@@ -1266,7 +1741,7 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 			FAethelnCrashContextSnapshot Tampered = MakeSnapshot();
 			Tampered.*Field = Text;
 			TestFalse(TEXT("A snapshot carrying caller text is not bounded"), Tampered.IsBounded());
-			Owner.Register(&Second);
+			Owner.RefreshForTrackedWorld(World.World);
 			Owner.Register(&Tampered);
 			TestEqual(TEXT("Caller text marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
 			TestFalse(TEXT("Caller text clears every identity key"), HasAnyIdentityKey());
@@ -1274,22 +1749,32 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	Owner.Register(&First);
+	Owner.RefreshForTrackedWorld(World.World);
 	Owner.Register(nullptr);
 	TestEqual(TEXT("Missing snapshot marks the context missing"), ReadKey(StateKey), FString(TEXT("missing")));
 	TestFalse(TEXT("Missing snapshot clears every identity key"), HasAnyIdentityKey());
 
-	Owner.Register(&First);
+	Owner.RefreshForTrackedWorld(World.World);
 	Owner.MarkStale();
 	TestEqual(TEXT("Stale context is explicit"), ReadKey(StateKey), FString(TEXT("stale")));
 	TestFalse(TEXT("Stale context clears every identity key"), HasAnyIdentityKey());
-	Owner.Register(&Second);
+	Owner.RefreshForTrackedWorld(World.World);
+	TestEqual(TEXT("Refresh cannot bypass stale revocation"), ReadKey(StateKey), FString(TEXT("stale")));
+	FAethelnCrashContextOwner::FWorldTickAdmission StaleRecovery;
+	TestEqual(TEXT("Stale world receives a recovery tick"), Owner.BeginWorldTickAdmission(World.World, StaleRecovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("A completed tick replaces stale context"), Owner.CompleteWorldTickAdmission(StaleRecovery));
 	TestEqual(TEXT("A later valid owner replaces stale context"), ReadKey(StateKey), FString(TEXT("active")));
 
 	Owner.MarkAmbiguous();
 	TestEqual(TEXT("Ambiguous ownership is explicit"), ReadKey(StateKey), FString(TEXT("ambiguous")));
 	TestFalse(TEXT("Ambiguous ownership clears every identity key"), HasAnyIdentityKey());
-	Owner.Register(&First);
+	Owner.RefreshForTrackedWorld(World.World);
+	TestEqual(TEXT("Refresh cannot bypass ambiguous revocation"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	FAethelnCrashContextOwner::FWorldTickAdmission AmbiguousRecovery;
+	TestEqual(TEXT("Ambiguous world receives a recovery tick"), Owner.BeginWorldTickAdmission(World.World, AmbiguousRecovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("A completed tick replaces ambiguous context"), Owner.CompleteWorldTickAdmission(AmbiguousRecovery));
 	TestEqual(TEXT("A later valid owner replaces ambiguous context"), ReadKey(StateKey), FString(TEXT("active")));
 
 	Owner.Shutdown();
@@ -1297,6 +1782,30 @@ bool FAethelnCrashContextRegistrationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Shutdown clears every identity key"), HasAnyIdentityKey());
 
 	FGenericCrashContext::OnGameDataSetDelegate().Remove(WriteHandle);
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextRejectsUnprovenRegistrationTest,
+	"Aetheln.Observability.CrashContext.RejectsUnprovenDirectRegistration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextRejectsUnprovenRegistrationTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	const FAethelnCrashContextSnapshot First = MakeSnapshot();
+	TestTrue(TEXT("Synthetic fixture is bounded but has no tracked subsystem"), First.IsBounded());
+	FScopedCrashMarkerCapture Capture;
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.Register(&First);
+	TestEqual(TEXT("Direct registration without a tracked subsystem fails missing"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("Direct registration cannot publish an identity"), HasAnyIdentityKey());
+	TestEqual(TEXT("No marker is logged for a run that never becomes active"), Capture.GetLines().Num(), 0);
+	Owner.Shutdown();
 	return true;
 }
 
@@ -1360,6 +1869,982 @@ bool FAethelnCrashContextWorldOwnershipTest::RunTest(const FString& Parameters)
 	Owner.Shutdown();
 	First.Destroy();
 	Second.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextCountBeforeConfigureTest,
+	"Aetheln.Observability.CrashContext.CountBeforeConfigureDefersRegistration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextCountBeforeConfigureTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld First;
+	FTestGameWorld Second;
+	if (!First.Create(TEXT("run-count-first"), TEXT("instance-count-first"))
+		|| !Second.Create(TEXT("run-count-second"), TEXT("instance-count-second")))
+	{
+		TestTrue(TEXT("Both game worlds were created"), false);
+		First.Destroy();
+		Second.Destroy();
+		return false;
+	}
+	FScopedCrashMarkerCapture Capture;
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	bool bInjected = false;
+	bool bNestedSameWorldRejected = false;
+	bool bAcceptedContextChange = false;
+	bool bStayedMissingInsideCallback = false;
+	const FDelegateHandle MissingHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (!bInjected && Key == StateKey && Value == TEXT("missing"))
+			{
+				bInjected = true;
+				Owner.RefreshForTrackedWorld(First.World);
+				FAethelnCrashContextOwner::FWorldTickAdmission Nested;
+				bNestedSameWorldRejected = Owner.BeginWorldTickAdmission(First.World, Nested)
+					== FAethelnCrashContextOwner::EWorldTickAdmissionResult::Rejected;
+				bAcceptedContextChange = First.Subsystem->SetRuntimeContext(
+					EAethelnFlowKind::PrototypeAuthority,
+					TEXT("run-count-changed-during-admission"),
+					TEXT("instance-count-first"),
+					AethelnObservability::ExcludedIdentifier);
+				bStayedMissingInsideCallback = ReadKey(StateKey) == TEXT("missing") && !HasAnyIdentityKey();
+			}
+		});
+	FAethelnCrashContextOwner::FWorldTickAdmission FirstAdmission;
+	TestEqual(TEXT("First world receives a new-world admission"), Owner.BeginWorldTickAdmission(First.World, FirstAdmission),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::NewWorld);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(MissingHandle);
+	TestTrue(TEXT("State callback attempted refresh and accepted context change"), bInjected && bNestedSameWorldRejected && bAcceptedContextChange);
+	TestTrue(TEXT("Reentrant callbacks could not publish active inside admission"), bStayedMissingInsideCallback);
+	TestEqual(TEXT("Admission remains missing before completion"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("Admission publishes no identity before completion"), HasAnyIdentityKey());
+	TestEqual(TEXT("Admission writes no marker before completion"), Capture.GetLines().Num(), 0);
+	Owner.RefreshForTrackedWorld(First.World);
+	TestEqual(TEXT("Public refresh cannot cross the admission gate"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestTrue(TEXT("Owner consumes the post-configuration admission once"), Owner.CompleteWorldTickAdmission(FirstAdmission));
+	TestFalse(TEXT("Admission token cannot be replayed"), Owner.CompleteWorldTickAdmission(FirstAdmission));
+	TestEqual(TEXT("Authorized completion activates first world"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("First world is selected after refresh"), ReadKey(CrashRunIdKey), CurrentCrashRunId(*First.Subsystem));
+	int32 SteadyTickWrites = 0;
+	const FDelegateHandle SteadyWriteHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString&, const FString&) { ++SteadyTickWrites; });
+	FAethelnCrashContextOwner::FWorldTickAdmission ExistingAdmission;
+	TestEqual(TEXT("Existing world receives its next tick admission"), Owner.BeginWorldTickAdmission(First.World, ExistingAdmission),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("Existing-world admission completes once"), Owner.CompleteWorldTickAdmission(ExistingAdmission));
+	TestFalse(TEXT("Existing-world token cannot be replayed"), Owner.CompleteWorldTickAdmission(ExistingAdmission));
+	FAethelnCrashContextOwner::FWorldTickAdmission AnotherSteadyAdmission;
+	TestEqual(TEXT("Another steady tick is admitted"), Owner.BeginWorldTickAdmission(First.World, AnotherSteadyAdmission),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("Another steady tick completes"), Owner.CompleteWorldTickAdmission(AnotherSteadyAdmission));
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(SteadyWriteHandle);
+	TestEqual(TEXT("Repeated steady ticks write no crash GameData"), SteadyTickWrites, 0);
+	TestEqual(TEXT("Repeated steady ticks add no marker"), Capture.GetLines().Num(), 1);
+	FAethelnCrashContextOwner::FWorldTickAdmission ChangedAdmission;
+	TestEqual(TEXT("Existing world admits a changed tick"), Owner.BeginWorldTickAdmission(First.World, ChangedAdmission),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("A runtime change during admission is accepted"), First.Subsystem->SetRuntimeContext(
+		EAethelnFlowKind::PrototypeAuthority, TEXT("run-count-next-tick"), TEXT("instance-count-first"), AethelnObservability::ExcludedIdentifier));
+	TestEqual(TEXT("Changed runtime invalidates old active identity before completion"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Changed runtime clears old identity"), HasAnyIdentityKey());
+	TestTrue(TEXT("Changed tick completes with fresh registration"), Owner.CompleteWorldTickAdmission(ChangedAdmission));
+	TestEqual(TEXT("Changed tick recovers active"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Changed tick registers its new crash run"), ReadKey(CrashRunIdKey), CurrentCrashRunId(*First.Subsystem));
+	FAethelnCrashContextOwner::FWorldTickAdmission SecondAdmission;
+	TestEqual(TEXT("Second world receives a new-world admission"), Owner.BeginWorldTickAdmission(Second.World, SecondAdmission),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::NewWorld);
+	TestEqual(TEXT("Second world immediately makes ownership ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestFalse(TEXT("Ambiguous ownership removes first identity"), HasAnyIdentityKey());
+	TestTrue(TEXT("Second admission can complete without selecting a world"), Owner.CompleteWorldTickAdmission(SecondAdmission));
+	TestEqual(TEXT("Post-configuration refresh cannot select one of two worlds"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestEqual(TEXT("Only the two active runs were marked"), Capture.GetLines().Num(), 2);
+	Owner.Shutdown();
+	First.Destroy();
+	Second.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextNestedWorldAdmissionTest,
+	"Aetheln.Observability.CrashContext.NestedSecondWorldAdmissionFailsAmbiguous",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextNestedWorldAdmissionTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld First;
+	FTestGameWorld Second;
+	if (!First.Create(TEXT("run-nested-first"), TEXT("instance-nested-first"))
+		|| !Second.Create(TEXT("run-nested-second"), TEXT("instance-nested-second")))
+	{
+		TestTrue(TEXT("Both game worlds were created"), false);
+		First.Destroy();
+		Second.Destroy();
+		return false;
+	}
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	bool bNestedAttempted = false;
+	bool bNestedRejected = false;
+	const FDelegateHandle MissingHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (!bNestedAttempted && Key == StateKey && Value == TEXT("missing"))
+			{
+				bNestedAttempted = true;
+				FAethelnCrashContextOwner::FWorldTickAdmission Nested;
+				bNestedRejected = Owner.BeginWorldTickAdmission(Second.World, Nested)
+					== FAethelnCrashContextOwner::EWorldTickAdmissionResult::Rejected;
+			}
+		});
+	FAethelnCrashContextOwner::FWorldTickAdmission FirstAdmission;
+	TestEqual(TEXT("First world begins admission"), Owner.BeginWorldTickAdmission(First.World, FirstAdmission),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::NewWorld);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(MissingHandle);
+	TestTrue(TEXT("Reentrant second world was observed and rejected"), bNestedAttempted && bNestedRejected);
+	TestEqual(TEXT("Both worlds are counted despite rejected nested token"), Owner.NumTrackedWorlds(), 2);
+	TestEqual(TEXT("Admission fails closed to ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestFalse(TEXT("Ambiguous admission has no identity"), HasAnyIdentityKey());
+	TestTrue(TEXT("First token may complete without selecting either world"), Owner.CompleteWorldTickAdmission(FirstAdmission));
+	TestEqual(TEXT("Completion remains ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestFalse(TEXT("Completion cannot publish a cross-world identity"), HasAnyIdentityKey());
+	Owner.Shutdown();
+	First.Destroy();
+	Second.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextRevokedAdmissionTest,
+	"Aetheln.Observability.CrashContext.RevokedWorldAdmissionCannotComplete",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextRevokedAdmissionTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-revoked-admission"), TEXT("instance-revoked-admission")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	FAethelnCrashContextOwner::FWorldTickAdmission First;
+	TestEqual(TEXT("New world receives an admission"), Owner.BeginWorldTickAdmission(World.World, First),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::NewWorld);
+	Owner.MarkStale();
+	TestFalse(TEXT("Pre/post association transition revokes its token"), Owner.CompleteWorldTickAdmission(First));
+	FAethelnCrashContextOwner::FWorldTickAdmission Second;
+	TestEqual(TEXT("Same world can be admitted on a later tick"), Owner.BeginWorldTickAdmission(World.World, Second),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	Owner.EndTracking(World.World);
+	TestFalse(TEXT("World cleanup revokes its token"), Owner.CompleteWorldTickAdmission(Second));
+	TestEqual(TEXT("Revocation remains stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Revocation never publishes identity"), HasAnyIdentityKey());
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextAbortAdmissionTest,
+	"Aetheln.Observability.CrashContext.AbortAdmissionIsExactAndFailsClosed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextAbortAdmissionTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-abort-admission"), TEXT("instance-abort-admission")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	FAethelnCrashContextOwner::FWorldTickAdmission First;
+	TestEqual(TEXT("World is admitted"), Owner.BeginWorldTickAdmission(World.World, First),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::NewWorld);
+	TestTrue(TEXT("Exact pending token aborts"), Owner.AbortWorldTickAdmission(First));
+	TestFalse(TEXT("Aborted token cannot complete"), Owner.CompleteWorldTickAdmission(First));
+	TestFalse(TEXT("Aborted token cannot abort twice"), Owner.AbortWorldTickAdmission(First));
+	TestEqual(TEXT("Abort fails closed"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Abort publishes no identity"), HasAnyIdentityKey());
+	FAethelnCrashContextOwner::FWorldTickAdmission Second;
+	TestEqual(TEXT("Later tick can receive a fresh admission"), Owner.BeginWorldTickAdmission(World.World, Second),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestFalse(TEXT("Old token cannot abort the new admission"), Owner.AbortWorldTickAdmission(First));
+	TestTrue(TEXT("New admission remains completable"), Owner.CompleteWorldTickAdmission(Second));
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextAbortCallbackCannotRefreshTest,
+	"Aetheln.Observability.CrashContext.AbortCallbackCannotRefreshBeforeNextCompletion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextAbortCallbackCannotRefreshTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-abort-callback"), TEXT("instance-abort-callback")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	TestEqual(TEXT("Preconfigured tracked world starts active"), ReadKey(StateKey), FString(TEXT("active")));
+	FAethelnCrashContextOwner::FWorldTickAdmission Aborted;
+	TestEqual(TEXT("Existing world tick is admitted"), Owner.BeginWorldTickAdmission(World.World, Aborted),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	bool bRefreshedInStaleCallback = false;
+	const FDelegateHandle StateHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (!bRefreshedInStaleCallback && Key == StateKey && Value == TEXT("stale"))
+			{
+				bRefreshedInStaleCallback = true;
+				Owner.RefreshForTrackedWorld(World.World);
+			}
+		});
+	TestTrue(TEXT("Exact token aborts"), Owner.AbortWorldTickAdmission(Aborted));
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(StateHandle);
+	TestTrue(TEXT("Stale-state callback attempted a synchronous refresh"), bRefreshedInStaleCallback);
+	TestEqual(TEXT("Callback cannot restore active after abort"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Aborted world has no active identity"), HasAnyIdentityKey());
+	Owner.RefreshForTrackedWorld(World.World);
+	TestEqual(TEXT("Explicit refresh remains denied before next completion"), ReadKey(StateKey), FString(TEXT("stale")));
+	FAethelnCrashContextOwner::FWorldTickAdmission Recovery;
+	TestEqual(TEXT("Next tick receives a new capability"), Owner.BeginWorldTickAdmission(World.World, Recovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	Owner.RefreshForTrackedWorld(World.World);
+	TestFalse(TEXT("Pending recovery cannot publish active"), HasAnyIdentityKey());
+	TestTrue(TEXT("Only exact post-configuration completion lifts denial"), Owner.CompleteWorldTickAdmission(Recovery));
+	TestEqual(TEXT("Completed world recovers active"), ReadKey(StateKey), FString(TEXT("active")));
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextRevocationCallbackTest,
+	"Aetheln.Observability.CrashContext.RevocationCallbacksRequireFreshCompletion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextRevocationCallbackTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-revocation-callback"), TEXT("instance-revocation-callback")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	TestEqual(TEXT("Configured world starts active"), ReadKey(StateKey), FString(TEXT("active")));
+	bool bRefreshOnStale = false;
+	bool bRefreshOnAmbiguous = false;
+	const FDelegateHandle StateHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (Key == StateKey && Value == TEXT("stale") && !bRefreshOnStale)
+			{
+				bRefreshOnStale = true;
+				Owner.RefreshForTrackedWorld(World.World);
+			}
+			if (Key == StateKey && Value == TEXT("ambiguous") && !bRefreshOnAmbiguous)
+			{
+				bRefreshOnAmbiguous = true;
+				Owner.RefreshForTrackedWorld(World.World);
+			}
+		});
+	Owner.MarkStale();
+	TestTrue(TEXT("Stale GameData callback attempted refresh"), bRefreshOnStale);
+	TestEqual(TEXT("Direct MarkStale remains stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Direct stale revocation leaves no identity"), HasAnyIdentityKey());
+	FAethelnCrashContextOwner::FWorldTickAdmission FirstRecovery;
+	TestEqual(TEXT("Stale world receives a fresh admission"), Owner.BeginWorldTickAdmission(World.World, FirstRecovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("First recovery completes"), Owner.CompleteWorldTickAdmission(FirstRecovery));
+	TestEqual(TEXT("Exact completion restores active"), ReadKey(StateKey), FString(TEXT("active")));
+	Owner.MarkAmbiguous();
+	TestTrue(TEXT("Ambiguous GameData callback attempted refresh"), bRefreshOnAmbiguous);
+	TestEqual(TEXT("Direct MarkAmbiguous remains ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	TestFalse(TEXT("Direct ambiguous revocation leaves no identity"), HasAnyIdentityKey());
+	FAethelnCrashContextOwner::FWorldTickAdmission SecondRecovery;
+	TestEqual(TEXT("Ambiguous world receives a fresh admission"), Owner.BeginWorldTickAdmission(World.World, SecondRecovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("Second recovery completes"), Owner.CompleteWorldTickAdmission(SecondRecovery));
+	TestEqual(TEXT("Second exact completion restores active"), ReadKey(StateKey), FString(TEXT("active")));
+	bRefreshOnStale = false;
+	Owner.MarkStale();
+	TestTrue(TEXT("Post-completion stale callback attempted refresh"), bRefreshOnStale);
+	TestEqual(TEXT("Completed tick does not authorize later stale refresh"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Post-completion stale has no identity"), HasAnyIdentityKey());
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(StateHandle);
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextEndTrackingCallbackTest,
+	"Aetheln.Observability.CrashContext.EndTrackingCallbackCannotSelectRemainingWorld",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextEndTrackingCallbackTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld First;
+	FTestGameWorld Second;
+	if (!First.Create(TEXT("run-end-tracking-first"), TEXT("instance-end-tracking-first"))
+		|| !Second.Create(TEXT("run-end-tracking-second"), TEXT("instance-end-tracking-second")))
+	{
+		TestTrue(TEXT("Both game worlds were created"), false);
+		First.Destroy();
+		Second.Destroy();
+		return false;
+	}
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(First.World);
+	Owner.TrackWorldTick(Second.World);
+	TestEqual(TEXT("Two tracked worlds are ambiguous"), ReadKey(StateKey), FString(TEXT("ambiguous")));
+	bool bRefreshedOnEnd = false;
+	const FDelegateHandle StateHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (!bRefreshedOnEnd && Key == StateKey && Value == TEXT("stale"))
+			{
+				bRefreshedOnEnd = true;
+				Owner.RefreshForTrackedWorld(First.World);
+			}
+		});
+	Owner.EndTracking(Second.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(StateHandle);
+	TestTrue(TEXT("EndTracking stale callback attempted remaining-world refresh"), bRefreshedOnEnd);
+	TestEqual(TEXT("Remaining world stays stale until a new tick"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("EndTracking callback cannot select prior identity"), HasAnyIdentityKey());
+	FAethelnCrashContextOwner::FWorldTickAdmission Recovery;
+	TestEqual(TEXT("Remaining world gets a new admission"), Owner.BeginWorldTickAdmission(First.World, Recovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("Remaining world completes after configuration"), Owner.CompleteWorldTickAdmission(Recovery));
+	TestEqual(TEXT("Completed remaining world becomes active"), ReadKey(StateKey), FString(TEXT("active")));
+	Owner.Shutdown();
+	First.Destroy();
+	Second.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextGameInstanceTransitionAdmissionTest,
+	"Aetheln.Observability.CrashContext.GameInstancePrechangeRejectsNestedTick",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextGameInstanceTransitionAdmissionTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-prechange-tick"), TEXT("instance-prechange-tick")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	TestEqual(TEXT("Configured world starts active"), ReadKey(StateKey), FString(TEXT("active")));
+	FAethelnCrashContextOwner::FWorldTickAdmission Prior;
+	TestEqual(TEXT("Tick before transition is admitted"), Owner.BeginWorldTickAdmission(World.World, Prior),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	bool bNestedTickRejected = false;
+	const FDelegateHandle StateHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (Key == StateKey && Value == TEXT("stale"))
+			{
+				FAethelnCrashContextOwner::FWorldTickAdmission Nested;
+				bNestedTickRejected = Owner.BeginWorldTickAdmission(World.World, Nested)
+					== FAethelnCrashContextOwner::EWorldTickAdmissionResult::Rejected;
+				Owner.RefreshForTrackedWorld(World.World);
+			}
+		});
+	// The server's pre-change hook enters this gate before the engine pointer assignment.
+	Owner.BeginWorldGameInstanceTransition(World.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(StateHandle);
+	TestTrue(TEXT("Stale callback's nested tick is rejected"), bNestedTickRejected);
+	TestFalse(TEXT("Prechange revokes the earlier tick"), Owner.CompleteWorldTickAdmission(Prior));
+	TestEqual(TEXT("Prechange remains stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Prechange has no identity"), HasAnyIdentityKey());
+	FAethelnCrashContextOwner::FWorldTickAdmission During;
+	TestEqual(TEXT("Transition rejects a direct tick"), Owner.BeginWorldTickAdmission(World.World, During),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::Rejected);
+	Owner.EndWorldGameInstanceTransition(World.World);
+	Owner.RefreshForTrackedWorld(World.World);
+	TestEqual(TEXT("Postchange without a new completed tick stays stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	FAethelnCrashContextOwner::FWorldTickAdmission Recovery;
+	TestEqual(TEXT("After setter return a later tick can be admitted"), Owner.BeginWorldTickAdmission(World.World, Recovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("Later configured tick completes"), Owner.CompleteWorldTickAdmission(Recovery));
+	TestEqual(TEXT("Later completion restores active"), ReadKey(StateKey), FString(TEXT("active")));
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextReentrantChangeTest,
+	"Aetheln.Observability.CrashContext.ReentrantChangeSettlesLatest",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextReentrantChangeTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-reentrant-first"), TEXT("instance-reentrant")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+
+	const FString SupersededRun = CurrentCrashRunId(*World.Subsystem);
+	bool bChanged = false;
+	bool bChangeAccepted = false;
+	const FDelegateHandle WriteHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (!bChanged && Key == FlowKindKey && Value == TEXT("prototype-authority"))
+			{
+				bChanged = true;
+				bChangeAccepted = World.Subsystem->SetRuntimeContext(
+					EAethelnFlowKind::PrototypeAuthority,
+					TEXT("run-reentrant-second"),
+					TEXT("instance-reentrant"),
+					AethelnObservability::ExcludedIdentifier);
+			}
+		});
+	FScopedCrashMarkerCapture Capture;
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(WriteHandle);
+	const FString SettledRun = CurrentCrashRunId(*World.Subsystem);
+	TestTrue(TEXT("One-shot callback changed the runtime during registration"), bChanged && bChangeAccepted);
+	TestNotEqual(TEXT("Reentrant replacement generated a new crash run"), SettledRun, SupersededRun);
+	TestEqual(TEXT("Reentrant registration settles active"), ReadKey(StateKey), FString(TEXT("active")));
+	TestEqual(TEXT("Active registration belongs to the latest runtime"), ReadKey(CrashRunIdKey), SettledRun);
+	TestFalse(TEXT("Superseded run is absent from all owned keys"), AnyOwnedKeyContains(SupersededRun));
+	const TArray<TPair<ELogVerbosity::Type, FString>> Lines = Capture.GetLines();
+	TestEqual(TEXT("Only the settled run receives a marker"), Lines.Num(), 1);
+	if (Lines.Num() == 1)
+	{
+		TestTrue(TEXT("Marker identifies the settled run"), Lines[0].Value.Equals(TEXT("AethelnCrashContextMarker crash-run=") + SettledRun, ESearchCase::CaseSensitive));
+	}
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextLogDispatchReentryTest,
+	"Aetheln.Observability.CrashContext.LogDispatchRejectsReentrantSetters",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextLogDispatchReentryTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-log-reentry-first"), TEXT("instance-log-reentry")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+
+	const FString FirstRun = CurrentCrashRunId(*World.Subsystem);
+	FScopedCrashMarkerCapture Capture;
+	bool bReentered = false;
+	bool bInvalidReplacementRejected = false;
+	bool bReplacementRejected = false;
+	bool bSecondReplacementRejected = false;
+	FString StateWhenFirstMarkerDispatched;
+	FString RegisteredRunWhenFirstMarkerDispatched;
+	FString CrashRunAfterRejectedRequest;
+	TArray<FString> ActivatedRuns;
+	const FDelegateHandle ActiveHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (Key == StateKey && Value == TEXT("active"))
+			{
+				ActivatedRuns.Add(ReadKey(CrashRunIdKey));
+			}
+		});
+	Capture.SetMarkerCallback([&](const FString& Message)
+	{
+		if (bReentered || !Message.Equals(TEXT("AethelnCrashContextMarker crash-run=") + FirstRun, ESearchCase::CaseSensitive))
+		{
+			return;
+		}
+		bReentered = true;
+		StateWhenFirstMarkerDispatched = ReadKey(StateKey);
+		RegisteredRunWhenFirstMarkerDispatched = ReadKey(CrashRunIdKey);
+		bInvalidReplacementRejected = !World.Subsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-log-reentry-invalid"),
+			FString::ChrN(AethelnObservability::MaxIdentifierLength + 1, TCHAR('x')),
+			AethelnObservability::ExcludedIdentifier);
+		bReplacementRejected = !World.Subsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-log-reentry-second"),
+			TEXT("instance-log-reentry"),
+			AethelnObservability::ExcludedIdentifier);
+		CrashRunAfterRejectedRequest = CurrentCrashRunId(*World.Subsystem);
+		bSecondReplacementRejected = !World.Subsystem->SetRuntimeContext(
+			EAethelnFlowKind::PrototypeAuthority,
+			TEXT("run-log-reentry-third"),
+			TEXT("instance-log-reentry"),
+			AethelnObservability::ExcludedIdentifier);
+	});
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(ActiveHandle);
+	const FString SecondRun = CurrentCrashRunId(*World.Subsystem);
+	TestTrue(TEXT("Marker dispatch attempted a valid runtime replacement"), bReentered && bReplacementRejected);
+	TestTrue(TEXT("Invalid reentrant request is rejected without using the pending slot"), bInvalidReplacementRejected);
+	TestTrue(TEXT("A second reentrant replacement is also rejected"), bSecondReplacementRejected);
+	TestEqual(TEXT("Rejected calls do not generate another crash run"), FirstRun, SecondRun);
+	TestEqual(TEXT("First marker precedes active registration"), StateWhenFirstMarkerDispatched, FString(TEXT("updating")));
+	TestEqual(TEXT("First marker agrees with its updating GameData"), RegisteredRunWhenFirstMarkerDispatched, FirstRun);
+	TestEqual(TEXT("Rejected replacement does not mutate the run inside log dispatch"), CrashRunAfterRejectedRequest, FirstRun);
+	TestEqual(TEXT("Only the original run reaches active"), ActivatedRuns.Num(), 1);
+	if (ActivatedRuns.Num() == 1)
+	{
+		TestEqual(TEXT("Marked run reached active"), ActivatedRuns[0], FirstRun);
+	}
+	TestEqual(TEXT("Registration retains the original run"), ReadKey(CrashRunIdKey), FirstRun);
+	TestEqual(TEXT("Original run is active"), ReadKey(StateKey), FString(TEXT("active")));
+	const TArray<TPair<ELogVerbosity::Type, FString>> Lines = Capture.GetLines();
+	TestEqual(TEXT("Only the active run receives a marker"), Lines.Num(), 1);
+	if (Lines.Num() == 1)
+	{
+		TestEqual(TEXT("Marker belongs to active run"), Lines[0].Value, FString(TEXT("AethelnCrashContextMarker crash-run=") + FirstRun));
+	}
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextLogDispatchCleanupTest,
+	"Aetheln.Observability.CrashContext.LogDispatchCleanupNeverActivatesEndedWorld",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextLogDispatchCleanupTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-log-cleanup"), TEXT("instance-log-cleanup")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	const FString InitialRun = CurrentCrashRunId(*World.Subsystem);
+	FAethelnCrashContextOwner Owner;
+	FScopedCrashMarkerCapture Capture;
+	bool bEndedDuringMarker = false;
+	int32 ActiveWrites = 0;
+	const FDelegateHandle ActiveHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (Key == StateKey && Value == TEXT("active"))
+			{
+				++ActiveWrites;
+			}
+		});
+	Capture.SetMarkerCallback([&](const FString& Message)
+	{
+		if (!bEndedDuringMarker && Message.Equals(TEXT("AethelnCrashContextMarker crash-run=") + InitialRun, ESearchCase::CaseSensitive))
+		{
+			bEndedDuringMarker = true;
+			Owner.EndTracking(World.World);
+		}
+	});
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(ActiveHandle);
+	TestTrue(TEXT("Log listener ended the world during marker dispatch"), bEndedDuringMarker);
+	TestEqual(TEXT("Ended world never publishes active GameData"), ActiveWrites, 0);
+	TestEqual(TEXT("Cleanup leaves crash context stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Cleanup leaves no owned identity"), HasAnyIdentityKey());
+	TestEqual(TEXT("Tentative marker is not an active attribution"), Capture.GetLines().Num(), 1);
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextActiveWriteCleanupTest,
+	"Aetheln.Observability.CrashContext.ActiveWriteCleanupInvalidatesSynchronously",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextActiveWriteCleanupTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-active-cleanup"), TEXT("instance-active-cleanup")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	FAethelnCrashContextOwner Owner;
+	bool bEndedOnActiveWrite = false;
+	bool bSawStaleAfterEnd = false;
+	bool bSawNoIdentityAfterEnd = false;
+	const FDelegateHandle ActiveHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (!bEndedOnActiveWrite && Key == StateKey && Value == TEXT("active"))
+			{
+				bEndedOnActiveWrite = true;
+				Owner.EndTracking(World.World);
+				bSawStaleAfterEnd = ReadKey(StateKey) == TEXT("stale");
+				bSawNoIdentityAfterEnd = !HasAnyIdentityKey();
+			}
+		});
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(ActiveHandle);
+	TestTrue(TEXT("GameData active-write callback ended the world"), bEndedOnActiveWrite);
+	TestTrue(TEXT("EndTracking synchronously changed active to stale"), bSawStaleAfterEnd);
+	TestTrue(TEXT("EndTracking synchronously removed identity"), bSawNoIdentityAfterEnd);
+	TestEqual(TEXT("Final state remains stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("No ended-world identity survives"), HasAnyIdentityKey());
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextActiveWriteResetFailureBoundaryTest,
+	"Aetheln.Observability.CrashContext.ActiveWriteResetFailsClosedBeforeFailureCapture",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextActiveWriteResetFailureBoundaryTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-active-reset"), TEXT("instance-active-reset")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	bool bResetOnActiveWrite = false;
+	FString StateAtFailureBoundary;
+	bool bIdentityAtFailureBoundary = true;
+	const FDelegateHandle ActiveHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (!bResetOnActiveWrite && Key == StateKey && Value == TEXT("active"))
+			{
+				bResetOnActiveWrite = true;
+				World.Subsystem->ResetRuntimeContext();
+				// A synchronous system-error callback here would read these GameData values.
+				StateAtFailureBoundary = ReadKey(StateKey);
+				bIdentityAtFailureBoundary = HasAnyIdentityKey();
+			}
+		});
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(ActiveHandle);
+	TestTrue(TEXT("Active-write observer requested a reset"), bResetOnActiveWrite);
+	TestNotEqual(TEXT("Failure boundary cannot read obsolete active state"), StateAtFailureBoundary, FString(TEXT("active")));
+	TestFalse(TEXT("Failure boundary cannot read obsolete identity"), bIdentityAtFailureBoundary);
+	TestEqual(TEXT("Reentrant active reset settles stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("Reset leaves no identity"), HasAnyIdentityKey());
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextLogDispatchResetTest,
+	"Aetheln.Observability.CrashContext.LogDispatchResetNeverPublishesActive",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextLogDispatchResetTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-log-reset"), TEXT("instance-log-reset")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+
+	const FString InitialRun = CurrentCrashRunId(*World.Subsystem);
+	FScopedCrashMarkerCapture Capture;
+	bool bRequestedReset = false;
+	FString RunDuringLogDispatch;
+	FString StateAfterResetRequest;
+	bool bBuildRemainedDuringLogDispatch = false;
+	TArray<TPair<bool, bool>> ContextsAtBroadcast;
+	const FDelegateHandle ChangeHandle = UAethelnObservabilitySubsystem::OnCrashContextChanged().AddLambda(
+		[&](const UAethelnObservabilitySubsystem& Changed)
+		{
+			if (&Changed == World.Subsystem)
+			{
+				ContextsAtBroadcast.Emplace(World.Subsystem->HasRuntimeContext(), World.Subsystem->HasBuildContext());
+			}
+		});
+	TArray<FString> ActivatedRuns;
+	const FDelegateHandle ActiveHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (Key == StateKey && Value == TEXT("active"))
+			{
+				ActivatedRuns.Add(ReadKey(CrashRunIdKey));
+			}
+		});
+	Capture.SetMarkerCallback([&](const FString& Message)
+	{
+		if (!bRequestedReset && Message.Equals(TEXT("AethelnCrashContextMarker crash-run=") + InitialRun, ESearchCase::CaseSensitive))
+		{
+			bRequestedReset = true;
+			World.Subsystem->ResetRuntimeContext();
+			World.Subsystem->ResetBuildContext();
+			RunDuringLogDispatch = CurrentCrashRunId(*World.Subsystem);
+			StateAfterResetRequest = ReadKey(StateKey);
+			bBuildRemainedDuringLogDispatch = World.Subsystem->HasBuildContext();
+		}
+	});
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(ActiveHandle);
+	UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(ChangeHandle);
+	TestTrue(TEXT("Marker listener requested a runtime reset"), bRequestedReset);
+	TestEqual(TEXT("Reset remains deferred during marker dispatch"), RunDuringLogDispatch, InitialRun);
+	TestTrue(TEXT("Build reset also remains deferred during marker dispatch"), bBuildRemainedDuringLogDispatch);
+	TestNotEqual(TEXT("A failure after the reset request cannot read active state"), StateAfterResetRequest, FString(TEXT("active")));
+	TestEqual(TEXT("Both deferred resets broadcast after publication"), ContextsAtBroadcast.Num(), 2);
+	if (ContextsAtBroadcast.Num() == 2)
+	{
+		TestFalse(TEXT("Runtime reset broadcasts with runtime removed"), ContextsAtBroadcast[0].Key);
+		TestTrue(TEXT("Runtime reset preserves build until its own reset"), ContextsAtBroadcast[0].Value);
+		TestFalse(TEXT("Build reset follows with runtime still removed"), ContextsAtBroadcast[1].Key);
+		TestFalse(TEXT("Build reset broadcasts with build removed"), ContextsAtBroadcast[1].Value);
+	}
+	TestEqual(TEXT("A marker-time reset prevents any obsolete active publication"), ActivatedRuns.Num(), 0);
+	TestFalse(TEXT("Deferred reset clears runtime context"), World.Subsystem->HasRuntimeContext());
+	TestFalse(TEXT("Deferred reset clears build context"), World.Subsystem->HasBuildContext());
+	TestEqual(TEXT("Deferred reset clears GameData identity"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("No crash identity survives reset"), HasAnyIdentityKey());
+	const TArray<TPair<ELogVerbosity::Type, FString>> Lines = Capture.GetLines();
+	TestEqual(TEXT("Reset emits no replacement marker"), Lines.Num(), 1);
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextLogDispatchResetOverflowTest,
+	"Aetheln.Observability.CrashContext.LogDispatchResetOverflowFailsClosed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextLogDispatchResetOverflowTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-reset-overflow"), TEXT("instance-reset-overflow")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	const FString InitialRun = CurrentCrashRunId(*World.Subsystem);
+	FScopedCrashMarkerCapture Capture;
+	bool bOverflowRequested = false;
+	Capture.SetMarkerCallback([&](const FString& Message)
+	{
+		if (!bOverflowRequested && Message.Equals(TEXT("AethelnCrashContextMarker crash-run=") + InitialRun, ESearchCase::CaseSensitive))
+		{
+			bOverflowRequested = true;
+			for (int32 Index = 0; Index < 9; ++Index)
+			{
+				World.Subsystem->ResetRuntimeContext();
+			}
+			World.Subsystem->ResetBuildContext();
+		}
+	});
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	TestTrue(TEXT("Marker listener exceeded the bounded reset queue"), bOverflowRequested);
+	TestFalse(TEXT("Overflow clears runtime context"), World.Subsystem->HasRuntimeContext());
+	TestFalse(TEXT("Overflow clears build context"), World.Subsystem->HasBuildContext());
+	TestEqual(TEXT("Overflow settles missing"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("Overflow leaves no crash identity"), HasAnyIdentityKey());
+	TestEqual(TEXT("Overflow cannot produce another marker"), Capture.GetLines().Num(), 1);
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextResetBroadcastReentryTest,
+	"Aetheln.Observability.CrashContext.ResetBroadcastReentryIsBounded",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextResetBroadcastReentryTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-reset-broadcast"), TEXT("instance-reset-broadcast")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+	const FString InitialRun = CurrentCrashRunId(*World.Subsystem);
+	FScopedCrashMarkerCapture Capture;
+	bool bQueuedFromMarker = false;
+	int32 ResetBroadcasts = 0;
+	FDelegateHandle ResetHandle;
+	Capture.SetMarkerCallback([&](const FString& Message)
+	{
+		if (!bQueuedFromMarker && Message.Equals(TEXT("AethelnCrashContextMarker crash-run=") + InitialRun, ESearchCase::CaseSensitive))
+		{
+			bQueuedFromMarker = true;
+			ResetHandle = UAethelnObservabilitySubsystem::OnCrashContextChanged().AddLambda(
+				[&](const UAethelnObservabilitySubsystem& Changed)
+				{
+					if (&Changed == World.Subsystem)
+					{
+						++ResetBroadcasts;
+						World.Subsystem->ResetRuntimeContext();
+					}
+				});
+			World.Subsystem->ResetRuntimeContext();
+		}
+	});
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	if (ResetHandle.IsValid())
+	{
+		UAethelnObservabilitySubsystem::OnCrashContextChanged().Remove(ResetHandle);
+	}
+	TestTrue(TEXT("Marker queued a reset"), bQueuedFromMarker);
+	TestEqual(TEXT("Reset broadcast recursion is capped at eight drains and one fail-closed broadcast"), ResetBroadcasts, 9);
+	TestFalse(TEXT("Runtime is cleared after bounded drain"), World.Subsystem->HasRuntimeContext());
+	TestFalse(TEXT("Build is cleared after bounded drain"), World.Subsystem->HasBuildContext());
+	TestEqual(TEXT("Crash state is missing"), ReadKey(StateKey), FString(TEXT("missing")));
+	TestFalse(TEXT("No crash identity survives recursive reset requests"), HasAnyIdentityKey());
+	TestEqual(TEXT("No replacement marker is emitted"), Capture.GetLines().Num(), 1);
+	Owner.Shutdown();
+	World.Destroy();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnCrashContextRepeatedReentryTest,
+	"Aetheln.Observability.CrashContext.RepeatedReentryFailsStale",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ServerContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnCrashContextRepeatedReentryTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnCrashContext;
+	using namespace AethelnCrashContextTests;
+	const FScopedOwnedCrashKeyRestore Restore;
+	FTestGameWorld World;
+	if (!World.Create(TEXT("run-reentry-loop"), TEXT("instance-reentry-loop")))
+	{
+		TestTrue(TEXT("Game world was created"), false);
+		World.Destroy();
+		return false;
+	}
+
+	int32 Reentries = 0;
+	bool bAllChangesAccepted = true;
+	const FDelegateHandle WriteHandle = FGenericCrashContext::OnGameDataSetDelegate().AddLambda(
+		[&](const FString& Key, const FString& Value)
+		{
+			if (Key == StateKey && Value == TEXT("updating"))
+			{
+				++Reentries;
+				bAllChangesAccepted &= World.Subsystem->SetRuntimeContext(
+					EAethelnFlowKind::PrototypeAuthority,
+					TEXT("run-reentry-loop"),
+					TEXT("instance-reentry-loop"),
+					AethelnObservability::ExcludedIdentifier);
+			}
+		});
+	FAethelnCrashContextOwner Owner;
+	Owner.Initialize();
+	Owner.TrackWorldTick(World.World);
+	FGenericCrashContext::OnGameDataSetDelegate().Remove(WriteHandle);
+	TestTrue(TEXT("Every bounded reentrant change was accepted"), bAllChangesAccepted);
+	TestEqual(TEXT("Registration attempts are bounded"), Reentries, 3);
+	TestEqual(TEXT("An unsettled owner fails stale"), ReadKey(StateKey), FString(TEXT("stale")));
+	TestFalse(TEXT("An unsettled owner leaves no identity"), HasAnyIdentityKey());
+	Owner.Shutdown();
+	World.Destroy();
 	return true;
 }
 
@@ -1737,7 +3222,10 @@ bool FAethelnCrashContextMarkerTest::RunTest(const FString& Parameters)
 
 	// Re-registering the same ID after the sole world recovers must not log it again.
 	Owner.MarkStale();
-	Owner.TrackWorldTick(World.World);
+	FAethelnCrashContextOwner::FWorldTickAdmission FirstRecovery;
+	TestEqual(TEXT("Stale world receives a recovery tick"), Owner.BeginWorldTickAdmission(World.World, FirstRecovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("Stale tick completes"), Owner.CompleteWorldTickAdmission(FirstRecovery));
 	TestEqual(TEXT("The recovered world registers active"), ReadKey(StateKey), FString(TEXT("active")));
 	TestTrue(TEXT("Recovery re-registers the same crash run"), ReadKey(CrashRunIdKey).Equals(FirstRun, ESearchCase::CaseSensitive));
 	ExpectMarkers({ FirstRun });
@@ -1752,12 +3240,35 @@ bool FAethelnCrashContextMarkerTest::RunTest(const FString& Parameters)
 	ExpectMarkers({ FirstRun, SecondRun });
 
 	Owner.MarkStale();
-	Owner.TrackWorldTick(World.World);
+	FAethelnCrashContextOwner::FWorldTickAdmission SecondRecovery;
+	TestEqual(TEXT("Replacement world receives a recovery tick"), Owner.BeginWorldTickAdmission(World.World, SecondRecovery),
+		FAethelnCrashContextOwner::EWorldTickAdmissionResult::ExistingWorld);
+	TestTrue(TEXT("Replacement tick completes"), Owner.CompleteWorldTickAdmission(SecondRecovery));
 	TestTrue(TEXT("Recovery keeps the replacement crash run"), ReadKey(CrashRunIdKey).Equals(SecondRun, ESearchCase::CaseSensitive));
 	ExpectMarkers({ FirstRun, SecondRun });
 
+	FTestGameWorld OtherWorld;
+	if (!OtherWorld.Create(TEXT("run-marker-other"), TEXT("instance-marker-other")))
+	{
+		TestTrue(TEXT("Second game world was created"), false);
+		Owner.Shutdown();
+		World.Destroy();
+		OtherWorld.Destroy();
+		return false;
+	}
+	Owner.EndTracking(World.World);
+	Owner.TrackWorldTick(OtherWorld.World);
+	const FString OtherRun = ReadKey(CrashRunIdKey);
+	TestEqual(TEXT("Different owner registers its own crash run"), OtherRun, CurrentCrashRunId(*OtherWorld.Subsystem));
+	ExpectMarkers({ FirstRun, SecondRun, OtherRun });
+	Owner.EndTracking(OtherWorld.World);
+	Owner.TrackWorldTick(World.World);
+	TestEqual(TEXT("Returning owner retains its generated crash run"), ReadKey(CrashRunIdKey), SecondRun);
+	ExpectMarkers({ FirstRun, SecondRun, OtherRun });
+
 	Owner.Shutdown();
 	World.Destroy();
+	OtherWorld.Destroy();
 	return true;
 }
 #endif

@@ -25,7 +25,7 @@ $EvidenceRoot = Join-Path ([IO.Path]::GetTempPath()) ('AethelnOperationFixture-'
 $null = New-Item -ItemType Directory -Path $EvidenceRoot
 foreach ($Case in @('execute', 'overlap')) {
 	$Request = [ordered]@{ schemaVersion = 2; repository = 'owner/repository'; targetRevision = $Revision;
-		engineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'; runnerId = 21; runnerName = 'fixture';
+		engineRevision = '9ab6767ecaaa724d01371ffaea14317311ae8371'; runnerId = 21; runnerName = 'fixture';
 		engineRoot = 'D:\engine'; targetRoot = $RepositoryRoot; leasePath = 'D:\control\host.lease';
 		yamlAssemblyPath = 'D:\control\YamlDotNet.dll'; linuxToolchainRoot = 'D:\toolchain';
 		sourceRoot = 'D:\source'; lfsStorageRoot = 'D:\lfs-cache';
@@ -70,7 +70,7 @@ foreach ($Case in @('dispatch-success', 'dispatch-nonzero')) {
 	$DispatchAttemptPath = Join-Path $CaseRoot 'attempt.json'
 	Write-OperationFixtureText -Path $DispatchAttemptPath -Text ($DispatchAttempt | ConvertTo-Json -Depth 4 -Compress)
 	$DispatchRequest = [ordered]@{ schemaVersion = 2; repository = 'owner/repository'; targetRevision = $Revision;
-		engineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'; runnerId = 21; runnerName = 'synthetic-only';
+		engineRevision = '9ab6767ecaaa724d01371ffaea14317311ae8371'; runnerId = 21; runnerName = 'synthetic-only';
 		engineRoot = 'D:\unused-engine'; targetRoot = 'D:\unused-target'; sourceRoot = 'D:\unused-source';
 		lfsStorageRoot = 'D:\unused-cache'; linuxToolchainRoot = 'D:\unused-toolchain'; compilerPath = 'D:\unused-tools\cl.exe';
 		resourceCompilerPath = 'D:\unused-tools\rc.exe'; leasePath = 'D:\unused-lease'; yamlAssemblyPath = 'D:\unused-yaml.dll';

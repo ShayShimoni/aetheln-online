@@ -217,7 +217,7 @@ function ConvertFrom-InitialPreparationRequest {
 		if ($Request.schemaVersion -isnot [int] -or $Request.schemaVersion -ne 2 -or $Request.runnerId -isnot [int] -or $Request.runnerId -lt 1 -or
 			$Request.repository -isnot [string] -or $Request.targetRevision -isnot [string] -or $Request.engineRevision -isnot [string] -or
 			$Request.repository -cne $Attempt.repository -or $Request.targetRevision -cne $Attempt.targetRevision -or
-			$Request.engineRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or
+			$Request.engineRevision -cne '9ab6767ecaaa724d01371ffaea14317311ae8371' -or
 			$Request.runnerName -isnot [string] -or [string]::IsNullOrWhiteSpace($Request.runnerName) -or $Request.runnerName.Length -gt 100 -or
 			$Request.mode -isnot [string] -or $Request.mode -cnotin @('inspect', 'execute')) { throw 'preparation_request_invalid' }
 		foreach ($Field in @('engineRoot', 'targetRoot', 'sourceRoot', 'lfsStorageRoot', 'compilerPath', 'resourceCompilerPath', 'leasePath', 'yamlAssemblyPath', 'linuxToolchainRoot')) {
