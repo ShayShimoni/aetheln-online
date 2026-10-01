@@ -115,8 +115,8 @@ Shared Order rules:
   version of the character. Peaks are feared, regulated, and central to each
   Order's taboos.
 - Each Order channels one named combat resource. Resource names are working
-  names; all resource behavior and numbers are tuning TBDs, and the prototype
-  combat resource identity remains owned by its existing decision record.
+  names; each is the selected presentation of the shared OrderResource slot.
+  All resource behavior and numeric tuning remain `TBD`.
 
 | Order | Stable ID | Specializations | Peak | Resource | Weapon traditions |
 | --- | --- | --- | --- | --- | --- |
@@ -125,6 +125,26 @@ Shared Order rules:
 | Hushblade | `order.hushblade` | Red Echo (`order.hushblade.spec.red_echo`), Hollow Guard (`order.hushblade.spec.hollow_guard`) | Missing Second (`order.hushblade.peak.missing_second`) | Tempo | Twin knives, sheathed blade, chain-sickle, needle fan |
 | Gravecant | `order.gravecant` | Dirge (`order.gravecant.spec.dirge`), Refrain (`order.gravecant.spec.refrain`) | Last Chorus (`order.gravecant.peak.last_chorus`) | Cadence | Chime-staff, mace-reliquary, chain-censer, tome-rod |
 | Blackfletch | `order.blackfletch` | Far Thorn (`order.blackfletch.spec.far_thorn`), Waykeeper (`order.blackfletch.spec.waykeeper`) | Narrowed Horizon (`order.blackfletch.peak.narrowed_horizon`) | Tension | Longbow, recurve bow, greatbow, tether/trap bow |
+
+Every name in the Resource column is the Order-specific presentation of the
+shared `combat.resource.order` slot: Grudge maps to `order.oathscar`, Proof to
+`order.nullwright`, Tempo to `order.hushblade`, Cadence to
+`order.gravecant`, and Tension to `order.blackfletch`. Changing an Order changes
+which authored resource rules may occupy that slot; it does not turn Health,
+Endurance, Guard, or Ward into an Order resource. The server validates the
+selected Order, its stable ID, and the compatible resource definition. A client
+cannot request another Order's resource identity or claim a gain, spend, or
+refund.
+
+The prototype remains one `order.oathscar` character using sword and shield.
+Grudge is canonical Oathscar intent but is not part of the default prototype
+resource subset. Issue [#107](https://github.com/ShayShimoni/aetheln-online/issues/107)
+may define one optional Oathbreak exercise; any resulting bounded attribute or
+ability work remains owned by Issue
+[#19](https://github.com/ShayShimoni/aetheln-online/issues/19). This document
+does not schedule the complete Oathscar kit, its specializations, Peak, other
+weapon traditions, or any other Order. Exact generation, spend, decay, caps,
+and UI values remain tuning `TBD`.
 
 ### Oathscar - Working Name
 
@@ -162,6 +182,187 @@ spends it in combat.
   names the specialization he embodies. Vothram, the Forgedoor, is an Oathscar
   of the Ironwake line whose falsified vault records are a live breach of the
   Order's witness duty.
+
+#### Canonical Intent
+
+This full design shard has maturity **Canonical Intent**. Display names remain
+working names, while the semantic IDs below are stable references for the
+future registry. It defines product behavior and compatibility boundaries; it
+does not claim **Evidence Validated** or **Implementation Ready** maturity.
+
+The Oathscar's mechanical identity is committed, readable pressure. They take
+and hold a line with active defense, then answer a witnessed wrong through an
+aimed, deliberately committed attack. Their base kit must remain functional
+without a specialization, Grudge, a Skein loadout, equipment bonuses, a
+Doctrine, or another player. Specialization and build choices change how the
+Oathscar applies pressure; they do not supply the missing half of an otherwise
+nonfunctional class.
+
+One authoritative weapon discipline is active in combat. A weapon model,
+animation, client request, or equipped presentation cannot select or combine
+discipline rules. The server validates the active discipline, its compatible
+ability definitions, and any allowed transition before accepting an
+activation. Rules for learning, changing, and persisting a discipline belong
+to Issues [#112](https://github.com/ShayShimoni/aetheln-online/issues/112) and
+[#113](https://github.com/ShayShimoni/aetheln-online/issues/113).
+
+| Weapon discipline | Stable ID | Mechanical identity |
+| --- | --- | --- |
+| Greatsword | `order.oathscar.weapon.greatsword` | Broad committed sweeps and heavy Wrought pressure that threaten a held approach but expose readable wind-up and recovery. |
+| Sword-and-shield | `order.oathscar.weapon.sword_and_shield` | Directional defense, short counter-pressure, and deliberate advances that exchange reach and pursuit for control of the immediate line. |
+| Two-handed spear | `order.oathscar.weapon.two_handed_spear` | Aimed reach and charge denial that reward spacing while becoming vulnerable when an opponent crosses the authored point-control window. |
+| Dual wield | `order.oathscar.weapon.dual_wield` | Focused pursuit of one sworn opponent through successive free-aim commitments, without lock-on, homing, or client-selected-target authority. |
+
+Ironwake (`order.oathscar.spec.ironwake`) interprets the oath as advancing
+punishment. It favors forcing a response, spending earned pressure, and
+continuing through a contested line, but it does not gain automatic contact or
+protection during commitment. Last Gate (`order.oathscar.spec.last_gate`)
+interprets the oath as immovable protection. It favors interception,
+directional defense, and punishments earned by correctly holding a line, but it
+does not create passive Guard, omnidirectional block, or permanent denial.
+Neither specialization changes pure free aim, the shared defense order, or the
+meaning of Health, Endurance, Guard, Ward, or OrderResource.
+
+Grudge (`order.oathscar.resource.grudge`) is the Oathscar presentation of the
+shared `combat.resource.order` slot. It records server-recognized grievances
+that the Oathscar can answer through compatible authored actions. A qualifying
+grant exists only after its source combat result commits; the server records it
+at most once under the shared combat grammar's complete committed-result
+identity, including target, authored result slot, component, and periodic tick
+identity where applicable. Replay, prediction, reordered delivery, or reconnect
+cannot grant it twice. A spend is
+likewise accepted and committed by the server against compatible content and
+current authoritative state. Grudge is not Guard, bonus Health, Ward,
+Endurance, threat, or an ownership claim over an opponent. It cannot be granted
+because a client reports being hit, names a target, or claims a successful
+block. Qualifying events, decay, bounds, costs, refunds, and every numeric rule
+remain tuning `TBD`.
+
+Oathbreak (`order.oathscar.peak.oathbreak`) briefly realizes the forbidden
+Oathscar who abandons the sworn line to force an ending. An accepted activation
+enters a server-owned temporary Peak state whose compatible Oathscar actions
+use explicitly authored aggressive variants. If an authored rule spends or
+grants Grudge, the server validates and commits that resource transition;
+presentation cannot create or refund it. Oathbreak does not convert Guard into
+damage, grant invulnerability, bypass
+Wrought/Cinder/Wake mitigation, erase costs or recovery, or make presentation
+authoritative. Opponents must receive a distinct activation tell, readable
+active state, and readable ending/recovery. Their counterplay is to evade the
+free-aim commitments, break contact, force poor facing, interrupt only where
+the authored window permits, or punish the defensive actions that Oathbreak
+replaces. Eligibility, Grudge cost and grant/refund policy during the Peak,
+duration, action replacements, cancellation, final recovery, and all numeric
+values remain `TBD`.
+
+The complete base kit must support solo play before specialization or build
+choices: the Oathscar can approach, apply Wrought damage, defend directionally,
+dodge, interrupt through an authored action where eligible, recover through
+the shared combat rules, defeat a representative ordinary enemy, and survive
+or fail through readable decisions. It must not require an ally to create a
+target, generate a resource, cover an unavoidable weakness, or finish a basic
+combat loop. Group play may reward line holding and interception without making
+solo viability depend on party state.
+
+Oathscar counterplay remains structural:
+
+- attacks and advances carry authored wind-up, active, and recovery phases;
+- directional defense loses to valid angle, timing, Guard pressure, or an
+  authored unblockable rule rather than protecting every side passively;
+- Endurance, Guard, Grudge, cooldowns, and action state remain distinct limits,
+  with no automatic conversion that hides a failed decision;
+- greatsword and spear commitments can be crossed or avoided, dual-wield
+  pursuit can be disengaged or interrupted as authored, and sword-and-shield
+  gives up reach and pursuit for immediate-line control; and
+- the Order receives no inherent long-range homing, unavoidable damage,
+  permanent control immunity, free sustain, or client-authoritative shortcut.
+
+The following are representative weave definitions at **Canonical Intent**,
+not an approved final collection, slot count, unlock schedule, or tuning set:
+
+| Kind | Working name and stable ID | Decision changed |
+| --- | --- | --- |
+| Form | Advancing Answer (`order.oathscar.form.gate_step.advancing_answer`) | Changes Gate Step into a more committed advance; contact, movement, and recovery remain authored and server resolved. |
+| Form | Rooted Answer (`order.oathscar.form.gate_step.rooted_answer`) | Gives up the advance so Gate Step contests Guard from a held position; it is mutually exclusive with Advancing Answer for that ability. |
+| Form | Closed Oath (`order.oathscar.form.hold_the_line.closed_oath`) | Narrows Hold the Line to a more committed directional defense with a distinct readable facing requirement. |
+| Thread | Witnessed Reprisal (`order.oathscar.thread.witnessed_reprisal`) | A committed perfect-block result authorizes one compatible follow-up; duplicate result delivery cannot authorize it again. |
+| Thread | Unbroken Sequence (`order.oathscar.thread.unbroken_sequence`) | Completing the authored basic chain without a miss changes the next compatible Sworn Rebuke rather than adding an invisible passive bonus. |
+| Thread | Ground Reclaimed (`order.oathscar.thread.ground_reclaimed`) | A committed dodge result changes the next compatible Gate Step; a predicted dodge alone cannot trigger it. |
+| Keystone | Debt Comes Due (`order.oathscar.keystone.debt_comes_due`) | Makes committed Grudge spends favor continuing offensive pressure while preserving the normal defense and authority rules. |
+| Keystone | The Line Remembers (`order.oathscar.keystone.the_line_remembers`) | Makes correctly resolved directional defense favor deliberate counter-pressure without turning Guard into Grudge or passive damage. |
+
+Forms modify only their referenced ability, Threads consume bounded and visible
+server-owned triggers, and one Keystone changes the build's central rhythm.
+None may create a target, contact, hit, resource result, or recursive proc from
+client presentation. Compatibility, listener budgets, cycles, versioning, and
+machine-readable generation remain owned by
+[#106](https://github.com/ShayShimoni/aetheln-online/issues/106); compiled
+builds, presets, persistence, and atomic equipment changes remain owned by
+[#113](https://github.com/ShayShimoni/aetheln-online/issues/113).
+
+#### Sword-and-Shield Prototype Candidate
+
+Only this bounded subset has maturity **Prototype Candidate**. The authoritative
+discipline is fixed to `order.oathscar.weapon.sword_and_shield` in one
+controlled combat space. Its default playable contract is exactly:
+
+- Health, Endurance, and active Guard under their shared semantic identities;
+- one server-owned, pure-free-aim, three-hit Wrought basic combo
+  (`order.oathscar.ability.sword_shield_basic_chain`);
+- directional block, the shared prototype dodge, and exactly three
+  representative active abilities:
+  - Gate Step (`order.oathscar.ability.gate_step`), an aimed, server-bounded
+    shield-led advance with authored Wrought contact and Guard pressure;
+  - Sworn Rebuke (`order.oathscar.ability.sworn_rebuke`), an aimed committed
+    Wrought answer with an authored interruption rule; and
+  - Hold the Line (`order.oathscar.ability.hold_the_line`), an active
+    directional defensive commitment whose Guard result comes only from the
+    authoritative contact and facing check;
+- one representative enemy; and
+- authoritative damage, readable acceptance/correction/rejection feedback,
+  death, and respawn.
+
+All damage, Guard pressure, Endurance costs, cooldowns, ranges, shapes, movement,
+phase timings, interruption rules, recovery, enemy values, and other tuning are
+`TBD` for their owning implementation and evidence work. The active abilities
+describe distinct prototype decisions; their working names do not approve
+animation, VFX, audio, or final balance.
+
+The default prototype does not read, grant, spend, display, or persist Grudge
+and does not depend on Ironwake, Last Gate, Oathbreak, Forms, Threads,
+Keystones, equipment, Doctrine, inventory, a specialization trial, weapon
+learning, or a wider Order roster. It therefore remains functional with no
+Skein selection and no durable character-system dependency.
+
+One optional Oathbreak exercise may separately instantiate
+`order.oathscar.peak.oathbreak` with fixed, temporary test state. It is not part
+of the default loop, does not unlock or persist anything, does not mutate
+inventory or saved build state, and does not require the default prototype to
+implement Grudge. The exercise must end by restoring or discarding only its
+explicit temporary state; disconnect, retry, death, or replay cannot preserve a
+Peak grant or duplicate a result. Passing that exercise would not validate the
+full Oathbreak, Grudge, specialization, or Skein designs.
+
+This shard retains existing delivery ownership:
+
+| Owner | Boundary retained |
+| --- | --- |
+| [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Dodge cost, cooldown, authoritative defensive window, correction, and network evidence. |
+| [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | PlayerState-owned GAS attributes, resources, effects, abilities, cooldowns, replication, rollback, and bounded optional-Peak attribute/resource/effect/ability work. |
+| [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Representative enemy authority, target choice, attack behavior, and runtime evidence. |
+| [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Integrated death, respawn, reconnect, stale-state cleanup, and duplicate-completion tests. |
+| [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Server-owned attack timeline, authored free-aim contacts, deterministic ordering, and the three-hit chain. |
+| [#61](https://github.com/ShayShimoni/aetheln-online/issues/61) | HUD, readable combat feedback, accessibility-safe cues, and correction/rejection presentation. |
+| [#82](https://github.com/ShayShimoni/aetheln-online/issues/82) | Input, camera, bounded aim intent, and measured pure-free-aim feel. |
+| [#84](https://github.com/ShayShimoni/aetheln-online/issues/84) | Attack, defense, telegraph, volume, animation, and presentation authoring pipeline. |
+| [#106](https://github.com/ShayShimoni/aetheln-online/issues/106) | Registry schema, stable-ID validation, maturity validation, generation, drift checks, and bounded proc/listener rules. |
+| [#112](https://github.com/ShayShimoni/aetheln-online/issues/112) | Specialization trial/reset, weapon learning, Heritage, and Order-mastery rules. |
+| [#113](https://github.com/ShayShimoni/aetheln-online/issues/113) | Skein compilation, presets, compatibility manifests, persistence, and atomic equipment/build changes. |
+| [#115](https://github.com/ShayShimoni/aetheln-online/issues/115) | Downstream canonical, roadmap, brief, ledger, glossary, generated-artifact, and board reconciliation. |
+
+No statement in this shard is runtime, packaged, balance, performance,
+security, readability, accessibility, or QA evidence. Only the bounded subset
+above is a Prototype Candidate; every broader Oathscar definition remains
+Canonical Intent.
 
 ### Nullwright - Working Name
 
@@ -283,7 +484,9 @@ is the drawn stillness between sighting and release.
 - **Taboos:** a Blackfletch must not loose without a named target, abandon a
   marked route while travelers still trust it, or hold the Narrowed Horizon -
   the Peak that briefly realizes the self who sees only one future - after the
-  shot is taken.
+  shot is taken. "Named target" is an Order oath and authored intent, not a
+  target lock, client-selected authoritative target, guaranteed contact, or
+  exception to pure free aim.
 - **Internal conflicts:** the Far Thorn interpretation strikes at the greatest
   distance and argues the kindest arrow arrives before the war does; the
   Waykeeper interpretation traps, tethers, and escorts, arguing that an Order
@@ -456,7 +659,7 @@ Conflict:
 - **People:** Kell
 - **Order:** Oathscar, Ironwake specialization
 - **Current alignment:** covert Hundred Witnesses supporter
-- **Combat lesson:** guard pressure, stamina breaking, and heavy commitment
+- **Combat lesson:** Guard and Endurance pressure, and heavy commitment
 
 Vothram forged the instruments Sevrin used to crack the Star. He did not know
 their purpose, but ignorance did not save the cities they destroyed.

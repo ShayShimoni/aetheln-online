@@ -34,7 +34,7 @@ The game combines:
 ### Skill Decides How Power Is Used
 
 Levels, equipment, Skein choices, and faction Doctrines provide real
-advantages. They do not aim, time a block, read a telegraph, manage stamina, or
+advantages. They do not aim, time a block, read a telegraph, manage Endurance, or
 choose a safe commitment for the player.
 
 A skilled but moderately under-equipped player should be able to defeat an
@@ -173,6 +173,123 @@ one layer cannot recapture the mouse while another still needs it. Cursor mode
 blocks new gameplay input; it does not pause gravity, erase momentum, cancel an
 accepted attack, or stop an authoritative combat timeline.
 
+### Shared Combat Grammar
+
+Every Order uses the same five resource concepts. Display names may be localized,
+but their semantic identities and responsibilities do not change by Order,
+equipment, Form, Thread, Keystone, or faction Doctrine.
+
+| Resource | Stable semantic ID | Player-facing rule |
+| --- | --- | --- |
+| Health | `combat.resource.health` | Remaining life. Reaching zero enters the server-authoritative death flow. Any future deliberate Health cost must be explicit rather than inferred from another resource. |
+| Endurance | `combat.resource.endurance` | Shared exertion used by authored physical actions such as dodge, sprint, or demanding defense. An action spends it only when that action's data says so. |
+| Guard | `combat.resource.guard` | Stability while actively defending. Guard pressure can break a block or defensive stance; Guard is not bonus Health and does not passively absorb every hit. |
+| Ward | `combat.resource.ward` | Explicit temporary protection that absorbs only the damage its authored rule permits. Ward is separate from Health, Guard, armor, and invulnerability. |
+| OrderResource | `combat.resource.order` | The one Order-specific combat currency slot. Its display identity is Grudge, Proof, Tempo, Cadence, or Tension according to the selected Order; it never aliases Endurance, Guard, or Ward. |
+
+Damage belongs to one of three stable families. **Wrought**
+(`combat.damage.wrought`) is material force: weapons, impacts, and other
+physical trauma. **Cinder** (`combat.damage.cinder`) is destructive
+Ember-light, heat, and burning transformation. **Wake**
+(`combat.damage.wake`) is Deepwake pressure that attacks continuity, memory,
+or realized form. An ability may contain more than one explicitly authored
+component, but the server resolves each component under its own family. Names
+do not imply fixed resistance values, bypasses, or status effects; those rules
+remain data driven and tuning-owned. No family is unmitigated "true damage,"
+and content cannot bypass the shared defense order by relabeling a packet.
+
+Combat resolves from authoritative state in a consistent order: action and
+world-policy eligibility, authored contact, avoidance or immunity, directional
+defense and Guard pressure, family-specific mitigation, eligible Ward
+absorption, remaining Health change, then secondary effects, interruption, and
+death. A Guard break affects later resolution only as its authored rule states;
+it never causes the same contact to be evaluated again. Simultaneous events use
+an explicit deterministic tie rule rather than frame or packet arrival order.
+
+The shared effect language distinguishes immediate changes from duration
+effects and distinguishes helpful effects, harmful effects, and control. Every
+duration effect declares its stacking key, source scope, refresh or replacement
+behavior, maximum stacks, cleanse eligibility, and proc eligibility. A cleanse
+removes only effects in its authored cleanse set. **Resolve** is the shared
+server-owned protection against repeated control: eligible control builds or
+consumes it according to authored data, while displacement, immunity, and
+uncontrolled damage remain separate concepts. Exact durations, stack limits,
+Resolve behavior, and all numeric values are tuning `TBD`.
+
+Triggered effects form a bounded server-owned chain. A proc cannot recursively
+grant itself, create an unbounded cycle, or escape the root activation's finite
+listener, event, target, and construct budgets through branching, delay, or
+periodic work. A replayed activation cannot grant a second result. Exact proc
+budgets remain tuning `TBD`. Opponents receive readable cues for dangerous
+wind-up, active and recovery phases, defense, control, and meaningful state
+changes, without receiving secrets that secure stealth or anti-abuse rules
+intentionally withhold.
+
+### Relations, Engagement, and Recovery
+
+- The server classifies a source/target pair as self, friendly, neutral,
+  hostile, or protected/non-interactable for the current world-policy context.
+  Party, faction, ownership, and sanctuary data are inputs; no client-provided
+  relation or PvP flag is truth. Projectiles, areas, summons, and other proxies
+  inherit an authoritative source identity and recheck current policy when
+  their result would apply.
+- Movement collision, combat query volumes, and presentation geometry are
+  separate. Character meshes and rendered weapons never become authoritative
+  collision merely because they overlap on a client.
+- Engagement is server-owned state derived from validated hostile actions,
+  damage, healing, protection, threat, and encounter rules. It is not a player
+  toggle and does not end merely because a client disconnects.
+- PvE threat is a server-owned input to AI target choice. A taunt is an
+  authored temporary priority rule for eligible AI, not selected-target combat
+  authority and never control of another player's input.
+- Resource recovery can be passive, delayed, event-driven, or supplied by an
+  authored restoration effect. Ability recovery windows and cooldowns are
+  separate from resource recovery. Exact rates, delays, and reset values are
+  `TBD`.
+- Death and respawn clear or preserve only explicitly authored state. Logout,
+  disconnect, reconnect, and encounter reset cannot be used to duplicate a
+  grant, erase an accepted hostile result, or revive stale attacks, threat,
+  effects, or invulnerability.
+- Stealth and detection are server decisions. A concealed opponent's hidden
+  state must not be disclosed through UI, targeting, replication, audio, or
+  effects before the observer is authorized to perceive the corresponding
+  cue.
+
+### Prototype Combat Boundary
+
+The prototype remains one Oathscar using sword and shield in one controlled
+combat space. It exercises only the shared grammar needed for Health,
+Endurance, active Guard, a three-hit Wrought combo, directional block, dodge,
+three representative active abilities, one enemy, death, respawn, and readable
+feedback. Issue [#107](https://github.com/ShayShimoni/aetheln-online/issues/107)
+may define one optional Oathbreak exercise; it does not make Grudge or the full
+OrderResource loop default prototype scope. Ward, Cinder, Wake, generalized
+threat and taunt, full effect and cleanse collections, full Resolve tuning,
+stealth gameplay, faction relations, and the other four Orders remain defined
+future-compatible concepts, not prototype runtime scope.
+
+This grammar does not take over runtime or evidence ownership. Networking and
+authority selection remain with [Issue #2](https://github.com/ShayShimoni/aetheln-online/issues/2);
+dodge with [#18](https://github.com/ShayShimoni/aetheln-online/issues/18);
+GAS attributes, effects, resources, and cooldowns with
+[#19](https://github.com/ShayShimoni/aetheln-online/issues/19); death and
+respawn with [#21](https://github.com/ShayShimoni/aetheln-online/issues/21);
+threat controls with [#40](https://github.com/ShayShimoni/aetheln-online/issues/40);
+measured budgets with [#45](https://github.com/ShayShimoni/aetheln-online/issues/45);
+the attack timeline and combo with
+[#60](https://github.com/ShayShimoni/aetheln-online/issues/60); HUD and
+readability with [#61](https://github.com/ShayShimoni/aetheln-online/issues/61);
+and input/camera feel with
+[#82](https://github.com/ShayShimoni/aetheln-online/issues/82).
+
+Some prototype brief and scope-ledger text still carries the pre-Issue-#103
+placeholder phrase `prototype combat resource` or says not to canonize Guard.
+This Issue-#105 grammar is the approved source contract for the four canonical
+documents updated here; [Issue #115](https://github.com/ShayShimoni/aetheln-online/issues/115)
+owns the downstream brief, ledger, roadmap, glossary, generated-artifact, and
+board reconciliation. Historical evidence keeps the terminology it recorded
+at the time and is not silently rewritten.
+
 ### Authoritative Rules
 
 - The server decides movement validity, hits, damage, healing, resources,
@@ -231,8 +348,8 @@ Every display name below is a working name with a stable semantic ID.
 Each Order has two specializations and one Peak; a specialization selects the
 dominant interpretation of the Order's oath, and a Peak briefly realizes a
 forbidden version of the character. Resource names are working names and all
-resource behavior is tuning TBD; the prototype combat resource identity remains
-owned by its existing decision record.
+resource behavior is tuning TBD; the shared resource identities and prototype
+subset are defined by the combat grammar above.
 
 Orders are not faction-locked. Faction Doctrines modify how an Order approaches
 the world and combat without replacing its identity. The full Order
@@ -281,7 +398,7 @@ Equipment supports every part of combat:
 
 - Offensive power and damage type.
 - Health, protection, and resistance.
-- Stamina, Guard, class resources, and recovery.
+- Endurance, Guard, Ward, OrderResource, and recovery.
 - Attack cadence and ability recovery within controlled limits.
 - Stagger, guard pressure, healing, and support.
 - Conditional class, faction, PvE, PvP, traversal, and siege utility.

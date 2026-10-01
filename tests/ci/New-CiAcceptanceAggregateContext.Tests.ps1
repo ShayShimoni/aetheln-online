@@ -45,6 +45,18 @@ function New-SelectorFixture {
 	}
 }
 
+function New-UnavailableSelectorFixture {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory unavailable-controller fixture only.')]
+	$Report = New-SelectorFixture -Selected $script:CheckIds
+	$Report.policy.digest = '0' * 64
+	$Report.execution = [pscustomobject][ordered]@{mode='accepted_controller_unavailable';controllerRevision=('a'*40);controllerBlobOid=$null;controllerSha256=$null;checkoutAllowed=$false;complete=$true;reason='accepted_controller_unavailable'}
+	$Report.classification = [pscustomobject][ordered]@{changedPaths=@();entries=@();uncertainties=@('accepted_controller_unavailable')}
+	$Report.selection.obligations = @($script:CheckIds | ForEach-Object { [pscustomobject][ordered]@{id=$_;selected=$true;reasons=@('accepted_controller_unavailable')} })
+	$Report.legacyAuthority = [pscustomobject][ordered]@{authoritative=$true;engineRequired=$null;reason='not_observed'}
+	$Report.comparison = [pscustomobject][ordered]@{status='unavailable';differences=@('accepted_controller_unavailable')}
+	return $Report
+}
+
 function New-RequirementsTemplateFixture {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs and returns an in-memory requirements-template fixture without changing external state.')]
 	param()
@@ -96,7 +108,7 @@ function New-InvocationFixture {
 }
 
 function Invoke-Fixture {
-	param($Fixture,[ValidateSet('Identity','Aggregate')][string]$Mode='Aggregate',[string]$ActionItemsJson=(Get-ActionItemsJson),[string]$SelectorBindingJson=(Get-SelectorBindingJson),[string]$ProducerBindingsJson=(Get-ProducerBindingsJson))
+	param($Fixture,[ValidateSet('Identity','Aggregate','Gap')][string]$Mode='Aggregate',[string]$ActionItemsJson=(Get-ActionItemsJson),[string]$SelectorBindingJson=(Get-SelectorBindingJson),[string]$ProducerBindingsJson=(Get-ProducerBindingsJson))
 	$Arguments = @{
 		Mode=$Mode;SelectorReportPath=$Fixture.SelectorPath;WorkflowPath=$Fixture.WorkflowPath
 		Repository='ShayShimoni/aetheln-online';Actor='owner';TriggeringActor='owner'
@@ -107,6 +119,7 @@ function Invoke-Fixture {
 		$Arguments.RequirementsTemplatePath=$Fixture.TemplatePath;$Arguments.SelectorBindingJson=$SelectorBindingJson;$Arguments.ProducerBindingsJson=$ProducerBindingsJson
 		$Arguments.AggregateContextOutputPath=$Fixture.AggregatePath;$Arguments.RuntimeRequirementsOutputPath=$Fixture.RequirementsPath
 	}
+	if ($Mode -ceq 'Gap') { return Invoke-CiAcceptanceAggregateContextMain @Arguments }
 	Invoke-CiAcceptanceAggregateContextMain @Arguments | Out-Null
 }
 
@@ -146,6 +159,73 @@ try {
 	Invoke-Fixture -Fixture $IdentityFixture -Mode Identity
 	Assert-True ((Test-Path -LiteralPath $IdentityFixture.IdentityPath -PathType Leaf) -and -not (Test-Path -LiteralPath $IdentityFixture.AggregatePath) -and -not (Test-Path -LiteralPath $IdentityFixture.RequirementsPath)) 'Identity mode must emit only the publisher context.'
 } finally { Remove-Item -LiteralPath $IdentityFixture.Root -Recurse -Force }
+
+$UnavailableGapFixture = New-InvocationFixture
+try {
+	Write-FixtureJson $UnavailableGapFixture.SelectorPath (New-UnavailableSelectorFixture)
+	$Gap = Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Gap
+	Assert-True ($Gap.mode -ceq 'Gap' -and $Gap.acceptedControllerUnavailable -eq $true -and $Gap.attemptAnchor.nonce -ceq $script:Nonce) 'Unavailable-controller gap validation must bind the current attempt without claiming accepted-base identity.'
+	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'unreal-editor-automation,content-reference-validation,controller-contract,controller-operational-proof,clean-package-provenance-smoke') 'The fallback must conservatively select all five obligations without live producers.'
+	Assert-True (-not (Test-Path -LiteralPath $UnavailableGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.AggregatePath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.RequirementsPath)) 'Gap mode must publish no identity, aggregate context, or receipt prerequisites.'
+	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Identity } 'selector_execution_invalid'
+	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Aggregate } 'selector_execution_invalid'
+} finally { Remove-Item -LiteralPath $UnavailableGapFixture.Root -Recurse -Force }
+
+$WorkflowFallbackFixture = New-InvocationFixture
+$PreviousShadowReportPath = [Environment]::GetEnvironmentVariable('AETHELN_SHADOW_REPORT')
+try {
+	$WorkflowSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml'), $script:ContextUtf8)
+	$FallbackWriters = [regex]::Matches($WorkflowSource, '(?m)^\s*\[IO\.File\]::WriteAllText\(\$env:AETHELN_SHADOW_REPORT, .*\)\r?$')
+	Assert-True ($FallbackWriters.Count -eq 1) 'The workflow must contain exactly one fallback report writer.'
+	$Report = New-UnavailableSelectorFixture
+	$Utf8 = $script:ContextUtf8
+	$env:AETHELN_SHADOW_REPORT = $WorkflowFallbackFixture.SelectorPath
+	& ([scriptblock]::Create($FallbackWriters[0].Value))
+	$FallbackBytes = [IO.File]::ReadAllBytes($WorkflowFallbackFixture.SelectorPath)
+	Assert-True ($FallbackBytes.Length -gt 2 -and $FallbackBytes[-1] -eq 10 -and $FallbackBytes[-2] -ne 10 -and $FallbackBytes[-2] -ne 13) 'The actual workflow fallback writer must emit exactly one trailing LF.'
+	$Gap = Invoke-Fixture -Fixture $WorkflowFallbackFixture -Mode Gap
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 5) 'The exact workflow fallback serialization must pass strict gap validation.'
+} finally {
+	if ($null -eq $PreviousShadowReportPath) { Remove-Item Env:AETHELN_SHADOW_REPORT -ErrorAction SilentlyContinue }
+	else { $env:AETHELN_SHADOW_REPORT = $PreviousShadowReportPath }
+	Remove-Item -LiteralPath $WorkflowFallbackFixture.Root -Recurse -Force
+}
+
+$AcceptedGapFixture = New-InvocationFixture
+try {
+	Write-FixtureJson $AcceptedGapFixture.SelectorPath (New-SelectorFixture -Selected @('controller-contract'))
+	$Gap = Invoke-Fixture -Fixture $AcceptedGapFixture -Mode Gap
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $false -and (@($Gap.selectedUnsupported) -join ',') -ceq 'controller-contract') 'An accepted-base unsupported selection must retain the strict existing identity contract but produce only a gap diagnostic.'
+	Assert-True (-not (Test-Path -LiteralPath $AcceptedGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $AcceptedGapFixture.AggregatePath)) 'Accepted-base gap validation must not create aggregate inputs.'
+} finally { Remove-Item -LiteralPath $AcceptedGapFixture.Root -Recurse -Force }
+
+$NoGapFixture = New-InvocationFixture
+try { Assert-Rejected { Invoke-Fixture -Fixture $NoGapFixture -Mode Gap } 'gap_selection_empty' }
+finally { Remove-Item -LiteralPath $NoGapFixture.Root -Recurse -Force }
+
+foreach ($Case in @(
+	@{name='fallback-policy-digest';reason='selector_fallback_invalid';mutate={param($x)$x.policy.digest='1'*64}},
+	@{name='fallback-blob';reason='selector_fallback_invalid';mutate={param($x)$x.execution.controllerBlobOid='d'*40}},
+	@{name='fallback-reason';reason='selector_fallback_invalid';mutate={param($x)$x.execution.reason='classified'}},
+	@{name='fallback-uncertainty';reason='selector_fallback_invalid';mutate={param($x)$x.classification.uncertainties=@('other')}},
+	@{name='fallback-changed-path';reason='selector_fallback_invalid';mutate={param($x)$x.classification.changedPaths=@('Source/Foo.cpp')}},
+	@{name='fallback-unselected';reason='selector_fallback_invalid';mutate={param($x)$x.selection.obligations[4].selected=$false;$x.selection.obligations[4].reasons=@()}},
+	@{name='fallback-selection-reason';reason='selector_fallback_invalid';mutate={param($x)$x.selection.obligations[4].reasons=@('fixture')}},
+	@{name='fallback-comparison';reason='selector_fallback_invalid';mutate={param($x)$x.comparison.status='match'}},
+	@{name='fallback-legacy';reason='selector_fallback_invalid';mutate={param($x)$x.legacyAuthority.engineRequired=$true}},
+	@{name='fallback-controller-revision';reason='selector_fallback_invalid';mutate={param($x)$x.execution.controllerRevision='f'*40}},
+	@{name='fallback-attempt-replay';reason='selector_identity_mismatch';mutate={param($x)$x.attemptAnchor.runAttempt=3}},
+	@{name='fallback-head-replay';reason='selector_identity_mismatch';mutate={param($x)$x.source.headRevision='f'*40}}
+)) {
+	$Bad = New-InvocationFixture
+	try {
+		$Report = New-UnavailableSelectorFixture
+		& $Case.mutate $Report
+		Write-FixtureJson $Bad.SelectorPath $Report
+		Assert-Rejected { Invoke-Fixture -Fixture $Bad -Mode Gap } $Case.reason
+		Assert-True (-not (Test-Path -LiteralPath $Bad.IdentityPath) -and -not (Test-Path -LiteralPath $Bad.AggregatePath)) "Malformed fallback '$($Case.name)' must publish no acceptance inputs."
+	} finally { Remove-Item -LiteralPath $Bad.Root -Recurse -Force }
+}
 
 $SingleBindingFixture = New-InvocationFixture
 try {

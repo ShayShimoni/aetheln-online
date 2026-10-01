@@ -668,6 +668,22 @@ Every accepted decision records:
   every obligation. Reusable invocations preserve caller kind and workflow
   revision and apply the same ordered merge-parent validation as direct pull
   requests.
+- **Stale event-base amendment:** GitHub may keep a pull request event's base
+  SHA when the target branch advances before the tested synthetic merge is
+  created. The shadow job fetches complete ancestry and derives the accepted
+  controller and comparison revision from that immutable merge's first parent.
+  Its second parent must equal the exact event head, and the event base must be
+  an ancestor of the first parent. The sparse checkout, controller blob lookup,
+  context controller revision, and report comparison base all use that verified
+  first parent. A foreign or divergent first parent, wrong head parent, shallow
+  graph, missing accepted controller, or inconsistent identity fails closed.
+  During the staged rollout, the live closed selector context sets both
+  `baseRevision` and `controllerRevision` to that first parent. This preserves
+  compatibility with the previously accepted controller, which requires their
+  equality and exact ordered merge parents. The event base remains an independent
+  pre-checkout workflow ancestry witness; the candidate selector does not need
+  that separate witness in its live context.
+  The selector remains non-authoritative and does not alter legacy CI gates.
 - **Historical Package 3A amendment:** Pin every approved remote action to its reviewed
   full commit SHA, implement and fixture-test exact per-job shadow receipt and
   bounded same-attempt aggregate contracts, and add a hosted direct-needs gap
@@ -725,11 +741,16 @@ Every accepted decision records:
   fallback. That package deliberately did not emit receipts, execute the
   aggregate, add `actions: read`, or grant acceptance. Package 3C supersedes
   those wiring limitations and strengthens the run-identity anchor regexes to
-  whole-input `\A...\z` matches. Its current-base eight-obligation selector
-  is 39,772 LF-normalized bytes with digest
+  whole-input `\A...\z` matches. The earlier eight-obligation selector
+  candidate was 39,772 LF-normalized bytes with digest
   `913411858dae63ff48de296ef59d4f5d84aeb43dc55759874f6cb4d03bb0a55d`.
-  This changes the policy identity and requires new accepted-base observations
-  after merge.
+  Reconciliation with the current accepted base additionally classifies the
+  exact #181 content-validation launcher and two contract tests while keeping
+  unwired lookalikes unclassified. This candidate is 40,236 LF-normalized
+  bytes with digest
+  `4e21f35a4791332176edd1f51c4ccf69115fb34bc2defda5b8e6716206aa2b46`.
+  It changes the policy identity and requires new accepted-base observations
+  after merge; neither digest grants activation authority.
 - **Direct-delivery retirement amendment:** The earlier delivery harness was
   diagnostic only: it executed writable worktree files without complete
   source-byte or mid-run mutation protection. The harness and its unsupported

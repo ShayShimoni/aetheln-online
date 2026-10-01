@@ -100,16 +100,25 @@ foreach ($OutputName in $ExpectedSelectorOutputs) {
 Assert-MatchCount -Text $ShadowSelection -Pattern '(?m)^      [a-z_]+: ' -Expected $ExpectedSelectorOutputs.Count -Message 'The selector must expose only the reviewed Package 3C decisions and artifact bindings.'
 Assert-True ($ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner|needs\.') 'The shadow selector must not admit or influence engine work.'
 Assert-MatchCount -Text $ShadowSelection -Pattern "(?m)^\s+- uses: $CheckoutActionPattern\r?$" -Expected 1 -Message 'The shadow selector must perform exactly one pinned checkout.'
-Assert-True ($ShadowSelection -match 'ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}' -and $ShadowSelection -match 'sparse-checkout: scripts/ci/Get-CiSelection\.ps1' -and $ShadowSelection -match 'persist-credentials: false') 'The only shadow checkout must sparsely materialize the exact accepted-base selector without credentials.'
+Assert-True ($ShadowSelection -match 'ref: \$\{\{ steps\.comparison\.outputs\.accepted_base_sha \}\}' -and $ShadowSelection -match 'sparse-checkout: scripts/ci/Get-CiSelection\.ps1' -and $ShadowSelection -match 'persist-credentials: false') 'The only shadow checkout must sparsely materialize the verified synthetic-merge first-parent selector without credentials.'
 $FetchPosition = $ShadowSelection.IndexOf('name: Fetch immutable comparison objects', [StringComparison]::Ordinal)
 $CheckoutPosition = $ShadowSelection.IndexOf("uses: $CheckoutAction", [StringComparison]::Ordinal)
 Assert-True ($FetchPosition -ge 0 -and $CheckoutPosition -gt $FetchPosition) 'Base, head and workflow objects must enter the bare control repository before any checkout.'
-foreach ($Binding in @('github.event.pull_request.base.sha', 'github.event.pull_request.head.sha', 'github.sha', 'github.run_id', 'github.run_attempt')) {
+Assert-True ($ShadowSelection -match '(?m)^        id: comparison\r?$' -and $ShadowSelection -match 'git --git-dir=\$env:AETHELN_CONTROL_REPO show -s --format=%P \$WorkflowSha' -and $ShadowSelection -match '\$Parents\[1\] -cne \$HeadSha' -and $ShadowSelection -match 'git --git-dir=\$env:AETHELN_CONTROL_REPO merge-base --is-ancestor \$BaseSha \$AcceptedSha' -and $ShadowSelection -match 'accepted_base_sha=\$AcceptedSha') 'The workflow must derive the accepted controller from the immutable merge first parent, verify the exact second parent and event-base ancestry, and publish only that verified revision.'
+Assert-True ($ShadowSelection -notmatch 'fetch --no-tags --depth=' -and $ShadowSelection -match 'comparison_ancestry_incomplete') 'The control repository must have complete ancestry before accepting a stale event base.'
+foreach ($Binding in @('github.event.pull_request.base.sha', 'github.event.pull_request.head.sha', 'github.sha')) {
 	Assert-True ($ShadowSelection.Contains($Binding)) "Shadow selection must bind exact immutable identity $Binding."
 }
-Assert-True ($ShadowSelection -match "runId = '\$\{\{ github\.run_id \}\}'" -and $ShadowSelection -match "runAttempt = \[int\] '\$\{\{ github\.run_attempt \}\}'") 'The live selector context must carry the canonical GitHub run and attempt into accepted-base controller execution.'
+$SelectionContext = [regex]::Match($ShadowSelection, '(?ms)^          \$Context = \[ordered\]@\{\r?\n(?<body>.*?)^          \}\r?$')
+Assert-True ($SelectionContext.Success) 'The shadow selection run block must construct one closed context object.'
+Assert-MatchCount -Text $SelectionContext.Groups['body'].Value -Pattern '(?m)^            baseRevision = \$AcceptedSha\r?$' -Expected 1 -Message 'The live context must use the verified first parent as its comparison base so the previously accepted closed selector can run during this transition.'
+Assert-True ($SelectionContext.Groups['body'].Value -notmatch '(?m)^            baseRevision = \$BaseSha\r?$') 'The stale event base must remain an independent workflow ancestry witness, not an incompatible selector-context base.'
+Assert-True ($ShadowSelection -match 'AETHELN_ACCEPTED_BASE_SHA: \$\{\{ steps\.comparison\.outputs\.accepted_base_sha \}\}' -and $SelectionContext.Groups['body'].Value -match '(?m)^            controllerRevision = \$AcceptedSha\r?$' -and $ShadowSelection -match '\$BlobQuery = "\$\{AcceptedSha\}:scripts/ci/Get-CiSelection.ps1"') 'Selection context and controller object lookup must use the same verified first parent, never the stale event base or candidate head.'
+Assert-MatchCount -Text $SelectionContext.Groups['body'].Value -Pattern '(?m)^            runId = ''\$\{\{ github\.run_id \}\}''\r?$' -Expected 1 -Message 'The accepted-base selector context must bind the current GitHub run ID.'
+Assert-MatchCount -Text $SelectionContext.Groups['body'].Value -Pattern '(?m)^            runAttempt = \[int\] ''\$\{\{ github\.run_attempt \}\}''\r?$' -Expected 1 -Message 'The accepted-base selector context must bind the current GitHub run attempt as an integer.'
 Assert-True ($ShadowSelection -match 'git init --bare' -and $ShadowSelection -match 'accepted_controller_unavailable') 'Bootstrap must use a bare control repository and explicitly diagnose an unavailable accepted controller.'
-Assert-True ($ShadowSelection -match 'New-Object byte\[\] 32' -and $ShadowSelection -match 'RandomNumberGenerator\]::Create\(\)' -and $ShadowSelection -match 'BootstrapRng\.GetBytes\(\$BootstrapNonceBytes\)' -and $ShadowSelection -match '\$BootstrapNonce -ceq \(''0'' \* 64\)' -and $ShadowSelection -match 'attemptAnchor = \[ordered\]@\{' -and $ShadowSelection -match "schemaVersion = 'aetheln\.current-attempt-anchor/v1'") 'The unavailable-controller fallback must still create a fresh nonzero 32-byte CSPRNG current-attempt anchor without a deterministic nonce fallback.'
+Assert-True ($ShadowSelection -match 'attempt_anchor_rng_failed' -and $ShadowSelection -match "attemptAnchor = \[ordered\]@\{ schemaVersion = 'aetheln.current-attempt-anchor/v1'" -and $ShadowSelection -match 'source = \[ordered\]@\{ kind = ''pull_request''; callerKind = \$null; baseRevision = \$AcceptedSha' -and $ShadowSelection -match 'controllerRevision = \$AcceptedSha') 'Missing accepted controller must publish a closed, attempt-bound, fully selected first-parent diagnostic.'
+Assert-True ($ShadowSelection -match 'function Assert-CurrentAttemptAnchor' -and $ShadowSelection -match '\$Parsed\.attemptAnchor' -and $ShadowSelection -match 'shadow_report_attempt_anchor_invalid') 'The selector output must validate the exact current run and attempt anchor before exposing nonce-based routing metadata.'
 Assert-True ($ShadowSelection -match 'AETHELN_GITHUB_TOKEN: \$\{\{ github\.token \}\}' -and $ShadowSelection -match "GIT_CONFIG_KEY_0 = 'http\.extraheader'" -and $ShadowSelection -match 'GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic \$Authorization"' -and $ShadowSelection -match '::add-mask::\$Authorization') 'Private-repository object fetches must use the ephemeral GitHub token through a masked environment-backed authorization header.'
 Assert-True ($ShadowSelection -notmatch 'persist-credentials: true' -and $ShadowSelection -notmatch 'https://x-access-token:') 'Shadow bootstrap credentials must not persist in the checkout or remote URL.'
 Assert-True ($ShadowSelection -match 'Get-CiSelection\.ps1' -and $ShadowSelection -match '-ContextJson' -and $ShadowSelection -match '-OutputPath' -and $ShadowSelection -match '-RepositoryRoot') 'Only the accepted-base selector entry point may produce a live shadow record.'
@@ -145,6 +154,58 @@ foreach ($RunBlock in $ShadowRunBlocks) {
 	$ShadowParseErrors = $null
 	$null = [Management.Automation.Language.Parser]::ParseInput($Body, [ref] $null, [ref] $ShadowParseErrors)
 	Assert-True ($ShadowParseErrors.Count -eq 0) "Shadow PowerShell must parse under Windows PowerShell 5.1: $($ShadowParseErrors | Select-Object -First 1 | ForEach-Object Message)"
+}
+$FetchRunBody = (($ShadowRunBlocks[0].Groups['body'].Value -split "`r?`n") | ForEach-Object { if ($_.Length -ge 10) { $_.Substring(10) } else { $_ } }) -join "`n"
+$PreflightStart = $FetchRunBody.IndexOf('$Shallow = @(', [StringComparison]::Ordinal)
+$PreflightEnd = $FetchRunBody.IndexOf("`n", $FetchRunBody.IndexOf('[IO.File]::AppendAllText($env:GITHUB_OUTPUT', $PreflightStart, [StringComparison]::Ordinal))
+Assert-True ($PreflightStart -ge 0 -and $PreflightEnd -gt $PreflightStart) 'The actual workflow preflight must be extractable for graph fixtures.'
+$GraphPreflight = [scriptblock]::Create($FetchRunBody.Substring($PreflightStart, $PreflightEnd - $PreflightStart))
+$GraphFixture = Join-Path ([IO.Path]::GetTempPath()) ('AethelnWorkflowGraph-' + [guid]::NewGuid().ToString('N'))
+$GraphRepo = Join-Path $GraphFixture 'repo'
+[void][IO.Directory]::CreateDirectory($GraphRepo)
+function Invoke-GraphGit([string[]] $Arguments) {
+	$Output = @(& git -C $GraphRepo @Arguments 2>&1 | ForEach-Object { "$_" })
+	Assert-True ($LASTEXITCODE -eq 0) "Workflow graph fixture Git failed: git $($Arguments -join ' '): $($Output -join ' ')"
+	return ,$Output
+}
+try {
+	$null = Invoke-GraphGit @('init','-q')
+	$null = Invoke-GraphGit @('config','user.name','fixture')
+	$null = Invoke-GraphGit @('config','user.email','fixture@example.invalid')
+	[IO.File]::WriteAllText((Join-Path $GraphRepo 'base.txt'), 'base', (New-Object Text.UTF8Encoding($false)))
+	$null = Invoke-GraphGit @('add','-A'); $null = Invoke-GraphGit @('commit','-qm','base'); $EventBase=[string]@(Invoke-GraphGit @('rev-parse','HEAD'))[0]
+	[IO.File]::WriteAllText((Join-Path $GraphRepo 'accepted.txt'), 'accepted', (New-Object Text.UTF8Encoding($false)))
+	$null = Invoke-GraphGit @('add','-A'); $null = Invoke-GraphGit @('commit','-qm','accepted'); $AdvancedBase=[string]@(Invoke-GraphGit @('rev-parse','HEAD'))[0]
+	$null = Invoke-GraphGit @('checkout','-q','--detach',$EventBase)
+	[IO.File]::WriteAllText((Join-Path $GraphRepo 'head.txt'), 'head', (New-Object Text.UTF8Encoding($false)))
+	$null = Invoke-GraphGit @('add','-A'); $null = Invoke-GraphGit @('commit','-qm','head'); $EventHead=[string]@(Invoke-GraphGit @('rev-parse','HEAD'))[0]
+	$HeadTree=[string]@(Invoke-GraphGit @('rev-parse',"$EventHead`^{tree}"))[0]
+	$ValidMerge=(@('merge' | & git -C $GraphRepo commit-tree $HeadTree -p $AdvancedBase -p $EventHead) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Valid workflow merge fixture must exist.'
+	$WrongHeadMerge=(@('wrong head' | & git -C $GraphRepo commit-tree $HeadTree -p $AdvancedBase -p $EventBase) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Wrong-head workflow merge fixture must exist.'
+	$ForeignRoot=(@('foreign root' | & git -C $GraphRepo commit-tree $HeadTree) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Foreign-root workflow fixture must exist.'
+	$ForeignMerge=(@('foreign merge' | & git -C $GraphRepo commit-tree $HeadTree -p $ForeignRoot -p $EventHead) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Foreign workflow merge fixture must exist.'
+	$env:AETHELN_CONTROL_REPO = Join-Path $GraphRepo '.git'
+	$env:GITHUB_OUTPUT = Join-Path $GraphFixture 'output.txt'
+	$BaseSha=$EventBase; $HeadSha=$EventHead; $WorkflowSha=$ValidMerge
+	[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+	. $GraphPreflight
+	Assert-True ($WorkflowSha -ceq $ValidMerge -and $AcceptedSha -ceq $AdvancedBase -and ([IO.File]::ReadAllText($env:GITHUB_OUTPUT)).Trim() -ceq "accepted_base_sha=$AdvancedBase") 'The real workflow preflight must accept stale event base and output only the verified newer first parent.'
+	foreach ($Invalid in @(
+		@{ Name='foreign first parent'; Base=$EventBase; Merge=$ForeignMerge; Reason='event_base_not_accepted_ancestor' },
+		@{ Name='divergent event base'; Base=$ForeignRoot; Merge=$ValidMerge; Reason='event_base_not_accepted_ancestor' },
+		@{ Name='wrong second parent'; Base=$EventBase; Merge=$WrongHeadMerge; Reason='workflow_revision_parents_invalid' }
+	)) {
+		$BaseSha=$Invalid.Base; $WorkflowSha=$Invalid.Merge
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		$Failure=$null
+		try { . $GraphPreflight } catch { $Failure=$_.Exception.Message }
+		Assert-True ($WorkflowSha -ceq $Invalid.Merge -and $Failure -ceq $Invalid.Reason -and ([IO.File]::ReadAllText($env:GITHUB_OUTPUT)).Length -eq 0) "$($Invalid.Name) must fail closed before publishing an accepted revision (got '$Failure')."
+	}
+}
+finally {
+	Remove-Item Env:AETHELN_CONTROL_REPO -ErrorAction SilentlyContinue
+	Remove-Item Env:GITHUB_OUTPUT -ErrorAction SilentlyContinue
+	if (Test-Path -LiteralPath $GraphFixture) { Remove-Item -LiteralPath $GraphFixture -Recurse -Force }
 }
 $SelectionRunBody = (($ShadowRunBlocks[1].Groups['body'].Value -split "`r?`n") | ForEach-Object { if ($_.Length -ge 10) { $_.Substring(10) } else { $_ } }) -join "`n"
 $SelectionTokens = $null
@@ -347,6 +408,7 @@ foreach ($Publisher in @('portable-receipt-shadow','native-receipt-shadow','visu
 	Assert-True ($AcceptanceShadow -match [regex]::Escape($Publisher)) "Acceptance aggregation must bind direct output and job identity for '$Publisher'."
 }
 Assert-True ($AcceptanceShadow -match 'if \(\$env:AETHELN_SELECTOR_READY -ceq ''false''\)' -and $AcceptanceShadow -match 'elseif \(\$env:AETHELN_SELECTOR_READY -ceq ''true''\)' -and $AcceptanceShadow -match "throw 'aggregate_ready_invalid'") 'Acceptance reconciliation must distinguish exact unsupported-gap, supported-aggregate, and invalid selector readiness states.'
+Assert-True ($AcceptanceShadow -match '\$Gap = & \$ContextBuilder -Mode Gap @ContextArguments' -and $AcceptanceShadow -match '\$Gap\.attemptAnchor\.nonce -cne \$env:AETHELN_SELECTOR_NONCE' -and $AcceptanceShadow -match '\$SelectedUnsupported = @\(\$Gap\.selectedUnsupported\)') 'A missing accepted controller must pass strict current-attempt gap validation before a non-authoritative producer-gap report is published.'
 Assert-True ($AcceptanceShadow -match "producer_contract_incomplete" -and $AcceptanceShadow -match "throw 'aggregate_ready_contradiction'" -and $AcceptanceShadow -match 'acceptance_producer_gap:') 'Only a selected unsupported obligation may become the explicit green producer gap.'
 Assert-True ($AcceptanceShadow -match 'Invoke-CiAcceptanceAggregateMain' -and $AcceptanceShadow -match "throw 'aggregate_shadow_decision_invalid'") 'The supported subset must execute the real aggregate and reject any authority-bearing or incomplete decision.'
 Assert-True ($AcceptanceShadow -match 'complete = \$false' -and $AcceptanceShadow -match 'shadow = \$true' -and $AcceptanceShadow -match 'authoritative = \$false' -and $AcceptanceShadow -match 'grantsAcceptance = \$false') 'The unsupported path must remain an explicit non-authoritative no-acceptance result.'

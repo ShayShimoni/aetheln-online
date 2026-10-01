@@ -289,12 +289,16 @@ produce a compile, and it never bypasses the portable gates.
 
 ### Pull-request shadow selector (Issue #167 Package 2)
 
-The shadow job first fetches the exact pull-request base, head, and synthetic
-workflow merge objects into a fresh bare/no-checkout control repository. Only
-after all three identities match their event SHAs does the reviewed
+The shadow job fetches the exact pull-request event base, head, and synthetic
+workflow merge with complete ancestry into a fresh bare/no-checkout control
+repository. It verifies that the merge has exactly two parents, its second
+parent is the event head, and the event base is an ancestor of its first parent.
+The verified first parent is the accepted comparison and controller revision;
+the event base may be older when the target branch advances before the run.
+Only after those identities and relationships are verified does the reviewed
 `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1`
 sparsely check out `scripts/ci/Get-CiSelection.ps1` from the exact accepted
-base into a separate run/attempt control path. No candidate selector,
+first parent into a separate run/attempt control path. No candidate selector,
 repository script, filter, or hook is checked out or executed. When the
 accepted-base controller exists, its Git blob OID and SHA-256 are recorded and
 the checked-out bytes must match that blob before PowerShell executes them.
@@ -311,7 +315,7 @@ writes a closed `aetheln.ci-selection/v1` record with
 every check conservatively selected, `selection.shadow=true`,
 `selection.authoritative=false`, legacy authority `not_observed`, and
 comparison `unavailable`; its policy digest is 64 zeroes because no accepted
-policy/controller exists at that base. This is a diagnostic bootstrap boundary, not a
+policy/controller exists at that accepted first parent. This is a diagnostic bootstrap boundary, not a
 comparison, equivalence, or selector-acceptance claim. A later pull request is
 the first meaningful live comparison after this controller is accepted-base
 code.
@@ -320,9 +324,19 @@ The CLI accepts `-ContextJson`, `-OutputPath`, and `-RepositoryRoot`. The
 Package 3B pre-activation controller requires canonical `runId` and
 `runAttempt` fields in every event context. A pull-request context otherwise
 has exactly `kind`, `baseRevision`, `headRevision`, `workflowRevision`, and
-`controllerRevision`; revisions are 40 lowercase hex Git IDs, the controller
-equals the base, and the workflow revision is a two-parent commit ordered base
-then head. The closed output roots are `schemaVersion`, `attemptAnchor`,
+`controllerRevision`; revisions are 40 lowercase hex Git IDs. The workflow
+requires the event base to be an ancestor of the verified merge first parent,
+and the second parent to equal the event head. The live context passes the
+verified first parent as both
+`baseRevision` and `controllerRevision`, matching the previously accepted
+controller's closed input contract while this workflow change is reviewed.
+The event base is retained separately in the workflow preflight and is checked
+before checkout; it is not a selector-context field in the live job. The
+selector retains its strict base/controller equality and ordered parent checks.
+The report's `source.baseRevision` and comparison diff use the accepted first
+parent.
+Missing ancestry or any conflicting parent/controller identity fails closed.
+The closed output roots are `schemaVersion`, `attemptAnchor`,
 `policy`, `source`, `execution`, `classification`, `selection`,
 `legacyAuthority`, and `comparison`. `attemptAnchor` uses
 `aetheln.current-attempt-anchor/v1` and binds the canonical run and attempt to a
@@ -349,8 +363,10 @@ are `path:<path>`, `attribute:<path>`, or `scheduled_event`; uncertainty keeps
 the fail-closed reason token that caused it, never an empty successful result.
 Reusable-call contexts additionally preserve the closed `callerKind` plus the
 caller workflow revision. A called pull request validates the same ordered
-base/head merge parents; called pushes bind workflow/controller revision to
-the head; called schedules bind both to the scheduled revision. The `source`
+accepted-base/head parents; its caller must check any separate event-base
+ancestry witness before executing the selector. Called pushes bind workflow and
+controller revisions to the head; called schedules bind both to the scheduled
+revision. The `source`
 record retains `callerKind` instead of collapsing called events into an
 ambiguous generic context.
 
@@ -383,11 +399,18 @@ and eight check IDs: `portable`, `visual-package`,
 `content-reference-validation`, `controller-contract`,
 `controller-operational-proof`, and `clean-package-provenance-smoke`.
 Package 3C also strengthens the run-identity anchor regexes to whole-input
-`\A...\z` matches. Its merged current-base selector is 39,772 LF-normalized
+`\A...\z` matches. Its earlier selector candidate was 39,772 LF-normalized
 bytes with digest
 `913411858dae63ff48de296ef59d4f5d84aeb43dc55759874f6cb4d03bb0a55d`.
+The current-base reconciliation explicitly classifies the exact #181
+content-validation launcher and two contract tests, while new unwired paths
+still fail closed. This candidate is 40,236 LF-normalized bytes with digest
+`4e21f35a4791332176edd1f51c4ccf69115fb34bc2defda5b8e6716206aa2b46`.
 This is a different policy identity and requires fresh accepted-base live
 shadow observations after merge before any later producer or activation change.
+The #181, #87, and #81 suite additions remain outside this manifest until
+their source pull requests are accepted on the integration branch; the three
+existing portable/receipt/aggregate lists must change together at that time.
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
@@ -1320,10 +1343,15 @@ one-workflow-file decision and five selector obligations still have no live
 receipt contract.
 
 When any unsupported obligation is selected, Package 3C deliberately does not
-call the aggregate. It validates the selector identity, computes the exact
-selected unsupported set, and emits `aetheln.ci-acceptance-shadow-gap/v2` with
+call the aggregate. A validation-only gap mode binds the selector's current
+run, attempt, nonce, accepted comparison base, head, and tested revision, then
+computes the exact selected unsupported set and emits
+`aetheln.ci-acceptance-shadow-gap/v2` with
 reason `producer_contract_incomplete`. That known gap is green and explicitly
-non-authoritative; contradictions and unexpected errors are red. The selector
+non-authoritative; it creates no aggregate context or receipt. The
+`accepted_controller_unavailable` fallback is valid only with its exact
+zero-digest, null-controller, all-eight-selected, no-checkout diagnostic shape.
+Contradictions and unexpected errors are red. The selector
 job is pull-request-only, so push and scheduled runs use the similarly
 non-authoritative `event_not_applicable` gap until an accepted event-specific
 selector producer is implemented and observed.

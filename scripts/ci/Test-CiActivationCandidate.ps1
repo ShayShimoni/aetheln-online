@@ -51,8 +51,7 @@ function Assert-ActivationSafePath {
 	}
 }
 
-function Assert-ActivationUniqueJsonProperties {
-	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function validates the complete JSON property set across all nested object scopes; the plural noun is semantically intentional.')]
+function Assert-ActivationJsonPropertyUniqueness {
 	param([string] $Raw)
 	$Scopes = New-Object Collections.Stack
 	$PendingName = $null
@@ -311,7 +310,7 @@ function ConvertFrom-CiActivationPolicyBytes {
 	if ($null -eq $Bytes -or $Bytes.Length -lt 1 -or $Bytes.Length -gt $script:ActivationPolicyLimit) { throw 'activation_policy_invalid' }
 	try { $Raw = $script:ActivationUtf8.GetString($Bytes) }
 	catch { throw 'activation_policy_invalid' }
-	Assert-ActivationUniqueJsonProperties -Raw $Raw
+	Assert-ActivationJsonPropertyUniqueness -Raw $Raw
 	try { $Policy = ConvertFrom-Json -InputObject $Raw }
 	catch { throw 'activation_policy_json_invalid' }
 	Assert-ActivationClosedObject -Value $Policy -Properties @('schemaVersion','repository','policyPath','workflowPath','templatePath','pinnedFiles') -Reason 'activation_policy_schema_invalid'

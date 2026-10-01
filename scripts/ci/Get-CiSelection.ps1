@@ -379,15 +379,19 @@ function Get-PathCheckSelection {
 	$PortableOnlyPaths = @(
 		'scripts/ci/Invoke-CiSuite.ps1',
 		'scripts/ci/Test-FormattingPolicy.ps1',
-		'scripts/ci/Test-MarkdownLinks.ps1'
+		'scripts/ci/Test-MarkdownLinks.ps1',
+		'scripts/tests/Test-ObservabilityContract.ps1',
+		'scripts/tests/Test-SourceControlPolicy.ps1'
 	)
 	if ($PortableOnlyPaths -ccontains $Path -or $Path -cmatch '^docs/.+' -or $Path -cmatch '^output/pdf/.+' -or
-		$Path -cmatch '^tests/.+\.(ps1|md)$' -or $Path -cmatch '^[^/]+\.md$' -or
+		($Path -cmatch '^tests/.+\.(ps1|md)$' -and -not $Path.StartsWith('tests/content/', [StringComparison]::Ordinal)) -or $Path -cmatch '^[^/]+\.md$' -or
 		$Path -cmatch '^\.github/(ISSUE_TEMPLATE|PULL_REQUEST_TEMPLATE)/[^/]+\.(md|yml|yaml)$' -or
 		$Path -cmatch '^\.github/(PULL_REQUEST_TEMPLATE|pull_request_template)\.md$') { $Recognized = $true }
 	if ($Path -ceq '.gitattributes' -or $Path.EndsWith('/.gitattributes', [StringComparison]::Ordinal)) { $Ids.Add('controller-contract'); $Ids.Add('controller-operational-proof'); $Recognized = $true }
 	if ($Path.StartsWith('visuals/', [StringComparison]::Ordinal)) { $Ids.Add('visual-package'); $Recognized = $true }
 	if ($Path -ceq 'scripts/ci/Invoke-VisualPackageValidation.ps1') { $Ids.Add('visual-package'); $Recognized = $true }
+	if ($Path -ceq 'scripts/content/Invoke-ContentValidation.ps1') { $Ids.Add('content-reference-validation'); $Recognized = $true }
+	if (@('tests/content/Invoke-ContentValidation.Tests.ps1', 'tests/content/Invoke-ContentValidationCommand.Tests.ps1') -ccontains $Path) { $Recognized = $true }
 	if ($Path.StartsWith('.agents/', [StringComparison]::Ordinal) -or $Path.StartsWith('tests/build/', [StringComparison]::Ordinal)) { $Recognized = $true }
 	if ($Path -match '^(Source|Config|Content|Plugins)/' -or $Path -eq 'AethelnOnline.uproject') {
 		$Ids.Add('native-client-server-compile'); $Ids.Add('unreal-editor-automation'); $Recognized = $true

@@ -180,5 +180,20 @@ deployment, deletion, or migration.
 Follow the scoped Conventional Commit-style subjects established by repository
 history: `type(scope): #<issue> <imperative summary>`, for example
 `feat(combat): #17 add replicated sprint ability`. Keep commits scoped. Pull
-requests should explain intent, list verification performed, link relevant
-tasks, and include screenshots or video for visible gameplay or UI changes.
+requests follow [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md):
+explain intent, link the ticket, list exact verification, name the review focus,
+record review evidence and residual limitations, and include screenshots or
+video for visible gameplay or UI changes.
+
+## Delivery Evidence and Authority
+
+[Delivery Workflow](docs/delivery-workflow.md) defines the evidence-based
+project statuses, issue and dependency synchronization, and merge gates. Keep
+independent-agent technical review, explicitly required human review, CI
+verification, and owner merge authorization separate. Never label agent review
+as human approval or claim a self-authored PR was `APPROVED` by its author.
+`Dev Done` needs a reviewed and verified merge; `QA` and `Done` need distinct
+post-merge evidence. For PRs targeting `develop`, an issue reference and manual
+Development link track the issue; a `Closes #<issue>` line does not link or
+auto-close it there. Do not close an issue or advance its board status merely
+because a PR merged.

@@ -44,7 +44,7 @@ function Get-FixtureSha256 {
 }
 
 function New-FixturePolicy {
-	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture policy.')]
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory policy fixture.')]
 	param([string] $SelectorSha256 = (Get-FixtureSha256 'scripts/ci/Get-CiSelection.ps1'))
 	$Pinned = @(
 		[ordered]@{path='scripts/ci/Get-CiSelection.ps1';sha256=$SelectorSha256},
@@ -63,8 +63,7 @@ function New-FixturePolicy {
 	}
 }
 
-function New-CandidateCommit {
-	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function mutates only the disposable test repository.')]
+function Invoke-FixtureCandidateCommit {
 	param([string] $WorkflowText, [switch] $WithExtraPath)
 	Invoke-FixtureGit -Arguments @('checkout','--detach',$script:BaseRevision)
 	Write-FixtureFile '.github/workflows/prototype-quality-gates.yml' $WorkflowText
@@ -74,8 +73,7 @@ function New-CandidateCommit {
 	return (& git -C $FixtureRepository rev-parse HEAD).Trim()
 }
 
-function New-TestedMergeCommit {
-	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs a commit object only in the disposable test repository.')]
+function Invoke-FixtureTestedMergeCommit {
 	param([string] $Base, [string] $Head, [switch] $ReverseParents, [string] $TreeRevision = $Head)
 	$Tree = (& git -C $FixtureRepository rev-parse ($TreeRevision + '^{tree}')).Trim()
 	if ($LASTEXITCODE -ne 0) { throw 'Fixture tree resolution failed.' }
@@ -117,8 +115,8 @@ try {
 	$script:AcceptedPolicySha256 = Get-FixtureSha256 $PolicyRepositoryPath
 	$TemplateText = [IO.File]::ReadAllText((Join-Path $FixtureRepository 'scripts/ci/activation/prototype-quality-gates.yml'))
 
-	$ValidHead = New-CandidateCommit -WorkflowText $TemplateText
-	$ValidTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $ValidHead
+	$ValidHead = Invoke-FixtureCandidateCommit -WorkflowText $TemplateText
+	$ValidTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ValidHead
 	$Report = Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ValidHead -Tested $ValidTested
 	Assert-True ($Report.decision.approved -and $Report.decision.complete -and $Report.decision.reason -ceq 'exact_accepted_template') 'Exact accepted template should pass.'
 	Assert-True ($Report.changedPaths.Count -eq 1 -and $Report.changedPaths[0] -ceq '.github/workflows/prototype-quality-gates.yml') 'Activation scope should contain only the live workflow.'
@@ -136,12 +134,12 @@ try {
 	$Written = ($CliOutput -join "`n") | ConvertFrom-Json
 	Assert-True ($Written.headRevision -ceq $ValidHead -and $Written.testedRevision -ceq $ValidTested -and $Written.decision.approved) 'Stdout report should preserve the verified identity.'
 
-	$WrongTemplateHead = New-CandidateCommit -WorkflowText "name: Candidate-controlled`njobs: {}`n"
-	$WrongTemplateTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $WrongTemplateHead
+	$WrongTemplateHead = Invoke-FixtureCandidateCommit -WorkflowText "name: Candidate-controlled`njobs: {}`n"
+	$WrongTemplateTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $WrongTemplateHead
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $WrongTemplateHead -Tested $WrongTemplateTested } 'activation_template_mismatch'
 
-	$ExtraPathHead = New-CandidateCommit -WorkflowText $TemplateText -WithExtraPath
-	$ExtraPathTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $ExtraPathHead
+	$ExtraPathHead = Invoke-FixtureCandidateCommit -WorkflowText $TemplateText -WithExtraPath
+	$ExtraPathTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ExtraPathHead
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ExtraPathHead -Tested $ExtraPathTested } 'activation_scope_invalid'
 
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $script:BaseRevision -Tested $ValidTested } 'activation_revision_invalid'
@@ -155,9 +153,9 @@ try {
 	Assert-Rejected { ConvertFrom-CiActivationPolicyBytes -Bytes $Utf8.GetBytes($NewlineRepositoryRaw) } 'activation_policy_schema_invalid'
 	Assert-True (-not (Test-ActivationRevision (('a' * 40) + "`n")) -and -not (Test-ActivationSha256 (('a' * 64) + "`n"))) 'Revision and SHA validators must reject trailing-newline bypasses.'
 
-	$WrongParentTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -ReverseParents
+	$WrongParentTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -ReverseParents
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ValidHead -Tested $WrongParentTested } 'activation_tested_parents_mismatch'
-	$WrongTreeTested = New-TestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -TreeRevision $script:BaseRevision
+	$WrongTreeTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -TreeRevision $script:BaseRevision
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ValidHead -Tested $WrongTreeTested } 'activation_tested_tree_mismatch'
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $ValidHead -Head $script:BaseRevision -Tested $ValidTested -ExpectedBase $ValidHead } 'activation_base_mismatch'
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base ('0' * 40) -Head $ValidHead -Tested $ValidTested -ExpectedBase ('0' * 40) } 'activation_revision_missing'
@@ -176,7 +174,7 @@ try {
 	Invoke-FixtureGit -Arguments @('add','--all')
 	Invoke-FixtureGit -Arguments @('commit','-m','hostile-activation')
 	$HostileHead = (& git -C $FixtureRepository rev-parse HEAD).Trim()
-	$HostileTested = New-TestedMergeCommit -Base $HostileBase -Head $HostileHead
+	$HostileTested = Invoke-FixtureTestedMergeCommit -Base $HostileBase -Head $HostileHead
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $HostileBase -Head $HostileHead -Tested $HostileTested } 'activation_accepted_base_mismatch'
 
 	# Executable discovery is machine-rooted and signed; PATH fakes must not run.

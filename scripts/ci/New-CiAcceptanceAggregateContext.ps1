@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-	[ValidateSet('Identity','Aggregate')] [string] $Mode,
+	[ValidateSet('Identity','Aggregate','Gap')] [string] $Mode,
 	[string] $SelectorReportPath,
 	[string] $WorkflowPath,
 	[string] $RequirementsTemplatePath,
@@ -207,7 +207,7 @@ function Assert-AggregateContextArguments {
 }
 
 function Read-AndAssertAggregateContextSelector {
-	param([string] $Path,[string] $Base,[string] $Head,[string] $Tested,[string] $ExpectedRunId,[int] $ExpectedRunAttempt)
+	param([string] $Path,[string] $Base,[string] $Head,[string] $Tested,[string] $ExpectedRunId,[int] $ExpectedRunAttempt,[switch] $AllowUnavailable)
 	$Report = Read-StrictAggregateContextFileJson -Path $Path -RootKind Object -RequireSingleTrailingLf
 	Assert-ClosedAggregateContextObject -Value $Report -Names @('schemaVersion','attemptAnchor','policy','source','execution','classification','selection','legacyAuthority','comparison') -Reason 'selector_schema_invalid'
 	if ($Report.schemaVersion -isnot [string] -or $Report.schemaVersion -cne 'aetheln.ci-selection/v1') { throw 'selector_schema_invalid' }
@@ -227,7 +227,13 @@ function Read-AndAssertAggregateContextSelector {
 		$Report.source.headRevision -cne $Head -or $Report.source.workflowRevision -cne $Tested -or $null -ne $Report.source.revision) { throw 'selector_identity_mismatch' }
 
 	Assert-ClosedAggregateContextObject -Value $Report.execution -Names @('mode','controllerRevision','controllerBlobOid','controllerSha256','checkoutAllowed','complete','reason') -Reason 'selector_execution_invalid'
-	if ($Report.execution.mode -cne 'accepted-base' -or $Report.execution.controllerRevision -cne $Base -or
+	$Unavailable = $Report.execution.mode -ceq 'accepted_controller_unavailable'
+	if ($Unavailable) {
+		if (-not $AllowUnavailable) { throw 'selector_execution_invalid' }
+		if ($Report.execution.controllerRevision -cne $Base -or $null -ne $Report.execution.controllerBlobOid -or
+			$null -ne $Report.execution.controllerSha256 -or $Report.execution.checkoutAllowed -ne $false -or
+			$Report.execution.complete -ne $true -or $Report.execution.reason -cne 'accepted_controller_unavailable') { throw 'selector_fallback_invalid' }
+	} elseif ($Report.execution.mode -cne 'accepted-base' -or $Report.execution.controllerRevision -cne $Base -or
 		-not (Test-AggregateContextRevision $Report.execution.controllerBlobOid) -or -not (Test-AggregateContextSha256 $Report.execution.controllerSha256) -or
 		$Report.execution.checkoutAllowed -ne $false -or $Report.execution.complete -ne $true -or $Report.execution.reason -isnot [string] -or $Report.execution.reason -cnotmatch '\A[a-z0-9_]{1,100}\z') { throw 'selector_execution_invalid' }
 
@@ -250,7 +256,18 @@ function Read-AndAssertAggregateContextSelector {
 			($Obligation.selected -and @($Obligation.reasons).Count -eq 0) -or (-not $Obligation.selected -and @($Obligation.reasons).Count -ne 0)) { throw 'selector_selection_invalid' }
 		if ($Obligation.selected) { [void]$Selected.Add($Obligation.id) }
 	}
-	return [pscustomobject]@{Report=$Report;Selected=$Selected}
+	if ($Unavailable) {
+		if ($Report.policy.version -cne 'shadow-v1' -or $Report.policy.digest -cne ('0'*64) -or
+			@($Report.classification.changedPaths).Count -ne 0 -or @($Report.classification.entries).Count -ne 0 -or
+			(@($Report.classification.uncertainties) -join ',') -cne 'accepted_controller_unavailable' -or
+			$Report.legacyAuthority.engineRequired -ne $null -or $Report.legacyAuthority.reason -cne 'not_observed' -or
+			$Report.comparison.status -cne 'unavailable' -or (@($Report.comparison.differences) -join ',') -cne 'accepted_controller_unavailable' -or
+			$Selected.Count -ne $script:AggregateContextCheckIds.Count) { throw 'selector_fallback_invalid' }
+		foreach ($Obligation in $Obligations) {
+			if ((@($Obligation.reasons) -join ',') -cne 'accepted_controller_unavailable') { throw 'selector_fallback_invalid' }
+		}
+	}
+	return [pscustomobject]@{Report=$Report;Selected=$Selected;AcceptedControllerUnavailable=$Unavailable}
 }
 
 function Read-AndAssertAggregateContextActions {
@@ -374,7 +391,7 @@ function Publish-AggregateContextOutputs {
 function Invoke-CiAcceptanceAggregateContextMain {
 	[CmdletBinding()]
 	param(
-		[Parameter(Mandatory)][ValidateSet('Identity','Aggregate')][string]$Mode,
+		[Parameter(Mandatory)][ValidateSet('Identity','Aggregate','Gap')][string]$Mode,
 		[Parameter(Mandatory)][string]$SelectorReportPath,[Parameter(Mandatory)][string]$WorkflowPath,[string]$RequirementsTemplatePath,
 		[Parameter(Mandatory)][string]$Repository,[Parameter(Mandatory)][string]$Actor,[Parameter(Mandatory)][string]$TriggeringActor,
 		[Parameter(Mandatory)][string]$BaseRevision,[Parameter(Mandatory)][string]$HeadRevision,[Parameter(Mandatory)][string]$TestedRevision,
@@ -383,9 +400,15 @@ function Invoke-CiAcceptanceAggregateContextMain {
 		[Parameter(Mandatory)][string]$IdentityContextOutputPath,[string]$AggregateContextOutputPath,[string]$RuntimeRequirementsOutputPath
 	)
 	Assert-AggregateContextArguments -RepositoryValue $Repository -ActorValue $Actor -TriggeringActorValue $TriggeringActor -Base $BaseRevision -Head $HeadRevision -Tested $TestedRevision -WorkflowIdentity $WorkflowId -RunIdentity $RunId -Attempt $RunAttempt
-	$Selector=Read-AndAssertAggregateContextSelector -Path $SelectorReportPath -Base $BaseRevision -Head $HeadRevision -Tested $TestedRevision -ExpectedRunId $RunId -ExpectedRunAttempt $RunAttempt
+	$Selector=Read-AndAssertAggregateContextSelector -Path $SelectorReportPath -Base $BaseRevision -Head $HeadRevision -Tested $TestedRevision -ExpectedRunId $RunId -ExpectedRunAttempt $RunAttempt -AllowUnavailable:($Mode -ceq 'Gap')
 	$Actions=Read-AndAssertAggregateContextActions -Json $ActionItemsJson
 	$WorkflowBytes=Read-BoundedAggregateContextFileBytes -Path $WorkflowPath
+	if ($Mode -ceq 'Gap') {
+		$LiveChecks=@('native-client-server-compile','portable','visual-package')
+		$Unsupported=@($script:AggregateContextCheckIds | Where-Object { $Selector.Selected.Contains($_) -and $LiveChecks -cnotcontains $_ })
+		if ($Unsupported.Count -eq 0) { throw 'gap_selection_empty' }
+		return [pscustomobject][ordered]@{mode='Gap';acceptedControllerUnavailable=$Selector.AcceptedControllerUnavailable;attemptAnchor=$Selector.Report.attemptAnchor;selectedUnsupported=$Unsupported}
+	}
 	$Identity=[pscustomobject][ordered]@{
 		schemaVersion='aetheln.ci-acceptance-context/v1';repository=[pscustomobject][ordered]@{fullName=$Repository}
 		event=[pscustomobject][ordered]@{kind='pull_request';classification='pull_request_acceptance';actor=$Actor;triggeringActor=$TriggeringActor}
