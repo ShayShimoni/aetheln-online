@@ -159,6 +159,8 @@ jobs:
 
           $Context = [ordered]@{
             kind = 'pull_request'
+            runId = '${{ github.run_id }}'
+            runAttempt = [int] '${{ github.run_attempt }}'
             baseRevision = $BaseSha
             headRevision = $HeadSha
             workflowRevision = $WorkflowSha
