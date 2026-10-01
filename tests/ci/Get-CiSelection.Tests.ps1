@@ -241,6 +241,30 @@ try {
 	$Tree=[string]@(Invoke-FixtureGit @('rev-parse',"$HeadRevision`^{tree}"))[0]
 	$MergeRevision=(@("synthetic merge" | & git -C $FixtureRepo commit-tree $Tree -p $BaseRevision -p $HeadRevision) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Synthetic merge creation should succeed.'
 	$Context=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;controllerRevision=$BaseRevision}
+	# GitHub can keep the event base while its synthetic merge uses a newer
+	# target tip. Only that verified first parent may supply controller bytes.
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BaseRevision)
+	Write-Fixture 'docs/accepted.md' "advanced target tip`n"
+	[IO.File]::AppendAllText($TargetController,"`n# accepted target controller bytes`n",(New-Object Text.UTF8Encoding($false)))
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','accepted target advances'); $AcceptedRevision=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$AcceptedControllerOid=[string]@(Invoke-FixtureGit @('rev-parse',"$AcceptedRevision`:$ControllerPath"))[0]
+	$StaleMerge=(@('stale event base merge' | & git -C $FixtureRepo commit-tree $Tree -p $AcceptedRevision -p $HeadRevision) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Stale-base synthetic merge creation should succeed.'
+	# The live workflow passes the verified first parent as baseRevision so the
+	# previously accepted closed selector (which requires base == controller and
+	# ordered base/head parents) can produce this transition PR's shadow report.
+	$LiveContext=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$AcceptedRevision;headRevision=$HeadRevision;workflowRevision=$StaleMerge;controllerRevision=$AcceptedRevision}
+	$LiveParents=([string]@(Invoke-FixtureGit @('show','-s','--format=%P',$StaleMerge))[0]).Split(' ')
+	Assert-True ($LiveContext.baseRevision -ceq $LiveContext.controllerRevision -and $LiveParents.Count -eq 2 -and $LiveParents[0] -ceq $LiveContext.baseRevision -and $LiveParents[1] -ceq $LiveContext.headRevision) 'Live context must satisfy the previously accepted selector relationship and workflow-parent checks despite a stale event base.'
+	$LiveReport=New-CiSelectionReport $LiveContext $FixtureRepo
+	Assert-True ($LiveReport.source.baseRevision -ceq $AcceptedRevision -and $LiveReport.execution.controllerBlobOid -ceq $AcceptedControllerOid -and $AcceptedControllerOid -cne $BaseControllerOid -and $LiveReport.execution.reason -ceq 'classified') 'Compatible live context must retain accepted first-parent comparison and controller bytes.'
+	$CalledStaleContext=[pscustomobject][ordered]@{kind='workflow_call';runId=$RunId;runAttempt=$RunAttempt;callerKind='pull_request';baseRevision=$AcceptedRevision;headRevision=$HeadRevision;workflowRevision=$StaleMerge;revision=$null;controllerRevision=$AcceptedRevision}
+	Assert-True ((New-CiSelectionReport $CalledStaleContext $FixtureRepo).source.baseRevision -ceq $AcceptedRevision) 'Called pull requests must use the same accepted first parent.'
+	$WrongHeadMerge=(@('wrong head merge' | & git -C $FixtureRepo commit-tree $Tree -p $AcceptedRevision -p $BaseRevision) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Wrong-head merge fixture creation should succeed.'
+	$WrongHeadContext=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$AcceptedRevision;headRevision=$HeadRevision;workflowRevision=$WrongHeadMerge;controllerRevision=$AcceptedRevision}
+	Assert-Rejected { New-CiSelectionReport $WrongHeadContext $FixtureRepo } 'workflow_revision_parents_invalid'
+	$WrongControllerContext=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$StaleMerge;controllerRevision=$BaseRevision}
+	Assert-Rejected { New-CiSelectionReport $WrongControllerContext $FixtureRepo } 'workflow_revision_parents_invalid'
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$HeadRevision)
 	$Report=New-CiSelectionReport $Context $FixtureRepo
 	$ScheduleReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=$RunAttempt;revision=$HeadRevision;controllerRevision=$HeadRevision}) $FixtureRepo
 	$ScheduledClean=@($ScheduleReport.selection.obligations | Where-Object id -eq 'clean-package-provenance-smoke')[0]
