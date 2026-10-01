@@ -89,20 +89,28 @@ unmitigated "true damage," and no authored alias may skip this resolution order.
 
 For each authoritative contact, the server performs this order:
 
-1. Revalidate source authority, source and target life state, current relation,
-   most-specific territory/sanctuary policy, content version, and effect
-   eligibility. This occurs again when a projectile arrives or a periodic or
-   delayed effect ticks; activation-time permission does not survive a policy
-   change automatically.
+1. Revalidate source authority, source and target life state under the
+   result's authored source-survival rule, current relation, most-specific
+   territory/sanctuary policy, content version, and effect eligibility. This
+   occurs again when a projectile arrives or a periodic or delayed effect
+   ticks; activation-time permission does not survive a policy change
+   automatically. A dead source is not implicitly eligible or ineligible:
+   only an explicitly permitted surviving result may continue.
 2. Validate authored contact from the server-owned volume or simulation and
-   reject any duplicate activation/contact identity. Enforce the versioned
+   reject any duplicate activation/contact identity. Each permitted result has
+   a server-authored contact/result slot; a periodic effect also identifies its
+   effect instance, schedule generation, and scheduled tick ordinal so distinct
+   ticks cannot alias one another or replay the same tick. Enforce the versioned
    definition's per-target result allowance: a one-result-per-activation rule
    rejects an actor already in the activation's bounded already-hit set, while
-   authored repeat-result rules use bounded actor/result-slot identities and
-   per-target counts to reject duplicate deliveries or results beyond the
-   authored allowance. If the applicable record is full,
-   reject new contacts for that activation; do not evict or clear recorded
-   identities while the activation remains live.
+   authored repeat-result rules, including eligible periodic ticks, use bounded
+   actor/result-slot identities and per-target counts to reject duplicate
+   deliveries or results beyond the authored allowance. A committed component
+   result is keyed by activation or effect instance, stable target identity,
+   authored result slot, periodic schedule generation and tick ordinal when
+   applicable, and authored component ordinal. If the applicable record is
+   full, reject new results for that activation; do not evict or clear recorded
+   identities while any result from it can still apply or be replayed.
 3. Resolve avoidance and explicit immunity, including the server-owned dodge
    window. An avoided contact cannot be reintroduced by later presentation.
 4. Resolve directional block from authoritative facing and contact geometry,
@@ -127,9 +135,15 @@ For each authoritative contact, the server performs this order:
    audit, threat, engagement, and proc events from the committed result.
 
 Contacts sharing one timestamp use a documented total order over authoritative
-timeline time, activation sequence, authored component order, and stable actor
-identity. Guard break, Ward depletion, Health zero, and control therefore
-cannot depend on packet arrival, actor iteration, or animation-notify order.
+timeline time, a unique server-issued activation sequence within the ordered
+timeline, stable effect-instance identity when applicable, server-authored
+contact/result slot, periodic schedule generation and tick ordinal when
+applicable, and stable target actor identity. All authored components for one
+ordered contact and target resolve atomically in component order before the
+next contact/target begins. A remaining identical contact/target key is a
+duplicate, not an actor-iteration tie. Guard break, Ward depletion, Health
+zero, and control therefore cannot depend on packet arrival, actor iteration,
+or animation-notify order.
 Duplicate or reordered requests and effect deliveries converge on the recorded
 result; they never repeat damage, restoration, recovery, control, threat, or a
 proc.
@@ -151,10 +165,13 @@ versioned definition that declares:
 
 Missing or incompatible lifecycle data fails closed rather than choosing an
 implicit refresh, persistence, or cleanup rule. Refresh and replacement update
-one recorded effect identity; they do not leave a second hidden timer. Periodic
-ticks revalidate target existence, life state, relation, territory policy, and
-effect version before resolution. Source removal, actor destruction, death,
-unpossession, and respawn cannot leave a dangling timer or stale actor pointer.
+one recorded effect identity; they do not leave a second hidden timer. A
+schedule generation changes when authored refresh or replacement restarts the
+periodic schedule; its server-issued tick ordinals distinguish permitted
+results and reject duplicate delivery of one tick. Periodic ticks revalidate
+target existence, life state, relation, territory policy, and effect version
+before resolution. Source removal, actor destruction, death, unpossession, and
+respawn cannot leave a dangling timer or stale actor pointer.
 
 A cleanse is a server-owned effect. It selects only effects within its authored
 cleanse categories and relation/policy scope, then removes them in a stable
@@ -239,10 +256,14 @@ rule for eligible AI and still requires server relation, life-state, immunity,
 
 Health reaching zero enters one server-owned death transition. The transition
 invalidates new movement and activation, closes or cancels pawn-bound timelines,
-clears already-hit state, releases or updates threat/engagement references,
-and removes, preserves, or transfers effects only through their declared
-lifecycle rule. A server-owned projectile, area, or construct may survive its
-source only when its versioned definition explicitly permits that behavior.
+releases or updates threat/engagement references, and removes, preserves, or
+transfers effects only through their declared lifecycle rule. A server-owned
+projectile, area, or construct may survive its source only when its versioned
+definition explicitly permits that behavior. Its activation identity,
+already-hit/result-slot records, and proc-chain budgets remain server-owned
+through the last permitted result and replay window; death or pawn destruction
+cannot reset them to grant a second hit. Records are retired only after no
+surviving result can apply and its replay allowance has expired.
 
 Respawn creates or reassigns the authoritative avatar and restores only the
 declared lifecycle allowlist. It cannot revive stale activation, control,
@@ -481,7 +502,8 @@ The authoritative timeline defines a deterministic order for:
 4. Revalidate authored contact, eligibility, relation, and current territory
    policy; reject duplicate activation/contact identities and enforce the
    versioned per-target result allowance with bounded records, then record the
-   accepted contact.
+   accepted contact, including a distinct server-issued periodic tick identity
+   when applicable.
 5. Resolve avoidance/immunity, directional block and Guard, family mitigation,
    Ward, and Health in the shared defense order; Health reaching zero latches
    death and makes ordinary secondary Health restoration or control ineligible
@@ -496,10 +518,12 @@ The exact rule between simultaneous events is content data or an explicit combat
 decision, never frame-order accident. Tests must cover boundary timestamps,
 multi-family contacts, same-timestamp Guard/Ward/Health/control transitions,
 repeated or reordered packets, authored repeat-contact allowances, already-hit
-capacity saturation and replay, lethal-contact secondary restoration,
-policy changes while an effect is in flight,
-stack refresh/replacement, periodic ticks, cleanse eligibility, proc cycles,
-actor destruction, disconnect, and death during an active window.
+capacity saturation and replay, same-timestamp contact/result-slot ties,
+duplicate versus distinct periodic ticks, source death with a surviving
+projectile or area, lethal-contact secondary restoration, policy changes while
+an effect is in flight, stack refresh/replacement, periodic ticks, cleanse
+eligibility, proc cycles, actor destruction, disconnect, and death during an
+active window.
 
 ## Corrections and Rejections
 
