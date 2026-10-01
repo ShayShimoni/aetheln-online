@@ -52,7 +52,9 @@ function New-HostToolAttemptEnvelope {
 }
 
 function New-HostToolEvidenceDirectory {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Create-only evidence setup is an internal mandatory step after admission.')]
 	[CmdletBinding()]
+	[OutputType([string])]
 	param([Parameter(Mandatory)][string] $Path)
 	if ($Path -cnotmatch '^[A-Za-z]:[\\/]' -or (Test-Path -LiteralPath $Path) -or
 		-not (Test-Path -LiteralPath (Split-Path -Parent $Path) -PathType Container)) { throw 'evidence_directory_exists_or_invalid' }
@@ -77,7 +79,9 @@ public static class HostToolProvisioningDirectory {
 }
 
 function Assert-HostToolFreshOutputRoot {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingBrokenHashAlgorithms', '', Justification = 'Pinned Unreal GitDependencies manifests specify SHA1 for exact payload comparison.')]
 	[CmdletBinding()]
+	[OutputType([int])]
 	param([Parameter(Mandatory)][string] $Root, [Parameter(Mandatory)][string] $EngineRoot,
 		[Parameter(Mandatory)][AllowEmptyCollection()][Collections.Generic.HashSet[string]] $Tracked,
 		[Parameter(Mandatory)][AllowEmptyCollection()][Collections.Generic.Dictionary[string,object]] $GitDependencies,
@@ -161,6 +165,7 @@ function Get-HostToolGitDependencyAllowlist {
 
 function Assert-HostToolGitDependencyManifestIdentity {
 	[CmdletBinding()]
+	[OutputType([bool])]
 	param([Parameter(Mandatory)][string] $ExpectedBlob, [Parameter(Mandatory)][string] $ActualBlob)
 	if ($ExpectedBlob -cnotmatch '^[0-9a-f]{40}$' -or $ActualBlob -cnotmatch '^[0-9a-f]{40}$' -or
 		$ExpectedBlob -cne $ActualBlob) { throw 'gitdeps_manifest_identity_mismatch' }
@@ -248,6 +253,7 @@ function Assert-HostToolFreshOutputState {
 
 function Assert-HostToolGitState {
 	[CmdletBinding()]
+	[OutputType([string])]
 	param([Parameter(Mandatory)][string] $Head, [AllowEmptyString()][Parameter(Mandatory)][string] $Status,
 		[Parameter(Mandatory)][string] $Expected, [ValidateSet('engine', 'controller')][string] $Kind = 'engine')
 	if ($Head -cnotmatch '^[0-9a-f]{40}$' -or $Expected -cnotmatch '^[0-9a-f]{40}$' -or $Head -cne $Expected) {
@@ -258,7 +264,9 @@ function Assert-HostToolGitState {
 }
 
 function Assert-HostToolControllerInputIdentity {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '', Justification = 'Best-effort process termination in finally must preserve the mapped identity failure.')]
 	[CmdletBinding()]
+	[OutputType([bool])]
 	param([Parameter(Mandatory)][string] $ControllerRoot)
 	$Safe = 'safe.directory=' + $ControllerRoot.Replace('\', '/')
 	$TreeText = [string]::Join("`n", @(& git -c $Safe -C $ControllerRoot ls-tree -r -z HEAD 2>$null))
@@ -327,7 +335,9 @@ function Assert-HostToolControllerInputIdentity {
 }
 
 function Assert-HostToolEngineInputIdentity {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '', Justification = 'Best-effort process termination in finally must preserve the mapped identity failure.')]
 	[CmdletBinding()]
+	[OutputType([bool])]
 	param([Parameter(Mandatory)][string] $EngineRoot)
 	$Safe = 'safe.directory=' + $EngineRoot.Replace('\', '/')
 	$TreeText = [string]::Join("`n", @(& git -c $Safe -C $EngineRoot ls-tree -r -z HEAD -- Engine 2>$null))
@@ -468,6 +478,7 @@ function Get-HostToolConfigurationSha256 {
 }
 
 function New-HostToolNativeLogAttemptRoot {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Create-only native log setup is an internal mandatory step after admission.')]
 	[CmdletBinding()]
 	param([Parameter(Mandatory)][string] $NativeLogRoot,
 		[ValidatePattern('^[A-Z]$')][string] $RequiredDrive = 'F')
@@ -570,6 +581,7 @@ function Get-HostToolBuildLogProof {
 
 function Get-HostToolProductState {
 	[CmdletBinding()]
+	[OutputType([Collections.Specialized.OrderedDictionary])]
 	param([Parameter(Mandatory)][string] $EngineRoot,
 		[Parameter(Mandatory)][ValidateSet('UnrealEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target)
 	$State = [ordered]@{}
@@ -586,6 +598,7 @@ function Get-HostToolProductState {
 
 function Assert-HostToolProductChange {
 	[CmdletBinding()]
+	[OutputType([bool])]
 	param([Parameter(Mandatory)][ValidateSet('UnrealEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
 		[Parameter(Mandatory)][Collections.IDictionary] $Before, [Parameter(Mandatory)][Collections.IDictionary] $After)
 	$Changed = $false
@@ -674,6 +687,7 @@ function Assert-HostToolReceiptSet {
 
 function Invoke-HostToolProvisioningSequence {
 	[CmdletBinding()]
+	[OutputType([object[]])]
 	param([Parameter(Mandatory)][string[]] $Targets, [Parameter(Mandatory)][scriptblock] $ReadTicks,
 		[Parameter(Mandatory)][long] $UsefulDeadlineTicks, [Parameter(Mandatory)][long] $CleanupDeadlineTicks,
 		[scriptblock] $ReadCapacity, [scriptblock] $AdmitTarget, [Parameter(Mandatory)][scriptblock] $InvokeBuild,

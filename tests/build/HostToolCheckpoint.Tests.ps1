@@ -94,7 +94,11 @@ try {
 	$Verified = Invoke-HostToolCheckpointFile -Mode Verify -EngineRoot $Engine -ManifestPath $Manifest -ExpectedHeader $Header -ExpectedManifestSha256 $Created.manifestSha256 -RequiredDrive $Drive
 	Assert-Checkpoint ($Verified.engineRevision -ceq $Header.engineRevision) 'Checkpoint verification failed.'
 	& {
-		function Get-FileHash { throw 'get_file_hash_unavailable' }
+		function Get-FileHash {
+			[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Scoped fixture proves checkpoint hashing does not depend on the built-in cmdlet.')]
+			param()
+			throw 'get_file_hash_unavailable'
+		}
 		$ModuleFreeManifest = Join-Path $Evidence 'module-free-checkpoint.jsonl'
 		$ModuleFreeCreated = Invoke-HostToolCheckpointFile -Mode Create -EngineRoot $Engine -ManifestPath $ModuleFreeManifest -Header $Header -RequiredDrive $Drive
 		$ModuleFreeVerified = Invoke-HostToolCheckpointFile -Mode Verify -EngineRoot $Engine -ManifestPath $ModuleFreeManifest -ExpectedHeader $Header -ExpectedManifestSha256 $ModuleFreeCreated.manifestSha256 -RequiredDrive $Drive

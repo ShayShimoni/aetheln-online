@@ -54,6 +54,7 @@ function Assert-HostToolPublicationDeadline {
 }
 
 function Assert-HostToolPublishedReceiptBytes {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The publication worker calls this existing function name.')]
 	param([string] $SupervisorRoot, [string] $EvidenceRoot, [string] $DReceiptSha256, [string] $FReceiptSha256)
 	try {
 		$DPublished = Read-HostToolPublicationJson -Path (Join-Path $SupervisorRoot 'host-tool-provisioning-receipt.json') -ExpectedSha256 $DReceiptSha256
@@ -65,6 +66,7 @@ function Assert-HostToolPublishedReceiptBytes {
 }
 
 function Publish-HostToolProvisioningReceipts {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The publication worker calls this existing function name.')]
 	param([string] $SupervisorRoot, [string] $EvidenceRoot, [Collections.IDictionary] $Receipt,
 		[long] $DeadlineTicks = [long]::MaxValue, [scriptblock] $ReadTicks = { Get-InitialPreparationTick },
 		[string] $ResultPath)

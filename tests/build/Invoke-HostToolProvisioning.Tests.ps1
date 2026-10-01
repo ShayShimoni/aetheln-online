@@ -13,7 +13,14 @@ function Assert-HostFailure([scriptblock] $Action, [string] $Reason) {
 	try { & $Action } catch { $Caught = $_.Exception.Message }
 	Assert-HostFixture ($Caught -ceq $Reason) "Expected '$Reason'; observed '$Caught'."
 }
-function Remove-HostFixtureRoot([string] $Root, [string] $Parent) {
+function Get-HostFixtureGitDependencyHash {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingBrokenHashAlgorithms', '', Justification = 'Pinned Unreal GitDependencies manifests specify SHA1; fixture hashes must match that format.')]
+	param([Parameter(Mandatory)][string] $Path)
+	return (Get-FileHash -LiteralPath $Path -Algorithm SHA1).Hash.ToLowerInvariant()
+}
+function Remove-HostFixtureRoot {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Fixture cleanup is confined to the validated test root and must run without prompting.')]
+	param([string] $Root, [string] $Parent)
 	$ResolvedParent = [IO.Path]::GetFullPath($Parent).TrimEnd('\')
 	$ResolvedRoot = [IO.Path]::GetFullPath($Root)
 	if (-not $ResolvedRoot.StartsWith($ResolvedParent + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'fixture_cleanup_path_invalid' }
@@ -46,7 +53,11 @@ Write-HostToolDiskWarning -ResourceMonitor $null
 Assert-HostFixture ($script:HostToolDiskWarningSent -eq $false) 'Disk warning state must be initialized before supervised preflight sampling.'
 $ExpectedInputSha256 = (Get-FileHash -LiteralPath $Entry -Algorithm SHA256).Hash.ToLowerInvariant()
 & {
-	function Get-FileHash { throw 'get_file_hash_unavailable' }
+	function Get-FileHash {
+		[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Scoped fixture proves input hashing does not depend on the built-in cmdlet.')]
+		param()
+		throw 'get_file_hash_unavailable'
+	}
 	Assert-HostFixture ((Get-HostToolFileDigest -Path $Entry -Algorithm SHA256) -ceq $ExpectedInputSha256) 'Tool-input hashing must not depend on Get-FileHash module discovery in the supervisor.'
 }
 Assert-HostFixture ((Get-HostToolCleanupWaitMilliseconds -DeadlineTicks 150 -NowTicks 100 -Frequency 1000) -eq 50 -and
@@ -180,7 +191,7 @@ Assert-HostFixture ($SupervisedProof.success -eq $true -and
 $SupervisedMarker = Get-Content -LiteralPath (Join-Path $SupervisedD 'publication-complete.json') -Raw | ConvertFrom-Json
 $ParentConfirmation = Get-Content -LiteralPath (Join-Path $SupervisedD 'publication-confirmed.json') -Raw | ConvertFrom-Json
 Assert-HostFixture ($ParentConfirmation.confirmed -eq $true -and
-	$ParentConfirmation.resultPath -cne $null -and
+	$null -cne $ParentConfirmation.resultPath -and
 	$ParentConfirmation.dReceiptSha256 -ceq $SupervisedProof.dReceiptSha256 -and
 	$ParentConfirmation.fReceiptSha256 -ceq $SupervisedProof.fReceiptSha256 -and
 	$ParentConfirmation.confirmedTicks -lt $SupervisedDeadline) 'Parent confirmation must bind the worker result and both receipt hashes.'
@@ -384,7 +395,7 @@ $GitdepsBuild = Join-Path $GitdepsEngine 'Engine/Build'
 foreach ($Path in @($GitdepsWin64, $GitdepsBuild)) { $null = New-Item -ItemType Directory -Path $Path -Force }
 $GitdepsSupport = Join-Path $GitdepsWin64 'Support.exe'
 Set-Content -LiteralPath $GitdepsSupport -Value 'setup payload fixture' -Encoding Ascii
-$GitdepsSha1 = (Get-FileHash -LiteralPath $GitdepsSupport -Algorithm SHA1).Hash.ToLowerInvariant()
+$GitdepsSha1 = Get-HostFixtureGitDependencyHash -Path $GitdepsSupport
 $GitdepsManifest = Join-Path $GitdepsBuild 'Commit.gitdeps.xml'
 Set-Content -LiteralPath $GitdepsManifest -Value ('<DependencyManifest><Files><File Name="Engine/Binaries/Win64/Support.exe" Hash="' + $GitdepsSha1 + '" /></Files></DependencyManifest>') -Encoding UTF8
 $GitdepsTracked = @('Engine/Build/Commit.gitdeps.xml')
@@ -393,7 +404,11 @@ Assert-HostFailure { Assert-HostToolGitDependencyManifestIdentity -ExpectedBlob 
 $GitdepsProof = Assert-HostToolFreshOutputState -EngineRoot $GitdepsEngine -TrackedPaths $GitdepsTracked
 Assert-HostFixture ($GitdepsProof.fresh -and $GitdepsProof.manifestFilesVerified -eq 1) 'Exact SHA1-verified Setup payload should pass.'
 & {
-	function Get-FileHash { throw 'get_file_hash_unavailable' }
+	function Get-FileHash {
+		[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidOverwritingBuiltInCmdlets', '', Justification = 'Scoped fixture proves GitDependencies hashing does not depend on the built-in cmdlet.')]
+		param()
+		throw 'get_file_hash_unavailable'
+	}
 	$WorkerPathProof = Assert-HostToolFreshOutputState -EngineRoot $GitdepsEngine -TrackedPaths $GitdepsTracked
 	Assert-HostFixture ($WorkerPathProof.fresh -and $WorkerPathProof.manifestFilesVerified -eq 1) 'The Fresh worker policy path must verify dependency bytes without Get-FileHash.'
 }
@@ -410,7 +425,7 @@ $PluginGitdepsOutput = Join-Path $PluginGitdepsEngine 'Engine/Plugins/Fixture/Bi
 foreach ($Path in @($PluginGitdepsBuild, $PluginGitdepsOutput)) { $null = New-Item -ItemType Directory -Path $Path -Force }
 $PluginSupport = Join-Path $PluginGitdepsOutput 'Support.dll'
 Set-Content -LiteralPath $PluginSupport -Value 'plugin setup fixture' -Encoding Ascii
-$PluginSha1 = (Get-FileHash -LiteralPath $PluginSupport -Algorithm SHA1).Hash.ToLowerInvariant()
+$PluginSha1 = Get-HostFixtureGitDependencyHash -Path $PluginSupport
 Set-Content -LiteralPath (Join-Path $PluginGitdepsEngine 'Engine/Plugins/Fixture/Fixture.uplugin') -Value '{}' -Encoding UTF8
 Set-Content -LiteralPath (Join-Path $PluginGitdepsBuild 'Commit.gitdeps.xml') -Value ('<DependencyManifest><Files><File Name="Binaries/Win64/Support.dll" Hash="' + $PluginSha1 + '" /></Files></DependencyManifest>') -Encoding UTF8
 $PluginGitdepsProof = Assert-HostToolFreshOutputState -EngineRoot $PluginGitdepsEngine -TrackedPaths @('Engine/Plugins/Fixture/Build/Commit.gitdeps.xml', 'Engine/Plugins/Fixture/Fixture.uplugin')
@@ -425,7 +440,7 @@ $ProgramBuild = Join-Path $ProgramGitdepsEngine 'Engine/Build'
 $null = New-Item -ItemType Directory -Path (Split-Path -Parent $ProgramOutput) -Force
 $null = New-Item -ItemType Directory -Path $ProgramBuild -Force
 Set-Content -LiteralPath $ProgramOutput -Value 'pinned program dependency' -Encoding Ascii
-$ProgramSha1 = (Get-FileHash -LiteralPath $ProgramOutput -Algorithm SHA1).Hash.ToLowerInvariant()
+$ProgramSha1 = Get-HostFixtureGitDependencyHash -Path $ProgramOutput
 $ProgramManifest = Join-Path $ProgramBuild 'Commit.gitdeps.xml'
 Set-Content -LiteralPath $ProgramManifest -Value ('<DependencyManifest><Files><File Name="' + $ProgramRelative + '" Hash="' + $ProgramSha1 + '" /></Files></DependencyManifest>') -Encoding UTF8
 $ProgramTracked = @('Engine/Build/Commit.gitdeps.xml')
@@ -440,7 +455,7 @@ Set-Content -LiteralPath $ProgramManifest -Value '<DependencyManifest><Files /><
 Assert-HostFailure { Assert-HostToolFreshOutputState -EngineRoot $ProgramGitdepsEngine -TrackedPaths $ProgramTracked } 'prior_host_outputs_present'
 $OtherProgram = Join-Path (Split-Path -Parent $ProgramOutput) 'Other.exe'
 Set-Content -LiteralPath $OtherProgram -Value 'another dependency' -Encoding Ascii
-$OtherProgramSha1 = (Get-FileHash -LiteralPath $OtherProgram -Algorithm SHA1).Hash.ToLowerInvariant()
+$OtherProgramSha1 = Get-HostFixtureGitDependencyHash -Path $OtherProgram
 Set-Content -LiteralPath $ProgramManifest -Value ('<DependencyManifest><Files><File Name="' + $ProgramRelative + '" Hash="' + $ProgramSha1 + '" /><File Name="' + $ProgramRelative.Replace('PostBadgeStatus.exe', 'Other.exe') + '" Hash="' + $OtherProgramSha1 + '" /></Files></DependencyManifest>') -Encoding UTF8
 Assert-HostFailure { Assert-HostToolFreshOutputState -EngineRoot $ProgramGitdepsEngine -TrackedPaths $ProgramTracked } 'prior_host_outputs_present'
 
@@ -513,7 +528,7 @@ $AcquireAt = $EntryText.IndexOf('$Lease = Enter-EngineRunnerHostLease', [StringC
 $EngineProbeAt = $EntryText.IndexOf('$EngineGit = Invoke-HostToolIdentityProbe -Mode Git', [StringComparison]::Ordinal)
 $InputProbeAt = $EntryText.IndexOf('$null = Invoke-HostToolIdentityProbe -Mode Engine', $EngineProbeAt, [StringComparison]::Ordinal)
 $FreshProbeAt = $EntryText.IndexOf('$FreshOutputProof = Assert-HostToolFreshOutputState', [StringComparison]::Ordinal)
-$BuildAt = $EntryText.IndexOf('$Sequence = Invoke-HostToolProvisioningSequence', [StringComparison]::Ordinal)
+$BuildAt = $EntryText.IndexOf('$null = Invoke-HostToolProvisioningSequence', [StringComparison]::Ordinal)
 $ReceiptProbeAt = $EntryText.IndexOf('$ReceiptClosureProof = Invoke-HostToolIdentityProbe -Mode Receipt', [StringComparison]::Ordinal)
 $ReleaseAt = $EntryText.IndexOf('Exit-EngineRunnerHostLease -Lease $Lease -CleanupVerified $true', [StringComparison]::Ordinal)
 Assert-HostFixture ($AcquireAt -ge 0 -and $AcquireAt -lt $EngineProbeAt -and $EngineProbeAt -lt $InputProbeAt -and $InputProbeAt -lt $FreshProbeAt -and
@@ -607,7 +622,9 @@ $null = New-Item -ItemType Directory -Path $ReceiptWin64 -Force
 foreach ($Name in @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe', 'UnrealPak.exe', 'ShaderCompileWorker.exe')) {
 	Set-Content -LiteralPath (Join-Path $ReceiptWin64 $Name) -Value 'fixture product' -Encoding Ascii
 }
-function Set-HostReceiptFixture([string] $Target, [string] $TargetType, [string[]] $Products, [object[]] $ExtraProducts = @()) {
+function Set-HostReceiptFixture {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Writes only ephemeral receipt fixtures under the validated test root.')]
+	param([string] $Target, [string] $TargetType, [string[]] $Products, [object[]] $ExtraProducts = @())
 	$BuildProducts = @($Products | ForEach-Object { [ordered]@{ Path = ('$(EngineDir)/Binaries/Win64/' + $_); Type = 'Executable' } }) + @($ExtraProducts)
 	[ordered]@{ TargetName = $Target; Platform = 'Win64'; Configuration = 'Development'; TargetType = $TargetType;
 		BuildProducts = $BuildProducts } | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath (Join-Path $ReceiptWin64 ($Target + '.target')) -Encoding UTF8
@@ -729,7 +746,7 @@ $Now = 0L
 $Calls = New-Object Collections.ArrayList
 $Capacity = [pscustomobject]@{ physicalCores = 4; availablePhysicalRamGiB = 24.0; commitHeadroomGiB = 24.0; volumes = @([pscustomobject]@{ availableBytes = 50GB; knownAllocationBytes = 0L; recoveryFloorBytes = 20GB }) }
 $Sequence = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { $Now } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild {
-	param($Target, $Limit)
+	param($Target)
 	[void] $Calls.Add($Target)
 	return [pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1; selectionVerified = $true; productsVerified = $true; cleanupVerified = $true; command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
 }
@@ -742,7 +759,7 @@ Assert-HostFailure {
 	Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -AdmitTarget {
 		$null = Assert-HostToolTargetDiskAdmission -FreeBytes $AdmissionFreeBytes -NativeTargetsStarted $DiskGateBuilds.Count
 		1
-	} -InvokeBuild { param($Target, $Limit) [void] $DiskGateBuilds.Add($Target); throw 'must_not_start' }
+	} -InvokeBuild { param($Target) [void] $DiskGateBuilds.Add($Target); throw 'must_not_start' }
 } 'disk_warning_admission_refused'
 Assert-HostFixture ($DiskGateBuilds.Count -eq 0) 'F dropping from 301 to 150 GiB before first admission must reject without starting any target.'
 foreach ($BadReceipt in @('malformed', 'missing')) {
@@ -754,13 +771,13 @@ foreach ($BadReceipt in @('malformed', 'missing')) {
 		$ReceiptGateCalls = New-Object Collections.ArrayList
 		Assert-HostFailure {
 			Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -AdmitTarget { 1 } -InvokeBuild {
-				param($Target, $Limit)
+				param($Target)
 				[void] $ReceiptGateCalls.Add($Target)
 				[pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1;
 					selectionVerified = $true; productsVerified = $true; cleanupVerified = $true;
 					command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
 			} -OnTargetCompleted {
-				param($Target, $Results)
+				param($Target)
 				$null = Assert-HostToolCompletedTargetReceipt -Target $Target -EngineRoot $ReceiptEngine -Bootstrap $false -SupervisorRoot $null -ControllerRoot $null -ResourceMonitor $null -DeadlineTicks 360
 			}
 		} 'target_receipt_invalid'
@@ -775,14 +792,14 @@ $CompletionRecordAt = $EntryText.IndexOf("Write-HostToolProvisioningReceipt -Pat
 Assert-HostFixture ($CompletionGateAt -ge 0 -and $CompletionGateAt -lt $CompletionRecordAt) 'Supervised per-target receipt validation must precede the completion record.'
 $ResumeCalls = New-Object Collections.ArrayList
 $Resumed = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -InvokeBuild {
-	param($Target, $Limit)
+	param($Target)
 	[void] $ResumeCalls.Add($Target)
 	[pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1; selectionVerified = $true;
 		productsVerified = $true; cleanupVerified = $true; command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
 }
 Assert-HostFixture ($Resumed.Count -eq 3 -and ($ResumeCalls -join ',') -ceq 'ShaderCompileWorker,UnrealEditor') 'Verified target reuse must skip only the completed prefix.'
 $RecoveredNoOp = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -RecoverableTarget ShaderCompileWorker -InvokeBuild {
-	param($Target, $Limit)
+	param($Target)
 	if ($Target -ceq 'ShaderCompileWorker') {
 		return [pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 0; progressCount = 0;
 			selectionVerified = $false; productsVerified = $true; cleanupVerified = $true; recoveredNoOp = $true;
@@ -797,14 +814,14 @@ Assert-HostFixture ($RecoveredNoOp[1].recoveredNoOp -eq $true -and $RecoveredNoO
 	$RecoveredNoOp[1].recoverySourceReceiptSha256 -ceq ('b' * 64) -and
 	$RecoveredNoOp[2].actionCount -eq 1) 'Only the verified interrupted target may recover via a zero-action native exit.'
 Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -RecoverableTarget UnrealEditor -InvokeBuild { throw 'must_not_start' } } 'provisioning_plan_invalid'
-Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -RecoverableTarget ShaderCompileWorker -InvokeBuild { param($Target,$Limit) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=0; progressCount=0; selectionVerified=$false; productsVerified=$true; cleanupVerified=$true; recoveredNoOp=$true; targetReceiptVerified=$false; command=@('Build.bat',$Target); logSha256=('a'*64) } } } 'recovered_noop_unproven'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -RecoverableTarget ShaderCompileWorker -InvokeBuild { param($Target) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=0; progressCount=0; selectionVerified=$false; productsVerified=$true; cleanupVerified=$true; recoveredNoOp=$true; targetReceiptVerified=$false; command=@('Build.bat',$Target); logSha256=('a'*64) } } } 'recovered_noop_unproven'
 Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @([pscustomobject]@{ target = 'UnrealEditor'; nativeExitCode = 0; cleanupVerified = $true; productsVerified = $true; logSha256 = ('a' * 64); actionCount = 1; progressCount = 1 }) -InvokeBuild { throw 'must_not_start' } } 'checkpoint_targets_invalid'
 $AdmissionState = [pscustomobject]@{ commit = [long] 24GB; ordinal = 0 }
 $AdmissionNow = 0L
 $AdmissionMonitor = New-RoutineCompileResourceMonitor -Roots @{ evidence = $PSScriptRoot } -ResolveVolume {
-	param($Root) [pscustomobject]@{ mount = 'F:\'; volumeId = 'admission-fixture' }
+	[pscustomobject]@{ mount = 'F:\'; volumeId = 'admission-fixture' }
 } -ReadDisk {
-	param($Volume) [pscustomobject]@{ volumeId = 'admission-fixture'; availableBytes = 50GB }
+	[pscustomobject]@{ volumeId = 'admission-fixture'; availableBytes = 50GB }
 } -ReadMemory {
 	[pscustomobject]@{ availableRamBytes = 24GB; commitHeadroomBytes = [long] $AdmissionState.commit }
 } -ReadPhysicalCores { 4 } -ReadMilliseconds { [long] $AdmissionNow }
@@ -813,7 +830,7 @@ $Admitted = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L
 	$AdmissionState.ordinal++
 	Get-RoutineCompileActionLimit -Monitor $AdmissionMonitor
 } -InvokeBuild {
-	param($Target, $Limit)
+	param($Target)
 	[pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1; selectionVerified = $true;
 		productsVerified = $true; cleanupVerified = $true; command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
 }
@@ -821,24 +838,24 @@ $AdmissionProof = Get-RoutineCompileResourceProof -Monitor $AdmissionMonitor
 Assert-HostFixture ($AdmissionProof.targetAdmissionCount -eq 3 -and $AdmissionProof.minimumActionLimit -eq 1 -and
 	$AdmissionProof.maximumActionLimit -eq 4 -and (@($Admitted | ForEach-Object actionLimit) -join ',') -ceq '4,1,2') 'Receipt admission proof must match three bounded target limits.'
 $Capacity.commitHeadroomGiB = 9.0
-$LowCap = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target,$Limit) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=1; progressCount=1; selectionVerified=$true; productsVerified=$true; cleanupVerified=$true; command=@('Build.bat',$Target); logSha256=('a'*64) } }
+$LowCap = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=1; progressCount=1; selectionVerified=$true; productsVerified=$true; cleanupVerified=$true; command=@('Build.bat',$Target); logSha256=('a'*64) } }
 Assert-HostFixture (@($LowCap | Where-Object { $_.actionLimit -ne 1 }).Count -eq 0) 'Commit headroom did not cap to one action.'
 $Capacity.commitHeadroomGiB = 8.0
 Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { throw 'must_not_start' } } 'resource_admission_refused'
 $Capacity.commitHeadroomGiB = 24.0
 Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 300L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { throw 'must_not_start' } } 'useful_work_deadline'
-Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target,$Limit) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=1; progressCount=1; selectionVerified=$true; productsVerified=$true; cleanupVerified=$false; command=@(); logSha256=('a'*64) } } } 'cleanup_unproven'
-Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target,$Limit) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=0; progressCount=0; selectionVerified=$true; productsVerified=$true; cleanupVerified=$true; command=@(); logSha256=('a'*64) } } } 'actions_unproven'
-Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target,$Limit) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=1; progressCount=1; selectionVerified=$true; productsVerified=$false; cleanupVerified=$true; command=@(); logSha256=('a'*64) } } } 'products_unproven'
-Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target,$Limit) [pscustomobject]@{ target=$Target; nativeExitCode=1; actionCount=1; progressCount=1; selectionVerified=$true; productsVerified=$true; cleanupVerified=$true; command=@(); logSha256=('a'*64) } } } 'native_build_failed'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=1; progressCount=1; selectionVerified=$true; productsVerified=$true; cleanupVerified=$false; command=@(); logSha256=('a'*64) } } } 'cleanup_unproven'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=0; progressCount=0; selectionVerified=$true; productsVerified=$true; cleanupVerified=$true; command=@(); logSha256=('a'*64) } } } 'actions_unproven'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=1; progressCount=1; selectionVerified=$true; productsVerified=$false; cleanupVerified=$true; command=@(); logSha256=('a'*64) } } } 'products_unproven'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -InvokeBuild { param($Target) [pscustomobject]@{ target=$Target; nativeExitCode=1; actionCount=1; progressCount=1; selectionVerified=$true; productsVerified=$true; cleanupVerified=$true; command=@(); logSha256=('a'*64) } } } 'native_build_failed'
 
 $SampleMilliseconds = 0L
 $AvailableDisk = 50GB
 $LowMemory = 1GB
 $ResourceArgs = @{
 	Roots = @{ evidence = $PSScriptRoot }
-	ResolveVolume = { param($Root) [pscustomobject]@{ mount = 'F:\'; volumeId = 'fixture-volume' } }
-	ReadDisk = { param($Volume) [pscustomobject]@{ volumeId = 'fixture-volume'; availableBytes = [long] $AvailableDisk } }
+	ResolveVolume = { [pscustomobject]@{ mount = 'F:\'; volumeId = 'fixture-volume' } }
+	ReadDisk = { [pscustomobject]@{ volumeId = 'fixture-volume'; availableBytes = [long] $AvailableDisk } }
 	ReadMemory = { [pscustomobject]@{ availableRamBytes = [long] $LowMemory; commitHeadroomBytes = 24GB } }
 	ReadPhysicalCores = { 4 }
 	ReadMilliseconds = { [long] $SampleMilliseconds }

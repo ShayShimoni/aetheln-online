@@ -68,6 +68,7 @@ function Get-HostToolGitState {
 }
 
 function Get-HostToolRemainingMilliseconds {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Existing provisioner callbacks and deadline calculations use this function name.')]
 	param([long] $DeadlineTicks)
 	$Now = Get-InitialPreparationTick
 	$Remaining = [Math]::Floor(([decimal] $DeadlineTicks - [decimal] $Now) * 1000 / [Diagnostics.Stopwatch]::Frequency)
@@ -76,6 +77,7 @@ function Get-HostToolRemainingMilliseconds {
 }
 
 function Get-HostToolCleanupWaitMilliseconds {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Existing provisioner callbacks and fixture assertions use this function name.')]
 	param([long] $DeadlineTicks, [long] $NowTicks = (Get-InitialPreparationTick),
 		[long] $Frequency = [Diagnostics.Stopwatch]::Frequency)
 	if ($Frequency -lt 1) { throw 'monotonic_clock_unavailable' }
@@ -549,7 +551,7 @@ $ResolvedLease = Resolve-EngineRunnerLeasePath -Path $HostLeasePath
 if (-not (Test-Path -LiteralPath $ResolvedLease -PathType Leaf)) { throw 'lease_path_invalid' }
 $SupervisorPins = @(); $EvidencePins = @()
 $InvocationRecords = New-Object Collections.ArrayList
-$Lease = $null; $ResourceMonitor = $null; $LeaseReleased = $false; $Completed = $false; $Failure = $null; $Sequence = @()
+$Lease = $null; $ResourceMonitor = $null; $LeaseReleased = $false; $Completed = $false; $Failure = $null
 $ControllerRevision = $null; $EngineRevision = $null; $FreshOutputProof = $null
 $CompilerSha256 = $null; $ResourceCompilerSha256 = $null; $ReceiptClosureProof = $null
 $ConfigurationSha256 = $null; $CheckpointPath = $null; $CheckpointSha256 = $null; $CheckpointFileCount = $null
@@ -663,7 +665,7 @@ try {
 		$AttemptOrdinal = 2; $PriorUsefulSeconds = 86400
 		$FreshOutputProof = [pscustomobject]@{ fresh = $false; resumedFromSha256 = $ResumeReceiptSha256 }
 	}
-	$Sequence = Invoke-HostToolProvisioningSequence -Targets $script:HostToolTargets -ReadTicks { Get-InitialPreparationTick } -UsefulDeadlineTicks $UsefulDeadlineTicks -CleanupDeadlineTicks $CleanupDeadlineTicks -AdmitTarget {
+	$null = Invoke-HostToolProvisioningSequence -Targets $script:HostToolTargets -ReadTicks { Get-InitialPreparationTick } -UsefulDeadlineTicks $UsefulDeadlineTicks -CleanupDeadlineTicks $CleanupDeadlineTicks -AdmitTarget {
 		Assert-HostToolAcPower
 		if ($Bootstrap) {
 			$LiveVolume = Assert-HostToolExternalVolume -Path $ResolvedEngine -Reason 'external_volume_mismatch'

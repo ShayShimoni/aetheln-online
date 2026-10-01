@@ -1,6 +1,7 @@
 # Definition-only checkpoint policy. Called by the lease-owning provisioner and
 # its supervised Windows PowerShell worker; it never launches a native build.
 function Get-HostToolGeneratedPaths {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The checkpoint worker calls this existing function name.')]
 	[CmdletBinding()]
 	param([Parameter(Mandatory)][string] $EngineRoot)
 	$Engine = Join-Path $EngineRoot 'Engine'
@@ -44,6 +45,7 @@ function Get-HostToolGeneratedPaths {
 
 function Assert-HostToolCheckpointHeader {
 	[CmdletBinding()]
+	[OutputType([bool])]
 	param([Parameter(Mandatory)] $Header, [Parameter(Mandatory)] $Expected, [ValidatePattern('^[A-Z]$')][string] $RequiredDrive = 'F')
 	foreach ($Key in @('schemaVersion', 'engineRoot', 'engineRevision', 'controllerRevision', 'compilerSha256',
 		'resourceCompilerSha256', 'volumeId', 'configurationSha256', 'attemptOrdinal', 'priorUsefulSeconds')) {
