@@ -115,8 +115,8 @@ Shared Order rules:
   version of the character. Peaks are feared, regulated, and central to each
   Order's taboos.
 - Each Order channels one named combat resource. Resource names are working
-  names; all resource behavior and numbers are tuning TBDs, and the prototype
-  combat resource identity remains owned by its existing decision record.
+  names; each is the selected presentation of the shared OrderResource slot.
+  All resource behavior and numeric tuning remain `TBD`.
 
 | Order | Stable ID | Specializations | Peak | Resource | Weapon traditions |
 | --- | --- | --- | --- | --- | --- |
@@ -125,6 +125,26 @@ Shared Order rules:
 | Hushblade | `order.hushblade` | Red Echo (`order.hushblade.spec.red_echo`), Hollow Guard (`order.hushblade.spec.hollow_guard`) | Missing Second (`order.hushblade.peak.missing_second`) | Tempo | Twin knives, sheathed blade, chain-sickle, needle fan |
 | Gravecant | `order.gravecant` | Dirge (`order.gravecant.spec.dirge`), Refrain (`order.gravecant.spec.refrain`) | Last Chorus (`order.gravecant.peak.last_chorus`) | Cadence | Chime-staff, mace-reliquary, chain-censer, tome-rod |
 | Blackfletch | `order.blackfletch` | Far Thorn (`order.blackfletch.spec.far_thorn`), Waykeeper (`order.blackfletch.spec.waykeeper`) | Narrowed Horizon (`order.blackfletch.peak.narrowed_horizon`) | Tension | Longbow, recurve bow, greatbow, tether/trap bow |
+
+Every name in the Resource column is the Order-specific presentation of the
+shared `combat.resource.order` slot: Grudge maps to `order.oathscar`, Proof to
+`order.nullwright`, Tempo to `order.hushblade`, Cadence to
+`order.gravecant`, and Tension to `order.blackfletch`. Changing an Order changes
+which authored resource rules may occupy that slot; it does not turn Health,
+Endurance, Guard, or Ward into an Order resource. The server validates the
+selected Order, its stable ID, and the compatible resource definition. A client
+cannot request another Order's resource identity or claim a gain, spend, or
+refund.
+
+The prototype remains one `order.oathscar` character using sword and shield.
+Grudge is canonical Oathscar intent but is not part of the default prototype
+resource subset. Issue [#107](https://github.com/ShayShimoni/aetheln-online/issues/107)
+may define one optional Oathbreak exercise; any resulting bounded attribute or
+ability work remains owned by Issue
+[#19](https://github.com/ShayShimoni/aetheln-online/issues/19). This document
+does not schedule the complete Oathscar kit, its specializations, Peak, other
+weapon traditions, or any other Order. Exact generation, spend, decay, caps,
+and UI values remain tuning `TBD`.
 
 ### Oathscar - Working Name
 
@@ -283,7 +303,9 @@ is the drawn stillness between sighting and release.
 - **Taboos:** a Blackfletch must not loose without a named target, abandon a
   marked route while travelers still trust it, or hold the Narrowed Horizon -
   the Peak that briefly realizes the self who sees only one future - after the
-  shot is taken.
+  shot is taken. "Named target" is an Order oath and authored intent, not a
+  target lock, client-selected authoritative target, guaranteed contact, or
+  exception to pure free aim.
 - **Internal conflicts:** the Far Thorn interpretation strikes at the greatest
   distance and argues the kindest arrow arrives before the war does; the
   Waykeeper interpretation traps, tethers, and escorts, arguing that an Order
@@ -456,7 +478,7 @@ Conflict:
 - **People:** Kell
 - **Order:** Oathscar, Ironwake specialization
 - **Current alignment:** covert Hundred Witnesses supporter
-- **Combat lesson:** guard pressure, stamina breaking, and heavy commitment
+- **Combat lesson:** Guard and Endurance pressure, and heavy commitment
 
 Vothram forged the instruments Sevrin used to crack the Star. He did not know
 their purpose, but ignorance did not save the cities they destroyed.

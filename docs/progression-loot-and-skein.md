@@ -30,6 +30,51 @@ The game should not manufacture engagement through a constant stream of trivial
 rewards. Upgrades may be less frequent, but a meaningful reward should produce a
 noticeable increase in power, speed, resilience, efficiency, or tactical choice.
 
+## Shared Combat-State Contract
+
+Progression, equipment, and Skein rules consume the shared combat grammar; they
+do not redefine it. The stable resources are Health
+(`combat.resource.health`), Endurance (`combat.resource.endurance`), Guard
+(`combat.resource.guard`), Ward (`combat.resource.ward`), and the selected
+OrderResource (`combat.resource.order`). Wrought (`combat.damage.wrought`),
+Cinder (`combat.damage.cinder`), and Wake (`combat.damage.wake`) are the stable
+damage families.
+
+- Health determines life state. An item or progression rule may modify an
+  authored Health bound or restoration path. Any future deliberate Health cost
+  or death-prevention rule must be explicit and readable rather than inferred
+  from another resource.
+- Endurance is shared exertion, Guard is active defensive stability, Ward is
+  explicit absorb protection, and OrderResource is the selected Order's
+  distinct currency. A modifier names exactly which resource it affects; broad
+  labels such as stamina, mana, shield, or class resource are not interchangeable
+  data keys.
+- Damage modifiers name a family or explicitly name all families. No generic
+  display phrase silently changes Wrought, Cinder, and Wake together, and a
+  family name alone grants no armor bypass, control, damage-over-time, or other
+  secondary behavior.
+- Resource restoration is passive, delayed, event-driven, or effect-supplied as
+  authored. Action recovery and cooldowns remain separate. Every rate, delay,
+  threshold, cap, cost, and reset value is tuning `TBD` until its owning
+  implementation and evidence work approves it.
+
+Every duration effect used by progression or equipment declares a stable effect
+identity, beneficial/harmful/control classification, stacking key, source scope,
+stack cap, duration/refresh/replace rule, cleanse eligibility, and proc
+eligibility. Cleanses operate on explicit server-owned categories rather than a
+client-selected hidden effect. Resolve is the shared server-owned protection
+against repeated eligible control, not generic damage reduction or universal
+immunity. Its gain, decay, consumption, immunity interaction, and every numeric
+value remain tuning `TBD`.
+
+Triggered effects carry their authoritative source and activation ancestry.
+The server enforces bounded depth plus aggregate listener, event, target, and
+construct budgets for the entire root activation, rejects recursive
+self-triggering and duplicate grants, and records deterministic ordering when
+more than one trigger is eligible. Exact values remain tuning `TBD`. Equipment,
+Forms, Threads, Keystones, and Doctrines cannot create a client-authored hit,
+target, resource result, effect, progression change, or hidden-state disclosure.
+
 ## Permanent Character Progression
 
 ### Character Level
@@ -160,10 +205,10 @@ Each Order also names one combat resource: Grudge (Oathscar), Proof
 (Nullwright), Tempo (Hushblade), Cadence (Gravecant), and Tension
 (Blackfletch). All display names are working names. Specialization mechanics,
 Peak mechanics, resource behavior, and every numeric value are tuning TBDs; the
-prototype combat resource identity remains owned by its existing decision
-record and is not resolved here. Specializations and Peaks extend the Order
-layer and do not replace the Forms, Threads, Keystone, and Faction Doctrine
-structure.
+five names are presentations of the shared `combat.resource.order` slot, not
+substitutes for Health, Endurance, Guard, or Ward. Specializations and Peaks
+extend the Order layer and do not replace the Forms, Threads, Keystone, and
+Faction Doctrine structure.
 
 ### Faction Doctrine
 
@@ -248,7 +293,7 @@ playtest and balance decision, not a fixed percentage in this document.
 
 - Weapon damage and ability output.
 - Armor, health, resistance, and Guard.
-- Stamina, mana, momentum, or other class resources.
+- Endurance, Guard, Ward, and the selected OrderResource.
 - Attack cadence, recovery, cooldowns, and resource efficiency.
 - Blocking, dodging, interruption, stagger, and Guard damage.
 - Healing, shielding, support, and group utility.
