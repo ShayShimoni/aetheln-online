@@ -539,6 +539,46 @@ attempt nonce, and the final `complete`, `shadow`, `authoritative`, and
 Push and schedule runs have no accepted event-specific selector producer: they
 emit `event_not_applicable` and remain non-authoritative.
 
+#### Recorded shadow observations
+
+Record each observation here with the exact identities the paragraph above
+requires. Entries are evidence records, not acceptance.
+
+- **Package 3C candidate pre-merge gap observation (pull request #174).**
+  Run `36924674482`, attempt `1`, `pull_request` by `ShayShimoni`
+  (triggering actor `ShayShimoni`). Accepted base and controller revision
+  `9355036edd51313ad52f387d14c1a8acf601d4f8`; head
+  `1a2a221c08dd6a61a523e5163e9bd729fd543bb5`; tested merge
+  `d9ec20b04ca489cc56cdee901c947e418982696d` with ordered parents
+  `9355036e`, `1a2a221c`. Accepted controller blob
+  `1db0665ebc06ce8edf86d0e0fbce700be88ddae0`, controller and policy digest
+  `d649a77899ecf6dde318f45acd29a38a3f2b81cb1b1d497c0e6a7351cd05d766` (the
+  pre-3C accepted-base selector, not the current develop selector). Attempt
+  nonce `8621a354d9b41a589a3ea56dd8c5b5e0601531cd4eac65045ff0b5362e84d467`.
+  Selector artifact ID `11193301609`, name
+  `ci-selection-shadow-36924674482-1-8621a354d9b41a589a3ea56dd8c5b5e0601531cd4eac65045ff0b5362e84d467`, API digest
+  `sha256:b15f50ed1fa91b36ffe69ee6dab381532e5cf0d9a58fe2ff69a87e813a0ce5fb`.
+  Selected raw portable artifact `ci-report` ID `11193883633`, API digest
+  `sha256:41bc741c1b7cd0fd2e437dacc181a67da068e4b41e2155c666afe12366df1c2b`;
+  portable receipt artifact ID `11193284889`, name
+  `ci-receipt-portable-36924674482-1-8621a354d9b41a589a3ea56dd8c5b5e0601531cd4eac65045ff0b5362e84d467`, API digest
+  `sha256:841873b66e896f7db65ec289724bd953fee46d629c625a0d7b28c238070cd841`.
+  Native compile raw artifact `engine-runner-compile-report` ID
+  `11194815077`, API digest
+  `sha256:9f95135080462bc98fd863de08325cb91b482ddf033c82119e9ec6c26b52b057`;
+  no native receipt was published because the gap branch ran. Gap record
+  `aetheln.ci-acceptance-shadow-gap/v2`, artifact ID `11194452443`, name
+  `ci-acceptance-shadow-36924674482-1-8621a354d9b41a589a3ea56dd8c5b5e0601531cd4eac65045ff0b5362e84d467`, API digest
+  `sha256:c0688c02657a7ae4c15db132e07ca385ef793085096f367ba520b6ba3811c47e`,
+  report SHA-256
+  `a050751b665f02cedafcd966c6932c74dd657a3437f0e75858e02dbd41949475`
+  (398 bytes). `selectedUnsupported` was `controller-contract`,
+  `controller-operational-proof`; the decision was `complete=false`,
+  `shadow=true`, `authoritative=false`, `grantsAcceptance=false`, reason
+  `producer_contract_incomplete`. This exercised the gap branch on the
+  candidate itself; the two post-merge accepted-base observations (one
+  supported-only, one unsupported-selection) remain to be recorded.
+
 That observation is necessary but not sufficient for activation. Changing the
 live workflow itself selects `controller-contract` and
 `controller-operational-proof`; Package 3C has no truthful live receipt producer
