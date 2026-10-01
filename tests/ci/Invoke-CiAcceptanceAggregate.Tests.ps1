@@ -145,6 +145,7 @@ function New-FixtureVisualReport {
 }
 
 function New-FixturePortableReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param($Context)
 	$Names = @(
 		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
@@ -154,6 +155,7 @@ function New-FixturePortableReport {
 }
 
 function New-FixtureEngineReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param($Context)
 	$Names = @('runner-input-validation','managed-compile-workspace','repository-state-before-work','incremental-client-build','incremental-client-build-repository-state','incremental-server-build','incremental-server-build-repository-state','repository-state-at-completion')
 	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier='required';status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
@@ -167,6 +169,7 @@ function New-FixtureEngineReport {
 }
 
 function New-FixtureUnrealReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param($Context)
 	$Tests = @(
 		[pscustomobject][ordered]@{fullTestPath='Aetheln.GameCombat.NetworkSpike.Authority';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0},
@@ -221,6 +224,7 @@ function New-FixtureVisualBoundary {
 }
 
 function New-FixtureSemanticBoundary {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param($Context, [string]$CheckId, $Report)
 	$EvidenceBytes = ConvertTo-FixtureBytes $Report
 	$Requirement = [pscustomobject][ordered]@{key='semantic';jobName='semantic-proof';artifactName=('ci-receipt-semantic-9001-2-' + $Context.attemptAnchor.nonce);checks=@($CheckId)}
@@ -585,7 +589,8 @@ foreach ($UnsafeRedirect in @('http://results0123.blob.core.windows.net/x','http
 }
 Assert-Rejected { Resolve-AggregateRequestTarget -Uri 'https://other0123.blob.core.windows.net/x' -ApiBaseUri 'https://api.github.com' -RequestKind 'Artifact' -RedirectSource ([uri]'https://results0123.blob.core.windows.net/x') } 'api_redirect_invalid'
 
-$BudgetFixture = { param([string]$Uri,[int]$Remaining,[int]$Maximum,[string]$Kind) return ,[byte[]](1,2,3) }
+# The API callback contract supplies these arguments; this budget fixture intentionally ignores their values.
+$BudgetFixture = { param([string]$Uri,[int]$Remaining,[int]$Maximum,[string]$Kind) $null = $Uri; $null = $Remaining; $null = $Maximum; $null = $Kind; return ,[byte[]](1,2,3) }
 $RequestBudget = New-AggregateBudget -MaximumRequests 1 -MaximumNetworkBytes 100 -MaximumArchiveBytes 100 -MaximumExpandedBytes 100
 [void](Invoke-AggregateApi -ApiRequest $BudgetFixture -Uri '/one' -Clock ([Diagnostics.Stopwatch]::StartNew()) -DeadlineSeconds 30 -MaximumBytes 10 -Budget $RequestBudget -RequestKind Api)
 Assert-Rejected { Invoke-AggregateApi -ApiRequest $BudgetFixture -Uri '/two' -Clock ([Diagnostics.Stopwatch]::StartNew()) -DeadlineSeconds 30 -MaximumBytes 10 -Budget $RequestBudget -RequestKind Api } 'api_request_budget_exceeded'
