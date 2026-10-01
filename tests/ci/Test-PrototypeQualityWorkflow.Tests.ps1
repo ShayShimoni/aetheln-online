@@ -88,6 +88,10 @@ Assert-True ($FetchPosition -ge 0 -and $CheckoutPosition -gt $FetchPosition) 'Ba
 foreach ($Binding in @('github.event.pull_request.base.sha', 'github.event.pull_request.head.sha', 'github.sha')) {
 	Assert-True ($ShadowSelection.Contains($Binding)) "Shadow selection must bind exact immutable identity $Binding."
 }
+$SelectionContext = [regex]::Match($ShadowSelection, '(?ms)^          \$Context = \[ordered\]@\{\r?\n(?<body>.*?)^          \}\r?$')
+Assert-True ($SelectionContext.Success) 'The shadow selection run block must construct one closed context object.'
+Assert-MatchCount -Text $SelectionContext.Groups['body'].Value -Pattern '(?m)^            runId = ''\$\{\{ github\.run_id \}\}''\r?$' -Expected 1 -Message 'The accepted-base selector context must bind the current GitHub run ID.'
+Assert-MatchCount -Text $SelectionContext.Groups['body'].Value -Pattern '(?m)^            runAttempt = \[int\] ''\$\{\{ github\.run_attempt \}\}''\r?$' -Expected 1 -Message 'The accepted-base selector context must bind the current GitHub run attempt as an integer.'
 Assert-True ($ShadowSelection -match 'git init --bare' -and $ShadowSelection -match 'accepted_controller_unavailable') 'Bootstrap must use a bare control repository and explicitly diagnose an unavailable accepted controller.'
 Assert-True ($ShadowSelection -match 'AETHELN_GITHUB_TOKEN: \$\{\{ github\.token \}\}' -and $ShadowSelection -match "GIT_CONFIG_KEY_0 = 'http\.extraheader'" -and $ShadowSelection -match 'GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic \$Authorization"' -and $ShadowSelection -match '::add-mask::\$Authorization') 'Private-repository object fetches must use the ephemeral GitHub token through a masked environment-backed authorization header.'
 Assert-True ($ShadowSelection -notmatch 'persist-credentials: true' -and $ShadowSelection -notmatch 'https://x-access-token:') 'Shadow bootstrap credentials must not persist in the checkout or remote URL.'
