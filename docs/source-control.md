@@ -124,17 +124,22 @@ Never infer a target from a wildcard or broad prune operation.
 
 Decide each ref separately, and record the evidence for every step:
 
-1. Identify the exact PR and its merge commit SHA on the target branch.
-2. Prove the branch tip is contained in that target:
-   `git merge-base --is-ancestor <tip> <merge-sha>` succeeds, or, for a squash
-   or rebase merge, show that the merged change is equivalent to the reviewed
-   PR head and that the branch has no commits after that head.
+1. Identify the exact PR, reviewed head, and merge commit SHA. Fetch `develop`,
+   read its live remote object ID with `git ls-remote origin refs/heads/develop`,
+   and require `git rev-parse refs/remotes/origin/develop` to equal that ID.
+2. Prove the branch tip is contained in the current target: for a merge commit,
+   `git merge-base --is-ancestor <tip> <merge-sha>` and
+   `git merge-base --is-ancestor <merge-sha> <current-develop-oid>` must both
+   succeed. For squash or rebase, prove the reviewed PR change is still
+   equivalent in the current target tree and the branch has no commits after
+   the reviewed head. Retain the branch if either proof is unavailable.
 3. Confirm no unique work remains: no other open PR uses the branch as its head
    or base, no stacked branch depends on it, and `git worktree list` shows no
    worktree that has it checked out.
-4. Immediately before the first deletion, repeat the step 3 checks live: a new
-   PR, stacked branch, or worktree can appear without changing the branch's
-   object ID. Then read the current local and remote object IDs
+4. Immediately before the first deletion, repeat steps 1-3 against the live
+   target: its object ID, ancestry or current-tree equivalence, PRs, stacked
+   branches, and worktrees can change independently. Then read the current
+   local and remote branch object IDs
    (`git rev-parse refs/heads/<branch>` and
    `git ls-remote origin refs/heads/<branch>`); each ref that exists must equal
    the verified tip.
@@ -143,10 +148,10 @@ Decide each ref separately, and record the evidence for every step:
    `git update-ref -d refs/heads/<branch> <tip>` locally and
    `git push --force-with-lease=refs/heads/<branch>:<tip> origin :refs/heads/<branch>`
    remotely.
-6. Immediately before the second deletion, repeat the step 3 checks live again
-   rather than reusing the first result. Confirm that the remaining ref still
-   equals the verified tip and that the ref deleted first is still absent, not
-   recreated.
+6. Immediately before the second deletion, repeat steps 1-3 against the live
+   target again rather than reusing the first result. Confirm that the remaining
+   ref still equals the verified tip and that the ref deleted first is still
+   absent, not recreated.
 
 Retain the ref and record why whenever any step is uncertain, its evidence
 changes, or a live recheck finds a dependent PR, stacked branch, or worktree. Never delete `main` or `develop`, and never treat a `develop` to
