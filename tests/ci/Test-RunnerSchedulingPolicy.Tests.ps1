@@ -97,9 +97,10 @@ $ActualAggregateNeeds = @([regex]::Matches($AggregateNeedsMatch.Groups['needs'].
 $ExpectedAggregateNeeds = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke', 'visual-proof')
 Assert-True (($ActualAggregateNeeds -join ',') -ceq ($ExpectedAggregateNeeds -join ',')) 'Acceptance aggregation must directly need every producer exactly once in the reviewed order.'
 Assert-True ($AggregateShadow -notmatch 'Invoke-CiAcceptanceAggregate\.ps1|New-CiAcceptanceReceipt\.ps1|acceptanceGranted') 'The incomplete shadow must not execute or advertise dormant receipt/aggregate authority.'
-foreach ($Gap in @('clean-package-provenance-smoke','content-reference-validation','delivery-harness','unreal-editor-automation')) {
+foreach ($Gap in @('clean-package-provenance-smoke','content-reference-validation','unreal-editor-automation')) {
 	Assert-True ($AggregateShadow -match [regex]::Escape("'$Gap'")) "Acceptance shadow must name missing producer '$Gap' rather than fabricating coverage."
 }
+Assert-True ($AggregateShadow -notmatch "'delivery-harness'") 'Retired delivery harness must not remain a missing-producer obligation.'
 foreach ($ReceiptGap in @('controller-contract-and-operational-proof','native-client-server-compile','portable','visual-package')) {
 	Assert-True ($AggregateShadow -match [regex]::Escape("'$ReceiptGap'")) "Acceptance shadow must name missing receipt '$ReceiptGap' rather than relabelling raw evidence."
 }

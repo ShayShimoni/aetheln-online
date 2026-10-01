@@ -1,4 +1,0 @@
-interface:
-  display_name: "Delivery Orchestrator"
-  short_description: "Coordinate delivery with fresh-context stage agents"
-  default_prompt: "Use $orchestrate-delivery to inspect the project board and run the next ready delivery wave."

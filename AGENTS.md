@@ -167,18 +167,11 @@ During prototype, use only:
 
 Keep `QA` as a board status, not an environment. Add `staging` for external playtests or release candidates and `production` only for a public service. Isolate endpoints, credentials, databases, and logs. Commit example configuration only; keep secrets outside the repository.
 
-## Delivery Orchestrator Shortcuts
+## Direct Delivery Requests
 
-When the user's entire request is one of these short commands, invoke
-`$orchestrate-delivery` in the corresponding mode:
-
-- `next` or `next wave` - select and run the next ready delivery wave.
-- `resume` or `continue` - reconcile and continue the active delivery wave.
-- `audit` or `status` - inspect and report without changing repository or
-  external state.
-- `work #<number>` or `issue #<number>` - run the targeted issue.
-
-These shortcuts authorize only the named orchestration mode. They do not
+Handle `next`, `resume`, `continue`, `audit`, `status`, and targeted issue
+requests directly under the repository guidance. Use independent subagents for
+bounded, parallel work when appropriate. A short request does not itself
 authorize a commit, push, pull-request publication, merge, branch change, pull,
 deployment, deletion, or migration.
 
@@ -187,5 +180,20 @@ deployment, deletion, or migration.
 Follow the scoped Conventional Commit-style subjects established by repository
 history: `type(scope): #<issue> <imperative summary>`, for example
 `feat(combat): #17 add replicated sprint ability`. Keep commits scoped. Pull
-requests should explain intent, list verification performed, link relevant
-tasks, and include screenshots or video for visible gameplay or UI changes.
+requests follow [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md):
+explain intent, link the ticket, list exact verification, name the review focus,
+record review evidence and residual limitations, and include screenshots or
+video for visible gameplay or UI changes.
+
+## Delivery Evidence and Authority
+
+[Delivery Workflow](docs/delivery-workflow.md) defines the evidence-based
+project statuses, issue and dependency synchronization, and merge gates. Keep
+independent-agent technical review, explicitly required human review, CI
+verification, and owner merge authorization separate. Never label agent review
+as human approval or claim a self-authored PR was `APPROVED` by its author.
+`Dev Done` needs a reviewed and verified merge; `QA` and `Done` need distinct
+post-merge evidence. For PRs targeting `develop`, an issue reference and manual
+Development link track the issue; a `Closes #<issue>` line does not link or
+auto-close it there. Do not close an issue or advance its board status merely
+because a PR merged.
