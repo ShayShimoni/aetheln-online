@@ -12,8 +12,9 @@ if (-not $RepositoryRoot) {
 
 $ContractPath = Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservability.h'
 $SubsystemPath = Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservabilitySubsystem.h'
+$SubsystemImplementationPath = Join-Path $RepositoryRoot 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp'
 $OperatorPath = Join-Path $RepositoryRoot 'docs\observability-and-crash-diagnostics.md'
-foreach ($Path in @($ContractPath, $SubsystemPath, $OperatorPath)) {
+foreach ($Path in @($ContractPath, $SubsystemPath, $SubsystemImplementationPath, $OperatorPath)) {
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
 		throw "Required observability contract '$Path' is missing."
 	}
@@ -21,6 +22,7 @@ foreach ($Path in @($ContractPath, $SubsystemPath, $OperatorPath)) {
 
 $Contract = Get-Content -LiteralPath $ContractPath -Raw
 $Subsystem = Get-Content -LiteralPath $SubsystemPath -Raw
+$SubsystemImplementation = Get-Content -LiteralPath $SubsystemImplementationPath -Raw
 $Operator = Get-Content -LiteralPath $OperatorPath -Raw
 
 function Assert-ContainsLiteral {
@@ -74,6 +76,7 @@ foreach ($Required in @('MaxIdentifierLength', 'MaxPendingDispatchItems', 'IsSaf
 }
 Assert-ContainsLiteral -Text $Subsystem -Literal 'UGameInstanceSubsystem' -Message 'Observability service must remain GameInstance-owned.'
 Assert-ContainsLiteral -Text $Subsystem -Literal 'SetTestRestrictedSink' -Message 'Restricted audit injection must remain separate from the public sink.'
+Assert-ContainsLiteral -Text $SubsystemImplementation -Literal '!InNetworkProfile.SchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)' -Message 'Build-context profile schema must be rejected case-sensitively before replacement.'
 Assert-ContainsLiteral -Text $Operator -Literal '| `local` |' -Message 'Local environment boundary is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal '| `development` |' -Message 'Development environment boundary is missing.'
 Assert-ContainsLiteral -Text $Operator -Literal 'retention is `TBD`' -Message 'Unresolved retention must remain explicit.'
