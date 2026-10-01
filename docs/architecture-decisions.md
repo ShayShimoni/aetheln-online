@@ -725,11 +725,16 @@ Every accepted decision records:
   producer-job binding through pinned `needs` outputs, a job-identity
   attestation, or verified non-overlapping producer execution. The current
   shared-nonce aggregate remains shadow-only for this reason.
-- The delivery harness is also diagnostic-only in this package. It checks the
-  declared revision against `HEAD` but executes writable worktree files and
-  does not yet bind every test/dependency byte or reject mid-run mutation.
-  `delivery-harness` remains an unsupported receipt obligation until a clean,
-  immutable source contract and dirty/mutation negative fixtures exist.
+- At this package's historical baseline, the delivery harness was diagnostic
+  only: it executed writable worktree files without complete source-byte or
+  mid-run mutation protection. The harness and its unsupported
+  `delivery-harness` obligation are retired by the later direct-delivery
+  change; the other CI obligations and evidence gates remain intact. A changed
+  selector digest requires a fresh accepted-base shadow observation before
+  any future authority activation. The retirement candidate's normalized
+  selector digest is
+  `a1be534a661508fdccae17ea7623b2c3f215119a07cdc66ef7ab8653a9925536`;
+  it is not an accepted activation pin before merge and that observation.
 - Authority activation remains a later change. Its checker executes from
   accepted-base bytes outside the candidate checkout and requires the trusted
   caller to provide the independently accepted base revision and policy

@@ -138,38 +138,9 @@ the suite; runner infrastructure failures always fail closed. The live
 supported-target compile and packaged-smoke jobs are also required gates when
 their event and trust predicates select them.
 
-The suite deliberately excludes two existing test groups:
-
-- `.agents/skills/orchestrate-delivery/scripts/tests/` exercises delivery
-  orchestration tooling, not the shipped repository, and has its own harness.
-- `visuals/tests/` is owned by the frozen `visual-package-validation.yml`
-  workflow described below and only needs to run when the visual package
-  changes.
-
-### Delivery tooling harness
-
-`.agents/skills/orchestrate-delivery/scripts/Invoke-DeliveryHarness.ps1`
-provides the explicit runner for the otherwise excluded delivery-tooling tests.
-It requires the closed canonical inventory of nine `Test-Delivery*.ps1`
-programs, requires `HEAD` to equal the declared revision, executes the current
-writable worktree files serially, enforces
-per-test and overall deadlines plus in-flight stdout/stderr ceilings, preserves
-the exact captured bytes and SHA-256 values, and verifies process-tree cleanup.
-Its bounded `delivery-harness-v1` JSON report records run/attempt identity,
-inventory, every native exit and terminal result, cleanup, infrastructure
-failure, and the aggregate nine-check summary. The focused runner contract is
-`Invoke-DeliveryHarness.Tests.ps1`; the long launcher contract remains
-`Test-DeliveryStageLauncher.ps1`.
-
-This runner is implemented and locally executable but is not yet registered as
-a portable CI check, producer job, or receipt adapter. The `delivery-harness`
-acceptance obligation therefore remains unsupported and fail-closed until its
-typed report validator, receipt producer, artifact registration, and workflow
-wiring are added together. Its current report is diagnostic rather than
-source-byte authority: it does not reject tracked dirt, bind every
-test/dependency byte, or prevent one test from mutating a later test. Authority
-also requires a clean immutable execution copy plus dirty and mid-run mutation
-negative fixtures.
+The suite deliberately excludes `visuals/tests/`, which is owned by the frozen
+`visual-package-validation.yml` workflow described below and only needs to run
+when the visual package changes.
 
 ### Historical Issue #151 compile applicability
 
@@ -183,14 +154,16 @@ It takes effect only after independent review and merge of the decision.
 For that historical protocol change, focused source-inspection, handoff, and
 launcher regressions, retained-event reproduction, and independent
 installed-Codex replacement-path QA establish the relevant behavior. Unreal
-compilation does not exercise it, and ordinary portable CI excludes its
-delivery harness. Final independent acceptance and pre-publication event-history
-reconciliation remain required; this record does not close Issue #151.
+compilation does not exercise it, and ordinary portable CI excluded its
+historical delivery harness. Final independent acceptance and pre-publication
+event-history reconciliation remain required; this record does not close Issue
+#151.
 
 Earlier failed or missing compile evidence retains that status. TA-016 adds
 no `.agents/` directory exemption, alters no classifier or future gate, and
 cannot waive compilation for a future revision, including the same paths.
-The closed classifier below remains unchanged.
+The retirement below separately changes the current classifier without
+changing that historical decision.
 
 ## Workflow Execution
 
@@ -355,10 +328,11 @@ RNG failure has no deterministic fallback and publishes no selector report.
 The existing live workflow remains on the Package 3A context/artifact contract
 until the separate shadow-wiring package supplies these fields; this
 pre-activation controller change therefore requires a new accepted-base live
-observation before any authority activation. Package 3A policy
-`shadow-v1` has canonical digest
+observation before any authority activation. The historical Package 3A policy
+`shadow-v1` had canonical digest
 `52f43ef45d9515bae76315026674ac0e052823b6dc63ec9ed008d093774c90a4`
-and exactly these check IDs: `portable`, `visual-package`, `delivery-harness`,
+and exactly these historical check IDs: `portable`, `visual-package`,
+`delivery-harness`,
 `native-client-server-compile`, `unreal-editor-automation`,
 `content-reference-validation`, `controller-contract`,
 `controller-operational-proof`, and `clean-package-provenance-smoke`.
@@ -372,11 +346,12 @@ the head; called schedules bind both to the scheduled revision. The `source`
 record retains `callerKind` instead of collapsing called events into an
 ambiguous generic context.
 
-Paths outside the closed documented/controller/visual/delivery/engine/build
+Paths outside the closed documented/controller/visual/agent-tooling/engine/build
 families fail closed as `path_unclassified`, producing an all-obligations
 conservative report. Adding a new repository root therefore cannot silently
-inherit portable-only treatment. Build scripts and build tests select delivery
-harness proof; production CI scripts and workflows select both controller
+inherit portable-only treatment. Agent-tooling and build-test paths retain
+portable proof; build scripts retain controller-operational and clean-package
+proof. Production CI scripts and workflows select both controller
 contract and operational proof; plugin Content also selects content-reference
 validation. Ordinary source, plugin source, and the project descriptor select
 native client/server compilation plus Unreal Editor automation, but not a
@@ -391,12 +366,17 @@ normalization, so changes to mappings, contexts, limits, uncertainty behavior,
 or attribute rules change the policy identity. `controllerSha256` separately
 binds the exact unnormalized blob bytes that executed.
 
-The current Package 3B pre-activation selector candidate has canonical
-normalized digest
+Before this retirement, the Package 3B pre-activation selector candidate had
+canonical normalized digest
 `605a3fc7a16e2664492a51bc44a3d267ee6e9955043811c1be4ce4c988f2fe4b`.
-That value documents this exact foundation candidate; it becomes an accepted
-pin only after merge and must then be bound by a fresh accepted-base live
-shadow observation before any separate activation change.
+The direct-delivery retirement candidate instead has normalized digest
+`a1be534a661508fdccae17ea7623b2c3f215119a07cdc66ef7ab8653a9925536`
+and eight check IDs: `portable`, `visual-package`,
+`native-client-server-compile`, `unreal-editor-automation`,
+`content-reference-validation`, `controller-contract`,
+`controller-operational-proof`, and `clean-package-provenance-smoke`.
+Its digest is not an accepted activation pin until this change is merged and
+bound by a fresh accepted-base live shadow observation.
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
@@ -1069,7 +1049,7 @@ incremental compile policy.
   `native-client-server-compile`, `unreal-editor-automation`, and
   `visual-package`. `clean-package-provenance-smoke`,
   `content-reference-validation`, `controller-contract`,
-  `controller-operational-proof`, and `delivery-harness` remain unsupported
+  and `controller-operational-proof` remain unsupported
   and fail closed. Artifact timestamps, API/download digests, exact job
   run/head/attempt identity, and native runner identity are mandatory; the
   contract remains shadow-only and grants no acceptance.
@@ -1186,7 +1166,7 @@ not-yet-wired semantic adapters accept only exact typed reports for `portable`,
 `native-client-server-compile`, `unreal-editor-automation`, and
 `visual-package`; producer and aggregate independently revalidate those bytes.
 `clean-package-provenance-smoke`, `content-reference-validation`,
-`controller-contract`, `controller-operational-proof`, and `delivery-harness`
+`controller-contract`, and `controller-operational-proof`
 continue to fail closed as unsupported until their real producer schemas and
 validators exist. An opaque digest or successful summary cannot substitute.
 

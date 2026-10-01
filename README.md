@@ -242,7 +242,15 @@ Board workflow:
 
 `Backlog -> Open -> In Progress -> Code Review -> Dev Done -> QA -> Done`
 
-Use `Blocked` only when work cannot progress, and populate `Blocked Reason`. Priorities range from `P0 - Must` to `P3 - Later`; `Target Version` records the intended release. Pull requests should describe the change, report exact verification, link the relevant issue, and use `Closes #<issue-number>` when appropriate.
+Use `Blocked` only when work cannot progress, and populate `Blocked Reason`.
+Priorities range from `P0 - Must` to `P3 - Later`; `Target Version` records
+the intended release. The [delivery workflow](docs/delivery-workflow.md)
+defines the evidence for each status and issue closure. Pull requests should
+describe the change and exact verification. For the normal `develop`
+integration path, reference the issue as plain `#<issue-number>` and link the
+PR through the issue's Development sidebar; GitHub does not apply closing
+keywords to non-default-branch PRs. Reserve `Closes #<issue-number>` for an
+evidence-ready merge into the default `main` branch.
 
 ## Current Status
 
