@@ -227,8 +227,10 @@ Grudge (`order.oathscar.resource.grudge`) is the Oathscar presentation of the
 shared `combat.resource.order` slot. It records server-recognized grievances
 that the Oathscar can answer through compatible authored actions. A qualifying
 grant exists only after its source combat result commits; the server records it
-at most once for the result's stable activation or effect identity, so replay,
-prediction, reordered delivery, or reconnect cannot grant it twice. A spend is
+at most once under the shared combat grammar's complete committed-result
+identity, including target, authored result slot, component, and periodic tick
+identity where applicable. Replay, prediction, reordered delivery, or reconnect
+cannot grant it twice. A spend is
 likewise accepted and committed by the server against compatible content and
 current authoritative state. Grudge is not Guard, bonus Health, Ward,
 Endurance, threat, or an ownership claim over an opponent. It cannot be granted
