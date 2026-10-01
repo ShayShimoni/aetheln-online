@@ -151,7 +151,7 @@ try {
 	$BaseSha=$EventBase; $HeadSha=$EventHead; $WorkflowSha=$ValidMerge
 	[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 	. $GraphPreflight
-	Assert-True ($AcceptedSha -ceq $AdvancedBase -and ([IO.File]::ReadAllText($env:GITHUB_OUTPUT)).Trim() -ceq "accepted_base_sha=$AdvancedBase") 'The real workflow preflight must accept stale event base and output only the verified newer first parent.'
+	Assert-True ($WorkflowSha -ceq $ValidMerge -and $AcceptedSha -ceq $AdvancedBase -and ([IO.File]::ReadAllText($env:GITHUB_OUTPUT)).Trim() -ceq "accepted_base_sha=$AdvancedBase") 'The real workflow preflight must accept stale event base and output only the verified newer first parent.'
 	foreach ($Invalid in @(
 		@{ Name='foreign first parent'; Base=$EventBase; Merge=$ForeignMerge; Reason='event_base_not_accepted_ancestor' },
 		@{ Name='divergent event base'; Base=$ForeignRoot; Merge=$ValidMerge; Reason='event_base_not_accepted_ancestor' },
@@ -161,7 +161,7 @@ try {
 		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 		$Failure=$null
 		try { . $GraphPreflight } catch { $Failure=$_.Exception.Message }
-		Assert-True ($Failure -ceq $Invalid.Reason -and ([IO.File]::ReadAllText($env:GITHUB_OUTPUT)).Length -eq 0) "$($Invalid.Name) must fail closed before publishing an accepted revision (got '$Failure')."
+		Assert-True ($WorkflowSha -ceq $Invalid.Merge -and $Failure -ceq $Invalid.Reason -and ([IO.File]::ReadAllText($env:GITHUB_OUTPUT)).Length -eq 0) "$($Invalid.Name) must fail closed before publishing an accepted revision (got '$Failure')."
 	}
 }
 finally {
