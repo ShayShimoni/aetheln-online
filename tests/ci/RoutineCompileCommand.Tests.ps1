@@ -43,7 +43,11 @@ function Get-FixtureProgress {
 	$Clock = [Diagnostics.Stopwatch]::StartNew()
 	return { if ($Clock.Elapsed.TotalSeconds -gt 15) { throw 'fixture_deadline' } }.GetNewClosure()
 }
-function New-FixtureCancellationProgress([string] $StartedMarker, [int] $RunningDeadlineMilliseconds = 600, [string] $DeadlineReason = 'fixture_running_deadline') {
+function New-FixtureCancellationProgress {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory progress callback fixture.')]
+	param([string] $StartedMarker, [int] $RunningDeadlineMilliseconds = 600, [string] $DeadlineReason = 'fixture_running_deadline')
+	# These inputs are captured by GetNewClosure; mark them as used outside the nested script block for static analysis.
+	$null = $StartedMarker; $null = $RunningDeadlineMilliseconds; $null = $DeadlineReason
 	$State = [pscustomobject]@{
 		StartupClock = [Diagnostics.Stopwatch]::StartNew()
 		RunningClock = $null
