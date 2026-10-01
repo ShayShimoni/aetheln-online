@@ -286,12 +286,16 @@ produce a compile, and it never bypasses the portable gates.
 
 ### Pull-request shadow selector (Issue #167 Package 2)
 
-The shadow job first fetches the exact pull-request base, head, and synthetic
-workflow merge objects into a fresh bare/no-checkout control repository. Only
-after all three identities match their event SHAs does the reviewed
+The shadow job fetches the exact pull-request event base, head, and synthetic
+workflow merge with complete ancestry into a fresh bare/no-checkout control
+repository. It verifies that the merge has exactly two parents, its second
+parent is the event head, and the event base is an ancestor of its first parent.
+The verified first parent is the accepted comparison and controller revision;
+the event base may be older when the target branch advances before the run.
+Only after those identities and relationships are verified does the reviewed
 `actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1`
 sparsely check out `scripts/ci/Get-CiSelection.ps1` from the exact accepted
-base into a separate run/attempt control path. No candidate selector,
+first parent into a separate run/attempt control path. No candidate selector,
 repository script, filter, or hook is checked out or executed. When the
 accepted-base controller exists, its Git blob OID and SHA-256 are recorded and
 the checked-out bytes must match that blob before PowerShell executes them.
@@ -308,7 +312,7 @@ writes a closed `aetheln.ci-selection/v1` record with
 every check conservatively selected, `selection.shadow=true`,
 `selection.authoritative=false`, legacy authority `not_observed`, and
 comparison `unavailable`; its policy digest is 64 zeroes because no accepted
-policy/controller exists at that base. This is a diagnostic bootstrap boundary, not a
+policy/controller exists at that accepted first parent. This is a diagnostic bootstrap boundary, not a
 comparison, equivalence, or selector-acceptance claim. A later pull request is
 the first meaningful live comparison after this controller is accepted-base
 code.
@@ -317,9 +321,19 @@ The CLI accepts `-ContextJson`, `-OutputPath`, and `-RepositoryRoot`. The
 Package 3B pre-activation controller requires canonical `runId` and
 `runAttempt` fields in every event context. A pull-request context otherwise
 has exactly `kind`, `baseRevision`, `headRevision`, `workflowRevision`, and
-`controllerRevision`; revisions are 40 lowercase hex Git IDs, the controller
-equals the base, and the workflow revision is a two-parent commit ordered base
-then head. The closed output roots are `schemaVersion`, `attemptAnchor`,
+`controllerRevision`; revisions are 40 lowercase hex Git IDs. The workflow
+requires the event base to be an ancestor of the verified merge first parent,
+and the second parent to equal the event head. The live context passes the
+verified first parent as both
+`baseRevision` and `controllerRevision`, matching the previously accepted
+controller's closed input contract while this workflow change is reviewed.
+The event base is retained separately in the workflow preflight and is checked
+before checkout; it is not a selector-context field in the live job. The
+selector retains its strict base/controller equality and ordered parent checks.
+The report's `source.baseRevision` and comparison diff use the accepted first
+parent.
+Missing ancestry or any conflicting parent/controller identity fails closed.
+The closed output roots are `schemaVersion`, `attemptAnchor`,
 `policy`, `source`, `execution`, `classification`, `selection`,
 `legacyAuthority`, and `comparison`. `attemptAnchor` uses
 `aetheln.current-attempt-anchor/v1` and binds the canonical run and attempt to a
@@ -341,8 +355,10 @@ are `path:<path>`, `attribute:<path>`, or `scheduled_event`; uncertainty keeps
 the fail-closed reason token that caused it, never an empty successful result.
 Reusable-call contexts additionally preserve the closed `callerKind` plus the
 caller workflow revision. A called pull request validates the same ordered
-base/head merge parents; called pushes bind workflow/controller revision to
-the head; called schedules bind both to the scheduled revision. The `source`
+accepted-base/head parents; its caller must check any separate event-base
+ancestry witness before executing the selector. Called pushes bind workflow and
+controller revisions to the head; called schedules bind both to the scheduled
+revision. The `source`
 record retains `callerKind` instead of collapsing called events into an
 ambiguous generic context.
 

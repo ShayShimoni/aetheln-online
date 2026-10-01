@@ -668,6 +668,22 @@ Every accepted decision records:
   every obligation. Reusable invocations preserve caller kind and workflow
   revision and apply the same ordered merge-parent validation as direct pull
   requests.
+- **Stale event-base amendment:** GitHub may keep a pull request event's base
+  SHA when the target branch advances before the tested synthetic merge is
+  created. The shadow job fetches complete ancestry and derives the accepted
+  controller and comparison revision from that immutable merge's first parent.
+  Its second parent must equal the exact event head, and the event base must be
+  an ancestor of the first parent. The sparse checkout, controller blob lookup,
+  context controller revision, and report comparison base all use that verified
+  first parent. A foreign or divergent first parent, wrong head parent, shallow
+  graph, missing accepted controller, or inconsistent identity fails closed.
+  During the staged rollout, the live closed selector context sets both
+  `baseRevision` and `controllerRevision` to that first parent. This preserves
+  compatibility with the previously accepted controller, which requires their
+  equality and exact ordered merge parents. The event base remains an independent
+  pre-checkout workflow ancestry witness; the candidate selector does not need
+  that separate witness in its live context.
+  The selector remains non-authoritative and does not alter legacy CI gates.
 - **Package 3A amendment:** Pin every approved remote action to its reviewed
   full commit SHA, implement and fixture-test exact per-job shadow receipt and
   bounded same-attempt aggregate contracts, and add a hosted direct-needs gap

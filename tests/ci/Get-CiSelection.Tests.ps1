@@ -174,6 +174,13 @@ $WorkflowController = @(Get-PathCheckSelection '.github/workflows/prototype-qual
 Assert-True ($WorkflowController -ccontains 'controller-contract' -and $WorkflowController -ccontains 'controller-operational-proof') 'Workflow controller changes should select contract and operational proof.'
 $ControllerTest = @(Get-PathCheckSelection 'tests/ci/Get-CiSelection.Tests.ps1' @{})
 Assert-True ($ControllerTest -ccontains 'controller-contract' -and $ControllerTest -cnotcontains 'controller-operational-proof') 'Controller tests should select contract proof without pretending to change production operations.'
+foreach ($ScriptTestPath in @('scripts/tests/Test-ObservabilityContract.ps1', 'scripts/tests/Test-SourceControlPolicy.ps1')) {
+	$ScriptTest = @(Get-PathCheckSelection $ScriptTestPath @{})
+	Assert-True (($ScriptTest -join ',') -ceq 'portable') "Tracked PowerShell script test '$ScriptTestPath' should select only portable proof."
+}
+foreach ($ScriptTestLookalike in @('scripts/tests/NewUnwiredTest.ps1', 'scripts/tests/Test-SourceControlPolicy.ps1.bak', 'scripts/tests/Test-SourceControlPolicy.md', 'Scripts/tests/Test-SourceControlPolicy.ps1', 'scripts/test/Test-SourceControlPolicy.ps1')) {
+	Assert-Rejected { Get-PathCheckSelection $ScriptTestLookalike @{} } 'path_unclassified'
+}
 $AttributesPolicy = @(Get-PathCheckSelection '.gitattributes' @{})
 Assert-True ($AttributesPolicy -ccontains 'controller-contract' -and $AttributesPolicy -ccontains 'controller-operational-proof') 'Attribute policy changes should remain classifiable while triggering global attribute evaluation.'
 Assert-Rejected { Get-PathCheckSelection 'Setup.ps1' @{} } 'path_unclassified'
@@ -227,10 +234,37 @@ try {
 	[IO.File]::Copy((Join-Path $FixtureRepo 'Content\source.bin'),(Join-Path $FixtureRepo 'Content\copy.bin'))
 	[void](New-Item -ItemType Directory -Path (Join-Path $FixtureRepo 'visuals') -Force)
 	[IO.File]::Move((Join-Path $FixtureRepo 'docs\rename.md'),(Join-Path $FixtureRepo 'visuals\renamed.md'))
+	Write-Fixture 'scripts/tests/Test-ObservabilityContract.ps1' "Write-Output 'observability fixture'`n"
+	Write-Fixture 'scripts/tests/Test-SourceControlPolicy.ps1' "Write-Output 'source policy fixture'`n"
+	Write-Fixture 'Source/GameCore/SelectorFixture.cpp' "// native source fixture`n"
 	Write-Fixture 'docs/readme.md' "head`n"; $null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','head'); $HeadRevision=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
 	$Tree=[string]@(Invoke-FixtureGit @('rev-parse',"$HeadRevision`^{tree}"))[0]
 	$MergeRevision=(@("synthetic merge" | & git -C $FixtureRepo commit-tree $Tree -p $BaseRevision -p $HeadRevision) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Synthetic merge creation should succeed.'
 	$Context=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$MergeRevision;controllerRevision=$BaseRevision}
+	# GitHub can keep the event base while its synthetic merge uses a newer
+	# target tip. Only that verified first parent may supply controller bytes.
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BaseRevision)
+	Write-Fixture 'docs/accepted.md' "advanced target tip`n"
+	[IO.File]::AppendAllText($TargetController,"`n# accepted target controller bytes`n",(New-Object Text.UTF8Encoding($false)))
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','accepted target advances'); $AcceptedRevision=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$AcceptedControllerOid=[string]@(Invoke-FixtureGit @('rev-parse',"$AcceptedRevision`:$ControllerPath"))[0]
+	$StaleMerge=(@('stale event base merge' | & git -C $FixtureRepo commit-tree $Tree -p $AcceptedRevision -p $HeadRevision) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Stale-base synthetic merge creation should succeed.'
+	# The live workflow passes the verified first parent as baseRevision so the
+	# previously accepted closed selector (which requires base == controller and
+	# ordered base/head parents) can produce this transition PR's shadow report.
+	$LiveContext=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$AcceptedRevision;headRevision=$HeadRevision;workflowRevision=$StaleMerge;controllerRevision=$AcceptedRevision}
+	$LiveParents=([string]@(Invoke-FixtureGit @('show','-s','--format=%P',$StaleMerge))[0]).Split(' ')
+	Assert-True ($LiveContext.baseRevision -ceq $LiveContext.controllerRevision -and $LiveParents.Count -eq 2 -and $LiveParents[0] -ceq $LiveContext.baseRevision -and $LiveParents[1] -ceq $LiveContext.headRevision) 'Live context must satisfy the previously accepted selector relationship and workflow-parent checks despite a stale event base.'
+	$LiveReport=New-CiSelectionReport $LiveContext $FixtureRepo
+	Assert-True ($LiveReport.source.baseRevision -ceq $AcceptedRevision -and $LiveReport.execution.controllerBlobOid -ceq $AcceptedControllerOid -and $AcceptedControllerOid -cne $BaseControllerOid -and $LiveReport.execution.reason -ceq 'classified') 'Compatible live context must retain accepted first-parent comparison and controller bytes.'
+	$CalledStaleContext=[pscustomobject][ordered]@{kind='workflow_call';runId=$RunId;runAttempt=$RunAttempt;callerKind='pull_request';baseRevision=$AcceptedRevision;headRevision=$HeadRevision;workflowRevision=$StaleMerge;revision=$null;controllerRevision=$AcceptedRevision}
+	Assert-True ((New-CiSelectionReport $CalledStaleContext $FixtureRepo).source.baseRevision -ceq $AcceptedRevision) 'Called pull requests must use the same accepted first parent.'
+	$WrongHeadMerge=(@('wrong head merge' | & git -C $FixtureRepo commit-tree $Tree -p $AcceptedRevision -p $BaseRevision) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Wrong-head merge fixture creation should succeed.'
+	$WrongHeadContext=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$AcceptedRevision;headRevision=$HeadRevision;workflowRevision=$WrongHeadMerge;controllerRevision=$AcceptedRevision}
+	Assert-Rejected { New-CiSelectionReport $WrongHeadContext $FixtureRepo } 'workflow_revision_parents_invalid'
+	$WrongControllerContext=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$StaleMerge;controllerRevision=$BaseRevision}
+	Assert-Rejected { New-CiSelectionReport $WrongControllerContext $FixtureRepo } 'workflow_revision_parents_invalid'
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$HeadRevision)
 	$Report=New-CiSelectionReport $Context $FixtureRepo
 	$ScheduleReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=$RunAttempt;revision=$HeadRevision;controllerRevision=$HeadRevision}) $FixtureRepo
 	$ScheduledClean=@($ScheduleReport.selection.obligations | Where-Object id -eq 'clean-package-provenance-smoke')[0]
@@ -241,6 +275,15 @@ try {
 	Assert-True ($CalledReport.source.kind -ceq 'workflow_call' -and $CalledReport.source.callerKind -ceq 'pull_request' -and $CalledReport.source.workflowRevision -ceq $MergeRevision) 'Reusable invocation reports must preserve caller kind and bind the caller workflow revision.'
 	$HeadControllerOid=[string]@(Invoke-FixtureGit @('rev-parse',"$HeadRevision`:$ControllerPath"))[0]
 	Assert-True ($Report.execution.controllerRevision -ceq $BaseRevision -and $Report.execution.controllerBlobOid -ceq $BaseControllerOid -and $Report.execution.controllerBlobOid -cne $HeadControllerOid -and $Report.execution.controllerSha256 -cmatch '^[0-9a-f]{64}$') 'Accepted controller identity should remain bound to base bytes when head modifies the selector.'
+	Assert-True ($Report.execution.reason -ceq 'classified' -and @($Report.classification.uncertainties).Count -eq 0) 'Known script tests and native source should produce a classified report without conservative uncertainty.'
+	foreach ($ScriptTestPath in @('scripts/tests/Test-ObservabilityContract.ps1', 'scripts/tests/Test-SourceControlPolicy.ps1')) {
+		Assert-True ($Report.classification.changedPaths -ccontains $ScriptTestPath) "Changed script test '$ScriptTestPath' should remain visible in the report."
+		$PortableObligation=@($Report.selection.obligations | Where-Object id -eq 'portable')[0]
+		Assert-True ($PortableObligation.selected -and $PortableObligation.reasons -ccontains "path:$ScriptTestPath") "Changed script test '$ScriptTestPath' should select portable proof."
+	}
+	$NativeObligation=@($Report.selection.obligations | Where-Object id -eq 'native-client-server-compile')[0]
+	$EditorObligation=@($Report.selection.obligations | Where-Object id -eq 'unreal-editor-automation')[0]
+	Assert-True ($NativeObligation.reasons -ccontains 'path:Source/GameCore/SelectorFixture.cpp' -and $EditorObligation.reasons -ccontains 'path:Source/GameCore/SelectorFixture.cpp') 'Mixed script-test and source changes should retain native and Editor obligations.'
 	Assert-True ($Report.policy.digest -ceq (Get-PolicyDigest)) 'Each report should bind the complete normalized selector policy source.'
 	$PolicyMutationPath=Join-Path $FixtureRoot 'selector-policy-mutation.ps1'
 	$PolicySource=[IO.File]::ReadAllText($SourceScript,$script:StrictUtf8)
@@ -270,6 +313,12 @@ try {
 	$JsonPath2=Join-Path $FixtureRoot 'report-2.json'; [void](Write-BoundedUtf8Json $Report $JsonPath2)
 	Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($JsonPath)) -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($JsonPath2))) 'Report bytes should be deterministic.'
 	Assert-Rejected { Write-BoundedUtf8Json $Report (Join-Path $FixtureRoot 'too-small.json') ($Length-1) } 'report_size_limit'
+	Write-Fixture 'scripts/tests/NewUnwiredTest.ps1' "Write-Output 'not wired into CI'`n"
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','unwired script test'); $UnwiredHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$UnwiredTree=[string]@(Invoke-FixtureGit @('rev-parse',"$UnwiredHead`^{tree}"))[0]
+	$UnwiredMerge=(@('synthetic unwired merge' | & git -C $FixtureRepo commit-tree $UnwiredTree -p $HeadRevision -p $UnwiredHead) -join '').Trim()
+	Assert-True ($LASTEXITCODE -eq 0) 'Unwired-test synthetic merge creation should succeed.'
+	Assert-Rejected { New-CiSelectionReport ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$HeadRevision;headRevision=$UnwiredHead;workflowRevision=$UnwiredMerge;controllerRevision=$HeadRevision}) $FixtureRepo } 'path_unclassified'
 
 	# Revision-specific attributes: deleted/source reads base; new/destination
 	# reads head. A changed root/nested policy forces whole-tree re-evaluation.
