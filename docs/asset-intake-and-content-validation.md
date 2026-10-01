@@ -258,6 +258,7 @@ Under the separately authorized engine gate, run the live local scanner. Its
 wrapper first builds the exact `AethelnOnlineEditor Win64 Development` target
 and derives the exact versioned toolchain and module evidence from that build:
 
+    New-Item -ItemType Directory -Path TestResults -Force
     powershell -NoProfile -File scripts/content/Invoke-ContentValidation.ps1 -EngineRoot <UE-5.8.1-source> -OutputPath TestResults/content-validation-report.json
 
 `-EngineRoot` is mandatory. The wrapper verifies the clean repository revision,
@@ -269,6 +270,63 @@ set, then launches
 malformed output. `-AssetRegistrySnapshotPath` is test-only and is rejected
 unless `-AllowTestRegistrySnapshot` is also present; the guard is not authority
 to substitute a fixture for live editor evidence.
+
+The wrapper writes each run to unique pending files under the retained output
+directory. A failed build, commandlet, or report check leaves the previous
+published report and logs unchanged; pending files are diagnostics, not accepted
+evidence. After a valid run, byte-verified copies of the previous outputs are
+retained under `.previous.*` names while the new logs and then the report are
+published by handle-relative renames. If publication fails partway, the wrapper
+restores the previous published bytes from those copies or reports the exact
+retained backup paths for manual recovery. Only the requested report path is
+the current published result.
+
+Only one invocation may use an output directory at a time. The wrapper holds an
+exclusive handle to `.content-validation.output.lock` from admission through
+publication or rollback; a second invocation fails before launching the build.
+The lock file may remain after a process exits, but the handle, not the file's
+presence or timestamp, determines ownership, so an abandoned file is not a
+stale-lock ambiguity. The Editor build starts suspended and is assigned to a
+kill-on-close Windows job before it resumes, so its batch launcher and native
+descendants share one cleanup boundary. Build stdout and stderr are streamed
+into the retained pending log with a 16 MiB capture cap; overflow or the
+separate `-BuildTimeoutSeconds` limit (24 hours by default) terminates the
+owned job and waits for its processes and pipe to quiesce before returning.
+Neither failure replaces the old published evidence. The commandlet's pending
+log and report are monitored
+against separate 16 MiB limits and rejected before in-memory reading if they
+exceed those limits. A fast writer can overshoot a monitored on-disk limit
+between samples, so failed-run pending files still require ordinary review.
+
+The output directory must already exist. The wrapper creates no directories:
+it holds and validates each ancestor against rename and reparse aliases, and
+creates pending files relative to the retained directory handle. An in-place
+reparse conversion is not prevented by the hold; the relative create fails
+closed without writing through the new alias. In a fresh checkout, create
+`TestResults` separately as shown above, then run the wrapper. At admission,
+the wrapper refuses another run when that exact output directory already has
+more than 122 retained `.pending`/`.previous` files or their combined logical
+size exceeds 1 GiB; it reserves room for three pending files and three possible
+backups if publication fails. It also checks prior canonical output sizes before
+the build and the actual pending and backup byte budget before copying, rejecting
+an oversized prior file before any backup is made. These
+are local evidence-retention safety limits, not content budgets. The wrapper
+never silently prunes earlier diagnostic evidence. To recover space, first
+confirm no validation run is active, inspect the canonical report and logs,
+then list only the retained files in the **exact** output directory and review
+which are no longer needed:
+
+```powershell
+$EvidenceDirectory = '<exact output directory>'
+Get-ChildItem -LiteralPath $EvidenceDirectory -File -Force |
+  Where-Object Name -Match '^\.(?:(?:content-validation-report|content-validation|editor-build)\.[0-9a-f]{32}\.pending|previous\.[0-9a-f]{32}\.(?:content-validation-report\.json|content-validation\.log|editor-build\.log))$' |
+  Select-Object FullName, Length, LastWriteTimeUtc
+```
+
+Preserve any evidence needed for diagnosis. Remove only individually reviewed,
+exact retained paths after approval; never delete the canonical report/logs or
+an entire output directory as a cleanup shortcut. If automatic rollback reports
+a retained backup path, restore or archive that exact file before cleanup.
 
 After the separately authorized, serialized
 `Build-PackagedArtifacts.ps1 -Stage All` run completes, capture only its two

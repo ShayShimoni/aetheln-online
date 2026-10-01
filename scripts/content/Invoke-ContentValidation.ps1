@@ -15,6 +15,8 @@ param(
 	[string] $OutputPath,
 	[ValidateRange(1, 86400)]
 	[int] $TimeoutSeconds = 600,
+	[ValidateRange(1, 86400)]
+	[int] $BuildTimeoutSeconds = 86400,
 	[string] $AssetRegistrySnapshotPath,
 	[switch] $AllowTestRegistrySnapshot
 )
@@ -40,9 +42,12 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Pipes;
 using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Aetheln {
  public static class FileIdentity {
@@ -57,44 +62,84 @@ namespace Aetheln {
   }
  }
  public sealed class OutputGuard : IDisposable {
-  const uint ShareRead=0x00000001, ShareWrite=0x00000002;
-  const uint CreateNew=1, OpenExisting=3;
+  const uint ShareRead=0x00000001;
+  const int MaxRetainedArtifacts=128;
+  const long MaxRetainedBytes=1073741824L;
+  const long MaxBuildLogBytes=16777216L;
+  const long MaxCommandletLogBytes=16777216L;
+  const long MaxReportBytes=16777216L;
+  const uint OpenExisting=3;
   const uint GenericRead=0x80000000, GenericWrite=0x40000000, DeleteAccess=0x00010000;
   const uint ReadAttributes=0x00000080;
   const uint HandleFlagInherit=0x00000001;
-  const uint AttributeNormal=0x00000080, AttributeReparsePoint=0x00000400;
+  const uint AttributeNormal=0x00000080, AttributeDirectory=0x00000010, AttributeReparsePoint=0x00000400;
   const uint FlagBackupSemantics=0x02000000, FlagOpenReparsePoint=0x00200000;
   static readonly IntPtr InvalidHandle=new IntPtr(-1);
   [StructLayout(LayoutKind.Sequential)] struct ByHandleFileInformation { public uint Attributes; public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime, LastAccessTime, LastWriteTime; public uint VolumeSerialNumber, FileSizeHigh, FileSizeLow, NumberOfLinks, FileIndexHigh, FileIndexLow; }
-  [StructLayout(LayoutKind.Sequential)] struct SecurityAttributes { public int Length; public IntPtr SecurityDescriptor; public int InheritHandle; }
+  [StructLayout(LayoutKind.Sequential)] struct UnicodeString { public ushort Length, MaximumLength; public IntPtr Buffer; }
+  [StructLayout(LayoutKind.Sequential)] struct ObjectAttributes { public int Length; public IntPtr RootDirectory, ObjectName; public uint Attributes; public IntPtr SecurityDescriptor, SecurityQualityOfService; }
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr CreateFile(string fileName,uint desiredAccess,uint shareMode,IntPtr securityAttributes,uint creationDisposition,uint flagsAndAttributes,IntPtr templateFile);
-  [DllImport("kernel32.dll",EntryPoint="CreateFileW",CharSet=CharSet.Unicode,SetLastError=true)] static extern IntPtr CreateInheritableFile(string fileName,uint desiredAccess,uint shareMode,ref SecurityAttributes securityAttributes,uint creationDisposition,uint flagsAndAttributes,IntPtr templateFile);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr handle,out ByHandleFileInformation information);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFilePointerEx(IntPtr handle,long distance,out long newPosition,uint moveMethod);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetEndOfFile(IntPtr handle);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool WriteFile(IntPtr handle,byte[] buffer,uint bytesToWrite,out uint bytesWritten,IntPtr overlapped);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool FlushFileBuffers(IntPtr handle);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle,uint mask,uint flags);
+  [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileInformationByHandle(IntPtr handle,int informationClass,IntPtr information,uint size);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+  [StructLayout(LayoutKind.Sequential)] struct IoStatusBlock { public IntPtr Status; public UIntPtr Information; }
+  [DllImport("ntdll.dll")] static extern int NtSetInformationFile(IntPtr handle,out IoStatusBlock status,IntPtr information,uint length,int informationClass);
+  [DllImport("ntdll.dll")] static extern int NtCreateFile(out IntPtr handle,uint access,ref ObjectAttributes attributes,out IoStatusBlock status,IntPtr allocationSize,uint fileAttributes,uint share,uint disposition,uint options,IntPtr eaBuffer,uint eaLength);
   readonly System.Collections.Generic.List<IntPtr> handles=new System.Collections.Generic.List<IntPtr>();
   readonly System.Collections.Generic.Dictionary<string,string> outputIdentities=new System.Collections.Generic.Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+  readonly System.Collections.Generic.Dictionary<string,IntPtr> directoryHandles=new System.Collections.Generic.Dictionary<string,IntPtr>(StringComparer.OrdinalIgnoreCase);
   readonly System.Collections.Generic.HashSet<string> retainedPaths=new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
   readonly System.Collections.Generic.List<string> retainedIdentities=new System.Collections.Generic.List<string>();
   readonly string boundaryRoot;
+  long retainedArtifactBytes;
   static string Identity(IntPtr handle,out uint attributes) {
    ByHandleFileInformation information;
    if(!GetFileInformationByHandle(handle,out information)) throw new Win32Exception(Marshal.GetLastWin32Error(),"GetFileInformationByHandle failed for retained output boundary.");
    attributes=information.Attributes;
    return information.VolumeSerialNumber.ToString("x8")+":"+information.FileIndexHigh.ToString("x8")+information.FileIndexLow.ToString("x8");
   }
+  public static void EnsureDirectory(string root,string target,string[] protectedIdentityValues) {
+   string boundary=Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+   string destination=Path.GetFullPath(target).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
+   if(!destination.StartsWith(boundary+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("output_guard_directory_outside_boundary");
+   var protectedIdentities=new System.Collections.Generic.HashSet<string>(protectedIdentityValues,StringComparer.Ordinal);
+   var held=new System.Collections.Generic.List<IntPtr>();
+   try {
+    string cursor=boundary;
+    IntPtr handle=CreateFile(cursor,ReadAttributes,ShareRead,IntPtr.Zero,OpenExisting,FlagBackupSemantics|FlagOpenReparsePoint,IntPtr.Zero);
+    if(handle==InvalidHandle) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_directory_root_open_failed: "+cursor);
+    held.Add(handle);
+    uint attributes; string identity=Identity(handle,out attributes);
+    if((attributes&(AttributeDirectory|AttributeReparsePoint))!=AttributeDirectory||protectedIdentities.Contains(identity)) throw new InvalidOperationException("output_guard_directory_root_invalid: "+cursor);
+    foreach(string segment in destination.Substring(boundary.Length+1).Split(Path.DirectorySeparatorChar)) {
+     if(String.IsNullOrEmpty(segment)||segment=="."||segment=="..") throw new InvalidOperationException("output_guard_directory_segment_invalid");
+     cursor=Path.Combine(cursor,segment);
+     handle=CreateFile(cursor,ReadAttributes,ShareRead,IntPtr.Zero,OpenExisting,FlagBackupSemantics|FlagOpenReparsePoint,IntPtr.Zero);
+     if(handle==InvalidHandle) {
+      int error=Marshal.GetLastWin32Error();
+      if(error==2||error==3) throw new DirectoryNotFoundException("output_guard_directory_missing: "+cursor);
+      throw new Win32Exception(error,"output_guard_directory_open_failed: "+cursor);
+     }
+     held.Add(handle);
+     identity=Identity(handle,out attributes);
+     if((attributes&(AttributeDirectory|AttributeReparsePoint))!=AttributeDirectory||protectedIdentities.Contains(identity)) throw new InvalidOperationException("output_path_reparse or alias during guarded directory validation: "+cursor);
+    }
+   }
+   finally { for(int index=held.Count-1;index>=0;--index) CloseHandle(held[index]); }
+  }
   void RetainDirectory(string path,System.Collections.Generic.HashSet<string> protectedIdentities) {
    string full=Path.GetFullPath(path);
    if(!retainedPaths.Add(full)) return;
-   IntPtr handle=CreateFile(full,ReadAttributes,ShareRead|ShareWrite,IntPtr.Zero,OpenExisting,FlagBackupSemantics|FlagOpenReparsePoint,IntPtr.Zero);
+   IntPtr handle=CreateFile(full,ReadAttributes,ShareRead,IntPtr.Zero,OpenExisting,FlagBackupSemantics|FlagOpenReparsePoint,IntPtr.Zero);
    if(handle==InvalidHandle) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_directory_open_failed: "+full);
-   handles.Add(handle);
+   handles.Add(handle); directoryHandles.Add(full,handle);
    uint attributes; string identity=Identity(handle,out attributes);
-   if((attributes&AttributeReparsePoint)!=0) throw new InvalidOperationException("output_path_reparse during retained output setup: "+full);
+   if((attributes&(AttributeDirectory|AttributeReparsePoint))!=AttributeDirectory) throw new InvalidOperationException("output_path_reparse during retained output setup: "+full);
    if(protectedIdentities.Contains(identity)) throw new InvalidOperationException("output_path_alias during retained output setup: "+full);
    retainedIdentities.Add(identity);
   }
@@ -111,23 +156,102 @@ namespace Aetheln {
    paths.Reverse();
    foreach(string path in paths) RetainDirectory(path,protectedIdentities);
   }
+  IntPtr OpenRelativeFile(string path,bool create,uint shareAccess=ShareRead,uint disposition=0) {
+   string full=Path.GetFullPath(path), parent=Path.GetDirectoryName(full), name=Path.GetFileName(full);
+   if(String.IsNullOrEmpty(name)||name=="."||name=="..") throw new InvalidOperationException("output_guard_relative_name_invalid");
+   IntPtr directory;
+   if(!directoryHandles.TryGetValue(parent,out directory)) throw new InvalidOperationException("output_guard_relative_parent_not_retained");
+   IntPtr nameBuffer=Marshal.StringToHGlobalUni(name), unicodeBuffer=IntPtr.Zero;
+   try {
+    UnicodeString unicode=new UnicodeString(); unicode.Length=(ushort)(name.Length*2); unicode.MaximumLength=(ushort)((name.Length+1)*2); unicode.Buffer=nameBuffer;
+    unicodeBuffer=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));
+    Marshal.StructureToPtr(unicode,unicodeBuffer,false);
+    ObjectAttributes attributes=new ObjectAttributes(); attributes.Length=Marshal.SizeOf(typeof(ObjectAttributes)); attributes.RootDirectory=directory; attributes.ObjectName=unicodeBuffer; attributes.Attributes=0x1000; // OBJ_DONT_REPARSE
+    IntPtr opened; IoStatusBlock status;
+    int result=NtCreateFile(out opened,GenericRead|0x00100000U|(create?GenericWrite|DeleteAccess:0),ref attributes,out status,IntPtr.Zero,AttributeNormal,shareAccess,disposition==0?(create?2U:1U):disposition,create?0x60U:0x00200060U,IntPtr.Zero,0); // SYNCHRONIZE, FILE_NON_DIRECTORY_FILE, synchronous I/O; no-follow on existing files
+    if(disposition==3&&result==unchecked((int)0xC0000043)) throw new InvalidOperationException("output_guard_directory_busy: "+parent);
+    if(!create&&(result==unchecked((int)0xC0000034)||result==unchecked((int)0xC000003A))) return InvalidHandle;
+    if(result!=0) throw new IOException("output_guard_relative_"+(create?"create":"open")+"_failed: NTSTATUS 0x"+result.ToString("X8")+": "+full);
+    return opened;
+   }
+   finally { if(unicodeBuffer!=IntPtr.Zero) Marshal.FreeHGlobal(unicodeBuffer); Marshal.FreeHGlobal(nameBuffer); }
+  }
   void CreateOutput(string path,System.Collections.Generic.HashSet<string> protectedIdentities,System.Collections.Generic.HashSet<string> uniqueOutputs) {
    string full=Path.GetFullPath(path);
    RetainAncestors(full,protectedIdentities);
-   SecurityAttributes security=new SecurityAttributes(); security.Length=Marshal.SizeOf(typeof(SecurityAttributes)); security.InheritHandle=0;
-   IntPtr handle=CreateInheritableFile(full,GenericRead|GenericWrite|DeleteAccess,ShareRead|ShareWrite,ref security,CreateNew,AttributeNormal|FlagOpenReparsePoint,IntPtr.Zero);
-   if(handle==InvalidHandle) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_create_failed: "+full);
+   IntPtr handle=OpenRelativeFile(full,true);
    handles.Add(handle);
    uint attributes; string identity=Identity(handle,out attributes);
    if((attributes&AttributeReparsePoint)!=0) throw new InvalidOperationException("output_path_reparse during retained output setup: "+full);
    if(protectedIdentities.Contains(identity)||!uniqueOutputs.Add(identity)) throw new InvalidOperationException("output_path_alias during retained output setup: "+full);
    retainedIdentities.Add(identity); outputIdentities.Add(full,identity);
   }
+  static bool IsRetainedArtifact(string name) {
+   return System.Text.RegularExpressions.Regex.IsMatch(name,@"^\.(?:(?:content-validation-report|content-validation|editor-build)\.[0-9a-f]{32}\.pending|previous\.[0-9a-f]{32}\.(?:content-validation-report\.json|content-validation\.log|editor-build\.log))$",System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+  }
+  void AssertRetentionBudget(string directory) {
+   IntPtr retained;
+   if(!directoryHandles.TryGetValue(directory,out retained)) throw new InvalidOperationException("output_guard_retention_parent_not_retained");
+   uint directoryAttributes; Identity(retained,out directoryAttributes);
+   if((directoryAttributes&(AttributeDirectory|AttributeReparsePoint))!=AttributeDirectory) throw new InvalidOperationException("output_path_reparse during retention admission: "+directory);
+   int count=0; long bytes=0;
+   foreach(string path in Directory.EnumerateFiles(directory)) {
+    if(!IsRetainedArtifact(Path.GetFileName(path))) continue;
+    FileAttributes attributes=File.GetAttributes(path);
+    if((attributes&FileAttributes.ReparsePoint)!=0) throw new InvalidOperationException("output_guard_retained_artifact_reparse: "+path);
+    FileInfo item=new FileInfo(path);
+    count++;
+    if(item.Length>MaxRetainedBytes-bytes) throw new InvalidOperationException("output_guard_retention_budget_exceeded: "+directory);
+    bytes+=item.Length;
+    if(count>MaxRetainedArtifacts-6) throw new InvalidOperationException("output_guard_retention_budget_exceeded: "+directory);
+   }
+   Identity(retained,out directoryAttributes);
+   if((directoryAttributes&(AttributeDirectory|AttributeReparsePoint))!=AttributeDirectory) throw new InvalidOperationException("output_path_reparse during retention admission: "+directory);
+   retainedArtifactBytes=bytes;
+  }
+  void AcquireDirectoryLock(string directory,System.Collections.Generic.HashSet<string> protectedIdentities) {
+   IntPtr selected=OpenRelativeFile(Path.Combine(directory,".content-validation.output.lock"),true,0,3); // FILE_OPEN_IF, no sharing; stale file is harmless after its handle closes.
+   handles.Add(selected);
+   uint attributes; string identity=Identity(selected,out attributes);
+   if((attributes&AttributeReparsePoint)!=0||protectedIdentities.Contains(identity)) throw new InvalidOperationException("output_guard_directory_lock_alias: "+directory);
+  }
+  public long AssertPublicationBudget(string[] pendingPaths,string[] finalPaths,string[] protectedIdentityValues) {
+   var protectedIdentities=new System.Collections.Generic.HashSet<string>(protectedIdentityValues,StringComparer.Ordinal);
+   long available=MaxRetainedBytes-retainedArtifactBytes;
+   foreach(string pending in pendingPaths) {
+    long length=GetLength(pending);
+    if(length>available) throw new InvalidOperationException("output_guard_retention_budget_exceeded: pending output " + pending);
+    available-=length;
+   }
+   long backupBudget=available;
+   foreach(string final in finalPaths) {
+    IntPtr previous=OpenRelativeFile(final,false);
+    if(previous==InvalidHandle) continue;
+    try {
+     uint attributes; string identity=Identity(previous,out attributes);
+     if((attributes&AttributeReparsePoint)!=0||protectedIdentities.Contains(identity)) throw new InvalidOperationException("output_guard_backup_alias_or_reparse: "+final);
+     using(SafeFileHandle safe=new SafeFileHandle(previous,false))
+     using(FileStream stream=new FileStream(safe,FileAccess.Read,4096,false)) {
+      if(stream.Length>available) throw new InvalidOperationException("output_guard_retention_budget_exceeded: prior output " + final);
+      available-=stream.Length;
+     }
+    }
+    finally { CloseHandle(previous); }
+   }
+   return backupBudget;
+  }
   public OutputGuard(string root,string[] paths,string[] protectedIdentityValues) {
    boundaryRoot=Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar);
    var protectedIdentities=new System.Collections.Generic.HashSet<string>(protectedIdentityValues,StringComparer.Ordinal);
    var uniqueOutputs=new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
-   try { foreach(string path in paths) CreateOutput(path,protectedIdentities,uniqueOutputs); }
+   try {
+    string outputDirectory=Path.GetDirectoryName(Path.GetFullPath(paths[0]));
+    foreach(string path in paths) if(!String.Equals(outputDirectory,Path.GetDirectoryName(Path.GetFullPath(path)),StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("output_guard_multiple_directories_unsupported");
+    RetainAncestors(paths[0],protectedIdentities);
+    AcquireDirectoryLock(outputDirectory,protectedIdentities);
+    AssertRetentionBudget(outputDirectory);
+    foreach(string path in paths) CreateOutput(path,protectedIdentities,uniqueOutputs);
+   }
    catch { Dispose(); throw; }
   }
   public string GetIdentity(string path) {
@@ -154,6 +278,70 @@ namespace Aetheln {
    if(bytes.Length>0&&(!WriteFile(selected,bytes,(uint)bytes.Length,out written,IntPtr.Zero)||written!=(uint)bytes.Length)) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_write_failed");
    if(!FlushFileBuffers(selected)) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_flush_failed");
   }
+  public int RunCapturedBuild(string commandLine,string workingDirectory,string path,int timeoutSeconds,bool allowTestFault) {
+   IntPtr selected=FindOutputHandle(path);
+   long position;
+   if(!SetFilePointerEx(selected,0,out position,0)||!SetEndOfFile(selected)) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_truncate_failed");
+   string shell=Path.Combine(Environment.SystemDirectory,"cmd.exe");
+   using(AnonymousPipeServerStream pipe=new AnonymousPipeServerStream(PipeDirection.In,HandleInheritability.Inheritable))
+   using(ContentValidationJob job=new ContentValidationJob()) {
+    Process process=null; Task drain=null;
+    object gate=new object(); long count=0; bool overflow=false; Exception pumpError=null; bool sawEof=false;
+    bool injectPumpFault=allowTestFault&&String.Equals(Environment.GetEnvironmentVariable("AETHELN_CONTENT_TEST_BUILD_PUMP_FAULT"),"1",StringComparison.Ordinal);
+    try {
+     process=job.StartSuspended(shell,commandLine,workingDirectory,pipe.ClientSafePipeHandle.DangerousGetHandle().ToInt64());
+     pipe.DisposeLocalCopyOfClientHandle();
+     drain=Task.Run(delegate() {
+      byte[] buffer=new byte[8192]; int n;
+      try {
+       while((n=pipe.Read(buffer,0,buffer.Length))>0) {
+        lock(gate) {
+         if(injectPumpFault&&count>0&&n>=1024) throw new IOException("fixture_capture_pump_fault");
+         if(count+n>MaxBuildLogBytes) { overflow=true; continue; }
+         uint written;
+         if(!WriteFile(selected,buffer,(uint)n,out written,IntPtr.Zero)||written!=(uint)n) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_build_log_write_failed");
+         count+=n;
+        }
+       }
+       sawEof=true;
+      }
+      catch(Exception error) { lock(gate) { if(pumpError==null) pumpError=error; } }
+     });
+     Stopwatch clock=Stopwatch.StartNew(); string failure=null;
+     while(true) {
+      lock(gate) {
+       if(overflow) failure="build_output_limit_exceeded: captured log reached 16 MiB; see retained pending log "+path;
+       else if(pumpError!=null) failure="build_capture_incomplete: "+pumpError.Message;
+      }
+      if(failure!=null) break;
+      if(clock.Elapsed.TotalSeconds>=timeoutSeconds) { failure="build_timeout_exceeded: editor build exceeded "+timeoutSeconds+" seconds (launcherExited="+process.HasExited+", captureCompleted="+drain.IsCompleted+", jobEmpty="+job.IsEmpty()+", capturedBytes="+count+")"; break; }
+      if(drain.IsCompleted&&process.HasExited&&job.IsEmpty()) break;
+      Thread.Sleep(50);
+     }
+     if(failure!=null) {
+      job.TerminateAndWait(10000);
+      bool launcherExited=process.WaitForExit(5000), pumpStopped=drain.Wait(5000);
+      if(!launcherExited||!pumpStopped||!job.IsEmpty()) throw new IOException("build_cleanup_unproven after "+failure);
+      // A failed reader cannot observe EOF; empty job plus exited launcher proves process cleanup independently.
+      if(!sawEof&&pumpError==null) throw new IOException("build_capture_incomplete: pipe did not reach EOF after cleanup");
+      if(!FlushFileBuffers(selected)) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_build_log_flush_failed");
+      throw new IOException(failure);
+     }
+     drain.Wait();
+     if(!sawEof) throw new IOException("build_capture_incomplete: pipe did not reach EOF");
+     if(!FlushFileBuffers(selected)) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_build_log_flush_failed");
+     return process.ExitCode;
+    }
+    finally {
+     if(!job.IsEmpty()) job.TerminateAndWait(10000);
+     if(process!=null) process.Dispose();
+    }
+   }
+  }
+  public void AssertCurrentOutputBounds(string commandletLog,string report) {
+   if(GetLength(commandletLog)>MaxCommandletLogBytes) throw new IOException("commandlet_log_limit_exceeded: 16 MiB");
+   if(GetLength(report)>MaxReportBytes) throw new IOException("content_report_limit_exceeded: 16 MiB");
+  }
   public long GetLength(string path) {
    using(SafeFileHandle safe=new SafeFileHandle(FindOutputHandle(path),false))
    using(FileStream stream=new FileStream(safe,FileAccess.Read,4096,false)) return stream.Length;
@@ -165,12 +353,88 @@ namespace Aetheln {
   }
   public string ReadUtf8(string path) {
    using(SafeFileHandle safe=new SafeFileHandle(FindOutputHandle(path),false))
-   using(FileStream stream=new FileStream(safe,FileAccess.Read,4096,false))
-   using(StreamReader reader=new StreamReader(stream,new UTF8Encoding(false,true),true,4096,false)) { stream.Position=0; return reader.ReadToEnd(); }
+   using(FileStream stream=new FileStream(safe,FileAccess.Read,4096,false)) {
+    stream.Position=0;
+    if(stream.Length>MaxReportBytes) throw new IOException("output_guard_read_limit_exceeded: 16 MiB");
+    byte[] bytes=new byte[(int)stream.Length]; int offset=0;
+    while(offset<bytes.Length) { int n=stream.Read(bytes,offset,bytes.Length-offset); if(n==0) throw new IOException("output_guard_read_incomplete"); offset+=n; }
+    if(stream.ReadByte()!=-1) throw new IOException("output_guard_read_limit_exceeded: output grew during read");
+    return new UTF8Encoding(false,true).GetString(bytes);
+   }
   }
   public void Release(string path) {
    string full=Path.GetFullPath(path); IntPtr selected=FindOutputHandle(full);
    CloseHandle(selected); handles.Remove(selected); outputIdentities.Remove(full);
+  }
+  public void DeleteRetained(string path) {
+   IntPtr selected=FindOutputHandle(path);
+   IntPtr disposition=Marshal.AllocHGlobal(4);
+   try {
+    Marshal.WriteInt32(disposition,1);
+    if(!SetFileInformationByHandle(selected,4,disposition,4)) throw new Win32Exception(Marshal.GetLastWin32Error(),"output_guard_delete_retained_failed: "+path);
+   }
+   finally { Marshal.FreeHGlobal(disposition); }
+   Release(path);
+  }
+  public bool BackupExisting(string finalPath,string backupPath,string[] protectedIdentityValues,long maxBytes) {
+   string final=Path.GetFullPath(finalPath), backup=Path.GetFullPath(backupPath);
+   if(!String.Equals(Path.GetDirectoryName(final),Path.GetDirectoryName(backup),StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("output_guard_backup_parent_mismatch");
+   if(!directoryHandles.ContainsKey(Path.GetDirectoryName(final))) throw new InvalidOperationException("output_guard_backup_parent_not_retained");
+   IntPtr previous=OpenRelativeFile(final,false);
+   if(previous==InvalidHandle) return false;
+   try {
+    uint attributes; string identity=Identity(previous,out attributes);
+    if((attributes&AttributeReparsePoint)!=0) throw new InvalidOperationException("output_guard_backup_reparse: "+final);
+    var protectedIdentities=new System.Collections.Generic.HashSet<string>(protectedIdentityValues,StringComparer.Ordinal);
+    if(protectedIdentities.Contains(identity)) throw new InvalidOperationException("output_guard_backup_alias: "+final);
+    using(SafeFileHandle oldSafe=new SafeFileHandle(previous,false))
+    using(FileStream oldStream=new FileStream(oldSafe,FileAccess.Read,65536,false)) {
+    if(oldStream.Length>maxBytes) throw new InvalidOperationException("output_guard_retention_budget_exceeded: prior output " + final);
+    CreateOutput(backup,protectedIdentities,new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal));
+    IntPtr target=FindOutputHandle(backup);
+    using(SafeFileHandle backupSafe=new SafeFileHandle(target,false))
+    using(FileStream backupStream=new FileStream(backupSafe,FileAccess.ReadWrite,65536,false)) {
+     oldStream.CopyTo(backupStream); backupStream.Flush(true);
+     oldStream.Position=0; backupStream.Position=0;
+     using(System.Security.Cryptography.SHA256 oldHash=System.Security.Cryptography.SHA256.Create())
+     using(System.Security.Cryptography.SHA256 backupHash=System.Security.Cryptography.SHA256.Create()) {
+      byte[] original=oldHash.ComputeHash(oldStream), copied=backupHash.ComputeHash(backupStream);
+      for(int index=0;index<original.Length;++index) if(original[index]!=copied[index]) throw new IOException("output_guard_backup_hash_mismatch: "+final);
+     }
+    }
+    }
+    return true;
+   }
+   finally { CloseHandle(previous); }
+  }
+  public void Publish(string pendingPath,string finalPath) {
+   string pending=Path.GetFullPath(pendingPath), final=Path.GetFullPath(finalPath);
+   string parent=Path.GetDirectoryName(pending);
+   if(!String.Equals(parent,Path.GetDirectoryName(final),StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("output_guard_publish_parent_mismatch");
+   string name=Path.GetFileName(final);
+   if(String.IsNullOrEmpty(name)||name=="."||name=="..") throw new InvalidOperationException("output_guard_publish_name_invalid");
+   IntPtr directory;
+   if(!directoryHandles.TryGetValue(parent,out directory)) throw new InvalidOperationException("output_guard_publish_parent_not_retained");
+   uint attributes;
+   Identity(directory,out attributes);
+   if((attributes&AttributeReparsePoint)!=0) throw new InvalidOperationException("output_guard_publish_parent_reparse");
+   IntPtr selected=FindOutputHandle(pending);
+   byte[] nameBytes=Encoding.Unicode.GetBytes(name);
+   int rootOffset=IntPtr.Size, lengthOffset=rootOffset+IntPtr.Size, nameOffset=lengthOffset+4;
+   int size=nameOffset+nameBytes.Length+2;
+   IntPtr buffer=Marshal.AllocHGlobal(size);
+   try {
+    for(int index=0;index<size;++index) Marshal.WriteByte(buffer,index,0);
+    Marshal.WriteByte(buffer,0,1); // ReplaceIfExists; never truncate the previous file.
+    Marshal.WriteIntPtr(buffer,rootOffset,directory);
+    Marshal.WriteInt32(buffer,lengthOffset,nameBytes.Length);
+    Marshal.Copy(nameBytes,0,IntPtr.Add(buffer,nameOffset),nameBytes.Length);
+    IoStatusBlock status;
+    int result=NtSetInformationFile(selected,out status,buffer,(uint)size,10);
+    if(result!=0) throw new IOException("output_guard_publish_rename_failed: NTSTATUS 0x"+result.ToString("X8"));
+    string identity=outputIdentities[pending]; outputIdentities.Remove(pending); outputIdentities[final]=identity;
+   }
+   finally { Marshal.FreeHGlobal(buffer); }
   }
   public void AssertNotProtected(string[] protectedIdentityValues) {
    var protectedIdentities=new System.Collections.Generic.HashSet<string>(protectedIdentityValues,StringComparer.Ordinal);
@@ -189,6 +453,7 @@ namespace Aetheln {
   const uint UseStdHandles = 0x00000100;
   IntPtr handle;
   [StructLayout(LayoutKind.Sequential)] struct IoCounters { public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount; }
+  [StructLayout(LayoutKind.Sequential)] struct BasicAccountingInformation { public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime; public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses; }
   [StructLayout(LayoutKind.Sequential)] struct BasicLimitInformation { public long PerProcessUserTimeLimit, PerJobUserTimeLimit; public uint LimitFlags; public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize; public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass, SchedulingClass; }
   [StructLayout(LayoutKind.Sequential)] struct ExtendedLimitInformation { public BasicLimitInformation BasicLimitInformation; public IoCounters IoInfo; public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed; }
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct StartupInfo { public uint cb; public string reserved, desktop, title; public uint x, y, xSize, ySize, xCountChars, yCountChars, fillAttribute, flags; public short showWindow, reserved2; public IntPtr reserved2Pointer, standardInput, standardOutput, standardError; }
@@ -199,6 +464,8 @@ namespace Aetheln {
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcess(string applicationName, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags, IntPtr environment, string currentDirectory, ref StartupInfo startupInfo, out ProcessInformation processInformation);
   [DllImport("kernel32.dll", SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint exitCode);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job,uint exitCode);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int informationClass,out BasicAccountingInformation information,uint size,out uint returnedSize);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
   public ContentValidationJob() {
    handle=CreateJobObject(IntPtr.Zero,null);
@@ -227,6 +494,21 @@ namespace Aetheln {
     return managed;
    } catch { TerminateProcess(information.process,1); if(managed!=null) managed.Dispose(); throw; }
    finally { CloseHandle(information.thread); CloseHandle(information.process); }
+  }
+  public bool IsEmpty() {
+   if(handle==IntPtr.Zero) throw new ObjectDisposedException("ContentValidationJob");
+   BasicAccountingInformation information; uint returned;
+   if(!QueryInformationJobObject(handle,1,out information,(uint)Marshal.SizeOf(typeof(BasicAccountingInformation)),out returned)) throw new Win32Exception(Marshal.GetLastWin32Error(),"build_job_query_failed");
+   return information.ActiveProcesses==0;
+  }
+  public void TerminateAndWait(int milliseconds) {
+   if(handle==IntPtr.Zero) throw new ObjectDisposedException("ContentValidationJob");
+   if(!TerminateJobObject(handle,1)) throw new Win32Exception(Marshal.GetLastWin32Error(),"build_job_termination_failed");
+   Stopwatch clock=Stopwatch.StartNew();
+   while(!IsEmpty()) {
+    if(clock.ElapsedMilliseconds>=milliseconds) throw new IOException("build_cleanup_unproven: job did not become empty");
+    Thread.Sleep(50);
+   }
   }
   public void Dispose() { IntPtr current=handle; handle=IntPtr.Zero; if(current!=IntPtr.Zero) CloseHandle(current); GC.SuppressFinalize(this); }
   ~ContentValidationJob() { Dispose(); }
@@ -728,18 +1010,27 @@ Assert-ExactStringList @($ReportContract.allowed_promotion_statuses) @('eligible
 Assert-ExactStringList @($ReportContract.allowed_severities) @('error','non_promotion') 'Report allowed_severities'
 Assert-ExactStringList @($ReportContract.allowed_registry_sources) @('live_asset_registry','test_snapshot') 'Report allowed_registry_sources'
 
+$PublishedOutputPath = $OutputPath
+$PublishedLogPath = $LogPath
+$PublishedEditorBuildLogPath = $EditorBuildLogPath
+$PublishedOutputPaths = @($PublishedOutputPath, $PublishedLogPath, $PublishedEditorBuildLogPath)
+Assert-OutputBoundary $PublishedOutputPaths $ImmutableFileStates 'preparation'
+Invoke-OutputOpenTestSeam 'pre-output-directory-create'
+[Aetheln.OutputGuard]::EnsureDirectory($RepositoryRoot, $OutputDirectory, [string[]]@($ImmutableFileStates | ForEach-Object { $_.FileIdentity }))
+Assert-OutputBoundary $PublishedOutputPaths $ImmutableFileStates 'post-directory-creation'
+Invoke-OutputOpenTestSeam 'pre-output-cleanup'
+$PendingId = [guid]::NewGuid().ToString('N')
+$OutputPath = Join-Path $OutputDirectory ('.content-validation-report.' + $PendingId + '.pending')
+$LogPath = Join-Path $OutputDirectory ('.content-validation.' + $PendingId + '.pending')
+$EditorBuildLogPath = Join-Path $OutputDirectory ('.editor-build.' + $PendingId + '.pending')
 $OutputPaths = @($OutputPath, $LogPath, $EditorBuildLogPath)
-Assert-OutputBoundary $OutputPaths $ImmutableFileStates 'preparation'
-New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-Assert-OutputBoundary $OutputPaths $ImmutableFileStates 'post-directory-creation'
-if (Test-Path -LiteralPath $OutputPath) { Remove-Item -LiteralPath $OutputPath -Force }
-if (Test-Path -LiteralPath $LogPath) { Remove-Item -LiteralPath $LogPath -Force }
-if (Test-Path -LiteralPath $EditorBuildLogPath) { Remove-Item -LiteralPath $EditorBuildLogPath -Force }
-
 Assert-OutputBoundary $OutputPaths $ImmutableFileStates 'pre-build mutation'
 $OutputGuard = [Aetheln.OutputGuard]::new(
 	$RepositoryRoot,
 	[string[]]$OutputPaths,
+	[string[]]@($ImmutableFileStates | ForEach-Object { $_.FileIdentity }))
+try {
+$null = $OutputGuard.AssertPublicationBudget([string[]]$OutputPaths, [string[]]$PublishedOutputPaths,
 	[string[]]@($ImmutableFileStates | ForEach-Object { $_.FileIdentity }))
 $ReportFileIdentity = $OutputGuard.GetIdentity($OutputPath)
 Invoke-OutputOpenTestSeam 'pre-build-open'
@@ -749,40 +1040,20 @@ $BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-W
 $EditorBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($BuildScriptPath) + $BuildArguments))
 $BuildExitCode = $null
 $BuildInvocationError = $null
-$BuildProcess = $null
 try {
-	$BuildInfo = New-Object Diagnostics.ProcessStartInfo
-	$BuildInfo.FileName = $BuildScriptPath
-	$BuildInfo.Arguments = ($BuildArguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument $_ }) -join ' '
-	$BuildInfo.WorkingDirectory = $RepositoryRoot
-	$BuildInfo.UseShellExecute = $false
-	$BuildInfo.CreateNoWindow = $true
-	$BuildInfo.RedirectStandardOutput = $true
-	$BuildInfo.RedirectStandardError = $true
-	$BuildProcess = New-Object Diagnostics.Process
-	$BuildProcess.StartInfo = $BuildInfo
-	if (-not $BuildProcess.Start()) { throw 'Pinned Unreal editor build process did not start.' }
-	$BuildStandardOutput = $BuildProcess.StandardOutput.ReadToEndAsync()
-	$BuildStandardError = $BuildProcess.StandardError.ReadToEndAsync()
-	$BuildProcess.WaitForExit()
-	$BuildExitCode = $BuildProcess.ExitCode
-	$OutputGuard.WriteUtf8($EditorBuildLogPath, $BuildStandardOutput.GetAwaiter().GetResult() + $BuildStandardError.GetAwaiter().GetResult())
+	$BuildShell = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
+	$BuildInner = (ConvertTo-WindowsCommandLineArgument $BuildScriptPath) + ' ' + (($BuildArguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument $_ }) -join ' ')
+	$BuildShellCommandLine = (ConvertTo-WindowsCommandLineArgument $BuildShell) + ' /d /s /c "' + $BuildInner + '"'
+	$BuildExitCode = $OutputGuard.RunCapturedBuild($BuildShellCommandLine, $RepositoryRoot, $EditorBuildLogPath, $BuildTimeoutSeconds, [bool]$AllowTestRegistrySnapshot)
 }
 catch {
 	$BuildInvocationError = $_
 }
-finally {
-	if ($null -ne $BuildProcess) { $BuildProcess.Dispose() }
-}
 Assert-ExecutionBoundary 'the editor build' $SourceRevision $EngineRevision $EngineTagRevision $ImmutableFileStates
 if ($null -ne $BuildInvocationError) {
-	$OutputGuard.Release($OutputPath)
-	Remove-Item -LiteralPath $OutputPath -Force
 	throw "Editor build invocation failed: $($BuildInvocationError.Exception.Message)"
 }
 if ($BuildExitCode -ne 0) {
-	$OutputGuard.Release($OutputPath)
-	Remove-Item -LiteralPath $OutputPath -Force
 	throw "Editor build failed with exit code $BuildExitCode. See '$EditorBuildLogPath'."
 }
 
@@ -932,9 +1203,16 @@ $CommandLine += ' ' + (($EditorArguments | ForEach-Object { ConvertTo-WindowsCom
 try {
 	$ProcessJob = New-Object Aetheln.ContentValidationJob
 	$Process = $ProcessJob.StartSuspended($EditorPath, $CommandLine, $RepositoryRoot, $CommandletLogHandle)
-	if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
-		Stop-OwnedProcessTree $Process $ProcessJob
-		throw "Unreal content-validation commandlet timed out after $TimeoutSeconds seconds."
+	$CommandletClock = [Diagnostics.Stopwatch]::StartNew()
+	while (-not $Process.WaitForExit(100)) {
+		if ($OutputGuard.GetLength($LogPath) -gt 16MB -or $OutputGuard.GetLength($OutputPath) -gt 16MB) {
+			Stop-OwnedProcessTree $Process $ProcessJob
+			throw 'commandlet_output_limit_exceeded: log or report exceeded 16 MiB.'
+		}
+		if ($CommandletClock.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+			Stop-OwnedProcessTree $Process $ProcessJob
+			throw "Unreal content-validation commandlet timed out after $TimeoutSeconds seconds."
+		}
 	}
 	$Process.WaitForExit()
 	$ExitCode = $Process.ExitCode
@@ -952,20 +1230,21 @@ finally {
 	}
 	elseif ($null -ne $ProcessJob) { $ProcessJob.Dispose() }
 }
-$CommandletOutput = $OutputGuard.ReadUtf8($LogPath)
-if (-not [string]::IsNullOrWhiteSpace($CommandletOutput)) { $CapturedOutput = $CommandletOutput }
 Assert-ExecutionBoundary 'the commandlet launch' $SourceRevision $EngineRevision $EngineTagRevision $LaunchFileStates
 Assert-OutputBoundary $OutputPaths $OutputProtectedStates 'report consumption'
 if ($null -ne $LaunchError) { throw $LaunchError }
+$OutputGuard.AssertCurrentOutputBounds($LogPath, $OutputPath)
+$CommandletOutput = $OutputGuard.ReadUtf8($LogPath)
+if (-not [string]::IsNullOrWhiteSpace($CommandletOutput)) {
+	$CapturedOutput = $CommandletOutput.Substring(0, [Math]::Min(4096, $CommandletOutput.Length))
+	if ($CommandletOutput.Length -gt 4096) { $CapturedOutput += "... [truncated; full pending log: '$LogPath']" }
+}
 
 if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf) -or (Get-Item -LiteralPath $OutputPath).Length -eq 0) {
-	if (Test-Path -LiteralPath $OutputPath -PathType Leaf) {
-		$OutputGuard.Release($OutputPath)
-		Remove-Item -LiteralPath $OutputPath -Force
-	}
 	if ($ExitCode -ne 0) { throw "Unreal content-validation commandlet exited with exit code $ExitCode and did not produce '$OutputPath'. Output: $CapturedOutput" }
 	throw "Unreal content-validation commandlet did not produce '$OutputPath'. Output: $CapturedOutput"
 }
+$ValidatedReportSha256 = $OutputGuard.GetSha256($OutputPath)
 try { $Report = $OutputGuard.ReadUtf8($OutputPath) | ConvertFrom-Json } catch { throw "Content-validation report '$OutputPath' is not valid JSON: $($_.Exception.Message)" }
 
 Assert-ExactPropertySet $Report $ReportFields 'Content-validation report'
@@ -1248,5 +1527,68 @@ if (($Report.result -ceq 'passed' -and ($ErrorCount -ne 0 -or $NonPromotionCount
 if ($ExitCode -ne 0) { throw "Unreal content-validation commandlet exited with exit code $ExitCode and report result '$($Report.result)'. Output: $CapturedOutput" }
 if ($Report.result -ceq 'failed') { throw 'Unreal content-validation commandlet returned exit code zero with a failed report.' }
 
-$OutputGuard.Dispose()
-Write-Output "Content validation $($Report.result): $($ReportAssets.Count) governed package(s), $($ReportFindings.Count) finding(s). Report: '$OutputPath'."
+$PendingOutputHashes = @($OutputPaths | ForEach-Object { $OutputGuard.GetSha256($_) })
+if ($PendingOutputHashes[0] -cne $ValidatedReportSha256) { throw 'Content-validation report bytes changed after validation.' }
+Assert-ExecutionBoundary 'pre-publication validation' $SourceRevision $EngineRevision $EngineTagRevision $LaunchFileStates
+Assert-OutputBoundary $PublishedOutputPaths $OutputProtectedStates 'pre-publication validation'
+$PublicationPairs = @(
+	@{ Pending = $EditorBuildLogPath; Final = $PublishedEditorBuildLogPath },
+	@{ Pending = $LogPath; Final = $PublishedLogPath },
+	@{ Pending = $OutputPath; Final = $PublishedOutputPath }
+)
+$PriorBackups = @{}
+$BackupId = [guid]::NewGuid().ToString('N')
+$ProtectedOutputIdentities = [string[]]@($OutputProtectedStates | ForEach-Object { $_.FileIdentity })
+$RemainingBackupBytes = $OutputGuard.AssertPublicationBudget([string[]]$OutputPaths, [string[]]$PublishedOutputPaths, $ProtectedOutputIdentities)
+# Copy each previous entry into a distinct, retained, byte-verified backup.
+# No published path changes if backup creation or new-run validation fails.
+foreach ($Pair in $PublicationPairs) {
+	$Backup = Join-Path $OutputDirectory ('.previous.' + $BackupId + '.' + [IO.Path]::GetFileName($Pair.Final))
+	if ($OutputGuard.BackupExisting($Pair.Final, $Backup, $ProtectedOutputIdentities, $RemainingBackupBytes)) {
+		$PriorBackups[$Pair.Final] = @{ Path = $Backup; Sha256 = $OutputGuard.GetSha256($Backup) }
+		$RemainingBackupBytes -= $OutputGuard.GetLength($Backup)
+	}
+}
+# Publish the report last. If a later rename fails, restore any earlier logs
+# from the held backups; if restoration is denied, retain backups for recovery.
+$PublishedPairs = [Collections.Generic.List[object]]::new()
+try {
+	foreach ($Pair in $PublicationPairs) {
+		$OutputGuard.Publish($Pair.Pending, $Pair.Final)
+		$PublishedPairs.Add($Pair)
+		if ($PublishedPairs.Count -eq 1 -and $env:AETHELN_CONTENT_TEST_PUBLISH_FAIL_AFTER_FIRST -ceq '1') {
+			throw 'output_publication_test_failure_after_first_rename'
+		}
+	}
+	$PublishedHashes = @($PublishedOutputPaths | ForEach-Object { $OutputGuard.GetSha256($_) })
+	for ($Index = 0; $Index -lt $PendingOutputHashes.Count; $Index++) {
+		if ($PendingOutputHashes[$Index] -cne $PublishedHashes[$Index]) { throw 'Published content-validation output bytes changed during publication.' }
+	}
+}
+catch {
+	$PublicationFailure = $_
+	$RecoveryFailures = [Collections.Generic.List[string]]::new()
+	for ($Index = $PublishedPairs.Count - 1; $Index -ge 0; $Index--) {
+		$Pair = $PublishedPairs[$Index]
+		try {
+			if ($PriorBackups.ContainsKey($Pair.Final)) {
+				$Backup = $PriorBackups[$Pair.Final]
+				$OutputGuard.Release($Pair.Final)
+				$OutputGuard.Publish($Backup.Path, $Pair.Final)
+				if ($OutputGuard.GetSha256($Pair.Final) -cne $Backup.Sha256) { throw 'restored output bytes differ from the retained backup' }
+			}
+			else { $OutputGuard.DeleteRetained($Pair.Final) }
+		}
+		catch {
+			$BackupDetail = if ($PriorBackups.ContainsKey($Pair.Final)) { "; backup: '$($PriorBackups[$Pair.Final].Path)'" } else { '; no prior file existed' }
+			$RecoveryFailures.Add("$($Pair.Final): $($_.Exception.Message)$BackupDetail")
+		}
+	}
+	if ($RecoveryFailures.Count -gt 0) {
+		throw "Content-validation output publication failed: $($PublicationFailure.Exception.Message). Manual recovery is required for the exact output(s): $($RecoveryFailures -join '; ')"
+	}
+	throw "Content-validation output publication failed and prior outputs were restored: $($PublicationFailure.Exception.Message)"
+}
+Write-Output "Content validation $($Report.result): $($ReportAssets.Count) governed package(s), $($ReportFindings.Count) finding(s). Report: '$PublishedOutputPath'."
+}
+finally { $OutputGuard.Dispose() }

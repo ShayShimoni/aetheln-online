@@ -81,8 +81,10 @@ public static class FakeGitForContentValidation {
 
 	$BuildSource = @'
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Threading;
 public static class FakeEditorBuildForContentValidation {
  static string Escape(string value) { return value.Replace("\\","\\\\").Replace("\"","\\\""); }
  static string Q(string value) { return "\""+Escape(value)+"\""; }
@@ -91,6 +93,19 @@ public static class FakeEditorBuildForContentValidation {
   File.WriteAllText(path,content,new UTF8Encoding(false));
  }
  public static int Main(string[] args) {
+  if(args.Length==1&&args[0].StartsWith("--child-",StringComparison.Ordinal)) {
+   string pidPath=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CHILD_PID")??"";
+   string latePath=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_LATE_MARKER")??"";
+   if(pidPath.Length>0) File.WriteAllText(pidPath,Process.GetCurrentProcess().Id.ToString());
+   if(args[0]=="--child-flood") {
+    byte[] chunk=new byte[8192];
+    for(int i=0;i<chunk.Length;i++) chunk[i]=(byte)'Z';
+    using(Stream output=Console.OpenStandardOutput()) for(int i=0;i<2176;i++) output.Write(chunk,0,chunk.Length);
+   }
+   Thread.Sleep(30000);
+   if(latePath.Length>0) File.WriteAllText(latePath,"late child write");
+   return 0;
+  }
   string capture=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CAPTURE")??"";
   if(capture.Length>0) File.WriteAllLines(capture,args);
   string scenario=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CASE")??"success";
@@ -106,6 +121,23 @@ public static class FakeEditorBuildForContentValidation {
    if(scenario=="duplicate-toolchain") Console.WriteLine("Using Visual Studio 14.50.99999 toolchain ("+compilerRoot+") and Windows 10.0.30000.0 SDK ("+sdkRoot+").");
   }
   if(scenario=="nonzero") return 41;
+  if(scenario=="child-flood"||scenario=="child-timeout"||scenario=="child-pump-fault") {
+   string parentPidPath=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_PARENT_PID")??"";
+   if(parentPidPath.Length>0) File.WriteAllText(parentPidPath,Process.GetCurrentProcess().Id.ToString());
+   ProcessStartInfo childInfo=new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,scenario=="child-timeout"?"--child-timeout":"--child-flood");
+   childInfo.UseShellExecute=false; childInfo.CreateNoWindow=true; childInfo.RedirectStandardOutput=true;
+   using(Process child=Process.Start(childInfo))
+   using(Stream output=Console.OpenStandardOutput()) child.StandardOutput.BaseStream.CopyTo(output);
+   return 0;
+  }
+  if(scenario=="output-flood") {
+   byte[] chunk=new byte[8192];
+   for(int i=0;i<chunk.Length;i++) chunk[i]=(byte)'X';
+   using(Stream output=Console.OpenStandardOutput()) {
+    for(int i=0;i<2176;i++) output.Write(chunk,0,chunk.Length); // 17 MiB: must exceed the bounded capture limit.
+   }
+   return 41;
+  }
   if(args.Length<4) { Console.Error.WriteLine("missing fixed build arguments"); return 42; }
   string repository=Path.GetDirectoryName(Path.GetFullPath(args[3]));
   string binaries=Path.Combine(repository,"Binaries","Win64");
@@ -193,6 +225,14 @@ public static class FakeUnrealEditorForContentValidation {
   }
   string output=Get(values,"Report");
   Console.WriteLine("fixture commandlet log");
+  if(scenario=="commandlet-log-flood") {
+   byte[] chunk=new byte[8192];
+   for(int i=0;i<chunk.Length;i++) chunk[i]=(byte)'Y';
+   using(Stream standard=Console.OpenStandardOutput()) {
+    for(int i=0;i<2176;i++) standard.Write(chunk,0,chunk.Length);
+   }
+   return 9;
+  }
   if(scenario=="timeout") {
    ProcessStartInfo childInfo=new ProcessStartInfo("powershell.exe","-NoProfile -Command \"Start-Sleep -Seconds 30\"");
    childInfo.UseShellExecute=false; childInfo.CreateNoWindow=true;
@@ -204,6 +244,7 @@ public static class FakeUnrealEditorForContentValidation {
   }
   if(scenario=="nonzero-no-report") return 9;
   if(scenario=="missing-report") return 0;
+  if(scenario=="report-flood") { WriteReport(values,new string('X',17*1024*1024)); return 0; }
   Directory.CreateDirectory(Path.GetDirectoryName(output));
   if(scenario=="corrupt") { WriteReport(values,"{broken"); return 0; }
    string policy=Get(values,"PolicySha256"), intake=Get(values,"IntakeSha256"), revision=Get(values,"Revision");
@@ -270,7 +311,11 @@ public static class FakeUnrealEditorForContentValidation {
    if(scenario=="module-file-drift") File.AppendAllText(Path.Combine(binaries,"UnrealEditor-GameCore.dll"),"changed");
    if(scenario=="manifest-file-drift") File.AppendAllText(Path.Combine(binaries,"UnrealEditor.modules")," ");
    if(scenario=="build-log-drift") {
-    try { File.AppendAllText(Path.Combine(Path.GetDirectoryName(output),"editor-build.log"),"changed"); }
+    try {
+     string[] buildLogs=Directory.GetFiles(Path.GetDirectoryName(output),".editor-build.*.pending");
+     if(buildLogs.Length!=1) throw new IOException("expected one retained pending build log");
+     File.AppendAllText(buildLogs[0],"changed");
+    }
     catch(IOException) { Console.Error.WriteLine("output_guard_blocked_build_log_drift"); return 34; }
    }
    if(scenario=="snapshot-file-drift") File.AppendAllText(Get(values,"RegistrySnapshot")," ");
@@ -406,6 +451,9 @@ exit /b %ERRORLEVEL%
 		compiler = $Compiler
 		resourceCompiler = $ResourceCompiler
 		childPid = Join-Path $Root 'child-pid.txt'
+		buildChildPid = Join-Path $Root 'build-child-pid.txt'
+		buildParentPid = Join-Path $Root 'build-parent-pid.txt'
+		buildLateMarker = Join-Path $Root 'build-late.marker'
 		drift = Join-Path $Root 'drift.marker'
 		report = Join-Path $Repository 'TestResults\content-validation-report.json'
 		buildLog = Join-Path $Repository 'TestResults\editor-build.log'
@@ -417,12 +465,37 @@ exit /b %ERRORLEVEL%
 	}
 }
 
-function Invoke-Case([string] $Name, [string] $FakeBin, [string] $EditorCase = 'success', [string] $GitCase = 'clean', [bool] $UseSnapshot = $false, [bool] $AllowSnapshot = $false, [int] $TimeoutSeconds = 5, [string] $BuildCase = 'success', [string] $OutputAttack = 'none') {
+function Invoke-Case([string] $Name, [string] $FakeBin, [string] $EditorCase = 'success', [string] $GitCase = 'clean', [bool] $UseSnapshot = $false, [bool] $AllowSnapshot = $false, [int] $TimeoutSeconds = 5, [string] $BuildCase = 'success', [string] $OutputAttack = 'none', [int] $BuildTimeoutSeconds = 10) {
 	$Fixture = New-Case $Name $FakeBin
 	$AttackJob = $null
 	$AttackResult = $null
+	$SecondExitCode = $null
+	$SecondOutput = $null
+	$SecondStartedBuild = $null
+	$CanonicalBeforeRelease = $null
 	$ProtectedHashBefore = $null
 	$ProtectedHashAfter = $null
+	if ($OutputAttack -cin @('swap-before-directory-create','missing-output-directory')) {
+		$Fixture.report = Join-Path $Fixture.repository 'TestResults\new\content-validation-report.json'
+		$Fixture.commandletLog = Join-Path $Fixture.repository 'TestResults\new\content-validation.log'
+		$Fixture.buildLog = Join-Path $Fixture.repository 'TestResults\new\editor-build.log'
+	}
+	if ($OutputAttack -ceq 'publish-fail-first-run') {
+		foreach ($Path in @($Fixture.report, $Fixture.commandletLog, $Fixture.buildLog)) { Remove-Item -LiteralPath $Path -Force }
+	}
+	if ($OutputAttack -cin @('retention-cap','retention-reserve-six')) {
+		$ArtifactCount = if ($OutputAttack -ceq 'retention-cap') { 129 } else { 123 }
+		for ($Index = 1; $Index -le $ArtifactCount; $Index++) {
+			$Token = $Index.ToString('x32')
+			Write-Utf8 (Join-Path (Split-Path -Parent $Fixture.report) ".previous.$Token.content-validation.log") 'retained fixture log'
+		}
+	}
+	if ($OutputAttack -ceq 'retention-backup-byte-cap') {
+		$RunnerText = [IO.File]::ReadAllText($Fixture.runner)
+		Assert-True ($RunnerText.Contains('const long MaxRetainedBytes=1073741824L;')) 'The byte-cap fixture must locate the production retention constant.'
+		[IO.File]::WriteAllText($Fixture.runner, $RunnerText.Replace('const long MaxRetainedBytes=1073741824L;', 'const long MaxRetainedBytes=256L;'), [Text.UTF8Encoding]::new($false))
+		Write-Utf8 $Fixture.report ('{"stale":"' + ('x' * 300) + '"}')
+	}
 	if ($EditorCase -ceq 'failed-eligible') {
 		$IntakePath = Join-Path $Fixture.repository 'Config\ContentValidation\runtime-asset-intake.json'
 		$Intake = Get-Content -LiteralPath $IntakePath -Raw | ConvertFrom-Json
@@ -451,13 +524,94 @@ function Invoke-Case([string] $Name, [string] $FakeBin, [string] $EditorCase = '
 		& fsutil.exe hardlink create $Fixture.report (Join-Path $Fixture.repository 'Config\ContentValidation\asset-intake-policy.json') | Out-Null
 		if ($LASTEXITCODE -ne 0) { throw 'Could not create the owned hard-link attack fixture.' }
 	}
-	elseif ($OutputAttack -cin @('swap-build-log','swap-report','swap-commandlet-log','swap-output-directory')) {
+	elseif ($OutputAttack -ceq 'mount-during-held-directory') {
+		foreach ($Path in @($Fixture.report, $Fixture.commandletLog, $Fixture.buildLog)) { Remove-Item -LiteralPath $Path -Force }
+		$SeamRoot = Join-Path $Fixture.root 'held-directory-seam'
+		$VictimDirectory = Join-Path $Fixture.root 'outside-victim'
+		New-Item -ItemType Directory -Path $SeamRoot,$VictimDirectory | Out-Null
+		$ProtectedPath = Join-Path $VictimDirectory 'sentinel.txt'
+		Write-Utf8 $ProtectedPath 'outside victim bytes'
+		$ProtectedHashBefore = Get-Sha256 $ProtectedPath
+		$ReadyPath = Join-Path $SeamRoot 'held.ready'
+		$ContinuePath = Join-Path $SeamRoot 'held.continue'
+		$ResultPath = Join-Path $SeamRoot 'held.result'
+		$TargetPath = Split-Path -Parent $Fixture.report
+		$RunnerText = [IO.File]::ReadAllText($Fixture.runner)
+		$Marker = 'AssertRetentionBudget(outputDirectory);'
+		Assert-True ($RunnerText.Contains($Marker)) 'The fixture must find the post-admission held-ancestor seam before pending-file creation.'
+		$Injected = @'
+string heldSeam=Environment.GetEnvironmentVariable("AETHELN_CONTENT_TEST_HELD_SEAM_ROOT");
+if(!String.IsNullOrEmpty(heldSeam)) {
+ File.WriteAllText(Path.Combine(heldSeam,"held.ready"),"ready");
+ DateTime deadline=DateTime.UtcNow.AddSeconds(10);
+ while(!File.Exists(Path.Combine(heldSeam,"held.continue"))&&DateTime.UtcNow<deadline) System.Threading.Thread.Sleep(10);
+ if(!File.Exists(Path.Combine(heldSeam,"held.continue"))) throw new InvalidOperationException("held_directory_fixture_timeout");
+}
+'@
+		[IO.File]::WriteAllText($Fixture.runner, $RunnerText.Replace($Marker, $Marker + "`n" + $Injected), [Text.UTF8Encoding]::new($false))
+		$AttackJob = Start-Job -ArgumentList $ReadyPath,$ContinuePath,$ResultPath,$TargetPath,$VictimDirectory -ScriptBlock {
+			param($Ready,$Continue,$Result,$Target,$Victim)
+			try {
+				$Deadline = [DateTime]::UtcNow.AddSeconds(10)
+				while (-not (Test-Path -LiteralPath $Ready -PathType Leaf) -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 10 }
+				if (-not (Test-Path -LiteralPath $Ready -PathType Leaf)) { throw 'held_directory_ready_timeout' }
+				Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class AethelnContentFixtureMountPoint {
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+ public static extern SafeFileHandle CreateFileW(string name,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
+ [DllImport("kernel32.dll", SetLastError=true)]
+ public static extern bool DeviceIoControl(SafeFileHandle handle,uint code,byte[] input,int inputSize,IntPtr output,int outputSize,out int returned,IntPtr overlapped);
+}
+'@
+				$Substitute = [Text.Encoding]::Unicode.GetBytes('\??\' + $Victim.TrimEnd('\') + '\')
+				$Print = [Text.Encoding]::Unicode.GetBytes($Victim)
+				$DataLength = 8 + $Substitute.Length + 2 + $Print.Length + 2
+				$Buffer = New-Object byte[] (8 + $DataLength)
+				[BitConverter]::GetBytes([uint32] 2684354563).CopyTo($Buffer, 0)
+				[BitConverter]::GetBytes([uint16] $DataLength).CopyTo($Buffer, 4)
+				[BitConverter]::GetBytes([uint16] 0).CopyTo($Buffer, 8)
+				[BitConverter]::GetBytes([uint16] $Substitute.Length).CopyTo($Buffer, 10)
+				[BitConverter]::GetBytes([uint16] ($Substitute.Length + 2)).CopyTo($Buffer, 12)
+				[BitConverter]::GetBytes([uint16] $Print.Length).CopyTo($Buffer, 14)
+				$Substitute.CopyTo($Buffer, 16)
+				$Print.CopyTo($Buffer, 16 + $Substitute.Length + 2)
+				$Handle = [AethelnContentFixtureMountPoint]::CreateFileW($Target, 0x100, 0x7, [IntPtr]::Zero, 3, 0x02200000, [IntPtr]::Zero)
+				$Returned = 0
+				$Converted = (-not $Handle.IsInvalid) -and [AethelnContentFixtureMountPoint]::DeviceIoControl($Handle, 0x900A4, $Buffer, $Buffer.Length, [IntPtr]::Zero, 0, [ref] $Returned, [IntPtr]::Zero)
+				$ErrorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+				$Handle.Dispose()
+				[IO.File]::WriteAllText($Result, $(if ($Converted) { 'swapped' } else { "blocked:$ErrorCode" }))
+			}
+			catch { [IO.File]::WriteAllText($Result, "fixture_error:$($_.Exception.Message)") }
+			finally { [IO.File]::WriteAllText($Continue, 'continue') }
+		}
+		$env:AETHELN_CONTENT_TEST_HELD_SEAM_ROOT = $SeamRoot
+	}
+	elseif ($OutputAttack -ceq 'concurrent-directory') {
+		$SeamRoot = Join-Path $Fixture.root 'concurrent-seam'
+		New-Item -ItemType Directory -Path $SeamRoot | Out-Null
+		$ReadyPath = Join-Path $SeamRoot 'pre-build-open.ready'
+		$ContinuePath = Join-Path $SeamRoot 'pre-build-open.continue'
+		$env:AETHELN_CONTENT_TEST_OUTPUT_OPEN_SEAM_ROOT = $SeamRoot
+		$env:AETHELN_CONTENT_TEST_OUTPUT_OPEN_SEAM_PHASE = 'pre-build-open'
+	}
+	elseif ($OutputAttack -cin @('swap-build-log','swap-report','swap-commandlet-log','swap-output-directory','swap-pre-cleanup-directory','swap-before-directory-create')) {
 		$SeamRoot = Join-Path $Fixture.root 'output-open-seam'
 		New-Item -ItemType Directory -Path $SeamRoot | Out-Null
-		$Phase = if ($OutputAttack -cin @('swap-build-log','swap-output-directory')) { 'pre-build-open' } else { 'pre-editor-open' }
-		$TargetPath = if ($OutputAttack -ceq 'swap-build-log') { $Fixture.buildLog } elseif ($OutputAttack -ceq 'swap-report') { $Fixture.report } elseif ($OutputAttack -ceq 'swap-commandlet-log') { $Fixture.commandletLog } else { Split-Path -Parent $Fixture.report }
-		$DirectoryAttack = $OutputAttack -ceq 'swap-output-directory'
-		$ProtectedPath = Join-Path $Fixture.repository 'Config\ContentValidation\asset-intake-policy.json'
+		$Phase = if ($OutputAttack -ceq 'swap-before-directory-create') { 'pre-output-directory-create' } elseif ($OutputAttack -ceq 'swap-pre-cleanup-directory') { 'pre-output-cleanup' } elseif ($OutputAttack -cin @('swap-build-log','swap-output-directory')) { 'pre-build-open' } else { 'pre-editor-open' }
+		$TargetPath = if ($OutputAttack -ceq 'swap-build-log') { $Fixture.buildLog } elseif ($OutputAttack -ceq 'swap-report') { $Fixture.report } elseif ($OutputAttack -ceq 'swap-commandlet-log') { $Fixture.commandletLog } elseif ($OutputAttack -ceq 'swap-before-directory-create') { Join-Path $Fixture.repository 'TestResults' } else { Split-Path -Parent $Fixture.report }
+		$DirectoryAttack = $OutputAttack -cin @('swap-output-directory','swap-pre-cleanup-directory','swap-before-directory-create')
+		$ProtectedPath = if ($OutputAttack -cin @('swap-pre-cleanup-directory','swap-before-directory-create')) {
+			$VictimDirectory = Join-Path $Fixture.root 'outside-victim'
+			New-Item -ItemType Directory -Path $VictimDirectory | Out-Null
+			Write-Utf8 (Join-Path $VictimDirectory 'content-validation-report.json') 'outside previous report'
+			Write-Utf8 (Join-Path $VictimDirectory 'content-validation.log') 'outside previous commandlet log'
+			Write-Utf8 (Join-Path $VictimDirectory 'editor-build.log') 'outside previous build log'
+			Join-Path $VictimDirectory 'content-validation-report.json'
+		} else { Join-Path $Fixture.repository 'Config\ContentValidation\asset-intake-policy.json' }
 		$ProtectedHashBefore = Get-Sha256 $ProtectedPath
 		$ReadyPath = Join-Path $SeamRoot "$Phase.ready"
 		$ContinuePath = Join-Path $SeamRoot "$Phase.continue"
@@ -489,6 +643,10 @@ function Invoke-Case([string] $Name, [string] $FakeBin, [string] $EditorCase = '
 	$SnapshotSha256 = if ($UseSnapshot) { Get-Sha256 $Snapshot } else { $null }
 	$env:AETHELN_CONTENT_FAKE_BUILD_CAPTURE = $Fixture.buildCapture
 	$env:AETHELN_CONTENT_FAKE_BUILD_CASE = $BuildCase
+	if ($BuildCase -ceq 'child-pump-fault') { $env:AETHELN_CONTENT_TEST_BUILD_PUMP_FAULT = '1' }
+	$env:AETHELN_CONTENT_FAKE_BUILD_CHILD_PID = $Fixture.buildChildPid
+	$env:AETHELN_CONTENT_FAKE_BUILD_PARENT_PID = $Fixture.buildParentPid
+	$env:AETHELN_CONTENT_FAKE_BUILD_LATE_MARKER = $Fixture.buildLateMarker
 	$env:AETHELN_CONTENT_FAKE_COMPILER_ROOT = $Fixture.compilerRoot
 	$env:AETHELN_CONTENT_FAKE_SDK_ROOT = $Fixture.sdkRoot
 	$env:AETHELN_CONTENT_FAKE_CAPTURE = $Fixture.editorCapture
@@ -497,7 +655,9 @@ function Invoke-Case([string] $Name, [string] $FakeBin, [string] $EditorCase = '
 	$env:AETHELN_CONTENT_FAKE_GIT_CASE = $GitCase
 	$env:AETHELN_CONTENT_FAKE_DRIFT = $Fixture.drift
 	$env:AETHELN_CONTENT_FAKE_OUTPUT_ATTACK = $OutputAttack
+	if ($OutputAttack -cin @('publish-fail-after-first','publish-fail-first-run')) { $env:AETHELN_CONTENT_TEST_PUBLISH_FAIL_AFTER_FIRST = '1' }
 	$Arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $Fixture.runner, '-EngineRoot', $Fixture.engine, '-OutputPath', $Fixture.report, '-TimeoutSeconds', [string]$TimeoutSeconds)
+	if ($BuildTimeoutSeconds -ne 86400) { $Arguments += @('-BuildTimeoutSeconds', [string]$BuildTimeoutSeconds) }
 	if ($UseSnapshot) { $Arguments += @('-AssetRegistrySnapshotPath', $Snapshot) }
 	if ($AllowSnapshot) { $Arguments += '-AllowTestRegistrySnapshot' }
 	$Info = New-Object Diagnostics.ProcessStartInfo
@@ -514,7 +674,46 @@ function Invoke-Case([string] $Name, [string] $FakeBin, [string] $EditorCase = '
 		Assert-True ($Process.Start()) "$Name runner must start."
 		$StandardOutput = $Process.StandardOutput.ReadToEndAsync()
 		$StandardError = $Process.StandardError.ReadToEndAsync()
-		Assert-True ($Process.WaitForExit(20000)) "$Name runner must finish within the fixture bound."
+		if ($OutputAttack -ceq 'concurrent-directory') {
+			try {
+				$Deadline = [DateTime]::UtcNow.AddSeconds(8)
+				while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf) -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 10 }
+				Assert-True (Test-Path -LiteralPath $ReadyPath -PathType Leaf) 'The first invocation must reach the held pre-build seam.'
+				$SecondInfo = New-Object Diagnostics.ProcessStartInfo
+				$SecondInfo.FileName = $Info.FileName
+				$SecondInfo.Arguments = $Info.Arguments
+				$SecondInfo.WorkingDirectory = $Info.WorkingDirectory
+				$SecondInfo.UseShellExecute = $false
+				$SecondInfo.CreateNoWindow = $true
+				$SecondInfo.RedirectStandardOutput = $true
+				$SecondInfo.RedirectStandardError = $true
+				$SecondInfo.EnvironmentVariables.Remove('AETHELN_CONTENT_TEST_OUTPUT_OPEN_SEAM_ROOT')
+				$SecondInfo.EnvironmentVariables.Remove('AETHELN_CONTENT_TEST_OUTPUT_OPEN_SEAM_PHASE')
+				$SecondProcess = New-Object Diagnostics.Process
+				$SecondProcess.StartInfo = $SecondInfo
+				try {
+					Assert-True ($SecondProcess.Start()) 'The second invocation must start.'
+					$SecondStdout = $SecondProcess.StandardOutput.ReadToEndAsync()
+					$SecondStderr = $SecondProcess.StandardError.ReadToEndAsync()
+					Assert-True ($SecondProcess.WaitForExit(7000)) 'The second invocation must fail closed within seven seconds.'
+					$SecondExitCode = $SecondProcess.ExitCode
+					$SecondOutput = $SecondStdout.GetAwaiter().GetResult() + $SecondStderr.GetAwaiter().GetResult()
+				}
+				finally {
+					if (-not $SecondProcess.HasExited) { $SecondProcess.Kill() }
+					$SecondProcess.Dispose()
+				}
+				$SecondStartedBuild = Test-Path -LiteralPath $Fixture.buildCapture
+				$CanonicalBeforeRelease = Get-Content -LiteralPath $Fixture.report -Raw
+			}
+			finally { Write-Utf8 $ContinuePath 'continue' }
+		}
+		$FinishedWithinFixtureBound = $Process.WaitForExit(20000)
+		if (-not $FinishedWithinFixtureBound) {
+			$PendingBuild = @(Get-ChildItem -LiteralPath (Split-Path -Parent $Fixture.buildLog) -Filter '.editor-build.*.pending' -File -ErrorAction SilentlyContinue)
+			$PendingLengths = @($PendingBuild | ForEach-Object { $_.Length }) -join ','
+			throw "$Name runner must finish within the fixture bound. buildStarted=$(Test-Path -LiteralPath $Fixture.buildCapture); pendingBuildLengths=$PendingLengths"
+		}
 		$Output = $StandardOutput.GetAwaiter().GetResult() + $StandardError.GetAwaiter().GetResult()
 		$ExitCode = $Process.ExitCode
 	}
@@ -527,18 +726,23 @@ function Invoke-Case([string] $Name, [string] $FakeBin, [string] $EditorCase = '
 		[void](Receive-Job -Job $AttackJob)
 		Remove-Job -Job $AttackJob -Force
 		$AttackResult = if (Test-Path -LiteralPath $ResultPath -PathType Leaf) { Get-Content -LiteralPath $ResultPath -Raw } else { 'missing_result' }
-		$ProtectedHashAfter = Get-Sha256 $ProtectedPath
+		$ProtectedHashAfter = if (Test-Path -LiteralPath $ProtectedPath -PathType Leaf) { Get-Sha256 $ProtectedPath } else { $null }
+		if ($OutputAttack -ceq 'mount-during-held-directory' -and $AttackResult -ceq 'swapped') { $script:KeepUnsafeFixtureRoot = $true }
 	}
 	Remove-Item Env:AETHELN_CONTENT_TEST_OUTPUT_OPEN_SEAM_ROOT -ErrorAction SilentlyContinue
 	Remove-Item Env:AETHELN_CONTENT_TEST_OUTPUT_OPEN_SEAM_PHASE -ErrorAction SilentlyContinue
 	Remove-Item Env:AETHELN_CONTENT_FAKE_OUTPUT_ATTACK -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_CONTENT_TEST_BUILD_PUMP_FAULT -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_CONTENT_TEST_PUBLISH_FAIL_AFTER_FIRST -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_CONTENT_TEST_HELD_SEAM_ROOT -ErrorAction SilentlyContinue
 	$Report = $null
 	if (Test-Path -LiteralPath $Fixture.report -PathType Leaf) {
 		try { $Report = Get-Content -LiteralPath $Fixture.report -Raw | ConvertFrom-Json } catch { }
 	}
-	return [ordered]@{ fixture = $Fixture; snapshot = $Snapshot; snapshotSha256 = $SnapshotSha256; exitCode = $ExitCode; output = $Output; report = $Report; attackResult = $AttackResult; protectedHashBefore = $ProtectedHashBefore; protectedHashAfter = $ProtectedHashAfter }
+	return [ordered]@{ fixture = $Fixture; snapshot = $Snapshot; snapshotSha256 = $SnapshotSha256; exitCode = $ExitCode; output = $Output; report = $Report; attackResult = $AttackResult; protectedHashBefore = $ProtectedHashBefore; protectedHashAfter = $ProtectedHashAfter; secondExitCode = $SecondExitCode; secondOutput = $SecondOutput; secondStartedBuild = $SecondStartedBuild; canonicalBeforeRelease = $CanonicalBeforeRelease }
 }
 
+$script:KeepUnsafeFixtureRoot = $false
 try {
 	foreach ($RequiredPath in @($SourceRunner, $BuildRules, $ScannerHeader, $ScannerSource, $CommandletHeader, $CommandletSource)) {
 		Assert-True (Test-Path -LiteralPath $RequiredPath -PathType Leaf) "Required implementation '$RequiredPath' must exist."
@@ -549,7 +753,7 @@ try {
 	$Ast = [Management.Automation.Language.Parser]::ParseFile($SourceRunner, [ref]$Tokens, [ref]$Errors)
 	Assert-True ($Errors.Count -eq 0) 'The local content-validation runner must parse under Windows PowerShell.'
 	$ParameterNames = @($Ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
-	$ExpectedParameters = @('EngineRoot', 'OutputPath', 'TimeoutSeconds', 'AssetRegistrySnapshotPath', 'AllowTestRegistrySnapshot')
+	$ExpectedParameters = @('EngineRoot', 'OutputPath', 'TimeoutSeconds', 'BuildTimeoutSeconds', 'AssetRegistrySnapshotPath', 'AllowTestRegistrySnapshot')
 	Assert-True (($ParameterNames -join ',') -ceq ($ExpectedParameters -join ',')) 'The runner public parameter contract changed unexpectedly.'
 	$RunnerText = Get-Content -LiteralPath $SourceRunner -Raw
 	Assert-True ($RunnerText -match 'Engine[\\/]Build[\\/]BatchFiles[\\/]Build\.bat' -and $RunnerText -match "'AethelnOnlineEditor','Win64','Development'" -and $RunnerText -match "'-WaitMutex','-NoHotReloadFromIDE'") 'The wrapper must own the exact approved AethelnOnlineEditor Win64 Development build invocation.'
@@ -559,7 +763,8 @@ try {
 	Assert-True ($CreateIndex -ge 0 -and $CreateIndex -lt $AssignIndex -and $AssignIndex -lt $ResumeIndex) 'The commandlet must remain suspended until assignment to its kill-on-close job succeeds.'
 	Assert-True ($RunnerText -notmatch '\$Process\.Start\(' -and $RunnerText -match 'JOB_OBJECT_LIMIT_KILL_ON_CLOSE|KillOnJobClose') 'The wrapper must not launch the editor before process-tree ownership is established.'
 	Assert-True ($RunnerText -match 'Assert-OutputBoundary' -and $RunnerText -match 'output_path_reparse' -and $RunnerText -match 'output_path_alias') 'The wrapper must reject reparse traversal and same-file output aliases before mutation and report consumption.'
-	Assert-True ($RunnerText -match 'class OutputGuard' -and $RunnerText -match 'CreateNew' -and $RunnerText -match 'FlagOpenReparsePoint' -and $RunnerText -match 'ReportFileIdentity') 'The wrapper must atomically create and retain opened output identities through producer execution.'
+	Assert-True ($RunnerText -match 'class OutputGuard' -and $RunnerText -match 'NtCreateFile' -and $RunnerText -match 'FlagOpenReparsePoint' -and $RunnerText -match 'ReportFileIdentity' -and $RunnerText -notmatch 'CreateDirectoryW') 'The wrapper must create pending files relative to retained output handles and never create a missing output directory.'
+	Assert-True ($RunnerText -match 'BackupExisting' -and $RunnerText -match 'output_publication_test_failure_after_first_rename' -and $RunnerText -match 'prior outputs were restored') 'The wrapper must retain prior output bytes for recoverable publication.'
 	Assert-True ($RunnerText -match 'New-JsonFileState' -and $RunnerText -notmatch 'Get-Content -LiteralPath \$PolicyPath -Raw \| ConvertFrom-Json') 'Policy and intake parsing must use the same bounded bytes that are hashed.'
 
 	$ScannerText = Get-Content -LiteralPath $ScannerSource -Raw
@@ -589,9 +794,56 @@ try {
 	Assert-True ($ReparseOutput.exitCode -ne 0 -and $ReparseOutput.output -match 'output_path_reparse' -and -not (Test-Path -LiteralPath $ReparseOutput.fixture.buildCapture)) 'A reparse-point output traversal must fail before cleanup or build launch.'
 	$HardLinkOutput = Invoke-Case -Name 'hardlink-output' -FakeBin $FakeBin -OutputAttack 'policy-hardlink'
 	Assert-True ($HardLinkOutput.exitCode -ne 0 -and $HardLinkOutput.output -match 'output_path_alias' -and -not (Test-Path -LiteralPath $HardLinkOutput.fixture.buildCapture)) 'A same-file output alias to a protected input must fail before cleanup or build launch.'
+	$RetentionCap = Invoke-Case -Name 'retention-cap' -FakeBin $FakeBin -OutputAttack 'retention-cap'
+	Assert-True ($RetentionCap.exitCode -ne 0 -and $RetentionCap.output -match 'output_guard_retention_budget_exceeded' -and
+		(Get-Content -LiteralPath $RetentionCap.fixture.report -Raw) -ceq '{"stale":true}' -and
+		-not (Test-Path -LiteralPath $RetentionCap.fixture.buildCapture)) "Retained artifact admission must fail before producer launch without erasing prior output. Output: $($RetentionCap.output)"
+	$RetentionReserve = Invoke-Case -Name 'retention-reserve-six' -FakeBin $FakeBin -OutputAttack 'retention-reserve-six'
+	Assert-True ($RetentionReserve.exitCode -ne 0 -and $RetentionReserve.output -match 'output_guard_retention_budget_exceeded' -and
+		(Get-Content -LiteralPath $RetentionReserve.fixture.report -Raw) -ceq '{"stale":true}' -and
+		-not (Test-Path -LiteralPath $RetentionReserve.fixture.buildCapture)) "Admission must reserve six retained entries for failed publication after all backups. Output: $($RetentionReserve.output)"
+	$BackupByteCap = Invoke-Case -Name 'retention-backup-byte-cap' -FakeBin $FakeBin -OutputAttack 'retention-backup-byte-cap'
+	Assert-True ($BackupByteCap.exitCode -ne 0 -and $BackupByteCap.output -match 'output_guard_retention_budget_exceeded' -and
+		(Get-Content -LiteralPath $BackupByteCap.fixture.report -Raw) -ceq ('{"stale":"' + ('x' * 300) + '"}') -and
+		-not (Test-Path -LiteralPath $BackupByteCap.fixture.buildCapture)) "Oversized prior canonical output must fail admission before build or backup copying. Output: $($BackupByteCap.output)"
+	$MissingOutputDirectory = Invoke-Case -Name 'missing-output-directory' -FakeBin $FakeBin -OutputAttack 'missing-output-directory'
+	Assert-True ($MissingOutputDirectory.exitCode -ne 0 -and $MissingOutputDirectory.output -match 'output_guard_directory_missing' -and
+		-not (Test-Path -LiteralPath (Split-Path -Parent $MissingOutputDirectory.fixture.report)) -and
+		-not (Test-Path -LiteralPath $MissingOutputDirectory.fixture.buildCapture)) "A missing output directory must fail closed without creating directories or launching the producer. Output: $($MissingOutputDirectory.output)"
+	$RelativeOpenNormal = Invoke-Case -Name 'relative-open-normal' -FakeBin $FakeBin
+	Assert-True ($RelativeOpenNormal.exitCode -eq 0 -and $null -ne $RelativeOpenNormal.report) "Relative pending-file creation must succeed without an attack. Output: $($RelativeOpenNormal.output)"
+	$SpacedBuildPath = Invoke-Case -Name 'build path with spaces' -FakeBin $FakeBin
+	$SpacedBuildArguments = if (Test-Path -LiteralPath $SpacedBuildPath.fixture.buildCapture) { [IO.File]::ReadAllLines($SpacedBuildPath.fixture.buildCapture) } else { @() }
+	Assert-True ($SpacedBuildPath.exitCode -eq 0 -and $null -ne $SpacedBuildPath.report -and
+		$SpacedBuildArguments.Count -eq 6 -and $SpacedBuildArguments[3] -ceq (Join-Path $SpacedBuildPath.fixture.repository 'AethelnOnline.uproject')) "The suspended cmd.exe launch must preserve exact Build.bat arguments when engine and project paths contain spaces. Output: $($SpacedBuildPath.output)"
+	$Concurrent = Invoke-Case -Name 'concurrent-directory' -FakeBin $FakeBin -OutputAttack 'concurrent-directory'
+	Assert-True ($Concurrent.secondExitCode -ne 0 -and $Concurrent.secondOutput -match 'output_guard_directory_busy' -and
+		-not $Concurrent.secondStartedBuild -and $Concurrent.canonicalBeforeRelease -ceq '{"stale":true}' -and
+		$Concurrent.exitCode -eq 0 -and $null -ne $Concurrent.report) "A second same-directory invocation must fail before build/publication while the first retains exclusive admission. second=$($Concurrent.secondExitCode) output=$($Concurrent.secondOutput) first=$($Concurrent.exitCode)"
+	$HeldMount = Invoke-Case -Name 'mount-during-held-directory' -FakeBin $FakeBin -OutputAttack 'mount-during-held-directory'
+	$HeldMountVictim = Join-Path $HeldMount.fixture.root 'outside-victim'
+	$MountFailedClosed = $HeldMount.attackResult -ceq 'swapped' -and $HeldMount.exitCode -ne 0 -and $HeldMount.output -match 'output_guard_relative_create_failed' -and -not (Test-Path -LiteralPath $HeldMount.fixture.buildCapture)
+	$MountBlocked = $HeldMount.attackResult -match '^blocked:' -and $HeldMount.exitCode -eq 0 -and $null -ne $HeldMount.report
+	Assert-True (($MountFailedClosed -or $MountBlocked) -and
+		$HeldMount.protectedHashAfter -ceq $HeldMount.protectedHashBefore -and
+		@(Get-ChildItem -LiteralPath $HeldMountVictim -Force).Count -eq 1) "An in-place mount-point conversion after ancestor retention must be blocked or fail relative creation without outside mutation. attack=$($HeldMount.attackResult) output=$($HeldMount.output)"
+	if ($HeldMount.attackResult -ceq 'swapped') { [IO.Directory]::Delete((Split-Path -Parent $HeldMount.fixture.report)) }
+	Assert-True ($HeldMount.protectedHashAfter -ceq (Get-Sha256 (Join-Path $HeldMountVictim 'sentinel.txt'))) 'Removing the test-owned mount-point link must leave its outside victim intact.'
+	$script:KeepUnsafeFixtureRoot = $false
+	$PreCreateSwap = Invoke-Case -Name 'swap-before-directory-create' -FakeBin $FakeBin -OutputAttack 'swap-before-directory-create'
+	Assert-True ($PreCreateSwap.exitCode -ne 0 -and $PreCreateSwap.attackResult -ceq 'alias_installed' -and $PreCreateSwap.output -match 'output_path_reparse' -and
+		-not (Test-Path -LiteralPath (Join-Path $PreCreateSwap.fixture.root 'outside-victim\new')) -and
+		$PreCreateSwap.protectedHashAfter -ceq $PreCreateSwap.protectedHashBefore -and -not (Test-Path -LiteralPath $PreCreateSwap.fixture.buildCapture)) "A synchronized parent swap before missing output-directory creation must not create outside directories. attack=$($PreCreateSwap.attackResult) output=$($PreCreateSwap.output)"
+	$PreCleanupSwap = Invoke-Case -Name 'swap-pre-cleanup-directory' -FakeBin $FakeBin -OutputAttack 'swap-pre-cleanup-directory'
+	$VictimDirectory = Join-Path $PreCleanupSwap.fixture.root 'outside-victim'
+	$VictimLogsIntact = (Get-Content -LiteralPath (Join-Path $VictimDirectory 'content-validation.log') -Raw) -ceq 'outside previous commandlet log' -and
+		(Get-Content -LiteralPath (Join-Path $VictimDirectory 'editor-build.log') -Raw) -ceq 'outside previous build log'
+	Assert-True ($PreCleanupSwap.exitCode -ne 0 -and $PreCleanupSwap.attackResult -ceq 'alias_installed' -and $PreCleanupSwap.protectedHashAfter -ceq $PreCleanupSwap.protectedHashBefore -and $VictimLogsIntact -and -not (Test-Path -LiteralPath $PreCleanupSwap.fixture.buildCapture)) "A synchronized pre-cleanup directory swap must preserve all outside victim bytes and fail before build launch. attack=$($PreCleanupSwap.attackResult) output=$($PreCleanupSwap.output)"
 	foreach ($OutputAttack in @('swap-build-log','swap-report','swap-commandlet-log','swap-output-directory')) {
 		$Swap = Invoke-Case -Name $OutputAttack -FakeBin $FakeBin -OutputAttack $OutputAttack
-		Assert-True ($Swap.exitCode -eq 0 -and $Swap.attackResult -match '^alias_blocked:' -and $Swap.protectedHashAfter -ceq $Swap.protectedHashBefore) "Synchronized $OutputAttack must be blocked at the producer open boundary while preserving protected bytes. exit=$($Swap.exitCode) attack=$($Swap.attackResult) output=$($Swap.output)"
+		$RejectedAlias = $Swap.exitCode -ne 0 -and $Swap.attackResult -ceq 'alias_installed' -and $Swap.output -match 'output_path_alias'
+		$BlockedSwap = $Swap.exitCode -eq 0 -and $Swap.attackResult -match '^alias_blocked:'
+		Assert-True (($RejectedAlias -or $BlockedSwap) -and $Swap.protectedHashAfter -ceq $Swap.protectedHashBefore) "Synchronized $OutputAttack must be rejected or blocked while preserving protected bytes. exit=$($Swap.exitCode) attack=$($Swap.attackResult) output=$($Swap.output)"
 	}
 
 	$Success = Invoke-Case 'success' $FakeBin
@@ -640,7 +892,7 @@ try {
 	Assert-True (@($SnapshotArguments | Where-Object { $_ -ceq '-AllowTestRegistrySnapshot' }).Count -eq 1) 'The guarded snapshot marker must reach the commandlet.'
 	Assert-True (@($SnapshotArguments | Where-Object { $_.StartsWith('-RegistrySnapshot=', [StringComparison]::Ordinal) }).Count -eq 1) 'The exact snapshot path must reach the commandlet.'
 	$SwapRestore = Invoke-Case 'snapshot-swap-restore' $FakeBin 'snapshot-swap-restore' 'clean' $true $true
-	Assert-True ($SwapRestore.exitCode -ne 0 -and $SwapRestore.output -match 'exit code 33' -and -not (Test-Path -LiteralPath $SwapRestore.fixture.report) -and (Get-Sha256 $SwapRestore.snapshot) -ceq $SwapRestore.snapshotSha256) "A synchronized snapshot swap must fail on digest mismatch even after the original bytes are restored. exit=$($SwapRestore.exitCode) report=$((Test-Path -LiteralPath $SwapRestore.fixture.report)) output=$($SwapRestore.output)"
+	Assert-True ($SwapRestore.exitCode -ne 0 -and $SwapRestore.output -match 'exit code 33' -and (Get-Content -LiteralPath $SwapRestore.fixture.report -Raw) -ceq '{"stale":true}' -and (Get-Sha256 $SwapRestore.snapshot) -ceq $SwapRestore.snapshotSha256) "A synchronized snapshot swap must fail on digest mismatch while preserving the previous report. exit=$($SwapRestore.exitCode) output=$($SwapRestore.output)"
 	$SnapshotDigestArguments = @($SnapshotArguments | Where-Object { $_.StartsWith('-RegistrySnapshotSha256=', [StringComparison]::Ordinal) })
 	Assert-True ($SnapshotDigestArguments.Count -eq 1 -and $SnapshotDigestArguments[0].Substring('-RegistrySnapshotSha256='.Length) -ceq $Snapshot.snapshotSha256) 'The guarded snapshot invocation must bind the captured lowercase snapshot SHA-256 exactly once.'
 	$InvocationArgument = @($SnapshotArguments | Where-Object { $_.StartsWith('-InvocationSha256=', [StringComparison]::Ordinal) })[0]
@@ -681,7 +933,112 @@ try {
 		Assert-True (-not (Test-Path -LiteralPath $Run.fixture.editorCapture)) "$($Case[0]) must not launch the editor."
 	}
 	$BuildFailure = Invoke-Case -Name 'stale-build-failure' -FakeBin $FakeBin -BuildCase 'nonzero'
-	Assert-True ($BuildFailure.exitCode -ne 0 -and -not (Test-Path -LiteralPath $BuildFailure.fixture.report)) 'A failed build must not accept a pre-existing content report.'
+	Assert-True ($BuildFailure.exitCode -ne 0 -and (Get-Content -LiteralPath $BuildFailure.fixture.report -Raw) -ceq '{"stale":true}' -and (Get-Content -LiteralPath $BuildFailure.fixture.commandletLog -Raw) -ceq 'stale commandlet log' -and (Get-Content -LiteralPath $BuildFailure.fixture.buildLog -Raw) -ceq 'stale build log') 'A failed build must leave previous report and logs intact, never accepting them as new evidence.'
+	$BuildFlood = Invoke-Case -Name 'build-output-flood' -FakeBin $FakeBin -BuildCase 'output-flood'
+	$FloodLogs = @(Get-ChildItem -LiteralPath (Split-Path -Parent $BuildFlood.fixture.buildLog) -Filter '.editor-build.*.pending' -File)
+	Assert-True ($BuildFlood.exitCode -ne 0 -and $BuildFlood.output -match 'build_output_limit_exceeded' -and
+		$FloodLogs.Count -eq 1 -and $FloodLogs[0].Length -gt 0 -and $FloodLogs[0].Length -le 16MB -and
+		(Get-Content -LiteralPath $BuildFlood.fixture.report -Raw) -ceq '{"stale":true}' -and
+		(Get-Content -LiteralPath $BuildFlood.fixture.commandletLog -Raw) -ceq 'stale commandlet log' -and
+		(Get-Content -LiteralPath $BuildFlood.fixture.buildLog -Raw) -ceq 'stale build log') "A verbose build must be stopped at the bounded captured-log budget and preserve previous evidence. Output: $($BuildFlood.output)"
+	$BuildChildFlood = $null
+	$BuildChildFixtureRoot = Join-Path $FixtureRoot 'build-child-flood'
+	try {
+		$BuildChildFlood = Invoke-Case -Name 'build-child-flood' -FakeBin $FakeBin -BuildCase 'child-flood'
+		$BuildChildPid = if (Test-Path -LiteralPath $BuildChildFlood.fixture.buildChildPid) { [int](Get-Content -LiteralPath $BuildChildFlood.fixture.buildChildPid -Raw) } else { 0 }
+		$ChildGone = $BuildChildPid -gt 0 -and $null -eq (Get-Process -Id $BuildChildPid -ErrorAction SilentlyContinue)
+		$BuildChildLogs = @(Get-ChildItem -LiteralPath (Split-Path -Parent $BuildChildFlood.fixture.buildLog) -Filter '.editor-build.*.pending' -File)
+		Assert-True ($BuildChildFlood.exitCode -ne 0 -and $BuildChildFlood.output -match 'build_output_limit_exceeded' -and
+			$ChildGone -and -not (Test-Path -LiteralPath $BuildChildFlood.fixture.buildLateMarker) -and
+			$BuildChildLogs.Count -eq 1 -and $BuildChildLogs[0].Length -le 16MB -and
+			(Get-Content -LiteralPath $BuildChildFlood.fixture.report -Raw) -ceq '{"stale":true}' -and
+			(Get-Content -LiteralPath $BuildChildFlood.fixture.commandletLog -Raw) -ceq 'stale commandlet log' -and
+			(Get-Content -LiteralPath $BuildChildFlood.fixture.buildLog -Raw) -ceq 'stale build log') "Overflow must terminate a child-bearing build tree before returning. ChildGone=$ChildGone Output=$($BuildChildFlood.output)"
+	}
+	finally {
+		foreach ($PidFile in @((Join-Path $BuildChildFixtureRoot 'build-child-pid.txt'), (Join-Path $BuildChildFixtureRoot 'build-parent-pid.txt'))) {
+				if (Test-Path -LiteralPath $PidFile) {
+					$OwnedTestProcessId = [int](Get-Content -LiteralPath $PidFile -Raw)
+					$OwnedTestProcess = Get-Process -Id $OwnedTestProcessId -ErrorAction SilentlyContinue
+					if ($null -ne $OwnedTestProcess) {
+						Stop-Process -Id $OwnedTestProcessId -Force -ErrorAction SilentlyContinue
+						try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { }
+					}
+				}
+			}
+	}
+	$BuildChildTimeout = $null
+	$BuildTimeoutFixtureRoot = Join-Path $FixtureRoot 'build-child-timeout'
+	try {
+		$BuildChildTimeout = Invoke-Case -Name 'build-child-timeout' -FakeBin $FakeBin -BuildCase 'child-timeout' -BuildTimeoutSeconds 2
+		$BuildTimeoutChildId = if (Test-Path -LiteralPath $BuildChildTimeout.fixture.buildChildPid) { [int](Get-Content -LiteralPath $BuildChildTimeout.fixture.buildChildPid -Raw) } else { 0 }
+		$TimeoutChildGone = $BuildTimeoutChildId -gt 0 -and $null -eq (Get-Process -Id $BuildTimeoutChildId -ErrorAction SilentlyContinue)
+		$TimeoutBuildLogs = @(Get-ChildItem -LiteralPath (Split-Path -Parent $BuildChildTimeout.fixture.buildLog) -Filter '.editor-build.*.pending' -File)
+		Assert-True ($BuildChildTimeout.exitCode -ne 0 -and $BuildChildTimeout.output -match 'build_timeout_exceeded' -and
+			$TimeoutChildGone -and -not (Test-Path -LiteralPath $BuildChildTimeout.fixture.buildLateMarker) -and
+			$TimeoutBuildLogs.Count -eq 1 -and $TimeoutBuildLogs[0].Length -le 16MB -and
+			(Get-Content -LiteralPath $BuildChildTimeout.fixture.report -Raw) -ceq '{"stale":true}' -and
+			(Get-Content -LiteralPath $BuildChildTimeout.fixture.commandletLog -Raw) -ceq 'stale commandlet log' -and
+			(Get-Content -LiteralPath $BuildChildTimeout.fixture.buildLog -Raw) -ceq 'stale build log') "Build timeout must terminate a child-bearing build tree before returning. ChildGone=$TimeoutChildGone Output=$($BuildChildTimeout.output)"
+	}
+	finally {
+		foreach ($PidFile in @((Join-Path $BuildTimeoutFixtureRoot 'build-child-pid.txt'), (Join-Path $BuildTimeoutFixtureRoot 'build-parent-pid.txt'))) {
+			if (Test-Path -LiteralPath $PidFile) {
+				$OwnedTestProcessId = [int](Get-Content -LiteralPath $PidFile -Raw)
+				$OwnedTestProcess = Get-Process -Id $OwnedTestProcessId -ErrorAction SilentlyContinue
+				if ($null -ne $OwnedTestProcess) {
+					Stop-Process -Id $OwnedTestProcessId -Force -ErrorAction SilentlyContinue
+					try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { }
+				}
+			}
+		}
+	}
+	$BuildPumpFault = $null
+	$BuildPumpFixtureRoot = Join-Path $FixtureRoot 'build-child-pump-fault'
+	$OrdinaryPumpFixtureRoot = Join-Path $FixtureRoot 'ambient-pump-fault-ignored'
+	try {
+		$OrdinaryPump = Invoke-Case -Name 'ambient-pump-fault-ignored' -FakeBin $FakeBin -BuildCase 'child-pump-fault'
+		Assert-True ($OrdinaryPump.exitCode -ne 0 -and $OrdinaryPump.output -match 'build_output_limit_exceeded' -and
+			$OrdinaryPump.output -notmatch 'fixture_capture_pump_fault|build_cleanup_unproven') "An ambient test fault must be ignored without explicit snapshot authorization. Output=$($OrdinaryPump.output)"
+		$BuildPumpFault = Invoke-Case -Name 'build-child-pump-fault' -FakeBin $FakeBin -BuildCase 'child-pump-fault' -UseSnapshot $true -AllowSnapshot $true
+		$BuildPumpChildId = if (Test-Path -LiteralPath $BuildPumpFault.fixture.buildChildPid) { [int](Get-Content -LiteralPath $BuildPumpFault.fixture.buildChildPid -Raw) } else { 0 }
+		$PumpChildGone = $BuildPumpChildId -gt 0 -and $null -eq (Get-Process -Id $BuildPumpChildId -ErrorAction SilentlyContinue)
+		Assert-True ($BuildPumpFault.exitCode -ne 0 -and $BuildPumpFault.output -match 'build_capture_incomplete.*fixture_capture_pump_fault' -and
+			$BuildPumpFault.output -notmatch 'build_cleanup_unproven' -and $PumpChildGone -and
+			-not (Test-Path -LiteralPath $BuildPumpFault.fixture.buildLateMarker) -and
+			(Get-Content -LiteralPath $BuildPumpFault.fixture.report -Raw) -ceq '{"stale":true}' -and
+			(Get-Content -LiteralPath $BuildPumpFault.fixture.buildLog -Raw) -ceq 'stale build log') "A capture pump failure must terminate and prove the child-bearing job empty, then report capture failure without claiming cleanup unproven. ChildGone=$PumpChildGone Output=$($BuildPumpFault.output)"
+	}
+	finally {
+		foreach ($PidFile in @((Join-Path $BuildPumpFixtureRoot 'build-child-pid.txt'), (Join-Path $BuildPumpFixtureRoot 'build-parent-pid.txt'), (Join-Path $OrdinaryPumpFixtureRoot 'build-child-pid.txt'), (Join-Path $OrdinaryPumpFixtureRoot 'build-parent-pid.txt'))) {
+			if (Test-Path -LiteralPath $PidFile) {
+				$OwnedTestProcessId = [int](Get-Content -LiteralPath $PidFile -Raw)
+				$OwnedTestProcess = Get-Process -Id $OwnedTestProcessId -ErrorAction SilentlyContinue
+				if ($null -ne $OwnedTestProcess) {
+					Stop-Process -Id $OwnedTestProcessId -Force -ErrorAction SilentlyContinue
+					try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { }
+				}
+			}
+		}
+	}
+	$CommandletFlood = Invoke-Case -Name 'commandlet-log-flood' -FakeBin $FakeBin -EditorCase 'commandlet-log-flood'
+	Assert-True ($CommandletFlood.exitCode -ne 0 -and $CommandletFlood.output -match 'commandlet_output_limit_exceeded|commandlet_log_limit_exceeded' -and
+		(Get-Content -LiteralPath $CommandletFlood.fixture.report -Raw) -ceq '{"stale":true}' -and
+		(Get-Content -LiteralPath $CommandletFlood.fixture.commandletLog -Raw) -ceq 'stale commandlet log') "Oversized commandlet logs must fail before unbounded read and preserve previous evidence. Output: $($CommandletFlood.output)"
+	$ReportFlood = Invoke-Case -Name 'commandlet-report-flood' -FakeBin $FakeBin -EditorCase 'report-flood'
+	Assert-True ($ReportFlood.exitCode -ne 0 -and $ReportFlood.output -match 'commandlet_output_limit_exceeded|content_report_limit_exceeded' -and
+		(Get-Content -LiteralPath $ReportFlood.fixture.report -Raw) -ceq '{"stale":true}' -and
+		(Get-Content -LiteralPath $ReportFlood.fixture.commandletLog -Raw) -ceq 'stale commandlet log') "Oversized commandlet reports must fail before unbounded read and preserve previous evidence. Output: $($ReportFlood.output)"
+	$PublishFailure = Invoke-Case -Name 'publication-rollback' -FakeBin $FakeBin -OutputAttack 'publish-fail-after-first'
+	Assert-True ($PublishFailure.exitCode -ne 0 -and $PublishFailure.output -match 'prior outputs were restored' -and
+		(Get-Content -LiteralPath $PublishFailure.fixture.report -Raw) -ceq '{"stale":true}' -and
+		(Get-Content -LiteralPath $PublishFailure.fixture.commandletLog -Raw) -ceq 'stale commandlet log' -and
+		(Get-Content -LiteralPath $PublishFailure.fixture.buildLog -Raw) -ceq 'stale build log') "A failure after the first rename must restore all prior published report and log bytes. Output: $($PublishFailure.output)"
+	$FirstRunPublicationFailure = Invoke-Case -Name 'publication-first-run-rollback' -FakeBin $FakeBin -OutputAttack 'publish-fail-first-run'
+	Assert-True ($FirstRunPublicationFailure.exitCode -ne 0 -and $FirstRunPublicationFailure.output -match 'prior outputs were restored' -and
+		-not (Test-Path -LiteralPath $FirstRunPublicationFailure.fixture.report) -and
+		-not (Test-Path -LiteralPath $FirstRunPublicationFailure.fixture.commandletLog) -and
+		-not (Test-Path -LiteralPath $FirstRunPublicationFailure.fixture.buildLog)) "A first-run failure after the first rename must remove only its own published entry and leave no canonical output. Output: $($FirstRunPublicationFailure.output)"
 
 	foreach ($Case in @(@('missing-report','missing-report','did not produce'), @('corrupt','corrupt','valid JSON'), @('policy-mismatch','policy-mismatch','policy_sha256'), @('intake-mismatch','intake-mismatch','intake_sha256'), @('nonzero','nonzero-no-report','exit code'), @('nonzero-with-report','nonzero-with-report','exit code'))) {
 		$Run = Invoke-Case $Case[0] $FakeBin $Case[1]
@@ -720,8 +1077,8 @@ try {
 }
 finally {
 	if ($null -ne (Get-Variable OriginalPath -ErrorAction SilentlyContinue)) { $env:PATH = $OriginalPath }
-	foreach ($Name in @('AETHELN_CONTENT_FAKE_BUILD_CAPTURE','AETHELN_CONTENT_FAKE_BUILD_CASE','AETHELN_CONTENT_FAKE_COMPILER_ROOT','AETHELN_CONTENT_FAKE_SDK_ROOT','AETHELN_CONTENT_FAKE_CAPTURE','AETHELN_CONTENT_FAKE_CHILD_PID','AETHELN_CONTENT_FAKE_EDITOR_CASE','AETHELN_CONTENT_FAKE_GIT_CASE','AETHELN_CONTENT_FAKE_DRIFT')) {
+	foreach ($Name in @('AETHELN_CONTENT_FAKE_BUILD_CAPTURE','AETHELN_CONTENT_FAKE_BUILD_CASE','AETHELN_CONTENT_FAKE_COMPILER_ROOT','AETHELN_CONTENT_FAKE_SDK_ROOT','AETHELN_CONTENT_FAKE_CAPTURE','AETHELN_CONTENT_FAKE_CHILD_PID','AETHELN_CONTENT_FAKE_EDITOR_CASE','AETHELN_CONTENT_FAKE_GIT_CASE','AETHELN_CONTENT_FAKE_DRIFT','AETHELN_CONTENT_TEST_BUILD_PUMP_FAULT')) {
 		Remove-Item ("Env:$Name") -ErrorAction SilentlyContinue
 	}
-	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+	if (-not $script:KeepUnsafeFixtureRoot -and (Test-Path -LiteralPath $FixtureRoot)) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 }
