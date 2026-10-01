@@ -43,7 +43,8 @@ $script:AcceptancePortableCheckNames = @(
 	'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
 	'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
 	'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
-	'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
+	'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests',
+	'ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 	'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
 	'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
 	'psscriptanalyzer'
@@ -236,7 +237,7 @@ function Assert-AcceptancePortableEvidence {
 			$Check.command -isnot [string] -or $Check.command.Length -gt 32768 -or $Check.message -isnot [string] -or $Check.message.Length -gt 131072) {
 			throw 'receipt_semantic_evidence_invalid:portable'
 		}
-		if ($Check.status -cnotin @('passed','skipped') -or ($ExpectedTier -ceq 'required' -and $Check.status -cne 'passed')) {
+		if ($Check.status -cnotin @('passed','skipped') -or (($ExpectedTier -ceq 'required' -or $ExpectedName -ceq 'psscriptanalyzer') -and $Check.status -cne 'passed')) {
 			throw 'receipt_semantic_evidence_failure:portable'
 		}
 		if ($Check.status -ceq 'passed') { $Passed++ } else { $Skipped++ }
@@ -409,7 +410,7 @@ function Test-AcceptanceRevision($Value) {
 }
 
 function Test-AcceptanceDigest($Value) {
-	return $Value -is [string] -and $Value -cmatch '^[0-9a-f]{64}$'
+	return $Value -is [string] -and $Value -cmatch '\A[0-9a-f]{64}\z'
 }
 
 function Test-AcceptanceDecimalIdentity($Value) {
@@ -423,7 +424,7 @@ function Assert-AcceptanceAttemptAnchor {
 	Assert-AcceptanceClosedObject -Value $Anchor -PropertyNames @('schemaVersion','runId','runAttempt','nonce')
 	if ($Anchor.schemaVersion -isnot [string] -or $Anchor.schemaVersion -cne $script:AttemptAnchorSchema -or
 		-not (Test-AcceptanceDecimalIdentity $Anchor.runId) -or $Anchor.runAttempt -isnot [int] -or $Anchor.runAttempt -lt 1 -or
-		$Anchor.nonce -isnot [string] -or $Anchor.nonce -cnotmatch '^[0-9a-f]{64}$' -or $Anchor.nonce -cmatch '^0{64}$' -or
+		$Anchor.nonce -isnot [string] -or $Anchor.nonce -cnotmatch '\A[0-9a-f]{64}\z' -or $Anchor.nonce -cmatch '\A0{64}\z' -or
 		$Anchor.runId -cne $Run.id -or $Anchor.runAttempt -ne $Run.attempt) { throw 'receipt_invalid' }
 }
 

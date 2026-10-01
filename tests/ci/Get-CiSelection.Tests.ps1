@@ -181,6 +181,15 @@ foreach ($ScriptTestPath in @('scripts/tests/Test-ObservabilityContract.ps1', 's
 foreach ($ScriptTestLookalike in @('scripts/tests/NewUnwiredTest.ps1', 'scripts/tests/Test-SourceControlPolicy.ps1.bak', 'scripts/tests/Test-SourceControlPolicy.md', 'Scripts/tests/Test-SourceControlPolicy.ps1', 'scripts/test/Test-SourceControlPolicy.ps1')) {
 	Assert-Rejected { Get-PathCheckSelection $ScriptTestLookalike @{} } 'path_unclassified'
 }
+$ContentValidationScript = @(Get-PathCheckSelection 'scripts/content/Invoke-ContentValidation.ps1' @{})
+Assert-True ($ContentValidationScript -ccontains 'portable' -and $ContentValidationScript -ccontains 'content-reference-validation' -and $ContentValidationScript -cnotcontains 'native-client-server-compile' -and $ContentValidationScript -cnotcontains 'clean-package-provenance-smoke') 'The exact content-validation launcher must select portable and content-reference proof without implying a native or clean build.'
+foreach ($ContentTestPath in @('tests/content/Invoke-ContentValidation.Tests.ps1', 'tests/content/Invoke-ContentValidationCommand.Tests.ps1')) {
+	$ContentTest = @(Get-PathCheckSelection $ContentTestPath @{})
+	Assert-True (($ContentTest -join ',') -ceq 'portable') "The exact content contract test '$ContentTestPath' must select portable proof."
+}
+foreach ($ContentLookalike in @('scripts/content/Unwired.ps1', 'scripts/content/Invoke-ContentValidation.ps1.bak', 'scripts/content/nested/Invoke-ContentValidation.ps1', 'Scripts/content/Invoke-ContentValidation.ps1', 'tests/content/Unwired.Tests.ps1', 'tests/content/Invoke-ContentValidation.Tests.ps1.bak', 'tests/content/nested/Invoke-ContentValidation.Tests.ps1', 'Tests/content/Invoke-ContentValidation.Tests.ps1')) {
+	Assert-Rejected { Get-PathCheckSelection $ContentLookalike @{} } 'path_unclassified'
+}
 $AttributesPolicy = @(Get-PathCheckSelection '.gitattributes' @{})
 Assert-True ($AttributesPolicy -ccontains 'controller-contract' -and $AttributesPolicy -ccontains 'controller-operational-proof') 'Attribute policy changes should remain classifiable while triggering global attribute evaluation.'
 Assert-Rejected { Get-PathCheckSelection 'Setup.ps1' @{} } 'path_unclassified'

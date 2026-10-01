@@ -8,6 +8,22 @@ on:
         required: false
         type: boolean
         default: false
+    outputs:
+      report_artifact_id:
+        description: Exact uploaded visual evidence artifact ID.
+        value: ${{ jobs.validate.outputs.report_artifact_id }}
+      report_artifact_name:
+        description: Exact uploaded visual evidence artifact name.
+        value: ${{ jobs.validate.outputs.report_artifact_name }}
+      report_artifact_digest:
+        description: GitHub archive digest for the uploaded visual evidence.
+        value: ${{ jobs.validate.outputs.report_artifact_digest }}
+      report_sha256:
+        description: SHA-256 of visual-package-report.json.
+        value: ${{ jobs.validate.outputs.report_sha256 }}
+      report_size_bytes:
+        description: Byte length of visual-package-report.json.
+        value: ${{ jobs.validate.outputs.report_size_bytes }}
   pull_request:
     paths:
       - '.gitattributes'
@@ -31,6 +47,12 @@ jobs:
     continue-on-error: ${{ inputs.non_authoritative == true }}
     runs-on: windows-latest
     timeout-minutes: 20
+    outputs:
+      report_artifact_id: ${{ steps.report_artifact.outputs.artifact-id }}
+      report_artifact_name: ${{ steps.report_identity.outputs.artifact_name }}
+      report_artifact_digest: sha256:${{ steps.report_artifact.outputs.artifact-digest }}
+      report_sha256: ${{ steps.report_identity.outputs.evidence_sha256 }}
+      report_size_bytes: ${{ steps.report_identity.outputs.evidence_size_bytes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -51,10 +73,26 @@ jobs:
             -MaxCapturedLineUtf8Bytes 4096 `
             -MaxCapturedUtf8BytesPerValidator 131072 `
             -MaxReportUtf8Bytes 4194304
+      - name: Bind visual package evidence
+        id: report_identity
+        if: always()
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $ReportPath = Join-Path '${{ runner.temp }}' 'aetheln-visual-${{ github.run_id }}-${{ github.run_attempt }}/visual-package-report.json'
+          if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) { throw 'visual_report_missing' }
+          $Report = Get-Item -LiteralPath $ReportPath
+          if ($Report.Length -le 0 -or $Report.Length -gt 4MB) { throw 'visual_report_size_invalid' }
+          $Digest = (Get-FileHash -LiteralPath $ReportPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $ArtifactName = 'visual-package-report-${{ github.run_id }}-${{ github.run_attempt }}'
+          $Utf8 = New-Object Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "artifact_name=$ArtifactName`nevidence_sha256=$Digest`nevidence_size_bytes=$($Report.Length)`n", $Utf8)
       - name: Upload visual package evidence
+        id: report_artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: visual-package-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.report_identity.outputs.artifact_name }}
           path: ${{ runner.temp }}/aetheln-visual-${{ github.run_id }}-${{ github.run_attempt }}/visual-package-report.json
           if-no-files-found: error

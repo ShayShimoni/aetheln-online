@@ -149,6 +149,9 @@ try {
 	Assert-Rejected { ConvertFrom-CiActivationPolicyBytes -Bytes $Utf8.GetBytes($PolicyRaw) } 'activation_policy_duplicate_property'
 	$WrongPathRaw = $Utf8.GetString($PolicyBytes).Replace($PolicyRepositoryPath, 'attacker/policy.json')
 	Assert-Rejected { ConvertFrom-CiActivationPolicyBytes -Bytes $Utf8.GetBytes($WrongPathRaw) } 'activation_policy_schema_invalid'
+	$NewlineRepositoryRaw = $Utf8.GetString($PolicyBytes).Replace('ShayShimoni/aetheln-online', "ShayShimoni/aetheln-online`n")
+	Assert-Rejected { ConvertFrom-CiActivationPolicyBytes -Bytes $Utf8.GetBytes($NewlineRepositoryRaw) } 'activation_policy_schema_invalid'
+	Assert-True (-not (Test-ActivationRevision (('a' * 40) + "`n")) -and -not (Test-ActivationSha256 (('a' * 64) + "`n"))) 'Revision and SHA validators must reject trailing-newline bypasses.'
 
 	$WrongParentTested = Invoke-FixtureTestedMergeCommit -Base $script:BaseRevision -Head $ValidHead -ReverseParents
 	Assert-Rejected { Invoke-FixtureActivationCheck -Base $script:BaseRevision -Head $ValidHead -Tested $WrongParentTested } 'activation_tested_parents_mismatch'

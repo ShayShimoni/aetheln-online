@@ -96,7 +96,8 @@ function New-TestPortableReport {
 		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
 		'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
 		'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
-		'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
+		'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests',
+		'ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 		'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
 		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
 		'psscriptanalyzer'
@@ -164,6 +165,8 @@ try {
 		schemaVersion = 'aetheln.ci-acceptance-context/v1'
 		repository = $Parsed.repository; event = $Parsed.event; source = $Parsed.source; workflow = $Parsed.workflow
 		actions = $Parsed.actions; controller = $Parsed.controller; policy = $Parsed.policy; run = $Parsed.run; attemptAnchor = $Parsed.attemptAnchor
+		selectorBinding = [pscustomobject][ordered]@{ jobName='ci-selection-shadow'; artifactId='1001'; artifactName=('ci-selection-shadow-35533038331-2-' + ('6' * 64)); digest=('sha256:' + ('7' * 64)) }
+		producerBindings = @([pscustomobject][ordered]@{ key='visual'; jobName='visual-package-proof'; artifactId='2001'; artifactName=('ci-receipt-visual-35533038331-2-' + ('6' * 64)); digest=('sha256:' + ('8' * 64)) })
 	}
 	$ConsumerRequirement = [pscustomobject][ordered]@{
 		key = 'visual'; jobName = 'visual-package-proof'; selected = $true
@@ -207,6 +210,7 @@ try {
 		@{ name='anchor-short'; action={ param($x) $x.attemptAnchor.nonce = ('6' * 63) } },
 		@{ name='anchor-uppercase'; action={ param($x) $x.attemptAnchor.nonce = ('A' * 64) } },
 		@{ name='anchor-nonhex'; action={ param($x) $x.attemptAnchor.nonce = ('g' * 64) } },
+		@{ name='anchor-trailing-newline'; action={ param($x) $x.attemptAnchor.nonce = (('6' * 64) + "`n") } },
 		@{ name='anchor-all-zero'; action={ param($x) $x.attemptAnchor.nonce = ('0' * 64) } },
 		@{ name='anchor-run-replay'; action={ param($x) $x.attemptAnchor.runId = '35533038330' } },
 		@{ name='anchor-attempt-replay'; action={ param($x) $x.attemptAnchor.runAttempt = 1 } },
@@ -292,6 +296,12 @@ try {
 		try { Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $BadPortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:portable' }
 		catch { throw "Portable type fixture '$($PortableTypeCase.name)' failed: $($_.Exception.Message)" }
 	}
+	$SkippedAnalyzer = New-TestPortableReport
+	$SkippedAnalyzer.checks[$SkippedAnalyzer.checks.Count - 1].status = 'skipped'
+	$SkippedAnalyzer.summary.passed--
+	$SkippedAnalyzer.summary.skipped++
+	$SkippedAnalyzerBytes = $Utf8.GetBytes(($SkippedAnalyzer | ConvertTo-Json -Depth 12 -Compress) + "`n")
+	Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $SkippedAnalyzerBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_failure:portable'
 
 	foreach ($NativeTypeCase in @(
 		@{name='schema-string';mutate={param($x)$x.schemaVersion='1'}},
