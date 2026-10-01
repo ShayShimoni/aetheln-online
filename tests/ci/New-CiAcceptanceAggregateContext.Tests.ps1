@@ -45,8 +45,7 @@ function New-SelectorFixture {
 	}
 }
 
-function New-UnavailableSelectorFixture {
-	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory unavailable-controller fixture only.')]
+function Get-UnavailableSelectorFixture {
 	$Report = New-SelectorFixture -Selected $script:CheckIds
 	$Report.policy.digest = '0' * 64
 	$Report.execution = [pscustomobject][ordered]@{mode='accepted_controller_unavailable';controllerRevision=('a'*40);controllerBlobOid=$null;controllerSha256=$null;checkoutAllowed=$false;complete=$true;reason='accepted_controller_unavailable'}
@@ -162,7 +161,7 @@ try {
 
 $UnavailableGapFixture = New-InvocationFixture
 try {
-	Write-FixtureJson $UnavailableGapFixture.SelectorPath (New-UnavailableSelectorFixture)
+	Write-FixtureJson $UnavailableGapFixture.SelectorPath (Get-UnavailableSelectorFixture)
 	$Gap = Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Gap
 	Assert-True ($Gap.mode -ceq 'Gap' -and $Gap.acceptedControllerUnavailable -eq $true -and $Gap.attemptAnchor.nonce -ceq $script:Nonce) 'Unavailable-controller gap validation must bind the current attempt without claiming accepted-base identity.'
 	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'unreal-editor-automation,content-reference-validation,controller-contract,controller-operational-proof,clean-package-provenance-smoke') 'The fallback must conservatively select all five obligations without live producers.'
@@ -177,8 +176,9 @@ try {
 	$WorkflowSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml'), $script:ContextUtf8)
 	$FallbackWriters = [regex]::Matches($WorkflowSource, '(?m)^\s*\[IO\.File\]::WriteAllText\(\$env:AETHELN_SHADOW_REPORT, .*\)\r?$')
 	Assert-True ($FallbackWriters.Count -eq 1) 'The workflow must contain exactly one fallback report writer.'
-	$Report = New-UnavailableSelectorFixture
+	$Report = Get-UnavailableSelectorFixture
 	$Utf8 = $script:ContextUtf8
+	Assert-True ($Utf8.WebName -ceq 'utf-8') 'The workflow fallback fixture must use UTF-8 bytes.'
 	$env:AETHELN_SHADOW_REPORT = $WorkflowFallbackFixture.SelectorPath
 	& ([scriptblock]::Create($FallbackWriters[0].Value))
 	$FallbackBytes = [IO.File]::ReadAllBytes($WorkflowFallbackFixture.SelectorPath)
@@ -219,7 +219,7 @@ foreach ($Case in @(
 )) {
 	$Bad = New-InvocationFixture
 	try {
-		$Report = New-UnavailableSelectorFixture
+		$Report = Get-UnavailableSelectorFixture
 		& $Case.mutate $Report
 		Write-FixtureJson $Bad.SelectorPath $Report
 		Assert-Rejected { Invoke-Fixture -Fixture $Bad -Mode Gap } $Case.reason

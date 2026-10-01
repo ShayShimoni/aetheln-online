@@ -260,7 +260,7 @@ function Read-AndAssertAggregateContextSelector {
 		if ($Report.policy.version -cne 'shadow-v1' -or $Report.policy.digest -cne ('0'*64) -or
 			@($Report.classification.changedPaths).Count -ne 0 -or @($Report.classification.entries).Count -ne 0 -or
 			(@($Report.classification.uncertainties) -join ',') -cne 'accepted_controller_unavailable' -or
-			$Report.legacyAuthority.engineRequired -ne $null -or $Report.legacyAuthority.reason -cne 'not_observed' -or
+			$null -ne $Report.legacyAuthority.engineRequired -or $Report.legacyAuthority.reason -cne 'not_observed' -or
 			$Report.comparison.status -cne 'unavailable' -or (@($Report.comparison.differences) -join ',') -cne 'accepted_controller_unavailable' -or
 			$Selected.Count -ne $script:AggregateContextCheckIds.Count) { throw 'selector_fallback_invalid' }
 		foreach ($Obligation in $Obligations) {
