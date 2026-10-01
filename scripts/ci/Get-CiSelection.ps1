@@ -127,7 +127,7 @@ function Assert-CiSelectionContext {
 function Assert-CiSelectionAttemptAnchor {
 	param($AttemptAnchor, $Context)
 	Assert-CiSelectionContext $Context | Out-Null
-	Assert-ClosedObject $AttemptAnchor @('schemaVersion', 'runId', 'runAttempt', 'nonce') 'attempt_anchor_schema_invalid'
+	Assert-ClosedObject -Value $AttemptAnchor -PropertyNames @('schemaVersion', 'runId', 'runAttempt', 'nonce') -Reason 'attempt_anchor_schema_invalid'
 	if ($AttemptAnchor.schemaVersion -isnot [string] -or $AttemptAnchor.schemaVersion -cne $script:CiSelectionAttemptAnchorSchema) { throw 'attempt_anchor_schema_invalid' }
 	if ($AttemptAnchor.runId -isnot [string] -or $AttemptAnchor.runId -cnotmatch '^[1-9][0-9]{0,18}$' -or ($AttemptAnchor.runAttempt -isnot [int] -and $AttemptAnchor.runAttempt -isnot [long]) -or [long] $AttemptAnchor.runAttempt -le 0) { throw 'attempt_anchor_run_identity_invalid' }
 	if ($AttemptAnchor.nonce -isnot [string] -or $AttemptAnchor.nonce -cnotmatch '^[0-9a-f]{64}$' -or $AttemptAnchor.nonce -ceq ('0' * 64)) { throw 'attempt_anchor_nonce_invalid' }
