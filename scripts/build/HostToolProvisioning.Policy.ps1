@@ -1,7 +1,7 @@
 # Definition-only policy shared by the explicit operator entry point and fixtures.
 . (Join-Path $PSScriptRoot '../ci/RoutineCompileResources.ps1')
 
-$script:HostToolEnginePin = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
+$script:HostToolEnginePin = '9ab6767ecaaa724d01371ffaea14317311ae8371'
 $script:HostToolTargets = @('UnrealPak', 'ShaderCompileWorker', 'UnrealEditor')
 $script:HostToolProducts = @{
 	UnrealEditor = @('Engine/Binaries/Win64/UnrealEditor.exe', 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe', 'Engine/Binaries/Win64/UnrealEditor.target')

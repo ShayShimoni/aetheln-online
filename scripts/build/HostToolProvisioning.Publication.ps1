@@ -12,6 +12,42 @@ function Write-HostToolProvisioningReceipt {
 	}
 }
 
+function Write-HostToolResourceFailureReceipt {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)][string] $StartedUtc,
+		[Parameter(Mandatory)][ValidateSet('resource_pressure')][string] $ResourceFailure,
+		[AllowNull()][string] $PrePublicationFailure,
+		[Parameter(Mandatory)] $ResourceMonitor, [bool] $CleanupVerified, [bool] $LeaseReleased)
+	if (Test-Path -LiteralPath $Path) { throw 'resource_failure_receipt_exists' }
+	Assert-InitialPreparationPlainPath -Path $Path -Reason 'resource_failure_receipt_path_invalid'
+	$Proof = Get-RoutineCompileResourceProof -Monitor $ResourceMonitor
+	$Receipt = [ordered]@{ schemaVersion = 1; scope = 'host_tool_resource_failure';
+		startedUtc = $StartedUtc; finishedUtc = [DateTime]::UtcNow.ToString('o');
+		resourceFailure = $ResourceFailure; prePublicationFailure = $PrePublicationFailure;
+		monitorFailure = $Proof.failureReason;
+		cleanupVerified = $CleanupVerified; leaseReleased = $LeaseReleased;
+		resumeAuthorized = $false; sampleCount = $Proof.sampleCount;
+		lastAvailableRamBytes = $ResourceMonitor.lastAvailableRamBytes;
+		lastCommitHeadroomBytes = $ResourceMonitor.lastCommitHeadroomBytes;
+		minimumAvailableRamBytes = $Proof.minimumAvailableRamBytes;
+		minimumCommitHeadroomBytes = $Proof.minimumCommitHeadroomBytes }
+	$null = Write-HostToolProvisioningReceipt -Path $Path -Receipt $Receipt
+	return [pscustomobject] $Receipt
+}
+
+function Write-HostToolResourceFailureReceiptIfNeeded {
+	[CmdletBinding()]
+	[OutputType([bool])]
+	param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)][string] $StartedUtc,
+		[AllowNull()][string] $PrePublicationFailure, $ResourceMonitor,
+		[bool] $CleanupVerified, [bool] $LeaseReleased)
+	if ($null -eq $ResourceMonitor -or $ResourceMonitor.failureReason -cne 'resource_pressure') { return $false }
+	$null = Write-HostToolResourceFailureReceipt -Path $Path -StartedUtc $StartedUtc `
+		-ResourceFailure 'resource_pressure' -PrePublicationFailure $PrePublicationFailure `
+		-ResourceMonitor $ResourceMonitor -CleanupVerified $CleanupVerified -LeaseReleased $LeaseReleased
+	return $true
+}
+
 function Assert-HostToolPublicationDeadline {
 	param([long] $DeadlineTicks, [scriptblock] $ReadTicks)
 	if ((& $ReadTicks) -ge $DeadlineTicks) { throw 'publication_deadline' }

@@ -20,7 +20,8 @@ function Remove-HostFixtureRoot([string] $Root, [string] $Parent) {
 	if (Test-Path -LiteralPath $ResolvedRoot -PathType Container) { Remove-Item -LiteralPath $ResolvedRoot -Recurse -Force }
 }
 
-$Pin = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
+$Pin = '9ab6767ecaaa724d01371ffaea14317311ae8371'
+Assert-HostFixture ($script:HostToolEnginePin -ceq $Pin) 'Host-tool admission must require the approved custom engine commit.'
 $Envelope = New-HostToolAttemptEnvelope -StartTicks 1000L -Frequency 10L
 Assert-HostFixture ($Envelope.usefulDeadlineTicks -eq 199000L -and $Envelope.cleanupDeadlineTicks -eq 205000L -and $Envelope.publicationDeadlineTicks -eq 217000L) 'The 330/340/360 minute envelope drifted.'
 $BootstrapEnvelope = New-HostToolAttemptEnvelope -StartTicks 1000L -Frequency 10L -UsefulWorkMinutes 1440 -VerificationMinutes 120
@@ -847,6 +848,56 @@ $SampleMilliseconds = 5000L
 $null = Update-RoutineCompileResources -Monitor $PressureMonitor
 $SampleMilliseconds = 10000L
 Assert-HostFailure { Update-RoutineCompileResources -Monitor $PressureMonitor } 'resource_pressure'
+$ResourceFailurePath = Join-Path $FixtureTempRoot 'resource-failure.json'
+$null = Write-HostToolResourceFailureReceipt -Path $ResourceFailurePath -StartedUtc '2026-10-01T00:00:00.0000000Z' -ResourceFailure 'resource_pressure' -PrePublicationFailure 'resource_pressure' -ResourceMonitor $PressureMonitor -CleanupVerified $true -LeaseReleased $true
+$ResourceFailureRecord = Get-Content -LiteralPath $ResourceFailurePath -Raw | ConvertFrom-Json
+Assert-HostFixture ($ResourceFailureRecord.scope -ceq 'host_tool_resource_failure' -and
+	$ResourceFailureRecord.resourceFailure -ceq 'resource_pressure' -and
+	$ResourceFailureRecord.prePublicationFailure -ceq 'resource_pressure' -and
+	$ResourceFailureRecord.resumeAuthorized -eq $false -and
+	$ResourceFailureRecord.cleanupVerified -eq $true -and $ResourceFailureRecord.leaseReleased -eq $true -and
+	$ResourceFailureRecord.lastAvailableRamBytes -eq 1GB -and
+	$ResourceFailureRecord.lastCommitHeadroomBytes -eq 24GB -and
+	$ResourceFailureRecord.minimumAvailableRamBytes -eq 1GB -and
+	$ResourceFailureRecord.minimumCommitHeadroomBytes -eq 24GB) 'A sticky monitor must still allow a small independent D: terminal resource record.'
+Assert-HostFailure { Write-HostToolResourceFailureReceipt -Path $ResourceFailurePath -StartedUtc '2026-10-01T00:00:00.0000000Z' -ResourceFailure 'resource_pressure' -PrePublicationFailure 'resource_pressure' -ResourceMonitor $PressureMonitor -CleanupVerified $true -LeaseReleased $true } 'resource_failure_receipt_exists'
+$FallbackPath = Join-Path $FixtureTempRoot 'resource-publication-failure.json'
+$SimulatedPublicationError = $null
+try { throw 'simulated_publication_failure' } catch {
+	$SimulatedPublicationError = $_.Exception.Message
+	$FallbackWritten = Write-HostToolResourceFailureReceiptIfNeeded -Path $FallbackPath -StartedUtc '2026-10-01T00:00:00.0000000Z' -PrePublicationFailure 'checkpoint_skipped_resource_pressure' -ResourceMonitor $PressureMonitor -CleanupVerified $false -LeaseReleased $true
+}
+$FallbackRecord = Get-Content -LiteralPath $FallbackPath -Raw | ConvertFrom-Json
+Assert-HostFixture ($SimulatedPublicationError -ceq 'simulated_publication_failure' -and $FallbackWritten -eq $true -and
+	$FallbackRecord.resourceFailure -ceq 'resource_pressure' -and $FallbackRecord.prePublicationFailure -ceq 'checkpoint_skipped_resource_pressure' -and
+	$FallbackRecord.cleanupVerified -eq $false -and $FallbackRecord.leaseReleased -eq $true -and $FallbackRecord.resumeAuthorized -eq $false) 'A simulated publication exception must still produce an independent create-only D: failure record with honest cleanup and lease state.'
+$FinalizerSupervisor = Join-Path $FixtureTempRoot 'finalizer-supervisor'
+$null = New-Item -ItemType Directory -Path $FinalizerSupervisor
+& {
+	function Invoke-HostToolPublicationWorker { throw 'simulated_finalizer_publication_failure' }
+	Assert-HostFailure {
+		Invoke-HostToolFinalReceiptPublication -Bootstrap $true -SupervisorRoot $FinalizerSupervisor -EvidenceRoot $FixtureTempRoot `
+			-Receipt ([ordered]@{ failure = 'resource_pressure' }) -ControllerRoot $FixtureTempRoot -ResourceMonitor $PressureMonitor `
+			-DeadlineTicks ([long]::MaxValue) -StartedUtc '2026-10-01T00:00:00.0000000Z' `
+			-PrePublicationFailure 'checkpoint_skipped_resource_pressure' -CleanupVerified $true -LeaseReleased $true
+	} 'host_tool_provisioning_failed: simulated_finalizer_publication_failure'
+}
+$FinalizerFailure = Get-Content -LiteralPath (Join-Path $FinalizerSupervisor 'resource-failure.json') -Raw | ConvertFrom-Json
+$FinalizerMarker = Get-Content -LiteralPath (Join-Path $FinalizerSupervisor 'publication-failed.json') -Raw | ConvertFrom-Json
+Assert-HostFixture ($FinalizerFailure.resourceFailure -ceq 'resource_pressure' -and
+	$FinalizerFailure.prePublicationFailure -ceq 'checkpoint_skipped_resource_pressure' -and
+	$FinalizerFailure.cleanupVerified -eq $true -and $FinalizerFailure.leaseReleased -eq $true -and
+	$FinalizerFailure.resumeAuthorized -eq $false -and $FinalizerMarker.complete -eq $false -and
+	$FinalizerMarker.reason -ceq 'simulated_finalizer_publication_failure') 'The actual final publication path must preserve failure and write the independent D: receipt after publication throws.'
+$HealthyFallbackPath = Join-Path $FixtureTempRoot 'no-resource-failure.json'
+$HealthyMonitor = [pscustomobject]@{ failureReason = $null }
+Assert-HostFixture (-not (Write-HostToolResourceFailureReceiptIfNeeded -Path $HealthyFallbackPath -StartedUtc '2026-10-01T00:00:00.0000000Z' -ResourceMonitor $HealthyMonitor -CleanupVerified $true -LeaseReleased $true) -and
+	-not (Test-Path -LiteralPath $HealthyFallbackPath)) 'An unrelated publication failure must not be mislabeled as resource pressure.'
+$LeaseReleaseAt = $EntryText.LastIndexOf('Exit-EngineRunnerHostLease -Lease $Lease -CleanupVerified $true', [StringComparison]::Ordinal)
+$ResourceReceiptAt = $EntryText.IndexOf('Write-HostToolResourceFailureReceiptIfNeeded -Path', [StringComparison]::Ordinal)
+$FinalPublicationAt = $EntryText.LastIndexOf('Invoke-HostToolFinalReceiptPublication -Bootstrap $Bootstrap', [StringComparison]::Ordinal)
+Assert-HostFixture ($EntryText.Contains('$PrePublicationFailure = $Failure') -and
+	$ResourceReceiptAt -ge 0 -and $LeaseReleaseAt -ge 0 -and $FinalPublicationAt -gt $LeaseReleaseAt) 'The independent D: pressure record must be reachable after native cleanup and lease release without resampling a sticky monitor.'
 $LowMemory = 24GB; $SampleMilliseconds = 0L; $AvailableDisk = 20GB
 Assert-HostFailure { New-RoutineCompileResourceMonitor @ResourceArgs } 'disk_floor_reached'
 

@@ -464,6 +464,37 @@ function Invoke-HostToolNativeBuild {
 		cleanupVerified = $true; command = $Record.command; logPath = $Record.logPath; logSha256 = $Record.logSha256 }
 }
 
+function Invoke-HostToolFinalReceiptPublication {
+	param([bool] $Bootstrap, [string] $SupervisorRoot, [string] $EvidenceRoot,
+		[Collections.IDictionary] $Receipt, [string] $ControllerRoot, $ResourceMonitor,
+		[long] $DeadlineTicks, [string] $StartedUtc, [AllowNull()][string] $PrePublicationFailure,
+		[bool] $CleanupVerified, [bool] $LeaseReleased)
+	try {
+		if ($Bootstrap) {
+			$null = Invoke-HostToolPublicationWorker -SupervisorRoot $SupervisorRoot -EvidenceRoot $EvidenceRoot `
+				-Receipt $Receipt -ControllerRoot $ControllerRoot -ResourceMonitor $ResourceMonitor -DeadlineTicks $DeadlineTicks
+		} else {
+			Write-HostToolProvisioningReceipt -Path (Join-Path $EvidenceRoot 'host-tool-provisioning-receipt.json') -Receipt $Receipt
+		}
+	} catch {
+		$PublicationFailure = $_.Exception.Message
+		if ($Bootstrap -and (Test-Path -LiteralPath $SupervisorRoot -PathType Container)) {
+			try {
+				$null = Write-HostToolResourceFailureReceiptIfNeeded -Path (Join-Path $SupervisorRoot 'resource-failure.json') `
+					-StartedUtc $StartedUtc -PrePublicationFailure $PrePublicationFailure -ResourceMonitor $ResourceMonitor `
+					-CleanupVerified $CleanupVerified -LeaseReleased $LeaseReleased
+			} catch { Write-Warning 'Could not write the independent D: resource-failure receipt.' }
+		}
+		if ($Bootstrap -and -not (Test-Path -LiteralPath (Join-Path $SupervisorRoot 'publication-failed.json') -PathType Leaf)) {
+			try {
+				$null = Write-HostToolProvisioningReceipt -Path (Join-Path $SupervisorRoot 'publication-failed.json') -Receipt ([ordered]@{
+					schemaVersion = 1; scope = 'host_tool_receipt_publication'; complete = $false; reason = $PublicationFailure })
+			} catch { Write-Warning 'Could not write the D: publication-failed marker.' }
+		}
+		throw ('host_tool_provisioning_failed: ' + $PublicationFailure)
+	}
+}
+
 if (-not $Execute) { throw 'execute_required' }
 if (-not $PSCmdlet.ShouldProcess($EngineRoot, 'Run bounded non-clean host-tool provisioning')) { throw 'execute_declined' }
 $StartedUtc = [DateTime]::UtcNow.ToString('o')
@@ -673,8 +704,12 @@ try {
 } catch { $Failure = $_.Exception.Message }
 finally {
 	$PrimaryFailure = $Failure
+	if ($Bootstrap -and $null -ne $ResourceMonitor -and $ResourceMonitor.failureReason -ceq 'resource_pressure') {
+		$CheckpointFailure = 'checkpoint_skipped_resource_pressure'
+	}
 	if ($Bootstrap -and $null -ne $Lease -and $script:HostToolOwnedCleanupVerified -and
-		$null -ne $ResourceMonitor -and $null -ne $EngineRevision -and $null -ne $ConfigurationSha256) {
+		$null -ne $ResourceMonitor -and $null -eq $ResourceMonitor.failureReason -and
+		$null -ne $EngineRevision -and $null -ne $ConfigurationSha256) {
 		try {
 			$CheckpointPath = Join-Path $ResolvedEvidence 'generated-output-checkpoint.jsonl'
 			$Header = [pscustomobject]@{ schemaVersion = 2; engineRoot = $ResolvedEngine;
@@ -742,22 +777,10 @@ finally {
 	if ((Get-InitialPreparationTick) -ge $PublicationDeadlineTicks) {
 		$Receipt.success = $false; $Receipt.failure = 'publication_deadline'; $Failure = 'publication_deadline'; $Completed = $false
 	}
-	try {
-		if ($Bootstrap) {
-			$null = Invoke-HostToolPublicationWorker -SupervisorRoot $ResolvedSupervisor -EvidenceRoot $ResolvedEvidence -Receipt $Receipt -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $PublicationDeadlineTicks
-		} else {
-			Write-HostToolProvisioningReceipt -Path (Join-Path $ResolvedEvidence 'host-tool-provisioning-receipt.json') -Receipt $Receipt
-		}
-	} catch {
-		$Completed = $false; $Failure = $_.Exception.Message
-		if ($Bootstrap -and -not (Test-Path -LiteralPath (Join-Path $ResolvedSupervisor 'publication-failed.json') -PathType Leaf)) {
-			try {
-				$null = Write-HostToolProvisioningReceipt -Path (Join-Path $ResolvedSupervisor 'publication-failed.json') -Receipt ([ordered]@{
-					schemaVersion = 1; scope = 'host_tool_receipt_publication'; complete = $false; reason = $Failure })
-			} catch { Write-Warning 'Could not write the D: publication-failed marker.' }
-		}
-		throw ('host_tool_provisioning_failed: ' + $Failure)
-	}
+	$PrePublicationFailure = $Failure
+	Invoke-HostToolFinalReceiptPublication -Bootstrap $Bootstrap -SupervisorRoot $ResolvedSupervisor -EvidenceRoot $ResolvedEvidence `
+		-Receipt $Receipt -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $PublicationDeadlineTicks `
+		-StartedUtc $StartedUtc -PrePublicationFailure $PrePublicationFailure -CleanupVerified $script:HostToolOwnedCleanupVerified -LeaseReleased $LeaseReleased
 	} finally {
 		if ($PowerRequest) { [HostToolSleepPrevention]::End() }
 		foreach ($Pin in $EvidencePins) { $Pin.Dispose() }

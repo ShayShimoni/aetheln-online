@@ -32,6 +32,8 @@ function New-ResourceFixture {
 $F = New-ResourceFixture -Allocations @{ target = 1GB; logs = 2GB }
 $Proof = Get-RoutineCompileResourceProof -Monitor $F.monitor
 Assert-ResourceFixture -Condition ($Proof.volumes.Count -eq 1 -and $Proof.volumes[0].knownAllocationBytes -eq 3GB) -Message 'Physical volume aliases deduplicate floor, sum explicit allocations.'
+Assert-ResourceFixture -Condition ($F.monitor.lastAvailableRamBytes -eq 24GB -and $F.monitor.lastCommitHeadroomBytes -eq 24GB -and
+	$null -eq $Proof.PSObject.Properties['lastAvailableRamBytes']) -Message 'Retain the last memory sample internally without expanding the closed CI proof schema.'
 Assert-ResourceFixture -Condition ($Proof.sampleCount -eq 1 -and $F.state.reads -eq 1) -Message 'Initial sample reads each unique volume once.'
 Assert-ResourceFixture -Condition ((Get-RoutineCompileActionLimit -Monitor $F.monitor) -eq 4) -Message 'Action cap four.'
 $F.state.cores = 1
@@ -65,6 +67,7 @@ foreach ($Tick in @(20000L, 25000L)) { $F.state.milliseconds = $Tick; $F.state.c
 $F.state.milliseconds = 30000L
 Assert-ResourceFailure -Action { Update-RoutineCompileResources -Monitor $F.monitor } -Reason 'resource_pressure'
 Assert-ResourceFixture -Condition ((Get-RoutineCompileResourceProof -Monitor $F.monitor).consecutivePressureSamples -eq 3) -Message 'Pressure failure retained.'
+Assert-ResourceFixture -Condition ($F.monitor.lastCommitHeadroomBytes -eq (2GB - 1L)) -Message 'A sticky pressure failure must preserve the last measured commit headroom.'
 $F = New-ResourceFixture
 foreach ($Tick in @(5000L, 10000L)) { $F.state.milliseconds = $Tick; $F.state.ram = 1GB; $null = Update-RoutineCompileResources -Monitor $F.monitor }
 $F.state.milliseconds = 15000L; $F.state.ram = 24GB; $F.state.commit = 1GB
