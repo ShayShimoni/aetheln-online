@@ -249,7 +249,10 @@ Board moves, made in the same step as the action:
 - An issue moves from `Dev Done` to `QA` only when a QA round actually
   starts on it, and stays in `QA` only while that round runs. When the round
   ends: all boxes checked moves it to `Done`; a failed criterion that needs a
-  fix moves it back to `Open`, and to `In Progress` when the fix starts; a
+  fix moves it back to `Open` with a comment stating the failed criterion,
+  the `develop` commit, the expected and actual result, and exact steps or
+  commands to reproduce or simulate the failure. It moves to `In Progress`
+  when the fix starts. A
   criterion waiting on a decision, a dependency, or an engine QA run moves it
   to `Blocked` with the reason.
 - `Open` holds the next issues ready to start: clear acceptance criteria,
