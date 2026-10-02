@@ -794,6 +794,7 @@ AAethelnPlayerCharacter::AAethelnPlayerCharacter(
 void AAethelnPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	// Apply the Blueprint-tunable WalkSpeed identically on server and clients; sprint comes from GetMaxSpeed.
 	GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
 	BaseMeshRelativeYaw = GetMesh()->GetRelativeRotation().Yaw;
 	DesiredCameraZoomDistance = CameraBoom->TargetArmLength;

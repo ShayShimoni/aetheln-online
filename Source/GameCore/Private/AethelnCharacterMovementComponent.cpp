@@ -14,8 +14,8 @@
 
 namespace
 {
-	// Numerical tolerance (about 0.6 degrees) that keeps pure strafes from reading as
-	// backpedal after network yaw and acceleration quantization. Not a gameplay tuning value.
+	// Deliberately loose numeric epsilon (about 0.6 degrees, far above network yaw and
+	// acceleration quantization) so pure strafes never read as backpedal. Not a tuning value.
 	constexpr float BackpedalDotTolerance = 0.01f;
 
 	class FSavedMove_Aetheln : public FSavedMove_Character
@@ -99,8 +99,9 @@ float UAethelnCharacterMovementComponent::GetMaxSpeed() const
 
 bool UAethelnCharacterMovementComponent::IsBackpedaling() const
 {
-	// The server has already applied this move's control rotation, so prediction and
-	// authority derive backpedal from the same inputs. It is never a client claim.
+	// Never a client claim. On the server and in first-pass prediction this uses the move's
+	// control rotation. Correction replay uses the current yaw (PrepMoveFor does not restore
+	// SavedControlRotation), so a sharp turn can flip a replayed move between walk and sprint.
 	const float ControlYaw = CharacterOwner != nullptr
 		? CharacterOwner->GetControlRotation().Yaw
 		: 0.0f;
@@ -278,6 +279,8 @@ bool FAethelnMovementNetSavedMoveSprintFlagTest::RunTest(const FString& Paramete
 	TestEqual(TEXT("Cleared pooled move forgets sprint intent"), SprintMove->GetCompressedFlags() & SprintFlag, 0);
 
 	// The player released sprint after this move was saved; replay must not leave it latched.
+	// Runs on a standalone authority pawn: valid in Development, but the engine's checkSlow
+	// role/net-mode asserts in GetPredictionData_Client_Character would fire in a Debug build.
 	ClientMovement->bWantsToSprint = false;
 	ClientData->SavedMoves.Add(SecondSprintMove);
 	ClientData->bUpdatePosition = true;
@@ -388,8 +391,8 @@ bool FAethelnMovementNetInvalidSprintRejectedTest::RunTest(const FString& Parame
 	const float PeakBackwardSpeed =
 		RunAuthorityMoves(60, SprintFlag, FVector(-MaxAccel, 0.0f, 0.0f));
 	TestTrue(TEXT("Server received the backward sprint request"), Movement->bWantsToSprint);
-	TestEqual(TEXT("Backward sprint request is simulated at walk speed"), Movement->GetMaxSpeed(), WalkSpeed);
-	TestTrue(TEXT("Backward sprint request never exceeds walk speed"), PeakBackwardSpeed <= WalkSpeed + SpeedTolerance);
+	TestEqual(TEXT("Backward sprint request gets no sprint cap (walk cap; 0.7 backpedal scale is client input shaping)"), Movement->GetMaxSpeed(), WalkSpeed);
+	TestTrue(TEXT("Backward sprint request never exceeds the walk cap"), PeakBackwardSpeed <= WalkSpeed + SpeedTolerance);
 
 	Movement->StopMovementImmediately();
 	RunAuthorityMoves(1, SprintFlag, FVector(0.0f, MaxAccel, 0.0f));
@@ -407,7 +410,7 @@ bool FAethelnMovementNetInvalidSprintRejectedTest::RunTest(const FString& Parame
 	RunAuthorityMoves(60, 0, FVector(MaxAccel, 0.0f, 0.0f));
 	TestTrue(TEXT("Walking authority stays grounded"), Movement->IsMovingOnGround());
 	const FVector ServerLocation = Character->GetActorLocation();
-	// A client that predicted sprint without sending the flag runs one move ahead by the speed difference.
+	// Engine threshold check only: a one-move offset of the sprint/walk speed difference exceeds it.
 	const FVector SprintPredictedLocation =
 		ServerLocation + FVector((SprintSpeed - WalkSpeed) * MoveDeltaTime, 0.0f, 0.0f);
 	FMovementBaseInterfaceData MovementBase;
@@ -417,7 +420,7 @@ bool FAethelnMovementNetInvalidSprintRejectedTest::RunTest(const FString& Parame
 			TimeStamp, MoveDeltaTime, FVector::ZeroVector, ServerLocation, ServerLocation,
 			&MovementBase, NAME_None, Movement->PackNetworkMovementMode()));
 	TestTrue(
-		TEXT("Client location implying unflagged sprint distance is corrected"),
+		TEXT("Engine position-error threshold rejects a one-move sprint/walk speed-difference offset"),
 		Movement->ServerExceedsAllowablePositionError(
 			TimeStamp, MoveDeltaTime, FVector::ZeroVector, SprintPredictedLocation, SprintPredictedLocation,
 			&MovementBase, NAME_None, Movement->PackNetworkMovementMode()));

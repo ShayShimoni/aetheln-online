@@ -5,9 +5,9 @@
 GitHub issue [#100](https://github.com/ShayShimoni/aetheln-online/issues/100)
 is a one-time P0 Prototype Gate learning exception under Epic #6. It validates
 local movement, camera, animation, and traversal feel before the networked
-movement story. Issue #17 remains in Backlog and still owns saved-move
-prediction, replication, server validation, correction, and multiplayer
-evidence.
+movement story. Issue #17 now replicates sprint through a predicted saved-move
+flag and still owns remote facing, jump parity, server-side backpedal speed, and
+packaged multiplayer evidence.
 
 This POC is temporary. Quinn is an engine mannequin, not an approved Aetheln
 race, sex, class, silhouette, animation set, or combat property. None of the
@@ -219,10 +219,18 @@ component destruction, and PIE shutdown.
 
 Sprint is deliberately disabled while backpedaling. Issue #17 replicates it:
 `UAethelnCharacterMovementComponent` packs sprint intent into the predicted
-saved move as `FLAG_Custom_0`, and the server grants sprint speed only while
-walking with non-zero acceleration that is not backward relative to control
-yaw. Any other sprint request simulates walk speed, and a client that predicted
-sprint anyway is corrected. Clients never send speeds. `Aetheln.Movement.Net.*`
+saved move as `FLAG_Custom_0`. The server enforces the 500 cm/s walk and
+700 cm/s sprint caps and allows the sprint cap only while walking with non-zero
+acceleration that is not backward relative to control yaw. Any other sprint
+request is simulated at the walk cap, and a client that predicted sprint anyway
+is corrected. Clients never send speeds.
+
+Known limits until later #17 work: the 70% backpedal scale is client input
+shaping, so the server caps backpedal at 500 cm/s rather than 350 cm/s;
+correction replay judges backpedal against the current control yaw, so a sharp
+turn can flip a replayed move between walk and sprint caps; jump takeoff reads
+the previous tick's acceleration, so a sprint jump on the first movement frame
+launches at walk speed. `Aetheln.Movement.Net.*`
 covers the flag round trip, the server speed clamp, and rejected requests.
 
 ## Verification and feedback
