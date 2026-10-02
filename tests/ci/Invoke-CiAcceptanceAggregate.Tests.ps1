@@ -40,6 +40,7 @@ function New-FixtureZip {
 	try {
 		foreach ($Spec in $Entries) {
 			$Entry = $Archive.CreateEntry([string] $Spec.name, [IO.Compression.CompressionLevel]::Optimal)
+			$Entry.LastWriteTime = [DateTimeOffset]'2000-01-01T00:00:00Z'
 			if ($Spec.PSObject.Properties.Name -ccontains 'externalAttributes') { $Entry.ExternalAttributes = [int] $Spec.externalAttributes }
 			$Stream = $Entry.Open()
 			try {
@@ -53,11 +54,21 @@ function New-FixtureZip {
 	return $Buffer.ToArray()
 }
 
+$TimestampFixture = New-FixtureZip @([pscustomobject]@{name='timestamp.txt';bytes='stable'})
+$TimestampBuffer = New-Object IO.MemoryStream(,$TimestampFixture)
+$TimestampArchive = New-Object IO.Compression.ZipArchive($TimestampBuffer, [IO.Compression.ZipArchiveMode]::Read)
+try {
+	Assert-True ($TimestampArchive.Entries[0].LastWriteTime.DateTime -eq [datetime]'2000-01-01T00:00:00') 'Fixture ZIP entries must use a fixed timestamp so artifact digests remain stable across API calls.'
+} finally { $TimestampArchive.Dispose(); $TimestampBuffer.Dispose() }
+
 function Get-Sha256([byte[]] $Bytes) {
 	$Algorithm = [Security.Cryptography.SHA256]::Create()
 	try { return ([BitConverter]::ToString($Algorithm.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
 	finally { $Algorithm.Dispose() }
 }
+
+Start-Sleep -Milliseconds 2100
+Assert-True ((Get-Sha256 $TimestampFixture) -ceq (Get-Sha256 (New-FixtureZip @([pscustomobject]@{name='timestamp.txt';bytes='stable'})))) 'Identical fixture ZIPs must have the same digest across a ZIP timestamp boundary.'
 
 function Set-FixtureSelectorBinding {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Updates only an in-memory test fixture binding.')]
@@ -166,7 +177,7 @@ function New-FixturePortableReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param($Context)
 	$Names = @(
-		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
+		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','host-tool-provisioning-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
 	)
 	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
 	return [pscustomobject][ordered]@{schemaVersion=1;revision=$Context.source.testedRevision;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';checks=$Checks;summary=[pscustomobject][ordered]@{total=$Checks.Count;passed=$Checks.Count;failed=0;skipped=0;requiredFailed=0}}
