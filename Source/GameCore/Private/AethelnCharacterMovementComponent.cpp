@@ -43,6 +43,18 @@ namespace
 			bSavedWantsToSprint = Movement != nullptr && Movement->bWantsToSprint;
 		}
 
+		virtual void PostUpdate(ACharacter* Character, EPostUpdateMode PostUpdateMode) override
+		{
+			// The engine rewrites SavedControlRotation with the live rotation after a replay too; keep the
+			// recorded one so a later correction replays this move with the same yaw.
+			const FRotator RecordedControlRotation = SavedControlRotation;
+			Super::PostUpdate(Character, PostUpdateMode);
+			if (PostUpdateMode == PostUpdate_Replay)
+			{
+				SavedControlRotation = RecordedControlRotation;
+			}
+		}
+
 		// The base CanCombineWith compares GetCompressedFlags, and replay applies these
 		// flags through MoveAutonomous, so neither needs an override here.
 		virtual uint8 GetCompressedFlags() const override
@@ -741,6 +753,104 @@ bool FAethelnMovementNetJumpTakeoffParityTest::RunTest(const FString& Parameters
 	return true;
 }
 
+
+/**
+ * A forward sprint jump simulated once by an authority reference, and the same move recorded by a
+ * second character at a non-zero control yaw, then replayed ReplayCount times after the camera
+ * turned around. Judging the move by the live yaw would call it a backpedal (walk cap, camera facing).
+ */
+struct FAethelnMovementNetJumpReplayScenario
+{
+	static bool Run(FAutomationTestBase& Test, int32 ReplayCount)
+	{
+		using namespace AethelnMovementNetTests;
+		const FTestWorld TestWorld;
+		AAethelnPlayerCharacter* Reference = TestWorld.SpawnGroundedCharacter(FVector(0.0f, 0.0f, 100.0f));
+		AAethelnPlayerCharacter* Replayed = TestWorld.SpawnGroundedCharacter(FVector(500.0f, 0.0f, 100.0f));
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		APlayerController* ReferenceController = TestWorld.World != nullptr
+			? TestWorld.World->SpawnActor<APlayerController>(
+				APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters)
+			: nullptr;
+		APlayerController* ReplayedController = TestWorld.World != nullptr
+			? TestWorld.World->SpawnActor<APlayerController>(
+				APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters)
+			: nullptr;
+		UAethelnCharacterMovementComponent* ReferenceMovement = GetMovement(Reference);
+		UAethelnCharacterMovementComponent* ReplayedMovement = GetMovement(Replayed);
+		Test.TestNotNull(TEXT("Reference POC character uses the project movement component"), ReferenceMovement);
+		Test.TestNotNull(TEXT("Replayed POC character uses the project movement component"), ReplayedMovement);
+		Test.TestNotNull(TEXT("Reference character has a player controller"), ReferenceController);
+		Test.TestNotNull(TEXT("Replayed character has a player controller"), ReplayedController);
+		if (ReferenceMovement == nullptr || ReplayedMovement == nullptr
+			|| ReferenceController == nullptr || ReplayedController == nullptr)
+		{
+			return false;
+		}
+		ReferenceController->Possess(Reference);
+		ReplayedController->Possess(Replayed);
+		// Non-zero, so a saved move that kept a cleared (zero) yaw could not pass by accident.
+		const FRotator RecordedControlRotation(0.0f, 90.0f, 0.0f);
+		ReferenceController->SetControlRotation(RecordedControlRotation);
+		ReplayedController->SetControlRotation(RecordedControlRotation);
+
+		float TimeStamp = 0.0f;
+		for (int32 Index = 0; Index < 10; ++Index)
+		{
+			TimeStamp += MoveDeltaTime;
+			ReferenceMovement->MoveAutonomous(TimeStamp, MoveDeltaTime, 0, FVector::ZeroVector);
+			ReplayedMovement->MoveAutonomous(TimeStamp, MoveDeltaTime, 0, FVector::ZeroVector);
+		}
+		Test.TestTrue(TEXT("Both characters settle on the ground"),
+			ReferenceMovement->IsMovingOnGround() && ReplayedMovement->IsMovingOnGround());
+
+		const FVector ForwardAccel = RecordedControlRotation.Vector() * ReferenceMovement->GetMaxAcceleration();
+		TimeStamp += MoveDeltaTime;
+		ReferenceMovement->MoveAutonomous(
+			TimeStamp, MoveDeltaTime, FSavedMove_Character::FLAG_JumpPressed | FSavedMove_Character::FLAG_Custom_0, ForwardAccel);
+		Test.TestTrue(
+			TEXT("First pass launches forward at sprint speed"),
+			Horizontal(ReferenceMovement->Velocity).Equals(
+				RecordedControlRotation.Vector() * ReferenceMovement->SprintSpeed, SpeedTolerance));
+
+		const FVector ReplayStartLocation = Replayed->GetActorLocation();
+		FNetworkPredictionData_Client_Character* ClientData = ReplayedMovement->GetPredictionData_Client_Character();
+		ReplayedMovement->bWantsToSprint = true;
+		Replayed->Jump();
+		FSavedMovePtr JumpMove = ClientData->AllocateNewMove();
+		JumpMove->SetMoveFor(Replayed, MoveDeltaTime, ForwardAccel, *ClientData);
+		JumpMove->PostUpdate(Replayed, FSavedMove_Character::PostUpdate_Record);
+		ReplayedController->SetControlRotation(RecordedControlRotation + FRotator(0.0f, 180.0f, 0.0f));
+		for (int32 Replay = 0; Replay < ReplayCount; ++Replay)
+		{
+			if (Replay > 0)
+			{
+				// Each correction replays from the server state, here the grounded pre-jump state.
+				Replayed->SetActorLocation(ReplayStartLocation);
+				ReplayedMovement->Velocity = FVector::ZeroVector;
+				ReplayedMovement->SetMovementMode(MOVE_Walking);
+				Replayed->ResetJumpState();
+			}
+			ClientData->SavedMoves.Reset();
+			ClientData->SavedMoves.Add(JumpMove);
+			ClientData->bUpdatePosition = true;
+			Test.TestTrue(
+				FString::Printf(TEXT("Correction %d replays the jump move"), Replay + 1),
+				ReplayedMovement->ClientUpdatePositionAfterServerUpdate());
+			Test.TestTrue(
+				FString::Printf(TEXT("Correction %d replay launches at the first-pass takeoff velocity"), Replay + 1),
+				(ReplayedMovement->Velocity - ReferenceMovement->Velocity).Size() <= SpeedTolerance);
+			Test.TestTrue(
+				FString::Printf(TEXT("Correction %d replay snaps facing to the first-pass yaw"), Replay + 1),
+				FMath::Abs(FRotator::NormalizeAxis(
+					Replayed->GetActorRotation().Yaw - Reference->GetActorRotation().Yaw)) <= YawTolerance);
+		}
+		ClientData->SavedMoves.Reset();
+		return true;
+	}
+};
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnMovementNetJumpTakeoffReplayTest,
 	"Aetheln.Movement.Net.JumpTakeoffReplay",
@@ -748,64 +858,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnMovementNetJumpTakeoffReplayTest::RunTest(const FString& Parameters)
 {
-	using namespace AethelnMovementNetTests;
-	const FTestWorld TestWorld;
-	AAethelnPlayerCharacter* Reference = TestWorld.SpawnGroundedCharacter(FVector(0.0f, 0.0f, 100.0f));
-	AAethelnPlayerCharacter* Replayed = TestWorld.SpawnGroundedCharacter(FVector(500.0f, 0.0f, 100.0f));
-	FActorSpawnParameters SpawnParameters;
-	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	APlayerController* PlayerController = TestWorld.World != nullptr
-		? TestWorld.World->SpawnActor<APlayerController>(
-			APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters)
-		: nullptr;
-	UAethelnCharacterMovementComponent* ReferenceMovement = GetMovement(Reference);
-	UAethelnCharacterMovementComponent* ReplayedMovement = GetMovement(Replayed);
-	TestNotNull(TEXT("Reference POC character uses the project movement component"), ReferenceMovement);
-	TestNotNull(TEXT("Replayed POC character uses the project movement component"), ReplayedMovement);
-	TestNotNull(TEXT("Replayed character has a player controller"), PlayerController);
-	if (ReferenceMovement == nullptr || ReplayedMovement == nullptr || PlayerController == nullptr)
-	{
-		return false;
-	}
-	PlayerController->Possess(Replayed);
+	return FAethelnMovementNetJumpReplayScenario::Run(*this, 1);
+}
 
-	float TimeStamp = 0.0f;
-	for (int32 Index = 0; Index < 10; ++Index)
-	{
-		TimeStamp += MoveDeltaTime;
-		ReferenceMovement->MoveAutonomous(TimeStamp, MoveDeltaTime, 0, FVector::ZeroVector);
-		ReplayedMovement->MoveAutonomous(TimeStamp, MoveDeltaTime, 0, FVector::ZeroVector);
-	}
-	TestTrue(TEXT("Both characters settle on the ground"),
-		ReferenceMovement->IsMovingOnGround() && ReplayedMovement->IsMovingOnGround());
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnMovementNetJumpTakeoffRepeatedReplayTest,
+	"Aetheln.Movement.Net.JumpTakeoffRepeatedReplay",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-	// First pass at control yaw zero: a forward sprint jump.
-	const FVector ForwardAccel(ReferenceMovement->GetMaxAcceleration(), 0.0f, 0.0f);
-	TimeStamp += MoveDeltaTime;
-	ReferenceMovement->MoveAutonomous(
-		TimeStamp, MoveDeltaTime, FSavedMove_Character::FLAG_JumpPressed | FSavedMove_Character::FLAG_Custom_0, ForwardAccel);
-	TestTrue(
-		TEXT("First pass launches forward at sprint speed"),
-		Horizontal(ReferenceMovement->Velocity).Equals(FVector(ReferenceMovement->SprintSpeed, 0.0f, 0.0f), SpeedTolerance));
-
-	// The same move recorded at control yaw zero, replayed after the camera turned around, so judging it
-	// against the live yaw would call it a backpedal (walk cap, camera facing).
-	FNetworkPredictionData_Client_Character* ClientData = ReplayedMovement->GetPredictionData_Client_Character();
-	ReplayedMovement->bWantsToSprint = true;
-	Replayed->Jump();
-	FSavedMovePtr JumpMove = ClientData->AllocateNewMove();
-	JumpMove->SetMoveFor(Replayed, MoveDeltaTime, ForwardAccel, *ClientData);
-	PlayerController->SetControlRotation(FRotator(0.0f, 180.0f, 0.0f));
-	ClientData->SavedMoves.Add(JumpMove);
-	ClientData->bUpdatePosition = true;
-	TestTrue(TEXT("Correction replays the jump move"), ReplayedMovement->ClientUpdatePositionAfterServerUpdate());
-	ClientData->SavedMoves.Reset();
-	TestTrue(
-		TEXT("Replay launches at the first-pass takeoff velocity"),
-		(ReplayedMovement->Velocity - ReferenceMovement->Velocity).Size() <= SpeedTolerance);
-	TestTrue(
-		TEXT("Replay snaps facing to the first-pass yaw"),
-		FMath::Abs(FRotator::NormalizeAxis(Replayed->GetActorRotation().Yaw - Reference->GetActorRotation().Yaw)) <= YawTolerance);
-	return true;
+bool FAethelnMovementNetJumpTakeoffRepeatedReplayTest::RunTest(const FString& Parameters)
+{
+	// A move still unacknowledged after one correction is replayed again by the next one.
+	return FAethelnMovementNetJumpReplayScenario::Run(*this, 2);
 }
 #endif

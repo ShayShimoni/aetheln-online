@@ -28,6 +28,11 @@ public:
 
 	virtual float GetMaxSpeed() const override;
 	virtual FNetworkPredictionData_Client* GetPredictionData_Client() const override;
+	// Re-expose the deprecated DoJump(bool) overload so overriding the current one does not hide it
+	// (clang -Woverloaded-virtual, an error under UBT's -Werror on Linux).
+	PRAGMA_DISABLE_DEPRECATION_WARNINGS
+	using Super::DoJump;
+	PRAGMA_ENABLE_DEPRECATION_WARNINGS
 	virtual bool DoJump(bool bReplayingMoves, float DeltaTime) override;
 
 	static float SelectGroundMaxSpeed(
@@ -74,8 +79,8 @@ private:
 	friend class FAethelnMovementNetServerSpeedClampTest;
 	friend class FAethelnMovementNetInvalidSprintRejectedTest;
 	friend class FAethelnMovementNetJumpTakeoffParityTest;
-	friend class FAethelnMovementNetJumpTakeoffReplayTest;
 	friend struct FAethelnMovementNetPredictionPair;
+	friend struct FAethelnMovementNetJumpReplayScenario;
 
 	bool IsBackpedaling() const;
 	float GetSimulatedControlYaw() const;
