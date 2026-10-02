@@ -131,14 +131,14 @@ required human review, applicable checks, and explicit owner authorization.
 The PR author records a final self-review as `COMMENTED`, never as a fabricated
 `APPROVED` state. No single gate implies another.
 
-Branch-protection enforcement is deferred while the private repository's
-`develop` protection API reports HTTP 403 and requests GitHub Pro or public
-visibility. The documented process gate above remains mandatory even without
-enforced protection. If protection later becomes available, configure required
-checks only from the then-current attainable #16 baseline; do not select a
-check that never reports for the relevant event/trust path. Recheck capability
-and check names before configuration rather than treating this deferral as a
-permanent platform fact.
+The repository became public on 2026-10-02, and branch protection was set on
+`develop` and `main` on 2026-10-03 with the owner's approval: changes only
+through PRs with 0 required approvals, required checks `quality-gates` and
+`change-impact` (non-strict), `enforce_admins` on, and no force-push or
+deletion. The process gate above still applies, since protection does not
+check review or owner authorization. Add `pull-request-policy` to both
+branches' required checks once it has reported on a `develop` PR and a `main`
+PR; never require a check that does not report for the relevant event.
 
 ## Releases and versioning
 
