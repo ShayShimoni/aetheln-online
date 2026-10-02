@@ -236,7 +236,8 @@ velocity with the held direction at the move's speed cap (so a sprint jump on
 the first movement frame launches at 700 cm/s) and snaps facing to travel or
 camera yaw as described above. A buffered jump fires on the move after landing,
 on both client and server. Correction replay judges backpedal and takeoff facing
-against the yaw each move was recorded with.
+against the yaw each move was recorded with, also when a later correction
+replays the same move again.
 
 Known limits until later #17 work: aim steering is not yet a saved-move flag,
 so the server picks travel facing for aimed forward-diagonal jumps, and airborne
@@ -244,7 +245,7 @@ aim tracking of pure lateral aimed jumps is client-only; remote players see
 those facings only after the remote-facing change. `Aetheln.Movement.Net.*`
 covers the flag round trip, the server speed and backpedal clamps, rejected
 requests, client/server takeoff parity on a land-and-rejump direction change,
-and takeoff replay with a turned camera.
+and takeoff replay, once and repeated, with a turned camera.
 
 ## Verification and feedback
 
