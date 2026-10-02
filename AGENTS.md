@@ -225,8 +225,10 @@ Tie board moves to PR events, in the same step as the PR action:
   `In Progress` in the same step.
 - When an agent or session starts work on an issue, move the issue to
   `In Progress` in the same step, before the work begins.
-- Never leave an open, active PR whose issue is not in `Code Review` or
-  `Blocked`.
+- Every open PR has its issue in `Code Review`, so the number of open PRs
+  matches the `Code Review` cards. If the issue becomes `Blocked` or parked,
+  close the PR unmerged, keep its branch, and record on the issue how to resume;
+  reopen the PR when work resumes.
 - Check each acceptance-criteria checkbox as soon as QA on the merged
   `develop` revision verifies that specific criterion, not only when the
   issue moves to `Done`. Where QA is explicitly not applicable, the distinct
