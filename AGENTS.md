@@ -209,3 +209,9 @@ Tie board moves to PR events, in the same step as the PR action:
 - `Blocked` overrides these moves while a recorded blocker exists.
 - Never leave an open, active PR whose issue is not in `Code Review` or
   `Blocked`.
+- Move an issue to `Done` only after required post-merge QA has passed on the
+  merged `develop` revision and every acceptance-criteria checkbox in the
+  issue body is checked. Check a box only when recorded evidence covers that
+  criterion, and link the QA comment, run, and `develop` commit. An issue in
+  `Done` with an unchecked acceptance box returns to the status its evidence
+  supports.
