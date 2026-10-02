@@ -793,7 +793,11 @@ Every accepted decision records:
   with zero native exit and no cleanup claim; its runner identity is covered by
   the native receipt the selector always co-selects. That first proof runs in
   the existing compile job after the host lease is released, inside the
-  unchanged 40-minute job ceiling.
+  unchanged 40-minute job ceiling: the editor build starts only when its
+  15-minute bound and the 12-minute harness bound still fit, and every
+  automation step continues on error, so an unreal failure leaves the compile
+  job and native receipt intact while the unreal receipt fails red at its raw
+  binding check. Host-lease wrapping remains a follow-up.
   `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
   when the selector's chosen checks are a subset of those six live
   obligations, nonce-specific requirements with an exact selector binding and
