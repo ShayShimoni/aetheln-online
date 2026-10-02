@@ -29,6 +29,7 @@ namespace
 		{
 			Super::Clear();
 			bSavedWantsToSprint = false;
+			bSavedWantsAimSteering = false;
 		}
 
 		virtual void SetMoveFor(
@@ -41,6 +42,7 @@ namespace
 			const UAethelnCharacterMovementComponent* Movement =
 				Character->GetCharacterMovement<UAethelnCharacterMovementComponent>();
 			bSavedWantsToSprint = Movement != nullptr && Movement->bWantsToSprint;
+			bSavedWantsAimSteering = Movement != nullptr && Movement->bWantsAimSteering;
 		}
 
 		virtual void PostUpdate(ACharacter* Character, EPostUpdateMode PostUpdateMode) override
@@ -64,11 +66,16 @@ namespace
 			{
 				Flags |= FLAG_Custom_0;
 			}
+			if (bSavedWantsAimSteering)
+			{
+				Flags |= FLAG_Custom_1;
+			}
 			return Flags;
 		}
 
 	private:
 		bool bSavedWantsToSprint = false;
+		bool bSavedWantsAimSteering = false;
 	};
 
 	class FNetworkPredictionData_Client_Aetheln : public FNetworkPredictionData_Client_Character
@@ -166,6 +173,7 @@ UAethelnCharacterMovementComponent::FJumpTakeoff UAethelnCharacterMovementCompon
 	Takeoff.FacingYaw = bCameraFacing
 		? ControlYaw
 		: PlanarAcceleration.Rotation().Yaw;
+	Takeoff.bAimTracked = bAimSteering && bPureLateral;
 	return Takeoff;
 }
 
@@ -182,10 +190,11 @@ bool UAethelnCharacterMovementComponent::DoJump(bool bReplayingMoves, float Delt
 	{
 		return true;
 	}
+	const float ControlYaw = GetSimulatedControlYaw();
 	const FJumpTakeoff Takeoff = CalculateJumpTakeoff(
 		Acceleration,
 		GetMaxAcceleration(),
-		GetSimulatedControlYaw(),
+		ControlYaw,
 		TakeoffSpeed,
 		bWantsAimSteering);
 	if (Takeoff.bHasMoveInput)
@@ -197,7 +206,70 @@ bool UAethelnCharacterMovementComponent::DoJump(bool bReplayingMoves, float Delt
 			FRotator(0.0f, Takeoff.FacingYaw, 0.0f),
 			ETeleportType::TeleportPhysics);
 	}
+	bAimTrackedJump = Takeoff.bAimTracked;
+	AimTrackedJumpYawOffset = FRotator::NormalizeAxis(Takeoff.FacingYaw - ControlYaw);
 	return true;
+}
+
+void UAethelnCharacterMovementComponent::ConfigureRotationMode(
+	UCharacterMovementComponent& Movement,
+	bool bFalling,
+	bool bAimSteering,
+	bool bBackpedaling,
+	bool bTrackedJump)
+{
+	const bool bCameraFacing = bFalling
+		? bAimSteering && !bTrackedJump
+		: bAimSteering || bBackpedaling;
+	Movement.bOrientRotationToMovement = !bFalling && !bCameraFacing;
+	Movement.bUseControllerDesiredRotation = bCameraFacing;
+}
+
+void UAethelnCharacterMovementComponent::PhysicsRotation(float DeltaTime)
+{
+	if (!HasValidData() || (CharacterOwner->GetController() == nullptr && !bRunPhysicsWithNoController))
+	{
+		return;
+	}
+	// Chosen from this move's state on the owning client, in replay and on the server alike. The flags
+	// are still written each move because the locomotion Animation Blueprint reads bOrientRotationToMovement.
+	const bool bFalling = IsFalling();
+	bAimTrackedJump = bAimTrackedJump && bFalling;
+	ConfigureRotationMode(*this, bFalling, bWantsAimSteering, IsBackpedaling(), bAimTrackedJump);
+	const float ControlYaw = GetSimulatedControlYaw();
+	const float CurrentYaw = UpdatedComponent->GetComponentRotation().Yaw;
+	if (bAimTrackedJump)
+	{
+		// While aim is held the sideways body turns with camera yaw; otherwise it holds and the offset
+		// follows, so re-aiming mid-air resumes from the held facing.
+		if (bWantsAimSteering)
+		{
+			MoveUpdatedComponent(
+				FVector::ZeroVector,
+				FRotator(0.0f, FRotator::NormalizeAxis(ControlYaw + AimTrackedJumpYawOffset), 0.0f),
+				false);
+		}
+		else
+		{
+			AimTrackedJumpYawOffset = FRotator::NormalizeAxis(CurrentYaw - ControlYaw);
+		}
+		return;
+	}
+	if (!bUseControllerDesiredRotation)
+	{
+		Super::PhysicsRotation(DeltaTime);
+		return;
+	}
+	// The engine's controller-desired path would read the live control rotation, which correction
+	// replay must not use; turn toward this move's control yaw at the same rate instead.
+	const float TargetYaw = FRotator::NormalizeAxis(ControlYaw);
+	if (!FMath::IsNearlyEqual(CurrentYaw, TargetYaw, 1e-3f))
+	{
+		MoveUpdatedComponent(
+			FVector::ZeroVector,
+			FRotator(0.0f, FMath::FixedTurn(CurrentYaw, TargetYaw, GetDeltaRotation(DeltaTime).Yaw), 0.0f),
+			false);
+	}
 }
 
 void UAethelnCharacterMovementComponent::ControlledCharacterMove(const FVector& InputVector, float DeltaSeconds)
@@ -238,15 +310,18 @@ void UAethelnCharacterMovementComponent::UpdateFromCompressedFlags(uint8 Flags)
 {
 	Super::UpdateFromCompressedFlags(Flags);
 	bWantsToSprint = (Flags & FSavedMove_Character::FLAG_Custom_0) != 0;
+	bWantsAimSteering = (Flags & FSavedMove_Character::FLAG_Custom_1) != 0;
 }
 
 bool UAethelnCharacterMovementComponent::ClientUpdatePositionAfterServerUpdate()
 {
 	// Replay applies each saved move's flags; restore the live input intent afterwards,
-	// as the engine does for crouch, because sprint input is edge triggered.
+	// as the engine does for crouch, because sprint and aim input are edge triggered.
 	const bool bRealWantsToSprint = bWantsToSprint;
+	const bool bRealWantsAimSteering = bWantsAimSteering;
 	const bool bReplayed = Super::ClientUpdatePositionAfterServerUpdate();
 	bWantsToSprint = bRealWantsToSprint;
+	bWantsAimSteering = bRealWantsAimSteering;
 	return bReplayed;
 }
 
