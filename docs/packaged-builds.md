@@ -80,7 +80,7 @@ $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
 .\scripts\build\Build-PackagedArtifacts.ps1 `
   -ProjectPath .\AethelnOnline.uproject `
-  -EngineRoot 'D:\UnrealEngine\UE-5.8.1-source' `
+  -EngineRoot 'D:\UnrealEngine\UE-5.8.1-source-issue81-clean' `
   -LinuxToolchainRoot 'C:\UnrealToolchains\v26_clang-20.1.8-rockylinux8' `
   -ArchiveRoot 'D:\Builds\aetheln-run-001' `
   -LogRoot 'D:\BuildLogs\aetheln-run-001' `
