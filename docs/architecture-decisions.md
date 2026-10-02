@@ -978,6 +978,83 @@ Every accepted decision records:
   compile report, or the per-PR compile becomes a measured engine-runner
   bottleneck.
 
+### TA-019 - Private Art Plugin Outside the Public Tree
+
+- **Status:** Accepted
+- **Scope:** Issue #201 art storage boundary: `AethelnOnline.uproject`,
+  the private `aetheln-art` repository, and the `formatting-policy` check.
+- **Decision (2026-10-02):** Fab Standard License, Megascans, paid-pack, and
+  AI-generated art live only in the private `ShayShimoni/aetheln-art`
+  repository as the content-only plugin `Plugins/AethelnArt` (no modules,
+  `CanContainContent`, enabled by default, LFS rules mirroring this
+  repository). Contributors clone it beside the code checkout they open; the
+  project loads it only through
+  `"AdditionalPluginDirectories": ["../aetheln-art/Plugins"]`, resolved
+  relative to the `.uproject` directory. It is never listed in `Plugins`, not
+  even as `Optional`. Public `Content/`, `Config/`, `Source/`, and `Plugins/`
+  never reference `/AethelnArt/`; art-dependent maps live inside the private
+  plugin. Epic template content (Mannequins, LevelPrototyping) stays public:
+  it comes from the engine `Templates` folder, so it is UE EULA "Examples"
+  that section 4(b) allows distributing, and it remains under the UE EULA, not
+  a repository license.
+- **Context:** The repository became public on 2026-10-02. The Fab Standard
+  License allows sharing through a private repository with project
+  collaborators but forbids standalone redistribution, which a public
+  repository is. No Fab, Megascans, or paid content was ever committed, so no
+  history rewrite is needed.
+- **Evidence:** Static engine-source reading at the pinned 5.8.1 revision
+  (paths relative to the engine root). A missing directory is safe:
+  - Editor and cook runtime: `Engine/Source/Runtime/Projects/Private/ProjectDescriptor.cpp`
+    resolves relative entries against the `.uproject` directory, and
+    `PluginManager.cpp` `ReadPluginsInDirectory` scans only when
+    `DirectoryExists`; a missing directory is skipped without a log line.
+  - UBT: `Engine/Source/Programs/UnrealBuildTool/System/Plugins.cs`
+    `ReadAdditionalPlugins` logs a warning ("AdditionalPluginDirectory ... not
+    found") and continues. `EnumeratePlugins.cs` and `Unreal.cs`
+    `GetExtensionDirs` filter non-existent directories. The repository CI does
+    not promote UBT warnings to failures.
+  - UAT staging: `AutomationUtils/DeploymentContext.cs` and `ProjectParams.cs`
+    only remap files under the directory to `RemappedPlugins/`; nothing exists
+    there when it is absent.
+  - The directory sits outside the work tree, so the untracked-input checks
+    in `scripts/ci/InitialPreparation.Input.ps1:105-106` and
+    `scripts/ci/ManagedCompileWorkspace.ps1:330-331` never see it.
+- **Alternatives:** A git submodule at `Plugins/AethelnArt` or `Content/Art`
+  is rejected: `scripts/ci/Get-CiSelection.ps1:326` throws
+  `checkout_unsupported_entry` on any gitlink, both
+  `scripts/ci/InitialPreparation.Input.ps1:65` and
+  `scripts/ci/ManagedCompileWorkspace.ps1:127` reject `.gitmodules`, and fork
+  clones would get a broken pointer. A gitignored clone inside the tree is
+  rejected because those two untracked-input checks run
+  `git ls-files --others` without `--exclude-standard` over `Content`,
+  `Plugins`, and the other build inputs, so it fails
+  `input_untracked_build_input` and `managed_workspace_untracked_input`.
+  Perforce or Diversion stays the escape hatch if LFS quota or binary size
+  becomes the bottleneck.
+- **Consequences:** Hosted jobs, fork pull requests, and
+  `trusted-candidate-compile` run without the art and must stay green; every
+  UBT run there logs the missing-directory warning. Rule 4 of
+  `scripts/ci/Test-FormattingPolicy.ps1` fails on any tracked `Content/`,
+  `Config/`, `Source/`, or `Plugins/` file matching `AethelnArt` and on a
+  `Plugins` entry named `AethelnArt`. It scans text and real binary assets but
+  only counts LFS pointer files, which hosted checkouts with `lfs: false`
+  contain, and it reports that count. The rule lives in an existing check
+  because adding a check name changes the closed portable, receipt, and
+  aggregate check lists. Private LFS storage shares the account's 10 GiB
+  quota with this repository.
+- **Follow-up (not implemented):** Only the scheduled packaging jobs on the
+  trusted runner may clone `aetheln-art`, beside the checkout so
+  `../aetheln-art/Plugins` resolves. They use a fine-grained, read-only token
+  scoped to that repository, stored as a secret that `pull_request` jobs never
+  receive. Cooked builds remap the plugin to `../RemappedPlugins/`, so
+  packaging evidence must cover that staging path once art exists.
+- **Owner:** Issue #201, including the packaging-clone follow-up until it moves
+  to its own issue. #202 and #203 consume this boundary; intake and provenance
+  follow #120 and the `visuals/asset-provenance.md` model.
+- **Revisit trigger:** The first licensed asset needs a public reference, LFS
+  quota or binary size forces another VCS, or an engine upgrade changes
+  missing-directory handling.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |

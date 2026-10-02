@@ -105,10 +105,29 @@ try {
 		'docs/clean.md' = "# Clean`n`nBody text.`n"
 		'docs/setext.md' = "Setext Title`n$('=' * 9)`n`nBody.`n"
 		'Source/GameCore/Private/Clean.cpp' = "void Clean()`n{`n`tint Value = 0;`n}`n"
+		'Content/Maps/Real.umap' = "`0`0/Game/Maps/Real`0"
+		'Content/Maps/Pointer.umap' = "version https://git-lfs.github.com/spec/v1`noid sha256:$('0' * 64)`nsize 1`n"
+		'AethelnOnline.uproject' = "{`n`t`"Plugins`": [ { `"Name`": `"EnhancedInput`", `"Enabled`": true } ],`n`t`"AdditionalPluginDirectories`": [ `"../aetheln-art/Plugins`" ]`n}`n"
 	}
 	$CleanOutput = & $Checker -RepositoryRoot $CleanRoot | Out-String
 	Assert-True -Condition ($CleanOutput -match 'Formatting policy checks passed\.') -Message 'A clean LF, marker-free, tab-indented repository should pass.'
-	Write-Output 'PASS: clean repository with tab-indented C++ and a setext underline passes'
+	Assert-True -Condition ($CleanOutput -match 'scanned 2 tracked files; 1 LFS pointer files not scanned') -Message "The private art boundary must report scanned and pointer-only files honestly: $CleanOutput"
+	Write-Output 'PASS: clean repository with tab-indented C++, a setext underline, and an AethelnArt plugin directory passes'
+
+	$ArtAssetRoot = Join-Path $FixtureRoot 'art-asset'
+	New-FixtureRepository -Root $ArtAssetRoot -Files @{ 'Content/Maps/Leak.umap' = "`0`0/AethelnArt/Meshes/SM_Rock`0" }
+	Invoke-ExpectedFailure -Root $ArtAssetRoot -ExpectedPattern 'Content/Maps/Leak\.umap: references the private AethelnArt plugin'
+	Write-Output 'PASS: a binary public asset referencing /AethelnArt/ is rejected'
+
+	$ArtConfigRoot = Join-Path $FixtureRoot 'art-config'
+	New-FixtureRepository -Root $ArtConfigRoot -Files @{ 'Config/DefaultEngine.ini' = "[/Script/EngineSettings.GameMapsSettings]`nGameDefaultMap=/AethelnArt/Maps/Art.Art`n" }
+	Invoke-ExpectedFailure -Root $ArtConfigRoot -ExpectedPattern 'Config/DefaultEngine\.ini: references the private AethelnArt plugin'
+	Write-Output 'PASS: public config referencing /AethelnArt/ is rejected'
+
+	$ArtPluginRoot = Join-Path $FixtureRoot 'art-plugin'
+	New-FixtureRepository -Root $ArtPluginRoot -Files @{ 'AethelnOnline.uproject' = "{`n`t`"Plugins`": [ { `"Name`": `"AethelnArt`", `"Enabled`": true, `"Optional`": true } ]`n}`n" }
+	Invoke-ExpectedFailure -Root $ArtPluginRoot -ExpectedPattern 'AethelnOnline\.uproject: Plugins lists AethelnArt'
+	Write-Output 'PASS: listing AethelnArt as a .uproject plugin dependency is rejected'
 
 	$CrlfRoot = Join-Path $FixtureRoot 'crlf'
 	New-FixtureRepository -Root $CrlfRoot -Files @{

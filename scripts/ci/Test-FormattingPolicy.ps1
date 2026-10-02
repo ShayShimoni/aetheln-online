@@ -72,6 +72,36 @@ foreach ($RelativePath in $SourceFiles) {
 	}
 }
 
+# 4. Public project files never reference the private AethelnArt plugin (TA-019).
+#    Text and real binary assets are scanned; LFS pointer files carry no asset
+#    content, so they are counted and reported instead of silently passing.
+$Latin1 = [System.Text.Encoding]::GetEncoding(28591)
+$ScannedCount = 0
+$PointerCount = 0
+foreach ($RelativePath in @(Invoke-Git -Arguments @('ls-files', '--', 'Content', 'Config', 'Source', 'Plugins'))) {
+	$FullPath = Join-Path $RepositoryRoot ($RelativePath -replace '/', [IO.Path]::DirectorySeparatorChar)
+	if (-not (Test-Path -LiteralPath $FullPath)) {
+		continue
+	}
+	$Text = $Latin1.GetString([System.IO.File]::ReadAllBytes($FullPath))
+	if ($Text.StartsWith('version https://git-lfs.github.com/spec/v1', [StringComparison]::Ordinal)) {
+		$PointerCount++
+		continue
+	}
+	$ScannedCount++
+	if ($Text -match '(?i)\bAethelnArt\b') {
+		$Violations += "${RelativePath}: references the private AethelnArt plugin; public files must not depend on private art."
+	}
+}
+$ProjectPath = Join-Path $RepositoryRoot 'AethelnOnline.uproject'
+if (Test-Path -LiteralPath $ProjectPath) {
+	$PluginsProperty = (Get-Content -LiteralPath $ProjectPath -Raw | ConvertFrom-Json).PSObject.Properties['Plugins']
+	if ($null -ne $PluginsProperty -and @($PluginsProperty.Value | Where-Object { $_.Name -eq 'AethelnArt' }).Count -gt 0) {
+		$Violations += 'AethelnOnline.uproject: Plugins lists AethelnArt; load it only through AdditionalPluginDirectories.'
+	}
+}
+Write-Output "Private art boundary: scanned $ScannedCount tracked files; $PointerCount LFS pointer files not scanned (asset content absent)."
+
 if ($Violations.Count -gt 0) {
 	throw "Formatting policy violations:`n$($Violations -join "`n")"
 }
