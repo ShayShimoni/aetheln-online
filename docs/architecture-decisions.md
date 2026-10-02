@@ -295,7 +295,8 @@ Every accepted decision records:
   `scripts/ci/Test-MarkdownLinks.ps1`, and
   `.github/workflows/prototype-quality-gates.yml`. The lead's 2026-09-06
   applicability decision under the user's CI-improvement authorization adds
-  only those four exact CI paths: Unreal compilation does not validate
+  only those four exact CI paths (historical; TA-018 later narrowed the
+  exempt list): Unreal compilation does not validate
   portable scheduling, policy checks, or workflow YAML logic. Required
   portable runner, formatting, Markdown, workflow, and scheduling-policy
   fixture suites plus independent review remain mandatory. Case variants,
@@ -950,7 +951,7 @@ Every accepted decision records:
   independent review remain the gates for that logic. The compile is
   operational proof of the controller, not a substitute for them.
 - **Cost:** one incremental Windows client plus Linux server compile on the
-  self-hosted engine runner (runner 21) per owner controller pull request,
+  self-hosted `aetheln-engine` runner per owner controller pull request,
   behind the existing `quality-gates` success requirement and the FIFO
   `aetheln-engine-runner` queue.
 - **Alternatives:** a new green gap reason for "selected but compile skipped"

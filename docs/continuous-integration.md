@@ -576,11 +576,10 @@ live workflow itself selects `controller-contract` and
 `controller-operational-proof`, which now both have truthful receipt producers
 (portable and native). The requirements-template bytes changed with the native
 producer, so activation pins still come only after a fresh accepted-base
-observation of this wiring; no activation policy or template is published.
-No Package 3C activation policy or pre-reviewed template is published. Before a
-one-file activation can exist, a separate reviewed package must either add and
-shadow-observe a truthful controller-operational receipt or replace this selection boundary
-  with an independently justified, fail-closed contract. Only after that work may
+observation of this wiring. No Package 3C activation policy or pre-reviewed
+template is published. Before a one-file activation can exist, a separate
+reviewed package must shadow-observe the native producer wiring on a fresh
+accepted base. Only after that work may
   an accepted-base policy pin a template whose only candidate delta is the final
   literal `false` to `true` in the dormant predicate, while controller,
   publisher, aggregate,
