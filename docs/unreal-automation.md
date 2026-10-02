@@ -170,6 +170,18 @@ source engine and can pass its local non-secret path explicitly through
 revision, and clean-workspace controls. Live execution evidence is
 commit-specific and cannot be inferred from fixture coverage.
 
+Issue #167 Package 3C wires that run into the owner-only
+`trusted-candidate-compile` job. After a passing compile, the job builds the
+`AethelnOnlineEditor` Win64 target in the registered managed compile workspace,
+runs this harness from that workspace with `-EngineRoot` set to the runner's
+engine root and the default 600-second timeout, and uploads the normalized
+`TestResults/unreal-automation-report.json` as the `unreal-automation-report`
+artifact. Harness and Unreal output stay in runner-local files because they
+contain absolute runner paths and this repository is public; the job log shows
+only a path-free summary. The hosted `unreal-receipt-shadow` job publishes a
+shadow-only `unreal-editor-automation` receipt from that report. The filter,
+report schema, and engine pin are unchanged, and nothing grants acceptance.
+
 Issue #44 must reuse this automation foundation for its downstream packaged
 dedicated-server/two-client lifecycle, Gauntlet orchestration, and network-
 profile scenarios rather than create a second test system. Those packaged

@@ -772,10 +772,13 @@ Every accepted decision records:
   all eight exact obligation decisions, and its artifact ID/name/API digest as
   direct `needs` outputs. The portable, trusted native client/server compile,
   and reusable visual jobs expose their truthful raw artifact ID/name/digest
-  plus inner report SHA-256/length. Three hosted receipt-publisher jobs download
-  those exact artifacts by ID, validate the raw typed reports, and publish
-  nonce-bound shadow receipts for `portable`, `controller-contract`,
-  `controller-operational-proof`, `native-client-server-compile`, and
+  plus inner report SHA-256/length; the trusted compile job also exposes a
+  second raw artifact, the normalized `unreal-automation-report` from the
+  frozen two-test harness run in its managed workspace. Four hosted
+  receipt-publisher jobs download those exact artifacts by ID, validate the raw
+  typed reports, and publish nonce-bound shadow receipts for `portable`,
+  `controller-contract`, `controller-operational-proof`,
+  `native-client-server-compile`, `unreal-editor-automation`, and
   `visual-package` only. The portable
   publisher proves `controller-contract` and `portable` from the same exact
   `ci-report.json`, limited to the selector-derived subset carried in its
@@ -785,9 +788,14 @@ Every accepted decision records:
   same exact `engine-runner-report.json` under the same selector-derived
   subset rule; both results bind zero native exit, verified cleanup, and the
   `trusted-candidate-compile` runner identity, and the report is revalidated
-  under each check id with its own reason suffix.
+  under each check id with its own reason suffix. The unreal publisher proves
+  `unreal-editor-automation` from the exact `unreal-automation-report.json`
+  with zero native exit and no cleanup claim; its runner identity is covered by
+  the native receipt the selector always co-selects. That first proof runs in
+  the existing compile job after the host lease is released, with step bounds
+  inside the unchanged 40-minute job ceiling.
   `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
-  when the selector's chosen checks are a subset of those five live
+  when the selector's chosen checks are a subset of those six live
   obligations, nonce-specific requirements with an exact selector binding and
   sorted producer bindings. Each binding carries the job name and exact
   artifact ID/name/digest from the named direct dependency. The aggregate
@@ -797,16 +805,15 @@ Every accepted decision records:
   closed. This direct producer binding resolves the earlier shared-nonce
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
-  live portable/controller-contract/controller-operational-proof/native/visual subset, the aggregate is not called. The workflow
+  live portable/controller-contract/controller-operational-proof/native/unreal/visual subset, the aggregate is not called. The workflow
   still validates the selector identity and emits the exact selected
   unsupported set as a green `producer_contract_incomplete` record with
   `complete=false`, `shadow=true`, `authoritative=false`, and
   `grantsAcceptance=false`. The green result prevents a known incomplete shadow
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
-  publication error remains red. `unreal-editor-automation`,
-  `clean-package-provenance-smoke`, and `content-reference-validation` remain
-  unsupported live obligations.
+  publication error remains red. `clean-package-provenance-smoke` and
+  `content-reference-validation` remain unsupported live obligations.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate
