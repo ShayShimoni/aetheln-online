@@ -246,6 +246,11 @@ Board moves, made in the same step as the action:
   separate issue tracks the blocker, that issue moves instead.
 - An issue that is deliberately parked, rather than waiting on a named
   blocker, moves to `Backlog`.
+- An issue moves from `Dev Done` to `QA` only when a QA round actually
+  starts on it, and stays in `QA` only while that round runs. When the round
+  ends: all boxes checked moves it to `Done`; a failed criterion that needs a
+  fix moves it to `In Progress`; a criterion waiting on a decision, a
+  dependency, or an engine QA run moves it to `Blocked` with the reason.
 - Check each acceptance-criteria checkbox as soon as QA on the merged
   `develop` revision verifies that criterion, not only when the issue moves
   to `Done`. Where QA is explicitly not applicable, the distinct acceptance
@@ -260,20 +265,14 @@ Board moves, made in the same step as the action:
 
 Keep local branches and worktrees in sync with the remote. GitHub deletes a
 PR's head branch on merge. In the same step as the merge, run
-`git fetch --prune`, then remove the local worktree and branch only when all
-of these hold:
-
-- The local branch tip equals the merged PR head SHA, or is an ancestor of the
-  PR's base branch. Unpushed local commits keep the branch.
-- `git status --porcelain --ignored` shows no untracked files and no ignored
-  evidence (for example `Saved/` logs or automation reports). Ignored build
-  output (`Binaries/`, `Intermediate/`, `DerivedDataCache/`) may go.
-- The worktree holds no preserved evidence and is not an engine or compile
-  workspace. Keep those until the issue that owns them is `Done`.
-
-Use `git worktree remove` and `git branch -d`. Use `--force` or `-D` only
-after checking the rules above, for example when `git diff HEAD` is empty and
-the only status entries are line-ending changes. A PR closed unmerged keeps
-its branch until the issue records that nothing on it is still needed. If a
-worktree must stay, record its name and state on the issue. QA and review
-worktrees follow the same rules once their result is recorded.
+`git fetch --prune` and clean up the local worktree and branch under
+[Completed Delivery Branch Cleanup](docs/source-control.md#completed-delivery-branch-cleanup).
+On 2026-10-03 the owner gave standing authorization for that cleanup of
+merged PR head branches, so no per-ref request is needed when every check
+there passes. Before removing a worktree, also confirm that
+`git status --porcelain --ignored` shows no untracked files and no ignored
+evidence such as `Saved/` logs or automation reports; ignored build output
+(`Binaries/`, `Intermediate/`, `DerivedDataCache/`) may go. Keep worktrees
+that hold preserved evidence or are engine or compile workspaces until the
+issue that owns them is `Done`, and record any kept worktree's name and state
+on the issue.
