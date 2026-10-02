@@ -168,6 +168,10 @@ Complete roadmap work in dependency order:
    [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6), with
    [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17) as its
    first actionable child rather than a separately counted roadmap step.
+   Issue #17 may start and merge on Unreal Editor/PIE and headless automation
+   evidence while Issue #2's packaged comparison continues; Issue #17's
+   packaged two-client evidence and closure still require Issue #2's final
+   packaged comparison through Issue #15's artifacts.
 9. Evaluate the prototype against the exit criteria in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before beginning the 1.0 vertical slice.
 
 The [GitHub Issues backlog](https://github.com/ShayShimoni/aetheln-online/issues) remains the source of truth for work status, priority, ownership, and target version. This roadmap defines stage boundaries and dependencies.

@@ -46,7 +46,6 @@ protected:
 private:
 	void ApplyAimSteeringIntent(bool bWantsAimSteering);
 	void ApplyCurrentGroundRotationMode();
-	void ApplyCurrentGroundSpeed();
 	void ApplyCurrentJumpFacing();
 	void ApplyCurrentJumpHorizontalVelocity();
 	void ApplySprintIntent(bool bWantsToSprint);
@@ -95,9 +94,6 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float WalkSpeed = 500.0f;
 
-	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", Units = "cm/s"))
-	float SprintSpeed = 700.0f;
-
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float BackpedalSpeedScale = 0.7f;
 
@@ -121,11 +117,9 @@ private:
 	float CurrentPresentationYaw = 0.0f;
 	float DesiredCameraZoomDistance = 400.0f;
 	float TravelFacingAimJumpOffset = 0.0f;
-	bool bIssuedNetworkSprintWarning = false;
 	bool bAimSteeringActive = false;
 	bool bCameraMeshHidden = false;
 	bool bHasBufferedJump = false;
-	bool bSprintIntentActive = false;
 	bool bTravelFacingAimJumpActive = false;
 	bool bWantsBackpedal = false;
 	bool bJumpPresentationActive = false;

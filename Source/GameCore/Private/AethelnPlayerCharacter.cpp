@@ -1,5 +1,6 @@
 #include "AethelnPlayerCharacter.h"
 
+#include "AethelnCharacterMovementComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -10,8 +11,6 @@
 #include "Misc/AutomationTest.h"
 #include "UObject/UnrealType.h"
 #endif
-
-DEFINE_LOG_CATEGORY_STATIC(LogAethelnMovementPOC, Log, All);
 
 namespace
 {
@@ -122,17 +121,6 @@ namespace
 				? FMath::Clamp(BackpedalSpeedScale, 0.0f, 1.0f)
 				: 1.0f;
 		return MovementInput * DirectionalSpeedScale;
-	}
-
-	float SelectGroundMaxWalkSpeed(
-		bool bSprintAllowed,
-		bool bWantsBackpedal,
-		float WalkSpeed,
-		float SprintSpeed)
-	{
-		return bSprintAllowed && !bWantsBackpedal
-			? SprintSpeed
-			: WalkSpeed;
 	}
 
 	bool IsBufferedJumpReady(
@@ -563,16 +551,16 @@ bool FAethelnPOCBackpedalSpeedTest::RunTest(const FString& Parameters)
 
 	TestEqual(
 		TEXT("Forward movement may use sprint speed"),
-		SelectGroundMaxWalkSpeed(true, false, 500.0f, 700.0f),
+		UAethelnCharacterMovementComponent::SelectGroundMaxSpeed(true, false, 500.0f, 700.0f),
 		700.0f);
 	TestEqual(
 		TEXT("Backward movement cannot sprint"),
-		SelectGroundMaxWalkSpeed(true, true, 500.0f, 700.0f),
+		UAethelnCharacterMovementComponent::SelectGroundMaxSpeed(true, true, 500.0f, 700.0f),
 		500.0f);
 	TestEqual(
 		TEXT("Backward sprint intent remains capped at 350 cm/s"),
 		BackwardInput.Size()
-			* SelectGroundMaxWalkSpeed(
+			* UAethelnCharacterMovementComponent::SelectGroundMaxSpeed(
 				true,
 				true,
 				500.0f,
@@ -764,7 +752,8 @@ bool FAethelnPOCResponsiveMovementSettingsTest::RunTest(
 
 AAethelnPlayerCharacter::AAethelnPlayerCharacter(
 	const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UAethelnCharacterMovementComponent>(
+		ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
 
@@ -805,6 +794,8 @@ AAethelnPlayerCharacter::AAethelnPlayerCharacter(
 void AAethelnPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	// Apply the Blueprint-tunable WalkSpeed identically on server and clients; sprint comes from GetMaxSpeed.
+	GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
 	BaseMeshRelativeYaw = GetMesh()->GetRelativeRotation().Yaw;
 	DesiredCameraZoomDistance = CameraBoom->TargetArmLength;
 	UpdateCameraPresentation(0.0f);
@@ -841,7 +832,6 @@ void AAethelnPlayerCharacter::ReceiveMoveInput(const FVector2D& MovementInput)
 	if (!GetCharacterMovement()->IsFalling())
 	{
 		ApplyCurrentGroundRotationMode();
-		ApplyCurrentGroundSpeed();
 	}
 
 	const FRotator YawRotation = GetMovementReferenceRotation();
@@ -893,7 +883,6 @@ void AAethelnPlayerCharacter::ReceiveJumpStarted()
 	}
 
 	ClearBufferedJumpRequest();
-	ApplyCurrentGroundSpeed();
 	ApplyCurrentJumpHorizontalVelocity();
 	bTravelFacingAimJumpActive =
 		bAimSteeringActive
@@ -997,7 +986,6 @@ void AAethelnPlayerCharacter::OnMovementModeChanged(
 	LockedJumpPresentationYaw = 0.0f;
 	bJumpPresentationActive = false;
 	ApplyCurrentGroundRotationMode();
-	ApplyCurrentGroundSpeed();
 	if (PrevMovementMode == MOVE_Falling
 		&& Movement->IsMovingOnGround())
 	{
@@ -1092,26 +1080,6 @@ void AAethelnPlayerCharacter::ApplyCurrentGroundRotationMode()
 	}
 }
 
-void AAethelnPlayerCharacter::ApplyCurrentGroundSpeed()
-{
-	UCharacterMovementComponent* Movement = GetCharacterMovement();
-	if (Movement == nullptr)
-	{
-		return;
-	}
-
-	const UWorld* World = GetWorld();
-	const bool bSprintAllowed =
-		bSprintIntentActive
-		&& World != nullptr
-		&& World->GetNetMode() == NM_Standalone;
-	Movement->MaxWalkSpeed = SelectGroundMaxWalkSpeed(
-		bSprintAllowed,
-		bWantsBackpedal,
-		WalkSpeed,
-		SprintSpeed);
-}
-
 void AAethelnPlayerCharacter::ApplyCurrentJumpHorizontalVelocity()
 {
 	UCharacterMovementComponent* Movement = GetCharacterMovement();
@@ -1126,7 +1094,7 @@ void AAethelnPlayerCharacter::ApplyCurrentJumpHorizontalVelocity()
 		CalculateJumpHorizontalVelocity(
 			LastMovementInput,
 			GetMovementReferenceRotation(),
-			Movement->MaxWalkSpeed,
+			Movement->GetMaxSpeed(),
 			BackpedalSpeedScale);
 	Movement->Velocity.X = HorizontalVelocity.X;
 	Movement->Velocity.Y = HorizontalVelocity.Y;
@@ -1287,22 +1255,9 @@ void AAethelnPlayerCharacter::UpdateMovementPresentation(
 
 void AAethelnPlayerCharacter::ApplySprintIntent(bool bWantsToSprint)
 {
-	bSprintIntentActive = bWantsToSprint;
-	const UWorld* World = GetWorld();
-	const bool bStandalone =
-		World != nullptr && World->GetNetMode() == NM_Standalone;
-	ApplyCurrentGroundSpeed();
-	if (!bWantsToSprint || bStandalone)
+	if (UAethelnCharacterMovementComponent* Movement =
+		GetCharacterMovement<UAethelnCharacterMovementComponent>())
 	{
-		return;
-	}
-
-	if (!bIssuedNetworkSprintWarning)
-	{
-		bIssuedNetworkSprintWarning = true;
-		UE_LOG(
-			LogAethelnMovementPOC,
-			Warning,
-			TEXT("POC sprint is disabled outside standalone play. Replicated prediction and server validation remain issue #17 work."));
+		Movement->bWantsToSprint = bWantsToSprint;
 	}
 }
