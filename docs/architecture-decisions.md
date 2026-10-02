@@ -697,6 +697,11 @@ Every accepted decision records:
   equality and exact ordered merge parents. The event base remains an independent
   pre-checkout workflow ancestry witness; the candidate selector does not need
   that separate witness in its live context.
+  Receipt publishers and the shadow aggregate bind their base to the same
+  verified first parent through the selector's `accepted_base_sha` output,
+  never the raw event base. GitHub does not refresh the event base when the
+  target branch moves, so that binding failed every pull request behind its
+  base with `selector_identity_mismatch`, on every rerun.
   The selector remains non-authoritative and does not alter legacy CI gates.
 - **Historical Package 3A amendment:** Pin every approved remote action to its reviewed
   full commit SHA, implement and fixture-test exact per-job shadow receipt and
