@@ -1167,10 +1167,76 @@ Every accepted decision records:
   lease, a larger job ceiling, and removal of the no-checkout pin in
   `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`. Record editor-build and
   harness durations from the first live runs. Authority stays off.
+- **Amendment (2026-10-02, shared engine tree):** the editor build must not
+  rewrite the pinned engine tree that contributor builds share.
+  - *Incident:* the run 37056028961 editor build passed
+    `-Compiler=VisualStudio2022` and relinked
+    `UnrealEditor-VisualStudioCodeSourceCodeAccess.dll`, which rewrote the
+    engine editor BuildId in `UnrealEditor.version`. The next contributor build
+    relinked it again and produced another BuildId, which invalidated the
+    editor binaries of every other worktree. Cause:
+    `VisualStudioCodeSourceCodeAccess.Build.cs` emits `VSACCESSOR_HAS_DTE=1`
+    only when `WindowsPlatform.ToolChain` is `VisualStudio2022` (and the DTE
+    registry key exists), and `0` otherwise. The CI build resolved
+    `VisualStudio2022`; contributor builds, which pass no `-Compiler`
+    (`docs/unreal-project-setup.md`), resolve `VisualStudio`. The flip recurs on
+    every switch between a CI editor build and a contributor build. The same
+    run also rewrote one engine UHT output,
+    `Engine/Intermediate/Build/Win64/UnrealEditor/Inc/NetCore/UHT/NetCore.init.gen.cpp`,
+    and relinked the NetCore module. The editor build triggered it; why the
+    content changed is unknown, because the earlier content is gone. Header
+    ordering is ruled out: UHT sorts headers before it combines body hashes.
+  - *Compiler alignment:* for `AethelnOnlineEditor` only,
+    `InitialPreparation.BuildInvocation.ps1` no longer passes `-Compiler=` and
+    keeps `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0`. In the
+    pinned UnrealBuildTool (`Platform/Windows/UEBuildWindows.cs`), `Compiler`
+    stays `Default`, so `GetDefaultCompiler` has no `PreferredCompilers`, and
+    `GetDefaultToolchain` finds no project-file format, an empty
+    `BuildConfiguration.xml`, and no `PreferredAccessor` in the EditorSettings
+    hierarchy. It returns `WindowsCompiler.VisualStudio`, an alias of
+    `VisualStudio2026`. `ToolChain` then copies the MSVC compiler.
+    `MicrosoftPlatformSDK.FindToolChainInstallations(VisualStudio2026)` also
+    adds the VS 2022 toolsets, and the version pin selects the same MSVC 14.44
+    toolset that contributors use (both logs report product 14.44.35228).
+    That resolution reads host configuration, so a `PreferredCompilers`,
+    project-file format, or `PreferredAccessor` setting for the runner account
+    would change it. Contributor builds on the same host read the same inputs.
+    Client and server compile invocations, and the compile host proof's
+    `requiredWindowsArguments`, keep `-Compiler=VisualStudio2022`: those targets
+    write their UHT and definition outputs under the project's `Intermediate`
+    and do not build the editor-only plugin.
+  - *Fail closed:* the editor target also passes `-NoEngineChanges`. If an
+    outdated action would rewrite an existing file under `Engine/`, UBT
+    (`Modes/BuildMode.cs`) logs the file list and exits 5
+    (`CompilationResult.FailedDueToEngineChange`), and `Build.bat` passes that
+    code through. The editor-build step maps exit 5 without a capture failure to
+    the fixed reason `editor_build_engine_changes_required`. Every other nonzero
+    exit stays `editor_build_failed`, and there is no retry and no fallback
+    without the flag. The file list contains engine paths, so it stays in the
+    runner-local `build.log`. To recover, rebuild the shared tree's editor with
+    the contributor command in `docs/unreal-project-setup.md`, then use "Re-run
+    all jobs".
+  - *Residual:* UBT runs the check after it creates the makefile. By then UHT
+    outputs and `Definitions.*.h` headers may already be written, so the flag
+    stops engine compile, link, and BuildId rewrites but not those intermediate
+    writes.
+  - *Monitoring:* before and after CI editor runs, hash `NetCore.init.gen.cpp`
+    and the plugin header
+    `Engine/Plugins/Developer/VisualStudioCodeSourceCodeAccess/Intermediate/Build/Win64/x64/UnrealEditor/Development/VSCSCA/Definitions.VSCSCA.h`.
+    If NetCore changes again, investigate with a controlled UHT rerun on a
+    scratch engine copy.
+  - *Follow-ups:* package jobs are unchanged. In `rebuild-authorized` mode,
+    `scripts/build/HostToolProvisioning.Policy.ps1` passes
+    `-Compiler=VisualStudio2022` when it rebuilds host `UnrealEditor`, so it can
+    flip the same definition. Align it separately. Longer term, give each
+    consumer an isolated or installed engine tree. Live proof is still pending:
+    one editor build with this argument set while the shared engine is idle.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
-  their step bounds, workspace-revision races appear in practice, or the
-  combined compile plus editor hold becomes a measured scheduling bottleneck.
+  their step bounds, workspace-revision races appear in practice, the
+  combined compile plus editor hold becomes a measured scheduling bottleneck,
+  `editor_build_engine_changes_required` appears in practice, or the monitored
+  engine intermediates change across a CI editor run.
 
 ## Candidate Decisions
 
