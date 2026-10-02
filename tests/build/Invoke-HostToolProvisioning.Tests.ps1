@@ -563,7 +563,11 @@ $NativeAcAt = $EntryText.IndexOf('Assert-HostToolAcPower', $NativeBuildAt, [Stri
 Assert-HostFixture ($AdmitAt -ge 0 -and $AdmitAcAt -gt $AdmitAt -and $AdmitAcAt -lt $CapacityAt -and
 	$NativeAcAt -gt $NativeInputAt -and $NativeAcAt -lt $ProcessStartAt) 'AC loss after preflight or during native identity verification must stop each target before child launch.'
 Assert-HostFixture ($EntryText.Contains('$LiveVolume = Assert-HostToolExternalVolume -Path $ResolvedEngine') -and
-	$EntryText.Contains('Assert-HostToolTargetDiskAdmission -FreeBytes ([IO.DriveInfo]::new(''F:\'')).AvailableFreeSpace -NativeTargetsStarted $InvocationRecords.Count')) 'Native admission must refresh F identity and free bytes after preflight.'
+	$EntryText.Contains('Assert-HostToolTargetDiskAdmission -FreeBytes ([IO.DriveInfo]::new($ExternalDrive + '':\'')).AvailableFreeSpace -NativeTargetsStarted $InvocationRecords.Count')) 'Native admission must refresh external volume identity and free bytes after preflight.'
+foreach ($MachineLiteral in @('F:\UnrealEngine', 'Volume{', 'Get-Volume -DriveLetter F', '[Ff]:', 'DriveInfo]::new(''F:')) {
+	Assert-HostFixture (-not $EntryText.Contains($MachineLiteral)) "The tracked controller must not hard-code the operator's engine path, drive, or volume identity ($MachineLiteral)."
+}
+Assert-HostFixture ($EntryText.Contains("'checkpoint_skipped_' + `$ResourceMonitor.failureReason")) 'Every sticky monitor failure must skip the checkpoint under its own reason.'
 $RaceEngine = Join-Path $FixtureTempRoot ('AethelnHostRace-' + [guid]::NewGuid().ToString('N'))
 $RaceOutput = Join-Path $RaceEngine 'Engine/Binaries/Win64'
 $null = New-Item -ItemType Directory -Path $RaceOutput -Force
@@ -573,16 +577,24 @@ try {
 	Assert-HostFailure { Assert-HostToolFreshOutputState -EngineRoot $RaceEngine } 'prior_host_outputs_present'
 } finally { Exit-EngineRunnerHostLease -Lease $RaceLease -CleanupVerified $true }
 
-$Command = Get-HostToolBuildCommand -Target 'UnrealEditor' -ActionLimit 2 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat'
+$FixtureProject = 'D:\Project\AethelnOnline.uproject'
+$Command = Get-HostToolBuildCommand -Target 'AethelnOnlineEditor' -ActionLimit 2 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat' -ProjectPath $FixtureProject
+Assert-HostFixture ($Command.arguments[0] -ceq 'AethelnOnlineEditor' -and $Command.arguments -ccontains ('-Project=' + $FixtureProject)) 'The editor target must be the project editor target built with -Project.'
 Assert-HostFixture ($Command.arguments -contains '-MaxParallelActions=2') 'Action limit missing.'
 Assert-HostFixture ($Command.arguments -contains '-CompilerVersion=14.44.35207') 'Compiler pin missing.'
 Assert-HostFixture ($Command.arguments -contains '-WindowsSDKVersion=10.0.26100.0') 'SDK pin missing.'
 Assert-HostFixture (-not (($Command.arguments -join ' ') -match '(?i)(^|\s)-clean(\s|$)|RunUAT|Rebuild')) 'Provisioner must not clean or use UAT/rebuild.'
-$ExternalCommand = Get-HostToolBuildCommand -Target 'UnrealPak' -ActionLimit 2 -BuildBatch 'F:\Engine\Engine\Build\BatchFiles\Build.bat' -UbaRootDir 'F:\Aetheln-BuildCache\UBA' -LogPath 'F:\Aetheln-BuildLogs\UnrealPak.ubt.log'
+Assert-HostFailure { Get-HostToolBuildCommand -Target 'AethelnOnlineEditor' -ActionLimit 2 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat' } 'build_path_invalid'
+Assert-HostFailure { Get-HostToolBuildCommand -Target 'AethelnOnlineEditor' -ActionLimit 2 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat' -ProjectPath 'D:\Pro ject\AethelnOnline.uproject' } 'build_path_invalid'
+Assert-HostFailure { Get-HostToolBuildCommand -Target 'UnrealPak' -ActionLimit 2 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat' -ProjectPath $FixtureProject } 'build_path_invalid'
+Assert-HostFixture ((Get-HostToolBuildCommand -Target 'UnrealPak' -ActionLimit 2 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat').arguments -notcontains ('-Project=' + $FixtureProject)) 'Program targets must not receive a project argument.'
+$ExternalCommand = Get-HostToolBuildCommand -Target 'UnrealPak' -ActionLimit 2 -BuildBatch 'F:\Engine\Engine\Build\BatchFiles\Build.bat' -UbaRootDir 'F:\Aetheln-BuildCache\UBA' -LogPath 'F:\Aetheln-BuildLogs\UnrealPak.ubt.log' -RequiredDrive 'F'
 Assert-HostFixture ($ExternalCommand.arguments -contains '-UBARootDir=F:\Aetheln-BuildCache\UBA' -and
 	$ExternalCommand.arguments -contains '-UBAStoreCapacityGb=40' -and
-	$ExternalCommand.arguments -contains '-Log=F:\Aetheln-BuildLogs\UnrealPak.ubt.log') 'F: UBA cap and native log route must reach UnrealBuildTool.'
-Assert-HostFailure { Get-HostToolBuildCommand -Target 'UnrealEditor' -ActionLimit 5 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat' } 'action_limit_invalid'
+	$ExternalCommand.arguments -contains '-Log=F:\Aetheln-BuildLogs\UnrealPak.ubt.log') 'External UBA cap and native log route must reach UnrealBuildTool.'
+Assert-HostFailure { Get-HostToolBuildCommand -Target 'UnrealPak' -ActionLimit 2 -BuildBatch 'F:\Engine\Engine\Build\BatchFiles\Build.bat' -UbaRootDir 'F:\Aetheln-BuildCache\UBA' -LogPath 'F:\Aetheln-BuildLogs\UnrealPak.ubt.log' } 'build_path_invalid'
+Assert-HostFailure { Get-HostToolBuildCommand -Target 'UnrealPak' -ActionLimit 2 -BuildBatch 'F:\Engine\Engine\Build\BatchFiles\Build.bat' -UbaRootDir 'F:\Aetheln-BuildCache\UBA' -LogPath 'F:\Aetheln-BuildLogs\UnrealPak.ubt.log' -RequiredDrive 'E' } 'build_path_invalid'
+Assert-HostFailure { Get-HostToolBuildCommand -Target 'AethelnOnlineEditor' -ActionLimit 5 -BuildBatch 'D:\Engine\Engine\Build\BatchFiles\Build.bat' -ProjectPath $FixtureProject } 'action_limit_invalid'
 
 $Observed = Get-HostToolBuildProof -Lines @(
 	'Using Visual Studio 2022 14.44.35228 toolchain (C:\VS\VC\Tools\MSVC\14.44.35207) and Windows 10.0.26100.0 SDK (C:\Kits\10).',
@@ -618,18 +630,24 @@ Assert-HostFailure { Assert-HostToolProductChange -Target UnrealPak -Before $Rec
 
 $ReceiptEngine = Join-Path $FixtureTempRoot ('AethelnReceiptHostTools-' + [guid]::NewGuid().ToString('N'))
 $ReceiptWin64 = Join-Path $ReceiptEngine 'Engine/Binaries/Win64'
-$null = New-Item -ItemType Directory -Path $ReceiptWin64 -Force
+$ReceiptProject = Join-Path $FixtureTempRoot ('AethelnReceiptProject-' + [guid]::NewGuid().ToString('N'))
+$ReceiptProjectWin64 = Join-Path $ReceiptProject 'Binaries/Win64'
+$null = New-Item -ItemType Directory -Path $ReceiptWin64, $ReceiptProjectWin64 -Force
 foreach ($Name in @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe', 'UnrealPak.exe', 'ShaderCompileWorker.exe')) {
 	Set-Content -LiteralPath (Join-Path $ReceiptWin64 $Name) -Value 'fixture product' -Encoding Ascii
 }
+Set-Content -LiteralPath (Join-Path $ReceiptProjectWin64 'UnrealEditor-GameCore.dll') -Value 'project module fixture' -Encoding Ascii
+$ProjectModule = [ordered]@{ Path = '$(ProjectDir)/Binaries/Win64/UnrealEditor-GameCore.dll'; Type = 'DynamicLibrary' }
 function Set-HostReceiptFixture {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Writes only ephemeral receipt fixtures under the validated test root.')]
 	param([string] $Target, [string] $TargetType, [string[]] $Products, [object[]] $ExtraProducts = @())
 	$BuildProducts = @($Products | ForEach-Object { [ordered]@{ Path = ('$(EngineDir)/Binaries/Win64/' + $_); Type = 'Executable' } }) + @($ExtraProducts)
+	# The project editor receipt lands beside the .uproject, not under Engine/Binaries/Win64.
+	$ReceiptDirectory = if ($Target -ceq 'AethelnOnlineEditor') { $ReceiptProjectWin64 } else { $ReceiptWin64 }
 	[ordered]@{ TargetName = $Target; Platform = 'Win64'; Configuration = 'Development'; TargetType = $TargetType;
-		BuildProducts = $BuildProducts } | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath (Join-Path $ReceiptWin64 ($Target + '.target')) -Encoding UTF8
+		BuildProducts = $BuildProducts } | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath (Join-Path $ReceiptDirectory ($Target + '.target')) -Encoding UTF8
 }
-Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')
+Set-HostReceiptFixture -Target AethelnOnlineEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ProjectModule)
 Set-HostReceiptFixture -Target UnrealPak -TargetType Program -Products @('UnrealPak.exe')
 Assert-HostFixture ((Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -Targets @('UnrealPak')).semanticsVerified -eq $true) 'Single-target receipt semantics must be verifiable before recovered no-op acceptance.'
 $PakTargetPath = Join-Path $ReceiptWin64 'UnrealPak.target'
@@ -642,45 +660,52 @@ Set-Content -LiteralPath $PakTargetPath -Value '{invalid' -Encoding Ascii
 Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -Targets @('UnrealPak') } 'target_receipt_invalid'
 Set-Content -LiteralPath $PakTargetPath -Value $PakTargetOriginal -Encoding UTF8
 Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe')
-$ReceiptProof = Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine
-Assert-HostFixture ($ReceiptProof.productCount -eq 7 -and $ReceiptProof.totalBytes -gt 0) 'Semantically valid target receipts should pass.'
+$ReceiptProof = Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject
+Assert-HostFixture ($ReceiptProof.productCount -eq 8 -and $ReceiptProof.totalBytes -gt 0) 'Semantically valid target receipts should pass.'
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'project_root_required'
+Set-HostReceiptFixture -Target UnrealPak -TargetType Program -Products @('UnrealPak.exe') -ExtraProducts @($ProjectModule)
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject } 'target_receipt_invalid'
+Set-HostReceiptFixture -Target UnrealPak -TargetType Program -Products @('UnrealPak.exe')
 $SharedDirectory = Join-Path $ReceiptWin64 'D3D12/x64'
 $null = New-Item -ItemType Directory -Path $SharedDirectory -Force
 Set-Content -LiteralPath (Join-Path $SharedDirectory 'D3D12Core.dll') -Value 'shared runtime product' -Encoding Ascii
 $SharedProduct = [ordered]@{ Path = '$(EngineDir)/Binaries/Win64/D3D12/x64/D3D12Core.dll'; Type = 'DynamicLibrary' }
 Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe') -ExtraProducts @($SharedProduct)
-Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($SharedProduct)
-$ReceiptProof = Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine
+Set-HostReceiptFixture -Target AethelnOnlineEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ProjectModule, $SharedProduct)
+$ReceiptProof = Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject
 $ExpectedReceiptBytes = [long] 0
-foreach ($Name in @('UnrealPak.target', 'ShaderCompileWorker.target', 'UnrealEditor.target', 'UnrealPak.exe',
+foreach ($Name in @('UnrealPak.target', 'ShaderCompileWorker.target', 'UnrealPak.exe',
 	'ShaderCompileWorker.exe', 'UnrealEditor.exe', 'UnrealEditor-Cmd.exe', 'D3D12/x64/D3D12Core.dll')) {
 	$ExpectedReceiptBytes += [long] (Get-Item -LiteralPath (Join-Path $ReceiptWin64 $Name)).Length
 }
-Assert-HostFixture ($ReceiptProof.productCount -eq 8 -and $ReceiptProof.totalBytes -eq $ExpectedReceiptBytes) 'Shared identical target products should be counted once.'
+foreach ($Name in @('AethelnOnlineEditor.target', 'UnrealEditor-GameCore.dll')) {
+	$ExpectedReceiptBytes += [long] (Get-Item -LiteralPath (Join-Path $ReceiptProjectWin64 $Name)).Length
+}
+Assert-HostFixture ($ReceiptProof.productCount -eq 9 -and $ReceiptProof.totalBytes -eq $ExpectedReceiptBytes) 'Shared identical target products should be counted once across engine and project roots.'
 Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe') -ExtraProducts @($SharedProduct, $SharedProduct)
-Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_product_duplicate'
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject } 'target_product_duplicate'
 Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe') -ExtraProducts @($SharedProduct)
 $ConflictingType = [ordered]@{ Path = $SharedProduct.Path; Type = 'RequiredResource' }
-Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ConflictingType)
-Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_product_duplicate'
+Set-HostReceiptFixture -Target AethelnOnlineEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ProjectModule, $ConflictingType)
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject } 'target_product_duplicate'
 $ConflictingCase = [ordered]@{ Path = '$(EngineDir)/Binaries/Win64/D3D12/x64/d3d12core.dll'; Type = 'DynamicLibrary' }
-Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ConflictingCase)
-Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_product_duplicate'
+Set-HostReceiptFixture -Target AethelnOnlineEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ProjectModule, $ConflictingCase)
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject } 'target_product_duplicate'
 Set-HostReceiptFixture -Target ShaderCompileWorker -TargetType Program -Products @('ShaderCompileWorker.exe')
-Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')
-$EditorTargetPath = Join-Path $ReceiptWin64 'UnrealEditor.target'
+Set-HostReceiptFixture -Target AethelnOnlineEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ProjectModule)
+$EditorTargetPath = Join-Path $ReceiptProjectWin64 'AethelnOnlineEditor.target'
 Set-Content -LiteralPath $EditorTargetPath -Value '{invalid' -Encoding Ascii
-Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_receipt_invalid'
-Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject } 'target_receipt_invalid'
+Set-HostReceiptFixture -Target AethelnOnlineEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ProjectModule)
 $EditorBody = Get-Content -LiteralPath $EditorTargetPath -Raw
 Set-Content -LiteralPath $EditorTargetPath -Value ($EditorBody.Replace('"Development"', '"Shipping"')) -Encoding UTF8
-Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_receipt_invalid'
-Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject } 'target_receipt_invalid'
+Set-HostReceiptFixture -Target AethelnOnlineEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ProjectModule)
 Set-Content -LiteralPath $EditorTargetPath -Value ($EditorBody.Replace('"BuildProducts":', '"WrongProducts":')) -Encoding UTF8
-Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_receipt_invalid'
-Set-HostReceiptFixture -Target UnrealEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject } 'target_receipt_invalid'
+Set-HostReceiptFixture -Target AethelnOnlineEditor -TargetType Editor -Products @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe') -ExtraProducts @($ProjectModule)
 Set-HostReceiptFixture -Target UnrealPak -TargetType Program -Products @('UnrealPak.exe', 'UnrealPak-Missing.dll')
-Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine } 'target_product_missing'
+Assert-HostFailure { Assert-HostToolReceiptSet -EngineRoot $ReceiptEngine -ProjectRoot $ReceiptProject } 'target_product_missing'
 Set-HostReceiptFixture -Target UnrealPak -TargetType Program -Products @('UnrealPak.exe')
 
 # Exercise the real child capture using a harmless fixture Build.bat. This is
@@ -728,20 +753,31 @@ Assert-HostFixture ($BuildLogPolicy.Contains('ComputeHash($LogStream)') -and $Bu
 
 $OverflowEvidence = Join-Path $FakeEngine 'overflow-evidence'
 $null = New-Item -ItemType Directory -Path $OverflowEvidence
+# Past the 16 MiB capture cap the child must stop recording, append one marker,
+# and let the native process finish; the bounded log must still prove the build.
 $OverflowBatch = @'
 @echo off
-powershell.exe -NoProfile -NonInteractive -Command "[Console]::Out.Write('A' * 16777217)"
+echo Using Visual Studio 2022 14.44.35228 toolchain (C:\VS\VC\Tools\MSVC\14.44.35207) and Windows 10.0.26100.0 SDK (C:\Kits\10).
+echo Using Parallel executor to run 1 action(s)
+powershell.exe -NoProfile -NonInteractive -Command "[Console]::Out.Write(('[1/1] ' + ('A' * 16000) + [char]10) * 1100)"
 exit /b 0
 '@
 Set-Content -LiteralPath (Join-Path $FakeBatchDir 'Build.bat') -Value $OverflowBatch -Encoding Ascii
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Child -Target UnrealPak -ActionLimit 1 -EngineRoot $FakeEngine -EvidenceRoot $OverflowEvidence
-Assert-HostFixture ($LASTEXITCODE -ne 0) 'The fixture must trigger the real 16 MiB capture limit.'
+Assert-HostFixture ($LASTEXITCODE -eq 0) 'Output past the 16 MiB capture cap must not kill or fail the native build.'
 $OverflowResult = Get-Content -LiteralPath (Join-Path $OverflowEvidence 'native-result.json') -Raw | ConvertFrom-Json
-Assert-HostFixture ($OverflowResult.infrastructureFailure -ceq 'build_output_limit' -and
-	(Get-Item -LiteralPath (Join-Path $OverflowEvidence 'build.log')).Length -le 16777216) 'Child must preserve explicit overflow and bounded captured bytes.'
-Assert-HostFailure { Assert-HostToolNativeResult -Result $OverflowResult -Target UnrealPak -NativeExitCode $LASTEXITCODE } 'build_output_limit'
+$OverflowLog = Join-Path $OverflowEvidence 'build.log'
+$OverflowText = [IO.File]::ReadAllText($OverflowLog)
+Assert-HostFixture ($OverflowResult.outputTruncated -eq $true -and $null -eq $OverflowResult.infrastructureFailure -and
+	(Get-Item -LiteralPath $OverflowLog).Length -le 16777216 -and (Get-Item -LiteralPath $OverflowLog).Length -gt 16000000 -and
+	$OverflowText.EndsWith("`n[build_output_truncated]`n") -and
+	([regex]::Matches($OverflowText, '\[build_output_truncated\]')).Count -eq 1) 'Child must truncate captured bytes at the proof bound with one marker and record the truncation.'
+Assert-HostToolNativeResult -Result $OverflowResult -Target UnrealPak -NativeExitCode 0
+$OverflowProof = Get-HostToolBuildLogProof -LogPath $OverflowLog -ToolDirectory 'C:\VS\VC\Tools\MSVC\14.44.35207' -SdkDirectory 'C:\Kits\10'
+Assert-HostFixture ($OverflowProof.actionCount -eq 1 -and $OverflowProof.progressCount -ge 1) 'A truncated log must still prove selection and progress within the proof bound.'
+Assert-HostFailure { Assert-HostToolNativeResult -Result ([pscustomobject]@{ schemaVersion = 1; target = 'UnrealPak'; nativeExitCode = 0; infrastructureFailure = $null }) -Target UnrealPak -NativeExitCode 0 } 'build_result_invalid'
 
-$States = @('UnrealPak', 'ShaderCompileWorker', 'UnrealEditor')
+$States = @('UnrealPak', 'ShaderCompileWorker', 'AethelnOnlineEditor')
 $Now = 0L
 $Calls = New-Object Collections.ArrayList
 $Capacity = [pscustomobject]@{ physicalCores = 4; availablePhysicalRamGiB = 24.0; commitHeadroomGiB = 24.0; volumes = @([pscustomobject]@{ availableBytes = 50GB; knownAllocationBytes = 0L; recoveryFloorBytes = 20GB }) }
@@ -797,7 +833,7 @@ $Resumed = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L 
 	[pscustomobject]@{ target = $Target; nativeExitCode = 0; actionCount = 1; progressCount = 1; selectionVerified = $true;
 		productsVerified = $true; cleanupVerified = $true; command = @('Build.bat', $Target); logSha256 = ('a' * 64) }
 }
-Assert-HostFixture ($Resumed.Count -eq 3 -and ($ResumeCalls -join ',') -ceq 'ShaderCompileWorker,UnrealEditor') 'Verified target reuse must skip only the completed prefix.'
+Assert-HostFixture ($Resumed.Count -eq 3 -and ($ResumeCalls -join ',') -ceq 'ShaderCompileWorker,AethelnOnlineEditor') 'Verified target reuse must skip only the completed prefix.'
 $RecoveredNoOp = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -RecoverableTarget ShaderCompileWorker -InvokeBuild {
 	param($Target)
 	if ($Target -ceq 'ShaderCompileWorker') {
@@ -813,9 +849,9 @@ $RecoveredNoOp = Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks
 Assert-HostFixture ($RecoveredNoOp[1].recoveredNoOp -eq $true -and $RecoveredNoOp[1].actionCount -eq 0 -and
 	$RecoveredNoOp[1].recoverySourceReceiptSha256 -ceq ('b' * 64) -and
 	$RecoveredNoOp[2].actionCount -eq 1) 'Only the verified interrupted target may recover via a zero-action native exit.'
-Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -RecoverableTarget UnrealEditor -InvokeBuild { throw 'must_not_start' } } 'provisioning_plan_invalid'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -RecoverableTarget AethelnOnlineEditor -InvokeBuild { throw 'must_not_start' } } 'provisioning_plan_invalid'
 Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @($Sequence[0]) -RecoverableTarget ShaderCompileWorker -InvokeBuild { param($Target) [pscustomobject]@{ target=$Target; nativeExitCode=0; actionCount=0; progressCount=0; selectionVerified=$false; productsVerified=$true; cleanupVerified=$true; recoveredNoOp=$true; targetReceiptVerified=$false; command=@('Build.bat',$Target); logSha256=('a'*64) } } } 'recovered_noop_unproven'
-Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @([pscustomobject]@{ target = 'UnrealEditor'; nativeExitCode = 0; cleanupVerified = $true; productsVerified = $true; logSha256 = ('a' * 64); actionCount = 1; progressCount = 1 }) -InvokeBuild { throw 'must_not_start' } } 'checkpoint_targets_invalid'
+Assert-HostFailure { Invoke-HostToolProvisioningSequence -Targets $States -ReadTicks { 0L } -UsefulDeadlineTicks 300 -CleanupDeadlineTicks 360 -ReadCapacity { $Capacity } -CompletedResults @([pscustomobject]@{ target = 'AethelnOnlineEditor'; nativeExitCode = 0; cleanupVerified = $true; productsVerified = $true; logSha256 = ('a' * 64); actionCount = 1; progressCount = 1 }) -InvokeBuild { throw 'must_not_start' } } 'checkpoint_targets_invalid'
 $AdmissionState = [pscustomobject]@{ commit = [long] 24GB; ordinal = 0 }
 $AdmissionNow = 0L
 $AdmissionMonitor = New-RoutineCompileResourceMonitor -Roots @{ evidence = $PSScriptRoot } -ResolveVolume {
@@ -915,6 +951,28 @@ $ResourceReceiptAt = $EntryText.IndexOf('Write-HostToolResourceFailureReceiptIfN
 $FinalPublicationAt = $EntryText.LastIndexOf('Invoke-HostToolFinalReceiptPublication -Bootstrap $Bootstrap', [StringComparison]::Ordinal)
 Assert-HostFixture ($EntryText.Contains('$PrePublicationFailure = $Failure') -and
 	$ResourceReceiptAt -ge 0 -and $LeaseReleaseAt -ge 0 -and $FinalPublicationAt -gt $LeaseReleaseAt) 'The independent D: pressure record must be reachable after native cleanup and lease release without resampling a sticky monitor.'
+# The real publication worker must still publish the terminal receipts after a
+# sticky monitor failure; its wait loop must not resample the failed monitor.
+$StickySupervisor = Join-Path $FixtureTempRoot 'sticky-publication-d'
+$StickyEvidence = Join-Path $FixtureTempRoot 'sticky-publication-f'
+$null = New-Item -ItemType Directory -Path $StickySupervisor, $StickyEvidence
+$StickyDeadline = (Get-InitialPreparationTick) + 30L * [Diagnostics.Stopwatch]::Frequency
+Invoke-HostToolFinalReceiptPublication -Bootstrap $true -SupervisorRoot $StickySupervisor -EvidenceRoot $StickyEvidence `
+	-Receipt ([ordered]@{ schemaVersion = 2; scope = 'bounded_host_tool_provisioning'; startedUtc = '2026-10-01T00:00:00.0000000Z'; success = $false; failure = 'resource_pressure' }) `
+	-ControllerRoot ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))) -ResourceMonitor $PressureMonitor -DeadlineTicks $StickyDeadline `
+	-StartedUtc '2026-10-01T00:00:00.0000000Z' -PrePublicationFailure 'resource_pressure' -CleanupVerified $true -LeaseReleased $true
+Assert-HostFixture ((Test-Path -LiteralPath (Join-Path $StickySupervisor 'publication-confirmed.json') -PathType Leaf) -and
+	(Test-Path -LiteralPath (Join-Path $StickyEvidence 'host-tool-provisioning-receipt.json') -PathType Leaf) -and
+	-not (Test-Path -LiteralPath (Join-Path $StickySupervisor 'publication-failed.json')) -and
+	-not (Test-Path -LiteralPath (Join-Path $StickySupervisor 'resource-failure.json'))) 'A sticky monitor must not block terminal receipt publication through the real worker.'
+Assert-HostFixture ($PressureMonitor.failureReason -ceq 'resource_pressure') 'Publication must leave the sticky monitor reason intact.'
+# Every sticky monitor reason, not only resource_pressure, earns the independent D: record.
+$ClockMonitor = New-RoutineCompileResourceMonitor @ResourceArgs
+$SampleMilliseconds = 9000L
+Assert-HostFailure { Update-RoutineCompileResources -Monitor $ClockMonitor } 'resource_clock_invalid'
+$ClockFailurePath = Join-Path $FixtureTempRoot 'clock-failure.json'
+Assert-HostFixture ((Write-HostToolResourceFailureReceiptIfNeeded -Path $ClockFailurePath -StartedUtc '2026-10-01T00:00:00.0000000Z' -PrePublicationFailure 'checkpoint_skipped_resource_clock_invalid' -ResourceMonitor $ClockMonitor -CleanupVerified $true -LeaseReleased $true) -and
+	(Get-Content -LiteralPath $ClockFailurePath -Raw | ConvertFrom-Json).resourceFailure -ceq 'resource_clock_invalid') 'A non-pressure sticky monitor failure must still produce the independent D: resource record under its own reason.'
 $LowMemory = 24GB; $SampleMilliseconds = 0L; $AvailableDisk = 20GB
 Assert-HostFailure { New-RoutineCompileResourceMonitor @ResourceArgs } 'disk_floor_reached'
 

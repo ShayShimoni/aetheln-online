@@ -15,7 +15,7 @@ function Write-HostToolProvisioningReceipt {
 function Write-HostToolResourceFailureReceipt {
 	[CmdletBinding()]
 	param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)][string] $StartedUtc,
-		[Parameter(Mandatory)][ValidateSet('resource_pressure')][string] $ResourceFailure,
+		[Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $ResourceFailure,
 		[AllowNull()][string] $PrePublicationFailure,
 		[Parameter(Mandatory)] $ResourceMonitor, [bool] $CleanupVerified, [bool] $LeaseReleased)
 	if (Test-Path -LiteralPath $Path) { throw 'resource_failure_receipt_exists' }
@@ -41,9 +41,11 @@ function Write-HostToolResourceFailureReceiptIfNeeded {
 	param([Parameter(Mandatory)][string] $Path, [Parameter(Mandatory)][string] $StartedUtc,
 		[AllowNull()][string] $PrePublicationFailure, $ResourceMonitor,
 		[bool] $CleanupVerified, [bool] $LeaseReleased)
-	if ($null -eq $ResourceMonitor -or $ResourceMonitor.failureReason -cne 'resource_pressure') { return $false }
+	# Any sticky monitor failure (pressure, disk floor, clock, measurement)
+	# deserves the independent D: record, not only resource_pressure.
+	if ($null -eq $ResourceMonitor -or $null -eq $ResourceMonitor.failureReason) { return $false }
 	$null = Write-HostToolResourceFailureReceipt -Path $Path -StartedUtc $StartedUtc `
-		-ResourceFailure 'resource_pressure' -PrePublicationFailure $PrePublicationFailure `
+		-ResourceFailure ([string] $ResourceMonitor.failureReason) -PrePublicationFailure $PrePublicationFailure `
 		-ResourceMonitor $ResourceMonitor -CleanupVerified $CleanupVerified -LeaseReleased $LeaseReleased
 	return $true
 }

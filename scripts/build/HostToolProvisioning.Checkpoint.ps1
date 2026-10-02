@@ -25,14 +25,20 @@ function Get-HostToolGeneratedPaths {
 			foreach ($Item in @(Get-ChildItem -LiteralPath $Directory -Force -ErrorAction Stop)) {
 				$Visited++
 				if ($Visited -gt 1000000) { throw 'checkpoint_entry_limit' }
-				Assert-InitialPreparationPlainPath -Path $Item.FullName -Reason 'checkpoint_path_invalid'
-				$Relative = $Item.FullName.Substring($EngineRoot.TrimEnd('\').Length + 1).Replace('\', '/')
-				if ($Relative -match '(^|/)(\.env(?:\.[^/]*)?|[^/]+\.(?:pem|pfx|p12|p8|ppk|key|kdbx|jks|keystore|snk|gpg|asc)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.[^/]*)?|credentials(?:\.[^/]*)?|secrets?(?:\.[^/]*)?|kubeconfig(?:\.[^/]*)?)(?=/|$)') { throw 'checkpoint_protected_name' }
+				# The scan root's ancestors were asserted above and every directory is
+				# checked here before it is pushed, so this O(1) attribute test covers
+				# the same reparse points as a per-entry ancestor walk over the whole
+				# Engine/Plugins and Engine/Source/Programs trees.
+				if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'checkpoint_path_invalid' }
 				if ($Item.PSIsContainer) { $Stack.Push($Item.FullName); continue }
+				$Relative = $Item.FullName.Substring($EngineRoot.TrimEnd('\').Length + 1).Replace('\', '/')
 				$Generated = $Relative -cmatch '^Engine/(Binaries/Win64|Intermediate/Build|Binaries/DotNET/UnrealBuildTool)/' -or
 					$Relative -cmatch '^Engine/Plugins/.+/(Binaries/Win64|Intermediate/Build|bin|obj)/' -or
 					$Relative -cmatch '^Engine/Source/Programs/.+/(bin|obj)/'
 				if (-not $Generated) { continue }
+				# Only generated output files are screened; tracked engine source may
+				# legitimately contain names such as Secrets or credentials.
+				if ($Relative -match '(^|/)(\.env(?:\.[^/]*)?|[^/]+\.(?:pem|pfx|p12|p8|ppk|key|kdbx|jks|keystore|snk|gpg|asc)|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.[^/]*)?|credentials(?:\.[^/]*)?|secrets?(?:\.[^/]*)?|kubeconfig(?:\.[^/]*)?)(?=/|$)') { throw 'checkpoint_protected_name' }
 				if (-not $Seen.Add($Relative)) { throw 'checkpoint_case_collision' }
 				$Paths.Add($Relative)
 				if ($Paths.Count -gt 1000000) { throw 'checkpoint_entry_limit' }

@@ -2,9 +2,10 @@
 param([Parameter(Mandatory)][ValidateSet('Controller','Engine','Fresh','Receipt','Product','Git','ReusedLog')][string] $Mode,
 	[Parameter(Mandatory)][string] $Root,
 	[Parameter(Mandatory)][string] $ResultPath,
-	[ValidateSet('UnrealEditor','UnrealPak','ShaderCompileWorker')][string] $Target,
+	[ValidateSet('AethelnOnlineEditor','UnrealPak','ShaderCompileWorker')][string] $Target,
 	[string] $ExpectedLogSha256,
 	[switch] $IgnoreUntrackedGenerated,
+	[string] $ProjectRoot,
 	[ValidatePattern('^[A-Z]$')][string] $RequiredResultDrive = 'D')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -15,15 +16,19 @@ try {
 		(Test-Path -LiteralPath $ResultPath)) { throw 'identity_worker_input_invalid' }
 	Assert-InitialPreparationPlainPath -Path $Root -Reason 'identity_worker_input_invalid'
 	Assert-InitialPreparationPlainPath -Path $ResultPath -Reason 'identity_worker_input_invalid'
+	if (-not [string]::IsNullOrWhiteSpace($ProjectRoot)) {
+		if ($ProjectRoot -cnotmatch '^[A-Za-z]:\\') { throw 'identity_worker_input_invalid' }
+		Assert-InitialPreparationPlainPath -Path $ProjectRoot -Reason 'identity_worker_input_invalid'
+	}
 	if ($Mode -ceq 'Controller') { $null = Assert-HostToolControllerInputIdentity -ControllerRoot $Root }
 	elseif ($Mode -ceq 'Engine') { $null = Assert-HostToolEngineInputIdentity -EngineRoot $Root }
 	elseif ($Mode -ceq 'Receipt') {
 		$Targets = if ([string]::IsNullOrWhiteSpace($Target)) { $script:HostToolTargets } else { @($Target) }
-		$Proof = Assert-HostToolReceiptSet -EngineRoot $Root -Targets $Targets
+		$Proof = Assert-HostToolReceiptSet -EngineRoot $Root -Targets $Targets -ProjectRoot $ProjectRoot
 	}
 	elseif ($Mode -ceq 'Product') {
 		if ([string]::IsNullOrWhiteSpace($Target)) { throw 'identity_worker_input_invalid' }
-		$Proof = Get-HostToolProductState -EngineRoot $Root -Target $Target
+		$Proof = Get-HostToolProductState -EngineRoot $Root -Target $Target -ProjectRoot $ProjectRoot
 	}
 	elseif ($Mode -ceq 'ReusedLog') {
 		if ([string]::IsNullOrWhiteSpace($Target) -or $ExpectedLogSha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'reused_log_invalid' }

@@ -1,12 +1,14 @@
 [CmdletBinding()]
 param(
-	[Parameter(Mandatory)][ValidateSet('UnrealEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
+	[Parameter(Mandatory)][ValidateSet('AethelnOnlineEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
 	[Parameter(Mandatory)][ValidateRange(1, 4)][int] $ActionLimit,
 	[Parameter(Mandatory)][string] $EngineRoot,
 	[Parameter(Mandatory)][string] $EvidenceRoot,
+	[string] $ProjectPath,
 	[string] $TempRoot,
 	[string] $UbaRootDir,
-	[string] $UbtLogPath
+	[string] $UbtLogPath,
+	[string] $RequiredDrive
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -24,11 +26,11 @@ try {
 	$Batch = Join-Path $EngineRoot 'Engine/Build/BatchFiles/Build.bat'
 	$DotnetRoot = Join-Path $EngineRoot 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64'
 	$Dotnet = Join-Path $DotnetRoot 'dotnet.exe'
-	foreach ($Path in @($Batch, $Dotnet)) {
+	foreach ($Path in @($Batch, $Dotnet) + @($ProjectPath | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
 		if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'build_input_missing' }
 		Assert-InitialPreparationPlainPath -Path $Path -Reason 'build_path_invalid'
 	}
-	$Command = Get-HostToolBuildCommand -Target $Target -ActionLimit $ActionLimit -BuildBatch $Batch -UbaRootDir $UbaRootDir -LogPath $UbtLogPath
+	$Command = Get-HostToolBuildCommand -Target $Target -ActionLimit $ActionLimit -BuildBatch $Batch -ProjectPath $ProjectPath -UbaRootDir $UbaRootDir -LogPath $UbtLogPath -RequiredDrive $RequiredDrive
 	$ResultStream = [IO.File]::Open((Join-Path $EvidenceRoot 'native-result.json'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
 	Add-Type -TypeDefinition @'
 using System;
@@ -37,7 +39,7 @@ using System.IO;
 using System.Threading.Tasks;
 public static class HostToolProvisioningCapture {
  public static int? LastNativeExit;
- public static bool OutputLimitExceeded;
+ public static bool OutputTruncated;
  public static int Run(string cmd, string arguments, string cwd, string dotnetRoot, string log, string tempRoot) {
   using(FileStream output=new FileStream(log,FileMode.CreateNew,FileAccess.Write,FileShare.Read))
   using(Process process=new Process()) {
@@ -59,13 +61,22 @@ public static class HostToolProvisioningCapture {
     process.StartInfo.EnvironmentVariables["TMP"]=tempRoot;
    }
    process.Start();
-   object gate=new object(); long count=0; bool overflow=false;
+   // The captured log must stay within the 16 MiB proof bound, but a multi-hour
+   // native build must never be killed for talking too much: past the cap the
+   // capture writes one marker, then keeps draining so the pipes never fill.
+   byte[] marker=System.Text.Encoding.ASCII.GetBytes("\n[build_output_truncated]\n");
+   long capacity=16777216-marker.Length;
+   object gate=new object(); long count=0; bool truncated=false;
    Action<Stream> drain=delegate(Stream input) {
     byte[] buffer=new byte[8192]; int n;
     try { while((n=input.Read(buffer,0,buffer.Length))>0) {
      lock(gate) {
-      if(count+n>16777216) { overflow=true; OutputLimitExceeded=true; try { process.Kill(); } catch {} throw new IOException("build_output_limit"); }
-      output.Write(buffer,0,n); count+=n; output.Flush(false);
+      if(truncated) continue;
+      int keep=(int)Math.Min(n,capacity-count);
+      if(keep<n) { while(keep>0 && (buffer[keep]&0xC0)==0x80) keep--; }
+      if(keep>0) { output.Write(buffer,0,keep); count+=keep; }
+      if(keep<n) { output.Write(marker,0,marker.Length); truncated=true; OutputTruncated=true; }
+      output.Flush(false);
      }
     } } catch { try { process.Kill(); } catch {} throw; }
    };
@@ -73,11 +84,7 @@ public static class HostToolProvisioningCapture {
    Task stderr=Task.Run(()=>drain(process.StandardError.BaseStream));
    try {
     process.WaitForExit(); LastNativeExit=process.ExitCode;
-    bool drained;
-    try { drained=Task.WaitAll(new[]{stdout,stderr},5000); }
-    catch(AggregateException) { if(OutputLimitExceeded) throw new IOException("build_output_limit"); throw; }
-    if(OutputLimitExceeded || overflow) throw new IOException("build_output_limit");
-    if(!drained) throw new IOException("build_capture_incomplete");
+    if(!Task.WaitAll(new[]{stdout,stderr},5000)) throw new IOException("build_capture_incomplete");
     output.Flush(true); return process.ExitCode;
    } finally { if(!process.HasExited) { try { process.Kill(); } catch {} } }
   }
@@ -91,13 +98,13 @@ public static class HostToolProvisioningCapture {
 	$Failure = $null
 } catch {
 	if ('HostToolProvisioningCapture' -as [type]) { $NativeExit = [HostToolProvisioningCapture]::LastNativeExit }
-	$Failure = if (('HostToolProvisioningCapture' -as [type]) -and [HostToolProvisioningCapture]::OutputLimitExceeded) {
-		'build_output_limit'
-	} else { 'build_capture_failed' }
+	$Failure = 'build_capture_failed'
 } finally {
 	if ($null -ne $ResultStream) {
 		try {
-			$Bytes = [Text.Encoding]::UTF8.GetBytes(([ordered]@{ schemaVersion = 1; target = $Target; nativeExitCode = $NativeExit; infrastructureFailure = $Failure } | ConvertTo-Json -Compress))
+			$Truncated = ('HostToolProvisioningCapture' -as [type]) -and [HostToolProvisioningCapture]::OutputTruncated
+			$Bytes = [Text.Encoding]::UTF8.GetBytes(([ordered]@{ schemaVersion = 1; target = $Target; nativeExitCode = $NativeExit;
+				infrastructureFailure = $Failure; outputTruncated = [bool] $Truncated } | ConvertTo-Json -Compress))
 			$ResultStream.Write($Bytes, 0, $Bytes.Length); $ResultStream.Flush($true)
 		} finally { $ResultStream.Dispose() }
 	}

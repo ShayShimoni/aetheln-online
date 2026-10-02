@@ -258,20 +258,34 @@ source-support binaries and exact files
 verified by SHA-1 against a pinned, tracked GitDependencies manifest are
 allowed; a clean Git tree alone does not prove ignored product provenance),
 the pinned MSVC/SDK paths, the existing shared engine-host `.lease`
-file, and a new external evidence directory on the current operator's **F:**
-volume. For the Issue #81 bootstrap on this host, the separately registered
-pinned engine worktree, dependency-download cache, UBA store, native logs,
-child temporary files, and subsequent project-build workspace also live on
-the verified NTFS F: volume. Verify its volume ID, NTFS format, and 4 KiB
-allocation units, then require at least 600 GiB free **before** preparing the
-engine worktree and dependency cache. Recheck for at least 300 GiB free after
+file, and a new external evidence directory on the operator's external
+volume. The repository tracks no machine-specific engine path, drive letter,
+or volume identifier: the operator names the external drive with
+`-ExternalDrive` (one uppercase letter; the evidence root must live on it in
+every mode) and, for the bootstrap, supplies `-ExternalVolumeId`, the expected
+`Get-Volume` `UniqueId` of that drive in the form `\\?\Volume{...}\`. The
+bootstrap compares the live volume against that identifier, NTFS, and 4 KiB
+allocation units before admission, before every target, and at final identity
+verification. For the Issue #81 bootstrap on this host, the separately
+registered pinned engine worktree, dependency-download cache, UBA store,
+native logs, child temporary files, and subsequent project-build workspace
+also live on the verified NTFS F: volume. Verify its volume ID, NTFS format,
+and 4 KiB allocation units, then require at least 600 GiB free **before**
+preparing the engine worktree and dependency cache. Recheck for at least 300 GiB free after
 hydration and before native compilation; the controller enforces this latter
 admission gate. These are conservative operating thresholds, not estimates of
 the engine's eventual disk use. The failed D: engine attempt remains recovery
 evidence and its compiled outputs are never imported into F:. This is a local
 operational layout, not a canonical contributor-machine layout. It runs only pinned `Build.bat`
-`UnrealPak`, `ShaderCompileWorker`, and `UnrealEditor` Win64
-Development targets. It passes explicit local-only executor flags and at most
+`UnrealPak`, `ShaderCompileWorker`, and the project's `AethelnOnlineEditor`
+Win64 Development targets. The editor target is built with
+`-Project=<repository root>\AethelnOnline.uproject` rather than the
+all-modules engine `UnrealEditor` target (roughly 1,900 actions instead of
+9,000), so `UnrealEditor.exe`, `UnrealEditor-Cmd.exe`, and the engine
+`UnrealEditor-*.dll` set still land in `Engine/Binaries/Win64` while the
+`AethelnOnlineEditor.target` receipt and `UnrealEditor-Game*.dll` modules land
+in the repository's Git-ignored `Binaries/Win64`; the receipt validation
+resolves those `$(ProjectDir)` products against the controller checkout. It passes explicit local-only executor flags and at most
 `min(4, physical cores, floor((available RAM GiB - 6)/3),
 floor((commit headroom GiB - 6)/3))` actions. It never runs UAT, invokes
 `-clean`, explicitly removes existing engine outputs, or falls back to a
@@ -295,7 +309,16 @@ required executable, deadline, pressure, or unproven cleanup fails closed. No au
 made for compiler or resource failures; after a valid evidence root exists,
 failure logs, products, and receipts remain on F: for diagnosis. The D:
 supervisor keeps a small independent terminal receipt so loss of F: remains
-reportable. The shared host lease is released only after owned-child cleanup
+reportable. After any sticky monitor failure (pressure, disk floor, clock, or
+measurement) the checkpoint is skipped with
+`checkpointFailure = checkpoint_skipped_<reason>`, the reason travels in the
+terminal receipts, and those receipts are still published: the publication
+worker runs on its own deadline without the failed monitor. Only when that
+publication itself fails does the D: supervisor write an independent
+`resource-failure.json` naming the reason. Captured native output is bounded at 16 MiB per target; past that the
+controller stops recording, appends one `[build_output_truncated]` marker,
+lets the native build run to completion, and records `outputTruncated` in the
+receipt. The shared host lease is released only after owned-child cleanup
 and final identity checks are proven.
 The shared lease is acquired **before** probing the engine source, tool inputs,
 and outputs, then held through the build. In particular, the fresh-output
@@ -344,8 +367,14 @@ checkout at the same controller commit:
   -SupervisorEvidenceRoot $AethelnNewDSupervisorEvidenceRoot `
   -TempRoot $AethelnFDriveTempRoot `
   -UbaRootDir $AethelnFDriveUbaRoot `
-  -NativeLogRoot $AethelnFDriveNativeLogRoot
+  -NativeLogRoot $AethelnFDriveNativeLogRoot `
+  -ExternalDrive 'F' `
+  -ExternalVolumeId $AethelnFDriveVolumeId
 ```
+
+`$AethelnFDriveVolumeId` is the operator-recorded `(Get-Volume -DriveLetter
+F).UniqueId`; keep it, like every other machine-specific path above, in the
+operator's untracked shell profile rather than in the repository.
 
 The supervisor enforces AC power before launch and prevents only automatic
 idle sleep while the attempt runs. It samples resource headroom and the F:
@@ -366,6 +395,13 @@ confirmation must cross-verify. Only a complete
 checkpoint created by this revised controller for the same F: engine path,
 source, controller, toolchain, configuration, and volume may be reused.
 Checkpoint hashing runs only after native children are quiescent. The
+checkpoint manifest covers generated engine output files only (Win64
+binaries, build intermediates, UnrealBuildTool outputs, and plugin or program
+`bin`/`obj` products); protected-name screening (`.env`, `secrets`,
+`credentials`, `kubeconfig`, and key material) applies to those generated
+files, not to tracked engine source paths that happen to carry such names.
+Project-side outputs under the repository's `Binaries/` and `Intermediate/`
+are not part of the manifest. The
 continuation verifies the prior manifest through one pinned read handle,
 rehashes retained build logs and products for completed targets, and records
 which targets were reused. A verified continuation skips those completed
@@ -439,9 +475,9 @@ written atomically to a temporary sibling and moved into place), and writes
 file with its engine-relative `path`, lowercase SHA-256, and `sizeBytes`.
 The attested set is not a hand-written list: it is derived from the pinned
 engine's generated Unreal target receipts — the exact
-`UnrealEditor` Win64 Development Editor receipt plus the `UnrealPak` and
-`ShaderCompileWorker` Win64 Development Program receipts under
-`Engine/Binaries/Win64` — whose validated non-symbol build products
+`AethelnOnlineEditor` Win64 Development Editor receipt under the project
+`Binaries/Win64` plus the `UnrealPak` and `ShaderCompileWorker` Win64
+Development Program receipts under `Engine/Binaries/Win64` — whose validated non-symbol build products
 (executables, dynamic libraries, module/resource manifests, and the receipts
 themselves, including engine-plugin products outside `Engine/Binaries/Win64`)
 form the complete closure `-nocompileeditor` would skip. Symbol/debug and

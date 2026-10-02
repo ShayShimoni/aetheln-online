@@ -2,13 +2,39 @@
 . (Join-Path $PSScriptRoot '../ci/RoutineCompileResources.ps1')
 
 $script:HostToolEnginePin = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
-$script:HostToolTargets = @('UnrealPak', 'ShaderCompileWorker', 'UnrealEditor')
+# The editor target is the project's own Editor target built with -Project,
+# not the all-modules engine UnrealEditor target. Its engine-side products
+# (UnrealEditor.exe, UnrealEditor-Cmd.exe, UnrealEditor-*.dll) still land in
+# Engine/Binaries/Win64; its receipt and UnrealEditor-Game*.dll modules land in
+# the repository's Binaries/Win64, addressed with UBT's own $(ProjectDir) token.
+$script:HostToolTargets = @('UnrealPak', 'ShaderCompileWorker', 'AethelnOnlineEditor')
+$script:HostToolProjectTarget = 'AethelnOnlineEditor'
+$script:HostToolProjectFile = 'AethelnOnline.uproject'
 $script:HostToolProducts = @{
-	UnrealEditor = @('Engine/Binaries/Win64/UnrealEditor.exe', 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe', 'Engine/Binaries/Win64/UnrealEditor.target')
+	AethelnOnlineEditor = @('Engine/Binaries/Win64/UnrealEditor.exe', 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe', '$(ProjectDir)/Binaries/Win64/AethelnOnlineEditor.target')
 	UnrealPak = @('Engine/Binaries/Win64/UnrealPak.exe', 'Engine/Binaries/Win64/UnrealPak.target')
 	ShaderCompileWorker = @('Engine/Binaries/Win64/ShaderCompileWorker.exe', 'Engine/Binaries/Win64/ShaderCompileWorker.target')
 }
-$script:HostToolReceiptTypes = @{ UnrealEditor = 'Editor'; UnrealPak = 'Program'; ShaderCompileWorker = 'Program' }
+$script:HostToolReceiptTypes = @{ AethelnOnlineEditor = 'Editor'; UnrealPak = 'Program'; ShaderCompileWorker = 'Program' }
+
+function Resolve-HostToolProductPath {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param([Parameter(Mandatory)][string] $Relative, [Parameter(Mandatory)][string] $EngineRoot, [string] $ProjectRoot)
+	if ($Relative.StartsWith('$(ProjectDir)/', [StringComparison]::Ordinal)) {
+		if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { throw 'project_root_required' }
+		return Join-Path $ProjectRoot $Relative.Substring(14)
+	}
+	return Join-Path $EngineRoot $Relative
+}
+
+function Get-HostToolReceiptRelativePath {
+	[CmdletBinding()]
+	[OutputType([string])]
+	param([Parameter(Mandatory)][string] $Target)
+	if ($Target -ceq $script:HostToolProjectTarget) { return '$(ProjectDir)/Binaries/Win64/' + $Target + '.target' }
+	return 'Engine/Binaries/Win64/' + $Target + '.target'
+}
 $script:HostToolIncludedProductTypes = @('Executable', 'DynamicLibrary', 'RequiredResource', 'BuildResource', 'Package')
 $script:HostToolExcludedProductTypes = @('SymbolFile', 'MapFile', 'StaticLibrary', 'ImportLibrary')
 
@@ -435,20 +461,29 @@ function Assert-HostToolEngineInputIdentity {
 
 function Get-HostToolBuildCommand {
 	[CmdletBinding()]
-	param([Parameter(Mandatory)][ValidateSet('UnrealEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
+	param([Parameter(Mandatory)][ValidateSet('AethelnOnlineEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
 		[Parameter(Mandatory)][int] $ActionLimit, [Parameter(Mandatory)][string] $BuildBatch,
-		[string] $UbaRootDir, [string] $LogPath)
+		[string] $ProjectPath, [string] $UbaRootDir, [string] $LogPath, [string] $RequiredDrive)
 	if ($ActionLimit -lt 1 -or $ActionLimit -gt 4) { throw 'action_limit_invalid' }
 	if ([string]::IsNullOrWhiteSpace($BuildBatch) -or $BuildBatch -match '["\x00-\x1f]') { throw 'build_path_invalid' }
 	if (($UbaRootDir.Length -gt 0) -ne ($LogPath.Length -gt 0)) { throw 'build_path_invalid' }
-	$Arguments = @(
-		$Target, 'Win64', 'Development', '-WaitMutex', '-NoHotReloadFromIDE',
+	$Arguments = @($Target, 'Win64', 'Development')
+	if ($Target -ceq $script:HostToolProjectTarget) {
+		# The worker joins arguments with spaces into one cmd line, so the
+		# project path must be a plain, space-free .uproject path.
+		if ($ProjectPath -cnotmatch '^[A-Za-z]:\\' -or $ProjectPath -cnotmatch '\.uproject$' -or
+			$ProjectPath -match '["\s\x00-\x1f]' -or $ProjectPath.Length -gt 240) { throw 'build_path_invalid' }
+		$Arguments += ('-Project=' + $ProjectPath)
+	} elseif ($ProjectPath.Length -gt 0) { throw 'build_path_invalid' }
+	$Arguments += @(
+		'-WaitMutex', '-NoHotReloadFromIDE',
 		'-UBA', '-UBADisableRemote', '-NoXGE', '-NoSNDBS', '-NoFASTBuild',
 		('-MaxParallelActions=' + $ActionLimit), '-Compiler=VisualStudio2022',
 		'-CompilerVersion=14.44.35207', '-WindowsSDKVersion=10.0.26100.0')
 	if ($UbaRootDir.Length -gt 0) {
+		if ($RequiredDrive -cnotmatch '^[A-Z]$') { throw 'build_path_invalid' }
 		foreach ($Path in @($UbaRootDir, $LogPath)) {
-			if ($Path -cnotmatch '^[Ff]:\\' -or $Path -match '["\x00-\x1f]' -or $Path.Length -gt 240) { throw 'build_path_invalid' }
+			if ($Path -notmatch ('^' + $RequiredDrive + ':\\') -or $Path -match '["\x00-\x1f]' -or $Path.Length -gt 240) { throw 'build_path_invalid' }
 		}
 		$Arguments += @(
 			('-UBARootDir=' + $UbaRootDir),
@@ -461,16 +496,18 @@ function Get-HostToolBuildCommand {
 function Get-HostToolConfigurationSha256 {
 	[CmdletBinding()]
 	param([Parameter(Mandatory)][string] $EngineRoot, [Parameter(Mandatory)][string] $UbaRootDir,
-		[Parameter(Mandatory)][string] $TempRoot, [Parameter(Mandatory)][string] $NativeLogRoot)
+		[Parameter(Mandatory)][string] $TempRoot, [Parameter(Mandatory)][string] $NativeLogRoot,
+		[Parameter(Mandatory)][string] $ProjectPath, [Parameter(Mandatory)][ValidatePattern('^[A-Z]$')][string] $RequiredDrive)
 	$Batch = Join-Path $EngineRoot 'Engine/Build/BatchFiles/Build.bat'
 	$Commands = @($script:HostToolTargets | ForEach-Object {
 		$Target = $_
 		$Log = Join-Path (Join-Path $NativeLogRoot '{ATTEMPT_ID}') ($Target + '.ubt.log')
-		$Command = Get-HostToolBuildCommand -Target $Target -ActionLimit 4 -BuildBatch $Batch -UbaRootDir $UbaRootDir -LogPath $Log
+		$CommandProject = if ($Target -ceq $script:HostToolProjectTarget) { $ProjectPath } else { '' }
+		$Command = Get-HostToolBuildCommand -Target $Target -ActionLimit 4 -BuildBatch $Batch -ProjectPath $CommandProject -UbaRootDir $UbaRootDir -LogPath $Log -RequiredDrive $RequiredDrive
 		$Command.executable + ' ' + ($Command.arguments -join ' ')
 	})
-	$Text = @($EngineRoot, $UbaRootDir, $TempRoot, $NativeLogRoot,
-		'native-log-route-v2:create-only-per-attempt', 'TEMP=F', 'TMP=F', $Commands) -join "`n"
+	$Text = @($EngineRoot, $UbaRootDir, $TempRoot, $NativeLogRoot, $ProjectPath,
+		'native-log-route-v2:create-only-per-attempt', ('TEMP=' + $RequiredDrive), ('TMP=' + $RequiredDrive), $Commands) -join "`n"
 	$Bytes = [Text.Encoding]::UTF8.GetBytes($Text)
 	$Hasher = [Security.Cryptography.SHA256]::Create()
 	try { return ([BitConverter]::ToString($Hasher.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
@@ -583,10 +620,11 @@ function Get-HostToolProductState {
 	[CmdletBinding()]
 	[OutputType([Collections.Specialized.OrderedDictionary])]
 	param([Parameter(Mandatory)][string] $EngineRoot,
-		[Parameter(Mandatory)][ValidateSet('UnrealEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target)
+		[Parameter(Mandatory)][ValidateSet('AethelnOnlineEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
+		[string] $ProjectRoot)
 	$State = [ordered]@{}
 	foreach ($Relative in $script:HostToolProducts[$Target]) {
-		$Path = Join-Path $EngineRoot $Relative
+		$Path = Resolve-HostToolProductPath -Relative $Relative -EngineRoot $EngineRoot -ProjectRoot $ProjectRoot
 		Assert-InitialPreparationPlainPath -Path $Path -Reason 'product_path_invalid'
 		if (-not (Test-Path -LiteralPath $Path)) { $State[$Relative] = $null; continue }
 		$Item = Get-Item -LiteralPath $Path -ErrorAction Stop
@@ -599,7 +637,7 @@ function Get-HostToolProductState {
 function Assert-HostToolProductChange {
 	[CmdletBinding()]
 	[OutputType([bool])]
-	param([Parameter(Mandatory)][ValidateSet('UnrealEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
+	param([Parameter(Mandatory)][ValidateSet('AethelnOnlineEditor', 'UnrealPak', 'ShaderCompileWorker')][string] $Target,
 		[Parameter(Mandatory)][Collections.IDictionary] $Before, [Parameter(Mandatory)][Collections.IDictionary] $After)
 	$Changed = $false
 	foreach ($Relative in $script:HostToolProducts[$Target]) {
@@ -616,15 +654,15 @@ function Assert-HostToolProductChange {
 
 function Assert-HostToolReceiptSet {
 	[CmdletBinding()]
-	param([Parameter(Mandatory)][string] $EngineRoot, [string[]] $Targets = $script:HostToolTargets)
+	param([Parameter(Mandatory)][string] $EngineRoot, [string[]] $Targets = $script:HostToolTargets, [string] $ProjectRoot)
 	if ($Targets.Count -lt 1 -or $Targets.Count -gt 3 -or
 		@($Targets | Where-Object { $script:HostToolTargets -cnotcontains $_ }).Count -gt 0 -or
 		(@($Targets | Select-Object -Unique).Count -ne $Targets.Count)) { throw 'target_receipt_invalid' }
 	$Seen = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
 	$TotalBytes = [long] 0
 	foreach ($Target in $Targets) {
-		$ReceiptRelative = 'Engine/Binaries/Win64/' + $Target + '.target'
-		$ReceiptPath = Join-Path $EngineRoot $ReceiptRelative
+		$ReceiptRelative = Get-HostToolReceiptRelativePath -Target $Target
+		$ReceiptPath = Resolve-HostToolProductPath -Relative $ReceiptRelative -EngineRoot $EngineRoot -ProjectRoot $ProjectRoot
 		Assert-InitialPreparationPlainPath -Path $ReceiptPath -Reason 'target_receipt_invalid'
 		if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) { throw 'target_receipt_invalid' }
 		$ReceiptItem = Get-Item -LiteralPath $ReceiptPath -Force
@@ -648,9 +686,10 @@ function Assert-HostToolReceiptSet {
 				$null -eq $Product.PSObject.Properties['Type'] -or $Product.Path -isnot [string] -or
 				$Product.Type -isnot [string]) { throw 'target_receipt_invalid' }
 			if ($script:HostToolExcludedProductTypes -ccontains $Product.Type) { continue }
-			if ($script:HostToolIncludedProductTypes -cnotcontains $Product.Type -or
-				$Product.Path -cnotmatch '^\$\(EngineDir\)/') { throw 'target_receipt_invalid' }
-			$Relative = 'Engine/' + $Product.Path.Substring(13)
+			if ($script:HostToolIncludedProductTypes -cnotcontains $Product.Type) { throw 'target_receipt_invalid' }
+			if ($Product.Path -cmatch '^\$\(EngineDir\)/(?<rest>.+)$') { $Relative = 'Engine/' + $Matches.rest }
+			elseif ($Target -ceq $script:HostToolProjectTarget -and $Product.Path -cmatch '^\$\(ProjectDir\)/.+$') { $Relative = $Product.Path }
+			else { throw 'target_receipt_invalid' }
 			if ($Relative.Contains(':') -or [IO.Path]::IsPathRooted($Relative) -or
 				@(($Relative -split '[\\/]') | Where-Object { $_ -in @('', '.', '..') }).Count -ne 0) { throw 'target_receipt_invalid' }
 			[void] $Derived.Add([pscustomobject]@{ path = $Relative; type = $Product.Type })
@@ -671,7 +710,7 @@ function Assert-HostToolReceiptSet {
 				if ($Previous.path -cne $Normalized -or $Previous.type -cne [string] $Entry.type -or
 					$Entry.type -ceq 'TargetReceipt') { throw 'target_product_duplicate' }
 			}
-			$Path = Join-Path $EngineRoot $Relative
+			$Path = Resolve-HostToolProductPath -Relative $Relative -EngineRoot $EngineRoot -ProjectRoot $ProjectRoot
 			Assert-InitialPreparationPlainPath -Path $Path -Reason 'target_receipt_invalid'
 			if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw 'target_product_missing' }
 			$Size = [long] (Get-Item -LiteralPath $Path -Force).Length

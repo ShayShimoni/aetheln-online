@@ -21,7 +21,9 @@ param(
 	[string] $UbaRootDir,
 	[string] $NativeLogRoot,
 	[string] $ResumeReceiptPath,
-	[string] $ResumeReceiptSha256
+	[string] $ResumeReceiptSha256,
+	[string] $ExternalDrive,
+	[string] $ExternalVolumeId
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -29,6 +31,10 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'HostToolProvisioning.Publication.ps1')
 . (Join-Path $PSScriptRoot '../ci/EngineRunnerHostLease.ps1')
 $script:HostToolDiskWarningSent = $false
+# Operator-supplied external volume identity; the repository tracks no
+# machine-specific engine path, drive letter, or volume identifier.
+$script:HostToolExternalDrive = $null
+$script:HostToolExternalVolumeId = $null
 
 function Assert-HostToolPlainRoot {
 	param([string] $Path, [string] $Reason)
@@ -150,9 +156,9 @@ function Invoke-HostToolPublicationWorker {
 
 function Assert-HostToolExternalVolume {
 	param([string] $Path, [string] $Reason)
-	if ($Path -cnotmatch '^[Ff]:\\') { throw $Reason }
-	$Volume = Get-Volume -DriveLetter F -ErrorAction Stop
-	if ($Volume.UniqueId -cne '\\?\Volume{fd18ede5-0de4-431c-839e-3163c3427d30}\' -or
+	if ($Path -notmatch ('^' + $script:HostToolExternalDrive + ':\\')) { throw $Reason }
+	$Volume = Get-Volume -DriveLetter $script:HostToolExternalDrive -ErrorAction Stop
+	if ($Volume.UniqueId -cne $script:HostToolExternalVolumeId -or
 		$Volume.FileSystem -cne 'NTFS' -or $Volume.AllocationUnitSize -ne 4096) { throw 'external_volume_mismatch' }
 	return $Volume
 }
@@ -194,8 +200,8 @@ function Write-HostToolDiskWarning {
 	param($ResourceMonitor)
 	if ($script:HostToolDiskWarningSent -or $null -eq $ResourceMonitor) { return }
 	foreach ($Volume in $ResourceMonitor.volumes) {
-		if ($Volume.mount -match '^[Ff]:\\' -and $Volume.minimumAvailableBytes -lt 100GB) {
-			Write-Warning 'F: free space has fallen below 100 GiB; the 20 GiB emergency floor remains enforced.'
+		if ($Volume.mount -match ('^' + $script:HostToolExternalDrive + ':\\') -and $Volume.minimumAvailableBytes -lt 100GB) {
+			Write-Warning ($script:HostToolExternalDrive + ': free space has fallen below 100 GiB; the 20 GiB emergency floor remains enforced.')
 			$script:HostToolDiskWarningSent = $true
 			return
 		}
@@ -214,7 +220,8 @@ function Invoke-HostToolCheckpointWorker {
 	$Arguments = @('-NoProfile', '-NonInteractive', '-File',
 		(Join-Path $PSScriptRoot 'HostToolProvisioning.CheckpointWorker.ps1'),
 		'-Mode', $Mode, '-EngineRoot', $EngineRoot, '-ManifestPath', $ManifestPath,
-		'-HeaderBase64', [Convert]::ToBase64String($HeaderBytes), '-ResultPath', $ResultPath)
+		'-HeaderBase64', [Convert]::ToBase64String($HeaderBytes), '-ResultPath', $ResultPath,
+		'-RequiredExternalDrive', $script:HostToolExternalDrive)
 	if ($Mode -ceq 'Verify') { $Arguments += @('-ExpectedManifestSha256', $ExpectedManifestSha256) }
 	$ChildPowerShell = Resolve-HostToolChildPowerShellPath
 	$Job = $null; $Process = $null; $Cleanup = $false
@@ -252,18 +259,20 @@ function Invoke-HostToolIdentityProbe {
 	param([ValidateSet('Controller','Engine','Fresh','Receipt','Product','Git','ReusedLog')][string] $Mode, [string] $Root,
 		[bool] $Bootstrap, [string] $SupervisorRoot, [string] $ControllerRoot,
 		$ResourceMonitor, [long] $DeadlineTicks,
-		[ValidateSet('UnrealEditor','UnrealPak','ShaderCompileWorker')][string] $Target,
+		[ValidateSet('AethelnOnlineEditor','UnrealPak','ShaderCompileWorker')][string] $Target,
 		[string] $ExpectedLogSha256, [switch] $IgnoreUntrackedGenerated)
+	# The controller root is the project root: the project editor target's
+	# receipt and project modules land beside AethelnOnline.uproject.
 	if (-not $Bootstrap) {
 		if ($Mode -ceq 'Git') { return Get-HostToolGitState -Root $Root -IgnoreUntrackedGenerated:$IgnoreUntrackedGenerated }
 		if ($Mode -ceq 'ReusedLog') { throw 'reused_log_bootstrap_only' }
 		if ($Mode -ceq 'Controller') { return Assert-HostToolControllerInputIdentity -ControllerRoot $Root }
 		if ($Mode -ceq 'Fresh') { throw 'fresh_probe_bootstrap_only' }
 		if ($Mode -ceq 'Receipt') {
-			if ([string]::IsNullOrWhiteSpace($Target)) { return Assert-HostToolReceiptSet -EngineRoot $Root }
-			return Assert-HostToolReceiptSet -EngineRoot $Root -Targets @($Target)
+			if ([string]::IsNullOrWhiteSpace($Target)) { return Assert-HostToolReceiptSet -EngineRoot $Root -ProjectRoot $ControllerRoot }
+			return Assert-HostToolReceiptSet -EngineRoot $Root -Targets @($Target) -ProjectRoot $ControllerRoot
 		}
-		if ($Mode -ceq 'Product') { return Get-HostToolProductState -EngineRoot $Root -Target $Target }
+		if ($Mode -ceq 'Product') { return Get-HostToolProductState -EngineRoot $Root -Target $Target -ProjectRoot $ControllerRoot }
 		return Assert-HostToolEngineInputIdentity -EngineRoot $Root
 	}
 	$ResultPath = Join-Path $SupervisorRoot ('identity-' + $Mode.ToLowerInvariant() + '-' + [guid]::NewGuid().ToString('N') + '.json')
@@ -271,6 +280,7 @@ function Invoke-HostToolIdentityProbe {
 		(Join-Path $PSScriptRoot 'HostToolProvisioning.IdentityWorker.ps1'),
 		'-Mode', $Mode, '-Root', $Root, '-ResultPath', $ResultPath)
 	if ($Mode -in @('Product','ReusedLog') -or ($Mode -ceq 'Receipt' -and -not [string]::IsNullOrWhiteSpace($Target))) { $Arguments += @('-Target', $Target) }
+	if ($Mode -in @('Product','Receipt')) { $Arguments += @('-ProjectRoot', $ControllerRoot) }
 	if ($Mode -ceq 'ReusedLog') { $Arguments += @('-ExpectedLogSha256', $ExpectedLogSha256) }
 	if ($Mode -ceq 'Git' -and $IgnoreUntrackedGenerated) { $Arguments += '-IgnoreUntrackedGenerated' }
 	$Job = $null; $Process = $null; $Cleanup = $false
@@ -319,10 +329,10 @@ function Assert-HostToolNativeResult {
 	param($Result, [string] $Target, [int] $NativeExitCode)
 	if (($Result.schemaVersion -isnot [int] -and $Result.schemaVersion -isnot [long]) -or
 		$Result.schemaVersion -ne 1 -or $Result.target -cne $Target) { throw 'build_result_invalid' }
-	if ($Result.infrastructureFailure -ceq 'build_output_limit') { throw 'build_output_limit' }
 	if ($null -ne $Result.infrastructureFailure -or
 		($Result.nativeExitCode -isnot [int] -and $Result.nativeExitCode -isnot [long]) -or
-		$Result.nativeExitCode -ne $NativeExitCode) { throw 'build_result_invalid' }
+		$Result.nativeExitCode -ne $NativeExitCode -or
+		$null -eq $Result.PSObject.Properties['outputTruncated'] -or $Result.outputTruncated -isnot [bool]) { throw 'build_result_invalid' }
 }
 
 function Test-HostToolQuietAlert {
@@ -340,7 +350,7 @@ function Assert-HostToolTargetDiskAdmission {
 }
 
 function Assert-HostToolCompletedTargetReceipt {
-	param([ValidateSet('UnrealEditor','UnrealPak','ShaderCompileWorker')][string] $Target,
+	param([ValidateSet('AethelnOnlineEditor','UnrealPak','ShaderCompileWorker')][string] $Target,
 		[string] $EngineRoot, [bool] $Bootstrap, [string] $SupervisorRoot,
 		[string] $ControllerRoot, $ResourceMonitor, [long] $DeadlineTicks)
 	$Proof = Invoke-HostToolIdentityProbe -Mode Receipt -Root $EngineRoot -Target $Target -Bootstrap $Bootstrap -SupervisorRoot $SupervisorRoot -ControllerRoot $ControllerRoot -ResourceMonitor $ResourceMonitor -DeadlineTicks $DeadlineTicks
@@ -360,16 +370,19 @@ function Invoke-HostToolNativeBuild {
 	$null = New-HostToolEvidenceDirectory -Path $TargetEvidence
 	$Before = Invoke-HostToolIdentityProbe -Mode Product -Root $ResolvedEngine -Target $Target -Bootstrap $Bootstrap -SupervisorRoot $SupervisorRoot -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $UsefulDeadlineTicks
 	$BuildParameters = @{ Target = $Target; ActionLimit = $ActionLimit; BuildBatch = (Join-Path $ResolvedEngine 'Engine/Build/BatchFiles/Build.bat') }
+	$ProjectPath = if ($Target -ceq $script:HostToolProjectTarget) { Join-Path $ResolvedController $script:HostToolProjectFile } else { '' }
+	if ($ProjectPath.Length -gt 0) { $BuildParameters.ProjectPath = $ProjectPath }
 	if (-not [string]::IsNullOrWhiteSpace($NativeLogRoot)) {
 		$BuildParameters.UbaRootDir = $UbaRootDir
 		$BuildParameters.LogPath = Join-Path $NativeLogRoot ($Target + '.ubt.log')
+		$BuildParameters.RequiredDrive = $script:HostToolExternalDrive
 	}
 	$Build = Get-HostToolBuildCommand @BuildParameters
 	$Record = [pscustomobject]@{ target = $Target; command = @($Build.executable) + @($Build.arguments); nativeExitCode = $null;
 		logPath = (Join-Path $TargetEvidence 'build.log'); logSha256 = $null; actionCount = $null; progressCount = $null;
 		selectionVerified = $false; recoveredNoOp = $false; targetReceiptVerified = $false;
 		recoverySourceReceiptSha256 = $(if ($AllowRecoveredNoOp) { $RecoverySourceReceiptSha256 } else { $null });
-		cleanupVerified = $false; productsVerified = $false; products = $null }
+		cleanupVerified = $false; productsVerified = $false; products = $null; outputTruncated = $null }
 	[void] $InvocationRecords.Add($Record)
 	$Job = $null; $Process = $null; $Cleanup = $false
 	try {
@@ -381,9 +394,11 @@ function Invoke-HostToolNativeBuild {
 		$Arguments = @('-NoProfile', '-NonInteractive', '-File',
 			(Join-Path $PSScriptRoot 'HostToolProvisioning.BuildInvocation.ps1'), '-Target', $Target,
 			'-ActionLimit', [string] $ActionLimit, '-EngineRoot', $ResolvedEngine, '-EvidenceRoot', $TargetEvidence)
+		if ($ProjectPath.Length -gt 0) { $Arguments += @('-ProjectPath', $ProjectPath) }
 		if (-not [string]::IsNullOrWhiteSpace($NativeLogRoot)) {
 			$Arguments += @('-TempRoot', $TempRoot, '-UbaRootDir', $UbaRootDir,
-				'-UbtLogPath', (Join-Path $NativeLogRoot ($Target + '.ubt.log')))
+				'-UbtLogPath', (Join-Path $NativeLogRoot ($Target + '.ubt.log')),
+				'-RequiredDrive', $script:HostToolExternalDrive)
 		}
 		Assert-HostToolAcPower
 		$Process = $Job.Start($ChildPowerShell, $Arguments, $ResolvedEngine)
@@ -444,6 +459,7 @@ function Invoke-HostToolNativeBuild {
 	if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf) -or (Get-Item -LiteralPath $ResultPath).Length -gt 4096) { throw 'build_result_missing' }
 	$Result = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
 	Assert-HostToolNativeResult -Result $Result -Target $Target -NativeExitCode $Record.nativeExitCode
+	$Record.outputTruncated = [bool] $Result.outputTruncated
 	if ($Record.nativeExitCode -ne 0) { throw 'native_build_failed' }
 	$null = Invoke-HostToolIdentityProbe -Mode Engine -Root $ResolvedEngine -Bootstrap $Bootstrap -SupervisorRoot $SupervisorRoot -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $script:HostToolVerificationDeadlineTicks
 	$LogPath = Join-Path $TargetEvidence 'build.log'
@@ -473,8 +489,12 @@ function Invoke-HostToolFinalReceiptPublication {
 		[bool] $CleanupVerified, [bool] $LeaseReleased)
 	try {
 		if ($Bootstrap) {
+			# Publication has its own deadline. A sticky monitor failure must not
+			# make the terminal receipt itself unpublishable, so the worker wait
+			# loop runs without the monitor once it has failed.
+			$PublicationMonitor = if ($null -ne $ResourceMonitor -and $null -ne $ResourceMonitor.failureReason) { $null } else { $ResourceMonitor }
 			$null = Invoke-HostToolPublicationWorker -SupervisorRoot $SupervisorRoot -EvidenceRoot $EvidenceRoot `
-				-Receipt $Receipt -ControllerRoot $ControllerRoot -ResourceMonitor $ResourceMonitor -DeadlineTicks $DeadlineTicks
+				-Receipt $Receipt -ControllerRoot $ControllerRoot -ResourceMonitor $PublicationMonitor -DeadlineTicks $DeadlineTicks
 		} else {
 			Write-HostToolProvisioningReceipt -Path (Join-Path $EvidenceRoot 'host-tool-provisioning-receipt.json') -Receipt $Receipt
 		}
@@ -499,6 +519,8 @@ function Invoke-HostToolFinalReceiptPublication {
 
 if (-not $Execute) { throw 'execute_required' }
 if (-not $PSCmdlet.ShouldProcess($EngineRoot, 'Run bounded non-clean host-tool provisioning')) { throw 'execute_declined' }
+if ($ExternalDrive -cnotmatch '^[A-Z]$') { throw 'external_drive_invalid' }
+$script:HostToolExternalDrive = $ExternalDrive
 $StartedUtc = [DateTime]::UtcNow.ToString('o')
 $StartedTicks = Get-InitialPreparationTick
 $Frequency = [Diagnostics.Stopwatch]::Frequency
@@ -523,8 +545,9 @@ $ResolvedCompiler = Assert-HostToolPlainRoot -Path $CompilerPath -Reason 'compil
 $ResolvedResourceCompiler = Assert-HostToolPlainRoot -Path $ResourceCompilerPath -Reason 'resource_compiler_path_invalid'
 $ResolvedSupervisor = $null; $ResolvedTemp = $null; $ResolvedUba = $null; $ResolvedNativeLog = $null; $ExternalVolume = $null
 if ($Bootstrap) {
+	if ($ExternalVolumeId -cnotmatch '^\\\\\?\\Volume\{[0-9a-fA-F-]{36}\}\\$') { throw 'external_volume_id_invalid' }
+	$script:HostToolExternalVolumeId = $ExternalVolumeId
 	if ($ResolvedController -cnotmatch '^[Dd]:\\' -or
-		$ResolvedEngine -cne 'F:\UnrealEngine\UE-5.8.1-source' -or
 		@(@($SupervisorEvidenceRoot, $TempRoot, $UbaRootDir, $NativeLogRoot) | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0) { throw 'bootstrap_paths_invalid' }
 	$ResolvedSupervisor = Assert-HostToolPlainRoot -Path $SupervisorEvidenceRoot -Reason 'supervisor_root_invalid'
 	$ResolvedTemp = Assert-HostToolPlainRoot -Path $TempRoot -Reason 'temp_root_invalid'
@@ -541,7 +564,7 @@ if ($Bootstrap) {
 	Assert-HostToolAcPower
 	if ([long] $ExternalVolume.SizeRemaining -lt 300GB) { throw 'bootstrap_disk_admission_refused' }
 }
-if ($ResolvedEvidence -cnotmatch '^[Ff]:\\' -or (Test-Path -LiteralPath $ResolvedEvidence) -or
+if ($ResolvedEvidence -notmatch ('^' + $ExternalDrive + ':\\') -or (Test-Path -LiteralPath $ResolvedEvidence) -or
 	(Test-InitialPreparationWithin -Candidate $ResolvedEvidence -Parent $ResolvedEngine) -or
 	(Test-InitialPreparationWithin -Candidate $ResolvedEvidence -Parent $ResolvedController) -or
 	(-not (Test-Path -LiteralPath (Split-Path -Parent $ResolvedEvidence) -PathType Container))) { throw 'evidence_root_invalid' }
@@ -573,12 +596,13 @@ try {
 	Assert-InitialPreparationPlainPath -Path $ResolvedEvidence -Reason 'evidence_root_invalid'
 	$EvidencePins = @(Get-InitialPreparationDirectoryPin -Directory $ResolvedEvidence)
 	if ($Bootstrap) {
-		$NativeLogAttemptRoot = New-HostToolNativeLogAttemptRoot -NativeLogRoot $ResolvedNativeLog
+		$NativeLogAttemptRoot = New-HostToolNativeLogAttemptRoot -NativeLogRoot $ResolvedNativeLog -RequiredDrive $ExternalDrive
 		$null = Assert-HostToolExternalVolume -Path $NativeLogAttemptRoot -Reason 'native_log_volume_mismatch'
 	}
 	foreach ($Required in @($ResolvedCompiler, $ResolvedResourceCompiler,
 		(Join-Path $ResolvedEngine 'Engine/Build/BatchFiles/Build.bat'),
-		(Join-Path $ResolvedEngine 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64/dotnet.exe'))) {
+		(Join-Path $ResolvedEngine 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64/dotnet.exe'),
+		(Join-Path $ResolvedController $script:HostToolProjectFile))) {
 		if (-not (Test-Path -LiteralPath $Required -PathType Leaf)) { throw 'tool_input_missing' }
 		Assert-InitialPreparationPlainPath -Path $Required -Reason 'tool_path_invalid'
 	}
@@ -617,18 +641,19 @@ try {
 	$CompilerSha256 = Get-HostToolFileDigest -Path $ResolvedCompiler -Algorithm SHA256
 	$ResourceCompilerSha256 = Get-HostToolFileDigest -Path $ResolvedResourceCompiler -Algorithm SHA256
 	if ($Bootstrap) {
-		$ConfigurationSha256 = Get-HostToolConfigurationSha256 -EngineRoot $ResolvedEngine -UbaRootDir $ResolvedUba -TempRoot $ResolvedTemp -NativeLogRoot $ResolvedNativeLog
+		$ConfigurationSha256 = Get-HostToolConfigurationSha256 -EngineRoot $ResolvedEngine -UbaRootDir $ResolvedUba -TempRoot $ResolvedTemp -NativeLogRoot $ResolvedNativeLog `
+			-ProjectPath (Join-Path $ResolvedController $script:HostToolProjectFile) -RequiredDrive $ExternalDrive
 	}
 	if ($Resume) {
 		$ExpectedHeader = [pscustomobject]@{ engineRoot = $ResolvedEngine; engineRevision = $EngineRevision;
 			controllerRevision = $ControllerRevision; compilerSha256 = $CompilerSha256;
 			resourceCompilerSha256 = $ResourceCompilerSha256; volumeId = $ExternalVolume.UniqueId;
 			configurationSha256 = $ConfigurationSha256 }
-		$Prior = Get-HostToolResumeReceipt -ReceiptPath $ResumeReceiptPath -ExpectedSha256 $ResumeReceiptSha256 -ExpectedHeader $ExpectedHeader
+		$Prior = Get-HostToolResumeReceipt -ReceiptPath $ResumeReceiptPath -ExpectedSha256 $ResumeReceiptSha256 -ExpectedHeader $ExpectedHeader -RequiredExternalDrive $ExternalDrive
 		$null = Assert-HostToolExternalVolume -Path $Prior.evidenceRoot -Reason 'resume_evidence_volume_mismatch'
 		$PriorProof = Invoke-HostToolCheckpointWorker -Mode Verify -EngineRoot $ResolvedEngine -ManifestPath $Prior.checkpointPath -Header $ExpectedHeader -SupervisorRoot $ResolvedSupervisor -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $VerificationDeadlineTicks -ExpectedManifestSha256 $Prior.checkpointSha256
 		$ParsedHeader = $PriorProof.verifiedHeader
-		$null = Assert-HostToolCheckpointHeader -Header $ParsedHeader -Expected $ExpectedHeader
+		$null = Assert-HostToolCheckpointHeader -Header $ParsedHeader -Expected $ExpectedHeader -RequiredDrive $ExternalDrive
 		foreach ($PriorTarget in @($ParsedHeader.completedTargets)) { [void] $CompletedTargets.Add($PriorTarget) }
 		foreach ($PriorTarget in $CompletedTargets) {
 			$LiveReceiptProof = Assert-HostToolCompletedTargetReceipt -Target $PriorTarget.target -EngineRoot $ResolvedEngine -Bootstrap $Bootstrap -SupervisorRoot $ResolvedSupervisor -ControllerRoot $ResolvedController -ResourceMonitor $ResourceMonitor -DeadlineTicks $VerificationDeadlineTicks
@@ -670,7 +695,7 @@ try {
 		if ($Bootstrap) {
 			$LiveVolume = Assert-HostToolExternalVolume -Path $ResolvedEngine -Reason 'external_volume_mismatch'
 			if ($LiveVolume.UniqueId -cne $ExternalVolume.UniqueId) { throw 'external_volume_mismatch' }
-			$null = Assert-HostToolTargetDiskAdmission -FreeBytes ([IO.DriveInfo]::new('F:\')).AvailableFreeSpace -NativeTargetsStarted $InvocationRecords.Count
+			$null = Assert-HostToolTargetDiskAdmission -FreeBytes ([IO.DriveInfo]::new($ExternalDrive + ':\')).AvailableFreeSpace -NativeTargetsStarted $InvocationRecords.Count
 		}
 		Get-RoutineCompileActionLimit -Monitor $ResourceMonitor
 	} -InvokeBuild {
@@ -706,8 +731,8 @@ try {
 } catch { $Failure = $_.Exception.Message }
 finally {
 	$PrimaryFailure = $Failure
-	if ($Bootstrap -and $null -ne $ResourceMonitor -and $ResourceMonitor.failureReason -ceq 'resource_pressure') {
-		$CheckpointFailure = 'checkpoint_skipped_resource_pressure'
+	if ($Bootstrap -and $null -ne $ResourceMonitor -and $null -ne $ResourceMonitor.failureReason) {
+		$CheckpointFailure = 'checkpoint_skipped_' + $ResourceMonitor.failureReason
 	}
 	if ($Bootstrap -and $null -ne $Lease -and $script:HostToolOwnedCleanupVerified -and
 		$null -ne $ResourceMonitor -and $null -eq $ResourceMonitor.failureReason -and
@@ -735,7 +760,7 @@ finally {
 				(Assert-HostToolExternalVolume -Path $ResolvedEngine -Reason 'external_volume_mismatch').UniqueId -cne $ExternalVolume.UniqueId) { throw 'checkpoint_final_identity_mismatch' }
 		} catch {
 			$CheckpointFailure = 'checkpoint_or_final_identity_failed:' + $_.Exception.Message
-			if ($PrimaryFailure -cne 'build_output_limit') { $Failure = $CheckpointFailure }
+			$Failure = $CheckpointFailure
 			$Completed = $false
 			$CheckpointSha256 = $null; $CheckpointFileCount = $null
 		}

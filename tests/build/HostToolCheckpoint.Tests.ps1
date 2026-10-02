@@ -17,13 +17,21 @@ try {
 	$null = New-Item -ItemType Directory -Path $Output, $Evidence -Force
 	$File = Join-Path $Output 'ActionHistory.bin'
 	[IO.File]::WriteAllBytes($File, [byte[]] @(1, 2, 3, 4))
+	# Tracked engine source under the scanned roots may legitimately carry
+	# protected-looking names; only generated output files are screened, and
+	# these must not enter the manifest or fail Create/Verify.
+	foreach ($TrackedRelative in @('Engine/Source/Programs/Fixture/Secrets/Foo.cs', 'Engine/Plugins/Fixture/credentials/README.md')) {
+		$TrackedPath = Join-Path $Engine $TrackedRelative
+		$null = New-Item -ItemType Directory -Path (Split-Path -Parent $TrackedPath) -Force
+		[IO.File]::WriteAllText($TrackedPath, 'tracked source fixture', (New-Object Text.UTF8Encoding($false)))
+	}
 	$Header = [pscustomobject]@{ schemaVersion = 2; engineRoot = $Engine; engineRevision = ('a' * 40);
 		controllerRevision = ('b' * 40); compilerSha256 = ('c' * 64); resourceCompilerSha256 = ('d' * 64);
 		volumeId = 'test-volume'; configurationSha256 = ('e' * 64); attemptOrdinal = 1;
 		priorUsefulSeconds = 0; completedTargets = @() }
 	$Manifest = Join-Path $Evidence 'generated-output-checkpoint.jsonl'
 	$Created = Invoke-HostToolCheckpointFile -Mode Create -EngineRoot $Engine -ManifestPath $Manifest -Header $Header -RequiredDrive $Drive
-	Assert-Checkpoint ($Created.fileCount -eq 1 -and $Created.manifestSha256 -cmatch '^[0-9a-f]{64}$') 'Checkpoint creation failed.'
+	Assert-Checkpoint ($Created.fileCount -eq 1 -and $Created.manifestSha256 -cmatch '^[0-9a-f]{64}$') 'Checkpoint creation must hash only generated outputs and tolerate protected-looking tracked source names.'
 	$Worker = Join-Path $PSScriptRoot '../../scripts/build/HostToolProvisioning.CheckpointWorker.ps1'
 	$HeaderBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($Header | ConvertTo-Json -Compress -Depth 15)))
 	$WorkerResultPath = Join-Path $Root 'worker-result.json'
@@ -68,6 +76,22 @@ try {
 	Assert-Checkpoint ($LASTEXITCODE -eq 0) 'Git state must run in the supervised identity worker.'
 	$GitResult = Get-Content -LiteralPath $GitResultPath -Raw | ConvertFrom-Json
 	Assert-Checkpoint ($GitResult.proof.head -cmatch '^[0-9a-f]{40}$' -and $GitResult.proof.status -match 'Engine/README.txt') 'Git worker must return head and dirty status.'
+	# The project editor target's receipt lives beside the .uproject, so the
+	# product worker resolves $(ProjectDir) entries against the supplied project root.
+	$ProjectRoot = Join-Path $Root 'identity-project'
+	$ProjectWin64 = Join-Path $ProjectRoot 'Binaries/Win64'
+	$null = New-Item -ItemType Directory -Path $ProjectWin64 -Force
+	foreach ($EditorProduct in @('UnrealEditor.exe', 'UnrealEditor-Cmd.exe')) { [IO.File]::WriteAllBytes((Join-Path $ProductDir $EditorProduct), [byte[]] @(3, 4)) }
+	[IO.File]::WriteAllBytes((Join-Path $ProjectWin64 'AethelnOnlineEditor.target'), [byte[]] @(5, 6))
+	$EditorProductResultPath = Join-Path $Root 'editor-product-result.json'
+	& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $IdentityWorker -Mode Product -Target AethelnOnlineEditor -Root $IdentityRoot -ProjectRoot $ProjectRoot -ResultPath $EditorProductResultPath -RequiredResultDrive $Drive
+	Assert-Checkpoint ($LASTEXITCODE -eq 0) 'Product worker must resolve the project editor receipt against the project root.'
+	$EditorProductResult = Get-Content -LiteralPath $EditorProductResultPath -Raw | ConvertFrom-Json
+	Assert-Checkpoint ($EditorProductResult.proof.'$(ProjectDir)/Binaries/Win64/AethelnOnlineEditor.target'.sizeBytes -eq 2 -and
+		$EditorProductResult.proof.'Engine/Binaries/Win64/UnrealEditor.exe'.sha256 -cmatch '^[0-9a-f]{64}$') 'Project editor product state must carry both engine-side and project-side entries.'
+	$NoProjectResultPath = Join-Path $Root 'editor-product-no-project.json'
+	& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $IdentityWorker -Mode Product -Target AethelnOnlineEditor -Root $IdentityRoot -ResultPath $NoProjectResultPath -RequiredResultDrive $Drive
+	Assert-Checkpoint ($LASTEXITCODE -eq 1 -and (Get-Content -LiteralPath $NoProjectResultPath -Raw | ConvertFrom-Json).failure -ceq 'project_root_required') 'Project editor product state must fail closed without a project root.'
 	$PriorLogDir = Join-Path $Evidence 'UnrealPak'
 	$null = New-Item -ItemType Directory -Path $PriorLogDir
 	$PriorLogPath = Join-Path $PriorLogDir 'build.log'
@@ -115,9 +139,13 @@ try {
 	$CompletedCreated = Invoke-HostToolCheckpointFile -Mode Create -EngineRoot $Engine -ManifestPath $CompletedManifest -Header $CompletedHeader -RequiredDrive $Drive
 	$CompletedVerified = Invoke-HostToolCheckpointFile -Mode Verify -EngineRoot $Engine -ManifestPath $CompletedManifest -ExpectedHeader $CompletedHeader -ExpectedManifestSha256 $CompletedCreated.manifestSha256 -RequiredDrive $Drive
 	Assert-Checkpoint ($CompletedVerified.completedTargets.Count -eq 1 -and $CompletedVerified.completedTargets[0].target -ceq 'UnrealPak') 'Completed-target prefix must survive checkpoint serialization.'
-	$Config1 = Get-HostToolConfigurationSha256 -EngineRoot 'F:\Engine' -UbaRootDir 'F:\UBA' -TempRoot 'F:\Temp' -NativeLogRoot 'F:\Logs'
-	$Config2 = Get-HostToolConfigurationSha256 -EngineRoot 'F:\Engine' -UbaRootDir 'F:\UBA' -TempRoot 'F:\Temp' -NativeLogRoot 'F:\OtherLogs'
-	Assert-Checkpoint ($Config1 -cmatch '^[0-9a-f]{64}$' -and $Config1 -cne $Config2) 'Native log routing must be bound by configuration identity.'
+	$ConfigArgs = @{ EngineRoot = ($Drive + ':\Engine'); UbaRootDir = ($Drive + ':\UBA'); TempRoot = ($Drive + ':\Temp');
+		ProjectPath = ($Drive + ':\Project\AethelnOnline.uproject'); RequiredDrive = $Drive }
+	$Config1 = Get-HostToolConfigurationSha256 @ConfigArgs -NativeLogRoot ($Drive + ':\Logs')
+	$Config2 = Get-HostToolConfigurationSha256 @ConfigArgs -NativeLogRoot ($Drive + ':\OtherLogs')
+	$ConfigArgs.ProjectPath = $Drive + ':\OtherProject\AethelnOnline.uproject'
+	$Config3 = Get-HostToolConfigurationSha256 @ConfigArgs -NativeLogRoot ($Drive + ':\Logs')
+	Assert-Checkpoint ($Config1 -cmatch '^[0-9a-f]{64}$' -and $Config1 -cne $Config2 -and $Config1 -cne $Config3) 'Native log routing and the project path must be bound by configuration identity.'
 	$ReceiptPath = Join-Path $Root 'prior-receipt.json'
 	$Receipt = [ordered]@{ schemaVersion = 2; scope = 'bounded_host_tool_provisioning'; success = $false;
 		failure = 'useful_work_deadline'; leaseReleased = $true; cleanupVerified = $true;
@@ -233,13 +261,14 @@ try {
 	foreach ($ProtectedName in @('.env', 'secrets')) {
 		$ProtectedDirectory = Join-Path $Output $ProtectedName
 		$null = [IO.Directory]::CreateDirectory($ProtectedDirectory)
+		[IO.File]::WriteAllBytes((Join-Path $ProtectedDirectory 'token.bin'), [byte[]] @(9))
 		try {
 			$ProtectedCreateManifest = Join-Path $Evidence ('protected-' + $ProtectedName.TrimStart('.') + '.jsonl')
 			Assert-CheckpointFailure { Invoke-HostToolCheckpointFile -Mode Create -EngineRoot $Engine -ManifestPath $ProtectedCreateManifest -Header $Header -RequiredDrive $Drive } 'checkpoint_protected_name'
-			Assert-Checkpoint (-not (Test-Path -LiteralPath $ProtectedCreateManifest)) "Protected directory $ProtectedName must be rejected before creating a manifest."
+			Assert-Checkpoint (-not (Test-Path -LiteralPath $ProtectedCreateManifest)) "Generated output under protected directory $ProtectedName must be rejected before creating a manifest."
 			Assert-CheckpointFailure { Invoke-HostToolCheckpointFile -Mode Verify -EngineRoot $Engine -ManifestPath $Manifest -ExpectedHeader $Header -ExpectedManifestSha256 $Created.manifestSha256 -RequiredDrive $Drive } 'checkpoint_protected_name'
 		} finally {
-			[IO.Directory]::Delete($ProtectedDirectory)
+			[IO.Directory]::Delete($ProtectedDirectory, $true)
 		}
 	}
 	$Protected = Join-Path $Output 'signing.pem'
