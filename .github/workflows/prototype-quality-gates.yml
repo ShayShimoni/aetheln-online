@@ -696,7 +696,8 @@ jobs:
             Write-Output $ResultText
             try { $CaptureFailed = $null -ne ($ResultText | ConvertFrom-Json).infrastructureFailure } catch { $CaptureFailed = $true }
           }
-          if ($BuildExit -ne 0) { if ($CaptureFailed) { Exit-Automation 'editor_build_capture_failed' } else { Exit-Automation 'editor_build_failed' } }
+          # Exit 5 is UBT FailedDueToEngineChange: -NoEngineChanges refused to rewrite engine files.
+          if ($BuildExit -ne 0) { if ($CaptureFailed) { Exit-Automation 'editor_build_capture_failed' } elseif ($BuildExit -eq 5) { Exit-Automation 'editor_build_engine_changes_required' } else { Exit-Automation 'editor_build_failed' } }
       - name: Run frozen Unreal automation filter
         id: automation_run
         if: steps.editor_build.outcome == 'success'
