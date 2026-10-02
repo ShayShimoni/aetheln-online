@@ -149,7 +149,7 @@ so the pose blends briefly without delaying movement.
 - Walk: 500 cm/s
 - Backpedal: 350 cm/s (70% movement scale); backward and backward-diagonal
   movement cannot sprint
-- Standalone-only provisional forward/lateral sprint: 700 cm/s
+- Provisional forward/lateral sprint: 700 cm/s
 - Jump velocity: 500 cm/s
 - Landing jump buffer: 0.20 seconds
 - Air control: 0.0; horizontal trajectory locks after takeoff
@@ -217,9 +217,13 @@ focus returns.
 Jump and sprint state are cleared on cancellation, focus loss, unpossession,
 component destruction, and PIE shutdown.
 
-Sprint is deliberately disabled while backpedaling and outside standalone
-play. A non-standalone attempt emits one development warning. This prevents
-the POC shortcut from being mistaken for validated multiplayer movement.
+Sprint is deliberately disabled while backpedaling. Issue #17 replicates it:
+`UAethelnCharacterMovementComponent` packs sprint intent into the predicted
+saved move as `FLAG_Custom_0`, and the server grants sprint speed only while
+walking with non-zero acceleration that is not backward relative to control
+yaw. Any other sprint request simulates walk speed, and a client that predicted
+sprint anyway is corrected. Clients never send speeds. `Aetheln.Movement.Net.*`
+covers the flag round trip, the server speed clamp, and rejected requests.
 
 ## Verification and feedback
 
