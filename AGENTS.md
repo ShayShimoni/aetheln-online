@@ -186,13 +186,14 @@ record review evidence and residual limitations, and include screenshots or
 video for visible gameplay or UI changes.
 
 Releases follow [Releases and versioning](docs/delivery-workflow.md#releases-and-versioning).
-Feature and fix PRs target `develop`. `main` receives only `release/*` and
-`hotfix/*` PRs, and only when a build is distributed to players. Internal
-pre-release tags (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`) stay on `release/*`
-branches. Board moves: `Done` issues move to `Release Candidate` when a
-release branch containing them is cut, with the `Release` field set to its
-tag. They move to `Released` once that release reaches players, is merged
-to `main` and tagged, and is back-merged into `develop`.
+Feature and fix PRs target `develop`, the default branch. `main` receives
+only `release/*` and `hotfix/*` PRs, and only when a build is distributed to
+players. Internal pre-release tags (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`)
+stay on `release/*` branches. Board moves: `Done` issues move to
+`Release Candidate` when a release branch containing them is cut, with the
+`Release` field set to the planned tag. They move to `Released` once that
+release reaches players, is merged to `main`, tagged, published as a GitHub
+Release, and back-merged into `develop`.
 
 ## Delivery Evidence and Authority
 
@@ -202,16 +203,16 @@ independent-agent technical review, explicitly required human review, CI
 verification, and owner merge authorization separate. Never label agent review
 as human approval or claim a self-authored PR was `APPROVED` by its author.
 `Dev Done` needs a reviewed and verified merge; `QA` and `Done` need distinct
-post-merge evidence. For PRs targeting `develop`, an issue reference and manual
-Development link track the issue; a `Closes #<issue>` line does not link or
-auto-close it there. Do not close an issue or advance its board status merely
-because a PR merged.
+post-merge evidence. `develop` is the default branch, so a closing keyword in
+a PR into `develop` closes the issue on merge. Reference the issue with
+`Refs #<issue>` instead, and do not close an issue or advance its board status
+merely because a PR merged.
 
 The project board is the source of truth for work status. It must reflect
 current reality at all times. Update it in the same step as every action
 that changes an issue's real state: work started, PR opened, PR merged, QA
-result, blocker found or cleared. Correct any drift the moment it is noticed.
-Only the lead moves the board; parallel lanes report to the lead.
+result, blocker found or cleared. Only the lead moves the board. A lane that
+notices drift reports it, and the lead corrects it at once.
 
 Keep state durable so any later session can resume without loss. When work
 starts, pauses, hands off, or changes state, record on the issue: the branch,
@@ -222,45 +223,50 @@ in progress. Otherwise record what is uncommitted and where.
 Board moves, made in the same step as the action:
 
 - When the lead starts implementation on an issue, directly or through a lane,
-  move the issue to `In Progress` before the work begins. Review, QA, and
-  audit work does not move an issue back to `In Progress`.
+  move the issue to `In Progress` before the work begins.
 - Open a PR only after developer verification is complete and recorded. Do
   not keep draft PRs open. When the PR opens, move the issue to `Code Review`.
   It stays there while CI, review, fixes, and owner authorization run; waiting
   on those gates is not `Blocked`.
-- Every open feature or fix PR into `develop` has its issue in `Code Review`,
-  so those PRs match the `Code Review` cards one to one. `release/*`,
-  `hotfix/*`, and back-merge PRs follow
+- Every open PR into `develop`, other than `release/*`, `hotfix/*`, and
+  back-merge PRs, has its issue in `Code Review`. Keep at most one open PR per
+  issue, so these PRs match the `Code Review` cards one to one. Release and
+  hotfix PRs follow
   [Releases and versioning](docs/delivery-workflow.md#releases-and-versioning).
 - Move the issue to `Dev Done` only after the PR is reviewed, verified, and
   merged. For an issue that needs several PRs, return it to `In Progress`
   after a partial merge, and move it to `Code Review` again when the next PR
   opens.
-- Every `Blocked` issue has a current `Blocked Reason`. A `Blocked` issue has
-  no open PR: close the PR unmerged, keep its branch unchanged (no
-  force-push, so the PR can be reopened), and record on the issue how to
-  resume.
-- When work starts on a `Blocked` issue, including work to remove its
-  blocker, clear the reason and move it to `In Progress`. If the reason still
-  holds when that work stops, return it to `Blocked` with the reason. When a
-  separate issue tracks the blocker, that issue moves instead.
+- Any move out of `Code Review` other than a merge closes the PR unmerged.
+  Do not delete or force-push its branch, so the PR can be reopened, and
+  record on the issue how to resume.
+- Every `Blocked` issue has a current `Blocked Reason` and no open PR.
+- When implementation or blocker-removal work starts on a `Blocked` issue,
+  clear the reason and move it to `In Progress`; when a QA round resumes on
+  it, move it to `QA`. If the reason still holds when that work stops, return
+  it to `Blocked` with the reason. When a separate issue tracks the blocker,
+  that separate issue moves to `In Progress` instead.
 - An issue that is deliberately parked, rather than waiting on a named
   blocker, moves to `Backlog`.
-- An issue moves from `Dev Done` to `QA` only when a QA round actually
-  starts on it, and stays in `QA` only while that round runs. When the round
-  ends: all boxes checked moves it to `Done`; a failed criterion that needs a
-  fix moves it back to `Open` with a comment stating the failed criterion,
-  the `develop` commit, the expected and actual result, and exact steps or
-  commands to reproduce or simulate the failure. It moves to `In Progress`
-  when the fix starts. A
-  criterion waiting on a decision, a dependency, or an engine QA run moves it
-  to `Blocked` with the reason.
 - `Open` holds the next issues ready to start: clear acceptance criteria,
   dependencies at the evidence level they need, and in the current roadmap
   stage. Keep about 8 at most. When fewer than 3 remain, the lead pulls the
   next ready issues from `Backlog` in roadmap order, with owner priorities
   first. Issues that need an undecided design or belong to a later stage stay
   in `Backlog`.
+- An issue moves from `Dev Done` to `QA` only when a QA round actually
+  starts on it, and stays in `QA` only while that round runs. Review and audit
+  work does not move an issue. When the round ends:
+  - every box checked: move it to `Done`;
+  - a failed criterion that needs a fix: move it back to `Open` with a comment
+    stating the failed criterion, the `develop` commit, the expected and
+    actual result, and exact steps or commands to reproduce or simulate the
+    failure; it moves to `In Progress` when the fix starts;
+  - criteria that only wait for a later QA round that has not started yet,
+    such as an engine QA run: move it back to `Dev Done`, and to `QA` again
+    when that round starts;
+  - a criterion waiting on a decision or a dependency: move it to `Blocked`
+    with the reason.
 - Check each acceptance-criteria checkbox as soon as QA on the merged
   `develop` revision verifies that criterion, not only when the issue moves
   to `Done`. Where QA is explicitly not applicable, the distinct acceptance
@@ -270,19 +276,18 @@ Board moves, made in the same step as the action:
 - When every acceptance and definition-of-done box is checked and the
   workflow's `Done` entry evidence is recorded, move the issue to `Done` in
   the same step. Never move an issue to `Done` with an unchecked box. An issue
-  in `Done`, `Release Candidate`, or `Released` with an unchecked box returns
-  to the status its evidence supports.
+  in `Done` with an unchecked box returns to the status its evidence
+  supports. For an issue in `Release Candidate` or `Released`, pulling the
+  work from the release or starting a hotfix is a separate release decision.
 
 Keep local branches and worktrees in sync with the remote. GitHub deletes a
 PR's head branch on merge. In the same step as the merge, run
-`git fetch --prune` and clean up the local worktree and branch under
-[Completed Delivery Branch Cleanup](docs/source-control.md#completed-delivery-branch-cleanup).
-On 2026-10-03 the owner gave standing authorization for that cleanup of
-merged PR head branches, so no per-ref request is needed when every check
-there passes. Before removing a worktree, also confirm that
-`git status --porcelain --ignored` shows no untracked files and no ignored
-evidence such as `Saved/` logs or automation reports; ignored build output
-(`Binaries/`, `Intermediate/`, `DerivedDataCache/`) may go. Keep worktrees
-that hold preserved evidence or are engine or compile workspaces until the
-issue that owns them is `Done`, and record any kept worktree's name and state
-on the issue.
+`git fetch --prune`, then follow
+[Completed Delivery Branch Cleanup](docs/source-control.md#completed-delivery-branch-cleanup):
+first remove the worktree, then delete the branch. Before removing a
+worktree, also confirm that `git status --porcelain --ignored` shows no
+untracked files and no ignored evidence such as `Saved/` logs or automation
+reports; ignored build output (`Binaries/`, `Intermediate/`,
+`DerivedDataCache/`) may go. Keep worktrees that hold preserved evidence or
+are engine or compile workspaces until the issue that owns them is `Done`, and
+record any kept worktree's name and state on the issue.

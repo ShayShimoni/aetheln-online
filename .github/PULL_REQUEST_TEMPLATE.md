@@ -4,12 +4,10 @@
 
 <!-- What changes, why, and which acceptance criteria does it address? -->
 
-Issue: #<issue>
-<!-- For a PR targeting develop, also link the issue from the Development
-sidebar. GitHub ignores closing keywords in PR descriptions targeting
-non-default branches. Do not add a closing keyword here. If a later PR targets
-default-branch main, use a closing keyword only when issue closure is intended
-and the issue's required acceptance/QA evidence already exists. -->
+Refs #<issue>
+<!-- develop is the default branch, so a closing keyword (Closes/Fixes/Resolves)
+would close the issue at merge, before QA. Use "Refs #<issue>" and also link
+the issue from the Development sidebar. -->
 
 ## Verification
 
