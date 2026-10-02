@@ -205,59 +205,72 @@ auto-close it there. Do not close an issue or advance its board status merely
 because a PR merged.
 
 The project board is the source of truth for work status. It must reflect
-current reality at all times: update it in the same step as every action
-that changes an issue's real state (work started, PR opened, PR merged, QA
-result, blocker found or cleared), and correct any drift the moment it is
-noticed.
+current reality at all times. Update it in the same step as every action
+that changes an issue's real state: work started, PR opened, PR merged, QA
+result, blocker found or cleared. Correct any drift the moment it is noticed.
+Only the lead moves the board; parallel lanes report to the lead.
 
 Keep state durable so any later session can resume without loss. When work
-starts, pauses, hands off, or changes state, record on the issue: the
-branch, worktree, head SHA, what is verified, open decisions, and the next
-step. Commit or push work in progress rather than leaving it only in an
-uncommitted worktree or in an agent's context. Never let the issue, the board,
-and the repository disagree.
+starts, pauses, hands off, or changes state, record on the issue: the branch,
+the worktree name (never a machine path), the head SHA, what is verified, open
+decisions, and the next step. When commit and push are authorized, push work
+in progress. Otherwise record what is uncommitted and where.
 
-Tie board moves to PR events, in the same step as the PR action:
+Board moves, made in the same step as the action:
 
-- Open a PR only after developer verification is complete and recorded. When
-  it opens, move the issue to `Code Review`. It stays there while CI, review,
-  and fixes run.
-- Move it to `Dev Done` only after the PR is reviewed, verified, and merged.
-- For an issue that needs several PRs, return it to `In Progress` after a
-  partial merge, and move it to `Code Review` again when the next PR opens.
-- `Blocked` overrides these moves while a recorded blocker exists. Every
-  `Blocked` issue has a current `Blocked Reason`. When work starts on a
-  `Blocked` issue or its blocker, clear the reason and move the issue to
-  `In Progress` in the same step.
-- When an agent or session starts work on an issue, move the issue to
-  `In Progress` in the same step, before the work begins.
-- Every open PR has its issue in `Code Review`, so the number of open PRs
-  matches the `Code Review` cards. If the issue becomes `Blocked` or parked,
-  close the PR unmerged, keep its branch, and record on the issue how to resume;
-  reopen the PR when work resumes.
+- When the lead starts implementation on an issue, directly or through a lane,
+  move the issue to `In Progress` before the work begins. Review, QA, and
+  audit work does not move an issue back to `In Progress`.
+- Open a PR only after developer verification is complete and recorded. Do
+  not keep draft PRs open. When the PR opens, move the issue to `Code Review`.
+  It stays there while CI, review, fixes, and owner authorization run; waiting
+  on those gates is not `Blocked`.
+- Every open feature or fix PR into `develop` has its issue in `Code Review`,
+  so those PRs match the `Code Review` cards one to one. `release/*`,
+  `hotfix/*`, and back-merge PRs follow
+  [Releases and versioning](docs/delivery-workflow.md#releases-and-versioning).
+- Move the issue to `Dev Done` only after the PR is reviewed, verified, and
+  merged. For an issue that needs several PRs, return it to `In Progress`
+  after a partial merge, and move it to `Code Review` again when the next PR
+  opens.
+- Every `Blocked` issue has a current `Blocked Reason`. A `Blocked` issue has
+  no open PR: close the PR unmerged, keep its branch unchanged (no
+  force-push, so the PR can be reopened), and record on the issue how to
+  resume.
+- When work starts on a `Blocked` issue, including work to remove its
+  blocker, clear the reason and move it to `In Progress`. If the reason still
+  holds when that work stops, return it to `Blocked` with the reason. When a
+  separate issue tracks the blocker, that issue moves instead.
+- An issue that is deliberately parked, rather than waiting on a named
+  blocker, moves to `Backlog`.
 - Check each acceptance-criteria checkbox as soon as QA on the merged
-  `develop` revision verifies that specific criterion, not only when the
-  issue moves to `Done`. Where QA is explicitly not applicable, the distinct
-  acceptance verification required by the delivery workflow takes QA's place.
-  Check a box only when recorded evidence covers that criterion, and post or
-  link the comment naming the run or check and the `develop` commit in the
-  same step.
-- When the last acceptance-criteria checkbox is checked, the issue is done:
-  move it to `Done` in the same step. Never move an issue to `Done` while any
-  acceptance box is unchecked. An issue in `Done` with an unchecked acceptance
-  box returns to the status its evidence supports.
+  `develop` revision verifies that criterion, not only when the issue moves
+  to `Done`. Where QA is explicitly not applicable, the distinct acceptance
+  verification required by the delivery workflow takes QA's place. Check a
+  box only when recorded evidence covers that criterion, and in the same step
+  post or link the comment naming the run or check and the `develop` commit.
+- When every acceptance and definition-of-done box is checked and the
+  workflow's `Done` entry evidence is recorded, move the issue to `Done` in
+  the same step. Never move an issue to `Done` with an unchecked box. An issue
+  in `Done`, `Release Candidate`, or `Released` with an unchecked box returns
+  to the status its evidence supports.
 
-Keep local branches and worktrees in sync with the remote:
+Keep local branches and worktrees in sync with the remote. GitHub deletes a
+PR's head branch on merge. In the same step as the merge, run
+`git fetch --prune`, then remove the local worktree and branch only when all
+of these hold:
 
-- GitHub deletes a PR's head branch on merge. In the same step as the merge,
-  run `git fetch --prune`, remove the branch's local worktree, and delete the
-  local branch.
-- Remove a worktree only when `git status --porcelain` shows nothing, or
-  `git diff HEAD` and untracked files are empty (line-ending noise only).
-  Otherwise keep it and record its path and state on the issue.
-- Delete a local branch only when its tip is an ancestor of `origin/develop`,
-  or after its PR is closed unmerged and the issue records that nothing on it
-  is still needed.
-- Keep worktrees that hold preserved evidence, engine or compile workspaces,
-  and detached evidence checkouts until the issue that owns them is `Done`.
-- Remove a QA or review worktree when that QA or review is recorded.
+- The local branch tip equals the merged PR head SHA, or is an ancestor of the
+  PR's base branch. Unpushed local commits keep the branch.
+- `git status --porcelain --ignored` shows no untracked files and no ignored
+  evidence (for example `Saved/` logs or automation reports). Ignored build
+  output (`Binaries/`, `Intermediate/`, `DerivedDataCache/`) may go.
+- The worktree holds no preserved evidence and is not an engine or compile
+  workspace. Keep those until the issue that owns them is `Done`.
+
+Use `git worktree remove` and `git branch -d`. Use `--force` or `-D` only
+after checking the rules above, for example when `git diff HEAD` is empty and
+the only status entries are line-ending changes. A PR closed unmerged keeps
+its branch until the issue records that nothing on it is still needed. If a
+worktree must stay, record its name and state on the issue. QA and review
+worktrees follow the same rules once their result is recorded.
