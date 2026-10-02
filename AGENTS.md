@@ -224,9 +224,11 @@ Tie board moves to PR events, in the same step as the PR action:
   `Blocked`.
 - Check each acceptance-criteria checkbox as soon as QA on the merged
   `develop` revision verifies that specific criterion, not only when the
-  issue moves to `Done`. Check a box only when recorded evidence covers that
-  criterion, and post or link the QA comment naming the run and `develop`
-  commit in the same step.
+  issue moves to `Done`. Where QA is explicitly not applicable, the distinct
+  acceptance verification required by the delivery workflow takes QA's place.
+  Check a box only when recorded evidence covers that criterion, and post or
+  link the comment naming the run or check and the `develop` commit in the
+  same step.
 - When the last acceptance-criteria checkbox is checked, the issue is done:
   move it to `Done` in the same step. Never move an issue to `Done` while any
   acceptance box is unchecked. An issue in `Done` with an unchecked acceptance
