@@ -35,7 +35,8 @@ function Get-JobBody([string] $JobName, [string] $NextJobName) {
 $ShadowSelection = Get-JobBody 'ci-selection-shadow' 'quality-gates'
 $QualityGates = Get-JobBody 'quality-gates' 'change-impact'
 $ChangeImpact = Get-JobBody 'change-impact' 'trusted-candidate-compile'
-$TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'scheduled-client-package'
+$TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'trusted-editor-automation'
+$EditorAutomation = Get-JobBody 'trusted-editor-automation' 'scheduled-client-package'
 $ScheduledSmokeStart = $Workflow.IndexOf('  scheduled-packaged-smoke:', [StringComparison]::Ordinal)
 Assert-True ($ScheduledSmokeStart -ge 0) "Workflow job 'scheduled-packaged-smoke' should exist."
 $ScheduledSmoke = Get-JobBody 'scheduled-packaged-smoke' 'visual-proof'
@@ -351,10 +352,15 @@ foreach ($RawProducer in @(
 }
 Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $TrustedCompile -match '\.ComputeHash\(\$ReportStream\)' -and $TrustedCompile -match '(?m)^          name: engine-runner-compile-report\r?$') 'The self-hosted compile report must use the portable .NET SHA-256 implementation and preserve its static artifact name even if binding fails.'
 
-# The same trusted job then builds the editor target in the managed workspace
-# through the bounded build wrapper and runs the frozen two-test harness from
-# that workspace. Nothing Unreal prints reaches the public log: the harness
+# TA-020: a separate owner-only engine job builds the editor target in the
+# managed workspace through the bounded build wrapper and runs the frozen
+# two-test harness from that workspace after a successful compile. The compile
+# job keeps its pre-producer shape, so nothing here can fail it or skip the
+# native receipt. Nothing Unreal prints reaches the public log: the harness
 # streams go to runner-local files and only a path-free summary is printed.
+Assert-True (((($TrustedCompile -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch '(?i)automation|AethelnOnlineEditor|editor_build') 'The compile job must carry no editor automation.'
+Assert-True ($EditorAutomation -match "(?m)^    needs: trusted-candidate-compile\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Editor automation must run only after a successful compile under the same owner and same-repository trust.'
+Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 35\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result|always\(\)|actions/checkout') 'Editor automation must have its own 35-minute ceiling, join the FIFO engine queue, and add no status bypass or checkout.'
 foreach ($Binding in @(
 	'automation_artifact_id: ${{ steps.automation_artifact.outputs.artifact-id }}',
 	'automation_artifact_name: ${{ steps.automation_identity.outputs.artifact_name }}',
@@ -363,15 +369,15 @@ foreach ($Binding in @(
 	'automation_size_bytes: ${{ steps.automation_identity.outputs.evidence_size_bytes }}',
 	'automation_reason: ${{ steps.automation_outcome.outputs.reason }}'
 )) {
-	Assert-True ($TrustedCompile.Contains($Binding)) "trusted-candidate-compile must expose exact automation artifact/file binding '$Binding'."
+	Assert-True ($EditorAutomation.Contains($Binding)) "trusted-editor-automation must expose exact automation artifact/file binding '$Binding'."
 }
-$EditorBuild = [regex]::Match($TrustedCompile, '(?ms)^      - name: Build editor target for Unreal automation\r?\n.*?(?=^      - )').Value
-$AutomationRun = [regex]::Match($TrustedCompile, '(?ms)^      - name: Run frozen Unreal automation filter\r?\n.*?(?=^      - )').Value
-$AutomationResidue = [regex]::Match($TrustedCompile, '(?ms)^      - name: Clear editor-written input residue\r?\n.*?(?=^      - )').Value
-$AutomationBind = [regex]::Match($TrustedCompile, '(?ms)^      - name: Bind Unreal automation report\r?\n.*?(?=^      - )').Value
-$AutomationUpload = [regex]::Match($TrustedCompile, '(?ms)^      - name: Upload Unreal automation report\r?\n.*?(?=^      - )').Value
-$AutomationOutcome = [regex]::Match($TrustedCompile, '(?ms)^      - name: Report Unreal automation outcome\r?\n.*?(?=\r?\n\r?\n|\z)').Value
-Assert-True ($EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome -and $TrustedCompile.IndexOf('name: Upload engine-runner report') -lt $TrustedCompile.IndexOf('name: Build editor target for Unreal automation')) 'The editor build and harness must follow the compile report upload so a harness failure never hides compile evidence.'
+$EditorBuild = [regex]::Match($EditorAutomation, '(?ms)^      - name: Build editor target for Unreal automation\r?\n.*?(?=^      - )').Value
+$AutomationRun = [regex]::Match($EditorAutomation, '(?ms)^      - name: Run frozen Unreal automation filter\r?\n.*?(?=^      - )').Value
+$AutomationResidue = [regex]::Match($EditorAutomation, '(?ms)^      - name: Clear editor-written input residue\r?\n.*?(?=^      - )').Value
+$AutomationBind = [regex]::Match($EditorAutomation, '(?ms)^      - name: Bind Unreal automation report\r?\n.*?(?=^      - )').Value
+$AutomationUpload = [regex]::Match($EditorAutomation, '(?ms)^      - name: Upload Unreal automation report\r?\n.*?(?=^      - )').Value
+$AutomationOutcome = [regex]::Match($EditorAutomation, '(?ms)^      - name: Report Unreal automation outcome\r?\n.*?(?=\r?\n\r?\n|\z)').Value
+Assert-True ($EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome) 'Editor automation must declare every reviewed step.'
 # Unreal failures stay on the unreal side: every automation step that can fail
 # continues on error, so the compile job and native receipt survive, while
 # binding and upload require every automation step to have succeeded. A
@@ -395,14 +401,14 @@ foreach ($Step in @(
 	if ($Step.Continue) { Assert-True ($Body -match '(?m)^        continue-on-error: true\r?$') "The automation $($Step.Name) step must not fail the compile job." }
 	else { Assert-True ($Body -notmatch 'continue-on-error') "The automation $($Step.Name) step must fail red once every automation step succeeded." }
 }
-Assert-True ($UnrealReceipt -match "(?ms)^      - name: Download exact unreal evidence\r?\n        if: needs\.trusted-candidate-compile\.outputs\.automation_artifact_id != ''\r?\n") 'A missing automation artifact must skip the unreal download so the publisher fails at its raw binding check rather than downloading every run artifact.'
-# The editor build starts only when its own bound, the harness bound, and a
-# small residue/bind/upload reserve still fit inside the 40-minute job.
-Assert-True ($EditorBuild.Contains('$JobSeconds = 40 * 60') -and $EditorBuild.Contains('$RequiredSeconds = (15 + 12 + 2 + 1 + 1 + 1 + 2) * 60') -and $EditorBuild.Contains('$env:AETHELN_COMPILE_STARTED_TIMESTAMP') -and $EditorBuild.IndexOf("Exit-Automation 'editor_build_budget_exhausted'") -gt 0 -and $EditorBuild.IndexOf("Exit-Automation 'editor_build_budget_exhausted'") -lt $EditorBuild.IndexOf('InitialPreparation.BuildInvocation.ps1')) 'The editor build must check the remaining job budget before it starts.'
+Assert-True ($UnrealReceipt -match "(?ms)^      - name: Download exact unreal evidence\r?\n        if: needs\.trusted-editor-automation\.outputs\.automation_artifact_id != ''\r?\n") 'A missing automation artifact must skip the unreal download so the publisher fails at its raw binding check rather than downloading every run artifact.'
+# The editor build builds only the exact clean revision the compile used:
+# another engine job may have synchronized the workspace in between.
+Assert-True ($EditorBuild.Contains("(Get-WorkspaceGitText 'rev-parse HEAD').Trim() -cne $env:GITHUB_SHA") -and $EditorBuild.Contains("Exit-Automation 'editor_workspace_revision_changed'") -and $EditorBuild.Contains("Exit-Automation 'editor_workspace_dirty'") -and $EditorBuild.IndexOf('editor_workspace_dirty') -lt $EditorBuild.IndexOf('InitialPreparation.BuildInvocation.ps1') -and $EditorBuild -notmatch 'AETHELN_COMPILE_STARTED|RequiredSeconds|budget') 'The editor build must verify the exact clean workspace revision before it starts and carry no budget gate.'
 Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $AutomationRun.Contains("Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f")) 'The harness step may print only the fixed path-free summary line.'
-# The editor build prints only the two masks, the fixed skip line, and the
+# The editor build prints only the two masks and the
 # wrapper's native-result.json (target, platform, exit code, failure class).
-Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 4 -and $EditorBuild.Contains("Write-Output 'editor_build_skipped reason=editor_build_budget_exhausted'") -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'")) 'The editor build may print only the masks, the fixed skip line, and the bounded native result record.'
+Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 3 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'")) 'The editor build may print only the masks and the bounded native result record.'
 $ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
 $UntrackedInputQuery = [regex]::Matches($ManagedWorkspaceSource, "'(ls-files --others -z -- [^']+)'")
 Assert-True ($AutomationResidue.Contains("(Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source") -and $AutomationResidue.Contains('''--no-replace-objects --no-optional-locks -C "'' + $Root + ''" '' + $Query')) 'Residue cleanup must resolve and invoke git exactly as the managed sync does.'
@@ -414,7 +420,7 @@ foreach ($Step in @($EditorBuild, $AutomationRun, $AutomationResidue, $Automatio
 	Assert-True ($Step.Contains($StopAutomation) -and $Step -notmatch "\bthrow '") 'Every automation failure must record its fixed reason before it stops.'
 }
 Assert-True ($AutomationOutcome.Contains('AETHELN_UPLOAD_OUTCOME: ${{ steps.automation_artifact.outcome }}') -and $AutomationOutcome.Contains("'automation_report_upload_failed'") -and $AutomationOutcome.Contains('Write-Output (''unreal_automation_outcome reason='' + $Reason)') -and [regex]::Matches($AutomationOutcome, 'Write-Output').Count -eq 1) 'The outcome step must expose the first automation failure as one fixed line.'
-Assert-True ($UnrealReceipt.Contains('AETHELN_AUTOMATION_REASON: ${{ needs.trusted-candidate-compile.outputs.automation_reason }}') -and $UnrealReceipt.Contains('Write-Output (''unreal_automation_outcome reason='' + $AutomationReason)') -and $UnrealReceipt.IndexOf('unreal_automation_outcome reason=') -lt $UnrealReceipt.IndexOf("throw 'unreal_raw_artifact_binding_invalid'")) 'The unreal publisher must print the fixed automation reason before its binding check.'
+Assert-True ($UnrealReceipt.Contains('AETHELN_AUTOMATION_REASON: ${{ needs.trusted-editor-automation.outputs.automation_reason }}') -and $UnrealReceipt.Contains('Write-Output (''unreal_automation_outcome reason='' + $AutomationReason)') -and $UnrealReceipt.IndexOf('unreal_automation_outcome reason=') -lt $UnrealReceipt.IndexOf("throw 'unreal_raw_artifact_binding_invalid'")) 'The unreal publisher must print the fixed automation reason before its binding check.'
 Assert-True ($UntrackedInputQuery.Count -eq 1 -and $AutomationResidue.Contains("'" + $UntrackedInputQuery[0].Groups[1].Value + "'")) 'Residue cleanup must use exactly the untracked-input query that the next managed sync enforces.'
 
 function Get-WorkflowStepScript([string] $Step) {
@@ -447,19 +453,34 @@ $AutomationFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-automati
 $script:AutomationFixtureTemp = Join-Path $AutomationFixtureRoot 'temp'
 $null = New-Item -ItemType Directory -Path (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job')
 $PreviousAutomationEnvironment = @{}
-foreach ($Name in @('AETHELN_COMPILE_STARTED_TIMESTAMP', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_ENGINE_ROOT', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+foreach ($Name in @('GITHUB_SHA', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_ENGINE_ROOT', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
 try {
-	# Budget gate: an exhausted or unreadable budget stops before any build input is touched.
-	$env:AETHELN_MANAGED_COMPILE_ROOT = Join-Path $AutomationFixtureRoot 'managed'
 	$env:AETHELN_ENGINE_ROOT = Join-Path $AutomationFixtureRoot 'engine'
 	$env:GITHUB_OUTPUT = Join-Path $AutomationFixtureRoot 'github-output.txt'
+	# Workspace gate: a moved, dirty, or unreadable workspace stops before any build input is touched.
+	$WorkspaceRepo = Join-Path $AutomationFixtureRoot 'workspace'
+	$null = New-Item -ItemType Directory -Path $WorkspaceRepo
+	[IO.File]::WriteAllText((Join-Path $WorkspaceRepo 'tracked.txt'), "tracked`n")
+	Invoke-AutomationFixtureGit $WorkspaceRepo @('init', '-q')
+	Invoke-AutomationFixtureGit $WorkspaceRepo @('add', '-A')
+	Invoke-AutomationFixtureGit $WorkspaceRepo @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
+	$WorkspaceHead = ([string] (& git -C $WorkspaceRepo rev-parse HEAD)).Trim()
+	$NotRepository = Join-Path $AutomationFixtureRoot 'not-a-repository'
+	$null = New-Item -ItemType Directory -Path $NotRepository
+	foreach ($WorkspaceCase in @(
+		@{ root=$WorkspaceRepo; sha=('f' * 40); dirty=$false; reason='editor_workspace_revision_changed' },
+		@{ root=$WorkspaceRepo; sha=$WorkspaceHead; dirty=$true; reason='editor_workspace_dirty' },
+		@{ root=$NotRepository; sha=$WorkspaceHead; dirty=$false; reason='editor_workspace_query_failed' }
+	)) {
+		if ($WorkspaceCase.dirty) { [IO.File]::WriteAllText((Join-Path $WorkspaceRepo 'untracked.txt'), 'editor output') }
+		$env:AETHELN_MANAGED_COMPILE_ROOT = $WorkspaceCase.root
+		$env:GITHUB_SHA = $WorkspaceCase.sha
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		$Gated = Invoke-AutomationStepFixture $EditorBuild
+		Assert-True ($Gated.failure -ceq $WorkspaceCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq ('reason=' + $WorkspaceCase.reason + "`n") -and -not (Test-Path -LiteralPath (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'))) "A workspace that fails '$($WorkspaceCase.reason)' must stop before the editor build."
+	}
+	$env:AETHELN_MANAGED_COMPILE_ROOT = Join-Path $AutomationFixtureRoot 'managed'
 	[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
-	$env:AETHELN_COMPILE_STARTED_TIMESTAMP = ([Diagnostics.Stopwatch]::GetTimestamp() - [long] (11 * 60 * [Diagnostics.Stopwatch]::Frequency)).ToString([Globalization.CultureInfo]::InvariantCulture)
-	$Exhausted = Invoke-AutomationStepFixture $EditorBuild
-	Assert-True ([IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq "reason=editor_build_budget_exhausted`n") 'An exhausted budget must record its fixed reason.'
-	Assert-True ($Exhausted.failure -ceq 'editor_build_budget_exhausted' -and -not (Test-Path -LiteralPath (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'))) 'An editor build that cannot finish inside the job budget must not start.'
-	$env:AETHELN_COMPILE_STARTED_TIMESTAMP = 'not-a-timestamp'
-	Assert-True ((Invoke-AutomationStepFixture $EditorBuild).failure -ceq 'editor_build_budget_invalid') 'An unreadable compile start anchor must fail closed.'
 
 	# The harness step summarizes a well-formed report and records
 	# unreal_automation_report_invalid for a malformed one.
@@ -552,12 +573,12 @@ try {
 	foreach ($Name in $PreviousAutomationEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $PreviousAutomationEnvironment[$Name]) }
 	Remove-Item -LiteralPath $AutomationFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
-Assert-True ($EditorBuild -match 'scripts/ci/InitialPreparation\.BuildInvocation\.ps1 `' -and $EditorBuild -match '(?m)^\s+-Target AethelnOnlineEditor `\r?$' -and $EditorBuild -match '(?m)^\s+-Platform Win64 `\r?$' -and $EditorBuild -match '(?m)^\s+-TargetRoot \$env:AETHELN_MANAGED_COMPILE_ROOT `\r?$' -and $EditorBuild -match '(?m)^\s+-EngineRoot \$env:AETHELN_ENGINE_ROOT `\r?$' -and $EditorBuild -notmatch 'Build\.bat') 'The editor target must be built in the managed workspace only through the bounded capture wrapper.'
+Assert-True ($EditorBuild.Contains('powershell -NoProfile -File (Join-Path $Root ''scripts\ci\InitialPreparation.BuildInvocation.ps1'') `') -and $EditorBuild -match '(?m)^\s+-Target AethelnOnlineEditor `\r?$' -and $EditorBuild -match '(?m)^\s+-Platform Win64 `\r?$' -and $EditorBuild -match '(?m)^\s+-TargetRoot \$env:AETHELN_MANAGED_COMPILE_ROOT `\r?$' -and $EditorBuild -match '(?m)^\s+-EngineRoot \$env:AETHELN_ENGINE_ROOT `\r?$' -and $EditorBuild -notmatch 'Build\.bat') 'The editor target must be built in the managed workspace only through the bounded capture wrapper.'
 Assert-True ($EditorBuild.Contains('::add-mask::$env:AETHELN_ENGINE_ROOT') -and $EditorBuild.Contains('::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT')) 'Runner-local engine and workspace roots must be masked before any automation step runs.'
 Assert-True ($AutomationRun -match [regex]::Escape("Join-Path `$env:AETHELN_MANAGED_COMPILE_ROOT 'scripts\ci\Invoke-UnrealAutomationTests.ps1'") -and $AutomationRun -match '-EngineRoot' -and $AutomationRun.Contains('$env:AETHELN_ENGINE_ROOT') -and $AutomationRun -match "'-TimeoutSeconds', '600'" -and $AutomationRun -match '(?m)^        timeout-minutes: \d+\r?$') 'The frozen harness must run from the managed workspace against the runner engine root with its bounded timeout.'
 Assert-True ($AutomationRun -match '-RedirectStandardOutput' -and $AutomationRun -match '-RedirectStandardError' -and $AutomationRun -notmatch 'Get-Content[^\r\n]*\.log' -and $AutomationRun -notmatch 'Write-Output \$Report\b') 'Unreal and harness output must stay in runner-local files; only a bounded summary may reach the log.'
 Assert-True ($AutomationBind -match '(?m)^        id: automation_identity\r?$' -and $AutomationBind -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $AutomationBind.Contains('artifact_name=unreal-automation-report') -and $AutomationBind -notmatch 'if: always\(\)') 'The automation report must be bound with the portable SHA-256 implementation and only after a passing harness.'
-Assert-True ($TrustedCompile -match '(?m)^        id: automation_artifact\r?$' -and $TrustedCompile -match '(?m)^          name: unreal-automation-report\r?$' -and $TrustedCompile.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/unreal-automation-report.json')) 'The automation report upload must be one exact run/attempt/job-scoped file.'
+Assert-True ($EditorAutomation -match '(?m)^        id: automation_artifact\r?$' -and $EditorAutomation -match '(?m)^          name: unreal-automation-report\r?$' -and $EditorAutomation.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/unreal-automation-report.json')) 'The automation report upload must be one exact run/attempt/job-scoped file.'
 
 # Package 3C receipt publishers are additive PR-only hosted jobs. Each consumes
 # the selector and exactly one raw producer through immutable artifact IDs,
@@ -567,8 +588,8 @@ $ReceiptContracts = @(
 	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Producer='quality-gates'; ArtifactOutput='report_artifact_id'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
 	# The native publisher proves native-client-server-compile and controller-operational-proof from one compile report, so either selection runs it.
 	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Producer='trusted-candidate-compile'; ArtifactOutput='report_artifact_id'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
-	# The unreal publisher consumes the second raw report of the same trusted compile job.
-	@{ Name='unreal-receipt-shadow'; Body=$UnrealReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required == 'true'"; Producer='trusted-candidate-compile'; ArtifactOutput='automation_artifact_id'; Key='unreal'; RawName="'unreal-automation-report'"; Evidence='unreal' },
+	# The unreal publisher consumes the raw report of the separate editor automation job.
+	@{ Name='unreal-receipt-shadow'; Body=$UnrealReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required == 'true'"; Producer='trusted-editor-automation'; ArtifactOutput='automation_artifact_id'; Key='unreal'; RawName="'unreal-automation-report'"; Evidence='unreal' },
 	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Producer='visual-proof'; ArtifactOutput='report_artifact_id'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
 )
 # aggregate_ready and the context builder's gap computation must agree on the
@@ -612,7 +633,7 @@ foreach ($Receipt in $ReceiptContracts) {
 $AggregateNeeds = [regex]::Match($AcceptanceShadow, '(?ms)^    needs:\r?\n(?<needs>(?:      - [a-z0-9-]+\r?\n)+)')
 Assert-True $AggregateNeeds.Success 'Acceptance aggregation must declare an exact direct-needs list.'
 $ActualAggregateNeeds = @([regex]::Matches($AggregateNeeds.Groups['needs'].Value, '(?m)^      - (?<job>[a-z0-9-]+)\r?$') | ForEach-Object { [string] $_.Groups['job'].Value })
-$ExpectedAggregateNeeds = @('ci-selection-shadow','quality-gates','change-impact','trusted-candidate-compile','scheduled-client-package','scheduled-server-package','scheduled-provenance-validation','scheduled-packaged-smoke','visual-proof','portable-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')
+$ExpectedAggregateNeeds = @('ci-selection-shadow','quality-gates','change-impact','trusted-candidate-compile','trusted-editor-automation','scheduled-client-package','scheduled-server-package','scheduled-provenance-validation','scheduled-packaged-smoke','visual-proof','portable-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')
 Assert-True (($ActualAggregateNeeds -join ',') -ceq ($ExpectedAggregateNeeds -join ',')) 'Acceptance aggregation must directly need every reviewed producer and receipt publisher exactly once.'
 foreach ($Output in @(
 	'complete: ${{ steps.reconcile.outputs.complete }}',

@@ -28,7 +28,7 @@ function Assert-MatchCount([string] $Text, [string] $Pattern, [int] $Expected, [
 	Assert-True ($Actual -eq $Expected) "$Message Expected $Expected match(es), found $Actual."
 }
 
-$JobOrder = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke', 'visual-proof', 'portable-receipt-shadow', 'native-receipt-shadow', 'unreal-receipt-shadow', 'visual-receipt-shadow', 'ci-acceptance-shadow', 'ci-acceptance-authority')
+$JobOrder = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'trusted-editor-automation', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke', 'visual-proof', 'portable-receipt-shadow', 'native-receipt-shadow', 'unreal-receipt-shadow', 'visual-receipt-shadow', 'ci-acceptance-shadow', 'ci-acceptance-authority')
 $JobBodies = @{}
 for ($Index = 1; $Index -lt $JobOrder.Count; $Index++) {
 	$Start = $Workflow.IndexOf("  $($JobOrder[$Index - 1]):", [StringComparison]::Ordinal)
@@ -62,15 +62,15 @@ Assert-True ($Workflow -notmatch 'manual-packaged-smoke') 'Workflow must not def
 Assert-True ($Workflow -notmatch 'engine-runner-manual-smoke-report') 'Workflow must not publish the retired manual smoke artifact.'
 Assert-True ($Workflow -notmatch '-Mode PackagedSmoke') 'Workflow must not select the monolithic PackagedSmoke gate anywhere.'
 Assert-MatchCount -Text $Workflow -Pattern 'timeout-minutes:\s*1440' -Expected 0 -Message 'No job may hold the engine runner for a 24-hour bound.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$' -Expected 5 -Message 'Exactly five jobs (trusted compile plus four phases) may target the engine runner.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$' -Expected 6 -Message 'Exactly six jobs (trusted compile, trusted editor automation, and four phases) may target the engine runner.'
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+runs-on: windows-latest\r?$' -Expected 9 -Message 'Exactly selector, portable gates, classifier, four receipt publishers, aggregate, and dormant authority run on GitHub-hosted Windows.'
 
 # Every engine-runner concurrency block queues FIFO without cancelling pending
 # or in-progress work. queue: single would silently cancel a pending trusted
 # compile; cancel-in-progress: true would cancel healthy milestone work.
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+group: aetheln-engine-runner\r?$' -Expected 5 -Message 'Exactly five jobs must share the engine-runner concurrency group.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+queue: max\r?$' -Expected 5 -Message 'Every engine-runner concurrency block must use queue: max so pending jobs wait FIFO instead of being replaced.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+cancel-in-progress: false\r?$' -Expected 5 -Message 'Every engine-runner concurrency block must keep cancel-in-progress: false.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+group: aetheln-engine-runner\r?$' -Expected 6 -Message 'Exactly six jobs must share the engine-runner concurrency group.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+queue: max\r?$' -Expected 6 -Message 'Every engine-runner concurrency block must use queue: max so pending jobs wait FIFO instead of being replaced.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s+cancel-in-progress: false\r?$' -Expected 6 -Message 'Every engine-runner concurrency block must keep cancel-in-progress: false.'
 Assert-True ($Workflow -notmatch '(?m)^\s+cancel-in-progress: true\r?$') 'No engine job may cancel in-progress work.'
 
 # No authoritative job-level predicate may silently skip after a failed,
@@ -124,7 +124,7 @@ Assert-True ($ShadowSelection -notmatch '(?m)^\s+if: always\(\)\r?$') 'A failed 
 $ReceiptContracts = @(
 	@{ Job='portable-receipt-shadow'; Producer='quality-gates'; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Key='portable'; ArtifactOutput='report_artifact_id' },
 	@{ Job='native-receipt-shadow'; Producer='trusted-candidate-compile'; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Key='native'; ArtifactOutput='report_artifact_id' },
-	@{ Job='unreal-receipt-shadow'; Producer='trusted-candidate-compile'; Predicate="needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required == 'true'"; Key='unreal'; ArtifactOutput='automation_artifact_id' },
+	@{ Job='unreal-receipt-shadow'; Producer='trusted-editor-automation'; Predicate="needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required == 'true'"; Key='unreal'; ArtifactOutput='automation_artifact_id' },
 	@{ Job='visual-receipt-shadow'; Producer='visual-proof'; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Key='visual'; ArtifactOutput='report_artifact_id' }
 )
 foreach ($Receipt in $ReceiptContracts) {
@@ -149,7 +149,7 @@ Assert-True ($AggregateShadow -match '(?ms)^    permissions:\r?\n      actions: 
 $AggregateNeedsMatch = [regex]::Match($AggregateShadow, '(?ms)^    needs:\r?\n(?<needs>(?:      - [a-z0-9-]+\r?\n)+)')
 Assert-True $AggregateNeedsMatch.Success 'Acceptance aggregation must declare an explicit direct-needs list.'
 $ActualAggregateNeeds = @([regex]::Matches($AggregateNeedsMatch.Groups['needs'].Value, '(?m)^      - (?<job>[a-z0-9-]+)\r?$') | ForEach-Object { [string] $_.Groups['job'].Value })
-$ExpectedAggregateNeeds = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke', 'visual-proof', 'portable-receipt-shadow', 'native-receipt-shadow', 'unreal-receipt-shadow', 'visual-receipt-shadow')
+$ExpectedAggregateNeeds = @('ci-selection-shadow', 'quality-gates', 'change-impact', 'trusted-candidate-compile', 'trusted-editor-automation', 'scheduled-client-package', 'scheduled-server-package', 'scheduled-provenance-validation', 'scheduled-packaged-smoke', 'visual-proof', 'portable-receipt-shadow', 'native-receipt-shadow', 'unreal-receipt-shadow', 'visual-receipt-shadow')
 Assert-True (($ActualAggregateNeeds -join ',') -ceq ($ExpectedAggregateNeeds -join ',')) 'Acceptance aggregation must directly need every raw producer and receipt publisher exactly once in the reviewed order.'
 Assert-True ($AggregateShadow -match ('(?m)^        uses: ' + [regex]::Escape($DownloadAction) + '\r?$') -and $AggregateShadow -match 'artifact-ids: \$\{\{ needs\.ci-selection-shadow\.outputs\.selector_artifact_id \}\}') 'Acceptance aggregation must download its selector through the direct upload ID.'
 foreach ($RequiredInput in @('scripts/ci/New-CiAcceptanceAggregateContext.ps1','scripts/ci/ci-acceptance-requirements.json','scripts/ci/Invoke-CiAcceptanceAggregate.ps1')) { Assert-True ($AggregateShadow -match [regex]::Escape($RequiredInput)) "Acceptance aggregation must use exact reviewed input '$RequiredInput'." }
@@ -222,6 +222,14 @@ foreach ($Job in @('scheduled-client-package', 'scheduled-server-package')) {
 # (implicit success() on both), no 24-hour bound, no handoff coupling, so an
 # unset AETHELN_HANDOFF_ROOT can never affect it.
 $TrustedCompile = [string] $JobBodies['trusted-candidate-compile']
+# TA-020: editor automation is a separate owner-only engine job after a
+# successful compile, with its own 35-minute ceiling, the shared FIFO queue,
+# and no status bypass, so it can never fail the compile job or skip the
+# native receipt, and it is skipped whenever the compile is skipped.
+$EditorAutomation = [string] $JobBodies['trusted-editor-automation']
+Assert-True ($EditorAutomation -match '(?m)^    needs: trusted-candidate-compile\r?$' -and $EditorAutomation -match "github\.event_name == 'pull_request'" -and $EditorAutomation -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $EditorAutomation -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $EditorAutomation -match 'github\.triggering_actor == github\.repository_owner') 'Editor automation must need the compile and keep the owner, same-repository, and triggering-actor trust.'
+Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 35\r?$' -and $EditorAutomation -notmatch 'timeout-minutes:\s*1440' -and $EditorAutomation -notmatch '(?m)^    if: always\(\)' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result' -and $EditorAutomation -notmatch '-Mode ') 'Editor automation must keep its 35-minute ceiling, never bypass prerequisite status, and never invoke the engine gate.'
+Assert-True ((($TrustedCompile -split '\r?\n' | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch 'AethelnOnlineEditor|automation_') 'The compile job must keep its pre-producer shape.'
 Assert-True ($TrustedCompile -match '(?m)^\s+needs:\r?\n\s+- quality-gates\r?\n\s+- change-impact\r?$') 'Trusted compile must depend on exactly the portable gates and the change-impact classifier.'
 Assert-True ($TrustedCompile -match "needs\.change-impact\.outputs\.engine_required == 'true'") 'Trusted compile must require the classifier to demand the engine.'
 Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Trusted compile must remain a pull-request lane.'
