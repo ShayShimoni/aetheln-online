@@ -67,6 +67,7 @@ function New-TestPortableReport {
 		'ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 		'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
 		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
+		'board-integrity-tests','pull-request-policy-tests',
 		'psscriptanalyzer'
 	)
 	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
