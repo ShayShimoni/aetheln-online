@@ -1180,7 +1180,11 @@ incremental compile policy.
   portable, native, and visual receipts; `native-client-server-compile`
   revalidates the exact
   `engine-runner-report.json`, both compile targets, runner identity, native
-  exit, supervisor, managed workspace, resource proof, and cleanup; and
+  exit, supervisor, managed workspace, resource proof, and cleanup; the runner
+  identity compared against the report is the self-hosted
+  `trusted-candidate-compile` job's `runner_name`, which the aggregate resolves
+  from the attempt jobs and validates (success, interval, exact labels) before
+  it accepts the hosted `native-receipt-shadow` publisher's receipt; and
   `visual-package` revalidates the exact bounded
   `aetheln.visual-package-report/v1`. The aggregate contains a semantic adapter
   for `unreal-editor-automation`, but no live Package 3C receipt publisher feeds

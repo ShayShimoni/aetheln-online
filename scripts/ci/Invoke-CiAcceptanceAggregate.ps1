@@ -694,7 +694,7 @@ function Assert-VisualPackageSemanticEvidence {
 }
 
 function Assert-CiAcceptanceReceipt {
-	param($Receipt, $Context, $Requirement, $Archive, $ProducerJob)
+	param($Receipt, $Context, $Requirement, $Archive, $CompileJob)
 	Assert-ClosedObject -Value $Receipt -Names @('schemaVersion','repository','event','source','workflow','actions','controller','policy','run','attemptAnchor','selection','results','acceptance') -Reason 'receipt_schema_invalid'
 	if ($Receipt.schemaVersion -cne 'aetheln.ci-acceptance-receipt/v1') { throw 'receipt_schema_invalid' }
 	Assert-AcceptanceIdentityContext ([pscustomobject][ordered]@{ schemaVersion='aetheln.ci-acceptance-context/v1'; repository=$Receipt.repository; event=$Receipt.event; source=$Receipt.source; workflow=$Receipt.workflow; actions=$Receipt.actions; controller=$Receipt.controller; policy=$Receipt.policy; run=$Receipt.run; attemptAnchor=$Receipt.attemptAnchor })
@@ -742,7 +742,7 @@ function Assert-CiAcceptanceReceipt {
 		}
 		if ($null -ne $SemanticEvidenceName) {
 			if ($null -eq $SemanticEvidenceBytes) { throw ('receipt_semantic_evidence_missing:' + $Result.id) }
-			switch ($Result.id) { 'portable' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'controller-contract' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -CheckId 'controller-contract'} 'native-client-server-compile' {Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName $(if ($null -eq $ProducerJob) { $null } else { [string] $ProducerJob.runner_name })} 'unreal-editor-automation' {Assert-UnrealAutomationSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'visual-package' {Assert-VisualPackageSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} default { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) } }
+			switch ($Result.id) { 'portable' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'controller-contract' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -CheckId 'controller-contract'} 'native-client-server-compile' {Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName $(if ($null -eq $CompileJob) { $null } else { [string] $CompileJob.runner_name })} 'unreal-editor-automation' {Assert-UnrealAutomationSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'visual-package' {Assert-VisualPackageSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} default { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) } }
 		}
 	}
 	if ($Archive.entries.Count -ne $ExpectedNames.Count -or @($Archive.entries | Where-Object { -not $ExpectedNames.Contains($_.name) }).Count -ne 0) { throw 'archive_unexpected_entry' }
@@ -1063,6 +1063,18 @@ function New-CiAcceptanceAggregate {
 		$ProducerBinding = $ProducerBindingsByKey[[string]$Requirement.key]
 		$ProducerJob = $ProducerJobsByKey[[string]$Requirement.key]
 		$ProducerJobInterval = Get-CurrentApiJobInterval -Job $ProducerJob -Context $Context -ExpectedConclusion 'success'
+		# The hosted native publisher only wraps the raw engine report; its runner identity belongs to the self-hosted compile job.
+		$CompileJob = $null
+		if ($SelectedSubset -ccontains 'native-client-server-compile') {
+			$CompileMatches = @($AttemptJobs | Where-Object { $_.name -ceq 'trusted-candidate-compile' })
+			if ($CompileMatches.Count -eq 0) { throw 'native_compile_job_missing' }
+			if ($CompileMatches.Count -ne 1) { throw 'job_identity_ambiguous' }
+			$CompileJob = $CompileMatches[0]
+			Assert-ApiJob -Job $CompileJob
+			if ($CompileJob.run_attempt -ne $Context.run.attempt) { throw 'job_attempt_mismatch' }
+			if ($CompileJob.status -cne 'completed' -or $CompileJob.conclusion -cne 'success') { throw 'native_compile_job_not_success' }
+			$null = Get-CurrentApiJobInterval -Job $CompileJob -Context $Context -ExpectedConclusion 'success'
+		}
 		foreach ($Name in @('id','name','size_in_bytes','archive_download_url','expired','workflow_run','created_at','digest')) { if ($Artifact.PSObject.Properties.Name -cnotcontains $Name) { throw 'api_schema_invalid' } }
 		if ($Artifact.expired -ne $false) { throw 'artifact_identity_mismatch' }
 		Assert-ArtifactWorkflowRunIdentity -WorkflowRun $Artifact.workflow_run -Context $Context -Reason 'artifact_identity_mismatch'
@@ -1082,7 +1094,7 @@ function New-CiAcceptanceAggregate {
 		$Receipt = ConvertFrom-StrictBoundedJson -Bytes $ReceiptEntries[0].bytes
 		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 		$SelectedRequirement = [pscustomobject][ordered]@{ key=[string]$Requirement.key; jobName=[string]$Requirement.jobName; artifactName=[string]$Requirement.artifactName; checks=$SelectedSubset }
-		$Results = Assert-CiAcceptanceReceipt -Receipt $Receipt -Context $Context -Requirement $SelectedRequirement -Archive $Archive -ProducerJob $ProducerJob
+		$Results = Assert-CiAcceptanceReceipt -Receipt $Receipt -Context $Context -Requirement $SelectedRequirement -Archive $Archive -CompileJob $CompileJob
 		Assert-AggregateDeadline -Clock $Clock -DeadlineSeconds $DeadlineSeconds
 		$Receipts.Add([pscustomobject][ordered]@{
 			jobKey = [string] $Requirement.key
