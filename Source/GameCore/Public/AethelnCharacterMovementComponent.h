@@ -79,6 +79,7 @@ private:
 	friend class FAethelnMovementNetServerSpeedClampTest;
 	friend class FAethelnMovementNetInvalidSprintRejectedTest;
 	friend class FAethelnMovementNetJumpTakeoffParityTest;
+	friend class FAethelnMovementNetFacingSpoofBoundedTest;
 	friend struct FAethelnMovementNetPredictionPair;
 	friend struct FAethelnMovementNetJumpReplayScenario;
 
