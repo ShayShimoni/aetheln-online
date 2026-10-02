@@ -197,3 +197,14 @@ post-merge evidence. For PRs targeting `develop`, an issue reference and manual
 Development link track the issue; a `Closes #<issue>` line does not link or
 auto-close it there. Do not close an issue or advance its board status merely
 because a PR merged.
+
+Tie board moves to PR events, in the same step as the PR action:
+
+- When a PR for an issue is opened, move the issue to `Code Review`. It stays
+  there while CI, review, and fixes run.
+- Move it to `Dev Done` only after the PR is reviewed, verified, and merged.
+- For an issue that needs several PRs, return it to `In Progress` after a
+  partial merge, and move it to `Code Review` again when the next PR opens.
+- `Blocked` overrides these moves while a recorded blocker exists.
+- Never leave an open, active PR whose issue is not in `Code Review` or
+  `Blocked`.
