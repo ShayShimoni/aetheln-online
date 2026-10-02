@@ -138,7 +138,7 @@ name it. Collaborators with access clone it anywhere, for example
 $env:UE_ADDITIONAL_PLUGIN_PATHS = (Resolve-Path '<art-clone>\Plugins').Path
 & (Join-Path $AethelnEngineRoot 'Engine\Binaries\Win64\UnrealEditor.exe') `
   $AethelnProject /Game/Maps/StarterMap -log
-Remove-Item Env:UE_ADDITIONAL_PLUGIN_PATHS
+Remove-Item Env:UE_ADDITIONAL_PLUGIN_PATHS -ErrorAction SilentlyContinue
 ```
 
 `$env:` changes only the current process and its children, and the last line
