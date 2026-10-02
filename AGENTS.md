@@ -189,7 +189,10 @@ Releases follow [Releases and versioning](docs/delivery-workflow.md#releases-and
 Feature and fix PRs target `develop`. `main` receives only `release/*` and
 `hotfix/*` PRs, and only when a build is distributed to players. Internal
 pre-release tags (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`) stay on `release/*`
-branches.
+branches. Board moves: `Done` issues move to `Release Candidate` when a
+release branch containing them is cut, with the `Release` field set to its
+tag. They move to `Released` once that release reaches players, is merged
+to `main` and tagged, and is back-merged into `develop`.
 
 ## Delivery Evidence and Authority
 
