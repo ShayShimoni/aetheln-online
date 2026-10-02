@@ -409,6 +409,8 @@ Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $
 # The editor build prints only the two masks and the
 # wrapper's native-result.json (target, platform, exit code, failure class).
 Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 3 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'")) 'The editor build may print only the masks and the bounded native result record.'
+# UBT exit 5 (-NoEngineChanges, deferred by TA-020) keeps its own fixed reason, checked before the generic failure.
+Assert-True ($EditorBuild.Contains("elseif (`$BuildExit -eq 5) { Exit-Automation 'editor_build_engine_changes_required' }") -and $EditorBuild.IndexOf('editor_build_engine_changes_required') -lt $EditorBuild.IndexOf("'editor_build_failed'")) 'The editor build must map UBT exit 5 to editor_build_engine_changes_required before editor_build_failed.'
 $ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
 $UntrackedInputQuery = [regex]::Matches($ManagedWorkspaceSource, "'(ls-files --others -z -- [^']+)'")
 Assert-True ($AutomationResidue.Contains("(Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source") -and $AutomationResidue.Contains('''--no-replace-objects --no-optional-locks -C "'' + $Root + ''" '' + $Query')) 'Residue cleanup must resolve and invoke git exactly as the managed sync does.'
@@ -437,10 +439,12 @@ function Get-WorkflowStepScript([string] $Step) {
 }
 function Invoke-AutomationStepFixture([string] $Step) {
 	$Previous = $ErrorActionPreference
+	# Output stays collected when the step stops, so failures can be checked for leaks too.
+	$Output = New-Object Collections.Generic.List[string]
 	try {
-		$Output = @(& ([scriptblock]::Create((Get-WorkflowStepScript $Step))) 2>&1 | ForEach-Object { [string] $_ })
-		return [pscustomobject]@{ failure = $null; output = $Output }
-	} catch { return [pscustomobject]@{ failure = $_.Exception.Message; output = @() } }
+		& ([scriptblock]::Create((Get-WorkflowStepScript $Step))) 2>&1 | ForEach-Object { $Output.Add([string] $_) }
+		return [pscustomobject]@{ failure = $null; output = @($Output) }
+	} catch { return [pscustomobject]@{ failure = $_.Exception.Message; output = @($Output) } }
 	finally { $ErrorActionPreference = $Previous }
 }
 function Invoke-AutomationFixtureGit([string] $Root, [string[]] $Arguments) {
@@ -453,7 +457,7 @@ $AutomationFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-automati
 $script:AutomationFixtureTemp = Join-Path $AutomationFixtureRoot 'temp'
 $null = New-Item -ItemType Directory -Path (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job')
 $PreviousAutomationEnvironment = @{}
-foreach ($Name in @('GITHUB_SHA', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_ENGINE_ROOT', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+foreach ($Name in @('GITHUB_SHA', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_ENGINE_ROOT', 'AETHELN_LINUX_TOOLCHAIN_ROOT', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
 try {
 	$env:AETHELN_ENGINE_ROOT = Join-Path $AutomationFixtureRoot 'engine'
 	$env:GITHUB_OUTPUT = Join-Path $AutomationFixtureRoot 'github-output.txt'
@@ -479,6 +483,36 @@ try {
 		$Gated = Invoke-AutomationStepFixture $EditorBuild
 		Assert-True ($Gated.failure -ceq $WorkspaceCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq ('reason=' + $WorkspaceCase.reason + "`n") -and -not (Test-Path -LiteralPath (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'))) "A workspace that fails '$($WorkspaceCase.reason)' must stop before the editor build."
 	}
+	# Editor build exit mapping (TA-020): through the workspace copy of the
+	# wrapper, UBT exit 5 (a deferred -NoEngineChanges refusal) records
+	# editor_build_engine_changes_required, any other exit editor_build_failed,
+	# and the refused engine file list stays in the runner-local build.log.
+	$EditorWorkspace = Join-Path $AutomationFixtureRoot 'editor-workspace'
+	$null = New-Item -ItemType Directory -Path (Join-Path $EditorWorkspace 'scripts\ci')
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\InitialPreparation.BuildInvocation.ps1') -Destination (Join-Path $EditorWorkspace 'scripts\ci')
+	[IO.File]::WriteAllText((Join-Path $EditorWorkspace 'AethelnOnline.uproject'), '{}')
+	Invoke-AutomationFixtureGit $EditorWorkspace @('init', '-q')
+	Invoke-AutomationFixtureGit $EditorWorkspace @('add', '-A')
+	Invoke-AutomationFixtureGit $EditorWorkspace @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
+	$null = New-Item -ItemType Directory -Path (Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles'), (Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64')
+	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64/dotnet.exe'), 'fixture')
+	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles/Build.bat'), "@echo off`r`necho Building would modify the following existing engine files:`r`necho %~dp0UnrealEditor-Fixture.dll`r`nexit /b %AETHELN_FIXTURE_NATIVE_EXIT%`r`n")
+	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $AutomationFixtureRoot
+	$env:AETHELN_MANAGED_COMPILE_ROOT = $EditorWorkspace
+	$env:GITHUB_SHA = ([string] (& git -C $EditorWorkspace rev-parse HEAD)).Trim()
+	$EditorBuildEvidence = Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'
+	try {
+		foreach ($ExitCase in @(@{ exit = '5'; reason = 'editor_build_engine_changes_required' }, @{ exit = '7'; reason = 'editor_build_failed' }, @{ exit = '0'; reason = $null })) {
+			$env:AETHELN_FIXTURE_NATIVE_EXIT = $ExitCase.exit
+			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+			$Built = Invoke-AutomationStepFixture $EditorBuild
+			$ExpectedOutput = if ($null -eq $ExitCase.reason) { '' } else { 'reason=' + $ExitCase.reason + "`n" }
+			$Visible = (@($Built.output | Where-Object { -not $_.StartsWith('::add-mask::') }) -join "`n")
+			Assert-True ($Built.failure -ceq $ExitCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput) "Editor build exit $($ExitCase.exit) must record '$($ExitCase.reason)'."
+			Assert-True ($Visible.Contains('"nativeExitCode":' + $ExitCase.exit) -and -not $Visible.Contains($env:AETHELN_ENGINE_ROOT) -and -not $Visible.Contains('Building would modify') -and [IO.File]::ReadAllText((Join-Path $EditorBuildEvidence 'build.log')).Contains('Building would modify')) "Editor build exit $($ExitCase.exit) must print only the native result record, never engine paths."
+			Remove-Item -LiteralPath $EditorBuildEvidence -Recurse -Force
+		}
+	} finally { Remove-Item Env:AETHELN_FIXTURE_NATIVE_EXIT -ErrorAction SilentlyContinue }
 	$env:AETHELN_MANAGED_COMPILE_ROOT = Join-Path $AutomationFixtureRoot 'managed'
 	[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 
@@ -511,6 +545,7 @@ try {
 	# fallback for an unrecorded or malformed one, and 'none' after success.
 	foreach ($OutcomeCase in @(
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='failure'; AETHELN_EDITOR_BUILD_REASON='editor_build_budget_exhausted'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_build_budget_exhausted' },
+		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='failure'; AETHELN_EDITOR_BUILD_REASON='editor_build_engine_changes_required'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_build_engine_changes_required' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='C:\leak path'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_interrupted' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='unreal_automation_test_failure'; AETHELN_RESIDUE_OUTCOME='failure'; AETHELN_RESIDUE_REASON='automation_input_residue_remaining'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_test_failure' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='failure' }; expected='automation_report_upload_failed' },

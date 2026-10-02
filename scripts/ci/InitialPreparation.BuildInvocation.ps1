@@ -95,7 +95,11 @@ public static class PreparationBuildCapture {
 	$Command = '""{0}" {1} {2} Development "{3}" -WaitMutex -NoHotReloadFromIDE -UBA -UBADisableRemote -NoXGE -NoSNDBS -NoFASTBuild -MaxParallelActions={4}"' -f $Batch, $Target, $Platform, $Project, $ActionLimit
 	if ($Platform -ceq 'Win64') {
 		# Supported by the pinned UEBuildWindows.cs CommandLine attributes.
-		$Command = $Command.TrimEnd('"') + ' -Compiler=VisualStudio2022 -CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0"'
+		# The editor shares the engine tree with contributor builds (TA-020): it omits
+		# -Compiler so UBT resolves the same toolchain enum. -NoEngineChanges is
+		# deferred until the NetCore UHT regeneration follow-up lands.
+		$Selection = if ($Target -ceq 'AethelnOnlineEditor') { '' } else { ' -Compiler=VisualStudio2022' }
+		$Command = $Command.TrimEnd('"') + $Selection + ' -CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0"'
 	}
 	$Cmd = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
 	$NativeExit = [PreparationBuildCapture]::Run($Cmd, ('/d /s /c ' + $Command), $TargetRoot, $LinuxToolchainRoot, $DotnetRoot, (Join-Path $EvidenceRoot 'build.log'))
