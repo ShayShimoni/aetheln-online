@@ -219,7 +219,12 @@ Tie board moves to PR events, in the same step as the PR action:
 - Move it to `Dev Done` only after the PR is reviewed, verified, and merged.
 - For an issue that needs several PRs, return it to `In Progress` after a
   partial merge, and move it to `Code Review` again when the next PR opens.
-- `Blocked` overrides these moves while a recorded blocker exists.
+- `Blocked` overrides these moves while a recorded blocker exists. Every
+  `Blocked` issue has a current `Blocked Reason`. When work starts on a
+  `Blocked` issue or its blocker, clear the reason and move the issue to
+  `In Progress` in the same step.
+- When an agent or session starts work on an issue, move the issue to
+  `In Progress` in the same step, before the work begins.
 - Never leave an open, active PR whose issue is not in `Code Review` or
   `Blocked`.
 - Check each acceptance-criteria checkbox as soon as QA on the merged
