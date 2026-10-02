@@ -1167,8 +1167,14 @@ Every accepted decision records:
   lease, a larger job ceiling, and removal of the no-checkout pin in
   `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`. Record editor-build and
   harness durations from the first live runs. Authority stays off.
-- **Amendment (2026-10-02, shared engine tree):** the editor build must not
-  rewrite the pinned engine tree that contributor builds share.
+- **Amendment (2026-10-02, shared engine tree):** the editor build shares
+  the pinned engine tree with contributor builds. This amendment removes the
+  source-code-access plugin flip. It does not make the job leave the engine
+  unchanged. Residual cost: every CI editor run still relinks
+  `UnrealEditor-NetCore.dll` and rewrites the engine editor BuildId. A
+  contributor editor built before that run then needs a rebuild of about
+  30 seconds before it loads again. `-NoEngineChanges` is deferred (see
+  *Deferred fail-closed* below).
   - *Incident:* the run 37056028961 editor build passed
     `-Compiler=VisualStudio2022` and relinked
     `UnrealEditor-VisualStudioCodeSourceCodeAccess.dll`, which rewrote the
@@ -1184,8 +1190,11 @@ Every accepted decision records:
   - *NetCore regeneration (recurring, cause unknown):* both observed CI editor
     runs (37056028961 and 37061874410, the PR #207 run) rewrote
     `Engine/Intermediate/Build/Win64/UnrealEditor/Inc/NetCore/UHT/NetCore.init.gen.cpp`
-    and relinked `UnrealEditor-NetCore.dll`. Each run also flipped the plugin
-    definition. Only the package registration body hash changed: it went to
+    and relinked `UnrealEditor-NetCore.dll`, which rewrote the BuildId. The
+    trigger is that NetCore's UHT output alternates between two package body
+    hashes. That has been seen only when CI and contributor builds alternate,
+    never across consecutive builds of one project. Each run also flipped the
+    plugin definition, which the compiler alignment below removes. Only the package registration body hash changed: it went to
     `0xF26BCE42` in the first run and to `0x6C2D6518` in the second. The
     declarations hash (`0x12F0F921`) and every per-header NetCore `.gen.cpp`
     (unchanged since the engine build) stayed the same. The contributor editor
@@ -1210,9 +1219,6 @@ Every accepted decision records:
       sources and each left whatever value they found. A deterministic
       generator could not have matched both values, so the input that varies
       between UHT runs is not yet identified.
-    Until it is, expect `-NoEngineChanges` (below) to fail closed on CI editor
-    runs where NetCore regenerates. Record that as a known outcome, not a
-    regression.
   - *Compiler alignment:* for `AethelnOnlineEditor` only,
     `InitialPreparation.BuildInvocation.ps1` no longer passes `-Compiler=` and
     keeps `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0`. In the
@@ -1232,22 +1238,22 @@ Every accepted decision records:
     `requiredWindowsArguments`, keep `-Compiler=VisualStudio2022`: those targets
     write their UHT and definition outputs under the project's `Intermediate`
     and do not build the editor-only plugin.
-  - *Fail closed:* the editor target also passes `-NoEngineChanges`. If an
-    outdated action would rewrite an existing file under `Engine/`, UBT
-    (`Modes/BuildMode.cs`) logs the file list and exits 5
-    (`CompilationResult.FailedDueToEngineChange`), and `Build.bat` passes that
-    code through. The editor-build step maps exit 5 without a capture failure to
-    the fixed reason `editor_build_engine_changes_required`. Every other nonzero
-    exit stays `editor_build_failed`, and there is no retry and no fallback
-    without the flag. The file list contains engine paths, so it stays in the
-    runner-local `build.log`. To recover, rebuild the shared tree's editor with
-    the contributor command in `docs/unreal-project-setup.md`, then use "Re-run
-    all jobs".
-  - *Residual:* UBT runs the check after it creates the makefile. By then UHT
-    outputs and `Definitions.*.h` headers may already be written, so the flag
-    stops engine compile, link, and BuildId rewrites but not those intermediate
-    writes. After a refused run that regenerated NetCore, the next contributor
-    editor build still compiles and relinks NetCore once.
+  - *Deferred fail-closed:* the editor target does not pass
+    `-NoEngineChanges` yet. The NetCore regeneration happens on every CI editor
+    run, so the flag would turn `unreal-receipt-shadow` and
+    `ci-acceptance-shadow` red on every owner Source pull request. A test pins
+    that the flag is absent. The mapping is ready for when the NetCore
+    follow-up lands. With the flag, if an outdated action would rewrite an
+    existing file under `Engine/`, UBT (`Modes/BuildMode.cs`) logs the file
+    list and exits 5 (`CompilationResult.FailedDueToEngineChange`), and
+    `Build.bat` passes that code through. The editor-build step already maps
+    exit 5 without a capture failure to the fixed reason
+    `editor_build_engine_changes_required`, and an executed fixture covers it.
+    Every other nonzero exit stays `editor_build_failed`. The file list holds
+    engine paths, so it would stay in the runner-local `build.log`. Even
+    enabled, UBT runs the check after it creates the makefile, so UHT outputs
+    and `Definitions.*.h` headers may already be written. The flag stops
+    engine compile, link, and BuildId rewrites only.
   - *Monitoring:* before and after CI editor runs, hash `NetCore.init.gen.cpp`
     and the plugin header
     `Engine/Plugins/Developer/VisualStudioCodeSourceCodeAccess/Intermediate/Build/Win64/x64/UnrealEditor/Development/VSCSCA/Definitions.VSCSCA.h`.
@@ -1260,16 +1266,15 @@ Every accepted decision records:
     `-Compiler=VisualStudio2022` when it rebuilds host `UnrealEditor`, so it can
     flip the same definition. Align it separately. Longer term, give each
     consumer an isolated or installed engine tree, which removes both
-    exposures. Live proof is still pending: one editor build with this argument
-    set while the shared engine is idle. It should show no plugin relink and
-    show whether NetCore regenerates, which ends in exit 5 and
-    `editor_build_engine_changes_required`.
+    exposures. Live proof is still pending: the next CI editor run should show
+    no plugin relink, which leaves NetCore as the only engine rebuild.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, workspace-revision races appear in practice, the
   combined compile plus editor hold becomes a measured scheduling bottleneck,
-  `editor_build_engine_changes_required` appears in practice, or the monitored
-  engine intermediates change across a CI editor run.
+  the NetCore follow-up identifies the varying UHT input (then enable
+  `-NoEngineChanges`), or the plugin definition header still changes across
+  a CI editor run.
 
 ## Candidate Decisions
 
