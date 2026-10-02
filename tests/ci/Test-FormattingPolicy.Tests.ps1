@@ -107,17 +107,28 @@ try {
 		'Source/GameCore/Private/Clean.cpp' = "void Clean()`n{`n`tint Value = 0;`n}`n"
 		'Content/Maps/Real.umap' = "`0`0/Game/Maps/Real`0"
 		'Content/Maps/Pointer.umap' = "version https://git-lfs.github.com/spec/v1`noid sha256:$('0' * 64)`nsize 1`n"
-		'AethelnOnline.uproject' = "{`n`t`"Plugins`": [ { `"Name`": `"EnhancedInput`", `"Enabled`": true } ],`n`t`"AdditionalPluginDirectories`": [ `"../aetheln-art/Plugins`" ]`n}`n"
+		'AethelnOnline.uproject' = "{`n`t`"Plugins`": [ { `"Name`": `"EnhancedInput`", `"Enabled`": true } ]`n}`n"
 	}
 	$CleanOutput = & $Checker -RepositoryRoot $CleanRoot | Out-String
 	Assert-True -Condition ($CleanOutput -match 'Formatting policy checks passed\.') -Message 'A clean LF, marker-free, tab-indented repository should pass.'
-	Assert-True -Condition ($CleanOutput -match 'scanned 2 tracked files; 1 LFS pointer files not scanned') -Message "The private art boundary must report scanned and pointer-only files honestly: $CleanOutput"
-	Write-Output 'PASS: clean repository with tab-indented C++, a setext underline, and an AethelnArt plugin directory passes'
+	Assert-True -Condition ($CleanOutput -match 'scanned 3 tracked files; 1 LFS pointer files not scanned') -Message "The private art boundary must report scanned and pointer-only files honestly: $CleanOutput"
+	Write-Output 'PASS: clean repository with tab-indented C++, a setext underline, a real asset, and an LFS pointer passes'
 
 	$ArtAssetRoot = Join-Path $FixtureRoot 'art-asset'
 	New-FixtureRepository -Root $ArtAssetRoot -Files @{ 'Content/Maps/Leak.umap' = "`0`0/AethelnArt/Meshes/SM_Rock`0" }
 	Invoke-ExpectedFailure -Root $ArtAssetRoot -ExpectedPattern 'Content/Maps/Leak\.umap: references the private AethelnArt plugin'
 	Write-Output 'PASS: a binary public asset referencing /AethelnArt/ is rejected'
+
+	$FakePointerRoot = Join-Path $FixtureRoot 'fake-pointer'
+	New-FixtureRepository -Root $FakePointerRoot -Files @{ 'Content/Maps/Fake.umap' = "version https://git-lfs.github.com/spec/v1`n`0/AethelnArt/Maps/Art`0" }
+	Invoke-ExpectedFailure -Root $FakePointerRoot -ExpectedPattern 'Content/Maps/Fake\.umap: references the private AethelnArt plugin'
+	Write-Output 'PASS: a pointer-like header without oid and size lines is scanned, not skipped'
+
+	$MissingRoot = Join-Path $FixtureRoot 'missing'
+	New-FixtureRepository -Root $MissingRoot -Files @{ 'Content/Maps/Gone.umap' = "`0`0/Game/Maps/Gone`0" }
+	Remove-Item -LiteralPath (Join-Path $MissingRoot 'Content/Maps/Gone.umap')
+	Invoke-ExpectedFailure -Root $MissingRoot -ExpectedPattern 'Content/Maps/Gone\.umap: tracked file is missing from the work tree'
+	Write-Output 'PASS: a tracked file missing from the work tree fails instead of being skipped'
 
 	$ArtConfigRoot = Join-Path $FixtureRoot 'art-config'
 	New-FixtureRepository -Root $ArtConfigRoot -Files @{ 'Config/DefaultEngine.ini' = "[/Script/EngineSettings.GameMapsSettings]`nGameDefaultMap=/AethelnArt/Maps/Art.Art`n" }
@@ -126,7 +137,7 @@ try {
 
 	$ArtPluginRoot = Join-Path $FixtureRoot 'art-plugin'
 	New-FixtureRepository -Root $ArtPluginRoot -Files @{ 'AethelnOnline.uproject' = "{`n`t`"Plugins`": [ { `"Name`": `"AethelnArt`", `"Enabled`": true, `"Optional`": true } ]`n}`n" }
-	Invoke-ExpectedFailure -Root $ArtPluginRoot -ExpectedPattern 'AethelnOnline\.uproject: Plugins lists AethelnArt'
+	Invoke-ExpectedFailure -Root $ArtPluginRoot -ExpectedPattern 'AethelnOnline\.uproject: references the private AethelnArt plugin'
 	Write-Output 'PASS: listing AethelnArt as a .uproject plugin dependency is rejected'
 
 	$CrlfRoot = Join-Path $FixtureRoot 'crlf'

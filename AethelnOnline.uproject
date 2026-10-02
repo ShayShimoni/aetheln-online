@@ -58,8 +58,5 @@
 			"Name": "AndroidFileServer",
 			"Enabled": false
 		}
-	],
-	"AdditionalPluginDirectories": [
-		"../aetheln-art/Plugins"
 	]
 }

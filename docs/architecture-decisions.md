@@ -978,83 +978,104 @@ Every accepted decision records:
   compile report, or the per-PR compile becomes a measured engine-runner
   bottleneck.
 
-### TA-019 - Private Art Plugin Outside the Public Tree
+### TA-019 - Private Art Plugin Loaded Only by Local Editor Sessions
 
 - **Status:** Accepted
-- **Scope:** Issue #201 art storage boundary: `AethelnOnline.uproject`,
-  the private `aetheln-art` repository, and the `formatting-policy` check.
+- **Scope:** Issue #201 art storage boundary: the private `aetheln-art`
+  repository, local editor launch, and the `formatting-policy` check.
 - **Decision (2026-10-02):** Fab Standard License, Megascans, paid-pack, and
   AI-generated art live only in the private `ShayShimoni/aetheln-art`
-  repository as the content-only plugin `Plugins/AethelnArt` (no modules,
-  `CanContainContent`, enabled by default, LFS rules mirroring this
-  repository). Contributors clone it beside the code checkout they open; the
-  project loads it only through
-  `"AdditionalPluginDirectories": ["../aetheln-art/Plugins"]`, resolved
-  relative to the `.uproject` directory. It is never listed in `Plugins`, not
-  even as `Optional`. Public `Content/`, `Config/`, `Source/`, and `Plugins/`
-  never reference `/AethelnArt/`; art-dependent maps live inside the private
-  plugin. Epic template content (Mannequins, LevelPrototyping) stays public:
-  it comes from the engine `Templates` folder, so it is UE EULA "Examples"
-  that section 4(b) allows distributing, and it remains under the UE EULA, not
+  repository as the content-only plugin `Plugins/AethelnArt`. The plugin has
+  no modules, sets `CanContainContent`, is enabled by default, and uses LFS
+  rules that mirror this repository. The public project does not name it at
+  all: `AethelnOnline.uproject` gains no `Plugins` entry and no
+  `AdditionalPluginDirectories` key. A contributor with access loads it for a
+  local editor session only. They set the editor-only environment variable
+  `UE_ADDITIONAL_PLUGIN_PATHS` on the launching shell process to the plugin
+  folder of their clone, as shown in
+  [Unreal Project Setup](unreal-project-setup.md). Public `Content/`,
+  `Config/`, `Source/`, `Plugins/`, and the `.uproject` never reference
+  `AethelnArt`; art-dependent maps live inside the private plugin.
+- **Epic template content stays public:** Mannequins and LevelPrototyping
+  come from the engine `Templates` folder, so they are UE EULA "Examples",
+  which section 4(b) allows distributing. They remain under the UE EULA, not
   a repository license.
 - **Context:** The repository became public on 2026-10-02. Per Epic's Fab
   licensing documentation, the Fab Standard License allows sharing through a
   private repository with project collaborators but forbids standalone
   redistribution, which a public repository is. The Fab EULA text itself was
-  not retrievable during research, and this record is not legal advice. No Fab, Megascans, or paid content was ever committed, so no
-  history rewrite is needed.
-- **Evidence:** Static engine-source reading at the pinned 5.8.1 revision
-  (paths relative to the engine root). A missing directory is safe:
-  - Editor and cook runtime: `Engine/Source/Runtime/Projects/Private/ProjectDescriptor.cpp`
-    resolves relative entries against the `.uproject` directory, and
-    `PluginManager.cpp` `ReadPluginsInDirectory` scans only when
-    `DirectoryExists`; a missing directory is skipped without a log line.
-  - UBT: `Engine/Source/Programs/UnrealBuildTool/System/Plugins.cs`
-    `ReadAdditionalPlugins` logs a warning ("AdditionalPluginDirectory ... not
-    found") and continues. `EnumeratePlugins.cs` and `Unreal.cs`
-    `GetExtensionDirs` filter non-existent directories. The repository CI does
-    not promote UBT warnings to failures.
-  - UAT staging: `AutomationUtils/DeploymentContext.cs` and `ProjectParams.cs`
-    only remap files under the directory to `RemappedPlugins/`; nothing exists
-    there when it is absent.
-  - The directory sits outside the work tree, so the untracked-input checks
-    in `scripts/ci/InitialPreparation.Input.ps1:105-106` and
-    `scripts/ci/ManagedCompileWorkspace.ps1:330-331` never see it.
-- **Alternatives:** A git submodule at `Plugins/AethelnArt` or `Content/Art`
-  is rejected: `scripts/ci/Get-CiSelection.ps1:326` throws
-  `checkout_unsupported_entry` on any gitlink, both
-  `scripts/ci/InitialPreparation.Input.ps1:65` and
-  `scripts/ci/ManagedCompileWorkspace.ps1:127` reject `.gitmodules`, and fork
-  clones would get a broken pointer. A gitignored clone inside the tree is
-  rejected because those two untracked-input checks run
-  `git ls-files --others` without `--exclude-standard` over `Content`,
-  `Plugins`, and the other build inputs, so it fails
-  `input_untracked_build_input` and `managed_workspace_untracked_input`.
-  Perforce or Diversion stays the escape hatch if LFS quota or binary size
-  becomes the bottleneck.
-- **Consequences:** Hosted jobs, fork pull requests, and
-  `trusted-candidate-compile` run without the art and must stay green; every
-  UBT run there logs the missing-directory warning. Rule 4 of
-  `scripts/ci/Test-FormattingPolicy.ps1` fails on any tracked `Content/`,
-  `Config/`, `Source/`, or `Plugins/` file matching `AethelnArt` and on a
-  `Plugins` entry named `AethelnArt`. It scans text and real binary assets but
-  only counts LFS pointer files, which hosted checkouts with `lfs: false`
-  contain, and it reports that count. The rule lives in an existing check
-  because adding a check name changes the closed portable, receipt, and
-  aggregate check lists. Private LFS storage shares the account's 10 GiB
-  quota with this repository.
-- **Follow-up (not implemented):** Only the scheduled packaging jobs on the
-  trusted runner may clone `aetheln-art`, beside the checkout so
-  `../aetheln-art/Plugins` resolves. They use a fine-grained, read-only token
-  scoped to that repository, stored as a secret that `pull_request` jobs never
-  receive. Cooked builds remap the plugin to `../RemappedPlugins/`, so
-  packaging evidence must cover that staging path once art exists.
-- **Owner:** Issue #201, including the packaging-clone follow-up until it moves
-  to its own issue. #202 and #203 consume this boundary; intake and provenance
-  follow #120 and the `visuals/asset-provenance.md` model.
+  not retrievable during research, and this record is not legal advice. No
+  Fab, Megascans, or paid content was ever committed, so no history rewrite
+  is needed.
+- **Evidence:** Static reading of the pinned 5.8.1 engine source, with paths
+  relative to the engine root:
+  - `Engine/Source/Runtime/Projects/Private/PluginManager.cpp`: the
+    `GetAdditionalExternalPluginsByEnvVar` function reads
+    `UE_ADDITIONAL_PLUGIN_PATHS` only under `WITH_EDITOR`. It returns nothing
+    in game, client, or server builds.
+  - `GetPluginPathsByEnv` splits the value on `;` on Windows and on `:`
+    elsewhere.
+  - `DiscoverAllPlugins` adds each path as an external discovery root.
+    `ReadPluginsInDirectory` skips a missing directory.
+  - External plugins count as project plugins, so `EnabledByDefault` applies.
+  - A content-only plugin needs no UBT or compile step.
+  - Repository CI scripts and workflows never set this variable, so CI never
+    sees private art.
+- **Alternatives:**
+  - The `.uproject` key `AdditionalPluginDirectories` is rejected. Both
+    trust-boundary input checks deliberately refuse any
+    `AdditionalPluginDirectories` or `AdditionalRootDirectories` key:
+    `scripts/ci/ManagedCompileWorkspace.ps1:243`
+    (`managed_workspace_external_descriptor_root`) and
+    `scripts/ci/InitialPreparation.Input.ps1:213`
+    (`input_external_descriptor_root`). Tests pin both. A relative
+    `../aetheln-art` path could also resolve to a real private clone on the
+    runner host.
+  - A git submodule at `Plugins/AethelnArt` or `Content/Art` is rejected.
+    `scripts/ci/Get-CiSelection.ps1:326` throws `checkout_unsupported_entry`
+    on any gitlink, and both `scripts/ci/InitialPreparation.Input.ps1:65` and
+    `scripts/ci/ManagedCompileWorkspace.ps1:127` reject `.gitmodules`. Fork
+    clones would also get a broken pointer.
+  - A gitignored clone inside the tree is rejected.
+    `scripts/ci/InitialPreparation.Input.ps1:105-106` and
+    `scripts/ci/ManagedCompileWorkspace.ps1:330-331` run
+    `git ls-files --others` without `--exclude-standard` over `Content`,
+    `Plugins`, and the other build inputs. They fail with
+    `input_untracked_build_input` and `managed_workspace_untracked_input`.
+  - Perforce or Diversion stays the escape hatch if LFS quota or binary size
+    becomes the bottleneck.
+- **Consequences:**
+  - Hosted jobs, fork pull requests, `trusted-candidate-compile`, and the
+    scheduled engine jobs are unchanged and never load the art.
+  - Rule 4 of `scripts/ci/Test-FormattingPolicy.ps1` fails when a tracked
+    `Content/`, `Config/`, `Source/`, or `Plugins/` file, or the `.uproject`,
+    matches `AethelnArt`. It also fails when a tracked file in those paths is
+    missing from the work tree.
+  - The rule scans text and hydrated binary assets. It counts and reports LFS
+    pointer files: files of 1 KiB or less with the spec version, `oid sha256:`,
+    and `size` lines.
+  - Hosted quality gates hydrate only `Content/Maps/StarterMap.umap`, so binary
+    `Content/` references are scanned only where LFS content is present: local
+    checkouts and LFS-pulling runner jobs.
+  - The rule lives in an existing check because adding a check name changes
+    the closed portable, receipt, and aggregate check lists. It is under
+    `scripts/ci/`, so editing it also selects the trusted compile (TA-018).
+  - Private LFS storage shares the account's 10 GiB quota with this
+    repository.
+- **Follow-up (not implemented):**
+  - Packaging or cooking with the art. The cook commandlet runs in an editor
+    (`WITH_EDITOR`) binary, so the same variable could serve a scheduled
+    trusted-runner packaging job. That job would clone `aetheln-art` with a
+    fine-grained read-only token, stored as a secret that `pull_request` jobs
+    never receive.
+  - A `/AethelnArt/` dependency assertion in
+    `scripts/build/Validate-ServerCookReferences.ps1`.
+- **Owner:** Issue #201, including the follow-ups until they move to their own
+  issue. #202 and #203 consume this boundary. Intake and provenance follow #120
+  and the `visuals/asset-provenance.md` model.
 - **Revisit trigger:** The first licensed asset needs a public reference, LFS
   quota or binary size forces another VCS, or an engine upgrade changes
-  missing-directory handling.
+  `UE_ADDITIONAL_PLUGIN_PATHS` handling.
 
 ## Candidate Decisions
 

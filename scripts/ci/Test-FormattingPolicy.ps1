@@ -73,31 +73,28 @@ foreach ($RelativePath in $SourceFiles) {
 }
 
 # 4. Public project files never reference the private AethelnArt plugin (TA-019).
-#    Text and real binary assets are scanned; LFS pointer files carry no asset
-#    content, so they are counted and reported instead of silently passing.
+#    Text and hydrated binary assets are scanned. LFS pointer files carry no
+#    asset content, so they are counted and reported instead of silently
+#    passing. This script is under scripts/ci/, so editing this rule also
+#    selects the trusted compile (TA-018).
+# ponytail: whole-file ReadAllBytes + Latin-1 string per file; stream in chunks if a single asset nears the 2 GiB array limit.
 $Latin1 = [System.Text.Encoding]::GetEncoding(28591)
 $ScannedCount = 0
 $PointerCount = 0
-foreach ($RelativePath in @(Invoke-Git -Arguments @('ls-files', '--', 'Content', 'Config', 'Source', 'Plugins'))) {
+foreach ($RelativePath in @(Invoke-Git -Arguments @('ls-files', '--', 'Content', 'Config', 'Source', 'Plugins', 'AethelnOnline.uproject'))) {
 	$FullPath = Join-Path $RepositoryRoot ($RelativePath -replace '/', [IO.Path]::DirectorySeparatorChar)
-	if (-not (Test-Path -LiteralPath $FullPath)) {
+	if (-not (Test-Path -LiteralPath $FullPath -PathType Leaf)) {
+		$Violations += "${RelativePath}: tracked file is missing from the work tree; the private art boundary cannot scan it."
 		continue
 	}
 	$Text = $Latin1.GetString([System.IO.File]::ReadAllBytes($FullPath))
-	if ($Text.StartsWith('version https://git-lfs.github.com/spec/v1', [StringComparison]::Ordinal)) {
+	if ($Text.Length -le 1024 -and $Text -cmatch '\Aversion https://git-lfs\.github\.com/spec/v1\n(?:.*\n)*?oid sha256:[0-9a-f]{64}\nsize [0-9]+\n') {
 		$PointerCount++
 		continue
 	}
 	$ScannedCount++
 	if ($Text -match '(?i)\bAethelnArt\b') {
 		$Violations += "${RelativePath}: references the private AethelnArt plugin; public files must not depend on private art."
-	}
-}
-$ProjectPath = Join-Path $RepositoryRoot 'AethelnOnline.uproject'
-if (Test-Path -LiteralPath $ProjectPath) {
-	$PluginsProperty = (Get-Content -LiteralPath $ProjectPath -Raw | ConvertFrom-Json).PSObject.Properties['Plugins']
-	if ($null -ne $PluginsProperty -and @($PluginsProperty.Value | Where-Object { $_.Name -eq 'AethelnArt' }).Count -gt 0) {
-		$Violations += 'AethelnOnline.uproject: Plugins lists AethelnArt; load it only through AdditionalPluginDirectories.'
 	}
 }
 Write-Output "Private art boundary: scanned $ScannedCount tracked files; $PointerCount LFS pointer files not scanned (asset content absent)."

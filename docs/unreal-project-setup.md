@@ -129,14 +129,24 @@ errors.
 
 Licensed and generated art lives in the private `aetheln-art` repository as
 the `AethelnArt` content plugin (TA-019 in
-[Architecture Decisions](architecture-decisions.md)). Collaborators with access
-can clone it beside the checkout they open, for example
-`<parent>/aetheln-art` next to `<parent>/aetheln-online`. The project loads it
-through `AdditionalPluginDirectories` (`../aetheln-art/Plugins`). A worktree
-in another parent folder does not see that clone. Without the clone, the
-project still opens, compiles, and passes CI. Each UBT invocation logs a
-warning that the directory was not found. Never reference `/AethelnArt/` assets from public
-`Content/`, `Config/`, or `Source/`; the `formatting-policy` check rejects it.
+[Architecture Decisions](architecture-decisions.md)). The project files never
+name it. Collaborators with access clone it anywhere, for example
+`D:\aetheln-art`. Before opening the editor, set the editor-only variable
+`UE_ADDITIONAL_PLUGIN_PATHS` in the PowerShell session that launches it:
+
+```powershell
+$env:UE_ADDITIONAL_PLUGIN_PATHS = (Resolve-Path '<art-clone>\Plugins').Path
+& (Join-Path $AethelnEngineRoot 'Engine\Binaries\Win64\UnrealEditor.exe') `
+  $AethelnProject /Game/Maps/StarterMap -log
+```
+
+`$env:` changes only the current process and its children; it is not a user
+or system setting. Separate multiple plugin roots with `;` on Windows (`:` on
+Linux and macOS). The content-only plugin needs no build. Without the variable
+the editor opens without the art. CI scripts, workflows, and runner jobs never
+set it, so CI never sees private art. Never reference `/AethelnArt/` assets from
+public `Content/`, `Config/`, `Source/`, `Plugins/`, or the `.uproject`; the
+`formatting-policy` check rejects it.
 
 ### Second-workspace reproduction record for Issue #81
 
