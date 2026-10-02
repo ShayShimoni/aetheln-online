@@ -613,18 +613,37 @@ jobs:
       # (and its report upload), build the editor target in the same managed
       # workspace through the bounded capture wrapper, then run the frozen
       # two-test harness from that workspace. Outside the host lease by design
-      # for this first proof. The editor build is bounded by the job ceiling;
-      # the harness carries its own timeout.
+      # for this first proof. Every automation step continues on error, so an
+      # unreal failure never fails this job or skips the native receipt; bind
+      # and upload run only after every automation step succeeded, and a
+      # missing artifact fails unreal-receipt-shadow at its raw binding check.
       - name: Build editor target for Unreal automation
+        id: editor_build
+        continue-on-error: true
+        timeout-minutes: 15
         shell: powershell
         env:
           AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
-          # Backstop only: no step below prints these roots on purpose.
+          # Mask both roots in later step output. The managed root is a
+          # repository variable that step env headers already display; masking
+          # only keeps it and the engine root out of later output.
           if ($env:AETHELN_ENGINE_ROOT) { Write-Output "::add-mask::$env:AETHELN_ENGINE_ROOT" }
           if ($env:AETHELN_MANAGED_COMPILE_ROOT) { Write-Output "::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT" }
+          # Start only if this step's bound, the harness bound, and a small
+          # residue/bind/upload reserve still fit inside the 40-minute job.
+          $Started = 0L
+          if (-not [long]::TryParse([string] $env:AETHELN_COMPILE_STARTED_TIMESTAMP, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $Started) -or $Started -le 0) { throw 'editor_build_budget_invalid' }
+          $JobSeconds = 40 * 60
+          $RequiredSeconds = (15 + 12 + 3) * 60
+          $ElapsedSeconds = ([Diagnostics.Stopwatch]::GetTimestamp() - $Started) / [Diagnostics.Stopwatch]::Frequency
+          if ($ElapsedSeconds -lt 0) { throw 'editor_build_budget_invalid' }
+          if ($JobSeconds - $ElapsedSeconds -lt $RequiredSeconds) {
+            Write-Output 'editor_build_skipped reason=editor_build_budget_exhausted'
+            throw 'editor_build_budget_exhausted'
+          }
           $EvidenceRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/editor-build'
           $null = New-Item -ItemType Directory -Path $EvidenceRoot
           # The wrapper captures all build output in runner-local build.log.
@@ -642,6 +661,9 @@ jobs:
           if (Test-Path -LiteralPath $ResultPath -PathType Leaf) { Write-Output ([IO.File]::ReadAllText($ResultPath)) }
           if ($BuildExit -ne 0) { throw 'editor_build_failed' }
       - name: Run frozen Unreal automation filter
+        id: automation_run
+        if: steps.editor_build.outcome == 'success'
+        continue-on-error: true
         timeout-minutes: 12
         shell: powershell
         env:
@@ -667,8 +689,48 @@ jobs:
           $Reason = if ([string] $Report.failureReason -cmatch '\A[a-z-]{1,32}\z') { $Report.failureReason } else { 'invalid' }
           Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f $Result, $Reason, [int] $Report.summary.total, [int] $Report.summary.passed, [int] $Report.summary.requiredFailed, $Harnessed.ExitCode)
           if ($Harnessed.ExitCode -ne 0 -or $Result -cne 'passed') { throw 'unreal_automation_failed' }
+      # The editor may write gitignored files under compile inputs, and the next
+      # managed sync rejects any untracked input file. Remove exactly the set
+      # that sync query reports (it runs even after a failed build or harness)
+      # so later pull requests keep a clean workspace; anything left fails here.
+      - name: Clear editor-written input residue
+        id: automation_residue
+        continue-on-error: true
+        timeout-minutes: 2
+        shell: powershell
+        env:
+          AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $Root = [IO.Path]::GetFullPath($env:AETHELN_MANAGED_COMPILE_ROOT).TrimEnd('\', '/')
+          $Query = 'ls-files --others -z -- ":(icase)Source" ":(icase)Config" ":(icase)Content" ":(icase)Plugins" ":(icase)Build" ":(icase)Platforms" ":(icase)AethelnOnline.uproject" ":(icase).gitattributes" ":(icase).gitmodules" ":(icase).lfsconfig" ":(exclude,icase,glob)**/Binaries/**" ":(exclude,icase,glob)**/Intermediate/**"'
+          function Get-InputResidue {
+            $Info = New-Object Diagnostics.ProcessStartInfo 'git', ('-C "' + $Root + '" ' + $Query)
+            $Info.UseShellExecute = $false
+            $Info.CreateNoWindow = $true
+            $Info.RedirectStandardOutput = $true
+            $Info.RedirectStandardError = $true
+            $Info.StandardOutputEncoding = New-Object Text.UTF8Encoding $false
+            $Git = [Diagnostics.Process]::Start($Info)
+            $ErrorText = $Git.StandardError.ReadToEndAsync()
+            $Text = $Git.StandardOutput.ReadToEnd()
+            $Git.WaitForExit()
+            $null = $ErrorText.Result
+            if ($Git.ExitCode -ne 0) { throw 'automation_input_residue_query_failed' }
+            return @($Text.Split([char] 0) | Where-Object { $_ })
+          }
+          $Residue = @(Get-InputResidue)
+          foreach ($Relative in $Residue) {
+            $Path = [IO.Path]::GetFullPath((Join-Path $Root $Relative))
+            if (-not $Path.StartsWith($Root + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'automation_input_residue_path_invalid' }
+            Remove-Item -LiteralPath $Path -Force
+          }
+          if (@(Get-InputResidue).Count -ne 0) { throw 'automation_input_residue_remaining' }
+          Write-Output ('automation_input_residue removed={0}' -f $Residue.Count)
       - name: Bind Unreal automation report
         id: automation_identity
+        if: steps.editor_build.outcome == 'success' && steps.automation_run.outcome == 'success' && steps.automation_residue.outcome == 'success'
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
@@ -686,6 +748,7 @@ jobs:
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "artifact_name=unreal-automation-report`nevidence_sha256=$Digest`nevidence_size_bytes=$($Report.Length)`n", $Utf8)
       - name: Upload Unreal automation report
         id: automation_artifact
+        if: steps.editor_build.outcome == 'success' && steps.automation_run.outcome == 'success' && steps.automation_residue.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: unreal-automation-report
@@ -1101,6 +1164,7 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/aetheln-unreal-selector
       - name: Download exact unreal evidence
+        if: needs.trusted-candidate-compile.outputs.automation_artifact_id != ''
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           artifact-ids: ${{ needs.trusted-candidate-compile.outputs.automation_artifact_id }}
