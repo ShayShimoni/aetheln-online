@@ -1028,10 +1028,15 @@ Every accepted decision records:
   older waiter queued between the two jobs. A scheduled phase that queues
   while the editor job runs waits at most 35 minutes for it; the recorded
   40-minute trusted-compile queue delay attributable to one running scheduled
-  phase is unchanged. Between the two jobs another engine job may synchronize
-  the managed workspace to a different revision; the editor job then fails
-  closed with `editor_workspace_revision_changed` rather than building the
-  wrong revision.
+  phase is unchanged. Workspace race: when another owner pull request's
+  compile, or a newer push to the same pull request, enters the engine queue
+  during this pull request's compile window, it can re-sync the managed
+  workspace before the editor job starts. The editor-build step then stops
+  with `editor_workspace_revision_changed` instead of building another
+  revision; the editor job still succeeds because every step continues on
+  error, and only `unreal-receipt-shadow` fails, when it is selected. Recovery
+  needs "Re-run all jobs"; "Re-run failed jobs" does not re-run the successful
+  editor job.
 - **Alternatives:** lowering the editor or harness bounds (unmeasured, and
   would still skip on slow compiles); a budget-skip that publishes a green gap
   (reintroduces the exemption TA-018 removed); raising the compile job ceiling
@@ -1041,8 +1046,14 @@ Every accepted decision records:
   job and fails red at its raw binding check, printing the fixed
   `automation_reason`, when no report was uploaded. The job runs outside the
   engine host lease for this first proof; wrapping it in the lease is a
-  follow-up. Record editor-build and harness durations from the first live
-  runs. Authority stays off.
+  follow-up. A second follow-up replaces the revision check with a real
+  re-sync through `Sync-ManagedCompileWorkspace`
+  (`scripts/ci/ManagedCompileWorkspace.ps1`), as the gate's managed compile
+  path in `Invoke-EngineRunnerGate.ps1` does; that needs a control checkout at
+  `github.sha`, the managed-workspace registration variables, the engine host
+  lease, a larger job ceiling, and removal of the no-checkout pin in
+  `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`. Record editor-build and
+  harness durations from the first live runs. Authority stays off.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, workspace-revision races appear in practice, or the

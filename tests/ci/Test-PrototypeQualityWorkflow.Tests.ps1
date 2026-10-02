@@ -512,6 +512,7 @@ try {
 	foreach ($OutcomeCase in @(
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='failure'; AETHELN_EDITOR_BUILD_REASON='editor_build_budget_exhausted'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_build_budget_exhausted' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='C:\leak path'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_interrupted' },
+		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='unreal_automation_test_failure'; AETHELN_RESIDUE_OUTCOME='failure'; AETHELN_RESIDUE_REASON='automation_input_residue_remaining'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_test_failure' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='failure' }; expected='automation_report_upload_failed' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='success' }; expected='none' }
 	)) {
@@ -607,7 +608,7 @@ Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_UNREAL_REQUIRED: \
 
 foreach ($Receipt in $ReceiptContracts) {
 	$Body = [string] $Receipt.Body
-	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
+	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?\n(?=    if: )" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
 	Assert-True ($Body -match '(?m)^    runs-on: windows-latest\r?$' -and $Body -match '(?m)^    timeout-minutes: 10\r?$' -and $Body -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Name) must be a bounded hosted publisher without engine admission."
 	foreach ($Output in @('artifact_id: \$\{\{ steps\.receipt_artifact\.outputs\.artifact-id \}\}', 'artifact_name: \$\{\{ steps\.receipt_identity\.outputs\.artifact_name \}\}', 'artifact_digest: sha256:\$\{\{ steps\.receipt_artifact\.outputs\.artifact-digest \}\}')) {
 		Assert-True ($Body -match "(?m)^      $Output\r?$") "$($Receipt.Name) must expose the reviewed direct receipt upload binding."

@@ -129,7 +129,7 @@ $ReceiptContracts = @(
 )
 foreach ($Receipt in $ReceiptContracts) {
 	$ReceiptBody = [string] $JobBodies[$Receipt.Job]
-	Assert-True ($ReceiptBody -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $ReceiptBody -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Job) must be selected only for a pull request through the exact accepted selector output and raw producer."
+	Assert-True ($ReceiptBody -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?\n(?=    if: )" -and $ReceiptBody -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Job) must be selected only for a pull request through the exact accepted selector output and raw producer."
 	Assert-True ($ReceiptBody -match '(?m)^    runs-on: windows-latest\r?$' -and $ReceiptBody -match '(?m)^    timeout-minutes: 10\r?$' -and $ReceiptBody -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Job) must remain bounded and hosted."
 	Assert-MatchCount -Text $ReceiptBody -Pattern ('(?m)^        uses: ' + [regex]::Escape($DownloadAction) + '\r?$') -Expected 2 -Message "$($Receipt.Job) must download selector and raw evidence by exact artifact ID."
 	$ProducerId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.' + $Receipt.ArtifactOutput + ' }}')
@@ -413,6 +413,19 @@ foreach ($Value in @('40 minutes', '20 minutes', '30/30/10/10', '64 GiB', 'AETHE
 	Assert-True ($SchedulingDecision -match [regex]::Escape($Value)) "TA-012 must preserve the accepted value '$Value'."
 }
 Assert-True ($SchedulingDecision -match 'Test-PrototypeQualityWorkflow\.Tests\.ps1') 'TA-012 must cite the classifier fixture suite as evidence.'
+
+# TA-020 records the editor job ceiling, the worst-case owner pull-request hold
+# (compile plus editor ceilings), and the engine-runner job count; each figure
+# is derived from the workflow so a ceiling change cannot leave TA-020 stale.
+$EditorDecision = (Get-DecisionSection 'TA-020') -replace '\s+', ' '
+$EditorCeiling = [int] [regex]::Match($EditorAutomation, '(?m)^    timeout-minutes: (\d+)\r?$').Groups[1].Value
+$CompileCeiling = [int] [regex]::Match($TrustedCompile, '(?m)^    timeout-minutes: (\d+)\r?$').Groups[1].Value
+$EngineJobCount = [regex]::Matches($Workflow, '(?m)^\s+runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$').Count
+$EngineJobWord = @('zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine')[$EngineJobCount]
+Assert-True ($EditorDecision.Contains('- **Status:** Accepted -') -and $EditorCeiling -gt 0 -and $CompileCeiling -gt 0) 'TA-020 must be accepted and both engine pull-request jobs must declare a job ceiling.'
+foreach ($Figure in @("has a $EditorCeiling-minute job ceiling", "up to $($CompileCeiling + $EditorCeiling) minutes ($CompileCeiling-minute compile plus $EditorCeiling-minute editor automation)", "now has $EngineJobWord jobs")) {
+	Assert-True ($EditorDecision.Contains($Figure)) "TA-020 must record the workflow figure '$Figure'."
+}
 
 # The portable CI exemption is a closed applicability decision, not a blanket
 # scripts/workflows exemption or a replacement for independent review. TA-018
