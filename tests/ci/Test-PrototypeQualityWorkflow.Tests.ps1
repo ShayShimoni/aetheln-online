@@ -355,9 +355,10 @@ Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -matc
 # publishes one nonce-bound receipt directory, and exposes only the upload
 # action's direct artifact binding. They never acquire engine-runner authority.
 $ReceiptContracts = @(
-	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; SelectorOutput='portable_required'; Producer='quality-gates'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
-	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; SelectorOutput='native_client_server_compile_required'; Producer='trusted-candidate-compile'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
-	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; SelectorOutput='visual_package_required'; Producer='visual-proof'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
+	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Producer='quality-gates'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
+	# The native publisher proves native-client-server-compile and controller-operational-proof from one compile report, so either selection runs it.
+	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Producer='trusted-candidate-compile'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
+	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Producer='visual-proof'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
 )
 # aggregate_ready and the context builder's gap computation must agree on the
 # exact set of obligations that have a live receipt producer.
@@ -367,11 +368,13 @@ $BuilderLiveChecks = [regex]::Matches($ContextBuilderSource, '(?m)^\s*\$LiveChec
 Assert-True ($WorkflowLiveChecks.Count -eq 1 -and $BuilderLiveChecks.Count -eq 1) 'The workflow and context builder must each declare exactly one live producer check list.'
 $WorkflowLiveList = @([regex]::Matches($WorkflowLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
 $BuilderLiveList = @([regex]::Matches($BuilderLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
-Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,native-client-server-compile,portable,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
+Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,controller-operational-proof,native-client-server-compile,portable,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
+# The aggregate binds the native receipt when either native obligation is selected; any other selector output pair must still fail closed.
+Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_OPERATIONAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$NativeProducerRequired \`$env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow'" -and $AcceptanceShadow -match "\`$NativeProducerRequired = if \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true'\) \{ 'true' \} elseif \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false'\) \{ 'false' \} else \{ 'invalid' \}") 'The aggregate must bind the native receipt for either native obligation and reject any other selector output pair.'
 
 foreach ($Receipt in $ReceiptContracts) {
 	$Body = [string] $Receipt.Body
-	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && needs\.ci-selection-shadow\.outputs\.$($Receipt.SelectorOutput) == 'true'\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
+	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
 	Assert-True ($Body -match '(?m)^    runs-on: windows-latest\r?$' -and $Body -match '(?m)^    timeout-minutes: 10\r?$' -and $Body -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Name) must be a bounded hosted publisher without engine admission."
 	foreach ($Output in @('artifact_id: \$\{\{ steps\.receipt_artifact\.outputs\.artifact-id \}\}', 'artifact_name: \$\{\{ steps\.receipt_identity\.outputs\.artifact_name \}\}', 'artifact_digest: sha256:\$\{\{ steps\.receipt_artifact\.outputs\.artifact-digest \}\}')) {
 		Assert-True ($Body -match "(?m)^      $Output\r?$") "$($Receipt.Name) must expose the reviewed direct receipt upload binding."
@@ -474,7 +477,8 @@ $LegacyBytes = [Text.Encoding]::UTF8.GetBytes($NormalizedWorkflow.Substring($Leg
 $LegacyHasher = [Security.Cryptography.SHA256]::Create()
 try { $LegacyDigest = ([BitConverter]::ToString($LegacyHasher.ComputeHash($LegacyBytes)) -replace '-', '').ToLowerInvariant() }
 finally { $LegacyHasher.Dispose() }
-Assert-True ($LegacyBytes.Length -eq 5633 -and $LegacyDigest -ceq 'f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df') 'The change-impact block must match the reviewed Package 3A action-pin-only identity after LF normalization.'
+# TA-018 (2026-10-02) removed the six controller paths from the portable-only set; this is the reviewed block identity after that change.
+Assert-True ($LegacyBytes.Length -eq 5395 -and $LegacyDigest -ceq 'e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805') 'The change-impact block must match the reviewed TA-018 identity after LF normalization.'
 
 function Get-ClassifierScript {
 	$Lines = $Workflow -split "\r?\n"
@@ -660,8 +664,9 @@ try {
 
 	$Matrix = @(
 		@{ Case = 'exact packaging orchestration'; Write = @('scripts/build/Build-PackagedArtifacts.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
-		@{ Case = 'exact engine wrapper'; Write = @('scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
-		@{ Case = 'exact retention helper'; Write = @('scripts/ci/Initialize-CompileWorkspace.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
+		# TA-018: controller scripts and the live workflow compile again so the native producer can publish controller-operational-proof.
+		@{ Case = 'exact engine wrapper'; Write = @('scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'exact retention helper'; Write = @('scripts/ci/Initialize-CompileWorkspace.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'exact smoke evidence runner'; Write = @('scripts/build/Invoke-PackagedSmokeTest.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
 		@{ Case = 'smoke runner lookalike'; Write = @('scripts/build/Invoke-PackagedSmokeTestHelper.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different smoke runner'; Write = @(); IndexOnly = @('scripts/build/invoke-PackagedSmokeTest.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
@@ -671,12 +676,12 @@ try {
 		@{ Case = 'case-different wrapper'; Write = @(); IndexOnly = @('scripts/ci/invoke-EngineRunnerGate.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different packaging'; Write = @(); IndexOnly = @('Scripts/build/Build-PackagedArtifacts.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different retention'; Write = @(); IndexOnly = @('scripts/ci/initialize-CompileWorkspace.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'exact portable CI suite'; Write = @('scripts/ci/Invoke-CiSuite.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'exact portable formatting policy'; Write = @('scripts/ci/Test-FormattingPolicy.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'exact portable markdown links'; Write = @('scripts/ci/Test-MarkdownLinks.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'exact tested prototype workflow'; Write = @('.github/workflows/prototype-quality-gates.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'controller CI workflow plus fixtures'; Write = @('scripts/ci/Invoke-CiSuite.ps1', '.github/workflows/prototype-quality-gates.yml', 'tests/ci/Seed.Tests.ps1', 'docs/a.md'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		# Portable-only set: no Unreal compile.
-		@{ Case = 'exact portable CI suite'; Write = @('scripts/ci/Invoke-CiSuite.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
-		@{ Case = 'exact portable formatting policy'; Write = @('scripts/ci/Test-FormattingPolicy.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
-		@{ Case = 'exact portable markdown links'; Write = @('scripts/ci/Test-MarkdownLinks.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
-		@{ Case = 'exact tested prototype workflow'; Write = @('.github/workflows/prototype-quality-gates.yml'); Expect = 'false'; Reason = 'portable_paths_only' },
-		@{ Case = 'portable CI workflow plus fixtures'; Write = @('scripts/ci/Invoke-CiSuite.ps1', '.github/workflows/prototype-quality-gates.yml', 'tests/ci/Seed.Tests.ps1', 'docs/a.md'); Expect = 'false'; Reason = 'portable_paths_only' },
 		@{ Case = 'docs markdown'; Write = @('docs/a.md'); Expect = 'false'; Reason = 'portable_paths_only' },
 		@{ Case = 'docs nested any extension'; Write = @('docs/sub/new.png', 'docs/sub/b.md'); Expect = 'false'; Reason = 'portable_paths_only' },
 		@{ Case = 'visuals'; Write = @('visuals/a.svg', 'visuals/new/b.png'); Expect = 'false'; Reason = 'portable_paths_only' },
@@ -702,11 +707,11 @@ try {
 		@{ Case = 'case-different formatting directory'; Write = @(); IndexOnly = @('Scripts/ci/Test-FormattingPolicy.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different markdown checker extension'; Write = @(); IndexOnly = @('scripts/ci/Test-MarkdownLinks.PS1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different workflow'; Write = @(); IndexOnly = @('.github/workflows/Prototype-quality-gates.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'engine gate script'; Write = @('scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
+		@{ Case = 'engine gate script'; Write = @('scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'real Unreal automation script'; Write = @('scripts/ci/Invoke-UnrealAutomationTests.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'packaging script'; Write = @('scripts/build/Build-PackagedArtifacts.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
 		@{ Case = 'mixed portable CI and Source'; Write = @('scripts/ci/Invoke-CiSuite.ps1', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'mixed tested workflow and engine gate'; Write = @('.github/workflows/prototype-quality-gates.yml', 'scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
+		@{ Case = 'mixed tested workflow and engine gate'; Write = @('.github/workflows/prototype-quality-gates.yml', 'scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'new workflow file'; Write = @('.github/workflows/new.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'other .github yaml'; Write = @('.github/dependabot.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'template directory non-markdown'; Write = @('.github/ISSUE_TEMPLATE/script.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },

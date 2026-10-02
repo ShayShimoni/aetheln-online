@@ -62,8 +62,8 @@ function New-RequirementsTemplateFixture {
 	return [pscustomobject][ordered]@{
 		schemaVersion='aetheln.ci-acceptance-requirements-template/v1'
 		jobs=@(
-			[pscustomobject][ordered]@{key='native';jobName='native-receipt-shadow';checks=@('clean-package-provenance-smoke','native-client-server-compile')},
-			[pscustomobject][ordered]@{key='portable';jobName='portable-receipt-shadow';checks=@('content-reference-validation','controller-contract','controller-operational-proof','portable','unreal-editor-automation')},
+			[pscustomobject][ordered]@{key='native';jobName='native-receipt-shadow';checks=@('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile')},
+			[pscustomobject][ordered]@{key='portable';jobName='portable-receipt-shadow';checks=@('content-reference-validation','controller-contract','portable','unreal-editor-automation')},
 			[pscustomobject][ordered]@{key='visual';jobName='visual-receipt-shadow';checks=@('visual-package')}
 		)
 	}
@@ -165,7 +165,7 @@ try {
 	Write-FixtureJson $UnavailableGapFixture.SelectorPath (Get-UnavailableSelectorFixture)
 	$Gap = Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Gap
 	Assert-True ($Gap.mode -ceq 'Gap' -and $Gap.acceptedControllerUnavailable -eq $true -and $Gap.attemptAnchor.nonce -ceq $script:Nonce) 'Unavailable-controller gap validation must bind the current attempt without claiming accepted-base identity.'
-	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'unreal-editor-automation,content-reference-validation,controller-operational-proof,clean-package-provenance-smoke') 'The fallback must conservatively select all four obligations without live producers.'
+	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'unreal-editor-automation,content-reference-validation,clean-package-provenance-smoke') 'The fallback must conservatively select all three obligations without live producers.'
 	Assert-True (-not (Test-Path -LiteralPath $UnavailableGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.AggregatePath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.RequirementsPath)) 'Gap mode must publish no identity, aggregate context, or receipt prerequisites.'
 	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Identity } 'selector_execution_invalid'
 	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Aggregate } 'selector_execution_invalid'
@@ -185,7 +185,7 @@ try {
 	$FallbackBytes = [IO.File]::ReadAllBytes($WorkflowFallbackFixture.SelectorPath)
 	Assert-True ($FallbackBytes.Length -gt 2 -and $FallbackBytes[-1] -eq 10 -and $FallbackBytes[-2] -ne 10 -and $FallbackBytes[-2] -ne 13) 'The actual workflow fallback writer must emit exactly one trailing LF.'
 	$Gap = Invoke-Fixture -Fixture $WorkflowFallbackFixture -Mode Gap
-	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 4) 'The exact workflow fallback serialization must pass strict gap validation.'
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 3) 'The exact workflow fallback serialization must pass strict gap validation.'
 } finally {
 	if ($null -eq $PreviousShadowReportPath) { Remove-Item Env:AETHELN_SHADOW_REPORT -ErrorAction SilentlyContinue }
 	else { $env:AETHELN_SHADOW_REPORT = $PreviousShadowReportPath }
@@ -194,9 +194,9 @@ try {
 
 $AcceptedGapFixture = New-InvocationFixture
 try {
-	Write-FixtureJson $AcceptedGapFixture.SelectorPath (New-SelectorFixture -Selected @('controller-operational-proof'))
+	Write-FixtureJson $AcceptedGapFixture.SelectorPath (New-SelectorFixture -Selected @('content-reference-validation'))
 	$Gap = Invoke-Fixture -Fixture $AcceptedGapFixture -Mode Gap
-	Assert-True ($Gap.acceptedControllerUnavailable -eq $false -and (@($Gap.selectedUnsupported) -join ',') -ceq 'controller-operational-proof') 'An accepted-base unsupported selection must retain the strict existing identity contract but produce only a gap diagnostic.'
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $false -and (@($Gap.selectedUnsupported) -join ',') -ceq 'content-reference-validation') 'An accepted-base unsupported selection must retain the strict existing identity contract but produce only a gap diagnostic.'
 	Assert-True (-not (Test-Path -LiteralPath $AcceptedGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $AcceptedGapFixture.AggregatePath)) 'Accepted-base gap validation must not create aggregate inputs.'
 } finally { Remove-Item -LiteralPath $AcceptedGapFixture.Root -Recurse -Force }
 
@@ -208,6 +208,9 @@ $ContractFixture = New-InvocationFixture
 try {
 	Write-FixtureJson $ContractFixture.SelectorPath (New-SelectorFixture -Selected @('controller-contract','portable'))
 	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -Mode Gap } 'gap_selection_empty'
+	Write-FixtureJson $ContractFixture.SelectorPath (New-SelectorFixture -Selected @('controller-operational-proof'))
+	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -Mode Gap } 'gap_selection_empty'
+	Write-FixtureJson $ContractFixture.SelectorPath (New-SelectorFixture -Selected @('controller-contract','portable'))
 	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -ProducerBindingsJson '[]' } 'producer_binding_missing'
 	Assert-True (-not (Test-Path -LiteralPath $ContractFixture.IdentityPath) -and -not (Test-Path -LiteralPath $ContractFixture.AggregatePath)) 'A missing portable producer binding must publish no aggregate inputs.'
 	Invoke-Fixture -Fixture $ContractFixture -Mode Identity
@@ -258,7 +261,7 @@ foreach ($Case in @(
 	@{name='selector-extra-lf';reason='json_canonical_bytes_invalid';mutate={param($f)[IO.File]::AppendAllText($f.SelectorPath,"`n",$script:ContextUtf8)}},
 	@{name='selector-duplicate-json';reason='json_duplicate_property';mutate={param($f)$raw=[IO.File]::ReadAllText($f.SelectorPath,$script:ContextUtf8);$raw=$raw -replace '^\{','{"schemaVersion":"evil",';[IO.File]::WriteAllText($f.SelectorPath,$raw,$script:ContextUtf8)}},
 	@{name='incomplete-coverage';reason='requirements_check_coverage_incomplete';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks|Where-Object{$_ -cne 'portable'});Write-FixtureJson $f.TemplatePath $x}},
-	@{name='retired-template-id';reason='requirements_check_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks[0..2])+@('delivery-harness')+@($x.jobs[1].checks[3..4]);Write-FixtureJson $f.TemplatePath $x}},
+	@{name='retired-template-id';reason='requirements_check_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks[0..1])+@('delivery-harness')+@($x.jobs[1].checks[2..3]);Write-FixtureJson $f.TemplatePath $x}},
 	@{name='unsorted-template';reason='requirements_not_sorted';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs=@($x.jobs[1],$x.jobs[0],$x.jobs[2]);Write-FixtureJson $f.TemplatePath $x}},
 	@{name='template-open';reason='requirements_schema_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x|Add-Member extra $true;Write-FixtureJson $f.TemplatePath $x}},
 	@{name='workflow-reparse';reason='input_reparse_rejected';mutate={param($f)$targetRoot=Join-Path $f.Root 'actual';$linkRoot=Join-Path $f.Root 'linked';New-Item -ItemType Directory -Path $targetRoot|Out-Null;Move-Item $f.WorkflowPath (Join-Path $targetRoot 'workflow.yml');New-Item -ItemType Junction -Path $linkRoot -Target $targetRoot|Out-Null;$f.WorkflowPath=Join-Path $linkRoot 'workflow.yml'}}

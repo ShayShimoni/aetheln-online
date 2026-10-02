@@ -122,13 +122,13 @@ Assert-True ($ShadowSelection -notmatch '(?m)^\s+if: always\(\)\r?$') 'A failed 
 # admission. Unsupported selected checks produce a green no-acceptance gap;
 # the supported subset runs the real shadow aggregate and failures stay red.
 $ReceiptContracts = @(
-	@{ Job='portable-receipt-shadow'; Producer='quality-gates'; Required='portable_required'; Key='portable' },
-	@{ Job='native-receipt-shadow'; Producer='trusted-candidate-compile'; Required='native_client_server_compile_required'; Key='native' },
-	@{ Job='visual-receipt-shadow'; Producer='visual-proof'; Required='visual_package_required'; Key='visual' }
+	@{ Job='portable-receipt-shadow'; Producer='quality-gates'; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Key='portable' },
+	@{ Job='native-receipt-shadow'; Producer='trusted-candidate-compile'; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Key='native' },
+	@{ Job='visual-receipt-shadow'; Producer='visual-proof'; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Key='visual' }
 )
 foreach ($Receipt in $ReceiptContracts) {
 	$ReceiptBody = [string] $JobBodies[$Receipt.Job]
-	Assert-True ($ReceiptBody -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $ReceiptBody -match "needs\.ci-selection-shadow\.outputs\.$($Receipt.Required) == 'true'") "$($Receipt.Job) must be selected only for a pull request through the exact accepted selector output and raw producer."
+	Assert-True ($ReceiptBody -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $ReceiptBody -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Job) must be selected only for a pull request through the exact accepted selector output and raw producer."
 	Assert-True ($ReceiptBody -match '(?m)^    runs-on: windows-latest\r?$' -and $ReceiptBody -match '(?m)^    timeout-minutes: 10\r?$' -and $ReceiptBody -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Job) must remain bounded and hosted."
 	Assert-MatchCount -Text $ReceiptBody -Pattern ('(?m)^        uses: ' + [regex]::Escape($DownloadAction) + '\r?$') -Expected 2 -Message "$($Receipt.Job) must download selector and raw evidence by exact artifact ID."
 	$ProducerId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.report_artifact_id }}')
@@ -380,7 +380,7 @@ Assert-True ($SelectionDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$') 'T
 foreach ($Contract in @('shadow-first', 'accepted-base', '07bb90760bf493e25e40ac781143d07e701a113db3ede8bc7380490f6b85e9b6', 'wiring-only', 'external checker', 'before any self-hosted runner queues')) {
 	Assert-True ($SelectionDecision -match [regex]::Escape($Contract)) "TA-017 must record the selector activation contract '$Contract'."
 }
-Assert-True ($CiDocumentation -match 'accepted_controller_unavailable' -and $CiDocumentation -match '5,633' -and $CiDocumentation -match 'f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df') 'CI documentation must record the bootstrap boundary and exact Package 3A action-pin-only legacy block identity.'
+Assert-True ($CiDocumentation -match 'accepted_controller_unavailable' -and $CiDocumentation -match '5,395' -and $CiDocumentation -match 'e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805') 'CI documentation must record the bootstrap boundary and exact TA-018 legacy block identity.'
 foreach ($Limit in @('two minutes', '8 MiB', '64 KiB', '4,096', '4 MiB')) {
 	Assert-True ($CiDocumentation -match [regex]::Escape($Limit)) "CI documentation must record selector limit '$Limit'."
 }
@@ -405,10 +405,22 @@ foreach ($Value in @('40 minutes', '20 minutes', '30/30/10/10', '64 GiB', 'AETHE
 Assert-True ($SchedulingDecision -match 'Test-PrototypeQualityWorkflow\.Tests\.ps1') 'TA-012 must cite the classifier fixture suite as evidence.'
 
 # The portable CI exemption is a closed applicability decision, not a blanket
-# scripts/workflows exemption or a replacement for independent review.
-foreach ($Path in @('scripts/ci/Invoke-CiSuite.ps1', 'scripts/ci/Test-FormattingPolicy.ps1', 'scripts/ci/Test-MarkdownLinks.ps1', '.github/workflows/prototype-quality-gates.yml', 'scripts/build/Build-PackagedArtifacts.ps1', 'scripts/build/Invoke-PackagedSmokeTest.ps1', 'scripts/ci/Invoke-EngineRunnerGate.ps1', 'scripts/ci/Initialize-CompileWorkspace.ps1')) {
+# scripts/workflows exemption or a replacement for independent review. TA-018
+# (2026-10-02) partially reverses TA-012: controller scripts and the live
+# workflow compile again so the native producer can publish
+# controller-operational-proof; only the two packaging scripts stay exempt.
+$OperationalProofDecision = Get-DecisionSection 'TA-018'
+Assert-True ($OperationalProofDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$' -and $OperationalProofDecision -match '2026-10-02' -and $OperationalProofDecision -match 'TA-012' -and $OperationalProofDecision -match '`controller-operational-proof`') 'TA-018 must record the accepted 2026-10-02 partial reversal of TA-012 for controller-operational-proof.'
+foreach ($Path in @('scripts/build/Build-PackagedArtifacts.ps1', 'scripts/build/Invoke-PackagedSmokeTest.ps1')) {
 	Assert-True ($SchedulingDecision.Contains('`' + $Path + '`')) "TA-012 must record the exact portable CI exemption '$Path'."
+	Assert-True ($OperationalProofDecision.Contains('`' + $Path + '`')) "TA-018 must record that '$Path' remains exempt."
 	Assert-True ($CiDocumentation.Contains('`' + $Path + '`')) "CI documentation must record the exact portable CI exemption '$Path'."
+}
+$PortableCiPathsBlock = [regex]::Match($Workflow, '(?ms)^\s*\$PortableCiPaths = @\((?<list>.*?)\)\r?$')
+Assert-True ($PortableCiPathsBlock.Success -and ((@([regex]::Matches($PortableCiPathsBlock.Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ',') -ceq 'scripts/build/Build-PackagedArtifacts.ps1,scripts/build/Invoke-PackagedSmokeTest.ps1')) 'The workflow portable-only CI path list must contain exactly the two packaging scripts.'
+foreach ($Path in @('scripts/ci/Invoke-CiSuite.ps1', 'scripts/ci/Test-FormattingPolicy.ps1', 'scripts/ci/Test-MarkdownLinks.ps1', 'scripts/ci/Invoke-EngineRunnerGate.ps1', 'scripts/ci/Initialize-CompileWorkspace.ps1', '.github/workflows/prototype-quality-gates.yml')) {
+	Assert-True ($SchedulingDecision.Contains('`' + $Path + '`') -and $OperationalProofDecision.Contains('`' + $Path + '`')) "TA-012 must keep its historical exemption of '$Path' and TA-018 must record its removal."
+	Assert-True ($CiDocumentation.Contains('`' + $Path + '`')) "CI documentation must record that '$Path' compiles again."
 }
 foreach ($Document in @($SchedulingDecision, $CiDocumentation)) {
 	Assert-True ($Document -match '(?i)case-sensitive') 'The portable CI allowlist must remain case-sensitive.'

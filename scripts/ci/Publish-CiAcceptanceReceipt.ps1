@@ -22,7 +22,7 @@ $script:PublisherCheckIds = @('clean-package-provenance-smoke','content-referenc
 # Each producer key publishes one typed report; Checks are the ordinal-sorted obligations that report can prove.
 $script:PublisherContracts = @{
 	'portable' = [pscustomobject]@{ EvidenceName='ci-report.json'; Checks=@('controller-contract','portable'); NativeExitCode=$null; CleanupVerified=$null }
-	'native' = [pscustomobject]@{ EvidenceName='engine-runner-report.json'; Checks=@('native-client-server-compile'); NativeExitCode=0; CleanupVerified=$true }
+	'native' = [pscustomobject]@{ EvidenceName='engine-runner-report.json'; Checks=@('controller-operational-proof','native-client-server-compile'); NativeExitCode=0; CleanupVerified=$true }
 	'visual' = [pscustomobject]@{ EvidenceName='visual-package-report.json'; Checks=@('visual-package'); NativeExitCode=$null; CleanupVerified=$null }
 }
 

@@ -171,6 +171,21 @@ try {
 		Assert-True ($Entries.Count -eq 2 -and @($Receipt.results.checks | Where-Object { @($_.evidence).Count -ne 1 -or $_.evidence[0].name -cne 'ci-report.json' -or $_.evidence[0].sha256 -cne $Case.EvidenceSha256 -or $_.evidence[0].sizeBytes -ne $Case.EvidenceSizeBytes -or $_.jobName -cne 'portable-receipt-shadow' -or $null -ne $_.nativeExitCode -or $null -ne $_.cleanupVerified }).Count -eq 0) "Portable selection '$($SelectionCase.name)' must bind every result to the one exact ci-report.json."
 	}
 
+	# The native producer covers controller-operational-proof and native-client-server-compile
+	# from the one engine-runner-report.json; every result binds the real native exit and cleanup proof.
+	foreach ($SelectionCase in @(
+		@{ name='both'; selection=@('native-client-server-compile','controller-operational-proof'); expected='controller-operational-proof,native-client-server-compile' },
+		@{ name='operational-only'; selection=@('controller-operational-proof'); expected='controller-operational-proof' },
+		@{ name='contract-dropped'; selection=@('native-client-server-compile','controller-contract'); expected='native-client-server-compile' }
+	)) {
+		$Case = New-PublisherFixture -Root (Join-Path $FixtureRoot ('native-selection-' + $SelectionCase.name)) -ProducerKey native -Selection $SelectionCase.selection
+		$Published = Invoke-PublisherFixture $Case
+		$Receipt = Get-Content -LiteralPath $Published.receiptPath -Raw | ConvertFrom-Json
+		$Entries = @(Get-ChildItem -LiteralPath $Case.OutputRoot -Force)
+		Assert-True ((@($Published.checks) -join ',') -ceq $SelectionCase.expected -and (@($Receipt.selection.checks) -join ',') -ceq $SelectionCase.expected -and (@($Receipt.results.checks | ForEach-Object { $_.id }) -join ',') -ceq $SelectionCase.expected) "Native selection '$($SelectionCase.name)' must publish exactly the selector-derived subset."
+		Assert-True ($Entries.Count -eq 2 -and @($Receipt.results.checks | Where-Object { @($_.evidence).Count -ne 1 -or $_.evidence[0].name -cne 'engine-runner-report.json' -or $_.evidence[0].sha256 -cne $Case.EvidenceSha256 -or $_.evidence[0].sizeBytes -ne $Case.EvidenceSizeBytes -or $_.jobName -cne 'native-receipt-shadow' -or $_.nativeExitCode -ne 0 -or $_.cleanupVerified -ne $true }).Count -eq 0) "Native selection '$($SelectionCase.name)' must bind every result to the one exact engine-runner-report.json with zero exit and verified cleanup."
+	}
+
 	$EmptySelection = New-PublisherFixture -Root (Join-Path $FixtureRoot 'selection-empty') -ProducerKey portable -Selection @('visual-package')
 	Assert-Rejected { Invoke-PublisherFixture $EmptySelection } 'receipt_publisher_selection_empty'
 	Assert-True (-not (Test-Path -LiteralPath $EmptySelection.OutputRoot)) 'A producer with no selected obligation must publish nothing.'

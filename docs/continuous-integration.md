@@ -197,10 +197,14 @@ Package 3C evidence from reconciling and therefore makes that new evidence path
 red. It does not silently produce acceptance. The legacy
 `change-impact` job remains the sole selection authority. Historically,
 Package 3A changed only its remote checkout action identity to the reviewed
-full SHA; after LF normalization the block from `change-impact:` through the
-`trusted-candidate-compile` explanatory comment is exactly 5,633 UTF-8 bytes
+full SHA; after LF normalization that block from `change-impact:` through the
+`trusted-candidate-compile` explanatory comment was exactly 5,633 UTF-8 bytes
 with SHA-256
 `f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df`.
+TA-018 (2026-10-02) then removed the six controller paths from the
+portable-only set; the current normalized block is exactly 5,395 UTF-8 bytes
+with SHA-256
+`e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -234,35 +238,37 @@ this closed, case-sensitive portable-only set:
 - GitHub issue or pull-request template Markdown or YAML files under
   `.github/ISSUE_TEMPLATE/` or `.github/PULL_REQUEST_TEMPLATE/`, or the
   top-level `.github/PULL_REQUEST_TEMPLATE.md`
-- Exactly `scripts/ci/Invoke-CiSuite.ps1`,
-  `scripts/ci/Test-FormattingPolicy.ps1`,
-  `scripts/ci/Test-MarkdownLinks.ps1`, and
-  `.github/workflows/prototype-quality-gates.yml`
-- Exactly `scripts/build/Build-PackagedArtifacts.ps1`,
-  `scripts/build/Invoke-PackagedSmokeTest.ps1`,
-  `scripts/ci/Invoke-EngineRunnerGate.ps1`, and
-  `scripts/ci/Initialize-CompileWorkspace.ps1`
+- Exactly `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`
 
-The four exact CI paths are the lead's 2026-09-06 applicability decision under
-the user's CI-improvement authorization, recorded in TA-012. Unreal compilation
-does not validate portable scheduling, policy checks, or workflow YAML logic.
-The required portable suite (including its runner, formatting, Markdown,
-workflow, and scheduling-policy fixture suites) and independent review remain
-mandatory for these changes. This is not a blanket scripts or workflow
-exemption: matching uses exact case-sensitive paths, not prefixes, filename
-lookalikes, or extension substitutions. Passing local fixtures does not prove
-live workflow activation, engine execution, or scheduled milestone completion.
+Until 2026-10-02 the set also exempted exactly `scripts/ci/Invoke-CiSuite.ps1`,
+`scripts/ci/Test-FormattingPolicy.ps1`, `scripts/ci/Test-MarkdownLinks.ps1`,
+`scripts/ci/Invoke-EngineRunnerGate.ps1`,
+`scripts/ci/Initialize-CompileWorkspace.ps1`, and
+`.github/workflows/prototype-quality-gates.yml` (the lead's 2026-09-06
+applicability decision recorded in TA-012). Unreal compilation does not
+validate portable scheduling, policy checks, or workflow YAML logic, and the
+required portable suite (including its runner, formatting, Markdown, workflow,
+and scheduling-policy fixture suites) plus independent review remain mandatory
+for those files. TA-018 nevertheless removes those six paths from the exempt
+set: a pull request that changes only controller files now runs the real
+supervised compile so the native producer can publish
+`controller-operational-proof`. The compile is operational proof that the
+candidate controller drove the engine runner, not validation of its YAML or
+scheduling logic. This is not a blanket scripts or workflow exemption: matching
+uses exact case-sensitive paths, not prefixes, filename lookalikes, or
+extension substitutions. Passing local fixtures does not prove live workflow
+activation, engine execution, or scheduled milestone completion.
 
-The four exact orchestration additions follow the owner's CI-redesign
+The two remaining exact orchestration exemptions follow the owner's CI-redesign
 authorization and independent applicability review on 2026-09-06. Their PR
-gates are the full required portable suite (including packaging, smoke, gate,
-post-command-state and retention fixtures) plus independent review. Compile
-does not execute the packaging controller or smoke evidence writer; it does
-exercise the wrapper and
-retention helper against a real engine, so that integration coverage remains
-an explicitly separate bounded operational proof, not an asserted pass.
-Revisit these exceptions if an orchestration script begins generating engine
-inputs. A simultaneous engine-input change still requires compilation.
+gates are the full required portable suite (including packaging, smoke, and
+post-command-state fixtures) plus independent review. Compile does not execute
+the packaging controller or smoke evidence writer, and a `scripts/build/`
+change co-selects the unsupported `clean-package-provenance-smoke` obligation,
+so a compile could not become operational proof for it. Revisit these
+exceptions if an orchestration script begins generating engine inputs. A
+simultaneous engine-input change still requires compilation.
 
 Everything else requires compile, including `Source/**`, `Config/**`,
 `Content/**`, `Plugins/**`, other `scripts/**`, other `.github/workflows/**`, and
@@ -467,9 +473,9 @@ contract is:
 | `ci-selection-shadow` | `pull_request` | None | Diagnostic only; exact accepted-base controller bytes, never candidate selector bytes. | Produce the closed current-attempt selector artifact and expose its nonce, all eight required decisions, aggregate readiness, and exact artifact ID/name/digest as non-authoritative direct outputs. |
 | `visual-proof` | `pull_request` | `ci-selection-shadow` | Runs only when the accepted-base selector selects `visual-package`; the reusable call remains additive and non-authoritative. | Execute both existing visual validators and expose the exact raw report artifact ID/name/digest plus inner report SHA-256/length. |
 | `portable-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `quality-gates` | Runs only when `portable` is selected and both direct producers succeed. | Download the selector and portable report by exact artifact ID, validate their direct name/digest metadata, verify the inner report hash/length, then publish one nonce-bound receipt whose checks are the selector-derived subset of {`controller-contract`, `portable`}, every result bound to the one raw `ci-report.json`. The aggregate later verifies each archive digest against GitHub's API and downloaded bytes. |
-| `native-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-candidate-compile` | Runs only when native client/server compile is selected and succeeds. | Apply the same direct binding and truthful publication contract to the exact compile report, including successful native exit and cleanup proof. The self-hosted producer hashes the report with the portable .NET SHA-256 API because that runner's Windows PowerShell environment does not expose `Get-FileHash`; its upload retains the static report artifact name even if identity binding fails. |
+| `native-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-candidate-compile` | Runs only when `native-client-server-compile` or `controller-operational-proof` is selected and the compile succeeds. | Apply the same direct binding and truthful publication contract to the exact compile report, publishing the selector-derived subset of {`controller-operational-proof`, `native-client-server-compile`} with every result bound to the one raw `engine-runner-report.json`, successful native exit, and cleanup proof. `controller-operational-proof` attests that the candidate controller at the tested revision ran the real supervised Compile gate on the engine runner with resource monitoring and verified cleanup in this attempt; it is the same exact report, revalidated under its own check id. The self-hosted producer hashes the report with the portable .NET SHA-256 API because that runner's Windows PowerShell environment does not expose `Get-FileHash`; its upload retains the static report artifact name even if identity binding fails. |
 | `visual-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `visual-proof` | Runs only when visual validation is selected and succeeds. | Apply the same direct binding and truthful publication contract to the exact bounded visual report. |
-| `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | GitHub-hosted, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/native/visual supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, publish the explicit green `producer_contract_incomplete` no-acceptance gap. Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
+| `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | GitHub-hosted, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/controller-operational-proof/native/visual supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, publish the explicit green `producer_contract_incomplete` no-acceptance gap. Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
 | `ci-acceptance-authority` | `pull_request` | `ci-acceptance-shadow` | Hard-skipped by the literal `always() && github.event_name == 'pull_request' && false`; job-scoped `actions: read` is dormant. | Reserved activation boundary: when later enabled, it still runs after a failed or cancelled aggregate and fails unless `needs.ci-acceptance-shadow.result` is exactly `success`; only a complete, nonce-bound reconciled shadow aggregate could produce an authority receipt. It grants nothing in the live Package 3C workflow. |
 | `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
 | `scheduled-client-package` | `schedule` at `02:00 UTC` daily | `quality-gates` | Schedule-only; the schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
@@ -504,13 +510,16 @@ they never forward JSON through a nested native `powershell.exe` command line,
 where Windows PowerShell 5.1 would strip embedded JSON quotes.
 
 `aggregate_ready=true` only when every selected obligation is in the currently
-wired semantic subset: `controller-contract`, `native-client-server-compile`,
-`portable`, and `visual-package`. In that case the aggregate derives the selected producer set
+wired semantic subset: `controller-contract`, `controller-operational-proof`,
+`native-client-server-compile`, `portable`, and `visual-package`. In that case the aggregate derives the selected producer set
 from the selector report, requires the corresponding direct `needs` binding,
 and verifies each binding's job name and exact artifact ID/name/digest against
 the same-attempt GitHub API record and downloaded archive. Missing, duplicate,
 extra, unselected, swapped, replayed, malformed, unsorted, or digest-mismatched
-bindings fail the job. If the selector chooses any of the other four
+bindings fail the job. The native binding is required when either
+`native-client-server-compile` or `controller-operational-proof` is selected;
+any selector output pair other than exact `true`/`false` values fails closed as
+`producer_direct_binding_invalid:native`. If the selector chooses any of the other three
 obligations, `aggregate_ready=false` and the workflow validates the selector
 identity before publishing a green, explicitly incomplete
 `producer_contract_incomplete` record with
@@ -543,10 +552,22 @@ tested-merge revisions, selector artifact ID/name/API digest, every selected raw
 and receipt artifact ID/name/API digest, aggregate or gap report SHA-256, the
 attempt nonce, and the final `complete`, `shadow`, `authoritative`, and
 `grantsAcceptance` values. One observation cannot substitute for the other.
-A supported-only observation that exercises `controller-contract` needs a pull
-request that changes only `tests/ci/**`: any `scripts/ci/` or workflow change
-also selects the still-unsupported `controller-operational-proof` and takes the
-gap branch.
+A supported-only observation that exercises both controller obligations needs an
+owner pull request that changes a `scripts/ci/` file or the live workflow
+without any `scripts/build/` path and without
+`scripts/ci/Invoke-EngineRunnerGate.ps1` or
+`scripts/ci/Initialize-CompileWorkspace.ps1` (the selector co-selects the
+unsupported `clean-package-provenance-smoke` for those two): it selects `portable`,
+`controller-contract`, and `controller-operational-proof`, the classifier
+requires the compile, and the expected result is `aggregate_ready=true`, a
+`native-receipt-shadow` receipt carrying only `controller-operational-proof`, a
+portable receipt carrying `controller-contract` and `portable`, and a
+`complete=true`, `shadow=true`, `authoritative=false`, `grantsAcceptance=false`
+aggregate report. A `scripts/build/` change still co-selects the unsupported
+`clean-package-provenance-smoke` and takes the gap branch. A non-owner pull
+request that selects `controller-operational-proof` skips the compile under the
+trust predicates and fails red at `producer_direct_binding_invalid:native`, the
+same pre-existing behavior as `native-client-server-compile`.
 Push and schedule runs have no accepted event-specific selector producer: they
 emit `event_not_applicable` and remain non-authoritative.
 
@@ -680,15 +701,13 @@ requires. Entries are evidence records, not acceptance.
 In all three runs `ci-acceptance-authority` stayed skipped. These observations
 are necessary but not sufficient for activation. Changing the
 live workflow itself selects `controller-contract` and
-`controller-operational-proof`. `controller-contract` now has a truthful
-portable receipt producer, but Package 3C still has none for
-`controller-operational-proof`. A candidate that merely flips the dormant
-predicate would therefore receive `complete=false` and fail closed in the
-authority job.
-No Package 3C activation policy or pre-reviewed template is published. Before a
-one-file activation can exist, a separate reviewed package must either add and
-shadow-observe a truthful controller-operational receipt or replace this selection boundary
-  with an independently justified, fail-closed contract. Only after that work may
+`controller-operational-proof`, which now both have truthful receipt producers
+(portable and native). The requirements-template bytes changed with the native
+producer, so activation pins still come only after a fresh accepted-base
+observation of this wiring. No Package 3C activation policy or pre-reviewed
+template is published. Before a one-file activation can exist, a separate
+reviewed package must shadow-observe the native producer wiring on a fresh
+accepted base. Only after that work may
   an accepted-base policy pin a template whose only candidate delta is the final
   literal `false` to `true` in the dormant predicate, while controller,
   publisher, aggregate,
@@ -1292,9 +1311,11 @@ incremental compile policy.
 - Package 3C emits attempt-specific
   `ci-receipt-<job-key>-<run-id>-<run-attempt>-<nonce>` archives for the three
   truthful live semantic producers: portable quality, native client/server
-  compile, and visual validation. Together they cover four obligations: the
+  compile, and visual validation. Together they cover five obligations: the
   portable producer covers both `portable` and `controller-contract` from the
-  same report. Each archive contains exactly one closed
+  same report, and the native producer covers both
+  `native-client-server-compile` and `controller-operational-proof` from the
+  same compile report. Each archive contains exactly one closed
   `ci-acceptance-receipt.json` and the one typed raw report named by it. Before
   publication, the producer exposes its raw archive ID/name/API digest and
   inner report SHA-256/length as direct outputs; the receipt publisher downloads
@@ -1312,13 +1333,17 @@ incremental compile policy.
   identity compared against the report is the self-hosted
   `trusted-candidate-compile` job's `runner_name`, which the aggregate resolves
   from the attempt jobs and validates (success, interval, exact labels) before
-  it accepts the hosted `native-receipt-shadow` publisher's receipt; and
+  it accepts the hosted `native-receipt-shadow` publisher's receipt;
+  `controller-operational-proof` revalidates that same exact
+  `engine-runner-report.json` under its own check id (reasons
+  `receipt_semantic_evidence_invalid|failure:controller-operational-proof`)
+  against the same bound compile job, so a receipt carrying both native
+  obligations validates the one report once per result; and
   `visual-package` revalidates the exact bounded
   `aetheln.visual-package-report/v1`. The aggregate contains a semantic adapter
   for `unreal-editor-automation`, but no live Package 3C receipt publisher feeds
   it, so it remains unsupported along with
-  `clean-package-provenance-smoke`, `content-reference-validation`, and
-  `controller-operational-proof`. Selection of any
+  `clean-package-provenance-smoke` and `content-reference-validation`. Selection of any
   unsupported obligation follows the
   explicit `producer_contract_incomplete` no-acceptance path.
 - Selector, receipt, aggregate, and future authority artifacts all bind the same
@@ -1441,8 +1466,9 @@ IDs, normalized result state, native exit, infrastructure and cleanup state,
 the exact closed current-attempt anchor, and SHA-256/length of every raw
 evidence file. One receipt belongs to one named receipt-publisher job. The live
 publisher takes a producer key, not a check ID: `portable` may prove
-`controller-contract` and `portable` from `ci-report.json`, `native` proves
-`native-client-server-compile`, and `visual` proves `visual-package`. It
+`controller-contract` and `portable` from `ci-report.json`, `native` may prove
+`controller-operational-proof` and `native-client-server-compile` from
+`engine-runner-report.json`, and `visual` proves `visual-package`. It
 publishes the ordinal-sorted intersection of that fixed set with the identity
 context's selector-derived `selection.checks`, drops selected obligations the
 key cannot prove, and rejects an empty intersection. Every published result
@@ -1451,15 +1477,14 @@ when name, SHA-256, and size are all identical, and the archive still holds
 that one file. Producer and aggregate independently revalidate the typed bytes
 for every result. Every receipt remains
 shadow-only and cannot grant acceptance. `unreal-editor-automation`,
-`clean-package-provenance-smoke`, `content-reference-validation`, and
-`controller-operational-proof`
+`clean-package-provenance-smoke`, and `content-reference-validation`
 remain unsupported until their real producer schemas, publishers, direct
 artifact bindings, and validators are wired together. An opaque digest or
 successful summary cannot substitute.
 
 `aetheln.ci-acceptance-aggregate/v1` is the live hosted shadow reconciliation
 record for a selector whose selected obligations are all in the supported
-portable/controller-contract/native/visual subset. It does not trust caller-supplied job-selection
+portable/controller-contract/controller-operational-proof/native/visual subset. It does not trust caller-supplied job-selection
 booleans. Instead, it requires the exact successful current-attempt
 `ci-selection-shadow` job, downloads the uniquely named current-attempt
 `ci-selection-shadow-<run-id>-<run-attempt>-<nonce>` artifact through bounded GitHub API
@@ -1536,12 +1561,12 @@ and independent review. Package 3C adds the real
 `scripts/ci/ci-acceptance-requirements.json` template and the dormant live
 authority boundary, but deliberately does not add
 `scripts/ci/activation/ci-activation-policy.json`, an activation workflow
-template, or a trusted caller. A workflow-only activation currently selects
-`controller-contract`, which now has a truthful portable receipt producer, and
-the still-unsupported `controller-operational-proof` obligation, so its
-aggregate is incomplete and the authority boundary rejects it. The missing
-truthful controller-operational producer (or a separately accepted
-replacement selection contract) must be implemented and shadow-observed first.
+template, or a trusted caller. A workflow-only activation selects
+`controller-contract` and `controller-operational-proof`, which now have
+truthful portable and native receipt producers, so a complete shadow aggregate
+is reachable for an owner candidate; the dormant predicate still hard-skips the
+authority job and nothing grants acceptance. The native producer wiring must be
+shadow-observed on a fresh accepted base first.
 Only a later accepted base may then add the exact policy/template pins and
 trusted caller; its activation candidate may change only the live workflow,
 must byte-match that pinned template, and may not modify any dependency it
