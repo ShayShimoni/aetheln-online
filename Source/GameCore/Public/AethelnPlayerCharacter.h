@@ -46,8 +46,6 @@ protected:
 private:
 	void ApplyAimSteeringIntent(bool bWantsAimSteering);
 	void ApplyCurrentGroundRotationMode();
-	void ApplyCurrentJumpFacing();
-	void ApplyCurrentJumpHorizontalVelocity();
 	void ApplySprintIntent(bool bWantsToSprint);
 	void CaptureTravelFacingAimJumpOffset();
 	void ClearBufferedJumpRequest();
@@ -93,9 +91,6 @@ private:
 
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float WalkSpeed = 500.0f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float BackpedalSpeedScale = 0.7f;
 
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", ClampMax = "30.0", Units = "deg"))
 	float MaxAimJumpPresentationYaw = 25.0f;
