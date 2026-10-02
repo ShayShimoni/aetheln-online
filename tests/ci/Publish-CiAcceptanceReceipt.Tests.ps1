@@ -344,4 +344,14 @@ for ($Index = 0; $Index -lt 8; $Index++) {
 	Assert-True ($SortedContextCheckIds[$Index] -ceq $SortedPublisherCheckIds[$Index]) "Aggregate context and publisher check ids must match in lockstep (index $Index)."
 }
 
+# The aggregate filters each template job's checks by selection in template order; the publisher filters its contract checks in
+# contract order. Both must agree per job key or the receipt fails receipt_selection_mismatch.
+$RequirementsTemplate = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ci-acceptance-requirements.json') -Raw | ConvertFrom-Json
+Assert-True (@($RequirementsTemplate.jobs).Count -eq @($script:PublisherContracts.Keys).Count) 'Publisher contracts and requirements template must declare the same number of jobs.'
+foreach ($TemplateJob in @($RequirementsTemplate.jobs)) {
+	Assert-True (@($script:PublisherContracts.Keys) -ccontains $TemplateJob.key) "Publisher must declare a contract for requirements-template job '$($TemplateJob.key)'."
+	$ContractChecks = @($script:PublisherContracts[$TemplateJob.key].Checks)
+	Assert-True ((@($TemplateJob.checks | Where-Object { $ContractChecks -ccontains $_ }) -join "`n") -ceq ($ContractChecks -join "`n")) "Publisher contract '$($TemplateJob.key)' checks must be an in-order subset of the requirements-template job checks."
+}
+
 Write-Output 'PASS: CI acceptance receipt publisher validates exact supported evidence and emits bounded shadow-only upload roots'

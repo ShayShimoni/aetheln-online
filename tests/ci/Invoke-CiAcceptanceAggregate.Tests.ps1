@@ -558,6 +558,16 @@ foreach ($ContractCase in @(
 $ContractOnlyBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract') -Report (New-FixturePortableReport $Context)
 $ContractOnlyValidated = @(Assert-CiAcceptanceReceipt -Receipt $ContractOnlyBoundary.receipt -Context $Context -Requirement $ContractOnlyBoundary.requirement -Archive $ContractOnlyBoundary.archive)
 Assert-True ($ContractOnlyValidated.Count -eq 1 -and @($ContractOnlyValidated[0]).Count -eq 1) 'Aggregate must revalidate controller-contract without assuming portable is co-selected.'
+# The full-manifest loop pins every suite name and position, so a renamed suite inside the report never reaches the 25-suite
+# subset loop. Widening the subset list instead leaves the manifest valid and isolates that loop; portable proves the same bytes pass without it.
+$SavedContractSubset = $script:AcceptanceControllerContractCheckNames
+try {
+	$script:AcceptanceControllerContractCheckNames = @($SavedContractSubset) + @('renamed-suite-tests')
+	$RenamedSubsetBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract') -Report (New-FixturePortableReport $Context)
+	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $RenamedSubsetBoundary.receipt -Context $Context -Requirement $RenamedSubsetBoundary.requirement -Archive $RenamedSubsetBoundary.archive } 'receipt_semantic_evidence_invalid:controller-contract'
+	$RenamedPortableBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('portable') -Report (New-FixturePortableReport $Context)
+	Assert-True (@(Assert-CiAcceptanceReceipt -Receipt $RenamedPortableBoundary.receipt -Context $Context -Requirement $RenamedPortableBoundary.requirement -Archive $RenamedPortableBoundary.archive).Count -eq 1) 'Only the controller-contract subset loop may reject a report whose full manifest is valid.'
+} finally { $script:AcceptanceControllerContractCheckNames = $SavedContractSubset }
 $PortableOnlyBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('portable') -Report (New-FixturePortableReport $Context)
 Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $PortableOnlyBoundary.receipt -Context $Context -Requirement $ContractBoundary.requirement -Archive $PortableOnlyBoundary.archive } 'receipt_selection_mismatch'
 Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $ContractBoundary.receipt -Context $Context -Requirement $PortableOnlyBoundary.requirement -Archive $ContractBoundary.archive } 'receipt_selection_mismatch'
