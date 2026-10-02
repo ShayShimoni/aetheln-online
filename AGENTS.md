@@ -175,6 +175,10 @@ bounded, parallel work when appropriate. A short request does not itself
 authorize a commit, push, pull-request publication, merge, branch change, pull,
 deployment, deletion, or migration.
 
+Run `scripts/delivery/Test-BoardIntegrity.ps1` at session start, after every
+merge, and before every release cut; fix any violation it reports before other
+work continues ([Rule enforcement](docs/delivery-workflow.md#rule-enforcement)).
+
 ## Commit & Pull Request Guidelines
 
 Follow the scoped Conventional Commit-style subjects established by repository

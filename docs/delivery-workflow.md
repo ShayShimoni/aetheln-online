@@ -99,6 +99,27 @@ one bounded lane and never move the board, merge, or edit another lane.
   limitations. The lead verifies them independently before integrating; a
   lane's own report is not review evidence for its own work.
 
+## Rule enforcement
+
+`scripts/delivery/Test-BoardIntegrity.ps1` reads the board and open PRs
+through the locally authenticated `gh` and reports each violation as
+`<rule-id> #<issue> <detail>`: a `Done` issue with an unchecked box, an open
+PR whose issue is not in `Code Review` or `Blocked`, a closed issue outside
+`Done`, `Release Candidate`, or `Released`, an open issue in `Done` or
+`Released`, a `Release Candidate` or `Released` item without `Release`, and a
+`Blocked` item without `Blocked Reason`. It exits 1 on any violation; `-Json`
+emits the same result for tooling.
+
+Run it at session start, after every merge, and before every release cut. A
+violation is fixed, or ticketed when it cannot be fixed at once, before other
+work continues.
+
+The hosted `pull-request-policy` check (`.github/workflows/delivery-policy.yml`)
+needs no project access. It fails a PR whose base is `main` and whose head is
+not `release/*` or `hotfix/*`, whose head branch does not start with
+`feature/`, `fix/`, `docs/`, `chore/`, `release/`, `hotfix/`, or `codex/`, or
+whose title lacks `#<issue>`; only a `release/*` PR to `main` may omit it.
+
 ## Checks, protection, and merge
 
 Run the applicable, attainable [Issue #16 CI baseline](continuous-integration.md)
