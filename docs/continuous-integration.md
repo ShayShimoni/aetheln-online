@@ -348,8 +348,12 @@ pushes, so a consumer bound to it fails `selector_identity_mismatch` for every
 pull request behind its base. The context builder keeps strict equality between
 the bound base and the selector report, so a mismatch is a real contradiction.
 The selector retains its strict base/controller equality and ordered parent checks.
-The report's `source.baseRevision` and comparison diff use the accepted first
-parent.
+The report's `source.baseRevision` is the accepted first parent. The comparison
+diff runs from that first parent to the tested synthetic merge
+(`workflowRevision`), not to the head, and new-side attributes and any
+whole-tree attribute re-evaluation read the merge. A head behind its target is
+therefore classified by what the merge changes, not by the upstream changes it
+lacks. Windows checkout safety is still checked on the base and head trees.
 Missing ancestry or any conflicting parent/controller identity fails closed.
 The closed output roots are `schemaVersion`, `attemptAnchor`,
 `policy`, `source`, `execution`, `classification`, `selection`,

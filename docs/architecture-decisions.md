@@ -701,7 +701,11 @@ Every accepted decision records:
   verified first parent through the selector's `accepted_base_sha` output,
   never the raw event base. GitHub does not refresh the event base when the
   target branch moves, so that binding failed every pull request behind its
-  base with `selector_identity_mismatch`, on every rerun.
+  base with `selector_identity_mismatch`, on every rerun. The selector diffs
+  the first parent against the tested merge, not the head, so a head behind its
+  target is not charged with reversed upstream changes. Because the selector is
+  accepted-base code, that diff applies only to runs whose accepted base
+  already contains it.
   The selector remains non-authoritative and does not alter legacy CI gates.
 - **Historical Package 3A amendment:** Pin every approved remote action to its reviewed
   full commit SHA, implement and fixture-test exact per-job shadow receipt and

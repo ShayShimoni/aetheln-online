@@ -273,6 +273,22 @@ try {
 	Assert-Rejected { New-CiSelectionReport $WrongHeadContext $FixtureRepo } 'workflow_revision_parents_invalid'
 	$WrongControllerContext=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$StaleMerge;controllerRevision=$BaseRevision}
 	Assert-Rejected { New-CiSelectionReport $WrongControllerContext $FixtureRepo } 'workflow_revision_parents_invalid'
+	# A head behind its target is classified by what the tested merge changes:
+	# upstream-only changes are not reversed into the selection, and a file both
+	# sides changed is read from its auto-merged content.
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BaseRevision)
+	Write-Fixture 'docs/both.md' "1`n2`n3`n4`n5`n"; $null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','branch point'); $BranchPoint=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	Write-Fixture 'scripts/ci/Upstream.ps1' "Write-Output 'upstream'`n"; Write-Fixture 'docs/both.md' "upstream`n2`n3`n4`n5`n"
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','upstream advances'); $UpstreamRevision=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BranchPoint)
+	Write-Fixture 'AGENTS.md' "behind head`n"; Write-Fixture 'docs/both.md' "1`n2`n3`n4`nhead`n"
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','behind head'); $BehindHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$UpstreamRevision); $null=Invoke-FixtureGit @('merge','-q','--no-ff','-m','behind merge',$BehindHead); $BehindMerge=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$BehindReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$UpstreamRevision;headRevision=$BehindHead;workflowRevision=$BehindMerge;controllerRevision=$UpstreamRevision}) $FixtureRepo
+	$BehindSelected=@($BehindReport.selection.obligations | Where-Object selected | ForEach-Object id)
+	Assert-True ((@($BehindReport.classification.changedPaths) -join ',') -ceq 'AGENTS.md,docs/both.md' -and ($BehindSelected -join ',') -ceq 'portable' -and $BehindReport.source.headRevision -ceq $BehindHead) "A head behind its target must be classified from the tested merge, never from reversed upstream changes (paths: $(@($BehindReport.classification.changedPaths) -join ','); selected: $($BehindSelected -join ','))."
+	$MergedOid=[string]@(Invoke-FixtureGit @('rev-parse',"$BehindMerge`:docs/both.md"))[0]; $BehindHeadOid=[string]@(Invoke-FixtureGit @('rev-parse',"$BehindHead`:docs/both.md"))[0]
+	Assert-True (@($BehindReport.classification.entries | Where-Object { $_.newPath -ceq 'docs/both.md' -and $_.newOid -ceq $MergedOid }).Count -eq 1 -and $MergedOid -cne $BehindHeadOid) 'A file both sides changed must be classified from its auto-merged content.'
 	$null=Invoke-FixtureGit @('checkout','-q','--detach',$HeadRevision)
 	$Report=New-CiSelectionReport $Context $FixtureRepo
 	$ScheduleReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=$RunAttempt;revision=$HeadRevision;controllerRevision=$HeadRevision}) $FixtureRepo
