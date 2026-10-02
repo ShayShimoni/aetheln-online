@@ -1233,7 +1233,12 @@ Every accepted decision records:
     toolset that contributors use (both logs report product 14.44.35228).
     That resolution reads host configuration, so a `PreferredCompilers`,
     project-file format, or `PreferredAccessor` setting for the runner account
-    would change it. Contributor builds on the same host read the same inputs.
+    would change it. Contributor builds on the same host under the same user
+    account read the same inputs. A contributor can bring the plugin flip back
+    by preferring VS 2022 in the per-account `BuildConfiguration.xml` or by
+    setting `PreferredAccessor` to VS 2022 in the user-level
+    `EditorSettings.ini`. The plugin-header hash monitoring below would catch
+    that.
     Client and server compile invocations, and the compile host proof's
     `requiredWindowsArguments`, keep `-Compiler=VisualStudio2022`: those targets
     write their UHT and definition outputs under the project's `Intermediate`

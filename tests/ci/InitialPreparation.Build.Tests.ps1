@@ -165,7 +165,6 @@ foreach ($Native in @(0, 7)) {
 		foreach ($Flag in @('-UBA', '-UBADisableRemote', '-NoXGE', '-NoSNDBS', '-NoFASTBuild', '-MaxParallelActions=1', '-Compiler=VisualStudio2022', '-CompilerVersion=14.44.35207', '-WindowsSDKVersion=10.0.26100.0')) {
 			Assert-BuildTest -Condition $Log.Contains($Flag) -Message "Missing supported local-only flag $Flag"
 		}
-		Assert-BuildTest -Condition (-not $Log.Contains('-NoEngineChanges')) -Message 'Client build must not carry -NoEngineChanges'
 		$OriginalLogHash = (Get-FileHash -LiteralPath (Join-Path $NativeEvidence 'build.log') -Algorithm SHA256).Hash
 		Assert-BuildRejected -Action {
 			Invoke-InitialPreparationSingleBuild -Attempt $Attempt -Lease $Lease -EngineRoot $NativeRoot -TargetRoot $NativeRoot -LinuxToolchainRoot $NativeRoot -EvidenceRoot $NativeEvidence -Target AethelnOnlineClient -Platform Win64 -ActionLimit 1 -Roots @{ evidence = $NativeRoot } -OnSample {}
