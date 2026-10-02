@@ -38,7 +38,7 @@ function Get-TestActionManifest {
 
 function New-TestPublisherContext {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs and returns an in-memory publisher-context fixture without changing external state.')]
-	param()
+	param([string[]] $Selection = @('visual-package'))
 	return [pscustomobject][ordered]@{
 		schemaVersion = 'aetheln.ci-acceptance-context/v1'
 		repository = [pscustomobject][ordered]@{ fullName='ShayShimoni/aetheln-online' }
@@ -50,6 +50,7 @@ function New-TestPublisherContext {
 		actions = Get-TestActionManifest
 		run = [pscustomobject][ordered]@{ id='9001'; attempt=2 }
 		attemptAnchor = [pscustomobject][ordered]@{ schemaVersion='aetheln.current-attempt-anchor/v1'; runId='9001'; runAttempt=2; nonce=$script:PublisherNonce }
+		selection = [pscustomobject][ordered]@{ checks=@($Selection) }
 	}
 }
 
@@ -98,35 +99,36 @@ function New-TestVisualReport {
 	return [pscustomobject][ordered]@{schemaVersion='aetheln.visual-package-report/v1';repository='ShayShimoni/aetheln-online';revision=('c'*40);run=[pscustomobject][ordered]@{id='9001';attempt=2};results=$Results;conclusion='success'}
 }
 
-function Get-PublisherCaseDefinition([string] $CheckId) {
-	switch ($CheckId) {
-		'portable' { return @{ key='portable'; name='ci-report.json'; job='portable-receipt-shadow'; report=(New-TestPortableReport) } }
-		'native-client-server-compile' { return @{ key='native'; name='engine-runner-report.json'; job='native-receipt-shadow'; report=(New-TestNativeReport) } }
-		'visual-package' { return @{ key='visual'; name='visual-package-report.json'; job='visual-receipt-shadow'; report=(New-TestVisualReport) } }
-		default { throw 'test_check_invalid' }
+function Get-PublisherCaseDefinition([string] $ProducerKey) {
+	switch ($ProducerKey) {
+		'portable' { return @{ checks=@('portable'); name='ci-report.json'; job='portable-receipt-shadow'; report=(New-TestPortableReport) } }
+		'native' { return @{ checks=@('native-client-server-compile'); name='engine-runner-report.json'; job='native-receipt-shadow'; report=(New-TestNativeReport) } }
+		'visual' { return @{ checks=@('visual-package'); name='visual-package-report.json'; job='visual-receipt-shadow'; report=(New-TestVisualReport) } }
+		default { throw 'test_producer_key_invalid' }
 	}
 }
 
 function New-PublisherFixture {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Creates only caller-scoped disposable test inputs and output paths under the process temporary directory.')]
-	param([string] $Root, [string] $CheckId)
-	$Definition = Get-PublisherCaseDefinition $CheckId
+	param([string] $Root, [string] $ProducerKey, [string[]] $Selection = $null)
+	$Definition = Get-PublisherCaseDefinition $ProducerKey
+	if ($null -eq $Selection) { $Selection = $Definition.checks }
 	[void] (New-Item -ItemType Directory -Path $Root)
 	$EvidenceRoot = Join-Path $Root 'downloaded-evidence'
 	[void] (New-Item -ItemType Directory -Path $EvidenceRoot)
 	$ContextPath = Join-Path $Root 'context.json'
 	$EvidencePath = Join-Path $EvidenceRoot $Definition.name
-	[IO.File]::WriteAllText($ContextPath, ((New-TestPublisherContext | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
+	[IO.File]::WriteAllText($ContextPath, ((New-TestPublisherContext -Selection $Selection | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
 	[IO.File]::WriteAllText($EvidencePath, (($Definition.report | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
-	$OutputRoot = Join-Path $Root ('ci-receipt-' + $Definition.key + '-9001-2-' + $script:PublisherNonce)
+	$OutputRoot = Join-Path $Root ('ci-receipt-' + $ProducerKey + '-9001-2-' + $script:PublisherNonce)
 	return [pscustomobject]@{
-		CheckId=$CheckId; JobName=$Definition.job; ContextPath=$ContextPath; EvidenceRoot=$EvidenceRoot; EvidencePath=$EvidencePath
+		ProducerKey=$ProducerKey; Selection=@($Selection); JobName=$Definition.job; ContextPath=$ContextPath; EvidenceRoot=$EvidenceRoot; EvidencePath=$EvidencePath
 		EvidenceName=$Definition.name; EvidenceSha256=(Get-PublisherSha256 $EvidencePath); EvidenceSizeBytes=[long](Get-Item -LiteralPath $EvidencePath).Length; OutputRoot=$OutputRoot
 	}
 }
 
 function Invoke-PublisherFixture($Fixture) {
-	return Publish-CiAcceptanceReceipt -ContextPath $Fixture.ContextPath -CheckId $Fixture.CheckId -JobName $Fixture.JobName `
+	return Publish-CiAcceptanceReceipt -ContextPath $Fixture.ContextPath -ProducerKey $Fixture.ProducerKey -JobName $Fixture.JobName `
 		-EvidenceRoot $Fixture.EvidenceRoot -ExpectedEvidenceSha256 $Fixture.EvidenceSha256 `
 		-ExpectedEvidenceSizeBytes $Fixture.EvidenceSizeBytes -OutputRoot $Fixture.OutputRoot
 }
@@ -134,15 +136,16 @@ function Invoke-PublisherFixture($Fixture) {
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-receipt-publisher-' + [guid]::NewGuid().ToString('N'))
 try {
 	[void] (New-Item -ItemType Directory -Path $FixtureRoot)
-	foreach ($CheckId in @('portable','native-client-server-compile','visual-package')) {
-		$Case = New-PublisherFixture -Root (Join-Path $FixtureRoot $CheckId) -CheckId $CheckId
+	foreach ($ProducerKey in @('portable','native','visual')) {
+		$Case = New-PublisherFixture -Root (Join-Path $FixtureRoot $ProducerKey) -ProducerKey $ProducerKey
+		$CheckId = $Case.Selection[0]
 		$Published = Invoke-PublisherFixture $Case
 		Assert-True ($Published.artifactName -ceq (Split-Path -Leaf $Case.OutputRoot)) "The $CheckId publisher should return its exact artifact name."
 		$Entries = @(Get-ChildItem -LiteralPath $Case.OutputRoot -Force)
 		Assert-True ($Entries.Count -eq 2 -and @($Entries | Where-Object { -not $_.PSIsContainer }).Count -eq 2) "The $CheckId upload root must contain exactly receipt plus raw evidence."
 		$ReceiptPath = Join-Path $Case.OutputRoot 'ci-acceptance-receipt.json'
 		$Receipt = Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json
-		Assert-True ($Receipt.selection.checks.Count -eq 1 -and $Receipt.selection.checks[0] -ceq $CheckId) "The $CheckId receipt must select exactly its supported obligation."
+		Assert-True ($Receipt.selection.checks.Count -eq 1 -and $Receipt.selection.checks[0] -ceq $CheckId -and (@($Published.checks) -join ',') -ceq $CheckId) "The $CheckId receipt must select exactly its supported obligation."
 		Assert-True ($Receipt.acceptance.shadow -and -not $Receipt.acceptance.authoritative -and -not $Receipt.acceptance.grantsAcceptance) "The $CheckId receipt must remain shadow-only."
 		Assert-True ((Get-PublisherSha256 (Join-Path $Case.OutputRoot $Case.EvidenceName)) -ceq $Case.EvidenceSha256) "The $CheckId receipt archive must preserve exact evidence bytes."
 		if ($CheckId -ceq 'native-client-server-compile') {
@@ -152,59 +155,97 @@ try {
 		}
 	}
 
-	$Duplicate = New-PublisherFixture -Root (Join-Path $FixtureRoot 'duplicate') -CheckId 'visual-package'
+	# The portable producer covers controller-contract and portable from the one
+	# ci-report.json; only the selector-derived subset is published, in ordinal order.
+	foreach ($SelectionCase in @(
+		@{ name='both'; selection=@('portable','controller-contract'); expected='controller-contract,portable' },
+		@{ name='portable-only'; selection=@('portable'); expected='portable' },
+		@{ name='contract-only'; selection=@('controller-contract'); expected='controller-contract' },
+		@{ name='operational-dropped'; selection=@('portable','controller-operational-proof'); expected='portable' }
+	)) {
+		$Case = New-PublisherFixture -Root (Join-Path $FixtureRoot ('selection-' + $SelectionCase.name)) -ProducerKey portable -Selection $SelectionCase.selection
+		$Published = Invoke-PublisherFixture $Case
+		$Receipt = Get-Content -LiteralPath $Published.receiptPath -Raw | ConvertFrom-Json
+		$Entries = @(Get-ChildItem -LiteralPath $Case.OutputRoot -Force)
+		Assert-True ((@($Published.checks) -join ',') -ceq $SelectionCase.expected -and (@($Receipt.selection.checks) -join ',') -ceq $SelectionCase.expected -and (@($Receipt.results.checks | ForEach-Object { $_.id }) -join ',') -ceq $SelectionCase.expected) "Portable selection '$($SelectionCase.name)' must publish exactly the selector-derived subset."
+		Assert-True ($Entries.Count -eq 2 -and @($Receipt.results.checks | Where-Object { @($_.evidence).Count -ne 1 -or $_.evidence[0].name -cne 'ci-report.json' -or $_.evidence[0].sha256 -cne $Case.EvidenceSha256 -or $_.evidence[0].sizeBytes -ne $Case.EvidenceSizeBytes -or $_.jobName -cne 'portable-receipt-shadow' -or $null -ne $_.nativeExitCode -or $null -ne $_.cleanupVerified }).Count -eq 0) "Portable selection '$($SelectionCase.name)' must bind every result to the one exact ci-report.json."
+	}
+
+	$EmptySelection = New-PublisherFixture -Root (Join-Path $FixtureRoot 'selection-empty') -ProducerKey portable -Selection @('visual-package')
+	Assert-Rejected { Invoke-PublisherFixture $EmptySelection } 'receipt_publisher_selection_empty'
+	Assert-True (-not (Test-Path -LiteralPath $EmptySelection.OutputRoot)) 'A producer with no selected obligation must publish nothing.'
+
+	foreach ($SelectionShapeCase in @(
+		@{ name='missing'; mutate={ param($x) $x.PSObject.Properties.Remove('selection') } },
+		@{ name='extra'; mutate={ param($x) $x.selection | Add-Member -NotePropertyName extra -NotePropertyValue $true } },
+		@{ name='unknown'; mutate={ param($x) $x.selection.checks = @('portable','delivery-harness') } },
+		@{ name='duplicate'; mutate={ param($x) $x.selection.checks = @('portable','portable') } },
+		@{ name='not-array'; mutate={ param($x) $x.selection.checks = 'portable' } },
+		@{ name='empty'; mutate={ param($x) $x.selection.checks = @() } },
+		@{ name='non-string'; mutate={ param($x) $x.selection.checks = @(1) } }
+	)) {
+		$Shape = New-PublisherFixture -Root (Join-Path $FixtureRoot ('selection-shape-' + $SelectionShapeCase.name)) -ProducerKey portable
+		$ShapeContext = New-TestPublisherContext -Selection @('portable'); & $SelectionShapeCase.mutate $ShapeContext
+		[IO.File]::WriteAllText($Shape.ContextPath, (($ShapeContext | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
+		try { Assert-Rejected { Invoke-PublisherFixture $Shape } 'receipt_publisher_context_invalid' }
+		catch { throw "Publisher selection fixture '$($SelectionShapeCase.name)' failed: $($_.Exception.Message)" }
+	}
+
+	$Duplicate = New-PublisherFixture -Root (Join-Path $FixtureRoot 'duplicate') -ProducerKey visual
 	[void] (Invoke-PublisherFixture $Duplicate)
 	Assert-Rejected { Invoke-PublisherFixture $Duplicate } 'receipt_publisher_output_exists'
 
-	$Missing = New-PublisherFixture -Root (Join-Path $FixtureRoot 'missing') -CheckId 'visual-package'
+	$Missing = New-PublisherFixture -Root (Join-Path $FixtureRoot 'missing') -ProducerKey visual
 	Remove-Item -LiteralPath $Missing.EvidencePath -Force
 	Assert-Rejected { Invoke-PublisherFixture $Missing } 'receipt_publisher_evidence_inventory_invalid'
 
-	$Extra = New-PublisherFixture -Root (Join-Path $FixtureRoot 'extra') -CheckId 'visual-package'
+	$Extra = New-PublisherFixture -Root (Join-Path $FixtureRoot 'extra') -ProducerKey visual
 	[IO.File]::WriteAllText((Join-Path $Extra.EvidenceRoot 'extra.txt'), 'extra', $script:PublisherUtf8)
 	Assert-Rejected { Invoke-PublisherFixture $Extra } 'receipt_publisher_evidence_inventory_invalid'
 
-	$WrongName = New-PublisherFixture -Root (Join-Path $FixtureRoot 'wrong-name') -CheckId 'visual-package'
+	$WrongName = New-PublisherFixture -Root (Join-Path $FixtureRoot 'wrong-name') -ProducerKey visual
 	Move-Item -LiteralPath $WrongName.EvidencePath -Destination (Join-Path $WrongName.EvidenceRoot 'wrong.json')
 	Assert-Rejected { Invoke-PublisherFixture $WrongName } 'receipt_publisher_evidence_inventory_invalid'
 
-	$WrongDigest = New-PublisherFixture -Root (Join-Path $FixtureRoot 'wrong-digest') -CheckId 'visual-package'
+	$WrongDigest = New-PublisherFixture -Root (Join-Path $FixtureRoot 'wrong-digest') -ProducerKey visual
 	$WrongDigest.EvidenceSha256 = '0' * 64
 	Assert-Rejected { Invoke-PublisherFixture $WrongDigest } 'receipt_publisher_evidence_digest_mismatch'
 
-	$WrongSize = New-PublisherFixture -Root (Join-Path $FixtureRoot 'wrong-size') -CheckId 'visual-package'
+	$WrongSize = New-PublisherFixture -Root (Join-Path $FixtureRoot 'wrong-size') -ProducerKey visual
 	$WrongSize.EvidenceSizeBytes++
 	Assert-Rejected { Invoke-PublisherFixture $WrongSize } 'receipt_publisher_evidence_size_mismatch'
 
-	$MalformedEvidence = New-PublisherFixture -Root (Join-Path $FixtureRoot 'malformed-evidence') -CheckId 'visual-package'
+	$MalformedEvidence = New-PublisherFixture -Root (Join-Path $FixtureRoot 'malformed-evidence') -ProducerKey visual
 	[IO.File]::WriteAllText($MalformedEvidence.EvidencePath, '{', $script:PublisherUtf8)
 	$MalformedEvidence.EvidenceSha256 = Get-PublisherSha256 $MalformedEvidence.EvidencePath
 	$MalformedEvidence.EvidenceSizeBytes = [long](Get-Item $MalformedEvidence.EvidencePath).Length
 	Assert-Rejected { Invoke-PublisherFixture $MalformedEvidence } 'receipt_semantic_evidence_invalid:visual-package'
 
-	$OversizedEvidence = New-PublisherFixture -Root (Join-Path $FixtureRoot 'oversized-evidence') -CheckId 'visual-package'
+	$OversizedEvidence = New-PublisherFixture -Root (Join-Path $FixtureRoot 'oversized-evidence') -ProducerKey visual
 	$EvidenceStream = New-Object IO.FileStream($OversizedEvidence.EvidencePath, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)
 	try { $EvidenceStream.SetLength(4MB + 1) } finally { $EvidenceStream.Dispose() }
-	Assert-Rejected { Publish-CiAcceptanceReceipt -ContextPath $OversizedEvidence.ContextPath -CheckId $OversizedEvidence.CheckId -JobName $OversizedEvidence.JobName -EvidenceRoot $OversizedEvidence.EvidenceRoot -ExpectedEvidenceSha256 ('0'*64) -ExpectedEvidenceSizeBytes (4MB + 1) -OutputRoot $OversizedEvidence.OutputRoot } 'receipt_publisher_evidence_size_invalid'
+	Assert-Rejected { Publish-CiAcceptanceReceipt -ContextPath $OversizedEvidence.ContextPath -ProducerKey $OversizedEvidence.ProducerKey -JobName $OversizedEvidence.JobName -EvidenceRoot $OversizedEvidence.EvidenceRoot -ExpectedEvidenceSha256 ('0'*64) -ExpectedEvidenceSizeBytes (4MB + 1) -OutputRoot $OversizedEvidence.OutputRoot } 'receipt_publisher_evidence_size_invalid'
 
-	$Unsupported = New-PublisherFixture -Root (Join-Path $FixtureRoot 'unsupported') -CheckId 'visual-package'
-	Assert-Rejected { Publish-CiAcceptanceReceipt -ContextPath $Unsupported.ContextPath -CheckId 'content-reference-validation' -JobName $Unsupported.JobName -EvidenceRoot $Unsupported.EvidenceRoot -ExpectedEvidenceSha256 $Unsupported.EvidenceSha256 -ExpectedEvidenceSizeBytes $Unsupported.EvidenceSizeBytes -OutputRoot $Unsupported.OutputRoot } 'receipt_publisher_check_unsupported:content-reference-validation'
+	$Unsupported = New-PublisherFixture -Root (Join-Path $FixtureRoot 'unsupported') -ProducerKey visual
+	foreach ($UnsupportedKey in @('quality','Portable','portable-receipt-shadow')) {
+		Assert-Rejected { Publish-CiAcceptanceReceipt -ContextPath $Unsupported.ContextPath -ProducerKey $UnsupportedKey -JobName $Unsupported.JobName -EvidenceRoot $Unsupported.EvidenceRoot -ExpectedEvidenceSha256 $Unsupported.EvidenceSha256 -ExpectedEvidenceSizeBytes $Unsupported.EvidenceSizeBytes -OutputRoot $Unsupported.OutputRoot } ('receipt_publisher_key_unsupported:' + $UnsupportedKey)
+	}
 
-	$MalformedContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'malformed-context') -CheckId 'visual-package'
+	$MalformedContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'malformed-context') -ProducerKey visual
 	[IO.File]::WriteAllText($MalformedContext.ContextPath, '{', $script:PublisherUtf8)
 	Assert-Rejected { Invoke-PublisherFixture $MalformedContext } 'receipt_publisher_context_json_invalid'
 
-	$DuplicateContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'duplicate-context') -CheckId 'visual-package'
+	$DuplicateContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'duplicate-context') -ProducerKey visual
 	[IO.File]::WriteAllText($DuplicateContext.ContextPath, '{"schemaVersion":"aetheln.ci-acceptance-context/v1","schemaVersion":"aetheln.ci-acceptance-context/v1"}', $script:PublisherUtf8)
 	Assert-Rejected { Invoke-PublisherFixture $DuplicateContext } 'receipt_publisher_context_json_duplicate_property'
 
-	$ExtraContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'extra-context') -CheckId 'visual-package'
+	$ExtraContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'extra-context') -ProducerKey visual
 	$ExtraObject = New-TestPublisherContext
 	$ExtraObject | Add-Member -NotePropertyName unexpected -NotePropertyValue $true
 	[IO.File]::WriteAllText($ExtraContext.ContextPath, (($ExtraObject | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
 	Assert-Rejected { Invoke-PublisherFixture $ExtraContext } 'receipt_publisher_context_invalid'
 
-	$OversizedContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'oversized-context') -CheckId 'visual-package'
+	$OversizedContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'oversized-context') -ProducerKey visual
 	[IO.File]::WriteAllBytes($OversizedContext.ContextPath, [byte[]]::new(65537))
 	Assert-Rejected { Invoke-PublisherFixture $OversizedContext } 'receipt_publisher_context_limit'
 
@@ -213,38 +254,38 @@ try {
 		@{ name='wrong-revision'; mutate={param($x)$x.source.testedRevision=('9'*40);$x.workflow.revision=('9'*40)}; reason='receipt_semantic_evidence_invalid:visual-package' },
 		@{ name='wrong-run'; mutate={param($x)$x.run.id='9002';$x.attemptAnchor.runId='9002'}; reason='receipt_semantic_evidence_invalid:visual-package' }
 	)) {
-		$Identity = New-PublisherFixture -Root (Join-Path $FixtureRoot $IdentityCase.name) -CheckId 'visual-package'
+		$Identity = New-PublisherFixture -Root (Join-Path $FixtureRoot $IdentityCase.name) -ProducerKey visual
 		$Context = New-TestPublisherContext; & $IdentityCase.mutate $Context
 		[IO.File]::WriteAllText($Identity.ContextPath, (($Context | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
 		if ($IdentityCase.name -ceq 'wrong-run') { $Identity.OutputRoot = Join-Path (Split-Path -Parent $Identity.OutputRoot) ('ci-receipt-visual-9002-2-' + $script:PublisherNonce) }
 		Assert-Rejected { Invoke-PublisherFixture $Identity } $IdentityCase.reason
 	}
 
-	$WrongOutput = New-PublisherFixture -Root (Join-Path $FixtureRoot 'wrong-output') -CheckId 'visual-package'
+	$WrongOutput = New-PublisherFixture -Root (Join-Path $FixtureRoot 'wrong-output') -ProducerKey visual
 	$WrongOutput.OutputRoot = Join-Path (Split-Path -Parent $WrongOutput.OutputRoot) 'wrong-artifact-name'
 	Assert-Rejected { Invoke-PublisherFixture $WrongOutput } 'receipt_publisher_output_name_invalid'
 
-	$OverlappingOutput = New-PublisherFixture -Root (Join-Path $FixtureRoot 'overlap') -CheckId 'visual-package'
+	$OverlappingOutput = New-PublisherFixture -Root (Join-Path $FixtureRoot 'overlap') -ProducerKey visual
 	$OverlappingOutput.OutputRoot = Join-Path $OverlappingOutput.EvidenceRoot ('ci-receipt-visual-9001-2-' + $script:PublisherNonce)
 	Assert-Rejected { Invoke-PublisherFixture $OverlappingOutput } 'receipt_publisher_path_overlap'
 
-	$TraversalOutput = New-PublisherFixture -Root (Join-Path $FixtureRoot 'traversal-output') -CheckId 'visual-package'
+	$TraversalOutput = New-PublisherFixture -Root (Join-Path $FixtureRoot 'traversal-output') -ProducerKey visual
 	$TraversalOutput.OutputRoot = (Join-Path (Split-Path -Parent $TraversalOutput.OutputRoot) ('unused\..\ci-receipt-visual-9001-2-' + $script:PublisherNonce))
 	Assert-Rejected { Invoke-PublisherFixture $TraversalOutput } 'receipt_publisher_path_traversal'
 
-	$TraversalEvidence = New-PublisherFixture -Root (Join-Path $FixtureRoot 'traversal-evidence') -CheckId 'visual-package'
+	$TraversalEvidence = New-PublisherFixture -Root (Join-Path $FixtureRoot 'traversal-evidence') -ProducerKey visual
 	$TraversalEvidence.EvidenceRoot = Join-Path $TraversalEvidence.EvidenceRoot '..\downloaded-evidence'
 	Assert-Rejected { Invoke-PublisherFixture $TraversalEvidence } 'receipt_publisher_path_traversal'
 
-	$TraversalContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'traversal-context') -CheckId 'visual-package'
+	$TraversalContext = New-PublisherFixture -Root (Join-Path $FixtureRoot 'traversal-context') -ProducerKey visual
 	$TraversalContext.ContextPath = Join-Path (Split-Path -Parent $TraversalContext.ContextPath) 'unused\..\context.json'
 	Assert-Rejected { Invoke-PublisherFixture $TraversalContext } 'receipt_publisher_path_traversal'
 
-	$MissingOutputParent = New-PublisherFixture -Root (Join-Path $FixtureRoot 'missing-output-parent') -CheckId 'visual-package'
+	$MissingOutputParent = New-PublisherFixture -Root (Join-Path $FixtureRoot 'missing-output-parent') -ProducerKey visual
 	$MissingOutputParent.OutputRoot = Join-Path (Join-Path (Split-Path -Parent $MissingOutputParent.OutputRoot) 'absent') ('ci-receipt-visual-9001-2-' + $script:PublisherNonce)
 	Assert-Rejected { Invoke-PublisherFixture $MissingOutputParent } 'receipt_publisher_output_parent_invalid'
 
-	$HostileEnvironment = New-PublisherFixture -Root (Join-Path $FixtureRoot 'hostile-environment') -CheckId 'visual-package'
+	$HostileEnvironment = New-PublisherFixture -Root (Join-Path $FixtureRoot 'hostile-environment') -ProducerKey visual
 	$SavedEnvironment = @{}
 	foreach ($Name in @('AETHELN_RECEIPT_CONTEXT','AETHELN_RECEIPT_EVIDENCE_ROOT','AETHELN_RECEIPT_OUTPUT_ROOT','INPUTPATH','EVIDENCEROOT','OUTPUTPATH')) {
 		$SavedEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name, 'Process')
@@ -254,8 +295,8 @@ try {
 	finally { foreach ($Name in $SavedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $SavedEnvironment[$Name], 'Process') } }
 	Assert-True (Test-Path -LiteralPath (Join-Path $HostileEnvironment.OutputRoot 'ci-acceptance-receipt.json') -PathType Leaf) 'Hostile ambient overrides must not redirect publication.'
 
-	$Cli = New-PublisherFixture -Root (Join-Path $FixtureRoot 'cli') -CheckId 'portable'
-	& $ScriptPath -ContextPath $Cli.ContextPath -CheckId $Cli.CheckId -JobName $Cli.JobName -EvidenceRoot $Cli.EvidenceRoot `
+	$Cli = New-PublisherFixture -Root (Join-Path $FixtureRoot 'cli') -ProducerKey portable
+	& $ScriptPath -ContextPath $Cli.ContextPath -ProducerKey $Cli.ProducerKey -JobName $Cli.JobName -EvidenceRoot $Cli.EvidenceRoot `
 		-ExpectedEvidenceSha256 $Cli.EvidenceSha256 -ExpectedEvidenceSizeBytes $Cli.EvidenceSizeBytes -OutputRoot $Cli.OutputRoot
 	Assert-True (Test-Path -LiteralPath (Join-Path $Cli.OutputRoot 'ci-acceptance-receipt.json') -PathType Leaf) 'The script entry point must publish the same bounded receipt as the function entry point.'
 
@@ -265,14 +306,14 @@ try {
 	[IO.File]::WriteAllText($JunctionFile, ((New-TestVisualReport | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
 	$JunctionRoot = Join-Path $FixtureRoot 'junction-evidence'
 	[void] (New-Item -ItemType Junction -Path $JunctionRoot -Target $JunctionTarget)
-	$JunctionCase = New-PublisherFixture -Root (Join-Path $FixtureRoot 'junction-case') -CheckId 'visual-package'
-	Assert-Rejected { Publish-CiAcceptanceReceipt -ContextPath $JunctionCase.ContextPath -CheckId $JunctionCase.CheckId -JobName $JunctionCase.JobName -EvidenceRoot $JunctionRoot -ExpectedEvidenceSha256 (Get-PublisherSha256 $JunctionFile) -ExpectedEvidenceSizeBytes ([long](Get-Item $JunctionFile).Length) -OutputRoot $JunctionCase.OutputRoot } 'receipt_publisher_reparse_path_invalid'
+	$JunctionCase = New-PublisherFixture -Root (Join-Path $FixtureRoot 'junction-case') -ProducerKey visual
+	Assert-Rejected { Publish-CiAcceptanceReceipt -ContextPath $JunctionCase.ContextPath -ProducerKey $JunctionCase.ProducerKey -JobName $JunctionCase.JobName -EvidenceRoot $JunctionRoot -ExpectedEvidenceSha256 (Get-PublisherSha256 $JunctionFile) -ExpectedEvidenceSizeBytes ([long](Get-Item $JunctionFile).Length) -OutputRoot $JunctionCase.OutputRoot } 'receipt_publisher_reparse_path_invalid'
 
 	$OutputJunctionTarget = Join-Path $FixtureRoot 'output-junction-target'
 	[void] (New-Item -ItemType Directory -Path $OutputJunctionTarget)
 	$OutputJunction = Join-Path $FixtureRoot 'output-junction'
 	[void] (New-Item -ItemType Junction -Path $OutputJunction -Target $OutputJunctionTarget)
-	$OutputJunctionCase = New-PublisherFixture -Root (Join-Path $FixtureRoot 'output-junction-case') -CheckId 'visual-package'
+	$OutputJunctionCase = New-PublisherFixture -Root (Join-Path $FixtureRoot 'output-junction-case') -ProducerKey visual
 	$OutputJunctionCase.OutputRoot = Join-Path $OutputJunction ('ci-receipt-visual-9001-2-' + $script:PublisherNonce)
 	Assert-Rejected { Invoke-PublisherFixture $OutputJunctionCase } 'receipt_publisher_reparse_path_invalid'
 
@@ -282,12 +323,35 @@ try {
 	[IO.File]::WriteAllText($ContextJunctionFile, ((New-TestPublisherContext | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
 	$ContextJunction = Join-Path $FixtureRoot 'context-junction'
 	[void] (New-Item -ItemType Junction -Path $ContextJunction -Target $ContextJunctionTarget)
-	$ContextJunctionCase = New-PublisherFixture -Root (Join-Path $FixtureRoot 'context-junction-case') -CheckId 'visual-package'
+	$ContextJunctionCase = New-PublisherFixture -Root (Join-Path $FixtureRoot 'context-junction-case') -ProducerKey visual
 	$ContextJunctionCase.ContextPath = Join-Path $ContextJunction 'context.json'
 	Assert-Rejected { Invoke-PublisherFixture $ContextJunctionCase } 'receipt_publisher_reparse_path_invalid'
 }
 finally {
 	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+}
+
+$ContextSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\New-CiAcceptanceAggregateContext.ps1'))
+$ContextListMatch = [regex]::Match($ContextSource, '\$script:AggregateContextCheckIds = @\(([^)]*)\)')
+Assert-True $ContextListMatch.Success 'Aggregate context check-id list must be discoverable for lockstep validation.'
+$ContextCheckIds = @([regex]::Matches($ContextListMatch.Groups[1].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+Assert-True ($ContextCheckIds.Count -eq 8 -and $script:PublisherCheckIds.Count -eq 8) 'Aggregate context and publisher must both declare exactly eight check ids.'
+$SortedContextCheckIds = [string[]] $ContextCheckIds
+[Array]::Sort($SortedContextCheckIds, [StringComparer]::Ordinal)
+$SortedPublisherCheckIds = [string[]] $script:PublisherCheckIds
+[Array]::Sort($SortedPublisherCheckIds, [StringComparer]::Ordinal)
+for ($Index = 0; $Index -lt 8; $Index++) {
+	Assert-True ($SortedContextCheckIds[$Index] -ceq $SortedPublisherCheckIds[$Index]) "Aggregate context and publisher check ids must match in lockstep (index $Index)."
+}
+
+# The aggregate filters each template job's checks by selection in template order; the publisher filters its contract checks in
+# contract order. Both must agree per job key or the receipt fails receipt_selection_mismatch.
+$RequirementsTemplate = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ci-acceptance-requirements.json') -Raw | ConvertFrom-Json
+Assert-True (@($RequirementsTemplate.jobs).Count -eq @($script:PublisherContracts.Keys).Count) 'Publisher contracts and requirements template must declare the same number of jobs.'
+foreach ($TemplateJob in @($RequirementsTemplate.jobs)) {
+	Assert-True (@($script:PublisherContracts.Keys) -ccontains $TemplateJob.key) "Publisher must declare a contract for requirements-template job '$($TemplateJob.key)'."
+	$ContractChecks = @($script:PublisherContracts[$TemplateJob.key].Checks)
+	Assert-True ((@($TemplateJob.checks | Where-Object { $ContractChecks -ccontains $_ }) -join "`n") -ceq ($ContractChecks -join "`n")) "Publisher contract '$($TemplateJob.key)' checks must be an in-order subset of the requirements-template job checks."
 }
 
 Write-Output 'PASS: CI acceptance receipt publisher validates exact supported evidence and emits bounded shadow-only upload roots'

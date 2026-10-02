@@ -316,7 +316,7 @@ jobs:
             'controller-operational-proof' = 'controller_operational_proof_required'
             'clean-package-provenance-smoke' = 'clean_package_provenance_smoke_required'
           }
-          $LiveProducerChecks = @('native-client-server-compile', 'portable', 'visual-package')
+          $LiveProducerChecks = @('controller-contract', 'native-client-server-compile', 'portable', 'visual-package')
           $Obligations = @($Parsed.selection.obligations)
           if ($Obligations.Count -ne $ExpectedObligations.Count) { throw 'shadow_selection_obligations_invalid' }
           $AggregateReady = $true
@@ -890,7 +890,7 @@ jobs:
             -IdentityContextOutputPath $ContextPath | Out-Null
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/Publish-CiAcceptanceReceipt.ps1 `
             -ContextPath $ContextPath `
-            -CheckId portable `
+            -ProducerKey portable `
             -JobName portable-receipt-shadow `
             -EvidenceRoot '${{ runner.temp }}/aetheln-portable-evidence' `
             -ExpectedEvidenceSha256 $env:AETHELN_EVIDENCE_SHA256 `
@@ -979,7 +979,7 @@ jobs:
             -IdentityContextOutputPath $ContextPath | Out-Null
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/Publish-CiAcceptanceReceipt.ps1 `
             -ContextPath $ContextPath `
-            -CheckId native-client-server-compile `
+            -ProducerKey native `
             -JobName native-receipt-shadow `
             -EvidenceRoot '${{ runner.temp }}/aetheln-native-evidence' `
             -ExpectedEvidenceSha256 $env:AETHELN_EVIDENCE_SHA256 `
@@ -1068,7 +1068,7 @@ jobs:
             -IdentityContextOutputPath $ContextPath | Out-Null
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/Publish-CiAcceptanceReceipt.ps1 `
             -ContextPath $ContextPath `
-            -CheckId visual-package `
+            -ProducerKey visual `
             -JobName visual-receipt-shadow `
             -EvidenceRoot '${{ runner.temp }}/aetheln-visual-evidence' `
             -ExpectedEvidenceSha256 $env:AETHELN_EVIDENCE_SHA256 `

@@ -1,7 +1,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
 	[string] $ContextPath,
-	[string] $CheckId,
+	[string] $ProducerKey,
 	[string] $JobName,
 	[string] $EvidenceRoot,
 	[string] $ExpectedEvidenceSha256,
@@ -18,10 +18,12 @@ $script:PublisherEvidenceLimit = 4MB
 $script:PublisherReceiptLimit = 64KB
 $script:PublisherUtf8 = New-Object Text.UTF8Encoding($false, $true)
 $script:PublisherUtf8NoBom = New-Object Text.UTF8Encoding($false)
+$script:PublisherCheckIds = @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','native-client-server-compile','portable','unreal-editor-automation','visual-package')
+# Each producer key publishes one typed report; Checks are the ordinal-sorted obligations that report can prove.
 $script:PublisherContracts = @{
-	'portable' = [pscustomobject]@{ Key='portable'; EvidenceName='ci-report.json'; NativeExitCode=$null; CleanupVerified=$null }
-	'native-client-server-compile' = [pscustomobject]@{ Key='native'; EvidenceName='engine-runner-report.json'; NativeExitCode=0; CleanupVerified=$true }
-	'visual-package' = [pscustomobject]@{ Key='visual'; EvidenceName='visual-package-report.json'; NativeExitCode=$null; CleanupVerified=$null }
+	'portable' = [pscustomobject]@{ EvidenceName='ci-report.json'; Checks=@('controller-contract','portable'); NativeExitCode=$null; CleanupVerified=$null }
+	'native' = [pscustomobject]@{ EvidenceName='engine-runner-report.json'; Checks=@('native-client-server-compile'); NativeExitCode=0; CleanupVerified=$true }
+	'visual' = [pscustomobject]@{ EvidenceName='visual-package-report.json'; Checks=@('visual-package'); NativeExitCode=$null; CleanupVerified=$null }
 }
 
 function Assert-PublisherClosedObject {
@@ -140,8 +142,15 @@ function Read-PublisherContext {
 	Assert-PublisherUniqueJsonProperties -Raw $Raw
 	try { $Context = ConvertFrom-Json -InputObject $Raw }
 	catch { throw 'receipt_publisher_context_json_invalid' }
-	Assert-PublisherClosedObject -Value $Context -PropertyNames @('schemaVersion','repository','event','source','workflow','controller','policy','actions','run','attemptAnchor')
+	Assert-PublisherClosedObject -Value $Context -PropertyNames @('schemaVersion','repository','event','source','workflow','controller','policy','actions','run','attemptAnchor','selection')
 	if ($Context.schemaVersion -isnot [string] -or $Context.schemaVersion -cne $script:PublisherContextSchema) { throw 'receipt_publisher_context_invalid' }
+	Assert-PublisherClosedObject -Value $Context.selection -PropertyNames @('checks')
+	$SelectedChecks = $Context.selection.checks
+	if ($SelectedChecks -isnot [array] -or $SelectedChecks.Count -lt 1 -or $SelectedChecks.Count -gt $script:PublisherCheckIds.Count) { throw 'receipt_publisher_context_invalid' }
+	$SeenChecks = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	foreach ($Check in $SelectedChecks) {
+		if ($Check -isnot [string] -or $script:PublisherCheckIds -cnotcontains $Check -or -not $SeenChecks.Add($Check)) { throw 'receipt_publisher_context_invalid' }
+	}
 	return $Context
 }
 
@@ -185,16 +194,19 @@ function Publish-CiAcceptanceReceipt {
 	[CmdletBinding(SupportsShouldProcess)]
 	param(
 		[Parameter(Mandatory)] [string] $ContextPath,
-		[Parameter(Mandatory)] [string] $CheckId,
+		[Parameter(Mandatory)] [string] $ProducerKey,
 		[Parameter(Mandatory)] [string] $JobName,
 		[Parameter(Mandatory)] [string] $EvidenceRoot,
 		[Parameter(Mandatory)] [string] $ExpectedEvidenceSha256,
 		[Parameter(Mandatory)] [long] $ExpectedEvidenceSizeBytes,
 		[Parameter(Mandatory)] [string] $OutputRoot
 	)
-	if (-not $script:PublisherContracts.ContainsKey($CheckId)) { throw ('receipt_publisher_check_unsupported:' + $CheckId) }
-	$Contract = $script:PublisherContracts[$CheckId]
+	if (@($script:PublisherContracts.Keys) -cnotcontains $ProducerKey) { throw ('receipt_publisher_key_unsupported:' + $ProducerKey) }
+	$Contract = $script:PublisherContracts[$ProducerKey]
 	$Context = Read-PublisherContext -Path $ContextPath
+	# Selection comes only from the selector-derived identity context; checks this producer cannot prove are dropped.
+	$Checks = @($Contract.Checks | Where-Object { @($Context.selection.checks) -ccontains $_ })
+	if ($Checks.Count -eq 0) { throw 'receipt_publisher_selection_empty' }
 	if ([string]::IsNullOrWhiteSpace($JobName)) { throw 'receipt_publisher_job_invalid' }
 	try {
 		Assert-PublisherClosedObject -Value $Context.run -PropertyNames @('id','attempt')
@@ -222,7 +234,7 @@ function Publish-CiAcceptanceReceipt {
 	try { $FullOutputRoot = [IO.Path]::GetFullPath($OutputRoot).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) }
 	catch { throw 'receipt_publisher_output_path_invalid' }
 	if ([string]::IsNullOrWhiteSpace($FullOutputRoot) -or (Test-Path -LiteralPath $FullOutputRoot)) { throw 'receipt_publisher_output_exists' }
-	$ExpectedArtifactName = 'ci-receipt-' + $Contract.Key + '-' + $NormalizedRun.id + '-' + $NormalizedRun.attempt + '-' + $NormalizedAttemptAnchor.nonce
+	$ExpectedArtifactName = 'ci-receipt-' + $ProducerKey + '-' + $NormalizedRun.id + '-' + $NormalizedRun.attempt + '-' + $NormalizedAttemptAnchor.nonce
 	if ((Split-Path -Path $FullOutputRoot -Leaf) -cne $ExpectedArtifactName) { throw 'receipt_publisher_output_name_invalid' }
 	$OutputParent = Split-Path -Path $FullOutputRoot -Parent
 	Assert-PublisherPathWithoutReparse -Path $OutputParent -RequiredType Container -Reason 'receipt_publisher_output_parent_invalid'
@@ -242,10 +254,10 @@ function Publish-CiAcceptanceReceipt {
 		actions = $Context.actions
 		run = $NormalizedRun
 		attemptAnchor = $NormalizedAttemptAnchor
-		selection = [pscustomobject][ordered]@{ checks=@($CheckId) }
-		results = [pscustomobject][ordered]@{ checks=@(
+		selection = [pscustomobject][ordered]@{ checks=$Checks }
+		results = [pscustomobject][ordered]@{ checks=@($Checks | ForEach-Object {
 			[pscustomobject][ordered]@{
-				id=$CheckId
+				id=$_
 				jobName=$JobName
 				conclusion='success'
 				nativeExitCode=$Contract.NativeExitCode
@@ -254,7 +266,7 @@ function Publish-CiAcceptanceReceipt {
 				cleanupVerified=$Contract.CleanupVerified
 				evidence=@([pscustomobject][ordered]@{ name=$Contract.EvidenceName; sha256=$ExpectedEvidenceSha256; sizeBytes=[long]$ExpectedEvidenceSizeBytes })
 			}
-		) }
+		}) }
 	}
 
 	$WorkRoot = Join-Path $OutputParent ('.ci-acceptance-publisher-' + [guid]::NewGuid().ToString('N') + '.tmp')
@@ -298,6 +310,7 @@ function Publish-CiAcceptanceReceipt {
 			artifactName=$ExpectedArtifactName
 			outputRoot=$FullOutputRoot
 			receiptPath=(Join-Path $FullOutputRoot 'ci-acceptance-receipt.json')
+			checks=$Checks
 			evidenceName=[string]$Contract.EvidenceName
 			evidenceSha256=$ExpectedEvidenceSha256
 			evidenceSizeBytes=[long]$ExpectedEvidenceSizeBytes
@@ -310,10 +323,10 @@ function Publish-CiAcceptanceReceipt {
 	}
 }
 
-if ($ContextPath -or $CheckId -or $JobName -or $EvidenceRoot -or $ExpectedEvidenceSha256 -or $ExpectedEvidenceSizeBytes -ge 0 -or $OutputRoot) {
-	if (-not $ContextPath -or -not $CheckId -or -not $JobName -or -not $EvidenceRoot -or -not $ExpectedEvidenceSha256 -or $ExpectedEvidenceSizeBytes -lt 0 -or -not $OutputRoot) {
-		throw 'ContextPath, CheckId, JobName, EvidenceRoot, ExpectedEvidenceSha256, ExpectedEvidenceSizeBytes, and OutputRoot are required together.'
+if ($ContextPath -or $ProducerKey -or $JobName -or $EvidenceRoot -or $ExpectedEvidenceSha256 -or $ExpectedEvidenceSizeBytes -ge 0 -or $OutputRoot) {
+	if (-not $ContextPath -or -not $ProducerKey -or -not $JobName -or -not $EvidenceRoot -or -not $ExpectedEvidenceSha256 -or $ExpectedEvidenceSizeBytes -lt 0 -or -not $OutputRoot) {
+		throw 'ContextPath, ProducerKey, JobName, EvidenceRoot, ExpectedEvidenceSha256, ExpectedEvidenceSizeBytes, and OutputRoot are required together.'
 	}
-	Publish-CiAcceptanceReceipt -ContextPath $ContextPath -CheckId $CheckId -JobName $JobName -EvidenceRoot $EvidenceRoot `
+	Publish-CiAcceptanceReceipt -ContextPath $ContextPath -ProducerKey $ProducerKey -JobName $JobName -EvidenceRoot $EvidenceRoot `
 		-ExpectedEvidenceSha256 $ExpectedEvidenceSha256 -ExpectedEvidenceSizeBytes $ExpectedEvidenceSizeBytes -OutputRoot $OutputRoot | Out-Null
 }

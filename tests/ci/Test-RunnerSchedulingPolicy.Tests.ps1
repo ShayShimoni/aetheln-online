@@ -122,9 +122,9 @@ Assert-True ($ShadowSelection -notmatch '(?m)^\s+if: always\(\)\r?$') 'A failed 
 # admission. Unsupported selected checks produce a green no-acceptance gap;
 # the supported subset runs the real shadow aggregate and failures stay red.
 $ReceiptContracts = @(
-	@{ Job='portable-receipt-shadow'; Producer='quality-gates'; Required='portable_required'; Check='portable'; Key='portable' },
-	@{ Job='native-receipt-shadow'; Producer='trusted-candidate-compile'; Required='native_client_server_compile_required'; Check='native-client-server-compile'; Key='native' },
-	@{ Job='visual-receipt-shadow'; Producer='visual-proof'; Required='visual_package_required'; Check='visual-package'; Key='visual' }
+	@{ Job='portable-receipt-shadow'; Producer='quality-gates'; Required='portable_required'; Key='portable' },
+	@{ Job='native-receipt-shadow'; Producer='trusted-candidate-compile'; Required='native_client_server_compile_required'; Key='native' },
+	@{ Job='visual-receipt-shadow'; Producer='visual-proof'; Required='visual_package_required'; Key='visual' }
 )
 foreach ($Receipt in $ReceiptContracts) {
 	$ReceiptBody = [string] $JobBodies[$Receipt.Job]
@@ -133,7 +133,7 @@ foreach ($Receipt in $ReceiptContracts) {
 	Assert-MatchCount -Text $ReceiptBody -Pattern ('(?m)^        uses: ' + [regex]::Escape($DownloadAction) + '\r?$') -Expected 2 -Message "$($Receipt.Job) must download selector and raw evidence by exact artifact ID."
 	$ProducerId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.report_artifact_id }}')
 	Assert-True ($ReceiptBody -match 'artifact-ids: \$\{\{ needs\.ci-selection-shadow\.outputs\.selector_artifact_id \}\}' -and $ReceiptBody -match ("artifact-ids: " + $ProducerId)) "$($Receipt.Job) must use direct needs artifact-ID bindings."
-	Assert-True ($ReceiptBody -match 'scripts/ci/New-CiAcceptanceAggregateContext\.ps1' -and $ReceiptBody -match '-Mode Identity' -and $ReceiptBody -match 'scripts/ci/Publish-CiAcceptanceReceipt\.ps1' -and $ReceiptBody -match ("-CheckId " + [regex]::Escape($Receipt.Check) + ' `') -and $ReceiptBody -match ("-JobName " + [regex]::Escape($Receipt.Job) + ' `')) "$($Receipt.Job) must use the exact identity and receipt scripts with reviewed identities."
+	Assert-True ($ReceiptBody -match 'scripts/ci/New-CiAcceptanceAggregateContext\.ps1' -and $ReceiptBody -match '-Mode Identity' -and $ReceiptBody -match 'scripts/ci/Publish-CiAcceptanceReceipt\.ps1' -and $ReceiptBody -match ("-ProducerKey " + [regex]::Escape($Receipt.Key) + ' `') -and $ReceiptBody -match ("-JobName " + [regex]::Escape($Receipt.Job) + ' `')) "$($Receipt.Job) must use the exact identity and receipt scripts with reviewed identities."
 	Assert-True ($ReceiptBody -match ("ci-receipt-" + $Receipt.Key + '-') -and $ReceiptBody -match '\$\{\{ needs\.ci-selection-shadow\.outputs\.attempt_nonce \}\}') "$($Receipt.Job) receipt name must be bound to the selector nonce."
 	foreach ($Output in @('artifact_id','artifact_name','artifact_digest')) { Assert-True ($ReceiptBody -match "(?m)^      ${Output}: ") "$($Receipt.Job) must expose direct upload output '$Output'." }
 	Assert-True ($ReceiptBody -notmatch '(?m)^\s+if: always\(\)\r?$' -and $ReceiptBody -notmatch '(?m)^\s+continue-on-error:') "$($Receipt.Job) must fail red on unexpected publication failures."
