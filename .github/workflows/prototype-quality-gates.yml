@@ -696,7 +696,7 @@ jobs:
             Write-Output $ResultText
             try { $CaptureFailed = $null -ne ($ResultText | ConvertFrom-Json).infrastructureFailure } catch { $CaptureFailed = $true }
           }
-          # Exit 5 is UBT FailedDueToEngineChange: -NoEngineChanges refused to rewrite engine files.
+          # Exit 5 is UBT FailedDueToEngineChange (-NoEngineChanges, deferred by TA-020 until the NetCore follow-up).
           if ($BuildExit -ne 0) { if ($CaptureFailed) { Exit-Automation 'editor_build_capture_failed' } elseif ($BuildExit -eq 5) { Exit-Automation 'editor_build_engine_changes_required' } else { Exit-Automation 'editor_build_failed' } }
       - name: Run frozen Unreal automation filter
         id: automation_run

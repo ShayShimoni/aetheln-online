@@ -409,7 +409,7 @@ Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $
 # The editor build prints only the two masks and the
 # wrapper's native-result.json (target, platform, exit code, failure class).
 Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 3 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'")) 'The editor build may print only the masks and the bounded native result record.'
-# UBT exit 5 (-NoEngineChanges) has its own fixed reason, checked before the generic failure.
+# UBT exit 5 (-NoEngineChanges, deferred by TA-020) keeps its own fixed reason, checked before the generic failure.
 Assert-True ($EditorBuild.Contains("elseif (`$BuildExit -eq 5) { Exit-Automation 'editor_build_engine_changes_required' }") -and $EditorBuild.IndexOf('editor_build_engine_changes_required') -lt $EditorBuild.IndexOf("'editor_build_failed'")) 'The editor build must map UBT exit 5 to editor_build_engine_changes_required before editor_build_failed.'
 $ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
 $UntrackedInputQuery = [regex]::Matches($ManagedWorkspaceSource, "'(ls-files --others -z -- [^']+)'")
@@ -484,7 +484,7 @@ try {
 		Assert-True ($Gated.failure -ceq $WorkspaceCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq ('reason=' + $WorkspaceCase.reason + "`n") -and -not (Test-Path -LiteralPath (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'))) "A workspace that fails '$($WorkspaceCase.reason)' must stop before the editor build."
 	}
 	# Editor build exit mapping (TA-020): through the workspace copy of the
-	# wrapper, UBT exit 5 (-NoEngineChanges refused an engine rewrite) records
+	# wrapper, UBT exit 5 (a deferred -NoEngineChanges refusal) records
 	# editor_build_engine_changes_required, any other exit editor_build_failed,
 	# and the refused engine file list stays in the runner-local build.log.
 	$EditorWorkspace = Join-Path $AutomationFixtureRoot 'editor-workspace'
