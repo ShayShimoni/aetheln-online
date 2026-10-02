@@ -117,8 +117,9 @@ work continues.
 The hosted `pull-request-policy` check (`.github/workflows/delivery-policy.yml`)
 needs no project access. It fails a PR whose base is `main` and whose head is
 not `release/*` or `hotfix/*`, whose head branch does not start with
-`feature/`, `fix/`, `docs/`, `chore/`, `release/`, `hotfix/`, or `codex/`, or
-whose title lacks `#<issue>`; only a `release/*` PR to `main` may omit it.
+`feature/`, `fix/`, `docs/`, `chore/`, `release/`, `hotfix/`, or `codex/`
+(head `main` is allowed only as a back-merge into `develop`), or whose title
+lacks `#<issue>`; only a `release/*` PR to `main` may omit it.
 
 ## Checks, protection, and merge
 

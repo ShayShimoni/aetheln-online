@@ -22,8 +22,10 @@ $Violations = @(
 	if ($BaseRef -ceq 'main' -and $HeadRef -cnotmatch '^(release|hotfix)/') {
 		"main-head-branch: base 'main' accepts only release/* or hotfix/* heads, not '$HeadRef'."
 	}
-	if ($HeadRef -cnotmatch '^(feature|fix|docs|chore|release|hotfix|codex)/') {
-		"head-branch-name: head '$HeadRef' must start with feature/, fix/, docs/, chore/, release/, hotfix/, or codex/."
+	# Gitflow back-merges `main` into `develop`; no other base accepts head `main`.
+	$BackMerge = $BaseRef -ceq 'develop' -and $HeadRef -ceq 'main'
+	if (-not $BackMerge -and $HeadRef -cnotmatch '^(feature|fix|docs|chore|release|hotfix|codex)/') {
+		"head-branch-name: head '$HeadRef' must start with feature/, fix/, docs/, chore/, release/, hotfix/, or codex/, or be main into develop."
 	}
 	if (-not $ReleaseToMain -and $Title -notmatch '#\d+') {
 		'title-issue-reference: the title must reference its issue as #<number>.'

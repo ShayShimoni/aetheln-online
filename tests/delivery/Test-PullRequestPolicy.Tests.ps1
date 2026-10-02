@@ -30,6 +30,9 @@ $Accepted = @(
 	@('develop', 'chore/87-templates', 'chore(delivery): #87 add templates'),
 	@('develop', 'codex/148-bounded-crash-context', 'feat(observability): #148 register crash context'),
 	@('develop', 'release/v1.0.0', 'chore(release): #300 merge release fixes back'),
+	@('develop', 'release/v1.0.0-rc.1', 'fix(net): #302 merge release-branch fix back'),
+	@('develop', 'hotfix/v1.0.1', 'fix(net): #301 back-merge hotfix'),
+	@('develop', 'main', 'chore(release): #300 back-merge v1.0.0 into develop'),
 	@('main', 'release/v1.0.0', 'chore(release): v1.0.0'),
 	@('main', 'release/v1.0.0', 'chore(release): #300 v1.0.0'),
 	@('main', 'hotfix/v1.0.1', 'fix(net): #301 patch reconnect crash')
@@ -55,6 +58,10 @@ foreach ($Case in $Rejected) {
 	Assert-True ($Result.ExitCode -eq 1) "Policy must reject $($Case.Head) -> $($Case.Base) ('$($Case.Title)'). Output: $($Result.Text)"
 	Assert-True ($Lines.Count -eq 1 -and $Lines[0].StartsWith($Case.Rule + ': ')) "Policy must report exactly rule '$($Case.Rule)'. Output: $($Result.Text)"
 }
+
+# Head 'main' is a back-merge only into develop; into main it breaks both branch rules.
+$MainIntoMain = Invoke-Policy -BaseRef main -HeadRef main -Title 'chore: #1 x'
+Assert-True ($MainIntoMain.ExitCode -eq 1 -and $MainIntoMain.Text -match 'main-head-branch: ' -and $MainIntoMain.Text -match 'head-branch-name: ') "Head 'main' must be accepted only as a back-merge into develop. Output: $($MainIntoMain.Text)"
 
 # Every violated rule is reported together.
 $Multi = Invoke-Policy -BaseRef main -HeadRef wip -Title 'no issue'
