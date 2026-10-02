@@ -767,13 +767,19 @@ Every accepted decision records:
   plus inner report SHA-256/length. Three hosted receipt-publisher jobs download
   those exact artifacts by ID, validate the raw typed reports, and publish
   nonce-bound shadow receipts for `portable`, `controller-contract`,
-  `native-client-server-compile`, and `visual-package` only. The portable
+  `controller-operational-proof`, `native-client-server-compile`, and
+  `visual-package` only. The portable
   publisher proves `controller-contract` and `portable` from the same exact
   `ci-report.json`, limited to the selector-derived subset carried in its
   identity context; `controller-contract` additionally requires every required
-  `tests/ci` suite to pass.
+  `tests/ci` suite to pass. The native publisher proves
+  `controller-operational-proof` and `native-client-server-compile` from the
+  same exact `engine-runner-report.json` under the same selector-derived
+  subset rule; both results bind zero native exit, verified cleanup, and the
+  `trusted-candidate-compile` runner identity, and the report is revalidated
+  under each check id with its own reason suffix.
   `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
-  when the selector's chosen checks are a subset of those four live
+  when the selector's chosen checks are a subset of those five live
   obligations, nonce-specific requirements with an exact selector binding and
   sorted producer bindings. Each binding carries the job name and exact
   artifact ID/name/digest from the named direct dependency. The aggregate
@@ -783,7 +789,7 @@ Every accepted decision records:
   closed. This direct producer binding resolves the earlier shared-nonce
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
-  live portable/controller-contract/native/visual subset, the aggregate is not called. The workflow
+  live portable/controller-contract/controller-operational-proof/native/visual subset, the aggregate is not called. The workflow
   still validates the selector identity and emits the exact selected
   unsupported set as a green `producer_contract_incomplete` record with
   `complete=false`, `shadow=true`, `authoritative=false`, and
@@ -791,8 +797,8 @@ Every accepted decision records:
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `unreal-editor-automation`,
-  `clean-package-provenance-smoke`, `content-reference-validation`, and
-  `controller-operational-proof` remain unsupported live obligations.
+  `clean-package-provenance-smoke`, and `content-reference-validation` remain
+  unsupported live obligations.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate
@@ -803,13 +809,14 @@ Every accepted decision records:
   `success`. Its body accepts only a complete, nonce-bound, non-authoritative
   shadow aggregate and would emit a separate authority receipt, but it cannot run or grant
   acceptance in the Package 3C workflow. A workflow-only change selects
-  `controller-contract`, which now has a truthful portable receipt, and
-  `controller-operational-proof`, which still has no truthful live Package 3C
-  receipt. Merely flipping the dormant predicate
-  would therefore receive an incomplete aggregate and fail closed. Package 3C
+  `controller-contract` and `controller-operational-proof`, which now have
+  truthful portable and native receipts, so an owner candidate can reach a
+  complete shadow aggregate; the dormant predicate still makes the authority
+  job unreachable and nothing grants acceptance. Package 3C
   deliberately publishes no activation policy or pre-reviewed activation
-  template. A separate reviewed package must first implement and shadow-observe
-  that controller-operational producer, or independently replace the selection boundary
+  template. The native producer wiring (which changed the requirements-template
+  bytes) must first be shadow-observed on a fresh accepted base, or the
+  selection boundary independently replaced
   with an equally fail-closed contract. Only a later accepted base may pin the
   exact one-workflow-file template and immutable controller, publisher,
   aggregate, requirements, checker, policy, and action identities.

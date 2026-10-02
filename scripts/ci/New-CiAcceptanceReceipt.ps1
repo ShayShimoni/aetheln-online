@@ -33,8 +33,7 @@ $script:AcceptanceCheckIds = @(
 # obligation unsupported until this producer can parse its exact report schema.
 $script:AcceptanceReceiptUnsupportedCheckIds = @(
 	'clean-package-provenance-smoke',
-	'content-reference-validation',
-	'controller-operational-proof'
+	'content-reference-validation'
 )
 $script:AcceptancePortableCheckNames = @(
 	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','host-tool-provisioning-tests',
@@ -145,8 +144,8 @@ function Test-AcceptanceBoundedNumber {
 }
 
 function Assert-AcceptanceCompileBuildRecord {
-	param($Build, [string]$ExpectedCheck, [string]$ExpectedTarget, [string]$ExpectedPlatform)
-	$Reason = 'receipt_semantic_evidence_invalid:native-client-server-compile'
+	param($Build, [string]$ExpectedCheck, [string]$ExpectedTarget, [string]$ExpectedPlatform, [string]$CheckId = 'native-client-server-compile')
+	$Reason = "receipt_semantic_evidence_invalid:$CheckId"
 	Assert-AcceptanceClosedObject $Build @('check','target','platform','configuration','intermediateBuildDirectoryPresentBeforeRun','makefilePresentBeforeRun','outputState','lastObservedAction','observedTotalActions','actionCounterState','plannedActionCount','observedTargetNames','makefileObservation','makefileReason','makefileCreationCount','upToDateObserved','executorSummaryCount')
 	if ($Build.check -isnot [string] -or $Build.check -cne $ExpectedCheck -or $Build.target -isnot [string] -or $Build.target -cne $ExpectedTarget -or
 		$Build.platform -isnot [string] -or $Build.platform -cne $ExpectedPlatform -or $Build.configuration -isnot [string] -or $Build.configuration -cne 'Development' -or
@@ -166,8 +165,8 @@ function Assert-AcceptanceCompileBuildRecord {
 }
 
 function Assert-AcceptanceManagedCompileProof {
-	param($Report, $Identity)
-	$Reason = 'receipt_semantic_evidence_invalid:native-client-server-compile'
+	param($Report, $Identity, [string]$CheckId = 'native-client-server-compile')
+	$Reason = "receipt_semantic_evidence_invalid:$CheckId"
 	try {
 		Assert-AcceptanceClosedObject $Report.managedWorkspace @('schemaVersion','registrationId','registrationSha256','preparationReceiptSha256','revision','synchronized')
 		Assert-AcceptanceClosedObject $Report.compileResources @('schemaVersion','sampleIntervalMilliseconds','recoveryFloorBytes','pressureThresholdBytes','sampleCount','measurementCount','maximumSampleGapMilliseconds','consecutivePressureSamples','maximumConsecutivePressureSamples','minimumAvailableRamBytes','minimumCommitHeadroomBytes','physicalCores','targetAdmissionCount','minimumActionLimit','maximumActionLimit','failureReason','volumes')
@@ -257,58 +256,61 @@ function Assert-AcceptancePortableEvidence {
 }
 
 function Assert-AcceptanceEngineRunnerEvidence {
-	param([byte[]] $Bytes, $Identity)
-	$Report = ConvertFrom-AcceptanceEvidenceJson -Bytes $Bytes -CheckId 'native-client-server-compile'
+	# controller-operational-proof and native-client-server-compile are the same exact compile report; only the reported check id differs.
+	param([byte[]] $Bytes, $Identity, [string] $CheckId = 'native-client-server-compile')
+	$Reason = "receipt_semantic_evidence_invalid:$CheckId"
+	$Failure = "receipt_semantic_evidence_failure:$CheckId"
+	$Report = ConvertFrom-AcceptanceEvidenceJson -Bytes $Bytes -CheckId $CheckId
 	$RequiredProperties = @('schemaVersion','mode','policy','revision','runnerName','startedUtc','finishedUtc','checks','summary','compileEvidence','managedWorkspace','compileResources','supervisor')
-	foreach ($Name in $RequiredProperties) { if ($Report -isnot [pscustomobject] -or $Report.PSObject.Properties.Name -cnotcontains $Name) { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' } }
-	if (@($Report.PSObject.Properties.Name | Where-Object { $RequiredProperties -cnotcontains $_ }).Count -ne 0) { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	foreach ($Name in $RequiredProperties) { if ($Report -isnot [pscustomobject] -or $Report.PSObject.Properties.Name -cnotcontains $Name) { throw $Reason } }
+	if (@($Report.PSObject.Properties.Name | Where-Object { $RequiredProperties -cnotcontains $_ }).Count -ne 0) { throw $Reason }
 	try {
 		Assert-AcceptanceClosedObject $Report.summary @('total','passed','failed','skipped','requiredFailed')
 		Assert-AcceptanceClosedObject $Report.supervisor @('childExitCode','timedOut','cleanupVerified')
-	} catch { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	} catch { throw $Reason }
 	if (-not (Test-AcceptanceBoundedInteger -Value $Report.schemaVersion -Minimum 1 -Maximum 1) -or $Report.mode -isnot [string] -or $Report.mode -cne 'Compile' -or
 		$Report.policy -isnot [string] -or $Report.policy -cne 'incremental-target-compilation' -or $Report.revision -isnot [string] -or
 		$Report.revision -cne $Identity.source.testedRevision -or $Report.runnerName -isnot [string] -or [string]::IsNullOrWhiteSpace($Report.runnerName) -or $Report.runnerName.Length -gt 128 -or
 		-not (Test-AcceptanceTimestampRange $Report.startedUtc $Report.finishedUtc) -or $Report.checks -isnot [array] -or @($Report.checks).Count -lt 8 -or @($Report.checks).Count -gt 32 -or
 		-not (Test-AcceptanceBoundedInteger -Value $Report.supervisor.childExitCode -Minimum 0 -Maximum 0) -or $Report.supervisor.timedOut -isnot [bool] -or $Report.supervisor.timedOut -or
 		$Report.supervisor.cleanupVerified -isnot [bool] -or -not $Report.supervisor.cleanupVerified) {
-		throw 'receipt_semantic_evidence_invalid:native-client-server-compile'
+		throw $Reason
 	}
 	$Names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 	foreach ($Check in $Report.checks) {
-		try { Assert-AcceptanceClosedObject $Check @('name','tier','status','durationSeconds','command','message') } catch { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+		try { Assert-AcceptanceClosedObject $Check @('name','tier','status','durationSeconds','command','message') } catch { throw $Reason }
 		if ($Check.name -isnot [string] -or $Check.name.Length -lt 1 -or $Check.name.Length -gt 128 -or -not $Names.Add($Check.name) -or
 			$Check.tier -isnot [string] -or $Check.status -isnot [string] -or -not (Test-AcceptanceBoundedNumber -Value $Check.durationSeconds -Minimum 0 -Maximum 86400) -or
 			$Check.command -isnot [string] -or $Check.command.Length -gt 32768 -or $Check.message -isnot [string] -or $Check.message.Length -gt 131072) {
-			throw 'receipt_semantic_evidence_invalid:native-client-server-compile'
+			throw $Reason
 		}
-		if ($Check.tier -cne 'required' -or $Check.status -cne 'passed') { throw 'receipt_semantic_evidence_failure:native-client-server-compile' }
+		if ($Check.tier -cne 'required' -or $Check.status -cne 'passed') { throw $Failure }
 	}
 	foreach ($Expected in @('runner-input-validation','managed-compile-workspace','repository-state-before-work','incremental-client-build','incremental-client-build-repository-state','incremental-server-build','incremental-server-build-repository-state','repository-state-at-completion')) {
-		if (-not $Names.Contains($Expected)) { throw 'receipt_semantic_evidence_failure:native-client-server-compile' }
+		if (-not $Names.Contains($Expected)) { throw $Failure }
 	}
 	if (-not (Test-AcceptanceBoundedInteger -Value $Report.summary.total -Minimum 0 -Maximum 32) -or $Report.summary.total -ne $Report.checks.Count -or
 		-not (Test-AcceptanceBoundedInteger -Value $Report.summary.passed -Minimum 0 -Maximum 32) -or $Report.summary.passed -ne $Report.checks.Count -or
 		-not (Test-AcceptanceBoundedInteger -Value $Report.summary.failed -Minimum 0 -Maximum 0) -or -not (Test-AcceptanceBoundedInteger -Value $Report.summary.skipped -Minimum 0 -Maximum 0) -or
-		-not (Test-AcceptanceBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 0)) { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
-	Assert-AcceptanceManagedCompileProof -Report $Report -Identity $Identity
-	if ($Report.compileEvidence -isnot [pscustomobject] -or -not (Test-AcceptanceBoundedInteger -Value $Report.compileEvidence.schemaVersion -Minimum 1 -Maximum 1) -or $Report.compileEvidence.builds -isnot [array] -or @($Report.compileEvidence.builds).Count -ne 2) { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+		-not (Test-AcceptanceBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 0)) { throw $Reason }
+	Assert-AcceptanceManagedCompileProof -Report $Report -Identity $Identity -CheckId $CheckId
+	if ($Report.compileEvidence -isnot [pscustomobject] -or -not (Test-AcceptanceBoundedInteger -Value $Report.compileEvidence.schemaVersion -Minimum 1 -Maximum 1) -or $Report.compileEvidence.builds -isnot [array] -or @($Report.compileEvidence.builds).Count -ne 2) { throw $Reason }
 	try {
 		Assert-AcceptanceClosedObject $Report.compileEvidence @('schemaVersion','identity','builds')
 		Assert-AcceptanceClosedObject $Report.compileEvidence.identity @('engineGitRevision','engineGitRevisionStatus','engineBuildVersionSha256','engineBuildVersionSha256Status','linuxToolchainCompilerSha256','linuxToolchainCompilerSha256Status','runnerName','durationSeconds')
-	} catch { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	} catch { throw $Reason }
 	$CompileIdentity = $Report.compileEvidence.identity
 	if ($CompileIdentity.engineGitRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or $CompileIdentity.engineGitRevisionStatus -cne 'verified' -or
 		-not (Test-AcceptanceDigest $CompileIdentity.engineBuildVersionSha256) -or $CompileIdentity.engineBuildVersionSha256Status -cne 'verified' -or
 		-not (Test-AcceptanceDigest $CompileIdentity.linuxToolchainCompilerSha256) -or $CompileIdentity.linuxToolchainCompilerSha256Status -cne 'verified' -or
 		$CompileIdentity.runnerName -isnot [string] -or $CompileIdentity.runnerName -cne $Report.runnerName -or -not (Test-AcceptanceBoundedNumber -Value $CompileIdentity.durationSeconds -Minimum 0 -Maximum 3600)) {
-		throw 'receipt_semantic_evidence_invalid:native-client-server-compile'
+		throw $Reason
 	}
 	$ExpectedBuilds = @(@('incremental-client-build','AethelnOnlineClient','Win64'),@('incremental-server-build','AethelnOnlineServer','Linux'))
 	for ($Index = 0; $Index -lt 2; $Index++) {
 		$Build = $Report.compileEvidence.builds[$Index]; $Expected = $ExpectedBuilds[$Index]
-		try { Assert-AcceptanceCompileBuildRecord -Build $Build -ExpectedCheck $Expected[0] -ExpectedTarget $Expected[1] -ExpectedPlatform $Expected[2] }
-		catch { throw 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+		try { Assert-AcceptanceCompileBuildRecord -Build $Build -ExpectedCheck $Expected[0] -ExpectedTarget $Expected[1] -ExpectedPlatform $Expected[2] -CheckId $CheckId }
+		catch { throw $Reason }
 	}
 }
 
@@ -576,20 +578,21 @@ function New-CiAcceptanceReceipt {
 		if ($Result.id -ceq 'visual-package' -and $null -ne $Result.nativeExitCode) { throw 'receipt_semantic_evidence_invalid:visual-package' }
 		if ($Result.id -cin @('portable','controller-contract') -and $null -ne $Result.nativeExitCode) { throw ('receipt_semantic_evidence_invalid:' + $Result.id) }
 		if ($Result.id -ceq 'unreal-editor-automation' -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
-		$RequiresCleanup = $Result.id -in @('native-client-server-compile','clean-package-provenance-smoke')
-		if ($Result.id -in @('native-client-server-compile','clean-package-provenance-smoke') -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_invalid' }
+		$RequiresCleanup = $Result.id -in @('native-client-server-compile','controller-operational-proof','clean-package-provenance-smoke')
+		if ($RequiresCleanup -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_invalid' }
 		if ($RequiresCleanup) {
 			if ($Result.cleanupVerified -isnot [bool] -or -not $Result.cleanupVerified) { throw 'receipt_invalid' }
 			$CleanupApplicable = $true
 		} elseif ($null -ne $Result.cleanupVerified) { throw 'receipt_invalid' }
 		if ($Result.evidence -isnot [Array] -or $Result.evidence.Count -lt 1 -or $Result.evidence.Count -gt $script:AcceptanceEvidencePerResultLimit) { throw 'receipt_invalid' }
-		if ($Result.id -in @('portable','controller-contract','native-client-server-compile','unreal-editor-automation','visual-package') -and $Result.evidence.Count -ne 1) { throw ('receipt_semantic_evidence_duplicate:' + $Result.id) }
+		if ($Result.id -in @('portable','controller-contract','controller-operational-proof','native-client-server-compile','unreal-editor-automation','visual-package') -and $Result.evidence.Count -ne 1) { throw ('receipt_semantic_evidence_duplicate:' + $Result.id) }
 		$EvidenceCopies = New-Object System.Collections.Generic.List[object]
 		$PreviousEvidenceName = $null
 		$SemanticEvidenceBytes = $null
 		$SemanticEvidenceName = switch ($Result.id) {
 			'portable' { 'ci-report.json' }
 			'controller-contract' { 'ci-report.json' }
+			'controller-operational-proof' { 'engine-runner-report.json' }
 			'native-client-server-compile' { 'engine-runner-report.json' }
 			'unreal-editor-automation' { 'unreal-automation-report.json' }
 			'visual-package' { 'visual-package-report.json' }
@@ -626,6 +629,7 @@ function New-CiAcceptanceReceipt {
 			switch ($Result.id) {
 				'portable' { Assert-AcceptancePortableEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput }
 				'controller-contract' { Assert-AcceptancePortableEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput -CheckId 'controller-contract' }
+				'controller-operational-proof' { Assert-AcceptanceEngineRunnerEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput -CheckId 'controller-operational-proof' }
 				'native-client-server-compile' { Assert-AcceptanceEngineRunnerEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput }
 				'unreal-editor-automation' { Assert-AcceptanceUnrealAutomationEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput }
 				'visual-package' { Assert-AcceptanceVisualPackageEvidence -Bytes $SemanticEvidenceBytes -Identity $ReceiptInput }

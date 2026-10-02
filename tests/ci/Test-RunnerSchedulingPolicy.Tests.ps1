@@ -122,13 +122,13 @@ Assert-True ($ShadowSelection -notmatch '(?m)^\s+if: always\(\)\r?$') 'A failed 
 # admission. Unsupported selected checks produce a green no-acceptance gap;
 # the supported subset runs the real shadow aggregate and failures stay red.
 $ReceiptContracts = @(
-	@{ Job='portable-receipt-shadow'; Producer='quality-gates'; Required='portable_required'; Key='portable' },
-	@{ Job='native-receipt-shadow'; Producer='trusted-candidate-compile'; Required='native_client_server_compile_required'; Key='native' },
-	@{ Job='visual-receipt-shadow'; Producer='visual-proof'; Required='visual_package_required'; Key='visual' }
+	@{ Job='portable-receipt-shadow'; Producer='quality-gates'; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Key='portable' },
+	@{ Job='native-receipt-shadow'; Producer='trusted-candidate-compile'; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Key='native' },
+	@{ Job='visual-receipt-shadow'; Producer='visual-proof'; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Key='visual' }
 )
 foreach ($Receipt in $ReceiptContracts) {
 	$ReceiptBody = [string] $JobBodies[$Receipt.Job]
-	Assert-True ($ReceiptBody -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $ReceiptBody -match "needs\.ci-selection-shadow\.outputs\.$($Receipt.Required) == 'true'") "$($Receipt.Job) must be selected only for a pull request through the exact accepted selector output and raw producer."
+	Assert-True ($ReceiptBody -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $ReceiptBody -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Job) must be selected only for a pull request through the exact accepted selector output and raw producer."
 	Assert-True ($ReceiptBody -match '(?m)^    runs-on: windows-latest\r?$' -and $ReceiptBody -match '(?m)^    timeout-minutes: 10\r?$' -and $ReceiptBody -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Job) must remain bounded and hosted."
 	Assert-MatchCount -Text $ReceiptBody -Pattern ('(?m)^        uses: ' + [regex]::Escape($DownloadAction) + '\r?$') -Expected 2 -Message "$($Receipt.Job) must download selector and raw evidence by exact artifact ID."
 	$ProducerId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.report_artifact_id }}')

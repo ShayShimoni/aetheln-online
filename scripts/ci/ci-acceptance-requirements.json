@@ -6,6 +6,7 @@
       "jobName": "native-receipt-shadow",
       "checks": [
         "clean-package-provenance-smoke",
+        "controller-operational-proof",
         "native-client-server-compile"
       ]
     },
@@ -15,7 +16,6 @@
       "checks": [
         "content-reference-validation",
         "controller-contract",
-        "controller-operational-proof",
         "portable",
         "unreal-editor-automation"
       ]

@@ -316,7 +316,7 @@ jobs:
             'controller-operational-proof' = 'controller_operational_proof_required'
             'clean-package-provenance-smoke' = 'clean_package_provenance_smoke_required'
           }
-          $LiveProducerChecks = @('controller-contract', 'native-client-server-compile', 'portable', 'visual-package')
+          $LiveProducerChecks = @('controller-contract', 'controller-operational-proof', 'native-client-server-compile', 'portable', 'visual-package')
           $Obligations = @($Parsed.selection.obligations)
           if ($Obligations.Count -ne $ExpectedObligations.Count) { throw 'shadow_selection_obligations_invalid' }
           $AggregateReady = $true
@@ -911,7 +911,7 @@ jobs:
     needs:
       - ci-selection-shadow
       - trusted-candidate-compile
-    if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.native_client_server_compile_required == 'true'
+    if: github.event_name == 'pull_request' && (needs.ci-selection-shadow.outputs.native_client_server_compile_required == 'true' || needs.ci-selection-shadow.outputs.controller_operational_proof_required == 'true')
     runs-on: windows-latest
     timeout-minutes: 10
     outputs:
@@ -1153,6 +1153,7 @@ jobs:
           AETHELN_SELECTOR_ARTIFACT_DIGEST: ${{ needs.ci-selection-shadow.outputs.selector_artifact_digest }}
           AETHELN_PORTABLE_REQUIRED: ${{ needs.ci-selection-shadow.outputs.portable_required }}
           AETHELN_NATIVE_REQUIRED: ${{ needs.ci-selection-shadow.outputs.native_client_server_compile_required }}
+          AETHELN_OPERATIONAL_REQUIRED: ${{ needs.ci-selection-shadow.outputs.controller_operational_proof_required }}
           AETHELN_VISUAL_REQUIRED: ${{ needs.ci-selection-shadow.outputs.visual_package_required }}
           AETHELN_PORTABLE_RESULT: ${{ needs.portable-receipt-shadow.result }}
           AETHELN_PORTABLE_ARTIFACT_ID: ${{ needs.portable-receipt-shadow.outputs.artifact_id }}
@@ -1244,7 +1245,9 @@ jobs:
                   $Digest -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw ('producer_direct_binding_invalid:' + $Key) }
               $ProducerBindings.Add([pscustomobject][ordered]@{ key=$Key; jobName=$JobName; artifactId=$ArtifactId; artifactName=$ArtifactName; digest=$Digest })
             }
-            Add-ProducerBinding $env:AETHELN_NATIVE_REQUIRED $env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow' $env:AETHELN_NATIVE_ARTIFACT_ID $env:AETHELN_NATIVE_ARTIFACT_NAME $env:AETHELN_NATIVE_ARTIFACT_DIGEST
+            # The native publisher proves either native obligation from one compile report; any other output pair is invalid and fails closed.
+            $NativeProducerRequired = if ($env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true') { 'true' } elseif ($env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false') { 'false' } else { 'invalid' }
+            Add-ProducerBinding $NativeProducerRequired $env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow' $env:AETHELN_NATIVE_ARTIFACT_ID $env:AETHELN_NATIVE_ARTIFACT_NAME $env:AETHELN_NATIVE_ARTIFACT_DIGEST
             Add-ProducerBinding $env:AETHELN_PORTABLE_REQUIRED $env:AETHELN_PORTABLE_RESULT 'portable' 'portable-receipt-shadow' $env:AETHELN_PORTABLE_ARTIFACT_ID $env:AETHELN_PORTABLE_ARTIFACT_NAME $env:AETHELN_PORTABLE_ARTIFACT_DIGEST
             Add-ProducerBinding $env:AETHELN_VISUAL_REQUIRED $env:AETHELN_VISUAL_RESULT 'visual' 'visual-receipt-shadow' $env:AETHELN_VISUAL_ARTIFACT_ID $env:AETHELN_VISUAL_ARTIFACT_NAME $env:AETHELN_VISUAL_ARTIFACT_DIGEST
             $SelectorBinding = [pscustomobject][ordered]@{

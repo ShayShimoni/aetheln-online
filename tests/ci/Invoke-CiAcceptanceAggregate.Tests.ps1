@@ -149,8 +149,8 @@ function New-FixtureRequirements {
 	return [pscustomobject][ordered]@{
 		schemaVersion = 'aetheln.ci-acceptance-requirements/v1'
 		jobs = @(
-			[pscustomobject][ordered]@{ key = 'native'; jobName = 'native-receipt-shadow'; artifactName = ('ci-receipt-native-9001-2-' + $script:FixtureNonce); checks = @('clean-package-provenance-smoke','native-client-server-compile') },
-			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; artifactName = ('ci-receipt-quality-9001-2-' + $script:FixtureNonce); checks = @('content-reference-validation','controller-contract','controller-operational-proof','portable','unreal-editor-automation','visual-package') }
+			[pscustomobject][ordered]@{ key = 'native'; jobName = 'native-receipt-shadow'; artifactName = ('ci-receipt-native-9001-2-' + $script:FixtureNonce); checks = @('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile') },
+			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; artifactName = ('ci-receipt-quality-9001-2-' + $script:FixtureNonce); checks = @('content-reference-validation','controller-contract','portable','unreal-editor-automation','visual-package') }
 		)
 	}
 }
@@ -211,9 +211,9 @@ function New-FixtureReceipt {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture.')]
 	param($Context, $Requirement, [byte[]] $EvidenceBytes = $script:Utf8.GetBytes('raw-proof'))
 	$Results = @($Requirement.checks | ForEach-Object {
-		$RequiresNativeProof = $_ -cin @('clean-package-provenance-smoke','native-client-server-compile')
+		$RequiresNativeProof = $_ -cin @('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile')
 		$RequiresNativeExit = $RequiresNativeProof -or $_ -ceq 'unreal-editor-automation'
-		$EvidenceName = switch ($_) { 'portable' {'ci-report.json'} 'controller-contract' {'ci-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { 'evidence/' + $_ + '.json' } }
+		$EvidenceName = switch ($_) { 'portable' {'ci-report.json'} 'controller-contract' {'ci-report.json'} 'controller-operational-proof' {'engine-runner-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { 'evidence/' + $_ + '.json' } }
 		[pscustomobject][ordered]@{
 			id = [string] $_; jobName = [string] $Requirement.jobName; conclusion = 'success'; nativeExitCode = if ($RequiresNativeExit) { 0 } else { $null }
 			infrastructureFailure = $null; terminal = $true; cleanupVerified = if ($RequiresNativeProof) { $true } else { $null }
@@ -233,7 +233,7 @@ function New-FixtureReceipt {
 		attemptAnchor = $Context.attemptAnchor
 		selection = [pscustomobject][ordered]@{ checks = @($Requirement.checks) }
 		results = [pscustomobject][ordered]@{ checks = $Results }
-		acceptance = [pscustomobject][ordered]@{ shadow = $true; authoritative = $false; grantsAcceptance = $false; terminal = $true; infrastructureFailure = $false; cleanupVerified = $(if (@($Requirement.checks | Where-Object { $_ -cin @('clean-package-provenance-smoke','native-client-server-compile') }).Count -gt 0) { $true } else { $null }) }
+		acceptance = [pscustomobject][ordered]@{ shadow = $true; authoritative = $false; grantsAcceptance = $false; terminal = $true; infrastructureFailure = $false; cleanupVerified = $(if (@($Requirement.checks | Where-Object { $_ -cin @('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile') }).Count -gt 0) { $true } else { $null }) }
 	}
 }
 
@@ -304,13 +304,14 @@ function New-FixtureApi {
 		$RunnerId = if ($Conclusion -ceq 'success') { 100 + $ArtifactId } else { 0 }
 		$RunnerName = if ($Conclusion -ceq 'success') { 'GitHub Actions 2' } else { $null }
 		$Jobs.Add([pscustomobject][ordered]@{ id = 100 + $ArtifactId; name = $Requirement.jobName; status = 'completed'; conclusion = $Conclusion; run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at=$StartedAt;completed_at=$CompletedAt;labels=[string[]]@('windows-latest');runner_id=$RunnerId;runner_name=$RunnerName })
-		if ($SelectedSubset -ccontains 'native-client-server-compile') {
+		$EngineReportSelected = $SelectedSubset -ccontains 'native-client-server-compile' -or $SelectedSubset -ccontains 'controller-operational-proof'
+		if ($EngineReportSelected) {
 			# The self-hosted compile job produces the raw engine report that the hosted native publisher only wraps.
 			$Jobs.Add([pscustomobject][ordered]@{ id = 150; name = 'trusted-candidate-compile'; status = 'completed'; conclusion = 'success'; run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at=$StartedAt;completed_at=$CompletedAt;labels=[string[]]@('self-hosted','Windows','X64','aetheln-engine');runner_id=50;runner_name='fixture-runner' })
 		}
 		if ($SelectedSubset.Count -eq 0) { continue }
 		$SelectedRequirement = [pscustomobject][ordered]@{key=$Requirement.key;jobName=$Requirement.jobName;artifactName=$Requirement.artifactName;checks=$SelectedSubset}
-		$Evidence = if ($SelectedSubset -ccontains 'native-client-server-compile') { ConvertTo-FixtureBytes (New-FixtureEngineReport -Context $Context) }
+		$Evidence = if ($EngineReportSelected) { ConvertTo-FixtureBytes (New-FixtureEngineReport -Context $Context) }
 			elseif ($SelectedSubset -ccontains 'visual-package') { ConvertTo-FixtureBytes (New-FixtureVisualReport -Context $Context) }
 			elseif ($SelectedSubset -ccontains 'portable' -or $SelectedSubset -ccontains 'controller-contract') { ConvertTo-FixtureBytes (New-FixturePortableReport -Context $Context) }
 			else { $script:Utf8.GetBytes('raw-proof') }
@@ -519,6 +520,17 @@ foreach ($CompileJobCase in @(
 	catch { throw "Compile job case '$($CompileJobCase.name)' failed: $($_.Exception.Message)" }
 }
 
+# controller-operational-proof is proven by the same native publisher from the same compile job's engine report.
+foreach ($OperationalSelection in @(@('controller-operational-proof','native-client-server-compile'), @('controller-operational-proof'))) {
+	$OperationalContext=New-FixtureContext
+	$OperationalApi=New-FixtureApi -Context $OperationalContext -Requirements $Requirements -SelectedChecks $OperationalSelection
+	$OperationalAggregate=New-CiAcceptanceAggregate -Context $OperationalContext -Requirements $Requirements -ApiRequest $OperationalApi -DeadlineSeconds 30
+	Assert-True ($OperationalAggregate.decision.complete -and $OperationalAggregate.decision.shadow -and -not $OperationalAggregate.decision.authoritative -and -not $OperationalAggregate.decision.grantsAcceptance -and @($OperationalAggregate.receipts).Count -eq 1 -and (@($OperationalAggregate.receipts[0].selectedChecks) -join ',') -ceq ($OperationalSelection -join ',') -and $OperationalAggregate.receipts[0].jobKey -ceq 'native') "A selected '$($OperationalSelection -join ',')' subset must reconcile to a complete shadow-only aggregate through the native receipt."
+}
+$OperationalRunnerListing=$CompileJobListing|ConvertTo-Json -Depth 8|ConvertFrom-Json;($OperationalRunnerListing.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).runner_name='other-runner'
+$OperationalRunnerContext=New-FixtureContext;$OperationalRunnerApi=New-FixtureApi -Context $OperationalRunnerContext -Requirements $Requirements -SelectedChecks @('controller-operational-proof') -Overrides @{$NativeAttemptJobsUri=(ConvertTo-FixtureBytes $OperationalRunnerListing)}
+Assert-Rejected { New-CiAcceptanceAggregate -Context $OperationalRunnerContext -Requirements $Requirements -ApiRequest $OperationalRunnerApi -DeadlineSeconds 30 } 'receipt_semantic_evidence_invalid:controller-operational-proof'
+
 $VisualBoundary = New-FixtureVisualBoundary -Context $Context
 $VisualResults = @(Assert-CiAcceptanceReceipt -Receipt $VisualBoundary.receipt -Context $Context -Requirement $VisualBoundary.requirement -Archive $VisualBoundary.archive)
 Assert-True ($VisualResults.Count -eq 1 -and @($VisualResults[0]).Count -eq 1) 'The aggregate must accept exact, identity-bound visual semantic evidence.'
@@ -567,6 +579,7 @@ $FixtureCompileJob=[pscustomobject]@{runner_name='fixture-runner'}
 foreach ($Fixture in @(
 	@{id='portable';report=(New-FixturePortableReport $Context);reason='receipt_semantic_evidence_failure:portable';mutate={param($x)$x.summary.requiredFailed=1}},
 	@{id='native-client-server-compile';report=(New-FixtureEngineReport $Context);reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)$x.supervisor.cleanupVerified=$false}},
+	@{id='controller-operational-proof';report=(New-FixtureEngineReport $Context);reason='receipt_semantic_evidence_invalid:controller-operational-proof';mutate={param($x)$x.compileResources.failureReason='memory_pressure'}},
 	@{id='unreal-editor-automation';report=(New-FixtureUnrealReport $Context);reason='receipt_semantic_evidence_invalid:unreal-editor-automation';mutate={param($x)$x.tests[0].status='failed'}}
 )) {
 	$Boundary = New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $Fixture.report
@@ -578,6 +591,8 @@ foreach ($Fixture in @(
 }
 $NoCompileJobBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'native-client-server-compile' -Report (New-FixtureEngineReport $Context)
 Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $NoCompileJobBoundary.receipt -Context $Context -Requirement $NoCompileJobBoundary.requirement -Archive $NoCompileJobBoundary.archive } 'native_compile_job_missing'
+$NoCompileJobOperationalBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'controller-operational-proof' -Report (New-FixtureEngineReport $Context)
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $NoCompileJobOperationalBoundary.receipt -Context $Context -Requirement $NoCompileJobOperationalBoundary.requirement -Archive $NoCompileJobOperationalBoundary.archive } 'native_compile_job_missing'
 
 $ContractBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
 $ContractValidated = @(Assert-CiAcceptanceReceipt -Receipt $ContractBoundary.receipt -Context $Context -Requirement $ContractBoundary.requirement -Archive $ContractBoundary.archive)
@@ -722,7 +737,7 @@ foreach ($UnrealTypeCase in @(
 	catch { throw "Aggregate Unreal fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 }
 
-foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-operational-proof')) {
+foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation')) {
 	$UnsupportedRequirement = [pscustomobject][ordered]@{key='unsupported';jobName='unsupported-proof';selected=$true;artifactName=('ci-receipt-unsupported-9001-2-' + $Context.attemptAnchor.nonce);checks=@($UnsupportedId)}
 	$UnsupportedBytes = $script:Utf8.GetBytes('opaque-proof')
 	$UnsupportedReceipt = New-FixtureReceipt -Context $Context -Requirement $UnsupportedRequirement -EvidenceBytes $UnsupportedBytes

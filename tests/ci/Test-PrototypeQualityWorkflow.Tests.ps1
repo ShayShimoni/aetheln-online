@@ -355,9 +355,10 @@ Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -matc
 # publishes one nonce-bound receipt directory, and exposes only the upload
 # action's direct artifact binding. They never acquire engine-runner authority.
 $ReceiptContracts = @(
-	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; SelectorOutput='portable_required'; Producer='quality-gates'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
-	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; SelectorOutput='native_client_server_compile_required'; Producer='trusted-candidate-compile'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
-	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; SelectorOutput='visual_package_required'; Producer='visual-proof'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
+	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Producer='quality-gates'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
+	# The native publisher proves native-client-server-compile and controller-operational-proof from one compile report, so either selection runs it.
+	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Producer='trusted-candidate-compile'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
+	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Producer='visual-proof'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
 )
 # aggregate_ready and the context builder's gap computation must agree on the
 # exact set of obligations that have a live receipt producer.
@@ -367,11 +368,13 @@ $BuilderLiveChecks = [regex]::Matches($ContextBuilderSource, '(?m)^\s*\$LiveChec
 Assert-True ($WorkflowLiveChecks.Count -eq 1 -and $BuilderLiveChecks.Count -eq 1) 'The workflow and context builder must each declare exactly one live producer check list.'
 $WorkflowLiveList = @([regex]::Matches($WorkflowLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
 $BuilderLiveList = @([regex]::Matches($BuilderLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
-Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,native-client-server-compile,portable,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
+Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,controller-operational-proof,native-client-server-compile,portable,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
+# The aggregate binds the native receipt when either native obligation is selected; any other selector output pair must still fail closed.
+Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_OPERATIONAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$NativeProducerRequired \`$env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow'" -and $AcceptanceShadow -match "\`$NativeProducerRequired = if \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true'\) \{ 'true' \} elseif \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false'\) \{ 'false' \} else \{ 'invalid' \}") 'The aggregate must bind the native receipt for either native obligation and reject any other selector output pair.'
 
 foreach ($Receipt in $ReceiptContracts) {
 	$Body = [string] $Receipt.Body
-	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && needs\.ci-selection-shadow\.outputs\.$($Receipt.SelectorOutput) == 'true'\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
+	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
 	Assert-True ($Body -match '(?m)^    runs-on: windows-latest\r?$' -and $Body -match '(?m)^    timeout-minutes: 10\r?$' -and $Body -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Name) must be a bounded hosted publisher without engine admission."
 	foreach ($Output in @('artifact_id: \$\{\{ steps\.receipt_artifact\.outputs\.artifact-id \}\}', 'artifact_name: \$\{\{ steps\.receipt_identity\.outputs\.artifact_name \}\}', 'artifact_digest: sha256:\$\{\{ steps\.receipt_artifact\.outputs\.artifact-digest \}\}')) {
 		Assert-True ($Body -match "(?m)^      $Output\r?$") "$($Receipt.Name) must expose the reviewed direct receipt upload binding."

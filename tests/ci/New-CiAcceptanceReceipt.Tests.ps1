@@ -142,13 +142,13 @@ function Write-ControllerContractReport($Report, [string] $Name = 'ci-report.jso
 
 function New-ControllerContractInput {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture.')]
-	param([string[]] $CheckIds, $Evidence, [string] $EvidenceName = 'ci-report.json')
+	param([string[]] $CheckIds, $Evidence, [string] $EvidenceName = 'ci-report.json', [string] $JobName = 'portable-receipt-shadow', $NativeExitCode = $null, $CleanupVerified = $null)
 	$Value = Get-TestReceiptInput -VisualSha256 $Evidence.sha256 -VisualSize $Evidence.size
 	$Value.selection.checks = @($CheckIds)
 	$Value.results.checks = @($CheckIds | ForEach-Object {
 		[pscustomobject][ordered]@{
-			id = $_; jobName = 'portable-receipt-shadow'; conclusion = 'success'; nativeExitCode = $null
-			infrastructureFailure = $null; terminal = $true; cleanupVerified = $null
+			id = $_; jobName = $JobName; conclusion = 'success'; nativeExitCode = $NativeExitCode
+			infrastructureFailure = $null; terminal = $true; cleanupVerified = $CleanupVerified
 			evidence = @([pscustomobject][ordered]@{ name = $EvidenceName; sha256 = $Evidence.sha256; sizeBytes = $Evidence.size })
 		}
 	})
@@ -369,6 +369,42 @@ try {
 	$WrongContractPath = Join-Path $FixtureRoot 'controller-contract-wrong-name.json'
 	Write-Input (New-ControllerContractInput -CheckIds @('controller-contract') -Evidence $WrongContractEvidence -EvidenceName 'wrong-ci-report.json') $WrongContractPath
 	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $WrongContractPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_semantic_evidence_missing:controller-contract'
+
+	# controller-operational-proof revalidates the same exact engine-runner-report.json
+	# the native producer proves; an opaque or failed compile report never passes.
+	$OperationalArguments = @{ EvidenceName = 'engine-runner-report.json'; JobName = 'native-receipt-shadow'; NativeExitCode = 0; CleanupVerified = $true }
+	$OperationalEvidence = Write-ControllerContractReport (New-TestEngineReport) 'engine-runner-report.json'
+	foreach ($OperationalSelection in @(@('controller-operational-proof','native-client-server-compile'), @('controller-operational-proof'))) {
+		$OperationalName = $OperationalSelection -join '+'
+		$OperationalInputPath = Join-Path $FixtureRoot ('controller-operational-' + $OperationalName + '.json')
+		Write-Input (New-ControllerContractInput -CheckIds $OperationalSelection -Evidence $OperationalEvidence @OperationalArguments) $OperationalInputPath
+		$OperationalReceipt = New-CiAcceptanceReceipt -InputPath $OperationalInputPath -EvidenceRoot $EvidenceRoot -OutputPath (Join-Path $FixtureRoot ('controller-operational-' + $OperationalName + '\ci-acceptance-receipt.json'))
+		Assert-True ((@($OperationalReceipt.selection.checks) -join ',') -ceq ($OperationalSelection -join ',') -and (@($OperationalReceipt.results.checks | ForEach-Object { $_.id }) -join ',') -ceq ($OperationalSelection -join ',') -and $OperationalReceipt.acceptance.cleanupVerified -eq $true -and -not $OperationalReceipt.acceptance.grantsAcceptance) "The native producer must publish '$OperationalName' from one engine report as shadow-only."
+		Assert-True (@($OperationalReceipt.results.checks | Where-Object { @($_.evidence).Count -ne 1 -or $_.evidence[0].name -cne 'engine-runner-report.json' -or $_.evidence[0].sha256 -cne $OperationalEvidence.sha256 -or $_.evidence[0].sizeBytes -ne $OperationalEvidence.size -or $_.nativeExitCode -ne 0 -or $_.cleanupVerified -ne $true }).Count -eq 0) "Every '$OperationalName' result must bind the one exact engine-runner-report.json with zero exit and verified cleanup."
+	}
+	foreach ($OperationalResultCase in @(
+		@{ name='null-native-exit'; mutate={ param($x) $x.results.checks[0].nativeExitCode = $null } },
+		@{ name='null-cleanup'; mutate={ param($x) $x.results.checks[0].cleanupVerified = $null } }
+	)) {
+		$OperationalInput = New-ControllerContractInput -CheckIds @('controller-operational-proof') -Evidence $OperationalEvidence @OperationalArguments
+		& $OperationalResultCase.mutate $OperationalInput
+		$OperationalInputPath = Join-Path $FixtureRoot ('controller-operational-' + $OperationalResultCase.name + '.json'); Write-Input $OperationalInput $OperationalInputPath
+		try { Assert-Rejected { New-CiAcceptanceReceipt -InputPath $OperationalInputPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_invalid' }
+		catch { throw "Operational result fixture '$($OperationalResultCase.name)' failed: $($_.Exception.Message)" }
+	}
+	foreach ($OperationalReportCase in @(
+		@{ name='cleanup-unverified'; mutate={ param($r) $r.supervisor.cleanupVerified = $false } },
+		@{ name='resource-failure'; mutate={ param($r) $r.compileResources.failureReason = 'memory_pressure' } },
+		@{ name='wrong-revision'; mutate={ param($r) $r.revision = 'd' * 40 } },
+		@{ name='wrong-mode'; mutate={ param($r) $r.mode = 'ClientPackage' } }
+	)) {
+		$BadOperationalReport = New-TestEngineReport; & $OperationalReportCase.mutate $BadOperationalReport
+		$BadOperationalEvidence = Write-ControllerContractReport $BadOperationalReport 'engine-runner-report.json'
+		$BadOperationalPath = Join-Path $FixtureRoot ('controller-operational-' + $OperationalReportCase.name + '.json')
+		Write-Input (New-ControllerContractInput -CheckIds @('controller-operational-proof') -Evidence $BadOperationalEvidence @OperationalArguments) $BadOperationalPath
+		try { Assert-Rejected { New-CiAcceptanceReceipt -InputPath $BadOperationalPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_semantic_evidence_invalid:controller-operational-proof' }
+		catch { throw "Operational report fixture '$($OperationalReportCase.name)' failed: $($_.Exception.Message)" }
+	}
 	Remove-Item -LiteralPath (Join-Path $EvidenceRoot 'wrong-ci-report.json') -Force
 
 	foreach ($PortableTypeCase in @(
@@ -466,7 +502,7 @@ try {
 		catch { throw "Unreal type fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 	}
 
-	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-operational-proof')) {
+	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation')) {
 		$Unsupported = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
 		$Unsupported.selection.checks[0] = $UnsupportedId; $Unsupported.results.checks[0].id = $UnsupportedId
 		if ($UnsupportedId -in @('clean-package-provenance-smoke','native-client-server-compile')) { $Unsupported.results.checks[0].nativeExitCode=0; $Unsupported.results.checks[0].cleanupVerified=$true }
