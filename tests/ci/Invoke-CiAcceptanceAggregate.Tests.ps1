@@ -202,7 +202,7 @@ function New-FixtureReceipt {
 	$Results = @($Requirement.checks | ForEach-Object {
 		$RequiresNativeProof = $_ -cin @('clean-package-provenance-smoke','native-client-server-compile')
 		$RequiresNativeExit = $RequiresNativeProof -or $_ -ceq 'unreal-editor-automation'
-		$EvidenceName = switch ($_) { 'portable' {'ci-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { 'evidence/' + $_ + '.json' } }
+		$EvidenceName = switch ($_) { 'portable' {'ci-report.json'} 'controller-contract' {'ci-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { 'evidence/' + $_ + '.json' } }
 		[pscustomobject][ordered]@{
 			id = [string] $_; jobName = [string] $Requirement.jobName; conclusion = 'success'; nativeExitCode = if ($RequiresNativeExit) { 0 } else { $null }
 			infrastructureFailure = $null; terminal = $true; cleanupVerified = if ($RequiresNativeProof) { $true } else { $null }
@@ -243,9 +243,9 @@ function New-FixtureVisualBoundary {
 
 function New-FixtureSemanticBoundary {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory semantic fixture boundary.')]
-	param($Context, [string]$CheckId, $Report)
+	param($Context, [string[]]$CheckIds, $Report)
 	$EvidenceBytes = ConvertTo-FixtureBytes $Report
-	$Requirement = [pscustomobject][ordered]@{key='semantic';jobName='semantic-proof';artifactName=('ci-receipt-semantic-9001-2-' + $Context.attemptAnchor.nonce);checks=@($CheckId)}
+	$Requirement = [pscustomobject][ordered]@{key='semantic';jobName='semantic-proof';artifactName=('ci-receipt-semantic-9001-2-' + $Context.attemptAnchor.nonce);checks=@($CheckIds)}
 	$Receipt = New-FixtureReceipt -Context $Context -Requirement $Requirement -EvidenceBytes $EvidenceBytes
 	$ReceiptBytes = ConvertTo-FixtureBytes $Receipt
 	$Name = [string]$Receipt.results.checks[0].evidence[0].name
@@ -299,11 +299,12 @@ function New-FixtureApi {
 		$SelectedRequirement = [pscustomobject][ordered]@{key=$Requirement.key;jobName=$Requirement.jobName;artifactName=$Requirement.artifactName;checks=$SelectedSubset}
 		$Evidence = if ($SelectedSubset -ccontains 'native-client-server-compile') { ConvertTo-FixtureBytes (New-FixtureEngineReport -Context $Context) }
 			elseif ($SelectedSubset -ccontains 'visual-package') { ConvertTo-FixtureBytes (New-FixtureVisualReport -Context $Context) }
+			elseif ($SelectedSubset -ccontains 'portable' -or $SelectedSubset -ccontains 'controller-contract') { ConvertTo-FixtureBytes (New-FixturePortableReport -Context $Context) }
 			else { $script:Utf8.GetBytes('raw-proof') }
 		$Receipt = New-FixtureReceipt -Context $Context -Requirement $SelectedRequirement -EvidenceBytes $Evidence
 		$ArchiveEntries = New-Object System.Collections.Generic.List[object]
 		$ArchiveEntries.Add([pscustomobject]@{ name = 'ci-acceptance-receipt.json'; bytes = (ConvertTo-FixtureBytes $Receipt) })
-		foreach ($Result in $Receipt.results.checks) { $ArchiveEntries.Add([pscustomobject]@{ name = $Result.evidence[0].name; bytes = $Evidence }) }
+		foreach ($EvidenceName in @($Receipt.results.checks | ForEach-Object { [string] $_.evidence[0].name } | Select-Object -Unique)) { $ArchiveEntries.Add([pscustomobject]@{ name = $EvidenceName; bytes = $Evidence }) }
 		$Archive = New-FixtureZip $ArchiveEntries.ToArray()
 		$Url = "https://api.fixture/artifacts/$ArtifactId/zip"
 		$Archives[$Url] = $Archive
@@ -394,6 +395,14 @@ $VisualJob = @($VisualAggregate.jobs | Where-Object key -ceq 'quality')[0]
 Assert-True ($VisualJob.selected -and (@($VisualJob.capabilityChecks).Count -gt 1) -and (@($VisualJob.selectedChecks) -join ',') -ceq 'visual-package') 'A mixed producer capability must derive the exact visual-only selected subset.'
 Assert-True (@($VisualAggregate.receipts).Count -eq 1 -and (@($VisualAggregate.receipts[0].selectedChecks) -join ',') -ceq 'visual-package') 'Visual-only selected evidence must validate without claiming other producer capabilities.'
 Assert-True (@($Context.producerBindings).Count -eq 1 -and $Context.producerBindings[0].key -ceq 'quality' -and $Context.producerBindings[0].jobName -ceq 'quality-gates' -and $Context.producerBindings[0].artifactId -ceq $VisualAggregate.receipts[0].artifactId -and $Context.producerBindings[0].artifactName -ceq $VisualAggregate.receipts[0].artifactName -and $Context.producerBindings[0].digest -ceq $VisualAggregate.receipts[0].artifactApiDigest) 'Selected producer evidence must match one direct uploader binding exactly.'
+
+foreach ($ContractSelection in @(@('controller-contract','portable'), @('controller-contract'))) {
+	$ContractContext = New-FixtureContext
+	$ContractApi = New-FixtureApi -Context $ContractContext -Requirements $Requirements -SelectedChecks $ContractSelection
+	$ContractAggregate = New-CiAcceptanceAggregate -Context $ContractContext -Requirements $Requirements -ApiRequest $ContractApi -DeadlineSeconds 30
+	Assert-True ($ContractAggregate.decision.complete -and $ContractAggregate.decision.shadow -and -not $ContractAggregate.decision.authoritative -and -not $ContractAggregate.decision.grantsAcceptance) "A selected '$($ContractSelection -join ',')' subset must reconcile to a complete shadow-only aggregate."
+	Assert-True (@($ContractAggregate.receipts).Count -eq 1 -and (@($ContractAggregate.receipts[0].selectedChecks) -join ',') -ceq ($ContractSelection -join ',') -and $ContractAggregate.receipts[0].jobKey -ceq 'quality') "The '$($ContractSelection -join ',')' receipt must bind exactly the selector-derived controller-contract subset."
+}
 
 foreach ($SelectorBindingShapeCase in @(
 	@{name='missing-root';reason='context_schema_invalid';mutate={param($x)$x.PSObject.Properties.Remove('selectorBinding')}},
@@ -524,12 +533,52 @@ foreach ($Fixture in @(
 	@{id='native-client-server-compile';report=(New-FixtureEngineReport $Context);reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)$x.supervisor.cleanupVerified=$false}},
 	@{id='unreal-editor-automation';report=(New-FixtureUnrealReport $Context);reason='receipt_semantic_evidence_invalid:unreal-editor-automation';mutate={param($x)$x.tests[0].status='failed'}}
 )) {
-	$Boundary = New-FixtureSemanticBoundary -Context $Context -CheckId $Fixture.id -Report $Fixture.report
+	$Boundary = New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $Fixture.report
 	$Validated = @(Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive)
 	Assert-True ($Validated.Count -eq 1 -and @($Validated[0]).Count -eq 1) "Aggregate must accept exact semantic evidence for '$($Fixture.id)'."
 	$BadReport=$Fixture.report|ConvertTo-Json -Depth 20|ConvertFrom-Json;& $Fixture.mutate $BadReport
-	$BadBoundary=New-FixtureSemanticBoundary -Context $Context -CheckId $Fixture.id -Report $BadReport
+	$BadBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $BadReport
 	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadBoundary.receipt -Context $Context -Requirement $BadBoundary.requirement -Archive $BadBoundary.archive } $Fixture.reason
+}
+
+$ContractBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
+$ContractValidated = @(Assert-CiAcceptanceReceipt -Receipt $ContractBoundary.receipt -Context $Context -Requirement $ContractBoundary.requirement -Archive $ContractBoundary.archive)
+Assert-True ($ContractValidated.Count -eq 1 -and @($ContractValidated[0]).Count -eq 2 -and @($ContractBoundary.archive.entries).Count -eq 2) 'Aggregate must accept controller-contract and portable bound to one shared ci-report.json archive entry.'
+foreach ($ContractCase in @(
+	@{name='subset-failed';reason='receipt_semantic_evidence_failure:controller-contract';mutate={param($r)@($r.checks|Where-Object name -ceq 'ci-suite-tests')[0].status='failed';$r.summary.passed--;$r.summary.failed++;$r.summary.requiredFailed++}},
+	@{name='subset-missing';reason='receipt_semantic_evidence_invalid:controller-contract';mutate={param($r)$r.checks=@($r.checks|Where-Object name -cne 'ci-suite-tests');$r.summary.total--;$r.summary.passed--}}
+)) {
+	foreach ($ContractSelection in @(@('controller-contract','portable'), @('controller-contract'))) {
+		$BadContractReport=New-FixturePortableReport $Context;& $ContractCase.mutate $BadContractReport
+		$BadContractBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds $ContractSelection -Report $BadContractReport
+		try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadContractBoundary.receipt -Context $Context -Requirement $BadContractBoundary.requirement -Archive $BadContractBoundary.archive } $ContractCase.reason }
+		catch { throw "Aggregate controller-contract fixture '$($ContractCase.name)' failed: $($_.Exception.Message)" }
+	}
+}
+$ContractOnlyBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract') -Report (New-FixturePortableReport $Context)
+$ContractOnlyValidated = @(Assert-CiAcceptanceReceipt -Receipt $ContractOnlyBoundary.receipt -Context $Context -Requirement $ContractOnlyBoundary.requirement -Archive $ContractOnlyBoundary.archive)
+Assert-True ($ContractOnlyValidated.Count -eq 1 -and @($ContractOnlyValidated[0]).Count -eq 1) 'Aggregate must revalidate controller-contract without assuming portable is co-selected.'
+$PortableOnlyBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('portable') -Report (New-FixturePortableReport $Context)
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $PortableOnlyBoundary.receipt -Context $Context -Requirement $ContractBoundary.requirement -Archive $PortableOnlyBoundary.archive } 'receipt_selection_mismatch'
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $ContractBoundary.receipt -Context $Context -Requirement $PortableOnlyBoundary.requirement -Archive $ContractBoundary.archive } 'receipt_selection_mismatch'
+foreach ($SharedCase in @(
+	@{name='digest';mutate={param($x)$x.sha256='0'*64}},
+	@{name='size';mutate={param($x)$x.sizeBytes=[long]$x.sizeBytes+1}}
+)) {
+	$SharedBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
+	& $SharedCase.mutate $SharedBoundary.receipt.results.checks[1].evidence[0]
+	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $SharedBoundary.receipt -Context $Context -Requirement $SharedBoundary.requirement -Archive $SharedBoundary.archive } 'receipt_evidence_invalid' }
+	catch { throw "Aggregate shared-evidence fixture '$($SharedCase.name)' failed: $($_.Exception.Message)" }
+}
+foreach ($ContractResultCase in @(
+	@{name='native-exit';reason='receipt_semantic_evidence_invalid:controller-contract';mutate={param($x)$x.nativeExitCode=0}},
+	@{name='cleanup';reason='receipt_semantic_evidence_invalid:controller-contract';mutate={param($x)$x.cleanupVerified=$true}},
+	@{name='two-evidence';reason='receipt_semantic_evidence_duplicate:controller-contract';mutate={param($x)$x.evidence=@($x.evidence[0],$x.evidence[0])}}
+)) {
+	$ResultBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
+	& $ContractResultCase.mutate $ResultBoundary.receipt.results.checks[0]
+	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $ResultBoundary.receipt -Context $Context -Requirement $ResultBoundary.requirement -Archive $ResultBoundary.archive } $ContractResultCase.reason }
+	catch { throw "Aggregate controller-contract result fixture '$($ContractResultCase.name)' failed: $($_.Exception.Message)" }
 }
 
 foreach ($PortableTypeCase in @(
@@ -543,13 +592,13 @@ foreach ($PortableTypeCase in @(
 	@{name='summary-required-failed-string';mutate={param($x)$x.summary.requiredFailed='0'}}
 )) {
 	$BadPortable=New-FixturePortableReport $Context;& $PortableTypeCase.mutate $BadPortable
-	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'portable' -Report $BadPortable
+	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'portable' -Report $BadPortable
 	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:portable' }
 	catch { throw "Aggregate portable fixture '$($PortableTypeCase.name)' failed: $($_.Exception.Message)" }
 }
 $SkippedAnalyzer=New-FixturePortableReport $Context
 $SkippedAnalyzer.checks[$SkippedAnalyzer.checks.Count-1].status='skipped';$SkippedAnalyzer.summary.passed--;$SkippedAnalyzer.summary.skipped++
-$SkippedAnalyzerBoundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'portable' -Report $SkippedAnalyzer
+$SkippedAnalyzerBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'portable' -Report $SkippedAnalyzer
 Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $SkippedAnalyzerBoundary.receipt -Context $Context -Requirement $SkippedAnalyzerBoundary.requirement -Archive $SkippedAnalyzerBoundary.archive } 'receipt_semantic_evidence_failure:portable'
 
 foreach ($NativeTypeCase in @(
@@ -604,7 +653,7 @@ foreach ($NativeTypeCase in @(
 	@{name='build-executor-count-string';mutate={param($x)$x.compileEvidence.builds[0].executorSummaryCount='1'}}
 )) {
 	$BadNative=New-FixtureEngineReport $Context;& $NativeTypeCase.mutate $BadNative
-	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'native-client-server-compile' -Report $BadNative
+	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'native-client-server-compile' -Report $BadNative
 	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:native-client-server-compile' }
 	catch { throw "Aggregate native fixture '$($NativeTypeCase.name)' failed: $($_.Exception.Message)" }
 }
@@ -620,12 +669,12 @@ foreach ($UnrealTypeCase in @(
 	@{name='summary-relationship';mutate={param($x)$x.summary.total=3}}
 )) {
 	$BadUnreal=New-FixtureUnrealReport $Context;& $UnrealTypeCase.mutate $BadUnreal
-	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'unreal-editor-automation' -Report $BadUnreal
+	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'unreal-editor-automation' -Report $BadUnreal
 	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
 	catch { throw "Aggregate Unreal fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 }
 
-foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof')) {
+foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-operational-proof')) {
 	$UnsupportedRequirement = [pscustomobject][ordered]@{key='unsupported';jobName='unsupported-proof';selected=$true;artifactName=('ci-receipt-unsupported-9001-2-' + $Context.attemptAnchor.nonce);checks=@($UnsupportedId)}
 	$UnsupportedBytes = $script:Utf8.GetBytes('opaque-proof')
 	$UnsupportedReceipt = New-FixtureReceipt -Context $Context -Requirement $UnsupportedRequirement -EvidenceBytes $UnsupportedBytes
