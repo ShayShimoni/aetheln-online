@@ -1339,8 +1339,9 @@ IDs, normalized result state, native exit, infrastructure and cleanup state,
 the exact closed current-attempt anchor, and SHA-256/length of every raw
 evidence file. One receipt belongs to one named receipt-publisher job. The live
 publisher takes a producer key, not a check ID: `portable` may prove
-`controller-contract` and `portable` from `ci-report.json`, `native` proves
-`native-client-server-compile`, and `visual` proves `visual-package`. It
+`controller-contract` and `portable` from `ci-report.json`, `native` may prove
+`controller-operational-proof` and `native-client-server-compile` from
+`engine-runner-report.json`, and `visual` proves `visual-package`. It
 publishes the ordinal-sorted intersection of that fixed set with the identity
 context's selector-derived `selection.checks`, drops selected obligations the
 key cannot prove, and rejects an empty intersection. Every published result
@@ -1356,7 +1357,7 @@ successful summary cannot substitute.
 
 `aetheln.ci-acceptance-aggregate/v1` is the live hosted shadow reconciliation
 record for a selector whose selected obligations are all in the supported
-portable/controller-contract/native/visual subset. It does not trust caller-supplied job-selection
+portable/controller-contract/controller-operational-proof/native/visual subset. It does not trust caller-supplied job-selection
 booleans. Instead, it requires the exact successful current-attempt
 `ci-selection-shadow` job, downloads the uniquely named current-attempt
 `ci-selection-shadow-<run-id>-<run-attempt>-<nonce>` artifact through bounded GitHub API
