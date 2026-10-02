@@ -51,7 +51,7 @@ path, not a credential; keep it outside tracked configuration.
 From the repository root:
 
 ```powershell
-$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source-issue81-clean'
 powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
   -EngineRoot $AethelnEngineRoot
 ```

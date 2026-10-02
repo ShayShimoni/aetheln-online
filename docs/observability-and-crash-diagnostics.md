@@ -175,7 +175,7 @@ evidence rather than observation of production gameplay behavior.
 For a local representative inspection, run:
 
 ```powershell
-& 'D:\UnrealEngine\UE-5.8.1-source\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' `
+& 'D:\UnrealEngine\UE-5.8.1-source-issue81-clean\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' `
   (Resolve-Path '.\AethelnOnline.uproject').Path `
   -unattended -nop4 -nullrhi `
   '-ExecCmds=Automation RunTests Aetheln.Observability; Quit' `
