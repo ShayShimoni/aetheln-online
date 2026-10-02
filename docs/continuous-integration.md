@@ -85,7 +85,7 @@ With the pinned source engine already built, run the real headless Unreal tests
 locally by passing its explicit non-secret path:
 
 ```powershell
-$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source-issue81-clean'
 powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
   -EngineRoot $AethelnEngineRoot
 ```
