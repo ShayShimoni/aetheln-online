@@ -638,13 +638,14 @@ jobs:
           if ($env:AETHELN_ENGINE_ROOT) { Write-Output "::add-mask::$env:AETHELN_ENGINE_ROOT" }
           if ($env:AETHELN_MANAGED_COMPILE_ROOT) { Write-Output "::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT" }
           # Start only if every automation step bound (build 15, harness 12,
-          # residue 2, bind 1, upload 1, outcome 1) still fits inside the
-          # 40-minute job, so the compile must finish within about 8 minutes
-          # of the start anchor for the editor build to run.
+          # residue 2, bind 1, upload 1, outcome 1) plus a 2-minute margin for
+          # job setup before the anchor and post-job cleanup still fits inside
+          # the 40-minute job, so the compile must finish within about 6
+          # minutes of the start anchor for the editor build to run.
           $Started = 0L
           if (-not [long]::TryParse([string] $env:AETHELN_COMPILE_STARTED_TIMESTAMP, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref] $Started) -or $Started -le 0) { Exit-Automation 'editor_build_budget_invalid' }
           $JobSeconds = 40 * 60
-          $RequiredSeconds = (15 + 12 + 2 + 1 + 1 + 1) * 60
+          $RequiredSeconds = (15 + 12 + 2 + 1 + 1 + 1 + 2) * 60
           $ElapsedSeconds = ([Diagnostics.Stopwatch]::GetTimestamp() - $Started) / [Diagnostics.Stopwatch]::Frequency
           if ($ElapsedSeconds -lt 0) { Exit-Automation 'editor_build_budget_invalid' }
           if ($JobSeconds - $ElapsedSeconds -lt $RequiredSeconds) {
@@ -696,12 +697,18 @@ jobs:
           $ReportPath = Join-Path $RunRoot 'unreal-automation-report.json'
           if (-not (Test-Path -LiteralPath $ManagedReport -PathType Leaf)) { Exit-Automation 'unreal_automation_report_missing' }
           Copy-Item -LiteralPath $ManagedReport -Destination $ReportPath
-          try { $Report = [IO.File]::ReadAllText($ReportPath) | ConvertFrom-Json } catch { Exit-Automation 'unreal_automation_report_invalid' }
           # Bounded, path-free summary: the harness's fixed vocabulary and integers only.
+          # Any missing or mistyped field records unreal_automation_report_invalid.
           $KnownReasons = @('none', 'preflight', 'repository-dirty', 'engine-pin', 'process-start', 'timeout', 'editor-exit', 'missing-report', 'discovery-mismatch', 'test-failure', 'invalid-report', 'repository-drift')
-          $Result = if ($Report.result -cin @('passed', 'failed')) { $Report.result } else { 'invalid' }
-          $Reason = if ($KnownReasons -ccontains [string] $Report.failureReason) { [string] $Report.failureReason } else { 'invalid' }
-          Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f $Result, $Reason, [int] $Report.summary.total, [int] $Report.summary.passed, [int] $Report.summary.requiredFailed, $Harnessed.ExitCode)
+          try {
+            $Report = [IO.File]::ReadAllText($ReportPath) | ConvertFrom-Json
+            $Result = $Report.result
+            $Reason = $Report.failureReason
+            $Summary = $Report.summary
+            if ($Result -isnot [string] -or $Result -cnotin @('passed', 'failed') -or $Reason -isnot [string] -or $KnownReasons -cnotcontains $Reason -or
+                $Summary.total -isnot [int] -or $Summary.passed -isnot [int] -or $Summary.requiredFailed -isnot [int]) { throw [FormatException]::new('report_invalid') }
+          } catch { Exit-Automation 'unreal_automation_report_invalid' }
+          Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f $Result, $Reason, $Summary.total, $Summary.passed, $Summary.requiredFailed, $Harnessed.ExitCode)
           if ($Harnessed.ExitCode -ne 0 -or $Result -cne 'passed') { Exit-Automation ('unreal_automation_' + $Reason.Replace('-', '_')) }
       # The editor may write gitignored files under compile inputs, and the next
       # managed sync rejects any untracked input file. Remove exactly the set
@@ -728,7 +735,7 @@ jobs:
             $Info.CreateNoWindow = $true
             $Info.RedirectStandardOutput = $true
             $Info.RedirectStandardError = $true
-            $Info.StandardOutputEncoding = New-Object Text.UTF8Encoding $false
+            $Info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false, $true)
             $Process = [Diagnostics.Process]::Start($Info)
             $ErrorText = $Process.StandardError.ReadToEndAsync()
             $Text = $Process.StandardOutput.ReadToEnd()

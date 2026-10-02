@@ -398,8 +398,11 @@ foreach ($Step in @(
 Assert-True ($UnrealReceipt -match "(?ms)^      - name: Download exact unreal evidence\r?\n        if: needs\.trusted-candidate-compile\.outputs\.automation_artifact_id != ''\r?\n") 'A missing automation artifact must skip the unreal download so the publisher fails at its raw binding check rather than downloading every run artifact.'
 # The editor build starts only when its own bound, the harness bound, and a
 # small residue/bind/upload reserve still fit inside the 40-minute job.
-Assert-True ($EditorBuild.Contains('$JobSeconds = 40 * 60') -and $EditorBuild.Contains('$RequiredSeconds = (15 + 12 + 2 + 1 + 1 + 1) * 60') -and $EditorBuild.Contains('$env:AETHELN_COMPILE_STARTED_TIMESTAMP') -and $EditorBuild.IndexOf("Exit-Automation 'editor_build_budget_exhausted'") -gt 0 -and $EditorBuild.IndexOf("Exit-Automation 'editor_build_budget_exhausted'") -lt $EditorBuild.IndexOf('InitialPreparation.BuildInvocation.ps1')) 'The editor build must check the remaining job budget before it starts.'
+Assert-True ($EditorBuild.Contains('$JobSeconds = 40 * 60') -and $EditorBuild.Contains('$RequiredSeconds = (15 + 12 + 2 + 1 + 1 + 1 + 2) * 60') -and $EditorBuild.Contains('$env:AETHELN_COMPILE_STARTED_TIMESTAMP') -and $EditorBuild.IndexOf("Exit-Automation 'editor_build_budget_exhausted'") -gt 0 -and $EditorBuild.IndexOf("Exit-Automation 'editor_build_budget_exhausted'") -lt $EditorBuild.IndexOf('InitialPreparation.BuildInvocation.ps1')) 'The editor build must check the remaining job budget before it starts.'
 Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $AutomationRun.Contains("Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f")) 'The harness step may print only the fixed path-free summary line.'
+# The editor build prints only the two masks, the fixed skip line, and the
+# wrapper's native-result.json (target, platform, exit code, failure class).
+Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 4 -and $EditorBuild.Contains("Write-Output 'editor_build_skipped reason=editor_build_budget_exhausted'") -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'")) 'The editor build may print only the masks, the fixed skip line, and the bounded native result record.'
 $ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
 $UntrackedInputQuery = [regex]::Matches($ManagedWorkspaceSource, "'(ls-files --others -z -- [^']+)'")
 Assert-True ($AutomationResidue.Contains("(Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source") -and $AutomationResidue.Contains('''--no-replace-objects --no-optional-locks -C "'' + $Root + ''" '' + $Query')) 'Residue cleanup must resolve and invoke git exactly as the managed sync does.'
@@ -417,7 +420,13 @@ Assert-True ($UntrackedInputQuery.Count -eq 1 -and $AutomationResidue.Contains("
 function Get-WorkflowStepScript([string] $Step) {
 	$Run = [regex]::Match($Step, '(?ms)^        run: \|\r?\n(?<body>.*)\z')
 	Assert-True $Run.Success 'Automation step must have a literal run block.'
-	$Script = ($Run.Groups['body'].Value -split '\r?\n' | ForEach-Object { if ($_.Length -ge 10) { $_.Substring(10) } else { $_.Trim() } }) -join "`n"
+	# The literal block ends at the first nonblank line indented less than its body.
+	$Lines = New-Object Collections.Generic.List[string]
+	foreach ($Line in ($Run.Groups['body'].Value -split '\r?\n')) {
+		if ($Line.Trim().Length -ne 0 -and -not $Line.StartsWith(' ' * 10)) { break }
+		$Lines.Add($(if ($Line.Length -ge 10) { $Line.Substring(10) } else { '' }))
+	}
+	$Script = $Lines -join "`n"
 	return $Script.Replace('${{ runner.temp }}', $script:AutomationFixtureTemp).Replace('${{ github.run_id }}', '1').Replace('${{ github.run_attempt }}', '1').Replace('${{ github.job }}', 'job')
 }
 function Invoke-AutomationStepFixture([string] $Step) {
@@ -451,6 +460,31 @@ try {
 	Assert-True ($Exhausted.failure -ceq 'editor_build_budget_exhausted' -and -not (Test-Path -LiteralPath (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'))) 'An editor build that cannot finish inside the job budget must not start.'
 	$env:AETHELN_COMPILE_STARTED_TIMESTAMP = 'not-a-timestamp'
 	Assert-True ((Invoke-AutomationStepFixture $EditorBuild).failure -ceq 'editor_build_budget_invalid') 'An unreadable compile start anchor must fail closed.'
+
+	# The harness step summarizes a well-formed report and records
+	# unreal_automation_report_invalid for a malformed one.
+	$HarnessManaged = Join-Path $AutomationFixtureRoot 'harness-managed'
+	$null = New-Item -ItemType Directory -Path (Join-Path $HarnessManaged 'scripts\ci'), (Join-Path $HarnessManaged 'TestResults')
+	[IO.File]::WriteAllText((Join-Path $HarnessManaged 'scripts\ci\Invoke-UnrealAutomationTests.ps1'), "param([string] `$EngineRoot, [int] `$TimeoutSeconds)`n[IO.File]::WriteAllText((Join-Path `$PSScriptRoot '..\..\TestResults\unreal-automation-report.json'), `$env:AETHELN_FIXTURE_REPORT)`nexit [int] `$env:AETHELN_FIXTURE_EXIT`n")
+	$PreviousHarnessManaged = $env:AETHELN_MANAGED_COMPILE_ROOT
+	$env:AETHELN_MANAGED_COMPILE_ROOT = $HarnessManaged
+	try {
+		foreach ($HarnessCase in @(
+			@{ report='{"result":"passed","failureReason":"none","summary":{"total":2,"passed":2,"requiredFailed":0}}'; exit='0'; failure=$null; output='unreal_automation result=passed reason=none total=2 passed=2 requiredFailed=0 exit=0' },
+			@{ report='{"result":"passed","failureReason":"none","summary":{"total":"2","passed":2}}'; exit='0'; failure='unreal_automation_report_invalid'; output='' },
+			@{ report='{"result":"failed","failureReason":"test-failure","summary":{"total":2,"passed":1,"requiredFailed":1}}'; exit='1'; failure='unreal_automation_test_failure'; output='unreal_automation result=failed reason=test-failure total=2 passed=1 requiredFailed=1 exit=1' }
+		)) {
+			$env:AETHELN_FIXTURE_REPORT = $HarnessCase.report
+			$env:AETHELN_FIXTURE_EXIT = $HarnessCase.exit
+			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+			$Harnessed = Invoke-AutomationStepFixture $AutomationRun
+			$ExpectedOutput = if ($null -eq $HarnessCase.failure) { '' } else { 'reason=' + $HarnessCase.failure + "`n" }
+			Assert-True ($Harnessed.failure -ceq $HarnessCase.failure -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput -and ($null -ne $HarnessCase.failure -or (@($Harnessed.output) -join "`n") -ceq $HarnessCase.output)) "The harness step must handle report case '$($HarnessCase.exit)/$($HarnessCase.failure)'."
+		}
+	} finally {
+		$env:AETHELN_MANAGED_COMPILE_ROOT = $PreviousHarnessManaged
+		Remove-Item Env:AETHELN_FIXTURE_REPORT, Env:AETHELN_FIXTURE_EXIT -ErrorAction SilentlyContinue
+	}
 
 	# The outcome step reports the first failed step's fixed reason, a fixed
 	# fallback for an unrecorded or malformed one, and 'none' after success.

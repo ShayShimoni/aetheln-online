@@ -794,11 +794,14 @@ Every accepted decision records:
   the native receipt the selector always co-selects. That first proof runs in
   the existing compile job after the host lease is released, inside the
   unchanged 40-minute job ceiling: the editor build starts only when every
-  automation step bound (32 minutes in total) still fits, and every automation
-  step continues on error, so an automation step failure leaves the compile job
-  and native receipt intact while the unreal receipt reports the fixed
-  `automation_reason` and fails red at its raw binding check. A whole-job
-  ceiling overrun still cancels the compile job. Host-lease wrapping remains a
+  automation step bound plus a 2-minute setup/cleanup margin (34 minutes in
+  total) still fits, so the compile must finish within about 6 minutes of the
+  job's start anchor. Every automation step continues on error, so an
+  automation step failure leaves the compile job and native receipt intact
+  while the unreal receipt reports the fixed `automation_reason` and fails red
+  at its raw binding check. A whole-job ceiling overrun still cancels the
+  compile job. Compile and editor-build durations are to be recorded from the
+  first live runs to confirm that cutoff. Host-lease wrapping remains a
   follow-up.
   `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
   when the selector's chosen checks are a subset of those six live

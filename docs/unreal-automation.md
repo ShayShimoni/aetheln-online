@@ -186,8 +186,12 @@ and does not fail the compile job (a whole-job ceiling overrun still cancels
 it). The hosted `unreal-receipt-shadow` job publishes a shadow-only
 `unreal-editor-automation` receipt from the report, or prints the fixed
 `automation_reason` and fails red when it is missing. Harness and build output
-stay in the runner temp directory, which is wiped after the job. The filter, report schema, and engine pin are
-unchanged, and nothing grants acceptance.
+stay in the runner temp directory, which is wiped after the job. The editor
+build starts only when the compile finished within about 6 minutes of the
+job's start anchor; compile and editor-build durations are to be recorded from
+the first live runs. These steps run outside the engine host lease for this
+first proof; wrapping them in the lease is a follow-up. The filter, report
+schema, and engine pin are unchanged, and nothing grants acceptance.
 
 Issue #44 must reuse this automation foundation for its downstream packaged
 dedicated-server/two-client lifecycle, Gauntlet orchestration, and network-
