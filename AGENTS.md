@@ -220,7 +220,7 @@ Tie board moves to PR events, in the same step as the PR action:
   issue moves to `Done`. Check a box only when recorded evidence covers that
   criterion, and post or link the QA comment naming the run and `develop`
   commit in the same step.
-- Move an issue to `Done` only after required post-merge QA has passed on the
-  merged `develop` revision and every acceptance-criteria checkbox is
-  checked. An issue in `Done` with an unchecked acceptance box returns to the
-  status its evidence supports.
+- When the last acceptance-criteria checkbox is checked, the issue is done:
+  move it to `Done` in the same step. Never move an issue to `Done` while any
+  acceptance box is unchecked. An issue in `Done` with an unchecked acceptance
+  box returns to the status its evidence supports.
