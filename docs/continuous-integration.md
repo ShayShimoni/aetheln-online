@@ -554,7 +554,10 @@ attempt nonce, and the final `complete`, `shadow`, `authoritative`, and
 `grantsAcceptance` values. One observation cannot substitute for the other.
 A supported-only observation that exercises both controller obligations needs an
 owner pull request that changes a `scripts/ci/` file or the live workflow
-without any `scripts/build/` path: it selects `portable`,
+without any `scripts/build/` path and without
+`scripts/ci/Invoke-EngineRunnerGate.ps1` or
+`scripts/ci/Initialize-CompileWorkspace.ps1` (the selector co-selects the
+unsupported `clean-package-provenance-smoke` for those two): it selects `portable`,
 `controller-contract`, and `controller-operational-proof`, the classifier
 requires the compile, and the expected result is `aggregate_ready=true`, a
 `native-receipt-shadow` receipt carrying only `controller-operational-proof`, a

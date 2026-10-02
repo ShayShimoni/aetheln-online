@@ -961,7 +961,14 @@ Every accepted decision records:
   `controller-operational-proof` still skips the compile under the trust
   predicates and fails red at the native binding, the pre-existing
   `native-client-server-compile` behavior now reachable for controller-only
-  changes. Authority stays off: the `ci-acceptance-authority` predicate remains
+  changes. A pull request that touches only
+  `scripts/ci/Invoke-EngineRunnerGate.ps1` or
+  `scripts/ci/Initialize-CompileWorkspace.ps1` now compiles but still lands in
+  the green `producer_contract_incomplete` gap, because the accepted selector
+  co-selects the unsupported `clean-package-provenance-smoke` for those two
+  paths exactly as it does for `scripts/build/`; the owner directed their
+  removal from the exempt set, so that compile cost without operational proof
+  is recorded here rather than hidden. Authority stays off: the `ci-acceptance-authority` predicate remains
   literally `always() && github.event_name == 'pull_request' && false`, and no
   receipt or aggregate grants acceptance.
 - **Owner:** Issue #167.
