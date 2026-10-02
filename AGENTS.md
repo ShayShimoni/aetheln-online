@@ -249,8 +249,15 @@ Board moves, made in the same step as the action:
 - An issue moves from `Dev Done` to `QA` only when a QA round actually
   starts on it, and stays in `QA` only while that round runs. When the round
   ends: all boxes checked moves it to `Done`; a failed criterion that needs a
-  fix moves it to `In Progress`; a criterion waiting on a decision, a
-  dependency, or an engine QA run moves it to `Blocked` with the reason.
+  fix moves it back to `Open`, and to `In Progress` when the fix starts; a
+  criterion waiting on a decision, a dependency, or an engine QA run moves it
+  to `Blocked` with the reason.
+- `Open` holds the next issues ready to start: clear acceptance criteria,
+  dependencies at the evidence level they need, and in the current roadmap
+  stage. Keep about 8 at most. When fewer than 3 remain, the lead pulls the
+  next ready issues from `Backlog` in roadmap order, with owner priorities
+  first. Issues that need an undecided design or belong to a later stage stay
+  in `Backlog`.
 - Check each acceptance-criteria checkbox as soon as QA on the merged
   `develop` revision verifies that criterion, not only when the issue moves
   to `Done`. Where QA is explicitly not applicable, the distinct acceptance
