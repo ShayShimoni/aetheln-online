@@ -1281,6 +1281,46 @@ Every accepted decision records:
   `-NoEngineChanges`), or the plugin definition header still changes across
   a CI editor run.
 
+### TA-021 - Private GameCombat Dependency on the GameNet Observability Service
+
+- **Status:** Accepted
+- **Scope:** `GameCombat` module dependencies and the structured observability
+  producers added by issue #38.
+- **Decision (2026-10-03):** `GameCombat` keeps a private dependency on
+  `GameNet` (`PrivateDependencyModuleNames.Add("GameNet")` in
+  `Source/GameCombat/GameCombat.Build.cs`). The edge exists only so
+  authoritative combat and movement producers can emit structured events
+  through `UAethelnObservabilitySubsystem` (`AethelnObservability.h` and
+  `AethelnObservabilitySubsystem.h`). `GameCombat` uses no other `GameNet`
+  type through it and exposes no `GameNet` type in its public headers.
+- **Context:** Commit `186b4f89` (#38) added the edge without a record, and the
+  issue #13 QA (AC6, DoD4) found it outside the `GameCombat` row of
+  [Technical Architecture](technical-architecture.md). The producers are
+  `AethelnSpikeCharacter`, `AethelnSpikeMovementComponent`,
+  `AethelnSpikeAuthorityComponent`, and `AethelnNetworkSpikeGameMode`, plus the
+  `AethelnNetworkSpikeAuthorityTests` automation test. Producers only enqueue,
+  and sink failure never changes gameplay truth
+  ([Observability and Crash Diagnostics](observability-and-crash-diagnostics.md)).
+- **Evidence:** All `GameNet` includes in `Source/GameCombat/` are the two
+  observability headers, in `Private/` source files only. `GameNet.Build.cs`
+  depends only on `Core`, `CoreUObject`, and `Engine`, so the edge is
+  one-directional and adds no cycle. `GameServer` already depends on both
+  modules.
+- **Alternatives:** Move the observability service, or an emission interface,
+  into `GameCore` so `GameCombat` needs no `GameNet` edge (deferred: a C++ move
+  with no behavior change). Drop the combat producers (rejected: #38 requires
+  correlated movement and combat activations, corrections, and rejection
+  reason codes).
+- **Consequences:** The `GameCombat` row in Technical Architecture lists the
+  private edge, and the `GameNet` row lists the observability service.
+  `GameNet` must never depend on `GameCombat`. The edge gives `GameCombat` no
+  session, admission, or transfer access, and `GameNet` still owns no combat
+  truth.
+- **Owner:** Issues #13 and #38.
+- **Revisit trigger:** `GameCombat` needs a `GameNet` type other than the
+  observability service, `GameNet` needs a `GameCombat` type, or a reviewed
+  change moves the observability service into `GameCore` or its own module.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |
