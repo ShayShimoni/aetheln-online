@@ -1180,12 +1180,39 @@ Every accepted decision records:
     registry key exists), and `0` otherwise. The CI build resolved
     `VisualStudio2022`; contributor builds, which pass no `-Compiler`
     (`docs/unreal-project-setup.md`), resolve `VisualStudio`. The flip recurs on
-    every switch between a CI editor build and a contributor build. The same
-    run also rewrote one engine UHT output,
-    `Engine/Intermediate/Build/Win64/UnrealEditor/Inc/NetCore/UHT/NetCore.init.gen.cpp`,
-    and relinked the NetCore module. The editor build triggered it; why the
-    content changed is unknown, because the earlier content is gone. Header
-    ordering is ruled out: UHT sorts headers before it combines body hashes.
+    every switch between a CI editor build and a contributor build.
+  - *NetCore regeneration (recurring, cause unknown):* both observed CI editor
+    runs (37056028961 and 37061874410, the PR #207 run) rewrote
+    `Engine/Intermediate/Build/Win64/UnrealEditor/Inc/NetCore/UHT/NetCore.init.gen.cpp`
+    and relinked `UnrealEditor-NetCore.dll`. Each run also flipped the plugin
+    definition. Only the package registration body hash changed: it went to
+    `0xF26BCE42` in the first run and to `0x6C2D6518` in the second. The
+    declarations hash (`0x12F0F921`) and every per-header NetCore `.gen.cpp`
+    (unchanged since the engine build) stayed the same. The contributor editor
+    build that followed the second run flipped the definition back but left
+    NetCore and its DLL alone. No CI argument explains the difference:
+    - The arguments only CI passed were `-UBA -UBADisableRemote -NoXGE -NoSNDBS
+      -NoFASTBuild -MaxParallelActions=4`, the compiler pins, and, before this
+      change, `-Compiler=`. CI also sets child-only dotnet and toolchain
+      environment variables and builds a project on another drive.
+    - None of these reaches UHT. Both logs invoke the internal UHT with only
+      the project, the manifest, and `-WarningsAsErrors`.
+    - The CI and contributor `AethelnOnlineEditor.uhtmanifest` files are
+      identical for all 588 engine modules, NetCore included (headers,
+      definitions, dependencies, output directory). They also have the same
+      target settings, with the UHT input cache off (it is enabled only by
+      `-EnableUHTInputCache` or `IsBuildMachine=1`), and no UHT plugins. Only
+      the four project modules' paths differ.
+    - UHT writes an output only when its bytes differ. Header ordering is ruled
+      out, because UHT sorts headers before it combines body hashes. Monolithic
+      client and server builds always produce `0x6C2D6518`.
+    - The two contributor builds ran full-target UHT on identical project
+      sources and each left whatever value they found. A deterministic
+      generator could not have matched both values, so the input that varies
+      between UHT runs is not yet identified.
+    Until it is, expect `-NoEngineChanges` (below) to fail closed on CI editor
+    runs where NetCore regenerates. Record that as a known outcome, not a
+    regression.
   - *Compiler alignment:* for `AethelnOnlineEditor` only,
     `InitialPreparation.BuildInvocation.ps1` no longer passes `-Compiler=` and
     keeps `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0`. In the
@@ -1219,18 +1246,24 @@ Every accepted decision records:
   - *Residual:* UBT runs the check after it creates the makefile. By then UHT
     outputs and `Definitions.*.h` headers may already be written, so the flag
     stops engine compile, link, and BuildId rewrites but not those intermediate
-    writes.
+    writes. After a refused run that regenerated NetCore, the next contributor
+    editor build still compiles and relinks NetCore once.
   - *Monitoring:* before and after CI editor runs, hash `NetCore.init.gen.cpp`
     and the plugin header
     `Engine/Plugins/Developer/VisualStudioCodeSourceCodeAccess/Intermediate/Build/Win64/x64/UnrealEditor/Development/VSCSCA/Definitions.VSCSCA.h`.
-    If NetCore changes again, investigate with a controlled UHT rerun on a
-    scratch engine copy.
+    Follow-up (required): find what varies the NetCore package body hash. Run
+    UHT repeatedly against a scratch engine copy with the same manifest, then
+    compare the per-header body hashes and the exported header set, and align
+    or pin whatever input varies.
   - *Follow-ups:* package jobs are unchanged. In `rebuild-authorized` mode,
     `scripts/build/HostToolProvisioning.Policy.ps1` passes
     `-Compiler=VisualStudio2022` when it rebuilds host `UnrealEditor`, so it can
     flip the same definition. Align it separately. Longer term, give each
-    consumer an isolated or installed engine tree. Live proof is still pending:
-    one editor build with this argument set while the shared engine is idle.
+    consumer an isolated or installed engine tree, which removes both
+    exposures. Live proof is still pending: one editor build with this argument
+    set while the shared engine is idle. It should show no plugin relink and
+    show whether NetCore regenerates, which ends in exit 5 and
+    `editor_build_engine_changes_required`.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, workspace-revision races appear in practice, the
