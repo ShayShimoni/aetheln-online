@@ -200,8 +200,9 @@ because a PR merged.
 
 Tie board moves to PR events, in the same step as the PR action:
 
-- When a PR for an issue is opened, move the issue to `Code Review`. It stays
-  there while CI, review, and fixes run.
+- Open a PR only after developer verification is complete and recorded. When
+  it opens, move the issue to `Code Review`. It stays there while CI, review,
+  and fixes run.
 - Move it to `Dev Done` only after the PR is reviewed, verified, and merged.
 - For an issue that needs several PRs, return it to `In Progress` after a
   partial merge, and move it to `Code Review` again when the next PR opens.
