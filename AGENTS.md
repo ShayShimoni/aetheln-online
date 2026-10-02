@@ -233,3 +233,18 @@ Tie board moves to PR events, in the same step as the PR action:
   move it to `Done` in the same step. Never move an issue to `Done` while any
   acceptance box is unchecked. An issue in `Done` with an unchecked acceptance
   box returns to the status its evidence supports.
+
+Keep local branches and worktrees in sync with the remote:
+
+- GitHub deletes a PR's head branch on merge. In the same step as the merge,
+  run `git fetch --prune`, remove the branch's local worktree, and delete the
+  local branch.
+- Remove a worktree only when `git status --porcelain` shows nothing, or
+  `git diff HEAD` and untracked files are empty (line-ending noise only).
+  Otherwise keep it and record its path and state on the issue.
+- Delete a local branch only when its tip is an ancestor of `origin/develop`,
+  or after its PR is closed unmerged and the issue records that nothing on it
+  is still needed.
+- Keep worktrees that hold preserved evidence, engine or compile workspaces,
+  and detached evidence checkouts until the issue that owns them is `Done`.
+- Remove a QA or review worktree when that QA or review is recorded.
