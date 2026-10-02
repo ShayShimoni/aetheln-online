@@ -1067,4 +1067,18 @@ $NonCanonicalReceiptArtifact = New-FixtureRequirements
 $NonCanonicalReceiptArtifact.jobs[0].artifactName = 'ci-receipt-native-custom'
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $NonCanonicalReceiptArtifact -ApiRequest (New-FixtureApi -Context $Context -Requirements $NonCanonicalReceiptArtifact) -DeadlineSeconds 30 } 'requirements_artifact_name_invalid'
 
+
+# Live run 36935862210 (PR #194) failed with api_response_type_invalid: the default bounded HTTP reader returned
+# $Output.ToArray() without the unary comma, so PowerShell unrolled the byte[] into Object[] before the type guard.
+# Fixture callbacks already return ,$Bytes, so only a live request exercised the defect. Keep the guard strict and
+# pin the production reader to the comma form; a wrapper that unrolls the array must stay rejected.
+$UnrolledFixture = { param([string]$Uri,[int]$Remaining,[int]$Maximum,[string]$Kind) $null = $Uri; $null = $Remaining; $null = $Maximum; $null = $Kind; return [byte[]](1,2,3) }
+Assert-Rejected { Invoke-AggregateApi -ApiRequest $UnrolledFixture -Uri '/unrolled' -Clock ([Diagnostics.Stopwatch]::StartNew()) -DeadlineSeconds 30 -MaximumBytes 10 -Budget (New-AggregateBudget) -RequestKind Api } 'api_response_type_invalid'
+$ReaderSource = [IO.File]::ReadAllText($SourceScript)
+$ReaderStart = $ReaderSource.IndexOf('function Invoke-DefaultBoundedApiRequest', [StringComparison]::Ordinal)
+$ReaderEnd = $ReaderSource.IndexOf('function Get-RemainingMilliseconds', [StringComparison]::Ordinal)
+Assert-True ($ReaderStart -ge 0 -and $ReaderEnd -gt $ReaderStart) 'The default bounded API reader must remain a distinct function ahead of Get-RemainingMilliseconds.'
+$ReaderBody = $ReaderSource.Substring($ReaderStart, $ReaderEnd - $ReaderStart)
+Assert-True ($ReaderBody.Contains('return ,$Output.ToArray()') -and -not $ReaderBody.Contains('return $Output.ToArray()')) 'The default bounded API reader must return the response byte[] with the unary comma so the aggregate type guard receives a byte[] from live GitHub requests.'
+
 Write-Output "PASS: $script:Assertions acceptance aggregate assertions"

@@ -803,7 +803,7 @@ function Invoke-DefaultBoundedApiRequest {
 		if($Status-ne 200){$Response.Dispose();throw 'api_request_failed'}
 		try{
 			$Stream=$Response.GetResponseStream();$Output=New-Object IO.MemoryStream
-			try{$Buffer=New-Object byte[] 8192;while($true){$ReadRemaining=[long]$RemainingMilliseconds-$RequestClock.ElapsedMilliseconds;if($ReadRemaining-le 0){throw 'api_deadline_exceeded'};if($Stream.CanTimeout){$Stream.ReadTimeout=[int][Math]::Min($ReadRemaining,[int]::MaxValue)};try{$Read=$Stream.Read($Buffer,0,$Buffer.Length)}catch{if($RequestClock.ElapsedMilliseconds-ge$RemainingMilliseconds){throw 'api_deadline_exceeded'};throw 'api_request_failed'};if($RequestClock.ElapsedMilliseconds-ge$RemainingMilliseconds){throw 'api_deadline_exceeded'};if($Read-le 0){break};if($Output.Length+$Read-gt$MaximumBytes){throw 'api_response_size_limit'};$Output.Write($Buffer,0,$Read)};return $Output.ToArray()}
+			try{$Buffer=New-Object byte[] 8192;while($true){$ReadRemaining=[long]$RemainingMilliseconds-$RequestClock.ElapsedMilliseconds;if($ReadRemaining-le 0){throw 'api_deadline_exceeded'};if($Stream.CanTimeout){$Stream.ReadTimeout=[int][Math]::Min($ReadRemaining,[int]::MaxValue)};try{$Read=$Stream.Read($Buffer,0,$Buffer.Length)}catch{if($RequestClock.ElapsedMilliseconds-ge$RemainingMilliseconds){throw 'api_deadline_exceeded'};throw 'api_request_failed'};if($RequestClock.ElapsedMilliseconds-ge$RemainingMilliseconds){throw 'api_deadline_exceeded'};if($Read-le 0){break};if($Output.Length+$Read-gt$MaximumBytes){throw 'api_response_size_limit'};$Output.Write($Buffer,0,$Read)};return ,$Output.ToArray()}
 			finally{$Output.Dispose();$Stream.Dispose()}
 		}finally{$Response.Dispose()}
 	}
