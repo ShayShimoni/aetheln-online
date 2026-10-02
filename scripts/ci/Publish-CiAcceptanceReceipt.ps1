@@ -23,6 +23,7 @@ $script:PublisherCheckIds = @('clean-package-provenance-smoke','content-referenc
 $script:PublisherContracts = @{
 	'portable' = [pscustomobject]@{ EvidenceName='ci-report.json'; Checks=@('controller-contract','portable'); NativeExitCode=$null; CleanupVerified=$null }
 	'native' = [pscustomobject]@{ EvidenceName='engine-runner-report.json'; Checks=@('controller-operational-proof','native-client-server-compile'); NativeExitCode=0; CleanupVerified=$true }
+	'unreal' = [pscustomobject]@{ EvidenceName='unreal-automation-report.json'; Checks=@('unreal-editor-automation'); NativeExitCode=0; CleanupVerified=$null }
 	'visual' = [pscustomobject]@{ EvidenceName='visual-package-report.json'; Checks=@('visual-package'); NativeExitCode=$null; CleanupVerified=$null }
 }
 

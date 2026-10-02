@@ -474,10 +474,12 @@ contract is:
 | `visual-proof` | `pull_request` | `ci-selection-shadow` | Runs only when the accepted-base selector selects `visual-package`; the reusable call remains additive and non-authoritative. | Execute both existing visual validators and expose the exact raw report artifact ID/name/digest plus inner report SHA-256/length. |
 | `portable-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `quality-gates` | Runs only when `portable` is selected and both direct producers succeed. | Download the selector and portable report by exact artifact ID, validate their direct name/digest metadata, verify the inner report hash/length, then publish one nonce-bound receipt whose checks are the selector-derived subset of {`controller-contract`, `portable`}, every result bound to the one raw `ci-report.json`. The aggregate later verifies each archive digest against GitHub's API and downloaded bytes. |
 | `native-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-candidate-compile` | Runs only when `native-client-server-compile` or `controller-operational-proof` is selected and the compile succeeds. | Apply the same direct binding and truthful publication contract to the exact compile report, publishing the selector-derived subset of {`controller-operational-proof`, `native-client-server-compile`} with every result bound to the one raw `engine-runner-report.json`, successful native exit, and cleanup proof. `controller-operational-proof` attests that the candidate controller at the tested revision ran the real supervised Compile gate on the engine runner with resource monitoring and verified cleanup in this attempt; it is the same exact report, revalidated under its own check id. The self-hosted producer hashes the report with the portable .NET SHA-256 API because that runner's Windows PowerShell environment does not expose `Get-FileHash`; its upload retains the static report artifact name even if identity binding fails. |
+| `unreal-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-editor-automation` | Runs only when `unreal-editor-automation` is selected and the editor automation job succeeds. If any automation step failed or was skipped, that job exposes no automation artifact, the evidence download is skipped, and this job prints the fixed `unreal_automation_outcome reason=<reason>` line from its `automation_reason` output, then fails red at `unreal_raw_artifact_binding_invalid`. | Apply the same direct binding and truthful publication contract to the exact `unreal-automation-report` artifact, publishing `unreal-editor-automation` bound to the one raw `unreal-automation-report.json` with native exit `0` and no cleanup claim. The report proves the tested revision ran the frozen two-test filter on the pinned engine and both tests passed without warnings or errors. Runner identity is covered through the native receipt, which the selector always co-selects with this obligation. |
 | `visual-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `visual-proof` | Runs only when visual validation is selected and succeeds. | Apply the same direct binding and truthful publication contract to the exact bounded visual report. |
-| `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | GitHub-hosted, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/controller-operational-proof/native/visual supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, publish the explicit green `producer_contract_incomplete` no-acceptance gap. Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
+| `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | GitHub-hosted, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/controller-operational-proof/native/unreal/visual supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, publish the explicit green `producer_contract_incomplete` no-acceptance gap. Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
 | `ci-acceptance-authority` | `pull_request` | `ci-acceptance-shadow` | Hard-skipped by the literal `always() && github.event_name == 'pull_request' && false`; job-scoped `actions: read` is dormant. | Reserved activation boundary: when later enabled, it still runs after a failed or cancelled aggregate and fails unless `needs.ci-acceptance-shadow.result` is exactly `success`; only a complete, nonce-bound reconciled shadow aggregate could produce an authority receipt. It grants nothing in the live Package 3C workflow. |
 | `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
+| `trusted-editor-automation` | `pull_request` | `trusted-candidate-compile` | Runs only after a successful compile (so it is skipped, not failed, whenever the compile is skipped or fails) under the same owner, same-repository, and triggering-actor predicates; 35-minute job ceiling (step bounds 15 + 12 + 2 + 1 + 1 + 1 plus a 3-minute margin); shared FIFO `aetheln-engine-runner` queue. TA-020. | Verify that the registered managed compile workspace still holds exactly this clean revision (`editor_workspace_revision_changed`, `editor_workspace_dirty`, or `editor_workspace_query_failed` otherwise), build the `AethelnOnlineEditor` Win64 target there through the workspace copy of `InitialPreparation.BuildInvocation.ps1` (runner-local `build.log`; 15 minutes), run the frozen two-test harness from that workspace with its 600-second bound (12 minutes), remove the untracked compile-input files the next managed sync would reject (the exact `ls-files --others` query and git flags of `ManagedCompileWorkspace.ps1`; 2 minutes), bind (1 minute) and upload (1 minute) the normalized `unreal-automation-report` artifact only when every earlier step succeeded, and publish the first failure as the fixed-vocabulary `automation_reason` output (1 minute). Every step continues on error. This job is separate from the compile, so nothing in it can fail the compile job or skip the native receipt. `build.log`, harness output, and the copied report live under the runner temp directory, which the runner wipes after the job; only fixed failure-class and summary lines reach the public log, and the editor log stays in its `-abslog` file. It runs outside the engine host lease for this first proof; wrapping it in the lease is a follow-up. Workspace race: when another owner pull request's compile, or a newer push to the same pull request, enters the engine queue during this pull request's compile window, it can re-sync the managed workspace before this job starts; the editor-build step then stops with `editor_workspace_revision_changed`, the job still succeeds (every step continues on error), and only `unreal-receipt-shadow` fails, when it is selected. Recovery needs "Re-run all jobs"; "Re-run failed jobs" does not re-run this successful job. The follow-up replaces the revision check with a real re-sync through `Sync-ManagedCompileWorkspace` as `Invoke-EngineRunnerGate.ps1` does, which needs a control checkout at `github.sha`, the registration variables, the host lease, a larger ceiling, and removal of the no-checkout pin in `Test-PrototypeQualityWorkflow.Tests.ps1`. |
 | `scheduled-client-package` | `schedule` at `02:00 UTC` daily | `quality-gates` | Schedule-only; the schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
 | `scheduled-server-package` | `schedule` | `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
 | `scheduled-provenance-validation` | `schedule` | `scheduled-server-package` | Same as phase 1. | Milestone phase 3: verify both handoff payloads, validate server cook references, and write bound provenance. |
@@ -511,7 +513,8 @@ where Windows PowerShell 5.1 would strip embedded JSON quotes.
 
 `aggregate_ready=true` only when every selected obligation is in the currently
 wired semantic subset: `controller-contract`, `controller-operational-proof`,
-`native-client-server-compile`, `portable`, and `visual-package`. In that case the aggregate derives the selected producer set
+`native-client-server-compile`, `portable`, `unreal-editor-automation`, and
+`visual-package`. In that case the aggregate derives the selected producer set
 from the selector report, requires the corresponding direct `needs` binding,
 and verifies each binding's job name and exact artifact ID/name/digest against
 the same-attempt GitHub API record and downloaded archive. Missing, duplicate,
@@ -519,8 +522,8 @@ extra, unselected, swapped, replayed, malformed, unsorted, or digest-mismatched
 bindings fail the job. The native binding is required when either
 `native-client-server-compile` or `controller-operational-proof` is selected;
 any selector output pair other than exact `true`/`false` values fails closed as
-`producer_direct_binding_invalid:native`. If the selector chooses any of the other three
-obligations, `aggregate_ready=false` and the workflow validates the selector
+`producer_direct_binding_invalid:native`. If the selector chooses either of the other two
+obligations (`content-reference-validation`, `clean-package-provenance-smoke`), `aggregate_ready=false` and the workflow validates the selector
 identity before publishing a green, explicitly incomplete
 `producer_contract_incomplete` record with
 `complete=false`, `shadow=true`, `authoritative=false`, and
@@ -751,7 +754,15 @@ trusted-compile queue delay **attributable to one currently running scheduled
 phase** (the longest total phase bound, the 40-minute client or server package),
 subject to platform assignment latency. Total queue time can be longer when
 older jobs are already ahead in the queue (for example earlier pull-request
-compiles, or a scheduled milestone whose next phase queued earlier). These
+compiles, or a scheduled milestone whose next phase queued earlier). TA-020
+adds a sixth engine-runner job, `trusted-editor-automation` (35-minute
+ceiling), which starts waiting only after its compile succeeds: a scheduled
+phase that queues while it runs waits at most 35 minutes for it, a
+trusted compile queued while it runs now also waits up to 35 minutes for it,
+and an owner
+pull request can now hold the runner for up to 75 minutes (40-minute compile
+plus 35-minute editor automation) when no older waiter queued between the two
+jobs. The TA-015 watchdogs are unchanged. These
 bounds are
 revisited only from retained phase evidence and are never silently raised.
 
@@ -937,7 +948,21 @@ and toolchain. A workflow integration must pass the local non-secret engine
 path explicitly and preserve the existing owner/trust predicates, serialization,
 revision checks, and clean-workspace enforcement. This document does not claim
 that a GitHub-hosted runner has the engine or that the real automation run is
-part of the portable job.
+part of the portable job. The live integration is the owner-only
+`trusted-editor-automation` job (TA-020): after a successful
+`trusted-candidate-compile`, it verifies that the managed compile workspace
+still holds the same clean revision, builds the editor target there, and runs
+this harness there (see the job table under Package 3C). It has its own
+35-minute ceiling, so a compile that uses its full 30-minute watchdog still
+leaves the editor build its whole budget. It runs outside the engine host lease
+and outside the gate's supervisor and resource monitor; wrapping it in the
+lease is a follow-up. Every step has a step bound (editor build 15 minutes,
+harness 12 minutes around its 600 seconds, residue cleanup 2, bind 1, upload 1,
+outcome report 1) and continues on error. First live-run data on runner 21:
+the `trusted-candidate-compile` step "Compile supported client and server
+targets" took 102 s on PR #204 (CI-script change) and 503 s on PR #205
+(Source change). Record editor-build and harness durations from the first live
+runs of this job.
 
 Issue #44 remains responsible for packaged dedicated-server/two-client lifecycle,
 Gauntlet, and representative or harsh network-profile scenarios; those scenarios
@@ -1304,9 +1329,13 @@ incremental compile policy.
   only the fresh report at
   `runner.temp/aetheln-engine-<run>-<attempt>-<job>/engine-runner-report.json`.
   Each scheduled phase uploads only
-  `milestone/TestResults/engine-runner-report.json`. The five engine jobs keep
-  distinct artifact names: compile, client package, server package, provenance
-  validation, and scheduled smoke. Every engine upload uses
+  `milestone/TestResults/engine-runner-report.json`. The five gate-driven
+  engine jobs keep distinct artifact names: compile, client package, server
+  package, provenance validation, and scheduled smoke. The sixth engine job,
+  `trusted-editor-automation`, uploads only
+  `runner.temp/aetheln-engine-<run>-<attempt>-<job>/unreal-automation-report.json`
+  as `unreal-automation-report`, and only after every automation step
+  succeeded. Every engine upload uses
   `if-no-files-found: error`; missing evidence cannot establish success.
 - Package 3C emits attempt-specific
   `ci-receipt-<job-key>-<run-id>-<run-attempt>-<nonce>` archives for the three
@@ -1340,10 +1369,12 @@ incremental compile policy.
   against the same bound compile job, so a receipt carrying both native
   obligations validates the one report once per result; and
   `visual-package` revalidates the exact bounded
-  `aetheln.visual-package-report/v1`. The aggregate contains a semantic adapter
-  for `unreal-editor-automation`, but no live Package 3C receipt publisher feeds
-  it, so it remains unsupported along with
-  `clean-package-provenance-smoke` and `content-reference-validation`. Selection of any
+  `aetheln.visual-package-report/v1`; and `unreal-editor-automation`
+  revalidates the exact `aetheln.unreal-automation` report from the hosted
+  `unreal-receipt-shadow` publisher (tested revision, pinned engine commit,
+  frozen filter, exactly two passing tests, clean repository after the run,
+  native exit `0`, no cleanup claim). `clean-package-provenance-smoke` and
+  `content-reference-validation` remain unsupported. Selection of any
   unsupported obligation follows the
   explicit `producer_contract_incomplete` no-acceptance path.
 - Selector, receipt, aggregate, and future authority artifacts all bind the same
@@ -1468,7 +1499,8 @@ evidence file. One receipt belongs to one named receipt-publisher job. The live
 publisher takes a producer key, not a check ID: `portable` may prove
 `controller-contract` and `portable` from `ci-report.json`, `native` may prove
 `controller-operational-proof` and `native-client-server-compile` from
-`engine-runner-report.json`, and `visual` proves `visual-package`. It
+`engine-runner-report.json`, `unreal` proves `unreal-editor-automation` from
+`unreal-automation-report.json`, and `visual` proves `visual-package`. It
 publishes the ordinal-sorted intersection of that fixed set with the identity
 context's selector-derived `selection.checks`, drops selected obligations the
 key cannot prove, and rejects an empty intersection. Every published result
@@ -1476,15 +1508,15 @@ names the same single typed report; a repeated evidence name is accepted only
 when name, SHA-256, and size are all identical, and the archive still holds
 that one file. Producer and aggregate independently revalidate the typed bytes
 for every result. Every receipt remains
-shadow-only and cannot grant acceptance. `unreal-editor-automation`,
-`clean-package-provenance-smoke`, and `content-reference-validation`
+shadow-only and cannot grant acceptance.
+`clean-package-provenance-smoke` and `content-reference-validation`
 remain unsupported until their real producer schemas, publishers, direct
 artifact bindings, and validators are wired together. An opaque digest or
 successful summary cannot substitute.
 
 `aetheln.ci-acceptance-aggregate/v1` is the live hosted shadow reconciliation
 record for a selector whose selected obligations are all in the supported
-portable/controller-contract/controller-operational-proof/native/visual subset. It does not trust caller-supplied job-selection
+portable/controller-contract/controller-operational-proof/native/unreal/visual subset. It does not trust caller-supplied job-selection
 booleans. Instead, it requires the exact successful current-attempt
 `ci-selection-shadow` job, downloads the uniquely named current-attempt
 `ci-selection-shadow-<run-id>-<run-attempt>-<nonce>` artifact through bounded GitHub API
@@ -1517,12 +1549,12 @@ acceptance. PR output is only an acceptance candidate; push output is only
 post-merge hosted health.
 
 The direct selector and producer bindings close the earlier shared-nonce
-uploader ambiguity for these three live publishers: the downstream job receives
+uploader ambiguity for these four live publishers: the downstream job receives
 each exact artifact identity from its named producer through `needs`, and the
 aggregate independently confirms that identity against GitHub. Interval checks
 remain additional temporal correlation, not the sole job binding. The result is
 still shadow-only because authority activation is a separate accepted-base,
-one-workflow-file decision and four selector obligations still have no live
+one-workflow-file decision and two selector obligations still have no live
 receipt contract.
 
 When any unsupported obligation is selected, Package 3C deliberately does not

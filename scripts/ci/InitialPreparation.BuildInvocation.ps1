@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-	[Parameter(Mandatory)][ValidateSet('AethelnOnlineClient', 'AethelnOnlineServer')][string] $Target,
+	[Parameter(Mandatory)][ValidateSet('AethelnOnlineClient', 'AethelnOnlineEditor', 'AethelnOnlineServer')][string] $Target,
 	[Parameter(Mandatory)][ValidateSet('Win64', 'Linux')][string] $Platform,
 	[Parameter(Mandatory)][ValidateRange(1, 4)][int] $ActionLimit,
 	[Parameter(Mandatory)][string] $EngineRoot,
@@ -14,7 +14,8 @@ $NativeExit = $null
 $Failure = 'build_capture_failed'
 $ResultStream = $null
 try {
-	if (($Target -ceq 'AethelnOnlineClient') -ne ($Platform -ceq 'Win64')) { throw 'build_target_invalid' }
+	# Linux builds only the server; client and editor targets build only on Win64.
+	if (($Target -ceq 'AethelnOnlineServer') -ne ($Platform -ceq 'Linux')) { throw 'build_target_invalid' }
 	foreach ($Path in @($EngineRoot, $TargetRoot, $LinuxToolchainRoot, $EvidenceRoot)) {
 		if ($Path -cnotmatch '^[A-Za-z]:[\\/]' -or $Path.Substring(2).Contains(':') -or $Path -match '[";%!&|<>^()\x00-\x1f]' -or -not (Test-Path -LiteralPath $Path -PathType Container)) { throw 'build_path_invalid' }
 		$Probe = [IO.Path]::GetFullPath($Path)

@@ -63,11 +63,14 @@ function New-RequirementsTemplateFixture {
 		schemaVersion='aetheln.ci-acceptance-requirements-template/v1'
 		jobs=@(
 			[pscustomobject][ordered]@{key='native';jobName='native-receipt-shadow';checks=@('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile')},
-			[pscustomobject][ordered]@{key='portable';jobName='portable-receipt-shadow';checks=@('content-reference-validation','controller-contract','portable','unreal-editor-automation')},
+			[pscustomobject][ordered]@{key='portable';jobName='portable-receipt-shadow';checks=@('content-reference-validation','controller-contract','portable')},
+			[pscustomobject][ordered]@{key='unreal';jobName='unreal-receipt-shadow';checks=@('unreal-editor-automation')},
 			[pscustomobject][ordered]@{key='visual';jobName='visual-receipt-shadow';checks=@('visual-package')}
 		)
 	}
 }
+# The fixture is the live template, so every aggregate case below exercises the real producer job map.
+Assert-True (((New-RequirementsTemplateFixture) | ConvertTo-Json -Depth 8 -Compress) -ceq ($RepositoryTemplate | ConvertTo-Json -Depth 8 -Compress)) 'The requirements-template fixture must match the live template exactly.'
 
 function Get-ActionItemsJson {
 	return (@(
@@ -141,7 +144,7 @@ try {
 	}
 	Assert-True ($Identity.workflow.sha256 -ceq (Get-FileHash -LiteralPath $Fixture.WorkflowPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'Workflow digest must bind exact workflow bytes.'
 	Assert-True ($Identity.controller.blobOid -ceq ('d'*40) -and $Identity.policy.digest -ceq ('1'*64) -and $Identity.attemptAnchor.nonce -ceq $script:Nonce) 'Controller, policy, and attempt anchor must come from the selector report.'
-	Assert-True ($Requirements.schemaVersion -ceq 'aetheln.ci-acceptance-requirements/v1' -and @($Requirements.jobs).Count -eq 3) 'Runtime requirements must use the aggregate schema.'
+	Assert-True ($Requirements.schemaVersion -ceq 'aetheln.ci-acceptance-requirements/v1' -and @($Requirements.jobs).Count -eq 4) 'Runtime requirements must use the aggregate schema.'
 	foreach ($Job in $Requirements.jobs) { Assert-True ($Job.artifactName -ceq ('ci-receipt-'+$Job.key+'-9001-2-'+$script:Nonce)) 'Runtime artifact names must bind the current nonce.' }
 	. (Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiAcceptanceAggregate.ps1')
 	Assert-AcceptanceContext -Context $Aggregate
@@ -165,7 +168,7 @@ try {
 	Write-FixtureJson $UnavailableGapFixture.SelectorPath (Get-UnavailableSelectorFixture)
 	$Gap = Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Gap
 	Assert-True ($Gap.mode -ceq 'Gap' -and $Gap.acceptedControllerUnavailable -eq $true -and $Gap.attemptAnchor.nonce -ceq $script:Nonce) 'Unavailable-controller gap validation must bind the current attempt without claiming accepted-base identity.'
-	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'unreal-editor-automation,content-reference-validation,clean-package-provenance-smoke') 'The fallback must conservatively select all three obligations without live producers.'
+	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'content-reference-validation,clean-package-provenance-smoke') 'The fallback must conservatively select both obligations without live producers.'
 	Assert-True (-not (Test-Path -LiteralPath $UnavailableGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.AggregatePath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.RequirementsPath)) 'Gap mode must publish no identity, aggregate context, or receipt prerequisites.'
 	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Identity } 'selector_execution_invalid'
 	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Aggregate } 'selector_execution_invalid'
@@ -185,7 +188,7 @@ try {
 	$FallbackBytes = [IO.File]::ReadAllBytes($WorkflowFallbackFixture.SelectorPath)
 	Assert-True ($FallbackBytes.Length -gt 2 -and $FallbackBytes[-1] -eq 10 -and $FallbackBytes[-2] -ne 10 -and $FallbackBytes[-2] -ne 13) 'The actual workflow fallback writer must emit exactly one trailing LF.'
 	$Gap = Invoke-Fixture -Fixture $WorkflowFallbackFixture -Mode Gap
-	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 3) 'The exact workflow fallback serialization must pass strict gap validation.'
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 2) 'The exact workflow fallback serialization must pass strict gap validation.'
 } finally {
 	if ($null -eq $PreviousShadowReportPath) { Remove-Item Env:AETHELN_SHADOW_REPORT -ErrorAction SilentlyContinue }
 	else { $env:AETHELN_SHADOW_REPORT = $PreviousShadowReportPath }
@@ -210,6 +213,11 @@ try {
 	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -Mode Gap } 'gap_selection_empty'
 	Write-FixtureJson $ContractFixture.SelectorPath (New-SelectorFixture -Selected @('controller-operational-proof'))
 	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -Mode Gap } 'gap_selection_empty'
+	# The selector always co-selects native compile with unreal automation; both now have live producers.
+	Write-FixtureJson $ContractFixture.SelectorPath (New-SelectorFixture -Selected @('native-client-server-compile','unreal-editor-automation'))
+	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -Mode Gap } 'gap_selection_empty'
+	$NativeOnlyBinding = ConvertTo-Json -InputObject @((Get-ProducerBindingsJson | ConvertFrom-Json)[0]) -Depth 4 -Compress
+	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -ProducerBindingsJson $NativeOnlyBinding } 'producer_binding_missing'
 	Write-FixtureJson $ContractFixture.SelectorPath (New-SelectorFixture -Selected @('controller-contract','portable'))
 	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -ProducerBindingsJson '[]' } 'producer_binding_missing'
 	Assert-True (-not (Test-Path -LiteralPath $ContractFixture.IdentityPath) -and -not (Test-Path -LiteralPath $ContractFixture.AggregatePath)) 'A missing portable producer binding must publish no aggregate inputs.'
@@ -242,6 +250,17 @@ foreach ($Case in @(
 	} finally { Remove-Item -LiteralPath $Bad.Root -Recurse -Force }
 }
 
+$UnrealBindingFixture = New-InvocationFixture
+try {
+	Write-FixtureJson $UnrealBindingFixture.SelectorPath (New-SelectorFixture -Selected @('native-client-server-compile','unreal-editor-automation'))
+	$NativeBinding = (Get-ProducerBindingsJson | ConvertFrom-Json)[0]
+	$UnrealBinding = [pscustomobject][ordered]@{key='unreal';jobName='unreal-receipt-shadow';artifactId='2004';artifactName=('ci-receipt-unreal-9001-2-'+$script:Nonce);digest=('sha256:'+('b'*64))}
+	Invoke-Fixture -Fixture $UnrealBindingFixture -ProducerBindingsJson (ConvertTo-Json -InputObject @($NativeBinding, $UnrealBinding) -Depth 4 -Compress)
+	$UnrealAggregate = Get-Content -LiteralPath $UnrealBindingFixture.AggregatePath -Raw | ConvertFrom-Json
+	$UnrealRequirements = Get-Content -LiteralPath $UnrealBindingFixture.RequirementsPath -Raw | ConvertFrom-Json
+	Assert-True ((@($UnrealAggregate.producerBindings | ForEach-Object { $_.key }) -join ',') -ceq 'native,unreal' -and (@($UnrealRequirements.jobs | Where-Object { $_.key -ceq 'unreal' } | ForEach-Object { $_.jobName + ':' + (@($_.checks) -join ',') }) -join ';') -ceq 'unreal-receipt-shadow:unreal-editor-automation') 'A native plus unreal selection must bind the dedicated unreal receipt job.'
+} finally { Remove-Item -LiteralPath $UnrealBindingFixture.Root -Recurse -Force }
+
 $SingleBindingFixture = New-InvocationFixture
 try {
 	Write-FixtureJson $SingleBindingFixture.SelectorPath (New-SelectorFixture -Selected @('visual-package'))
@@ -261,8 +280,8 @@ foreach ($Case in @(
 	@{name='selector-extra-lf';reason='json_canonical_bytes_invalid';mutate={param($f)[IO.File]::AppendAllText($f.SelectorPath,"`n",$script:ContextUtf8)}},
 	@{name='selector-duplicate-json';reason='json_duplicate_property';mutate={param($f)$raw=[IO.File]::ReadAllText($f.SelectorPath,$script:ContextUtf8);$raw=$raw -replace '^\{','{"schemaVersion":"evil",';[IO.File]::WriteAllText($f.SelectorPath,$raw,$script:ContextUtf8)}},
 	@{name='incomplete-coverage';reason='requirements_check_coverage_incomplete';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks|Where-Object{$_ -cne 'portable'});Write-FixtureJson $f.TemplatePath $x}},
-	@{name='retired-template-id';reason='requirements_check_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks[0..1])+@('delivery-harness')+@($x.jobs[1].checks[2..3]);Write-FixtureJson $f.TemplatePath $x}},
-	@{name='unsorted-template';reason='requirements_not_sorted';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs=@($x.jobs[1],$x.jobs[0],$x.jobs[2]);Write-FixtureJson $f.TemplatePath $x}},
+	@{name='retired-template-id';reason='requirements_check_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks[0..1])+@('delivery-harness')+@($x.jobs[1].checks[2]);Write-FixtureJson $f.TemplatePath $x}},
+	@{name='unsorted-template';reason='requirements_not_sorted';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs=@($x.jobs[1],$x.jobs[0],$x.jobs[2],$x.jobs[3]);Write-FixtureJson $f.TemplatePath $x}},
 	@{name='template-open';reason='requirements_schema_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x|Add-Member extra $true;Write-FixtureJson $f.TemplatePath $x}},
 	@{name='workflow-reparse';reason='input_reparse_rejected';mutate={param($f)$targetRoot=Join-Path $f.Root 'actual';$linkRoot=Join-Path $f.Root 'linked';New-Item -ItemType Directory -Path $targetRoot|Out-Null;Move-Item $f.WorkflowPath (Join-Path $targetRoot 'workflow.yml');New-Item -ItemType Junction -Path $linkRoot -Target $targetRoot|Out-Null;$f.WorkflowPath=Join-Path $linkRoot 'workflow.yml'}}
 )) {

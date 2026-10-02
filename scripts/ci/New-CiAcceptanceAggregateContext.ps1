@@ -404,7 +404,7 @@ function Invoke-CiAcceptanceAggregateContextMain {
 	$Actions=Read-AndAssertAggregateContextActions -Json $ActionItemsJson
 	$WorkflowBytes=Read-BoundedAggregateContextFileBytes -Path $WorkflowPath
 	if ($Mode -ceq 'Gap') {
-		$LiveChecks=@('controller-contract','controller-operational-proof','native-client-server-compile','portable','visual-package')
+		$LiveChecks=@('controller-contract','controller-operational-proof','native-client-server-compile','portable','unreal-editor-automation','visual-package')
 		$Unsupported=@($script:AggregateContextCheckIds | Where-Object { $Selector.Selected.Contains($_) -and $LiveChecks -cnotcontains $_ })
 		if ($Unsupported.Count -eq 0) { throw 'gap_selection_empty' }
 		return [pscustomobject][ordered]@{mode='Gap';acceptedControllerUnavailable=$Selector.AcceptedControllerUnavailable;attemptAnchor=$Selector.Report.attemptAnchor;selectedUnsupported=$Unsupported}

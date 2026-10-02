@@ -35,13 +35,15 @@ function Get-JobBody([string] $JobName, [string] $NextJobName) {
 $ShadowSelection = Get-JobBody 'ci-selection-shadow' 'quality-gates'
 $QualityGates = Get-JobBody 'quality-gates' 'change-impact'
 $ChangeImpact = Get-JobBody 'change-impact' 'trusted-candidate-compile'
-$TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'scheduled-client-package'
+$TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'trusted-editor-automation'
+$EditorAutomation = Get-JobBody 'trusted-editor-automation' 'scheduled-client-package'
 $ScheduledSmokeStart = $Workflow.IndexOf('  scheduled-packaged-smoke:', [StringComparison]::Ordinal)
 Assert-True ($ScheduledSmokeStart -ge 0) "Workflow job 'scheduled-packaged-smoke' should exist."
 $ScheduledSmoke = Get-JobBody 'scheduled-packaged-smoke' 'visual-proof'
 $VisualProof = Get-JobBody 'visual-proof' 'portable-receipt-shadow'
 $PortableReceipt = Get-JobBody 'portable-receipt-shadow' 'native-receipt-shadow'
-$NativeReceipt = Get-JobBody 'native-receipt-shadow' 'visual-receipt-shadow'
+$NativeReceipt = Get-JobBody 'native-receipt-shadow' 'unreal-receipt-shadow'
+$UnrealReceipt = Get-JobBody 'unreal-receipt-shadow' 'visual-receipt-shadow'
 $VisualReceipt = Get-JobBody 'visual-receipt-shadow' 'ci-acceptance-shadow'
 $AcceptanceShadow = Get-JobBody 'ci-acceptance-shadow' 'ci-acceptance-authority'
 $AuthorityStart = $Workflow.IndexOf('  ci-acceptance-authority:', [StringComparison]::Ordinal)
@@ -73,8 +75,8 @@ Assert-True ($Workflow -notmatch 'workflow_dispatch') 'Workflow must not expose 
 Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)') 'Workflow must not use status functions that bypass a failed or skipped prerequisite.'
 $ExpectedActionManifest = '[{"uses":"actions/checkout","revision":"3d3c42e5aac5ba805825da76410c181273ba90b1"},{"uses":"actions/download-artifact","revision":"d3f86a106a0bac45b974a628896c90dbdf5c8093"},{"uses":"actions/upload-artifact","revision":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"}]'
 Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape($ExpectedActionManifest)) -Expected 1 -Message 'The aggregate identity manifest must exactly bind the reviewed checkout, download, and upload action revisions.'
-Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape("uses: $DownloadAction")) -Expected 8 -Message 'Package 3C must contain exactly eight reviewed exact-ID artifact downloads.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^          merge-multiple: true\r?$' -Expected 8 -Message 'Every exact-ID artifact download must flatten its single archive into the validated destination root.'
+Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape("uses: $DownloadAction")) -Expected 10 -Message 'Package 3C must contain exactly ten reviewed exact-ID artifact downloads.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^          merge-multiple: true\r?$' -Expected 10 -Message 'Every exact-ID artifact download must flatten its single archive into the validated destination root.'
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^    if: always\(\)(?: && github\.event_name == ''pull_request'' && false)?\r?$' -Expected 2 -Message 'Only the hosted aggregate and dormant fail-closed authority boundary may use job-level always().'
 Assert-True ($AcceptanceShadow -match '(?m)^    if: always\(\)\r?$' -and $AcceptanceShadow -notmatch '(?m)^    continue-on-error:') 'The acceptance shadow must run after every dependency while unexpected reconciliation failures remain visible.'
 Assert-True ($AcceptanceShadow -match "Write-Warning \('acceptance_producer_gap:' \+" -and $AcceptanceShadow -notmatch "throw \('acceptance_producer_gap:") 'A selected unsupported producer must publish a green no-acceptance diagnostic rather than fail an otherwise healthy pull request.'
@@ -265,7 +267,7 @@ foreach ($WorkflowSource in @($Workflow, $VisualWorkflow)) {
 		Assert-True ($ActionIdentity -cmatch '^actions/[a-z0-9-]+@[0-9a-f]{40}$') "Remote action '$ActionIdentity' must use one full lowercase commit SHA."
 	}
 }
-Assert-MatchCount -Text $Workflow -Pattern "(?m)^\s+uses: $DownloadActionPattern\r?$" -Expected 8 -Message 'Package 3C must use the reviewed downloader exactly for two direct bindings per receipt, the aggregate selector binding, and the hard-disabled authority boundary.'
+Assert-MatchCount -Text $Workflow -Pattern "(?m)^\s+uses: $DownloadActionPattern\r?$" -Expected 10 -Message 'Package 3C must use the reviewed downloader exactly for two direct bindings per receipt, the aggregate selector binding, and the hard-disabled authority boundary.'
 
 function Assert-AllPowerShellRunBlocksParse([string] $Text, [string] $Name, [int] $ExpectedCount) {
 	$Lines = $Text -split "\r?\n"
@@ -296,7 +298,7 @@ function Assert-AllPowerShellRunBlocksParse([string] $Text, [string] $Name, [int
 	}
 	Assert-True ($ParsedCount -eq $ExpectedCount) "$Name must contain exactly $ExpectedCount reviewed literal PowerShell run blocks; found $ParsedCount."
 }
-Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 17
+Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 23
 Assert-AllPowerShellRunBlocksParse -Text $VisualWorkflow -Name 'Visual workflow' -ExpectedCount 2
 
 Assert-True ($VisualWorkflow -match '(?m)^  workflow_call:\r?$') 'Visual validation must expose an additive reusable workflow entry point.'
@@ -350,15 +352,246 @@ foreach ($RawProducer in @(
 }
 Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $TrustedCompile -match '\.ComputeHash\(\$ReportStream\)' -and $TrustedCompile -match '(?m)^          name: engine-runner-compile-report\r?$') 'The self-hosted compile report must use the portable .NET SHA-256 implementation and preserve its static artifact name even if binding fails.'
 
+# TA-020: a separate owner-only engine job builds the editor target in the
+# managed workspace through the bounded build wrapper and runs the frozen
+# two-test harness from that workspace after a successful compile. The compile
+# job keeps its pre-producer shape, so nothing here can fail it or skip the
+# native receipt. Nothing Unreal prints reaches the public log: the harness
+# streams go to runner-local files and only a path-free summary is printed.
+Assert-True (((($TrustedCompile -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch '(?i)automation|AethelnOnlineEditor|editor_build') 'The compile job must carry no editor automation.'
+Assert-True ($EditorAutomation -match "(?m)^    needs: trusted-candidate-compile\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Editor automation must run only after a successful compile under the same owner and same-repository trust.'
+Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 35\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result|always\(\)|actions/checkout') 'Editor automation must have its own 35-minute ceiling, join the FIFO engine queue, and add no status bypass or checkout.'
+foreach ($Binding in @(
+	'automation_artifact_id: ${{ steps.automation_artifact.outputs.artifact-id }}',
+	'automation_artifact_name: ${{ steps.automation_identity.outputs.artifact_name }}',
+	'automation_artifact_digest: sha256:${{ steps.automation_artifact.outputs.artifact-digest }}',
+	'automation_sha256: ${{ steps.automation_identity.outputs.evidence_sha256 }}',
+	'automation_size_bytes: ${{ steps.automation_identity.outputs.evidence_size_bytes }}',
+	'automation_reason: ${{ steps.automation_outcome.outputs.reason }}'
+)) {
+	Assert-True ($EditorAutomation.Contains($Binding)) "trusted-editor-automation must expose exact automation artifact/file binding '$Binding'."
+}
+$EditorBuild = [regex]::Match($EditorAutomation, '(?ms)^      - name: Build editor target for Unreal automation\r?\n.*?(?=^      - )').Value
+$AutomationRun = [regex]::Match($EditorAutomation, '(?ms)^      - name: Run frozen Unreal automation filter\r?\n.*?(?=^      - )').Value
+$AutomationResidue = [regex]::Match($EditorAutomation, '(?ms)^      - name: Clear editor-written input residue\r?\n.*?(?=^      - )').Value
+$AutomationBind = [regex]::Match($EditorAutomation, '(?ms)^      - name: Bind Unreal automation report\r?\n.*?(?=^      - )').Value
+$AutomationUpload = [regex]::Match($EditorAutomation, '(?ms)^      - name: Upload Unreal automation report\r?\n.*?(?=^      - )').Value
+$AutomationOutcome = [regex]::Match($EditorAutomation, '(?ms)^      - name: Report Unreal automation outcome\r?\n.*?(?=\r?\n\r?\n|\z)').Value
+Assert-True ($EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome) 'Editor automation must declare every reviewed step.'
+# Unreal failures stay on the unreal side: every automation step that can fail
+# continues on error, so the compile job and native receipt survive, while
+# binding and upload require every automation step to have succeeded. A
+# missing automation artifact then fails unreal-receipt-shadow at its raw
+# binding check instead of passing silently.
+$AutomationSuccess = "if: steps.editor_build.outcome == 'success' && steps.automation_run.outcome == 'success' && steps.automation_residue.outcome == 'success'"
+foreach ($Step in @(
+	@{ Name='editor build'; Body=$EditorBuild; Id='editor_build'; If=$null; Timeout='15'; Continue=$true },
+	@{ Name='harness'; Body=$AutomationRun; Id='automation_run'; If="if: steps.editor_build.outcome == 'success'"; Timeout='12'; Continue=$true },
+	@{ Name='residue cleanup'; Body=$AutomationResidue; Id='automation_residue'; If=$null; Timeout='2'; Continue=$true },
+	@{ Name='bind'; Body=$AutomationBind; Id='automation_identity'; If=$AutomationSuccess; Timeout='1'; Continue=$true },
+	@{ Name='upload'; Body=$AutomationUpload; Id='automation_artifact'; If=($AutomationSuccess + " && steps.automation_identity.outcome == 'success'"); Timeout='1'; Continue=$true },
+	@{ Name='outcome report'; Body=$AutomationOutcome; Id='automation_outcome'; If=$null; Timeout='1'; Continue=$true }
+)) {
+	$Body = [string] $Step.Body
+	Assert-True ($Body -match ('(?m)^        id: ' + $Step.Id + '\r?$')) "The automation $($Step.Name) step must carry id '$($Step.Id)'."
+	if ($null -eq $Step.If) { Assert-True ($Body -notmatch '(?m)^        if:') "The automation $($Step.Name) step must not carry its own condition." }
+	else { Assert-True ($Body -match ('(?m)^        ' + [regex]::Escape($Step.If) + '\r?$') -and [regex]::Matches($Body, '(?m)^        if:').Count -eq 1) "The automation $($Step.Name) step must use exactly the reviewed condition." }
+	if ($null -eq $Step.Timeout) { Assert-True ($Body -notmatch '(?m)^        timeout-minutes:') "The automation $($Step.Name) step needs no separate bound." }
+	else { Assert-True ($Body -match ('(?m)^        timeout-minutes: ' + $Step.Timeout + '\r?$')) "The automation $($Step.Name) step must be bounded to $($Step.Timeout) minutes." }
+	if ($Step.Continue) { Assert-True ($Body -match '(?m)^        continue-on-error: true\r?$') "The automation $($Step.Name) step must not fail the compile job." }
+	else { Assert-True ($Body -notmatch 'continue-on-error') "The automation $($Step.Name) step must fail red once every automation step succeeded." }
+}
+Assert-True ($UnrealReceipt -match "(?ms)^      - name: Download exact unreal evidence\r?\n        if: needs\.trusted-editor-automation\.outputs\.automation_artifact_id != ''\r?\n") 'A missing automation artifact must skip the unreal download so the publisher fails at its raw binding check rather than downloading every run artifact.'
+# The editor build builds only the exact clean revision the compile used:
+# another engine job may have synchronized the workspace in between.
+Assert-True ($EditorBuild.Contains("(Get-WorkspaceGitText 'rev-parse HEAD').Trim() -cne `$env:GITHUB_SHA") -and $EditorBuild.Contains("Exit-Automation 'editor_workspace_revision_changed'") -and $EditorBuild.Contains("Exit-Automation 'editor_workspace_dirty'") -and $EditorBuild.IndexOf('editor_workspace_dirty') -lt $EditorBuild.IndexOf('InitialPreparation.BuildInvocation.ps1') -and $EditorBuild -notmatch 'AETHELN_COMPILE_STARTED|RequiredSeconds|budget') 'The editor build must verify the exact clean workspace revision before it starts and carry no budget gate.'
+Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $AutomationRun.Contains("Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f")) 'The harness step may print only the fixed path-free summary line.'
+# The editor build prints only the two masks and the
+# wrapper's native-result.json (target, platform, exit code, failure class).
+Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 3 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'")) 'The editor build may print only the masks and the bounded native result record.'
+$ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
+$UntrackedInputQuery = [regex]::Matches($ManagedWorkspaceSource, "'(ls-files --others -z -- [^']+)'")
+Assert-True ($AutomationResidue.Contains("(Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source") -and $AutomationResidue.Contains('''--no-replace-objects --no-optional-locks -C "'' + $Root + ''" '' + $Query')) 'Residue cleanup must resolve and invoke git exactly as the managed sync does.'
+# A red unreal receipt must say why: every automation step records a fixed
+# failure reason, the outcome step exposes the first one as a job output, and
+# the unreal publisher prints it as one fixed-vocabulary line.
+$StopAutomation = 'function Exit-Automation([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }'
+foreach ($Step in @($EditorBuild, $AutomationRun, $AutomationResidue, $AutomationBind)) {
+	Assert-True ($Step.Contains($StopAutomation) -and $Step -notmatch "\bthrow '") 'Every automation failure must record its fixed reason before it stops.'
+}
+Assert-True ($AutomationOutcome.Contains('AETHELN_UPLOAD_OUTCOME: ${{ steps.automation_artifact.outcome }}') -and $AutomationOutcome.Contains("'automation_report_upload_failed'") -and $AutomationOutcome.Contains('Write-Output (''unreal_automation_outcome reason='' + $Reason)') -and [regex]::Matches($AutomationOutcome, 'Write-Output').Count -eq 1) 'The outcome step must expose the first automation failure as one fixed line.'
+Assert-True ($UnrealReceipt.Contains('AETHELN_AUTOMATION_REASON: ${{ needs.trusted-editor-automation.outputs.automation_reason }}') -and $UnrealReceipt.Contains('Write-Output (''unreal_automation_outcome reason='' + $AutomationReason)') -and $UnrealReceipt.IndexOf('unreal_automation_outcome reason=') -lt $UnrealReceipt.IndexOf("throw 'unreal_raw_artifact_binding_invalid'")) 'The unreal publisher must print the fixed automation reason before its binding check.'
+Assert-True ($UntrackedInputQuery.Count -eq 1 -and $AutomationResidue.Contains("'" + $UntrackedInputQuery[0].Groups[1].Value + "'")) 'Residue cleanup must use exactly the untracked-input query that the next managed sync enforces.'
+
+function Get-WorkflowStepScript([string] $Step) {
+	$Run = [regex]::Match($Step, '(?ms)^        run: \|\r?\n(?<body>.*)\z')
+	Assert-True $Run.Success 'Automation step must have a literal run block.'
+	# The literal block ends at the first nonblank line indented less than its body.
+	$Lines = New-Object Collections.Generic.List[string]
+	foreach ($Line in ($Run.Groups['body'].Value -split '\r?\n')) {
+		if ($Line.Trim().Length -ne 0 -and -not $Line.StartsWith(' ' * 10)) { break }
+		$Lines.Add($(if ($Line.Length -ge 10) { $Line.Substring(10) } else { '' }))
+	}
+	$Script = $Lines -join "`n"
+	return $Script.Replace('${{ runner.temp }}', $script:AutomationFixtureTemp).Replace('${{ github.run_id }}', '1').Replace('${{ github.run_attempt }}', '1').Replace('${{ github.job }}', 'job')
+}
+function Invoke-AutomationStepFixture([string] $Step) {
+	$Previous = $ErrorActionPreference
+	try {
+		$Output = @(& ([scriptblock]::Create((Get-WorkflowStepScript $Step))) 2>&1 | ForEach-Object { [string] $_ })
+		return [pscustomobject]@{ failure = $null; output = $Output }
+	} catch { return [pscustomobject]@{ failure = $_.Exception.Message; output = @() } }
+	finally { $ErrorActionPreference = $Previous }
+}
+function Invoke-AutomationFixtureGit([string] $Root, [string[]] $Arguments) {
+	$Previous = $ErrorActionPreference
+	$ErrorActionPreference = 'Continue'
+	try { $null = & git -C $Root @Arguments 2>&1; $Exit = $LASTEXITCODE } finally { $ErrorActionPreference = $Previous }
+	Assert-True ($Exit -eq 0) "Fixture git $($Arguments[0]) failed."
+}
+$AutomationFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-automation-steps-' + [guid]::NewGuid().ToString('N'))
+$script:AutomationFixtureTemp = Join-Path $AutomationFixtureRoot 'temp'
+$null = New-Item -ItemType Directory -Path (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job')
+$PreviousAutomationEnvironment = @{}
+foreach ($Name in @('GITHUB_SHA', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_ENGINE_ROOT', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+try {
+	$env:AETHELN_ENGINE_ROOT = Join-Path $AutomationFixtureRoot 'engine'
+	$env:GITHUB_OUTPUT = Join-Path $AutomationFixtureRoot 'github-output.txt'
+	# Workspace gate: a moved, dirty, or unreadable workspace stops before any build input is touched.
+	$WorkspaceRepo = Join-Path $AutomationFixtureRoot 'workspace'
+	$null = New-Item -ItemType Directory -Path $WorkspaceRepo
+	[IO.File]::WriteAllText((Join-Path $WorkspaceRepo 'tracked.txt'), "tracked`n")
+	Invoke-AutomationFixtureGit $WorkspaceRepo @('init', '-q')
+	Invoke-AutomationFixtureGit $WorkspaceRepo @('add', '-A')
+	Invoke-AutomationFixtureGit $WorkspaceRepo @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
+	$WorkspaceHead = ([string] (& git -C $WorkspaceRepo rev-parse HEAD)).Trim()
+	$NotRepository = Join-Path $AutomationFixtureRoot 'not-a-repository'
+	$null = New-Item -ItemType Directory -Path $NotRepository
+	foreach ($WorkspaceCase in @(
+		@{ root=$WorkspaceRepo; sha=('f' * 40); dirty=$false; reason='editor_workspace_revision_changed' },
+		@{ root=$WorkspaceRepo; sha=$WorkspaceHead; dirty=$true; reason='editor_workspace_dirty' },
+		@{ root=$NotRepository; sha=$WorkspaceHead; dirty=$false; reason='editor_workspace_query_failed' }
+	)) {
+		if ($WorkspaceCase.dirty) { [IO.File]::WriteAllText((Join-Path $WorkspaceRepo 'untracked.txt'), 'editor output') }
+		$env:AETHELN_MANAGED_COMPILE_ROOT = $WorkspaceCase.root
+		$env:GITHUB_SHA = $WorkspaceCase.sha
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		$Gated = Invoke-AutomationStepFixture $EditorBuild
+		Assert-True ($Gated.failure -ceq $WorkspaceCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq ('reason=' + $WorkspaceCase.reason + "`n") -and -not (Test-Path -LiteralPath (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'))) "A workspace that fails '$($WorkspaceCase.reason)' must stop before the editor build."
+	}
+	$env:AETHELN_MANAGED_COMPILE_ROOT = Join-Path $AutomationFixtureRoot 'managed'
+	[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+
+	# The harness step summarizes a well-formed report and records
+	# unreal_automation_report_invalid for a malformed one.
+	$HarnessManaged = Join-Path $AutomationFixtureRoot 'harness-managed'
+	$null = New-Item -ItemType Directory -Path (Join-Path $HarnessManaged 'scripts\ci'), (Join-Path $HarnessManaged 'TestResults')
+	[IO.File]::WriteAllText((Join-Path $HarnessManaged 'scripts\ci\Invoke-UnrealAutomationTests.ps1'), "param([string] `$EngineRoot, [int] `$TimeoutSeconds)`n[IO.File]::WriteAllText((Join-Path `$PSScriptRoot '..\..\TestResults\unreal-automation-report.json'), `$env:AETHELN_FIXTURE_REPORT)`nexit [int] `$env:AETHELN_FIXTURE_EXIT`n")
+	$PreviousHarnessManaged = $env:AETHELN_MANAGED_COMPILE_ROOT
+	$env:AETHELN_MANAGED_COMPILE_ROOT = $HarnessManaged
+	try {
+		foreach ($HarnessCase in @(
+			@{ report='{"result":"passed","failureReason":"none","summary":{"total":2,"passed":2,"requiredFailed":0}}'; exit='0'; failure=$null; output='unreal_automation result=passed reason=none total=2 passed=2 requiredFailed=0 exit=0' },
+			@{ report='{"result":"passed","failureReason":"none","summary":{"total":"2","passed":2}}'; exit='0'; failure='unreal_automation_report_invalid'; output='' },
+			@{ report='{"result":"failed","failureReason":"test-failure","summary":{"total":2,"passed":1,"requiredFailed":1}}'; exit='1'; failure='unreal_automation_test_failure'; output='unreal_automation result=failed reason=test-failure total=2 passed=1 requiredFailed=1 exit=1' }
+		)) {
+			$env:AETHELN_FIXTURE_REPORT = $HarnessCase.report
+			$env:AETHELN_FIXTURE_EXIT = $HarnessCase.exit
+			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+			$Harnessed = Invoke-AutomationStepFixture $AutomationRun
+			$ExpectedOutput = if ($null -eq $HarnessCase.failure) { '' } else { 'reason=' + $HarnessCase.failure + "`n" }
+			Assert-True ($Harnessed.failure -ceq $HarnessCase.failure -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput -and ($null -ne $HarnessCase.failure -or (@($Harnessed.output) -join "`n") -ceq $HarnessCase.output)) "The harness step must handle report case '$($HarnessCase.exit)/$($HarnessCase.failure)'."
+		}
+	} finally {
+		$env:AETHELN_MANAGED_COMPILE_ROOT = $PreviousHarnessManaged
+		Remove-Item Env:AETHELN_FIXTURE_REPORT, Env:AETHELN_FIXTURE_EXIT -ErrorAction SilentlyContinue
+	}
+
+	# The outcome step reports the first failed step's fixed reason, a fixed
+	# fallback for an unrecorded or malformed one, and 'none' after success.
+	foreach ($OutcomeCase in @(
+		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='failure'; AETHELN_EDITOR_BUILD_REASON='editor_build_budget_exhausted'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_build_budget_exhausted' },
+		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='C:\leak path'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_interrupted' },
+		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='unreal_automation_test_failure'; AETHELN_RESIDUE_OUTCOME='failure'; AETHELN_RESIDUE_REASON='automation_input_residue_remaining'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_test_failure' },
+		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='failure' }; expected='automation_report_upload_failed' },
+		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='success' }; expected='none' }
+	)) {
+		$OutcomeNames = @('AETHELN_EDITOR_BUILD_OUTCOME', 'AETHELN_EDITOR_BUILD_REASON', 'AETHELN_RUN_OUTCOME', 'AETHELN_RUN_REASON', 'AETHELN_RESIDUE_OUTCOME', 'AETHELN_RESIDUE_REASON', 'AETHELN_BIND_OUTCOME', 'AETHELN_BIND_REASON', 'AETHELN_UPLOAD_OUTCOME')
+		foreach ($Name in $OutcomeNames) { [Environment]::SetEnvironmentVariable($Name, [string] $OutcomeCase.env[$Name]) }
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		$Outcome = Invoke-AutomationStepFixture $AutomationOutcome
+		foreach ($Name in $OutcomeNames) { [Environment]::SetEnvironmentVariable($Name, $null) }
+		Assert-True ($null -eq $Outcome.failure -and (@($Outcome.output) -join "`n") -ceq ('unreal_automation_outcome reason=' + $OutcomeCase.expected) -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq ('reason=' + $OutcomeCase.expected + "`n")) "The automation outcome must be '$($OutcomeCase.expected)'."
+	}
+
+	# Residue cleanup removes exactly the untracked compile-input files the next
+	# managed sync would reject and leaves retained and unrelated outputs alone.
+	$ResidueRepo = Join-Path $AutomationFixtureRoot 'managed'
+	$null = New-Item -ItemType Directory -Path (Join-Path $ResidueRepo 'Source')
+	[IO.File]::WriteAllText((Join-Path $ResidueRepo '.gitignore'), "Generated/`n*.gen`nBinaries/`nIntermediate/`nSaved/`n")
+	[IO.File]::WriteAllText((Join-Path $ResidueRepo 'Source/Keep.cpp'), "tracked`n")
+	Invoke-AutomationFixtureGit $ResidueRepo @('init', '-q')
+	Invoke-AutomationFixtureGit $ResidueRepo @('add', '-A')
+	Invoke-AutomationFixtureGit $ResidueRepo @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
+	$Residue = @('Source/Generated/Editor.h', 'Config/Editor.gen', 'Content/Unexpected.uasset')
+	$Retained = @('Source/Keep.cpp', 'Binaries/Win64/Editor.dll', 'Plugins/Fixture/Intermediate/Build.obj', 'Saved/Logs/Editor.log')
+	foreach ($Relative in ($Residue + $Retained | Where-Object { $_ -cne 'Source/Keep.cpp' })) {
+		$Path = Join-Path $ResidueRepo $Relative
+		$null = New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force
+		[IO.File]::WriteAllText($Path, 'editor output')
+	}
+	$Cleared = Invoke-AutomationStepFixture $AutomationResidue
+	Assert-True ($null -eq $Cleared.failure -and (@($Cleared.output) -join "`n") -ceq 'automation_input_residue removed=3') 'Residue cleanup must report only the removed count.'
+	Assert-True (@($Residue | Where-Object { Test-Path -LiteralPath (Join-Path $ResidueRepo $_) }).Count -eq 0 -and @($Retained | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ResidueRepo $_)) }).Count -eq 0) 'Residue cleanup must remove only untracked compile-input files.'
+	$Repeated = Invoke-AutomationStepFixture $AutomationResidue
+	Assert-True ($null -eq $Repeated.failure -and (@($Repeated.output) -join "`n") -ceq 'automation_input_residue removed=0') 'Residue cleanup must be idempotent.'
+
+	# The editor target reaches Build.bat only as a Win64 build through the
+	# bounded wrapper; Linux stays server-only.
+	$EditorRoot = Join-Path $AutomationFixtureRoot 'editor-target'
+	$EditorBatch = Join-Path $EditorRoot 'Engine/Build/BatchFiles'
+	$null = New-Item -ItemType Directory -Path $EditorBatch
+	$EditorDotnet = Join-Path $EditorRoot 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64'
+	$null = New-Item -ItemType Directory -Path $EditorDotnet
+	[IO.File]::WriteAllText((Join-Path $EditorDotnet 'dotnet.exe'), 'fixture')
+	[IO.File]::WriteAllText((Join-Path $EditorBatch 'Build.bat'), "@echo off`r`necho build-args %1 %2`r`nexit /b 0`r`n")
+	[IO.File]::WriteAllText((Join-Path $EditorRoot 'AethelnOnline.uproject'), '{}')
+	foreach ($EditorCase in @(@{ platform = 'Win64'; exit = 0 }, @{ platform = 'Linux'; exit = 1 })) {
+		$EditorEvidence = Join-Path $EditorRoot ('evidence-' + $EditorCase.platform)
+		$null = New-Item -ItemType Directory -Path $EditorEvidence
+		& (Join-Path $PSHOME 'powershell.exe') -NoProfile -NonInteractive -File (Join-Path $RepositoryRoot 'scripts/ci/InitialPreparation.BuildInvocation.ps1') `
+			-Target AethelnOnlineEditor -Platform $EditorCase.platform -ActionLimit 1 -EngineRoot $EditorRoot -TargetRoot $EditorRoot -LinuxToolchainRoot $EditorRoot -EvidenceRoot $EditorEvidence 2>&1 | Out-Null
+		Assert-True ($LASTEXITCODE -eq $EditorCase.exit) "Editor target on $($EditorCase.platform) must exit $($EditorCase.exit)."
+		$EditorResultPath = Join-Path $EditorEvidence 'native-result.json'
+		if ($EditorCase.exit -eq 0) {
+			$EditorRecord = Get-Content -LiteralPath $EditorResultPath -Raw | ConvertFrom-Json
+			Assert-True ($EditorRecord.target -ceq 'AethelnOnlineEditor' -and $EditorRecord.platform -ceq 'Win64' -and $EditorRecord.nativeExitCode -eq 0 -and $null -eq $EditorRecord.infrastructureFailure -and [IO.File]::ReadAllText((Join-Path $EditorEvidence 'build.log')).Contains('build-args AethelnOnlineEditor Win64')) 'Editor target must reach Build.bat as a Win64 build.'
+		} else {
+			Assert-True (-not (Test-Path -LiteralPath $EditorResultPath) -and -not (Test-Path -LiteralPath (Join-Path $EditorEvidence 'build.log'))) 'Editor target must be rejected on Linux before Build.bat runs.'
+		}
+	}
+} finally {
+	foreach ($Name in $PreviousAutomationEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $PreviousAutomationEnvironment[$Name]) }
+	Remove-Item -LiteralPath $AutomationFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+Assert-True ($EditorBuild.Contains('powershell -NoProfile -File (Join-Path $Root ''scripts\ci\InitialPreparation.BuildInvocation.ps1'') `') -and $EditorBuild -match '(?m)^\s+-Target AethelnOnlineEditor `\r?$' -and $EditorBuild -match '(?m)^\s+-Platform Win64 `\r?$' -and $EditorBuild -match '(?m)^\s+-TargetRoot \$env:AETHELN_MANAGED_COMPILE_ROOT `\r?$' -and $EditorBuild -match '(?m)^\s+-EngineRoot \$env:AETHELN_ENGINE_ROOT `\r?$' -and $EditorBuild -notmatch 'Build\.bat') 'The editor target must be built in the managed workspace only through the bounded capture wrapper.'
+Assert-True ($EditorBuild.Contains('::add-mask::$env:AETHELN_ENGINE_ROOT') -and $EditorBuild.Contains('::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT')) 'Runner-local engine and workspace roots must be masked before any automation step runs.'
+Assert-True ($AutomationRun -match [regex]::Escape("Join-Path `$env:AETHELN_MANAGED_COMPILE_ROOT 'scripts\ci\Invoke-UnrealAutomationTests.ps1'") -and $AutomationRun -match '-EngineRoot' -and $AutomationRun.Contains('$env:AETHELN_ENGINE_ROOT') -and $AutomationRun -match "'-TimeoutSeconds', '600'" -and $AutomationRun -match '(?m)^        timeout-minutes: \d+\r?$') 'The frozen harness must run from the managed workspace against the runner engine root with its bounded timeout.'
+Assert-True ($AutomationRun -match '-RedirectStandardOutput' -and $AutomationRun -match '-RedirectStandardError' -and $AutomationRun -notmatch 'Get-Content[^\r\n]*\.log' -and $AutomationRun -notmatch 'Write-Output \$Report\b') 'Unreal and harness output must stay in runner-local files; only a bounded summary may reach the log.'
+Assert-True ($AutomationBind -match '(?m)^        id: automation_identity\r?$' -and $AutomationBind -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $AutomationBind.Contains('artifact_name=unreal-automation-report') -and $AutomationBind -notmatch 'if: always\(\)') 'The automation report must be bound with the portable SHA-256 implementation and only after a passing harness.'
+Assert-True ($EditorAutomation -match '(?m)^        id: automation_artifact\r?$' -and $EditorAutomation -match '(?m)^          name: unreal-automation-report\r?$' -and $EditorAutomation.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/unreal-automation-report.json')) 'The automation report upload must be one exact run/attempt/job-scoped file.'
+
 # Package 3C receipt publishers are additive PR-only hosted jobs. Each consumes
 # the selector and exactly one raw producer through immutable artifact IDs,
 # publishes one nonce-bound receipt directory, and exposes only the upload
 # action's direct artifact binding. They never acquire engine-runner authority.
 $ReceiptContracts = @(
-	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Producer='quality-gates'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
+	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Producer='quality-gates'; ArtifactOutput='report_artifact_id'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
 	# The native publisher proves native-client-server-compile and controller-operational-proof from one compile report, so either selection runs it.
-	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Producer='trusted-candidate-compile'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
-	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Producer='visual-proof'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
+	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Producer='trusted-candidate-compile'; ArtifactOutput='report_artifact_id'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
+	# The unreal publisher consumes the raw report of the separate editor automation job.
+	@{ Name='unreal-receipt-shadow'; Body=$UnrealReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required == 'true'"; Producer='trusted-editor-automation'; ArtifactOutput='automation_artifact_id'; Key='unreal'; RawName="'unreal-automation-report'"; Evidence='unreal' },
+	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Producer='visual-proof'; ArtifactOutput='report_artifact_id'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
 )
 # aggregate_ready and the context builder's gap computation must agree on the
 # exact set of obligations that have a live receipt producer.
@@ -368,19 +601,20 @@ $BuilderLiveChecks = [regex]::Matches($ContextBuilderSource, '(?m)^\s*\$LiveChec
 Assert-True ($WorkflowLiveChecks.Count -eq 1 -and $BuilderLiveChecks.Count -eq 1) 'The workflow and context builder must each declare exactly one live producer check list.'
 $WorkflowLiveList = @([regex]::Matches($WorkflowLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
 $BuilderLiveList = @([regex]::Matches($BuilderLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
-Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,controller-operational-proof,native-client-server-compile,portable,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
+Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,controller-operational-proof,native-client-server-compile,portable,unreal-editor-automation,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
 # The aggregate binds the native receipt when either native obligation is selected; any other selector output pair must still fail closed.
 Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_OPERATIONAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$NativeProducerRequired \`$env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow'" -and $AcceptanceShadow -match "\`$NativeProducerRequired = if \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true'\) \{ 'true' \} elseif \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false'\) \{ 'false' \} else \{ 'invalid' \}") 'The aggregate must bind the native receipt for either native obligation and reject any other selector output pair.'
+Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_UNREAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$env:AETHELN_UNREAL_REQUIRED \`$env:AETHELN_UNREAL_RESULT 'unreal' 'unreal-receipt-shadow'" -and $AcceptanceShadow.IndexOf("'portable' 'portable-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'unreal' 'unreal-receipt-shadow'") -and $AcceptanceShadow.IndexOf("'unreal' 'unreal-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'visual' 'visual-receipt-shadow'")) 'The aggregate must bind the unreal receipt from its own selector output in key order.'
 
 foreach ($Receipt in $ReceiptContracts) {
 	$Body = [string] $Receipt.Body
-	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
+	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?\n(?=    if: )" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && $($Receipt.Predicate)\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
 	Assert-True ($Body -match '(?m)^    runs-on: windows-latest\r?$' -and $Body -match '(?m)^    timeout-minutes: 10\r?$' -and $Body -notmatch 'self-hosted|aetheln-engine-runner|concurrency:') "$($Receipt.Name) must be a bounded hosted publisher without engine admission."
 	foreach ($Output in @('artifact_id: \$\{\{ steps\.receipt_artifact\.outputs\.artifact-id \}\}', 'artifact_name: \$\{\{ steps\.receipt_identity\.outputs\.artifact_name \}\}', 'artifact_digest: sha256:\$\{\{ steps\.receipt_artifact\.outputs\.artifact-digest \}\}')) {
 		Assert-True ($Body -match "(?m)^      $Output\r?$") "$($Receipt.Name) must expose the reviewed direct receipt upload binding."
 	}
 	Assert-MatchCount -Text $Body -Pattern "(?m)^        uses: $DownloadActionPattern\r?$" -Expected 2 -Message "$($Receipt.Name) must download exactly the selector and its raw evidence by ID."
-	$ProducerArtifactId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.report_artifact_id }}')
+	$ProducerArtifactId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.' + $Receipt.ArtifactOutput + ' }}')
 	Assert-True ($Body -match 'artifact-ids: \$\{\{ needs\.ci-selection-shadow\.outputs\.selector_artifact_id \}\}' -and $Body -match ("artifact-ids: " + $ProducerArtifactId)) "$($Receipt.Name) must bind both downloads directly to needs upload IDs, never artifact-name discovery."
 	Assert-True ($Body -match 'scripts/ci/New-CiAcceptanceAggregateContext\.ps1' -and $Body -match '-Mode Identity' -and $Body -match 'scripts/ci/Publish-CiAcceptanceReceipt\.ps1') "$($Receipt.Name) must use the reviewed identity builder and receipt publisher."
 	Assert-True ($Body -match '(?m)^          \$ContextBuilder = \(Resolve-Path -LiteralPath ''scripts/ci/New-CiAcceptanceAggregateContext\.ps1''\)\.Path\r?$' -and $Body -match '(?m)^          & \$ContextBuilder `\r?$' -and $Body -notmatch 'powershell\.exe[^\r\n]*New-CiAcceptanceAggregateContext\.ps1') "$($Receipt.Name) must pass JSON to the context builder in-process so Windows PowerShell cannot strip native command-line quotes."
@@ -400,7 +634,7 @@ foreach ($Receipt in $ReceiptContracts) {
 $AggregateNeeds = [regex]::Match($AcceptanceShadow, '(?ms)^    needs:\r?\n(?<needs>(?:      - [a-z0-9-]+\r?\n)+)')
 Assert-True $AggregateNeeds.Success 'Acceptance aggregation must declare an exact direct-needs list.'
 $ActualAggregateNeeds = @([regex]::Matches($AggregateNeeds.Groups['needs'].Value, '(?m)^      - (?<job>[a-z0-9-]+)\r?$') | ForEach-Object { [string] $_.Groups['job'].Value })
-$ExpectedAggregateNeeds = @('ci-selection-shadow','quality-gates','change-impact','trusted-candidate-compile','scheduled-client-package','scheduled-server-package','scheduled-provenance-validation','scheduled-packaged-smoke','visual-proof','portable-receipt-shadow','native-receipt-shadow','visual-receipt-shadow')
+$ExpectedAggregateNeeds = @('ci-selection-shadow','quality-gates','change-impact','trusted-candidate-compile','trusted-editor-automation','scheduled-client-package','scheduled-server-package','scheduled-provenance-validation','scheduled-packaged-smoke','visual-proof','portable-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')
 Assert-True (($ActualAggregateNeeds -join ',') -ceq ($ExpectedAggregateNeeds -join ',')) 'Acceptance aggregation must directly need every reviewed producer and receipt publisher exactly once.'
 foreach ($Output in @(
 	'complete: ${{ steps.reconcile.outputs.complete }}',
@@ -417,7 +651,7 @@ Assert-True ($AcceptanceShadow -match "(?m)^        uses: $DownloadActionPattern
 foreach ($Script in @('scripts/ci/New-CiAcceptanceAggregateContext.ps1','scripts/ci/ci-acceptance-requirements.json','scripts/ci/Invoke-CiAcceptanceAggregate.ps1')) {
 	Assert-True ($AcceptanceShadow -match [regex]::Escape($Script)) "Acceptance aggregation must invoke exact reviewed input '$Script'."
 }
-foreach ($Publisher in @('portable-receipt-shadow','native-receipt-shadow','visual-receipt-shadow')) {
+foreach ($Publisher in @('portable-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')) {
 	Assert-True ($AcceptanceShadow -match [regex]::Escape($Publisher)) "Acceptance aggregation must bind direct output and job identity for '$Publisher'."
 }
 Assert-True ($AcceptanceShadow -match 'if \(\$env:AETHELN_SELECTOR_READY -ceq ''false''\)' -and $AcceptanceShadow -match 'elseif \(\$env:AETHELN_SELECTOR_READY -ceq ''true''\)' -and $AcceptanceShadow -match "throw 'aggregate_ready_invalid'") 'Acceptance reconciliation must distinguish exact unsupported-gap, supported-aggregate, and invalid selector readiness states.'
@@ -563,7 +797,7 @@ Assert-True ($ReportUploads.Count -eq 6) 'Exactly six report uploads remain.'
 Assert-True ($TrustedCompile.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json')) 'Compile artifact is unique to this run, attempt and job.'
 Assert-True ($TrustedCompile -match 'timeout-minutes: 40' -and $TrustedCompile -match '-CompileTimeoutMinutes 30') 'Routine compile has a whole-job and controlled-work limit.'
 Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Uploads cannot contain wildcard payload paths.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 12 -Message 'Only six raw reports, the selector, three nonce-bound receipts, the acceptance shadow diagnostic, and the hard-disabled authority receipt may be uploaded.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 14 -Message 'Only seven raw reports, the selector, four nonce-bound receipts, the acceptance shadow diagnostic, and the hard-disabled authority receipt may be uploaded.'
 Assert-True ($Workflow -notmatch '(?m)^\s+path:\s*.*(?:archives?|logs?|Saved|StagedBuilds)') 'Generated payload directories must never be uploaded.'
 
 # Classifier behavior matrix: run the extracted script against fixture commits.

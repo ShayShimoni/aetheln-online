@@ -316,7 +316,7 @@ jobs:
             'controller-operational-proof' = 'controller_operational_proof_required'
             'clean-package-provenance-smoke' = 'clean_package_provenance_smoke_required'
           }
-          $LiveProducerChecks = @('controller-contract', 'controller-operational-proof', 'native-client-server-compile', 'portable', 'visual-package')
+          $LiveProducerChecks = @('controller-contract', 'controller-operational-proof', 'native-client-server-compile', 'portable', 'unreal-editor-automation', 'visual-package')
           $Obligations = @($Parsed.selection.obligations)
           if ($Obligations.Count -ne $ExpectedObligations.Count) { throw 'shadow_selection_obligations_invalid' }
           $AggregateReady = $true
@@ -604,6 +604,248 @@ jobs:
           name: engine-runner-compile-report
           path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json
           if-no-files-found: error
+
+  # Package 3C unreal-editor-automation producer (TA-020). A separate
+  # owner-only engine job runs after a successful compile, so the editor build
+  # and harness have their own ceiling and can never fail the compile job or
+  # skip the native receipt. It reuses the registered managed compile workspace
+  # only while that workspace still holds this exact revision, and runs outside
+  # the engine host lease for this first proof (recorded follow-up). Every step
+  # continues on error; bind and upload run only after the earlier steps
+  # succeeded, and a missing artifact fails unreal-receipt-shadow at its raw
+  # binding check. Each failure records one fixed reason, exposed as
+  # automation_reason. build.log, harness output, and the copied report live
+  # under runner.temp, which the runner wipes after the job.
+  trusted-editor-automation:
+    needs: trusted-candidate-compile
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.triggering_actor == github.repository_owner
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    # The step bounds (15 + 12 + 2 + 1 + 1 + 1) plus a 3-minute margin.
+    timeout-minutes: 35
+    outputs:
+      automation_artifact_id: ${{ steps.automation_artifact.outputs.artifact-id }}
+      automation_artifact_name: ${{ steps.automation_identity.outputs.artifact_name }}
+      automation_artifact_digest: sha256:${{ steps.automation_artifact.outputs.artifact-digest }}
+      automation_sha256: ${{ steps.automation_identity.outputs.evidence_sha256 }}
+      automation_size_bytes: ${{ steps.automation_identity.outputs.evidence_size_bytes }}
+      automation_reason: ${{ steps.automation_outcome.outputs.reason }}
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Build editor target for Unreal automation
+        id: editor_build
+        continue-on-error: true
+        timeout-minutes: 15
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          function Exit-Automation([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }
+          # Mask both roots in later step output. The managed root is a
+          # repository variable that step env headers already display; masking
+          # only keeps it and the engine root out of later output.
+          if ($env:AETHELN_ENGINE_ROOT) { Write-Output "::add-mask::$env:AETHELN_ENGINE_ROOT" }
+          if ($env:AETHELN_MANAGED_COMPILE_ROOT) { Write-Output "::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT" }
+          # Another engine job may have synchronized the managed workspace after
+          # the compile job released the runner; build only this exact, clean revision.
+          $Root = [IO.Path]::GetFullPath($env:AETHELN_MANAGED_COMPILE_ROOT).TrimEnd('\', '/')
+          $Git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          function Get-WorkspaceGitText([string] $Arguments) {
+            $Info = New-Object Diagnostics.ProcessStartInfo $Git, ('--no-replace-objects --no-optional-locks -C "' + $Root + '" ' + $Arguments)
+            $Info.UseShellExecute = $false
+            $Info.CreateNoWindow = $true
+            $Info.RedirectStandardOutput = $true
+            $Info.RedirectStandardError = $true
+            $Info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false, $true)
+            $Process = [Diagnostics.Process]::Start($Info)
+            $ErrorText = $Process.StandardError.ReadToEndAsync()
+            $Text = $Process.StandardOutput.ReadToEnd()
+            $Process.WaitForExit()
+            $null = $ErrorText.Result
+            if ($Process.ExitCode -ne 0) { Exit-Automation 'editor_workspace_query_failed' }
+            return $Text
+          }
+          if ((Get-WorkspaceGitText 'rev-parse HEAD').Trim() -cne $env:GITHUB_SHA) { Exit-Automation 'editor_workspace_revision_changed' }
+          if ((Get-WorkspaceGitText 'status --porcelain --untracked-files=all').Trim().Length -ne 0) { Exit-Automation 'editor_workspace_dirty' }
+          $EvidenceRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/editor-build'
+          $null = New-Item -ItemType Directory -Path $EvidenceRoot
+          # The verified workspace copy of the wrapper captures all build output in runner-local build.log.
+          powershell -NoProfile -File (Join-Path $Root 'scripts\ci\InitialPreparation.BuildInvocation.ps1') `
+            -Target AethelnOnlineEditor `
+            -Platform Win64 `
+            -ActionLimit 4 `
+            -EngineRoot $env:AETHELN_ENGINE_ROOT `
+            -TargetRoot $env:AETHELN_MANAGED_COMPILE_ROOT `
+            -LinuxToolchainRoot $env:AETHELN_LINUX_TOOLCHAIN_ROOT `
+            -EvidenceRoot $EvidenceRoot
+          $BuildExit = $LASTEXITCODE
+          # native-result.json holds only target, platform, exit code, and failure class.
+          $ResultPath = Join-Path $EvidenceRoot 'native-result.json'
+          $CaptureFailed = $true
+          if (Test-Path -LiteralPath $ResultPath -PathType Leaf) {
+            $ResultText = [IO.File]::ReadAllText($ResultPath)
+            Write-Output $ResultText
+            try { $CaptureFailed = $null -ne ($ResultText | ConvertFrom-Json).infrastructureFailure } catch { $CaptureFailed = $true }
+          }
+          if ($BuildExit -ne 0) { if ($CaptureFailed) { Exit-Automation 'editor_build_capture_failed' } else { Exit-Automation 'editor_build_failed' } }
+      - name: Run frozen Unreal automation filter
+        id: automation_run
+        if: steps.editor_build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 12
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          function Exit-Automation([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          $Harness = Join-Path $env:AETHELN_MANAGED_COMPILE_ROOT 'scripts\ci\Invoke-UnrealAutomationTests.ps1'
+          # Unreal and harness output carry absolute runner paths, so both streams
+          # go to runner-local files and never reach this public log.
+          $Arguments = @('-NoProfile', '-NonInteractive', '-File', ('"' + $Harness + '"'), '-EngineRoot', ('"' + $env:AETHELN_ENGINE_ROOT.TrimEnd('\') + '"'), '-TimeoutSeconds', '600')
+          $Harnessed = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $Arguments -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput (Join-Path $RunRoot 'unreal-automation-stdout.txt') `
+            -RedirectStandardError (Join-Path $RunRoot 'unreal-automation-stderr.txt')
+          $ManagedReport = Join-Path $env:AETHELN_MANAGED_COMPILE_ROOT 'TestResults\unreal-automation-report.json'
+          $ReportPath = Join-Path $RunRoot 'unreal-automation-report.json'
+          if (-not (Test-Path -LiteralPath $ManagedReport -PathType Leaf)) { Exit-Automation 'unreal_automation_report_missing' }
+          Copy-Item -LiteralPath $ManagedReport -Destination $ReportPath
+          # Bounded, path-free summary: the harness's fixed vocabulary and integers only.
+          # Any missing or mistyped field records unreal_automation_report_invalid.
+          $KnownReasons = @('none', 'preflight', 'repository-dirty', 'engine-pin', 'process-start', 'timeout', 'editor-exit', 'missing-report', 'discovery-mismatch', 'test-failure', 'invalid-report', 'repository-drift')
+          try {
+            $Report = [IO.File]::ReadAllText($ReportPath) | ConvertFrom-Json
+            $Result = $Report.result
+            $Reason = $Report.failureReason
+            $Summary = $Report.summary
+            if ($Result -isnot [string] -or $Result -cnotin @('passed', 'failed') -or $Reason -isnot [string] -or $KnownReasons -cnotcontains $Reason -or
+                $Summary.total -isnot [int] -or $Summary.passed -isnot [int] -or $Summary.requiredFailed -isnot [int]) { throw [FormatException]::new('report_invalid') }
+          } catch { Exit-Automation 'unreal_automation_report_invalid' }
+          Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f $Result, $Reason, $Summary.total, $Summary.passed, $Summary.requiredFailed, $Harnessed.ExitCode)
+          if ($Harnessed.ExitCode -ne 0 -or $Result -cne 'passed') { Exit-Automation ('unreal_automation_' + $Reason.Replace('-', '_')) }
+      # The editor may write gitignored files under compile inputs, and the next
+      # managed sync rejects any untracked input file. Remove exactly the set
+      # that sync query reports (it runs even after a failed build or harness)
+      # so later pull requests keep a clean workspace; anything left fails here.
+      - name: Clear editor-written input residue
+        id: automation_residue
+        continue-on-error: true
+        timeout-minutes: 2
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          function Exit-Automation([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }
+          $Root = [IO.Path]::GetFullPath($env:AETHELN_MANAGED_COMPILE_ROOT).TrimEnd('\', '/')
+          $Query = 'ls-files --others -z -- ":(icase)Source" ":(icase)Config" ":(icase)Content" ":(icase)Plugins" ":(icase)Build" ":(icase)Platforms" ":(icase)AethelnOnline.uproject" ":(icase).gitattributes" ":(icase).gitmodules" ":(icase).lfsconfig" ":(exclude,icase,glob)**/Binaries/**" ":(exclude,icase,glob)**/Intermediate/**"'
+          # Same git resolution and flags as the managed sync.
+          $Git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          function Get-InputResidue {
+            $Info = New-Object Diagnostics.ProcessStartInfo $Git, ('--no-replace-objects --no-optional-locks -C "' + $Root + '" ' + $Query)
+            $Info.UseShellExecute = $false
+            $Info.CreateNoWindow = $true
+            $Info.RedirectStandardOutput = $true
+            $Info.RedirectStandardError = $true
+            $Info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false, $true)
+            $Process = [Diagnostics.Process]::Start($Info)
+            $ErrorText = $Process.StandardError.ReadToEndAsync()
+            $Text = $Process.StandardOutput.ReadToEnd()
+            $Process.WaitForExit()
+            $null = $ErrorText.Result
+            if ($Process.ExitCode -ne 0) { Exit-Automation 'automation_input_residue_query_failed' }
+            return @($Text.Split([char] 0) | Where-Object { $_ })
+          }
+          $Residue = @(Get-InputResidue)
+          foreach ($Relative in $Residue) {
+            $Path = [IO.Path]::GetFullPath((Join-Path $Root $Relative))
+            if (-not $Path.StartsWith($Root + '\', [StringComparison]::OrdinalIgnoreCase)) { Exit-Automation 'automation_input_residue_path_invalid' }
+            Remove-Item -LiteralPath $Path -Force
+          }
+          if (@(Get-InputResidue).Count -ne 0) { Exit-Automation 'automation_input_residue_remaining' }
+          Write-Output ('automation_input_residue removed={0}' -f $Residue.Count)
+      - name: Bind Unreal automation report
+        id: automation_identity
+        if: steps.editor_build.outcome == 'success' && steps.automation_run.outcome == 'success' && steps.automation_residue.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          function Exit-Automation([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }
+          $ReportPath = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/unreal-automation-report.json'
+          if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) { Exit-Automation 'automation_report_missing' }
+          $Report = Get-Item -LiteralPath $ReportPath
+          if ($Report.Length -le 0 -or $Report.Length -gt 4MB) { Exit-Automation 'automation_report_size_invalid' }
+          $ReportStream = [IO.File]::OpenRead($ReportPath)
+          $Hasher = [Security.Cryptography.SHA256]::Create()
+          try { $Digest = ([BitConverter]::ToString($Hasher.ComputeHash($ReportStream))).Replace('-', '').ToLowerInvariant() }
+          finally { $Hasher.Dispose(); $ReportStream.Dispose() }
+          $Utf8 = New-Object Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "artifact_name=unreal-automation-report`nevidence_sha256=$Digest`nevidence_size_bytes=$($Report.Length)`n", $Utf8)
+      - name: Upload Unreal automation report
+        id: automation_artifact
+        if: steps.editor_build.outcome == 'success' && steps.automation_run.outcome == 'success' && steps.automation_residue.outcome == 'success' && steps.automation_identity.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: unreal-automation-report
+          path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/unreal-automation-report.json
+          if-no-files-found: error
+      # Expose the first automation failure as one fixed-vocabulary reason so a
+      # red unreal receipt says why; runner-temp evidence is wiped after the job.
+      - name: Report Unreal automation outcome
+        id: automation_outcome
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_EDITOR_BUILD_OUTCOME: ${{ steps.editor_build.outcome }}
+          AETHELN_EDITOR_BUILD_REASON: ${{ steps.editor_build.outputs.reason }}
+          AETHELN_RUN_OUTCOME: ${{ steps.automation_run.outcome }}
+          AETHELN_RUN_REASON: ${{ steps.automation_run.outputs.reason }}
+          AETHELN_RESIDUE_OUTCOME: ${{ steps.automation_residue.outcome }}
+          AETHELN_RESIDUE_REASON: ${{ steps.automation_residue.outputs.reason }}
+          AETHELN_BIND_OUTCOME: ${{ steps.automation_identity.outcome }}
+          AETHELN_BIND_REASON: ${{ steps.automation_identity.outputs.reason }}
+          AETHELN_UPLOAD_OUTCOME: ${{ steps.automation_artifact.outcome }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          # First failed or cancelled step wins; an unrecorded failure (for
+          # example a step timeout) maps to that step's fixed fallback.
+          $Reason = 'none'
+          foreach ($Step in @(
+              @($env:AETHELN_EDITOR_BUILD_OUTCOME, $env:AETHELN_EDITOR_BUILD_REASON, 'editor_build_interrupted'),
+              @($env:AETHELN_RUN_OUTCOME, $env:AETHELN_RUN_REASON, 'unreal_automation_interrupted'),
+              @($env:AETHELN_RESIDUE_OUTCOME, $env:AETHELN_RESIDUE_REASON, 'automation_input_residue_interrupted'),
+              @($env:AETHELN_BIND_OUTCOME, $env:AETHELN_BIND_REASON, 'automation_report_bind_interrupted'),
+              @($env:AETHELN_UPLOAD_OUTCOME, '', 'automation_report_upload_failed'))) {
+            if ($Step[0] -cin @('failure', 'cancelled')) {
+              $Reason = if ([string] $Step[1] -cmatch '\A[a-z][a-z0-9_]{0,63}\z') { [string] $Step[1] } else { $Step[2] }
+              break
+            }
+          }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false))
+          Write-Output ('unreal_automation_outcome reason=' + $Reason)
 
   # Issue #150 milestone phases. The packaging and smoke milestone is split
   # into four bounded, schedule-only jobs (no manual trigger exists on this
@@ -991,6 +1233,100 @@ jobs:
           path: ${{ runner.temp }}/${{ steps.receipt_identity.outputs.artifact_name }}
           if-no-files-found: error
 
+  unreal-receipt-shadow:
+    needs:
+      - ci-selection-shadow
+      - trusted-editor-automation
+    if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.unreal_editor_automation_required == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      artifact_id: ${{ steps.receipt_artifact.outputs.artifact-id }}
+      artifact_name: ${{ steps.receipt_identity.outputs.artifact_name }}
+      artifact_digest: sha256:${{ steps.receipt_artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          lfs: false
+          persist-credentials: false
+      - name: Download exact selector evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.ci-selection-shadow.outputs.selector_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/aetheln-unreal-selector
+      - name: Download exact unreal evidence
+        if: needs.trusted-editor-automation.outputs.automation_artifact_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.trusted-editor-automation.outputs.automation_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/aetheln-unreal-evidence
+      - name: Publish unreal acceptance receipt
+        id: receipt_identity
+        shell: powershell
+        env:
+          AETHELN_REPOSITORY: ${{ github.repository }}
+          AETHELN_ACTOR: ${{ github.actor }}
+          AETHELN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          AETHELN_BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+          AETHELN_HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
+          AETHELN_TESTED_REVISION: ${{ github.sha }}
+          AETHELN_RUN_ID: ${{ github.run_id }}
+          AETHELN_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AETHELN_RAW_ARTIFACT_ID: ${{ needs.trusted-editor-automation.outputs.automation_artifact_id }}
+          AETHELN_RAW_ARTIFACT_NAME: ${{ needs.trusted-editor-automation.outputs.automation_artifact_name }}
+          AETHELN_RAW_ARTIFACT_DIGEST: ${{ needs.trusted-editor-automation.outputs.automation_artifact_digest }}
+          AETHELN_EVIDENCE_SHA256: ${{ needs.trusted-editor-automation.outputs.automation_sha256 }}
+          AETHELN_EVIDENCE_SIZE_BYTES: ${{ needs.trusted-editor-automation.outputs.automation_size_bytes }}
+          AETHELN_AUTOMATION_REASON: ${{ needs.trusted-editor-automation.outputs.automation_reason }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          # Fixed-vocabulary reason from the editor automation job's outcome step.
+          $AutomationReason = if ($env:AETHELN_AUTOMATION_REASON -cmatch '\A[a-z][a-z0-9_]{0,63}\z') { $env:AETHELN_AUTOMATION_REASON } else { 'unrecorded' }
+          Write-Output ('unreal_automation_outcome reason=' + $AutomationReason)
+          if ($env:AETHELN_RAW_ARTIFACT_ID -cnotmatch '\A[1-9][0-9]{0,19}\z' -or
+              $env:AETHELN_RAW_ARTIFACT_NAME -cne 'unreal-automation-report' -or
+              $env:AETHELN_RAW_ARTIFACT_DIGEST -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'unreal_raw_artifact_binding_invalid' }
+          $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-unreal-identity.json'
+          $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-unreal-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
+          $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
+          $ContextBuilder = (Resolve-Path -LiteralPath 'scripts/ci/New-CiAcceptanceAggregateContext.ps1').Path
+          & $ContextBuilder `
+            -Mode Identity `
+            -SelectorReportPath '${{ runner.temp }}/aetheln-unreal-selector/ci-selection-shadow.json' `
+            -WorkflowPath $WorkflowPath `
+            -Repository $env:AETHELN_REPOSITORY `
+            -Actor $env:AETHELN_ACTOR `
+            -TriggeringActor $env:AETHELN_TRIGGERING_ACTOR `
+            -BaseRevision $env:AETHELN_BASE_REVISION `
+            -HeadRevision $env:AETHELN_HEAD_REVISION `
+            -TestedRevision $env:AETHELN_TESTED_REVISION `
+            -WorkflowId $env:AETHELN_ACCEPTANCE_WORKFLOW_ID `
+            -RunId $env:AETHELN_RUN_ID `
+            -RunAttempt ([int] $env:AETHELN_RUN_ATTEMPT) `
+            -ActionItemsJson $env:AETHELN_ACCEPTANCE_ACTION_ITEMS_JSON `
+            -IdentityContextOutputPath $ContextPath | Out-Null
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/Publish-CiAcceptanceReceipt.ps1 `
+            -ContextPath $ContextPath `
+            -ProducerKey unreal `
+            -JobName unreal-receipt-shadow `
+            -EvidenceRoot '${{ runner.temp }}/aetheln-unreal-evidence' `
+            -ExpectedEvidenceSha256 $env:AETHELN_EVIDENCE_SHA256 `
+            -ExpectedEvidenceSizeBytes ([long] $env:AETHELN_EVIDENCE_SIZE_BYTES) `
+            -OutputRoot $OutputRoot
+          if ($LASTEXITCODE -ne 0) { throw 'unreal_receipt_failed' }
+          $Utf8 = New-Object Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, ('artifact_name=' + (Split-Path -Leaf $OutputRoot) + "`n"), $Utf8)
+      - name: Upload unreal acceptance receipt
+        id: receipt_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.receipt_identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/${{ steps.receipt_identity.outputs.artifact_name }}
+          if-no-files-found: error
+
   visual-receipt-shadow:
     needs:
       - ci-selection-shadow
@@ -1092,6 +1428,7 @@ jobs:
       - quality-gates
       - change-impact
       - trusted-candidate-compile
+      - trusted-editor-automation
       - scheduled-client-package
       - scheduled-server-package
       - scheduled-provenance-validation
@@ -1099,6 +1436,7 @@ jobs:
       - visual-proof
       - portable-receipt-shadow
       - native-receipt-shadow
+      - unreal-receipt-shadow
       - visual-receipt-shadow
     if: always()
     permissions:
@@ -1149,6 +1487,7 @@ jobs:
           AETHELN_PORTABLE_REQUIRED: ${{ needs.ci-selection-shadow.outputs.portable_required }}
           AETHELN_NATIVE_REQUIRED: ${{ needs.ci-selection-shadow.outputs.native_client_server_compile_required }}
           AETHELN_OPERATIONAL_REQUIRED: ${{ needs.ci-selection-shadow.outputs.controller_operational_proof_required }}
+          AETHELN_UNREAL_REQUIRED: ${{ needs.ci-selection-shadow.outputs.unreal_editor_automation_required }}
           AETHELN_VISUAL_REQUIRED: ${{ needs.ci-selection-shadow.outputs.visual_package_required }}
           AETHELN_PORTABLE_RESULT: ${{ needs.portable-receipt-shadow.result }}
           AETHELN_PORTABLE_ARTIFACT_ID: ${{ needs.portable-receipt-shadow.outputs.artifact_id }}
@@ -1158,6 +1497,10 @@ jobs:
           AETHELN_NATIVE_ARTIFACT_ID: ${{ needs.native-receipt-shadow.outputs.artifact_id }}
           AETHELN_NATIVE_ARTIFACT_NAME: ${{ needs.native-receipt-shadow.outputs.artifact_name }}
           AETHELN_NATIVE_ARTIFACT_DIGEST: ${{ needs.native-receipt-shadow.outputs.artifact_digest }}
+          AETHELN_UNREAL_RESULT: ${{ needs.unreal-receipt-shadow.result }}
+          AETHELN_UNREAL_ARTIFACT_ID: ${{ needs.unreal-receipt-shadow.outputs.artifact_id }}
+          AETHELN_UNREAL_ARTIFACT_NAME: ${{ needs.unreal-receipt-shadow.outputs.artifact_name }}
+          AETHELN_UNREAL_ARTIFACT_DIGEST: ${{ needs.unreal-receipt-shadow.outputs.artifact_digest }}
           AETHELN_VISUAL_RESULT: ${{ needs.visual-receipt-shadow.result }}
           AETHELN_VISUAL_ARTIFACT_ID: ${{ needs.visual-receipt-shadow.outputs.artifact_id }}
           AETHELN_VISUAL_ARTIFACT_NAME: ${{ needs.visual-receipt-shadow.outputs.artifact_name }}
@@ -1244,6 +1587,7 @@ jobs:
             $NativeProducerRequired = if ($env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true') { 'true' } elseif ($env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false') { 'false' } else { 'invalid' }
             Add-ProducerBinding $NativeProducerRequired $env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow' $env:AETHELN_NATIVE_ARTIFACT_ID $env:AETHELN_NATIVE_ARTIFACT_NAME $env:AETHELN_NATIVE_ARTIFACT_DIGEST
             Add-ProducerBinding $env:AETHELN_PORTABLE_REQUIRED $env:AETHELN_PORTABLE_RESULT 'portable' 'portable-receipt-shadow' $env:AETHELN_PORTABLE_ARTIFACT_ID $env:AETHELN_PORTABLE_ARTIFACT_NAME $env:AETHELN_PORTABLE_ARTIFACT_DIGEST
+            Add-ProducerBinding $env:AETHELN_UNREAL_REQUIRED $env:AETHELN_UNREAL_RESULT 'unreal' 'unreal-receipt-shadow' $env:AETHELN_UNREAL_ARTIFACT_ID $env:AETHELN_UNREAL_ARTIFACT_NAME $env:AETHELN_UNREAL_ARTIFACT_DIGEST
             Add-ProducerBinding $env:AETHELN_VISUAL_REQUIRED $env:AETHELN_VISUAL_RESULT 'visual' 'visual-receipt-shadow' $env:AETHELN_VISUAL_ARTIFACT_ID $env:AETHELN_VISUAL_ARTIFACT_NAME $env:AETHELN_VISUAL_ARTIFACT_DIGEST
             $SelectorBinding = [pscustomobject][ordered]@{
               jobName = 'ci-selection-shadow'
