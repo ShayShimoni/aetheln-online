@@ -353,7 +353,10 @@ Every accepted decision records:
   bounded report itself. Upload is best effort within remaining job time, not
   guaranteed before platform cancellation; checkout/LFS and grace also consume
   that budget, and missing evidence never establishes success. Checkout/LFS
-  and report upload sit only inside the job bound. The recorded
+  and report upload sit only inside the job bound. TA-020 (2026-10-02) adds a
+  sixth engine-runner job, `trusted-editor-automation`, with a 35-minute
+  ceiling after a successful trusted compile; a scheduled phase that queues
+  while it runs waits at most those 35 minutes for it. The recorded
   40-minute value is the maximum trusted-compile queue delay attributable to one
   currently running scheduled phase, subject to platform assignment latency;
   total queue time can be longer when older jobs are already ahead.
@@ -443,6 +446,9 @@ Every accepted decision records:
   30-minute controlled-work watchdog, client/server packaging at 40 minutes
   each with 30-minute watchdogs, and provenance/smoke at 20 minutes each with
   10-minute watchdogs. These are operational ceilings, not measured budgets.
+  TA-020 adds the owner-only `trusted-editor-automation` job at 35 minutes
+  (its step bounds plus a 3-minute margin) and leaves every watchdog here
+  unchanged.
   Supersede the former multi-hour TA-012 phase ceilings. Timeouts fail with
   retained evidence and owned-tree cleanup; no silent retry or longer fallback.
   Under the approved Issue #167 recovery, use a fresh exact-revision control
@@ -772,9 +778,9 @@ Every accepted decision records:
   all eight exact obligation decisions, and its artifact ID/name/API digest as
   direct `needs` outputs. The portable, trusted native client/server compile,
   and reusable visual jobs expose their truthful raw artifact ID/name/digest
-  plus inner report SHA-256/length; the trusted compile job also exposes a
-  second raw artifact, the normalized `unreal-automation-report` from the
-  frozen two-test harness run in its managed workspace. Four hosted
+  plus inner report SHA-256/length; the separate `trusted-editor-automation`
+  job (TA-020) exposes the normalized `unreal-automation-report` from the
+  frozen two-test harness run in the managed compile workspace. Four hosted
   receipt-publisher jobs download those exact artifacts by ID, validate the raw
   typed reports, and publish nonce-bound shadow receipts for `portable`,
   `controller-contract`, `controller-operational-proof`,
@@ -791,18 +797,11 @@ Every accepted decision records:
   under each check id with its own reason suffix. The unreal publisher proves
   `unreal-editor-automation` from the exact `unreal-automation-report.json`
   with zero native exit and no cleanup claim; its runner identity is covered by
-  the native receipt the selector always co-selects. That first proof runs in
-  the existing compile job after the host lease is released, inside the
-  unchanged 40-minute job ceiling: the editor build starts only when every
-  automation step bound plus a 2-minute setup/cleanup margin (34 minutes in
-  total) still fits, so the compile must finish within about 6 minutes of the
-  job's start anchor. Every automation step continues on error, so an
-  automation step failure leaves the compile job and native receipt intact
-  while the unreal receipt reports the fixed `automation_reason` and fails red
-  at its raw binding check. A whole-job ceiling overrun still cancels the
-  compile job. Compile and editor-build durations are to be recorded from the
-  first live runs to confirm that cutoff. Host-lease wrapping remains a
-  follow-up.
+  the native receipt the selector always co-selects. The editor build and
+  harness run in their own engine-runner job after a successful compile (see
+  TA-020), so an automation failure leaves the compile job and native receipt
+  intact while the unreal receipt reports the fixed `automation_reason` and
+  fails red at its raw binding check. Host-lease wrapping remains a follow-up.
   `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
   when the selector's chosen checks are a subset of those six live
   obligations, nonce-specific requirements with an exact selector binding and
@@ -993,6 +992,61 @@ Every accepted decision records:
   `controller-operational-proof` for these paths, the producer moves off the
   compile report, or the per-PR compile becomes a measured engine-runner
   bottleneck.
+
+### TA-020 - Separate Engine-Runner Job for Unreal Editor Automation
+
+- **Status:** Accepted
+- **Scope:** Issue #167 Package 3C `unreal-editor-automation` producer and the
+  engine-runner operational ceilings recorded in TA-012 and TA-015.
+- **Decision (2026-10-02):** Under the lead's direction, run the editor build,
+  the frozen two-test harness, residue cleanup, report binding and upload, and
+  the outcome report in a new self-hosted job, `trusted-editor-automation`,
+  instead of inside `trusted-candidate-compile`. The job needs
+  `trusted-candidate-compile` (so it runs only after a successful compile and
+  is skipped, not failed, when the compile is skipped or fails), keeps the
+  same pull-request, same-repository, owner, and triggering-actor predicates,
+  targets `[self-hosted, Windows, X64, aetheln-engine]`, joins the
+  `aetheln-engine-runner` group with `queue: max` and
+  `cancel-in-progress: false`, and has a 35-minute job ceiling: its step
+  bounds (editor build 15, harness 12, residue cleanup 2, bind 1, upload 1,
+  outcome 1) plus a 3-minute margin. Every step continues on error. It reuses
+  the registered managed compile workspace only after verifying that the
+  workspace still holds the tested revision and is clean, and fails with a
+  fixed reason otherwise. `trusted-candidate-compile` returns to its
+  pre-producer shape, and the TA-015 30-minute compile watchdog is unchanged.
+  The engine runner now has six jobs.
+- **Evidence:** first live runs on runner 21. The `trusted-candidate-compile`
+  step "Compile supported client and server targets" took 102 s on PR #204 (a
+  CI-script change) and 503 s on PR #205 (a Source change). Inside the compile
+  job, the editor build would have needed the compile to finish within about
+  6 minutes of the job's start to fit the remaining 40-minute budget, so it
+  would have been skipped on exactly the Source pull requests it exists to
+  cover. A separate job gives the editor build its full budget even when the
+  compile uses its whole 30-minute watchdog.
+- **Cost:** an owner engine pull request can hold the runner for up to
+  75 minutes (40-minute compile plus 35-minute editor automation) when no
+  older waiter queued between the two jobs. A scheduled phase that queues
+  while the editor job runs waits at most 35 minutes for it; the recorded
+  40-minute trusted-compile queue delay attributable to one running scheduled
+  phase is unchanged. Between the two jobs another engine job may synchronize
+  the managed workspace to a different revision; the editor job then fails
+  closed with `editor_workspace_revision_changed` rather than building the
+  wrong revision.
+- **Alternatives:** lowering the editor or harness bounds (unmeasured, and
+  would still skip on slow compiles); a budget-skip that publishes a green gap
+  (reintroduces the exemption TA-018 removed); raising the compile job ceiling
+  (TA-015 forbids raising ceilings without retained evidence).
+- **Consequences:** a failure in the editor automation job never affects the
+  compile job or `native-receipt-shadow`; `unreal-receipt-shadow` needs the new
+  job and fails red at its raw binding check, printing the fixed
+  `automation_reason`, when no report was uploaded. The job runs outside the
+  engine host lease for this first proof; wrapping it in the lease is a
+  follow-up. Record editor-build and harness durations from the first live
+  runs. Authority stays off.
+- **Owner:** Issue #167.
+- **Revisit trigger:** measured editor-build or harness durations approach
+  their step bounds, workspace-revision races appear in practice, or the
+  combined compile plus editor hold becomes a measured scheduling bottleneck.
 
 ## Candidate Decisions
 
