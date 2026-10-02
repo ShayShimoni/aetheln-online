@@ -204,6 +204,13 @@ that changes an issue's real state (work started, PR opened, PR merged, QA
 result, blocker found or cleared), and correct any drift the moment it is
 noticed.
 
+Keep state durable so any later session can resume without loss. When work
+starts, pauses, hands off, or changes state, record on the issue: the
+branch, worktree, head SHA, what is verified, open decisions, and the next
+step. Commit or push work in progress rather than leaving it only in an
+uncommitted worktree or in an agent's context. Never let the issue, the board,
+and the repository disagree.
+
 Tie board moves to PR events, in the same step as the PR action:
 
 - Open a PR only after developer verification is complete and recorded. When
