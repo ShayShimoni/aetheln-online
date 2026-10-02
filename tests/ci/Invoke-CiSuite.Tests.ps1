@@ -461,6 +461,8 @@ function Mark([string] $Name) { [IO.File]::WriteAllText((Join-Path $PSScriptRoot
 	# Smoke observes package-process quiescence and is deliberately not eligible
 	# for overlap. Its observed concurrent failure must not be hidden by retries.
 	$RunnerSource = Get-Content -LiteralPath $Runner -Raw
+	$HostToolLines = @($RunnerSource -split "\r?\n" | Where-Object { $_ -match "name = 'host-tool-provisioning-tests'; tier = 'required'; script = 'tests/build/Invoke-HostToolProvisioning.Tests.ps1'" })
+	Assert-True -Condition ($HostToolLines.Count -eq 1) -Message 'Host-tool provisioning fixtures must be a required default CI check.'
 	$ConcurrentLine = @($RunnerSource -split "\r?\n" | Where-Object { $_ -match '^\$ConcurrentChecks = ' })
 	Assert-True -Condition ($ConcurrentLine.Count -eq 1 -and $ConcurrentLine[0] -notmatch "'packaged-smoke-test-tests'") -Message 'Packaged smoke fixtures must remain a required serial barrier, not a concurrency experiment.'
 	$SchedulerNames = @('build-packaged-artifacts-tests', 'network-authority-spike-tests', 'engine-runner-gate-tests', 'packaged-smoke-test-tests', 'unreal-automation-tests')

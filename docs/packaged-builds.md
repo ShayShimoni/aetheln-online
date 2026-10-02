@@ -67,6 +67,11 @@ revision and an existing external host-tools attestation record. That record
 must have been produced with `-Stage AttestHostTools` after an authorized,
 successful provisioning build, referencing its retained evidence; see
 [Host-tools attestation record](developer-environment-and-ddc.md#host-tools-attestation-record).
+If the pinned checkout lacks host products, the optional operator-only
+[non-clean host-tool provisioner](developer-environment-and-ddc.md#explicit-non-clean-host-tool-provisioning)
+can produce bounded local build evidence without running UAT or changing this
+clean packaging contract. Provisioning does not create the attestation or
+replace the separate attestation review step.
 Substitute the local roots, enter that existing record's path when prompted,
 and capture the actual full repository `HEAD` for the run:
 
