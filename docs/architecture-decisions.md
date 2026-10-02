@@ -312,7 +312,14 @@ Every accepted decision records:
   its process supervision or JSONL evidence writer. Its mandatory portable smoke
   fixture suite and independent review cover those changes; real packaged-smoke
   evidence remains a separate required milestone. Revisit these exact exceptions
-  if these scripts start generating engine inputs. Everything else,
+  if these scripts start generating engine inputs. TA-018 (2026-10-02)
+  partially reverses this applicability decision: the six controller paths
+  (`scripts/ci/Invoke-CiSuite.ps1`, `scripts/ci/Test-FormattingPolicy.ps1`,
+  `scripts/ci/Test-MarkdownLinks.ps1`, `scripts/ci/Invoke-EngineRunnerGate.ps1`,
+  `scripts/ci/Initialize-CompileWorkspace.ps1`, and
+  `.github/workflows/prototype-quality-gates.yml`) require compile again so
+  the native producer can publish `controller-operational-proof`; only the two
+  `scripts/build/` paths remain exempt. Everything else,
   including `Source/**`, `Config/**`, `Content/**`, `Plugins/**`, other
   `scripts/**`, other `.github/workflows/**`, and `AethelnOnline.uproject`,
   requires compile; so does any mixed change containing an engine-required
@@ -869,9 +876,12 @@ Every accepted decision records:
   5,595-byte block at SHA-256
   `b69855c18bf8a8dd0a7e686b80d97d338c558b0868c27a05bf7cbdf9b3c04b6c`.
   Historically, Package 3A changed only the reviewed checkout action identity
-  in that block;
-  its current normalized identity is 5,633 bytes at SHA-256
-  `f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df`,
+  in that block
+  (5,633 bytes at SHA-256
+  `f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df`);
+  TA-018 removed the six controller paths from its portable-only set, so its
+  current normalized identity is 5,395 bytes at SHA-256
+  `e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805`,
   and the shadow is independent with one attempt-bound artifact. Fixtures do
   not replace the first later live accepted-base comparison. Package 3A adds
   `New-CiAcceptanceReceipt.Tests.ps1` and
@@ -901,6 +911,64 @@ Every accepted decision records:
 - **Revisit trigger:** Pull-request merge identity or checkout semantics change,
   the accepted policy/check set changes, a required obligation gains a real
   producer, or live comparison contradicts this contract.
+
+### TA-018 - Compile Controller Changes for Operational Proof
+
+- **Status:** Accepted
+- **Scope:** Issue #167 Package 3C `controller-operational-proof` producer and
+  the `change-impact` portable-only exemption list in
+  `.github/workflows/prototype-quality-gates.yml`.
+- **Decision (2026-10-02):** Under the owner's direction for the
+  `controller-operational-proof` producer, partially reverse the TA-012
+  applicability decision of 2026-09-06. Remove exactly
+  `scripts/ci/Invoke-CiSuite.ps1`, `scripts/ci/Test-FormattingPolicy.ps1`,
+  `scripts/ci/Test-MarkdownLinks.ps1`, `scripts/ci/Invoke-EngineRunnerGate.ps1`,
+  `scripts/ci/Initialize-CompileWorkspace.ps1`, and
+  `.github/workflows/prototype-quality-gates.yml` from the closed
+  case-sensitive portable-only set, so a pull request that changes only those
+  controller files publishes `engine_required=true` and runs
+  `trusted-candidate-compile`. Exactly
+  `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1` remain exempt: a
+  `scripts/build/` change co-selects the unsupported
+  `clean-package-provenance-smoke` obligation and takes the green gap branch,
+  so no compile could turn it into proof. Every other TA-012 rule (uncertainty
+  fails closed to `engine_required=true`, lookalikes and case variants compile,
+  trust predicates, portable gates before engine work, phase bounds) is
+  unchanged. The accepted-base selector `scripts/ci/Get-CiSelection.ps1` is
+  unchanged, so its digest and pinned blob are unaffected.
+- **Why:** `controller-operational-proof` attests that the candidate
+  controller at the tested revision ran the real supervised Compile gate on
+  the engine runner with resource monitoring and verified cleanup in this
+  attempt; its only truthful producer is the `trusted-candidate-compile`
+  report republished by `native-receipt-shadow`. The selector selects it for
+  every `scripts/ci/` or live-workflow change, but the exemption skipped that
+  producer, so the aggregate failed red at
+  `producer_direct_binding_invalid:native` and activation could never obtain
+  proof. Unreal compilation still does not validate portable scheduling,
+  policy checks, or workflow YAML logic; the required portable suite and
+  independent review remain the gates for that logic. The compile is
+  operational proof of the controller, not a substitute for them.
+- **Cost:** one incremental Windows client plus Linux server compile on the
+  self-hosted engine runner (runner 21) per owner controller pull request,
+  behind the existing `quality-gates` success requirement and the FIFO
+  `aetheln-engine-runner` queue.
+- **Alternatives:** a new green gap reason for "selected but compile skipped"
+  (hides the missing proof); accepting the red native binding (makes every
+  controller pull request permanently red); adding `hostLease` to the engine
+  report (changes the closed report shape in both validators and the gate).
+- **Consequences:** a non-owner pull request that selects
+  `controller-operational-proof` still skips the compile under the trust
+  predicates and fails red at the native binding, the pre-existing
+  `native-client-server-compile` behavior now reachable for controller-only
+  changes. Authority stays off: the `ci-acceptance-authority` predicate remains
+  literally `always() && github.event_name == 'pull_request' && false`, and no
+  receipt or aggregate grants acceptance.
+- **Owner:** Issue #167.
+- **Revisit trigger:** the selector stops selecting
+  `controller-operational-proof` for these paths, the producer moves off the
+  compile report, or the per-PR compile becomes a measured engine-runner
+  bottleneck.
 
 ## Candidate Decisions
 

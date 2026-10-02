@@ -197,10 +197,14 @@ Package 3C evidence from reconciling and therefore makes that new evidence path
 red. It does not silently produce acceptance. The legacy
 `change-impact` job remains the sole selection authority. Historically,
 Package 3A changed only its remote checkout action identity to the reviewed
-full SHA; after LF normalization the block from `change-impact:` through the
-`trusted-candidate-compile` explanatory comment is exactly 5,633 UTF-8 bytes
+full SHA; after LF normalization that block from `change-impact:` through the
+`trusted-candidate-compile` explanatory comment was exactly 5,633 UTF-8 bytes
 with SHA-256
 `f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df`.
+TA-018 (2026-10-02) then removed the six controller paths from the
+portable-only set; the current normalized block is exactly 5,395 UTF-8 bytes
+with SHA-256
+`e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -234,35 +238,37 @@ this closed, case-sensitive portable-only set:
 - GitHub issue or pull-request template Markdown or YAML files under
   `.github/ISSUE_TEMPLATE/` or `.github/PULL_REQUEST_TEMPLATE/`, or the
   top-level `.github/PULL_REQUEST_TEMPLATE.md`
-- Exactly `scripts/ci/Invoke-CiSuite.ps1`,
-  `scripts/ci/Test-FormattingPolicy.ps1`,
-  `scripts/ci/Test-MarkdownLinks.ps1`, and
-  `.github/workflows/prototype-quality-gates.yml`
-- Exactly `scripts/build/Build-PackagedArtifacts.ps1`,
-  `scripts/build/Invoke-PackagedSmokeTest.ps1`,
-  `scripts/ci/Invoke-EngineRunnerGate.ps1`, and
-  `scripts/ci/Initialize-CompileWorkspace.ps1`
+- Exactly `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`
 
-The four exact CI paths are the lead's 2026-09-06 applicability decision under
-the user's CI-improvement authorization, recorded in TA-012. Unreal compilation
-does not validate portable scheduling, policy checks, or workflow YAML logic.
-The required portable suite (including its runner, formatting, Markdown,
-workflow, and scheduling-policy fixture suites) and independent review remain
-mandatory for these changes. This is not a blanket scripts or workflow
-exemption: matching uses exact case-sensitive paths, not prefixes, filename
-lookalikes, or extension substitutions. Passing local fixtures does not prove
-live workflow activation, engine execution, or scheduled milestone completion.
+Until 2026-10-02 the set also exempted exactly `scripts/ci/Invoke-CiSuite.ps1`,
+`scripts/ci/Test-FormattingPolicy.ps1`, `scripts/ci/Test-MarkdownLinks.ps1`,
+`scripts/ci/Invoke-EngineRunnerGate.ps1`,
+`scripts/ci/Initialize-CompileWorkspace.ps1`, and
+`.github/workflows/prototype-quality-gates.yml` (the lead's 2026-09-06
+applicability decision recorded in TA-012). Unreal compilation does not
+validate portable scheduling, policy checks, or workflow YAML logic, and the
+required portable suite (including its runner, formatting, Markdown, workflow,
+and scheduling-policy fixture suites) plus independent review remain mandatory
+for those files. TA-018 nevertheless removes those six paths from the exempt
+set: a pull request that changes only controller files now runs the real
+supervised compile so the native producer can publish
+`controller-operational-proof`. The compile is operational proof that the
+candidate controller drove the engine runner, not validation of its YAML or
+scheduling logic. This is not a blanket scripts or workflow exemption: matching
+uses exact case-sensitive paths, not prefixes, filename lookalikes, or
+extension substitutions. Passing local fixtures does not prove live workflow
+activation, engine execution, or scheduled milestone completion.
 
-The four exact orchestration additions follow the owner's CI-redesign
+The two remaining exact orchestration exemptions follow the owner's CI-redesign
 authorization and independent applicability review on 2026-09-06. Their PR
-gates are the full required portable suite (including packaging, smoke, gate,
-post-command-state and retention fixtures) plus independent review. Compile
-does not execute the packaging controller or smoke evidence writer; it does
-exercise the wrapper and
-retention helper against a real engine, so that integration coverage remains
-an explicitly separate bounded operational proof, not an asserted pass.
-Revisit these exceptions if an orchestration script begins generating engine
-inputs. A simultaneous engine-input change still requires compilation.
+gates are the full required portable suite (including packaging, smoke, and
+post-command-state fixtures) plus independent review. Compile does not execute
+the packaging controller or smoke evidence writer, and a `scripts/build/`
+change co-selects the unsupported `clean-package-provenance-smoke` obligation,
+so a compile could not become operational proof for it. Revisit these
+exceptions if an orchestration script begins generating engine inputs. A
+simultaneous engine-input change still requires compilation.
 
 Everything else requires compile, including `Source/**`, `Config/**`,
 `Content/**`, `Plugins/**`, other `scripts/**`, other `.github/workflows/**`, and

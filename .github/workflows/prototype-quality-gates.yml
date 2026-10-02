@@ -441,19 +441,14 @@ jobs:
           }
 
           function Test-PortablePath([string] $Path) {
-            # Closed portable-only set (case-sensitive). These exact CI files
-            # are checked by the required portable suites and independent review;
-            # an Unreal compile does not validate their scheduling or YAML logic.
+            # Closed portable-only set (case-sensitive). Compile never executes
+            # these packaging scripts; their required portable suites and independent
+            # review are the gates. Controller scripts and this workflow compile
+            # (TA-018) so the native producer can publish controller-operational-proof.
             # Other scripts/workflows and all engine inputs still require compile.
             $PortableCiPaths = @(
-              'scripts/ci/Invoke-CiSuite.ps1',
-              'scripts/ci/Test-FormattingPolicy.ps1',
-              'scripts/ci/Test-MarkdownLinks.ps1',
               'scripts/build/Build-PackagedArtifacts.ps1',
-              'scripts/build/Invoke-PackagedSmokeTest.ps1',
-              'scripts/ci/Invoke-EngineRunnerGate.ps1',
-              'scripts/ci/Initialize-CompileWorkspace.ps1',
-              '.github/workflows/prototype-quality-gates.yml'
+              'scripts/build/Invoke-PackagedSmokeTest.ps1'
             )
             if ($PortableCiPaths -ccontains $Path) { return $true }
             if ($Path -cmatch '^docs/.+') { return $true }
