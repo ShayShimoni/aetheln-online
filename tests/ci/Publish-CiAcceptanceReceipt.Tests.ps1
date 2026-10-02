@@ -99,10 +99,21 @@ function New-TestVisualReport {
 	return [pscustomobject][ordered]@{schemaVersion='aetheln.visual-package-report/v1';repository='ShayShimoni/aetheln-online';revision=('c'*40);run=[pscustomobject][ordered]@{id='9001';attempt=2};results=$Results;conclusion='success'}
 }
 
+function New-TestUnrealReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs and returns an in-memory unreal-automation-report fixture without changing external state.')]
+	param()
+	$Tests = @(
+		[pscustomobject][ordered]@{fullTestPath='Aetheln.GameCombat.NetworkSpike.Authority';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0},
+		[pscustomobject][ordered]@{fullTestPath='Aetheln.Harness.ProjectAndModuleLoad';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0}
+	)
+	return [pscustomobject][ordered]@{schemaId='aetheln.unreal-automation';schemaVersion=1;mode='production';sourceRevision=('c'*40);engineRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';projectName='AethelnOnline';filter='^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$';timeoutSeconds=600;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';processExitCode=0;repositoryCleanBefore=$true;repositoryCleanAfter=$true;outputs=[pscustomobject][ordered]@{unrealReport='TestResults/UnrealAutomation/index.json';log='Saved/Logs/AethelnUnrealAutomation.log'};tests=$Tests;summary=[pscustomobject][ordered]@{total=2;passed=2;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=0};result='passed';failureReason='none'}
+}
+
 function Get-PublisherCaseDefinition([string] $ProducerKey) {
 	switch ($ProducerKey) {
 		'portable' { return @{ checks=@('portable'); name='ci-report.json'; job='portable-receipt-shadow'; report=(New-TestPortableReport) } }
 		'native' { return @{ checks=@('native-client-server-compile'); name='engine-runner-report.json'; job='native-receipt-shadow'; report=(New-TestNativeReport) } }
+		'unreal' { return @{ checks=@('unreal-editor-automation'); name='unreal-automation-report.json'; job='unreal-receipt-shadow'; report=(New-TestUnrealReport) } }
 		'visual' { return @{ checks=@('visual-package'); name='visual-package-report.json'; job='visual-receipt-shadow'; report=(New-TestVisualReport) } }
 		default { throw 'test_producer_key_invalid' }
 	}
@@ -136,7 +147,7 @@ function Invoke-PublisherFixture($Fixture) {
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-receipt-publisher-' + [guid]::NewGuid().ToString('N'))
 try {
 	[void] (New-Item -ItemType Directory -Path $FixtureRoot)
-	foreach ($ProducerKey in @('portable','native','visual')) {
+	foreach ($ProducerKey in @('portable','native','unreal','visual')) {
 		$Case = New-PublisherFixture -Root (Join-Path $FixtureRoot $ProducerKey) -ProducerKey $ProducerKey
 		$CheckId = $Case.Selection[0]
 		$Published = Invoke-PublisherFixture $Case
@@ -150,6 +161,9 @@ try {
 		Assert-True ((Get-PublisherSha256 (Join-Path $Case.OutputRoot $Case.EvidenceName)) -ceq $Case.EvidenceSha256) "The $CheckId receipt archive must preserve exact evidence bytes."
 		if ($CheckId -ceq 'native-client-server-compile') {
 			Assert-True ($Receipt.results.checks[0].nativeExitCode -eq 0 -and $Receipt.results.checks[0].cleanupVerified) 'Native receipt must bind zero exit and verified cleanup.'
+		} elseif ($CheckId -ceq 'unreal-editor-automation') {
+			# The harness exits zero only after both frozen tests pass; it owns no cleanup proof.
+			Assert-True ($Receipt.results.checks[0].nativeExitCode -eq 0 -and $null -eq $Receipt.results.checks[0].cleanupVerified -and $null -eq $Receipt.acceptance.cleanupVerified) 'Unreal receipt must bind zero exit without inventing cleanup evidence.'
 		} else {
 			Assert-True ($null -eq $Receipt.results.checks[0].nativeExitCode -and $null -eq $Receipt.results.checks[0].cleanupVerified) "$CheckId must not invent native or cleanup evidence."
 		}
@@ -235,6 +249,15 @@ try {
 	$MalformedEvidence.EvidenceSha256 = Get-PublisherSha256 $MalformedEvidence.EvidencePath
 	$MalformedEvidence.EvidenceSizeBytes = [long](Get-Item $MalformedEvidence.EvidencePath).Length
 	Assert-Rejected { Invoke-PublisherFixture $MalformedEvidence } 'receipt_semantic_evidence_invalid:visual-package'
+
+	# A harness report whose frozen test failed can never become an unreal receipt.
+	$FailedUnreal = New-PublisherFixture -Root (Join-Path $FixtureRoot 'failed-unreal') -ProducerKey unreal
+	$FailedUnrealReport = New-TestUnrealReport
+	$FailedUnrealReport.tests[0].status = 'failed'
+	[IO.File]::WriteAllText($FailedUnreal.EvidencePath, (($FailedUnrealReport | ConvertTo-Json -Depth 12 -Compress) + "`n"), $script:PublisherUtf8)
+	$FailedUnreal.EvidenceSha256 = Get-PublisherSha256 $FailedUnreal.EvidencePath
+	$FailedUnreal.EvidenceSizeBytes = [long](Get-Item $FailedUnreal.EvidencePath).Length
+	Assert-Rejected { Invoke-PublisherFixture $FailedUnreal } 'receipt_semantic_evidence_invalid:unreal-editor-automation'
 
 	$OversizedEvidence = New-PublisherFixture -Root (Join-Path $FixtureRoot 'oversized-evidence') -ProducerKey visual
 	$EvidenceStream = New-Object IO.FileStream($OversizedEvidence.EvidencePath, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None)

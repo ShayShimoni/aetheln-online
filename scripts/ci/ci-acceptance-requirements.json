@@ -16,7 +16,13 @@
       "checks": [
         "content-reference-validation",
         "controller-contract",
-        "portable",
+        "portable"
+      ]
+    },
+    {
+      "key": "unreal",
+      "jobName": "unreal-receipt-shadow",
+      "checks": [
         "unreal-editor-automation"
       ]
     },

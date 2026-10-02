@@ -246,4 +246,30 @@ try {
 	$null = Stop-InitialPreparationOwnedTree -Lease $CapLease -DeadlineTicks $Attempt.cleanupDeadlineTicks
 	Exit-InitialPreparationLease -Lease $CapLease
 }
+# The trusted compile job builds the editor target through the same wrapper;
+# the editor target is Win64-only, and Linux stays server-only.
+$EditorRoot = Join-Path $FixtureRoot 'editor-target'
+$EditorBatch = Join-Path $EditorRoot 'Engine/Build/BatchFiles'
+$null = New-Item -ItemType Directory -Path $EditorBatch
+$EditorDotnet = Join-Path $EditorRoot 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64'
+$null = New-Item -ItemType Directory -Path $EditorDotnet
+[IO.File]::WriteAllText((Join-Path $EditorDotnet 'dotnet.exe'), 'fixture')
+[IO.File]::WriteAllText((Join-Path $EditorBatch 'Build.bat'), "@echo off`r`necho build-args %1 %2`r`nexit /b 0`r`n")
+[IO.File]::WriteAllText((Join-Path $EditorRoot 'AethelnOnline.uproject'), '{}')
+foreach ($EditorCase in @(@{ platform = 'Win64'; exit = 0 }, @{ platform = 'Linux'; exit = 1 })) {
+	$EditorEvidence = Join-Path $EditorRoot ('evidence-' + $EditorCase.platform)
+	$null = New-Item -ItemType Directory -Path $EditorEvidence
+	& (Join-Path $PSHOME 'powershell.exe') -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot '../../scripts/ci/InitialPreparation.BuildInvocation.ps1') `
+		-Target AethelnOnlineEditor -Platform $EditorCase.platform -ActionLimit 1 -EngineRoot $EditorRoot -TargetRoot $EditorRoot -LinuxToolchainRoot $EditorRoot -EvidenceRoot $EditorEvidence | Out-Null
+	$EditorExit = $LASTEXITCODE
+	$EditorResultPath = Join-Path $EditorEvidence 'native-result.json'
+	Assert-BuildTest -Condition ($EditorExit -eq $EditorCase.exit) -Message "Editor target on $($EditorCase.platform) must exit $($EditorCase.exit)"
+	if ($EditorCase.exit -eq 0) {
+		$EditorRecord = Get-Content -LiteralPath $EditorResultPath -Raw | ConvertFrom-Json
+		Assert-BuildTest -Condition ($EditorRecord.target -ceq 'AethelnOnlineEditor' -and $EditorRecord.platform -ceq 'Win64' -and $EditorRecord.nativeExitCode -eq 0 -and $null -eq $EditorRecord.infrastructureFailure -and [IO.File]::ReadAllText((Join-Path $EditorEvidence 'build.log')).Contains('build-args AethelnOnlineEditor Win64')) -Message 'Editor target must reach Build.bat as a Win64 build'
+	} else {
+		# The target/platform rule runs before any evidence file or Build.bat exists.
+		Assert-BuildTest -Condition (-not (Test-Path -LiteralPath $EditorResultPath) -and -not (Test-Path -LiteralPath (Join-Path $EditorEvidence 'build.log'))) -Message 'Editor target must be rejected on Linux before Build.bat runs'
+	}
+}
 Write-Output "PASS: preparation build fixtures; retained $FixtureRoot"

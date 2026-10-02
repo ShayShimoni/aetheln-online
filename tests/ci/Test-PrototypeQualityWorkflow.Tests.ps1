@@ -41,7 +41,8 @@ Assert-True ($ScheduledSmokeStart -ge 0) "Workflow job 'scheduled-packaged-smoke
 $ScheduledSmoke = Get-JobBody 'scheduled-packaged-smoke' 'visual-proof'
 $VisualProof = Get-JobBody 'visual-proof' 'portable-receipt-shadow'
 $PortableReceipt = Get-JobBody 'portable-receipt-shadow' 'native-receipt-shadow'
-$NativeReceipt = Get-JobBody 'native-receipt-shadow' 'visual-receipt-shadow'
+$NativeReceipt = Get-JobBody 'native-receipt-shadow' 'unreal-receipt-shadow'
+$UnrealReceipt = Get-JobBody 'unreal-receipt-shadow' 'visual-receipt-shadow'
 $VisualReceipt = Get-JobBody 'visual-receipt-shadow' 'ci-acceptance-shadow'
 $AcceptanceShadow = Get-JobBody 'ci-acceptance-shadow' 'ci-acceptance-authority'
 $AuthorityStart = $Workflow.IndexOf('  ci-acceptance-authority:', [StringComparison]::Ordinal)
@@ -73,8 +74,8 @@ Assert-True ($Workflow -notmatch 'workflow_dispatch') 'Workflow must not expose 
 Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)') 'Workflow must not use status functions that bypass a failed or skipped prerequisite.'
 $ExpectedActionManifest = '[{"uses":"actions/checkout","revision":"3d3c42e5aac5ba805825da76410c181273ba90b1"},{"uses":"actions/download-artifact","revision":"d3f86a106a0bac45b974a628896c90dbdf5c8093"},{"uses":"actions/upload-artifact","revision":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"}]'
 Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape($ExpectedActionManifest)) -Expected 1 -Message 'The aggregate identity manifest must exactly bind the reviewed checkout, download, and upload action revisions.'
-Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape("uses: $DownloadAction")) -Expected 8 -Message 'Package 3C must contain exactly eight reviewed exact-ID artifact downloads.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^          merge-multiple: true\r?$' -Expected 8 -Message 'Every exact-ID artifact download must flatten its single archive into the validated destination root.'
+Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape("uses: $DownloadAction")) -Expected 10 -Message 'Package 3C must contain exactly ten reviewed exact-ID artifact downloads.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^          merge-multiple: true\r?$' -Expected 10 -Message 'Every exact-ID artifact download must flatten its single archive into the validated destination root.'
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^    if: always\(\)(?: && github\.event_name == ''pull_request'' && false)?\r?$' -Expected 2 -Message 'Only the hosted aggregate and dormant fail-closed authority boundary may use job-level always().'
 Assert-True ($AcceptanceShadow -match '(?m)^    if: always\(\)\r?$' -and $AcceptanceShadow -notmatch '(?m)^    continue-on-error:') 'The acceptance shadow must run after every dependency while unexpected reconciliation failures remain visible.'
 Assert-True ($AcceptanceShadow -match "Write-Warning \('acceptance_producer_gap:' \+" -and $AcceptanceShadow -notmatch "throw \('acceptance_producer_gap:") 'A selected unsupported producer must publish a green no-acceptance diagnostic rather than fail an otherwise healthy pull request.'
@@ -265,7 +266,7 @@ foreach ($WorkflowSource in @($Workflow, $VisualWorkflow)) {
 		Assert-True ($ActionIdentity -cmatch '^actions/[a-z0-9-]+@[0-9a-f]{40}$') "Remote action '$ActionIdentity' must use one full lowercase commit SHA."
 	}
 }
-Assert-MatchCount -Text $Workflow -Pattern "(?m)^\s+uses: $DownloadActionPattern\r?$" -Expected 8 -Message 'Package 3C must use the reviewed downloader exactly for two direct bindings per receipt, the aggregate selector binding, and the hard-disabled authority boundary.'
+Assert-MatchCount -Text $Workflow -Pattern "(?m)^\s+uses: $DownloadActionPattern\r?$" -Expected 10 -Message 'Package 3C must use the reviewed downloader exactly for two direct bindings per receipt, the aggregate selector binding, and the hard-disabled authority boundary.'
 
 function Assert-AllPowerShellRunBlocksParse([string] $Text, [string] $Name, [int] $ExpectedCount) {
 	$Lines = $Text -split "\r?\n"
@@ -296,7 +297,7 @@ function Assert-AllPowerShellRunBlocksParse([string] $Text, [string] $Name, [int
 	}
 	Assert-True ($ParsedCount -eq $ExpectedCount) "$Name must contain exactly $ExpectedCount reviewed literal PowerShell run blocks; found $ParsedCount."
 }
-Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 17
+Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 21
 Assert-AllPowerShellRunBlocksParse -Text $VisualWorkflow -Name 'Visual workflow' -ExpectedCount 2
 
 Assert-True ($VisualWorkflow -match '(?m)^  workflow_call:\r?$') 'Visual validation must expose an additive reusable workflow entry point.'
@@ -350,15 +351,41 @@ foreach ($RawProducer in @(
 }
 Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $TrustedCompile -match '\.ComputeHash\(\$ReportStream\)' -and $TrustedCompile -match '(?m)^          name: engine-runner-compile-report\r?$') 'The self-hosted compile report must use the portable .NET SHA-256 implementation and preserve its static artifact name even if binding fails.'
 
+# The same trusted job then builds the editor target in the managed workspace
+# through the bounded build wrapper and runs the frozen two-test harness from
+# that workspace. Nothing Unreal prints reaches the public log: the harness
+# streams go to runner-local files and only a path-free summary is printed.
+foreach ($Binding in @(
+	'automation_artifact_id: ${{ steps.automation_artifact.outputs.artifact-id }}',
+	'automation_artifact_name: ${{ steps.automation_identity.outputs.artifact_name }}',
+	'automation_artifact_digest: sha256:${{ steps.automation_artifact.outputs.artifact-digest }}',
+	'automation_sha256: ${{ steps.automation_identity.outputs.evidence_sha256 }}',
+	'automation_size_bytes: ${{ steps.automation_identity.outputs.evidence_size_bytes }}'
+)) {
+	Assert-True ($TrustedCompile.Contains($Binding)) "trusted-candidate-compile must expose exact automation artifact/file binding '$Binding'."
+}
+$EditorBuild = [regex]::Match($TrustedCompile, '(?ms)^      - name: Build editor target for Unreal automation\r?\n.*?(?=^      - )').Value
+$AutomationRun = [regex]::Match($TrustedCompile, '(?ms)^      - name: Run frozen Unreal automation filter\r?\n.*?(?=^      - )').Value
+$AutomationBind = [regex]::Match($TrustedCompile, '(?ms)^      - name: Bind Unreal automation report\r?\n.*?(?=^      - )').Value
+Assert-True ($EditorBuild -and $AutomationRun -and $AutomationBind -and $TrustedCompile.IndexOf('name: Upload engine-runner report') -lt $TrustedCompile.IndexOf('name: Build editor target for Unreal automation')) 'The editor build and harness must follow the compile report upload so a harness failure never hides compile evidence.'
+Assert-True ($EditorBuild -match 'scripts/ci/InitialPreparation\.BuildInvocation\.ps1 `' -and $EditorBuild -match '(?m)^\s+-Target AethelnOnlineEditor `\r?$' -and $EditorBuild -match '(?m)^\s+-Platform Win64 `\r?$' -and $EditorBuild -match '(?m)^\s+-TargetRoot \$env:AETHELN_MANAGED_COMPILE_ROOT `\r?$' -and $EditorBuild -match '(?m)^\s+-EngineRoot \$env:AETHELN_ENGINE_ROOT `\r?$' -and $EditorBuild -match '(?m)^        timeout-minutes: \d+\r?$' -and $EditorBuild -notmatch 'Build\.bat') 'The editor target must be built in the managed workspace only through the bounded capture wrapper.'
+Assert-True ($EditorBuild.Contains('::add-mask::$env:AETHELN_ENGINE_ROOT') -and $EditorBuild.Contains('::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT')) 'Runner-local engine and workspace roots must be masked before any automation step runs.'
+Assert-True ($AutomationRun -match [regex]::Escape("Join-Path `$env:AETHELN_MANAGED_COMPILE_ROOT 'scripts\ci\Invoke-UnrealAutomationTests.ps1'") -and $AutomationRun -match '-EngineRoot' -and $AutomationRun.Contains('$env:AETHELN_ENGINE_ROOT') -and $AutomationRun -match "'-TimeoutSeconds', '600'" -and $AutomationRun -match '(?m)^        timeout-minutes: \d+\r?$') 'The frozen harness must run from the managed workspace against the runner engine root with its bounded timeout.'
+Assert-True ($AutomationRun -match '-RedirectStandardOutput' -and $AutomationRun -match '-RedirectStandardError' -and $AutomationRun -notmatch 'Get-Content[^\r\n]*\.log' -and $AutomationRun -notmatch 'Write-Output \$Report\b') 'Unreal and harness output must stay in runner-local files; only a bounded summary may reach the log.'
+Assert-True ($AutomationBind -match '(?m)^        id: automation_identity\r?$' -and $AutomationBind -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $AutomationBind.Contains('artifact_name=unreal-automation-report') -and $AutomationBind -notmatch 'if: always\(\)') 'The automation report must be bound with the portable SHA-256 implementation and only after a passing harness.'
+Assert-True ($TrustedCompile -match '(?m)^        id: automation_artifact\r?$' -and $TrustedCompile -match '(?m)^          name: unreal-automation-report\r?$' -and $TrustedCompile.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/unreal-automation-report.json')) 'The automation report upload must be one exact run/attempt/job-scoped file.'
+
 # Package 3C receipt publishers are additive PR-only hosted jobs. Each consumes
 # the selector and exactly one raw producer through immutable artifact IDs,
 # publishes one nonce-bound receipt directory, and exposes only the upload
 # action's direct artifact binding. They never acquire engine-runner authority.
 $ReceiptContracts = @(
-	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Producer='quality-gates'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
+	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Producer='quality-gates'; ArtifactOutput='report_artifact_id'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
 	# The native publisher proves native-client-server-compile and controller-operational-proof from one compile report, so either selection runs it.
-	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Producer='trusted-candidate-compile'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
-	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Producer='visual-proof'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
+	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Producer='trusted-candidate-compile'; ArtifactOutput='report_artifact_id'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
+	# The unreal publisher consumes the second raw report of the same trusted compile job.
+	@{ Name='unreal-receipt-shadow'; Body=$UnrealReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required == 'true'"; Producer='trusted-candidate-compile'; ArtifactOutput='automation_artifact_id'; Key='unreal'; RawName="'unreal-automation-report'"; Evidence='unreal' },
+	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Producer='visual-proof'; ArtifactOutput='report_artifact_id'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
 )
 # aggregate_ready and the context builder's gap computation must agree on the
 # exact set of obligations that have a live receipt producer.
@@ -368,9 +395,10 @@ $BuilderLiveChecks = [regex]::Matches($ContextBuilderSource, '(?m)^\s*\$LiveChec
 Assert-True ($WorkflowLiveChecks.Count -eq 1 -and $BuilderLiveChecks.Count -eq 1) 'The workflow and context builder must each declare exactly one live producer check list.'
 $WorkflowLiveList = @([regex]::Matches($WorkflowLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
 $BuilderLiveList = @([regex]::Matches($BuilderLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
-Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,controller-operational-proof,native-client-server-compile,portable,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
+Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,controller-operational-proof,native-client-server-compile,portable,unreal-editor-automation,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
 # The aggregate binds the native receipt when either native obligation is selected; any other selector output pair must still fail closed.
 Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_OPERATIONAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$NativeProducerRequired \`$env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow'" -and $AcceptanceShadow -match "\`$NativeProducerRequired = if \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true'\) \{ 'true' \} elseif \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false'\) \{ 'false' \} else \{ 'invalid' \}") 'The aggregate must bind the native receipt for either native obligation and reject any other selector output pair.'
+Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_UNREAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$env:AETHELN_UNREAL_REQUIRED \`$env:AETHELN_UNREAL_RESULT 'unreal' 'unreal-receipt-shadow'" -and $AcceptanceShadow.IndexOf("'portable' 'portable-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'unreal' 'unreal-receipt-shadow'") -and $AcceptanceShadow.IndexOf("'unreal' 'unreal-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'visual' 'visual-receipt-shadow'")) 'The aggregate must bind the unreal receipt from its own selector output in key order.'
 
 foreach ($Receipt in $ReceiptContracts) {
 	$Body = [string] $Receipt.Body
@@ -380,7 +408,7 @@ foreach ($Receipt in $ReceiptContracts) {
 		Assert-True ($Body -match "(?m)^      $Output\r?$") "$($Receipt.Name) must expose the reviewed direct receipt upload binding."
 	}
 	Assert-MatchCount -Text $Body -Pattern "(?m)^        uses: $DownloadActionPattern\r?$" -Expected 2 -Message "$($Receipt.Name) must download exactly the selector and its raw evidence by ID."
-	$ProducerArtifactId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.report_artifact_id }}')
+	$ProducerArtifactId = [regex]::Escape('${{ needs.' + $Receipt.Producer + '.outputs.' + $Receipt.ArtifactOutput + ' }}')
 	Assert-True ($Body -match 'artifact-ids: \$\{\{ needs\.ci-selection-shadow\.outputs\.selector_artifact_id \}\}' -and $Body -match ("artifact-ids: " + $ProducerArtifactId)) "$($Receipt.Name) must bind both downloads directly to needs upload IDs, never artifact-name discovery."
 	Assert-True ($Body -match 'scripts/ci/New-CiAcceptanceAggregateContext\.ps1' -and $Body -match '-Mode Identity' -and $Body -match 'scripts/ci/Publish-CiAcceptanceReceipt\.ps1') "$($Receipt.Name) must use the reviewed identity builder and receipt publisher."
 	Assert-True ($Body -match '(?m)^          \$ContextBuilder = \(Resolve-Path -LiteralPath ''scripts/ci/New-CiAcceptanceAggregateContext\.ps1''\)\.Path\r?$' -and $Body -match '(?m)^          & \$ContextBuilder `\r?$' -and $Body -notmatch 'powershell\.exe[^\r\n]*New-CiAcceptanceAggregateContext\.ps1') "$($Receipt.Name) must pass JSON to the context builder in-process so Windows PowerShell cannot strip native command-line quotes."
@@ -400,7 +428,7 @@ foreach ($Receipt in $ReceiptContracts) {
 $AggregateNeeds = [regex]::Match($AcceptanceShadow, '(?ms)^    needs:\r?\n(?<needs>(?:      - [a-z0-9-]+\r?\n)+)')
 Assert-True $AggregateNeeds.Success 'Acceptance aggregation must declare an exact direct-needs list.'
 $ActualAggregateNeeds = @([regex]::Matches($AggregateNeeds.Groups['needs'].Value, '(?m)^      - (?<job>[a-z0-9-]+)\r?$') | ForEach-Object { [string] $_.Groups['job'].Value })
-$ExpectedAggregateNeeds = @('ci-selection-shadow','quality-gates','change-impact','trusted-candidate-compile','scheduled-client-package','scheduled-server-package','scheduled-provenance-validation','scheduled-packaged-smoke','visual-proof','portable-receipt-shadow','native-receipt-shadow','visual-receipt-shadow')
+$ExpectedAggregateNeeds = @('ci-selection-shadow','quality-gates','change-impact','trusted-candidate-compile','scheduled-client-package','scheduled-server-package','scheduled-provenance-validation','scheduled-packaged-smoke','visual-proof','portable-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')
 Assert-True (($ActualAggregateNeeds -join ',') -ceq ($ExpectedAggregateNeeds -join ',')) 'Acceptance aggregation must directly need every reviewed producer and receipt publisher exactly once.'
 foreach ($Output in @(
 	'complete: ${{ steps.reconcile.outputs.complete }}',
@@ -417,7 +445,7 @@ Assert-True ($AcceptanceShadow -match "(?m)^        uses: $DownloadActionPattern
 foreach ($Script in @('scripts/ci/New-CiAcceptanceAggregateContext.ps1','scripts/ci/ci-acceptance-requirements.json','scripts/ci/Invoke-CiAcceptanceAggregate.ps1')) {
 	Assert-True ($AcceptanceShadow -match [regex]::Escape($Script)) "Acceptance aggregation must invoke exact reviewed input '$Script'."
 }
-foreach ($Publisher in @('portable-receipt-shadow','native-receipt-shadow','visual-receipt-shadow')) {
+foreach ($Publisher in @('portable-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')) {
 	Assert-True ($AcceptanceShadow -match [regex]::Escape($Publisher)) "Acceptance aggregation must bind direct output and job identity for '$Publisher'."
 }
 Assert-True ($AcceptanceShadow -match 'if \(\$env:AETHELN_SELECTOR_READY -ceq ''false''\)' -and $AcceptanceShadow -match 'elseif \(\$env:AETHELN_SELECTOR_READY -ceq ''true''\)' -and $AcceptanceShadow -match "throw 'aggregate_ready_invalid'") 'Acceptance reconciliation must distinguish exact unsupported-gap, supported-aggregate, and invalid selector readiness states.'
@@ -563,7 +591,7 @@ Assert-True ($ReportUploads.Count -eq 6) 'Exactly six report uploads remain.'
 Assert-True ($TrustedCompile.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json')) 'Compile artifact is unique to this run, attempt and job.'
 Assert-True ($TrustedCompile -match 'timeout-minutes: 40' -and $TrustedCompile -match '-CompileTimeoutMinutes 30') 'Routine compile has a whole-job and controlled-work limit.'
 Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Uploads cannot contain wildcard payload paths.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 12 -Message 'Only six raw reports, the selector, three nonce-bound receipts, the acceptance shadow diagnostic, and the hard-disabled authority receipt may be uploaded.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 14 -Message 'Only seven raw reports, the selector, four nonce-bound receipts, the acceptance shadow diagnostic, and the hard-disabled authority receipt may be uploaded.'
 Assert-True ($Workflow -notmatch '(?m)^\s+path:\s*.*(?:archives?|logs?|Saved|StagedBuilds)') 'Generated payload directories must never be uploaded.'
 
 # Classifier behavior matrix: run the extracted script against fixture commits.
