@@ -577,9 +577,93 @@ requires. Entries are evidence records, not acceptance.
   `shadow=true`, `authoritative=false`, `grantsAcceptance=false`, reason
   `producer_contract_incomplete`. This exercised the gap branch on the
   candidate itself; the two post-merge accepted-base observations (one
-  supported-only, one unsupported-selection) remain to be recorded.
+  supported-only, one unsupported-selection) are recorded below.
+- **Post-merge supported-only observation (pull request #194).**
+  Run `36955343907`, attempt `2`, `pull_request` by `ShayShimoni`
+  (triggering actor `ShayShimoni`). Accepted base and controller revision
+  `2a100a474b5bbfd8e4eb633cc550379efb6c721f` (the first develop merge after
+  the Package 3C merge `5948549`, the merge of pull request #195); head
+  `2d5c1257dd9ae2aeeafd4daa84ede427b28fdb6f`; tested merge
+  `b28739508811554914b5dff56efa57d555e02a1d` with ordered parents
+  `2a100a47`, `2d5c1257`, as recorded in the selector `workflowRevision` and
+  the aggregate `testedRevision`. Accepted controller blob
+  `0348a8e09ebdb7babbec81c34026ffe7512ef731`, controller and policy digest
+  `4e21f35a4791332176edd1f51c4ccf69115fb34bc2defda5b8e6716206aa2b46` (the
+  post-3C accepted-base selector). Attempt nonce
+  `c5aa877c5485d98421435f06bad70c9202dc13e680311246943cb5c845fb399c`.
+  Selector artifact ID `11206725129`, name
+  `ci-selection-shadow-36955343907-2-c5aa877c5485d98421435f06bad70c9202dc13e680311246943cb5c845fb399c`, API digest
+  `sha256:d8bd4de709767e04a4389cbe618a8b27134fea005d00a64e3ff46db4e4aac316`.
+  The selector chose only `portable` for the single changed path
+  `docs/continuous-integration.md`. Selected raw portable artifact `ci-report`
+  ID `11207535119`, API digest
+  `sha256:056d44af0c26888536177791318a7e0bf341deea35cbf42e2bffd73879306f58`
+  (unsuffixed name; created `2026-10-02T03:05:33Z` during attempt 2, and its
+  `ci-report.json` SHA-256
+  `184cf4c3f760290668edc72d7a583f9f057f9f56ab058393a6bc6d611f937623` equals
+  the receipt evidence hash); portable receipt artifact ID `11206926579`, name
+  `ci-receipt-portable-36955343907-2-c5aa877c5485d98421435f06bad70c9202dc13e680311246943cb5c845fb399c`, API digest
+  `sha256:a3efb76ff0471a0ce272410c0df76dbdb15826c0e02e9bda313288e42dd11d39`.
+  No native or visual raw artifact and no native or visual receipt exist:
+  `native-receipt-shadow` and `visual-receipt-shadow` were skipped as
+  unselected, and the legacy `visual-proof` and `trusted-candidate-compile`
+  jobs were also skipped. Aggregate record
+  `aetheln.ci-acceptance-aggregate/v1`, artifact ID `11206701981`, name
+  `ci-acceptance-shadow-36955343907-2-c5aa877c5485d98421435f06bad70c9202dc13e680311246943cb5c845fb399c`, API digest
+  `sha256:f33f3d37e15ea57e2c10040d098f34a4c49411e3a6f309d27ea9982bb9ed7460`,
+  report SHA-256
+  `53c4ab80aa7e0b6f065a5b9cb504d40c5de865893954682fb6245318ff153b0f`
+  (3789 bytes). The aggregate record has no `selectedUnsupported` field; its
+  `selectorEvidence.selectedChecks` was `portable`. The decision was
+  `complete=true`, `shadow=true`, `authoritative=false`,
+  `grantsAcceptance=false`, reason `shadow_evidence_reconciled`. This is the
+  real complete shadow aggregate over the accepted selector, the selected
+  portable producer, its receipt publisher, and their direct bindings.
+- **Post-merge unsupported-selection observation (pull request #183).**
+  Run `36956923388`, attempt `1`, `pull_request` by `ShayShimoni`
+  (triggering actor `ShayShimoni`). Accepted base and controller revision
+  `2a100a474b5bbfd8e4eb633cc550379efb6c721f`; head
+  `48d599a20b7d5d722f64b958e3c678b7e85e987c`; tested merge
+  `e65cabcce1e82dd3d95626f43b59b7721fb1e77d` with ordered parents
+  `2a100a47`, `48d599a2`, as recorded in the selector `workflowRevision` and
+  the gap record `revision`. Accepted controller blob
+  `0348a8e09ebdb7babbec81c34026ffe7512ef731`, controller and policy digest
+  `4e21f35a4791332176edd1f51c4ccf69115fb34bc2defda5b8e6716206aa2b46` (the
+  same post-3C accepted-base selector). Attempt nonce
+  `9fc8394dbf6307774a0ad44e7d1e28cae16af5bdf5f03e15225a54e64b7d69ab`.
+  Selector artifact ID `11205409356`, name
+  `ci-selection-shadow-36956923388-1-9fc8394dbf6307774a0ad44e7d1e28cae16af5bdf5f03e15225a54e64b7d69ab`, API digest
+  `sha256:b0a0326cf4460d0feb20a04491d85275d9c59c4f634d9bb285e0f66ea25e29a4`.
+  The selector chose `portable`, `controller-contract`,
+  `controller-operational-proof`, and `clean-package-provenance-smoke` for 23
+  changed paths under `docs/`, `scripts/build/`, `scripts/ci/`, and `tests/`.
+  Selected raw portable artifact `ci-report` ID `11207125923`, API digest
+  `sha256:316840e79cc039c2906d69c9a926e2ec97e14fcad76a2cff418de8e9739d9969`
+  (its `ci-report.json` SHA-256
+  `6ca3ee500130a54d3498767fce9ce222cbd83285dc712b41825ca79872ac310a` equals
+  the receipt evidence hash); portable receipt artifact ID `11206503747`, name
+  `ci-receipt-portable-36956923388-1-9fc8394dbf6307774a0ad44e7d1e28cae16af5bdf5f03e15225a54e64b7d69ab`, API digest
+  `sha256:2ee4cf910c106d79059485f6a086a7c426e44c9d7ea6f009427d9452c362ec9e`.
+  `native-client-server-compile` was not selected; the legacy
+  `trusted-candidate-compile` job still published the unselected raw artifact
+  `engine-runner-compile-report` ID `11206956443`, API digest
+  `sha256:00b716de57f3f5ab640fbc9850d2dbe7d1eadabbb53a9ba7326e5e3824f1fddf`,
+  and no native or visual receipt was published because neither
+  `native-client-server-compile` nor `visual-package` was selected.
+  Gap record `aetheln.ci-acceptance-shadow-gap/v2`, artifact ID
+  `11207261117`, name
+  `ci-acceptance-shadow-36956923388-1-9fc8394dbf6307774a0ad44e7d1e28cae16af5bdf5f03e15225a54e64b7d69ab`, API digest
+  `sha256:2426599118744afe0a23f61a588304a95846ec698c4d0a3fad6f604ef4374c32`,
+  report SHA-256
+  `62dea04a588d303025f9316db184beb3b3c36dbcc010b650ce96dad5a1200c44`
+  (431 bytes). `selectedUnsupported` was `controller-contract`,
+  `controller-operational-proof`, `clean-package-provenance-smoke`; the
+  decision was `complete=false`, `shadow=true`, `authoritative=false`,
+  `grantsAcceptance=false`, reason `producer_contract_incomplete`. The green
+  `ci-acceptance-shadow` job exercised the exact gap branch on the accepted
+  base and stayed explicitly incomplete and non-granting.
 
-That observation is necessary but not sufficient for activation. Changing the
+These observations are necessary but not sufficient for activation. Changing the
 live workflow itself selects `controller-contract` and
 `controller-operational-proof`; Package 3C has no truthful live receipt producer
 for either obligation. A candidate that merely flips the dormant predicate
