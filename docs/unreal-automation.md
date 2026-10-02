@@ -181,10 +181,12 @@ to the `-abslog` file under `Saved/`; both contain absolute runner paths and
 this repository is public, so the job log shows only a path-free summary.
 After the run, the job removes the untracked compile-input files the editor
 may have written, because the next managed workspace sync rejects them. These
-steps continue on error: a failed build, harness run, or cleanup uploads no
-report and never fails the compile job. The hosted `unreal-receipt-shadow` job
-publishes a shadow-only `unreal-editor-automation` receipt from the report, or
-fails red when it is missing. The filter, report schema, and engine pin are
+steps continue on error: a failed or skipped automation step uploads no report
+and does not fail the compile job (a whole-job ceiling overrun still cancels
+it). The hosted `unreal-receipt-shadow` job publishes a shadow-only
+`unreal-editor-automation` receipt from the report, or prints the fixed
+`automation_reason` and fails red when it is missing. Harness and build output
+stay in the runner temp directory, which is wiped after the job. The filter, report schema, and engine pin are
 unchanged, and nothing grants acceptance.
 
 Issue #44 must reuse this automation foundation for its downstream packaged
