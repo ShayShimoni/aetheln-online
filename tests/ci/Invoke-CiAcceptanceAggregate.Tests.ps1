@@ -149,7 +149,7 @@ function New-FixtureRequirements {
 	return [pscustomobject][ordered]@{
 		schemaVersion = 'aetheln.ci-acceptance-requirements/v1'
 		jobs = @(
-			[pscustomobject][ordered]@{ key = 'native'; jobName = 'trusted-candidate-compile'; artifactName = ('ci-receipt-native-9001-2-' + $script:FixtureNonce); checks = @('clean-package-provenance-smoke','native-client-server-compile') },
+			[pscustomobject][ordered]@{ key = 'native'; jobName = 'native-receipt-shadow'; artifactName = ('ci-receipt-native-9001-2-' + $script:FixtureNonce); checks = @('clean-package-provenance-smoke','native-client-server-compile') },
 			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; artifactName = ('ci-receipt-quality-9001-2-' + $script:FixtureNonce); checks = @('content-reference-validation','controller-contract','controller-operational-proof','portable','unreal-editor-automation','visual-package') }
 		)
 	}
@@ -301,11 +301,13 @@ function New-FixtureApi {
 		$ArtifactId++
 		$SelectedSubset = @($Requirement.checks | Where-Object { $Selected.Contains([string]$_) })
 		$Conclusion = if ($SelectedSubset.Count -gt 0) { 'success' } else { 'skipped' }
-		$IsNative = $Requirement.jobName -ceq 'trusted-candidate-compile'
-		[string[]] $Labels = if ($IsNative) { @('self-hosted','Windows','X64','aetheln-engine') } else { @('windows-latest') }
 		$RunnerId = if ($Conclusion -ceq 'success') { 100 + $ArtifactId } else { 0 }
-		$RunnerName = if ($Conclusion -cne 'success') { $null } elseif ($IsNative) { 'fixture-runner' } else { 'GitHub Actions 2' }
-		$Jobs.Add([pscustomobject][ordered]@{ id = 100 + $ArtifactId; name = $Requirement.jobName; status = 'completed'; conclusion = $Conclusion; run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at=$StartedAt;completed_at=$CompletedAt;labels=$Labels;runner_id=$RunnerId;runner_name=$RunnerName })
+		$RunnerName = if ($Conclusion -ceq 'success') { 'GitHub Actions 2' } else { $null }
+		$Jobs.Add([pscustomobject][ordered]@{ id = 100 + $ArtifactId; name = $Requirement.jobName; status = 'completed'; conclusion = $Conclusion; run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at=$StartedAt;completed_at=$CompletedAt;labels=[string[]]@('windows-latest');runner_id=$RunnerId;runner_name=$RunnerName })
+		if ($SelectedSubset -ccontains 'native-client-server-compile') {
+			# The self-hosted compile job produces the raw engine report that the hosted native publisher only wraps.
+			$Jobs.Add([pscustomobject][ordered]@{ id = 150; name = 'trusted-candidate-compile'; status = 'completed'; conclusion = 'success'; run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at=$StartedAt;completed_at=$CompletedAt;labels=[string[]]@('self-hosted','Windows','X64','aetheln-engine');runner_id=50;runner_name='fixture-runner' })
+		}
 		if ($SelectedSubset.Count -eq 0) { continue }
 		$SelectedRequirement = [pscustomobject][ordered]@{key=$Requirement.key;jobName=$Requirement.jobName;artifactName=$Requirement.artifactName;checks=$SelectedSubset}
 		$Evidence = if ($SelectedSubset -ccontains 'native-client-server-compile') { ConvertTo-FixtureBytes (New-FixtureEngineReport -Context $Context) }
@@ -446,7 +448,7 @@ Assert-Rejected { New-CiAcceptanceAggregate -Context $MissingProducerBindingCont
 $UnselectedProducerBindingContext=New-FixtureContext
 $UnselectedProducerBindingApi=New-FixtureApi -Context $UnselectedProducerBindingContext -Requirements $Requirements -SelectedChecks @('visual-package')
 $UnselectedProducerBindingContext.producerBindings=@(
-	[pscustomobject][ordered]@{key='native';jobName='trusted-candidate-compile';artifactId='201';artifactName=('ci-receipt-native-9001-2-' + $script:FixtureNonce);digest=('sha256:' + ('8' * 64))},
+	[pscustomobject][ordered]@{key='native';jobName='native-receipt-shadow';artifactId='201';artifactName=('ci-receipt-native-9001-2-' + $script:FixtureNonce);digest=('sha256:' + ('8' * 64))},
 	$UnselectedProducerBindingContext.producerBindings[0]
 )
 Assert-Rejected { New-CiAcceptanceAggregate -Context $UnselectedProducerBindingContext -Requirements $Requirements -ApiRequest $UnselectedProducerBindingApi -DeadlineSeconds 30 } 'producer_binding_unselected'
@@ -496,6 +498,27 @@ $DuplicateBindingApi=New-FixtureApi -Context $DuplicateBindingContext -Requireme
 $DuplicateBindingContext.producerBindings[1].artifactId=$DuplicateBindingContext.producerBindings[0].artifactId
 Assert-Rejected { New-CiAcceptanceAggregate -Context $DuplicateBindingContext -Requirements $Requirements -ApiRequest $DuplicateBindingApi -DeadlineSeconds 30 } 'producer_bindings_duplicate'
 
+# The native receipt's runner identity binds to the self-hosted trusted-candidate-compile job, not the hosted publisher.
+$NativeAttemptJobsUri = '/repos/ShayShimoni/aetheln-online/actions/runs/9001/attempts/2/jobs?per_page=100&page=1'
+$CompileJobContext=New-FixtureContext
+$CompileJobApi=New-FixtureApi -Context $CompileJobContext -Requirements $Requirements -SelectedChecks @('native-client-server-compile')
+$CompileJobAggregate=New-CiAcceptanceAggregate -Context $CompileJobContext -Requirements $Requirements -ApiRequest $CompileJobApi -DeadlineSeconds 30
+Assert-True (@($CompileJobAggregate.receipts).Count -eq 1 -and (@($CompileJobAggregate.jobs | ForEach-Object name) -join ',') -ceq 'native-receipt-shadow,quality-gates') 'The hosted native publisher must pass when the compile job runner matches the raw report.'
+$CompileJobListing=ConvertFrom-StrictBoundedJson -Bytes (& $CompileJobApi $NativeAttemptJobsUri 30000 1048576)
+foreach ($CompileJobCase in @(
+	@{name='missing';reason='native_compile_job_missing';mutate={param($x)$x.jobs=@($x.jobs|Where-Object{$_.name-cne'trusted-candidate-compile'})}},
+	@{name='failure';reason='native_compile_job_not_success';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).conclusion='failure'}},
+	@{name='labels';reason='native_job_labels_invalid';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).labels=[string[]]@('self-hosted','Windows','X64')}},
+	@{name='runner';reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).runner_name='other-runner'}},
+	@{name='duplicate';reason='job_identity_ambiguous';mutate={param($x)$Copy=($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'})|ConvertTo-Json -Depth 8|ConvertFrom-Json;$Copy.id=151;$x.jobs=@($x.jobs)+@($Copy)}},
+	@{name='attempt';reason='job_attempt_mismatch';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).run_attempt=1}}
+)) {
+	$CaseListing=$CompileJobListing|ConvertTo-Json -Depth 8|ConvertFrom-Json;& $CompileJobCase.mutate $CaseListing;$CaseListing.total_count=@($CaseListing.jobs).Count
+	$CaseContext=New-FixtureContext;$CaseApi=New-FixtureApi -Context $CaseContext -Requirements $Requirements -SelectedChecks @('native-client-server-compile') -Overrides @{$NativeAttemptJobsUri=(ConvertTo-FixtureBytes $CaseListing)}
+	try { Assert-Rejected { New-CiAcceptanceAggregate -Context $CaseContext -Requirements $Requirements -ApiRequest $CaseApi -DeadlineSeconds 30 } $CompileJobCase.reason }
+	catch { throw "Compile job case '$($CompileJobCase.name)' failed: $($_.Exception.Message)" }
+}
+
 $VisualBoundary = New-FixtureVisualBoundary -Context $Context
 $VisualResults = @(Assert-CiAcceptanceReceipt -Receipt $VisualBoundary.receipt -Context $Context -Requirement $VisualBoundary.requirement -Archive $VisualBoundary.archive)
 Assert-True ($VisualResults.Count -eq 1 -and @($VisualResults[0]).Count -eq 1) 'The aggregate must accept exact, identity-bound visual semantic evidence.'
@@ -539,18 +562,22 @@ $VisualAcceptanceCleanupLie = New-FixtureVisualBoundary -Context $Context
 $VisualAcceptanceCleanupLie.receipt.acceptance.cleanupVerified = $true
 Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $VisualAcceptanceCleanupLie.receipt -Context $Context -Requirement $VisualAcceptanceCleanupLie.requirement -Archive $VisualAcceptanceCleanupLie.archive } 'receipt_cleanup_invalid'
 
+# Direct receipt assertions for the native check need the bound compile job; only its runner name is read.
+$FixtureCompileJob=[pscustomobject]@{runner_name='fixture-runner'}
 foreach ($Fixture in @(
 	@{id='portable';report=(New-FixturePortableReport $Context);reason='receipt_semantic_evidence_failure:portable';mutate={param($x)$x.summary.requiredFailed=1}},
 	@{id='native-client-server-compile';report=(New-FixtureEngineReport $Context);reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)$x.supervisor.cleanupVerified=$false}},
 	@{id='unreal-editor-automation';report=(New-FixtureUnrealReport $Context);reason='receipt_semantic_evidence_invalid:unreal-editor-automation';mutate={param($x)$x.tests[0].status='failed'}}
 )) {
 	$Boundary = New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $Fixture.report
-	$Validated = @(Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive)
+	$Validated = @(Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive -CompileJob $FixtureCompileJob)
 	Assert-True ($Validated.Count -eq 1 -and @($Validated[0]).Count -eq 1) "Aggregate must accept exact semantic evidence for '$($Fixture.id)'."
 	$BadReport=$Fixture.report|ConvertTo-Json -Depth 20|ConvertFrom-Json;& $Fixture.mutate $BadReport
 	$BadBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $BadReport
-	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadBoundary.receipt -Context $Context -Requirement $BadBoundary.requirement -Archive $BadBoundary.archive } $Fixture.reason
+	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadBoundary.receipt -Context $Context -Requirement $BadBoundary.requirement -Archive $BadBoundary.archive -CompileJob $FixtureCompileJob } $Fixture.reason
 }
+$NoCompileJobBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'native-client-server-compile' -Report (New-FixtureEngineReport $Context)
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $NoCompileJobBoundary.receipt -Context $Context -Requirement $NoCompileJobBoundary.requirement -Archive $NoCompileJobBoundary.archive } 'native_compile_job_missing'
 
 $ContractBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
 $ContractValidated = @(Assert-CiAcceptanceReceipt -Receipt $ContractBoundary.receipt -Context $Context -Requirement $ContractBoundary.requirement -Archive $ContractBoundary.archive)
@@ -675,7 +702,7 @@ foreach ($NativeTypeCase in @(
 )) {
 	$BadNative=New-FixtureEngineReport $Context;& $NativeTypeCase.mutate $BadNative
 	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'native-client-server-compile' -Report $BadNative
-	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive -CompileJob $FixtureCompileJob } 'receipt_semantic_evidence_invalid:native-client-server-compile' }
 	catch { throw "Aggregate native fixture '$($NativeTypeCase.name)' failed: $($_.Exception.Message)" }
 }
 
@@ -901,7 +928,7 @@ $AttemptJobsUri = '/repos/ShayShimoni/aetheln-online/actions/runs/9001/attempts/
 $AllJobsUri = '/repos/ShayShimoni/aetheln-online/actions/runs/9001/jobs?filter=all&per_page=100&page=1'
 $ArtifactsUri = '/repos/ShayShimoni/aetheln-online/actions/runs/9001/artifacts?per_page=100&page=1'
 $SelectorJob = [pscustomobject][ordered]@{id=100;name='ci-selection-shadow';status='completed';conclusion='success';run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at='2026-09-20T20:00:00Z';completed_at='2026-09-20T20:10:00Z';labels=[string[]]@('windows-latest');runner_id=10;runner_name='GitHub Actions 1'}
-$NativeJob = [pscustomobject][ordered]@{id=301;name='trusted-candidate-compile';status='completed';conclusion='skipped';run_attempt=2}
+$NativeJob = [pscustomobject][ordered]@{id=301;name='native-receipt-shadow';status='completed';conclusion='skipped';run_attempt=2}
 $QualityJob = [pscustomobject][ordered]@{id=302;name='quality-gates';status='completed';conclusion='skipped';run_attempt=2}
 $ProducerJobs = @($NativeJob,$QualityJob)
 Assert-True ($null -ne (Get-CurrentApiJobInterval -Job $SelectorJob -Context $Context -ExpectedConclusion 'success')) 'A fully bound current selector job must expose a valid artifact interval.'
@@ -1064,11 +1091,11 @@ $PartialJobs = [pscustomobject][ordered]@{ total_count = 2; jobs = @($SelectorJo
 $PartialApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{ $AttemptJobsUri = (ConvertTo-FixtureBytes $PartialJobs) }
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $PartialApi -DeadlineSeconds 30 } 'partial_rerun_missing_job'
 
-$FailedJobs = [pscustomobject][ordered]@{ total_count = 3; jobs = @($SelectorJob,[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='failure';run_attempt=2},[pscustomobject][ordered]@{id=102;name='trusted-candidate-compile';status='completed';conclusion='success';run_attempt=2}) }
+$FailedJobs = [pscustomobject][ordered]@{ total_count = 3; jobs = @($SelectorJob,[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='failure';run_attempt=2},[pscustomobject][ordered]@{id=102;name='native-receipt-shadow';status='completed';conclusion='success';run_attempt=2}) }
 $FailedApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{ $AttemptJobsUri = (ConvertTo-FixtureBytes $FailedJobs) }
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $FailedApi -DeadlineSeconds 30 } 'job_conclusion_not_expected'
 
-$MalformedHistory = [pscustomobject][ordered]@{ total_count = 3; jobs = @([pscustomobject][ordered]@{id=100;name='ci-selection-shadow';status='completed';conclusion='success';run_attempt=2},[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='success';run_attempt='2'},[pscustomobject][ordered]@{id=102;name='trusted-candidate-compile';status='completed';conclusion='success';run_attempt=2}) }
+$MalformedHistory = [pscustomobject][ordered]@{ total_count = 3; jobs = @([pscustomobject][ordered]@{id=100;name='ci-selection-shadow';status='completed';conclusion='success';run_attempt=2},[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='success';run_attempt='2'},[pscustomobject][ordered]@{id=102;name='native-receipt-shadow';status='completed';conclusion='success';run_attempt=2}) }
 $MalformedHistoryApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{ $AllJobsUri = (ConvertTo-FixtureBytes $MalformedHistory) }
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $MalformedHistoryApi -DeadlineSeconds 30 } 'api_job_schema_invalid'
 
