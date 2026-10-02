@@ -6,8 +6,8 @@ GitHub issue [#100](https://github.com/ShayShimoni/aetheln-online/issues/100)
 is a one-time P0 Prototype Gate learning exception under Epic #6. It validates
 local movement, camera, animation, and traversal feel before the networked
 movement story. Issue #17 now replicates sprint through a predicted saved-move
-flag and still owns remote facing, jump parity, server-side backpedal speed, and
-packaged multiplayer evidence.
+flag, simulates jump takeoff and backpedal speed on the server, and still owns
+remote facing and packaged multiplayer evidence.
 
 This POC is temporary. Quinn is an engine mannequin, not an approved Aetheln
 race, sex, class, silhouette, animation set, or combat property. None of the
@@ -225,13 +225,27 @@ acceleration that is not backward relative to control yaw. Any other sprint
 request is simulated at the walk cap, and a client that predicted sprint anyway
 is corrected. Clients never send speeds.
 
-Known limits until later #17 work: the 70% backpedal scale is client input
-shaping, so the server caps backpedal at 500 cm/s rather than 350 cm/s;
-correction replay judges backpedal against the current control yaw, so a sharp
-turn can flip a replayed move between walk and sprint caps; jump takeoff reads
-the previous tick's acceleration, so a sprint jump on the first movement frame
-launches at walk speed. `Aetheln.Movement.Net.*`
-covers the flag round trip, the server speed clamp, and rejected requests.
+The server also enforces the 350 cm/s backpedal: the client still scales
+backward input to 70%, and the server holds backward movement to the same
+speed even when a client sends full-magnitude backward acceleration.
+
+Jump takeoff runs inside the movement simulation (`DoJump`), so client
+prediction, correction replay, and the server compute the same takeoff from the
+move's own acceleration and control yaw. The takeoff replaces horizontal
+velocity with the held direction at the move's speed cap (so a sprint jump on
+the first movement frame launches at 700 cm/s) and snaps facing to travel or
+camera yaw as described above. A buffered jump fires on the move after landing,
+on both client and server. Correction replay judges backpedal and takeoff facing
+against the yaw each move was recorded with, also when a later correction
+replays the same move again.
+
+Known limits until later #17 work: aim steering is not yet a saved-move flag,
+so the server picks travel facing for aimed forward-diagonal jumps, and airborne
+aim tracking of pure lateral aimed jumps is client-only; remote players see
+those facings only after the remote-facing change. `Aetheln.Movement.Net.*`
+covers the flag round trip, the server speed and backpedal clamps, rejected
+requests, client/server takeoff parity on a land-and-rejump direction change,
+and takeoff replay, once and repeated, with a turned camera.
 
 ## Verification and feedback
 

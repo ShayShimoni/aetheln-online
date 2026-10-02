@@ -8,15 +8,17 @@
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
 #include "Interfaces/MovementBaseInterface.h"
 #include "Misc/AutomationTest.h"
 #endif
 
 namespace
 {
-	// Deliberately loose numeric epsilon (about 0.6 degrees, far above network yaw and
-	// acceleration quantization) so pure strafes never read as backpedal. Not a tuning value.
-	constexpr float BackpedalDotTolerance = 0.01f;
+	// Deliberately loose numeric epsilon on the dot of move direction and control forward (about
+	// 0.6 degrees, far above network yaw and acceleration quantization) so pure strafes never read
+	// as backpedal or forward. Not a tuning value.
+	constexpr float DirectionDotTolerance = 0.01f;
 
 	class FSavedMove_Aetheln : public FSavedMove_Character
 	{
@@ -39,6 +41,18 @@ namespace
 			const UAethelnCharacterMovementComponent* Movement =
 				Character->GetCharacterMovement<UAethelnCharacterMovementComponent>();
 			bSavedWantsToSprint = Movement != nullptr && Movement->bWantsToSprint;
+		}
+
+		virtual void PostUpdate(ACharacter* Character, EPostUpdateMode PostUpdateMode) override
+		{
+			// The engine rewrites SavedControlRotation with the live rotation after a replay too; keep the
+			// recorded one so a later correction replays this move with the same yaw.
+			const FRotator RecordedControlRotation = SavedControlRotation;
+			Super::PostUpdate(Character, PostUpdateMode);
+			if (PostUpdateMode == PostUpdate_Replay)
+			{
+				SavedControlRotation = RecordedControlRotation;
+			}
 		}
 
 		// The base CanCombineWith compares GetCompressedFlags, and replay applies these
@@ -90,23 +104,123 @@ float UAethelnCharacterMovementComponent::GetMaxSpeed() const
 	{
 		return BaseMaxSpeed;
 	}
-	return SelectGroundMaxSpeed(
+	const bool bBackpedaling = IsBackpedaling();
+	const float GroundMaxSpeed = SelectGroundMaxSpeed(
 		bWantsToSprint && !Acceleration.IsNearlyZero(),
-		IsBackpedaling(),
+		bBackpedaling,
 		BaseMaxSpeed,
 		SprintSpeed);
+	if (!bBackpedaling)
+	{
+		return GroundMaxSpeed;
+	}
+	// The engine caps speed at GetMaxSpeed() x AnalogInputModifier; keep that product at or below
+	// the backpedal speed. The POC client already scales backward input by BackpedalSpeedScale, so
+	// its cap is unchanged (standalone feel identical); full-magnitude backward input is held to it too.
+	const float BackpedalScale = FMath::Clamp(BackpedalSpeedScale, 0.0f, 1.0f);
+	return GroundMaxSpeed * FMath::Min(1.0f, BackpedalScale / FMath::Max(AnalogInputModifier, UE_SMALL_NUMBER));
 }
 
 bool UAethelnCharacterMovementComponent::IsBackpedaling() const
 {
-	// Never a client claim. On the server and in first-pass prediction this uses the move's
-	// control rotation. Correction replay uses the current yaw (PrepMoveFor does not restore
-	// SavedControlRotation), so a sharp turn can flip a replayed move between walk and sprint.
-	const float ControlYaw = CharacterOwner != nullptr
+	// Never a client claim: judged from the move's acceleration against the move's control yaw.
+	const FVector ControlForward = FRotator(0.0f, GetSimulatedControlYaw(), 0.0f).Vector();
+	return (Acceleration.GetSafeNormal2D() | ControlForward) < -DirectionDotTolerance;
+}
+
+float UAethelnCharacterMovementComponent::GetSimulatedControlYaw() const
+{
+	// Correction replay runs with the live control rotation; judge a replayed move by the yaw it
+	// was recorded with. The server has already applied the move's control rotation.
+	if (const FSavedMove_Character* ReplayedMove = GetCurrentReplayedSavedMove())
+	{
+		return ReplayedMove->SavedControlRotation.Yaw;
+	}
+	return CharacterOwner != nullptr
 		? CharacterOwner->GetControlRotation().Yaw
 		: 0.0f;
-	const FVector ControlForward = FRotator(0.0f, ControlYaw, 0.0f).Vector();
-	return (Acceleration.GetSafeNormal2D() | ControlForward) < -BackpedalDotTolerance;
+}
+
+UAethelnCharacterMovementComponent::FJumpTakeoff UAethelnCharacterMovementComponent::CalculateJumpTakeoff(
+	const FVector& MoveAcceleration,
+	float MaxAcceleration,
+	float ControlYaw,
+	float TakeoffSpeed,
+	bool bAimSteering)
+{
+	FJumpTakeoff Takeoff;
+	const FVector PlanarAcceleration(MoveAcceleration.X, MoveAcceleration.Y, 0.0f);
+	if (MaxAcceleration <= UE_SMALL_NUMBER || PlanarAcceleration.IsNearlyZero())
+	{
+		return Takeoff;
+	}
+	Takeoff.bHasMoveInput = true;
+	// Acceleration carries the analog magnitude, including the client's backpedal input shaping.
+	Takeoff.HorizontalVelocity =
+		(PlanarAcceleration / MaxAcceleration).GetClampedToMaxSize(1.0f) * TakeoffSpeed;
+	const float ForwardDot =
+		PlanarAcceleration.GetSafeNormal() | FRotator(0.0f, ControlYaw, 0.0f).Vector();
+	const bool bBackpedaling = ForwardDot < -DirectionDotTolerance;
+	const bool bPureLateral = FMath::Abs(ForwardDot) <= DirectionDotTolerance;
+	const bool bCameraFacing = bBackpedaling || (bAimSteering && !bPureLateral);
+	Takeoff.FacingYaw = bCameraFacing
+		? ControlYaw
+		: PlanarAcceleration.Rotation().Yaw;
+	return Takeoff;
+}
+
+bool UAethelnCharacterMovementComponent::DoJump(bool bReplayingMoves, float DeltaTime)
+{
+	// Read before Super switches to falling, so the takeoff keeps this move's sprint or backpedal cap.
+	const bool bGroundTakeoff = IsMovingOnGround();
+	const float TakeoffSpeed = GetMaxSpeed();
+	if (!Super::DoJump(bReplayingMoves, DeltaTime))
+	{
+		return false;
+	}
+	if (!bGroundTakeoff)
+	{
+		return true;
+	}
+	const FJumpTakeoff Takeoff = CalculateJumpTakeoff(
+		Acceleration,
+		GetMaxAcceleration(),
+		GetSimulatedControlYaw(),
+		TakeoffSpeed,
+		bWantsAimSteering);
+	if (Takeoff.bHasMoveInput)
+	{
+		// AirControl is zero, so this velocity holds for the whole jump.
+		Velocity.X = Takeoff.HorizontalVelocity.X;
+		Velocity.Y = Takeoff.HorizontalVelocity.Y;
+		CharacterOwner->SetActorRotation(
+			FRotator(0.0f, Takeoff.FacingYaw, 0.0f),
+			ETeleportType::TeleportPhysics);
+	}
+	return true;
+}
+
+void UAethelnCharacterMovementComponent::ControlledCharacterMove(const FVector& InputVector, float DeltaSeconds)
+{
+	// The engine checks jump input before it applies this move's acceleration, so a takeoff would read
+	// the previous move. Apply it first; Super recomputes the same value. MoveAutonomous does the same.
+	Acceleration = ScaleInputAcceleration(ConstrainInputAcceleration(InputVector));
+	AnalogInputModifier = ComputeAnalogInputModifier();
+	Super::ControlledCharacterMove(InputVector, DeltaSeconds);
+}
+
+void UAethelnCharacterMovementComponent::MoveAutonomous(
+	float ClientTimeStamp,
+	float DeltaTime,
+	uint8 CompressedFlags,
+	const FVector& NewAccel)
+{
+	if (HasValidData())
+	{
+		Acceleration = ConstrainInputAcceleration(NewAccel).GetClampedToMaxSize(GetMaxAcceleration());
+		AnalogInputModifier = ComputeAnalogInputModifier();
+	}
+	Super::MoveAutonomous(ClientTimeStamp, DeltaTime, CompressedFlags, NewAccel);
 }
 
 FNetworkPredictionData_Client* UAethelnCharacterMovementComponent::GetPredictionData_Client() const
@@ -388,11 +502,22 @@ bool FAethelnMovementNetInvalidSprintRejectedTest::RunTest(const FString& Parame
 	};
 
 	// No controller: control yaw is zero, so -X is backward and +Y is lateral.
+	const float BackpedalSpeed = WalkSpeed * Movement->BackpedalSpeedScale;
+	const float PeakShapedBackwardSpeed =
+		RunAuthorityMoves(60, 0, FVector(-MaxAccel * Movement->BackpedalSpeedScale, 0.0f, 0.0f));
+	TestNearlyEqual(
+		TEXT("Client-shaped backpedal input still converges to the backpedal speed"),
+		static_cast<float>(Movement->Velocity.Size2D()), BackpedalSpeed, SpeedTolerance);
+	TestTrue(TEXT("Client-shaped backpedal never exceeds the backpedal speed"), PeakShapedBackwardSpeed <= BackpedalSpeed + SpeedTolerance);
+
+	Movement->StopMovementImmediately();
 	const float PeakBackwardSpeed =
 		RunAuthorityMoves(60, SprintFlag, FVector(-MaxAccel, 0.0f, 0.0f));
 	TestTrue(TEXT("Server received the backward sprint request"), Movement->bWantsToSprint);
-	TestEqual(TEXT("Backward sprint request gets no sprint cap (walk cap; 0.7 backpedal scale is client input shaping)"), Movement->GetMaxSpeed(), WalkSpeed);
-	TestTrue(TEXT("Backward sprint request never exceeds the walk cap"), PeakBackwardSpeed <= WalkSpeed + SpeedTolerance);
+	TestNearlyEqual(
+		TEXT("Full-magnitude backward sprint request is held to the backpedal speed"),
+		static_cast<float>(Movement->Velocity.Size2D()), BackpedalSpeed, SpeedTolerance);
+	TestTrue(TEXT("Full-magnitude backward sprint request never exceeds the backpedal speed"), PeakBackwardSpeed <= BackpedalSpeed + SpeedTolerance);
 
 	Movement->StopMovementImmediately();
 	RunAuthorityMoves(1, SprintFlag, FVector(0.0f, MaxAccel, 0.0f));
@@ -425,5 +550,325 @@ bool FAethelnMovementNetInvalidSprintRejectedTest::RunTest(const FString& Parame
 			TimeStamp, MoveDeltaTime, FVector::ZeroVector, SprintPredictedLocation, SprintPredictedLocation,
 			&MovementBase, NAME_None, Movement->PackNetworkMovementMode()));
 	return true;
+}
+
+/**
+ * A predicting client driven through the POC input entry points and ControlledCharacterMove, and a
+ * server copy fed only what the client's saved move carries (flags and rounded acceleration) through
+ * MoveAutonomous. Neither has a remote connection; this isolates the shared simulation code.
+ */
+struct FAethelnMovementNetPredictionPair
+{
+	AAethelnPlayerCharacter* Client = nullptr;
+	AAethelnPlayerCharacter* Server = nullptr;
+	UAethelnCharacterMovementComponent* ClientMovement = nullptr;
+	UAethelnCharacterMovementComponent* ServerMovement = nullptr;
+	FVector ServerOffset = FVector::ZeroVector;
+	float TimeStamp = 0.0f;
+
+	FAethelnMovementNetPredictionPair(const AethelnMovementNetTests::FTestWorld& TestWorld, const FVector& Location)
+	{
+		Client = TestWorld.SpawnGroundedCharacter(Location);
+		Server = TestWorld.SpawnGroundedCharacter(Location + FVector(500.0f, 0.0f, 0.0f));
+		if (Client == nullptr || Server == nullptr)
+		{
+			return;
+		}
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		APlayerController* PlayerController = TestWorld.World->SpawnActor<APlayerController>(
+			APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters);
+		if (PlayerController == nullptr)
+		{
+			return;
+		}
+		// The client needs a controller for the POC input path; the server copy keeps control yaw zero without one.
+		PlayerController->Possess(Client);
+		ClientMovement = AethelnMovementNetTests::GetMovement(Client);
+		ServerMovement = AethelnMovementNetTests::GetMovement(Server);
+		ServerOffset = Server->GetActorLocation() - Client->GetActorLocation();
+	}
+
+	bool IsValid() const
+	{
+		return ClientMovement != nullptr && ServerMovement != nullptr && Client->GetController() != nullptr;
+	}
+
+	/** One frame of client input and prediction, then the matching server move. Returns true when the server accepts the client location. */
+	bool Step(const FVector2D& MoveInput, bool bPressJump, bool bSprint)
+	{
+		Client->ReceiveSprintIntent(bSprint);
+		Client->ReceiveMoveInput(MoveInput);
+		if (bPressJump)
+		{
+			Client->ReceiveJumpStarted();
+		}
+		// The saved move reads these after the jump check, which never clears them.
+		uint8 Flags = 0;
+		if (Client->bPressedJump)
+		{
+			Flags |= FSavedMove_Character::FLAG_JumpPressed;
+		}
+		if (ClientMovement->bWantsToSprint)
+		{
+			Flags |= FSavedMove_Character::FLAG_Custom_0;
+		}
+		TimeStamp += AethelnMovementNetTests::MoveDeltaTime;
+		ClientMovement->ControlledCharacterMove(ClientMovement->ConsumeInputVector(), AethelnMovementNetTests::MoveDeltaTime);
+		ServerMovement->MoveAutonomous(
+			TimeStamp,
+			AethelnMovementNetTests::MoveDeltaTime,
+			Flags,
+			ClientMovement->RoundAcceleration(ClientMovement->Acceleration));
+		const FVector ClientLocation = Client->GetActorLocation() + ServerOffset;
+		FMovementBaseInterfaceData MovementBase;
+		return !ServerMovement->ServerExceedsAllowablePositionError(
+			TimeStamp, AethelnMovementNetTests::MoveDeltaTime, ClientMovement->Acceleration, ClientLocation, ClientLocation,
+			&MovementBase, NAME_None, ClientMovement->PackNetworkMovementMode());
+	}
+
+	float VelocityError() const
+	{
+		return static_cast<float>((ClientMovement->Velocity - ServerMovement->Velocity).Size());
+	}
+
+	float YawError() const
+	{
+		return FMath::Abs(FRotator::NormalizeAxis(Client->GetActorRotation().Yaw - Server->GetActorRotation().Yaw));
+	}
+};
+
+namespace AethelnMovementNetTests
+{
+	// Numeric comparison epsilon for yaw snapped in the shared simulation; not a tuning value.
+	constexpr float YawTolerance = 0.5f;
+
+	FVector Horizontal(const FVector& Vector)
+	{
+		return FVector(Vector.X, Vector.Y, 0.0f);
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnMovementNetJumpTakeoffParityTest,
+	"Aetheln.Movement.Net.JumpTakeoffParity",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnMovementNetJumpTakeoffParityTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnMovementNetTests;
+	const FTestWorld TestWorld;
+	FAethelnMovementNetPredictionPair Pair(TestWorld, FVector(0.0f, 0.0f, 100.0f));
+	TestTrue(TEXT("Client and server POC characters are set up"), Pair.IsValid());
+	if (!Pair.IsValid())
+	{
+		return false;
+	}
+
+	const float WalkSpeed = Pair.ClientMovement->MaxWalkSpeed;
+	// Control yaw is zero on both, so +X is forward and +Y is right.
+	const FVector2D Right(1.0f, 0.0f);
+	const FVector2D Left(-1.0f, 0.0f);
+	bool bServerAcceptedEveryMove = true;
+	float MaxVelocityError = 0.0f;
+	float MaxYawError = 0.0f;
+	auto Step = [&Pair, &bServerAcceptedEveryMove, &MaxVelocityError, &MaxYawError](
+		const FVector2D& MoveInput, bool bPressJump)
+	{
+		bServerAcceptedEveryMove &= Pair.Step(MoveInput, bPressJump, false);
+		MaxVelocityError = FMath::Max(MaxVelocityError, Pair.VelocityError());
+		MaxYawError = FMath::Max(MaxYawError, Pair.YawError());
+	};
+
+	for (int32 Index = 0; Index < 30; ++Index)
+	{
+		Step(Right, false);
+	}
+	TestTrue(TEXT("Client runs right on the ground"), Pair.ClientMovement->IsMovingOnGround());
+	Step(Right, true);
+	TestTrue(TEXT("First jump takes off"), Pair.ClientMovement->IsFalling());
+
+	// Airborne: switch to left and press jump before landing; the landing buffer fires the rejump.
+	bool bLanded = false;
+	bool bRejumped = false;
+	FVector ClientTakeoffVelocity = FVector::ZeroVector;
+	FVector ServerTakeoffVelocity = FVector::ZeroVector;
+	float ClientTakeoffYaw = 0.0f;
+	float ServerTakeoffYaw = 0.0f;
+	for (int32 Index = 0; Index < 120 && !bRejumped; ++Index)
+	{
+		Step(Index < 40 ? Right : Left, Index == 40);
+		bLanded |= Pair.ClientMovement->IsMovingOnGround();
+		if (bLanded && Pair.ClientMovement->IsFalling())
+		{
+			bRejumped = true;
+			ClientTakeoffVelocity = Pair.ClientMovement->Velocity;
+			ServerTakeoffVelocity = Pair.ServerMovement->Velocity;
+			ClientTakeoffYaw = Pair.Client->GetActorRotation().Yaw;
+			ServerTakeoffYaw = Pair.Server->GetActorRotation().Yaw;
+		}
+	}
+	TestTrue(TEXT("Client landed from the first jump"), bLanded);
+	TestTrue(TEXT("Buffered rejump fired after landing"), bRejumped);
+	TestTrue(
+		TEXT("Client rejump launches left at walk speed"),
+		Horizontal(ClientTakeoffVelocity).Equals(FVector(0.0f, -WalkSpeed, 0.0f), SpeedTolerance));
+	TestTrue(
+		TEXT("Server simulates the same rejump takeoff velocity"),
+		(ClientTakeoffVelocity - ServerTakeoffVelocity).Size() <= SpeedTolerance);
+	TestTrue(
+		TEXT("Client rejump faces the new travel direction"),
+		FMath::Abs(FRotator::NormalizeAxis(ClientTakeoffYaw + 90.0f)) <= YawTolerance);
+	TestTrue(
+		TEXT("Server rejump faces the same direction"),
+		FMath::Abs(FRotator::NormalizeAxis(ServerTakeoffYaw - ClientTakeoffYaw)) <= YawTolerance);
+
+	for (int32 Index = 0; Index < 20; ++Index)
+	{
+		Step(Left, false);
+	}
+	TestTrue(TEXT("Server accepts every predicted client location (no correction)"), bServerAcceptedEveryMove);
+	TestTrue(TEXT("Predicted and server velocity never diverge"), MaxVelocityError <= SpeedTolerance);
+	TestTrue(TEXT("Predicted and server facing never diverge"), MaxYawError <= YawTolerance);
+
+	// A sprint jump pressed on the very first movement frame launches at sprint speed on both.
+	FAethelnMovementNetPredictionPair SprintPair(TestWorld, FVector(0.0f, 5000.0f, 100.0f));
+	TestTrue(TEXT("Sprint client and server POC characters are set up"), SprintPair.IsValid());
+	if (!SprintPair.IsValid())
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < 10; ++Index)
+	{
+		SprintPair.Step(FVector2D::ZeroVector, false, false);
+	}
+	TestTrue(TEXT("Sprint client settles on the ground"), SprintPair.ClientMovement->IsMovingOnGround());
+	const bool bSprintMoveAccepted = SprintPair.Step(FVector2D(0.0f, 1.0f), true, true);
+	TestTrue(
+		TEXT("First-frame sprint jump launches forward at sprint speed"),
+		Horizontal(SprintPair.ClientMovement->Velocity).Equals(
+			FVector(SprintPair.ClientMovement->SprintSpeed, 0.0f, 0.0f), SpeedTolerance));
+	TestTrue(TEXT("Server simulates the same first-frame sprint jump"), SprintPair.VelocityError() <= SpeedTolerance);
+	TestTrue(TEXT("Server accepts the first-frame sprint jump location"), bSprintMoveAccepted);
+	return true;
+}
+
+
+/**
+ * A forward sprint jump simulated once by an authority reference, and the same move recorded by a
+ * second character at a non-zero control yaw, then replayed ReplayCount times after the camera
+ * turned around. Judging the move by the live yaw would call it a backpedal (walk cap, camera facing).
+ */
+struct FAethelnMovementNetJumpReplayScenario
+{
+	static bool Run(FAutomationTestBase& Test, int32 ReplayCount)
+	{
+		using namespace AethelnMovementNetTests;
+		const FTestWorld TestWorld;
+		AAethelnPlayerCharacter* Reference = TestWorld.SpawnGroundedCharacter(FVector(0.0f, 0.0f, 100.0f));
+		AAethelnPlayerCharacter* Replayed = TestWorld.SpawnGroundedCharacter(FVector(500.0f, 0.0f, 100.0f));
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		APlayerController* ReferenceController = TestWorld.World != nullptr
+			? TestWorld.World->SpawnActor<APlayerController>(
+				APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters)
+			: nullptr;
+		APlayerController* ReplayedController = TestWorld.World != nullptr
+			? TestWorld.World->SpawnActor<APlayerController>(
+				APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters)
+			: nullptr;
+		UAethelnCharacterMovementComponent* ReferenceMovement = GetMovement(Reference);
+		UAethelnCharacterMovementComponent* ReplayedMovement = GetMovement(Replayed);
+		Test.TestNotNull(TEXT("Reference POC character uses the project movement component"), ReferenceMovement);
+		Test.TestNotNull(TEXT("Replayed POC character uses the project movement component"), ReplayedMovement);
+		Test.TestNotNull(TEXT("Reference character has a player controller"), ReferenceController);
+		Test.TestNotNull(TEXT("Replayed character has a player controller"), ReplayedController);
+		if (ReferenceMovement == nullptr || ReplayedMovement == nullptr
+			|| ReferenceController == nullptr || ReplayedController == nullptr)
+		{
+			return false;
+		}
+		ReferenceController->Possess(Reference);
+		ReplayedController->Possess(Replayed);
+		// Non-zero, so a saved move that kept a cleared (zero) yaw could not pass by accident.
+		const FRotator RecordedControlRotation(0.0f, 90.0f, 0.0f);
+		ReferenceController->SetControlRotation(RecordedControlRotation);
+		ReplayedController->SetControlRotation(RecordedControlRotation);
+
+		float TimeStamp = 0.0f;
+		for (int32 Index = 0; Index < 10; ++Index)
+		{
+			TimeStamp += MoveDeltaTime;
+			ReferenceMovement->MoveAutonomous(TimeStamp, MoveDeltaTime, 0, FVector::ZeroVector);
+			ReplayedMovement->MoveAutonomous(TimeStamp, MoveDeltaTime, 0, FVector::ZeroVector);
+		}
+		Test.TestTrue(TEXT("Both characters settle on the ground"),
+			ReferenceMovement->IsMovingOnGround() && ReplayedMovement->IsMovingOnGround());
+
+		const FVector ForwardAccel = RecordedControlRotation.Vector() * ReferenceMovement->GetMaxAcceleration();
+		TimeStamp += MoveDeltaTime;
+		ReferenceMovement->MoveAutonomous(
+			TimeStamp, MoveDeltaTime, FSavedMove_Character::FLAG_JumpPressed | FSavedMove_Character::FLAG_Custom_0, ForwardAccel);
+		Test.TestTrue(
+			TEXT("First pass launches forward at sprint speed"),
+			Horizontal(ReferenceMovement->Velocity).Equals(
+				RecordedControlRotation.Vector() * ReferenceMovement->SprintSpeed, SpeedTolerance));
+
+		const FVector ReplayStartLocation = Replayed->GetActorLocation();
+		FNetworkPredictionData_Client_Character* ClientData = ReplayedMovement->GetPredictionData_Client_Character();
+		ReplayedMovement->bWantsToSprint = true;
+		Replayed->Jump();
+		FSavedMovePtr JumpMove = ClientData->AllocateNewMove();
+		JumpMove->SetMoveFor(Replayed, MoveDeltaTime, ForwardAccel, *ClientData);
+		JumpMove->PostUpdate(Replayed, FSavedMove_Character::PostUpdate_Record);
+		ReplayedController->SetControlRotation(RecordedControlRotation + FRotator(0.0f, 180.0f, 0.0f));
+		for (int32 Replay = 0; Replay < ReplayCount; ++Replay)
+		{
+			if (Replay > 0)
+			{
+				// Each correction replays from the server state, here the grounded pre-jump state.
+				Replayed->SetActorLocation(ReplayStartLocation);
+				ReplayedMovement->Velocity = FVector::ZeroVector;
+				ReplayedMovement->SetMovementMode(MOVE_Walking);
+				Replayed->ResetJumpState();
+			}
+			ClientData->SavedMoves.Reset();
+			ClientData->SavedMoves.Add(JumpMove);
+			ClientData->bUpdatePosition = true;
+			Test.TestTrue(
+				FString::Printf(TEXT("Correction %d replays the jump move"), Replay + 1),
+				ReplayedMovement->ClientUpdatePositionAfterServerUpdate());
+			Test.TestTrue(
+				FString::Printf(TEXT("Correction %d replay launches at the first-pass takeoff velocity"), Replay + 1),
+				(ReplayedMovement->Velocity - ReferenceMovement->Velocity).Size() <= SpeedTolerance);
+			Test.TestTrue(
+				FString::Printf(TEXT("Correction %d replay snaps facing to the first-pass yaw"), Replay + 1),
+				FMath::Abs(FRotator::NormalizeAxis(
+					Replayed->GetActorRotation().Yaw - Reference->GetActorRotation().Yaw)) <= YawTolerance);
+		}
+		ClientData->SavedMoves.Reset();
+		return true;
+	}
+};
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnMovementNetJumpTakeoffReplayTest,
+	"Aetheln.Movement.Net.JumpTakeoffReplay",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnMovementNetJumpTakeoffReplayTest::RunTest(const FString& Parameters)
+{
+	return FAethelnMovementNetJumpReplayScenario::Run(*this, 1);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnMovementNetJumpTakeoffRepeatedReplayTest,
+	"Aetheln.Movement.Net.JumpTakeoffRepeatedReplay",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnMovementNetJumpTakeoffRepeatedReplayTest::RunTest(const FString& Parameters)
+{
+	// A move still unacknowledged after one correction is replayed again by the next one.
+	return FAethelnMovementNetJumpReplayScenario::Run(*this, 2);
 }
 #endif
