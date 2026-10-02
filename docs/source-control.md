@@ -89,7 +89,8 @@ remains lockable when it must be edited.
 ## Sensitive Material
 
 Private keys, certificates, signing bundles, provisioning profiles, keystores,
-signing-material directories, and service-account material stay outside source
+signing-material directories, service-account material, and infrastructure
+state files (`*.tfstate`, `*.tfstate.*`, `.terraform/`) stay outside source
 control. Only narrowly named redacted examples may be committed. Never open or
 print a suspected sensitive file to diagnose ignore behavior; test its path with
 `git check-ignore`.
