@@ -613,9 +613,9 @@ jobs:
       # (and its report upload), build the editor target in the same managed
       # workspace through the bounded capture wrapper, then run the frozen
       # two-test harness from that workspace. Outside the host lease by design
-      # for this first proof; both steps carry their own bounds.
+      # for this first proof. The editor build is bounded by the job ceiling;
+      # the harness carries its own timeout.
       - name: Build editor target for Unreal automation
-        timeout-minutes: 15
         shell: powershell
         env:
           AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}

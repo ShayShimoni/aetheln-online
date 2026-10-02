@@ -792,8 +792,8 @@ Every accepted decision records:
   `unreal-editor-automation` from the exact `unreal-automation-report.json`
   with zero native exit and no cleanup claim; its runner identity is covered by
   the native receipt the selector always co-selects. That first proof runs in
-  the existing compile job after the host lease is released, with step bounds
-  inside the unchanged 40-minute job ceiling.
+  the existing compile job after the host lease is released, inside the
+  unchanged 40-minute job ceiling.
   `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
   when the selector's chosen checks are a subset of those six live
   obligations, nonce-specific requirements with an exact selector binding and
