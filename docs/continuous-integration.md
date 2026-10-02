@@ -97,7 +97,7 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 
 | Check | Tier | What it gates |
 | --- | --- | --- |
-| `formatting-policy` (`scripts/ci/Test-FormattingPolicy.ps1`) | Required | Tracked text is stored LF, no merge-conflict markers, tab indentation in `Source/` C++. Deterministic repository policy. |
+| `formatting-policy` (`scripts/ci/Test-FormattingPolicy.ps1`) | Required | Tracked text is stored LF, no merge-conflict markers, tab indentation in `Source/` C++, and no tracked `Content/`, `Config/`, `Source/`, `Plugins/`, or `.uproject` file references the private `AethelnArt` plugin or is missing from the work tree (TA-019). It reports LFS pointer files it could not scan. Only the hosted `quality-gates` job runs it, with just `StarterMap.umap` fetched from LFS, so hosted CI scans text files plus that one map; a full binary `Content/` scan is local-only today (open TA-019 follow-up). Edits to this rule also select the trusted compile (TA-018). Deterministic repository policy. |
 | `markdown-links` (`scripts/ci/Test-MarkdownLinks.ps1`) | Required | Relative links and heading anchors in tracked Markdown resolve. Deterministic documentation gate. |
 | `source-control-policy` (`scripts/tests/Test-SourceControlPolicy.ps1`) | Required | LFS ownership, generated-artifact exclusions, and sensitive-path (dependency/secret) tracking policy. |
 | `observability-contract` (`scripts/tests/Test-ObservabilityContract.ps1`) | Required | Closed observability vocabulary, bounded/redacted event shape, explicit environment/retention boundaries, and downstream ownership. |
