@@ -355,10 +355,20 @@ Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -matc
 # publishes one nonce-bound receipt directory, and exposes only the upload
 # action's direct artifact binding. They never acquire engine-runner authority.
 $ReceiptContracts = @(
-	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; SelectorOutput='portable_required'; Producer='quality-gates'; Check='portable'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
-	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; SelectorOutput='native_client_server_compile_required'; Producer='trusted-candidate-compile'; Check='native-client-server-compile'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
-	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; SelectorOutput='visual_package_required'; Producer='visual-proof'; Check='visual-package'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
+	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; SelectorOutput='portable_required'; Producer='quality-gates'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
+	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; SelectorOutput='native_client_server_compile_required'; Producer='trusted-candidate-compile'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
+	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; SelectorOutput='visual_package_required'; Producer='visual-proof'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
 )
+# aggregate_ready and the context builder's gap computation must agree on the
+# exact set of obligations that have a live receipt producer.
+$ContextBuilderSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\New-CiAcceptanceAggregateContext.ps1') -Raw
+$WorkflowLiveChecks = [regex]::Matches($ShadowSelection, '(?m)^\s*\$LiveProducerChecks = @\((?<list>[^)]*)\)\r?$')
+$BuilderLiveChecks = [regex]::Matches($ContextBuilderSource, '(?m)^\s*\$LiveChecks=@\((?<list>[^)]*)\)\r?$')
+Assert-True ($WorkflowLiveChecks.Count -eq 1 -and $BuilderLiveChecks.Count -eq 1) 'The workflow and context builder must each declare exactly one live producer check list.'
+$WorkflowLiveList = @([regex]::Matches($WorkflowLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
+$BuilderLiveList = @([regex]::Matches($BuilderLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
+Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,native-client-server-compile,portable,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
+
 foreach ($Receipt in $ReceiptContracts) {
 	$Body = [string] $Receipt.Body
 	Assert-True ($Body -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - $([regex]::Escape($Receipt.Producer))\r?$" -and $Body -match "(?m)^    if: github\.event_name == 'pull_request' && needs\.ci-selection-shadow\.outputs\.$($Receipt.SelectorOutput) == 'true'\r?$") "$($Receipt.Name) must be PR-only and selected solely through the accepted selector output after its raw producer."
@@ -371,7 +381,7 @@ foreach ($Receipt in $ReceiptContracts) {
 	Assert-True ($Body -match 'artifact-ids: \$\{\{ needs\.ci-selection-shadow\.outputs\.selector_artifact_id \}\}' -and $Body -match ("artifact-ids: " + $ProducerArtifactId)) "$($Receipt.Name) must bind both downloads directly to needs upload IDs, never artifact-name discovery."
 	Assert-True ($Body -match 'scripts/ci/New-CiAcceptanceAggregateContext\.ps1' -and $Body -match '-Mode Identity' -and $Body -match 'scripts/ci/Publish-CiAcceptanceReceipt\.ps1') "$($Receipt.Name) must use the reviewed identity builder and receipt publisher."
 	Assert-True ($Body -match '(?m)^          \$ContextBuilder = \(Resolve-Path -LiteralPath ''scripts/ci/New-CiAcceptanceAggregateContext\.ps1''\)\.Path\r?$' -and $Body -match '(?m)^          & \$ContextBuilder `\r?$' -and $Body -notmatch 'powershell\.exe[^\r\n]*New-CiAcceptanceAggregateContext\.ps1') "$($Receipt.Name) must pass JSON to the context builder in-process so Windows PowerShell cannot strip native command-line quotes."
-	Assert-True ($Body -match ("-CheckId " + [regex]::Escape($Receipt.Check) + ' `') -and $Body -match ("-JobName " + [regex]::Escape($Receipt.Name) + ' `')) "$($Receipt.Name) must bind its exact check and publisher job identity."
+	Assert-True ($Body -match ("-ProducerKey " + [regex]::Escape($Receipt.Key) + ' `') -and $Body -notmatch '-CheckId ' -and $Body -match ("-JobName " + [regex]::Escape($Receipt.Name) + ' `')) "$($Receipt.Name) must bind its exact producer key and publisher job identity."
 	$ReceiptPrefix = [regex]::Escape("'ci-receipt-$($Receipt.Key)-' + `$env:AETHELN_RUN_ID + '-' + `$env:AETHELN_RUN_ATTEMPT + '-")
 	Assert-True ($Body -match $ReceiptPrefix -and $Body -match '\$\{\{ needs\.ci-selection-shadow\.outputs\.attempt_nonce \}\}') "$($Receipt.Name) output must be run/attempt/selector-nonce bound."
 	$ArchiveDigestValidation = [regex]::Escape("`$env:AETHELN_RAW_ARTIFACT_DIGEST -cnotmatch '\Asha256:[0-9a-f]{64}\z'")

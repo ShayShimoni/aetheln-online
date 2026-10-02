@@ -133,7 +133,8 @@ try {
 	$Identity = $script:ContextUtf8.GetString($IdentityBytes) | ConvertFrom-Json
 	$Aggregate = $script:ContextUtf8.GetString($AggregateBytes) | ConvertFrom-Json
 	$Requirements = $script:ContextUtf8.GetString($RequirementsBytes) | ConvertFrom-Json
-	Assert-True ((@($Identity.PSObject.Properties.Name)-join ',') -ceq 'schemaVersion,repository,event,source,workflow,controller,policy,actions,run,attemptAnchor') 'Publisher identity context must have the exact closed ordered schema.'
+	Assert-True ((@($Identity.PSObject.Properties.Name)-join ',') -ceq 'schemaVersion,repository,event,source,workflow,controller,policy,actions,run,attemptAnchor,selection') 'Publisher identity context must have the exact closed ordered schema.'
+	Assert-True ((@($Identity.selection.PSObject.Properties.Name)-join ',') -ceq 'checks' -and $Identity.selection.checks -is [array] -and (@($Identity.selection.checks)-join ',') -ceq 'portable,visual-package,native-client-server-compile') 'Publisher identity selection must carry every selector-selected obligation in selector order.'
 	Assert-True ((@($Aggregate.PSObject.Properties.Name)-join ',') -ceq 'schemaVersion,repository,event,source,workflow,actions,controller,policy,run,attemptAnchor,selectorBinding,producerBindings') 'Aggregate context must have the exact direct-binding schema.'
 	foreach ($Name in @('schemaVersion','repository','event','source','workflow','controller','policy','actions','run','attemptAnchor')) {
 		Assert-True (($Identity.$Name|ConvertTo-Json -Depth 8 -Compress) -ceq ($Aggregate.$Name|ConvertTo-Json -Depth 8 -Compress)) "Identity field '$Name' must be semantically identical in both outputs."
@@ -164,7 +165,7 @@ try {
 	Write-FixtureJson $UnavailableGapFixture.SelectorPath (Get-UnavailableSelectorFixture)
 	$Gap = Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Gap
 	Assert-True ($Gap.mode -ceq 'Gap' -and $Gap.acceptedControllerUnavailable -eq $true -and $Gap.attemptAnchor.nonce -ceq $script:Nonce) 'Unavailable-controller gap validation must bind the current attempt without claiming accepted-base identity.'
-	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'unreal-editor-automation,content-reference-validation,controller-contract,controller-operational-proof,clean-package-provenance-smoke') 'The fallback must conservatively select all five obligations without live producers.'
+	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'unreal-editor-automation,content-reference-validation,controller-operational-proof,clean-package-provenance-smoke') 'The fallback must conservatively select all four obligations without live producers.'
 	Assert-True (-not (Test-Path -LiteralPath $UnavailableGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.AggregatePath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.RequirementsPath)) 'Gap mode must publish no identity, aggregate context, or receipt prerequisites.'
 	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Identity } 'selector_execution_invalid'
 	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Aggregate } 'selector_execution_invalid'
@@ -184,7 +185,7 @@ try {
 	$FallbackBytes = [IO.File]::ReadAllBytes($WorkflowFallbackFixture.SelectorPath)
 	Assert-True ($FallbackBytes.Length -gt 2 -and $FallbackBytes[-1] -eq 10 -and $FallbackBytes[-2] -ne 10 -and $FallbackBytes[-2] -ne 13) 'The actual workflow fallback writer must emit exactly one trailing LF.'
 	$Gap = Invoke-Fixture -Fixture $WorkflowFallbackFixture -Mode Gap
-	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 5) 'The exact workflow fallback serialization must pass strict gap validation.'
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 4) 'The exact workflow fallback serialization must pass strict gap validation.'
 } finally {
 	if ($null -eq $PreviousShadowReportPath) { Remove-Item Env:AETHELN_SHADOW_REPORT -ErrorAction SilentlyContinue }
 	else { $env:AETHELN_SHADOW_REPORT = $PreviousShadowReportPath }
@@ -193,15 +194,26 @@ try {
 
 $AcceptedGapFixture = New-InvocationFixture
 try {
-	Write-FixtureJson $AcceptedGapFixture.SelectorPath (New-SelectorFixture -Selected @('controller-contract'))
+	Write-FixtureJson $AcceptedGapFixture.SelectorPath (New-SelectorFixture -Selected @('controller-operational-proof'))
 	$Gap = Invoke-Fixture -Fixture $AcceptedGapFixture -Mode Gap
-	Assert-True ($Gap.acceptedControllerUnavailable -eq $false -and (@($Gap.selectedUnsupported) -join ',') -ceq 'controller-contract') 'An accepted-base unsupported selection must retain the strict existing identity contract but produce only a gap diagnostic.'
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $false -and (@($Gap.selectedUnsupported) -join ',') -ceq 'controller-operational-proof') 'An accepted-base unsupported selection must retain the strict existing identity contract but produce only a gap diagnostic.'
 	Assert-True (-not (Test-Path -LiteralPath $AcceptedGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $AcceptedGapFixture.AggregatePath)) 'Accepted-base gap validation must not create aggregate inputs.'
 } finally { Remove-Item -LiteralPath $AcceptedGapFixture.Root -Recurse -Force }
 
 $NoGapFixture = New-InvocationFixture
 try { Assert-Rejected { Invoke-Fixture -Fixture $NoGapFixture -Mode Gap } 'gap_selection_empty' }
 finally { Remove-Item -LiteralPath $NoGapFixture.Root -Recurse -Force }
+
+$ContractFixture = New-InvocationFixture
+try {
+	Write-FixtureJson $ContractFixture.SelectorPath (New-SelectorFixture -Selected @('controller-contract','portable'))
+	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -Mode Gap } 'gap_selection_empty'
+	Assert-Rejected { Invoke-Fixture -Fixture $ContractFixture -ProducerBindingsJson '[]' } 'producer_binding_missing'
+	Assert-True (-not (Test-Path -LiteralPath $ContractFixture.IdentityPath) -and -not (Test-Path -LiteralPath $ContractFixture.AggregatePath)) 'A missing portable producer binding must publish no aggregate inputs.'
+	Invoke-Fixture -Fixture $ContractFixture -Mode Identity
+	$ContractIdentity = Get-Content -LiteralPath $ContractFixture.IdentityPath -Raw | ConvertFrom-Json
+	Assert-True ((@($ContractIdentity.selection.checks) -join ',') -ceq 'portable,controller-contract') 'Identity selection must expose controller-contract to the portable receipt publisher from selector bytes.'
+} finally { Remove-Item -LiteralPath $ContractFixture.Root -Recurse -Force }
 
 foreach ($Case in @(
 	@{name='fallback-policy-digest';reason='selector_fallback_invalid';mutate={param($x)$x.policy.digest='1'*64}},

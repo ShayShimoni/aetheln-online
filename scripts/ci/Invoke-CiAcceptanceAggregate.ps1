@@ -42,10 +42,12 @@ $script:AcceptanceCheckIds = @('clean-package-provenance-smoke','content-referen
 $script:SelectorCheckIds = @('portable','visual-package','native-client-server-compile','unreal-editor-automation','content-reference-validation','controller-contract','controller-operational-proof','clean-package-provenance-smoke')
 # Opaque hashes and receipt summaries never establish success. Add an
 # obligation from here only after its evidence bytes have an exact semantic parser.
-$script:AcceptanceUnsupportedCheckIds = @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof')
+$script:AcceptanceUnsupportedCheckIds = @('clean-package-provenance-smoke','content-reference-validation','controller-operational-proof')
 $script:AcceptancePortableCheckNames = @(
-	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
+	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','host-tool-provisioning-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
 )
+# controller-contract revalidates the exact portable report and also requires every required tests/ci suite to pass.
+$script:AcceptanceControllerContractCheckNames = @('engine-runner-gate-tests','unreal-automation-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests')
 
 function New-AggregateBudget {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory accounting object only.')]
@@ -511,28 +513,35 @@ function Test-AggregateTimestampRange {
 }
 
 function Assert-PortableSemanticEvidence {
-	param([byte[]]$Bytes,$Context)
+	param([byte[]]$Bytes,$Context,[string]$CheckId='portable')
 	try {
 		$Report=ConvertFrom-StrictBoundedJson -Bytes $Bytes -MaximumBytes $script:AggregateLimits.jsonBytes -MaximumDepth 8 -MaximumProperties 1024 -MaximumArrayItems 2048
-		Assert-ClosedObject -Value $Report -Names @('schemaVersion','revision','startedUtc','finishedUtc','checks','summary') -Reason 'receipt_semantic_evidence_invalid:portable'
-		Assert-ClosedObject -Value $Report.summary -Names @('total','passed','failed','skipped','requiredFailed') -Reason 'receipt_semantic_evidence_invalid:portable'
-	} catch { if($_.Exception.Message -cmatch '^receipt_semantic_evidence_'){throw}; throw 'receipt_semantic_evidence_invalid:portable' }
+		Assert-ClosedObject -Value $Report -Names @('schemaVersion','revision','startedUtc','finishedUtc','checks','summary') -Reason "receipt_semantic_evidence_invalid:$CheckId"
+		Assert-ClosedObject -Value $Report.summary -Names @('total','passed','failed','skipped','requiredFailed') -Reason "receipt_semantic_evidence_invalid:$CheckId"
+	} catch { if($_.Exception.Message -cmatch '^receipt_semantic_evidence_'){throw}; throw "receipt_semantic_evidence_invalid:$CheckId" }
 	if (-not (Test-AggregateBoundedInteger -Value $Report.schemaVersion -Minimum 1 -Maximum 1) -or $Report.revision -isnot [string] -or $Report.revision -cne $Context.source.testedRevision -or
-		-not (Test-AggregateTimestampRange $Report.startedUtc $Report.finishedUtc) -or $Report.checks -isnot [array] -or @($Report.checks).Count -ne $script:AcceptancePortableCheckNames.Count) { throw 'receipt_semantic_evidence_invalid:portable' }
+		-not (Test-AggregateTimestampRange $Report.startedUtc $Report.finishedUtc) -or $Report.checks -isnot [array] -or @($Report.checks).Count -ne $script:AcceptancePortableCheckNames.Count) { throw "receipt_semantic_evidence_invalid:$CheckId" }
 	$Passed=0;$Skipped=0
 	for($Index=0;$Index-lt$script:AcceptancePortableCheckNames.Count;$Index++){
-		$Check=$Report.checks[$Index]; Assert-ClosedObject -Value $Check -Names @('name','tier','status','durationSeconds','command','message') -Reason 'receipt_semantic_evidence_invalid:portable'
+		$Check=$Report.checks[$Index]; Assert-ClosedObject -Value $Check -Names @('name','tier','status','durationSeconds','command','message') -Reason "receipt_semantic_evidence_invalid:$CheckId"
 		$Expected=$script:AcceptancePortableCheckNames[$Index];$Tier=if($Expected-ceq'psscriptanalyzer'){'advisory'}else{'required'}
-		if($Check.name-isnot[string]-or$Check.name-cne$Expected-or$Check.tier-isnot[string]-or$Check.tier-cne$Tier-or$Check.status-isnot[string]-or-not(Test-AggregateBoundedNumber -Value $Check.durationSeconds -Minimum 0 -Maximum 86400)-or$Check.command-isnot[string]-or$Check.command.Length-gt 32768-or$Check.message-isnot[string]-or$Check.message.Length-gt 131072){throw 'receipt_semantic_evidence_invalid:portable'}
-		if($Check.status-cnotin@('passed','skipped')-or(($Tier-ceq'required'-or$Expected-ceq'psscriptanalyzer')-and$Check.status-cne'passed')){throw 'receipt_semantic_evidence_failure:portable'}
+		if($Check.name-isnot[string]-or$Check.name-cne$Expected-or$Check.tier-isnot[string]-or$Check.tier-cne$Tier-or$Check.status-isnot[string]-or-not(Test-AggregateBoundedNumber -Value $Check.durationSeconds -Minimum 0 -Maximum 86400)-or$Check.command-isnot[string]-or$Check.command.Length-gt 32768-or$Check.message-isnot[string]-or$Check.message.Length-gt 131072){throw "receipt_semantic_evidence_invalid:$CheckId"}
+		if($Check.status-cnotin@('passed','skipped')-or(($Tier-ceq'required'-or$Expected-ceq'psscriptanalyzer')-and$Check.status-cne'passed')){throw "receipt_semantic_evidence_failure:$CheckId"}
 		if($Check.status-ceq'passed'){$Passed++}else{$Skipped++}
 	}
 	if(-not(Test-AggregateBoundedInteger -Value $Report.summary.total -Minimum 0 -Maximum 1024)-or
 		-not(Test-AggregateBoundedInteger -Value $Report.summary.passed -Minimum 0 -Maximum 1024)-or
 		-not(Test-AggregateBoundedInteger -Value $Report.summary.failed -Minimum 0 -Maximum 1024)-or
 		-not(Test-AggregateBoundedInteger -Value $Report.summary.skipped -Minimum 0 -Maximum 1024)-or
-		-not(Test-AggregateBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 1024)){throw 'receipt_semantic_evidence_invalid:portable'}
-	if($Report.summary.total-ne$Report.checks.Count-or$Report.summary.passed-ne$Passed-or$Report.summary.failed-ne 0-or$Report.summary.skipped-ne$Skipped-or$Report.summary.requiredFailed-ne 0){throw 'receipt_semantic_evidence_failure:portable'}
+		-not(Test-AggregateBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 1024)){throw "receipt_semantic_evidence_invalid:$CheckId"}
+	if($Report.summary.total-ne$Report.checks.Count-or$Report.summary.passed-ne$Passed-or$Report.summary.failed-ne 0-or$Report.summary.skipped-ne$Skipped-or$Report.summary.requiredFailed-ne 0){throw "receipt_semantic_evidence_failure:$CheckId"}
+	if($CheckId-ceq'controller-contract'){
+		foreach($Name in $script:AcceptanceControllerContractCheckNames){
+			$Matched=@($Report.checks|Where-Object{$_.name-ceq$Name-and$_.tier-ceq'required'})
+			if($Matched.Count-ne 1){throw 'receipt_semantic_evidence_invalid:controller-contract'}
+			if($Matched[0].status-cne'passed'){throw 'receipt_semantic_evidence_failure:controller-contract'}
+		}
+	}
 }
 
 function Assert-EngineRunnerSemanticEvidence {
@@ -696,6 +705,8 @@ function Assert-CiAcceptanceReceipt {
 	if ($Receipt.results.checks -isnot [array] -or @($Receipt.results.checks).Count -ne @($Requirement.checks).Count) { throw 'receipt_results_invalid' }
 	$ExpectedNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 	[void] $ExpectedNames.Add('ci-acceptance-receipt.json')
+	# A repeated evidence name is one shared archive entry only when name, digest, and size are identical.
+	$SharedEvidence = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 	$Results = @($Receipt.results.checks)
 	for ($ResultIndex = 0; $ResultIndex -lt $Results.Count; $ResultIndex++) {
 		$Result = $Results[$ResultIndex]
@@ -705,20 +716,23 @@ function Assert-CiAcceptanceReceipt {
 		if ($script:AcceptanceUnsupportedCheckIds -ccontains $Result.id) { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) }
 		if ($null -ne $Result.nativeExitCode -and ($Result.nativeExitCode -isnot [int] -or $Result.nativeExitCode -ne 0)) { throw 'receipt_native_exit_invalid' }
 		if ($Result.id -ceq 'visual-package' -and ($null -ne $Result.nativeExitCode -or $null -ne $Result.cleanupVerified)) { throw 'receipt_semantic_evidence_invalid:visual-package' }
-		if ($Result.id -ceq 'portable' -and ($null -ne $Result.nativeExitCode -or $null -ne $Result.cleanupVerified)) { throw 'receipt_semantic_evidence_invalid:portable' }
+		if ($Result.id -cin @('portable','controller-contract') -and ($null -ne $Result.nativeExitCode -or $null -ne $Result.cleanupVerified)) { throw ('receipt_semantic_evidence_invalid:' + $Result.id) }
 		if ($Result.id -ceq 'unreal-editor-automation' -and ($Result.nativeExitCode -ne 0 -or $null -ne $Result.cleanupVerified)) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
 		if ($null -ne $Result.cleanupVerified -and $Result.cleanupVerified -isnot [bool]) { throw 'receipt_cleanup_invalid' }
 		if ($Result.id -cin @('clean-package-provenance-smoke','native-client-server-compile') -and ($Result.nativeExitCode -ne 0 -or $Result.cleanupVerified -ne $true)) { throw 'receipt_native_proof_incomplete' }
 		if ($Result.evidence -isnot [array]) { throw 'receipt_evidence_invalid' }
 		$Evidence = @($Result.evidence)
 		if ($Evidence.Count -eq 0 -or $Evidence.Count -gt $script:AggregateLimits.evidencePerReceipt) { throw 'receipt_evidence_invalid' }
-		if ($Result.id -in @('portable','native-client-server-compile','unreal-editor-automation','visual-package') -and $Evidence.Count -ne 1) { throw ('receipt_semantic_evidence_duplicate:' + $Result.id) }
+		if ($Result.id -in @('portable','controller-contract','native-client-server-compile','unreal-editor-automation','visual-package') -and $Evidence.Count -ne 1) { throw ('receipt_semantic_evidence_duplicate:' + $Result.id) }
 		$SemanticEvidenceBytes = $null
-		$SemanticEvidenceName = switch ($Result.id) { 'portable' {'ci-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default {$null} }
+		$SemanticEvidenceName = switch ($Result.id) { 'portable' {'ci-report.json'} 'controller-contract' {'ci-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) } }
 		foreach ($Item in $Evidence) {
 			Assert-ClosedObject -Value $Item -Names @('name','sha256','sizeBytes') -Reason 'receipt_schema_invalid'
 			Assert-SafeArchivePath ([string] $Item.name)
-			if ($Item.name -ceq 'ci-acceptance-receipt.json' -or -not (Test-Sha256 $Item.sha256) -or $Item.sizeBytes -isnot [long] -and $Item.sizeBytes -isnot [int] -or [long] $Item.sizeBytes -lt 0 -or -not $ExpectedNames.Add([string] $Item.name)) { throw 'receipt_evidence_invalid' }
+			if ($Item.name -ceq 'ci-acceptance-receipt.json' -or -not (Test-Sha256 $Item.sha256) -or $Item.sizeBytes -isnot [long] -and $Item.sizeBytes -isnot [int] -or [long] $Item.sizeBytes -lt 0) { throw 'receipt_evidence_invalid' }
+			$SharedEvidenceKey = [string] $Item.name + '|' + [string] $Item.sha256 + '|' + [long] $Item.sizeBytes
+			if ($ExpectedNames.Add([string] $Item.name)) { [void] $SharedEvidence.Add($SharedEvidenceKey) }
+			elseif (-not $SharedEvidence.Contains($SharedEvidenceKey)) { throw 'receipt_evidence_invalid' }
 			$Entry = @($Archive.entries | Where-Object { $_.name -ceq $Item.name })
 			if ($Entry.Count -ne 1 -or $Entry[0].sha256 -cne $Item.sha256 -or $Entry[0].sizeBytes -ne [long] $Item.sizeBytes) { throw 'receipt_evidence_mismatch' }
 			if ($null -ne $SemanticEvidenceName) {
@@ -728,7 +742,7 @@ function Assert-CiAcceptanceReceipt {
 		}
 		if ($null -ne $SemanticEvidenceName) {
 			if ($null -eq $SemanticEvidenceBytes) { throw ('receipt_semantic_evidence_missing:' + $Result.id) }
-			switch ($Result.id) { 'portable' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'native-client-server-compile' {Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName $(if ($null -eq $ProducerJob) { $null } else { [string] $ProducerJob.runner_name })} 'unreal-editor-automation' {Assert-UnrealAutomationSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'visual-package' {Assert-VisualPackageSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} }
+			switch ($Result.id) { 'portable' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'controller-contract' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -CheckId 'controller-contract'} 'native-client-server-compile' {Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName $(if ($null -eq $ProducerJob) { $null } else { [string] $ProducerJob.runner_name })} 'unreal-editor-automation' {Assert-UnrealAutomationSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'visual-package' {Assert-VisualPackageSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} default { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) } }
 		}
 	}
 	if ($Archive.entries.Count -ne $ExpectedNames.Count -or @($Archive.entries | Where-Object { -not $ExpectedNames.Contains($_.name) }).Count -ne 0) { throw 'archive_unexpected_entry' }

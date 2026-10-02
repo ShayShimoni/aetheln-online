@@ -404,7 +404,7 @@ function Invoke-CiAcceptanceAggregateContextMain {
 	$Actions=Read-AndAssertAggregateContextActions -Json $ActionItemsJson
 	$WorkflowBytes=Read-BoundedAggregateContextFileBytes -Path $WorkflowPath
 	if ($Mode -ceq 'Gap') {
-		$LiveChecks=@('native-client-server-compile','portable','visual-package')
+		$LiveChecks=@('controller-contract','native-client-server-compile','portable','visual-package')
 		$Unsupported=@($script:AggregateContextCheckIds | Where-Object { $Selector.Selected.Contains($_) -and $LiveChecks -cnotcontains $_ })
 		if ($Unsupported.Count -eq 0) { throw 'gap_selection_empty' }
 		return [pscustomobject][ordered]@{mode='Gap';acceptedControllerUnavailable=$Selector.AcceptedControllerUnavailable;attemptAnchor=$Selector.Report.attemptAnchor;selectedUnsupported=$Unsupported}
@@ -417,6 +417,7 @@ function Invoke-CiAcceptanceAggregateContextMain {
 		controller=[pscustomobject][ordered]@{revision=$Selector.Report.execution.controllerRevision;blobOid=$Selector.Report.execution.controllerBlobOid;sha256=$Selector.Report.execution.controllerSha256}
 		policy=[pscustomobject][ordered]@{version=$Selector.Report.policy.version;digest=$Selector.Report.policy.digest}
 		actions=$Actions;run=[pscustomobject][ordered]@{id=$RunId;attempt=$RunAttempt};attemptAnchor=$Selector.Report.attemptAnchor
+		selection=[pscustomobject][ordered]@{checks=@($script:AggregateContextCheckIds | Where-Object { $Selector.Selected.Contains($_) })}
 	}
 	$IdentityPath=Resolve-AggregateContextOutputPath $IdentityContextOutputPath
 	$Outputs=@{$IdentityPath=(ConvertTo-BoundedAggregateContextBytes $Identity)}

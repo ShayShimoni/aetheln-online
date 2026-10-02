@@ -92,7 +92,7 @@ function New-TestPortableReport {
 	param()
 	$Names = @(
 		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
-		'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
+		'host-tool-provisioning-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
 		'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
 		'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
@@ -132,6 +132,27 @@ function New-TestUnrealReport {
 
 function Write-Input($Value, [string] $Path = $InputPath) {
 	[IO.File]::WriteAllText($Path, (($Value | ConvertTo-Json -Depth 12 -Compress) + "`n"), $Utf8)
+}
+
+function Write-ControllerContractReport($Report, [string] $Name = 'ci-report.json') {
+	$Path = Join-Path $EvidenceRoot $Name
+	[IO.File]::WriteAllText($Path, (($Report | ConvertTo-Json -Depth 12 -Compress) + "`n"), $Utf8)
+	return [pscustomobject]@{ sha256=(Get-Sha256 $Path); size=[long](Get-Item -LiteralPath $Path).Length }
+}
+
+function New-ControllerContractInput {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture.')]
+	param([string[]] $CheckIds, $Evidence, [string] $EvidenceName = 'ci-report.json')
+	$Value = Get-TestReceiptInput -VisualSha256 $Evidence.sha256 -VisualSize $Evidence.size
+	$Value.selection.checks = @($CheckIds)
+	$Value.results.checks = @($CheckIds | ForEach-Object {
+		[pscustomobject][ordered]@{
+			id = $_; jobName = 'portable-receipt-shadow'; conclusion = 'success'; nativeExitCode = $null
+			infrastructureFailure = $null; terminal = $true; cleanupVerified = $null
+			evidence = @([pscustomobject][ordered]@{ name = $EvidenceName; sha256 = $Evidence.sha256; sizeBytes = $Evidence.size })
+		}
+	})
+	return $Value
 }
 
 try {
@@ -281,6 +302,75 @@ try {
 		Assert-Rejected { New-CiAcceptanceReceipt -InputPath $SemanticInputPath -EvidenceRoot $EvidenceRoot -OutputPath (Join-Path $FixtureRoot ('bad-' + $SemanticFixture.id + '\ci-acceptance-receipt.json')) } ('receipt_semantic_evidence_' + $FailureKind + ':' + $SemanticFixture.id)
 	}
 
+	# controller-contract revalidates the same exact ci-report.json and also
+	# requires every tests/ci suite in the portable manifest to have passed.
+	$ReceiptSource = [IO.File]::ReadAllText($ScriptPath)
+	$AggregateSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiAcceptanceAggregate.ps1'))
+	$SuiteSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiSuite.ps1'))
+	$SubsetPattern = '(?m)^\$script:AcceptanceControllerContractCheckNames = @\([^)]*\)\r?$'
+	$ReceiptSubset = [regex]::Matches($ReceiptSource, $SubsetPattern)
+	$AggregateSubset = [regex]::Matches($AggregateSource, $SubsetPattern)
+	Assert-True ($ReceiptSubset.Count -eq 1 -and $AggregateSubset.Count -eq 1 -and $ReceiptSubset[0].Value.TrimEnd() -ceq $AggregateSubset[0].Value.TrimEnd()) 'The controller-contract subset must be byte-identical in the receipt producer and aggregate.'
+	$SubsetNames = @([regex]::Matches($ReceiptSubset[0].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+	$SuiteNames = @([regex]::Matches($SuiteSource, "name = '([^']+)'; tier = 'required'; script = 'tests/ci/") | ForEach-Object { $_.Groups[1].Value })
+	Assert-True ($SuiteNames.Count -eq 25 -and ($SubsetNames -join ',') -ceq ($SuiteNames -join ',')) 'The controller-contract subset must equal the required tests/ci suites in Invoke-CiSuite.ps1 order.'
+	Assert-True ((@($script:AcceptanceControllerContractCheckNames) -join ',') -ceq ($SubsetNames -join ',') -and $SubsetNames.Count -lt $script:AcceptancePortableCheckNames.Count -and @($SubsetNames | Where-Object { $script:AcceptancePortableCheckNames -cnotcontains $_ }).Count -eq 0) 'The controller-contract subset must be a strict subset of the portable manifest.'
+
+	$ContractEvidence = Write-ControllerContractReport (New-TestPortableReport)
+	foreach ($ContractSelection in @(@('controller-contract','portable'), @('controller-contract'))) {
+		$ContractInput = New-ControllerContractInput -CheckIds $ContractSelection -Evidence $ContractEvidence
+		$ContractName = $ContractSelection -join '+'
+		$ContractInputPath = Join-Path $FixtureRoot ('controller-contract-' + $ContractName + '.json'); Write-Input $ContractInput $ContractInputPath
+		$ContractReceipt = New-CiAcceptanceReceipt -InputPath $ContractInputPath -EvidenceRoot $EvidenceRoot -OutputPath (Join-Path $FixtureRoot ('controller-contract-' + $ContractName + '\ci-acceptance-receipt.json'))
+		Assert-True ((@($ContractReceipt.selection.checks) -join ',') -ceq ($ContractSelection -join ',') -and (@($ContractReceipt.results.checks | ForEach-Object { $_.id }) -join ',') -ceq ($ContractSelection -join ',')) "Receipt '$ContractName' must bind the exact controller-contract selection."
+		Assert-True (@($ContractReceipt.results.checks | Where-Object { @($_.evidence).Count -ne 1 -or $_.evidence[0].name -cne 'ci-report.json' -or $_.evidence[0].sha256 -cne $ContractEvidence.sha256 -or $_.evidence[0].sizeBytes -ne $ContractEvidence.size -or $null -ne $_.nativeExitCode -or $null -ne $_.cleanupVerified }).Count -eq 0) "Receipt '$ContractName' must bind every result to the one exact ci-report.json."
+		Assert-True ($ContractReceipt.acceptance.shadow -and -not $ContractReceipt.acceptance.authoritative -and -not $ContractReceipt.acceptance.grantsAcceptance -and $null -eq $ContractReceipt.acceptance.cleanupVerified) "Receipt '$ContractName' must stay shadow-only."
+	}
+
+	foreach ($ContractReportCase in @(
+		@{ name='subset-failed'; reason='receipt_semantic_evidence_failure:controller-contract'; mutate={ param($r) @($r.checks | Where-Object name -ceq 'ci-suite-tests')[0].status = 'failed'; $r.summary.passed--; $r.summary.failed++; $r.summary.requiredFailed++ } },
+		@{ name='subset-missing'; reason='receipt_semantic_evidence_invalid:controller-contract'; mutate={ param($r) $r.checks = @($r.checks | Where-Object name -cne 'ci-suite-tests'); $r.summary.total--; $r.summary.passed-- } }
+	)) {
+		foreach ($ContractSelection in @(@('controller-contract','portable'), @('controller-contract'))) {
+			$BadContractReport = New-TestPortableReport; & $ContractReportCase.mutate $BadContractReport
+			$BadContractEvidence = Write-ControllerContractReport $BadContractReport
+			$BadContractPath = Join-Path $FixtureRoot ('controller-contract-' + $ContractReportCase.name + '-' + ($ContractSelection -join '+') + '.json')
+			Write-Input (New-ControllerContractInput -CheckIds $ContractSelection -Evidence $BadContractEvidence) $BadContractPath
+			Assert-Rejected { New-CiAcceptanceReceipt -InputPath $BadContractPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } $ContractReportCase.reason
+			Assert-True (-not (Test-Path -LiteralPath $OutputPath)) "Controller-contract case '$($ContractReportCase.name)' must not publish output."
+		}
+	}
+
+	$ContractEvidence = Write-ControllerContractReport (New-TestPortableReport)
+	$ContractBytes = [IO.File]::ReadAllBytes((Join-Path $EvidenceRoot 'ci-report.json'))
+	$ContractIdentity = Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0
+	$SavedSubset = $script:AcceptanceControllerContractCheckNames
+	try {
+		$script:AcceptanceControllerContractCheckNames = @($SavedSubset) + @('renamed-suite-tests')
+		Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $ContractBytes -Identity $ContractIdentity -CheckId 'controller-contract' } 'receipt_semantic_evidence_invalid:controller-contract'
+		Assert-AcceptancePortableEvidence -Bytes $ContractBytes -Identity $ContractIdentity
+	} finally { $script:AcceptanceControllerContractCheckNames = $SavedSubset }
+
+	foreach ($ContractInputCase in @(
+		@{ name='shared-digest'; reason='receipt_invalid'; mutate={ param($x) $x.results.checks[1].evidence[0].sha256 = ('0' * 64) } },
+		@{ name='shared-size'; reason='receipt_invalid'; mutate={ param($x) $x.results.checks[1].evidence[0].sizeBytes++ } },
+		@{ name='shared-case'; reason='receipt_invalid'; mutate={ param($x) $x.results.checks[1].evidence[0].name = 'CI-report.json' } },
+		@{ name='native-exit'; reason='receipt_semantic_evidence_invalid:controller-contract'; mutate={ param($x) $x.results.checks[0].nativeExitCode = 0 } },
+		@{ name='cleanup'; reason='receipt_invalid'; mutate={ param($x) $x.results.checks[0].cleanupVerified = $true } },
+		@{ name='two-evidence'; reason='receipt_semantic_evidence_duplicate:controller-contract'; mutate={ param($x) $x.results.checks[0].evidence = @($x.results.checks[0].evidence[0], $x.results.checks[0].evidence[0]) } }
+	)) {
+		$ContractInput = New-ControllerContractInput -CheckIds @('controller-contract','portable') -Evidence $ContractEvidence
+		& $ContractInputCase.mutate $ContractInput
+		$ContractInputPath = Join-Path $FixtureRoot ('controller-contract-' + $ContractInputCase.name + '.json'); Write-Input $ContractInput $ContractInputPath
+		Assert-Rejected { New-CiAcceptanceReceipt -InputPath $ContractInputPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } $ContractInputCase.reason
+		Assert-True (-not (Test-Path -LiteralPath $OutputPath)) "Controller-contract case '$($ContractInputCase.name)' must not publish output."
+	}
+	$WrongContractEvidence = Write-ControllerContractReport (New-TestPortableReport) 'wrong-ci-report.json'
+	$WrongContractPath = Join-Path $FixtureRoot 'controller-contract-wrong-name.json'
+	Write-Input (New-ControllerContractInput -CheckIds @('controller-contract') -Evidence $WrongContractEvidence -EvidenceName 'wrong-ci-report.json') $WrongContractPath
+	Assert-Rejected { New-CiAcceptanceReceipt -InputPath $WrongContractPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } 'receipt_semantic_evidence_missing:controller-contract'
+	Remove-Item -LiteralPath (Join-Path $EvidenceRoot 'wrong-ci-report.json') -Force
+
 	foreach ($PortableTypeCase in @(
 		@{name='schema-string';mutate={param($x)$x.schemaVersion='1'}},
 		@{name='check-duration-boolean';mutate={param($x)$x.checks[0].durationSeconds=$true}},
@@ -376,7 +466,7 @@ try {
 		catch { throw "Unreal type fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 	}
 
-	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof')) {
+	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-operational-proof')) {
 		$Unsupported = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
 		$Unsupported.selection.checks[0] = $UnsupportedId; $Unsupported.results.checks[0].id = $UnsupportedId
 		if ($UnsupportedId -in @('clean-package-provenance-smoke','native-client-server-compile')) { $Unsupported.results.checks[0].nativeExitCode=0; $Unsupported.results.checks[0].cleanupVerified=$true }
