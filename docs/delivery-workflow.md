@@ -147,7 +147,12 @@ branch is cut) plus the CI build number as SemVer build metadata, for example
 `1.0.0-alpha.1+412`. Build metadata never changes version precedence, so
 day-to-day internal builds are told apart by build number alone and never
 consume a version. Pre-release tags mark only named internal milestones, not
-every build.
+every build. The build number is the packaging workflow's GitHub Actions
+`run_number`, which the packaging step stamps into the package. Where a
+platform field accepts only numbers (for example a Windows file version), use
+`MAJOR.MINOR.PATCH.<build number>`. The first release-cut script must verify
+that each consumer of `ProjectVersion` accepts the full string, before relying
+on it.
 
 **When the lead cuts a release.**
 
