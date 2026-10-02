@@ -139,9 +139,15 @@ roadmap `Target Version` lines (1.0.0 MVP, 1.1.0, 1.2.0, 2.0.0, 2.1.0).
 | `-rc.N` | Final internal candidate; only fixes enter the release branch. |
 
 The first internal pre-release is `v1.0.0-alpha.1`. Plain `v1.0.0` exists only
-when the MVP acceptance criteria pass release QA. Every package carries the
+when the MVP acceptance criteria pass release QA.
+
+**Build numbers.** Every package, internal or player-facing, carries the
 version in `ProjectVersion` (`Config/DefaultGame.ini`, set when the release
-branch is cut) plus the CI build number.
+branch is cut) plus the CI build number as SemVer build metadata, for example
+`1.0.0-alpha.1+412`. Build metadata never changes version precedence, so
+day-to-day internal builds are told apart by build number alone and never
+consume a version. Pre-release tags mark only named internal milestones, not
+every build.
 
 **When the lead cuts a release.**
 
