@@ -198,6 +198,12 @@ Development link track the issue; a `Closes #<issue>` line does not link or
 auto-close it there. Do not close an issue or advance its board status merely
 because a PR merged.
 
+The project board is the source of truth for work status. It must reflect
+current reality at all times: update it in the same step as every action
+that changes an issue's real state (work started, PR opened, PR merged, QA
+result, blocker found or cleared), and correct any drift the moment it is
+noticed.
+
 Tie board moves to PR events, in the same step as the PR action:
 
 - Open a PR only after developer verification is complete and recorded. When
