@@ -980,7 +980,9 @@ Every accepted decision records:
 
 ### TA-019 - Private Art Plugin Loaded Only by Local Editor Sessions
 
-- **Status:** Accepted
+- **Status:** Accepted. Basis: on 2026-10-02 the owner approved splitting art
+  into a private repository and delegated the loading mechanism to the lead.
+  Human review of the implementing pull request is still pending.
 - **Scope:** Issue #201 art storage boundary: the private `aetheln-art`
   repository, local editor launch, and the `formatting-policy` check.
 - **Decision (2026-10-02):** Fab Standard License, Megascans, paid-pack, and
@@ -1019,8 +1021,8 @@ Every accepted decision records:
     `ReadPluginsInDirectory` skips a missing directory.
   - External plugins count as project plugins, so `EnabledByDefault` applies.
   - A content-only plugin needs no UBT or compile step.
-  - Repository CI scripts and workflows never set this variable, so CI never
-    sees private art.
+  - Repository CI scripts and workflows never set this variable. CI could see
+    private art only if a host set it persistently; see Consequences.
 - **Alternatives:**
   - The `.uproject` key `AdditionalPluginDirectories` is rejected. Both
     trust-boundary input checks deliberately refuse any
@@ -1054,9 +1056,17 @@ Every accepted decision records:
   - The rule scans text and hydrated binary assets. It counts and reports LFS
     pointer files: files of 1 KiB or less with the spec version, `oid sha256:`,
     and `size` lines.
-  - Hosted quality gates hydrate only `Content/Maps/StarterMap.umap`, so binary
-    `Content/` references are scanned only where LFS content is present: local
-    checkouts and LFS-pulling runner jobs.
+  - Only the hosted `quality-gates` job runs the rule. It fetches only
+    `Content/Maps/StarterMap.umap` from LFS. Hosted CI therefore scans text
+    files plus that one map. A full binary `Content/` scan is local-only
+    today, and no runner job runs this check.
+  - The byte match finds ANSI (single-byte) names only. A non-ASCII path stored
+    as a UTF-16 `FString` inside an asset is not detected.
+  - Never set `UE_ADDITIONAL_PLUGIN_PATHS` persistently, at user or machine
+    scope, and especially not on the runner host. Editor-binary cook and
+    automation jobs would then load private art. Scheduled package artifacts
+    are uploaded from this public repository. Nothing enforces this today;
+    see the follow-ups.
   - The rule lives in an existing check because adding a check name changes
     the closed portable, receipt, and aggregate check lists. It is under
     `scripts/ci/`, so editing it also selects the trusted compile (TA-018).
@@ -1070,6 +1080,10 @@ Every accepted decision records:
     never receive.
   - A `/AethelnArt/` dependency assertion in
     `scripts/build/Validate-ServerCookReferences.ps1`.
+  - Hydrated `Content/` scanning in CI, for example by running the rule in an
+    LFS-pulling job.
+  - Guard against a persistent `UE_ADDITIONAL_PLUGIN_PATHS`: pin it empty in
+    the workflow `env`, or fail the engine-runner gate when it is non-empty.
 - **Owner:** Issue #201, including the follow-ups until they move to their own
   issue. #202 and #203 consume this boundary. Intake and provenance follow #120
   and the `visuals/asset-provenance.md` model.

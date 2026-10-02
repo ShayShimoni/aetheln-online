@@ -124,6 +124,11 @@ try {
 	Invoke-ExpectedFailure -Root $FakePointerRoot -ExpectedPattern 'Content/Maps/Fake\.umap: references the private AethelnArt plugin'
 	Write-Output 'PASS: a pointer-like header without oid and size lines is scanned, not skipped'
 
+	$UnicodeRoot = Join-Path $FixtureRoot 'unicode-path'
+	New-FixtureRepository -Root $UnicodeRoot -Files @{ "Content/Maps/Caf$([char]0xE9) Map.umap" = "`0`0/AethelnArt/Maps/Art`0" }
+	Invoke-ExpectedFailure -Root $UnicodeRoot -ExpectedPattern "Content/Maps/Caf$([char]0xE9) Map\.umap: references the private AethelnArt plugin"
+	Write-Output 'PASS: a non-ASCII tracked path is listed, scanned, and reported by its real name'
+
 	$MissingRoot = Join-Path $FixtureRoot 'missing'
 	New-FixtureRepository -Root $MissingRoot -Files @{ 'Content/Maps/Gone.umap' = "`0`0/Game/Maps/Gone`0" }
 	Remove-Item -LiteralPath (Join-Path $MissingRoot 'Content/Maps/Gone.umap')

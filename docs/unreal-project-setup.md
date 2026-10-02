@@ -138,13 +138,26 @@ name it. Collaborators with access clone it anywhere, for example
 $env:UE_ADDITIONAL_PLUGIN_PATHS = (Resolve-Path '<art-clone>\Plugins').Path
 & (Join-Path $AethelnEngineRoot 'Engine\Binaries\Win64\UnrealEditor.exe') `
   $AethelnProject /Game/Maps/StarterMap -log
+Remove-Item Env:UE_ADDITIONAL_PLUGIN_PATHS
 ```
 
-`$env:` changes only the current process and its children; it is not a user
-or system setting. Separate multiple plugin roots with `;` on Windows (`:` on
-Linux and macOS). The content-only plugin needs no build. Without the variable
-the editor opens without the art. CI scripts, workflows, and runner jobs never
-set it, so CI never sees private art. Never reference `/AethelnArt/` assets from
+`$env:` changes only the current process and its children, and the last line
+clears it from the session once the editor has started.
+
+- Separate multiple plugin roots with `;` on Windows (`:` on Linux and macOS).
+- The content-only plugin needs no build.
+- If the art path is missing, `Resolve-Path` reports an error and the editor
+  launches without the art.
+- To browse `/AethelnArt/`, enable **Show Plugin Content** in the Content
+  Browser settings.
+- CI scripts and workflows never set the variable.
+
+**Never set `UE_ADDITIONAL_PLUGIN_PATHS` persistently** (user or machine
+environment), and especially not on the runner host. Editor-binary cook and
+automation jobs would then load private art, and package artifacts are
+uploaded from this public repository.
+
+Never reference `/AethelnArt/` assets from
 public `Content/`, `Config/`, `Source/`, `Plugins/`, or the `.uproject`; the
 `formatting-policy` check rejects it.
 
