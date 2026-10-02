@@ -509,7 +509,9 @@ foreach ($CompileJobCase in @(
 	@{name='missing';reason='native_compile_job_missing';mutate={param($x)$x.jobs=@($x.jobs|Where-Object{$_.name-cne'trusted-candidate-compile'})}},
 	@{name='failure';reason='native_compile_job_not_success';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).conclusion='failure'}},
 	@{name='labels';reason='native_job_labels_invalid';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).labels=[string[]]@('self-hosted','Windows','X64')}},
-	@{name='runner';reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).runner_name='other-runner'}}
+	@{name='runner';reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).runner_name='other-runner'}},
+	@{name='duplicate';reason='job_identity_ambiguous';mutate={param($x)$Copy=($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'})|ConvertTo-Json -Depth 8|ConvertFrom-Json;$Copy.id=151;$x.jobs=@($x.jobs)+@($Copy)}},
+	@{name='attempt';reason='job_attempt_mismatch';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).run_attempt=1}}
 )) {
 	$CaseListing=$CompileJobListing|ConvertTo-Json -Depth 8|ConvertFrom-Json;& $CompileJobCase.mutate $CaseListing;$CaseListing.total_count=@($CaseListing.jobs).Count
 	$CaseContext=New-FixtureContext;$CaseApi=New-FixtureApi -Context $CaseContext -Requirements $Requirements -SelectedChecks @('native-client-server-compile') -Overrides @{$NativeAttemptJobsUri=(ConvertTo-FixtureBytes $CaseListing)}
@@ -560,18 +562,22 @@ $VisualAcceptanceCleanupLie = New-FixtureVisualBoundary -Context $Context
 $VisualAcceptanceCleanupLie.receipt.acceptance.cleanupVerified = $true
 Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $VisualAcceptanceCleanupLie.receipt -Context $Context -Requirement $VisualAcceptanceCleanupLie.requirement -Archive $VisualAcceptanceCleanupLie.archive } 'receipt_cleanup_invalid'
 
+# Direct receipt assertions for the native check need the bound compile job; only its runner name is read.
+$FixtureCompileJob=[pscustomobject]@{runner_name='fixture-runner'}
 foreach ($Fixture in @(
 	@{id='portable';report=(New-FixturePortableReport $Context);reason='receipt_semantic_evidence_failure:portable';mutate={param($x)$x.summary.requiredFailed=1}},
 	@{id='native-client-server-compile';report=(New-FixtureEngineReport $Context);reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)$x.supervisor.cleanupVerified=$false}},
 	@{id='unreal-editor-automation';report=(New-FixtureUnrealReport $Context);reason='receipt_semantic_evidence_invalid:unreal-editor-automation';mutate={param($x)$x.tests[0].status='failed'}}
 )) {
 	$Boundary = New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $Fixture.report
-	$Validated = @(Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive)
+	$Validated = @(Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive -CompileJob $FixtureCompileJob)
 	Assert-True ($Validated.Count -eq 1 -and @($Validated[0]).Count -eq 1) "Aggregate must accept exact semantic evidence for '$($Fixture.id)'."
 	$BadReport=$Fixture.report|ConvertTo-Json -Depth 20|ConvertFrom-Json;& $Fixture.mutate $BadReport
 	$BadBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $BadReport
-	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadBoundary.receipt -Context $Context -Requirement $BadBoundary.requirement -Archive $BadBoundary.archive } $Fixture.reason
+	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadBoundary.receipt -Context $Context -Requirement $BadBoundary.requirement -Archive $BadBoundary.archive -CompileJob $FixtureCompileJob } $Fixture.reason
 }
+$NoCompileJobBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'native-client-server-compile' -Report (New-FixtureEngineReport $Context)
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $NoCompileJobBoundary.receipt -Context $Context -Requirement $NoCompileJobBoundary.requirement -Archive $NoCompileJobBoundary.archive } 'native_compile_job_missing'
 
 $ContractBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
 $ContractValidated = @(Assert-CiAcceptanceReceipt -Receipt $ContractBoundary.receipt -Context $Context -Requirement $ContractBoundary.requirement -Archive $ContractBoundary.archive)
@@ -696,7 +702,7 @@ foreach ($NativeTypeCase in @(
 )) {
 	$BadNative=New-FixtureEngineReport $Context;& $NativeTypeCase.mutate $BadNative
 	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'native-client-server-compile' -Report $BadNative
-	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive -CompileJob $FixtureCompileJob } 'receipt_semantic_evidence_invalid:native-client-server-compile' }
 	catch { throw "Aggregate native fixture '$($NativeTypeCase.name)' failed: $($_.Exception.Message)" }
 }
 
