@@ -16,7 +16,6 @@ function Assert-True([bool] $Condition, [string] $Message) {
 }
 
 function Invoke-Policy([string] $BaseRef, [string] $HeadRef, [string] $Title) {
-	$global:LASTEXITCODE = 0
 	$Output = @(& $Checker -BaseRef $BaseRef -HeadRef $HeadRef -Title $Title | ForEach-Object { "$_" })
 	return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($Output -join "`n") }
 }
@@ -76,7 +75,6 @@ foreach ($Missing in @(@('', 'feature/1-x', '#1 t'), @('develop', '', '#1 t'))) 
 $SavedEnvironment = @($env:AETHELN_PR_BASE_REF, $env:AETHELN_PR_HEAD_REF, $env:AETHELN_PR_TITLE)
 try {
 	$env:AETHELN_PR_BASE_REF = 'main'; $env:AETHELN_PR_HEAD_REF = 'feature/1-x'; $env:AETHELN_PR_TITLE = 'feat: #1 x'
-	$global:LASTEXITCODE = 0
 	$EnvironmentOutput = @(& $Checker | ForEach-Object { "$_" }) -join "`n"
 	Assert-True ($LASTEXITCODE -eq 1 -and $EnvironmentOutput -match 'main-head-branch: ') 'Environment-variable inputs must be the parameter defaults.'
 }

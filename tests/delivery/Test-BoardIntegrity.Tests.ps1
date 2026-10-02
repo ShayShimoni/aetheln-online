@@ -41,7 +41,6 @@ function Invoke-Checker {
 	[IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $Snapshot -Depth 6))
 	$Arguments = @{ FixturePath = $Path }
 	if ($Json) { $Arguments.Json = $true }
-	$global:LASTEXITCODE = 0
 	$Output = @(& $Checker @Arguments | ForEach-Object { "$_" })
 	return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($Output -join "`n") }
 }
