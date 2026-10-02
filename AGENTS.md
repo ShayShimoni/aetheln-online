@@ -185,6 +185,12 @@ explain intent, link the ticket, list exact verification, name the review focus,
 record review evidence and residual limitations, and include screenshots or
 video for visible gameplay or UI changes.
 
+Releases follow [Releases and versioning](docs/delivery-workflow.md#releases-and-versioning).
+Feature and fix PRs target `develop`. `main` receives only `release/*` and
+`hotfix/*` PRs, and only when a build is distributed to players. Internal
+pre-release tags (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`) stay on `release/*`
+branches.
+
 ## Delivery Evidence and Authority
 
 [Delivery Workflow](docs/delivery-workflow.md) defines the evidence-based

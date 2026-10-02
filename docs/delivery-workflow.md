@@ -32,7 +32,9 @@ column solely to make the board look current.
 | `Code Review` | Reviewable PR, exact head, scope, and developer checks recorded. | Record the applicable current-head CI, independent-agent review, any explicitly required human review, and owner merge authorization; merge into `develop` before `Dev Done`. |
 | `Dev Done` | Reviewed, verified implementation merged; record PR, merge SHA, review, and checks. | Start separately authorized post-merge QA (`QA`), or record an explicit QA-not-applicable decision and distinct acceptance verification before `Done`. |
 | `QA` | Independent post-merge QA has started on the merged revision with procedure and environment recorded. | Record raw result, revision, limitations, and disposition; only passing required QA permits `Done`. A defect starts a linked fix cycle. |
-| `Done` | Required QA or explicitly substituted acceptance verification is recorded on the issue, acceptance criteria are satisfied, and no required work remains. | No routine transition; new work uses a new or deliberately reopened ticket. |
+| `Done` | Required QA or explicitly substituted acceptance verification is recorded on the issue, acceptance criteria are satisfied, and no required work remains. | When a release branch that contains the work is cut, move to `Release Candidate`; otherwise no routine transition. New work uses a new or deliberately reopened ticket. |
+| `Release Candidate` | The work is in a cut `release/vX.Y.Z` branch, which carries an internal pre-release tag; the board `Release` field records the tag. | Move to `Released` when that release is distributed to players. If the work is pulled from the release, return to `Done` and clear `Release`. |
+| `Released` | The release that contains the work was distributed to players, merged to `main`, tagged, published as a GitHub Release, and back-merged into `develop`. | No routine transition. A defect in a released build starts a `hotfix/*` cycle with its own ticket. |
 | `Blocked` | A named prerequisite, decision, permission, dependency, or external condition prevents meaningful safe progress after viable alternatives are exhausted; record `Blocked Reason`. | Once resolved, clear the reason and return to the state supported by current evidence. |
 
 `Dev Done` never implies QA passed. Development tests, self-review, PR merge,
@@ -114,6 +116,78 @@ checks only from the then-current attainable #16 baseline; do not select a
 check that never reports for the relevant event/trust path. Recheck capability
 and check names before configuration rather than treating this deferral as a
 permanent platform fact.
+
+## Releases and versioning
+
+Releases follow Gitflow and Semantic Versioning. A version becomes official
+only when a build is distributed to players, as with a mobile app store
+release. By the owner's delegation on 2026-10-03
+([Issue #212](https://github.com/ShayShimoni/aetheln-online/issues/212)), the
+lead decides when to cut each release and runs the whole flow, including the
+merge to `main`. The owner may veto or stop any release.
+
+**Version numbers.** Versions follow `MAJOR.MINOR.PATCH` and align with the
+roadmap `Target Version` lines (1.0.0 MVP, 1.1.0, 1.2.0, 2.0.0, 2.1.0).
+
+| Bump | When |
+| --- | --- |
+| MAJOR | A roadmap stage change, a rebrand, or an incompatible change to saves, the network protocol, or world rules. |
+| MINOR | A backward-compatible roadmap milestone or feature set. |
+| PATCH | Fixes only, shipped from a `hotfix/*` branch. |
+| `-alpha.N` | Internal build while the milestone is still in progress. |
+| `-beta.N` | Internal build once the milestone is feature-complete and in testing. |
+| `-rc.N` | Final internal candidate; only fixes enter the release branch. |
+
+The first internal pre-release is `v1.0.0-alpha.1`. Plain `v1.0.0` exists only
+when the MVP acceptance criteria pass release QA.
+
+**Build numbers.** Every package, internal or player-facing, carries the
+version in `ProjectVersion` (`Config/DefaultGame.ini`, set when the release
+branch is cut) plus the CI build number as SemVer build metadata, for example
+`1.0.0-alpha.1+412`. Build metadata never changes version precedence, so
+day-to-day internal builds are told apart by build number alone and never
+consume a version. Pre-release tags mark only named internal milestones, not
+every build. The build number is the packaging workflow's GitHub Actions
+`run_number`, which the packaging step stamps into the package. Where a
+platform field accepts only numbers (for example a Windows file version), use
+`MAJOR.MINOR.PATCH.<build number>`. The first release-cut script must verify
+that each consumer of `ProjectVersion` accepts the full string, before relying
+on it.
+
+**When the lead cuts a release.**
+
+- Cut an internal pre-release when a playable milestone lands on `develop`,
+  or when about two weeks have passed with `Done` work waiting.
+- Never include work that is not `Done`.
+
+**Internal release flow.**
+
+1. Cut `release/vX.Y.Z` from `develop`. Set `ProjectVersion`, move the included
+   tickets to `Release Candidate`, and fill their `Release` field.
+2. Build the internal packages and run release QA on the release branch. Fix
+   defects only on the release branch, and merge each fix back into `develop`.
+3. Place an annotated pre-release tag (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`)
+   on the tested release-branch commit. Internal builds never merge to `main`.
+
+**Player distribution.** Player distribution means an external playtest on
+`staging`, Early Access, or a store launch on `production`; an external
+playtest counts.
+
+1. Merge the release branch into `main` through a PR, and place the annotated
+   tag on the merge commit. A beta playtest may ship a pre-release version.
+2. Publish a GitHub Release that lists the included tickets.
+3. Back-merge `main` into `develop`, then move the tickets to `Released`.
+
+`main` receives only `release/*` and `hotfix/*` PRs, never other branches and
+never direct pushes. Until the first player distribution, `main` stays
+unchanged.
+
+**Hotfixes.**
+
+1. Branch `hotfix/vX.Y.Z` from `main` for a defect in a distributed build, and
+   bump PATCH.
+2. Merge it into `main` and tag it.
+3. Merge it back into `develop`, and into an open release branch if one exists.
 
 ## Representative trace and limitation
 
