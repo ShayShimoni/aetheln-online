@@ -125,6 +125,42 @@ Editor build completes, the Editor loads `/Game/Maps/StarterMap`, the map uses
 `AAethelnGameModeBase`, and the initial launch reports no bootstrap-blocking
 errors.
 
+### Optional private art
+
+Licensed and generated art lives in the private `aetheln-art` repository as
+the `AethelnArt` content plugin (TA-019 in
+[Architecture Decisions](architecture-decisions.md)). The project files never
+name it. Collaborators with access clone it anywhere, for example
+`D:\aetheln-art`. Before opening the editor, set the editor-only variable
+`UE_ADDITIONAL_PLUGIN_PATHS` in the PowerShell session that launches it:
+
+```powershell
+$env:UE_ADDITIONAL_PLUGIN_PATHS = (Resolve-Path '<art-clone>\Plugins').Path
+& (Join-Path $AethelnEngineRoot 'Engine\Binaries\Win64\UnrealEditor.exe') `
+  $AethelnProject /Game/Maps/StarterMap -log
+Remove-Item Env:UE_ADDITIONAL_PLUGIN_PATHS -ErrorAction SilentlyContinue
+```
+
+`$env:` changes only the current process and its children, and the last line
+clears it from the session once the editor has started.
+
+- Separate multiple plugin roots with `;` on Windows (`:` on Linux and macOS).
+- The content-only plugin needs no build.
+- If the art path is missing, `Resolve-Path` reports an error and the editor
+  launches without the art.
+- To browse `/AethelnArt/`, enable **Show Plugin Content** in the Content
+  Browser settings.
+- CI scripts and workflows never set the variable.
+
+**Never set `UE_ADDITIONAL_PLUGIN_PATHS` persistently** (user or machine
+environment), and especially not on the runner host. Editor-binary cook and
+automation jobs would then load private art, and package artifacts are
+uploaded from this public repository.
+
+Never reference `/AethelnArt/` assets from
+public `Content/`, `Config/`, `Source/`, `Plugins/`, or the `.uproject`; the
+`formatting-policy` check rejects it.
+
 ### Second-workspace reproduction record for Issue #81
 
 From a separate clean workspace or contributor machine, retain a local record
