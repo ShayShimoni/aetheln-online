@@ -577,7 +577,8 @@ requires. Entries are evidence records, not acceptance.
   Native compile raw artifact `engine-runner-compile-report` ID
   `11194815077`, API digest
   `sha256:9f95135080462bc98fd863de08325cb91b482ddf033c82119e9ec6c26b52b057`;
-  no native receipt was published because the gap branch ran. Gap record
+  no native receipt was published because `native-client-server-compile` was
+  not selected. Gap record
   `aetheln.ci-acceptance-shadow-gap/v2`, artifact ID `11194452443`, name
   `ci-acceptance-shadow-36924674482-1-8621a354d9b41a589a3ea56dd8c5b5e0601531cd4eac65045ff0b5362e84d467`, API digest
   `sha256:c0688c02657a7ae4c15db132e07ca385ef793085096f367ba520b6ba3811c47e`,
@@ -590,7 +591,9 @@ requires. Entries are evidence records, not acceptance.
   candidate itself; the two post-merge accepted-base observations (one
   supported-only, one unsupported-selection) are recorded below.
 - **Post-merge supported-only observation (pull request #194).**
-  Run `36955343907`, attempt `2`, `pull_request` by `ShayShimoni`
+  Run `36955343907`, attempt `2` (attempt 1 failed `quality-gates` on a
+  hosted-runner process-termination race unrelated to the shadow path),
+  `pull_request` by `ShayShimoni`
   (triggering actor `ShayShimoni`). Accepted base and controller revision
   `2a100a474b5bbfd8e4eb633cc550379efb6c721f` (the first develop merge after
   the Package 3C merge `5948549`, the merge of pull request #195); head
@@ -674,7 +677,8 @@ requires. Entries are evidence records, not acceptance.
   `ci-acceptance-shadow` job exercised the exact gap branch on the accepted
   base and stayed explicitly incomplete and non-granting.
 
-These observations are necessary but not sufficient for activation. Changing the
+In all three runs `ci-acceptance-authority` stayed skipped. These observations
+are necessary but not sufficient for activation. Changing the
 live workflow itself selects `controller-contract` and
 `controller-operational-proof`. `controller-contract` now has a truthful
 portable receipt producer, but Package 3C still has none for
