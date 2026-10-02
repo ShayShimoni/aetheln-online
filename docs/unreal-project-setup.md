@@ -134,8 +134,8 @@ can clone it beside the checkout they open, for example
 `<parent>/aetheln-art` next to `<parent>/aetheln-online`. The project loads it
 through `AdditionalPluginDirectories` (`../aetheln-art/Plugins`). A worktree
 in another parent folder does not see that clone. Without the clone, the
-project still opens, compiles, and passes CI. UBT logs one warning that the
-directory was not found. Never reference `/AethelnArt/` assets from public
+project still opens, compiles, and passes CI. Each UBT invocation logs a
+warning that the directory was not found. Never reference `/AethelnArt/` assets from public
 `Content/`, `Config/`, or `Source/`; the `formatting-policy` check rejects it.
 
 ### Second-workspace reproduction record for Issue #81

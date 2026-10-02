@@ -997,10 +997,11 @@ Every accepted decision records:
   it comes from the engine `Templates` folder, so it is UE EULA "Examples"
   that section 4(b) allows distributing, and it remains under the UE EULA, not
   a repository license.
-- **Context:** The repository became public on 2026-10-02. The Fab Standard
-  License allows sharing through a private repository with project
-  collaborators but forbids standalone redistribution, which a public
-  repository is. No Fab, Megascans, or paid content was ever committed, so no
+- **Context:** The repository became public on 2026-10-02. Per Epic's Fab
+  licensing documentation, the Fab Standard License allows sharing through a
+  private repository with project collaborators but forbids standalone
+  redistribution, which a public repository is. The Fab EULA text itself was
+  not retrievable during research, and this record is not legal advice. No Fab, Megascans, or paid content was ever committed, so no
   history rewrite is needed.
 - **Evidence:** Static engine-source reading at the pinned 5.8.1 revision
   (paths relative to the engine root). A missing directory is safe:
