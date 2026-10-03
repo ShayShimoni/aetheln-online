@@ -157,6 +157,19 @@ references, candidate or approved redirectors, duplicate IDs, invalid versions,
 editor-only runtime dependencies, and undeclared hard-reference exceptions
 fail validation.
 
+An editor-only runtime dependency is an Asset Registry `Game` package
+dependency, hard or soft, whose target is editor-only content: a `/Script`
+package flagged `PKG_EditorOnly` or `PKG_UncookedOnly` (Editor and
+UncookedOnly modules), a package whose on-disk Asset Registry record carries
+either flag, or a `/Script` package that is not loaded in the Editor and so
+cannot be proven runtime content. Editor-only (`NotGame`) references, such as
+a Blueprint's editor graph nodes, are recorded and allowed; a `/Game` target
+of one must still resolve to governed content. The Asset Registry does not
+record hard dependencies on `/Script/CoreUObject`, `/Script/Engine`,
+`/Script/BlueprintGraph`, or `/Script/UnrealEd`, so the scanner cannot observe
+those four. A guarded test snapshot carries no package flags and therefore
+reports no editor-only runtime dependencies.
+
 `Shared` packages are required in both targets. `ServerOnly` packages are
 required in the dedicated-server cook and prohibited from the client cook.
 `ClientOnly` packages are required in the client cook and prohibited from the

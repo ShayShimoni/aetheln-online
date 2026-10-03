@@ -1,9 +1,12 @@
 #include "AethelnPrimaryAssetDefinition.h"
 #include "AethelnContentValidationScanner.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 #include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -146,6 +149,40 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 			TEXT("/Game/Fixtures/DA_Server"),
 			TEXT("server_only"),
 			Rules));
+
+	// Editor-only (NotGame) references are allowed; runtime (Game) dependencies on editor-only content fail.
+	FAethelnObservedPackage Referencing;
+	Referencing.PackageName = TEXT("/Game/Fixtures/BP_Referencing");
+	Referencing.HardDependencies = { TEXT("/Game/Fixtures/EUW_RuntimeLinked"), TEXT("/Game/Fixtures/SM_Runtime") };
+	Referencing.SoftDependencies = { TEXT("/Script/Blutility") };
+	Referencing.EditorOnlyDependencies = { TEXT("/Game/Fixtures/EUW_EditorLinked"), TEXT("/Script/BlueprintGraph") };
+	const TSet<FString> EditorOnlyTargets = {
+		TEXT("/Game/Fixtures/EUW_RuntimeLinked"),
+		TEXT("/Script/Blutility"),
+		TEXT("/Game/Fixtures/EUW_EditorLinked"),
+		TEXT("/Script/BlueprintGraph")
+	};
+	const TArray<FString> RuntimeBoundaryFailures = FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(
+		Referencing,
+		[&EditorOnlyTargets](const FString& TargetPackage)
+		{
+			return EditorOnlyTargets.Contains(TargetPackage) ? FString(TEXT("fixture editor-only target")) : FString();
+		});
+	const FString JoinedRuntimeBoundaryFailures = FString::Join(RuntimeBoundaryFailures, TEXT("\n"));
+	TestEqual(TEXT("Only runtime dependencies on editor-only content fail"), RuntimeBoundaryFailures.Num(), 2);
+	TestTrue(TEXT("A hard runtime dependency on editor-only content fails"), JoinedRuntimeBoundaryFailures.Contains(TEXT("'/Game/Fixtures/EUW_RuntimeLinked'")));
+	TestTrue(TEXT("A soft runtime dependency on editor-only content fails"), JoinedRuntimeBoundaryFailures.Contains(TEXT("'/Script/Blutility'")));
+	TestFalse(TEXT("A runtime dependency on runtime content passes"), JoinedRuntimeBoundaryFailures.Contains(TEXT("SM_Runtime")));
+	TestFalse(TEXT("An editor-only reference to editor-only content is allowed"), JoinedRuntimeBoundaryFailures.Contains(TEXT("EUW_EditorLinked")));
+	TestFalse(TEXT("An editor-only reference to an editor module is allowed"), JoinedRuntimeBoundaryFailures.Contains(TEXT("BlueprintGraph")));
+
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	TestTrue(TEXT("The runtime Engine script package is runtime content"),
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/Engine")).IsEmpty());
+	TestFalse(TEXT("The Editor-module UnrealEd script package is editor-only content"),
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/UnrealEd")).IsEmpty());
+	TestFalse(TEXT("An unloaded script package fails closed"),
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/AethelnMissingModule")).IsEmpty());
 
 	const FString VerifiedSnapshot = TEXT("{\"schema_id\":\"aetheln.asset-registry-snapshot\",\"schema_version\":1,\"packages\":[{\"package_name\":\"/Game/Fixtures/SM_GovernedFixture\",\"repository_path\":\"Content/Fixtures/SM_GovernedFixture.uasset\",\"class_paths\":[\"/Script/Engine.StaticMesh\"],\"tags\":{},\"hard_dependencies\":[],\"soft_dependencies\":[],\"editor_only_dependencies\":[],\"content_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"is_redirector\":false}]}");
 	const FString VerifiedSnapshotPath = FPaths::CreateTempFilename(*FPaths::ProjectSavedDir(), TEXT("AethelnSnapshotBinding"), TEXT(".json"));
@@ -435,6 +472,14 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 	Equivalence.BooleanFacts.Remove(TEXT("presentation_equivalence_verified"));
 	Equivalence.BooleanFacts[TEXT("authoritative_geometry_present")] = false;
 	CheckFactStatus(TEXT("Missing authoritative geometry remains a failure"), TEXT("collision"), Equivalence, TEXT("failed"));
+
+	FAethelnContentCheckFacts RuntimeBoundary = MakeFact(TEXT("runtime_editor_boundary"));
+	RuntimeBoundary.IntegerFacts.Add(TEXT("editor_only_dependency_count"), 5);
+	CheckFactStatus(TEXT("Allowed editor-only references alone cannot prove the runtime boundary"), TEXT("map_world"), RuntimeBoundary, TEXT("evidence_unavailable"));
+	RuntimeBoundary.IntegerFacts.Add(TEXT("editor_only_runtime_dependency_count"), 0);
+	CheckFactStatus(TEXT("Allowed editor-only references keep the runtime boundary"), TEXT("map_world"), RuntimeBoundary, TEXT("passed"));
+	RuntimeBoundary.IntegerFacts[TEXT("editor_only_runtime_dependency_count")] = 1;
+	CheckFactStatus(TEXT("A runtime dependency on editor-only content fails the boundary"), TEXT("map_world"), RuntimeBoundary, TEXT("failed"));
 	FAethelnContentCheckFacts NotApplicable;
 	NotApplicable.CheckId = TEXT("material_instance_policy");
 	NotApplicable.Evidence = TEXT("not_applicable:object_is_not_material");

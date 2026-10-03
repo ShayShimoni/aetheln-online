@@ -27,22 +27,6 @@ namespace
 		return true;
 	}
 
-	bool IsLowerSha256(const FString& Value)
-	{
-		if (Value.Len() != 64)
-		{
-			return false;
-		}
-		for (const TCHAR Character : Value)
-		{
-			if (!((Character >= TEXT('0') && Character <= TEXT('9')) || (Character >= TEXT('a') && Character <= TEXT('f'))))
-			{
-				return false;
-			}
-		}
-		return true;
-	}
-
 	bool IsLowerGitRevision(const FString& Value)
 	{
 		if (Value.Len() != 40)
@@ -384,7 +368,7 @@ int32 UAethelnContentValidationCommandlet::Main(const FString& Params)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAethelnContentValidationReportOutputGuardTest,
-	"GameTests.AethelnContentValidation.ReportOutputGuard",
+	"Aetheln.Content.Validation.ReportOutputGuard",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAethelnContentValidationReportOutputGuardTest::RunTest(const FString& Parameters)

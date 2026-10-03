@@ -1,8 +1,27 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Templates/Function.h"
 
 class FJsonObject;
+class IAssetRegistry;
+
+/** Exact lowercase SHA-256 text check, defined once so a unity build cannot see two copies. */
+inline bool IsLowerSha256(const FString& Value)
+{
+	if (Value.Len() != 64)
+	{
+		return false;
+	}
+	for (const TCHAR Character : Value)
+	{
+		if (!((Character >= TEXT('0') && Character <= TEXT('9')) || (Character >= TEXT('a') && Character <= TEXT('f'))))
+		{
+			return false;
+		}
+	}
+	return true;
+}
 
 struct FAethelnBuildArtifactDescriptor
 {
@@ -52,7 +71,10 @@ struct FAethelnObservedPackage
 	TMap<FString, FString> Tags;
 	TArray<FString> HardDependencies;
 	TArray<FString> SoftDependencies;
+	/** Asset Registry NotGame (editor-only) references; recorded and allowed. */
 	TArray<FString> EditorOnlyDependencies;
+	/** Live-scan failures for runtime (Game) dependencies whose target is editor-only content. */
+	TArray<FString> EditorOnlyRuntimeDependencyFailures;
 	FString ContentSha256;
 	bool bRedirector = false;
 };
@@ -128,6 +150,14 @@ public:
 		const FString& TargetPackage,
 		const FString& TargetAudience,
 		const TArray<FAethelnSoftReferenceRule>& Rules);
+
+	/** Returns why a dependency target is editor-only content, or an empty string for runtime content. */
+	static FString ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage);
+
+	/** Applies the classifier to runtime (hard and soft Game) dependencies only; NotGame references are never failures. */
+	static TArray<FString> SelectEditorOnlyRuntimeDependencyFailures(
+		const FAethelnObservedPackage& Package,
+		TFunctionRef<FString(const FString& TargetPackage)> ClassifyTarget);
 
 	/** Derives the closed v2 status vocabulary from typed observed facts. */
 	static FAethelnContentFamilyResult EvaluateFamilyFacts(

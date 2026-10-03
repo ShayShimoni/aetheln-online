@@ -38,6 +38,9 @@
 #include "Serialization/JsonSerializer.h"
 #include "TargetReceipt.h"
 #include "UObject/GarbageCollection.h"
+#include "UObject/ObjectMacros.h"
+#include "UObject/Package.h"
+#include "UObject/UObjectGlobals.h"
 #include "WorldPartition/DataLayer/DataLayerManager.h"
 #include "WorldPartition/WorldPartition.h"
 
@@ -46,7 +49,9 @@
 #endif
 
 #if AETHELN_CONTENT_VALIDATION_WITH_OPENSSL
+THIRD_PARTY_INCLUDES_START
 #include <openssl/sha.h>
+THIRD_PARTY_INCLUDES_END
 #endif
 
 namespace
@@ -156,22 +161,6 @@ namespace
 		TMap<FString, TSet<FString>> HardAudienceRules;
 		TArray<FAethelnSoftReferenceRule> SoftReferenceRules;
 	};
-
-	bool IsLowerSha256(const FString& Value)
-	{
-		if (Value.Len() != 64)
-		{
-			return false;
-		}
-		for (const TCHAR Character : Value)
-		{
-			if (!((Character >= TEXT('0') && Character <= TEXT('9')) || (Character >= TEXT('a') && Character <= TEXT('f'))))
-			{
-				return false;
-			}
-		}
-		return true;
-	}
 
 	bool IsNonBlank(const FString& Value)
 	{
@@ -1133,7 +1122,7 @@ namespace
 				RecordFacts(OutFacts, TEXT("texture"), TEXT("mips"), Texture2D != nullptr, TextureEvidence,
 					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("width"), Width}, {TEXT("height"), Height}, {TEXT("mip_count"), Mips}});
 				RecordFacts(OutFacts, TEXT("texture"), TEXT("streaming"), true, TextureEvidence + TEXT(";quantitative_policy=TBD"),
-					{{TEXT("virtual_texture_streaming"), Texture->VirtualTextureStreaming}},
+					{{TEXT("virtual_texture_streaming"), Texture->VirtualTextureStreaming != 0}},
 					{{TEXT("streaming_method"), static_cast<int64>(Texture->GetTextureStreamingMethod())}}, {}, {}, true);
 			}
 
@@ -1262,8 +1251,11 @@ namespace
 				RecordFacts(OutFacts, TEXT("map_world"), TEXT("data_layers"), true, WorldEvidence + TEXT(";quantitative_policy=TBD"),
 					{{TEXT("data_layer_manager_present"), DataLayerManager != nullptr}}, {{TEXT("data_layer_count"), DataLayerCount}}, {}, {}, true);
 				RecordFacts(OutFacts, TEXT("map_world"), TEXT("pcg_authority"), true, WorldEvidence + TEXT(";quantitative_policy=TBD"), {}, {}, {}, {}, true);
+				// NotGame references are allowed observations; only runtime (Game) dependencies on editor-only content fail.
 				RecordFacts(OutFacts, TEXT("map_world"), TEXT("runtime_editor_boundary"), true, WorldEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("editor_only_dependency_count"), Package.EditorOnlyDependencies.Num()}});
+					{{TEXT("asset_data_valid"), bDataValid}},
+					{{TEXT("editor_only_runtime_dependency_count"), Package.EditorOnlyRuntimeDependencyFailures.Num()},
+					 {TEXT("editor_only_dependency_count"), Package.EditorOnlyDependencies.Num()}});
 				const bool bNavigationConfigPresent = WorldSettings != nullptr && WorldSettings->GetNavigationSystemConfig() != nullptr;
 				// World metadata does not bind navigation packages to client/server cook or reference evidence.
 				RecordFacts(OutFacts, TEXT("navigation"), TEXT("navigation_data_audience"), bNavigationApplicable,
@@ -1553,6 +1545,7 @@ bool FAethelnContentValidationScanner::ParseRegistrySnapshot(
 			OutFailure = Context + TEXT(" contains an invalid or duplicate package path, repository path, dependency classification, or content hash.");
 			return false;
 		}
+		// Snapshots carry no package-flag facts, so EditorOnlyRuntimeDependencyFailures stays empty in snapshot mode.
 		OutPackages.Add(MoveTemp(Package));
 	}
 	OutPackages.Sort([](const FAethelnObservedPackage& Left, const FAethelnObservedPackage& Right) { return Left.PackageName < Right.PackageName; });
@@ -1633,6 +1626,53 @@ bool FAethelnContentValidationScanner::IsSoftReferenceAllowed(
 		}
 	}
 	return false;
+}
+
+FString FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage)
+{
+	// UHT flags Editor-module script packages PKG_EditorOnly and UncookedOnly-module script packages
+	// PKG_UncookedOnly; a saved editor-only content package carries PKG_EditorOnly in its package flags.
+	if (TargetPackage.StartsWith(TEXT("/Script/")))
+	{
+		const UPackage* ScriptPackage = FindPackage(nullptr, *TargetPackage);
+		if (ScriptPackage == nullptr)
+		{
+			return TEXT("script package is not loaded in the Editor, so it cannot be proven runtime content");
+		}
+		return ScriptPackage->HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly)
+			? FString(TEXT("script package is flagged PKG_EditorOnly or PKG_UncookedOnly"))
+			: FString();
+	}
+	TArray<FAssetData> TargetAssets;
+	Registry.GetAssetsByPackageName(FName(*TargetPackage), TargetAssets, true, true);
+	for (const FAssetData& TargetAsset : TargetAssets)
+	{
+		if (TargetAsset.HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly))
+		{
+			return TEXT("package is flagged PKG_EditorOnly or PKG_UncookedOnly");
+		}
+	}
+	return FString();
+}
+
+TArray<FString> FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(
+	const FAethelnObservedPackage& Package,
+	TFunctionRef<FString(const FString& TargetPackage)> ClassifyTarget)
+{
+	TArray<FString> Failures;
+	for (const TArray<FString>* RuntimeDependencies : { &Package.HardDependencies, &Package.SoftDependencies })
+	{
+		for (const FString& Dependency : *RuntimeDependencies)
+		{
+			const FString Reason = ClassifyTarget(Dependency);
+			if (!Reason.IsEmpty())
+			{
+				Failures.Add(FString::Printf(TEXT("editor-only runtime dependency '%s' is prohibited: %s"), *Dependency, *Reason));
+			}
+		}
+	}
+	Failures.Sort();
+	return Failures;
 }
 
 FAethelnContentFamilyResult FAethelnContentValidationScanner::EvaluateFamilyFacts(
@@ -1839,11 +1879,12 @@ FAethelnContentFamilyResult FAethelnContentValidationScanner::EvaluateFamilyFact
 		}
 		if (FamilyId == TEXT("map_world") && Fact.CheckId == TEXT("runtime_editor_boundary"))
 		{
-			const int64* EditorOnlyDependencies = RequiredInt(TEXT("editor_only_dependency_count"));
-			if (EditorOnlyDependencies == nullptr) { return Unavailable(TEXT("editor_only_dependency_count")); }
-			return *EditorOnlyDependencies == 0
-				? Derived(TEXT("passed"), TEXT("editor_only_dependency_count=0"))
-				: Derived(TEXT("failed"), TEXT("editor_only_dependencies_present"));
+			// editor_only_dependency_count records allowed NotGame references and never decides this check.
+			const int64* EditorOnlyRuntimeDependencies = RequiredInt(TEXT("editor_only_runtime_dependency_count"));
+			if (EditorOnlyRuntimeDependencies == nullptr) { return Unavailable(TEXT("editor_only_runtime_dependency_count")); }
+			return *EditorOnlyRuntimeDependencies == 0
+				? Derived(TEXT("passed"), TEXT("editor_only_runtime_dependency_count=0"))
+				: Derived(TEXT("failed"), TEXT("editor_only_runtime_dependencies_present"));
 		}
 
 		if (FamilyId == TEXT("navigation") && Fact.CheckId == TEXT("navigation_data_audience"))
@@ -2051,6 +2092,9 @@ bool FAethelnContentValidationScanner::ScanLiveRegistry(TArray<FAethelnObservedP
 			OutFailure = FString::Printf(TEXT("Asset Registry dependency query failed for '%s'."), *Package.PackageName);
 			return false;
 		}
+		Package.EditorOnlyRuntimeDependencyFailures = SelectEditorOnlyRuntimeDependencyFailures(
+			Package,
+			[&Registry](const FString& TargetPackage) { return ClassifyEditorOnlyTarget(Registry, TargetPackage); });
 		OutPackages.Add(MoveTemp(Package));
 	}
 	OutPackages.Sort([](const FAethelnObservedPackage& Left, const FAethelnObservedPackage& Right) { return Left.PackageName < Right.PackageName; });
@@ -2209,10 +2253,7 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 			}
 		}
 
-		for (const FString& Dependency : Observed.EditorOnlyDependencies)
-		{
-			BrokenReferenceFailures.Add(FString::Printf(TEXT("editor-only runtime dependency '%s' is prohibited"), *Dependency));
-		}
+		BrokenReferenceFailures.Append(Observed.EditorOnlyRuntimeDependencyFailures);
 		auto ResolveTarget = [&IntakeByPath, &BrokenReferenceFailures](const FString& Dependency) -> const FIntakeAsset*
 		{
 			if (!Dependency.StartsWith(TEXT("/Game/")))
@@ -2227,6 +2268,11 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 			}
 			return *Target;
 		};
+		// NotGame (editor-only) references are allowed, but a /Game target must still resolve to governed content.
+		for (const FString& Dependency : Observed.EditorOnlyDependencies)
+		{
+			ResolveTarget(Dependency);
+		}
 		for (const FString& Dependency : Observed.HardDependencies)
 		{
 			const FIntakeAsset* Target = ResolveTarget(Dependency);
