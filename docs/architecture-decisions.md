@@ -828,14 +828,22 @@ Every accepted decision records:
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
   live portable/controller-contract/controller-operational-proof/native/unreal/visual subset, the aggregate is not called. The workflow
-  still validates the selector identity and emits the exact selected
-  unsupported set as a green `producer_contract_incomplete` record with
+  still validates the selector identity and the direct bindings of every
+  selected live producer, so a failed or skipped required receipt remains red
+  rather than hiding behind the gap, and emits the exact selected
+  unsupported set as a green `producer_contract_incomplete` record
+  (`aetheln.ci-acceptance-shadow-gap/v3`, carrying the validated
+  `liveBindings`) with
   `complete=false`, `shadow=true`, `authoritative=false`, and
   `grantsAcceptance=false`. The green result prevents a known incomplete shadow
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `clean-package-provenance-smoke` and
-  `content-reference-validation` remain unsupported live obligations.
+  `content-reference-validation` remain unsupported live obligations. A
+  publisher-contract test ties the workflow live list, the context builder
+  live list and the aggregate unsupported list to the checks the publishers can
+  prove, so shipping a producer fails that test until all three lists move
+  together.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate
