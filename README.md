@@ -250,11 +250,12 @@ Use `Blocked` only when work cannot progress, and populate `Blocked Reason`.
 Priorities range from `P0 - Must` to `P3 - Later`; `Target Version` records
 the intended release. The [delivery workflow](docs/delivery-workflow.md)
 defines the evidence for each status and issue closure. Pull requests should
-describe the change and exact verification. For the normal `develop`
-integration path, reference the issue as plain `#<issue-number>` and link the
-PR through the issue's Development sidebar; GitHub does not apply closing
-keywords to non-default-branch PRs. Reserve `Closes #<issue-number>` for an
-evidence-ready merge into the default `main` branch.
+describe the change and exact verification. `develop` is the default branch,
+and GitHub closes an issue when a PR linked to it by a closing keyword or by a
+manual Development-sidebar link merges there. Reference the issue only as
+`Refs #<issue-number>`, do not add a Development link, and keep closing
+keywords out of PR bodies and commit messages, so the issue stays open until
+QA.
 
 ## Current Status
 
