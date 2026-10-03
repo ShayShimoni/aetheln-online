@@ -13,11 +13,15 @@ param(
 # any violation and 0 when the board is clean.
 #
 # Snapshot shape: { items: [{ number, state, status, release, blockedReason,
-# body }], pullRequests: [{ number, title, isDraft, linkedIssues: [n] }] }.
-# A pull request links an issue through closingIssuesReferences or a `#<n>`
-# in its title; develop PRs link through the Development sidebar, which the
-# API does not expose as closing references, so the title is the usual link.
-# Draft pull requests count as open. Only this repository's issues are read.
+# body }], pullRequests: [{ number, title, isDraft, headRefName, baseRefName,
+# linkedIssues: [n] }] }. A pull request links an issue through
+# closingIssuesReferences or a `#<n>` in its title. PRs reference their issue
+# with a body `Refs #<n>` line and no closing keyword or Development link, so
+# the title is the usual link; a carried fix's `Refs` line is not a link.
+# Draft pull requests count as open, and `draft-pr-open` reports the PR's own
+# number. Release, hotfix, and `main` into `develop` back-merge PRs ship work
+# already tracked elsewhere, so they are outside the Code Review match.
+# Only this repository's issues are read.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -48,7 +52,7 @@ function Invoke-GhGraphQl {
 function Get-LiveSnapshot {
 	# Queries contain no string literals so native argument passing stays safe.
 	$ItemQuery = 'query($id: ID!, $after: String) { node(id: $id) { ... on ProjectV2 { items(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { content { __typename ... on Issue { number state body repository { nameWithOwner } } } fieldValues(first: 30) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } } ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } } } } } } } } }'
-	$PullQuery = 'query($owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { number title isDraft closingIssuesReferences(first: 20) { nodes { number } } } } } }'
+	$PullQuery = 'query($owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { number title isDraft headRefName baseRefName closingIssuesReferences(first: 20) { nodes { number } } } } } }'
 
 	$Items = New-Object Collections.Generic.List[object]
 	$Cursor = $null
@@ -78,6 +82,7 @@ function Get-LiveSnapshot {
 		foreach ($Node in $Page.nodes) {
 			$PullRequests.Add([pscustomobject][ordered]@{
 				number = $Node.number; title = $Node.title; isDraft = $Node.isDraft
+				headRefName = $Node.headRefName; baseRefName = $Node.baseRefName
 				linkedIssues = @($Node.closingIssuesReferences.nodes | ForEach-Object { $_.number })
 			})
 		}
@@ -122,16 +127,30 @@ function Get-BoardViolation {
 		if ($Status -ceq 'Blocked' -and [string]::IsNullOrWhiteSpace((Get-OptionalText $Item 'blockedReason'))) { Add-Violation -Rule 'blocked-reason-empty' -Issue $Number -Detail 'is Blocked without a Blocked Reason' }
 	}
 
+	$PullsByIssue = @{}
 	foreach ($Pull in @($Snapshot.pullRequests)) {
+		if ($Pull.isDraft) { Add-Violation -Rule 'draft-pr-open' -Issue ([int] $Pull.number) -Detail 'is an open draft PR; open a PR only after developer verification' }
+		$Head = Get-OptionalText $Pull 'headRefName'
+		if ($Head -cmatch '^(release|hotfix)/' -or ($Head -ceq 'main' -and (Get-OptionalText $Pull 'baseRefName') -ceq 'develop')) { continue }
 		$Linked = @(@($Pull.linkedIssues) + @([regex]::Matches((Get-OptionalText $Pull 'title'), '#(\d+)') | ForEach-Object { $_.Groups[1].Value }) |
 			Where-Object { $null -ne $_ } | ForEach-Object { [int] $_ } | Sort-Object -Unique)
-		$Draft = if ($Pull.isDraft) { 'draft ' } else { '' }
 		foreach ($Number in $Linked) {
+			if (-not $PullsByIssue.ContainsKey($Number)) { $PullsByIssue[$Number] = @() }
+			$PullsByIssue[$Number] += [int] $Pull.number
 			$Status = if ($ByNumber.ContainsKey($Number)) { Get-OptionalText $ByNumber[$Number] 'status' } else { '(not on board)' }
-			if ($Status -cnotin @('Code Review', 'Blocked')) {
+			if ($Status -cne 'Code Review') {
 				$StatusLabel = if ($Status) { $Status } else { '(none)' }
-				Add-Violation -Rule 'open-pr-issue-status' -Issue $Number -Detail "has open ${Draft}PR #$($Pull.number) but is in '$StatusLabel', not Code Review or Blocked"
+				Add-Violation -Rule 'open-pr-issue-status' -Issue $Number -Detail "has open PR #$($Pull.number) but is in '$StatusLabel', not Code Review"
 			}
+		}
+	}
+	foreach ($Number in $PullsByIssue.Keys) {
+		$Pulls = $PullsByIssue[$Number]
+		if ($Pulls.Count -gt 1) { Add-Violation -Rule 'duplicate-pr-issue' -Issue $Number -Detail "is linked by open PRs #$($Pulls -join ', #'); keep one open PR per issue" }
+	}
+	foreach ($Item in @($Snapshot.items)) {
+		if ((Get-OptionalText $Item 'status') -ceq 'Code Review' -and -not $PullsByIssue.ContainsKey([int] $Item.number)) {
+			Add-Violation -Rule 'code-review-without-pr' -Issue ([int] $Item.number) -Detail 'is in Code Review without an open PR linking it'
 		}
 	}
 	return $Violations.ToArray()

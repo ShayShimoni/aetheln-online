@@ -28,11 +28,20 @@ function New-CleanSnapshot {
 		[ordered]@{ number = 6; state = 'CLOSED'; status = 'Released'; release = 'v1.0.0'; blockedReason = ''; body = '- [x] done' },
 		[ordered]@{ number = 7; state = 'OPEN'; status = 'In Progress'; release = ''; blockedReason = ''; body = '' }
 	)
+	# PR 100 is the only ordinary PR. 101-103 are release, hotfix, and
+	# back-merge PRs whose linked issues sit outside Code Review, so a green
+	# clean run proves those PRs are excluded from the Code Review match.
 	$PullRequests = @(
-		[ordered]@{ number = 100; title = 'feat(ci): #2 add a check'; isDraft = $false; linkedIssues = @() },
-		[ordered]@{ number = 101; title = 'fix(ci): blocked work'; isDraft = $true; linkedIssues = @(3) }
+		[ordered]@{ number = 100; title = 'feat(ci): #2 add a check'; isDraft = $false; headRefName = 'feature/2-add-check'; baseRefName = 'develop'; linkedIssues = @() },
+		[ordered]@{ number = 101; title = 'chore(release): #5 v1.0.0'; isDraft = $false; headRefName = 'release/v1.0.0'; baseRefName = 'main'; linkedIssues = @() },
+		[ordered]@{ number = 102; title = 'fix(net): #6 merge hotfix back'; isDraft = $false; headRefName = 'hotfix/v1.0.1'; baseRefName = 'develop'; linkedIssues = @() },
+		[ordered]@{ number = 103; title = 'chore(release): back-merge #4 v1.0.0'; isDraft = $false; headRefName = 'main'; baseRefName = 'develop'; linkedIssues = @(2) }
 	)
 	return [ordered]@{ items = $Items; pullRequests = $PullRequests }
+}
+
+function New-Pull([int] $Number, [string] $Title, [string] $Head, [int[]] $Linked = @()) {
+	return [ordered]@{ number = $Number; title = $Title; isDraft = $false; headRefName = $Head; baseRefName = 'develop'; linkedIssues = $Linked }
 }
 
 function Invoke-Checker {
@@ -61,9 +70,22 @@ try {
 	# that rule on that issue.
 	$Cases = @(
 		@{ Rule = 'done-unchecked-acceptance'; Issue = 4; Mutate = { param($S) $S.items[3].body = "- [x] one`n- [ ] two" } },
-		@{ Rule = 'open-pr-issue-status'; Issue = 7; Mutate = { param($S) $S.pullRequests[0].title = 'feat(ci): #7 add a check' } },
-		@{ Rule = 'open-pr-issue-status'; Issue = 1; Mutate = { param($S) $S.pullRequests[1].linkedIssues = @(1) } },
-		@{ Rule = 'open-pr-issue-status'; Issue = 99; Mutate = { param($S) $S.pullRequests[0].title = 'feat(ci): #99 off-board issue' } },
+		@{ Rule = 'open-pr-issue-status'; Issue = 7; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'feat(ci): #7 add a check' 'feature/7-add-check') } },
+		@{ Rule = 'open-pr-issue-status'; Issue = 1; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'fix(ci): no title reference' 'fix/1-no-ref' @(1)) } },
+		@{ Rule = 'open-pr-issue-status'; Issue = 99; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'feat(ci): #99 off-board issue' 'feature/99-off-board') } },
+		# A Blocked issue has no open PR of its own; only carried fixes sit in Blocked.
+		@{ Rule = 'open-pr-issue-status'; Issue = 3; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'fix(ci): #3 blocked work' 'fix/3-blocked-work') } },
+		# Without its release head the release PR is ordinary, so its Release Candidate issue is out of place.
+		@{ Rule = 'open-pr-issue-status'; Issue = 5; Mutate = { param($S) $S.pullRequests[1].headRefName = 'feature/5-not-a-release' } },
+		@{ Rule = 'code-review-without-pr'; Issue = 2; Mutate = { param($S) $S.pullRequests[0].title = 'feat(ci): add a check' } },
+		# A release head does not count as the Code Review issue's PR.
+		@{ Rule = 'code-review-without-pr'; Issue = 2; Mutate = { param($S) $S.pullRequests[0].headRefName = 'release/v1.1.0' } },
+		@{ Rule = 'duplicate-pr-issue'; Issue = 2; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'fix(ci): #2 second attempt' 'fix/2-second-attempt') } },
+		# Head main is a back-merge only into develop.
+		@{ Rule = 'duplicate-pr-issue'; Issue = 2; Mutate = { param($S) $S.pullRequests[3].baseRefName = 'main'; $S.pullRequests[3].title = 'chore(release): back-merge v1.0.0' } },
+		# A draft is reported by its PR number, on any base, and still links its issue.
+		@{ Rule = 'draft-pr-open'; Issue = 100; Mutate = { param($S) $S.pullRequests[0].isDraft = $true } },
+		@{ Rule = 'draft-pr-open'; Issue = 101; Mutate = { param($S) $S.pullRequests[1].isDraft = $true } },
 		@{ Rule = 'closed-issue-status'; Issue = 7; Mutate = { param($S) $S.items[6].state = 'CLOSED' } },
 		@{ Rule = 'open-issue-final-status'; Issue = 4; Mutate = { param($S) $S.items[3].state = 'OPEN' } },
 		@{ Rule = 'open-issue-final-status'; Issue = 6; Mutate = { param($S) $S.items[5].state = 'OPEN' } },
