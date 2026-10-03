@@ -697,6 +697,20 @@ Every accepted decision records:
   equality and exact ordered merge parents. The event base remains an independent
   pre-checkout workflow ancestry witness; the candidate selector does not need
   that separate witness in its live context.
+  Receipt publishers and the shadow aggregate bind their base to the same
+  verified first parent through the selector's `accepted_base_sha` output,
+  never the raw event base. GitHub does not refresh the event base when the
+  target branch moves, so that binding failed every pull request behind its
+  base with `selector_identity_mismatch`, on every rerun. The selector diffs
+  the first parent against the tested merge, not the head, so a head behind its
+  target is not charged with reversed upstream changes. Because the selector is
+  accepted-base code, that diff applies only to runs whose accepted base
+  already contains it. A conservative fallback report, for example after
+  `path_unclassified`, carries the same accepted-controller blob OID and
+  SHA-256 as a classified report. Both come from the trusted control
+  repository, never from the candidate. The workflow's identity check
+  therefore accepts it, and the all-selected selection fails safe instead of
+  failing the selector job.
   The selector remains non-authoritative and does not alter legacy CI gates.
 - **Historical Package 3A amendment:** Pin every approved remote action to its reviewed
   full commit SHA, implement and fixture-test exact per-job shadow receipt and
