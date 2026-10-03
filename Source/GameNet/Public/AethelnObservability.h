@@ -439,7 +439,8 @@ struct GAMENET_API FAethelnObservabilityEvent
 		const bool bSubjectMatchesCategory = Category == EAethelnObservabilityCategory::Correction
 			? IsCorrectableSubject(SubjectCategory)
 			: (Category == EAethelnObservabilityCategory::Rejection || SubjectCategory == Category);
-		return SchemaId == AethelnObservability::SchemaId
+		// FString == ignores case, so schema identities compare case-sensitively.
+		return SchemaId.Equals(AethelnObservability::SchemaId, ESearchCase::CaseSensitive)
 			&& SchemaVersion == AethelnObservability::SchemaVersion
 			&& IsKnown(Category)
 			&& IsKnown(SubjectCategory)
@@ -448,7 +449,7 @@ struct GAMENET_API FAethelnObservabilityEvent
 			&& IsKnown(DiagnosticCode)
 			&& Correlation.IsValidForEvent(Category, SubjectCategory)
 			&& Build.HasSafeIdentifiers()
-			&& NetworkProfile.SchemaId == AethelnNetworkSpike::NetworkProfileSchemaId
+			&& NetworkProfile.SchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)
 			&& NetworkProfile.SchemaVersion == AethelnNetworkSpike::NetworkProfileSchemaVersion
 			&& !NetworkProfile.ProfileId.IsEmpty()
 			&& AethelnObservability::IsSafeIdentifier(NetworkProfile.ProfileId);

@@ -12,8 +12,9 @@ if (-not $RepositoryRoot) {
 
 $ContractPath = Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservability.h'
 $SubsystemPath = Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservabilitySubsystem.h'
+$SubsystemImplementationPath = Join-Path $RepositoryRoot 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp'
 $OperatorPath = Join-Path $RepositoryRoot 'docs\observability-and-crash-diagnostics.md'
-foreach ($Path in @($ContractPath, $SubsystemPath, $OperatorPath)) {
+foreach ($Path in @($ContractPath, $SubsystemPath, $SubsystemImplementationPath, $OperatorPath)) {
 	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
 		throw "Required observability contract '$Path' is missing."
 	}
@@ -21,6 +22,7 @@ foreach ($Path in @($ContractPath, $SubsystemPath, $OperatorPath)) {
 
 $Contract = Get-Content -LiteralPath $ContractPath -Raw
 $Subsystem = Get-Content -LiteralPath $SubsystemPath -Raw
+$SubsystemImplementation = Get-Content -LiteralPath $SubsystemImplementationPath -Raw
 $Operator = Get-Content -LiteralPath $OperatorPath -Raw
 
 function Assert-ContainsLiteral {
@@ -63,7 +65,15 @@ foreach ($Forbidden in @('TMap<', 'Metadata', 'Payload', 'CommandBody', 'Account
 	}
 }
 
-foreach ($Required in @('MaxIdentifierLength', 'MaxPendingDispatchItems', 'IsSafeIdentifier', 'IsValidForEvent', 'SchemaId == AethelnObservability::SchemaId', 'SchemaVersion == AethelnObservability::SchemaVersion', 'Sequence != 0', 'IsBounded()', 'MakePublicCopy()', 'FAethelnNoOpObservabilitySink', 'FAethelnStructuredLogObservabilitySink', 'FAethelnInMemoryObservabilitySink', 'IAethelnRestrictedAuditSink', 'FAethelnBoundedRestrictedAuditSink', 'FDispatchState', 'WaitForIdleForTests', 'PawnCount', 'ControllerCount', 'PlayerStateCount', 'OtherActorCount')) {
+# Unreal FString == and != compare case-insensitively, so schema identities must
+# use explicit case-sensitive comparisons to reject case-only variants.
+foreach ($SchemaSource in @($Contract, $SubsystemImplementation)) {
+	$CaseInsensitiveSchemaComparison = [regex]::Match($SchemaSource, 'SchemaId\s*[!=]=')
+	if ($CaseInsensitiveSchemaComparison.Success) {
+		throw "Schema identity uses case-insensitive comparison '$($CaseInsensitiveSchemaComparison.Value)'; use Equals with ESearchCase::CaseSensitive."
+	}
+}
+foreach ($Required in @('MaxIdentifierLength', 'MaxPendingDispatchItems', 'IsSafeIdentifier', 'IsValidForEvent', 'SchemaId.Equals(AethelnObservability::SchemaId, ESearchCase::CaseSensitive)', 'NetworkProfile.SchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)', 'SchemaVersion == AethelnObservability::SchemaVersion', 'Sequence != 0', 'IsBounded()', 'MakePublicCopy()', 'FAethelnNoOpObservabilitySink', 'FAethelnStructuredLogObservabilitySink', 'FAethelnInMemoryObservabilitySink', 'IAethelnRestrictedAuditSink', 'FAethelnBoundedRestrictedAuditSink', 'FDispatchState', 'WaitForIdleForTests', 'PawnCount', 'ControllerCount', 'PlayerStateCount', 'OtherActorCount')) {
 	Assert-ContainsLiteral -Text $Contract -Literal $Required -Message "Required bounded/failure-safe contract '$Required' is missing."
 }
 Assert-ContainsLiteral -Text $Subsystem -Literal 'UGameInstanceSubsystem' -Message 'Observability service must remain GameInstance-owned.'
