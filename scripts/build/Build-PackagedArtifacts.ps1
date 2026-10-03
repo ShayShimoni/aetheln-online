@@ -20,6 +20,10 @@ host-tools boundary (-HostToolsBoundary Prebuilt -EngineRevision <sha>) skips
 rebuilding the host editor/engine tools only after fail-closed proof that they
 belong to the exact clean pinned engine revision; the client and server
 project targets always build with -clean.
+.PARAMETER BuildNumber
+Optional release build number, accepted only with -Stage Provenance and
+forwarded to Write-BuildProvenance.ps1, which then adds a release block to the
+provenance. Every other stage rejects it; without it nothing changes.
 .EXAMPLE
 $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
@@ -53,7 +57,8 @@ param(
 	[string] $EngineRevision,
 	[string] $HostToolsAttestationPath,
 	[ValidatePattern('^$|^[^\x00-\x1f]{1,512}$')] [string] $ProvisioningEvidence,
-	[ValidatePattern('^$|^[^\\/:*?"<>|\x00-\x1f]{1,128}$')] [string] $RunnerName
+	[ValidatePattern('^$|^[^\\/:*?"<>|\x00-\x1f]{1,128}$')] [string] $RunnerName,
+	[string] $BuildNumber
 )
 
 Set-StrictMode -Version Latest
@@ -683,6 +688,14 @@ function Resolve-RecordDirectory([string] $Root, [string] $Relative, [string] $L
 	Resolve-RequiredPath -Name $Label -Path (Join-Path $Root $Relative) -PathType 'Container'
 }
 
+# Release build number (issue #226): a Provenance-stage input only, checked before
+# any path, repository, or output work so a rejected value leaves nothing behind.
+$ProvenanceBuildNumberArguments = @{}
+if ($PSBoundParameters.ContainsKey('BuildNumber')) {
+	if ($Stage -ne 'Provenance') { throw "build_number_stage_invalid: -BuildNumber is only accepted with -Stage Provenance, not '$Stage'." }
+	if ($BuildNumber -cnotmatch '^[1-9][0-9]{0,9}\z') { throw 'build_number_invalid: -BuildNumber must be a positive integer of at most ten digits without a leading zero.' }
+	$ProvenanceBuildNumberArguments['BuildNumber'] = $BuildNumber
+}
 $ResolvedProject = Resolve-RequiredPath -Name 'ProjectPath' -Path $ProjectPath -PathType 'Leaf'
 $ProjectRoot = Split-Path -Parent $ResolvedProject
 Assert-CleanRepository $ProjectRoot
@@ -838,7 +851,7 @@ try {
 			$CookedInventoryDirectory = Resolve-RecordDirectory -Root $ResolvedServerStage -Relative ([string] $ServerRecord.cookedInventoryDirectory) -Label 'Cooked inventory directory'
 			Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyReportDirectory -CookedInventoryDirectory $CookedInventoryDirectory }
 			$UatArgumentsJson = [ordered]@{ client = @($ClientRecord.clientArguments); server = @($ServerRecord.serverArguments); dependencyRegistryDump = @($ServerRecord.dependencyRegistryDumpArguments); cookedInventoryDump = @($ServerRecord.cookedInventoryDumpArguments) } | ConvertTo-Json -Compress
-			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson }
+			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson @ProvenanceBuildNumberArguments }
 			Write-Output "Provenance validation stage completed under '$ResolvedArchive'."
 		}
 		default {

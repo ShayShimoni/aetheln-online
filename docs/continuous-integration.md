@@ -1062,6 +1062,15 @@ powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
   -PhaseTimeoutMinutes 30
 ```
 
+`ValidateProvenance` also accepts an optional `-BuildNumber` (a positive
+integer of at most ten digits). The supervisor forwards it to the supervised
+child, which hands it to `Build-PackagedArtifacts.ps1 -Stage Provenance` so the
+provenance gains a `release` block (see
+[Packaged Builds](packaged-builds.md)). Every other mode rejects it with
+`build_number_mode_invalid`, an invalid value fails as `build_number_invalid`
+before any phase work, and the number never enters the gate report. No workflow
+passes it today, so the scheduled phases are unchanged.
+
 ### Compile Policy
 
 `Compile` is the routine pull-request policy. It reports
