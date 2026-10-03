@@ -67,6 +67,29 @@ function Invoke-Cut {
 	return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = ($Output -join "`n"); Lines = @($Output | Where-Object { $_ -cmatch '^release_[a-z_]+ ' }) }
 }
 
+# A child process reports what `-File` reports: the real exit code and the stderr
+# an in-process call does not capture.
+function Invoke-CutProcess {
+	param([string[]] $ArgumentList, [string] $Script = $Cutter)
+	$Previous = $ErrorActionPreference
+	$ErrorActionPreference = 'Continue'
+	try {
+		$Output = @(& (Get-Process -Id $PID).Path -NoProfile -NonInteractive -File $Script @ArgumentList 2>&1 | ForEach-Object { "$_" })
+		$ExitCode = $LASTEXITCODE
+	}
+	finally {
+		$ErrorActionPreference = $Previous
+	}
+	return [pscustomobject]@{ ExitCode = $ExitCode; Text = ($Output -join "`n"); Lines = @($Output | Where-Object { $_ -cmatch '^release_[a-z_]+ ' }) }
+}
+
+function Assert-ExitTwo {
+	param($Result, [string] $Reason, [string] $Name)
+	Assert-True ($Result.ExitCode -eq 2 -and $Result.Lines.Count -eq 0) "$Name must exit 2 without a violation line. Exit: $($Result.ExitCode). Output: $($Result.Text)"
+	Assert-True ($Result.Text -match "Release cut error \[$Reason\]: ") "$Name must print the fixed reason [$Reason]. Output: $($Result.Text)"
+	Assert-True ($Result.Text -notmatch '(?<![A-Za-z0-9])[A-Za-z]:[\\/]') "$Name must print no drive-letter path in stdout or stderr. Output: $($Result.Text)"
+}
+
 function Invoke-Verify {
 	param($Snapshot, [string] $Name, [hashtable] $Parameters = @{}, [switch] $Json)
 	$Path = Join-Path $FixtureRoot ($Name + '.json')
@@ -145,6 +168,11 @@ try {
 		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "  projectversion = 1.0.0`n" } },
 		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.BuildNumber = '70000' } },
 		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.BuildNumber = 'abc' } },
+		# The numeric form must have exactly four parts, so the build number is digits only.
+		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.BuildNumber = '4.1' } },
+		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.BuildNumber = '1.2.3' } },
+		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.BuildNumber = '0412' } },
+		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.BuildNumber = '12345678901' } },
 		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.Version = '70000.0.0' } },
 		@{ Code = 'release_version_consumer_rejects'; Subject = 'build-identity'; Mutate = { $Parameters.Version = $Long } }
 	)
@@ -219,10 +247,37 @@ try {
 		Assert-True ($MultiResult.ExitCode -eq 1 -and $MultiResult.Text -match 'Release cut Verify: 4 violation\(s\)\.') "Every violation must be counted. Output: $($MultiResult.Text)"
 	}
 
-	# An environment error is exit 2, not a violation.
+	# An environment error is exit 2, not a violation, and prints a fixed reason with no local path.
 	Test-Case 'environment error' {
-		$Missing = Invoke-Cut @{ Stage = 'Verify'; Version = '1.0.0-alpha.1'; FixturePath = (Join-Path $FixtureRoot 'does-not-exist.json') }
-		Assert-True ($Missing.ExitCode -eq 2 -and $Missing.Lines.Count -eq 0) "A missing fixture must exit 2 without a violation line. Exit: $($Missing.ExitCode)"
+		$Missing = Invoke-CutProcess @('-Stage', 'Verify', '-Version', '1.0.0-alpha.1', '-FixturePath', (Join-Path $FixtureRoot 'does-not-exist.json'))
+		Assert-ExitTwo -Result $Missing -Reason 'environment' -Name 'A missing fixture'
+		$Garbled = Join-Path $FixtureRoot 'garbled.json'
+		[IO.File]::WriteAllText($Garbled, '{ not json')
+		Assert-ExitTwo -Result (Invoke-CutProcess @('-Stage', 'Verify', '-Version', '1.0.0-alpha.1', '-FixturePath', $Garbled)) -Reason 'environment' -Name 'An unparsable fixture'
+	}
+
+	# A failing git call must not echo `-C <repository root>`. The script is copied
+	# into a folder that is not a repository, so `ls-remote` fails without a network.
+	Test-Case 'environment error from git' {
+		$Copy = Join-Path $FixtureRoot 'not-a-repository/scripts/delivery'
+		New-Item -ItemType Directory -Path $Copy -Force | Out-Null
+		Copy-Item -LiteralPath $Cutter -Destination $Copy
+		$PreviousCeiling = $env:GIT_CEILING_DIRECTORIES
+		$env:GIT_CEILING_DIRECTORIES = $FixtureRoot
+		try { $Failed = Invoke-CutProcess @('-Stage', 'Verify', '-Version', '1.0.0-alpha.1') -Script (Join-Path $Copy 'Invoke-ReleaseCut.ps1') }
+		finally { $env:GIT_CEILING_DIRECTORIES = $PreviousCeiling }
+		Assert-ExitTwo -Result $Failed -Reason 'environment' -Name 'A failing git call'
+	}
+
+	# Usage errors exit 2 under `-File`, not the exit 1 that is reserved for violations.
+	Test-Case 'usage errors' {
+		$Fixture = Join-Path $FixtureRoot 'usage.json'
+		[IO.File]::WriteAllText($Fixture, (ConvertTo-Json -InputObject (New-CleanSnapshot) -Depth 8))
+		Assert-ExitTwo -Result (Invoke-CutProcess @('-Stage', 'Nope', '-Version', '1.0.0-alpha.1', '-FixturePath', $Fixture)) -Reason 'usage' -Name 'A bad -Stage'
+		Assert-ExitTwo -Result (Invoke-CutProcess @('-Stage', 'verify', '-Version', '1.0.0-alpha.1', '-FixturePath', $Fixture)) -Reason 'usage' -Name 'A -Stage in the wrong case'
+		Assert-ExitTwo -Result (Invoke-CutProcess @('-Stage', 'Verify', '-FixturePath', $Fixture)) -Reason 'usage' -Name 'A missing -Version'
+		Assert-ExitTwo -Result (Invoke-CutProcess @('-Stage', 'Verify', '-Version', '1.0.0-alpha.1', '-FixturePath', $Fixture, '-Bogus', 'x')) -Reason 'usage' -Name 'An unknown parameter'
+		Assert-ExitTwo -Result (Invoke-CutProcess @('-Stage', 'VerifyPackage', '-Version', '1.0.0-alpha.1')) -Reason 'usage' -Name 'VerifyPackage without its inputs'
 	}
 
 	# VerifyPackage: logs and provenance only.
@@ -264,9 +319,9 @@ try {
 		}
 	}
 
-	# The engine default 1.0.0 in both logs means ProjectVersion never reached the package.
+	# The engine default 1.0.0.0 (Engine/Config/BaseGame.ini) in both logs means ProjectVersion never reached the package.
 	Test-Case 'package default version' {
-		$Default = New-NetVersionLog -Version '1.0.0'
+		$Default = New-NetVersionLog -Version '1.0.0.0'
 		$Result = Invoke-VerifyPackage -Name 'package-default' -ClientLog $Default -ServerLog $Default -Provenance $GoodProvenance
 		Assert-True ($Result.ExitCode -eq 1 -and $Result.Lines.Count -eq 2 -and $Result.Lines[0].StartsWith('release_package_version_mismatch client ') -and $Result.Lines[1].StartsWith('release_package_version_mismatch server ')) "Both logs must fail when they show a version other than the release. Output: $($Result.Text)"
 	}
@@ -290,8 +345,22 @@ try {
 		Assert-True ($Json.ExitCode -eq 1 -and $Parsed.stage -ceq 'VerifyPackage' -and $Parsed.count -eq 1 -and $Parsed.violations[0].code -ceq 'release_package_version_mismatch') '-Json must emit the VerifyPackage violation.'
 	}
 	Test-Case 'package environment error' {
-		$Missing = Invoke-Cut @{ Stage = 'VerifyPackage'; Version = '1.0.0-alpha.1'; ClientLogPath = (Join-Path $FixtureRoot 'absent-client.log'); ServerLogPath = (Join-Path $FixtureRoot 'absent-server.log'); ProvenancePath = (Join-Path $FixtureRoot 'absent.json'); ReleaseRevision = $CutRevision }
-		Assert-True ($Missing.ExitCode -eq 2 -and $Missing.Lines.Count -eq 0) "A missing log must exit 2 without a violation line. Exit: $($Missing.ExitCode)"
+		$Missing = Invoke-CutProcess @('-Stage', 'VerifyPackage', '-Version', '1.0.0-alpha.1', '-ClientLogPath', (Join-Path $FixtureRoot 'absent-client.log'), '-ServerLogPath', (Join-Path $FixtureRoot 'absent-server.log'), '-ProvenancePath', (Join-Path $FixtureRoot 'absent.json'), '-ReleaseRevision', $CutRevision)
+		Assert-ExitTwo -Result $Missing -Reason 'environment' -Name 'A missing log'
+		$Present = Join-Path $FixtureRoot 'present.log'
+		[IO.File]::WriteAllText($Present, $GoodLog)
+		$NoProvenance = Invoke-CutProcess @('-Stage', 'VerifyPackage', '-Version', '1.0.0-alpha.1', '-ClientLogPath', $Present, '-ServerLogPath', $Present, '-ProvenancePath', (Join-Path $FixtureRoot 'absent.json'), '-ReleaseRevision', $CutRevision)
+		Assert-ExitTwo -Result $NoProvenance -Reason 'environment' -Name 'A missing provenance file'
+	}
+
+	# -ReleaseRevision is a 40-character commit SHA, so a short SHA or a ref name is an error, not a mismatch.
+	Test-Case 'invalid release revision' {
+		foreach ($Bad in @('abc123', 'refs/heads/release/v1.0.0-alpha.1', ($CutRevision + '0'), ('g' + $CutRevision.Substring(1)))) {
+			$Result = Invoke-VerifyPackage -Name 'package-bad-revision' -ClientLog $GoodLog -ServerLog $GoodLog -Provenance $GoodProvenance -Parameters @{ ReleaseRevision = $Bad }
+			Assert-True ($Result.ExitCode -eq 2 -and $Result.Lines.Count -eq 0) "-ReleaseRevision '$Bad' must exit 2 without a violation line. Exit: $($Result.ExitCode). Output: $($Result.Text)"
+		}
+		$Upper = Invoke-VerifyPackage -Name 'package-upper-revision' -ClientLog $GoodLog -ServerLog $GoodLog -Provenance $GoodProvenance -Parameters @{ ReleaseRevision = $CutRevision.ToUpperInvariant() }
+		Assert-True ($Upper.ExitCode -eq 0) "An uppercase SHA is lowercased like -DevelopRevision. Output: $($Upper.Text)"
 	}
 }
 finally {

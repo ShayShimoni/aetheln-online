@@ -33,7 +33,7 @@ column solely to make the board look current.
 | `Dev Done` | Reviewed, verified implementation merged; record PR, merge SHA, review, and checks. | Start separately authorized post-merge QA (`QA`), or record an explicit QA-not-applicable decision and distinct acceptance verification before `Done`. |
 | `QA` | Independent post-merge QA has started on the merged revision with procedure and environment recorded. | Record raw result, revision, limitations, and disposition; only passing required QA permits `Done`. Stay in `QA` only while the round runs. At round end: every box checked goes to `Done`; a failed criterion that needs a fix returns to `Open` with a comment naming the failed criterion and the `develop` commit and giving the expected and actual result and exact steps to reproduce or simulate the failure; criteria that wait only for a later QA round return to `Dev Done`; a criterion waiting on a decision or dependency goes to `Blocked`. |
 | `Done` | Required QA or explicitly substituted acceptance verification is recorded on the issue, acceptance criteria are satisfied, and no required work remains. | When a release branch that contains the work is cut, move to `Release Candidate`; otherwise no routine transition. New work uses a new or deliberately reopened ticket. |
-| `Release Candidate` | The work is in a cut `release/vX.Y.Z` branch, which carries an internal pre-release tag; the board `Release` field records the tag. | Move to `Released` when that release is distributed to players. If the work is pulled from the release, return to `Done` and clear `Release`. |
+| `Release Candidate` | The work is in a cut `release/v<ProjectVersion>` branch (for example `release/v1.0.0-alpha.1`), which carries an internal pre-release tag; the board `Release` field records the tag. | Move to `Released` when that release is distributed to players. If the work is pulled from the release, return to `Done` and clear `Release`. |
 | `Released` | The release that contains the work was distributed to players, merged to `main`, tagged, published as a GitHub Release, and back-merged into `develop`. | No routine transition. A defect in a released build starts a `hotfix/*` cycle with its own ticket. |
 | `Blocked` | A named prerequisite, decision, permission, dependency, or external condition prevents meaningful safe progress after viable alternatives are exhausted; record `Blocked Reason`. | When implementation or blocker-removal work starts, clear the reason and move it to `In Progress` (or to `QA` when a QA round resumes); return it to `Blocked` if the reason still holds when that work stops. When a separate issue tracks the blocker, that separate issue moves to `In Progress` instead. Once resolved, return to the state supported by current evidence. A `Blocked` issue has no open PR of its own. When another issue's PR also carries its fix, it gets no `Code Review` card: its `Blocked Reason` names the carrying PR, the PR body lists it with `Refs #<issue>`, and after the merge it moves to `Dev Done` or `QA` as its evidence supports. |
 
@@ -216,7 +216,8 @@ Release-cut verification below.
 **Internal release flow.**
 
 1. Run `Invoke-ReleaseCut.ps1 -Stage Verify` and fix or ticket every violation.
-   Cut `release/vX.Y.Z` from `develop`. Set `ProjectVersion`, move the included
+   Cut `release/v<ProjectVersion>` from `develop`, for example
+   `release/v1.0.0-alpha.1`. Set `ProjectVersion`, move the included
    tickets to `Release Candidate`, and fill their `Release` field.
 2. Build the internal packages and run release QA on the release branch,
    including `Invoke-ReleaseCut.ps1 -Stage VerifyPackage` on those packages. Fix
@@ -228,7 +229,9 @@ Release-cut verification below.
 reads: its `Cut` and `Tag` stages are not implemented, so the flow above stays
 manual. Run it from a clean worktree with `gh` authenticated and `origin`
 fetched. It reports each violation as `<code> <subject> <detail>`, exits 1 on
-any violation and 2 when the environment cannot be read, and `-Json` adds the
+any violation and 2 on a usage error or when the environment cannot be read
+(`Release cut error [usage|environment]: <detail>` on stderr, with no local
+path), and `-Json` adds the
 consumer record below.
 
 - `-Stage Verify -Version <version>` runs before the cut. It runs
@@ -259,7 +262,7 @@ Engine source (paths are relative to the engine root) and this repository:
 | --- | --- | --- |
 | Network version checksum: `Engine/Source/Runtime/Core/Private/Misc/NetworkVersion.cpp`, `Engine/Source/Runtime/Engine/Private/UnrealEngine.cpp` | `1.0.0-alpha.1+412` | Accepted: any non-empty string, hashed into the join handshake, so a client and a server must carry the identical string. `VerifyPackage` proves it on packages. |
 | Build identity: `Source/GameNet/Public/AethelnObservability.h` | `1.0.0-alpha.1+412` | Accepted up to 96 characters with no control characters, U+2028, or U+2029. |
-| Windows file version | `1.0.0.412` | Each part must be 0 to 65535. The pinned engine does not read `ProjectVersion` for the executable resource, which `Engine/Build/Windows/Resources/Default.rc2` (added by `Engine/Source/Programs/UnrealBuildTool/Configuration/UEBuildBinary.cs`) sets from the engine version and `BUILD_VERSION`, so this is the rule for a future stamping step. Unverified until a packaged executable is inspected. |
+| Windows file version | `1.0.0.412` | Exactly four parts, each 0 to 65535, because the Windows `VERSIONINFO` resource stores the version as four 16-bit words; `-BuildNumber` is therefore digits only (1 to 10 digits, no leading zero). The pinned engine does not read `ProjectVersion` for the executable resource, which `Engine/Build/Windows/Resources/Default.rc2` (added by `Engine/Source/Programs/UnrealBuildTool/Configuration/UEBuildBinary.cs`) sets from the engine version and `BUILD_VERSION`, so this is the rule for a future stamping step. Unverified until a packaged executable is inspected. |
 | AppX manifest: `Engine/Source/Programs/UnrealBuildTool/Platform/Windows/AppXManifestGeneratorBase.cs` | not applicable | UWP and MSIX packages only, which the Win64 client and Linux server are not. It would not reject the string but silently turn `1.0.0-alpha.1+412` into `1.0.0.1412`. |
 
 **Player distribution.** Player distribution means an external playtest on

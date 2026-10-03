@@ -1,16 +1,11 @@
 [CmdletBinding()]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'BuildNumber', Justification = 'Consumed by a nested function.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DevelopRevision', Justification = 'Consumed by a nested function.')]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ReleaseRevision', Justification = 'Consumed by a nested function.')]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ClientLogPath', Justification = 'Consumed by a nested function.')]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ServerLogPath', Justification = 'Consumed by a nested function.')]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProvenancePath', Justification = 'Consumed by a nested function.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectId', Justification = 'Consumed by a nested function.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Repository', Justification = 'Consumed by a nested function.')]
 param(
-	[ValidateSet('Verify', 'VerifyPackage')]
 	[string] $Stage = 'Verify',
-	[Parameter(Mandatory)][string] $Version,
+	[string] $Version,
 	[string] $BranchName,
 	[string] $BuildNumber,
 	[string] $DevelopRevision,
@@ -21,7 +16,9 @@ param(
 	[string] $FixturePath,
 	[string] $ProjectId = 'PVT_kwHOBB63qs4Bedeu',
 	[string] $Repository = 'ShayShimoni/aetheln-online',
-	[switch] $Json
+	[switch] $Json,
+	# Collects what PowerShell would reject as an unknown parameter, so it exits 2 like any usage error.
+	[Parameter(ValueFromRemainingArguments)][string[]] $UnknownArguments
 )
 
 # Issue #225 release-cut verification. It only reads: the Cut and Tag stages are
@@ -34,7 +31,9 @@ param(
 # VerifyPackage reads the packaged client and server logs and the provenance
 # JSON and compares them with -Version and the release head (-ReleaseRevision,
 # default the tip of the release branch on origin). Exit 0 when clean, 1 on any
-# violation, and 2 when the environment cannot be read.
+# violation, and 2 on a usage error or when the environment cannot be read; an
+# exit-2 message is `Release cut error [usage|environment]: <detail>` on stderr
+# and never carries a local path.
 #
 # Snapshot shape: { tags: [name], remoteBranches: [name], developRevision,
 # developRun: { status, conclusion } or null, defaultGameIni, items: [{ number,
@@ -58,6 +57,22 @@ $Branch = if ($BranchName) { $BranchName } else { "release/v$Version" }
 # Details never echo raw control characters, which may come from a parameter.
 function Format-Safe([string] $Text) {
 	return [regex]::Replace($Text, $UnsafeCharacters, [Text.RegularExpressions.MatchEvaluator] { param($Match) '\u{0:x4}' -f [int] [char] $Match.Value })
+}
+
+# Exit-2 text must carry no local path: this drops the roots the script itself
+# touches and then any drive-letter, UNC, or rooted multi-segment path in it.
+function Hide-LocalPath([string] $Text) {
+	foreach ($Root in @($RepositoryRoot, [IO.Path]::GetTempPath(), $HOME)) {
+		$Trimmed = ([string] $Root).TrimEnd('\', '/')
+		if ($Trimmed) { $Text = [regex]::Replace($Text, [regex]::Escape($Trimmed) + '[^\s''"<>|]*', '<path>', 'IgnoreCase') }
+	}
+	return [regex]::Replace($Text, '(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\|(?<![\w/.:-])/(?=[\w.-]+/))[^\s''"<>|]*', '<path>')
+}
+
+# A fixture or provenance file is parsed as JSON; the error names the file, not its folder.
+function Read-JsonFile([string] $Path, [string] $Role) {
+	try { return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json }
+	catch { throw "cannot read the $Role '$(Split-Path -Leaf $Path)' as JSON" }
 }
 
 function Get-OptionalText($Object, [string] $Name) {
@@ -114,7 +129,7 @@ function Compare-SemVer($Left, $Right) {
 }
 
 function Get-LinkedIssue($Pull) {
-	return @(@(Get-OptionalList $Pull 'linkedIssues') + @([regex]::Matches((Get-OptionalText $Pull 'title'), '#(\d+)') | ForEach-Object { $_.Groups[1].Value }) |
+	return @(@(Get-OptionalList $Pull 'linkedIssues') + @([regex]::Matches((Get-OptionalText $Pull 'title'), '#([0-9]{1,9})') | ForEach-Object { $_.Groups[1].Value }) |
 		Where-Object { $null -ne $_ } | ForEach-Object { [int] $_ } | Sort-Object -Unique)
 }
 
@@ -170,13 +185,20 @@ function Get-ConsumerResult {
 		evidence = 'Source/GameNet/Public/AethelnObservability.h: IsSafeIdentifier allows at most 96 UTF-16 code units and no U+0000-U+001F, U+007F-U+009F, U+2028, or U+2029.'
 	}
 
+	# The build number is the workflow run number, so digits only; anything else
+	# (4.1, 1.2.3) would make the numeric form more than four parts.
 	$Reason = ''
-	foreach ($Part in @($Numeric -split '\.')) {
-		if (-not (Test-Word16 $Part)) { $Reason = "numeric form '$(Format-Safe $Numeric)' has part '$(Format-Safe $Part)', which is not a whole number from 0 to 65535"; break }
+	$Parts = @($Numeric -split '\.')
+	if ($Build -cnotmatch '^[1-9][0-9]{0,9}\z') { $Reason = "build number '$(Format-Safe $Build)' is not a whole number of 1 to 10 digits with no leading zero" }
+	elseif ($Parts.Count -ne 4) { $Reason = "numeric form '$(Format-Safe $Numeric)' has $($Parts.Count) parts, not 4" }
+	else {
+		foreach ($Part in $Parts) {
+			if (-not (Test-Word16 $Part)) { $Reason = "numeric form '$(Format-Safe $Numeric)' has part '$(Format-Safe $Part)', which is not a whole number from 0 to 65535"; break }
+		}
 	}
 	$Windows = [ordered]@{
 		name = 'windows-file-version'; form = $Numeric; status = $(if ($Reason) { 'rejected' } else { 'unverified' }); reason = $Reason
-		evidence = 'The numeric form is the rule in docs/delivery-workflow.md; each part is a 16-bit value, and Engine/Source/Programs/UnrealBuildTool/Platform/Windows/AppXManifestGeneratorBase.cs ValidatePackageVersion clamps parts to 65535. The pinned engine does not read ProjectVersion for the executable resource: Engine/Build/Windows/Resources/Default.rc2, the default resource file added by Engine/Source/Programs/UnrealBuildTool/Configuration/UEBuildBinary.cs, sets FILEVERSION from ENGINE_MAJOR_VERSION, ENGINE_MINOR_VERSION and ENGINE_PATCH_VERSION, and FileVersion and ProductVersion from BUILD_VERSION or ENGINE_VERSION_STRING (Engine/Source/Programs/UnrealBuildTool/Platform/Windows/VCToolChain.cs defines BUILD_VERSION only when bSetResourceVersions is on). Unverified on a packaged executable.'
+		evidence = 'The numeric form is the rule in docs/delivery-workflow.md: the Windows VERSIONINFO resource (FILEVERSION and PRODUCTVERSION) stores the version as four 16-bit words, so it has exactly four parts, each 0 to 65535. The pinned engine does not read ProjectVersion for the executable resource: Engine/Build/Windows/Resources/Default.rc2, the default resource file added by Engine/Source/Programs/UnrealBuildTool/Configuration/UEBuildBinary.cs, sets FILEVERSION from ENGINE_MAJOR_VERSION, ENGINE_MINOR_VERSION and ENGINE_PATCH_VERSION, and FileVersion and ProductVersion from BUILD_VERSION or ENGINE_VERSION_STRING (Engine/Source/Programs/UnrealBuildTool/Platform/Windows/VCToolChain.cs defines BUILD_VERSION only when bSetResourceVersions is on). Unverified on a packaged executable.'
 	}
 
 	return @(
@@ -273,19 +295,21 @@ function Get-VerifyViolation {
 function Get-NetVersion([string] $Path) {
 	$Pattern = 'LogNetVersion:\s+\S+\s+(?<version>\S+),\s+NetCL:.*\(Checksum:\s*(?<checksum>[0-9]+)\)'
 	$Last = $null
-	foreach ($Line in [IO.File]::ReadLines((Resolve-Path -LiteralPath $Path).Path)) {
-		$Match = [regex]::Match($Line, $Pattern)
-		if ($Match.Success) { $Last = [pscustomobject]@{ version = $Match.Groups['version'].Value; checksum = $Match.Groups['checksum'].Value } }
+	try {
+		foreach ($Line in [IO.File]::ReadLines((Resolve-Path -LiteralPath $Path).Path)) {
+			$Match = [regex]::Match($Line, $Pattern)
+			if ($Match.Success) { $Last = [pscustomobject]@{ version = $Match.Groups['version'].Value; checksum = $Match.Groups['checksum'].Value } }
+		}
 	}
+	catch { throw "cannot read the log '$(Split-Path -Leaf $Path)'" }
 	return $Last
 }
 
 # VerifyPackage proves the packaged client and server accepted the version
 # string, hashed it to the same network checksum, and came from the release head.
 function Get-PackageViolation {
-	if (-not ($ClientLogPath -and $ServerLogPath -and $ProvenancePath)) { throw 'VerifyPackage needs -ClientLogPath, -ServerLogPath, and -ProvenancePath.' }
 	$Head = if ($ReleaseRevision) { $ReleaseRevision } else { Get-RemoteRevision "refs/heads/$Branch" }
-	if (-not $Head) { throw "$Branch is not on origin; pass -ReleaseRevision." }
+	if (-not $Head) { throw "$(Format-Safe $Branch) is not on origin; pass -ReleaseRevision." }
 
 	$Violations = New-Object Collections.Generic.List[object]
 	function Add-Violation([string] $Code, [string] $Subject, [string] $Detail) {
@@ -308,7 +332,7 @@ function Get-PackageViolation {
 	}
 
 	# Today's build-provenance.json (schemaVersion 2) records source.revision; the packaging stage records use sourceRevision.
-	$Provenance = Get-Content -LiteralPath $ProvenancePath -Raw | ConvertFrom-Json
+	$Provenance = Read-JsonFile $ProvenancePath 'provenance file'
 	$Recorded = Get-OptionalText $Provenance 'sourceRevision'
 	$Source = $Provenance.PSObject.Properties['source']
 	if (-not $Recorded -and $Source -and $Source.Value) { $Recorded = Get-OptionalText $Source.Value 'revision' }
@@ -335,13 +359,15 @@ function Invoke-Native {
 	return [pscustomobject]@{ ExitCode = $ExitCode; Output = $Output }
 }
 
-function Invoke-Checked([string] $Command, [string[]] $Arguments) {
+# A failure names only the command and its subcommand: the arguments can carry
+# the repository root (`git -C <root>`) or a long query.
+function Invoke-Checked([string] $Command, [string[]] $Arguments, [string] $Subcommand = $Arguments[0]) {
 	$Result = Invoke-Native -Command $Command -Arguments $Arguments
-	if ($Result.ExitCode -ne 0) { throw "$Command $($Arguments -join ' ') failed: $($Result.Output -join ' ')" }
+	if ($Result.ExitCode -ne 0) { throw "$Command $Subcommand failed: $($Result.Output -join ' ')" }
 	return $Result.Output
 }
 
-function Invoke-Git([string[]] $Arguments) { return Invoke-Checked 'git' (@('-C', $RepositoryRoot) + $Arguments) }
+function Invoke-Git([string[]] $Arguments) { return Invoke-Checked -Command 'git' -Arguments (@('-C', $RepositoryRoot) + $Arguments) -Subcommand $Arguments[0] }
 
 # Windows PowerShell 5.1 emits a parsed JSON array as one pipeline object, so
 # the array is assigned before it is enumerated.
@@ -377,10 +403,10 @@ function Get-LiveSnapshot {
 	$ItemQuery = 'query($id: ID!, $after: String) { node(id: $id) { ... on ProjectV2 { items(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { content { __typename ... on Issue { number repository { nameWithOwner } } ... on PullRequest { number repository { nameWithOwner } } } fieldValues(first: 30) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } } ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } } } } } } } } }'
 
 	$Develop = if ($DevelopRevision) { $DevelopRevision.ToLowerInvariant() } else { Get-RemoteRevision 'refs/heads/develop' }
-	if ($Develop -cnotmatch '^[0-9a-f]{40}$') { throw 'The develop revision must be a 40-character commit SHA.' }
+	if ($Develop -cnotmatch '^[0-9a-f]{40}\z') { throw 'The develop revision must be a 40-character commit SHA.' }
 	if ((Invoke-Native -Command 'git' -Arguments @('-C', $RepositoryRoot, 'cat-file', '-e', ($Develop + '^{commit}'))).ExitCode -ne 0) { throw "Revision $Develop is not in this clone; run git fetch origin first." }
 
-	$Tags = @(Invoke-Git @('ls-remote', '--tags', 'origin', 'refs/tags/v*') | ForEach-Object { if ($_ -match 'refs/tags/(\S+?)(?:\^\{\})?$') { $Matches[1] } } | Sort-Object -Unique)
+	$Tags = @(Invoke-Git @('ls-remote', '--tags', 'origin', 'refs/tags/v*') | ForEach-Object { if ($_ -match 'refs/tags/(\S+?)(?:\^\{\})?$') { $Matches[1] } } | Sort-Object -Unique -CaseSensitive)
 	$RemoteBranches = if (@(Invoke-Git @('ls-remote', '--heads', 'origin', "refs/heads/$Branch")).Count -gt 0) { @($Branch) } else { @() }
 	$Runs = @(Get-GhJsonList @('run', 'list', '-R', $Repository, '--workflow', 'prototype-quality-gates.yml', '--branch', 'develop', '--event', 'push', '--commit', $Develop, '--limit', '20', '--json', 'status,conclusion'))
 	$Run = $Runs | Where-Object { $_.conclusion -ceq 'success' } | Select-Object -First 1
@@ -431,9 +457,22 @@ function Get-LiveSnapshot {
 	}
 }
 
+$ErrorKind = 'usage'
 try {
+	# Usage errors exit 2 too: exit 1 is reserved for violations, and PowerShell
+	# itself exits 1 on a parameter binding error, so the checks live here.
+	if ($UnknownArguments) { throw "unknown argument '$(Format-Safe ($UnknownArguments -join ' '))'" }
+	if ($Stage -cnotin 'Verify', 'VerifyPackage') { throw "-Stage must be Verify or VerifyPackage, not '$(Format-Safe $Stage)'" }
+	if ([string]::IsNullOrWhiteSpace($Version)) { throw '-Version is required' }
+	if ($ReleaseRevision) {
+		$ReleaseRevision = $ReleaseRevision.ToLowerInvariant()
+		if ($ReleaseRevision -cnotmatch '^[0-9a-f]{40}\z') { throw '-ReleaseRevision must be a 40-character commit SHA' }
+	}
+	if ($Stage -ceq 'VerifyPackage' -and -not ($ClientLogPath -and $ServerLogPath -and $ProvenancePath)) { throw 'VerifyPackage needs -ClientLogPath, -ServerLogPath, and -ProvenancePath' }
+	$ErrorKind = 'environment'
+
 	if ($Stage -ceq 'Verify') {
-		$Snapshot = if ($FixturePath) { Get-Content -LiteralPath $FixturePath -Raw | ConvertFrom-Json } else { Get-LiveSnapshot }
+		$Snapshot = if ($FixturePath) { Read-JsonFile $FixturePath 'fixture' } else { Get-LiveSnapshot }
 		$Result = Get-VerifyViolation -Snapshot $Snapshot
 		$Violations = @($Result.violations)
 		$Consumers = @($Result.consumers)
@@ -444,7 +483,7 @@ try {
 	}
 }
 catch {
-	[Console]::Error.WriteLine("Release cut error: $($_.Exception.Message)")
+	[Console]::Error.WriteLine("Release cut error [$ErrorKind]: $(Format-Safe (Hide-LocalPath $_.Exception.Message))")
 	exit 2
 }
 
