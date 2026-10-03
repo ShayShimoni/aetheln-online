@@ -181,9 +181,10 @@ foreach ($ScriptTestPath in @('scripts/tests/Test-ObservabilityContract.ps1', 's
 foreach ($ScriptTestLookalike in @('scripts/tests/NewUnwiredTest.ps1', 'scripts/tests/Test-SourceControlPolicy.ps1.bak', 'scripts/tests/Test-SourceControlPolicy.md', 'Scripts/tests/Test-SourceControlPolicy.ps1', 'scripts/test/Test-SourceControlPolicy.ps1')) {
 	Assert-Rejected { Get-PathCheckSelection $ScriptTestLookalike @{} } 'path_unclassified'
 }
-# The root ignore policy is enforced by the portable source-control policy test.
-Assert-True ((@(Get-PathCheckSelection '.gitignore' @{}) -join ',') -ceq 'portable') 'The root .gitignore should select only portable proof.'
-foreach ($IgnoreLookalike in @('.gitignore.bak', 'scripts/.gitignore')) { Assert-Rejected { Get-PathCheckSelection $IgnoreLookalike @{} } 'path_unclassified' }
+# .gitignore decides the engine gate's post-build drift check, so it is not
+# portable-only. It stays unclassified and takes the conservative report,
+# which the CLI fixture below proves carries the controller identity.
+Assert-Rejected { Get-PathCheckSelection '.gitignore' @{} } 'path_unclassified'
 $ContentValidationScript = @(Get-PathCheckSelection 'scripts/content/Invoke-ContentValidation.ps1' @{})
 Assert-True ($ContentValidationScript -ccontains 'portable' -and $ContentValidationScript -ccontains 'content-reference-validation' -and $ContentValidationScript -cnotcontains 'native-client-server-compile' -and $ContentValidationScript -cnotcontains 'clean-package-provenance-smoke') 'The exact content-validation launcher must select portable and content-reference proof without implying a native or clean build.'
 foreach ($ContentTestPath in @('tests/content/Invoke-ContentValidation.Tests.ps1', 'tests/content/Invoke-ContentValidationCommand.Tests.ps1')) {
@@ -361,7 +362,9 @@ try {
 	Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($JsonPath)) -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($JsonPath2))) 'Report bytes should be deterministic.'
 	Assert-Rejected { Write-BoundedUtf8Json $Report (Join-Path $FixtureRoot 'too-small.json') ($Length-1) } 'report_size_limit'
 	Write-Fixture 'scripts/tests/NewUnwiredTest.ps1' "Write-Output 'not wired into CI'`n"
-	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','unwired script test'); $UnwiredHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	# Like PR #217, also change the unclassified root .gitignore.
+	Write-Fixture '.gitignore' "*.tfstate`n"
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','unwired script test and ignore policy'); $UnwiredHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
 	$UnwiredTree=[string]@(Invoke-FixtureGit @('rev-parse',"$UnwiredHead`^{tree}"))[0]
 	$UnwiredMerge=(@('synthetic unwired merge' | & git -C $FixtureRepo commit-tree $UnwiredTree -p $HeadRevision -p $UnwiredHead) -join '').Trim()
 	Assert-True ($LASTEXITCODE -eq 0) 'Unwired-test synthetic merge creation should succeed.'

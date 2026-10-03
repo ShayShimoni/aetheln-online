@@ -377,7 +377,6 @@ function Get-PathCheckSelection {
 	$Ids.Add('portable')
 	$Recognized = $false
 	$PortableOnlyPaths = @(
-		'.gitignore',
 		'scripts/ci/Invoke-CiSuite.ps1',
 		'scripts/ci/Test-FormattingPolicy.ps1',
 		'scripts/ci/Test-MarkdownLinks.ps1',
@@ -465,11 +464,11 @@ function New-ConservativeSelection {
 
 function New-CiSelectionReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory report value and changes no external state.')]
-	param($Context, [string] $Repository, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null)
+	param($Context, [string] $Repository, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null, $ControllerIdentity = $null)
 	Assert-CiSelectionContext $Context | Out-Null
 	if ($null -eq $AttemptAnchor) { $AttemptAnchor = New-CiSelectionAttemptAnchor $Context }
 	else { Assert-CiSelectionAttemptAnchor $AttemptAnchor $Context | Out-Null }
-	$ControllerIdentity = Get-ControllerIdentity $Repository $Context.controllerRevision
+	if ($null -eq $ControllerIdentity) { $ControllerIdentity = Get-ControllerIdentity $Repository $Context.controllerRevision }
 	if ($Context.kind -eq 'schedule' -or ($Context.kind -eq 'workflow_call' -and $Context.callerKind -eq 'schedule')) {
 		$Revision = if ($Context.kind -eq 'schedule') { $Context.revision } else { $Context.revision }
 		$CallerKind = if ($Context.kind -eq 'workflow_call') { $Context.callerKind } else { $null }
@@ -564,7 +563,7 @@ if ($ContextJson -or $OutputPath) {
 		# classified one, or the workflow rejects it. If this lookup fails, the
 		# conservative report has no identity and the workflow fails closed.
 		$ControllerIdentity=Get-ControllerIdentity $RepositoryPath $Context.controllerRevision
-		$Report=New-CiSelectionReport $Context $RepositoryPath -AttemptAnchor $AttemptAnchor
+		$Report=New-CiSelectionReport $Context $RepositoryPath -AttemptAnchor $AttemptAnchor -ControllerIdentity $ControllerIdentity
 	} catch {
 		$Reason=($_.Exception.Message -split ':')[0]
 		if (-not $ContextAccepted -or $null -eq $AttemptAnchor -or $Reason.StartsWith('attempt_anchor_', [StringComparison]::Ordinal)) { throw }

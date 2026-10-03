@@ -402,8 +402,7 @@ any other caught failure) carries the same controller blob OID and SHA-256 as a
 classified report, so the workflow's controller identity check accepts it and
 the all-selected selection reaches the producer-gap path. If the identity
 lookup itself fails, the report has no identity and the workflow fails closed
-with `shadow_report_controller_identity_mismatch`. The root `.gitignore` is
-portable-only, because the portable `source-control-policy` check enforces it.
+with `shadow_report_controller_identity_mismatch`.
 Agent-tooling and build-test paths retain
 portable proof; build scripts retain controller-operational and clean-package
 proof. Production CI scripts and workflows select both controller
