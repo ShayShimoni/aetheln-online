@@ -1518,13 +1518,14 @@ jobs:
           $Utf8 = New-Object System.Text.UTF8Encoding $false
 
           function Write-AcceptanceGap {
-            param([string] $Reason, [string[]] $SelectedUnsupported)
+            param([string] $Reason, [string[]] $SelectedUnsupported, [object[]] $LiveBindings = @())
             $Report = [ordered]@{
-              schemaVersion = 'aetheln.ci-acceptance-shadow-gap/v2'
+              schemaVersion = 'aetheln.ci-acceptance-shadow-gap/v3'
               repository = $env:AETHELN_REPOSITORY
               revision = $env:AETHELN_TESTED_REVISION
               run = [ordered]@{ id = $env:AETHELN_RUN_ID; attempt = [int] $env:AETHELN_RUN_ATTEMPT }
               selectedUnsupported = @($SelectedUnsupported)
+              liveBindings = @($LiveBindings)
               decision = [ordered]@{
                 complete = $false
                 shadow = $true
@@ -1571,31 +1572,33 @@ jobs:
           }
           $ContextBuilder = Join-Path $env:GITHUB_WORKSPACE 'scripts/ci/New-CiAcceptanceAggregateContext.ps1'
 
+          # Both readiness branches share the live receipt bindings: a failed or skipped selected receipt fails red here, never behind a green gap.
+          $ProducerBindings = New-Object Collections.Generic.List[object]
+          function Add-ProducerBinding {
+            param([string] $Required, [string] $Result, [string] $Key, [string] $JobName, [string] $ArtifactId, [string] $ArtifactName, [string] $Digest)
+            if ($Required -ceq 'false') { return }
+            if ($Required -cne 'true' -or $Result -cne 'success' -or
+                $ArtifactId -cnotmatch '\A[1-9][0-9]{0,19}\z' -or
+                $ArtifactName -cne ('ci-receipt-' + $Key + '-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-' + $env:AETHELN_SELECTOR_NONCE) -or
+                $Digest -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw ('producer_direct_binding_invalid:' + $Key) }
+            $ProducerBindings.Add([pscustomobject][ordered]@{ key=$Key; jobName=$JobName; artifactId=$ArtifactId; artifactName=$ArtifactName; digest=$Digest })
+          }
+          # The native publisher proves either native obligation from one compile report; any other output pair is invalid and fails closed.
+          $NativeProducerRequired = if ($env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true') { 'true' } elseif ($env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false') { 'false' } else { 'invalid' }
+          Add-ProducerBinding $NativeProducerRequired $env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow' $env:AETHELN_NATIVE_ARTIFACT_ID $env:AETHELN_NATIVE_ARTIFACT_NAME $env:AETHELN_NATIVE_ARTIFACT_DIGEST
+          Add-ProducerBinding $env:AETHELN_PORTABLE_REQUIRED $env:AETHELN_PORTABLE_RESULT 'portable' 'portable-receipt-shadow' $env:AETHELN_PORTABLE_ARTIFACT_ID $env:AETHELN_PORTABLE_ARTIFACT_NAME $env:AETHELN_PORTABLE_ARTIFACT_DIGEST
+          Add-ProducerBinding $env:AETHELN_UNREAL_REQUIRED $env:AETHELN_UNREAL_RESULT 'unreal' 'unreal-receipt-shadow' $env:AETHELN_UNREAL_ARTIFACT_ID $env:AETHELN_UNREAL_ARTIFACT_NAME $env:AETHELN_UNREAL_ARTIFACT_DIGEST
+          Add-ProducerBinding $env:AETHELN_VISUAL_REQUIRED $env:AETHELN_VISUAL_RESULT 'visual' 'visual-receipt-shadow' $env:AETHELN_VISUAL_ARTIFACT_ID $env:AETHELN_VISUAL_ARTIFACT_NAME $env:AETHELN_VISUAL_ARTIFACT_DIGEST
+
           if ($env:AETHELN_SELECTOR_READY -ceq 'false') {
             $Gap = & $ContextBuilder -Mode Gap @ContextArguments
             if ($Gap.mode -cne 'Gap' -or $Gap.acceptedControllerUnavailable -isnot [bool] -or
                 $Gap.attemptAnchor.nonce -cne $env:AETHELN_SELECTOR_NONCE) { throw 'selector_gap_identity_invalid' }
             $SelectedUnsupported = @($Gap.selectedUnsupported)
             if ($SelectedUnsupported.Count -eq 0) { throw 'aggregate_ready_contradiction' }
-            Write-AcceptanceGap -Reason 'producer_contract_incomplete' -SelectedUnsupported $SelectedUnsupported
+            Write-AcceptanceGap -Reason 'producer_contract_incomplete' -SelectedUnsupported $SelectedUnsupported -LiveBindings ([object[]] $ProducerBindings.ToArray())
             Write-Warning ('acceptance_producer_gap:' + ($SelectedUnsupported -join ','))
           } elseif ($env:AETHELN_SELECTOR_READY -ceq 'true') {
-            $ProducerBindings = New-Object Collections.Generic.List[object]
-            function Add-ProducerBinding {
-              param([string] $Required, [string] $Result, [string] $Key, [string] $JobName, [string] $ArtifactId, [string] $ArtifactName, [string] $Digest)
-              if ($Required -ceq 'false') { return }
-              if ($Required -cne 'true' -or $Result -cne 'success' -or
-                  $ArtifactId -cnotmatch '\A[1-9][0-9]{0,19}\z' -or
-                  $ArtifactName -cne ('ci-receipt-' + $Key + '-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-' + $env:AETHELN_SELECTOR_NONCE) -or
-                  $Digest -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw ('producer_direct_binding_invalid:' + $Key) }
-              $ProducerBindings.Add([pscustomobject][ordered]@{ key=$Key; jobName=$JobName; artifactId=$ArtifactId; artifactName=$ArtifactName; digest=$Digest })
-            }
-            # The native publisher proves either native obligation from one compile report; any other output pair is invalid and fails closed.
-            $NativeProducerRequired = if ($env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true') { 'true' } elseif ($env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false') { 'false' } else { 'invalid' }
-            Add-ProducerBinding $NativeProducerRequired $env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow' $env:AETHELN_NATIVE_ARTIFACT_ID $env:AETHELN_NATIVE_ARTIFACT_NAME $env:AETHELN_NATIVE_ARTIFACT_DIGEST
-            Add-ProducerBinding $env:AETHELN_PORTABLE_REQUIRED $env:AETHELN_PORTABLE_RESULT 'portable' 'portable-receipt-shadow' $env:AETHELN_PORTABLE_ARTIFACT_ID $env:AETHELN_PORTABLE_ARTIFACT_NAME $env:AETHELN_PORTABLE_ARTIFACT_DIGEST
-            Add-ProducerBinding $env:AETHELN_UNREAL_REQUIRED $env:AETHELN_UNREAL_RESULT 'unreal' 'unreal-receipt-shadow' $env:AETHELN_UNREAL_ARTIFACT_ID $env:AETHELN_UNREAL_ARTIFACT_NAME $env:AETHELN_UNREAL_ARTIFACT_DIGEST
-            Add-ProducerBinding $env:AETHELN_VISUAL_REQUIRED $env:AETHELN_VISUAL_RESULT 'visual' 'visual-receipt-shadow' $env:AETHELN_VISUAL_ARTIFACT_ID $env:AETHELN_VISUAL_ARTIFACT_NAME $env:AETHELN_VISUAL_ARTIFACT_DIGEST
             $SelectorBinding = [pscustomobject][ordered]@{
               jobName = 'ci-selection-shadow'
               artifactId = $env:AETHELN_SELECTOR_ARTIFACT_ID

@@ -383,6 +383,26 @@ for ($Index = 0; $Index -lt 8; $Index++) {
 	Assert-True ($SortedContextCheckIds[$Index] -ceq $SortedPublisherCheckIds[$Index]) "Aggregate context and publisher check ids must match in lockstep (index $Index)."
 }
 
+# The live/pending split is kept by hand in several places; this guard ties the three selector-facing lists (other copies fail closed on their own). A check is live exactly when a publisher contract can prove it, so
+# shipping a producer (adding its check to a contract) must fail here until those three lists move with it.
+function Get-SourceCheckList([string] $Source, [string] $Pattern, [string] $Name) {
+	$Lists = [regex]::Matches($Source, $Pattern)
+	Assert-True ($Lists.Count -eq 1) "$Name must declare exactly one check list."
+	$Ids = [string[]] @([regex]::Matches($Lists[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+	[Array]::Sort($Ids, [StringComparer]::Ordinal)
+	return ($Ids -join ',')
+}
+$ProvableChecks = [string[]] @($script:PublisherContracts.Values | ForEach-Object { $_.Checks } | Select-Object -Unique)
+[Array]::Sort($ProvableChecks, [StringComparer]::Ordinal)
+$PendingChecks = [string[]] @($script:PublisherCheckIds | Where-Object { $ProvableChecks -cnotcontains $_ })
+[Array]::Sort($PendingChecks, [StringComparer]::Ordinal)
+$WorkflowLiveChecks = Get-SourceCheckList -Source ([IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml'))) -Pattern '(?m)^\s*\$LiveProducerChecks = @\((?<list>[^)]*)\)\r?$' -Name 'The workflow selector job ($LiveProducerChecks)'
+$BuilderLiveChecks = Get-SourceCheckList -Source $ContextSource -Pattern '(?m)^\s*\$LiveChecks=@\((?<list>[^)]*)\)\r?$' -Name 'The aggregate context builder ($LiveChecks)'
+$AggregatePendingChecks = Get-SourceCheckList -Source ([IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiAcceptanceAggregate.ps1'))) -Pattern '(?m)^\$script:AcceptanceUnsupportedCheckIds = @\((?<list>[^)]*)\)\r?$' -Name 'The aggregate ($script:AcceptanceUnsupportedCheckIds)'
+Assert-True ($WorkflowLiveChecks -ceq ($ProvableChecks -join ',')) "The workflow `$LiveProducerChecks ($WorkflowLiveChecks) must equal the checks the publisher contracts can prove ($($ProvableChecks -join ','))."
+Assert-True ($BuilderLiveChecks -ceq ($ProvableChecks -join ',')) "The context builder `$LiveChecks ($BuilderLiveChecks) must equal the checks the publisher contracts can prove ($($ProvableChecks -join ','))."
+Assert-True ($AggregatePendingChecks -ceq ($PendingChecks -join ',')) "The aggregate `$AcceptanceUnsupportedCheckIds ($AggregatePendingChecks) must equal the publisher check ids no contract can prove ($($PendingChecks -join ','))."
+
 # The aggregate filters each template job's checks by selection in template order; the publisher filters its contract checks in
 # contract order. Both must agree per job key or the receipt fails receipt_selection_mismatch.
 $RequirementsTemplate = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ci-acceptance-requirements.json') -Raw | ConvertFrom-Json
