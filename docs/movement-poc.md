@@ -5,9 +5,9 @@
 GitHub issue [#100](https://github.com/ShayShimoni/aetheln-online/issues/100)
 is a one-time P0 Prototype Gate learning exception under Epic #6. It validates
 local movement, camera, animation, and traversal feel before the networked
-movement story. Issue #17 now replicates sprint through a predicted saved-move
-flag, simulates jump takeoff and backpedal speed on the server, and still owns
-remote facing and packaged multiplayer evidence.
+movement story. Issue #17 now replicates sprint and aim steering through
+predicted saved-move flags, simulates jump takeoff, backpedal speed, and body
+facing on the server, and still owns packaged multiplayer evidence.
 
 This POC is temporary. Quinn is an engine mannequin, not an approved Aetheln
 race, sex, class, silhouette, animation set, or combat property. None of the
@@ -239,13 +239,40 @@ on both client and server. Correction replay judges backpedal and takeoff facing
 against the yaw each move was recorded with, also when a later correction
 replays the same move again.
 
-Known limits until later #17 work: aim steering is not yet a saved-move flag,
-so the server picks travel facing for aimed forward-diagonal jumps, and airborne
-aim tracking of pure lateral aimed jumps is client-only; remote players see
-those facings only after the remote-facing change. `Aetheln.Movement.Net.*`
-covers the flag round trip, the server speed and backpedal clamps, rejected
-requests, client/server takeoff parity on a land-and-rejump direction change,
-and takeoff replay, once and repeated, with a turned camera.
+Body facing is part of the same simulation. Aim steering (Reticle mode) travels
+in the saved move as `FLAG_Custom_1`; `FLAG_Custom_2` and `FLAG_Custom_3`
+remain free. `UAethelnCharacterMovementComponent::PhysicsRotation` selects the
+rotation mode for every move from that flag, the move's acceleration, and its
+control yaw: on the ground, aim or backpedal faces the camera at the 720
+degrees/s rate and anything else faces travel; airborne, aim faces the camera
+unless the takeoff was a pure lateral aimed jump, whose sideways body then
+turns with camera yaw while aim is held and holds still while it is released.
+Camera facing turns toward the move's own control yaw, so correction replay
+uses the recorded yaw rather than the live camera. The aim-tracked jump state
+is saved with each client move, so a correction replay restores it too. The
+owning client's prediction and replay and the server therefore compute the
+same facing, and remote players receive it through ordinary replicated
+movement. A client can only request aim; it sends no body rotation (only the
+control rotation every move already carries), and the server never turns the
+body faster than the rotation rate except at the takeoff and airborne-tracking
+snaps described above. The visible mesh-yaw blends stay local presentation.
+
+`Aetheln.Movement.Net.*` covers the flag round trip, the server speed and
+backpedal clamps, rejected requests, client/server takeoff parity on a
+land-and-rejump direction change, takeoff replay, once and repeated, with a
+turned camera (also for an aimed diagonal jump with aim released), airborne
+tracking replay across an aim release and re-press, and server and
+simulated-proxy facing equal to the owning client's for aimed diagonal jumps,
+Reticle strafing, S backpedal, and pure lateral airborne aim tracking, plus
+bounds on what a client can obtain through the aim flag (rate-limited facing,
+no extra speed).
+
+Known limits: remote players do not see the local mesh-yaw presentation (the
+35-degree strafe and 25-degree aim-jump turns), and their locomotion Animation
+Blueprint does not yet know the rotation mode, so it uses the travel-facing
+direction clamp. Airborne aim tracking sets server facing to camera yaw plus
+the held offset on every aimed move, with no rate limit; a future directional
+block that reads authoritative facing may need one.
 
 ## Verification and feedback
 
