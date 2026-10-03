@@ -705,7 +705,12 @@ Every accepted decision records:
   the first parent against the tested merge, not the head, so a head behind its
   target is not charged with reversed upstream changes. Because the selector is
   accepted-base code, that diff applies only to runs whose accepted base
-  already contains it.
+  already contains it. A conservative fallback report, for example after
+  `path_unclassified`, carries the same accepted-controller blob OID and
+  SHA-256 as a classified report. Both come from the trusted control
+  repository, never from the candidate. The workflow's identity check
+  therefore accepts it, and the all-selected selection fails safe instead of
+  failing the selector job.
   The selector remains non-authoritative and does not alter legacy CI gates.
 - **Historical Package 3A amendment:** Pin every approved remote action to its reviewed
   full commit SHA, implement and fixture-test exact per-job shadow receipt and

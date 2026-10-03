@@ -377,6 +377,7 @@ function Get-PathCheckSelection {
 	$Ids.Add('portable')
 	$Recognized = $false
 	$PortableOnlyPaths = @(
+		'.gitignore',
 		'scripts/ci/Invoke-CiSuite.ps1',
 		'scripts/ci/Test-FormattingPolicy.ps1',
 		'scripts/ci/Test-MarkdownLinks.ps1',
@@ -431,7 +432,7 @@ function New-Obligations {
 
 function New-ConservativeSelection {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory report value and changes no external state.')]
-	param([string] $Reason, $Context, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null)
+	param([string] $Reason, $Context, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null, $ControllerIdentity = $null)
 	Assert-CiSelectionContext $Context | Out-Null
 	if ($null -eq $AttemptAnchor) { $AttemptAnchor = New-CiSelectionAttemptAnchor $Context }
 	else { Assert-CiSelectionAttemptAnchor $AttemptAnchor $Context | Out-Null }
@@ -454,7 +455,7 @@ function New-ConservativeSelection {
 		attemptAnchor=$AttemptAnchor
 		policy=[pscustomobject][ordered]@{ version=$script:CiSelectionPolicyVersion; digest=(Get-PolicyDigest); checkIds=@($script:CiSelectionCheckIds) }
 		source=[pscustomobject]$Source
-		execution=[pscustomobject][ordered]@{ mode=$ExecutionMode; controllerRevision=$Controller; controllerBlobOid=$null; controllerSha256=$null; checkoutAllowed=$false; complete=$true; reason=$Reason }
+		execution=[pscustomobject][ordered]@{ mode=$ExecutionMode; controllerRevision=$Controller; controllerBlobOid=$(if ($ControllerIdentity) { $ControllerIdentity.oid }); controllerSha256=$(if ($ControllerIdentity) { $ControllerIdentity.sha256 }); checkoutAllowed=$false; complete=$true; reason=$Reason }
 		classification=[pscustomobject][ordered]@{ changedPaths=@(); entries=@(); uncertainties=@($Reason) }
 		selection=[pscustomobject][ordered]@{ shadow=$true; authoritative=$false; obligations=(New-Obligations $All $Reason) }
 		legacyAuthority=[pscustomobject][ordered]@{ authoritative=$true; engineRequired=$LegacyEngineRequired; reason=$LegacyReason }
@@ -549,6 +550,7 @@ if ($ContextJson -or $OutputPath) {
 	if (-not $ContextJson -or -not $OutputPath) { throw 'ContextJson and OutputPath are required together.' }
 	$Context=$null
 	$AttemptAnchor=$null
+	$ControllerIdentity=$null
 	$ContextAccepted=$false
 	try {
 		$Raw=[IO.File]::ReadAllText((Resolve-Path -LiteralPath $ContextJson),$script:StrictUtf8)
@@ -557,15 +559,20 @@ if ($ContextJson -or $OutputPath) {
 		Assert-CiSelectionContext $Context | Out-Null
 		$ContextAccepted=$true
 		$AttemptAnchor=New-CiSelectionAttemptAnchor $Context
-		$Report=New-CiSelectionReport $Context (Resolve-Path -LiteralPath $RepositoryRoot).Path -AttemptAnchor $AttemptAnchor
+		$RepositoryPath=(Resolve-Path -LiteralPath $RepositoryRoot).Path
+		# A conservative report must carry the same accepted-controller identity as a
+		# classified one, or the workflow rejects it. If this lookup fails, the
+		# conservative report has no identity and the workflow fails closed.
+		$ControllerIdentity=Get-ControllerIdentity $RepositoryPath $Context.controllerRevision
+		$Report=New-CiSelectionReport $Context $RepositoryPath -AttemptAnchor $AttemptAnchor
 	} catch {
 		$Reason=($_.Exception.Message -split ':')[0]
 		if (-not $ContextAccepted -or $null -eq $AttemptAnchor -or $Reason.StartsWith('attempt_anchor_', [StringComparison]::Ordinal)) { throw }
 		if ($Reason -cnotmatch '^[a-z0-9_]+$') { $Reason='selector_internal_error' }
-		$Report=New-ConservativeSelection $Reason $Context -AttemptAnchor $AttemptAnchor
+		$Report=New-ConservativeSelection $Reason $Context -AttemptAnchor $AttemptAnchor -ControllerIdentity $ControllerIdentity
 	}
 	try { [void](Write-BoundedUtf8Json $Report $OutputPath) } catch {
-		$Fallback=New-ConservativeSelection 'report_size_limit' $Context -AttemptAnchor $AttemptAnchor
+		$Fallback=New-ConservativeSelection 'report_size_limit' $Context -AttemptAnchor $AttemptAnchor -ControllerIdentity $ControllerIdentity
 		[void](Write-BoundedUtf8Json $Fallback $OutputPath)
 	}
 }

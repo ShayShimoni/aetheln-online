@@ -181,6 +181,9 @@ foreach ($ScriptTestPath in @('scripts/tests/Test-ObservabilityContract.ps1', 's
 foreach ($ScriptTestLookalike in @('scripts/tests/NewUnwiredTest.ps1', 'scripts/tests/Test-SourceControlPolicy.ps1.bak', 'scripts/tests/Test-SourceControlPolicy.md', 'Scripts/tests/Test-SourceControlPolicy.ps1', 'scripts/test/Test-SourceControlPolicy.ps1')) {
 	Assert-Rejected { Get-PathCheckSelection $ScriptTestLookalike @{} } 'path_unclassified'
 }
+# The root ignore policy is enforced by the portable source-control policy test.
+Assert-True ((@(Get-PathCheckSelection '.gitignore' @{}) -join ',') -ceq 'portable') 'The root .gitignore should select only portable proof.'
+foreach ($IgnoreLookalike in @('.gitignore.bak', 'scripts/.gitignore')) { Assert-Rejected { Get-PathCheckSelection $IgnoreLookalike @{} } 'path_unclassified' }
 $ContentValidationScript = @(Get-PathCheckSelection 'scripts/content/Invoke-ContentValidation.ps1' @{})
 Assert-True ($ContentValidationScript -ccontains 'portable' -and $ContentValidationScript -ccontains 'content-reference-validation' -and $ContentValidationScript -cnotcontains 'native-client-server-compile' -and $ContentValidationScript -cnotcontains 'clean-package-provenance-smoke') 'The exact content-validation launcher must select portable and content-reference proof without implying a native or clean build.'
 foreach ($ContentTestPath in @('tests/content/Invoke-ContentValidation.Tests.ps1', 'tests/content/Invoke-ContentValidationCommand.Tests.ps1')) {
@@ -363,6 +366,34 @@ try {
 	$UnwiredMerge=(@('synthetic unwired merge' | & git -C $FixtureRepo commit-tree $UnwiredTree -p $HeadRevision -p $UnwiredHead) -join '').Trim()
 	Assert-True ($LASTEXITCODE -eq 0) 'Unwired-test synthetic merge creation should succeed.'
 	Assert-Rejected { New-CiSelectionReport ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$HeadRevision;headRevision=$UnwiredHead;workflowRevision=$UnwiredMerge;controllerRevision=$HeadRevision}) $FixtureRepo } 'path_unclassified'
+	# The CLI turns that rejection into the conservative all-selected report. It
+	# must carry the same verified accepted-controller identity as a classified
+	# report, or the workflow rejects it and the fail-safe selection never runs.
+	$UnclassifiedContextPath=Join-Path $FixtureRoot 'unclassified-context.json'; $UnclassifiedReportPath=Join-Path $FixtureRoot 'unclassified-report.json'
+	[IO.File]::WriteAllText($UnclassifiedContextPath,(ConvertTo-Json -Compress -InputObject ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$HeadRevision;headRevision=$UnwiredHead;workflowRevision=$UnwiredMerge;controllerRevision=$HeadRevision})),$script:Utf8NoBom)
+	$PreviousErrorAction=$ErrorActionPreference; $ErrorActionPreference='Continue'
+	try { $UnclassifiedOutput=@(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SourceScript -ContextJson $UnclassifiedContextPath -OutputPath $UnclassifiedReportPath -RepositoryRoot $FixtureRepo 2>&1 | ForEach-Object { "$_" }); $UnclassifiedExitCode=$LASTEXITCODE }
+	finally { $ErrorActionPreference=$PreviousErrorAction }
+	$Parsed=[IO.File]::ReadAllText($UnclassifiedReportPath,$script:StrictUtf8) | ConvertFrom-Json
+	$NormalIdentity=Get-ControllerIdentity $FixtureRepo $HeadRevision
+	Assert-True ($UnclassifiedExitCode -eq 0 -and $Parsed.execution.reason -ceq 'path_unclassified' -and @($Parsed.selection.obligations | Where-Object { -not $_.selected }).Count -eq 0 -and $Parsed.execution.controllerBlobOid -ceq $NormalIdentity.oid -and $Parsed.execution.controllerSha256 -ceq $NormalIdentity.sha256) "A conservative report must carry the classified report's controller identity (oid: '$($Parsed.execution.controllerBlobOid)'; output: $($UnclassifiedOutput -join ' '))."
+	# Run the workflow's own identity check against that report, with the blob
+	# OID and SHA-256 computed the way the workflow computes them.
+	$WorkflowSource=[IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml'),$script:StrictUtf8)
+	$IdentityCheck=[regex]::Match($WorkflowSource,'(?ms)^          if \(\$null -ne \$ControllerBlobOid\) \{\r?\n.*?^          \}\r?$')
+	Assert-True ($IdentityCheck.Success -and $IdentityCheck.Value.Contains('shadow_report_controller_identity_mismatch')) 'The workflow must keep one extractable controller identity check.'
+	$ControllerBlobOid=[string]@(Invoke-FixtureGit @('rev-parse',"$HeadRevision`:$ControllerPath"))[0]
+	$IdentityHasher=[Security.Cryptography.SHA256]::Create()
+	try { $ControllerSha256=([BitConverter]::ToString($IdentityHasher.ComputeHash((Invoke-BoundedGitBytes $FixtureRepo @('cat-file','blob',$ControllerBlobOid)).Stdout))).Replace('-','').ToLowerInvariant() } finally { $IdentityHasher.Dispose() }
+	. ([scriptblock]::Create($IdentityCheck.Value))
+	# The consumers' context builder accepts the same report on the gap path.
+	$BuilderArguments=@{
+		Mode='Gap';SelectorReportPath=$UnclassifiedReportPath;WorkflowPath=$UnclassifiedContextPath;Repository='ShayShimoni/aetheln-online';Actor='owner';TriggeringActor='owner'
+		BaseRevision=$HeadRevision;HeadRevision=$UnwiredHead;TestedRevision=$UnwiredMerge;WorkflowId='326989724';RunId=$RunId;RunAttempt=[int]$RunAttempt
+		ActionItemsJson=('[{"uses":"actions/checkout","revision":"' + ('3'*40) + '"}]');IdentityContextOutputPath=(Join-Path $FixtureRoot 'unclassified-identity.json')
+	}
+	$UnclassifiedGap=& (Join-Path $RepositoryRoot 'scripts\ci\New-CiAcceptanceAggregateContext.ps1') @BuilderArguments
+	Assert-True ($UnclassifiedGap.mode -ceq 'Gap' -and $UnclassifiedGap.acceptedControllerUnavailable -eq $false -and (@($UnclassifiedGap.selectedUnsupported) -join ',') -ceq 'content-reference-validation,clean-package-provenance-smoke') 'The conservative report must reach the green producer-gap path.'
 
 	# Revision-specific attributes: deleted/source reads base; new/destination
 	# reads head. A changed root/nested policy forces whole-tree re-evaluation.
