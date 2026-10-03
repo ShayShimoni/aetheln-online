@@ -1,5 +1,6 @@
 #include "AethelnPlayerCharacter.h"
 
+#include "AethelnCharacterMovementComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -10,8 +11,6 @@
 #include "Misc/AutomationTest.h"
 #include "UObject/UnrealType.h"
 #endif
-
-DEFINE_LOG_CATEGORY_STATIC(LogAethelnMovementPOC, Log, All);
 
 namespace
 {
@@ -94,25 +93,6 @@ namespace
 			|| ResolvedCameraDistance < SafeRestoreDistance - KINDA_SMALL_NUMBER;
 	}
 
-	void ConfigureGroundRotationMode(
-		UCharacterMovementComponent& Movement,
-		bool bWantsAimSteering,
-		bool bWantsBackpedal)
-	{
-		Movement.bOrientRotationToMovement =
-			!bWantsAimSteering && !bWantsBackpedal;
-		Movement.bUseControllerDesiredRotation =
-			bWantsAimSteering || bWantsBackpedal;
-	}
-
-	void ConfigureAirborneRotationMode(
-		UCharacterMovementComponent& Movement,
-		bool bWantsAimSteering)
-	{
-		Movement.bOrientRotationToMovement = false;
-		Movement.bUseControllerDesiredRotation = bWantsAimSteering;
-	}
-
 	FVector2D ApplyBackpedalSpeedScale(
 		const FVector2D& MovementInput,
 		float BackpedalSpeedScale)
@@ -124,17 +104,6 @@ namespace
 		return MovementInput * DirectionalSpeedScale;
 	}
 
-	float SelectGroundMaxWalkSpeed(
-		bool bSprintAllowed,
-		bool bWantsBackpedal,
-		float WalkSpeed,
-		float SprintSpeed)
-	{
-		return bSprintAllowed && !bWantsBackpedal
-			? SprintSpeed
-			: WalkSpeed;
-	}
-
 	bool IsBufferedJumpReady(
 		bool bHasBufferedJump,
 		double BufferedJumpExpiryTime,
@@ -142,82 +111,6 @@ namespace
 	{
 		return bHasBufferedJump
 			&& CurrentTime <= BufferedJumpExpiryTime;
-	}
-
-	FVector CalculateJumpHorizontalVelocity(
-		const FVector2D& MovementInput,
-		const FRotator& ControlRotation,
-		float MaxGroundSpeed,
-		float BackpedalSpeedScale)
-	{
-		const FVector2D SpeedAdjustedInput =
-			ApplyBackpedalSpeedScale(
-				MovementInput.GetClampedToMaxSize(1.0f),
-				BackpedalSpeedScale);
-		const FRotator YawRotation(
-			0.0f,
-			ControlRotation.Yaw,
-			0.0f);
-		const FVector ForwardDirection =
-			FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
-		const FVector RightDirection =
-			FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
-		return (
-			ForwardDirection * SpeedAdjustedInput.Y
-			+ RightDirection * SpeedAdjustedInput.X)
-			* MaxGroundSpeed;
-	}
-
-	bool ShouldSnapJumpFacing(
-		const FVector2D& MovementInput)
-	{
-		return !MovementInput.IsNearlyZero();
-	}
-
-	bool ShouldUseControllerJumpFacing(
-		bool bWantsAimSteering,
-		bool bWantsBackpedal,
-		const FVector2D& MovementInput)
-	{
-		const FVector2D ClampedInput =
-			MovementInput.GetClampedToMaxSize(1.0f);
-		const bool bPureLateralAimJump =
-			bWantsAimSteering
-			&& FMath::Abs(ClampedInput.X) > KINDA_SMALL_NUMBER
-			&& FMath::Abs(ClampedInput.Y) <= KINDA_SMALL_NUMBER;
-		return bWantsBackpedal
-			|| (bWantsAimSteering && !bPureLateralAimJump);
-	}
-
-
-	float CalculateAimJumpFacingOffset(
-		float BodyYaw,
-		float ControlYaw)
-	{
-		return FRotator::NormalizeAxis(
-			BodyYaw - ControlYaw);
-	}
-
-	float CalculateAimJumpTrackedYaw(
-		float ControlYaw,
-		float FacingOffset)
-	{
-		return FRotator::NormalizeAxis(
-			ControlYaw + FacingOffset);
-	}
-
-	float CalculateControllerJumpFacingYaw(
-		const FRotator& ControlRotation)
-	{
-		return ControlRotation.Yaw;
-	}
-
-	float CalculateJumpFacingYaw(
-		const FVector& HorizontalVelocity)
-	{
-		return HorizontalVelocity.IsNearlyZero()
-			? 0.0f
-			: HorizontalVelocity.Rotation().Yaw;
 	}
 
 	float CalculateAimJumpPresentationYaw(
@@ -423,8 +316,14 @@ bool FAethelnPOCRotationModeTest::RunTest(const FString& Parameters)
 {
 	UCharacterMovementComponent* Movement =
 		NewObject<UCharacterMovementComponent>();
+	// Arguments: falling, aim steering, backpedaling, aim-tracked jump.
+	auto Configure = [Movement](bool bFalling, bool bAimSteering, bool bBackpedaling, bool bTrackedJump)
+	{
+		UAethelnCharacterMovementComponent::ConfigureRotationMode(
+			*Movement, bFalling, bAimSteering, bBackpedaling, bTrackedJump);
+	};
 
-	ConfigureGroundRotationMode(*Movement, false, false);
+	Configure(false, false, false, false);
 	TestTrue(
 		TEXT("Movement without aim steering faces travel direction"),
 		Movement->bOrientRotationToMovement);
@@ -432,7 +331,7 @@ bool FAethelnPOCRotationModeTest::RunTest(const FString& Parameters)
 		TEXT("Movement without aim steering ignores controller yaw"),
 		Movement->bUseControllerDesiredRotation);
 
-	ConfigureGroundRotationMode(*Movement, false, true);
+	Configure(false, false, true, false);
 	TestFalse(
 		TEXT("Backpedaling does not face the reverse travel direction"),
 		Movement->bOrientRotationToMovement);
@@ -440,7 +339,7 @@ bool FAethelnPOCRotationModeTest::RunTest(const FString& Parameters)
 		TEXT("Backpedaling realigns facing to camera-forward"),
 		Movement->bUseControllerDesiredRotation);
 
-	ConfigureGroundRotationMode(*Movement, true, true);
+	Configure(false, true, true, false);
 	TestFalse(
 		TEXT("Reticle aim preserves camera-facing strafing"),
 		Movement->bOrientRotationToMovement);
@@ -448,7 +347,7 @@ bool FAethelnPOCRotationModeTest::RunTest(const FString& Parameters)
 		TEXT("Reticle aim steers character with controller yaw"),
 		Movement->bUseControllerDesiredRotation);
 
-	ConfigureAirborneRotationMode(*Movement, false);
+	Configure(true, false, false, false);
 	TestFalse(
 		TEXT("Airborne movement cannot rotate toward movement input"),
 		Movement->bOrientRotationToMovement);
@@ -456,12 +355,20 @@ bool FAethelnPOCRotationModeTest::RunTest(const FString& Parameters)
 		TEXT("Free airborne movement preserves takeoff facing"),
 		Movement->bUseControllerDesiredRotation);
 
-	ConfigureAirborneRotationMode(*Movement, true);
+	Configure(true, true, false, false);
 	TestFalse(
 		TEXT("Airborne aim never rotates toward movement input"),
 		Movement->bOrientRotationToMovement);
 	TestTrue(
 		TEXT("Airborne aim may rotate facing toward camera yaw"),
+		Movement->bUseControllerDesiredRotation);
+
+	Configure(true, true, false, true);
+	TestFalse(
+		TEXT("Aim-tracked lateral jump never rotates toward movement input"),
+		Movement->bOrientRotationToMovement);
+	TestFalse(
+		TEXT("Aim-tracked lateral jump keeps its sideways offset instead of facing the camera"),
 		Movement->bUseControllerDesiredRotation);
 
 	const FVector2D DiagonalInput(UE_INV_SQRT_2, UE_INV_SQRT_2);
@@ -563,16 +470,16 @@ bool FAethelnPOCBackpedalSpeedTest::RunTest(const FString& Parameters)
 
 	TestEqual(
 		TEXT("Forward movement may use sprint speed"),
-		SelectGroundMaxWalkSpeed(true, false, 500.0f, 700.0f),
+		UAethelnCharacterMovementComponent::SelectGroundMaxSpeed(true, false, 500.0f, 700.0f),
 		700.0f);
 	TestEqual(
 		TEXT("Backward movement cannot sprint"),
-		SelectGroundMaxWalkSpeed(true, true, 500.0f, 700.0f),
+		UAethelnCharacterMovementComponent::SelectGroundMaxSpeed(true, true, 500.0f, 700.0f),
 		500.0f);
 	TestEqual(
 		TEXT("Backward sprint intent remains capped at 350 cm/s"),
 		BackwardInput.Size()
-			* SelectGroundMaxWalkSpeed(
+			* UAethelnCharacterMovementComponent::SelectGroundMaxSpeed(
 				true,
 				true,
 				500.0f,
@@ -598,22 +505,28 @@ bool FAethelnPOCJumpBufferTest::RunTest(const FString& Parameters)
 		TEXT("Landing without a buffered press does not jump"),
 		IsBufferedJumpReady(false, 10.20, 10.10));
 
+	// Takeoff is simulated from the move's acceleration; at control yaw zero +X is forward, +Y right.
+	constexpr float MaxAcceleration = 10000.0f;
 	const FVector LeftTakeoffVelocity =
-		CalculateJumpHorizontalVelocity(
-			FVector2D(-1.0, 0.0),
-			FRotator::ZeroRotator,
+		UAethelnCharacterMovementComponent::CalculateJumpTakeoff(
+			FVector(0.0, -MaxAcceleration, 0.0),
+			MaxAcceleration,
+			0.0f,
 			500.0f,
-			0.7f);
+			false).HorizontalVelocity;
 	TestTrue(
 		TEXT("Latest held left input replaces the previous rightward velocity"),
 		LeftTakeoffVelocity.Equals(FVector(0.0, -500.0, 0.0)));
 
+	const FVector2D BackwardInput =
+		ApplyBackpedalSpeedScale(FVector2D(0.0, -1.0), 0.7f);
 	const FVector BackwardTakeoffVelocity =
-		CalculateJumpHorizontalVelocity(
-			FVector2D(0.0, -1.0),
-			FRotator::ZeroRotator,
+		UAethelnCharacterMovementComponent::CalculateJumpTakeoff(
+			FVector(BackwardInput.Y, BackwardInput.X, 0.0) * MaxAcceleration,
+			MaxAcceleration,
+			0.0f,
 			500.0f,
-			0.7f);
+			false).HorizontalVelocity;
 	TestTrue(
 		TEXT("Buffered backward takeoff respects backpedal speed"),
 		BackwardTakeoffVelocity.Equals(FVector(-350.0, 0.0, 0.0)));
@@ -627,71 +540,61 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnPOCJumpFacingTest::RunTest(const FString& Parameters)
 {
+	// Authoritative takeoff facing is simulated from the move's acceleration and control yaw.
+	constexpr float MaxAcceleration = 10000.0f;
+	// Numeric comparison epsilon for float yaw math; not a tuning value.
+	constexpr float YawTolerance = 0.01f;
+	auto Takeoff = [](const FVector2D& Input, float ControlYaw, bool bAimSteering)
+	{
+		const FVector WorldInput = FRotator(0.0f, ControlYaw, 0.0f).RotateVector(
+			FVector(Input.Y, Input.X, 0.0));
+		return UAethelnCharacterMovementComponent::CalculateJumpTakeoff(
+			WorldInput * MaxAcceleration, MaxAcceleration, ControlYaw, 500.0f, bAimSteering);
+	};
+	const FVector2D ForwardDiagonal(UE_INV_SQRT_2, UE_INV_SQRT_2);
 	TestTrue(
 		TEXT("Free jump chains snap body facing to takeoff direction"),
-		ShouldSnapJumpFacing(
-			FVector2D(-1.0, 0.0)));
-	TestEqual(
+		Takeoff(FVector2D(-1.0, 0.0), 0.0f, false).bHasMoveInput);
+	TestTrue(
 		TEXT("A leftward takeoff faces left immediately"),
-		CalculateJumpFacingYaw(FVector(0.0, -500.0, 0.0)),
-		-90.0f);
+		FMath::IsNearlyEqual(Takeoff(FVector2D(-1.0, 0.0), 0.0f, false).FacingYaw, -90.0f, YawTolerance));
 	TestTrue(
 		TEXT("Aim jumps snap base body to camera-facing"),
-		ShouldSnapJumpFacing(
-			FVector2D(-1.0, 0.0)));
+		Takeoff(FVector2D(-1.0, 0.0), 0.0f, true).bHasMoveInput);
 	TestTrue(
 		TEXT("Backward jumps snap base body to camera-forward"),
-		ShouldSnapJumpFacing(
-			FVector2D(0.0, -1.0)));
+		Takeoff(FVector2D(0.0, -1.0), 0.0f, false).bHasMoveInput);
 	TestTrue(
-		TEXT("Forward-diagonal aim jump facing uses controller yaw"),
-		ShouldUseControllerJumpFacing(
-			true,
-			false,
-			FVector2D(UE_INV_SQRT_2, UE_INV_SQRT_2)));
-	TestFalse(
-		TEXT("Pure-lateral aim jump facing uses travel yaw"),
-		ShouldUseControllerJumpFacing(
-			true,
-			false,
-			FVector2D(1.0f, 0.0f)));
+		TEXT("Simulated forward-diagonal aim jump faces controller yaw"),
+		FMath::IsNearlyEqual(Takeoff(ForwardDiagonal, 35.0f, true).FacingYaw, 35.0f, YawTolerance));
 	TestTrue(
-		TEXT("Backward jump facing uses controller yaw"),
-		ShouldUseControllerJumpFacing(
-			false,
-			true,
-			FVector2D(0.0f, -1.0f)));
-	TestFalse(
-		TEXT("Free lateral jump facing uses travel yaw"),
-		ShouldUseControllerJumpFacing(
-			false,
-			false,
-			FVector2D(-1.0f, 0.0f)));
-	TestEqual(
+		TEXT("Simulated pure-lateral aim jump faces travel yaw"),
+		FMath::IsNearlyEqual(Takeoff(FVector2D(1.0, 0.0), 35.0f, true).FacingYaw, 125.0f, YawTolerance));
+	TestTrue(
+		TEXT("Simulated backward jump faces controller yaw"),
+		FMath::IsNearlyEqual(Takeoff(FVector2D(0.0, -1.0), 35.0f, false).FacingYaw, 35.0f, YawTolerance));
+	TestTrue(
+		TEXT("Simulated free lateral jump faces travel yaw"),
+		FMath::IsNearlyEqual(Takeoff(FVector2D(-1.0, 0.0), 35.0f, false).FacingYaw, -55.0f, YawTolerance));
+	TestTrue(
 		TEXT("Controller-facing jumps snap to camera-forward yaw"),
-		CalculateControllerJumpFacingYaw(
-			FRotator(20.0f, 35.0f, 10.0f)),
-		35.0f);
+		FMath::IsNearlyEqual(Takeoff(FVector2D(0.0, -1.0), 35.0f, true).FacingYaw, 35.0f, YawTolerance));
 	TestFalse(
 		TEXT("Stationary jumps preserve current facing"),
-		ShouldSnapJumpFacing(
-			FVector2D::ZeroVector));
-	const float RightJumpFacingOffset =
-		CalculateAimJumpFacingOffset(90.0f, 0.0f);
-	TestEqual(
-		TEXT("Rightward RMB jump retains its sideways takeoff offset"),
-		RightJumpFacingOffset,
-		90.0f);
-	TestEqual(
-		TEXT("Airborne RMB camera yaw turns the sideways body by the same delta"),
-		CalculateAimJumpTrackedYaw(35.0f, RightJumpFacingOffset),
-		125.0f);
-	TestEqual(
-		TEXT("Airborne RMB tracking normalizes across the yaw boundary"),
-		CalculateAimJumpTrackedYaw(
-			-175.0f,
-			CalculateAimJumpFacingOffset(-170.0f, 170.0f)),
-		-155.0f);
+		Takeoff(FVector2D::ZeroVector, 0.0f, false).bHasMoveInput);
+	// Airborne tracking of the camera turn itself is covered by Aetheln.Movement.Net.AirborneAimTrackingParity.
+	TestTrue(
+		TEXT("Pure-lateral aim jump tracks later camera turns"),
+		Takeoff(FVector2D(1.0, 0.0), 35.0f, true).bAimTracked);
+	TestFalse(
+		TEXT("Forward-diagonal aim jump faces the camera instead of tracking"),
+		Takeoff(ForwardDiagonal, 35.0f, true).bAimTracked);
+	TestFalse(
+		TEXT("Backward aim jump faces the camera instead of tracking"),
+		Takeoff(FVector2D(0.0, -1.0), 35.0f, true).bAimTracked);
+	TestFalse(
+		TEXT("Free lateral jump never tracks the camera"),
+		Takeoff(FVector2D(-1.0, 0.0), 35.0f, false).bAimTracked);
 	return true;
 }
 
@@ -764,7 +667,8 @@ bool FAethelnPOCResponsiveMovementSettingsTest::RunTest(
 
 AAethelnPlayerCharacter::AAethelnPlayerCharacter(
 	const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UAethelnCharacterMovementComponent>(
+		ACharacter::CharacterMovementComponentName))
 {
 	PrimaryActorTick.bCanEverTick = true;
 
@@ -775,7 +679,8 @@ AAethelnPlayerCharacter::AAethelnPlayerCharacter(
 	bUseControllerRotationRoll = false;
 
 	UCharacterMovementComponent* Movement = GetCharacterMovement();
-	ConfigureGroundRotationMode(*Movement, false, false);
+	// Default until the first move; UAethelnCharacterMovementComponent::PhysicsRotation selects the mode per move.
+	Movement->bOrientRotationToMovement = true;
 	Movement->RotationRate = FRotator(0.0f, 720.0f, 0.0f);
 	Movement->JumpZVelocity = 500.0f;
 	Movement->AirControl = 0.0f;
@@ -805,6 +710,8 @@ AAethelnPlayerCharacter::AAethelnPlayerCharacter(
 void AAethelnPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	// Apply the Blueprint-tunable WalkSpeed identically on server and clients; sprint comes from GetMaxSpeed.
+	GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
 	BaseMeshRelativeYaw = GetMesh()->GetRelativeRotation().Yaw;
 	DesiredCameraZoomDistance = CameraBoom->TargetArmLength;
 	UpdateCameraPresentation(0.0f);
@@ -821,7 +728,6 @@ void AAethelnPlayerCharacter::Tick(float DeltaSeconds)
 	{
 		return;
 	}
-	UpdateAirborneAimFacing();
 	UpdateMovementPresentation(DeltaSeconds);
 	UpdateCameraPresentation(DeltaSeconds);
 }
@@ -833,16 +739,14 @@ void AAethelnPlayerCharacter::ReceiveMoveInput(const FVector2D& MovementInput)
 		return;
 	}
 
+	const UAethelnCharacterMovementComponent* AethelnMovement =
+		GetCharacterMovement<UAethelnCharacterMovementComponent>();
 	const FVector2D ClampedInput = MovementInput.GetClampedToMaxSize(1.0f);
 	const FVector2D SpeedAdjustedInput =
-		ApplyBackpedalSpeedScale(ClampedInput, BackpedalSpeedScale);
+		ApplyBackpedalSpeedScale(
+			ClampedInput,
+			AethelnMovement != nullptr ? AethelnMovement->GetBackpedalSpeedScale() : 1.0f);
 	LastMovementInput = ClampedInput;
-	bWantsBackpedal = ClampedInput.Y < -KINDA_SMALL_NUMBER;
-	if (!GetCharacterMovement()->IsFalling())
-	{
-		ApplyCurrentGroundRotationMode();
-		ApplyCurrentGroundSpeed();
-	}
 
 	const FRotator YawRotation = GetMovementReferenceRotation();
 
@@ -893,16 +797,6 @@ void AAethelnPlayerCharacter::ReceiveJumpStarted()
 	}
 
 	ClearBufferedJumpRequest();
-	ApplyCurrentGroundSpeed();
-	ApplyCurrentJumpHorizontalVelocity();
-	bTravelFacingAimJumpActive =
-		bAimSteeringActive
-		&& !ShouldUseControllerJumpFacing(
-			true,
-			bWantsBackpedal,
-			LastMovementInput);
-	ApplyCurrentJumpFacing();
-	CaptureTravelFacingAimJumpOffset();
 	PendingJumpPresentationYaw = CalculateAimJumpPresentationYaw(
 		bAimSteeringActive,
 		LastMovementInput,
@@ -933,9 +827,6 @@ void AAethelnPlayerCharacter::UnPossessed()
 	ResetMovementPresentation(true);
 	ClearBufferedJumpRequest();
 	LastMovementInput = FVector2D::ZeroVector;
-	bWantsBackpedal = false;
-	bTravelFacingAimJumpActive = false;
-	TravelFacingAimJumpOffset = 0.0f;
 	ApplyAimSteeringIntent(false);
 	ApplySprintIntent(false);
 	StopJumping();
@@ -949,9 +840,6 @@ void AAethelnPlayerCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	ResetMovementPresentation(true);
 	ClearBufferedJumpRequest();
 	LastMovementInput = FVector2D::ZeroVector;
-	bWantsBackpedal = false;
-	bTravelFacingAimJumpActive = false;
-	TravelFacingAimJumpOffset = 0.0f;
 	ApplyAimSteeringIntent(false);
 	ApplySprintIntent(false);
 	StopJumping();
@@ -964,7 +852,10 @@ void AAethelnPlayerCharacter::OnJumped_Implementation()
 	LockedJumpPresentationYaw = PendingJumpPresentationYaw;
 	bJumpPresentationActive =
 		!FMath::IsNearlyZero(LockedJumpPresentationYaw);
-	if (bTravelFacingAimJumpActive)
+	// The movement component decided the takeoff just before this.
+	const UAethelnCharacterMovementComponent* AethelnMovement =
+		GetCharacterMovement<UAethelnCharacterMovementComponent>();
+	if (AethelnMovement != nullptr && AethelnMovement->bAimTrackedJump)
 	{
 		CurrentPresentationYaw = 0.0f;
 		FRotator MeshRotation = GetMesh()->GetRelativeRotation();
@@ -984,20 +875,12 @@ void AAethelnPlayerCharacter::OnMovementModeChanged(
 	UCharacterMovementComponent* Movement = GetCharacterMovement();
 	if (Movement->IsFalling())
 	{
-		ConfigureAirborneRotationMode(
-			*Movement,
-			bAimSteeringActive
-				&& !bTravelFacingAimJumpActive);
 		return;
 	}
 
-	bTravelFacingAimJumpActive = false;
-	TravelFacingAimJumpOffset = 0.0f;
 	PendingJumpPresentationYaw = 0.0f;
 	LockedJumpPresentationYaw = 0.0f;
 	bJumpPresentationActive = false;
-	ApplyCurrentGroundRotationMode();
-	ApplyCurrentGroundSpeed();
 	if (PrevMovementMode == MOVE_Falling
 		&& Movement->IsMovingOnGround())
 	{
@@ -1007,39 +890,12 @@ void AAethelnPlayerCharacter::OnMovementModeChanged(
 
 void AAethelnPlayerCharacter::ApplyAimSteeringIntent(bool bWantsAimSteering)
 {
-	const bool bWasAimSteeringActive = bAimSteeringActive;
 	bAimSteeringActive = bWantsAimSteering;
-	UCharacterMovementComponent* Movement = GetCharacterMovement();
-	if (Movement->IsFalling())
+	if (UAethelnCharacterMovementComponent* Movement =
+		GetCharacterMovement<UAethelnCharacterMovementComponent>())
 	{
-		if (bAimSteeringActive
-			&& !bWasAimSteeringActive
-			&& bTravelFacingAimJumpActive)
-		{
-			CaptureTravelFacingAimJumpOffset();
-		}
-		ConfigureAirborneRotationMode(
-			*Movement,
-			bAimSteeringActive
-				&& !bTravelFacingAimJumpActive);
-		return;
+		Movement->bWantsAimSteering = bWantsAimSteering;
 	}
-
-	ApplyCurrentGroundRotationMode();
-}
-
-void AAethelnPlayerCharacter::CaptureTravelFacingAimJumpOffset()
-{
-	if (!bTravelFacingAimJumpActive
-		|| Controller == nullptr)
-	{
-		return;
-	}
-
-	TravelFacingAimJumpOffset =
-		CalculateAimJumpFacingOffset(
-			GetActorRotation().Yaw,
-			Controller->GetControlRotation().Yaw);
 }
 
 void AAethelnPlayerCharacter::UpdateCameraPresentation(float DeltaSeconds)
@@ -1081,99 +937,6 @@ void AAethelnPlayerCharacter::UpdateCameraPresentation(float DeltaSeconds)
 	GetMesh()->SetOwnerNoSee(bCameraMeshHidden);
 }
 
-void AAethelnPlayerCharacter::ApplyCurrentGroundRotationMode()
-{
-	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
-	{
-		ConfigureGroundRotationMode(
-			*Movement,
-			bAimSteeringActive,
-			bWantsBackpedal);
-	}
-}
-
-void AAethelnPlayerCharacter::ApplyCurrentGroundSpeed()
-{
-	UCharacterMovementComponent* Movement = GetCharacterMovement();
-	if (Movement == nullptr)
-	{
-		return;
-	}
-
-	const UWorld* World = GetWorld();
-	const bool bSprintAllowed =
-		bSprintIntentActive
-		&& World != nullptr
-		&& World->GetNetMode() == NM_Standalone;
-	Movement->MaxWalkSpeed = SelectGroundMaxWalkSpeed(
-		bSprintAllowed,
-		bWantsBackpedal,
-		WalkSpeed,
-		SprintSpeed);
-}
-
-void AAethelnPlayerCharacter::ApplyCurrentJumpHorizontalVelocity()
-{
-	UCharacterMovementComponent* Movement = GetCharacterMovement();
-	if (Movement == nullptr
-		|| Controller == nullptr
-		|| LastMovementInput.IsNearlyZero())
-	{
-		return;
-	}
-
-	const FVector HorizontalVelocity =
-		CalculateJumpHorizontalVelocity(
-			LastMovementInput,
-			GetMovementReferenceRotation(),
-			Movement->MaxWalkSpeed,
-			BackpedalSpeedScale);
-	Movement->Velocity.X = HorizontalVelocity.X;
-	Movement->Velocity.Y = HorizontalVelocity.Y;
-}
-
-void AAethelnPlayerCharacter::ApplyCurrentJumpFacing()
-{
-	if (!ShouldSnapJumpFacing(LastMovementInput))
-	{
-		return;
-	}
-
-	const UCharacterMovementComponent* Movement =
-		GetCharacterMovement();
-	const FVector HorizontalVelocity(
-		Movement->Velocity.X,
-		Movement->Velocity.Y,
-		0.0);
-	const bool bUseControllerFacing =
-		ShouldUseControllerJumpFacing(
-			bAimSteeringActive,
-			bWantsBackpedal,
-			LastMovementInput);
-	if (bUseControllerFacing && Controller == nullptr)
-	{
-		return;
-	}
-	if (!bUseControllerFacing
-		&& HorizontalVelocity.IsNearlyZero())
-	{
-		return;
-	}
-
-	FRotator FacingRotation = GetActorRotation();
-	FacingRotation.Pitch = 0.0f;
-	FacingRotation.Yaw = bUseControllerFacing
-		? CalculateControllerJumpFacingYaw(
-			bAimSteeringActive
-				? Controller->GetControlRotation()
-				: GetMovementReferenceRotation())
-		: CalculateJumpFacingYaw(HorizontalVelocity);
-	FacingRotation.Roll = 0.0f;
-	SetActorRotation(
-		FacingRotation,
-		ETeleportType::TeleportPhysics);
-}
-
 FRotator AAethelnPlayerCharacter::GetMovementReferenceRotation() const
 {
 	const float ControlYaw = Controller != nullptr
@@ -1203,42 +966,11 @@ void AAethelnPlayerCharacter::TryConsumeBufferedJump()
 		return;
 	}
 
-	ApplyCurrentJumpHorizontalVelocity();
-	bTravelFacingAimJumpActive =
-		bAimSteeringActive
-		&& !ShouldUseControllerJumpFacing(
-			true,
-			bWantsBackpedal,
-			LastMovementInput);
-	ApplyCurrentJumpFacing();
-	CaptureTravelFacingAimJumpOffset();
 	PendingJumpPresentationYaw = CalculateAimJumpPresentationYaw(
 		bAimSteeringActive,
 		LastMovementInput,
 		MaxAimJumpPresentationYaw);
 	Jump();
-}
-
-void AAethelnPlayerCharacter::UpdateAirborneAimFacing()
-{
-	if (!bTravelFacingAimJumpActive
-		|| !bAimSteeringActive
-		|| Controller == nullptr
-		|| !GetCharacterMovement()->IsFalling())
-	{
-		return;
-	}
-
-	FRotator FacingRotation = GetActorRotation();
-	FacingRotation.Pitch = 0.0f;
-	FacingRotation.Yaw =
-		CalculateAimJumpTrackedYaw(
-			Controller->GetControlRotation().Yaw,
-			TravelFacingAimJumpOffset);
-	FacingRotation.Roll = 0.0f;
-	SetActorRotation(
-		FacingRotation,
-		ETeleportType::TeleportPhysics);
 }
 
 void AAethelnPlayerCharacter::ResetMovementPresentation(
@@ -1287,22 +1019,9 @@ void AAethelnPlayerCharacter::UpdateMovementPresentation(
 
 void AAethelnPlayerCharacter::ApplySprintIntent(bool bWantsToSprint)
 {
-	bSprintIntentActive = bWantsToSprint;
-	const UWorld* World = GetWorld();
-	const bool bStandalone =
-		World != nullptr && World->GetNetMode() == NM_Standalone;
-	ApplyCurrentGroundSpeed();
-	if (!bWantsToSprint || bStandalone)
+	if (UAethelnCharacterMovementComponent* Movement =
+		GetCharacterMovement<UAethelnCharacterMovementComponent>())
 	{
-		return;
-	}
-
-	if (!bIssuedNetworkSprintWarning)
-	{
-		bIssuedNetworkSprintWarning = true;
-		UE_LOG(
-			LogAethelnMovementPOC,
-			Warning,
-			TEXT("POC sprint is disabled outside standalone play. Replicated prediction and server validation remain issue #17 work."));
+		Movement->bWantsToSprint = bWantsToSprint;
 	}
 }

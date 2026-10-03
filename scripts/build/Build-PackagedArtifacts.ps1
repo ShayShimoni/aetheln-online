@@ -23,7 +23,7 @@ project targets always build with -clean.
 .EXAMPLE
 $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
-./scripts/build/Build-PackagedArtifacts.ps1 -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -ArchiveRoot D:/Builds/aetheln-run-001 -LogRoot D:/BuildLogs/aetheln-run-001 -SourceRevision $AethelnRevision -HostToolsBoundary Prebuilt -EngineRevision 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43 -HostToolsAttestationPath $AethelnHostToolsAttestationPath
+./scripts/build/Build-PackagedArtifacts.ps1 -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source-issue81-clean -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -ArchiveRoot D:/Builds/aetheln-run-001 -LogRoot D:/BuildLogs/aetheln-run-001 -SourceRevision $AethelnRevision -HostToolsBoundary Prebuilt -EngineRevision 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43 -HostToolsAttestationPath $AethelnHostToolsAttestationPath
 
 Selects Prebuilt explicitly. Enter the path to an existing external attestation
 record produced with -Stage AttestHostTools after an authorized successful

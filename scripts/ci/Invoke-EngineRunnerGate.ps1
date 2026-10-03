@@ -1896,8 +1896,10 @@ try {
 				revision = $SourceRevision; synchronized = $true }
 			Add-Check -Name 'managed-compile-workspace' -Status 'passed' -CheckStarted $WorkspaceStarted -Command 'synchronize-registered-workspace' -Message 'managed_workspace_synchronized'
 		} catch {
-			Add-Check -Name 'managed-compile-workspace' -Status 'failed' -CheckStarted $WorkspaceStarted -Command 'synchronize-registered-workspace' -Message 'managed_workspace_failed'
-			throw
+			$Reason = [string] $_.Exception.Message
+			if ($Reason -cnotmatch '^managed_workspace_[a-z_]+$' -and $Reason -cnotin @('compile_timeout', 'compile_clock_invalid', 'resource_pressure', 'disk_floor_reached')) { $Reason = 'managed_workspace_failed' }
+			Add-Check -Name 'managed-compile-workspace' -Status 'failed' -CheckStarted $WorkspaceStarted -Command 'synchronize-registered-workspace' -Message $Reason
+			throw $Reason
 		}
 	}
 	$ValidationStarted = [DateTime]::UtcNow

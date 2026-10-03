@@ -352,8 +352,18 @@ try {
 	Assert-True -Condition $AnalyzerCommandMatch.Success -Message 'The default PSScriptAnalyzer command must be discoverable.'
 	$AnalyzerCommand = $AnalyzerCommandMatch.Groups['command'].Value -replace "''", "'"
 	Assert-True -Condition ($AnalyzerCommand -notmatch '-Path\s+scripts,\s*tests') -Message 'PSScriptAnalyzer must receive one path at a time.'
+	Assert-True -Condition ($RunnerSource -match "requiredModuleVersion\s*=\s*'1\.25\.0'" -and $AnalyzerCommand -match 'Import-Module PSScriptAnalyzer -RequiredVersion 1\.25\.0' -and $AnalyzerCommand -match 'psscriptanalyzer_version_invalid') -Message 'The hosted analyzer must load and verify exact PSScriptAnalyzer 1.25.0.'
 
 	$AnalyzerFixtureCommand = @"
+function Import-Module {
+	param([string] `$Name, [version] `$RequiredVersion, [switch] `$Force, `$ErrorAction)
+	if (`$Name -cne 'PSScriptAnalyzer' -or `$RequiredVersion.ToString() -cne '1.25.0') { throw 'fixture module pin mismatch' }
+}
+function Get-Module {
+	param([string] `$Name)
+	if (`$Name -cne 'PSScriptAnalyzer') { return }
+	return [pscustomobject]@{ Version = [version] '1.25.0' }
+}
 function Invoke-ScriptAnalyzer {
 	[CmdletBinding()]
 	param(
@@ -466,6 +476,8 @@ function Mark([string] $Name) { [IO.File]::WriteAllText((Join-Path $PSScriptRoot
 	# Smoke observes package-process quiescence and is deliberately not eligible
 	# for overlap. Its observed concurrent failure must not be hidden by retries.
 	$RunnerSource = Get-Content -LiteralPath $Runner -Raw
+	$HostToolLines = @($RunnerSource -split "\r?\n" | Where-Object { $_ -match "name = 'host-tool-provisioning-tests'; tier = 'required'; script = 'tests/build/Invoke-HostToolProvisioning.Tests.ps1'" })
+	Assert-True -Condition ($HostToolLines.Count -eq 1) -Message 'Host-tool provisioning fixtures must be a required default CI check.'
 	$ConcurrentLine = @($RunnerSource -split "\r?\n" | Where-Object { $_ -match '^\$ConcurrentChecks = ' })
 	Assert-True -Condition ($ConcurrentLine.Count -eq 1 -and $ConcurrentLine[0] -notmatch "'packaged-smoke-test-tests'") -Message 'Packaged smoke fixtures must remain a required serial barrier, not a concurrency experiment.'
 	$SchedulerNames = @('build-packaged-artifacts-tests', 'network-authority-spike-tests', 'engine-runner-gate-tests', 'packaged-smoke-test-tests', 'unreal-automation-tests')

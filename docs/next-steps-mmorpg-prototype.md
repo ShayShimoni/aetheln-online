@@ -317,6 +317,10 @@ Evaluate the result against Issue #48. Only after the prototype passes that gate
    [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6), with
    [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17) as its
    first actionable child rather than a separately counted roadmap step.
+   Issue #17 may start and merge on Unreal Editor/PIE and headless automation
+   evidence while Issue #2's packaged comparison continues; Issue #17's
+   packaged two-client evidence and closure still require Issue #2's final
+   packaged comparison through Issue #15's artifacts.
 9. Pass the prototype exit gate in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before starting the 1.0 vertical slice.
 
 Install the supported Unreal Engine revision and other approved tools only when needed for the corresponding foundation ticket.

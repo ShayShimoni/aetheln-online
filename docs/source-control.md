@@ -89,7 +89,8 @@ remains lockable when it must be edited.
 ## Sensitive Material
 
 Private keys, certificates, signing bundles, provisioning profiles, keystores,
-signing-material directories, and service-account material stay outside source
+signing-material directories, service-account material, and infrastructure
+state files (`*.tfstate`, `*.tfstate.*`, `.terraform/`) stay outside source
 control. Only narrowly named redacted examples may be committed. Never open or
 print a suspected sensitive file to diagnose ignore behavior; test its path with
 `git check-ignore`.
@@ -121,6 +122,46 @@ Branch cleanup is part of completed ticket delivery only after verifying that a
 short-lived ticket branch is merged into `develop`. The rule does not authorize
 a deletion; follow repository operation-permission and Git-safety requirements.
 Never infer a target from a wildcard or broad prune operation.
+
+Decide each ref separately, and record the evidence for every step:
+
+1. Identify the exact PR, reviewed head, and merge commit SHA. Fetch `develop`,
+   read its live remote object ID with `git ls-remote origin refs/heads/develop`,
+   and require `git rev-parse refs/remotes/origin/develop` to equal that ID.
+2. Prove the branch tip is contained in the current target: for a merge commit,
+   `git merge-base --is-ancestor <tip> <merge-sha>` and
+   `git merge-base --is-ancestor <merge-sha> <current-develop-oid>` must both
+   succeed. For squash or rebase, prove the reviewed PR change is still
+   equivalent in the current target tree and the branch has no commits after
+   the reviewed head. Retain the branch if either proof is unavailable.
+3. Confirm no unique work remains: no other open PR uses the branch as its head
+   or base, no stacked branch depends on it, and `git worktree list` shows no
+   worktree that has it checked out.
+4. Immediately before the first deletion, repeat steps 1-3 against the live
+   target: its object ID, ancestry or current-tree equivalence, PRs, stacked
+   branches, and worktrees can change independently. Then read the current
+   local and remote branch object IDs
+   (`git rev-parse refs/heads/<branch>` and
+   `git ls-remote origin refs/heads/<branch>`); each ref that exists must equal
+   the verified tip.
+5. Act only with explicit authorization that names that exact ref. The owner's
+   standing authorization of 2026-10-03 (recorded on
+   [Issue #208](https://github.com/ShayShimoni/aetheln-online/issues/208))
+   satisfies this step for the head branch of a merged PR, together with its
+   worktree; steps 1-4 and 6 still apply to each ref. Delete one
+   ref at a time and bind it to the verified object ID, for example
+   `git update-ref -d refs/heads/<branch> <tip>` locally and
+   `git push --force-with-lease=refs/heads/<branch>:<tip> origin :refs/heads/<branch>`
+   remotely.
+6. Immediately before the second deletion, repeat steps 1-3 against the live
+   target again rather than reusing the first result. Confirm that the remaining
+   ref still equals the verified tip and that the ref deleted first is still
+   absent, not recreated.
+
+Retain the ref and record why whenever any step is uncertain, its evidence
+changes, or a live recheck finds a dependent PR, stacked branch, or worktree. Never delete `main` or `develop`, and never treat a `develop` to
+`main` merge as routine cleanup; that is a separately authorized release
+decision.
 
 ## Verification
 

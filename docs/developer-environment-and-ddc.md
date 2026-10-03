@@ -239,6 +239,215 @@ editor/engine rebuild:
   (`Stage Provenance` runs no build phase and takes no host-tools
   parameters).
 
+### Explicit non-clean host-tool provisioning
+
+When the pinned engine checkout lacks host-tool products, an operator may run
+`scripts/build/Invoke-HostToolProvisioning.ps1` with `-Execute`. This is a
+separate, bounded source-build operation, not a packaging mode or CI fallback.
+It requires clean controller and engine Git trees, the exact canonical engine
+commit, and preflight plus per-target prelaunch comparison of every tracked
+`Engine/` input with its `HEAD` blob. Any assume-unchanged or skip-worktree
+index flag fails closed,
+including flags that make `git status --porcelain` appear clean. Git's normal
+checkout text normalization is applied when comparing file content. This
+prelaunch check does not freeze the checkout against concurrent edits while
+the build runs; the operator must retain exclusive control of the engine
+source tree for the attempt. It also requires no unproven preexisting Win64
+engine, engine-plugin, or UnrealBuildTool outputs and intermediates (tracked
+source-support binaries and exact files
+verified by SHA-1 against a pinned, tracked GitDependencies manifest are
+allowed; a clean Git tree alone does not prove ignored product provenance),
+the pinned MSVC/SDK paths, the existing shared engine-host `.lease`
+file, and a new external evidence directory on the operator's external
+volume. The repository tracks no machine-specific engine path, drive letter,
+or volume identifier: the operator names the external drive with
+`-ExternalDrive` (one uppercase letter; the evidence root must live on it in
+every mode) and, for the bootstrap, supplies `-ExternalVolumeId`, the expected
+`Get-Volume` `UniqueId` of that drive in the form `\\?\Volume{...}\`. The
+bootstrap compares the live volume against that identifier, NTFS, and 4 KiB
+allocation units before admission, before every target, and at final identity
+verification. For the Issue #81 bootstrap on this host, the separately
+registered pinned engine worktree, dependency-download cache, UBA store,
+native logs, child temporary files, and subsequent project-build workspace
+also live on the verified NTFS F: volume. Verify its volume ID, NTFS format,
+and 4 KiB allocation units, then require at least 600 GiB free **before**
+preparing the engine worktree and dependency cache. Recheck for at least 300 GiB free after
+hydration and before native compilation; the controller enforces this latter
+admission gate. These are conservative operating thresholds, not estimates of
+the engine's eventual disk use. The failed D: engine attempt remains recovery
+evidence and its compiled outputs are never imported into F:. This is a local
+operational layout, not a canonical contributor-machine layout. It runs only pinned `Build.bat`
+`UnrealPak`, `ShaderCompileWorker`, and the project's `AethelnOnlineEditor`
+Win64 Development targets. The editor target is built with
+`-Project=<repository root>\AethelnOnline.uproject` rather than the
+all-modules engine `UnrealEditor` target (roughly 1,900 actions instead of
+9,000), so `UnrealEditor.exe`, `UnrealEditor-Cmd.exe`, and the engine
+`UnrealEditor-*.dll` set still land in `Engine/Binaries/Win64` while the
+`AethelnOnlineEditor.target` receipt and `UnrealEditor-Game*.dll` modules land
+in the repository's Git-ignored `Binaries/Win64`; the receipt validation
+resolves those `$(ProjectDir)` products against the controller checkout. It passes explicit local-only executor flags and at most
+`min(4, physical cores, floor((available RAM GiB - 6)/3),
+floor((commit headroom GiB - 6)/3))` actions. It never runs UAT, invokes
+`-clean`, explicitly removes existing engine outputs, or falls back to a
+rebuild. Each target is admitted through the shared resource monitor, so the
+receipt records three target admissions and the minimum/maximum admitted
+action limits on a completed three-target attempt.
+
+The compatible default attempt retains 330 minutes of useful work. The
+explicit Issue #81 F: bootstrap selects 1,440 minutes (24 hours) of useful
+work, followed by up to 10 minutes for owned-process cleanup, up to 120
+minutes for final verification and checkpoint hashing, and up to 20 minutes
+for receipt publication and lease release. All deadlines are monotonic
+ceilings, not expected runtime or permission to launch an engine run. The
+shared lease covers validation through cleanup and checkpoint verification.
+The existing
+resource monitor samples at five-second intervals, rejects three consecutive
+low-RAM or low-commit samples, and maintains a 20 GiB free-space floor on each
+involved physical volume. Any missing product, unproven selected toolchain,
+nonzero exit, zero/unknown action plan, absent action progress, unchanged
+required executable, deadline, pressure, or unproven cleanup fails closed. No automatic retry is
+made for compiler or resource failures; after a valid evidence root exists,
+failure logs, products, and receipts remain on F: for diagnosis. The D:
+supervisor keeps a small independent terminal receipt so loss of F: remains
+reportable. After any sticky monitor failure (pressure, disk floor, clock, or
+measurement) the checkpoint is skipped with
+`checkpointFailure = checkpoint_skipped_<reason>`, the reason travels in the
+terminal receipts, and those receipts are still published: the publication
+worker runs on its own deadline without the failed monitor. Only when that
+publication itself fails does the D: supervisor write an independent
+`resource-failure.json` naming the reason. Captured native output is bounded at 16 MiB per target; past that the
+controller stops recording, appends one `[build_output_truncated]` marker,
+lets the native build run to completion, and records `outputTruncated` in the
+receipt. The shared host lease is released only after owned-child cleanup
+and final identity checks are proven.
+The shared lease is acquired **before** probing the engine source, tool inputs,
+and outputs, then held through the build. In particular, the fresh-output
+preflight rejects a reusable `UnrealBuildTool.dll`, its dependency CSV, and
+generated .NET `bin`/`obj` products: the pinned engine's `Build.bat` calls
+`BuildUBT.bat`, which can otherwise skip rebuilding UBT from source.
+Normal `Setup.bat` hydration is not mistaken for a prior host build: only
+manifest-listed Win64 engine/plugin files and the pinned
+`Engine/Source/Programs/UnrealGameSync/PostBadgeStatus/bin/Release/PostBadgeStatus.exe`
+payload pass with exact path case and matching SHA-1 hashes. Unlisted,
+changed, case-colliding, or reparse-mediated files fail closed.
+If the bounded fresh-host-tool attempt intentionally omits `Setup.bat`'s
+machine setup, hydrate dependencies directly from the pinned engine checkout.
+For this host, first copy and byte-verify the existing download cache to F:,
+then explicitly select it:
+
+```powershell
+& (Join-Path $AethelnEngineRoot 'Engine\Binaries\DotNET\GitDependencies\win-x64\GitDependencies.exe') `
+  "--root=$AethelnEngineRoot" "--cache=$AethelnFDriveDependencyCache" --prompt
+```
+
+This explicit-root invocation hydrates source dependencies only. It does not
+perform `Setup.bat`'s Git-hook installation, redistributable
+installation, or engine registration; record those omissions and verify any
+needed machine prerequisites separately before claiming Editor reproduction.
+For this optional fresh-checkout path, hydrate source dependencies first, then
+run the provisioner before `GenerateProjectFiles.bat` or another build step.
+Project generation may create UBT products that fail this preflight; it is not
+assumed to do so on every host. The normal contributor project-generation and
+Development Editor sequence remains documented in
+[Unreal Project Setup](unreal-project-setup.md).
+
+From a clean committed controller checkout, an authorized operator supplies
+existing validated paths and a *new* F: evidence root. The F: bootstrap uses
+the extended envelope and an independently registered, clean D: supervisor
+checkout at the same controller commit:
+
+```powershell
+./scripts/build/Invoke-HostToolProvisioning.ps1 -Execute `
+  -EngineRoot $AethelnEngineRoot `
+  -EvidenceRoot $AethelnNewFDriveEvidenceRoot `
+  -HostLeasePath $AethelnExistingHostLeasePath `
+  -CompilerPath $AethelnPinnedClExe `
+  -ResourceCompilerPath $AethelnPinnedRcExe `
+  -UsefulWorkMinutes 1440 -VerificationMinutes 120 `
+  -SupervisorEvidenceRoot $AethelnNewDSupervisorEvidenceRoot `
+  -TempRoot $AethelnFDriveTempRoot `
+  -UbaRootDir $AethelnFDriveUbaRoot `
+  -NativeLogRoot $AethelnFDriveNativeLogRoot `
+  -ExternalDrive 'F' `
+  -ExternalVolumeId $AethelnFDriveVolumeId
+```
+
+`$AethelnFDriveVolumeId` is the operator-recorded `(Get-Volume -DriveLetter
+F).UniqueId`; keep it, like every other machine-specific path above, in the
+operator's untracked shell profile rather than in the repository.
+
+The supervisor enforces AC power before launch and prevents only automatic
+idle sleep while the attempt runs. It samples resource headroom and the F:
+volume identity every five seconds, warns below 100 GiB free on F:, refuses
+another target below that threshold, and retains the 20 GiB emergency floor.
+Thirty minutes without log output is an alert, not proof that a compiler or
+linker has stalled. Each target's Unreal receipt and referenced-product
+closure are validated before its completion record and the next target. The
+controller creates a distinct, create-only child of the F: native-log root
+for each attempt; a continuation never rotates or overwrites an earlier
+attempt's UBT logs. The combined tool set is revalidated after all targets.
+
+A useful-work timeout can authorize **one** explicit continuation, not an
+automatic retry. Supply the prior D: receipt with its separately recorded
+SHA-256 using `-ResumeReceiptPath` and `-ResumeReceiptSha256`; both the prior
+D: and F: receipts, D: completion marker, publication result, and supervisor
+confirmation must cross-verify. Only a complete
+checkpoint created by this revised controller for the same F: engine path,
+source, controller, toolchain, configuration, and volume may be reused.
+Checkpoint hashing runs only after native children are quiescent. The
+checkpoint manifest covers generated engine output files only (Win64
+binaries, build intermediates, UnrealBuildTool outputs, and plugin or program
+`bin`/`obj` products); protected-name screening (`.env`, `secrets`,
+`credentials`, `kubeconfig`, and key material) applies to those generated
+files, not to tracked engine source paths that happen to carry such names.
+Project-side outputs under the repository's `Binaries/` and `Intermediate/`
+are not part of the manifest. The
+continuation verifies the prior manifest through one pinned read handle,
+rehashes retained build logs and products for completed targets, and records
+which targets were reused. A verified continuation skips those completed
+targets and resumes unfinished work; interrupted actions may run again. If the
+first unfinished target already linked before interruption, a zero-action
+successful continuation is accepted only with the exact pinned UBT up-to-date
+signal, prior native-progress and log proof, valid target receipt, and complete
+product and identity checks; fresh targets still require positive actions.
+Compiler failures, resource pressure, F: loss, failed
+cleanup, and incomplete or damaged checkpoints require diagnosis rather than
+an automatic retry. Attempt 06 on D: is historical failure evidence, not a
+resumable checkpoint. Preserve outputs on failure; no clean rebuild or
+automatic deletion follows.
+
+Before attestation, require the controller's successful exit, no D:
+`publication-failed.json`, and the create-only D: `publication-confirmed.json`
+written by the supervisor after the publication worker exits successfully.
+The same-volume atomic rename to that final name is the durable publication
+commit point; a leftover temporary confirmation is not authoritative.
+Verify that confirmation against the D: `publication-result-*.json` whose
+`completedTicks` is before its `deadlineTicks`, the D: completion marker, and
+the SHA-256 values of both terminal receipts they name,
+as well as each target's local `build.log`. A completion marker can remain after
+a late write even when the controller rejects publication; neither that marker
+nor either receipt alone establishes success. The separate
+attestation command accepts `-ProvisioningEvidence` as an operator reference,
+so this cross-volume check is an explicit operator gate rather than a claim
+that attestation validates the marker itself. Only then use the successful
+evidence as `-ProvisioningEvidence` for the **separate**
+`Build-PackagedArtifacts.ps1 -Stage AttestHostTools` step below. The provisioner
+checks target-receipt metadata and referenced product closure before reporting
+success, but never creates an attestation. An existing mixed-output engine checkout is
+ineligible: use a separate fresh pinned checkout; this command never cleans or
+deletes those outputs. On a fresh attempt, if the tools already exist unchanged
+and UBT performs zero actions, the provisioner does not relabel that
+incremental result as newly provisioned; use independently retained successful
+build evidence or escalate the non-clean provisioning gap. A successful provisioner fixture test
+does not prove a real engine run, clean Editor reproduction, packaged build,
+cache speedup, or Issue #81 completion. The provisioner receipt is local
+host-tool evidence only. For Issue #81's separate-workspace reproduction,
+retain the exact project-generation and Development Editor command, timing,
+exit status, and failures independently as described in
+[Unreal Project Setup](unreal-project-setup.md#second-workspace-reproduction-record-for-issue-81).
+Keep the raw receipt and logs local; publish only redacted summaries and
+references that omit machine-specific paths and sensitive content.
+
 ### Host-tools attestation record
 
 Provenance of the host binaries is proven by an external, local attestation
@@ -266,9 +475,9 @@ written atomically to a temporary sibling and moved into place), and writes
 file with its engine-relative `path`, lowercase SHA-256, and `sizeBytes`.
 The attested set is not a hand-written list: it is derived from the pinned
 engine's generated Unreal target receipts — the exact
-`UnrealEditor` Win64 Development Editor receipt plus the `UnrealPak` and
-`ShaderCompileWorker` Win64 Development Program receipts under
-`Engine/Binaries/Win64` — whose validated non-symbol build products
+`AethelnOnlineEditor` Win64 Development Editor receipt under the project
+`Binaries/Win64` plus the `UnrealPak` and `ShaderCompileWorker` Win64
+Development Program receipts under `Engine/Binaries/Win64` — whose validated non-symbol build products
 (executables, dynamic libraries, module/resource manifests, and the receipts
 themselves, including engine-plugin products outside `Engine/Binaries/Win64`)
 form the complete closure `-nocompileeditor` would skip. Symbol/debug and
@@ -347,6 +556,43 @@ records the validated runner name in `engine-runner-report.json`. See
 [Continuous Integration](continuous-integration.md) for the gate contract.
 
 ## Evaluation ladder beyond the local DDC
+
+### Shared-DDC decision record (candidate only)
+
+**Current topology evidence (2026-09-28):** GitHub lists one registered
+Windows engine runner for this repository; Issue #81 records the current
+owner-operated clean-package path, but no measured second contributor/cook host
+or shared-cache traffic. This is a dated inventory, not a claim that no other
+contributors exist. A cache shared between processes on that one host would
+add no cross-machine reuse; the local DDC remains the working baseline. No
+shared endpoint, provider, namespace, or budget is approved.
+
+| Candidate | Fit and access boundary | Cost and failure/poisoning boundary |
+| --- | --- | --- |
+| Local DDC only | Fits the evidenced single-runner topology; write access stays within local filesystem permissions. | Uses local SSD capacity and re-derivation time; no network service. A compromised local writer can still corrupt its cache, so use the identity and clean-isolated recovery above. |
+| SMB fileshare | Revisit for multiple measured cooks on a trusted LAN/VPN. Require authenticated accounts, restrictive share and filesystem ACLs, and protected transport; do not expose SMB to the public internet. | Host/disk, monitoring, network, and operator costs are `TBD`. A disconnected/slow share must be tested against an isolated local re-derivation path. Any writer with share permissions can poison or delete entries; a namespace/path name alone is not authorization. |
+| Shared Zen server | Revisit for multiple trusted LAN/VPN cooks with measured latency and cache-hit benefit. Epic states this server is unauthenticated: any reachable user has read/write/delete access, and Zen namespaces do **not** enforce access control. Do not expose it to the internet or untrusted contributors. | Server/storage/network/operations costs are `TBD`. Epic expects local cache to preserve access during shared-layer downtime, at lower performance; verify that behavior in this project's graph. A reachable malicious writer can poison, corrupt, or erase shared data. |
+| Unreal Cloud DDC | Candidate only if remote/multi-region cooks justify an internet-reachable service. Require HTTPS, OIDC authentication, and least-privilege namespace ACLs; never use its unauthenticated example configuration. | Storage, database, identity, network/egress, operations, and recovery costs are `TBD`. Test outage and local re-derivation behavior; compromised write credentials can still poison a namespace. Cloud DDC is not a source-of-truth or build-provenance store. |
+
+Before selecting any shared layer, the Issue #81 owner must record actual
+contributor/runner locations and trust domains, cold/warm cook hit rates and
+elapsed times on identical inputs, cache bytes and growth, network latency and
+transfer, a cost estimate, and outage/recovery tests. Test a wrong-identity or
+malicious-write candidate in an isolated namespace without exposing the
+production cache; untrusted PR code must not publish to a trusted shared
+cache. A successful DDC lookup is not evidence that a package came from
+trusted source: exact source/engine/toolchain identity, clean target builds,
+artifact provenance, and packaged smoke remain independent gates. The owner
+revisits this `TBD` when a second independent cook host is measured, local
+capacity or re-derivation becomes material, or the trust topology changes.
+
+These candidate properties follow Epic's [shared Zen guidance](https://dev.epicgames.com/documentation/en-us/unreal-engine/set-up-zen-storage-server-as-shared-ddc-for-unreal-engine),
+[Cloud DDC deployment and ACL guidance](https://dev.epicgames.com/documentation/en-us/unreal-engine/how-to-set-up-a-cloud-type-derived-data-cache-for-unreal-engine),
+and [DDC overview](https://dev.epicgames.com/documentation/en-us/unreal-engine/using-derived-data-cache-in-unreal-engine);
+Microsoft documents [SMB access and transport controls](https://learn.microsoft.com/en-us/windows-server/storage/file-server/smb-security).
+The no-selection conclusion is an inference from this project's current
+single-runner evidence, not an Epic or Microsoft recommendation for every
+team.
 
 In the authorized evaluation order, the states of the remaining options:
 

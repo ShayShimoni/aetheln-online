@@ -67,6 +67,11 @@ revision and an existing external host-tools attestation record. That record
 must have been produced with `-Stage AttestHostTools` after an authorized,
 successful provisioning build, referencing its retained evidence; see
 [Host-tools attestation record](developer-environment-and-ddc.md#host-tools-attestation-record).
+If the pinned checkout lacks host products, the optional operator-only
+[non-clean host-tool provisioner](developer-environment-and-ddc.md#explicit-non-clean-host-tool-provisioning)
+can produce bounded local build evidence without running UAT or changing this
+clean packaging contract. Provisioning does not create the attestation or
+replace the separate attestation review step.
 Substitute the local roots, enter that existing record's path when prompted,
 and capture the actual full repository `HEAD` for the run:
 
@@ -75,7 +80,7 @@ $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
 .\scripts\build\Build-PackagedArtifacts.ps1 `
   -ProjectPath .\AethelnOnline.uproject `
-  -EngineRoot 'D:\UnrealEngine\UE-5.8.1-source' `
+  -EngineRoot 'D:\UnrealEngine\UE-5.8.1-source-issue81-clean' `
   -LinuxToolchainRoot 'C:\UnrealToolchains\v26_clang-20.1.8-rockylinux8' `
   -ArchiveRoot 'D:\Builds\aetheln-run-001' `
   -LogRoot 'D:\BuildLogs\aetheln-run-001' `

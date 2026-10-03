@@ -30,6 +30,8 @@ function Read-RoutineResourceCapacity {
 		$Memory = & $Monitor.readMemory
 		$Ram = ConvertTo-RoutineResourceInteger -Value $Memory.availableRamBytes
 		$Commit = ConvertTo-RoutineResourceInteger -Value $Memory.commitHeadroomBytes
+		$Monitor.lastAvailableRamBytes = $Ram
+		$Monitor.lastCommitHeadroomBytes = $Commit
 		$Volumes = @()
 		foreach ($Volume in $Monitor.volumes) {
 			$Reading = & $Monitor.readDisk $Volume
@@ -117,6 +119,7 @@ function New-RoutineCompileResourceMonitor {
 		maximumSampleGapMilliseconds = 0L; sampleCount = 0L; measurementCount = 0L;
 		consecutivePressureSamples = 0; maximumConsecutivePressureSamples = 0;
 		minimumAvailableRamBytes = [long]::MaxValue; minimumCommitHeadroomBytes = [long]::MaxValue;
+		lastAvailableRamBytes = $null; lastCommitHeadroomBytes = $null;
 		lastCapacity = $null; failureReason = $null; targetAdmissionCount = 0L; minimumActionLimit = $null; maximumActionLimit = $null
 	}
 	$null = Update-RoutineCompileResources -Monitor $Monitor

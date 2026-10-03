@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-	[Parameter(Mandatory)][ValidateSet('AethelnOnlineClient', 'AethelnOnlineServer')][string] $Target,
+	[Parameter(Mandatory)][ValidateSet('AethelnOnlineClient', 'AethelnOnlineEditor', 'AethelnOnlineServer')][string] $Target,
 	[Parameter(Mandatory)][ValidateSet('Win64', 'Linux')][string] $Platform,
 	[Parameter(Mandatory)][ValidateRange(1, 4)][int] $ActionLimit,
 	[Parameter(Mandatory)][string] $EngineRoot,
@@ -14,7 +14,8 @@ $NativeExit = $null
 $Failure = 'build_capture_failed'
 $ResultStream = $null
 try {
-	if (($Target -ceq 'AethelnOnlineClient') -ne ($Platform -ceq 'Win64')) { throw 'build_target_invalid' }
+	# Linux builds only the server; client and editor targets build only on Win64.
+	if (($Target -ceq 'AethelnOnlineServer') -ne ($Platform -ceq 'Linux')) { throw 'build_target_invalid' }
 	foreach ($Path in @($EngineRoot, $TargetRoot, $LinuxToolchainRoot, $EvidenceRoot)) {
 		if ($Path -cnotmatch '^[A-Za-z]:[\\/]' -or $Path.Substring(2).Contains(':') -or $Path -match '[";%!&|<>^()\x00-\x1f]' -or -not (Test-Path -LiteralPath $Path -PathType Container)) { throw 'build_path_invalid' }
 		$Probe = [IO.Path]::GetFullPath($Path)
@@ -94,7 +95,11 @@ public static class PreparationBuildCapture {
 	$Command = '""{0}" {1} {2} Development "{3}" -WaitMutex -NoHotReloadFromIDE -UBA -UBADisableRemote -NoXGE -NoSNDBS -NoFASTBuild -MaxParallelActions={4}"' -f $Batch, $Target, $Platform, $Project, $ActionLimit
 	if ($Platform -ceq 'Win64') {
 		# Supported by the pinned UEBuildWindows.cs CommandLine attributes.
-		$Command = $Command.TrimEnd('"') + ' -Compiler=VisualStudio2022 -CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0"'
+		# The editor shares the engine tree with contributor builds (TA-020): it omits
+		# -Compiler so UBT resolves the same toolchain enum. -NoEngineChanges is
+		# deferred until the NetCore UHT regeneration follow-up lands.
+		$Selection = if ($Target -ceq 'AethelnOnlineEditor') { '' } else { ' -Compiler=VisualStudio2022' }
+		$Command = $Command.TrimEnd('"') + $Selection + ' -CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0"'
 	}
 	$Cmd = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
 	$NativeExit = [PreparationBuildCapture]::Run($Cmd, ('/d /s /c ' + $Command), $TargetRoot, $LinuxToolchainRoot, $DotnetRoot, (Join-Path $EvidenceRoot 'build.log'))

@@ -95,7 +95,8 @@ function Assert-ManagedWorkspaceProgress {
 
 function Invoke-ManagedWorkspaceGit {
 	param([Parameter(Mandatory)][string] $Root, [Parameter(Mandatory)][string] $Arguments,
-		[Parameter(Mandatory)] $Context, [switch] $AllowMissing)
+		[Parameter(Mandatory)] $Context, [switch] $AllowMissing,
+		[ValidateSet('managed_workspace_git_failed', 'managed_workspace_checkout_failed')][string] $FailureReason = 'managed_workspace_git_failed')
 	Assert-ManagedWorkspaceProgress -Context $Context
 	$Native = $null
 	try {
@@ -109,7 +110,7 @@ function Invoke-ManagedWorkspaceGit {
 		if ($Native.Overflow) { throw 'managed_workspace_git_output_limit' }
 		if ($Native.Process.ExitCode -ne 0) {
 			if ($AllowMissing) { return $null }
-			throw 'managed_workspace_git_failed'
+			throw $FailureReason
 		}
 		return [string] $Native.Output.Result
 	} catch {
@@ -297,7 +298,21 @@ function Sync-ManagedCompileWorkspace {
 		$Incoming = Get-ManagedWorkspaceTree -Root $ControlRoot -Revision $SourceRevision -Context $Context
 		$Current = Get-ManagedWorkspaceTree -Root $TargetRoot -Revision $OldHead -Context $Context
 		Assert-ManagedWorkspaceIndex -Root $ControlRoot -Tree $Incoming -Context $Context
-		Assert-ManagedWorkspaceIndex -Root $TargetRoot -Tree $Current -Context $Context
+		try { Assert-ManagedWorkspaceIndex -Root $TargetRoot -Tree $Current -Context $Context }
+		catch {
+			if ($OldHead -ceq $SourceRevision -or $_.Exception.Message -cne 'managed_workspace_index_mismatch') { throw }
+			# A checkout can update the index and raw files before advancing detached
+			# HEAD. Prove the entire incoming tree before assigning this diagnosis;
+			# never repair or admit that split state automatically.
+			try {
+				Assert-ManagedWorkspaceIndex -Root $TargetRoot -Tree $Incoming -Context $Context
+				Assert-ManagedWorkspaceFile -Root $TargetRoot -Tree $Incoming -Context $Context -VerifyBytes
+			} catch {
+				if ($_.Exception.Message -cin @('compile_timeout', 'compile_clock_invalid', 'resource_pressure', 'disk_floor_reached', 'managed_workspace_deadline')) { throw }
+				throw 'managed_workspace_index_mismatch'
+			}
+			throw 'managed_workspace_partial_checkout'
+		}
 		Assert-ManagedWorkspaceFile -Root $ControlRoot -Tree $Incoming -Context $Context
 		Assert-ManagedWorkspaceFile -Root $TargetRoot -Tree $Current -Context $Context -VerifyBytes
 		$Tracked = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
@@ -324,7 +339,7 @@ function Sync-ManagedCompileWorkspace {
 			# Managed workspaces are verified against raw Git blob bytes. Never let
 			# a machine-level core.autocrlf setting rewrite tracked inputs while
 			# advancing the prepared target to the candidate revision.
-			$null = Invoke-ManagedWorkspaceGit -Root $TargetRoot -Arguments ('-c core.autocrlf=false -c core.eol=lf checkout --detach ' + $SourceRevision) -Context $Context
+			$null = Invoke-ManagedWorkspaceGit -Root $TargetRoot -Arguments ('-c core.autocrlf=false -c core.eol=lf checkout --detach ' + $SourceRevision) -Context $Context -FailureReason 'managed_workspace_checkout_failed'
 		}
 		$FinalHead = (Invoke-ManagedWorkspaceGit -Root $TargetRoot -Arguments 'rev-parse --verify HEAD' -Context $Context).Trim()
 		if ($FinalHead -cne $SourceRevision) { throw 'managed_workspace_revision_mismatch' }
