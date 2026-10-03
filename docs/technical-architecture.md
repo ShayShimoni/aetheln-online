@@ -157,6 +157,7 @@ launcher installation.
 | `GameUI` | CommonUI screens, HUD, presentation view models | `GameCore`; presentation-safe combat interfaces | Authority decisions, direct service or database access |
 | `GameNet` | Sessions, admission, transfer client/server adapters, protocol boundaries, structured observability service | `GameCore`; vendor-neutral interfaces | Combat truth, durable state ownership |
 | `GameServer` | Dedicated-server composition, allocation hooks, service adapters, server-only orchestration | `GameCore`, `GameCombat`, `GameNet` | Client presentation assets |
+| `GameTests` | Editor-only Unreal automation harness (#85): project and module load tests. Module type `Editor`, listed only by the Editor target | `Core` (private) | Gameplay, runtime, or server code; anything a game, client, or server target loads |
 
 Rules:
 
