@@ -42,7 +42,9 @@ function New-CleanSnapshot {
 	return [ordered]@{ items = $Items; pullRequests = $PullRequests }
 }
 
-function New-Pull([int] $Number, [string] $Title, [string] $Head, [int[]] $Linked = @()) {
+function New-Pull {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory pull request fixture.')]
+	param([int] $Number, [string] $Title, [string] $Head, [int[]] $Linked = @())
 	return [ordered]@{ number = $Number; title = $Title; isDraft = $false; isCrossRepository = $false; headRefName = $Head; baseRefName = 'develop'; linkedIssues = $Linked }
 }
 
@@ -72,11 +74,11 @@ try {
 	# that rule on that issue.
 	$Cases = @(
 		@{ Rule = 'done-unchecked-acceptance'; Issue = 4; Mutate = { param($S) $S.items[3].body = "- [x] one`n- [ ] two" } },
-		@{ Rule = 'open-pr-issue-status'; Issue = 7; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'feat(ci): #7 add a check' 'feature/7-add-check') } },
-		@{ Rule = 'open-pr-issue-status'; Issue = 1; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'fix(ci): no title reference' 'fix/1-no-ref' @(1)) } },
-		@{ Rule = 'open-pr-issue-status'; Issue = 99; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'feat(ci): #99 off-board issue' 'feature/99-off-board') } },
+		@{ Rule = 'open-pr-issue-status'; Issue = 7; Mutate = { param($S) $S.pullRequests += , (New-Pull -Number 110 -Title 'feat(ci): #7 add a check' -Head 'feature/7-add-check') } },
+		@{ Rule = 'open-pr-issue-status'; Issue = 1; Mutate = { param($S) $S.pullRequests += , (New-Pull -Number 110 -Title 'fix(ci): no title reference' -Head 'fix/1-no-ref' -Linked @(1)) } },
+		@{ Rule = 'open-pr-issue-status'; Issue = 99; Mutate = { param($S) $S.pullRequests += , (New-Pull -Number 110 -Title 'feat(ci): #99 off-board issue' -Head 'feature/99-off-board') } },
 		# A Blocked issue has no open PR of its own; only carried fixes sit in Blocked.
-		@{ Rule = 'open-pr-issue-status'; Issue = 3; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'fix(ci): #3 blocked work' 'fix/3-blocked-work') } },
+		@{ Rule = 'open-pr-issue-status'; Issue = 3; Mutate = { param($S) $S.pullRequests += , (New-Pull -Number 110 -Title 'fix(ci): #3 blocked work' -Head 'fix/3-blocked-work') } },
 		# Without its release head the release PR is ordinary, so its Release Candidate issue is out of place.
 		@{ Rule = 'open-pr-issue-status'; Issue = 5; Mutate = { param($S) $S.pullRequests[1].headRefName = 'feature/5-not-a-release' } },
 		# A fork names its own branches, so its release or main head earns no exclusion.
@@ -85,11 +87,11 @@ try {
 		# A hotfix PR goes through the normal match: its ticket must be in Code Review.
 		@{ Rule = 'open-pr-issue-status'; Issue = 8; Mutate = { param($S) $S.items[7].status = 'Dev Done' } },
 		@{ Rule = 'code-review-without-pr'; Issue = 8; Mutate = { param($S) $S.pullRequests[2].title = 'fix(net): patch reconnect crash' } },
-		@{ Rule = 'duplicate-pr-issue'; Issue = 8; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'fix(net): #8 second hotfix' 'hotfix/v1.0.2') } },
+		@{ Rule = 'duplicate-pr-issue'; Issue = 8; Mutate = { param($S) $S.pullRequests += , (New-Pull -Number 110 -Title 'fix(net): #8 second hotfix' -Head 'hotfix/v1.0.2') } },
 		@{ Rule = 'code-review-without-pr'; Issue = 2; Mutate = { param($S) $S.pullRequests[0].title = 'feat(ci): add a check' } },
 		# A release head does not count as the Code Review issue's PR.
 		@{ Rule = 'code-review-without-pr'; Issue = 2; Mutate = { param($S) $S.pullRequests[0].headRefName = 'release/v1.1.0' } },
-		@{ Rule = 'duplicate-pr-issue'; Issue = 2; Mutate = { param($S) $S.pullRequests += , (New-Pull 110 'fix(ci): #2 second attempt' 'fix/2-second-attempt') } },
+		@{ Rule = 'duplicate-pr-issue'; Issue = 2; Mutate = { param($S) $S.pullRequests += , (New-Pull -Number 110 -Title 'fix(ci): #2 second attempt' -Head 'fix/2-second-attempt') } },
 		# Head main is a back-merge only into develop.
 		@{ Rule = 'duplicate-pr-issue'; Issue = 2; Mutate = { param($S) $S.pullRequests[3].baseRefName = 'main'; $S.pullRequests[3].title = 'chore(release): back-merge v1.0.0' } },
 		# A draft is reported by its PR number, on any base, and still links its issue.

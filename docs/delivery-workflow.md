@@ -239,7 +239,10 @@ unchanged.
 1. Branch `hotfix/vX.Y.Z` from `main` for a defect in a distributed build, and
    bump PATCH.
 2. Merge it into `main` and tag it.
-3. Merge it back into `develop`, and into an open release branch if one exists.
+3. Merge it back into `develop` through the excluded `main`-into-`develop`
+   back-merge PR, never a second `hotfix/*` PR into `develop`, so the board
+   check's one-PR-per-issue rule holds. Also merge it into an open release
+   branch if one exists.
 
 ## Representative trace and limitation
 

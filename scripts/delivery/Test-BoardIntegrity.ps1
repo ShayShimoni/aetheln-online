@@ -1,4 +1,6 @@
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectId', Justification = 'Consumed by the nested Get-LiveSnapshot.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Repository', Justification = 'Consumed by the nested Get-LiveSnapshot.')]
 param(
 	[string] $FixturePath,
 	[string] $ProjectId = 'PVT_kwHOBB63qs4Bedeu',
