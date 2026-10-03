@@ -1031,8 +1031,10 @@ the retired single-job gate.
   `smoke_logs_invalid`, `smoke_logs_missing`, `net_version_line_invalid`,
   `net_version_missing`, `net_version_mismatch`,
   `net_version_project_mismatch`, `smoke_evidence_missing`,
-  `smoke_evidence_invalid`, and `smoke_not_passed`. Both modes print exactly
-  one reason code and nothing else. Whether a Development package prints the
+  `smoke_evidence_invalid`, `smoke_not_passed`, `release_output_invalid` (no
+  `-OutputPath`), and `release_evidence_failed` (an unexpected error during
+  the checks). Both modes print exactly one reason code and nothing else; any
+  other unexpected error prints `release_packaging_failed`. Whether a Development package prints the
   `LogNetVersion` line to stdout is confirmed only by the first dispatch; if it
   does not, this step fails red.
 - **Uploads (public).** Exactly six files, each with
