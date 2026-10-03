@@ -13,15 +13,18 @@ param(
 # any violation and 0 when the board is clean.
 #
 # Snapshot shape: { items: [{ number, state, status, release, blockedReason,
-# body }], pullRequests: [{ number, title, isDraft, headRefName, baseRefName,
-# linkedIssues: [n] }] }. A pull request links an issue through
-# closingIssuesReferences or a `#<n>` in its title. PRs reference their issue
-# with a body `Refs #<n>` line and no closing keyword or Development link, so
-# the title is the usual link; a carried fix's `Refs` line is not a link.
-# Draft pull requests count as open, and `draft-pr-open` reports the PR's own
-# number. Release, hotfix, and `main` into `develop` back-merge PRs ship work
-# already tracked elsewhere, so they are outside the Code Review match.
-# Only this repository's issues are read.
+# body }], pullRequests: [{ number, title, isDraft, isCrossRepository,
+# headRefName, baseRefName, linkedIssues: [n] }] }. A pull request links an
+# issue through closingIssuesReferences or a `#<n>` in its title. PRs reference
+# their issue with a body `Refs #<n>` line and no closing keyword or
+# Development link, so the title is the usual link; a carried fix's `Refs` line
+# is not a link. A PR that links no issue is left to the hosted
+# `pull-request-policy` title check. Draft pull requests count as open, and
+# `draft-pr-open` reports the PR's own number. Release and `main` into
+# `develop` back-merge PRs ship work already tracked elsewhere, so they are
+# outside the Code Review match; a hotfix PR links its own ticket and is
+# matched like any other. A fork names its own branches, so a cross-repository
+# PR gets no exclusion. Only this repository's issues are read.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -52,7 +55,7 @@ function Invoke-GhGraphQl {
 function Get-LiveSnapshot {
 	# Queries contain no string literals so native argument passing stays safe.
 	$ItemQuery = 'query($id: ID!, $after: String) { node(id: $id) { ... on ProjectV2 { items(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { content { __typename ... on Issue { number state body repository { nameWithOwner } } } fieldValues(first: 30) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } } ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } } } } } } } } }'
-	$PullQuery = 'query($owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { number title isDraft headRefName baseRefName closingIssuesReferences(first: 20) { nodes { number } } } } } }'
+	$PullQuery = 'query($owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { number title isDraft isCrossRepository headRefName baseRefName closingIssuesReferences(first: 20) { nodes { number } } } } } }'
 
 	$Items = New-Object Collections.Generic.List[object]
 	$Cursor = $null
@@ -81,7 +84,7 @@ function Get-LiveSnapshot {
 		$Page = (Invoke-GhGraphQl -Query $PullQuery -Variables @{ owner = $Owner; name = $Name; after = $Cursor }).data.repository.pullRequests
 		foreach ($Node in $Page.nodes) {
 			$PullRequests.Add([pscustomobject][ordered]@{
-				number = $Node.number; title = $Node.title; isDraft = $Node.isDraft
+				number = $Node.number; title = $Node.title; isDraft = $Node.isDraft; isCrossRepository = $Node.isCrossRepository
 				headRefName = $Node.headRefName; baseRefName = $Node.baseRefName
 				linkedIssues = @($Node.closingIssuesReferences.nodes | ForEach-Object { $_.number })
 			})
@@ -131,7 +134,7 @@ function Get-BoardViolation {
 	foreach ($Pull in @($Snapshot.pullRequests)) {
 		if ($Pull.isDraft) { Add-Violation -Rule 'draft-pr-open' -Issue ([int] $Pull.number) -Detail 'is an open draft PR; open a PR only after developer verification' }
 		$Head = Get-OptionalText $Pull 'headRefName'
-		if ($Head -cmatch '^(release|hotfix)/' -or ($Head -ceq 'main' -and (Get-OptionalText $Pull 'baseRefName') -ceq 'develop')) { continue }
+		if (-not $Pull.isCrossRepository -and ($Head -cmatch '^release/' -or ($Head -ceq 'main' -and (Get-OptionalText $Pull 'baseRefName') -ceq 'develop'))) { continue }
 		$Linked = @(@($Pull.linkedIssues) + @([regex]::Matches((Get-OptionalText $Pull 'title'), '#(\d+)') | ForEach-Object { $_.Groups[1].Value }) |
 			Where-Object { $null -ne $_ } | ForEach-Object { [int] $_ } | Sort-Object -Unique)
 		foreach ($Number in $Linked) {
