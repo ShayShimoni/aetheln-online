@@ -10,7 +10,8 @@
  * move is eligible, and caps backpedal speed. Jump takeoff and body facing are
  * set inside the simulation from the move's flags, acceleration and control yaw,
  * so prediction, correction replay and the server compute the same result.
- * Clients never send speeds or rotations.
+ * Clients never send speeds or body rotation; facing is derived from the control
+ * rotation each move already carries.
  */
 UCLASS()
 class GAMECORE_API UAethelnCharacterMovementComponent : public UCharacterMovementComponent
@@ -64,13 +65,19 @@ public:
 		bool bTrackedJump);
 
 	float GetBackpedalSpeedScale() const { return BackpedalSpeedScale; }
-	bool IsAimTrackedJump() const { return bAimTrackedJump; }
 
 	/** Sprint intent. Set by local input, packed into saved moves, and restored from them on the server. */
 	bool bWantsToSprint = false;
 
 	/** Aim-steering (Reticle) intent. Set by local input, packed into saved moves, and restored from them on the server. */
 	bool bWantsAimSteering = false;
+
+	/**
+	 * Simulation state of the current jump: set at takeoff, cleared when not falling, and saved with each
+	 * client move so correction replay restores it. Never sent to the server, which simulates its own.
+	 */
+	bool bAimTrackedJump = false;
+	float AimTrackedJumpYawOffset = 0.0f;
 
 protected:
 	virtual void UpdateFromCompressedFlags(uint8 Flags) override;
@@ -92,13 +99,10 @@ private:
 	friend class FAethelnMovementNetInvalidSprintRejectedTest;
 	friend class FAethelnMovementNetJumpTakeoffParityTest;
 	friend class FAethelnMovementNetFacingSpoofBoundedTest;
+	friend class FAethelnMovementNetAimTrackingReplayTest;
 	friend struct FAethelnMovementNetPredictionPair;
 	friend struct FAethelnMovementNetJumpReplayScenario;
 
 	bool IsBackpedaling() const;
 	float GetSimulatedControlYaw() const;
-
-	/** Simulation state of the current jump, set at takeoff and cleared when not falling. */
-	bool bAimTrackedJump = false;
-	float AimTrackedJumpYawOffset = 0.0f;
 };

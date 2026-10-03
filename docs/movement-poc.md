@@ -248,28 +248,31 @@ degrees/s rate and anything else faces travel; airborne, aim faces the camera
 unless the takeoff was a pure lateral aimed jump, whose sideways body then
 turns with camera yaw while aim is held and holds still while it is released.
 Camera facing turns toward the move's own control yaw, so correction replay
-uses the recorded yaw rather than the live camera. The owning client's
-prediction and replay and the server therefore compute the same facing, and
-remote players receive it through ordinary replicated movement. A client can
-only request aim; it never sends a rotation, and the server never turns the
+uses the recorded yaw rather than the live camera. The aim-tracked jump state
+is saved with each client move, so a correction replay restores it too. The
+owning client's prediction and replay and the server therefore compute the
+same facing, and remote players receive it through ordinary replicated
+movement. A client can only request aim; it sends no body rotation (only the
+control rotation every move already carries), and the server never turns the
 body faster than the rotation rate except at the takeoff and airborne-tracking
 snaps described above. The visible mesh-yaw blends stay local presentation.
 
 `Aetheln.Movement.Net.*` covers the flag round trip, the server speed and
 backpedal clamps, rejected requests, client/server takeoff parity on a
 land-and-rejump direction change, takeoff replay, once and repeated, with a
-turned camera (also for an aimed diagonal jump with aim released), and
-server and simulated-proxy facing equal to the owning client's for aimed
-diagonal jumps, Reticle strafing, S backpedal, and pure lateral airborne aim
-tracking, plus bounds on what a client can obtain through the aim flag
-(rate-limited facing, no extra speed).
+turned camera (also for an aimed diagonal jump with aim released), airborne
+tracking replay across an aim release and re-press, and server and
+simulated-proxy facing equal to the owning client's for aimed diagonal jumps,
+Reticle strafing, S backpedal, and pure lateral airborne aim tracking, plus
+bounds on what a client can obtain through the aim flag (rate-limited facing,
+no extra speed).
 
 Known limits: remote players do not see the local mesh-yaw presentation (the
 35-degree strafe and 25-degree aim-jump turns), and their locomotion Animation
 Blueprint does not yet know the rotation mode, so it uses the travel-facing
-direction clamp. The aim-tracked jump state is not rolled back by a correction:
-a replay starts from the client's current tracking state, and a replayed
-takeoff recomputes the same offset.
+direction clamp. Airborne aim tracking sets server facing to camera yaw plus
+the held offset on every aimed move, with no rate limit; a future directional
+block that reads authoritative facing may need one.
 
 ## Verification and feedback
 

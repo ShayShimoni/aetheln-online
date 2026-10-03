@@ -30,6 +30,8 @@ namespace
 			Super::Clear();
 			bSavedWantsToSprint = false;
 			bSavedWantsAimSteering = false;
+			bSavedAimTrackedJump = false;
+			SavedAimTrackedJumpYawOffset = 0.0f;
 		}
 
 		virtual void SetMoveFor(
@@ -43,6 +45,22 @@ namespace
 				Character->GetCharacterMovement<UAethelnCharacterMovementComponent>();
 			bSavedWantsToSprint = Movement != nullptr && Movement->bWantsToSprint;
 			bSavedWantsAimSteering = Movement != nullptr && Movement->bWantsAimSteering;
+			// Start-of-move jump state, restored before this move is replayed. Moves combine only with equal
+			// flags and no movement-mode change, where the state this move reads is unchanged, so CombineWith
+			// needs no rollback of it.
+			bSavedAimTrackedJump = Movement != nullptr && Movement->bAimTrackedJump;
+			SavedAimTrackedJumpYawOffset = Movement != nullptr ? Movement->AimTrackedJumpYawOffset : 0.0f;
+		}
+
+		virtual void PrepMoveFor(ACharacter* Character) override
+		{
+			Super::PrepMoveFor(Character);
+			if (UAethelnCharacterMovementComponent* Movement =
+				Character->GetCharacterMovement<UAethelnCharacterMovementComponent>())
+			{
+				Movement->bAimTrackedJump = bSavedAimTrackedJump;
+				Movement->AimTrackedJumpYawOffset = SavedAimTrackedJumpYawOffset;
+			}
 		}
 
 		virtual void PostUpdate(ACharacter* Character, EPostUpdateMode PostUpdateMode) override
@@ -76,6 +94,8 @@ namespace
 	private:
 		bool bSavedWantsToSprint = false;
 		bool bSavedWantsAimSteering = false;
+		bool bSavedAimTrackedJump = false;
+		float SavedAimTrackedJumpYawOffset = 0.0f;
 	};
 
 	class FNetworkPredictionData_Client_Aetheln : public FNetworkPredictionData_Client_Character
@@ -207,7 +227,7 @@ bool UAethelnCharacterMovementComponent::DoJump(bool bReplayingMoves, float Delt
 			ETeleportType::TeleportPhysics);
 	}
 	bAimTrackedJump = Takeoff.bAimTracked;
-	AimTrackedJumpYawOffset = FRotator::NormalizeAxis(Takeoff.FacingYaw - ControlYaw);
+	AimTrackedJumpYawOffset = static_cast<float>(FRotator::NormalizeAxis(Takeoff.FacingYaw - ControlYaw));
 	return true;
 }
 
@@ -237,7 +257,7 @@ void UAethelnCharacterMovementComponent::PhysicsRotation(float DeltaTime)
 	bAimTrackedJump = bAimTrackedJump && bFalling;
 	ConfigureRotationMode(*this, bFalling, bWantsAimSteering, IsBackpedaling(), bAimTrackedJump);
 	const float ControlYaw = GetSimulatedControlYaw();
-	const float CurrentYaw = UpdatedComponent->GetComponentRotation().Yaw;
+	const float CurrentYaw = static_cast<float>(UpdatedComponent->GetComponentRotation().Yaw);
 	if (bAimTrackedJump)
 	{
 		// While aim is held the sideways body turns with camera yaw; otherwise it holds and the offset
@@ -251,7 +271,7 @@ void UAethelnCharacterMovementComponent::PhysicsRotation(float DeltaTime)
 		}
 		else
 		{
-			AimTrackedJumpYawOffset = FRotator::NormalizeAxis(CurrentYaw - ControlYaw);
+			AimTrackedJumpYawOffset = static_cast<float>(FRotator::NormalizeAxis(CurrentYaw - ControlYaw));
 		}
 		return;
 	}
@@ -262,12 +282,12 @@ void UAethelnCharacterMovementComponent::PhysicsRotation(float DeltaTime)
 	}
 	// The engine's controller-desired path would read the live control rotation, which correction
 	// replay must not use; turn toward this move's control yaw at the same rate instead.
-	const float TargetYaw = FRotator::NormalizeAxis(ControlYaw);
+	const float TargetYaw = static_cast<float>(FRotator::NormalizeAxis(ControlYaw));
 	if (!FMath::IsNearlyEqual(CurrentYaw, TargetYaw, 1e-3f))
 	{
 		MoveUpdatedComponent(
 			FVector::ZeroVector,
-			FRotator(0.0f, FMath::FixedTurn(CurrentYaw, TargetYaw, GetDeltaRotation(DeltaTime).Yaw), 0.0f),
+			FRotator(0.0f, FMath::FixedTurn(CurrentYaw, TargetYaw, static_cast<float>(GetDeltaRotation(DeltaTime).Yaw)), 0.0f),
 			false);
 	}
 }
@@ -476,6 +496,37 @@ bool FAethelnMovementNetSavedMoveSprintFlagTest::RunTest(const FString& Paramete
 	TestTrue(TEXT("Correction replays the unacknowledged sprint move"), ClientMovement->ClientUpdatePositionAfterServerUpdate());
 	TestFalse(TEXT("Replay restores the live sprint intent afterwards"), ClientMovement->bWantsToSprint);
 	ClientData->SavedMoves.Reset();
+
+	// Aim steering uses custom flag 1 the same way, and each move keeps its start-of-move jump tracking state.
+	constexpr int32 AimFlag = FSavedMove_Character::FLAG_Custom_1;
+	ClientMovement->bWantsAimSteering = true;
+	ClientMovement->bAimTrackedJump = true;
+	ClientMovement->AimTrackedJumpYawOffset = 90.0f;
+	FSavedMovePtr AimMove = ClientData->AllocateNewMove();
+	AimMove->SetMoveFor(ClientCharacter, MoveDeltaTime, Accel, *ClientData);
+	ClientMovement->bWantsAimSteering = false;
+	ClientMovement->bAimTrackedJump = false;
+	ClientMovement->AimTrackedJumpYawOffset = 0.0f;
+	FSavedMovePtr FreeMove = ClientData->AllocateNewMove();
+	FreeMove->SetMoveFor(ClientCharacter, MoveDeltaTime, Accel, *ClientData);
+	TestEqual(TEXT("Aim intent packs into custom flag 1"), AimMove->GetCompressedFlags() & AimFlag, AimFlag);
+	TestEqual(TEXT("No aim intent leaves custom flag 1 clear"), FreeMove->GetCompressedFlags() & AimFlag, 0);
+	TestFalse(
+		TEXT("Moves with different aim intent never combine"),
+		AimMove->CanCombineWith(FreeMove, ClientCharacter, 1.0f));
+	ServerMovement->UpdateFromCompressedFlags(AimMove->GetCompressedFlags());
+	TestTrue(TEXT("Server restores aim intent from the received flags"), ServerMovement->bWantsAimSteering);
+	ServerMovement->UpdateFromCompressedFlags(FreeMove->GetCompressedFlags());
+	TestFalse(TEXT("Server clears aim intent when the flag is absent"), ServerMovement->bWantsAimSteering);
+
+	AimMove->PrepMoveFor(ClientCharacter);
+	TestTrue(TEXT("Preparing a replay restores the move's tracked-jump state"), ClientMovement->bAimTrackedJump);
+	TestEqual(TEXT("Preparing a replay restores the move's tracking offset"), ClientMovement->AimTrackedJumpYawOffset, 90.0f);
+	AimMove->Clear();
+	TestEqual(TEXT("Cleared pooled move forgets aim intent"), AimMove->GetCompressedFlags() & AimFlag, 0);
+	AimMove->PrepMoveFor(ClientCharacter);
+	TestFalse(TEXT("Cleared pooled move forgets the tracked-jump state"), ClientMovement->bAimTrackedJump);
+	TestEqual(TEXT("Cleared pooled move forgets the tracking offset"), ClientMovement->AimTrackedJumpYawOffset, 0.0f);
 	return true;
 }
 
@@ -721,12 +772,14 @@ struct FAethelnMovementNetPredictionPair
 		bAcceptedEveryMove &= bAccepted;
 		MaxYawError = FMath::Max(MaxYawError, YawError());
 
-		// What the server would replicate this frame, applied through the stock simulated-proxy path.
+		// What the server would replicate this frame, applied through the stock simulated-proxy path, then one
+		// frame of the proxy's own movement tick (SimulatedTick), which must not change the replicated facing.
 		Server->GatherCurrentMovement();
 		FRepMovement ReplicatedMovement = Server->GetReplicatedMovement();
 		ReplicatedMovement.Location += ProxyOffset;
 		Proxy->SetReplicatedMovement(ReplicatedMovement);
 		Proxy->OnRep_ReplicatedMovement();
+		Proxy->GetCharacterMovement()->TickComponent(AethelnMovementNetTests::MoveDeltaTime, LEVELTICK_All, nullptr);
 		MaxProxyYawError = FMath::Max(
 			MaxProxyYawError,
 			FMath::Abs(FRotator::NormalizeAxis(Proxy->GetActorRotation().Yaw - Client->GetActorRotation().Yaw)));
@@ -941,6 +994,10 @@ struct FAethelnMovementNetJumpReplayScenario
 				Reference->GetActorRotation().Yaw - RecordedControlRotation.Yaw)) <= YawTolerance);
 
 		const FVector ReplayStartLocation = Replayed->GetActorLocation();
+		const FRotator ReplayStartRotation = Replayed->GetActorRotation();
+		Test.TestTrue(
+			TEXT("Each replay starts away from the takeoff yaw, so a replay that never sets facing fails"),
+			FMath::Abs(FRotator::NormalizeAxis(ReplayStartRotation.Yaw - RecordedControlRotation.Yaw)) > YawTolerance);
 		FNetworkPredictionData_Client_Character* ClientData = ReplayedMovement->GetPredictionData_Client_Character();
 		ReplayedMovement->bWantsToSprint = !bAimed;
 		ReplayedMovement->bWantsAimSteering = bAimed;
@@ -957,7 +1014,7 @@ struct FAethelnMovementNetJumpReplayScenario
 			if (Replay > 0)
 			{
 				// Each correction replays from the server state, here the grounded pre-jump state.
-				Replayed->SetActorLocation(ReplayStartLocation);
+				Replayed->SetActorLocationAndRotation(ReplayStartLocation, ReplayStartRotation);
 				ReplayedMovement->Velocity = FVector::ZeroVector;
 				ReplayedMovement->SetMovementMode(MOVE_Walking);
 				Replayed->ResetJumpState();
@@ -1151,6 +1208,89 @@ bool FAethelnMovementNetAirborneAimTrackingParityTest::RunTest(const FString& Pa
 	Pair.Steps(90, MoveRight, true);
 	TestTrue(TEXT("Client landed"), Pair.ClientMovement->IsMovingOnGround());
 	TestFacingParity(*this, Pair);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnMovementNetAimTrackingReplayTest,
+	"Aetheln.Movement.Net.AimTrackingReplay",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnMovementNetAimTrackingReplayTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnMovementNetTests;
+	const FTestWorld TestWorld;
+	AAethelnPlayerCharacter* Character = TestWorld.SpawnGroundedCharacter(FVector(0.0f, 0.0f, 100.0f));
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	APlayerController* Controller = TestWorld.World != nullptr
+		? TestWorld.World->SpawnActor<APlayerController>(
+			APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters)
+		: nullptr;
+	UAethelnCharacterMovementComponent* Movement = GetMovement(Character);
+	TestNotNull(TEXT("POC character uses the project movement component"), Movement);
+	TestNotNull(TEXT("POC character has a player controller"), Controller);
+	if (Movement == nullptr || Controller == nullptr)
+	{
+		return false;
+	}
+	Controller->Possess(Character);
+
+	// An aimed pure-right takeoff at camera yaw 0: the body faces travel (90) and then tracks camera turns.
+	const FVector RightAccel = FVector::RightVector * Movement->GetMaxAcceleration();
+	float TimeStamp = 0.0f;
+	for (int32 Index = 0; Index < 10; ++Index)
+	{
+		TimeStamp += MoveDeltaTime;
+		Movement->MoveAutonomous(TimeStamp, MoveDeltaTime, 0, FVector::ZeroVector);
+	}
+	TimeStamp += MoveDeltaTime;
+	Movement->MoveAutonomous(
+		TimeStamp, MoveDeltaTime, FSavedMove_Character::FLAG_JumpPressed | FSavedMove_Character::FLAG_Custom_1, RightAccel);
+	TestTrue(TEXT("Aimed lateral jump takes off aim tracked"), Movement->IsFalling() && Movement->bAimTrackedJump);
+
+	// Record the airborne moves as a predicting client does: aim held at camera 30, released at 60, re-pressed at 100.
+	FNetworkPredictionData_Client_Character* ClientData = Movement->GetPredictionData_Client_Character();
+	ClientData->SavedMoves.Reset();
+	const FVector AirborneStartLocation = Character->GetActorLocation();
+	const FVector AirborneStartVelocity = Movement->Velocity;
+	const float PhaseControlYaws[] = {30.0f, 60.0f, 100.0f};
+	const bool bPhaseAims[] = {true, false, true};
+	for (int32 Phase = 0; Phase < 3; ++Phase)
+	{
+		Controller->SetControlRotation(FRotator(0.0f, PhaseControlYaws[Phase], 0.0f));
+		Movement->bWantsAimSteering = bPhaseAims[Phase];
+		for (int32 Index = 0; Index < 5; ++Index)
+		{
+			FSavedMovePtr Move = ClientData->AllocateNewMove();
+			Move->SetMoveFor(Character, MoveDeltaTime, RightAccel, *ClientData);
+			TimeStamp += MoveDeltaTime;
+			Movement->MoveAutonomous(TimeStamp, MoveDeltaTime, Move->GetCompressedFlags(), RightAccel);
+			Move->PostUpdate(Character, FSavedMove_Character::PostUpdate_Record);
+			ClientData->SavedMoves.Add(Move);
+		}
+	}
+	TestTrue(TEXT("Still airborne after the recorded moves"), Movement->IsFalling());
+	const float FirstPassYaw = Character->GetActorRotation().Yaw;
+	// 0 + 90 while aimed at 30 gives 120; released at 60 holds 120 (offset 60); re-pressed at 100 gives 160.
+	TestYaw(*this, TEXT("First pass resumes tracking from the held facing after re-aim"), FirstPassYaw, 160.0f);
+
+	// A correction back to the first recorded move after the client predicted a landing (tracking state
+	// cleared), with the live camera and aim since changed.
+	Character->SetActorLocation(AirborneStartLocation);
+	Movement->Velocity = AirborneStartVelocity;
+	Movement->bAimTrackedJump = false;
+	Movement->AimTrackedJumpYawOffset = 0.0f;
+	Controller->SetControlRotation(FRotator(0.0f, -90.0f, 0.0f));
+	Movement->bWantsAimSteering = false;
+	ClientData->bUpdatePosition = true;
+	TestTrue(TEXT("Correction replays the airborne moves"), Movement->ClientUpdatePositionAfterServerUpdate());
+	TestYaw(
+		*this,
+		TEXT("Replay across aim release and re-press ends with the first-pass (server) facing"),
+		Character->GetActorRotation().Yaw,
+		FirstPassYaw);
+	ClientData->SavedMoves.Reset();
 	return true;
 }
 

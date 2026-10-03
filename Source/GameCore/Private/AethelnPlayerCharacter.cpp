@@ -855,7 +855,7 @@ void AAethelnPlayerCharacter::OnJumped_Implementation()
 	// The movement component decided the takeoff just before this.
 	const UAethelnCharacterMovementComponent* AethelnMovement =
 		GetCharacterMovement<UAethelnCharacterMovementComponent>();
-	if (AethelnMovement != nullptr && AethelnMovement->IsAimTrackedJump())
+	if (AethelnMovement != nullptr && AethelnMovement->bAimTrackedJump)
 	{
 		CurrentPresentationYaw = 0.0f;
 		FRotator MeshRotation = GetMesh()->GetRelativeRotation();
