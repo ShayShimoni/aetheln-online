@@ -193,18 +193,23 @@ roadmap `Target Version` lines (1.0.0 MVP, 1.1.0, 1.2.0, 2.0.0, 2.1.0).
 The first internal pre-release is `v1.0.0-alpha.1`. Plain `v1.0.0` exists only
 when the MVP acceptance criteria pass release QA.
 
-**Build numbers.** Every package, internal or player-facing, carries the
-version in `ProjectVersion` (`Config/DefaultGame.ini`, set when the release
+**Build numbers.** Every package, internal or player-facing, is identified by
+its version in `ProjectVersion` (`Config/DefaultGame.ini`, set when the release
 branch is cut) plus the CI build number as SemVer build metadata, for example
 `1.0.0-alpha.1+412`. Build metadata never changes version precedence, so
 day-to-day internal builds are told apart by build number alone and never
 consume a version. Pre-release tags mark only named internal milestones, not
-every build. The build number is the packaging workflow's GitHub Actions
-`run_number`, which the packaging step stamps into the package. Where a
-platform field accepts only numbers (for example a Windows file version), use
-`MAJOR.MINOR.PATCH.<build number>`. The first release-cut script must verify
-that each consumer of `ProjectVersion` accepts the full string, before relying
-on it.
+every build. The build number is the `run_number` of
+`.github/workflows/release-packaging.yml`, which counts that workflow's runs
+from 1. The committed `ProjectVersion` never carries `+<build>`, so the client
+and server stay network-compatible across builds; the full build version is
+recorded in the package provenance and the release evidence
+([TA-022](architecture-decisions.md#ta-022---dispatch-only-release-packaging-on-a-separate-workflow-identity)).
+A re-run of a release run is refused, so one build number always names one
+package. Where a platform field accepts only numbers (for example a Windows
+file version), use `MAJOR.MINOR.PATCH.<build number>`. The first release-cut
+script must verify that each consumer of `ProjectVersion` accepts the full
+string, before relying on it.
 
 **When the lead cuts a release.**
 
@@ -214,12 +219,35 @@ on it.
 
 **Internal release flow.**
 
-1. Cut `release/vX.Y.Z` from `develop`. Set `ProjectVersion`, move the included
-   tickets to `Release Candidate`, and fill their `Release` field.
-2. Build the internal packages and run release QA on the release branch. Fix
-   defects only on the release branch, and merge each fix back into `develop`.
+1. Cut `release/v<ProjectVersion>` from `develop`, for example
+   `release/v1.0.0-alpha.1`, and commit that exact `ProjectVersion`: the
+   release workflow refuses a branch name that differs from
+   `release/v<ProjectVersion>` in any character. Move the included tickets to
+   `Release Candidate` and fill their `Release` field. When the first release
+   branch is cut, create the `release/*` ruleset recorded in TA-022: block
+   force-push and deletion, require `quality-gates`, and allow no bypass.
+2. Build the internal packages and run release QA on the release branch:
+   - Push the release head, then run
+     `gh workflow run release-packaging.yml --ref release/v<ProjectVersion>`
+     and record the run, its number, and the dispatched head SHA. A new commit
+     voids earlier evidence, so dispatch again after every change.
+   - While the dispatch is queued or running, run no local engine or editor
+     build against the runner's engine root. A run that fails on host-tools
+     attestation after editor automation interleaved is dispatched again.
+   - The run keeps its six evidence reports for 90 days. Packages stay in the
+     durable handoff store on the runner host and are never published, not
+     even as a GitHub pre-release. Before acting on a cleanup request for a
+     tagged build, copy its packages to a retained location.
+   - Fix defects only on the release branch, and merge each fix back into
+     `develop`.
 3. Place an annotated pre-release tag (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`)
-   on the tested release-branch commit. Internal builds never merge to `main`.
+   on the tested release-branch commit, and record the run, the build version,
+   and the evidence digests in the tag message. Internal builds never merge to
+   `main`.
+
+After any security fix to the release workflow or its guard script, update or
+delete every existing `release/*` branch, because each keeps its older copy and
+stays dispatchable.
 
 **Player distribution.** Player distribution means an external playtest on
 `staging`, Early Access, or a store launch on `production`; an external
@@ -227,7 +255,10 @@ playtest counts.
 
 1. Merge the release branch into `main` through a PR, and place the annotated
    tag on the merge commit. A beta playtest may ship a pre-release version.
-2. Publish a GitHub Release that lists the included tickets.
+2. Publish a GitHub Release that lists the included tickets. Publishing
+   packaged bytes anywhere, a GitHub Release included, first needs its own
+   reviewed decision (path-leak scan, licensing, signing, and the TA-022
+   runner-trust revisit).
 3. Back-merge `main` into `develop`, then move the tickets to `Released`.
 
 `main` receives only `release/*` and `hotfix/*` PRs, never other branches and

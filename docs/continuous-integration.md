@@ -132,6 +132,7 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `routine-compile-resources-tests` (`tests/ci/RoutineCompileResources.Tests.ps1`) | Required | Physical-volume recovery floors, sustained memory pressure, sampling, and per-target action admission. |
 | `routine-compile-command-tests` (`tests/ci/RoutineCompileCommand.Tests.ps1`) | Required | Bounded asynchronous native/script command capture, literal argument binding, progress callbacks, and output limits. |
 | `routine-compile-gate-tests` (`tests/ci/RoutineCompileGate.Tests.ps1`) | Required | Actual managed entrypoint against disposable Git fixtures, native receipt validation, deadline rejection before build, and cleanup proof. |
+| `release-packaging-tests` (`tests/ci/Invoke-ReleasePackaging.Tests.ps1`) | Required | Offline fixtures for the release guard and evidence modes: case-sensitive event, repository, actor, attempt, ref, run-number, and `ProjectVersion` refusals; provenance, network-version, and smoke-evidence binding; a closed, create-only, path-free record; and output limited to one reason code. |
 | `unreal-automation-tests` (`tests/ci/Invoke-UnrealAutomationTests.Tests.ps1`) | Required | Portable fixture regression tests for the headless Unreal runner's engine pin, discovery, repository-state, timeout, report validation, and fail-closed exit behavior. |
 | `board-integrity-tests` (`tests/delivery/Test-BoardIntegrity.Tests.ps1`) | Required | Offline snapshot fixtures for every board integrity rule, the violation format, the summary count, and `-Json` output. They never contact GitHub. |
 | `pull-request-policy-tests` (`tests/delivery/Test-PullRequestPolicy.Tests.ps1`) | Required | Base, head-branch, and title rules of the hosted PR policy check, including fork PRs, plus its workflow contract: env-only PR inputs, read-only permissions, a 5-minute bound, and the pinned checkout. |
@@ -187,8 +188,9 @@ changing that historical decision.
 `pull_request`, `push` to `develop`, and the daily `schedule`. It declares no
 manual trigger: a manual trigger on this workflow identity would let an
 operator select an older branch that still carries the retired 1,440-minute
-`PackagedSmoke` job, so none exists and no replacement manual workflow is
-provided. The `quality-gates` job runs the portable suite on every event, on a
+`PackagedSmoke` job, so none exists on this workflow identity. Internal release
+packaging uses the separate workflow described in
+[Release packaging](#release-packaging-issue-226). The `quality-gates` job runs the portable suite on every event, on a
 GitHub-hosted `windows-latest` runner bounded at 30 minutes. That job checks
 out without LFS smudge, fetches only the
 `Content/Maps/StarterMap.umap` LFS object required by the source-control policy
@@ -759,7 +761,8 @@ bounds, concurrency block, handoff contract, and per-phase artifacts. There is
 no single-job package and smoke entry point: no workflow job selects the
 gate's `PackagedSmoke` mode or holds the engine runner for a 24-hour bound.
 Pull requests and pushes cannot start any of the four phases, and no manual
-trigger exists.
+trigger exists on this workflow. The separate release workflow reuses the same
+phases for release heads (see [Release packaging](#release-packaging-issue-226)).
 
 Per event, the jobs that can run are:
 
@@ -938,6 +941,126 @@ credential-like, environment-assignment, environment-table, known token-
 format, and high-entropy values are discarded or redacted. The wrapper exits
 nonzero when a required check fails.
 
+### Release packaging (Issue #226)
+
+`.github/workflows/release-packaging.yml` packages internal pre-releases from a
+release head.
+[TA-022](architecture-decisions.md#ta-022---dispatch-only-release-packaging-on-a-separate-workflow-identity)
+records why it is a separate workflow identity: GitHub runs a dispatched
+workflow from the YAML at the selected ref, so a trigger on
+`prototype-quality-gates.yml` could select an older branch that still carries
+the retired single-job gate.
+
+- **Trigger.** `workflow_dispatch` only, with no inputs, so the dispatched ref
+  is the operator's only choice. There is no pull-request, push, schedule,
+  chained, or comment trigger, so pull-request and fork events cannot start it.
+  The version is never an input: it is the `ProjectVersion` committed in
+  `Config/DefaultGame.ini` at the dispatched commit.
+- **Guard.** `release-gates` runs on GitHub-hosted `windows-latest` with a
+  30-minute bound and no job condition, so a refused dispatch is a visible red
+  check, not an all-skipped run. Its first step after checkout runs
+  `scripts/ci/Invoke-ReleasePackaging.ps1 -Mode Guard` as the only command. It
+  requires, case-sensitively, the `workflow_dispatch` event, this repository,
+  the repository owner as both actor and triggering actor, run attempt 1, a ref
+  of exactly `refs/heads/release/v<ProjectVersion>` (so `release/*` only; never
+  `develop`, `main`, a tag, or a pull-request ref), and a `run_number` of one
+  to ten digits. It reads `ProjectVersion` with the same reader as build
+  provenance, refuses a `ProjectVersion` declared in any other `Config` ini, and
+  writes the version, the build number, and `<ProjectVersion>+<run_number>` to
+  the job summary. The ref is checked before the version, so a dispatch of
+  `develop` fails as `release_ref_invalid`. Reason codes:
+  `release_guard_passed`, `release_event_invalid`, `release_repository_invalid`,
+  `release_actor_invalid`, `release_attempt_invalid`, `release_ref_invalid`,
+  `build_number_invalid`, `project_version_missing`, `project_version_invalid`,
+  `project_version_override`, `project_version_branch_mismatch`, and
+  `release_mode_invalid`. The job then runs the full portable suite on the
+  release head, as `quality-gates` does, and uploads its report unless the
+  guard refused.
+- **Engine jobs.** `release-client-package`, `release-server-package`,
+  `release-provenance-validation`, and `release-packaged-smoke` copy the four
+  scheduled phases: the same gate script, modes, handoff bindings, job bounds
+  (40/40/20/20 minutes), and watchdogs (30/30/10/10). Each needs its
+  predecessor (the first needs `release-gates`) with no status-function bypass
+  and repeats the literal six-clause predicate (the dispatch event, this
+  repository, the `refs/heads/release/` prefix, the owner as actor and as
+  triggering actor, and attempt 1), so GitHub skips a refused run before it
+  requests the self-hosted runner. Expression comparisons ignore case; the
+  guard's case-sensitive check covers that. Re-runs are refused, so one build
+  number always names one package; retry with a new dispatch.
+- **Build number.** The build number is this workflow's own `run_number`,
+  which starts at 1. Only `release-provenance-validation` passes it, as
+  `-BuildNumber`, so provenance gains its `release` block (see
+  [Packaged Builds](packaged-builds.md)). The committed `ProjectVersion` never
+  carries `+<build>`.
+- **Concurrency.** All four engine jobs join `aetheln-engine-runner` with
+  `queue: max` and `cancel-in-progress: false`. Concurrency groups are
+  repository-wide, so release phases wait FIFO with the trusted compile, editor
+  automation, and scheduled phases and never cancel them. A release phase is
+  one more possible waiter with the same bounds, so the 40-minute delay
+  attributable to one running phase is unchanged. Like the scheduled phases,
+  release phases never take the host lease.
+- **Checkout and token.** Workflow permissions are `contents: read`, and no job
+  raises them. Every checkout pins `ref: ${{ github.sha }}` and sets
+  `persist-credentials: false`; engine checkouts also use `fetch-depth: 0`,
+  `lfs: false`, and default cleaning (no `clean:` key). No step reads a secret
+  or a repository variable, downloads an artifact, uses a cache, or
+  interpolates event or ref data.
+- **Private art.** Every engine job pins `UE_ADDITIONAL_PLUGIN_PATHS` empty, and
+  both cook steps refuse to start (`private_plugin_paths_set`) if the value is
+  non-empty (TA-019).
+- **Evidence.** After the smoke gate, `Invoke-ReleasePackaging.ps1 -Mode
+  Evidence` (2-minute step bound) applies the gate's root rules (a local fixed
+  drive, no UNC, containment and no reparse point on every path component). It
+  verifies that `manifest-provenance.json` binds the provenance to this
+  repository, SHA, run, and attempt, that the provenance digest matches, and
+  that the `release` block matches the ref and `run_number`. It then requires a
+  `LogNetVersion` checksum line in the server log and in both client stdout
+  logs, each matching a closed grammar (project name, version, `NetCL`,
+  `EngineNetworkVersion`, `GameNetworkVersion`, and checksum), all three
+  identical, with the version equal to `ProjectVersion`, plus a `smoke_passed`
+  smoke-evidence event. It writes `TestResults/release-evidence.json`
+  (create-only, schema `aetheln.release-evidence/v1`) with validated values
+  only: no absolute path, machine name, address, or free log text. A failure
+  still writes the record with `passed: false` and then fails the step. Reason
+  codes: `release_evidence_passed`, `release_context_invalid`,
+  `release_evidence_exists`, `handoff_root_unset`, `handoff_root_invalid`,
+  `handoff_missing`, `provenance_manifest_invalid`,
+  `provenance_digest_mismatch`, `provenance_invalid`,
+  `provenance_revision_mismatch`, `provenance_release_invalid`,
+  `provenance_build_number_mismatch`, `provenance_inventory_invalid`,
+  `smoke_logs_invalid`, `smoke_logs_missing`, `net_version_line_invalid`,
+  `net_version_missing`, `net_version_mismatch`,
+  `net_version_project_mismatch`, `smoke_evidence_missing`,
+  `smoke_evidence_invalid`, and `smoke_not_passed`. Both modes print exactly
+  one reason code and nothing else. Whether a Development package prints the
+  `LogNetVersion` line to stdout is confirmed only by the first dispatch; if it
+  does not, this step fails red.
+- **Uploads (public).** Exactly six files, each with
+  `if-no-files-found: error` and `retention-days: 90`: `release-ci-report`,
+  the four gate reports (`release-client-package-report`,
+  `release-server-package-report`, `release-provenance-validation-report`, and
+  `release-packaged-smoke-report`), and `release-evidence`. Packaged bytes,
+  cook output, full logs, `build-provenance.json`, and `smoke-evidence.jsonl`
+  are never uploaded or published, including as a GitHub release asset.
+  Packages stay in the durable handoff store on the runner host.
+- **Shared engine state.** Release phases share the engine tree, the DDC, the
+  handoff store, and `milestone/.git` with every other engine job, and other
+  engine jobs may run between release phases by design. A
+  `trusted-editor-automation` job that runs between release phases relinks an
+  attested engine module, so the next package phase is expected to fail closed
+  on host-tools attestation; dispatch again after it finishes. Operator rule:
+  run no local engine or editor build against the runner's engine root while a
+  release dispatch is queued or running, because nothing serializes it and
+  attestation runs only at stage start.
+- **Pins.** `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the release
+  workflow (the exact predicate and guard step, parity with the scheduled
+  phases, and the six uploads), each with a mutation case, and pins
+  repository-wide allowlists for workflow files, triggers, `runs-on` labels, and
+  permissions. These pins catch honest drift only. GitHub settings and the
+  TA-022 operator rules are the controls against a direct push or an approved
+  fork run. `release-packaging-tests` covers both script modes with offline
+  fixtures.
+
 ## Runner Constraints
 
 - Portable checks and the pull-request change-impact classifier use
@@ -1068,8 +1191,10 @@ child, which hands it to `Build-PackagedArtifacts.ps1 -Stage Provenance` so the
 provenance gains a `release` block (see
 [Packaged Builds](packaged-builds.md)). Every other mode rejects it with
 `build_number_mode_invalid`, an invalid value fails as `build_number_invalid`
-before any phase work, and the number never enters the gate report. No workflow
-passes it today, so the scheduled phases are unchanged.
+before any phase work, and the number never enters the gate report. Only the
+release workflow's provenance phase passes it (see
+[Release packaging](#release-packaging-issue-226)); the scheduled phases never
+do, so they are unchanged.
 
 ### Compile Policy
 
@@ -1382,6 +1507,8 @@ incremental compile policy.
   as `unreal-automation-report`, and only after every automation step
   succeeded. Every engine upload uses
   `if-no-files-found: error`; missing evidence cannot establish success.
+- The release packaging workflow uploads exactly six reports and never
+  packaged bytes; see [Release packaging](#release-packaging-issue-226).
 - Package 3C emits attempt-specific
   `ci-receipt-<job-key>-<run-id>-<run-attempt>-<nonce>` archives for the three
   truthful live semantic producers: portable quality, native client/server
@@ -1445,7 +1572,8 @@ incremental compile policy.
   LFS inputs fail closed and require explicit provisioning. Provenance validation
   and scheduled smoke consume
   the verified handoff payloads and do not fetch LFS Content.
-- Artifact retention periods remain an open decision and are not configured.
+- Artifact retention periods remain an open decision and are not configured,
+  except that the release packaging uploads keep 90 days (TA-022).
 
 ## Secret Policy
 
@@ -1473,7 +1601,8 @@ The following remain open exactly as recorded in
 [Security and Operations](security-and-operations.md); this workflow does not
 decide them:
 
-- Artifact retention policy.
+- Artifact retention policy, apart from the 90-day release packaging uploads
+  that TA-022 decides.
 - The exact secret scanner and SBOM format.
 - Artifact signing and the retention policy for local engine logs and archives.
 
