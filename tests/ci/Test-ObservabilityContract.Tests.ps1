@@ -70,9 +70,15 @@ try {
 	if ($Implementation.IndexOf($Sensitive, [StringComparison]::Ordinal) -lt 0) {
 		throw 'Build-context implementation does not compare the profile schema case-sensitively.'
 	}
+	[System.IO.File]::WriteAllText($ImplementationPath, $Implementation.Replace('InNetworkProfile', 'InProfile'))
+	$Pass = Invoke-Check
+	if ($Pass.ExitCode -ne 0) {
+		throw "Harmless parameter rename in the build-context implementation was rejected: $($Pass.Output -join [Environment]::NewLine)"
+	}
+	Write-Output 'PASS: harmless build-context parameter rename is accepted'
 	[System.IO.File]::WriteAllText($ImplementationPath, $Implementation.Replace($Sensitive, $Insensitive))
 	$Fail = Invoke-Check
-	if ($Fail.ExitCode -eq 0 -or ($Fail.Output -join "`n") -notmatch 'Build-context profile schema') {
+	if ($Fail.ExitCode -eq 0 -or ($Fail.Output -join "`n") -notmatch 'case-insensitive comparison') {
 		throw "Case-insensitive build-context schema replacement did not fail closed: $($Fail.Output -join [Environment]::NewLine)"
 	}
 	Write-Output 'PASS: case-insensitive build-context schema replacement fails closed'

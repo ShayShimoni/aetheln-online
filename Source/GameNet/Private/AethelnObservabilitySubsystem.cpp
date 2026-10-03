@@ -463,6 +463,10 @@ bool FAethelnObservabilitySubsystemBuildContextCaseTest::RunTest(const FString& 
 		TestEqual(TEXT("Restricted event retains original build"), RestrictedSink->GetEvents()[1].Build.BuildIdentity, Build.BuildIdentity);
 		TestEqual(TEXT("Restricted event retains original profile"), RestrictedSink->GetEvents()[1].NetworkProfile.ProfileId, Profile.ProfileId);
 	}
+
+	CaseVariant.SchemaId = Profile.SchemaId;
+	TestTrue(TEXT("Same replacement with the exact profile schema is accepted"),
+		Subsystem->SetBuildContext(ReplacementBuild, CaseVariant));
 	return true;
 }
 
