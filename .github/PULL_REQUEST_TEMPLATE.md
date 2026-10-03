@@ -6,8 +6,9 @@
 
 Refs #<issue>
 <!-- develop is the default branch, so a closing keyword (Closes/Fixes/Resolves)
-would close the issue at merge, before QA. Use "Refs #<issue>" and also link
-the issue from the Development sidebar. -->
+would close the issue at merge, before QA. A manual Development-sidebar link
+closes it the same way. Use only "Refs #<issue>" and do not link the issue
+from the Development sidebar. -->
 
 ## Verification
 

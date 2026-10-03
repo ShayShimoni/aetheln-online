@@ -181,9 +181,10 @@ Follow the scoped Conventional Commit-style subjects established by repository
 history: `type(scope): #<issue> <imperative summary>`, for example
 `feat(combat): #17 add replicated sprint ability`. Keep commits scoped. Pull
 requests follow [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md):
-explain intent, link the ticket, list exact verification, name the review focus,
-record review evidence and residual limitations, and include screenshots or
-video for visible gameplay or UI changes.
+explain intent, reference the ticket with `Refs #<issue>`, list exact
+verification, name the review focus, record review evidence and residual
+limitations, and include screenshots or video for visible gameplay or UI
+changes.
 
 Releases follow [Releases and versioning](docs/delivery-workflow.md#releases-and-versioning).
 Feature and fix PRs target `develop`, the default branch. `main` receives
@@ -204,9 +205,12 @@ verification, and owner merge authorization separate. Never label agent review
 as human approval or claim a self-authored PR was `APPROVED` by its author.
 `Dev Done` needs a reviewed and verified merge; `QA` and `Done` need distinct
 post-merge evidence. `develop` is the default branch, so a closing keyword in
-a PR into `develop` closes the issue on merge. Reference the issue with
-`Refs #<issue>` instead, and do not close an issue or advance its board status
-merely because a PR merged.
+a PR into `develop` closes the issue on merge, and so does a manual
+Development-sidebar link. Reference the issue with `Refs #<issue>` only and do
+not add a Development link. Closing keywords in commit messages also close
+issues once merged into the default branch, so commits use `#<issue>` without
+a closing keyword. Do not close an issue or advance its board status merely
+because a PR merged.
 
 The project board is the source of truth for work status. It must reflect
 current reality at all times. Update it in the same step as every action
@@ -230,8 +234,12 @@ Board moves, made in the same step as the action:
   on those gates is not `Blocked`.
 - Every open PR into `develop`, other than `release/*`, `hotfix/*`, and
   back-merge PRs, has its issue in `Code Review`. Keep at most one open PR per
-  issue, so these PRs match the `Code Review` cards one to one. Release and
-  hotfix PRs follow
+  issue and one `Code Review` card per PR, so these PRs match the
+  `Code Review` cards one to one. When a PR also carries a fix for a second
+  issue, that second issue gets no `Code Review` card: it moves to `Blocked`
+  with a `Blocked Reason` naming the carrying PR, the PR body lists it with
+  `Refs #<second-issue>`, and after the merge it moves to `Dev Done` or `QA`
+  as its evidence supports. Release and hotfix PRs follow
   [Releases and versioning](docs/delivery-workflow.md#releases-and-versioning).
 - Move the issue to `Dev Done` only after the PR is reviewed, verified, and
   merged. For an issue that needs several PRs, return it to `In Progress`
@@ -240,7 +248,8 @@ Board moves, made in the same step as the action:
 - Any move out of `Code Review` other than a merge closes the PR unmerged.
   Do not delete or force-push its branch, so the PR can be reopened, and
   record on the issue how to resume.
-- Every `Blocked` issue has a current `Blocked Reason` and no open PR.
+- Every `Blocked` issue has a current `Blocked Reason` and no open PR of its
+  own.
 - When implementation or blocker-removal work starts on a `Blocked` issue,
   clear the reason and move it to `In Progress`; when a QA round resumes on
   it, move it to `QA`. If the reason still holds when that work stops, return

@@ -31,11 +31,11 @@ column solely to make the board look current.
 | `In Progress` | Work started on an identified branch, worktree, or evidence task. | Complete developer verification and publish a reviewable artifact; then `Code Review`. Keep this state if publication is not authorized or a recoverable attempt fails. |
 | `Code Review` | Reviewable PR, exact head, scope, and developer checks recorded. | Record the applicable current-head CI, independent-agent review, any explicitly required human review, and owner merge authorization; merge into `develop` before `Dev Done`. After a partial merge of a multi-PR issue, return to `In Progress`. |
 | `Dev Done` | Reviewed, verified implementation merged; record PR, merge SHA, review, and checks. | Start separately authorized post-merge QA (`QA`), or record an explicit QA-not-applicable decision and distinct acceptance verification before `Done`. |
-| `QA` | Independent post-merge QA has started on the merged revision with procedure and environment recorded. | Record raw result, revision, limitations, and disposition; only passing required QA permits `Done`. Stay in `QA` only while the round runs. At round end: every box checked goes to `Done`; a failed criterion that needs a fix returns to `Open` with a comment giving the expected and actual result and exact reproduction steps; criteria that wait only for a later QA round return to `Dev Done`; a criterion waiting on a decision or dependency goes to `Blocked`. |
+| `QA` | Independent post-merge QA has started on the merged revision with procedure and environment recorded. | Record raw result, revision, limitations, and disposition; only passing required QA permits `Done`. Stay in `QA` only while the round runs. At round end: every box checked goes to `Done`; a failed criterion that needs a fix returns to `Open` with a comment naming the failed criterion and the `develop` commit and giving the expected and actual result and exact steps to reproduce or simulate the failure; criteria that wait only for a later QA round return to `Dev Done`; a criterion waiting on a decision or dependency goes to `Blocked`. |
 | `Done` | Required QA or explicitly substituted acceptance verification is recorded on the issue, acceptance criteria are satisfied, and no required work remains. | When a release branch that contains the work is cut, move to `Release Candidate`; otherwise no routine transition. New work uses a new or deliberately reopened ticket. |
 | `Release Candidate` | The work is in a cut `release/vX.Y.Z` branch, which carries an internal pre-release tag; the board `Release` field records the tag. | Move to `Released` when that release is distributed to players. If the work is pulled from the release, return to `Done` and clear `Release`. |
 | `Released` | The release that contains the work was distributed to players, merged to `main`, tagged, published as a GitHub Release, and back-merged into `develop`. | No routine transition. A defect in a released build starts a `hotfix/*` cycle with its own ticket. |
-| `Blocked` | A named prerequisite, decision, permission, dependency, or external condition prevents meaningful safe progress after viable alternatives are exhausted; record `Blocked Reason`. | When implementation or blocker-removal work starts, clear the reason and move it to `In Progress` (or to `QA` when a QA round resumes); return it to `Blocked` if the reason still holds when that work stops. Once resolved, return to the state supported by current evidence. A `Blocked` issue has no open PR. |
+| `Blocked` | A named prerequisite, decision, permission, dependency, or external condition prevents meaningful safe progress after viable alternatives are exhausted; record `Blocked Reason`. | When implementation or blocker-removal work starts, clear the reason and move it to `In Progress` (or to `QA` when a QA round resumes); return it to `Blocked` if the reason still holds when that work stops. When a separate issue tracks the blocker, that separate issue moves to `In Progress` instead. Once resolved, return to the state supported by current evidence. A `Blocked` issue has no open PR of its own. When another issue's PR also carries its fix, it gets no `Code Review` card: its `Blocked Reason` names the carrying PR, the PR body lists it with `Refs #<issue>`, and after the merge it moves to `Dev Done` or `QA` as its evidence supports. |
 
 `Dev Done` never implies QA passed. Development tests, self-review, PR merge,
 and a board move cannot be reused as independent post-merge QA. If QA is not
@@ -47,9 +47,10 @@ distinct acceptance evidence; it is not a shortcut for missing verification.
 - Keep issue acceptance and definition-of-done checkboxes unchecked until
   their own evidence exists. Record links and exact revisions on the issue.
 - Use native blocked-by/blocking and parent/sub-issue relationships where
-  available, and link the PR to its issue. A dependency is satisfied only at
-  the evidence level required by its consumer: `Dev Done` suffices for reviewed
-  merged implementation; `Done` is required for QA or completed acceptance.
+  available, and reference the issue in its PR with `Refs #<issue>`. A
+  dependency is satisfied only at the evidence level required by its consumer:
+  `Dev Done` suffices for reviewed merged implementation; `Done` is required
+  for QA or completed acceptance.
   A closed issue or board label alone does not prove either. If the consumer
   does not specify the level, the lead must record it from authoritative scope
   before declaring readiness.
@@ -58,10 +59,11 @@ distinct acceptance evidence; it is not a shortcut for missing verification.
   [Issue #16](https://github.com/ShayShimoni/aetheln-online/issues/16)).
   GitHub honours closing keywords in PRs into the default branch, so a
   `Closes #<issue>` line in a `develop` PR would close the issue at merge,
-  before QA. Reference the issue with `Refs #<issue>` instead, and link it
-  through GitHub's Development sidebar. Record the merge SHA, move the board
-  to `Dev Done`, and leave the issue open until its required QA/acceptance
-  evidence permits `Done`.
+  before QA. A manually linked PR merged into the default branch also closes
+  the issue, so review a PR's linked issues before merging. Do not add a
+  Development-sidebar link on PRs into `develop`: `Refs #<issue>` is the only
+  reference. Record the merge SHA, move the board to `Dev Done`, and leave the
+  issue open until its required QA/acceptance evidence permits `Done`.
 - PRs into `main` (`release/*` and `hotfix/*` only) also use `Refs`; the
   issues they ship are already `Done`. If GitHub closes an issue before its
   QA/Done board evidence is recorded, add the evidence to the closed issue and
