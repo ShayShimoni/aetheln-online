@@ -402,6 +402,76 @@ attribute initialization, and replication for the `PlayerState`-owned component.
 Reference:
 [Understanding the Unreal Engine Gameplay Ability System](https://dev.epicgames.com/documentation/en-us/unreal-engine/understanding-the-unreal-engine-gameplay-ability-system).
 
+### Gameplay Tag and Content-Version Conventions
+
+The foundation that implements these conventions is specified in
+[Gameplay Ability System Foundation](gas-foundation.md).
+
+**Two vocabularies, one mapping.** Canonical semantic IDs such as
+`combat.resource.endurance` and `order.oathscar.ability.gate_step` are the
+content identity and belong to the registry work in
+[#106](https://github.com/ShayShimoni/aetheln-online/issues/106). Gameplay Tags
+are the runtime vocabulary. Every tag that names authored content maps one to
+one to a semantic ID in the table below. A tag is never reused for a different
+meaning. Renaming a tag is a migration that bumps every affected content
+version.
+
+**Declaration.** Authoritative tags are native C++ tags declared in `GameCore`
+(`AethelnGameplayTags`). No authoritative logic depends on a tag that exists
+only in an ini file or a Blueprint asset. Client and server builds must have
+identical tag lists.
+
+**Spelling.** Dotted PascalCase segments with no spaces, following the
+existing examples `Ability.Melee.Combo1`, `State.Dodging`, and
+`Cooldown.Dodge`. Those three are style references, not registered tags; #18
+and #60 register the tags for dodge and the basic chain when they add them.
+Working names may appear in tags. A display rename does not require a tag
+rename.
+
+**Families.**
+
+| Family | Meaning | Who applies it |
+| --- | --- | --- |
+| `Ability.<Order>.<Name>` | Ability identity, the request `AbilityId` | Granted by the server |
+| `Cooldown.<Order>.<Name>` | Ability on cooldown | Shared cooldown effect, server |
+| `State.<Name>` | Authoritative actor state, for example `State.Dead` and `State.Dodging` | Server-owned effects or abilities of the owning issue only |
+| `SetByCaller.<Purpose>.<Name>` | Effect magnitude keys, for example `SetByCaller.Cooldown.Duration`, `SetByCaller.Cost.Endurance`, `SetByCaller.Init.MaxHealth` | Server code building specs |
+
+`GameplayCue.*` (presentation, #61 and #97), damage-family effect tags (#60),
+and territory `Policy.*` tags (2.x) are reserved for their owners. The engine's
+activation-failure tags are not configured: the activation seam reads its
+rejection reason from the cooldown, cost, and tag checks directly.
+
+**Client input.** The only tag a client sends is the request `AbilityId`. The
+server accepts it only if it is in the `Ability.` family and names an ability
+granted to that character.
+
+**Content version.** Every ability definition has an unsigned `ContentVersion`,
+starting at 1. Bump it in the same change whenever an authoritative field
+changes: cost, cooldown, tag requirements or blocks, phase support, applied
+effects, and later #60's windows and shapes. Presentation-only changes do not
+bump it. The server accepts only an exact match and otherwise fails closed with
+`IncompatibleVersion`. The request struct has its own `SchemaVersion`, which is
+bumped on any layout change; an older schema is rejected. The authoritative
+`CombatActivation` record carries the `ContentVersion` the server used. Ability
+definitions live in config ini until #106 generates them. Until then, bumps are
+manual and checked in review.
+
+**Initial entries.**
+
+| Tag | Semantic ID | Owner |
+| --- | --- | --- |
+| `Ability.Oathscar.GateStep` | `order.oathscar.ability.gate_step` | #19 (skeleton), #60 (contact) |
+| `Ability.Oathscar.SwornRebuke` | `order.oathscar.ability.sworn_rebuke` | #19 (skeleton), #60 (contact) |
+| `Ability.Oathscar.HoldTheLine` | `order.oathscar.ability.hold_the_line` | #19 (skeleton), #60 (Guard result) |
+| `Cooldown.Oathscar.GateStep`, `Cooldown.Oathscar.SwornRebuke`, `Cooldown.Oathscar.HoldTheLine` | (cooldown state of the above) | #19 |
+| `State.Dead` | (death flow state) | Declared by #19, applied by #21 |
+
+Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
+`combat.resource.health`, `combat.resource.endurance`, and
+`combat.resource.guard`. The working names Gate Step, Sworn Rebuke, Hold the
+Line, Endurance, Guard, and Oathscar are not final display names.
+
 ## Pure Free Aim
 
 Input provides intent:
