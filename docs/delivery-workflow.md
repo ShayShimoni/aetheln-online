@@ -64,8 +64,9 @@ distinct acceptance evidence; it is not a shortcut for missing verification.
   Development-sidebar link on PRs into `develop`: `Refs #<issue>` is the only
   reference. Record the merge SHA, move the board to `Dev Done`, and leave the
   issue open until its required QA/acceptance evidence permits `Done`.
-- PRs into `main` (`release/*` and `hotfix/*` only) also use `Refs`; the
-  issues they ship are already `Done`. If GitHub closes an issue before its
+- PRs into `main` (`release/*` and `hotfix/*` only) also use `Refs`. The
+  issues a release PR ships are already `Done`; a hotfix PR's own ticket is in
+  `Code Review` while the PR is open. If GitHub closes an issue before its
   QA/Done board evidence is recorded, add the evidence to the closed issue and
   update the board directly; do not reopen solely to traverse columns. Closure
   never counts as QA or acceptance proof.
@@ -122,8 +123,14 @@ the same result for tooling. It reports:
 A PR links an issue through a `#<issue>` in its title or a GitHub closing
 reference. The body's `Refs #<issue>` lines are not links, so the second
 issue of a carried fix can sit in `Blocked` as that rule requires. The last
-three rules skip `release/*`, `hotfix/*`, and `main`-into-`develop`
-back-merge PRs, which ship work already tracked on its own tickets.
+three rules skip `release/*` and `main`-into-`develop` back-merge PRs, which
+ship work already tracked on its own tickets, but only when the head branch
+is in this repository: a fork names its own branches and gets no exception.
+A `hotfix/*` PR links its own ticket and is matched like any other PR, so
+that ticket is in `Code Review` while the PR is open. Any other PR with
+neither a title `#<issue>` nor a closing reference links nothing, so the
+board check cannot see it; the hosted `pull-request-policy` title check
+reports it instead.
 
 Run it at session start, after every merge, and before every release cut. A
 violation is fixed, or ticketed when it cannot be fixed at once, before other
@@ -137,7 +144,10 @@ not `release/*` or `hotfix/*`, whose head branch does not start with
 lacks `#<issue>`. A `release/*` PR, into `main` or merging release fixes back
 into `develop`, and the `main`-into-`develop` back-merge may omit the issue,
 because they carry several tickets rather than one. A `hotfix/*` PR has its
-own ticket, so its title still needs it.
+own ticket, so its title still needs it. These `release/*`, `hotfix/*`, and
+back-merge allowances apply only when the head branch is in this repository;
+a fork PR gets the full branch and title rules and is never accepted into
+`main`.
 
 ## Checks, protection, and merge
 

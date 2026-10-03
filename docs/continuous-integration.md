@@ -134,7 +134,7 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `routine-compile-gate-tests` (`tests/ci/RoutineCompileGate.Tests.ps1`) | Required | Actual managed entrypoint against disposable Git fixtures, native receipt validation, deadline rejection before build, and cleanup proof. |
 | `unreal-automation-tests` (`tests/ci/Invoke-UnrealAutomationTests.Tests.ps1`) | Required | Portable fixture regression tests for the headless Unreal runner's engine pin, discovery, repository-state, timeout, report validation, and fail-closed exit behavior. |
 | `board-integrity-tests` (`tests/delivery/Test-BoardIntegrity.Tests.ps1`) | Required | Offline snapshot fixtures for every board integrity rule, the violation format, the summary count, and `-Json` output. They never contact GitHub. |
-| `pull-request-policy-tests` (`tests/delivery/Test-PullRequestPolicy.Tests.ps1`) | Required | Base, head-branch, and title rules of the hosted PR policy check, plus its workflow contract: env-only PR inputs, read-only permissions, a 5-minute bound, and the pinned checkout. |
+| `pull-request-policy-tests` (`tests/delivery/Test-PullRequestPolicy.Tests.ps1`) | Required | Base, head-branch, and title rules of the hosted PR policy check, including fork PRs, plus its workflow contract: env-only PR inputs, read-only permissions, a 5-minute bound, and the pinned checkout. |
 | `psscriptanalyzer` (`Invoke-ScriptAnalyzer` 1.25.0 over `scripts/` and `tests/`) | Advisory | PowerShell static analysis pinned to the hosted image's exact 1.25.0 module. Contributor machines without that exact version report `skipped`; Package 3C portable acceptance nevertheless requires the hosted report to record this check as `passed`, so a hosted analyzer failure or version skip cannot produce a portable receipt. |
 
 Required checks fail the suite and the workflow. Ordinary advisory-check
@@ -146,11 +146,13 @@ their event and trust predicates select them.
 `.github/workflows/delivery-policy.yml` runs the `pull-request-policy` job
 for pull requests to `develop` and `main`, including title edits, on
 GitHub-hosted `windows-latest` with `contents: read` and a 5-minute bound. It
-passes the base ref, head ref, and title to
-`scripts/ci/Test-PullRequestPolicy.ps1` through environment variables only. The
-rules are listed in [Rule enforcement](delivery-workflow.md#rule-enforcement).
-The board integrity check itself needs project access, so it runs locally, not
-in hosted CI.
+passes the base ref, head ref, head and base repositories, and title to
+`scripts/ci/Test-PullRequestPolicy.ps1` through environment variables only, so
+the release, hotfix, and back-merge allowances apply only to heads in this
+repository and never to fork PRs. The rules are listed in
+[Rule enforcement](delivery-workflow.md#rule-enforcement). The board
+integrity check itself needs project access, so it runs locally, not in
+hosted CI.
 
 The suite deliberately excludes `visuals/tests/`, which is owned by the frozen
 `visual-package-validation.yml` workflow described below and only needs to run
