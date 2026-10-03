@@ -91,7 +91,7 @@ Assert-True ($ShadowSelection -match '(?m)^\s+continue-on-error: true\r?$') 'The
 Assert-True ($ShadowSelection -match '(?m)^\s+runs-on: windows-latest\r?$' -and $ShadowSelection -match '(?m)^\s+timeout-minutes: 10\r?$') 'The shadow selector must be a bounded GitHub-hosted job.'
 Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:') 'The accepted-base shadow selector must remain dependency-free.'
 $ExpectedSelectorOutputs = @(
-	'attempt_nonce','aggregate_ready','clean_package_provenance_smoke_required','content_reference_validation_required',
+	'accepted_base_sha','attempt_nonce','aggregate_ready','clean_package_provenance_smoke_required','content_reference_validation_required',
 	'controller_contract_required','controller_operational_proof_required',
 	'native_client_server_compile_required','portable_required','unreal_editor_automation_required','visual_package_required',
 	'selector_artifact_id','selector_artifact_name','selector_artifact_digest'
@@ -100,6 +100,7 @@ foreach ($OutputName in $ExpectedSelectorOutputs) {
 	Assert-True ($ShadowSelection -match "(?m)^      ${OutputName}: ") "The selector must expose exact Package 3C output '$OutputName'."
 }
 Assert-MatchCount -Text $ShadowSelection -Pattern '(?m)^      [a-z_]+: ' -Expected $ExpectedSelectorOutputs.Count -Message 'The selector must expose only the reviewed Package 3C decisions and artifact bindings.'
+Assert-True ($ShadowSelection -match '(?m)^      accepted_base_sha: \$\{\{ steps\.comparison\.outputs\.accepted_base_sha \}\}\r?$') 'The selector must expose the verified synthetic-merge first parent so consumers bind the same base the selector compared.'
 Assert-True ($ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner|needs\.') 'The shadow selector must not admit or influence engine work.'
 Assert-MatchCount -Text $ShadowSelection -Pattern "(?m)^\s+- uses: $CheckoutActionPattern\r?$" -Expected 1 -Message 'The shadow selector must perform exactly one pinned checkout.'
 Assert-True ($ShadowSelection -match 'ref: \$\{\{ steps\.comparison\.outputs\.accepted_base_sha \}\}' -and $ShadowSelection -match 'sparse-checkout: scripts/ci/Get-CiSelection\.ps1' -and $ShadowSelection -match 'persist-credentials: false') 'The only shadow checkout must sparsely materialize the verified synthetic-merge first-parent selector without credentials.'
@@ -660,7 +661,14 @@ foreach ($Receipt in $ReceiptContracts) {
 	Assert-True ($Body -match [regex]::Escape($Receipt.RawName) -and $Body -match $ArchiveDigestValidation) "$($Receipt.Name) must validate the expected raw artifact name and archive digest before publication."
 	Assert-True ($Body -match '(?m)^        id: receipt_artifact\r?$' -and $Body -match 'name: \$\{\{ steps\.receipt_identity\.outputs\.artifact_name \}\}' -and $Body -match 'path: \$\{\{ runner\.temp \}\}/\$\{\{ steps\.receipt_identity\.outputs\.artifact_name \}\}') "$($Receipt.Name) must upload only its exact dynamically named receipt directory."
 	Assert-True ($Body -notmatch '(?m)^\s+if: always\(\)\r?$' -and $Body -notmatch '(?m)^\s+continue-on-error:') "$($Receipt.Name) must fail red on any unexpected binding, receipt, or upload failure."
+	# GitHub never refreshes the event base after the target branch moves, so a
+	# receipt bound to it contradicts the selector for every PR behind its base.
+	Assert-True ($Body -match '(?m)^          AETHELN_BASE_REVISION: \$\{\{ needs\.ci-selection-shadow\.outputs\.accepted_base_sha \}\}\r?$' -and $Body -notmatch 'github\.event\.pull_request\.base\.sha' -and $Body -match "\`$env:AETHELN_BASE_REVISION -cnotmatch '\\A\[0-9a-f\]\{40\}\\z'" -and $Body -match "throw 'accepted_base_invalid'") "$($Receipt.Name) must bind and validate the selector's verified first parent, never the stale event base."
 }
+# The aggregate binds the same verified first parent. Its guard runs only after
+# the non-PR early exit, where the skipped selector leaves the output empty.
+$AggregateBaseGuard = $AcceptanceShadow.IndexOf("if (`$env:AETHELN_BASE_REVISION -cnotmatch '\A[0-9a-f]{40}\z') { throw 'accepted_base_invalid' }", [StringComparison]::Ordinal)
+Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_BASE_REVISION: \$\{\{ needs\.ci-selection-shadow\.outputs\.accepted_base_sha \}\}\r?$' -and $AcceptanceShadow -notmatch 'github\.event\.pull_request\.base\.sha' -and $AggregateBaseGuard -gt $AcceptanceShadow.IndexOf("Write-AcceptanceGap -Reason 'event_not_applicable'", [StringComparison]::Ordinal) -and $AggregateBaseGuard -lt $AcceptanceShadow.IndexOf('$ContextBuilder = ', [StringComparison]::Ordinal)) 'The aggregate must bind and validate the selector''s verified first parent after the non-PR exit and before building any context.'
 
 # The aggregate directly waits for every raw and receipt job so it can explain
 # skips without granting authority. It may produce a real shadow aggregate only

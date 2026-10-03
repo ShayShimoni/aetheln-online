@@ -103,7 +103,7 @@ Assert-True ($ShadowSelection -match "(?m)^\s+if: github\.event_name == 'pull_re
 Assert-True ($ShadowSelection -match '(?m)^\s+continue-on-error: true\r?$') 'The selector itself must not control legacy job selection; dependent Package 3C evidence validation may still fail red.'
 Assert-True ($ShadowSelection -notmatch '(?m)^\s+needs:' -and $ShadowSelection -notmatch 'self-hosted|aetheln-engine-runner') 'Shadow selection must have no predecessor or engine-runner admission surface.'
 $ExpectedSelectorOutputs = @(
-	'attempt_nonce','aggregate_ready','clean_package_provenance_smoke_required','content_reference_validation_required',
+	'accepted_base_sha','attempt_nonce','aggregate_ready','clean_package_provenance_smoke_required','content_reference_validation_required',
 	'controller_contract_required','controller_operational_proof_required',
 	'native_client_server_compile_required','portable_required','unreal_editor_automation_required','visual_package_required',
 	'selector_artifact_id','selector_artifact_name','selector_artifact_digest'

@@ -45,14 +45,11 @@ protected:
 
 private:
 	void ApplyAimSteeringIntent(bool bWantsAimSteering);
-	void ApplyCurrentGroundRotationMode();
 	void ApplySprintIntent(bool bWantsToSprint);
-	void CaptureTravelFacingAimJumpOffset();
 	void ClearBufferedJumpRequest();
 	FRotator GetMovementReferenceRotation() const;
 	void ResetMovementPresentation(bool bResetImmediately);
 	void TryConsumeBufferedJump();
-	void UpdateAirborneAimFacing();
 	void UpdateCameraPresentation(float DeltaSeconds);
 	void UpdateMovementPresentation(float DeltaSeconds);
 
@@ -111,11 +108,8 @@ private:
 	float LockedJumpPresentationYaw = 0.0f;
 	float CurrentPresentationYaw = 0.0f;
 	float DesiredCameraZoomDistance = 400.0f;
-	float TravelFacingAimJumpOffset = 0.0f;
 	bool bAimSteeringActive = false;
 	bool bCameraMeshHidden = false;
 	bool bHasBufferedJump = false;
-	bool bTravelFacingAimJumpActive = false;
-	bool bWantsBackpedal = false;
 	bool bJumpPresentationActive = false;
 };

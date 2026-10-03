@@ -35,6 +35,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 10
     outputs:
+      accepted_base_sha: ${{ steps.comparison.outputs.accepted_base_sha }}
       attempt_nonce: ${{ steps.selection.outputs.attempt_nonce }}
       aggregate_ready: ${{ steps.selection.outputs.aggregate_ready }}
       clean_package_provenance_smoke_required: ${{ steps.selection.outputs.clean_package_provenance_smoke_required }}
@@ -1091,7 +1092,7 @@ jobs:
           AETHELN_REPOSITORY: ${{ github.repository }}
           AETHELN_ACTOR: ${{ github.actor }}
           AETHELN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          AETHELN_BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+          AETHELN_BASE_REVISION: ${{ needs.ci-selection-shadow.outputs.accepted_base_sha }}
           AETHELN_HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
           AETHELN_TESTED_REVISION: ${{ github.sha }}
           AETHELN_RUN_ID: ${{ github.run_id }}
@@ -1107,6 +1108,7 @@ jobs:
           if ($env:AETHELN_RAW_ARTIFACT_ID -cnotmatch '\A[1-9][0-9]{0,19}\z' -or
               $env:AETHELN_RAW_ARTIFACT_NAME -cne 'ci-report' -or
               $env:AETHELN_RAW_ARTIFACT_DIGEST -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'portable_raw_artifact_binding_invalid' }
+          if ($env:AETHELN_BASE_REVISION -cnotmatch '\A[0-9a-f]{40}\z') { throw 'accepted_base_invalid' }
           $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-portable-identity.json'
           $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-portable-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
           $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
@@ -1180,7 +1182,7 @@ jobs:
           AETHELN_REPOSITORY: ${{ github.repository }}
           AETHELN_ACTOR: ${{ github.actor }}
           AETHELN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          AETHELN_BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+          AETHELN_BASE_REVISION: ${{ needs.ci-selection-shadow.outputs.accepted_base_sha }}
           AETHELN_HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
           AETHELN_TESTED_REVISION: ${{ github.sha }}
           AETHELN_RUN_ID: ${{ github.run_id }}
@@ -1196,6 +1198,7 @@ jobs:
           if ($env:AETHELN_RAW_ARTIFACT_ID -cnotmatch '\A[1-9][0-9]{0,19}\z' -or
               $env:AETHELN_RAW_ARTIFACT_NAME -cne 'engine-runner-compile-report' -or
               $env:AETHELN_RAW_ARTIFACT_DIGEST -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'native_raw_artifact_binding_invalid' }
+          if ($env:AETHELN_BASE_REVISION -cnotmatch '\A[0-9a-f]{40}\z') { throw 'accepted_base_invalid' }
           $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-native-identity.json'
           $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-native-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
           $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
@@ -1270,7 +1273,7 @@ jobs:
           AETHELN_REPOSITORY: ${{ github.repository }}
           AETHELN_ACTOR: ${{ github.actor }}
           AETHELN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          AETHELN_BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+          AETHELN_BASE_REVISION: ${{ needs.ci-selection-shadow.outputs.accepted_base_sha }}
           AETHELN_HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
           AETHELN_TESTED_REVISION: ${{ github.sha }}
           AETHELN_RUN_ID: ${{ github.run_id }}
@@ -1290,6 +1293,7 @@ jobs:
           if ($env:AETHELN_RAW_ARTIFACT_ID -cnotmatch '\A[1-9][0-9]{0,19}\z' -or
               $env:AETHELN_RAW_ARTIFACT_NAME -cne 'unreal-automation-report' -or
               $env:AETHELN_RAW_ARTIFACT_DIGEST -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'unreal_raw_artifact_binding_invalid' }
+          if ($env:AETHELN_BASE_REVISION -cnotmatch '\A[0-9a-f]{40}\z') { throw 'accepted_base_invalid' }
           $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-unreal-identity.json'
           $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-unreal-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
           $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
@@ -1363,7 +1367,7 @@ jobs:
           AETHELN_REPOSITORY: ${{ github.repository }}
           AETHELN_ACTOR: ${{ github.actor }}
           AETHELN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          AETHELN_BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+          AETHELN_BASE_REVISION: ${{ needs.ci-selection-shadow.outputs.accepted_base_sha }}
           AETHELN_HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
           AETHELN_TESTED_REVISION: ${{ github.sha }}
           AETHELN_RUN_ID: ${{ github.run_id }}
@@ -1379,6 +1383,7 @@ jobs:
           if ($env:AETHELN_RAW_ARTIFACT_ID -cnotmatch '\A[1-9][0-9]{0,19}\z' -or
               $env:AETHELN_RAW_ARTIFACT_NAME -cne ('visual-package-report-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT) -or
               $env:AETHELN_RAW_ARTIFACT_DIGEST -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'visual_raw_artifact_binding_invalid' }
+          if ($env:AETHELN_BASE_REVISION -cnotmatch '\A[0-9a-f]{40}\z') { throw 'accepted_base_invalid' }
           $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-visual-identity.json'
           $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-visual-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
           $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
@@ -1475,7 +1480,7 @@ jobs:
           AETHELN_REPOSITORY: ${{ github.repository }}
           AETHELN_ACTOR: ${{ github.actor }}
           AETHELN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          AETHELN_BASE_REVISION: ${{ github.event.pull_request.base.sha }}
+          AETHELN_BASE_REVISION: ${{ needs.ci-selection-shadow.outputs.accepted_base_sha }}
           AETHELN_HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
           AETHELN_TESTED_REVISION: ${{ github.sha }}
           AETHELN_RUN_ID: ${{ github.run_id }}
@@ -1545,6 +1550,7 @@ jobs:
               $env:AETHELN_SELECTOR_ARTIFACT_DIGEST -cnotmatch '\Asha256:[0-9a-f]{64}\z') {
             throw 'selector_direct_binding_invalid'
           }
+          if ($env:AETHELN_BASE_REVISION -cnotmatch '\A[0-9a-f]{40}\z') { throw 'accepted_base_invalid' }
 
           $SelectorPath = Join-Path '${{ runner.temp }}' 'aetheln-aggregate-selector/ci-selection-shadow.json'
           $IdentityPath = Join-Path '${{ runner.temp }}' 'aetheln-aggregate-identity.json'

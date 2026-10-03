@@ -431,7 +431,7 @@ function New-Obligations {
 
 function New-ConservativeSelection {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory report value and changes no external state.')]
-	param([string] $Reason, $Context, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null)
+	param([string] $Reason, $Context, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null, $ControllerIdentity = $null)
 	Assert-CiSelectionContext $Context | Out-Null
 	if ($null -eq $AttemptAnchor) { $AttemptAnchor = New-CiSelectionAttemptAnchor $Context }
 	else { Assert-CiSelectionAttemptAnchor $AttemptAnchor $Context | Out-Null }
@@ -454,7 +454,7 @@ function New-ConservativeSelection {
 		attemptAnchor=$AttemptAnchor
 		policy=[pscustomobject][ordered]@{ version=$script:CiSelectionPolicyVersion; digest=(Get-PolicyDigest); checkIds=@($script:CiSelectionCheckIds) }
 		source=[pscustomobject]$Source
-		execution=[pscustomobject][ordered]@{ mode=$ExecutionMode; controllerRevision=$Controller; controllerBlobOid=$null; controllerSha256=$null; checkoutAllowed=$false; complete=$true; reason=$Reason }
+		execution=[pscustomobject][ordered]@{ mode=$ExecutionMode; controllerRevision=$Controller; controllerBlobOid=$(if ($ControllerIdentity) { $ControllerIdentity.oid }); controllerSha256=$(if ($ControllerIdentity) { $ControllerIdentity.sha256 }); checkoutAllowed=$false; complete=$true; reason=$Reason }
 		classification=[pscustomobject][ordered]@{ changedPaths=@(); entries=@(); uncertainties=@($Reason) }
 		selection=[pscustomobject][ordered]@{ shadow=$true; authoritative=$false; obligations=(New-Obligations $All $Reason) }
 		legacyAuthority=[pscustomobject][ordered]@{ authoritative=$true; engineRequired=$LegacyEngineRequired; reason=$LegacyReason }
@@ -464,11 +464,11 @@ function New-ConservativeSelection {
 
 function New-CiSelectionReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory report value and changes no external state.')]
-	param($Context, [string] $Repository, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null)
+	param($Context, [string] $Repository, $LegacyEngineRequired = $null, [string] $LegacyReason = 'not_observed', $AttemptAnchor = $null, $ControllerIdentity = $null)
 	Assert-CiSelectionContext $Context | Out-Null
 	if ($null -eq $AttemptAnchor) { $AttemptAnchor = New-CiSelectionAttemptAnchor $Context }
 	else { Assert-CiSelectionAttemptAnchor $AttemptAnchor $Context | Out-Null }
-	$ControllerIdentity = Get-ControllerIdentity $Repository $Context.controllerRevision
+	if ($null -eq $ControllerIdentity) { $ControllerIdentity = Get-ControllerIdentity $Repository $Context.controllerRevision }
 	if ($Context.kind -eq 'schedule' -or ($Context.kind -eq 'workflow_call' -and $Context.callerKind -eq 'schedule')) {
 		$Revision = if ($Context.kind -eq 'schedule') { $Context.revision } else { $Context.revision }
 		$CallerKind = if ($Context.kind -eq 'workflow_call') { $Context.callerKind } else { $null }
@@ -478,22 +478,32 @@ function New-CiSelectionReport {
 	$Base = if ($Context.kind -eq 'pull_request') { $Context.baseRevision } elseif ($Context.kind -eq 'push') { $Context.beforeRevision } else { $Context.baseRevision }
 	$Head = if ($Context.kind -eq 'pull_request') { $Context.headRevision } elseif ($Context.kind -eq 'push') { $Context.afterRevision } else { $Context.headRevision }
 	if ([string]::IsNullOrEmpty($Base) -or $Base -eq ('0' * 40)) { throw 'comparison_base_unavailable' }
+	# A pull request is classified by what its tested merge changes relative to
+	# the first parent; diffing the head would reverse upstream-only changes.
+	$Compared = $Head
 	if ($Context.kind -eq 'pull_request' -or ($Context.kind -eq 'workflow_call' -and $Context.callerKind -eq 'pull_request')) {
 		$ParentsRaw = (Invoke-BoundedGitBytes $Repository @('show','-s','--format=%P',$Context.workflowRevision) -StdoutLimit 1024).Stdout
 		$Parents = ($script:StrictUtf8.GetString($ParentsRaw).Trim() -split ' ')
 		if ($Parents.Count -ne 2 -or $Parents[0] -cne $Base -or $Parents[1] -cne $Head) { throw 'workflow_revision_parents_invalid' }
+		$Compared = $Context.workflowRevision
 	}
 	$BaseTree = @(Get-TrackedTreeEntries $Repository $Base); $HeadTree = @(Get-TrackedTreeEntries $Repository $Head)
 	Test-WindowsCheckoutTree $BaseTree | Out-Null
 	Test-WindowsCheckoutTree $HeadTree | Out-Null
-	$Raw = (Invoke-BoundedGitBytes $Repository @('diff','--raw','-z','--no-abbrev','--no-ext-diff','--no-textconv','--find-renames','--find-copies-harder',$Base,$Head,'--')).Stdout
+	$NewTree = $HeadTree
+	if ($Compared -cne $Head) {
+		# Hosted jobs check out the merge, so it needs the same safety check.
+		$NewTree = @(Get-TrackedTreeEntries $Repository $Compared)
+		Test-WindowsCheckoutTree $NewTree | Out-Null
+	}
+	$Raw = (Invoke-BoundedGitBytes $Repository @('diff','--raw','-z','--no-abbrev','--no-ext-diff','--no-textconv','--find-renames','--find-copies-harder',$Base,$Compared,'--')).Stdout
 	$Entries = @(ConvertFrom-GitRawZ $Raw)
 	if ($Entries.Count -eq 0) { throw 'empty_diff' }
 	if (@($Entries | Where-Object { $_.oldPath -eq '.lfsconfig' -or $_.newPath -eq '.lfsconfig' }).Count -gt 0) { throw 'lfsconfig_changed' }
 	$AttributeChanged = @($Entries | Where-Object { $_.oldPath -eq '.gitattributes' -or $_.newPath -eq '.gitattributes' -or $_.oldPath.EndsWith('/.gitattributes') -or $_.newPath.EndsWith('/.gitattributes') }).Count -gt 0
 	$BasePaths = if ($AttributeChanged) { @($BaseTree | Where-Object {$_.type -eq 'blob'} | ForEach-Object {$_.path}) } else { @($Entries | Where-Object {$_.status -ne 'A'} | ForEach-Object {$_.oldPath}) }
-	$HeadPaths = if ($AttributeChanged) { @($HeadTree | Where-Object {$_.type -eq 'blob'} | ForEach-Object {$_.path}) } else { @($Entries | Where-Object {$_.status -ne 'D'} | ForEach-Object {$_.newPath}) }
-	$BaseAttrs=Get-RevisionAttributes -Repository $Repository -Revision $Base -Paths @($BasePaths | Sort-Object -Unique); $HeadAttrs=Get-RevisionAttributes -Repository $Repository -Revision $Head -Paths @($HeadPaths | Sort-Object -Unique)
+	$HeadPaths = if ($AttributeChanged) { @($NewTree | Where-Object {$_.type -eq 'blob'} | ForEach-Object {$_.path}) } else { @($Entries | Where-Object {$_.status -ne 'D'} | ForEach-Object {$_.newPath}) }
+	$BaseAttrs=Get-RevisionAttributes -Repository $Repository -Revision $Base -Paths @($BasePaths | Sort-Object -Unique); $HeadAttrs=Get-RevisionAttributes -Repository $Repository -Revision $Compared -Paths @($HeadPaths | Sort-Object -Unique)
 	$Selected=@{}; $Classified=New-Object System.Collections.Generic.List[object]; $Changed=New-Object System.Collections.Generic.List[string]
 	foreach ($Entry in $Entries) {
 		foreach ($Side in @(@{path=$Entry.oldPath;attrs=$BaseAttrs},@{path=$Entry.newPath;attrs=$HeadAttrs})) {
@@ -539,6 +549,7 @@ if ($ContextJson -or $OutputPath) {
 	if (-not $ContextJson -or -not $OutputPath) { throw 'ContextJson and OutputPath are required together.' }
 	$Context=$null
 	$AttemptAnchor=$null
+	$ControllerIdentity=$null
 	$ContextAccepted=$false
 	try {
 		$Raw=[IO.File]::ReadAllText((Resolve-Path -LiteralPath $ContextJson),$script:StrictUtf8)
@@ -547,15 +558,20 @@ if ($ContextJson -or $OutputPath) {
 		Assert-CiSelectionContext $Context | Out-Null
 		$ContextAccepted=$true
 		$AttemptAnchor=New-CiSelectionAttemptAnchor $Context
-		$Report=New-CiSelectionReport $Context (Resolve-Path -LiteralPath $RepositoryRoot).Path -AttemptAnchor $AttemptAnchor
+		$RepositoryPath=(Resolve-Path -LiteralPath $RepositoryRoot).Path
+		# A conservative report must carry the same accepted-controller identity as a
+		# classified one, or the workflow rejects it. If this lookup fails, the
+		# conservative report has no identity and the workflow fails closed.
+		$ControllerIdentity=Get-ControllerIdentity $RepositoryPath $Context.controllerRevision
+		$Report=New-CiSelectionReport $Context $RepositoryPath -AttemptAnchor $AttemptAnchor -ControllerIdentity $ControllerIdentity
 	} catch {
 		$Reason=($_.Exception.Message -split ':')[0]
 		if (-not $ContextAccepted -or $null -eq $AttemptAnchor -or $Reason.StartsWith('attempt_anchor_', [StringComparison]::Ordinal)) { throw }
 		if ($Reason -cnotmatch '^[a-z0-9_]+$') { $Reason='selector_internal_error' }
-		$Report=New-ConservativeSelection $Reason $Context -AttemptAnchor $AttemptAnchor
+		$Report=New-ConservativeSelection $Reason $Context -AttemptAnchor $AttemptAnchor -ControllerIdentity $ControllerIdentity
 	}
 	try { [void](Write-BoundedUtf8Json $Report $OutputPath) } catch {
-		$Fallback=New-ConservativeSelection 'report_size_limit' $Context -AttemptAnchor $AttemptAnchor
+		$Fallback=New-ConservativeSelection 'report_size_limit' $Context -AttemptAnchor $AttemptAnchor -ControllerIdentity $ControllerIdentity
 		[void](Write-BoundedUtf8Json $Fallback $OutputPath)
 	}
 }

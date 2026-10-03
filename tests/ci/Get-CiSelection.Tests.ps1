@@ -181,6 +181,10 @@ foreach ($ScriptTestPath in @('scripts/tests/Test-ObservabilityContract.ps1', 's
 foreach ($ScriptTestLookalike in @('scripts/tests/NewUnwiredTest.ps1', 'scripts/tests/Test-SourceControlPolicy.ps1.bak', 'scripts/tests/Test-SourceControlPolicy.md', 'Scripts/tests/Test-SourceControlPolicy.ps1', 'scripts/test/Test-SourceControlPolicy.ps1')) {
 	Assert-Rejected { Get-PathCheckSelection $ScriptTestLookalike @{} } 'path_unclassified'
 }
+# .gitignore decides the engine gate's post-build drift check, so it is not
+# portable-only. It stays unclassified and takes the conservative report,
+# which the CLI fixture below proves carries the controller identity.
+Assert-Rejected { Get-PathCheckSelection '.gitignore' @{} } 'path_unclassified'
 $ContentValidationScript = @(Get-PathCheckSelection 'scripts/content/Invoke-ContentValidation.ps1' @{})
 Assert-True ($ContentValidationScript -ccontains 'portable' -and $ContentValidationScript -ccontains 'content-reference-validation' -and $ContentValidationScript -cnotcontains 'native-client-server-compile' -and $ContentValidationScript -cnotcontains 'clean-package-provenance-smoke') 'The exact content-validation launcher must select portable and content-reference proof without implying a native or clean build.'
 foreach ($ContentTestPath in @('tests/content/Invoke-ContentValidation.Tests.ps1', 'tests/content/Invoke-ContentValidationCommand.Tests.ps1')) {
@@ -273,6 +277,41 @@ try {
 	Assert-Rejected { New-CiSelectionReport $WrongHeadContext $FixtureRepo } 'workflow_revision_parents_invalid'
 	$WrongControllerContext=[pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$BaseRevision;headRevision=$HeadRevision;workflowRevision=$StaleMerge;controllerRevision=$BaseRevision}
 	Assert-Rejected { New-CiSelectionReport $WrongControllerContext $FixtureRepo } 'workflow_revision_parents_invalid'
+	# A head behind its target is classified by what the tested merge changes:
+	# upstream-only changes are not reversed into the selection, and a file both
+	# sides changed is read from its auto-merged content.
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BaseRevision)
+	Write-Fixture 'docs/both.md' "1`n2`n3`n4`n5`n"; $null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','branch point'); $BranchPoint=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	Write-Fixture 'scripts/ci/Upstream.ps1' "Write-Output 'upstream'`n"; Write-Fixture 'docs/both.md' "upstream`n2`n3`n4`n5`n"
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','upstream advances'); $UpstreamRevision=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BranchPoint)
+	Write-Fixture 'AGENTS.md' "behind head`n"; Write-Fixture 'docs/both.md' "1`n2`n3`n4`nhead`n"
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','behind head'); $BehindHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$UpstreamRevision); $null=Invoke-FixtureGit @('merge','-q','--no-ff','-m','behind merge',$BehindHead); $BehindMerge=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$BehindReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$UpstreamRevision;headRevision=$BehindHead;workflowRevision=$BehindMerge;controllerRevision=$UpstreamRevision}) $FixtureRepo
+	$BehindSelected=@($BehindReport.selection.obligations | Where-Object selected | ForEach-Object id)
+	Assert-True ((@($BehindReport.classification.changedPaths) -join ',') -ceq 'AGENTS.md,docs/both.md' -and ($BehindSelected -join ',') -ceq 'portable' -and $BehindReport.source.headRevision -ceq $BehindHead) "A head behind its target must be classified from the tested merge, never from reversed upstream changes (paths: $(@($BehindReport.classification.changedPaths) -join ','); selected: $($BehindSelected -join ','))."
+	$MergedOid=[string]@(Invoke-FixtureGit @('rev-parse',"$BehindMerge`:docs/both.md"))[0]; $BehindHeadOid=[string]@(Invoke-FixtureGit @('rev-parse',"$BehindHead`:docs/both.md"))[0]
+	Assert-True (@($BehindReport.classification.entries | Where-Object { $_.newPath -ceq 'docs/both.md' -and $_.newOid -ceq $MergedOid }).Count -eq 1 -and $MergedOid -cne $BehindHeadOid) 'A file both sides changed must be classified from its auto-merged content.'
+	# Hosted jobs check out the merge tree, so it gets the same Windows safety
+	# check. A case collision that only the merge creates must fail safe.
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BranchPoint)
+	Write-Fixture 'docs/Foo.md' "upstream case`n"; $null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','upstream adds Foo.md'); $CaseUpstream=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BranchPoint)
+	Write-Fixture 'docs/foo.md' "head case`n"; $null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','head adds foo.md'); $CaseHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$CaseHeadBlob=[string]@(Invoke-FixtureGit @('rev-parse',"$CaseHead`:docs/foo.md"))[0]
+	# A case-insensitive work tree cannot hold both names, so build the merge tree in a private index.
+	$env:GIT_INDEX_FILE=Join-Path $FixtureRoot 'case-merge.index'
+	try { $null=Invoke-FixtureGit @('read-tree',$CaseUpstream); $null=Invoke-FixtureGit @('-c','core.ignorecase=false','update-index','--add','--cacheinfo',"100644,$CaseHeadBlob,docs/foo.md"); $CaseTree=[string]@(Invoke-FixtureGit @('write-tree'))[0] }
+	finally { Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
+	$CaseMerge=(@('case collision merge' | & git -C $FixtureRepo commit-tree $CaseTree -p $CaseUpstream -p $CaseHead) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Case-collision merge creation should succeed.'
+	$CaseContextPath=Join-Path $FixtureRoot 'case-context.json'; $CaseReportPath=Join-Path $FixtureRoot 'case-report.json'
+	[IO.File]::WriteAllText($CaseContextPath,(ConvertTo-Json -Compress -InputObject ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$CaseUpstream;headRevision=$CaseHead;workflowRevision=$CaseMerge;controllerRevision=$CaseUpstream})),$script:Utf8NoBom)
+	$PreviousErrorAction=$ErrorActionPreference; $ErrorActionPreference='Continue'
+	try { $CaseOutput=@(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SourceScript -ContextJson $CaseContextPath -OutputPath $CaseReportPath -RepositoryRoot $FixtureRepo 2>&1 | ForEach-Object { "$_" }); $CaseExitCode=$LASTEXITCODE }
+	finally { $ErrorActionPreference=$PreviousErrorAction }
+	$CaseReport=[IO.File]::ReadAllText($CaseReportPath,$script:StrictUtf8) | ConvertFrom-Json
+	Assert-True ($CaseExitCode -eq 0 -and $CaseReport.execution.reason -ceq 'checkout_case_collision' -and @($CaseReport.selection.obligations | Where-Object { -not $_.selected }).Count -eq 0) "A merge-only case collision must produce the conservative all-selected report (reason: $($CaseReport.execution.reason); output: $($CaseOutput -join ' '))."
 	$null=Invoke-FixtureGit @('checkout','-q','--detach',$HeadRevision)
 	$Report=New-CiSelectionReport $Context $FixtureRepo
 	$ScheduleReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=$RunAttempt;revision=$HeadRevision;controllerRevision=$HeadRevision}) $FixtureRepo
@@ -323,11 +362,43 @@ try {
 	Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($JsonPath)) -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($JsonPath2))) 'Report bytes should be deterministic.'
 	Assert-Rejected { Write-BoundedUtf8Json $Report (Join-Path $FixtureRoot 'too-small.json') ($Length-1) } 'report_size_limit'
 	Write-Fixture 'scripts/tests/NewUnwiredTest.ps1' "Write-Output 'not wired into CI'`n"
-	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','unwired script test'); $UnwiredHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	# Like PR #217, also change the unclassified root .gitignore.
+	Write-Fixture '.gitignore' "*.tfstate`n"
+	$null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','unwired script test and ignore policy'); $UnwiredHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
 	$UnwiredTree=[string]@(Invoke-FixtureGit @('rev-parse',"$UnwiredHead`^{tree}"))[0]
 	$UnwiredMerge=(@('synthetic unwired merge' | & git -C $FixtureRepo commit-tree $UnwiredTree -p $HeadRevision -p $UnwiredHead) -join '').Trim()
 	Assert-True ($LASTEXITCODE -eq 0) 'Unwired-test synthetic merge creation should succeed.'
 	Assert-Rejected { New-CiSelectionReport ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$HeadRevision;headRevision=$UnwiredHead;workflowRevision=$UnwiredMerge;controllerRevision=$HeadRevision}) $FixtureRepo } 'path_unclassified'
+	# The CLI turns that rejection into the conservative all-selected report. It
+	# must carry the same verified accepted-controller identity as a classified
+	# report, or the workflow rejects it and the fail-safe selection never runs.
+	$UnclassifiedContextPath=Join-Path $FixtureRoot 'unclassified-context.json'; $UnclassifiedReportPath=Join-Path $FixtureRoot 'unclassified-report.json'
+	[IO.File]::WriteAllText($UnclassifiedContextPath,(ConvertTo-Json -Compress -InputObject ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$HeadRevision;headRevision=$UnwiredHead;workflowRevision=$UnwiredMerge;controllerRevision=$HeadRevision})),$script:Utf8NoBom)
+	$PreviousErrorAction=$ErrorActionPreference; $ErrorActionPreference='Continue'
+	try { $UnclassifiedOutput=@(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SourceScript -ContextJson $UnclassifiedContextPath -OutputPath $UnclassifiedReportPath -RepositoryRoot $FixtureRepo 2>&1 | ForEach-Object { "$_" }); $UnclassifiedExitCode=$LASTEXITCODE }
+	finally { $ErrorActionPreference=$PreviousErrorAction }
+	$Parsed=[IO.File]::ReadAllText($UnclassifiedReportPath,$script:StrictUtf8) | ConvertFrom-Json
+	$NormalIdentity=Get-ControllerIdentity $FixtureRepo $HeadRevision
+	Assert-True ($UnclassifiedExitCode -eq 0 -and $Parsed.execution.reason -ceq 'path_unclassified' -and @($Parsed.selection.obligations | Where-Object { -not $_.selected }).Count -eq 0 -and $Parsed.execution.controllerBlobOid -ceq $NormalIdentity.oid -and $Parsed.execution.controllerSha256 -ceq $NormalIdentity.sha256) "A conservative report must carry the classified report's controller identity (oid: '$($Parsed.execution.controllerBlobOid)'; output: $($UnclassifiedOutput -join ' '))."
+	# Run the workflow's own identity check against that report, with the blob
+	# OID and SHA-256 computed the way the workflow computes them.
+	$WorkflowSource=[IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml'),$script:StrictUtf8)
+	$IdentityCheck=[regex]::Match($WorkflowSource,'(?ms)^          if \(\$null -ne \$ControllerBlobOid\) \{\r?\n.*?^          \}\r?$')
+	Assert-True ($IdentityCheck.Success -and $IdentityCheck.Value.Contains('shadow_report_controller_identity_mismatch')) 'The workflow must keep one extractable controller identity check.'
+	$ControllerBlobOid=[string]@(Invoke-FixtureGit @('rev-parse',"$HeadRevision`:$ControllerPath"))[0]
+	$IdentityHasher=[Security.Cryptography.SHA256]::Create()
+	try { $ControllerSha256=([BitConverter]::ToString($IdentityHasher.ComputeHash((Invoke-BoundedGitBytes $FixtureRepo @('cat-file','blob',$ControllerBlobOid)).Stdout))).Replace('-','').ToLowerInvariant() } finally { $IdentityHasher.Dispose() }
+	# The extracted block reads both values; this static use also keeps PSScriptAnalyzer from flagging them as unused.
+	Assert-True ($ControllerBlobOid -ceq $NormalIdentity.oid -and $ControllerSha256 -ceq $NormalIdentity.sha256) 'The workflow-style controller identity must equal the selector identity.'
+	. ([scriptblock]::Create($IdentityCheck.Value))
+	# The consumers' context builder accepts the same report on the gap path.
+	$BuilderArguments=@{
+		Mode='Gap';SelectorReportPath=$UnclassifiedReportPath;WorkflowPath=$UnclassifiedContextPath;Repository='ShayShimoni/aetheln-online';Actor='owner';TriggeringActor='owner'
+		BaseRevision=$HeadRevision;HeadRevision=$UnwiredHead;TestedRevision=$UnwiredMerge;WorkflowId='326989724';RunId=$RunId;RunAttempt=[int]$RunAttempt
+		ActionItemsJson=('[{"uses":"actions/checkout","revision":"' + ('3'*40) + '"}]');IdentityContextOutputPath=(Join-Path $FixtureRoot 'unclassified-identity.json')
+	}
+	$UnclassifiedGap=& (Join-Path $RepositoryRoot 'scripts\ci\New-CiAcceptanceAggregateContext.ps1') @BuilderArguments
+	Assert-True ($UnclassifiedGap.mode -ceq 'Gap' -and $UnclassifiedGap.acceptedControllerUnavailable -eq $false -and (@($UnclassifiedGap.selectedUnsupported) -join ',') -ceq 'content-reference-validation,clean-package-provenance-smoke') 'The conservative report must reach the green producer-gap path.'
 
 	# Revision-specific attributes: deleted/source reads base; new/destination
 	# reads head. A changed root/nested policy forces whole-tree re-evaluation.

@@ -7,9 +7,11 @@
 /**
  * Project character movement. Sprint intent travels as a predicted saved-move
  * flag; the server grants sprint speed only when its own simulation agrees the
- * move is eligible, and caps backpedal speed. Jump takeoff velocity and facing
- * are set inside the simulation from the move's acceleration, so prediction,
- * correction replay and the server compute the same takeoff. Clients never send speeds.
+ * move is eligible, and caps backpedal speed. Jump takeoff and body facing are
+ * set inside the simulation from the move's flags, acceleration and control yaw,
+ * so prediction, correction replay and the server compute the same result.
+ * Clients never send speeds or body rotation; facing is derived from the control
+ * rotation each move already carries.
  */
 UCLASS()
 class GAMECORE_API UAethelnCharacterMovementComponent : public UCharacterMovementComponent
@@ -24,9 +26,12 @@ public:
 		float FacingYaw = 0.0f;
 		/** False when the move has no input: the jump keeps its current velocity and facing. */
 		bool bHasMoveInput = false;
+		/** Aimed pure-lateral takeoff: faces travel, then turns with camera yaw while aim is held. */
+		bool bAimTracked = false;
 	};
 
 	virtual float GetMaxSpeed() const override;
+	virtual void PhysicsRotation(float DeltaTime) override;
 	virtual FNetworkPredictionData_Client* GetPredictionData_Client() const override;
 	// Re-expose the deprecated DoJump(bool) overload so overriding the current one does not hide it
 	// (clang -Woverloaded-virtual, an error under UBT's -Werror on Linux).
@@ -48,17 +53,31 @@ public:
 		float TakeoffSpeed,
 		bool bAimSteering);
 
+	/**
+	 * Rotation mode for one move: camera facing on the ground for aim or backpedal, else travel facing;
+	 * airborne, camera facing for aim unless the jump is aim tracked, never travel facing.
+	 */
+	static void ConfigureRotationMode(
+		UCharacterMovementComponent& Movement,
+		bool bFalling,
+		bool bAimSteering,
+		bool bBackpedaling,
+		bool bTrackedJump);
+
 	float GetBackpedalSpeedScale() const { return BackpedalSpeedScale; }
 
 	/** Sprint intent. Set by local input, packed into saved moves, and restored from them on the server. */
 	bool bWantsToSprint = false;
 
-	/**
-	 * Aim-steering intent, used here only to choose camera or travel facing at jump takeoff.
-	 * Local input only: it is not packed into saved moves yet (remote facing follow-up), so the
-	 * server always sees false and correction replay uses the live value.
-	 */
+	/** Aim-steering (Reticle) intent. Set by local input, packed into saved moves, and restored from them on the server. */
 	bool bWantsAimSteering = false;
+
+	/**
+	 * Simulation state of the current jump: set at takeoff, cleared when not falling, and saved with each
+	 * client move so correction replay restores it. Never sent to the server, which simulates its own.
+	 */
+	bool bAimTrackedJump = false;
+	float AimTrackedJumpYawOffset = 0.0f;
 
 protected:
 	virtual void UpdateFromCompressedFlags(uint8 Flags) override;
@@ -79,6 +98,8 @@ private:
 	friend class FAethelnMovementNetServerSpeedClampTest;
 	friend class FAethelnMovementNetInvalidSprintRejectedTest;
 	friend class FAethelnMovementNetJumpTakeoffParityTest;
+	friend class FAethelnMovementNetFacingSpoofBoundedTest;
+	friend class FAethelnMovementNetAimTrackingReplayTest;
 	friend struct FAethelnMovementNetPredictionPair;
 	friend struct FAethelnMovementNetJumpReplayScenario;
 

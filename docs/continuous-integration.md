@@ -351,10 +351,26 @@ verified first parent as both
 `baseRevision` and `controllerRevision`, matching the previously accepted
 controller's closed input contract while this workflow change is reviewed.
 The event base is retained separately in the workflow preflight and is checked
-before checkout; it is not a selector-context field in the live job. The
-selector retains its strict base/controller equality and ordered parent checks.
-The report's `source.baseRevision` and comparison diff use the accepted first
-parent.
+before checkout; it is not a selector-context field in the live job.
+`ci-selection-shadow` exposes the verified first parent as `accepted_base_sha`.
+Every receipt publisher and `ci-acceptance-shadow` bind `AETHELN_BASE_REVISION`
+to that output and fail `accepted_base_invalid` unless it is 40 lowercase hex;
+none of them reads `github.event.pull_request.base.sha`. The aggregate applies
+that check only after its non-PR `event_not_applicable` exit, because the
+selector does not run outside pull requests. GitHub does not
+refresh the event base when the target branch moves, on reruns or on new
+pushes, so a consumer bound to it fails `selector_identity_mismatch` for every
+pull request behind its base. The context builder keeps strict equality between
+the bound base and the selector report, so a mismatch is a real contradiction.
+The selector retains its strict base/controller equality and ordered parent checks.
+The report's `source.baseRevision` is the accepted first parent. The comparison
+diff runs from that first parent to the tested synthetic merge
+(`workflowRevision`), not to the head, and new-side attributes and any
+whole-tree attribute re-evaluation read the merge. A head behind its target is
+therefore classified by what the merge changes, not by the upstream changes it
+lacks. Windows checkout safety is checked on the base, head and merge trees,
+because hosted jobs check out the merge; a collision only the merge creates
+fails closed to the conservative all-selected report.
 Missing ancestry or any conflicting parent/controller identity fails closed.
 The closed output roots are `schemaVersion`, `attemptAnchor`,
 `policy`, `source`, `execution`, `classification`, `selection`,
@@ -366,7 +382,7 @@ Package 3C retains that accepted-base execution boundary and completes the
 non-authoritative wiring around it. The workflow supplies the canonical run ID
 and integer attempt, validates the returned anchor's exact closed schema and
 native types, and rejects a mismatched or all-zero nonce before publishing
-anything. `ci-selection-shadow` exposes the nonce, `aggregate_ready`, every one
+anything. `ci-selection-shadow` exposes the verified first parent, the nonce, `aggregate_ready`, every one
 of the eight `*_required` decisions, and the selector archive's exact artifact
 ID, nonce-suffixed name, and API digest through direct `needs` outputs. The
 unavailable-controller fallback uses the same fresh 32-byte CSPRNG rule and has
@@ -393,7 +409,14 @@ ambiguous generic context.
 Paths outside the closed documented/controller/visual/agent-tooling/engine/build
 families fail closed as `path_unclassified`, producing an all-obligations
 conservative report. Adding a new repository root therefore cannot silently
-inherit portable-only treatment. Agent-tooling and build-test paths retain
+inherit portable-only treatment. Every conservative report from the accepted
+controller (`path_unclassified`, `empty_diff`, a checkout-safety rejection, or
+any other caught failure) carries the same controller blob OID and SHA-256 as a
+classified report, so the workflow's controller identity check accepts it and
+the all-selected selection reaches the producer-gap path. If the identity
+lookup itself fails, the report has no identity and the workflow fails closed
+with `shadow_report_controller_identity_mismatch`.
+Agent-tooling and build-test paths retain
 portable proof; build scripts retain controller-operational and clean-package
 proof. Production CI scripts and workflows select both controller
 contract and operational proof; plugin Content also selects content-reference
@@ -436,8 +459,8 @@ change together at that time.
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
-both paths and preserve status, score, modes, OIDs, and paths. The head tree
-allows regular blob modes `100644` and `100755` only. Submodules, symlinks,
+both paths and preserve status, score, modes, OIDs, and paths. The base and
+head trees, and for pull requests the tested merge tree, allow regular blob modes `100644` and `100755` only. Submodules, symlinks,
 absolute/backslash/traversal paths, Windows reserved/invalid components,
 trailing dot/space, overlong components, and ordinal case-insensitive or
 Unicode-NFC collisions fail closed before any runner can consume the result.
@@ -483,7 +506,7 @@ contract is:
 
 | Job | Event | `needs` | Trust predicate | Gate |
 | --- | --- | --- | --- | --- |
-| `ci-selection-shadow` | `pull_request` | None | Diagnostic only; exact accepted-base controller bytes, never candidate selector bytes. | Produce the closed current-attempt selector artifact and expose its nonce, all eight required decisions, aggregate readiness, and exact artifact ID/name/digest as non-authoritative direct outputs. |
+| `ci-selection-shadow` | `pull_request` | None | Diagnostic only; exact accepted-base controller bytes, never candidate selector bytes. | Produce the closed current-attempt selector artifact and expose the verified first parent, its nonce, all eight required decisions, aggregate readiness, and exact artifact ID/name/digest as non-authoritative direct outputs. |
 | `visual-proof` | `pull_request` | `ci-selection-shadow` | Runs only when the accepted-base selector selects `visual-package`; the reusable call remains additive and non-authoritative. | Execute both existing visual validators and expose the exact raw report artifact ID/name/digest plus inner report SHA-256/length. |
 | `portable-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `quality-gates` | Runs only when `portable` is selected and both direct producers succeed. | Download the selector and portable report by exact artifact ID, validate their direct name/digest metadata, verify the inner report hash/length, then publish one nonce-bound receipt whose checks are the selector-derived subset of {`controller-contract`, `portable`}, every result bound to the one raw `ci-report.json`. The aggregate later verifies each archive digest against GitHub's API and downloaded bytes. |
 | `native-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-candidate-compile` | Runs only when `native-client-server-compile` or `controller-operational-proof` is selected and the compile succeeds. | Apply the same direct binding and truthful publication contract to the exact compile report, publishing the selector-derived subset of {`controller-operational-proof`, `native-client-server-compile`} with every result bound to the one raw `engine-runner-report.json`, successful native exit, and cleanup proof. `controller-operational-proof` attests that the candidate controller at the tested revision ran the real supervised Compile gate on the engine runner with resource monitoring and verified cleanup in this attempt; it is the same exact report, revalidated under its own check id. The self-hosted producer hashes the report with the portable .NET SHA-256 API because that runner's Windows PowerShell environment does not expose `Get-FileHash`; its upload retains the static report artifact name even if identity binding fails. |
