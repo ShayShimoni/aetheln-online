@@ -845,12 +845,13 @@ Every accepted decision records:
   reconciliation, and `liveBindings` is informational. A
   publisher-contract test ties the three selector-facing lists (the workflow
   live list, the context builder live list and the aggregate unsupported list)
-  to the checks the publishers can prove, so shipping a producer fails that
-  test until those three lists move together. Other hand-kept copies of the
-  split (the receipt builder's unsupported-check list and the inline live-id
-  lists in the receipt builder and the aggregate) are not covered by that
-  guard; each fails closed, turning the receipt or aggregate red, if a producer
-  ships without updating it.
+  and the aggregate's inline exactly-one-evidence list to the checks the
+  publishers can prove, so shipping a producer fails that test until those
+  lists move together. Two other copies are not covered by it. The receipt
+  builder's unsupported-check list fails closed: a stale entry makes the builder
+  throw `receipt_semantic_evidence_unsupported:<id>`. The receipt builder's
+  inline evidence list is inert, because its strict evidence-name ordering
+  check still rejects a repeated evidence entry.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate
