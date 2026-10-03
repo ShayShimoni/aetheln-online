@@ -24,10 +24,33 @@ param(
 	[switch] $Json
 )
 
+# Issue #225 release-cut verification. It only reads: the Cut and Tag stages are
+# not implemented, so the release flow in docs/delivery-workflow.md stays manual.
+#
+# Verify proves a cut of -Version is safe. It reads git (nothing is fetched or
+# written) and the project board, pull requests, and develop CI through the
+# locally authenticated `gh`, or a normalized snapshot from -FixturePath for
+# offline tests, and reports each violation as `<code> <subject> <detail>`.
+# VerifyPackage reads the packaged client and server logs and the provenance
+# JSON and compares them with -Version and the release head (-ReleaseRevision,
+# default the tip of the release branch on origin). Exit 0 when clean, 1 on any
+# violation, and 2 when the environment cannot be read.
+#
+# Snapshot shape: { tags: [name], remoteBranches: [name], developRevision,
+# developRun: { status, conclusion } or null, defaultGameIni, items: [{ number,
+# type: Issue or PullRequest, status, release }], openPullRequests: [{ number,
+# title, linkedIssues: [n] }], mergedPullRequests: [{ number, title,
+# baseRefName, mergeCommit, linkedIssues: [n], inCut }], board: { items,
+# pullRequests } }. `board` is handed to Test-BoardIntegrity.ps1 as its own
+# snapshot; a live run lets that script read the board itself. `inCut` is
+# `git merge-base --is-ancestor <mergeCommit> <develop revision>`. A PR links an
+# issue through a closing reference or a `#<n>` in its title, as in
+# Test-BoardIntegrity.ps1.
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Control characters and the Unicode line separators. Details never echo them raw, and an identifier containing one is unsafe.
+# Control characters and the Unicode line and paragraph separators.
 $UnsafeCharacters = "[\u0000-\u001f\u007f-\u009f$([char] 0x2028)$([char] 0x2029)]"
 
 $Branch = if ($BranchName) { $BranchName } else { "release/v$Version" }
@@ -153,7 +176,7 @@ function Get-ConsumerResult {
 	}
 	$Windows = [ordered]@{
 		name = 'windows-file-version'; form = $Numeric; status = $(if ($Reason) { 'rejected' } else { 'unverified' }); reason = $Reason
-		evidence = 'The numeric form is the rule in docs/delivery-workflow.md; each part is a 16-bit value, and Engine/Source/Programs/UnrealBuildTool/Platform/Windows/AppXManifestGeneratorBase.cs ValidatePackageVersion clamps parts to 65535. The pinned engine does not read ProjectVersion for the executable resource: Engine/Build/Windows/Resources/Default.rc2 sets FILEVERSION from ENGINE_MAJOR_VERSION, ENGINE_MINOR_VERSION and ENGINE_PATCH_VERSION, and FileVersion and ProductVersion from BUILD_VERSION or ENGINE_VERSION_STRING (Engine/Source/Programs/UnrealBuildTool/Platform/Windows/VCToolChain.cs defines BUILD_VERSION only when bSetResourceVersions is on). Unverified on a packaged executable.'
+		evidence = 'The numeric form is the rule in docs/delivery-workflow.md; each part is a 16-bit value, and Engine/Source/Programs/UnrealBuildTool/Platform/Windows/AppXManifestGeneratorBase.cs ValidatePackageVersion clamps parts to 65535. The pinned engine does not read ProjectVersion for the executable resource: Engine/Build/Windows/Resources/Default.rc2, the default resource file added by Engine/Source/Programs/UnrealBuildTool/Configuration/UEBuildBinary.cs, sets FILEVERSION from ENGINE_MAJOR_VERSION, ENGINE_MINOR_VERSION and ENGINE_PATCH_VERSION, and FileVersion and ProductVersion from BUILD_VERSION or ENGINE_VERSION_STRING (Engine/Source/Programs/UnrealBuildTool/Platform/Windows/VCToolChain.cs defines BUILD_VERSION only when bSetResourceVersions is on). Unverified on a packaged executable.'
 	}
 
 	return @(

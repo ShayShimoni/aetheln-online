@@ -259,7 +259,7 @@ Engine source (paths are relative to the engine root) and this repository:
 | --- | --- | --- |
 | Network version checksum: `Engine/Source/Runtime/Core/Private/Misc/NetworkVersion.cpp`, `Engine/Source/Runtime/Engine/Private/UnrealEngine.cpp` | `1.0.0-alpha.1+412` | Accepted: any non-empty string, hashed into the join handshake, so a client and a server must carry the identical string. `VerifyPackage` proves it on packages. |
 | Build identity: `Source/GameNet/Public/AethelnObservability.h` | `1.0.0-alpha.1+412` | Accepted up to 96 characters with no control characters, U+2028, or U+2029. |
-| Windows file version | `1.0.0.412` | Each part must be 0 to 65535. The pinned engine does not read `ProjectVersion` for the executable resource, which `Engine/Build/Windows/Resources/Default.rc2` sets from the engine version and `BUILD_VERSION`, so this is the rule for a future stamping step. Unverified until a packaged executable is inspected. |
+| Windows file version | `1.0.0.412` | Each part must be 0 to 65535. The pinned engine does not read `ProjectVersion` for the executable resource, which `Engine/Build/Windows/Resources/Default.rc2` (added by `Engine/Source/Programs/UnrealBuildTool/Configuration/UEBuildBinary.cs`) sets from the engine version and `BUILD_VERSION`, so this is the rule for a future stamping step. Unverified until a packaged executable is inspected. |
 | AppX manifest: `Engine/Source/Programs/UnrealBuildTool/Platform/Windows/AppXManifestGeneratorBase.cs` | not applicable | UWP and MSIX packages only, which the Win64 client and Linux server are not. It would not reject the string but silently turn `1.0.0-alpha.1+412` into `1.0.0.1412`. |
 
 **Player distribution.** Player distribution means an external playtest on
