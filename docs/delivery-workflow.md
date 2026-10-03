@@ -204,7 +204,8 @@ every build. The build number is the packaging workflow's GitHub Actions
 platform field accepts only numbers (for example a Windows file version), use
 `MAJOR.MINOR.PATCH.<build number>`. The first release-cut script must verify
 that each consumer of `ProjectVersion` accepts the full string, before relying
-on it.
+on it. `scripts/delivery/Invoke-ReleaseCut.ps1` is that script; see
+Release-cut verification below.
 
 **When the lead cuts a release.**
 
@@ -214,12 +215,52 @@ on it.
 
 **Internal release flow.**
 
-1. Cut `release/vX.Y.Z` from `develop`. Set `ProjectVersion`, move the included
+1. Run `Invoke-ReleaseCut.ps1 -Stage Verify` and fix or ticket every violation.
+   Cut `release/vX.Y.Z` from `develop`. Set `ProjectVersion`, move the included
    tickets to `Release Candidate`, and fill their `Release` field.
-2. Build the internal packages and run release QA on the release branch. Fix
+2. Build the internal packages and run release QA on the release branch,
+   including `Invoke-ReleaseCut.ps1 -Stage VerifyPackage` on those packages. Fix
    defects only on the release branch, and merge each fix back into `develop`.
 3. Place an annotated pre-release tag (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`)
    on the tested release-branch commit. Internal builds never merge to `main`.
+
+**Release-cut verification.** `scripts/delivery/Invoke-ReleaseCut.ps1` only
+reads: its `Cut` and `Tag` stages are not implemented, so the flow above stays
+manual. Run it from a clean worktree with `gh` authenticated and `origin`
+fetched. It reports each violation as `<code> <subject> <detail>`, exits 1 on
+any violation and 2 when the environment cannot be read, and `-Json` adds the
+consumer record below.
+
+- `-Stage Verify -Version <version>` runs before the cut. It runs
+  `Test-BoardIntegrity.ps1` and reports each of that script's violations as
+  `release_board_integrity_failed`. Its other codes are
+  `release_version_invalid` (not SemVer 2.0, or build metadata given),
+  `release_version_not_newer` (an existing `v*` tag is at or above it),
+  `release_branch_exists`, `release_tag_exists`, `release_develop_not_green`
+  (no successful `Prototype quality gates` push run for the develop revision),
+  `release_scope_empty`, `release_item_release_field_set`,
+  `release_item_not_issue` (a `Done` PR card, which the move leaves out),
+  `release_item_open_pr`, `release_item_work_not_in_cut` (a merged PR's commit
+  is not an ancestor of the cut revision), `release_project_version_conflict`,
+  and `release_version_consumer_rejects`. The scope is exactly the issues in
+  `Done`.
+- `-Stage VerifyPackage -Version <version>` takes `-ClientLogPath`,
+  `-ServerLogPath`, `-ProvenancePath`, and optionally `-ReleaseRevision`. It
+  reports `release_package_version_mismatch` when the last `LogNetVersion` line
+  of either log lacks the release version or the two logs differ in version
+  string or checksum, and `release_package_revision_mismatch` when the
+  provenance revision (`sourceRevision`, or `source.revision` in
+  `build-provenance.json`) is not the release head.
+
+The consumers of the full string, read statically from the pinned Unreal
+Engine source (paths are relative to the engine root) and this repository:
+
+| Consumer | Form | Result |
+| --- | --- | --- |
+| Network version checksum: `Engine/Source/Runtime/Core/Private/Misc/NetworkVersion.cpp`, `Engine/Source/Runtime/Engine/Private/UnrealEngine.cpp` | `1.0.0-alpha.1+412` | Accepted: any non-empty string, hashed into the join handshake, so a client and a server must carry the identical string. `VerifyPackage` proves it on packages. |
+| Build identity: `Source/GameNet/Public/AethelnObservability.h` | `1.0.0-alpha.1+412` | Accepted up to 96 characters with no control characters, U+2028, or U+2029. |
+| Windows file version | `1.0.0.412` | Each part must be 0 to 65535. The pinned engine does not read `ProjectVersion` for the executable resource, which `Engine/Build/Windows/Resources/Default.rc2` sets from the engine version and `BUILD_VERSION`, so this is the rule for a future stamping step. Unverified until a packaged executable is inspected. |
+| AppX manifest: `Engine/Source/Programs/UnrealBuildTool/Platform/Windows/AppXManifestGeneratorBase.cs` | not applicable | UWP and MSIX packages only, which the Win64 client and Linux server are not. It would not reject the string but silently turn `1.0.0-alpha.1+412` into `1.0.0.1412`. |
 
 **Player distribution.** Player distribution means an external playtest on
 `staging`, Early Access, or a store launch on `production`; an external
