@@ -383,8 +383,8 @@ for ($Index = 0; $Index -lt 8; $Index++) {
 	Assert-True ($SortedContextCheckIds[$Index] -ceq $SortedPublisherCheckIds[$Index]) "Aggregate context and publisher check ids must match in lockstep (index $Index)."
 }
 
-# The live/pending split is kept by hand in three places. A check is live exactly when a publisher contract can prove it, so
-# shipping a producer (adding its check to a contract) must fail here until all three lists move with it.
+# The live/pending split is kept by hand in several places; this guard ties the three selector-facing lists (other copies fail closed on their own). A check is live exactly when a publisher contract can prove it, so
+# shipping a producer (adding its check to a contract) must fail here until those three lists move with it.
 function Get-SourceCheckList([string] $Source, [string] $Pattern, [string] $Name) {
 	$Lists = [regex]::Matches($Source, $Pattern)
 	Assert-True ($Lists.Count -eq 1) "$Name must declare exactly one check list."

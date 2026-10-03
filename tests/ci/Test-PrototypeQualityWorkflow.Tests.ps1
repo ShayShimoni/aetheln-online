@@ -777,6 +777,9 @@ try {
 $ReconcileBindingsIndex = $ReconcileStep.IndexOf('Add-ProducerBinding $NativeProducerRequired', [StringComparison]::Ordinal)
 $ReconcileReadinessIndex = $ReconcileStep.IndexOf('if ($env:AETHELN_SELECTOR_READY -ceq ''false'')', [StringComparison]::Ordinal)
 Assert-True ($ReconcileBindingsIndex -ge 0 -and $ReconcileReadinessIndex -ge 0 -and $ReconcileBindingsIndex -lt $ReconcileReadinessIndex) 'The live producer bindings must be validated before the aggregate-readiness branch so both branches share them.'
+$ReconcileEventExitIndex = $ReconcileStep.IndexOf('Write-AcceptanceGap -Reason ''event_not_applicable''', [StringComparison]::Ordinal)
+$ReconcileBindingsStartIndex = $ReconcileStep.IndexOf('$ProducerBindings = New-Object', [StringComparison]::Ordinal)
+Assert-True ($ReconcileEventExitIndex -ge 0 -and $ReconcileBindingsStartIndex -ge 0 -and $ReconcileEventExitIndex -lt $ReconcileBindingsStartIndex) 'The non-pull-request event_not_applicable exit must come before the live producer bindings so push and schedule runs never validate bindings they do not have.'
 Assert-True ($ReconcileStep.Contains('aetheln.ci-acceptance-shadow-gap/v3') -and $ReconcileStep.Contains('liveBindings') -and -not $ReconcileStep.Contains('shadow-gap/v2')) 'The gap record must be the v3 schema carrying liveBindings.'
 Assert-True ($AcceptanceShadow -notmatch 'acceptanceGranted|grantsAcceptance = \$true|authoritative = \$true' -and $AcceptanceShadow -notmatch '(?m)^\s+continue-on-error:') 'Package 3C must neither advertise nor grant authority and unexpected failures must remain red.'
 Assert-True ($AcceptanceShadow -match '(?m)^        id: acceptance_artifact\r?$' -and $AcceptanceShadow -notmatch '(?ms)^      - name: Upload shadow acceptance diagnostic\r?\n        id: acceptance_artifact\r?\n        if: always\(\)') 'The shadow aggregate must upload only a successfully reconciled report, never mask a failed reconciliation with always().'

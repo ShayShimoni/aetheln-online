@@ -560,7 +560,9 @@ bindings fail the job. The native binding is required when either
 any selector output pair other than exact `true`/`false` values fails closed as
 `producer_direct_binding_invalid:native`. If the selector chooses either of the other two
 obligations (`content-reference-validation`, `clean-package-provenance-smoke`), `aggregate_ready=false` and the workflow validates the selector
-identity and the same direct bindings of every selected live producer before
+identity and the direct bindings of every selected live producer (job result
+`success`, exact artifact name, and artifact ID and digest format; the gap path
+does not do the aggregate's artifact-API and byte reconciliation) before
 publishing a green, explicitly incomplete
 `producer_contract_incomplete` record with
 `complete=false`, `shadow=true`, `authoritative=false`, and
@@ -1599,14 +1601,22 @@ call the aggregate. A validation-only gap mode binds the selector's current
 run, attempt, nonce, accepted comparison base, head, and tested revision, then
 computes the exact selected unsupported set and emits
 `aetheln.ci-acceptance-shadow-gap/v3` with
-reason `producer_contract_incomplete`. Before either branch runs, the same
-direct bindings are validated for every selected live producer, so a failed or
+reason `producer_contract_incomplete`. Before either branch runs, the step's
+direct-binding check (job result `success`, exact artifact name, and artifact ID
+and digest format) is applied to every selected live producer, so a failed or
 skipped required receipt fails red on the gap path as it does on the aggregate
-path, and the gap record carries the validated bindings as `liveBindings`
-(empty for `event_not_applicable`). That known gap is green and explicitly
-non-authoritative; it creates no aggregate context or receipt. The
-`accepted_controller_unavailable` fallback is valid only with its exact
-zero-digest, null-controller, all-eight-selected, no-checkout diagnostic shape.
+path. The gap path does not reconcile the bindings against the artifact API or
+the downloaded bytes as the aggregate does; the gap record carries them as
+informational `liveBindings` (empty for `event_not_applicable`). That known gap
+is green and explicitly non-authoritative; it creates no aggregate context or
+receipt. The `accepted_controller_unavailable` fallback selects all eight
+checks, so every live receipt is required, but each receipt publisher builds its
+identity context in `Identity` mode, which rejects the fallback shape. No
+receipt can succeed under it, so the step fails red at the binding check with
+`producer_direct_binding_invalid:native`, before Gap mode runs and before any
+gap record is written. The builder's Gap mode still accepts the fallback's exact
+zero-digest, null-controller, all-eight-selected, no-checkout diagnostic shape,
+but only its own unit tests reach that path; the workflow cannot.
 Contradictions and unexpected errors are red. The selector
 job is pull-request-only, so push and scheduled runs use the similarly
 non-authoritative `event_not_applicable` gap until an accepted event-specific
