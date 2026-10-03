@@ -342,7 +342,9 @@ before checkout; it is not a selector-context field in the live job.
 `ci-selection-shadow` exposes the verified first parent as `accepted_base_sha`.
 Every receipt publisher and `ci-acceptance-shadow` bind `AETHELN_BASE_REVISION`
 to that output and fail `accepted_base_invalid` unless it is 40 lowercase hex;
-none of them reads `github.event.pull_request.base.sha`. GitHub does not
+none of them reads `github.event.pull_request.base.sha`. The aggregate applies
+that check only after its non-PR `event_not_applicable` exit, because the
+selector does not run outside pull requests. GitHub does not
 refresh the event base when the target branch moves, on reruns or on new
 pushes, so a consumer bound to it fails `selector_identity_mismatch` for every
 pull request behind its base. The context builder keeps strict equality between
@@ -353,7 +355,9 @@ diff runs from that first parent to the tested synthetic merge
 (`workflowRevision`), not to the head, and new-side attributes and any
 whole-tree attribute re-evaluation read the merge. A head behind its target is
 therefore classified by what the merge changes, not by the upstream changes it
-lacks. Windows checkout safety is still checked on the base and head trees.
+lacks. Windows checkout safety is checked on the base, head and merge trees,
+because hosted jobs check out the merge; a collision only the merge creates
+fails closed to the conservative all-selected report.
 Missing ancestry or any conflicting parent/controller identity fails closed.
 The closed output roots are `schemaVersion`, `attemptAnchor`,
 `policy`, `source`, `execution`, `classification`, `selection`,
@@ -435,8 +439,8 @@ change together at that time.
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
-both paths and preserve status, score, modes, OIDs, and paths. The head tree
-allows regular blob modes `100644` and `100755` only. Submodules, symlinks,
+both paths and preserve status, score, modes, OIDs, and paths. The base and
+head trees, and for pull requests the tested merge tree, allow regular blob modes `100644` and `100755` only. Submodules, symlinks,
 absolute/backslash/traversal paths, Windows reserved/invalid components,
 trailing dot/space, overlong components, and ordinal case-insensitive or
 Unicode-NFC collisions fail closed before any runner can consume the result.

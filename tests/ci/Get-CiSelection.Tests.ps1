@@ -289,6 +289,25 @@ try {
 	Assert-True ((@($BehindReport.classification.changedPaths) -join ',') -ceq 'AGENTS.md,docs/both.md' -and ($BehindSelected -join ',') -ceq 'portable' -and $BehindReport.source.headRevision -ceq $BehindHead) "A head behind its target must be classified from the tested merge, never from reversed upstream changes (paths: $(@($BehindReport.classification.changedPaths) -join ','); selected: $($BehindSelected -join ','))."
 	$MergedOid=[string]@(Invoke-FixtureGit @('rev-parse',"$BehindMerge`:docs/both.md"))[0]; $BehindHeadOid=[string]@(Invoke-FixtureGit @('rev-parse',"$BehindHead`:docs/both.md"))[0]
 	Assert-True (@($BehindReport.classification.entries | Where-Object { $_.newPath -ceq 'docs/both.md' -and $_.newOid -ceq $MergedOid }).Count -eq 1 -and $MergedOid -cne $BehindHeadOid) 'A file both sides changed must be classified from its auto-merged content.'
+	# Hosted jobs check out the merge tree, so it gets the same Windows safety
+	# check. A case collision that only the merge creates must fail safe.
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BranchPoint)
+	Write-Fixture 'docs/Foo.md' "upstream case`n"; $null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','upstream adds Foo.md'); $CaseUpstream=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$null=Invoke-FixtureGit @('checkout','-q','--detach',$BranchPoint)
+	Write-Fixture 'docs/foo.md' "head case`n"; $null=Invoke-FixtureGit @('add','-A'); $null=Invoke-FixtureGit @('commit','-qm','head adds foo.md'); $CaseHead=[string]@(Invoke-FixtureGit @('rev-parse','HEAD'))[0]
+	$CaseHeadBlob=[string]@(Invoke-FixtureGit @('rev-parse',"$CaseHead`:docs/foo.md"))[0]
+	# A case-insensitive work tree cannot hold both names, so build the merge tree in a private index.
+	$env:GIT_INDEX_FILE=Join-Path $FixtureRoot 'case-merge.index'
+	try { $null=Invoke-FixtureGit @('read-tree',$CaseUpstream); $null=Invoke-FixtureGit @('-c','core.ignorecase=false','update-index','--add','--cacheinfo',"100644,$CaseHeadBlob,docs/foo.md"); $CaseTree=[string]@(Invoke-FixtureGit @('write-tree'))[0] }
+	finally { Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue }
+	$CaseMerge=(@('case collision merge' | & git -C $FixtureRepo commit-tree $CaseTree -p $CaseUpstream -p $CaseHead) -join '').Trim(); Assert-True ($LASTEXITCODE -eq 0) 'Case-collision merge creation should succeed.'
+	$CaseContextPath=Join-Path $FixtureRoot 'case-context.json'; $CaseReportPath=Join-Path $FixtureRoot 'case-report.json'
+	[IO.File]::WriteAllText($CaseContextPath,(ConvertTo-Json -Compress -InputObject ([pscustomobject][ordered]@{kind='pull_request';runId=$RunId;runAttempt=$RunAttempt;baseRevision=$CaseUpstream;headRevision=$CaseHead;workflowRevision=$CaseMerge;controllerRevision=$CaseUpstream})),$script:Utf8NoBom)
+	$PreviousErrorAction=$ErrorActionPreference; $ErrorActionPreference='Continue'
+	try { $CaseOutput=@(& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $SourceScript -ContextJson $CaseContextPath -OutputPath $CaseReportPath -RepositoryRoot $FixtureRepo 2>&1 | ForEach-Object { "$_" }); $CaseExitCode=$LASTEXITCODE }
+	finally { $ErrorActionPreference=$PreviousErrorAction }
+	$CaseReport=[IO.File]::ReadAllText($CaseReportPath,$script:StrictUtf8) | ConvertFrom-Json
+	Assert-True ($CaseExitCode -eq 0 -and $CaseReport.execution.reason -ceq 'checkout_case_collision' -and @($CaseReport.selection.obligations | Where-Object { -not $_.selected }).Count -eq 0) "A merge-only case collision must produce the conservative all-selected report (reason: $($CaseReport.execution.reason); output: $($CaseOutput -join ' '))."
 	$null=Invoke-FixtureGit @('checkout','-q','--detach',$HeadRevision)
 	$Report=New-CiSelectionReport $Context $FixtureRepo
 	$ScheduleReport=New-CiSelectionReport ([pscustomobject][ordered]@{kind='schedule';runId=$RunId;runAttempt=$RunAttempt;revision=$HeadRevision;controllerRevision=$HeadRevision}) $FixtureRepo

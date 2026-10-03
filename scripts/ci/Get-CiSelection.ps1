@@ -480,25 +480,30 @@ function New-CiSelectionReport {
 	if ([string]::IsNullOrEmpty($Base) -or $Base -eq ('0' * 40)) { throw 'comparison_base_unavailable' }
 	# A pull request is classified by what its tested merge changes relative to
 	# the first parent; diffing the head would reverse upstream-only changes.
-	$New = $Head
+	$Compared = $Head
 	if ($Context.kind -eq 'pull_request' -or ($Context.kind -eq 'workflow_call' -and $Context.callerKind -eq 'pull_request')) {
 		$ParentsRaw = (Invoke-BoundedGitBytes $Repository @('show','-s','--format=%P',$Context.workflowRevision) -StdoutLimit 1024).Stdout
 		$Parents = ($script:StrictUtf8.GetString($ParentsRaw).Trim() -split ' ')
 		if ($Parents.Count -ne 2 -or $Parents[0] -cne $Base -or $Parents[1] -cne $Head) { throw 'workflow_revision_parents_invalid' }
-		$New = $Context.workflowRevision
+		$Compared = $Context.workflowRevision
 	}
 	$BaseTree = @(Get-TrackedTreeEntries $Repository $Base); $HeadTree = @(Get-TrackedTreeEntries $Repository $Head)
 	Test-WindowsCheckoutTree $BaseTree | Out-Null
 	Test-WindowsCheckoutTree $HeadTree | Out-Null
-	$NewTree = if ($New -ceq $Head) { $HeadTree } else { @(Get-TrackedTreeEntries $Repository $New) }
-	$Raw = (Invoke-BoundedGitBytes $Repository @('diff','--raw','-z','--no-abbrev','--no-ext-diff','--no-textconv','--find-renames','--find-copies-harder',$Base,$New,'--')).Stdout
+	$NewTree = $HeadTree
+	if ($Compared -cne $Head) {
+		# Hosted jobs check out the merge, so it needs the same safety check.
+		$NewTree = @(Get-TrackedTreeEntries $Repository $Compared)
+		Test-WindowsCheckoutTree $NewTree | Out-Null
+	}
+	$Raw = (Invoke-BoundedGitBytes $Repository @('diff','--raw','-z','--no-abbrev','--no-ext-diff','--no-textconv','--find-renames','--find-copies-harder',$Base,$Compared,'--')).Stdout
 	$Entries = @(ConvertFrom-GitRawZ $Raw)
 	if ($Entries.Count -eq 0) { throw 'empty_diff' }
 	if (@($Entries | Where-Object { $_.oldPath -eq '.lfsconfig' -or $_.newPath -eq '.lfsconfig' }).Count -gt 0) { throw 'lfsconfig_changed' }
 	$AttributeChanged = @($Entries | Where-Object { $_.oldPath -eq '.gitattributes' -or $_.newPath -eq '.gitattributes' -or $_.oldPath.EndsWith('/.gitattributes') -or $_.newPath.EndsWith('/.gitattributes') }).Count -gt 0
 	$BasePaths = if ($AttributeChanged) { @($BaseTree | Where-Object {$_.type -eq 'blob'} | ForEach-Object {$_.path}) } else { @($Entries | Where-Object {$_.status -ne 'A'} | ForEach-Object {$_.oldPath}) }
 	$HeadPaths = if ($AttributeChanged) { @($NewTree | Where-Object {$_.type -eq 'blob'} | ForEach-Object {$_.path}) } else { @($Entries | Where-Object {$_.status -ne 'D'} | ForEach-Object {$_.newPath}) }
-	$BaseAttrs=Get-RevisionAttributes -Repository $Repository -Revision $Base -Paths @($BasePaths | Sort-Object -Unique); $HeadAttrs=Get-RevisionAttributes -Repository $Repository -Revision $New -Paths @($HeadPaths | Sort-Object -Unique)
+	$BaseAttrs=Get-RevisionAttributes -Repository $Repository -Revision $Base -Paths @($BasePaths | Sort-Object -Unique); $HeadAttrs=Get-RevisionAttributes -Repository $Repository -Revision $Compared -Paths @($HeadPaths | Sort-Object -Unique)
 	$Selected=@{}; $Classified=New-Object System.Collections.Generic.List[object]; $Changed=New-Object System.Collections.Generic.List[string]
 	foreach ($Entry in $Entries) {
 		foreach ($Side in @(@{path=$Entry.oldPath;attrs=$BaseAttrs},@{path=$Entry.newPath;attrs=$HeadAttrs})) {
