@@ -703,6 +703,81 @@ Assert-True ($AcceptanceShadow -match '\$Gap = & \$ContextBuilder -Mode Gap @Con
 Assert-True ($AcceptanceShadow -match "producer_contract_incomplete" -and $AcceptanceShadow -match "throw 'aggregate_ready_contradiction'" -and $AcceptanceShadow -match 'acceptance_producer_gap:') 'Only a selected unsupported obligation may become the explicit green producer gap.'
 Assert-True ($AcceptanceShadow -match 'Invoke-CiAcceptanceAggregateMain' -and $AcceptanceShadow -match "throw 'aggregate_shadow_decision_invalid'") 'The supported subset must execute the real aggregate and reject any authority-bearing or incomplete decision.'
 Assert-True ($AcceptanceShadow -match 'complete = \$false' -and $AcceptanceShadow -match 'shadow = \$true' -and $AcceptanceShadow -match 'authoritative = \$false' -and $AcceptanceShadow -match 'grantsAcceptance = \$false') 'The unsupported path must remain an explicit non-authoritative no-acceptance result.'
+# Every selected live receipt binding is validated before the readiness branch, so a failed or skipped required receipt
+# stays red on the gap path too and can never hide behind a green producer gap. The context builder is stubbed here (it has
+# its own tests); only the reconcile step's own binding and report logic runs.
+$ReconcileStep = [regex]::Match($AcceptanceShadow, '(?ms)^      - name: Reconcile shadow acceptance evidence\r?\n.*?(?=^      - )').Value
+Assert-True ($ReconcileStep.Length -gt 0) 'The reconcile step must be discoverable for the gap-path fixtures.'
+$ReconcileRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-reconcile-step-' + [guid]::NewGuid().ToString('N'))
+$ReconcileNonce = '5' * 64
+$ReconcileEnvironment = @{
+	AETHELN_ACCEPTANCE_REPORT = Join-Path $ReconcileRoot 'ci-acceptance-shadow.json'
+	AETHELN_EVENT_NAME = 'pull_request'
+	AETHELN_REPOSITORY = 'ShayShimoni/aetheln-online'
+	AETHELN_ACTOR = 'fixture-actor'
+	AETHELN_TRIGGERING_ACTOR = 'fixture-actor'
+	AETHELN_BASE_REVISION = 'a' * 40
+	AETHELN_HEAD_REVISION = 'b' * 40
+	AETHELN_TESTED_REVISION = 'c' * 40
+	AETHELN_RUN_ID = '1'
+	AETHELN_RUN_ATTEMPT = '1'
+	AETHELN_SELECTOR_NONCE = $ReconcileNonce
+	AETHELN_SELECTOR_READY = 'false'
+	AETHELN_SELECTOR_ARTIFACT_ID = '1'
+	AETHELN_SELECTOR_ARTIFACT_NAME = 'ci-selection-shadow-1-1-' + $ReconcileNonce
+	AETHELN_SELECTOR_ARTIFACT_DIGEST = 'sha256:' + ('d' * 64)
+	AETHELN_PORTABLE_REQUIRED = 'true'
+	AETHELN_NATIVE_REQUIRED = 'false'
+	AETHELN_OPERATIONAL_REQUIRED = 'false'
+	AETHELN_UNREAL_REQUIRED = 'false'
+	AETHELN_VISUAL_REQUIRED = 'false'
+	AETHELN_PORTABLE_RESULT = 'success'
+	AETHELN_PORTABLE_ARTIFACT_ID = '2'
+	AETHELN_PORTABLE_ARTIFACT_NAME = 'ci-receipt-portable-1-1-' + $ReconcileNonce
+	AETHELN_PORTABLE_ARTIFACT_DIGEST = 'sha256:' + ('e' * 64)
+	AETHELN_NATIVE_RESULT = 'skipped'
+	AETHELN_UNREAL_RESULT = 'skipped'
+	AETHELN_VISUAL_RESULT = 'skipped'
+	GITHUB_WORKSPACE = Join-Path $ReconcileRoot 'workspace'
+	GITHUB_OUTPUT = Join-Path $ReconcileRoot 'github-output.txt'
+}
+function Invoke-ReconcileFixture([hashtable] $Overrides) {
+	$Applied = $script:ReconcileEnvironment.Clone()
+	foreach ($Key in $Overrides.Keys) { $Applied[$Key] = $Overrides[$Key] }
+	foreach ($Key in $Applied.Keys) { [Environment]::SetEnvironmentVariable($Key, $Applied[$Key]) }
+	if (Test-Path -LiteralPath $script:ReconcileEnvironment.AETHELN_ACCEPTANCE_REPORT) { Remove-Item -LiteralPath $script:ReconcileEnvironment.AETHELN_ACCEPTANCE_REPORT -Force }
+	$WarningPreference = 'SilentlyContinue'
+	return Invoke-AutomationStepFixture $script:ReconcileStep
+}
+$PreviousReconcileEnvironment = @{}
+foreach ($Name in $ReconcileEnvironment.Keys) { $PreviousReconcileEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+try {
+	$null = New-Item -ItemType Directory -Path (Join-Path $ReconcileEnvironment.GITHUB_WORKSPACE 'scripts/ci')
+	[IO.File]::WriteAllText((Join-Path $ReconcileEnvironment.GITHUB_WORKSPACE 'scripts/ci/New-CiAcceptanceAggregateContext.ps1'), "[pscustomobject]@{ mode = 'Gap'; acceptedControllerUnavailable = `$false; attemptAnchor = [pscustomobject]@{ nonce = `$env:AETHELN_SELECTOR_NONCE }; selectedUnsupported = @('content-reference-validation') }`n")
+	foreach ($GapCase in @(
+		@{ Name = 'a skipped portable receipt'; Reason = 'producer_direct_binding_invalid:portable'; Overrides = @{ AETHELN_PORTABLE_RESULT = 'skipped' } },
+		@{ Name = 'a portable receipt without its direct artifact binding'; Reason = 'producer_direct_binding_invalid:portable'; Overrides = @{ AETHELN_PORTABLE_ARTIFACT_ID = '' } },
+		@{ Name = 'a skipped native receipt'; Reason = 'producer_direct_binding_invalid:native'; Overrides = @{ AETHELN_NATIVE_REQUIRED = 'true' } },
+		@{ Name = 'a skipped unreal receipt'; Reason = 'producer_direct_binding_invalid:unreal'; Overrides = @{ AETHELN_UNREAL_REQUIRED = 'true' } },
+		@{ Name = 'a skipped visual receipt'; Reason = 'producer_direct_binding_invalid:visual'; Overrides = @{ AETHELN_VISUAL_REQUIRED = 'true' } }
+	)) {
+		$Failed = Invoke-ReconcileFixture $GapCase.Overrides
+		Assert-True ($null -ne $Failed.failure -and $Failed.failure -ceq $GapCase.Reason -and -not (Test-Path -LiteralPath $ReconcileEnvironment.AETHELN_ACCEPTANCE_REPORT)) "The gap path must fail red with $($GapCase.Reason) and publish no report for $($GapCase.Name) (actual failure: '$($Failed.failure)')."
+	}
+	$Green = Invoke-ReconcileFixture @{}
+	Assert-True ($null -eq $Green.failure) "A valid live receipt on the gap path must stay green: $($Green.failure)"
+	$GapReport = Get-Content -LiteralPath $ReconcileEnvironment.AETHELN_ACCEPTANCE_REPORT -Raw | ConvertFrom-Json
+	$LiveBindings = @($GapReport.liveBindings)
+	Assert-True ($GapReport.schemaVersion -ceq 'aetheln.ci-acceptance-shadow-gap/v3' -and $LiveBindings.Count -eq 1 -and $LiveBindings[0].key -ceq 'portable' -and $LiveBindings[0].jobName -ceq 'portable-receipt-shadow' -and $LiveBindings[0].artifactId -ceq '2' -and $LiveBindings[0].artifactName -ceq ('ci-receipt-portable-1-1-' + $ReconcileNonce) -and $LiveBindings[0].digest -ceq ('sha256:' + ('e' * 64))) 'The green gap record must carry the validated live receipt binding as aetheln.ci-acceptance-shadow-gap/v3.'
+	Assert-True ((@($GapReport.selectedUnsupported) -join ',') -ceq 'content-reference-validation' -and $GapReport.decision.complete -eq $false -and $GapReport.decision.shadow -eq $true -and $GapReport.decision.authoritative -eq $false -and $GapReport.decision.grantsAcceptance -eq $false -and $GapReport.decision.reason -ceq 'producer_contract_incomplete') 'The green gap record must stay an explicit non-authoritative no-acceptance result.'
+} finally {
+	foreach ($Name in $PreviousReconcileEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $PreviousReconcileEnvironment[$Name]) }
+	Remove-Item -LiteralPath $ReconcileRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+$ReconcileBindingsIndex = $ReconcileStep.IndexOf('Add-ProducerBinding $NativeProducerRequired', [StringComparison]::Ordinal)
+$ReconcileReadinessIndex = $ReconcileStep.IndexOf('if ($env:AETHELN_SELECTOR_READY -ceq ''false'')', [StringComparison]::Ordinal)
+Assert-True ($ReconcileBindingsIndex -ge 0 -and $ReconcileReadinessIndex -ge 0 -and $ReconcileBindingsIndex -lt $ReconcileReadinessIndex) 'The live producer bindings must be validated before the aggregate-readiness branch so both branches share them.'
+Assert-True ($ReconcileStep.Contains('aetheln.ci-acceptance-shadow-gap/v3') -and $ReconcileStep.Contains('liveBindings') -and -not $ReconcileStep.Contains('shadow-gap/v2')) 'The gap record must be the v3 schema carrying liveBindings.'
 Assert-True ($AcceptanceShadow -notmatch 'acceptanceGranted|grantsAcceptance = \$true|authoritative = \$true' -and $AcceptanceShadow -notmatch '(?m)^\s+continue-on-error:') 'Package 3C must neither advertise nor grant authority and unexpected failures must remain red.'
 Assert-True ($AcceptanceShadow -match '(?m)^        id: acceptance_artifact\r?$' -and $AcceptanceShadow -notmatch '(?ms)^      - name: Upload shadow acceptance diagnostic\r?\n        id: acceptance_artifact\r?\n        if: always\(\)') 'The shadow aggregate must upload only a successfully reconciled report, never mask a failed reconciliation with always().'
 Assert-True ($AcceptanceAuthority -match "(?m)^    needs: ci-acceptance-shadow\r?\n    if: always\(\) && github\.event_name == 'pull_request' && false\r?$" -and $AcceptanceAuthority -match '(?m)^    runs-on: windows-latest\r?$' -and $AcceptanceAuthority -match '(?m)^    timeout-minutes: 5\r?$') 'The future authority boundary must remain literally unreachable, evaluate dependency failures when activated, and stay bounded on a hosted runner.'
