@@ -73,6 +73,9 @@ subordinate to the specialized canonical product and technical documents.
   the identity-bound persistent Derived Data Cache contract, the attested
   fail-closed prebuilt host-tools boundary and its operator attestation step,
   and capacity and recovery ownership.
+- [Asset Intake and Content Validation](asset-intake-and-content-validation.md)
+  defines lifecycle, provenance, stable identity, audience, validation, and
+  client/server cook-evidence contracts for Issue #120.
 - [GitHub Issues](https://github.com/ShayShimoni/aetheln-online/issues) govern
   work status, ownership, priority, and target version.
 

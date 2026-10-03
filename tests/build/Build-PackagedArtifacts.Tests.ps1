@@ -14,6 +14,31 @@ function Assert-True([bool] $Condition, [string] $Message) { if (-not $Condition
 
 try {
 	$RealRevision = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
+	# Packaging writes cooked registries under the project's Saved/Cooked, so the
+	# fake UAT targets an isolated project copy and never touches a real checkout.
+	$FixtureProjectRoot = Join-Path $FixtureRoot 'Project'
+	New-Item -ItemType Directory -Path $FixtureProjectRoot -Force | Out-Null
+	foreach ($ProjectItem in @('AethelnOnline.uproject', 'Source', 'Config')) { Copy-Item -LiteralPath (Join-Path $RepositoryRoot $ProjectItem) -Destination $FixtureProjectRoot -Recurse }
+	$FixtureProject = Join-Path $FixtureProjectRoot 'AethelnOnline.uproject'
+	$env:AETHELN_TEST_PROJECT_ROOT = $FixtureProjectRoot
+	$env:AETHELN_TEST_REGISTRY_NONCE = 'fixture'
+	function Assert-RegistryReceipt($Actual, [string] $Kind, [string] $Context) {
+		$CookPlatform = if ($Kind -ceq 'client') { 'WindowsClient' } else { 'LinuxServer' }
+		$RelativePath = "Saved/Cooked/$CookPlatform/AethelnOnline/AssetRegistry.bin"
+		$RegistryPath = Join-Path $FixtureProjectRoot $RelativePath
+		$Expected = [ordered]@{
+			relativePath = $RelativePath
+			sizeBytes = (Get-Item -LiteralPath $RegistryPath).Length
+			sha256 = (Get-FileHash -LiteralPath $RegistryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+			target = if ($Kind -ceq 'client') { 'AethelnOnlineClient' } else { 'AethelnOnlineServer' }
+			platform = if ($Kind -ceq 'client') { 'Win64' } else { 'Linux' }
+			cookPlatform = $CookPlatform
+			sourceRevision = $Revision
+		}
+		Assert-True ($null -ne $Actual) "$Context must carry the producer $Kind cooked-registry receipt."
+		Assert-True ((@($Actual.PSObject.Properties.Name) -join ',') -ceq (@($Expected.Keys) -join ',')) "$Context $Kind receipt must use the closed field set."
+		foreach ($Field in $Expected.Keys) { Assert-True ($Actual.$Field -eq $Expected[$Field]) "$Context $Kind receipt $Field must bind the exact cooked registry." }
+	}
 	$OriginalPath = $env:PATH
 	$GitBin = Join-Path $FixtureRoot 'GitBin'
 	New-Item -ItemType Directory -Path $GitBin -Force | Out-Null
@@ -84,9 +109,14 @@ echo %* | findstr /c:"-serverplatform=Linux" >nul
 if %errorlevel%==0 (
 	mkdir "%AETHELN_TEST_ARCHIVE_ROOT%\LinuxServer" 2>nul
 	echo server>"%AETHELN_TEST_ARCHIVE_ROOT%\LinuxServer\AethelnOnlineServer"
+	mkdir "%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\LinuxServer\AethelnOnline" 2>nul
+	echo server registry %AETHELN_TEST_REGISTRY_NONCE%>"%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\LinuxServer\AethelnOnline\AssetRegistry.bin"
 ) else (
 	mkdir "%AETHELN_TEST_ARCHIVE_ROOT%\WindowsClient" 2>nul
 	echo client>"%AETHELN_TEST_ARCHIVE_ROOT%\WindowsClient\AethelnOnlineClient.exe"
+	mkdir "%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\WindowsClient\AethelnOnline" 2>nul
+	del "%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\WindowsClient\AethelnOnline\AssetRegistry.bin" 2>nul
+	if not "%AETHELN_TEST_SKIP_CLIENT_REGISTRY%"=="1" echo client registry %AETHELN_TEST_REGISTRY_NONCE%>"%AETHELN_TEST_PROJECT_ROOT%\Saved\Cooked\WindowsClient\AethelnOnline\AssetRegistry.bin"
 	mkdir "%uebp_LogFolder%" 2>nul
 	>"%uebp_LogFolder%\UBA-client.txt" echo Compiler: $SelectedCompiler
 	>>"%uebp_LogFolder%\UBA-client.txt" echo Compiler: $SelectedCompiler
@@ -150,7 +180,7 @@ public static class FakeEditor {
 	Add-Type -TypeDefinition $EditorSource -OutputAssembly (Join-Path $EditorDirectory 'UnrealEditor-Cmd.exe') -OutputType ConsoleApplication
 	$Revision = $RealRevision
 
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $ArchiveRoot -LogRoot $LogRoot -SourceRevision $Revision -HostToolsBoundary Rebuild -RunnerName 'fixture-runner'
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $ArchiveRoot -LogRoot $LogRoot -SourceRevision $Revision -HostToolsBoundary Rebuild -RunnerName 'fixture-runner'
 	$Calls = @(Get-Content -LiteralPath $CapturePath)
 	Assert-True ($Calls.Count -eq 2) 'RunUAT should be invoked once per supported artifact.'
 	foreach ($Required in @('BuildCookRun', '-build', '-cook', '-clean', '-stage', '-pak', '-archive', '-map=/Game/Maps/StarterMap')) {
@@ -162,6 +192,8 @@ public static class FakeEditor {
 	Assert-True (-not $Calls[1].Contains('-platform=Linux')) 'The server must use serverplatform rather than the ambiguous platform switch.'
 	$Provenance = Get-Content -LiteralPath (Join-Path $ArchiveRoot 'build-provenance.json') -Raw | ConvertFrom-Json
 	Assert-True ($Provenance.build.uatInvocations.server.arguments -contains '-serverplatform=Linux') 'Provenance should preserve exact UAT arguments.'
+	Assert-RegistryReceipt -Actual $Provenance.build.cookedRegistries.client -Kind 'client' -Context 'Build provenance'
+	Assert-RegistryReceipt -Actual $Provenance.build.cookedRegistries.server -Kind 'server' -Context 'Build provenance'
 	Assert-True ($Provenance.source.clean -eq $true) 'Provenance should record the clean-worktree gate result.'
 	Assert-True ($Provenance.tools.compiler.path -eq $SelectedCompiler) 'Provenance must use the compiler selected in this UBT invocation.'
 	Assert-True ($Provenance.tools.compiler.version -eq '14.44.35207') 'The selected MSVC version should be correlated from its exact path.'
@@ -185,7 +217,7 @@ public static class FakeEditor {
 	$env:AETHELN_TEST_CONFLICTING_COMPILER = '1'
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'ConflictArchive'
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ConflictArchive') -LogRoot (Join-Path $FixtureRoot 'ConflictLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ConflictArchive') -LogRoot (Join-Path $FixtureRoot 'ConflictLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'exactly one UBT-selected Compiler.*found 2') 'Conflicting compiler paths from the isolated client sidecars should fail actionably.'
 	Assert-True ([Environment]::GetEnvironmentVariable('uebp_LogFolder', 'Process') -eq $PriorLogFolder) 'The prior AutomationTool log folder should be restored after failure.'
 	Assert-True ([Environment]::GetEnvironmentVariable('uebp_FinalLogFolder', 'Process') -eq $PriorFinalLogFolder) 'The prior final AutomationTool log folder should be restored after failure.'
@@ -197,7 +229,7 @@ public static class FakeEditor {
 	New-Item -ItemType Directory -Path $DirtyRoot | Out-Null
 	Set-Content -LiteralPath (Join-Path $DirtyRoot 'old.txt') -Value old
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $DirtyRoot -LogRoot (Join-Path $FixtureRoot 'FreshLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $DirtyRoot -LogRoot (Join-Path $FixtureRoot 'FreshLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'must be empty') 'Existing output must not be silently mixed with a new build.'
 	Write-Output 'PASS: non-empty output roots are rejected'
 
@@ -208,7 +240,7 @@ public static class FakeEditor {
 	)) {
 		$env:AETHELN_TEST_GIT_STATUS = $DirtyCase.Status
 		$Failure = $null
-		try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot "$($DirtyCase.Label)-archive") -LogRoot (Join-Path $FixtureRoot "$($DirtyCase.Label)-logs") -SourceRevision $Revision -HostToolsBoundary Rebuild } catch { $Failure = $_.Exception.Message }
+		try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot "$($DirtyCase.Label)-archive") -LogRoot (Join-Path $FixtureRoot "$($DirtyCase.Label)-logs") -SourceRevision $Revision -HostToolsBoundary Rebuild } catch { $Failure = $_.Exception.Message }
 		Assert-True ($Failure -match 'require a clean repository') "$($DirtyCase.Label) build inputs should be rejected actionably."
 		Assert-True ($Failure -match [regex]::Escape($DirtyCase.Status.Substring(3))) "$($DirtyCase.Label) input path should be listed."
 		Assert-True (-not (Test-Path -LiteralPath (Join-Path $FixtureRoot "$($DirtyCase.Label)-archive"))) 'Dirty source should fail before creating output roots.'
@@ -222,31 +254,61 @@ public static class FakeEditor {
 	$StagedProvenanceRoot = Join-Path $FixtureRoot 'StagedProvenance'
 
 	$env:AETHELN_TEST_ARCHIVE_ROOT = $StagedClientRoot
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedClientRoot -LogRoot (Join-Path $FixtureRoot 'StagedClientLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -Stage Client
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedClientRoot -LogRoot (Join-Path $FixtureRoot 'StagedClientLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -Stage Client
 	$ClientRecord = Get-Content -LiteralPath (Join-Path $StagedClientRoot 'phase-client.json') -Raw | ConvertFrom-Json
 	Assert-True ($ClientRecord.schemaVersion -eq 1 -and $ClientRecord.stage -eq 'client' -and $ClientRecord.sourceRevision -eq $Revision) 'The client stage record must bind schema, stage, and source revision.'
 	Assert-True ($ClientRecord.compilerPath -eq $SelectedCompiler -and $ClientRecord.resourceCompilerPath -eq $SelectedResourceCompiler) 'The client stage record must carry the exact UBT-selected toolchain.'
 	Assert-True ((@($ClientRecord.clientArguments) -contains '-target=AethelnOnlineClient') -and (@($ClientRecord.clientArguments) -contains '-clean')) 'The client stage record must preserve the exact clean client UAT arguments.'
 	Assert-True (-not (Test-Path -LiteralPath (Join-Path $StagedClientRoot 'LinuxServer'))) 'The client stage must not produce server output.'
+	Assert-RegistryReceipt -Actual $ClientRecord.cookedRegistry -Kind 'client' -Context 'The client stage record'
 
 	$env:AETHELN_TEST_ARCHIVE_ROOT = $StagedServerRoot
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedServerRoot -LogRoot (Join-Path $FixtureRoot 'StagedServerLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -Stage Server
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedServerRoot -LogRoot (Join-Path $FixtureRoot 'StagedServerLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -Stage Server
 	$ServerRecord = Get-Content -LiteralPath (Join-Path $StagedServerRoot 'phase-server.json') -Raw | ConvertFrom-Json
 	Assert-True ($ServerRecord.stage -eq 'server' -and (@($ServerRecord.serverArguments) -contains '-serverplatform=Linux')) 'The server stage record must preserve the exact server UAT arguments.'
 	Assert-True (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'RegistryDumps/server-dependency-registry-dump/Page_0.txt')) 'The server stage must publish its dependency registry dump as payload.'
 	Assert-True (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'RegistryDumps/server-cooked-inventory-dump/Page_0.txt')) 'The server stage must publish its cooked inventory dump as payload.'
 	Assert-True (-not (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'WindowsClient'))) 'The server stage must not produce client output.'
+	Assert-RegistryReceipt -Actual $ServerRecord.cookedRegistry -Kind 'server' -Context 'The server stage record'
 
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedProvenanceRoot -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceLogs') -SourceRevision $Revision -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedProvenanceRoot -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceLogs') -SourceRevision $Revision -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot
 	$StagedProvenance = Get-Content -LiteralPath (Join-Path $StagedProvenanceRoot 'build-provenance.json') -Raw | ConvertFrom-Json
 	Assert-True ($StagedProvenance.tools.compiler.path -eq $SelectedCompiler -and $StagedProvenance.tools.compiler.version -eq '14.44.35207') 'Staged provenance must use the client stage record toolchain.'
 	Assert-True ($StagedProvenance.build.uatInvocations.server.arguments -contains '-serverplatform=Linux') 'Staged provenance must preserve the exact recorded server UAT arguments.'
 	Assert-True ($StagedProvenance.artifacts.inventory.Count -eq 2) 'Staged provenance must inventory every packaged file from both stage payloads.'
 
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'StagedProvenanceMismatch') -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceMismatchLogs') -SourceRevision ('1' * 40) -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'StagedProvenanceMismatch') -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceMismatchLogs') -SourceRevision ('1' * 40) -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'produced from source revision') 'Provenance over stage records from a different revision must fail closed.'
 	Write-Output 'PASS: staged client, server, and provenance phases exchange exact records and fail closed on revision mismatch'
+
+	Assert-RegistryReceipt -Actual $StagedProvenance.build.cookedRegistries.client -Kind 'client' -Context 'Staged build provenance'
+	Assert-RegistryReceipt -Actual $StagedProvenance.build.cookedRegistries.server -Kind 'server' -Context 'Staged build provenance'
+	foreach ($ReceiptCase in @(
+		@{ name = 'CrossTarget'; field = 'cookPlatform'; value = 'LinuxServer' },
+		@{ name = 'CrossRevision'; field = 'sourceRevision'; value = ('1' * 40) },
+		@{ name = 'ForeignTarget'; field = 'target'; value = 'AethelnOnlineServer' }
+	)) {
+		$TamperedClientRoot = Join-Path $FixtureRoot "StagedClient$($ReceiptCase.name)"
+		Copy-Item -LiteralPath $StagedClientRoot -Destination $TamperedClientRoot -Recurse
+		$TamperedRecordPath = Join-Path $TamperedClientRoot 'phase-client.json'
+		$TamperedRecord = Get-Content -LiteralPath $TamperedRecordPath -Raw | ConvertFrom-Json
+		$TamperedRecord.cookedRegistry.($ReceiptCase.field) = $ReceiptCase.value
+		$TamperedRecord | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $TamperedRecordPath -Encoding UTF8
+		$Failure = $null
+		try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot "StagedProvenance$($ReceiptCase.name)") -LogRoot (Join-Path $FixtureRoot "StagedProvenance$($ReceiptCase.name)Logs") -SourceRevision $Revision -Stage Provenance -ClientStageRoot $TamperedClientRoot -ServerStageRoot $StagedServerRoot } catch { $Failure = $_.Exception.Message }
+		Assert-True ($null -ne $Failure -and $Failure -match 'client cooked-registry receipt') "A $($ReceiptCase.name) client stage receipt must fail provenance closed; observed '$Failure'."
+		Assert-True (-not (Test-Path -LiteralPath (Join-Path $FixtureRoot "StagedProvenance$($ReceiptCase.name)/build-provenance.json"))) "A $($ReceiptCase.name) client stage receipt must not produce provenance."
+	}
+	$env:AETHELN_TEST_SKIP_CLIENT_REGISTRY = '1'
+	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'MissingRegistryClient'
+	$Failure = $null
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'MissingRegistryClient') -LogRoot (Join-Path $FixtureRoot 'MissingRegistryClientLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -Stage Client } catch { $Failure = $_.Exception.Message }
+	Remove-Item Env:AETHELN_TEST_SKIP_CLIENT_REGISTRY
+	$env:AETHELN_TEST_ARCHIVE_ROOT = $ArchiveRoot
+	Assert-True ($null -ne $Failure -and $Failure -match 'client cooked registry') "A cook that leaves no client registry must fail closed; observed '$Failure'."
+	Assert-True (-not (Test-Path -LiteralPath (Join-Path $FixtureRoot 'MissingRegistryClient/phase-client.json'))) 'A cook without a registry must not publish a client stage record.'
+	Write-Output 'PASS: producer-owned registry receipts bind stage records and provenance, and missing, cross-target, and cross-revision receipts fail closed'
 
 	$Timing = Get-Content -LiteralPath (Join-Path $LogRoot 'build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($Timing.schemaVersion -eq 3 -and $Timing.stage -eq 'all' -and $Timing.sourceRevision -eq $Revision -and $Timing.configuration -eq 'Development') 'The timing record must bind schema, stage, source revision, and configuration.'
@@ -277,7 +339,7 @@ public static class FakeEditor {
 	$env:AETHELN_TEST_DDC_CAPTURE = $DdcCapture
 	$PreRunLocalDdc = [Environment]::GetEnvironmentVariable('UE-LocalDataCachePath', 'Process')
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'DdcArchive1'
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive1') -LogRoot (Join-Path $FixtureRoot 'DdcLogs1') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive1') -LogRoot (Join-Path $FixtureRoot 'DdcLogs1') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot
 	$IdentityPath = Join-Path $DdcRoot 'cache-identity.json'
 	$Identity = Get-Content -LiteralPath $IdentityPath -Raw | ConvertFrom-Json
 	$ExpectedEngineHash = (Get-FileHash -LiteralPath (Join-Path $EngineRoot 'Engine/Build/Build.version') -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -291,7 +353,7 @@ public static class FakeEditor {
 	Assert-True ($DdcEnvLines.Count -eq 2 -and @($DdcEnvLines | Where-Object { $_ -ne $DdcRoot }).Count -eq 0) 'Both UAT invocations must run with UE-LocalDataCachePath pointed at the validated cache root.'
 	Assert-True ([Environment]::GetEnvironmentVariable('UE-LocalDataCachePath', 'Process') -eq $PreRunLocalDdc) 'The prior UE-LocalDataCachePath value must be restored after the run.'
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'DdcArchive2'
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive2') -LogRoot (Join-Path $FixtureRoot 'DdcLogs2') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive2') -LogRoot (Join-Path $FixtureRoot 'DdcLogs2') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot
 	$Timing2 = Get-Content -LiteralPath (Join-Path $FixtureRoot 'DdcLogs2/build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($Timing2.derivedDataCache.mode -eq 'persistent' -and $Timing2.derivedDataCache.status -eq 'reused') 'A matching identity record must be recorded as persistent/reused.'
 	Write-Output 'PASS: the persistent cache initializes and reuses only under a matching explicit identity'
@@ -300,11 +362,11 @@ public static class FakeEditor {
 	($IdentityRaw -replace 'v26_clang-20\.1\.8-rockylinux8', 'v25_clang-18.1.0-rockylinux8') | Set-Content -LiteralPath $IdentityPath -Encoding UTF8
 	$CallsBeforeDdcMismatch = @(Get-Content -LiteralPath $CapturePath).Count
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive3') -LogRoot (Join-Path $FixtureRoot 'DdcLogs3') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive3') -LogRoot (Join-Path $FixtureRoot 'DdcLogs3') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'failed identity validation') 'A mismatched cache identity must fail closed by default.'
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeDdcMismatch) 'A mismatched cache identity must stop before any UAT invocation.'
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'DdcArchive4'
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive4') -LogRoot (Join-Path $FixtureRoot 'DdcLogs4') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot -CacheFallback CleanIsolated
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive4') -LogRoot (Join-Path $FixtureRoot 'DdcLogs4') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot -CacheFallback CleanIsolated
 	$Timing4 = Get-Content -LiteralPath (Join-Path $FixtureRoot 'DdcLogs4/build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($Timing4.derivedDataCache.mode -eq 'clean-isolated-fallback' -and $Timing4.derivedDataCache.status -eq 'fallback_mismatch') 'The clean fallback must be recorded with its mismatch reason.'
 	$IsolatedPath = Join-Path (Join-Path $FixtureRoot 'DdcLogs4') 'ddc-clean-isolated'
@@ -312,7 +374,7 @@ public static class FakeEditor {
 	Assert-True (@($FallbackEnvLines | Where-Object { $_ -ne $IsolatedPath }).Count -eq 0) 'The clean fallback must re-derive into a fresh run-scoped cache, never the mismatched root.'
 	Set-Content -LiteralPath $IdentityPath -Value 'not-json' -Encoding UTF8
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'DdcArchive5'
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive5') -LogRoot (Join-Path $FixtureRoot 'DdcLogs5') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot -CacheFallback CleanIsolated
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive5') -LogRoot (Join-Path $FixtureRoot 'DdcLogs5') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $DdcRoot -CacheFallback CleanIsolated
 	$Timing5 = Get-Content -LiteralPath (Join-Path $FixtureRoot 'DdcLogs5/build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($Timing5.derivedDataCache.mode -eq 'clean-isolated-fallback' -and $Timing5.derivedDataCache.status -eq 'fallback_corrupt') 'A corrupt identity record must take the clean fallback with its corrupt reason.'
 	$ForeignDdc = Join-Path $FixtureRoot 'ForeignDdc'
@@ -320,12 +382,12 @@ public static class FakeEditor {
 	Set-Content -LiteralPath (Join-Path $ForeignDdc 'entry.bin') -Value 'foreign' -Encoding Ascii
 	$CallsBeforeForeign = @(Get-Content -LiteralPath $CapturePath).Count
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive6') -LogRoot (Join-Path $FixtureRoot 'DdcLogs6') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $ForeignDdc } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive6') -LogRoot (Join-Path $FixtureRoot 'DdcLogs6') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $ForeignDdc } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'failed identity validation' -and @(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeForeign) 'A non-empty cache without an identity record is unverifiable and must fail closed before UAT.'
 	$FileDdc = Join-Path $FixtureRoot 'ddc-as-file.txt'
 	Set-Content -LiteralPath $FileDdc -Value 'blocking' -Encoding Ascii
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive7') -LogRoot (Join-Path $FixtureRoot 'DdcLogs7') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $FileDdc } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'DdcArchive7') -LogRoot (Join-Path $FixtureRoot 'DdcLogs7') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $FileDdc } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'failed identity validation') 'An unavailable cache path must fail closed by default.'
 	Remove-Item Env:AETHELN_TEST_DDC_CAPTURE
 	Write-Output 'PASS: cache identity mismatch, corruption, unverifiable, and unavailable states fail closed or take the recorded clean fallback'
@@ -340,7 +402,7 @@ public static class FakeEditor {
 	Assert-True (-not $Calls[0].Contains('-nocompileeditor') -and -not $Calls[1].Contains('-nocompileeditor')) 'Without the prebuilt boundary the editor/engine host build must not be skipped.'
 	$CallsBeforeUnsetBoundary = @(Get-Content -LiteralPath $CapturePath).Count
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'UnsetBoundaryArchive') -LogRoot (Join-Path $FixtureRoot 'UnsetBoundaryLogs') -SourceRevision $Revision } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'UnsetBoundaryArchive') -LogRoot (Join-Path $FixtureRoot 'UnsetBoundaryLogs') -SourceRevision $Revision } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'host_tools_configuration_required') 'A build without an explicit host-tools selection must fail closed, never rebuild implicitly.'
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeUnsetBoundary) 'A missing host-tools selection must stop before any UAT invocation.'
 	Write-Output 'PASS: a missing host-tools selection fails closed instead of launching an implicit rebuild'
@@ -349,7 +411,7 @@ public static class FakeEditor {
 	New-Item -ItemType Directory -Path $AttestationDirectory | Out-Null
 	$AttestationPath = Join-Path $AttestationDirectory 'host-tools-attestation.json'
 	$CallsBeforeAttest = @(Get-Content -LiteralPath $CapturePath).Count
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'AttestArchive') -LogRoot (Join-Path $FixtureRoot 'AttestLogs') -SourceRevision $Revision -Stage AttestHostTools -HostToolsAttestationPath $AttestationPath -ProvisioningEvidence 'legacy scheduled milestone build, retained runner evidence 2026-09-04'
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'AttestArchive') -LogRoot (Join-Path $FixtureRoot 'AttestLogs') -SourceRevision $Revision -Stage AttestHostTools -HostToolsAttestationPath $AttestationPath -ProvisioningEvidence 'legacy scheduled milestone build, retained runner evidence 2026-09-04'
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeAttest) 'The attestation step must build nothing.'
 	$Attestation = Get-Content -LiteralPath $AttestationPath -Raw | ConvertFrom-Json
 	Assert-True ($Attestation.schemaVersion -eq 1 -and $Attestation.engineGitRevision -eq $CanonicalEnginePin) 'The attestation must bind the canonical pinned engine revision.'
@@ -377,7 +439,7 @@ public static class FakeEditor {
 
 	$CallsBeforePrebuilt = @(Get-Content -LiteralPath $CapturePath).Count
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'PrebuiltArchive'
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath -RunnerName 'fixture-runner'
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath -RunnerName 'fixture-runner'
 	$PrebuiltCalls = @(Get-Content -LiteralPath $CapturePath)
 	Assert-True ($PrebuiltCalls.Count -eq $CallsBeforePrebuilt + 2) 'The verified prebuilt boundary must still run both UAT invocations.'
 	foreach ($PrebuiltCall in @($PrebuiltCalls | Select-Object -Last 2)) {
@@ -391,15 +453,15 @@ public static class FakeEditor {
 
 	$CallsBeforeInvalidBoundary = @(Get-Content -LiteralPath $CapturePath).Count
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltNoAttestArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltNoAttestLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltNoAttestArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltNoAttestLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'requires -HostToolsAttestationPath') 'The prebuilt boundary without an attestation record must fail closed.'
 
 	$env:AETHELN_TEST_ENGINE_HEAD = ('5' * 40)
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltWrongPinArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltWrongPinLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision ('5' * 40) -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltWrongPinArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltWrongPinLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision ('5' * 40) -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'canonical pinned engine revision') 'A wrong-but-checkout-matching engine SHA must fail closed as noncanonical.'
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltWrongHeadArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltWrongHeadLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltWrongHeadArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltWrongHeadLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'not the canonical pinned') 'An engine checkout away from the canonical pin must fail the prebuilt boundary closed.'
 	$WrongHeadTiming = Get-Content -LiteralPath (Join-Path $FixtureRoot 'PrebuiltWrongHeadLogs/build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True (@($WrongHeadTiming.substeps | Where-Object { $_.name -eq 'host-tools-boundary' -and $_.status -eq 'failed' }).Count -eq 1) 'A failed prebuilt boundary must still emit bounded failed timing evidence.'
@@ -408,14 +470,14 @@ public static class FakeEditor {
 
 	$env:AETHELN_TEST_ENGINE_GIT_STATUS = ' M Engine/Source/Runtime/Core/Private/Core.cpp'
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltDirtyArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltDirtyLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltDirtyArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltDirtyLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'clean canonical pinned engine checkout') 'A dirty engine checkout must fail the prebuilt boundary closed.'
 	$env:AETHELN_TEST_ENGINE_GIT_STATUS = ''
 
 	$UnrealPakPath = Join-Path $EditorDirectory 'UnrealPak.exe'
 	Set-Content -LiteralPath $UnrealPakPath -Value 'mixture unrealpak' -Encoding Ascii
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltTamperArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltTamperLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltTamperArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltTamperLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'does not match its attested SHA-256') 'An arbitrary binary with an intact version JSON must fail the content attestation closed.'
 	Set-Content -LiteralPath $UnrealPakPath -Value 'fixture unrealpak' -Encoding Ascii
 
@@ -424,30 +486,30 @@ public static class FakeEditor {
 	$Manipulated.files[0].path = '..\GitBin\git.bat'
 	$Manipulated | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $BadAttestation -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltEscapeArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltEscapeLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltEscapeArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltEscapeLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'safe engine-relative path') 'An attestation path escape must fail closed.'
 	$Manipulated = Get-Content -LiteralPath $AttestationPath -Raw | ConvertFrom-Json
 	$Manipulated.files[1].path = ([string] $Manipulated.files[0].path).ToUpperInvariant()
 	$Manipulated | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $BadAttestation -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltCollideArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltCollideLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltCollideArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltCollideLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'duplicates or case-collides') 'A case-colliding attestation entry must fail closed.'
 	$Manipulated = Get-Content -LiteralPath $AttestationPath -Raw | ConvertFrom-Json
 	$Manipulated | Add-Member -NotePropertyName note -NotePropertyValue 'injected'
 	$Manipulated | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $BadAttestation -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltExtraPropArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltExtraPropLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltExtraPropArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltExtraPropLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'unexpected property') 'An attestation record with extra properties must fail closed.'
 	$Manipulated = Get-Content -LiteralPath $AttestationPath -Raw | ConvertFrom-Json
 	$Manipulated.files = @($Manipulated.files | Select-Object -Skip 1)
 	$Manipulated | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $BadAttestation -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltMissingEntryArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltMissingEntryLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltMissingEntryArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltMissingEntryLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'receipt-derived host build products; found') 'An attestation record missing a required entry must fail closed.'
 	$Oversized = Join-Path $AttestationDirectory 'oversized-attestation.json'
 	Set-Content -LiteralPath $Oversized -Value ((Get-Content -LiteralPath $AttestationPath -Raw) + (' ' * 8400000)) -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltOversizedArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltOversizedLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $Oversized } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PrebuiltOversizedArchive') -LogRoot (Join-Path $FixtureRoot 'PrebuiltOversizedLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $Oversized } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'exceeds the 8388608-byte') 'An oversized attestation record must fail closed before parsing.'
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeInvalidBoundary) 'Every invalid boundary or attestation must stop before any UAT invocation.'
 	Write-Output 'PASS: tampered tools, noncanonical revisions, dirty checkouts, and manipulated attestation records all fail the boundary closed'
@@ -455,40 +517,40 @@ public static class FakeEditor {
 	$CallsBeforeReceiptClosure = @(Get-Content -LiteralPath $CapturePath).Count
 	Set-Content -LiteralPath $EditorCoreDllPath -Value 'FIXTURE EDITOR CORE MODULE' -Encoding Ascii
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptRootDllArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptRootDllLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptRootDllArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptRootDllLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'does not match its attested SHA-256') 'A mutated receipt-listed root editor module DLL must fail the boundary closed even when the legacy five files are untouched.'
 	Set-Content -LiteralPath $EditorCoreDllPath -Value 'fixture editor core module' -Encoding Ascii
 	Set-Content -LiteralPath $PluginDllPath -Value 'FIXTURE PLUGIN MODULE' -Encoding Ascii
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptPluginDllArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptPluginDllLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptPluginDllArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptPluginDllLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'does not match its attested SHA-256') 'A mutated receipt-listed engine-plugin module DLL must fail the boundary closed.'
 	Set-Content -LiteralPath $PluginDllPath -Value 'fixture plugin module' -Encoding Ascii
 	Set-Content -LiteralPath $EditorReceiptPath -Value ($EditorReceiptBody.Replace('"Configuration":"Development"', '"Configuration":"Shipping"')) -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptWrongConfigArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptWrongConfigLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptWrongConfigArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptWrongConfigLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'exact expected UnrealEditor Win64 Development') 'A receipt with tampered target metadata must fail closed.'
 	Set-Content -LiteralPath $EditorReceiptPath -Value ($EditorReceiptBody.Replace('"TargetType":"Editor",', '')) -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptMissingMetaArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptMissingMetaLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptMissingMetaArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptMissingMetaLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'missing required metadata') 'A receipt missing required target metadata must fail closed.'
 	Set-Content -LiteralPath $EditorReceiptPath -Value ($EditorReceiptBody.Replace('"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Core.dll"', '"Path":"$(EngineDir)/../GitBin/git.bat"')) -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptEscapeArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptEscapeLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptEscapeArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptEscapeLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'safe engine-relative path') 'A receipt build product escaping the engine root must fail closed.'
 	Set-Content -LiteralPath $EditorReceiptPath -Value ($EditorReceiptBody.Replace('{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Core.dll","Type":"DynamicLibrary"},', '{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Core.dll","Type":"DynamicLibrary"},{"Path":"$(EngineDir)/Binaries/Win64/UNREALEDITOR-CORE.DLL","Type":"DynamicLibrary"},')) -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptDupArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptDupLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptDupArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptDupLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'duplicates or case-collides') 'Duplicate or case-colliding receipt build products must fail closed.'
 	Set-Content -LiteralPath $EditorReceiptPath -Value ($EditorReceiptBody.Replace('{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Core.dll","Type":"DynamicLibrary"},', '{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Core.dll","Type":"DynamicLibrary"},{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Missing.dll","Type":"DynamicLibrary"},')) -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptMissingProductArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptMissingProductLogs') -SourceRevision $Revision -Stage AttestHostTools -HostToolsAttestationPath (Join-Path $AttestationDirectory 'missing-product-attestation.json') -ProvisioningEvidence 'fixture evidence' } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptMissingProductArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptMissingProductLogs') -SourceRevision $Revision -Stage AttestHostTools -HostToolsAttestationPath (Join-Path $AttestationDirectory 'missing-product-attestation.json') -ProvisioningEvidence 'fixture evidence' } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'does not exist under the engine root') 'A missing receipt-listed build product must fail the attestation step closed.'
 	Set-Content -LiteralPath $EditorReceiptPath -Value $EditorReceiptBody -Encoding UTF8
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeReceiptClosure) 'Every receipt-closure failure must stop before any UAT invocation.'
 	Write-Output 'PASS: the receipt-derived closure covers editor and plugin modules and fails closed on tampered, escaping, colliding, or missing receipt products'
 
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'AttestOverwriteArchive') -LogRoot (Join-Path $FixtureRoot 'AttestOverwriteLogs') -SourceRevision $Revision -Stage AttestHostTools -HostToolsAttestationPath $AttestationPath -ProvisioningEvidence 'fixture evidence' } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'AttestOverwriteArchive') -LogRoot (Join-Path $FixtureRoot 'AttestOverwriteLogs') -SourceRevision $Revision -Stage AttestHostTools -HostToolsAttestationPath $AttestationPath -ProvisioningEvidence 'fixture evidence' } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'already exists') 'The attestation step must never overwrite an existing record.'
 	$AttestationRaw = Get-Content -LiteralPath $AttestationPath -Raw
 	foreach ($StrictCase in @(
@@ -505,7 +567,7 @@ public static class FakeEditor {
 	)) {
 		Set-Content -LiteralPath $BadAttestation -Value ([string] $StrictCase.Content) -Encoding UTF8
 		$Failure = $null
-		try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot ("StrictArchive-{0}" -f ($StrictCase.Label -replace '[^a-z]', ''))) -LogRoot (Join-Path $FixtureRoot ("StrictLogs-{0}" -f ($StrictCase.Label -replace '[^a-z]', ''))) -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
+		try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot ("StrictArchive-{0}" -f ($StrictCase.Label -replace '[^a-z]', ''))) -LogRoot (Join-Path $FixtureRoot ("StrictLogs-{0}" -f ($StrictCase.Label -replace '[^a-z]', ''))) -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
 		Assert-True ($null -ne $Failure -and $Failure -match [string] $StrictCase.Expect) "An attestation with a $($StrictCase.Label) must fail closed."
 	}
 	foreach ($SizeCase in @(
@@ -525,7 +587,7 @@ public static class FakeEditor {
 		}
 		$Manipulated | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $BadAttestation -Encoding UTF8
 		$Failure = $null
-		try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot ("SizeArchive-{0}" -f $SizeCase.Label)) -LogRoot (Join-Path $FixtureRoot ("SizeLogs-{0}" -f $SizeCase.Label)) -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
+		try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot ("SizeArchive-{0}" -f $SizeCase.Label)) -LogRoot (Join-Path $FixtureRoot ("SizeLogs-{0}" -f $SizeCase.Label)) -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $BadAttestation } catch { $Failure = $_.Exception.Message }
 		Assert-True ($null -ne $Failure -and $Failure -match [string] $SizeCase.Expect) "An attestation with $($SizeCase.Label) must fail closed."
 	}
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeReceiptClosure) 'Every strict-contract rejection must stop before any UAT invocation.'
@@ -533,32 +595,32 @@ public static class FakeEditor {
 
 	$IdentityDdc = Join-Path $FixtureRoot 'IdentityDdc'
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'IdentityArchive1'
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive1') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs1') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $IdentityDdc
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive1') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs1') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $IdentityDdc
 	$IdentityPath2 = Join-Path $IdentityDdc 'cache-identity.json'
 	$CallsBeforeIdentityRegressions = @(Get-Content -LiteralPath $CapturePath).Count
 	$IdentityObject = Get-Content -LiteralPath $IdentityPath2 -Raw | ConvertFrom-Json
 	$IdentityObject.engineGitRevision = ('3' * 40)
 	$IdentityObject | ConvertTo-Json | Set-Content -LiteralPath $IdentityPath2 -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive2') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs2') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $IdentityDdc } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive2') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs2') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $IdentityDdc } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'failed identity validation') 'A cache bound to a different engine Git revision must fail closed.'
 	$IdentityObject.engineGitRevision = $RealRevision
 	$IdentityObject.projectRepository = ('4' * 40)
 	$IdentityObject | ConvertTo-Json | Set-Content -LiteralPath $IdentityPath2 -Encoding UTF8
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive3') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs3') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $IdentityDdc } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive3') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs3') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $IdentityDdc } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'failed identity validation') 'A colliding project name from a different repository identity must fail closed.'
 	$IdentityObject.projectRepository = $RealRevision
 	$IdentityObject.schemaVersion = 1
 	$IdentityObject | ConvertTo-Json | Set-Content -LiteralPath $IdentityPath2 -Encoding UTF8
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'IdentityArchive4'
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive4') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs4') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $IdentityDdc -CacheFallback CleanIsolated
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive4') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs4') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath $IdentityDdc -CacheFallback CleanIsolated
 	$OldSchemaTiming = Get-Content -LiteralPath (Join-Path $FixtureRoot 'IdentityLogs4/build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($OldSchemaTiming.derivedDataCache.status -eq 'fallback_corrupt') 'An older identity schema must never be reused; it takes the recorded clean fallback or fails closed.'
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeIdentityRegressions + 2) 'Fail-closed identity regressions must stop before UAT; only the clean fallback run may invoke UAT.'
 	$env:AETHELN_TEST_ENGINE_GIT_STATUS = ' M Engine/Source/Runtime/Core/Private/Core.cpp'
 	$env:AETHELN_TEST_ARCHIVE_ROOT = Join-Path $FixtureRoot 'IdentityArchive5'
-	& $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive5') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs5') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath (Join-Path $FixtureRoot 'IdentityDdcDirtyEngine') -CacheFallback CleanIsolated
+	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'IdentityArchive5') -LogRoot (Join-Path $FixtureRoot 'IdentityLogs5') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath (Join-Path $FixtureRoot 'IdentityDdcDirtyEngine') -CacheFallback CleanIsolated
 	$DirtyEngineTiming = Get-Content -LiteralPath (Join-Path $FixtureRoot 'IdentityLogs5/build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($DirtyEngineTiming.derivedDataCache.status -eq 'fallback_engine_identity_unverifiable') 'A dirty engine checkout must make the cache identity unverifiable.'
 	$env:AETHELN_TEST_ENGINE_GIT_STATUS = ''
@@ -566,25 +628,25 @@ public static class FakeEditor {
 
 	$CallsBeforePathContract = @(Get-Content -LiteralPath $CapturePath).Count
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathRelArchive') -LogRoot (Join-Path $FixtureRoot 'PathRelLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath 'relative\ddc' } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathRelArchive') -LogRoot (Join-Path $FixtureRoot 'PathRelLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath 'relative\ddc' } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'absolute local path') 'A relative DDC path must be rejected by the build entry point.'
 	$PathTiming = Get-Content -LiteralPath (Join-Path $FixtureRoot 'PathRelLogs/build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($PathTiming.derivedDataCache.status -eq 'failed_path_invalid') 'A rejected DDC path must be recorded as failed_path_invalid in the timing record.'
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathUncArchive') -LogRoot (Join-Path $FixtureRoot 'PathUncLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath '\\server\share\ddc' } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathUncArchive') -LogRoot (Join-Path $FixtureRoot 'PathUncLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath '\\server\share\ddc' } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'must not be a UNC path') 'A UNC DDC path must be rejected by the build entry point.'
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathOverlapArchive') -LogRoot (Join-Path $FixtureRoot 'PathOverlapLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath (Join-Path $FixtureRoot 'PathOverlapLogs/ddc') } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathOverlapArchive') -LogRoot (Join-Path $FixtureRoot 'PathOverlapLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath (Join-Path $FixtureRoot 'PathOverlapLogs/ddc') } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'must be disjoint') 'A DDC path inside the log root must be rejected by the build entry point.'
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathRepoArchive') -LogRoot (Join-Path $FixtureRoot 'PathRepoLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath (Join-Path $RepositoryRoot 'ddc-under-repo') } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathRepoArchive') -LogRoot (Join-Path $FixtureRoot 'PathRepoLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath (Join-Path $FixtureProjectRoot 'ddc-under-repo') } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'must be disjoint') 'A DDC path inside the repository must be rejected on a direct call, matching the CI gate contract.'
 	$JunctionTarget = Join-Path $FixtureRoot 'DdcJunctionTarget'
 	New-Item -ItemType Directory -Path $JunctionTarget | Out-Null
 	$Junction = Join-Path $FixtureRoot 'DdcJunction'
 	New-Item -ItemType Junction -Path $Junction -Value $JunctionTarget | Out-Null
 	$Failure = $null
-	try { & $Script -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathReparseArchive') -LogRoot (Join-Path $FixtureRoot 'PathReparseLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath (Join-Path $Junction 'ddc') } catch { $Failure = $_.Exception.Message }
+	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'PathReparseArchive') -LogRoot (Join-Path $FixtureRoot 'PathReparseLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -DerivedDataCachePath (Join-Path $Junction 'ddc') } catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'reparse point') 'A reparse-mediated DDC path must be rejected by the build entry point.'
 	[IO.Directory]::Delete($Junction)
 	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforePathContract) 'Every rejected DDC path must stop before any UAT invocation.'
@@ -598,6 +660,9 @@ finally {
 	Remove-Item Env:AETHELN_TEST_CONFLICTING_COMPILER -ErrorAction SilentlyContinue
 	Remove-Item Env:AETHELN_TEST_ARCHIVE_ROOT -ErrorAction SilentlyContinue
 	Remove-Item Env:AETHELN_TEST_DDC_CAPTURE -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_TEST_PROJECT_ROOT -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_TEST_REGISTRY_NONCE -ErrorAction SilentlyContinue
+	Remove-Item Env:AETHELN_TEST_SKIP_CLIENT_REGISTRY -ErrorAction SilentlyContinue
 	[Environment]::SetEnvironmentVariable('uebp_LogFolder', $OriginalUebpLogFolder, 'Process')
 	[Environment]::SetEnvironmentVariable('uebp_FinalLogFolder', $OriginalUebpFinalLogFolder, 'Process')
 	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
