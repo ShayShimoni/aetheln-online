@@ -274,6 +274,89 @@ direction clamp. Airborne aim tracking sets server facing to camera yaw plus
 the held offset on every aimed move, with no rate limit; a future directional
 block that reads authoritative facing may need one.
 
+### Correction and rubber-banding
+
+This section records what the project code and the pinned engine source do
+today. It reports no measurement. Engine paths are relative to the engine
+root; `CharacterMovementComponent.cpp` below is
+`Engine/Source/Runtime/Engine/Private/Components/CharacterMovementComponent.cpp`.
+
+- When the server corrects: the server simulates each client move itself, then
+  `ServerMoveHandleClientError` calls `ServerCheckClientError`, which calls
+  `ServerExceedsAllowablePositionError` (`CharacterMovementComponent.cpp`).
+  That function asks for a correction in two cases only: the packed movement
+  mode differs from the client's, or the squared distance between the server
+  location and the location the client reported exceeds
+  `MAXPOSITIONERRORSQUARED` (`AGameNetworkManager::ExceedsAllowablePositionError`).
+  Facing and rotation are not part of that comparison. The tolerance is the
+  engine default: `Config/DefaultGame.ini` has no
+  `[/Script/Engine.GameNetworkManager]` section, so `Engine/Config/BaseGame.ini`
+  and `Engine/Source/Runtime/Engine/Private/GameNetworkManager.cpp` apply
+  `MAXPOSITIONERRORSQUARED=3.0` (cm squared, about 1.7 cm),
+  `ClientAuthorativePosition=false` (the server does not adopt the client
+  position), `ClientErrorUpdateRateLimit=0.0`, and movement time-discrepancy
+  detection off. The character movement component throttles corrections with
+  its own defaults: `NetworkMinTimeBetweenClientAdjustments` 0.10 s, or
+  `NetworkMinTimeBetweenClientAdjustmentsLargeCorrection` 0.05 s when the error
+  exceeds `NetworkLargeClientCorrectionDistance` (15 cm).
+- Project bounds: these shape the server's own simulation of a move, so a
+  client that predicted more than they allow ends at a different location and
+  is corrected by the check above. In
+  `Source/GameCore/Private/AethelnCharacterMovementComponent.cpp`,
+  `GetMaxSpeed` returns the sprint cap only while walking, not crouched, with
+  non-zero acceleration and no backpedal, and the walk cap on foot otherwise;
+  it holds backpedal to `BackpedalSpeedScale` (0.7) of the walk cap;
+  `MoveAutonomous` clamps each move's acceleration to `MaxAcceleration`;
+  `PhysicsRotation` turns the body at the rotation rate toward the move's
+  travel direction or its own control yaw, apart from the takeoff and
+  airborne-tracking snaps described above. The tests
+  `Aetheln.Movement.Net.ServerSpeedClamp`, `InvalidSprintRejected` and
+  `FacingSpoofBounded` cover these bounds, and `JumpTakeoffParity` asserts that
+  the server accepts every predicted client location through
+  `ServerExceedsAllowablePositionError`.
+- How the owning client reconciles: a correction reaches the client as
+  `ClientAdjustPosition`. `ClientAdjustPosition_Implementation` acknowledges the
+  move, teleports the pawn to the server location without smoothing, takes the
+  server velocity and movement mode, and flags a replay. On the next tick
+  `ClientUpdatePositionAfterServerUpdate` replays every unacknowledged saved
+  move and calls each move's `PrepMoveFor`, where
+  `FSavedMove_Aetheln::PrepMoveFor` restores the project's aim-tracked jump
+  state. A correction carries no rotation (`ShouldCorrectRotation()` returns
+  false in
+  `Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h`);
+  while `bOrientRotationToMovement` or `bUseControllerDesiredRotation` is set,
+  the engine restores the last acknowledged move's rotation before the replay
+  (`p.UseLastGoodRotationDuringCorrection`, default 1). Sprint and aim intent,
+  recorded yaw, and takeoff and tracking replay are described in the
+  [Movement baseline](#movement-baseline) text above and are not repeated here.
+- What remote players see: they are simulated proxies and do not predict or
+  replay moves. `ACharacter::OnRep_ReplicatedMovement` and
+  `PostNetReceiveLocationAndRotation`
+  (`Engine/Source/Runtime/Engine/Private/Character.cpp`) pass each replicated
+  update to `SmoothCorrection`, and `SmoothClientPosition` then decays the mesh
+  offset (`CharacterMovementComponent.cpp`). `NetworkSmoothingMode` is the
+  engine default, `Exponential`. The project overrides neither it nor the
+  smoothing times and distances below in `Config/`, in `Source/`, or in
+  `Content/POC/BP_MovementPOCCharacter.uasset` (a string search of that asset,
+  not an editor inspection). The defaults are `NetworkSimulatedSmoothLocationTime`
+  0.100 s and `NetworkSimulatedSmoothRotationTime` 0.050 s (0.040 s and 0.033 s
+  on a listen server). For a correction larger than
+  `NetworkMaxSmoothUpdateDistance` (256 cm) the starting visual offset is capped
+  at that distance, and beyond `NetworkNoSmoothUpdateDistance` (384 cm) the
+  proxy is not smoothed and snaps. The local mesh-yaw blends in this POC are
+  owning-client presentation and are separate from this network smoothing.
+- What the player sees as rubber-banding: a correction snaps the owning client
+  to the server position and replays the unacknowledged moves from there. A
+  small difference is hardly visible; a large correction, or many in a short
+  time, shows as the pawn jumping back toward the server's path.
+- Measurement status: correction frequency, correction magnitude, and recovery
+  time under latency, jitter, and packet-loss profiles, for both the owning
+  client and remote players, are `TBD` and not yet measured. Issue
+  [#45](https://github.com/ShayShimoni/aetheln-online/issues/45) (client,
+  server, and bandwidth performance budgets) owns them. No value above is a
+  tuned project decision; each is an engine default kept until evidence
+  resolves it.
+
 ## Verification and feedback
 
 The mouse-button observations in the historical tuning table below describe
