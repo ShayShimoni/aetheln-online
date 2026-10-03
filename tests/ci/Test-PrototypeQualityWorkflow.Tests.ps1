@@ -361,7 +361,14 @@ Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -matc
 # streams go to runner-local files and only a path-free summary is printed.
 Assert-True (((($TrustedCompile -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch '(?i)automation|AethelnOnlineEditor|editor_build') 'The compile job must carry no editor automation.'
 Assert-True ($EditorAutomation -match "(?m)^    needs: trusted-candidate-compile\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Editor automation must run only after a successful compile under the same owner and same-repository trust.'
-Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 35\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result|always\(\)|actions/checkout') 'Editor automation must have its own 35-minute ceiling, join the FIFO engine queue, and add no status bypass or checkout.'
+Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 45\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result|always\(\)') 'Editor automation must have its own 45-minute ceiling, join the FIFO engine queue, and add no status bypass.'
+# Issue #236: the editor job re-syncs the managed workspace from its own fresh
+# exact-revision control checkout, with the compile job's checkout inputs: no
+# persisted credentials, no LFS, a five-minute bound, and a run/attempt path.
+$EditorControl = [regex]::Match($EditorAutomation, '(?ms)^      - name: Check out trusted editor control source\r?\n.*?(?=^      - )').Value
+Assert-MatchCount -Text $EditorAutomation -Pattern 'actions/checkout@' -Expected 1 -Message 'Editor automation must perform exactly one control checkout.'
+Assert-True ($EditorControl -match "(?m)^        uses: $CheckoutActionPattern\r?$" -and $EditorControl -match '(?m)^          ref: \$\{\{ github\.sha \}\}\r?$' -and $EditorControl -match '(?m)^          lfs: false\r?$' -and $EditorControl -match '(?m)^          persist-credentials: false\r?$' -and $EditorControl -match '(?m)^          path: editor-control-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}\r?$' -and $EditorControl -notmatch 'clean: false|fetch-depth|token|sparse') 'The editor control checkout must be the pinned, exact-revision, credential-free, LFS-free run/attempt checkout.'
+Assert-True ($EditorAutomation.IndexOf('name: Check out trusted editor control source') -ge 0 -and $EditorAutomation.IndexOf('name: Check out trusted editor control source') -lt $EditorAutomation.IndexOf('name: Re-sync managed workspace and build editor target')) 'The control checkout must precede the re-sync and build.'
 foreach ($Binding in @(
 	'automation_artifact_id: ${{ steps.automation_artifact.outputs.artifact-id }}',
 	'automation_artifact_name: ${{ steps.automation_identity.outputs.artifact_name }}',
@@ -372,13 +379,13 @@ foreach ($Binding in @(
 )) {
 	Assert-True ($EditorAutomation.Contains($Binding)) "trusted-editor-automation must expose exact automation artifact/file binding '$Binding'."
 }
-$EditorBuild = [regex]::Match($EditorAutomation, '(?ms)^      - name: Build editor target for Unreal automation\r?\n.*?(?=^      - )').Value
+$EditorBuild = [regex]::Match($EditorAutomation, '(?ms)^      - name: Re-sync managed workspace and build editor target\r?\n.*?(?=^      - )').Value
 $AutomationRun = [regex]::Match($EditorAutomation, '(?ms)^      - name: Run frozen Unreal automation filter\r?\n.*?(?=^      - )').Value
 $AutomationResidue = [regex]::Match($EditorAutomation, '(?ms)^      - name: Clear editor-written input residue\r?\n.*?(?=^      - )').Value
 $AutomationBind = [regex]::Match($EditorAutomation, '(?ms)^      - name: Bind Unreal automation report\r?\n.*?(?=^      - )').Value
 $AutomationUpload = [regex]::Match($EditorAutomation, '(?ms)^      - name: Upload Unreal automation report\r?\n.*?(?=^      - )').Value
 $AutomationOutcome = [regex]::Match($EditorAutomation, '(?ms)^      - name: Report Unreal automation outcome\r?\n.*?(?=\r?\n\r?\n|\z)').Value
-Assert-True ($EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome) 'Editor automation must declare every reviewed step.'
+Assert-True ($EditorControl -and $EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome) 'Editor automation must declare every reviewed step.'
 # Unreal failures stay on the unreal side: every automation step that can fail
 # continues on error, so the compile job and native receipt survive, while
 # binding and upload require every automation step to have succeeded. A
@@ -386,7 +393,8 @@ Assert-True ($EditorBuild -and $AutomationRun -and $AutomationResidue -and $Auto
 # binding check instead of passing silently.
 $AutomationSuccess = "if: steps.editor_build.outcome == 'success' && steps.automation_run.outcome == 'success' && steps.automation_residue.outcome == 'success'"
 foreach ($Step in @(
-	@{ Name='editor build'; Body=$EditorBuild; Id='editor_build'; If=$null; Timeout='15'; Continue=$true },
+	@{ Name='control checkout'; Body=$EditorControl; Id='editor_control'; If=$null; Timeout='5'; Continue=$true },
+	@{ Name='editor build'; Body=$EditorBuild; Id='editor_build'; If="if: steps.editor_control.outcome == 'success'"; Timeout='20'; Continue=$true },
 	@{ Name='harness'; Body=$AutomationRun; Id='automation_run'; If="if: steps.editor_build.outcome == 'success'"; Timeout='12'; Continue=$true },
 	@{ Name='residue cleanup'; Body=$AutomationResidue; Id='automation_residue'; If=$null; Timeout='2'; Continue=$true },
 	@{ Name='bind'; Body=$AutomationBind; Id='automation_identity'; If=$AutomationSuccess; Timeout='1'; Continue=$true },
@@ -403,15 +411,44 @@ foreach ($Step in @(
 	else { Assert-True ($Body -notmatch 'continue-on-error') "The automation $($Step.Name) step must fail red once every automation step succeeded." }
 }
 Assert-True ($UnrealReceipt -match "(?ms)^      - name: Download exact unreal evidence\r?\n        if: needs\.trusted-editor-automation\.outputs\.automation_artifact_id != ''\r?\n") 'A missing automation artifact must skip the unreal download so the publisher fails at its raw binding check rather than downloading every run artifact.'
-# The editor build builds only the exact clean revision the compile used:
-# another engine job may have synchronized the workspace in between.
-Assert-True ($EditorBuild.Contains("(Get-WorkspaceGitText 'rev-parse HEAD').Trim() -cne `$env:GITHUB_SHA") -and $EditorBuild.Contains("Exit-Automation 'editor_workspace_revision_changed'") -and $EditorBuild.Contains("Exit-Automation 'editor_workspace_dirty'") -and $EditorBuild.IndexOf('editor_workspace_dirty') -lt $EditorBuild.IndexOf('InitialPreparation.BuildInvocation.ps1') -and $EditorBuild -notmatch 'AETHELN_COMPILE_STARTED|RequiredSeconds|budget') 'The editor build must verify the exact clean workspace revision before it starts and carry no budget gate.'
+# Issue #236: another owner pull request's compile may re-sync the managed
+# workspace between this run's compile and this job. Under the engine host
+# lease, the step re-syncs it to this revision from the trusted control
+# checkout (the revision and clean checks stay as post-sync assertions), then
+# builds. Every process it starts under the lease runs in an owned
+# kill-on-close Job Object, and the lease is released only after that job is
+# proven empty; otherwise the held journal stays for explicit recovery.
+$SyncScriptPath = Join-Path $RepositoryRoot 'scripts\ci\Sync-EditorAutomationWorkspace.ps1'
+Assert-True (Test-Path -LiteralPath $SyncScriptPath -PathType Leaf) 'The editor re-sync child script must exist.'
+$SyncScript = Get-Content -LiteralPath $SyncScriptPath -Raw
+foreach ($Binding in @('AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_MANAGED_COMPILE_REGISTRATION', 'AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256', 'AETHELN_ENGINE_HOST_LEASE')) {
+	Assert-True ($EditorBuild.Contains($Binding + ': ${{ vars.' + $Binding + ' }}')) "The editor re-sync must bind $Binding from its repository variable."
+}
+Assert-True ($EditorBuild.Contains('$Control = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE ''editor-control-${{ github.run_id }}-${{ github.run_attempt }}''))')) 'Trusted scripts must resolve from the run/attempt control checkout.'
+$ScriptReferences = @([regex]::Matches($EditorBuild, "Join-Path (\S+) '(scripts\\ci\\[A-Za-z.-]+\.ps1)'") | ForEach-Object { $_.Groups[1].Value + ' ' + $_.Groups[2].Value }) | Sort-Object
+$ExpectedReferences = @('$Control scripts\ci\EngineRunnerHostLease.ps1', '$Control scripts\ci\InitialPreparation.BuildInvocation.ps1', '$Control scripts\ci\InitialPreparation.Core.ps1', '$Control scripts\ci\Sync-EditorAutomationWorkspace.ps1') | Sort-Object
+Assert-True ((@($ScriptReferences) -join '|') -ceq (@($ExpectedReferences) -join '|')) 'The re-sync and build must load and run only the four reviewed control-checkout scripts, never a managed-workspace copy.'
+$LeaseEnter = $EditorBuild.IndexOf('$Lease = Enter-EngineRunnerHostLease -LeasePath $env:AETHELN_ENGINE_HOST_LEASE -OwnerId (''editor-'' + [guid]::NewGuid().ToString(''N'')) -DeadlineUtc $DeadlineUtc')
+$SyncStart = $EditorBuild.IndexOf('$Sync = Invoke-OwnedPowerShell')
+$BuildStart = $EditorBuild.IndexOf('$Build = Invoke-OwnedPowerShell')
+$ReleaseAt = $EditorBuild.IndexOf('if ($Quiescent) { try { Exit-EngineRunnerHostLease -Lease $Lease -CleanupVerified $true; $Released = $true } catch { $Released = $false } }')
+Assert-True ($LeaseEnter -ge 0 -and $LeaseEnter -lt $SyncStart -and $SyncStart -lt $BuildStart -and $BuildStart -lt $ReleaseAt -and $EditorBuild.LastIndexOf('} finally {', $ReleaseAt) -gt $BuildStart) 'The host lease must be held from before the re-sync until after the build and released in finally.'
+Assert-True ($EditorBuild.Contains('try { Close-EngineRunnerHostLease -Lease $Lease } catch { $Released = $false }') -and $EditorBuild.Contains("`$Failure = 'editor_host_lease_release_failed'") -and [regex]::Matches($EditorBuild, '\$Quiescent = \$false').Count -eq 2 -and $EditorBuild.Contains('$Quiescent = $Sync.quiescent') -and $EditorBuild.Contains('$Quiescent = $Build.quiescent')) 'Unproven cleanup must keep the held lease journal and record a fixed reason.'
+Assert-True ($EditorBuild.Contains('$Job = New-Object Aetheln.PreparationJob ($DeadlineTicks)') -and $EditorBuild.Contains('$Job.StopAndWait(30000); $Owned.quiescent = $Job.ActiveCount -eq 0') -and $EditorBuild.Contains('finally { $Job.Dispose() }') -and $EditorAutomation -notmatch '(?i)Stop-Process|taskkill|\.Kill\(|Get-Process|Get-CimInstance|Win32_Process') 'Processes started under the lease must run in an owned Job Object; nothing is stopped by name or command line.'
+# Lease wait, sync and build share one 17-minute deadline; the two 30-second
+# cleanup proofs and the release fit inside the 20-minute step bound.
+Assert-True ($EditorBuild.Contains('$DeadlineUtc = [DateTime]::UtcNow.AddMinutes(17)') -and $EditorBuild.Contains('$DeadlineTicks = [Diagnostics.Stopwatch]::GetTimestamp() + 17L * 60L * [Diagnostics.Stopwatch]::Frequency') -and $EditorBuild.Contains("'-DeadlineUtc', `$DeadlineUtc.ToString('o')") -and $EditorBuild -notmatch 'AETHELN_COMPILE_STARTED|RequiredSeconds|budget') 'The re-sync and build must share one bounded deadline inside the step bound and carry no compile budget gate.'
+Assert-True ($SyncScript.Contains(". (Join-Path `$PSScriptRoot 'ManagedCompileRegistration.ps1')") -and $SyncScript.Contains(". (Join-Path `$PSScriptRoot 'ManagedCompileWorkspace.ps1')") -and $SyncScript.Contains('$TrustedControl = [IO.Path]::GetFullPath((Split-Path (Split-Path $PSScriptRoot))).TrimEnd') -and $SyncScript.Contains('-AssertRepositoryTrust $TrustRegisteredWorkspace') -and $SyncScript.Contains('}.GetNewClosure()') -and $SyncScript -notmatch 'Write-(Output|Host)') 'The re-sync child must load the managed modules beside itself, sync from its own control checkout, authorize only the registered tuple, and print nothing.'
+$SyncCall = $SyncScript.IndexOf('Sync-ManagedCompileWorkspace -ControlRoot $TrustedControl')
+Assert-True ($SyncCall -ge 0 -and $SyncScript.Contains("if ((Get-WorkspaceGitText -Git `$Git -Root `$Root -Arguments 'rev-parse HEAD').Trim() -cne `$SourceRevision) { `$Result = 'editor_workspace_revision_changed' }") -and $SyncCall -lt $SyncScript.IndexOf("'rev-parse HEAD'") -and $SyncCall -lt $SyncScript.IndexOf("`$Result = 'editor_workspace_dirty'")) 'The revision and clean checks must be post-sync assertions.'
+Assert-True ($EditorBuild.Contains("`$Failure = 'editor_host_lease_failed'") -and $EditorBuild.Contains("`$Failure = 'editor_workspace_sync_failed'") -and $EditorBuild.Contains("if (`$Build.timedOut) { `$Failure = 'editor_build_timeout' }") -and [regex]::Matches($EditorBuild, 'Exit-Automation').Count -eq 2 -and $EditorBuild.Contains('if ($null -ne $Failure) { Exit-Automation $Failure }')) 'The step must map lease, sync, timeout and release failures to fixed reasons and record exactly one reason.'
 Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $AutomationRun.Contains("Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f")) 'The harness step may print only the fixed path-free summary line.'
-# The editor build prints only the two masks and the
-# wrapper's native-result.json (target, platform, exit code, failure class).
-Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 3 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'")) 'The editor build may print only the masks and the bounded native result record.'
+# The editor build prints only the two masks, one regex-validated lease or
+# sync detail code, and the wrapper's native-result.json (target, platform,
+# exit code, failure class).
+Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 4 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'") -and $EditorBuild.Contains("if (`$null -ne `$Detail) { Write-Output ('editor_build_detail code=' + `$Detail) }") -and $EditorBuild.Contains("-cmatch '\Alease_[a-z_]{1,48}\z'") -and $EditorBuild.Contains("-cmatch '\Amanaged_(registration|workspace)_[a-z_]{1,48}\z'")) 'The editor build may print only the masks, a fixed detail code, and the bounded native result record.'
 # UBT exit 5 (-NoEngineChanges, deferred by TA-020) keeps its own fixed reason, checked before the generic failure.
-Assert-True ($EditorBuild.Contains("elseif (`$BuildExit -eq 5) { Exit-Automation 'editor_build_engine_changes_required' }") -and $EditorBuild.IndexOf('editor_build_engine_changes_required') -lt $EditorBuild.IndexOf("'editor_build_failed'")) 'The editor build must map UBT exit 5 to editor_build_engine_changes_required before editor_build_failed.'
+Assert-True ($EditorBuild.Contains("elseif (`$BuildExit -eq 5) { `$Failure = 'editor_build_engine_changes_required' }") -and $EditorBuild.IndexOf('editor_build_engine_changes_required') -lt $EditorBuild.IndexOf("'editor_build_failed'")) 'The editor build must map UBT exit 5 to editor_build_engine_changes_required before editor_build_failed.'
 $ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
 $UntrackedInputQuery = [regex]::Matches($ManagedWorkspaceSource, "'(ls-files --others -z -- [^']+)'")
 Assert-True ($AutomationResidue.Contains("(Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source") -and $AutomationResidue.Contains('''--no-replace-objects --no-optional-locks -C "'' + $Root + ''" '' + $Query')) 'Residue cleanup must resolve and invoke git exactly as the managed sync does.'
@@ -422,6 +459,7 @@ $StopAutomation = 'function Exit-Automation([string] $Reason) { [IO.File]::Appen
 foreach ($Step in @($EditorBuild, $AutomationRun, $AutomationResidue, $AutomationBind)) {
 	Assert-True ($Step.Contains($StopAutomation) -and $Step -notmatch "\bthrow '") 'Every automation failure must record its fixed reason before it stops.'
 }
+Assert-True ($AutomationOutcome.Contains('AETHELN_CONTROL_OUTCOME: ${{ steps.editor_control.outcome }}') -and $AutomationOutcome.Contains("@(`$env:AETHELN_CONTROL_OUTCOME, '', 'editor_control_checkout_failed')") -and $AutomationOutcome.IndexOf('editor_control_checkout_failed') -lt $AutomationOutcome.IndexOf('editor_build_interrupted')) 'A failed control checkout, which cannot record its own reason, must be the first fixed outcome fallback.'
 Assert-True ($AutomationOutcome.Contains('AETHELN_UPLOAD_OUTCOME: ${{ steps.automation_artifact.outcome }}') -and $AutomationOutcome.Contains("'automation_report_upload_failed'") -and $AutomationOutcome.Contains('Write-Output (''unreal_automation_outcome reason='' + $Reason)') -and [regex]::Matches($AutomationOutcome, 'Write-Output').Count -eq 1) 'The outcome step must expose the first automation failure as one fixed line.'
 Assert-True ($UnrealReceipt.Contains('AETHELN_AUTOMATION_REASON: ${{ needs.trusted-editor-automation.outputs.automation_reason }}') -and $UnrealReceipt.Contains('Write-Output (''unreal_automation_outcome reason='' + $AutomationReason)') -and $UnrealReceipt.IndexOf('unreal_automation_outcome reason=') -lt $UnrealReceipt.IndexOf("throw 'unreal_raw_artifact_binding_invalid'")) 'The unreal publisher must print the fixed automation reason before its binding check.'
 Assert-True ($UntrackedInputQuery.Count -eq 1 -and $AutomationResidue.Contains("'" + $UntrackedInputQuery[0].Groups[1].Value + "'")) 'Residue cleanup must use exactly the untracked-input query that the next managed sync enforces.'
@@ -458,62 +496,94 @@ $AutomationFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-automati
 $script:AutomationFixtureTemp = Join-Path $AutomationFixtureRoot 'temp'
 $null = New-Item -ItemType Directory -Path (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job')
 $PreviousAutomationEnvironment = @{}
-foreach ($Name in @('GITHUB_SHA', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_ENGINE_ROOT', 'AETHELN_LINUX_TOOLCHAIN_ROOT', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+foreach ($Name in @('GITHUB_SHA', 'GITHUB_REPOSITORY', 'GITHUB_WORKSPACE', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_MANAGED_COMPILE_REGISTRATION', 'AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256', 'AETHELN_ENGINE_HOST_LEASE', 'AETHELN_ENGINE_ROOT', 'AETHELN_LINUX_TOOLCHAIN_ROOT', 'AETHELN_FIXTURE_NATIVE_EXIT', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
 try {
 	$env:AETHELN_ENGINE_ROOT = Join-Path $AutomationFixtureRoot 'engine'
 	$env:GITHUB_OUTPUT = Join-Path $AutomationFixtureRoot 'github-output.txt'
-	# Workspace gate: a moved, dirty, or unreadable workspace stops before any build input is touched.
-	$WorkspaceRepo = Join-Path $AutomationFixtureRoot 'workspace'
-	$null = New-Item -ItemType Directory -Path $WorkspaceRepo
-	[IO.File]::WriteAllText((Join-Path $WorkspaceRepo 'tracked.txt'), "tracked`n")
-	Invoke-AutomationFixtureGit $WorkspaceRepo @('init', '-q')
-	Invoke-AutomationFixtureGit $WorkspaceRepo @('add', '-A')
-	Invoke-AutomationFixtureGit $WorkspaceRepo @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
-	$WorkspaceHead = ([string] (& git -C $WorkspaceRepo rev-parse HEAD)).Trim()
-	$NotRepository = Join-Path $AutomationFixtureRoot 'not-a-repository'
-	$null = New-Item -ItemType Directory -Path $NotRepository
-	foreach ($WorkspaceCase in @(
-		@{ root=$WorkspaceRepo; sha=('f' * 40); dirty=$false; reason='editor_workspace_revision_changed' },
-		@{ root=$WorkspaceRepo; sha=$WorkspaceHead; dirty=$true; reason='editor_workspace_dirty' },
-		@{ root=$NotRepository; sha=$WorkspaceHead; dirty=$false; reason='editor_workspace_query_failed' }
-	)) {
-		if ($WorkspaceCase.dirty) { [IO.File]::WriteAllText((Join-Path $WorkspaceRepo 'untracked.txt'), 'editor output') }
-		$env:AETHELN_MANAGED_COMPILE_ROOT = $WorkspaceCase.root
-		$env:GITHUB_SHA = $WorkspaceCase.sha
-		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
-		$Gated = Invoke-AutomationStepFixture $EditorBuild
-		Assert-True ($Gated.failure -ceq $WorkspaceCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq ('reason=' + $WorkspaceCase.reason + "`n") -and -not (Test-Path -LiteralPath (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'))) "A workspace that fails '$($WorkspaceCase.reason)' must stop before the editor build."
-	}
-	# Editor build exit mapping (TA-020): through the workspace copy of the
-	# wrapper, UBT exit 5 (a deferred -NoEngineChanges refusal) records
-	# editor_build_engine_changes_required, any other exit editor_build_failed,
-	# and the refused engine file list stays in the runner-local build.log.
-	$EditorWorkspace = Join-Path $AutomationFixtureRoot 'editor-workspace'
-	$null = New-Item -ItemType Directory -Path (Join-Path $EditorWorkspace 'scripts\ci')
-	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\InitialPreparation.BuildInvocation.ps1') -Destination (Join-Path $EditorWorkspace 'scripts\ci')
-	[IO.File]::WriteAllText((Join-Path $EditorWorkspace 'AethelnOnline.uproject'), '{}')
-	Invoke-AutomationFixtureGit $EditorWorkspace @('init', '-q')
-	Invoke-AutomationFixtureGit $EditorWorkspace @('add', '-A')
-	Invoke-AutomationFixtureGit $EditorWorkspace @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
 	$null = New-Item -ItemType Directory -Path (Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles'), (Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64')
 	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64/dotnet.exe'), 'fixture')
 	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles/Build.bat'), "@echo off`r`necho Building would modify the following existing engine files:`r`necho %~dp0UnrealEditor-Fixture.dll`r`nexit /b %AETHELN_FIXTURE_NATIVE_EXIT%`r`n")
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $AutomationFixtureRoot
-	$env:AETHELN_MANAGED_COMPILE_ROOT = $EditorWorkspace
-	$env:GITHUB_SHA = ([string] (& git -C $EditorWorkspace rev-parse HEAD)).Trim()
+	# Issue #236 re-sync fixture. One source repository holds the reviewed
+	# control-checkout scripts and one compile input at two revisions. The
+	# registered managed workspace is a clone that an interleaved pull request
+	# left at the first revision; this run's control checkout and GITHUB_SHA are
+	# the second. Every repository keeps raw bytes, as managed workspaces do.
+	$SyncRoot = Join-Path $AutomationFixtureRoot 'sync'
+	$SyncSource = Join-Path $SyncRoot 'source'
+	$SyncTarget = Join-Path $SyncRoot 'managed'
+	$env:GITHUB_WORKSPACE = Join-Path $SyncRoot 'workspace'
+	$SyncControl = Join-Path $env:GITHUB_WORKSPACE 'editor-control-1-1'
+	$null = New-Item -ItemType Directory -Path (Join-Path $SyncSource 'scripts\ci'), (Join-Path $SyncSource 'Source'), $env:GITHUB_WORKSPACE
+	foreach ($Module in @('EngineRunnerHostLease.ps1', 'InitialPreparation.Core.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1', 'Sync-EditorAutomationWorkspace.ps1', 'InitialPreparation.BuildInvocation.ps1')) {
+		Copy-Item -LiteralPath (Join-Path $RepositoryRoot ('scripts\ci\' + $Module)) -Destination (Join-Path $SyncSource 'scripts\ci')
+	}
+	[IO.File]::WriteAllText((Join-Path $SyncSource 'AethelnOnline.uproject'), '{}')
+	[IO.File]::WriteAllText((Join-Path $SyncSource '.gitignore'), "Binaries/`nIntermediate/`nSaved/`n")
+	Invoke-AutomationFixtureGit $SyncSource @('init', '-q')
+	Invoke-AutomationFixtureGit $SyncSource @('config', 'core.autocrlf', 'false')
+	$Revisions = @{}
+	foreach ($Revision in @('interleaved', 'tested')) {
+		[IO.File]::WriteAllText((Join-Path $SyncSource 'Source\Input.cpp'), "// $Revision revision`n")
+		Invoke-AutomationFixtureGit $SyncSource @('add', '-A')
+		Invoke-AutomationFixtureGit $SyncSource @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', $Revision)
+		$Revisions[$Revision] = ([string] (& git -C $SyncSource rev-parse HEAD)).Trim()
+	}
+	foreach ($Clone in @($SyncTarget, $SyncControl)) { Invoke-AutomationFixtureGit $SyncRoot @('clone', '-q', '--no-hardlinks', '--config', 'core.autocrlf=false', $SyncSource, $Clone) }
+	$SyncCommon = [IO.Path]::GetFullPath(([string] (& git -C $SyncTarget rev-parse --path-format=absolute --git-common-dir)).Trim())
+	$env:AETHELN_MANAGED_COMPILE_ROOT = $SyncTarget
+	$env:AETHELN_MANAGED_COMPILE_REGISTRATION = Join-Path $SyncRoot 'registration.json'
+	[IO.File]::WriteAllText($env:AETHELN_MANAGED_COMPILE_REGISTRATION, ([ordered]@{ schemaVersion = 1; registrationId = ('a' * 32); repository = 'Fixture/project'; targetRoot = $SyncTarget; gitCommonDirectory = $SyncCommon; preparationReceiptSha256 = ('b' * 64) } | ConvertTo-Json -Compress), (New-Object Text.UTF8Encoding $false))
+	$env:AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256 = (Get-FileHash -LiteralPath $env:AETHELN_MANAGED_COMPILE_REGISTRATION -Algorithm SHA256).Hash.ToLowerInvariant()
+	$env:AETHELN_ENGINE_HOST_LEASE = Join-Path $SyncRoot 'engine-host.lease'
+	$env:GITHUB_REPOSITORY = 'Fixture/project'
+	$env:GITHUB_SHA = $Revisions.tested
 	$EditorBuildEvidence = Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job/editor-build'
-	try {
-		foreach ($ExitCase in @(@{ exit = '5'; reason = 'editor_build_engine_changes_required' }, @{ exit = '7'; reason = 'editor_build_failed' }, @{ exit = '0'; reason = $null })) {
-			$env:AETHELN_FIXTURE_NATIVE_EXIT = $ExitCase.exit
-			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
-			$Built = Invoke-AutomationStepFixture $EditorBuild
-			$ExpectedOutput = if ($null -eq $ExitCase.reason) { '' } else { 'reason=' + $ExitCase.reason + "`n" }
-			$Visible = (@($Built.output | Where-Object { -not $_.StartsWith('::add-mask::') }) -join "`n")
-			Assert-True ($Built.failure -ceq $ExitCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput) "Editor build exit $($ExitCase.exit) must record '$($ExitCase.reason)'."
-			Assert-True ($Visible.Contains('"nativeExitCode":' + $ExitCase.exit) -and -not $Visible.Contains($env:AETHELN_ENGINE_ROOT) -and -not $Visible.Contains('Building would modify') -and [IO.File]::ReadAllText((Join-Path $EditorBuildEvidence 'build.log')).Contains('Building would modify')) "Editor build exit $($ExitCase.exit) must print only the native result record, never engine paths."
+	foreach ($SyncCase in @(
+		# Interleaved revision: re-sync the workspace to this revision, then build.
+		@{ name = 'interleaved revision'; exit = '0'; residue = $false; reason = $null; detail = $null; head = $Revisions.tested; built = $true },
+		# Through the control-checkout wrapper, UBT exit 5 (a deferred
+		# -NoEngineChanges refusal) records editor_build_engine_changes_required,
+		# any other exit editor_build_failed; the refused engine file list stays
+		# in the runner-local build.log.
+		@{ name = 'engine changes'; exit = '5'; residue = $false; reason = 'editor_build_engine_changes_required'; detail = $null; head = $Revisions.tested; built = $true },
+		@{ name = 'build failure'; exit = '7'; residue = $false; reason = 'editor_build_failed'; detail = $null; head = $Revisions.tested; built = $true },
+		# A refused sync stops before the build, leaves the old revision, and still releases the lease.
+		@{ name = 'sync failure'; exit = '0'; residue = $true; reason = 'editor_workspace_sync_failed'; detail = 'managed_workspace_untracked_input'; head = $Revisions.interleaved; built = $false }
+	)) {
+		Invoke-AutomationFixtureGit $SyncTarget @('checkout', '-q', '--detach', $Revisions.interleaved)
+		$ResiduePath = Join-Path $SyncTarget 'Source\Residue.cpp'
+		if ($SyncCase.residue) { [IO.File]::WriteAllText($ResiduePath, 'editor output') }
+		$env:AETHELN_FIXTURE_NATIVE_EXIT = $SyncCase.exit
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		$JournalBefore = if (Test-Path -LiteralPath $env:AETHELN_ENGINE_HOST_LEASE) { [IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE) } else { '' }
+		$Synced = Invoke-AutomationStepFixture $EditorBuild
+		$ExpectedOutput = if ($null -eq $SyncCase.reason) { '' } else { 'reason=' + $SyncCase.reason + "`n" }
+		$Visible = (@($Synced.output | Where-Object { -not $_.StartsWith('::add-mask::') }) -join "`n")
+		Assert-True ($Synced.failure -ceq $SyncCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput) "The $($SyncCase.name) case must record '$($SyncCase.reason)'."
+		Assert-True (([string] (& git -C $SyncTarget rev-parse HEAD)).Trim() -ceq $SyncCase.head) "The $($SyncCase.name) case must leave the managed workspace at the expected revision."
+		$Appended = [IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE).Substring($JournalBefore.Length)
+		$States = @($Appended.Split([char] 10) | Where-Object { $_ } | ForEach-Object { ($_ | ConvertFrom-Json).state })
+		Assert-True (($States -join ',') -ceq 'held,released') "The $($SyncCase.name) case must acquire and then release the engine host lease."
+		$Exclusive = [IO.File]::Open($env:AETHELN_ENGINE_HOST_LEASE, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+		$Exclusive.Dispose()
+		Assert-True (-not $Visible.Contains($env:AETHELN_ENGINE_ROOT) -and -not $Visible.Contains($SyncRoot) -and -not $Visible.Contains('Building would modify')) "The $($SyncCase.name) case must print no local path or build output."
+		if ($null -ne $SyncCase.detail) { Assert-True ($Visible -ceq ('editor_build_detail code=' + $SyncCase.detail)) "The $($SyncCase.name) case must print only its fixed detail code." }
+		if ($SyncCase.built) {
+			Assert-True ($Visible.Contains('"nativeExitCode":' + $SyncCase.exit) -and [IO.File]::ReadAllText((Join-Path $EditorBuildEvidence 'build.log')).Contains('Building would modify')) "The $($SyncCase.name) case must print the native result record and keep build output runner-local."
 			Remove-Item -LiteralPath $EditorBuildEvidence -Recurse -Force
-		}
-	} finally { Remove-Item Env:AETHELN_FIXTURE_NATIVE_EXIT -ErrorAction SilentlyContinue }
+		} else { Assert-True (-not (Test-Path -LiteralPath $EditorBuildEvidence)) "The $($SyncCase.name) case must stop before the editor build." }
+		if ($SyncCase.residue) { Remove-Item -LiteralPath $ResiduePath -Force }
+	}
+	# A stale held record (a lease that was never released) blocks the re-sync:
+	# nothing is synchronized or built, and the journal stays for recovery.
+	Invoke-AutomationFixtureGit $SyncTarget @('checkout', '-q', '--detach', $Revisions.interleaved)
+	$StaleJournal = [IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE) + '{"schemaVersion":1,"state":"held","leaseId":"' + ('c' * 32) + '","attemptId":"stale-owner","ownerPid":4,"ownerStartUtc":"2026-01-01T00:00:00.0000000Z"}' + "`n"
+	[IO.File]::WriteAllText($env:AETHELN_ENGINE_HOST_LEASE, $StaleJournal, (New-Object Text.UTF8Encoding $false))
+	[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+	$Blocked = Invoke-AutomationStepFixture $EditorBuild
+	Assert-True ($Blocked.failure -ceq 'editor_host_lease_failed' -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq "reason=editor_host_lease_failed`n" -and (@($Blocked.output | Where-Object { -not $_.StartsWith('::add-mask::') }) -join "`n") -ceq 'editor_build_detail code=lease_owner_ambiguous') 'A stale held lease record must stop the re-sync with editor_host_lease_failed and its fixed detail code.'
+	Assert-True ([IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE) -ceq $StaleJournal -and ([string] (& git -C $SyncTarget rev-parse HEAD)).Trim() -ceq $Revisions.interleaved -and -not (Test-Path -LiteralPath $EditorBuildEvidence)) 'A blocked lease must leave the journal, the managed workspace, and the build untouched.'
 	$env:AETHELN_MANAGED_COMPILE_ROOT = Join-Path $AutomationFixtureRoot 'managed'
 	[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 
@@ -545,6 +615,8 @@ try {
 	# The outcome step reports the first failed step's fixed reason, a fixed
 	# fallback for an unrecorded or malformed one, and 'none' after success.
 	foreach ($OutcomeCase in @(
+		@{ env=@{ AETHELN_CONTROL_OUTCOME='failure'; AETHELN_EDITOR_BUILD_OUTCOME='skipped'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_control_checkout_failed' },
+		@{ env=@{ AETHELN_CONTROL_OUTCOME='success'; AETHELN_EDITOR_BUILD_OUTCOME='failure'; AETHELN_EDITOR_BUILD_REASON='editor_workspace_sync_failed'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_workspace_sync_failed' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='failure'; AETHELN_EDITOR_BUILD_REASON='editor_build_budget_exhausted'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_build_budget_exhausted' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='failure'; AETHELN_EDITOR_BUILD_REASON='editor_build_engine_changes_required'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_build_engine_changes_required' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='C:\leak path'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_interrupted' },
@@ -552,7 +624,7 @@ try {
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='failure' }; expected='automation_report_upload_failed' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='success' }; expected='none' }
 	)) {
-		$OutcomeNames = @('AETHELN_EDITOR_BUILD_OUTCOME', 'AETHELN_EDITOR_BUILD_REASON', 'AETHELN_RUN_OUTCOME', 'AETHELN_RUN_REASON', 'AETHELN_RESIDUE_OUTCOME', 'AETHELN_RESIDUE_REASON', 'AETHELN_BIND_OUTCOME', 'AETHELN_BIND_REASON', 'AETHELN_UPLOAD_OUTCOME')
+		$OutcomeNames = @('AETHELN_CONTROL_OUTCOME', 'AETHELN_EDITOR_BUILD_OUTCOME', 'AETHELN_EDITOR_BUILD_REASON', 'AETHELN_RUN_OUTCOME', 'AETHELN_RUN_REASON', 'AETHELN_RESIDUE_OUTCOME', 'AETHELN_RESIDUE_REASON', 'AETHELN_BIND_OUTCOME', 'AETHELN_BIND_REASON', 'AETHELN_UPLOAD_OUTCOME')
 		foreach ($Name in $OutcomeNames) { [Environment]::SetEnvironmentVariable($Name, [string] $OutcomeCase.env[$Name]) }
 		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 		$Outcome = Invoke-AutomationStepFixture $AutomationOutcome
@@ -610,7 +682,7 @@ try {
 	foreach ($Name in $PreviousAutomationEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $PreviousAutomationEnvironment[$Name]) }
 	Remove-Item -LiteralPath $AutomationFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
-Assert-True ($EditorBuild.Contains('powershell -NoProfile -File (Join-Path $Root ''scripts\ci\InitialPreparation.BuildInvocation.ps1'') `') -and $EditorBuild -match '(?m)^\s+-Target AethelnOnlineEditor `\r?$' -and $EditorBuild -match '(?m)^\s+-Platform Win64 `\r?$' -and $EditorBuild -match '(?m)^\s+-TargetRoot \$env:AETHELN_MANAGED_COMPILE_ROOT `\r?$' -and $EditorBuild -match '(?m)^\s+-EngineRoot \$env:AETHELN_ENGINE_ROOT `\r?$' -and $EditorBuild -notmatch 'Build\.bat') 'The editor target must be built in the managed workspace only through the bounded capture wrapper.'
+Assert-True ($EditorBuild.Contains('$Build = Invoke-OwnedPowerShell @((Join-Path $Control ''scripts\ci\InitialPreparation.BuildInvocation.ps1''), ''-Target'', ''AethelnOnlineEditor'', ''-Platform'', ''Win64'', ''-ActionLimit'', ''4'', ''-EngineRoot'', $env:AETHELN_ENGINE_ROOT, ''-TargetRoot'', $env:AETHELN_MANAGED_COMPILE_ROOT, ''-LinuxToolchainRoot'', $env:AETHELN_LINUX_TOOLCHAIN_ROOT, ''-EvidenceRoot'', $EvidenceRoot)') -and $EditorBuild -notmatch 'Build\.bat') 'The editor target must be built in the managed workspace only through the control-checkout copy of the bounded capture wrapper.'
 Assert-True ($EditorBuild.Contains('::add-mask::$env:AETHELN_ENGINE_ROOT') -and $EditorBuild.Contains('::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT')) 'Runner-local engine and workspace roots must be masked before any automation step runs.'
 Assert-True ($AutomationRun -match [regex]::Escape("Join-Path `$env:AETHELN_MANAGED_COMPILE_ROOT 'scripts\ci\Invoke-UnrealAutomationTests.ps1'") -and $AutomationRun -match '-EngineRoot' -and $AutomationRun.Contains('$env:AETHELN_ENGINE_ROOT') -and $AutomationRun -match "'-TimeoutSeconds', '600'" -and $AutomationRun -match '(?m)^        timeout-minutes: \d+\r?$') 'The frozen harness must run from the managed workspace against the runner engine root with its bounded timeout.'
 Assert-True ($AutomationRun -match '-RedirectStandardOutput' -and $AutomationRun -match '-RedirectStandardError' -and $AutomationRun -notmatch 'Get-Content[^\r\n]*\.log' -and $AutomationRun -notmatch 'Write-Output \$Report\b') 'Unreal and harness output must stay in runner-local files; only a bounded summary may reach the log.'
