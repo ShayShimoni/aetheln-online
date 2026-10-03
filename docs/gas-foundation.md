@@ -68,18 +68,18 @@ resource" wording remains in the roadmap
 [#115](https://github.com/ShayShimoni/aetheln-online/issues/115) owns that
 cleanup (`docs/game-design-bible.md:285-291`); #19 does not edit it.
 
-`docs/characters-and-factions.md:313-319` defines exactly three representative
-actives, with all tuning `TBD` (`:324-328`). #19 builds only their skeletons:
-identity, activation, validation, cost, cooldown, and state tags. Contacts,
-Guard pressure, interruption, movement, and attack windows belong to Issue
-[#60](https://github.com/ShayShimoni/aetheln-online/issues/60); dodge interplay
-belongs to Issue [#18](https://github.com/ShayShimoni/aetheln-online/issues/18).
+[Characters and Factions](characters-and-factions.md)
+(`docs/characters-and-factions.md:313-319`) defines exactly three
+representative actives, Gate Step, Sworn Rebuke, and Hold the Line, with their
+stable IDs and canon summaries and with all tuning `TBD` (`:324-328`). The
+combat document's conventions table maps their IDs to tags. #19 builds only
+their skeletons: identity, activation, validation, cost, cooldown, and state
+tags. Contacts, Guard pressure, interruption, movement, and attack windows
+belong to Issue [#60](https://github.com/ShayShimoni/aetheln-online/issues/60);
+dodge interplay belongs to Issue
+[#18](https://github.com/ShayShimoni/aetheln-online/issues/18).
 
-| Working name | Stable ID | Canon summary |
-| --- | --- | --- |
-| Gate Step | `order.oathscar.ability.gate_step` | Aimed, server-bounded, shield-led advance with authored Wrought contact and Guard pressure |
-| Sworn Rebuke | `order.oathscar.ability.sworn_rebuke` | Aimed committed Wrought answer with an authored interruption rule |
-| Hold the Line | `order.oathscar.ability.hold_the_line` | Active directional defensive commitment; its Guard result comes only from the authoritative contact and facing check |
+Existing code, as of `develop` `688b6b1`:
 
 | Existing code | Disposition |
 | --- | --- |
@@ -97,9 +97,10 @@ No gameplay tags are registered today; the spike uses the plain string
 
 Everything is in `GameCombat` except the native tags, which are in `GameCore`:
 `docs/technical-architecture.md:155-157` assigns shared identifiers and tags to
-GameCore, and GameUI depends on GameCore only, so the HUD (Issue
-[#61](https://github.com/ShayShimoni/aetheln-online/issues/61)) can reach only
-tags declared there.
+GameCore, and GameUI may depend only on GameCore and presentation-safe combat
+interfaces (`:157`), so the HUD (Issue
+[#61](https://github.com/ShayShimoni/aetheln-online/issues/61)) can reach tags
+only if they are declared in GameCore.
 
 | Class or file | Module | Responsibility |
 | --- | --- | --- |
@@ -111,18 +112,18 @@ tags declared there.
 | `UAethelnGameplayAbility` (abstract) | GameCombat | Base ability: reads config, overrides `CheckCost`, `ApplyCost`, `GetCooldownTags`, `ApplyCooldown`, and `CanActivateAbility` (the choke point), fixes the net and instancing policies, leaves the engine cost and cooldown effect classes null. |
 | `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnGateStepAbility`, `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility` skeletons. |
 | `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first). All magnitudes set by caller. |
-| `AAethelnCombatGameMode` | GameCombat | Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by extending `scripts/build_movement_poc.py`, a config soft-class path, or a `?game=` URL, never by editing binary assets by hand. |
+| `AAethelnCombatGameMode` | GameCombat | Derives from `AGameModeBase` (for example through `AAethelnGameModeBase`), never `AGameMode`: `AGameMode::FindInactivePlayer` (`Runtime/Engine/Private/GameMode.cpp:687-751`) would reuse the old PlayerState on reconnect, which breaks the sequence policy and T34. A later base-class change must revisit both. Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by extending `scripts/build_movement_poc.py`, a config soft-class path, or a `?game=` URL, never by editing binary assets by hand. |
 | `AAethelnCombatAICharacter` | GameCombat | Base for Issue [#20](https://github.com/ShayShimoni/aetheln-online/issues/20)'s enemy: its own ASC in Minimal mode and its own attribute set. |
 
 ### Why Mixed for players and Minimal for AI
 
-- Canon puts the player ASC on `PlayerState` (TA-003). Minimal mode does not
-  work for owned ASCs (`GAS/Public/AbilitySystemComponent.h:81-89`, note at
-  `:83`); Full would send every player's effect list to every client.
+- Minimal mode does not work for owned ASCs
+  (`GAS/Public/AbilitySystemComponent.h:81-89`, note at `:83`); Full would send
+  every player's effect list to every client.
 - In Mixed mode the active-effects container replicates owner-only on the
   server (`GAS/Private/GameplayEffect.cpp:5183-5213`), with ownership resolved
   through the PlayerState's controller (`:5225-5240`). The owner gets full
-  effect data, including cooldown time remaining. Non-owners get only tags
+  effect data, including cooldown time remaining; non-owners get only tags
   (`MinimalReplicationTags`, `COND_SkipOwner`,
   `GAS/Private/AbilitySystemComponent.cpp:1874`), so the cooldown tag still
   reaches them. Granted specs replicate to the owner only (`:1861-1862`).
@@ -263,8 +264,13 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
   clients still get death from #21's replicated state and hit results from
   cues. `REPNOTIFY_Always` lets prediction reconcile later
   (`GAS/Public/GameplayPrediction.h:122-132`).
-- **No identity data.** Race, sex, appearance, and faction are never inputs to
-  any attribute, effect, or ability.
+- **Resource contract mapping** (Shared Combat Semantic Contract in the combat
+  document). The authored bound is the matching `Max*` attribute. The mutation
+  reason is the applying effect class: init and cost here, with #60 and #21
+  adding theirs. The per-resource content version is `TBD` with #106.
+- **No identity data.** Race, sex, and appearance are never inputs to any
+  attribute, effect, or ability. Faction and Faction Doctrine inputs are outside
+  #19's scope; canon Doctrine abilities arrive in a later stage.
 
 ## Abilities
 
@@ -290,8 +296,11 @@ All three derive from `UAethelnGameplayAbility`.
   never evaluates set-by-caller magnitudes that have no value.
 - **`ActivateAbility`** calls `CommitAbility`, writes the outcome (committed or
   not) and the server `ActivationId` into the seam scope's result slot, then
-  calls `EndAbility`; #60 replaces the end with its timeline. Hold the Line's
-  duration-or-hold behavior is `TBD`.
+  calls `EndAbility`; #60 replaces the end with its timeline. Hold the Line may
+  later hold its own state tag while active, `State.<Order>.<Name>` under the
+  conventions (for example `State.Oathscar.HoldTheLine`, a technical
+  identifier, not a display name). The PR that creates it adds it to the
+  Initial entries table. Hold the Line's duration-or-hold behavior is `TBD`.
 
 **Grant-time validation.** `AAethelnPlayerState` refuses to grant, and logs,
 any configured class that:
@@ -335,7 +344,8 @@ optimistic presentation.
 
 Whether #19 can close without P6 is an owner decision after the P5 two-client
 PIE feel test, recorded as candidate TC-008. If approved, P6 predicts only Hold
-the Line's activation, Endurance cost, cooldown, and own state tag: self-only
+the Line's activation, Endurance cost (if it has one), cooldown, and own state
+tag: self-only
 and reversible, with no contact, Guard result, or damage predicted (Prediction
 Matrix in the combat document). The mechanism uses only engine hooks:
 
@@ -352,13 +362,17 @@ Matrix in the combat document). The mechanism uses only engine hooks:
   `ServerSubmitPredictedActivation(Request, PredictionKey)`.
 - On the server, run steps 1 to 8. Reject with
   `ClientActivateAbilityFailed(Handle, PredictionKey.Current)`, which rolls the
-  client back (`GAS/Public/GameplayPrediction.h:84-94`); accept through
-  `Super::InternalServerTryActivateAbility` inside the seam scope. P6 adds that
-  exemption to the override, which refuses unconditionally until then.
+  client back (`GAS/Public/GameplayPrediction.h:84-94`), and send the outcome;
+  accept through `Super::InternalServerTryActivateAbility` inside the seam
+  scope. P6 adds that exemption to the override, which refuses unconditionally
+  until then.
 - P6's first task is a compile-level check that the override reaches the batch
-  data (`GAS/Public/AbilitySystemComponent.h:1280`, `:1309`). If batching is
+  data: `LocalServerAbilityRPCBatchData` is declared in a `public:` section
+  (`GAS/Public/AbilitySystemComponent.h:1280`), at `:1309`. If batching is
   fragile, send the seam request first and let the engine's own activation RPC
-  follow on the same ordered channel.
+  follow on the same ordered channel. The server pairs the engine activation
+  with the validated pending request and refuses any activation without one.
+  This uses two messages and keeps per-handle pending state.
 
 ## Activation Seam
 
@@ -447,9 +461,10 @@ that fails. Each rejection has one reason, and precedence is deterministic.
 - **Step 8 uses no failure tags.** The three checks are public virtuals
   (`GAS/Public/Abilities/GameplayAbility.h:285`, `:357`, `:363`), called in
   the engine's own order (cooldown at `GAS/Private/Abilities/GameplayAbility.cpp:508`,
-  cost `:518`, tags `:528`). The `AbilitySystemGlobals` failure-tag keys are
-  deprecated since 5.5 (`GAS/Public/AbilitySystemGlobals.h:187-234`), so none
-  is configured. **Cheat variables:** the engine wraps its checks in
+  cost `:518`, tags `:528`). The cooldown, cost, and tag-requirement
+  failure-tag keys moved from `AbilitySystemGlobals` to the GAS developer
+  settings in 5.5 (`GAS/Public/AbilitySystemGlobals.h:187-234`); step 8 does not
+  need them, so none is configured. **Cheat variables:** the engine wraps its checks in
   `ShouldIgnoreCooldowns` and `ShouldIgnoreCosts` (`GameplayAbility.cpp:508`,
   `:518`, and in `CommitCheck` at `:671`, `:676`); the seam does not. With the
   cheats on in a non-shipping build the seam rejects where the engine would
@@ -474,8 +489,8 @@ that fails. Each rejection has one reason, and precedence is deterministic.
 **Sequence policy.** The sequence advances only on acceptance (a valid Release
 included), accepts forward gaps, never wraps, and lives for one PlayerState
 lifetime. A client that jumps to the maximum only makes its own later requests
-stale. A reconnect gets a new PlayerState and starts at 1 (see Known Interim
-Gaps).
+stale. With the `AGameModeBase` base class pinned in Class Layout, a reconnect
+gets a new PlayerState and starts at 1 (see Known Interim Gaps).
 
 **Input-contract findings** (numbers from the Issue
 [#82](https://github.com/ShayShimoni/aetheln-online/issues/82) review). The
@@ -528,8 +543,10 @@ Three mechanisms close them:
    a second, independent guard.
 2. **The choke point plus grant validation.**
    `UAethelnGameplayAbility::CanActivateAbility` returns false on a
-   PlayerState-owned ASC unless a seam scope is open (AI ASCs are exempt). One
-   check thus covers event and tag triggers, `GiveAbilityAndActivateOnce`,
+   PlayerState-owned ASC unless a seam scope is open for that ability's spec
+   handle (AI ASCs are exempt). The scope passes only the handle the seam is
+   activating, so an ability activated from inside another ability's
+   `ActivateAbility` is refused. One check thus covers event and tag triggers, `GiveAbilityAndActivateOnce`,
    server-side `TryActivate*`, and the stock Blueprint calls, and it stops a
    client forwarding through the stock path, because the client-side check runs
    first (`GAS/Private/AbilitySystemComponent_Abilities.cpp:1665`). Grant
@@ -548,7 +565,7 @@ these rules keep it so:
 
 | RPC | Status | Rule |
 | --- | --- | --- |
-| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`GAS/Public/AbilitySystemComponent.h:1572-1577`) | **Residual: memory growth.** They `FindOrAdd` cache entries on client-chosen keys, removed only when that activation ends (`GAS/Private/AbilitySystemComponent_Abilities.cpp:4007-4031`, `:4047-4056`, `:1301`). Neither is virtual. The batch route is closed; these remain. | **Owner: #60.** Bound it before any ability consumes target data. No ability may use target-data tasks until then. |
+| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`GAS/Public/AbilitySystemComponent.h:1572-1577`) | **Residual: memory growth.** A hostile client can `FindOrAdd` cache entries on keys it chooses, whether or not any ability reads the data; they are removed only when that activation ends (`GAS/Private/AbilitySystemComponent_Abilities.cpp:4007-4031`, `:4047-4056`, `:1301`). Neither is virtual. The batch route is closed; these remain. | **Owner: #60.** Bound it before any ability consumes target data. No ability may use target-data tasks until then. |
 | `ServerSetReplicatedEvent`, `...WithPayload` (`GAS/Public/AbilitySystemComponent.h:1554-1559`) | Nothing reads them. | No ability may use replicated-event tasks. |
 | `ServerSetInputPressed`, `ServerSetInputReleased` (`GAS/Public/AbilitySystemComponent.h:1618-1622`) | Only update spec input state (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2885-2893`). | Phase comes only from the request. Abilities must not read `InputPressed` or `InputReleased`. |
 | Montage section and play-rate RPCs (`GAS/Public/AbilitySystemComponent.h:1803-1812`) | Presentation only. | No gameplay window may derive from a montage (Server-Owned Attack Timeline in the combat document). |
@@ -596,7 +613,9 @@ The client must not control event volume in the observability critical lane.
 - **Rate-limited windows.** A connection enters the limited state when its
   bucket is empty and leaves it when a request is admitted again.
   - On entry: one `RateLimited` event (if the request has a nonzero sequence),
-    one metric sample, and one `RateLimited` outcome to the owner.
+    one metric sample, and, only when the entering message is a seam request,
+    one `RateLimited` outcome to the owner. A refused stock-route call that
+    empties the bucket sends no reply.
   - While limited: no events and no outcomes. Refused seam requests and
     refused stock-route calls are only counted in memory, folded into one
     suppressed count.
@@ -677,7 +696,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T10 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3 | H | Exactly five reflected fields; none named or typed as target, hit, contact, damage, magnitude, attribute, aim, cost, or cooldown (extends `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:186-189`) |
 | T11 | `Aetheln.GameCombat.ActivationSeam.ValidateMatrix` | P3 | H | Steps 1 to 7 with an injected clock: each failure, precedence, zero/lower/equal sequences, an accepted forward gap, Press while active, Release undeclared, a valid Release |
 | T12 | `Aetheln.GameCombat.ActivationSeam.RejectionHasNoSideEffect` | P3 | H | Every rejection leaves no cost, cooldown, state tag, sequence advance, or activation id; a failing commit gives `InternalFailure`; a valid Release advances the sequence and replaying it is rejected |
-| T13 | `Aetheln.GameCombat.ActivationSeam.StockRoutesRefused` | P3 | H | Nothing activates or commits via the single-ability RPCs, `ServerAbilityRPCBatch` (whole batch dropped, target-data cache untouched), `TryActivateAbilityByClass`, `TryActivateAbilitiesByTag`, `GiveAbilityAndActivateOnce`, or a gameplay event matching a test trigger. The trigger case grants its test ability directly, because T15 refuses triggers. The cache assertion uses a test accessor on the project ASC, because `AbilityTargetDataMap` is protected (`GAS/Public/AbilitySystemComponent.h:1650`, `:1671`). |
+| T13 | `Aetheln.GameCombat.ActivationSeam.StockRoutesRefused` | P3 | H | Nothing activates or commits via the single-ability RPCs, `ServerAbilityRPCBatch` (whole batch dropped, target-data cache untouched), `TryActivateAbilityByClass`, `TryActivateAbilitiesByTag`, `GiveAbilityAndActivateOnce`, a gameplay event matching a test trigger, or an ability activated from inside another ability's `ActivateAbility`. The trigger case grants its test ability directly, because T15 refuses triggers. The cache assertion uses a test accessor on the project ASC, because `AbilityTargetDataMap` is protected (`GAS/Public/AbilitySystemComponent.h:1650`, `:1671`). |
 | T14 | `Aetheln.GameCombat.ActivationSeam.RateBound` | P3 | H | With an injected clock and test-set bucket: excess requests get `RateLimited` with no side effect; refused stock-route calls draw from the same bucket; in-bound requests are unaffected |
 | T15 | `Aetheln.GameCombat.ActivationSeam.GrantValidationFailsClosed` | P3 | H | Grant refused for a class not deriving from `UAethelnGameplayAbility`, a client security policy, missing tag, content version 0, bad cost or cooldown, `AbilityTriggers`, `bReplicateInputDirectly`, or a spec input id |
 | T16 | `Aetheln.GameCombat.ActivationSeam.CheatFlagsOff` | P3 | H | `AbilitySystem.IgnoreCooldowns` and `IgnoreCosts` are off by default (cheat variables, `GAS/Private/AbilitySystemGlobals.cpp:39-40`); the seam ignores them |
@@ -767,20 +786,19 @@ here.
 
 ## Known Interim Gaps
 
-- **Reconnect is a free refill (owner: #21).** A reconnect creates a new
-  PlayerState by default, so `bCombatStateInitialized` is false and P2 applies
-  the init effect again: the player returns with full Health and Endurance and
-  no cooldowns. Canon forbids this: "disconnect is never an instant escape,
+- **Reconnect is a free refill (owner: #21).** With the `AGameModeBase` base
+  class pinned in Class Layout, a reconnect creates a new PlayerState, so
+  `bCombatStateInitialized` is false and P2 applies the init effect again: the
+  player returns with full Health and Endurance and no cooldowns. Canon forbids this: "disconnect is never an instant escape,
   cleanse, restore, or grant" (Death, Logout, and Recovery Safety in the combat
   document). #19 adds no restoration code. The test
   `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` pins the current behavior
   so the gap stays visible, and #21 flips it when it lands its reconnect rule
   (its acceptance criterion: reconnect during death or respawn resolves to one
   valid state).
-- **Target-data cache growth (owner: #60).** The standalone target-data RPCs
-  let a hostile client grow server memory on keys it chooses, whether or not
-  any ability reads the data. It must be bounded before any ability consumes
-  target data; until then no ability may use target-data tasks.
+- **Target-data cache growth (owner: #60).** A hostile client can grow server
+  memory through the standalone target-data RPCs; see the RPC table in Closing
+  the Stock Routes for the mechanism and the rule.
 
 ## Open Decisions
 

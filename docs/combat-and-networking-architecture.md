@@ -437,6 +437,16 @@ rename.
 | `State.<Name>` | Authoritative actor state, for example `State.Dead` and `State.Dodging` | Server-owned effects or abilities of the owning issue only |
 | `SetByCaller.<Purpose>.<Name>` | Effect magnitude keys, for example `SetByCaller.Cooldown.Duration`, `SetByCaller.Cost.Endurance`, `SetByCaller.Init.MaxHealth` | Server code building specs |
 
+**Order scope.** The `<Order>` segment appears only when the content's semantic
+ID is Order-scoped (an `order.<order>.` prefix), as in `Ability.Oathscar.GateStep` and
+`Cooldown.Oathscar.GateStep`. Order-scoped state follows the same form,
+`State.<Order>.<Name>`. A shared action with no Order-scoped semantic ID, such
+as dodge, block, or sprint, uses `<Family>.<Name>`, for example
+`Cooldown.Dodge` and `State.Dodging`. The basic chain takes the form its
+semantic ID dictates (`order.oathscar.ability.sword_shield_basic_chain` is
+Order-scoped). `Ability.Melee.Combo1` is the spike's string and a spelling
+example only. This keeps the mapping from tag to semantic ID one to one.
+
 `GameplayCue.*` (presentation, #61 and #97), damage-family effect tags (#60),
 and territory `Policy.*` tags (2.x) are reserved for their owners. The engine's
 activation-failure tags are not configured: the activation seam reads its
@@ -737,7 +747,8 @@ when the Unreal project exists.
 - Server tick and combat-history sampling.
 - Projectile simulation representation at representative scale.
 - Exact simultaneous-event ordering where game design has not resolved it.
-- Ability-specific prediction and rollback eligibility.
+- Ability-specific prediction and rollback eligibility
+  ([candidate TC-008](architecture-decisions.md#candidate-decisions)).
 
 These decisions require linked evidence and an accepted entry in
 [Architecture Decisions](architecture-decisions.md).
