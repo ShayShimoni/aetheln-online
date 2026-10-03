@@ -99,7 +99,7 @@ function New-TestPortableReport {
 		'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests',
 		'ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 		'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
-		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
+		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','release-packaging-tests',
 		'board-integrity-tests','pull-request-policy-tests',
 		'psscriptanalyzer'
 	)
@@ -314,7 +314,7 @@ try {
 	Assert-True ($ReceiptSubset.Count -eq 1 -and $AggregateSubset.Count -eq 1 -and $ReceiptSubset[0].Value.TrimEnd() -ceq $AggregateSubset[0].Value.TrimEnd()) 'The controller-contract subset must be byte-identical in the receipt producer and aggregate.'
 	$SubsetNames = @([regex]::Matches($ReceiptSubset[0].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
 	$SuiteNames = @([regex]::Matches($SuiteSource, "name = '([^']+)'; tier = 'required'; script = 'tests/ci/") | ForEach-Object { $_.Groups[1].Value })
-	Assert-True ($SuiteNames.Count -eq 25 -and ($SubsetNames -join ',') -ceq ($SuiteNames -join ',')) 'The controller-contract subset must equal the required tests/ci suites in Invoke-CiSuite.ps1 order.'
+	Assert-True ($SuiteNames.Count -eq 26 -and ($SubsetNames -join ',') -ceq ($SuiteNames -join ',')) 'The controller-contract subset must equal the required tests/ci suites in Invoke-CiSuite.ps1 order.'
 	Assert-True ((@($script:AcceptanceControllerContractCheckNames) -join ',') -ceq ($SubsetNames -join ',') -and $SubsetNames.Count -lt $script:AcceptancePortableCheckNames.Count -and @($SubsetNames | Where-Object { $script:AcceptancePortableCheckNames -cnotcontains $_ }).Count -eq 0) 'The controller-contract subset must be a strict subset of the portable manifest.'
 
 	$ContractEvidence = Write-ControllerContractReport (New-TestPortableReport)

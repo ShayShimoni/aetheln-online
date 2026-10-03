@@ -122,6 +122,10 @@ try {
 	$CrlfProject = Initialize-VersionedProject 'crlf' @('; leading comment', $SectionHeader, 'ProjectName=AethelnOnline', 'ProjectVersion=2.1.0', '', '[/Script/GameplayAbilities.AbilitySystemGlobals]', '+GameplayCueNotifyPaths=/Game') -LineEnding "`r`n"
 	$Result = Invoke-Provenance 'crlf' $CrlfProject -Extra @{ BuildNumber = '3' }
 	Assert-True ($null -eq $Result.Failure -and (Get-Content -LiteralPath $Result.Path -Raw | ConvertFrom-Json).release.buildVersion -ceq '2.1.0+3') "A CRLF ini with other sections must be read. Failure: $($Result.Failure)"
+	# The engine trims trailing whitespace before it recognizes a section header.
+	$TrailingHeaderProject = Initialize-VersionedProject 'trailing-header' @(($SectionHeader + " `t"), 'ProjectVersion=2.1.0')
+	$Result = Invoke-Provenance 'trailing-header' $TrailingHeaderProject -Extra @{ BuildNumber = '3' }
+	Assert-True ($null -eq $Result.Failure -and (Get-Content -LiteralPath $Result.Path -Raw | ConvertFrom-Json).release.buildVersion -ceq '2.1.0+3') "A target section header with trailing whitespace must be read as the engine reads it. Failure: $($Result.Failure)"
 	Write-Output 'PASS: ProjectVersion is read from the exact section for SemVer values with or without CRLF'
 
 	$MissingCases = @(
@@ -152,7 +156,13 @@ try {
 		@{ Name = 'lowercase-key'; Lines = @($SectionHeader, 'projectversion=1.0.0') },
 		@{ Name = 'lowercase-section'; Lines = @('[/script/enginesettings.generalprojectsettings]', 'ProjectVersion=1.0.0') },
 		@{ Name = 'array-operator'; Lines = @($SectionHeader, '+ProjectVersion=1.0.0') },
-		@{ Name = 'duplicate-case-variant'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', 'PROJECTVERSION=2.0.0') }
+		@{ Name = 'duplicate-case-variant'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', 'PROJECTVERSION=2.0.0') },
+		# Engine-parser parity: these files assign the value to another section or
+		# join it into another line, so the build would not use it.
+		@{ Name = 'other-section-trailing-space-header'; Lines = @($SectionHeader, '[/Script/Other] ', 'ProjectVersion=1.0.0') },
+		@{ Name = 'other-section-inner-bracket-header'; Lines = @($SectionHeader, '[/Script/Other]x]', 'ProjectVersion=1.0.0') },
+		@{ Name = 'line-continuation'; Lines = @($SectionHeader, 'ProjectName=AethelnOnline\', 'ProjectVersion=1.0.0') },
+		@{ Name = 'bracket-block'; Lines = @($SectionHeader, 'ProjectName={', 'ProjectVersion=1.0.0', '}') }
 	)
 	foreach ($Case in $InvalidCases) {
 		$Project = Initialize-VersionedProject ('invalid-' + $Case.Name) $Case.Lines
