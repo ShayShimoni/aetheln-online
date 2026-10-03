@@ -68,7 +68,7 @@ Use the same exact source revision, pinned engine/toolchain, map, pawn/ability d
 | Server/client topology, network profile and measured latency/jitter/loss | Not run; `TBD` |
 | Input-to-visible-action and input-to-server-accept/reject observations | Not run; `TBD` |
 | Camera behavior, reticle readability, parallax/cover discrepancies | Not run; `TBD` |
-| Movement and combat correction frequency/magnitude and recovery behavior | Not run; `TBD` |
+| Movement and combat correction frequency/magnitude and recovery behavior | Not run; `TBD` (movement correction behavior: [Correction and rubber-banding](movement-poc.md#correction-and-rubber-banding)) |
 | Mouse/keyboard and controller candidate observations, remap conflicts | Not run; `TBD` |
 | Invalid/stale/duplicate/version/aim/time request failures and logs | Not run; `TBD` |
 | Accepted/rejected candidate choices, limitations, owner, revisit trigger | Not run; `TBD` |
