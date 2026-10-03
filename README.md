@@ -85,8 +85,9 @@ The prototype proves the technical foundation and core combat before persistence
 - The reviewed prototype brief defines the core loop, combat identity, success
   criteria, explicit exclusions, and owned blocking decisions
 - The supported Unreal Engine source revision, C++, repository safeguards, and
-  accepted `GameCore`, `GameCombat`, `GameUI`, `GameNet`, and server-only
-  `GameServer` boundaries form a repeatable baseline
+  accepted `GameCore`, `GameCombat`, `GameUI`, `GameNet`, server-only
+  `GameServer`, and editor-only `GameTests` boundaries form a repeatable
+  baseline
 - Two connected players can move, use pure free aim, perform a basic three-hit
   attack chain, dodge, use three representative active abilities, engage one
   readable enemy and one authoritative objective, take damage, die, and respawn

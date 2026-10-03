@@ -109,10 +109,10 @@ Every accepted decision records:
 
 - **Status:** Accepted
 - **Scope:** Source architecture
-- **Decision:** Keep `GameCore`, `GameCombat`, `GameUI`, `GameNet`, and
-  server-only `GameServer` with the dependency rules in
-  [Technical Architecture](technical-architecture.md). Put selected vendor SDKs
-  behind dedicated adapters/modules or plugins.
+- **Decision:** Keep `GameCore`, `GameCombat`, `GameUI`, `GameNet`,
+  server-only `GameServer`, and editor-only `GameTests` with the dependency
+  rules in [Technical Architecture](technical-architecture.md). Put selected
+  vendor SDKs behind dedicated adapters/modules or plugins.
 - **Rationale:** Gameplay ownership stays testable and vendor choices remain
   replaceable.
 - **Owner/evidence:** Issues #13, #15, and #36.
@@ -1280,6 +1280,56 @@ Every accepted decision records:
   the NetCore follow-up identifies the varying UHT input (then enable
   `-NoEngineChanges`), or the plugin definition header still changes across
   a CI editor run.
+
+### TA-021 - Private GameCombat Dependency on the GameNet Observability Service
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-03 by the delivery lead under the owner's
+  delegated authority.
+- **Scope:** `GameCombat` module dependencies and the structured observability
+  producers added by issue #38.
+- **Decision (2026-10-03):** `GameCombat` keeps a private dependency on
+  `GameNet` (`PrivateDependencyModuleNames.Add("GameNet")` in
+  `Source/GameCombat/GameCombat.Build.cs`). The edge exists only so
+  authoritative combat and movement producers can emit structured events
+  through `UAethelnObservabilitySubsystem` (`AethelnObservability.h` and
+  `AethelnObservabilitySubsystem.h`). The only other `GameNet` types it uses
+  come in through those headers for the observability build context:
+  `FAethelnNetworkProfile` and `AethelnNetworkSpike::UnsetNetworkProfileId`
+  from `AethelnNetworkProfile.h`, which `AethelnObservability.h` includes, passed
+  only into `SetBuildContext`. `GameCombat` exposes no `GameNet` type in its
+  public headers.
+- **Context:** Commit `186b4f89` (#38) added the edge without a record, and the
+  issue #13 QA (AC6, DoD4) found it outside the `GameCombat` row of
+  [Technical Architecture](technical-architecture.md). The producers are
+  `AethelnSpikeCharacter`, `AethelnSpikeMovementComponent`,
+  `AethelnSpikeAuthorityComponent`, and `AethelnNetworkSpikeGameMode`, plus the
+  `AethelnNetworkSpikeAuthorityTests` automation test. Producers only enqueue,
+  and sink failure never changes gameplay truth
+  ([Observability and Crash Diagnostics](observability-and-crash-diagnostics.md)).
+- **Evidence:** All direct `GameNet` includes in `Source/GameCombat/` are the
+  two observability headers, in `Private/` source files only.
+  `AethelnNetworkSpikeGameMode.cpp` and `AethelnSpikeCharacter.cpp` build an
+  `FAethelnNetworkProfile` only to pass the network profile id to
+  `UAethelnObservabilitySubsystem::SetBuildContext`. `GameNet.Build.cs`
+  depends only on `Core`, `CoreUObject`, and `Engine`, so the edge is
+  one-directional and adds no cycle. `GameServer` already depends on both
+  modules.
+- **Alternatives:** Move the observability service, or an emission interface,
+  into `GameCore` so `GameCombat` needs no `GameNet` edge (deferred: a C++ move
+  with no behavior change). Drop the combat producers (rejected: #38 requires
+  correlated movement and combat activations, corrections, and rejection
+  reason codes).
+- **Consequences:** The `GameCombat` row in Technical Architecture lists the
+  private edge, and the `GameNet` row lists the observability service.
+  `GameNet` must never depend on `GameCombat`. The edge gives `GameCombat` no
+  session, admission, or transfer access, and `GameNet` still owns no combat
+  truth.
+- **Owner:** Issues #13 and #38.
+- **Revisit trigger:** `GameCombat` needs a `GameNet` type beyond those the
+  observability headers bring in, `GameNet` needs a `GameCombat` type, or a
+  reviewed change moves the observability service into `GameCore` or its own
+  module.
 
 ## Candidate Decisions
 
