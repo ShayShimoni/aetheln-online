@@ -17,17 +17,20 @@ if ([string]::IsNullOrWhiteSpace($BaseRef) -or [string]::IsNullOrWhiteSpace($Hea
 	throw 'Pull request policy needs both a base ref and a head ref.'
 }
 
-$ReleaseToMain = $BaseRef -ceq 'main' -and $HeadRef -cmatch '^release/'
+# Gitflow back-merges `main` into `develop`; no other base accepts head `main`.
+$BackMerge = $BaseRef -ceq 'develop' -and $HeadRef -ceq 'main'
+# A release PR (into main, or merging release fixes back into develop) and the
+# back-merge ship several tickets and carry no single issue. A hotfix has its
+# own ticket, so its PRs still need one.
+$NoSingleIssue = $BackMerge -or $HeadRef -cmatch '^release/'
 $Violations = @(
 	if ($BaseRef -ceq 'main' -and $HeadRef -cnotmatch '^(release|hotfix)/') {
 		"main-head-branch: base 'main' accepts only release/* or hotfix/* heads, not '$HeadRef'."
 	}
-	# Gitflow back-merges `main` into `develop`; no other base accepts head `main`.
-	$BackMerge = $BaseRef -ceq 'develop' -and $HeadRef -ceq 'main'
 	if (-not $BackMerge -and $HeadRef -cnotmatch '^(feature|fix|docs|chore|release|hotfix|codex)/') {
 		"head-branch-name: head '$HeadRef' must start with feature/, fix/, docs/, chore/, release/, hotfix/, or codex/, or be main into develop."
 	}
-	if (-not $ReleaseToMain -and $Title -notmatch '#\d+') {
+	if (-not $NoSingleIssue -and $Title -notmatch '#\d+') {
 		'title-issue-reference: the title must reference its issue as #<number>.'
 	}
 )

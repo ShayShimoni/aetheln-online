@@ -33,6 +33,9 @@ $Accepted = @(
 	@('develop', 'release/v1.0.0-rc.1', 'fix(net): #302 merge release-branch fix back'),
 	@('develop', 'hotfix/v1.0.1', 'fix(net): #301 back-merge hotfix'),
 	@('develop', 'main', 'chore(release): #300 back-merge v1.0.0 into develop'),
+	# Release merge-backs and the main back-merge carry no single issue.
+	@('develop', 'release/v1.0.0', 'chore(release): merge v1.0.0 fixes back'),
+	@('develop', 'main', 'chore(release): back-merge v1.0.0 into develop'),
 	@('main', 'release/v1.0.0', 'chore(release): v1.0.0'),
 	@('main', 'release/v1.0.0', 'chore(release): #300 v1.0.0'),
 	@('main', 'hotfix/v1.0.1', 'fix(net): #301 patch reconnect crash')
@@ -47,7 +50,8 @@ $Rejected = @(
 	@{ Base = 'main'; Head = 'chore/1-sync'; Title = 'chore: #1 sync'; Rule = 'main-head-branch' },
 	@{ Base = 'develop'; Head = 'feature/214-x'; Title = 'feat(ci): add a check'; Rule = 'title-issue-reference' },
 	@{ Base = 'main'; Head = 'hotfix/v1.0.1'; Title = 'fix(net): patch reconnect crash'; Rule = 'title-issue-reference' },
-	@{ Base = 'develop'; Head = 'release/v1.0.0'; Title = 'chore(release): v1.0.0 fixes'; Rule = 'title-issue-reference' },
+	# A hotfix has its own ticket in both directions.
+	@{ Base = 'develop'; Head = 'hotfix/v1.0.1'; Title = 'fix(net): merge hotfix back'; Rule = 'title-issue-reference' },
 	@{ Base = 'develop'; Head = 'my-branch'; Title = 'feat(ci): #214 x'; Rule = 'head-branch-name' },
 	@{ Base = 'develop'; Head = 'Feature/214-x'; Title = 'feat(ci): #214 x'; Rule = 'head-branch-name' },
 	@{ Base = 'develop'; Head = 'feat/214-x'; Title = 'feat(ci): #214 x'; Rule = 'head-branch-name' }
