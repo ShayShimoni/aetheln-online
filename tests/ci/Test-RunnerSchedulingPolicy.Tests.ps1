@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Workflow = Get-Content -LiteralPath (Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml') -Raw
 $VisualWorkflow = Get-Content -LiteralPath (Join-Path $RepositoryRoot '.github\workflows\visual-package-validation.yml') -Raw
+$DeliveryWorkflow = Get-Content -LiteralPath (Join-Path $RepositoryRoot '.github\workflows\delivery-policy.yml') -Raw
 $CiDocumentation = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'docs\continuous-integration.md') -Raw
 $CheckoutAction = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
 $DownloadAction = 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093'
@@ -39,13 +40,16 @@ for ($Index = 1; $Index -lt $JobOrder.Count; $Index++) {
 $JobBodies['ci-acceptance-authority'] = $Workflow.Substring($Workflow.IndexOf('  ci-acceptance-authority:', [StringComparison]::Ordinal))
 
 $AllowedRemoteActions = @($CheckoutAction, $DownloadAction, $UploadAction)
-foreach ($WorkflowSource in @($Workflow, $VisualWorkflow)) {
+foreach ($WorkflowSource in @($Workflow, $VisualWorkflow, $DeliveryWorkflow)) {
 	foreach ($ActionUse in @([regex]::Matches($WorkflowSource, '(?m)^\s+(?:- )?uses: (?<action>actions/[^@\s]+@[^\s]+)\r?$'))) {
 		$Identity = [string] $ActionUse.Groups['action'].Value
 		Assert-True ($Identity -cin $AllowedRemoteActions) "Remote action '$Identity' must belong to the reviewed checkout/download/upload allowlist."
 		Assert-True ($Identity -cmatch '^actions/[a-z0-9-]+@[0-9a-f]{40}$') "Remote action '$Identity' must be pinned to one full lowercase commit SHA."
 	}
 }
+# Issue #214: the delivery-policy job is hosted, read-only, and bounded; it
+# never targets or queues behind the engine runner.
+Assert-True ($DeliveryWorkflow -match '(?m)^    runs-on: windows-latest\r?$' -and $DeliveryWorkflow -match '(?m)^    timeout-minutes: 5\r?$' -and $DeliveryWorkflow -match '(?m)^permissions:\r?\n  contents: read\r?$' -and $DeliveryWorkflow -notmatch 'self-hosted|aetheln-engine|concurrency:|schedule:|workflow_dispatch') 'The delivery-policy workflow must stay a bounded, read-only, hosted pull-request job outside engine scheduling.'
 Assert-MatchCount -Text $Workflow -Pattern ('(?m)^\s+uses: ' + [regex]::Escape($DownloadAction) + '\r?$') -Expected 10 -Message 'Downloader use must be limited to eight receipt inputs, aggregate selector, and dormant authority aggregate.'
 foreach ($OutputName in @('report_artifact_id','report_artifact_name','report_artifact_digest','report_sha256','report_size_bytes')) {
 	$CallBinding = [regex]::Escape('${{ jobs.validate.outputs.' + $OutputName + ' }}')

@@ -64,8 +64,9 @@ distinct acceptance evidence; it is not a shortcut for missing verification.
   Development-sidebar link on PRs into `develop`: `Refs #<issue>` is the only
   reference. Record the merge SHA, move the board to `Dev Done`, and leave the
   issue open until its required QA/acceptance evidence permits `Done`.
-- PRs into `main` (`release/*` and `hotfix/*` only) also use `Refs`; the
-  issues they ship are already `Done`. If GitHub closes an issue before its
+- PRs into `main` (`release/*` and `hotfix/*` only) also use `Refs`. The
+  issues a release PR ships are already `Done`; a hotfix PR's own ticket is in
+  `Code Review` while the PR is open. If GitHub closes an issue before its
   QA/Done board evidence is recorded, add the evidence to the closed issue and
   update the board directly; do not reopen solely to traverse columns. Closure
   never counts as QA or acceptance proof.
@@ -99,6 +100,55 @@ one bounded lane and never move the board, merge, or edit another lane.
   limitations. The lead verifies them independently before integrating; a
   lane's own report is not review evidence for its own work.
 
+## Rule enforcement
+
+`scripts/delivery/Test-BoardIntegrity.ps1` reads the board and open PRs
+through the locally authenticated `gh` and reports each violation as
+`<rule-id> #<number> <detail>`. It exits 1 on any violation; `-Json` emits
+the same result for tooling. It reports:
+
+- `done-unchecked-acceptance`: a `Done` issue with an unchecked box.
+- `closed-issue-status`: a closed issue outside `Done`, `Release Candidate`,
+  or `Released`.
+- `open-issue-final-status`: an open issue in `Done` or `Released`.
+- `release-field-empty`: a `Release Candidate` or `Released` item without
+  `Release`.
+- `blocked-reason-empty`: a `Blocked` item without `Blocked Reason`.
+- `draft-pr-open`: an open draft PR, reported by its PR number.
+- `open-pr-issue-status`: an open PR whose issue is not in `Code Review`, or
+  is not on the board.
+- `code-review-without-pr`: a `Code Review` issue that no open PR links.
+- `duplicate-pr-issue`: an issue that more than one open PR links.
+
+A PR links an issue through a `#<issue>` in its title or a GitHub closing
+reference. The body's `Refs #<issue>` lines are not links, so the second
+issue of a carried fix can sit in `Blocked` as that rule requires. The last
+three rules skip `release/*` and `main`-into-`develop` back-merge PRs, which
+ship work already tracked on its own tickets, but only when the head branch
+is in this repository: a fork names its own branches and gets no exception.
+A `hotfix/*` PR links its own ticket and is matched like any other PR, so
+that ticket is in `Code Review` while the PR is open. Any other PR with
+neither a title `#<issue>` nor a closing reference links nothing, so the
+board check cannot see it; the hosted `pull-request-policy` title check
+reports it instead.
+
+Run it at session start, after every merge, and before every release cut. A
+violation is fixed, or ticketed when it cannot be fixed at once, before other
+work continues.
+
+The hosted `pull-request-policy` check (`.github/workflows/delivery-policy.yml`)
+needs no project access. It fails a PR whose base is `main` and whose head is
+not `release/*` or `hotfix/*`, whose head branch does not start with
+`feature/`, `fix/`, `docs/`, `chore/`, `release/`, `hotfix/`, or `codex/`
+(head `main` is allowed only as a back-merge into `develop`), or whose title
+lacks `#<issue>`. A `release/*` PR, into `main` or merging release fixes back
+into `develop`, and the `main`-into-`develop` back-merge may omit the issue,
+because they carry several tickets rather than one. A `hotfix/*` PR has its
+own ticket, so its title still needs it. These `release/*`, `hotfix/*`, and
+back-merge allowances apply only when the head branch is in this repository;
+a fork PR gets the full branch and title rules and is never accepted into
+`main`.
+
 ## Checks, protection, and merge
 
 Run the applicable, attainable [Issue #16 CI baseline](continuous-integration.md)
@@ -110,14 +160,14 @@ required human review, applicable checks, and explicit owner authorization.
 The PR author records a final self-review as `COMMENTED`, never as a fabricated
 `APPROVED` state. No single gate implies another.
 
-Branch-protection enforcement is deferred while the private repository's
-`develop` protection API reports HTTP 403 and requests GitHub Pro or public
-visibility. The documented process gate above remains mandatory even without
-enforced protection. If protection later becomes available, configure required
-checks only from the then-current attainable #16 baseline; do not select a
-check that never reports for the relevant event/trust path. Recheck capability
-and check names before configuration rather than treating this deferral as a
-permanent platform fact.
+The repository became public on 2026-10-02, and branch protection was set on
+`develop` and `main` on 2026-10-03 with the owner's approval: changes only
+through PRs with 0 required approvals, required checks `quality-gates` and
+`change-impact` (non-strict), `enforce_admins` on, and no force-push or
+deletion. The process gate above still applies, since protection does not
+check review or owner authorization. Add `pull-request-policy` to both
+branches' required checks once it has reported on a `develop` PR and a `main`
+PR; never require a check that does not report for the relevant event.
 
 ## Releases and versioning
 
@@ -189,7 +239,10 @@ unchanged.
 1. Branch `hotfix/vX.Y.Z` from `main` for a defect in a distributed build, and
    bump PATCH.
 2. Merge it into `main` and tag it.
-3. Merge it back into `develop`, and into an open release branch if one exists.
+3. Merge it back into `develop` through the excluded `main`-into-`develop`
+   back-merge PR, never a second `hotfix/*` PR into `develop`, so the board
+   check's one-PR-per-issue rule holds. Also merge it into an open release
+   branch if one exists.
 
 ## Representative trace and limitation
 

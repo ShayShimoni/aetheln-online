@@ -175,6 +175,10 @@ bounded, parallel work when appropriate. A short request does not itself
 authorize a commit, push, pull-request publication, merge, branch change, pull,
 deployment, deletion, or migration.
 
+Run `scripts/delivery/Test-BoardIntegrity.ps1` at session start, after every
+merge, and before every release cut; fix any violation it reports before other
+work continues ([Rule enforcement](docs/delivery-workflow.md#rule-enforcement)).
+
 ## Commit & Pull Request Guidelines
 
 Follow the scoped Conventional Commit-style subjects established by repository
@@ -232,8 +236,9 @@ Board moves, made in the same step as the action:
   not keep draft PRs open. When the PR opens, move the issue to `Code Review`.
   It stays there while CI, review, fixes, and owner authorization run; waiting
   on those gates is not `Blocked`.
-- Every open PR into `develop`, other than `release/*`, `hotfix/*`, and
-  back-merge PRs, has its issue in `Code Review`. Keep at most one open PR per
+- Every open PR into `develop`, other than `release/*` and `main`-into-`develop`
+  back-merge PRs, has its issue in `Code Review`; so does a `hotfix/*` PR into
+  `main`, which links its own ticket. Keep at most one open PR per
   issue and one `Code Review` card per PR, so these PRs match the
   `Code Review` cards one to one. When a PR also carries a fix for a second
   issue, that second issue gets no `Code Review` card: it moves to `Blocked`
