@@ -542,6 +542,9 @@ try {
 	foreach ($SyncCase in @(
 		# Interleaved revision: re-sync the workspace to this revision, then build.
 		@{ name = 'interleaved revision'; exit = '0'; residue = $false; reason = $null; detail = $null; head = $Revisions.tested; built = $true },
+		# Non-compile residue survives the sync, but the post-sync clean assertion
+		# must reject it through the parent's editor_workspace_dirty mapping.
+		@{ name = 'dirty workspace'; exit = '0'; residue = $false; stray = $true; reason = 'editor_workspace_dirty'; detail = $null; head = $Revisions.tested; built = $false },
 		# Through the control-checkout wrapper, UBT exit 5 (a deferred
 		# -NoEngineChanges refusal) records editor_build_engine_changes_required,
 		# any other exit editor_build_failed; the refused engine file list stays
@@ -554,6 +557,8 @@ try {
 		Invoke-AutomationFixtureGit $SyncTarget @('checkout', '-q', '--detach', $Revisions.interleaved)
 		$ResiduePath = Join-Path $SyncTarget 'Source\Residue.cpp'
 		if ($SyncCase.residue) { [IO.File]::WriteAllText($ResiduePath, 'editor output') }
+		$StrayPath = Join-Path $SyncTarget 'Stray.txt'
+		if ($SyncCase.ContainsKey('stray')) { [IO.File]::WriteAllText($StrayPath, 'non-compile residue') }
 		$env:AETHELN_FIXTURE_NATIVE_EXIT = $SyncCase.exit
 		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 		$JournalBefore = if (Test-Path -LiteralPath $env:AETHELN_ENGINE_HOST_LEASE) { [IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE) } else { '' }
@@ -569,11 +574,13 @@ try {
 		$Exclusive.Dispose()
 		Assert-True (-not $Visible.Contains($env:AETHELN_ENGINE_ROOT) -and -not $Visible.Contains($SyncRoot) -and -not $Visible.Contains('Building would modify')) "The $($SyncCase.name) case must print no local path or build output."
 		if ($null -ne $SyncCase.detail) { Assert-True ($Visible -ceq ('editor_build_detail code=' + $SyncCase.detail)) "The $($SyncCase.name) case must print only its fixed detail code." }
+		elseif (-not $SyncCase.built) { Assert-True ($Visible -ceq '') "The $($SyncCase.name) case must print no detail line or native build result." }
 		if ($SyncCase.built) {
 			Assert-True ($Visible.Contains('"nativeExitCode":' + $SyncCase.exit) -and [IO.File]::ReadAllText((Join-Path $EditorBuildEvidence 'build.log')).Contains('Building would modify')) "The $($SyncCase.name) case must print the native result record and keep build output runner-local."
 			Remove-Item -LiteralPath $EditorBuildEvidence -Recurse -Force
 		} else { Assert-True (-not (Test-Path -LiteralPath $EditorBuildEvidence)) "The $($SyncCase.name) case must stop before the editor build." }
 		if ($SyncCase.residue) { Remove-Item -LiteralPath $ResiduePath -Force }
+		if ($SyncCase.ContainsKey('stray')) { Remove-Item -LiteralPath $StrayPath -Force }
 	}
 	# A stale held record (a lease that was never released) blocks the re-sync:
 	# nothing is synchronized or built, and the journal stays for recovery.
