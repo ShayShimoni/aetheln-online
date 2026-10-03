@@ -153,10 +153,11 @@ launcher installation.
 | Module | Responsibility | May depend on | Must not own |
 | --- | --- | --- | --- |
 | `GameCore` | Framework types, shared identifiers, tags, policy interfaces, data definitions | Unreal runtime foundations | Combat implementation, vendor SDKs, UI |
-| `GameCombat` | GAS abilities/effects, attack timelines, combat traces, health, death | `GameCore`, required GAS/runtime modules | Persistence, sessions, vendor SDKs |
+| `GameCombat` | GAS abilities/effects, attack timelines, combat traces, health, death | `GameCore`, required GAS/runtime modules; private `GameNet` dependency for the structured observability service only ([TA-021](architecture-decisions.md#ta-021---private-gamecombat-dependency-on-the-gamenet-observability-service)) | Persistence, sessions, vendor SDKs |
 | `GameUI` | CommonUI screens, HUD, presentation view models | `GameCore`; presentation-safe combat interfaces | Authority decisions, direct service or database access |
-| `GameNet` | Sessions, admission, transfer client/server adapters, protocol boundaries | `GameCore`; vendor-neutral interfaces | Combat truth, durable state ownership |
+| `GameNet` | Sessions, admission, transfer client/server adapters, protocol boundaries, structured observability service | `GameCore`; vendor-neutral interfaces | Combat truth, durable state ownership |
 | `GameServer` | Dedicated-server composition, allocation hooks, service adapters, server-only orchestration | `GameCore`, `GameCombat`, `GameNet` | Client presentation assets |
+| `GameTests` | Editor-only Unreal automation harness (#85): project and module load tests. Module type `Editor`, listed only by the Editor target | `Core` (private) | Gameplay, runtime, or server code; anything a game, client, or server target loads |
 
 Rules:
 

@@ -5,9 +5,9 @@
 GitHub issue [#100](https://github.com/ShayShimoni/aetheln-online/issues/100)
 is a one-time P0 Prototype Gate learning exception under Epic #6. It validates
 local movement, camera, animation, and traversal feel before the networked
-movement story. Issue #17 remains in Backlog and still owns saved-move
-prediction, replication, server validation, correction, and multiplayer
-evidence.
+movement story. Issue #17 now replicates sprint and aim steering through
+predicted saved-move flags, simulates jump takeoff, backpedal speed, and body
+facing on the server, and still owns packaged multiplayer evidence.
 
 This POC is temporary. Quinn is an engine mannequin, not an approved Aetheln
 race, sex, class, silhouette, animation set, or combat property. None of the
@@ -149,7 +149,7 @@ so the pose blends briefly without delaying movement.
 - Walk: 500 cm/s
 - Backpedal: 350 cm/s (70% movement scale); backward and backward-diagonal
   movement cannot sprint
-- Standalone-only provisional forward/lateral sprint: 700 cm/s
+- Provisional forward/lateral sprint: 700 cm/s
 - Jump velocity: 500 cm/s
 - Landing jump buffer: 0.20 seconds
 - Air control: 0.0; horizontal trajectory locks after takeoff
@@ -217,9 +217,162 @@ focus returns.
 Jump and sprint state are cleared on cancellation, focus loss, unpossession,
 component destruction, and PIE shutdown.
 
-Sprint is deliberately disabled while backpedaling and outside standalone
-play. A non-standalone attempt emits one development warning. This prevents
-the POC shortcut from being mistaken for validated multiplayer movement.
+Sprint is deliberately disabled while backpedaling. Issue #17 replicates it:
+`UAethelnCharacterMovementComponent` packs sprint intent into the predicted
+saved move as `FLAG_Custom_0`. The server enforces the 500 cm/s walk and
+700 cm/s sprint caps and allows the sprint cap only while walking with non-zero
+acceleration that is not backward relative to control yaw. Any other sprint
+request is simulated at the walk cap, and a client that predicted sprint anyway
+is corrected. Clients never send speeds.
+
+The server also enforces the 350 cm/s backpedal: the client still scales
+backward input to 70%, and the server holds backward movement to the same
+speed even when a client sends full-magnitude backward acceleration.
+
+Jump takeoff runs inside the movement simulation (`DoJump`), so client
+prediction, correction replay, and the server compute the same takeoff from the
+move's own acceleration and control yaw. The takeoff replaces horizontal
+velocity with the held direction at the move's speed cap (so a sprint jump on
+the first movement frame launches at 700 cm/s) and snaps facing to travel or
+camera yaw as described above. A buffered jump fires on the move after landing,
+on both client and server. Correction replay judges backpedal and takeoff facing
+against the yaw each move was recorded with, also when a later correction
+replays the same move again.
+
+Body facing is part of the same simulation. Aim steering (Reticle mode) travels
+in the saved move as `FLAG_Custom_1`; `FLAG_Custom_2` and `FLAG_Custom_3`
+remain free. `UAethelnCharacterMovementComponent::PhysicsRotation` selects the
+rotation mode for every move from that flag, the move's acceleration, and its
+control yaw: on the ground, aim or backpedal faces the camera at the 720
+degrees/s rate and anything else faces travel; airborne, aim faces the camera
+unless the takeoff was a pure lateral aimed jump, whose sideways body then
+turns with camera yaw while aim is held and holds still while it is released.
+Camera facing turns toward the move's own control yaw, so correction replay
+uses the recorded yaw rather than the live camera. The aim-tracked jump state
+is saved with each client move, so a correction replay restores it too. The
+owning client's prediction and replay and the server therefore compute the
+same facing, and remote players receive it through ordinary replicated
+movement. A client can only request aim; it sends no body rotation (only the
+control rotation every move already carries), and the server never turns the
+body faster than the rotation rate except at the takeoff and airborne-tracking
+snaps described above. The visible mesh-yaw blends stay local presentation.
+
+`Aetheln.Movement.Net.*` covers the flag round trip, the server speed and
+backpedal clamps, rejected requests, client/server takeoff parity on a
+land-and-rejump direction change, takeoff replay, once and repeated, with a
+turned camera (also for an aimed diagonal jump with aim released), airborne
+tracking replay across an aim release and re-press, and server and
+simulated-proxy facing equal to the owning client's for aimed diagonal jumps,
+Reticle strafing, S backpedal, and pure lateral airborne aim tracking, plus
+bounds on what a client can obtain through the aim flag (rate-limited facing,
+no extra speed).
+
+Known limits: remote players do not see the local mesh-yaw presentation (the
+35-degree strafe and 25-degree aim-jump turns), and their locomotion Animation
+Blueprint does not yet know the rotation mode, so it uses the travel-facing
+direction clamp. Airborne aim tracking sets server facing to camera yaw plus
+the held offset on every aimed move, with no rate limit; a future directional
+block that reads authoritative facing may need one.
+
+### Correction and rubber-banding
+
+This section records what the project code and the pinned engine source do
+today. It reports no measurement. Engine paths are relative to the engine
+root; `CharacterMovementComponent.cpp` below is
+`Engine/Source/Runtime/Engine/Private/Components/CharacterMovementComponent.cpp`.
+
+- When the server corrects: the server simulates each client move itself, then
+  `ServerMoveHandleClientError` calls `ServerCheckClientError`, which calls
+  `ServerExceedsAllowablePositionError` (`CharacterMovementComponent.cpp`).
+  That function asks for a correction in two cases only: the packed movement
+  mode differs from the client's, or the squared distance between the server
+  location and the location the client reported exceeds
+  `MAXPOSITIONERRORSQUARED` (`AGameNetworkManager::ExceedsAllowablePositionError`).
+  Facing and rotation are not part of that comparison. The tolerance is the
+  engine default: `Config/DefaultGame.ini` has no
+  `[/Script/Engine.GameNetworkManager]` section, so `Engine/Config/BaseGame.ini`
+  and `Engine/Source/Runtime/Engine/Private/GameNetworkManager.cpp` apply
+  `MAXPOSITIONERRORSQUARED=3.0` (cm squared, about 1.7 cm),
+  `ClientAuthorativePosition=false` (the server does not adopt the client
+  position), `ClientErrorUpdateRateLimit=0.0`, and movement time-discrepancy
+  detection off. Corrections are throttled twice. With the rate limit at 0,
+  `AGameNetworkManager::WithinUpdateDelayBounds` falls back to a spacing from
+  `CLIENTADJUSTUPDATECOST` and the connection's net speed, and inside that
+  window `ServerMoveHandleClientError` returns early, before the error check.
+  The character movement component then applies its own defaults:
+  `NetworkMinTimeBetweenClientAdjustments` 0.10 s, or
+  `NetworkMinTimeBetweenClientAdjustmentsLargeCorrection` 0.05 s for a large
+  correction, which is an error over `NetworkLargeClientCorrectionDistance`
+  (15 cm) or a movement-mode mismatch.
+- Project bounds: these shape the server's own simulation of a move. In
+  `Source/GameCore/Private/AethelnCharacterMovementComponent.cpp`,
+  `GetMaxSpeed` returns the sprint cap only while walking, not crouched, with
+  non-zero acceleration and no backpedal, and the walk cap on foot otherwise;
+  it holds backpedal to `BackpedalSpeedScale` (0.7) of the walk cap;
+  `MoveAutonomous` clamps each move's acceleration to `MaxAcceleration`. A
+  client that predicted more speed or acceleration than these allow ends at a
+  different location, which is position error, so the check above corrects it.
+  `PhysicsRotation` turns the body at the rotation rate toward the move's
+  travel direction or its own control yaw, apart from the takeoff and
+  airborne-tracking snaps described above. A facing disagreement is never
+  corrected: rotation does not enter the check, so the server's facing simply
+  replicates to remote players. The tests
+  `Aetheln.Movement.Net.ServerSpeedClamp`, `InvalidSprintRejected` and
+  `FacingSpoofBounded` cover these bounds, and `JumpTakeoffParity` asserts that
+  the server accepts every predicted client location through
+  `ServerExceedsAllowablePositionError`.
+- How the owning client reconciles: `p.NetUsePackedMovementRPCs` defaults to 1
+  (`CharacterMovementComponent.cpp`), so a correction reaches the client in a
+  packed move response and `ClientHandleMoveResponse` calls
+  `ClientAdjustPosition_Implementation`. That function acknowledges the move,
+  teleports the pawn to the server location without smoothing, takes the
+  server velocity and movement mode, and flags a replay. On the next tick
+  `ClientUpdatePositionAfterServerUpdate` replays every unacknowledged saved
+  move and calls each move's `PrepMoveFor`, where
+  `FSavedMove_Aetheln::PrepMoveFor` restores the project's aim-tracked jump
+  state. A correction carries no rotation (`ShouldCorrectRotation()` returns
+  false in
+  `Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h`);
+  while `bOrientRotationToMovement` or `bUseControllerDesiredRotation` is set,
+  the engine restores the last acknowledged move's rotation before the replay
+  (`p.UseLastGoodRotationDuringCorrection`, default 1). Sprint and aim intent,
+  recorded yaw, and takeoff and tracking replay are described in the
+  [Movement baseline](#movement-baseline) text above and are not repeated here.
+- What remote players see: they are simulated proxies and do not predict or
+  replay moves. `ACharacter::OnRep_ReplicatedMovement` forwards to
+  `AActor::OnRep_ReplicatedMovement`
+  (`Engine/Source/Runtime/Engine/Private/ActorReplication.cpp`), which calls
+  `ACharacter::PostNetReceiveLocationAndRotation`, and that passes the update to
+  `SmoothCorrection` (`Engine/Source/Runtime/Engine/Private/Character.cpp`).
+  The based-movement path, `ACharacter::OnRep_ReplicatedBasedMovement`, also
+  calls `SmoothCorrection`. `SmoothClientPosition` then decays the mesh offset
+  (`CharacterMovementComponent.cpp`). `NetworkSmoothingMode` is the
+  engine default, `Exponential`. The project overrides neither it nor the
+  smoothing times and distances below in `Config/`, in `Source/`, or in
+  `Content/POC/BP_MovementPOCCharacter.uasset` (a string search of that asset,
+  not an editor inspection). The defaults are `NetworkSimulatedSmoothLocationTime`
+  0.100 s and `NetworkSimulatedSmoothRotationTime` 0.050 s (0.040 s and 0.033 s
+  on a listen server). For a correction larger than
+  `NetworkMaxSmoothUpdateDistance` (256 cm) the starting visual offset is capped
+  at that distance, and beyond `NetworkNoSmoothUpdateDistance` (384 cm) the
+  proxy is not smoothed and snaps. The local mesh-yaw blends in this POC are
+  owning-client presentation and are separate from this network smoothing.
+- What the player sees as rubber-banding: a correction snaps the owning client
+  to the server position and replays the unacknowledged moves from there. This
+  is expected engine behavior, not something observed in this project: a small
+  difference is hardly visible, while a large correction, or many in a short
+  time, shows as the pawn jumping back toward the server's path.
+- Measurement status: correction frequency, correction magnitude, and recovery
+  time under latency, jitter, and packet-loss profiles, for both the owning
+  client and remote players, are `TBD` and not yet measured. Issue
+  [#45](https://github.com/ShayShimoni/aetheln-online/issues/45) (client,
+  server, and bandwidth performance budgets) owns them. The networked spike
+  pawn's `UAethelnSpikeMovementComponent`
+  (`Source/GameCombat/Private/AethelnSpikeMovementComponent.cpp:39-89`) already
+  emits Correction and Rejection observability events, which are an input for
+  that measurement. Apart from the POC backpedal scale (0.7, owner-confirmed in
+  the tuning table below), every value in this section is an engine default,
+  not a tuned project decision, kept until evidence resolves it.
 
 ## Verification and feedback
 

@@ -33,6 +33,29 @@ foreach ($FunctionName in @('ConvertTo-DriverLiteral', 'ConvertTo-DriverValueTex
 	$Definition = $Definition.Replace('$PSCommandPath', ("'" + $GatePath.Replace("'", "''") + "'"))
 	. ([scriptblock]::Create($Definition))
 }
+$WorkspaceCatch = @($GateAst.FindAll({ param($Node)
+	$Node -is [Management.Automation.Language.TryStatementAst] -and
+	@($Node.CatchClauses | Where-Object { $_.Extent.Text -match "Add-Check -Name 'managed-compile-workspace'" }).Count -eq 1
+}, $true))
+if ($WorkspaceCatch.Count -ne 1) { throw 'Expected one managed workspace report catch.' }
+$WorkspaceCatchDefinition = 'function Invoke-FixtureWorkspaceCatch { param([string] $FixtureReason) try { throw $FixtureReason } ' +
+	$WorkspaceCatch[0].CatchClauses[0].Extent.Text + ' }'
+. ([scriptblock]::Create($WorkspaceCatchDefinition))
+foreach ($Case in @(
+	@('managed_workspace_partial_checkout', 'managed_workspace_partial_checkout'),
+	@('managed_workspace_checkout_failed', 'managed_workspace_checkout_failed'),
+	@('compile_timeout', 'compile_timeout'),
+	@('unsafe raw Git stderr: token=value', 'managed_workspace_failed')
+)) {
+	$script:Checks = New-Object System.Collections.ArrayList
+	$script:WorkspaceStarted = [DateTime]::UtcNow
+	$Observed = ''
+	try { Invoke-FixtureWorkspaceCatch -FixtureReason $Case[0] } catch { $Observed = $_.Exception.Message }
+	if ($Observed -cne $Case[1] -or $script:Checks.Count -ne 1 -or $script:Checks[0].status -cne 'failed' -or $script:Checks[0].message -cne $Case[1]) {
+		throw ('Managed workspace report did not preserve a safe reason: ' + $Case[0])
+	}
+}
+Write-Output 'PASS managed-workspace-safe-failure-reporting'
 $OuterTry = @($GateAst.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.TryStatementAst] })
 if ($OuterTry.Count -ne 1 -or $OuterTry[0].CatchClauses.Count -ne 1) { throw 'Expected exactly one outer gate try/catch/finally.' }
 # Exercise the real outer catch/finally and real report publisher without the

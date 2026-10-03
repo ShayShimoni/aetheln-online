@@ -22,6 +22,26 @@ runtime inclusion, or production approval. The appropriate owner must attach
 and review the applicable license or permission evidence before any broader
 use.
 
+## Generating tool and model by source class
+
+The generating tool and the generating model/version are two further
+independent states. Neither establishes, implies, or substitutes for the other
+or for any of the five states above. A model/version with no retained record is
+recorded as **Pending/TBD** and is never inferred from the tool name.
+
+| Source class | Generating tool | Model/version |
+| --- | --- | --- |
+| Owner-supplied legacy package | **Pending/TBD**: no generating tool is recorded for this source class. | **Pending/TBD**: 35 legacy PNGs (seven top-level, 28 under `ui-production*/`) carry a C2PA `softwareAgent` declaration of `gpt-image` version `2.0`, not verified here. No generation record is retained for the legacy package, so that declaration is not adopted as its model/version. |
+| Owner-directed issue #114 generation | Built-in OpenAI image workflow, per the source-class evidence above. | `gpt-image` version `2.0`, as declared by the `softwareAgent` of the `c2pa.created` action in the embedded C2PA manifest of each of the ten issue #114 concepts. The C2PA signatures are not validated here, so this is the declared model/version, not a verified one. |
+| Repository-hardened text derivatives | Not applicable: repository-authored text edits recorded in git history. | Not applicable: no generated output. |
+
+## Reference originality
+
+Concept references must not imitate identifiable franchise art or a named
+artist's style. A prompt must not name a franchise, its characters or
+settings, or an artist as a style target, and a reference that reads as such an
+imitation is not eligible for import or approval.
+
 ## Per-asset governance states
 
 Every row records the five states independently. `Provenance/custody` states how

@@ -62,7 +62,9 @@ subordinate to the specialized canonical product and technical documents.
   environment, retention, and downstream-ownership contracts.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
-  constraints, and machine-readable evidence path.
+  constraints, and machine-readable evidence path, plus the Issue #167
+  accepted-base selector, receipt, aggregate, activation, and live-observation
+  contracts used to recover and evolve CI without creating false authority.
 - [Unreal Automation](unreal-automation.md) records the pinned headless harness,
   exact Issue #85 tests and discovery contract, fail-closed behavior, local
   invocation, and normalized evidence schema.

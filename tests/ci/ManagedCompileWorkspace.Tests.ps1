@@ -42,7 +42,7 @@ foreach ($Reason in @('compile_timeout', 'resource_pressure', 'disk_floor_reache
 	Assert-ManagedRejection -Action { Sync-ManagedCompileWorkspace @EarlyParameters } -Reason $Reason
 }
 Write-Output 'PASS monotonic-admission-and-progress-reasons'
-foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'autocrlf', 'dirty', 'index', 'collision', 'ignored-collision', 'untracked-input', 'lfs-pointer', 'expired', 'wrong-control', 'trust', 'generated', 'symlink-mode', 'case-collision', 'wrong-common', 'same-root', 'volume-root', 'relative-root', 'reparse-root', 'hydrated-lfs', 'nonselected-lfs-pointer', 'external-descriptor', 'newline-revision', 'monotonic-forward-utc')) {
+foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'autocrlf', 'dirty', 'index', 'partial-checkout', 'collision', 'ignored-collision', 'untracked-input', 'lfs-pointer', 'expired', 'wrong-control', 'trust', 'generated', 'symlink-mode', 'case-collision', 'wrong-common', 'same-root', 'volume-root', 'relative-root', 'reparse-root', 'hydrated-lfs', 'nonselected-lfs-pointer', 'external-descriptor', 'newline-revision', 'monotonic-forward-utc')) {
 	$Control = Join-Path $FixtureRoot ($Case + '-control')
 	$Target = Join-Path $FixtureRoot ($Case + '-target')
 	$null = New-Item -ItemType Directory -Path $Control
@@ -69,6 +69,7 @@ foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'autocrlf', 'dir
 	if ($Case -eq 'hydrated-lfs') { Set-ManagedFixtureFile -Root $Target -Path $LfsPath -Value $Payload }
 	if ($Case -in @('different', 'linked', 'collision')) { Set-ManagedFixtureFile -Root $Control -Path 'Source/new.cpp' -Value '// new' }
 	if ($Case -eq 'autocrlf') { Set-ManagedFixtureFile -Root $Control -Path 'Source/new.cpp' -Value "// new`n" }
+	if ($Case -eq 'partial-checkout') { Set-ManagedFixtureFile -Root $Control -Path 'Source/input.cpp' -Value "// incoming`n" }
 	if ($Case -eq 'ignored-collision') { Set-ManagedFixtureFile -Root $Control -Path 'ignored.txt' -Value 'tracked'; $null = Invoke-ManagedFixtureGit -Root $Control -Arguments @('add', '-f', 'ignored.txt') }
 	if ($Case -eq 'lfs-pointer') { Set-ManagedFixtureFile -Root $Control -Path 'Content/test.uasset' -Value ("version https://git-lfs.github.com/spec/v1`noid sha256:" + ('a' * 64) + "`nsize 500`n") }
 	if ($Case -eq 'generated') { Set-ManagedFixtureFile -Root $Control -Path 'Binaries/tracked.bin' -Value 'bad'; $null = Invoke-ManagedFixtureGit -Root $Control -Arguments @('add', '-f', 'Binaries/tracked.bin') }
@@ -83,6 +84,12 @@ foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'autocrlf', 'dir
 	$null = Invoke-ManagedFixtureGit -Root $Control -Arguments @('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'candidate')
 	$Revision = Invoke-ManagedFixtureGit -Root $Control -Arguments @('rev-parse', 'HEAD')
 	if ($Case -eq 'same') { $null = Invoke-ManagedFixtureGit -Root $Target -Arguments @('fetch', '--quiet', $Control, $Revision); $null = Invoke-ManagedFixtureGit -Root $Target -Arguments @('checkout', '--quiet', '--detach', $Revision) }
+	if ($Case -eq 'partial-checkout') {
+		$null = Invoke-ManagedFixtureGit -Root $Target -Arguments @('fetch', '--quiet', $Control, $Revision)
+		$null = Invoke-ManagedFixtureGit -Root $Target -Arguments @('read-tree', $Revision)
+		$null = Invoke-ManagedFixtureGit -Root $Target -Arguments @('checkout-index', '-a', '-f')
+		Assert-ManagedFixture -Condition ((Invoke-ManagedFixtureGit -Root $Target -Arguments @('rev-parse', 'HEAD')) -ceq $Old) -Message 'Partial-checkout fixture advanced HEAD'
+	}
 	if ($Case -in @('dirty', 'index')) { Set-ManagedFixtureFile -Root $Target -Path 'Source/input.cpp' -Value '// dirty' }
 	if ($Case -eq 'index') { $null = Invoke-ManagedFixtureGit -Root $Target -Arguments @('add', 'Source/input.cpp') }
 	if ($Case -eq 'collision') { Set-ManagedFixtureFile -Root $Target -Path 'Source/new.cpp' -Value 'preserve' }
@@ -106,6 +113,7 @@ foreach ($Case in @('same', 'different', 'same-tree', 'linked', 'autocrlf', 'dir
 	}
 	$Expected = switch ($Case) {
 		'dirty' { 'managed_workspace_dirty' }; 'index' { 'managed_workspace_index_mismatch' }
+		'partial-checkout' { 'managed_workspace_partial_checkout' }
 		'collision' { 'managed_workspace_collision' }; 'ignored-collision' { 'managed_workspace_collision' }
 		'untracked-input' { 'managed_workspace_untracked_input' }; 'lfs-pointer' { 'managed_workspace_lfs_hydration_required' }
 		'expired' { 'managed_workspace_deadline' }; 'wrong-control' { 'managed_workspace_revision_mismatch' }
@@ -143,6 +151,7 @@ Assert-ManagedFixture -Condition ($NativeContext.clock.Elapsed.TotalSeconds -lt 
 Write-Output 'PASS native-deadline'
 $NativeFailureContext = @{ remainingBudget = { 30000 }; milliseconds = [double]::PositiveInfinity; clock = [Diagnostics.Stopwatch]::StartNew(); progress = $null; git = $NativeContext.git; pins = @{} }
 Assert-ManagedRejection -Action { Invoke-ManagedWorkspaceGit -Root $Control -Arguments 'rev-parse --verify refs/heads/aetheln-managed-workspace-missing' -Context $NativeFailureContext } -Reason 'managed_workspace_git_failed'
+Assert-ManagedRejection -Action { Invoke-ManagedWorkspaceGit -Root $Control -Arguments 'rev-parse --verify refs/heads/aetheln-managed-workspace-missing' -Context $NativeFailureContext -FailureReason 'managed_workspace_checkout_failed' } -Reason 'managed_workspace_checkout_failed'
 Write-Output 'PASS native-failure-closed'
 $MonotonicContext = @{ deadline = [DateTime]::UtcNow.AddDays(-1); seconds = -1; clock = [pscustomobject]@{ Elapsed = [TimeSpan]::Zero }; progress = $null; remainingBudget = { 1000 }; milliseconds = [double]::PositiveInfinity }
 Assert-ManagedWorkspaceProgress -Context $MonotonicContext
