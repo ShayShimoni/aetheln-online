@@ -388,6 +388,8 @@ try {
 	$ControllerBlobOid=[string]@(Invoke-FixtureGit @('rev-parse',"$HeadRevision`:$ControllerPath"))[0]
 	$IdentityHasher=[Security.Cryptography.SHA256]::Create()
 	try { $ControllerSha256=([BitConverter]::ToString($IdentityHasher.ComputeHash((Invoke-BoundedGitBytes $FixtureRepo @('cat-file','blob',$ControllerBlobOid)).Stdout))).Replace('-','').ToLowerInvariant() } finally { $IdentityHasher.Dispose() }
+	# The extracted block reads both values; this static use also keeps PSScriptAnalyzer from flagging them as unused.
+	Assert-True ($ControllerBlobOid -ceq $NormalIdentity.oid -and $ControllerSha256 -ceq $NormalIdentity.sha256) 'The workflow-style controller identity must equal the selector identity.'
 	. ([scriptblock]::Create($IdentityCheck.Value))
 	# The consumers' context builder accepts the same report on the gap path.
 	$BuilderArguments=@{
