@@ -630,14 +630,15 @@ $ReceiptContracts = @(
 	@{ Name='visual-receipt-shadow'; Body=$VisualReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.visual_package_required == 'true'"; Producer='visual-proof'; ArtifactOutput='report_artifact_id'; Key='visual'; RawName="'visual-package-report-'"; Evidence='visual' }
 )
 # aggregate_ready and the context builder's gap computation must agree on the
-# exact set of obligations that have a live receipt producer.
+# exact set of obligations that have a live receipt producer. Publish-CiAcceptanceReceipt.Tests.ps1 ties both lists to the
+# publisher contracts.
 $ContextBuilderSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\New-CiAcceptanceAggregateContext.ps1') -Raw
 $WorkflowLiveChecks = [regex]::Matches($ShadowSelection, '(?m)^\s*\$LiveProducerChecks = @\((?<list>[^)]*)\)\r?$')
 $BuilderLiveChecks = [regex]::Matches($ContextBuilderSource, '(?m)^\s*\$LiveChecks=@\((?<list>[^)]*)\)\r?$')
 Assert-True ($WorkflowLiveChecks.Count -eq 1 -and $BuilderLiveChecks.Count -eq 1) 'The workflow and context builder must each declare exactly one live producer check list.'
 $WorkflowLiveList = @([regex]::Matches($WorkflowLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
 $BuilderLiveList = @([regex]::Matches($BuilderLiveChecks[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }) -join ','
-Assert-True ($WorkflowLiveList -ceq $BuilderLiveList -and $WorkflowLiveList -ceq 'controller-contract,controller-operational-proof,native-client-server-compile,portable,unreal-editor-automation,visual-package') 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
+Assert-True ($WorkflowLiveList -ceq $BuilderLiveList) 'Workflow aggregate readiness and the context builder gap mode must use the same live producer checks.'
 # The aggregate binds the native receipt when either native obligation is selected; any other selector output pair must still fail closed.
 Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_OPERATIONAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$NativeProducerRequired \`$env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow'" -and $AcceptanceShadow -match "\`$NativeProducerRequired = if \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true'\) \{ 'true' \} elseif \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false'\) \{ 'false' \} else \{ 'invalid' \}") 'The aggregate must bind the native receipt for either native obligation and reject any other selector output pair.'
 Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_UNREAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$env:AETHELN_UNREAL_REQUIRED \`$env:AETHELN_UNREAL_RESULT 'unreal' 'unreal-receipt-shadow'" -and $AcceptanceShadow.IndexOf("'portable' 'portable-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'unreal' 'unreal-receipt-shadow'") -and $AcceptanceShadow.IndexOf("'unreal' 'unreal-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'visual' 'visual-receipt-shadow'")) 'The aggregate must bind the unreal receipt from its own selector output in key order.'
