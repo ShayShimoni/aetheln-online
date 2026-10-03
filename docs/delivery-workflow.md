@@ -103,12 +103,27 @@ one bounded lane and never move the board, merge, or edit another lane.
 
 `scripts/delivery/Test-BoardIntegrity.ps1` reads the board and open PRs
 through the locally authenticated `gh` and reports each violation as
-`<rule-id> #<issue> <detail>`: a `Done` issue with an unchecked box, an open
-PR whose issue is not in `Code Review` or `Blocked`, a closed issue outside
-`Done`, `Release Candidate`, or `Released`, an open issue in `Done` or
-`Released`, a `Release Candidate` or `Released` item without `Release`, and a
-`Blocked` item without `Blocked Reason`. It exits 1 on any violation; `-Json`
-emits the same result for tooling.
+`<rule-id> #<number> <detail>`. It exits 1 on any violation; `-Json` emits
+the same result for tooling. It reports:
+
+- `done-unchecked-acceptance`: a `Done` issue with an unchecked box.
+- `closed-issue-status`: a closed issue outside `Done`, `Release Candidate`,
+  or `Released`.
+- `open-issue-final-status`: an open issue in `Done` or `Released`.
+- `release-field-empty`: a `Release Candidate` or `Released` item without
+  `Release`.
+- `blocked-reason-empty`: a `Blocked` item without `Blocked Reason`.
+- `draft-pr-open`: an open draft PR, reported by its PR number.
+- `open-pr-issue-status`: an open PR whose issue is not in `Code Review`, or
+  is not on the board.
+- `code-review-without-pr`: a `Code Review` issue that no open PR links.
+- `duplicate-pr-issue`: an issue that more than one open PR links.
+
+A PR links an issue through a `#<issue>` in its title or a GitHub closing
+reference. The body's `Refs #<issue>` lines are not links, so the second
+issue of a carried fix can sit in `Blocked` as that rule requires. The last
+three rules skip `release/*`, `hotfix/*`, and `main`-into-`develop`
+back-merge PRs, which ship work already tracked on its own tickets.
 
 Run it at session start, after every merge, and before every release cut. A
 violation is fixed, or ticketed when it cannot be fixed at once, before other
@@ -119,7 +134,10 @@ needs no project access. It fails a PR whose base is `main` and whose head is
 not `release/*` or `hotfix/*`, whose head branch does not start with
 `feature/`, `fix/`, `docs/`, `chore/`, `release/`, `hotfix/`, or `codex/`
 (head `main` is allowed only as a back-merge into `develop`), or whose title
-lacks `#<issue>`; only a `release/*` PR to `main` may omit it.
+lacks `#<issue>`. A `release/*` PR, into `main` or merging release fixes back
+into `develop`, and the `main`-into-`develop` back-merge may omit the issue,
+because they carry several tickets rather than one. A `hotfix/*` PR has its
+own ticket, so its title still needs it.
 
 ## Checks, protection, and merge
 
