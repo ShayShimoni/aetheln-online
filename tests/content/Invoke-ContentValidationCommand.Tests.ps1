@@ -44,7 +44,7 @@ function Get-TextSha256([string] $Value) {
 	}
 }
 
-function Build-Fakes {
+function Initialize-FakeBin {
 	param([string] $FakeBin)
 
 	New-Item -ItemType Directory -Path $FakeBin -Force | Out-Null
@@ -328,7 +328,9 @@ public static class FakeUnrealEditorForContentValidation {
 	Add-Type -TypeDefinition $EditorSource -OutputAssembly (Join-Path $FakeBin 'UnrealEditor-Cmd.exe') -OutputType ConsoleApplication
 }
 
-function New-Case([string] $Name, [string] $FakeBin) {
+function New-Case {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Creates a throwaway fixture tree under the test-owned temporary root and must run unattended.')]
+	param([string] $Name, [string] $FakeBin)
 	$Root = Join-Path $FixtureRoot $Name
 	$Repository = Join-Path $Root 'repo'
 	$Engine = Join-Path $Root 'engine'
@@ -465,7 +467,9 @@ exit /b %ERRORLEVEL%
 	}
 }
 
-function Invoke-Case([string] $Name, [string] $FakeBin, [string] $EditorCase = 'success', [string] $GitCase = 'clean', [bool] $UseSnapshot = $false, [bool] $AllowSnapshot = $false, [int] $TimeoutSeconds = 5, [string] $BuildCase = 'success', [string] $OutputAttack = 'none', [int] $BuildTimeoutSeconds = 10) {
+function Invoke-Case {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'Each Start-Job scriptblock declares its own param() block and receives every value through -ArgumentList, so no Using: capture is involved.')]
+	param([string] $Name, [string] $FakeBin, [string] $EditorCase = 'success', [string] $GitCase = 'clean', [bool] $UseSnapshot = $false, [bool] $AllowSnapshot = $false, [int] $TimeoutSeconds = 5, [string] $BuildCase = 'success', [string] $OutputAttack = 'none', [int] $BuildTimeoutSeconds = 10)
 	$Fixture = New-Case $Name $FakeBin
 	$AttackJob = $null
 	$AttackResult = $null
@@ -737,7 +741,7 @@ public static class AethelnContentFixtureMountPoint {
 	Remove-Item Env:AETHELN_CONTENT_TEST_HELD_SEAM_ROOT -ErrorAction SilentlyContinue
 	$Report = $null
 	if (Test-Path -LiteralPath $Fixture.report -PathType Leaf) {
-		try { $Report = Get-Content -LiteralPath $Fixture.report -Raw | ConvertFrom-Json } catch { }
+		try { $Report = Get-Content -LiteralPath $Fixture.report -Raw | ConvertFrom-Json } catch { Write-Verbose "The fixture report could not be parsed and stays unset: $($_.Exception.Message)" }
 	}
 	return [ordered]@{ fixture = $Fixture; snapshot = $Snapshot; snapshotSha256 = $SnapshotSha256; exitCode = $ExitCode; output = $Output; report = $Report; attackResult = $AttackResult; protectedHashBefore = $ProtectedHashBefore; protectedHashAfter = $ProtectedHashAfter; secondExitCode = $SecondExitCode; secondOutput = $SecondOutput; secondStartedBuild = $SecondStartedBuild; canonicalBeforeRelease = $CanonicalBeforeRelease }
 }
@@ -786,7 +790,7 @@ try {
 
 	New-Item -ItemType Directory -Path $FixtureRoot -Force | Out-Null
 	$FakeBin = Join-Path $FixtureRoot 'fake-bin'
-	Build-Fakes $FakeBin
+	Initialize-FakeBin -FakeBin $FakeBin
 	$OriginalPath = $env:PATH
 	$env:PATH = $FakeBin + [IO.Path]::PathSeparator + $OriginalPath
 
@@ -886,12 +890,12 @@ try {
 		Assert-True (@($CapturedArguments | Where-Object { $_.StartsWith($Prefix, [StringComparison]::Ordinal) }).Count -eq 1) "The commandlet argument '$Prefix' must occur exactly once."
 	}
 
-	$Snapshot = Invoke-Case 'snapshot' $FakeBin 'success' 'clean' $true $true
+	$Snapshot = Invoke-Case -Name 'snapshot' -FakeBin $FakeBin -EditorCase 'success' -GitCase 'clean' -UseSnapshot $true -AllowSnapshot $true
 	Assert-True ($Snapshot.exitCode -eq 0 -and $Snapshot.report.execution_provenance.registry_source -ceq 'test_snapshot') "Explicitly authorized test snapshot failed: $($Snapshot.output)"
 	$SnapshotArguments = [IO.File]::ReadAllLines($Snapshot.fixture.editorCapture)
 	Assert-True (@($SnapshotArguments | Where-Object { $_ -ceq '-AllowTestRegistrySnapshot' }).Count -eq 1) 'The guarded snapshot marker must reach the commandlet.'
 	Assert-True (@($SnapshotArguments | Where-Object { $_.StartsWith('-RegistrySnapshot=', [StringComparison]::Ordinal) }).Count -eq 1) 'The exact snapshot path must reach the commandlet.'
-	$SwapRestore = Invoke-Case 'snapshot-swap-restore' $FakeBin 'snapshot-swap-restore' 'clean' $true $true
+	$SwapRestore = Invoke-Case -Name 'snapshot-swap-restore' -FakeBin $FakeBin -EditorCase 'snapshot-swap-restore' -GitCase 'clean' -UseSnapshot $true -AllowSnapshot $true
 	Assert-True ($SwapRestore.exitCode -ne 0 -and $SwapRestore.output -match 'exit code 33' -and (Get-Content -LiteralPath $SwapRestore.fixture.report -Raw) -ceq '{"stale":true}' -and (Get-Sha256 $SwapRestore.snapshot) -ceq $SwapRestore.snapshotSha256) "A synchronized snapshot swap must fail on digest mismatch while preserving the previous report. exit=$($SwapRestore.exitCode) output=$($SwapRestore.output)"
 	$SnapshotDigestArguments = @($SnapshotArguments | Where-Object { $_.StartsWith('-RegistrySnapshotSha256=', [StringComparison]::Ordinal) })
 	Assert-True ($SnapshotDigestArguments.Count -eq 1 -and $SnapshotDigestArguments[0].Substring('-RegistrySnapshotSha256='.Length) -ceq $Snapshot.snapshotSha256) 'The guarded snapshot invocation must bind the captured lowercase snapshot SHA-256 exactly once.'
@@ -901,11 +905,11 @@ try {
 	$LiveArguments = [IO.File]::ReadAllLines($Success.fixture.editorCapture)
 	Assert-True (@($LiveArguments | Where-Object { $_.StartsWith('-RegistrySnapshot=', [StringComparison]::Ordinal) -or $_.StartsWith('-RegistrySnapshotSha256=', [StringComparison]::Ordinal) -or $_ -ceq '-AllowTestRegistrySnapshot' }).Count -eq 0) 'Live-registry mode must emit no snapshot-only invocation members.'
 
-	$UnguardedSnapshot = Invoke-Case 'unguarded-snapshot' $FakeBin 'success' 'clean' $true $false
+	$UnguardedSnapshot = Invoke-Case -Name 'unguarded-snapshot' -FakeBin $FakeBin -EditorCase 'success' -GitCase 'clean' -UseSnapshot $true -AllowSnapshot $false
 	Assert-True ($UnguardedSnapshot.exitCode -ne 0 -and -not (Test-Path -LiteralPath $UnguardedSnapshot.fixture.buildCapture) -and -not (Test-Path -LiteralPath $UnguardedSnapshot.fixture.editorCapture)) 'A snapshot path without explicit test authorization must fail before build or editor launch.'
 
 	foreach ($Case in @(@('dirty','success','dirty','clean repository'), @('tag-mismatch','success','tag-mismatch','engine tag'), @('head-mismatch','success','engine-head-mismatch','engine revision'))) {
-		$Run = Invoke-Case $Case[0] $FakeBin $Case[1] $Case[2]
+		$Run = Invoke-Case -Name $Case[0] -FakeBin $FakeBin -EditorCase $Case[1] -GitCase $Case[2]
 		Assert-True ($Run.exitCode -ne 0 -and $Run.output -match $Case[3]) "$($Case[0]) must fail closed with an actionable diagnostic. Output: $($Run.output)"
 		Assert-True (-not (Test-Path -LiteralPath $Run.fixture.buildCapture) -and -not (Test-Path -LiteralPath $Run.fixture.editorCapture)) "$($Case[0]) must fail before build or editor launch."
 	}
@@ -962,7 +966,7 @@ try {
 					$OwnedTestProcess = Get-Process -Id $OwnedTestProcessId -ErrorAction SilentlyContinue
 					if ($null -ne $OwnedTestProcess) {
 						Stop-Process -Id $OwnedTestProcessId -Force -ErrorAction SilentlyContinue
-						try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { }
+						try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { Write-Verbose "Bounded wait for the owned test process failed: $($_.Exception.Message)" }
 					}
 				}
 			}
@@ -988,7 +992,7 @@ try {
 				$OwnedTestProcess = Get-Process -Id $OwnedTestProcessId -ErrorAction SilentlyContinue
 				if ($null -ne $OwnedTestProcess) {
 					Stop-Process -Id $OwnedTestProcessId -Force -ErrorAction SilentlyContinue
-					try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { }
+					try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { Write-Verbose "Bounded wait for the owned test process failed: $($_.Exception.Message)" }
 				}
 			}
 		}
@@ -1016,7 +1020,7 @@ try {
 				$OwnedTestProcess = Get-Process -Id $OwnedTestProcessId -ErrorAction SilentlyContinue
 				if ($null -ne $OwnedTestProcess) {
 					Stop-Process -Id $OwnedTestProcessId -Force -ErrorAction SilentlyContinue
-					try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { }
+					try { $OwnedTestProcess.WaitForExit(2000) | Out-Null } catch { Write-Verbose "Bounded wait for the owned test process failed: $($_.Exception.Message)" }
 				}
 			}
 		}
@@ -1041,32 +1045,32 @@ try {
 		-not (Test-Path -LiteralPath $FirstRunPublicationFailure.fixture.buildLog)) "A first-run failure after the first rename must remove only its own published entry and leave no canonical output. Output: $($FirstRunPublicationFailure.output)"
 
 	foreach ($Case in @(@('missing-report','missing-report','did not produce'), @('corrupt','corrupt','valid JSON'), @('policy-mismatch','policy-mismatch','policy_sha256'), @('intake-mismatch','intake-mismatch','intake_sha256'), @('nonzero','nonzero-no-report','exit code'), @('nonzero-with-report','nonzero-with-report','exit code'))) {
-		$Run = Invoke-Case $Case[0] $FakeBin $Case[1]
+		$Run = Invoke-Case -Name $Case[0] -FakeBin $FakeBin -EditorCase $Case[1]
 		Assert-True ($Run.exitCode -ne 0 -and $Run.output -match $Case[2]) "$($Case[0]) must fail closed with an actionable diagnostic. Output: $($Run.output)"
 	}
 	foreach ($Case in @(@('unknown-field','unknown-report-field','unsupported field'), @('provenance','provenance-mismatch','provenance.source_record'), @('lifecycle','lifecycle-mismatch','lifecycle_evidence does not match'), @('check-field','check-report-extra-field','check contains unsupported\s+field'), @('family-aggregate','family-aggregate-mismatch','deterministic_status does not\s+aggregate'), @('failed-eligible','failed-eligible','failed check.*must be non_promotion'), @('finding-code','finding-code-mismatch','policy code'), @('result','result-mismatch','result is inconsistent'))) {
-		$Run = Invoke-Case $Case[0] $FakeBin $Case[1]
+		$Run = Invoke-Case -Name $Case[0] -FakeBin $FakeBin -EditorCase $Case[1]
 		Assert-True ($Run.exitCode -ne 0 -and $Run.output -match $Case[2]) "$($Case[0]) malformed report must fail closed. Output: $($Run.output)"
 	}
 	foreach ($Case in @(@('receipt-extra','receipt-report-extra-field','target_receipt contains unsupported field'), @('module-order','module-report-order-mismatch','loaded_project_modules'), @('module-hash','module-report-hash-mismatch','GameCore'), @('module-build-id','module-report-build-id-mismatch','build ID'))) {
-		$Run = Invoke-Case $Case[0] $FakeBin $Case[1]
+		$Run = Invoke-Case -Name $Case[0] -FakeBin $FakeBin -EditorCase $Case[1]
 		Assert-True ($Run.exitCode -ne 0 -and $Run.output -match $Case[2]) "$($Case[0]) report provenance must fail closed. Output: $($Run.output)"
 	}
 
-	$Drift = Invoke-Case 'repository-drift' $FakeBin 'repository-drift'
+	$Drift = Invoke-Case -Name 'repository-drift' -FakeBin $FakeBin -EditorCase 'repository-drift'
 	Assert-True ($Drift.exitCode -ne 0 -and $Drift.output -match 'changed during') "Repository drift must invalidate the report. Output: $($Drift.output)"
-	$PolicyDrift = Invoke-Case 'policy-file-drift' $FakeBin 'policy-file-drift'
+	$PolicyDrift = Invoke-Case -Name 'policy-file-drift' -FakeBin $FakeBin -EditorCase 'policy-file-drift'
 	Assert-True ($PolicyDrift.exitCode -ne 0 -and $PolicyDrift.output -match 'Asset intake policy changed during') "Policy byte drift must invalidate the report. Output: $($PolicyDrift.output)"
 	$BuildInputDrift = Invoke-Case -Name 'build-project-drift' -FakeBin $FakeBin -BuildCase 'build-project-drift'
 	Assert-True ($BuildInputDrift.exitCode -ne 0 -and $BuildInputDrift.output -match 'project descriptor changed during the editor build' -and -not (Test-Path -LiteralPath $BuildInputDrift.fixture.editorCapture)) "Same-path build-input drift must fail before editor launch. Output: $($BuildInputDrift.output)"
 	foreach ($Case in @(@('module-file-drift','module-file-drift','GameCore.*changed during'), @('manifest-file-drift','manifest-file-drift','module manifest changed during'), @('build-log-drift','build-log-drift','output_guard_blocked_build_log_drift'))) {
-		$Run = Invoke-Case $Case[0] $FakeBin $Case[1]
+		$Run = Invoke-Case -Name $Case[0] -FakeBin $FakeBin -EditorCase $Case[1]
 		Assert-True ($Run.exitCode -ne 0 -and $Run.output -match $Case[2]) "$($Case[0]) same-path launch drift must invalidate the report. Output: $($Run.output)"
 	}
-	$SnapshotDrift = Invoke-Case 'snapshot-file-drift' $FakeBin 'snapshot-file-drift' 'clean' $true $true
+	$SnapshotDrift = Invoke-Case -Name 'snapshot-file-drift' -FakeBin $FakeBin -EditorCase 'snapshot-file-drift' -GitCase 'clean' -UseSnapshot $true -AllowSnapshot $true
 	Assert-True ($SnapshotDrift.exitCode -ne 0 -and $SnapshotDrift.output -match 'registry snapshot changed during') "Same-path snapshot drift must invalidate the report. Output: $($SnapshotDrift.output)"
 
-	$Timeout = Invoke-Case 'timeout' $FakeBin 'timeout' 'clean' $false $false 1
+	$Timeout = Invoke-Case -Name 'timeout' -FakeBin $FakeBin -EditorCase 'timeout' -GitCase 'clean' -UseSnapshot $false -AllowSnapshot $false -TimeoutSeconds 1
 	Assert-True ($Timeout.exitCode -ne 0 -and $Timeout.output -match 'timed out') "A commandlet timeout must fail closed. Output: $($Timeout.output)"
 	Assert-True (Test-Path -LiteralPath $Timeout.fixture.childPid -PathType Leaf) 'The timeout fixture child process was not observed.'
 	$ChildProcessId = [int](Get-Content -LiteralPath $Timeout.fixture.childPid -Raw)

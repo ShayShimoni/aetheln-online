@@ -559,8 +559,10 @@ function Get-TextSha256([string] $Value) {
 	}
 }
 
-function New-FileState([string] $Path, [string] $Description) {
-	$ResolvedPath = Resolve-RequiredPath $Description $Path 'Leaf'
+function New-FileState {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory descriptor of one existing file using read-only probes and changes no external state.')]
+	param([string] $Path, [string] $Description)
+	$ResolvedPath = Resolve-RequiredPath -Name $Description -Path $Path -PathType 'Leaf'
 	$File = Get-Item -LiteralPath $ResolvedPath
 	if ($File.Length -le 0) { throw "$Description '$ResolvedPath' must have a positive size." }
 	return [pscustomobject]@{
@@ -572,7 +574,9 @@ function New-FileState([string] $Path, [string] $Description) {
 	}
 }
 
-function New-GuardedFileState([object] $Guard, [string] $Path, [string] $Description) {
+function New-GuardedFileState {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory descriptor of one guarded file using read-only probes and changes no external state.')]
+	param([object] $Guard, [string] $Path, [string] $Description)
 	$SizeBytes = $Guard.GetLength($Path)
 	if ($SizeBytes -le 0) { throw "$Description '$Path' must have a positive size." }
 	return [pscustomobject]@{
@@ -585,8 +589,10 @@ function New-GuardedFileState([object] $Guard, [string] $Path, [string] $Descrip
 	}
 }
 
-function New-JsonFileState([string] $Path, [string] $Description, [int64] $MaximumBytes) {
-	$ResolvedPath = Resolve-RequiredPath $Description $Path 'Leaf'
+function New-JsonFileState {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory descriptor of one JSON file using read-only probes and changes no external state.')]
+	param([string] $Path, [string] $Description, [int64] $MaximumBytes)
+	$ResolvedPath = Resolve-RequiredPath -Name $Description -Path $Path -PathType 'Leaf'
 	$Bytes = [IO.File]::ReadAllBytes($ResolvedPath)
 	if ($Bytes.Length -le 0 -or $Bytes.Length -gt $MaximumBytes) { throw "$Description is empty or exceeds its byte limit." }
 	$Hasher = [Security.Cryptography.SHA256]::Create()
@@ -655,7 +661,7 @@ function Assert-FileState([object] $State, [string] $Phase) {
 }
 
 function ConvertTo-RepositoryRelativePath([string] $Path, [string] $Root, [string] $Description) {
-	$ResolvedPath = Resolve-RequiredPath $Description $Path 'Leaf'
+	$ResolvedPath = Resolve-RequiredPath -Name $Description -Path $Path -PathType 'Leaf'
 	$ResolvedRoot = [IO.Path]::GetFullPath($Root).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
 	$RootPrefix = $ResolvedRoot + [IO.Path]::DirectorySeparatorChar
 	if (-not $ResolvedPath.StartsWith($RootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
@@ -686,12 +692,14 @@ function Assert-CanonicalRepositoryRelativePath([object] $Value, [string] $Conte
 	}
 }
 
-function New-BuildArtifactEvidence([object] $State, [string] $BuildId) {
+function New-BuildArtifactEvidence {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory evidence record and changes no external state.')]
+	param([object] $State, [string] $BuildId)
 	if ([string]::IsNullOrWhiteSpace($BuildId)) { throw "$($State.Description) build ID must be nonblank." }
 	return [pscustomobject]@{
 		State = $State
 		Evidence = [ordered]@{
-			path = ConvertTo-RepositoryRelativePath $State.Path $RepositoryRoot $State.Description
+			path = ConvertTo-RepositoryRelativePath -Path $State.Path -Root $RepositoryRoot -Description $State.Description
 			size_bytes = [int64]$State.SizeBytes
 			sha256 = [string]$State.Sha256
 			build_id = $BuildId
@@ -702,18 +710,18 @@ function New-BuildArtifactEvidence([object] $State, [string] $BuildId) {
 function Get-EditorBuildToolchain([string] $BuildLogPath, [object] $Guard) {
 	$BuildLog = $Guard.ReadUtf8($BuildLogPath)
 	$Pattern = '^Using Visual Studio (?<CompilerVersion>[0-9]+(?:\.[0-9]+){2,3}) toolchain \((?<CompilerRoot>.+)\) and Windows (?<ResourceCompilerVersion>[0-9]+(?:\.[0-9]+){3}) SDK \((?<SdkRoot>.+)\)\.\r?$'
-	$Matches = [regex]::Matches($BuildLog, $Pattern, [Text.RegularExpressions.RegexOptions]::Multiline)
-	if ($Matches.Count -ne 1) {
-		throw "Editor build log must contain exactly one complete Visual Studio and Windows SDK toolchain identity; found $($Matches.Count)."
+	$ToolchainMatches = [regex]::Matches($BuildLog, $Pattern, [Text.RegularExpressions.RegexOptions]::Multiline)
+	if ($ToolchainMatches.Count -ne 1) {
+		throw "Editor build log must contain exactly one complete Visual Studio and Windows SDK toolchain identity; found $($ToolchainMatches.Count)."
 	}
-	$Match = $Matches[0]
+	$Match = $ToolchainMatches[0]
 	$CompilerRoot = [string]$Match.Groups['CompilerRoot'].Value
 	$SdkRoot = [string]$Match.Groups['SdkRoot'].Value
 	if (-not [IO.Path]::IsPathRooted($CompilerRoot) -or -not [IO.Path]::IsPathRooted($SdkRoot)) {
 		throw 'Editor build log toolchain roots must be absolute paths.'
 	}
-	$CompilerPath = Resolve-RequiredPath 'Compiler derived from Editor build log' (Join-Path $CompilerRoot 'bin\Hostx64\x64\cl.exe') 'Leaf'
-	$ResourceCompilerPath = Resolve-RequiredPath 'Resource compiler derived from Editor build log' (Join-Path $SdkRoot ("bin\$($Match.Groups['ResourceCompilerVersion'].Value)\x64\rc.exe")) 'Leaf'
+	$CompilerPath = Resolve-RequiredPath -Name 'Compiler derived from Editor build log' -Path (Join-Path $CompilerRoot 'bin\Hostx64\x64\cl.exe') -PathType 'Leaf'
+	$ResourceCompilerPath = Resolve-RequiredPath -Name 'Resource compiler derived from Editor build log' -Path (Join-Path $SdkRoot ("bin\$($Match.Groups['ResourceCompilerVersion'].Value)\x64\rc.exe")) -PathType 'Leaf'
 	return [pscustomobject]@{
 		CompilerVersion = [string]$Match.Groups['CompilerVersion'].Value
 		CompilerPath = $CompilerPath
@@ -740,23 +748,25 @@ function Invoke-BoundedTaskKill([int] $ProcessId) {
 	$TaskKillProcess.StartInfo = $Info
 	try {
 		if ($TaskKillProcess.Start() -and -not $TaskKillProcess.WaitForExit(5000)) {
-			try { $TaskKillProcess.Kill() } catch { }
-			try { [void]$TaskKillProcess.WaitForExit(1000) } catch { }
+			try { $TaskKillProcess.Kill() } catch { Write-Verbose "Terminating the unresponsive taskkill fallback failed: $($_.Exception.Message)" }
+			try { [void]$TaskKillProcess.WaitForExit(1000) } catch { Write-Verbose "Bounded wait for the terminated taskkill fallback failed: $($_.Exception.Message)" }
 		}
 	}
-	catch { }
+	catch { Write-Verbose "The taskkill fallback could not be started or awaited: $($_.Exception.Message)" }
 	finally { $TaskKillProcess.Dispose() }
 }
 
-function Stop-OwnedProcessTree([Diagnostics.Process] $TargetProcess, $TargetJob) {
+function Stop-OwnedProcessTree {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Internal best-effort cleanup of the runner-owned process tree after the run outcome is decided; it must always run and is not user skippable.')]
+	param([Diagnostics.Process] $TargetProcess, $TargetJob)
 	if ($null -ne $TargetJob) { $TargetJob.Dispose() }
-	try { [void]$TargetProcess.WaitForExit(5000) } catch { }
+	try { [void]$TargetProcess.WaitForExit(5000) } catch { Write-Verbose "Bounded wait for the owned process tree failed: $($_.Exception.Message)" }
 	$Alive = $false
-	try { $Alive = -not $TargetProcess.HasExited } catch { }
+	try { $Alive = -not $TargetProcess.HasExited } catch { Write-Verbose "Reading owned process state failed: $($_.Exception.Message)" }
 	if ($Alive) {
 		Invoke-BoundedTaskKill $TargetProcess.Id
-		try { if (-not $TargetProcess.HasExited) { $TargetProcess.Kill() } } catch { }
-		try { [void]$TargetProcess.WaitForExit(5000) } catch { }
+		try { if (-not $TargetProcess.HasExited) { $TargetProcess.Kill() } } catch { Write-Verbose "Direct termination of the owned process failed: $($_.Exception.Message)" }
+		try { [void]$TargetProcess.WaitForExit(5000) } catch { Write-Verbose "Bounded wait after termination failed: $($_.Exception.Message)" }
 	}
 }
 
@@ -846,13 +856,13 @@ function Assert-ExecutionBoundary(
 	[string] $EngineRevision,
 	[string] $EngineTagRevision,
 	[object[]] $FileStates) {
-	$CurrentSourceRevision = Invoke-IdentityCommand 'git' @('-C', $RepositoryRoot, 'rev-parse', 'HEAD') "$Phase repository revision lookup"
+	$CurrentSourceRevision = Invoke-IdentityCommand -File 'git' -Arguments @('-C', $RepositoryRoot, 'rev-parse', 'HEAD') -Description "$Phase repository revision lookup"
 	Assert-CleanGitTree $RepositoryRoot "repository at $Phase"
 	if ($CurrentSourceRevision -cne $SourceRevision) {
 		throw "Repository revision changed during $Phase from '$SourceRevision' to '$CurrentSourceRevision'."
 	}
-	$CurrentEngineRevision = Invoke-IdentityCommand 'git' @('-C', $ResolvedEngineRoot, 'rev-parse', 'HEAD') "$Phase engine revision lookup"
-	$CurrentEngineTagRevision = Invoke-IdentityCommand 'git' @('-C', $ResolvedEngineRoot, 'rev-parse', "refs/tags/$PinnedEngineTag^{commit}") "$Phase pinned engine tag lookup"
+	$CurrentEngineRevision = Invoke-IdentityCommand -File 'git' -Arguments @('-C', $ResolvedEngineRoot, 'rev-parse', 'HEAD') -Description "$Phase engine revision lookup"
+	$CurrentEngineTagRevision = Invoke-IdentityCommand -File 'git' -Arguments @('-C', $ResolvedEngineRoot, 'rev-parse', "refs/tags/$PinnedEngineTag^{commit}") -Description "$Phase pinned engine tag lookup"
 	Assert-CleanGitTree $ResolvedEngineRoot "engine at $Phase"
 	if ($CurrentEngineRevision -cne $EngineRevision -or $CurrentEngineTagRevision -cne $EngineTagRevision) {
 		throw "Engine revision or pinned tag changed during $Phase."
@@ -864,7 +874,7 @@ function Assert-ExecutionBoundary(
 
 function Assert-BuildArtifactDescriptor([object] $Actual, [object] $Expected, [string] $Context) {
 	$Fields = $ArtifactDescriptorFields
-	Assert-ExactPropertySet $Actual $Fields $Context
+	Assert-ExactPropertySet -Object $Actual -Expected $Fields -Context $Context
 	Assert-CanonicalRepositoryRelativePath $Actual.path "$Context.path"
 	if (-not (Test-JsonInteger $Actual.size_bytes) -or [int64]$Actual.size_bytes -le 0) {
 		throw "$Context.size_bytes must be a positive integer."
@@ -883,7 +893,7 @@ function Assert-BuildArtifactDescriptor([object] $Actual, [object] $Expected, [s
 
 function Assert-LoadedProjectModuleDescriptor([object] $Actual, [object] $Expected, [string] $Context) {
 	$Fields = $LoadedProjectModuleFields
-	Assert-ExactPropertySet $Actual $Fields $Context
+	Assert-ExactPropertySet -Object $Actual -Expected $Fields -Context $Context
 	Assert-NonBlankString $Actual.name "$Context.name"
 	Assert-CanonicalRepositoryRelativePath $Actual.path "$Context.path"
 	if (-not (Test-JsonInteger $Actual.size_bytes) -or [int64]$Actual.size_bytes -le 0) {
@@ -908,15 +918,15 @@ if (-not [string]::IsNullOrWhiteSpace($AssetRegistrySnapshotPath) -and -not $All
 	throw 'AssetRegistrySnapshotPath is test-only and requires explicit -AllowTestRegistrySnapshot authorization.'
 }
 
-$ProjectPath = Resolve-RequiredPath 'Aetheln project descriptor' (Join-Path $RepositoryRoot 'AethelnOnline.uproject') 'Leaf'
-$PolicyPath = Resolve-RequiredPath 'Asset intake policy' (Join-Path $RepositoryRoot 'Config\ContentValidation\asset-intake-policy.json') 'Leaf'
-$IntakePath = Resolve-RequiredPath 'Runtime asset intake registry' (Join-Path $RepositoryRoot 'Config\ContentValidation\runtime-asset-intake.json') 'Leaf'
-$ResolvedEngineRoot = Resolve-RequiredPath 'EngineRoot' $EngineRoot 'Container'
-$BuildScriptPath = Resolve-RequiredPath 'Pinned Unreal Build.bat' (Join-Path $ResolvedEngineRoot 'Engine\Build\BatchFiles\Build.bat') 'Leaf'
-$BuildVersionPath = Resolve-RequiredPath 'Unreal Build.version' (Join-Path $ResolvedEngineRoot 'Engine\Build\Build.version') 'Leaf'
+$ProjectPath = Resolve-RequiredPath -Name 'Aetheln project descriptor' -Path (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -PathType 'Leaf'
+$PolicyPath = Resolve-RequiredPath -Name 'Asset intake policy' -Path (Join-Path $RepositoryRoot 'Config\ContentValidation\asset-intake-policy.json') -PathType 'Leaf'
+$IntakePath = Resolve-RequiredPath -Name 'Runtime asset intake registry' -Path (Join-Path $RepositoryRoot 'Config\ContentValidation\runtime-asset-intake.json') -PathType 'Leaf'
+$ResolvedEngineRoot = Resolve-RequiredPath -Name 'EngineRoot' -Path $EngineRoot -PathType 'Container'
+$BuildScriptPath = Resolve-RequiredPath -Name 'Pinned Unreal Build.bat' -Path (Join-Path $ResolvedEngineRoot 'Engine\Build\BatchFiles\Build.bat') -PathType 'Leaf'
+$BuildVersionPath = Resolve-RequiredPath -Name 'Unreal Build.version' -Path (Join-Path $ResolvedEngineRoot 'Engine\Build\Build.version') -PathType 'Leaf'
 $ResolvedSnapshotPath = $null
 if ($AllowTestRegistrySnapshot) {
-	$ResolvedSnapshotPath = Resolve-RequiredPath 'AssetRegistrySnapshotPath' $AssetRegistrySnapshotPath 'Leaf'
+	$ResolvedSnapshotPath = Resolve-RequiredPath -Name 'AssetRegistrySnapshotPath' -Path $AssetRegistrySnapshotPath -PathType 'Leaf'
 }
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
 	$OutputPath = Join-Path $RepositoryRoot 'TestResults\content-validation-report.json'
@@ -937,29 +947,29 @@ $EditorBuildLogPath = Join-Path $OutputDirectory 'editor-build.log'
 
 if ($null -eq (Get-Command git -ErrorAction SilentlyContinue)) { throw 'git is required to bind source and engine identities.' }
 Initialize-ContentValidationJobType
-$SourceRevision = Invoke-IdentityCommand 'git' @('-C', $RepositoryRoot, 'rev-parse', 'HEAD') 'Repository revision lookup'
+$SourceRevision = Invoke-IdentityCommand -File 'git' -Arguments @('-C', $RepositoryRoot, 'rev-parse', 'HEAD') -Description 'Repository revision lookup'
 if ($SourceRevision -cnotmatch '^[0-9a-f]{40}$') { throw "Repository HEAD '$SourceRevision' is not an exact lowercase commit SHA." }
 Assert-CleanGitTree $RepositoryRoot 'repository'
 
-$EngineRevision = Invoke-IdentityCommand 'git' @('-C', $ResolvedEngineRoot, 'rev-parse', 'HEAD') 'Engine revision lookup'
+$EngineRevision = Invoke-IdentityCommand -File 'git' -Arguments @('-C', $ResolvedEngineRoot, 'rev-parse', 'HEAD') -Description 'Engine revision lookup'
 if ($EngineRevision -cne $PinnedEngineRevision) {
 	throw "Pinned engine revision mismatch: expected '$PinnedEngineRevision' but found '$EngineRevision'."
 }
-$EngineTagRevision = Invoke-IdentityCommand 'git' @('-C', $ResolvedEngineRoot, 'rev-parse', "refs/tags/$PinnedEngineTag^{commit}") 'Pinned engine tag lookup'
+$EngineTagRevision = Invoke-IdentityCommand -File 'git' -Arguments @('-C', $ResolvedEngineRoot, 'rev-parse', "refs/tags/$PinnedEngineTag^{commit}") -Description 'Pinned engine tag lookup'
 if ($EngineTagRevision -cne $PinnedEngineRevision) {
 	throw "Pinned engine tag '$PinnedEngineTag' resolves to '$EngineTagRevision' instead of '$PinnedEngineRevision'."
 }
 Assert-CleanGitTree $ResolvedEngineRoot 'engine'
 
 $ProjectState = New-FileState $ProjectPath 'Aetheln project descriptor'
-$PolicyState = New-JsonFileState $PolicyPath 'Asset intake policy' (1024 * 1024)
-$IntakeState = New-JsonFileState $IntakePath 'Runtime asset intake registry' (8 * 1024 * 1024)
+$PolicyState = New-JsonFileState -Path $PolicyPath -Description 'Asset intake policy' -MaximumBytes (1024 * 1024)
+$IntakeState = New-JsonFileState -Path $IntakePath -Description 'Runtime asset intake registry' -MaximumBytes (8 * 1024 * 1024)
 $BuildScriptState = New-FileState $BuildScriptPath 'Pinned Unreal Build.bat'
 $BuildVersionState = New-FileState $BuildVersionPath 'Unreal Build.version'
 $ImmutableFileStates = @($ProjectState, $PolicyState, $IntakeState, $BuildScriptState, $BuildVersionState)
 $SnapshotState = $null
 if ($AllowTestRegistrySnapshot) {
-	$SnapshotState = New-JsonFileState $ResolvedSnapshotPath 'Asset registry snapshot' (64 * 1024 * 1024)
+	$SnapshotState = New-JsonFileState -Path $ResolvedSnapshotPath -Description 'Asset registry snapshot' -MaximumBytes (64 * 1024 * 1024)
 	$ImmutableFileStates += $SnapshotState
 }
 
@@ -989,42 +999,42 @@ $LoadedProjectModuleFields = @('name','path','size_bytes','sha256','build_id')
 $LoadedProjectModuleNames = @('GameCore','GameTests')
 $CountsFields = @('assets','findings','errors','non_promotion')
 $ReportContractFields = @('schema_id','schema_version','required_fields','finding_required_fields','asset_required_fields','provenance_required_fields','lifecycle_evidence_required_fields','execution_provenance_required_fields','family_result_required_fields','check_result_required_fields','artifact_descriptor_required_fields','loaded_project_module_required_fields','loaded_project_module_names','counts_required_fields','allowed_results','allowed_deterministic_statuses','allowed_promotion_statuses','allowed_severities','allowed_registry_sources')
-$ReportContract = Get-RequiredProperty $Policy 'report' 'Asset intake policy'
-Assert-ExactPropertySet $ReportContract $ReportContractFields 'Asset intake policy report contract'
+$ReportContract = Get-RequiredProperty -Object $Policy -Name 'report' -Context 'Asset intake policy'
+Assert-ExactPropertySet -Object $ReportContract -Expected $ReportContractFields -Context 'Asset intake policy report contract'
 if ($ReportContract.schema_id -cne 'aetheln.content-validation-report' -or -not (Test-JsonInteger $ReportContract.schema_version) -or [int]$ReportContract.schema_version -ne 2) { throw 'Asset intake policy report contract has an incompatible schema identity.' }
-Assert-ExactStringList @($ReportContract.required_fields) $ReportFields 'Report required_fields'
-Assert-ExactStringList @($ReportContract.finding_required_fields) $FindingFields 'Report finding_required_fields'
-Assert-ExactStringList @($ReportContract.asset_required_fields) $AssetFields 'Report asset_required_fields'
-Assert-ExactStringList @($ReportContract.provenance_required_fields) $ProvenanceFields 'Report provenance_required_fields'
-Assert-ExactStringList @($ReportContract.lifecycle_evidence_required_fields) $LifecycleFields 'Report lifecycle_evidence_required_fields'
-Assert-ExactStringList @($ReportContract.execution_provenance_required_fields) $ExecutionFields 'Report execution_provenance_required_fields'
-Assert-ExactStringList @($ReportContract.family_result_required_fields) $FamilyResultFields 'Report family_result_required_fields'
-Assert-ExactStringList @($ReportContract.check_result_required_fields) $CheckResultFields 'Report check_result_required_fields'
-Assert-ExactStringList @($ReportContract.artifact_descriptor_required_fields) $ArtifactDescriptorFields 'Report artifact_descriptor_required_fields'
-Assert-ExactStringList @($ReportContract.loaded_project_module_required_fields) $LoadedProjectModuleFields 'Report loaded_project_module_required_fields'
-Assert-ExactStringList @($ReportContract.loaded_project_module_names) $LoadedProjectModuleNames 'Report loaded_project_module_names'
-Assert-ExactStringList @($ReportContract.counts_required_fields) $CountsFields 'Report counts_required_fields'
-Assert-ExactStringList @($ReportContract.allowed_results) @('passed','failed','non_promotion') 'Report allowed_results'
-Assert-ExactStringList @($ReportContract.allowed_deterministic_statuses) @('passed','failed','evidence_unavailable','not_applicable') 'Report allowed_deterministic_statuses'
-Assert-ExactStringList @($ReportContract.allowed_promotion_statuses) @('eligible','non_promotion','not_applicable') 'Report allowed_promotion_statuses'
-Assert-ExactStringList @($ReportContract.allowed_severities) @('error','non_promotion') 'Report allowed_severities'
-Assert-ExactStringList @($ReportContract.allowed_registry_sources) @('live_asset_registry','test_snapshot') 'Report allowed_registry_sources'
+Assert-ExactStringList -Actual @($ReportContract.required_fields) -Expected $ReportFields -Context 'Report required_fields'
+Assert-ExactStringList -Actual @($ReportContract.finding_required_fields) -Expected $FindingFields -Context 'Report finding_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.asset_required_fields) -Expected $AssetFields -Context 'Report asset_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.provenance_required_fields) -Expected $ProvenanceFields -Context 'Report provenance_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.lifecycle_evidence_required_fields) -Expected $LifecycleFields -Context 'Report lifecycle_evidence_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.execution_provenance_required_fields) -Expected $ExecutionFields -Context 'Report execution_provenance_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.family_result_required_fields) -Expected $FamilyResultFields -Context 'Report family_result_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.check_result_required_fields) -Expected $CheckResultFields -Context 'Report check_result_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.artifact_descriptor_required_fields) -Expected $ArtifactDescriptorFields -Context 'Report artifact_descriptor_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.loaded_project_module_required_fields) -Expected $LoadedProjectModuleFields -Context 'Report loaded_project_module_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.loaded_project_module_names) -Expected $LoadedProjectModuleNames -Context 'Report loaded_project_module_names'
+Assert-ExactStringList -Actual @($ReportContract.counts_required_fields) -Expected $CountsFields -Context 'Report counts_required_fields'
+Assert-ExactStringList -Actual @($ReportContract.allowed_results) -Expected @('passed','failed','non_promotion') -Context 'Report allowed_results'
+Assert-ExactStringList -Actual @($ReportContract.allowed_deterministic_statuses) -Expected @('passed','failed','evidence_unavailable','not_applicable') -Context 'Report allowed_deterministic_statuses'
+Assert-ExactStringList -Actual @($ReportContract.allowed_promotion_statuses) -Expected @('eligible','non_promotion','not_applicable') -Context 'Report allowed_promotion_statuses'
+Assert-ExactStringList -Actual @($ReportContract.allowed_severities) -Expected @('error','non_promotion') -Context 'Report allowed_severities'
+Assert-ExactStringList -Actual @($ReportContract.allowed_registry_sources) -Expected @('live_asset_registry','test_snapshot') -Context 'Report allowed_registry_sources'
 
 $PublishedOutputPath = $OutputPath
 $PublishedLogPath = $LogPath
 $PublishedEditorBuildLogPath = $EditorBuildLogPath
 $PublishedOutputPaths = @($PublishedOutputPath, $PublishedLogPath, $PublishedEditorBuildLogPath)
-Assert-OutputBoundary $PublishedOutputPaths $ImmutableFileStates 'preparation'
+Assert-OutputBoundary -Paths $PublishedOutputPaths -ProtectedStates $ImmutableFileStates -Phase 'preparation'
 Invoke-OutputOpenTestSeam 'pre-output-directory-create'
 [Aetheln.OutputGuard]::EnsureDirectory($RepositoryRoot, $OutputDirectory, [string[]]@($ImmutableFileStates | ForEach-Object { $_.FileIdentity }))
-Assert-OutputBoundary $PublishedOutputPaths $ImmutableFileStates 'post-directory-creation'
+Assert-OutputBoundary -Paths $PublishedOutputPaths -ProtectedStates $ImmutableFileStates -Phase 'post-directory-creation'
 Invoke-OutputOpenTestSeam 'pre-output-cleanup'
 $PendingId = [guid]::NewGuid().ToString('N')
 $OutputPath = Join-Path $OutputDirectory ('.content-validation-report.' + $PendingId + '.pending')
 $LogPath = Join-Path $OutputDirectory ('.content-validation.' + $PendingId + '.pending')
 $EditorBuildLogPath = Join-Path $OutputDirectory ('.editor-build.' + $PendingId + '.pending')
 $OutputPaths = @($OutputPath, $LogPath, $EditorBuildLogPath)
-Assert-OutputBoundary $OutputPaths $ImmutableFileStates 'pre-build mutation'
+Assert-OutputBoundary -Paths $OutputPaths -ProtectedStates $ImmutableFileStates -Phase 'pre-build mutation'
 $OutputGuard = [Aetheln.OutputGuard]::new(
 	$RepositoryRoot,
 	[string[]]$OutputPaths,
@@ -1035,7 +1045,7 @@ $null = $OutputGuard.AssertPublicationBudget([string[]]$OutputPaths, [string[]]$
 $ReportFileIdentity = $OutputGuard.GetIdentity($OutputPath)
 Invoke-OutputOpenTestSeam 'pre-build-open'
 
-Assert-ExecutionBoundary 'pre-build validation' $SourceRevision $EngineRevision $EngineTagRevision $ImmutableFileStates
+Assert-ExecutionBoundary -Phase 'pre-build validation' -SourceRevision $SourceRevision -EngineRevision $EngineRevision -EngineTagRevision $EngineTagRevision -FileStates $ImmutableFileStates
 $BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-WaitMutex','-NoHotReloadFromIDE')
 $EditorBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($BuildScriptPath) + $BuildArguments))
 $BuildExitCode = $null
@@ -1049,7 +1059,7 @@ try {
 catch {
 	$BuildInvocationError = $_
 }
-Assert-ExecutionBoundary 'the editor build' $SourceRevision $EngineRevision $EngineTagRevision $ImmutableFileStates
+Assert-ExecutionBoundary -Phase 'the editor build' -SourceRevision $SourceRevision -EngineRevision $EngineRevision -EngineTagRevision $EngineTagRevision -FileStates $ImmutableFileStates
 if ($null -ne $BuildInvocationError) {
 	throw "Editor build invocation failed: $($BuildInvocationError.Exception.Message)"
 }
@@ -1057,7 +1067,7 @@ if ($BuildExitCode -ne 0) {
 	throw "Editor build failed with exit code $BuildExitCode. See '$EditorBuildLogPath'."
 }
 
-$EditorBuildLogState = New-GuardedFileState $OutputGuard $EditorBuildLogPath 'Editor build log'
+$EditorBuildLogState = New-GuardedFileState -Guard $OutputGuard -Path $EditorBuildLogPath -Description 'Editor build log'
 $EditorBuildLogSha256 = $EditorBuildLogState.Sha256
 $Toolchain = Get-EditorBuildToolchain $EditorBuildLogPath $OutputGuard
 Assert-FileState $EditorBuildLogState 'toolchain identity capture'
@@ -1066,7 +1076,7 @@ $ResourceCompilerState = New-FileState $Toolchain.ResourceCompilerPath 'Resource
 $CompilerSha256 = $CompilerState.Sha256
 $ResourceCompilerSha256 = $ResourceCompilerState.Sha256
 
-$EditorPath = Resolve-RequiredPath 'UnrealEditor-Cmd.exe produced for validation' (Join-Path $ResolvedEngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe') 'Leaf'
+$EditorPath = Resolve-RequiredPath -Name 'UnrealEditor-Cmd.exe produced for validation' -Path (Join-Path $ResolvedEngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe') -PathType 'Leaf'
 $EditorState = New-FileState $EditorPath 'UnrealEditor-Cmd.exe'
 $EngineBinarySha256 = $EditorState.Sha256
 $BuildVersionSha256 = $BuildVersionState.Sha256
@@ -1074,17 +1084,17 @@ $ProjectSha256 = $ProjectState.Sha256
 $PolicySha256 = $PolicyState.Sha256
 $IntakeSha256 = $IntakeState.Sha256
 
-$TargetReceiptPath = Resolve-RequiredPath 'AethelnOnlineEditor target receipt' (Join-Path $RepositoryRoot 'Binaries\Win64\AethelnOnlineEditor.target') 'Leaf'
+$TargetReceiptPath = Resolve-RequiredPath -Name 'AethelnOnlineEditor target receipt' -Path (Join-Path $RepositoryRoot 'Binaries\Win64\AethelnOnlineEditor.target') -PathType 'Leaf'
 $TargetReceiptState = New-FileState $TargetReceiptPath 'AethelnOnlineEditor target receipt'
 try { $TargetReceipt = Get-Content -LiteralPath $TargetReceiptPath -Raw | ConvertFrom-Json } catch { throw "AethelnOnlineEditor target receipt is not valid JSON: $($_.Exception.Message)" }
-$ReceiptTarget = [string](Get-RequiredProperty $TargetReceipt 'TargetName' 'AethelnOnlineEditor target receipt')
-$ReceiptPlatform = [string](Get-RequiredProperty $TargetReceipt 'Platform' 'AethelnOnlineEditor target receipt')
-$ReceiptConfiguration = [string](Get-RequiredProperty $TargetReceipt 'Configuration' 'AethelnOnlineEditor target receipt')
-$ReceiptTargetType = [string](Get-RequiredProperty $TargetReceipt 'TargetType' 'AethelnOnlineEditor target receipt')
-$ReceiptProject = [string](Get-RequiredProperty $TargetReceipt 'Project' 'AethelnOnlineEditor target receipt')
-$ReceiptLaunchCmd = [string](Get-RequiredProperty $TargetReceipt 'LaunchCmd' 'AethelnOnlineEditor target receipt')
-$ReceiptVersion = Get-RequiredProperty $TargetReceipt 'Version' 'AethelnOnlineEditor target receipt'
-$BuildId = [string](Get-RequiredProperty $ReceiptVersion 'BuildId' 'AethelnOnlineEditor target receipt Version')
+$ReceiptTarget = [string](Get-RequiredProperty -Object $TargetReceipt -Name 'TargetName' -Context 'AethelnOnlineEditor target receipt')
+$ReceiptPlatform = [string](Get-RequiredProperty -Object $TargetReceipt -Name 'Platform' -Context 'AethelnOnlineEditor target receipt')
+$ReceiptConfiguration = [string](Get-RequiredProperty -Object $TargetReceipt -Name 'Configuration' -Context 'AethelnOnlineEditor target receipt')
+$ReceiptTargetType = [string](Get-RequiredProperty -Object $TargetReceipt -Name 'TargetType' -Context 'AethelnOnlineEditor target receipt')
+$ReceiptProject = [string](Get-RequiredProperty -Object $TargetReceipt -Name 'Project' -Context 'AethelnOnlineEditor target receipt')
+$ReceiptLaunchCmd = [string](Get-RequiredProperty -Object $TargetReceipt -Name 'LaunchCmd' -Context 'AethelnOnlineEditor target receipt')
+$ReceiptVersion = Get-RequiredProperty -Object $TargetReceipt -Name 'Version' -Context 'AethelnOnlineEditor target receipt'
+$BuildId = [string](Get-RequiredProperty -Object $ReceiptVersion -Name 'BuildId' -Context 'AethelnOnlineEditor target receipt Version')
 if ($ReceiptTarget -cne 'AethelnOnlineEditor' -or $ReceiptPlatform -cne 'Win64' -or
 	$ReceiptConfiguration -cne 'Development' -or $ReceiptTargetType -cne 'Editor' -or
 	$ReceiptLaunchCmd -cne '$(EngineDir)/Binaries/Win64/UnrealEditor-Cmd.exe') {
@@ -1100,11 +1110,11 @@ if (-not $ReceiptProjectPath.Equals($ProjectPath, [StringComparison]::OrdinalIgn
 if ([string]::IsNullOrWhiteSpace($BuildId)) { throw 'AethelnOnlineEditor target receipt build ID must be nonblank.' }
 Assert-FileState $TargetReceiptState 'target receipt capture'
 
-$ModuleManifestPath = Resolve-RequiredPath 'AethelnOnlineEditor project module manifest' (Join-Path $RepositoryRoot 'Binaries\Win64\UnrealEditor.modules') 'Leaf'
+$ModuleManifestPath = Resolve-RequiredPath -Name 'AethelnOnlineEditor project module manifest' -Path (Join-Path $RepositoryRoot 'Binaries\Win64\UnrealEditor.modules') -PathType 'Leaf'
 $ModuleManifestState = New-FileState $ModuleManifestPath 'AethelnOnlineEditor project module manifest'
 try { $ModuleManifest = Get-Content -LiteralPath $ModuleManifestPath -Raw | ConvertFrom-Json } catch { throw "AethelnOnlineEditor project module manifest is not valid JSON: $($_.Exception.Message)" }
-$ManifestBuildId = [string](Get-RequiredProperty $ModuleManifest 'BuildId' 'AethelnOnlineEditor project module manifest')
-$ManifestModules = Get-RequiredProperty $ModuleManifest 'Modules' 'AethelnOnlineEditor project module manifest'
+$ManifestBuildId = [string](Get-RequiredProperty -Object $ModuleManifest -Name 'BuildId' -Context 'AethelnOnlineEditor project module manifest')
+$ManifestModules = Get-RequiredProperty -Object $ModuleManifest -Name 'Modules' -Context 'AethelnOnlineEditor project module manifest'
 if ([string]::IsNullOrWhiteSpace($ManifestBuildId) -or $ManifestBuildId -cne $BuildId) {
 	throw 'Target receipt and project module manifest must share one nonblank build ID.'
 }
@@ -1118,7 +1128,7 @@ foreach ($ModuleName in $LoadedProjectModuleNames) {
 	if (@($ManifestModules.PSObject.Properties.Name) -cnotcontains $ModuleName) {
 		throw "AethelnOnlineEditor project module manifest Modules is missing exact project module '$ModuleName'."
 	}
-	$ModuleFileName = [string](Get-RequiredProperty $ManifestModules $ModuleName 'AethelnOnlineEditor project module manifest Modules')
+	$ModuleFileName = [string](Get-RequiredProperty -Object $ManifestModules -Name $ModuleName -Context 'AethelnOnlineEditor project module manifest Modules')
 	$ExpectedModuleFileName = "UnrealEditor-$ModuleName.dll"
 	if ($ModuleFileName -cne $ExpectedModuleFileName -or [IO.Path]::IsPathRooted($ModuleFileName) -or [IO.Path]::GetFileName($ModuleFileName) -cne $ModuleFileName) {
 		throw "AethelnOnlineEditor project module manifest $ModuleName path must be the canonical '$ExpectedModuleFileName' file."
@@ -1188,9 +1198,9 @@ $EditorArguments = @($ArgumentsToBind + "-InvocationSha256=$InvocationSha256" + 
 
 $LaunchFileStates = @($ImmutableFileStates) + @($EditorBuildLogState, $CompilerState, $ResourceCompilerState, $EditorState, $TargetReceiptArtifact.State, $ModuleManifestArtifact.State) + @($ProjectModuleStates)
 $OutputProtectedStates = @($ImmutableFileStates) + @($CompilerState, $ResourceCompilerState, $EditorState, $TargetReceiptArtifact.State, $ModuleManifestArtifact.State) + @($ProjectModuleStates)
-Assert-OutputBoundary $OutputPaths $OutputProtectedStates 'pre-launch validation'
+Assert-OutputBoundary -Paths $OutputPaths -ProtectedStates $OutputProtectedStates -Phase 'pre-launch validation'
 $OutputGuard.AssertNotProtected([string[]]@($OutputProtectedStates | ForEach-Object { $_.FileIdentity }))
-Assert-ExecutionBoundary 'pre-launch validation' $SourceRevision $EngineRevision $EngineTagRevision $LaunchFileStates
+Assert-ExecutionBoundary -Phase 'pre-launch validation' -SourceRevision $SourceRevision -EngineRevision $EngineRevision -EngineTagRevision $EngineTagRevision -FileStates $LaunchFileStates
 Invoke-OutputOpenTestSeam 'pre-editor-open'
 
 $Process = $null
@@ -1223,15 +1233,15 @@ catch {
 finally {
 	if ($null -ne $Process) {
 		$Alive = $false
-		try { $Alive = -not $Process.HasExited } catch { }
+		try { $Alive = -not $Process.HasExited } catch { Write-Verbose "Reading owned process state failed: $($_.Exception.Message)" }
 		if ($Alive) { Stop-OwnedProcessTree $Process $ProcessJob }
 		elseif ($null -ne $ProcessJob) { $ProcessJob.Dispose() }
 		$Process.Dispose()
 	}
 	elseif ($null -ne $ProcessJob) { $ProcessJob.Dispose() }
 }
-Assert-ExecutionBoundary 'the commandlet launch' $SourceRevision $EngineRevision $EngineTagRevision $LaunchFileStates
-Assert-OutputBoundary $OutputPaths $OutputProtectedStates 'report consumption'
+Assert-ExecutionBoundary -Phase 'the commandlet launch' -SourceRevision $SourceRevision -EngineRevision $EngineRevision -EngineTagRevision $EngineTagRevision -FileStates $LaunchFileStates
+Assert-OutputBoundary -Paths $OutputPaths -ProtectedStates $OutputProtectedStates -Phase 'report consumption'
 if ($null -ne $LaunchError) { throw $LaunchError }
 $OutputGuard.AssertCurrentOutputBounds($LogPath, $OutputPath)
 $CommandletOutput = $OutputGuard.ReadUtf8($LogPath)
@@ -1247,8 +1257,8 @@ if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf) -or (Get-Item -Lite
 $ValidatedReportSha256 = $OutputGuard.GetSha256($OutputPath)
 try { $Report = $OutputGuard.ReadUtf8($OutputPath) | ConvertFrom-Json } catch { throw "Content-validation report '$OutputPath' is not valid JSON: $($_.Exception.Message)" }
 
-Assert-ExactPropertySet $Report $ReportFields 'Content-validation report'
-Assert-ExactPropertySet $Report.execution_provenance $ExecutionFields 'Content-validation report execution_provenance'
+Assert-ExactPropertySet -Object $Report -Expected $ReportFields -Context 'Content-validation report'
+Assert-ExactPropertySet -Object $Report.execution_provenance -Expected $ExecutionFields -Context 'Content-validation report execution_provenance'
 if ($Report.schema_id -cne 'aetheln.content-validation-report' -or -not (Test-JsonInteger $Report.schema_version) -or [int]$Report.schema_version -ne 2) { throw 'Content-validation report has an incompatible schema identity.' }
 if ($Report.revision -cne $SourceRevision) { throw "Content-validation report revision '$($Report.revision)' does not match '$SourceRevision'." }
 if ($Report.engine_identity -cne "$PinnedEngineTag@$EngineRevision") { throw 'Content-validation report engine_identity does not bind the exact engine tag and revision.' }
@@ -1287,8 +1297,8 @@ foreach ($Entry in $ExpectedExecution.GetEnumerator()) {
 		throw "Content-validation report execution_provenance.$($Entry.Key) does not match the launched input."
 	}
 }
-Assert-BuildArtifactDescriptor $Report.execution_provenance.target_receipt $TargetReceiptArtifact.Evidence 'Content-validation report execution_provenance.target_receipt'
-Assert-BuildArtifactDescriptor $Report.execution_provenance.module_manifest $ModuleManifestArtifact.Evidence 'Content-validation report execution_provenance.module_manifest'
+Assert-BuildArtifactDescriptor -Actual $Report.execution_provenance.target_receipt -Expected $TargetReceiptArtifact.Evidence -Context 'Content-validation report execution_provenance.target_receipt'
+Assert-BuildArtifactDescriptor -Actual $Report.execution_provenance.module_manifest -Expected $ModuleManifestArtifact.Evidence -Context 'Content-validation report execution_provenance.module_manifest'
 Assert-JsonArray $Report.execution_provenance.loaded_project_modules 'Content-validation report execution_provenance.loaded_project_modules'
 $LoadedProjectModules = @($Report.execution_provenance.loaded_project_modules)
 if ($LoadedProjectModules.Count -ne $LoadedProjectModuleNames.Count) {
@@ -1297,11 +1307,11 @@ if ($LoadedProjectModules.Count -ne $LoadedProjectModuleNames.Count) {
 for ($ModuleIndex = 0; $ModuleIndex -lt $ExpectedLoadedProjectModules.Count; $ModuleIndex++) {
 	$ExpectedModule = $ExpectedLoadedProjectModules[$ModuleIndex]
 	$ActualModule = $LoadedProjectModules[$ModuleIndex]
-	$ActualModuleName = [string](Get-RequiredProperty $ActualModule 'name' "Content-validation report execution_provenance.loaded_project_modules[$ModuleIndex]")
+	$ActualModuleName = [string](Get-RequiredProperty -Object $ActualModule -Name 'name' -Context "Content-validation report execution_provenance.loaded_project_modules[$ModuleIndex]")
 	if ($ActualModuleName -cne $ExpectedModule.name) {
 		throw 'Content-validation report execution_provenance.loaded_project_modules must contain exactly GameCore then GameTests.'
 	}
-	Assert-LoadedProjectModuleDescriptor $ActualModule $ExpectedModule "Content-validation report execution_provenance.loaded_project_modules[$ModuleIndex] $($ExpectedModule.name)"
+	Assert-LoadedProjectModuleDescriptor -Actual $ActualModule -Expected $ExpectedModule -Context "Content-validation report execution_provenance.loaded_project_modules[$ModuleIndex] $($ExpectedModule.name)"
 }
 $ReportedBuildIds = @(
 	[string]$Report.execution_provenance.target_receipt.build_id,
@@ -1313,7 +1323,7 @@ if (@($ReportedBuildIds | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Cou
 	throw 'Content-validation report target receipt, module manifest, GameCore, and GameTests must share one nonblank build ID.'
 }
 
-Assert-ExactPropertySet $Report.counts $CountsFields 'Content-validation report counts'
+Assert-ExactPropertySet -Object $Report.counts -Expected $CountsFields -Context 'Content-validation report counts'
 foreach ($Field in $CountsFields) {
 	if (-not (Test-JsonInteger $Report.counts.$Field) -or [int64]$Report.counts.$Field -lt 0) {
 		throw "Content-validation report counts.$Field must be a non-negative integer."
@@ -1345,7 +1355,7 @@ $ReportedPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Or
 $ReportedStableIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $FamilyRecords = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 foreach ($Asset in $ReportAssets) {
-	Assert-ExactPropertySet $Asset $AssetFields "Content-validation report asset '$($Asset.asset_path)'"
+	Assert-ExactPropertySet -Object $Asset -Expected $AssetFields -Context "Content-validation report asset '$($Asset.asset_path)'"
 	Assert-NonBlankString $Asset.asset_path 'Content-validation report asset_path'
 	if (-not $ReportedPaths.Add([string]$Asset.asset_path)) { throw "Content-validation report repeats asset_path '$($Asset.asset_path)'." }
 	$RegistryAsset = $null
@@ -1358,7 +1368,7 @@ foreach ($Asset in $ReportAssets) {
 
 	$SourceGroup = $null
 	if (-not $SourceGroupById.TryGetValue([string]$RegistryAsset.source_group_id, [ref]$SourceGroup)) { throw "Runtime intake asset '$($Asset.asset_path)' names a missing source group." }
-	Assert-ExactPropertySet $Asset.provenance $ProvenanceFields "Content-validation report asset '$($Asset.asset_path)' provenance"
+	Assert-ExactPropertySet -Object $Asset.provenance -Expected $ProvenanceFields -Context "Content-validation report asset '$($Asset.asset_path)' provenance"
 	$ExpectedProvenance = [ordered]@{
 		author_or_provider = $SourceGroup.author_or_provider
 		source_record = $SourceGroup.source_record
@@ -1376,30 +1386,30 @@ foreach ($Asset in $ReportAssets) {
 	}
 	if ($Asset.provenance.content_sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "Content-validation report asset '$($Asset.asset_path)' has an invalid content hash." }
 
-	Assert-ExactPropertySet $Asset.lifecycle_evidence $LifecycleFields "Content-validation report asset '$($Asset.asset_path)' lifecycle_evidence"
+	Assert-ExactPropertySet -Object $Asset.lifecycle_evidence -Expected $LifecycleFields -Context "Content-validation report asset '$($Asset.asset_path)' lifecycle_evidence"
 	if (($Asset.lifecycle_evidence | ConvertTo-Json -Compress -Depth 12) -cne ($RegistryAsset.lifecycle_evidence | ConvertTo-Json -Compress -Depth 12)) { throw "Content-validation report asset '$($Asset.asset_path)' lifecycle_evidence does not match the intake registry." }
 	$Identity = $Asset.lifecycle_evidence.content_identity
-	Assert-ExactPropertySet $Identity @('stable_id','content_version','content_sha256') "Content-validation report asset '$($Asset.asset_path)' lifecycle content identity"
+	Assert-ExactPropertySet -Object $Identity -Expected @('stable_id','content_version','content_sha256') -Context "Content-validation report asset '$($Asset.asset_path)' lifecycle content identity"
 	if ($Identity.stable_id -cne $RegistryAsset.stable_id -or [int]$Identity.content_version -ne [int]$RegistryAsset.content_version -or $Identity.content_sha256 -cne $RegistryAsset.content_sha256) { throw "Content-validation report asset '$($Asset.asset_path)' lifecycle evidence does not bind the exact content identity." }
 	$TemporaryEvidence = @($Asset.lifecycle_evidence.temporary_prototype)
 	$CandidateEvidence = @($Asset.lifecycle_evidence.runtime_candidate)
 	$ProductionEvidence = @($Asset.lifecycle_evidence.production_approval)
 	if ($Asset.lifecycle_state -ceq 'temporary_prototype') {
 		if ($TemporaryEvidence.Count -ne 1 -or $CandidateEvidence.Count -ne 0 -or $ProductionEvidence.Count -ne 0 -or $SourceGroup.approval_state -cne 'temporary_prototype_only') { throw "Content-validation report asset '$($Asset.asset_path)' has invalid temporary lifecycle evidence." }
-		Assert-ExactPropertySet $TemporaryEvidence[0] @('owner','approval_record','recovery_trigger','may_be_runtime_candidate') "Content-validation report temporary evidence"
+		Assert-ExactPropertySet -Object $TemporaryEvidence[0] -Expected @('owner','approval_record','recovery_trigger','may_be_runtime_candidate') -Context "Content-validation report temporary evidence"
 		foreach ($Field in @('owner','approval_record','recovery_trigger')) { Assert-NonBlankString $TemporaryEvidence[0].$Field "Content-validation report temporary evidence $Field" }
 		if ($TemporaryEvidence[0].may_be_runtime_candidate -isnot [bool] -or $TemporaryEvidence[0].may_be_runtime_candidate) { throw "Content-validation report temporary evidence cannot be promotion-capable." }
 	}
 	else {
 		if ($TemporaryEvidence.Count -ne 0 -or $CandidateEvidence.Count -ne 1) { throw "Content-validation report asset '$($Asset.asset_path)' lacks exact runtime-candidate evidence." }
 		$Candidate = $CandidateEvidence[0]
-		Assert-ExactPropertySet $Candidate @('review_revision','reviewer','approval_record','stable_id','content_version','content_sha256') 'Content-validation report runtime-candidate evidence'
+		Assert-ExactPropertySet -Object $Candidate -Expected @('review_revision','reviewer','approval_record','stable_id','content_version','content_sha256') -Context 'Content-validation report runtime-candidate evidence'
 		if ($Candidate.review_revision -cnotmatch '^[0-9a-f]{40}$' -or $Candidate.stable_id -cne $RegistryAsset.stable_id -or [int]$Candidate.content_version -ne [int]$RegistryAsset.content_version -or $Candidate.content_sha256 -cne $RegistryAsset.content_sha256) { throw "Content-validation report runtime-candidate evidence does not bind the exact revision and content identity." }
 		if ($Asset.lifecycle_state -ceq 'runtime_candidate' -and ($ProductionEvidence.Count -ne 0 -or $SourceGroup.approval_state -cne 'runtime_candidate_approved')) { throw "Content-validation report runtime-candidate evidence conflicts with source approval." }
 		if ($Asset.lifecycle_state -ceq 'production_approved') {
 			if ($ProductionEvidence.Count -ne 1 -or $SourceGroup.approval_state -cne 'production_approved') { throw "Content-validation report production evidence is missing or unapproved." }
 			$Production = $ProductionEvidence[0]
-			Assert-ExactPropertySet $Production @('candidate_review_revision','candidate_approval_record','production_revision','reviewer','approval_record','stable_id','content_version','content_sha256') 'Content-validation report production evidence'
+			Assert-ExactPropertySet -Object $Production -Expected @('candidate_review_revision','candidate_approval_record','production_revision','reviewer','approval_record','stable_id','content_version','content_sha256') -Context 'Content-validation report production evidence'
 			if ($Production.candidate_review_revision -cne $Candidate.review_revision -or $Production.candidate_approval_record -cne $Candidate.approval_record -or $Production.production_revision -cnotmatch '^[0-9a-f]{40}$' -or $Production.stable_id -cne $RegistryAsset.stable_id -or [int]$Production.content_version -ne [int]$RegistryAsset.content_version -or $Production.content_sha256 -cne $RegistryAsset.content_sha256) { throw "Content-validation report production evidence does not bind the exact candidate approval and content identity." }
 		}
 	}
@@ -1407,7 +1417,7 @@ foreach ($Asset in $ReportAssets) {
 	$FamilyResults = @($Asset.family_results)
 	if ($FamilyResults.Count -ne $ExpectedFamilies.Count) { throw "Content-validation report asset '$($Asset.asset_path)' does not report every policy family exactly once." }
 	foreach ($FamilyResult in $FamilyResults) {
-		Assert-ExactPropertySet $FamilyResult $FamilyResultFields "Content-validation report asset '$($Asset.asset_path)' family result"
+		Assert-ExactPropertySet -Object $FamilyResult -Expected $FamilyResultFields -Context "Content-validation report asset '$($Asset.asset_path)' family result"
 		foreach ($Field in @('policy_id','applicability','deterministic_status','promotion_status','evidence')) { Assert-NonBlankString $FamilyResult.$Field "Content-validation report asset '$($Asset.asset_path)' family result $Field" }
 		if ($ExpectedFamilies -cnotcontains [string]$FamilyResult.policy_id) { throw "Content-validation report asset '$($Asset.asset_path)' names unknown family '$($FamilyResult.policy_id)'." }
 		$FamilyKey = [string]$Asset.asset_path + [char]0 + [string]$FamilyResult.policy_id
@@ -1430,7 +1440,7 @@ foreach ($Asset in $ReportAssets) {
 		if ($CheckResults.Count -ne $ExpectedChecks.Count) { throw "Content-validation report asset '$($Asset.asset_path)' family '$($FamilyResult.policy_id)' must report every policy check exactly once." }
 		$CheckResultsById = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 		foreach ($CheckResult in $CheckResults) {
-			Assert-ExactPropertySet $CheckResult $CheckResultFields "Content-validation report asset '$($Asset.asset_path)' family '$($FamilyResult.policy_id)' check"
+			Assert-ExactPropertySet -Object $CheckResult -Expected $CheckResultFields -Context "Content-validation report asset '$($Asset.asset_path)' family '$($FamilyResult.policy_id)' check"
 			foreach ($Field in $CheckResultFields) { Assert-NonBlankString $CheckResult.$Field "Content-validation report asset '$($Asset.asset_path)' family '$($FamilyResult.policy_id)' check $Field" }
 			$CheckId = [string]$CheckResult.check_id
 			if ($ExpectedChecks -cnotcontains $CheckId) { throw "Content-validation report asset '$($Asset.asset_path)' family '$($FamilyResult.policy_id)' names unknown check '$CheckId'." }
@@ -1489,7 +1499,7 @@ $ActualPaths = @($ReportAssets | ForEach-Object { [string]$_.asset_path } | Sort
 if (($ExpectedPaths -join "`n") -cne ($ActualPaths -join "`n")) { throw 'Content-validation report asset paths do not exactly match the runtime intake registry.' }
 
 foreach ($Finding in $ReportFindings) {
-	Assert-ExactPropertySet $Finding $FindingFields 'Content-validation report finding'
+	Assert-ExactPropertySet -Object $Finding -Expected $FindingFields -Context 'Content-validation report finding'
 	foreach ($Field in $FindingFields) { Assert-NonBlankString $Finding.$Field "Content-validation report finding $Field" }
 	if (@('error','non_promotion') -cnotcontains [string]$Finding.severity) { throw "Content-validation report finding severity '$($Finding.severity)' is unsupported." }
 	$PolicyFamily = $null
@@ -1529,8 +1539,8 @@ if ($Report.result -ceq 'failed') { throw 'Unreal content-validation commandlet 
 
 $PendingOutputHashes = @($OutputPaths | ForEach-Object { $OutputGuard.GetSha256($_) })
 if ($PendingOutputHashes[0] -cne $ValidatedReportSha256) { throw 'Content-validation report bytes changed after validation.' }
-Assert-ExecutionBoundary 'pre-publication validation' $SourceRevision $EngineRevision $EngineTagRevision $LaunchFileStates
-Assert-OutputBoundary $PublishedOutputPaths $OutputProtectedStates 'pre-publication validation'
+Assert-ExecutionBoundary -Phase 'pre-publication validation' -SourceRevision $SourceRevision -EngineRevision $EngineRevision -EngineTagRevision $EngineTagRevision -FileStates $LaunchFileStates
+Assert-OutputBoundary -Paths $PublishedOutputPaths -ProtectedStates $OutputProtectedStates -Phase 'pre-publication validation'
 $PublicationPairs = @(
 	@{ Pending = $EditorBuildLogPath; Final = $PublishedEditorBuildLogPath },
 	@{ Pending = $LogPath; Final = $PublishedLogPath },

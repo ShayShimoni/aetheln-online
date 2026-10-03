@@ -37,7 +37,10 @@ try {
 	$Revision = $RealRevision
 	$UatArguments = [ordered]@{ client = @('BuildCookRun', '-platform=Win64'); server = @('BuildCookRun', '-serverplatform=Linux'); dependencyRegistryDump = @('-run=DumpAssetRegistry', '-DependencyDetails'); cookedInventoryDump = @('-run=DumpAssetRegistry', '-PackageName') } | ConvertTo-Json -Compress
 	$OutputPath = Join-Path $FixtureRoot 'provenance/build.json'
-	function New-RegistryReceipts([string] $ReceiptRevision = $Revision) {
+	function New-RegistryReceipts {
+		[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function returns the client and server registry receipt pair.')]
+		[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory fixture value and changes no external state.')]
+		param([string] $ReceiptRevision = $Revision)
 		[ordered]@{
 			client = [ordered]@{ relativePath = 'Saved/Cooked/WindowsClient/AethelnOnline/AssetRegistry.bin'; sizeBytes = 17; sha256 = ('a' * 64); target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient'; sourceRevision = $ReceiptRevision }
 			server = [ordered]@{ relativePath = 'Saved/Cooked/LinuxServer/AethelnOnline/AssetRegistry.bin'; sizeBytes = 23; sha256 = ('b' * 64); target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer'; sourceRevision = $ReceiptRevision }

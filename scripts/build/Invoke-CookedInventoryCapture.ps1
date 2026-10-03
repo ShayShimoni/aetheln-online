@@ -148,20 +148,20 @@ function Get-JsonProperty([object] $Value, [string] $Name, [string] $Context) {
 # registry, so the bytes must match the receipt the packaging producer recorded
 # right after that exact target's cook.
 function Assert-ProducerRegistryReceipt([string] $Kind, [object] $RegistryIdentity) {
-	$Receipts = Get-JsonProperty $Build.build 'cookedRegistries' 'Build provenance build'
-	$Receipt = Get-JsonProperty $Receipts $Kind 'Build provenance build.cookedRegistries'
+	$Receipts = Get-JsonProperty -Value $Build.build -Name 'cookedRegistries' -Context 'Build provenance build'
+	$Receipt = Get-JsonProperty -Value $Receipts -Name $Kind -Context 'Build provenance build.cookedRegistries'
 	$Context = "$Kind producer registry receipt"
 	$ReceiptFields = @('relativePath','sizeBytes','sha256','target','platform','cookPlatform','sourceRevision')
 	if ((@($Receipt.PSObject.Properties.Name | Sort-Object) -join ',') -cne (@($ReceiptFields | Sort-Object) -join ',')) { throw "$Context fields must be exactly $($ReceiptFields -join ', ')." }
 	$Expected =if ($Kind -ceq 'client') { [ordered]@{ target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient' } } else { [ordered]@{ target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer' } }
 	foreach ($Field in $Expected.Keys) {
-		if ((Get-JsonProperty $Receipt $Field $Context) -cne $Expected[$Field]) { throw "$Context $Field '$($Receipt.$Field)' does not match '$($Expected[$Field])'." }
+		if ((Get-JsonProperty -Value $Receipt -Name $Field -Context $Context) -cne $Expected[$Field]) { throw "$Context $Field '$($Receipt.$Field)' does not match '$($Expected[$Field])'." }
 	}
-	if ((Get-JsonProperty $Receipt 'relativePath' $Context) -cne "Saved/Cooked/$($Expected.cookPlatform)/AethelnOnline/AssetRegistry.bin") { throw "$Context relativePath '$($Receipt.relativePath)' is not the canonical $($Expected.cookPlatform) registry." }
-	$ReceiptRevision = Get-JsonProperty $Receipt 'sourceRevision' $Context
+	if ((Get-JsonProperty -Value $Receipt -Name 'relativePath' -Context $Context) -cne "Saved/Cooked/$($Expected.cookPlatform)/AethelnOnline/AssetRegistry.bin") { throw "$Context relativePath '$($Receipt.relativePath)' is not the canonical $($Expected.cookPlatform) registry." }
+	$ReceiptRevision = Get-JsonProperty -Value $Receipt -Name 'sourceRevision' -Context $Context
 	if ($ReceiptRevision -isnot [string] -or -not $ReceiptRevision.Equals([string]$Build.source.revision, [StringComparison]::OrdinalIgnoreCase)) { throw "$Context sourceRevision '$ReceiptRevision' does not match build revision '$($Build.source.revision)'." }
-	Assert-LowerSha256 (Get-JsonProperty $Receipt 'sha256' $Context) "$Context sha256"
-	if ([long](Get-JsonProperty $Receipt 'sizeBytes' $Context) -ne $RegistryIdentity.SizeBytes -or $Receipt.sha256 -cne $RegistryIdentity.Sha256) {
+	Assert-LowerSha256 (Get-JsonProperty -Value $Receipt -Name 'sha256' -Context $Context) "$Context sha256"
+	if ([long](Get-JsonProperty -Value $Receipt -Name 'sizeBytes' -Context $Context) -ne $RegistryIdentity.SizeBytes -or $Receipt.sha256 -cne $RegistryIdentity.Sha256) {
 		throw "$Kind cooked registry bytes do not match the producer receipt recorded at cook time; capture fails closed."
 	}
 }
@@ -314,14 +314,14 @@ $Build = $BuildSnapshot.Value
 $Report = $ReportSnapshot.Value
 $Policy = $PolicySnapshot.Value
 $Intake = $IntakeSnapshot.Value
-if ([int](Get-JsonProperty $Build 'schemaVersion' 'Build provenance') -ne 2) { throw 'Build provenance must use schemaVersion 2.' }
-if ((Get-JsonProperty $Build.source 'clean' 'Build provenance source') -ne $true) { throw 'Build provenance must record a clean source tree.' }
-$PolicyReport = Get-JsonProperty $Policy 'report' 'Asset intake policy'
-if ((Get-JsonProperty $Report 'schema_id' 'Content validation report') -cne (Get-JsonProperty $PolicyReport 'schema_id' 'Asset intake policy report') -or
-	[int](Get-JsonProperty $Report 'schema_version' 'Content validation report') -ne [int](Get-JsonProperty $PolicyReport 'schema_version' 'Asset intake policy report')) {
+if ([int](Get-JsonProperty -Value $Build -Name 'schemaVersion' -Context 'Build provenance') -ne 2) { throw 'Build provenance must use schemaVersion 2.' }
+if ((Get-JsonProperty -Value $Build.source -Name 'clean' -Context 'Build provenance source') -ne $true) { throw 'Build provenance must record a clean source tree.' }
+$PolicyReport = Get-JsonProperty -Value $Policy -Name 'report' -Context 'Asset intake policy'
+if ((Get-JsonProperty -Value $Report -Name 'schema_id' -Context 'Content validation report') -cne (Get-JsonProperty -Value $PolicyReport -Name 'schema_id' -Context 'Asset intake policy report') -or
+	[int](Get-JsonProperty -Value $Report -Name 'schema_version' -Context 'Content validation report') -ne [int](Get-JsonProperty -Value $PolicyReport -Name 'schema_version' -Context 'Asset intake policy report')) {
 	throw 'Content validation report schema identity does not match the governed policy.'
 }
-if ((Get-JsonProperty $Policy 'schema_id' 'Asset intake policy') -cne [string]$Intake.policy_schema_id -or [int]$Policy.schema_version -ne [int]$Intake.policy_schema_version) { throw 'Runtime intake policy identity does not match the governed policy.' }
+if ((Get-JsonProperty -Value $Policy -Name 'schema_id' -Context 'Asset intake policy') -cne [string]$Intake.policy_schema_id -or [int]$Policy.schema_version -ne [int]$Intake.policy_schema_version) { throw 'Runtime intake policy identity does not match the governed policy.' }
 
 $PolicySha256 = $PolicySnapshot.Identity.Sha256
 $IntakeSha256 = $IntakeSnapshot.Identity.Sha256
@@ -366,14 +366,14 @@ New-Item -ItemType Directory -Path $ResolvedOutputRoot -Force | Out-Null
 $ClientDestination = Join-Path $ResolvedOutputRoot 'client'
 $ServerDestination = Join-Path $ResolvedOutputRoot 'server'
 New-Item -ItemType Directory -Path $ClientDestination,$ServerDestination | Out-Null
-$StagedBuildProvenance = Copy-StableFile $BuildSnapshot.Identity (Join-Path $ResolvedOutputRoot 'build-provenance.json') 'Build provenance'
-$StagedClientRegistry = Copy-StableFile $ClientRegistryIdentity (Join-Path $ClientDestination 'AssetRegistry.bin') 'Client cooked registry'
-$StagedServerRegistry = Copy-StableFile $ServerRegistryIdentity (Join-Path $ServerDestination 'AssetRegistry.bin') 'Server cooked registry'
+$StagedBuildProvenance = Copy-StableFile -ExpectedSource $BuildSnapshot.Identity -DestinationPath (Join-Path $ResolvedOutputRoot 'build-provenance.json') -Context 'Build provenance'
+$StagedClientRegistry = Copy-StableFile -ExpectedSource $ClientRegistryIdentity -DestinationPath (Join-Path $ClientDestination 'AssetRegistry.bin') -Context 'Client cooked registry'
+$StagedServerRegistry = Copy-StableFile -ExpectedSource $ServerRegistryIdentity -DestinationPath (Join-Path $ServerDestination 'AssetRegistry.bin') -Context 'Server cooked registry'
 $ClientRegistrySourceBinding = if ($AllowTestCommand) { $ResolvedClientRegistry.Replace('\','/') } else { $CanonicalClientRegistryRelativePath }
 $ServerRegistrySourceBinding = if ($AllowTestCommand) { $ResolvedServerRegistry.Replace('\','/') } else { $CanonicalServerRegistryRelativePath }
 
-$ClientCapture = Invoke-InventoryCapture 'client' $StagedClientRegistry $ClientRegistrySourceBinding ([string]$Build.build.clientTarget) ([string]$Build.build.clientPlatform) 'WindowsClient' ([string]$Build.tools.compiler.version) ([string]$Build.tools.compiler.sha256)
-$ServerCapture = Invoke-InventoryCapture 'server' $StagedServerRegistry $ServerRegistrySourceBinding ([string]$Build.build.serverTarget) ([string]$Build.build.serverPlatform) 'LinuxServer' ([string]$Build.tools.linuxCrossToolchain.identity) ([string]$Build.tools.linuxCrossToolchain.compilerSha256)
+$ClientCapture = Invoke-InventoryCapture -Kind 'client' -StagedRegistry $StagedClientRegistry -RegistrySourceBinding $ClientRegistrySourceBinding -Target ([string]$Build.build.clientTarget) -Platform ([string]$Build.build.clientPlatform) -CookPlatform 'WindowsClient' -ToolchainIdentity ([string]$Build.tools.compiler.version) -ToolchainSha256 ([string]$Build.tools.compiler.sha256)
+$ServerCapture = Invoke-InventoryCapture -Kind 'server' -StagedRegistry $StagedServerRegistry -RegistrySourceBinding $ServerRegistrySourceBinding -Target ([string]$Build.build.serverTarget) -Platform ([string]$Build.build.serverPlatform) -CookPlatform 'LinuxServer' -ToolchainIdentity ([string]$Build.tools.linuxCrossToolchain.identity) -ToolchainSha256 ([string]$Build.tools.linuxCrossToolchain.compilerSha256)
 
 $CaptureInputChecks = @(
 	@{ Identity=$BuildSnapshot.Identity; Context='Build provenance' },

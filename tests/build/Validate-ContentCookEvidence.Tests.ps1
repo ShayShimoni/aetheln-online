@@ -1,4 +1,7 @@
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'IntakeValue', Justification = 'Lifecycle mutation callbacks share one two-argument interface and each uses only the value it mutates.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ReportAssets', Justification = 'Lifecycle mutation callbacks share one two-argument interface and each uses only the value it mutates.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidGlobalVars', '', Justification = 'The instrumented validator copy runs as a child script and reports its ancestor-hold count to the test host only through this global.')]
 param()
 
 Set-StrictMode -Version Latest
@@ -54,7 +57,7 @@ function Write-Inventory([string] $Directory, [string[]] $Packages, [string] $Ki
 	$Lines.Add("--- End CachedAssetsByPackageName : $($Packages.Count) entries ---")
 	Set-Content -LiteralPath (Join-Path $Directory 'Page_00000.txt') -Value $Lines -Encoding UTF8
 	Set-Content -LiteralPath (Join-Path $Directory 'AssetRegistry.bin') -Value "$Kind staged registry fixture" -Encoding UTF8
-	Write-InventoryManifest $Directory $Packages.Count $Kind
+	Write-InventoryManifest -Directory $Directory -PackageCount $Packages.Count -Kind $Kind
 }
 
 function Write-InventoryManifest([string] $Directory, [int] $PackageCount, [string] $Kind) {
@@ -96,7 +99,9 @@ function Write-InventoryManifest([string] $Directory, [int] $PackageCount, [stri
 	[IO.File]::WriteAllText((Join-Path $Directory 'inventory-manifest.json'), (($Manifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
 }
 
-function Split-InventoryIntoTwoPages([string] $Directory) {
+function Split-InventoryIntoTwoPages {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The fixture name describes the two inventory pages it produces from one directory.')]
+	param([string] $Directory)
 	$FirstPagePath = Join-Path $Directory 'Page_00000.txt'
 	$Lines = @(Get-Content -LiteralPath $FirstPagePath)
 	Assert-True ($Lines.Count -ge 6) 'The paged inventory fixture requires at least two packages.'
@@ -107,7 +112,9 @@ function Split-InventoryIntoTwoPages([string] $Directory) {
 	Write-InventoryManifest $Directory $EntryCount
 }
 
-function New-FixtureExecutionProvenance([string] $EffectivePolicyPath) {
+function New-FixtureExecutionProvenance {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory fixture value and changes no external state.')]
+	param([string] $EffectivePolicyPath)
 	$Policy = Get-Content -LiteralPath $EffectivePolicyPath -Raw | ConvertFrom-Json
 	$PolicySha256 = (Get-FileHash -LiteralPath $EffectivePolicyPath -Algorithm SHA256).Hash.ToLowerInvariant()
 	$IntakeSha256 = (Get-FileHash -LiteralPath $RuntimeIntakePath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -158,7 +165,9 @@ function Write-Report([string] $Path, [object[]] $Assets, [string] $Result = 'pa
 	} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
-function New-FixtureLifecycle([string] $StableId, [string] $State = 'runtime_candidate') {
+function New-FixtureLifecycle {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory fixture value and changes no external state.')]
+	param([string] $StableId, [string] $State = 'runtime_candidate')
 	$Evidence = [ordered]@{
 		content_identity = [ordered]@{ stable_id=$StableId; content_version=1; content_sha256=('1' * 64) }
 		temporary_prototype = @()
@@ -176,7 +185,9 @@ function New-FixtureLifecycle([string] $StableId, [string] $State = 'runtime_can
 	return $Evidence
 }
 
-function Set-FixtureLifecycleWrapperCasing([object] $Record) {
+function Set-FixtureLifecycleWrapperCasing {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Mutates only the in-memory fixture record passed in and changes no external state.')]
+	param([object] $Record)
 	$Lifecycle = $Record.lifecycle_evidence
 	if ($Record -is [Collections.IDictionary]) {
 		$Record.Remove('lifecycle_evidence')
@@ -187,7 +198,9 @@ function Set-FixtureLifecycleWrapperCasing([object] $Record) {
 	}
 }
 
-function New-GovernedAsset([string] $AssetPath, [string] $StableId, [string] $Audience, [string] $EffectivePolicyPath = $PolicyPath) {
+function New-GovernedAsset {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory fixture value and changes no external state.')]
+	param([string] $AssetPath, [string] $StableId, [string] $Audience, [string] $EffectivePolicyPath = $PolicyPath)
 	$Policy = Get-Content -LiteralPath $EffectivePolicyPath -Raw | ConvertFrom-Json
 	return [ordered]@{
 		asset_path = $AssetPath
@@ -221,9 +234,11 @@ function New-GovernedAsset([string] $AssetPath, [string] $StableId, [string] $Au
 	}
 }
 
-function New-PolicyOutcomeAsset([string] $AssetPath, [string] $StableId, [string] $Audience, [string] $EffectivePolicyPath) {
+function New-PolicyOutcomeAsset {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory fixture value and changes no external state.')]
+	param([string] $AssetPath, [string] $StableId, [string] $Audience, [string] $EffectivePolicyPath)
 	$Policy = Get-Content -LiteralPath $EffectivePolicyPath -Raw | ConvertFrom-Json
-	$Asset = New-GovernedAsset $AssetPath $StableId $Audience $EffectivePolicyPath
+	$Asset = New-GovernedAsset -AssetPath $AssetPath -StableId $StableId -Audience $Audience -EffectivePolicyPath $EffectivePolicyPath
 	$HasUnresolvedThresholds = @($Policy.thresholds.unresolved_budgets | Where-Object { $_.value -ceq $Policy.thresholds.unresolved_value }).Count -gt 0
 	foreach ($FamilyResult in $Asset.family_results) {
 		$FamilyPolicy = @($Policy.policy_families | Where-Object { $_.id -ceq $FamilyResult.policy_id })[0]
@@ -355,8 +370,8 @@ function Invoke-LifecycleFixture([string] $Name, [string] $State, [scriptblock] 
 			$IntakeRecord.lifecycle_state = $State
 			$IntakeRecord.lifecycle_evidence = New-FixtureLifecycle $IntakeRecord.stable_id $State
 			$Record = if ($State -ceq 'temporary_prototype') {
-				New-PolicyOutcomeAsset $IntakeRecord.asset_path $IntakeRecord.stable_id $IntakeRecord.audience $CasePolicyPath
-			} else { New-GovernedAsset $IntakeRecord.asset_path $IntakeRecord.stable_id $IntakeRecord.audience $CasePolicyPath }
+				New-PolicyOutcomeAsset -AssetPath $IntakeRecord.asset_path -StableId $IntakeRecord.stable_id -Audience $IntakeRecord.audience -EffectivePolicyPath $CasePolicyPath
+			} else { New-GovernedAsset -AssetPath $IntakeRecord.asset_path -StableId $IntakeRecord.stable_id -Audience $IntakeRecord.audience -EffectivePolicyPath $CasePolicyPath }
 			$Record.lifecycle_state = $State
 			$Record.provenance.approval_state = $ApprovalState
 			$Record.lifecycle_evidence = New-FixtureLifecycle $IntakeRecord.stable_id $State
@@ -372,15 +387,15 @@ function Invoke-LifecycleFixture([string] $Name, [string] $State, [scriptblock] 
 	if ($null -ne $Mutation) { & $Mutation $CaseIntake $CaseAssets }
 	$CaseIntake | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $RuntimeIntakePath -Encoding UTF8
 	$ActiveReportPath = Join-Path $CaseRoot 'report.json'
-	if ($State -ceq 'temporary_prototype') { Write-PolicyOutcomeReport $ActiveReportPath $CaseAssets $CasePolicyPath }
-	else { Write-Report $ActiveReportPath $CaseAssets 'passed' $CasePolicyPath }
+	if ($State -ceq 'temporary_prototype') { Write-PolicyOutcomeReport -Path $ActiveReportPath -Assets $CaseAssets -EffectivePolicyPath $CasePolicyPath }
+	else { Write-Report -Path $ActiveReportPath -Assets $CaseAssets -Result 'passed' -EffectivePolicyPath $CasePolicyPath }
 	$CaseClient = Join-Path $CaseRoot 'client'
 	$CaseServer = Join-Path $CaseRoot 'server'
-	Write-Inventory $CaseClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
-	Write-Inventory $CaseServer @('/Game/Shared/DA_Objective', '/Game/Server/DA_ServerRules') 'server'
+	Write-Inventory -Directory $CaseClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
+	Write-Inventory -Directory $CaseServer -Packages @('/Game/Shared/DA_Objective', '/Game/Server/DA_ServerRules') -Kind 'server'
 	$CaseOutput = Join-Path $CaseRoot 'evidence.json'
 	if ([string]::IsNullOrWhiteSpace($FailurePattern)) {
-		Invoke-TestValidator $ActiveReportPath $CaseClient $CaseServer $CaseOutput $CasePolicyPath
+		Invoke-TestValidator -ReportPath $ActiveReportPath -ClientDirectory $CaseClient -ServerDirectory $CaseServer -EvidencePath $CaseOutput -EffectivePolicyPath $CasePolicyPath
 		$ExpectedResult = if ($State -ceq 'temporary_prototype') { 'non_promotion' } else { 'passed' }
 		$Actual = Get-Content -LiteralPath $CaseOutput -Raw | ConvertFrom-Json
 		Assert-True ($Actual.result -ceq $ExpectedResult) "Lifecycle '$State' must retain result '$ExpectedResult'."
@@ -458,14 +473,14 @@ try {
 	$Server = Join-Path $FixtureRoot 'server'
 	$Output = Join-Path $FixtureRoot 'cook-evidence.json'
 	$Assets = @(
-		New-GovernedAsset '/Game/Shared/DA_Objective' 'content.objective' 'shared'
-		New-GovernedAsset '/Game/Server/DA_ServerRules' 'content.server_rules' 'server_only'
-		New-GovernedAsset '/Game/UI/WBP_HUD' 'content.hud' 'client_only'
+		New-GovernedAsset -AssetPath '/Game/Shared/DA_Objective' -StableId 'content.objective' -Audience 'shared'
+		New-GovernedAsset -AssetPath '/Game/Server/DA_ServerRules' -StableId 'content.server_rules' -Audience 'server_only'
+		New-GovernedAsset -AssetPath '/Game/UI/WBP_HUD' -StableId 'content.hud' -Audience 'client_only'
 	)
 	Write-Report $Report $Assets
 	$ActiveReportPath = $Report
 	Write-Inventory $Client @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD')
-	Write-Inventory $Server @('/Game/Shared/DA_Objective', '/Game/Server/DA_ServerRules') 'server'
+	Write-Inventory -Directory $Server -Packages @('/Game/Shared/DA_Objective', '/Game/Server/DA_ServerRules') -Kind 'server'
 
 	$UnavailableReport = Join-Path $FixtureRoot 'unavailable-content-report.json'
 	$UnavailableOutput = Join-Path $FixtureRoot 'unavailable-cook-evidence.json'
@@ -475,11 +490,11 @@ try {
 	$UnavailableFamily.check_results[0].promotion_status = 'non_promotion'
 	$UnavailableFamily.deterministic_status = 'evidence_unavailable'
 	$UnavailableFamily.promotion_status = 'non_promotion'
-	Write-PolicyOutcomeReport $UnavailableReport $UnavailableAssets $PolicyPath
+	Write-PolicyOutcomeReport -Path $UnavailableReport -Assets $UnavailableAssets -EffectivePolicyPath $PolicyPath
 	$ActiveReportPath = $UnavailableReport
 	Write-InventoryManifest $Client 2
 	Write-InventoryManifest $Server 2
-	Invoke-TestValidator $UnavailableReport $Client $Server $UnavailableOutput
+	Invoke-TestValidator -ReportPath $UnavailableReport -ClientDirectory $Client -ServerDirectory $Server -EvidencePath $UnavailableOutput
 	$UnavailableEvidence = Get-Content -LiteralPath $UnavailableOutput -Raw | ConvertFrom-Json
 	Assert-True ($UnavailableEvidence.result -ceq 'non_promotion' -and $UnavailableEvidence.inputs.content_validation_report.result -ceq 'non_promotion') 'Unavailable check evidence must permit cook comparison while preserving non-promotion.'
 	Assert-True ($UnavailableEvidence.inputs.content_validation_report.sha256 -ceq (Get-FileHash -LiteralPath $UnavailableReport -Algorithm SHA256).Hash.ToLowerInvariant()) 'Unavailable evidence must retain the exact source report hash.'
@@ -497,11 +512,11 @@ try {
 	$NavigationCheck.promotion_status = 'non_promotion'
 	$NavigationFamily.deterministic_status = 'evidence_unavailable'
 	$NavigationFamily.promotion_status = 'non_promotion'
-	Write-PolicyOutcomeReport $NavigationReport $NavigationAssets $PolicyPath
+	Write-PolicyOutcomeReport -Path $NavigationReport -Assets $NavigationAssets -EffectivePolicyPath $PolicyPath
 	$ActiveReportPath = $NavigationReport
 	Write-InventoryManifest $Client 2
 	Write-InventoryManifest $Server 2
-	Invoke-TestValidator $NavigationReport $Client $Server $NavigationOutput
+	Invoke-TestValidator -ReportPath $NavigationReport -ClientDirectory $Client -ServerDirectory $Server -EvidencePath $NavigationOutput
 	$NavigationEvidence = Get-Content -LiteralPath $NavigationOutput -Raw | ConvertFrom-Json
 	Assert-True ($NavigationEvidence.result -ceq 'non_promotion' -and $NavigationEvidence.inputs.content_validation_report.result -ceq 'non_promotion') 'Unavailable navigation audience evidence must keep cook evidence non-promotion.'
 	$ForgedNavigation = Get-Content -LiteralPath $NavigationReport -Raw | ConvertFrom-Json
@@ -545,10 +560,10 @@ try {
 	$FailedUnavailableFamily.check_results[1].promotion_status = 'non_promotion'
 	$FailedUnavailableFamily.deterministic_status = 'failed'
 	$FailedUnavailableReport = Join-Path $FixtureRoot 'failed-and-unavailable-report.json'
-	Write-PolicyOutcomeReport $FailedUnavailableReport $UnavailableAssets $PolicyPath
+	Write-PolicyOutcomeReport -Path $FailedUnavailableReport -Assets $UnavailableAssets -EffectivePolicyPath $PolicyPath
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$FailedUnavailableReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'contains deterministic validation errors'
 	$FailedUnavailableFamily.deterministic_status = 'evidence_unavailable'
-	Write-PolicyOutcomeReport $FailedUnavailableReport $UnavailableAssets $PolicyPath
+	Write-PolicyOutcomeReport -Path $FailedUnavailableReport -Assets $UnavailableAssets -EffectivePolicyPath $PolicyPath
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$FailedUnavailableReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'deterministic_status does not aggregate'
 	Write-Output 'PASS: failed checks take precedence over unavailable and passed checks'
 	$ActiveReportPath = $Report
@@ -558,15 +573,15 @@ try {
 	$GovernedReport = Join-Path $FixtureRoot 'governed-content-report.json'
 	$GovernedOutput = Join-Path $FixtureRoot 'governed-cook-evidence.json'
 	$GovernedAssets = @(
-		New-PolicyOutcomeAsset '/Game/Shared/DA_Objective' 'content.objective' 'shared' $GovernedPolicyPath
-		New-PolicyOutcomeAsset '/Game/Server/DA_ServerRules' 'content.server_rules' 'server_only' $GovernedPolicyPath
-		New-PolicyOutcomeAsset '/Game/UI/WBP_HUD' 'content.hud' 'client_only' $GovernedPolicyPath
+		New-PolicyOutcomeAsset -AssetPath '/Game/Shared/DA_Objective' -StableId 'content.objective' -Audience 'shared' -EffectivePolicyPath $GovernedPolicyPath
+		New-PolicyOutcomeAsset -AssetPath '/Game/Server/DA_ServerRules' -StableId 'content.server_rules' -Audience 'server_only' -EffectivePolicyPath $GovernedPolicyPath
+		New-PolicyOutcomeAsset -AssetPath '/Game/UI/WBP_HUD' -StableId 'content.hud' -Audience 'client_only' -EffectivePolicyPath $GovernedPolicyPath
 	)
-	Write-PolicyOutcomeReport $GovernedReport $GovernedAssets $GovernedPolicyPath
+	Write-PolicyOutcomeReport -Path $GovernedReport -Assets $GovernedAssets -EffectivePolicyPath $GovernedPolicyPath
 	$ActiveReportPath = $GovernedReport
 	Write-InventoryManifest $Client 2
 	Write-InventoryManifest $Server 2
-	Invoke-TestValidator $GovernedReport $Client $Server $GovernedOutput $GovernedPolicyPath
+	Invoke-TestValidator -ReportPath $GovernedReport -ClientDirectory $Client -ServerDirectory $Server -EvidencePath $GovernedOutput -EffectivePolicyPath $GovernedPolicyPath
 	$GovernedEvidence = Get-Content -LiteralPath $GovernedOutput -Raw | ConvertFrom-Json
 	Assert-True ($GovernedEvidence.result -ceq 'non_promotion') 'Successful cook-boundary comparison must preserve the governed report non-promotion result.'
 	Assert-True ($GovernedEvidence.inputs.content_validation_report.result -ceq 'non_promotion') 'Cook evidence must record the governed source report result.'
@@ -580,13 +595,13 @@ try {
 	$WrongFindingCode = Get-Content -LiteralPath $GovernedReport -Raw | ConvertFrom-Json
 	$WrongFindingCode.findings[0].code = 'content.texture.non_promotion'
 	$WrongFindingCode | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $WrongFindingCodeReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$WrongFindingCodeReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'finding code.*does not match policy family' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$WrongFindingCodeReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'finding code.*does not match policy family' -ValidatorPath $Validator
 
 	$OrphanFindingReport = Join-Path $FixtureRoot 'orphan-finding-report.json'
 	$OrphanFinding = Get-Content -LiteralPath $GovernedReport -Raw | ConvertFrom-Json
 	$OrphanFinding.findings[0].asset_path = '/Game/Other/DA_NotReported'
 	$OrphanFinding | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OrphanFindingReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$OrphanFindingReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'does not identify one reported asset family' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$OrphanFindingReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'does not identify one reported asset family' -ValidatorPath $Validator
 
 	$MissingFindingReport = Join-Path $FixtureRoot 'missing-correlated-finding-report.json'
 	$MissingFinding = Get-Content -LiteralPath $GovernedReport -Raw | ConvertFrom-Json
@@ -594,7 +609,7 @@ try {
 	$MissingFinding.counts.findings = @($MissingFinding.findings).Count
 	$MissingFinding.counts.non_promotion = @($MissingFinding.findings | Where-Object { $_.severity -ceq 'non_promotion' }).Count
 	$MissingFinding | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $MissingFindingReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$MissingFindingReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'status.*non_promotion.*exactly one correlated finding' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$MissingFindingReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'status.*non_promotion.*exactly one correlated finding' -ValidatorPath $Validator
 
 	$DuplicateFindingReport = Join-Path $FixtureRoot 'duplicate-correlated-finding-report.json'
 	$DuplicateFinding = Get-Content -LiteralPath $GovernedReport -Raw | ConvertFrom-Json
@@ -602,13 +617,13 @@ try {
 	$DuplicateFinding.counts.findings = @($DuplicateFinding.findings).Count
 	$DuplicateFinding.counts.non_promotion = @($DuplicateFinding.findings | Where-Object { $_.severity -ceq 'non_promotion' }).Count
 	$DuplicateFinding | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $DuplicateFindingReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$DuplicateFindingReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'status.*non_promotion.*exactly one correlated finding' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$DuplicateFindingReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'status.*non_promotion.*exactly one correlated finding' -ValidatorPath $Validator
 
 	$FindingCountMismatchReport = Join-Path $FixtureRoot 'finding-count-mismatch-report.json'
 	$FindingCountMismatch = Get-Content -LiteralPath $GovernedReport -Raw | ConvertFrom-Json
 	$FindingCountMismatch.counts.findings++
 	$FindingCountMismatch | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $FindingCountMismatchReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$FindingCountMismatchReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'finding count.*does not match' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$FindingCountMismatchReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'finding count.*does not match' -ValidatorPath $Validator
 
 	$DeterministicErrorReport = Join-Path $FixtureRoot 'deterministic-error-report.json'
 	$DeterministicError = Get-Content -LiteralPath $GovernedReport -Raw | ConvertFrom-Json
@@ -621,10 +636,10 @@ try {
 	$DeterministicError.counts.non_promotion--
 	$DeterministicError.result = 'failed'
 	$DeterministicError | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $DeterministicErrorReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$DeterministicErrorReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'contains deterministic validation errors' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$DeterministicErrorReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'contains deterministic validation errors' -ValidatorPath $Validator
 	Write-Output 'PASS: governed findings, correlations, counts, and deterministic errors fail closed'
 
-	Invoke-TestValidator $Report $Client $Server $Output
+	Invoke-TestValidator -ReportPath $Report -ClientDirectory $Client -ServerDirectory $Server -EvidencePath $Output
 	$Evidence = Get-Content -LiteralPath $Output -Raw | ConvertFrom-Json
 	Assert-True ($Evidence.schema_id -eq 'aetheln.content-cook-evidence' -and [int]$Evidence.schema_version -eq 3) 'Cook evidence must be versioned.'
 	Assert-True ($Evidence.revision -eq $FixtureRevision -and $Evidence.result -eq 'passed') 'Passing evidence must retain the source revision.'
@@ -652,37 +667,37 @@ try {
 	$ReceiptExtra = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json
 	$ReceiptExtra.execution_provenance.target_receipt | Add-Member -NotePropertyName ungoverned -NotePropertyValue $true
 	$ReceiptExtra | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $ReceiptExtraReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$ReceiptExtraReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'target_receipt contains unsupported field' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$ReceiptExtraReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } -Pattern 'target_receipt contains unsupported field' -ValidatorPath $Validator
 	$WrongModuleOrderReport = Join-Path $FixtureRoot 'wrong-module-order-report.json'
 	$WrongModuleOrder = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json
 	$WrongModuleOrder.execution_provenance.loaded_project_modules = @($WrongModuleOrder.execution_provenance.loaded_project_modules[1], $WrongModuleOrder.execution_provenance.loaded_project_modules[0])
 	$WrongModuleOrder | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $WrongModuleOrderReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$WrongModuleOrderReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'loaded project module 0 name mismatch' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$WrongModuleOrderReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } -Pattern 'loaded project module 0 name mismatch' -ValidatorPath $Validator
 	$WrongBuildIdReport = Join-Path $FixtureRoot 'wrong-editor-build-id-report.json'
 	$WrongBuildId = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json
 	$WrongBuildId.execution_provenance.loaded_project_modules[1].build_id = 'different-build-id'
 	$WrongBuildId | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $WrongBuildIdReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$WrongBuildIdReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'must share one non-blank build_id' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$WrongBuildIdReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } -Pattern 'must share one non-blank build_id' -ValidatorPath $Validator
 	$WrongEditorHashReport = Join-Path $FixtureRoot 'wrong-editor-build-hash-report.json'
 	$WrongEditorHash = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json
 	$WrongEditorHash.execution_provenance.editor_build_log_sha256 = ('A' * 64)
 	$WrongEditorHash | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $WrongEditorHashReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$WrongEditorHashReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'editor_build_log_sha256.*lowercase SHA-256' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$WrongEditorHashReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } -Pattern 'editor_build_log_sha256.*lowercase SHA-256' -ValidatorPath $Validator
 	$MissingCompilerVersionReport = Join-Path $FixtureRoot 'missing-compiler-version-report.json'
 	$MissingCompilerVersion = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json
 	$MissingCompilerVersion.execution_provenance.compiler_version = ''
 	$MissingCompilerVersion | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $MissingCompilerVersionReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$MissingCompilerVersionReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'compiler_version.*non-blank string' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$MissingCompilerVersionReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } -Pattern 'compiler_version.*non-blank string' -ValidatorPath $Validator
 	Write-Output 'PASS: full report-v2 Editor build, receipt, manifest, and module provenance fails closed on drift'
 
 	$UnregisteredClient = Join-Path $FixtureRoot 'unregistered-client'
-	Write-Inventory $UnregisteredClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD', '/Game/Unregistered/DA_Unexpected') 'client'
+	Write-Inventory -Directory $UnregisteredClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD', '/Game/Unregistered/DA_Unexpected') -Kind 'client'
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$UnregisteredClient; ServerCookedInventoryDirectory=$Server } 'Unregistered.*absent from the closed runtime intake registry'
 	Write-Output 'PASS: every cooked /Game package requires a closed intake record'
 
 	$EnginePackageClient = Join-Path $FixtureRoot 'engine-package-client'
-	Write-Inventory $EnginePackageClient @('/Engine/EngineMaterials/DefaultMaterial', '/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
-	Invoke-TestValidator $Report $EnginePackageClient $Server $null
+	Write-Inventory -Directory $EnginePackageClient -Packages @('/Engine/EngineMaterials/DefaultMaterial', '/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
+	Invoke-TestValidator -ReportPath $Report -ClientDirectory $EnginePackageClient -ServerDirectory $Server -EvidencePath $null
 	Write-Output 'PASS: engine packages remain outside the /Game intake boundary'
 
 	$MissingRegistryAssetReport = Join-Path $FixtureRoot 'missing-registry-asset-report.json'
@@ -701,7 +716,7 @@ try {
 	$MismatchedLifecycle | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $MismatchedLifecycleReport -Encoding UTF8
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$MismatchedLifecycleReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'lifecycle_evidence.*does not match the intake'
 	Write-Output 'PASS: report completeness, content hashes, and lifecycle evidence bind exactly to intake'
-	foreach ($State in @('temporary_prototype','runtime_candidate','production_approved')) { Invoke-LifecycleFixture $State $State $null '' }
+	foreach ($State in @('temporary_prototype','runtime_candidate','production_approved')) { Invoke-LifecycleFixture -Name $State -State $State -Mutation $null -FailurePattern '' }
 	$LifecycleCases = @(
 		@{ name='legacy-intake'; state='runtime_candidate'; mutation={ param($IntakeValue, $ReportAssets) $IntakeValue.assets[0].PSObject.Properties.Remove('lifecycle_evidence'); $IntakeValue.assets[0] | Add-Member -NotePropertyName temporary_owner -NotePropertyValue 'legacy' }; pattern='Runtime asset intake asset.*unsupported field.*temporary_owner' },
 		@{ name='legacy-report'; state='runtime_candidate'; mutation={ param($IntakeValue, $ReportAssets) $ReportAssets[0].lifecycle_evidence = [ordered]@{ owner='legacy'; approval_record='legacy'; recovery_trigger='legacy'; may_be_runtime_candidate=$true } }; pattern='lifecycle_evidence.*unsupported field.*owner' },
@@ -731,13 +746,13 @@ try {
 	)
 	$LifecycleFailures = [Collections.Generic.List[string]]::new()
 	foreach ($Case in $LifecycleCases) {
-		try { Invoke-LifecycleFixture $Case.name $Case.state $Case.mutation $Case.pattern }
+		try { Invoke-LifecycleFixture -Name $Case.name -State $Case.state -Mutation $Case.mutation -FailurePattern $Case.pattern }
 		catch { $LifecycleFailures.Add("$($Case.name): $($_.Exception.Message)") }
 	}
 	Assert-True ($LifecycleFailures.Count -eq 0) ("Lifecycle regression failures:`n" + ($LifecycleFailures -join "`n"))
 
 	$TamperedPageManifestClient = Join-Path $FixtureRoot 'tampered-page-manifest-client'
-	Write-Inventory $TamperedPageManifestClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
+	Write-Inventory -Directory $TamperedPageManifestClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
 	$TamperedPageManifestPath = Join-Path $TamperedPageManifestClient 'inventory-manifest.json'
 	$TamperedPageManifest = Get-Content -LiteralPath $TamperedPageManifestPath -Raw | ConvertFrom-Json
 	$TamperedPageManifest.pages[0].sha256 = ('8' * 64)
@@ -745,7 +760,7 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$TamperedPageManifestClient; ServerCookedInventoryDirectory=$Server } 'page.*digest mismatch'
 
 	$WrongTargetClient = Join-Path $FixtureRoot 'wrong-target-client'
-	Write-Inventory $WrongTargetClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
+	Write-Inventory -Directory $WrongTargetClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
 	$WrongTargetManifestPath = Join-Path $WrongTargetClient 'inventory-manifest.json'
 	$WrongTargetManifest = Get-Content -LiteralPath $WrongTargetManifestPath -Raw | ConvertFrom-Json
 	$WrongTargetManifest.target = 'AethelnOnlineServer'
@@ -753,7 +768,7 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$WrongTargetClient; ServerCookedInventoryDirectory=$Server } 'Client manifest target mismatch'
 
 	$WrongCookPlatformClient = Join-Path $FixtureRoot 'wrong-cook-platform-client'
-	Write-Inventory $WrongCookPlatformClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
+	Write-Inventory -Directory $WrongCookPlatformClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
 	$WrongCookPlatformManifestPath = Join-Path $WrongCookPlatformClient 'inventory-manifest.json'
 	$WrongCookPlatformManifest = Get-Content -LiteralPath $WrongCookPlatformManifestPath -Raw | ConvertFrom-Json
 	$WrongCookPlatformManifest.cooked_registry.cook_platform = 'LinuxServer'
@@ -761,7 +776,7 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$WrongCookPlatformClient; ServerCookedInventoryDirectory=$Server } 'Client manifest cooked_registry\.cook_platform mismatch'
 
 	$WrongRegistryBuildClient = Join-Path $FixtureRoot 'wrong-registry-build-client'
-	Write-Inventory $WrongRegistryBuildClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
+	Write-Inventory -Directory $WrongRegistryBuildClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
 	$WrongRegistryBuildManifestPath = Join-Path $WrongRegistryBuildClient 'inventory-manifest.json'
 	$WrongRegistryBuildManifest = Get-Content -LiteralPath $WrongRegistryBuildManifestPath -Raw | ConvertFrom-Json
 	$WrongRegistryBuildManifest.cooked_registry.build_provenance_sha256 = ('9' * 64)
@@ -769,12 +784,12 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$WrongRegistryBuildClient; ServerCookedInventoryDirectory=$Server } 'Client manifest cooked_registry\.build_provenance_sha256 mismatch'
 
 	$TamperedStagedRegistryClient = Join-Path $FixtureRoot 'tampered-staged-registry-client'
-	Write-Inventory $TamperedStagedRegistryClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
+	Write-Inventory -Directory $TamperedStagedRegistryClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
 	Add-Content -LiteralPath (Join-Path $TamperedStagedRegistryClient 'AssetRegistry.bin') -Value 'tampered bytes' -Encoding UTF8
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$TamperedStagedRegistryClient; ServerCookedInventoryDirectory=$Server } 'Client manifest cooked_registry\.(?:size_bytes|sha256) mismatch'
 
 	$ZeroRegistrySizeClient = Join-Path $FixtureRoot 'zero-registry-size-client'
-	Write-Inventory $ZeroRegistrySizeClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
+	Write-Inventory -Directory $ZeroRegistrySizeClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
 	$ZeroRegistrySizeManifestPath = Join-Path $ZeroRegistrySizeClient 'inventory-manifest.json'
 	$ZeroRegistrySizeManifest = Get-Content -LiteralPath $ZeroRegistrySizeManifestPath -Raw | ConvertFrom-Json
 	$ZeroRegistrySizeManifest.cooked_registry.size_bytes = 0
@@ -782,12 +797,12 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$ZeroRegistrySizeClient; ServerCookedInventoryDirectory=$Server } 'cooked_registry\.size_bytes must be a positive JSON integer'
 
 	$MissingStagedRegistryClient = Join-Path $FixtureRoot 'missing-staged-registry-client'
-	Write-Inventory $MissingStagedRegistryClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
+	Write-Inventory -Directory $MissingStagedRegistryClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
 	Remove-Item -LiteralPath (Join-Path $MissingStagedRegistryClient 'AssetRegistry.bin') -Force
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$MissingStagedRegistryClient; ServerCookedInventoryDirectory=$Server } 'staged cooked registry.*missing'
 
 	$ExtraFieldClient = Join-Path $FixtureRoot 'extra-field-client'
-	Write-Inventory $ExtraFieldClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') 'client'
+	Write-Inventory -Directory $ExtraFieldClient -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD') -Kind 'client'
 	$ExtraFieldManifestPath = Join-Path $ExtraFieldClient 'inventory-manifest.json'
 	$ExtraFieldManifest = Get-Content -LiteralPath $ExtraFieldManifestPath -Raw | ConvertFrom-Json
 	$ExtraFieldManifest | Add-Member -NotePropertyName ungoverned -NotePropertyValue $true
@@ -824,7 +839,7 @@ try {
 	Set-Content -LiteralPath (Join-Path $SubstitutedClient 'AssetRegistry.bin') -Value 'stale or substituted client registry' -Encoding UTF8
 	$PreviousActiveReportPath = $ActiveReportPath
 	$ActiveReportPath = $Report
-	try { Write-InventoryManifest $SubstitutedClient ([int](Get-Content -LiteralPath (Join-Path $Client 'inventory-manifest.json') -Raw | ConvertFrom-Json).package_count) 'client' }
+	try { Write-InventoryManifest -Directory $SubstitutedClient -PackageCount ([int](Get-Content -LiteralPath (Join-Path $Client 'inventory-manifest.json') -Raw | ConvertFrom-Json).package_count) -Kind 'client' }
 	finally { $ActiveReportPath = $PreviousActiveReportPath }
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$SubstitutedClient; ServerCookedInventoryDirectory=$Server } 'Client manifest cooked_registry.*producer registry receipt'
 	Write-Output 'PASS: missing, cross-target, cross-revision, and self-consistent substituted registry receipts fail closed'
@@ -841,7 +856,7 @@ try {
 	$PagedOutput = Join-Path $FixtureRoot 'paged-evidence.json'
 	Write-Inventory $PagedClient @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD')
 	Split-InventoryIntoTwoPages $PagedClient
-	Invoke-TestValidator $Report $PagedClient $Server $PagedOutput
+	Invoke-TestValidator -ReportPath $Report -ClientDirectory $PagedClient -ServerDirectory $Server -EvidencePath $PagedOutput
 	$PagedEvidence = Get-Content -LiteralPath $PagedOutput -Raw | ConvertFrom-Json
 	Assert-True (@($PagedEvidence.inputs.client_inventory.pages).Count -eq 2) 'A valid contiguous multi-page inventory must retain both page hashes.'
 	Assert-True ($PagedEvidence.inputs.client_inventory.pages[0].name -ceq 'Page_00000.txt' -and $PagedEvidence.inputs.client_inventory.pages[1].name -ceq 'Page_00001.txt') 'A valid contiguous multi-page inventory must retain its ordered page names.'
@@ -859,7 +874,7 @@ try {
 	foreach ($Line in $OriginalMultiItemLines[3..($OriginalMultiItemLines.Count - 1)]) { $MultiItemLines.Add($Line) }
 	Set-Content -LiteralPath $MultiItemPage -Value $MultiItemLines -Encoding UTF8
 	Write-InventoryManifest $MultiItemClient 2
-	Invoke-TestValidator $Report $MultiItemClient $Server $null
+	Invoke-TestValidator -ReportPath $Report -ClientDirectory $MultiItemClient -ServerDirectory $Server -EvidencePath $null
 	Write-Output 'PASS: multiple package records with exact positive item details are accepted'
 
 	$ZeroItemHeader = Join-Path $FixtureRoot 'zero-item-header'
@@ -960,19 +975,19 @@ try {
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$ClientLeak } 'client_only.*WBP_HUD.*server'
 
 	$ServerLeak = Join-Path $FixtureRoot 'server-leak-client'
-	Write-Inventory $ServerLeak @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD', '/Game/Server/DA_ServerRules') 'client'
+	Write-Inventory -Directory $ServerLeak -Packages @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD', '/Game/Server/DA_ServerRules') -Kind 'client'
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$ServerLeak; ServerCookedInventoryDirectory=$Server } 'server_only.*DA_ServerRules.*client'
 
 	$FailedReport = Join-Path $FixtureRoot 'failed-report.json'
-	Write-Report $FailedReport $Assets 'failed'
+	Write-Report -Path $FailedReport -Assets $Assets -Result 'failed'
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$FailedReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'result failed.*without a correlated deterministic error'
 
 	$DuplicateReport = Join-Path $FixtureRoot 'duplicate-report.json'
-	Write-Report $DuplicateReport @($Assets[0], (New-GovernedAsset '/Game/Other/DA_Other' 'content.objective' 'shared'))
+	Write-Report $DuplicateReport @($Assets[0], (New-GovernedAsset -AssetPath '/Game/Other/DA_Other' -StableId 'content.objective' -Audience 'shared'))
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$DuplicateReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'duplicate stable_id'
 
 	$DuplicateAssetPathReport = Join-Path $FixtureRoot 'duplicate-asset-path-report.json'
-	Write-Report $DuplicateAssetPathReport @($Assets[0], (New-GovernedAsset '/Game/Shared/DA_Objective' 'content.other_objective' 'shared'))
+	Write-Report $DuplicateAssetPathReport @($Assets[0], (New-GovernedAsset -AssetPath '/Game/Shared/DA_Objective' -StableId 'content.other_objective' -Audience 'shared'))
 	Invoke-ExpectedFailure @{ ContentValidationReportPath=$DuplicateAssetPathReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } 'duplicate asset_path'
 
 	$IncompleteReport = Join-Path $FixtureRoot 'incomplete-report.json'
@@ -1042,17 +1057,17 @@ try {
 		}
 	}
 	$ForgedPassing | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ForgedPassingReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$ForgedPassingReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'promotion_status does not aggregate' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$ForgedPassingReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'promotion_status does not aggregate' -ValidatorPath $Validator
 
 	$ForgedNonPromotionReport = Join-Path $FixtureRoot 'forged-non-promotion-as-passed-report.json'
 	Copy-Item -LiteralPath $GovernedReport -Destination $ForgedNonPromotionReport
 	$ForgedNonPromotion = Get-Content -LiteralPath $ForgedNonPromotionReport -Raw | ConvertFrom-Json
 	$ForgedNonPromotion.result = 'passed'
 	$ForgedNonPromotion | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ForgedNonPromotionReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$ForgedNonPromotionReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'result passed.*inconsistent' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$ForgedNonPromotionReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'result passed.*inconsistent' -ValidatorPath $Validator
 
 	$ForgedNotApplicableReport = Join-Path $FixtureRoot 'forged-runtime-not-applicable-report.json'
-	Write-Report $ForgedNotApplicableReport $Assets 'passed' $GovernedPolicyPath
+	Write-Report -Path $ForgedNotApplicableReport -Assets $Assets -Result 'passed' -EffectivePolicyPath $GovernedPolicyPath
 	$ForgedNotApplicable = Get-Content -LiteralPath $ForgedNotApplicableReport -Raw | ConvertFrom-Json
 	foreach ($AssetRecord in $ForgedNotApplicable.assets) {
 		foreach ($FamilyResult in $AssetRecord.family_results) {
@@ -1066,7 +1081,7 @@ try {
 		}
 	}
 	$ForgedNotApplicable | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $ForgedNotApplicableReport -Encoding UTF8
-	Invoke-ExpectedFailure @{ ContentValidationReportPath=$ForgedNotApplicableReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } 'cooked package requires applicable reference_boundary' $Validator
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$ForgedNotApplicableReport; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; PolicyPath=$GovernedPolicyPath } -Pattern 'cooked package requires applicable reference_boundary' -ValidatorPath $Validator
 	Write-Output 'PASS: arbitrary applicability evidence and forged policy outcomes fail closed'
 
 	$NonUtcReport = Join-Path $FixtureRoot 'non-utc-report.json'
@@ -1208,7 +1223,7 @@ public static class AethelnFixtureDosDevice {
 	Assert-True ($LateDriftSource.IndexOf('$PublicationTarget = $ResolvedOutput', [StringComparison]::Ordinal) -ge 0) 'The late-drift fixture needs the publication marker.'
 	[IO.File]::WriteAllText($LateDriftValidator, $LateDriftSource.Replace('$PublicationTarget = $ResolvedOutput', ("[IO.File]::WriteAllText('$LateDriftFile', 'late drift')`n" + '$PublicationTarget = $ResolvedOutput')), [Text.UTF8Encoding]::new($false))
 	try {
-		Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$LateDriftOutput } 'Client cooked inventory.*(changed|unsupported file)' $LateDriftValidator
+		Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$LateDriftOutput } -Pattern 'Client cooked inventory.*(changed|unsupported file)' -ValidatorPath $LateDriftValidator
 		Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($LateDriftOutput)) -ceq [Convert]::ToBase64String($PreviousOutputBytes)) 'Late input drift must leave the preexisting output unchanged.'
 		Assert-True (@(Get-ChildItem -LiteralPath $DriftOutputParent -Force).Count -eq 1) 'Late input drift must not leave pending or new evidence.'
 	}
@@ -1255,7 +1270,7 @@ public static class AethelnFixtureDosDevice {
 		$SwapParent = Split-Path -Parent ([string]$SwapCase.output)
 		if (-not (Test-Path -LiteralPath $SwapParent)) { New-Item -ItemType Directory -Path $SwapParent | Out-Null }
 		try {
-			Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=[string]$SwapCase.output } ([string]$SwapCase.pattern) $SwapValidator
+			Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=[string]$SwapCase.output } -Pattern ([string]$SwapCase.pattern) -ValidatorPath $SwapValidator
 			Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($Report)) -ceq [Convert]::ToBase64String($OriginalReportBytes)) "A post-preflight $($SwapCase.name) output swap must leave the input report bytes unchanged."
 			Assert-True (@(Get-ChildItem -LiteralPath $ReportDirectory -Force -Filter '*.tmp').Count -eq 0) "A post-preflight $($SwapCase.name) output swap must not leave pending evidence beside the input report."
 		}
@@ -1454,7 +1469,7 @@ try { if (Test-Path -LiteralPath $ResolvedOutput) { Remove-Item -LiteralPath $Re
 		[IO.File]::WriteAllText($DriftValidator, $InstrumentedSource, [Text.UTF8Encoding]::new($false))
 		$DriftOutput = Join-Path $FixtureRoot ("{0}-drift-evidence.json" -f $DriftCase.name)
 		try {
-			Invoke-ExpectedFailure @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$DriftOutput } ([string]$DriftCase.pattern) $DriftValidator
+			Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server; OutputPath=$DriftOutput } -Pattern ([string]$DriftCase.pattern) -ValidatorPath $DriftValidator
 			Assert-True (-not (Test-Path -LiteralPath $DriftOutput)) "Observed $($DriftCase.name) drift must fail before publishing evidence."
 		}
 		finally { [IO.File]::WriteAllBytes([string]$DriftCase.target, $OriginalBytes) }

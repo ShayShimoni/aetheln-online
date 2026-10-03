@@ -69,7 +69,9 @@ function ConvertFrom-RequiredUtcTimestamp([object] $Value, [string] $Context) {
 	return $Parsed
 }
 
-function Assert-ClosedProperties([object] $Value, [string[]] $Allowed, [string] $Context, [switch] $CaseSensitive) {
+function Assert-ClosedProperties {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function validates the complete closed property set of one JSON object.')]
+	param([object] $Value, [string[]] $Allowed, [string] $Context, [switch] $CaseSensitive)
 	if (-not (Test-JsonObject $Value)) { throw "$Context must be a JSON object; validation fails closed." }
 	$Names = @($Value.PSObject.Properties.Name)
 	foreach ($Name in $Names) {
@@ -142,7 +144,9 @@ function Copy-StableFile([object] $ExpectedSource, [string] $DestinationPath, [s
 	return $Staged
 }
 
-function Get-InventorySourceFiles([string] $Directory, [string] $TargetName) {
+function Get-InventorySourceFiles {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function returns every source file of one cooked inventory directory.')]
+	param([string] $Directory, [string] $TargetName)
 	if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
 		throw "$TargetName cooked inventory directory is missing at '$Directory'; validation fails closed."
 	}
@@ -162,13 +166,15 @@ function Get-InventorySourceFiles([string] $Directory, [string] $TargetName) {
 	return [pscustomobject]@{ Directory=$ResolvedDirectory; Files=$Files }
 }
 
-function New-InventorySnapshot([string] $Directory, [string] $TargetName, [string] $Destination) {
+function New-InventorySnapshot {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Internal mandatory step that creates the validator-owned private snapshot directory and copies the inventory into it; it must not be skippable.')]
+	param([string] $Directory, [string] $TargetName, [string] $Destination)
 	$Source = Get-InventorySourceFiles $Directory $TargetName
 	New-Item -ItemType Directory -Path $Destination | Out-Null
 	$Identities = [System.Collections.Generic.List[object]]::new()
 	foreach ($File in $Source.Files) {
 		$Identity = Read-StableFileSnapshot "$TargetName cooked inventory '$($File.Name)'" $File.FullName
-		[void](Copy-StableFile $Identity (Join-Path $Destination $File.Name) "$TargetName cooked inventory '$($File.Name)'")
+		[void](Copy-StableFile -ExpectedSource $Identity -DestinationPath (Join-Path $Destination $File.Name) -Context "$TargetName cooked inventory '$($File.Name)'")
 		$Identities.Add($Identity)
 	}
 	$After = Get-InventorySourceFiles $Source.Directory $TargetName
@@ -403,7 +409,9 @@ function Assert-OutputOnLocalVolume([string] $Path) {
 	if ($RootFinalPath.StartsWith('\\?\UNC\', [StringComparison]::OrdinalIgnoreCase)) { throw "OutputPath '$Path' resolves to network share '$RootFinalPath'; cook evidence must be published to a local volume." }
 }
 
-function Open-OutputAncestorHolds([string] $Directory) {
+function Open-OutputAncestorHolds {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function opens the complete set of ancestor directory holds for one output directory.')]
+	param([string] $Directory)
 	# Directory handles with list access and no delete sharing make every
 	# ancestor unrenameable until release. An empty held directory can still be
 	# converted to a mount point in place, so publication additionally proves the
@@ -432,7 +440,9 @@ function Open-OutputAncestorHolds([string] $Directory) {
 	return ,$Holds
 }
 
-function Open-InputLocks([object[]] $Identities) {
+function Open-InputLocks {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function opens one read lock for every input identity in a single acquisition.')]
+	param([object[]] $Identities)
 	# Read handles without write/delete sharing make the input bytes unwritable
 	# through any alias (hardlink, junction, or later swap) until release.
 	$Locks = [System.Collections.Generic.List[IO.FileStream]]::new()
@@ -458,7 +468,7 @@ function Assert-LowerSha256([object] $Value, [string] $Context) {
 }
 
 function Assert-ArtifactDescriptor([object] $Descriptor, [string[]] $RequiredFields, [string] $Context) {
-	Assert-ClosedProperties $Descriptor $RequiredFields $Context
+	Assert-ClosedProperties -Value $Descriptor -Allowed $RequiredFields -Context $Context
 	if (-not (Test-NonBlankJsonString $Descriptor.path) -or
 		([string]$Descriptor.path).Contains(':') -or
 		([string]$Descriptor.path).StartsWith('/') -or
@@ -487,14 +497,14 @@ function Assert-LifecycleContentIdentity([object] $Identity, [object] $IntakeAss
 	if ($Identity.stable_id -isnot [string] -or $Identity.stable_id -cnotmatch '^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$') { throw "$Context.stable_id is malformed." }
 	if (-not (Test-JsonInteger $Identity.content_version) -or $Identity.content_version -lt 1) { throw "$Context.content_version must be a positive JSON integer." }
 	Assert-LowerSha256 $Identity.content_sha256 "$Context.content_sha256"
-	foreach ($Field in @('stable_id','content_version','content_sha256')) { Assert-Equal $Identity.$Field $IntakeAsset.$Field "$Context.$Field" }
+	foreach ($Field in @('stable_id','content_version','content_sha256')) { Assert-Equal -Actual $Identity.$Field -Expected $IntakeAsset.$Field -Context "$Context.$Field" }
 }
 
 function Assert-LifecycleEvidence([object] $Evidence, [object] $IntakeAsset, [string] $SourceApproval, [string] $Context) {
 	if (@('temporary_prototype','runtime_candidate','production_approved') -cnotcontains $IntakeAsset.lifecycle_state) { throw "$Context has unsupported runtime lifecycle_state '$($IntakeAsset.lifecycle_state)'." }
-	Assert-ClosedProperties $Evidence @('content_identity','temporary_prototype','runtime_candidate','production_approval') $Context -CaseSensitive
-	Assert-ClosedProperties $Evidence.content_identity @('stable_id','content_version','content_sha256') "$Context.content_identity" -CaseSensitive
-	Assert-LifecycleContentIdentity $Evidence.content_identity $IntakeAsset "$Context.content_identity"
+	Assert-ClosedProperties -Value $Evidence -Allowed @('content_identity','temporary_prototype','runtime_candidate','production_approval') -Context $Context -CaseSensitive
+	Assert-ClosedProperties -Value $Evidence.content_identity -Allowed @('stable_id','content_version','content_sha256') -Context "$Context.content_identity" -CaseSensitive
+	Assert-LifecycleContentIdentity -Identity $Evidence.content_identity -IntakeAsset $IntakeAsset -Context "$Context.content_identity"
 	foreach ($Field in @('temporary_prototype','runtime_candidate','production_approval')) {
 		if (-not (Test-JsonArray $Evidence.$Field)) { throw "$Context.$Field must be a JSON array." }
 		if (@($Evidence.$Field).Count -gt 1) { throw "$Context.$Field must contain at most one evidence record." }
@@ -504,7 +514,7 @@ function Assert-LifecycleEvidence([object] $Evidence, [object] $IntakeAsset, [st
 	$Production = @($Evidence.production_approval)
 	if ($IntakeAsset.lifecycle_state -ceq 'temporary_prototype') {
 		if ($Temporary.Count -ne 1 -or $Candidate.Count -ne 0 -or $Production.Count -ne 0 -or $SourceApproval -cne 'temporary_prototype_only') { throw "$Context has invalid temporary-only evidence or source approval." }
-		Assert-ClosedProperties $Temporary[0] @('owner','approval_record','recovery_trigger','may_be_runtime_candidate') "$Context.temporary_prototype[0]" -CaseSensitive
+		Assert-ClosedProperties -Value $Temporary[0] -Allowed @('owner','approval_record','recovery_trigger','may_be_runtime_candidate') -Context "$Context.temporary_prototype[0]" -CaseSensitive
 		foreach ($Field in @('owner','approval_record','recovery_trigger')) {
 			if (-not (Test-NonBlankJsonString $Temporary[0].$Field)) { throw "$Context.temporary_prototype[0].$Field must be a non-blank string." }
 		}
@@ -513,8 +523,8 @@ function Assert-LifecycleEvidence([object] $Evidence, [object] $IntakeAsset, [st
 		return
 	}
 	if ($Temporary.Count -ne 0 -or $Candidate.Count -ne 1) { throw "$Context requires runtime-candidate evidence and no temporary evidence." }
-	Assert-ClosedProperties $Candidate[0] @('review_revision','reviewer','approval_record','stable_id','content_version','content_sha256') "$Context.runtime_candidate[0]" -CaseSensitive
-	Assert-LifecycleContentIdentity $Candidate[0] $IntakeAsset "$Context.runtime_candidate[0]"
+	Assert-ClosedProperties -Value $Candidate[0] -Allowed @('review_revision','reviewer','approval_record','stable_id','content_version','content_sha256') -Context "$Context.runtime_candidate[0]" -CaseSensitive
+	Assert-LifecycleContentIdentity -Identity $Candidate[0] -IntakeAsset $IntakeAsset -Context "$Context.runtime_candidate[0]"
 	foreach ($Field in @('reviewer','approval_record')) {
 		if (-not (Test-NonBlankJsonString $Candidate[0].$Field)) { throw "$Context.runtime_candidate[0].$Field must be a non-blank string." }
 	}
@@ -524,14 +534,14 @@ function Assert-LifecycleEvidence([object] $Evidence, [object] $IntakeAsset, [st
 		return
 	}
 	if ($Production.Count -ne 1 -or $SourceApproval -cne 'production_approved') { throw "$Context production evidence is missing or conflicts with source approval." }
-	Assert-ClosedProperties $Production[0] @('candidate_review_revision','candidate_approval_record','production_revision','reviewer','approval_record','stable_id','content_version','content_sha256') "$Context.production_approval[0]" -CaseSensitive
-	Assert-LifecycleContentIdentity $Production[0] $IntakeAsset "$Context.production_approval[0]"
+	Assert-ClosedProperties -Value $Production[0] -Allowed @('candidate_review_revision','candidate_approval_record','production_revision','reviewer','approval_record','stable_id','content_version','content_sha256') -Context "$Context.production_approval[0]" -CaseSensitive
+	Assert-LifecycleContentIdentity -Identity $Production[0] -IntakeAsset $IntakeAsset -Context "$Context.production_approval[0]"
 	foreach ($Field in @('candidate_review_revision','candidate_approval_record','reviewer','approval_record')) {
 		if (-not (Test-NonBlankJsonString $Production[0].$Field)) { throw "$Context.production_approval[0].$Field must be a non-blank string." }
 	}
 	if ($Production[0].production_revision -isnot [string] -or $Production[0].production_revision -cnotmatch '^[0-9a-f]{40}$') { throw "$Context.production_approval[0].production_revision must be a lowercase Git revision." }
-	Assert-Equal $Production[0].candidate_review_revision $Candidate[0].review_revision "$Context.production_approval[0].candidate_review_revision"
-	Assert-Equal $Production[0].candidate_approval_record $Candidate[0].approval_record "$Context.production_approval[0].candidate_approval_record"
+	Assert-Equal -Actual $Production[0].candidate_review_revision -Expected $Candidate[0].review_revision -Context "$Context.production_approval[0].candidate_review_revision"
+	Assert-Equal -Actual $Production[0].candidate_approval_record -Expected $Candidate[0].approval_record -Context "$Context.production_approval[0].candidate_approval_record"
 }
 
 function Read-CookedInventory([string] $Directory, [string] $TargetName) {
@@ -621,8 +631,8 @@ function Read-InventoryManifest([object] $Inventory, [string] $TargetName, [hash
 		'project_sha256','policy_sha256','intake_sha256','content_validation_report_sha256','build_provenance_sha256',
 		'cooked_registry','cook_command_sha256','capture_command_sha256','started_utc','finished_utc','package_count','pages'
 	)
-	Assert-ClosedProperties $Manifest $Fields "$TargetName cooked inventory manifest"
-	Assert-Equal $Manifest.schema_id 'aetheln.cooked-inventory-manifest' "$TargetName manifest schema_id"
+	Assert-ClosedProperties -Value $Manifest -Allowed $Fields -Context "$TargetName cooked inventory manifest"
+	Assert-Equal -Actual $Manifest.schema_id -Expected 'aetheln.cooked-inventory-manifest' -Context "$TargetName manifest schema_id"
 	if (-not (Test-JsonInteger $Manifest.schema_version) -or $Manifest.schema_version -ne 2) { throw "$TargetName manifest schema_version must be JSON integer 2." }
 	$AllowedMode = if ($AllowTestEvidence) { @('live_cooked_registry','test_fixture') } else { @('live_cooked_registry') }
 	if ($Manifest.capture_mode -isnot [string] -or $AllowedMode -cnotcontains $Manifest.capture_mode) { throw "$TargetName manifest capture_mode '$($Manifest.capture_mode)' is not admissible." }
@@ -632,25 +642,25 @@ function Read-InventoryManifest([object] $Inventory, [string] $TargetName, [hash
 		Assert-LowerSha256 $Manifest.$Field "$TargetName manifest $Field"
 	}
 	$RegistryFields = @('source_path','staged_path','size_bytes','sha256','target','platform','cook_platform','build_provenance_sha256','source_revision')
-	Assert-ClosedProperties $Manifest.cooked_registry $RegistryFields "$TargetName manifest cooked_registry"
+	Assert-ClosedProperties -Value $Manifest.cooked_registry -Allowed $RegistryFields -Context "$TargetName manifest cooked_registry"
 	if (-not (Test-NonBlankJsonString $Manifest.cooked_registry.source_path)) { throw "$TargetName manifest cooked_registry.source_path must be a non-blank string." }
-	Assert-Equal $Manifest.cooked_registry.staged_path 'AssetRegistry.bin' "$TargetName manifest cooked_registry.staged_path"
+	Assert-Equal -Actual $Manifest.cooked_registry.staged_path -Expected 'AssetRegistry.bin' -Context "$TargetName manifest cooked_registry.staged_path"
 	if (-not (Test-JsonInteger $Manifest.cooked_registry.size_bytes) -or $Manifest.cooked_registry.size_bytes -lt 1) { throw "$TargetName manifest cooked_registry.size_bytes must be a positive JSON integer." }
 	foreach ($Field in @('sha256','build_provenance_sha256')) { Assert-LowerSha256 $Manifest.cooked_registry.$Field "$TargetName manifest cooked_registry.$Field" }
 	$ExpectedCookPlatform = if ($TargetName -ceq 'Client') { 'WindowsClient' } else { 'LinuxServer' }
 	$ExpectedSourcePath = if ($TargetName -ceq 'Client') { 'Saved/Cooked/WindowsClient/AethelnOnline/AssetRegistry.bin' } else { 'Saved/Cooked/LinuxServer/AethelnOnline/AssetRegistry.bin' }
-	if (-not $AllowTestEvidence) { Assert-Equal $Manifest.cooked_registry.source_path $ExpectedSourcePath "$TargetName manifest cooked_registry.source_path" }
-	Assert-Equal $Manifest.cooked_registry.target $Expected.target "$TargetName manifest cooked_registry.target"
-	Assert-Equal $Manifest.cooked_registry.platform $Expected.platform "$TargetName manifest cooked_registry.platform"
-	Assert-Equal $Manifest.cooked_registry.cook_platform $ExpectedCookPlatform "$TargetName manifest cooked_registry.cook_platform"
-	Assert-Equal $Manifest.cooked_registry.build_provenance_sha256 $Expected.build_provenance_sha256 "$TargetName manifest cooked_registry.build_provenance_sha256"
-	Assert-Equal $Manifest.cooked_registry.source_revision $Expected.source_revision "$TargetName manifest cooked_registry.source_revision"
+	if (-not $AllowTestEvidence) { Assert-Equal -Actual $Manifest.cooked_registry.source_path -Expected $ExpectedSourcePath -Context "$TargetName manifest cooked_registry.source_path" }
+	Assert-Equal -Actual $Manifest.cooked_registry.target -Expected $Expected.target -Context "$TargetName manifest cooked_registry.target"
+	Assert-Equal -Actual $Manifest.cooked_registry.platform -Expected $Expected.platform -Context "$TargetName manifest cooked_registry.platform"
+	Assert-Equal -Actual $Manifest.cooked_registry.cook_platform -Expected $ExpectedCookPlatform -Context "$TargetName manifest cooked_registry.cook_platform"
+	Assert-Equal -Actual $Manifest.cooked_registry.build_provenance_sha256 -Expected $Expected.build_provenance_sha256 -Context "$TargetName manifest cooked_registry.build_provenance_sha256"
+	Assert-Equal -Actual $Manifest.cooked_registry.source_revision -Expected $Expected.source_revision -Context "$TargetName manifest cooked_registry.source_revision"
 	$StagedRegistryPath = [IO.Path]::GetFullPath((Join-Path $Inventory.Directory ([string]$Manifest.cooked_registry.staged_path)))
 	$ExpectedStagedRegistryPath = [IO.Path]::GetFullPath((Join-Path $Inventory.Directory 'AssetRegistry.bin'))
 	if (-not [string]::Equals($StagedRegistryPath, $ExpectedStagedRegistryPath, [StringComparison]::OrdinalIgnoreCase)) { throw "$TargetName manifest cooked_registry.staged_path escapes its inventory directory." }
 	$StagedRegistry = Read-StableFileSnapshot "$TargetName staged cooked registry" $StagedRegistryPath
-	Assert-Equal ([long]$Manifest.cooked_registry.size_bytes) ([long]$StagedRegistry.SizeBytes) "$TargetName manifest cooked_registry.size_bytes"
-	Assert-Equal $Manifest.cooked_registry.sha256 $StagedRegistry.Sha256 "$TargetName manifest cooked_registry.sha256"
+	Assert-Equal -Actual ([long]$Manifest.cooked_registry.size_bytes) -Expected ([long]$StagedRegistry.SizeBytes) -Context "$TargetName manifest cooked_registry.size_bytes"
+	Assert-Equal -Actual $Manifest.cooked_registry.sha256 -Expected $StagedRegistry.Sha256 -Context "$TargetName manifest cooked_registry.sha256"
 	$ProducerReceipt = $ProducerRegistryReceipts[$TargetName.ToLowerInvariant()]
 	if ([long]$Manifest.cooked_registry.size_bytes -ne [long]$ProducerReceipt.sizeBytes -or [string]$Manifest.cooked_registry.sha256 -cne [string]$ProducerReceipt.sha256) {
 		throw "$TargetName manifest cooked_registry bytes do not match the producer registry receipt recorded at cook time; validation fails closed."
@@ -659,17 +669,17 @@ function Read-InventoryManifest([object] $Inventory, [string] $TargetName, [hash
 	$Finished = ConvertFrom-RequiredUtcTimestamp $Manifest.finished_utc "$TargetName manifest finished_utc"
 	if ($Finished -lt $Started) { throw "$TargetName manifest finished_utc precedes started_utc." }
 	if (-not (Test-JsonInteger $Manifest.package_count) -or $Manifest.package_count -lt 1) { throw "$TargetName manifest package_count must be a positive JSON integer." }
-	Assert-Equal ([long]$Manifest.package_count) ([long]$Inventory.Packages.Count) "$TargetName manifest package_count"
+	Assert-Equal -Actual ([long]$Manifest.package_count) -Expected ([long]$Inventory.Packages.Count) -Context "$TargetName manifest package_count"
 	if (-not (Test-JsonArray $Manifest.pages)) { throw "$TargetName manifest pages must be a JSON array." }
 	$ManifestPages = @($Manifest.pages)
 	if ($ManifestPages.Count -ne @($Inventory.Pages).Count) { throw "$TargetName manifest page count does not match the captured inventory." }
 	for ($Index = 0; $Index -lt $ManifestPages.Count; $Index++) {
-		Assert-ClosedProperties $ManifestPages[$Index] @('name','sha256') "$TargetName manifest page[$Index]"
+		Assert-ClosedProperties -Value $ManifestPages[$Index] -Allowed @('name','sha256') -Context "$TargetName manifest page[$Index]"
 		Assert-LowerSha256 $ManifestPages[$Index].sha256 "$TargetName manifest page[$Index].sha256"
-		Assert-Equal $ManifestPages[$Index].name $Inventory.Pages[$Index].name "$TargetName manifest page[$Index].name"
-		Assert-Equal $ManifestPages[$Index].sha256 $Inventory.Pages[$Index].sha256 "$TargetName manifest page '$($Inventory.Pages[$Index].name)' digest"
+		Assert-Equal -Actual $ManifestPages[$Index].name -Expected $Inventory.Pages[$Index].name -Context "$TargetName manifest page[$Index].name"
+		Assert-Equal -Actual $ManifestPages[$Index].sha256 -Expected $Inventory.Pages[$Index].sha256 -Context "$TargetName manifest page '$($Inventory.Pages[$Index].name)' digest"
 	}
-	foreach ($Name in $Expected.Keys) { Assert-Equal $Manifest.$Name $Expected[$Name] "$TargetName manifest $Name" }
+	foreach ($Name in $Expected.Keys) { Assert-Equal -Actual $Manifest.$Name -Expected $Expected[$Name] -Context "$TargetName manifest $Name" }
 	return [pscustomobject]@{ Value=$Manifest; Path=$ManifestPath; Sha256=(Get-LowerSha256 $ManifestPath) }
 }
 
@@ -715,12 +725,12 @@ $SnapshotReportPath = Join-Path $InputSnapshotRoot 'content-validation-report.js
 $SnapshotPolicyPath = Join-Path $InputSnapshotRoot 'asset-intake-policy.json'
 $SnapshotIntakePath = Join-Path $InputSnapshotRoot 'runtime-asset-intake.json'
 $SnapshotBuildProvenancePath = Join-Path $InputSnapshotRoot 'build-provenance.json'
-[void](Copy-StableFile $ContentReportSource $SnapshotReportPath 'Content validation report')
-[void](Copy-StableFile $PolicySource $SnapshotPolicyPath 'Governed asset intake policy')
-[void](Copy-StableFile $IntakeSource $SnapshotIntakePath 'Governed runtime asset intake registry')
-[void](Copy-StableFile $BuildProvenanceSource $SnapshotBuildProvenancePath 'Build provenance')
-$ClientInventorySnapshot = New-InventorySnapshot $SourceClientCookedInventoryDirectory 'Client' (Join-Path $InputSnapshotRoot 'client')
-$ServerInventorySnapshot = New-InventorySnapshot $SourceServerCookedInventoryDirectory 'Server' (Join-Path $InputSnapshotRoot 'server')
+[void](Copy-StableFile -ExpectedSource $ContentReportSource -DestinationPath $SnapshotReportPath -Context 'Content validation report')
+[void](Copy-StableFile -ExpectedSource $PolicySource -DestinationPath $SnapshotPolicyPath -Context 'Governed asset intake policy')
+[void](Copy-StableFile -ExpectedSource $IntakeSource -DestinationPath $SnapshotIntakePath -Context 'Governed runtime asset intake registry')
+[void](Copy-StableFile -ExpectedSource $BuildProvenanceSource -DestinationPath $SnapshotBuildProvenancePath -Context 'Build provenance')
+$ClientInventorySnapshot = New-InventorySnapshot -Directory $SourceClientCookedInventoryDirectory -TargetName 'Client' -Destination (Join-Path $InputSnapshotRoot 'client')
+$ServerInventorySnapshot = New-InventorySnapshot -Directory $SourceServerCookedInventoryDirectory -TargetName 'Server' -Destination (Join-Path $InputSnapshotRoot 'server')
 
 function Assert-AllValidationInputsUnchanged {
 	foreach ($Check in @(
@@ -747,13 +757,13 @@ $UnresolvedQuantitativeBudgets = @($Policy.thresholds.unresolved_budgets | Where
 $HasUnresolvedQuantitativeThresholds = $UnresolvedQuantitativeBudgets.Count -gt 0
 
 $IntakeFields = @('schema_id','schema_version','policy_schema_id','policy_schema_version','content_root','package_root','expected_asset_count','source_groups','assets')
-Assert-ClosedProperties $Intake $IntakeFields 'Runtime asset intake registry'
-Assert-Equal $Intake.schema_id 'aetheln.runtime-asset-intake' 'Runtime asset intake schema_id'
+Assert-ClosedProperties -Value $Intake -Allowed $IntakeFields -Context 'Runtime asset intake registry'
+Assert-Equal -Actual $Intake.schema_id -Expected 'aetheln.runtime-asset-intake' -Context 'Runtime asset intake schema_id'
 if (-not (Test-JsonInteger $Intake.schema_version) -or $Intake.schema_version -ne 1) { throw 'Runtime asset intake schema_version must be JSON integer 1.' }
-Assert-Equal $Intake.policy_schema_id $Policy.schema_id 'Runtime asset intake policy_schema_id'
-Assert-Equal $Intake.policy_schema_version $Policy.schema_version 'Runtime asset intake policy_schema_version'
-Assert-Equal $Intake.content_root 'Content/' 'Runtime asset intake content_root'
-Assert-Equal $Intake.package_root '/Game' 'Runtime asset intake package_root'
+Assert-Equal -Actual $Intake.policy_schema_id -Expected $Policy.schema_id -Context 'Runtime asset intake policy_schema_id'
+Assert-Equal -Actual $Intake.policy_schema_version -Expected $Policy.schema_version -Context 'Runtime asset intake policy_schema_version'
+Assert-Equal -Actual $Intake.content_root -Expected 'Content/' -Context 'Runtime asset intake content_root'
+Assert-Equal -Actual $Intake.package_root -Expected '/Game' -Context 'Runtime asset intake package_root'
 if (-not (Test-JsonArray $Intake.source_groups) -or @($Intake.source_groups).Count -eq 0) { throw 'Runtime asset intake source_groups must be a non-empty JSON array.' }
 if (-not (Test-JsonArray $Intake.assets) -or @($Intake.assets).Count -eq 0) { throw 'Runtime asset intake assets must be a non-empty JSON array.' }
 if (-not (Test-JsonInteger $Intake.expected_asset_count) -or $Intake.expected_asset_count -ne @($Intake.assets).Count) { throw 'Runtime asset intake expected_asset_count does not match its assets array.' }
@@ -761,7 +771,7 @@ if (-not (Test-JsonInteger $Intake.expected_asset_count) -or $Intake.expected_as
 $SourceGroupFields = @('id','author_or_provider','source_record','source_version','license_or_permission_evidence','modifications','generation_metadata_when_applicable','reviewer','approval_state','naming_owner','import_settings_record','reimport_settings_record')
 $SourceGroupsById = @{}
 foreach ($SourceGroup in @($Intake.source_groups)) {
-	Assert-ClosedProperties $SourceGroup $SourceGroupFields 'Runtime asset intake source group'
+	Assert-ClosedProperties -Value $SourceGroup -Allowed $SourceGroupFields -Context 'Runtime asset intake source group'
 	foreach ($Field in $SourceGroupFields) { if (-not (Test-NonBlankJsonString $SourceGroup.$Field)) { throw "Runtime asset intake source group field '$Field' must be a non-blank string." } }
 	if ($SourceGroupsById.ContainsKey([string]$SourceGroup.id)) { throw "Runtime asset intake contains duplicate source group '$($SourceGroup.id)'." }
 	$SourceGroupsById[[string]$SourceGroup.id] = $SourceGroup
@@ -770,7 +780,7 @@ $IntakeAssetFields = @('asset_path','repository_path','stable_id','content_versi
 $IntakeAssetsByPath = @{}
 $IntakeStableIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($IntakeAsset in @($Intake.assets)) {
-	Assert-ClosedProperties $IntakeAsset $IntakeAssetFields 'Runtime asset intake asset'
+	Assert-ClosedProperties -Value $IntakeAsset -Allowed $IntakeAssetFields -Context 'Runtime asset intake asset'
 	if (@($IntakeAsset.PSObject.Properties.Name) -cnotcontains 'lifecycle_evidence') { throw "Runtime asset intake asset requires exact field 'lifecycle_evidence'." }
 	if ($IntakeAsset.asset_path -isnot [string] -or $IntakeAsset.asset_path -cnotmatch '^/Game(?:/[^\s.]+)+$') { throw "Runtime asset intake asset_path '$($IntakeAsset.asset_path)' is malformed." }
 	if ($IntakeAssetsByPath.ContainsKey(([string]$IntakeAsset.asset_path).ToLowerInvariant())) { throw "Runtime asset intake contains duplicate asset_path '$($IntakeAsset.asset_path)'." }
@@ -780,22 +790,22 @@ foreach ($IntakeAsset in @($Intake.assets)) {
 	if (-not (Test-JsonInteger $IntakeAsset.content_version) -or $IntakeAsset.content_version -lt 1) { throw "Runtime asset intake asset '$($IntakeAsset.asset_path)' content_version must be a positive JSON integer." }
 	if (@($Policy.lifecycle_states) -cnotcontains $IntakeAsset.lifecycle_state) { throw "Runtime asset intake asset '$($IntakeAsset.asset_path)' has unsupported lifecycle_state '$($IntakeAsset.lifecycle_state)'." }
 	if (@($Policy.audiences) -cnotcontains $IntakeAsset.audience) { throw "Runtime asset intake asset '$($IntakeAsset.asset_path)' has unsupported audience '$($IntakeAsset.audience)'." }
-	Assert-LifecycleEvidence $IntakeAsset.lifecycle_evidence $IntakeAsset ([string]$SourceGroupsById[[string]$IntakeAsset.source_group_id].approval_state) "Runtime asset intake asset '$($IntakeAsset.asset_path)' lifecycle_evidence"
+	Assert-LifecycleEvidence -Evidence $IntakeAsset.lifecycle_evidence -IntakeAsset $IntakeAsset -SourceApproval ([string]$SourceGroupsById[[string]$IntakeAsset.source_group_id].approval_state) -Context "Runtime asset intake asset '$($IntakeAsset.asset_path)' lifecycle_evidence"
 	$IntakeAssetsByPath[([string]$IntakeAsset.asset_path).ToLowerInvariant()] = $IntakeAsset
 }
 
 if ([int]$BuildProvenance.schemaVersion -ne 2) { throw 'Build provenance must use schemaVersion 2.' }
 Assert-Boolean $BuildProvenance.source.clean 'Build provenance source.clean'
 if (-not $BuildProvenance.source.clean) { throw 'Build provenance must bind a clean source tree.' }
-Assert-Equal $BuildProvenance.build.clientTarget 'AethelnOnlineClient' 'Build provenance clientTarget'
-Assert-Equal $BuildProvenance.build.clientPlatform 'Win64' 'Build provenance clientPlatform'
-Assert-Equal $BuildProvenance.build.serverTarget 'AethelnOnlineServer' 'Build provenance serverTarget'
-Assert-Equal $BuildProvenance.build.serverPlatform 'Linux' 'Build provenance serverPlatform'
+Assert-Equal -Actual $BuildProvenance.build.clientTarget -Expected 'AethelnOnlineClient' -Context 'Build provenance clientTarget'
+Assert-Equal -Actual $BuildProvenance.build.clientPlatform -Expected 'Win64' -Context 'Build provenance clientPlatform'
+Assert-Equal -Actual $BuildProvenance.build.serverTarget -Expected 'AethelnOnlineServer' -Context 'Build provenance serverTarget'
+Assert-Equal -Actual $BuildProvenance.build.serverPlatform -Expected 'Linux' -Context 'Build provenance serverPlatform'
 foreach ($Field in @('sha256')) { Assert-LowerSha256 $BuildProvenance.tools.compiler.$Field "Build provenance compiler.$Field" }
 Assert-LowerSha256 $BuildProvenance.tools.linuxCrossToolchain.compilerSha256 'Build provenance linuxCrossToolchain.compilerSha256'
 
 $ReportFields = @($Policy.report.required_fields)
-Assert-ClosedProperties $Report $ReportFields 'Content validation report'
+Assert-ClosedProperties -Value $Report -Allowed $ReportFields -Context 'Content validation report'
 if (-not (Test-NonBlankJsonString $Report.schema_id)) { throw 'Content validation report schema_id must be a non-blank string.' }
 if (-not (Test-JsonInteger $Report.schema_version)) { throw 'Content validation report schema_version must be a JSON integer.' }
 if ($Report.schema_id -cne $Policy.report.schema_id -or $Report.schema_version -ne $Policy.report.schema_version) {
@@ -815,7 +825,7 @@ if ($Report.policy_sha256 -cne $ExpectedPolicySha256) { throw 'Content validatio
 Assert-LowerSha256 $Report.intake_sha256 'Content validation report intake_sha256'
 if ($Report.intake_sha256 -cne $ExpectedIntakeSha256) { throw 'Content validation report intake_sha256 does not match the current governed runtime intake registry.' }
 $ExecutionFields = @($Policy.report.execution_provenance_required_fields)
-Assert-ClosedProperties $Report.execution_provenance $ExecutionFields 'Content validation report execution_provenance'
+Assert-ClosedProperties -Value $Report.execution_provenance -Allowed $ExecutionFields -Context 'Content validation report execution_provenance'
 foreach ($Field in @('engine_revision','engine_tag','engine_binary_sha256','build_version_sha256','target','platform','configuration','compiler_sha256','resource_compiler_sha256','project_sha256','policy_sha256','intake_sha256','invocation_sha256','registry_source')) {
 	if (-not (Test-NonBlankJsonString $Report.execution_provenance.$Field)) { throw "Content validation report execution_provenance.$Field must be a non-blank string." }
 }
@@ -833,10 +843,10 @@ foreach ($Field in $ExecutionHashFields) {
 }
 if ($ReportContractVersion -ge 2) {
 	$ArtifactFields = @($Policy.report.artifact_descriptor_required_fields)
-	Assert-ArtifactDescriptor $Report.execution_provenance.target_receipt $ArtifactFields 'Content validation report execution_provenance.target_receipt'
-	Assert-ArtifactDescriptor $Report.execution_provenance.module_manifest $ArtifactFields 'Content validation report execution_provenance.module_manifest'
-	Assert-Equal $Report.execution_provenance.target_receipt.path 'Binaries/Win64/AethelnOnlineEditor.target' 'Content validation target_receipt.path'
-	Assert-Equal $Report.execution_provenance.module_manifest.path 'Binaries/Win64/UnrealEditor.modules' 'Content validation module_manifest.path'
+	Assert-ArtifactDescriptor -Descriptor $Report.execution_provenance.target_receipt -RequiredFields $ArtifactFields -Context 'Content validation report execution_provenance.target_receipt'
+	Assert-ArtifactDescriptor -Descriptor $Report.execution_provenance.module_manifest -RequiredFields $ArtifactFields -Context 'Content validation report execution_provenance.module_manifest'
+	Assert-Equal -Actual $Report.execution_provenance.target_receipt.path -Expected 'Binaries/Win64/AethelnOnlineEditor.target' -Context 'Content validation target_receipt.path'
+	Assert-Equal -Actual $Report.execution_provenance.module_manifest.path -Expected 'Binaries/Win64/UnrealEditor.modules' -Context 'Content validation module_manifest.path'
 	if (-not (Test-JsonArray $Report.execution_provenance.loaded_project_modules)) { throw 'Content validation report execution_provenance.loaded_project_modules must be a JSON array.' }
 	$LoadedProjectModules = @($Report.execution_provenance.loaded_project_modules)
 	$ExpectedModuleNames = @($Policy.report.loaded_project_module_names)
@@ -847,11 +857,11 @@ if ($ReportContractVersion -ge 2) {
 	for ($ModuleIndex = 0; $ModuleIndex -lt $ExpectedModuleNames.Count; $ModuleIndex++) {
 		$Module = $LoadedProjectModules[$ModuleIndex]
 		$ModuleName = [string]$ExpectedModuleNames[$ModuleIndex]
-		Assert-ClosedProperties $Module @($Policy.report.loaded_project_module_required_fields) "Content validation loaded project module $ModuleIndex"
-		Assert-Equal $Module.name $ModuleName "Content validation loaded project module $ModuleIndex name"
+		Assert-ClosedProperties -Value $Module -Allowed @($Policy.report.loaded_project_module_required_fields) -Context "Content validation loaded project module $ModuleIndex"
+		Assert-Equal -Actual $Module.name -Expected $ModuleName -Context "Content validation loaded project module $ModuleIndex name"
 		$ModuleDescriptor = [pscustomobject][ordered]@{ path=$Module.path; size_bytes=$Module.size_bytes; sha256=$Module.sha256; build_id=$Module.build_id }
-		Assert-ArtifactDescriptor $ModuleDescriptor $ArtifactFields "Content validation loaded project module $ModuleName"
-		Assert-Equal $Module.path "Binaries/Win64/UnrealEditor-$ModuleName.dll" "Content validation loaded project module $ModuleName path"
+		Assert-ArtifactDescriptor -Descriptor $ModuleDescriptor -RequiredFields $ArtifactFields -Context "Content validation loaded project module $ModuleName"
+		Assert-Equal -Actual $Module.path -Expected "Binaries/Win64/UnrealEditor-$ModuleName.dll" -Context "Content validation loaded project module $ModuleName path"
 	}
 	$SharedBuildId = [string]$Report.execution_provenance.target_receipt.build_id
 	if ($Report.execution_provenance.module_manifest.build_id -cne $SharedBuildId -or
@@ -860,47 +870,47 @@ if ($ReportContractVersion -ge 2) {
 		throw 'Content validation target receipt, module manifest, GameCore, and GameTests must share one non-blank build_id.'
 	}
 }
-Assert-Equal $Report.execution_provenance.policy_sha256 $ExpectedPolicySha256 'Content validation execution policy_sha256'
-Assert-Equal $Report.execution_provenance.intake_sha256 $ExpectedIntakeSha256 'Content validation execution intake_sha256'
-Assert-Equal $Report.execution_provenance.target 'AethelnOnlineEditor' 'Content validation execution target'
-Assert-Equal $Report.execution_provenance.platform 'Win64' 'Content validation execution platform'
-Assert-Equal $Report.execution_provenance.configuration 'Development' 'Content validation execution configuration'
+Assert-Equal -Actual $Report.execution_provenance.policy_sha256 -Expected $ExpectedPolicySha256 -Context 'Content validation execution policy_sha256'
+Assert-Equal -Actual $Report.execution_provenance.intake_sha256 -Expected $ExpectedIntakeSha256 -Context 'Content validation execution intake_sha256'
+Assert-Equal -Actual $Report.execution_provenance.target -Expected 'AethelnOnlineEditor' -Context 'Content validation execution target'
+Assert-Equal -Actual $Report.execution_provenance.platform -Expected 'Win64' -Context 'Content validation execution platform'
+Assert-Equal -Actual $Report.execution_provenance.configuration -Expected 'Development' -Context 'Content validation execution configuration'
 if ($Report.revision -cnotmatch '^[0-9a-f]{40}$') { throw 'Content validation report revision must be an exact lowercase Git commit.' }
 if ($Report.execution_provenance.engine_revision -cnotmatch '^[0-9a-f]{40}$') { throw 'Content validation execution engine_revision must be an exact lowercase Git commit.' }
-Assert-Equal $Report.execution_provenance.engine_tag '5.8.1-release' 'Content validation execution engine_tag'
-Assert-Equal $Report.engine_identity ("$($Report.execution_provenance.engine_tag)@$($Report.execution_provenance.engine_revision)") 'Content validation engine_identity'
+Assert-Equal -Actual $Report.execution_provenance.engine_tag -Expected '5.8.1-release' -Context 'Content validation execution engine_tag'
+Assert-Equal -Actual $Report.engine_identity -Expected ("$($Report.execution_provenance.engine_tag)@$($Report.execution_provenance.engine_revision)") -Context 'Content validation engine_identity'
 if ($Report.execution_provenance.registry_source -cne 'live_asset_registry' -and -not ($AllowTestEvidence -and $Report.execution_provenance.registry_source -ceq 'test_snapshot')) { throw "Content validation registry_source '$($Report.execution_provenance.registry_source)' is not admissible for cook evidence." }
-Assert-Equal $BuildProvenance.source.revision $Report.revision 'Build/content-validation source revision'
+Assert-Equal -Actual $BuildProvenance.source.revision -Expected $Report.revision -Context 'Build/content-validation source revision'
 # Producer receipts are recorded right after each target's own cook; manifests
 # must match them so a self-consistent manifest cannot vouch for other bytes.
 if (@($BuildProvenance.build.PSObject.Properties.Name) -cnotcontains 'cookedRegistries') { throw 'Build provenance build.cookedRegistries producer registry receipts are missing; validation fails closed.' }
-Assert-ClosedProperties $BuildProvenance.build.cookedRegistries @('client','server') 'Build provenance build.cookedRegistries' -CaseSensitive
+Assert-ClosedProperties -Value $BuildProvenance.build.cookedRegistries -Allowed @('client','server') -Context 'Build provenance build.cookedRegistries' -CaseSensitive
 $ProducerRegistryReceipts = @{}
 foreach ($Kind in @('client','server')) {
 	$Receipt = $BuildProvenance.build.cookedRegistries.$Kind
 	$Context = "$Kind producer registry receipt"
-	Assert-ClosedProperties $Receipt @('relativePath','sizeBytes','sha256','target','platform','cookPlatform','sourceRevision') $Context -CaseSensitive
+	Assert-ClosedProperties -Value $Receipt -Allowed @('relativePath','sizeBytes','sha256','target','platform','cookPlatform','sourceRevision') -Context $Context -CaseSensitive
 	$ExpectedCookPlatform = if ($Kind -ceq 'client') { 'WindowsClient' } else { 'LinuxServer' }
-	Assert-Equal $Receipt.cookPlatform $ExpectedCookPlatform "$Context cookPlatform"
-	Assert-Equal $Receipt.target $(if ($Kind -ceq 'client') { 'AethelnOnlineClient' } else { 'AethelnOnlineServer' }) "$Context target"
-	Assert-Equal $Receipt.platform $(if ($Kind -ceq 'client') { 'Win64' } else { 'Linux' }) "$Context platform"
-	Assert-Equal $Receipt.relativePath "Saved/Cooked/$ExpectedCookPlatform/AethelnOnline/AssetRegistry.bin" "$Context relativePath"
+	Assert-Equal -Actual $Receipt.cookPlatform -Expected $ExpectedCookPlatform -Context "$Context cookPlatform"
+	Assert-Equal -Actual $Receipt.target -Expected $(if ($Kind -ceq 'client') { 'AethelnOnlineClient' } else { 'AethelnOnlineServer' }) -Context "$Context target"
+	Assert-Equal -Actual $Receipt.platform -Expected $(if ($Kind -ceq 'client') { 'Win64' } else { 'Linux' }) -Context "$Context platform"
+	Assert-Equal -Actual $Receipt.relativePath -Expected "Saved/Cooked/$ExpectedCookPlatform/AethelnOnline/AssetRegistry.bin" -Context "$Context relativePath"
 	if ($Receipt.sourceRevision -isnot [string] -or -not $Receipt.sourceRevision.Equals([string]$BuildProvenance.source.revision, [StringComparison]::OrdinalIgnoreCase)) { throw "$Context sourceRevision '$($Receipt.sourceRevision)' does not match build revision '$($BuildProvenance.source.revision)'." }
 	Assert-LowerSha256 $Receipt.sha256 "$Context sha256"
 	if (-not (Test-JsonInteger $Receipt.sizeBytes) -or $Receipt.sizeBytes -lt 1) { throw "$Context sizeBytes must be a positive JSON integer." }
 	$ProducerRegistryReceipts[$Kind] = $Receipt
 }
-Assert-Equal $BuildProvenance.source.projectSha256 $Report.execution_provenance.project_sha256 'Build/content-validation project_sha256'
-Assert-Equal $BuildProvenance.build.configuration $Report.execution_provenance.configuration 'Build/content-validation configuration'
-Assert-Equal $BuildProvenance.tools.unreal.repositoryRevision $Report.execution_provenance.engine_revision 'Build/content-validation engine_revision'
-Assert-Equal $BuildProvenance.tools.unreal.buildVersionSha256 $Report.execution_provenance.build_version_sha256 'Build/content-validation build_version_sha256'
-Assert-Equal $BuildProvenance.tools.compiler.sha256 $Report.execution_provenance.compiler_sha256 'Build/content-validation compiler_sha256'
-Assert-Equal $BuildProvenance.tools.windowsSdk.resourceCompilerSha256 $Report.execution_provenance.resource_compiler_sha256 'Build/content-validation resource_compiler_sha256'
+Assert-Equal -Actual $BuildProvenance.source.projectSha256 -Expected $Report.execution_provenance.project_sha256 -Context 'Build/content-validation project_sha256'
+Assert-Equal -Actual $BuildProvenance.build.configuration -Expected $Report.execution_provenance.configuration -Context 'Build/content-validation configuration'
+Assert-Equal -Actual $BuildProvenance.tools.unreal.repositoryRevision -Expected $Report.execution_provenance.engine_revision -Context 'Build/content-validation engine_revision'
+Assert-Equal -Actual $BuildProvenance.tools.unreal.buildVersionSha256 -Expected $Report.execution_provenance.build_version_sha256 -Context 'Build/content-validation build_version_sha256'
+Assert-Equal -Actual $BuildProvenance.tools.compiler.sha256 -Expected $Report.execution_provenance.compiler_sha256 -Context 'Build/content-validation compiler_sha256'
+Assert-Equal -Actual $BuildProvenance.tools.windowsSdk.resourceCompilerSha256 -Expected $Report.execution_provenance.resource_compiler_sha256 -Context 'Build/content-validation resource_compiler_sha256'
 $StartedAt = ConvertFrom-RequiredUtcTimestamp $Report.started_utc 'Content validation report started_utc'
 $FinishedAt = ConvertFrom-RequiredUtcTimestamp $Report.finished_utc 'Content validation report finished_utc'
 if ($FinishedAt -lt $StartedAt) { throw 'Content validation report finished_utc precedes started_utc.' }
 
-Assert-ClosedProperties $Report.counts @($Policy.report.counts_required_fields) 'Content validation report counts'
+Assert-ClosedProperties -Value $Report.counts -Allowed @($Policy.report.counts_required_fields) -Context 'Content validation report counts'
 foreach ($Field in @($Policy.report.counts_required_fields)) {
 	if (-not (Test-JsonInteger $Report.counts.$Field)) { throw "Content validation report counts.$Field must be a JSON integer." }
 	if ($Report.counts.$Field -lt 0) { throw "Content validation report counts.$Field must not be negative." }
@@ -920,7 +930,7 @@ $ExpectedFamilies = @($Policy.policy_families.id)
 $FamilyStatuses = [System.Collections.Generic.List[string]]::new()
 $FamilyRecords = [System.Collections.Generic.List[object]]::new()
 foreach ($Asset in $Assets) {
-	Assert-ClosedProperties $Asset @($Policy.report.asset_required_fields) 'Content validation asset'
+	Assert-ClosedProperties -Value $Asset -Allowed @($Policy.report.asset_required_fields) -Context 'Content validation asset'
 	if (@($Asset.PSObject.Properties.Name) -cnotcontains 'lifecycle_evidence') { throw "Content validation asset requires exact field 'lifecycle_evidence'." }
 	if ($Asset.asset_path -isnot [string] -or $Asset.asset_path -cnotmatch '^/Game(?:/[^\s.]+)+$') { throw "Content validation asset_path '$($Asset.asset_path)' is malformed." }
 	if (-not $AssetPaths.Add($Asset.asset_path)) { throw "Content validation report contains duplicate asset_path '$($Asset.asset_path)'." }
@@ -933,21 +943,21 @@ foreach ($Asset in $Assets) {
 	$IntakeKey = ([string]$Asset.asset_path).ToLowerInvariant()
 	if (-not $IntakeAssetsByPath.ContainsKey($IntakeKey)) { throw "Content validation asset '$($Asset.asset_path)' is absent from the runtime intake registry." }
 	$IntakeAsset = $IntakeAssetsByPath[$IntakeKey]
-	foreach ($Field in @('stable_id','content_version','audience','lifecycle_state')) { Assert-Equal $Asset.$Field $IntakeAsset.$Field "Content validation asset '$($Asset.asset_path)' $Field" }
+	foreach ($Field in @('stable_id','content_version','audience','lifecycle_state')) { Assert-Equal -Actual $Asset.$Field -Expected $IntakeAsset.$Field -Context "Content validation asset '$($Asset.asset_path)' $Field" }
 
-	Assert-ClosedProperties $Asset.provenance @($Policy.report.provenance_required_fields) "Content validation asset '$($Asset.asset_path)' provenance"
+	Assert-ClosedProperties -Value $Asset.provenance -Allowed @($Policy.report.provenance_required_fields) -Context "Content validation asset '$($Asset.asset_path)' provenance"
 	foreach ($Field in @($Policy.report.provenance_required_fields)) {
 		if ($Asset.provenance.$Field -isnot [string]) { throw "Content validation asset '$($Asset.asset_path)' provenance field '$Field' must be a string." }
 		if ([string]::IsNullOrWhiteSpace($Asset.provenance.$Field)) { throw "Content validation asset '$($Asset.asset_path)' provenance field '$Field' is empty." }
 	}
 	if ($Asset.provenance.content_sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "Content validation asset '$($Asset.asset_path)' content_sha256 is malformed." }
-	Assert-Equal $Asset.provenance.content_sha256 $IntakeAsset.content_sha256 "Content validation asset '$($Asset.asset_path)' content_sha256"
+	Assert-Equal -Actual $Asset.provenance.content_sha256 -Expected $IntakeAsset.content_sha256 -Context "Content validation asset '$($Asset.asset_path)' content_sha256"
 	$SourceGroup = $SourceGroupsById[[string]$IntakeAsset.source_group_id]
 	foreach ($Field in @('author_or_provider','source_record','source_version','license_or_permission_evidence','modifications','generation_metadata_when_applicable','reviewer','approval_state')) {
-		Assert-Equal $Asset.provenance.$Field $SourceGroup.$Field "Content validation asset '$($Asset.asset_path)' provenance.$Field"
+		Assert-Equal -Actual $Asset.provenance.$Field -Expected $SourceGroup.$Field -Context "Content validation asset '$($Asset.asset_path)' provenance.$Field"
 	}
-	Assert-ClosedProperties $Asset.lifecycle_evidence @($Policy.report.lifecycle_evidence_required_fields) "Content validation asset '$($Asset.asset_path)' lifecycle_evidence"
-	Assert-LifecycleEvidence $Asset.lifecycle_evidence $IntakeAsset ([string]$SourceGroup.approval_state) "Content validation asset '$($Asset.asset_path)' lifecycle_evidence"
+	Assert-ClosedProperties -Value $Asset.lifecycle_evidence -Allowed @($Policy.report.lifecycle_evidence_required_fields) -Context "Content validation asset '$($Asset.asset_path)' lifecycle_evidence"
+	Assert-LifecycleEvidence -Evidence $Asset.lifecycle_evidence -IntakeAsset $IntakeAsset -SourceApproval ([string]$SourceGroup.approval_state) -Context "Content validation asset '$($Asset.asset_path)' lifecycle_evidence"
 	if (($Asset.lifecycle_evidence | ConvertTo-Json -Compress -Depth 12) -cne ($IntakeAsset.lifecycle_evidence | ConvertTo-Json -Compress -Depth 12)) { throw "Content validation asset '$($Asset.asset_path)' lifecycle_evidence does not match the intake registry." }
 
 	if (-not (Test-JsonArray $Asset.family_results)) { throw "Content validation asset '$($Asset.asset_path)' family_results must be a JSON array." }
@@ -957,7 +967,7 @@ foreach ($Asset in $Assets) {
 		$FamilyResult = @($FamilyResults | Where-Object { $_.policy_id -ceq $FamilyId })
 		if ($FamilyResult.Count -ne 1) { throw "Content validation asset '$($Asset.asset_path)' policy family '$FamilyId' must occur exactly once." }
 		$FamilyPolicy = @($Policy.policy_families | Where-Object { $_.id -ceq $FamilyId })[0]
-		Assert-ClosedProperties $FamilyResult[0] @($Policy.report.family_result_required_fields) "Content validation asset '$($Asset.asset_path)' policy family '$FamilyId'"
+		Assert-ClosedProperties -Value $FamilyResult[0] -Allowed @($Policy.report.family_result_required_fields) -Context "Content validation asset '$($Asset.asset_path)' policy family '$FamilyId'"
 		if ($ReportContractVersion -ge 2) {
 			foreach ($Field in @('policy_id','applicability','deterministic_status','promotion_status','evidence')) {
 				if (-not (Test-NonBlankJsonString $FamilyResult[0].$Field)) { throw "Content validation asset '$($Asset.asset_path)' policy family '$FamilyId' field '$Field' must be a non-blank string." }
@@ -972,7 +982,7 @@ foreach ($Asset in $Assets) {
 			foreach ($CheckId in $ExpectedChecks) {
 				$CheckResult = @($CheckResults | Where-Object { $_.check_id -ceq $CheckId })
 				if ($CheckResult.Count -ne 1) { throw "Content validation asset '$($Asset.asset_path)' policy family '$FamilyId' check '$CheckId' must occur exactly once." }
-				Assert-ClosedProperties $CheckResult[0] @($Policy.report.check_result_required_fields) "Content validation asset '$($Asset.asset_path)' policy family '$FamilyId' check '$CheckId'"
+				Assert-ClosedProperties -Value $CheckResult[0] -Allowed @($Policy.report.check_result_required_fields) -Context "Content validation asset '$($Asset.asset_path)' policy family '$FamilyId' check '$CheckId'"
 				foreach ($Field in @($Policy.report.check_result_required_fields)) {
 					if (-not (Test-NonBlankJsonString $CheckResult[0].$Field)) { throw "Content validation asset '$($Asset.asset_path)' policy family '$FamilyId' check '$CheckId' field '$Field' must be a non-blank string." }
 				}
@@ -1029,7 +1039,7 @@ foreach ($Asset in $Assets) {
 if ($Assets.Count -ne @($Intake.assets).Count) { throw 'Content validation report must contain exactly every runtime intake registry asset.' }
 
 foreach ($Finding in $ReportFindings) {
-	Assert-ClosedProperties $Finding @($Policy.report.finding_required_fields) 'Content validation finding'
+	Assert-ClosedProperties -Value $Finding -Allowed @($Policy.report.finding_required_fields) -Context 'Content validation finding'
 	foreach ($Field in @($Policy.report.finding_required_fields)) {
 		if (-not (Test-NonBlankJsonString $Finding.$Field)) { throw "Content validation finding field '$Field' must be a non-blank string." }
 	}
@@ -1097,8 +1107,8 @@ $ServerExpectedManifest.platform = [string]$BuildProvenance.build.serverPlatform
 $ServerExpectedManifest.toolchain_identity = [string]$BuildProvenance.tools.linuxCrossToolchain.identity
 $ServerExpectedManifest.toolchain_sha256 = [string]$BuildProvenance.tools.linuxCrossToolchain.compilerSha256
 $ServerExpectedManifest.cook_command_sha256 = Get-StringSha256 (@($BuildProvenance.build.uatInvocations.server.arguments) -join "`0")
-$ClientManifest = Read-InventoryManifest $ClientInventory 'Client' $ClientExpectedManifest
-$ServerManifest = Read-InventoryManifest $ServerInventory 'Server' $ServerExpectedManifest
+$ClientManifest = Read-InventoryManifest -Inventory $ClientInventory -TargetName 'Client' -Expected $ClientExpectedManifest
+$ServerManifest = Read-InventoryManifest -Inventory $ServerInventory -TargetName 'Server' -Expected $ServerExpectedManifest
 $ClientPackages = $ClientInventory.Packages
 $ServerPackages = $ServerInventory.Packages
 $Findings = [System.Collections.Generic.List[object]]::new()
@@ -1138,16 +1148,16 @@ foreach ($Asset in $Assets) {
 	$Path = [string]$Asset.asset_path
 	switch ([string]$Asset.audience) {
 		'shared' {
-			if (-not $ClientPackages.Contains($Path)) { Add-Finding $Asset "shared asset '$Path' is missing from the client cooked inventory" 'Include the shared package in the exact-revision client cook.' }
-			if (-not $ServerPackages.Contains($Path)) { Add-Finding $Asset "shared asset '$Path' is missing from the server cooked inventory" 'Include the shared package in the exact-revision dedicated-server cook.' }
+			if (-not $ClientPackages.Contains($Path)) { Add-Finding -Asset $Asset -Reason "shared asset '$Path' is missing from the client cooked inventory" -Remediation 'Include the shared package in the exact-revision client cook.' }
+			if (-not $ServerPackages.Contains($Path)) { Add-Finding -Asset $Asset -Reason "shared asset '$Path' is missing from the server cooked inventory" -Remediation 'Include the shared package in the exact-revision dedicated-server cook.' }
 		}
 		'server_only' {
-			if (-not $ServerPackages.Contains($Path)) { Add-Finding $Asset "server_only asset '$Path' is missing from the server cooked inventory" 'Include the server-only package in the exact-revision dedicated-server cook.' }
-			if ($ClientPackages.Contains($Path)) { Add-Finding $Asset "server_only asset '$Path' leaked into the client cooked inventory" 'Remove the server-only package from client cook reachability.' }
+			if (-not $ServerPackages.Contains($Path)) { Add-Finding -Asset $Asset -Reason "server_only asset '$Path' is missing from the server cooked inventory" -Remediation 'Include the server-only package in the exact-revision dedicated-server cook.' }
+			if ($ClientPackages.Contains($Path)) { Add-Finding -Asset $Asset -Reason "server_only asset '$Path' leaked into the client cooked inventory" -Remediation 'Remove the server-only package from client cook reachability.' }
 		}
 		'client_only' {
-			if (-not $ClientPackages.Contains($Path)) { Add-Finding $Asset "client_only asset '$Path' is missing from the client cooked inventory" 'Include the client-only package in the exact-revision client cook.' }
-			if ($ServerPackages.Contains($Path)) { Add-Finding $Asset "client_only asset '$Path' leaked into the server cooked inventory" 'Remove the client-only package from dedicated-server cook reachability.' }
+			if (-not $ClientPackages.Contains($Path)) { Add-Finding -Asset $Asset -Reason "client_only asset '$Path' is missing from the client cooked inventory" -Remediation 'Include the client-only package in the exact-revision client cook.' }
+			if ($ServerPackages.Contains($Path)) { Add-Finding -Asset $Asset -Reason "client_only asset '$Path' leaked into the server cooked inventory" -Remediation 'Remove the client-only package from dedicated-server cook reachability.' }
 		}
 	}
 }

@@ -18,7 +18,9 @@ function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
 }
 
-function Assert-ClosedProperties([object] $Value, [string[]] $Allowed, [string] $Context) {
+function Assert-ClosedProperties {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function validates the complete closed property set of one fixture value.')]
+	param([object] $Value, [string[]] $Allowed, [string] $Context)
 	$Names = @(Get-JsonPropertyNames $Value)
 	foreach ($Name in $Names) {
 		Assert-True ($Allowed -contains $Name) "$Context contains unsupported field '$Name'."
@@ -61,7 +63,9 @@ function ConvertFrom-JsonUtcTimestamp([object] $Value, [string] $Context) {
 	return $Parsed
 }
 
-function Get-JsonPropertyNames([object] $Value) {
+function Get-JsonPropertyNames {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function returns every property name of one JSON object.')]
+	param([object] $Value)
 	if ($Value -is [System.Collections.IDictionary]) {
 		return @($Value.Keys | ForEach-Object { [string]$_ })
 	}
@@ -190,7 +194,7 @@ function Assert-JsonSchemaNode([object] $Value, [object] $SchemaNode, [object] $
 	if ($Reference.Found) {
 		Assert-True ($Reference.Value -is [string]) "$Context has a non-string schema reference."
 		$ReferencedSchema = Resolve-LocalJsonSchemaReference $RootSchema ([string]$Reference.Value)
-		Assert-JsonSchemaNode $Value $ReferencedSchema $RootSchema $Context ($Depth + 1)
+		Assert-JsonSchemaNode -Value $Value -SchemaNode $ReferencedSchema -RootSchema $RootSchema -Context $Context -Depth ($Depth + 1)
 	}
 
 	$ExpectedType = Get-JsonProperty $SchemaNode 'type'
@@ -242,7 +246,7 @@ function Assert-JsonSchemaNode([object] $Value, [object] $SchemaNode, [object] $
 				$PropertyValue = Get-JsonProperty $Value $PropertyName
 				if ($PropertyValue.Found) {
 					$PropertySchema = Get-JsonProperty $Properties.Value $PropertyName
-					Assert-JsonSchemaNode $PropertyValue.Value $PropertySchema.Value $RootSchema "$Context.$PropertyName" ($Depth + 1)
+					Assert-JsonSchemaNode -Value $PropertyValue.Value -SchemaNode $PropertySchema.Value -RootSchema $RootSchema -Context "$Context.$PropertyName" -Depth ($Depth + 1)
 				}
 			}
 		}
@@ -283,7 +287,7 @@ function Assert-JsonSchemaNode([object] $Value, [object] $SchemaNode, [object] $
 		$ItemSchema = Get-JsonProperty $SchemaNode 'items'
 		if ($ItemSchema.Found) {
 			for ($Index = 0; $Index -lt $Items.Count; $Index++) {
-				Assert-JsonSchemaNode $Items[$Index] $ItemSchema.Value $RootSchema "${Context}[$Index]" ($Depth + 1)
+				Assert-JsonSchemaNode -Value $Items[$Index] -SchemaNode $ItemSchema.Value -RootSchema $RootSchema -Context "${Context}[$Index]" -Depth ($Depth + 1)
 			}
 		}
 	}
@@ -302,17 +306,21 @@ function Assert-JsonSchemaNode([object] $Value, [object] $SchemaNode, [object] $
 
 function Assert-JsonSchemaConformance([object] $Value, [object] $Schema, [string] $Context) {
 	Assert-SupportedPolicySchema $Schema '$schema'
-	Assert-JsonSchemaNode $Value $Schema $Schema $Context 0
+	Assert-JsonSchemaNode -Value $Value -SchemaNode $Schema -RootSchema $Schema -Context $Context -Depth 0
 }
 
-function Assert-JsonSchemaRejects([object] $Value, [object] $Schema, [string] $ExpectedMessage, [string] $Context) {
+function Assert-JsonSchemaRejects {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Rejects is the verb of the assertion (the schema rejects the value), not a plural noun.')]
+	param([object] $Value, [object] $Schema, [string] $ExpectedMessage, [string] $Context)
 	$Failure = $null
-	try { Assert-JsonSchemaConformance $Value $Schema $Context } catch { $Failure = $_.Exception.Message }
+	try { Assert-JsonSchemaConformance -Value $Value -Schema $Schema -Context $Context } catch { $Failure = $_.Exception.Message }
 	Assert-True (-not [string]::IsNullOrWhiteSpace($Failure)) "$Context must fail schema validation."
 	Assert-True ($Failure -match $ExpectedMessage) "$Context failed with an unexpected diagnostic: $Failure"
 }
 
-function Get-IniSectionLines([string] $ConfigText, [string] $SectionName, [string] $Context) {
+function Get-IniSectionLines {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'The function returns every line of one INI section.')]
+	param([string] $ConfigText, [string] $SectionName, [string] $Context)
 	$EscapedSectionName = [regex]::Escape($SectionName)
 	$Sections = [regex]::Matches($ConfigText, "(?ms)^\[$EscapedSectionName\]\s*(?<Body>.*?)(?=^\[|\z)")
 	Assert-True ($Sections.Count -eq 1) "$Context must contain exactly one [$SectionName] section."
@@ -344,13 +352,13 @@ function ConvertFrom-PrimaryAssetScanRecord([string] $Line, [string] $Context) {
 
 function Assert-AssetManagerConfiguration([string] $ProjectConfig, [string] $PinnedBaseConfig, [string] $Context) {
 	$SectionName = '/Script/Engine.AssetManagerSettings'
-	$BaseLines = @(Get-IniSectionLines $PinnedBaseConfig $SectionName "$Context pinned BaseGame.ini")
+	$BaseLines = @(Get-IniSectionLines -ConfigText $PinnedBaseConfig -SectionName $SectionName -Context "$Context pinned BaseGame.ini")
 	$KeyCommands = @($BaseLines | Where-Object { $_ -match 'PrimaryAssetTypesToScan' -and $_.StartsWith('@') })
 	Assert-True ($KeyCommands.Count -eq 1 -and $KeyCommands[0] -ceq '@PrimaryAssetTypesToScan=PrimaryAssetType') "$Context pinned BaseGame.ini must key PrimaryAssetTypesToScan records by PrimaryAssetType."
 	$BaseScanLines = @($BaseLines | Where-Object { $_ -match 'PrimaryAssetTypesToScan' -and -not $_.StartsWith('@') })
 	$BaseRecords = @($BaseScanLines | ForEach-Object { ConvertFrom-PrimaryAssetScanRecord $_ "$Context pinned BaseGame.ini" })
 
-	$ProjectLines = @(Get-IniSectionLines $ProjectConfig $SectionName "$Context DefaultGame.ini")
+	$ProjectLines = @(Get-IniSectionLines -ConfigText $ProjectConfig -SectionName $SectionName -Context "$Context DefaultGame.ini")
 	$ProjectScanLines = @($ProjectLines | Where-Object { $_ -match 'PrimaryAssetTypesToScan' })
 	$ProjectRecords = [System.Collections.Generic.List[object]]::new()
 	$ProjectTypes = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -391,7 +399,7 @@ function Assert-AssetManagerConfiguration([string] $ProjectConfig, [string] $Pin
 
 function Assert-AssetManagerConfigurationRejected([string] $ProjectConfig, [string] $PinnedBaseConfig, [string] $ExpectedMessage, [string] $Context) {
 	$Failure = $null
-	try { Assert-AssetManagerConfiguration $ProjectConfig $PinnedBaseConfig $Context } catch { $Failure = $_.Exception.Message }
+	try { Assert-AssetManagerConfiguration -ProjectConfig $ProjectConfig -PinnedBaseConfig $PinnedBaseConfig -Context $Context } catch { $Failure = $_.Exception.Message }
 	Assert-True (-not [string]::IsNullOrWhiteSpace($Failure)) "$Context must fail Asset Manager configuration validation."
 	Assert-True ($Failure -match $ExpectedMessage) "$Context failed with an unexpected diagnostic: $Failure"
 }
@@ -443,21 +451,21 @@ $PinnedBaseGameAssetManagerConfig = @'
 +PrimaryAssetTypesToScan=(PrimaryAssetType="Map",AssetBaseClass=/Script/Engine.World,bHasBlueprintClasses=False,bIsEditorOnly=True,Directories=((Path="/Game/Maps")),SpecificAssets=,Rules=(Priority=-1,ChunkId=-1,bApplyRecursively=True,CookRule=Unknown))
 +PrimaryAssetTypesToScan=(PrimaryAssetType="PrimaryAssetLabel",AssetBaseClass=/Script/Engine.PrimaryAssetLabel,bHasBlueprintClasses=False,bIsEditorOnly=True,Directories=((Path="/Game")),SpecificAssets=,Rules=(Priority=-1,ChunkId=-1,bApplyRecursively=True,CookRule=Unknown))
 '@
-Assert-AssetManagerConfiguration $GameConfig $PinnedBaseGameAssetManagerConfig 'Repository Asset Manager configuration'
+Assert-AssetManagerConfiguration -ProjectConfig $GameConfig -PinnedBaseConfig $PinnedBaseGameAssetManagerConfig -Context 'Repository Asset Manager configuration'
 
-$AssetManagerLines = @(Get-IniSectionLines $GameConfig '/Script/Engine.AssetManagerSettings' 'Repository DefaultGame.ini')
+$AssetManagerLines = @(Get-IniSectionLines -ConfigText $GameConfig -SectionName '/Script/Engine.AssetManagerSettings' -Context 'Repository DefaultGame.ini')
 $MapScanLine = @($AssetManagerLines | Where-Object { $_ -match 'PrimaryAssetType="Map"' })[0]
 $SuffixConfig = $GameConfig.Replace($MapScanLine, "${MapScanLine}suffix")
-Assert-AssetManagerConfigurationRejected $SuffixConfig $PinnedBaseGameAssetManagerConfig 'not a canonical.*suffix' 'Suffixed scan record fixture'
+Assert-AssetManagerConfigurationRejected -ProjectConfig $SuffixConfig -PinnedBaseConfig $PinnedBaseGameAssetManagerConfig -ExpectedMessage 'not a canonical.*suffix' -Context 'Suffixed scan record fixture'
 $PrefixConfig = $GameConfig.Replace($MapScanLine, "prefix${MapScanLine}")
-Assert-AssetManagerConfigurationRejected $PrefixConfig $PinnedBaseGameAssetManagerConfig 'not a canonical.*prefix' 'Prefixed scan record fixture'
+Assert-AssetManagerConfigurationRejected -ProjectConfig $PrefixConfig -PinnedBaseConfig $PinnedBaseGameAssetManagerConfig -ExpectedMessage 'not a canonical.*prefix' -Context 'Prefixed scan record fixture'
 $ExtraFieldConfig = $GameConfig.Replace($MapScanLine, $MapScanLine.Replace(',SpecificAssets=', ',UnexpectedField=True,SpecificAssets='))
-Assert-AssetManagerConfigurationRejected $ExtraFieldConfig $PinnedBaseGameAssetManagerConfig 'not a canonical.*UnexpectedField' 'Extra-field scan record fixture'
+Assert-AssetManagerConfigurationRejected -ProjectConfig $ExtraFieldConfig -PinnedBaseConfig $PinnedBaseGameAssetManagerConfig -ExpectedMessage 'not a canonical.*UnexpectedField' -Context 'Extra-field scan record fixture'
 $DuplicateConfig = $GameConfig.TrimEnd() + [Environment]::NewLine + $MapScanLine + [Environment]::NewLine
-Assert-AssetManagerConfigurationRejected $DuplicateConfig $PinnedBaseGameAssetManagerConfig 'duplicate or conflicting.*Map' 'Duplicate scan record fixture'
+Assert-AssetManagerConfigurationRejected -ProjectConfig $DuplicateConfig -PinnedBaseConfig $PinnedBaseGameAssetManagerConfig -ExpectedMessage 'duplicate or conflicting.*Map' -Context 'Duplicate scan record fixture'
 $ConflictingMapLine = $MapScanLine.Replace('bIsEditorOnly=False', 'bIsEditorOnly=True')
 $ConflictingConfig = $GameConfig.TrimEnd() + [Environment]::NewLine + $ConflictingMapLine + [Environment]::NewLine
-Assert-AssetManagerConfigurationRejected $ConflictingConfig $PinnedBaseGameAssetManagerConfig 'duplicate or conflicting.*Map' 'Conflicting scan record fixture'
+Assert-AssetManagerConfigurationRejected -ProjectConfig $ConflictingConfig -PinnedBaseConfig $PinnedBaseGameAssetManagerConfig -ExpectedMessage 'duplicate or conflicting.*Map' -Context 'Conflicting scan record fixture'
 Write-Output 'PASS: pinned keyed Asset Manager merge and strict project scan records fail closed'
 
 $ExpectedLifecycle = @('concept_reference', 'temporary_prototype', 'runtime_candidate', 'production_approved')
@@ -474,36 +482,36 @@ $ExpectedChecksByFamily = [ordered]@{
 	reference_boundary = @('stable_id_unique','redirectors','broken_references','compatible_content_version','audience_reachability','hard_reference_exceptions')
 }
 
-Assert-JsonSchemaConformance $Policy $Schema 'Repository policy'
+Assert-JsonSchemaConformance -Value $Policy -Schema $Schema -Context 'Repository policy'
 Write-Output 'PASS: repository policy conforms to its closed JSON Schema'
 
 $UnknownTopLevelPolicy = Copy-JsonObject $Policy
 Add-Member -InputObject $UnknownTopLevelPolicy -MemberType NoteProperty -Name 'unexpected_top_level' -Value $true
-Assert-JsonSchemaRejects $UnknownTopLevelPolicy $Schema 'unexpected_top_level' 'Unknown top-level field'
+Assert-JsonSchemaRejects -Value $UnknownTopLevelPolicy -Schema $Schema -ExpectedMessage 'unexpected_top_level' -Context 'Unknown top-level field'
 
 $UnknownNestedPolicy = Copy-JsonObject $Policy
 Add-Member -InputObject $UnknownNestedPolicy.references.hard_reference_exceptions -MemberType NoteProperty -Name 'unexpected_nested' -Value $true
-Assert-JsonSchemaRejects $UnknownNestedPolicy $Schema 'unexpected_nested' 'Unknown nested field'
+Assert-JsonSchemaRejects -Value $UnknownNestedPolicy -Schema $Schema -ExpectedMessage 'unexpected_nested' -Context 'Unknown nested field'
 
 $WrongTypePolicy = Copy-JsonObject $Policy
 $WrongTypePolicy.policy_families[0].checks = 'simple_collision'
-Assert-JsonSchemaRejects $WrongTypePolicy $Schema 'expected type array' 'Type constraint'
+Assert-JsonSchemaRejects -Value $WrongTypePolicy -Schema $Schema -ExpectedMessage 'expected type array' -Context 'Type constraint'
 
 $InvalidEnumPolicy = Copy-JsonObject $Policy
 $InvalidEnumPolicy.lifecycle_states[0] = 'unknown_state'
-Assert-JsonSchemaRejects $InvalidEnumPolicy $Schema 'enum' 'Enum constraint'
+Assert-JsonSchemaRejects -Value $InvalidEnumPolicy -Schema $Schema -ExpectedMessage 'enum' -Context 'Enum constraint'
 
 $InvalidConstPolicy = Copy-JsonObject $Policy
 $InvalidConstPolicy.lifecycle_gates.repository_presence_implies_approval = $true
-Assert-JsonSchemaRejects $InvalidConstPolicy $Schema 'const' 'Const constraint'
+Assert-JsonSchemaRejects -Value $InvalidConstPolicy -Schema $Schema -ExpectedMessage 'const' -Context 'Const constraint'
 
 $InvalidReferencedPolicy = Copy-JsonObject $Policy
 $InvalidReferencedPolicy.references.hard_reference_exceptions.default_allowed = $true
-Assert-JsonSchemaRejects $InvalidReferencedPolicy $Schema 'default_allowed.*const' 'Local reference constraint'
+Assert-JsonSchemaRejects -Value $InvalidReferencedPolicy -Schema $Schema -ExpectedMessage 'default_allowed.*const' -Context 'Local reference constraint'
 
 $UnsupportedKeywordSchema = Copy-JsonObject $Schema
 Add-Member -InputObject $UnsupportedKeywordSchema.properties.schema_id -MemberType NoteProperty -Name 'maxLength' -Value 64
-Assert-JsonSchemaRejects $Policy $UnsupportedKeywordSchema "unsupported schema keyword 'maxLength'" 'Unsupported validation keyword'
+Assert-JsonSchemaRejects -Value $Policy -Schema $UnsupportedKeywordSchema -ExpectedMessage "unsupported schema keyword 'maxLength'" -Context 'Unsupported validation keyword'
 Write-Output 'PASS: schema rejects unknown fields and type, enum, const, local-ref, and unsupported-keyword violations'
 
 $TrackedRuntimePaths = @(
@@ -535,7 +543,7 @@ foreach ($Line in $AttributeLines) {
 
 function Assert-LifecycleTransitionEvidence([object] $Asset, [object] $SourceGroup, [string] $Context) {
 	$Evidence = $Asset.lifecycle_evidence
-	Assert-ClosedProperties $Evidence @('content_identity','temporary_prototype','runtime_candidate','production_approval') "$Context lifecycle evidence"
+	Assert-ClosedProperties -Value $Evidence -Allowed @('content_identity','temporary_prototype','runtime_candidate','production_approval') -Context "$Context lifecycle evidence"
 	Assert-True ($Evidence.content_identity.stable_id -ceq $Asset.stable_id -and [int]$Evidence.content_identity.content_version -eq [int]$Asset.content_version -and $Evidence.content_identity.content_sha256 -ceq $Asset.content_sha256) "$Context lifecycle evidence does not bind the exact content identity."
 	$Temporary = @($Evidence.temporary_prototype); $Candidate = @($Evidence.runtime_candidate); $Production = @($Evidence.production_approval)
 	if ($Asset.lifecycle_state -ceq 'temporary_prototype') {
@@ -553,7 +561,7 @@ function Assert-LifecycleTransitionEvidence([object] $Asset, [object] $SourceGro
 }
 
 function Assert-RuntimeIntakeContract([object] $Registry, [string] $Context, [bool] $ValidateSchema = $true) {
-	if ($ValidateSchema) { Assert-JsonSchemaConformance $Registry $RuntimeIntakeSchema $Context }
+	if ($ValidateSchema) { Assert-JsonSchemaConformance -Value $Registry -Schema $RuntimeIntakeSchema -Context $Context }
 	Assert-True ($Registry.schema_id -ceq 'aetheln.runtime-asset-intake' -and $Registry.schema_version -eq 1) "$Context has an incompatible registry schema identity."
 	Assert-True ($Registry.policy_schema_id -ceq $Policy.schema_id -and $Registry.policy_schema_version -eq $Policy.schema_version) "$Context does not bind the current policy schema identity."
 	Assert-True ($Registry.content_root -ceq 'Content/' -and $Registry.package_root -ceq '/Game') "$Context has unsupported runtime roots."
@@ -598,10 +606,10 @@ function Assert-RuntimeIntakeContract([object] $Registry, [string] $Context, [bo
 		Assert-True ($AttributesByPath[[string]$Asset.repository_path]['lockable'] -ceq 'set') "$Context package '$($Asset.repository_path)' is not lockable."
 		Assert-True ($SourceGroupIds.Contains([string]$Asset.source_group_id)) "$Context asset '$($Asset.asset_path)' names unknown source group '$($Asset.source_group_id)'."
 		[void]$UsedSourceGroups.Add([string]$Asset.source_group_id)
-		Assert-LifecycleTransitionEvidence $Asset (@($SourceGroups | Where-Object { $_.id -ceq $Asset.source_group_id })[0]) "$Context asset '$($Asset.asset_path)'"
+		Assert-LifecycleTransitionEvidence -Asset $Asset -SourceGroup (@($SourceGroups | Where-Object { $_.id -ceq $Asset.source_group_id })[0]) -Context "$Context asset '$($Asset.asset_path)'"
 		Assert-True ($Asset.lifecycle_state -ceq 'temporary_prototype') "$Context current package '$($Asset.asset_path)' must remain an explicit temporary prototype."
 		Assert-True (Test-JsonObject $Asset.lifecycle_evidence) "$Context package '$($Asset.asset_path)' must carry closed lifecycle evidence."
-		Assert-ClosedProperties $Asset.lifecycle_evidence @('content_identity','temporary_prototype','runtime_candidate','production_approval') "$Context lifecycle evidence"
+		Assert-ClosedProperties -Value $Asset.lifecycle_evidence -Allowed @('content_identity','temporary_prototype','runtime_candidate','production_approval') -Context "$Context lifecycle evidence"
 		Assert-True ($Asset.lifecycle_evidence.content_identity.stable_id -ceq $Asset.stable_id -and [int]$Asset.lifecycle_evidence.content_identity.content_version -eq [int]$Asset.content_version -and $Asset.lifecycle_evidence.content_identity.content_sha256 -ceq $Asset.content_sha256) "$Context lifecycle evidence must bind the exact governed content identity."
 		Assert-True (@($Asset.lifecycle_evidence.temporary_prototype).Count -eq 1 -and @($Asset.lifecycle_evidence.runtime_candidate).Count -eq 0 -and @($Asset.lifecycle_evidence.production_approval).Count -eq 0) "$Context temporary package '$($Asset.asset_path)' must have exactly one temporary record and no promotion records."
 		$TemporaryEvidence = @($Asset.lifecycle_evidence.temporary_prototype)[0]
@@ -628,34 +636,34 @@ Write-Output "PASS: closed runtime intake registry covers all $($TrackedRuntimeP
 
 $UnknownRuntimeIntake = Copy-JsonObject $RuntimeIntake
 Add-Member -InputObject $UnknownRuntimeIntake -MemberType NoteProperty -Name 'unexpected_top_level' -Value $true
-Assert-JsonSchemaRejects $UnknownRuntimeIntake $RuntimeIntakeSchema 'unexpected_top_level' 'Runtime-intake unknown-field fixture'
+Assert-JsonSchemaRejects -Value $UnknownRuntimeIntake -Schema $RuntimeIntakeSchema -ExpectedMessage 'unexpected_top_level' -Context 'Runtime-intake unknown-field fixture'
 $InvalidRuntimeVersion = Copy-JsonObject $RuntimeIntake
 $InvalidRuntimeVersion.assets[0].content_version = 0
-Assert-JsonSchemaRejects $InvalidRuntimeVersion $RuntimeIntakeSchema 'less than minimum' 'Runtime-intake invalid-version fixture'
+Assert-JsonSchemaRejects -Value $InvalidRuntimeVersion -Schema $RuntimeIntakeSchema -ExpectedMessage 'less than minimum' -Context 'Runtime-intake invalid-version fixture'
 $DuplicateRuntimePath = Copy-JsonObject $RuntimeIntake
 $DuplicateRuntimePath.assets[1].repository_path = $DuplicateRuntimePath.assets[0].repository_path
 $DuplicateRuntimePath.assets[1].asset_path = $DuplicateRuntimePath.assets[0].asset_path
 $DuplicateRuntimeFailure = $null
-try { Assert-RuntimeIntakeContract $DuplicateRuntimePath 'Runtime-intake duplicate-path fixture' $false } catch { $DuplicateRuntimeFailure = $_.Exception.Message }
+try { Assert-RuntimeIntakeContract -Registry $DuplicateRuntimePath -Context 'Runtime-intake duplicate-path fixture' -ValidateSchema $false } catch { $DuplicateRuntimeFailure = $_.Exception.Message }
 Assert-True ($DuplicateRuntimeFailure -match 'duplicate repository_path') 'Runtime intake must reject a duplicate package record.'
 $DuplicateRuntimeStableId = Copy-JsonObject $RuntimeIntake
 $DuplicateRuntimeStableId.assets[1].stable_id = $DuplicateRuntimeStableId.assets[0].stable_id
 $DuplicateStableFailure = $null
-try { Assert-RuntimeIntakeContract $DuplicateRuntimeStableId 'Runtime-intake duplicate-stable-id fixture' $false } catch { $DuplicateStableFailure = $_.Exception.Message }
+try { Assert-RuntimeIntakeContract -Registry $DuplicateRuntimeStableId -Context 'Runtime-intake duplicate-stable-id fixture' -ValidateSchema $false } catch { $DuplicateStableFailure = $_.Exception.Message }
 Assert-True ($DuplicateStableFailure -match 'duplicate stable_id') 'Runtime intake must reject duplicate stable IDs.'
 $MissingRuntimeStableId = Copy-JsonObject $RuntimeIntake
 $MissingRuntimeStableId.assets[0].stable_id = ''
-Assert-JsonSchemaRejects $MissingRuntimeStableId $RuntimeIntakeSchema 'stable_id.*pattern' 'Runtime-intake missing-stable-id fixture'
+Assert-JsonSchemaRejects -Value $MissingRuntimeStableId -Schema $RuntimeIntakeSchema -ExpectedMessage 'stable_id.*pattern' -Context 'Runtime-intake missing-stable-id fixture'
 $MissingRuntimeRecord = Copy-JsonObject $RuntimeIntake
 $MissingRuntimeRecord.assets = @($MissingRuntimeRecord.assets | Select-Object -Skip 1)
 $MissingRuntimeRecord.expected_asset_count = $MissingRuntimeRecord.assets.Count
 $MissingRuntimeFailure = $null
-try { Assert-RuntimeIntakeContract $MissingRuntimeRecord 'Runtime-intake missing-package fixture' $false } catch { $MissingRuntimeFailure = $_.Exception.Message }
+try { Assert-RuntimeIntakeContract -Registry $MissingRuntimeRecord -Context 'Runtime-intake missing-package fixture' -ValidateSchema $false } catch { $MissingRuntimeFailure = $_.Exception.Message }
 Assert-True ($MissingRuntimeFailure -match 'exactly one record for every committed runtime package') 'Runtime intake must fail closed when a committed package lacks a record.'
 $WrongRuntimeHash = Copy-JsonObject $RuntimeIntake
 $WrongRuntimeHash.assets[0].content_sha256 = ('0' * 64)
 $WrongRuntimeHashFailure = $null
-try { Assert-RuntimeIntakeContract $WrongRuntimeHash 'Runtime-intake stale-hash fixture' $false } catch { $WrongRuntimeHashFailure = $_.Exception.Message }
+try { Assert-RuntimeIntakeContract -Registry $WrongRuntimeHash -Context 'Runtime-intake stale-hash fixture' -ValidateSchema $false } catch { $WrongRuntimeHashFailure = $_.Exception.Message }
 Assert-True ($WrongRuntimeHashFailure -match 'does not match its committed LFS object') 'Runtime intake must reject a stale package hash.'
 
 $CandidateAsset = Copy-JsonObject $RuntimeIntake.assets[0]
@@ -664,11 +672,11 @@ $CandidateAsset.lifecycle_state = 'runtime_candidate'
 $CandidateGroup.approval_state = 'runtime_candidate_approved'
 $CandidateAsset.lifecycle_evidence.temporary_prototype = @()
 $CandidateAsset.lifecycle_evidence.runtime_candidate = @([ordered]@{ review_revision = ('a' * 40); reviewer = 'reviewer'; approval_record = 'candidate approval'; stable_id = $CandidateAsset.stable_id; content_version = $CandidateAsset.content_version; content_sha256 = $CandidateAsset.content_sha256 })
-Assert-LifecycleTransitionEvidence $CandidateAsset $CandidateGroup 'Valid runtime-candidate fixture'
+Assert-LifecycleTransitionEvidence -Asset $CandidateAsset -SourceGroup $CandidateGroup -Context 'Valid runtime-candidate fixture'
 $StaleCandidate = Copy-JsonObject $CandidateAsset
 $StaleCandidate.lifecycle_evidence.runtime_candidate[0].content_sha256 = ('0' * 64)
 $StaleCandidateFailure = $null
-try { Assert-LifecycleTransitionEvidence $StaleCandidate $CandidateGroup 'Stale runtime-candidate fixture' } catch { $StaleCandidateFailure = $_.Exception.Message }
+try { Assert-LifecycleTransitionEvidence -Asset $StaleCandidate -SourceGroup $CandidateGroup -Context 'Stale runtime-candidate fixture' } catch { $StaleCandidateFailure = $_.Exception.Message }
 Assert-True ($StaleCandidateFailure -match 'does not bind exact revision and content identity') 'Runtime-candidate evidence must reject stale content identity.'
 
 $ProductionAsset = Copy-JsonObject $CandidateAsset
@@ -676,11 +684,11 @@ $ProductionGroup = Copy-JsonObject $CandidateGroup
 $ProductionAsset.lifecycle_state = 'production_approved'
 $ProductionGroup.approval_state = 'production_approved'
 $ProductionAsset.lifecycle_evidence.production_approval = @([ordered]@{ candidate_review_revision = ('a' * 40); candidate_approval_record = 'candidate approval'; production_revision = ('b' * 40); reviewer = 'production reviewer'; approval_record = 'production approval'; stable_id = $ProductionAsset.stable_id; content_version = $ProductionAsset.content_version; content_sha256 = $ProductionAsset.content_sha256 })
-Assert-LifecycleTransitionEvidence $ProductionAsset $ProductionGroup 'Valid production fixture'
+Assert-LifecycleTransitionEvidence -Asset $ProductionAsset -SourceGroup $ProductionGroup -Context 'Valid production fixture'
 $StaleProduction = Copy-JsonObject $ProductionAsset
 $StaleProduction.lifecycle_evidence.production_approval[0].candidate_approval_record = 'different candidate approval'
 $StaleProductionFailure = $null
-try { Assert-LifecycleTransitionEvidence $StaleProduction $ProductionGroup 'Stale production fixture' } catch { $StaleProductionFailure = $_.Exception.Message }
+try { Assert-LifecycleTransitionEvidence -Asset $StaleProduction -SourceGroup $ProductionGroup -Context 'Stale production fixture' } catch { $StaleProductionFailure = $_.Exception.Message }
 Assert-True ($StaleProductionFailure -match 'does not bind exact candidate approval') 'Production evidence must reject a different candidate approval record.'
 Write-Output 'PASS: runtime intake rejects unknown fields, invalid versions, duplicate paths, missing packages, and stale LFS hashes'
 
@@ -780,10 +788,10 @@ foreach ($Pair in $ExpectedSoftAudiencePairs) { Assert-True ($ActualSoftAudience
 Assert-True (-not $ActualSoftAudiencePairs.Contains('shared>server_only')) 'Shared content must not gain an undeclared server-only soft dependency.'
 $UnanchoredSoftPolicy = Copy-JsonObject $Policy
 $UnanchoredSoftPolicy.references.soft_reference_rules.rules[0].source_package_pattern = '/Game/.*'
-Assert-JsonSchemaRejects $UnanchoredSoftPolicy $Schema 'source_package_pattern.*pattern' 'Unanchored-soft-reference fixture'
+Assert-JsonSchemaRejects -Value $UnanchoredSoftPolicy -Schema $Schema -ExpectedMessage 'source_package_pattern.*pattern' -Context 'Unanchored-soft-reference fixture'
 $UnknownSoftFieldPolicy = Copy-JsonObject $Policy
 Add-Member -InputObject $UnknownSoftFieldPolicy.references.soft_reference_rules.rules[0] -MemberType NoteProperty -Name 'allow_prefix' -Value $true
-Assert-JsonSchemaRejects $UnknownSoftFieldPolicy $Schema 'allow_prefix' 'Unknown-soft-reference-field fixture'
+Assert-JsonSchemaRejects -Value $UnknownSoftFieldPolicy -Schema $Schema -ExpectedMessage 'allow_prefix' -Context 'Unknown-soft-reference-field fixture'
 Assert-True ($ReferenceRules.hard_reference_exceptions.default_allowed -eq $false) 'Hard-reference exceptions must be denied by default.'
 foreach ($Field in @('owner','justification','source_audience','target_audience','reviewer','approval_record','revisit_trigger')) {
 	Assert-True ($ReferenceRules.hard_reference_exceptions.required_fields -contains $Field) "Hard-reference exception field '$Field' is missing."
@@ -829,7 +837,6 @@ foreach ($BudgetId in $BudgetIds) {
 Assert-True (@($Policy.thresholds.unresolved_budgets).Count -eq $BudgetIds.Count) 'The unresolved budget registry must contain only the governed TBD entries.'
 $UnresolvedQuantitativeBudgets = @($Policy.thresholds.unresolved_budgets | Where-Object { $_.value -ceq $Policy.thresholds.unresolved_value })
 $UnresolvedBudgetIds = @($UnresolvedQuantitativeBudgets | ForEach-Object { [string]$_.id })
-$HasUnresolvedQuantitativeThresholds = $UnresolvedQuantitativeBudgets.Count -gt 0
 
 $ReportContract = $Policy.report
 foreach ($Field in @('asset_required_fields','provenance_required_fields','lifecycle_evidence_required_fields','execution_provenance_required_fields','family_result_required_fields','check_result_required_fields','artifact_descriptor_required_fields','loaded_project_module_required_fields','loaded_project_module_names','counts_required_fields','allowed_results','allowed_deterministic_statuses','allowed_promotion_statuses','allowed_severities','allowed_registry_sources')) {
@@ -842,7 +849,7 @@ Assert-True ($ReportContract.finding_required_fields -contains 'code') 'Findings
 
 function Assert-ArtifactDescriptor([object] $Descriptor, [string] $Context) {
 	Assert-True (Test-JsonObject $Descriptor) "$Context must be an object."
-	Assert-ClosedProperties $Descriptor @($ReportContract.artifact_descriptor_required_fields) $Context
+	Assert-ClosedProperties -Value $Descriptor -Allowed @($ReportContract.artifact_descriptor_required_fields) -Context $Context
 	if (-not (Test-NonBlankJsonString $Descriptor.path) -or ([string]$Descriptor.path).Contains(':') -or ([string]$Descriptor.path).StartsWith('/') -or ([string]$Descriptor.path).Contains('\\') -or [string]$Descriptor.path -match '(?:^|/)\.\.(?:/|$)') {
 		throw "$Context.path must be canonical repository-relative forward-slash form."
 	}
@@ -853,7 +860,7 @@ function Assert-ArtifactDescriptor([object] $Descriptor, [string] $Context) {
 
 function Assert-ReportContract([object] $Report, [string] $Context) {
 	Assert-True (Test-JsonObject $Report) "$Context must be a JSON object."
-	Assert-ClosedProperties $Report @($ReportContract.required_fields) $Context
+	Assert-ClosedProperties -Value $Report -Allowed @($ReportContract.required_fields) -Context $Context
 	Assert-True (Test-NonBlankJsonString $Report.schema_id) "$Context schema_id must be a non-blank string."
 	Assert-True (Test-JsonInteger $Report.schema_version) "$Context schema_version must be a JSON integer."
 	Assert-True ($Report.schema_id -ceq $ReportContract.schema_id -and $Report.schema_version -eq $ReportContract.schema_version) "$Context has an incompatible schema identity."
@@ -864,7 +871,7 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 	Assert-True (Test-NonBlankJsonString $Report.policy_sha256 -and $Report.policy_sha256 -cmatch '^[0-9a-f]{64}$') "$Context policy_sha256 must be a lowercase SHA-256 string."
 	Assert-True (Test-NonBlankJsonString $Report.intake_sha256 -and $Report.intake_sha256 -cmatch '^[0-9a-f]{64}$') "$Context intake_sha256 must be a lowercase SHA-256 string."
 	Assert-True (Test-JsonObject $Report.execution_provenance) "$Context execution_provenance must be a JSON object."
-	Assert-ClosedProperties $Report.execution_provenance @($ReportContract.execution_provenance_required_fields) "$Context execution_provenance"
+	Assert-ClosedProperties -Value $Report.execution_provenance -Allowed @($ReportContract.execution_provenance_required_fields) -Context "$Context execution_provenance"
 	Assert-True ($Report.execution_provenance.repository_clean -is [bool] -and $Report.execution_provenance.repository_clean) "$Context execution_provenance.repository_clean must be true."
 	foreach ($Field in @('engine_binary_sha256','build_version_sha256','editor_build_command_sha256','editor_build_log_sha256','compiler_sha256','resource_compiler_sha256','project_sha256','policy_sha256','intake_sha256','invocation_sha256')) {
 		Assert-True (Test-NonBlankJsonString $Report.execution_provenance.$Field -and $Report.execution_provenance.$Field -cmatch '^[0-9a-f]{64}$') "$Context execution_provenance.$Field must be a lowercase SHA-256 string."
@@ -881,7 +888,7 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 	foreach ($Index in 0..1) {
 		$Module = $LoadedModules[$Index]
 		Assert-True (Test-JsonObject $Module) "$Context loaded module $Index must be an object."
-		Assert-ClosedProperties $Module @($ReportContract.loaded_project_module_required_fields) "$Context loaded module $Index"
+		Assert-ClosedProperties -Value $Module -Allowed @($ReportContract.loaded_project_module_required_fields) -Context "$Context loaded module $Index"
 		$ExpectedName = @($ReportContract.loaded_project_module_names)[$Index]
 		Assert-True ($Module.name -ceq $ExpectedName) "$Context loaded module $Index must be $ExpectedName."
 		$Descriptor = [ordered]@{ path = $Module.path; size_bytes = $Module.size_bytes; sha256 = $Module.sha256; build_id = $Module.build_id }
@@ -900,7 +907,7 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 	Assert-True ($Finished -ge $Started) "$Context finished_utc precedes started_utc."
 
 	Assert-True (Test-JsonObject $Report.counts) "$Context counts must be a JSON object."
-	Assert-ClosedProperties $Report.counts @($ReportContract.counts_required_fields) "$Context counts"
+	Assert-ClosedProperties -Value $Report.counts -Allowed @($ReportContract.counts_required_fields) -Context "$Context counts"
 	foreach ($Field in @($ReportContract.counts_required_fields)) {
 		Assert-True (Test-JsonInteger $Report.counts.$Field) "$Context counts.$Field must be a JSON integer."
 		Assert-True ($Report.counts.$Field -ge 0) "$Context counts.$Field must not be negative."
@@ -919,7 +926,7 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 	$FamilyRecords = [System.Collections.Generic.List[object]]::new()
 	foreach ($Asset in $Assets) {
 		Assert-True (Test-JsonObject $Asset) "$Context asset must be a JSON object."
-		Assert-ClosedProperties $Asset @($ReportContract.asset_required_fields) "$Context asset"
+		Assert-ClosedProperties -Value $Asset -Allowed @($ReportContract.asset_required_fields) -Context "$Context asset"
 		Assert-True (Test-NonBlankJsonString $Asset.asset_path -and $Asset.asset_path -cmatch '^/Game(?:/[^\s.]+)+$') "$Context asset_path '$($Asset.asset_path)' is malformed."
 		Assert-True ($AssetPaths.Add($Asset.asset_path)) "$Context contains duplicate asset_path '$($Asset.asset_path)'."
 		Assert-True (Test-NonBlankJsonString $Asset.stable_id -and $Asset.stable_id -cmatch '^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$') "$Context stable_id '$($Asset.stable_id)' is malformed."
@@ -930,7 +937,7 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 		Assert-True (Test-NonBlankJsonString $Asset.lifecycle_state -and $ExpectedLifecycle -ccontains $Asset.lifecycle_state) "$Context asset '$($Asset.asset_path)' has an unsupported lifecycle_state."
 
 		Assert-True (Test-JsonObject $Asset.provenance) "$Context provenance must be a JSON object."
-		Assert-ClosedProperties $Asset.provenance @($ReportContract.provenance_required_fields) "$Context provenance"
+		Assert-ClosedProperties -Value $Asset.provenance -Allowed @($ReportContract.provenance_required_fields) -Context "$Context provenance"
 		foreach ($Field in @($ReportContract.provenance_required_fields)) {
 			Assert-True ($Asset.provenance.$Field -is [string]) "$Context provenance field '$Field' must be a string."
 			Assert-True (-not [string]::IsNullOrWhiteSpace($Asset.provenance.$Field)) "$Context provenance field '$Field' is empty."
@@ -941,8 +948,8 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 			Assert-True ($Asset.provenance.approval_state -ceq $ExpectedApproval) "$Context lifecycle '$($Asset.lifecycle_state)' lacks matching approval evidence."
 		}
 		Assert-True (Test-JsonObject $Asset.lifecycle_evidence) "$Context lifecycle_evidence must be a JSON object."
-		Assert-ClosedProperties $Asset.lifecycle_evidence @($ReportContract.lifecycle_evidence_required_fields) "$Context lifecycle_evidence"
-		Assert-ClosedProperties $Asset.lifecycle_evidence.content_identity @('stable_id','content_version','content_sha256') "$Context lifecycle content identity"
+		Assert-ClosedProperties -Value $Asset.lifecycle_evidence -Allowed @($ReportContract.lifecycle_evidence_required_fields) -Context "$Context lifecycle_evidence"
+		Assert-ClosedProperties -Value $Asset.lifecycle_evidence.content_identity -Allowed @('stable_id','content_version','content_sha256') -Context "$Context lifecycle content identity"
 		Assert-True ($Asset.lifecycle_evidence.content_identity.stable_id -ceq $Asset.stable_id -and [int]$Asset.lifecycle_evidence.content_identity.content_version -eq [int]$Asset.content_version -and $Asset.lifecycle_evidence.content_identity.content_sha256 -ceq $Asset.provenance.content_sha256) "$Context lifecycle evidence must bind the exact content identity."
 		if ($Asset.lifecycle_state -ceq 'concept_reference') {
 			Assert-True (@($Asset.lifecycle_evidence.temporary_prototype).Count -eq 0 -and @($Asset.lifecycle_evidence.runtime_candidate).Count -eq 0 -and @($Asset.lifecycle_evidence.production_approval).Count -eq 0) "$Context concept reference cannot carry promotion evidence."
@@ -950,13 +957,13 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 		elseif ($Asset.lifecycle_state -ceq 'temporary_prototype') {
 			$Temporary = @($Asset.lifecycle_evidence.temporary_prototype)
 			Assert-True ($Temporary.Count -eq 1 -and @($Asset.lifecycle_evidence.runtime_candidate).Count -eq 0 -and @($Asset.lifecycle_evidence.production_approval).Count -eq 0) "$Context temporary prototype must have only temporary lifecycle evidence."
-			Assert-ClosedProperties $Temporary[0] @('owner','approval_record','recovery_trigger','may_be_runtime_candidate') "$Context temporary lifecycle evidence"
+			Assert-ClosedProperties -Value $Temporary[0] -Allowed @('owner','approval_record','recovery_trigger','may_be_runtime_candidate') -Context "$Context temporary lifecycle evidence"
 			Assert-True ($Temporary[0].may_be_runtime_candidate -eq $false) "$Context temporary prototype cannot be promotion-capable."
 		}
 		else {
 			$Candidate = @($Asset.lifecycle_evidence.runtime_candidate)
 			Assert-True (@($Asset.lifecycle_evidence.temporary_prototype).Count -eq 0 -and $Candidate.Count -eq 1) "$Context promoted lifecycle must contain exact runtime-candidate evidence."
-			Assert-ClosedProperties $Candidate[0] @('review_revision','reviewer','approval_record','stable_id','content_version','content_sha256') "$Context runtime-candidate evidence"
+			Assert-ClosedProperties -Value $Candidate[0] -Allowed @('review_revision','reviewer','approval_record','stable_id','content_version','content_sha256') -Context "$Context runtime-candidate evidence"
 			Assert-True ($Candidate[0].review_revision -cmatch '^[0-9a-f]{40}$' -and $Candidate[0].stable_id -ceq $Asset.stable_id -and [int]$Candidate[0].content_version -eq [int]$Asset.content_version -and $Candidate[0].content_sha256 -ceq $Asset.provenance.content_sha256) "$Context runtime-candidate evidence must bind exact revision and content identity."
 		}
 
@@ -968,7 +975,7 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 			Assert-True ($FamilyResult.Count -eq 1) "$Context asset '$($Asset.asset_path)' family '$FamilyId' must occur exactly once."
 			$FamilyPolicy = @($Policy.policy_families | Where-Object { $_.id -ceq $FamilyId })[0]
 			Assert-True (Test-JsonObject $FamilyResult[0]) "$Context family result '$FamilyId' must be a JSON object."
-			Assert-ClosedProperties $FamilyResult[0] @($ReportContract.family_result_required_fields) "$Context family result '$FamilyId'"
+			Assert-ClosedProperties -Value $FamilyResult[0] -Allowed @($ReportContract.family_result_required_fields) -Context "$Context family result '$FamilyId'"
 			foreach ($Field in @('policy_id','applicability','deterministic_status','promotion_status','evidence')) {
 				Assert-True (Test-NonBlankJsonString $FamilyResult[0].$Field) "$Context family '$FamilyId' field '$Field' must be a non-blank string."
 			}
@@ -982,7 +989,7 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 			foreach ($CheckId in $ExpectedChecks) {
 				$CheckResult = @($CheckResults | Where-Object { $_.check_id -ceq $CheckId })
 				Assert-True ($CheckResult.Count -eq 1) "$Context family '$FamilyId' check '$CheckId' must occur exactly once."
-				Assert-ClosedProperties $CheckResult[0] @($ReportContract.check_result_required_fields) "$Context family '$FamilyId' check '$CheckId'"
+				Assert-ClosedProperties -Value $CheckResult[0] -Allowed @($ReportContract.check_result_required_fields) -Context "$Context family '$FamilyId' check '$CheckId'"
 				foreach ($Field in @($ReportContract.check_result_required_fields)) {
 					Assert-True (Test-NonBlankJsonString $CheckResult[0].$Field) "$Context family '$FamilyId' check '$CheckId' field '$Field' must be non-blank."
 				}
@@ -1026,7 +1033,7 @@ function Assert-ReportContract([object] $Report, [string] $Context) {
 
 	foreach ($Finding in $Findings) {
 		Assert-True (Test-JsonObject $Finding) "$Context finding must be a JSON object."
-		Assert-ClosedProperties $Finding @($ReportContract.finding_required_fields) "$Context finding"
+		Assert-ClosedProperties -Value $Finding -Allowed @($ReportContract.finding_required_fields) -Context "$Context finding"
 		foreach ($Field in @($ReportContract.finding_required_fields)) {
 			Assert-True (Test-NonBlankJsonString $Finding.$Field) "$Context finding field '$Field' must be a non-blank string."
 		}
@@ -1073,6 +1080,8 @@ function Assert-ReportRejected([object] $Report, [string] $ExpectedMessage, [str
 }
 
 function New-ContentFixtureInput {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory fixture value and changes no external state.')]
+	param()
 	$FamilyInputs = [ordered]@{}
 	foreach ($Family in $Policy.policy_families) {
 		$Checks = [ordered]@{}
@@ -1125,20 +1134,20 @@ $PromotionBlockingChecks = @{
 }
 
 function Invoke-ContentFixtureValidation([object] $FixtureInput) {
-	Assert-ClosedProperties $FixtureInput @('asset_path','stable_id','content_version','audience','lifecycle_state','provenance','lifecycle_evidence','family_inputs') 'Content fixture input'
+	Assert-ClosedProperties -Value $FixtureInput -Allowed @('asset_path','stable_id','content_version','audience','lifecycle_state','provenance','lifecycle_evidence','family_inputs') -Context 'Content fixture input'
 	Assert-True (Test-JsonObject $FixtureInput.family_inputs) 'Content fixture family_inputs must be an object.'
-	Assert-ClosedProperties $FixtureInput.family_inputs $ExpectedFamilies 'Content fixture family_inputs'
+	Assert-ClosedProperties -Value $FixtureInput.family_inputs -Allowed $ExpectedFamilies -Context 'Content fixture family_inputs'
 	$FamilyResults = [System.Collections.Generic.List[object]]::new()
 	$Findings = [System.Collections.Generic.List[object]]::new()
 	foreach ($Family in $Policy.policy_families) {
 		$FamilyId = [string]$Family.id
 		$FamilyInput = (Get-JsonProperty $FixtureInput.family_inputs $FamilyId).Value
 		Assert-True (Test-JsonObject $FamilyInput) "Content fixture family '$FamilyId' must be an object."
-		Assert-ClosedProperties $FamilyInput @('checks') "Content fixture family '$FamilyId'"
+		Assert-ClosedProperties -Value $FamilyInput -Allowed @('checks') -Context "Content fixture family '$FamilyId'"
 		Assert-True ($Family.applicability_required -eq $true) "Content fixture family '$FamilyId' must use the committed policy applicability rule."
 		Assert-True (Test-JsonObject $FamilyInput.checks) "Content fixture family '$FamilyId' checks must be an object."
 		$ExpectedChecks = @($Family.checks | ForEach-Object { [string]$_ })
-		Assert-ClosedProperties $FamilyInput.checks $ExpectedChecks "Content fixture family '$FamilyId' checks"
+		Assert-ClosedProperties -Value $FamilyInput.checks -Allowed $ExpectedChecks -Context "Content fixture family '$FamilyId' checks"
 		$CheckResults = [System.Collections.Generic.List[object]]::new()
 		$FailedChecks = [System.Collections.Generic.List[string]]::new()
 		$BlockedChecks = [System.Collections.Generic.List[string]]::new()
@@ -1149,7 +1158,7 @@ function Invoke-ContentFixtureValidation([object] $FixtureInput) {
 			$Passed = $false
 			if ($Applicable) {
 				Assert-True (Test-JsonObject $CheckValue) "Content fixture family '$FamilyId' check '$Check' must contain raw observation facts or null."
-				Assert-ClosedProperties $CheckValue @('observations','violations') "Content fixture family '$FamilyId' check '$Check' raw facts"
+				Assert-ClosedProperties -Value $CheckValue -Allowed @('observations','violations') -Context "Content fixture family '$FamilyId' check '$Check' raw facts"
 				$Observations = @($CheckValue.observations)
 				$Violations = @($CheckValue.violations)
 				Assert-True ($Observations.Count -gt 0) "Content fixture family '$FamilyId' check '$Check' needs at least one observed fact."
@@ -1342,15 +1351,15 @@ $ForgedFailedEligible = Copy-JsonObject $CorrectedReferenceFailure
 $ForgedReferenceFamily = @($ForgedFailedEligible.assets[0].family_results | Where-Object { $_.policy_id -ceq 'reference_boundary' })[0]
 $ForgedReferenceFamily.promotion_status = 'eligible'
 @($ForgedReferenceFamily.check_results | Where-Object { $_.deterministic_status -ceq 'failed' })[0].promotion_status = 'eligible'
-Assert-ReportRejected $ForgedFailedEligible 'failed check.*must block promotion' 'Forged-failed-check-eligible fixture'
+Assert-ReportRejected -Report $ForgedFailedEligible -ExpectedMessage 'failed check.*must block promotion' -Context 'Forged-failed-check-eligible fixture'
 
 $ForgedFailedFamilyEligible = Copy-JsonObject $CorrectedReferenceFailure
 @($ForgedFailedFamilyEligible.assets[0].family_results | Where-Object { $_.policy_id -ceq 'reference_boundary' })[0].promotion_status = 'eligible'
-Assert-ReportRejected $ForgedFailedFamilyEligible 'promotion_status does not aggregate' 'Forged-failed-family-eligible fixture'
+Assert-ReportRejected -Report $ForgedFailedFamilyEligible -ExpectedMessage 'promotion_status does not aggregate' -Context 'Forged-failed-family-eligible fixture'
 
 $ApplicableNotApplicable = Copy-JsonObject $AllApplicablePolicyOutcome
 $ApplicableNotApplicable.assets[0].family_results[0].deterministic_status = 'not_applicable'
-Assert-ReportRejected $ApplicableNotApplicable 'deterministic_status does not aggregate' 'Applicable-family-not-applicable fixture'
+Assert-ReportRejected -Report $ApplicableNotApplicable -ExpectedMessage 'deterministic_status does not aggregate' -Context 'Applicable-family-not-applicable fixture'
 
 $UnavailableEvidence = Copy-JsonObject $AllApplicablePolicyOutcome
 $UnavailableFamily = @($UnavailableEvidence.assets[0].family_results | Where-Object { $_.policy_id -ceq 'collision' })[0]
@@ -1363,7 +1372,7 @@ Assert-True ($UnavailableEvidence.result -ceq 'non_promotion') 'Applicable unava
 
 $UnavailableEligible = Copy-JsonObject $UnavailableEvidence
 $UnavailableEligible.assets[0].family_results[0].check_results[0].promotion_status = 'eligible'
-Assert-ReportRejected $UnavailableEligible 'unavailable check.*must block promotion' 'Unavailable-evidence-eligible fixture'
+Assert-ReportRejected -Report $UnavailableEligible -ExpectedMessage 'unavailable check.*must block promotion' -Context 'Unavailable-evidence-eligible fixture'
 
 $AuthorSuppliedApplicability = Copy-JsonObject $AllApplicableInput
 Add-Member -InputObject $AuthorSuppliedApplicability.family_inputs.material -MemberType NoteProperty -Name 'applicability' -Value 'not_applicable' -Force
@@ -1401,29 +1410,29 @@ Assert-True ($ValidNotApplicableMaterial.deterministic_status -ceq 'not_applicab
 $ArbitraryNotApplicableEvidence = Copy-JsonObject $ValidNotApplicable
 $ArbitraryMaterial = @($ArbitraryNotApplicableEvidence.assets[0].family_results | Where-Object { $_.policy_id -ceq 'material' })[0]
 $ArbitraryMaterial.evidence = 'author supplied not-applicable evidence'
-Assert-ReportRejected $ArbitraryNotApplicableEvidence 'not_applicable.*canonical evidence' 'Arbitrary-not-applicable-evidence fixture'
+Assert-ReportRejected -Report $ArbitraryNotApplicableEvidence -ExpectedMessage 'not_applicable.*canonical evidence' -Context 'Arbitrary-not-applicable-evidence fixture'
 
 $NonApplicablePassed = Copy-JsonObject $ValidNotApplicable
 $NonApplicablePassedMaterial = @($NonApplicablePassed.assets[0].family_results | Where-Object { $_.policy_id -ceq 'material' })[0]
 $NonApplicablePassedMaterial.deterministic_status = 'passed'
-Assert-ReportRejected $NonApplicablePassed 'deterministic_status does not aggregate' 'Non-applicable-family-passed fixture'
+Assert-ReportRejected -Report $NonApplicablePassed -ExpectedMessage 'deterministic_status does not aggregate' -Context 'Non-applicable-family-passed fixture'
 
 $StringSchemaVersion = Copy-JsonObject $PassingFixture
 $StringSchemaVersion.schema_version = '2'
-Assert-ReportRejected $StringSchemaVersion 'schema_version.*JSON integer' 'String-schema-version fixture'
+Assert-ReportRejected -Report $StringSchemaVersion -ExpectedMessage 'schema_version.*JSON integer' -Context 'String-schema-version fixture'
 
 $FractionalContentVersion = Copy-JsonObject $PassingFixture
 $FractionalContentVersion.assets[0].content_version = 1.5
-Assert-ReportRejected $FractionalContentVersion 'content_version.*JSON integer' 'Fractional-content-version fixture'
+Assert-ReportRejected -Report $FractionalContentVersion -ExpectedMessage 'content_version.*JSON integer' -Context 'Fractional-content-version fixture'
 
 $NumericReviewer = Copy-JsonObject $PassingFixture
 $NumericReviewer.assets[0].provenance.reviewer = 42
-Assert-ReportRejected $NumericReviewer 'reviewer.*string' 'Numeric-reviewer fixture'
+Assert-ReportRejected -Report $NumericReviewer -ExpectedMessage 'reviewer.*string' -Context 'Numeric-reviewer fixture'
 
 foreach ($InvalidHash in @(('A' * 64), ('a' * 63), ('g' * 64))) {
 	$InvalidContentHash = Copy-JsonObject $PassingFixture
 	$InvalidContentHash.assets[0].provenance.content_sha256 = $InvalidHash
-	Assert-ReportRejected $InvalidContentHash 'content_sha256.*lowercase SHA-256' 'Invalid-content-hash fixture'
+	Assert-ReportRejected -Report $InvalidContentHash -ExpectedMessage 'content_sha256.*lowercase SHA-256' -Context 'Invalid-content-hash fixture'
 }
 
 $DuplicateAssetPath = Copy-JsonObject $PassingFixture
@@ -1431,74 +1440,74 @@ $SecondAssetAtSamePath = Copy-JsonObject $DuplicateAssetPath.assets[0]
 $SecondAssetAtSamePath.stable_id = 'content.fixture.other'
 $DuplicateAssetPath.assets = @($DuplicateAssetPath.assets[0], $SecondAssetAtSamePath)
 $DuplicateAssetPath.counts.assets = 2
-Assert-ReportRejected $DuplicateAssetPath 'duplicate asset_path' 'Duplicate-asset-path fixture'
+Assert-ReportRejected -Report $DuplicateAssetPath -ExpectedMessage 'duplicate asset_path' -Context 'Duplicate-asset-path fixture'
 
 $MissingStableIdReport = Copy-JsonObject $PassingFixture
 $MissingStableIdReport.assets[0].stable_id = ''
-Assert-ReportRejected $MissingStableIdReport 'stable_id.*malformed' 'Missing-report-stable-id fixture'
+Assert-ReportRejected -Report $MissingStableIdReport -ExpectedMessage 'stable_id.*malformed' -Context 'Missing-report-stable-id fixture'
 
 $DuplicateStableIdReport = Copy-JsonObject $PassingFixture
 $SecondAssetWithDuplicateId = Copy-JsonObject $DuplicateStableIdReport.assets[0]
 $SecondAssetWithDuplicateId.asset_path = '/Game/Fixtures/DA_OtherFixture'
 $DuplicateStableIdReport.assets = @($DuplicateStableIdReport.assets[0], $SecondAssetWithDuplicateId)
 $DuplicateStableIdReport.counts.assets = 2
-Assert-ReportRejected $DuplicateStableIdReport 'duplicate stable_id' 'Duplicate-report-stable-id fixture'
+Assert-ReportRejected -Report $DuplicateStableIdReport -ExpectedMessage 'duplicate stable_id' -Context 'Duplicate-report-stable-id fixture'
 
 $NonUtcTimestamp = Copy-JsonObject $PassingFixture
 $NonUtcTimestamp.started_utc = '2026-09-05T02:00:00+02:00'
-Assert-ReportRejected $NonUtcTimestamp 'started_utc.*UTC' 'Non-UTC-timestamp fixture'
+Assert-ReportRejected -Report $NonUtcTimestamp -ExpectedMessage 'started_utc.*UTC' -Context 'Non-UTC-timestamp fixture'
 
 $MalformedRevision = Copy-JsonObject $PassingFixture
 $MalformedRevision.revision = 'fixture-revision'
-Assert-ReportRejected $MalformedRevision 'revision.*exact lowercase Git commit' 'Malformed-revision fixture'
+Assert-ReportRejected -Report $MalformedRevision -ExpectedMessage 'revision.*exact lowercase Git commit' -Context 'Malformed-revision fixture'
 
 $DirtyExecution = Copy-JsonObject $PassingFixture
 $DirtyExecution.execution_provenance.repository_clean = $false
-Assert-ReportRejected $DirtyExecution 'repository_clean must be true' 'Dirty-execution fixture'
+Assert-ReportRejected -Report $DirtyExecution -ExpectedMessage 'repository_clean must be true' -Context 'Dirty-execution fixture'
 
 $MismatchedIntakeHash = Copy-JsonObject $PassingFixture
 $MismatchedIntakeHash.execution_provenance.intake_sha256 = ('9' * 64)
-Assert-ReportRejected $MismatchedIntakeHash 'embedded intake hash' 'Mismatched-intake-hash fixture'
+Assert-ReportRejected -Report $MismatchedIntakeHash -ExpectedMessage 'embedded intake hash' -Context 'Mismatched-intake-hash fixture'
 
 $UnsupportedRegistrySource = Copy-JsonObject $PassingFixture
 $UnsupportedRegistrySource.execution_provenance.registry_source = 'author_supplied'
-Assert-ReportRejected $UnsupportedRegistrySource 'registry_source is unsupported' 'Unsupported-registry-source fixture'
+Assert-ReportRejected -Report $UnsupportedRegistrySource -ExpectedMessage 'registry_source is unsupported' -Context 'Unsupported-registry-source fixture'
 
 $UnknownExecutionField = Copy-JsonObject $PassingFixture
 Add-Member -InputObject $UnknownExecutionField.execution_provenance -MemberType NoteProperty -Name 'unbound_note' -Value 'ignored'
-Assert-ReportRejected $UnknownExecutionField 'unsupported field.*unbound_note' 'Unknown-execution-field fixture'
+Assert-ReportRejected -Report $UnknownExecutionField -ExpectedMessage 'unsupported field.*unbound_note' -Context 'Unknown-execution-field fixture'
 
 $MismatchedBuildId = Copy-JsonObject $PassingFixture
 $MismatchedBuildId.execution_provenance.loaded_project_modules[1].build_id = 'other-build-id'
-Assert-ReportRejected $MismatchedBuildId 'share one non-blank build_id' 'Mismatched-module-build-id fixture'
+Assert-ReportRejected -Report $MismatchedBuildId -ExpectedMessage 'share one non-blank build_id' -Context 'Mismatched-module-build-id fixture'
 
 $ReorderedModules = Copy-JsonObject $PassingFixture
 $ReorderedModules.execution_provenance.loaded_project_modules = @($ReorderedModules.execution_provenance.loaded_project_modules[1], $ReorderedModules.execution_provenance.loaded_project_modules[0])
-Assert-ReportRejected $ReorderedModules 'loaded module 0 must be GameCore' 'Reordered-loaded-modules fixture'
+Assert-ReportRejected -Report $ReorderedModules -ExpectedMessage 'loaded module 0 must be GameCore' -Context 'Reordered-loaded-modules fixture'
 
 $AbsoluteReceiptPath = Copy-JsonObject $PassingFixture
 $AbsoluteReceiptPath.execution_provenance.target_receipt.path = 'D:/build/AethelnOnlineEditor.target'
-Assert-ReportRejected $AbsoluteReceiptPath 'path must be canonical repository-relative' 'Absolute-receipt-path fixture'
+Assert-ReportRejected -Report $AbsoluteReceiptPath -ExpectedMessage 'path must be canonical repository-relative' -Context 'Absolute-receipt-path fixture'
 
 $EmptyCompilerVersion = Copy-JsonObject $PassingFixture
 $EmptyCompilerVersion.execution_provenance.compiler_version = ''
-Assert-ReportRejected $EmptyCompilerVersion 'compiler_version.*non-blank' 'Empty-compiler-version fixture'
+Assert-ReportRejected -Report $EmptyCompilerVersion -ExpectedMessage 'compiler_version.*non-blank' -Context 'Empty-compiler-version fixture'
 
 $PromotableTemporary = Copy-JsonObject $PassingFixture
 $PromotableTemporary.assets[0].lifecycle_state = 'temporary_prototype'
 $PromotableTemporary.assets[0].provenance.approval_state = 'temporary_prototype_only'
 $PromotableTemporary.assets[0].lifecycle_evidence.runtime_candidate = @()
 $PromotableTemporary.assets[0].lifecycle_evidence.temporary_prototype = @([ordered]@{ owner = 'fixture-owner'; approval_record = 'fixture://temporary'; recovery_trigger = 'fixture recovery'; may_be_runtime_candidate = $true })
-Assert-ReportRejected $PromotableTemporary 'temporary prototype cannot be promotion-capable' 'Promotable-temporary fixture'
+Assert-ReportRejected -Report $PromotableTemporary -ExpectedMessage 'temporary prototype cannot be promotion-capable' -Context 'Promotable-temporary fixture'
 
 $WrongFailureCode = Copy-JsonObject $FailingReports.collision
 $WrongFailureCode.findings[0].code = 'content.texture.failed'
-Assert-ReportRejected $WrongFailureCode 'code.*collision' 'Wrong-family-code fixture'
+Assert-ReportRejected -Report $WrongFailureCode -ExpectedMessage 'code.*collision' -Context 'Wrong-family-code fixture'
 
 $CrossFamilyFinding = Copy-JsonObject $FailingReports.collision
 $CrossFamilyFinding.findings[0].policy_id = 'texture'
 $CrossFamilyFinding.findings[0].code = 'content.texture.failed'
-Assert-ReportRejected $CrossFamilyFinding "error finding 'texture'.*deterministic_status failed" 'Cross-family-finding fixture'
+Assert-ReportRejected -Report $CrossFamilyFinding -ExpectedMessage "error finding 'texture'.*deterministic_status failed" -Context 'Cross-family-finding fixture'
 Write-Output 'PASS: family applicability, scalar formats, asset identity, and diagnostic correlation fail closed'
 
 $MissingRights = Copy-JsonObject $PassingFixture

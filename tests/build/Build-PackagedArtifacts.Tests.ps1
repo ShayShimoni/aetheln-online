@@ -192,8 +192,8 @@ public static class FakeEditor {
 	Assert-True (-not $Calls[1].Contains('-platform=Linux')) 'The server must use serverplatform rather than the ambiguous platform switch.'
 	$Provenance = Get-Content -LiteralPath (Join-Path $ArchiveRoot 'build-provenance.json') -Raw | ConvertFrom-Json
 	Assert-True ($Provenance.build.uatInvocations.server.arguments -contains '-serverplatform=Linux') 'Provenance should preserve exact UAT arguments.'
-	Assert-RegistryReceipt $Provenance.build.cookedRegistries.client 'client' 'Build provenance'
-	Assert-RegistryReceipt $Provenance.build.cookedRegistries.server 'server' 'Build provenance'
+	Assert-RegistryReceipt -Actual $Provenance.build.cookedRegistries.client -Kind 'client' -Context 'Build provenance'
+	Assert-RegistryReceipt -Actual $Provenance.build.cookedRegistries.server -Kind 'server' -Context 'Build provenance'
 	Assert-True ($Provenance.source.clean -eq $true) 'Provenance should record the clean-worktree gate result.'
 	Assert-True ($Provenance.tools.compiler.path -eq $SelectedCompiler) 'Provenance must use the compiler selected in this UBT invocation.'
 	Assert-True ($Provenance.tools.compiler.version -eq '14.44.35207') 'The selected MSVC version should be correlated from its exact path.'
@@ -260,7 +260,7 @@ public static class FakeEditor {
 	Assert-True ($ClientRecord.compilerPath -eq $SelectedCompiler -and $ClientRecord.resourceCompilerPath -eq $SelectedResourceCompiler) 'The client stage record must carry the exact UBT-selected toolchain.'
 	Assert-True ((@($ClientRecord.clientArguments) -contains '-target=AethelnOnlineClient') -and (@($ClientRecord.clientArguments) -contains '-clean')) 'The client stage record must preserve the exact clean client UAT arguments.'
 	Assert-True (-not (Test-Path -LiteralPath (Join-Path $StagedClientRoot 'LinuxServer'))) 'The client stage must not produce server output.'
-	Assert-RegistryReceipt $ClientRecord.cookedRegistry 'client' 'The client stage record'
+	Assert-RegistryReceipt -Actual $ClientRecord.cookedRegistry -Kind 'client' -Context 'The client stage record'
 
 	$env:AETHELN_TEST_ARCHIVE_ROOT = $StagedServerRoot
 	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedServerRoot -LogRoot (Join-Path $FixtureRoot 'StagedServerLogs') -SourceRevision $Revision -HostToolsBoundary Rebuild -Stage Server
@@ -269,7 +269,7 @@ public static class FakeEditor {
 	Assert-True (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'RegistryDumps/server-dependency-registry-dump/Page_0.txt')) 'The server stage must publish its dependency registry dump as payload.'
 	Assert-True (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'RegistryDumps/server-cooked-inventory-dump/Page_0.txt')) 'The server stage must publish its cooked inventory dump as payload.'
 	Assert-True (-not (Test-Path -LiteralPath (Join-Path $StagedServerRoot 'WindowsClient'))) 'The server stage must not produce client output.'
-	Assert-RegistryReceipt $ServerRecord.cookedRegistry 'server' 'The server stage record'
+	Assert-RegistryReceipt -Actual $ServerRecord.cookedRegistry -Kind 'server' -Context 'The server stage record'
 
 	& $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $StagedProvenanceRoot -LogRoot (Join-Path $FixtureRoot 'StagedProvenanceLogs') -SourceRevision $Revision -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot
 	$StagedProvenance = Get-Content -LiteralPath (Join-Path $StagedProvenanceRoot 'build-provenance.json') -Raw | ConvertFrom-Json
@@ -282,8 +282,8 @@ public static class FakeEditor {
 	Assert-True ($Failure -match 'produced from source revision') 'Provenance over stage records from a different revision must fail closed.'
 	Write-Output 'PASS: staged client, server, and provenance phases exchange exact records and fail closed on revision mismatch'
 
-	Assert-RegistryReceipt $StagedProvenance.build.cookedRegistries.client 'client' 'Staged build provenance'
-	Assert-RegistryReceipt $StagedProvenance.build.cookedRegistries.server 'server' 'Staged build provenance'
+	Assert-RegistryReceipt -Actual $StagedProvenance.build.cookedRegistries.client -Kind 'client' -Context 'Staged build provenance'
+	Assert-RegistryReceipt -Actual $StagedProvenance.build.cookedRegistries.server -Kind 'server' -Context 'Staged build provenance'
 	foreach ($ReceiptCase in @(
 		@{ name = 'CrossTarget'; field = 'cookPlatform'; value = 'LinuxServer' },
 		@{ name = 'CrossRevision'; field = 'sourceRevision'; value = ('1' * 40) },
