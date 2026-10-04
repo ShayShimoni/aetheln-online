@@ -140,6 +140,8 @@ param(
 	[string] $ObservationExitSignalPath = 'none',
 	[Parameter(ValueFromRemainingArguments)] [string[]] $Remaining
 )
+$LauncherId = [int] $env:AETHELN_FIXTURE_PARENT_PID
+function Test-LauncherGone { $LauncherId -gt 0 -and $null -eq (Get-Process -Id $LauncherId -ErrorAction Ignore) }
 if ($Role -eq 'server') {
 	Start-Sleep -Seconds $StartupDelaySeconds
 	if ($Behavior -eq 'literal-profile-token') {
@@ -223,14 +225,17 @@ if ($Role -eq 'server') {
 	}
 	if ($ExitAfterMarkers -eq 'true') {
 		if ($ObservationExitSignalPath -eq 'none') { throw 'The early-exit fixture requires an observation-entry signal.' }
-		while (-not (Test-Path -LiteralPath $ObservationExitSignalPath -PathType Leaf)) { Start-Sleep -Milliseconds 50 }
+		while (-not (Test-Path -LiteralPath $ObservationExitSignalPath -PathType Leaf) -and -not (Test-LauncherGone)) { Start-Sleep -Milliseconds 50 }
 		exit 0
 	}
 	if ($ControlledExitSignalPath -ne 'none') {
-		while (-not (Test-Path -LiteralPath $ControlledExitSignalPath -PathType Leaf)) { Start-Sleep -Milliseconds 50 }
+		while (-not (Test-Path -LiteralPath $ControlledExitSignalPath -PathType Leaf) -and -not (Test-LauncherGone)) { Start-Sleep -Milliseconds 50 }
 		exit 0
 	}
-	while ($true) { Start-Sleep -Milliseconds 50 }
+	# A server whose launcher was killed must exit: an orphan keeps the launcher's
+	# redirected pipes open and blocks the runner's untimed WaitForExit forever.
+	while (-not (Test-LauncherGone)) { Start-Sleep -Milliseconds 50 }
+	exit 0
 }
 if ($Behavior -eq 'slow-client-start') { Start-Sleep -Seconds 3 }
 if ($Behavior -eq 'literal-profile-token') {
@@ -259,6 +264,7 @@ if ($Mode -eq 'identity') {
 	exit 0
 }
 if ($Mode -eq 'cleanup') {
+	if ($env:AETHELN_TEST_CLEANUP_LEAK -eq 'true') { [Console]::Error.WriteLine('Fixture cleanup left the owned process running.'); exit 44 }
 	$TargetProcess = $null
 	try {
 		$IdentityText = Get-Content -LiteralPath $StatePath -Raw
@@ -290,6 +296,7 @@ if ($Mode -eq 'cleanup') {
 }
 if ($Mode -ne 'launch') { throw "Unsupported launcher mode '$Mode'." }
 if ($env:AETHELN_TEST_LAUNCHER_FAIL -eq 'true') { exit 41 }
+if ($env:AETHELN_TEST_KEEP_ORPHAN -ne 'true') { $env:AETHELN_FIXTURE_PARENT_PID = $PID }
 $Child = Start-Process -FilePath $Target -ArgumentList $Remaining -PassThru -NoNewWindow
 $null = $Child.Handle
 $IdentityText = [ordered]@{ pid = $Child.Id; start_ticks = $Child.StartTime.ToUniversalTime().Ticks } | ConvertTo-Json -Compress
@@ -400,6 +407,30 @@ exit $LASTEXITCODE
 	}
 	Write-Output 'PASS: launcher cleanup confirms owned-process exit without interpreting a later PID occupant as a leak'
 
+	# Per-case timeout. A hang inside the in-process runner cannot be interrupted
+	# from the harness thread, so a separate watchdog process terminates what keeps
+	# it blocked: the harness's runtime children and the recorded launcher-side
+	# server, which may have been orphaned and still holds the launcher's pipes.
+	$CaseWatchdog = Join-Path $FixtureRoot 'case-watchdog.ps1'
+	Set-Content -LiteralPath $CaseWatchdog -Encoding UTF8 -Value @'
+param([int] $HarnessId, [string] $StatePath, [string] $MarkerPath, [int] $Seconds)
+Start-Sleep -Seconds $Seconds
+[System.IO.File]::WriteAllText($MarkerPath, 'timeout')
+$Rows = @(Get-CimInstance -ClassName Win32_Process)
+$Doomed = @{}
+$Frontier = @($HarnessId)
+while ($Frontier.Count -gt 0) {
+	$Parents = $Frontier
+	$Frontier = @($Rows | Where-Object { $Parents -contains $_.ParentProcessId -and $_.ProcessId -ne $PID -and -not $Doomed.ContainsKey([int] $_.ProcessId) } | ForEach-Object { $Doomed[[int] $_.ProcessId] = $true; [int] $_.ProcessId })
+}
+if (Test-Path -LiteralPath $StatePath) {
+	$Identity = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+	$Orphan = Get-Process -Id $Identity.pid -ErrorAction Ignore
+	if ($null -ne $Orphan -and $Orphan.StartTime.ToUniversalTime().Ticks -eq $Identity.start_ticks) { $Doomed[[int] $Orphan.Id] = $true }
+}
+foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore }
+'@
+
 	function Invoke-FixtureRun(
 		[string] $FixtureLogRoot,
 		[string] $FixtureRunId,
@@ -424,7 +455,8 @@ exit $LASTEXITCODE
 		[int] $ObservationStartDelaySeconds = 0,
 		[bool] $WithholdShutdownRelease = $false,
 		[int] $ServerStartupDelaySeconds = 0,
-		[string] $BoundaryTimeoutDescription
+		[string] $BoundaryTimeoutDescription,
+		[int] $CaseTimeoutSeconds = 120
 	) {
 		$ControlledExitSignalPath = if ($UseContracts -and -not $ExitAfterMarkers -and $Behavior -in @('normal','literal-profile-token','adversarial-public-lines','duplicate-death','duplicate-respawn','duplicate-shutdown')) { Join-Path $FixtureRoot ("shutdown-release-$FixtureRunId") } else { 'none' }
 		$ObservationExitSignalPath = if ($ExitAfterMarkers) { Join-Path $FixtureRoot ("observation-exit-$FixtureRunId") } else { 'none' }
@@ -512,7 +544,10 @@ exit $LASTEXITCODE
 		$ShutdownReleaseBreakpoint = $null
 		$ObservationExitBreakpoint = $null
 		$BoundaryTimeoutBreakpoints = @()
+		$Watchdog = $null
+		$WatchdogMarker = Join-Path $FixtureRoot ("case-timeout-$FixtureRunId")
 		try {
+			$Watchdog = Start-Process -FilePath $PowerShellExecutable -ArgumentList @('-NoProfile', '-File', $CaseWatchdog, $PID, (Join-Path $FixtureRoot "launcher-identity-$FixtureRunId.json"), $WatchdogMarker, $CaseTimeoutSeconds) -PassThru -WindowStyle Hidden
 			if ($BoundaryTimeoutDescription) {
 				# Command breakpoint actions run in a child scope of the invoked function,
 				# after parameter binding. Shadow the runner's timeout only in that wait's
@@ -547,10 +582,15 @@ exit $LASTEXITCODE
 			& $Script @Arguments
 		}
 		finally {
+			if ($null -ne $Watchdog) {
+				if (-not $Watchdog.HasExited) { $Watchdog.Kill(); $Watchdog.WaitForExit() }
+				$Watchdog.Dispose()
+			}
 			foreach ($Breakpoint in $BoundaryTimeoutBreakpoints) { Remove-PSBreakpoint -Breakpoint $Breakpoint }
 			if ($null -ne $ObservationDelayBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationDelayBreakpoint }
 			if ($null -ne $ShutdownReleaseBreakpoint) { Remove-PSBreakpoint -Breakpoint $ShutdownReleaseBreakpoint }
 			if ($null -ne $ObservationExitBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationExitBreakpoint }
+			if (Test-Path -LiteralPath $WatchdogMarker) { throw "Fixture case '$FixtureRunId' exceeded its $CaseTimeoutSeconds-second case timeout; the watchdog terminated the runtime processes it blocked on." }
 		}
 	}
 
@@ -996,6 +1036,35 @@ exit $LASTEXITCODE
 	Assert-True ($CleanupFailureEvidence.schema_version -eq 2 -and $CleanupFailureEvidence.result -eq 'failed') 'Cleanup failure must downgrade otherwise complete contract evidence to failed.'
 	Assert-True ($CleanupFailureEvidence.failure_details.observed_stage -eq 'cleanup' -and $CleanupFailureEvidence.failure_details.process_role -eq 'server' -and $CleanupFailureEvidence.failure_details.cleanup_attempted -and -not $CleanupFailureEvidence.failure_details.cleanup_succeeded) 'Cleanup failure evidence must identify the cleanup stage, server role, attempt, and outcome.'
 	Write-Output 'PASS: launcher-side descendant cleanup failure is observable and fails closed'
+
+	# A cleanup that leaves the launcher-side server alive must fail the run, not
+	# hang it: the surviving server holds the launcher's redirected pipes open.
+	$env:AETHELN_TEST_CLEANUP_LEAK = 'true'
+	$CleanupLeakFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'cleanup-leak') -FixtureRunId 'fixture-cleanup-leak' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true
+	} catch { $CleanupLeakFailure = $_.Exception.Message }
+	Remove-Item -LiteralPath Env:AETHELN_TEST_CLEANUP_LEAK -ErrorAction Ignore
+	Assert-True ($CleanupLeakFailure -match 'server descendant cleanup.*exited with code 44') "A cleanup that leaves the server running must fail the run. Actual: $CleanupLeakFailure"
+	$LeakIdentity = Get-Content -LiteralPath (Join-Path $FixtureRoot 'launcher-identity-fixture-cleanup-leak.json') -Raw | ConvertFrom-Json
+	$LeakedServer = Get-Process -Id $LeakIdentity.pid -ErrorAction Ignore
+	Assert-True ($null -eq $LeakedServer -or $LeakedServer.StartTime.ToUniversalTime().Ticks -ne $LeakIdentity.start_ticks) 'A failed launcher cleanup must not leave the fake server orphaned after the run.'
+	Write-Output 'PASS: a launcher cleanup that leaks the server fails the run instead of hanging on the orphan'
+
+	# If a server does survive its launcher, the per-case timeout must still turn
+	# the hang into a named failure and remove the orphan.
+	$env:AETHELN_TEST_CLEANUP_LEAK = 'true'
+	$env:AETHELN_TEST_KEEP_ORPHAN = 'true'
+	$OrphanTimeoutFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'orphan-timeout') -FixtureRunId 'fixture-orphan-timeout' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -CaseTimeoutSeconds 25
+	} catch { $OrphanTimeoutFailure = $_.Exception.Message }
+	Remove-Item -LiteralPath Env:AETHELN_TEST_CLEANUP_LEAK, Env:AETHELN_TEST_KEEP_ORPHAN -ErrorAction Ignore
+	Assert-True ($OrphanTimeoutFailure -match "Fixture case 'fixture-orphan-timeout' exceeded its 25-second case timeout") "An orphaned server must fail the case by timeout instead of hanging. Actual: $OrphanTimeoutFailure"
+	$OrphanIdentity = Get-Content -LiteralPath (Join-Path $FixtureRoot 'launcher-identity-fixture-orphan-timeout.json') -Raw | ConvertFrom-Json
+	$OrphanedServer = Get-Process -Id $OrphanIdentity.pid -ErrorAction Ignore
+	Assert-True ($null -eq $OrphanedServer -or $OrphanedServer.StartTime.ToUniversalTime().Ticks -ne $OrphanIdentity.start_ticks) 'The case timeout must terminate the orphaned fake server.'
+	Write-Output 'PASS: the per-case timeout fails an orphan-blocked case by name and terminates the orphan'
 
 	$env:AETHELN_TEST_CLEANUP_FAIL = 'true'
 	$CombinedFailure = $null
