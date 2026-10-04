@@ -383,6 +383,36 @@ for ($Index = 0; $Index -lt 8; $Index++) {
 	Assert-True ($SortedContextCheckIds[$Index] -ceq $SortedPublisherCheckIds[$Index]) "Aggregate context and publisher check ids must match in lockstep (index $Index)."
 }
 
+# The live/pending split is kept by hand in several places; this guard ties the three selector-facing lists plus the aggregate's inline exactly-one-evidence list. A check is live exactly when a publisher contract can prove it, so
+# shipping a producer (adding its check to a contract) must fail here until those four lists move with it. Two other copies are left unguarded:
+# AcceptanceReceiptUnsupportedCheckIds in the receipt builder fails closed (a stale entry makes the builder throw receipt_semantic_evidence_unsupported), and the
+# receipt builder's inline six-id evidence list is inert (its strict evidence-name ordering check still rejects a repeated evidence entry).
+function Get-SourceCheckList([string] $Source, [string] $Pattern, [string] $Name) {
+	$Lists = [regex]::Matches($Source, $Pattern)
+	Assert-True ($Lists.Count -eq 1) "$Name must declare exactly one check list."
+	$Ids = [string[]] @([regex]::Matches($Lists[0].Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+	[Array]::Sort($Ids, [StringComparer]::Ordinal)
+	return ($Ids -join ',')
+}
+$ProvableChecks = [string[]] @($script:PublisherContracts.Values | ForEach-Object { $_.Checks } | Select-Object -Unique)
+[Array]::Sort($ProvableChecks, [StringComparer]::Ordinal)
+$PendingChecks = [string[]] @($script:PublisherCheckIds | Where-Object { $ProvableChecks -cnotcontains $_ })
+[Array]::Sort($PendingChecks, [StringComparer]::Ordinal)
+$WorkflowLiveChecks = Get-SourceCheckList -Source ([IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml'))) -Pattern '(?m)^\s*\$LiveProducerChecks = @\((?<list>[^)]*)\)\r?$' -Name 'The workflow selector job ($LiveProducerChecks)'
+$BuilderLiveChecks = Get-SourceCheckList -Source $ContextSource -Pattern '(?m)^\s*\$LiveChecks=@\((?<list>[^)]*)\)\r?$' -Name 'The aggregate context builder ($LiveChecks)'
+$AggregateSource = [IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiAcceptanceAggregate.ps1'))
+$AggregatePendingChecks = Get-SourceCheckList -Source $AggregateSource -Pattern '(?m)^\$script:AcceptanceUnsupportedCheckIds = @\((?<list>[^)]*)\)\r?$' -Name 'The aggregate ($script:AcceptanceUnsupportedCheckIds)'
+Assert-True ($WorkflowLiveChecks -ceq ($ProvableChecks -join ',')) "The workflow `$LiveProducerChecks ($WorkflowLiveChecks) must equal the checks the publisher contracts can prove ($($ProvableChecks -join ','))."
+Assert-True ($BuilderLiveChecks -ceq ($ProvableChecks -join ',')) "The context builder `$LiveChecks ($BuilderLiveChecks) must equal the checks the publisher contracts can prove ($($ProvableChecks -join ','))."
+Assert-True ($AggregatePendingChecks -ceq ($PendingChecks -join ',')) "The aggregate `$AcceptanceUnsupportedCheckIds ($AggregatePendingChecks) must equal the publisher check ids no contract can prove ($($PendingChecks -join ','))."
+# The aggregate's inline exactly-one-evidence list runs after the unsupported-check throw, so it must name every check the aggregate can accept evidence for:
+# the checks the publisher contracts can prove (every check id outside $AcceptanceUnsupportedCheckIds). Unlike the other copies it fails open on drift: an id
+# left out silently lets a repeated identical evidence entry through, so this assertion is the only thing that turns that drift red. The pattern is anchored on
+# the guard's own throw, and a renamed or reformatted line fails the exactly-one count; a vacuous empty match cannot equal the non-empty provable set.
+Assert-True ($ProvableChecks.Count -gt 0) 'The publisher contracts must prove at least one check for the evidence-guard comparison to mean anything.'
+$AggregateEvidenceGuardChecks = Get-SourceCheckList -Source $AggregateSource -Pattern '(?m)^\s*if \(\$Result\.id -in @\((?<list>[^)]*)\) -and \$Evidence\.Count -ne 1\) \{ throw \(''receipt_semantic_evidence_duplicate:''' -Name 'The aggregate exactly-one-evidence guard ($Result.id -in @(...) -and $Evidence.Count -ne 1)'
+Assert-True ($AggregateEvidenceGuardChecks -ceq ($ProvableChecks -join ',')) "The aggregate exactly-one-evidence list ($AggregateEvidenceGuardChecks) must equal the checks the publisher contracts can prove ($($ProvableChecks -join ','))."
+
 # The aggregate filters each template job's checks by selection in template order; the publisher filters its contract checks in
 # contract order. Both must agree per job key or the receipt fails receipt_selection_mismatch.
 $RequirementsTemplate = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ci-acceptance-requirements.json') -Raw | ConvertFrom-Json

@@ -828,14 +828,30 @@ Every accepted decision records:
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
   live portable/controller-contract/controller-operational-proof/native/unreal/visual subset, the aggregate is not called. The workflow
-  still validates the selector identity and emits the exact selected
-  unsupported set as a green `producer_contract_incomplete` record with
+  still validates the selector identity and the direct bindings of every
+  selected live producer, so a failed or skipped required receipt remains red
+  rather than hiding behind the gap, and emits the exact selected
+  unsupported set as a green `producer_contract_incomplete` record
+  (`aetheln.ci-acceptance-shadow-gap/v3`, carrying the checked
+  `liveBindings`) with
   `complete=false`, `shadow=true`, `authoritative=false`, and
   `grantsAcceptance=false`. The green result prevents a known incomplete shadow
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `clean-package-provenance-smoke` and
-  `content-reference-validation` remain unsupported live obligations.
+  `content-reference-validation` remain unsupported live obligations. The gap
+  path checks only job success, the exact artifact name, and the artifact ID and
+  digest format; it does not do the aggregate's artifact-API and byte
+  reconciliation, and `liveBindings` is informational. A
+  publisher-contract test ties the three selector-facing lists (the workflow
+  live list, the context builder live list and the aggregate unsupported list)
+  and the aggregate's inline exactly-one-evidence list to the checks the
+  publishers can prove, so shipping a producer fails that test until those
+  lists move together. Two other copies are not covered by it. The receipt
+  builder's unsupported-check list fails closed: a stale entry makes the builder
+  throw `receipt_semantic_evidence_unsupported:<id>`. The receipt builder's
+  inline evidence list is inert, because its strict evidence-name ordering
+  check still rejects a repeated evidence entry.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate
