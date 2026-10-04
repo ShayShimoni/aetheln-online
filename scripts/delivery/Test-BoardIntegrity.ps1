@@ -137,7 +137,7 @@ function Get-BoardViolation {
 		if ($Pull.isDraft) { Add-Violation -Rule 'draft-pr-open' -Issue ([int] $Pull.number) -Detail 'is an open draft PR; open a PR only after developer verification' }
 		$Head = Get-OptionalText $Pull 'headRefName'
 		if (-not $Pull.isCrossRepository -and ($Head -cmatch '^release/' -or ($Head -ceq 'main' -and (Get-OptionalText $Pull 'baseRefName') -ceq 'develop'))) { continue }
-		$Linked = @(@($Pull.linkedIssues) + @([regex]::Matches((Get-OptionalText $Pull 'title'), '#(\d+)') | ForEach-Object { $_.Groups[1].Value }) |
+		$Linked = @(@($Pull.linkedIssues) + @([regex]::Matches((Get-OptionalText $Pull 'title'), '#([0-9]{1,9})') | ForEach-Object { $_.Groups[1].Value }) |
 			Where-Object { $null -ne $_ } | ForEach-Object { [int] $_ } | Sort-Object -Unique)
 		foreach ($Number in $Linked) {
 			if (-not $PullsByIssue.ContainsKey($Number)) { $PullsByIssue[$Number] = @() }

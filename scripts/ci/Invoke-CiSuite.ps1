@@ -55,6 +55,7 @@ $DefaultChecks = @(
 	@{ name = 'routine-compile-gate-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileGate.Tests.ps1' },
 	@{ name = 'board-integrity-tests'; tier = 'required'; script = 'tests/delivery/Test-BoardIntegrity.Tests.ps1' },
 	@{ name = 'pull-request-policy-tests'; tier = 'required'; script = 'tests/delivery/Test-PullRequestPolicy.Tests.ps1' },
+	@{ name = 'release-cut-tests'; tier = 'required'; script = 'tests/delivery/Invoke-ReleaseCut.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'
