@@ -45,7 +45,7 @@ $script:AcceptancePortableCheckNames = @(
 	'ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 	'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
 	'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
-	'board-integrity-tests','pull-request-policy-tests',
+	'board-integrity-tests','pull-request-policy-tests','release-cut-tests',
 	'psscriptanalyzer'
 )
 # controller-contract revalidates the exact portable report and also requires every required tests/ci suite to pass.
