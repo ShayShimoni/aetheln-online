@@ -320,6 +320,46 @@ foreach ($BlankCase in @(@('blank-tuple', ''), @('whitespace-tuple', '   '))) {
 	try { Test-BlankManagedTuple -Name $BlankCase[0] -Value $BlankCase[1]; Write-Output ('PASS ' + $BlankCase[0]) }
 	catch { $script:FixtureFailures.Add($BlankCase[0] + ': ' + $_.Exception.Message); Write-Output ('FAIL ' + $script:FixtureFailures[-1]) }
 }
+# #239: run the gate's real trust callback (extracted from the gate source)
+# inside the real Sync-ManagedCompileWorkspace. An unbound callback reads the
+# sync's own ControlRoot/SourceRevision parameters and trusts any value.
+. (Join-Path $RepositoryRoot 'scripts/ci/ManagedCompileWorkspace.ps1')
+$TrustAssignments = @($GateAst.FindAll({ param($Node)
+	$Node -is [Management.Automation.Language.AssignmentStatementAst] -and $Node.Left.Extent.Text -ceq '$TrustRegisteredWorkspace'
+}, $true))
+if ($TrustAssignments.Count -ne 1) { throw 'Expected exactly one gate trust callback assignment.' }
+$TrustRoot = Join-Path $FixtureRoot 'trust'
+foreach ($Name in @('control-a', 'control-b', 'target', 'common')) { $null = New-Item -ItemType Directory -Path (Join-Path $TrustRoot $Name) }
+function Invoke-GateTrustFixture {
+	param([string] $GateControl, [string] $GateRevision, [string] $SyncControl, [string] $SyncRevision)
+	$ControlRoot = $GateControl
+	$SourceRevision = $GateRevision
+	$Registered = [pscustomobject]@{ targetRoot = (Join-Path $TrustRoot 'target'); repository = 'owner/repository' }
+	. ([scriptblock]::Create($TrustAssignments[0].Extent.Text))
+	try {
+		$null = Sync-ManagedCompileWorkspace -ControlRoot $SyncControl -TargetRoot $Registered.targetRoot -SourceRevision $SyncRevision -Repository 'owner/repository' -ExpectedGitCommonDirectory (Join-Path $TrustRoot 'common') -DeadlineUtc ([DateTime]::UtcNow.AddMinutes(2)) -AssertRepositoryTrust $TrustRegisteredWorkspace
+		return 'none'
+	} catch { return $_.Exception.Message }
+}
+$ControlA = Join-Path $TrustRoot 'control-a'
+$ControlB = Join-Path $TrustRoot 'control-b'
+$RevisionA = 'a' * 40
+$RevisionB = 'b' * 40
+# Matching values and a casing-only control-root difference pass the trust
+# gate (the sync then fails later on the fixture's missing Git state).
+foreach ($Case in @(
+	@('trust-callback-accepts-matching-values', $ControlA, $RevisionA, $ControlA, $RevisionA, $false),
+	@('trust-callback-accepts-control-root-casing-difference', $ControlA, $RevisionA, $ControlA.ToUpperInvariant(), $RevisionA, $false),
+	@('trust-callback-rejects-mismatched-control-root', $ControlA, $RevisionA, $ControlB, $RevisionA, $true),
+	@('trust-callback-rejects-mismatched-revision', $ControlA, $RevisionA, $ControlA, $RevisionB, $true)
+)) {
+	try {
+		$Observed = Invoke-GateTrustFixture -GateControl $Case[1] -GateRevision $Case[2] -SyncControl $Case[3] -SyncRevision $Case[4]
+		$Rejected = $Observed -ceq 'managed_workspace_trust_required'
+		Assert-Fixture -Condition ($Rejected -eq $Case[5]) -Message ('Trust callback outcome was ' + $Observed)
+		Write-Output ('PASS ' + $Case[0])
+	} catch { $script:FixtureFailures.Add($Case[0] + ': ' + $_.Exception.Message); Write-Output ('FAIL ' + $script:FixtureFailures[-1]) }
+}
 Write-Output ('Fixtures retained: ' + $FixtureRoot)
 if ($script:FixtureFailures.Count -gt 0) { throw ($script:FixtureFailures.Count.ToString() + ' managed compile integration cases failed.') }
 Write-Output ('PASS ' + $script:FixtureAssertions + ' assertions across 29 managed compile supervisor/publication/argument scenarios.')
