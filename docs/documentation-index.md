@@ -60,6 +60,13 @@ subordinate to the specialized canonical product and technical documents.
 - [Structured Observability and Crash Diagnostics](observability-and-crash-diagnostics.md)
   records the Issue #38 event, metric, redaction, lifecycle, crash-context,
   environment, retention, and downstream-ownership contracts.
+- [Gameplay Ability System Foundation](gas-foundation.md) records the Issue #19
+  implementation spec for the PlayerState-owned ability system: class layout,
+  lifecycle, attribute policy, the versioned activation seam, closure of the
+  stock GAS activation routes, rejection telemetry, test plan, PR phasing,
+  known interim gaps, and open decisions. The Gameplay Tag and content-version
+  conventions it implements live in
+  [Combat and Networking Architecture](combat-and-networking-architecture.md#gameplay-tag-and-content-version-conventions).
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path, plus the Issue #167

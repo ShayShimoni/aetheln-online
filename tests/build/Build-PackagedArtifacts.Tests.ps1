@@ -310,6 +310,41 @@ public static class FakeEditor {
 	Assert-True (-not (Test-Path -LiteralPath (Join-Path $FixtureRoot 'MissingRegistryClient/phase-client.json'))) 'A cook without a registry must not publish a client stage record.'
 	Write-Output 'PASS: producer-owned registry receipts bind stage records and provenance, and missing, cross-target, and cross-revision receipts fail closed'
 
+	# Issue #226: -BuildNumber is a Provenance-stage input forwarded to the writer.
+	$ReleaseProjectRoot = Join-Path $FixtureRoot 'ReleaseProject'
+	New-Item -ItemType Directory -Path (Join-Path $ReleaseProjectRoot 'Config') -Force | Out-Null
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -Destination $ReleaseProjectRoot
+	Set-Content -LiteralPath (Join-Path $ReleaseProjectRoot 'Config/DefaultGame.ini') -Value "[/Script/EngineSettings.GeneralProjectSettings]`nProjectVersion=1.0.0-alpha.1" -Encoding Ascii
+	$ReleaseProject = Join-Path $ReleaseProjectRoot 'AethelnOnline.uproject'
+	$ReleaseArchive = Join-Path $FixtureRoot 'ReleaseProvenance'
+	& $Script -ProjectPath $ReleaseProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $ReleaseArchive -LogRoot (Join-Path $FixtureRoot 'ReleaseProvenanceLogs') -SourceRevision $Revision -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot -BuildNumber 7
+	$ReleaseProvenance = Get-Content -LiteralPath (Join-Path $ReleaseArchive 'build-provenance.json') -Raw | ConvertFrom-Json
+	Assert-True ($ReleaseProvenance.release.projectVersion -ceq '1.0.0-alpha.1' -and $ReleaseProvenance.release.buildNumber -eq 7 -and $ReleaseProvenance.release.buildVersion -ceq '1.0.0-alpha.1+7') 'The Provenance stage must forward -BuildNumber so the writer records the release block.'
+	$UnnumberedArchive = Join-Path $FixtureRoot 'UnnumberedProvenance'
+	& $Script -ProjectPath $ReleaseProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $UnnumberedArchive -LogRoot (Join-Path $FixtureRoot 'UnnumberedProvenanceLogs') -SourceRevision $Revision -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot
+	$UnnumberedProvenance = Get-Content -LiteralPath (Join-Path $UnnumberedArchive 'build-provenance.json') -Raw | ConvertFrom-Json
+	Assert-True (-not ($UnnumberedProvenance.PSObject.Properties.Name -contains 'release')) 'Without -BuildNumber the provenance writer must receive no build number, even for a project that declares ProjectVersion.'
+
+	$CallsBeforeBuildNumberChecks = @(Get-Content -LiteralPath $CapturePath).Count
+	foreach ($BadNumber in @('0', '01', 'abc', '12345678901', '')) {
+		$BadArchive = Join-Path $FixtureRoot 'BadNumberArchive'
+		$Failure = $null
+		try { & $Script -ProjectPath $ReleaseProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot $BadArchive -LogRoot (Join-Path $FixtureRoot 'BadNumberLogs') -SourceRevision $Revision -Stage Provenance -ClientStageRoot $StagedClientRoot -ServerStageRoot $StagedServerRoot -BuildNumber $BadNumber } catch { $Failure = $_.Exception.Message }
+		Assert-True ($Failure -match '^build_number_invalid') "Build number '$BadNumber' must fail closed as build_number_invalid. Failure: $Failure"
+		Assert-True (-not (Test-Path -LiteralPath $BadArchive)) 'An invalid build number must fail before any output root is created.'
+	}
+	foreach ($RejectedStage in @('Client', 'Server', 'All', 'AttestHostTools')) {
+		$StageArchive = Join-Path $FixtureRoot ('BuildNumberStage' + $RejectedStage)
+		$StageArguments = @{ ProjectPath = $ReleaseProject; EngineRoot = $EngineRoot; LinuxToolchainRoot = $ToolchainRoot; ArchiveRoot = $StageArchive; LogRoot = (Join-Path $FixtureRoot ('BuildNumberStageLogs' + $RejectedStage)); SourceRevision = $Revision; HostToolsBoundary = 'Rebuild'; BuildNumber = '7' }
+		if ($RejectedStage -ne 'All') { $StageArguments['Stage'] = $RejectedStage }
+		$Failure = $null
+		try { & $Script @StageArguments } catch { $Failure = $_.Exception.Message }
+		Assert-True ($Failure -match '^build_number_stage_invalid') "-BuildNumber must be rejected for stage '$RejectedStage' as build_number_stage_invalid. Failure: $Failure"
+		Assert-True (-not (Test-Path -LiteralPath $StageArchive)) "A rejected -BuildNumber for stage '$RejectedStage' must fail before any output root is created."
+	}
+	Assert-True (@(Get-Content -LiteralPath $CapturePath).Count -eq $CallsBeforeBuildNumberChecks) 'A rejected build number must fail before any UAT invocation.'
+	Write-Output 'PASS: -BuildNumber is validated, accepted only for the Provenance stage, and forwarded to the provenance writer'
+
 	$Timing = Get-Content -LiteralPath (Join-Path $LogRoot 'build-timing.json') -Raw | ConvertFrom-Json
 	Assert-True ($Timing.schemaVersion -eq 3 -and $Timing.stage -eq 'all' -and $Timing.sourceRevision -eq $Revision -and $Timing.configuration -eq 'Development') 'The timing record must bind schema, stage, source revision, and configuration.'
 	Assert-True ($Timing.derivedDataCache.mode -eq 'engine-default' -and $Timing.derivedDataCache.status -eq 'not_configured') 'Without a configured cache the timing record must state the engine-default mode explicitly.'

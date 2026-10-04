@@ -33,6 +33,13 @@ workflow job bound, and a report cannot be preserved if the platform kills the
 job before this script starts. Handoff directories are never deleted here; eligible
 directories are only listed in cleanup-request records for external
 operational cleanup.
+.PARAMETER BuildNumber
+Optional release build number, accepted only with -Mode ValidateProvenance
+(build_number_mode_invalid otherwise) and validated as a positive integer of at
+most ten digits without a leading zero (build_number_invalid) before any phase
+work. The supervisor forwards it to the supervised child, which hands it to
+Build-PackagedArtifacts.ps1 -Stage Provenance. It never enters the gate report,
+and without it every invocation is unchanged.
 #>
 [CmdletBinding()]
 param(
@@ -45,6 +52,7 @@ param(
 	[string] $RunId,
 	[string] $RunAttempt,
 	[string] $RunnerName,
+	[string] $BuildNumber,
 	[string] $ManagedWorkspaceRoot,
 	[string] $ManagedWorkspaceRegistrationPath,
 	[string] $ManagedWorkspaceRegistrationSha256,
@@ -68,6 +76,7 @@ $ErrorActionPreference = 'Stop'
 
 $Started = [DateTime]::UtcNow
 $ExplicitReportRequested = $PSBoundParameters.ContainsKey('ReportPath')
+$BuildNumberRequested = $PSBoundParameters.ContainsKey('BuildNumber')
 $CompileSupervisorContext = Get-Variable -Name AethelnCompileGateContext -Scope Global -ValueOnly -ErrorAction SilentlyContinue
 $IsCompileChild = $Mode -eq 'Compile' -and $null -ne $CompileSupervisorContext
 if ($IsCompileChild) { $Started = [DateTime]::Parse($CompileSupervisorContext.startedUtc).ToUniversalTime() }
@@ -1617,6 +1626,7 @@ function Invoke-PhaseSupervisor {
 		PhaseSupervisorParentProcessId = $SupervisorParentProcessId
 		PhaseSupervisorParentStartTicks = $SupervisorParentStartTicks
 	}
+	if ($BuildNumberRequested) { $ChildParameters['BuildNumber'] = $BuildNumber }
 	$ChildParameters['ReportPath'] = $ChildReportPath
 	$BoundedGraceSeconds = [Math]::Min([Math]::Max($PhaseFinalizeGraceSeconds, 1), 600)
 	$HardDeadlineUtc = $Started.AddMinutes($PhaseTimeoutMinutes).AddSeconds($BoundedGraceSeconds)
@@ -1845,6 +1855,15 @@ try {
 	if ($PhaseSupervisorAuthenticationInvalid) {
 		Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-phase-supervisor-authentication' -Message 'phase_supervisor_auth_invalid'
 		throw 'phase_supervisor_auth_invalid'
+	}
+	if ($BuildNumberRequested) {
+		# Decided before any mode-specific work, so no mode other than
+		# ValidateProvenance can start with a build number.
+		$BuildNumberFailure = if ($Mode -ne 'ValidateProvenance') { 'build_number_mode_invalid' } elseif ($BuildNumber -cnotmatch '^[1-9][0-9]{0,9}\z') { 'build_number_invalid' } else { $null }
+		if ($BuildNumberFailure) {
+			Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-build-number' -Message $BuildNumberFailure
+			throw $BuildNumberFailure
+		}
 	}
 	if ($Mode -eq 'Compile') {
 		if ([double]::IsNaN($CompileTimeoutMinutes) -or [double]::IsInfinity($CompileTimeoutMinutes) -or $CompileTimeoutMinutes -le 0 -or $CompileTimeoutMinutes -gt 30) {
@@ -2250,6 +2269,7 @@ try {
 			ClientStageRoot = $ClientDirectory
 			ServerStageRoot = $ServerDirectory
 		}
+		if ($BuildNumberRequested) { $PhaseParameters['BuildNumber'] = $BuildNumber }
 		$BuildStarted = [DateTime]::UtcNow
 		$PhaseResult = Invoke-PhaseChildWithinDeadline (ConvertTo-NamedInvocationText $BuildScript $PhaseParameters)
 		$BuildFailure = $null

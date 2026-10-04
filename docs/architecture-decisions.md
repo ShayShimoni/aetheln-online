@@ -828,14 +828,30 @@ Every accepted decision records:
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
   live portable/controller-contract/controller-operational-proof/native/unreal/visual subset, the aggregate is not called. The workflow
-  still validates the selector identity and emits the exact selected
-  unsupported set as a green `producer_contract_incomplete` record with
+  still validates the selector identity and the direct bindings of every
+  selected live producer, so a failed or skipped required receipt remains red
+  rather than hiding behind the gap, and emits the exact selected
+  unsupported set as a green `producer_contract_incomplete` record
+  (`aetheln.ci-acceptance-shadow-gap/v3`, carrying the checked
+  `liveBindings`) with
   `complete=false`, `shadow=true`, `authoritative=false`, and
   `grantsAcceptance=false`. The green result prevents a known incomplete shadow
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `clean-package-provenance-smoke` and
-  `content-reference-validation` remain unsupported live obligations.
+  `content-reference-validation` remain unsupported live obligations. The gap
+  path checks only job success, the exact artifact name, and the artifact ID and
+  digest format; it does not do the aggregate's artifact-API and byte
+  reconciliation, and `liveBindings` is informational. A
+  publisher-contract test ties the three selector-facing lists (the workflow
+  live list, the context builder live list and the aggregate unsupported list)
+  and the aggregate's inline exactly-one-evidence list to the checks the
+  publishers can prove, so shipping a producer fails that test until those
+  lists move together. Two other copies are not covered by it. The receipt
+  builder's unsupported-check list fails closed: a stale entry makes the builder
+  throw `receipt_semantic_evidence_unsupported:<id>`. The receipt builder's
+  inline evidence list is inert, because its strict evidence-name ordering
+  check still rejects a repeated evidence entry.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate
@@ -1356,6 +1372,7 @@ Every accepted decision records:
 | TC-005 | Server tick, capacity, layers, and bandwidth | Representative combat and stress captures with explicit failure shape | #45 | Canonizing 32/64 players, a tick value, or bandwidth estimate | Approved performance baseline |
 | TC-006 | Production backup, retention, RPO, and RTO | Data criticality, provider capability, restore drills, operating cost | #36, #40, #48 | Vendor-default recovery promises | Before public production |
 | TC-007 | Anti-cheat and platform services | Threat coverage, platform support, privacy, cost, operations, false-positive handling, exit strategy | #40 | Treating client integrity as gameplay authority | Before external risk justifies integration |
+| TC-008 | Per-ability GAS prediction eligibility. First candidate (Issue #19, PR P6): predict Hold the Line's activation, its Endurance cost (if it has one), its cooldown, and its own state tag as a self-only reversible path, using the engine's `LocalPredicted` execution policy with the `ServerOnlyTermination` security policy. Every other ability stays server-only until it is added to an approved prediction list with its own evidence, and contact, Guard, damage, control, and death results are never predicted. See [Gameplay Ability System Foundation](gas-foundation.md) | The two-client PIE feel test of the server-only abilities (#19 PR P5); rollback evidence under the supported network profiles for rejection, acceptance, and loss: a rejected prediction removes the predicted cost, cooldown, and tag, and an accepted one converges with no double cost; a compile-level check that the project ASC can reach the engine's batched-activation data | #19 (owner decision after the feel test); #2 and #45 for network profiles | Predicting any ability without tested rollback; predicting a contact, Guard, damage, control, or death result; granting `LocalPredicted` to an ability not on an approved prediction list | The owner's decision, after the P5 feel test, on whether #19 can close without P6. If the owner closes #19 without P6, the row stays Candidate until a later ability requests prediction |
 
 ## Rejected Architecture Alternatives
 
