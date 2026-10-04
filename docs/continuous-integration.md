@@ -1086,8 +1086,8 @@ engine exposure and its recovery requirements remain in effect.
 The intended runner root serves CI compile, editor automation and packaging;
 the contributor root serves contributor builds and editor launches. Preserve
 the pinned source/toolchain baseline and automatic BuildId mismatch refusal.
-No BuildId pin, loader exemption or clean-source waiver is part of this
-direction. Engine/plugin binaries, generated source, intermediates and module
+No BuildId pin, loader exemption or waiver of the clean Git checkout at exactly
+the pinned revision is part of this direction. Engine/plugin binaries, generated source, intermediates and module
 manifests must not share writable aliases through hardlinks, junctions or
 other indirection. Local root configuration, managed-workspace registration,
 compile proofs, host-tool attestations and cache identity records must bind
@@ -1096,25 +1096,34 @@ than reusing contributor-root proofs.
 
 Before deployment, measure supported payload size, available active-storage
 capacity and peak construction space; then provision and validate the new
-runner route without altering the working contributor tree. An installed
+runner route without altering the working contributor tree. Preliminary,
+metadata-only evidence on the issue shows about 95 GiB free on the active
+volume against about 212 GiB of logical engine data, so a plain duplicate does
+not fit; capacity and provisioning remain unresolved. An installed
 artifact remains a later optimization with size, construction peak, duration
 and target coverage `TBD`. No capacity change, copy, deletion or relocation is
 authorized by this documentation.
 
-Retain exact before/after contributor engine BuildId and relevant output
-hashes, plus contributor project DLL and manifest hashes. Run a CI editor
-build that exercises regeneration, then require those contributor bindings
-to remain unchanged and launch the contributor project without a rebuild or
-manifest edit. Verify module and map load. Also cover CI failure after engine
-metadata writes, and retain the runner's separate provisioning, build and
-automation evidence. A no-op CI build is insufficient for this proof.
+Before the proof run, bind both roots, project revisions, engine/toolchain
+identities and contributor DLL/manifest hashes (see TA-020). Retain exact
+before/after contributor engine BuildId and relevant output hashes, plus
+contributor project DLL and manifest hashes. Run a CI editor build, such as the
+first editor build on the newly provisioned tree, and require evidence that the
+runner root's engine BuildId or NetCore outputs changed during that run; a
+no-op build does not qualify. Then require the contributor bindings to remain
+unchanged and launch the contributor project without a rebuild or manifest
+edit. Verify module and map load. Also cover CI failure after engine metadata
+writes, and retain the runner's separate provisioning, build and automation
+evidence. A no-op CI build is insufficient for this proof.
 
-Until then, serialize shared-engine consumers and use the normal Development
-Editor build in [Unreal Project Setup](unreal-project-setup.md) to recover an
-affected project; confirm the fresh engine/project BuildId match before
-relaunching. Existing admission predicates, job bounds, queue and lease
-requirements, failure reporting and the disabled authority predicate stay
-unchanged. File isolation does not remove shared CPU, memory, storage or GPU
+Until then, serialize shared-engine consumers (lead/owner-coordinated outside
+the repository; the lead holds the engine and announces its release in the
+delivery status or issue) and use the normal Development Editor build in
+[Unreal Project Setup](unreal-project-setup.md) to recover an affected
+project; compare the project and engine `UnrealEditor.modules` `BuildId`
+before relaunching. Existing admission predicates, job bounds, queue and lease
+requirements, failure reporting and the dormant predicate stay unchanged.
+File isolation does not remove shared CPU, memory, storage or GPU
 contention: performance captures still require a quiet host.
 
 ### Compile Policy
