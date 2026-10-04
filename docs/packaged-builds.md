@@ -123,9 +123,17 @@ appends one closed `release` block after the existing properties:
 The read is case-sensitive and strict: exactly one `ProjectVersion=` line in
 `[/Script/EngineSettings.GeneralProjectSettings]`, holding SemVer without build
 metadata. Section headers are matched after trailing whitespace is trimmed, as
-the engine does. A file with a line continuation (a trailing `\`) or a `{...}`
-block fails closed, because the engine joins those lines. A missing value fails
-closed as `project_version_missing`, and any other malformed or ambiguous value
+the engine does. CRLF, lone CR, and LF delimit lines. Engine-recognized key
+prefixes (`~` and the `+ - . ! @ * ^` commands), case variants, and duplicate
+declarations cannot hide another version. A file with a line continuation
+(a trailing `\`), a `{...}` block, or `//` syntax fails closed rather than
+approximating joined lines or comment-dependent headers. Both the release
+guard and build-number provenance use the same reader and refuse any version
+declaration in another `Config` ini as `project_version_override`. Braces in
+another `Config` ini also fail with that reason, since engine brace removal
+can hide a version key; this conservative refusal includes unrelated braces.
+A missing value fails closed as `project_version_missing`, and any other
+malformed or ambiguous value
 as `project_version_invalid`. The reader is a line-oriented approximation of
 the engine's ini parser; the release smoke evidence checks the network version
 that both packages actually log. The committed

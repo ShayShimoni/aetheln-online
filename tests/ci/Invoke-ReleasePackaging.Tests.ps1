@@ -164,6 +164,13 @@ try {
 	Write-Output 'PASS: the guard refuses other events, repositories, actors, attempts, refs, build numbers, and branch versions case-sensitively'
 
 	$VersionCases = @(
+		@{ Name = 'linux-braced'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1'); Other = @{ 'Config/Linux/LinuxGame.ini' = "$SectionHeader`nProject{Version}=9.9.9`n" }; Reason = 'project_version_override' },
+		@{ Name = 'tilde-set'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1', '~ProjectVersion=9.9.9'); Other = @{}; Reason = 'project_version_invalid' },
+		@{ Name = 'tilde-add'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1', '~+ProjectVersion=9.9.9'); Other = @{}; Reason = 'project_version_invalid' },
+		@{ Name = 'lone-cr'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1', "ProjectName=AethelnOnline`rProjectVersion=9.9.9"); Other = @{}; Reason = 'project_version_invalid' },
+		@{ Name = 'commented-header'; Lines = @($SectionHeader, '[/Script/Other] // note', 'ProjectVersion=1.0.0-alpha.1'); Other = @{}; Reason = 'project_version_invalid' },
+		@{ Name = 'linux-tilde'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1'); Other = @{ 'Config/Linux/LinuxGame.ini' = "$SectionHeader`n~ProjectVersion=9.9.9`n" }; Reason = 'project_version_override' },
+		@{ Name = 'linux-reset'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1'); Other = @{ 'Config/Linux/LinuxGame.ini' = "$SectionHeader`n^ProjectVersion=`n" }; Reason = 'project_version_override' },
 		@{ Name = 'missing-file'; Lines = $null; Other = @{}; Reason = 'project_version_missing' },
 		@{ Name = 'missing-line'; Lines = @($SectionHeader, 'ProjectName=AethelnOnline'); Other = @{}; Reason = 'project_version_missing' },
 		@{ Name = 'build-metadata'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1+7'); Other = @{}; Reason = 'project_version_invalid' },

@@ -219,18 +219,25 @@ string, before relying on it.
 
 **Internal release flow.**
 
-1. Cut `release/v<ProjectVersion>` from `develop`, for example
-   `release/v1.0.0-alpha.1`, and commit that exact `ProjectVersion`: the
+1. Land the exact `ProjectVersion` through a reviewed PR into `develop` and
+   verify that the resulting head has a passing `quality-gates` check. Before
+   the first push of any release branch, create the `release/*` ruleset
+   recorded in TA-022: block force-push and deletion, require `quality-gates`,
+   and allow no bypass. Then cut `release/v<ProjectVersion>` from that verified
+   `develop` head, for example `release/v1.0.0-alpha.1`: the
    release workflow refuses a branch name that differs from
    `release/v<ProjectVersion>` in any character. Move the included tickets to
-   `Release Candidate` and fill their `Release` field. When the first release
-   branch is cut, create the `release/*` ruleset recorded in TA-022: block
-   force-push and deletion, require `quality-gates`, and allow no bypass.
+   `Release Candidate` and fill their `Release` field. Later version changes
+   also go through a reviewed PR into the release branch with passing
+   `quality-gates`; do not commit a version change directly to the protected
+   branch or postpone protection to make a push succeed.
 2. Build the internal packages and run release QA on the release branch:
-   - Push the release head, then run
+   - Push the verified release head. The owner checks the remote head SHA
+     against the reviewed head immediately before dispatching, then runs
      `gh workflow run release-packaging.yml --ref release/v<ProjectVersion>`
-     and record the run, its number, and the dispatched head SHA. A new commit
-     voids earlier evidence, so dispatch again after every change.
+     and records the run, its number, and the dispatched head SHA. A new commit
+     voids earlier evidence, so dispatch again after every change. The ruleset
+     does not prevent a writer from adding commits; recheck the head each time.
    - While the dispatch is queued or running, run no local engine or editor
      build against the runner's engine root. A run that fails on host-tools
      attestation after editor automation interleaved is dispatched again.

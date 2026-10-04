@@ -1395,9 +1395,16 @@ Every accepted decision records:
   runner 21 is registered. Owner-authored pull requests, agent-written ones
   included, are trusted code. The owner accepted this risk on 2026-10-03 for
   internal builds that never leave the owner's control.
-- **Release branch protection:** When the first release branch is cut, a
+- **Release branch protection:** Before the first push of a release branch, a
   ruleset on `release/*` is created with these rules: block force-push, block
   deletion, require the `quality-gates` status check, and no bypass actors.
+  Land `ProjectVersion` through a reviewed PR into `develop` before the cut;
+  verify the resulting head's passing `quality-gates` check before pushing
+  the release branch. Later version changes use a reviewed PR into the release
+  branch, never an unchecked direct commit. The owner checks the remote head
+  SHA against the reviewed head immediately before every dispatch: the ruleset
+  does not prevent a writer from adding commits. Do not postpone protection
+  until after the first push.
   After any security fix to `release-packaging.yml` or
   `scripts/ci/Invoke-ReleasePackaging.ps1`, update or delete every existing
   `release/*` branch, because each keeps its older copy and stays

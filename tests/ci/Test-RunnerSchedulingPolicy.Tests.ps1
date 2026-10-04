@@ -361,8 +361,25 @@ function Edit-WorkflowText([string] $Text, [string] $Old, [string] $New) {
 	return $Text.Substring(0, $Index) + $New + $Text.Substring($Index + $Old.Length)
 }
 
+function Test-UntrustedWorkflowInterpolation([string] $Text) {
+	# Match the entire expression, including single braces in format strings.
+	foreach ($Expression in [regex]::Matches($Text, '(?s)\$\{\{.*?\}\}')) {
+		if ($Expression.Value -match 'github\s*(?:\.\s*(?:event|head_ref|base_ref|ref)|\[\s*[''"](?:event|head_ref|base_ref|ref)[A-Za-z0-9_]*[''"]\s*\])') { return $true }
+	}
+	return $false
+}
+
+function Test-WorkflowWritePermission([string] $Text) {
+	# Flow-form permission mappings are intentionally outside the reviewed form.
+	return ($Text -match '(?m)^[ \t]+[''"]?[a-z-]+[''"]?\s*:[ \t]*[''"]?write\b|write-all|(?m)^\s*[''"]?permissions[''"]?\s*:\s*\{')
+}
+
 function Assert-ReleaseWorkflow([string] $Source) {
 	$Text = ConvertTo-LfText $Source
+	$TopKeys = @([regex]::Matches($Text, '(?m)^(?<key>[^\s#:][^:\n]*):') | ForEach-Object { $_.Groups['key'].Value })
+	Assert-True (($TopKeys -join ',') -ceq 'name,on,permissions,jobs') 'Release packaging must have exactly the reviewed name, on, permissions and jobs top-level keys.'
+	Assert-True (-not (Test-WorkflowWritePermission $Text)) 'Release packaging must not grant write or use flow-form permissions.'
+	Assert-True (-not (Test-UntrustedWorkflowInterpolation $Text)) 'Release packaging must not interpolate event or ref data inside any expression.'
 	Assert-True ($Text -match '(?m)^on:\n  workflow_dispatch:\n\npermissions:\n  contents: read\n\njobs:$') 'Release packaging must declare only the input-free workflow_dispatch trigger and an explicit top-level contents: read.'
 	foreach ($Rule in @(
 		@('(?m)^\s+inputs:', 'dispatch inputs'),
@@ -460,7 +477,10 @@ function Assert-RepositoryWorkflowSet([hashtable] $Workflows) {
 	Assert-True ((@($Workflows.Keys | Sort-Object) -join ',') -ceq 'delivery-policy.yml,prototype-quality-gates.yml,release-packaging.yml,visual-package-validation.yml') 'The workflow set is closed: a new workflow file needs its own reviewed pins.'
 	foreach ($Name in @($Workflows.Keys)) {
 		$Text = ConvertTo-LfText ([string] $Workflows[$Name])
-		Assert-True ($Text -match '(?m)^permissions:\n(?:  [a-z-]+: (?:read|none)\n)+' -and $Text -cnotmatch 'write-all|read-all' -and $Text -cnotmatch '(?m)^[ \t]+[a-z-]+:[ \t]*write\b') "$Name must declare an explicit top-level permissions block and grant no write permission."
+		Assert-True ($Text -match '(?m)^permissions:\n(?:  [a-z-]+: (?:read|none)\n)+' -and $Text -cnotmatch 'write-all|read-all' -and -not (Test-WorkflowWritePermission $Text)) "$Name must declare an explicit top-level permissions block and grant no write permission."
+		foreach ($Use in [regex]::Matches($Text, '(?m)^\s+(?:- )?[''"]?uses[''"]?\s*:\s*(?<action>[^\n]+)$')) {
+			Assert-True ($Use.Groups['action'].Value.Trim() -cin @($CheckoutAction, $DownloadAction, $UploadAction, './.github/workflows/visual-package-validation.yml')) "$Name uses an action or reusable workflow outside the reviewed allowlist."
+		}
 		$OnMatch = [regex]::Match($Text, '(?ms)^on:\n(?<body>.*?)(?=^\S)')
 		Assert-True ($OnMatch.Success -and [regex]::Matches($Text, '(?m)^on:').Count -eq 1) "$Name must declare its triggers as one top-level on: mapping."
 		$Triggers = @([regex]::Matches($OnMatch.Groups['body'].Value, '(?m)^  (?<event>[^\s:#]+):') | ForEach-Object { $_.Groups['event'].Value })
@@ -476,7 +496,7 @@ function Assert-RepositoryWorkflowSet([hashtable] $Workflows) {
 		}
 		foreach ($Job in (Get-WorkflowJobBody $Text).GetEnumerator()) {
 			if ($Job.Value -match 'self-hosted') {
-				Assert-True ($Job.Value -notmatch '\$\{\{\s*github\.(?:event|head_ref|base_ref|ref)') "$Name job $($Job.Key) runs on the engine runner and must not interpolate event or ref data."
+				Assert-True (-not (Test-UntrustedWorkflowInterpolation $Job.Value)) "$Name job $($Job.Key) runs on the engine runner and must not interpolate event or ref data."
 			}
 		}
 	}
@@ -485,6 +505,9 @@ function Assert-RepositoryWorkflowSet([hashtable] $Workflows) {
 $ReleaseWorkflowLf = ConvertTo-LfText $ReleaseWorkflow
 Assert-ReleaseWorkflow $ReleaseWorkflowLf
 $ReleaseMutations = @(
+	@{ Name = 'append a top-level environment'; Old = $null; New = "`nenv:`n  PSModulePath: fixture`n" },
+	@{ Name = 'prepend a top-level environment'; Old = "on:`n"; New = "env:`n  GIT_CONFIG_PARAMETERS: fixture`n`non:`n" },
+	@{ Name = 'add top-level defaults'; Old = "on:`n"; New = "defaults:`n  run:`n    shell: powershell`n`non:`n" },
 	@{ Name = 'drop the ref prefix clause'; Old = "startsWith(github.ref, 'refs/heads/release/') && "; New = '' },
 	@{ Name = 'widen the ref prefix'; Old = "'refs/heads/release/'"; New = "'refs/heads/'" },
 	@{ Name = 'drop the repository clause'; Old = "github.repository == 'ShayShimoni/aetheln-online' && "; New = '' },
@@ -527,7 +550,7 @@ $ReleaseMutations = @(
 	@{ Name = 'route the guard to a runner label'; Old = '    runs-on: windows-latest'; New = '    runs-on: self-hosted' }
 )
 foreach ($Mutation in $ReleaseMutations) {
-	$Mutated = Edit-WorkflowText -Text $ReleaseWorkflowLf -Old $Mutation.Old -New $Mutation.New
+	$Mutated = if ($null -eq $Mutation.Old) { $ReleaseWorkflowLf + $Mutation.New } else { Edit-WorkflowText -Text $ReleaseWorkflowLf -Old $Mutation.Old -New $Mutation.New }
 	$Rejected = $false
 	try { Assert-ReleaseWorkflow $Mutated } catch { $Rejected = $true }
 	Assert-True $Rejected "Release workflow mutation '$($Mutation.Name)' must be rejected."
@@ -539,6 +562,19 @@ foreach ($WorkflowFile in @(Get-ChildItem -LiteralPath (Join-Path $RepositoryRoo
 }
 Assert-RepositoryWorkflowSet $RepositoryWorkflows
 $RepositoryMutations = @(
+	@{ Name = 'grant write through a single-quoted permission key'; File = 'delivery-policy.yml'; Old = "permissions:`n  contents: read`n"; New = "permissions:`n  contents: read`n  'actions': write`n" },
+	@{ Name = 'grant write through a double-quoted permission key'; File = 'delivery-policy.yml'; Old = "permissions:`n  contents: read`n"; New = "permissions:`n  contents: read`n  `"actions`": write`n" },
+	@{ Name = 'call an external workflow through a single-quoted uses key'; File = 'delivery-policy.yml'; Old = "jobs:`n"; New = "jobs:`n  external:`n    'uses': someone/repo/.github/workflows/x.yml@0123456789abcdef0123456789abcdef01234567`n" },
+	@{ Name = 'call an external action through a double-quoted uses key'; File = 'delivery-policy.yml'; Old = ('uses: ' + $CheckoutAction); New = '"uses": someone/action@0123456789abcdef0123456789abcdef01234567' },
+	@{ Name = 'grant quoted write'; File = 'delivery-policy.yml'; Old = "permissions:`n  contents: read`n"; New = "permissions:`n  contents: read`n  actions: 'write'`n" },
+	@{ Name = 'grant flow-form write'; File = 'prototype-quality-gates.yml'; Old = "    permissions:`n      actions: read`n"; New = "    permissions: { actions: write, contents: read }`n" },
+	@{ Name = 'call an external reusable workflow'; File = 'delivery-policy.yml'; Old = "jobs:`n"; New = "jobs:`n  external:`n    uses: someone/repo/.github/workflows/x.yml@0123456789abcdef0123456789abcdef01234567`n" },
+	@{ Name = 'call an external step action'; File = 'delivery-policy.yml'; Old = ('uses: ' + $CheckoutAction); New = 'uses: someone/action@0123456789abcdef0123456789abcdef01234567' },
+	@{ Name = 'nest event interpolation in toJSON'; File = 'prototype-quality-gates.yml'; Old = '${{ runner.name }}'; New = '${{ toJSON(github.event) }}' },
+	@{ Name = 'nest head_ref interpolation in format'; File = 'prototype-quality-gates.yml'; Old = '${{ runner.name }}'; New = '${{ format(''{0}'', github.head_ref) }}' },
+	@{ Name = 'index head_ref in an expression'; File = 'prototype-quality-gates.yml'; Old = '${{ runner.name }}'; New = '${{ github[''head_ref''] }}' },
+	@{ Name = 'retain refusal of ref_name interpolation'; File = 'prototype-quality-gates.yml'; Old = '${{ runner.name }}'; New = '${{ github.ref_name }}' },
+	@{ Name = 'index ref_name in an expression'; File = 'prototype-quality-gates.yml'; Old = '${{ runner.name }}'; New = '${{ github[''ref_name''] }}' },
 	@{ Name = 'add a workflow file'; File = 'extra.yml'; Old = $null; New = "name: Extra`n" },
 	@{ Name = 'add an issue_comment trigger'; File = 'delivery-policy.yml'; Old = "on:`n  pull_request:`n"; New = "on:`n  issue_comment:`n  pull_request:`n" },
 	@{ Name = 'switch to pull_request_target'; File = 'delivery-policy.yml'; Old = "  pull_request:`n    types:"; New = "  pull_request_target:`n    types:" },

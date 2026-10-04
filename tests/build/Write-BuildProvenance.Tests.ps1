@@ -137,6 +137,10 @@ try {
 		Assert-True ($Result.Failure -match '^project_version_missing' -and -not $Result.Written) "A missing ProjectVersion ($($Case.Name)) must fail closed as project_version_missing. Failure: $($Result.Failure)"
 	}
 	$InvalidCases = @(
+		@{ Name = 'tilde-set'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', '~ProjectVersion=9.9.9') },
+		@{ Name = 'tilde-add'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', '~+ProjectVersion=9.9.9') },
+		@{ Name = 'lone-cr'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', "ProjectName=AethelnOnline`rProjectVersion=9.9.9") },
+		@{ Name = 'commented-header'; Lines = @($SectionHeader, '[/Script/Other] // note', 'ProjectVersion=1.0.0') },
 		@{ Name = 'build-metadata'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0+3') },
 		@{ Name = 'prerelease-and-metadata'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1+7') },
 		@{ Name = 'v-prefix'; Lines = @($SectionHeader, 'ProjectVersion=v1.0.0') },
@@ -172,6 +176,22 @@ try {
 		Assert-True ($null -eq $Inert.Failure -and -not ((Get-Content -LiteralPath $Inert.Path -Raw | ConvertFrom-Json).PSObject.Properties.Name -contains 'release')) "ProjectVersion case '$($Case.Name)' must be ignored entirely when -BuildNumber is absent. Failure: $($Inert.Failure)"
 	}
 	Write-Output 'PASS: a missing or malformed ProjectVersion fails closed only when -BuildNumber is present'
+	foreach ($OverrideCase in @(
+		@{ Name = 'linux-braced'; Line = 'Project{Version}=9.9.9' },
+		@{ Name = 'linux-tilde'; Line = '~ProjectVersion=9.9.9' },
+		@{ Name = 'linux-reset'; Line = '^ProjectVersion=' }
+	)) {
+		$Name = $OverrideCase.Name
+		$OverrideLine = $OverrideCase.Line
+		$Project = Initialize-VersionedProject $Name @($SectionHeader, 'ProjectVersion=1.0.0')
+		$LinuxConfig = Join-Path (Split-Path -Parent $Project) 'Config/Linux'
+		New-Item -ItemType Directory -Path $LinuxConfig -Force | Out-Null
+		[IO.File]::WriteAllText((Join-Path $LinuxConfig 'LinuxGame.ini'), "$SectionHeader`n$OverrideLine`n")
+		$Result = Invoke-Provenance $Name $Project -Extra @{ BuildNumber = '7' }
+		Assert-True ($Result.Failure -match '^project_version_override' -and -not $Result.Written) "Platform override '$Name' must fail before release provenance is written. Failure: $($Result.Failure)"
+		$Inert = Invoke-Provenance ($Name + '-inert') $Project
+		Assert-True ($null -eq $Inert.Failure) 'Platform version scanning must remain inert without BuildNumber.'
+	}
 
 	$ArabicIndicThree = [string][char] 0x0663
 	foreach ($BadNumber in @('0', '01', 'abc', '12345678901', '', '-1', '+7', '7.0', ' 7', '7 ', "7`n", $ArabicIndicThree)) {

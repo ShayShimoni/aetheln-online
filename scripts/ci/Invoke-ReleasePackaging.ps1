@@ -129,12 +129,7 @@ try {
 		$Root = if ([string]::IsNullOrEmpty($RootOverride)) { Join-Path $PSScriptRoot '..\..' } else { $RootOverride }
 		$DefaultGame = [IO.Path]::GetFullPath((Join-Path $Root 'Config\DefaultGame.ini'))
 		$ProjectVersion = Read-ProjectVersion $DefaultGame
-		# A platform or other ini override would let the client and server differ.
-		foreach ($Ini in @(Get-ChildItem -LiteralPath (Join-Path $Root 'Config') -Recurse -File -Force | Where-Object { $_.Extension -eq '.ini' -and $_.FullName -ne $DefaultGame })) {
-			foreach ($Line in [IO.File]::ReadAllLines($Ini.FullName)) {
-				if (Test-ProjectVersionDeclaration $Line) { throw 'project_version_override' }
-			}
-		}
+		# The shared reader also refuses platform/other Config ini overrides.
 		Assert-Condition ($ProjectVersion -ceq $RefMatch.Groups['Version'].Value) 'project_version_branch_mismatch'
 		$SummaryPath = Get-ContextValue 'GITHUB_STEP_SUMMARY'
 		if ($SummaryPath.Length -gt 0) {
