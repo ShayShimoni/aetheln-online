@@ -392,7 +392,7 @@ $EntryParameters = [ordered]@{
 	Mode = 'Compile'; RepositoryRoot = $EntryControl; SourceRevision = $EntryRevision; ArchiveRoot = (Join-Path $EntryRoot 'archive'); LogRoot = (Join-Path $EntryRoot 'logs');
 	Repository = 'fixture/repository'; RunnerName = 'fixture-runner'; ManagedWorkspaceRoot = $EntryTarget; ManagedWorkspaceRegistrationPath = $RegistrationPath;
 	ManagedWorkspaceRegistrationSha256 = (Get-FileHash -LiteralPath $RegistrationPath -Algorithm SHA256).Hash.ToLowerInvariant();
-	HostLeasePath = (Join-Path $EntryRoot 'host.lease'); CompileTimeoutMinutes = 1.0; CompileStartedUtc = $AnchorUtc; CompileStartedTimestamp = $AnchorTimestamp;
+	HostLeasePath = (Join-Path $EntryRoot 'host.lease'); CompileTimeoutMinutes = 30; CompileStartedUtc = $AnchorUtc; CompileStartedTimestamp = $AnchorTimestamp;
 	ReportPath = (Join-Path $EntryRoot 'report.json')
 }
 $EntryResult = Invoke-RoutineEntryFixtureProcess -EntryGate $EntryGate -Parameters $EntryParameters -FixtureEngine $EntryEngine -FixtureToolchain $EntryToolchain
@@ -418,8 +418,8 @@ Set-RoutineEntryFixtureFile -Path (Join-Path $EntryControl 'Source/next.cpp') -V
 $null = Invoke-RoutineEntryFixtureGit -Root $EntryControl -Arguments @('add', '.')
 $null = Invoke-RoutineEntryFixtureGit -Root $EntryControl -Arguments @('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'expired-candidate')
 $EntryParameters.SourceRevision = Invoke-RoutineEntryFixtureGit -Root $EntryControl -Arguments @('rev-parse', 'HEAD')
-$EntryParameters.CompileStartedUtc = [DateTime]::UtcNow.AddMinutes(-2).ToString('o')
-$EntryParameters.CompileStartedTimestamp = [Diagnostics.Stopwatch]::GetTimestamp() - 120L * [Diagnostics.Stopwatch]::Frequency
+$EntryParameters.CompileStartedUtc = [DateTime]::UtcNow.AddMinutes(-31).ToString('o')
+$EntryParameters.CompileStartedTimestamp = [Diagnostics.Stopwatch]::GetTimestamp() - 1860L * [Diagnostics.Stopwatch]::Frequency
 $EntryParameters.LogRoot = Join-Path $EntryRoot 'expired-logs'
 $EntryParameters.ArchiveRoot = Join-Path $EntryRoot 'expired-archive'
 $EntryParameters.HostLeasePath = Join-Path $EntryRoot 'expired-host.lease'
@@ -431,6 +431,24 @@ Assert-RoutineGateFixture -Condition ($ExpiredReport.summary.requiredFailed -gt 
 Assert-RoutineGateFixture -Condition ((Invoke-RoutineEntryFixtureGit -Root $EntryTarget -Arguments @('rev-parse', 'HEAD')) -ceq $EntryRevision -and -not (Test-Path -LiteralPath (Join-Path $EntryTarget 'Source/next.cpp'))) -Message 'Expired anchor performs no Git synchronization.'
 Assert-RoutineGateFixture -Condition (-not (Test-Path -LiteralPath $EntryParameters.HostLeasePath) -and -not (Test-Path -LiteralPath $EntryParameters.LogRoot)) -Message 'Expired anchor acquires no host lease and starts no build.'
 Write-Output 'PASS actual managed entrypoint and expired original deadline'
+# Issue #243: a deadline that is not yet expired but leaves under the fixed
+# 5-minute minimum after the lease must not start the checkout, and still
+# releases the lease it took.
+$EntryParameters.CompileTimeoutMinutes = 4
+$EntryParameters.CompileStartedUtc = [DateTime]::UtcNow.ToString('o')
+$EntryParameters.CompileStartedTimestamp = [Diagnostics.Stopwatch]::GetTimestamp()
+$EntryParameters.LogRoot = Join-Path $EntryRoot 'short-logs'
+$EntryParameters.ArchiveRoot = Join-Path $EntryRoot 'short-archive'
+$EntryParameters.HostLeasePath = Join-Path $EntryRoot 'short-host.lease'
+$EntryParameters.ReportPath = Join-Path $EntryRoot 'short-report.json'
+$ShortResult = Invoke-RoutineEntryFixtureProcess -EntryGate $EntryGate -Parameters $EntryParameters -FixtureEngine $EntryEngine -FixtureToolchain $EntryToolchain
+Assert-RoutineGateFixture -Condition ($ShortResult.exitCode -ne 0) -Message 'Under the minimum after the lease exits nonzero.'
+$ShortReport = Get-Content -LiteralPath $EntryParameters.ReportPath -Raw | ConvertFrom-Json
+Assert-RoutineGateFixture -Condition ($ShortReport.summary.requiredFailed -gt 0 -and @($ShortReport.checks | Where-Object { $_.message -ceq 'managed_workspace_time_insufficient' }).Count -gt 0) -Message 'Under the minimum publishes the distinct insufficient-time failure.'
+Assert-RoutineGateFixture -Condition ((Invoke-RoutineEntryFixtureGit -Root $EntryTarget -Arguments @('rev-parse', 'HEAD')) -ceq $EntryRevision -and -not (Test-Path -LiteralPath (Join-Path $EntryTarget 'Source/next.cpp'))) -Message 'Under the minimum starts no Git synchronization.'
+$ShortLeaseRows = @(Get-Content -LiteralPath $EntryParameters.HostLeasePath | ForEach-Object { $_ | ConvertFrom-Json })
+Assert-RoutineGateFixture -Condition ($ShortLeaseRows[-1].state -ceq 'released' -and $ShortLeaseRows[-1].cleanupVerified -eq $true -and @(Get-ChildItem -LiteralPath (Join-Path $EntryParameters.LogRoot 'compile') -Directory -Filter 'routine-*').Count -eq 0) -Message 'Under the minimum releases the lease with cleanup proof and starts no build.'
+Write-Output 'PASS actual managed entrypoint refuses a checkout under the minimum remaining time'
 Write-Output ('Fixtures retained: ' + $FixtureRoot)
 if ($script:RoutineFailures.Count -gt 0) { throw ($script:RoutineFailures.Count.ToString() + ' routine gate integration cases failed.') }
 Write-Output ('PASS ' + $script:RoutineAssertions + ' routine gate integration assertions.')

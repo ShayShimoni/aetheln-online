@@ -89,6 +89,9 @@ $RoutineResourceMonitor = $null
 $RoutineDeadline = $null
 $ManagedCompile = $PSBoundParameters.ContainsKey('ManagedWorkspaceRoot')
 $CompileDeadlineUtc = [DateTime]::MaxValue
+# Provisional fixed minimum (not a tuning result): a checkout cut off by the
+# deadline can leave the managed workspace half-updated (issue #243).
+$ManagedWorkspaceMinimumSyncMilliseconds = 300000
 $Checks = New-Object System.Collections.ArrayList
 $RequiredFailed = $false
 $SupervisedChildExited = $false
@@ -1911,6 +1914,7 @@ try {
 					[string]::Equals([IO.Path]::GetFullPath($ProposedTarget).TrimEnd('\', '/'), [IO.Path]::GetFullPath($Registered.targetRoot).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -and
 					$ProposedRepository -ceq $Registered.repository -and $ProposedRevision -ceq $SourceRevision)
 			}.GetNewClosure()
+			if ((Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline) -lt $ManagedWorkspaceMinimumSyncMilliseconds) { throw 'managed_workspace_time_insufficient' }
 			$null = Sync-ManagedCompileWorkspace -ControlRoot $ControlRoot -TargetRoot $ManagedWorkspaceRoot -SourceRevision $SourceRevision -Repository $Repository -ExpectedGitCommonDirectory $Registered.gitCommonDirectory -DeadlineUtc $CompileDeadlineUtc -RemainingBudget { Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline } -AssertRepositoryTrust $TrustRegisteredWorkspace -OnProgress { Assert-RoutineCompileProgress }
 			$ResolvedRepository = Resolve-RequiredDirectory $ManagedWorkspaceRoot 'managed_workspace_root_invalid'
 			$ManagedWorkspaceEvidence = [ordered]@{ schemaVersion = 1; registrationId = $Registered.registrationId;

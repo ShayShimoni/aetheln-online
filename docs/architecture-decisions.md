@@ -1330,7 +1330,13 @@ Every accepted decision records:
     `editor_build_timeout`, `editor_host_lease_release_failed`, and
     `editor_control_checkout_failed` join the fixed vocabulary; the lease or
     sync module's own fixed code is printed as one
-    `editor_build_detail code=<code>` line.
+    `editor_build_detail code=<code>` line. `editor_build_timeout` means only
+    that the build reached the deadline: a lease wait that reaches it records
+    `editor_host_lease_failed`, and a sync that times out records
+    `editor_workspace_sync_failed` with no detail code. Issue #243 adds
+    `editor_sync_time_insufficient`, recorded when less than the provisional
+    fixed 5-minute minimum remains after the lease is taken, before any
+    checkout starts.
   - *Ceiling:* the job now has a 45-minute job ceiling: its step bounds
     (control checkout 5, re-sync and editor build 20, harness 12, residue
     cleanup 2, bind 1, upload 1, outcome 1) plus a 3-minute margin. The added

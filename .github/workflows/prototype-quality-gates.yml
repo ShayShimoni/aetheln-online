@@ -680,8 +680,20 @@ jobs:
           # 30-second cleanup proofs and the release fit in the rest of the
           # 20-minute step bound, so the step releases before the platform
           # could stop it.
-          $DeadlineUtc = [DateTime]::UtcNow.AddMinutes(17)
-          $DeadlineTicks = [Diagnostics.Stopwatch]::GetTimestamp() + 17L * 60L * [Diagnostics.Stopwatch]::Frequency
+          # A checkout cut off by the deadline can leave the managed workspace
+          # half-updated, so the re-sync starts only when at least a fixed,
+          # provisional minimum remains after the lease is taken (not a tuning
+          # result). Test-only: a fixture may shorten, never extend, either
+          # value through its own environment variable.
+          function Get-ShortenedSeconds([string] $Name, [int] $Default) {
+            $Value = [Environment]::GetEnvironmentVariable($Name)
+            if ($Value -cmatch '\A[1-9][0-9]{0,3}\z' -and [int] $Value -lt $Default) { return [int] $Value }
+            return $Default
+          }
+          $DeadlineSeconds = Get-ShortenedSeconds 'AETHELN_EDITOR_TEST_DEADLINE_SECONDS' (17 * 60)
+          $MinimumSyncSeconds = Get-ShortenedSeconds 'AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS' (5 * 60)
+          $DeadlineUtc = [DateTime]::UtcNow.AddSeconds($DeadlineSeconds)
+          $DeadlineTicks = [Diagnostics.Stopwatch]::GetTimestamp() + [long] $DeadlineSeconds * [Diagnostics.Stopwatch]::Frequency
           $Control = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'editor-control-${{ github.run_id }}-${{ github.run_attempt }}'))
           $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
           $EvidenceRoot = Join-Path $RunRoot 'editor-build'
@@ -720,6 +732,7 @@ jobs:
                 $Failure = 'editor_host_lease_failed'
               }
             }
+            if ($null -eq $Failure -and $DeadlineTicks - [Diagnostics.Stopwatch]::GetTimestamp() -lt $MinimumSyncSeconds * [Diagnostics.Stopwatch]::Frequency) { $Failure = 'editor_sync_time_insufficient' }
             if ($null -eq $Failure) {
               $null = New-Item -ItemType Directory -Path $RunRoot -Force
               $SyncResult = Join-Path $RunRoot ('editor-sync-' + [guid]::NewGuid().ToString('N') + '.txt')
@@ -814,8 +827,13 @@ jobs:
       # managed sync rejects any untracked input file. Remove exactly the set
       # that sync query reports (it runs even after a failed build or harness)
       # so later pull requests keep a clean workspace; anything left fails here.
+      # It is skipped after a lease failure or a failed release (issue #243):
+      # the editor step then does not hold the lease, so this step must not
+      # delete anything outside it, and the held journal and workspace stay as
+      # evidence for explicit recovery.
       - name: Clear editor-written input residue
         id: automation_residue
+        if: steps.editor_build.outputs.reason != 'editor_host_lease_failed' && steps.editor_build.outputs.reason != 'editor_host_lease_release_failed'
         continue-on-error: true
         timeout-minutes: 2
         shell: powershell

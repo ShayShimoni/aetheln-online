@@ -45,6 +45,7 @@ foreach ($Case in @(
 	@('managed_workspace_partial_checkout', 'managed_workspace_partial_checkout'),
 	@('managed_workspace_checkout_failed', 'managed_workspace_checkout_failed'),
 	@('compile_timeout', 'compile_timeout'),
+	@('managed_workspace_time_insufficient', 'managed_workspace_time_insufficient'),
 	@('unsafe raw Git stderr: token=value', 'managed_workspace_failed')
 )) {
 	$script:Checks = New-Object System.Collections.ArrayList
@@ -331,6 +332,7 @@ if ($TrustAssignments.Count -ne 1) { throw 'Expected exactly one gate trust call
 $TrustRoot = Join-Path $FixtureRoot 'trust'
 foreach ($Name in @('control-a', 'control-b', 'target', 'common')) { $null = New-Item -ItemType Directory -Path (Join-Path $TrustRoot $Name) }
 function Invoke-GateTrustFixture {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'The extracted gate callback closes over these gate variables by name.')]
 	param([string] $GateControl, [string] $GateRevision, [string] $SyncControl, [string] $SyncRevision)
 	$ControlRoot = $GateControl
 	$SourceRevision = $GateRevision
@@ -359,6 +361,36 @@ foreach ($Case in @(
 		Assert-Fixture -Condition ($Rejected -eq $Case[5]) -Message ('Trust callback outcome was ' + $Observed)
 		Write-Output ('PASS ' + $Case[0])
 	} catch { $script:FixtureFailures.Add($Case[0] + ': ' + $_.Exception.Message); Write-Output ('FAIL ' + $script:FixtureFailures[-1]) }
+}
+# #243: the gate refuses to start the checkout when less than the fixed minimum
+# of its deadline remains, using the gate's own constant and statement and a
+# real routine deadline over a controllable monotonic clock.
+$MinimumAssignment = @($GateAst.FindAll({ param($Node)
+	$Node -is [Management.Automation.Language.AssignmentStatementAst] -and $Node.Left.Extent.Text -ceq '$ManagedWorkspaceMinimumSyncMilliseconds'
+}, $true))
+$MinimumGuard = @($GateAst.FindAll({ param($Node)
+	$Node -is [Management.Automation.Language.IfStatementAst] -and $Node.Clauses.Count -eq 1 -and $Node.Clauses[0].Item2.Extent.Text -match "^\{ throw 'managed_workspace_time_insufficient' \}$"
+}, $true))
+$SyncCall = @($GateAst.FindAll({ param($Node)
+	$Node -is [Management.Automation.Language.CommandAst] -and $Node.GetCommandName() -ceq 'Sync-ManagedCompileWorkspace'
+}, $true))
+if ($MinimumAssignment.Count -ne 1 -or $MinimumGuard.Count -ne 1 -or $SyncCall.Count -ne 1 -or $MinimumGuard[0].Extent.EndOffset -gt $SyncCall[0].Extent.StartOffset) { throw 'Expected one minimum-time guard that precedes the managed sync.' }
+. ([scriptblock]::Create($MinimumAssignment[0].Extent.Text))
+function Invoke-GateMinimumFixture {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'The extracted gate guard reads this gate variable by name.')]
+	param([long] $ElapsedSeconds)
+	$script:FixtureTick = 1000 + $ElapsedSeconds * [Diagnostics.Stopwatch]::Frequency
+	$RoutineDeadline = New-RoutineCompileDeadline -StartedUtc ([DateTime]::UtcNow.ToString('o')) -StartedTimestamp 1000 -TimeoutMinutes 30 -ReadTimestamp { $script:FixtureTick } -TimestampFrequency ([Diagnostics.Stopwatch]::Frequency)
+	try { . ([scriptblock]::Create($MinimumGuard[0].Extent.Text)); return 'proceed' } catch { return $_.Exception.Message }
+}
+foreach ($Case in @(
+	@('gate-minimum-allows-ample-time', 600, 'proceed'),
+	@('gate-minimum-allows-exactly-the-minimum', 1500, 'proceed'),
+	@('gate-minimum-refuses-just-under-the-minimum', 1501, 'managed_workspace_time_insufficient'),
+	@('gate-minimum-refuses-late-lease', 1700, 'managed_workspace_time_insufficient')
+)) {
+	try { Assert-Fixture -Condition ((Invoke-GateMinimumFixture -ElapsedSeconds $Case[1]) -ceq $Case[2]) -Message ($Case[0] + ' observed the wrong outcome'); Write-Output ('PASS ' + $Case[0]) }
+	catch { $script:FixtureFailures.Add($Case[0] + ': ' + $_.Exception.Message); Write-Output ('FAIL ' + $script:FixtureFailures[-1]) }
 }
 Write-Output ('Fixtures retained: ' + $FixtureRoot)
 if ($script:FixtureFailures.Count -gt 0) { throw ($script:FixtureFailures.Count.ToString() + ' managed compile integration cases failed.') }
