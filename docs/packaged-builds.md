@@ -98,7 +98,10 @@ default or automatic rebuild fallback: an omitted selection or an unverified
 prebuilt attestation stops the build.
 
 The script produces `WindowsClient` and `LinuxServer` below `ArchiveRoot` and
-writes `build-provenance.json` beside them. Provenance generation is part of
+writes `build-provenance.json` beside them. Right after each cook it hashes that
+target's canonical `Saved/Cooked/<CookPlatform>/AethelnOnline/AssetRegistry.bin`
+and records the receipt in the stage record and in `build.cookedRegistries`; a
+cook that leaves no registry fails closed. Provenance generation is part of
 the build entry point; `Write-BuildProvenance.ps1` remains independently
 callable for validation and focused testing but is not an extra normal build
 step.

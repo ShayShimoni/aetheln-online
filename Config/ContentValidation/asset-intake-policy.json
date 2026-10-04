@@ -1,0 +1,277 @@
+{
+  "schema_id": "aetheln.asset-intake-policy",
+  "schema_version": 2,
+  "lifecycle_states": [
+    "concept_reference",
+    "temporary_prototype",
+    "runtime_candidate",
+    "production_approved"
+  ],
+  "lifecycle_gates": {
+    "forward_transitions": [
+      { "from": "concept_reference", "to": "temporary_prototype" },
+      { "from": "concept_reference", "to": "runtime_candidate" },
+      { "from": "temporary_prototype", "to": "runtime_candidate" },
+      { "from": "runtime_candidate", "to": "production_approved" }
+    ],
+    "repository_presence_implies_approval": false,
+    "successful_import_implies_approval": false,
+    "successful_cook_implies_approval": false,
+    "evidence_change_returns_to_review": true,
+    "runtime_candidate_requires": [
+      "complete_provenance",
+      "rights_evidence",
+      "stable_identity_and_version",
+      "audience",
+      "all_deterministic_families_passed",
+      "named_reviewer",
+      "approval_record",
+      "exact_content_identity"
+    ],
+    "production_approval_requires": [
+      "exact_runtime_candidate_revision",
+      "production_reviewer",
+      "production_approval_record",
+      "exact_content_identity",
+      "exact_runtime_candidate_approval_record"
+    ]
+  },
+  "audiences": [
+    "shared",
+    "server_only",
+    "client_only"
+  ],
+  "provenance": {
+    "required_fields": [
+      "author_or_provider",
+      "source_record",
+      "source_version",
+      "license_or_permission_evidence",
+      "modifications",
+      "generation_metadata_when_applicable",
+      "content_sha256",
+      "reviewer",
+      "approval_state"
+    ],
+    "automation_may_download_or_accept_terms": false
+  },
+  "identity": {
+    "stable_id_required": true,
+    "positive_content_version_required": true,
+    "rename_changes_identity": false,
+    "duplicate_identity_result": "fail",
+    "missing_identity_result": "fail"
+  },
+  "storage": {
+    "source_root": "SourceAssets/",
+    "runtime_root": "Content/",
+    "repository_presence_implies_approval": false
+  },
+  "intake_controls": {
+    "source_assets_may_be_cooked": false,
+    "runtime_assets_require_intake_record": true,
+    "naming_owner_required": true,
+    "import_settings_required": true,
+    "reimport_settings_required": true,
+    "lfs_policy_path": "docs/source-control.md",
+    "lock_before_binary_edit": true,
+    "recovery_requires_preserved_copy": true
+  },
+  "references": {
+    "soft_presentation_requires_declared_rule": true,
+    "soft_reference_rules": {
+      "default_allowed": false,
+      "match_mode": "full_package_path_and_audience",
+      "required_fields": [
+        "id",
+        "source_package_pattern",
+        "source_audience",
+        "target_package_pattern",
+        "target_audience",
+        "justification"
+      ],
+      "rules": [
+        { "id": "shared-to-shared", "source_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "source_audience": "shared", "target_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "target_audience": "shared", "justification": "Shared runtime content may resolve shared runtime content in both targets." },
+        { "id": "shared-to-client-presentation", "source_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "source_audience": "shared", "target_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "target_audience": "client_only", "justification": "Shared content may name optional client presentation without making it a server cook dependency." },
+        { "id": "server-to-shared", "source_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "source_audience": "server_only", "target_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "target_audience": "shared", "justification": "Server-only runtime content may resolve shared runtime content." },
+        { "id": "server-to-server", "source_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "source_audience": "server_only", "target_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "target_audience": "server_only", "justification": "Server-only runtime content may resolve server-only runtime content." },
+        { "id": "client-to-shared", "source_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "source_audience": "client_only", "target_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "target_audience": "shared", "justification": "Client-only runtime content may resolve shared runtime content." },
+        { "id": "client-to-client", "source_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "source_audience": "client_only", "target_package_pattern": "^/Game(?:/[A-Za-z0-9_]+)+$", "target_audience": "client_only", "justification": "Client-only runtime content may resolve client-only runtime content." }
+      ]
+    },
+    "candidate_redirectors_allowed": false,
+    "broken_references_allowed": false,
+    "editor_only_runtime_dependency_allowed": false,
+    "incompatible_content_version_result": "fail",
+    "hard_reference_exceptions": {
+      "default_allowed": false,
+      "required_fields": [
+        "owner",
+        "justification",
+        "source_audience",
+        "target_audience",
+        "reviewer",
+        "approval_record",
+        "revisit_trigger"
+      ]
+    },
+    "hard_reference_audience_rules": [
+      { "source": "shared", "may_reference": ["shared"] },
+      { "source": "server_only", "may_reference": ["shared", "server_only"] },
+      { "source": "client_only", "may_reference": ["shared", "client_only"] }
+    ]
+  },
+  "thresholds": {
+    "unresolved_value": "TBD",
+    "tbd_requires_owner": true,
+    "tbd_requires_revisit_trigger": true,
+    "tbd_may_promote_to_production": false,
+    "unresolved_budgets": [
+      { "id": "collision_complexity", "value": "TBD", "owner": "Issue #45", "revisit_trigger": "Accepted representative collision and runtime capture" },
+      { "id": "lod_hlod_nanite", "value": "TBD", "owner": "Issue #45", "revisit_trigger": "Accepted representative rendering and streaming capture" },
+      { "id": "texture_memory_streaming", "value": "TBD", "owner": "Issue #45", "revisit_trigger": "Accepted representative texture memory and streaming capture" },
+      { "id": "material_shader_complexity", "value": "TBD", "owner": "Issue #45", "revisit_trigger": "Accepted representative shader-complexity capture" },
+      { "id": "skeletal_rig_influences_morphs", "value": "TBD", "owner": "Issue #45", "revisit_trigger": "Accepted representative skeletal runtime capture" },
+      { "id": "animation_complexity", "value": "TBD", "owner": "Issue #45", "revisit_trigger": "Accepted representative animation runtime capture" },
+      { "id": "map_data_layer_pcg", "value": "TBD", "owner": "Issue #45 and the owning map issue", "revisit_trigger": "Accepted per-map editor, runtime, cook, and recovery evidence" },
+      { "id": "navigation_runtime", "value": "TBD", "owner": "Issue #45 and the owning map issue", "revisit_trigger": "Accepted per-map navigation generation and runtime capture" }
+    ]
+  },
+  "policy_families": [
+    { "id": "collision", "applicability_required": true, "deterministic_invariants_fail": true, "unresolved_quantitative_result": "non_promotion", "failure_code": "content.collision.failed", "checks": ["profile", "simple_complex_policy", "presentation_equivalence"] },
+    { "id": "rendering_suitability", "applicability_required": true, "deterministic_invariants_fail": true, "unresolved_quantitative_result": "non_promotion", "failure_code": "content.rendering_suitability.failed", "checks": ["lod", "hlod", "nanite_suitability", "streaming"] },
+    { "id": "texture", "applicability_required": true, "deterministic_invariants_fail": true, "unresolved_quantitative_result": "non_promotion", "failure_code": "content.texture.failed", "checks": ["pbr_channels", "tiling", "compression", "mips", "streaming"] },
+    { "id": "material", "applicability_required": true, "deterministic_invariants_fail": true, "unresolved_quantitative_result": "non_promotion", "failure_code": "content.material.failed", "checks": ["material_instance_policy", "shader_complexity_evidence"] },
+    { "id": "skeletal_animation", "applicability_required": true, "deterministic_invariants_fail": true, "unresolved_quantitative_result": "non_promotion", "failure_code": "content.skeletal_animation.failed", "checks": ["rig_compatibility", "morph_policy", "influences", "socket_ownership", "animation_complexity"] },
+    { "id": "map_world", "applicability_required": true, "deterministic_invariants_fail": true, "unresolved_quantitative_result": "non_promotion", "failure_code": "content.map_world.failed", "checks": ["map_identity", "data_layers", "pcg_authority", "runtime_editor_boundary"] },
+    { "id": "navigation", "applicability_required": true, "deterministic_invariants_fail": true, "unresolved_quantitative_result": "non_promotion", "failure_code": "content.navigation.failed", "checks": ["navigation_data_audience", "streaming_boundaries", "runtime_rebuild_policy"] },
+    { "id": "reference_boundary", "applicability_required": true, "deterministic_invariants_fail": true, "unresolved_quantitative_result": "non_promotion", "failure_code": "content.reference_boundary.failed", "checks": ["stable_id_unique", "redirectors", "broken_references", "compatible_content_version", "audience_reachability", "hard_reference_exceptions"] }
+  ],
+  "grandfathered_temporary_prototype": {
+    "allowed": true,
+    "requires_owner": true,
+    "requires_recovery_trigger": true,
+    "may_be_runtime_candidate": false
+  },
+  "report": {
+    "schema_id": "aetheln.content-validation-report",
+    "schema_version": 2,
+    "required_fields": [
+      "schema_id",
+      "schema_version",
+      "revision",
+      "engine_identity",
+      "policy_sha256",
+      "intake_sha256",
+      "execution_provenance",
+      "audience",
+      "started_utc",
+      "finished_utc",
+      "command",
+      "counts",
+      "assets",
+      "findings",
+      "result"
+    ],
+    "finding_required_fields": [
+      "policy_id",
+      "code",
+      "asset_path",
+      "severity",
+      "reason",
+      "remediation",
+      "evidence_field"
+    ],
+    "asset_required_fields": [
+      "asset_path",
+      "stable_id",
+      "content_version",
+      "audience",
+      "lifecycle_state",
+      "provenance",
+      "lifecycle_evidence",
+      "family_results"
+    ],
+    "provenance_required_fields": [
+      "author_or_provider",
+      "source_record",
+      "source_version",
+      "license_or_permission_evidence",
+      "modifications",
+      "generation_metadata_when_applicable",
+      "content_sha256",
+      "reviewer",
+      "approval_state"
+    ],
+    "lifecycle_evidence_required_fields": [
+      "content_identity",
+      "temporary_prototype",
+      "runtime_candidate",
+      "production_approval"
+    ],
+    "execution_provenance_required_fields": [
+      "repository_clean",
+      "engine_revision",
+      "engine_tag",
+      "engine_binary_sha256",
+      "build_version_sha256",
+      "target",
+      "platform",
+      "configuration",
+      "editor_build_command_sha256",
+      "editor_build_log_sha256",
+      "compiler_version",
+      "compiler_sha256",
+      "resource_compiler_version",
+      "resource_compiler_sha256",
+      "target_receipt",
+      "module_manifest",
+      "loaded_project_modules",
+      "project_sha256",
+      "policy_sha256",
+      "intake_sha256",
+      "invocation_sha256",
+      "registry_source"
+    ],
+    "family_result_required_fields": [
+      "policy_id",
+      "applicability",
+      "deterministic_status",
+      "promotion_status",
+      "evidence",
+      "check_results"
+    ],
+    "check_result_required_fields": [
+      "check_id",
+      "applicability",
+      "deterministic_status",
+      "promotion_status",
+      "evidence"
+    ],
+    "artifact_descriptor_required_fields": [
+      "path",
+      "size_bytes",
+      "sha256",
+      "build_id"
+    ],
+    "loaded_project_module_required_fields": [
+      "name",
+      "path",
+      "size_bytes",
+      "sha256",
+      "build_id"
+    ],
+    "loaded_project_module_names": ["GameCore", "GameTests"],
+    "counts_required_fields": [
+      "assets",
+      "findings",
+      "errors",
+      "non_promotion"
+    ],
+    "allowed_results": ["passed", "failed", "non_promotion"],
+    "allowed_deterministic_statuses": ["passed", "failed", "evidence_unavailable", "not_applicable"],
+    "allowed_promotion_statuses": ["eligible", "non_promotion", "not_applicable"],
+    "allowed_severities": ["error", "non_promotion"],
+    "allowed_registry_sources": ["live_asset_registry", "test_snapshot"]
+  }
+}

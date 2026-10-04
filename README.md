@@ -231,6 +231,10 @@ the imported concepts. Repository inclusion records and preserves the package;
 it does not make an image canonical, production-ready, or approved for Unreal
 runtime use.
 
+Before adding or promoting runtime content, follow the
+[asset intake and content-validation contract](docs/asset-intake-and-content-validation.md).
+Repository presence or successful import never grants production approval.
+
 Use the [pinned Unreal project setup guide](docs/unreal-project-setup.md) to
 verify the engine revision, generate project files, build the Development
 Editor target, and launch the starter map. Issue #15 owns clean client/server
