@@ -222,8 +222,9 @@ script; see Release-cut verification below.
 
 1. Land the exact `ProjectVersion` through a reviewed PR into `develop` and
    verify that the resulting head has a passing `quality-gates` check. Run
-   `Invoke-ReleaseCut.ps1 -Stage Verify` against that head and fix or ticket
-   every violation. Before
+   `Invoke-ReleaseCut.ps1 -Stage Verify -DevelopRevision <verified head SHA>`
+   so the verified commit is the one cut, and fix or ticket every violation.
+   Before
    the first push of any release branch, create the `release/*` ruleset
    recorded in TA-022: block force-push and deletion, require `quality-gates`,
    and allow no bypass. Then cut `release/v<ProjectVersion>` from that verified
@@ -248,7 +249,10 @@ script; see Release-cut verification below.
      durable handoff store on the runner host and are never published, not
      even as a GitHub pre-release. Before acting on a cleanup request for a
      tagged build, copy its packages to a retained location.
-   - Run `Invoke-ReleaseCut.ps1 -Stage VerifyPackage` on those packages.
+   - Run `Invoke-ReleaseCut.ps1 -Stage VerifyPackage` on those packages with
+     logs from a local launch of the handoff-store packages. The workflow does
+     not retain its smoke logs; its Evidence step records the same
+     `LogNetVersion` check for the dispatched run.
    - Fix defects only on the release branch, and merge each fix back into
      `develop`.
 3. Place an annotated pre-release tag (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`)
@@ -280,10 +284,11 @@ consumer record below.
   `release_item_not_issue` (a `Done` PR card, which the move leaves out),
   `release_item_open_pr`, `release_item_work_not_in_cut` (a merged PR's commit
   is not an ancestor of the cut revision), `release_project_version_conflict`
-  (an existing `ProjectVersion` other than `-Version`, or one the shared
+  (a `ProjectVersion` other than `-Version`, a missing one, or one the shared
   `scripts/build/ProjectVersion.ps1` reader refuses, including an override in
-  any other `Config` ini tracked at the develop revision; a missing value is
-  allowed only here, before the cut), and `release_version_consumer_rejects`. The scope is exactly the issues in
+  any other `Config` ini tracked at the develop revision; TA-022 requires the
+  version to land in `develop` before the cut), and
+  `release_version_consumer_rejects`. The scope is exactly the issues in
   `Done`.
 - `-Stage VerifyPackage -Version <version>` takes `-ClientLogPath`,
   `-ServerLogPath`, `-ProvenancePath`, and optionally `-ReleaseRevision`. It

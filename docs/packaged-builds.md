@@ -138,7 +138,8 @@ can hide a version key; this conservative refusal includes unrelated braces.
 The pre-cut release verifier (`scripts/delivery/Invoke-ReleaseCut.ps1 -Stage
 Verify`) applies the same reader to `Config/DefaultGame.ini` and every other
 tracked `Config` ini read from Git at the nominated `develop` revision, never
-from the checkout; only it may accept a missing `ProjectVersion`.
+from the checkout; a missing `ProjectVersion` there is a violation too, since
+TA-022 lands the version in `develop` before the cut.
 A missing value fails closed as `project_version_missing`, and any other
 malformed or ambiguous value
 as `project_version_invalid`. The reader is a line-oriented approximation of

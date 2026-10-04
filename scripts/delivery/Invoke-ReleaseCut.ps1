@@ -256,18 +256,18 @@ function Get-VerifyViolation {
 		Add-Violation -Code 'release_board_integrity_failed' -Subject "#$($Finding.issue)" -Detail "$($Finding.rule): $($Finding.detail)"
 	}
 
-	# The cut adds ProjectVersion, so it may be missing here, but only before the
-	# cut: an existing value must be the planned one and must pass the same
-	# shared reader as packaging, including the override scan of other Config ini.
+	# TA-022 lands ProjectVersion through a reviewed PR before the cut, so it must
+	# already be present here, equal the planned version, and pass the same shared
+	# reader as packaging, including the override scan of other Config ini.
 	try {
-		$Existing = Read-ProjectVersionConfig -DefaultGameContent (Get-OptionalText $Snapshot 'defaultGameIni') -OtherIniContents ([string[]] @(Get-OptionalList $Snapshot 'otherConfigIni')) -AllowMissing
-		if ($null -ne $Existing -and $Existing -cne $Version) {
+		$Existing = Read-ProjectVersionConfig -DefaultGameContent (Get-OptionalText $Snapshot 'defaultGameIni') -OtherIniContents ([string[]] @(Get-OptionalList $Snapshot 'otherConfigIni'))
+		if ($Existing -cne $Version -and $null -ne $Parsed) {
 			Add-Violation -Code 'release_project_version_conflict' -Subject 'Config/DefaultGame.ini' -Detail "already holds ProjectVersion=$Existing, not $Version"
 		}
 	}
 	catch {
 		$Reason = ($_.Exception.Message -split ':')[0]
-		if ($Reason -cnotin 'project_version_invalid', 'project_version_override') { throw }
+		if ($Reason -cnotin 'project_version_missing', 'project_version_invalid', 'project_version_override') { throw }
 		$Subject = if ($Reason -ceq 'project_version_override') { 'Config' } else { 'Config/DefaultGame.ini' }
 		Add-Violation -Code 'release_project_version_conflict' -Subject $Subject -Detail $Reason
 	}
