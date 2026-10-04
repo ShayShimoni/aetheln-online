@@ -354,9 +354,10 @@ Every accepted decision records:
   guaranteed before platform cancellation; checkout/LFS and grace also consume
   that budget, and missing evidence never establishes success. Checkout/LFS
   and report upload sit only inside the job bound. TA-020 (2026-10-02) adds a
-  sixth engine-runner job, `trusted-editor-automation`, with a 35-minute
-  ceiling after a successful trusted compile; a scheduled phase that queues
-  while it runs waits at most those 35 minutes for it. The recorded
+  sixth engine-runner job, `trusted-editor-automation`, with a 45-minute
+  ceiling (35 minutes before the 2026-10-03 re-sync amendment) after a
+  successful trusted compile; a scheduled phase that queues while it runs
+  waits at most those 45 minutes for it. The recorded
   40-minute value is the maximum trusted-compile queue delay attributable to one
   currently running scheduled phase, subject to platform assignment latency;
   total queue time can be longer when older jobs are already ahead.
@@ -446,9 +447,9 @@ Every accepted decision records:
   30-minute controlled-work watchdog, client/server packaging at 40 minutes
   each with 30-minute watchdogs, and provenance/smoke at 20 minutes each with
   10-minute watchdogs. These are operational ceilings, not measured budgets.
-  TA-020 adds the owner-only `trusted-editor-automation` job at 35 minutes
-  (its step bounds plus a 3-minute margin) and leaves every watchdog here
-  unchanged.
+  TA-020 adds the owner-only `trusted-editor-automation` job at 45 minutes
+  since its 2026-10-03 re-sync amendment (its step bounds plus a 3-minute
+  margin) and leaves every watchdog here unchanged.
   Supersede the former multi-hour TA-012 phase ceilings. Timeouts fail with
   retained evidence and owned-tree cleanup; no silent retry or longer fallback.
   Under the approved Issue #167 recovery, use a fresh exact-revision control
@@ -1150,12 +1151,14 @@ Every accepted decision records:
   same pull-request, same-repository, owner, and triggering-actor predicates,
   targets `[self-hosted, Windows, X64, aetheln-engine]`, joins the
   `aetheln-engine-runner` group with `queue: max` and
-  `cancel-in-progress: false`, and has a 35-minute job ceiling: its step
+  `cancel-in-progress: false`, and had a 35-minute job ceiling: its step
   bounds (editor build 15, harness 12, residue cleanup 2, bind 1, upload 1,
-  outcome 1) plus a 3-minute margin. Every step continues on error. It reuses
-  the registered managed compile workspace only after verifying that the
-  workspace still holds the tested revision and is clean, and fails with a
-  fixed reason otherwise. `trusted-candidate-compile` returns to its
+  outcome 1) plus a 3-minute margin, raised by the re-sync amendment below.
+  Every step continues on error. It reused the registered managed compile
+  workspace only after verifying that the workspace still held the tested
+  revision and was clean, and failed with a fixed reason otherwise; the re-sync
+  amendment below replaces that check with a leased re-sync.
+  `trusted-candidate-compile` returns to its
   pre-producer shape, and the TA-015 30-minute compile watchdog is unchanged.
   The engine runner now has six jobs.
 - **Evidence:** first live runs on runner 21. The `trusted-candidate-compile`
@@ -1167,19 +1170,20 @@ Every accepted decision records:
   cover. A separate job gives the editor build its full budget even when the
   compile uses its whole 30-minute watchdog.
 - **Cost:** an owner engine pull request can hold the runner for up to
-  75 minutes (40-minute compile plus 35-minute editor automation) when no
-  older waiter queued between the two jobs. A scheduled phase that queues
-  while the editor job runs waits at most 35 minutes for it; the recorded
-  40-minute trusted-compile queue delay attributable to one running scheduled
-  phase is unchanged. Workspace race: when another owner pull request's
-  compile, or a newer push to the same pull request, enters the engine queue
-  during this pull request's compile window, it can re-sync the managed
-  workspace before the editor job starts. The editor-build step then stops
-  with `editor_workspace_revision_changed` instead of building another
-  revision; the editor job still succeeds because every step continues on
-  error, and only `unreal-receipt-shadow` fails, when it is selected. Recovery
-  needs "Re-run all jobs"; "Re-run failed jobs" does not re-run the successful
-  editor job.
+  85 minutes (40-minute compile plus 45-minute editor automation) when no
+  older waiter queued between the two jobs (75 minutes before the re-sync
+  amendment). A scheduled phase that queues while the editor job runs waits
+  at most 45 minutes for it; the recorded 40-minute trusted-compile queue
+  delay attributable to one running scheduled phase is unchanged. Workspace
+  race (history, resolved by the re-sync amendment): when another owner pull
+  request's compile, or a newer push to the same pull request, entered the
+  engine queue during this pull request's compile window, it could re-sync the
+  managed workspace before the editor job started. The editor-build step then
+  stopped with `editor_workspace_revision_changed` instead of building another
+  revision; the editor job still succeeded because every step continues on
+  error, and only `unreal-receipt-shadow` failed, when it was selected.
+  Recovery took a full workflow re-run, because re-running only the failed
+  jobs skipped the successful editor job.
 - **Alternatives:** lowering the editor or harness bounds (unmeasured, and
   would still skip on slow compiles); a budget-skip that publishes a green gap
   (reintroduces the exemption TA-018 removed); raising the compile job ceiling
@@ -1187,15 +1191,12 @@ Every accepted decision records:
 - **Consequences:** a failure in the editor automation job never affects the
   compile job or `native-receipt-shadow`; `unreal-receipt-shadow` needs the new
   job and fails red at its raw binding check, printing the fixed
-  `automation_reason`, when no report was uploaded. The job runs outside the
-  engine host lease for this first proof; wrapping it in the lease is a
-  follow-up. A second follow-up replaces the revision check with a real
-  re-sync through `Sync-ManagedCompileWorkspace`
+  `automation_reason`, when no report was uploaded. The job first ran outside
+  the engine host lease and only checked the workspace revision; the re-sync
+  amendment below wraps the re-sync and editor build in the lease and replaces
+  the check with a real re-sync through `Sync-ManagedCompileWorkspace`
   (`scripts/ci/ManagedCompileWorkspace.ps1`), as the gate's managed compile
-  path in `Invoke-EngineRunnerGate.ps1` does; that needs a control checkout at
-  `github.sha`, the managed-workspace registration variables, the engine host
-  lease, a larger job ceiling, and removal of the no-checkout pin in
-  `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`. Record editor-build and
+  path in `Invoke-EngineRunnerGate.ps1` does. Record editor-build and
   harness durations from the first live runs. Authority stays off.
 - **Amendment (2026-10-02, shared engine tree):** the editor build shares
   the pinned engine tree with contributor builds. This amendment removes the
@@ -1303,6 +1304,42 @@ Every accepted decision records:
     consumer an isolated or installed engine tree, which removes both
     exposures. Live proof is still pending: the next CI editor run should show
     no plugin relink, which leaves NetCore as the only engine rebuild.
+- **Amendment (2026-10-03, workspace re-sync, issue #236):** on 2026-10-03
+  the workspace race hit two of seven parallel pull requests (PR #227, run
+  37132326052; PR #232, run 37131973257), and each recovery cost a full
+  compile cycle on the single runner. The job now checks out its own
+  exact-revision control source at `github.sha` into
+  `editor-control-<run>-<attempt>` with the compile job's checkout inputs (no
+  persisted credentials, no LFS, 5 minutes). In one 20-minute step it then
+  takes the engine host lease, re-syncs the registered managed workspace to
+  that revision, and builds the editor. The control-checkout copy of
+  `scripts/ci/Sync-EditorAutomationWorkspace.ps1` validates the registration,
+  calls `Sync-ManagedCompileWorkspace` with the registered trust tuple, and
+  keeps the revision and clean checks as post-sync assertions; the build uses
+  the control-checkout copy of `InitialPreparation.BuildInvocation.ps1`.
+  - *Lease:* lease wait, sync, and build share one 17-minute deadline. The
+    sync child and the build each run in an owned kill-on-close Job Object
+    (`Aetheln.PreparationJob`) that stops at that deadline, and the step
+    releases the lease only after each job is proven empty, within the step
+    bound. Nothing is stopped by name or command line. An unproven cleanup or
+    a failed release keeps the held journal for explicit recovery, as the
+    compile does, and records `editor_host_lease_release_failed`. The harness
+    and residue cleanup still run outside the lease, serialized by the engine
+    queue.
+  - *Reasons:* `editor_host_lease_failed`, `editor_workspace_sync_failed`,
+    `editor_build_timeout`, `editor_host_lease_release_failed`, and
+    `editor_control_checkout_failed` join the fixed vocabulary; the lease or
+    sync module's own fixed code is printed as one
+    `editor_build_detail code=<code>` line.
+  - *Ceiling:* the job now has a 45-minute job ceiling: its step bounds
+    (control checkout 5, re-sync and editor build 20, harness 12, residue
+    cleanup 2, bind 1, upload 1, outcome 1) plus a 3-minute margin. The added
+    10 minutes pay for the new checkout and re-sync work, not for a slower
+    build. An owner engine pull request can now hold the runner for up to
+    85 minutes (40-minute compile plus 45-minute editor automation).
+  - *Pending evidence:* one live observation of two compile-selecting pull
+    requests pushed together that both reach a green `unreal-receipt-shadow`.
+    Authority stays off.
 - **Amendment (2026-10-04, runner engine isolation):** the lead selected an
   independently writable runner source-engine tree for
   [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
@@ -1368,8 +1405,8 @@ Every accepted decision records:
     is deployed and proven, or if capacity proves infeasible.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
-  their step bounds, workspace-revision races appear in practice, the
-  combined compile plus editor hold becomes a measured scheduling bottleneck,
+  their step bounds, the leased re-sync fails or keeps the lease in practice,
+  the combined compile plus editor hold becomes a measured scheduling bottleneck,
   the NetCore follow-up identifies the varying UHT input (then enable
   `-NoEngineChanges`), or the plugin definition header still changes across
   a CI editor run.

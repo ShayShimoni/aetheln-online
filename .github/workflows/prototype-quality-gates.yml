@@ -609,14 +609,16 @@ jobs:
   # Package 3C unreal-editor-automation producer (TA-020). A separate
   # owner-only engine job runs after a successful compile, so the editor build
   # and harness have their own ceiling and can never fail the compile job or
-  # skip the native receipt. It reuses the registered managed compile workspace
-  # only while that workspace still holds this exact revision, and runs outside
-  # the engine host lease for this first proof (recorded follow-up). Every step
-  # continues on error; bind and upload run only after the earlier steps
-  # succeeded, and a missing artifact fails unreal-receipt-shadow at its raw
-  # binding check. Each failure records one fixed reason, exposed as
-  # automation_reason. build.log, harness output, and the copied report live
-  # under runner.temp, which the runner wipes after the job.
+  # skip the native receipt. Another owner pull request's compile can re-sync
+  # the registered managed compile workspace between this run's compile and
+  # this job (issue #236), so the job checks out its own exact-revision control
+  # source and, under the engine host lease, re-syncs the workspace to this
+  # revision as the compile gate does before it builds. Every step continues
+  # on error; bind and upload run only after the earlier steps succeeded, and a
+  # missing artifact fails unreal-receipt-shadow at its raw binding check. Each
+  # failure records one fixed reason, exposed as automation_reason. build.log,
+  # harness output, and the copied report live under runner.temp, which the
+  # runner wipes after the job.
   trusted-editor-automation:
     needs: trusted-candidate-compile
     if: >-
@@ -625,8 +627,8 @@ jobs:
       github.event.pull_request.user.login == github.repository_owner &&
       github.triggering_actor == github.repository_owner
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    # The step bounds (15 + 12 + 2 + 1 + 1 + 1) plus a 3-minute margin.
-    timeout-minutes: 35
+    # The step bounds (5 + 20 + 12 + 2 + 1 + 1 + 1) plus a 3-minute margin.
+    timeout-minutes: 45
     outputs:
       automation_artifact_id: ${{ steps.automation_artifact.outputs.artifact-id }}
       automation_artifact_name: ${{ steps.automation_identity.outputs.artifact_name }}
@@ -639,14 +641,28 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
-      - name: Build editor target for Unreal automation
-        id: editor_build
+      - name: Check out trusted editor control source
+        id: editor_control
         continue-on-error: true
-        timeout-minutes: 15
+        timeout-minutes: 5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          lfs: false
+          ref: ${{ github.sha }}
+          path: editor-control-${{ github.run_id }}-${{ github.run_attempt }}
+          persist-credentials: false
+      - name: Re-sync managed workspace and build editor target
+        id: editor_build
+        if: steps.editor_control.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 20
         shell: powershell
         working-directory: ${{ runner.temp }}
         env:
           AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+          AETHELN_MANAGED_COMPILE_REGISTRATION: ${{ vars.AETHELN_MANAGED_COMPILE_REGISTRATION }}
+          AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256: ${{ vars.AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256 }}
+          AETHELN_ENGINE_HOST_LEASE: ${{ vars.AETHELN_ENGINE_HOST_LEASE }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
@@ -656,49 +672,106 @@ jobs:
           # only keeps it and the engine root out of later output.
           if ($env:AETHELN_ENGINE_ROOT) { Write-Output "::add-mask::$env:AETHELN_ENGINE_ROOT" }
           if ($env:AETHELN_MANAGED_COMPILE_ROOT) { Write-Output "::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT" }
-          # Another engine job may have synchronized the managed workspace after
-          # the compile job released the runner; build only this exact, clean revision.
-          $Root = [IO.Path]::GetFullPath($env:AETHELN_MANAGED_COMPILE_ROOT).TrimEnd('\', '/')
-          $Git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-          function Get-WorkspaceGitText([string] $Arguments) {
-            $Info = New-Object Diagnostics.ProcessStartInfo $Git, ('--no-replace-objects --no-optional-locks -C "' + $Root + '" ' + $Arguments)
-            $Info.UseShellExecute = $false
-            $Info.CreateNoWindow = $true
-            $Info.RedirectStandardOutput = $true
-            $Info.RedirectStandardError = $true
-            $Info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false, $true)
-            $Process = [Diagnostics.Process]::Start($Info)
-            $ErrorText = $Process.StandardError.ReadToEndAsync()
-            $Text = $Process.StandardOutput.ReadToEnd()
-            $Process.WaitForExit()
-            $null = $ErrorText.Result
-            if ($Process.ExitCode -ne 0) { Exit-Automation 'editor_workspace_query_failed' }
-            return $Text
+          # Another owner pull request's compile may have re-synced the managed
+          # workspace after this run's compile released the runner. As the
+          # compile gate does, hold the engine host lease, re-sync the workspace
+          # to this exact revision from the fresh control checkout, then build.
+          # Lease wait, sync, and build share one 17-minute deadline; the two
+          # 30-second cleanup proofs and the release fit in the rest of the
+          # 20-minute step bound, so the step releases before the platform
+          # could stop it.
+          $DeadlineUtc = [DateTime]::UtcNow.AddMinutes(17)
+          $DeadlineTicks = [Diagnostics.Stopwatch]::GetTimestamp() + 17L * 60L * [Diagnostics.Stopwatch]::Frequency
+          $Control = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'editor-control-${{ github.run_id }}-${{ github.run_attempt }}'))
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          $EvidenceRoot = Join-Path $RunRoot 'editor-build'
+          # Each process started under the lease runs in its own kill-on-close
+          # Job Object that stops at the deadline. Cleanup counts only when that
+          # job is proven empty; nothing is stopped by name or command line.
+          function Invoke-OwnedPowerShell([string[]] $Arguments) {
+            $Owned = [pscustomobject]@{ exitCode = $null; timedOut = $false; quiescent = $false }
+            try { $Job = New-Object Aetheln.PreparationJob ($DeadlineTicks) }
+            catch { $Owned.quiescent = $true; $Owned.timedOut = [Diagnostics.Stopwatch]::GetTimestamp() -ge $DeadlineTicks; return $Owned }
+            try {
+              $Process = $null
+              try { $Process = $Job.Start((Join-Path $PSHOME 'powershell.exe'), (@('-NoProfile', '-NonInteractive', '-File') + $Arguments), $RunRoot) } catch { $Process = $null }
+              if ($null -ne $Process) { $null = $Process.WaitForExit([int] [Math]::Max(0, ($DeadlineTicks - [Diagnostics.Stopwatch]::GetTimestamp()) * 1000 / [Diagnostics.Stopwatch]::Frequency) + 5000) }
+              try { $Job.StopAndWait(30000); $Owned.quiescent = $Job.ActiveCount -eq 0 } catch { $Owned.quiescent = $false }
+              $Owned.timedOut = $Job.TimedOut
+              if ($null -ne $Process -and $Owned.quiescent) { $Owned.exitCode = $Process.ExitCode }
+            } finally { $Job.Dispose() }
+            return $Owned
           }
-          if ((Get-WorkspaceGitText 'rev-parse HEAD').Trim() -cne $env:GITHUB_SHA) { Exit-Automation 'editor_workspace_revision_changed' }
-          if ((Get-WorkspaceGitText 'status --porcelain --untracked-files=all').Trim().Length -ne 0) { Exit-Automation 'editor_workspace_dirty' }
-          $EvidenceRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/editor-build'
-          $null = New-Item -ItemType Directory -Path $EvidenceRoot
-          # The verified workspace copy of the wrapper captures all build output in runner-local build.log.
-          powershell -NoProfile -File (Join-Path $Root 'scripts\ci\InitialPreparation.BuildInvocation.ps1') `
-            -Target AethelnOnlineEditor `
-            -Platform Win64 `
-            -ActionLimit 4 `
-            -EngineRoot $env:AETHELN_ENGINE_ROOT `
-            -TargetRoot $env:AETHELN_MANAGED_COMPILE_ROOT `
-            -LinuxToolchainRoot $env:AETHELN_LINUX_TOOLCHAIN_ROOT `
-            -EvidenceRoot $EvidenceRoot
-          $BuildExit = $LASTEXITCODE
-          # native-result.json holds only target, platform, exit code, and failure class.
-          $ResultPath = Join-Path $EvidenceRoot 'native-result.json'
-          $CaptureFailed = $true
-          if (Test-Path -LiteralPath $ResultPath -PathType Leaf) {
-            $ResultText = [IO.File]::ReadAllText($ResultPath)
-            Write-Output $ResultText
-            try { $CaptureFailed = $null -ne ($ResultText | ConvertFrom-Json).infrastructureFailure } catch { $CaptureFailed = $true }
+          $Failure = $null
+          $Detail = $null
+          $Lease = $null
+          $Quiescent = $true
+          try {
+            # Trusted modules load only from the exact-revision control checkout.
+            try {
+              . (Join-Path $Control 'scripts\ci\EngineRunnerHostLease.ps1')
+              . (Join-Path $Control 'scripts\ci\InitialPreparation.Core.ps1')
+              Initialize-InitialPreparationJob
+            } catch { $Failure = 'editor_workspace_sync_failed' }
+            if ($null -eq $Failure) {
+              try { $Lease = Enter-EngineRunnerHostLease -LeasePath $env:AETHELN_ENGINE_HOST_LEASE -OwnerId ('editor-' + [guid]::NewGuid().ToString('N')) -DeadlineUtc $DeadlineUtc }
+              catch {
+                if ([string] $_.Exception.Message -cmatch '\Alease_[a-z_]{1,48}\z') { $Detail = [string] $_.Exception.Message }
+                $Failure = 'editor_host_lease_failed'
+              }
+            }
+            if ($null -eq $Failure) {
+              $null = New-Item -ItemType Directory -Path $RunRoot -Force
+              $SyncResult = Join-Path $RunRoot ('editor-sync-' + [guid]::NewGuid().ToString('N') + '.txt')
+              $Quiescent = $false
+              $Sync = Invoke-OwnedPowerShell @((Join-Path $Control 'scripts\ci\Sync-EditorAutomationWorkspace.ps1'), '-ManagedWorkspaceRoot', $env:AETHELN_MANAGED_COMPILE_ROOT, '-RegistrationPath', $env:AETHELN_MANAGED_COMPILE_REGISTRATION, '-RegistrationSha256', $env:AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256, '-Repository', $env:GITHUB_REPOSITORY, '-SourceRevision', $env:GITHUB_SHA, '-DeadlineUtc', $DeadlineUtc.ToString('o'), '-ResultPath', $SyncResult)
+              $Quiescent = $Sync.quiescent
+              $SyncCode = ''
+              if ($Sync.exitCode -eq 0 -and -not $Sync.timedOut -and (Test-Path -LiteralPath $SyncResult -PathType Leaf)) { $SyncCode = [IO.File]::ReadAllText($SyncResult) }
+              # The revision and clean checks stay as post-sync assertions.
+              if ($SyncCode -cmatch '\Aeditor_workspace_(revision_changed|dirty|query_failed)\z') { $Failure = $SyncCode }
+              elseif ($SyncCode -cne 'none') {
+                if ($SyncCode -cmatch '\Amanaged_(registration|workspace)_[a-z_]{1,48}\z') { $Detail = $SyncCode }
+                $Failure = 'editor_workspace_sync_failed'
+              }
+            }
+            if ($null -eq $Failure) {
+              $null = New-Item -ItemType Directory -Path $EvidenceRoot
+              # The control-checkout copy of the wrapper captures all build output in runner-local build.log.
+              $Quiescent = $false
+              $Build = Invoke-OwnedPowerShell @((Join-Path $Control 'scripts\ci\InitialPreparation.BuildInvocation.ps1'), '-Target', 'AethelnOnlineEditor', '-Platform', 'Win64', '-ActionLimit', '4', '-EngineRoot', $env:AETHELN_ENGINE_ROOT, '-TargetRoot', $env:AETHELN_MANAGED_COMPILE_ROOT, '-LinuxToolchainRoot', $env:AETHELN_LINUX_TOOLCHAIN_ROOT, '-EvidenceRoot', $EvidenceRoot)
+              $Quiescent = $Build.quiescent
+              # native-result.json holds only target, platform, exit code, and failure class.
+              $ResultPath = Join-Path $EvidenceRoot 'native-result.json'
+              $CaptureFailed = $true
+              if (-not $Build.timedOut -and (Test-Path -LiteralPath $ResultPath -PathType Leaf)) {
+                $ResultText = [IO.File]::ReadAllText($ResultPath)
+                Write-Output $ResultText
+                try { $CaptureFailed = $null -ne ($ResultText | ConvertFrom-Json).infrastructureFailure } catch { $CaptureFailed = $true }
+              }
+              $BuildExit = $Build.exitCode
+              # Exit 5 is UBT FailedDueToEngineChange (-NoEngineChanges, deferred by TA-020 until the NetCore follow-up).
+              if ($Build.timedOut) { $Failure = 'editor_build_timeout' }
+              elseif ($null -eq $BuildExit) { $Failure = 'editor_build_capture_failed' }
+              elseif ($BuildExit -ne 0) { if ($CaptureFailed) { $Failure = 'editor_build_capture_failed' } elseif ($BuildExit -eq 5) { $Failure = 'editor_build_engine_changes_required' } else { $Failure = 'editor_build_failed' } }
+            }
+          } catch {
+            if ($null -eq $Failure) { $Failure = 'editor_build_capture_failed' }
+          } finally {
+            if ($null -ne $Lease) {
+              # Release only after every owned job is proven empty. Otherwise
+              # keep the held journal for explicit recovery, as the compile
+              # gate does; that release failure outranks any earlier reason.
+              $Released = $false
+              if ($Quiescent) { try { Exit-EngineRunnerHostLease -Lease $Lease -CleanupVerified $true; $Released = $true } catch { $Released = $false } }
+              if (-not $Released) {
+                try { Close-EngineRunnerHostLease -Lease $Lease } catch { $Released = $false }
+                $Failure = 'editor_host_lease_release_failed'
+              }
+            }
           }
-          # Exit 5 is UBT FailedDueToEngineChange (-NoEngineChanges, deferred by TA-020 until the NetCore follow-up).
-          if ($BuildExit -ne 0) { if ($CaptureFailed) { Exit-Automation 'editor_build_capture_failed' } elseif ($BuildExit -eq 5) { Exit-Automation 'editor_build_engine_changes_required' } else { Exit-Automation 'editor_build_failed' } }
+          if ($null -ne $Detail) { Write-Output ('editor_build_detail code=' + $Detail) }
+          if ($null -ne $Failure) { Exit-Automation $Failure }
       - name: Run frozen Unreal automation filter
         id: automation_run
         if: steps.editor_build.outcome == 'success'
@@ -820,6 +893,7 @@ jobs:
         shell: powershell
         working-directory: ${{ runner.temp }}
         env:
+          AETHELN_CONTROL_OUTCOME: ${{ steps.editor_control.outcome }}
           AETHELN_EDITOR_BUILD_OUTCOME: ${{ steps.editor_build.outcome }}
           AETHELN_EDITOR_BUILD_REASON: ${{ steps.editor_build.outputs.reason }}
           AETHELN_RUN_OUTCOME: ${{ steps.automation_run.outcome }}
@@ -833,9 +907,11 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           # First failed or cancelled step wins; an unrecorded failure (for
-          # example a step timeout) maps to that step's fixed fallback.
+          # example a step timeout, or the control checkout, which cannot
+          # record one) maps to that step's fixed fallback.
           $Reason = 'none'
           foreach ($Step in @(
+              @($env:AETHELN_CONTROL_OUTCOME, '', 'editor_control_checkout_failed'),
               @($env:AETHELN_EDITOR_BUILD_OUTCOME, $env:AETHELN_EDITOR_BUILD_REASON, 'editor_build_interrupted'),
               @($env:AETHELN_RUN_OUTCOME, $env:AETHELN_RUN_REASON, 'unreal_automation_interrupted'),
               @($env:AETHELN_RESIDUE_OUTCOME, $env:AETHELN_RESIDUE_REASON, 'automation_input_residue_interrupted'),
