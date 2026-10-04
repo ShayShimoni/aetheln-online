@@ -1303,6 +1303,69 @@ Every accepted decision records:
     consumer an isolated or installed engine tree, which removes both
     exposures. Live proof is still pending: the next CI editor run should show
     no plugin relink, which leaves NetCore as the only engine rebuild.
+- **Amendment (2026-10-04, runner engine isolation):** the lead selected an
+  independently writable runner source-engine tree for
+  [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
+  This is the architectural direction; capacity, provisioning, deployment and
+  isolation proof remain pending. The shared-tree behavior above still applies
+  until the new route is deployed and verified.
+  - *Roles and identity:* keep contributor builds and editor launches on the
+    contributor engine root; route CI compile, editor automation and packaging
+    to the independently provisioned runner engine root. Preserve the pinned
+    engine source and toolchain identities, clean Git checkout at exactly the
+    pinned revision and automatic BuildId stale-module refusal. Do not pin a
+    BuildId or weaken the loader.
+    Keep root paths in local configuration. Bind each role's registration,
+    compile proof, host-tool attestation and cache identity to its actual root
+    and verified inputs; do not reuse evidence from the other root.
+  - *Output separation:* engine and plugin binaries, generated source,
+    intermediates and module manifests must have no shared writable aliases,
+    including hardlinks or junctions. A second path to the same writable
+    outputs is not isolation. Existing admission, queue, lease and failure
+    rules remain in force; this amendment does not change CI authority.
+  - *Provisioning gate:* measure available active-storage capacity, the
+    supported engine payload and peak build space before copying or building.
+    Preliminary, metadata-only evidence on the Issue #238 thread shows about
+    95 GiB free on the active volume against about 212 GiB of logical engine
+    data, so a plain full duplicate does not fit; this does not resolve the
+    provisioning `TBD`. Capacity and provisioning are not yet approved or
+    complete. Retain the
+    working contributor tree and its evidence; this decision authorizes no
+    deletion or relocation. An installed artifact is a possible later
+    optimization; its size, construction peak, duration and supported-target
+    validation remain `TBD`.
+  - *Deployment proof:* bind both roots, project revisions, engine/toolchain
+    identities and contributor DLL/manifest hashes before a CI editor build,
+    such as the first editor build on the newly provisioned tree. Require
+    evidence that the runner root's engine BuildId or NetCore outputs changed
+    during that run; a no-op build does not qualify. Require the contributor
+    engine's BuildId and relevant output hashes, and the contributor project's
+    DLLs and manifests, to remain unchanged. Then launch that contributor project
+    without rebuilding or restamping it and verify its modules and map load.
+    Cover a CI failure after engine metadata work as well; a no-op build or
+    successful CI result alone does not prove isolation. Record the new
+    runner's provisioning and applicable build/automation evidence separately.
+  - *Interim operation:* serialize shared-engine consumers until deployment.
+    The procedure is lead/owner-coordinated outside the repository: the lead
+    holds the engine and announces its release in the delivery status or
+    issue. Recover an affected contributor project with the normal Development
+    Editor `Build.bat` command in
+    [Unreal Project Setup](unreal-project-setup.md), compare `BuildId` in the
+    project and engine `UnrealEditor.modules` files, then relaunch. Never repair
+    this by hand-editing generated manifests. Even after file isolation,
+    performance captures require a quiet host because CI still competes for
+    CPU, memory, storage and GPU resources.
+  - *Rationale and alternatives:* a BuildId pin was rejected: CI would still
+    write the shared NetCore DLLs, so serialization would remain, and it would
+    remove stale-binary refusal. An installed engine is a later optimization
+    (`TBD`). The NetCore root-cause fix plus `-NoEngineChanges` remains the
+    TA-020 follow-up and does not isolate the trees. An unverified external
+    hypothesis on Issue #238 (comment, 2026-10-04 05:02Z) attributes the
+    NetCore output variance to a UHT race and proposes workarounds (enable the
+    UHT input cache, or change `UhtHeaderFile.cs`). It is under evaluation; if
+    confirmed, it triggers the TA-020 revisit before provisioning.
+  - *Amendment owner and revisit:* Issue #238; revisit when the runner route
+    is deployed and proven, or if capacity proves infeasible.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, workspace-revision races appear in practice, the
