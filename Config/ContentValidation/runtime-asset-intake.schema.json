@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aetheln.invalid/schemas/runtime-asset-intake-v1.json",
+  "title": "Aetheln Online runtime asset intake registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "schema_version",
+    "policy_schema_id",
+    "policy_schema_version",
+    "content_root",
+    "package_root",
+    "expected_asset_count",
+    "source_groups",
+    "assets"
+  ],
+  "properties": {
+    "schema_id": { "const": "aetheln.runtime-asset-intake" },
+    "schema_version": { "const": 1 },
+    "policy_schema_id": { "const": "aetheln.asset-intake-policy" },
+    "policy_schema_version": { "const": 2 },
+    "content_root": { "const": "Content/" },
+    "package_root": { "const": "/Game" },
+    "expected_asset_count": { "type": "integer", "minimum": 1 },
+    "source_groups": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/sourceGroup" }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/asset" }
+    }
+  },
+  "$defs": {
+    "sourceGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "author_or_provider",
+        "source_record",
+        "source_version",
+        "license_or_permission_evidence",
+        "modifications",
+        "generation_metadata_when_applicable",
+        "reviewer",
+        "approval_state",
+        "naming_owner",
+        "import_settings_record",
+        "reimport_settings_record"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "author_or_provider": { "type": "string", "minLength": 1 },
+        "source_record": { "type": "string", "minLength": 1 },
+        "source_version": { "type": "string", "minLength": 1 },
+        "license_or_permission_evidence": { "type": "string", "minLength": 1 },
+        "modifications": { "type": "string", "minLength": 1 },
+        "generation_metadata_when_applicable": { "type": "string", "minLength": 1 },
+        "reviewer": { "type": "string", "minLength": 1 },
+        "approval_state": { "enum": ["temporary_prototype_only", "runtime_candidate_approved", "production_approved"] },
+        "naming_owner": { "type": "string", "minLength": 1 },
+        "import_settings_record": { "type": "string", "minLength": 1 },
+        "reimport_settings_record": { "type": "string", "minLength": 1 }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_path",
+        "repository_path",
+        "stable_id",
+        "content_version",
+        "audience",
+        "lifecycle_state",
+        "source_group_id",
+        "content_sha256",
+        "lifecycle_evidence"
+      ],
+      "properties": {
+        "asset_path": { "type": "string", "pattern": "^/Game(?:/[A-Za-z0-9_]+)+$" },
+        "repository_path": { "type": "string", "pattern": "^Content/(?:[A-Za-z0-9_]+/)*[A-Za-z0-9_]+\\.(?:uasset|umap)$" },
+        "stable_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$" },
+        "content_version": { "type": "integer", "minimum": 1 },
+        "audience": { "enum": ["shared", "server_only", "client_only"] },
+        "lifecycle_state": { "enum": ["temporary_prototype", "runtime_candidate", "production_approved"] },
+        "source_group_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "lifecycle_evidence": { "$ref": "#/$defs/lifecycleEvidence" }
+      }
+    },
+    "contentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stable_id", "content_version", "content_sha256"],
+      "properties": {
+        "stable_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$" },
+        "content_version": { "type": "integer", "minimum": 1 },
+        "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "temporaryEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "approval_record", "recovery_trigger", "may_be_runtime_candidate"],
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "approval_record": { "type": "string", "minLength": 1 },
+        "recovery_trigger": { "type": "string", "minLength": 1 },
+        "may_be_runtime_candidate": { "const": false }
+      }
+    },
+    "runtimeCandidateEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_revision", "reviewer", "approval_record", "stable_id", "content_version", "content_sha256"],
+      "properties": {
+        "review_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "reviewer": { "type": "string", "minLength": 1 },
+        "approval_record": { "type": "string", "minLength": 1 },
+        "stable_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$" },
+        "content_version": { "type": "integer", "minimum": 1 },
+        "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "productionEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_review_revision", "candidate_approval_record", "production_revision", "reviewer", "approval_record", "stable_id", "content_version", "content_sha256"],
+      "properties": {
+        "candidate_review_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "candidate_approval_record": { "type": "string", "minLength": 1 },
+        "production_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "reviewer": { "type": "string", "minLength": 1 },
+        "approval_record": { "type": "string", "minLength": 1 },
+        "stable_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)+$" },
+        "content_version": { "type": "integer", "minimum": 1 },
+        "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "lifecycleEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content_identity", "temporary_prototype", "runtime_candidate", "production_approval"],
+      "properties": {
+        "content_identity": { "$ref": "#/$defs/contentIdentity" },
+        "temporary_prototype": { "type": "array", "maxItems": 1, "items": { "$ref": "#/$defs/temporaryEvidence" } },
+        "runtime_candidate": { "type": "array", "maxItems": 1, "items": { "$ref": "#/$defs/runtimeCandidateEvidence" } },
+        "production_approval": { "type": "array", "maxItems": 1, "items": { "$ref": "#/$defs/productionEvidence" } }
+      }
+    }
+  }
+}

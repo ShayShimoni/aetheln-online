@@ -98,7 +98,10 @@ default or automatic rebuild fallback: an omitted selection or an unverified
 prebuilt attestation stops the build.
 
 The script produces `WindowsClient` and `LinuxServer` below `ArchiveRoot` and
-writes `build-provenance.json` beside them. Provenance generation is part of
+writes `build-provenance.json` beside them. Right after each cook it hashes that
+target's canonical `Saved/Cooked/<CookPlatform>/AethelnOnline/AssetRegistry.bin`
+and records the receipt in the stage record and in `build.cookedRegistries`; a
+cook that leaves no registry fails closed. Provenance generation is part of
 the build entry point; `Write-BuildProvenance.ps1` remains independently
 callable for validation and focused testing but is not an extra normal build
 step.
@@ -132,6 +135,10 @@ guard and build-number provenance use the same reader and refuse any version
 declaration in another `Config` ini as `project_version_override`. Braces in
 another `Config` ini also fail with that reason, since engine brace removal
 can hide a version key; this conservative refusal includes unrelated braces.
+The pre-cut release verifier (`scripts/delivery/Invoke-ReleaseCut.ps1 -Stage
+Verify`) applies the same reader to `Config/DefaultGame.ini` and every other
+tracked `Config` ini read from Git at the nominated `develop` revision, never
+from the checkout; only it may accept a missing `ProjectVersion`.
 A missing value fails closed as `project_version_missing`, and any other
 malformed or ambiguous value
 as `project_version_invalid`. The reader is a line-oriented approximation of

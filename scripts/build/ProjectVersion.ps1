@@ -66,6 +66,30 @@ function Read-ProjectVersionConfig([string] $DefaultGameContent, [string[]] $Oth
 	return $Matches.Value
 }
 
+function Get-ProjectVersionGitConfig([string] $RepositoryRoot, [string] $Revision) {
+	# The Config ini text tracked at one commit, read from Git objects only: the
+	# worktree, Saved, user and engine config are never consulted. Any failed
+	# enumeration or blob read throws; messages carry no local path.
+	function Invoke-ConfigGit([string[]] $Arguments) {
+		$PreviousPreference = $ErrorActionPreference
+		$ErrorActionPreference = 'Continue'
+		try {
+			$Output = @(& git -C $RepositoryRoot @Arguments 2>$null)
+			$ExitCode = $LASTEXITCODE
+		}
+		finally {
+			$ErrorActionPreference = $PreviousPreference
+		}
+		if ($ExitCode -ne 0) { throw "git $($Arguments[0]) failed reading Config at $Revision." }
+		return ($Output -join "`n")
+	}
+	$Paths = @((Invoke-ConfigGit @('ls-tree', '-r', '-z', '--name-only', $Revision, '--', 'Config')) -split [char]0 | Where-Object { $_ -match '\.ini\z' -and $_ -cne 'Config/DefaultGame.ini' })
+	return [pscustomobject]@{
+		defaultGameIni = Invoke-ConfigGit @('show', "${Revision}:Config/DefaultGame.ini")
+		otherConfigIni = [string[]] @(foreach ($Path in $Paths) { Invoke-ConfigGit @('show', "${Revision}:$Path") })
+	}
+}
+
 function Read-ProjectVersion([string] $IniPath) {
 	# Packaging and provenance remain strict disk callers. They cannot opt into
 	# a missing version; both use exactly the same text/override rules as Git.

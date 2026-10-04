@@ -33,7 +33,7 @@ column solely to make the board look current.
 | `Dev Done` | Reviewed, verified implementation merged; record PR, merge SHA, review, and checks. | Start separately authorized post-merge QA (`QA`), or record an explicit QA-not-applicable decision and distinct acceptance verification before `Done`. |
 | `QA` | Independent post-merge QA has started on the merged revision with procedure and environment recorded. | Record raw result, revision, limitations, and disposition; only passing required QA permits `Done`. Stay in `QA` only while the round runs. At round end: every box checked goes to `Done`; a failed criterion that needs a fix returns to `Open` with a comment naming the failed criterion and the `develop` commit and giving the expected and actual result and exact steps to reproduce or simulate the failure; criteria that wait only for a later QA round return to `Dev Done`; a criterion waiting on a decision or dependency goes to `Blocked`. |
 | `Done` | Required QA or explicitly substituted acceptance verification is recorded on the issue, acceptance criteria are satisfied, and no required work remains. | When a release branch that contains the work is cut, move to `Release Candidate`; otherwise no routine transition. New work uses a new or deliberately reopened ticket. |
-| `Release Candidate` | The work is in a cut `release/vX.Y.Z` branch, which carries an internal pre-release tag; the board `Release` field records the tag. | Move to `Released` when that release is distributed to players. If the work is pulled from the release, return to `Done` and clear `Release`. |
+| `Release Candidate` | The work is in a cut `release/v<ProjectVersion>` branch (for example `release/v1.0.0-alpha.1`), which carries an internal pre-release tag; the board `Release` field records the tag. | Move to `Released` when that release is distributed to players. If the work is pulled from the release, return to `Done` and clear `Release`. |
 | `Released` | The release that contains the work was distributed to players, merged to `main`, tagged, published as a GitHub Release, and back-merged into `develop`. | No routine transition. A defect in a released build starts a `hotfix/*` cycle with its own ticket. |
 | `Blocked` | A named prerequisite, decision, permission, dependency, or external condition prevents meaningful safe progress after viable alternatives are exhausted; record `Blocked Reason`. | When implementation or blocker-removal work starts, clear the reason and move it to `In Progress` (or to `QA` when a QA round resumes); return it to `Blocked` if the reason still holds when that work stops. When a separate issue tracks the blocker, that separate issue moves to `In Progress` instead. Once resolved, return to the state supported by current evidence. A `Blocked` issue has no open PR of its own. When another issue's PR also carries its fix, it gets no `Code Review` card: its `Blocked Reason` names the carrying PR, the PR body lists it with `Refs #<issue>`, and after the merge it moves to `Dev Done` or `QA` as its evidence supports. |
 
@@ -209,7 +209,8 @@ A re-run of a release run is refused, so one build number always names one
 package. Where a platform field accepts only numbers (for example a Windows
 file version), use `MAJOR.MINOR.PATCH.<build number>`. The first release-cut
 script must verify that each consumer of `ProjectVersion` accepts the full
-string, before relying on it.
+string, before relying on it. `scripts/delivery/Invoke-ReleaseCut.ps1` is that
+script; see Release-cut verification below.
 
 **When the lead cuts a release.**
 
@@ -220,7 +221,9 @@ string, before relying on it.
 **Internal release flow.**
 
 1. Land the exact `ProjectVersion` through a reviewed PR into `develop` and
-   verify that the resulting head has a passing `quality-gates` check. Before
+   verify that the resulting head has a passing `quality-gates` check. Run
+   `Invoke-ReleaseCut.ps1 -Stage Verify` against that head and fix or ticket
+   every violation. Before
    the first push of any release branch, create the `release/*` ruleset
    recorded in TA-022: block force-push and deletion, require `quality-gates`,
    and allow no bypass. Then cut `release/v<ProjectVersion>` from that verified
@@ -245,6 +248,7 @@ string, before relying on it.
      durable handoff store on the runner host and are never published, not
      even as a GitHub pre-release. Before acting on a cleanup request for a
      tagged build, copy its packages to a retained location.
+   - Run `Invoke-ReleaseCut.ps1 -Stage VerifyPackage` on those packages.
    - Fix defects only on the release branch, and merge each fix back into
      `develop`.
 3. Place an annotated pre-release tag (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`)
@@ -255,6 +259,49 @@ string, before relying on it.
 After any security fix to the release workflow or its guard script, update or
 delete every existing `release/*` branch, because each keeps its older copy and
 stays dispatchable.
+
+**Release-cut verification.** `scripts/delivery/Invoke-ReleaseCut.ps1` only
+reads: its `Cut` and `Tag` stages are not implemented, so the flow above stays
+manual. Run it from a clean worktree with `gh` authenticated and `origin`
+fetched. It reports each violation as `<code> <subject> <detail>`, exits 1 on
+any violation and 2 on a usage error or when the environment cannot be read
+(`Release cut error [usage|environment]: <detail>` on stderr, with no local
+path), and `-Json` adds the
+consumer record below.
+
+- `-Stage Verify -Version <version>` runs before the cut. It runs
+  `Test-BoardIntegrity.ps1` and reports each of that script's violations as
+  `release_board_integrity_failed`. Its other codes are
+  `release_version_invalid` (not SemVer 2.0, or build metadata given),
+  `release_version_not_newer` (an existing `v*` tag is at or above it),
+  `release_branch_exists`, `release_tag_exists`, `release_develop_not_green`
+  (no successful `Prototype quality gates` push run for the develop revision),
+  `release_scope_empty`, `release_item_release_field_set`,
+  `release_item_not_issue` (a `Done` PR card, which the move leaves out),
+  `release_item_open_pr`, `release_item_work_not_in_cut` (a merged PR's commit
+  is not an ancestor of the cut revision), `release_project_version_conflict`
+  (an existing `ProjectVersion` other than `-Version`, or one the shared
+  `scripts/build/ProjectVersion.ps1` reader refuses, including an override in
+  any other `Config` ini tracked at the develop revision; a missing value is
+  allowed only here, before the cut), and `release_version_consumer_rejects`. The scope is exactly the issues in
+  `Done`.
+- `-Stage VerifyPackage -Version <version>` takes `-ClientLogPath`,
+  `-ServerLogPath`, `-ProvenancePath`, and optionally `-ReleaseRevision`. It
+  reports `release_package_version_mismatch` when the last `LogNetVersion` line
+  of either log lacks the release version or the two logs differ in version
+  string or checksum, and `release_package_revision_mismatch` when the
+  provenance revision (`sourceRevision`, or `source.revision` in
+  `build-provenance.json`) is not the release head.
+
+The consumers of the full string, read statically from the pinned Unreal
+Engine source (paths are relative to the engine root) and this repository:
+
+| Consumer | Form | Result |
+| --- | --- | --- |
+| Network version checksum: `Engine/Source/Runtime/Core/Private/Misc/NetworkVersion.cpp`, `Engine/Source/Runtime/Engine/Private/UnrealEngine.cpp` | `1.0.0-alpha.1+412` | Accepted: any non-empty string, hashed into the join handshake, so a client and a server must carry the identical string. `VerifyPackage` proves it on packages. |
+| Build identity: `Source/GameNet/Public/AethelnObservability.h` | `1.0.0-alpha.1+412` | Accepted up to 96 characters with no control characters, U+2028, or U+2029. |
+| Windows file version | `1.0.0.412` | Exactly four parts, each 0 to 65535, because the Windows `VERSIONINFO` resource stores the version as four 16-bit words; `-BuildNumber` is therefore digits only (1 to 10 digits, no leading zero). The pinned engine does not read `ProjectVersion` for the executable resource, which `Engine/Build/Windows/Resources/Default.rc2` (added by `Engine/Source/Programs/UnrealBuildTool/Configuration/UEBuildBinary.cs`) sets from the engine version and `BUILD_VERSION`, so this is the rule for a future stamping step. Unverified until a packaged executable is inspected. |
+| AppX manifest: `Engine/Source/Programs/UnrealBuildTool/Platform/Windows/AppXManifestGeneratorBase.cs` | not applicable | UWP and MSIX packages only, which the Win64 client and Linux server are not. It would not reject the string but silently turn `1.0.0-alpha.1+412` into `1.0.0.1412`. |
 
 **Player distribution.** Player distribution means an external playtest on
 `staging`, Early Access, or a store launch on `production`; an external

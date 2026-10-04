@@ -9,7 +9,10 @@ validated as SemVer without build metadata, and recorded with the number in a
 release block. Without it the document is unchanged and ProjectVersion is not
 read.
 .EXAMPLE
-./scripts/build/Write-BuildProvenance.ps1 -OutputPath D:/Builds/run/build-provenance.json -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source-issue81-clean -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -SourceRevision e5798da01cc8dddb70c0a586843ddd2294dbfef3 -BuildConfiguration Development -ClientArchivePath D:/Builds/run/WindowsClient -ServerArchivePath D:/Builds/run/LinuxServer -CompilerPath 'C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe' -ResourceCompilerPath 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe' -UatArgumentsJson '{"client":["BuildCookRun"],"server":["BuildCookRun"],"dependencyRegistryDump":["-run=DumpAssetRegistry","-DependencyDetails"],"cookedInventoryDump":["-run=DumpAssetRegistry","-PackageName"]}'
+./scripts/build/Write-BuildProvenance.ps1 -OutputPath D:/Builds/run/build-provenance.json -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source-issue81-clean -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -SourceRevision e5798da01cc8dddb70c0a586843ddd2294dbfef3 -BuildConfiguration Development -ClientArchivePath D:/Builds/run/WindowsClient -ServerArchivePath D:/Builds/run/LinuxServer -CompilerPath 'C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe' -ResourceCompilerPath 'C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe' -UatArgumentsJson '{"client":["BuildCookRun"],"server":["BuildCookRun"],"dependencyRegistryDump":["-run=DumpAssetRegistry","-DependencyDetails"],"cookedInventoryDump":["-run=DumpAssetRegistry","-PackageName"]}' -CookedRegistryReceiptsJson (Get-Content -Raw D:/Builds/run/cooked-registry-receipts.json)
+
+CookedRegistryReceiptsJson carries the packaging producer's client and server
+Saved/Cooked AssetRegistry.bin receipts, captured immediately after each cook.
 #>
 [CmdletBinding()]
 param(
@@ -24,6 +27,7 @@ param(
 	[Parameter(Mandatory)] [string] $CompilerPath,
 	[Parameter(Mandatory)] [string] $ResourceCompilerPath,
 	[Parameter(Mandatory)] [string] $UatArgumentsJson,
+	[Parameter(Mandatory)] [string] $CookedRegistryReceiptsJson,
 	[string] $BuildNumber
 )
 
@@ -85,6 +89,29 @@ $RecordedUatInvocations = [ordered]@{
 	dependencyRegistryDump = [ordered]@{ arguments = @($UatInvocations.dependencyRegistryDump) }
 	cookedInventoryDump = [ordered]@{ arguments = @($UatInvocations.cookedInventoryDump) }
 }
+# The producer hashes each canonical cooked registry immediately after its own
+# cook; consumers compare later registry bytes against these receipts.
+try { $CookedRegistryReceipts = $CookedRegistryReceiptsJson | ConvertFrom-Json } catch { throw "CookedRegistryReceiptsJson is invalid JSON: $($_.Exception.Message)" }
+if ($null -eq $CookedRegistryReceipts -or (@($CookedRegistryReceipts.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'client,server') { throw 'CookedRegistryReceiptsJson must contain exactly client and server cooked-registry receipts.' }
+$RecordedCookedRegistries = [ordered]@{}
+foreach ($Expected in @(
+	[ordered]@{ kind = 'client'; target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient' },
+	[ordered]@{ kind = 'server'; target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer' }
+)) {
+	$Receipt = $CookedRegistryReceipts.($Expected.kind)
+	$Context = "$($Expected.kind) cooked-registry receipt"
+	$ReceiptFields = @('relativePath', 'sizeBytes', 'sha256', 'target', 'platform', 'cookPlatform', 'sourceRevision')
+	if ($null -eq $Receipt -or (@($Receipt.PSObject.Properties.Name | Sort-Object) -join ',') -cne (@($ReceiptFields | Sort-Object) -join ',')) { throw "$Context fields must be exactly $($ReceiptFields -join ', ')." }
+	foreach ($Field in @('target', 'platform', 'cookPlatform')) {
+		if ($Receipt.$Field -cne $Expected[$Field]) { throw "$Context $Field '$($Receipt.$Field)' does not match '$($Expected[$Field])'." }
+	}
+	$ExpectedRelativePath = "Saved/Cooked/$($Expected.cookPlatform)/AethelnOnline/AssetRegistry.bin"
+	if ($Receipt.relativePath -cne $ExpectedRelativePath) { throw "$Context relativePath must be '$ExpectedRelativePath'." }
+	if ($Receipt.sha256 -isnot [string] -or $Receipt.sha256 -cnotmatch '^[0-9a-f]{64}$') { throw "$Context sha256 must be a lowercase SHA-256 digest." }
+	if (-not ($Receipt.sizeBytes -is [int] -or $Receipt.sizeBytes -is [long]) -or $Receipt.sizeBytes -le 0) { throw "$Context sizeBytes must be a positive integer." }
+	if ($Receipt.sourceRevision -isnot [string] -or -not $Receipt.sourceRevision.Equals($SourceRevision, [StringComparison]::OrdinalIgnoreCase)) { throw "$Context sourceRevision '$($Receipt.sourceRevision)' does not match '$SourceRevision'." }
+	$RecordedCookedRegistries[$Expected.kind] = [ordered]@{ relativePath = $Receipt.relativePath; sizeBytes = [long] $Receipt.sizeBytes; sha256 = $Receipt.sha256; target = $Receipt.target; platform = $Receipt.platform; cookPlatform = $Receipt.cookPlatform; sourceRevision = $Receipt.sourceRevision }
+}
 $ProjectDescriptor = Get-Content -LiteralPath $ResolvedProject -Raw | ConvertFrom-Json
 
 $EngineRevision = Invoke-IdentityCommand 'git' @('-C', $ResolvedEngine, 'rev-parse', 'HEAD')
@@ -107,7 +134,7 @@ $Inventory = foreach ($Archive in @(@{ Kind = 'client'; Root = $ResolvedClient }
 $Document = [ordered]@{
 	schemaVersion = 2; createdUtc = [DateTime]::UtcNow.ToString('o'); host = $HostIdentity
 	source = [ordered]@{ revision = $ActualRevision; repositoryRoot = $RepositoryRoot; clean = $true; statusCommand = $StatusCommand; project = $ResolvedProject; projectSha256 = (Get-FileHash -LiteralPath $ResolvedProject -Algorithm SHA256).Hash.ToLowerInvariant(); plugins = @($ProjectDescriptor.Plugins | ForEach-Object { [ordered]@{ name = $_.Name; enabled = $_.Enabled; targetAllowList = @(Get-OptionalProperty $_ 'TargetAllowList'); targetDenyList = @(Get-OptionalProperty $_ 'TargetDenyList'); descriptor = $_ } }) }
-	build = [ordered]@{ configuration = $BuildConfiguration; clientPlatform = 'Win64'; serverPlatform = 'Linux'; clientTarget = 'AethelnOnlineClient'; serverTarget = 'AethelnOnlineServer'; uatInvocations = $RecordedUatInvocations }
+	build = [ordered]@{ configuration = $BuildConfiguration; clientPlatform = 'Win64'; serverPlatform = 'Linux'; clientTarget = 'AethelnOnlineClient'; serverTarget = 'AethelnOnlineServer'; uatInvocations = $RecordedUatInvocations; cookedRegistries = $RecordedCookedRegistries }
 	tools = [ordered]@{ unreal = [ordered]@{ root = $ResolvedEngine; repositoryRevision = $EngineRevision; build = $BuildVersion; buildVersionSha256 = (Get-FileHash -LiteralPath $BuildVersionPath -Algorithm SHA256).Hash.ToLowerInvariant() }; compiler = $CompilerIdentity; windowsSdk = $WindowsSdk; linuxCrossToolchain = [ordered]@{ identity = $ToolchainRootIdentity; root = $ResolvedToolchain; compilerPath = $ToolchainCompiler.FullName; compilerBanner = $ToolchainCompilerBanner; compilerFileVersion = $ToolchainCompiler.VersionInfo.FileVersion; compilerSha256 = (Get-FileHash -LiteralPath $ToolchainCompiler.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); versionMarker = if ($ToolchainMarker) { [ordered]@{ path = $ToolchainMarker.FullName; sha256 = (Get-FileHash -LiteralPath $ToolchainMarker.FullName -Algorithm SHA256).Hash.ToLowerInvariant() } } else { $null } } }
 	artifacts = [ordered]@{ clientArchive = $ResolvedClient; serverArchive = $ResolvedServer; inventory = @($Inventory) }
 }

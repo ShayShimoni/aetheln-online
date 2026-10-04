@@ -46,6 +46,10 @@ powershell -NoProfile -File scripts/ci/Test-FormattingPolicy.ps1
 powershell -NoProfile -File scripts/ci/Test-MarkdownLinks.ps1
 powershell -NoProfile -File scripts/tests/Test-SourceControlPolicy.ps1
 powershell -NoProfile -File scripts/tests/Test-ObservabilityContract.ps1
+powershell -NoProfile -File tests/content/Invoke-ContentValidation.Tests.ps1
+powershell -NoProfile -File tests/content/Invoke-ContentValidationCommand.Tests.ps1
+powershell -NoProfile -File tests/build/Invoke-CookedInventoryCapture.Tests.ps1
+powershell -NoProfile -File tests/build/Validate-ContentCookEvidence.Tests.ps1
 ```
 
 The portable runner uses at most two concurrent checks from this closed set:
@@ -101,8 +105,12 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `markdown-links` (`scripts/ci/Test-MarkdownLinks.ps1`) | Required | Relative links and heading anchors in tracked Markdown resolve. Deterministic documentation gate. |
 | `source-control-policy` (`scripts/tests/Test-SourceControlPolicy.ps1`) | Required | LFS ownership, generated-artifact exclusions, and sensitive-path (dependency/secret) tracking policy. |
 | `observability-contract` (`scripts/tests/Test-ObservabilityContract.ps1`) | Required | Closed observability vocabulary, bounded/redacted event shape, explicit environment/retention boundaries, and downstream ownership. |
+| `content-validation-policy-tests` (`tests/content/Invoke-ContentValidation.Tests.ps1`) | Required | Closed asset-intake policy, runtime registry, lifecycle, provenance, stable identity, audience, validation-family, and unresolved-`TBD` behavior. |
+| `content-validation-command-tests` (`tests/content/Invoke-ContentValidationCommand.Tests.ps1`) | Required | Portable fixtures for the local content-validation producer, its command contract, provenance binding, and fail-closed input validation. |
 | `build-packaged-artifacts-tests` (`tests/build/Build-PackagedArtifacts.Tests.ps1`) | Required | Focused automation for the packaging entry point. |
 | `host-tool-provisioning-tests` (`tests/build/Invoke-HostToolProvisioning.Tests.ps1`) | Required | Fixture coverage for the bounded, fail-closed source-engine host-tool provisioner; it does not run an engine build. |
+| `cooked-inventory-capture-tests` (`tests/build/Invoke-CookedInventoryCapture.Tests.ps1`) | Required | Portable fixtures proving canonical client/server registry selection, immutable staging, exact build-provenance binding, and pre/post input stability. |
+| `content-cook-evidence-tests` (`tests/build/Validate-ContentCookEvidence.Tests.ps1`) | Required | Portable fixtures proving closed cooked-registry provenance, complete page parsing, `Content/` root agreement, and client/server audience separation. |
 | `packaged-smoke-test-tests` (`tests/build/Invoke-PackagedSmokeTest.Tests.ps1`) | Required | Focused automation for the smoke orchestrator logic. |
 | `server-cook-reference-tests` (`tests/build/Validate-ServerCookReferences.Tests.ps1`) | Required | Focused automation for server cook reference rules. |
 | `target-composition-tests` (`tests/build/Validate-TargetComposition.Tests.ps1`) | Required | Focused automation for client/server module composition rules. |
@@ -110,7 +118,7 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `network-authority-spike-tests` (`tests/build/Invoke-NetworkAuthoritySpike.Tests.ps1`) | Required | Fixture-only validation of the existing authority runner, including versioned six-profile selection, exact join/play/death/respawn/disconnect/reconnect/shutdown ordering, normalized role/stage failures, and cleanup evidence. It does not execute packaged Unreal processes. |
 | `markdown-link-tests` (`tests/ci/Test-MarkdownLinks.Tests.ps1`) | Required | Fixture regression tests for the link checker itself. |
 | `formatting-policy-tests` (`tests/ci/Test-FormattingPolicy.Tests.ps1`) | Required | Fixture regression tests for the formatting checker itself. |
-| `observability-contract-tests` (`tests/ci/Test-ObservabilityContract.Tests.ps1`) | Required | Fixture regression tests proving the observability checker accepts the bounded contract and fails closed on a sensitive free-form field. |
+| `observability-contract-tests` (`tests/ci/Test-ObservabilityContract.Tests.ps1`) | Required | Fixture regression tests proving the observability checker accepts the bounded contract, fails closed on a sensitive free-form field, fails closed on case-insensitive event, network-profile, and build-context schema comparisons, and accepts a harmless rename in the build-context implementation. |
 | `ci-suite-tests` (`tests/ci/Invoke-CiSuite.Tests.ps1`) | Required | Fixture regression tests for the runner, report schema, and exit codes. |
 | `engine-runner-gate-tests` (`tests/ci/Invoke-EngineRunnerGate.Tests.ps1`) | Required | Fixture regression tests for engine-runner input validation, command selection, repository-state enforcement, redacted failures, report schema, report-only compile evidence extraction, and exit codes. |
 | `engine-runner-post-command-state-tests` (`tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1`) | Required | Fixture regression tests for repository-state checks after engine commands, including command failures. |
@@ -136,13 +144,17 @@ semantics are documented in [Unreal Automation](unreal-automation.md).
 | `unreal-automation-tests` (`tests/ci/Invoke-UnrealAutomationTests.Tests.ps1`) | Required | Portable fixture regression tests for the headless Unreal runner's engine pin, discovery, repository-state, timeout, report validation, and fail-closed exit behavior. |
 | `board-integrity-tests` (`tests/delivery/Test-BoardIntegrity.Tests.ps1`) | Required | Offline snapshot fixtures for every board integrity rule, the violation format, the summary count, and `-Json` output. They never contact GitHub. |
 | `pull-request-policy-tests` (`tests/delivery/Test-PullRequestPolicy.Tests.ps1`) | Required | Base, head-branch, and title rules of the hosted PR policy check, including fork PRs, plus its workflow contract: env-only PR inputs, read-only permissions, a 5-minute bound, and the pinned checkout. |
+| `release-cut-tests` (`tests/delivery/Invoke-ReleaseCut.Tests.ps1`) | Required | Offline snapshot, log, and provenance fixtures for every `Invoke-ReleaseCut.ps1` failure code in the `Verify` and `VerifyPackage` stages, the `<code> <subject> <detail>` format, exit codes 0, 1, and 2 (usage and environment errors, which print no local path), the `ProjectVersion` consumer record, and `-Json` output. They never contact GitHub or a git remote. |
 | `psscriptanalyzer` (`Invoke-ScriptAnalyzer` 1.25.0 over `scripts/` and `tests/`) | Advisory | PowerShell static analysis pinned to the hosted image's exact 1.25.0 module. Contributor machines without that exact version report `skipped`; Package 3C portable acceptance nevertheless requires the hosted report to record this check as `passed`, so a hosted analyzer failure or version skip cannot produce a portable receipt. |
 
 Required checks fail the suite and the workflow. Ordinary advisory-check
 failures are reported in the same machine-readable evidence without failing
 the suite; runner infrastructure failures always fail closed. The live
 supported-target compile and packaged-smoke jobs are also required gates when
-their event and trust predicates select them.
+their event and trust predicates select them. The four content-validation
+fixture suites above run through the existing default portable entry point; no
+separate workflow registration is required. Their passing results do not
+substitute for an exact-revision Editor scan or real client/server cook evidence.
 
 `.github/workflows/delivery-policy.yml` runs the `pull-request-policy` job
 for pull requests to `develop` and `main`, including title edits, on
@@ -514,7 +526,7 @@ contract is:
 | `native-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-candidate-compile` | Runs only when `native-client-server-compile` or `controller-operational-proof` is selected and the compile succeeds. | Apply the same direct binding and truthful publication contract to the exact compile report, publishing the selector-derived subset of {`controller-operational-proof`, `native-client-server-compile`} with every result bound to the one raw `engine-runner-report.json`, successful native exit, and cleanup proof. `controller-operational-proof` attests that the candidate controller at the tested revision ran the real supervised Compile gate on the engine runner with resource monitoring and verified cleanup in this attempt; it is the same exact report, revalidated under its own check id. The self-hosted producer hashes the report with the portable .NET SHA-256 API because that runner's Windows PowerShell environment does not expose `Get-FileHash`; its upload retains the static report artifact name even if identity binding fails. |
 | `unreal-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `trusted-editor-automation` | Runs only when `unreal-editor-automation` is selected and the editor automation job succeeds. If any automation step failed or was skipped, that job exposes no automation artifact, the evidence download is skipped, and this job prints the fixed `unreal_automation_outcome reason=<reason>` line from its `automation_reason` output, then fails red at `unreal_raw_artifact_binding_invalid`. | Apply the same direct binding and truthful publication contract to the exact `unreal-automation-report` artifact, publishing `unreal-editor-automation` bound to the one raw `unreal-automation-report.json` with native exit `0` and no cleanup claim. The report proves the tested revision ran the frozen two-test filter on the pinned engine and both tests passed without warnings or errors. Runner identity is covered through the native receipt, which the selector always co-selects with this obligation. |
 | `visual-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `visual-proof` | Runs only when visual validation is selected and succeeds. | Apply the same direct binding and truthful publication contract to the exact bounded visual report. |
-| `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | GitHub-hosted, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/controller-operational-proof/native/unreal/visual supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, publish the explicit green `producer_contract_incomplete` no-acceptance gap. Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
+| `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | GitHub-hosted, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/controller-operational-proof/native/unreal/visual supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, validate the direct bindings of every selected live producer (a failed or skipped required receipt stays red), then publish the explicit green `producer_contract_incomplete` no-acceptance gap (`aetheln.ci-acceptance-shadow-gap/v3`, carrying `liveBindings`). Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
 | `ci-acceptance-authority` | `pull_request` | `ci-acceptance-shadow` | Hard-skipped by the literal `always() && github.event_name == 'pull_request' && false`; job-scoped `actions: read` is dormant. | Reserved activation boundary: when later enabled, it still runs after a failed or cancelled aggregate and fails unless `needs.ci-acceptance-shadow.result` is exactly `success`; only a complete, nonce-bound reconciled shadow aggregate could produce an authority receipt. It grants nothing in the live Package 3C workflow. |
 | `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
 | `trusted-editor-automation` | `pull_request` | `trusted-candidate-compile` | Runs only after a successful compile (so it is skipped, not failed, whenever the compile is skipped or fails) under the same owner, same-repository, and triggering-actor predicates; 35-minute job ceiling (step bounds 15 + 12 + 2 + 1 + 1 + 1 plus a 3-minute margin); shared FIFO `aetheln-engine-runner` queue. TA-020. | Verify that the registered managed compile workspace still holds exactly this clean revision (`editor_workspace_revision_changed`, `editor_workspace_dirty`, or `editor_workspace_query_failed` otherwise), build the `AethelnOnlineEditor` Win64 target there through the workspace copy of `InitialPreparation.BuildInvocation.ps1` (runner-local `build.log`; 15 minutes) with the contributor compiler selection (no `-Compiler=`, the same `-CompilerVersion` and `-WindowsSDKVersion` pins), so the source-code-access plugin no longer flips between CI and contributor builds. This job does not leave the shared engine unchanged. Each CI editor run still relinks `UnrealEditor-NetCore.dll` and rewrites the engine editor BuildId, so a contributor editor built before that run needs a rebuild of about 30 seconds. The trigger is NetCore's UHT output alternating between two package body hashes. It is seen only when CI and contributor builds alternate, never across consecutive builds of one project. The follow-up runs UHT repeatedly on a scratch engine copy (TA-020 amendment). `-NoEngineChanges` is deferred until then: a test pins that the editor does not pass it, while the step's exit-5 mapping to `editor_build_engine_changes_required` is already in place and covered by a fixture. Every other build failure records `editor_build_failed`. Then run the frozen two-test harness from that workspace with its 600-second bound (12 minutes), remove the untracked compile-input files the next managed sync would reject (the exact `ls-files --others` query and git flags of `ManagedCompileWorkspace.ps1`; 2 minutes), bind (1 minute) and upload (1 minute) the normalized `unreal-automation-report` artifact only when every earlier step succeeded, and publish the first failure as the fixed-vocabulary `automation_reason` output (1 minute). Every step continues on error. This job is separate from the compile, so nothing in it can fail the compile job or skip the native receipt. `build.log`, harness output, and the copied report live under the runner temp directory, which the runner wipes after the job; only fixed failure-class and summary lines reach the public log, and the editor log stays in its `-abslog` file. It runs outside the engine host lease for this first proof; wrapping it in the lease is a follow-up. Workspace race: when another owner pull request's compile, or a newer push to the same pull request, enters the engine queue during this pull request's compile window, it can re-sync the managed workspace before this job starts; the editor-build step then stops with `editor_workspace_revision_changed`, the job still succeeds (every step continues on error), and only `unreal-receipt-shadow` fails, when it is selected. Recovery needs "Re-run all jobs"; "Re-run failed jobs" does not re-run this successful job. The follow-up replaces the revision check with a real re-sync through `Sync-ManagedCompileWorkspace` as `Invoke-EngineRunnerGate.ps1` does, which needs a control checkout at `github.sha`, the registration variables, the host lease, a larger ceiling, and removal of the no-checkout pin in `Test-PrototypeQualityWorkflow.Tests.ps1`. |
@@ -562,7 +574,10 @@ bindings fail the job. The native binding is required when either
 any selector output pair other than exact `true`/`false` values fails closed as
 `producer_direct_binding_invalid:native`. If the selector chooses either of the other two
 obligations (`content-reference-validation`, `clean-package-provenance-smoke`), `aggregate_ready=false` and the workflow validates the selector
-identity before publishing a green, explicitly incomplete
+identity and the direct bindings of every selected live producer (job result
+`success`, exact artifact name, and artifact ID and digest format; the gap path
+does not do the aggregate's artifact-API and byte reconciliation) before
+publishing a green, explicitly incomplete
 `producer_contract_incomplete` record with
 `complete=false`, `shadow=true`, `authoritative=false`, and
 `grantsAcceptance=false`. The green result means the known producer gap did not
@@ -1198,6 +1213,58 @@ release workflow's provenance phase passes it (see
 [Release packaging](#release-packaging-issue-226)); the scheduled phases never
 do, so they are unchanged.
 
+### Runner engine isolation direction (issue #238)
+
+The lead selected an independently writable runner source-engine tree under
+[TA-020](architecture-decisions.md) and
+[Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
+This direction is not yet deployed: capacity, provisioning and the
+CI-to-untouched-contributor launch proof remain outstanding. The current shared
+engine exposure and its recovery requirements remain in effect.
+
+The intended runner root serves CI compile, editor automation and packaging;
+the contributor root serves contributor builds and editor launches. Preserve
+the pinned source/toolchain baseline and automatic BuildId mismatch refusal.
+No BuildId pin, loader exemption or waiver of the clean Git checkout at exactly
+the pinned revision is part of this direction. Engine/plugin binaries, generated source, intermediates and module
+manifests must not share writable aliases through hardlinks, junctions or
+other indirection. Local root configuration, managed-workspace registration,
+compile proofs, host-tool attestations and cache identity records must bind
+the actual role and root. Provision and verify the runner's evidence rather
+than reusing contributor-root proofs.
+
+Before deployment, measure supported payload size, available active-storage
+capacity and peak construction space; then provision and validate the new
+runner route without altering the working contributor tree. Preliminary,
+metadata-only evidence on the issue shows about 95 GiB free on the active
+volume against about 212 GiB of logical engine data, so a plain duplicate does
+not fit; capacity and provisioning remain unresolved. An installed
+artifact remains a later optimization with size, construction peak, duration
+and target coverage `TBD`. No capacity change, copy, deletion or relocation is
+authorized by this documentation.
+
+Before the proof run, bind both roots, project revisions, engine/toolchain
+identities and contributor DLL/manifest hashes (see TA-020). Retain exact
+before/after contributor engine BuildId and relevant output hashes, plus
+contributor project DLL and manifest hashes. Run a CI editor build, such as the
+first editor build on the newly provisioned tree, and require evidence that the
+runner root's engine BuildId or NetCore outputs changed during that run; a
+no-op build does not qualify. Then require the contributor bindings to remain
+unchanged and launch the contributor project without a rebuild or manifest
+edit. Verify module and map load. Also cover CI failure after engine metadata
+writes, and retain the runner's separate provisioning, build and automation
+evidence. A no-op CI build is insufficient for this proof.
+
+Until then, serialize shared-engine consumers (lead/owner-coordinated outside
+the repository; the lead holds the engine and announces its release in the
+delivery status or issue) and use the normal Development Editor build in
+[Unreal Project Setup](unreal-project-setup.md) to recover an affected
+project; compare the project and engine `UnrealEditor.modules` `BuildId`
+before relaunching. Existing admission predicates, job bounds, queue and lease
+requirements, failure reporting and the dormant predicate stay unchanged.
+File isolation does not remove shared CPU, memory, storage or GPU
+contention: performance captures still require a quiet host.
+
 ### Compile Policy
 
 `Compile` is the routine pull-request policy. It reports
@@ -1737,11 +1804,23 @@ When any unsupported obligation is selected, Package 3C deliberately does not
 call the aggregate. A validation-only gap mode binds the selector's current
 run, attempt, nonce, accepted comparison base, head, and tested revision, then
 computes the exact selected unsupported set and emits
-`aetheln.ci-acceptance-shadow-gap/v2` with
-reason `producer_contract_incomplete`. That known gap is green and explicitly
-non-authoritative; it creates no aggregate context or receipt. The
-`accepted_controller_unavailable` fallback is valid only with its exact
-zero-digest, null-controller, all-eight-selected, no-checkout diagnostic shape.
+`aetheln.ci-acceptance-shadow-gap/v3` with
+reason `producer_contract_incomplete`. Before either branch runs, the step's
+direct-binding check (job result `success`, exact artifact name, and artifact ID
+and digest format) is applied to every selected live producer, so a failed or
+skipped required receipt fails red on the gap path as it does on the aggregate
+path. The gap path does not reconcile the bindings against the artifact API or
+the downloaded bytes as the aggregate does; the gap record carries them as
+informational `liveBindings` (empty for `event_not_applicable`). That known gap
+is green and explicitly non-authoritative; it creates no aggregate context or
+receipt. The `accepted_controller_unavailable` fallback selects all eight
+checks, so every live receipt is required, but each receipt publisher builds its
+identity context in `Identity` mode, which rejects the fallback shape. No
+receipt can succeed under it, so the step fails red at the binding check with
+`producer_direct_binding_invalid:native`, before Gap mode runs and before any
+gap record is written. The builder's Gap mode still accepts the fallback's exact
+zero-digest, null-controller, all-eight-selected, no-checkout diagnostic shape,
+but only its own unit tests reach that path; the workflow cannot.
 Contradictions and unexpected errors are red. The selector
 job is pull-request-only, so push and scheduled runs use the similarly
 non-authoritative `event_not_applicable` gap until an accepted event-specific

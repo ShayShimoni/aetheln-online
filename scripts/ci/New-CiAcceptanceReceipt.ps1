@@ -36,7 +36,7 @@ $script:AcceptanceReceiptUnsupportedCheckIds = @(
 	'content-reference-validation'
 )
 $script:AcceptancePortableCheckNames = @(
-	'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','host-tool-provisioning-tests',
+	'formatting-policy','markdown-links','source-control-policy','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests','host-tool-provisioning-tests','cooked-inventory-capture-tests','content-cook-evidence-tests',
 	'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 	'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
 	'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
@@ -45,7 +45,7 @@ $script:AcceptancePortableCheckNames = @(
 	'ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 	'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
 	'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','release-packaging-tests',
-	'board-integrity-tests','pull-request-policy-tests',
+	'board-integrity-tests','pull-request-policy-tests','release-cut-tests',
 	'psscriptanalyzer'
 )
 # controller-contract revalidates the exact portable report and also requires every required tests/ci suite to pass.

@@ -134,6 +134,12 @@ try {
 	$Prose.items[3].body = "Use [ ] in prose`n``- [ ]`` inline is fine`n- [x] real box"
 	$ProseResult = Invoke-Checker $Prose 'prose'
 	Assert-True ($ProseResult.ExitCode -eq 0) "Non-list bracket text must not count as an unchecked box. Output: $($ProseResult.Text)"
+
+	# A public PR title with an oversized or non-ASCII digit run must not abort the check.
+	$Digits = New-CleanSnapshot
+	$Digits.pullRequests += , (New-Pull -Number 110 -Title ('feat(ci): #99999999999 and #' + [char] 0x0663) -Head 'feature/digits')
+	$DigitsResult = Invoke-Checker $Digits 'digits'
+	Assert-True ($DigitsResult.ExitCode -in 0, 1 -and $DigitsResult.Text -match 'Board integrity: \d+ violation\(s\)') "A PR title with an oversized or non-ASCII digit run must not abort the check. Output: $($DigitsResult.Text)"
 }
 finally {
 	Remove-Item -LiteralPath $FixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
