@@ -105,6 +105,29 @@ function Invoke-Guard([string] $Root, [hashtable] $Override = @{}, [string] $Mod
 $SectionHeader = '[/Script/EngineSettings.GeneralProjectSettings]'
 
 try {
+	. (Join-Path $RepositoryRoot 'scripts/build/ProjectVersion.ps1')
+	foreach ($Separator in @("`n", "`r", "`r`n")) {
+		$ConfigText = $SectionHeader + $Separator + 'ProjectVersion=1.0.0-alpha.1' + $Separator
+		Assert-True ((Read-ProjectVersionConfig -DefaultGameContent $ConfigText) -ceq '1.0.0-alpha.1') 'The shared parser must accept canonical version text with each engine line boundary.'
+	}
+	$PreCutText = $SectionHeader + "`nProjectName=AethelnOnline`n"
+	Assert-True ($null -eq (Read-ProjectVersionConfig -DefaultGameContent $PreCutText -AllowMissing)) 'Only the pre-cut caller may explicitly accept an absent version.'
+	$ConfigRefusals = @(
+		@{ Text = ([string][char]0 + "`n$SectionHeader`nProjectVersion=1.0.0-alpha.1"); Other = @(); Missing = $false; Reason = 'project_version_invalid' },
+		@{ Text = ([string][char]0); Other = @(); Missing = $true; Reason = 'project_version_invalid' },
+		@{ Text = "$SectionHeader`nProjectVersion=1.0.0-alpha.1"; Other = @([string][char]0 + "`n$SectionHeader`nProjectVersion=9.9.9"); Missing = $false; Reason = 'project_version_override' },
+		@{ Text = $PreCutText; Other = @(); Missing = $false; Reason = 'project_version_missing' },
+		@{ Text = $PreCutText; Other = @("$SectionHeader`nProjectVersion=9.9.9`n"); Missing = $true; Reason = 'project_version_override' },
+		@{ Text = "$SectionHeader`nProjectVersion=1.0.0-alpha.1`rProjectVersion=9.9.9"; Other = @(); Missing = $false; Reason = 'project_version_invalid' },
+		@{ Text = "[/Script/Other]`nProjectVersion=1.0.0-alpha.1"; Other = @(); Missing = $false; Reason = 'project_version_invalid' },
+		@{ Text = "$SectionHeader`nProjectName=AethelnOnline\`n"; Other = @(); Missing = $true; Reason = 'project_version_invalid' }
+	)
+	foreach ($Case in $ConfigRefusals) {
+		$ConfigReason = ''
+		try { $null = Read-ProjectVersionConfig -DefaultGameContent $Case.Text -OtherIniContents $Case.Other -AllowMissing:$Case.Missing } catch { $ConfigReason = $_.Exception.Message.Split(':')[0] }
+		Assert-True ($ConfigReason -ceq $Case.Reason) "Shared version parsing must refuse with $($Case.Reason), including before a release version exists (actual: $ConfigReason)."
+	}
+	Write-Output 'PASS: the shared text parser preserves line endings, strict required callers and pre-cut override refusal'
 	New-Item -ItemType Directory -Path $FixtureRoot -Force | Out-Null
 
 	$AlphaRoot = Initialize-GuardRoot 'alpha' @($SectionHeader, 'ProjectName=AethelnOnline', 'ProjectVersion=1.0.0-alpha.1')
@@ -165,6 +188,7 @@ try {
 
 	$VersionCases = @(
 		@{ Name = 'linux-braced'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1'); Other = @{ 'Config/Linux/LinuxGame.ini' = "$SectionHeader`nProject{Version}=9.9.9`n" }; Reason = 'project_version_override' },
+		@{ Name = 'linux-joined-key'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1'); Other = @{ 'Config/Linux/LinuxGame.ini' = "$SectionHeader`nProjectVersion\`n=9.9.9`n" }; Reason = 'project_version_override' },
 		@{ Name = 'tilde-set'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1', '~ProjectVersion=9.9.9'); Other = @{}; Reason = 'project_version_invalid' },
 		@{ Name = 'tilde-add'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1', '~+ProjectVersion=9.9.9'); Other = @{}; Reason = 'project_version_invalid' },
 		@{ Name = 'lone-cr'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1', "ProjectName=AethelnOnline`rProjectVersion=9.9.9"); Other = @{}; Reason = 'project_version_invalid' },
