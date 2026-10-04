@@ -224,8 +224,7 @@ script; see Release-cut verification below.
    verify that the resulting head has a passing `quality-gates` check. Run
    `Invoke-ReleaseCut.ps1 -Stage Verify -DevelopRevision <verified head SHA>`
    so the verified commit is the one cut, and fix or ticket every violation.
-   Before
-   the first push of any release branch, create the `release/*` ruleset
+   Before the first push of any release branch, create the `release/*` ruleset
    recorded in TA-022: block force-push and deletion, require `quality-gates`,
    and allow no bypass. Then cut `release/v<ProjectVersion>` from that verified
    `develop` head, for example `release/v1.0.0-alpha.1`: the

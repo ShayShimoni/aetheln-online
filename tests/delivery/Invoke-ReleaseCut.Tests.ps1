@@ -12,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Cutter = Join-Path $RepositoryRoot 'scripts/delivery/Invoke-ReleaseCut.ps1'
+. (Join-Path $RepositoryRoot 'scripts/build/ProjectVersion.ps1')
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('AethelnReleaseCutTests-' + [guid]::NewGuid().ToString('N'))
 $Failures = New-Object Collections.Generic.List[string]
 $CutRevision = '0123456789abcdef0123456789abcdef01234567'
@@ -97,7 +98,7 @@ function Invoke-Verify {
 	# The landed ProjectVersion follows a valid planned -Version, so a case that
 	# varies the version stays a one-violation case; invalid versions keep the default.
 	$Planned = if ($Parameters.ContainsKey('Version')) { [string] $Parameters.Version } else { '' }
-	if ($Planned -match '^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z]+([.][0-9A-Za-z]+)*)?$' -and $Snapshot.defaultGameIni -is [string]) {
+	if ($Planned -cmatch ('^' + (Get-ProjectVersionPattern) + '\z') -and $Snapshot.defaultGameIni -is [string]) {
 		$Snapshot.defaultGameIni = $Snapshot.defaultGameIni.Replace('ProjectVersion=1.0.0-alpha.1', "ProjectVersion=$Planned")
 	}
 	[IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $Snapshot -Depth 8))
@@ -171,7 +172,7 @@ try {
 		@{ Code = 'release_item_open_pr'; Subject = '#9'; Mutate = { $Snapshot.openPullRequests += , [ordered]@{ number = 101; title = 'fix(ci): late fix'; linkedIssues = @(9) } } },
 		@{ Code = 'release_item_work_not_in_cut'; Subject = '#4'; Mutate = { $Snapshot.mergedPullRequests[0].inCut = $false } },
 		@{ Code = 'release_item_work_not_in_cut'; Subject = '#9'; Mutate = { $Snapshot.mergedPullRequests[1].inCut = $false; $Snapshot.mergedPullRequests[1].baseRefName = 'main' } },
-		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=0.9.0`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni = $Snapshot.defaultGameIni.Replace('ProjectVersion=1.0.0-alpha.1', 'ProjectVersion=0.9.0') } },
 		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "  projectversion = 1.0.0`n" } },
 		# TA-022 lands the version before the cut, so a missing one is a violation.
 		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni = "[/Script/EngineSettings.GeneralProjectSettings]`nProjectName=AethelnOnline`n" } },
@@ -307,6 +308,17 @@ try {
 		Assert-ExitTwo -Result $Failed -Reason 'environment' -Name 'A failing git call'
 	}
 
+	# A valid planned -Version that differs from the landed one is refused by the
+	# comparison itself, not by the shared reader: the landed text is replaced, so it
+	# stays one canonical declaration.
+	Test-Case 'landed version differs from planned' {
+		$Snapshot = New-CleanSnapshot
+		$Snapshot.defaultGameIni = $Snapshot.defaultGameIni.Replace('ProjectVersion=1.0.0-alpha.1', 'ProjectVersion=0.9.0')
+		$Result = Invoke-Verify -Snapshot $Snapshot -Name 'landed-differs'
+		Assert-Single -Result $Result -Code 'release_project_version_conflict' -Subject 'Config/DefaultGame.ini' -Name 'A landed version other than the planned one'
+		Assert-True ($Result.Lines[0] -match 'already holds ProjectVersion=0[.]9[.]0, not 1[.]0[.]0-alpha[.]1') "The conflict must name the mismatch, not a reader refusal. Output: $($Result.Text)"
+	}
+
 	# The live snapshot reads Config ini from the nominated revision's Git objects,
 	# never from the checkout. A local repository needs no network.
 	Test-Case 'config read at the nominated revision' {
@@ -346,7 +358,7 @@ try {
 		[IO.File]::WriteAllText((Join-Path $Repo 'Config/DefaultGame.ini'), $Clean + "ProjectVersion=0.9.0`n")
 		$AtB = Get-ProjectVersionGitConfig -RepositoryRoot $Repo -Revision $RevisionB
 		Assert-True (@($AtB.otherConfigIni).Count -eq 0 -and $AtB.defaultGameIni -cnotmatch 'ProjectVersion') 'Revision B must not read the checkout.'
-		Assert-True ($null -eq (Read-ProjectVersionConfig -DefaultGameContent $AtB.defaultGameIni -OtherIniContents $AtB.otherConfigIni -AllowMissing)) 'Revision B must read as pre-cut.'
+		Assert-True ($null -eq (Read-ProjectVersionConfig -DefaultGameContent $AtB.defaultGameIni -OtherIniContents $AtB.otherConfigIni -AllowMissing)) 'Revision B must read as having no version.'
 
 		# An unreadable revision throws without the repository path.
 		$Unreadable = $null

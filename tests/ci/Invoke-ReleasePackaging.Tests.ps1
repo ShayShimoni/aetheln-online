@@ -111,7 +111,7 @@ try {
 		Assert-True ((Read-ProjectVersionConfig -DefaultGameContent $ConfigText) -ceq '1.0.0-alpha.1') 'The shared parser must accept canonical version text with each engine line boundary.'
 	}
 	$PreCutText = $SectionHeader + "`nProjectName=AethelnOnline`n"
-	Assert-True ($null -eq (Read-ProjectVersionConfig -DefaultGameContent $PreCutText -AllowMissing)) 'Only the pre-cut caller may explicitly accept an absent version.'
+	Assert-True ($null -eq (Read-ProjectVersionConfig -DefaultGameContent $PreCutText -AllowMissing)) 'Only an explicit -AllowMissing caller may accept an absent version.'
 	$ConfigRefusals = @(
 		@{ Text = ([string][char]0 + "`n$SectionHeader`nProjectVersion=1.0.0-alpha.1"); Other = @(); Missing = $false; Reason = 'project_version_invalid' },
 		@{ Text = ([string][char]0); Other = @(); Missing = $true; Reason = 'project_version_invalid' },
