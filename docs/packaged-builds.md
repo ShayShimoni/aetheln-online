@@ -98,10 +98,38 @@ default or automatic rebuild fallback: an omitted selection or an unverified
 prebuilt attestation stops the build.
 
 The script produces `WindowsClient` and `LinuxServer` below `ArchiveRoot` and
-writes `build-provenance.json` beside them. Provenance generation is part of
+writes `build-provenance.json` beside them. Right after each cook it hashes that
+target's canonical `Saved/Cooked/<CookPlatform>/AethelnOnline/AssetRegistry.bin`
+and records the receipt in the stage record and in `build.cookedRegistries`; a
+cook that leaves no registry fails closed. Provenance generation is part of
 the build entry point; `Write-BuildProvenance.ps1` remains independently
 callable for validation and focused testing but is not an extra normal build
 step.
+
+Release builds add one optional input, `-BuildNumber`, accepted only by
+`-Stage Provenance` and by `Write-BuildProvenance.ps1`. It must be a positive
+integer of at most ten digits without a leading zero. The writer then reads the
+committed `ProjectVersion` from `Config/DefaultGame.ini` of the verified clean
+`HEAD` and appends one closed `release` block after the existing properties:
+
+```json
+"release": {
+  "schemaVersion": 1,
+  "projectVersion": "1.0.0-alpha.1",
+  "buildNumber": 7,
+  "buildVersion": "1.0.0-alpha.1+7"
+}
+```
+
+The read is case-sensitive and strict: exactly one `ProjectVersion=` line in
+`[/Script/EngineSettings.GeneralProjectSettings]`, holding SemVer without build
+metadata. A missing value fails closed as `project_version_missing`, and any
+other malformed or ambiguous value as `project_version_invalid`. The committed
+`ProjectVersion` never carries `+<build>`; the build number lives only in the
+provenance. Without `-BuildNumber` the document has no `release` block,
+`ProjectVersion` is not read, and the output is unchanged. `host.buildIdentity`
+keeps its `AethelnOnline@<revision>/<configuration>` format in both cases
+because the network authority spike compares it byte for byte.
 
 For Linux cooking, the proven UAT invocation requires this exact cooker
 override:

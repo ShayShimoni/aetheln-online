@@ -829,14 +829,30 @@ Every accepted decision records:
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
   live portable/controller-contract/controller-operational-proof/native/unreal/visual subset, the aggregate is not called. The workflow
-  still validates the selector identity and emits the exact selected
-  unsupported set as a green `producer_contract_incomplete` record with
+  still validates the selector identity and the direct bindings of every
+  selected live producer, so a failed or skipped required receipt remains red
+  rather than hiding behind the gap, and emits the exact selected
+  unsupported set as a green `producer_contract_incomplete` record
+  (`aetheln.ci-acceptance-shadow-gap/v3`, carrying the checked
+  `liveBindings`) with
   `complete=false`, `shadow=true`, `authoritative=false`, and
   `grantsAcceptance=false`. The green result prevents a known incomplete shadow
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `clean-package-provenance-smoke` and
-  `content-reference-validation` remain unsupported live obligations.
+  `content-reference-validation` remain unsupported live obligations. The gap
+  path checks only job success, the exact artifact name, and the artifact ID and
+  digest format; it does not do the aggregate's artifact-API and byte
+  reconciliation, and `liveBindings` is informational. A
+  publisher-contract test ties the three selector-facing lists (the workflow
+  live list, the context builder live list and the aggregate unsupported list)
+  and the aggregate's inline exactly-one-evidence list to the checks the
+  publishers can prove, so shipping a producer fails that test until those
+  lists move together. Two other copies are not covered by it. The receipt
+  builder's unsupported-check list fails closed: a stale entry makes the builder
+  throw `receipt_semantic_evidence_unsupported:<id>`. The receipt builder's
+  inline evidence list is inert, because its strict evidence-name ordering
+  check still rejects a repeated evidence entry.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate
@@ -1324,6 +1340,69 @@ Every accepted decision records:
   - *Pending evidence:* one live observation of two compile-selecting pull
     requests pushed together that both reach a green `unreal-receipt-shadow`.
     Authority stays off.
+- **Amendment (2026-10-04, runner engine isolation):** the lead selected an
+  independently writable runner source-engine tree for
+  [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
+  This is the architectural direction; capacity, provisioning, deployment and
+  isolation proof remain pending. The shared-tree behavior above still applies
+  until the new route is deployed and verified.
+  - *Roles and identity:* keep contributor builds and editor launches on the
+    contributor engine root; route CI compile, editor automation and packaging
+    to the independently provisioned runner engine root. Preserve the pinned
+    engine source and toolchain identities, clean Git checkout at exactly the
+    pinned revision and automatic BuildId stale-module refusal. Do not pin a
+    BuildId or weaken the loader.
+    Keep root paths in local configuration. Bind each role's registration,
+    compile proof, host-tool attestation and cache identity to its actual root
+    and verified inputs; do not reuse evidence from the other root.
+  - *Output separation:* engine and plugin binaries, generated source,
+    intermediates and module manifests must have no shared writable aliases,
+    including hardlinks or junctions. A second path to the same writable
+    outputs is not isolation. Existing admission, queue, lease and failure
+    rules remain in force; this amendment does not change CI authority.
+  - *Provisioning gate:* measure available active-storage capacity, the
+    supported engine payload and peak build space before copying or building.
+    Preliminary, metadata-only evidence on the Issue #238 thread shows about
+    95 GiB free on the active volume against about 212 GiB of logical engine
+    data, so a plain full duplicate does not fit; this does not resolve the
+    provisioning `TBD`. Capacity and provisioning are not yet approved or
+    complete. Retain the
+    working contributor tree and its evidence; this decision authorizes no
+    deletion or relocation. An installed artifact is a possible later
+    optimization; its size, construction peak, duration and supported-target
+    validation remain `TBD`.
+  - *Deployment proof:* bind both roots, project revisions, engine/toolchain
+    identities and contributor DLL/manifest hashes before a CI editor build,
+    such as the first editor build on the newly provisioned tree. Require
+    evidence that the runner root's engine BuildId or NetCore outputs changed
+    during that run; a no-op build does not qualify. Require the contributor
+    engine's BuildId and relevant output hashes, and the contributor project's
+    DLLs and manifests, to remain unchanged. Then launch that contributor project
+    without rebuilding or restamping it and verify its modules and map load.
+    Cover a CI failure after engine metadata work as well; a no-op build or
+    successful CI result alone does not prove isolation. Record the new
+    runner's provisioning and applicable build/automation evidence separately.
+  - *Interim operation:* serialize shared-engine consumers until deployment.
+    The procedure is lead/owner-coordinated outside the repository: the lead
+    holds the engine and announces its release in the delivery status or
+    issue. Recover an affected contributor project with the normal Development
+    Editor `Build.bat` command in
+    [Unreal Project Setup](unreal-project-setup.md), compare `BuildId` in the
+    project and engine `UnrealEditor.modules` files, then relaunch. Never repair
+    this by hand-editing generated manifests. Even after file isolation,
+    performance captures require a quiet host because CI still competes for
+    CPU, memory, storage and GPU resources.
+  - *Rationale and alternatives:* a BuildId pin was rejected: CI would still
+    write the shared NetCore DLLs, so serialization would remain, and it would
+    remove stale-binary refusal. An installed engine is a later optimization
+    (`TBD`). The NetCore root-cause fix plus `-NoEngineChanges` remains the
+    TA-020 follow-up and does not isolate the trees. An unverified external
+    hypothesis on Issue #238 (comment, 2026-10-04 05:02Z) attributes the
+    NetCore output variance to a UHT race and proposes workarounds (enable the
+    UHT input cache, or change `UhtHeaderFile.cs`). It is under evaluation; if
+    confirmed, it triggers the TA-020 revisit before provisioning.
+  - *Amendment owner and revisit:* Issue #238; revisit when the runner route
+    is deployed and proven, or if capacity proves infeasible.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
@@ -1393,6 +1472,7 @@ Every accepted decision records:
 | TC-005 | Server tick, capacity, layers, and bandwidth | Representative combat and stress captures with explicit failure shape | #45 | Canonizing 32/64 players, a tick value, or bandwidth estimate | Approved performance baseline |
 | TC-006 | Production backup, retention, RPO, and RTO | Data criticality, provider capability, restore drills, operating cost | #36, #40, #48 | Vendor-default recovery promises | Before public production |
 | TC-007 | Anti-cheat and platform services | Threat coverage, platform support, privacy, cost, operations, false-positive handling, exit strategy | #40 | Treating client integrity as gameplay authority | Before external risk justifies integration |
+| TC-008 | Per-ability GAS prediction eligibility. First candidate (Issue #19, PR P6): predict Hold the Line's activation, its Endurance cost (if it has one), its cooldown, and its own state tag as a self-only reversible path, using the engine's `LocalPredicted` execution policy with the `ServerOnlyTermination` security policy. Every other ability stays server-only until it is added to an approved prediction list with its own evidence, and contact, Guard, damage, control, and death results are never predicted. See [Gameplay Ability System Foundation](gas-foundation.md) | The two-client PIE feel test of the server-only abilities (#19 PR P5); rollback evidence under the supported network profiles for rejection, acceptance, and loss: a rejected prediction removes the predicted cost, cooldown, and tag, and an accepted one converges with no double cost; a compile-level check that the project ASC can reach the engine's batched-activation data | #19 (owner decision after the feel test); #2 and #45 for network profiles | Predicting any ability without tested rollback; predicting a contact, Guard, damage, control, or death result; granting `LocalPredicted` to an ability not on an approved prediction list | The owner's decision, after the P5 feel test, on whether #19 can close without P6. If the owner closes #19 without P6, the row stays Candidate until a later ability requests prediction |
 
 ## Rejected Architecture Alternatives
 

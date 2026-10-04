@@ -179,6 +179,12 @@ Run `scripts/delivery/Test-BoardIntegrity.ps1` at session start, after every
 merge, and before every release cut; fix any violation it reports before other
 work continues ([Rule enforcement](docs/delivery-workflow.md#rule-enforcement)).
 
+Run `scripts/delivery/Invoke-ReleaseCut.ps1 -Stage Verify -Version <version>`
+before cutting a release branch, and `-Stage VerifyPackage` on the packaged
+client and server logs and provenance before placing the tag. It only reads, and
+it checks that every consumer of `ProjectVersion` accepts the full string
+([Releases and versioning](docs/delivery-workflow.md#releases-and-versioning)).
+
 ## Commit & Pull Request Guidelines
 
 Follow the scoped Conventional Commit-style subjects established by repository
