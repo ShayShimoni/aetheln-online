@@ -1303,6 +1303,48 @@ Every accepted decision records:
     consumer an isolated or installed engine tree, which removes both
     exposures. Live proof is still pending: the next CI editor run should show
     no plugin relink, which leaves NetCore as the only engine rebuild.
+- **Amendment (2026-10-04, runner engine isolation):** the lead selected an
+  independently writable runner source-engine tree for
+  [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
+  This is the architectural direction; capacity, provisioning, deployment and
+  isolation proof remain pending. The shared-tree behavior above still applies
+  until the new route is deployed and verified.
+  - *Roles and identity:* keep contributor builds and editor launches on the
+    contributor engine root; route CI compile, editor automation and packaging
+    to the independently provisioned runner engine root. Preserve the pinned
+    engine source and toolchain identities, clean-source checks and automatic
+    BuildId stale-module refusal. Do not pin a BuildId or weaken the loader.
+    Keep root paths in local configuration. Bind each role's registration,
+    compile proof, host-tool attestation and cache identity to its actual root
+    and verified inputs; do not reuse evidence from the other root.
+  - *Output separation:* engine and plugin binaries, generated source,
+    intermediates and module manifests must have no shared writable aliases,
+    including hardlinks or junctions. A second path to the same writable
+    outputs is not isolation. Existing admission, queue, lease and failure
+    rules remain in force; this amendment does not change CI authority.
+  - *Provisioning gate:* measure available active-storage capacity, the
+    supported engine payload and peak build space before copying or building.
+    Capacity and provisioning are not yet approved or complete. Retain the
+    working contributor tree and its evidence; this decision authorizes no
+    deletion or relocation. An installed artifact is a possible later
+    optimization; its size, construction peak, duration and supported-target
+    validation remain `TBD`.
+  - *Deployment proof:* bind both roots, project revisions, engine/toolchain
+    identities and contributor DLL/manifest hashes before a CI editor build
+    that exercises the known regeneration. Require the contributor engine's
+    BuildId and relevant output hashes, and the contributor project's DLLs
+    and manifests, to remain unchanged. Then launch that contributor project
+    without rebuilding or restamping it and verify its modules and map load.
+    Cover a CI failure after engine metadata work as well; a no-op build or
+    successful CI result alone does not prove isolation. Record the new
+    runner's provisioning and applicable build/automation evidence separately.
+  - *Interim operation:* serialize shared-engine consumers until deployment.
+    Recover an affected contributor project with the normal Development Editor
+    `Build.bat` command in [Unreal Project Setup](unreal-project-setup.md), check
+    the resulting engine/project BuildId match, then relaunch. Never repair
+    this by hand-editing generated manifests. Even after file isolation,
+    performance captures require a quiet host because CI still competes for
+    CPU, memory, storage and GPU resources.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, workspace-revision races appear in practice, the

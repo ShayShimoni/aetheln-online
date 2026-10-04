@@ -103,6 +103,32 @@ Build the Development Editor target:
   -WaitMutex -NoHotReloadFromIDE
 ```
 
+### Recovery while CI shares the engine
+
+Until the [TA-020 isolation direction](architecture-decisions.md) is deployed
+and verified, CI and contributor builds share writable engine outputs. A CI
+editor build can refresh the engine BuildId even when later project work
+fails, leaving a previously built contributor project unable to load its game
+modules.
+
+Wait for the lead to release the shared engine, close the affected editor,
+and run the normal Development Editor `Build.bat` command above for that
+project. Confirm the build succeeds and the project's module manifest matches
+the current engine editor BuildId, then relaunch. Do not hand-edit generated
+`.modules` files or pin a BuildId to bypass the mismatch. The earlier observed
+recovery time is not a build-duration guarantee.
+
+The lead selected an independent runner source-engine tree in
+[Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517);
+capacity, provisioning and CI-to-contributor isolation proof remain pending.
+After deployment, use the locally configured contributor engine root for these
+build and launch commands. CI uses its separately provisioned runner root;
+engine/plugin binaries, generated files and intermediates must not share
+writable aliases. Each root retains its own applicable identity and
+provisioning evidence. Until that separation is verified, continue to
+serialize shared-engine consumers. Even afterward, reserve a quiet host for
+performance captures.
+
 ## First launch
 
 Open the committed starter map:
