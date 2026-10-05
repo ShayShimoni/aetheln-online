@@ -133,11 +133,13 @@ Build the Development Editor target:
 
 ### Recovery while CI shares the engine
 
-Until the [TA-020 isolation direction](architecture-decisions.md) is deployed
-and verified, CI and contributor builds that use the runner host's engine root
-share writable engine outputs. A CI editor build can refresh the engine
-BuildId even when later project work fails, leaving a previously built
-contributor project unable to load its game modules.
+CI and contributor builds that use the runner host's engine root still share
+writable engine outputs. The recurring NetCore BuildId churn is resolved by the
+[UHT input cache setting](#enable-the-uht-input-cache) (TA-020, 2026-10-05), so
+a CI editor build should no longer refresh the engine BuildId. If a mismatch
+still appears (for example on a tree without that setting), a refreshed BuildId
+leaves a previously built contributor project unable to load its game modules,
+and the steps below are the fallback.
 
 Wait for the lead to release the shared engine (the lead holds it and
 announces the release in the delivery status or issue), close the affected

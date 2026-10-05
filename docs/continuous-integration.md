@@ -1221,9 +1221,10 @@ do, so they are unchanged.
 The lead selected an independently writable runner source-engine tree under
 [TA-020](architecture-decisions.md) and
 [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
-This direction is not yet deployed: capacity, provisioning and the
-CI-to-untouched-contributor launch proof remain outstanding. The current shared
-engine exposure and its recovery requirements remain in effect.
+This direction is not deployed: capacity, provisioning and the
+CI-to-untouched-contributor launch proof remain outstanding and, per the
+supersession below, are no longer scheduled. The shared engine tree and its
+recovery requirements remain in effect.
 
 The 2026-10-05 TA-020 amendment (issue #238) supersedes the need for this
 route for the NetCore BuildId churn: `bEnableUHTInputCache` set to `true` in
