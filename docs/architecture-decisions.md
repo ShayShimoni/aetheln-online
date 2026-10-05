@@ -807,6 +807,28 @@ Every accepted decision records:
   normalized digest is
   `a1be534a661508fdccae17ea7623b2c3f215119a07cdc66ef7ab8653a9925536`.
   It is historical identity, not a Package 3C activation pin.
+- **Amendment (2026-10-05, selector aligned with `change-impact`, issue
+  #231):** the selector and `change-impact` disagreed for two path classes,
+  and the producer-gap path failed with `producer_direct_binding_invalid:native`
+  because the selector required a native receipt for a compile that
+  `change-impact` skipped. This reverses the reconciliation rule above that
+  kept unwired lookalikes unclassified, for one class: new
+  `tests/content/*.ps1` and `tests/content/*.md` files, nested ones included,
+  are now portable, as every other `tests/**/*.ps1|md` path already was. Any
+  other `tests/content/` file, such as a `.json` fixture, still fails closed as
+  `path_unclassified`. The two packaging scripts
+  `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1` no longer select
+  `controller-operational-proof`; they select `portable` and
+  `clean-package-provenance-smoke` only, because the Compile gate never runs
+  them. The match is exact and case-sensitive, so a case variant of either
+  filename keeps operational proof. The `change-impact` block and the
+  authority predicate are unchanged. The selector candidate is 41,492
+  LF-normalized bytes with digest
+  `40cb0f0c2aeee97557d0d939d63ce7e1b68274338033304a4c11a7626a70313d`. It is a
+  new policy identity and grants no activation authority; the earlier
+  digests above stay as recorded, and `docs/continuous-integration.md` holds
+  the detail.
 - **Package 3C receipt and aggregate wiring amendment:**
   `ci-selection-shadow` now exposes the validated nonce, aggregate readiness,
   all eight exact obligation decisions, and its artifact ID/name/API digest as
@@ -1037,6 +1059,15 @@ Every accepted decision records:
   is recorded here rather than hidden. Authority stays off: the `ci-acceptance-authority` predicate remains
   literally `always() && github.event_name == 'pull_request' && false`, and no
   receipt or aggregate grants acceptance.
+- **Amendment (2026-10-05, issue #231):** the statement above that the
+  accepted-base selector is unchanged was true on 2026-10-02 and stays as
+  recorded. The selector has since stopped selecting
+  `controller-operational-proof` for exactly the two exempt packaging
+  scripts, so a packaging-only pull request selects `portable` and
+  `clean-package-provenance-smoke` and takes the green gap branch this
+  decision assumed. The exempt list, the controller paths, and the compile
+  decision are unchanged, so the revisit trigger below is not met. The
+  selector digest changed; the TA-017 amendment of the same date records it.
 - **Owner:** Issue #167.
 - **Revisit trigger:** the selector stops selecting
   `controller-operational-proof` for these paths, the producer moves off the
