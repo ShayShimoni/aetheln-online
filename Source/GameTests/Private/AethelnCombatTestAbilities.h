@@ -39,7 +39,8 @@ public:
 
 /**
  * Seam probe. The knobs and counters live on the primary instance, which the seam
- * reads. Cost and cooldown are counted, not applied (the real ones arrive in P4).
+ * reads. Its cost and cooldown overrides count, not apply (the Oathscar ability
+ * tests cover the base ability's real ones).
  * It accepts Release, holds a state tag while active, and stays active after a
  * successful commit. The setters let grant-validation tests build bad definitions
  * on transient instances.
