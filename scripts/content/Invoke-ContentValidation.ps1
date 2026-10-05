@@ -1054,6 +1054,9 @@ $EditorBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($BuildScri
 $BuildExitCode = $null
 $BuildInvocationError = $null
 try {
+	# Build.bat runs 'dotnet msbuild -t:Scan', whose reusable worker nodes would stay in
+	# the build job until MSBuild's 15-minute idle timeout; the build inherits this.
+	$env:MSBUILDDISABLENODEREUSE = '1'
 	$BuildShell = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
 	$BuildInner = (ConvertTo-WindowsCommandLineArgument $BuildScriptPath) + ' ' + (($BuildArguments | ForEach-Object { ConvertTo-WindowsCommandLineArgument $_ }) -join ' ')
 	$BuildShellCommandLine = (ConvertTo-WindowsCommandLineArgument $BuildShell) + ' /d /s /c "' + $BuildInner + '"'

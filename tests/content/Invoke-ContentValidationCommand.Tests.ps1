@@ -108,6 +108,7 @@ public static class FakeEditorBuildForContentValidation {
   }
   string capture=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CAPTURE")??"";
   if(capture.Length>0) File.WriteAllLines(capture,args);
+  if(capture.Length>0) File.WriteAllText(capture+".msbuild-node-reuse",Environment.GetEnvironmentVariable("MSBUILDDISABLENODEREUSE")??"unset");
   string scenario=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CASE")??"success";
   string compilerRoot=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_COMPILER_ROOT")??"";
   string sdkRoot=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_SDK_ROOT")??"";
@@ -682,6 +683,7 @@ public static class AethelnContentFixtureMountPoint {
 	$Info.CreateNoWindow = $true
 	$Info.RedirectStandardOutput = $true
 	$Info.RedirectStandardError = $true
+	$Info.EnvironmentVariables.Remove('MSBUILDDISABLENODEREUSE') # the launcher itself must set it for its build
 	$Process = New-Object Diagnostics.Process
 	$Process.StartInfo = $Info
 	try {
@@ -884,6 +886,7 @@ try {
 	$BuildArguments = [IO.File]::ReadAllLines($Success.fixture.buildCapture)
 	$ExpectedBuildArguments = @('AethelnOnlineEditor','Win64','Development',(Join-Path $Success.fixture.repository 'AethelnOnline.uproject'),'-WaitMutex','-NoHotReloadFromIDE','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 	Assert-True (($BuildArguments -join [char]0) -ceq ($ExpectedBuildArguments -join [char]0)) 'The wrapper must run the exact approved Editor build argument vector before validation.'
+	Assert-True ([IO.File]::ReadAllText($Success.fixture.buildCapture + '.msbuild-node-reuse') -ceq '1') 'The editor build must inherit MSBUILDDISABLENODEREUSE=1 so no reusable MSBuild node keeps the build job alive.'
 	$ExpectedBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($Success.fixture.build) + $ExpectedBuildArguments))
 	Assert-True ($Success.report.execution_provenance.editor_build_command_sha256 -ceq $ExpectedBuildCommandSha256) 'The report must bind the exact Editor build command.'
 	Assert-True ($Success.report.execution_provenance.editor_build_log_sha256 -ceq (Get-Sha256 $Success.fixture.buildLog) -and (Get-Content -LiteralPath $Success.fixture.buildLog -Raw) -notmatch 'stale build log') 'The report must bind the fresh exact Editor build log.'

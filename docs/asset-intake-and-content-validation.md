@@ -311,7 +311,10 @@ The lock file may remain after a process exits, but the handle, not the file's
 presence or timestamp, determines ownership, so an abandoned file is not a
 stale-lock ambiguity. The Editor build starts suspended and is assigned to a
 kill-on-close Windows job before it resumes, so its batch launcher and native
-descendants share one cleanup boundary. Build stdout and stderr are streamed
+descendants share one cleanup boundary. The build runs with
+`MSBUILDDISABLENODEREUSE=1`: `Build.bat` runs `dotnet msbuild -t:Scan`, whose
+reusable worker nodes would otherwise stay in that job until MSBuild's
+15-minute idle timeout, and the wrapper waits for the job to empty. Build stdout and stderr are streamed
 into the retained pending log with a 16 MiB capture cap; overflow or the
 separate `-BuildTimeoutSeconds` limit (24 hours by default) terminates the
 owned job and waits for its processes and pipe to quiesce before returning.
