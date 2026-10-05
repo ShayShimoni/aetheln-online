@@ -2,12 +2,15 @@
 #include "AethelnContentValidationScanner.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/Texture2D.h"
 #include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "PhysicsEngine/PhysicsAsset.h"
+#include "PhysicsEngine/SkeletalBodySetup.h"
 #include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -562,6 +565,39 @@ bool FAethelnContentValidationTextureSourceFactsTest::RunTest(const FString& Par
 	TestTrue(TEXT("An invalid source records no mip facts"), UnsourcedMips != nullptr && UnsourcedMips->IntegerFacts.IsEmpty());
 	TestTrue(TEXT("An invalid source records no pbr_channels size"), UnsourcedPbrChannels != nullptr && UnsourcedPbrChannels->IntegerFacts.IsEmpty());
 	TestEqual(TEXT("An invalid source leaves mips unavailable"), CheckStatus(UnsourcedFacts, TEXT("texture"), TEXT("mips")), FString(TEXT("evidence_unavailable")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnContentValidationSkeletalCollisionTest,
+	"Aetheln.Content.Validation.SkeletalMeshCollisionSource",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnContentValidationSkeletalCollisionTest::RunTest(const FString& Parameters)
+{
+	// Like SKM_Quinn_Simple: no per-poly BodySetup, collision through the PhysicsAsset bodies.
+	USkeletalMesh* SkeletalMesh = NewObject<USkeletalMesh>(GetTransientPackage());
+	UPhysicsAsset* PhysicsAsset = NewObject<UPhysicsAsset>(GetTransientPackage());
+	PhysicsAsset->SkeletalBodySetups.Add(NewObject<USkeletalBodySetup>(PhysicsAsset));
+	SkeletalMesh->SetPhysicsAsset(PhysicsAsset);
+	TMap<FString, TArray<FAethelnContentCheckFacts>> Facts;
+	FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(*SkeletalMesh, true, TEXT("fixture"), Facts);
+	const FAethelnContentCheckFacts* Profile = FindCheckFacts(Facts, TEXT("collision"), TEXT("profile"));
+	const FAethelnContentCheckFacts* Shapes = FindCheckFacts(Facts, TEXT("collision"), TEXT("simple_complex_policy"));
+	if (!TestNotNull(TEXT("The profile fact is recorded"), Profile) || !TestNotNull(TEXT("The simple_complex_policy fact is recorded"), Shapes))
+	{
+		return false;
+	}
+	TestTrue(TEXT("PhysicsAsset bodies are the collision source"), Profile->BooleanFacts.FindRef(TEXT("collision_source_present")));
+	TestEqual(TEXT("The shape count comes from the PhysicsAsset bodies"), Shapes->IntegerFacts.FindRef(TEXT("simple_shape_count")), int64{1});
+	TestEqual(TEXT("A PhysicsAsset-backed profile is unavailable, not failed"), CheckStatus(Facts, TEXT("collision"), TEXT("profile")), FString(TEXT("evidence_unavailable")));
+	TestEqual(TEXT("A PhysicsAsset-backed shape policy is unavailable, not failed"), CheckStatus(Facts, TEXT("collision"), TEXT("simple_complex_policy")), FString(TEXT("evidence_unavailable")));
+
+	// Neither PhysicsAsset bodies nor a BodySetup: still no collision source.
+	USkeletalMesh* Bare = NewObject<USkeletalMesh>(GetTransientPackage());
+	TMap<FString, TArray<FAethelnContentCheckFacts>> BareFacts;
+	FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(*Bare, true, TEXT("fixture"), BareFacts);
+	TestEqual(TEXT("A skeletal mesh without a collision source fails"), CheckStatus(BareFacts, TEXT("collision"), TEXT("profile")), FString(TEXT("failed")));
 	return true;
 }
 

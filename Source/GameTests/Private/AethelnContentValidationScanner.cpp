@@ -1075,14 +1075,7 @@ namespace
 					ImportedVertices,
 					SkeletalMesh->GetMorphTargets().Num(),
 					SkeletalMesh->GetMeshOnlySocketList().Num());
-				RecordFacts(OutFacts, TEXT("collision"), TEXT("profile"), true, SkeletalEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), BodySetup != nullptr}}, {}, {},
-					{{TEXT("profile_name"), BodySetup == nullptr ? FString() : BodySetup->DefaultInstance.GetCollisionProfileName().ToString()}});
-				RecordFacts(OutFacts, TEXT("collision"), TEXT("simple_complex_policy"), true, SkeletalEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), BodySetup != nullptr}},
-					{{TEXT("simple_shape_count"), BodySetup == nullptr ? 0 : BodySetup->AggGeom.GetElementCount()}, {TEXT("trace_flag"), BodySetup == nullptr ? -1 : static_cast<int64>(BodySetup->GetCollisionTraceFlag())}});
-				RecordFacts(OutFacts, TEXT("collision"), TEXT("presentation_equivalence"), true, SkeletalEvidence + TEXT(";quantitative_policy=TBD"),
-					{{TEXT("authoritative_geometry_present"), PhysicsAsset != nullptr}}, {}, {}, {}, true);
+				FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(*SkeletalMesh, bDataValid, SkeletalEvidence, OutFacts);
 				RecordFacts(OutFacts, TEXT("rendering_suitability"), TEXT("lod"), true, SkeletalEvidence,
 					{{TEXT("asset_data_valid"), bDataValid}, {TEXT("imported_model_present"), bHasImportedModel}},
 					{{TEXT("source_model_count"), LodCount}, {TEXT("render_lod_count"), LodCount}});
@@ -1700,6 +1693,40 @@ void FAethelnContentValidationScanner::CollectTextureFacts(
 	RecordFacts(OutFacts, TEXT("texture"), TEXT("streaming"), true, TextureEvidence + TEXT(";quantitative_policy=TBD"),
 		{{TEXT("virtual_texture_streaming"), Texture.VirtualTextureStreaming != 0}},
 		{{TEXT("streaming_method"), static_cast<int64>(Texture.GetTextureStreamingMethod())}}, {}, {}, true);
+}
+
+void FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(
+	const USkeletalMesh& SkeletalMesh,
+	bool bDataValid,
+	const FString& SkeletalEvidence,
+	TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts)
+{
+	// USkeletalMesh::BodySetup is the transient per-poly body; a skeletal mesh collides through its
+	// PhysicsAsset bodies, recorded exactly as the PhysicsAsset's own collision facts are.
+	const UPhysicsAsset* PhysicsAsset = SkeletalMesh.GetPhysicsAsset();
+	const int32 PhysicsBodies = PhysicsAsset == nullptr ? 0 : PhysicsAsset->SkeletalBodySetups.Num();
+	if (PhysicsBodies > 0)
+	{
+		const FString PhysicsEvidence = FString::Printf(TEXT("%s;collision_source=physics_asset;physics_asset_bodies=%d"), *SkeletalEvidence, PhysicsBodies);
+		RecordFacts(OutFacts, TEXT("collision"), TEXT("profile"), true, PhysicsEvidence,
+			{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), true}});
+		RecordFacts(OutFacts, TEXT("collision"), TEXT("simple_complex_policy"), true, PhysicsEvidence,
+			{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), true}},
+			{{TEXT("simple_shape_count"), PhysicsBodies}});
+	}
+	else
+	{
+		const UBodySetup* BodySetup = SkeletalMesh.GetBodySetup();
+		const FString BodyEvidence = SkeletalEvidence + (BodySetup == nullptr ? TEXT(";collision_source=missing") : TEXT(";collision_source=body_setup"));
+		RecordFacts(OutFacts, TEXT("collision"), TEXT("profile"), true, BodyEvidence,
+			{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), BodySetup != nullptr}}, {}, {},
+			{{TEXT("profile_name"), BodySetup == nullptr ? FString() : BodySetup->DefaultInstance.GetCollisionProfileName().ToString()}});
+		RecordFacts(OutFacts, TEXT("collision"), TEXT("simple_complex_policy"), true, BodyEvidence,
+			{{TEXT("asset_data_valid"), bDataValid}, {TEXT("collision_source_present"), BodySetup != nullptr}},
+			{{TEXT("simple_shape_count"), BodySetup == nullptr ? 0 : BodySetup->AggGeom.GetElementCount()}, {TEXT("trace_flag"), BodySetup == nullptr ? -1 : static_cast<int64>(BodySetup->GetCollisionTraceFlag())}});
+	}
+	RecordFacts(OutFacts, TEXT("collision"), TEXT("presentation_equivalence"), true, SkeletalEvidence + TEXT(";quantitative_policy=TBD"),
+		{{TEXT("authoritative_geometry_present"), PhysicsAsset != nullptr}}, {}, {}, {}, true);
 }
 
 FAethelnContentFamilyResult FAethelnContentValidationScanner::EvaluateFamilyFacts(

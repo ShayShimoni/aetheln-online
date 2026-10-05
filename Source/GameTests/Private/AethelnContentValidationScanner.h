@@ -5,6 +5,7 @@
 
 class FJsonObject;
 class IAssetRegistry;
+class USkeletalMesh;
 class UTexture;
 
 /** Exact lowercase SHA-256 text check, defined once so a unity build cannot see two copies. */
@@ -165,6 +166,13 @@ public:
 		const UTexture& Texture,
 		bool bDataValid,
 		const FString& ValidationEvidence,
+		TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts);
+
+	/** Records the skeletal mesh collision facts; the PhysicsAsset bodies are the collision source. */
+	static void CollectSkeletalMeshCollisionFacts(
+		const USkeletalMesh& SkeletalMesh,
+		bool bDataValid,
+		const FString& SkeletalEvidence,
 		TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts);
 
 	/** Derives the closed v2 status vocabulary from typed observed facts. */
