@@ -51,7 +51,7 @@ relative to the root of the pinned UE 5.8.1 source, revision `71fe36aac5`.
    that accepted the dodge, so a client cannot stretch it by withholding moves.
 4. **Avoidance is time-exact.** A contact is avoided if its contact time lies
    inside the target's invulnerability window. The window tag stays for gating
-   and observers. This asks one change of #60 P4.
+   and observers. This asks one change of #60 P4 (Technical decision T2).
 5. **The block is a held seam ability.** Right mouse sends a seam `Press` and a
    `Release` (`bAcceptsRelease`). Nothing is predicted.
 6. **One defense slot per ASC.** While active, the block registers the
@@ -216,6 +216,7 @@ these substitutions:
 | 4 Sequence | Replaced by the engine's move-timestamp rule (above) |
 | 5 Ability lookup | Unchanged; the ability must be flagged movement-carried |
 | 6 Content version | The flagged move's dodge `ContentVersion` against the granted ability |
+| 6a to 6d (#60 P2) | Not applicable: a dodge has no aim, and the move's client timestamp is checked by the engine's move-timestamp rule instead of a time sample |
 | 7 Phase and instance | `Press` only. The single instance must be inactive, and the movement state must allow a start (no dodge in progress and, under Q3, on the ground). Otherwise `ActivationBlocked` |
 | 8 to 10 | Unchanged: cooldown, cost, and tags; activate inside the seam scope; commit; accept |
 
@@ -572,7 +573,7 @@ closed. The keys live in shared `Config/DefaultGame.ini` for #19's reason.
    (pass step 4), and the seam and the movement-carried entry apply a
    requester's due boundaries before validating. P3 exposes a boundary
    registration for timelines that are not chain steps.
-2. **P4: time-exact avoidance.** Step 3 asks `IsAvoidingAt(ContactTime)`;
+2. **P4: time-exact avoidance (T2).** Step 3 asks `IsAvoidingAt(ContactTime)`;
    `State.DodgeInvulnerable` joins the authored avoidance-tag set for observers
    and gating.
 3. **P4: the defense step.** Step 4 reads `GetActiveDefense()`, evaluates the
@@ -718,11 +719,12 @@ Guard break duration; the rate-bucket values (#45).
 | Q12 | Must #17 bound airborne facing before the block lands? Airborne aim tracking sets server facing with no rate limit (`docs/movement-poc.md:270-275`), so a jumping blocker could swing the arc instantly. | Yes: #17 bounds it before P4 merges, or the owner accepts the risk for the prototype (residual risk 3). |
 | Q13 | Semantic IDs for the shared dodge and block actions. | Proposed for #106: `combat.action.dodge` and `combat.action.block`. The tags do not wait on the IDs. |
 
-**Technical decision for #19 sign-off:**
+**Technical decisions for #19 and #60 sign-off:**
 
 | # | Decision | Recommendation |
 | --- | --- | --- |
-| T1 | Carry the dodge request on the movement stream into a movement-carried seam entry, or make the dodge a non-ability movement action that applies #19's effects directly. | The movement-carried entry (see [Technical decision T1](#technical-decision-t1-the-movement-carried-seam-entry)). It keeps one eligibility path, and the #19 text changes are listed in [Dependencies on #19](#dependencies-on-19). |
+| T1 (#19) | Carry the dodge request on the movement stream into a movement-carried seam entry, or make the dodge a non-ability movement action that applies #19's effects directly. | The movement-carried entry (see [Technical decision T1](#technical-decision-t1-the-movement-carried-seam-entry)). It keeps one eligibility path, and the #19 text changes are listed in [Dependencies on #19](#dependencies-on-19). |
+| T2 (#60) | Evaluate avoidance and the defense slot at the contact time (`IsAvoidingAt`, the slot's interval), or by tag presence when #60 resolves the contact. | At the contact time. #60's driver applies boundaries after it resolves the frame's contacts, so a tag check cannot tell a contact before a mid-frame window boundary from one after it. The #60 changes are dependencies 2 and 3 in [Dependencies on #60](#dependencies-on-60). |
 
 Decisions that belong to other owners, recorded so they are not lost: rewind
 for dodge and block ordering (#2, TC-002); every numeric value (#45, #107);
