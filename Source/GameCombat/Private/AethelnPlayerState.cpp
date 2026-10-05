@@ -20,7 +20,10 @@ void AAethelnPlayerState::PostInitializeComponents()
 	Super::PostInitializeComponents();
 
 	// Config values are not available in the constructor.
-	SetNetUpdateFrequency(ProvisionalNetUpdateFrequency);
+	if (ProvisionalNetUpdateFrequency > 0.0f)
+	{
+		SetNetUpdateFrequency(ProvisionalNetUpdateFrequency);
+	}
 
 	// The ASC's InitializeComponent made this PlayerState its avatar. There is no
 	// pawn yet, so this sets the avatar to null on the server and on clients.

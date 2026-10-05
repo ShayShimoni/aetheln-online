@@ -39,9 +39,12 @@ public:
 	UPROPERTY(Config)
 	FAethelnCombatAttributeInitValues ProvisionalInitialAttributes;
 
-	/** Placeholder network update frequency; the engine default is 1 Hz. #45 owns the final value. */
+	/**
+	 * Placeholder network update frequency, set only from Config/DefaultGame.ini; #45 owns the
+	 * final value. Without config (0) the engine's 1 Hz PlayerState default stays.
+	 */
 	UPROPERTY(Config)
-	float ProvisionalNetUpdateFrequency = 100.0f;
+	float ProvisionalNetUpdateFrequency = 0.0f;
 
 private:
 	UFUNCTION()

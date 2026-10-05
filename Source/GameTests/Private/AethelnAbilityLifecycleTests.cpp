@@ -14,6 +14,7 @@
 #include "GameFramework/GameMode.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ConfigCacheIni.h"
 
 namespace AethelnAbilityLifecycleTests
 {
@@ -138,6 +139,24 @@ bool FAethelnPlayerStateOwnsAbilitySystemTest::RunTest(const FString& Parameters
 	TestNull(TEXT("Avatar is null before the first possession"), AbilitySystem->GetAvatarActor());
 	TestEqual(TEXT("PlayerState uses the provisional update frequency"), Player.PlayerState->GetNetUpdateFrequency(), Player.PlayerState->ProvisionalNetUpdateFrequency);
 	TestEqual(TEXT("No abilities are granted before possession"), AbilitySystem->GetActivatableAbilities().Num(), 0);
+
+	// The ini sections load: the header default is 0, so only config can make the class default positive.
+	float IniFrequency = 0.0f;
+	TestTrue(TEXT("DefaultGame.ini sets ProvisionalNetUpdateFrequency"),
+		GConfig->GetFloat(TEXT("/Script/GameCombat.AethelnPlayerState"), TEXT("ProvisionalNetUpdateFrequency"), IniFrequency, GGameIni));
+	TestTrue(TEXT("The configured update frequency is positive"), IniFrequency > 0.0f);
+	TestEqual(TEXT("The PlayerState class default loaded the ini value"), GetDefault<AAethelnPlayerState>()->ProvisionalNetUpdateFrequency, IniFrequency);
+	for (UClass* ConfiguredClass : { AAethelnPlayerState::StaticClass(), AAethelnCombatAICharacter::StaticClass() })
+	{
+		const FString Section = FString::Printf(TEXT("/Script/GameCombat.%s"), *ConfiguredClass->GetName());
+		FString IniAttributes;
+		FAethelnCombatAttributeInitValues ParsedAttributes;
+		const FProperty* Property = FindFProperty<FProperty>(ConfiguredClass, TEXT("ProvisionalInitialAttributes"));
+		TestTrue(*FString::Printf(TEXT("%s sets ProvisionalInitialAttributes"), *Section),
+			GConfig->GetString(*Section, TEXT("ProvisionalInitialAttributes"), IniAttributes, GGameIni));
+		TestTrue(*FString::Printf(TEXT("%s ProvisionalInitialAttributes parses"), *Section),
+			Property != nullptr && Property->ImportText_Direct(*IniAttributes, &ParsedAttributes, nullptr, PPF_None) != nullptr);
+	}
 	return true;
 }
 
