@@ -33,12 +33,35 @@ try {
 	Assert-True ($RunnerSource -match 'ShutdownPattern') 'The scenario contract must bind controlled-shutdown evidence.'
 	Assert-True ($RunnerSource -match 'failure_details') 'Machine-readable results must expose normalized role and stage failure identity.'
 	Assert-True ($RunnerSource -match 'process_outcomes') 'Machine-readable schema-v2 results must expose bounded process outcomes.'
-	Assert-True ($RunnerSource -notmatch '\$\S*\.WaitForExit\(\)') 'The runner must not call the parameterless WaitForExit(): it waits for the redirected pipes with no bound, so a surviving descendant hangs the run. Use Wait-ForProcessDrain.'
 
 	$RunnerTokens = $null
 	$RunnerParseErrors = $null
 	$RunnerAst = [System.Management.Automation.Language.Parser]::ParseInput($RunnerSource, [ref] $RunnerTokens, [ref] $RunnerParseErrors)
 	Assert-True ($RunnerParseErrors.Count -eq 0) 'The network-authority runner must parse without PowerShell syntax errors.'
+
+	# The parameterless WaitForExit() waits for the redirected pipes with no bound, so
+	# a surviving descendant hangs the run; -1 and [Timeout]::Infinite mean the same.
+	# Parsing, not matching text, keeps spacing and receiver variants from slipping by.
+	function Get-UnboundedWaitForExit([System.Management.Automation.Language.Ast] $Ast) {
+		return @($Ast.FindAll({
+			param($Node)
+			if ($Node -isnot [System.Management.Automation.Language.InvokeMemberExpressionAst]) { return $false }
+			if ($Node.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or $Node.Member.Value -ine 'WaitForExit') { return $false }
+			$Arguments = @($Node.Arguments | Where-Object { $null -ne $_ })
+			return $Arguments.Count -eq 0 -or ($Arguments.Count -eq 1 -and ($Arguments[0].Extent.Text -replace '[\s()]', '') -imatch '^(-1|\[(System\.)?(Threading\.)?Timeout\]::Infinite)$')
+		}, $true))
+	}
+	foreach ($UnboundedWait in @('$p.WaitForExit()', '$p.WaitForExit( )', '$p.waitforexit()', '$p.WaitForExit(-1)', '$p.WaitForExit( -1 )', '$p.WaitForExit([System.Threading.Timeout]::Infinite)', '$p.WaitForExit([Threading.Timeout]::Infinite)', '$p.WaitForExit( [Timeout]::Infinite )', '$a[ ''x'' ].WaitForExit( )')) {
+		$WaitErrors = $null
+		$WaitAst = [System.Management.Automation.Language.Parser]::ParseInput($UnboundedWait, [ref] $null, [ref] $WaitErrors)
+		Assert-True ($WaitErrors.Count -eq 0 -and @(Get-UnboundedWaitForExit $WaitAst).Count -eq 1) "The unbounded-wait check must reject '$UnboundedWait'."
+	}
+	foreach ($BoundedWait in @('$p.WaitForExit(5000)', '$p.WaitForExit($TimeoutSeconds * 1000)', '$p.WaitForExit(0)', 'Wait-ForProcessDrain $p ''x''')) {
+		$WaitAst = [System.Management.Automation.Language.Parser]::ParseInput($BoundedWait, [ref] $null, [ref] $null)
+		Assert-True (@(Get-UnboundedWaitForExit $WaitAst).Count -eq 0) "The unbounded-wait check must allow '$BoundedWait'."
+	}
+	$UnboundedRunnerWaits = @(Get-UnboundedWaitForExit $RunnerAst | ForEach-Object { "line $($_.Extent.StartLineNumber)" })
+	Assert-True ($UnboundedRunnerWaits.Count -eq 0) "The runner must not wait on a process without a bound; use Wait-ForProcessDrain. Found: $($UnboundedRunnerWaits -join ', ')"
 	$ObservationFunctionAst = $RunnerAst.Find({
 		param($Ast)
 		$Ast -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -58,7 +81,6 @@ try {
 		$Clock = [pscustomobject]@{ UtcNow = [DateTime]::Parse('2026-08-12T00:00:00Z').ToUniversalTime() }
 		$ProcessState = [pscustomobject]@{ HasExited = $false; ExitCode = 0 }
 		$ProcessState | Add-Member -MemberType ScriptMethod -Name Refresh -Value { }
-		$ProcessState | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { }
 		$RequiredProcess = [pscustomobject]@{
 			Name = 'boundary-runtime'
 			Process = $ProcessState
@@ -110,6 +132,87 @@ try {
 	Assert-True (-not (Test-Path -LiteralPath $DeclinedStandardOutput)) 'A declined hidden launch must create no redirected standard-output capture.'
 	Assert-True (-not (Test-Path -LiteralPath $DeclinedStandardError)) 'A declined hidden launch must create no redirected standard-error capture.'
 	Write-Output 'PASS: a declined hidden launch starts no process and allocates no capture'
+
+	# A warn-only site must still report its original failure and warn about the held
+	# pipes. A real grandchild keeps the pipes open after its parent exits. It reports
+	# its own PID, and the test removes only a process started after this case began.
+	$DrainFunctionAst = $RunnerAst.Find({
+		param($Ast)
+		$Ast -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+		$Ast.Name -eq 'Wait-ForProcessDrain'
+	}, $true)
+	$MatchFunctionAst = $RunnerAst.Find({
+		param($Ast)
+		$Ast -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+		$Ast.Name -eq 'Wait-ForMatch'
+	}, $true)
+	$CaptureTypeAst = $RunnerAst.Find({
+		param($Ast)
+		$Ast -is [System.Management.Automation.Language.CommandAst] -and
+		$Ast.GetCommandName() -ceq 'Add-Type'
+	}, $true)
+	Assert-True ($null -ne $DrainFunctionAst -and $null -ne $MatchFunctionAst -and $null -ne $CaptureTypeAst) 'The runner must define Wait-ForProcessDrain, Wait-ForMatch, and its output-capture type.'
+	$DrainGrandchildScript = Join-Path $FixtureRoot 'drain-grandchild.ps1'
+	$DrainGrandchildPidPath = Join-Path $FixtureRoot 'drain-grandchild.pid'
+	Set-Content -LiteralPath $DrainGrandchildScript -Encoding UTF8 -Value @'
+param([string] $PidPath)
+[System.IO.File]::WriteAllText("$PidPath.tmp", [string] $PID)
+Move-Item -LiteralPath "$PidPath.tmp" -Destination $PidPath
+Start-Sleep -Seconds 12
+'@
+	$DrainLaunchedAt = [DateTime]::Now
+	$HeldPipeOutcome = & {
+		param([string] $TypeSource, [string] $DrainSource, [string] $MatchSource, [string] $Shell, [string] $GrandchildScript, [string] $GrandchildPidPath, [string] $LogPrefix)
+
+		# The extracted functions read the runner's timeout from their caller's scope.
+		Set-Variable -Name TimeoutSeconds -Value 2
+		function Get-RuntimeError([string[]] $Paths) { return $null }
+		if (-not ('AethelnProcessOutputCapture' -as [type])) { . ([scriptblock]::Create($TypeSource)) }
+		. ([scriptblock]::Create($DrainSource))
+		. ([scriptblock]::Create($MatchSource))
+
+		$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+		$StartInfo.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
+		# start /b: the parent exits at once and its child inherits the redirected pipes.
+		$StartInfo.Arguments = '/c start /b "" "' + $Shell + '" -NoProfile -File "' + $GrandchildScript + '" "' + $GrandchildPidPath + '"'
+		$StartInfo.UseShellExecute = $false
+		$StartInfo.CreateNoWindow = $true
+		$StartInfo.RedirectStandardOutput = $true
+		$StartInfo.RedirectStandardError = $true
+		$Process = [System.Diagnostics.Process]::new()
+		$Process.StartInfo = $StartInfo
+		$Capture = [AethelnProcessOutputCapture]::new($Process, "$LogPrefix.stdout.log", "$LogPrefix.stderr.log")
+		$Warnings = [System.Collections.Generic.List[string]]::new()
+		$Failure = $null
+		$Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+		try {
+			[void] $Process.Start()
+			$Process.BeginOutputReadLine()
+			$Process.BeginErrorReadLine()
+			try {
+				& { Wait-ForMatch -Process $Process -Path "$LogPrefix.never.log" -ErrorPath "$LogPrefix.stderr.log" -Description 'fixture readiness' -Pattern 'never' } 3>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.WarningRecord]) { $Warnings.Add($_.Message) } }
+			} catch { $Failure = $_.Exception.Message }
+		}
+		finally { $Capture.Dispose(); $Process.Dispose() }
+		return [pscustomobject]@{ Failure = $Failure; Warnings = @($Warnings); ElapsedSeconds = $Stopwatch.Elapsed.TotalSeconds }
+	} $CaptureTypeAst.Extent.Text $DrainFunctionAst.Extent.Text $MatchFunctionAst.Extent.Text (Get-Process -Id $PID).Path $DrainGrandchildScript $DrainGrandchildPidPath (Join-Path $FixtureRoot 'drain-held-pipe')
+	try {
+		Assert-True ($HeldPipeOutcome.Failure -match 'Process exited with code \d+ while waiting for fixture readiness') "A warn-only site must report its original failure, not the drain timeout. Actual: $($HeldPipeOutcome.Failure)"
+		Assert-True (@($HeldPipeOutcome.Warnings | Where-Object { $_ -match 'Timed out after 2 seconds waiting for process \d+ \(fixture readiness\) to exit and close its output pipes' }).Count -eq 1) "A warn-only site must warn that a descendant still holds the pipes. Actual: $($HeldPipeOutcome.Warnings -join ' | ')"
+		Assert-True ($HeldPipeOutcome.ElapsedSeconds -lt 8) "A warn-only site must give up at its bound instead of waiting for the grandchild. Elapsed: $($HeldPipeOutcome.ElapsedSeconds) s."
+	}
+	finally {
+		$DrainGrandchildId = 0
+		for ($Attempt = 0; $Attempt -lt 50 -and -not ((Test-Path -LiteralPath $DrainGrandchildPidPath) -and [int]::TryParse((Get-Content -LiteralPath $DrainGrandchildPidPath -Raw), [ref] $DrainGrandchildId) -and $DrainGrandchildId -gt 4); $Attempt++) { Start-Sleep -Milliseconds 200 }
+		if ($DrainGrandchildId -gt 4) {
+			$DrainGrandchild = Get-Process -Id $DrainGrandchildId -ErrorAction Ignore
+			if ($null -ne $DrainGrandchild) {
+				if ($DrainGrandchild.StartTime -ge $DrainLaunchedAt) { try { $DrainGrandchild.Kill() } catch { if (-not $DrainGrandchild.HasExited) { throw } } }
+				$DrainGrandchild.Dispose()
+			}
+		}
+	}
+	Write-Output 'PASS: a warn-only drain site warns about held pipes and still reports its original failure'
 
 	$CaptureDisposeIndex = $RunnerSource.LastIndexOf('$Handle.Capture.Dispose()', [System.StringComparison]::Ordinal)
 	$FinalInventoryIndex = $RunnerSource.LastIndexOf('Assert-ExactRejectionInventory -Lines @($FinalServerLines + $FinalServerErrorLines)', [System.StringComparison]::Ordinal)
@@ -1086,7 +1189,7 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 	$OrphanedServer = Get-Process -Id $OrphanIdentity.pid -ErrorAction Ignore
 	$OrphanIsOurs = $null -ne $OrphanedServer -and $OrphanedServer.StartTime.ToUniversalTime().Ticks -eq $OrphanIdentity.start_ticks
 	try {
-		Assert-True ($OrphanDrainFailure -match "Runtime process 'server' cleanup failed: Timed out after 8 seconds waiting for process \d+ \(runtime process 'server'\) to exit and close its output pipes") "The runner must fail by name when an orphan holds the launcher's output pipes. Actual: $OrphanDrainFailure"
+		Assert-True ($OrphanDrainFailure -match "Runtime process 'server' cleanup failed: Timed out after 8 seconds waiting for process \d+ \(runtime process 'server'\) to exit and close its output pipes; a descendant process may still hold them \(launcher-side server process $($OrphanIdentity.pid)\)\.") "The runner must fail by name when an orphan holds the launcher's output pipes. Actual: $OrphanDrainFailure"
 		Assert-True $OrphanIsOurs 'The orphan must still be alive when the runner gives up; otherwise the drain bound was never exercised.'
 	}
 	finally {

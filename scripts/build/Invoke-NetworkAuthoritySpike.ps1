@@ -70,6 +70,7 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -111,14 +112,27 @@ public sealed class AethelnProcessOutputCapture : IDisposable
 		}
 	}
 
+	private static readonly ConditionalWeakTable<Process, Task> drains = new ConditionalWeakTable<Process, Task>();
+
 	// Process.WaitForExit(int) returns at process exit. Only the parameterless
 	// overload also waits for the redirected pipes to reach end-of-file, and it has
 	// no timeout: a surviving descendant that inherited the pipes blocks it forever.
+	// Each process gets one waiter that every later wait reuses: a second concurrent
+	// WaitForExit() races the first inside AsyncStreamReader.WaitUtilEOF() and can
+	// fault with a NullReferenceException.
 	// ponytail: a timed-out wait leaves its thread-pool thread blocked until the
 	// descendant exits; the runner is short-lived, so that thread is never reclaimed.
 	public static bool WaitForExitAndDrain(Process process, int milliseconds)
 	{
-		return Task.Run(() => process.WaitForExit()).Wait(milliseconds);
+		Task drain = drains.GetValue(process, p => Task.Run(() => p.WaitForExit()));
+		try
+		{
+			return drain.Wait(milliseconds);
+		}
+		catch (AggregateException exception)
+		{
+			throw exception.Flatten().InnerExceptions[0];
+		}
 	}
 
 	public void Dispose()
@@ -258,12 +272,13 @@ function Get-RuntimeError([string[]] $Paths) {
 # outlives the process holds the pipes open, so the wait fails by name instead of
 # blocking the run. -ReportOnly is for callers that are already failing and only
 # want complete logs: it warns instead of replacing their primary failure.
-function Wait-ForProcessDrain([System.Diagnostics.Process] $Process, [string] $Description, [switch] $ReportOnly) {
+function Wait-ForProcessDrain([System.Diagnostics.Process] $Process, [string] $Description, [switch] $ReportOnly, [string] $DescendantProcessId) {
 	if ([AethelnProcessOutputCapture]::WaitForExitAndDrain($Process, $TimeoutSeconds * 1000)) { return }
 	# Stop the asynchronous readers that are being abandoned.
 	try { $Process.CancelOutputRead() } catch { Write-Verbose "Cancelling asynchronous standard-output capture failed after a drain timeout: $($_.Exception.Message)" }
 	try { $Process.CancelErrorRead() } catch { Write-Verbose "Cancelling asynchronous standard-error capture failed after a drain timeout: $($_.Exception.Message)" }
-	$Message = "Timed out after $TimeoutSeconds seconds waiting for process $($Process.Id) ($Description) to exit and close its output pipes; a descendant process may still hold them."
+	$Hint = if ($DescendantProcessId) { " (launcher-side server process $DescendantProcessId)" } else { '' }
+	$Message = "Timed out after $TimeoutSeconds seconds waiting for process $($Process.Id) ($Description) to exit and close its output pipes; a descendant process may still hold them$Hint."
 	if ($ReportOnly) { Write-Warning $Message } else { throw $Message }
 }
 
@@ -286,11 +301,11 @@ function Wait-ForMatch([System.Diagnostics.Process] $Process, [string] $Path, [s
 	throw "Timed out after $TimeoutSeconds seconds waiting for $Description in '$Path' (pattern '$Pattern')."
 }
 
-function Wait-ForSuccessfulProcessExit([System.Diagnostics.Process] $Process, [string] $Description) {
+function Wait-ForSuccessfulProcessExit([System.Diagnostics.Process] $Process, [string] $Description, [string] $DescendantProcessId) {
 	if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
 		throw "Timed out after $TimeoutSeconds seconds waiting for $Description."
 	}
-	Wait-ForProcessDrain $Process $Description
+	Wait-ForProcessDrain $Process $Description -DescendantProcessId $DescendantProcessId
 	if ($Process.ExitCode -ne 0) {
 		throw "$Description exited with code $($Process.ExitCode)."
 	}
@@ -1279,7 +1294,7 @@ try {
 		$CurrentProcessRole = 'server'
 		$CurrentClientId = $null
 		$ShutdownLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'controlled shutdown' -Pattern (Expand-Pattern $ShutdownPattern 'server')
-		[void] (Wait-ForSuccessfulProcessExit $ServerProcess 'authoritative server exit after controlled shutdown')
+		[void] (Wait-ForSuccessfulProcessExit $ServerProcess 'authoritative server exit after controlled shutdown' -DescendantProcessId $ServerDescendantProcessId)
 		$ServerHandle.TerminationState = 'exited'
 		$Lifecycle.Add((ConvertTo-Observation -EventName 'shutdown' -Source $ServerStdOut -Detail $ShutdownLine))
 		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 7 -Stage 'shutdown' -AuthoritativeResult 'shutdown-complete' -ProcessRole 'server' -Source $ServerStdOut -Detail $ShutdownLine))
@@ -1346,7 +1361,7 @@ finally {
 			if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
 				throw "Timed out after $TimeoutSeconds seconds waiting for runtime process '$($Handle.Role)' cleanup."
 			}
-			Wait-ForProcessDrain $Process "runtime process '$($Handle.Role)'"
+			Wait-ForProcessDrain $Process "runtime process '$($Handle.Role)'" -DescendantProcessId $(if ($Handle.Role -ceq 'server') { $ServerDescendantProcessId })
 			if (-not $Handle.TerminationState) { $Handle.TerminationState = 'exited' }
 			try { $Process.CancelOutputRead() } catch { Write-Verbose "Cancelling asynchronous standard-output capture failed during runtime cleanup: $($_.Exception.Message)" }
 			try { $Process.CancelErrorRead() } catch { Write-Verbose "Cancelling asynchronous standard-error capture failed during runtime cleanup: $($_.Exception.Message)" }
