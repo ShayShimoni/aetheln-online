@@ -33,6 +33,7 @@ try {
 	Assert-True ($RunnerSource -match 'ShutdownPattern') 'The scenario contract must bind controlled-shutdown evidence.'
 	Assert-True ($RunnerSource -match 'failure_details') 'Machine-readable results must expose normalized role and stage failure identity.'
 	Assert-True ($RunnerSource -match 'process_outcomes') 'Machine-readable schema-v2 results must expose bounded process outcomes.'
+	Assert-True ($RunnerSource -notmatch '\$\S*\.WaitForExit\(\)') 'The runner must not call the parameterless WaitForExit(): it waits for the redirected pipes with no bound, so a surviving descendant hangs the run. Use Wait-ForProcessDrain.'
 
 	$RunnerTokens = $null
 	$RunnerParseErrors = $null
@@ -49,6 +50,7 @@ try {
 		param([string] $FunctionSource)
 
 		function Get-RuntimeError([string[]] $Paths) { return $null }
+		function Wait-ForProcessDrain([object] $Process, [string] $Description, [switch] $ReportOnly) { }
 		# Dot-sourced so the extracted runner function lands in this isolated
 		# scriptblock scope exactly as Invoke-Expression placed it.
 		. ([scriptblock]::Create($FunctionSource))
@@ -233,7 +235,7 @@ if ($Role -eq 'server') {
 		exit 0
 	}
 	# A server whose launcher was killed must exit: an orphan keeps the launcher's
-	# redirected pipes open and blocks the runner's untimed WaitForExit forever.
+	# redirected pipes open and holds the runner's output drain until its bound expires.
 	while (-not (Test-LauncherGone)) { Start-Sleep -Milliseconds 50 }
 	exit 0
 }
@@ -265,6 +267,7 @@ if ($Mode -eq 'identity') {
 }
 if ($Mode -eq 'cleanup') {
 	if ($env:AETHELN_TEST_CLEANUP_LEAK -eq 'true') { [Console]::Error.WriteLine('Fixture cleanup left the owned process running.'); exit 44 }
+	if ($env:AETHELN_TEST_CLEANUP_SILENT_LEAK -eq 'true') { exit 0 }
 	$TargetProcess = $null
 	try {
 		$IdentityText = Get-Content -LiteralPath $StatePath -Raw
@@ -1067,23 +1070,30 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 	Assert-True ($null -eq $LeakedServer -or $LeakedServer.StartTime.ToUniversalTime().Ticks -ne $LeakIdentity.start_ticks) 'A failed launcher cleanup must not leave the fake server orphaned after the run.'
 	Write-Output 'PASS: a launcher cleanup that leaks the server fails the run instead of hanging on the orphan'
 
-	# If a server does survive its launcher, the per-case timeout must still turn
-	# the hang into a named failure and remove the orphan. This case reaches the
-	# harness timeout only because the runner's parameterless WaitForExit() blocks
-	# on the orphan's pipes. When #248 bounds the runner's waits,
-	# change it to expect the runner's own named failure instead.
-	$env:AETHELN_TEST_CLEANUP_LEAK = 'true'
+	# A cleanup that reports success while the launcher-side server survives leaves
+	# an orphan holding the launcher's redirected pipes. The runner must bound its
+	# wait for those pipes and fail by name instead of hanging; the per-case
+	# watchdog is only the backstop that turns a regression back into a diagnosis.
+	# Nothing owns the orphan once the runner gives up, so the test removes it.
+	$env:AETHELN_TEST_CLEANUP_SILENT_LEAK = 'true'
 	$env:AETHELN_TEST_KEEP_ORPHAN = 'true'
-	$OrphanTimeoutFailure = $null
+	$OrphanDrainFailure = $null
 	try {
-		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'orphan-timeout') -FixtureRunId 'fixture-orphan-timeout' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -CaseTimeoutSeconds 25
-	} catch { $OrphanTimeoutFailure = $_.Exception.Message }
-	Remove-Item -LiteralPath Env:AETHELN_TEST_CLEANUP_LEAK, Env:AETHELN_TEST_KEEP_ORPHAN -ErrorAction Ignore
-	Assert-True ($OrphanTimeoutFailure -match "Fixture case 'fixture-orphan-timeout' exceeded its 25-second case timeout") "An orphaned server must fail the case by timeout instead of hanging. Actual: $OrphanTimeoutFailure"
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'orphan-timeout') -FixtureRunId 'fixture-orphan-timeout' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -CaseTimeoutSeconds 60
+	} catch { $OrphanDrainFailure = $_.Exception.Message }
+	Remove-Item -LiteralPath Env:AETHELN_TEST_CLEANUP_SILENT_LEAK, Env:AETHELN_TEST_KEEP_ORPHAN -ErrorAction Ignore
 	$OrphanIdentity = Get-Content -LiteralPath (Join-Path $FixtureRoot 'launcher-identity-fixture-orphan-timeout.json') -Raw | ConvertFrom-Json
 	$OrphanedServer = Get-Process -Id $OrphanIdentity.pid -ErrorAction Ignore
-	Assert-True ($null -eq $OrphanedServer -or $OrphanedServer.StartTime.ToUniversalTime().Ticks -ne $OrphanIdentity.start_ticks) 'The case timeout must terminate the orphaned fake server.'
-	Write-Output 'PASS: the per-case timeout fails an orphan-blocked case by name and terminates the orphan'
+	$OrphanIsOurs = $null -ne $OrphanedServer -and $OrphanedServer.StartTime.ToUniversalTime().Ticks -eq $OrphanIdentity.start_ticks
+	try {
+		Assert-True ($OrphanDrainFailure -match "Runtime process 'server' cleanup failed: Timed out after 8 seconds waiting for process \d+ \(runtime process 'server'\) to exit and close its output pipes") "The runner must fail by name when an orphan holds the launcher's output pipes. Actual: $OrphanDrainFailure"
+		Assert-True $OrphanIsOurs 'The orphan must still be alive when the runner gives up; otherwise the drain bound was never exercised.'
+	}
+	finally {
+		if ($OrphanIsOurs) { try { $OrphanedServer.Kill() } catch { if (-not $OrphanedServer.HasExited) { throw } } }
+		if ($null -ne $OrphanedServer) { $OrphanedServer.Dispose() }
+	}
+	Write-Output 'PASS: an orphan that holds the launcher pipes fails the run by name within the drain bound instead of hanging it'
 
 	$env:AETHELN_TEST_CLEANUP_FAIL = 'true'
 	$CombinedFailure = $null
