@@ -47,6 +47,17 @@ Issue #45 converts the target into measured game-thread, render-thread, GPU,
 memory, streaming, and hitch budgets. No subsystem budget is invented before
 the representative capture.
 
+`Config/DefaultScalability.ini` lowers the Epic shadow tier's virtual shadow
+map page pool (`[ShadowQuality@3]` `r.Shadow.Virtual.MaxPhysicalPages`) from
+the engine's 4096 to 2048, the engine's High-tier value. Other tiers keep the
+engine values. The owner accepted the change on 2026-10-04 (#244, from #211):
+a 12-camera 4096/2048/4096 comparison on the development PC showed no visible
+shadow difference and no page-pool overflow, and two-client editor PIE at 4096
+left only about 129 MiB of video memory headroom on the RTX 2060. That
+evidence comes from editor PIE, not a packaged capture, so the value is not a
+#45 budget. Whether the development PC needs a dedicated device profile stays
+open until the two-client re-measure at 2048.
+
 ## Initial World-Combat Hypothesis
 
 Planning may use:
