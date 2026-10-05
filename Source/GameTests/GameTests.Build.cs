@@ -13,7 +13,10 @@ public class GameTests : ModuleRules
 			"CoreUObject",
 			"DesktopPlatform",
 			"Engine",
+			"GameCombat",
 			"GameCore",
+			"GameplayAbilities",
+			"GameplayTags",
 			"Json",
 			"NavigationSystem",
 			"PhysicsCore"

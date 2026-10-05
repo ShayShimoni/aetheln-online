@@ -10,7 +10,8 @@ public class GameCore : ModuleRules
 		{
 			"Core",
 			"CoreUObject",
-			"Engine"
+			"Engine",
+			"GameplayTags"
 		});
 	}
 }
