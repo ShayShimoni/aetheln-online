@@ -260,6 +260,12 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
   maximum drops, `PostAttributeChange` on that maximum re-clamps the current
   value (`GAS/Public/AttributeSet.h:223`), because the current value's own
   `PreAttributeChange` does not fire. A current value is never scaled up.
+  **The re-clamp only lowers** (owner decision on #19, 2026-10-05): it writes
+  the base as the lower of the new maximum and the existing base, so lowering a
+  maximum never raises a base value, even while a positive temporary modifier
+  holds the current value above the base. Rewriting an unchanged base still
+  re-evaluates the current value, which its own clamp then lowers. The clamp
+  after instant effects follows the same rule.
 - **Replication:** all six use `COND_OwnerOnly` with `REPNOTIFY_Always`. Canon
   says opponent cues must not expose exact unrevealed resources (Secure
   Stealth and Opponent Readability in the combat document). Owner-only fails
@@ -714,7 +720,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T5 | `Aetheln.GameCombat.Lifecycle.AvatarDestroyedWhilePossessed` | P2 | H | Null case fires first; avatar null; PlayerState ASC intact; no crash |
 | T6 | `Aetheln.GameCombat.Lifecycle.AIPawnOwnsAbilitySystem` | P2 | H | AI ASC on the pawn, Minimal, owner and avatar the pawn; possession refreshes actor info; no PlayerState |
 | T7 | `Aetheln.GameCombat.Attributes.ReplicationPolicy` | P2 | H | From the class default object: all six attributes `COND_OwnerOnly` and `REPNOTIFY_Always` |
-| T8 | `Aetheln.GameCombat.Attributes.ClampAndBounds` | P2 | H | Values clamp to `[0, Max]`; lowering each max re-clamps its current value |
+| T8 | `Aetheln.GameCombat.Attributes.ClampAndBounds` | P2 (P4 adds the lower-only case) | H | Values clamp to `[0, Max]`; lowering each max re-clamps its current value and lowers a base above it; with a positive temporary modifier active, lowering a max below the current value but above the base re-clamps the current value and never raises the base |
 | T9 | `Aetheln.GameCombat.Attributes.InitOnceThroughEffect` | P2 | H | Values arrive only through the init effect, once per PlayerState; every current value equals its configured value; re-possession does not reapply |
 | T10 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3 | H | Exactly five reflected fields; none named or typed as target, hit, contact, damage, magnitude, attribute, aim, cost, or cooldown (extends `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:186-189`) |
 | T11 | `Aetheln.GameCombat.ActivationSeam.ValidateMatrix` | P3 | H | Steps 1 to 7 with an injected clock: each failure, precedence, zero/lower/equal sequences, an accepted forward gap, Press while active, Release undeclared, a valid Release |
