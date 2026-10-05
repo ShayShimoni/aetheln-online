@@ -225,9 +225,10 @@ Every accepted decision records:
   same-repository pull requests may run the supported-target compile gate,
   after the portable gates pass and only when the exact base/head change
   classification in TA-012 requires the engine. The packaged-smoke milestone
-  runs at `02:00 UTC` from the protected default branch `main` as the four
+  runs at `02:00 UTC` from the protected default branch as the four
   schedule-only phases decided in TA-012; the workflow declares no manual
-  trigger.
+  trigger. The default branch was `main` when this was accepted and has been
+  `develop` since 2026-10-03 (see the amendment below).
 - **Rationale:** The pinned Unreal source build, Visual Studio and Linux
   cross-toolchains, WSL topology, disk capacity, and local build paths are not
   available on ordinary GitHub-hosted runners. Repository scope and explicit
@@ -247,17 +248,33 @@ Every accepted decision records:
   pull requests; granting future collaborators runner access without a new
   review; storing local paths as repository secrets; uploading packaged builds,
   cook output, or full logs by default; treating `develop` as the schedule's
-  activation branch.
+  activation branch (rejected while `main` was the default branch; superseded
+  by the amendment below).
 - **Consequences:** The owner must provision and maintain the runner, pinned
   toolchains, WSL `Ubuntu` distribution and `aethelnqa` user. Non-secret
   `AETHELN_ENGINE_ROOT` and `AETHELN_LINUX_TOOLCHAIN_ROOT` paths are current-
   account user variables inherited by the runner process. Engine jobs serialize
   through one concurrency group, convert the packaged server path with WSL
   `wslpath`, publish only the redacted JSON report by default, and retain large
-  archives/logs locally under per-run roots. The schedule becomes active only
-  when the workflow reaches `main` through normal Git Flow; `develop` remains
-  the integration branch. Artifact retention, local-output retention, scanner,
+  archives/logs locally under per-run roots. The schedule runs from the default
+  branch, now `develop` (see the amendment below), which is also the
+  integration branch. Artifact retention, local-output retention, scanner,
   SBOM, and signing decisions remain open.
+- **Amendment (2026-10-05, scheduled runs follow the default branch, issue
+  #228):** GitHub runs scheduled workflows only from the default branch, and
+  the owner made `develop` the default branch on 2026-10-03 (recorded on
+  [Issue #16](https://github.com/ShayShimoni/aetheln-online/issues/16)).
+  Scheduled runs 37106216412 (2026-10-03), 37186384030 (2026-10-04), and
+  37281226888 (2026-10-05) ran on `develop`; the earlier runs, through
+  36980533796 on 2026-10-02, ran on `main`. This replaces the clause above that
+  kept the schedule off `develop` until the workflow reached `main` through Git
+  Flow. What changes: each `02:00 UTC` run executes the workflow at the head of
+  `develop`, so a change to the schedule or to a phase takes effect when it
+  merges to `develop`, and the four phases package that head, not the contents
+  of `main`. The copy of the workflow on `main` is not scheduled.
+  Release packaging stays on `release/*` through TA-022. The scheduled jobs
+  guard only on the `schedule` event, so no workflow condition or test pins
+  `main` for the schedule, and none changed.
 - **Revisit trigger:** A collaborator needs runner access, the runner moves to a
   different host/account or trust domain, hosted/ephemeral infrastructure can
   reproduce the pinned toolchain, or measured cost, reliability, isolation, or
