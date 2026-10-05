@@ -6,8 +6,11 @@ This is the implementation specification for
 [Issue #60](https://github.com/ShayShimoni/aetheln-online/issues/60): the
 server-owned, pure-free-aim attack timeline, the authored contact pipeline, and
 the Oathscar sword-and-shield three-hit basic chain. It is phase P1 of the
-issue and contains no code. Pull requests P2 to P7 deliver it (see
-[Phased Delivery](#phased-delivery)).
+issue and contains no code. Pull requests P2 to P6 deliver it (see
+[Phased Delivery](#phased-delivery)). The owner's decisions of 2026-10-05 are
+recorded in [Owner Decisions](#owner-decisions); the representative Oathscar
+actives moved to
+[Issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260).
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
@@ -79,20 +82,23 @@ abbreviates `Runtime/Engine/Private/Components/CharacterMovementComponent.cpp`.
 the deterministic contact order, the already-hit allowance, Wrought damage
 application, interruption, the lethal latch, and the three-hit chain
 (`docs/characters-and-factions.md:309-310`;
-`docs/prototype-and-1.0-scope-ledger.md:75`). The table lists what it consumes
-and what it leaves to other owners.
+`docs/prototype-and-1.0-scope-ledger.md:75`). It covers the three-hit chain
+only: Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result
+belong to #260 (OQ3, owner, 2026-10-05). The table lists what #60 consumes and
+what it leaves to other owners.
 
 | Owner | #60 consumes or provides | #60 does not do |
 | --- | --- | --- |
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes the seam, rate bucket, outcome RPC, base ability, cost and cooldown overrides, grant validation, `FindForPawn`, and `State.Dead` (see [Dependencies on #19](#dependencies-on-19)). Adds one `ResetChain(AvatarLost)` call to the PlayerState's null-pawn case. | Reorder or change #19's existing seam steps, or change what #19's lifecycle grants, initializes, or cancels. |
-| [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Provides the avoidance step and an authored avoidance-tag set that #18 fills with its dodge invulnerability tag; a dodge activation resets the chain like any other action. | Dodge cost, window, movement, or tags. |
+| [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Provides the avoidance step and an authored avoidance-tag set that #18 fills with its dodge invulnerability tag; a dodge activation resets the chain like any other action. Resolves whether a contact is blocked against the active defense state #18 exposes (OQ6, owner, 2026-10-05). | Dodge cost, window, movement, or tags; the right-mouse block action, its state, and what a blocked hit does to Guard (#18 owns them). |
+| [#260](https://github.com/ShayShimoni/aetheln-online/issues/260) | Provides the timeline, contact pipeline, defense-state check, and network-condition test rows that the representative actives reuse. | Gate Step and Sworn Rebuke contacts, Gate Step's movement, Hold the Line's Guard result (OQ3, owner, 2026-10-05). |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Provides the step definition, timeline driver, contact pipeline, and result path; the enemy registers its steps directly, without the seam. | Enemy behavior, target choice, or telegraph content. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Latches lethal results and raises one lethal notification per target; treats `State.Dead` and zero Health as not alive. | Apply `State.Dead`, run death, respawn, or reconnect. |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61), [#97](https://github.com/ShayShimoni/aetheln-online/issues/97) | Provides the outcome, record, chain-end, phase state, and result cues. | Presentation, HUD, `GameplayCue.*` tags. |
 | [#82](https://github.com/ShayShimoni/aetheln-online/issues/82) | Closes F1 and F2 by policy; supplies the left-mouse primary-attack binding in P6 and the attack scenario S5 needs. | Camera, reticle, controller layout, feel study. |
 | [#84](https://github.com/ShayShimoni/aetheln-online/issues/84) | Hands over the step data layout as the starting point for authored assets. | The authoring pipeline. |
 | [#2](https://github.com/ShayShimoni/aetheln-online/issues/2), [#45](https://github.com/ShayShimoni/aetheln-online/issues/45) | Records rejection and correction rates for their profiles. | Rewind, network profiles, numeric bounds. |
-| [#17](https://github.com/ShayShimoni/aetheln-online/issues/17) | Owner question 4: movement commitment during attacks. | Predicted movement changes. |
+| [#17](https://github.com/ShayShimoni/aetheln-online/issues/17) | Nothing in P3 to P6: attacks do not restrict movement (OQ4, owner, 2026-10-05). | Authored movement restrictions, which come later with #17's predicted movement. |
 | [#106](https://github.com/ShayShimoni/aetheln-online/issues/106), [#107](https://github.com/ShayShimoni/aetheln-online/issues/107) | Stable IDs and tuning. | Final values. |
 
 ## Canon Anchors and Existing Code
@@ -305,9 +311,9 @@ the rule `0 <= InterruptibleUntil <= RecoveryEnd`, extends A5, and bumps the
 chain's `ContentVersion`.
 
 `LinkClose >= RecoveryEnd` keeps a late press out of recovery: after the link
-closes, the character is already free and the press starts a new chain.
-Whether that is the right reading of "late" in the issue's criteria is owner
-question 8.
+closes, the character is already free and the press starts a new chain. The
+owner confirmed this reading of "late" (OQ8, owner, 2026-10-05): only a stale
+time sample is rejected.
 
 ### Chain progression and buffering
 
@@ -335,7 +341,8 @@ Rules:
 - **Commit at acceptance.** A buffered press runs #19's steps 8 to 10 when it
   arrives, so `Accepted` always means committed. If the chain resets before
   the buffered step starts, the step never starts and its cost (if any) is not
-  refunded (owner question 5).
+  refunded. Whether it should be refunded is the one open owner question
+  (OQ5); it matters only if the chain costs Endurance (#107).
 - **Buffered aim.** A buffered step uses the aim accepted at its press, which
   is at most `LinkOpen - BufferOpen` old when the step starts.
 - **No cooldown on the chain.** Cadence is bounded by the timeline, the
@@ -344,8 +351,12 @@ Rules:
   (dependency 2). This is a structural consequence, not a tuning value; a
   chain-level restart delay, if one is ever wanted, stays `TBD` (#107).
 - **Final-step presses.** The final step's activation lasts until its recovery
-  ends, so every press during it is an early press. Buffering into a new chain
-  is owner question 7.
+  ends, so every press during it is an early press. There is no restart
+  buffer (OQ7, owner, 2026-10-05): a press after the final recovery starts
+  step 1.
+- **No movement restriction.** In P3 to P6 an attack does not restrict the
+  attacker's movement (OQ4, owner, 2026-10-05). Authored restrictions come
+  later with #17's predicted movement, with their own content-version bump.
 
 ### Cancel rules and commitment
 
@@ -522,9 +533,17 @@ For each candidate, in order:
    registered. Record the accepted contact.
 3. **Avoidance.** A target holding any tag in the authored avoidance set
    (empty until #18) yields a recorded `Avoided` result and nothing else.
-4. **Directional defense.** With no active directional defense on the target,
-   this step passes. Block resolution, Guard pressure, and Guard break arrive
-   with Hold the Line (P7, owner question 3).
+4. **Directional defense.** #60 decides only whether the contact is blocked
+   (OQ6, owner, 2026-10-05). The defense owner exposes an active defense state
+   on the target: a state tag, its authored arc, and a server hook. If the
+   state is active and the contact direction falls inside the arc around the
+   target's authoritative facing, #60 records `Blocked` and calls the hook
+   once; the hook applies what a blocked hit does (Guard pressure, Guard break,
+   and whether later steps still apply) under the defense's authored rule. The
+   same contact is never re-scored. #18 owns the block action and its state;
+   #260 owns Hold the Line's Guard result. Until a defense state exists, no
+   target is defending and this step passes. P4 adds the check with a test
+   defense state.
 5. **Family mitigation.** Wrought has no mitigation inputs in the prototype;
    the step exists in code order and applies none. No value is invented.
 6. **Ward.** Not prototype scope; no attribute exists.
@@ -553,17 +572,16 @@ A committed result with `bInterruptsTarget` resets the target's chain with
 `Interrupted`, stamped at the contact time, if the target's current step is
 inside its interruptible window at that contact time
 (`ContactTime < TargetStepStart + InterruptibleUntil`). Both fields arrive in
-P5. The same mechanism serves #20's enemy steps and Sworn Rebuke's authored
-rule.
-Resolve and control families are not prototype scope.
+P5. The same mechanism serves #20's enemy steps and, in #260, Sworn Rebuke's
+authored rule. Resolve and control families are not prototype scope.
 
 ### Relation
 
 The prototype is two players against one enemy (`docs/GameBrief.md:24-27`),
-before factions (`Faction = Unassigned`). The default relation is: self
-excluded, player to player friendly (no result), player and AI enemy hostile.
-One server function decides it, so faction and territory policy replace it
-later. Owner question 1 confirms the default.
+before factions (`Faction = Unassigned`). The relation is (OQ1, owner,
+2026-10-05): no player-versus-player hits in the prototype arena; players are
+allies and only enemies are hostile. Self is excluded. One server function
+decides it, so faction and territory policy replace it later.
 
 ## Lag Compensation
 
@@ -744,19 +762,24 @@ modifier. Today the re-clamp writes the new maximum as the base
 70, so when the modifier expires the value is 70 instead of 50, a free
 restoration.
 
-**Recommendation (owner question 2):** a lowered maximum never raises a base.
-The re-clamp writes `min(Base, NewMax)`. When the base is already within the
-new maximum, it rewrites the unchanged base, which re-evaluates the current
-value: the aggregator broadcasts dirty on every base write with no equality
-check (`GAS/Private/GameplayEffectAggregator.cpp:438-445`), the dirty chain
+**Decision (OQ2, owner, 2026-10-05):** lowering a maximum never raises a base
+value. The owner recorded it on #19 as a change to #19's server-only re-clamp
+in a later #19 phase, pinned by a #19 test.
+
+One way to implement it, offered to #19: the re-clamp writes
+`min(Base, NewMax)`. When the base is already within the new maximum, it
+rewrites the unchanged base, which re-evaluates the current value: the
+aggregator broadcasts dirty on every base write with no equality check
+(`GAS/Private/GameplayEffectAggregator.cpp:438-445`), the dirty chain
 recomputes the current value (`GAS/Private/GameplayEffect.cpp:4022-4031`), and
 `PreAttributeChange` clamps it to the new maximum. The example then gives
 current 70 and base 50, and 50 after the modifier expires.
 
 Damage and Guard pressure lower current values only, and #60 adds no effect
-that modifies a maximum or adds a duration modifier to a current value. The fix
-therefore lands with the first PR that adds such an effect, with its test; P4
-adds A18 so a #60 change cannot introduce one silently.
+that modifies a maximum or adds a duration modifier to a current value, so no
+#60 phase waits for the #19 change. P4 adds A18 so a #60 change cannot
+introduce such an effect silently; any later PR that does depends on the #19
+change (dependency 7).
 
 ## Data-Driven Tuning
 
@@ -808,6 +831,10 @@ seam keys live in shared `DefaultGame.ini` for the reason #19 gives
    for target-data cache growth.
 6. **Lifecycle hook (P3).** The PlayerState's null-pawn case gains one
    `ResetChain(AvatarLost)` call. Nothing else in #19's lifecycle changes.
+7. **Re-clamp (later #19 phase).** Lowering a maximum never raises a base value
+   (OQ2, owner, 2026-10-05, recorded on #19). #19 changes its re-clamp in a
+   later phase; see [Attribute Re-clamp Behavior](#attribute-re-clamp-behavior).
+   No #60 phase depends on it, because #60 lowers no maximum (A18).
 
 ## Test Plan
 
@@ -833,17 +860,20 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A11 | `Aetheln.GameCombat.AttackTimeline.DeterministicOrdering` | P4 | H | Two attackers' same-frame contacts on one target resolve by the total order; reversing registration and tick order changes nothing |
 | A12 | `Aetheln.GameCombat.AttackTimeline.DamageAndLethalLatch` | P4 | H | Health changes only through the damage effect by the test magnitude; it clamps at zero; the lethal notification fires once; a zero-Health target takes no further result |
 | A13 | `Aetheln.GameCombat.AttackTimeline.DeadLifeStateRejected` | P4 | H | An attacker with `State.Dead` (test seam) is refused with `ActivationBlocked`; a target with it yields no result |
-| A14 | `Aetheln.GameCombat.AttackTimeline.AvoidanceAndRelation` | P4 | H | A target with a test avoidance tag yields a recorded `Avoided` and no damage; a friendly player target yields nothing |
+| A14 | `Aetheln.GameCombat.AttackTimeline.AvoidanceDefenseAndRelation` | P4 | H | A target with a test avoidance tag yields a recorded `Avoided` and no damage; a target holding a test defense state facing the contact yields `Blocked` and calls the test hook once, and facing away yields an ordinary hit; a player target yields nothing (OQ1) |
 | A15 | `Aetheln.GameCombat.AttackTimeline.Interruption` | P5 | H | An interrupting result inside `InterruptibleUntil` resets the target's chain; outside it does not; a lethal target is not interrupted |
 | A16 | `Aetheln.GameCombat.AttackTimeline.RejectionAndCorrectionTelemetry` | P2 | H | `TimestampOutOfBounds`, `ImpossibleAimTransition`, and the aim correction emit the events and metric in the tables; refused replicated-data routes are metric-only; the public copy has no diagnostic code |
 | A17 | `Aetheln.GameCombat.AttackTimeline.RunsWithoutPresentation` | P3 | H | A step with no mesh, montage, or notify advances, ends, and (from P4) resolves contacts |
 | A18 | `Aetheln.GameCombat.AttackTimeline.NoMaximumModifiers` | P4 | H | No #60 effect modifies a `Max*` attribute or adds a duration modifier to a current value |
 | A19 | `Aetheln.GameCombat.Net.AttackOutcomeRouting` | P6 | P | The owner receives the outcome, record, and chain end; the other client receives the phase state but no record; both see result cues |
-| A20 | `Aetheln.GameCombat.Net.ChainUnderProfiles` | P6 | P | The full chain and a buffered link under C1 and each C2 kind: no double commit or damage, deterministic resets, recorded correction, rejection (including `ImpossibleAimTransition`, for #82 S5), and miss rates |
-| A21 | `Aetheln.GameCombat.Net.DisconnectMidChain` | P6 | P | Disconnect during wind-up, active, and a buffered wait: no result after avatar loss and no stale chain state for the new PlayerState |
+| A20 | `Aetheln.GameCombat.Net.ChainUnderProfiles` | P6 | P | Additional PIE evidence beside A25 and A26: the full chain and a buffered link under C1 and each C2 kind: no double commit or damage, deterministic resets, recorded correction, rejection (including `ImpossibleAimTransition`, for #82 S5), and miss rates |
+| A21 | `Aetheln.GameCombat.Net.DisconnectMidChain` | P6 | P | Additional PIE evidence beside A27: a real disconnect during wind-up, active, and a buffered wait gives no result after avatar loss and no stale chain state for the new PlayerState |
 | A22 | `Aetheln.POC.Input.AttackBindingSubmitsControlAim` | P6 | H | A Reticle-mode press builds a request with the control-rotation aim including pitch; Cursor mode blocks it; the recapture click is never an attack; a fresh press is needed after recapture |
 | A23 | Packaged two-client run of the chain | later | K | Evidence for #2 and #48; not required to merge #60 |
 | A24 | `Aetheln.GameCombat.AttackTimeline.HitTelemetry` | P4 | H | One hit event per committed result with the activation id, ability id, and sequence; no target identity |
+| A25 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsChain` | P3 | H | Injected clock and a scripted delivery queue: chain requests delayed to arrive just before and after `BufferOpen`, `LinkOpen`, and `LinkClose` get the outcome their server arrival time dictates; a duplicated request gets `DuplicateSequence`; a reordered older request gets `StaleSequence`; a dropped follow-up lets the chain time out, and the next press (a forward sequence gap) starts step 1; nothing commits twice |
+| A26 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsContacts` | P4 | H | The A25 delivery profiles against a target dummy: delay moves only when a step starts, never adds a result; duplicated, reordered, and dropped requests never produce a second result or a result from a rejected request; each activation hits the target at most once |
+| A27 | `Aetheln.GameCombat.AttackTimeline.TeardownMidChain` | P3 (contact rows P4) | H | PlayerState or avatar teardown during wind-up, the active window, and a buffered wait: one chain end; the buffered step never starts; no contact at or after the teardown time; a new PlayerState starts with no chain or seam state |
 
 CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
 so each code PR records local automation evidence at its exact head on the
@@ -858,11 +888,11 @@ capsule response). P6 runs `Aetheln.POC` and records the manual PIE steps. No
 | --- | --- |
 | No request field names an authoritative target or claims a hit | A1, A3; [Request Contract](#request-contract) |
 | A valid sequence produces the three-hit chain and resets after timeout, interruption, unpossession, or incompatible action state | A6, A7, A8, A15, A20 |
-| Early, late, duplicate, stale, impossible, and version-mismatched activations are rejected deterministically and do not spend or grant twice | A2 (late time sample, impossible aim), A6 (early press, replay), #19 T11 and T12 (duplicate, stale, version), A20. The reading of "late" is pending owner question 8: a late follow-up press is accepted as a new chain, not rejected. |
+| Early, late, duplicate, stale, impossible, and version-mismatched activations are rejected deterministically and do not spend or grant twice | A2 (late time sample, impossible aim), A6 (early press, replay), #19 T11 and T12 (duplicate, stale, version), A25, A20. "Late" means a stale time sample, which is rejected with `TimestampOutOfBounds`; a follow-up press after `LinkClose` starts a new chain at step 1 (OQ8, owner, 2026-10-05). |
 | An already-dead life state supplied through the test seam is rejected | A13 |
 | Each activation damages every eligible target no more than the authored number of times | A10, A11, A20 |
 | Server correction gives a bounded presentation correction without client state overwriting authority | A2, A19; [Bounded presentation correction](#bounded-presentation-correction) |
-| Automated tests cover success, combo boundaries, duplicates, invalid windows, interruption, already-dead rejection, disconnect, and representative latency or loss | Automated: A4, A6, A7 (including unpossession and avatar destruction), A10, A13, A15. Latency, loss, and a real disconnect are covered only by manual PIE (A20, A21) until owner question 9 is answered. |
+| Automated tests cover success, combo boundaries, duplicates, invalid windows, interruption, already-dead rejection, disconnect, and representative latency or loss | Automated (OQ9, owner, 2026-10-05): A4, A6, A7, A10, A13, A15, and the injected-clock rows A25 (delayed, duplicated, reordered, and dropped requests), A26 (the same against contacts), and A27 (teardown mid-chain). A20 and A21 are additional PIE evidence. |
 
 ## Phased Delivery
 
@@ -873,57 +903,40 @@ files untouched.
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Request and aim | Schema 2, steps 6a to 6d in the pure validator, last accepted raw aim and time, the two result values, rejection and correction telemetry, client fill with `FlushServerMoves`, the four replicated-data overrides, the #19 fixture and specification changes (dependencies 3 to 5); A1 to A3, A16. | #19 P3 |
-| **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17. No contacts yet. | P2, #19 P4 |
-| **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, relation default, avoidance hook, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, and the sweep rows of A4 and A7. | P3 |
+| **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17, A25, A27. No contacts yet. | P2, #19 P4 |
+| **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, and the sweep and contact rows of A4, A7, and A27. | P3 |
 | **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct with a content-version bump; A15 and the A5 rows. | P4 |
 | **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
-| **P7** Representative actives (owner-gated) | Gate Step and Sworn Rebuke contacts, Hold the Line's block, Guard pressure, and Guard break, on the same timeline. Gate Step's advance also needs #17. | P6 and owner question 3 |
+
+Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result are not
+#60 phases; they are #260, which builds on P4 and P5 (OQ3, owner, 2026-10-05).
+
+## Owner Decisions
+
+The owner answered these design questions in chat on 2026-10-05. They are
+recorded on [#60](https://github.com/ShayShimoni/aetheln-online/issues/60),
+[#18](https://github.com/ShayShimoni/aetheln-online/issues/18) (OQ6),
+[#19](https://github.com/ShayShimoni/aetheln-online/issues/19) (OQ2), and
+[#260](https://github.com/ShayShimoni/aetheln-online/issues/260) (OQ3). The OQ
+numbers are the original question numbers.
+
+| OQ | Decision (owner, 2026-10-05) | Where it applies |
+| --- | --- | --- |
+| OQ1 | No player-versus-player hits in the prototype arena. Players are allies; only enemies are hostile until faction policy exists. | [Relation](#relation), A14 |
+| OQ2 | Lowering a maximum never raises a base value. #19 changes its server-only re-clamp in a later #19 phase. | [Attribute Re-clamp Behavior](#attribute-re-clamp-behavior), dependency 7 |
+| OQ3 | Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result move to #260. #60 covers the three-hit chain only, and its former P7 is removed. | [Scope and Boundaries](#scope-and-boundaries), [Phased Delivery](#phased-delivery) |
+| OQ4 | Attacks do not restrict movement in P3 to P6. Authored restrictions come later with #17's predicted movement. | [Chain progression and buffering](#chain-progression-and-buffering) |
+| OQ6 | #18 owns the right-mouse block action, alongside dodge. #60 only resolves whether a hit is blocked against an active defense state. | [Resolution order](#resolution-order-prototype-subset) step 4, A14 |
+| OQ7 | No restart buffer. A press after the final recovery starts step 1. | [Chain progression and buffering](#chain-progression-and-buffering) |
+| OQ8 | "Late" in the acceptance criteria means a stale time sample, rejected with `TimestampOutOfBounds`. A follow-up press after `LinkClose` starts a new chain at step 1. | [Step definition](#step-definition), [Acceptance-Criteria Mapping](#acceptance-criteria-mapping) |
+| OQ9 | Network-condition coverage is automated: headless injected-clock tests for delayed, duplicated, reordered, and dropped requests, plus a mid-chain disconnect or PlayerState teardown, in P3 and P4. AC7 maps to them; A20 and A21 remain additional PIE evidence. | A25 to A27, [Acceptance-Criteria Mapping](#acceptance-criteria-mapping) |
 
 ## Open Questions for the Owner
 
-1. **Prototype relation.** May one player's attacks hit the other player in the
-   prototype arena? Recommendation: no; players are friendly and the enemy is
-   hostile until faction policy exists.
-2. **Re-clamp behavior.** Should a lowered maximum never raise a base value, as
-   recommended in [Attribute Re-clamp Behavior](#attribute-re-clamp-behavior)?
-3. **Representative actives.** Do Gate Step and Sworn Rebuke contacts and Hold
-   the Line's Guard result stay in #60 as P7, or move to a follow-up issue?
-   Recommendation: a follow-up issue, because #60's criteria cover only the
-   chain and Gate Step needs movement validation with #17.
-4. **Movement commitment.** Ship P3 to P6 with attacks that do not restrict
-   movement, and add authored restrictions later with #17's predicted
-   movement? A server-only restriction would cause a correction on every
-   attack. Recommendation: yes.
-5. **Buffered cost.** A buffered hit commits at its press; if the chain resets
-   before it starts, nothing is refunded. Accept this? It matters only if the
-   chain costs Endurance, which is #107 tuning. Recommendation: accept.
-6. **Block action owner.** #60 resolves directional block for an active
-   defense state. Which issue owns the right-mouse block action itself (#18,
-   #60 P7, or a new issue)?
-7. **Restart buffer.** May a press during the third hit's recovery be buffered
-   into a new chain? Recommendation: no for the prototype; a press after the
-   final recovery starts step 1.
-8. **Meaning of "late" in the acceptance criteria.** The criterion says early,
-   late, and other invalid activations are rejected. In this design, "late"
-   means a request whose time sample is older than the allowed bound; it is
-   rejected with `TimestampOutOfBounds`. A follow-up press that arrives after
-   the link window closes is not rejected: the chain has already reset, so the
-   press starts a new chain at step 1. Confirm this reading, or require that a
-   late follow-up be rejected? Rejection would need `LinkClose < RecoveryEnd`
-   and a lock tag held from `LinkClose` to `RecoveryEnd`. Recommendation:
-   confirm; rejecting a press after the character is free would feel like
-   dropped input.
-9. **Automated latency, loss, and disconnect coverage.** The criterion asks for
-   automated tests of disconnect and of representative latency or packet loss.
-   The design automates unpossession and avatar destruction (A7) but covers
-   latency, loss, and a real disconnect only with manual two-client PIE runs
-   (A20, A21), following #19's precedent. Accept manual PIE evidence for those
-   cases, or require headless automation? Recommendation: require headless
-   rows, because the pure validator and the injected clock make them cheap.
-   P3 and P4 would add rows that deliver chain requests with added delay around
-   `BufferOpen`, `LinkOpen`, and `LinkClose`; duplicated, out-of-order, and
-   dropped requests; and a PlayerState teardown mid-chain. AC7 would map to
-   those rows, and A20 and A21 would stay as supplementary PIE evidence.
+- **OQ5, buffered cost.** A buffered hit commits at its press; if the chain
+  resets before it starts, nothing is refunded. Should it be refunded? It
+  matters only if the chain costs Endurance, which is #107 tuning.
+  Recommendation: no refund.
 
 Decisions that belong to other owners, recorded so they are not lost: rewind
 and any client-time window evaluation (#2, TC-002); every numeric bound,
@@ -946,7 +959,9 @@ and generation (#106).
 5. **Build-output citation.** The replicated-data cache closure relies on
    virtual declarations seen in local Unreal Header Tool output. P2 confirms by
    compiling.
-6. **No movement commitment** until owner question 4 is resolved with #17.
+6. **No movement commitment** in P3 to P6 (OQ4, owner, 2026-10-05): an
+   attacker can move freely while attacking until #17 adds authored
+   restrictions.
 7. **No death transition** until #21: a zero-Health actor is inert to #60 but
    is not dead.
 8. **Reconnect refill** (#19 T34) also restores a chain-free state; #21 owns it.

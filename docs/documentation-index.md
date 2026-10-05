@@ -72,8 +72,8 @@ subordinate to the specialized canonical product and technical documents.
   timeline: request schema 2 and the aim policy, chain progression and
   buffering, cancel and reset rules, authored volumes and deterministic hit
   resolution, lag-compensation and prediction policy, outcome reporting,
-  rejection reasons, data-driven tuning, test plan, phased delivery, and owner
-  questions.
+  rejection reasons, data-driven tuning, test plan, phased delivery, and the
+  owner decisions of 2026-10-05.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path, plus the Issue #167
