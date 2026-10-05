@@ -1,0 +1,246 @@
+name: Release packaging
+
+# Issue #226 (TA-022): internal release packaging from a release head. The only
+# trigger is a dispatch with no inputs, so the dispatched ref is the operator's
+# only choice. release-gates refuses, red, anything but an owner dispatch of
+# release/v<ProjectVersion> in this repository on attempt 1, then runs the
+# portable suite. The four engine jobs copy the scheduled phases (same gate,
+# modes, bounds, handoff, and FIFO concurrency group) and repeat the trust
+# predicate, so GitHub never hands a refused run to the self-hosted runner. Only
+# six redacted reports are uploaded; packaged bytes stay on the runner host.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-gates:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          lfs: false
+          persist-credentials: false
+      - name: Refuse anything but an owner dispatch of a matching release head
+        shell: powershell
+        run: powershell -NoProfile -File scripts/ci/Invoke-ReleasePackaging.ps1 -Mode Guard
+      - name: Fetch StarterMap LFS object
+        shell: powershell
+        run: git lfs pull --include "Content/Maps/StarterMap.umap"
+      - name: Run CI suite
+        id: suite
+        shell: powershell
+        run: powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1
+      - name: Upload machine-readable report
+        if: always() && steps.suite.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-ci-report
+          path: TestResults/ci-report.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release-client-package:
+    needs: release-gates
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ShayShimoni/aetheln-online' && startsWith(github.ref, 'refs/heads/release/') && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.run_attempt == '1'
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 40
+    env:
+      UE_ADDITIONAL_PLUGIN_PATHS: ''
+    defaults:
+      run:
+        working-directory: milestone
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          lfs: false
+          path: milestone
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch Unreal Content LFS objects
+        shell: powershell
+        run: git lfs pull --include "Content/**"
+      - name: Run release client packaging phase
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrEmpty($env:UE_ADDITIONAL_PLUGIN_PATHS)) { Write-Output 'private_plugin_paths_set'; exit 1 }
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode PackageClient `
+            -RepositoryRoot '${{ github.workspace }}/milestone' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 30
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-client-package-report
+          path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release-server-package:
+    needs: release-client-package
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ShayShimoni/aetheln-online' && startsWith(github.ref, 'refs/heads/release/') && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.run_attempt == '1'
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 40
+    env:
+      UE_ADDITIONAL_PLUGIN_PATHS: ''
+    defaults:
+      run:
+        working-directory: milestone
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          lfs: false
+          path: milestone
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch Unreal Content LFS objects
+        shell: powershell
+        run: git lfs pull --include "Content/**"
+      - name: Run release server packaging phase
+        shell: powershell
+        run: |
+          if (-not [string]::IsNullOrEmpty($env:UE_ADDITIONAL_PLUGIN_PATHS)) { Write-Output 'private_plugin_paths_set'; exit 1 }
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode PackageServer `
+            -RepositoryRoot '${{ github.workspace }}/milestone' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 30
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-server-package-report
+          path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release-provenance-validation:
+    needs: release-server-package
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ShayShimoni/aetheln-online' && startsWith(github.ref, 'refs/heads/release/') && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.run_attempt == '1'
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 20
+    env:
+      UE_ADDITIONAL_PLUGIN_PATHS: ''
+    defaults:
+      run:
+        working-directory: milestone
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          lfs: false
+          path: milestone
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run release registry and provenance validation phase
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode ValidateProvenance `
+            -RepositoryRoot '${{ github.workspace }}/milestone' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -BuildNumber '${{ github.run_number }}' `
+            -PhaseTimeoutMinutes 10
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-provenance-validation-report
+          path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release-packaged-smoke:
+    needs: release-provenance-validation
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'ShayShimoni/aetheln-online' && startsWith(github.ref, 'refs/heads/release/') && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.run_attempt == '1'
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    timeout-minutes: 20
+    env:
+      UE_ADDITIONAL_PLUGIN_PATHS: ''
+    defaults:
+      run:
+        working-directory: milestone
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          lfs: false
+          path: milestone
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Run release packaged smoke phase
+        shell: powershell
+        run: |
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          powershell -NoProfile -File scripts/ci/Invoke-EngineRunnerGate.ps1 `
+            -Mode SmokePhase `
+            -RepositoryRoot '${{ github.workspace }}/milestone' `
+            -SourceRevision '${{ github.sha }}' `
+            -LogRoot (Join-Path $RunRoot 'logs') `
+            -Repository '${{ github.repository }}' `
+            -RunId '${{ github.run_id }}' `
+            -RunAttempt '${{ github.run_attempt }}' `
+            -RunnerName '${{ runner.name }}' `
+            -PhaseTimeoutMinutes 10
+      - name: Record release version evidence
+        id: release_evidence
+        timeout-minutes: 2
+        shell: powershell
+        run: powershell -NoProfile -File scripts/ci/Invoke-ReleasePackaging.ps1 -Mode Evidence -OutputPath TestResults/release-evidence.json
+      - name: Upload engine-runner report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-packaged-smoke-report
+          path: milestone/TestResults/engine-runner-report.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Upload release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-evidence
+          path: milestone/TestResults/release-evidence.json
+          if-no-files-found: error
+          retention-days: 90

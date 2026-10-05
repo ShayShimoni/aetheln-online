@@ -138,6 +138,15 @@ try {
 	Assert-True ($ReleasedDocument.release.schemaVersion -eq 1 -and $ReleasedDocument.release.projectVersion -ceq '1.0.0-alpha.1' -and $ReleasedDocument.release.buildNumber -eq 7 -and $ReleasedDocument.release.buildVersion -ceq '1.0.0-alpha.1+7') 'The release block must record the committed ProjectVersion, the build number, and their joined build version.'
 	Assert-True ((Get-Content -LiteralPath $Released.Path -Raw) -match '"buildNumber":\s+7\b') 'The build number must be a JSON number, not a string.'
 	Assert-True ($ReleasedDocument.host.buildIdentity -ceq "AethelnOnline@$Revision/Development") 'host.buildIdentity must not change when a release block is added.'
+	# The release block and the cooked-registry receipts coexist in one document,
+	# and a tampered receipt still refuses when a build number is given.
+	Assert-True ((@($ReleasedDocument.build.cookedRegistries.PSObject.Properties.Name) -join ',') -ceq 'client,server' -and $ReleasedDocument.build.cookedRegistries.client.sha256 -ceq (New-RegistryReceipts).client.sha256) 'A release document must keep both cooked-registry receipts.'
+	$TamperedArguments = $BaseArguments.Clone()
+	$TamperedArguments.CookedRegistryReceiptsJson = $BadDigest | ConvertTo-Json -Compress
+	$TamperedOutput = Join-Path $FixtureRoot 'case-tampered-release/build.json'
+	$TamperedFailure = $null
+	try { [void] (& $Script @TamperedArguments -BuildNumber '7' -OutputPath $TamperedOutput -ProjectPath $ValidProject) } catch { $TamperedFailure = $_.Exception.Message }
+	Assert-True ($TamperedFailure -match 'server cooked-registry receipt sha256' -and -not (Test-Path -LiteralPath $TamperedOutput)) "A tampered receipt must refuse with -BuildNumber too; observed '$TamperedFailure'."
 	# The release block is purely additive: removing it must leave the document
 	# identical to the one written without -BuildNumber, apart from the clock.
 	$PlainDocument.createdUtc = 'normalized'
@@ -157,6 +166,10 @@ try {
 	$CrlfProject = Initialize-VersionedProject 'crlf' @('; leading comment', $SectionHeader, 'ProjectName=AethelnOnline', 'ProjectVersion=2.1.0', '', '[/Script/GameplayAbilities.AbilitySystemGlobals]', '+GameplayCueNotifyPaths=/Game') -LineEnding "`r`n"
 	$Result = Invoke-Provenance 'crlf' $CrlfProject -Extra @{ BuildNumber = '3' }
 	Assert-True ($null -eq $Result.Failure -and (Get-Content -LiteralPath $Result.Path -Raw | ConvertFrom-Json).release.buildVersion -ceq '2.1.0+3') "A CRLF ini with other sections must be read. Failure: $($Result.Failure)"
+	# The engine trims trailing whitespace before it recognizes a section header.
+	$TrailingHeaderProject = Initialize-VersionedProject 'trailing-header' @(($SectionHeader + " `t"), 'ProjectVersion=2.1.0')
+	$Result = Invoke-Provenance 'trailing-header' $TrailingHeaderProject -Extra @{ BuildNumber = '3' }
+	Assert-True ($null -eq $Result.Failure -and (Get-Content -LiteralPath $Result.Path -Raw | ConvertFrom-Json).release.buildVersion -ceq '2.1.0+3') "A target section header with trailing whitespace must be read as the engine reads it. Failure: $($Result.Failure)"
 	Write-Output 'PASS: ProjectVersion is read from the exact section for SemVer values with or without CRLF'
 
 	$MissingCases = @(
@@ -168,6 +181,10 @@ try {
 		Assert-True ($Result.Failure -match '^project_version_missing' -and -not $Result.Written) "A missing ProjectVersion ($($Case.Name)) must fail closed as project_version_missing. Failure: $($Result.Failure)"
 	}
 	$InvalidCases = @(
+		@{ Name = 'tilde-set'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', '~ProjectVersion=9.9.9') },
+		@{ Name = 'tilde-add'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', '~+ProjectVersion=9.9.9') },
+		@{ Name = 'lone-cr'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', "ProjectName=AethelnOnline`rProjectVersion=9.9.9") },
+		@{ Name = 'commented-header'; Lines = @($SectionHeader, '[/Script/Other] // note', 'ProjectVersion=1.0.0') },
 		@{ Name = 'build-metadata'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0+3') },
 		@{ Name = 'prerelease-and-metadata'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0-alpha.1+7') },
 		@{ Name = 'v-prefix'; Lines = @($SectionHeader, 'ProjectVersion=v1.0.0') },
@@ -187,7 +204,13 @@ try {
 		@{ Name = 'lowercase-key'; Lines = @($SectionHeader, 'projectversion=1.0.0') },
 		@{ Name = 'lowercase-section'; Lines = @('[/script/enginesettings.generalprojectsettings]', 'ProjectVersion=1.0.0') },
 		@{ Name = 'array-operator'; Lines = @($SectionHeader, '+ProjectVersion=1.0.0') },
-		@{ Name = 'duplicate-case-variant'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', 'PROJECTVERSION=2.0.0') }
+		@{ Name = 'duplicate-case-variant'; Lines = @($SectionHeader, 'ProjectVersion=1.0.0', 'PROJECTVERSION=2.0.0') },
+		# Engine-parser parity: these files assign the value to another section or
+		# join it into another line, so the build would not use it.
+		@{ Name = 'other-section-trailing-space-header'; Lines = @($SectionHeader, '[/Script/Other] ', 'ProjectVersion=1.0.0') },
+		@{ Name = 'other-section-inner-bracket-header'; Lines = @($SectionHeader, '[/Script/Other]x]', 'ProjectVersion=1.0.0') },
+		@{ Name = 'line-continuation'; Lines = @($SectionHeader, 'ProjectName=AethelnOnline\', 'ProjectVersion=1.0.0') },
+		@{ Name = 'bracket-block'; Lines = @($SectionHeader, 'ProjectName={', 'ProjectVersion=1.0.0', '}') }
 	)
 	foreach ($Case in $InvalidCases) {
 		$Project = Initialize-VersionedProject ('invalid-' + $Case.Name) $Case.Lines
@@ -197,6 +220,22 @@ try {
 		Assert-True ($null -eq $Inert.Failure -and -not ((Get-Content -LiteralPath $Inert.Path -Raw | ConvertFrom-Json).PSObject.Properties.Name -contains 'release')) "ProjectVersion case '$($Case.Name)' must be ignored entirely when -BuildNumber is absent. Failure: $($Inert.Failure)"
 	}
 	Write-Output 'PASS: a missing or malformed ProjectVersion fails closed only when -BuildNumber is present'
+	foreach ($OverrideCase in @(
+		@{ Name = 'linux-braced'; Line = 'Project{Version}=9.9.9' },
+		@{ Name = 'linux-tilde'; Line = '~ProjectVersion=9.9.9' },
+		@{ Name = 'linux-reset'; Line = '^ProjectVersion=' }
+	)) {
+		$Name = $OverrideCase.Name
+		$OverrideLine = $OverrideCase.Line
+		$Project = Initialize-VersionedProject $Name @($SectionHeader, 'ProjectVersion=1.0.0')
+		$LinuxConfig = Join-Path (Split-Path -Parent $Project) 'Config/Linux'
+		New-Item -ItemType Directory -Path $LinuxConfig -Force | Out-Null
+		[IO.File]::WriteAllText((Join-Path $LinuxConfig 'LinuxGame.ini'), "$SectionHeader`n$OverrideLine`n")
+		$Result = Invoke-Provenance $Name $Project -Extra @{ BuildNumber = '7' }
+		Assert-True ($Result.Failure -match '^project_version_override' -and -not $Result.Written) "Platform override '$Name' must fail before release provenance is written. Failure: $($Result.Failure)"
+		$Inert = Invoke-Provenance ($Name + '-inert') $Project
+		Assert-True ($null -eq $Inert.Failure) 'Platform version scanning must remain inert without BuildNumber.'
+	}
 
 	$ArabicIndicThree = [string][char] 0x0663
 	foreach ($BadNumber in @('0', '01', 'abc', '12345678901', '', '-1', '+7', '7.0', ' 7', '7 ', "7`n", $ArabicIndicThree)) {

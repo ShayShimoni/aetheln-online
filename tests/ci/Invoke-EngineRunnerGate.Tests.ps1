@@ -1465,13 +1465,13 @@ try {
 	$Fixture = New-Case 'build-number-forwarded'
 	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
 	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
-	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' -ExtraArguments @('-BuildNumber', '7')
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' -ExtraArguments @('-BuildNumber', '7654321')
 	Assert-True ($Result.ExitCode -eq 0) "ValidateProvenance with a valid -BuildNumber must pass. Output: $($Result.Output)"
 	$NumberedCall = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })[-1]
-	Assert-True ($NumberedCall.Stage -eq 'Provenance' -and $NumberedCall.HasBuildNumber -eq $true -and $NumberedCall.BuildNumber -ceq '7') 'The supervisor must forward -BuildNumber through the child to the provenance writer.'
+	Assert-True ($NumberedCall.Stage -eq 'Provenance' -and $NumberedCall.HasBuildNumber -eq $true -and $NumberedCall.BuildNumber -ceq '7654321') 'The supervisor must forward -BuildNumber through the child to the provenance writer.'
 	$NumberedReport = Read-Report $Result
 	Assert-True ($PlainReportShape -ceq (Get-GateReportShape $NumberedReport)) 'A build number must not change the gate report shape or its checks.'
-	Assert-True (-not (Get-Content $Result.Report -Raw).Contains('BuildNumber')) 'The build number must stay out of the gate report.'
+	Assert-True ((Get-Content $Result.Report -Raw) -notmatch '(?i)buildnumber|7654321') 'Neither the build-number parameter nor its value may enter the gate report.'
 
 	foreach ($WrongMode in @('PackageClient', 'PackageServer', 'SmokePhase')) {
 		$Fixture = New-Case ('build-number-mode-' + $WrongMode)

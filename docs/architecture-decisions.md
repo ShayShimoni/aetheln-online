@@ -282,7 +282,8 @@ Every accepted decision records:
   schedule-only: a manual trigger on this workflow identity would let an
   operator select an older branch that still carries the retired
   1,440-minute single-job gate, and no replacement manual workflow is
-  provided. `trusted-candidate-compile` additionally needs the GitHub-hosted
+  provided on this identity. TA-022 (2026-10-03) later adds internal release
+  packaging on a separate workflow identity. `trusted-candidate-compile` additionally needs the GitHub-hosted
   `change-impact` classifier (the reviewed full-SHA checkout action plus repository-owned
   PowerShell, no third-party action), which compares the exact pull-request
   base SHA and head SHA with a rename-free name-status diff and publishes
@@ -1460,6 +1461,103 @@ Every accepted decision records:
   observability headers bring in, `GameNet` needs a `GameCombat` type, or a
   reviewed change moves the observability service into `GameCore` or its own
   module.
+
+### TA-022 - Dispatch-Only Release Packaging on a Separate Workflow Identity
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-03 by the delivery lead under the owner's
+  delegated authority, after an independent security review of the
+  self-hosted runner exposure. The owner accepted the runner-trust risk below
+  on 2026-10-03.
+- **Scope:** Internal pre-release packaging from `release/*` branches (issue
+  #226).
+- **Decision (2026-10-03):** `.github/workflows/release-packaging.yml`
+  packages internal pre-releases. Its only trigger is `workflow_dispatch`, with
+  no inputs. A hosted `release-gates` job refuses, red, anything but a dispatch
+  by the repository owner of exactly `refs/heads/release/v<ProjectVersion>` in
+  this repository on run attempt 1, and then runs the portable suite. Four
+  engine jobs copy the TA-012 scheduled phases (gate, modes, bounds, handoff,
+  and the `aetheln-engine-runner` group), and each repeats a literal six-clause
+  trust predicate. The token is `contents: read`, checkouts do not persist
+  credentials, and only six redacted reports are uploaded, kept for 90 days.
+  Packaged bytes are never published, not even as a GitHub pre-release,
+  because release assets on a public repository are world-downloadable;
+  packages stay in the durable handoff store on the runner host. The build
+  number is this workflow's `run_number`. The committed `ProjectVersion` has no
+  `+<build>`; the build version lives in the provenance `release` block and
+  the release evidence. Re-runs are refused, so one build number names one
+  package. `prototype-quality-gates.yml` is unchanged and keeps no manual
+  trigger.
+- **Context:** TA-012 forbids a manual trigger on `prototype-quality-gates.yml`
+  for the older branch reason: GitHub runs a dispatched workflow from the YAML
+  at the selected ref, so an older branch that still carries the retired
+  1,440-minute single-job gate could be selected. A new workflow identity has
+  no such older copies. On 2026-10-03, 12 stale remote branches still declared
+  that retired job. The owner deleted them that day (they are preserved
+  locally as archive refs and a verified bundle), and a check after pruning
+  found zero remote branches whose workflows declare `workflow_dispatch`. This
+  decision reverses TA-012's clause that no replacement manual workflow is
+  provided.
+- **Runner trust and risk acceptance:** Release-package integrity rests on no
+  untrusted code ever running on runner 21. That runner also runs
+  owner-authored pull-request heads, including agent-written ones, under the
+  owner's OS account and GitHub credentials, against the shared engine tree,
+  DDC, handoff store, and `milestone/.git`, interleaved with release phases by
+  design. The actor clauses cannot tell the human owner from an agent or a
+  local process that uses the owner's credentials. The controls are: approval
+  for every fork pull-request workflow run from an external contributor
+  (verified 2026-10-03), the owner and same-repository predicates, and a
+  standing rule to never approve a workflow run from a fork pull request while
+  runner 21 is registered. Owner-authored pull requests, agent-written ones
+  included, are trusted code. The owner accepted this risk on 2026-10-03 for
+  internal builds that never leave the owner's control.
+- **Release branch protection:** Before the first push of a release branch, a
+  ruleset on `release/*` is created with these rules: block force-push, block
+  deletion, require the `quality-gates` status check, and no bypass actors.
+  Land `ProjectVersion` through a reviewed PR into `develop` before the cut;
+  verify the resulting head's passing `quality-gates` check before pushing
+  the release branch. Later version changes use a reviewed PR into the release
+  branch, never an unchecked direct commit. The owner checks the remote head
+  SHA against the reviewed head immediately before every dispatch: the ruleset
+  does not prevent a writer from adding commits. Do not postpone protection
+  until after the first push.
+  After any security fix to `release-packaging.yml` or
+  `scripts/ci/Invoke-ReleasePackaging.ps1`, update or delete every existing
+  `release/*` branch, because each keeps its older copy and stays
+  dispatchable.
+- **Operator rules:** Run no local engine or editor build against the runner's
+  engine root while a release dispatch is queued or running; nothing
+  serializes it, and attestation runs only at stage start. A
+  `trusted-editor-automation` job that runs between release phases relinks an
+  attested engine module, so the next package phase is expected to fail closed
+  on host-tools attestation; dispatch again.
+- **Evidence:** Issue
+  [#226](https://github.com/ShayShimoni/aetheln-online/issues/226), its design,
+  and its independent security review.
+  `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the exact predicate,
+  the guard-first step, parity with the scheduled phases, the six uploads, and
+  repository-wide allowlists for workflow files, triggers, `runs-on` labels,
+  and permissions, each with a mutation case.
+  `tests/ci/Invoke-ReleasePackaging.Tests.ps1` covers the guard and evidence
+  modes. These pins catch honest drift only; they cannot stop an approved fork
+  run or a direct push, which the settings and rules above control. The first
+  dispatched run is the operational proof and is recorded on issue #226.
+- **Alternatives:** A dispatch trigger on `prototype-quality-gates.yml`
+  (rejected: the older branch risk); a reusable workflow or composite action
+  shared with the scheduled jobs (rejected: it renames the scheduled checks and
+  breaks the preparation admission rule against job-level `uses:`); dispatch
+  inputs for the version or ref (rejected: an injection surface, and the
+  version comes from the commit); tag refs (rejected: tags mark a tested
+  commit after release QA); publishing packages as a GitHub pre-release
+  (rejected: world-downloadable on a public repository).
+- **Consequences:** One more FIFO waiter in `aetheln-engine-runner`, with the
+  same bounds. Each run reserves 64 GiB of the shared handoff cap until its
+  cleanup request is acted on. The immediate kill switch is disabling the
+  workflow; the permanent rollback is reverting it.
+- **Owner:** Issue #226.
+- **Revisit trigger:** Any package leaves the owner's control (external
+  testers, a public download, or a store), a collaborator gains write access, a
+  second matching runner is registered, or `hotfix/*` packaging is needed.
 
 ## Candidate Decisions
 

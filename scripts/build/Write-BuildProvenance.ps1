@@ -46,26 +46,7 @@ function Get-OptionalProperty($Object, [string] $Name) {
 	if ($null -eq $Property) { return @() }
 	return @($Property.Value)
 }
-function Read-ProjectVersion([string] $IniPath) {
-	# The one ProjectVersion the engine bakes into both packages. Any spelling the
-	# engine's case-insensitive ini reader could also pick up (case variants, an
-	# array operator, a second line, another section) fails closed rather than
-	# being skipped, so the recorded value is the value the build used.
-	if (-not (Test-Path -LiteralPath $IniPath -PathType Leaf)) { throw 'project_version_missing: Config/DefaultGame.ini does not exist.' }
-	$Section = $null
-	$Declarations = @()
-	foreach ($Line in ([IO.File]::ReadAllText($IniPath, [Text.Encoding]::UTF8) -split '\r?\n')) {
-		if ($Line -cmatch '^\[(?<Name>[^\]]*)\]$') { $Section = $Matches.Name; continue }
-		if ($Line -match '^\s*[-+.!]?\s*ProjectVersion\s*=') { $Declarations += [pscustomobject]@{ Section = $Section; Text = $Line } }
-	}
-	if ($Declarations.Count -eq 0) { throw 'project_version_missing: Config/DefaultGame.ini declares no ProjectVersion.' }
-	$SemVerCore = '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
-	$PreReleaseIdentifier = '(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
-	if ($Declarations.Count -ne 1 -or $Declarations[0].Section -cne '/Script/EngineSettings.GeneralProjectSettings' -or $Declarations[0].Text -cnotmatch ('^ProjectVersion=(?<Value>' + $SemVerCore + '(-' + $PreReleaseIdentifier + '(\.' + $PreReleaseIdentifier + ')*)?)\z')) {
-		throw 'project_version_invalid: Config/DefaultGame.ini must declare exactly one ProjectVersion=<SemVer without build metadata> in [/Script/EngineSettings.GeneralProjectSettings].'
-	}
-	return $Matches.Value
-}
+. (Join-Path $PSScriptRoot 'ProjectVersion.ps1')
 
 $HasBuildNumber = $PSBoundParameters.ContainsKey('BuildNumber')
 if ($HasBuildNumber -and $BuildNumber -cnotmatch '^[1-9][0-9]{0,9}\z') { throw 'build_number_invalid: -BuildNumber must be a positive integer of at most ten digits without a leading zero.' }

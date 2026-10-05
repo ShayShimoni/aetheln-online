@@ -67,7 +67,7 @@ function New-TestPortableReport {
 		'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests',
 		'ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 		'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
-		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
+		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','release-packaging-tests',
 		'board-integrity-tests','pull-request-policy-tests','release-cut-tests',
 		'psscriptanalyzer'
 	)

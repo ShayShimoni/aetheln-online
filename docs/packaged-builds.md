@@ -108,9 +108,11 @@ step.
 
 Release builds add one optional input, `-BuildNumber`, accepted only by
 `-Stage Provenance` and by `Write-BuildProvenance.ps1`. It must be a positive
-integer of at most ten digits without a leading zero. The writer then reads the
-committed `ProjectVersion` from `Config/DefaultGame.ini` of the verified clean
-`HEAD` and appends one closed `release` block after the existing properties:
+integer of at most ten digits without a leading zero. An invalid value fails as
+`build_number_invalid`, and passing it to any other stage fails as
+`build_number_stage_invalid`. The writer then reads the committed
+`ProjectVersion` from `Config/DefaultGame.ini` of the verified clean `HEAD` and
+appends one closed `release` block after the existing properties:
 
 ```json
 "release": {
@@ -123,8 +125,26 @@ committed `ProjectVersion` from `Config/DefaultGame.ini` of the verified clean
 
 The read is case-sensitive and strict: exactly one `ProjectVersion=` line in
 `[/Script/EngineSettings.GeneralProjectSettings]`, holding SemVer without build
-metadata. A missing value fails closed as `project_version_missing`, and any
-other malformed or ambiguous value as `project_version_invalid`. The committed
+metadata. Section headers are matched after trailing whitespace is trimmed, as
+the engine does. CRLF, lone CR, and LF delimit lines. Engine-recognized key
+prefixes (`~` and the `+ - . ! @ * ^` commands), case variants, and duplicate
+declarations cannot hide another version. A file with a line continuation
+(a trailing `\`), a `{...}` block, or `//` syntax fails closed rather than
+approximating joined lines or comment-dependent headers. Both the release
+guard and build-number provenance use the same reader and refuse any version
+declaration in another `Config` ini as `project_version_override`. Braces in
+another `Config` ini also fail with that reason, since engine brace removal
+can hide a version key; this conservative refusal includes unrelated braces.
+The pre-cut release verifier (`scripts/delivery/Invoke-ReleaseCut.ps1 -Stage
+Verify`) applies the same reader to `Config/DefaultGame.ini` and every other
+tracked `Config` ini read from Git at the nominated `develop` revision, never
+from the checkout; a missing `ProjectVersion` there is a violation too, since
+TA-022 lands the version in `develop` before the cut.
+A missing value fails closed as `project_version_missing`, and any other
+malformed or ambiguous value
+as `project_version_invalid`. The reader is a line-oriented approximation of
+the engine's ini parser; the release smoke evidence checks the network version
+that both packages actually log. The committed
 `ProjectVersion` never carries `+<build>`; the build number lives only in the
 provenance. Without `-BuildNumber` the document has no `release` block,
 `ProjectVersion` is not read, and the output is unchanged. `host.buildIdentity`

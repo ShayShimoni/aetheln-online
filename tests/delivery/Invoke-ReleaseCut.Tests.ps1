@@ -12,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Cutter = Join-Path $RepositoryRoot 'scripts/delivery/Invoke-ReleaseCut.ps1'
+. (Join-Path $RepositoryRoot 'scripts/build/ProjectVersion.ps1')
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('AethelnReleaseCutTests-' + [guid]::NewGuid().ToString('N'))
 $Failures = New-Object Collections.Generic.List[string]
 $CutRevision = '0123456789abcdef0123456789abcdef01234567'
@@ -46,7 +47,8 @@ function New-CleanSnapshot {
 		remoteBranches = @('release/v0.1.0')
 		developRevision = $CutRevision
 		developRun = [ordered]@{ status = 'completed'; conclusion = 'success' }
-		defaultGameIni = "[/Script/EngineSettings.GeneralProjectSettings]`nProjectID=00000000-0000-0000-0000-000000000000`nProjectName=AethelnOnline`n"
+		defaultGameIni = "[/Script/EngineSettings.GeneralProjectSettings]`nProjectID=00000000-0000-0000-0000-000000000000`nProjectName=AethelnOnline`nProjectVersion=1.0.0-alpha.1`n"
+		otherConfigIni = @()
 		items = $Items
 		openPullRequests = @([ordered]@{ number = 100; title = 'feat(ci): #2 add a check'; linkedIssues = @() })
 		# PR 52 links a Release Candidate issue and PR 53 merged into a feature
@@ -93,6 +95,12 @@ function Assert-ExitTwo {
 function Invoke-Verify {
 	param($Snapshot, [string] $Name, [hashtable] $Parameters = @{}, [switch] $Json)
 	$Path = Join-Path $FixtureRoot ($Name + '.json')
+	# The landed ProjectVersion follows a valid planned -Version, so a case that
+	# varies the version stays a one-violation case; invalid versions keep the default.
+	$Planned = if ($Parameters.ContainsKey('Version')) { [string] $Parameters.Version } else { '' }
+	if ($Planned -cmatch ('^' + (Get-ProjectVersionPattern) + '\z') -and $Snapshot.defaultGameIni -is [string]) {
+		$Snapshot.defaultGameIni = $Snapshot.defaultGameIni.Replace('ProjectVersion=1.0.0-alpha.1', "ProjectVersion=$Planned")
+	}
 	[IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $Snapshot -Depth 8))
 	$Arguments = @{ Stage = 'Verify'; Version = '1.0.0-alpha.1'; FixturePath = $Path }
 	foreach ($Key in $Parameters.Keys) { $Arguments[$Key] = $Parameters[$Key] }
@@ -164,8 +172,28 @@ try {
 		@{ Code = 'release_item_open_pr'; Subject = '#9'; Mutate = { $Snapshot.openPullRequests += , [ordered]@{ number = 101; title = 'fix(ci): late fix'; linkedIssues = @(9) } } },
 		@{ Code = 'release_item_work_not_in_cut'; Subject = '#4'; Mutate = { $Snapshot.mergedPullRequests[0].inCut = $false } },
 		@{ Code = 'release_item_work_not_in_cut'; Subject = '#9'; Mutate = { $Snapshot.mergedPullRequests[1].inCut = $false; $Snapshot.mergedPullRequests[1].baseRefName = 'main' } },
-		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=0.9.0`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni = $Snapshot.defaultGameIni.Replace('ProjectVersion=1.0.0-alpha.1', 'ProjectVersion=0.9.0') } },
 		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "  projectversion = 1.0.0`n" } },
+		# TA-022 lands the version before the cut, so a missing one is a violation.
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni = "[/Script/EngineSettings.GeneralProjectSettings]`nProjectName=AethelnOnline`n" } },
+		# Issue #226: the shared ProjectVersion reader. Each defect below hides
+		# another version or sits where the engine would read it differently.
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=1.0.0-alpha.1`nProjectVersion=0.9.0`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=1.0.0-alpha.1`nPROJECTVERSION=1.0.0-alpha.1`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "[/Script/Engine.Other]`nProjectVersion=1.0.0-alpha.1`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=1.0.0-alpha.1`n~ProjectVersion=0.9.0`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=1.0.0-alpha.1`n~+ProjectVersion=0.9.0`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "Unrelated=1`rProjectVersion=0.9.0`n" } },
+		# Refused, not parsed: a header that trailing whitespace still closes, a
+		# joined line, a // header, and braces.
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "[/Script/Engine.Other] `nProjectVersion=1.0.0-alpha.1`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=1.0.0-alpha.1`nUnrelated=1\`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "//[/Script/Engine.Other]`nProjectVersion=1.0.0-alpha.1`n" } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=1.0.0-alpha.1`nUnrelated={1}`n" } },
+		# Another tracked Config ini overrides the version, with or without a default declaration.
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config'; Mutate = { $Snapshot.defaultGameIni += "ProjectVersion=1.0.0-alpha.1`n"; $Snapshot.otherConfigIni = @("[/Script/EngineSettings.GeneralProjectSettings]`nProjectVersion=0.9.0`n") } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config'; Mutate = { $Snapshot.otherConfigIni = @("[/Script/EngineSettings.GeneralProjectSettings]`nProjectVersion=1.0.0-alpha.1`n") } },
+		@{ Code = 'release_project_version_conflict'; Subject = 'Config'; Mutate = { $Snapshot.otherConfigIni = @("[/Script/Engine.Engine]`nUnrelated=1`n", "[/Script/EngineSettings.GeneralProjectSettings]`nProject{Version}=0.9.0`n") } },
 		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.BuildNumber = '70000' } },
 		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.BuildNumber = 'abc' } },
 		# The numeric form must have exactly four parts, so the build number is digits only.
@@ -176,6 +204,10 @@ try {
 		@{ Code = 'release_version_consumer_rejects'; Subject = 'windows-file-version'; Mutate = { $Parameters.Version = '70000.0.0' } },
 		@{ Code = 'release_version_consumer_rejects'; Subject = 'build-identity'; Mutate = { $Parameters.Version = $Long } }
 	)
+	# Every engine array-operator prefix also hides a second version.
+	foreach ($Operator in '-', '+', '.', '!', '@', '*', '^') {
+		$Cases += @{ Code = 'release_project_version_conflict'; Subject = 'Config/DefaultGame.ini'; Mutate = [scriptblock]::Create("`$Snapshot.defaultGameIni += ""ProjectVersion=1.0.0-alpha.1``n$($Operator)ProjectVersion=0.9.0``n""") }
+	}
 	$Index = 0
 	foreach ($Case in $Cases) {
 		$Index++
@@ -222,7 +254,11 @@ try {
 		@{ Name = 'release over its pre-releases'; Mutate = { $Parameters.Version = '1.0.0'; $Snapshot.tags = @('v1.0.0-alpha.1', 'v1.0.0-alpha.2', 'v1.0.0-rc.1') } },
 		@{ Name = 'non-SemVer tags are ignored'; Mutate = { $Snapshot.tags += @('vfoo', 'v2', 'nightly', 'v9.0.0+5') } },
 		@{ Name = 'no tags at all'; Mutate = { $Snapshot.tags = @() } },
-		@{ Name = 'commented ProjectVersion line'; Mutate = { $Snapshot.defaultGameIni += ";ProjectVersion=0.9.0`n" } }
+		@{ Name = 'commented ProjectVersion line'; Mutate = { $Snapshot.defaultGameIni += ";ProjectVersion=0.9.0`n" } },
+		@{ Name = 'matching ProjectVersion with LF'; Mutate = { $Snapshot.defaultGameIni = "[/Script/EngineSettings.GeneralProjectSettings]`nProjectName=AethelnOnline`nProjectVersion=1.0.0-alpha.1`n" } },
+		@{ Name = 'matching ProjectVersion with CRLF'; Mutate = { $Snapshot.defaultGameIni = "[/Script/EngineSettings.GeneralProjectSettings]`r`nProjectName=AethelnOnline`r`nProjectVersion=1.0.0-alpha.1`r`n" } },
+		@{ Name = 'matching ProjectVersion with lone CR'; Mutate = { $Snapshot.defaultGameIni = "[/Script/EngineSettings.GeneralProjectSettings]`rProjectName=AethelnOnline`rProjectVersion=1.0.0-alpha.1`r" } },
+		@{ Name = 'other Config ini without a version'; Mutate = { $Snapshot.otherConfigIni = @("[/Script/Engine.Engine]`nUnrelated=1`n") } }
 	)
 	$Index = 0
 	foreach ($Case in $GreenCases) {
@@ -262,11 +298,97 @@ try {
 		$Copy = Join-Path $FixtureRoot 'not-a-repository/scripts/delivery'
 		New-Item -ItemType Directory -Path $Copy -Force | Out-Null
 		Copy-Item -LiteralPath $Cutter -Destination $Copy
+		$BuildCopy = Join-Path $FixtureRoot 'not-a-repository/scripts/build'
+		New-Item -ItemType Directory -Path $BuildCopy -Force | Out-Null
+		Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'scripts/build/ProjectVersion.ps1') -Destination $BuildCopy
 		$PreviousCeiling = $env:GIT_CEILING_DIRECTORIES
 		$env:GIT_CEILING_DIRECTORIES = $FixtureRoot
 		try { $Failed = Invoke-CutProcess @('-Stage', 'Verify', '-Version', '1.0.0-alpha.1') -Script (Join-Path $Copy 'Invoke-ReleaseCut.ps1') }
 		finally { $env:GIT_CEILING_DIRECTORIES = $PreviousCeiling }
 		Assert-ExitTwo -Result $Failed -Reason 'environment' -Name 'A failing git call'
+	}
+
+	# A valid planned -Version that differs from the landed one is refused by the
+	# comparison itself, not by the shared reader: the landed text is replaced, so it
+	# stays one canonical declaration.
+	Test-Case 'landed version differs from planned' {
+		$Snapshot = New-CleanSnapshot
+		$Snapshot.defaultGameIni = $Snapshot.defaultGameIni.Replace('ProjectVersion=1.0.0-alpha.1', 'ProjectVersion=0.9.0')
+		$Result = Invoke-Verify -Snapshot $Snapshot -Name 'landed-differs'
+		Assert-Single -Result $Result -Code 'release_project_version_conflict' -Subject 'Config/DefaultGame.ini' -Name 'A landed version other than the planned one'
+		Assert-True ($Result.Lines[0] -match 'already holds ProjectVersion=0[.]9[.]0, not 1[.]0[.]0-alpha[.]1') "The conflict must name the mismatch, not a reader refusal. Output: $($Result.Text)"
+	}
+
+	# The live snapshot reads Config ini from the nominated revision's Git objects,
+	# never from the checkout. A local repository needs no network.
+	Test-Case 'config read at the nominated revision' {
+		. (Join-Path $RepositoryRoot 'scripts/build/ProjectVersion.ps1')
+		$Repo = Join-Path $FixtureRoot 'revision-repo'
+		New-Item -ItemType Directory -Path (Join-Path $Repo 'Config/Linux') -Force | Out-Null
+		function Invoke-FixtureGit([string[]] $Arguments) {
+			$Previous = $ErrorActionPreference
+			$ErrorActionPreference = 'Continue'
+			try { $Output = @(& git -C $Repo -c user.name=fixture -c user.email=fixture@example.invalid -c core.autocrlf=false @Arguments 2>&1) }
+			finally { $ErrorActionPreference = $Previous }
+			if ($LASTEXITCODE -ne 0) { throw "fixture git $($Arguments[0]) failed: $Output" }
+			return $Output
+		}
+		$Clean = "[/Script/EngineSettings.GeneralProjectSettings]`nProjectName=AethelnOnline`n"
+		$Override = "[/Script/EngineSettings.GeneralProjectSettings]`nProjectVersion=0.9.0`n"
+		Invoke-FixtureGit @('init', '-q') | Out-Null
+		[IO.File]::WriteAllText((Join-Path $Repo 'Config/DefaultGame.ini'), $Clean)
+		[IO.File]::WriteAllText((Join-Path $Repo 'Config/Linux/LinuxGame.ini'), $Override)
+		Invoke-FixtureGit @('add', '-A') | Out-Null
+		Invoke-FixtureGit @('commit', '-q', '-m', 'A') | Out-Null
+		$RevisionA = [string] (Invoke-FixtureGit @('rev-parse', 'HEAD'))
+		Invoke-FixtureGit @('rm', '-q', 'Config/Linux/LinuxGame.ini') | Out-Null
+		Invoke-FixtureGit @('commit', '-q', '-m', 'B') | Out-Null
+		$RevisionB = [string] (Invoke-FixtureGit @('rev-parse', 'HEAD'))
+
+		# A's tracked override is refused although the checkout (B) is clean.
+		$AtA = Get-ProjectVersionGitConfig -RepositoryRoot $Repo -Revision $RevisionA
+		Assert-True (@($AtA.otherConfigIni).Count -eq 1) 'Revision A must yield its one other Config ini.'
+		$Refused = $null
+		try { Read-ProjectVersionConfig -DefaultGameContent $AtA.defaultGameIni -OtherIniContents $AtA.otherConfigIni -AllowMissing | Out-Null } catch { $Refused = $_.Exception.Message }
+		Assert-True ($Refused -ceq 'project_version_override') "Revision A's override must be refused. Got: $Refused"
+
+		# B stays clean although the checkout now carries an untracked override and a dirty default.
+		New-Item -ItemType Directory -Path (Join-Path $Repo 'Config/Linux') -Force | Out-Null
+		[IO.File]::WriteAllText((Join-Path $Repo 'Config/Linux/LinuxGame.ini'), $Override)
+		[IO.File]::WriteAllText((Join-Path $Repo 'Config/DefaultGame.ini'), $Clean + "ProjectVersion=0.9.0`n")
+		$AtB = Get-ProjectVersionGitConfig -RepositoryRoot $Repo -Revision $RevisionB
+		Assert-True (@($AtB.otherConfigIni).Count -eq 0 -and $AtB.defaultGameIni -cnotmatch 'ProjectVersion') 'Revision B must not read the checkout.'
+		Assert-True ($null -eq (Read-ProjectVersionConfig -DefaultGameContent $AtB.defaultGameIni -OtherIniContents $AtB.otherConfigIni -AllowMissing)) 'Revision B must read as having no version.'
+
+		# An unreadable revision throws without the repository path.
+		$Unreadable = $null
+		try { Get-ProjectVersionGitConfig -RepositoryRoot $Repo -Revision ('0' * 40) | Out-Null } catch { $Unreadable = $_.Exception.Message }
+		Assert-True ($Unreadable -match '^git ls-tree failed' -and $Unreadable -notmatch [regex]::Escape($FixtureRoot)) "An unreadable revision must throw a path-free git failure. Got: $Unreadable"
+	}
+
+	# A tracked ini with a UTF-8 byte-order mark reads the same from Git as from disk.
+	Test-Case 'byte-order mark in tracked config' {
+		. (Join-Path $RepositoryRoot 'scripts/build/ProjectVersion.ps1')
+		$Repo = Join-Path $FixtureRoot 'bom-repo'
+		New-Item -ItemType Directory -Path (Join-Path $Repo 'Config') -Force | Out-Null
+		$Bom = [Text.UTF8Encoding]::new($true)
+		[IO.File]::WriteAllText((Join-Path $Repo 'Config/DefaultGame.ini'), "[/Script/EngineSettings.GeneralProjectSettings]`nProjectVersion=1.0.0-alpha.1`n", $Bom)
+		[IO.File]::WriteAllText((Join-Path $Repo 'Config/DefaultEngine.ini'), "[/Script/Engine.Engine]`nUnrelated=1`n", $Bom)
+		function Invoke-BomGit([string[]] $Arguments) {
+			$Previous = $ErrorActionPreference
+			$ErrorActionPreference = 'Continue'
+			try { $Output = @(& git -C $Repo -c user.name=fixture -c user.email=fixture@example.invalid -c core.autocrlf=false @Arguments 2>&1) }
+			finally { $ErrorActionPreference = $Previous }
+			if ($LASTEXITCODE -ne 0) { throw "fixture git $($Arguments[0]) failed: $Output" }
+			return $Output
+		}
+		Invoke-BomGit @('init', '-q') | Out-Null
+		Invoke-BomGit @('add', '-A') | Out-Null
+		Invoke-BomGit @('commit', '-q', '-m', 'bom') | Out-Null
+		$Revision = [string] (Invoke-BomGit @('rev-parse', 'HEAD'))
+		$AtBom = Get-ProjectVersionGitConfig -RepositoryRoot $Repo -Revision $Revision
+		$FromGit = Read-ProjectVersionConfig -DefaultGameContent $AtBom.defaultGameIni -OtherIniContents $AtBom.otherConfigIni -AllowMissing
+		Assert-True ($FromGit -ceq (Read-ProjectVersion (Join-Path $Repo 'Config/DefaultGame.ini')) -and $FromGit -ceq '1.0.0-alpha.1') "A BOM-prefixed ini must read the same from Git and disk. Got: $FromGit"
 	}
 
 	# Usage errors exit 2 under `-File`, not the exit 1 that is reserved for violations.

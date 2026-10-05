@@ -36,7 +36,8 @@ param(
 # and never carries a local path.
 #
 # Snapshot shape: { tags: [name], remoteBranches: [name], developRevision,
-# developRun: { status, conclusion } or null, defaultGameIni, items: [{ number,
+# developRun: { status, conclusion } or null, defaultGameIni, otherConfigIni:
+# [text of every other tracked Config/**/*.ini at that revision], items: [{ number,
 # type: Issue or PullRequest, status, release }], openPullRequests: [{ number,
 # title, linkedIssues: [n] }], mergedPullRequests: [{ number, title,
 # baseRefName, mergeCommit, linkedIssues: [n], inCut }], board: { items,
@@ -48,6 +49,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/ProjectVersion.ps1')
 
 # Control characters and the Unicode line and paragraph separators.
 $UnsafeCharacters = "[\u0000-\u001f\u007f-\u009f$([char] 0x2028)$([char] 0x2029)]"
@@ -254,10 +256,20 @@ function Get-VerifyViolation {
 		Add-Violation -Code 'release_board_integrity_failed' -Subject "#$($Finding.issue)" -Detail "$($Finding.rule): $($Finding.detail)"
 	}
 
-	# The cut adds ProjectVersion; a different existing value means the ini changed under the plan.
-	$IniMatch = [regex]::Match((Get-OptionalText $Snapshot 'defaultGameIni'), '(?im)^[ \t]*ProjectVersion[ \t]*=[ \t]*(.*?)[ \t]*\r?$')
-	if ($IniMatch.Success -and $IniMatch.Groups[1].Value -cne $Version) {
-		Add-Violation -Code 'release_project_version_conflict' -Subject 'Config/DefaultGame.ini' -Detail "already holds ProjectVersion=$($IniMatch.Groups[1].Value), not $Version"
+	# TA-022 lands ProjectVersion through a reviewed PR before the cut, so it must
+	# already be present here, equal the planned version, and pass the same shared
+	# reader as packaging, including the override scan of other Config ini.
+	try {
+		$Existing = Read-ProjectVersionConfig -DefaultGameContent (Get-OptionalText $Snapshot 'defaultGameIni') -OtherIniContents ([string[]] @(Get-OptionalList $Snapshot 'otherConfigIni'))
+		if ($Existing -cne $Version -and $null -ne $Parsed) {
+			Add-Violation -Code 'release_project_version_conflict' -Subject 'Config/DefaultGame.ini' -Detail "already holds ProjectVersion=$Existing, not $Version"
+		}
+	}
+	catch {
+		$Reason = ($_.Exception.Message -split ':')[0]
+		if ($Reason -cnotin 'project_version_missing', 'project_version_invalid', 'project_version_override') { throw }
+		$Subject = if ($Reason -ceq 'project_version_override') { 'Config' } else { 'Config/DefaultGame.ini' }
+		Add-Violation -Code 'release_project_version_conflict' -Subject $Subject -Detail $Reason
 	}
 
 	# Scope is exactly the issues in Done. A Done PR card is listed and left out of the move.
@@ -411,7 +423,7 @@ function Get-LiveSnapshot {
 	$Runs = @(Get-GhJsonList @('run', 'list', '-R', $Repository, '--workflow', 'prototype-quality-gates.yml', '--branch', 'develop', '--event', 'push', '--commit', $Develop, '--limit', '20', '--json', 'status,conclusion'))
 	$Run = $Runs | Where-Object { $_.conclusion -ceq 'success' } | Select-Object -First 1
 	if (-not $Run) { $Run = $Runs | Select-Object -First 1 }
-	$Ini = (Invoke-Git @('show', ($Develop + ':Config/DefaultGame.ini'))) -join "`n"
+	$Config = Get-ProjectVersionGitConfig -RepositoryRoot $RepositoryRoot -Revision $Develop
 
 	$Items = New-Object Collections.Generic.List[object]
 	$Cursor = $null
@@ -452,7 +464,7 @@ function Get-LiveSnapshot {
 	}
 
 	return [pscustomobject]@{
-		tags = $Tags; remoteBranches = $RemoteBranches; developRevision = $Develop; developRun = $Run; defaultGameIni = $Ini
+		tags = $Tags; remoteBranches = $RemoteBranches; developRevision = $Develop; developRun = $Run; defaultGameIni = $Config.defaultGameIni; otherConfigIni = $Config.otherConfigIni
 		items = $Items.ToArray(); openPullRequests = $Open; mergedPullRequests = $Merged.ToArray()
 	}
 }
