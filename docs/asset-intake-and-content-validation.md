@@ -452,6 +452,16 @@ coordination, all four portable content-validation suites are default required
 checks in `Invoke-CiSuite.ps1`. Clean packaging or cook execution remains
 separately authority-gated.
 
+On owner pull requests that select `content-reference-validation`, the
+`trusted-content-validation` CI job runs this launcher against the live Asset
+Registry in the managed compile workspace, and `content-receipt-shadow`
+publishes a non-authoritative shadow receipt
+([TA-023](architecture-decisions.md#ta-023---separate-engine-runner-job-for-content-reference-validation)).
+That receipt claims only report integrity and the six `reference_boundary`
+checks; the other families still run, and any deterministic error fails the
+report. A green content receipt is never content approval, and it is not cook
+evidence.
+
 The comparator hashes the accepted content-validation report, build provenance,
 both staged registries, both closed manifests, and every inventory page into
 its machine-readable result. The inputs must come from the same clean source

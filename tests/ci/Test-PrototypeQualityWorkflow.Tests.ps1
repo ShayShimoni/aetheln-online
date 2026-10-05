@@ -36,12 +36,14 @@ $ShadowSelection = Get-JobBody 'ci-selection-shadow' 'quality-gates'
 $QualityGates = Get-JobBody 'quality-gates' 'change-impact'
 $ChangeImpact = Get-JobBody 'change-impact' 'trusted-candidate-compile'
 $TrustedCompile = Get-JobBody 'trusted-candidate-compile' 'trusted-editor-automation'
-$EditorAutomation = Get-JobBody 'trusted-editor-automation' 'scheduled-client-package'
+$EditorAutomation = Get-JobBody 'trusted-editor-automation' 'trusted-content-validation'
+$ContentValidation = Get-JobBody 'trusted-content-validation' 'scheduled-client-package'
 $ScheduledSmokeStart = $Workflow.IndexOf('  scheduled-packaged-smoke:', [StringComparison]::Ordinal)
 Assert-True ($ScheduledSmokeStart -ge 0) "Workflow job 'scheduled-packaged-smoke' should exist."
 $ScheduledSmoke = Get-JobBody 'scheduled-packaged-smoke' 'visual-proof'
 $VisualProof = Get-JobBody 'visual-proof' 'portable-receipt-shadow'
-$PortableReceipt = Get-JobBody 'portable-receipt-shadow' 'native-receipt-shadow'
+$PortableReceipt = Get-JobBody 'portable-receipt-shadow' 'content-receipt-shadow'
+$ContentReceipt = Get-JobBody 'content-receipt-shadow' 'native-receipt-shadow'
 $NativeReceipt = Get-JobBody 'native-receipt-shadow' 'unreal-receipt-shadow'
 $UnrealReceipt = Get-JobBody 'unreal-receipt-shadow' 'visual-receipt-shadow'
 $VisualReceipt = Get-JobBody 'visual-receipt-shadow' 'ci-acceptance-shadow'
@@ -75,8 +77,8 @@ Assert-True ($Workflow -notmatch 'workflow_dispatch') 'Workflow must not expose 
 Assert-True ($Workflow -notmatch 'cancelled\(\)' -and $Workflow -notmatch 'failure\(\)') 'Workflow must not use status functions that bypass a failed or skipped prerequisite.'
 $ExpectedActionManifest = '[{"uses":"actions/checkout","revision":"3d3c42e5aac5ba805825da76410c181273ba90b1"},{"uses":"actions/download-artifact","revision":"d3f86a106a0bac45b974a628896c90dbdf5c8093"},{"uses":"actions/upload-artifact","revision":"043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"}]'
 Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape($ExpectedActionManifest)) -Expected 1 -Message 'The aggregate identity manifest must exactly bind the reviewed checkout, download, and upload action revisions.'
-Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape("uses: $DownloadAction")) -Expected 10 -Message 'Package 3C must contain exactly ten reviewed exact-ID artifact downloads.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^          merge-multiple: true\r?$' -Expected 10 -Message 'Every exact-ID artifact download must flatten its single archive into the validated destination root.'
+Assert-MatchCount -Text $Workflow -Pattern ([regex]::Escape("uses: $DownloadAction")) -Expected 12 -Message 'Package 3C must contain exactly twelve reviewed exact-ID artifact downloads.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^          merge-multiple: true\r?$' -Expected 12 -Message 'Every exact-ID artifact download must flatten its single archive into the validated destination root.'
 Assert-MatchCount -Text $Workflow -Pattern '(?m)^    if: always\(\)(?: && github\.event_name == ''pull_request'' && false)?\r?$' -Expected 2 -Message 'Only the hosted aggregate and dormant fail-closed authority boundary may use job-level always().'
 Assert-True ($AcceptanceShadow -match '(?m)^    if: always\(\)\r?$' -and $AcceptanceShadow -notmatch '(?m)^    continue-on-error:') 'The acceptance shadow must run after every dependency while unexpected reconciliation failures remain visible.'
 Assert-True ($AcceptanceShadow -match "Write-Warning \('acceptance_producer_gap:' \+" -and $AcceptanceShadow -notmatch "throw \('acceptance_producer_gap:") 'A selected unsupported producer must publish a green no-acceptance diagnostic rather than fail an otherwise healthy pull request.'
@@ -268,7 +270,7 @@ foreach ($WorkflowSource in @($Workflow, $VisualWorkflow)) {
 		Assert-True ($ActionIdentity -cmatch '^actions/[a-z0-9-]+@[0-9a-f]{40}$') "Remote action '$ActionIdentity' must use one full lowercase commit SHA."
 	}
 }
-Assert-MatchCount -Text $Workflow -Pattern "(?m)^\s+uses: $DownloadActionPattern\r?$" -Expected 10 -Message 'Package 3C must use the reviewed downloader exactly for two direct bindings per receipt, the aggregate selector binding, and the hard-disabled authority boundary.'
+Assert-MatchCount -Text $Workflow -Pattern "(?m)^\s+uses: $DownloadActionPattern\r?$" -Expected 12 -Message 'Package 3C must use the reviewed downloader exactly for two direct bindings per receipt, the aggregate selector binding, and the hard-disabled authority boundary.'
 
 function Assert-AllPowerShellRunBlocksParse([string] $Text, [string] $Name, [int] $ExpectedCount) {
 	$Lines = $Text -split "\r?\n"
@@ -299,7 +301,7 @@ function Assert-AllPowerShellRunBlocksParse([string] $Text, [string] $Name, [int
 	}
 	Assert-True ($ParsedCount -eq $ExpectedCount) "$Name must contain exactly $ExpectedCount reviewed literal PowerShell run blocks; found $ParsedCount."
 }
-Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 23
+Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 28
 Assert-AllPowerShellRunBlocksParse -Text $VisualWorkflow -Name 'Visual workflow' -ExpectedCount 2
 
 Assert-True ($VisualWorkflow -match '(?m)^  workflow_call:\r?$') 'Visual validation must expose an additive reusable workflow entry point.'
@@ -474,6 +476,59 @@ Assert-True ($AutomationOutcome.Contains('AETHELN_CONTROL_OUTCOME: ${{ steps.edi
 Assert-True ($AutomationOutcome.Contains('AETHELN_UPLOAD_OUTCOME: ${{ steps.automation_artifact.outcome }}') -and $AutomationOutcome.Contains("'automation_report_upload_failed'") -and $AutomationOutcome.Contains('Write-Output (''unreal_automation_outcome reason='' + $Reason)') -and [regex]::Matches($AutomationOutcome, 'Write-Output').Count -eq 1) 'The outcome step must expose the first automation failure as one fixed line.'
 Assert-True ($UnrealReceipt.Contains('AETHELN_AUTOMATION_REASON: ${{ needs.trusted-editor-automation.outputs.automation_reason }}') -and $UnrealReceipt.Contains('Write-Output (''unreal_automation_outcome reason='' + $AutomationReason)') -and $UnrealReceipt.IndexOf('unreal_automation_outcome reason=') -lt $UnrealReceipt.IndexOf("throw 'unreal_raw_artifact_binding_invalid'")) 'The unreal publisher must print the fixed automation reason before its binding check.'
 Assert-True ($UntrackedInputQuery.Count -eq 1 -and $AutomationResidue.Contains("'" + $UntrackedInputQuery[0].Groups[1].Value + "'")) 'Residue cleanup must use exactly the untracked-input query that the next managed sync enforces.'
+
+# TA-023: content-reference-validation is a separate owner-only engine job after
+# the editor job, selected only by the accepted selector. It runs the launcher
+# from the managed workspace without a control checkout, re-sync, or lease, so
+# it verifies the exact clean revision first and fails closed otherwise.
+Assert-True ($ContentValidation -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - trusted-editor-automation\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      needs\.ci-selection-shadow\.outputs\.content_reference_validation_required == 'true' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Content validation must run only after the editor job, when selected, under the same owner and same-repository trust.'
+Assert-True ($ContentValidation -match '(?m)^    timeout-minutes: 32\r?$' -and $ContentValidation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $ContentValidation -notmatch 'needs\.[a-z-]+\.result|always\(\)') 'Content validation must have its own 32-minute ceiling, join the FIFO engine queue, and add no status bypass.'
+Assert-True ($ContentValidation -notmatch 'actions/checkout@|EngineRunnerHostLease|Sync-EditorAutomationWorkspace|-Mode |Build\.bat') 'Content validation takes no control checkout, lease, or re-sync and never invokes the engine gate or Build.bat directly.'
+foreach ($Binding in @(
+	'content_artifact_id: ${{ steps.content_artifact.outputs.artifact-id }}',
+	'content_artifact_name: ${{ steps.content_identity.outputs.artifact_name }}',
+	'content_artifact_digest: sha256:${{ steps.content_artifact.outputs.artifact-digest }}',
+	'content_sha256: ${{ steps.content_identity.outputs.evidence_sha256 }}',
+	'content_size_bytes: ${{ steps.content_identity.outputs.evidence_size_bytes }}',
+	'content_reason: ${{ steps.content_outcome.outputs.reason }}'
+)) {
+	Assert-True ($ContentValidation.Contains($Binding)) "trusted-content-validation must expose exact content artifact/file binding '$Binding'."
+}
+$ContentRun = [regex]::Match($ContentValidation, '(?ms)^      - name: Run content validation launcher\r?\n.*?(?=^      - |^      # )').Value
+$ContentResidue = [regex]::Match($ContentValidation, '(?ms)^      - name: Clear content-scan input residue\r?\n.*?(?=^      - )').Value
+$ContentBind = [regex]::Match($ContentValidation, '(?ms)^      - name: Bind content validation report\r?\n.*?(?=^      - )').Value
+$ContentUpload = [regex]::Match($ContentValidation, '(?ms)^      - name: Upload content validation report\r?\n.*?(?=^      - |^      # )').Value
+$ContentOutcome = [regex]::Match($ContentValidation, '(?ms)^      - name: Report content validation outcome\r?\n.*?(?=\r?\n\r?\n|\z)').Value
+Assert-True ($ContentRun -and $ContentResidue -and $ContentBind -and $ContentUpload -and $ContentOutcome) 'Content validation must declare every reviewed step.'
+$ContentSuccess = "if: steps.content_run.outcome == 'success' && steps.content_residue.outcome == 'success'"
+foreach ($Step in @(
+	@{ Name='launch'; Body=$ContentRun; Id='content_run'; If=$null; Timeout='25' },
+	@{ Name='residue cleanup'; Body=$ContentResidue; Id='content_residue'; If=$null; Timeout='1' },
+	@{ Name='bind'; Body=$ContentBind; Id='content_identity'; If=$ContentSuccess; Timeout='1' },
+	@{ Name='upload'; Body=$ContentUpload; Id='content_artifact'; If=($ContentSuccess + " && steps.content_identity.outcome == 'success'"); Timeout='1' },
+	@{ Name='outcome report'; Body=$ContentOutcome; Id='content_outcome'; If=$null; Timeout='1' }
+)) {
+	$Body = [string] $Step.Body
+	Assert-True ($Body -match ('(?m)^        id: ' + $Step.Id + '\r?$')) "The content $($Step.Name) step must carry id '$($Step.Id)'."
+	if ($null -eq $Step.If) { Assert-True ($Body -notmatch '(?m)^        if:') "The content $($Step.Name) step must not carry its own condition." }
+	else { Assert-True ($Body -match ('(?m)^        ' + [regex]::Escape($Step.If) + '\r?$') -and [regex]::Matches($Body, '(?m)^        if:').Count -eq 1) "The content $($Step.Name) step must use exactly the reviewed condition." }
+	Assert-True ($Body -match ('(?m)^        timeout-minutes: ' + $Step.Timeout + '\r?$')) "The content $($Step.Name) step must be bounded to $($Step.Timeout) minutes."
+	Assert-True ($Body -match '(?m)^        continue-on-error: true\r?$') "The content $($Step.Name) step must continue on error so the outcome step reports it."
+}
+Assert-True ($ContentRun.Contains("Join-Path `$Root 'scripts\content\Invoke-ContentValidation.ps1'") -and $ContentRun.Contains("'-BuildTimeoutSeconds', '900', '-TimeoutSeconds', '600'") -and $ContentRun.Contains("'-EngineRoot', ('`"' + `$env:AETHELN_ENGINE_ROOT.TrimEnd('\') + '`"')") -and $ContentRun.Contains("`$OutputDirectory = Join-Path `$Root 'TestResults\content-validation-`${{ github.run_id }}-`${{ github.run_attempt }}'")) 'The launcher must run from the managed workspace with the explicit 15-minute build and 10-minute commandlet bounds into a fresh run/attempt output directory.'
+Assert-True ($ContentRun -match '-RedirectStandardOutput' -and $ContentRun -match '-RedirectStandardError' -and [regex]::Matches($ContentRun, 'Write-Output').Count -eq 3 -and $ContentRun.Contains("Write-Output ('content_validation exit=' + `$Launched.ExitCode)") -and $ContentRun.Contains('::add-mask::$env:AETHELN_ENGINE_ROOT') -and $ContentRun.Contains('::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT')) 'Launcher output must stay in runner-local files; the step prints only the two masks and the exit code.'
+$ContentRevisionGate = $ContentRun.IndexOf("Exit-Content 'content_workspace_dirty'")
+Assert-True ($ContentRun.Contains("if ((Get-WorkspaceGitText 'rev-parse HEAD').Trim() -cne `$env:GITHUB_SHA) { Exit-Content 'content_workspace_revision_changed' }") -and $ContentRevisionGate -ge 0 -and $ContentRevisionGate -lt $ContentRun.IndexOf('Invoke-ContentValidation.ps1') -and $ContentRun.Contains('''--no-replace-objects --no-optional-locks -C "'' + $Root + ''" '' + $Arguments')) 'The launch must verify the exact clean managed revision with the managed sync git flags before the launcher starts.'
+Assert-True ($ContentResidue.Contains("'" + $UntrackedInputQuery[0].Groups[1].Value + "'") -and $ContentResidue.Contains('''--no-replace-objects --no-optional-locks -C "'' + $Root + ''" '' + $Query')) 'Content residue cleanup must use exactly the untracked-input query and git flags of the managed sync.'
+$StopContent = 'function Exit-Content([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }'
+foreach ($Step in @($ContentRun, $ContentResidue, $ContentBind)) {
+	Assert-True ($Step.Contains($StopContent) -and $Step -notmatch "\bthrow '") 'Every content failure must record its fixed reason before it stops.'
+}
+Assert-True ($ContentBind -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $ContentBind.Contains('artifact_name=content-validation-report') -and $ContentBind.Contains("Exit-Content 'content_report_size_invalid'")) 'The content report must be bound with the portable SHA-256 implementation and the 4 MiB evidence limit.'
+Assert-True ($ContentUpload -match '(?m)^          name: content-validation-report\r?$' -and $ContentUpload.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/content-validation-report.json')) 'The content report upload must be one exact run/attempt/job-scoped file.'
+Assert-True ($ContentOutcome.Contains("'content_report_upload_failed'") -and $ContentOutcome.Contains('Write-Output (''content_validation_outcome reason='' + $Reason)') -and [regex]::Matches($ContentOutcome, 'Write-Output').Count -eq 1) 'The content outcome step must expose the first failure as one fixed line.'
+Assert-True ($ContentReceipt.Contains('AETHELN_CONTENT_REASON: ${{ needs.trusted-content-validation.outputs.content_reason }}') -and $ContentReceipt.IndexOf('content_validation_outcome reason=') -lt $ContentReceipt.IndexOf("throw 'content_raw_artifact_binding_invalid'")) 'The content publisher must print the fixed content reason before its binding check.'
+Assert-True ($ContentReceipt -match "(?ms)^      - name: Download exact content evidence\r?\n        if: needs\.trusted-content-validation\.outputs\.content_artifact_id != ''\r?\n") 'A missing content artifact must skip the download so the publisher fails at its raw binding check.'
 
 function Get-WorkflowStepScript([string] $Step) {
 	$Run = [regex]::Match($Step, '(?ms)^        run: \|\r?\n(?<body>.*)\z')
@@ -731,6 +786,34 @@ try {
 	Assert-True (@($Residue | Where-Object { Test-Path -LiteralPath (Join-Path $ResidueRepo $_) }).Count -eq 0 -and @($Retained | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ResidueRepo $_)) }).Count -eq 0) 'Residue cleanup must remove only untracked compile-input files.'
 	$Repeated = Invoke-AutomationStepFixture $AutomationResidue
 	Assert-True ($null -eq $Repeated.failure -and (@($Repeated.output) -join "`n") -ceq 'automation_input_residue removed=0') 'Residue cleanup must be idempotent.'
+	# The content job clears the same residue set with its own fixed vocabulary.
+	foreach ($Relative in $Residue) {
+		$Path = Join-Path $ResidueRepo $Relative
+		$null = New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force
+		[IO.File]::WriteAllText($Path, 'editor output')
+	}
+	$ContentCleared = Invoke-AutomationStepFixture $ContentResidue
+	Assert-True ($null -eq $ContentCleared.failure -and (@($ContentCleared.output) -join "`n") -ceq 'content_input_residue removed=3' -and @($Residue | Where-Object { Test-Path -LiteralPath (Join-Path $ResidueRepo $_) }).Count -eq 0 -and @($Retained | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ResidueRepo $_)) }).Count -eq 0) 'Content residue cleanup must remove only untracked compile-input files and report only the count.'
+	$ContentRepeated = Invoke-AutomationStepFixture $ContentResidue
+	Assert-True ($null -eq $ContentRepeated.failure -and (@($ContentRepeated.output) -join "`n") -ceq 'content_input_residue removed=0') 'Content residue cleanup must be idempotent.'
+
+	# The content outcome reports the first failed step's fixed reason, a fixed
+	# fallback for an unrecorded or malformed one, and 'none' after success.
+	foreach ($OutcomeCase in @(
+		@{ env=@{ AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='content_workspace_revision_changed'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='content_workspace_revision_changed' },
+		@{ env=@{ AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='C:\leak path'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='content_validation_interrupted' },
+		@{ env=@{ AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='content_validation_failed'; AETHELN_RESIDUE_OUTCOME='failure'; AETHELN_RESIDUE_REASON='content_input_residue_remaining'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='content_validation_failed' },
+		@{ env=@{ AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='failure'; AETHELN_RESIDUE_REASON='content_input_residue_remaining'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='content_input_residue_remaining' },
+		@{ env=@{ AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='failure' }; expected='content_report_upload_failed' },
+		@{ env=@{ AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='success' }; expected='none' }
+	)) {
+		$OutcomeNames = @('AETHELN_RUN_OUTCOME', 'AETHELN_RUN_REASON', 'AETHELN_RESIDUE_OUTCOME', 'AETHELN_RESIDUE_REASON', 'AETHELN_BIND_OUTCOME', 'AETHELN_BIND_REASON', 'AETHELN_UPLOAD_OUTCOME')
+		foreach ($Name in $OutcomeNames) { [Environment]::SetEnvironmentVariable($Name, [string] $OutcomeCase.env[$Name]) }
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		$Outcome = Invoke-AutomationStepFixture $ContentOutcome
+		foreach ($Name in $OutcomeNames) { [Environment]::SetEnvironmentVariable($Name, $null) }
+		Assert-True ($null -eq $Outcome.failure -and (@($Outcome.output) -join "`n") -ceq ('content_validation_outcome reason=' + $OutcomeCase.expected) -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq ('reason=' + $OutcomeCase.expected + "`n")) "The content outcome must be '$($OutcomeCase.expected)'."
+	}
 
 	# The editor target reaches Build.bat only as a Win64 build through the
 	# bounded wrapper; Linux stays server-only.
@@ -756,6 +839,59 @@ try {
 			Assert-True (-not (Test-Path -LiteralPath $EditorResultPath) -and -not (Test-Path -LiteralPath (Join-Path $EditorEvidence 'build.log'))) 'Editor target must be rejected on Linux before Build.bat runs.'
 		}
 	}
+
+	# TA-023 content launch. A moved, dirty, or unreadable managed workspace stops
+	# before the launcher; the launcher gets the explicit bounds and a fresh
+	# run/attempt output directory, its output stays in runner-local files, a
+	# passing report is copied to runner temp, and the output directory is
+	# removed after every launch.
+	$ContentManaged = Join-Path $AutomationFixtureRoot 'content-managed'
+	$null = New-Item -ItemType Directory -Path (Join-Path $ContentManaged 'scripts\content')
+	[IO.File]::WriteAllText((Join-Path $ContentManaged '.gitignore'), "TestResults/`n")
+	[IO.File]::WriteAllText((Join-Path $ContentManaged 'scripts\content\Invoke-ContentValidation.ps1'), "param([string] `$EngineRoot, [string] `$OutputPath, [int] `$TimeoutSeconds, [int] `$BuildTimeoutSeconds)`n[IO.File]::WriteAllText((Join-Path `$PSScriptRoot '..\..\TestResults\launcher-arguments.txt'), (`$EngineRoot + '|' + `$OutputPath + '|' + `$BuildTimeoutSeconds + '|' + `$TimeoutSeconds))`nif (`$env:AETHELN_FIXTURE_CONTENT_REPORT) { [IO.File]::WriteAllText(`$OutputPath, `$env:AETHELN_FIXTURE_CONTENT_REPORT) }`nWrite-Output ('launcher output ' + `$OutputPath)`nexit [int] `$env:AETHELN_FIXTURE_CONTENT_EXIT`n")
+	Invoke-AutomationFixtureGit $ContentManaged @('init', '-q')
+	Invoke-AutomationFixtureGit $ContentManaged @('add', '-A')
+	Invoke-AutomationFixtureGit $ContentManaged @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
+	$ContentHead = ([string] (& git -C $ContentManaged rev-parse HEAD)).Trim()
+	$ContentNotRepository = Join-Path $AutomationFixtureRoot 'content-not-a-repository'
+	$null = New-Item -ItemType Directory -Path $ContentNotRepository
+	$ContentOutputDirectory = Join-Path $ContentManaged 'TestResults\content-validation-1-1'
+	$ContentArguments = Join-Path $ContentManaged 'TestResults\launcher-arguments.txt'
+	$ContentCopiedReport = Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job\content-validation-report.json'
+	try {
+		foreach ($ContentCase in @(
+			@{ name='moved workspace'; root=$ContentManaged; sha=('f' * 40); stray=$false; existing=$false; report=''; exit='0'; reason='content_workspace_revision_changed'; launched=$false },
+			@{ name='dirty workspace'; root=$ContentManaged; sha=$ContentHead; stray=$true; existing=$false; report=''; exit='0'; reason='content_workspace_dirty'; launched=$false },
+			@{ name='unreadable workspace'; root=$ContentNotRepository; sha=$ContentHead; stray=$false; existing=$false; report=''; exit='0'; reason='content_workspace_query_failed'; launched=$false },
+			@{ name='existing output directory'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$true; report=''; exit='0'; reason='content_output_directory_exists'; launched=$false },
+			@{ name='failed launcher'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$false; report='{"result":"failed"}'; exit='1'; reason='content_validation_failed'; launched=$true },
+			@{ name='missing report'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$false; report=''; exit='0'; reason='content_report_missing'; launched=$true },
+			@{ name='passing launcher'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$false; report='{"result":"non_promotion"}'; exit='0'; reason=$null; launched=$true }
+		)) {
+			foreach ($Stale in @($ContentArguments, $ContentCopiedReport)) { if (Test-Path -LiteralPath $Stale) { Remove-Item -LiteralPath $Stale -Force } }
+			$StrayPath = Join-Path $ContentManaged 'Stray.txt'
+			if ($ContentCase.stray) { [IO.File]::WriteAllText($StrayPath, 'stray') } elseif (Test-Path -LiteralPath $StrayPath) { Remove-Item -LiteralPath $StrayPath -Force }
+			if ($ContentCase.existing) { $null = New-Item -ItemType Directory -Path $ContentOutputDirectory -Force }
+			$env:AETHELN_MANAGED_COMPILE_ROOT = $ContentCase.root
+			$env:GITHUB_SHA = $ContentCase.sha
+			$env:AETHELN_FIXTURE_CONTENT_REPORT = $ContentCase.report
+			$env:AETHELN_FIXTURE_CONTENT_EXIT = $ContentCase.exit
+			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+			$Launched = Invoke-AutomationStepFixture $ContentRun
+			$ExpectedOutput = if ($null -eq $ContentCase.reason) { '' } else { 'reason=' + $ContentCase.reason + "`n" }
+			$Visible = (@($Launched.output | Where-Object { -not $_.StartsWith('::add-mask::') }) -join "`n")
+			Assert-True ($Launched.failure -ceq $ContentCase.reason -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput) "The content $($ContentCase.name) case must record '$($ContentCase.reason)' (actual '$($Launched.failure)')."
+			Assert-True ((Test-Path -LiteralPath $ContentArguments) -eq $ContentCase.launched -and ($ContentCase.launched -or $Visible -ceq '') -and ($Visible -notmatch 'launcher output')) "The content $($ContentCase.name) case must start the launcher only after the workspace gate and keep its output off the log."
+			if ($ContentCase.launched) {
+				Assert-True ($Visible -ceq ('content_validation exit=' + $ContentCase.exit) -and [IO.File]::ReadAllText($ContentArguments) -ceq ($env:AETHELN_ENGINE_ROOT + '|' + (Join-Path $ContentOutputDirectory 'content-validation-report.json') + '|900|600') -and -not (Test-Path -LiteralPath $ContentOutputDirectory)) "The content $($ContentCase.name) case must pass the explicit bounds and fresh output path, print only the exit code, and remove the output directory."
+			}
+			Assert-True ((Test-Path -LiteralPath $ContentCopiedReport) -eq ($null -eq $ContentCase.reason)) "The content $($ContentCase.name) case must copy only a passing launcher's report to runner temp."
+			if ($ContentCase.existing) { Remove-Item -LiteralPath $ContentOutputDirectory -Force }
+		}
+		Assert-True ([IO.File]::ReadAllText($ContentCopiedReport) -ceq '{"result":"non_promotion"}') 'The copied content report must keep the launcher report bytes.'
+	} finally {
+		Remove-Item Env:AETHELN_FIXTURE_CONTENT_REPORT, Env:AETHELN_FIXTURE_CONTENT_EXIT -ErrorAction SilentlyContinue
+	}
 } finally {
 	foreach ($Name in $PreviousAutomationEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $PreviousAutomationEnvironment[$Name]) }
 	Remove-Item -LiteralPath $AutomationFixtureRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -772,6 +908,8 @@ Assert-True ($EditorAutomation -match '(?m)^        id: automation_artifact\r?$'
 # publishes one nonce-bound receipt directory, and exposes only the upload
 # action's direct artifact binding. They never acquire engine-runner authority.
 $ReceiptContracts = @(
+	# The content publisher consumes the raw report of the separate content validation job.
+	@{ Name='content-receipt-shadow'; Body=$ContentReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.content_reference_validation_required == 'true'"; Producer='trusted-content-validation'; ArtifactOutput='content_artifact_id'; Key='content'; RawName="'content-validation-report'"; Evidence='content' },
 	@{ Name='portable-receipt-shadow'; Body=$PortableReceipt; Predicate="needs\.ci-selection-shadow\.outputs\.portable_required == 'true'"; Producer='quality-gates'; ArtifactOutput='report_artifact_id'; Key='portable'; RawName="'ci-report'"; Evidence='portable' },
 	# The native publisher proves native-client-server-compile and controller-operational-proof from one compile report, so either selection runs it.
 	@{ Name='native-receipt-shadow'; Body=$NativeReceipt; Predicate="\(needs\.ci-selection-shadow\.outputs\.native_client_server_compile_required == 'true' \|\| needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required == 'true'\)"; Producer='trusted-candidate-compile'; ArtifactOutput='report_artifact_id'; Key='native'; RawName="'engine-runner-compile-report'"; Evidence='native' },
@@ -792,6 +930,7 @@ Assert-True ($WorkflowLiveList -ceq $BuilderLiveList) 'Workflow aggregate readin
 # The aggregate binds the native receipt when either native obligation is selected; any other selector output pair must still fail closed.
 Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_OPERATIONAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.controller_operational_proof_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$NativeProducerRequired \`$env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow'" -and $AcceptanceShadow -match "\`$NativeProducerRequired = if \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true'\) \{ 'true' \} elseif \(\`$env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and \`$env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false'\) \{ 'false' \} else \{ 'invalid' \}") 'The aggregate must bind the native receipt for either native obligation and reject any other selector output pair.'
 Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_UNREAL_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.unreal_editor_automation_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$env:AETHELN_UNREAL_REQUIRED \`$env:AETHELN_UNREAL_RESULT 'unreal' 'unreal-receipt-shadow'" -and $AcceptanceShadow.IndexOf("'portable' 'portable-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'unreal' 'unreal-receipt-shadow'") -and $AcceptanceShadow.IndexOf("'unreal' 'unreal-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'visual' 'visual-receipt-shadow'")) 'The aggregate must bind the unreal receipt from its own selector output in key order.'
+Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_CONTENT_REQUIRED: \$\{\{ needs\.ci-selection-shadow\.outputs\.content_reference_validation_required \}\}\r?$' -and $AcceptanceShadow -match "Add-ProducerBinding \`$env:AETHELN_CONTENT_REQUIRED \`$env:AETHELN_CONTENT_RESULT 'content' 'content-receipt-shadow'" -and $AcceptanceShadow.IndexOf("'content' 'content-receipt-shadow'") -lt $AcceptanceShadow.IndexOf("'native' 'native-receipt-shadow'")) 'The aggregate must bind the content receipt from its own selector output first in key order.'
 
 foreach ($Receipt in $ReceiptContracts) {
 	$Body = [string] $Receipt.Body
@@ -828,7 +967,7 @@ Assert-True ($AcceptanceShadow -match '(?m)^          AETHELN_BASE_REVISION: \$\
 $AggregateNeeds = [regex]::Match($AcceptanceShadow, '(?ms)^    needs:\r?\n(?<needs>(?:      - [a-z0-9-]+\r?\n)+)')
 Assert-True $AggregateNeeds.Success 'Acceptance aggregation must declare an exact direct-needs list.'
 $ActualAggregateNeeds = @([regex]::Matches($AggregateNeeds.Groups['needs'].Value, '(?m)^      - (?<job>[a-z0-9-]+)\r?$') | ForEach-Object { [string] $_.Groups['job'].Value })
-$ExpectedAggregateNeeds = @('ci-selection-shadow','quality-gates','change-impact','trusted-candidate-compile','trusted-editor-automation','scheduled-client-package','scheduled-server-package','scheduled-provenance-validation','scheduled-packaged-smoke','visual-proof','portable-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')
+$ExpectedAggregateNeeds = @('ci-selection-shadow','quality-gates','change-impact','trusted-candidate-compile','trusted-editor-automation','trusted-content-validation','scheduled-client-package','scheduled-server-package','scheduled-provenance-validation','scheduled-packaged-smoke','visual-proof','portable-receipt-shadow','content-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')
 Assert-True (($ActualAggregateNeeds -join ',') -ceq ($ExpectedAggregateNeeds -join ',')) 'Acceptance aggregation must directly need every reviewed producer and receipt publisher exactly once.'
 foreach ($Output in @(
 	'complete: ${{ steps.reconcile.outputs.complete }}',
@@ -845,7 +984,7 @@ Assert-True ($AcceptanceShadow -match "(?m)^        uses: $DownloadActionPattern
 foreach ($Script in @('scripts/ci/New-CiAcceptanceAggregateContext.ps1','scripts/ci/ci-acceptance-requirements.json','scripts/ci/Invoke-CiAcceptanceAggregate.ps1')) {
 	Assert-True ($AcceptanceShadow -match [regex]::Escape($Script)) "Acceptance aggregation must invoke exact reviewed input '$Script'."
 }
-foreach ($Publisher in @('portable-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')) {
+foreach ($Publisher in @('portable-receipt-shadow','content-receipt-shadow','native-receipt-shadow','unreal-receipt-shadow','visual-receipt-shadow')) {
 	Assert-True ($AcceptanceShadow -match [regex]::Escape($Publisher)) "Acceptance aggregation must bind direct output and job identity for '$Publisher'."
 }
 Assert-True ($AcceptanceShadow -match 'if \(\$env:AETHELN_SELECTOR_READY -ceq ''false''\)' -and $AcceptanceShadow -match 'elseif \(\$env:AETHELN_SELECTOR_READY -ceq ''true''\)' -and $AcceptanceShadow -match "throw 'aggregate_ready_invalid'") 'Acceptance reconciliation must distinguish exact unsupported-gap, supported-aggregate, and invalid selector readiness states.'
@@ -877,6 +1016,7 @@ $ReconcileEnvironment = @{
 	AETHELN_SELECTOR_ARTIFACT_NAME = 'ci-selection-shadow-1-1-' + $ReconcileNonce
 	AETHELN_SELECTOR_ARTIFACT_DIGEST = 'sha256:' + ('d' * 64)
 	AETHELN_PORTABLE_REQUIRED = 'true'
+	AETHELN_CONTENT_REQUIRED = 'false'
 	AETHELN_NATIVE_REQUIRED = 'false'
 	AETHELN_OPERATIONAL_REQUIRED = 'false'
 	AETHELN_UNREAL_REQUIRED = 'false'
@@ -888,6 +1028,7 @@ $ReconcileEnvironment = @{
 	AETHELN_NATIVE_RESULT = 'skipped'
 	AETHELN_UNREAL_RESULT = 'skipped'
 	AETHELN_VISUAL_RESULT = 'skipped'
+	AETHELN_CONTENT_RESULT = 'skipped'
 	GITHUB_WORKSPACE = Join-Path $ReconcileRoot 'workspace'
 	GITHUB_OUTPUT = Join-Path $ReconcileRoot 'github-output.txt'
 }
@@ -903,13 +1044,15 @@ $PreviousReconcileEnvironment = @{}
 foreach ($Name in $ReconcileEnvironment.Keys) { $PreviousReconcileEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
 try {
 	$null = New-Item -ItemType Directory -Path (Join-Path $ReconcileEnvironment.GITHUB_WORKSPACE 'scripts/ci')
-	[IO.File]::WriteAllText((Join-Path $ReconcileEnvironment.GITHUB_WORKSPACE 'scripts/ci/New-CiAcceptanceAggregateContext.ps1'), "[pscustomobject]@{ mode = 'Gap'; acceptedControllerUnavailable = `$false; attemptAnchor = [pscustomobject]@{ nonce = `$env:AETHELN_SELECTOR_NONCE }; selectedUnsupported = @('content-reference-validation') }`n")
+	[IO.File]::WriteAllText((Join-Path $ReconcileEnvironment.GITHUB_WORKSPACE 'scripts/ci/New-CiAcceptanceAggregateContext.ps1'), "[pscustomobject]@{ mode = 'Gap'; acceptedControllerUnavailable = `$false; attemptAnchor = [pscustomobject]@{ nonce = `$env:AETHELN_SELECTOR_NONCE }; selectedUnsupported = @('clean-package-provenance-smoke') }`n")
 	foreach ($GapCase in @(
 		@{ Name = 'a skipped portable receipt'; Reason = 'producer_direct_binding_invalid:portable'; Overrides = @{ AETHELN_PORTABLE_RESULT = 'skipped' } },
 		@{ Name = 'a portable receipt without its direct artifact binding'; Reason = 'producer_direct_binding_invalid:portable'; Overrides = @{ AETHELN_PORTABLE_ARTIFACT_ID = '' } },
 		@{ Name = 'a skipped native receipt'; Reason = 'producer_direct_binding_invalid:native'; Overrides = @{ AETHELN_NATIVE_REQUIRED = 'true' } },
 		@{ Name = 'a skipped unreal receipt'; Reason = 'producer_direct_binding_invalid:unreal'; Overrides = @{ AETHELN_UNREAL_REQUIRED = 'true' } },
-		@{ Name = 'a skipped visual receipt'; Reason = 'producer_direct_binding_invalid:visual'; Overrides = @{ AETHELN_VISUAL_REQUIRED = 'true' } }
+		@{ Name = 'a skipped visual receipt'; Reason = 'producer_direct_binding_invalid:visual'; Overrides = @{ AETHELN_VISUAL_REQUIRED = 'true' } },
+		@{ Name = 'a skipped content receipt'; Reason = 'producer_direct_binding_invalid:content'; Overrides = @{ AETHELN_CONTENT_REQUIRED = 'true' } },
+		@{ Name = 'an unset content selector output'; Reason = 'producer_direct_binding_invalid:content'; Overrides = @{ AETHELN_CONTENT_REQUIRED = '' } }
 	)) {
 		$Failed = Invoke-ReconcileFixture $GapCase.Overrides
 		Assert-True ($null -ne $Failed.failure -and $Failed.failure -ceq $GapCase.Reason -and -not (Test-Path -LiteralPath $ReconcileEnvironment.AETHELN_ACCEPTANCE_REPORT)) "The gap path must fail red with $($GapCase.Reason) and publish no report for $($GapCase.Name) (actual failure: '$($Failed.failure)')."
@@ -919,7 +1062,7 @@ try {
 	$GapReport = Get-Content -LiteralPath $ReconcileEnvironment.AETHELN_ACCEPTANCE_REPORT -Raw | ConvertFrom-Json
 	$LiveBindings = @($GapReport.liveBindings)
 	Assert-True ($GapReport.schemaVersion -ceq 'aetheln.ci-acceptance-shadow-gap/v3' -and $LiveBindings.Count -eq 1 -and $LiveBindings[0].key -ceq 'portable' -and $LiveBindings[0].jobName -ceq 'portable-receipt-shadow' -and $LiveBindings[0].artifactId -ceq '2' -and $LiveBindings[0].artifactName -ceq ('ci-receipt-portable-1-1-' + $ReconcileNonce) -and $LiveBindings[0].digest -ceq ('sha256:' + ('e' * 64))) 'The green gap record must carry the validated live receipt binding as aetheln.ci-acceptance-shadow-gap/v3.'
-	Assert-True ((@($GapReport.selectedUnsupported) -join ',') -ceq 'content-reference-validation' -and $GapReport.decision.complete -eq $false -and $GapReport.decision.shadow -eq $true -and $GapReport.decision.authoritative -eq $false -and $GapReport.decision.grantsAcceptance -eq $false -and $GapReport.decision.reason -ceq 'producer_contract_incomplete') 'The green gap record must stay an explicit non-authoritative no-acceptance result.'
+	Assert-True ((@($GapReport.selectedUnsupported) -join ',') -ceq 'clean-package-provenance-smoke' -and $GapReport.decision.complete -eq $false -and $GapReport.decision.shadow -eq $true -and $GapReport.decision.authoritative -eq $false -and $GapReport.decision.grantsAcceptance -eq $false -and $GapReport.decision.reason -ceq 'producer_contract_incomplete') 'The green gap record must stay an explicit non-authoritative no-acceptance result.'
 } finally {
 	foreach ($Name in $PreviousReconcileEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $PreviousReconcileEnvironment[$Name]) }
 	Remove-Item -LiteralPath $ReconcileRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -1069,7 +1212,7 @@ Assert-True ($ReportUploads.Count -eq 6) 'Exactly six report uploads remain.'
 Assert-True ($TrustedCompile.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json')) 'Compile artifact is unique to this run, attempt and job.'
 Assert-True ($TrustedCompile -match 'timeout-minutes: 40' -and $TrustedCompile -match '-CompileTimeoutMinutes 30') 'Routine compile has a whole-job and controlled-work limit.'
 Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Uploads cannot contain wildcard payload paths.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 14 -Message 'Only seven raw reports, the selector, four nonce-bound receipts, the acceptance shadow diagnostic, and the hard-disabled authority receipt may be uploaded.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 16 -Message 'Only eight raw reports, the selector, five nonce-bound receipts, the acceptance shadow diagnostic, and the hard-disabled authority receipt may be uploaded.'
 Assert-True ($Workflow -notmatch '(?m)^\s+path:\s*.*(?:archives?|logs?|Saved|StagedBuilds)') 'Generated payload directories must never be uploaded.'
 
 # Classifier behavior matrix: run the extracted script against fixture commits.

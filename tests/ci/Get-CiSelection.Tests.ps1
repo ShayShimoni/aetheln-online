@@ -398,7 +398,7 @@ try {
 		ActionItemsJson=('[{"uses":"actions/checkout","revision":"' + ('3'*40) + '"}]');IdentityContextOutputPath=(Join-Path $FixtureRoot 'unclassified-identity.json')
 	}
 	$UnclassifiedGap=& (Join-Path $RepositoryRoot 'scripts\ci\New-CiAcceptanceAggregateContext.ps1') @BuilderArguments
-	Assert-True ($UnclassifiedGap.mode -ceq 'Gap' -and $UnclassifiedGap.acceptedControllerUnavailable -eq $false -and (@($UnclassifiedGap.selectedUnsupported) -join ',') -ceq 'content-reference-validation,clean-package-provenance-smoke') 'The conservative report must reach the green producer-gap path.'
+	Assert-True ($UnclassifiedGap.mode -ceq 'Gap' -and $UnclassifiedGap.acceptedControllerUnavailable -eq $false -and (@($UnclassifiedGap.selectedUnsupported) -join ',') -ceq 'clean-package-provenance-smoke') 'The conservative report must reach the green producer-gap path.'
 
 	# Revision-specific attributes: deleted/source reads base; new/destination
 	# reads head. A changed root/nested policy forces whole-tree re-evaluation.
