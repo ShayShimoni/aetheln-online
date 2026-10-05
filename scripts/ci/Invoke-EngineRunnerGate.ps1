@@ -89,6 +89,9 @@ $RoutineResourceMonitor = $null
 $RoutineDeadline = $null
 $ManagedCompile = $PSBoundParameters.ContainsKey('ManagedWorkspaceRoot')
 $CompileDeadlineUtc = [DateTime]::MaxValue
+# Provisional fixed minimum (not a tuning result): a checkout cut off by the
+# deadline can leave the managed workspace half-updated (issue #243).
+$ManagedWorkspaceMinimumSyncMilliseconds = 300000
 $Checks = New-Object System.Collections.ArrayList
 $RequiredFailed = $false
 $SupervisedChildExited = $false
@@ -1902,12 +1905,16 @@ try {
 			$Registered = $ManagedRegistration.record
 			# Authorization comes from the separately registered operator tuple;
 			# this is not endpoint/filter/hook certification by candidate code.
+			# The closure binds this script's values: invoked inside
+			# Sync-ManagedCompileWorkspace, an unbound block would read that
+			# function's own ControlRoot/SourceRevision parameters instead.
 			$TrustRegisteredWorkspace = {
 				param($ProposedControl, $ProposedTarget, $ProposedRepository, $ProposedRevision)
-				return ($ProposedControl -ceq $ControlRoot -and
+				return ([string]::Equals([IO.Path]::GetFullPath($ProposedControl).TrimEnd('\', '/'), [IO.Path]::GetFullPath($ControlRoot).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -and
 					[string]::Equals([IO.Path]::GetFullPath($ProposedTarget).TrimEnd('\', '/'), [IO.Path]::GetFullPath($Registered.targetRoot).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -and
 					$ProposedRepository -ceq $Registered.repository -and $ProposedRevision -ceq $SourceRevision)
-			}
+			}.GetNewClosure()
+			if ((Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline) -lt $ManagedWorkspaceMinimumSyncMilliseconds) { throw 'managed_workspace_time_insufficient' }
 			$null = Sync-ManagedCompileWorkspace -ControlRoot $ControlRoot -TargetRoot $ManagedWorkspaceRoot -SourceRevision $SourceRevision -Repository $Repository -ExpectedGitCommonDirectory $Registered.gitCommonDirectory -DeadlineUtc $CompileDeadlineUtc -RemainingBudget { Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline } -AssertRepositoryTrust $TrustRegisteredWorkspace -OnProgress { Assert-RoutineCompileProgress }
 			$ResolvedRepository = Resolve-RequiredDirectory $ManagedWorkspaceRoot 'managed_workspace_root_invalid'
 			$ManagedWorkspaceEvidence = [ordered]@{ schemaVersion = 1; registrationId = $Registered.registrationId;

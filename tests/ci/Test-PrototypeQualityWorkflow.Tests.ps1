@@ -392,11 +392,17 @@ Assert-True ($EditorControl -and $EditorBuild -and $AutomationRun -and $Automati
 # missing automation artifact then fails unreal-receipt-shadow at its raw
 # binding check instead of passing silently.
 $AutomationSuccess = "if: steps.editor_build.outcome == 'success' && steps.automation_run.outcome == 'success' && steps.automation_residue.outcome == 'success'"
+# Issue #243: residue cleanup runs only on positive evidence that the editor
+# step released the lease or never needed it: success, or a recorded reason
+# other than a lease failure or a failed release. A skipped or interrupted
+# editor step (no recorded reason) leaves the lease state unknown, so it skips.
+# A build, sync, or timeout failure still releases the lease, so it cleans up.
+$ResidueCondition = "if: steps.editor_build.outcome == 'success' || (steps.editor_build.outputs.reason != '' && steps.editor_build.outputs.reason != 'editor_host_lease_failed' && steps.editor_build.outputs.reason != 'editor_host_lease_release_failed')"
 foreach ($Step in @(
 	@{ Name='control checkout'; Body=$EditorControl; Id='editor_control'; If=$null; Timeout='5'; Continue=$true },
 	@{ Name='editor build'; Body=$EditorBuild; Id='editor_build'; If="if: steps.editor_control.outcome == 'success'"; Timeout='20'; Continue=$true },
 	@{ Name='harness'; Body=$AutomationRun; Id='automation_run'; If="if: steps.editor_build.outcome == 'success'"; Timeout='12'; Continue=$true },
-	@{ Name='residue cleanup'; Body=$AutomationResidue; Id='automation_residue'; If=$null; Timeout='2'; Continue=$true },
+	@{ Name='residue cleanup'; Body=$AutomationResidue; Id='automation_residue'; If=$ResidueCondition; Timeout='2'; Continue=$true },
 	@{ Name='bind'; Body=$AutomationBind; Id='automation_identity'; If=$AutomationSuccess; Timeout='1'; Continue=$true },
 	@{ Name='upload'; Body=$AutomationUpload; Id='automation_artifact'; If=($AutomationSuccess + " && steps.automation_identity.outcome == 'success'"); Timeout='1'; Continue=$true },
 	@{ Name='outcome report'; Body=$AutomationOutcome; Id='automation_outcome'; If=$null; Timeout='1'; Continue=$true }
@@ -437,16 +443,21 @@ Assert-True ($EditorBuild.Contains('try { Close-EngineRunnerHostLease -Lease $Le
 Assert-True ($EditorBuild.Contains('$Job = New-Object Aetheln.PreparationJob ($DeadlineTicks)') -and $EditorBuild.Contains('$Job.StopAndWait(30000); $Owned.quiescent = $Job.ActiveCount -eq 0') -and $EditorBuild.Contains('finally { $Job.Dispose() }') -and $EditorAutomation -notmatch '(?i)Stop-Process|taskkill|\.Kill\(|Get-Process|Get-CimInstance|Win32_Process') 'Processes started under the lease must run in an owned Job Object; nothing is stopped by name or command line.'
 # Lease wait, sync and build share one 17-minute deadline; the two 30-second
 # cleanup proofs and the release fit inside the 20-minute step bound.
-Assert-True ($EditorBuild.Contains('$DeadlineUtc = [DateTime]::UtcNow.AddMinutes(17)') -and $EditorBuild.Contains('$DeadlineTicks = [Diagnostics.Stopwatch]::GetTimestamp() + 17L * 60L * [Diagnostics.Stopwatch]::Frequency') -and $EditorBuild.Contains("'-DeadlineUtc', `$DeadlineUtc.ToString('o')") -and $EditorBuild -notmatch 'AETHELN_COMPILE_STARTED|RequiredSeconds|budget') 'The re-sync and build must share one bounded deadline inside the step bound and carry no compile budget gate.'
+# Issue #243: the deadline and the minimum time that must remain before the
+# re-sync starts are fixed values that a fixture may only shorten, and the
+# minimum is honored only while the deadline override is in effect.
+$MinimumCheck = $EditorBuild.IndexOf("`$Failure = 'editor_sync_time_insufficient'")
+Assert-True ($EditorBuild.Contains("Get-ShortenedSeconds 'AETHELN_EDITOR_TEST_DEADLINE_SECONDS' (17 * 60)") -and $EditorBuild.Contains("Get-ShortenedSeconds 'AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS' `$MinimumSyncSeconds") -and $EditorBuild.Contains('if ($DeadlineSeconds -lt 17 * 60) {') -and $EditorBuild.Contains("Write-Output 'editor_test_override active'") -and $EditorBuild.Contains('-cmatch ''\A[1-9][0-9]{0,3}\z'' -and [int] $Value -lt $Default') -and $EditorBuild.Contains('$DeadlineTicks - [Diagnostics.Stopwatch]::GetTimestamp() -lt $MinimumSyncSeconds * [Diagnostics.Stopwatch]::Frequency') -and $LeaseEnter -lt $MinimumCheck -and $MinimumCheck -lt $SyncStart) 'The re-sync must start only when the fixed minimum remains after the lease is taken, and a fixture may only shorten the deadline and that minimum.'
+Assert-True ($EditorBuild.Contains('$DeadlineUtc = [DateTime]::UtcNow.AddSeconds($DeadlineSeconds)') -and $EditorBuild.Contains('$DeadlineTicks = [Diagnostics.Stopwatch]::GetTimestamp() + [long] $DeadlineSeconds * [Diagnostics.Stopwatch]::Frequency') -and $EditorBuild.Contains("'-DeadlineUtc', `$DeadlineUtc.ToString('o')") -and $EditorBuild -notmatch 'AETHELN_COMPILE_STARTED|RequiredSeconds|budget') 'The re-sync and build must share one bounded deadline inside the step bound and carry no compile budget gate.'
 Assert-True ($SyncScript.Contains(". (Join-Path `$PSScriptRoot 'ManagedCompileRegistration.ps1')") -and $SyncScript.Contains(". (Join-Path `$PSScriptRoot 'ManagedCompileWorkspace.ps1')") -and $SyncScript.Contains('$TrustedControl = [IO.Path]::GetFullPath((Split-Path (Split-Path $PSScriptRoot))).TrimEnd') -and $SyncScript.Contains('-AssertRepositoryTrust $TrustRegisteredWorkspace') -and $SyncScript.Contains('}.GetNewClosure()') -and $SyncScript -notmatch 'Write-(Output|Host)') 'The re-sync child must load the managed modules beside itself, sync from its own control checkout, authorize only the registered tuple, and print nothing.'
 $SyncCall = $SyncScript.IndexOf('Sync-ManagedCompileWorkspace -ControlRoot $TrustedControl')
 Assert-True ($SyncCall -ge 0 -and $SyncScript.Contains("if ((Get-WorkspaceGitText -Git `$Git -Root `$Root -Arguments 'rev-parse HEAD').Trim() -cne `$SourceRevision) { `$Result = 'editor_workspace_revision_changed' }") -and $SyncCall -lt $SyncScript.IndexOf("'rev-parse HEAD'") -and $SyncCall -lt $SyncScript.IndexOf("`$Result = 'editor_workspace_dirty'")) 'The revision and clean checks must be post-sync assertions.'
 Assert-True ($EditorBuild.Contains("`$Failure = 'editor_host_lease_failed'") -and $EditorBuild.Contains("`$Failure = 'editor_workspace_sync_failed'") -and $EditorBuild.Contains("if (`$Build.timedOut) { `$Failure = 'editor_build_timeout' }") -and [regex]::Matches($EditorBuild, 'Exit-Automation').Count -eq 2 -and $EditorBuild.Contains('if ($null -ne $Failure) { Exit-Automation $Failure }')) 'The step must map lease, sync, timeout and release failures to fixed reasons and record exactly one reason.'
 Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $AutomationRun.Contains("Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f")) 'The harness step may print only the fixed path-free summary line.'
 # The editor build prints only the two masks, one regex-validated lease or
-# sync detail code, and the wrapper's native-result.json (target, platform,
-# exit code, failure class).
-Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 4 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'") -and $EditorBuild.Contains("if (`$null -ne `$Detail) { Write-Output ('editor_build_detail code=' + `$Detail) }") -and $EditorBuild.Contains("-cmatch '\Alease_[a-z_]{1,48}\z'") -and $EditorBuild.Contains("-cmatch '\Amanaged_(registration|workspace)_[a-z_]{1,48}\z'")) 'The editor build may print only the masks, a fixed detail code, and the bounded native result record.'
+# sync detail code, the fixed test-override line, and the wrapper's
+# native-result.json (target, platform, exit code, failure class).
+Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 5 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'") -and $EditorBuild.Contains("if (`$null -ne `$Detail) { Write-Output ('editor_build_detail code=' + `$Detail) }") -and $EditorBuild.Contains("-cmatch '\Alease_[a-z_]{1,48}\z'") -and $EditorBuild.Contains("-cmatch '\Amanaged_(registration|workspace)_[a-z_]{1,48}\z'")) 'The editor build may print only the masks, a fixed detail code, and the bounded native result record.'
 # UBT exit 5 (-NoEngineChanges, deferred by TA-020) keeps its own fixed reason, checked before the generic failure.
 Assert-True ($EditorBuild.Contains("elseif (`$BuildExit -eq 5) { `$Failure = 'editor_build_engine_changes_required' }") -and $EditorBuild.IndexOf('editor_build_engine_changes_required') -lt $EditorBuild.IndexOf("'editor_build_failed'")) 'The editor build must map UBT exit 5 to editor_build_engine_changes_required before editor_build_failed.'
 $ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
@@ -496,13 +507,13 @@ $AutomationFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-automati
 $script:AutomationFixtureTemp = Join-Path $AutomationFixtureRoot 'temp'
 $null = New-Item -ItemType Directory -Path (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job')
 $PreviousAutomationEnvironment = @{}
-foreach ($Name in @('GITHUB_SHA', 'GITHUB_REPOSITORY', 'GITHUB_WORKSPACE', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_MANAGED_COMPILE_REGISTRATION', 'AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256', 'AETHELN_ENGINE_HOST_LEASE', 'AETHELN_ENGINE_ROOT', 'AETHELN_LINUX_TOOLCHAIN_ROOT', 'AETHELN_FIXTURE_NATIVE_EXIT', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+foreach ($Name in @('GITHUB_SHA', 'GITHUB_REPOSITORY', 'GITHUB_WORKSPACE', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_MANAGED_COMPILE_REGISTRATION', 'AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256', 'AETHELN_ENGINE_HOST_LEASE', 'AETHELN_ENGINE_ROOT', 'AETHELN_LINUX_TOOLCHAIN_ROOT', 'AETHELN_FIXTURE_NATIVE_EXIT', 'AETHELN_FIXTURE_NATIVE_SLEEP', 'AETHELN_EDITOR_TEST_DEADLINE_SECONDS', 'AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
 try {
 	$env:AETHELN_ENGINE_ROOT = Join-Path $AutomationFixtureRoot 'engine'
 	$env:GITHUB_OUTPUT = Join-Path $AutomationFixtureRoot 'github-output.txt'
 	$null = New-Item -ItemType Directory -Path (Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles'), (Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64')
 	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64/dotnet.exe'), 'fixture')
-	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles/Build.bat'), "@echo off`r`necho Building would modify the following existing engine files:`r`necho %~dp0UnrealEditor-Fixture.dll`r`nexit /b %AETHELN_FIXTURE_NATIVE_EXIT%`r`n")
+	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles/Build.bat'), "@echo off`r`necho Building would modify the following existing engine files:`r`necho %~dp0UnrealEditor-Fixture.dll`r`nif defined AETHELN_FIXTURE_NATIVE_SLEEP ping -n %AETHELN_FIXTURE_NATIVE_SLEEP% 127.0.0.1 >nul`r`nexit /b %AETHELN_FIXTURE_NATIVE_EXIT%`r`n")
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $AutomationFixtureRoot
 	# Issue #236 re-sync fixture. One source repository holds the reviewed
 	# control-checkout scripts and one compile input at two revisions. The
@@ -581,6 +592,66 @@ try {
 		} else { Assert-True (-not (Test-Path -LiteralPath $EditorBuildEvidence)) "The $($SyncCase.name) case must stop before the editor build." }
 		if ($SyncCase.residue) { Remove-Item -LiteralPath $ResiduePath -Force }
 		if ($SyncCase.ContainsKey('stray')) { Remove-Item -LiteralPath $StrayPath -Force }
+	}
+	# Issue #243 failure paths. A fixture may shorten the step's 17-minute
+	# deadline and 5-minute minimum through its test-only variables; with the
+	# Job Object watchdog and the lease unchanged, each path is driven for real.
+	function Get-AppendedLeaseState([string] $Before) {
+		return (@([IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE).Substring($Before.Length).Split([char] 10) | Where-Object { $_ } | ForEach-Object { ($_ | ConvertFrom-Json).state }) -join ',')
+	}
+	function Get-VisibleStepOutput($Result) { return (@($Result.output | Where-Object { -not $_.StartsWith('::add-mask::') }) -join "`n") }
+	$env:AETHELN_FIXTURE_NATIVE_EXIT = '0'
+	try {
+		# A build that outlives the deadline is stopped by the owned job, which is
+		# proven empty, so the lease is released and the reason is the timeout.
+		Invoke-AutomationFixtureGit $SyncTarget @('checkout', '-q', '--detach', $Revisions.interleaved)
+		$env:AETHELN_FIXTURE_NATIVE_SLEEP = '120'
+		$env:AETHELN_EDITOR_TEST_DEADLINE_SECONDS = '40'
+		$env:AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS = '1'
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		$JournalBefore = [IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE)
+		$Clock = [Diagnostics.Stopwatch]::StartNew()
+		$TimedOut = Invoke-AutomationStepFixture $EditorBuild
+		$Clock.Stop()
+		Assert-True ($TimedOut.failure -ceq 'editor_build_timeout' -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq "reason=editor_build_timeout`n") 'A build that reaches the deadline must record editor_build_timeout.'
+		Assert-True (([string] (& git -C $SyncTarget rev-parse HEAD)).Trim() -ceq $Revisions.tested -and $Clock.Elapsed.TotalSeconds -lt 100) 'The timeout case must finish the sync, then stop the build at the deadline rather than after its 120-second run.'
+		Assert-True ((Get-AppendedLeaseState $JournalBefore) -ceq 'held,released') 'A timed-out build proven empty must still release the engine host lease.'
+		Assert-True ((Get-VisibleStepOutput $TimedOut) -ceq 'editor_test_override active') 'The timeout case must print only the fixed override line, no detail line, path, or build output.'
+		if (Test-Path -LiteralPath $EditorBuildEvidence) { Remove-Item -LiteralPath $EditorBuildEvidence -Recurse -Force }
+		Remove-Item Env:AETHELN_FIXTURE_NATIVE_SLEEP, Env:AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS
+
+		# Less than the minimum left after the lease: no checkout starts, the
+		# workspace is untouched, the lease is released, and the reason is distinct.
+		Invoke-AutomationFixtureGit $SyncTarget @('checkout', '-q', '--detach', $Revisions.interleaved)
+		$env:AETHELN_EDITOR_TEST_DEADLINE_SECONDS = '60'
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		$JournalBefore = [IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE)
+		$TooLate = Invoke-AutomationStepFixture $EditorBuild
+		Assert-True ($TooLate.failure -ceq 'editor_sync_time_insufficient' -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq "reason=editor_sync_time_insufficient`n") 'Less than the minimum after the lease must record editor_sync_time_insufficient.'
+		Assert-True (([string] (& git -C $SyncTarget rev-parse HEAD)).Trim() -ceq $Revisions.interleaved -and -not (Test-Path -LiteralPath $EditorBuildEvidence) -and (Get-VisibleStepOutput $TooLate) -ceq 'editor_test_override active') 'The insufficient-time case must not start a checkout or a build.'
+		Assert-True ((Get-AppendedLeaseState $JournalBefore) -ceq 'held,released') 'The insufficient-time case must release the engine host lease it took.'
+		Remove-Item Env:AETHELN_EDITOR_TEST_DEADLINE_SECONDS
+
+		# A failed release keeps the held journal for explicit recovery and
+		# outranks the otherwise successful build. The control checkout's lease
+		# module is made to refuse the release, then restored.
+		Invoke-AutomationFixtureGit $SyncTarget @('checkout', '-q', '--detach', $Revisions.interleaved)
+		$LeaseModule = Join-Path $SyncControl 'scripts\ci\EngineRunnerHostLease.ps1'
+		$LeaseModuleBytes = [IO.File]::ReadAllBytes($LeaseModule)
+		$JournalBefore = [IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE)
+		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+		try {
+			[IO.File]::AppendAllText($LeaseModule, "`r`nfunction Exit-EngineRunnerHostLease { [CmdletBinding()] param(`$Lease, `$CleanupVerified) throw 'fixture_release_failed' }`r`n")
+			$Unreleased = Invoke-AutomationStepFixture $EditorBuild
+		} finally { [IO.File]::WriteAllBytes($LeaseModule, $LeaseModuleBytes) }
+		Assert-True ($Unreleased.failure -ceq 'editor_host_lease_release_failed' -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq "reason=editor_host_lease_release_failed`n") 'A failed lease release must record editor_host_lease_release_failed even after a successful build.'
+		Assert-True ((Get-AppendedLeaseState $JournalBefore) -ceq 'held' -and (Get-VisibleStepOutput $Unreleased).Contains('"nativeExitCode":0')) 'A failed release must leave the held journal unreleased after the build ran.'
+		$Reopened = [IO.File]::Open($env:AETHELN_ENGINE_HOST_LEASE, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+		$Reopened.Dispose()
+		[IO.File]::WriteAllText($env:AETHELN_ENGINE_HOST_LEASE, $JournalBefore, (New-Object Text.UTF8Encoding $false))
+		if (Test-Path -LiteralPath $EditorBuildEvidence) { Remove-Item -LiteralPath $EditorBuildEvidence -Recurse -Force }
+	} finally {
+		Remove-Item Env:AETHELN_FIXTURE_NATIVE_SLEEP, Env:AETHELN_EDITOR_TEST_DEADLINE_SECONDS, Env:AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS -ErrorAction SilentlyContinue
 	}
 	# A stale held record (a lease that was never released) blocks the re-sync:
 	# nothing is synchronized or built, and the journal stays for recovery.
