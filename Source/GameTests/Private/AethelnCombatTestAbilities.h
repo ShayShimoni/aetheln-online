@@ -8,7 +8,8 @@
  * Test-only long-running ability for the #19 lifecycle automation tests. Only
  * those tests grant it. It uses the server-only policies the project abilities
  * will use, never commits, and stays active until cancelled. UHT parses only
- * headers, so the type cannot live in the test .cpp.
+ * headers, so the type cannot live in the test .cpp; it lives in the
+ * editor-only GameTests module so Client and Server targets carry no test class.
  */
 UCLASS(NotBlueprintable, HideDropdown)
 class UAethelnLongRunningTestAbility : public UGameplayAbility
