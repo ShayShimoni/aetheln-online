@@ -7,9 +7,11 @@ This is the implementation specification for
 PlayerState-owned Ability System Component (ASC), one combat attribute set, a
 versioned activation seam, three ability skeletons, and the rejection
 telemetry around them. It distils the design approved on the issue (revision 2,
-after an independent review and a fix verification). No code described here
-exists yet; pull requests P2 to P6 deliver it (see
-[PR Phasing](#pr-phasing-and-evidence)).
+after an independent review and a fix verification). Pull requests P2 to P6
+deliver it in phases (see [PR Phasing](#pr-phasing-and-evidence)): P2 adds the
+PlayerState-owned ASC, the attribute set, the init effect, the combat game mode,
+the AI character base, and their tests; the seam, the abilities, and the
+two-client evidence follow in P3 to P6.
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
