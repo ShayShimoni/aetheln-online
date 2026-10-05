@@ -215,9 +215,10 @@ performed or proven by Issue #16 or Issue #127 repository changes.
 Representative engine-runner evidence is commit-specific and must come from
 the artifacts uploaded by the corresponding GitHub run. An earlier or
 in-progress run does not establish that the unpublished incremental candidate
-has completed successfully. The `02:00 UTC` schedule becomes active only after
-the workflow reaches the protected default branch `main` through normal Git
-Flow; `develop` remains the integration branch.
+has completed successfully. GitHub runs the `02:00 UTC` schedule only from the
+default branch, which has been `develop` since 2026-10-03 (it was `main`
+before), so each scheduled run exercises the head of `develop`. `develop` is
+also the integration branch.
 
 ## Change Gates
 
