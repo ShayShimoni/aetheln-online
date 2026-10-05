@@ -112,7 +112,7 @@ only if they are declared in GameCore.
 | `UAethelnAbilitySystemComponent` | GameCombat | Project ASC for players and AI. Hosts the activation seam (request RPC, validator, per-connection sequence and rate state, seam scope with result slot, owner-only outcome RPC). Overrides the two stock client-route entry points. Provides static `FindForPawn(const APawn*)`. |
 | `UAethelnCombatAttributeSet` | GameCombat | `Health`, `MaxHealth`, `Endurance`, `MaxEndurance`, `Guard`, `MaxGuard`. |
 | `AethelnActivationTypes.h` | GameCombat | `FAethelnCombatActivationRequest`, `EAethelnActivationPhase`, `EAethelnActivationResult` (client-facing mirror of the safe reasons). |
-| `UAethelnGameplayAbility` (abstract) | GameCombat | Base ability: reads config, overrides `CheckCost`, `ApplyCost`, `GetCooldownTags`, `ApplyCooldown`, and `CanActivateAbility` (the choke point), fixes the net and instancing policies, leaves the engine cost and cooldown effect classes null. |
+| `UAethelnGameplayAbility` (abstract) | GameCombat | Base ability: reads config, overrides `CheckCost`, `ApplyCost`, `GetCooldownTags`, `ApplyCooldown`, `CanActivateAbility` (the choke point), and `CommitAbility` (records the seam's result slot), refuses the partial `CommitAbilityCost` and `CommitAbilityCooldown`, fixes the net and instancing policies, leaves the engine cost and cooldown effect classes null. |
 | `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnGateStepAbility`, `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility` skeletons. |
 | `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first). All magnitudes set by caller. |
 | `AAethelnCombatGameMode` | GameCombat | Derives from `AGameModeBase` (for example through `AAethelnGameModeBase`), never `AGameMode`: `AGameMode::FindInactivePlayer` (`Runtime/Engine/Private/GameMode.cpp:687-751`) would reuse the old PlayerState on reconnect, which breaks the sequence policy and T34. A later base-class change must revisit both. Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by extending `scripts/build_movement_poc.py`, a config soft-class path, or a `?game=` URL, never by editing binary assets by hand. |
@@ -299,7 +299,12 @@ All three derive from `UAethelnGameplayAbility`.
   never evaluates set-by-caller magnitudes that have no value.
 - **`ActivateAbility`** calls `CommitAbility`, writes the outcome (committed or
   not) and the server `ActivationId` into the seam scope's result slot, then
-  calls `EndAbility`; #60 replaces the end with its timeline. Hold the Line may
+  calls `EndAbility`; #60 replaces the end with its timeline. `CommitAbility`
+  is the only commit: an ability commits once, synchronously, inside
+  `ActivateAbility`. The partial `CommitAbilityCost` and `CommitAbilityCooldown`
+  (and their Blueprint versions) are refused and apply nothing. If the
+  activation has not committed when `TryActivateAbility` returns, the seam
+  cancels it and reports `InternalFailure`. Hold the Line may
   later hold its own state tag while active, `State.<Order>.<Name>` under the
   conventions (for example `State.Oathscar.HoldTheLine`, a technical
   identifier, not a display name). The PR that creates it adds it to the
@@ -315,7 +320,8 @@ any configured class that:
 - has a cost or cooldown that is non-finite or negative;
 - has non-empty `AbilityTriggers` (`GAS/Public/Abilities/GameplayAbility.h:727`)
   or sets `bReplicateInputDirectly` (`:480`); or
-- would be granted with a spec `InputID` other than `INDEX_NONE`.
+- would be granted with a spec `InputID` other than `INDEX_NONE`, or with
+  spec-level `DynamicAbilityTriggers`.
 
 This also catches a future Blueprint subclass that edits policies or values.
 
@@ -578,8 +584,9 @@ these rules keep it so:
 | Montage section and play-rate RPCs (`GAS/Public/AbilitySystemComponent.h:1803-1812`) | Presentation only. | No gameplay window may derive from a montage (Server-Owned Attack Timeline in the combat document). |
 
 **Blueprint exposure review (DoD2).** Attributes are `BlueprintReadOnly` with
-no setters. The only project Blueprint entry point is the client-side
-`RequestActivation`; server RPCs are not `BlueprintCallable`; no project
+no setters. P3 exposes no project Blueprint entry point; the client-side
+`RequestActivation` may become `BlueprintCallable` when #61 or #82 needs it.
+Server RPCs are not `BlueprintCallable`; no project
 function grants abilities, applies effects, or writes attributes for Blueprint.
 Inherited calls are covered by mechanism 3 (T13), and grant validation (T15)
 covers Blueprint subclasses that change policies or values.
@@ -684,7 +691,11 @@ Names follow `Aetheln.<Area>.<Group>.<Case>`. Each test is
 tests, their headless-world helper, and the test-only ability UCLASS live in
 the editor-only `GameTests` module (`Source/GameTests/Private/`), which depends
 on `GameCombat`, `GameplayAbilities`, and `GameplayTags`, so the Client and
-Server targets carry no test class. Test names keep the
+Server targets carry no test class. The test-only native tags (`Ability.Test.*`,
+`Test.*`) are the exception: the engine accepts native tags only from Runtime
+modules, and client and server tag sets must match, so they are declared in
+`GameCore` under `WITH_DEV_AUTOMATION_TESTS` and are absent from Shipping
+builds. Test names keep the
 `Aetheln.GameCombat.*` prefix. Tests that pin a policy set their own values,
 never a tuning number. **H** is a headless single authority world using the
 spike's harness and the in-memory sink (`SetTestSink`). **P** is PIE with a

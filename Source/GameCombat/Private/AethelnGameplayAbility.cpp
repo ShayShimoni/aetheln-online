@@ -90,6 +90,25 @@ bool UAethelnGameplayAbility::CommitAbility(
 	return bCommitted;
 }
 
+bool UAethelnGameplayAbility::CommitAbilityCost(
+	const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo,
+	FGameplayTagContainer* OptionalRelevantTags)
+{
+	return false;
+}
+
+bool UAethelnGameplayAbility::CommitAbilityCooldown(
+	const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo,
+	const bool ForceCooldown,
+	FGameplayTagContainer* OptionalRelevantTags)
+{
+	return false;
+}
+
 void UAethelnGameplayAbility::ActivateAbility(
 	const FGameplayAbilitySpecHandle Handle,
 	const FGameplayAbilityActorInfo* ActorInfo,

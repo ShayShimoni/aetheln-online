@@ -26,7 +26,7 @@ public:
 	/** Ability identity and the request AbilityId (Ability.<Order>.<Name>). */
 	const FGameplayTag& GetAbilityId() const { return AbilityId; }
 
-	/** Server only: the id of the latest committed activation of this instance. */
+	/** Server only: the id this instance's latest CommitAbility created, or invalid if that commit failed. */
 	const FGuid& GetActivationId() const { return ActivationId; }
 
 	/** Grant-time validation of this definition: null when it may be granted, otherwise the reason. */
@@ -44,6 +44,21 @@ public:
 		const FGameplayAbilitySpecHandle Handle,
 		const FGameplayAbilityActorInfo* ActorInfo,
 		const FGameplayAbilityActivationInfo ActivationInfo,
+		FGameplayTagContainer* OptionalRelevantTags = nullptr) override;
+
+	/** Refused: CommitAbility is the only commit, so the seam's result slot sees every spend. Applies nothing. */
+	virtual bool CommitAbilityCost(
+		const FGameplayAbilitySpecHandle Handle,
+		const FGameplayAbilityActorInfo* ActorInfo,
+		const FGameplayAbilityActivationInfo ActivationInfo,
+		FGameplayTagContainer* OptionalRelevantTags = nullptr) override;
+
+	/** Refused: CommitAbility is the only commit, so the seam's result slot sees every spend. Applies nothing. */
+	virtual bool CommitAbilityCooldown(
+		const FGameplayAbilitySpecHandle Handle,
+		const FGameplayAbilityActorInfo* ActorInfo,
+		const FGameplayAbilityActivationInfo ActivationInfo,
+		const bool ForceCooldown,
 		FGameplayTagContainer* OptionalRelevantTags = nullptr) override;
 
 	/** Authored definition version, starting at 1. The seam accepts only an exact match. */

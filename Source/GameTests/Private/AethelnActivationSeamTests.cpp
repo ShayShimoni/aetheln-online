@@ -453,7 +453,20 @@ bool FAethelnActivationRejectionHasNoSideEffectTest::RunTest(const FString& Para
 	Probe.bTestFailCommit = true;
 	ExpectResult(*this, TEXT("Failing commit"), Fixture.Submit(1, ProbeId()), EResult::InternalFailure);
 	ExpectNoSideEffect(TEXT("Failing commit"));
+
+	// A failed commit that does not end itself is cancelled by the seam.
+	Probe.bTestKeepActiveOnFailedCommit = true;
+	ExpectResult(*this, TEXT("Failing commit that keeps running"), Fixture.Submit(1, ProbeId()), EResult::InternalFailure);
+	ExpectNoSideEffect(TEXT("Failing commit that keeps running"));
+	Probe.bTestKeepActiveOnFailedCommit = false;
 	Probe.bTestFailCommit = false;
+
+	// The partial commits are refused and apply nothing; the uncommitted activation is cancelled.
+	Probe.bTestUsePartialCommit = true;
+	ExpectResult(*this, TEXT("Partial commit"), Fixture.Submit(1, ProbeId()), EResult::InternalFailure);
+	TestFalse(TEXT("CommitAbilityCost and CommitAbilityCooldown are refused"), Probe.bTestPartialCommitSucceeded);
+	ExpectNoSideEffect(TEXT("Partial commit"));
+	Probe.bTestUsePartialCommit = false;
 
 	ExpectResult(*this, TEXT("Sequence 1 was never advanced"), Fixture.Submit(1, ProbeId()), EResult::Accepted);
 	TestEqual(TEXT("Acceptance applies one cost"), Probe.CostApplications, 1);
@@ -483,6 +496,8 @@ bool FAethelnActivationRejectionHasNoSideEffectTest::RunTest(const FString& Para
 		{ 0u, EResult::StaleSequence },
 		{ 1u, EResult::MalformedRequest },
 		{ 1u, EResult::ActivationBlocked },
+		{ 1u, EResult::InternalFailure },
+		{ 1u, EResult::InternalFailure },
 		{ 1u, EResult::InternalFailure },
 		{ 1u, EResult::Accepted },
 		{ 1u, EResult::DuplicateSequence },
@@ -643,6 +658,24 @@ bool FAethelnActivationRateBoundTest::RunTest(const FString& Parameters)
 		{ 4u, EResult::RateLimited },
 		{ 4u, EResult::RateLimited },
 		{ 4u, EResult::Accepted } });
+
+	// Step 1 runs before steps 2 to 7, so rejected requests spend tokens too. Test-set bucket: three tokens, no refill.
+	FSeamFixture DrainFixture;
+	if (!DrainFixture.Init(*this, TestWorld))
+	{
+		return false;
+	}
+	UAethelnAbilitySystemComponent& DrainAbilitySystem = *DrainFixture.Player.AbilitySystem;
+	DrainAbilitySystem.ProvisionalActivationBucketCapacity = 3.0f;
+	DrainAbilitySystem.ProvisionalActivationBucketRefillPerSecond = 0.0f;
+	ExpectResult(*this, TEXT("A zero-sequence request spends a token"), DrainFixture.Submit(0, ProbeId()), EResult::StaleSequence);
+	ExpectResult(*this, TEXT("A malformed request spends a token"), DrainFixture.Submit(1, FGameplayTag()), EResult::MalformedRequest);
+	DrainFixture.Player.Controller->UnPossess();
+	ExpectResult(*this, TEXT("A no-avatar request spends a token"), DrainFixture.Submit(1, ProbeId()), EResult::ConnectionClosed);
+	DrainFixture.Player.Controller->Possess(DrainFixture.Pawn);
+	ExpectResult(*this, TEXT("The next malformed request is rate limited before validation"), DrainFixture.Submit(1, FGameplayTag()), EResult::RateLimited);
+	ExpectResult(*this, TEXT("A valid request is rate limited too"), DrainFixture.Submit(1, ProbeId()), EResult::RateLimited);
+	TestFalse(TEXT("Nothing activated on the drained bucket"), DrainFixture.IsActive(DrainFixture.ProbeHandle));
 	return true;
 }
 
@@ -655,7 +688,7 @@ bool FAethelnActivationGrantValidationTest::RunTest(const FString& Parameters)
 {
 	using namespace AethelnActivationSeamTests;
 
-	constexpr int32 ExpectedRefusals = 19;
+	constexpr int32 ExpectedRefusals = 20;
 	AddExpectedMessagePlain(TEXT("Refused to grant ability"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, ExpectedRefusals);
 
 	TestTrue(TEXT("The probe definition is grantable"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnSeamProbeTestAbility::StaticClass(), 1)));
@@ -663,6 +696,9 @@ bool FAethelnActivationGrantValidationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("A plain UGameplayAbility is refused"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UGameplayAbility::StaticClass(), 1)));
 	TestFalse(TEXT("A null ability is refused"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(TSubclassOf<UGameplayAbility>(), 1)));
 	TestFalse(TEXT("A spec input id is refused"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnSeamProbeTestAbility::StaticClass(), 1, 3)));
+	FGameplayAbilitySpec DynamicTriggerSpec(UAethelnSeamProbeTestAbility::StaticClass(), 1);
+	DynamicTriggerSpec.DynamicAbilityTriggers.AddDefaulted_GetRef().TriggerTag = AethelnCombatTestTags::Test_Trigger;
+	TestFalse(TEXT("Spec-level dynamic ability triggers are refused"), AAethelnPlayerState::IsGrantableAbilitySpec(DynamicTriggerSpec));
 
 	// Each case changes one field of an otherwise grantable transient definition.
 	auto ExpectRefused = [this](const TCHAR* Case, TFunctionRef<void(UAethelnSeamProbeTestAbility&)> Change)

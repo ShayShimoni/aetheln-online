@@ -2,25 +2,17 @@
 
 #include "AbilitySystemComponent.h"
 #include "AethelnGameplayAbility.h"
+#include "AethelnGameplayTags.h"
 #include "CoreMinimal.h"
-#include "NativeGameplayTags.h"
 #include "AethelnCombatTestAbilities.generated.h"
 
-/**
- * Test-only native tags and abilities for the #19 automation tests. UHT parses
- * only headers, so the types cannot live in a test .cpp; they live in the
- * editor-only GameTests module so Client and Server targets carry no test class
- * and no test tag. Only the tests grant these abilities.
+/*
+ * Test-only abilities for the #19 automation tests. UHT parses only headers, so
+ * the types cannot live in a test .cpp; they live in the editor-only GameTests
+ * module so Client and Server targets carry no test class. Their tags
+ * (AethelnCombatTestTags) are declared in GameCore, because the engine accepts
+ * native tags only from Runtime modules. Only the tests grant these abilities.
  */
-namespace AethelnCombatTestTags
-{
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_LongRunning);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_Probe);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_Triggered);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Test_Trigger);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Test_ProbeActive);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Test_Blocking);
-}
 
 /** Commits through the seam's result slot, then stays active until cancelled. */
 UCLASS(NotBlueprintable, HideDropdown)
@@ -70,6 +62,11 @@ public:
 	bool bTestOnCooldown = false;
 	bool bTestInsufficientResource = false;
 	bool bTestFailCommit = false;
+	/** With bTestFailCommit: stay active after the failed commit instead of ending. */
+	bool bTestKeepActiveOnFailedCommit = false;
+	/** Commit through the partial CommitAbilityCost and CommitAbilityCooldown instead of CommitAbility, and stay active. */
+	bool bTestUsePartialCommit = false;
+	bool bTestPartialCommitSucceeded = false;
 	TSubclassOf<UGameplayAbility> TestNestedActivationClass;
 	bool bTestNestedActivationSucceeded = false;
 	mutable int32 CostApplications = 0;
@@ -121,12 +118,19 @@ public:
 		const FGameplayAbilityActivationInfo ActivationInfo,
 		const FGameplayEventData* TriggerEventData) override
 	{
+		if (bTestUsePartialCommit)
+		{
+			const bool bCostCommitted = CommitAbilityCost(Handle, ActorInfo, ActivationInfo);
+			const bool bCooldownCommitted = CommitAbilityCooldown(Handle, ActorInfo, ActivationInfo, false);
+			bTestPartialCommitSucceeded = bCostCommitted || bCooldownCommitted;
+			return;
+		}
 		const bool bCommitted = CommitAbility(Handle, ActorInfo, ActivationInfo);
 		if (TestNestedActivationClass != nullptr)
 		{
 			bTestNestedActivationSucceeded = ActorInfo->AbilitySystemComponent->TryActivateAbilityByClass(TestNestedActivationClass);
 		}
-		if (!bCommitted)
+		if (!bCommitted && !bTestKeepActiveOnFailedCommit)
 		{
 			EndAbility(Handle, ActorInfo, ActivationInfo, true, true);
 		}

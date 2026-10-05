@@ -47,7 +47,9 @@ bool AAethelnPlayerState::IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spe
 		? TEXT("does not derive from UAethelnGameplayAbility")
 		: Spec.InputID != INDEX_NONE
 			? TEXT("would be granted with an input id")
-			: Ability->FindGrantProblem();
+			: Spec.DynamicAbilityTriggers.Num() > 0
+				? TEXT("would be granted with dynamic ability triggers")
+				: Ability->FindGrantProblem();
 	if (Problem != nullptr)
 	{
 		UE_LOG(LogAethelnAbilityGrant, Warning, TEXT("Refused to grant ability %s: it %s."), *GetNameSafe(Spec.Ability), Problem);

@@ -221,6 +221,12 @@ void UAethelnAbilitySystemComponent::ServerSubmitActivation_Implementation(const
 
 EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(const FAethelnCombatActivationRequest& Request)
 {
+	// Server only: a client opening a seam scope locally would activate nothing, but it is not the contract.
+	if (!ensureMsgf(IsOwnerActorAuthoritative(), TEXT("ProcessServerRequest runs only on the server")))
+	{
+		return EAethelnActivationResult::ConnectionClosed;
+	}
+
 	// 1. Rate bucket, before any lookup.
 	if (!AdmitMessage(true, Request.Sequence))
 	{
@@ -263,11 +269,13 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 	// A valid Release is accepted: it ends the running activation and skips steps 8 and 9.
 	if (Request.Phase == EAethelnActivationPhase::Release)
 	{
-		const FGuid RunningActivationId = Instance != nullptr ? Instance->GetActivationId() : FGuid();
-		if (Instance != nullptr)
+		// Unreachable for a validated InstancedPerActor spec; fail closed anyway.
+		if (Instance == nullptr)
 		{
-			Instance->EndForRelease();
+			return Finish(Request, EAethelnActivationResult::InternalFailure, ResolvedAbilityId, FGuid());
 		}
+		const FGuid RunningActivationId = Instance->GetActivationId();
+		Instance->EndForRelease();
 		return Finish(Request, EAethelnActivationResult::Accepted, ResolvedAbilityId, RunningActivationId);
 	}
 
@@ -302,6 +310,12 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 	}
 	if (!Scope.bCommitted)
 	{
+		// Fail closed: an activation that did not commit must not keep running or holding its state tags.
+		const FGameplayAbilitySpec* ActivatedSpec = FindAbilitySpecFromHandle(Handle);
+		if (ActivatedSpec != nullptr && ActivatedSpec->IsActive())
+		{
+			CancelAbilityHandle(Handle);
+		}
 		return Finish(Request, EAethelnActivationResult::InternalFailure, ResolvedAbilityId, FGuid());
 	}
 

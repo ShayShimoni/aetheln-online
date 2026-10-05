@@ -35,7 +35,8 @@ public:
 	/**
 	 * Grant-time validation (docs/gas-foundation.md, Abilities). Refuses, and logs, a spec
 	 * whose ability does not derive from UAethelnGameplayAbility, whose definition fails
-	 * UAethelnGameplayAbility::FindGrantProblem, or that carries an input id.
+	 * UAethelnGameplayAbility::FindGrantProblem, or that carries an input id or
+	 * spec-level dynamic ability triggers.
 	 */
 	static bool IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spec);
 

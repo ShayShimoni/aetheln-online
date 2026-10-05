@@ -28,3 +28,21 @@ namespace AethelnGameplayTags
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Init_MaxGuard);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Init_Guard);
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+/**
+ * Test-only tags for the #19 automation tests (Source/GameTests). They are not
+ * content and map to no semantic ID. The engine accepts native tags only from
+ * Runtime modules, and client and server tag sets must match, so they live here
+ * rather than in the editor-only GameTests module; Shipping builds carry none.
+ */
+namespace AethelnCombatTestTags
+{
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_LongRunning);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_Probe);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_Triggered);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Test_Trigger);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Test_ProbeActive);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Test_Blocking);
+}
+#endif
