@@ -15,6 +15,7 @@ public class GameTests : ModuleRules
 			"Engine",
 			"GameCombat",
 			"GameCore",
+			"GameNet",
 			"GameplayAbilities",
 			"GameplayTags",
 			"Json",

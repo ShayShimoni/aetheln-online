@@ -136,6 +136,9 @@ bool FAethelnObservabilitySchemaTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Event subject category is a closed enum"), Event.SubjectCategory, EAethelnObservabilityCategory::ServerLifecycle);
 	TestEqual(TEXT("Safe rejection reason is stable"), FString(LexToString(EAethelnSafeReason::Rejected)), FString(TEXT("rejected")));
 	TestEqual(TEXT("Controlled shutdown reason is stable"), FString(LexToString(EAethelnSafeReason::ControlledShutdown)), FString(TEXT("controlled-shutdown")));
+	TestTrue(TEXT("Rate-limited reason is known"), IsKnown(EAethelnSafeReason::RateLimited));
+	TestEqual(TEXT("Rate-limited reason is stable"), FString(LexToString(EAethelnSafeReason::RateLimited)), FString(TEXT("rate-limited")));
+	TestTrue(TEXT("Rate-limited is appended after controlled shutdown"), static_cast<uint8>(EAethelnSafeReason::RateLimited) == static_cast<uint8>(EAethelnSafeReason::ControlledShutdown) + 1);
 	TestEqual(TEXT("Queue drop metric is stable"), FString(LexToString(EAethelnMetricKind::QueueDropCount)), FString(TEXT("queue-drop-count")));
 	TestFalse(
 		TEXT("Correction cannot use a server lifecycle default as its affected subject"),
