@@ -174,13 +174,18 @@ only `PKG_EditorOnly` as editor-only, so every Control Rig Blueprint, such as
 code. Revisit trigger: the first #15 client and dedicated-server cook must
 show that cooked `CR_Mannequin_FootIK` imports neither package; otherwise the
 exception is removed. A `PKG_EditorOnly` target still fails from any package.
-Editor-only (`NotGame`) references, such as
-a Blueprint's editor graph nodes, are recorded and allowed; a `/Game` target
-of one must still resolve to governed content. The Asset Registry does not
-record hard dependencies on `/Script/CoreUObject`, `/Script/Engine`,
-`/Script/BlueprintGraph`, or `/Script/UnrealEd`, so the scanner cannot observe
-those four. A guarded test snapshot carries no package flags and therefore
-reports no editor-only runtime dependencies.
+Editor-only (`NotGame`) references, such as a Blueprint's editor graph nodes
+or a mesh's preview assets, are recorded and allowed. A `/Game` target of one
+that is not governed is recorded in the
+`broken_references` evidence, not failed: closed coverage already requires an
+intake record for every `/Game` package on disk, so such a target is missing
+editor or preview content that never cooks, such as the seven preview
+packages Issue #100 excluded (`docs/movement-poc.md:81-85`). A `/Game` target
+of a `Game` dependency must still resolve to governed content. The Asset
+Registry does not record hard dependencies on `/Script/CoreUObject`,
+`/Script/Engine`, `/Script/BlueprintGraph`, or `/Script/UnrealEd`, so the
+scanner cannot observe those four. A guarded test snapshot carries no package
+flags and therefore reports no editor-only runtime dependencies.
 
 `Shared` packages are required in both targets. `ServerOnly` packages are
 required in the dedicated-server cook and prohibited from the client cook.

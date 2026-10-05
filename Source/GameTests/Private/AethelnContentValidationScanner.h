@@ -175,6 +175,15 @@ public:
 		TFunctionRef<FAethelnEditorOnlyTarget(const FString& TargetPackage)> ClassifyTarget,
 		TArray<FString>& OutRecorded);
 
+	/**
+	 * Returns a failure for every ungoverned /Game target of a runtime (hard or soft Game) dependency.
+	 * An ungoverned NotGame /Game target is recorded in OutRecorded instead of failing.
+	 */
+	static TArray<FString> SelectBrokenGameReferences(
+		const FAethelnObservedPackage& Package,
+		TFunctionRef<bool(const FString& TargetPackage)> IsGoverned,
+		TArray<FString>& OutRecorded);
+
 	/** Records the texture family facts, reading size and mips from the editor source data. */
 	static void CollectTextureFacts(
 		const UTexture& Texture,

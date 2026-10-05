@@ -1683,6 +1683,36 @@ TArray<FString> FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDepende
 	return Failures;
 }
 
+TArray<FString> FAethelnContentValidationScanner::SelectBrokenGameReferences(
+	const FAethelnObservedPackage& Package,
+	TFunctionRef<bool(const FString& TargetPackage)> IsGoverned,
+	TArray<FString>& OutRecorded)
+{
+	TArray<FString> Failures;
+	for (const TArray<FString>* RuntimeDependencies : { &Package.HardDependencies, &Package.SoftDependencies })
+	{
+		for (const FString& Dependency : *RuntimeDependencies)
+		{
+			if (Dependency.StartsWith(TEXT("/Game/")) && !IsGoverned(Dependency))
+			{
+				Failures.Add(FString::Printf(TEXT("broken or ungoverned /Game dependency '%s'"), *Dependency));
+			}
+		}
+	}
+	// Closed coverage governs every /Game package on disk, so an ungoverned NotGame target is missing
+	// editor or preview content, such as the seven preview packages Issue #100 excluded. It never cooks.
+	for (const FString& Dependency : Package.EditorOnlyDependencies)
+	{
+		if (Dependency.StartsWith(TEXT("/Game/")) && !IsGoverned(Dependency))
+		{
+			OutRecorded.Add(FString::Printf(TEXT("editor-only (NotGame) reference to missing /Game package '%s'"), *Dependency));
+		}
+	}
+	Failures.Sort();
+	OutRecorded.Sort();
+	return Failures;
+}
+
 void FAethelnContentValidationScanner::CollectTextureFacts(
 	const UTexture& Texture,
 	bool bDataValid,
@@ -2344,25 +2374,16 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 		}
 
 		BrokenReferenceFailures.Append(Observed.EditorOnlyRuntimeDependencyFailures);
-		auto ResolveTarget = [&IntakeByPath, &BrokenReferenceFailures](const FString& Dependency) -> const FIntakeAsset*
+		TArray<FString> RecordedReferences = Observed.RecordedUncookedOnlyDependencies;
+		BrokenReferenceFailures.Append(SelectBrokenGameReferences(
+			Observed,
+			[&IntakeByPath](const FString& TargetPackage) { return IntakeByPath.Contains(TargetPackage); },
+			RecordedReferences));
+		auto ResolveTarget = [&IntakeByPath](const FString& Dependency) -> const FIntakeAsset*
 		{
-			if (!Dependency.StartsWith(TEXT("/Game/")))
-			{
-				return nullptr;
-			}
 			const FIntakeAsset* const* Target = IntakeByPath.Find(Dependency);
-			if (Target == nullptr)
-			{
-				BrokenReferenceFailures.Add(FString::Printf(TEXT("broken or ungoverned /Game dependency '%s'"), *Dependency));
-				return nullptr;
-			}
-			return *Target;
+			return Target == nullptr ? nullptr : *Target;
 		};
-		// NotGame (editor-only) references are allowed, but a /Game target must still resolve to governed content.
-		for (const FString& Dependency : Observed.EditorOnlyDependencies)
-		{
-			ResolveTarget(Dependency);
-		}
 		for (const FString& Dependency : Observed.HardDependencies)
 		{
 			const FIntakeAsset* Target = ResolveTarget(Dependency);
@@ -2413,7 +2434,7 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 		};
 		RecordReferenceCheck(TEXT("stable_id_unique"), StableIdentityFailures);
 		RecordReferenceCheck(TEXT("redirectors"), RedirectorFailures);
-		RecordReferenceCheck(TEXT("broken_references"), BrokenReferenceFailures, Observed.RecordedUncookedOnlyDependencies);
+		RecordReferenceCheck(TEXT("broken_references"), BrokenReferenceFailures, RecordedReferences);
 		RecordReferenceCheck(TEXT("compatible_content_version"), VersionFailures);
 		RecordReferenceCheck(TEXT("audience_reachability"), AudienceFailures);
 		RecordReferenceCheck(TEXT("hard_reference_exceptions"), HardAudienceFailures);

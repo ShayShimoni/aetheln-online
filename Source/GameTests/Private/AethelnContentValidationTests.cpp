@@ -648,4 +648,31 @@ bool FAethelnContentValidationBlueprintUncookedOnlyTest::RunTest(const FString& 
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnContentValidationMissingEditorOnlyTargetTest,
+	"Aetheln.Content.Validation.MissingEditorOnlyGameTarget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnContentValidationMissingEditorOnlyTargetTest::RunTest(const FString& Parameters)
+{
+	// Like SK_Mannequin: an editor-only preview reference to an excluded template package.
+	FAethelnObservedPackage Package;
+	Package.PackageName = TEXT("/Game/Fixtures/SK_Fixture");
+	Package.HardDependencies = { TEXT("/Game/Fixtures/Governed"), TEXT("/Game/Fixtures/MissingHard"), TEXT("/Script/Engine") };
+	Package.SoftDependencies = { TEXT("/Game/Fixtures/MissingSoft") };
+	Package.EditorOnlyDependencies = { TEXT("/Game/Fixtures/GovernedPreview"), TEXT("/Game/Fixtures/SKM_MissingPreview"), TEXT("/Script/UnrealEd") };
+	TArray<FString> Recorded;
+	const TArray<FString> Failures = FAethelnContentValidationScanner::SelectBrokenGameReferences(
+		Package,
+		[](const FString& TargetPackage) { return TargetPackage == TEXT("/Game/Fixtures/Governed") || TargetPackage == TEXT("/Game/Fixtures/GovernedPreview"); },
+		Recorded);
+	const FString JoinedFailures = FString::Join(Failures, TEXT("\n"));
+	TestEqual(TEXT("Only missing runtime /Game targets fail"), Failures.Num(), 2);
+	TestTrue(TEXT("A missing hard Game target fails"), JoinedFailures.Contains(TEXT("'/Game/Fixtures/MissingHard'")));
+	TestTrue(TEXT("A missing soft Game target fails"), JoinedFailures.Contains(TEXT("'/Game/Fixtures/MissingSoft'")));
+	TestFalse(TEXT("A missing NotGame target does not fail"), JoinedFailures.Contains(TEXT("SKM_MissingPreview")));
+	TestTrue(TEXT("A missing NotGame target is recorded"), Recorded.Num() == 1 && Recorded[0].Contains(TEXT("'/Game/Fixtures/SKM_MissingPreview'")));
+	return true;
+}
+
 #endif
