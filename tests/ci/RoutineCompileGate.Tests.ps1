@@ -418,8 +418,13 @@ Set-RoutineEntryFixtureFile -Path (Join-Path $EntryControl 'Source/next.cpp') -V
 $null = Invoke-RoutineEntryFixtureGit -Root $EntryControl -Arguments @('add', '.')
 $null = Invoke-RoutineEntryFixtureGit -Root $EntryControl -Arguments @('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'expired-candidate')
 $EntryParameters.SourceRevision = Invoke-RoutineEntryFixtureGit -Root $EntryControl -Arguments @('rev-parse', 'HEAD')
-$EntryParameters.CompileStartedUtc = [DateTime]::UtcNow.AddMinutes(-31).ToString('o')
-$EntryParameters.CompileStartedTimestamp = [Diagnostics.Stopwatch]::GetTimestamp() - 1860L * [Diagnostics.Stopwatch]::Frequency
+# The anchor must stay a positive monotonic timestamp (the gate rejects one
+# at or below zero as compile_clock_invalid), and the timestamp counts from
+# host boot, so a freshly started hosted runner cannot afford a long offset.
+# Use a short budget with a modest offset instead of the production budget.
+$EntryParameters.CompileTimeoutMinutes = 0.5
+$EntryParameters.CompileStartedUtc = [DateTime]::UtcNow.AddSeconds(-60).ToString('o')
+$EntryParameters.CompileStartedTimestamp = [Diagnostics.Stopwatch]::GetTimestamp() - 60L * [Diagnostics.Stopwatch]::Frequency
 $EntryParameters.LogRoot = Join-Path $EntryRoot 'expired-logs'
 $EntryParameters.ArchiveRoot = Join-Path $EntryRoot 'expired-archive'
 $EntryParameters.HostLeasePath = Join-Path $EntryRoot 'expired-host.lease'
