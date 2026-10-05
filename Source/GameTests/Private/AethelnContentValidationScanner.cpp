@@ -1103,27 +1103,7 @@ namespace
 
 			if (const UTexture* Texture = Cast<UTexture>(Object))
 			{
-				const int64 Width = FMath::RoundToInt64(Texture->GetSurfaceWidth());
-				const int64 Height = FMath::RoundToInt64(Texture->GetSurfaceHeight());
-				const UTexture2D* Texture2D = Cast<UTexture2D>(Texture);
-				const int32 Mips = Texture2D == nullptr ? 0 : Texture2D->GetNumMips();
-				const FString TextureEvidence = FString::Printf(
-					TEXT("%s;width=%lld;height=%lld;mips=%d;compression=%d;address_x=%d;address_y=%d;virtual_texture_streaming=%s;streaming_method=%d"),
-					*ValidationEvidence, Width, Height, Mips, static_cast<int32>(Texture->CompressionSettings),
-					static_cast<int32>(Texture->GetTextureAddressX()), static_cast<int32>(Texture->GetTextureAddressY()),
-					Texture->VirtualTextureStreaming ? TEXT("true") : TEXT("false"),
-					static_cast<int32>(Texture->GetTextureStreamingMethod()));
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("pbr_channels"), true, TextureEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("width"), Width}, {TEXT("height"), Height}});
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("tiling"), true, TextureEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("address_x"), static_cast<int64>(Texture->GetTextureAddressX())}, {TEXT("address_y"), static_cast<int64>(Texture->GetTextureAddressY())}});
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("compression"), true, TextureEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("compression_setting"), static_cast<int64>(Texture->CompressionSettings)}});
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("mips"), Texture2D != nullptr, TextureEvidence,
-					{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("width"), Width}, {TEXT("height"), Height}, {TEXT("mip_count"), Mips}});
-				RecordFacts(OutFacts, TEXT("texture"), TEXT("streaming"), true, TextureEvidence + TEXT(";quantitative_policy=TBD"),
-					{{TEXT("virtual_texture_streaming"), Texture->VirtualTextureStreaming != 0}},
-					{{TEXT("streaming_method"), static_cast<int64>(Texture->GetTextureStreamingMethod())}}, {}, {}, true);
+				FAethelnContentValidationScanner::CollectTextureFacts(*Texture, bDataValid, ValidationEvidence, OutFacts);
 			}
 
 			if (const UMaterialInterface* Material = Cast<UMaterialInterface>(Object))
@@ -1673,6 +1653,53 @@ TArray<FString> FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDepende
 	}
 	Failures.Sort();
 	return Failures;
+}
+
+void FAethelnContentValidationScanner::CollectTextureFacts(
+	const UTexture& Texture,
+	bool bDataValid,
+	const FString& ValidationEvidence,
+	TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts)
+{
+	// A -nullrhi commandlet never caches platform data (FApp::CanEverRender), so the platform size and
+	// mip count read 0. The editor source data is the imported texture; without it the size is unavailable.
+	bool bSourceValid = false;
+	int64 Width = 0;
+	int64 Height = 0;
+	int32 Mips = 0;
+#if WITH_EDITORONLY_DATA
+	bSourceValid = Texture.Source.IsValid();
+	if (bSourceValid)
+	{
+		Width = Texture.Source.GetSizeX();
+		Height = Texture.Source.GetSizeY();
+		Mips = Texture.Source.GetNumMips();
+	}
+#endif
+	const FString TextureEvidence = FString::Printf(
+		TEXT("%s;source=%s;source_width=%lld;source_height=%lld;source_mips=%d;compression=%d;address_x=%d;address_y=%d;virtual_texture_streaming=%s;streaming_method=%d"),
+		*ValidationEvidence, bSourceValid ? TEXT("valid") : TEXT("invalid"), Width, Height, Mips, static_cast<int32>(Texture.CompressionSettings),
+		static_cast<int32>(Texture.GetTextureAddressX()), static_cast<int32>(Texture.GetTextureAddressY()),
+		Texture.VirtualTextureStreaming ? TEXT("true") : TEXT("false"),
+		static_cast<int32>(Texture.GetTextureStreamingMethod()));
+	TMap<FString, int64> SourceSize;
+	TMap<FString, int64> SourceMips;
+	if (bSourceValid)
+	{
+		SourceSize = {{TEXT("width"), Width}, {TEXT("height"), Height}};
+		SourceMips = {{TEXT("width"), Width}, {TEXT("height"), Height}, {TEXT("mip_count"), Mips}};
+	}
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("pbr_channels"), true, TextureEvidence,
+		{{TEXT("asset_data_valid"), bDataValid}}, SourceSize);
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("tiling"), true, TextureEvidence,
+		{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("address_x"), static_cast<int64>(Texture.GetTextureAddressX())}, {TEXT("address_y"), static_cast<int64>(Texture.GetTextureAddressY())}});
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("compression"), true, TextureEvidence,
+		{{TEXT("asset_data_valid"), bDataValid}}, {{TEXT("compression_setting"), static_cast<int64>(Texture.CompressionSettings)}});
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("mips"), Texture.IsA<UTexture2D>(), TextureEvidence,
+		{{TEXT("asset_data_valid"), bDataValid}}, SourceMips);
+	RecordFacts(OutFacts, TEXT("texture"), TEXT("streaming"), true, TextureEvidence + TEXT(";quantitative_policy=TBD"),
+		{{TEXT("virtual_texture_streaming"), Texture.VirtualTextureStreaming != 0}},
+		{{TEXT("streaming_method"), static_cast<int64>(Texture.GetTextureStreamingMethod())}}, {}, {}, true);
 }
 
 FAethelnContentFamilyResult FAethelnContentValidationScanner::EvaluateFamilyFacts(

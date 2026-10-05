@@ -5,6 +5,7 @@
 
 class FJsonObject;
 class IAssetRegistry;
+class UTexture;
 
 /** Exact lowercase SHA-256 text check, defined once so a unity build cannot see two copies. */
 inline bool IsLowerSha256(const FString& Value)
@@ -158,6 +159,13 @@ public:
 	static TArray<FString> SelectEditorOnlyRuntimeDependencyFailures(
 		const FAethelnObservedPackage& Package,
 		TFunctionRef<FString(const FString& TargetPackage)> ClassifyTarget);
+
+	/** Records the texture family facts, reading size and mips from the editor source data. */
+	static void CollectTextureFacts(
+		const UTexture& Texture,
+		bool bDataValid,
+		const FString& ValidationEvidence,
+		TMap<FString, TArray<FAethelnContentCheckFacts>>& OutFacts);
 
 	/** Derives the closed v2 status vocabulary from typed observed facts. */
 	static FAethelnContentFamilyResult EvaluateFamilyFacts(

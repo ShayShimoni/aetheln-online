@@ -2,6 +2,7 @@
 #include "AethelnContentValidationScanner.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "Engine/Texture2D.h"
 #include "HAL/FileManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
@@ -503,6 +504,64 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("TBD evidence does not hide deterministic success"), UnresolvedResult.DeterministicStatus, FString(TEXT("passed")));
 	TestEqual(TEXT("TBD evidence blocks promotion"), UnresolvedResult.PromotionStatus, FString(TEXT("non_promotion")));
 
+	return true;
+}
+
+namespace
+{
+	const FAethelnContentCheckFacts* FindCheckFacts(const TMap<FString, TArray<FAethelnContentCheckFacts>>& Facts, const TCHAR* FamilyId, const TCHAR* CheckId)
+	{
+		const TArray<FAethelnContentCheckFacts>* FamilyFacts = Facts.Find(FamilyId);
+		return FamilyFacts == nullptr ? nullptr : FamilyFacts->FindByPredicate([CheckId](const FAethelnContentCheckFacts& Fact) { return Fact.CheckId == CheckId; });
+	}
+
+	FString CheckStatus(const TMap<FString, TArray<FAethelnContentCheckFacts>>& Facts, const TCHAR* FamilyId, const TCHAR* CheckId)
+	{
+		const TArray<FAethelnContentCheckFacts>* FamilyFacts = Facts.Find(FamilyId);
+		if (FamilyFacts == nullptr)
+		{
+			return TEXT("missing_family");
+		}
+		const FAethelnContentFamilyResult Result = FAethelnContentValidationScanner::EvaluateFamilyFacts(FamilyId, *FamilyFacts, false);
+		const FAethelnContentCheckResult* Check = Result.CheckResults.FindByPredicate([CheckId](const FAethelnContentCheckResult& Candidate) { return Candidate.CheckId == CheckId; });
+		return Check == nullptr ? FString(TEXT("missing_check")) : Check->DeterministicStatus;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnContentValidationTextureSourceFactsTest,
+	"Aetheln.Content.Validation.TextureSourceFacts",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnContentValidationTextureSourceFactsTest::RunTest(const FString& Parameters)
+{
+	// Like a texture in the -nullrhi commandlet: editor source data, but no cached platform data.
+	UTexture2D* Texture = NewObject<UTexture2D>(GetTransientPackage());
+	Texture->Source.Init(64, 32, 1, 7, TSF_BGRA8);
+	TMap<FString, TArray<FAethelnContentCheckFacts>> Facts;
+	FAethelnContentValidationScanner::CollectTextureFacts(*Texture, true, TEXT("fixture"), Facts);
+	const FAethelnContentCheckFacts* Mips = FindCheckFacts(Facts, TEXT("texture"), TEXT("mips"));
+	const FAethelnContentCheckFacts* PbrChannels = FindCheckFacts(Facts, TEXT("texture"), TEXT("pbr_channels"));
+	if (!TestNotNull(TEXT("The mips fact is recorded"), Mips) || !TestNotNull(TEXT("The pbr_channels fact is recorded"), PbrChannels))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Mips reads the source width"), Mips->IntegerFacts.FindRef(TEXT("width")), int64{64});
+	TestEqual(TEXT("Mips reads the source height"), Mips->IntegerFacts.FindRef(TEXT("height")), int64{32});
+	TestEqual(TEXT("Mips reads the source mip count"), Mips->IntegerFacts.FindRef(TEXT("mip_count")), int64{7});
+	TestEqual(TEXT("pbr_channels reads the source width"), PbrChannels->IntegerFacts.FindRef(TEXT("width")), int64{64});
+	TestEqual(TEXT("pbr_channels reads the source height"), PbrChannels->IntegerFacts.FindRef(TEXT("height")), int64{32});
+	TestEqual(TEXT("A sourced texture without declared mip intent is unavailable, not failed"), CheckStatus(Facts, TEXT("texture"), TEXT("mips")), FString(TEXT("evidence_unavailable")));
+
+	// Without source data the size is unknown: unavailable, never a failed zero.
+	UTexture2D* Unsourced = NewObject<UTexture2D>(GetTransientPackage());
+	TMap<FString, TArray<FAethelnContentCheckFacts>> UnsourcedFacts;
+	FAethelnContentValidationScanner::CollectTextureFacts(*Unsourced, true, TEXT("fixture"), UnsourcedFacts);
+	const FAethelnContentCheckFacts* UnsourcedMips = FindCheckFacts(UnsourcedFacts, TEXT("texture"), TEXT("mips"));
+	const FAethelnContentCheckFacts* UnsourcedPbrChannels = FindCheckFacts(UnsourcedFacts, TEXT("texture"), TEXT("pbr_channels"));
+	TestTrue(TEXT("An invalid source records no mip facts"), UnsourcedMips != nullptr && UnsourcedMips->IntegerFacts.IsEmpty());
+	TestTrue(TEXT("An invalid source records no pbr_channels size"), UnsourcedPbrChannels != nullptr && UnsourcedPbrChannels->IntegerFacts.IsEmpty());
+	TestEqual(TEXT("An invalid source leaves mips unavailable"), CheckStatus(UnsourcedFacts, TEXT("texture"), TEXT("mips")), FString(TEXT("evidence_unavailable")));
 	return true;
 }
 
