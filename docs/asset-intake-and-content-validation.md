@@ -162,7 +162,19 @@ dependency, hard or soft, whose target is editor-only content: a `/Script`
 package flagged `PKG_EditorOnly` or `PKG_UncookedOnly` (Editor and
 UncookedOnly modules), a package whose on-disk Asset Registry record carries
 either flag, or a `/Script` package that is not loaded in the Editor and so
-cannot be proven runtime content. Editor-only (`NotGame`) references, such as
+cannot be proven runtime content. One case is recorded in the
+`broken_references` evidence instead of failing: a `Game` dependency on a
+loaded `/Script` package flagged `PKG_UncookedOnly` and not `PKG_EditorOnly`,
+from a package whose every asset class is a `UBlueprint`. SavePackage treats
+only `PKG_EditorOnly` as editor-only, so every Control Rig Blueprint, such as
+`CR_Mannequin_FootIK`, saves its `/Script/ControlRigDeveloper` and
+`/Script/RigVMDeveloper` imports as `Game`, and the cook strips the
+`UBlueprint` itself (`UBlueprint::NeedsLoadForClient` and
+`NeedsLoadForServer` return false). This exception is inferred from engine
+code. Revisit trigger: the first #15 client and dedicated-server cook must
+show that cooked `CR_Mannequin_FootIK` imports neither package; otherwise the
+exception is removed. A `PKG_EditorOnly` target still fails from any package.
+Editor-only (`NotGame`) references, such as
 a Blueprint's editor graph nodes, are recorded and allowed; a `/Game` target
 of one must still resolve to governed content. The Asset Registry does not
 record hard dependencies on `/Script/CoreUObject`, `/Script/Engine`,

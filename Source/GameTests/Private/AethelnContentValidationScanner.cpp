@@ -875,6 +875,20 @@ namespace
 		return false;
 	}
 
+	/** True when every asset class in the package is a loaded UBlueprint subclass. */
+	bool IsBlueprintClassPackage(const FAethelnObservedPackage& Package)
+	{
+		for (const FString& ClassPath : Package.ClassPaths)
+		{
+			const UClass* Class = FindObject<UClass>(nullptr, *ClassPath);
+			if (Class == nullptr || !Class->IsChildOf(UBlueprint::StaticClass()))
+			{
+				return false;
+			}
+		}
+		return !Package.ClassPaths.IsEmpty();
+	}
+
 	FString DescribeObservedClasses(const FAethelnObservedPackage& Package)
 	{
 		return FString::Join(Package.ClassPaths, TEXT(", "));
@@ -1601,7 +1615,7 @@ bool FAethelnContentValidationScanner::IsSoftReferenceAllowed(
 	return false;
 }
 
-FString FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage)
+FAethelnEditorOnlyTarget FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage)
 {
 	// UHT flags Editor-module script packages PKG_EditorOnly and UncookedOnly-module script packages
 	// PKG_UncookedOnly; a saved editor-only content package carries PKG_EditorOnly in its package flags.
@@ -1610,11 +1624,17 @@ FString FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistr
 		const UPackage* ScriptPackage = FindPackage(nullptr, *TargetPackage);
 		if (ScriptPackage == nullptr)
 		{
-			return TEXT("script package is not loaded in the Editor, so it cannot be proven runtime content");
+			return {TEXT("script package is not loaded in the Editor, so it cannot be proven runtime content")};
 		}
-		return ScriptPackage->HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly)
-			? FString(TEXT("script package is flagged PKG_EditorOnly or PKG_UncookedOnly"))
-			: FString();
+		if (ScriptPackage->HasAnyPackageFlags(PKG_EditorOnly))
+		{
+			return {TEXT("script package is flagged PKG_EditorOnly")};
+		}
+		if (ScriptPackage->HasAnyPackageFlags(PKG_UncookedOnly))
+		{
+			return {TEXT("script package is flagged PKG_UncookedOnly"), true};
+		}
+		return {};
 	}
 	TArray<FAssetData> TargetAssets;
 	Registry.GetAssetsByPackageName(FName(*TargetPackage), TargetAssets, true, true);
@@ -1622,29 +1642,44 @@ FString FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistr
 	{
 		if (TargetAsset.HasAnyPackageFlags(PKG_EditorOnly | PKG_UncookedOnly))
 		{
-			return TEXT("package is flagged PKG_EditorOnly or PKG_UncookedOnly");
+			return {TEXT("package is flagged PKG_EditorOnly or PKG_UncookedOnly")};
 		}
 	}
-	return FString();
+	return {};
 }
 
 TArray<FString> FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(
 	const FAethelnObservedPackage& Package,
-	TFunctionRef<FString(const FString& TargetPackage)> ClassifyTarget)
+	TFunctionRef<FAethelnEditorOnlyTarget(const FString& TargetPackage)> ClassifyTarget,
+	TArray<FString>& OutRecorded)
 {
+	// The package saver treats only PKG_EditorOnly as editor-only, so every Control Rig Blueprint saves its
+	// UncookedOnly imports as Game. The cook strips the UBlueprint (UBlueprint::NeedsLoadForClient and
+	// NeedsLoadForServer return false), so those imports are recorded, not failed. Inferred from engine
+	// code: the first #15 cook must show the cooked package imports none of them.
+	const bool bBlueprintPackage = IsBlueprintClassPackage(Package);
 	TArray<FString> Failures;
 	for (const TArray<FString>* RuntimeDependencies : { &Package.HardDependencies, &Package.SoftDependencies })
 	{
 		for (const FString& Dependency : *RuntimeDependencies)
 		{
-			const FString Reason = ClassifyTarget(Dependency);
-			if (!Reason.IsEmpty())
+			const FAethelnEditorOnlyTarget Target = ClassifyTarget(Dependency);
+			if (Target.Reason.IsEmpty())
 			{
-				Failures.Add(FString::Printf(TEXT("editor-only runtime dependency '%s' is prohibited: %s"), *Dependency, *Reason));
+				continue;
+			}
+			if (bBlueprintPackage && Target.bUncookedOnlyScript)
+			{
+				OutRecorded.Add(FString::Printf(TEXT("UBlueprint-class package runtime dependency '%s' recorded: %s, and the cook strips the UBlueprint"), *Dependency, *Target.Reason));
+			}
+			else
+			{
+				Failures.Add(FString::Printf(TEXT("editor-only runtime dependency '%s' is prohibited: %s"), *Dependency, *Target.Reason));
 			}
 		}
 	}
 	Failures.Sort();
+	OutRecorded.Sort();
 	return Failures;
 }
 
@@ -2148,7 +2183,8 @@ bool FAethelnContentValidationScanner::ScanLiveRegistry(TArray<FAethelnObservedP
 		}
 		Package.EditorOnlyRuntimeDependencyFailures = SelectEditorOnlyRuntimeDependencyFailures(
 			Package,
-			[&Registry](const FString& TargetPackage) { return ClassifyEditorOnlyTarget(Registry, TargetPackage); });
+			[&Registry](const FString& TargetPackage) { return ClassifyEditorOnlyTarget(Registry, TargetPackage); },
+			Package.RecordedUncookedOnlyDependencies);
 		OutPackages.Add(MoveTemp(Package));
 	}
 	OutPackages.Sort([](const FAethelnObservedPackage& Left, const FAethelnObservedPackage& Right) { return Left.PackageName < Right.PackageName; });
@@ -2366,19 +2402,18 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 		VersionFailures.Sort();
 		AudienceFailures.Sort();
 		HardAudienceFailures.Sort();
-		auto RecordReferenceCheck = [&FamilyFacts](const FString& CheckId, const TArray<FString>& Failures)
+		auto RecordReferenceCheck = [&FamilyFacts](const FString& CheckId, const TArray<FString>& Failures, const TArray<FString>& Recorded = {})
 		{
-			RecordFacts(
-				FamilyFacts,
-				TEXT("reference_boundary"),
-				CheckId,
-				true,
-				Failures.IsEmpty() ? TEXT("verified from closed intake and Asset Registry facts") : FString::Join(Failures, TEXT("; ")),
-				{}, {{TEXT("violation_count"), Failures.Num()}});
+			FString Evidence = Failures.IsEmpty() ? TEXT("verified from closed intake and Asset Registry facts") : FString::Join(Failures, TEXT("; "));
+			if (!Recorded.IsEmpty())
+			{
+				Evidence += TEXT("; recorded, not failed: ") + FString::Join(Recorded, TEXT("; "));
+			}
+			RecordFacts(FamilyFacts, TEXT("reference_boundary"), CheckId, true, Evidence, {}, {{TEXT("violation_count"), Failures.Num()}});
 		};
 		RecordReferenceCheck(TEXT("stable_id_unique"), StableIdentityFailures);
 		RecordReferenceCheck(TEXT("redirectors"), RedirectorFailures);
-		RecordReferenceCheck(TEXT("broken_references"), BrokenReferenceFailures);
+		RecordReferenceCheck(TEXT("broken_references"), BrokenReferenceFailures, Observed.RecordedUncookedOnlyDependencies);
 		RecordReferenceCheck(TEXT("compatible_content_version"), VersionFailures);
 		RecordReferenceCheck(TEXT("audience_reachability"), AudienceFailures);
 		RecordReferenceCheck(TEXT("hard_reference_exceptions"), HardAudienceFailures);

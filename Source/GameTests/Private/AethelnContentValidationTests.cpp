@@ -166,12 +166,15 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 		TEXT("/Game/Fixtures/EUW_EditorLinked"),
 		TEXT("/Script/BlueprintGraph")
 	};
+	TArray<FString> RecordedRuntimeDependencies;
 	const TArray<FString> RuntimeBoundaryFailures = FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(
 		Referencing,
 		[&EditorOnlyTargets](const FString& TargetPackage)
 		{
-			return EditorOnlyTargets.Contains(TargetPackage) ? FString(TEXT("fixture editor-only target")) : FString();
-		});
+			return EditorOnlyTargets.Contains(TargetPackage) ? FAethelnEditorOnlyTarget{TEXT("fixture editor-only target")} : FAethelnEditorOnlyTarget{};
+		},
+		RecordedRuntimeDependencies);
+	TestTrue(TEXT("A package without asset classes records no runtime dependency"), RecordedRuntimeDependencies.IsEmpty());
 	const FString JoinedRuntimeBoundaryFailures = FString::Join(RuntimeBoundaryFailures, TEXT("\n"));
 	TestEqual(TEXT("Only runtime dependencies on editor-only content fail"), RuntimeBoundaryFailures.Num(), 2);
 	TestTrue(TEXT("A hard runtime dependency on editor-only content fails"), JoinedRuntimeBoundaryFailures.Contains(TEXT("'/Game/Fixtures/EUW_RuntimeLinked'")));
@@ -182,11 +185,11 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 
 	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
 	TestTrue(TEXT("The runtime Engine script package is runtime content"),
-		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/Engine")).IsEmpty());
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/Engine")).Reason.IsEmpty());
 	TestFalse(TEXT("The Editor-module UnrealEd script package is editor-only content"),
-		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/UnrealEd")).IsEmpty());
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/UnrealEd")).Reason.IsEmpty());
 	TestFalse(TEXT("An unloaded script package fails closed"),
-		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/AethelnMissingModule")).IsEmpty());
+		FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/AethelnMissingModule")).Reason.IsEmpty());
 
 	const FString VerifiedSnapshot = TEXT("{\"schema_id\":\"aetheln.asset-registry-snapshot\",\"schema_version\":1,\"packages\":[{\"package_name\":\"/Game/Fixtures/SM_GovernedFixture\",\"repository_path\":\"Content/Fixtures/SM_GovernedFixture.uasset\",\"class_paths\":[\"/Script/Engine.StaticMesh\"],\"tags\":{},\"hard_dependencies\":[],\"soft_dependencies\":[],\"editor_only_dependencies\":[],\"content_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"is_redirector\":false}]}");
 	const FString VerifiedSnapshotPath = FPaths::CreateTempFilename(*FPaths::ProjectSavedDir(), TEXT("AethelnSnapshotBinding"), TEXT(".json"));
@@ -598,6 +601,50 @@ bool FAethelnContentValidationSkeletalCollisionTest::RunTest(const FString& Para
 	TMap<FString, TArray<FAethelnContentCheckFacts>> BareFacts;
 	FAethelnContentValidationScanner::CollectSkeletalMeshCollisionFacts(*Bare, true, TEXT("fixture"), BareFacts);
 	TestEqual(TEXT("A skeletal mesh without a collision source fails"), CheckStatus(BareFacts, TEXT("collision"), TEXT("profile")), FString(TEXT("failed")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnContentValidationBlueprintUncookedOnlyTest,
+	"Aetheln.Content.Validation.BlueprintUncookedOnlyDependencies",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnContentValidationBlueprintUncookedOnlyTest::RunTest(const FString& Parameters)
+{
+	// The live classifier on CR_Mannequin_FootIK's Game script imports.
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	for (const TCHAR* UncookedOnly : { TEXT("/Script/ControlRigDeveloper"), TEXT("/Script/RigVMDeveloper") })
+	{
+		const FAethelnEditorOnlyTarget Target = FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, UncookedOnly);
+		TestTrue(*FString::Printf(TEXT("%s is an UncookedOnly-only script package"), UncookedOnly), !Target.Reason.IsEmpty() && Target.bUncookedOnlyScript);
+	}
+	const FAethelnEditorOnlyTarget EditorOnly = FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TEXT("/Script/UnrealEd"));
+	TestTrue(TEXT("An Editor-module script package is PKG_EditorOnly, not UncookedOnly-only"), !EditorOnly.Reason.IsEmpty() && !EditorOnly.bUncookedOnlyScript);
+
+	FAethelnObservedPackage ControlRig;
+	ControlRig.PackageName = TEXT("/Game/Fixtures/CR_Fixture");
+	ControlRig.ClassPaths = { TEXT("/Script/ControlRigDeveloper.ControlRigBlueprint") };
+	ControlRig.HardDependencies = { TEXT("/Script/ControlRigDeveloper"), TEXT("/Script/Engine"), TEXT("/Script/RigVMDeveloper"), TEXT("/Script/UnrealEd") };
+	auto Classify = [&Registry](const FString& TargetPackage) { return FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(Registry, TargetPackage); };
+	TArray<FString> Recorded;
+	TArray<FString> Failures = FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(ControlRig, Classify, Recorded);
+	const FString JoinedRecorded = FString::Join(Recorded, TEXT("\n"));
+	TestEqual(TEXT("A Blueprint package's UncookedOnly-only imports are recorded"), Recorded.Num(), 2);
+	TestTrue(TEXT("ControlRigDeveloper is recorded"), JoinedRecorded.Contains(TEXT("'/Script/ControlRigDeveloper'")));
+	TestTrue(TEXT("RigVMDeveloper is recorded"), JoinedRecorded.Contains(TEXT("'/Script/RigVMDeveloper'")));
+	TestTrue(TEXT("A Blueprint package's PKG_EditorOnly import still fails"), Failures.Num() == 1 && Failures[0].Contains(TEXT("'/Script/UnrealEd'")));
+
+	// Only a package whose every asset is a UBlueprint is stripped from the cook.
+	for (const TArray<FString>& ClassPaths : { TArray<FString>{ TEXT("/Script/Engine.StaticMesh") }, TArray<FString>{ TEXT("/Script/Engine.Blueprint"), TEXT("/Script/Engine.StaticMesh") }, TArray<FString>{} })
+	{
+		FAethelnObservedPackage Cooked = ControlRig;
+		Cooked.ClassPaths = ClassPaths;
+		Recorded.Reset();
+		Failures = FAethelnContentValidationScanner::SelectEditorOnlyRuntimeDependencyFailures(Cooked, Classify, Recorded);
+		const FString Classes = FString::Join(ClassPaths, TEXT(","));
+		TestTrue(*FString::Printf(TEXT("[%s] records nothing"), *Classes), Recorded.IsEmpty());
+		TestEqual(*FString::Printf(TEXT("[%s] fails every editor-only import"), *Classes), Failures.Num(), 3);
+	}
 	return true;
 }
 
