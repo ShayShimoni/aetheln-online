@@ -10,8 +10,9 @@ telemetry around them. It distils the design approved on the issue (revision 2,
 after an independent review and a fix verification). Pull requests P2 to P6
 deliver it in phases (see [PR Phasing](#pr-phasing-and-evidence)): P2 adds the
 PlayerState-owned ASC, the attribute set, the init effect, the combat game mode,
-the AI character base, and their tests; the seam, the abilities, and the
-two-client evidence follow in P3 to P6.
+the AI character base, and their tests; P3 adds the activation seam, the base
+ability with its choke point, grant validation, and the rejection telemetry; the
+abilities and the two-client evidence follow in P4 to P6.
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
@@ -309,7 +310,7 @@ any configured class that:
 
 - does not derive from `UAethelnGameplayAbility` (a plain `UGameplayAbility`
   subclass would bypass the choke point);
-- is not ServerOnly in both policies;
+- is not InstancedPerActor, or not ServerOnly in both net policies;
 - lacks a valid `Ability.` identity tag, or has a `ContentVersion` of 0;
 - has a cost or cooldown that is non-finite or negative;
 - has non-empty `AbilityTriggers` (`GAS/Public/Abilities/GameplayAbility.h:727`)
@@ -456,7 +457,9 @@ that fails. Each rejection has one reason, and precedence is deterministic.
   blocked here, so the reason is deterministic and precedes commit (the engine
   would refuse later: `GAS/Private/AbilitySystemComponent_Abilities.cpp:1831-1850`).
   A `Release` is valid only if `bAcceptsRelease` is set and the instance is
-  active. **A valid Release is an accepted request:** it ends the instance,
+  active: an undeclared Release is `MalformedRequest`, and a declared Release
+  while the instance is not active is `ActivationBlocked`. **A valid Release is
+  an accepted request:** it ends the instance,
   skips steps 8 and 9, and runs step 10, so the sequence advances, the owner
   gets `Accepted`, and the event carries the running activation's id. A
   replayed Release then fails step 4.
@@ -484,9 +487,10 @@ that fails. Each rejection has one reason, and precedence is deterministic.
   (`GAS/Private/AbilitySystemComponent_Abilities.cpp:1682`), so the result slot
   decides between `Accepted` and `InternalFailure`. A failed commit applies
   nothing and does not advance the sequence.
-- **Pure validator.** Steps 1 to 7 are a static pure function, modeled on the
-  spike's, taking server time and instance state as inputs, so they are
-  headless table-testable.
+- **Pure validator.** Step 1 is a token bucket that takes the server time as an
+  input and runs before any lookup. Steps 2 to 7 are a static pure function,
+  modeled on the spike's, taking the request and the server and instance state
+  as inputs. Both are headless table-testable.
 
 **Sequence policy.** The sequence advances only on acceptance (a valid Release
 included), accepts forward gaps, never wraps, and lives for one PlayerState
@@ -539,7 +543,8 @@ Three mechanisms close them:
    `ServerAbilityRPCBatch_Internal` (dropping the whole batch, including its
    target-data write). In P2 to P5 both refuse unconditionally; P6 adds the
    seam-scope exemption to the first. Each refusal takes one token from the
-   connection's bucket and records a metric only. It sends **no reply**: no
+   connection's bucket and records a metric only (`RejectionCount`, subject
+   Ability, safe reason `Rejected`). It sends **no reply**: no
    legitimate client uses these routes, so a hostile client gets no reliable
    `ClientActivateAbilityFailed` to amplify. The ServerOnly security policy is
    a second, independent guard.
@@ -621,7 +626,8 @@ The client must not control event volume in the observability critical lane.
   - While limited: no events and no outcomes. Refused seam requests and
     refused stock-route calls are only counted in memory, folded into one
     suppressed count.
-  - On exit: one metric sample whose value is the suppressed count.
+  - On exit: one metric sample whose value is the suppressed count, which may
+    be 0.
   - **Teardown flush.** A window ends only when a request is admitted, so
     PlayerState or ASC teardown while limited flushes the exit metric;
     otherwise a client that disconnects mid-window would never emit it.

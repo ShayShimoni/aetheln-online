@@ -23,6 +23,10 @@ flow kind, metric kind, and environment. The prototype categories are:
 - correction and rejection;
 - server lifecycle, server health, and crash context.
 
+Closed-enum values may be appended within a schema version. Removing,
+renumbering, or changing the meaning of an existing value requires a schema
+version bump.
+
 Correction and rejection are subject-bearing envelopes: their subject retains
 the closed category that was corrected or rejected instead of being silently
 rewritten to the envelope category.

@@ -9,6 +9,7 @@
 class UAethelnAbilitySystemComponent;
 class UAethelnCombatAttributeSet;
 class UGameplayAbility;
+struct FGameplayAbilitySpec;
 
 /**
  * Owns the player Ability System Component (Mixed replication) and the combat
@@ -31,7 +32,14 @@ public:
 	UAethelnAbilitySystemComponent* GetAethelnAbilitySystemComponent() const { return AbilitySystemComponent; }
 	const UAethelnCombatAttributeSet* GetCombatAttributeSet() const { return AttributeSet; }
 
-	/** Server-side config: abilities granted on the first possession. Grant validation arrives with the activation seam. */
+	/**
+	 * Grant-time validation (docs/gas-foundation.md, Abilities). Refuses, and logs, a spec
+	 * whose ability does not derive from UAethelnGameplayAbility, whose definition fails
+	 * UAethelnGameplayAbility::FindGrantProblem, or that carries an input id.
+	 */
+	static bool IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spec);
+
+	/** Server-side config: abilities granted on the first possession, each through grant validation. */
 	UPROPERTY(Config)
 	TArray<TSubclassOf<UGameplayAbility>> GrantedAbilities;
 
