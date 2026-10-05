@@ -1221,9 +1221,22 @@ do, so they are unchanged.
 The lead selected an independently writable runner source-engine tree under
 [TA-020](architecture-decisions.md) and
 [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
-This direction is not yet deployed: capacity, provisioning and the
-CI-to-untouched-contributor launch proof remain outstanding. The current shared
-engine exposure and its recovery requirements remain in effect.
+This direction is not deployed: capacity, provisioning and the
+CI-to-untouched-contributor launch proof remain outstanding and, per the
+supersession below, are no longer scheduled. The shared engine tree and its
+recovery requirements remain in effect.
+
+The 2026-10-05 TA-020 amendment (issue #238) supersedes the need for this
+route for the NetCore BuildId churn: `bEnableUHTInputCache` set to `true` in
+the engine's git-ignored `Engine/Saved/UnrealBuildTool/BuildConfiguration.xml`
+makes UHT deterministic. The runner's engine provisioning must include that
+file (exact XML in
+[Unreal Project Setup](unreal-project-setup.md#enable-the-uht-input-cache)),
+and no build against these trees may pass `-ForceHeaderGeneration`. A second
+writable engine tree is no longer required for this problem; it remains a
+recorded option with the revisit triggers in TA-020. The remainder of this
+section describes that option unchanged, so read it with that supersession in
+mind. `-NoEngineChanges` stays off until a separate change enables it.
 
 The intended runner root serves CI compile, editor automation and packaging;
 the contributor root serves contributor builds and editor launches. Preserve
