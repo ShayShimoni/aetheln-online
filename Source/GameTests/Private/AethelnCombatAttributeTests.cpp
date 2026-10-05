@@ -138,6 +138,27 @@ bool FAethelnAttributeClampAndBoundsTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("Max%s clamps to 0"), Pair.Name), GetValue(*AbilitySystem, Pair.Max), 0.0f);
 		TestEqual(*FString::Printf(TEXT("%s follows a zero maximum"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), 0.0f);
 	}
+
+	// The re-clamp writes only on the server. A client reaches PostAttributeChange
+	// when a lowered maximum replicates; simulate that role and call it directly.
+	UAethelnAttributeInitEffect::ApplyTo(*AbilitySystem, MakeTestInitValues());
+	UAethelnCombatAttributeSet* AttributeSet = const_cast<UAethelnCombatAttributeSet*>(Character->GetCombatAttributeSet());
+	const FGameplayAttribute HealthAttribute = UAethelnCombatAttributeSet::GetHealthAttribute();
+	const FGameplayAttribute MaxHealthAttribute = UAethelnCombatAttributeSet::GetMaxHealthAttribute();
+	const float FullHealth = MakeTestInitValues().Health;
+	const float LoweredMax = FullHealth * 0.5f;
+
+	Character->SetRole(ROLE_SimulatedProxy);
+	AbilitySystem->CacheIsNetSimulated();
+	TestFalse(TEXT("Simulated proxy ASC is not authoritative"), AbilitySystem->IsOwnerActorAuthoritative());
+	AttributeSet->PostAttributeChange(MaxHealthAttribute, FullHealth, LoweredMax);
+	TestEqual(TEXT("Client re-clamp writes nothing to the Health base"), AbilitySystem->GetNumericAttributeBase(HealthAttribute), FullHealth);
+
+	Character->SetRole(ROLE_Authority);
+	AbilitySystem->CacheIsNetSimulated();
+	TestTrue(TEXT("Restored ASC is authoritative"), AbilitySystem->IsOwnerActorAuthoritative());
+	AttributeSet->PostAttributeChange(MaxHealthAttribute, FullHealth, LoweredMax);
+	TestEqual(TEXT("Server re-clamp lowers the Health base"), AbilitySystem->GetNumericAttributeBase(HealthAttribute), LoweredMax);
 	return true;
 }
 

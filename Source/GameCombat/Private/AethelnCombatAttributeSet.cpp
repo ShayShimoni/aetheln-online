@@ -42,7 +42,10 @@ void UAethelnCombatAttributeSet::ClampAttribute(const FGameplayAttribute& Attrib
 
 void UAethelnCombatAttributeSet::SetClampedBaseValue(const FGameplayAttribute& Attribute, float NewValue)
 {
-	if (UAbilitySystemComponent* AbilitySystemComponent = GetOwningAbilitySystemComponent())
+	// Server only: SetNumericAttributeBase has no authority check, and a client
+	// reaches the re-clamp when a lowered maximum replicates. Clients never write.
+	UAbilitySystemComponent* AbilitySystemComponent = GetOwningAbilitySystemComponent();
+	if (AbilitySystemComponent != nullptr && AbilitySystemComponent->IsOwnerActorAuthoritative())
 	{
 		AbilitySystemComponent->SetNumericAttributeBase(Attribute, NewValue);
 	}

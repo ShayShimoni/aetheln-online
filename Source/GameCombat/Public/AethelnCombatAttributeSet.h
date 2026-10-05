@@ -39,7 +39,7 @@ private:
 	/** Clamps a current value to [0, Max] and a maximum to >= 0. */
 	void ClampAttribute(const FGameplayAttribute& Attribute, float& NewValue) const;
 
-	/** The only direct write: used by the clamps above, never by gameplay code. */
+	/** The only direct write: used by the clamps above, never by gameplay code. Server only; a no-op on clients. */
 	void SetClampedBaseValue(const FGameplayAttribute& Attribute, float NewValue);
 
 	UFUNCTION()
