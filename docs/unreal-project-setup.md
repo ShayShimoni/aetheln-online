@@ -93,9 +93,10 @@ can alternate NetCore's generated output through a race in the engine's
 `UhtHeaderFile.cs`, which relinks `UnrealEditor-NetCore.dll`, restamps the
 engine BuildId and stops editors built earlier from loading (see the TA-020
 2026-10-05 amendment in [Architecture Decisions](architecture-decisions.md)).
-Create `Engine\Saved\UnrealBuildTool\BuildConfiguration.xml` under
-`$AethelnEngineRoot` with exactly this content (replace the file if it is
-empty):
+The file is `Engine\Saved\UnrealBuildTool\BuildConfiguration.xml` under
+`$AethelnEngineRoot`. UnrealBuildTool creates a default file there on its first
+run, holding only an empty `<Configuration xmlns="...">` element. If the file
+holds only that default (or does not exist), it must contain exactly:
 
 ```xml
 <?xml version="1.0" encoding="utf-8" ?>
@@ -106,8 +107,44 @@ empty):
 </Configuration>
 ```
 
+If the file already holds other settings, merge instead: add the
+`bEnableUHTInputCache` line inside an existing `UEBuildConfiguration` element,
+or add that element, and keep the rest. This PowerShell creates the directory
+and writes the file only when it is missing or holds just the default empty
+`Configuration` element, so it never overwrites an `UEBuildConfiguration`
+element or other settings:
+
+```powershell
+$AethelnUbtConfig = Join-Path $AethelnEngineRoot 'Engine\Saved\UnrealBuildTool\BuildConfiguration.xml'
+New-Item -ItemType Directory -Force (Split-Path $AethelnUbtConfig) | Out-Null
+$AethelnDefaultOnly = '^\s*(<\?xml[^>]*\?>)?\s*<Configuration[^>]*(/>|>\s*</Configuration>)\s*$'
+if (-not (Test-Path $AethelnUbtConfig) -or
+    ((Get-Content -Raw $AethelnUbtConfig) -match $AethelnDefaultOnly)) {
+  Set-Content -Path $AethelnUbtConfig -Encoding utf8 -Value @'
+<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+  <UEBuildConfiguration>
+    <bEnableUHTInputCache>true</bEnableUHTInputCache>
+  </UEBuildConfiguration>
+</Configuration>
+'@
+} else {
+  Write-Warning "Merge bEnableUHTInputCache=true into $AethelnUbtConfig by hand."
+}
+```
+
+UnrealBuildTool reads later configuration files (ProgramData, AppData,
+LocalAppData, Documents and the project's
+`Saved\UnrealBuildTool\BuildConfiguration.xml`) after the engine one, so none
+of them may set `bEnableUHTInputCache` to `false`.
+
 The engine's own `.gitignore` ignores `Saved/`, so the pinned checkout stays
-clean and the file is never committed. The next build of each project logs
+clean and the file is never committed. With the cache on, UHT also writes
+git-ignored `.inputcache.data` files under the engine and project
+`Intermediate` folders; they are shared mutable engine state. The cache fixes
+BuildId determinism and does not make concurrent engine writes safe, so
+serialization of shared-engine users through the host lease and queue remains a
+standing rule. The next build of each project logs
 `BuildConfiguration.xml is newer`, runs a full UHT pass and may rebuild the
 editor once; that is expected. Never pass `-ForceHeaderGeneration` to
 `Build.bat` or UnrealBuildTool, because it turns the cache read off and brings
@@ -162,9 +199,9 @@ If a second tree is ever deployed, use the locally configured contributor
 engine root for these build and launch commands. CI uses its separately
 provisioned runner root; engine/plugin binaries, generated files,
 intermediates and module manifests must not share writable aliases. Each root
-retains its own applicable identity and provisioning evidence. Until that
-separation is verified, continue to serialize shared-engine consumers. Even
-afterward, reserve a quiet host for performance captures.
+retains its own applicable identity and provisioning evidence. Serialization
+of shared-engine consumers is a standing rule; only a verified separation
+could relax it. Even then, reserve a quiet host for performance captures.
 
 ## First launch
 
