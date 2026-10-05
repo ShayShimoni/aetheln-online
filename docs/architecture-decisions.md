@@ -268,10 +268,11 @@ Every accepted decision records:
   37281226888 (2026-10-05) ran on `develop`; the earlier runs, through
   36980533796 on 2026-10-02, ran on `main`. This replaces the original
   consequence that kept the schedule off `develop` until the workflow reached
-  `main` through Git Flow. What changes: each `02:00 UTC` run executes the workflow at the head of
-  `develop`, so a change to the schedule or to a phase takes effect when it
-  merges to `develop`, and the four phases package that head, not the contents
-  of `main`. The copy of the workflow on `main` is not scheduled.
+  `main` through Git Flow. What changes: each scheduled run executes the
+  workflow at the head of `develop` when GitHub starts it, which can be hours
+  after the nominal `02:00 UTC`. A change to the schedule or to a phase takes
+  effect when it merges to `develop`, and the four phases package that head,
+  not the contents of `main`. The copy of the workflow on `main` is not scheduled.
   Release packaging stays on `release/*` through TA-022. The scheduled jobs
   guard only on the `schedule` event, so no workflow condition or test pins
   `main` for the schedule, and none changed.
