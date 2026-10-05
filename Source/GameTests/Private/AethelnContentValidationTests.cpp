@@ -464,7 +464,7 @@ bool FAethelnContentValidationSnapshotTest::RunTest(const FString& Parameters)
 	CheckFactStatus(TEXT("Default-config world without navigation data stays unavailable"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
 	Navigation.BooleanFacts[TEXT("navigation_config_present")] = false;
 	CheckFactStatus(TEXT("World without navigation config or data stays unavailable"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
-	Navigation.BooleanFacts[TEXT("navigation_audience_evidence_recorded")] = true;
+	Navigation.BooleanFacts.Add(TEXT("navigation_audience_evidence_recorded"), true);
 	Navigation.BooleanFacts[TEXT("navigation_config_present")] = true;
 	CheckFactStatus(TEXT("Audience evidence cannot promote a world without navigation data"), TEXT("navigation"), Navigation, TEXT("evidence_unavailable"));
 	Navigation.BooleanFacts.Remove(TEXT("navigation_audience_evidence_recorded"));
