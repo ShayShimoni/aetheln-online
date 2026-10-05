@@ -12,6 +12,8 @@
  * module so Client and Server targets carry no test class. Their tags
  * (AethelnCombatTestTags) are declared in GameCore, because the engine accepts
  * native tags only from Runtime modules. Only the tests grant these abilities.
+ * No WITH_DEV_AUTOMATION_TESTS guard: UHT skips the contents of #if blocks it
+ * does not recognize, so guarded UCLASS types would lose their generated code.
  */
 
 /** Commits through the seam's result slot, then stays active until cancelled. */
