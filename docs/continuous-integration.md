@@ -430,9 +430,10 @@ classified report, so the workflow's controller identity check accepts it and
 the all-selected selection reaches the producer-gap path. If the identity
 lookup itself fails, the report has no identity and the workflow fails closed
 with `shadow_report_controller_identity_mismatch`.
-Agent-tooling and build-test paths retain
+Agent-tooling, build-test, and every `tests/**/*.ps1|md` path retain
 portable proof; build scripts retain controller-operational and clean-package
-proof. Production CI scripts and workflows select both controller
+proof, except the two packaging scripts `change-impact` exempts from compile,
+which keep clean-package proof only (issue #231, below). Production CI scripts and workflows select both controller
 contract and operational proof; plugin Content also selects content-reference
 validation. Ordinary source, plugin source, and the project descriptor select
 native client/server compilation plus Unreal Editor automation, but not a
@@ -470,6 +471,36 @@ their source pull requests are accepted on the integration branch; the three
 existing portable/receipt/aggregate lists and the two byte-identical
 `controller-contract` suite subsets in the receipt producer and aggregate must
 change together at that time.
+
+Issue #231 (2026-10-05) reconciles the selector with `change-impact` for the
+two path classes where they disagreed. On those pull requests the producer-gap
+path failed with `producer_direct_binding_invalid:native`, because the selector
+required a native receipt for a compile that `change-impact` skipped. The
+selector was wrong in both classes, so the `change-impact` block and the
+authority predicate are unchanged:
+
+- `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`: the selector over-selected
+  `controller-operational-proof`. The Compile gate never runs these scripts
+  (only its packaging, provenance, and smoke modes do), so a native receipt
+  cannot prove them. They now select `portable` and
+  `clean-package-provenance-smoke` only,
+  which keeps them on the explicit gap branch until a clean-package producer
+  exists. Every other `scripts/build/` path still selects
+  `controller-operational-proof`, and `change-impact` still compiles for it.
+- New `tests/content/*.ps1` and `*.md` files: the selector was the outlier.
+  Both classifiers treat every other `tests/**/*.ps1|md` path as portable, and
+  a compile cannot prove a test script. These paths now select `portable` only.
+  Any other `tests/content/` file, such as a `.json` fixture, still fails closed
+  as `path_unclassified`, and `change-impact` still requires compile for it.
+
+`tests/ci/Get-CiSelection.Tests.ps1` reads the workflow's compile-exempt list
+and fails if the selector requires a compile-backed receipt for any path on it.
+This candidate is 41,492 LF-normalized bytes with digest
+`40cb0f0c2aeee97557d0d939d63ce7e1b68274338033304a4c11a7626a70313d`. It is a new
+policy identity, and the shadow job runs the accepted-base selector. A later
+owner pull request that touches only these paths must therefore record the
+green gap observation after this change merges.
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
