@@ -371,12 +371,13 @@ function Assert-AcceptanceContentValidationEvidence {
 		$Report.result -isnot [string] -or $Report.result -cnotin @('passed','non_promotion') -or -not (Test-AcceptanceBoundedInteger -Value $Report.counts.errors -Minimum 0 -Maximum 0) -or
 		$Report.assets -isnot [array] -or @($Report.assets).Count -lt 1 -or -not (Test-AcceptanceBoundedInteger -Value $Report.counts.assets -Minimum 1 -Maximum 1000000) -or $Report.counts.assets -ne @($Report.assets).Count -or
 		$Report.findings -isnot [array] -or -not (Test-AcceptanceBoundedInteger -Value $Report.counts.findings -Minimum 0 -Maximum 1000000) -or $Report.counts.findings -ne @($Report.findings).Count) { throw $Reason }
-	foreach ($Finding in @($Report.findings)) {
-		if ($Finding -isnot [pscustomobject] -or $Finding.PSObject.Properties.Name -cnotcontains 'policy_id' -or $Finding.policy_id -isnot [string] -or $Finding.policy_id -ceq 'reference_boundary') { throw $Reason }
-	}
 	$ReferenceChecks = 'audience_reachability,broken_references,compatible_content_version,hard_reference_exceptions,redirectors,stable_id_unique'
+	$LifecycleByAsset = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
 	foreach ($Asset in @($Report.assets)) {
-		if ($Asset -isnot [pscustomobject] -or $Asset.PSObject.Properties.Name -cnotcontains 'family_results' -or $Asset.family_results -isnot [array]) { throw $Reason }
+		if ($Asset -isnot [pscustomobject] -or $Asset.PSObject.Properties.Name -cnotcontains 'family_results' -or $Asset.family_results -isnot [array] -or
+			$Asset.PSObject.Properties.Name -cnotcontains 'asset_path' -or $Asset.asset_path -isnot [string] -or $Asset.PSObject.Properties.Name -cnotcontains 'lifecycle_state' -or
+			$Asset.lifecycle_state -isnot [string] -or $LifecycleByAsset.ContainsKey($Asset.asset_path)) { throw $Reason }
+		$LifecycleByAsset.Add($Asset.asset_path, $Asset.lifecycle_state)
 		$Families = @($Asset.family_results | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties.Name -ccontains 'policy_id' -and $_.policy_id -ceq 'reference_boundary' })
 		if ($Families.Count -ne 1) { throw $Reason }
 		$Family = $Families[0]
@@ -389,6 +390,17 @@ function Assert-AcceptanceContentValidationEvidence {
 				$Check.deterministic_status -isnot [string] -or $Check.deterministic_status -cne 'passed') { throw $Reason }
 		}
 		if ((@($Checks | ForEach-Object { $_.check_id }) -join ',') -cne $ReferenceChecks) { throw $Reason }
+	}
+	# Closed allowlist: the only reference_boundary finding a claimed report may carry is the lifecycle non_promotion
+	# finding of a temporary_prototype asset, at most one per asset. Its six checks passed above.
+	$LifecycleFindingAssets = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	foreach ($Finding in @($Report.findings)) {
+		if ($Finding -isnot [pscustomobject] -or $Finding.PSObject.Properties.Name -cnotcontains 'policy_id' -or $Finding.policy_id -isnot [string]) { throw $Reason }
+		if ($Finding.policy_id -cne 'reference_boundary') { continue }
+		try { Assert-AcceptanceClosedObject $Finding @('policy_id','code','asset_path','severity','reason','remediation','evidence_field') } catch { throw $Reason }
+		if ($Finding.code -isnot [string] -or $Finding.code -cne 'content.reference_boundary.non_promotion' -or $Finding.severity -isnot [string] -or $Finding.severity -cne 'non_promotion' -or
+			$Finding.evidence_field -isnot [string] -or $Finding.evidence_field -cne 'thresholds.unresolved_budgets' -or $Finding.asset_path -isnot [string] -or
+			-not $LifecycleByAsset.ContainsKey($Finding.asset_path) -or $LifecycleByAsset[$Finding.asset_path] -cne 'temporary_prototype' -or -not $LifecycleFindingAssets.Add($Finding.asset_path)) { throw $Reason }
 	}
 }
 

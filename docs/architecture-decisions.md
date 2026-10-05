@@ -1760,11 +1760,16 @@ Every accepted decision records:
     revision, the pinned engine identity, target `AethelnOnlineEditor` Win64
     Development, a clean repository, `registry_source=live_asset_registry`,
     `counts.errors=0`, a `passed` or `non_promotion` result, at least one
-    asset, no `reference_boundary` finding, and, for every asset, one
-    `reference_boundary` family whose six checks are exactly
-    `audience_reachability`, `broken_references`,
+    asset, and, for every asset, one `reference_boundary` family whose six
+    checks are exactly `audience_reachability`, `broken_references`,
     `compatible_content_version`, `hard_reference_exceptions`, `redirectors`,
-    and `stable_id_unique`, each applicable and `passed`.
+    and `stable_id_unique`, each applicable and `passed`. The only
+    `reference_boundary` finding allowed is the lifecycle finding that
+    accepted `non_promotion` implies: code
+    `content.reference_boundary.non_promotion`, severity `non_promotion`, and
+    evidence field `thresholds.unresolved_budgets`, on a `temporary_prototype`
+    asset, at most one per asset. Any other `reference_boundary` finding fails
+    both parsers.
     `evidence_unavailable` never passes. The other seven families still run
     and any deterministic error fails the report, but they are not claimed,
     and a green content receipt is never content approval. Binding

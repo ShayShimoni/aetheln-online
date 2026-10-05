@@ -224,7 +224,8 @@ function New-FixtureContentReport {
 	for ($Index = 0; $Index -lt $AssetCount; $Index++) {
 		$AssetPath = '/Game/Fixture/Asset' + $Index
 		$Families = @($FamilyChecks.Keys | ForEach-Object {
-			$Promotion = if ($_ -ceq 'reference_boundary') { 'eligible' } else { 'non_promotion' }
+			# A temporary_prototype asset is non_promotion in every family, reference_boundary included (live L1 report).
+			$Promotion = 'non_promotion'
 			$Checks = @($FamilyChecks[$_] | ForEach-Object { [pscustomobject][ordered]@{check_id=$_;applicability='applicable';deterministic_status='passed';promotion_status=$Promotion;evidence='verified from closed intake and Asset Registry facts'} })
 			[pscustomobject][ordered]@{policy_id=$_;applicability='applicable';deterministic_status='passed';promotion_status=$Promotion;evidence='policy:fixture:non_promotion:unresolved_budgets=fixture';check_results=$Checks}
 		})
@@ -810,7 +811,12 @@ foreach ($ContentCase in @(
 	@{name='no-assets';mutate={param($x)$x.assets=@();$x.counts.assets=0}},
 	@{name='asset-count';mutate={param($x)$x.counts.assets=4}},
 	@{name='finding-count';mutate={param($x)$x.counts.findings=0}},
-	@{name='reference-finding';mutate={param($x)$x.findings[0].policy_id='reference_boundary'}},
+	# findings[7] is asset 0's allowlisted reference_boundary lifecycle finding; each case breaks one allowlist condition.
+	@{name='reference-finding-code';mutate={param($x)$x.findings[7].code='content.reference_boundary.failed'}},
+	@{name='reference-finding-severity';mutate={param($x)$x.findings[7].severity='error'}},
+	@{name='reference-finding-evidence-field';mutate={param($x)$x.findings[7].evidence_field='family_results.reference_boundary.check_results'}},
+	@{name='reference-finding-lifecycle';mutate={param($x)$x.assets[0].lifecycle_state='runtime_candidate'}},
+	@{name='reference-finding-duplicate';mutate={param($x)$x.findings=@($x.findings)+$x.findings[7];$x.counts.findings=@($x.findings).Count}},
 	@{name='family-failed';mutate={param($x)$x.assets[1].family_results[7].deterministic_status='failed'}},
 	@{name='family-missing';mutate={param($x)$x.assets[2].family_results=@($x.assets[2].family_results[0..6])}},
 	@{name='five-checks';mutate={param($x)$x.assets[0].family_results[7].check_results=@($x.assets[0].family_results[7].check_results[0..4])}},
