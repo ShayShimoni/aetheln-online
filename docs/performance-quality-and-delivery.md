@@ -55,9 +55,9 @@ a 12-camera 4096/2048/4096 comparison on the development PC showed no visible
 shadow difference and no page-pool overflow, and two-client editor PIE at 4096
 left only about 129 MiB of video memory headroom on the RTX 2060. That
 evidence comes from editor PIE, not a packaged capture, so the value is not a
-#45 budget. The two-client re-measure at 2048 on 2026-10-05 raised that
-headroom to about 1199 MiB (#211). The owner then kept the Epic tier at 2048
-with no dedicated device profile for the development PC.
+#45 budget. The two-client editor PIE re-measure at 2048 on 2026-10-05 raised
+that headroom to about 1199 MiB (#211). The owner then kept the Epic tier at
+2048 with no dedicated device profile for the development PC (#211, #244).
 
 ## Initial World-Combat Hypothesis
 
