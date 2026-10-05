@@ -1,9 +1,10 @@
 [CmdletBinding()]
 param()
 
-# Offline fixture tests for scripts/delivery/Test-BoardIntegrity.ps1 (Issue
-# #214). Every rule is proven red against a single-defect snapshot, and a clean
-# snapshot covering every status stays green. No test contacts GitHub.
+# Offline fixture tests for scripts/delivery/Test-BoardIntegrity.ps1 (Issues
+# #214 and #266). Every rule is proven red against a single-defect snapshot,
+# and a clean snapshot covering every status stays green. No test contacts
+# GitHub.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -16,18 +17,36 @@ function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
 }
 
+function New-Comment([string] $At, [string] $Body) {
+	return [ordered]@{ createdAt = $At; body = $Body }
+}
+
 function New-CleanSnapshot {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory fixture.')]
 	param()
+	# Items without comments have never had a QA round. #9 is in QA with an
+	# open round, its comments newest first as an older page arrives, so
+	# createdAt, not list order, decides. #10 is Dev Done after a closed round.
+	# The closed Done #4 keeps a lone start, which only the existing rules judge.
+	# #7's comments carry the start marker but not at the start of the first line.
 	$Items = @(
 		[ordered]@{ number = 1; state = 'OPEN'; status = 'Backlog'; release = ''; blockedReason = ''; body = "- [ ] not started" },
 		[ordered]@{ number = 2; state = 'OPEN'; status = 'Code Review'; release = ''; blockedReason = ''; body = "- [ ] pending" },
 		[ordered]@{ number = 3; state = 'OPEN'; status = 'Blocked'; release = ''; blockedReason = 'Waiting on #2'; body = '' },
-		[ordered]@{ number = 4; state = 'CLOSED'; status = 'Done'; release = ''; blockedReason = ''; body = "## Acceptance criteria`n- [x] one`n- [X] two" },
+		[ordered]@{ number = 4; state = 'CLOSED'; status = 'Done'; release = ''; blockedReason = ''; body = "## Acceptance criteria`n- [x] one`n- [X] two"; comments = @(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.') },
 		[ordered]@{ number = 5; state = 'CLOSED'; status = 'Release Candidate'; release = 'v1.0.0-alpha.1'; blockedReason = ''; body = '- [x] done' },
 		[ordered]@{ number = 6; state = 'CLOSED'; status = 'Released'; release = 'v1.0.0'; blockedReason = ''; body = '- [x] done' },
-		[ordered]@{ number = 7; state = 'OPEN'; status = 'In Progress'; release = ''; blockedReason = ''; body = '' },
-		[ordered]@{ number = 8; state = 'OPEN'; status = 'Code Review'; release = ''; blockedReason = ''; body = "- [ ] pending" }
+		[ordered]@{ number = 7; state = 'OPEN'; status = 'In Progress'; release = ''; blockedReason = ''; body = ''; comments = @(
+				(New-Comment '2026-10-01T00:00:00Z' 'Lead 2026-10-01: QA round started on develop abc1234.'),
+				(New-Comment '2026-10-02T00:00:00Z' "Work notes`r`nQA round started on the second line.")) },
+		[ordered]@{ number = 8; state = 'OPEN'; status = 'Code Review'; release = ''; blockedReason = ''; body = "- [ ] pending" },
+		[ordered]@{ number = 9; state = 'OPEN'; status = 'QA'; release = ''; blockedReason = ''; body = '- [ ] pending'; comments = @(
+				(New-Comment '2026-10-04T00:00:00Z' 'QA round started on develop def5678.'),
+				(New-Comment '2026-10-02T00:00:00Z' "## Post-merge QA record, 2026-10-02`r`nResult: one criterion waits for a later round."),
+				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.')) },
+		[ordered]@{ number = 10; state = 'OPEN'; status = 'Dev Done'; release = ''; blockedReason = ''; body = '- [ ] pending'; comments = @(
+				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.'),
+				(New-Comment '2026-10-02T00:00:00Z' '## Post-merge QA record, 2026-10-02')) }
 	)
 	# PR 100 and hotfix PR 102 are ordinary PRs whose issues sit in Code
 	# Review. 101 and 103 are release and back-merge PRs whose linked issues
@@ -102,7 +121,14 @@ try {
 		@{ Rule = 'open-issue-final-status'; Issue = 6; Mutate = { param($S) $S.items[5].state = 'OPEN' } },
 		@{ Rule = 'release-field-empty'; Issue = 5; Mutate = { param($S) $S.items[4].release = '' } },
 		@{ Rule = 'release-field-empty'; Issue = 6; Mutate = { param($S) $S.items[5].release = '  ' } },
-		@{ Rule = 'blocked-reason-empty'; Issue = 3; Mutate = { param($S) $S.items[2].blockedReason = '' } }
+		@{ Rule = 'blocked-reason-empty'; Issue = 3; Mutate = { param($S) $S.items[2].blockedReason = '' } },
+		# QA round lifecycle (Issue #266): a QA card never had a round, or its record is newer than its start.
+		@{ Rule = 'qa-status-without-round'; Issue = 9; Mutate = { param($S) $S.items[8].comments = @() } },
+		@{ Rule = 'qa-status-without-round'; Issue = 9; Mutate = { param($S) $S.items[8].comments = @($S.items[8].comments[1], $S.items[8].comments[2]) } },
+		# An open round on a card outside QA, including a Blocked card and a reopened round.
+		@{ Rule = 'qa-round-not-in-qa'; Issue = 9; Mutate = { param($S) $S.items[8].status = 'Dev Done' } },
+		@{ Rule = 'qa-round-not-in-qa'; Issue = 10; Mutate = { param($S) $S.items[9].comments += , (New-Comment '2026-10-03T00:00:00Z' 'QA round started on develop def5678.') } },
+		@{ Rule = 'qa-round-not-in-qa'; Issue = 3; Mutate = { param($S) $S.items[2].comments = @(New-Comment '2026-10-03T00:00:00Z' 'QA round started on develop def5678.') } }
 	)
 	$Index = 0
 	foreach ($Case in $Cases) {

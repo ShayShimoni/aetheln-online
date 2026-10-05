@@ -31,7 +31,7 @@ column solely to make the board look current.
 | `In Progress` | Work started on an identified branch, worktree, or evidence task. | Complete developer verification and publish a reviewable artifact; then `Code Review`. Keep this state if publication is not authorized or a recoverable attempt fails. |
 | `Code Review` | Reviewable PR, exact head, scope, and developer checks recorded. | Record the applicable current-head CI, independent-agent review, any explicitly required human review, and owner merge authorization; merge into `develop` before `Dev Done`. After a partial merge of a multi-PR issue, return to `In Progress`. |
 | `Dev Done` | Reviewed, verified implementation merged; record PR, merge SHA, review, and checks. | Start separately authorized post-merge QA (`QA`), or record an explicit QA-not-applicable decision and distinct acceptance verification before `Done`. |
-| `QA` | Independent post-merge QA has started on the merged revision with procedure and environment recorded. | Record raw result, revision, limitations, and disposition; only passing required QA permits `Done`. Stay in `QA` only while the round runs. At round end: every box checked goes to `Done`; a failed criterion that needs a fix returns to `Open` with a comment naming the failed criterion and the `develop` commit and giving the expected and actual result and exact steps to reproduce or simulate the failure; criteria that wait only for a later QA round return to `Dev Done`; a criterion waiting on a decision or dependency goes to `Blocked`. |
+| `QA` | Independent post-merge QA has started on the merged revision with procedure and environment recorded in an issue comment whose first line starts with `QA round started`. | Record raw result, revision, limitations, and disposition in an issue comment whose first line starts with `## Post-merge QA record`; only passing required QA permits `Done`. Stay in `QA` only while the round runs. At round end: every box checked goes to `Done`; a failed criterion that needs a fix returns to `Open` with a comment naming the failed criterion and the `develop` commit and giving the expected and actual result and exact steps to reproduce or simulate the failure; criteria that wait only for a later QA round return to `Dev Done`; a criterion waiting on a decision or dependency goes to `Blocked`. |
 | `Done` | Required QA or explicitly substituted acceptance verification is recorded on the issue, acceptance criteria are satisfied, and no required work remains. | When a release branch that contains the work is cut, move to `Release Candidate`; otherwise no routine transition. New work uses a new or deliberately reopened ticket. |
 | `Release Candidate` | The work is in a cut `release/v<ProjectVersion>` branch (for example `release/v1.0.0-alpha.1`), which carries an internal pre-release tag; the board `Release` field records the tag. | Move to `Released` when that release is distributed to players. If the work is pulled from the release, return to `Done` and clear `Release`. |
 | `Released` | The release that contains the work was distributed to players, merged to `main`, tagged, published as a GitHub Release, and back-merged into `develop`. | No routine transition. A defect in a released build starts a `hotfix/*` cycle with its own ticket. |
@@ -119,6 +119,18 @@ the same result for tooling. It reports:
   is not on the board.
 - `code-review-without-pr`: a `Code Review` issue that no open PR links.
 - `duplicate-pr-issue`: an issue that more than one open PR links.
+- `qa-status-without-round`: an open issue in `QA` with no open QA round.
+- `qa-round-not-in-qa`: an open issue outside `QA` and `Done` with an open QA
+  round.
+
+The QA rules read issue comments, and two first-line markers are the
+contract. A comment whose first line starts with `QA round started` starts a
+round; one whose first line starts with `## Post-merge QA record` records
+its end. Both are case-sensitive. A round is open while the latest start is
+newer than the latest record. The check reads every comment of every board
+issue, and a failed read stops it rather than giving a partial result.
+Closed issues and `Done` cards are left to the other rules, so comments on
+finished tickets that predate the markers are not reinterpreted.
 
 A PR links an issue through a `#<issue>` in its title or a GitHub closing
 reference. The body's `Refs #<issue>` lines are not links, so the second
