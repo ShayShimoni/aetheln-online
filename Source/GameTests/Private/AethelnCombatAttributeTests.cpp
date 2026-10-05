@@ -29,18 +29,7 @@ namespace AethelnCombatAttributeTests
 		};
 	}
 
-	/** Test-pinned values, not tuning. Each current value equals its maximum so a wrong init order would clamp it to 0. */
-	FAethelnCombatAttributeInitValues MakeTestInitValues()
-	{
-		FAethelnCombatAttributeInitValues Values;
-		Values.MaxHealth = 40.0f;
-		Values.Health = 40.0f;
-		Values.MaxEndurance = 30.0f;
-		Values.Endurance = 30.0f;
-		Values.MaxGuard = 20.0f;
-		Values.Guard = 20.0f;
-		return Values;
-	}
+	using AethelnCombatTests::MakeTestInitValues;
 
 	float GetValue(const UAbilitySystemComponent& AbilitySystem, const FGameplayAttribute& Attribute)
 	{
@@ -120,11 +109,23 @@ bool FAethelnAttributeClampAndBoundsTest::RunTest(const FString& Parameters)
 	{
 		const float Max = GetValue(*AbilitySystem, Pair.Max);
 
+		// A duration modifier never touches the base, so only the current-value
+		// clamp (PreAttributeChange) can hold the current value at its maximum.
+		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Current, EGameplayModOp::AddBase, -Max * 0.25f);
+		const FActiveGameplayEffectHandle BuffHandle = AethelnCombatTests::ApplyModifier(
+			*AbilitySystem, EGameplayEffectDurationType::Infinite, Pair.Current, EGameplayModOp::AddBase, 1000.0f);
+		TestEqual(*FString::Printf(TEXT("A duration modifier clamps %s to its maximum"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max);
+		TestEqual(*FString::Printf(TEXT("A duration modifier leaves the %s base unchanged"), Pair.Name), AbilitySystem->GetNumericAttributeBase(Pair.Current), Max * 0.75f);
+		TestTrue(*FString::Printf(TEXT("The %s duration modifier is removed"), Pair.Name), AbilitySystem->RemoveActiveGameplayEffect(BuffHandle));
+		TestEqual(*FString::Printf(TEXT("%s returns to its base when the modifier ends"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max * 0.75f);
+
 		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Current, EGameplayModOp::AddBase, 1000.0f);
 		TestEqual(*FString::Printf(TEXT("%s clamps to its maximum"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max);
+		TestEqual(*FString::Printf(TEXT("The %s base clamps to its maximum"), Pair.Name), AbilitySystem->GetNumericAttributeBase(Pair.Current), Max);
 
 		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Current, EGameplayModOp::AddBase, -1000.0f);
 		TestEqual(*FString::Printf(TEXT("%s clamps to 0"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), 0.0f);
+		TestEqual(*FString::Printf(TEXT("The %s base clamps to 0"), Pair.Name), AbilitySystem->GetNumericAttributeBase(Pair.Current), 0.0f);
 
 		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Current, EGameplayModOp::AddBase, 1000.0f);
 		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Max, EGameplayModOp::Override, Max * 0.5f);

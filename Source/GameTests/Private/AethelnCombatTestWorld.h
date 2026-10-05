@@ -3,6 +3,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "AbilitySystemComponent.h"
+#include "AethelnCombatEffects.h"
 #include "CoreMinimal.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -67,15 +68,33 @@ namespace AethelnCombatTests
 		return Effect;
 	}
 
-	/** Applies one instant modifier, standing in for #60's and #21's server effects. */
-	inline void ApplyInstantModifier(UAbilitySystemComponent& AbilitySystemComponent, const FGameplayAttribute& Attribute, EGameplayModOp::Type Op, float Magnitude)
+	/** Applies one modifier through a runtime effect, standing in for #60's and #21's server effects. */
+	inline FActiveGameplayEffectHandle ApplyModifier(UAbilitySystemComponent& AbilitySystemComponent, EGameplayEffectDurationType DurationPolicy, const FGameplayAttribute& Attribute, EGameplayModOp::Type Op, float Magnitude)
 	{
-		UGameplayEffect* Effect = MakeTestEffect(EGameplayEffectDurationType::Instant);
+		UGameplayEffect* Effect = MakeTestEffect(DurationPolicy);
 		FGameplayModifierInfo& Modifier = Effect->Modifiers.AddDefaulted_GetRef();
 		Modifier.Attribute = Attribute;
 		Modifier.ModifierOp = Op;
 		Modifier.ModifierMagnitude = FScalableFloat(Magnitude);
-		AbilitySystemComponent.ApplyGameplayEffectToSelf(Effect, 1.0f, AbilitySystemComponent.MakeEffectContext());
+		return AbilitySystemComponent.ApplyGameplayEffectToSelf(Effect, 1.0f, AbilitySystemComponent.MakeEffectContext());
+	}
+
+	inline void ApplyInstantModifier(UAbilitySystemComponent& AbilitySystemComponent, const FGameplayAttribute& Attribute, EGameplayModOp::Type Op, float Magnitude)
+	{
+		ApplyModifier(AbilitySystemComponent, EGameplayEffectDurationType::Instant, Attribute, Op, Magnitude);
+	}
+
+	/** Test-pinned values, not tuning. Each current value equals its maximum so a wrong init order would clamp it to 0. */
+	inline FAethelnCombatAttributeInitValues MakeTestInitValues()
+	{
+		FAethelnCombatAttributeInitValues Values;
+		Values.MaxHealth = 40.0f;
+		Values.Health = 40.0f;
+		Values.MaxEndurance = 30.0f;
+		Values.Endurance = 30.0f;
+		Values.MaxGuard = 20.0f;
+		Values.Guard = 20.0f;
+		return Values;
 	}
 }
 

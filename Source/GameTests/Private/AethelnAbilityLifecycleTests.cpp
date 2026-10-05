@@ -18,23 +18,11 @@
 namespace AethelnAbilityLifecycleTests
 {
 	using AethelnCombatTests::FScopedCombatTestWorld;
+	using AethelnCombatTests::MakeTestInitValues;
 
 	UClass* GetLongRunningTestAbilityClass()
 	{
 		return UAethelnLongRunningTestAbility::StaticClass();
-	}
-
-	/** Test-pinned values, not tuning. Each current value equals its maximum so a wrong init order would clamp it to 0. */
-	FAethelnCombatAttributeInitValues MakeTestInitValues()
-	{
-		FAethelnCombatAttributeInitValues Values;
-		Values.MaxHealth = 40.0f;
-		Values.Health = 40.0f;
-		Values.MaxEndurance = 30.0f;
-		Values.Endurance = 30.0f;
-		Values.MaxGuard = 20.0f;
-		Values.Guard = 20.0f;
-		return Values;
 	}
 
 	struct FTestPlayer
@@ -308,6 +296,8 @@ bool FAethelnAvatarDestroyedWhilePossessedTest::RunTest(const FString& Parameter
 	TestNull(TEXT("Controller has no pawn"), Player.Controller->GetPawn());
 	TestNull(TEXT("PlayerState has no pawn"), Player.PlayerState->GetPawn());
 	TestNull(TEXT("Avatar is null after the destroyed pawn's null case"), AbilitySystem->GetAvatarActor());
+	// A weak pointer to a destroyed pawn also reads null; only an explicit clear leaves it explicitly null.
+	TestTrue(TEXT("The null case cleared the avatar explicitly"), AbilitySystem->AbilityActorInfo->AvatarActor.IsExplicitlyNull());
 	TestFalse(TEXT("The null case cancelled the running ability"), IsAbilityActive(*AbilitySystem, AbilityHandle));
 	TestTrue(TEXT("Owner stays the PlayerState"), AbilitySystem->GetOwnerActor() == Player.PlayerState);
 	TestTrue(TEXT("PlayerState ASC is intact"), Player.PlayerState->GetAbilitySystemComponent() == AbilitySystem);
