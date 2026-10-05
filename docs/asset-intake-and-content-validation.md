@@ -291,7 +291,13 @@ to substitute a fixture for live editor evidence.
 The wrapper writes each run to unique pending files under the retained output
 directory. A failed build, commandlet, or report check leaves the previous
 published report and logs unchanged; pending files are diagnostics, not accepted
-evidence. After a valid run, byte-verified copies of the previous outputs are
+evidence. The commandlet's `-Report` argument names the published
+`content-validation-report.json` below `TestResults`, the only report name the
+commandlet accepts. The commandlet never opens that path: it writes the report
+through the inherited `-ReportHandle` of the pending file, after checking that
+the handle's file identity equals `-ReportFileIdentity`. The command tests' fake
+editor enforces the same path contract and pins it to the commandlet source.
+After a valid run, byte-verified copies of the previous outputs are
 retained under `.previous.*` names while the new logs and then the report are
 published by handle-relative renames. If publication fails partway, the wrapper
 restores the previous published bytes from those copies or reports the exact

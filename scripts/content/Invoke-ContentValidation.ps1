@@ -1158,7 +1158,9 @@ $OutputGuard.SetInheritable($LogPath, $true)
 $ArgumentsToBind = @(
 	$ProjectPath,
 	'-run=GameTests.AethelnContentValidation',
-	"-Report=$OutputPath",
+	# The commandlet requires the published content-validation-report.json name and
+	# writes only through -ReportHandle (the pending file); publication renames it.
+	"-Report=$PublishedOutputPath",
 	"-ReportFileIdentity=$ReportFileIdentity",
 	"-ReportHandle=$ReportHandle",
 	"-Policy=$PolicyPath",

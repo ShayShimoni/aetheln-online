@@ -212,6 +212,16 @@ public static class FakeUnrealEditorForContentValidation {
    if(split>1) values[arg.Substring(1,split-1)]=arg.Substring(split+1);
    else values[arg.Substring(1)]="true";
   }
+  // Mirrors the path contract in AethelnContentValidationCommandlet.cpp (pinned below):
+  // the report is named content-validation-report.json below <project>/TestResults,
+  // and policy and intake are the project's ContentValidation config files.
+  string contractProject=Path.GetDirectoryName(Path.GetFullPath(args[0])), contractReport=Get(values,"Report"), contractConfig=Path.Combine(contractProject,"Config","ContentValidation");
+  if(contractReport.Length==0||!Path.GetFullPath(contractReport).StartsWith(Path.Combine(contractProject,"TestResults")+"\\",StringComparison.OrdinalIgnoreCase)||Path.GetFileName(contractReport)!="content-validation-report.json"
+   ||!string.Equals(Path.GetFullPath(Get(values,"Policy")),Path.Combine(contractConfig,"asset-intake-policy.json"),StringComparison.OrdinalIgnoreCase)
+   ||!string.Equals(Path.GetFullPath(Get(values,"Intake")),Path.Combine(contractConfig,"runtime-asset-intake.json"),StringComparison.OrdinalIgnoreCase)) {
+   Console.WriteLine("LogAethelnContentValidationCommandlet: Error: Report, policy, or runtime intake path is outside the supported local contract.");
+   return 3;
+  }
   if(scenario=="snapshot-swap-restore") {
    string snapshot=Get(values,"RegistrySnapshot"), expected=Get(values,"RegistrySnapshotSha256");
    byte[] original=File.ReadAllBytes(snapshot);
@@ -782,6 +792,10 @@ try {
 	$CommandletText = Get-Content -LiteralPath $CommandletSource -Raw
 	Assert-True ($HeaderText -match 'UCLASS\(\)' -and $HeaderText -match 'public UCommandlet' -and $HeaderText -match 'generated\.h') 'The scanner entry point must be a reflected Unreal commandlet.'
 	Assert-True ($CommandletText -match 'FParse::Value' -and $CommandletText -match 'AllowTestRegistrySnapshot') 'The commandlet must parse explicit inputs and guard test snapshots.'
+	# The fake editor mirrors this exact path contract, so a launcher that passes any other -Report name fails here as it does live.
+	Assert-True ($CommandletText.Contains('FPaths::Combine(FPaths::ProjectDir(), TEXT("TestResults"))') -and $CommandletText.Contains('!FPaths::IsUnderDirectory(Arguments.ReportPath, ReportRoot)') -and
+		$CommandletText.Contains('FPaths::GetCleanFilename(Arguments.ReportPath) != TEXT("content-validation-report.json")') -and
+		$CommandletText.Contains('TEXT("ContentValidation/asset-intake-policy.json")') -and $CommandletText.Contains('TEXT("ContentValidation/runtime-asset-intake.json")')) 'The commandlet report, policy, and intake path contract changed; update the fake editor that mirrors it.'
 	Assert-True ($RunnerText -match 'RegistrySnapshotSha256=\$\(\$SnapshotState\.Sha256\)' -and $ScannerHeaderText -match 'RegistrySnapshotSha256' -and $CommandletText -match 'RegistrySnapshotSha256=' -and $CommandletText -match 'bAllSnapshotMembers') 'The captured snapshot digest must flow through wrapper, commandlet, and scanner run arguments.'
 	Assert-True ($ScannerText -match 'LoadVerifiedRegistrySnapshot\(Arguments\.RegistrySnapshotPath, Arguments\.RegistrySnapshotSha256' -and $ScannerText -notmatch 'Serialize\(SnapshotRoot') 'The scanner must hash and parse the original snapshot byte buffer without object serialization and reparsing.'
 	Assert-True ($ScannerText -match 'SearchAllAssets\(true\)' -and $ScannerText -match 'GetAllAssets' -and $ScannerText -match 'GetDependencies') 'The live scanner must use the read-only Asset Registry and dependency graph.'
@@ -893,6 +907,7 @@ try {
 	foreach ($Prefix in @('-Report=', '-ReportFileIdentity=', '-ReportHandle=', '-Policy=', '-Intake=', '-Revision=', '-EngineRevision=', '-EngineTag=', '-EngineBinarySha256=', '-BuildVersionSha256=', '-EditorBuildCommandSha256=', '-EditorBuildLogSha256=', '-CompilerVersion=', '-CompilerSha256=', '-ResourceCompilerVersion=', '-ResourceCompilerSha256=', '-TargetReceiptPath=', '-TargetReceiptSizeBytes=', '-TargetReceiptSha256=', '-TargetReceiptBuildId=', '-ModuleManifestPath=', '-ModuleManifestSizeBytes=', '-ModuleManifestSha256=', '-ModuleManifestBuildId=', '-ProjectSha256=', '-PolicySha256=', '-IntakeSha256=', '-InvocationSha256=', '-StartedUtc=', '-RegistrySource=live_asset_registry')) {
 		Assert-True (@($CapturedArguments | Where-Object { $_.StartsWith($Prefix, [StringComparison]::Ordinal) }).Count -eq 1) "The commandlet argument '$Prefix' must occur exactly once."
 	}
+	Assert-True ($CapturedArguments -ccontains ('-Report=' + $Success.fixture.report)) 'The commandlet -Report must name the published content-validation-report.json; the report bytes go through -ReportHandle to the pending file.'
 
 	$Snapshot = Invoke-Case -Name 'snapshot' -FakeBin $FakeBin -EditorCase 'success' -GitCase 'clean' -UseSnapshot $true -AllowSnapshot $true
 	Assert-True ($Snapshot.exitCode -eq 0 -and $Snapshot.report.execution_provenance.registry_source -ceq 'test_snapshot') "Explicitly authorized test snapshot failed: $($Snapshot.output)"
