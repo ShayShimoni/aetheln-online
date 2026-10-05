@@ -1700,8 +1700,10 @@ Every accepted decision records:
   dispatched run is the operational proof and is recorded on issue #226.
 - **Alternatives:** A dispatch trigger on `prototype-quality-gates.yml`
   (rejected: the older branch risk); a reusable workflow or composite action
-  shared with the scheduled jobs (rejected: it renames the scheduled checks and
-  breaks the preparation admission rule against job-level `uses:`); dispatch
+  shared with the scheduled jobs (rejected: it renames the scheduled checks;
+  it also broke the preparation admission rule against job-level `uses:`,
+  which issue #229 relaxed on 2026-10-05 for local `./.github/workflows/`
+  calls only, so the rename ground alone keeps it rejected); dispatch
   inputs for the version or ref (rejected: an injection surface, and the
   version comes from the commit); tag refs (rejected: tags mark a tested
   commit after release QA); publishing packages as a GitHub pre-release
