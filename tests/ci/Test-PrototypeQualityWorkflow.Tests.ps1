@@ -848,7 +848,7 @@ try {
 	$ContentManaged = Join-Path $AutomationFixtureRoot 'content-managed'
 	$null = New-Item -ItemType Directory -Path (Join-Path $ContentManaged 'scripts\content')
 	[IO.File]::WriteAllText((Join-Path $ContentManaged '.gitignore'), "TestResults/`n")
-	[IO.File]::WriteAllText((Join-Path $ContentManaged 'scripts\content\Invoke-ContentValidation.ps1'), "param([string] `$EngineRoot, [string] `$OutputPath, [int] `$TimeoutSeconds, [int] `$BuildTimeoutSeconds)`n[IO.File]::WriteAllText((Join-Path `$PSScriptRoot '..\..\TestResults\launcher-arguments.txt'), (`$EngineRoot + '|' + `$OutputPath + '|' + `$BuildTimeoutSeconds + '|' + `$TimeoutSeconds))`nif (`$env:AETHELN_FIXTURE_CONTENT_REPORT) { [IO.File]::WriteAllText(`$OutputPath, `$env:AETHELN_FIXTURE_CONTENT_REPORT) }`nWrite-Output ('launcher output ' + `$OutputPath)`nexit [int] `$env:AETHELN_FIXTURE_CONTENT_EXIT`n")
+	[IO.File]::WriteAllText((Join-Path $ContentManaged 'scripts\content\Invoke-ContentValidation.ps1'), "[CmdletBinding()]`nparam([Parameter(Mandatory)][string] `$EngineRoot, [string] `$OutputPath, [int] `$TimeoutSeconds, [int] `$BuildTimeoutSeconds)`n[IO.File]::WriteAllText((Join-Path `$PSScriptRoot '..\..\TestResults\launcher-arguments.txt'), (`$EngineRoot + '|' + `$OutputPath + '|' + `$BuildTimeoutSeconds + '|' + `$TimeoutSeconds))`nif (`$env:AETHELN_FIXTURE_CONTENT_REPORT) { [IO.File]::WriteAllText(`$OutputPath, `$env:AETHELN_FIXTURE_CONTENT_REPORT) }`nWrite-Output ('launcher output ' + `$OutputPath)`nexit [int] `$env:AETHELN_FIXTURE_CONTENT_EXIT`n")
 	Invoke-AutomationFixtureGit $ContentManaged @('init', '-q')
 	Invoke-AutomationFixtureGit $ContentManaged @('add', '-A')
 	Invoke-AutomationFixtureGit $ContentManaged @('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'fixture')
@@ -864,7 +864,7 @@ try {
 			@{ name='dirty workspace'; root=$ContentManaged; sha=$ContentHead; stray=$true; existing=$false; report=''; exit='0'; reason='content_workspace_dirty'; launched=$false },
 			@{ name='unreadable workspace'; root=$ContentNotRepository; sha=$ContentHead; stray=$false; existing=$false; report=''; exit='0'; reason='content_workspace_query_failed'; launched=$false },
 			@{ name='existing output directory'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$true; report=''; exit='0'; reason='content_output_directory_exists'; launched=$false },
-			@{ name='failed launcher'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$false; report='{"result":"failed"}'; exit='1'; reason='content_validation_failed'; launched=$true },
+			@{ name='failed launcher'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$false; noResults=$true; report='{"result":"failed"}'; exit='1'; reason='content_validation_failed'; launched=$true },
 			@{ name='missing report'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$false; report=''; exit='0'; reason='content_report_missing'; launched=$true },
 			@{ name='passing launcher'; root=$ContentManaged; sha=$ContentHead; stray=$false; existing=$false; report='{"result":"non_promotion"}'; exit='0'; reason=$null; launched=$true }
 		)) {
@@ -872,6 +872,7 @@ try {
 			$StrayPath = Join-Path $ContentManaged 'Stray.txt'
 			if ($ContentCase.stray) { [IO.File]::WriteAllText($StrayPath, 'stray') } elseif (Test-Path -LiteralPath $StrayPath) { Remove-Item -LiteralPath $StrayPath -Force }
 			if ($ContentCase.existing) { $null = New-Item -ItemType Directory -Path $ContentOutputDirectory -Force }
+			if ($ContentCase.ContainsKey('noResults')) { Remove-Item -LiteralPath (Join-Path $ContentManaged 'TestResults') -Recurse -Force -ErrorAction SilentlyContinue; Assert-True (-not (Test-Path -LiteralPath (Join-Path $ContentManaged 'TestResults'))) 'The first content launch must start without TestResults.' }
 			$env:AETHELN_MANAGED_COMPILE_ROOT = $ContentCase.root
 			$env:GITHUB_SHA = $ContentCase.sha
 			$env:AETHELN_FIXTURE_CONTENT_REPORT = $ContentCase.report

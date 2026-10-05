@@ -215,8 +215,10 @@ real engine automation tests.
 The independent `ci-selection-shadow` job runs only for pull requests on
 GitHub-hosted `windows-latest` and is bounded at 10 minutes. It has no `needs`,
 self-hosted labels, or engine concurrency. Package 3C exposes the accepted-base
-decisions to additive visual proof, truthful receipt publishers, and the shadow
-aggregate only; no existing authoritative job consumes them. The selector
+decisions to additive visual proof, the additive `trusted-content-validation`
+producer (TA-023, the first engine job a selector decision starts), truthful
+receipt publishers, and the shadow aggregate only; no existing authoritative
+job consumes them. The selector
 result cannot start, skip, cancel, or change the conclusion of any existing
 authoritative job. Job-level `continue-on-error` keeps the selector itself
 observational, but a selector failure or missing artifact prevents its dependent
