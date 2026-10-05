@@ -1325,7 +1325,10 @@ Every accepted decision records:
     a failed release keeps the held journal for explicit recovery, as the
     compile does, and records `editor_host_lease_release_failed`. The harness
     and residue cleanup still run outside the lease, serialized by the engine
-    queue.
+    queue. Residue cleanup is skipped when the lease state is unknown or held
+    by someone else (issue #243): after `editor_host_lease_failed` or
+    `editor_host_lease_release_failed`, a skipped editor step, or an
+    interrupted one that recorded no reason.
   - *Reasons:* `editor_host_lease_failed`, `editor_workspace_sync_failed`,
     `editor_build_timeout`, `editor_host_lease_release_failed`, and
     `editor_control_checkout_failed` join the fixed vocabulary; the lease or

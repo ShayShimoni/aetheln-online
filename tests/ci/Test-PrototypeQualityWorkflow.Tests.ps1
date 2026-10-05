@@ -392,11 +392,12 @@ Assert-True ($EditorControl -and $EditorBuild -and $AutomationRun -and $Automati
 # missing automation artifact then fails unreal-receipt-shadow at its raw
 # binding check instead of passing silently.
 $AutomationSuccess = "if: steps.editor_build.outcome == 'success' && steps.automation_run.outcome == 'success' && steps.automation_residue.outcome == 'success'"
-# Issue #243: after a lease failure or a failed release the editor step does not
-# hold the lease, so residue cleanup must not delete anything outside it. A
-# build, sync, or timeout failure still leaves the lease released, so it still
-# cleans up.
-$ResidueCondition = "if: steps.editor_build.outputs.reason != 'editor_host_lease_failed' && steps.editor_build.outputs.reason != 'editor_host_lease_release_failed'"
+# Issue #243: residue cleanup runs only on positive evidence that the editor
+# step released the lease or never needed it: success, or a recorded reason
+# other than a lease failure or a failed release. A skipped or interrupted
+# editor step (no recorded reason) leaves the lease state unknown, so it skips.
+# A build, sync, or timeout failure still releases the lease, so it cleans up.
+$ResidueCondition = "if: steps.editor_build.outcome == 'success' || (steps.editor_build.outputs.reason != '' && steps.editor_build.outputs.reason != 'editor_host_lease_failed' && steps.editor_build.outputs.reason != 'editor_host_lease_release_failed')"
 foreach ($Step in @(
 	@{ Name='control checkout'; Body=$EditorControl; Id='editor_control'; If=$null; Timeout='5'; Continue=$true },
 	@{ Name='editor build'; Body=$EditorBuild; Id='editor_build'; If="if: steps.editor_control.outcome == 'success'"; Timeout='20'; Continue=$true },
@@ -443,9 +444,10 @@ Assert-True ($EditorBuild.Contains('$Job = New-Object Aetheln.PreparationJob ($D
 # Lease wait, sync and build share one 17-minute deadline; the two 30-second
 # cleanup proofs and the release fit inside the 20-minute step bound.
 # Issue #243: the deadline and the minimum time that must remain before the
-# re-sync starts are fixed values that a fixture may only shorten.
+# re-sync starts are fixed values that a fixture may only shorten, and the
+# minimum is honored only while the deadline override is in effect.
 $MinimumCheck = $EditorBuild.IndexOf("`$Failure = 'editor_sync_time_insufficient'")
-Assert-True ($EditorBuild.Contains("Get-ShortenedSeconds 'AETHELN_EDITOR_TEST_DEADLINE_SECONDS' (17 * 60)") -and $EditorBuild.Contains("Get-ShortenedSeconds 'AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS' (5 * 60)") -and $EditorBuild.Contains('-cmatch ''\A[1-9][0-9]{0,3}\z'' -and [int] $Value -lt $Default') -and $EditorBuild.Contains('$DeadlineTicks - [Diagnostics.Stopwatch]::GetTimestamp() -lt $MinimumSyncSeconds * [Diagnostics.Stopwatch]::Frequency') -and $LeaseEnter -lt $MinimumCheck -and $MinimumCheck -lt $SyncStart) 'The re-sync must start only when the fixed minimum remains after the lease is taken, and a fixture may only shorten the deadline and that minimum.'
+Assert-True ($EditorBuild.Contains("Get-ShortenedSeconds 'AETHELN_EDITOR_TEST_DEADLINE_SECONDS' (17 * 60)") -and $EditorBuild.Contains("Get-ShortenedSeconds 'AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS' `$MinimumSyncSeconds") -and $EditorBuild.Contains('if ($DeadlineSeconds -lt 17 * 60) {') -and $EditorBuild.Contains("Write-Output 'editor_test_override active'") -and $EditorBuild.Contains('-cmatch ''\A[1-9][0-9]{0,3}\z'' -and [int] $Value -lt $Default') -and $EditorBuild.Contains('$DeadlineTicks - [Diagnostics.Stopwatch]::GetTimestamp() -lt $MinimumSyncSeconds * [Diagnostics.Stopwatch]::Frequency') -and $LeaseEnter -lt $MinimumCheck -and $MinimumCheck -lt $SyncStart) 'The re-sync must start only when the fixed minimum remains after the lease is taken, and a fixture may only shorten the deadline and that minimum.'
 Assert-True ($EditorBuild.Contains('$DeadlineUtc = [DateTime]::UtcNow.AddSeconds($DeadlineSeconds)') -and $EditorBuild.Contains('$DeadlineTicks = [Diagnostics.Stopwatch]::GetTimestamp() + [long] $DeadlineSeconds * [Diagnostics.Stopwatch]::Frequency') -and $EditorBuild.Contains("'-DeadlineUtc', `$DeadlineUtc.ToString('o')") -and $EditorBuild -notmatch 'AETHELN_COMPILE_STARTED|RequiredSeconds|budget') 'The re-sync and build must share one bounded deadline inside the step bound and carry no compile budget gate.'
 Assert-True ($SyncScript.Contains(". (Join-Path `$PSScriptRoot 'ManagedCompileRegistration.ps1')") -and $SyncScript.Contains(". (Join-Path `$PSScriptRoot 'ManagedCompileWorkspace.ps1')") -and $SyncScript.Contains('$TrustedControl = [IO.Path]::GetFullPath((Split-Path (Split-Path $PSScriptRoot))).TrimEnd') -and $SyncScript.Contains('-AssertRepositoryTrust $TrustRegisteredWorkspace') -and $SyncScript.Contains('}.GetNewClosure()') -and $SyncScript -notmatch 'Write-(Output|Host)') 'The re-sync child must load the managed modules beside itself, sync from its own control checkout, authorize only the registered tuple, and print nothing.'
 $SyncCall = $SyncScript.IndexOf('Sync-ManagedCompileWorkspace -ControlRoot $TrustedControl')
@@ -453,9 +455,9 @@ Assert-True ($SyncCall -ge 0 -and $SyncScript.Contains("if ((Get-WorkspaceGitTex
 Assert-True ($EditorBuild.Contains("`$Failure = 'editor_host_lease_failed'") -and $EditorBuild.Contains("`$Failure = 'editor_workspace_sync_failed'") -and $EditorBuild.Contains("if (`$Build.timedOut) { `$Failure = 'editor_build_timeout' }") -and [regex]::Matches($EditorBuild, 'Exit-Automation').Count -eq 2 -and $EditorBuild.Contains('if ($null -ne $Failure) { Exit-Automation $Failure }')) 'The step must map lease, sync, timeout and release failures to fixed reasons and record exactly one reason.'
 Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $AutomationRun.Contains("Write-Output ('unreal_automation result={0} reason={1} total={2} passed={3} requiredFailed={4} exit={5}' -f")) 'The harness step may print only the fixed path-free summary line.'
 # The editor build prints only the two masks, one regex-validated lease or
-# sync detail code, and the wrapper's native-result.json (target, platform,
-# exit code, failure class).
-Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 4 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'") -and $EditorBuild.Contains("if (`$null -ne `$Detail) { Write-Output ('editor_build_detail code=' + `$Detail) }") -and $EditorBuild.Contains("-cmatch '\Alease_[a-z_]{1,48}\z'") -and $EditorBuild.Contains("-cmatch '\Amanaged_(registration|workspace)_[a-z_]{1,48}\z'")) 'The editor build may print only the masks, a fixed detail code, and the bounded native result record.'
+# sync detail code, the fixed test-override line, and the wrapper's
+# native-result.json (target, platform, exit code, failure class).
+Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 5 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'") -and $EditorBuild.Contains("if (`$null -ne `$Detail) { Write-Output ('editor_build_detail code=' + `$Detail) }") -and $EditorBuild.Contains("-cmatch '\Alease_[a-z_]{1,48}\z'") -and $EditorBuild.Contains("-cmatch '\Amanaged_(registration|workspace)_[a-z_]{1,48}\z'")) 'The editor build may print only the masks, a fixed detail code, and the bounded native result record.'
 # UBT exit 5 (-NoEngineChanges, deferred by TA-020) keeps its own fixed reason, checked before the generic failure.
 Assert-True ($EditorBuild.Contains("elseif (`$BuildExit -eq 5) { `$Failure = 'editor_build_engine_changes_required' }") -and $EditorBuild.IndexOf('editor_build_engine_changes_required') -lt $EditorBuild.IndexOf("'editor_build_failed'")) 'The editor build must map UBT exit 5 to editor_build_engine_changes_required before editor_build_failed.'
 $ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
@@ -614,7 +616,7 @@ try {
 		Assert-True ($TimedOut.failure -ceq 'editor_build_timeout' -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq "reason=editor_build_timeout`n") 'A build that reaches the deadline must record editor_build_timeout.'
 		Assert-True (([string] (& git -C $SyncTarget rev-parse HEAD)).Trim() -ceq $Revisions.tested -and $Clock.Elapsed.TotalSeconds -lt 100) 'The timeout case must finish the sync, then stop the build at the deadline rather than after its 120-second run.'
 		Assert-True ((Get-AppendedLeaseState $JournalBefore) -ceq 'held,released') 'A timed-out build proven empty must still release the engine host lease.'
-		Assert-True ((Get-VisibleStepOutput $TimedOut) -ceq '') 'The timeout case must print no detail line, path, or build output.'
+		Assert-True ((Get-VisibleStepOutput $TimedOut) -ceq 'editor_test_override active') 'The timeout case must print only the fixed override line, no detail line, path, or build output.'
 		if (Test-Path -LiteralPath $EditorBuildEvidence) { Remove-Item -LiteralPath $EditorBuildEvidence -Recurse -Force }
 		Remove-Item Env:AETHELN_FIXTURE_NATIVE_SLEEP, Env:AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS
 
@@ -626,7 +628,7 @@ try {
 		$JournalBefore = [IO.File]::ReadAllText($env:AETHELN_ENGINE_HOST_LEASE)
 		$TooLate = Invoke-AutomationStepFixture $EditorBuild
 		Assert-True ($TooLate.failure -ceq 'editor_sync_time_insufficient' -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq "reason=editor_sync_time_insufficient`n") 'Less than the minimum after the lease must record editor_sync_time_insufficient.'
-		Assert-True (([string] (& git -C $SyncTarget rev-parse HEAD)).Trim() -ceq $Revisions.interleaved -and -not (Test-Path -LiteralPath $EditorBuildEvidence) -and (Get-VisibleStepOutput $TooLate) -ceq '') 'The insufficient-time case must not start a checkout or a build.'
+		Assert-True (([string] (& git -C $SyncTarget rev-parse HEAD)).Trim() -ceq $Revisions.interleaved -and -not (Test-Path -LiteralPath $EditorBuildEvidence) -and (Get-VisibleStepOutput $TooLate) -ceq 'editor_test_override active') 'The insufficient-time case must not start a checkout or a build.'
 		Assert-True ((Get-AppendedLeaseState $JournalBefore) -ceq 'held,released') 'The insufficient-time case must release the engine host lease it took.'
 		Remove-Item Env:AETHELN_EDITOR_TEST_DEADLINE_SECONDS
 
