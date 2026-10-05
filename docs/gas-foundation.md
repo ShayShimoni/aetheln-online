@@ -672,8 +672,12 @@ The client must not control event volume in the observability critical lane.
 ## Test Plan
 
 Names follow `Aetheln.<Area>.<Group>.<Case>`. Each test is
-`IMPLEMENT_SIMPLE_AUTOMATION_TEST` with `EditorContext | EngineFilter`, in the
-module's `Private/` folder. Tests that pin a policy set their own values,
+`IMPLEMENT_SIMPLE_AUTOMATION_TEST` with `EditorContext | EngineFilter`. The P2
+tests, their headless-world helper, and the test-only ability UCLASS live in
+the editor-only `GameTests` module (`Source/GameTests/Private/`), which depends
+on `GameCombat`, `GameplayAbilities`, and `GameplayTags`, so the Client and
+Server targets carry no test class. Test names keep the
+`Aetheln.GameCombat.*` prefix. Tests that pin a policy set their own values,
 never a tuning number. **H** is a headless single authority world using the
 spike's harness and the in-memory sink (`SetTestSink`). **P** is PIE with a
 dedicated server and two clients; no multi-client PIE harness exists, so these
@@ -743,7 +747,7 @@ leaves the spike files untouched.
 | PR | Scope | Depends on |
 | --- | --- | --- |
 | **P1** | The conventions section in the combat document, this document, the TC-008 candidate, and the index entry. Docs only. | Review of the approved design |
-| **P2** ASC foundation | Native tags (`Source/GameCore/GameCore.Build.cs`, `AethelnGameplayTags.*`); `AethelnPlayerState.*`; `AethelnAbilitySystemComponent.*` (with `FindForPawn`, no seam yet); the attribute set; the init effect; the combat game mode; the AI character base; `Config/DefaultGame.ini` sections; T1 to T9, T33, T34, using a test-only long-running ability. | P1 |
+| **P2** ASC foundation | Native tags (`Source/GameCore/GameCore.Build.cs`, `AethelnGameplayTags.*`); `AethelnPlayerState.*`; `AethelnAbilitySystemComponent.*` (with `FindForPawn`, no seam yet); the attribute set; the init effect; the combat game mode; the AI character base; `Config/DefaultGame.ini` sections; T1 to T9, T33, T34, using a test-only long-running ability, all in `Source/GameTests/Private/` (`GameTests.Build.cs` gains `GameCombat`, `GameplayAbilities`, and `GameplayTags`). | P1 |
 | **P3** Seam and telemetry | `AethelnActivationTypes.h`; in `AethelnAbilitySystemComponent.*`: the seam RPC, static validator, rate bucket, two stock-route overrides, seam scope and result slot, owner outcome, and telemetry; in `AethelnPlayerState.*`: grant validation; the base `AethelnGameplayAbility.*` with the choke point (cost and cooldown arrive in P4); `RateLimited` in `Source/GameNet/Public/AethelnObservability.h` and its test; T10 to T16, T21, T22, T31 with test-only abilities; the append-only rule in `docs/observability-and-crash-diagnostics.md`. | P2 |
 | **P4** Abilities | Cost and cooldown overrides on the base ability, the shared effects, the three skeletons (`AethelnOathscarAbilities.*`), the grant list and per-ability config, T17 to T20. | P3 |
 | **P5** Two-client evidence | Select the input-enabled pawn with `AAethelnCombatGameMode` by one of the three routes in Class Layout. T23 to T28 as manual PIE steps recorded in the PR. This is also the feel test after which the owner answers whether #19 can close without P6. | P4 |
