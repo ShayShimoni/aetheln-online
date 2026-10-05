@@ -1273,8 +1273,9 @@ function Get-PreparationWorkflowRoute {
 		$Uses = Get-PreparationYamlValue -Mapping $JobPair.Value -Name uses
 		if ($null -ne $Uses) {
 			# A local reusable-workflow call has no runner of its own: its jobs run from a file in this same
-			# revision, which Get-PreparationWorkflowSource classifies on its own pass. Any other form is unresolvable.
-			if ($Uses -isnot [YamlDotNet.RepresentationModel.YamlScalarNode] -or $Uses.Value -cnotmatch '^\./\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$') { throw 'routing_dynamic_unresolved' }
+			# revision, which Get-PreparationWorkflowSource classifies on its own pass. Any other form, or a call that also
+			# names runs-on (GitHub rejects that mix), is unresolvable.
+			if ($Uses -isnot [YamlDotNet.RepresentationModel.YamlScalarNode] -or $Uses.Value -cnotmatch '^\./\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml\z' -or $null -ne (Get-PreparationYamlValue -Mapping $JobPair.Value -Name 'runs-on')) { throw 'routing_dynamic_unresolved' }
 			continue
 		}
 		$RunsOn = Get-PreparationYamlValue -Mapping $JobPair.Value -Name 'runs-on'
