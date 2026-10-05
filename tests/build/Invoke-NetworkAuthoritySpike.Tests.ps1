@@ -418,15 +418,24 @@ Start-Sleep -Seconds $Seconds
 [System.IO.File]::WriteAllText($MarkerPath, 'timeout')
 $Rows = @(Get-CimInstance -ClassName Win32_Process)
 $Doomed = @{}
-$Frontier = @($HarnessId)
+# Windows keeps a child's parent PID after the parent dies and reuses PIDs, so
+# follow a child only if it was created no earlier than its parent. The
+# harness's own console host is not a runtime child.
+$Frontier = @($Rows | Where-Object { $_.ProcessId -eq $HarnessId })
 while ($Frontier.Count -gt 0) {
 	$Parents = $Frontier
-	$Frontier = @($Rows | Where-Object { $Parents -contains $_.ParentProcessId -and $_.ProcessId -ne $PID -and -not $Doomed.ContainsKey([int] $_.ProcessId) } | ForEach-Object { $Doomed[[int] $_.ProcessId] = $true; [int] $_.ProcessId })
+	$Frontier = @(foreach ($Parent in $Parents) {
+		$Rows | Where-Object { $_.ParentProcessId -eq $Parent.ProcessId -and $_.CreationDate -ge $Parent.CreationDate -and $_.ProcessId -ne $PID -and $_.Name -cne 'conhost.exe' -and -not $Doomed.ContainsKey([int] $_.ProcessId) } | ForEach-Object { $Doomed[[int] $_.ProcessId] = $true; $_ }
+	})
 }
 if (Test-Path -LiteralPath $StatePath) {
 	$Identity = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
 	$Orphan = Get-Process -Id $Identity.pid -ErrorAction Ignore
-	if ($null -ne $Orphan -and $Orphan.StartTime.ToUniversalTime().Ticks -eq $Identity.start_ticks) { $Doomed[[int] $Orphan.Id] = $true }
+	if ($null -ne $Orphan -and $Orphan.StartTime.ToUniversalTime().Ticks -eq $Identity.start_ticks) {
+		$null = $Doomed.Remove([int] $Orphan.Id)
+		# Kill the object whose identity was just checked, not its PID again.
+		try { $Orphan.Kill() } catch { if (-not $Orphan.HasExited) { throw } }
+	}
 }
 foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore }
 '@
@@ -583,7 +592,8 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 		}
 		finally {
 			if ($null -ne $Watchdog) {
-				if (-not $Watchdog.HasExited) { $Watchdog.Kill(); $Watchdog.WaitForExit() }
+				try { $Watchdog.Kill() } catch { if (-not $Watchdog.HasExited) { throw } }
+				$Watchdog.WaitForExit()
 				$Watchdog.Dispose()
 			}
 			foreach ($Breakpoint in $BoundaryTimeoutBreakpoints) { Remove-PSBreakpoint -Breakpoint $Breakpoint }
@@ -1023,6 +1033,12 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 		$_.CommandLine.IndexOf($FakeRuntime, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 	})
 	Assert-True ($LauncherDescendants.Count -eq 0) 'Launcher-side server descendants must be confirmed stopped, not merely detached from the launcher.'
+	# The server also exits by itself once its launcher is killed, so the process
+	# count alone cannot show that the runner ran the launcher-side cleanup. Only
+	# the fake cleanup prints this line, after it confirms the owned target exited.
+	$LauncherIdentity = Get-Content -LiteralPath (Join-Path $FixtureRoot 'launcher-identity-fixture-launcher.json') -Raw | ConvertFrom-Json
+	$LauncherCleanupOutput = Get-Content -LiteralPath (Join-Path $LauncherLogRoot 'server.cleanup.stdout.log') -Raw
+	Assert-True ($LauncherCleanupOutput -match ('(?m)^AETHELN_SERVER_DESCENDANT_EXITED=' + $LauncherIdentity.pid + '\r?$')) 'The runner must run launcher-side descendant cleanup and the cleanup must confirm the owned server exited.'
 	Write-Output 'PASS: explicit Linux-server launcher indirection remains hidden, redirected, monitored, provenance-ready, and descendant-cleaned'
 
 	$env:AETHELN_TEST_CLEANUP_FAIL = 'true'
@@ -1052,7 +1068,10 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 	Write-Output 'PASS: a launcher cleanup that leaks the server fails the run instead of hanging on the orphan'
 
 	# If a server does survive its launcher, the per-case timeout must still turn
-	# the hang into a named failure and remove the orphan.
+	# the hang into a named failure and remove the orphan. This case reaches the
+	# harness timeout only because the runner's parameterless WaitForExit() blocks
+	# on the orphan's pipes. When #248 bounds the runner's waits,
+	# change it to expect the runner's own named failure instead.
 	$env:AETHELN_TEST_CLEANUP_LEAK = 'true'
 	$env:AETHELN_TEST_KEEP_ORPHAN = 'true'
 	$OrphanTimeoutFailure = $null
