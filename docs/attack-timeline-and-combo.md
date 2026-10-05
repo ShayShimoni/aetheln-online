@@ -1,4 +1,4 @@
-# Attack Timeline and Three-Hit Combo
+| A16 | `Aetheln.GameCombat.AttackTimeline.RejectionAndCorrectionTelemetry` | P2 | H | `TimestampOutOfBounds`, `ImpossibleAimTransition`, and the aim correction emit the events and metric in the tables; refused replicated-data routes are metric-only; the public copy has no diagnostic code || A10 | `Aetheln.GameCombat.AttackTimeline.AlreadyHitAllowance` | P4 | H | A target inside the shape across several sub-sweeps and frames gets exactly one result per activation; a second activation can hit it again; a full record (`MaxTargets`) rejects new targets without eviction; a replayed candidate converges || A7 | `Aetheln.GameCombat.AttackTimeline.ChainResets` | P3 | H | Timeout, completion, interruption (test result), unpossession, avatar destruction, `State.Dead` added through the test seam, and another ability's activation each reset with the right reason and reset time; a waiting buffered step never starts; the next press is step 1; two reset paths for one chain send one chain end; from P4, a mid-frame external reset drops only contacts at or after its reset time || A6 | `Aetheln.GameCombat.AttackTimeline.ChainProgression` | P3 | H | Injected clock: steps 1, 2, 3 in order; buffered press starts at `LinkOpen`; link press starts at once; early and second buffered presses get `ActivationBlocked` with no commit; a press after `LinkClose` or after the final step starts step 1; each step has its own activation id and sequence; a replayed accepted chain request neither advances the step nor commits || A5 | `Aetheln.GameCombat.AttackTimeline.StepDefinitionFailsClosed` | P3 (P5 rows) | H | Grant refused for a wrong step count, each ordering violation including `LinkOpen == LinkClose`, non-finite or negative values, empty extents, `MaxTargets` below 1, a self-blocking commitment tag, and a blocking tag that is not a reset tag; P5 adds the `InterruptibleUntil` rows || A4 | `Aetheln.GameCombat.AttackTimeline.WindowEvaluation` | P3 (sweep rows P4) | H | Pure evaluator: inclusive starts and exclusive ends at exact boundaries; a frame spanning a whole window sweeps it once; clipping; sub-step counts honor the sampling bounds; one frame spanning the final step's remaining active window and its `RecoveryEnd`, and one spanning a non-final active window and its `LinkClose`, both still resolve the hit || A3 | `Aetheln.GameCombat.AttackTimeline.ReplicatedDataRoutesRefused` | P2 | H | All four implementations (target data, target data cancelled, replicated event, replicated event with payload) write no cache entry, draw one token each, emit a metric only, and send nothing; the input RPCs are unaffected || A2 | `Aetheln.GameCombat.AttackTimeline.AimAndTimeValidation` | P2 | H | Steps 6a to 6d with an injected clock and reference: time at and beyond each age and lead bound, non-finite, regressing within and beyond the regression tolerance; zero, non-unit, non-finite aim; soft-bound accept, clamp exactly to the soft bound, hard-bound reject; rate bound measured raw to raw (a corrected previous press does not cause a false rejection); zero and negative intervals; precedence after step 6; the same checks for a non-chain ability and a Release; no state advance on rejection |# Attack Timeline and Three-Hit Combo
 
 ## Document Status
 
@@ -40,19 +40,21 @@ abbreviates `Runtime/Engine/Private/Components/CharacterMovementComponent.cpp`.
    request, its own GAS activation, its own `ActivationId`, and its own
    `CombatActivation` record. The client always sends the same `AbilityId`;
    the server chooses the step. #19's step 7 stays unchanged.
-2. **The instance ends when the buffer opens.** A step's ability instance
-   lives from its start to its authored buffer-open offset, so #19's
-   single-instance rule rejects early presses and allows exactly one buffered
-   press. Recovery and the link window continue on the server timeline after
-   the instance ends.
-3. **Request schema 2** adds a bounded aim and a client time sample. Aim is
-   converted into a server-bounded direction: accepted, clamped and recorded as
-   corrected, or rejected. Exact equality is gone (F1); temporal, angular, and
-   angular-rate bounds exist (F2). All bounds are `TBD`.
-4. **One world-level driver.** A server-only world subsystem advances every
-   registered step after actor tick, sweeps authored shapes from the server
-   capsule pose, and resolves the frame's contacts in one canonical total
-   order, never in actor-iteration or packet order.
+2. **The activation ends when the buffer opens.** A step's activation of the
+   chain's single `InstancedPerActor` instance lasts from its start to its
+   authored buffer-open offset, so #19's single-instance rule rejects early
+   presses and allows exactly one buffered press. Recovery and the link window
+   continue on the server timeline after the activation ends.
+3. **Request schema 2** adds a bounded aim and a client time sample, checked
+   for every request through the seam. Aim is converted into a server-bounded
+   direction: accepted, clamped and recorded as corrected, or rejected. Exact
+   equality is gone (F1); temporal, angular, and angular-rate bounds exist
+   (F2). All bounds are `TBD`.
+4. **One world-level driver.** A server-only world subsystem sweeps every
+   registered step after actor tick, from the server capsule pose, and resolves
+   the frame's contacts in one canonical total order, never in actor-iteration
+   or packet order. Resets carry a time, so a frame that spans a window and a
+   reset cannot drop an earlier hit.
 5. **Contacts resolve on the capsule** through a dedicated combat query
    channel. Meshes, sockets, montages, and notifies never create a contact.
 6. **Present-time validation.** No rewind in the prototype; TC-002 stays with
@@ -63,9 +65,10 @@ abbreviates `Runtime/Engine/Private/Components/CharacterMovementComponent.cpp`.
 8. **Owner-only reliable messages** carry the outcome, the activation record,
    and chain ends; a skip-owner replicated state carries the readable phase to
    observers; an unreliable multicast carries presentation-safe result cues.
-9. **The target-data residual closes** by overriding the two virtual
-   `_Implementation` functions on the project ASC, as #19 closes the other
-   stock routes.
+9. **The replicated-data cache residual closes** by overriding the four
+   virtual `_Implementation` functions that write it (two target-data and two
+   replicated-event RPCs) on the project ASC, as #19 closes the other stock
+   routes.
 10. **Tuning is config data.** Steps, windows, shapes, and bounds are `Config`
     properties validated at grant time and failing closed, matching #19 until
     #84 and #106 supply the asset and registry pipeline.
@@ -81,7 +84,7 @@ and what it leaves to other owners.
 
 | Owner | #60 consumes or provides | #60 does not do |
 | --- | --- | --- |
-| [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes the seam, rate bucket, outcome RPC, base ability, cost and cooldown overrides, grant validation, `FindForPawn`, and `State.Dead` (see [Dependencies on #19](#dependencies-on-19)). | Change the seam's step order or the PlayerState lifecycle. |
+| [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes the seam, rate bucket, outcome RPC, base ability, cost and cooldown overrides, grant validation, `FindForPawn`, and `State.Dead` (see [Dependencies on #19](#dependencies-on-19)). Adds one `ResetChain(AvatarLost)` call to the PlayerState's null-pawn case. | Reorder or change #19's existing seam steps, or change what #19's lifecycle grants, initializes, or cancels. |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Provides the avoidance step and an authored avoidance-tag set that #18 fills with its dodge invulnerability tag; a dodge activation resets the chain like any other action. | Dodge cost, window, movement, or tags. |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Provides the step definition, timeline driver, contact pipeline, and result path; the enemy registers its steps directly, without the seam. | Enemy behavior, target choice, or telegraph content. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Latches lethal results and raises one lethal notification per target; treats `State.Dead` and zero Health as not alive. | Apply `State.Dead`, run death, respawn, or reconnect. |
@@ -124,11 +127,11 @@ Existing code at `ab296d0`:
 | --- | --- | --- |
 | `AethelnGameplayTags` (extend) | GameCore | `Ability.Oathscar.SwordShieldBasicChain` (`order.oathscar.ability.sword_shield_basic_chain`), `State.Oathscar.SwordShieldBasicChain` (commitment state), `Damage.Wrought` (`combat.damage.wrought`), `SetByCaller.Damage.Wrought`. The PR that adds each tag adds its row to the Initial entries table in the combat document. |
 | `IAethelnCombatInputSink` | GameCore | Presentation-safe client entry: `RequestAbilityPress(FGameplayTag AbilityId)`. No GAS type, so GameUI can call it. |
-| `AethelnActivationTypes.h` (extend) | GameCombat | Request schema 2; two appended `EAethelnActivationResult` values. |
+| `AethelnActivationTypes.h` (extend) | GameCombat | Request schema 2, every field initialized; two appended `EAethelnActivationResult` values. |
 | `AethelnAttackTypes.h` | GameCombat | `FAethelnAttackStepDefinition`, `FAethelnCombatActivationRecord`, `FAethelnAttackPresentationState`, `FAethelnCombatResultCue`, `EAethelnAimCorrection`, `EAethelnChainEndReason`. |
 | `AethelnAttackTimeline` (namespace, pure functions) | GameCombat | Window evaluation, sweep segment clipping and sub-stepping, aim bounding. Headless-testable with injected times. |
-| `UAethelnBasicChainAbility` | GameCombat | Derives from `UAethelnGameplayAbility`. Selects the step from the chain state, waits for a buffered start, registers the step with the subsystem, ends at buffer-open. |
-| `UAethelnAbilitySystemComponent` (extend) | GameCombat | Aim and time validation (steps 6a to 6d), per-connection last accepted aim and time, chain state and `ResetChain`, owner RPCs, the replicated phase state, the result-cue multicast, the two target-data overrides. |
+| `UAethelnBasicChainAbility` | GameCombat | Derives from `UAethelnGameplayAbility` (`InstancedPerActor`). Each activation selects the step from the chain state, waits for a buffered start, registers the step with the subsystem, and ends at buffer-open. |
+| `UAethelnAbilitySystemComponent` (extend) | GameCombat | Aim and time validation (steps 6a to 6d), per-connection last accepted raw aim and time, chain state and `ResetChain`, owner RPCs, the replicated phase state, the result-cue multicast, the four replicated-data overrides. |
 | `AAethelnPlayerState` (extend) | GameCombat | Implements `IAethelnCombatInputSink`; calls `ResetChain(AvatarLost)` in its null-pawn case. |
 | `UAethelnCombatTimelineSubsystem` | GameCombat | `UWorldSubsystem`, active on the server. Registered steps, activation ordinals, combat entity ids, per-frame sampling, the contact queue, resolution, already-hit records, the lethal notification. |
 | `UAethelnDamageEffect` | GameCombat | Instant effect: negated Health modifier from `SetByCaller.Damage.Wrought`, asset tag `Damage.Wrought`. |
@@ -150,10 +153,14 @@ struct GAMECOMBAT_API FAethelnCombatActivationRequest
 	UPROPERTY() uint32 ContentVersion = 0;
 	UPROPERTY() EAethelnActivationPhase Phase = EAethelnActivationPhase::Press;
 	UPROPERTY() uint32 Sequence = 0;
-	UPROPERTY() FVector_NetQuantizeNormal Aim;         // new: control-rotation unit vector at press, pitch included
+	UPROPERTY() FVector_NetQuantizeNormal Aim = FVector_NetQuantizeNormal(ForceInitToZero); // new: control-rotation unit vector at press, pitch included
 	UPROPERTY() double ClientServerTimeSeconds = 0.0;  // new: client's estimate of server world time at press
 };
 ```
+
+`Aim` is initialized explicitly because the vector's default constructor leaves
+it uninitialized (`Runtime/Core/Public/Math/Vector.h:150`;
+`Runtime/Engine/Classes/Engine/NetSerialization.h:544-546`).
 
 - **Why these two fields.** #19 deferred aim and any timestamp to #60 with a
   schema bump (Input-contract findings in the #19 specification). The aim is
@@ -163,15 +170,18 @@ struct GAMECOMBAT_API FAethelnCombatActivationRequest
   as the spike already uses. The time sample is the value of
   `AGameStateBase::GetServerWorldTimeSeconds` on the client
   (`Runtime/Engine/Classes/GameFramework/GameStateBase.h:72`): local world time
-  plus a replicated delta refreshed every 0.1 s by default
-  (`Runtime/Engine/Private/GameStateBase.cpp:36`, `:65-67`, `:144-150`), so it
-  carries a latency-dependent error that the bounds must tolerate.
+  plus a delta (`Runtime/Engine/Private/GameStateBase.cpp:144-150`). The
+  server replicates its world time every 0.1 s by default (`:36`, `:65-67`),
+  and the client derives a smoothed running delta from each update
+  (`:164-193`). The sample therefore carries a latency-dependent error and can
+  step back slightly between presses; the bounds must tolerate both.
 - **No step field.** Every hit sends the chain's `AbilityId`. The server
   chooses the step from its own chain state.
-- **#19 test change.** T10 (`RequestShape`) asserts exactly five reflected
-  fields with no aim. P2 changes it to seven fields, allows only `Aim` and
+- **#19 changes.** T10 (`RequestShape`) asserts exactly five reflected fields
+  with no aim. P2 changes it to seven fields, allows only `Aim` and
   `ClientServerTimeSeconds` as additions, and keeps every other forbidden
-  name.
+  name. Every other #19 fixture and text change is listed in
+  [Dependencies on #19](#dependencies-on-19).
 - **Client fill.** `RequestActivation(AbilityId, Phase)` reads the owning
   controller's control rotation and the game state's server time, and calls
   `FlushServerMoves()` on the avatar's movement component before sending
@@ -201,15 +211,23 @@ and Cursor mode blocks the press without cancelling an accepted step
 ### Validation additions
 
 Steps 6a to 6d run after #19's step 6 and before step 7, so identity, sequence,
-and version reasons keep their precedence. Each rejection has one reason and
-no side effect.
+and version reasons keep their precedence. They apply to every request through
+the seam, for every ability (the chain, Gate Step, Sworn Rebuke, Hold the Line)
+and both phases, not only to the chain. Each rejection has one reason and no
+side effect.
 
 | Step | Check | Rejection result |
 | --- | --- | --- |
-| 6a | `ClientServerTimeSeconds` is finite, within `[Now - ProvisionalTimestampMaxAgeSeconds, Now + ProvisionalTimestampMaxLeadSeconds]` of the server world time, and not lower than the last accepted request's sample | `TimestampOutOfBounds` (new) |
+| 6a | `ClientServerTimeSeconds` is finite, within `[Now - ProvisionalTimestampMaxAgeSeconds, Now + ProvisionalTimestampMaxLeadSeconds]` of the server world time, and not lower than the last accepted request's sample minus `ProvisionalTimestampRegressionToleranceSeconds` | `TimestampOutOfBounds` (new) |
 | 6b | `Aim` is finite, non-zero, and unit within `ProvisionalAimUnitTolerance` | `MalformedRequest` |
 | 6c | The angle between `Aim` and the reference `R` (the vector of the avatar controller's current server control rotation) is at most `ProvisionalAimHardBoundDegrees` | `ImpossibleAimTransition` (new) |
-| 6d | The angle between `Aim` and the last accepted aim is at most `ProvisionalAimMaxRateDegreesPerSecond` multiplied by the client-time interval since that request (skipped for the first accepted request) | `ImpossibleAimTransition` |
+| 6d | The angle between `Aim` and the last accepted request's raw `Aim` is at most `ProvisionalAimSoftBoundDegrees + ProvisionalAimMaxRateDegreesPerSecond * max(0, Interval)`, where `Interval` is the client-time difference between the two samples (skipped for the first accepted request) | `ImpossibleAimTransition` |
+
+Step 6d compares raw aim with raw aim, never with a corrected aim, so a press
+clamped toward a lagging `R` cannot make the next legitimate press look like
+an impossible turn. The soft-bound term absorbs quantization and the zero or
+negative intervals that the 6a regression tolerance allows; with a zero
+interval, any turn beyond the soft bound is rejected.
 
 On acceptance, the accepted aim is:
 
@@ -219,10 +237,10 @@ On acceptance, the accepted aim is:
   soft bound (correction `AimCorrected`).
 
 The soft bound is at most the hard bound; equal values give no correction band.
-The last accepted aim and client time advance only at #19's step 10, with
+The last accepted raw aim and client time advance only at #19's step 10, with
 `LastAcceptedSequence`, and live for one PlayerState lifetime. Steps 6a to 6d
-extend #19's static pure validator, which gains the reference vector and the
-last accepted aim and time as inputs.
+extend #19's static pure validator; the signature change is in
+[Dependencies on #19](#dependencies-on-19).
 
 **Why this closes F1 and F2.** The server reference comes from the last
 processed movement packet (`CMC.cpp:10027-10036` sets control rotation only
@@ -232,7 +250,10 @@ is the server-bounded direction the canon asks for: the server records the
 accepted direction and whether it corrected it. F2's temporal bound is step 6a
 and its angular bounds are 6c and 6d. Both stay plausibility checks: the
 reference and the time sample are client-derived, so neither proves intent.
-#82 S5 measures the correction and rejection rates (P6).
+#82 S5 measures the correction and rejection rates (P6). The record carries the
+accepted direction and the correction result, which closes #82 F11. A2
+replaces #82's planned spike tests `Aetheln.GameCombat.NetworkSpike.AimAfterLook`
+and `Aetheln.GameCombat.NetworkSpike.AimRateBound`.
 
 ## Server-Owned Attack Timeline
 
@@ -244,46 +265,66 @@ step's authoritative start; every value is `TBD`.
 | Value | Meaning |
 | --- | --- |
 | `ActiveStart`, `ActiveEnd` | The active window `[ActiveStart, ActiveEnd)`; wind-up is `[0, ActiveStart)` |
-| `BufferOpen` | The instance ends here; from here a press is accepted as the next step |
+| `BufferOpen` | The activation ends here; from here a press is accepted as the next step |
 | `LinkOpen`, `LinkClose` | The next step may start in `[LinkOpen, LinkClose)`; absent on the final step |
 | `RecoveryEnd` | Recovery is `[ActiveEnd, RecoveryEnd)` |
 | `CancelOpen` | The commitment tag is held in `[0, CancelOpen)` |
-| `InterruptibleUntil` | An interrupting result cancels the step in `[0, InterruptibleUntil)`; 0 means never |
+| `InterruptibleUntil` (P5) | An interrupting result cancels the step in `[0, InterruptibleUntil)`; 0 means never |
 | `Shape`, `ShapeExtent` | Sphere, capsule, or box, with its extent |
 | `PathStart`, `PathEnd` | Shape transforms in the combat frame at `ActiveStart` and `ActiveEnd` |
 | `MaxAimPitchDegrees` | Pitch clamp applied to the accepted aim when building the combat frame |
 | `WroughtDamage` | One Wrought component per contact |
-| `MaxResultsPerTarget`, `MaxTargets` | The per-activation allowance and the bounded record size |
-| `bInterruptsTarget` | Whether this step's committed hit interrupts the target |
+| `MaxTargets` | The bounded number of targets one activation may record |
+| `bInterruptsTarget` (P5) | Whether this step's committed hit interrupts the target |
+
+**One result per target per activation.** The chain has one active window per
+step, and a target gets at most one result from each activation, however many
+sub-sweeps or frames it stays inside the shape. This is fixed for the
+prototype chain, not tuned. Authored re-hits would need re-hit slots and a
+re-hit interval rule; none is designed, and adding them is a content-version
+and design change.
 
 Grant validation (extending #19's) refuses the chain unless there are exactly
-three steps, every value is finite, and, with `F` meaning the final step:
+three steps, every value is finite, and:
 
 - `0 <= ActiveStart < ActiveEnd <= BufferOpen`;
-- non-final steps: `BufferOpen <= LinkOpen <= RecoveryEnd <= LinkClose`;
+- non-final steps: `BufferOpen <= LinkOpen <= RecoveryEnd <= LinkClose` and
+  `LinkOpen < LinkClose`, so a buffered start and a timeout never share an
+  instant;
 - final step: `BufferOpen == RecoveryEnd`, no link values;
-- `ActiveEnd <= CancelOpen <= RecoveryEnd` and
-  `0 <= InterruptibleUntil <= RecoveryEnd`;
-- extents are positive, damage is non-negative, `MaxResultsPerTarget >= 1`,
-  `MaxTargets >= 1`, and the pitch clamp is within `[0, 90]`;
-- the chain's own `ActivationBlockedTags` do not contain its commitment tag.
+- `ActiveEnd <= CancelOpen <= RecoveryEnd`;
+- extents are positive, damage is non-negative, `MaxTargets >= 1`, and the
+  pitch clamp is within `[0, 90]`;
+- the chain's own `ActivationBlockedTags` do not contain its commitment tag,
+  and every tag in them is also an authored reset tag (see [Resets](#resets)),
+  so a blocking tag added while a buffered step waits resets the chain instead
+  of letting the step start.
+
+P5 adds `InterruptibleUntil` and `bInterruptsTarget` to the step struct, with
+the rule `0 <= InterruptibleUntil <= RecoveryEnd`, extends A5, and bumps the
+chain's `ContentVersion`.
 
 `LinkClose >= RecoveryEnd` keeps a late press out of recovery: after the link
 closes, the character is already free and the press starts a new chain.
+Whether that is the right reading of "late" in the issue's criteria is owner
+question 8.
 
 ### Chain progression and buffering
 
 The ASC holds one server-only `FAethelnChainState`: the current step index, its
 start time, and its content version. The seam evaluates a press at server time
-`t` after advancing the requester's timeline to `t` (see
+`t` with every boundary up to `t` already applied (see
 [Timeline driver](#timeline-driver-and-clock)). `S` is the current step's start.
+Every activation gets a new `ActivationId`, as the spike does per accepted
+intent (`Source/GameCombat/Private/AethelnSpikeAuthorityComponent.cpp:431`);
+the id is per activation, not per instance.
 
 | Press at `t` | Seam outcome | Effect |
 | --- | --- | --- |
 | No chain state | `Accepted` | Step 1 starts at `t` |
-| `t < S + BufferOpen` (instance active) | `ActivationBlocked` (#19 step 7) | Nothing; this is an early press |
-| `S + BufferOpen <= t < S + LinkOpen` | `Accepted`, cost committed now | A new instance waits and starts the next step at `S + LinkOpen` (buffered) |
-| Another press while that instance waits | `ActivationBlocked` (#19 step 7) | Nothing; one buffered press at most |
+| `t < S + BufferOpen` (activation still active) | `ActivationBlocked` (#19 step 7) | Nothing; this is an early press |
+| `S + BufferOpen <= t < S + LinkOpen` | `Accepted`, cost committed now | The instance activates again, waits, and starts the next step at `S + LinkOpen` (buffered) |
+| Another press while that activation waits | `ActivationBlocked` (#19 step 7) | Nothing; one buffered press at most |
 | `S + LinkOpen <= t < S + LinkClose` | `Accepted` | The next step starts at `t`; the rest of the current recovery is cancelled |
 | `t >= S + LinkClose`, or the final step has ended | `Accepted` | The chain timed out or completed; step 1 starts at `t` |
 
@@ -300,8 +341,9 @@ Rules:
 - **No cooldown on the chain.** Cadence is bounded by the timeline, the
   single-instance rule, and #19's rate bucket, which closes F3 for the chain. A
   positive chain cooldown would block the next hit, because every hit commits
-  (dependency 2).
-- **Final-step presses.** The final step's instance lasts until its recovery
+  (dependency 2). This is a structural consequence, not a tuning value; a
+  chain-level restart delay, if one is ever wanted, stays `TBD` (#107).
+- **Final-step presses.** The final step's activation lasts until its recovery
   ends, so every press during it is an early press. Buffering into a new chain
   is owner question 7.
 
@@ -317,25 +359,44 @@ with #18 (#19 open decision 6).
 
 The tag is added and removed by the timeline as a loose server tag, not as
 `ActivationOwnedTags`, because those last for the whole activation
-(`GAS/Private/Abilities/GameplayAbility.cpp:990`) and the instance ends before
-recovery does.
+(`GAS/Private/Abilities/GameplayAbility.cpp:990`) and the activation ends
+before recovery does.
 
 ### Resets
 
-Every reset goes through one `ResetChain(Reason)`. It cancels a running or
-waiting chain instance, removes the commitment tag, unregisters the step from
-the subsystem (so queued candidates from it fail revalidation), clears the
-phase state, and sends one `ClientChainEnded` to the owner. The next press is
-step 1.
+Every reset goes through one `ResetChain(Reason, ResetTime)`. It cancels a
+running or waiting chain activation, removes the commitment tag, stamps the
+registered step with `ResetTime`, clears the phase state, and sends one
+`ClientChainEnded` to the owner. The next press is step 1.
+
+- **Reset time.** Timeline resets use their exact authored time
+  (`S + RecoveryEnd`, `S + LinkClose`). An interruption uses the contact time
+  of the interrupting result. Every other reset uses the server time at which
+  it is processed.
+- **No mid-frame removal.** A reset never removes a step from the subsystem
+  during a frame. The frame pass still sweeps the step up to its reset time,
+  and revalidation accepts only contacts earlier than it (see
+  [Timeline driver](#timeline-driver-and-clock)); the step is removed after the
+  pass.
+- **Idempotent.** The first reset of a chain ends it; later calls for the same
+  chain do nothing. For example, #19's `CancelAllAbilities` ending the
+  activation and the explicit `AvatarLost` call produce exactly one
+  `ClientChainEnded`.
 
 | Reason | Trigger |
 | --- | --- |
 | `Completed` | The final step's recovery ended |
 | `Timeout` | A non-final step's link window closed with no press |
-| `Interrupted` | A committed interrupting result arrived inside `InterruptibleUntil` |
+| `Interrupted` | A committed interrupting result arrived inside `InterruptibleUntil` (P5) |
 | `AvatarLost` | #19's null-pawn case (unpossession, destroy while possessed, logout, disconnect); it already cancels all abilities |
-| `IncompatibleState` | `State.Dead` or an authored reset tag was added, through `RegisterGameplayTagEvent` (`GAS/Public/AbilitySystemComponent.h:720`) |
+| `IncompatibleState` | `State.Dead`, an authored reset tag, or any tag in the chain's `ActivationBlockedTags` was added, through `RegisterGameplayTagEvent` (`GAS/Public/AbilitySystemComponent.h:720`) |
 | `OtherAction` | Any other ability activated on the ASC, through `AbilityActivatedCallbacks` (`GAS/Public/AbilitySystemComponent.h:542`, broadcast at `GAS/Private/AbilitySystemComponent_Abilities.cpp:2554-2557`) |
+
+`AbilityActivatedCallbacks` fires from `PreActivate`
+(`GAS/Private/Abilities/GameplayAbility.cpp:997`), before the other ability
+commits, so an activation that then fails its commit (#19 `InternalFailure`)
+would still reset the chain. P3 either resets only on the other ability's
+committed activation or pins this behavior in A8.
 
 #18 may call `ResetChain(OtherAction)` directly if its dodge is not a GAS
 ability.
@@ -344,17 +405,32 @@ ability.
 
 `UAethelnCombatTimelineSubsystem` binds `FWorldDelegates::OnWorldPostActorTick`
 (`Runtime/Engine/Classes/Engine/World.h:4526-4527`, broadcast at
-`Runtime/Engine/Private/LevelTick.cpp:1905-1906`) on server worlds, so it runs
-after movement and actor ticks. Each frame it:
+`Runtime/Engine/Private/LevelTick.cpp:1905-1906`), so it runs after movement
+and actor ticks. The delegate is static and every world in the process
+broadcasts it, including client worlds in single-process PIE. The handler
+therefore returns unless the broadcasting world is the subsystem's own world
+and that world is not a client (`GetNetMode() != NM_Client`). `Now` is always
+that world's `GetTimeSeconds()`; the delegate's `DeltaSeconds` is never used.
 
-1. advances every registered step, in activation-ordinal order, from its last
-   sample time to `Now = UWorld::GetTimeSeconds()`, applying boundary events
-   (commitment end, instance end, link close, recovery end);
-2. sweeps each active window over the part of `(LastSample, Now]` it covers
-   and queues contact candidates;
-3. sorts the queue in the canonical total order and resolves it;
-4. emits records, cues, telemetry, and lethal notifications from committed
-   results.
+Each frame the pass:
+
+1. **Sweeps.** For every registered step, in activation-ordinal order, it
+   sweeps the active window over
+   `(LastSample, min(Now, S + ActiveEnd, ResetTime)]` and queues contact
+   candidates. Steps reset earlier in the frame are still swept up to their
+   reset time.
+2. **Resolves.** It sorts the queue in the canonical total order and resolves
+   it. Revalidation accepts a candidate only if its contact time is earlier
+   than its activation's reset time (if any). An interruption or lethal result
+   committed during resolution stamps its reset at its contact time, so it
+   invalidates only the victim's later contacts.
+3. **Applies boundaries.** It applies every boundary up to and including `Now`
+   (commitment end, activation end at `BufferOpen`, `Timeout` at `LinkClose`,
+   `Completed` at `RecoveryEnd`), each stamped with its authored time. These
+   times are never earlier than `ActiveEnd`, so they cannot invalidate the
+   frame's contacts.
+4. **Emits** records, cues, telemetry, and lethal notifications from committed
+   results, and removes the steps that were reset.
 
 Rules:
 
@@ -362,17 +438,23 @@ Rules:
   never a window input.
 - **Half-open windows.** A boundary belongs to the window it opens. A contact
   at exactly `ActiveEnd` is outside the active window.
-- **Catch-up before requests.** Before validating a request, the seam advances
-  the requester's boundary events to its server time, so instance end and link
-  windows are exact at request time rather than at the last frame. Contacts are
-  still sampled only by the frame pass.
+- **Requests see the last pass's time.** RPCs are dispatched before the world
+  time advances (`Runtime/Engine/Private/LevelTick.cpp:1574` before `:1610`),
+  so a request reads the previous frame's `Now`, and the previous pass has
+  already applied every boundary up to that time. If a request ever reads a
+  later time (for example a delayed bunch processed after the pass), the seam
+  first applies the requester's boundaries up to that time.
 - **Requests before contacts.** A request processed in a frame is validated
-  before that frame's contacts resolve. This is the declared rule for a dodge
-  or block request and a contact in the same frame.
+  before that frame's contacts resolve, and a reset it causes is stamped with
+  the previous frame's time, so it invalidates all of this frame's contacts
+  from that chain. This is the declared rule for a dodge or block request and
+  a contact in the same frame.
 - **Missing presentation changes nothing.** The driver needs no mesh, montage,
   notify, or effect; headless tests run the full timeline.
-- **No skipped windows.** A long frame that spans a whole active window still
-  sweeps it once, clipped to its exact bounds.
+- **No skipped windows or dropped hits.** A long frame that spans a whole
+  active window still sweeps it once, clipped to its exact bounds. A frame that
+  also spans `RecoveryEnd` or `LinkClose`, or a mid-frame external reset, keeps
+  every contact that came before the reset time.
 
 ## Authored Volumes and Hit Resolution
 
@@ -391,40 +473,53 @@ segment until each sub-sweep's rotation change and travel stay within
 sampling budget), sweeping each at its start rotation. A hit's contact time is
 the segment start plus the hit's sweep fraction times the segment duration.
 
+The server holds only end-of-frame capsule positions. Within one frame's
+segment, the combat-frame origin of each sub-step is interpolated linearly
+between the attacker's capsule center at the previous sample and at `Now`;
+targets are swept where they are at `Now`.
+
 ### Target query
 
 - A project trace channel, `AethelnCombatQuery`, defaults to `Ignore`.
-  Character capsules respond to it, set in C++ on the GameCore pawn and the AI
-  base; mesh profiles keep the default. The driver sweeps with
-  `SweepMultiByChannel` (`Runtime/Engine/Classes/Engine/World.h:2325`).
+  Character capsules respond to it with `ECR_Overlap`, set in C++ on the
+  GameCore pawn and the AI base; mesh profiles keep the default. Overlap, not
+  block, is required: a multi sweep generates nothing after its first blocking
+  hit (`Runtime/Engine/Classes/Engine/World.h:2313-2315`), which would cap a
+  swing at one target. The driver sweeps with `SweepMultiByChannel` (`:2325`).
 - A hit counts only if its component is the target character's capsule. This
   second check keeps a misconfigured mesh from creating a contact.
 - The attacker and its own avatar are ignored. The ASC is found with
   `FindForPawn`.
+- **Occlusion (decision).** Nothing blocks the channel, so a sweep is not
+  stopped by world geometry, and the prototype adds no line-of-sight check:
+  authored melee reach in a controlled arena. The canon notes that attacks
+  obstructed by near cover need separate validation (Local Control Modes in
+  the combat document); this stays residual risk 9 and is revisited when the
+  arena gains cover or a shape can reach through a wall.
 
 ### Total order
 
 Candidates sort by contact time, then activation ordinal (a server-global
 counter issued at step start, unique across connections and AI), then result
-slot (the step's window index), then target combat id (a server-issued id per
-ASC). This is the canonical key (Damage Families and Deterministic Defense in
-the combat document) without the periodic-effect terms, which melee does not
-use. A second candidate with the same activation, target, and slot is a
-duplicate.
+slot (always 0 for the chain: one active window per step), then target combat
+id (a server-issued id per ASC). This is the canonical key (Damage Families and
+Deterministic Defense in the combat document) without the periodic-effect
+terms, which melee does not use. A second candidate with the same activation
+and target is a duplicate.
 
 ### Resolution order (prototype subset)
 
 For each candidate, in order:
 
-1. **Revalidate.** The activation is still registered (not reset), the
-   attacker and target are alive (no `State.Dead` and Health above zero, which
-   fails closed until #21), the relation is hostile (see
+1. **Revalidate.** The activation was not reset at or before the contact time,
+   the attacker and target are alive (no `State.Dead` and Health above zero,
+   which fails closed until #21), the relation is hostile (see
    [Relation](#relation)), and the content version is the activation's.
    Territory policy is 2.x and is not checked.
-2. **Allowance.** Reject the candidate if this target already has
-   `MaxResultsPerTarget` results for this activation and slot, or if the
-   activation's record already holds `MaxTargets` targets. Never evict a
-   record while the activation is registered. Record the accepted contact.
+2. **Allowance.** Reject the candidate if this target already has a result
+   for this activation, or if the activation's record already holds
+   `MaxTargets` targets. Never evict a record while the activation's step is
+   registered. Record the accepted contact.
 3. **Avoidance.** A target holding any tag in the authored avoidance set
    (empty until #18) yields a recorded `Avoided` result and nothing else.
 4. **Directional defense.** With no active directional defense on the target,
@@ -455,8 +550,11 @@ fail revalidation.
 ### Interruption
 
 A committed result with `bInterruptsTarget` resets the target's chain with
-`Interrupted` if the target's current step is inside its `InterruptibleUntil`.
-The same mechanism serves #20's enemy steps and Sworn Rebuke's authored rule.
+`Interrupted`, stamped at the contact time, if the target's current step is
+inside its interruptible window at that contact time
+(`ContactTime < TargetStepStart + InterruptibleUntil`). Both fields arrive in
+P5. The same mechanism serves #20's enemy steps and Sworn Rebuke's authored
+rule.
 Resolve and control families are not prototype scope.
 
 ### Relation
@@ -555,7 +653,9 @@ and `GuardBroken`), the family tag, whether it was lethal, and the
 server-computed contact location. It carries no damage amount and no
 attribute value; Health stays owner-only (#19) until #61 decides opponent
 visibility. Losing a cue loses presentation only; attributes and death
-replicate separately.
+replicate separately. The attacker gets no reliable hit confirmation in the
+prototype: the unreliable cue is its only hit signal, and #61 treats it as
+presentation.
 
 ### Bounded presentation correction
 
@@ -589,39 +689,50 @@ Telemetry additions, using the #19 emission rules and allowlisted correlation
 (`docs/observability-and-crash-diagnostics.md:30-48`):
 
 - An `AimCorrected` acceptance also emits one correction event (subject `Aim`,
-  reason `Corrected`) and one `CorrectionCount` metric sample.
+  reason `Corrected`) and one `CorrectionCount` metric sample. P2 adds and
+  tests this with the two new rejections (A16).
 - Each committed result emits one event (subject `Hit`, reason `Accepted`)
   with the activation id, ability id, and request sequence. Target identity is
-  not an allowlisted field and is not logged.
+  not an allowlisted field and is not logged. P4 adds and tests this (A24).
+- The four refused replicated-data routes emit a metric only and draw from the
+  bucket, like #19's refused stock routes.
 - AI activations have no client sequence, and the contract drops events with
   sequence 0, so #20 issues a server sequence for its events.
 - Content version in correlation stays with #38 (#19 open decision 9); the
   record carries it meanwhile.
 
-## Closing the Target-Data Residual
+## Closing the Replicated-Data Cache Residual
 
-#19 left a residual to #60: a hostile client can grow the server's
-target-data cache through `ServerSetReplicatedTargetData` and
-`ServerSetReplicatedTargetDataCancelled`
-(`GAS/Public/AbilitySystemComponent.h:1572-1577`), whose implementations
-always `FindOrAdd` an entry (`GAS/Private/AbilitySystemComponent_Abilities.cpp:4011-4012`,
-`:4051-4052`). The container cannot be purged from a game module: its `Remove`
-is not exported and its storage is private
-(`GAS/Public/Abilities/GameplayAbilityTypes.h:554-567`).
+#19 left a residual to #60: a hostile client can grow the server's replicated
+ability-data cache (`AbilityTargetDataMap`) on keys it chooses. Four
+client-callable reliable server RPCs write it:
+
+| RPC | Declaration | Cache write | Generated virtual `_Implementation` |
+| --- | --- | --- | --- |
+| `ServerSetReplicatedTargetData` | `GAS/Public/AbilitySystemComponent.h:1572-1573` | `FindOrAdd` (`GAS/Private/AbilitySystemComponent_Abilities.cpp:4011-4012`) | `GAS-UHT/AbilitySystemComponent.generated.h:75` |
+| `ServerSetReplicatedTargetDataCancelled` | `:1576-1577` | `FindOrAdd` (`:4051-4052`) | `:73` |
+| `ServerSetReplicatedEvent` | `:1554-1555` | Through `InvokeReplicatedEvent` (`:3934-3938`), which calls `FindOrAdd` (`:3950`) | `:80` |
+| `ServerSetReplicatedEventWithPayload` | `:1558-1559` | Through `InvokeReplicatedEventWithPayload` (`:3941-3946`), which calls `FindOrAdd` (`:3968`) | `:78` |
+
+The container cannot be purged from a game module: its `Remove` is not
+exported and its storage is private
+(`GAS/Public/Abilities/GameplayAbilityTypes.h:554-567`). The input RPCs are
+bounded and stay open: `ServerSetInputPressed` and `ServerSetInputReleased`
+only update a spec that already exists
+(`GAS/Private/AbilitySystemComponent_Abilities.cpp:2885-2902`).
 
 The header declares the RPCs without `virtual`, but the generated
-`_Implementation` functions are virtual
-(`GAS-UHT/AbilitySystemComponent.generated.h:73-75`). P2 overrides both on
+`_Implementation` functions are virtual. P2 overrides all four on
 `UAethelnAbilitySystemComponent` to refuse unconditionally: no cache write,
 one token from the connection's bucket, a metric only, no reply. This mirrors
 #19's stock-route refusals. `_Validate` is not overridden: returning false
 there disconnects the client, which is harsher than the other routes. The
-batch route already calls the same virtual implementation
+batch route already calls the same virtual target-data implementation
 (`GAS/Private/AbilitySystemComponent_Abilities.cpp:4199`) and is closed by #19.
-P2 starts by compiling the override; if the virtual declaration does not
-reproduce, P2 stops and reports. P2 also updates the #19 specification's RPC
-table row and Known Interim Gaps entry, which describe the RPCs as not virtual.
-No #60 ability uses target-data tasks.
+P2 starts by compiling the overrides; if a virtual declaration does not
+reproduce, P2 stops and reports. P2 also corrects the #19 specification (see
+[Dependencies on #19](#dependencies-on-19)). No #60 ability uses target-data or
+replicated-event tasks.
 
 ## Attribute Re-clamp Behavior
 
@@ -657,11 +768,12 @@ change bumps the chain's `ContentVersion`.
 | Config section | Keys |
 | --- | --- |
 | `[/Script/GameCombat.AethelnBasicChainAbility]` | `ContentVersion`; `ProvisionalEnduranceCost` (optional); `ProvisionalSteps` (three step structs with the values in [Step definition](#step-definition)); `ProvisionalMaxSampleAngleDegrees`; `ProvisionalMaxSampleDistance` |
-| `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds` |
+| `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
 | `Config/DefaultEngine.ini` | The `AethelnCombatQuery` trace channel with default response `Ignore` (structure, not tuning) |
 
 The seam refuses to start with non-finite bounds, a soft bound above the hard
-bound, bounds outside `[0, 180]`, or non-positive tolerances; the chain's grant
+bound, bounds outside `[0, 180]`, non-positive unit or age tolerances, or a
+negative lead or regression tolerance; the chain's grant
 validation is in [Step definition](#step-definition). Both fail closed. The
 seam keys live in shared `DefaultGame.ini` for the reason #19 gives
 (`Runtime/Core/Private/Misc/ConfigContext.cpp:853`).
@@ -674,8 +786,28 @@ seam keys live in shared `DefaultGame.ini` for the reason #19 gives
    `CheckCooldown` passes, when the configured duration is zero; grant
    validation accepts zero. If #19 P4 does not already behave this way, #60 P3
    adds it with a test.
-3. **No edits to #19's step order.** Steps 6a to 6d are an insertion #19's
-   specification anticipates; T11's existing rows stay valid.
+3. **Validator signature (P2).** #19's static pure validator for steps 1 to 7
+   gains these inputs: the server reference aim vector, the last accepted raw
+   aim, the last accepted client time, and the aim and timestamp bounds. Its
+   result gains the accepted aim and the correction value. Step 10 also
+   advances the last accepted raw aim and client time. #19's existing steps are
+   not reordered or changed; 6a to 6d are an insertion its specification
+   anticipates.
+4. **Fixtures (P2).** Steps 6a to 6d apply to every request, so every #19 test
+   that sends a seam request must build one with a valid aim and time sample,
+   or it fails at 6a or 6b: T11, T12, T14, T16 to T21, and T31. T11's existing
+   rows keep their expected results with valid fixtures. T10 changes from five
+   fields to seven (A1).
+5. **Specification text (P2).** P2 corrects the #19 specification where
+   schema 2 and the route closure make it wrong: Decision 4 and the struct
+   comment ("no ... aim" field), the T10 row, Open Decision 4 (the aim policy
+   is now decided here), the "Which messages draw from the bucket" bullet (the
+   four replicated-data routes now draw from it), the RPC table rows for the
+   target-data and replicated-event RPCs (they are refusable, and the
+   replicated-event RPCs do write the cache), and the Known Interim Gaps entry
+   for target-data cache growth.
+6. **Lifecycle hook (P3).** The PlayerState's null-pawn case gains one
+   `ResetChain(AvatarLost)` call. Nothing else in #19's lifecycle changes.
 
 ## Test Plan
 
@@ -711,6 +843,7 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A21 | `Aetheln.GameCombat.Net.DisconnectMidChain` | P6 | P | Disconnect during wind-up, active, and a buffered wait: no result after avatar loss and no stale chain state for the new PlayerState |
 | A22 | `Aetheln.POC.Input.AttackBindingSubmitsControlAim` | P6 | H | A Reticle-mode press builds a request with the control-rotation aim including pitch; Cursor mode blocks it; the recapture click is never an attack; a fresh press is needed after recapture |
 | A23 | Packaged two-client run of the chain | later | K | Evidence for #2 and #48; not required to merge #60 |
+| A24 | `Aetheln.GameCombat.AttackTimeline.HitTelemetry` | P4 | H | One hit event per committed result with the activation id, ability id, and sequence; no target identity |
 
 CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
 so each code PR records local automation evidence at its exact head on the
@@ -725,11 +858,11 @@ capsule response). P6 runs `Aetheln.POC` and records the manual PIE steps. No
 | --- | --- |
 | No request field names an authoritative target or claims a hit | A1, A3; [Request Contract](#request-contract) |
 | A valid sequence produces the three-hit chain and resets after timeout, interruption, unpossession, or incompatible action state | A6, A7, A8, A15, A20 |
-| Early, late, duplicate, stale, impossible, and version-mismatched activations are rejected deterministically and do not spend or grant twice | A2 (late time, impossible aim), A6 (early press; a late follow-up deterministically starts step 1), #19 T11 and T12 (duplicate, stale, version), A20 |
+| Early, late, duplicate, stale, impossible, and version-mismatched activations are rejected deterministically and do not spend or grant twice | A2 (late time sample, impossible aim), A6 (early press, replay), #19 T11 and T12 (duplicate, stale, version), A20. The reading of "late" is pending owner question 8: a late follow-up press is accepted as a new chain, not rejected. |
 | An already-dead life state supplied through the test seam is rejected | A13 |
 | Each activation damages every eligible target no more than the authored number of times | A10, A11, A20 |
 | Server correction gives a bounded presentation correction without client state overwriting authority | A2, A19; [Bounded presentation correction](#bounded-presentation-correction) |
-| Automated tests cover success, combo boundaries, duplicates, invalid windows, interruption, already-dead rejection, disconnect, and representative latency or loss | A4, A6, A7, A10, A13, A15, A20, A21 |
+| Automated tests cover success, combo boundaries, duplicates, invalid windows, interruption, already-dead rejection, disconnect, and representative latency or loss | Automated: A4, A6, A7 (including unpossession and avatar destruction), A10, A13, A15. Latency, loss, and a real disconnect are covered only by manual PIE (A20, A21) until owner question 9 is answered. |
 
 ## Phased Delivery
 
@@ -739,10 +872,10 @@ files untouched.
 | PR | Scope | Depends on |
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
-| **P2** Request and aim | Schema 2, steps 6a to 6d in the pure validator, last accepted aim and time, the two result values and their telemetry, client fill with `FlushServerMoves`, the target-data overrides, the #19 specification's RPC row update; A1 to A3. | #19 P3 |
-| **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass and catch-up, owner record and chain-end RPCs, the observer phase state, the zero-cooldown delta if needed; A4 to A8, A17. No contacts yet. | P2, #19 P4 |
-| **P4** Contacts and damage | Combat query channel and capsule responses, sweeps, total order, revalidation, allowance records, relation default, avoidance hook, damage effect, lethal latch, result cues, telemetry; A9 to A14, A16, A18. | P3 |
-| **P5** Interruption | `InterruptibleUntil`, `bInterruptsTarget`; A15. | P4 |
+| **P2** Request and aim | Schema 2, steps 6a to 6d in the pure validator, last accepted raw aim and time, the two result values, rejection and correction telemetry, client fill with `FlushServerMoves`, the four replicated-data overrides, the #19 fixture and specification changes (dependencies 3 to 5); A1 to A3, A16. | #19 P3 |
+| **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17. No contacts yet. | P2, #19 P4 |
+| **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, relation default, avoidance hook, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, and the sweep rows of A4 and A7. | P3 |
+| **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct with a content-version bump; A15 and the A5 rows. | P4 |
 | **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
 | **P7** Representative actives (owner-gated) | Gate Step and Sworn Rebuke contacts, Hold the Line's block, Guard pressure, and Guard break, on the same timeline. Gate Step's advance also needs #17. | P6 and owner question 3 |
 
@@ -770,6 +903,27 @@ files untouched.
 7. **Restart buffer.** May a press during the third hit's recovery be buffered
    into a new chain? Recommendation: no for the prototype; a press after the
    final recovery starts step 1.
+8. **Meaning of "late" in the acceptance criteria.** The criterion says early,
+   late, and other invalid activations are rejected. In this design, "late"
+   means a request whose time sample is older than the allowed bound; it is
+   rejected with `TimestampOutOfBounds`. A follow-up press that arrives after
+   the link window closes is not rejected: the chain has already reset, so the
+   press starts a new chain at step 1. Confirm this reading, or require that a
+   late follow-up be rejected? Rejection would need `LinkClose < RecoveryEnd`
+   and a lock tag held from `LinkClose` to `RecoveryEnd`. Recommendation:
+   confirm; rejecting a press after the character is free would feel like
+   dropped input.
+9. **Automated latency, loss, and disconnect coverage.** The criterion asks for
+   automated tests of disconnect and of representative latency or packet loss.
+   The design automates unpossession and avatar destruction (A7) but covers
+   latency, loss, and a real disconnect only with manual two-client PIE runs
+   (A20, A21), following #19's precedent. Accept manual PIE evidence for those
+   cases, or require headless automation? Recommendation: require headless
+   rows, because the pure validator and the injected clock make them cheap.
+   P3 and P4 would add rows that deliver chain requests with added delay around
+   `BufferOpen`, `LinkOpen`, and `LinkClose`; duplicated, out-of-order, and
+   dropped requests; and a PlayerState teardown mid-chain. AC7 would map to
+   those rows, and A20 and A21 would stay as supplementary PIE evidence.
 
 Decisions that belong to other owners, recorded so they are not lost: rewind
 and any client-time window evaluation (#2, TC-002); every numeric bound,
@@ -789,10 +943,14 @@ and generation (#106).
    the sampling budget. Owner: #45.
 4. **PlayerState relevancy.** Phase state and cues replicate from an
    always-relevant PlayerState, which does not scale. Owner: TC-001, #45.
-5. **Build-output citation.** The target-data closure relies on virtual
-   declarations seen in local Unreal Header Tool output. P2 confirms by
+5. **Build-output citation.** The replicated-data cache closure relies on
+   virtual declarations seen in local Unreal Header Tool output. P2 confirms by
    compiling.
 6. **No movement commitment** until owner question 4 is resolved with #17.
 7. **No death transition** until #21: a zero-Health actor is inert to #60 but
    is not dead.
 8. **Reconnect refill** (#19 T34) also restores a chain-free state; #21 owns it.
+9. **No occlusion.** Melee sweeps are not stopped by world geometry, so a shape
+   that reaches through thin cover still hits. Canon asks for near-cover
+   validation; revisit when the arena gains cover (see
+   [Target query](#target-query)).
