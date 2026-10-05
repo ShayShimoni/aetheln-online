@@ -266,9 +266,9 @@ Every accepted decision records:
   [Issue #16](https://github.com/ShayShimoni/aetheln-online/issues/16)).
   Scheduled runs 37106216412 (2026-10-03), 37186384030 (2026-10-04), and
   37281226888 (2026-10-05) ran on `develop`; the earlier runs, through
-  36980533796 on 2026-10-02, ran on `main`. This replaces the clause above that
-  kept the schedule off `develop` until the workflow reached `main` through Git
-  Flow. What changes: each `02:00 UTC` run executes the workflow at the head of
+  36980533796 on 2026-10-02, ran on `main`. This replaces the original
+  consequence that kept the schedule off `develop` until the workflow reached
+  `main` through Git Flow. What changes: each `02:00 UTC` run executes the workflow at the head of
   `develop`, so a change to the schedule or to a phase takes effect when it
   merges to `develop`, and the four phases package that head, not the contents
   of `main`. The copy of the workflow on `main` is not scheduled.

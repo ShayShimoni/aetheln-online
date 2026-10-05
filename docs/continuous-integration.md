@@ -792,7 +792,7 @@ branch, and GitHub runs schedules only from the default branch. The daily run
 therefore executes the workflow at the head of `develop`: a schedule or phase
 change takes effect once it merges to `develop`, and a schedule added on a
 feature branch or on `main` never runs. Earlier runs, through 2026-10-02, ran
-on `main`, then the default branch
+on `main`, which was then the default branch
 ([TA-011](architecture-decisions.md#ta-011---repository-scoped-engine-runner)).
 Fork pull requests, collaborator-authored pull requests, and
 collaborator-triggered reruns cannot select the engine jobs. Future collaborator
