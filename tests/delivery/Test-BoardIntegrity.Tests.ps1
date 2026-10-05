@@ -17,7 +17,9 @@ function Assert-True([bool] $Condition, [string] $Message) {
 	if (-not $Condition) { throw "Assertion failed: $Message" }
 }
 
-function New-Comment([string] $At, [string] $Body) {
+function New-Comment {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory issue comment fixture.')]
+	param([string] $At, [string] $Body)
 	return [ordered]@{ createdAt = $At; body = $Body }
 }
 
