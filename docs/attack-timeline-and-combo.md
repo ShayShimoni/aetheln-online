@@ -227,13 +227,15 @@ side effect.
 | 6a | `ClientServerTimeSeconds` is finite, within `[Now - ProvisionalTimestampMaxAgeSeconds, Now + ProvisionalTimestampMaxLeadSeconds]` of the server world time, and not lower than the last accepted request's sample minus `ProvisionalTimestampRegressionToleranceSeconds` | `TimestampOutOfBounds` (new) |
 | 6b | `Aim` is finite, non-zero, and unit within `ProvisionalAimUnitTolerance` | `MalformedRequest` |
 | 6c | The angle between `Aim` and the reference `R` (the vector of the avatar controller's current server control rotation) is at most `ProvisionalAimHardBoundDegrees` | `ImpossibleAimTransition` (new) |
-| 6d | The angle between `Aim` and the last accepted request's raw `Aim` is at most `ProvisionalAimSoftBoundDegrees + ProvisionalAimMaxRateDegreesPerSecond * max(0, Interval)`, where `Interval` is the client-time difference between the two samples (skipped for the first accepted request) | `ImpossibleAimTransition` |
+| 6d | The angle between `Aim` and the last accepted request's raw `Aim` is at most `ProvisionalAimRateSlackDegrees + ProvisionalAimMaxRateDegreesPerSecond * max(0, Interval)`, where `Interval` is the client-time difference between the two samples (skipped for the first accepted request) | `ImpossibleAimTransition` |
 
 Step 6d compares raw aim with raw aim, never with a corrected aim, so a press
 clamped toward a lagging `R` cannot make the next legitimate press look like
-an impossible turn. The soft-bound term absorbs quantization and the zero or
+an impossible turn. Its own slack key absorbs quantization and the zero or
 negative intervals that the 6a regression tolerance allows; with a zero
-interval, any turn beyond the soft bound is rejected.
+interval, any turn beyond the slack is rejected. The slack is separate from
+the soft bound, so narrowing the correction band around `R` does not tighten
+the rate check.
 
 On acceptance, the accepted aim is:
 
@@ -425,22 +427,34 @@ that world's `GetTimeSeconds()`; the delegate's `DeltaSeconds` is never used.
 
 Each frame the pass:
 
-1. **Sweeps.** For every registered step, in activation-ordinal order, it
+1. **Starts buffered steps.** Every buffered activation whose start time
+   `S + LinkOpen` of the previous step is at or before `Now` starts at exactly
+   that time: its step registers with that start and with `LastSample` equal to
+   it, so the part of its window up to `Now` is swept in this same pass. A step
+   that starts on a request registers the same way, with `LastSample` equal to
+   its start. The first sweep of a step includes initial overlaps at its start.
+2. **Sweeps.** For every registered step, in activation-ordinal order, it
    sweeps the active window over
    `(LastSample, min(Now, S + ActiveEnd, ResetTime)]` and queues contact
    candidates. Steps reset earlier in the frame are still swept up to their
    reset time.
-2. **Resolves.** It sorts the queue in the canonical total order and resolves
+3. **Resolves.** It sorts the queue in the canonical total order and resolves
    it. Revalidation accepts a candidate only if its contact time is earlier
-   than its activation's reset time (if any). An interruption or lethal result
-   committed during resolution stamps its reset at its contact time, so it
-   invalidates only the victim's later contacts.
-3. **Applies boundaries.** It applies every boundary up to and including `Now`
-   (commitment end, activation end at `BufferOpen`, `Timeout` at `LinkClose`,
-   `Completed` at `RecoveryEnd`), each stamped with its authored time. These
-   times are never earlier than `ActiveEnd`, so they cannot invalidate the
-   frame's contacts.
-4. **Emits** records, cues, telemetry, and lethal notifications from committed
+   than its activation's reset time (if any). An interruption committed during
+   resolution stamps its reset at its contact time, so it invalidates only the
+   victim's later contacts. If that time is before a buffered step's start,
+   the step never starts: none of its contacts survive, it sends no record, and
+   the chain end reports it. A lethal result does not stamp a reset: it makes
+   the victim not alive from its contact time, so revalidation step 1 fails
+   the victim's later contacts, and the victim's chain ends through #21's
+   `State.Dead` (`IncompatibleState`).
+4. **Applies boundaries.** It applies every remaining boundary up to and
+   including `Now` (commitment end, activation end at `BufferOpen`, `Timeout`
+   at `LinkClose`, `Completed` at `RecoveryEnd`), each stamped with its authored
+   time. These times are never earlier than `ActiveEnd`, so they cannot
+   invalidate the frame's contacts. The buffered start is the one boundary
+   applied before sweeping, in pass step 1.
+5. **Emits** records, cues, telemetry, and lethal notifications from committed
    results, and removes the steps that were reset.
 
 Rules:
@@ -541,7 +555,9 @@ For each candidate, in order:
    once; the hook applies what a blocked hit does (Guard pressure, Guard break,
    and whether later steps still apply) under the defense's authored rule. The
    same contact is never re-scored. #18 owns the block action and its state;
-   #260 owns Hold the Line's Guard result. Until a defense state exists, no
+   #260 owns Hold the Line's Guard result. #18's defense state must therefore
+   expose an authored arc and a Guard-consequence hook, not only the state tag.
+   Until a defense state exists, no
    target is defending and this step passes. P4 adds the check with a test
    defense state.
 5. **Family mitigation.** Wrought has no mitigation inputs in the prototype;
@@ -791,12 +807,12 @@ change bumps the chain's `ContentVersion`.
 | Config section | Keys |
 | --- | --- |
 | `[/Script/GameCombat.AethelnBasicChainAbility]` | `ContentVersion`; `ProvisionalEnduranceCost` (optional); `ProvisionalSteps` (three step structs with the values in [Step definition](#step-definition)); `ProvisionalMaxSampleAngleDegrees`; `ProvisionalMaxSampleDistance` |
-| `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
+| `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimRateSlackDegrees`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
 | `Config/DefaultEngine.ini` | The `AethelnCombatQuery` trace channel with default response `Ignore` (structure, not tuning) |
 
 The seam refuses to start with non-finite bounds, a soft bound above the hard
-bound, bounds outside `[0, 180]`, non-positive unit or age tolerances, or a
-negative lead or regression tolerance; the chain's grant
+bound, bounds or rate slack outside `[0, 180]`, non-positive unit or age
+tolerances, or a negative lead or regression tolerance; the chain's grant
 validation is in [Step definition](#step-definition). Both fail closed. The
 seam keys live in shared `DefaultGame.ini` for the reason #19 gives
 (`Runtime/Core/Private/Misc/ConfigContext.cpp:853`).
@@ -820,7 +836,9 @@ seam keys live in shared `DefaultGame.ini` for the reason #19 gives
    that sends a seam request must build one with a valid aim and time sample,
    or it fails at 6a or 6b: T11, T12, T14, T16 to T21, and T31. T11's existing
    rows keep their expected results with valid fixtures. T10 changes from five
-   fields to seven (A1).
+   fields to seven (A1). T17 to T20 are #19 P4 tests, and #60 P2 depends only
+   on #19 P3: whichever of #19 P4 and #60 P2 lands second writes T17 to T20
+   with schema-2 requests.
 5. **Specification text (P2).** P2 corrects the #19 specification where
    schema 2 and the route closure make it wrong: Decision 4 and the struct
    comment ("no ... aim" field), the T10 row, Open Decision 4 (the aim policy
@@ -848,7 +866,7 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | # | Test | PR | Kind | What it proves |
 | --- | --- | --- | --- | --- |
 | A1 | `Aetheln.GameCombat.ActivationSeam.RequestShape` (T10 update) | P2 | H | Seven reflected fields; `Aim` and `ClientServerTimeSeconds` are the only additions; no target, hit, contact, damage, shape, range, window, or attribute field |
-| A2 | `Aetheln.GameCombat.AttackTimeline.AimAndTimeValidation` | P2 | H | Steps 6a to 6d with an injected clock and reference: time at and beyond each age and lead bound, non-finite, regressing within and beyond the regression tolerance; zero, non-unit, non-finite aim; soft-bound accept, clamp exactly to the soft bound, hard-bound reject; rate bound measured raw to raw (a corrected previous press does not cause a false rejection); zero and negative intervals; precedence after step 6; the same checks for a non-chain ability and a Release; no state advance on rejection |
+| A2 | `Aetheln.GameCombat.AttackTimeline.AimAndTimeValidation` | P2 | H | Steps 6a to 6d with an injected clock and reference: time at and beyond each age and lead bound, non-finite, regressing within and beyond the regression tolerance; zero, non-unit, non-finite aim; soft-bound accept, clamp exactly to the soft bound, hard-bound reject; rate bound measured raw to raw (a corrected previous press does not cause a false rejection); zero and negative intervals against the rate slack, which changes independently of the soft bound; precedence after step 6; the same checks for a non-chain ability and a Release; no state advance on rejection |
 | A3 | `Aetheln.GameCombat.AttackTimeline.ReplicatedDataRoutesRefused` | P2 | H | All four implementations (target data, target data cancelled, replicated event, replicated event with payload) write no cache entry, draw one token each, emit a metric only, and send nothing; the input RPCs are unaffected |
 | A4 | `Aetheln.GameCombat.AttackTimeline.WindowEvaluation` | P3 (sweep rows P4) | H | Pure evaluator: inclusive starts and exclusive ends at exact boundaries; a frame spanning a whole window sweeps it once; clipping; sub-step counts honor the sampling bounds; one frame spanning the final step's remaining active window and its `RecoveryEnd`, and one spanning a non-final active window and its `LinkClose`, both still resolve the hit |
 | A5 | `Aetheln.GameCombat.AttackTimeline.StepDefinitionFailsClosed` | P3 (P5 rows) | H | Grant refused for a wrong step count, each ordering violation including `LinkOpen == LinkClose`, non-finite or negative values, empty extents, `MaxTargets` below 1, a self-blocking commitment tag, and a blocking tag that is not a reset tag; P5 adds the `InterruptibleUntil` rows |
@@ -874,6 +892,7 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A25 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsChain` | P3 | H | Injected clock and a scripted delivery queue: chain requests delayed to arrive just before and after `BufferOpen`, `LinkOpen`, and `LinkClose` get the outcome their server arrival time dictates; a duplicated request gets `DuplicateSequence`; a reordered older request gets `StaleSequence`; a dropped follow-up lets the chain time out, and the next press (a forward sequence gap) starts step 1; nothing commits twice |
 | A26 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsContacts` | P4 | H | The A25 delivery profiles against a target dummy: delay moves only when a step starts, never adds a result; duplicated, reordered, and dropped requests never produce a second result or a result from a rejected request; each activation hits the target at most once |
 | A27 | `Aetheln.GameCombat.AttackTimeline.TeardownMidChain` | P3 (contact rows P4) | H | PlayerState or avatar teardown during wind-up, the active window, and a buffered wait: one chain end; the buffered step never starts; no contact at or after the teardown time; a new PlayerState starts with no chain or seam state |
+| A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time; an interruption in the same frame with a contact time before `S + LinkOpen` cancels the start, with no record and no contact |
 
 CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
 so each code PR records local automation evidence at its exact head on the
@@ -904,7 +923,7 @@ files untouched.
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Request and aim | Schema 2, steps 6a to 6d in the pure validator, last accepted raw aim and time, the two result values, rejection and correction telemetry, client fill with `FlushServerMoves`, the four replicated-data overrides, the #19 fixture and specification changes (dependencies 3 to 5); A1 to A3, A16. | #19 P3 |
 | **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17, A25, A27. No contacts yet. | P2, #19 P4 |
-| **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, and the sweep and contact rows of A4, A7, and A27. | P3 |
+| **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, A28, and the sweep and contact rows of A4, A7, and A27. | P3 |
 | **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct with a content-version bump; A15 and the A5 rows. | P4 |
 | **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
 
