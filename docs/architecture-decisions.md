@@ -1732,7 +1732,11 @@ Every accepted decision records:
     build's `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0` and,
     like it, no `-Compiler`, so after the editor job the launcher's build is
     expected to be a no-op rather than a toolchain switch. A launcher test pins
-    the two values to `InitialPreparation.BuildInvocation.ps1`.
+    the two values to `InitialPreparation.BuildInvocation.ps1`. Because UBT
+    logs its toolchain line only when it executes actions, the launcher reads
+    the compiler and SDK identity from the toolchain line that UBT records in
+    the target makefile, which an up-to-date build keeps
+    (`docs/asset-intake-and-content-validation.md`).
   - *Workspace:* the job runs the launcher from the registered managed compile
     workspace without a control checkout, a re-sync, or the engine host lease.
     It first requires the exact tested revision and a clean workspace

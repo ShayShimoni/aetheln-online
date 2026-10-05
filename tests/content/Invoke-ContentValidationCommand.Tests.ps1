@@ -81,6 +81,7 @@ public static class FakeGitForContentValidation {
 
 	$BuildSource = @'
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -115,12 +116,12 @@ public static class FakeEditorBuildForContentValidation {
   if(scenario=="missing-compiler") compilerRoot=Path.Combine(compilerRoot,"missing");
   if(scenario=="missing-resource-compiler") sdkRoot=Path.Combine(sdkRoot,"missing");
   string compilerVersion="14.44.35228", sdkVersion="10.0.26100.0";
+  string toolchain="Using Visual Studio "+compilerVersion+" toolchain ("+compilerRoot+") and Windows "+sdkVersion+" SDK ("+sdkRoot+").";
+  // Like UBT, log the toolchain line only when actions execute; an up-to-date build logs none.
   if(scenario=="silent-success") { }
-  else if(scenario=="missing-toolchain") Console.WriteLine("No toolchain identity was emitted.");
-  else {
-   Console.WriteLine("Using Visual Studio "+compilerVersion+" toolchain ("+compilerRoot+") and Windows "+sdkVersion+" SDK ("+sdkRoot+").");
-   if(scenario=="duplicate-toolchain") Console.WriteLine("Using Visual Studio 14.50.99999 toolchain ("+compilerRoot+") and Windows 10.0.30000.0 SDK ("+sdkRoot+").");
-  }
+  else if(scenario=="missing-toolchain"||scenario=="up-to-date") Console.WriteLine("Target is up to date");
+  else if(scenario=="log-toolchain-mismatch") Console.WriteLine(toolchain.Replace(compilerVersion,"14.44.11111"));
+  else Console.WriteLine(toolchain);
   if(scenario=="nonzero") return 41;
   if(scenario=="child-flood"||scenario=="child-timeout"||scenario=="child-pump-fault") {
    string parentPidPath=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_PARENT_PID")??"";
@@ -143,6 +144,20 @@ public static class FakeEditorBuildForContentValidation {
   string repository=Path.GetDirectoryName(Path.GetFullPath(args[3]));
   string binaries=Path.Combine(repository,"Binaries","Win64");
   Directory.CreateDirectory(binaries);
+  if(scenario!="missing-makefile") {
+   // The UE 5.8.1 UBT makefile layout the launcher reads: int32 version 37, VProject flag,
+   // int64 creation ticks, then the diagnostics as int32 count and int32-length UTF-8 strings.
+   List<string> diagnostics=new List<string>{"Using ISPC compiler (fixture)"};
+   if(scenario!="missing-toolchain") diagnostics.Add(toolchain);
+   if(scenario=="duplicate-toolchain") diagnostics.Add("Using Visual Studio 14.50.99999 toolchain ("+compilerRoot+") and Windows 10.0.30000.0 SDK ("+sdkRoot+").");
+   string makefile=Path.Combine(repository,"Intermediate","Build","Win64","x64","AethelnOnlineEditor","Development","Makefile.bin");
+   Directory.CreateDirectory(Path.GetDirectoryName(makefile));
+   using(BinaryWriter writer=new BinaryWriter(File.Create(makefile))) {
+    writer.Write(scenario=="makefile-version"?36:37); writer.Write((byte)0); writer.Write(DateTime.UtcNow.Ticks); writer.Write(diagnostics.Count);
+    foreach(string line in diagnostics) { byte[] bytes=Encoding.UTF8.GetBytes(line); writer.Write(bytes.Length); writer.Write(bytes); }
+    writer.Write(new byte[16]); // later makefile fields, which the launcher does not read
+   }
+  }
   string buildId="fixture-build-id";
   string receiptBuildId=scenario=="receipt-build-id-mismatch"?"other-receipt-id":buildId;
   string manifestBuildId=scenario=="manifest-build-id-mismatch"?"other-manifest-id":buildId;
@@ -881,8 +896,13 @@ try {
 	Assert-True ($Success.report.execution_provenance.engine_revision -ceq $PinnedEngineRevision -and $Success.report.execution_provenance.engine_tag -ceq $PinnedEngineTag) 'The report must bind the pinned engine revision and tag.'
 	Assert-True ($Success.report.policy_sha256 -ceq (Get-Sha256 (Join-Path $Success.fixture.repository 'Config\ContentValidation\asset-intake-policy.json'))) 'The report must bind the exact policy bytes.'
 	Assert-True ($Success.report.intake_sha256 -ceq (Get-Sha256 (Join-Path $Success.fixture.repository 'Config\ContentValidation\runtime-asset-intake.json'))) 'The report must bind the exact intake bytes.'
-	Assert-True ($Success.report.execution_provenance.compiler_version -ceq '14.44.35228' -and $Success.report.execution_provenance.compiler_sha256 -ceq (Get-Sha256 $Success.fixture.compiler)) 'The report must bind the compiler identity derived from the exact UBT build log.'
-	Assert-True ($Success.report.execution_provenance.resource_compiler_version -ceq '10.0.26100.0' -and $Success.report.execution_provenance.resource_compiler_sha256 -ceq (Get-Sha256 $Success.fixture.resourceCompiler)) 'The report must bind the resource-compiler identity derived from the exact UBT build log.'
+	Assert-True ($Success.report.execution_provenance.compiler_version -ceq '14.44.35228' -and $Success.report.execution_provenance.compiler_sha256 -ceq (Get-Sha256 $Success.fixture.compiler)) 'The report must bind the compiler identity recorded in the UBT target makefile.'
+	Assert-True ($Success.report.execution_provenance.resource_compiler_version -ceq '10.0.26100.0' -and $Success.report.execution_provenance.resource_compiler_sha256 -ceq (Get-Sha256 $Success.fixture.resourceCompiler)) 'The report must bind the resource-compiler identity recorded in the UBT target makefile.'
+	# UBT logs no toolchain line when the target is up to date (live L1 runs 2 and 3); its makefile still records one.
+	$UpToDate = Invoke-Case -Name 'up-to-date-build' -FakeBin $FakeBin -BuildCase 'up-to-date'
+	Assert-True ($UpToDate.exitCode -eq 0 -and $UpToDate.report.execution_provenance.compiler_version -ceq '14.44.35228' -and
+		$UpToDate.report.execution_provenance.resource_compiler_sha256 -ceq (Get-Sha256 $UpToDate.fixture.resourceCompiler) -and
+		(Get-Content -LiteralPath $UpToDate.fixture.buildLog -Raw) -notmatch 'Using Visual Studio') "An up-to-date editor build must take its toolchain identity from the UBT target makefile. Output: $($UpToDate.output)"
 	$BuildArguments = [IO.File]::ReadAllLines($Success.fixture.buildCapture)
 	$ExpectedBuildArguments = @('AethelnOnlineEditor','Win64','Development',(Join-Path $Success.fixture.repository 'AethelnOnline.uproject'),'-WaitMutex','-NoHotReloadFromIDE','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 	Assert-True (($BuildArguments -join [char]0) -ceq ($ExpectedBuildArguments -join [char]0)) 'The wrapper must run the exact approved Editor build argument vector before validation.'
@@ -941,6 +961,9 @@ try {
 		@('silent-build-log','silent-success','positive size'),
 		@('missing-toolchain','missing-toolchain','toolchain identity'),
 		@('duplicate-toolchain','duplicate-toolchain','toolchain identity'),
+		@('missing-makefile','missing-makefile','UBT target makefile'),
+		@('makefile-version','makefile-version','unsupported format'),
+		@('log-toolchain-mismatch','log-toolchain-mismatch','differs from the UBT target makefile'),
 		@('missing-compiler','missing-compiler','compiler'),
 		@('missing-resource-compiler','missing-resource-compiler','resource compiler'),
 		@('missing-receipt','missing-receipt','target receipt'),

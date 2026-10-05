@@ -284,7 +284,26 @@ build command and log, records the compiler/resource-compiler identities,
 validates the target receipt, module manifest, and exact loaded project-module
 set, then launches
 `-run=GameTests.AethelnContentValidation`, and rejects stale, mismatched, or
-malformed output. `-AssetRegistrySnapshotPath` is test-only and is rejected
+malformed output.
+
+The compiler and resource-compiler identities come from the toolchain line
+that UnrealBuildTool records in the target makefile,
+`Intermediate/Build/Win64/x64/AethelnOnlineEditor/Development/Makefile.bin`, not
+from the build log. UBT writes that line into the makefile's diagnostics
+whenever it creates the makefile, but prints it only when it executes build
+actions, so an up-to-date build, as in CI after the editor job, logs none. UBT
+recreates the makefile when its command-line arguments change or when the
+compiler, linker, or resource compiler is newer than the makefile, so the
+recorded line names the toolchain the build uses. The wrapper reads only the
+makefile's header and diagnostics (UE 5.8.1 makefile version 37) and requires
+exactly one `Using Visual Studio <version> toolchain (<root>) and Windows
+<version> SDK (<root>).` line. When the build log also prints that line, it must
+match. The wrapper then hashes the `cl.exe` and `rc.exe` that the line names. The
+report's `compiler_version` is therefore the version that UBT recorded for the
+compiler binary (for example `14.44.35228`), which can differ from the
+`-CompilerVersion` pin (`14.44.35207`, the toolchain directory name).
+
+`-AssetRegistrySnapshotPath` is test-only and is rejected
 unless `-AllowTestRegistrySnapshot` is also present; the guard is not authority
 to substitute a fixture for live editor evidence.
 
