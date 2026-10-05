@@ -269,7 +269,11 @@ tests and is identified as `test_snapshot` in the report.
 
 Under the separately authorized engine gate, run the live local scanner. Its
 wrapper first builds the exact `AethelnOnlineEditor Win64 Development` target
-and derives the exact versioned toolchain and module evidence from that build:
+with the CI editor build's compiler and Windows SDK pins
+(`-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0`, the values in
+`scripts/ci/InitialPreparation.BuildInvocation.ps1`), so in CI it reuses that
+editor build instead of switching toolchains. It then derives the exact
+versioned toolchain and module evidence from that build:
 
     New-Item -ItemType Directory -Path TestResults -Force
     powershell -NoProfile -File scripts/content/Invoke-ContentValidation.ps1 -EngineRoot <UE-5.8.1-source> -OutputPath TestResults/content-validation-report.json

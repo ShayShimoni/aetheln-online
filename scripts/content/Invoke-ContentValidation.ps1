@@ -1046,7 +1046,10 @@ $ReportFileIdentity = $OutputGuard.GetIdentity($OutputPath)
 Invoke-OutputOpenTestSeam 'pre-build-open'
 
 Assert-ExecutionBoundary -Phase 'pre-build validation' -SourceRevision $SourceRevision -EngineRevision $EngineRevision -EngineTagRevision $EngineTagRevision -FileStates $ImmutableFileStates
-$BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-WaitMutex','-NoHotReloadFromIDE')
+# The same compiler and SDK pins as the CI editor build
+# (scripts/ci/InitialPreparation.BuildInvocation.ps1), so in CI this build
+# reuses that editor build instead of switching toolchains.
+$BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-WaitMutex','-NoHotReloadFromIDE','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 $EditorBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($BuildScriptPath) + $BuildArguments))
 $BuildExitCode = $null
 $BuildInvocationError = $null
