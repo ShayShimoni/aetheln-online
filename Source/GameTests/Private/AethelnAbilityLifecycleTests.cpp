@@ -18,53 +18,15 @@
 
 namespace AethelnAbilityLifecycleTests
 {
+	using AethelnCombatTests::AttachFreshPlayerState;
 	using AethelnCombatTests::FScopedCombatTestWorld;
+	using AethelnCombatTests::FTestPlayer;
 	using AethelnCombatTests::MakeTestInitValues;
+	using AethelnCombatTests::SpawnTestPlayer;
 
 	UClass* GetLongRunningTestAbilityClass()
 	{
 		return UAethelnLongRunningTestAbility::StaticClass();
-	}
-
-	struct FTestPlayer
-	{
-		APlayerController* Controller = nullptr;
-		AAethelnPlayerState* PlayerState = nullptr;
-		UAethelnAbilitySystemComponent* AbilitySystem = nullptr;
-	};
-
-	/** A controller with a fresh AAethelnPlayerState, configured with test values and the test ability. */
-	AAethelnPlayerState* AttachFreshPlayerState(const FScopedCombatTestWorld& TestWorld, APlayerController& Controller)
-	{
-		AAethelnPlayerState* PlayerState = TestWorld.Spawn<AAethelnPlayerState>(&Controller);
-		if (PlayerState != nullptr)
-		{
-			PlayerState->GrantedAbilities = { GetLongRunningTestAbilityClass() };
-			PlayerState->ProvisionalInitialAttributes = MakeTestInitValues();
-			Controller.SetPlayerState(PlayerState);
-		}
-		return PlayerState;
-	}
-
-	bool SpawnTestPlayer(FAutomationTestBase& Test, const FScopedCombatTestWorld& TestWorld, FTestPlayer& OutPlayer)
-	{
-		if (!Test.TestNotNull(TEXT("Test world exists"), TestWorld.World))
-		{
-			return false;
-		}
-		OutPlayer.Controller = TestWorld.Spawn<APlayerController>();
-		if (!Test.TestNotNull(TEXT("Player controller exists"), OutPlayer.Controller))
-		{
-			return false;
-		}
-		Test.TestNull(TEXT("The harness registers no game mode, so the controller starts without a PlayerState"), OutPlayer.Controller->PlayerState.Get());
-		OutPlayer.PlayerState = AttachFreshPlayerState(TestWorld, *OutPlayer.Controller);
-		if (!Test.TestNotNull(TEXT("AAethelnPlayerState exists"), OutPlayer.PlayerState))
-		{
-			return false;
-		}
-		OutPlayer.AbilitySystem = OutPlayer.PlayerState->GetAethelnAbilitySystemComponent();
-		return Test.TestNotNull(TEXT("PlayerState owns the project ASC"), OutPlayer.AbilitySystem);
 	}
 
 	const FGameplayAbilitySpec* FindTestAbilitySpec(const UAbilitySystemComponent& AbilitySystem)
@@ -79,8 +41,8 @@ namespace AethelnAbilityLifecycleTests
 		return nullptr;
 	}
 
-	/** Activates the granted test ability and returns its handle, or an invalid handle. */
-	FGameplayAbilitySpecHandle ActivateTestAbility(FAutomationTestBase& Test, UAbilitySystemComponent& AbilitySystem)
+	/** Activates the granted test ability through the seam, once per PlayerState, and returns its handle, or an invalid handle. */
+	FGameplayAbilitySpecHandle ActivateTestAbility(FAutomationTestBase& Test, UAethelnAbilitySystemComponent& AbilitySystem)
 	{
 		const FGameplayAbilitySpec* Spec = FindTestAbilitySpec(AbilitySystem);
 		if (!Test.TestNotNull(TEXT("Test ability is granted"), Spec))
@@ -88,7 +50,11 @@ namespace AethelnAbilityLifecycleTests
 			return FGameplayAbilitySpecHandle();
 		}
 		const FGameplayAbilitySpecHandle Handle = Spec->Handle;
-		Test.TestTrue(TEXT("Test ability activates on the server"), AbilitySystem.TryActivateAbility(Handle));
+		FAethelnCombatActivationRequest Request;
+		Request.AbilityId = AethelnCombatTestTags::Ability_Test_LongRunning;
+		Request.ContentVersion = GetDefault<UAethelnLongRunningTestAbility>()->ContentVersion;
+		Request.Sequence = 1;
+		Test.TestTrue(TEXT("Test ability activates on the server through the seam"), AbilitySystem.ProcessServerRequest(Request) == EAethelnActivationResult::Accepted);
 		const FGameplayAbilitySpec* ActiveSpec = AbilitySystem.FindAbilitySpecFromHandle(Handle);
 		Test.TestTrue(TEXT("Test ability stays active until cancelled"), ActiveSpec != nullptr && ActiveSpec->IsActive());
 		return Handle;

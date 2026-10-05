@@ -72,7 +72,8 @@ enum class EAethelnSafeReason : uint8
 	ActivationBlocked,
 	NotImplemented,
 	InternalFailure,
-	ControlledShutdown
+	ControlledShutdown,
+	RateLimited
 };
 
 enum class EAethelnDiagnosticCode : uint8
@@ -188,6 +189,7 @@ inline bool IsKnown(EAethelnSafeReason Value)
 	case EAethelnSafeReason::NotImplemented:
 	case EAethelnSafeReason::InternalFailure:
 	case EAethelnSafeReason::ControlledShutdown:
+	case EAethelnSafeReason::RateLimited:
 		return true;
 	default:
 		return false;
@@ -274,6 +276,7 @@ inline const TCHAR* LexToString(EAethelnSafeReason Value)
 	case EAethelnSafeReason::NotImplemented: return TEXT("not-implemented");
 	case EAethelnSafeReason::InternalFailure: return TEXT("internal-failure");
 	case EAethelnSafeReason::ControlledShutdown: return TEXT("controlled-shutdown");
+	case EAethelnSafeReason::RateLimited: return TEXT("rate-limited");
 	default: return TEXT("unknown");
 	}
 }

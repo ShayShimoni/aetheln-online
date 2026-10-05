@@ -191,14 +191,39 @@ foreach ($ContentTestPath in @('tests/content/Invoke-ContentValidation.Tests.ps1
 	$ContentTest = @(Get-PathCheckSelection $ContentTestPath @{})
 	Assert-True (($ContentTest -join ',') -ceq 'portable') "The exact content contract test '$ContentTestPath' must select portable proof."
 }
-foreach ($ContentLookalike in @('scripts/content/Unwired.ps1', 'scripts/content/Invoke-ContentValidation.ps1.bak', 'scripts/content/nested/Invoke-ContentValidation.ps1', 'Scripts/content/Invoke-ContentValidation.ps1', 'tests/content/Unwired.Tests.ps1', 'tests/content/Invoke-ContentValidation.Tests.ps1.bak', 'tests/content/nested/Invoke-ContentValidation.Tests.ps1', 'Tests/content/Invoke-ContentValidation.Tests.ps1')) {
+foreach ($ContentLookalike in @('scripts/content/Unwired.ps1', 'scripts/content/Invoke-ContentValidation.ps1.bak', 'scripts/content/nested/Invoke-ContentValidation.ps1', 'Scripts/content/Invoke-ContentValidation.ps1', 'tests/content/Invoke-ContentValidation.Tests.ps1.bak', 'tests/content/fixture.json', 'Tests/content/Invoke-ContentValidation.Tests.ps1')) {
 	Assert-Rejected { Get-PathCheckSelection $ContentLookalike @{} } 'path_unclassified'
+}
+# Issue #231: change-impact treats every tests/**/*.ps1|md path as portable, so a
+# new content test must not fall into the all-obligations conservative report.
+foreach ($PortableTestPath in @('tests/content/New.Tests.ps1', 'tests/content/nested/Invoke-ContentValidation.Tests.ps1', 'tests/content/README.md', 'tests/delivery/X.Tests.ps1', 'docs/a.md')) {
+	$PortableTest = @(Get-PathCheckSelection $PortableTestPath @{})
+	Assert-True (($PortableTest -join ',') -ceq 'portable') "Portable test or documentation path '$PortableTestPath' must select only portable proof."
 }
 $AttributesPolicy = @(Get-PathCheckSelection '.gitattributes' @{})
 Assert-True ($AttributesPolicy -ccontains 'controller-contract' -and $AttributesPolicy -ccontains 'controller-operational-proof') 'Attribute policy changes should remain classifiable while triggering global attribute evaluation.'
 Assert-Rejected { Get-PathCheckSelection 'Setup.ps1' @{} } 'path_unclassified'
-$BuildHarness = @(Get-PathCheckSelection 'scripts/build/Build-PackagedArtifacts.ps1' @{})
+$BuildHarness = @(Get-PathCheckSelection 'scripts/build/Write-BuildProvenance.ps1' @{})
 Assert-True ($BuildHarness -cnotcontains 'delivery-harness' -and $BuildHarness -ccontains 'controller-operational-proof' -and $BuildHarness -ccontains 'clean-package-provenance-smoke') 'Build paths should retain operational and clean-package proof without the retired delivery harness.'
+# Issue #231: the selector must not require the native receipt for any path the
+# change-impact job exempts from compile, or the producer-gap path goes red.
+$WorkflowPortableCiPaths = [regex]::Match([IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml')), '(?ms)^\s*\$PortableCiPaths = @\((?<list>.*?)\)\r?$')
+$CompileExemptPaths = @([regex]::Matches($WorkflowPortableCiPaths.Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+Assert-True ($CompileExemptPaths.Count -eq 2) 'The workflow compile-exempt path list should contain exactly two paths.'
+foreach ($CompileExemptPath in $CompileExemptPaths) {
+	$Packaging = @(Get-PathCheckSelection $CompileExemptPath @{})
+	Assert-True (($Packaging -join ',') -ceq 'clean-package-provenance-smoke,portable') "Compile-exempt path '$CompileExemptPath' must select portable and clean-package proof, never a compile-backed receipt."
+}
+# The carve-out is an ordinal, case-sensitive match. A filename case variant is not a
+# compile-exempt path (change-impact compiles it), so it keeps operational proof; a
+# directory case variant is unclassified and takes the conservative report.
+foreach ($CaseVariantPath in @('scripts/build/build-packagedartifacts.ps1', 'scripts/build/Build-PackagedArtifacts.PS1', 'scripts/build/invoke-packagedsmoketest.ps1', 'scripts/build/Invoke-PackagedSmokeTest.PS1')) {
+	$CaseVariant = @(Get-PathCheckSelection $CaseVariantPath @{})
+	Assert-True ($CaseVariant -ccontains 'controller-operational-proof' -and $CaseVariant -ccontains 'clean-package-provenance-smoke') "Case variant '$CaseVariantPath' of a compile-exempt path must still select operational and clean-package proof."
+}
+foreach ($CaseVariantPath in @('Scripts/build/Build-PackagedArtifacts.ps1', 'Scripts/build/Invoke-PackagedSmokeTest.ps1')) {
+	Assert-Rejected { Get-PathCheckSelection $CaseVariantPath @{} } 'path_unclassified'
+}
 $BuildTest = @(Get-PathCheckSelection 'tests/build/X.Tests.ps1' @{})
 Assert-True ($BuildTest -cnotcontains 'delivery-harness' -and $BuildTest -ccontains 'portable') 'Build tests should retain portable proof without the retired delivery harness.'
 $RetiredSkill = @(Get-PathCheckSelection '.agents/skills/orchestrate-delivery/SKILL.md' @{})

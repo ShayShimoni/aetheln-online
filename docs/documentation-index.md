@@ -67,6 +67,13 @@ subordinate to the specialized canonical product and technical documents.
   known interim gaps, and open decisions. The Gameplay Tag and content-version
   conventions it implements live in
   [Combat and Networking Architecture](combat-and-networking-architecture.md#gameplay-tag-and-content-version-conventions).
+- [Attack Timeline and Three-Hit Combo](attack-timeline-and-combo.md) records
+  the Issue #60 implementation spec for the server-owned pure-free-aim attack
+  timeline: request schema 2 and the aim policy, chain progression and
+  buffering, cancel and reset rules, authored volumes and deterministic hit
+  resolution, lag-compensation and prediction policy, outcome reporting,
+  rejection reasons, data-driven tuning, test plan, phased delivery, and the
+  owner decisions of 2026-10-05.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path, plus the Issue #167

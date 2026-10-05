@@ -3,7 +3,10 @@
 #include "Abilities/GameplayAbility.h"
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnCombatAttributeSet.h"
+#include "AethelnGameplayAbility.h"
 #include "GameFramework/Pawn.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityGrant, Log, All);
 
 AAethelnPlayerState::AAethelnPlayerState()
 {
@@ -36,6 +39,25 @@ UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const
 	return AbilitySystemComponent;
 }
 
+bool AAethelnPlayerState::IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spec)
+{
+	// A plain UGameplayAbility subclass would bypass the choke point.
+	const UAethelnGameplayAbility* Ability = Cast<UAethelnGameplayAbility>(Spec.Ability);
+	const TCHAR* Problem = Ability == nullptr
+		? TEXT("does not derive from UAethelnGameplayAbility")
+		: Spec.InputID != INDEX_NONE
+			? TEXT("would be granted with an input id")
+			: Spec.DynamicAbilityTriggers.Num() > 0
+				? TEXT("would be granted with dynamic ability triggers")
+				: Ability->FindGrantProblem();
+	if (Problem != nullptr)
+	{
+		UE_LOG(LogAethelnAbilityGrant, Warning, TEXT("Refused to grant ability %s: it %s."), *GetNameSafe(Spec.Ability), Problem);
+		return false;
+	}
+	return true;
+}
+
 void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn)
 {
 	// Never read Controller->GetPawn() here: during possession it still points at the old pawn.
@@ -51,9 +73,10 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 			bCombatStateInitialized = true;
 			for (const TSubclassOf<UGameplayAbility>& AbilityClass : GrantedAbilities)
 			{
-				if (AbilityClass != nullptr)
+				const FGameplayAbilitySpec Spec(AbilityClass, 1);
+				if (IsGrantableAbilitySpec(Spec))
 				{
-					AbilitySystemComponent->GiveAbility(FGameplayAbilitySpec(AbilityClass, 1));
+					AbilitySystemComponent->GiveAbility(Spec);
 				}
 			}
 			UAethelnAttributeInitEffect::ApplyTo(*AbilitySystemComponent, ProvisionalInitialAttributes);

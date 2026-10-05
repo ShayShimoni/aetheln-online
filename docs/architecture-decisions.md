@@ -225,9 +225,10 @@ Every accepted decision records:
   same-repository pull requests may run the supported-target compile gate,
   after the portable gates pass and only when the exact base/head change
   classification in TA-012 requires the engine. The packaged-smoke milestone
-  runs at `02:00 UTC` from the protected default branch `main` as the four
+  runs at `02:00 UTC` from the protected default branch as the four
   schedule-only phases decided in TA-012; the workflow declares no manual
-  trigger.
+  trigger. The default branch was `main` when this was accepted and has been
+  `develop` since 2026-10-03 (see the amendment below).
 - **Rationale:** The pinned Unreal source build, Visual Studio and Linux
   cross-toolchains, WSL topology, disk capacity, and local build paths are not
   available on ordinary GitHub-hosted runners. Repository scope and explicit
@@ -247,17 +248,34 @@ Every accepted decision records:
   pull requests; granting future collaborators runner access without a new
   review; storing local paths as repository secrets; uploading packaged builds,
   cook output, or full logs by default; treating `develop` as the schedule's
-  activation branch.
+  activation branch (rejected while `main` was the default branch; superseded
+  by the amendment below).
 - **Consequences:** The owner must provision and maintain the runner, pinned
   toolchains, WSL `Ubuntu` distribution and `aethelnqa` user. Non-secret
   `AETHELN_ENGINE_ROOT` and `AETHELN_LINUX_TOOLCHAIN_ROOT` paths are current-
   account user variables inherited by the runner process. Engine jobs serialize
   through one concurrency group, convert the packaged server path with WSL
   `wslpath`, publish only the redacted JSON report by default, and retain large
-  archives/logs locally under per-run roots. The schedule becomes active only
-  when the workflow reaches `main` through normal Git Flow; `develop` remains
-  the integration branch. Artifact retention, local-output retention, scanner,
+  archives/logs locally under per-run roots. The schedule runs from the default
+  branch, now `develop` (see the amendment below), which is also the
+  integration branch. Artifact retention, local-output retention, scanner,
   SBOM, and signing decisions remain open.
+- **Amendment (2026-10-05, scheduled runs follow the default branch, issue
+  #228):** GitHub runs scheduled workflows only from the default branch, and
+  the owner made `develop` the default branch on 2026-10-03 (recorded on
+  [Issue #16](https://github.com/ShayShimoni/aetheln-online/issues/16)).
+  Scheduled runs 37106216412 (2026-10-03), 37186384030 (2026-10-04), and
+  37281226888 (2026-10-05) ran on `develop`; the earlier runs, through
+  36980533796 on 2026-10-02, ran on `main`. This replaces the original
+  consequence that kept the schedule off `develop` until the workflow reached
+  `main` through Git Flow. What changes: each scheduled run executes the
+  workflow at the head of `develop` when GitHub starts it, which can be hours
+  after the nominal `02:00 UTC`. A change to the schedule or to a phase takes
+  effect when it merges to `develop`, and the four phases package that head,
+  not the contents of `main`. The copy of the workflow on `main` is not scheduled.
+  Release packaging stays on `release/*` through TA-022. The scheduled jobs
+  guard only on the `schedule` event, so no workflow condition or test pins
+  `main` for the schedule, and none changed.
 - **Revisit trigger:** A collaborator needs runner access, the runner moves to a
   different host/account or trust domain, hosted/ephemeral infrastructure can
   reproduce the pinned toolchain, or measured cost, reliability, isolation, or
@@ -789,6 +807,28 @@ Every accepted decision records:
   normalized digest is
   `a1be534a661508fdccae17ea7623b2c3f215119a07cdc66ef7ab8653a9925536`.
   It is historical identity, not a Package 3C activation pin.
+- **Amendment (2026-10-05, selector aligned with `change-impact`, issue
+  #231):** the selector and `change-impact` disagreed for two path classes,
+  and the producer-gap path failed with `producer_direct_binding_invalid:native`
+  because the selector required a native receipt for a compile that
+  `change-impact` skipped. This reverses the reconciliation rule above that
+  kept unwired lookalikes unclassified, for one class: new
+  `tests/content/*.ps1` and `tests/content/*.md` files, nested ones included,
+  are now portable, as every other `tests/**/*.ps1|md` path already was. Any
+  other `tests/content/` file, such as a `.json` fixture, still fails closed as
+  `path_unclassified`. The two packaging scripts
+  `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1` no longer select
+  `controller-operational-proof`; they select `portable` and
+  `clean-package-provenance-smoke` only, because the Compile gate never runs
+  them. The match is exact and case-sensitive, so a case variant of either
+  filename keeps operational proof. The `change-impact` block and the
+  authority predicate are unchanged. The selector candidate is 41,492
+  LF-normalized bytes with digest
+  `40cb0f0c2aeee97557d0d939d63ce7e1b68274338033304a4c11a7626a70313d`. It is a
+  new policy identity and grants no activation authority; the earlier
+  digests above stay as recorded, and `docs/continuous-integration.md` holds
+  the detail.
 - **Package 3C receipt and aggregate wiring amendment:**
   `ci-selection-shadow` now exposes the validated nonce, aggregate readiness,
   all eight exact obligation decisions, and its artifact ID/name/API digest as
@@ -1024,6 +1064,15 @@ Every accepted decision records:
   is recorded here rather than hidden. Authority stays off: the `ci-acceptance-authority` predicate remains
   literally `always() && github.event_name == 'pull_request' && false`, and no
   receipt or aggregate grants acceptance.
+- **Amendment (2026-10-05, issue #231):** the statement above that the
+  accepted-base selector is unchanged was true on 2026-10-02 and stays as
+  recorded. The selector has since stopped selecting
+  `controller-operational-proof` for exactly the two exempt packaging
+  scripts, so a packaging-only pull request selects `portable` and
+  `clean-package-provenance-smoke` and takes the green gap branch this
+  decision assumed. The exempt list, the controller paths, and the compile
+  decision are unchanged, so the revisit trigger below is not met. The
+  selector digest changed; the TA-017 amendment of the same date records it.
 - **Owner:** Issue #167.
 - **Revisit trigger:** the selector stops selecting
   `controller-operational-proof` for these paths, the producer moves off the
@@ -1688,8 +1737,10 @@ Every accepted decision records:
   dispatched run is the operational proof and is recorded on issue #226.
 - **Alternatives:** A dispatch trigger on `prototype-quality-gates.yml`
   (rejected: the older branch risk); a reusable workflow or composite action
-  shared with the scheduled jobs (rejected: it renames the scheduled checks and
-  breaks the preparation admission rule against job-level `uses:`); dispatch
+  shared with the scheduled jobs (rejected: it renames the scheduled checks;
+  it also broke the preparation admission rule against job-level `uses:`,
+  which issue #229 relaxed on 2026-10-05 for local `./.github/workflows/`
+  calls only, so the rename ground alone keeps it rejected); dispatch
   inputs for the version or ref (rejected: an injection surface, and the
   version comes from the commit); tag refs (rejected: tags mark a tested
   commit after release QA); publishing packages as a GitHub pre-release

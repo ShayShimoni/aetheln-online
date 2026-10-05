@@ -432,9 +432,11 @@ classified report, so the workflow's controller identity check accepts it and
 the all-selected selection reaches the producer-gap path. If the identity
 lookup itself fails, the report has no identity and the workflow fails closed
 with `shadow_report_controller_identity_mismatch`.
-Agent-tooling and build-test paths retain
+Agent-tooling, build-test, and every `tests/**/*.ps1|md` path retain
 portable proof; build scripts retain controller-operational and clean-package
-proof. Production CI scripts and workflows select both controller
+proof, except the two packaging scripts `change-impact` exempts from compile,
+which keep `portable` and `clean-package-provenance-smoke` only (issue #231,
+below). Production CI scripts and workflows select both controller
 contract and operational proof; plugin Content also selects content-reference
 validation. Ordinary source, plugin source, and the project descriptor select
 native client/server compilation plus Unreal Editor automation, but not a
@@ -472,6 +474,36 @@ their source pull requests are accepted on the integration branch; the three
 existing portable/receipt/aggregate lists and the two byte-identical
 `controller-contract` suite subsets in the receipt producer and aggregate must
 change together at that time.
+
+Issue #231 (2026-10-05) reconciles the selector with `change-impact` for the
+two path classes where they disagreed. On those pull requests the producer-gap
+path failed with `producer_direct_binding_invalid:native`, because the selector
+required a native receipt for a compile that `change-impact` skipped. The
+selector was wrong in both classes, so the `change-impact` block and the
+authority predicate are unchanged:
+
+- `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`: the selector over-selected
+  `controller-operational-proof`. The Compile gate never runs these scripts
+  (only its packaging, provenance, and smoke modes do), so a native receipt
+  cannot prove them. They now select `portable` and
+  `clean-package-provenance-smoke` only,
+  which keeps them on the explicit gap branch until a clean-package producer
+  exists. Every other `scripts/build/` path still selects
+  `controller-operational-proof`, and `change-impact` still compiles for it.
+- New `tests/content/*.ps1` and `*.md` files: the selector was the outlier.
+  Both classifiers treat every other `tests/**/*.ps1|md` path as portable, and
+  a compile cannot prove a test script. These paths now select `portable` only.
+  Any other `tests/content/` file, such as a `.json` fixture, still fails closed
+  as `path_unclassified`, and `change-impact` still requires compile for it.
+
+`tests/ci/Get-CiSelection.Tests.ps1` reads the workflow's compile-exempt list
+and fails if the selector requires a compile-backed receipt for any path on it.
+This candidate is 41,492 LF-normalized bytes with digest
+`40cb0f0c2aeee97557d0d939d63ce7e1b68274338033304a4c11a7626a70313d`. It is a new
+policy identity, and the shadow job runs the accepted-base selector. A later
+owner pull request that touches only these paths must therefore record the
+green gap observation after this change merges.
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
@@ -534,7 +566,7 @@ contract is:
 | `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. |
 | `trusted-editor-automation` | `pull_request` | `trusted-candidate-compile` | Runs only after a successful compile (so it is skipped, not failed, whenever the compile is skipped or fails) under the same owner, same-repository, and triggering-actor predicates; 45-minute job ceiling (step bounds 5 + 20 + 12 + 2 + 1 + 1 + 1 plus a 3-minute margin); shared FIFO `aetheln-engine-runner` queue. TA-020 and its 2026-10-03 workspace re-sync amendment (issue #236). | Check out a fresh exact-revision control source at `github.sha` into `editor-control-<run>-<attempt>` with the compile job's inputs (no persisted credentials, no LFS; 5 minutes). Then, in one step (20 minutes), take the engine host lease and re-sync the registered managed compile workspace to this revision through `Sync-ManagedCompileWorkspace`, as `Invoke-EngineRunnerGate.ps1` does: the control-checkout copy of `scripts/ci/Sync-EditorAutomationWorkspace.ps1` validates the registration, synchronizes, and then asserts the exact revision and a clean workspace (`editor_workspace_revision_changed`, `editor_workspace_dirty`, or `editor_workspace_query_failed` otherwise). Build the `AethelnOnlineEditor` Win64 target there through the control-checkout copy of `InitialPreparation.BuildInvocation.ps1` (runner-local `build.log`) with the contributor compiler selection (no `-Compiler=`, the same `-CompilerVersion` and `-WindowsSDKVersion` pins), so the source-code-access plugin no longer flips between CI and contributor builds. Lease wait, sync, and build share one 17-minute deadline inside the 20-minute step. The sync and the build each run in an owned kill-on-close Job Object that stops at that deadline, and the step releases the lease only after each job is proven empty; nothing is stopped by name. An unproven cleanup or a failed release keeps the held journal for explicit recovery, as the compile does, and records `editor_host_lease_release_failed`. A lease that cannot be taken, including a lease wait that reaches the deadline, records `editor_host_lease_failed`. Fewer than 5 minutes left after the lease is taken (a provisional fixed minimum, not a tuning result) records `editor_sync_time_insufficient` before any checkout starts, because a checkout cut off by the deadline can leave the workspace half-updated (see Retained Compile workspace). A refused sync, or a sync that times out, records `editor_workspace_sync_failed`; a sync timeout carries no detail code. Only a build that reaches the deadline records `editor_build_timeout`, and a failed control checkout records `editor_control_checkout_failed`. A fixture may shorten, never extend, the deadline through `AETHELN_EDITOR_TEST_DEADLINE_SECONDS`, and may lower the minimum through `AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS` only while that deadline override is also set; the step then prints one fixed `editor_test_override active` line. Both variables come from the step's process environment, so a host-level variable on the runner would be honored too, visibly through that line; the lease or sync module's own fixed code is printed as one `editor_build_detail code=<code>` line. This job does not leave the shared engine unchanged. Each CI editor run still relinks `UnrealEditor-NetCore.dll` and rewrites the engine editor BuildId, so a contributor editor built before that run needs a rebuild of about 30 seconds. The trigger is NetCore's UHT output alternating between two package body hashes. It is seen only when CI and contributor builds alternate, never across consecutive builds of one project. The follow-up runs UHT repeatedly on a scratch engine copy (TA-020 amendment). `-NoEngineChanges` is deferred until then: a test pins that the editor does not pass it, while the step's exit-5 mapping to `editor_build_engine_changes_required` is already in place and covered by a fixture. Every other build failure records `editor_build_failed`. Then run the frozen two-test harness from that workspace with its 600-second bound (12 minutes), remove the untracked compile-input files the next managed sync would reject (the exact `ls-files --others` query and git flags of `ManagedCompileWorkspace.ps1`; 2 minutes; runs only on positive evidence that the lease was released or never needed: the editor step succeeded, or failed with a recorded reason other than `editor_host_lease_failed` or `editor_host_lease_release_failed`; it is skipped after those two reasons, after a skipped editor step, and after an interrupted one with no recorded reason, because the lease state is then unknown or held by someone else, and the journal and workspace stay as recovery evidence), bind (1 minute) and upload (1 minute) the normalized `unreal-automation-report` artifact only when every earlier step succeeded, and publish the first failure as the fixed-vocabulary `automation_reason` output (1 minute). Every step continues on error. This job is separate from the compile, so nothing in it can fail the compile job or skip the native receipt. `build.log`, harness output, and the copied report live under the runner temp directory, which the runner wipes after the job; only fixed failure-class and summary lines reach the public log, and the editor log stays in its `-abslog` file. The lease covers only the re-sync and build; the harness and residue cleanup still run outside it, serialized by the engine queue. History: before the re-sync, another owner pull request's compile, or a newer push to the same pull request, that entered the engine queue during this pull request's compile window could re-sync the managed workspace before this job started, and the editor build stopped with `editor_workspace_revision_changed` (PR #227 and PR #232 on 2026-10-03); recovery then took a full re-run of the workflow. |
 | `trusted-content-validation` | `pull_request` | `ci-selection-shadow`, `trusted-editor-automation` | Runs only when the accepted-base selector selects `content-reference-validation` and after the editor automation job, under the same owner, same-repository, and triggering-actor predicates; 34-minute job ceiling (step bounds 27 + 1 + 1 + 1 + 1 plus a 3-minute margin); shared FIFO `aetheln-engine-runner` queue. TA-023. | Without a control checkout, re-sync, or the engine host lease, require that the registered managed compile workspace holds exactly this clean revision (`content_workspace_revision_changed`, `content_workspace_dirty`, or `content_workspace_query_failed` otherwise), then run that workspace's `scripts/content/Invoke-ContentValidation.ps1` against the runner's engine root with `-BuildTimeoutSeconds 900` and `-TimeoutSeconds 600` (27 minutes: both bounds plus 2 minutes for the launcher's own checks) into a fresh `TestResults/content-validation-<run>-<attempt>` directory, because the launcher never prunes its retained pending and backup files. The launcher's editor build passes the CI editor build's compiler and SDK pins, so after the editor job it is expected to be a no-op. Launcher output goes to runner-local files and the step prints only `content_validation exit=<code>`; a non-zero exit records `content_validation_failed`, a missing report `content_report_missing`, and an existing output directory `content_output_directory_exists`. The step copies the report to the runner temp directory and removes the output directory after every launch. Then remove the untracked compile-input files the next managed sync would reject, as the editor job does (1 minute, after every launch, because this job holds no lease), bind (1 minute, `content_report_size_invalid` above 4 MiB) and upload (1 minute) the `content-validation-report` artifact only when the launch and cleanup succeeded, and publish the first failure as the fixed-vocabulary `content_reason` output (1 minute). Every step continues on error. Workspace race: another owner pull request's compile that enters the engine queue between this run's editor and content jobs can re-sync the managed workspace first; the launch then records `content_workspace_revision_changed` and recovery takes "Re-run all jobs". |
-| `scheduled-client-package` | `schedule` at `02:00 UTC` daily | `quality-gates` | Schedule-only; the schedule exists only on the protected default branch once this workflow reaches `main` through normal Git Flow. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
+| `scheduled-client-package` | `schedule` at `02:00 UTC` daily | `quality-gates` | Schedule-only; GitHub runs the schedule from the default branch, `develop` since 2026-10-03 (`main` before), so each run packages the head of `develop`. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
 | `scheduled-server-package` | `schedule` | `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
 | `scheduled-provenance-validation` | `schedule` | `scheduled-server-package` | Same as phase 1. | Milestone phase 3: verify both handoff payloads, validate server cook references, and write bound provenance. |
 | `scheduled-packaged-smoke` | `schedule` | `scheduled-provenance-validation` | Same as phase 1. | Milestone phase 4: verify every handoff payload and smoke the packaged client/server pair. |
@@ -791,9 +823,14 @@ Per event, the jobs that can run are:
 | `push` to `develop` | Skipped | Runs | Skipped | Skipped | Skipped |
 | `schedule` | Skipped | Runs | Skipped | Skipped | Phase 1 only after `quality-gates` succeeds; each later phase only after its predecessor succeeds |
 
-`develop` remains the integration branch. Merely adding the schedule on a
-feature or `develop` branch does not activate it; GitHub schedules run from the
-default branch. Fork pull requests, collaborator-authored pull requests, and
+`develop` is both the integration branch and, since 2026-10-03, the default
+branch, and GitHub runs schedules only from the default branch. The daily run
+therefore executes the workflow at the head of `develop`: a schedule or phase
+change takes effect once it merges to `develop`, and a schedule added on a
+feature branch or on `main` never runs. Earlier runs, through 2026-10-02, ran
+on `main`, which was then the default branch
+([TA-011](architecture-decisions.md#ta-011---repository-scoped-engine-runner)).
+Fork pull requests, collaborator-authored pull requests, and
 collaborator-triggered reruns cannot select the engine jobs. Future collaborator
 access requires a separate security and topology review.
 
