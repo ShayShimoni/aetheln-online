@@ -1723,11 +1723,17 @@ Every accepted decision records:
     `aetheln-engine-runner` group with `queue: max` and
     `cancel-in-progress: false`. It leaves producer 3's job unchanged.
   - *Bounds (D9):* the launch step passes `-BuildTimeoutSeconds 900` and
-    `-TimeoutSeconds 600`, so the launch step is bounded at 25 minutes; residue
-    cleanup, bind, upload, and outcome take 1 minute each, plus a 3-minute
-    margin, for a 32-minute job ceiling. D9 recorded 31 minutes; the extra
-    minute is the outcome step that producer 3 also has. These are starting
-    values, resized from the first live launcher run.
+    `-TimeoutSeconds 600` and is bounded at 27 minutes: the two launcher
+    bounds plus 2 minutes for the launcher's own checks outside them;
+    residue cleanup, bind, upload, and outcome take 1 minute each, plus a
+    3-minute margin, for a 34-minute job ceiling. D9 started at 25 and 32
+    minutes (31 recorded, plus the outcome step that producer 3 also has).
+    The live launcher run (L1, 2026-10-05) resized them: on the CI path, after
+    a CI-style editor build, the launcher's build phase took about 30 seconds,
+    the 51-asset commandlet about 22 to 25 seconds, and the launcher's checks
+    outside both bounds about 25 seconds (engine-tree `git status` takes
+    3.5 seconds per call); a cold build phase took about 110 seconds. The
+    build and commandlet bounds stay at 900 and 600 seconds.
   - *Build alignment (D3):* the launcher's editor build passes the CI editor
     build's `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0` and,
     like it, no `-Compiler`, so after the editor job the launcher's build is
@@ -1783,10 +1789,10 @@ Every accepted decision records:
   (`Test-RunnerSchedulingPolicy.Tests.ps1`). The report fixtures are synthetic
   until the first live launcher run (decision D6) supplies a real report.
 - **Cost:** an owner engine pull request that selects content can hold the
-  runner for up to 117 minutes (40-minute compile, 45-minute editor
-  automation, and 32-minute content validation) when no older waiter queued
+  runner for up to 119 minutes (40-minute compile, 45-minute editor
+  automation, and 34-minute content validation) when no older waiter queued
   between the jobs. A scheduled phase that queues while the content job runs
-  waits at most 32 minutes for it.
+  waits at most 34 minutes for it.
 - **Consequences:** a content or configuration owner pull request can now
   reach a complete shadow aggregate with four receipts instead of the green
   producer gap; any selection that includes `clean-package-provenance-smoke`

@@ -979,9 +979,10 @@ jobs:
       github.event.pull_request.user.login == github.repository_owner &&
       github.triggering_actor == github.repository_owner
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    # The step bounds (25 + 1 + 1 + 1 + 1) plus a 3-minute margin. The launch
-    # step holds the launcher's 15-minute build and 10-minute commandlet bounds.
-    timeout-minutes: 32
+    # The step bounds (27 + 1 + 1 + 1 + 1) plus a 3-minute margin. The launch
+    # step holds the launcher's 15-minute build and 10-minute commandlet bounds
+    # plus 2 minutes for the launcher's own checks (about 25 seconds measured).
+    timeout-minutes: 34
     outputs:
       content_artifact_id: ${{ steps.content_artifact.outputs.artifact-id }}
       content_artifact_name: ${{ steps.content_identity.outputs.artifact_name }}
@@ -997,7 +998,7 @@ jobs:
       - name: Run content validation launcher
         id: content_run
         continue-on-error: true
-        timeout-minutes: 25
+        timeout-minutes: 27
         shell: powershell
         working-directory: ${{ runner.temp }}
         env:

@@ -482,7 +482,7 @@ Assert-True ($UntrackedInputQuery.Count -eq 1 -and $AutomationResidue.Contains("
 # from the managed workspace without a control checkout, re-sync, or lease, so
 # it verifies the exact clean revision first and fails closed otherwise.
 Assert-True ($ContentValidation -match "(?m)^    needs:\r?\n      - ci-selection-shadow\r?\n      - trusted-editor-automation\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      needs\.ci-selection-shadow\.outputs\.content_reference_validation_required == 'true' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Content validation must run only after the editor job, when selected, under the same owner and same-repository trust.'
-Assert-True ($ContentValidation -match '(?m)^    timeout-minutes: 32\r?$' -and $ContentValidation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $ContentValidation -notmatch 'needs\.[a-z-]+\.result|always\(\)') 'Content validation must have its own 32-minute ceiling, join the FIFO engine queue, and add no status bypass.'
+Assert-True ($ContentValidation -match '(?m)^    timeout-minutes: 34\r?$' -and $ContentValidation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $ContentValidation -notmatch 'needs\.[a-z-]+\.result|always\(\)') 'Content validation must have its own 34-minute ceiling, join the FIFO engine queue, and add no status bypass.'
 Assert-True ($ContentValidation -notmatch 'actions/checkout@|EngineRunnerHostLease|Sync-EditorAutomationWorkspace|-Mode |Build\.bat') 'Content validation takes no control checkout, lease, or re-sync and never invokes the engine gate or Build.bat directly.'
 foreach ($Binding in @(
 	'content_artifact_id: ${{ steps.content_artifact.outputs.artifact-id }}',
@@ -502,7 +502,7 @@ $ContentOutcome = [regex]::Match($ContentValidation, '(?ms)^      - name: Report
 Assert-True ($ContentRun -and $ContentResidue -and $ContentBind -and $ContentUpload -and $ContentOutcome) 'Content validation must declare every reviewed step.'
 $ContentSuccess = "if: steps.content_run.outcome == 'success' && steps.content_residue.outcome == 'success'"
 foreach ($Step in @(
-	@{ Name='launch'; Body=$ContentRun; Id='content_run'; If=$null; Timeout='25' },
+	@{ Name='launch'; Body=$ContentRun; Id='content_run'; If=$null; Timeout='27' },
 	@{ Name='residue cleanup'; Body=$ContentResidue; Id='content_residue'; If=$null; Timeout='1' },
 	@{ Name='bind'; Body=$ContentBind; Id='content_identity'; If=$ContentSuccess; Timeout='1' },
 	@{ Name='upload'; Body=$ContentUpload; Id='content_artifact'; If=($ContentSuccess + " && steps.content_identity.outcome == 'success'"); Timeout='1' },
