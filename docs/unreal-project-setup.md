@@ -86,6 +86,34 @@ git -C $AethelnEngineRoot rev-parse HEAD
 Stop if either value differs. Do not substitute a preview, launcher binary, or
 another UE 5.8 revision.
 
+## Enable the UHT input cache
+
+Do this once per engine tree, before the first build. Without it, UnrealHeaderTool
+can alternate NetCore's generated output through a race in the engine's
+`UhtHeaderFile.cs`, which relinks `UnrealEditor-NetCore.dll`, restamps the
+engine BuildId and stops editors built earlier from loading (see the TA-020
+2026-10-05 amendment in [Architecture Decisions](architecture-decisions.md)).
+Create `Engine\Saved\UnrealBuildTool\BuildConfiguration.xml` under
+`$AethelnEngineRoot` with exactly this content (replace the file if it is
+empty):
+
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+  <UEBuildConfiguration>
+    <bEnableUHTInputCache>true</bEnableUHTInputCache>
+  </UEBuildConfiguration>
+</Configuration>
+```
+
+The engine's own `.gitignore` ignores `Saved/`, so the pinned checkout stays
+clean and the file is never committed. The next build of each project logs
+`BuildConfiguration.xml is newer`, runs a full UHT pass and may rebuild the
+editor once; that is expected. Never pass `-ForceHeaderGeneration` to
+`Build.bat` or UnrealBuildTool, because it turns the cache read off and brings
+the race back. Re-apply this step whenever you recreate or re-provision the
+engine tree.
+
 ## Generate and build
 
 Generate the Visual Studio project files from the pinned source engine:
@@ -122,13 +150,19 @@ hand-edit generated `.modules` files or pin a BuildId to bypass the mismatch.
 The lead selected an independent runner source-engine tree in
 [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517);
 capacity, provisioning and CI-to-contributor isolation proof remain pending.
-After deployment, use the locally configured contributor engine root for these
-build and launch commands. CI uses its separately provisioned runner root;
-engine/plugin binaries, generated files, intermediates and module manifests
-must not share writable aliases. Each root retains its own applicable identity and
-provisioning evidence. Until that separation is verified, continue to
-serialize shared-engine consumers. Even afterward, reserve a quiet host for
-performance captures.
+The 2026-10-05 TA-020 amendment
+([UHT input cache](#enable-the-uht-input-cache)) removed the NetCore BuildId
+flip that motivated that tree, so it is no longer needed for this problem. It
+stays a recorded option with revisit triggers, and the recovery steps above
+remain the fallback for an unexplained BuildId mismatch.
+
+If a second tree is ever deployed, use the locally configured contributor
+engine root for these build and launch commands. CI uses its separately
+provisioned runner root; engine/plugin binaries, generated files,
+intermediates and module manifests must not share writable aliases. Each root
+retains its own applicable identity and provisioning evidence. Until that
+separation is verified, continue to serialize shared-engine consumers. Even
+afterward, reserve a quiet host for performance captures.
 
 ## First launch
 

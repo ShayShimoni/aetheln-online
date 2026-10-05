@@ -1404,6 +1404,114 @@ Every accepted decision records:
     confirmed, it triggers the TA-020 revisit before provisioning.
   - *Amendment owner and revisit:* Issue #238; revisit when the runner route
     is deployed and proven, or if capacity proves infeasible.
+- **Amendment (2026-10-05, UHT input cache, issue #238):** the NetCore
+  variance has a root cause and a fix. This amendment supersedes the
+  2026-10-02 *NetCore regeneration (recurring, cause unknown)* analysis and the
+  2026-10-04 treatment of the UHT-race report as an unverified hypothesis. It
+  also changes the 2026-10-04 isolation direction as described below; it
+  does not otherwise alter that amendment.
+  - *Root cause:* a race in `UhtHeaderFile.cs`
+    (`Engine/Source/Programs/Shared/EpicGames.UHT/Types/UhtHeaderFile.cs`).
+    UHT reads and parses headers in parallel. `AddReferencedHeader` sets the
+    `Referenced` export flag on a same-module header while holding the lock of
+    the referring header, which does not protect that flag, and `Reset` clears
+    the flag without a lock. The flag decides whether NetCore's only
+    non-reflected header, `PushModel.h`, is exported, so it changes the
+    `NetCore.init.gen.cpp` bodies hash between `0x6C2D6518` (flag lost) and
+    `0xF26BCE42` (flag kept). Any flip rewrites that file, recompiles and
+    relinks `UnrealEditor-NetCore.dll`, and restamps the shared engine
+    BuildId, after which a contributor editor built earlier stops loading.
+    An external contributor reported the race on the Issue #238 thread (and in
+    an Epic Forums report); the lead's read of the pinned engine source
+    confirms the code path, and the fix below was verified on live builds. The
+    absolute hash values depend on host and source line endings; the values
+    above are this host's.
+  - *Corrections to the 2026-10-02 amendment:* the UHT input cache is off
+    on this host unless configured: `IsBuildMachine` is not set and UBT never
+    sets it, so CI never had the cache on. A cache-off CI client build wrote
+    `0xF26BCE42` on 2026-10-04, so "monolithic client and server builds always
+    produce `0x6C2D6518`" does not hold. The contributor builds that left the
+    value unchanged logged `Generated code is up to date`, so UHT did not run
+    and they were not evidence of a deterministic generator. Cache-off UHT is
+    the nondeterministic state.
+  - *Fix:* set `bEnableUHTInputCache` to `true` for every builder in the
+    engine's git-ignored UBT configuration file. The exact path and content
+    are:
+
+    ```text
+    <engine root>\Engine\Saved\UnrealBuildTool\BuildConfiguration.xml
+    ```
+
+    ```xml
+    <?xml version="1.0" encoding="utf-8" ?>
+    <Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+      <UEBuildConfiguration>
+        <bEnableUHTInputCache>true</bEnableUHTInputCache>
+      </UEBuildConfiguration>
+    </Configuration>
+    ```
+
+    With the cache read enabled, UHT re-applies `Referenced` after all parsing
+    (`Resolve` in the `InvalidCheck` phase), so the result is `0xF26BCE42` on
+    every run. No engine source edit is needed and the pinned clean checkout
+    stays clean: the file lives under `Saved/`, which the engine's own
+    `.gitignore` ignores, and the repository's engine cleanliness checks run
+    `git status --porcelain --untracked-files=all` without `--ignored`.
+  - *Provisioning requirement:* this file is now part of the provisioning of
+    every engine tree that CI or contributors build: the runner's engine root
+    and each contributor engine root (the same tree today). It is host
+    configuration outside version control, so re-provisioning or recreating
+    an engine tree loses it silently. Apply it in the same step that creates or
+    restores the tree; the contributor step is in
+    [Unreal Project Setup](unreal-project-setup.md#enable-the-uht-input-cache).
+    CI scripts do not repeat the setting. A fail-closed pre-check of the file,
+    or an `-EnableUHTInputCache` argument in
+    `InitialPreparation.BuildInvocation.ps1` (one `command_line_changed`
+    makefile reload), is a possible follow-up and is not implemented.
+  - *Never use `-ForceHeaderGeneration`:* it turns the input-cache read off
+    (`UEBuildTarget.cs`), which removes the re-apply step and brings the race
+    back. Do not pass it for any build against these engine trees.
+  - *Rejected for this problem:* a CI-only `-EnableUHTInputCache` (a
+    contributor full UHT run could still flip the shared NetCore), a per-user
+    `AppData` configuration file (it breaks if the runner changes account and
+    does not cover other accounts), `-NoGoWide` (not reachable from UBT's
+    internal UHT, and deterministic only at the other value), and an engine
+    source edit of `UhtHeaderFile.cs` (it breaks the pinned clean-source
+    check).
+  - *Evidence:* the setting was applied on 2026-10-04 at 22:09Z and the engine
+    tree stayed clean. One expected, one-time flip followed on the first
+    compile after the fix (PR #242's CI build, 22:35Z): the shared engine
+    BuildId changed from `5aaac352` to `5e7e5279` and NetCore settled on
+    `0xF26BCE42`. The BuildId then stayed `5e7e5279` through the next
+    compile-selecting run (PR #245, run 37242860365:
+    `trusted-candidate-compile` and `trusted-editor-automation` on runner 21)
+    and through four local editor builds of the #19 branch. Expect one more
+    one-time flip on any engine tree where the setting is first applied; it is
+    not a regression.
+  - *Effect on the isolation direction:* the 2026-10-04 amendment chose an
+    independently writable runner source-engine tree to stop shared engine
+    writes from churning the BuildId. With the NetCore flip removed, a
+    dedicated writable second engine tree is no longer needed for this
+    problem, and its capacity, provisioning and deployment-proof work is not
+    required to resolve Issue #238. The option is not deleted: it remains the
+    recorded alternative, with its pending items unapproved and unscheduled.
+    Revisit it, and the 2026-10-04 isolation requirements, if any of these
+    holds: the engine BuildId changes across a CI editor run or contributor
+    build with the setting confirmed present; a different cause of shared
+    engine writes appears; a measured contention cost from serializing
+    shared-engine consumers justifies the storage; or an engine upgrade
+    changes the UHT input-cache path or fixes the race upstream (then
+    re-evaluate the setting itself). Until then, the interim serialization and
+    recovery procedure above remains the fallback for any unexplained BuildId
+    mismatch, and performance captures still require a quiet host.
+  - *Follow-ups:* `-NoEngineChanges` stays off on the editor target. The
+    revisit trigger "the NetCore follow-up identifies the varying UHT input"
+    is met, but this amendment changes no script or test, so the flag and its
+    pinning test remain until a separate change enables them (fixed reason
+    `editor_build_engine_changes_required`). Keep the monitoring above and
+    expect `NetCore.init.gen.cpp` to hold `0xF26BCE42`. Remove the setting only
+    after a pinned engine revision contains an upstream fix for the race, and
+    record that in a new amendment.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
