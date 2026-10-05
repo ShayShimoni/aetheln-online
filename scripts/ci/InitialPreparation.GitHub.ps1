@@ -1270,7 +1270,13 @@ function Get-PreparationWorkflowRoute {
 	$Routes = New-Object Collections.ArrayList
 	foreach ($JobPair in $JobsNode.Children.GetEnumerator()) {
 		if ($JobPair.Key -isnot [YamlDotNet.RepresentationModel.YamlScalarNode] -or $JobPair.Key.Value -cnotmatch '^[A-Za-z_][A-Za-z0-9_-]*$') { throw 'workflow_yaml_invalid' }
-		if ($null -ne (Get-PreparationYamlValue -Mapping $JobPair.Value -Name uses)) { throw 'routing_dynamic_unresolved' }
+		$Uses = Get-PreparationYamlValue -Mapping $JobPair.Value -Name uses
+		if ($null -ne $Uses) {
+			# A local reusable-workflow call has no runner of its own: its jobs run from a file in this same
+			# revision, which Get-PreparationWorkflowSource classifies on its own pass. Any other form is unresolvable.
+			if ($Uses -isnot [YamlDotNet.RepresentationModel.YamlScalarNode] -or $Uses.Value -cnotmatch '^\./\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$') { throw 'routing_dynamic_unresolved' }
+			continue
+		}
 		$RunsOn = Get-PreparationYamlValue -Mapping $JobPair.Value -Name 'runs-on'
 		if ($RunsOn -is [YamlDotNet.RepresentationModel.YamlScalarNode]) { $LabelNodes = @($RunsOn) }
 		elseif ($RunsOn -is [YamlDotNet.RepresentationModel.YamlSequenceNode]) { $LabelNodes = @($RunsOn.Children) }
