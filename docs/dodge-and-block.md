@@ -282,8 +282,8 @@ server.
   start applies from the beginning of the flagged move.
 - **Direction.** The yaw-only direction of the move's own acceleration (after
   `ConstrainInputAcceleration`, as the jump takeoff uses), fixed for the whole
-  dodge (no steering, Q15). With no input, the neutral direction applies (Q2). Remote clients see
-  the server's path through replicated movement.
+  dodge (no steering, Q15). With no input, the neutral direction applies (Q2).
+  Remote clients see the server's path through replicated movement.
 - **Displacement.** While the dodge is in progress, walking physics runs with
   its velocity set to `Direction * Distance / MoveDuration`, ignoring input
   acceleration. Elapsed time advances by each move's delta; the move that
@@ -334,9 +334,8 @@ The rules:
 
 - **The authority is called only for a received flagged move:** the
   component's owner role is `ROLE_Authority` and `GetCurrentNetworkMoveData()`
-  is set. After the
-  call the server clears `bWantsToDodge`, so the evaluated flag is consumed and
-  nothing outside that move sees it again.
+  is set. After the call the server clears `bWantsToDodge`, so the evaluated
+  flag is consumed and nothing outside that move sees it again.
 - **Exactly once per received flagged move.** Every received flagged move
   calls `TryAuthorizeDodge` once, even mid-dodge or airborne, with
   `bMovementAllowsStart` false in those states. The authority still runs the
@@ -497,10 +496,11 @@ struct GAMECOMBAT_API FAethelnActiveDefense
   (inclusive). The incoming direction is the horizontal vector from the
   defender's capsule center to the attacker's combat-frame origin at the
   contact time, not the contact location or the sweep direction; #60 must
-  adopt it as its "contact direction" (T3). #60 already interpolates that origin per sub-step and holds
-  defenders at their end-of-frame pose. A zero-length direction is outside
-  (fails closed). The actor yaw is server-simulated and rate-limited on the
-  ground; the control rotation is client-supplied and is never used.
+  adopt it as its "contact direction" (T3). #60 already interpolates that
+  origin per sub-step and holds defenders at their end-of-frame pose. A
+  zero-length direction is outside (fails closed). The actor yaw is
+  server-simulated and rate-limited on the ground; the control rotation is
+  client-supplied and is never used.
 - **One slot.** Registering while a slot is active fails closed. Block and Hold
   the Line block each other (Q10), so this cannot happen through content. The
   block registers the slot before it commits: a failed registration ends the
@@ -654,12 +654,12 @@ closed. The keys live in shared `Config/DefaultGame.ini` for #19's reason.
    such abilities, the new outcome RPC, and the server ordinal. P3 updates the
    #19 specification: Decision 4 and Activation Seam (a second, server-internal
    transport into the same pipeline), Validation order (the substitution
-   table and the split validator), Rejection Telemetry (the ordinal, and the subject category for
-   ordinary results taken from the ability: `Dodge`, `Block`, otherwise
-   `Ability`), and Closing the Stock Routes (the entry is the only
-   server-internal route that opens a seam scope). P3 adds rows to T11 (a seam
-   request for a movement-carried ability is `MalformedRequest`), T13 (the
-   entry opens a scope only for its own spec), T15 (the flag requires
+   table and the split validator), Rejection Telemetry (the ordinal, and the
+   subject category for ordinary results taken from the ability: `Dodge`,
+   `Block`, otherwise `Ability`), and Closing the Stock Routes (the entry is
+   the only server-internal route that opens a seam scope). P3 adds rows to
+   T11 (a seam request for a movement-carried ability is `MalformedRequest`),
+   T13 (the entry opens a scope only for its own spec), T15 (the flag requires
    `Press`-only and no `bAcceptsRelease`), and T21 (ordinal events).
 3. **Life state.** #18 binds `State.Dead` for its own abilities; #19's lifecycle
    is unchanged.
@@ -713,11 +713,10 @@ drive client moves and the harness below, as the movement tests do through
 under `WITH_DEV_AUTOMATION_TESTS` (Test Plan in the #19 specification).
 
 The network-condition cases are automated simulations (recommended in Q20, by
-analogy with #60 OQ9).
-**P2's first deliverable is a loopback harness.** The existing prediction pair
-cannot run them: both of its copies are `ROLE_Authority`, the client saves no
-moves, the server copy is fed through `MoveAutonomous` directly, and nothing
-delivers a correction back
+analogy with #60 OQ9). **P2's first deliverable is a loopback harness.** The
+existing prediction pair cannot run them: both of its copies are
+`ROLE_Authority`, the client saves no moves, the server copy is fed through
+`MoveAutonomous` directly, and nothing delivers a correction back
 (`Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:688-800`). The
 harness:
 
