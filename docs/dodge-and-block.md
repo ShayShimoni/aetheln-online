@@ -49,6 +49,8 @@ relative to the root of the pinned UE 5.8.1 source, revision `71fe36aac5`.
    time, so prediction and the server compute the same path. The
    invulnerability window advances on server world time from the server step
    that accepted the dodge, so a client cannot stretch it by withholding moves.
+   While the client is silent, the engine's forced position updates advance a
+   dodge already in progress in server time; they never start one.
 4. **Avoidance is time-exact.** A contact is avoided if its contact time lies
    inside the target's invulnerability window. The window tag stays for gating
    and observers. This asks one change of #60 P4 (Technical decision T2).
@@ -134,7 +136,7 @@ Existing code at `f173388`:
 | Existing code | Disposition |
 | --- | --- |
 | Project movement component and saved move (`Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:23-114`) | Extend. `FLAG_Custom_0` is sprint and `FLAG_Custom_1` aim steering (`:80-92`, `:329-334`); `FLAG_Custom_2` and `FLAG_Custom_3` are free (`docs/movement-poc.md:242-244`). Reuse the jump-takeoff pattern: the result is derived inside the simulation from the move's own acceleration and control yaw (`:200-231`), so prediction, replay, and the server agree. |
-| Headless prediction pair (`Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:688-800`) | Reuse for the movement tests: client, server, and simulated proxy in one world, with the server's position-error check per move. |
+| Headless prediction pair (`Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:688-800`) | Reuse its one-world setup (client, server, and simulated proxy) and the server's position-error check per move. The dodge's network tests need the loopback harness in the [Test Plan](#test-plan), because the pair runs both copies as authority and delivers no corrections. |
 | Input receiver (`Source/GameCore/Public/AethelnPlayerInputReceiver.h:23-30`) | Extend with a dodge press. It has no combat, dodge, or defense method today (`docs/input-camera-free-aim-spike.md:26`). |
 | #19 P2 and P3 (`Source/GameCombat/Public/AethelnAbilitySystemComponent.h:58-142`, `Source/GameCombat/Public/AethelnGameplayAbility.h:15-100`, `Source/GameCombat/Public/AethelnActivationTypes.h:26-66`) | Build on them: the seam, validator, rate bucket, choke point, `CommitAbility` result slot, and owner outcome. Cost and cooldown (#19 P4) are not on `develop` yet; this document designs against their specification. |
 | Guard and Endurance attributes (`Source/GameCombat/Public/AethelnCombatAttributeSet.h:29-30`, `:70-74`) | Use as they are. Only Gameplay Effects change them. |
@@ -180,7 +182,10 @@ exactly one move: the start move.
   project relies on at `Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:78-79`).
   A move whose flags differ from the last acknowledged move is important
   (`CMC.cpp:12975-12983`), so the engine resends it with the next packet as the
-  old important move (`CMC.h:2598-2601`).
+  old important move. The client selects the oldest unacknowledged important
+  move other than the last saved move, once a `LastAckedMove` exists
+  (`CMC.cpp:8935-8950`); the server handles it first
+  (`ServerMove_HandleMoveData`, `CMC.cpp:9928-9963`).
 - **Ordering.** The server simulates a move only if its client timestamp passes
   `VerifyClientTimeStamp` (`CMC.cpp:9995`) and only for a positive delta
   (`:10027`). A duplicated copy or an older reordered move is therefore never
@@ -204,9 +209,11 @@ displacement in one server step.
 The dodge is a `UAethelnGameplayAbility` that reaches the seam only through a
 server-internal entry, `ProcessMovementCarriedRequest`. It is called only by
 the authority interface, only on the server, and only from the server's
-simulation of a received move, never from a client replay (the client replays
-through `MoveAutonomous` too, `CMC.cpp:8606-8686`). It runs #19's steps with
-these substitutions:
+simulation of a received move (see
+[Received moves and forced updates](#received-moves-and-forced-updates)), never
+from a forced position update or a client replay (the client replays through
+`MoveAutonomous` too, `CMC.cpp:8606-8686`). It runs #19's steps with these
+substitutions:
 
 | #19 step | Movement-carried entry |
 | --- | --- |
@@ -241,11 +248,13 @@ The dodge runs inside the movement simulation, in
 `CMC.cpp:2874`), on every path: client prediction, client replay, and the
 server.
 
-- **Start predicate.** The flag is set, no dodge is in progress, and the
-  character is walking (Q3). On the client and in replay that is enough, because the
-  flag itself records the client's decision to predict. On the server the
-  authority must also accept. The start applies from the beginning of the
-  flagged move.
+- **Start predicate.** The flag is set and the movement state allows a start:
+  no dodge is in progress and the character is walking (Q3). On the client and
+  in replay that is enough, because the flag itself records the client's
+  decision to predict. On the server a dodge starts only from a received
+  flagged move that the authority accepts, under the rules in
+  [Received moves and forced updates](#received-moves-and-forced-updates). The
+  start applies from the beginning of the flagged move.
 - **Direction.** The yaw-only direction of the move's own acceleration (after
   `ConstrainInputAcceleration`, as the jump takeoff uses), fixed for the whole
   dodge. With no input, the neutral direction applies (Q2). Remote clients see
@@ -265,8 +274,9 @@ server.
   corrects at or after the flagged move, which acknowledges that move, so replay
   never applies it again.
 - **Server end.** `EndDodgeForAuthority()` ends a dodge on the server outside a
-  move (life state, avatar loss). The owner is corrected; this is never
-  predicted.
+  move (life state, avatar loss). It sets `bForceClientUpdate` (`CMC.h:3309`),
+  so the owner is corrected even when the positions still agree, for example
+  after a dodge stopped against a wall. This is never predicted.
 
 **Consistency across clients** follows: the owning client and the server run
 the same start move, the same direction, and the same per-move displacement.
@@ -274,10 +284,53 @@ Simulated proxies interpolate the server's replicated movement. A difference
 appears only when the server refuses a predicted start, and then the
 correction converges on the server.
 
+### Received moves and forced updates
+
+The server runs `PerformMovement`, and so the dodge hook, on two paths:
+
+- **Received moves.** `ServerMove_HandleMoveData` sets the current network
+  move data around each move it hands to `ServerMove_PerformMovement`, and
+  clears it afterwards (`CMC.cpp:9928-9963`; `GetCurrentNetworkMoveData`,
+  `CMC.h:2715`).
+- **Forced position updates.** When no client move has arrived for
+  `MAXCLIENTUPDATEINTERVAL` (0.25 s by default), the player controller's tick
+  calls `ForcePositionUpdate`, and keeps doing so for up to
+  `MaxClientForcedUpdateDuration` (1.0 s by default)
+  (`Runtime/Engine/Private/PlayerController.cpp:5583-5593`;
+  `Runtime/Engine/Private/GameNetworkManager.cpp:32-33`). It calls
+  `PerformMovement` with no current move data and without
+  `UpdateFromCompressedFlags`, so the last received flags would still be set.
+  It also advances the server's copy of the client timestamp, so a client move
+  inside the forced interval later fails `VerifyClientTimeStamp` and is
+  dropped (`CMC.cpp:8726-8767`, `:8753`).
+
+The rules:
+
+- **The authority is called only for a received flagged move:** the owner
+  role is `ROLE_Authority` and `GetCurrentNetworkMoveData()` is set. After the
+  call the server clears `bWantsToDodge`, so the evaluated flag is consumed and
+  nothing outside that move sees it again.
+- **Exactly once per received flagged move.** Every received flagged move
+  calls `TryAuthorizeDodge` once, even mid-dodge or airborne, with
+  `bMovementAllowsStart` false in those states. The authority still runs the
+  substitution table, so the move draws its token, and step 7 refuses it with
+  `ActivationBlocked`. The movement component never skips the call, and never
+  calls it twice for one move.
+- **A forced update never starts, re-asks, or commits a dodge.** It advances
+  a dodge already in progress by its own delta, in server time. The
+  correction that follows carries the dodge state, so the client converges.
+- **`S` is always stamped by a received move,** which the net driver
+  dispatches before the world time advances (see
+  [Server-owned windows](#server-owned-windows)). A forced update runs in the
+  actor tick and stamps nothing.
+- **Dedicated server only.** A locally controlled authority pawn (a
+  listen-server host or a standalone game) never has a received move, so #18
+  gives it no dodge. The prototype's multiplayer runs use a dedicated server.
+
 ### Server-owned windows
 
-Let `S` be the server world time at which the server processed the accepted
-flagged move. Moves are dispatched before the world time advances, so `S` is
+Let `S` be the server world time at which the server processed the accepted,
+received flagged move. Moves are dispatched before the world time advances, so `S` is
 the previous frame's time, as for any request. #60's
 **requests before contacts** rule therefore decides a dodge and a contact in
 the same frame: the dodge is validated first and is stamped with that earlier
@@ -320,13 +373,15 @@ already authoritative.
 
 ### Rejections
 
-Each flagged move the server processes gets one outcome. Rejections have no
-side effect.
+Each received flagged move the server simulates gets one outcome. Rejections
+have no side effect.
 
 | Case | Result |
 | --- | --- |
 | Duplicated or reordered move copy | Never simulated; no outcome (transport, not a request) |
 | Flag on a zero-delta move | Never simulated; no outcome |
+| Flagged move whose timestamp a forced position update already covered | Never simulated; no outcome |
+| Flagged move that arrives before the controller acknowledged the pawn (`CMC.cpp:10014-10015`, `:10039`; `Runtime/Engine/Private/PlayerController.cpp:3286`), or while the world is paused (`CMC.cpp:10045`) | Timestamp consumed, never simulated; no outcome |
 | Bucket empty | `RateLimited` (#19's limited-window policy) |
 | No avatar, or a dying avatar | `ConnectionClosed`, `ActorDestroyed` |
 | Content version mismatch | `IncompatibleVersion` |
@@ -342,14 +397,18 @@ bucket.
 ### Disconnect, life state, and missing presentation
 
 - **Avatar loss** (unpossession, destroy while possessed, logout, disconnect)
-  reaches #19's null-pawn case, which cancels all abilities. Ending the dodge
-  ability closes the windows at the processing time. Nothing carries over to a
+  reaches #19's null-pawn case, which cancels all abilities. The dodge
+  ability's cancel path, not its normal end at `ActionEnd`, closes the windows
+  at the processing time and calls `EndDodgeForAuthority()`. #19's null-pawn
+  case cancels before it clears the avatar (Lifecycle in the #19
+  specification), so the movement component is still reachable, and a
+  re-possessed pawn resumes no stale displacement. Nothing carries over to a
   new avatar or a new PlayerState.
 - **`State.Dead`**, added through the test seam until #21 applies it, is bound
   with `RegisterGameplayTagEvent` (`GAS/Public/AbilitySystemComponent.h:720`)
-  as #60 binds it. It cancels the dodge ability (closing the windows at that
-  time), calls `EndDodgeForAuthority()`, and blocks new dodges. #21 owns the
-  integrated death and respawn case.
+  as #60 binds it. It cancels the dodge ability, whose cancel path closes the
+  windows at that time and calls `EndDodgeForAuthority()`, and it blocks new
+  dodges. #21 owns the integrated death and respawn case.
 - **Missing presentation changes nothing.** No montage, notify, root motion,
   or effect is read. Animation visualizes the server windows and the
   replicated movement.
@@ -492,8 +551,12 @@ change halfway through a contact.
 - **A separate outcome RPC.** Movement-carried outcomes do not share #19's
   sequence space; #19's client rule ("an outcome for any later sequence means
   every earlier pending request was suppressed") would break if they did. The
-  client matches movement-carried outcomes to its pending flagged moves in
-  order. They are reliable for #19's reason: they are the only reason signal
+  client keeps its pending flagged moves in send order. An outcome resolves the
+  first pending move with its client timestamp, and every earlier pending
+  flagged move without an outcome was never simulated (the silent drops in
+  [Rejections](#rejections)); the client treats it as not processed, and the
+  server's correction undoes its prediction. They are reliable for #19's
+  reason: they are the only reason signal
   #61 gets. Their volume is bounded by the bucket, and a rate-limited window
   sends at most one.
 - **Opponents see state, not values.** Guard stays owner-only (#19); the
@@ -593,36 +656,74 @@ headless authority world with an injected clock and the in-memory sink. **P**
 is PIE with a dedicated server and two clients, recorded as manual steps.
 **K** is a packaged run. Tests that pin a policy set their own values, never
 tuning. Pure movement tests live beside the movement component, because
-GameCore cannot depend on GameCombat; they use a test authority and keep the
-existing `Aetheln.Movement.Net` group. Everything that touches the ASC lives in
-`GameTests` as `Aetheln.GameCombat.Defense.*`. That needs a test-only accessor
-on the movement component (P2) so `GameTests` can drive client moves, as the
-movement tests do through `friend`.
+GameCore cannot depend on GameCombat; they keep the existing
+`Aetheln.Movement.Net` group and inject a test authority through a test-only
+seam on the movement component, because the production lookup goes through
+`GetPlayerState()` and would need a PlayerState class implementing the
+`UINTERFACE`, which a GameCore test cannot easily declare. Everything that
+touches the ASC lives in `GameTests` as `Aetheln.GameCombat.Defense.*`. That
+needs a test-only accessor on the movement component (P2) so `GameTests` can
+drive client moves and the harness below, as the movement tests do through
+`friend`. Native test tags follow #19's rule: they are declared in GameCore
+under `WITH_DEV_AUTOMATION_TESTS` (Test Plan in the #19 specification).
 
-The network-condition cases are automated simulations (owner decision 4). A
-scripted delivery queue feeds the server through the engine's
-`ServerMove_PerformMovement` (public, `CMC.h:2608`), so the timestamp rules run
-for real. It delays, duplicates, reorders, and drops moves and seam requests
+The network-condition cases are automated simulations (owner decision 4).
+**P2's first deliverable is a loopback harness.** The existing prediction pair
+cannot run them: both of its copies are `ROLE_Authority`, the client saves no
+moves, the server copy is fed through `MoveAutonomous` directly, and nothing
+delivers a correction back
+(`Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:688-800`). The
+harness:
+
+- **Roles.** The client copy is `ROLE_AutonomousProxy`, so it saves moves and
+  selects the old important move itself (`CMC.cpp:8935-8950`). The server copy
+  is `ROLE_Authority` with remote role `ROLE_AutonomousProxy`, which
+  `ForcePositionUpdate` requires (`CMC.cpp:8734-8735`).
+- **Acknowledged pawn.** The server's controller has acknowledged the pawn.
+  Otherwise `ServerMove_PerformMovement` consumes each timestamp and simulates
+  nothing (`CMC.cpp:10014-10015`, `:10039`;
+  `Runtime/Engine/Private/PlayerController.cpp:3286`), and a "no dodge"
+  assertion passes for the wrong reason.
+- **Moves.** Under `WITH_DEV_AUTOMATION_TESTS`, the project component's
+  `CallServerMovePacked` override (`CMC.h:2418`) hands the new, pending, and
+  old moves to a test capture hook instead of the RPC. A scripted delivery
+  queue passes each capture to the server's `ServerMove_HandleMoveData`
+  (public, `CMC.h:2601`), which sets the current move data, so the
+  received-move rule and the engine's timestamp rules run for real.
+- **Responses.** With no net driver, the server's pending adjustment is never
+  sent. After each delivered batch the harness fills a move-response container
+  from it as `ServerSendMoveResponse` does (`CMC.h:2614`), delivers it to the
+  client's `ClientHandleMoveResponse` (`CMC.h:2622`), and replays through
+  `ClientUpdatePositionAfterServerUpdate` (`CMC.h:2408`). These
+  acknowledgements give the client its `LastAckedMove`, so the old-move resend
+  is the engine's own; D1 asserts it.
+- **Silence.** The harness calls the server's `ForcePositionUpdate` to model a
+  client that sends nothing.
+- **Positive control.** Every delivery-profile test asserts that the server
+  simulated the expected number of received moves, so a harness that delivers
+  nothing fails instead of passing.
+
+The queue delays, duplicates, reorders, and drops moves and seam requests
 against the injected clock: **normal** delivers in order at once, **high
 latency** delays every message by a fixed test interval, and **packet loss**
 drops chosen copies and models a reliable resend as a later arrival.
 
 | # | Test | PR | Kind | What it proves |
 | --- | --- | --- | --- | --- |
-| D1 | `Aetheln.Movement.Net.DodgeFlagRoundTrip` | P2 | H | `FLAG_Custom_2` marks only the start move; it does not combine with neighbors; the move is important; the server restores it; sprint and aim flags are unchanged |
+| D1 | `Aetheln.Movement.Net.DodgeFlagRoundTrip` | P2 | H | `FLAG_Custom_2` marks only the start move; it does not combine with neighbors; the move is important; once a move is acknowledged, the client itself selects the unacknowledged flagged move as the old move in the next packet; the server restores it; sprint and aim flags are unchanged |
 | D2 | `Aetheln.Movement.Net.DodgeDisplacementParity` | P2 | H | Prediction pair, test authority accepting: forward, lateral, diagonal, backward, and neutral input, with sprint, aim steering, and a turned camera. Every move is accepted; the path equals the test distance on open ground; the direction stays fixed; the proxy converges on the server |
 | D3 | `Aetheln.Movement.Net.DodgeCorrectionReplay` | P2 | H | A forced correction mid-dodge restores dodge state from the response and replays the same path, once and repeatedly; saved moves never restore dodge state |
 | D4 | `Aetheln.Movement.Net.DodgeRefusedRollsBack` | P2 | H | Test authority refuses: the server moves without a dodge, corrects at the flagged move, the replay does not reapply it, and the client ends at the server's position |
-| D5 | `Aetheln.Movement.Net.DodgeDeliveryConditions` | P2 | H | Normal, high-latency, and packet-loss delivery; a duplicated copy is simulated once; an older reordered move is dropped; a lost first copy is processed once from the old-move resend; all copies lost gives no dodge and no authority call; a zero-delta flagged move is not processed; the authority is called at most once per dodge |
+| D5 | `Aetheln.Movement.Net.DodgeDeliveryConditions` | P2 | H | Normal, high-latency, and packet-loss delivery; a duplicated copy is simulated once; an older reordered move is dropped; a lost first copy is processed once from the old-move resend; all copies lost gives no dodge and no authority call; a zero-delta flagged move is not processed; the authority is called exactly once per received flagged move, including mid-dodge and airborne ones; a forced update between a flagged move and its late arrival drops that move with no authority call; a forced update mid-dodge advances the displacement and the next correction converges the client; a refused flagged move followed by silence makes no second authority call and starts no dodge when the forced updates run; an unacknowledged pawn simulates nothing and calls nothing; every profile asserts the server's simulated-move count |
 | D6 | `Aetheln.Movement.Net.DodgeGroundAndCollision` | P2 | H | A wall shortens the path equally on both sides; leaving a ledge ends the dodge; an airborne flag does not start one (Q3 pinned with a test policy); no authority means no dodge |
 | D7 | `Aetheln.GameCombat.Defense.DodgeDefinitionFailsClosed` | P3 | H | Grant refused for non-finite or non-positive values, each ordering violation, `MoveDuration > ActionEnd`, a missing movement-carried flag, missing blocking tags, and (if Q4) zero cost with zero cooldown |
 | D8 | `Aetheln.GameCombat.Defense.DodgeMovementCarriedRoute` | P3 | H | The dodge activates only through the entry; `ServerSubmitActivation` for it is `MalformedRequest`; the stock routes stay refused; the scope opens for the dodge spec only; content version mismatch is `IncompatibleVersion`; precedence follows the substitution table |
 | D9 | `Aetheln.GameCombat.Defense.DodgeCostCooldownAndRepeats` | P3 | H | Acceptance applies one cost and one cooldown; flagged moves during the dodge give `ActivationBlocked`, during the cooldown `OnCooldown`, with low Endurance `InsufficientResource`; rejections have no side effect; one outcome per processed flagged move; each draws one token |
 | D10 | `Aetheln.GameCombat.Defense.DodgeWindowBoundaries` | P3 | H | `S` is the processing time; `IsAvoidingAt` is true at `S + InvulnerableStart` and false at `S + InvulnerableEnd`; each tag exists exactly over its window; a request at exactly `S + ActionEnd` is not blocked by the dodge; withheld moves neither extend nor shorten the window |
 | D11 | `Aetheln.GameCombat.Defense.DodgeEndToEnd` | P3 | H | A client pawn and a server pawn with the real PlayerState authority: an accepted dodge produces no correction and the predicted path; a predicted dodge refused for cooldown rolls back with one correction; the owner receives one outcome per flagged move |
-| D12 | `Aetheln.GameCombat.Defense.NetworkConditionsDodge` | P3 | H | The D5 profiles with the real authority: each dodge commits at most once, with no double cost or cooldown; the window starts at server arrival; outcomes arrive in order; a dropped flagged move commits nothing |
-| D13 | `Aetheln.GameCombat.Defense.LifeStateCancelsDefense` | P3 (block rows P4) | H | `State.Dead` added through the test seam ends an active dodge window at that time, ends the server displacement, and ends a held block; later dodge and block requests get `ActivationBlocked`; re-possession revives no invulnerability or defense |
-| D14 | `Aetheln.GameCombat.Defense.TeardownMidDodgeAndBlock` | P3 (block rows P4) | H | Unpossession, avatar destruction, and PlayerState teardown during the window and during a held block: one end, no window or slot afterwards, and a new PlayerState starts clean |
+| D12 | `Aetheln.GameCombat.Defense.NetworkConditionsDodge` | P3 | H | The D5 profiles with the real authority: each dodge commits at most once, with no double cost or cooldown; the window starts at server arrival; outcomes arrive in order; a dropped flagged move commits nothing and gets no outcome, and the client resolves it as never simulated when the next outcome arrives; a refused flagged move (cooldown) followed by silence draws one token and sends one outcome, and nothing commits after the cooldown lapses; every profile asserts the server's simulated-move count |
+| D13 | `Aetheln.GameCombat.Defense.LifeStateCancelsDefense` | P3 (block rows P4) | H | `State.Dead` added through the test seam ends an active dodge window at that time, ends the server displacement, and ends a held block; later dodge and block requests get `ActivationBlocked`; re-possession revives no invulnerability or defense and resumes no displacement |
+| D14 | `Aetheln.GameCombat.Defense.TeardownMidDodgeAndBlock` | P3 (block rows P4) | H | Unpossession, avatar destruction, and PlayerState teardown during the window and during a held block: one end, no window or slot afterwards, the cancel path ends the server displacement, re-possession resumes no displacement, and a new PlayerState starts clean |
 | D15 | `Aetheln.GameCombat.Defense.DodgeTelemetry` | P3 | H | Events and metrics per the table with a nonzero ordinal; a flood of flagged moves stays within #19's window bound; the public copy has no diagnostic code |
 | D16 | `Aetheln.GameCombat.Defense.RunsWithoutPresentation` | P3 (block rows P4) | H | Dodge and block run, end, and (from P4) resolve contacts with no mesh, montage, or notify |
 | D17 | `Aetheln.GameCombat.Defense.BlockDefinitionFailsClosed` | P4 | H | Grant refused for each invalid value and for missing `bAcceptsRelease` or blocking tags |
@@ -667,7 +768,7 @@ files untouched.
 | PR | Scope | Depends on |
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
-| **P2** Dodge movement | GameCore only: the authority interface and definition structs, `FLAG_Custom_2`, dodge simulation state, displacement, custom move-data and move-response containers, `EndDodgeForAuthority`, the receiver method, the test accessor; D1 to D6 with a test authority; the `docs/movement-poc.md` flag note. No game code implements the authority yet, so no dodge runs in game. | P1 |
+| **P2** Dodge movement | GameCore only: first the loopback harness (see [Test Plan](#test-plan)); then the authority interface and definition structs, `FLAG_Custom_2`, dodge simulation state, displacement, custom move-data and move-response containers, `EndDodgeForAuthority`, the receiver method, the test accessor; D1 to D6 with a test authority; the `docs/movement-poc.md` flag note. No game code implements the authority yet, so no dodge runs in game. | P1 |
 | **P3** Dodge authority | Dodge tags, `UAethelnDodgeAbility`, the movement-carried entry and outcome RPC, the ordinal, the PlayerState authority, windows and boundaries, `IsAvoidingAt`, the `State.Dead` binding, telemetry, the #19 specification and fixture changes; D7 to D16 (dodge rows). | P2, #19 P4, #60 P3 (boundary registration) |
 | **P4** Block and contact integration | Block tags, `UAethelnBlockAbility`, the defense slot, `UAethelnGuardPressureEffect`, the Guard hook and break, the Q10 relations; D13, D14, D16 block rows, D17 to D25. | P3, #60 P4, the answers to Q6 to Q8 and Q10 |
 | **P5** Bindings and two-client evidence | The receiver and input-sink release, the GameUI dodge key and right-mouse hold, Cursor-entry release; D26, D27. | P4, #60 P6 (input sink), #19 P5 (input-enabled pawn), Q1 |
@@ -749,6 +850,8 @@ the remapping mechanism and controller layout (#82); display names.
 7. **PlayerState relevancy.** The state tags replicate from an always-relevant
    PlayerState, which does not scale. Owners: TC-001, #45.
 8. **Outcome keys repeat across timestamp resets.** The client matches
-   movement-carried outcomes by order; the key alone is not unique.
+   movement-carried outcomes by timestamp in send order, skipping moves that
+   were never simulated; the key alone is not unique, so a pending move left
+   over from before a reset could be resolved by a later move's outcome.
 9. **No death transition** until #21. A zero-Health target is inert to #60 but
    still holds its defense state until `State.Dead` arrives.
