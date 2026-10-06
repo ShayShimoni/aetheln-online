@@ -19,7 +19,20 @@ re-derives everything in a fresh run-scoped cache. An optional prebuilt
 host-tools boundary (-HostToolsBoundary Prebuilt -EngineRevision <sha>) skips
 rebuilding the host editor/engine tools only after fail-closed proof that they
 belong to the exact clean pinned engine revision; the client and server
-project targets always build with -clean.
+project targets always build with -clean. Prebuilt and AttestHostTools first
+build only the project editor modules (AethelnOnlineEditor) through the
+reviewed scripts/ci/InitialPreparation.BuildInvocation.ps1 wrapper as a child
+process, then verify the schema-2 attestation against the receipt that build
+wrote: the receipt's engine-side products plus ShaderCompileWorker (UAT
+rebuilds UnrealPak in every phase, so it is not attested), the receipt's
+LaunchCmd and Launch, and a manifest-set check that every UnrealEditor.modules
+and ShaderCompileWorker.modules in the engine binaries trees is attested. Both
+refuse a set UE_ADDITIONAL_PLUGIN_PATHS (Issue #267, TA-014 amendment).
+.PARAMETER HostToolsAttestationSha256
+Optional lowercase SHA-256 of the attestation record, accepted only with
+-HostToolsBoundary Prebuilt. The engine-runner gate passes the hash it reports;
+the controller hashes the bytes it reads once and fails closed
+(host_tools_attestation_changed) when they differ. A local run may omit it.
 .PARAMETER BuildNumber
 Optional release build number, accepted only with -Stage Provenance and
 forwarded to Write-BuildProvenance.ps1, which then adds a release block to the
@@ -56,6 +69,7 @@ param(
 	[ValidateSet('Rebuild', 'Prebuilt')] [string] $HostToolsBoundary,
 	[string] $EngineRevision,
 	[string] $HostToolsAttestationPath,
+	[ValidatePattern('^$|^[0-9a-f]{64}$')] [string] $HostToolsAttestationSha256,
 	[ValidatePattern('^$|^[^\x00-\x1f]{1,512}$')] [string] $ProvisioningEvidence,
 	[ValidatePattern('^$|^[^\\/:*?"<>|\x00-\x1f]{1,128}$')] [string] $RunnerName,
 	[string] $BuildNumber
@@ -74,16 +88,29 @@ $script:DdcIdentityFieldNames = @('engineGitRevision', 'engineBuildVersionSha256
 # The repository's canonical pinned engine revision (docs/unreal-project-setup.md).
 $script:CanonicalEngineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
 $script:BuildTargetsContract = 'AethelnOnlineClient:Win64+AethelnOnlineServer:Linux'
-# The pinned engine's generated Unreal target receipts are the authoritative
-# bounded source of the host build products -nocompileeditor would skip: the
-# source-built editor's executable code spans many UnrealEditor-*.dll
-# engine/plugin modules a hand-written closed list cannot cover. UnrealPak and
-# ShaderCompileWorker stay explicitly required as host programs.
+# Generated Unreal target receipts are the authoritative bounded source of the
+# host build products -nocompileeditor stops UAT from building (schema 2, Issue
+# #267, TA-014 amendment). The editor is built through the project target, so
+# its receipt is the project's Binaries/Win64/AethelnOnlineEditor.target,
+# written by this phase's own project editor build; its $(EngineDir) products
+# are the engine and plugin UnrealEditor-*.dll modules, manifests, version
+# file, and editor executables the cook loads. The receipt itself is a phase
+# output, not attested. ShaderCompileWorker is skipped by -nocompileeditor
+# (BuildProjectCommand.Automation.cs:101-104) yet executed by the cook, so its
+# engine receipt and products stay attested. UnrealPak is not attested: UAT
+# cleans and rebuilds it from the verified clean engine source in every
+# package phase (BuildProjectCommand.Automation.cs:113-118,243,251).
 $script:HostToolReceipts = @(
-	@{ path = 'Engine/Binaries/Win64/UnrealEditor.target'; targetName = 'UnrealEditor'; targetType = 'Editor' },
-	@{ path = 'Engine/Binaries/Win64/UnrealPak.target'; targetName = 'UnrealPak'; targetType = 'Program' },
-	@{ path = 'Engine/Binaries/Win64/ShaderCompileWorker.target'; targetName = 'ShaderCompileWorker'; targetType = 'Program' }
+	@{ path = 'Binaries/Win64/AethelnOnlineEditor.target'; root = 'project'; targetName = 'AethelnOnlineEditor'; targetType = 'Editor' },
+	@{ path = 'Engine/Binaries/Win64/ShaderCompileWorker.target'; root = 'engine'; targetName = 'ShaderCompileWorker'; targetType = 'Program' }
 )
+# UAT runs the project receipt's LaunchCmd for the cook (ProjectUtils.cs:689-715),
+# so both launch entries must name the attested engine editor executables.
+$script:HostEditorLaunchEntries = [ordered]@{ LaunchCmd = '$(EngineDir)/Binaries/Win64/UnrealEditor-Cmd.exe'; Launch = '$(EngineDir)/Binaries/Win64/UnrealEditor.exe' }
+# The engine loader reads these manifest names in every subdirectory of each
+# binaries directory under these engine trees (ModuleManager.cpp:1930-1965).
+$script:HostToolManifestNames = @('UnrealEditor.modules', 'ShaderCompileWorker.modules')
+$script:HostToolManifestRoots = @('Engine/Binaries/Win64', 'Engine/Plugins', 'Engine/Platforms', 'Engine/Restricted')
 # Symbol/debug and link-time-only products do not affect execution and stay
 # out of the attested closure; an unknown product type fails closed.
 $script:ReceiptIncludedProductTypes = @('Executable', 'DynamicLibrary', 'RequiredResource', 'BuildResource', 'Package')
@@ -93,7 +120,7 @@ $script:ReceiptMaxProducts = 8192
 $script:AttestationMaxBytes = 8388608
 $script:AttestedFileMaxBytes = [long] 4294967296
 $script:AttestedAggregateMaxBytes = [long] 137438953472
-$script:AttestationPropertyNames = @('schemaVersion', 'engineGitRevision', 'files', 'provisioningEvidence', 'createdUtc')
+$script:AttestationPropertyNames = @('schemaVersion', 'engineGitRevision', 'projectRevision', 'files', 'provisioningEvidence', 'createdUtc')
 $script:EvidenceIdentity = [ordered]@{
 	engineGitRevision = $null
 	engineGitRevisionStatus = 'unavailable'
@@ -145,6 +172,46 @@ function Invoke-LoggedCommand([string] $Label, [string] $Executable, [string[]] 
 	New-Item -ItemType File -Path $LogPath | Out-Null
 	& $Executable @Arguments 2>&1 | Tee-Object -FilePath $LogPath
 	if ($LASTEXITCODE -ne 0) { throw "$Label failed with exit code $LASTEXITCODE. Review '$LogPath' for details." }
+}
+function Assert-NoAdditionalPluginPath([string] $Activity) {
+	# The cook and the editor read UE_ADDITIONAL_PLUGIN_PATHS at runtime, so a
+	# set value would load plugin code and content from outside the engine, the
+	# project, and the attested closure (TA-019). The value is never echoed.
+	if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('UE_ADDITIONAL_PLUGIN_PATHS', 'Process'))) { throw "host_tools_plugin_paths_set: $Activity failed because UE_ADDITIONAL_PLUGIN_PATHS is set." }
+}
+function Invoke-HostEditorModulesBuild {
+	# Builds only the project editor modules (AethelnOnlineEditor) before UAT so
+	# a fresh checkout has the receipt and UnrealEditor-Game*.dll modules the cook
+	# needs. It runs the reviewed CI wrapper as a child process, so its exit and
+	# Add-Type stay isolated and its compiler selection matches the shared engine
+	# tree (TA-020); the wrapper adds the per-target UBT flags. Its console goes
+	# to files under LogRoot and nothing from it reaches this output, so every
+	# failure below is one fixed path-free reason containing 'failed'.
+	$EvidenceRoot = Join-Path $ResolvedLogs 'host-editor-build'
+	New-Item -ItemType Directory -Path $EvidenceRoot | Out-Null
+	$Wrapper = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../ci/InitialPreparation.BuildInvocation.ps1')).Path
+	$ArgumentText = '-NoProfile -NonInteractive -File "{0}" -Target AethelnOnlineEditor -Platform Win64 -ActionLimit 4 -EngineRoot "{1}" -TargetRoot "{2}" -LinuxToolchainRoot "{3}" -EvidenceRoot "{4}"' -f $Wrapper, $ResolvedEngine, $ProjectRoot, $ResolvedToolchain, $EvidenceRoot
+	$Result = $null
+	$Valid = $false
+	try {
+		$Child = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $ArgumentText -WorkingDirectory $ProjectRoot -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $EvidenceRoot 'wrapper-console.log') -RedirectStandardError (Join-Path $EvidenceRoot 'wrapper-console-error.log')
+		# Reading the handle keeps ExitCode available after the child exits.
+		$null = $Child.Handle
+		$Child.WaitForExit()
+		# The cross-check of InitialPreparation.Build.ps1: a bounded schema-1
+		# record for this target whose native exit equals the child's exit code.
+		$ResultFile = Get-Item -LiteralPath (Join-Path $EvidenceRoot 'native-result.json')
+		if ($ResultFile.Length -le 4096) {
+			$Result = Get-Content -LiteralPath $ResultFile.FullName -Raw | ConvertFrom-Json
+			$Valid = ($Result.schemaVersion -eq 1 -and $Result.target -ceq 'AethelnOnlineEditor' -and $Result.platform -ceq 'Win64' -and
+				$null -eq $Result.infrastructureFailure -and ($Result.nativeExitCode -is [int] -or $Result.nativeExitCode -is [long]) -and
+				$Child.ExitCode -eq $Result.nativeExitCode)
+		}
+	} catch { Write-Verbose "The in-phase project editor build result could not be read: $($_.Exception.Message)" }
+	if (-not $Valid) { throw 'host_editor_capture_failed: the in-phase project editor build failed to produce a valid result record.' }
+	# UBT exit 5 (-NoEngineChanges): the build would rewrite an existing engine file.
+	if ($Result.nativeExitCode -eq 5) { throw 'host_editor_engine_changes: the in-phase project editor build failed because it would rewrite existing engine files; the engine needs an authorized build and a new attestation.' }
+	if ($Result.nativeExitCode -ne 0) { throw 'host_editor_build_failed: the in-phase project editor build failed.' }
 }
 function Assert-PackagedExecutable([string] $Label, [string] $Root, [string[]] $Names) {
 	$Match = @(Get-ChildItem -LiteralPath $Root -Recurse -File | Where-Object { $Names -contains $_.Name })
@@ -411,37 +478,53 @@ function Assert-SafeEngineRelativePath([string] $Label, [string] $Value) {
 	if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Contains(':') -or [System.IO.Path]::IsPathRooted($Value) -or @(($Value -split '[\\/]') | Where-Object { $_ -in @('', '.', '..') }).Count -ne 0) { throw "$Label '$Value' must be a safe engine-relative path; host-tools validation fails closed." }
 }
 function Get-HostToolReceiptProductPath {
-	# Derives the exact host build-product closure from the pinned engine's
-	# generated Unreal target receipts. The set is re-derived fresh on every
-	# attestation write and every prebuilt verification, so a caller-supplied
-	# subset in the attestation record is never trusted.
+	# Derives the exact host build-product closure from the generated Unreal
+	# target receipts. The set is re-derived fresh on every attestation write and
+	# every prebuilt verification, so a caller-supplied subset in the attestation
+	# record is never trusted.
 	$Seen = @{}
 	$Paths = New-Object System.Collections.ArrayList
 	foreach ($Receipt in $script:HostToolReceipts) {
 		$ReceiptRelative = [string] $Receipt.path
-		$ReceiptFull = [System.IO.Path]::GetFullPath((Join-Path $ResolvedEngine $ReceiptRelative))
-		if (-not (Test-Path -LiteralPath $ReceiptFull -PathType Leaf)) { throw "Required host-target receipt '$ReceiptRelative' does not exist under the engine root; host-tools validation fails closed." }
-		if ((Get-Item -LiteralPath $ReceiptFull -Force).Length -gt $script:ReceiptMaxBytes) { throw "Required host-target receipt '$ReceiptRelative' exceeds the $($script:ReceiptMaxBytes)-byte receipt bound; host-tools validation fails closed." }
+		$IsProjectReceipt = [string] $Receipt.root -ceq 'project'
+		$ReceiptRoot = if ($IsProjectReceipt) { $ProjectRoot } else { $ResolvedEngine }
+		$Invalid = "host_tools_receipt_invalid: host-tools validation failed because receipt '$ReceiptRelative'"
+		$ReceiptFull = [System.IO.Path]::GetFullPath((Join-Path $ReceiptRoot $ReceiptRelative))
+		if (-not (Test-Path -LiteralPath $ReceiptFull -PathType Leaf)) { throw "$Invalid does not exist." }
+		if ((Get-Item -LiteralPath $ReceiptFull -Force).Length -gt $script:ReceiptMaxBytes) { throw "$Invalid exceeds the $($script:ReceiptMaxBytes)-byte receipt bound." }
 		$Parsed = $null
-		try { $Parsed = Get-Content -LiteralPath $ReceiptFull -Raw | ConvertFrom-Json } catch { throw "Required host-target receipt '$ReceiptRelative' is not a parseable Unreal target receipt; host-tools validation fails closed." }
+		try { $Parsed = Get-Content -LiteralPath $ReceiptFull -Raw | ConvertFrom-Json } catch { throw "$Invalid is not a parseable Unreal target receipt." }
 		foreach ($Name in @('TargetName', 'Platform', 'Configuration', 'TargetType', 'BuildProducts')) {
-			if ($null -eq $Parsed -or $null -eq $Parsed.PSObject.Properties[$Name]) { throw "Required host-target receipt '$ReceiptRelative' is missing required metadata '$Name'; host-tools validation fails closed." }
+			if ($null -eq $Parsed -or $null -eq $Parsed.PSObject.Properties[$Name]) { throw "$Invalid is missing required metadata '$Name'." }
 		}
-		if ([string] $Parsed.TargetName -cne [string] $Receipt.targetName -or [string] $Parsed.Platform -cne 'Win64' -or [string] $Parsed.Configuration -cne 'Development' -or [string] $Parsed.TargetType -cne [string] $Receipt.targetType) { throw "Required host-target receipt '$ReceiptRelative' does not describe the exact expected $($Receipt.targetName) Win64 Development $($Receipt.targetType) target; host-tools validation fails closed." }
-		if ($Parsed.BuildProducts -isnot [array]) { throw "Required host-target receipt '$ReceiptRelative' must carry a BuildProducts array; host-tools validation fails closed." }
+		if ([string] $Parsed.TargetName -cne [string] $Receipt.targetName -or [string] $Parsed.Platform -cne 'Win64' -or [string] $Parsed.Configuration -cne 'Development' -or [string] $Parsed.TargetType -cne [string] $Receipt.targetType) { throw "$Invalid does not describe the exact expected $($Receipt.targetName) Win64 Development $($Receipt.targetType) target." }
+		if ($IsProjectReceipt) {
+			foreach ($Entry in $script:HostEditorLaunchEntries.GetEnumerator()) {
+				if ($null -eq $Parsed.PSObject.Properties[$Entry.Key] -or [string] $Parsed.($Entry.Key) -cne $Entry.Value) { throw "host_tools_launch_invalid: host-tools validation failed because receipt '$ReceiptRelative' $($Entry.Key) is not the attested engine editor executable." }
+			}
+		}
+		if ($Parsed.BuildProducts -isnot [array]) { throw "$Invalid must carry a BuildProducts array." }
 		$Products = @($Parsed.BuildProducts)
-		if ($Products.Count -lt 1 -or $Products.Count -gt $script:ReceiptMaxProducts) { throw "Required host-target receipt '$ReceiptRelative' must list between 1 and $($script:ReceiptMaxProducts) build products; found $($Products.Count). Host-tools validation fails closed." }
-		# The receipt itself is part of the attested closure so a receipt edit
-		# after attestation fails the content re-verification.
+		if ($Products.Count -lt 1 -or $Products.Count -gt $script:ReceiptMaxProducts) { throw "$Invalid must list between 1 and $($script:ReceiptMaxProducts) build products; found $($Products.Count)." }
+		# An engine receipt is part of the attested closure so a receipt edit
+		# after attestation fails the content re-verification. The project
+		# receipt is this phase's own build output: its engine-side list is
+		# checked by set equality and its launch entries above.
 		$Derived = New-Object System.Collections.ArrayList
-		[void] $Derived.Add($ReceiptRelative)
+		if (-not $IsProjectReceipt) { [void] $Derived.Add($ReceiptRelative) }
 		foreach ($Product in $Products) {
-			if ($null -eq $Product -or $null -eq $Product.PSObject.Properties['Path'] -or $null -eq $Product.PSObject.Properties['Type'] -or $Product.Path -isnot [string] -or $Product.Type -isnot [string]) { throw "Required host-target receipt '$ReceiptRelative' carries a build product without string Path and Type; host-tools validation fails closed." }
+			if ($null -eq $Product -or $null -eq $Product.PSObject.Properties['Path'] -or $null -eq $Product.PSObject.Properties['Type'] -or $Product.Path -isnot [string] -or $Product.Type -isnot [string]) { throw "$Invalid carries a build product without string Path and Type." }
 			$ProductType = [string] $Product.Type
 			if ($script:ReceiptExcludedProductTypes -ccontains $ProductType) { continue }
-			if ($script:ReceiptIncludedProductTypes -cnotcontains $ProductType) { throw "Required host-target receipt '$ReceiptRelative' carries unknown build-product type '$ProductType'; host-tools validation fails closed." }
+			if ($script:ReceiptIncludedProductTypes -cnotcontains $ProductType) { throw "$Invalid carries unknown build-product type '$ProductType'." }
 			$ProductPath = [string] $Product.Path
-			if ($ProductPath -cnotmatch '^\$\(EngineDir\)/') { throw "Receipt '$ReceiptRelative' build product '$ProductPath' must resolve under the canonical engine root via `$(EngineDir); host-tools validation fails closed." }
+			if ($IsProjectReceipt -and $ProductPath.StartsWith('$(ProjectDir)/', [StringComparison]::Ordinal)) {
+				# Project modules are built in this phase from the tested
+				# revision and are not attested; only plain Binaries/Win64 leaves.
+				if ($ProductPath -cnotmatch '^\$\(ProjectDir\)/Binaries/Win64/[^/\\:]+$' -or $ProductPath -cmatch '/\.{1,2}$') { throw "$Invalid lists project product '$ProductPath' outside Binaries/Win64." }
+				continue
+			}
+			if ($ProductPath -cnotmatch '^\$\(EngineDir\)/') { throw "$Invalid lists build product '$ProductPath' outside the canonical engine root." }
 			$RelativeProduct = 'Engine/' + $ProductPath.Substring(13)
 			Assert-SafeEngineRelativePath "Receipt '$ReceiptRelative' build product" $RelativeProduct
 			[void] $Derived.Add($RelativeProduct)
@@ -454,6 +537,38 @@ function Get-HostToolReceiptProductPath {
 		}
 	}
 	return ,@($Paths)
+}
+function Assert-HostToolManifestSet([string[]] $ClosurePaths) {
+	# The engine loader reads the named manifest in every subdirectory of each
+	# binaries directory, merges any whose BuildId matches (later mappings win),
+	# and accepts any under Engine/Plugins/Bridge whatever its BuildId
+	# (ModuleManager.cpp:1930-1965). Binaries trees are git-ignored, so an extra
+	# manifest is invisible to the hashes and to git status. Every such manifest
+	# in the scanned engine trees must therefore be a byte-pinned closure member,
+	# with no BuildId filter. An explicit stack sees reparse-point directories
+	# instead of following them, and each one fails closed.
+	$Closure = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	foreach ($ClosurePath in $ClosurePaths) { [void] $Closure.Add(($ClosurePath -replace '\\', '/').ToLowerInvariant()) }
+	$Names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+	foreach ($Name in $script:HostToolManifestNames) { [void] $Names.Add($Name) }
+	$EngineFull = [System.IO.Path]::GetFullPath($ResolvedEngine).TrimEnd('\', '/')
+	$Failure = 'host_tools_manifest_set_invalid: host-tools validation failed because the engine binaries trees hold a module manifest outside the attested closure, a reparse-point directory, or an unreadable directory.'
+	$Pending = New-Object System.Collections.Stack
+	foreach ($Root in $script:HostToolManifestRoots) {
+		$Directory = New-Object System.IO.DirectoryInfo (Join-Path $EngineFull $Root)
+		if ($Directory.Exists) { $Pending.Push($Directory) }
+	}
+	try {
+		while ($Pending.Count -gt 0) {
+			$Directory = $Pending.Pop()
+			if ($Directory.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { throw $Failure }
+			foreach ($Child in $Directory.EnumerateDirectories()) { $Pending.Push($Child) }
+			foreach ($File in $Directory.EnumerateFiles('*.modules')) {
+				if (-not $Names.Contains($File.Name)) { continue }
+				if (-not $Closure.Contains($File.FullName.Substring($EngineFull.Length + 1).Replace('\', '/').ToLowerInvariant())) { throw $Failure }
+			}
+		}
+	} catch { throw $Failure }
 }
 function Assert-UniqueAttestationJsonProperty([string] $Raw) {
 	# Ported from Assert-UniqueJsonProperty in Invoke-EngineRunnerGate.ps1:
@@ -550,15 +665,21 @@ function Get-RequiredHostToolRecord([string] $RelativePath) {
 		sizeBytes = [long] (Get-Item -LiteralPath $ToolFull -Force).Length
 	}
 }
-function Test-HostToolsAttestation([string] $AttestationFull) {
-	# The attestation is external local state produced only by the explicit
-	# operator attestation step after an authorized provisioning/rebuild. It
-	# must list exactly the receipt-derived host build-product closure -
-	# re-derived fresh here, never trusted from the record - and every file
-	# must re-verify by content hash and size against the binaries on disk;
-	# Build.version alone never proves provenance.
+function Read-HostToolsAttestation([string] $AttestationFull, [string] $ExpectedSha256) {
+	# Reads the external attestation record exactly once (TA-014 amendment): the
+	# bytes hashed here are the bytes parsed here, and the record is never read
+	# again in this run. When the gate passes the hash it reported, any other
+	# bytes fail closed. Only the record's own structure is checked here; the
+	# receipt-derived closure is compared after this phase's editor build.
 	if ((Get-Item -LiteralPath $AttestationFull -Force).Length -gt $script:AttestationMaxBytes) { throw "HostToolsAttestationPath '$HostToolsAttestationPath' exceeds the $($script:AttestationMaxBytes)-byte attestation record bound; host-tools validation fails closed." }
-	$Raw = Get-Content -LiteralPath $AttestationFull -Raw
+	$Bytes = [System.IO.File]::ReadAllBytes($AttestationFull)
+	if ($Bytes.Length -gt $script:AttestationMaxBytes) { throw "HostToolsAttestationPath '$HostToolsAttestationPath' exceeds the $($script:AttestationMaxBytes)-byte attestation record bound; host-tools validation fails closed." }
+	$Hasher = [System.Security.Cryptography.SHA256]::Create()
+	try { $Sha256 = ([System.BitConverter]::ToString($Hasher.ComputeHash($Bytes)) -replace '-', '').ToLowerInvariant() } finally { $Hasher.Dispose() }
+	if (-not [string]::IsNullOrEmpty($ExpectedSha256) -and $Sha256 -cne $ExpectedSha256) { throw 'host_tools_attestation_changed: host-tools validation failed because the attestation record does not match the hash the gate reported.' }
+	# Decode the same bytes; the reader drops the UTF-8 BOM Set-Content writes.
+	$Reader = [System.IO.StreamReader]::new([System.IO.MemoryStream]::new($Bytes), [System.Text.Encoding]::UTF8, $true)
+	try { $Raw = $Reader.ReadToEnd() } finally { $Reader.Dispose() }
 	# The raw duplicate scan runs before conversion: Windows PowerShell's
 	# ConvertFrom-Json reports case-colliding keys as a generic parse failure,
 	# and newer PowerShell keeps one value silently.
@@ -574,14 +695,15 @@ function Test-HostToolsAttestation([string] $AttestationFull) {
 	foreach ($Name in $RecordNames) {
 		if ($script:AttestationPropertyNames -cnotcontains $Name) { throw "Attestation record carries unexpected property '$Name'; host-tools validation fails closed." }
 	}
-	if (-not (Test-AttestationJsonInteger $Record.schemaVersion) -or [long] $Record.schemaVersion -ne 1) { throw "Attestation record schemaVersion must be the JSON integer 1; host-tools validation fails closed." }
+	if (-not (Test-AttestationJsonInteger $Record.schemaVersion) -or [long] $Record.schemaVersion -ne 2) { throw "Attestation record schemaVersion must be the JSON integer 2; host-tools validation fails closed." }
 	if ($Record.engineGitRevision -isnot [string] -or [string] $Record.engineGitRevision -cne $script:CanonicalEngineRevision) { throw "Attestation record is bound to engine revision '$($Record.engineGitRevision)', not the canonical pinned '$script:CanonicalEngineRevision'; host-tools validation fails closed." }
+	# Recorded, never compared to -SourceRevision: every develop merge would
+	# otherwise invalidate the record.
+	if ($Record.projectRevision -isnot [string] -or [string] $Record.projectRevision -cnotmatch '^[0-9a-f]{40}$') { throw 'Attestation record projectRevision must be a lowercase 40-character commit hash; host-tools validation fails closed.' }
 	if ($Record.provisioningEvidence -isnot [string] -or [string]::IsNullOrWhiteSpace([string] $Record.provisioningEvidence) -or ([string] $Record.provisioningEvidence) -cnotmatch '^[^\x00-\x1f]{1,512}$') { throw 'Attestation record provisioningEvidence must be a nonempty bounded string; host-tools validation fails closed.' }
 	if (-not (Test-AttestationTimestamp $Record.createdUtc)) { throw 'Attestation record createdUtc must be a bounded round-trip UTC timestamp; host-tools validation fails closed.' }
 	if ($Record.files -isnot [array]) { throw "Attestation record 'files' must be a JSON array; host-tools validation fails closed." }
-	$DerivedPaths = Get-HostToolReceiptProductPath
 	$Entries = @($Record.files)
-	if ($Entries.Count -ne $DerivedPaths.Count) { throw "Attestation record must list exactly the $($DerivedPaths.Count) receipt-derived host build products; found $($Entries.Count) entries. Host-tools validation fails closed." }
 	$SeenPaths = @{}
 	foreach ($Entry in $Entries) {
 		if ($null -eq $Entry -or $Entry -isnot [System.Management.Automation.PSCustomObject]) { throw 'Every attestation file entry must be a JSON object; host-tools validation fails closed.' }
@@ -597,9 +719,21 @@ function Test-HostToolsAttestation([string] $AttestationFull) {
 		if (-not (Test-AttestationJsonInteger $Entry.sizeBytes)) { throw "Attestation entry for '$EntryPath' must carry sizeBytes as a nonnegative JSON integer; host-tools validation fails closed." }
 	}
 	Assert-AttestedSizeBound @($Entries | ForEach-Object { [long] $_.sizeBytes })
+	$CreatedUtc = if ($Record.createdUtc -is [datetime]) { $Record.createdUtc.ToString('o') } else { [string] $Record.createdUtc }
+	return @{ sha256 = $Sha256; entries = $Entries; seenPaths = $SeenPaths; createdUtc = $CreatedUtc; projectRevision = [string] $Record.projectRevision }
+}
+function Assert-HostToolsAttestation($Attestation) {
+	# Runs after this phase's project editor build, so anything that build (or
+	# anything else) changed in the closure fails closed. The closure is
+	# re-derived from the receipt the build just wrote, never trusted from the
+	# record; Build.version alone never proves provenance.
+	$DerivedPaths = Get-HostToolReceiptProductPath
+	$Entries = @($Attestation.entries)
+	if ($Entries.Count -ne $DerivedPaths.Count) { throw "Attestation record must list exactly the $($DerivedPaths.Count) receipt-derived host build products; found $($Entries.Count) entries. Host-tools validation fails closed." }
 	foreach ($RequiredPath in $DerivedPaths) {
-		if (-not $SeenPaths.ContainsKey((($RequiredPath -replace '\\', '/').ToLowerInvariant()))) { throw "Attestation record is missing receipt-derived host build product '$RequiredPath'; host-tools validation fails closed." }
+		if (-not $Attestation.seenPaths.ContainsKey((($RequiredPath -replace '\\', '/').ToLowerInvariant()))) { throw "Attestation record is missing receipt-derived host build product '$RequiredPath'; host-tools validation fails closed." }
 	}
+	Assert-HostToolManifestSet $DerivedPaths
 	foreach ($Entry in $Entries) {
 		$Actual = Get-RequiredHostToolRecord ([string] $Entry.path)
 		if ([long] $Entry.sizeBytes -ne [long] $Actual.sizeBytes) { throw "Host tool '$($Entry.path)' size does not match its attestation record; host-tools validation fails closed." }
@@ -607,20 +741,31 @@ function Test-HostToolsAttestation([string] $AttestationFull) {
 	}
 }
 function Write-HostToolsAttestation {
-	param([string] $HostToolsBoundary, [string] $EngineRevision, [string] $ProvisioningEvidence)
+	param([string] $HostToolsBoundary, [string] $EngineRevision, [string] $ProvisioningEvidence, [string] $HostToolsAttestationSha256)
 	# Explicit operator attestation step: run only after a successful,
-	# authorized host-tools provisioning/rebuild, with -ProvisioningEvidence
-	# referencing that build's retained evidence. This step builds nothing.
+	# authorized host-tools provisioning build, with -ProvisioningEvidence
+	# referencing that build's retained evidence. This step builds only the
+	# project editor modules and rewrites no existing engine file: it runs the
+	# same in-phase editor build as a prebuilt phase and then hashes the closure
+	# derived from the receipt that build wrote.
 	if (-not [string]::IsNullOrWhiteSpace($HostToolsBoundary)) { throw "Stage 'AttestHostTools' does not accept -HostToolsBoundary." }
 	if (-not [string]::IsNullOrWhiteSpace($EngineRevision)) { throw "Stage 'AttestHostTools' does not accept -EngineRevision; the canonical pinned revision is enforced from the engine checkout." }
+	if (-not [string]::IsNullOrWhiteSpace($HostToolsAttestationSha256)) { throw "Stage 'AttestHostTools' does not accept -HostToolsAttestationSha256; it writes a new record." }
 	if ([string]::IsNullOrWhiteSpace($HostToolsAttestationPath)) { throw "Stage 'AttestHostTools' requires -HostToolsAttestationPath (a local file path outside the repository and engine roots)." }
 	if ([string]::IsNullOrWhiteSpace($ProvisioningEvidence)) { throw "Stage 'AttestHostTools' requires -ProvisioningEvidence referencing the retained evidence of the explicit successful provisioning/rebuild that produced the host tools." }
 	$AttestationFull = Assert-SafeExternalPath 'HostToolsAttestationPath' $HostToolsAttestationPath
 	if (Test-Path -LiteralPath $AttestationFull) { throw "HostToolsAttestationPath '$HostToolsAttestationPath' already exists; an attestation is an explicit new record - remove the old record first." }
 	$AttestationParent = Split-Path -Parent $AttestationFull
 	if (-not (Test-Path -LiteralPath $AttestationParent -PathType Container)) { throw "HostToolsAttestationPath parent directory '$AttestationParent' does not exist." }
+	Assert-NoAdditionalPluginPath 'host-tools attestation'
+	# projectRevision is the checked-out HEAD, never free text.
+	$ProjectHead = Get-GitLine $ProjectRoot @('rev-parse', 'HEAD')
+	if ($null -eq $ProjectHead -or $ProjectHead.Count -ne 1 -or $ProjectHead[0] -cnotmatch '^[0-9a-f]{40}$' -or $SourceRevision -cne $ProjectHead[0]) { throw 'host_tools_revision_mismatch: host-tools attestation failed because -SourceRevision is not the checked-out project HEAD.' }
+	Assert-CanonicalCleanEngine
+	Invoke-TimedStep 'host-editor-modules-build' { Invoke-HostEditorModulesBuild }
 	Assert-CanonicalCleanEngine
 	$DerivedPaths = Get-HostToolReceiptProductPath
+	Assert-HostToolManifestSet $DerivedPaths
 	$Files = @($DerivedPaths | ForEach-Object { Get-RequiredHostToolRecord $_ })
 	Assert-AttestedSizeBound @($Files | ForEach-Object { [long] $_.sizeBytes })
 	# Written to a temporary sibling and moved into place: File.Move is atomic
@@ -628,8 +773,9 @@ function Write-HostToolsAttestation {
 	# writer can never overwrite or interleave an existing attestation.
 	$TemporaryPath = '{0}.tmp-{1}' -f $AttestationFull, [guid]::NewGuid().ToString('N')
 	[ordered]@{
-		schemaVersion = 1
+		schemaVersion = 2
 		engineGitRevision = $script:CanonicalEngineRevision
+		projectRevision = $ProjectHead[0]
 		files = $Files
 		provisioningEvidence = $ProvisioningEvidence
 		createdUtc = [DateTime]::UtcNow.ToString('o')
@@ -643,9 +789,9 @@ function Write-HostToolsAttestation {
 	return [ordered]@{ mode = 'attest'; status = 'written'; engineRevision = $script:CanonicalEngineRevision }
 }
 function Resolve-HostToolsBoundary {
-	param([string] $HostToolsBoundary, [string] $EngineRevision, [string] $ProvisioningEvidence)
+	param([string] $HostToolsBoundary, [string] $EngineRevision, [string] $ProvisioningEvidence, [string] $HostToolsAttestationSha256)
 	if ($Stage -eq 'Provenance') {
-		if (-not [string]::IsNullOrWhiteSpace($HostToolsBoundary) -or -not [string]::IsNullOrWhiteSpace($EngineRevision) -or -not [string]::IsNullOrWhiteSpace($HostToolsAttestationPath)) { throw "Stage 'Provenance' runs no build phase and does not accept host-tools parameters." }
+		if (-not [string]::IsNullOrWhiteSpace($HostToolsBoundary) -or -not [string]::IsNullOrWhiteSpace($EngineRevision) -or -not [string]::IsNullOrWhiteSpace($HostToolsAttestationPath) -or -not [string]::IsNullOrWhiteSpace($HostToolsAttestationSha256)) { throw "Stage 'Provenance' runs no build phase and does not accept host-tools parameters." }
 		return [ordered]@{ mode = 'not_applicable'; status = 'no_build_phase'; engineRevision = $null }
 	}
 	if (-not [string]::IsNullOrWhiteSpace($ProvisioningEvidence)) { throw "-ProvisioningEvidence is only accepted with -Stage AttestHostTools." }
@@ -653,22 +799,40 @@ function Resolve-HostToolsBoundary {
 	# an implicit multi-hour host editor/engine rebuild.
 	if ([string]::IsNullOrWhiteSpace($HostToolsBoundary)) { throw "host_tools_configuration_required: -HostToolsBoundary must be chosen explicitly - 'Prebuilt' with -EngineRevision and -HostToolsAttestationPath, or 'Rebuild' as an explicit operator-authorized full host-tools rebuild." }
 	if ($HostToolsBoundary -ne 'Prebuilt') {
-		if (-not [string]::IsNullOrWhiteSpace($EngineRevision) -or -not [string]::IsNullOrWhiteSpace($HostToolsAttestationPath)) { throw '-EngineRevision and -HostToolsAttestationPath are only accepted with -HostToolsBoundary Prebuilt.' }
+		if (-not [string]::IsNullOrWhiteSpace($EngineRevision) -or -not [string]::IsNullOrWhiteSpace($HostToolsAttestationPath) -or -not [string]::IsNullOrWhiteSpace($HostToolsAttestationSha256)) { throw '-EngineRevision, -HostToolsAttestationPath, and -HostToolsAttestationSha256 are only accepted with -HostToolsBoundary Prebuilt.' }
 		return [ordered]@{ mode = 'rebuild'; status = 'authorized_rebuild'; engineRevision = $null }
 	}
-	# Fail closed on every unproven condition. The prebuilt boundary skips the
+	# Fail closed on every unproven condition, in the order TA-014 (amended for
+	# Issue #267) fixes and the fixtures pin. The prebuilt boundary skips the
 	# host editor/engine tool build only when the attested host tools provably
 	# belong to the exact clean canonical pinned engine revision; it never
 	# falls back to rebuilding them silently.
+	# 1. Parameter checks, including the private-plugin refusal.
 	$NormalizedRevision = ([string] $EngineRevision).ToLowerInvariant()
 	if ($NormalizedRevision -notmatch '^[0-9a-f]{40}$') { throw "HostToolsBoundary 'Prebuilt' requires -EngineRevision with the full 40-character canonical pinned engine commit hash." }
 	if ($NormalizedRevision -cne $script:CanonicalEngineRevision) { throw "-EngineRevision '$NormalizedRevision' is not the repository's canonical pinned engine revision '$script:CanonicalEngineRevision'; the prebuilt host-tools boundary fails closed." }
 	if ([string]::IsNullOrWhiteSpace($HostToolsAttestationPath)) { throw "HostToolsBoundary 'Prebuilt' requires -HostToolsAttestationPath naming the external host-tools attestation record; produce it with -Stage AttestHostTools after an explicit authorized provisioning build." }
+	Assert-NoAdditionalPluginPath 'prebuilt packaging'
+	# 2. Clean canonical engine.
 	Assert-CanonicalCleanEngine
+	# 3. Read and structurally check the record once, bound to the gate's hash.
 	$AttestationFull = Assert-SafeExternalPath 'HostToolsAttestationPath' $HostToolsAttestationPath
 	if (-not (Test-Path -LiteralPath $AttestationFull -PathType Leaf)) { throw "HostToolsAttestationPath '$HostToolsAttestationPath' does not exist; produce it with -Stage AttestHostTools after an explicit authorized provisioning build." }
-	Test-HostToolsAttestation $AttestationFull
-	return [ordered]@{ mode = 'prebuilt'; status = 'verified'; engineRevision = $NormalizedRevision }
+	$Attestation = Read-HostToolsAttestation $AttestationFull $HostToolsAttestationSha256
+	# 4. Build the project editor modules; 5. the engine source is still clean.
+	Invoke-TimedStep 'host-editor-modules-build' { Invoke-HostEditorModulesBuild }
+	Assert-CanonicalCleanEngine
+	# 6-7. Receipt and launch checks, set equality, manifest set, content.
+	Assert-HostToolsAttestation $Attestation
+	return [ordered]@{
+		mode = 'prebuilt'
+		status = 'verified'
+		engineRevision = $NormalizedRevision
+		attestationSha256 = $Attestation.sha256
+		attestationCreatedUtc = $Attestation.createdUtc
+		attestationSchemaVersion = 2
+		attestedProjectRevision = $Attestation.projectRevision
+	}
 }
 function Read-StageRecord([string] $Root, [string] $ExpectedStage) {
 	$RecordPath = Join-Path $Root ('phase-{0}.json' -f $ExpectedStage.ToLowerInvariant())
@@ -731,7 +895,7 @@ $script:TimingRecordPath = Join-Path $ResolvedLogs 'build-timing.json'
 # blocks below, so each helper's dependency on the run's parameters stays
 # visible at its call site.
 $EvidenceIdentityArguments = @{ RunnerName = $RunnerName }
-$HostToolsArguments = @{ HostToolsBoundary = $HostToolsBoundary; EngineRevision = $EngineRevision; ProvisioningEvidence = $ProvisioningEvidence }
+$HostToolsArguments = @{ HostToolsBoundary = $HostToolsBoundary; EngineRevision = $EngineRevision; ProvisioningEvidence = $ProvisioningEvidence; HostToolsAttestationSha256 = $HostToolsAttestationSha256 }
 $DerivedDataCacheArguments = @{ DerivedDataCachePath = $DerivedDataCachePath; CacheFallback = $CacheFallback }
 # From here on a valid LogRoot exists, so every later validation and phase --
 # including fail-closed host-tools and cache-identity errors that stop the run
@@ -773,7 +937,9 @@ try {
 	if ($script:HostToolsState.mode -eq 'prebuilt') {
 		# Pinned UE 5.8.1 maps -nocompileeditor to SkipBuildEditor: UAT omits
 		# the host editor/engine targets from BuildProjectCommand while the
-		# client and server project targets still build with -clean.
+		# client and server project targets still build with -clean. The
+		# project editor modules the cook loads come from the host-tools
+		# step's in-phase build (Invoke-HostEditorModulesBuild).
 		$CommonArguments += '-nocompileeditor'
 	}
 	$ClientArguments = $CommonArguments + @('-target=AethelnOnlineClient', '-platform=Win64', "-clientconfig=$Configuration", '-client', "-archivedirectory=$ClientArchive")
