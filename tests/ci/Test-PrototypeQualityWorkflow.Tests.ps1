@@ -477,7 +477,7 @@ Assert-True ($AutomationOutcome.Contains('AETHELN_UPLOAD_OUTCOME: ${{ steps.auto
 Assert-True ($UnrealReceipt.Contains('AETHELN_AUTOMATION_REASON: ${{ needs.trusted-editor-automation.outputs.automation_reason }}') -and $UnrealReceipt.Contains('Write-Output (''unreal_automation_outcome reason='' + $AutomationReason)') -and $UnrealReceipt.IndexOf('unreal_automation_outcome reason=') -lt $UnrealReceipt.IndexOf("throw 'unreal_raw_artifact_binding_invalid'")) 'The unreal publisher must print the fixed automation reason before its binding check.'
 Assert-True ($UntrackedInputQuery.Count -eq 1 -and $AutomationResidue.Contains("'" + $UntrackedInputQuery[0].Groups[1].Value + "'")) 'Residue cleanup must use exactly the untracked-input query that the next managed sync enforces.'
 
-# TA-023: content-reference-validation is a separate owner-only engine job after
+# TA-024: content-reference-validation is a separate owner-only engine job after
 # the editor job, selected only by the accepted selector. It runs the launcher
 # from the managed workspace without a control checkout, re-sync, or lease, so
 # it verifies the exact clean revision first and fails closed otherwise.
@@ -840,7 +840,7 @@ try {
 		}
 	}
 
-	# TA-023 content launch. A moved, dirty, or unreadable managed workspace stops
+	# TA-024 content launch. A moved, dirty, or unreadable managed workspace stops
 	# before the launcher; the launcher gets the explicit bounds and a fresh
 	# run/attempt output directory, its output stays in runner-local files, a
 	# passing report is copied to runner temp, and the output directory is

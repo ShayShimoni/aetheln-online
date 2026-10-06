@@ -952,7 +952,7 @@ jobs:
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false))
           Write-Output ('unreal_automation_outcome reason=' + $Reason)
 
-  # Package 3C content-reference-validation producer (TA-023). A separate
+  # Package 3C content-reference-validation producer (TA-024). A separate
   # owner-only engine job runs after trusted-editor-automation, only when the
   # selector selects the obligation, and runs the content-validation launcher
   # from the registered managed compile workspace against the live Asset

@@ -242,7 +242,7 @@ $EditorAutomation = [string] $JobBodies['trusted-editor-automation']
 Assert-True ($EditorAutomation -match '(?m)^    needs: trusted-candidate-compile\r?$' -and $EditorAutomation -match "github\.event_name == 'pull_request'" -and $EditorAutomation -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $EditorAutomation -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $EditorAutomation -match 'github\.triggering_actor == github\.repository_owner') 'Editor automation must need the compile and keep the owner, same-repository, and triggering-actor trust.'
 Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 45\r?$' -and $EditorAutomation -notmatch 'timeout-minutes:\s*1440' -and $EditorAutomation -notmatch '(?m)^    if: always\(\)' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result' -and $EditorAutomation -notmatch '-Mode ') 'Editor automation must keep its 45-minute ceiling, never bypass prerequisite status, and never invoke the engine gate.'
 Assert-True ((($TrustedCompile -split '\r?\n' | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch 'AethelnOnlineEditor|automation_') 'The compile job must keep its pre-producer shape.'
-# TA-023: content validation is a separate owner-only engine job after the editor job,
+# TA-024: content validation is a separate owner-only engine job after the editor job,
 # selected only by the accepted selector, with its own 34-minute ceiling, the shared
 # FIFO queue, and no status bypass; it never invokes the engine gate.
 $ContentValidation = [string] $JobBodies['trusted-content-validation']

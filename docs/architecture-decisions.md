@@ -858,7 +858,7 @@ Every accepted decision records:
   TA-020), so an automation failure leaves the compile job and native receipt
   intact while the unreal receipt reports the fixed `automation_reason` and
   fails red at its raw binding check. Host-lease wrapping remains a follow-up.
-  TA-023 adds a fifth publisher, `content-receipt-shadow`, which proves
+  TA-024 adds a fifth publisher, `content-receipt-shadow`, which proves
   `content-reference-validation` from the exact
   `content-validation-report.json` of the separate `trusted-content-validation`
   job with zero native exit and no cleanup claim.
@@ -885,7 +885,7 @@ Every accepted decision records:
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `clean-package-provenance-smoke` remains the
-  only unsupported obligation; TA-023 made `content-reference-validation`
+  only unsupported obligation; TA-024 made `content-reference-validation`
   live. The gap
   path checks only job success, the exact artifact name, and the artifact ID and
   digest format; it does not do the aggregate's artifact-API and byte
@@ -1215,7 +1215,7 @@ Every accepted decision records:
   amendment below replaces that check with a leased re-sync.
   `trusted-candidate-compile` returns to its
   pre-producer shape, and the TA-015 30-minute compile watchdog is unchanged.
-  The engine runner then had six jobs; TA-023 adds `trusted-content-validation`,
+  The engine runner then had six jobs; TA-024 adds `trusted-content-validation`,
   so it now has seven jobs.
 - **Evidence:** first live runs on runner 21. The `trusted-candidate-compile`
   step "Compile supported client and server targets" took 102 s on PR #204 (a
@@ -1844,7 +1844,7 @@ Every accepted decision records:
   automation, a per-area test split is proposed, or the pinned engine gains a
   desktop SHA-256 in `Core`.
 
-### TA-023 - Separate Engine-Runner Job for Content Reference Validation
+### TA-024 - Separate Engine-Runner Job for Content Reference Validation
 
 - **Status:** Accepted
 - **Acceptance:** Lead decisions D1-D10 on issue #120 (2026-10-03), recorded

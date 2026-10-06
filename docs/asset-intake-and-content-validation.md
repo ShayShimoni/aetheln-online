@@ -501,7 +501,7 @@ On owner pull requests that select `content-reference-validation`, the
 `trusted-content-validation` CI job runs this launcher against the live Asset
 Registry in the managed compile workspace, and `content-receipt-shadow`
 publishes a non-authoritative shadow receipt
-([TA-023](architecture-decisions.md#ta-023---separate-engine-runner-job-for-content-reference-validation)).
+([TA-024](architecture-decisions.md#ta-024---separate-engine-runner-job-for-content-reference-validation)).
 That receipt claims only report integrity and the six `reference_boundary`
 checks; the other families still run, and any deterministic error fails the
 report. A green content receipt is never content approval, and it is not cook
