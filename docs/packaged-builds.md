@@ -97,6 +97,21 @@ three host-tools arguments with `-HostToolsBoundary Rebuild`. There is no
 default or automatic rebuild fallback: an omitted selection or an unverified
 prebuilt attestation stops the build.
 
+A prebuilt run first builds only the project editor modules
+(`AethelnOnlineEditor`) through `scripts/ci/InitialPreparation.BuildInvocation.ps1`,
+then verifies the schema-2 attestation against the receipt that build wrote
+(issue #267, TA-014 amendment). Local prebuilt use therefore needs plain
+paths: the wrapper rejects engine, repository, toolchain, and log roots that
+contain `" ; % ! & | < > ^ ( )` or a reparse point. Keep
+`UE_ADDITIONAL_PLUGIN_PATHS` empty; a prebuilt run or an attestation refuses
+it. The run fails closed with a fixed reason: `host_tools_plugin_paths_set`,
+`host_tools_attestation_changed`, `host_editor_engine_changes`
+(the engine needs an authorized build and a new attestation),
+`host_editor_build_failed`, `host_editor_capture_failed`,
+`host_tools_receipt_invalid`, `host_tools_launch_invalid`, or
+`host_tools_manifest_set_invalid`. The editor build's `build.log` and
+`native-result.json` stay under `<LogRoot>/host-editor-build`.
+
 The script produces `WindowsClient` and `LinuxServer` below `ArchiveRoot` and
 writes `build-provenance.json` beside them. Right after each cook it hashes that
 target's canonical `Saved/Cooked/<CookPlatform>/AethelnOnline/AssetRegistry.bin`
