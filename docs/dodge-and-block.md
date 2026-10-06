@@ -64,7 +64,8 @@ relative to the root of the pinned UE 5.8.1 source, revision `71fe36aac5`.
 7. **The block arc is measured from server state.** The incoming direction is
    the yaw-only vector from the defender's capsule center to the attacker's
    combat-frame origin at the contact time, compared with the defender's
-   server-simulated actor yaw, never the client control rotation.
+   server-simulated actor yaw, never the client control rotation. #60 adopts
+   that direction (Technical decision T3).
 8. **A blocked contact never resolves twice.** The hook applies Guard pressure
    once; a Guard break ends the block at the contact time and affects only
    later contacts.
@@ -172,8 +173,15 @@ dodge: the server fails closed.
 
 The press sets `bWantsToDodge` on the owning client's movement component, but
 only when `CanPredictDodge()` passes. That local gate reads the owner-replicated
-cooldown tag and Endurance and the local movement state. It decides whether to
-send a request and predict; it is not GAS prediction. The next saved move
+cooldown tag and Endurance, the dodge's activation-blocking tags as the owner
+knows them, and the local movement state. The owner sees the replicated
+`State.*` tags directly. The chain's commitment tag (Q10) is a server-only
+loose tag in #60, so the gate derives it from #60's owner-only
+`ClientCombatActivation` record, which carries the step's start time and its
+commitment offset, until that window ends or `ClientChainEnded` arrives.
+Without that check, under Q10 every dodge pressed during an attack's
+commitment window would be predicted, refused, and rolled back. The gate
+decides whether to send a request and predict; it is not GAS prediction. The next saved move
 carries `FLAG_Custom_2`, and the flag is cleared after that move, so it marks
 exactly one move: the start move.
 
@@ -223,9 +231,23 @@ substitutions:
 | 4 Sequence | Replaced by the engine's move-timestamp rule (above) |
 | 5 Ability lookup | Unchanged; the ability must be flagged movement-carried |
 | 6 Content version | The flagged move's dodge `ContentVersion` against the granted ability |
-| 6a to 6d (#60 P2) | Not applicable: a dodge has no aim, and the move's client timestamp is checked by the engine's move-timestamp rule instead of a time sample |
+| 6a to 6d (#60 P2) | Not applicable: a dodge has no aim, and the move's client timestamp is checked by the engine's move-timestamp rule instead of a time sample (#60's text changes, dependency 6 on #60) |
 | 7 Phase and instance | `Press` only. The single instance must be inactive, and the movement state must allow a start (no dodge in progress and, under Q3, on the ground). Otherwise `ActivationBlocked` |
-| 8 to 10 | Unchanged: cooldown, cost, and tags; activate inside the seam scope; commit; accept |
+| 8 and 9 | Unchanged: cooldown, cost, and tags; activate inside the seam scope; commit |
+| 10 Accept | Replaced. No sequence advances, and #60's last accepted raw aim and client time do not advance, because a dodge has none. The accepted event carries the activation id and the server ordinal (see [Observability Events](#observability-events)). The owner gets `ClientMovementActivationOutcome(ClientTimeStamp, Accepted)` |
+
+Every outcome of the entry, accepted or rejected, goes to the owner through
+`ClientMovementActivationOutcome` and is correlated by the server ordinal;
+none touches #19's step-10 state.
+
+**The validator is split, not fed a synthesized request.** The entry never
+builds a `FAethelnCombatActivationRequest` and never calls `ValidateRequest`
+(`Source/GameCombat/Public/AethelnAbilitySystemComponent.h:65-68`), so no
+zero aim or zero sequence can reach #19's or #60's last-accepted state. P3
+moves the steps both routes share (2, 5, 6, and 7) into pure helpers that
+`ValidateRequest` and the entry each call; the request-only steps (3, 4, and
+6a to 6d) stay in `ValidateRequest`. #60 P2 changes the same signature, so
+whichever of the two lands second adapts to the other.
 
 `ServerSubmitActivation` refuses a movement-carried ability with
 `MalformedRequest`, so each ability has exactly one route. The choke point is
@@ -467,7 +489,8 @@ struct GAMECOMBAT_API FAethelnActiveDefense
   actor yaw and the incoming direction is at most `ArcHalfAngleDegrees`
   (inclusive). The incoming direction is the horizontal vector from the
   defender's capsule center to the attacker's combat-frame origin at the
-  contact time. #60 already interpolates that origin per sub-step and holds
+  contact time, not the contact location or the sweep direction; #60 must
+  adopt it as its "contact direction" (T3). #60 already interpolates that origin per sub-step and holds
   defenders at their end-of-frame pose. A zero-length direction is outside
   (fails closed). The actor yaw is server-simulated and rate-limited on the
   ground; the control rotation is client-supplied and is never used.
@@ -533,8 +556,9 @@ change halfway through a contact.
 - **Not predicted:** cost, cooldown, `State.*` tags, the invulnerability
   window, the block state, Guard, and every contact result. Both abilities are
   `ServerOnly` in both policies. TC-008 is untouched.
-- **Local gate:** reading the owner-replicated cooldown tag and Endurance to
-  decide whether to press-predict is presentation logic. A stale local view
+- **Local gate:** reading the owner-replicated cooldown tag, Endurance, and
+  blocking tags, and the commitment window from #60's owner record, to decide
+  whether to press-predict is presentation logic. A stale local view
   produces a refused dodge and one correction, which P5 measures.
 
 ## Replication and Outcome Reporting
@@ -571,7 +595,7 @@ correlation only. No GameNet vocabulary changes.
 | Event | Subject | Safe reason | Correlation |
 | --- | --- | --- | --- |
 | Dodge accepted | `Dodge` | `Accepted` | Activation id, ability id, server ordinal |
-| Dodge rejected | `Dodge`; `Cooldown` for `OnCooldown`; `Resource` for `InsufficientResource` | #19's mapping | Ability id from step 5, server ordinal |
+| Dodge rejected | `Dodge`; `Cooldown` for `OnCooldown`; `Resource` for `InsufficientResource` | #19's mapping | Ability id from step 6 onward, as #19's rule (T21), server ordinal |
 | Block press or release accepted | `Block` | `Accepted` | #19 seam fields |
 | Block rejected | `Block`; `Cooldown`; `Resource` | #19's mapping | #19 seam fields |
 | Committed `Avoided` result (#60 emits) | `Dodge` | `Accepted` | The attack's activation id, ability id, sequence |
@@ -618,7 +642,7 @@ closed. The keys live in shared `Config/DefaultGame.ini` for #19's reason.
    such abilities, the new outcome RPC, and the server ordinal. P3 updates the
    #19 specification: Decision 4 and Activation Seam (a second, server-internal
    transport into the same pipeline), Validation order (the substitution
-   table), Rejection Telemetry (the ordinal, and the subject category for
+   table and the split validator), Rejection Telemetry (the ordinal, and the subject category for
    ordinary results taken from the ability: `Dodge`, `Block`, otherwise
    `Ability`), and Closing the Stock Routes (the entry is the only
    server-internal route that opens a seam scope). P3 adds rows to T11 (a seam
@@ -636,18 +660,27 @@ closed. The keys live in shared `Config/DefaultGame.ini` for #19's reason.
    (pass step 4), and the seam and the movement-carried entry apply a
    requester's due boundaries before validating. P3 exposes a boundary
    registration for timelines that are not chain steps.
-2. **P4: time-exact avoidance (T2).** Step 3 asks `IsAvoidingAt(ContactTime)`;
-   `State.DodgeInvulnerable` joins the authored avoidance-tag set for observers
-   and gating.
+2. **P4: time-exact avoidance (T2).** Step 3 asks `IsAvoidingAt(ContactTime)`
+   for the dodge. `State.DodgeInvulnerable` stays out of the authored
+   avoidance-tag set: an interval-backed tag is never checked by presence,
+   because the driver removes it at a mid-frame boundary only after the
+   frame's contacts (pass step 4), so a presence check would still avoid
+   contacts after `InvulnerableEnd`. The tag serves gating and observers only.
 3. **P4: the defense step.** Step 4 reads `GetActiveDefense()`, evaluates the
-   slot's interval at the contact time and the arc as defined above, calls
-   `OnBlockedHit` once, records its consequence, and ends that contact's
-   resolution. #60 P4's test defense state uses the same slot.
+   slot's interval at the contact time and the arc as defined above, with the
+   incoming direction of T3 as "the contact direction", calls `OnBlockedHit`
+   once, records its consequence, and ends that contact's resolution. #60 P4's
+   test defense state uses the same slot.
 4. **Guard pressure (Q7).** If attack-authored, #60's step definition gains
    `GuardPressure` with a content-version bump, in whichever of #60 P4 and #18
    P4 lands second.
 5. **Result events.** The committed-result event uses subject `Dodge` for
    `Avoided` and `Block` for `Blocked` and `GuardBroken`.
+6. **The scope of steps 6a to 6d.** #60's Validation additions say the steps
+   apply to every request through the seam, for every ability. #18 P3 amends
+   that text: they do not apply to the movement-carried entry, which carries
+   no aim and no time sample, and the entry advances neither the last accepted
+   raw aim nor the client time.
 
 ## Test Plan
 
@@ -717,7 +750,7 @@ drops chosen copies and models a reliable resend as a later arrival.
 | D5 | `Aetheln.Movement.Net.DodgeDeliveryConditions` | P2 | H | Normal, high-latency, and packet-loss delivery; a duplicated copy is simulated once; an older reordered move is dropped; a lost first copy is processed once from the old-move resend; all copies lost gives no dodge and no authority call; a zero-delta flagged move is not processed; the authority is called exactly once per received flagged move, including mid-dodge and airborne ones; a forced update between a flagged move and its late arrival drops that move with no authority call; a forced update mid-dodge advances the displacement and the next correction converges the client; a refused flagged move followed by silence makes no second authority call and starts no dodge when the forced updates run; an unacknowledged pawn simulates nothing and calls nothing; every profile asserts the server's simulated-move count |
 | D6 | `Aetheln.Movement.Net.DodgeGroundAndCollision` | P2 | H | A wall shortens the path equally on both sides; leaving a ledge ends the dodge; an airborne flag does not start one (Q3 pinned with a test policy); no authority means no dodge |
 | D7 | `Aetheln.GameCombat.Defense.DodgeDefinitionFailsClosed` | P3 | H | Grant refused for non-finite or non-positive values, each ordering violation, `MoveDuration > ActionEnd`, a missing movement-carried flag, missing blocking tags, and (if Q4) zero cost with zero cooldown |
-| D8 | `Aetheln.GameCombat.Defense.DodgeMovementCarriedRoute` | P3 | H | The dodge activates only through the entry; `ServerSubmitActivation` for it is `MalformedRequest`; the stock routes stay refused; the scope opens for the dodge spec only; content version mismatch is `IncompatibleVersion`; precedence follows the substitution table |
+| D8 | `Aetheln.GameCombat.Defense.DodgeMovementCarriedRoute` | P3 | H | The dodge activates only through the entry; `ServerSubmitActivation` for it is `MalformedRequest`; the stock routes stay refused; the scope opens for the dodge spec only; content version mismatch is `IncompatibleVersion`; precedence follows the substitution table; a seam `Press` for a test seam ability right after an accepted dodge is accepted, and the dodge leaves `LastAcceptedSequence` and #60's last accepted aim and client time unchanged |
 | D9 | `Aetheln.GameCombat.Defense.DodgeCostCooldownAndRepeats` | P3 | H | Acceptance applies one cost and one cooldown; flagged moves during the dodge give `ActivationBlocked`, during the cooldown `OnCooldown`, with low Endurance `InsufficientResource`; rejections have no side effect; one outcome per processed flagged move; each draws one token |
 | D10 | `Aetheln.GameCombat.Defense.DodgeWindowBoundaries` | P3 | H | `S` is the processing time; `IsAvoidingAt` is true at `S + InvulnerableStart` and false at `S + InvulnerableEnd`; each tag exists exactly over its window; a request at exactly `S + ActionEnd` is not blocked by the dodge; withheld moves neither extend nor shorten the window |
 | D11 | `Aetheln.GameCombat.Defense.DodgeEndToEnd` | P3 | H | A client pawn and a server pawn with the real PlayerState authority: an accepted dodge produces no correction and the predicted path; a predicted dodge refused for cooldown rolls back with one correction; the owner receives one outcome per flagged move |
@@ -735,7 +768,7 @@ drops chosen copies and models a reliable resend as a later arrival.
 | D23 | `Aetheln.GameCombat.Defense.ActionRelations` | P4 | H | The adopted Q10 relations with test tags: a dodge ends a block; a block is refused during `State.Dodging`; the chain's commitment tag blocks both; a dodge or block activation resets the chain (`OtherAction`); a second defense slot fails closed |
 | D24 | `Aetheln.GameCombat.Defense.NetworkConditionsBlock` | P4 | H | Press and Release under normal, high-latency, and packet-loss delivery around enemy contacts: blocked exactly when the server arrival precedes the contact under the stamping rule; duplicated and reordered requests get sequence reasons; the hook never runs twice |
 | D25 | `Aetheln.GameCombat.Defense.DefenseResultTelemetry` | P4 | H | `Avoided`, `Blocked`, and `GuardBroken` emit the events in the table, with no target identity and no Guard value |
-| D26 | `Aetheln.POC.Input.DodgeAndBlockBindings` | P5 | H | A dodge press sets the flag only in Reticle mode and when the local gate passes; right mouse maps to Press and Release; Cursor entry releases a held block; the recapture click is never a block |
+| D26 | `Aetheln.POC.Input.DodgeAndBlockBindings` | P5 | H | A dodge press sets the flag only in Reticle mode and when the local gate passes; the gate fails during the commitment window of an owner `ClientCombatActivation` record and while a replicated blocking tag is present; right mouse maps to Press and Release; Cursor entry releases a held block; the recapture click is never a block |
 | D27 | `Aetheln.GameCombat.Net.DodgeAndBlockTwoClients` | P5 | P | Additional PIE evidence under #82 C1 and C2: the owner's predicted dodge and the other client's view follow the same path; outcomes go to the owner only; both clients see the tags and cues; refused-dodge correction rates recorded |
 | D28 | Packaged two-client dodge and block run | later | K | Evidence for #2 and #48; not required to merge #18 |
 
@@ -826,6 +859,7 @@ Guard break duration; the rate-bucket values (#45).
 | --- | --- | --- |
 | T1 (#19) | Carry the dodge request on the movement stream into a movement-carried seam entry, or make the dodge a non-ability movement action that applies #19's effects directly. | The movement-carried entry (see [Technical decision T1](#technical-decision-t1-the-movement-carried-seam-entry)). It keeps one eligibility path, and the #19 text changes are listed in [Dependencies on #19](#dependencies-on-19). |
 | T2 (#60) | Evaluate avoidance and the defense slot at the contact time (`IsAvoidingAt`, the slot's interval), or by tag presence when #60 resolves the contact. | At the contact time. #60's driver applies boundaries after it resolves the frame's contacts, so a tag check cannot tell a contact before a mid-frame window boundary from one after it. The #60 changes are dependencies 2 and 3 in [Dependencies on #60](#dependencies-on-60). |
+| T3 (#60) | What "the contact direction" in #60's step 4 is: the yaw-only vector from the defender's capsule center to the attacker's combat-frame origin at the contact time, the direction to the contact location, or the sweep direction. | The vector to the attacker's combat-frame origin (see [Defense state exposed to #60](#defense-state-exposed-to-60)). It depends only on where the attacker stands, so a shape cannot reach around a block. The cost: a wide sweep that reaches the defender's flank while the attacker stands in front is blocked. #60 implements it in dependency 3. |
 
 Decisions that belong to other owners, recorded so they are not lost: rewind
 for dodge and block ordering (#2, TC-002); every numeric value (#45, #107);
