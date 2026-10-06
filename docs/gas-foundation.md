@@ -689,9 +689,11 @@ The client must not control event volume in the observability critical lane.
 Names follow `Aetheln.<Area>.<Group>.<Case>`. Each test is
 `IMPLEMENT_SIMPLE_AUTOMATION_TEST` with `EditorContext | EngineFilter`. The P2
 tests, their headless-world helper, and the test-only ability UCLASS live in
-the editor-only `GameTests` module (`Source/GameTests/Private/`), which depends
-on `GameCombat`, `GameplayAbilities`, and `GameplayTags`, so the Client and
-Server targets carry no test class. The test-only native tags (`Ability.Test.*`,
+the editor-only `GameTests` module (`Source/GameTests/Private/`), whose
+dependencies follow the `GameTests` row of the
+[Technical Architecture module table](technical-architecture.md#unreal-module-boundaries)
+([TA-023](architecture-decisions.md#ta-023---editor-only-gametests-module-for-project-automation-and-content-validation)),
+so the Client and Server targets carry no test class. The test-only native tags (`Ability.Test.*`,
 `Test.*`) are the exception: the engine accepts native tags only from Runtime
 modules, and client and server tag sets must match, so they are declared in
 `GameCore` under `WITH_DEV_AUTOMATION_TESTS` and are absent from Shipping
