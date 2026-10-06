@@ -157,7 +157,7 @@ launcher installation.
 | `GameUI` | CommonUI screens, HUD, presentation view models | `GameCore`; presentation-safe combat interfaces | Authority decisions, direct service or database access |
 | `GameNet` | Sessions, admission, transfer client/server adapters, protocol boundaries, structured observability service | `GameCore`; vendor-neutral interfaces | Combat truth, durable state ownership |
 | `GameServer` | Dedicated-server composition, allocation hooks, service adapters, server-only orchestration | `GameCore`, `GameCombat`, `GameNet` | Client presentation assets |
-| `GameTests` | Editor-only Unreal automation harness (#85): project and module load tests. Module type `Editor`, listed only by the Editor target | `Core` (private) | Gameplay, runtime, or server code; anything a game, client, or server target loads |
+| `GameTests` | Editor-only automation module: project and module load tests (#85), GAS, combat, and observability tests (#19), and the content-validation commandlet and its tests (#120). Module type `Editor`, listed only by the Editor target ([TA-023](architecture-decisions.md#ta-023---editor-only-gametests-module-for-project-automation-and-content-validation)) | Private dependencies only: project modules the Editor target lists, and the engine and engine-plugin modules (runtime, developer, or editor) that its tests and commandlet need. An engine third-party library needs a TA-023 justification; today only OpenSSL, for SHA-256 provenance checks | Gameplay, runtime, or server code; anything a game, client, or server target loads |
 
 Rules:
 
@@ -166,6 +166,8 @@ Rules:
 - Vendor SDKs live in dedicated adapter modules or plugins selected by an
   accepted architecture decision.
 - `GameServer` is excluded from client targets.
+- `GameTests` is listed only by the Editor target, and no other module depends
+  on it.
 - Server builds must not acquire hard references to client-only UI, audio,
   Niagara, camera, or high-detail art assets.
 - Gameplay data is versioned and loaded through Unreal's Asset Manager where
