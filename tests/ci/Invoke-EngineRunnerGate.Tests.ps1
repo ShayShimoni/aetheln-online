@@ -452,14 +452,15 @@ echo CLIENT_SECRET build_client_secret_marker
 exit /b 9
 )
 exit /b 0'
-	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot,$DerivedDataCachePath,$CacheFallback,$HostToolsBoundary,$EngineRevision,$HostToolsAttestationPath,$RunnerName,$BuildNumber)
-@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot;DerivedDataCachePath=$DerivedDataCachePath;CacheFallback=$CacheFallback;HostToolsBoundary=$HostToolsBoundary;EngineRevision=$EngineRevision;HostToolsAttestationPath=$HostToolsAttestationPath;RunnerName=$RunnerName;BuildNumber=$BuildNumber;HasBuildNumber=$PSBoundParameters.ContainsKey(''BuildNumber'')}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
+	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot,$DerivedDataCachePath,$CacheFallback,$HostToolsBoundary,$EngineRevision,$HostToolsAttestationPath,$HostToolsAttestationSha256,$RunnerName,$BuildNumber)
+@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot;DerivedDataCachePath=$DerivedDataCachePath;CacheFallback=$CacheFallback;HostToolsBoundary=$HostToolsBoundary;EngineRevision=$EngineRevision;HostToolsAttestationPath=$HostToolsAttestationPath;HostToolsAttestationSha256=$HostToolsAttestationSha256;RunnerName=$RunnerName;BuildNumber=$BuildNumber;HasBuildNumber=$PSBoundParameters.ContainsKey(''BuildNumber'')}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
 if($env:RUNNER_TEST_UBT_OUTPUT_PACKAGE){Get-Content $env:RUNNER_TEST_UBT_OUTPUT_PACKAGE}
 if($env:RUNNER_TEST_PHASE_SPAWN){Start-Process -FilePath $env:RUNNER_TEST_DESCENDANT_EXE -ArgumentList @("-NoProfile","-Command","Start-Sleep -Seconds 120") -WindowStyle Hidden|Out-Null}
 if($env:RUNNER_TEST_PHASE_SLEEP){Start-Sleep -Seconds ([int]$env:RUNNER_TEST_PHASE_SLEEP)}
 if($Stage){
 New-Item -ItemType Directory -Force -Path $LogRoot|Out-Null
 if($env:RUNNER_TEST_PHASE_FAIL -eq $Stage){Write-Output "error P1234 phase fixture failure";exit 9}
+if($env:RUNNER_TEST_PHASE_HOST_EDITOR -eq $Stage){Write-Output "error: planted failed line at $EngineRoot\Engine\Source\Planted.cpp beside $HostToolsAttestationPath";Write-Output "planted build log marker line";throw "host_editor_engine_changes: the in-phase project editor build failed because it would rewrite existing engine files"}
 if($Stage -eq "Client"){
 New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "WindowsClient/AethelnOnline/Binaries/Win64")|Out-Null
 Set-Content (Join-Path $ArchiveRoot "WindowsClient/AethelnOnlineClient.exe") launcher
@@ -527,6 +528,7 @@ throw "revealing failure"
 	$env:RUNNER_TEST_SMOKE_HANG = ''
 	$env:RUNNER_TEST_PHASE_SLEEP = ''
 	$env:RUNNER_TEST_PHASE_FAIL = ''
+	$env:RUNNER_TEST_PHASE_HOST_EDITOR = ''
 	$env:RUNNER_TEST_PHASE_SPAWN = ''
 	$env:RUNNER_TEST_KILL_FAULT = ''
 	$env:RUNNER_TEST_HASH_BLOCK_SECONDS = ''
@@ -1413,12 +1415,37 @@ try {
 	$env:AETHELN_HOST_TOOLS_ATTESTATION = $AttestationFile
 	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
 	Assert-True ($Result.ExitCode -eq 0) "PackageClient with a valid prebuilt host-tools configuration must pass. Output: $($Result.Output)"
-	Assert-True (@((Read-Report $Result).checks | Where-Object { $_.name -eq 'host-tools-configuration' -and $_.status -eq 'passed' -and $_.message -eq 'host_tools_prebuilt' }).Count -eq 1) 'A valid prebuilt selection must be recorded as configured.'
+	# Issue #267 (SF1): the passed message carries the SHA-256 of the record's
+	# bytes, path-free, and the gate forwards the same hash to the controller,
+	# which fails closed unless the bytes it reads hash to it.
+	$AttestationSha256 = (Get-FileHash -LiteralPath $AttestationFile -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-True (@((Read-Report $Result).checks | Where-Object { $_.name -eq 'host-tools-configuration' -and $_.status -eq 'passed' -and $_.message -ceq ('host_tools_prebuilt attestation_sha256=' + $AttestationSha256) }).Count -eq 1) "A valid prebuilt selection must be recorded with the record hash. Actual: $(@((Read-Report $Result).checks | ForEach-Object message) -join '; ')"
+	Assert-True ((Get-Content -LiteralPath $Result.Report -Raw).IndexOf($AttestationFile, [StringComparison]::OrdinalIgnoreCase) -lt 0) 'The record hash message must not disclose the attestation path.'
 	Assert-True ((Read-Report $Result).runnerName -eq 'fixture-runner') 'The runner report must record the validated runner name.'
 	$PackageCall = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })[-1]
 	Assert-True ($PackageCall.HostToolsBoundary -eq 'Prebuilt' -and $PackageCall.EngineRevision -eq $Fixture.Revision.ToLowerInvariant()) 'The gate must forward the prebuilt boundary with the normalized pinned engine revision.'
 	Assert-True ($PackageCall.HostToolsAttestationPath -eq (Resolve-Path -LiteralPath $AttestationFile).Path) 'The gate must forward the resolved attestation record path.'
+	Assert-True ($PackageCall.HostToolsAttestationSha256 -ceq $AttestationSha256) 'The gate must forward the record hash it reported.'
 	Assert-True ($PackageCall.RunnerName -eq 'fixture-runner') 'The gate must forward the validated runner name to the build controller.'
+	$SecondAttestationFile = Join-Path $Fixture.Root 'host-tools-attestation-second.json'
+	Write-Fixture $SecondAttestationFile '{"fixture":"second attestation"}'
+	$env:AETHELN_HOST_TOOLS_ATTESTATION = $SecondAttestationFile
+	$SecondResult = Invoke-PhaseGate $Fixture 'PackageClient' -RunId '12346'
+	$env:AETHELN_HOST_TOOLS_ATTESTATION = $AttestationFile
+	$SecondSha256 = (Get-FileHash -LiteralPath $SecondAttestationFile -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-True ($SecondResult.ExitCode -eq 0 -and $SecondSha256 -cne $AttestationSha256 -and @((Read-Report $SecondResult).checks | Where-Object { $_.name -eq 'host-tools-configuration' -and $_.message -ceq ('host_tools_prebuilt attestation_sha256=' + $SecondSha256) }).Count -eq 1) 'Two valid records must give two different report hashes.'
+	$env:RUNNER_TEST_PHASE_HOST_EDITOR = 'Client'
+	$HostEditorResult = Invoke-PhaseGate $Fixture 'PackageClient' -RunId '12347'
+	$env:RUNNER_TEST_PHASE_HOST_EDITOR = ''
+	# SF7: a controller failure with a new host-tools reason reaches the report
+	# through the keep-line filter, while the engine root, the attestation path,
+	# and lines without a failure word stay out of the report and the job output.
+	Assert-ReportReason -Result $HostEditorResult -Reason 'build_failed' -Message 'A failed in-phase editor build must fail the package phase'
+	$HostEditorReport = Get-Content -LiteralPath $HostEditorResult.Report -Raw
+	Assert-True ($HostEditorReport.Contains('host_editor_engine_changes') -and @((Read-Report $HostEditorResult).checks | Where-Object { $_.name -eq 'host-tools-configuration' -and $_.message -ceq ('host_tools_prebuilt attestation_sha256=' + $AttestationSha256) }).Count -eq 1) 'The package check must carry the controller reason code beside the reported record hash.'
+	foreach ($Leaked in @($Fixture.Engine, $Fixture.Engine.Replace('\', '\\'), $AttestationFile, $AttestationFile.Replace('\', '\\'), 'planted build log marker line')) {
+		Assert-True ($HostEditorReport.IndexOf($Leaked, [StringComparison]::OrdinalIgnoreCase) -lt 0 -and $HostEditorResult.Output.IndexOf($Leaked, [StringComparison]::OrdinalIgnoreCase) -lt 0) "A host-editor failure must not disclose '$Leaked' in the report or the job output."
+	}
 	$env:AETHELN_HOST_TOOLS = 'rebuild-authorized'
 	Remove-Item Env:AETHELN_ENGINE_REVISION
 	Remove-Item Env:AETHELN_HOST_TOOLS_ATTESTATION
@@ -1514,6 +1541,6 @@ try {
 	Remove-Item Env:AETHELN_HOST_TOOLS_ATTESTATION -ErrorAction Ignore
 	Remove-Item Env:RUNNER_TEST_CLOCK_ROOT -ErrorAction Ignore
 	Remove-Item Env:RUNNER_TEST_CLOCK_BUILD -ErrorAction Ignore
-	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_SMOKE_HANG','RUNNER_TEST_PHASE_SLEEP','RUNNER_TEST_PHASE_FAIL','RUNNER_TEST_PHASE_SPAWN','RUNNER_TEST_KILL_FAULT','RUNNER_TEST_HASH_BLOCK_SECONDS','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineClient','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineServer','RUNNER_TEST_UBT_OUTPUT_PACKAGE','RUNNER_TEST_DESCENDANT_EXE','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
+	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_SMOKE_HANG','RUNNER_TEST_PHASE_SLEEP','RUNNER_TEST_PHASE_FAIL','RUNNER_TEST_PHASE_HOST_EDITOR','RUNNER_TEST_PHASE_SPAWN','RUNNER_TEST_KILL_FAULT','RUNNER_TEST_HASH_BLOCK_SECONDS','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineClient','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineServer','RUNNER_TEST_UBT_OUTPUT_PACKAGE','RUNNER_TEST_DESCENDANT_EXE','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
 	if (-not $RetainFixtureEvidence -and (Test-Path -LiteralPath $FixtureRoot)) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 }
