@@ -11,8 +11,10 @@ after an independent review and a fix verification). Pull requests P2 to P6
 deliver it in phases (see [PR Phasing](#pr-phasing-and-evidence)): P2 adds the
 PlayerState-owned ASC, the attribute set, the init effect, the combat game mode,
 the AI character base, and their tests; P3 adds the activation seam, the base
-ability with its choke point, grant validation, and the rejection telemetry; the
-abilities and the two-client evidence follow in P4 to P6.
+ability with its choke point, grant validation, and the rejection telemetry; P4
+adds the cost and cooldown overrides, the shared effects, the three Oathscar
+skeletons with their grant list and config, and their tests; the two-client
+evidence follows in P5 and P6.
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
@@ -260,6 +262,12 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
   maximum drops, `PostAttributeChange` on that maximum re-clamps the current
   value (`GAS/Public/AttributeSet.h:223`), because the current value's own
   `PreAttributeChange` does not fire. A current value is never scaled up.
+  **The re-clamp only lowers** (owner decision on #19, 2026-10-05): it writes
+  the base as the lower of the new maximum and the existing base, so lowering a
+  maximum never raises a base value, even while a positive temporary modifier
+  holds the current value above the base. Rewriting an unchanged base still
+  re-evaluates the current value, which its own clamp then lowers. The clamp
+  after instant effects follows the same rule.
 - **Replication:** all six use `COND_OwnerOnly` with `REPNOTIFY_Always`. Canon
   says opponent cues must not expose exact unrevealed resources (Secure
   Stealth and Opponent Readability in the combat document). Owner-only fails
@@ -292,7 +300,13 @@ All three derive from `UAethelnGameplayAbility`.
   `ProvisionalCooldownSeconds` (`TBD`), `bAcceptsRelease`. The prefix follows
   the spike (`Source/GameCombat/Public/AethelnSpikeAuthorityComponent.h:60-70`).
   Identity, cooldown tag, and activation tag rules are structure in the C++
-  constructor.
+  constructor. Until #107 and #45 decide, each section sets `ContentVersion=1`
+  and both placeholders to 0, which means no cost and no cooldown; automation
+  tests set their own values on the granted instances. `AAethelnPlayerState`
+  grants the three, in order, from `+GrantedAbilities` entries in its own
+  section.
+- **`State.Dead`** blocks every project ability: the base constructor adds it
+  to `ActivationBlockedTags`.
 - **Phase:** Press only by default; `bAcceptsRelease = false` for all three.
 - **`CostGameplayEffectClass` and `CooldownGameplayEffectClass` stay null.**
   The overrides apply the shared effects directly, so the engine's cost check
@@ -304,7 +318,15 @@ All three derive from `UAethelnGameplayAbility`.
   `ActivateAbility`. The partial `CommitAbilityCost` and `CommitAbilityCooldown`
   (and their Blueprint versions) are refused and apply nothing. If the
   activation has not committed when `TryActivateAbility` returns, the seam
-  cancels it and reports `InternalFailure`. Hold the Line may
+  cancels it and reports `InternalFailure`. That cancel is only a fallback:
+  `CancelAbility` does nothing for an ability that marks itself non-cancelable
+  (`GAS/Private/Abilities/GameplayAbility.cpp:743`), so a project ability ends
+  itself directly with `EndAbility`, as the seam's `EndForRelease` does, whether
+  or not its commit succeeded. A C++ subclass could still call `ApplyCost`,
+  `ApplyCooldown`, or `CommitExecute` directly, which Blueprint cannot; review
+  refuses that, so `CommitAbility` stays the only spend. The three skeletons do
+  not override `ActivateAbility`; they inherit the base one, which follows both
+  rules, and T17 pins them. Hold the Line may
   later hold its own state tag while active, `State.<Order>.<Name>` under the
   conventions (for example `State.Oathscar.HoldTheLine`, a technical
   identifier, not a display name). The PR that creates it adds it to the
@@ -335,8 +357,11 @@ the engine's `CheckCooldown` works unchanged
 from `SetByCaller.Cost.Endurance`; `ApplyCost` applies it with the activation's
 prediction key (always a server key in P2 to P5). A Guard or other cost is
 added only when a canon ability spends that resource. `CommitAbility`
-re-checks and applies both. Recovery windows, cooldowns, and resource recovery
-are separate states, and resource recovery is not #19 scope.
+re-checks and applies both. A zero cost or a zero cooldown applies no effect:
+a duration effect without a positive duration gets no expiry timer
+(`GAS/Private/GameplayEffect.cpp:4438-4441`), so it would never end. Recovery
+windows, cooldowns, and resource recovery are separate states, and resource
+recovery is not #19 scope.
 
 ### Prediction
 
@@ -697,7 +722,12 @@ so the Client and Server targets carry no test class. The test-only native tags 
 `Test.*`) are the exception: the engine accepts native tags only from Runtime
 modules, and client and server tag sets must match, so they are declared in
 `GameCore` under `WITH_DEV_AUTOMATION_TESTS` and are absent from Shipping
-builds. Test names keep the
+builds. The test-ability header itself stays unguarded: UHT does not recognize
+`WITH_DEV_AUTOMATION_TESTS` and skips the contents of such a block
+(`Engine/Source/Programs/Shared/EpicGames.UHT/Parsers/UhtHeaderFileParser.cs:1187-1194`),
+so guarded `UCLASS` types would lose their generated code and fail to compile.
+The editor-only module already keeps them out of Client and Server targets.
+Test names keep the
 `Aetheln.GameCombat.*` prefix. Tests that pin a policy set their own values,
 never a tuning number. **H** is a headless single authority world using the
 spike's harness and the in-memory sink (`SetTestSink`). **P** is PIE with a
@@ -716,19 +746,19 @@ matches the approved design; T32 is intentionally unassigned.
 | T5 | `Aetheln.GameCombat.Lifecycle.AvatarDestroyedWhilePossessed` | P2 | H | Null case fires first; avatar null; PlayerState ASC intact; no crash |
 | T6 | `Aetheln.GameCombat.Lifecycle.AIPawnOwnsAbilitySystem` | P2 | H | AI ASC on the pawn, Minimal, owner and avatar the pawn; possession refreshes actor info; no PlayerState |
 | T7 | `Aetheln.GameCombat.Attributes.ReplicationPolicy` | P2 | H | From the class default object: all six attributes `COND_OwnerOnly` and `REPNOTIFY_Always` |
-| T8 | `Aetheln.GameCombat.Attributes.ClampAndBounds` | P2 | H | Values clamp to `[0, Max]`; lowering each max re-clamps its current value |
+| T8 | `Aetheln.GameCombat.Attributes.ClampAndBounds` | P2 (P4 adds the lower-only case) | H | Values clamp to `[0, Max]`; lowering each max re-clamps its current value and lowers a base above it; with a positive temporary modifier active, lowering a max below the current value but above the base re-clamps the current value and never raises the base |
 | T9 | `Aetheln.GameCombat.Attributes.InitOnceThroughEffect` | P2 | H | Values arrive only through the init effect, once per PlayerState; every current value equals its configured value; re-possession does not reapply |
 | T10 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3 | H | Exactly five reflected fields; none named or typed as target, hit, contact, damage, magnitude, attribute, aim, cost, or cooldown (extends `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:186-189`) |
 | T11 | `Aetheln.GameCombat.ActivationSeam.ValidateMatrix` | P3 | H | Steps 1 to 7 with an injected clock: each failure, precedence, zero/lower/equal sequences, an accepted forward gap, Press while active, Release undeclared, a valid Release |
-| T12 | `Aetheln.GameCombat.ActivationSeam.RejectionHasNoSideEffect` | P3 | H | Every rejection leaves no cost, cooldown, state tag, sequence advance, or activation id; a failing commit gives `InternalFailure`; a valid Release advances the sequence and replaying it is rejected |
+| T12 | `Aetheln.GameCombat.ActivationSeam.RejectionHasNoSideEffect` | P3 | H | Every rejection leaves no cost, cooldown, state tag, sequence advance, or activation id; a failing commit gives `InternalFailure`, and so does a failing commit whose ability keeps running (the seam cancels it) and a commit through the refused partial `CommitAbilityCost` and `CommitAbilityCooldown`, which apply nothing; a valid Release advances the sequence and replaying it is rejected |
 | T13 | `Aetheln.GameCombat.ActivationSeam.StockRoutesRefused` | P3 | H | Nothing activates or commits via the single-ability RPCs, `ServerAbilityRPCBatch` (whole batch dropped, target-data cache untouched), `TryActivateAbilityByClass`, `TryActivateAbilitiesByTag`, `GiveAbilityAndActivateOnce`, a gameplay event matching a test trigger, or an ability activated from inside another ability's `ActivateAbility`. The trigger case grants its test ability directly, because T15 refuses triggers. The cache assertion uses a test accessor on the project ASC, because `AbilityTargetDataMap` is protected (`GAS/Public/AbilitySystemComponent.h:1650`, `:1671`). |
-| T14 | `Aetheln.GameCombat.ActivationSeam.RateBound` | P3 | H | With an injected clock and test-set bucket: excess requests get `RateLimited` with no side effect; refused stock-route calls draw from the same bucket; in-bound requests are unaffected |
-| T15 | `Aetheln.GameCombat.ActivationSeam.GrantValidationFailsClosed` | P3 | H | Grant refused for a class not deriving from `UAethelnGameplayAbility`, a client security policy, missing tag, content version 0, bad cost or cooldown, `AbilityTriggers`, `bReplicateInputDirectly`, or a spec input id |
+| T14 | `Aetheln.GameCombat.ActivationSeam.RateBound` | P3 | H | With an injected clock and test-set bucket: excess requests get `RateLimited` with no side effect; refused stock-route calls draw from the same bucket; in-bound requests are unaffected. The bucket runs before validation: zero-sequence, malformed, and no-avatar requests each spend a token, and once the bucket is empty a malformed request gets `RateLimited`, not its validation reason |
+| T15 | `Aetheln.GameCombat.ActivationSeam.GrantValidationFailsClosed` | P3 | H | Grant refused for a class not deriving from `UAethelnGameplayAbility`, a null class, a client security policy, a predicted execution policy, per-execution instancing, a missing tag, an identity outside the `Ability.` family or the bare root, content version 0, a negative or non-finite cost or cooldown, `AbilityTriggers`, `bReplicateInputDirectly`, a spec input id, or spec-level `DynamicAbilityTriggers`. Each definition case first shows the unchanged definition is grantable, the exact refusal count is pinned, and end to end the PlayerState grants only the valid configured class |
 | T16 | `Aetheln.GameCombat.ActivationSeam.CheatFlagsOff` | P3 | H | `AbilitySystem.IgnoreCooldowns` and `IgnoreCosts` are off by default (cheat variables, `GAS/Private/AbilitySystemGlobals.cpp:39-40`); the seam ignores them |
-| T17 | `Aetheln.GameCombat.Abilities.CostAndCooldownCommit` | P4 | H | Acceptance applies one cost and one cooldown; a request during the cooldown gets `OnCooldown`; after the test removes the cooldown effect (no ticking), the next is accepted |
-| T18 | `Aetheln.GameCombat.Abilities.ResourceBounds` | P4 | H | Endurance below cost gives `InsufficientResource`, no partial spend; cost equal to Endurance is accepted and leaves 0 |
-| T19 | `Aetheln.GameCombat.Abilities.TagAndStateGates` | P4 | H | `State.Dead` and a test blocking tag give `ActivationBlocked`; removing the tag allows activation |
-| T20 | `Aetheln.GameCombat.Abilities.DefinitionsAndVersions` | P4 | H | Three abilities with unique `Ability.` tags mapped to their semantic IDs, `ContentVersion >= 1`, ServerOnly policies, a cooldown tag, null effect classes, `bAcceptsRelease = false`; a version mismatch gives `IncompatibleVersion` |
+| T17 | `Aetheln.GameCombat.Abilities.CostAndCooldownCommit` | P4 | H | For each of the three skeletons, with test-set values on the granted instance: acceptance commits once through `CommitAbility`, applies one cost (Endurance drops by exactly the cost) and one cooldown effect that grants the ability's own cooldown tag for the set duration, and the activation ends itself without a cancel; a request during the cooldown gets `OnCooldown` and spends nothing; after the test removes the cooldown effect (no ticking), the next is accepted; one ability's cooldown never blocks another |
+| T18 | `Aetheln.GameCombat.Abilities.ResourceBounds` | P4 | H | Endurance below cost gives `InsufficientResource`, no partial spend; a non-finite or negative cost fails closed the same way; cost equal to Endurance is accepted and leaves 0; a zero cost is accepted at 0 Endurance and applies no cost effect; content check: no configured cost exceeds the configured `MaxEndurance` |
+| T19 | `Aetheln.GameCombat.Abilities.TagAndStateGates` | P4 | H | For each skeleton, `State.Dead` and a test block give `ActivationBlocked` with nothing spent or committed, and removing either allows activation. Which abilities block which is `TBD` (#60, #18), so the test block uses the ASC's blocked-ability tags (`BlockAbilitiesWithTags` on the ability's identity), as an active blocking ability would, and puts no test tag on a production ability |
+| T20 | `Aetheln.GameCombat.Abilities.DefinitionsAndVersions` | P4 | H | `DefaultGame.ini` grants exactly the three skeletons, in order, and every definition passes grant validation; unique `Ability.` tags whose native tag comments are their semantic IDs, `ContentVersion >= 1` loaded from the ini, `InstancedPerActor` and ServerOnly policies (nothing predicted), exactly one unique cooldown tag, null effect classes, `bAcceptsRelease = false`; through the configured grant list, a newer or older content version gives `IncompatibleVersion` and the matching one is accepted |
 | T21 | `Aetheln.GameCombat.Telemetry.ActivationOutcomes` | P3 | H | One event and one metric per ordinary outcome, matching the telemetry table; activation id empty on rejections, ability id only from step 6; a valid Release event carries the running activation id; public copy has no diagnostic code; zero-sequence rejections and refused stock-route calls are metric-only; a rate-limited flood gives one event and one outcome on entry and one aggregated metric on exit; a stock-route flood during a window folds into the suppressed count; teardown while limited flushes the exit metric. The test calls `SetRuntimeContext` itself (as `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:251` does), because `TryComposeCorrelation` drops every event without one (`Source/GameNet/Private/AethelnObservabilitySubsystem.cpp:149-152`). |
 | T22 | `Aetheln.Observability.Contracts.SchemaAndVocabulary` (update) | P3 | H | `RateLimited` is known, its string `rate-limited` is stable, the schema version is still 1 |
 | T23 | `Aetheln.GameCombat.Net.ClientAvatarConvergence` | P5 | P | On both clients the avatar is null before possession and equals the pawn after spawn, re-possession, and unpossession, including when the PlayerState arrives after the pawn |

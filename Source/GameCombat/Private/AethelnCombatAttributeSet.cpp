@@ -44,10 +44,13 @@ void UAethelnCombatAttributeSet::SetClampedBaseValue(const FGameplayAttribute& A
 {
 	// Server only: SetNumericAttributeBase has no authority check, and a client
 	// reaches the re-clamp when a lowered maximum replicates. Clients never write.
+	// Lower only (owner decision on #19): the base is never raised, even when a
+	// positive temporary modifier holds the current value above it. Rewriting an
+	// unchanged base still re-evaluates, and so re-clamps, that current value.
 	UAbilitySystemComponent* AbilitySystemComponent = GetOwningAbilitySystemComponent();
 	if (AbilitySystemComponent != nullptr && AbilitySystemComponent->IsOwnerActorAuthoritative())
 	{
-		AbilitySystemComponent->SetNumericAttributeBase(Attribute, NewValue);
+		AbilitySystemComponent->SetNumericAttributeBase(Attribute, FMath::Min(NewValue, AbilitySystemComponent->GetNumericAttributeBase(Attribute)));
 	}
 }
 
