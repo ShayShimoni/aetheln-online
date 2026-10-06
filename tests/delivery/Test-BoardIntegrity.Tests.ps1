@@ -29,10 +29,12 @@ function New-CleanSnapshot {
 	# Items without comments have never had a QA round. #9 is in QA with an
 	# open round, its comments newest first as an older page arrives, so
 	# createdAt, not list order, decides; its later legacy `## Post-merge QA,`
-	# heading is not a record. #10 is Dev Done and the closed Done #4 is after a
-	# recorded round. #6's start and record share a createdAt second, which
-	# counts as closed. #7's comments carry the start marker but not at the start
-	# of the first line, after a leading space, or in lowercase.
+	# heading and lowercase record are not records. #10 is Dev Done and the
+	# closed Done #4 is after a recorded round; #10's later legacy `QA round
+	# <date>` result line is not a start. #6's start and record share a
+	# createdAt second, which counts as closed. #7's comments carry the start
+	# marker but not at the start of the first line, after a leading space, or
+	# in lowercase.
 	$Items = @(
 		[ordered]@{ number = 1; state = 'OPEN'; status = 'Backlog'; release = ''; blockedReason = ''; body = "- [ ] not started" },
 		[ordered]@{ number = 2; state = 'OPEN'; status = 'Code Review'; release = ''; blockedReason = ''; body = "- [ ] pending" },
@@ -54,10 +56,12 @@ function New-CleanSnapshot {
 				(New-Comment '2026-10-04T00:00:00Z' 'QA round started on develop def5678.'),
 				(New-Comment '2026-10-02T00:00:00Z' "## Post-merge QA record, 2026-10-02`r`nResult: one criterion waits for a later round."),
 				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.'),
-				(New-Comment '2026-10-05T00:00:00Z' '## Post-merge QA, 2026-10-05 in the older heading.')) },
+				(New-Comment '2026-10-05T00:00:00Z' '## Post-merge QA, 2026-10-05 in the older heading.'),
+				(New-Comment '2026-10-05T00:00:00Z' '## post-merge qa record in lowercase.')) },
 		[ordered]@{ number = 10; state = 'OPEN'; status = 'Dev Done'; release = ''; blockedReason = ''; body = '- [ ] pending'; comments = @(
 				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.'),
-				(New-Comment '2026-10-02T00:00:00Z' '## Post-merge QA record, 2026-10-02')) }
+				(New-Comment '2026-10-02T00:00:00Z' '## Post-merge QA record, 2026-10-02'),
+				(New-Comment '2026-10-03T00:00:00Z' 'QA round 2026-10-03 on develop abc1234: all criteria pass.')) }
 	)
 	# PR 100 and hotfix PR 102 are ordinary PRs whose issues sit in Code
 	# Review. 101 and 103 are release and back-merge PRs whose linked issues
