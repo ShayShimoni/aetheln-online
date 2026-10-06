@@ -27,8 +27,9 @@ param(
 # `## Post-merge QA record` records its end. Both are case-sensitive. A round
 # is open while the latest start is newer by createdAt than the latest record.
 # `qa-status-without-round` reports a QA card with no open round, and
-# `qa-round-not-in-qa` an open round on a card outside QA. Closed issues and
-# Done cards are left to the other rules. A pull request links an
+# `qa-round-not-in-qa` an open round on a card outside QA. Both apply to every
+# board issue, open or closed, in any status, so a card cannot reach Done or
+# close with its round unrecorded. A pull request links an
 # issue through closingIssuesReferences or a `#<n>` in its title. PRs reference
 # their issue with a body `Refs #<n>` line and no closing keyword or
 # Development link, so the title is the usual link; a carried fix's `Refs` line
@@ -149,19 +150,17 @@ function Get-BoardViolation {
 		if ($State -ceq 'OPEN' -and $Status -cin @('Done', 'Released')) { Add-Violation -Rule 'open-issue-final-status' -Issue $Number -Detail "is open but in '$Status'" }
 		if ($Status -cin @('Release Candidate', 'Released') -and [string]::IsNullOrWhiteSpace((Get-OptionalText $Item 'release'))) { Add-Violation -Rule 'release-field-empty' -Issue $Number -Detail "is in '$Status' with an empty Release field" }
 		if ($Status -ceq 'Blocked' -and [string]::IsNullOrWhiteSpace((Get-OptionalText $Item 'blockedReason'))) { Add-Violation -Rule 'blocked-reason-empty' -Issue $Number -Detail 'is Blocked without a Blocked Reason' }
-		if ($State -ceq 'OPEN' -and $Status -cne 'Done') {
-			$LatestStart = $LatestRecord = [DateTimeOffset]::MinValue
-			foreach ($Comment in $(if ($Item.PSObject.Properties['comments']) { $Item.comments })) {
-				# A marker has no line break, so a body that starts with it has it at the start of its first line.
-				$Body = Get-OptionalText $Comment 'body'
-				$CreatedAt = [DateTimeOffset] $Comment.createdAt
-				if ($Body -clike 'QA round started*' -and $CreatedAt -gt $LatestStart) { $LatestStart = $CreatedAt }
-				if ($Body -clike '## Post-merge QA record*' -and $CreatedAt -gt $LatestRecord) { $LatestRecord = $CreatedAt }
-			}
-			$RoundOpen = $LatestStart -gt $LatestRecord
-			if ($Status -ceq 'QA' -and -not $RoundOpen) { Add-Violation -Rule 'qa-status-without-round' -Issue $Number -Detail "is in QA without an open QA round: no 'QA round started' comment is newer than the latest '## Post-merge QA record'" }
-			if ($RoundOpen -and $Status -cne 'QA') { Add-Violation -Rule 'qa-round-not-in-qa' -Issue $Number -Detail "has a QA round open since $($LatestStart.UtcDateTime.ToString('u')) but is in '$StatusLabel', not QA" }
+		$LatestStart = $LatestRecord = [DateTimeOffset]::MinValue
+		foreach ($Comment in $(if ($Item.PSObject.Properties['comments']) { $Item.comments })) {
+			# A marker has no line break, so a body that starts with it has it at the start of its first line.
+			$Body = Get-OptionalText $Comment 'body'
+			$CreatedAt = [DateTimeOffset] $Comment.createdAt
+			if ($Body -clike 'QA round started*' -and $CreatedAt -gt $LatestStart) { $LatestStart = $CreatedAt }
+			if ($Body -clike '## Post-merge QA record*' -and $CreatedAt -gt $LatestRecord) { $LatestRecord = $CreatedAt }
 		}
+		$RoundOpen = $LatestStart -gt $LatestRecord
+		if ($Status -ceq 'QA' -and -not $RoundOpen) { Add-Violation -Rule 'qa-status-without-round' -Issue $Number -Detail "is in QA without an open QA round: no 'QA round started' comment is newer than the latest '## Post-merge QA record'" }
+		if ($RoundOpen -and $Status -cne 'QA') { Add-Violation -Rule 'qa-round-not-in-qa' -Issue $Number -Detail "has a QA round open since $($LatestStart.UtcDateTime.ToString('u')) but is in '$StatusLabel', not QA" }
 	}
 
 	$PullsByIssue = @{}

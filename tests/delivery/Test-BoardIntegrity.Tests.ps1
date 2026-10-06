@@ -28,24 +28,33 @@ function New-CleanSnapshot {
 	param()
 	# Items without comments have never had a QA round. #9 is in QA with an
 	# open round, its comments newest first as an older page arrives, so
-	# createdAt, not list order, decides. #10 is Dev Done after a closed round.
-	# The closed Done #4 keeps a lone start, which only the existing rules judge.
-	# #7's comments carry the start marker but not at the start of the first line.
+	# createdAt, not list order, decides; its later legacy `## Post-merge QA,`
+	# heading is not a record. #10 is Dev Done and the closed Done #4 is after a
+	# recorded round. #6's start and record share a createdAt second, which
+	# counts as closed. #7's comments carry the start marker but not at the start
+	# of the first line, after a leading space, or in lowercase.
 	$Items = @(
 		[ordered]@{ number = 1; state = 'OPEN'; status = 'Backlog'; release = ''; blockedReason = ''; body = "- [ ] not started" },
 		[ordered]@{ number = 2; state = 'OPEN'; status = 'Code Review'; release = ''; blockedReason = ''; body = "- [ ] pending" },
 		[ordered]@{ number = 3; state = 'OPEN'; status = 'Blocked'; release = ''; blockedReason = 'Waiting on #2'; body = '' },
-		[ordered]@{ number = 4; state = 'CLOSED'; status = 'Done'; release = ''; blockedReason = ''; body = "## Acceptance criteria`n- [x] one`n- [X] two"; comments = @(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.') },
+		[ordered]@{ number = 4; state = 'CLOSED'; status = 'Done'; release = ''; blockedReason = ''; body = "## Acceptance criteria`n- [x] one`n- [X] two"; comments = @(
+				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.'),
+				(New-Comment '2026-10-02T00:00:00Z' '## Post-merge QA record, 2026-10-02')) },
 		[ordered]@{ number = 5; state = 'CLOSED'; status = 'Release Candidate'; release = 'v1.0.0-alpha.1'; blockedReason = ''; body = '- [x] done' },
-		[ordered]@{ number = 6; state = 'CLOSED'; status = 'Released'; release = 'v1.0.0'; blockedReason = ''; body = '- [x] done' },
+		[ordered]@{ number = 6; state = 'CLOSED'; status = 'Released'; release = 'v1.0.0'; blockedReason = ''; body = '- [x] done'; comments = @(
+				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.'),
+				(New-Comment '2026-10-01T00:00:00Z' '## Post-merge QA record, 2026-10-01')) },
 		[ordered]@{ number = 7; state = 'OPEN'; status = 'In Progress'; release = ''; blockedReason = ''; body = ''; comments = @(
 				(New-Comment '2026-10-01T00:00:00Z' 'Lead 2026-10-01: QA round started on develop abc1234.'),
-				(New-Comment '2026-10-02T00:00:00Z' "Work notes`r`nQA round started on the second line.")) },
+				(New-Comment '2026-10-02T00:00:00Z' "Work notes`r`nQA round started on the second line."),
+				(New-Comment '2026-10-03T00:00:00Z' ' QA round started after a leading space.'),
+				(New-Comment '2026-10-03T00:00:00Z' 'qa round started in lowercase.')) },
 		[ordered]@{ number = 8; state = 'OPEN'; status = 'Code Review'; release = ''; blockedReason = ''; body = "- [ ] pending" },
 		[ordered]@{ number = 9; state = 'OPEN'; status = 'QA'; release = ''; blockedReason = ''; body = '- [ ] pending'; comments = @(
 				(New-Comment '2026-10-04T00:00:00Z' 'QA round started on develop def5678.'),
 				(New-Comment '2026-10-02T00:00:00Z' "## Post-merge QA record, 2026-10-02`r`nResult: one criterion waits for a later round."),
-				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.')) },
+				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.'),
+				(New-Comment '2026-10-05T00:00:00Z' '## Post-merge QA, 2026-10-05 in the older heading.')) },
 		[ordered]@{ number = 10; state = 'OPEN'; status = 'Dev Done'; release = ''; blockedReason = ''; body = '- [ ] pending'; comments = @(
 				(New-Comment '2026-10-01T00:00:00Z' 'QA round started on develop abc1234.'),
 				(New-Comment '2026-10-02T00:00:00Z' '## Post-merge QA record, 2026-10-02')) }
@@ -130,7 +139,10 @@ try {
 		# An open round on a card outside QA, including a Blocked card and a reopened round.
 		@{ Rule = 'qa-round-not-in-qa'; Issue = 9; Mutate = { param($S) $S.items[8].status = 'Dev Done' } },
 		@{ Rule = 'qa-round-not-in-qa'; Issue = 10; Mutate = { param($S) $S.items[9].comments += , (New-Comment '2026-10-03T00:00:00Z' 'QA round started on develop def5678.') } },
-		@{ Rule = 'qa-round-not-in-qa'; Issue = 3; Mutate = { param($S) $S.items[2].comments = @(New-Comment '2026-10-03T00:00:00Z' 'QA round started on develop def5678.') } }
+		@{ Rule = 'qa-round-not-in-qa'; Issue = 3; Mutate = { param($S) $S.items[2].comments = @(New-Comment '2026-10-03T00:00:00Z' 'QA round started on develop def5678.') } },
+		# Closed and final cards are checked too: a round left unrecorded on a closed Done or Release Candidate card.
+		@{ Rule = 'qa-round-not-in-qa'; Issue = 4; Mutate = { param($S) $S.items[3].comments = @($S.items[3].comments[0]) } },
+		@{ Rule = 'qa-round-not-in-qa'; Issue = 5; Mutate = { param($S) $S.items[4].comments = @(New-Comment '2026-10-03T00:00:00Z' 'QA round started on develop def5678.') } }
 	)
 	$Index = 0
 	foreach ($Case in $Cases) {

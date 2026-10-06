@@ -119,18 +119,19 @@ the same result for tooling. It reports:
   is not on the board.
 - `code-review-without-pr`: a `Code Review` issue that no open PR links.
 - `duplicate-pr-issue`: an issue that more than one open PR links.
-- `qa-status-without-round`: an open issue in `QA` with no open QA round.
-- `qa-round-not-in-qa`: an open issue outside `QA` and `Done` with an open QA
-  round.
+- `qa-status-without-round`: an issue in `QA` with no open QA round.
+- `qa-round-not-in-qa`: an issue outside `QA` with an open QA round.
 
 The QA rules read issue comments, and two first-line markers are the
 contract. A comment whose first line starts with `QA round started` starts a
 round; one whose first line starts with `## Post-merge QA record` records
-its end. Both are case-sensitive. A round is open while the latest start is
-newer than the latest record. The check reads every comment of every board
-issue, and a failed read stops it rather than giving a partial result.
-Closed issues and `Done` cards are left to the other rules, so comments on
-finished tickets that predate the markers are not reinterpreted.
+its end. Both are case-sensitive, and other first lines, such as older
+`## Post-merge QA, <date>` headings, are not markers. A round is open while
+the latest start is newer than the latest record. The check reads every
+comment of every board issue, and a failed read stops it rather than giving
+a partial result. Both rules apply to every board issue, open or closed, in
+any status, so a round must be recorded before its card leaves `QA`, also
+for `Done`.
 
 A PR links an issue through a `#<issue>` in its title or a GitHub closing
 reference. The body's `Refs #<issue>` lines are not links, so the second
