@@ -125,6 +125,9 @@ The canon fixes the shape of the work:
   instant escape (Death, Logout, and Recovery Safety).
 - A committed dodge result is what may trigger later content; "a predicted
   dodge alone cannot trigger it" (`docs/characters-and-factions.md:289`).
+- Race, sex, and appearance never change "collision, reach, traces, timing"
+  (`docs/playable-peoples.md:29-31`). No dodge or block value, window, arc, or
+  reach reads them.
 
 **Resource identity.** The ledger's P10-043 row and Issue #18's 2026-07-29
 note predate Issues #103 and #105. Guard is the canonical
@@ -279,7 +282,7 @@ server.
   start applies from the beginning of the flagged move.
 - **Direction.** The yaw-only direction of the move's own acceleration (after
   `ConstrainInputAcceleration`, as the jump takeoff uses), fixed for the whole
-  dodge. With no input, the neutral direction applies (Q2). Remote clients see
+  dodge (no steering, Q15). With no input, the neutral direction applies (Q2). Remote clients see
   the server's path through replicated movement.
 - **Displacement.** While the dodge is in progress, walking physics runs with
   its velocity set to `Direction * Distance / MoveDuration`, ignoring input
@@ -287,7 +290,8 @@ server.
   reaches `MoveDuration` covers only the remaining time, so the path on open
   ground is exactly `Distance`. Floors, steps, and slopes follow engine walking
   rules; collision shortens the path the same way on client and server.
-  Leaving the ground ends the dodge. Facing rules are unchanged.
+  The speed is constant (Q15). Leaving the ground ends the dodge; whether a
+  jump may do so is Q14. Facing rules are unchanged.
 - **Correction.** The dodge state (in progress, elapsed time, direction) is
   part of the server's correction, through a custom move-response container
   (`CMC.h:2728`; `Runtime/Engine/Classes/GameFramework/CharacterMovementReplication.h:343-367`).
@@ -389,9 +393,9 @@ time.
 
 #19 P4 commits them: `CommitAbility` applies one Endurance cost (optional) and
 one `Cooldown.Dodge` effect at acceptance, inside the server move. Both are
-`TBD` (#107). A refused dodge spends nothing. Nothing is refunded if the
-displacement is later cut short, because the commit and the window are
-already authoritative.
+`TBD` (#107). A refused dodge spends nothing. Under the Q16 recommendation,
+nothing is refunded if the displacement is later cut short, because the
+commit and the window are already authoritative.
 
 ### Rejections
 
@@ -447,7 +451,9 @@ Right mouse sends `RequestActivation(Ability.Block, Press)` on press and
 - A valid `Release` is accepted and ends the block.
 - A `Release` while the block is not active (after a Guard break, death, or a
   dodge) is `ActivationBlocked`. It is benign, and the client treats it as
-  "already lowered".
+  "already lowered". It still emits one `Block` rejection event each time, so
+  rejection rates include this expected noise; #61 may suppress the Release
+  once it knows the block ended.
 - Duplicated and reordered requests get #19's sequence reasons; after #60 P2,
   steps 6a to 6d apply to both phases.
 
@@ -495,7 +501,10 @@ struct GAMECOMBAT_API FAethelnActiveDefense
   (fails closed). The actor yaw is server-simulated and rate-limited on the
   ground; the control rotation is client-supplied and is never used.
 - **One slot.** Registering while a slot is active fails closed. Block and Hold
-  the Line block each other (Q10), so this cannot happen through content.
+  the Line block each other (Q10), so this cannot happen through content. The
+  block registers the slot before it commits: a failed registration ends the
+  activation uncommitted, which #19's step 9 reports as `InternalFailure` with
+  nothing spent, and a failed commit clears the slot.
 
 ### The Guard hook
 
@@ -555,7 +564,9 @@ change halfway through a contact.
   to predict, and the server's correction is authoritative.
 - **Not predicted:** cost, cooldown, `State.*` tags, the invulnerability
   window, the block state, Guard, and every contact result. Both abilities are
-  `ServerOnly` in both policies. TC-008 is untouched.
+  `ServerOnly` in both policies. TC-008 is untouched: the displacement is
+  supported custom movement under the Prediction Matrix, not a GAS
+  prediction exception, so no architecture decision changes.
 - **Local gate:** reading the owner-replicated cooldown tag, Endurance, and
   blocking tags, and the commitment window from #60's owner record, to decide
   whether to press-predict is presentation logic. A stale local view
@@ -700,7 +711,8 @@ drive client moves and the harness below, as the movement tests do through
 `friend`. Native test tags follow #19's rule: they are declared in GameCore
 under `WITH_DEV_AUTOMATION_TESTS` (Test Plan in the #19 specification).
 
-The network-condition cases are automated simulations (owner decision 4).
+The network-condition cases are automated simulations (recommended in Q20, by
+analogy with #60 OQ9).
 **P2's first deliverable is a loopback harness.** The existing prediction pair
 cannot run them: both of its copies are `ROLE_Authority`, the client saves no
 moves, the server copy is fed through `MoveAutonomous` directly, and nothing
@@ -744,7 +756,7 @@ drops chosen copies and models a reliable resend as a later arrival.
 | # | Test | PR | Kind | What it proves |
 | --- | --- | --- | --- | --- |
 | D1 | `Aetheln.Movement.Net.DodgeFlagRoundTrip` | P2 | H | `FLAG_Custom_2` marks only the start move; it does not combine with neighbors; the move is important; once a move is acknowledged, the client itself selects the unacknowledged flagged move as the old move in the next packet; the server restores it; sprint and aim flags are unchanged |
-| D2 | `Aetheln.Movement.Net.DodgeDisplacementParity` | P2 | H | Prediction pair, test authority accepting: forward, lateral, diagonal, backward, and neutral input, with sprint, aim steering, and a turned camera. Every move is accepted; the path equals the test distance on open ground; the direction stays fixed; the proxy converges on the server |
+| D2 | `Aetheln.Movement.Net.DodgeDisplacementParity` | P2 | H | Prediction pair, test authority accepting: forward, lateral, diagonal, backward, and neutral input (neutral per the adopted Q2 answer), with sprint, aim steering, and a turned camera. Every move is accepted; the path equals the test distance on open ground; the direction stays fixed; the proxy converges on the server |
 | D3 | `Aetheln.Movement.Net.DodgeCorrectionReplay` | P2 | H | A forced correction mid-dodge restores dodge state from the response and replays the same path, once and repeatedly; saved moves never restore dodge state |
 | D4 | `Aetheln.Movement.Net.DodgeRefusedRollsBack` | P2 | H | Test authority refuses: the server moves without a dodge, corrects at the flagged move, the replay does not reapply it, and the client ends at the server's position |
 | D5 | `Aetheln.Movement.Net.DodgeDeliveryConditions` | P2 | H | Normal, high-latency, and packet-loss delivery; a duplicated copy is simulated once; an older reordered move is dropped; a lost first copy is processed once from the old-move resend; all copies lost gives no dodge and no authority call; a zero-delta flagged move is not processed; the authority is called exactly once per received flagged move, including mid-dodge and airborne ones; a forced update between a flagged move and its late arrival drops that move with no authority call; a forced update mid-dodge advances the displacement and the next correction converges the client; a refused flagged move followed by silence makes no second authority call and starts no dodge when the forced updates run; an unacknowledged pawn simulates nothing and calls nothing; every profile asserts the server's simulated-move count |
@@ -787,7 +799,7 @@ the manual PIE steps.
 | AC3 Server owns the invulnerability window | D10, D12, D13; [Server-owned windows](#server-owned-windows) |
 | AC4 Damage during valid invulnerability is rejected | D10, D22 |
 | AC5 Invalid repeated dodge requests are rejected | D5, D8, D9, D12; [Rejections](#rejections) |
-| DoD1 Normal, high-latency, and packet-loss cases are tested | Automated (owner decision 4): D5, D12, D24. D27 is additional PIE evidence. |
+| DoD1 Normal, high-latency, and packet-loss cases are tested | Automated (Q20 recommendation, pending owner confirmation): D5, D12, D24. D27 is additional PIE evidence. |
 | DoD2 The server-owned authored window is authoritative; animation only visualizes it | D10, D16; [Prediction Policy](#prediction-policy) |
 | DoD3 Boundary timestamp, duplicate/reordered request, cooldown, distance, disconnect, and missing-presentation cases | Boundaries D10, D19, D21; duplicate and reordered D5, D12, D24; cooldown D9; distance D2, D6; disconnect D14, D27; missing presentation D16 |
 | DoD4 Life-state cancellation through an authoritative test seam; #21 owns integrated death and respawn | D13; [Disconnect, life state, and missing presentation](#disconnect-life-state-and-missing-presentation) |
@@ -801,9 +813,9 @@ files untouched.
 | PR | Scope | Depends on |
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
-| **P2** Dodge movement | GameCore only: first the loopback harness (see [Test Plan](#test-plan)); then the authority interface and definition structs, `FLAG_Custom_2`, dodge simulation state, displacement, custom move-data and move-response containers, `EndDodgeForAuthority`, the receiver method, the test accessor; D1 to D6 with a test authority; the `docs/movement-poc.md` flag note. No game code implements the authority yet, so no dodge runs in game. | P1 |
-| **P3** Dodge authority | Dodge tags, `UAethelnDodgeAbility`, the movement-carried entry and outcome RPC, the ordinal, the PlayerState authority, windows and boundaries, `IsAvoidingAt`, the `State.Dead` binding, telemetry, the #19 specification and fixture changes; D7 to D16 (dodge rows). | P2, #19 P4, #60 P3 (boundary registration) |
-| **P4** Block and contact integration | Block tags, `UAethelnBlockAbility`, the defense slot, `UAethelnGuardPressureEffect`, the Guard hook and break, the Q10 relations; D13, D14, D16 block rows, D17 to D25. | P3, #60 P4, the answers to Q6 to Q8 and Q10 |
+| **P2** Dodge movement | GameCore only: first the loopback harness (see [Test Plan](#test-plan)); then the authority interface and definition structs, `FLAG_Custom_2`, dodge simulation state, displacement, custom move-data and move-response containers, `EndDodgeForAuthority`, the receiver method, the test accessor; D1 to D6 with a test authority; the `docs/movement-poc.md` flag note. No game code implements the authority yet, so no dodge runs in game. | P1, the answers to Q2, Q3, Q14, Q15, and Q20 |
+| **P3** Dodge authority | Dodge tags, `UAethelnDodgeAbility`, the movement-carried entry and outcome RPC, the ordinal, the PlayerState authority, windows and boundaries, `IsAvoidingAt`, the `State.Dead` binding, telemetry, the #19 specification and fixture changes; D7 to D16 (dodge rows). | P2, #19 P4, #60 P3 (boundary registration), the answers to Q4 and Q16, and #19's sign-off on T1 |
+| **P4** Block and contact integration | Block tags, `UAethelnBlockAbility`, the defense slot, `UAethelnGuardPressureEffect`, the Guard hook and break, the Q10 relations; D13, D14, D16 block rows, D17 to D25. | P3, #60 P4, the answers to Q6 to Q8, Q10, Q12, and Q17 to Q19, and #60's sign-off on T2 and T3 |
 | **P5** Bindings and two-client evidence | The receiver and input-sink release, the GameUI dodge key and right-mouse hold, Cursor-entry release; D26, D27. | P4, #60 P6 (input sink), #19 P5 (input-enabled pawn), Q1 |
 
 Guard and Endurance recovery are not #18 phases unless the owner assigns them
@@ -813,16 +825,18 @@ Guard and Endurance recovery are not #18 phases unless the owner assigns them
 
 Recorded as decided. Decisions 1, 2, and 5 are on
 [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) from the #60
-design review (PR #258); decisions 3 and 4 were made on
-[#60](https://github.com/ShayShimoni/aetheln-online/issues/60) as OQ1 and OQ9
-(owner, 2026-10-05).
+design review (PR #258); decision 3 was made on
+[#60](https://github.com/ShayShimoni/aetheln-online/issues/60) as OQ1 (owner,
+2026-10-05) and is a general prototype relation rule. Row 4 is not an #18
+decision: #60's OQ9 is scoped to #60, so #18 carries it only as the Q20
+recommendation until the owner confirms it.
 
 | # | Decision | Where it applies |
 | --- | --- | --- |
 | 1 | #18 owns the right-mouse block action alongside dodge. | [The Block](#the-block) |
 | 2 | #60 only resolves whether an incoming hit is blocked against an active defense state. | [Defense state exposed to #60](#defense-state-exposed-to-60), [Dependencies on #60](#dependencies-on-60) |
 | 3 | No friendly fire in the prototype. | [Interaction with #60 contacts](#interaction-with-60-contacts); enemy attackers in D20 to D24 |
-| 4 | Network-condition tests are automated simulations. | D5, D12, D24; [Test Plan](#test-plan) |
+| 4 | Not decided for #18. #60's OQ9 made #60's network-condition tests automated simulations; the same approach for #18 is the Q20 recommendation. | D5, D12, D24; [Test Plan](#test-plan) |
 | 5 | #18's block must expose to #60 three things: a defense state tag, an authored defense arc, and a server hook for the Guard consequence of a blocked hit, which #60 calls once per blocked hit. | [Defense state exposed to #60](#defense-state-exposed-to-60), [The Guard hook](#the-guard-hook) |
 
 ## Open Decisions
@@ -846,12 +860,19 @@ Guard break duration; the rate-bucket values (#45).
 | Q5 | Does blocking restrict movement speed or turning? | No, not in the prototype phases. Authored restrictions come later with #17's predicted movement, as for attacks (#60 OQ4). |
 | Q6 | Does a blocked hit deal any Health damage (chip)? | No. A blocked contact stops at the defense step. |
 | Q7 | Where does Guard pressure come from? | From the attack: each attack step authors its `GuardPressure` (canon gives Gate Step authored Guard pressure, `docs/characters-and-factions.md:313-314`). The alternative, a defense-side conversion of blocked damage, would replace one hook field. |
-| Q8 | What does a Guard break do, and can the block be raised with zero Guard? | It ends the block and prevents raising it again for an authored duration, with no stagger or interruption (those stay per-step #60 rules). A Press with zero Guard gets `InsufficientResource`. |
+| Q8 | What does a Guard break do, and can the block be raised with zero Guard? | It ends the block and prevents raising it again for an authored duration, with no stagger or interruption (those stay per-step #60 rules). A Press with zero Guard gets `InsufficientResource`, which needs a block `CheckCost` override, because #19's `CheckCost` checks only Endurance. |
 | Q9 | Who owns Guard and Endurance recovery? No issue does today (`docs/gas-foundation.md` Cost and cooldown: "resource recovery is not #19 scope"). Without it, Guard only falls until #21's respawn allowlist. | A new ticket under #19's resource grammar owns passive and delayed server-clock recovery for both, with values from #107, before P5's feel evidence. #18 does not design it. |
 | Q10 | Blocking and cancel relations (#19 Open Decision 6, for dodge and block). | An accepted dodge ends a held block. A block is refused while `State.Dodging` holds. The chain's commitment tag blocks both, and their activation after `CancelOpen` resets the chain. An attack press while blocking is refused (release first). Block and Hold the Line block each other. |
 | Q11 | Is a perfect block or parry in scope? | No. The canon places it in a Thread (`docs/characters-and-factions.md:287`), outside the default prototype. |
 | Q12 | Must #17 bound airborne facing before the block lands? Airborne aim tracking sets server facing with no rate limit (`docs/movement-poc.md:270-275`), so a jumping blocker could swing the arc instantly. | Yes: #17 bounds it before P4 merges, or the owner accepts the risk for the prototype (residual risk 3). |
 | Q13 | Semantic IDs for the shared dodge and block actions. | Proposed for #106: `combat.action.dodge` and `combat.action.block`. The tags do not wait on the IDs. |
+| Q14 | Can the player jump during a dodge? Leaving the ground ends the displacement and nothing blocks jump, so a jump right after the start would keep the full invulnerability window without the displacement. | No. Jump is refused while the displacement is in progress, inside the movement simulation, so prediction, replay, and the server agree. This is a dodge-state rule; #17's jump rules are otherwise unchanged. Leaving the ground any other way (a ledge) still ends the displacement, and the window stays fixed. |
+| Q15 | Can the player steer a dodge, and does its speed vary? As designed, the direction is fixed for the whole dodge and the speed is constant (`Distance / MoveDuration`). | No steering and constant speed in the prototype. Steering or a speed curve is a later authored feel change with a content-version bump, after P5's feel evidence. |
+| Q16 | Is anything refunded when the displacement is cut short (a wall, a ledge, death)? #60 raised the analogous buffered-cost case as OQ5. | No refund. The commit and the window are authoritative at acceptance, as #60 recommends for OQ5. |
+| Q17 | Can the player attack while `State.Dodging` holds? Q10 does not say. | No. The chain lists `State.Dodging` among its activation-blocking tags, so an attack `Press` during the dodge gets `ActivationBlocked` until `ActionEnd`, which #107 tunes. |
+| Q18 | Under Q10 an accepted dodge ends a held block at `S`, but invulnerability starts at `S + InvulnerableStart`. If `InvulnerableStart` (#107) is above zero, dodging out of a block opens a vulnerable gap. Is that acceptable? | Yes. The block ends at `S`, and the gap is exactly `InvulnerableStart`, which #107 tunes and may set to zero. The alternative, holding the block until `S + InvulnerableStart`, mixes block and dodge state in one interval. |
+| Q19 | Can the block be raised or held while airborne? Q12 assumes it can, but no question asks it. | Yes, with the arc measured from the server actor yaw, subject to Q12's airborne facing bound. If the owner rejects that bound, a block `Press` while not walking gets `ActivationBlocked` instead. |
+| Q20 | Are #18's network-condition cases (DoD1) automated simulations? #60's OQ9 decided this for #60 only. | Yes, by analogy with #60 OQ9: the harness profiles in D5, D12, and D24 cover normal, high-latency, and packet-loss delivery, and D27 is additional PIE evidence. |
 
 **Technical decisions for #19 and #60 sign-off:**
 
@@ -877,7 +898,9 @@ the remapping mechanism and controller layout (#82); display names.
 3. **Airborne facing** has no rate bound, which matters for the block arc
    (Q12). Owner: #17.
 4. **Move data has no schema version** (#82 F10). The dodge field in the
-   custom move data relies on build-identical clients and servers.
+   custom move data relies on build-identical clients and servers. F10's
+   revisit trigger, "when a flag is added", fires with `FLAG_Custom_2`; this
+   is that revisit, and it keeps the build-identical rule.
 5. **No resource recovery** until Q9 is answered.
 6. **Refused predictions are visible.** A stale local gate produces one
    correction. P5 records the rate.
@@ -889,3 +912,11 @@ the remapping mechanism and controller layout (#82); display names.
    over from before a reset could be resolved by a later move's outcome.
 9. **No death transition** until #21. A zero-Health target is inert to #60 but
    still holds its defense state until `State.Dead` arrives.
+10. **`TagOnly` tags under Iris.** The owner sees `State.Dodging` and
+    `State.Blocking` because, with Iris off
+    (`Runtime/Net/Iris/Private/Iris/IrisConfig.cpp:15`), the tag-count
+    container replicates to everyone (`COND_None`,
+    `GAS/Private/AbilitySystemComponent.cpp:1858`). Under Iris, with
+    `AbilitySystem.Fix.ReplicateTagCountContainerWithIris` false, `TagOnly`
+    tags move to the minimal replication tags, which skip the owner
+    (`COND_SkipOwner`, `:717-733`, `:1874`). Enabling Iris must revisit this.
