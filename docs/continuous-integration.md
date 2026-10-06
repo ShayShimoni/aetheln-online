@@ -1745,12 +1745,13 @@ decide them:
 - The exact secret scanner and SBOM format.
 - Artifact signing and the retention policy for local engine logs and archives.
 
-The repository-scoped self-hosted topology and weekly Saturday `02:00 UTC` cadence are accepted
-in [Architecture Decisions](architecture-decisions.md). A compile-capable
-runner is registered, and commit-specific live compile evidence exists for
-GitHub Actions run `33161041115`. Ongoing runner maintenance, packaging-only
-prerequisites, and scheduled phased packaged-smoke evidence remain outstanding
-operational responsibilities, not architecture decisions.
+The repository-scoped self-hosted topology and weekly Saturday `02:00 UTC`
+cadence are accepted in [Architecture Decisions](architecture-decisions.md).
+A compile-capable runner is registered, and commit-specific live compile
+evidence exists for GitHub Actions run `33161041115`. Ongoing runner
+maintenance, packaging-only prerequisites, and scheduled phased packaged-smoke
+evidence remain outstanding operational responsibilities, not architecture
+decisions.
 
 ## Relationship to Visual Package Validation
 
