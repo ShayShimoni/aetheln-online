@@ -184,9 +184,9 @@ loose tag in #60, so the gate derives it from #60's owner-only
 commitment offset, until that window ends or `ClientChainEnded` arrives.
 Without that check, under Q10 every dodge pressed during an attack's
 commitment window would be predicted, refused, and rolled back. The gate
-decides whether to send a request and predict; it is not GAS prediction. The next saved move
-carries `FLAG_Custom_2`, and the flag is cleared after that move, so it marks
-exactly one move: the start move.
+decides whether to send a request and predict; it is not GAS prediction. The
+next saved move carries `FLAG_Custom_2`, and the flag is cleared after that
+move, so it marks exactly one move: the start move.
 
 - **Delivery.** Moves with different flags never combine
   (`FSavedMove_Character::CanCombineWith` compares compressed flags, as the
@@ -228,19 +228,19 @@ substitutions:
 
 | #19 step | Movement-carried entry |
 | --- | --- |
-| 1 Rate bucket | Unchanged: every flagged move processed draws one token from the connection's bucket, before any lookup |
+| 1 Rate bucket | Unchanged: every received flagged move the server simulates draws one token from the connection's bucket, before any lookup |
 | 2 Lifecycle | Unchanged |
 | 3 Schema version | Not applicable: the move protocol is build-identical (#82 F10, residual risk 4) |
 | 4 Sequence | Replaced by the engine's move-timestamp rule (above) |
 | 5 Ability lookup | Unchanged; the ability must be flagged movement-carried |
 | 6 Content version | The flagged move's dodge `ContentVersion` against the granted ability |
 | 6a to 6d (#60 P2) | Not applicable: a dodge has no aim, and the move's client timestamp is checked by the engine's move-timestamp rule instead of a time sample (#60's text changes, dependency 6 on #60) |
-| 7 Phase and instance | `Press` only. The single instance must be inactive, and the movement state must allow a start (no dodge in progress and, under Q3, on the ground). Otherwise `ActivationBlocked` |
+| 7 Phase and instance | `Press` only. The single instance must be inactive, and the movement state must allow a start (`bMovementAllowsStart`: no dodge in progress and, under Q3, on the ground). Otherwise `ActivationBlocked` |
 | 8 and 9 | Unchanged: cooldown, cost, and tags; activate inside the seam scope; commit |
 | 10 Accept | Replaced. No sequence advances, and #60's last accepted raw aim and client time do not advance, because a dodge has none. The accepted event carries the activation id and the server ordinal (see [Observability Events](#observability-events)). The owner gets `ClientMovementActivationOutcome(ClientTimeStamp, Accepted)` |
 
 Every outcome of the entry, accepted or rejected, goes to the owner through
-`ClientMovementActivationOutcome` and is correlated by the server ordinal;
+`ClientMovementActivationOutcome`, and its event carries the server ordinal;
 none touches #19's step-10 state.
 
 **The validator is split, not fed a synthesized request.** The entry never
@@ -332,8 +332,9 @@ The server runs `PerformMovement`, and so the dodge hook, on two paths:
 
 The rules:
 
-- **The authority is called only for a received flagged move:** the owner
-  role is `ROLE_Authority` and `GetCurrentNetworkMoveData()` is set. After the
+- **The authority is called only for a received flagged move:** the
+  component's owner role is `ROLE_Authority` and `GetCurrentNetworkMoveData()`
+  is set. After the
   call the server clears `bWantsToDodge`, so the evaluated flag is consumed and
   nothing outside that move sees it again.
 - **Exactly once per received flagged move.** Every received flagged move
@@ -356,8 +357,8 @@ The rules:
 ### Server-owned windows
 
 Let `S` be the server world time at which the server processed the accepted,
-received flagged move. Moves are dispatched before the world time advances, so `S` is
-the previous frame's time, as for any request. #60's
+received flagged move. Moves are dispatched before the world time advances,
+so `S` is the previous frame's time, as for any request. #60's
 **requests before contacts** rule therefore decides a dodge and a contact in
 the same frame: the dodge is validated first and is stamped with that earlier
 time.
