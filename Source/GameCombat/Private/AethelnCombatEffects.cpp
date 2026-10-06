@@ -39,3 +39,25 @@ void UAethelnAttributeInitEffect::ApplyTo(UAbilitySystemComponent& AbilitySystem
 	Spec.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Init_Guard, Values.Guard);
 	AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec);
 }
+
+UAethelnCooldownEffect::UAethelnCooldownEffect()
+{
+	DurationPolicy = EGameplayEffectDurationType::HasDuration;
+
+	FSetByCallerFloat Duration;
+	Duration.DataTag = AethelnGameplayTags::SetByCaller_Cooldown_Duration;
+	DurationMagnitude = FGameplayEffectModifierMagnitude(Duration);
+}
+
+UAethelnEnduranceCostEffect::UAethelnEnduranceCostEffect()
+{
+	DurationPolicy = EGameplayEffectDurationType::Instant;
+
+	FSetByCallerFloat Cost;
+	Cost.DataTag = AethelnGameplayTags::SetByCaller_Cost_Endurance;
+
+	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
+	Modifier.Attribute = UAethelnCombatAttributeSet::GetEnduranceAttribute();
+	Modifier.ModifierOp = EGameplayModOp::AddBase;
+	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Cost);
+}

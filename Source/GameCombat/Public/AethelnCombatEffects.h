@@ -50,3 +50,31 @@ public:
 	/** Server only. Applies the initial values through this effect. */
 	static void ApplyTo(UAbilitySystemComponent& AbilitySystemComponent, const FAethelnCombatAttributeInitValues& Values);
 };
+
+/**
+ * The shared ability cooldown. Its duration comes from SetByCaller.Cooldown.Duration;
+ * the ability adds its own Cooldown.<Order>.<Name> tag to the spec's
+ * DynamicGrantedTags, so one class serves every ability.
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnCooldownEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnCooldownEffect();
+};
+
+/**
+ * The shared Endurance cost: instant, adding SetByCaller.Cost.Endurance to
+ * Endurance. A set-by-caller magnitude has no coefficient, so the ability
+ * passes the negated cost.
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnEnduranceCostEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnEnduranceCostEffect();
+};

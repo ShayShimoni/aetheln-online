@@ -2,6 +2,9 @@
 
 #include "AbilitySystemComponent.h"
 #include "AethelnAbilitySystemComponent.h"
+#include "AethelnCombatAttributeSet.h"
+#include "AethelnCombatEffects.h"
+#include "AethelnGameplayTags.h"
 #include "GameFramework/PlayerState.h"
 
 UAethelnGameplayAbility::UAethelnGameplayAbility()
@@ -9,6 +12,9 @@ UAethelnGameplayAbility::UAethelnGameplayAbility()
 	InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerOnly;
 	NetSecurityPolicy = EGameplayAbilityNetSecurityPolicy::ServerOnly;
+
+	// Declared by #19, applied and removed only by #21.
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Dead);
 }
 
 bool UAethelnGameplayAbility::IsAbilityIdentityTag(const FGameplayTag& Tag)
@@ -109,6 +115,58 @@ bool UAethelnGameplayAbility::CommitAbilityCooldown(
 	return false;
 }
 
+bool UAethelnGameplayAbility::CheckCost(
+	const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo,
+	FGameplayTagContainer* OptionalRelevantTags) const
+{
+	const UAbilitySystemComponent* AbilitySystem = ActorInfo != nullptr ? ActorInfo->AbilitySystemComponent.Get() : nullptr;
+	return FMath::IsFinite(ProvisionalEnduranceCost)
+		&& ProvisionalEnduranceCost >= 0.0f
+		&& AbilitySystem != nullptr
+		&& AbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetEnduranceAttribute()) >= ProvisionalEnduranceCost;
+}
+
+void UAethelnGameplayAbility::ApplyCost(
+	const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo) const
+{
+	if (ProvisionalEnduranceCost <= 0.0f)
+	{
+		return;
+	}
+	const FGameplayEffectSpecHandle Spec = MakeOutgoingGameplayEffectSpec(Handle, ActorInfo, ActivationInfo, UAethelnEnduranceCostEffect::StaticClass(), GetAbilityLevel(Handle, ActorInfo));
+	if (Spec.IsValid())
+	{
+		Spec.Data->SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Cost_Endurance, -ProvisionalEnduranceCost);
+		ApplyGameplayEffectSpecToOwner(Handle, ActorInfo, ActivationInfo, Spec);
+	}
+}
+
+const FGameplayTagContainer* UAethelnGameplayAbility::GetCooldownTags() const
+{
+	return &CooldownTags;
+}
+
+void UAethelnGameplayAbility::ApplyCooldown(
+	const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo,
+	const FGameplayAbilityActivationInfo ActivationInfo) const
+{
+	if (ProvisionalCooldownSeconds <= 0.0f)
+	{
+		return;
+	}
+	const FGameplayEffectSpecHandle Spec = MakeOutgoingGameplayEffectSpec(Handle, ActorInfo, ActivationInfo, UAethelnCooldownEffect::StaticClass(), GetAbilityLevel(Handle, ActorInfo));
+	if (Spec.IsValid())
+	{
+		Spec.Data->SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Cooldown_Duration, ProvisionalCooldownSeconds);
+		Spec.Data->DynamicGrantedTags.AppendTags(CooldownTags);
+		ApplyGameplayEffectSpecToOwner(Handle, ActorInfo, ActivationInfo, Spec);
+	}
+}
+
 void UAethelnGameplayAbility::ActivateAbility(
 	const FGameplayAbilitySpecHandle Handle,
 	const FGameplayAbilityActorInfo* ActorInfo,
@@ -123,6 +181,11 @@ void UAethelnGameplayAbility::SetAbilityId(const FGameplayTag& InAbilityId)
 {
 	AbilityId = InAbilityId;
 	SetAssetTags(FGameplayTagContainer(InAbilityId));
+}
+
+void UAethelnGameplayAbility::SetCooldownTag(const FGameplayTag& InCooldownTag)
+{
+	CooldownTags = FGameplayTagContainer(InCooldownTag);
 }
 
 void UAethelnGameplayAbility::EndForRelease()

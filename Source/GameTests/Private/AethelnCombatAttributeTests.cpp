@@ -116,8 +116,16 @@ bool FAethelnAttributeClampAndBoundsTest::RunTest(const FString& Parameters)
 			*AbilitySystem, EGameplayEffectDurationType::Infinite, Pair.Current, EGameplayModOp::AddBase, 1000.0f);
 		TestEqual(*FString::Printf(TEXT("A duration modifier clamps %s to its maximum"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max);
 		TestEqual(*FString::Printf(TEXT("A duration modifier leaves the %s base unchanged"), Pair.Name), AbilitySystem->GetNumericAttributeBase(Pair.Current), Max * 0.75f);
+
+		// Owner decision (#19): lowering a maximum never raises a base value, even
+		// while a positive temporary modifier holds the current value above it.
+		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Max, EGameplayModOp::Override, Max * 0.9f);
+		TestEqual(*FString::Printf(TEXT("Lowering Max%s under a positive modifier re-clamps %s"), Pair.Name, Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max * 0.9f);
+		TestEqual(*FString::Printf(TEXT("Lowering Max%s under a positive modifier never raises the %s base"), Pair.Name, Pair.Name), AbilitySystem->GetNumericAttributeBase(Pair.Current), Max * 0.75f);
 		TestTrue(*FString::Printf(TEXT("The %s duration modifier is removed"), Pair.Name), AbilitySystem->RemoveActiveGameplayEffect(BuffHandle));
-		TestEqual(*FString::Printf(TEXT("%s returns to its base when the modifier ends"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max * 0.75f);
+		TestEqual(*FString::Printf(TEXT("%s returns to its unraised base when the modifier ends"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max * 0.75f);
+		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Max, EGameplayModOp::Override, Max);
+		TestEqual(*FString::Printf(TEXT("Restoring Max%s leaves %s at its base"), Pair.Name, Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max * 0.75f);
 
 		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Current, EGameplayModOp::AddBase, 1000.0f);
 		TestEqual(*FString::Printf(TEXT("%s clamps to its maximum"), Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max);
@@ -131,6 +139,7 @@ bool FAethelnAttributeClampAndBoundsTest::RunTest(const FString& Parameters)
 		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Max, EGameplayModOp::Override, Max * 0.5f);
 		TestEqual(*FString::Printf(TEXT("Lowering Max%s lowers it"), Pair.Name), GetValue(*AbilitySystem, Pair.Max), Max * 0.5f);
 		TestEqual(*FString::Printf(TEXT("Lowering Max%s re-clamps %s"), Pair.Name, Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max * 0.5f);
+		TestEqual(*FString::Printf(TEXT("Lowering Max%s lowers a %s base above it"), Pair.Name, Pair.Name), AbilitySystem->GetNumericAttributeBase(Pair.Current), Max * 0.5f);
 
 		AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, Pair.Max, EGameplayModOp::Override, Max);
 		TestEqual(*FString::Printf(TEXT("Raising Max%s never scales %s up"), Pair.Name, Pair.Name), GetValue(*AbilitySystem, Pair.Current), Max * 0.5f);

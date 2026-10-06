@@ -436,6 +436,7 @@ rename.
 | `Cooldown.<Order>.<Name>` | Ability on cooldown | Shared cooldown effect, server |
 | `State.<Name>` | Authoritative actor state, for example `State.Dead` and `State.Dodging` | Server-owned effects or abilities of the owning issue only |
 | `SetByCaller.<Purpose>.<Name>` | Effect magnitude keys, for example `SetByCaller.Cooldown.Duration`, `SetByCaller.Cost.Endurance`, `SetByCaller.Init.MaxHealth` | Server code building specs |
+| `Ability.Test.*`, `Test.*` | Test-only tags (`AethelnCombatTestTags`) for the automation tests. They name no content and map to no semantic ID. Declared in `GameCore` under `WITH_DEV_AUTOMATION_TESTS`, so Shipping builds carry none (see the Test Plan in [Gameplay Ability System Foundation](gas-foundation.md#test-plan)) | Automation tests only |
 
 **Order scope.** The `<Order>` segment appears only when the content's semantic
 ID is Order-scoped (an `order.<order>.` prefix), as in `Ability.Oathscar.GateStep` and
