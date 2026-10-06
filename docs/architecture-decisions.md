@@ -1798,6 +1798,96 @@ Every accepted decision records:
   testers, a public download, or a store), a collaborator gains write access, a
   second matching runner is registered, or `hotfix/*` packaging is needed.
 
+### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-06 by the delivery lead under the owner's
+  delegated authority.
+- **Scope:** Responsibility, dependencies, and target membership of the
+  `GameTests` module.
+- **Decision (2026-10-06):** `GameTests` is the editor-only automation module.
+  It hosts the project and module load harness (#85), the GAS foundation,
+  combat, and activation-seam tests with their observability assertions (#19),
+  and the content-validation commandlet with its tests (#120). Its dependency
+  rule, recorded in the `GameTests` row of
+  [Technical Architecture](technical-architecture.md#unreal-module-boundaries):
+  - Dependencies are private only. The module has no `Public/` folder and
+    exports nothing.
+  - It may depend on the project modules the Editor target lists, and on the
+    engine and engine-plugin modules (runtime, developer, or editor) that its
+    tests and the commandlet need.
+  - No other module may depend on it.
+  - Only `AethelnOnlineEditor.Target.cs` lists it. The Game, Client, and Server
+    targets never do.
+  - An engine third-party library needs a justification in this entry. The only
+    one today is OpenSSL. The content-validation scanner verifies
+    caller-supplied SHA-256 provenance of its bounded JSON inputs and of the
+    files it binds by hashing their bytes with OpenSSL `SHA256()`. The pinned
+    engine has no desktop SHA-256 in `Core`: the only definition of
+    `FPlatformMisc::GetSHA256Signature` is the generic one, which fails a
+    `checkf` with "No SHA256 Platform implementation". The build rule links
+    OpenSSL only on Win64, Mac, and Linux and sets
+    `AETHELN_CONTENT_VALIDATION_WITH_OPENSSL`; other platforms fail closed.
+- **Context:** PR #219 recorded `GameTests` on 2026-10-03 as project and module
+  load tests that depend only on `Core`. Three later changes widened it without
+  updating the row:
+  - `30f011f` (#120, merged in PR #235) added `AssetRegistry`, `CoreUObject`,
+    `DesktopPlatform`, `Engine`, `GameCore`, `Json`, `NavigationSystem`,
+    `PhysicsCore`, and OpenSSL for the content-validation commandlet.
+  - `cc65f1f` (#19, merged in PR #251) moved the GAS foundation tests out of
+    `GameCombat` and added `GameCombat`, `GameplayAbilities`, and
+    `GameplayTags`, so the shipping Client and Server targets carry no test
+    class.
+  - `3f839ed` (#19, merged in PR #261) added `GameNet`, for the activation-seam
+    tests that assert rejection telemetry through the observability subsystem
+    and its in-memory sink.
+
+  The issue #13 QA on 2026-10-06 found the row stale (AC6, DoD4).
+- **Evidence:** On `develop` `f173388`, `Source/GameTests/GameTests.Build.cs`
+  lists only private dependencies, `AethelnOnline.uproject` declares the module
+  `Type: Editor`, and only `Source/AethelnOnlineEditor.Target.cs` lists it in
+  `ExtraModuleNames`. No other `.Build.cs` names `GameTests`. The OpenSSL
+  reason is pinned by `tests/content/Invoke-ContentValidationCommand.Tests.ps1`:
+  the scanner must call `SHA256(` and must not call `GetSHA256Signature`, and
+  the build rule must add the OpenSSL dependency. The engine stub is in
+  `Engine/Source/Runtime/Core/Private/GenericPlatform/GenericPlatformMisc.cpp`
+  of the pinned source.
+- **Target boundary enforcement:** No automated check enforces the `GameTests`
+  target boundary today. `scripts/build/Validate-TargetComposition.ps1` reads
+  only the Game, Client, and Server targets. It rejects only `GameServer` in a
+  Game or Client target and `GameUI` in the Server target. The required CI
+  check `target-composition-tests` runs that validator against synthetic
+  fixtures only. The repository's real targets are validated only by the
+  `target-composition-gate` step of `scripts/build/Build-PackagedArtifacts.ps1`
+  during packaging. Until the validator also rejects `GameTests` in the Game,
+  Client, and Server targets, review of the target files and this entry
+  enforces the boundary.
+- **Alternatives:** Keep `GameTests` at `Core` only and move the tests
+  elsewhere (rejected: the GAS tests would return to `GameCombat` and ship test
+  classes in the Client and Server targets, which `cc65f1f` removed, and the
+  commandlet would need another editor module with the same dependencies).
+  Per-area test modules, such as separate combat-test and content-validation
+  editor modules (deferred: more `.uproject` and Editor-target entries under
+  the same boundary rule, with no measured compile or ownership problem today).
+  Hash with the engine's `Core` SHA-256 (rejected: the generic stub fails a
+  `checkf` on every desktop platform).
+- **Consequences:** The `GameTests` row in Technical Architecture states the
+  rule, and a Rules bullet keeps the module out of non-Editor targets. A new
+  dependency that fits the rule needs no new entry. A new engine third-party
+  library does. `docs/gas-foundation.md` refers to the row instead of listing
+  dependencies. The content-validation provenance contract
+  ([Asset Intake and Content Validation](asset-intake-and-content-validation.md))
+  binds exactly `GameCore` then `GameTests` as loaded project modules, so moving
+  the commandlet out of `GameTests` changes that contract. Follow-up: extend
+  `scripts/build/Validate-TargetComposition.ps1` and its tests to reject
+  `GameTests` in the Game, Client, and Server targets.
+- **Owner:** Issues #13, #19, #85, and #120.
+- **Revisit trigger:** A non-Editor target or another module needs `GameTests`
+  code, another engine third-party library is proposed, `GameTests` compile
+  time becomes a measured bottleneck for the Editor build or CI editor
+  automation, a per-area test split is proposed, or the pinned engine gains a
+  desktop SHA-256 in `Core`.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |
