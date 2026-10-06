@@ -1638,8 +1638,9 @@ Every accepted decision records:
     the wrapper, and hashes the closure again. It passes only on exit 0 with
     identical hashes, and refuses a set `UE_ADDITIONAL_PLUGIN_PATHS` or a
     worktree that already has `Binaries/` or `Intermediate/`; a fake-engine
-    fixture in the same suite entry covers it. The path-free result line is recorded on issue #267
-    before the host-tools receipt change that depends on it merges.
+    fixture in the same suite entry covers it. The path-free result line is
+    recorded on issue #267 before the host-tools receipt change that depends on
+    it merges.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
