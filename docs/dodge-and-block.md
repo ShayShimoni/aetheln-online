@@ -140,7 +140,7 @@ Existing code at `f173388`:
 | Existing code | Disposition |
 | --- | --- |
 | Project movement component and saved move (`Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:23-114`) | Extend. `FLAG_Custom_0` is sprint and `FLAG_Custom_1` aim steering (`:80-92`, `:329-334`); `FLAG_Custom_2` and `FLAG_Custom_3` are free (`docs/movement-poc.md:242-244`). Reuse the jump-takeoff pattern: the result is derived inside the simulation from the move's own acceleration and control yaw (`:200-231`), so prediction, replay, and the server agree. |
-| Headless prediction pair (`Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:688-800`) | Reuse its one-world setup (client, server, and simulated proxy) and the server's position-error check per move. The dodge's network tests need the loopback harness in the [Test Plan](#test-plan), because the pair runs both copies as authority and delivers no corrections. |
+| Headless prediction pair (`Source/GameCore/Private/AethelnCharacterMovementComponent.cpp:688-800`) | Reuse its one-world setup (client, server, and simulated proxy) and the server's position-error check per move. Every test in which the server copy must start a dodge needs the loopback harness in the [Test Plan](#test-plan), because the pair runs both copies as authority, feeds the server without received move data, and delivers no corrections. |
 | Input receiver (`Source/GameCore/Public/AethelnPlayerInputReceiver.h:23-30`) | Extend with a dodge press. It has no combat, dodge, or defense method today (`docs/input-camera-free-aim-spike.md:26`). |
 | #19 P2 and P3 (`Source/GameCombat/Public/AethelnAbilitySystemComponent.h:58-142`, `Source/GameCombat/Public/AethelnGameplayAbility.h:15-100`, `Source/GameCombat/Public/AethelnActivationTypes.h:26-66`) | Build on them: the seam, validator, rate bucket, choke point, `CommitAbility` result slot, and owner outcome. Cost and cooldown (#19 P4) are not on `develop` yet; this document designs against their specification. |
 | Guard and Endurance attributes (`Source/GameCombat/Public/AethelnCombatAttributeSet.h:29-30`, `:70-74`) | Use as they are. Only Gameplay Effects change them. |
@@ -577,7 +577,7 @@ change halfway through a contact.
 
 | Message or state | To | Reliability |
 | --- | --- | --- |
-| `ClientMovementActivationOutcome(float ClientTimeStamp, EAethelnActivationResult Result)` (new) | Owner, per processed flagged move | Reliable |
+| `ClientMovementActivationOutcome(float ClientTimeStamp, EAethelnActivationResult Result)` (new) | Owner, per received flagged move the server simulates | Reliable |
 | `ClientActivationOutcome(Sequence, Result)` (#19) | Owner, per block request | Reliable |
 | Movement correction with dodge state | Owner | Engine move response |
 | Replicated movement | Observers | Engine |
@@ -749,6 +749,10 @@ harness:
   simulated the expected number of received moves, so a harness that delivers
   nothing fails instead of passing.
 
+D1 to D6, D11, and D12 run on the harness, because under the received-move
+rule the server copy starts a dodge only from a delivered move; rows that
+check the observer path keep the pair's simulated proxy.
+
 The queue delays, duplicates, reorders, and drops moves and seam requests
 against the injected clock: **normal** delivers in order at once, **high
 latency** delays every message by a fixed test interval, and **packet loss**
@@ -757,14 +761,14 @@ drops chosen copies and models a reliable resend as a later arrival.
 | # | Test | PR | Kind | What it proves |
 | --- | --- | --- | --- | --- |
 | D1 | `Aetheln.Movement.Net.DodgeFlagRoundTrip` | P2 | H | `FLAG_Custom_2` marks only the start move; it does not combine with neighbors; the move is important; once a move is acknowledged, the client itself selects the unacknowledged flagged move as the old move in the next packet; the server restores it; sprint and aim flags are unchanged |
-| D2 | `Aetheln.Movement.Net.DodgeDisplacementParity` | P2 | H | Prediction pair, test authority accepting: forward, lateral, diagonal, backward, and neutral input (neutral per the adopted Q2 answer), with sprint, aim steering, and a turned camera. Every move is accepted; the path equals the test distance on open ground; the direction stays fixed; the proxy converges on the server |
+| D2 | `Aetheln.Movement.Net.DodgeDisplacementParity` | P2 | H | Loopback harness, test authority accepting: forward, lateral, diagonal, backward, and neutral input (neutral per the adopted Q2 answer), with sprint, aim steering, and a turned camera. Every move is accepted; the path equals the test distance on open ground; the direction stays fixed; the proxy converges on the server |
 | D3 | `Aetheln.Movement.Net.DodgeCorrectionReplay` | P2 | H | A forced correction mid-dodge restores dodge state from the response and replays the same path, once and repeatedly; saved moves never restore dodge state |
 | D4 | `Aetheln.Movement.Net.DodgeRefusedRollsBack` | P2 | H | Test authority refuses: the server moves without a dodge, corrects at the flagged move, the replay does not reapply it, and the client ends at the server's position |
 | D5 | `Aetheln.Movement.Net.DodgeDeliveryConditions` | P2 | H | Normal, high-latency, and packet-loss delivery; a duplicated copy is simulated once; an older reordered move is dropped; a lost first copy is processed once from the old-move resend; all copies lost gives no dodge and no authority call; a zero-delta flagged move is not processed; the authority is called exactly once per received flagged move, including mid-dodge and airborne ones; a forced update between a flagged move and its late arrival drops that move with no authority call; a forced update mid-dodge advances the displacement and the next correction converges the client; a refused flagged move followed by silence makes no second authority call and starts no dodge when the forced updates run; an unacknowledged pawn simulates nothing and calls nothing; every profile asserts the server's simulated-move count |
 | D6 | `Aetheln.Movement.Net.DodgeGroundAndCollision` | P2 | H | A wall shortens the path equally on both sides; leaving a ledge ends the dodge; an airborne flag does not start one (Q3 pinned with a test policy); no authority means no dodge |
 | D7 | `Aetheln.GameCombat.Defense.DodgeDefinitionFailsClosed` | P3 | H | Grant refused for non-finite or non-positive values, each ordering violation, `MoveDuration > ActionEnd`, a missing movement-carried flag, missing blocking tags, and (if Q4) zero cost with zero cooldown |
 | D8 | `Aetheln.GameCombat.Defense.DodgeMovementCarriedRoute` | P3 | H | The dodge activates only through the entry; `ServerSubmitActivation` for it is `MalformedRequest`; the stock routes stay refused; the scope opens for the dodge spec only; content version mismatch is `IncompatibleVersion`; precedence follows the substitution table; a seam `Press` for a test seam ability right after an accepted dodge is accepted, and the dodge leaves `LastAcceptedSequence` and #60's last accepted aim and client time unchanged |
-| D9 | `Aetheln.GameCombat.Defense.DodgeCostCooldownAndRepeats` | P3 | H | Acceptance applies one cost and one cooldown; flagged moves during the dodge give `ActivationBlocked`, during the cooldown `OnCooldown`, with low Endurance `InsufficientResource`; rejections have no side effect; one outcome per processed flagged move; each draws one token |
+| D9 | `Aetheln.GameCombat.Defense.DodgeCostCooldownAndRepeats` | P3 | H | Acceptance applies one cost and one cooldown; flagged moves during the dodge give `ActivationBlocked`, during the cooldown `OnCooldown`, with low Endurance `InsufficientResource`; rejections have no side effect; one outcome per received flagged move the server simulates; each draws one token |
 | D10 | `Aetheln.GameCombat.Defense.DodgeWindowBoundaries` | P3 | H | `S` is the processing time; `IsAvoidingAt` is true at `S + InvulnerableStart` and false at `S + InvulnerableEnd`; each tag exists exactly over its window; a request at exactly `S + ActionEnd` is not blocked by the dodge; withheld moves neither extend nor shorten the window |
 | D11 | `Aetheln.GameCombat.Defense.DodgeEndToEnd` | P3 | H | A client pawn and a server pawn with the real PlayerState authority: an accepted dodge produces no correction and the predicted path; a predicted dodge refused for cooldown rolls back with one correction; the owner receives one outcome per flagged move |
 | D12 | `Aetheln.GameCombat.Defense.NetworkConditionsDodge` | P3 | H | The D5 profiles with the real authority: each dodge commits at most once, with no double cost or cooldown; the window starts at server arrival; outcomes arrive in order; a dropped flagged move commits nothing and gets no outcome, and the client resolves it as never simulated when the next outcome arrives; a refused flagged move (cooldown) followed by silence draws one token and sends one outcome, and nothing commits after the cooldown lapses; every profile asserts the server's simulated-move count |
