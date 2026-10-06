@@ -1591,13 +1591,62 @@ Every accepted decision records:
     expect `NetCore.init.gen.cpp` to hold `0xF26BCE42`. Remove the setting only
     after a pinned engine revision contains an upstream fix for the race, and
     record that in a new amendment.
+- **Amendment (2026-10-06, `-NoEngineChanges` enabled, issue #267):** the
+  revisit trigger met on 2026-10-05 is now acted on. This amendment supersedes
+  the 2026-10-02 *Deferred fail-closed* bullet and the first sentence of the
+  2026-10-05 *Follow-ups* bullet; the rest of both amendments stands.
+  - *Decision:* `scripts/ci/InitialPreparation.BuildInvocation.ps1` passes
+    `-NoEngineChanges` for `AethelnOnlineEditor` (Win64) only. The compiler
+    selection is unchanged (no `-Compiler=`, the same version pins), and
+    client and server arguments are unchanged. A different compiler selection
+    would make UBT treat engine actions as outdated, which under the flag
+    becomes a false exit 5, so the selection stays pinned as above.
+  - *What the flag guarantees:* UBT (`Modes/BuildMode.cs`) exits 5
+    (`CompilationResult.FailedDueToEngineChange`) before any action that would
+    rewrite an **existing** file under `Engine/`, and the editor-build step
+    records `editor_build_engine_changes_required`; the refused file list
+    stays in the runner-local `build.log`. New engine files (for example a new
+    shared-PCH variant) and UHT and makefile outputs under `Engine/Intermediate`
+    may still be written. Any engine link makes the single engine metadata
+    action outdated, and that action rewrites the existing module manifests
+    and version file, so in practice an engine link always exits 5. A CI
+    editor build therefore no longer relinks an engine module or restamps the
+    shared engine BuildId, and a contributor editor built before a CI run keeps
+    loading after it.
+  - *Consequence:* a pull request that needs an engine rebuild, such as a new
+    engine plugin in `AethelnOnline.uproject`, keeps `unreal-receipt-shadow`
+    red with `editor_build_engine_changes_required` until the owner runs an
+    authorized engine build with the contributor command in
+    [Unreal Project Setup](unreal-project-setup.md) and re-attests the host
+    tools. This is intended. The flag also depends on the UHT input-cache file
+    above: if it is lost, the next CI editor run exits 5 instead of relinking
+    NetCore. Contributor builds, `scripts/content/Invoke-ContentValidation.ps1`
+    and `rebuild-authorized` host-tool provisioning still build the editor
+    without the flag and can still rewrite engine files.
+  - *Evidence:* `tests/ci/InitialPreparation.Build.Tests.ps1` (run outside
+    the CI suite) pins the flag on the editor target and its absence on client
+    and server, and the required suite entry
+    `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1` pins it through the
+    workflow's editor-build step and its control-checkout wrapper. The pull
+    request's own `trusted-editor-automation` run is a warm proof only: the
+    managed workspace keeps `Binaries/` and `Intermediate/` across runs. The
+    cold proof is local: in a new worktree of `develop`, with runner 21 idle,
+    `engine.lock` held and no engine process running, the owner (or the lead
+    with the owner's explicit approval) runs
+    `scripts/ci/Invoke-EditorColdDryRun.ps1`. It hashes the host-tools closure
+    (the engine-side editor and `ShaderCompileWorker` receipt products), runs
+    the wrapper, and hashes the closure again. It passes only on exit 0 with
+    identical hashes, and refuses a set `UE_ADDITIONAL_PLUGIN_PATHS` or a
+    worktree that already has `Binaries/` or `Intermediate/`; a fake-engine
+    fixture in the same suite entry covers it. The path-free result line is recorded on issue #267
+    before the host-tools receipt change that depends on it merges.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
   the combined compile plus editor hold becomes a measured scheduling bottleneck,
-  the NetCore follow-up identifies the varying UHT input (then enable
-  `-NoEngineChanges`), or the plugin definition header still changes across
-  a CI editor run.
+  a CI editor build records `editor_build_engine_changes_required` for a pull
+  request that changes no engine input (2026-10-06 amendment), or the plugin
+  definition header still changes across a CI editor run.
 
 ### TA-021 - Private GameCombat Dependency on the GameNet Observability Service
 
@@ -1714,10 +1763,11 @@ Every accepted decision records:
   dispatchable.
 - **Operator rules:** Run no local engine or editor build against the runner's
   engine root while a release dispatch is queued or running; nothing
-  serializes it, and attestation runs only at stage start. A
-  `trusted-editor-automation` job that runs between release phases relinks an
-  attested engine module, so the next package phase is expected to fail closed
-  on host-tools attestation; dispatch again.
+  serializes it, and attestation runs only at stage start. Obsolete since the
+  TA-020 2026-10-06 amendment (issue #267): a `trusted-editor-automation` job
+  that ran between release phases used to relink an attested engine module, so
+  the next package phase failed closed on host-tools attestation. That job now
+  builds with `-NoEngineChanges` and cannot rewrite an existing engine file.
 - **Evidence:** Issue
   [#226](https://github.com/ShayShimoni/aetheln-online/issues/226), its design,
   and its independent security review.

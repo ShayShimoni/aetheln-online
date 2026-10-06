@@ -242,8 +242,9 @@ script; see Release-cut verification below.
      voids earlier evidence, so dispatch again after every change. The ruleset
      does not prevent a writer from adding commits; recheck the head each time.
    - While the dispatch is queued or running, run no local engine or editor
-     build against the runner's engine root. A run that fails on host-tools
-     attestation after editor automation interleaved is dispatched again.
+     build against the runner's engine root. Interleaved editor automation no
+     longer changes attested engine files, because it builds with
+     `-NoEngineChanges` (issue #267).
    - The run keeps its six evidence reports for 90 days. Packages stay in the
      durable handoff store on the runner host and are never published, not
      even as a GitHub pre-release. Before acting on a cleanup request for a
