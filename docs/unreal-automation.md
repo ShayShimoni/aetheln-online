@@ -51,7 +51,7 @@ path, not a credential; keep it outside tracked configuration.
 From the repository root:
 
 ```powershell
-$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source-issue81-clean'
 powershell -NoProfile -File scripts/ci/Invoke-UnrealAutomationTests.ps1 `
   -EngineRoot $AethelnEngineRoot
 ```
@@ -169,6 +169,35 @@ source engine and can pass its local non-secret path explicitly through
 `-EngineRoot`; it must preserve the existing owner/trust, serialization,
 revision, and clean-workspace controls. Live execution evidence is
 commit-specific and cannot be inferred from fixture coverage.
+
+Issue #167 Package 3C wires that run into the owner-only
+`trusted-editor-automation` job (TA-020), a separate engine-runner job that
+runs only after a successful `trusted-candidate-compile`. Under the engine host
+lease, it first re-syncs the registered managed compile workspace to the tested
+revision from its own exact-revision control checkout, as the compile does, and
+asserts that the workspace holds that revision and is clean (issue #236). It
+then builds the `AethelnOnlineEditor` Win64 target there, runs
+this harness from that workspace with `-EngineRoot` set to the runner's engine
+root and the default 600-second timeout, and uploads the normalized
+`TestResults/unreal-automation-report.json` as the `unreal-automation-report`
+artifact. Harness output goes to runner-local files and Unreal writes its log
+to the `-abslog` file under `Saved/`; both contain absolute runner paths and
+this repository is public, so the job log shows only a path-free summary.
+After the run, the job removes the untracked compile-input files the editor
+may have written, because the next managed workspace sync rejects them. Every
+step continues on error, and the job is separate from the compile, so a failed
+or skipped automation step uploads no report and never affects the compile job
+or the native receipt. The hosted `unreal-receipt-shadow` job publishes a
+shadow-only `unreal-editor-automation` receipt from the report, or prints the
+fixed `automation_reason` and fails red when it is missing. Harness and build
+output stay in the runner temp directory, which is wiped after the job. The
+job has its own 45-minute ceiling, so a compile that uses its whole 30-minute
+watchdog still leaves the editor build its full budget; first live compile
+durations on runner 21 were 102 s and 503 s, and editor-build and harness
+durations are to be recorded from the first live runs of this job. The lease
+covers the re-sync and the editor build; this harness still runs outside it,
+serialized by the engine queue. The filter, report schema, and engine pin are
+unchanged, and nothing grants acceptance.
 
 Issue #44 must reuse this automation foundation for its downstream packaged
 dedicated-server/two-client lifecycle, Gauntlet orchestration, and network-

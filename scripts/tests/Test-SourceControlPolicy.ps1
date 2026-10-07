@@ -116,7 +116,11 @@ try {
 		'local/release.keystore',
 		'local/release.mobileprovision',
 		'local/game-service-account.json',
-		'local/game_service_account.json'
+		'local/game_service_account.json',
+		'terraform.tfstate',
+		'local/x.tfstate.backup',
+		'.terraform/terraform.tfstate',
+		'local/.terraform/providers/provider.bin'
 	)
 
 	foreach ($Path in $IgnoredPaths) {
@@ -135,16 +139,16 @@ try {
 
 	$ProhibitedTrackedPatterns = @(
 		'*.pem', '*.key', '*.p12', '*.pfx', '*.jks', '*.keystore',
-		'*.mobileprovision', '*service-account*.json', '*service_account*.json'
+		'*.mobileprovision', '*service-account*.json', '*service_account*.json',
+		'*.tfstate', '*.tfstate.*'
 	)
 	$TrackedViolations = @()
 	foreach ($Pattern in $ProhibitedTrackedPatterns) {
 		$TrackedViolations += @(Invoke-Git -Arguments @('ls-files', '--', $Pattern))
 	}
-	$TrackedViolations += @(Invoke-Git -Arguments @('ls-files', '--', ':(glob)**/signing-material/**', ':(glob)**/signing-materials/**', ':(glob)**/service-account/**', ':(glob)**/service-accounts/**'))
+	$TrackedViolations += @(Invoke-Git -Arguments @('ls-files', '--', ':(glob)**/signing-material/**', ':(glob)**/signing-materials/**', ':(glob)**/service-account/**', ':(glob)**/service-accounts/**', ':(glob)**/.terraform/**'))
 	$TrackedViolations = @($TrackedViolations | Where-Object {
-		$_ -and $_ -notmatch '(^|/)(service-account|service_account)\.redacted\.example\.json$' -and
-		$_ -ne '.agents/skills/orchestrate-delivery/scripts/tests/fixtures/snapshot-sensitive-test.pem'
+		$_ -and $_ -notmatch '(^|/)(service-account|service_account)\.redacted\.example\.json$'
 	} | Sort-Object -Unique)
 	if ($TrackedViolations.Count -gt 0) {
 		throw "Prohibited sensitive-pattern paths are tracked: $($TrackedViolations -join ', ')"

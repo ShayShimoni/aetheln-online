@@ -20,10 +20,14 @@ host-tools boundary (-HostToolsBoundary Prebuilt -EngineRevision <sha>) skips
 rebuilding the host editor/engine tools only after fail-closed proof that they
 belong to the exact clean pinned engine revision; the client and server
 project targets always build with -clean.
+.PARAMETER BuildNumber
+Optional release build number, accepted only with -Stage Provenance and
+forwarded to Write-BuildProvenance.ps1, which then adds a release block to the
+provenance. Every other stage rejects it; without it nothing changes.
 .EXAMPLE
 $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
-./scripts/build/Build-PackagedArtifacts.ps1 -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -ArchiveRoot D:/Builds/aetheln-run-001 -LogRoot D:/BuildLogs/aetheln-run-001 -SourceRevision $AethelnRevision -HostToolsBoundary Prebuilt -EngineRevision 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43 -HostToolsAttestationPath $AethelnHostToolsAttestationPath
+./scripts/build/Build-PackagedArtifacts.ps1 -ProjectPath ./AethelnOnline.uproject -EngineRoot D:/UnrealEngine/UE-5.8.1-source-issue81-clean -LinuxToolchainRoot C:/UnrealToolchains/v26_clang-20.1.8-rockylinux8 -ArchiveRoot D:/Builds/aetheln-run-001 -LogRoot D:/BuildLogs/aetheln-run-001 -SourceRevision $AethelnRevision -HostToolsBoundary Prebuilt -EngineRevision 71fe36aac5a8df5ccd66c763ffc902b29b6a9c43 -HostToolsAttestationPath $AethelnHostToolsAttestationPath
 
 Selects Prebuilt explicitly. Enter the path to an existing external attestation
 record produced with -Stage AttestHostTools after an authorized successful
@@ -53,7 +57,8 @@ param(
 	[string] $EngineRevision,
 	[string] $HostToolsAttestationPath,
 	[ValidatePattern('^$|^[^\x00-\x1f]{1,512}$')] [string] $ProvisioningEvidence,
-	[ValidatePattern('^$|^[^\\/:*?"<>|\x00-\x1f]{1,128}$')] [string] $RunnerName
+	[ValidatePattern('^$|^[^\\/:*?"<>|\x00-\x1f]{1,128}$')] [string] $RunnerName,
+	[string] $BuildNumber
 )
 
 Set-StrictMode -Version Latest
@@ -682,7 +687,34 @@ function Resolve-RecordDirectory([string] $Root, [string] $Relative, [string] $L
 	if ([string]::IsNullOrWhiteSpace($Relative) -or [System.IO.Path]::IsPathRooted($Relative) -or (($Relative -split '[\\/]') -contains '..')) { throw "$Label must be a safe stage-relative directory path." }
 	Resolve-RequiredPath -Name $Label -Path (Join-Path $Root $Relative) -PathType 'Container'
 }
+# Hashed immediately after each target's own cook so later consumers can reject
+# stale, substituted, or cross-target registry bytes against producer evidence.
+function Get-CookedRegistryReceipt([string] $Kind) {
+	$Identity = if ($Kind -eq 'client') { @{ target = 'AethelnOnlineClient'; platform = 'Win64'; cookPlatform = 'WindowsClient' } } else { @{ target = 'AethelnOnlineServer'; platform = 'Linux'; cookPlatform = 'LinuxServer' } }
+	$RelativePath = "Saved/Cooked/$($Identity.cookPlatform)/AethelnOnline/AssetRegistry.bin"
+	$RegistryPath = Join-Path $ProjectRoot $RelativePath
+	if (-not (Test-Path -LiteralPath $RegistryPath -PathType Leaf)) { throw "The $Kind cooked registry '$RegistryPath' is missing after the cook; packaging fails closed." }
+	$Registry = Get-Item -LiteralPath $RegistryPath
+	if ($Registry.Length -le 0) { throw "The $Kind cooked registry '$RegistryPath' is empty; packaging fails closed." }
+	return [ordered]@{
+		relativePath = $RelativePath
+		sizeBytes = $Registry.Length
+		sha256 = (Get-FileHash -LiteralPath $RegistryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+		target = $Identity.target
+		platform = $Identity.platform
+		cookPlatform = $Identity.cookPlatform
+		sourceRevision = $SourceRevision
+	}
+}
 
+# Release build number (issue #226): a Provenance-stage input only, checked before
+# any path, repository, or output work so a rejected value leaves nothing behind.
+$ProvenanceBuildNumberArguments = @{}
+if ($PSBoundParameters.ContainsKey('BuildNumber')) {
+	if ($Stage -ne 'Provenance') { throw "build_number_stage_invalid: -BuildNumber is only accepted with -Stage Provenance, not '$Stage'." }
+	if ($BuildNumber -cnotmatch '^[1-9][0-9]{0,9}\z') { throw 'build_number_invalid: -BuildNumber must be a positive integer of at most ten digits without a leading zero.' }
+	$ProvenanceBuildNumberArguments['BuildNumber'] = $BuildNumber
+}
 $ResolvedProject = Resolve-RequiredPath -Name 'ProjectPath' -Path $ProjectPath -PathType 'Leaf'
 $ProjectRoot = Split-Path -Parent $ResolvedProject
 Assert-CleanRepository $ProjectRoot
@@ -771,6 +803,8 @@ try {
 	$CookedInventoryArguments = @($ResolvedProject, '-run=DumpAssetRegistry', "-Path=$CookedInventoryPath", "-OutDir=$CookedInventoryDump", '-PackageName', '-unattended', '-nop4')
 	$SelectedCompiler = $null
 	$SelectedResourceCompiler = $null
+	$ClientRegistryReceipt = $null
+	$ServerRegistryReceipt = $null
 	$PreviousToolchain = [Environment]::GetEnvironmentVariable('LINUX_MULTIARCH_ROOT', 'Process')
 	$PreviousLocalDdc = [Environment]::GetEnvironmentVariable('UE-LocalDataCachePath', 'Process')
 	try {
@@ -782,11 +816,15 @@ try {
 				Assert-PackagedExecutable -Label 'Windows client packaging' -Root $ClientArchive -Names @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
 				$script:SelectedCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Compiler' -ExecutableName 'cl.exe'
 				$script:SelectedResourceCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Resource Compiler' -ExecutableName 'rc.exe'
+				$script:ClientRegistryReceipt = Get-CookedRegistryReceipt 'client'
 			}
 		}
 		if ($Stage -in @('All', 'Server')) {
 			Invoke-TimedStep 'server-uat-build-cook-package' { Invoke-UatBuild -Label 'Linux x86-64 dedicated server build/cook/package' -Arguments $ServerArguments -LogPath (Join-Path $ResolvedLogs 'server-uat.log') -AutomationToolLogDirectory $ServerAutomationToolLogs }
-			Invoke-TimedStep 'server-output-validation' { Assert-PackagedExecutable -Label 'Linux server packaging' -Root $ServerArchive -Names @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping') }
+			Invoke-TimedStep 'server-output-validation' {
+				Assert-PackagedExecutable -Label 'Linux server packaging' -Root $ServerArchive -Names @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping')
+				$script:ServerRegistryReceipt = Get-CookedRegistryReceipt 'server'
+			}
 			Invoke-TimedStep 'server-dependency-registry-dump' { Invoke-LoggedCommand -Label 'dedicated-server dependency registry dump' -Executable $UnrealEditorCmd -Arguments $DependencyRegistryArguments -LogPath (Join-Path $ResolvedLogs 'server-dependency-registry-dump.log') }
 			Invoke-TimedStep 'server-cooked-inventory-dump' { Invoke-LoggedCommand -Label 'dedicated-server cooked inventory dump' -Executable $UnrealEditorCmd -Arguments $CookedInventoryArguments -LogPath (Join-Path $ResolvedLogs 'server-cooked-inventory-dump.log') }
 			if ($Stage -eq 'All') { Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyRegistryDump -CookedInventoryDirectory $CookedInventoryDump } }
@@ -807,6 +845,7 @@ try {
 				clientArguments = $ClientArguments
 				compilerPath = $SelectedCompiler
 				resourceCompilerPath = $SelectedResourceCompiler
+				cookedRegistry = $ClientRegistryReceipt
 			} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-client.json') -Encoding UTF8
 			Write-Output "Client packaging stage completed under '$ResolvedArchive'."
 		}
@@ -822,28 +861,31 @@ try {
 				cookedInventoryDumpArguments = $CookedInventoryArguments
 				dependencyReportDirectory = 'RegistryDumps/server-dependency-registry-dump'
 				cookedInventoryDirectory = 'RegistryDumps/server-cooked-inventory-dump'
+				cookedRegistry = $ServerRegistryReceipt
 			} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-server.json') -Encoding UTF8
 			Write-Output "Server packaging stage completed under '$ResolvedArchive'."
 		}
 		'Provenance' {
 			$ClientRecord = Read-StageRecord $ResolvedClientStage 'Client'
 			$ServerRecord = Read-StageRecord $ResolvedServerStage 'Server'
-			foreach ($Property in @('clientArguments', 'compilerPath', 'resourceCompilerPath')) {
+			foreach ($Property in @('clientArguments', 'compilerPath', 'resourceCompilerPath', 'cookedRegistry')) {
 				if ($null -eq $ClientRecord.PSObject.Properties[$Property]) { throw "Client stage record is missing required property '$Property'." }
 			}
-			foreach ($Property in @('serverArguments', 'dependencyRegistryDumpArguments', 'cookedInventoryDumpArguments', 'dependencyReportDirectory', 'cookedInventoryDirectory')) {
+			foreach ($Property in @('serverArguments', 'dependencyRegistryDumpArguments', 'cookedInventoryDumpArguments', 'dependencyReportDirectory', 'cookedInventoryDirectory', 'cookedRegistry')) {
 				if ($null -eq $ServerRecord.PSObject.Properties[$Property]) { throw "Server stage record is missing required property '$Property'." }
 			}
 			$DependencyReportDirectory = Resolve-RecordDirectory -Root $ResolvedServerStage -Relative ([string] $ServerRecord.dependencyReportDirectory) -Label 'Dependency report directory'
 			$CookedInventoryDirectory = Resolve-RecordDirectory -Root $ResolvedServerStage -Relative ([string] $ServerRecord.cookedInventoryDirectory) -Label 'Cooked inventory directory'
 			Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyReportDirectory -CookedInventoryDirectory $CookedInventoryDirectory }
 			$UatArgumentsJson = [ordered]@{ client = @($ClientRecord.clientArguments); server = @($ServerRecord.serverArguments); dependencyRegistryDump = @($ServerRecord.dependencyRegistryDumpArguments); cookedInventoryDump = @($ServerRecord.cookedInventoryDumpArguments) } | ConvertTo-Json -Compress
-			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson }
+			$CookedRegistryReceiptsJson = [ordered]@{ client = $ClientRecord.cookedRegistry; server = $ServerRecord.cookedRegistry } | ConvertTo-Json -Depth 4 -Compress
+			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson -CookedRegistryReceiptsJson $CookedRegistryReceiptsJson @ProvenanceBuildNumberArguments }
 			Write-Output "Provenance validation stage completed under '$ResolvedArchive'."
 		}
 		default {
 			$UatArgumentsJson = [ordered]@{ client = $ClientArguments; server = $ServerArguments; dependencyRegistryDump = $DependencyRegistryArguments; cookedInventoryDump = $CookedInventoryArguments } | ConvertTo-Json -Compress
-			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath $SelectedCompiler -ResourceCompilerPath $SelectedResourceCompiler -UatArgumentsJson $UatArgumentsJson }
+			$CookedRegistryReceiptsJson = [ordered]@{ client = $ClientRegistryReceipt; server = $ServerRegistryReceipt } | ConvertTo-Json -Depth 4 -Compress
+			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath $SelectedCompiler -ResourceCompilerPath $SelectedResourceCompiler -UatArgumentsJson $UatArgumentsJson -CookedRegistryReceiptsJson $CookedRegistryReceiptsJson }
 			Write-Output "Packaged artifacts completed under '$ResolvedArchive'."
 		}
 	}

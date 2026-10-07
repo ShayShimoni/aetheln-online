@@ -183,6 +183,31 @@ foreach ($Native in @(0, 7)) {
 		Exit-InitialPreparationLease -Lease $Lease
 	}
 }
+# Per-target UBT flags (TA-020): the editor omits -Compiler= so it resolves the
+# contributor toolchain enum for the shared engine tree and keeps the version
+# pins; client and server arguments are unchanged. -NoEngineChanges stays off
+# the editor until the TA-020 NetCore UHT regeneration follow-up lands: every
+# CI editor run still relinks NetCore, so the flag would fail every run.
+$FlagRoot = Join-Path $FixtureRoot 'target-flags'
+$null = New-Item -ItemType Directory -Path (Join-Path $FlagRoot 'Engine/Build/BatchFiles'), (Join-Path $FlagRoot 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64')
+[IO.File]::WriteAllText((Join-Path $FlagRoot 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64/dotnet.exe'), 'fixture')
+[IO.File]::WriteAllText((Join-Path $FlagRoot 'Engine/Build/BatchFiles/Build.bat'), "@echo off`r`necho %*`r`nexit /b 0`r`n")
+[IO.File]::WriteAllText((Join-Path $FlagRoot 'AethelnOnline.uproject'), '{}')
+foreach ($FlagCase in @(
+	@{ target = 'AethelnOnlineEditor'; platform = 'Win64'; present = @('-CompilerVersion=14.44.35207', '-WindowsSDKVersion=10.0.26100.0'); absent = @('-Compiler=', '-NoEngineChanges') },
+	@{ target = 'AethelnOnlineClient'; platform = 'Win64'; present = @('-Compiler=VisualStudio2022', '-CompilerVersion=14.44.35207', '-WindowsSDKVersion=10.0.26100.0'); absent = @('-NoEngineChanges') },
+	@{ target = 'AethelnOnlineServer'; platform = 'Linux'; present = @(); absent = @('-NoEngineChanges', '-Compiler=', '-CompilerVersion=', '-WindowsSDKVersion=') }
+)) {
+	$FlagEvidence = Join-Path $FlagRoot ('evidence-' + $FlagCase.target)
+	$null = New-Item -ItemType Directory -Path $FlagEvidence
+	& (Join-Path $PSHOME 'powershell.exe') -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot '../../scripts/ci/InitialPreparation.BuildInvocation.ps1') `
+		-Target $FlagCase.target -Platform $FlagCase.platform -ActionLimit 1 -EngineRoot $FlagRoot -TargetRoot $FlagRoot -LinuxToolchainRoot $FlagRoot -EvidenceRoot $FlagEvidence 2>&1 | Out-Null
+	Assert-BuildTest -Condition ($LASTEXITCODE -eq 0) -Message "$($FlagCase.target) flag fixture did not run"
+	$FlagLog = [IO.File]::ReadAllText((Join-Path $FlagEvidence 'build.log'))
+	foreach ($Flag in $FlagCase.present) { Assert-BuildTest -Condition $FlagLog.Contains($Flag) -Message "$($FlagCase.target) is missing $Flag" }
+	foreach ($Flag in $FlagCase.absent) { Assert-BuildTest -Condition (-not $FlagLog.Contains($Flag)) -Message "$($FlagCase.target) must not carry $Flag" }
+}
+Write-Output 'PASS: only the editor target omits -Compiler=; no target passes -NoEngineChanges yet'
 # Short output must survive an owned abrupt stop, not remain solely in the
 # capture process's managed FileStream buffer until a normal native exit.
 $LiveRoot = Join-Path $FixtureRoot 'live-output'

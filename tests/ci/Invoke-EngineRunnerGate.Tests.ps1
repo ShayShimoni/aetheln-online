@@ -452,8 +452,8 @@ echo CLIENT_SECRET build_client_secret_marker
 exit /b 9
 )
 exit /b 0'
-	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot,$DerivedDataCachePath,$CacheFallback,$HostToolsBoundary,$EngineRevision,$HostToolsAttestationPath,$RunnerName)
-@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot;DerivedDataCachePath=$DerivedDataCachePath;CacheFallback=$CacheFallback;HostToolsBoundary=$HostToolsBoundary;EngineRevision=$EngineRevision;HostToolsAttestationPath=$HostToolsAttestationPath;RunnerName=$RunnerName}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
+	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot,$DerivedDataCachePath,$CacheFallback,$HostToolsBoundary,$EngineRevision,$HostToolsAttestationPath,$RunnerName,$BuildNumber)
+@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot;DerivedDataCachePath=$DerivedDataCachePath;CacheFallback=$CacheFallback;HostToolsBoundary=$HostToolsBoundary;EngineRevision=$EngineRevision;HostToolsAttestationPath=$HostToolsAttestationPath;RunnerName=$RunnerName;BuildNumber=$BuildNumber;HasBuildNumber=$PSBoundParameters.ContainsKey(''BuildNumber'')}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
 if($env:RUNNER_TEST_UBT_OUTPUT_PACKAGE){Get-Content $env:RUNNER_TEST_UBT_OUTPUT_PACKAGE}
 if($env:RUNNER_TEST_PHASE_SPAWN){Start-Process -FilePath $env:RUNNER_TEST_DESCENDANT_EXE -ArgumentList @("-NoProfile","-Command","Start-Sleep -Seconds 120") -WindowStyle Hidden|Out-Null}
 if($env:RUNNER_TEST_PHASE_SLEEP){Start-Sleep -Seconds ([int]$env:RUNNER_TEST_PHASE_SLEEP)}
@@ -592,6 +592,7 @@ function Assert-ReportReason($Result, [string] $Reason, [string] $Message) {
 	Assert-True (@((Read-Report $Result).checks | Where-Object message -like ($Reason + '*')).Count -ge 1) "$Message (report must carry $Reason). Actual: $(@((Read-Report $Result).checks | ForEach-Object message) -join '; ')"
 }
 function Read-Report($Result) { Get-Content -LiteralPath $Result.Report -Raw | ConvertFrom-Json }
+function Get-GateReportShape($Report) { return ((@($Report.PSObject.Properties.Name) -join ',') + '|' + (@($Report.checks | ForEach-Object { $_.name }) -join ',')) }
 function Assert-PhaseSupervisorProof($Report, [int] $ChildExitCode, [bool] $TimedOut, [bool] $CleanupVerified, [string] $Message) {
 	Assert-True ($null -ne $Report.supervisor) "$Message (missing outer-supervisor receipt)."
 	Assert-True (($Report.supervisor.childExitCode -is [int] -or $Report.supervisor.childExitCode -is [long]) -and [int] $Report.supervisor.childExitCode -eq $ChildExitCode) "$Message (child exit code)."
@@ -1020,6 +1021,8 @@ try {
 	}
 	$ProvenanceCall = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })[-1]
 	Assert-True ($ProvenanceCall.Stage -eq 'Provenance' -and $ProvenanceCall.ClientStageRoot -eq (Join-Path $RunDirectory 'client') -and $ProvenanceCall.ServerStageRoot -eq (Join-Path $RunDirectory 'server')) 'ValidateProvenance must consume the exact verified stage payload directories.'
+	Assert-True ($ProvenanceCall.HasBuildNumber -eq $false -and $null -eq $ProvenanceCall.BuildNumber) 'Without -BuildNumber the provenance writer must receive no build number parameter.'
+	$PlainReportShape = Get-GateReportShape $Report
 	$Result = Invoke-PhaseGate $Fixture 'SmokePhase'
 	Assert-True ($Result.ExitCode -eq 0) "SmokePhase must pass. Output: $($Result.Output)"
 	$Smoke = Get-Content $Fixture.SmokeCapture -Raw | ConvertFrom-Json
@@ -1455,6 +1458,40 @@ try {
 	$env:AETHELN_HOST_TOOLS = 'rebuild-authorized'
 	Remove-Item Env:AETHELN_ENGINE_REVISION
 	Remove-Item Env:AETHELN_HOST_TOOLS_ATTESTATION
+
+	# Issue #226: -BuildNumber is a ValidateProvenance-only input. The supervisor
+	# forwards it to the child, which hands it to the provenance writer; it never
+	# enters the closed gate report, and without it nothing changes.
+	$Fixture = New-Case 'build-number-forwarded'
+	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
+	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' -ExtraArguments @('-BuildNumber', '7654321')
+	Assert-True ($Result.ExitCode -eq 0) "ValidateProvenance with a valid -BuildNumber must pass. Output: $($Result.Output)"
+	$NumberedCall = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })[-1]
+	Assert-True ($NumberedCall.Stage -eq 'Provenance' -and $NumberedCall.HasBuildNumber -eq $true -and $NumberedCall.BuildNumber -ceq '7654321') 'The supervisor must forward -BuildNumber through the child to the provenance writer.'
+	$NumberedReport = Read-Report $Result
+	Assert-True ($PlainReportShape -ceq (Get-GateReportShape $NumberedReport)) 'A build number must not change the gate report shape or its checks.'
+	Assert-True ((Get-Content $Result.Report -Raw) -notmatch '(?i)buildnumber|7654321') 'Neither the build-number parameter nor its value may enter the gate report.'
+
+	foreach ($WrongMode in @('PackageClient', 'PackageServer', 'SmokePhase')) {
+		$Fixture = New-Case ('build-number-mode-' + $WrongMode)
+		$Result = Invoke-PhaseGate $Fixture $WrongMode -ExtraArguments @('-BuildNumber', '7')
+		Assert-ReportReason -Result $Result -Reason 'build_number_mode_invalid' -Message "-BuildNumber must be rejected for $WrongMode"
+		Assert-True (-not (Test-Path $Fixture.PackageCapture) -and -not (Test-Path $Fixture.SmokeCapture)) "A -BuildNumber rejected for $WrongMode must stop before any phase work."
+	}
+	foreach ($WrongMode in @('Compile', 'PackagedSmoke')) {
+		$Fixture = New-Case ('build-number-mode-' + $WrongMode)
+		$Result = Invoke-Gate $Fixture $WrongMode -ExtraArguments @('-BuildNumber', '7')
+		Assert-ReportReason -Result $Result -Reason 'build_number_mode_invalid' -Message "-BuildNumber must be rejected for $WrongMode"
+		Assert-True (-not (Test-Path $Fixture.BuildCapture) -and -not (Test-Path $Fixture.PackageCapture) -and -not (Test-Path $Fixture.SmokeCapture)) "A -BuildNumber rejected for $WrongMode must stop before any build or smoke work."
+	}
+	$Fixture = New-Case 'build-number-invalid'
+	foreach ($BadNumber in @('0', '01', 'abc', '12345678901', '7.5', '+7')) {
+		$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' -ExtraArguments @('-BuildNumber', $BadNumber)
+		Assert-ReportReason -Result $Result -Reason 'build_number_invalid' -Message "Build number '$BadNumber' must fail closed"
+		Assert-True (-not (Test-Path $Fixture.PackageCapture) -and -not (Test-Path (Get-PhaseRunDirectory $Fixture))) "Build number '$BadNumber' must be rejected before any handoff or provenance work."
+	}
+	Write-Output 'PASS: -BuildNumber is ValidateProvenance-only, validated before any phase work, forwarded to the provenance writer, and absent from the gate report'
 
 	Write-Output 'PASS: engine runner wrapper contracts are completely covered'
 } catch {

@@ -39,21 +39,40 @@ broader UI design.
 
 1. Obtain Epic's Unreal Engine source and check out the exact tag and commit.
 2. Install Visual Studio 2022 17.14 with the pinned MSVC toolset and Windows SDK.
-3. Run the normal source-engine dependency and project-file setup.
-4. Install the pinned Linux cross-toolchain before Linux server packaging.
-5. Initialize Git LFS for this repository before editing Unreal assets.
+3. Hydrate the pinned source engine's dependencies with its normal `Setup.bat`
+   before generating project files or building. Hydration supplies source
+   dependencies; it is not evidence that host tools have been built. For a
+   bounded fresh-host-tool attempt that intentionally omits `Setup.bat`'s
+   machine setup, use the [direct GitDependencies hydration path](developer-environment-and-ddc.md#explicit-non-clean-host-tool-provisioning)
+   and record the skipped setup steps.
+4. If an operator has authorized the optional fresh host-tool provisioner,
+   follow [its prerequisites and command](developer-environment-and-ddc.md#explicit-non-clean-host-tool-provisioning)
+   after dependency hydration and **before** `GenerateProjectFiles.bat` or
+   `Build.bat`. Project generation can create UnrealBuildTool outputs that make
+   that provisioner's fresh-output preflight ineligible; do not assume every
+   project-generation run creates them. Otherwise continue with project
+   generation and the Development Editor build below.
+5. Install the pinned Linux cross-toolchain before Linux server packaging.
+6. Initialize Git LFS for this repository before editing Unreal assets.
 
 Engine and repository locations differ between contributors. Keep those paths
 in the current shell or another local, untracked configuration. Never commit
 machine-specific paths, endpoints, credentials, access tokens, or other
 secrets.
 
+| Local data | Examples | Created by | Repository disposition |
+| --- | --- | --- | --- |
+| Engine source dependencies | Pinned, manifest-listed engine support files | Source-engine `Setup.bat` or direct GitDependencies hydration | Remain in the local engine checkout; hydration is not a host-tool build. |
+| Engine host build products | UnrealBuildTool, UnrealPak, ShaderCompileWorker, UnrealEditor products and engine intermediates | Pinned source-engine build steps; project generation may also produce UnrealBuildTool outputs | Remain in the local engine checkout; the fresh provisioner checks their provenance before a build. |
+| Project generated files | `Binaries/`, `Intermediate/`, generated solutions and IDE state | Project generation, Editor builds, and Unreal tools | Keep ignored and untracked in the project checkout. |
+| Local Derived Data Cache | Derived shaders, textures, and cook content | Unreal's derivation during Editor use or cooking | Keep local and untracked; the optional persistent cache has a separate identity and recovery contract. |
+
 ## Verify the source revision
 
 Set explicit local roots from a PowerShell session at the repository root:
 
 ```powershell
-$AethelnEngineRoot = 'D:\UnrealEngine\UE-5.8.1-source'
+$AethelnEngineRoot = (Resolve-Path -LiteralPath (Read-Host 'Pinned Unreal Engine source checkout')).Path
 $AethelnRepoRoot = (Resolve-Path '.').Path
 $AethelnProject = Join-Path $AethelnRepoRoot 'AethelnOnline.uproject'
 
@@ -66,6 +85,71 @@ git -C $AethelnEngineRoot rev-parse HEAD
 
 Stop if either value differs. Do not substitute a preview, launcher binary, or
 another UE 5.8 revision.
+
+## Enable the UHT input cache
+
+Do this once per engine tree, before the first build. Without it, UnrealHeaderTool
+can alternate NetCore's generated output through a race in the engine's
+`UhtHeaderFile.cs`, which relinks `UnrealEditor-NetCore.dll`, restamps the
+engine BuildId and stops editors built earlier from loading (see the TA-020
+2026-10-05 amendment in [Architecture Decisions](architecture-decisions.md)).
+The file is `Engine\Saved\UnrealBuildTool\BuildConfiguration.xml` under
+`$AethelnEngineRoot`. UnrealBuildTool creates a default file there on its first
+run, holding only an empty `<Configuration xmlns="...">` element. If the file
+holds only that default (or does not exist), it must contain exactly:
+
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+  <UEBuildConfiguration>
+    <bEnableUHTInputCache>true</bEnableUHTInputCache>
+  </UEBuildConfiguration>
+</Configuration>
+```
+
+If the file already holds other settings, merge instead: add the
+`bEnableUHTInputCache` line inside an existing `UEBuildConfiguration` element,
+or add that element, and keep the rest. This PowerShell creates the directory
+and writes the file only when it is missing or holds just the default empty
+`Configuration` element, so it never overwrites an `UEBuildConfiguration`
+element or other settings:
+
+```powershell
+$AethelnUbtConfig = Join-Path $AethelnEngineRoot 'Engine\Saved\UnrealBuildTool\BuildConfiguration.xml'
+New-Item -ItemType Directory -Force (Split-Path $AethelnUbtConfig) | Out-Null
+$AethelnDefaultOnly = '^\s*(<\?xml[^>]*\?>)?\s*<Configuration[^>]*(/>|>\s*</Configuration>)\s*$'
+if (-not (Test-Path $AethelnUbtConfig) -or
+    ((Get-Content -Raw $AethelnUbtConfig) -match $AethelnDefaultOnly)) {
+  Set-Content -Path $AethelnUbtConfig -Encoding utf8 -Value @'
+<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+  <UEBuildConfiguration>
+    <bEnableUHTInputCache>true</bEnableUHTInputCache>
+  </UEBuildConfiguration>
+</Configuration>
+'@
+} else {
+  Write-Warning "Merge bEnableUHTInputCache=true into $AethelnUbtConfig by hand."
+}
+```
+
+UnrealBuildTool reads later configuration files (ProgramData, AppData,
+LocalAppData, Documents and the project's
+`Saved\UnrealBuildTool\BuildConfiguration.xml`) after the engine one, so none
+of them may set `bEnableUHTInputCache` to `false`.
+
+The engine's own `.gitignore` ignores `Saved/`, so the pinned checkout stays
+clean and the file is never committed. With the cache on, UHT also writes
+git-ignored `.inputcache.data` files under the engine and project
+`Intermediate` folders; they are shared mutable engine state. The cache fixes
+BuildId determinism and does not make concurrent engine writes safe, so
+serialization of shared-engine users through the host lease and queue remains a
+standing rule. The next build of each project logs
+`BuildConfiguration.xml is newer`, runs a full UHT pass and may rebuild the
+editor once; that is expected. Never pass `-ForceHeaderGeneration` to
+`Build.bat` or UnrealBuildTool, because it turns the cache read off and brings
+the race back. Re-apply this step whenever you recreate or re-provision the
+engine tree.
 
 ## Generate and build
 
@@ -83,6 +167,41 @@ Build the Development Editor target:
   AethelnOnlineEditor Win64 Development $AethelnProject `
   -WaitMutex -NoHotReloadFromIDE
 ```
+
+### Recovery while CI shares the engine
+
+CI and contributor builds that use the runner host's engine root still share
+writable engine outputs. The recurring NetCore BuildId churn is resolved by the
+[UHT input cache setting](#enable-the-uht-input-cache) (TA-020, 2026-10-05), so
+a CI editor build should no longer refresh the engine BuildId. If a mismatch
+still appears (for example on a tree without that setting), a refreshed BuildId
+leaves a previously built contributor project unable to load its game modules,
+and the steps below are the fallback.
+
+Wait for the lead to release the shared engine (the lead holds it and
+announces the release in the delivery status or issue), close the affected
+editor, and run the normal Development Editor `Build.bat` command above for
+that project. Confirm the build succeeds and `BuildId` in
+`<project>\Binaries\Win64\UnrealEditor.modules` matches `BuildId` in
+`<engine>\Engine\Binaries\Win64\UnrealEditor.modules`, then relaunch. Do not
+hand-edit generated `.modules` files or pin a BuildId to bypass the mismatch.
+
+The lead selected an independent runner source-engine tree in
+[Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517);
+capacity, provisioning and CI-to-contributor isolation proof remain pending.
+The 2026-10-05 TA-020 amendment
+([UHT input cache](#enable-the-uht-input-cache)) removed the NetCore BuildId
+flip that motivated that tree, so it is no longer needed for this problem. It
+stays a recorded option with revisit triggers, and the recovery steps above
+remain the fallback for an unexplained BuildId mismatch.
+
+If a second tree is ever deployed, use the locally configured contributor
+engine root for these build and launch commands. CI uses its separately
+provisioned runner root; engine/plugin binaries, generated files,
+intermediates and module manifests must not share writable aliases. Each root
+retains its own applicable identity and provisioning evidence. Serialization
+of shared-engine consumers is a standing rule; only a verified separation
+could relax it. Even then, reserve a quiet host for performance captures.
 
 ## First launch
 
@@ -105,6 +224,80 @@ For issue #13 evidence, confirm project generation completes, the Development
 Editor build completes, the Editor loads `/Game/Maps/StarterMap`, the map uses
 `AAethelnGameModeBase`, and the initial launch reports no bootstrap-blocking
 errors.
+
+### Optional private art
+
+Licensed and generated art lives in the private `aetheln-art` repository as
+the `AethelnArt` content plugin (TA-019 in
+[Architecture Decisions](architecture-decisions.md)). The project files never
+name it. Collaborators with access clone it anywhere, for example
+`D:\aetheln-art`. Before opening the editor, set the editor-only variable
+`UE_ADDITIONAL_PLUGIN_PATHS` in the PowerShell session that launches it:
+
+```powershell
+$env:UE_ADDITIONAL_PLUGIN_PATHS = (Resolve-Path '<art-clone>\Plugins').Path
+& (Join-Path $AethelnEngineRoot 'Engine\Binaries\Win64\UnrealEditor.exe') `
+  $AethelnProject /Game/Maps/StarterMap -log
+Remove-Item Env:UE_ADDITIONAL_PLUGIN_PATHS -ErrorAction SilentlyContinue
+```
+
+`$env:` changes only the current process and its children, and the last line
+clears it from the session once the editor has started.
+
+- Separate multiple plugin roots with `;` on Windows (`:` on Linux and macOS).
+- The content-only plugin needs no build.
+- If the art path is missing, `Resolve-Path` reports an error and the editor
+  launches without the art.
+- To browse `/AethelnArt/`, enable **Show Plugin Content** in the Content
+  Browser settings.
+- CI scripts and workflows never set the variable.
+
+**Never set `UE_ADDITIONAL_PLUGIN_PATHS` persistently** (user or machine
+environment), and especially not on the runner host. Editor-binary cook and
+automation jobs would then load private art, and package artifacts are
+uploaded from this public repository.
+
+Never reference `/AethelnArt/` assets from
+public `Content/`, `Config/`, `Source/`, `Plugins/`, or the `.uproject`; the
+`formatting-policy` check rejects it.
+
+### Second-workspace reproduction record for Issue #81
+
+From a separate clean workspace or contributor machine, retain a local record
+of the following sequence. Publish only a redacted summary and evidence
+references; keep exact local paths and raw command output outside tracked docs.
+
+1. Record the committed project SHA and pinned engine SHA, plus clean Git
+   status for both checkouts. Record OS/build, CPU, memory, available disk, and
+   the observed Visual Studio, MSVC, and Windows SDK versions as host facts,
+   not canonical minimum hardware requirements.
+2. Record source dependency hydration and whether optional fresh host-tool
+   provisioning was used. If used, retain its receipt and logs locally and
+   record its outcome; a successful provisioner receipt does not prove project
+   generation, the Development Editor build, or Editor launch.
+   For the Issue #81 F: bootstrap, use the separately registered pinned engine
+   worktree and byte-verified dependency cache on the verified external NTFS
+   volume. Require at least 600 GiB free before that preparation and at least
+   300 GiB after hydration before compiling; these are operating thresholds,
+   not engine-size estimates. Do not import the failed D: native intermediates
+   or binaries.
+3. Use a separate, clean project workspace for this reproduction; keep its
+   generated project outputs and packages on F: as well. Run the
+   project-generation and Development Editor commands above. For each,
+   retain the exact resolved command, start/end times or elapsed time, exit
+   code, and a concise failure summary when applicable. Confirm the
+   `/Game/Maps/StarterMap` load separately if it was attempted.
+4. Record whether DDC was engine-default, a verified persistent local cache,
+   or not applicable to the measured step; note cold/warm state when known.
+   Record D: and F: free space before and after each stage, the relevant
+   product/checkpoint identities, and whether the native build was fresh or a
+   verified continuation. Do not count host-tool provisioning, Editor build,
+   and launch as one undifferentiated success.
+   Confirm generated project directories and solutions remain ignored and
+   untracked. Keep any failed step and the next required action explicit.
+
+The second-workspace record does not substitute for Issue #15 packaged
+client/server evidence or Issue #16 CI runner feasibility.
 
 ## Headless Unreal automation
 

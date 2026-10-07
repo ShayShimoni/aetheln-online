@@ -67,6 +67,11 @@ revision and an existing external host-tools attestation record. That record
 must have been produced with `-Stage AttestHostTools` after an authorized,
 successful provisioning build, referencing its retained evidence; see
 [Host-tools attestation record](developer-environment-and-ddc.md#host-tools-attestation-record).
+If the pinned checkout lacks host products, the optional operator-only
+[non-clean host-tool provisioner](developer-environment-and-ddc.md#explicit-non-clean-host-tool-provisioning)
+can produce bounded local build evidence without running UAT or changing this
+clean packaging contract. Provisioning does not create the attestation or
+replace the separate attestation review step.
 Substitute the local roots, enter that existing record's path when prompted,
 and capture the actual full repository `HEAD` for the run:
 
@@ -75,7 +80,7 @@ $AethelnRevision = git rev-parse HEAD
 $AethelnHostToolsAttestationPath = Read-Host 'Existing host-tools attestation file path'
 .\scripts\build\Build-PackagedArtifacts.ps1 `
   -ProjectPath .\AethelnOnline.uproject `
-  -EngineRoot 'D:\UnrealEngine\UE-5.8.1-source' `
+  -EngineRoot 'D:\UnrealEngine\UE-5.8.1-source-issue81-clean' `
   -LinuxToolchainRoot 'C:\UnrealToolchains\v26_clang-20.1.8-rockylinux8' `
   -ArchiveRoot 'D:\Builds\aetheln-run-001' `
   -LogRoot 'D:\BuildLogs\aetheln-run-001' `
@@ -93,10 +98,58 @@ default or automatic rebuild fallback: an omitted selection or an unverified
 prebuilt attestation stops the build.
 
 The script produces `WindowsClient` and `LinuxServer` below `ArchiveRoot` and
-writes `build-provenance.json` beside them. Provenance generation is part of
+writes `build-provenance.json` beside them. Right after each cook it hashes that
+target's canonical `Saved/Cooked/<CookPlatform>/AethelnOnline/AssetRegistry.bin`
+and records the receipt in the stage record and in `build.cookedRegistries`; a
+cook that leaves no registry fails closed. Provenance generation is part of
 the build entry point; `Write-BuildProvenance.ps1` remains independently
 callable for validation and focused testing but is not an extra normal build
 step.
+
+Release builds add one optional input, `-BuildNumber`, accepted only by
+`-Stage Provenance` and by `Write-BuildProvenance.ps1`. It must be a positive
+integer of at most ten digits without a leading zero. An invalid value fails as
+`build_number_invalid`, and passing it to any other stage fails as
+`build_number_stage_invalid`. The writer then reads the committed
+`ProjectVersion` from `Config/DefaultGame.ini` of the verified clean `HEAD` and
+appends one closed `release` block after the existing properties:
+
+```json
+"release": {
+  "schemaVersion": 1,
+  "projectVersion": "1.0.0-alpha.1",
+  "buildNumber": 7,
+  "buildVersion": "1.0.0-alpha.1+7"
+}
+```
+
+The read is case-sensitive and strict: exactly one `ProjectVersion=` line in
+`[/Script/EngineSettings.GeneralProjectSettings]`, holding SemVer without build
+metadata. Section headers are matched after trailing whitespace is trimmed, as
+the engine does. CRLF, lone CR, and LF delimit lines. Engine-recognized key
+prefixes (`~` and the `+ - . ! @ * ^` commands), case variants, and duplicate
+declarations cannot hide another version. A file with a line continuation
+(a trailing `\`), a `{...}` block, or `//` syntax fails closed rather than
+approximating joined lines or comment-dependent headers. Both the release
+guard and build-number provenance use the same reader and refuse any version
+declaration in another `Config` ini as `project_version_override`. Braces in
+another `Config` ini also fail with that reason, since engine brace removal
+can hide a version key; this conservative refusal includes unrelated braces.
+The pre-cut release verifier (`scripts/delivery/Invoke-ReleaseCut.ps1 -Stage
+Verify`) applies the same reader to `Config/DefaultGame.ini` and every other
+tracked `Config` ini read from Git at the nominated `develop` revision, never
+from the checkout; a missing `ProjectVersion` there is a violation too, since
+TA-022 lands the version in `develop` before the cut.
+A missing value fails closed as `project_version_missing`, and any other
+malformed or ambiguous value
+as `project_version_invalid`. The reader is a line-oriented approximation of
+the engine's ini parser; the release smoke evidence checks the network version
+that both packages actually log. The committed
+`ProjectVersion` never carries `+<build>`; the build number lives only in the
+provenance. Without `-BuildNumber` the document has no `release` block,
+`ProjectVersion` is not read, and the output is unchanged. `host.buildIdentity`
+keeps its `AethelnOnline@<revision>/<configuration>` format in both cases
+because the network authority spike compares it byte for byte.
 
 For Linux cooking, the proven UAT invocation requires this exact cooker
 override:

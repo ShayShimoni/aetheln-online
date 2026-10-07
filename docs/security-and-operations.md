@@ -392,6 +392,17 @@ Following the NIST SSDF baseline:
 The exact scanner, SBOM format, signing service, and release platform remain
 vendor/tooling decisions.
 
+Internal pre-release packages
+([TA-022](architecture-decisions.md#ta-022---dispatch-only-release-packaging-on-a-separate-workflow-identity))
+are built only on the owner's self-hosted runner, from an exact release head,
+with read-only workflow credentials. Only redacted evidence reports leave the
+runner; packaged bytes are never published, because release assets on this
+public repository are world-downloadable. Their integrity rests on no
+untrusted code ever running on that runner, so a workflow run from a fork pull
+request is never approved while it is registered. Publishing packaged bytes
+anywhere needs its own reviewed decision covering a path-leak scan, licensing,
+signing, and that runner-trust risk.
+
 ## Required Security Tests
 
 Automated or repeatable scenarios cover:

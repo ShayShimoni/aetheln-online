@@ -85,8 +85,9 @@ The prototype proves the technical foundation and core combat before persistence
 - The reviewed prototype brief defines the core loop, combat identity, success
   criteria, explicit exclusions, and owned blocking decisions
 - The supported Unreal Engine source revision, C++, repository safeguards, and
-  accepted `GameCore`, `GameCombat`, `GameUI`, `GameNet`, and server-only
-  `GameServer` boundaries form a repeatable baseline
+  accepted `GameCore`, `GameCombat`, `GameUI`, `GameNet`, server-only
+  `GameServer`, and editor-only `GameTests` boundaries form a repeatable
+  baseline
 - Two connected players can move, use pure free aim, perform a basic three-hit
   attack chain, dodge, use three representative active abilities, engage one
   readable enemy and one authoritative objective, take damage, die, and respawn
@@ -168,6 +169,10 @@ Complete roadmap work in dependency order:
    [Epic #6](https://github.com/ShayShimoni/aetheln-online/issues/6), with
    [Issue #17](https://github.com/ShayShimoni/aetheln-online/issues/17) as its
    first actionable child rather than a separately counted roadmap step.
+   Issue #17 may start and merge on Unreal Editor/PIE and headless automation
+   evidence while Issue #2's packaged comparison continues; Issue #17's
+   packaged two-client evidence and closure still require Issue #2's final
+   packaged comparison through Issue #15's artifacts.
 9. Evaluate the prototype against the exit criteria in [Issue #48](https://github.com/ShayShimoni/aetheln-online/issues/48) before beginning the 1.0 vertical slice.
 
 The [GitHub Issues backlog](https://github.com/ShayShimoni/aetheln-online/issues) remains the source of truth for work status, priority, ownership, and target version. This roadmap defines stage boundaries and dependencies.
@@ -226,6 +231,10 @@ the imported concepts. Repository inclusion records and preserves the package;
 it does not make an image canonical, production-ready, or approved for Unreal
 runtime use.
 
+Before adding or promoting runtime content, follow the
+[asset intake and content-validation contract](docs/asset-intake-and-content-validation.md).
+Repository presence or successful import never grants production approval.
+
 Use the [pinned Unreal project setup guide](docs/unreal-project-setup.md) to
 verify the engine revision, generate project files, build the Development
 Editor target, and launch the starter map. Issue #15 owns clean client/server
@@ -242,7 +251,16 @@ Board workflow:
 
 `Backlog -> Open -> In Progress -> Code Review -> Dev Done -> QA -> Done`
 
-Use `Blocked` only when work cannot progress, and populate `Blocked Reason`. Priorities range from `P0 - Must` to `P3 - Later`; `Target Version` records the intended release. Pull requests should describe the change, report exact verification, link the relevant issue, and use `Closes #<issue-number>` when appropriate.
+Use `Blocked` only when work cannot progress, and populate `Blocked Reason`.
+Priorities range from `P0 - Must` to `P3 - Later`; `Target Version` records
+the intended release. The [delivery workflow](docs/delivery-workflow.md)
+defines the evidence for each status and issue closure. Pull requests should
+describe the change and exact verification. `develop` is the default branch,
+and GitHub closes an issue when a PR linked to it by a closing keyword or by a
+manual Development-sidebar link merges there. Reference the issue only as
+`Refs #<issue-number>`, do not add a Development link, and keep closing
+keywords out of PR bodies and commit messages, so the issue stays open until
+QA.
 
 ## Current Status
 

@@ -19,7 +19,12 @@ $DefaultChecks = @(
 	@{ name = 'markdown-links'; tier = 'required'; script = 'scripts/ci/Test-MarkdownLinks.ps1' },
 	@{ name = 'source-control-policy'; tier = 'required'; script = 'scripts/tests/Test-SourceControlPolicy.ps1' },
 	@{ name = 'observability-contract'; tier = 'required'; script = 'scripts/tests/Test-ObservabilityContract.ps1' },
+	@{ name = 'content-validation-policy-tests'; tier = 'required'; script = 'tests/content/Invoke-ContentValidation.Tests.ps1' },
+	@{ name = 'content-validation-command-tests'; tier = 'required'; script = 'tests/content/Invoke-ContentValidationCommand.Tests.ps1' },
 	@{ name = 'build-packaged-artifacts-tests'; tier = 'required'; script = 'tests/build/Build-PackagedArtifacts.Tests.ps1' },
+	@{ name = 'host-tool-provisioning-tests'; tier = 'required'; script = 'tests/build/Invoke-HostToolProvisioning.Tests.ps1' },
+	@{ name = 'cooked-inventory-capture-tests'; tier = 'required'; script = 'tests/build/Invoke-CookedInventoryCapture.Tests.ps1' },
+	@{ name = 'content-cook-evidence-tests'; tier = 'required'; script = 'tests/build/Validate-ContentCookEvidence.Tests.ps1' },
 	@{ name = 'packaged-smoke-test-tests'; tier = 'required'; script = 'tests/build/Invoke-PackagedSmokeTest.Tests.ps1' },
 	@{ name = 'network-authority-spike-tests'; tier = 'required'; script = 'tests/build/Invoke-NetworkAuthoritySpike.Tests.ps1' },
 	# Keep independently isolated expensive fixtures consecutive so the two slots
@@ -40,6 +45,8 @@ $DefaultChecks = @(
 	@{ name = 'ci-selection-tests'; tier = 'required'; script = 'tests/ci/Get-CiSelection.Tests.ps1' },
 	@{ name = 'ci-acceptance-receipt-tests'; tier = 'required'; script = 'tests/ci/New-CiAcceptanceReceipt.Tests.ps1' },
 	@{ name = 'ci-acceptance-aggregate-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiAcceptanceAggregate.Tests.ps1' },
+	@{ name = 'ci-acceptance-publisher-tests'; tier = 'required'; script = 'tests/ci/Publish-CiAcceptanceReceipt.Tests.ps1' },
+	@{ name = 'ci-acceptance-context-tests'; tier = 'required'; script = 'tests/ci/New-CiAcceptanceAggregateContext.Tests.ps1' },
 	@{ name = 'ci-activation-candidate-tests'; tier = 'required'; script = 'tests/ci/Test-CiActivationCandidate.Tests.ps1' },
 	@{ name = 'compile-workspace-tests'; tier = 'required'; script = 'tests/ci/Initialize-CompileWorkspace.Tests.ps1' },
 	@{ name = 'engine-host-lease-tests'; tier = 'required'; script = 'tests/ci/EngineRunnerHostLease.Tests.ps1' },
@@ -50,11 +57,16 @@ $DefaultChecks = @(
 	@{ name = 'routine-compile-resources-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileResources.Tests.ps1' },
 	@{ name = 'routine-compile-command-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileCommand.Tests.ps1' },
 	@{ name = 'routine-compile-gate-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileGate.Tests.ps1' },
+	@{ name = 'release-packaging-tests'; tier = 'required'; script = 'tests/ci/Invoke-ReleasePackaging.Tests.ps1' },
+	@{ name = 'board-integrity-tests'; tier = 'required'; script = 'tests/delivery/Test-BoardIntegrity.Tests.ps1' },
+	@{ name = 'pull-request-policy-tests'; tier = 'required'; script = 'tests/delivery/Test-PullRequestPolicy.Tests.ps1' },
+	@{ name = 'release-cut-tests'; tier = 'required'; script = 'tests/delivery/Invoke-ReleaseCut.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'
 		requiredModule = 'PSScriptAnalyzer'
-		command = '$ErrorActionPreference = ''Stop''; $Findings = @(foreach ($AnalyzerPath in @(''scripts'', ''tests'')) { Invoke-ScriptAnalyzer -Path $AnalyzerPath -Recurse }); $Findings | Format-Table -AutoSize | Out-String -Width 200 | Write-Output; if ($Findings.Count -gt 0) { exit 1 } exit 0'
+		requiredModuleVersion = '1.25.0'
+		command = '$ErrorActionPreference = ''Stop''; Import-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force -ErrorAction Stop; $Loaded = @(Get-Module -Name PSScriptAnalyzer); if ($Loaded.Count -ne 1 -or $Loaded[0].Version.ToString() -cne ''1.25.0'') { throw ''psscriptanalyzer_version_invalid'' }; $Findings = @(foreach ($AnalyzerPath in @(''scripts'', ''tests'')) { Invoke-ScriptAnalyzer -Path $AnalyzerPath -Recurse }); $Findings | Format-Table -AutoSize | Out-String -Width 200 | Write-Output; if ($Findings.Count -gt 0) { exit 1 } exit 0'
 	}
 )
 
@@ -333,6 +345,7 @@ foreach ($Check in $Checks) {
 	$Script = Get-CheckField -Check $Check -Name 'script'
 	$Command = Get-CheckField -Check $Check -Name 'command'
 	$RequiredModule = Get-CheckField -Check $Check -Name 'requiredModule'
+	$RequiredModuleVersion = Get-CheckField -Check $Check -Name 'requiredModuleVersion'
 	if (-not $Name -or $Tier -notin @('required', 'advisory') -or (-not $Script -and -not $Command)) {
 		throw "Check manifest entry is invalid: every check needs a name, a tier of 'required' or 'advisory', and a script or command."
 	}
@@ -352,7 +365,7 @@ foreach ($Check in $Checks) {
 
 	$Prepared += @{
 		Index = $Prepared.Count; Name = $Name; Tier = $Tier
-		Arguments = $ProcessArguments; CommandText = $CommandText; RequiredModule = $RequiredModule
+		Arguments = $ProcessArguments; CommandText = $CommandText; RequiredModule = $RequiredModule; RequiredModuleVersion = $RequiredModuleVersion
 	}
 }
 
@@ -360,12 +373,18 @@ try {
 	foreach ($Check in $Prepared) {
 		$Concurrent = $Check.Name -in $ConcurrentChecks
 		if ($Concurrent) { Wait-CiSlot } else { Wait-CiSlot -Drain }
-		if ($Check.RequiredModule -and -not (Get-Module -ListAvailable -Name $Check.RequiredModule)) {
+		$AvailableModule = @(if ($Check.RequiredModuleVersion) {
+			Get-Module -ListAvailable -Name $Check.RequiredModule | Where-Object { $_.Version.ToString() -ceq $Check.RequiredModuleVersion }
+		} elseif ($Check.RequiredModule) {
+			Get-Module -ListAvailable -Name $Check.RequiredModule
+		})
+		if ($Check.RequiredModule -and $AvailableModule.Count -eq 0) {
+			$ModuleIdentity = if ($Check.RequiredModuleVersion) { "$($Check.RequiredModule) $($Check.RequiredModuleVersion)" } else { [string] $Check.RequiredModule }
 			$Results[$Check.Index] = [ordered]@{
 				name = $Check.Name; tier = $Check.Tier; status = 'skipped'; durationSeconds = 0
-				command = $Check.CommandText; message = "Skipped: module '$($Check.RequiredModule)' is not available on this runner."
+				command = $Check.CommandText; message = "Skipped: module '$ModuleIdentity' is not available on this runner."
 			}
-			Write-Output "[$($Check.Tier)] $($Check.Name): skipped (module '$($Check.RequiredModule)' unavailable)"
+			Write-Output "[$($Check.Tier)] $($Check.Name): skipped (module '$ModuleIdentity' unavailable)"
 			continue
 		}
 		$Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()

@@ -33,6 +33,13 @@ workflow job bound, and a report cannot be preserved if the platform kills the
 job before this script starts. Handoff directories are never deleted here; eligible
 directories are only listed in cleanup-request records for external
 operational cleanup.
+.PARAMETER BuildNumber
+Optional release build number, accepted only with -Mode ValidateProvenance
+(build_number_mode_invalid otherwise) and validated as a positive integer of at
+most ten digits without a leading zero (build_number_invalid) before any phase
+work. The supervisor forwards it to the supervised child, which hands it to
+Build-PackagedArtifacts.ps1 -Stage Provenance. It never enters the gate report,
+and without it every invocation is unchanged.
 #>
 [CmdletBinding()]
 param(
@@ -45,6 +52,7 @@ param(
 	[string] $RunId,
 	[string] $RunAttempt,
 	[string] $RunnerName,
+	[string] $BuildNumber,
 	[string] $ManagedWorkspaceRoot,
 	[string] $ManagedWorkspaceRegistrationPath,
 	[string] $ManagedWorkspaceRegistrationSha256,
@@ -68,6 +76,7 @@ $ErrorActionPreference = 'Stop'
 
 $Started = [DateTime]::UtcNow
 $ExplicitReportRequested = $PSBoundParameters.ContainsKey('ReportPath')
+$BuildNumberRequested = $PSBoundParameters.ContainsKey('BuildNumber')
 $CompileSupervisorContext = Get-Variable -Name AethelnCompileGateContext -Scope Global -ValueOnly -ErrorAction SilentlyContinue
 $IsCompileChild = $Mode -eq 'Compile' -and $null -ne $CompileSupervisorContext
 if ($IsCompileChild) { $Started = [DateTime]::Parse($CompileSupervisorContext.startedUtc).ToUniversalTime() }
@@ -80,6 +89,9 @@ $RoutineResourceMonitor = $null
 $RoutineDeadline = $null
 $ManagedCompile = $PSBoundParameters.ContainsKey('ManagedWorkspaceRoot')
 $CompileDeadlineUtc = [DateTime]::MaxValue
+# Provisional fixed minimum (not a tuning result): a checkout cut off by the
+# deadline can leave the managed workspace half-updated (issue #243).
+$ManagedWorkspaceMinimumSyncMilliseconds = 300000
 $Checks = New-Object System.Collections.ArrayList
 $RequiredFailed = $false
 $SupervisedChildExited = $false
@@ -1617,6 +1629,7 @@ function Invoke-PhaseSupervisor {
 		PhaseSupervisorParentProcessId = $SupervisorParentProcessId
 		PhaseSupervisorParentStartTicks = $SupervisorParentStartTicks
 	}
+	if ($BuildNumberRequested) { $ChildParameters['BuildNumber'] = $BuildNumber }
 	$ChildParameters['ReportPath'] = $ChildReportPath
 	$BoundedGraceSeconds = [Math]::Min([Math]::Max($PhaseFinalizeGraceSeconds, 1), 600)
 	$HardDeadlineUtc = $Started.AddMinutes($PhaseTimeoutMinutes).AddSeconds($BoundedGraceSeconds)
@@ -1846,6 +1859,15 @@ try {
 		Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-phase-supervisor-authentication' -Message 'phase_supervisor_auth_invalid'
 		throw 'phase_supervisor_auth_invalid'
 	}
+	if ($BuildNumberRequested) {
+		# Decided before any mode-specific work, so no mode other than
+		# ValidateProvenance can start with a build number.
+		$BuildNumberFailure = if ($Mode -ne 'ValidateProvenance') { 'build_number_mode_invalid' } elseif ($BuildNumber -cnotmatch '^[1-9][0-9]{0,9}\z') { 'build_number_invalid' } else { $null }
+		if ($BuildNumberFailure) {
+			Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-build-number' -Message $BuildNumberFailure
+			throw $BuildNumberFailure
+		}
+	}
 	if ($Mode -eq 'Compile') {
 		if ([double]::IsNaN($CompileTimeoutMinutes) -or [double]::IsInfinity($CompileTimeoutMinutes) -or $CompileTimeoutMinutes -le 0 -or $CompileTimeoutMinutes -gt 30) {
 			Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-runner-inputs' -Message 'compile_timeout_invalid'
@@ -1883,12 +1905,16 @@ try {
 			$Registered = $ManagedRegistration.record
 			# Authorization comes from the separately registered operator tuple;
 			# this is not endpoint/filter/hook certification by candidate code.
+			# The closure binds this script's values: invoked inside
+			# Sync-ManagedCompileWorkspace, an unbound block would read that
+			# function's own ControlRoot/SourceRevision parameters instead.
 			$TrustRegisteredWorkspace = {
 				param($ProposedControl, $ProposedTarget, $ProposedRepository, $ProposedRevision)
-				return ($ProposedControl -ceq $ControlRoot -and
+				return ([string]::Equals([IO.Path]::GetFullPath($ProposedControl).TrimEnd('\', '/'), [IO.Path]::GetFullPath($ControlRoot).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -and
 					[string]::Equals([IO.Path]::GetFullPath($ProposedTarget).TrimEnd('\', '/'), [IO.Path]::GetFullPath($Registered.targetRoot).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -and
 					$ProposedRepository -ceq $Registered.repository -and $ProposedRevision -ceq $SourceRevision)
-			}
+			}.GetNewClosure()
+			if ((Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline) -lt $ManagedWorkspaceMinimumSyncMilliseconds) { throw 'managed_workspace_time_insufficient' }
 			$null = Sync-ManagedCompileWorkspace -ControlRoot $ControlRoot -TargetRoot $ManagedWorkspaceRoot -SourceRevision $SourceRevision -Repository $Repository -ExpectedGitCommonDirectory $Registered.gitCommonDirectory -DeadlineUtc $CompileDeadlineUtc -RemainingBudget { Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline } -AssertRepositoryTrust $TrustRegisteredWorkspace -OnProgress { Assert-RoutineCompileProgress }
 			$ResolvedRepository = Resolve-RequiredDirectory $ManagedWorkspaceRoot 'managed_workspace_root_invalid'
 			$ManagedWorkspaceEvidence = [ordered]@{ schemaVersion = 1; registrationId = $Registered.registrationId;
@@ -1896,8 +1922,10 @@ try {
 				revision = $SourceRevision; synchronized = $true }
 			Add-Check -Name 'managed-compile-workspace' -Status 'passed' -CheckStarted $WorkspaceStarted -Command 'synchronize-registered-workspace' -Message 'managed_workspace_synchronized'
 		} catch {
-			Add-Check -Name 'managed-compile-workspace' -Status 'failed' -CheckStarted $WorkspaceStarted -Command 'synchronize-registered-workspace' -Message 'managed_workspace_failed'
-			throw
+			$Reason = [string] $_.Exception.Message
+			if ($Reason -cnotmatch '^managed_workspace_[a-z_]+$' -and $Reason -cnotin @('compile_timeout', 'compile_clock_invalid', 'resource_pressure', 'disk_floor_reached')) { $Reason = 'managed_workspace_failed' }
+			Add-Check -Name 'managed-compile-workspace' -Status 'failed' -CheckStarted $WorkspaceStarted -Command 'synchronize-registered-workspace' -Message $Reason
+			throw $Reason
 		}
 	}
 	$ValidationStarted = [DateTime]::UtcNow
@@ -2248,6 +2276,7 @@ try {
 			ClientStageRoot = $ClientDirectory
 			ServerStageRoot = $ServerDirectory
 		}
+		if ($BuildNumberRequested) { $PhaseParameters['BuildNumber'] = $BuildNumber }
 		$BuildStarted = [DateTime]::UtcNow
 		$PhaseResult = Invoke-PhaseChildWithinDeadline (ConvertTo-NamedInvocationText $BuildScript $PhaseParameters)
 		$BuildFailure = $null

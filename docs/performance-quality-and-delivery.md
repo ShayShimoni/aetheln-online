@@ -47,6 +47,18 @@ Issue #45 converts the target into measured game-thread, render-thread, GPU,
 memory, streaming, and hitch budgets. No subsystem budget is invented before
 the representative capture.
 
+`Config/DefaultScalability.ini` lowers the Epic shadow tier's virtual shadow
+map page pool (`[ShadowQuality@3]` `r.Shadow.Virtual.MaxPhysicalPages`) from
+the engine's 4096 to 2048, the engine's High-tier value. Other tiers keep the
+engine values. The owner accepted the change on 2026-10-04 (#244, from #211):
+a 12-camera 4096/2048/4096 comparison on the development PC showed no visible
+shadow difference and no page-pool overflow, and two-client editor PIE at 4096
+left only about 129 MiB of video memory headroom on the RTX 2060. That
+evidence comes from editor PIE, not a packaged capture, so the value is not a
+#45 budget. The two-client editor PIE re-measure at 2048 on 2026-10-05 raised
+that headroom to about 1199 MiB (#211). The owner then kept the Epic tier at
+2048 with no dedicated device profile for the development PC (#211, #244).
+
 ## Initial World-Combat Hypothesis
 
 Planning may use:
@@ -235,9 +247,10 @@ performed or proven by Issue #16 or Issue #127 repository changes.
 Representative engine-runner evidence is commit-specific and must come from
 the artifacts uploaded by the corresponding GitHub run. An earlier or
 in-progress run does not establish that the unpublished incremental candidate
-has completed successfully. The `02:00 UTC` schedule becomes active only after
-the workflow reaches the protected default branch `main` through normal Git
-Flow; `develop` remains the integration branch.
+has completed successfully. GitHub runs the weekly Saturday `02:00 UTC`
+schedule only from the default branch, which has been `develop` since
+2026-10-03 (it was `main` before), so each scheduled run exercises the head of
+`develop`. `develop` is also the integration branch.
 
 ## Change Gates
 

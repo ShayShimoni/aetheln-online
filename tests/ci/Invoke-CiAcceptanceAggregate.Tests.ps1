@@ -40,6 +40,7 @@ function New-FixtureZip {
 	try {
 		foreach ($Spec in $Entries) {
 			$Entry = $Archive.CreateEntry([string] $Spec.name, [IO.Compression.CompressionLevel]::Optimal)
+			$Entry.LastWriteTime = [DateTimeOffset]'2000-01-01T00:00:00Z'
 			if ($Spec.PSObject.Properties.Name -ccontains 'externalAttributes') { $Entry.ExternalAttributes = [int] $Spec.externalAttributes }
 			$Stream = $Entry.Open()
 			try {
@@ -53,10 +54,36 @@ function New-FixtureZip {
 	return $Buffer.ToArray()
 }
 
+$TimestampFixture = New-FixtureZip @([pscustomobject]@{name='timestamp.txt';bytes='stable'})
+$TimestampBuffer = New-Object IO.MemoryStream(,$TimestampFixture)
+$TimestampArchive = New-Object IO.Compression.ZipArchive($TimestampBuffer, [IO.Compression.ZipArchiveMode]::Read)
+try {
+	Assert-True ($TimestampArchive.Entries[0].LastWriteTime.DateTime -eq [datetime]'2000-01-01T00:00:00') 'Fixture ZIP entries must use a fixed timestamp so artifact digests remain stable across API calls.'
+} finally { $TimestampArchive.Dispose(); $TimestampBuffer.Dispose() }
+
 function Get-Sha256([byte[]] $Bytes) {
 	$Algorithm = [Security.Cryptography.SHA256]::Create()
 	try { return ([BitConverter]::ToString($Algorithm.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant() }
 	finally { $Algorithm.Dispose() }
+}
+
+Start-Sleep -Milliseconds 2100
+Assert-True ((Get-Sha256 $TimestampFixture) -ceq (Get-Sha256 (New-FixtureZip @([pscustomobject]@{name='timestamp.txt';bytes='stable'})))) 'Identical fixture ZIPs must have the same digest across a ZIP timestamp boundary.'
+
+function Set-FixtureSelectorBinding {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Updates only an in-memory test fixture binding.')]
+	param($Context, $Artifact)
+	$Context.selectorBinding = [pscustomobject][ordered]@{jobName='ci-selection-shadow';artifactId=[string]$Artifact.id;artifactName=[string]$Artifact.name;digest=[string]$Artifact.digest}
+}
+
+function Set-FixtureProducerBinding {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Updates only an in-memory test fixture binding.')]
+	param($Context, [string]$Key, $Artifact)
+	$Binding = @($Context.producerBindings | Where-Object { $_.key -ceq $Key })
+	if ($Binding.Count -ne 1) { throw 'fixture_producer_binding_missing' }
+	$Binding[0].artifactId = [string]$Artifact.id
+	$Binding[0].artifactName = [string]$Artifact.name
+	$Binding[0].digest = [string]$Artifact.digest
 }
 
 function New-FixtureActions {
@@ -86,6 +113,8 @@ function New-FixtureContext {
 		policy = [pscustomobject][ordered]@{ version = 'shadow-v1'; digest = ('3' * 64) }
 		run = [pscustomobject][ordered]@{ id = '9001'; attempt = 2 }
 		attemptAnchor = [pscustomobject][ordered]@{ schemaVersion='aetheln.current-attempt-anchor/v1'; runId='9001'; runAttempt=2; nonce=$script:FixtureNonce }
+		selectorBinding = [pscustomobject][ordered]@{ jobName='ci-selection-shadow'; artifactId='200'; artifactName=('ci-selection-shadow-9001-2-' + $script:FixtureNonce); digest=('sha256:' + ('0' * 64)) }
+		producerBindings = @()
 	}
 	return $Context
 }
@@ -120,8 +149,8 @@ function New-FixtureRequirements {
 	return [pscustomobject][ordered]@{
 		schemaVersion = 'aetheln.ci-acceptance-requirements/v1'
 		jobs = @(
-			[pscustomobject][ordered]@{ key = 'native'; jobName = 'trusted-candidate-compile'; artifactName = ('ci-receipt-native-9001-2-' + $script:FixtureNonce); checks = @('clean-package-provenance-smoke','native-client-server-compile') },
-			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; artifactName = ('ci-receipt-quality-9001-2-' + $script:FixtureNonce); checks = @('content-reference-validation','controller-contract','controller-operational-proof','delivery-harness','portable','unreal-editor-automation','visual-package') }
+			[pscustomobject][ordered]@{ key = 'native'; jobName = 'native-receipt-shadow'; artifactName = ('ci-receipt-native-9001-2-' + $script:FixtureNonce); checks = @('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile') },
+			[pscustomobject][ordered]@{ key = 'quality'; jobName = 'quality-gates'; artifactName = ('ci-receipt-quality-9001-2-' + $script:FixtureNonce); checks = @('content-reference-validation','controller-contract','portable','unreal-editor-automation','visual-package') }
 		)
 	}
 }
@@ -145,15 +174,17 @@ function New-FixtureVisualReport {
 }
 
 function New-FixturePortableReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param($Context)
 	$Names = @(
-		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','psscriptanalyzer'
+		'formatting-policy','markdown-links','source-control-policy','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests','host-tool-provisioning-tests','cooked-inventory-capture-tests','content-cook-evidence-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','release-packaging-tests','board-integrity-tests','pull-request-policy-tests','release-cut-tests','psscriptanalyzer'
 	)
 	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
 	return [pscustomobject][ordered]@{schemaVersion=1;revision=$Context.source.testedRevision;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';checks=$Checks;summary=[pscustomobject][ordered]@{total=$Checks.Count;passed=$Checks.Count;failed=0;skipped=0;requiredFailed=0}}
 }
 
 function New-FixtureEngineReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param($Context)
 	$Names = @('runner-input-validation','managed-compile-workspace','repository-state-before-work','incremental-client-build','incremental-client-build-repository-state','incremental-server-build','incremental-server-build-repository-state','repository-state-at-completion')
 	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier='required';status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
@@ -167,6 +198,7 @@ function New-FixtureEngineReport {
 }
 
 function New-FixtureUnrealReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param($Context)
 	$Tests = @(
 		[pscustomobject][ordered]@{fullTestPath='Aetheln.GameCombat.NetworkSpike.Authority';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0},
@@ -179,9 +211,9 @@ function New-FixtureReceipt {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory fixture.')]
 	param($Context, $Requirement, [byte[]] $EvidenceBytes = $script:Utf8.GetBytes('raw-proof'))
 	$Results = @($Requirement.checks | ForEach-Object {
-		$RequiresNativeProof = $_ -cin @('clean-package-provenance-smoke','native-client-server-compile')
+		$RequiresNativeProof = $_ -cin @('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile')
 		$RequiresNativeExit = $RequiresNativeProof -or $_ -ceq 'unreal-editor-automation'
-		$EvidenceName = switch ($_) { 'portable' {'ci-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { 'evidence/' + $_ + '.json' } }
+		$EvidenceName = switch ($_) { 'portable' {'ci-report.json'} 'controller-contract' {'ci-report.json'} 'controller-operational-proof' {'engine-runner-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { 'evidence/' + $_ + '.json' } }
 		[pscustomobject][ordered]@{
 			id = [string] $_; jobName = [string] $Requirement.jobName; conclusion = 'success'; nativeExitCode = if ($RequiresNativeExit) { 0 } else { $null }
 			infrastructureFailure = $null; terminal = $true; cleanupVerified = if ($RequiresNativeProof) { $true } else { $null }
@@ -201,7 +233,7 @@ function New-FixtureReceipt {
 		attemptAnchor = $Context.attemptAnchor
 		selection = [pscustomobject][ordered]@{ checks = @($Requirement.checks) }
 		results = [pscustomobject][ordered]@{ checks = $Results }
-		acceptance = [pscustomobject][ordered]@{ shadow = $true; authoritative = $false; grantsAcceptance = $false; terminal = $true; infrastructureFailure = $false; cleanupVerified = $(if (@($Requirement.checks | Where-Object { $_ -cin @('clean-package-provenance-smoke','native-client-server-compile') }).Count -gt 0) { $true } else { $null }) }
+		acceptance = [pscustomobject][ordered]@{ shadow = $true; authoritative = $false; grantsAcceptance = $false; terminal = $true; infrastructureFailure = $false; cleanupVerified = $(if (@($Requirement.checks | Where-Object { $_ -cin @('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile') }).Count -gt 0) { $true } else { $null }) }
 	}
 }
 
@@ -221,9 +253,10 @@ function New-FixtureVisualBoundary {
 }
 
 function New-FixtureSemanticBoundary {
-	param($Context, [string]$CheckId, $Report)
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory semantic fixture boundary.')]
+	param($Context, [string[]]$CheckIds, $Report)
 	$EvidenceBytes = ConvertTo-FixtureBytes $Report
-	$Requirement = [pscustomobject][ordered]@{key='semantic';jobName='semantic-proof';artifactName=('ci-receipt-semantic-9001-2-' + $Context.attemptAnchor.nonce);checks=@($CheckId)}
+	$Requirement = [pscustomobject][ordered]@{key='semantic';jobName='semantic-proof';artifactName=('ci-receipt-semantic-9001-2-' + $Context.attemptAnchor.nonce);checks=@($CheckIds)}
 	$Receipt = New-FixtureReceipt -Context $Context -Requirement $Requirement -EvidenceBytes $EvidenceBytes
 	$ReceiptBytes = ConvertTo-FixtureBytes $Receipt
 	$Name = [string]$Receipt.results.checks[0].evidence[0].name
@@ -259,28 +292,41 @@ function New-FixtureApi {
 	$SelectorArchive = New-FixtureZip @([pscustomobject]@{name='ci-selection-shadow.json';bytes=$SelectorReportBytes})
 	$SelectorUrl = 'https://api.fixture/artifacts/200/zip'
 	$Archives[$SelectorUrl] = $SelectorArchive
-	$Artifacts.Add([pscustomobject][ordered]@{id=200;name=('ci-selection-shadow-9001-2-' + $Context.attemptAnchor.nonce);size_in_bytes=$SelectorArchive.Length;archive_download_url=$SelectorUrl;expired=$false;created_at=$CreatedAt;digest=('sha256:' + (Get-Sha256 $SelectorArchive));workflow_run=[pscustomobject][ordered]@{id=9001;head_sha=$Context.source.headRevision}})
+	$SelectorDigest = 'sha256:' + (Get-Sha256 $SelectorArchive)
+	$SelectorArtifactName = 'ci-selection-shadow-' + $Context.run.id + '-' + $Context.run.attempt + '-' + $Context.attemptAnchor.nonce
+	$Context.selectorBinding = [pscustomobject][ordered]@{jobName='ci-selection-shadow';artifactId='200';artifactName=$SelectorArtifactName;digest=$SelectorDigest}
+	$Artifacts.Add([pscustomobject][ordered]@{id=200;name=$SelectorArtifactName;size_in_bytes=$SelectorArchive.Length;archive_download_url=$SelectorUrl;expired=$false;created_at=$CreatedAt;digest=$SelectorDigest;workflow_run=[pscustomobject][ordered]@{id=9001;head_sha=$Context.source.headRevision}})
+	$ProducerBindings = New-Object System.Collections.Generic.List[object]
 	foreach ($Requirement in $Requirements.jobs) {
 		$ArtifactId++
 		$SelectedSubset = @($Requirement.checks | Where-Object { $Selected.Contains([string]$_) })
 		$Conclusion = if ($SelectedSubset.Count -gt 0) { 'success' } else { 'skipped' }
-		$IsNative = $Requirement.jobName -ceq 'trusted-candidate-compile'
-		[string[]] $Labels = if ($IsNative) { @('self-hosted','Windows','X64','aetheln-engine') } else { @('windows-latest') }
 		$RunnerId = if ($Conclusion -ceq 'success') { 100 + $ArtifactId } else { 0 }
-		$RunnerName = if ($Conclusion -cne 'success') { $null } elseif ($IsNative) { 'fixture-runner' } else { 'GitHub Actions 2' }
-		$Jobs.Add([pscustomobject][ordered]@{ id = 100 + $ArtifactId; name = $Requirement.jobName; status = 'completed'; conclusion = $Conclusion; run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at=$StartedAt;completed_at=$CompletedAt;labels=$Labels;runner_id=$RunnerId;runner_name=$RunnerName })
+		$RunnerName = if ($Conclusion -ceq 'success') { 'GitHub Actions 2' } else { $null }
+		$Jobs.Add([pscustomobject][ordered]@{ id = 100 + $ArtifactId; name = $Requirement.jobName; status = 'completed'; conclusion = $Conclusion; run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at=$StartedAt;completed_at=$CompletedAt;labels=[string[]]@('windows-latest');runner_id=$RunnerId;runner_name=$RunnerName })
+		$EngineReportSelected = $SelectedSubset -ccontains 'native-client-server-compile' -or $SelectedSubset -ccontains 'controller-operational-proof'
+		if ($EngineReportSelected) {
+			# The self-hosted compile job produces the raw engine report that the hosted native publisher only wraps.
+			$Jobs.Add([pscustomobject][ordered]@{ id = 150; name = 'trusted-candidate-compile'; status = 'completed'; conclusion = 'success'; run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at=$StartedAt;completed_at=$CompletedAt;labels=[string[]]@('self-hosted','Windows','X64','aetheln-engine');runner_id=50;runner_name='fixture-runner' })
+		}
 		if ($SelectedSubset.Count -eq 0) { continue }
 		$SelectedRequirement = [pscustomobject][ordered]@{key=$Requirement.key;jobName=$Requirement.jobName;artifactName=$Requirement.artifactName;checks=$SelectedSubset}
-		$Evidence = if ($SelectedSubset -ccontains 'visual-package') { ConvertTo-FixtureBytes (New-FixtureVisualReport -Context $Context) } else { $script:Utf8.GetBytes('raw-proof') }
+		$Evidence = if ($EngineReportSelected) { ConvertTo-FixtureBytes (New-FixtureEngineReport -Context $Context) }
+			elseif ($SelectedSubset -ccontains 'visual-package') { ConvertTo-FixtureBytes (New-FixtureVisualReport -Context $Context) }
+			elseif ($SelectedSubset -ccontains 'portable' -or $SelectedSubset -ccontains 'controller-contract') { ConvertTo-FixtureBytes (New-FixturePortableReport -Context $Context) }
+			else { $script:Utf8.GetBytes('raw-proof') }
 		$Receipt = New-FixtureReceipt -Context $Context -Requirement $SelectedRequirement -EvidenceBytes $Evidence
 		$ArchiveEntries = New-Object System.Collections.Generic.List[object]
 		$ArchiveEntries.Add([pscustomobject]@{ name = 'ci-acceptance-receipt.json'; bytes = (ConvertTo-FixtureBytes $Receipt) })
-		foreach ($Result in $Receipt.results.checks) { $ArchiveEntries.Add([pscustomobject]@{ name = $Result.evidence[0].name; bytes = $Evidence }) }
+		foreach ($EvidenceName in @($Receipt.results.checks | ForEach-Object { [string] $_.evidence[0].name } | Select-Object -Unique)) { $ArchiveEntries.Add([pscustomobject]@{ name = $EvidenceName; bytes = $Evidence }) }
 		$Archive = New-FixtureZip $ArchiveEntries.ToArray()
 		$Url = "https://api.fixture/artifacts/$ArtifactId/zip"
 		$Archives[$Url] = $Archive
-		$Artifacts.Add([pscustomobject][ordered]@{ id = $ArtifactId; name = $Requirement.artifactName; size_in_bytes = $Archive.Length; archive_download_url = $Url; expired = $false; created_at=$CreatedAt; digest=('sha256:' + (Get-Sha256 $Archive)); workflow_run = [pscustomobject][ordered]@{ id = 9001; head_sha = $Context.source.headRevision } })
+		$ArtifactDigest = 'sha256:' + (Get-Sha256 $Archive)
+		$ProducerBindings.Add([pscustomobject][ordered]@{key=[string]$Requirement.key;jobName=[string]$Requirement.jobName;artifactId=[string]$ArtifactId;artifactName=[string]$Requirement.artifactName;digest=$ArtifactDigest})
+		$Artifacts.Add([pscustomobject][ordered]@{ id = $ArtifactId; name = $Requirement.artifactName; size_in_bytes = $Archive.Length; archive_download_url = $Url; expired = $false; created_at=$CreatedAt; digest=$ArtifactDigest; workflow_run = [pscustomobject][ordered]@{ id = 9001; head_sha = $Context.source.headRevision } })
 	}
+	$Context.producerBindings = $ProducerBindings.ToArray()
 	$State = @{}
 	$State['/repos/ShayShimoni/aetheln-online/actions/runs/9001'] = ConvertTo-FixtureBytes $Run
 	$WorkflowRunsUri = '/repos/ShayShimoni/aetheln-online/actions/workflows/1234/runs?event=' + $Context.event.kind + '&head_sha=' + $Context.source.headRevision + '&per_page=100&page=1'
@@ -319,6 +365,7 @@ Assert-True ($Aggregate.decision.evidenceClass -ceq 'pull_request_acceptance_can
 Assert-True (@($Aggregate.receipts).Count -eq 0 -and @($Aggregate.jobs | Where-Object { -not $_.selected -and $_.conclusion -ceq 'skipped' }).Count -eq 2) 'Unsupported obligations must remain unselected and emit no opaque receipts.'
 Assert-True ($Aggregate.selectorEvidence.job.name -ceq 'ci-selection-shadow' -and $Aggregate.selectorEvidence.artifact.name -ceq ('ci-selection-shadow-9001-2-' + $script:FixtureNonce) -and @($Aggregate.selectorEvidence.selectedChecks).Count -eq 0 -and $Aggregate.selectorEvidence.reportSha256 -cmatch '^[0-9a-f]{64}$') 'Aggregate output must retain exact same-attempt selector job, artifact, archive, and report provenance.'
 Assert-True ($Aggregate.attemptAnchor.nonce -ceq $script:FixtureNonce -and $Aggregate.attemptAnchor.runId -ceq $Aggregate.run.id -and $Aggregate.attemptAnchor.runAttempt -eq $Aggregate.run.attempt) 'Aggregate output must preserve the exact current-attempt anchor.'
+Assert-True ($Context.selectorBinding.artifactId -ceq $Aggregate.selectorEvidence.artifact.id -and $Context.selectorBinding.artifactName -ceq $Aggregate.selectorEvidence.artifact.name -and $Context.selectorBinding.digest -ceq $Aggregate.selectorEvidence.artifact.apiDigest -and @($Context.producerBindings).Count -eq 0) 'Aggregate must bind selector provenance directly and require no producer binding for an unselected requirement.'
 Assert-True (@($Requirements.jobs | Where-Object { $_.PSObject.Properties.Name -ccontains 'selected' }).Count -eq 0) 'Requirements must expose producer capabilities without caller-controlled selection booleans.'
 
 foreach ($AnchorCase in @(
@@ -328,6 +375,7 @@ foreach ($AnchorCase in @(
 	@{name='short';mutate={param($x)$x.attemptAnchor.nonce='6'*63}},
 	@{name='uppercase';mutate={param($x)$x.attemptAnchor.nonce='A'*64}},
 	@{name='nonhex';mutate={param($x)$x.attemptAnchor.nonce='g'*64}},
+	@{name='trailing-lf';mutate={param($x)$x.attemptAnchor.nonce=('6'*64)+"`n"}},
 	@{name='all-zero';mutate={param($x)$x.attemptAnchor.nonce='0'*64}},
 	@{name='run-replay';mutate={param($x)$x.attemptAnchor.runId='9000'}},
 	@{name='attempt-replay';mutate={param($x)$x.attemptAnchor.runAttempt=1}}
@@ -336,6 +384,7 @@ foreach ($AnchorCase in @(
 	try { Assert-Rejected { Assert-AcceptanceContext $BadContext } $(if($AnchorCase.name-cin@('missing','legacy-property')){'context_schema_invalid'}else{'context_attempt_anchor_invalid'}) }
 	catch { throw "Aggregate context anchor fixture '$($AnchorCase.name)' failed: $($_.Exception.Message)" }
 }
+Assert-True (-not (Test-Sha256 (('1' * 64) + "`n")) -and -not (Test-Revision (('a' * 40) + "`n"))) 'Fixed-length hexadecimal identities must reject a trailing LF.'
 
 foreach ($SelectorAnchorCase in @(
 	@{name='missing';reason='selector_evidence_report_invalid';mutate={param($x)$x.PSObject.Properties.Remove('attemptAnchor')}},
@@ -359,6 +408,128 @@ $VisualAggregate = New-CiAcceptanceAggregate -Context $Context -Requirements $Re
 $VisualJob = @($VisualAggregate.jobs | Where-Object key -ceq 'quality')[0]
 Assert-True ($VisualJob.selected -and (@($VisualJob.capabilityChecks).Count -gt 1) -and (@($VisualJob.selectedChecks) -join ',') -ceq 'visual-package') 'A mixed producer capability must derive the exact visual-only selected subset.'
 Assert-True (@($VisualAggregate.receipts).Count -eq 1 -and (@($VisualAggregate.receipts[0].selectedChecks) -join ',') -ceq 'visual-package') 'Visual-only selected evidence must validate without claiming other producer capabilities.'
+Assert-True (@($Context.producerBindings).Count -eq 1 -and $Context.producerBindings[0].key -ceq 'quality' -and $Context.producerBindings[0].jobName -ceq 'quality-gates' -and $Context.producerBindings[0].artifactId -ceq $VisualAggregate.receipts[0].artifactId -and $Context.producerBindings[0].artifactName -ceq $VisualAggregate.receipts[0].artifactName -and $Context.producerBindings[0].digest -ceq $VisualAggregate.receipts[0].artifactApiDigest) 'Selected producer evidence must match one direct uploader binding exactly.'
+
+foreach ($ContractSelection in @(@('controller-contract','portable'), @('controller-contract'))) {
+	$ContractContext = New-FixtureContext
+	$ContractApi = New-FixtureApi -Context $ContractContext -Requirements $Requirements -SelectedChecks $ContractSelection
+	$ContractAggregate = New-CiAcceptanceAggregate -Context $ContractContext -Requirements $Requirements -ApiRequest $ContractApi -DeadlineSeconds 30
+	Assert-True ($ContractAggregate.decision.complete -and $ContractAggregate.decision.shadow -and -not $ContractAggregate.decision.authoritative -and -not $ContractAggregate.decision.grantsAcceptance) "A selected '$($ContractSelection -join ',')' subset must reconcile to a complete shadow-only aggregate."
+	Assert-True (@($ContractAggregate.receipts).Count -eq 1 -and (@($ContractAggregate.receipts[0].selectedChecks) -join ',') -ceq ($ContractSelection -join ',') -and $ContractAggregate.receipts[0].jobKey -ceq 'quality') "The '$($ContractSelection -join ',')' receipt must bind exactly the selector-derived controller-contract subset."
+}
+
+foreach ($SelectorBindingShapeCase in @(
+	@{name='missing-root';reason='context_schema_invalid';mutate={param($x)$x.PSObject.Properties.Remove('selectorBinding')}},
+	@{name='extra-field';reason='selector_binding_schema_invalid';mutate={param($x)$x.selectorBinding|Add-Member -NotePropertyName extra -NotePropertyValue 'x'}},
+	@{name='wrong-job';reason='selector_binding_invalid';mutate={param($x)$x.selectorBinding.jobName='quality-gates'}},
+	@{name='replayed-name';reason='selector_binding_invalid';mutate={param($x)$x.selectorBinding.artifactName='ci-selection-shadow-9001-1-' + $script:FixtureNonce}},
+	@{name='nondecimal-id';reason='selector_binding_invalid';mutate={param($x)$x.selectorBinding.artifactId='0200'}},
+	@{name='uppercase-digest';reason='selector_binding_invalid';mutate={param($x)$x.selectorBinding.digest='sha256:' + ('A' * 64)}},
+	@{name='digest-trailing-lf';reason='selector_binding_invalid';mutate={param($x)$x.selectorBinding.digest='sha256:' + ('8' * 64) + "`n"}}
+)) {
+	$BindingContext=New-FixtureContext;$BindingApi=New-FixtureApi -Context $BindingContext -Requirements $Requirements;& $SelectorBindingShapeCase.mutate $BindingContext
+	try { Assert-Rejected { New-CiAcceptanceAggregate -Context $BindingContext -Requirements $Requirements -ApiRequest $BindingApi -DeadlineSeconds 30 } $SelectorBindingShapeCase.reason }
+	catch { throw "Aggregate selector binding fixture '$($SelectorBindingShapeCase.name)' failed: $($_.Exception.Message)" }
+}
+
+foreach ($SelectorBindingApiCase in @(
+	@{name='wrong-id';mutate={param($x)$x.selectorBinding.artifactId='999'}},
+	@{name='wrong-digest';mutate={param($x)$x.selectorBinding.digest='sha256:' + ('9' * 64)}}
+)) {
+	$BindingContext=New-FixtureContext;$BindingApi=New-FixtureApi -Context $BindingContext -Requirements $Requirements;& $SelectorBindingApiCase.mutate $BindingContext
+	try { Assert-Rejected { New-CiAcceptanceAggregate -Context $BindingContext -Requirements $Requirements -ApiRequest $BindingApi -DeadlineSeconds 30 } 'selector_binding_api_mismatch' }
+	catch { throw "Aggregate selector API binding fixture '$($SelectorBindingApiCase.name)' failed: $($_.Exception.Message)" }
+}
+
+$MissingProducerBindingContext=New-FixtureContext
+$MissingProducerBindingApi=New-FixtureApi -Context $MissingProducerBindingContext -Requirements $Requirements -SelectedChecks @('visual-package')
+$MissingProducerBindingContext.producerBindings=@()
+Assert-Rejected { New-CiAcceptanceAggregate -Context $MissingProducerBindingContext -Requirements $Requirements -ApiRequest $MissingProducerBindingApi -DeadlineSeconds 30 } 'producer_binding_missing'
+
+$UnselectedProducerBindingContext=New-FixtureContext
+$UnselectedProducerBindingApi=New-FixtureApi -Context $UnselectedProducerBindingContext -Requirements $Requirements -SelectedChecks @('visual-package')
+$UnselectedProducerBindingContext.producerBindings=@(
+	[pscustomobject][ordered]@{key='native';jobName='native-receipt-shadow';artifactId='201';artifactName=('ci-receipt-native-9001-2-' + $script:FixtureNonce);digest=('sha256:' + ('8' * 64))},
+	$UnselectedProducerBindingContext.producerBindings[0]
+)
+Assert-Rejected { New-CiAcceptanceAggregate -Context $UnselectedProducerBindingContext -Requirements $Requirements -ApiRequest $UnselectedProducerBindingApi -DeadlineSeconds 30 } 'producer_binding_unselected'
+
+$ExtraProducerBindingContext=New-FixtureContext
+$ExtraProducerBindingApi=New-FixtureApi -Context $ExtraProducerBindingContext -Requirements $Requirements -SelectedChecks @('visual-package')
+$ExtraProducerBindingContext.producerBindings=@(
+	[pscustomobject][ordered]@{key='other';jobName='other-job';artifactId='999';artifactName=('ci-receipt-other-9001-2-' + $script:FixtureNonce);digest=('sha256:' + ('8' * 64))},
+	$ExtraProducerBindingContext.producerBindings[0]
+)
+Assert-Rejected { New-CiAcceptanceAggregate -Context $ExtraProducerBindingContext -Requirements $Requirements -ApiRequest $ExtraProducerBindingApi -DeadlineSeconds 30 } 'producer_binding_unexpected'
+
+$SwappedProducerBindingContext=New-FixtureContext
+$SwappedProducerBindingApi=New-FixtureApi -Context $SwappedProducerBindingContext -Requirements $Requirements -SelectedChecks @('visual-package')
+$SwappedProducerBindingContext.producerBindings[0].jobName='trusted-candidate-compile'
+Assert-Rejected { New-CiAcceptanceAggregate -Context $SwappedProducerBindingContext -Requirements $Requirements -ApiRequest $SwappedProducerBindingApi -DeadlineSeconds 30 } 'producer_binding_requirement_mismatch'
+
+foreach ($ProducerBindingApiCase in @(
+	@{name='wrong-id';mutate={param($x)$x.producerBindings[0].artifactId='999'}},
+	@{name='wrong-digest';mutate={param($x)$x.producerBindings[0].digest='sha256:' + ('9' * 64)}}
+)) {
+	$BindingContext=New-FixtureContext;$BindingApi=New-FixtureApi -Context $BindingContext -Requirements $Requirements -SelectedChecks @('visual-package');& $ProducerBindingApiCase.mutate $BindingContext
+	try { Assert-Rejected { New-CiAcceptanceAggregate -Context $BindingContext -Requirements $Requirements -ApiRequest $BindingApi -DeadlineSeconds 30 } 'producer_binding_api_mismatch' }
+	catch { throw "Aggregate producer API binding fixture '$($ProducerBindingApiCase.name)' failed: $($_.Exception.Message)" }
+}
+
+foreach ($ProducerBindingShapeCase in @(
+	@{name='extra-field';reason='producer_binding_schema_invalid';mutate={param($x)$x.producerBindings[0]|Add-Member -NotePropertyName extra -NotePropertyValue 'x'}},
+	@{name='replayed-name';reason='producer_binding_invalid';mutate={param($x)$x.producerBindings[0].artifactName='ci-receipt-quality-9001-1-' + $script:FixtureNonce}},
+	@{name='uppercase-digest';reason='producer_binding_invalid';mutate={param($x)$x.producerBindings[0].digest='sha256:' + ('A' * 64)}},
+	@{name='digest-trailing-lf';reason='producer_binding_invalid';mutate={param($x)$x.producerBindings[0].digest='sha256:' + ('8' * 64) + "`n"}}
+)) {
+	$BindingContext=New-FixtureContext;$BindingApi=New-FixtureApi -Context $BindingContext -Requirements $Requirements -SelectedChecks @('visual-package');& $ProducerBindingShapeCase.mutate $BindingContext
+	try { Assert-Rejected { New-CiAcceptanceAggregate -Context $BindingContext -Requirements $Requirements -ApiRequest $BindingApi -DeadlineSeconds 30 } $ProducerBindingShapeCase.reason }
+	catch { throw "Aggregate producer binding fixture '$($ProducerBindingShapeCase.name)' failed: $($_.Exception.Message)" }
+}
+
+$BothBindingsContext=New-FixtureContext
+$BothBindingsApi=New-FixtureApi -Context $BothBindingsContext -Requirements $Requirements -SelectedChecks @('native-client-server-compile','visual-package')
+$BothBindingsAggregate=New-CiAcceptanceAggregate -Context $BothBindingsContext -Requirements $Requirements -ApiRequest $BothBindingsApi -DeadlineSeconds 30
+Assert-True (@($BothBindingsContext.producerBindings).Count -eq 2 -and (@($BothBindingsContext.producerBindings | ForEach-Object key) -join ',') -ceq 'native,quality' -and @($BothBindingsAggregate.receipts).Count -eq 2) 'Multiple selected producers must reconcile through one sorted direct binding each.'
+$BothBindingsContext.producerBindings=@($BothBindingsContext.producerBindings[1],$BothBindingsContext.producerBindings[0])
+Assert-Rejected { New-CiAcceptanceAggregate -Context $BothBindingsContext -Requirements $Requirements -ApiRequest $BothBindingsApi -DeadlineSeconds 30 } 'producer_bindings_not_sorted'
+
+$DuplicateBindingContext=New-FixtureContext
+$DuplicateBindingApi=New-FixtureApi -Context $DuplicateBindingContext -Requirements $Requirements -SelectedChecks @('native-client-server-compile','visual-package')
+$DuplicateBindingContext.producerBindings[1].artifactId=$DuplicateBindingContext.producerBindings[0].artifactId
+Assert-Rejected { New-CiAcceptanceAggregate -Context $DuplicateBindingContext -Requirements $Requirements -ApiRequest $DuplicateBindingApi -DeadlineSeconds 30 } 'producer_bindings_duplicate'
+
+# The native receipt's runner identity binds to the self-hosted trusted-candidate-compile job, not the hosted publisher.
+$NativeAttemptJobsUri = '/repos/ShayShimoni/aetheln-online/actions/runs/9001/attempts/2/jobs?per_page=100&page=1'
+$CompileJobContext=New-FixtureContext
+$CompileJobApi=New-FixtureApi -Context $CompileJobContext -Requirements $Requirements -SelectedChecks @('native-client-server-compile')
+$CompileJobAggregate=New-CiAcceptanceAggregate -Context $CompileJobContext -Requirements $Requirements -ApiRequest $CompileJobApi -DeadlineSeconds 30
+Assert-True (@($CompileJobAggregate.receipts).Count -eq 1 -and (@($CompileJobAggregate.jobs | ForEach-Object name) -join ',') -ceq 'native-receipt-shadow,quality-gates') 'The hosted native publisher must pass when the compile job runner matches the raw report.'
+$CompileJobListing=ConvertFrom-StrictBoundedJson -Bytes (& $CompileJobApi $NativeAttemptJobsUri 30000 1048576)
+foreach ($CompileJobCase in @(
+	@{name='missing';reason='native_compile_job_missing';mutate={param($x)$x.jobs=@($x.jobs|Where-Object{$_.name-cne'trusted-candidate-compile'})}},
+	@{name='failure';reason='native_compile_job_not_success';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).conclusion='failure'}},
+	@{name='labels';reason='native_job_labels_invalid';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).labels=[string[]]@('self-hosted','Windows','X64')}},
+	@{name='runner';reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).runner_name='other-runner'}},
+	@{name='duplicate';reason='job_identity_ambiguous';mutate={param($x)$Copy=($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'})|ConvertTo-Json -Depth 8|ConvertFrom-Json;$Copy.id=151;$x.jobs=@($x.jobs)+@($Copy)}},
+	@{name='attempt';reason='job_attempt_mismatch';mutate={param($x)($x.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).run_attempt=1}}
+)) {
+	$CaseListing=$CompileJobListing|ConvertTo-Json -Depth 8|ConvertFrom-Json;& $CompileJobCase.mutate $CaseListing;$CaseListing.total_count=@($CaseListing.jobs).Count
+	$CaseContext=New-FixtureContext;$CaseApi=New-FixtureApi -Context $CaseContext -Requirements $Requirements -SelectedChecks @('native-client-server-compile') -Overrides @{$NativeAttemptJobsUri=(ConvertTo-FixtureBytes $CaseListing)}
+	try { Assert-Rejected { New-CiAcceptanceAggregate -Context $CaseContext -Requirements $Requirements -ApiRequest $CaseApi -DeadlineSeconds 30 } $CompileJobCase.reason }
+	catch { throw "Compile job case '$($CompileJobCase.name)' failed: $($_.Exception.Message)" }
+}
+
+# controller-operational-proof is proven by the same native publisher from the same compile job's engine report.
+foreach ($OperationalSelection in @(@('controller-operational-proof','native-client-server-compile'), @('controller-operational-proof'))) {
+	$OperationalContext=New-FixtureContext
+	$OperationalApi=New-FixtureApi -Context $OperationalContext -Requirements $Requirements -SelectedChecks $OperationalSelection
+	$OperationalAggregate=New-CiAcceptanceAggregate -Context $OperationalContext -Requirements $Requirements -ApiRequest $OperationalApi -DeadlineSeconds 30
+	Assert-True ($OperationalAggregate.decision.complete -and $OperationalAggregate.decision.shadow -and -not $OperationalAggregate.decision.authoritative -and -not $OperationalAggregate.decision.grantsAcceptance -and @($OperationalAggregate.receipts).Count -eq 1 -and (@($OperationalAggregate.receipts[0].selectedChecks) -join ',') -ceq ($OperationalSelection -join ',') -and $OperationalAggregate.receipts[0].jobKey -ceq 'native') "A selected '$($OperationalSelection -join ',')' subset must reconcile to a complete shadow-only aggregate through the native receipt."
+}
+$OperationalRunnerListing=$CompileJobListing|ConvertTo-Json -Depth 8|ConvertFrom-Json;($OperationalRunnerListing.jobs|Where-Object{$_.name-ceq'trusted-candidate-compile'}).runner_name='other-runner'
+$OperationalRunnerContext=New-FixtureContext;$OperationalRunnerApi=New-FixtureApi -Context $OperationalRunnerContext -Requirements $Requirements -SelectedChecks @('controller-operational-proof') -Overrides @{$NativeAttemptJobsUri=(ConvertTo-FixtureBytes $OperationalRunnerListing)}
+Assert-Rejected { New-CiAcceptanceAggregate -Context $OperationalRunnerContext -Requirements $Requirements -ApiRequest $OperationalRunnerApi -DeadlineSeconds 30 } 'receipt_semantic_evidence_invalid:controller-operational-proof'
 
 $VisualBoundary = New-FixtureVisualBoundary -Context $Context
 $VisualResults = @(Assert-CiAcceptanceReceipt -Receipt $VisualBoundary.receipt -Context $Context -Requirement $VisualBoundary.requirement -Archive $VisualBoundary.archive)
@@ -403,17 +574,74 @@ $VisualAcceptanceCleanupLie = New-FixtureVisualBoundary -Context $Context
 $VisualAcceptanceCleanupLie.receipt.acceptance.cleanupVerified = $true
 Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $VisualAcceptanceCleanupLie.receipt -Context $Context -Requirement $VisualAcceptanceCleanupLie.requirement -Archive $VisualAcceptanceCleanupLie.archive } 'receipt_cleanup_invalid'
 
+# Direct receipt assertions for the native check need the bound compile job; only its runner name is read.
+$FixtureCompileJob=[pscustomobject]@{runner_name='fixture-runner'}
 foreach ($Fixture in @(
 	@{id='portable';report=(New-FixturePortableReport $Context);reason='receipt_semantic_evidence_failure:portable';mutate={param($x)$x.summary.requiredFailed=1}},
 	@{id='native-client-server-compile';report=(New-FixtureEngineReport $Context);reason='receipt_semantic_evidence_invalid:native-client-server-compile';mutate={param($x)$x.supervisor.cleanupVerified=$false}},
+	@{id='controller-operational-proof';report=(New-FixtureEngineReport $Context);reason='receipt_semantic_evidence_invalid:controller-operational-proof';mutate={param($x)$x.compileResources.failureReason='memory_pressure'}},
 	@{id='unreal-editor-automation';report=(New-FixtureUnrealReport $Context);reason='receipt_semantic_evidence_invalid:unreal-editor-automation';mutate={param($x)$x.tests[0].status='failed'}}
 )) {
-	$Boundary = New-FixtureSemanticBoundary -Context $Context -CheckId $Fixture.id -Report $Fixture.report
-	$Validated = @(Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive)
+	$Boundary = New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $Fixture.report
+	$Validated = @(Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive -CompileJob $FixtureCompileJob)
 	Assert-True ($Validated.Count -eq 1 -and @($Validated[0]).Count -eq 1) "Aggregate must accept exact semantic evidence for '$($Fixture.id)'."
 	$BadReport=$Fixture.report|ConvertTo-Json -Depth 20|ConvertFrom-Json;& $Fixture.mutate $BadReport
-	$BadBoundary=New-FixtureSemanticBoundary -Context $Context -CheckId $Fixture.id -Report $BadReport
-	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadBoundary.receipt -Context $Context -Requirement $BadBoundary.requirement -Archive $BadBoundary.archive } $Fixture.reason
+	$BadBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds $Fixture.id -Report $BadReport
+	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadBoundary.receipt -Context $Context -Requirement $BadBoundary.requirement -Archive $BadBoundary.archive -CompileJob $FixtureCompileJob } $Fixture.reason
+}
+$NoCompileJobBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'native-client-server-compile' -Report (New-FixtureEngineReport $Context)
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $NoCompileJobBoundary.receipt -Context $Context -Requirement $NoCompileJobBoundary.requirement -Archive $NoCompileJobBoundary.archive } 'native_compile_job_missing'
+$NoCompileJobOperationalBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'controller-operational-proof' -Report (New-FixtureEngineReport $Context)
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $NoCompileJobOperationalBoundary.receipt -Context $Context -Requirement $NoCompileJobOperationalBoundary.requirement -Archive $NoCompileJobOperationalBoundary.archive } 'native_compile_job_missing'
+
+$ContractBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
+$ContractValidated = @(Assert-CiAcceptanceReceipt -Receipt $ContractBoundary.receipt -Context $Context -Requirement $ContractBoundary.requirement -Archive $ContractBoundary.archive)
+Assert-True ($ContractValidated.Count -eq 1 -and @($ContractValidated[0]).Count -eq 2 -and @($ContractBoundary.archive.entries).Count -eq 2) 'Aggregate must accept controller-contract and portable bound to one shared ci-report.json archive entry.'
+foreach ($ContractCase in @(
+	@{name='subset-failed';reason='receipt_semantic_evidence_failure:controller-contract';mutate={param($r)@($r.checks|Where-Object name -ceq 'ci-suite-tests')[0].status='failed';$r.summary.passed--;$r.summary.failed++;$r.summary.requiredFailed++}},
+	@{name='subset-missing';reason='receipt_semantic_evidence_invalid:controller-contract';mutate={param($r)$r.checks=@($r.checks|Where-Object name -cne 'ci-suite-tests');$r.summary.total--;$r.summary.passed--}}
+)) {
+	foreach ($ContractSelection in @(@('controller-contract','portable'), @('controller-contract'))) {
+		$BadContractReport=New-FixturePortableReport $Context;& $ContractCase.mutate $BadContractReport
+		$BadContractBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds $ContractSelection -Report $BadContractReport
+		try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $BadContractBoundary.receipt -Context $Context -Requirement $BadContractBoundary.requirement -Archive $BadContractBoundary.archive } $ContractCase.reason }
+		catch { throw "Aggregate controller-contract fixture '$($ContractCase.name)' failed: $($_.Exception.Message)" }
+	}
+}
+$ContractOnlyBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract') -Report (New-FixturePortableReport $Context)
+$ContractOnlyValidated = @(Assert-CiAcceptanceReceipt -Receipt $ContractOnlyBoundary.receipt -Context $Context -Requirement $ContractOnlyBoundary.requirement -Archive $ContractOnlyBoundary.archive)
+Assert-True ($ContractOnlyValidated.Count -eq 1 -and @($ContractOnlyValidated[0]).Count -eq 1) 'Aggregate must revalidate controller-contract without assuming portable is co-selected.'
+# The full-manifest loop pins every suite name and position, so a renamed suite inside the report never reaches the 25-suite
+# subset loop. Widening the subset list instead leaves the manifest valid and isolates that loop; portable proves the same bytes pass without it.
+$SavedContractSubset = $script:AcceptanceControllerContractCheckNames
+try {
+	$script:AcceptanceControllerContractCheckNames = @($SavedContractSubset) + @('renamed-suite-tests')
+	$RenamedSubsetBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract') -Report (New-FixturePortableReport $Context)
+	Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $RenamedSubsetBoundary.receipt -Context $Context -Requirement $RenamedSubsetBoundary.requirement -Archive $RenamedSubsetBoundary.archive } 'receipt_semantic_evidence_invalid:controller-contract'
+	$RenamedPortableBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('portable') -Report (New-FixturePortableReport $Context)
+	Assert-True (@(Assert-CiAcceptanceReceipt -Receipt $RenamedPortableBoundary.receipt -Context $Context -Requirement $RenamedPortableBoundary.requirement -Archive $RenamedPortableBoundary.archive).Count -eq 1) 'Only the controller-contract subset loop may reject a report whose full manifest is valid.'
+} finally { $script:AcceptanceControllerContractCheckNames = $SavedContractSubset }
+$PortableOnlyBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('portable') -Report (New-FixturePortableReport $Context)
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $PortableOnlyBoundary.receipt -Context $Context -Requirement $ContractBoundary.requirement -Archive $PortableOnlyBoundary.archive } 'receipt_selection_mismatch'
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $ContractBoundary.receipt -Context $Context -Requirement $PortableOnlyBoundary.requirement -Archive $ContractBoundary.archive } 'receipt_selection_mismatch'
+foreach ($SharedCase in @(
+	@{name='digest';mutate={param($x)$x.sha256='0'*64}},
+	@{name='size';mutate={param($x)$x.sizeBytes=[long]$x.sizeBytes+1}}
+)) {
+	$SharedBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
+	& $SharedCase.mutate $SharedBoundary.receipt.results.checks[1].evidence[0]
+	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $SharedBoundary.receipt -Context $Context -Requirement $SharedBoundary.requirement -Archive $SharedBoundary.archive } 'receipt_evidence_invalid' }
+	catch { throw "Aggregate shared-evidence fixture '$($SharedCase.name)' failed: $($_.Exception.Message)" }
+}
+foreach ($ContractResultCase in @(
+	@{name='native-exit';reason='receipt_semantic_evidence_invalid:controller-contract';mutate={param($x)$x.nativeExitCode=0}},
+	@{name='cleanup';reason='receipt_semantic_evidence_invalid:controller-contract';mutate={param($x)$x.cleanupVerified=$true}},
+	@{name='two-evidence';reason='receipt_semantic_evidence_duplicate:controller-contract';mutate={param($x)$x.evidence=@($x.evidence[0],$x.evidence[0])}}
+)) {
+	$ResultBoundary = New-FixtureSemanticBoundary -Context $Context -CheckIds @('controller-contract','portable') -Report (New-FixturePortableReport $Context)
+	& $ContractResultCase.mutate $ResultBoundary.receipt.results.checks[0]
+	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $ResultBoundary.receipt -Context $Context -Requirement $ResultBoundary.requirement -Archive $ResultBoundary.archive } $ContractResultCase.reason }
+	catch { throw "Aggregate controller-contract result fixture '$($ContractResultCase.name)' failed: $($_.Exception.Message)" }
 }
 
 foreach ($PortableTypeCase in @(
@@ -427,9 +655,33 @@ foreach ($PortableTypeCase in @(
 	@{name='summary-required-failed-string';mutate={param($x)$x.summary.requiredFailed='0'}}
 )) {
 	$BadPortable=New-FixturePortableReport $Context;& $PortableTypeCase.mutate $BadPortable
-	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'portable' -Report $BadPortable
+	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'portable' -Report $BadPortable
 	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:portable' }
 	catch { throw "Aggregate portable fixture '$($PortableTypeCase.name)' failed: $($_.Exception.Message)" }
+}
+$SkippedAnalyzer=New-FixturePortableReport $Context
+$SkippedAnalyzer.checks[$SkippedAnalyzer.checks.Count-1].status='skipped';$SkippedAnalyzer.summary.passed--;$SkippedAnalyzer.summary.skipped++
+$SkippedAnalyzerBoundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'portable' -Report $SkippedAnalyzer
+Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $SkippedAnalyzerBoundary.receipt -Context $Context -Requirement $SkippedAnalyzerBoundary.requirement -Archive $SkippedAnalyzerBoundary.archive } 'receipt_semantic_evidence_failure:portable'
+
+$SuiteCheckNames = @([regex]::Matches([IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts/ci/Invoke-CiSuite.ps1')), "(?m)^\s*@\{\s*name\s*=\s*'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+Assert-True (($SuiteCheckNames -join "`n") -ceq (@($script:AcceptancePortableCheckNames) -join "`n")) 'The aggregate portable check list must equal the default Invoke-CiSuite check order.'
+$ExtraSuiteCheckNames = @($SuiteCheckNames[0..($SuiteCheckNames.Count - 2)]) + @('unregistered-extra-tests', $SuiteCheckNames[-1])
+foreach ($SuiteListCase in @(
+	@{name='exact';names=$SuiteCheckNames;reason=$null},
+	@{name='missing';names=@($SuiteCheckNames | Where-Object { $_ -cne 'content-cook-evidence-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+	@{name='reordered';names=@($SuiteCheckNames | ForEach-Object { if ($_ -ceq 'content-validation-policy-tests') { 'content-validation-command-tests' } elseif ($_ -ceq 'content-validation-command-tests') { 'content-validation-policy-tests' } else { $_ } });reason='receipt_semantic_evidence_invalid:portable'},
+	@{name='extra';names=$ExtraSuiteCheckNames;reason='receipt_semantic_evidence_invalid:portable'}
+)) {
+	$SuitePortable=New-FixturePortableReport $Context
+	$SuitePortable.checks=@($SuiteListCase.names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
+	$SuitePortable.summary.total=$SuitePortable.checks.Count;$SuitePortable.summary.passed=$SuitePortable.checks.Count
+	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'portable' -Report $SuitePortable
+	try {
+		if ($null -eq $SuiteListCase.reason) { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive | Out-Null; $script:Assertions++ }
+		else { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } $SuiteListCase.reason }
+	}
+	catch { throw "Aggregate default-suite list fixture '$($SuiteListCase.name)' failed: $($_.Exception.Message)" }
 }
 
 foreach ($NativeTypeCase in @(
@@ -484,8 +736,8 @@ foreach ($NativeTypeCase in @(
 	@{name='build-executor-count-string';mutate={param($x)$x.compileEvidence.builds[0].executorSummaryCount='1'}}
 )) {
 	$BadNative=New-FixtureEngineReport $Context;& $NativeTypeCase.mutate $BadNative
-	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'native-client-server-compile' -Report $BadNative
-	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:native-client-server-compile' }
+	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'native-client-server-compile' -Report $BadNative
+	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive -CompileJob $FixtureCompileJob } 'receipt_semantic_evidence_invalid:native-client-server-compile' }
 	catch { throw "Aggregate native fixture '$($NativeTypeCase.name)' failed: $($_.Exception.Message)" }
 }
 
@@ -500,12 +752,12 @@ foreach ($UnrealTypeCase in @(
 	@{name='summary-relationship';mutate={param($x)$x.summary.total=3}}
 )) {
 	$BadUnreal=New-FixtureUnrealReport $Context;& $UnrealTypeCase.mutate $BadUnreal
-	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckId 'unreal-editor-automation' -Report $BadUnreal
+	$Boundary=New-FixtureSemanticBoundary -Context $Context -CheckIds 'unreal-editor-automation' -Report $BadUnreal
 	try { Assert-Rejected { Assert-CiAcceptanceReceipt -Receipt $Boundary.receipt -Context $Context -Requirement $Boundary.requirement -Archive $Boundary.archive } 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
 	catch { throw "Aggregate Unreal fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 }
 
-foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation','controller-contract','controller-operational-proof','delivery-harness')) {
+foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation')) {
 	$UnsupportedRequirement = [pscustomobject][ordered]@{key='unsupported';jobName='unsupported-proof';selected=$true;artifactName=('ci-receipt-unsupported-9001-2-' + $Context.attemptAnchor.nonce);checks=@($UnsupportedId)}
 	$UnsupportedBytes = $script:Utf8.GetBytes('opaque-proof')
 	$UnsupportedReceipt = New-FixtureReceipt -Context $Context -Requirement $UnsupportedRequirement -EvidenceBytes $UnsupportedBytes
@@ -585,7 +837,8 @@ foreach ($UnsafeRedirect in @('http://results0123.blob.core.windows.net/x','http
 }
 Assert-Rejected { Resolve-AggregateRequestTarget -Uri 'https://other0123.blob.core.windows.net/x' -ApiBaseUri 'https://api.github.com' -RequestKind 'Artifact' -RedirectSource ([uri]'https://results0123.blob.core.windows.net/x') } 'api_redirect_invalid'
 
-$BudgetFixture = { param([string]$Uri,[int]$Remaining,[int]$Maximum,[string]$Kind) return ,[byte[]](1,2,3) }
+# The API callback contract supplies these arguments; this budget fixture intentionally ignores their values.
+$BudgetFixture = { param([string]$Uri,[int]$Remaining,[int]$Maximum,[string]$Kind) $null = $Uri; $null = $Remaining; $null = $Maximum; $null = $Kind; return ,[byte[]](1,2,3) }
 $RequestBudget = New-AggregateBudget -MaximumRequests 1 -MaximumNetworkBytes 100 -MaximumArchiveBytes 100 -MaximumExpandedBytes 100
 [void](Invoke-AggregateApi -ApiRequest $BudgetFixture -Uri '/one' -Clock ([Diagnostics.Stopwatch]::StartNew()) -DeadlineSeconds 30 -MaximumBytes 10 -Budget $RequestBudget -RequestKind Api)
 Assert-Rejected { Invoke-AggregateApi -ApiRequest $BudgetFixture -Uri '/two' -Clock ([Diagnostics.Stopwatch]::StartNew()) -DeadlineSeconds 30 -MaximumBytes 10 -Budget $RequestBudget -RequestKind Api } 'api_request_budget_exceeded'
@@ -648,6 +901,7 @@ $ExpiredOutputPath = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-ci-acceptanc
 $ExpiredDuringWriteOutputPath = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-ci-acceptance-write-expired-' + [guid]::NewGuid().ToString('N') + '.json')
 $ExpiredAfterWriteOutputPath = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-ci-acceptance-after-write-expired-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
+	$Api = New-FixtureApi -Context $Context -Requirements $Requirements
 	$ContextJson = $Context | ConvertTo-Json -Depth 20 -Compress
 	$RequirementsJson = $Requirements | ConvertTo-Json -Depth 20 -Compress
 	$OutputPath = $MainOutputPath
@@ -709,7 +963,7 @@ $AttemptJobsUri = '/repos/ShayShimoni/aetheln-online/actions/runs/9001/attempts/
 $AllJobsUri = '/repos/ShayShimoni/aetheln-online/actions/runs/9001/jobs?filter=all&per_page=100&page=1'
 $ArtifactsUri = '/repos/ShayShimoni/aetheln-online/actions/runs/9001/artifacts?per_page=100&page=1'
 $SelectorJob = [pscustomobject][ordered]@{id=100;name='ci-selection-shadow';status='completed';conclusion='success';run_id=9001;head_sha=$Context.source.headRevision;run_attempt=2;started_at='2026-09-20T20:00:00Z';completed_at='2026-09-20T20:10:00Z';labels=[string[]]@('windows-latest');runner_id=10;runner_name='GitHub Actions 1'}
-$NativeJob = [pscustomobject][ordered]@{id=301;name='trusted-candidate-compile';status='completed';conclusion='skipped';run_attempt=2}
+$NativeJob = [pscustomobject][ordered]@{id=301;name='native-receipt-shadow';status='completed';conclusion='skipped';run_attempt=2}
 $QualityJob = [pscustomobject][ordered]@{id=302;name='quality-gates';status='completed';conclusion='skipped';run_attempt=2}
 $ProducerJobs = @($NativeJob,$QualityJob)
 Assert-True ($null -ne (Get-CurrentApiJobInterval -Job $SelectorJob -Context $Context -ExpectedConclusion 'success')) 'A fully bound current selector job must expose a valid artifact interval.'
@@ -799,10 +1053,12 @@ foreach ($ArtifactProofCase in @(
 	@{name='after-job';reason='selector_artifact_created_at_invalid';mutate={param($x)$x.created_at='2026-09-20T20:10:01Z'}},
 	@{name='timestamp-type';reason='selector_artifact_created_at_invalid';mutate={param($x)$x.created_at=1}},
 	@{name='digest-shape';reason='selector_artifact_digest_invalid';mutate={param($x)$x.digest='sha256:' + ('A' * 64)}},
+	@{name='digest-trailing-lf';reason='selector_artifact_digest_invalid';mutate={param($x)$x.digest='sha256:' + ('8' * 64) + "`n"}},
 	@{name='digest-mismatch';reason='selector_artifact_digest_mismatch';mutate={param($x)$x.digest='sha256:' + ('0' * 64)}}
 )) {
 	$BadProofArtifact=$SelectorArtifact|ConvertTo-Json -Depth 8|ConvertFrom-Json;& $ArtifactProofCase.mutate $BadProofArtifact
 	$BadProofApi=New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{$ArtifactsUri=(ConvertTo-FixtureBytes ([pscustomobject][ordered]@{total_count=1;artifacts=@($BadProofArtifact)}))}
+	if ($ArtifactProofCase.name -ceq 'digest-mismatch') { Set-FixtureSelectorBinding -Context $Context -Artifact $BadProofArtifact }
 	try { Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $BadProofApi -DeadlineSeconds 30 } $ArtifactProofCase.reason }
 	catch { throw "Aggregate artifact proof fixture '$($ArtifactProofCase.name)' failed: $($_.Exception.Message)" }
 }
@@ -821,12 +1077,14 @@ $ExtraSelectorArtifact = $SelectorArtifact | ConvertTo-Json -Depth 8 | ConvertFr
 $ExtraSelectorArtifact.size_in_bytes = $ExtraSelectorArchive.Length
 $ExtraSelectorArtifact.digest = 'sha256:' + (Get-Sha256 $ExtraSelectorArchive)
 $ExtraSelectorArchiveApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{$SelectorUrl=$ExtraSelectorArchive;$ArtifactsUri=(ConvertTo-FixtureBytes ([pscustomobject][ordered]@{total_count=1;artifacts=@($ExtraSelectorArtifact)}))}
+Set-FixtureSelectorBinding -Context $Context -Artifact $ExtraSelectorArtifact
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $ExtraSelectorArchiveApi -DeadlineSeconds 30 } 'selector_archive_entries_invalid'
 $WrongEntrySelectorArchive = New-FixtureZip @([pscustomobject]@{name='wrong.json';bytes=$SelectorReportBytes})
 $WrongEntrySelectorArtifact = $SelectorArtifact | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 $WrongEntrySelectorArtifact.size_in_bytes = $WrongEntrySelectorArchive.Length
 $WrongEntrySelectorArtifact.digest = 'sha256:' + (Get-Sha256 $WrongEntrySelectorArchive)
 $WrongEntrySelectorArchiveApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{$SelectorUrl=$WrongEntrySelectorArchive;$ArtifactsUri=(ConvertTo-FixtureBytes ([pscustomobject][ordered]@{total_count=1;artifacts=@($WrongEntrySelectorArtifact)}))}
+Set-FixtureSelectorBinding -Context $Context -Artifact $WrongEntrySelectorArtifact
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $WrongEntrySelectorArchiveApi -DeadlineSeconds 30 } 'selector_archive_entries_invalid'
 $BadSelectorReport = ConvertFrom-StrictBoundedJson -Bytes $SelectorReportBytes
 $BadSelectorReport.execution.controllerSha256 = ('9' * 64)
@@ -835,6 +1093,7 @@ $BadSelectorReportArtifact = $SelectorArtifact | ConvertTo-Json -Depth 8 | Conve
 $BadSelectorReportArtifact.size_in_bytes = $BadSelectorReportArchive.Length
 $BadSelectorReportArtifact.digest = 'sha256:' + (Get-Sha256 $BadSelectorReportArchive)
 $BadSelectorReportApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{$SelectorUrl=$BadSelectorReportArchive;$ArtifactsUri=(ConvertTo-FixtureBytes ([pscustomobject][ordered]@{total_count=1;artifacts=@($BadSelectorReportArtifact)}))}
+Set-FixtureSelectorBinding -Context $Context -Artifact $BadSelectorReportArtifact
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $BadSelectorReportApi -DeadlineSeconds 30 } 'selector_evidence_report_invalid'
 $BadSelectorDigest = ConvertFrom-StrictBoundedJson -Bytes $SelectorReportBytes
 $BadSelectorDigest.policy.digest = ('8' * 64)
@@ -843,6 +1102,7 @@ $BadSelectorDigestArtifact = $SelectorArtifact | ConvertTo-Json -Depth 8 | Conve
 $BadSelectorDigestArtifact.size_in_bytes = $BadSelectorDigestArchive.Length
 $BadSelectorDigestArtifact.digest = 'sha256:' + (Get-Sha256 $BadSelectorDigestArchive)
 $BadSelectorDigestApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{$SelectorUrl=$BadSelectorDigestArchive;$ArtifactsUri=(ConvertTo-FixtureBytes ([pscustomobject][ordered]@{total_count=1;artifacts=@($BadSelectorDigestArtifact)}))}
+Set-FixtureSelectorBinding -Context $Context -Artifact $BadSelectorDigestArtifact
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $BadSelectorDigestApi -DeadlineSeconds 30 } 'selector_evidence_report_invalid'
 $BadSelectorSource = ConvertFrom-StrictBoundedJson -Bytes $SelectorReportBytes
 $BadSelectorSource.source.headRevision = ('7' * 40)
@@ -851,29 +1111,35 @@ $BadSelectorSourceArtifact = $SelectorArtifact | ConvertTo-Json -Depth 8 | Conve
 $BadSelectorSourceArtifact.size_in_bytes = $BadSelectorSourceArchive.Length
 $BadSelectorSourceArtifact.digest = 'sha256:' + (Get-Sha256 $BadSelectorSourceArchive)
 $BadSelectorSourceApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{$SelectorUrl=$BadSelectorSourceArchive;$ArtifactsUri=(ConvertTo-FixtureBytes ([pscustomobject][ordered]@{total_count=1;artifacts=@($BadSelectorSourceArtifact)}))}
+Set-FixtureSelectorBinding -Context $Context -Artifact $BadSelectorSourceArtifact
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $BadSelectorSourceApi -DeadlineSeconds 30 } 'selector_evidence_report_invalid'
 $VisualSelectorReportBytes = New-FixtureSelectorReportData -Context $Context -SelectedChecks @('visual-package')
 $VisualSelectorArchiveBytes = New-FixtureZip @([pscustomobject]@{name='ci-selection-shadow.json';bytes=$VisualSelectorReportBytes})
 $VisualSelectorArtifact = [pscustomobject][ordered]@{id=200;name=('ci-selection-shadow-9001-2-' + $script:FixtureNonce);size_in_bytes=$VisualSelectorArchiveBytes.Length;archive_download_url=$SelectorUrl;expired=$false;created_at='2026-09-20T20:09:00Z';digest=('sha256:' + (Get-Sha256 $VisualSelectorArchiveBytes));workflow_run=[pscustomobject][ordered]@{id=9001;head_sha=$Context.source.headRevision}}
 $BadReceiptSizeArtifact = [pscustomobject][ordered]@{id=202;name=('ci-receipt-quality-9001-2-' + $script:FixtureNonce);size_in_bytes=1;archive_download_url='https://api.fixture/artifacts/202/zip';expired=$false;created_at='2026-09-20T20:09:00Z';digest=('sha256:' + ('0' * 64));workflow_run=[pscustomobject][ordered]@{id=9001;head_sha=$Context.source.headRevision}}
 $BadReceiptSizeApi = New-FixtureApi -Context $Context -Requirements $Requirements -SelectedChecks @('visual-package') -Overrides @{$SelectorUrl=$VisualSelectorArchiveBytes;$ArtifactsUri=(ConvertTo-FixtureBytes ([pscustomobject][ordered]@{total_count=2;artifacts=@($VisualSelectorArtifact,$BadReceiptSizeArtifact)}))}
+Set-FixtureSelectorBinding -Context $Context -Artifact $VisualSelectorArtifact
+Set-FixtureProducerBinding -Context $Context -Key 'quality' -Artifact $BadReceiptSizeArtifact
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $BadReceiptSizeApi -DeadlineSeconds 30 } 'artifact_size_mismatch'
 
 $PartialJobs = [pscustomobject][ordered]@{ total_count = 2; jobs = @($SelectorJob,[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='success';run_attempt=2}) }
 $PartialApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{ $AttemptJobsUri = (ConvertTo-FixtureBytes $PartialJobs) }
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $PartialApi -DeadlineSeconds 30 } 'partial_rerun_missing_job'
 
-$FailedJobs = [pscustomobject][ordered]@{ total_count = 3; jobs = @($SelectorJob,[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='failure';run_attempt=2},[pscustomobject][ordered]@{id=102;name='trusted-candidate-compile';status='completed';conclusion='success';run_attempt=2}) }
+$FailedJobs = [pscustomobject][ordered]@{ total_count = 3; jobs = @($SelectorJob,[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='failure';run_attempt=2},[pscustomobject][ordered]@{id=102;name='native-receipt-shadow';status='completed';conclusion='success';run_attempt=2}) }
 $FailedApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{ $AttemptJobsUri = (ConvertTo-FixtureBytes $FailedJobs) }
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $FailedApi -DeadlineSeconds 30 } 'job_conclusion_not_expected'
 
-$MalformedHistory = [pscustomobject][ordered]@{ total_count = 3; jobs = @([pscustomobject][ordered]@{id=100;name='ci-selection-shadow';status='completed';conclusion='success';run_attempt=2},[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='success';run_attempt='2'},[pscustomobject][ordered]@{id=102;name='trusted-candidate-compile';status='completed';conclusion='success';run_attempt=2}) }
+$MalformedHistory = [pscustomobject][ordered]@{ total_count = 3; jobs = @([pscustomobject][ordered]@{id=100;name='ci-selection-shadow';status='completed';conclusion='success';run_attempt=2},[pscustomobject][ordered]@{id=101;name='quality-gates';status='completed';conclusion='success';run_attempt='2'},[pscustomobject][ordered]@{id=102;name='native-receipt-shadow';status='completed';conclusion='success';run_attempt=2}) }
 $MalformedHistoryApi = New-FixtureApi -Context $Context -Requirements $Requirements -Overrides @{ $AllJobsUri = (ConvertTo-FixtureBytes $MalformedHistory) }
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Requirements -ApiRequest $MalformedHistoryApi -DeadlineSeconds 30 } 'api_job_schema_invalid'
 
 $BadRequirement = New-FixtureRequirements
 $BadRequirement.jobs[0].jobName = $BadRequirement.jobs[1].jobName
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $BadRequirement -ApiRequest (New-FixtureApi -Context $Context -Requirements $BadRequirement) -DeadlineSeconds 30 } 'requirements_identity_collision'
+$RetiredRequirement = New-FixtureRequirements
+$RetiredRequirement.jobs[1].checks += 'delivery-harness'
+Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $RetiredRequirement -ApiRequest (New-FixtureApi -Context $Context -Requirements $RetiredRequirement) -DeadlineSeconds 30 } 'requirements_check_invalid'
 $ReservedSelectorJob = New-FixtureRequirements
 $ReservedSelectorJob.jobs[0].jobName = 'ci-selection-shadow'
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $ReservedSelectorJob -ApiRequest (New-FixtureApi -Context $Context -Requirements $ReservedSelectorJob) -DeadlineSeconds 30 } 'requirements_selector_identity_reserved'
@@ -883,5 +1149,19 @@ Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $Res
 $NonCanonicalReceiptArtifact = New-FixtureRequirements
 $NonCanonicalReceiptArtifact.jobs[0].artifactName = 'ci-receipt-native-custom'
 Assert-Rejected { New-CiAcceptanceAggregate -Context $Context -Requirements $NonCanonicalReceiptArtifact -ApiRequest (New-FixtureApi -Context $Context -Requirements $NonCanonicalReceiptArtifact) -DeadlineSeconds 30 } 'requirements_artifact_name_invalid'
+
+
+# Live run 36935862210 (PR #194) failed with api_response_type_invalid: the default bounded HTTP reader returned
+# $Output.ToArray() without the unary comma, so PowerShell unrolled the byte[] into Object[] before the type guard.
+# Fixture callbacks already return ,$Bytes, so only a live request exercised the defect. Keep the guard strict and
+# pin the production reader to the comma form; a wrapper that unrolls the array must stay rejected.
+$UnrolledFixture = { param([string]$Uri,[int]$Remaining,[int]$Maximum,[string]$Kind) $null = $Uri; $null = $Remaining; $null = $Maximum; $null = $Kind; return [byte[]](1,2,3) }
+Assert-Rejected { Invoke-AggregateApi -ApiRequest $UnrolledFixture -Uri '/unrolled' -Clock ([Diagnostics.Stopwatch]::StartNew()) -DeadlineSeconds 30 -MaximumBytes 10 -Budget (New-AggregateBudget) -RequestKind Api } 'api_response_type_invalid'
+$ReaderSource = [IO.File]::ReadAllText($SourceScript)
+$ReaderStart = $ReaderSource.IndexOf('function Invoke-DefaultBoundedApiRequest', [StringComparison]::Ordinal)
+$ReaderEnd = $ReaderSource.IndexOf('function Get-RemainingMilliseconds', [StringComparison]::Ordinal)
+Assert-True ($ReaderStart -ge 0 -and $ReaderEnd -gt $ReaderStart) 'The default bounded API reader must remain a distinct function ahead of Get-RemainingMilliseconds.'
+$ReaderBody = $ReaderSource.Substring($ReaderStart, $ReaderEnd - $ReaderStart)
+Assert-True ($ReaderBody.Contains('return ,$Output.ToArray()') -and -not $ReaderBody.Contains('return $Output.ToArray()')) 'The default bounded API reader must return the response byte[] with the unary comma so the aggregate type guard receives a byte[] from live GitHub requests.'
 
 Write-Output "PASS: $script:Assertions acceptance aggregate assertions"

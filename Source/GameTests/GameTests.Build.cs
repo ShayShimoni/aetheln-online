@@ -8,7 +8,28 @@ public class GameTests : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"Core"
+			"AssetRegistry",
+			"Core",
+			"CoreUObject",
+			"DesktopPlatform",
+			"Engine",
+			"GameCombat",
+			"GameCore",
+			"GameNet",
+			"GameplayAbilities",
+			"GameplayTags",
+			"Json",
+			"NavigationSystem",
+			"PhysicsCore"
 		});
+
+		bool bWithOpenSsl = Target.Platform == UnrealTargetPlatform.Win64
+			|| Target.Platform == UnrealTargetPlatform.Mac
+			|| Target.Platform == UnrealTargetPlatform.Linux;
+		if (bWithOpenSsl)
+		{
+			AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
+		}
+		PrivateDefinitions.Add($"AETHELN_CONTENT_VALIDATION_WITH_OPENSSL={(bWithOpenSsl ? 1 : 0)}");
 	}
 }

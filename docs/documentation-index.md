@@ -60,9 +60,32 @@ subordinate to the specialized canonical product and technical documents.
 - [Structured Observability and Crash Diagnostics](observability-and-crash-diagnostics.md)
   records the Issue #38 event, metric, redaction, lifecycle, crash-context,
   environment, retention, and downstream-ownership contracts.
+- [Gameplay Ability System Foundation](gas-foundation.md) records the Issue #19
+  implementation spec for the PlayerState-owned ability system: class layout,
+  lifecycle, attribute policy, the versioned activation seam, closure of the
+  stock GAS activation routes, rejection telemetry, test plan, PR phasing,
+  known interim gaps, and open decisions. The Gameplay Tag and content-version
+  conventions it implements live in
+  [Combat and Networking Architecture](combat-and-networking-architecture.md#gameplay-tag-and-content-version-conventions).
+- [Attack Timeline and Three-Hit Combo](attack-timeline-and-combo.md) records
+  the Issue #60 implementation spec for the server-owned pure-free-aim attack
+  timeline: request schema 2 and the aim policy, chain progression and
+  buffering, cancel and reset rules, authored volumes and deterministic hit
+  resolution, lag-compensation and prediction policy, outcome reporting,
+  rejection reasons, data-driven tuning, test plan, phased delivery, and the
+  owner decisions of 2026-10-05.
+- [Dodge and Block](dodge-and-block.md) records the Issue #18 implementation
+  spec for the server-validated dodge and the right-mouse block: the
+  movement-carried dodge request, predicted displacement against the
+  server-owned invulnerability window, the held block and the defense state,
+  arc, and Guard hook it exposes to Issue #60, prediction and outcome
+  reporting, telemetry, test plan, phased delivery, owner decisions, and open
+  decisions.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
-  constraints, and machine-readable evidence path.
+  constraints, and machine-readable evidence path, plus the Issue #167
+  accepted-base selector, receipt, aggregate, activation, and live-observation
+  contracts used to recover and evolve CI without creating false authority.
 - [Unreal Automation](unreal-automation.md) records the pinned headless harness,
   exact Issue #85 tests and discovery contract, fail-closed behavior, local
   invocation, and normalized evidence schema.
@@ -71,6 +94,9 @@ subordinate to the specialized canonical product and technical documents.
   the identity-bound persistent Derived Data Cache contract, the attested
   fail-closed prebuilt host-tools boundary and its operator attestation step,
   and capacity and recovery ownership.
+- [Asset Intake and Content Validation](asset-intake-and-content-validation.md)
+  defines lifecycle, provenance, stable identity, audience, validation, and
+  client/server cook-evidence contracts for Issue #120.
 - [GitHub Issues](https://github.com/ShayShimoni/aetheln-online/issues) govern
   work status, ownership, priority, and target version.
 

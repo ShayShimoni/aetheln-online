@@ -1,12 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/CharacterMovementComponent.h"
+#include "AethelnCharacterMovementComponent.h"
 #include "AethelnSpikeMovementComponent.generated.h"
 
 /** Movement telemetry seam layered onto Unreal's authoritative prediction component. */
 UCLASS()
-class GAMECOMBAT_API UAethelnSpikeMovementComponent final : public UCharacterMovementComponent
+class GAMECOMBAT_API UAethelnSpikeMovementComponent final : public UAethelnCharacterMovementComponent
 {
 	GENERATED_BODY()
 

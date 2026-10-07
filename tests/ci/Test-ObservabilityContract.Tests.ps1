@@ -21,11 +21,12 @@ function Invoke-Check {
 }
 
 try {
-	foreach ($RelativeDirectory in @('Source\GameNet\Public', 'docs')) {
+	foreach ($RelativeDirectory in @('Source\GameNet\Public', 'Source\GameNet\Private', 'docs')) {
 		New-Item -ItemType Directory -Path (Join-Path $FixtureRoot $RelativeDirectory) -Force | Out-Null
 	}
 	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservability.h') -Destination (Join-Path $FixtureRoot 'Source\GameNet\Public\AethelnObservability.h')
 	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservabilitySubsystem.h') -Destination (Join-Path $FixtureRoot 'Source\GameNet\Public\AethelnObservabilitySubsystem.h')
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp') -Destination (Join-Path $FixtureRoot 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp')
 	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'docs\observability-and-crash-diagnostics.md') -Destination (Join-Path $FixtureRoot 'docs\observability-and-crash-diagnostics.md')
 
 	$Pass = Invoke-Check
@@ -43,6 +44,44 @@ try {
 		throw "Sensitive-field fixture did not fail closed: $($Fail.Output -join [Environment]::NewLine)"
 	}
 	Write-Output 'PASS: sensitive free-form identifier fixture fails closed'
+
+	foreach ($Variant in @(
+		@{ Name = 'event'; Sensitive = 'SchemaId.Equals(AethelnObservability::SchemaId, ESearchCase::CaseSensitive)'; Insensitive = 'SchemaId == AethelnObservability::SchemaId' },
+		@{ Name = 'network-profile'; Sensitive = 'NetworkProfile.SchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)'; Insensitive = 'NetworkProfile.SchemaId == AethelnNetworkSpike::NetworkProfileSchemaId' }
+	)) {
+		Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservability.h') -Destination $ContractPath -Force
+		$Contract = Get-Content -LiteralPath $ContractPath -Raw
+		if ($Contract.IndexOf($Variant.Sensitive, [StringComparison]::Ordinal) -lt 0) {
+			throw "Contract does not compare the $($Variant.Name) schema identity case-sensitively."
+		}
+		[System.IO.File]::WriteAllText($ContractPath, $Contract.Replace($Variant.Sensitive, $Variant.Insensitive))
+		$Fail = Invoke-Check
+		if ($Fail.ExitCode -eq 0 -or ($Fail.Output -join "`n") -notmatch 'case-insensitive comparison') {
+			throw "Case-insensitive $($Variant.Name) schema comparison did not fail closed: $($Fail.Output -join [Environment]::NewLine)"
+		}
+		Write-Output "PASS: case-insensitive $($Variant.Name) schema comparison fails closed"
+	}
+
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'Source\GameNet\Public\AethelnObservability.h') -Destination $ContractPath -Force
+	$ImplementationPath = Join-Path $FixtureRoot 'Source\GameNet\Private\AethelnObservabilitySubsystem.cpp'
+	$Implementation = Get-Content -LiteralPath $ImplementationPath -Raw
+	$Sensitive = '!InNetworkProfile.SchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)'
+	$Insensitive = 'InNetworkProfile.SchemaId != AethelnNetworkSpike::NetworkProfileSchemaId'
+	if ($Implementation.IndexOf($Sensitive, [StringComparison]::Ordinal) -lt 0) {
+		throw 'Build-context implementation does not compare the profile schema case-sensitively.'
+	}
+	[System.IO.File]::WriteAllText($ImplementationPath, $Implementation.Replace('InNetworkProfile', 'InProfile'))
+	$Pass = Invoke-Check
+	if ($Pass.ExitCode -ne 0) {
+		throw "Harmless parameter rename in the build-context implementation was rejected: $($Pass.Output -join [Environment]::NewLine)"
+	}
+	Write-Output 'PASS: harmless build-context parameter rename is accepted'
+	[System.IO.File]::WriteAllText($ImplementationPath, $Implementation.Replace($Sensitive, $Insensitive))
+	$Fail = Invoke-Check
+	if ($Fail.ExitCode -eq 0 -or ($Fail.Output -join "`n") -notmatch 'case-insensitive comparison') {
+		throw "Case-insensitive build-context schema replacement did not fail closed: $($Fail.Output -join [Environment]::NewLine)"
+	}
+	Write-Output 'PASS: case-insensitive build-context schema replacement fails closed'
 	Write-Output 'All observability contract fixture tests passed.'
 }
 finally {
