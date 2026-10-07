@@ -191,7 +191,9 @@ exit /b 0
 	$GoodEditorReceipt = Write-EditorReceipt 'good' $EditorReceiptBody
 	$env:AETHELN_TEST_EDITOR_RECEIPT = $GoodEditorReceipt
 	Set-Content -LiteralPath (Join-Path $EditorDirectory 'UnrealPak.target') -Value '{"TargetName":"UnrealPak","Platform":"Win64","Configuration":"Development","TargetType":"Program","BuildProducts":[{"Path":"$(EngineDir)/Binaries/Win64/UnrealPak.exe","Type":"Executable"},{"Path":"$(EngineDir)/Binaries/Win64/UnrealPak-PakFile.dll","Type":"DynamicLibrary"},{"Path":"$(EngineDir)/Binaries/Win64/UnrealPak.modules","Type":"RequiredResource"},{"Path":"$(EngineDir)/Binaries/Win64/UnrealPak.pdb","Type":"SymbolFile"}]}' -Encoding UTF8
-	Set-Content -LiteralPath $ScwReceiptPath -Value '{"TargetName":"ShaderCompileWorker","Platform":"Win64","Configuration":"Development","TargetType":"Program","BuildProducts":[{"Path":"$(EngineDir)/Binaries/Win64/ShaderCompileWorker.exe","Type":"Executable"},{"Path":"$(EngineDir)/Binaries/Win64/ShaderCompileWorker.modules","Type":"RequiredResource"}]}' -Encoding UTF8
+	# Real Editor and ShaderCompileWorker receipts share runtime DLLs. The
+	# closure must union that overlap, while rejecting duplicates within a receipt.
+	Set-Content -LiteralPath $ScwReceiptPath -Value '{"TargetName":"ShaderCompileWorker","Platform":"Win64","Configuration":"Development","TargetType":"Program","BuildProducts":[{"Path":"$(EngineDir)/Binaries/Win64/ShaderCompileWorker.exe","Type":"Executable"},{"Path":"$(EngineDir)/Binaries/Win64/ShaderCompileWorker.modules","Type":"RequiredResource"},{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Core.dll","Type":"DynamicLibrary"}]}' -Encoding UTF8
 	# The reviewed wrapper (InitialPreparation.BuildInvocation.ps1) runs this fake
 	# engine Build.bat with the bundled dotnet present. It records its arguments
 	# and build order, writes one planted build.log line (an engine path and the
@@ -568,6 +570,7 @@ public static class FakeEditor {
 		'Engine/Binaries/Win64/ShaderCompileWorker.modules'
 	)
 	$AttestedPaths = @($Attestation.files | ForEach-Object { [string] $_.path } | Sort-Object)
+	Assert-True (@($Attestation.files | Where-Object { $_.path -eq 'Engine/Binaries/Win64/UnrealEditor-Core.dll' }).Count -eq 1) 'A DLL shared by both receipts must be attested exactly once.'
 	Assert-True (($AttestedPaths -join ';') -eq (@($RequiredToolPaths | Sort-Object) -join ';')) "The attestation must record exactly the project receipt's engine-side products plus the ShaderCompileWorker receipt and products, with no UnrealPak, project, or symbol entries. Observed: $($AttestedPaths -join ';')"
 	foreach ($AttestedFile in @($Attestation.files)) {
 		$OnDisk = Join-Path $EngineRoot ([string] $AttestedFile.path)
@@ -880,10 +883,18 @@ public static class FakeEditor {
 	Write-Output 'PASS: noncanonical revisions, dirty checkouts, and manipulated attestation records all fail the boundary closed'
 
 	$CallsBeforeReceiptClosure = @(Get-Content -LiteralPath $CapturePath).Count
+	$SharedScwReceiptBytes = [System.IO.File]::ReadAllBytes($ScwReceiptPath)
+	$SharedScwReceiptBody = Get-Content -LiteralPath $ScwReceiptPath -Raw
+	try {
+		$DuplicateScwProduct = '{"Path":"$(EngineDir)/Binaries/Win64/ShaderCompileWorker.exe","Type":"Executable"},'
+		Set-Content -LiteralPath $ScwReceiptPath -Value ($SharedScwReceiptBody.Replace($DuplicateScwProduct, $DuplicateScwProduct + $DuplicateScwProduct)) -Encoding UTF8
+		$Run = Invoke-PackagingCase 'DuplicateScwReceiptProduct' $PrebuiltArguments -Override @{ Stage = 'Client' }
+		Assert-True ($null -ne $Run.Failure -and $Run.Failure -match 'duplicates or case-collides') 'A duplicate within the ShaderCompileWorker receipt must still fail closed.'
+	} finally { [System.IO.File]::WriteAllBytes($ScwReceiptPath, $SharedScwReceiptBytes) }
 	Set-Content -LiteralPath $EditorCoreDllPath -Value 'FIXTURE EDITOR CORE MODULE' -Encoding Ascii
 	$Failure = $null
 	try { & $Script -ProjectPath $FixtureProject -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -ArchiveRoot (Join-Path $FixtureRoot 'ReceiptRootDllArchive') -LogRoot (Join-Path $FixtureRoot 'ReceiptRootDllLogs') -SourceRevision $Revision -HostToolsBoundary Prebuilt -EngineRevision $CanonicalEnginePin -HostToolsAttestationPath $AttestationPath } catch { $Failure = $_.Exception.Message }
-	Assert-True ($Failure -match 'does not match its attested SHA-256') 'A mutated receipt-listed root editor module DLL must fail the boundary closed.'
+	Assert-True ($Failure -match 'does not match its attested SHA-256') 'A mutated DLL shared by the Editor and ShaderCompileWorker receipts must fail the boundary closed.'
 	Set-Content -LiteralPath $EditorCoreDllPath -Value 'fixture editor core module' -Encoding Ascii
 	Set-Content -LiteralPath $PluginDllPath -Value 'FIXTURE PLUGIN MODULE' -Encoding Ascii
 	$Failure = $null

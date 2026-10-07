@@ -511,6 +511,7 @@ function Get-HostToolReceiptProductPath {
 		# receipt is this phase's own build output: its engine-side list is
 		# checked by set equality and its launch entries above.
 		$Derived = New-Object System.Collections.ArrayList
+		$ReceiptSeen = @{}
 		if (-not $IsProjectReceipt) { [void] $Derived.Add($ReceiptRelative) }
 		foreach ($Product in $Products) {
 			if ($null -eq $Product -or $null -eq $Product.PSObject.Properties['Path'] -or $null -eq $Product.PSObject.Properties['Type'] -or $Product.Path -isnot [string] -or $Product.Type -isnot [string]) { throw "$Invalid carries a build product without string Path and Type." }
@@ -531,7 +532,11 @@ function Get-HostToolReceiptProductPath {
 		}
 		foreach ($RelativeProduct in $Derived) {
 			$Normalized = ($RelativeProduct -replace '\\', '/').ToLowerInvariant()
-			if ($Seen.ContainsKey($Normalized)) { throw "Receipt-derived host build product '$RelativeProduct' duplicates or case-collides with another product; host-tools validation fails closed." }
+			if ($ReceiptSeen.ContainsKey($Normalized)) { throw "Receipt-derived host build product '$RelativeProduct' duplicates or case-collides with another product in receipt '$ReceiptRelative'; host-tools validation fails closed." }
+			$ReceiptSeen[$Normalized] = $RelativeProduct
+			# Editor and ShaderCompileWorker legitimately share runtime products.
+			# Attest their canonical union once; duplicates within a receipt remain invalid.
+			if ($Seen.ContainsKey($Normalized)) { continue }
 			$Seen[$Normalized] = $RelativeProduct
 			[void] $Paths.Add($RelativeProduct)
 		}

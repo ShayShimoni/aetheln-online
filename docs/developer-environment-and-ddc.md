@@ -507,8 +507,10 @@ the engine `UnrealEditor-Cmd.exe` and `UnrealEditor.exe`
 (`host_tools_launch_invalid`). Symbol/debug and link-time-only
 products are excluded; unknown product types, receipt metadata mismatches
 (`host_tools_receipt_invalid`), paths escaping the engine root,
-reparse-mediated paths, and duplicate or case-colliding products fail closed,
-and receipt size, product count, per-file size, and overflow-checked aggregate
+reparse-mediated paths, and duplicate or case-colliding products within each
+receipt fail closed. Shared canonical products across the Editor and
+ShaderCompileWorker receipts are attested once as a union. Receipt size,
+product count, per-file size, and overflow-checked aggregate
 size are all bounded. Run it after an explicit authorized provisioning build
 and whenever re-attestation is needed (below); never start a full rebuild
 merely to create the record.
