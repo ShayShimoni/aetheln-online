@@ -209,10 +209,20 @@ Assert-True ($BuildHarness -cnotcontains 'delivery-harness' -and $BuildHarness -
 # change-impact job exempts from compile, or the producer-gap path goes red.
 $WorkflowPortableCiPaths = [regex]::Match([IO.File]::ReadAllText((Join-Path $RepositoryRoot '.github\workflows\prototype-quality-gates.yml')), '(?ms)^\s*\$PortableCiPaths = @\((?<list>.*?)\)\r?$')
 $CompileExemptPaths = @([regex]::Matches($WorkflowPortableCiPaths.Groups['list'].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
-Assert-True ($CompileExemptPaths.Count -eq 2) 'The workflow compile-exempt path list should be readable.'
+Assert-True ($CompileExemptPaths.Count -eq 2) 'The workflow compile-exempt path list should contain exactly two paths.'
 foreach ($CompileExemptPath in $CompileExemptPaths) {
 	$Packaging = @(Get-PathCheckSelection $CompileExemptPath @{})
 	Assert-True (($Packaging -join ',') -ceq 'clean-package-provenance-smoke,portable') "Compile-exempt path '$CompileExemptPath' must select portable and clean-package proof, never a compile-backed receipt."
+}
+# The carve-out is an ordinal, case-sensitive match. A filename case variant is not a
+# compile-exempt path (change-impact compiles it), so it keeps operational proof; a
+# directory case variant is unclassified and takes the conservative report.
+foreach ($CaseVariantPath in @('scripts/build/build-packagedartifacts.ps1', 'scripts/build/Build-PackagedArtifacts.PS1', 'scripts/build/invoke-packagedsmoketest.ps1', 'scripts/build/Invoke-PackagedSmokeTest.PS1')) {
+	$CaseVariant = @(Get-PathCheckSelection $CaseVariantPath @{})
+	Assert-True ($CaseVariant -ccontains 'controller-operational-proof' -and $CaseVariant -ccontains 'clean-package-provenance-smoke') "Case variant '$CaseVariantPath' of a compile-exempt path must still select operational and clean-package proof."
+}
+foreach ($CaseVariantPath in @('Scripts/build/Build-PackagedArtifacts.ps1', 'Scripts/build/Invoke-PackagedSmokeTest.ps1')) {
+	Assert-Rejected { Get-PathCheckSelection $CaseVariantPath @{} } 'path_unclassified'
 }
 $BuildTest = @(Get-PathCheckSelection 'tests/build/X.Tests.ps1' @{})
 Assert-True ($BuildTest -cnotcontains 'delivery-harness' -and $BuildTest -ccontains 'portable') 'Build tests should retain portable proof without the retired delivery harness.'

@@ -12,6 +12,8 @@
  * module so Client and Server targets carry no test class. Their tags
  * (AethelnCombatTestTags) are declared in GameCore, because the engine accepts
  * native tags only from Runtime modules. Only the tests grant these abilities.
+ * No WITH_DEV_AUTOMATION_TESTS guard: UHT skips the contents of #if blocks it
+ * does not recognize, so guarded UCLASS types would lose their generated code.
  */
 
 /** Commits through the seam's result slot, then stays active until cancelled. */
@@ -39,7 +41,8 @@ public:
 
 /**
  * Seam probe. The knobs and counters live on the primary instance, which the seam
- * reads. Cost and cooldown are counted, not applied (the real ones arrive in P4).
+ * reads. Its cost and cooldown overrides count, not apply (the Oathscar ability
+ * tests cover the base ability's real ones).
  * It accepts Release, holds a state tag while active, and stays active after a
  * successful commit. The setters let grant-validation tests build bad definitions
  * on transient instances.

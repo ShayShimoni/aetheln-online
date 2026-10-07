@@ -433,7 +433,8 @@ with `shadow_report_controller_identity_mismatch`.
 Agent-tooling, build-test, and every `tests/**/*.ps1|md` path retain
 portable proof; build scripts retain controller-operational and clean-package
 proof, except the two packaging scripts `change-impact` exempts from compile,
-which keep clean-package proof only (issue #231, below). Production CI scripts and workflows select both controller
+which keep `portable` and `clean-package-provenance-smoke` only (issue #231,
+below). Production CI scripts and workflows select both controller
 contract and operational proof; plugin Content also selects content-reference
 validation. Ordinary source, plugin source, and the project descriptor select
 native client/server compilation plus Unreal Editor automation, but not a
