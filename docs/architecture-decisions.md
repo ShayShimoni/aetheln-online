@@ -225,10 +225,11 @@ Every accepted decision records:
   same-repository pull requests may run the supported-target compile gate,
   after the portable gates pass and only when the exact base/head change
   classification in TA-012 requires the engine. The packaged-smoke milestone
-  runs at `02:00 UTC` from the protected default branch as the four
-  schedule-only phases decided in TA-012; the workflow declares no manual
-  trigger. The default branch was `main` when this was accepted and has been
-  `develop` since 2026-10-03 (see the amendment below).
+  runs on Saturday at `02:00 UTC` (weekly since the 2026-10-06 amendment
+  below) from the protected default branch as the four schedule-only phases
+  decided in TA-012; the workflow declares no manual trigger. The default
+  branch was `main` when this was accepted and has been `develop` since
+  2026-10-03 (see the amendment below).
 - **Rationale:** The pinned Unreal source build, Visual Studio and Linux
   cross-toolchains, WSL topology, disk capacity, and local build paths are not
   available on ordinary GitHub-hosted runners. Repository scope and explicit
@@ -276,6 +277,21 @@ Every accepted decision records:
   Release packaging stays on `release/*` through TA-022. The scheduled jobs
   guard only on the `schedule` event, so no workflow condition or test pins
   `main` for the schedule, and none changed.
+- **Amendment (2026-10-06, weekly schedule, issue #264):** The owner moved the
+  scheduled milestone from daily to weekly, on Saturday at `02:00 UTC` (cron
+  `0 2 * * 6`). At prototype stage, packaging-only changes are rare. Owner
+  pull requests with engine-impacting changes already compile, but a pull
+  request limited to portable-only paths or to the two exact packaging-script
+  exemptions (`scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`) is exercised on the engine
+  only by the scheduled and release packaging runs (TA-022). Weekly stretches
+  that gap from at most a day to at most a week; the owner accepted weekly on
+  2026-10-06. The owner estimated about one to two hours of runner time per
+  run (the 40/40/20/20-minute phase ceilings sum to two hours; no healthy
+  phased run has been measured yet), and a run could start late enough to
+  overlap the owner's working hours. The four phases, their bounds, the
+  handoff and evidence contracts, and the CI authority predicate are
+  unchanged.
 - **Revisit trigger:** A collaborator needs runner access, the runner moves to a
   different host/account or trust domain, hosted/ephemeral infrastructure can
   reproduce the pinned toolchain, or measured cost, reliability, isolation, or
