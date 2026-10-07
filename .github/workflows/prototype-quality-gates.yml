@@ -769,7 +769,7 @@ jobs:
                 try { $CaptureFailed = $null -ne ($ResultText | ConvertFrom-Json).infrastructureFailure } catch { $CaptureFailed = $true }
               }
               $BuildExit = $Build.exitCode
-              # Exit 5 is UBT FailedDueToEngineChange (-NoEngineChanges, deferred by TA-020 until the NetCore follow-up).
+              # Exit 5 is UBT FailedDueToEngineChange: -NoEngineChanges refused to rewrite an existing engine file.
               if ($Build.timedOut) { $Failure = 'editor_build_timeout' }
               elseif ($null -eq $BuildExit) { $Failure = 'editor_build_capture_failed' }
               elseif ($BuildExit -ne 0) { if ($CaptureFailed) { $Failure = 'editor_build_capture_failed' } elseif ($BuildExit -eq 5) { $Failure = 'editor_build_engine_changes_required' } else { $Failure = 'editor_build_failed' } }

@@ -458,7 +458,7 @@ Assert-True ([regex]::Matches($AutomationRun, 'Write-Output').Count -eq 1 -and $
 # sync detail code, the fixed test-override line, and the wrapper's
 # native-result.json (target, platform, exit code, failure class).
 Assert-True ([regex]::Matches($EditorBuild, 'Write-Output').Count -eq 5 -and $EditorBuild.Contains('Write-Output $ResultText') -and $EditorBuild.Contains('$ResultText = [IO.File]::ReadAllText($ResultPath)') -and $EditorBuild.Contains("`$ResultPath = Join-Path `$EvidenceRoot 'native-result.json'") -and $EditorBuild.Contains("if (`$null -ne `$Detail) { Write-Output ('editor_build_detail code=' + `$Detail) }") -and $EditorBuild.Contains("-cmatch '\Alease_[a-z_]{1,48}\z'") -and $EditorBuild.Contains("-cmatch '\Amanaged_(registration|workspace)_[a-z_]{1,48}\z'")) 'The editor build may print only the masks, a fixed detail code, and the bounded native result record.'
-# UBT exit 5 (-NoEngineChanges, deferred by TA-020) keeps its own fixed reason, checked before the generic failure.
+# UBT exit 5 (-NoEngineChanges refused an engine rewrite, TA-020 2026-10-06) keeps its own fixed reason, checked before the generic failure.
 Assert-True ($EditorBuild.Contains("elseif (`$BuildExit -eq 5) { `$Failure = 'editor_build_engine_changes_required' }") -and $EditorBuild.IndexOf('editor_build_engine_changes_required') -lt $EditorBuild.IndexOf("'editor_build_failed'")) 'The editor build must map UBT exit 5 to editor_build_engine_changes_required before editor_build_failed.'
 $ManagedWorkspaceSource = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\ManagedCompileWorkspace.ps1') -Raw
 $UntrackedInputQuery = [regex]::Matches($ManagedWorkspaceSource, "'(ls-files --others -z -- [^']+)'")
@@ -513,7 +513,7 @@ try {
 	$env:GITHUB_OUTPUT = Join-Path $AutomationFixtureRoot 'github-output.txt'
 	$null = New-Item -ItemType Directory -Path (Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles'), (Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64')
 	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64/dotnet.exe'), 'fixture')
-	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles/Build.bat'), "@echo off`r`necho Building would modify the following existing engine files:`r`necho %~dp0UnrealEditor-Fixture.dll`r`nif defined AETHELN_FIXTURE_NATIVE_SLEEP ping -n %AETHELN_FIXTURE_NATIVE_SLEEP% 127.0.0.1 >nul`r`nexit /b %AETHELN_FIXTURE_NATIVE_EXIT%`r`n")
+	[IO.File]::WriteAllText((Join-Path $env:AETHELN_ENGINE_ROOT 'Engine/Build/BatchFiles/Build.bat'), "@echo off`r`necho build-args %*`r`necho Building would modify the following existing engine files:`r`necho %~dp0UnrealEditor-Fixture.dll`r`nif defined AETHELN_FIXTURE_NATIVE_SLEEP ping -n %AETHELN_FIXTURE_NATIVE_SLEEP% 127.0.0.1 >nul`r`nexit /b %AETHELN_FIXTURE_NATIVE_EXIT%`r`n")
 	$env:AETHELN_LINUX_TOOLCHAIN_ROOT = $AutomationFixtureRoot
 	# Issue #236 re-sync fixture. One source repository holds the reviewed
 	# control-checkout scripts and one compile input at two revisions. The
@@ -556,8 +556,8 @@ try {
 		# Non-compile residue survives the sync, but the post-sync clean assertion
 		# must reject it through the parent's editor_workspace_dirty mapping.
 		@{ name = 'dirty workspace'; exit = '0'; residue = $false; stray = $true; reason = 'editor_workspace_dirty'; detail = $null; head = $Revisions.tested; built = $false },
-		# Through the control-checkout wrapper, UBT exit 5 (a deferred
-		# -NoEngineChanges refusal) records editor_build_engine_changes_required,
+		# Through the control-checkout wrapper, UBT exit 5 (a -NoEngineChanges
+		# refusal) records editor_build_engine_changes_required,
 		# any other exit editor_build_failed; the refused engine file list stays
 		# in the runner-local build.log.
 		@{ name = 'engine changes'; exit = '5'; residue = $false; reason = 'editor_build_engine_changes_required'; detail = $null; head = $Revisions.tested; built = $true },
@@ -588,6 +588,8 @@ try {
 		elseif (-not $SyncCase.built) { Assert-True ($Visible -ceq '') "The $($SyncCase.name) case must print no detail line or native build result." }
 		if ($SyncCase.built) {
 			Assert-True ($Visible.Contains('"nativeExitCode":' + $SyncCase.exit) -and [IO.File]::ReadAllText((Join-Path $EditorBuildEvidence 'build.log')).Contains('Building would modify')) "The $($SyncCase.name) case must print the native result record and keep build output runner-local."
+			# Issue #267: the CI editor build passes -NoEngineChanges, so exit 5 is a real UBT refusal.
+			Assert-True ([IO.File]::ReadAllText((Join-Path $EditorBuildEvidence 'build.log')).Contains(' -NoEngineChanges ')) "The $($SyncCase.name) case must build the editor with -NoEngineChanges."
 			Remove-Item -LiteralPath $EditorBuildEvidence -Recurse -Force
 		} else { Assert-True (-not (Test-Path -LiteralPath $EditorBuildEvidence)) "The $($SyncCase.name) case must stop before the editor build." }
 		if ($SyncCase.residue) { Remove-Item -LiteralPath $ResiduePath -Force }
@@ -766,6 +768,57 @@ Assert-True ($AutomationRun -match [regex]::Escape("Join-Path `$env:AETHELN_MANA
 Assert-True ($AutomationRun -match '-RedirectStandardOutput' -and $AutomationRun -match '-RedirectStandardError' -and $AutomationRun -notmatch 'Get-Content[^\r\n]*\.log' -and $AutomationRun -notmatch 'Write-Output \$Report\b') 'Unreal and harness output must stay in runner-local files; only a bounded summary may reach the log.'
 Assert-True ($AutomationBind -match '(?m)^        id: automation_identity\r?$' -and $AutomationBind -match '\[Security\.Cryptography\.SHA256\]::Create\(\)' -and $AutomationBind.Contains('artifact_name=unreal-automation-report') -and $AutomationBind -notmatch 'if: always\(\)') 'The automation report must be bound with the portable SHA-256 implementation and only after a passing harness.'
 Assert-True ($EditorAutomation -match '(?m)^        id: automation_artifact\r?$' -and $EditorAutomation -match '(?m)^          name: unreal-automation-report\r?$' -and $EditorAutomation.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/unreal-automation-report.json')) 'The automation report upload must be one exact run/attempt/job-scoped file.'
+
+# Issue #267 owner step B: the cold dry run passes only a fresh-worktree
+# -NoEngineChanges editor build that exits 0 and leaves every host-tools closure
+# file byte-identical. A fake engine stands in; Unreal never runs.
+$DryRunScript = Join-Path $RepositoryRoot 'scripts\ci\Invoke-EditorColdDryRun.ps1'
+$DryRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-cold-dry-run-' + [guid]::NewGuid().ToString('N'))
+$DryEngine = Join-Path $DryRoot 'engine'
+$DryBinaries = Join-Path $DryEngine 'Engine\Binaries\Win64'
+$DryBaseline = Join-Path $DryRoot 'baseline\AethelnOnlineEditor.target'
+$PreviousDryEnvironment = @{}
+foreach ($Name in @('UE_ADDITIONAL_PLUGIN_PATHS', 'AETHELN_FIXTURE_DRY_EXIT', 'AETHELN_FIXTURE_DRY_MUTATE')) { $PreviousDryEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+try {
+	$null = New-Item -ItemType Directory -Path (Join-Path $DryEngine 'Engine\Build\BatchFiles'), (Join-Path $DryEngine 'Engine\Binaries\ThirdParty\DotNet\10.0\win-x64'), $DryBinaries, (Split-Path -Parent $DryBaseline)
+	[IO.File]::WriteAllText((Join-Path $DryEngine 'Engine\Binaries\ThirdParty\DotNet\10.0\win-x64\dotnet.exe'), 'fixture')
+	foreach ($Name in @('UnrealEditor-Core.dll', 'UnrealEditor.modules', 'ShaderCompileWorker.exe')) { [IO.File]::WriteAllText((Join-Path $DryBinaries $Name), $Name) }
+	# Symbol and $(ProjectDir) products stay out of the closure, so they need not exist.
+	[IO.File]::WriteAllText((Join-Path $DryBinaries 'ShaderCompileWorker.target'), '{"TargetName":"ShaderCompileWorker","BuildProducts":[{"Path":"$(EngineDir)/Binaries/Win64/ShaderCompileWorker.exe","Type":"Executable"}]}')
+	[IO.File]::WriteAllText($DryBaseline, '{"TargetName":"AethelnOnlineEditor","BuildProducts":[{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Core.dll","Type":"DynamicLibrary"},{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor.modules","Type":"RequiredResource"},{"Path":"$(EngineDir)/Binaries/Win64/UnrealEditor-Core.pdb","Type":"SymbolFile"},{"Path":"$(ProjectDir)/Binaries/Win64/UnrealEditor-GameCore.dll","Type":"DynamicLibrary"}]}')
+	[IO.File]::WriteAllText((Join-Path $DryEngine 'Engine\Build\BatchFiles\Build.bat'), "@echo off`r`necho build-args %*`r`nif `"%AETHELN_FIXTURE_DRY_MUTATE%`"==`"1`" echo relinked>`"%~dp0..\..\Binaries\Win64\UnrealEditor-Core.dll`"`r`nif `"%AETHELN_FIXTURE_DRY_EXIT%`"==`"0`" mkdir Binaries\Win64`r`nif `"%AETHELN_FIXTURE_DRY_EXIT%`"==`"0`" copy /y `"$DryBaseline`" Binaries\Win64\AethelnOnlineEditor.target >nul`r`nexit /b %AETHELN_FIXTURE_DRY_EXIT%`r`n")
+	foreach ($DryCase in @(
+		@{ name = 'clean'; exit = '0'; mutate = '0'; plugin = $null; fresh = $true; status = 0; line = 'cold_dry_run passed exit=0 closure=4 changed=0' },
+		@{ name = 'engine-relink'; exit = '0'; mutate = '1'; plugin = $null; fresh = $true; status = 1; line = 'cold_dry_run failed exit=0 closure=4 changed=1' },
+		@{ name = 'engine-changes'; exit = '5'; mutate = '0'; plugin = $null; fresh = $true; status = 1; line = 'cold_dry_run failed exit=5 closure=4 changed=0' },
+		@{ name = 'plugin-path'; exit = '0'; mutate = '0'; plugin = 'C:\Plugins'; fresh = $true; status = 1; line = 'cold_dry_run_plugin_paths_set' },
+		@{ name = 'warm-target'; exit = '0'; mutate = '0'; plugin = $null; fresh = $false; status = 1; line = 'cold_dry_run_target_not_fresh' }
+	)) {
+		$DryTarget = Join-Path $DryRoot ('target-' + $DryCase.name)
+		$DryEvidence = Join-Path $DryRoot ('evidence-' + $DryCase.name)
+		$null = New-Item -ItemType Directory -Path $DryTarget, $DryEvidence
+		[IO.File]::WriteAllText((Join-Path $DryTarget 'AethelnOnline.uproject'), '{}')
+		if (-not $DryCase.fresh) { $null = New-Item -ItemType Directory -Path (Join-Path $DryTarget 'Intermediate') }
+		$env:AETHELN_FIXTURE_DRY_EXIT = $DryCase.exit
+		$env:AETHELN_FIXTURE_DRY_MUTATE = $DryCase.mutate
+		[Environment]::SetEnvironmentVariable('UE_ADDITIONAL_PLUGIN_PATHS', $DryCase.plugin)
+		$Previous = $ErrorActionPreference
+		$ErrorActionPreference = 'Continue'
+		try {
+			$DryOutput = (@(& (Join-Path $PSHOME 'powershell.exe') -NoProfile -NonInteractive -File $DryRunScript -EngineRoot $DryEngine -TargetRoot $DryTarget -BaselineReceipt $DryBaseline -LinuxToolchainRoot $DryRoot -EvidenceRoot $DryEvidence 2>&1 | ForEach-Object { [string] $_ }) -join "`n")
+			$DryStatus = $LASTEXITCODE
+		} finally { $ErrorActionPreference = $Previous }
+		if ($DryCase.line.StartsWith('cold_dry_run ', [StringComparison]::Ordinal)) {
+			Assert-True ($DryStatus -eq $DryCase.status -and $DryOutput -ceq $DryCase.line) "The cold dry run $($DryCase.name) case must exit $($DryCase.status) and print only '$($DryCase.line)'."
+			Assert-True ([IO.File]::ReadAllText((Join-Path $DryEvidence 'build\build.log')).Contains(' -NoEngineChanges ') -and (Test-Path -LiteralPath (Join-Path $DryEvidence 'build\native-result.json')) -and (Test-Path -LiteralPath (Join-Path $DryEvidence 'hashes-before.csv')) -and (Test-Path -LiteralPath (Join-Path $DryEvidence 'hashes-after.csv'))) "The cold dry run $($DryCase.name) case must build the editor with -NoEngineChanges and keep its evidence."
+		} else {
+			Assert-True ($DryStatus -ne 0 -and $DryOutput.Contains($DryCase.line) -and -not (Test-Path -LiteralPath (Join-Path $DryEvidence 'build'))) "The cold dry run $($DryCase.name) case must refuse with $($DryCase.line) before the editor build."
+		}
+	}
+} finally {
+	foreach ($Name in $PreviousDryEnvironment.Keys) { [Environment]::SetEnvironmentVariable($Name, $PreviousDryEnvironment[$Name]) }
+	Remove-Item -LiteralPath $DryRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # Package 3C receipt publishers are additive PR-only hosted jobs. Each consumes
 # the selector and exactly one raw producer through immutable artifact IDs,
@@ -1308,4 +1361,5 @@ Write-Output 'PASS: classifier skips compile only for the closed portable set an
 Write-Output 'PASS: milestone checkouts fetch complete ancestry; fixture proves shallow DDC root drift and full-ancestry stability across consecutive revisions'
 Write-Output 'PASS: workflow preserves LFS, serialization, report-only upload, and no-secret policy'
 Write-Output 'PASS: Package 3C selector, direct artifact bindings, receipt publishers, shadow aggregate, and hard-disabled authority boundary remain hosted, bounded, pinned, and non-authoritative'
+Write-Output 'PASS: the CI editor build passes -NoEngineChanges, and the issue #267 cold dry run passes only a fresh build that leaves every closure file unchanged'
 exit 0
