@@ -15,7 +15,7 @@ $RequiredTargets = @(
 	@{ File = 'AethelnOnlineEditor.Target.cs'; ExpectedType = 'Editor' }
 )
 
-function Remove-CSharpComment {
+function ConvertTo-CSharpCommentFreeText {
 	param([Parameter(Mandatory)][string] $Content)
 
 	# Match literals before comments so a // or /* inside a C# string is not
@@ -40,7 +40,7 @@ function Read-TargetDefinition {
 		throw "Target composition validation could not find required target file '$Path'."
 	}
 
-	$Content = Remove-CSharpComment -Content (Get-Content -LiteralPath $Path -Raw)
+	$Content = ConvertTo-CSharpCommentFreeText -Content (Get-Content -LiteralPath $Path -Raw)
 	$ClassMatch = [regex]::Match($Content, 'public\s+class\s+(?<Name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*TargetRules')
 	if (-not $ClassMatch.Success) {
 		throw "Target composition validation could not determine the TargetRules class in '$Path'."
@@ -109,7 +109,7 @@ foreach ($Target in $Targets) {
 $TestsModulePath = Join-Path $SourceDirectory 'GameTests/GameTests.Build.cs'
 foreach ($ModuleFile in Get-ChildItem -LiteralPath $SourceDirectory -Filter '*.Build.cs' -File -Recurse) {
 	if ($ModuleFile.FullName -eq $TestsModulePath) { continue }
-	$ModuleContent = Remove-CSharpComment -Content (Get-Content -LiteralPath $ModuleFile.FullName -Raw)
+	$ModuleContent = ConvertTo-CSharpCommentFreeText -Content (Get-Content -LiteralPath $ModuleFile.FullName -Raw)
 	# Treat a GameTests module-name literal anywhere in another build rule as
 	# a forbidden reference. This also catches dependency assignments and
 	# aliases, rather than only direct DependencyModuleNames.Add calls.
