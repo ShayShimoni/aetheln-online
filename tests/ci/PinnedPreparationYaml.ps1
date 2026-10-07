@@ -21,17 +21,17 @@ function Read-PinnedPreparationYamlBytes {
 	try {
 		$Entries = @($Archive.Entries | Where-Object { $_.FullName -ceq 'lib/net47/YamlDotNet.dll' })
 		if ($Entries.Count -ne 1 -or $Entries[0].Length -ne 288256) { throw 'preparation_yaml_assembly_invalid' }
-		$Input = $Entries[0].Open()
+		$AssemblyStream = $Entries[0].Open()
 		try {
 			$Bytes = [byte[]]::new(288256)
 			$Offset = 0
 			while ($Offset -lt $Bytes.Length) {
-				$Read = $Input.Read($Bytes, $Offset, $Bytes.Length - $Offset)
+				$Read = $AssemblyStream.Read($Bytes, $Offset, $Bytes.Length - $Offset)
 				if ($Read -eq 0) { throw 'preparation_yaml_assembly_invalid' }
 				$Offset += $Read
 			}
-			if ($Input.ReadByte() -ne -1) { throw 'preparation_yaml_assembly_invalid' }
-		} finally { $Input.Dispose() }
+			if ($AssemblyStream.ReadByte() -ne -1) { throw 'preparation_yaml_assembly_invalid' }
+		} finally { $AssemblyStream.Dispose() }
 		$Hasher = [Security.Cryptography.SHA256]::Create()
 		try { $Hash = [BitConverter]::ToString($Hasher.ComputeHash($Bytes)).Replace('-', '').ToLowerInvariant() } finally { $Hasher.Dispose() }
 		if ($Hash -cne 'd35c770d92632bd94bba4203db05eee5ebce6e6ea6d92e7ebe8997a942b5321c') { throw 'preparation_yaml_assembly_invalid' }
