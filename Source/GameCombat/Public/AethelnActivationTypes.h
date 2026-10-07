@@ -1,13 +1,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/NetSerialization.h"
 #include "GameplayTagContainer.h"
 #include "AethelnActivationTypes.generated.h"
 
 namespace AethelnActivation
 {
 	/** Layout version of FAethelnCombatActivationRequest; the server accepts only an exact match. */
-	inline constexpr uint8 SchemaVersion = 1;
+	inline constexpr uint8 SchemaVersion = 2;
 }
 
 /** Request phase. Charge is absent until an ability charges; adding it is an append plus a SchemaVersion bump. */
@@ -36,10 +37,14 @@ enum class EAethelnActivationResult : uint8
 	ActivationBlocked,
 	OnCooldown,
 	InsufficientResource,
-	InternalFailure
+	InternalFailure,
+	/** #60 step 6a: the client time sample is non-finite, too old, too far ahead, or regresses. */
+	TimestampOutOfBounds,
+	/** #60 steps 6c and 6d: the aim is beyond the hard bound of the server reference, or turned faster than the rate bound. */
+	ImpossibleAimTransition
 };
 
-/** Client intent only. No target, hit, contact, aim, damage, magnitude, cost, cooldown or attribute field. */
+/** Client intent only. No target, hit, contact, damage, magnitude, cost, cooldown, shape, range, window or attribute field. */
 USTRUCT()
 struct GAMECOMBAT_API FAethelnCombatActivationRequest
 {
@@ -63,4 +68,12 @@ struct GAMECOMBAT_API FAethelnCombatActivationRequest
 	/** Per connection, one PlayerState lifetime, never wraps. */
 	UPROPERTY()
 	uint32 Sequence = 0;
+
+	/** Control-rotation unit vector at press, pitch included. Explicitly zeroed: the vector's default constructor leaves it uninitialized. */
+	UPROPERTY()
+	FVector_NetQuantizeNormal Aim = FVector_NetQuantizeNormal(ForceInitToZero);
+
+	/** The client's estimate of server world time at press. */
+	UPROPERTY()
+	double ClientServerTimeSeconds = 0.0;
 };

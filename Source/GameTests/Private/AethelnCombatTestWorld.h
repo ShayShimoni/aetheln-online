@@ -127,6 +127,43 @@ namespace AethelnCombatTests
 		UAethelnAbilitySystemComponent* AbilitySystem = nullptr;
 	};
 
+	/** Fixture values only; no combat tuning is approved by these tests. */
+	inline FAethelnAimTimeBounds MakeTestAimTimeBounds()
+	{
+		FAethelnAimTimeBounds Bounds;
+		Bounds.AimSoftBoundDegrees = 20.0;
+		Bounds.AimHardBoundDegrees = 90.0;
+		Bounds.AimMaxRateDegreesPerSecond = 120.0;
+		Bounds.AimRateSlackDegrees = 5.0;
+		Bounds.AimUnitTolerance = 0.01;
+		Bounds.TimestampMaxAgeSeconds = 2.0;
+		Bounds.TimestampMaxLeadSeconds = 0.5;
+		Bounds.TimestampRegressionToleranceSeconds = 0.25;
+		return Bounds;
+	}
+
+	inline void SetTestAimTimeBounds(UAethelnAbilitySystemComponent& AbilitySystem)
+	{
+		const FAethelnAimTimeBounds Bounds = MakeTestAimTimeBounds();
+		AbilitySystem.ProvisionalAimSoftBoundDegrees = static_cast<float>(Bounds.AimSoftBoundDegrees);
+		AbilitySystem.ProvisionalAimHardBoundDegrees = static_cast<float>(Bounds.AimHardBoundDegrees);
+		AbilitySystem.ProvisionalAimMaxRateDegreesPerSecond = static_cast<float>(Bounds.AimMaxRateDegreesPerSecond);
+		AbilitySystem.ProvisionalAimRateSlackDegrees = static_cast<float>(Bounds.AimRateSlackDegrees);
+		AbilitySystem.ProvisionalAimUnitTolerance = static_cast<float>(Bounds.AimUnitTolerance);
+		AbilitySystem.ProvisionalTimestampMaxAgeSeconds = static_cast<float>(Bounds.TimestampMaxAgeSeconds);
+		AbilitySystem.ProvisionalTimestampMaxLeadSeconds = static_cast<float>(Bounds.TimestampMaxLeadSeconds);
+		AbilitySystem.ProvisionalTimestampRegressionToleranceSeconds = static_cast<float>(Bounds.TimestampRegressionToleranceSeconds);
+	}
+
+	inline void FillTestAimAndTime(FAethelnCombatActivationRequest& Request, const UAethelnAbilitySystemComponent& AbilitySystem)
+	{
+		const APlayerState* PlayerState = Cast<APlayerState>(AbilitySystem.GetOwner());
+		const AController* Controller = PlayerState != nullptr ? PlayerState->GetOwningController() : nullptr;
+		Request.Aim = Controller != nullptr ? Controller->GetControlRotation().Vector() : FVector::ForwardVector;
+		const UWorld* World = AbilitySystem.GetWorld();
+		Request.ClientServerTimeSeconds = World != nullptr ? World->GetTimeSeconds() : 0.0;
+	}
+
 	/**
 	 * A controller with a fresh AAethelnPlayerState, configured with test values and
 	 * the given abilities. The test-pinned rate bucket (1000 tokens, no refill) never
@@ -144,6 +181,7 @@ namespace AethelnCombatTests
 			PlayerState->ProvisionalInitialAttributes = MakeTestInitValues();
 			PlayerState->GetAethelnAbilitySystemComponent()->ProvisionalActivationBucketCapacity = 1000.0f;
 			PlayerState->GetAethelnAbilitySystemComponent()->ProvisionalActivationBucketRefillPerSecond = 0.0f;
+			SetTestAimTimeBounds(*PlayerState->GetAethelnAbilitySystemComponent());
 			Controller.SetPlayerState(PlayerState);
 		}
 		return PlayerState;

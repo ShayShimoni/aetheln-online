@@ -115,6 +115,7 @@ namespace AethelnOathscarAbilityTests
 			Request.AbilityId = Definition.AbilityId;
 			Request.ContentVersion = ContentVersion.Get(Definition.Class->GetDefaultObject<UAethelnGameplayAbility>()->ContentVersion);
 			Request.Sequence = NextSequence++;
+			AethelnCombatTests::FillTestAimAndTime(Request, *Player.AbilitySystem);
 			return Player.AbilitySystem->ProcessServerRequest(Request);
 		}
 

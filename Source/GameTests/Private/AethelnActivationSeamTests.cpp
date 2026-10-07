@@ -90,6 +90,7 @@ namespace AethelnActivationSeamTests
 			Request.ContentVersion = ContentVersion;
 			Request.Phase = Phase;
 			Request.Sequence = Sequence;
+			AethelnCombatTests::FillTestAimAndTime(Request, *Player.AbilitySystem);
 			return Player.AbilitySystem->ProcessServerRequest(Request);
 		}
 
@@ -205,16 +206,18 @@ bool FAethelnActivationRequestShapeTest::RunTest(const FString& Parameters)
 		FieldNames.Add(Property->GetName());
 		const FString Name = Property->GetName().ToLower();
 		const FString Type = Property->GetCPPType().ToLower();
-		for (const TCHAR* Forbidden : { TEXT("target"), TEXT("hit"), TEXT("contact"), TEXT("damage"), TEXT("magnitude"), TEXT("attribute"), TEXT("aim"), TEXT("cost"), TEXT("cooldown") })
+		for (const TCHAR* Forbidden : { TEXT("target"), TEXT("hit"), TEXT("contact"), TEXT("damage"), TEXT("magnitude"), TEXT("attribute"), TEXT("aim"), TEXT("cost"), TEXT("cooldown"), TEXT("shape"), TEXT("range"), TEXT("window") })
 		{
-			TestFalse(*FString::Printf(TEXT("Field %s is not named %s"), *Property->GetName(), Forbidden), Name.Contains(Forbidden));
+			const bool bAllowedAim = Name == TEXT("aim") && FString(Forbidden) == TEXT("aim");
+			TestFalse(*FString::Printf(TEXT("Field %s is not named %s"), *Property->GetName(), Forbidden), !bAllowedAim && Name.Contains(Forbidden));
 			TestFalse(*FString::Printf(TEXT("Field %s is not typed %s"), *Property->GetName(), Forbidden), Type.Contains(Forbidden));
 		}
 		TestNull(*FString::Printf(TEXT("Field %s references no object"), *Property->GetName()), CastField<FObjectPropertyBase>(Property));
 	}
-	TestEqual(TEXT("Request has exactly five reflected fields"), FieldNames.Num(), 5);
-	TestEqual(TEXT("Request fields are the documented five"), FString::Join(FieldNames, TEXT(",")), FString(TEXT("SchemaVersion,AbilityId,ContentVersion,Phase,Sequence")));
-	TestEqual(TEXT("Request schema version starts at 1"), static_cast<int32>(FAethelnCombatActivationRequest().SchemaVersion), 1);
+	TestEqual(TEXT("Request has exactly seven reflected fields"), FieldNames.Num(), 7);
+	TestEqual(TEXT("Request fields are the documented seven"), FString::Join(FieldNames, TEXT(",")), FString(TEXT("SchemaVersion,AbilityId,ContentVersion,Phase,Sequence,Aim,ClientServerTimeSeconds")));
+	TestEqual(TEXT("Request schema version starts at 2"), static_cast<int32>(FAethelnCombatActivationRequest().SchemaVersion), 2);
+	TestTrue(TEXT("Default aim is explicitly zero"), FAethelnCombatActivationRequest().Aim.IsZero());
 	TestEqual(TEXT("Phase has only Press and Release (plus the generated maximum)"), StaticEnum<EAethelnActivationPhase>()->NumEnums(), 3);
 
 	const UFunction* SubmitFunction = UAethelnAbilitySystemComponent::StaticClass()->FindFunctionByName(TEXT("ServerSubmitActivation"));
@@ -290,17 +293,26 @@ bool FAethelnActivationValidateMatrixTest::RunTest(const FString& Parameters)
 	ValidState.bAbilityGranted = true;
 	ValidState.GrantedContentVersion = 3;
 	ValidState.bAcceptsRelease = true;
+	ValidState.NowSeconds = 10.0;
+	ValidState.ReferenceAim = FVector::ForwardVector;
+	ValidState.LastAcceptedAim = FVector::ForwardVector;
+	ValidState.LastAcceptedClientTimeSeconds = 10.0;
+	ValidState.Bounds = AethelnCombatTests::MakeTestAimTimeBounds();
 
 	FAethelnCombatActivationRequest ValidRequest;
 	ValidRequest.AbilityId = ProbeId();
 	ValidRequest.ContentVersion = 3;
 	ValidRequest.Phase = EPhase::Press;
 	ValidRequest.Sequence = 6;
+	ValidRequest.Aim = FVector::ForwardVector;
+	ValidRequest.ClientServerTimeSeconds = 10.0;
 
 	auto Check = [this](const TCHAR* What, const FAethelnCombatActivationRequest& Request, const FAethelnActivationValidationState& State, EResult Expected, bool bExpectedResolved)
 	{
 		bool bResolved = !bExpectedResolved;
-		ExpectResult(*this, What, UAethelnAbilitySystemComponent::ValidateRequest(Request, State, bResolved), Expected);
+		FVector AcceptedAim;
+		EAethelnAimCorrection Correction;
+		ExpectResult(*this, What, UAethelnAbilitySystemComponent::ValidateRequest(Request, State, bResolved, AcceptedAim, Correction), Expected);
 		TestEqual(*FString::Printf(TEXT("%s: ability resolution"), What), bResolved, bExpectedResolved);
 	};
 
@@ -387,6 +399,13 @@ bool FAethelnActivationValidateMatrixTest::RunTest(const FString& Parameters)
 	BadState.GrantedContentVersion = 3;
 	Check(TEXT("Precedence: step 6"), BadRequest, BadState, EResult::IncompatibleVersion, true);
 	BadRequest.ContentVersion = 3;
+	BadState.NowSeconds = ValidState.NowSeconds;
+	BadState.ReferenceAim = ValidState.ReferenceAim;
+	BadState.LastAcceptedAim = ValidState.LastAcceptedAim;
+	BadState.LastAcceptedClientTimeSeconds = ValidState.LastAcceptedClientTimeSeconds;
+	BadState.Bounds = ValidState.Bounds;
+	BadRequest.Aim = ValidRequest.Aim;
+	BadRequest.ClientServerTimeSeconds = ValidRequest.ClientServerTimeSeconds;
 	Check(TEXT("Precedence: step 7"), BadRequest, BadState, EResult::ActivationBlocked, true);
 	BadState.bAbilityActive = false;
 	Check(TEXT("Precedence: all fixed"), BadRequest, BadState, EResult::Accepted, true);
@@ -546,9 +565,9 @@ bool FAethelnActivationStockRoutesRefusedTest::RunTest(const FString& Parameters
 	AbilitySystem.ServerAbilityRPCBatch(Batch);
 	ExpectNothingActivated(TEXT("ServerAbilityRPCBatch"));
 	TestFalse(TEXT("The dropped batch wrote no target data"), AbilitySystem.HasReplicatedTargetDataForTests(Fixture.ProbeHandle, Batch.PredictionKey));
-	// Control for the accessor: the standalone target-data RPC (a residual owned by #60) does write the cache.
-	AbilitySystem.ServerSetReplicatedTargetData(Fixture.ProbeHandle, Batch.PredictionKey, FGameplayAbilityTargetDataHandle(), FGameplayTag(), Batch.PredictionKey);
-	TestTrue(TEXT("Control: the cache accessor sees a target-data write"), AbilitySystem.HasReplicatedTargetDataForTests(Fixture.ProbeHandle, Batch.PredictionKey));
+	// Control: a local, non-RPC cache writer proves the accessor sees an entry.
+	AbilitySystem.InvokeReplicatedEvent(EAbilityGenericReplicatedEvent::GenericConfirm, Fixture.ProbeHandle, Batch.PredictionKey, Batch.PredictionKey);
+	TestTrue(TEXT("Control: the cache accessor sees a local replicated-event write"), AbilitySystem.HasReplicatedTargetDataForTests(Fixture.ProbeHandle, Batch.PredictionKey));
 
 	TestFalse(TEXT("TryActivateAbility refuses on the server"), AbilitySystem.TryActivateAbility(Fixture.ProbeHandle));
 	ExpectNothingActivated(TEXT("TryActivateAbility"));
@@ -832,6 +851,7 @@ bool FAethelnActivationLifecycleRejectionsTest::RunTest(const FString& Parameter
 		Request.AbilityId = LongRunningId();
 		Request.ContentVersion = 1;
 		Request.Sequence = Sequence;
+		AethelnCombatTests::FillTestAimAndTime(Request, AbilitySystem);
 		return AbilitySystem.ProcessServerRequest(Request);
 	};
 
