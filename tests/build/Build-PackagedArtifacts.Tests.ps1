@@ -926,7 +926,7 @@ public static class FakeEditor {
 		@{ Label = 'duplicate top-level property'; Content = ($AttestationRaw -replace '"schemaVersion":\s*2', '"schemaVersion": 2, "schemaVersion": 2'); Expect = 'duplicate or case-colliding JSON property' },
 		@{ Label = 'duplicate nested entry property'; Content = ($AttestationRaw -replace '"sha256":', '"path": "dup", "sha256":'); Expect = 'duplicate or case-colliding JSON property' },
 		@{ Label = 'case-colliding property'; Content = ($AttestationRaw -replace '"createdUtc":', '"CREATEDUTC": "x", "createdUtc":'); Expect = 'duplicate or case-colliding JSON property' },
-		@{ Label = 'unicode-escaped duplicate property'; Content = ($AttestationRaw -replace '"createdUtc":\s*"[^"]*"', '"createdUtc": "2026-09-04T12:00:00Z", "createdUtc": "2026-09-04T12:00:00Z"'); Expect = 'duplicate or case-colliding JSON property' },
+		@{ Label = 'unicode-escaped duplicate property'; Content = ($AttestationRaw -replace '"createdUtc":\s*"[^"]*"', '"createdUtc": "2026-09-04T12:00:00Z", "cr\u0065atedUtc": "2026-09-04T12:00:00Z"'); Expect = 'duplicate or case-colliding JSON property' },
 		@{ Label = 'string schema version'; Content = ($AttestationRaw -replace '"schemaVersion":\s*2', '"schemaVersion": "2"'); Expect = 'JSON integer 2' },
 		@{ Label = 'invalid project revision'; Content = ($AttestationRaw -replace '"projectRevision":\s*"[^"]*"', '"projectRevision": "HEAD"'); Expect = 'projectRevision must be' },
 		@{ Label = 'null provisioning evidence'; Content = ($AttestationRaw -replace '"provisioningEvidence":\s*"[^"]*"', '"provisioningEvidence": null'); Expect = 'nonempty bounded string' },
