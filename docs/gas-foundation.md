@@ -45,7 +45,8 @@ UE 5.8.1 source, revision `71fe36aac5`
 3. One attribute set holds Health, Endurance, Guard, and each maximum. All six
    replicate to the owner only. Gameplay Effects make every change.
 4. One versioned activation seam is the only way a client starts an ability.
-   Its request has no target, hit, aim, or attribute field.
+   Its schema-2 request carries bounded aim and a client server-time estimate,
+   with no target, hit, contact, shape, range, window, or attribute field.
 5. The stock GAS activation routes are closed by two engine overrides and a
    choke point in the base ability. Every activation request draws from a
    per-connection rate bucket, and outcomes go to the owner only.
@@ -414,17 +415,19 @@ Matrix in the combat document). The mechanism uses only engine hooks:
 UENUM()
 enum class EAethelnActivationPhase : uint8 { Press = 0, Release = 1 };
 
-/** Client intent only. No target, hit, contact, aim, damage, magnitude, cost, cooldown or attribute field. */
+/** Client intent only. No target, hit, contact, damage, magnitude, cost, cooldown, shape, range, window or attribute field. */
 USTRUCT()
 struct GAMECOMBAT_API FAethelnCombatActivationRequest
 {
 	GENERATED_BODY()
 
-	UPROPERTY() uint8 SchemaVersion = 1;      // layout version of this struct
+	UPROPERTY() uint8 SchemaVersion = 2;      // layout version of this struct
 	UPROPERTY() FGameplayTag AbilityId;       // Ability.<Order>.<Name>
 	UPROPERTY() uint32 ContentVersion = 0;    // authored definition the client built for
 	UPROPERTY() EAethelnActivationPhase Phase = EAethelnActivationPhase::Press;
 	UPROPERTY() uint32 Sequence = 0;          // per connection, one PlayerState lifetime, never wraps
+	UPROPERTY() FVector_NetQuantizeNormal Aim = FVector_NetQuantizeNormal(ForceInitToZero);
+	UPROPERTY() double ClientServerTimeSeconds = 0.0;
 };
 ```
 
@@ -434,8 +437,11 @@ struct GAMECOMBAT_API FAethelnCombatActivationRequest
 - **Transport.** `UFUNCTION(Server, Reliable) ServerSubmitActivation` on
   `UAethelnAbilitySystemComponent`. The PlayerState belongs to the client's
   controller, so only the owning connection can call it. The client entry
-  point `RequestActivation(AbilityId, Phase)` fills in the sequence and local
-  content version, may be `BlueprintCallable`, and cannot bypass validation.
+  point `RequestActivation(AbilityId, Phase)` fills in the sequence, local
+  content version, owning controller's control-rotation aim and the GameState's
+  server world time (local world time without a GameState). It flushes held
+  character moves before sending, as a mitigation for the lagging server
+  rotation. It cannot bypass validation and remains non-Blueprint-callable.
 - **Activation id.** The ability creates `ActivationId` (a GUID scoped to the
   instance, as the spike does at
   `Source/GameCombat/Private/AethelnSpikeAuthorityComponent.cpp:431`) and
@@ -479,10 +485,14 @@ that fails. Each rejection has one reason, and precedence is deterministic.
 | 4 | Sequence: zero or lower than the last accepted / equal to it. Forward gaps are accepted. | `StaleSequence` / `DuplicateSequence` |
 | 5 | `AbilityId` is a valid `Ability.` tag naming a spec granted to this ASC | `MalformedRequest` (unknown) / `ActivationBlocked` (known, not granted) |
 | 6 | `ContentVersion` matches the granted ability's config exactly | `IncompatibleVersion` |
+| 6a | Aim/time config is valid; client server-time sample is finite, within age/lead bounds and regression tolerance | `InternalFailure` (bounds) / `TimestampOutOfBounds` (sample) |
+| 6b | Finite, non-zero, unit aim within tolerance, with a defined great-circle direction if correction is needed | `MalformedRequest` |
+| 6c | Raw aim is within the hard angular bound of server control rotation | `ImpossibleAimTransition` |
+| 6d | Raw aim change is within the rate bound and separate slack over the nonnegative client-time interval; first accepted request skips this check | `ImpossibleAimTransition` |
 | 7 | Phase and instance state (below) | `ActivationBlocked` (already active) / `MalformedRequest` (unsupported phase) |
 | 8 | Engine eligibility: call the ability's `CheckCooldown`, `CheckCost`, and `DoesAbilitySatisfyTagRequirements` directly, in the engine's order, and take the reason from the first to fail | `OnCooldown` / `InsufficientResource` / `ActivationBlocked` |
 | 9 | Activate on the server inside the seam scope. `CommitAbility` re-checks and applies cooldown and cost. The seam reads the result slot, not the return value of `TryActivateAbility`. | `ActivationBlocked` (refused for a reason step 8 does not cover) / `InternalFailure` (activated but not committed) |
-| 10 | Advance `LastAcceptedSequence`, emit the accepted event with the `ActivationId` from the result slot, send the owner outcome | `Accepted` |
+| 10 | Advance last accepted sequence, raw aim and client time; emit any aim correction before the accepted event with the same activation id, then send one owner outcome | `Accepted` |
 
 - **Step 7.** A `Press` while the ability's single instance is active is
   blocked here, so the reason is deterministic and precedes commit (the engine
@@ -535,8 +545,10 @@ seam closes F9 (no ability id or phase), F6 (rejection replicated to everyone),
 and F3 (no rate limit) for itself; #60 still owns window and combo gating, and
 T14 replaces #82's planned spike test
 `Aetheln.GameCombat.NetworkSpike.RequestRateBound`. F1 and F2 (aim equality and
-angular or temporal bounds) are left to #60 with #2: the request carries no
-aim, and #60 adds aim and any timestamp with a `SchemaVersion` bump. The threat
+angular or temporal bounds) are addressed by #60 P2's schema-2 aim/time checks
+and bounded correction policy. The eight config values remain unset/`TBD`;
+every request fails closed until reviewed values are supplied. P3 carries
+accepted aim through the activation scope. The threat
 model's CM-04 and CM-07 rows map onto steps 1 to 8 and step 9
 (`docs/staged-multiplayer-threat-model.md:87`, `:90`).
 
@@ -603,8 +615,8 @@ these rules keep it so:
 
 | RPC | Status | Rule |
 | --- | --- | --- |
-| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`GAS/Public/AbilitySystemComponent.h:1572-1577`) | **Residual: memory growth.** A hostile client can `FindOrAdd` cache entries on keys it chooses, whether or not any ability reads the data; they are removed only when that activation ends (`GAS/Private/AbilitySystemComponent_Abilities.cpp:4007-4031`, `:4047-4056`, `:1301`). Neither is virtual. The batch route is closed; these remain. | **Owner: #60.** Bound it before any ability consumes target data. No ability may use target-data tasks until then. |
-| `ServerSetReplicatedEvent`, `...WithPayload` (`GAS/Public/AbilitySystemComponent.h:1554-1559`) | Nothing reads them. | No ability may use replicated-event tasks. |
+| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`GAS/Public/AbilitySystemComponent.h:1572-1577`) | Refused by virtual generated `_Implementation` overrides on the project ASC (#60 P2); no cache write. | Each draws one bucket token, emits a metric only and sends no reply. No project ability uses target-data tasks. |
+| `ServerSetReplicatedEvent`, `...WithPayload` (`GAS/Public/AbilitySystemComponent.h:1554-1559`) | The engine implementations write the same cache through `InvokeReplicatedEvent` / `InvokeReplicatedEventWithPayload`; project `_Implementation` overrides refuse them (#60 P2). | Same token/metric/no-reply contract; no project ability uses replicated-event tasks. |
 | `ServerSetInputPressed`, `ServerSetInputReleased` (`GAS/Public/AbilitySystemComponent.h:1618-1622`) | Only update spec input state (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2885-2893`). | Phase comes only from the request. Abilities must not read `InputPressed` or `InputReleased`. |
 | Montage section and play-rate RPCs (`GAS/Public/AbilitySystemComponent.h:1803-1812`) | Presentation only. | No gameplay window may derive from a montage (Server-Owned Attack Timeline in the combat document). |
 
@@ -637,14 +649,22 @@ for every rejection, because rejections precede activation
 | `OnCooldown` | **Cooldown** | `ActivationBlocked` |
 | `InsufficientResource` | **Resource** | `ActivationBlocked` |
 | `InternalFailure` (activated but not committed) | Ability | `InternalFailure` |
+| `TimestampOutOfBounds` | Ability | `TimestampOutOfBounds` |
+| `ImpossibleAimTransition` | Aim | `ImpossibleAimTransition` |
+
+An accepted corrected aim adds one Correction/Aim/`Corrected` event before
+the accepted event, with matching activation id, ability id and sequence,
+and one `CorrectionCount` sample. It adds no owner reply. P2 outputs the
+accepted aim; P3 passes it through the seam scope to the timeline.
 
 ### Bounding client-driven telemetry
 
 The client must not control event volume in the observability critical lane.
 
-- **Which messages draw from the bucket.** Seam requests and the two
-  overridden stock routes only. The target-data, replicated-event, input, and
-  montage RPCs cannot be intercepted, so they do not.
+- **Which messages draw from the bucket.** Seam requests, the two overridden
+  stock routes, and all four refused target-data/replicated-event routes.
+  Input-state and montage RPCs retain their existing bounded behavior and
+  do not draw from this bucket.
 - **Refused stock-route calls** emit a metric only: they have no sequence, and
   the contract drops any event with sequence 0
   (`Source/GameNet/Public/AethelnObservabilitySubsystem.h:56-61`;
@@ -748,7 +768,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T7 | `Aetheln.GameCombat.Attributes.ReplicationPolicy` | P2 | H | From the class default object: all six attributes `COND_OwnerOnly` and `REPNOTIFY_Always` |
 | T8 | `Aetheln.GameCombat.Attributes.ClampAndBounds` | P2 (P4 adds the lower-only case) | H | Values clamp to `[0, Max]`; lowering each max re-clamps its current value and lowers a base above it; with a positive temporary modifier active, lowering a max below the current value but above the base re-clamps the current value and never raises the base |
 | T9 | `Aetheln.GameCombat.Attributes.InitOnceThroughEffect` | P2 | H | Values arrive only through the init effect, once per PlayerState; every current value equals its configured value; re-possession does not reapply |
-| T10 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3 | H | Exactly five reflected fields; none named or typed as target, hit, contact, damage, magnitude, attribute, aim, cost, or cooldown (extends `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:186-189`) |
+| T10 / A1 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3, #60 P2 update | H | Exactly seven reflected fields; only Aim and ClientServerTimeSeconds are added; no target, hit, contact, damage, magnitude, attribute, shape, range, window, cost, or cooldown field |
 | T11 | `Aetheln.GameCombat.ActivationSeam.ValidateMatrix` | P3 | H | Steps 1 to 7 with an injected clock: each failure, precedence, zero/lower/equal sequences, an accepted forward gap, Press while active, Release undeclared, a valid Release |
 | T12 | `Aetheln.GameCombat.ActivationSeam.RejectionHasNoSideEffect` | P3 | H | Every rejection leaves no cost, cooldown, state tag, sequence advance, or activation id; a failing commit gives `InternalFailure`, and so does a failing commit whose ability keeps running (the seam cancels it) and a commit through the refused partial `CommitAbilityCost` and `CommitAbilityCooldown`, which apply nothing; a valid Release advances the sequence and replaying it is rejected |
 | T13 | `Aetheln.GameCombat.ActivationSeam.StockRoutesRefused` | P3 | H | Nothing activates or commits via the single-ability RPCs, `ServerAbilityRPCBatch` (whole batch dropped, target-data cache untouched), `TryActivateAbilityByClass`, `TryActivateAbilitiesByTag`, `GiveAbilityAndActivateOnce`, a gameplay event matching a test trigger, or an ability activated from inside another ability's `ActivateAbility`. The trigger case grants its test ability directly, because T15 refuses triggers. The cache assertion uses a test accessor on the project ASC, because `AbilityTargetDataMap` is protected (`GAS/Public/AbilitySystemComponent.h:1650`, `:1671`). |
@@ -806,7 +826,7 @@ leaves the spike files untouched.
 
 Not part of #19: ability input bindings (they go with #60 and #82); damage and
 the defense order, contacts, Guard pressure, block resolution, the basic chain,
-and attack timelines (#60); bounding the target-data cache (#60); dodge (#18);
+and attack timelines (#60); dodge (#18);
 death, respawn, and reconnect restoration (#21); the HUD and opponent
 visibility (#61); enemy behavior (#20); widening the CI filter; and migrating
 the spike classes after #2 closes.
@@ -851,9 +871,11 @@ here.
   so the gap stays visible, and #21 flips it when it lands its reconnect rule
   (its acceptance criterion: reconnect during death or respawn resolves to one
   valid state).
-- **Target-data cache growth (owner: #60).** A hostile client can grow server
-  memory through the standalone target-data RPCs; see the RPC table in Closing
-  the Stock Routes for the mechanism and the rule.
+- **Replicated-data cache closure (#60 P2).** All four client-callable cache
+  writers now refuse through generated virtual implementations. A3 covers
+  no writes, token accounting, metric-only telemetry, no replies, and
+  unaffected bounded input-state RPCs. Local non-RPC cache APIs remain
+  available to trusted engine code; project abilities do not use these tasks.
 
 ## Open Decisions
 
@@ -869,8 +891,9 @@ All stay `TBD` until the named owner decides.
    evidence tickets (#45).
 3. **Final values** for the PlayerState update frequency and the rate bucket
    (placeholders set and reviewed in P3). Owner: #45.
-4. **Aim policy and bounds** (#82 F1, F2), and whether the request gains aim
-   and a timestamp. Owners: #60 and #2.
+4. **Numeric aim/time bounds** (#82 F1, F2). #60 P2 decides the schema-2
+   representation, bounded correction and raw-to-raw rate policy. Its eight
+   keys remain unset/`TBD`; owners #60, #2 and #45 approve future values.
 5. **Phase behavior of Hold the Line:** a fixed-duration commitment, or
    hold-and-release (which would set `bAcceptsRelease`). Owners: #107 and the
    owner.

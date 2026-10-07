@@ -6,7 +6,10 @@
 #include "AethelnObservabilitySubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
 
@@ -36,6 +39,8 @@ namespace AethelnActivationTelemetry
 		case EAethelnActivationResult::OnCooldown: return { ECategory::Cooldown, EAethelnSafeReason::ActivationBlocked };
 		case EAethelnActivationResult::InsufficientResource: return { ECategory::Resource, EAethelnSafeReason::ActivationBlocked };
 		case EAethelnActivationResult::InternalFailure: return { ECategory::Ability, EAethelnSafeReason::InternalFailure };
+		case EAethelnActivationResult::TimestampOutOfBounds: return { ECategory::Ability, EAethelnSafeReason::TimestampOutOfBounds };
+		case EAethelnActivationResult::ImpossibleAimTransition: return { ECategory::Aim, EAethelnSafeReason::ImpossibleAimTransition };
 		default: return {};
 		}
 	}
@@ -95,6 +100,74 @@ namespace AethelnActivationTelemetry
 
 		EmitMetric(Component, bAccepted ? EAethelnMetricKind::EventCount : EAethelnMetricKind::RejectionCount, Outcome, 1);
 	}
+
+	/** An AimCorrected acceptance: one correction event, emitted before the accepted event and with its ids, and one CorrectionCount sample. */
+	void EmitAimCorrection(
+		const UActorComponent& Component,
+		uint32 Sequence,
+		const FGameplayTag& ResolvedAbilityId,
+		const FGuid& ActivationId)
+	{
+		UAethelnObservabilitySubsystem* Subsystem = ResolveSubsystem(Component);
+		if (Subsystem == nullptr)
+		{
+			return;
+		}
+
+		const FSafeOutcome Outcome{ EAethelnObservabilityCategory::Aim, EAethelnSafeReason::Corrected };
+		FAethelnObservabilityEvent Event;
+		Event.Category = EAethelnObservabilityCategory::Correction;
+		Event.SubjectCategory = Outcome.Subject;
+		Event.SafeReason = Outcome.Reason;
+
+		FAethelnObservabilityEventContext Context;
+		Context.ConnectionPseudonym = AethelnObservability::ExcludedIdentifier;
+		Context.ActivationId = ActivationId.IsValid() ? ActivationId.ToString(EGuidFormats::DigitsWithHyphensLower) : FString();
+		Context.AbilityId = ResolvedAbilityId.IsValid() ? ResolvedAbilityId.ToString() : FString();
+		Context.Sequence = Sequence;
+		Subsystem->EmitEvent(Event, Context);
+
+		EmitMetric(Component, EAethelnMetricKind::CorrectionCount, Outcome, 1);
+	}
+}
+
+namespace AethelnAimValidation
+{
+	/** The angle between two unit vectors in degrees; atan2 of the cross and dot products stays accurate near 0 and 180. */
+	double AngleDegrees(const FVector& A, const FVector& B)
+	{
+		return FMath::RadiansToDegrees(FMath::Atan2((A ^ B).Size(), A | B));
+	}
+
+	bool AreBoundsValid(const FAethelnAimTimeBounds& Bounds)
+	{
+		for (const double Value : {
+			Bounds.AimSoftBoundDegrees,
+			Bounds.AimHardBoundDegrees,
+			Bounds.AimMaxRateDegreesPerSecond,
+			Bounds.AimRateSlackDegrees,
+			Bounds.AimUnitTolerance,
+			Bounds.TimestampMaxAgeSeconds,
+			Bounds.TimestampMaxLeadSeconds,
+			Bounds.TimestampRegressionToleranceSeconds })
+		{
+			if (!FMath::IsFinite(Value))
+			{
+				return false;
+			}
+		}
+		// The hard bound stays below 180 so every accepted aim has a great-circle direction to R.
+		return Bounds.AimSoftBoundDegrees >= 0.0
+			&& Bounds.AimSoftBoundDegrees <= Bounds.AimHardBoundDegrees
+			&& Bounds.AimHardBoundDegrees < 180.0
+			&& Bounds.AimRateSlackDegrees >= 0.0
+			&& Bounds.AimRateSlackDegrees <= 180.0
+			&& Bounds.AimMaxRateDegreesPerSecond >= 0.0
+			&& Bounds.AimUnitTolerance > 0.0
+			&& Bounds.TimestampMaxAgeSeconds > 0.0
+			&& Bounds.TimestampMaxLeadSeconds >= 0.0
+			&& Bounds.TimestampRegressionToleranceSeconds >= 0.0;
+	}
 }
 
 bool FAethelnActivationRateBucket::TryConsume(double NowSeconds, double Capacity, double RefillPerSecond)
@@ -138,9 +211,13 @@ UAethelnAbilitySystemComponent* UAethelnAbilitySystemComponent::FindForPawn(cons
 EAethelnActivationResult UAethelnAbilitySystemComponent::ValidateRequest(
 	const FAethelnCombatActivationRequest& Request,
 	const FAethelnActivationValidationState& State,
-	bool& bOutAbilityResolved)
+	bool& bOutAbilityResolved,
+	FVector& OutAcceptedAim,
+	EAethelnAimCorrection& OutAimCorrection)
 {
 	bOutAbilityResolved = false;
+	OutAcceptedAim = FVector::ZeroVector;
+	OutAimCorrection = EAethelnAimCorrection::None;
 
 	// 2. Lifecycle.
 	if (State.bAvatarBeingDestroyed)
@@ -185,6 +262,68 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ValidateRequest(
 		return EAethelnActivationResult::IncompatibleVersion;
 	}
 
+	// 6a. Bounds (invalid or unset config fails closed), then the client time sample.
+	const FAethelnAimTimeBounds& Bounds = State.Bounds;
+	if (!AethelnAimValidation::AreBoundsValid(Bounds))
+	{
+		return EAethelnActivationResult::InternalFailure;
+	}
+	const bool bHasPrevious = State.LastAcceptedSequence != 0;
+	const double ClientTime = Request.ClientServerTimeSeconds;
+	if (!FMath::IsFinite(ClientTime)
+		|| ClientTime < State.NowSeconds - Bounds.TimestampMaxAgeSeconds
+		|| ClientTime > State.NowSeconds + Bounds.TimestampMaxLeadSeconds
+		|| (bHasPrevious && ClientTime < State.LastAcceptedClientTimeSeconds - Bounds.TimestampRegressionToleranceSeconds))
+	{
+		return EAethelnActivationResult::TimestampOutOfBounds;
+	}
+
+	// 6b. A finite, non-zero, unit aim. An aim opposite R has no great-circle direction to clamp along.
+	const FVector RawAim = Request.Aim;
+	const double AimLength = RawAim.Size();
+	if (RawAim.ContainsNaN() || !(AimLength > 0.0) || FMath::Abs(AimLength - 1.0) > Bounds.AimUnitTolerance)
+	{
+		return EAethelnActivationResult::MalformedRequest;
+	}
+	const FVector Aim = RawAim / AimLength;
+	const FVector& Reference = State.ReferenceAim;
+	if ((Aim ^ Reference).Size() <= UE_KINDA_SMALL_NUMBER && (Aim | Reference) < 0.0)
+	{
+		return EAethelnActivationResult::MalformedRequest;
+	}
+
+	// 6c. Within the hard bound of the server reference.
+	const double ReferenceAngle = AethelnAimValidation::AngleDegrees(Aim, Reference);
+	if (ReferenceAngle > Bounds.AimHardBoundDegrees)
+	{
+		return EAethelnActivationResult::ImpossibleAimTransition;
+	}
+
+	// 6d. Raw aim against the last accepted raw aim, over the client-time interval.
+	if (bHasPrevious)
+	{
+		const double Interval = FMath::Max(0.0, ClientTime - State.LastAcceptedClientTimeSeconds);
+		const double AllowedDegrees = Bounds.AimRateSlackDegrees + Bounds.AimMaxRateDegreesPerSecond * Interval;
+		if (AethelnAimValidation::AngleDegrees(Aim, State.LastAcceptedAim.GetSafeNormal()) > AllowedDegrees)
+		{
+			return EAethelnActivationResult::ImpossibleAimTransition;
+		}
+	}
+
+	// The accepted aim: as sent within the soft bound, otherwise R rotated toward it by exactly the soft bound.
+	if (ReferenceAngle <= Bounds.AimSoftBoundDegrees)
+	{
+		OutAcceptedAim = Aim;
+	}
+	else
+	{
+		// Not antipodal (6b) and not parallel (the angle exceeds the soft bound), so the direction exists.
+		const FVector Toward = ((Reference ^ Aim) ^ Reference).GetUnsafeNormal();
+		const double SoftRadians = FMath::DegreesToRadians(Bounds.AimSoftBoundDegrees);
+		OutAcceptedAim = Reference * FMath::Cos(SoftRadians) + Toward * FMath::Sin(SoftRadians);
+		OutAimCorrection = EAethelnAimCorrection::AimCorrected;
+	}
+
 	// 7. Phase and instance state.
 	switch (Request.Phase)
 	{
@@ -210,6 +349,24 @@ void UAethelnAbilitySystemComponent::RequestActivation(const FGameplayTag& Abili
 	if (const FGameplayAbilitySpec* Spec = FindSpecForAbilityId(AbilityId))
 	{
 		Request.ContentVersion = CastChecked<UAethelnGameplayAbility>(Spec->Ability)->ContentVersion;
+	}
+	const APlayerState* PlayerState = Cast<APlayerState>(GetOwner());
+	if (const AController* Controller = PlayerState != nullptr ? PlayerState->GetOwningController() : nullptr)
+	{
+		Request.Aim = Controller->GetControlRotation().Vector();
+	}
+	if (const UWorld* World = GetWorld())
+	{
+		const AGameStateBase* GameState = World->GetGameState();
+		Request.ClientServerTimeSeconds = GameState != nullptr ? GameState->GetServerWorldTimeSeconds() : World->GetTimeSeconds();
+	}
+	// Send a held move first so the server's control rotation is fresher. A mitigation, not authority.
+	if (const ACharacter* Character = Cast<ACharacter>(GetAvatarActor()))
+	{
+		if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+		{
+			Movement->FlushServerMoves();
+		}
 	}
 	ServerSubmitActivation(Request);
 }
@@ -245,6 +402,22 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 		&& Controller != nullptr
 		&& AvatarPawn->GetController() == Controller;
 	State.LastAcceptedSequence = LastAcceptedSequence;
+	const UWorld* World = GetWorld();
+	State.NowSeconds = World != nullptr ? World->GetTimeSeconds() : 0.0;
+	if (State.bHasPossessedAvatar)
+	{
+		State.ReferenceAim = Controller->GetControlRotation().Vector();
+	}
+	State.LastAcceptedAim = LastAcceptedAim;
+	State.LastAcceptedClientTimeSeconds = LastAcceptedClientTimeSeconds;
+	State.Bounds.AimSoftBoundDegrees = ProvisionalAimSoftBoundDegrees;
+	State.Bounds.AimHardBoundDegrees = ProvisionalAimHardBoundDegrees;
+	State.Bounds.AimMaxRateDegreesPerSecond = ProvisionalAimMaxRateDegreesPerSecond;
+	State.Bounds.AimRateSlackDegrees = ProvisionalAimRateSlackDegrees;
+	State.Bounds.AimUnitTolerance = ProvisionalAimUnitTolerance;
+	State.Bounds.TimestampMaxAgeSeconds = ProvisionalTimestampMaxAgeSeconds;
+	State.Bounds.TimestampMaxLeadSeconds = ProvisionalTimestampMaxLeadSeconds;
+	State.Bounds.TimestampRegressionToleranceSeconds = ProvisionalTimestampRegressionToleranceSeconds;
 
 	const FGameplayAbilitySpec* Spec = FindSpecForAbilityId(Request.AbilityId);
 	const UAethelnGameplayAbility* Definition = Spec != nullptr ? Cast<UAethelnGameplayAbility>(Spec->Ability) : nullptr;
@@ -257,9 +430,11 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 		State.bAbilityActive = Spec->IsActive();
 	}
 
-	// 2 to 7.
+	// 2 to 7. P2 outputs the accepted aim only; #60 P3 carries it through the seam scope.
 	bool bAbilityResolved = false;
-	const EAethelnActivationResult Validation = ValidateRequest(Request, State, bAbilityResolved);
+	FVector AcceptedAim;
+	EAethelnAimCorrection AimCorrection = EAethelnAimCorrection::None;
+	const EAethelnActivationResult Validation = ValidateRequest(Request, State, bAbilityResolved, AcceptedAim, AimCorrection);
 	const FGameplayTag ResolvedAbilityId = bAbilityResolved ? Request.AbilityId : FGameplayTag();
 	if (Validation != EAethelnActivationResult::Accepted)
 	{
@@ -276,7 +451,7 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 		}
 		const FGuid RunningActivationId = Instance->GetActivationId();
 		Instance->EndForRelease();
-		return Finish(Request, EAethelnActivationResult::Accepted, ResolvedAbilityId, RunningActivationId);
+		return Finish(Request, EAethelnActivationResult::Accepted, ResolvedAbilityId, RunningActivationId, AimCorrection);
 	}
 
 	// 8. Engine eligibility, in the engine's order. Unlike the engine, the seam ignores the cheat variables.
@@ -320,18 +495,25 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 	}
 
 	// 10.
-	return Finish(Request, EAethelnActivationResult::Accepted, ResolvedAbilityId, Scope.ActivationId);
+	return Finish(Request, EAethelnActivationResult::Accepted, ResolvedAbilityId, Scope.ActivationId, AimCorrection);
 }
 
 EAethelnActivationResult UAethelnAbilitySystemComponent::Finish(
 	const FAethelnCombatActivationRequest& Request,
 	EAethelnActivationResult Result,
 	const FGameplayTag& ResolvedAbilityId,
-	const FGuid& ActivationId)
+	const FGuid& ActivationId,
+	EAethelnAimCorrection AimCorrection)
 {
 	if (Result == EAethelnActivationResult::Accepted)
 	{
 		LastAcceptedSequence = Request.Sequence;
+		LastAcceptedAim = Request.Aim;
+		LastAcceptedClientTimeSeconds = Request.ClientServerTimeSeconds;
+		if (AimCorrection == EAethelnAimCorrection::AimCorrected)
+		{
+			AethelnActivationTelemetry::EmitAimCorrection(*this, Request.Sequence, ResolvedAbilityId, ActivationId);
+		}
 	}
 	AethelnActivationTelemetry::EmitOutcome(*this, Result, Request.Sequence, ResolvedAbilityId, ActivationId);
 	ClientActivationOutcome(Request.Sequence, Result);
@@ -411,6 +593,43 @@ void UAethelnAbilitySystemComponent::InternalServerTryActivateAbility(
 }
 
 void UAethelnAbilitySystemComponent::ServerAbilityRPCBatch_Internal(FServerAbilityRPCBatch& BatchInfo)
+{
+	RefuseStockRoute();
+}
+
+void UAethelnAbilitySystemComponent::ServerSetReplicatedTargetData_Implementation(
+	FGameplayAbilitySpecHandle AbilityHandle,
+	FPredictionKey AbilityOriginalPredictionKey,
+	const FGameplayAbilityTargetDataHandle& ReplicatedTargetDataHandle,
+	FGameplayTag ApplicationTag,
+	FPredictionKey CurrentPredictionKey)
+{
+	RefuseStockRoute();
+}
+
+void UAethelnAbilitySystemComponent::ServerSetReplicatedTargetDataCancelled_Implementation(
+	FGameplayAbilitySpecHandle AbilityHandle,
+	FPredictionKey AbilityOriginalPredictionKey,
+	FPredictionKey CurrentPredictionKey)
+{
+	RefuseStockRoute();
+}
+
+void UAethelnAbilitySystemComponent::ServerSetReplicatedEvent_Implementation(
+	EAbilityGenericReplicatedEvent::Type EventType,
+	FGameplayAbilitySpecHandle AbilityHandle,
+	FPredictionKey AbilityOriginalPredictionKey,
+	FPredictionKey CurrentPredictionKey)
+{
+	RefuseStockRoute();
+}
+
+void UAethelnAbilitySystemComponent::ServerSetReplicatedEventWithPayload_Implementation(
+	EAbilityGenericReplicatedEvent::Type EventType,
+	FGameplayAbilitySpecHandle AbilityHandle,
+	FPredictionKey AbilityOriginalPredictionKey,
+	FPredictionKey CurrentPredictionKey,
+	FVector_NetQuantize100 VectorPayload)
 {
 	RefuseStockRoute();
 }

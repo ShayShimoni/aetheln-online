@@ -183,13 +183,14 @@ it uninitialized (`Runtime/Core/Public/Math/Vector.h:150`;
   step back slightly between presses; the bounds must tolerate both.
 - **No step field.** Every hit sends the chain's `AbilityId`. The server
   chooses the step from its own chain state.
-- **#19 changes.** T10 (`RequestShape`) asserts exactly five reflected fields
-  with no aim. P2 changes it to seven fields, allows only `Aim` and
+- **#19 changes.** Before P2 T10 (`RequestShape`) asserted exactly five reflected
+  fields with no aim. P2 changes it to seven fields, allows only `Aim` and
   `ClientServerTimeSeconds` as additions, and keeps every other forbidden
   name. Every other #19 fixture and text change is listed in
   [Dependencies on #19](#dependencies-on-19).
 - **Client fill.** `RequestActivation(AbilityId, Phase)` reads the owning
-  controller's control rotation and the game state's server time, and calls
+  controller's control rotation and the game state's server time (local world
+  time when there is no GameState), and calls
   `FlushServerMoves()` on the avatar's movement component before sending
   (`Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h:2897`;
   `CMC.cpp:13429-13454` sends a held pending move). Flushing makes the server's
@@ -224,8 +225,8 @@ side effect.
 
 | Step | Check | Rejection result |
 | --- | --- | --- |
-| 6a | `ClientServerTimeSeconds` is finite, within `[Now - ProvisionalTimestampMaxAgeSeconds, Now + ProvisionalTimestampMaxLeadSeconds]` of the server world time, and not lower than the last accepted request's sample minus `ProvisionalTimestampRegressionToleranceSeconds` | `TimestampOutOfBounds` (new) |
-| 6b | `Aim` is finite, non-zero, and unit within `ProvisionalAimUnitTolerance` | `MalformedRequest` |
+| 6a | Validate the eight configured bounds first; unset or invalid bounds fail closed. Then require `ClientServerTimeSeconds` finite, within `[Now - ProvisionalTimestampMaxAgeSeconds, Now + ProvisionalTimestampMaxLeadSeconds]` of the server world time, and not lower than the last accepted request's sample minus `ProvisionalTimestampRegressionToleranceSeconds` | `InternalFailure` (bounds); `TimestampOutOfBounds` (sample) |
+| 6b | `Aim` is finite, non-zero, and unit within `ProvisionalAimUnitTolerance`; an antipodal direction (cross product about zero, dot product below zero) has no great-circle direction and is malformed | `MalformedRequest` |
 | 6c | The angle between `Aim` and the reference `R` (the vector of the avatar controller's current server control rotation) is at most `ProvisionalAimHardBoundDegrees` | `ImpossibleAimTransition` (new) |
 | 6d | The angle between `Aim` and the last accepted request's raw `Aim` is at most `ProvisionalAimRateSlackDegrees + ProvisionalAimMaxRateDegreesPerSecond * max(0, Interval)`, where `Interval` is the client-time difference between the two samples (skipped for the first accepted request) | `ImpossibleAimTransition` |
 
@@ -723,8 +724,9 @@ Telemetry additions, using the #19 emission rules and allowlisted correlation
 (`docs/observability-and-crash-diagnostics.md:30-48`):
 
 - An `AimCorrected` acceptance also emits one correction event (subject `Aim`,
-  reason `Corrected`) and one `CorrectionCount` metric sample. P2 adds and
-  tests this with the two new rejections (A16).
+  reason `Corrected`) before the accepted event, with the same activation id,
+  ability id and request sequence, and one `CorrectionCount` metric sample.
+  P2 adds and tests this with the two new rejections (A16).
 - Each committed result emits one event (subject `Hit`, reason `Accepted`)
   with the activation id, ability id, and request sequence. Target identity is
   not an allowlisted field and is not logged. P4 adds and tests this (A24).
@@ -772,17 +774,17 @@ replicated-event tasks.
 
 An Issue #60 comment from #19 P2 asks this issue to settle what happens when a
 maximum is lowered while the current value includes a positive temporary
-modifier. Today the re-clamp writes the new maximum as the base
+modifier. Before #19 P4 the re-clamp wrote the new maximum as the base
 (`Source/GameCombat/Private/AethelnCombatAttributeSet.cpp:66-80`, through
 `:43-52`): base 50 with a +30 modifier and the maximum lowered to 70 gives base
 70, so when the modifier expires the value is 70 instead of 50, a free
 restoration.
 
 **Decision (OQ2, owner, 2026-10-05):** lowering a maximum never raises a base
-value. The owner recorded it on #19 as a change to #19's server-only re-clamp
-in a later #19 phase, pinned by a #19 test.
+value. #19 P4 implements the lower-only re-clamp and its regression test at
+the P2 base `77e7414`.
 
-One way to implement it, offered to #19: the re-clamp writes
+The implemented re-clamp writes
 `min(Base, NewMax)`. When the base is already within the new maximum, it
 rewrites the unchanged base, which re-evaluates the current value: the
 aggregator broadcasts dirty on every base write with no equality check
@@ -799,8 +801,10 @@ change (dependency 7).
 
 ## Data-Driven Tuning
 
-All values are `TBD`. A PR may add a placeholder value so the game runs; a
-placeholder is reviewed as a placeholder, not approved tuning. Ini now,
+All values are `TBD`. The P2 lead decision of 2026-10-06 leaves all eight
+aim/time keys unset, so requests fail closed; tests inject fixture values.
+Any future placeholder needs an explicit reviewed decision and is not approved
+tuning. Ini now,
 assets with #84 and generation with #106 later, as in #19. Every authoritative
 change bumps the chain's `ContentVersion`.
 
@@ -810,8 +814,9 @@ change bumps the chain's `ContentVersion`.
 | `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimRateSlackDegrees`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
 | `Config/DefaultEngine.ini` | The `AethelnCombatQuery` trace channel with default response `Ignore` (structure, not tuning) |
 
-The seam refuses to start with non-finite bounds, a soft bound above the hard
-bound, bounds or rate slack outside `[0, 180]`, non-positive unit or age
+At step 6a the seam returns `InternalFailure` for non-finite bounds, a soft
+bound above the hard bound, angular bounds outside `0 <= soft <= hard < 180`,
+rate slack outside `[0, 180]`, a negative rate, non-positive unit or age
 tolerances, or a negative lead or regression tolerance; the chain's grant
 validation is in [Step definition](#step-definition). Both fail closed. The
 seam keys live in shared `DefaultGame.ini` for the reason #19 gives
@@ -825,20 +830,24 @@ seam keys live in shared `DefaultGame.ini` for the reason #19 gives
    `CheckCooldown` passes, when the configured duration is zero; grant
    validation accepts zero. If #19 P4 does not already behave this way, #60 P3
    adds it with a test.
-3. **Validator signature (P2).** #19's static pure validator for steps 1 to 7
-   gains these inputs: the server reference aim vector, the last accepted raw
+3. **Validator signature (P2).** #19's static pure validator for steps 2 to 7
+   gains these state inputs: server world time at receipt, the server reference
+   aim vector, the last accepted raw
    aim, the last accepted client time, and the aim and timestamp bounds. Its
    result gains the accepted aim and the correction value. Step 10 also
    advances the last accepted raw aim and client time. #19's existing steps are
    not reordered or changed; 6a to 6d are an insertion its specification
-   anticipates.
+   anticipates. Step 1 remains the separately evaluated rate bucket. P2 only
+   outputs the accepted aim; P3 carries it through `FSeamScope`.
 4. **Fixtures (P2).** Steps 6a to 6d apply to every request, so every #19 test
    that sends a seam request must build one with a valid aim and time sample,
-   or it fails at 6a or 6b: T11, T12, T14, T16 to T21, and T31. T11's existing
+   or it fails at 6a or 6b: T3 to T5, T11 to T14, T16 to T21, and T31.
+   `AethelnCombatTestWorld.h` supplies test-only bounds and a shared fill helper.
+   T13's cache-accessor control uses local `InvokeReplicatedEvent`, because
+   the standalone target-data RPC now refuses. T11's existing
    rows keep their expected results with valid fixtures. T10 changes from five
-   fields to seven (A1). T17 to T20 are #19 P4 tests, and #60 P2 depends only
-   on #19 P3: whichever of #19 P4 and #60 P2 lands second writes T17 to T20
-   with schema-2 requests.
+   fields to seven (A1). #19 P4 is merged at the P2 base `77e7414`, so P2 also
+   converts T17 to T20 to schema-2 requests.
 5. **Specification text (P2).** P2 corrects the #19 specification where
    schema 2 and the route closure make it wrong: Decision 4 and the struct
    comment ("no ... aim" field), the T10 row, Open Decision 4 (the aim policy
@@ -849,9 +858,9 @@ seam keys live in shared `DefaultGame.ini` for the reason #19 gives
    for target-data cache growth.
 6. **Lifecycle hook (P3).** The PlayerState's null-pawn case gains one
    `ResetChain(AvatarLost)` call. Nothing else in #19's lifecycle changes.
-7. **Re-clamp (later #19 phase).** Lowering a maximum never raises a base value
+7. **Re-clamp (#19 P4).** Lowering a maximum never raises a base value
    (OQ2, owner, 2026-10-05, recorded on #19). #19 changes its re-clamp in a
-   later phase; see [Attribute Re-clamp Behavior](#attribute-re-clamp-behavior).
+   P4; see [Attribute Re-clamp Behavior](#attribute-re-clamp-behavior).
    No #60 phase depends on it, because #60 lowers no maximum (A18).
 
 ## Test Plan
@@ -942,7 +951,7 @@ numbers are the original question numbers.
 | OQ | Decision (owner, 2026-10-05) | Where it applies |
 | --- | --- | --- |
 | OQ1 | No player-versus-player hits in the prototype arena. Players are allies; only enemies are hostile until faction policy exists. | [Relation](#relation), A14 |
-| OQ2 | Lowering a maximum never raises a base value. #19 changes its server-only re-clamp in a later #19 phase. | [Attribute Re-clamp Behavior](#attribute-re-clamp-behavior), dependency 7 |
+| OQ2 | Lowering a maximum never raises a base value. Implemented and regression-tested in #19 P4, merged at the P2 base `77e7414`. | [Attribute Re-clamp Behavior](#attribute-re-clamp-behavior), dependency 7 |
 | OQ3 | Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result move to #260. #60 covers the three-hit chain only, and its former P7 is removed. | [Scope and Boundaries](#scope-and-boundaries), [Phased Delivery](#phased-delivery) |
 | OQ4 | Attacks do not restrict movement in P3 to P6. Authored restrictions come later with #17's predicted movement. | [Chain progression and buffering](#chain-progression-and-buffering) |
 | OQ6 | #18 owns the right-mouse block action, alongside dodge. #60 only resolves whether a hit is blocked against an active defense state. | [Resolution order](#resolution-order-prototype-subset) step 4, A14 |
