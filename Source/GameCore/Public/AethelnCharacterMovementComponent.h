@@ -66,6 +66,19 @@ public:
 
 	float GetBackpedalSpeedScale() const { return BackpedalSpeedScale; }
 
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Loopback transport seam: still uses the engine's saved-move and timestamp paths. */
+	TFunction<void(const FSavedMove_Character*, const FSavedMove_Character*, const FSavedMove_Character*)> TestMoveCapture;
+	void TestReplicateMove(float DeltaTime, const FVector& NewAcceleration) { ReplicateMoveToServer(DeltaTime, NewAcceleration); }
+	bool TestReplayCorrection() { return ClientUpdatePositionAfterServerUpdate(); }
+	/** Test-only views of the protected packed move/response serialization state. */
+	FCharacterNetworkMoveDataContainer& TestGetNetworkMoveDataContainer() const { return GetNetworkMoveDataContainer(); }
+	FCharacterMoveResponseDataContainer& TestGetMoveResponseDataContainer() const { return GetMoveResponseDataContainer(); }
+	FCharacterNetworkMoveData* TestGetCurrentNetworkMoveData() const { return GetCurrentNetworkMoveData(); }
+	int32 TestReceivedMoveCount = 0;
+	TArray<uint8> TestReceivedMoveFlags;
+#endif
+
 	/** Sprint intent. Set by local input, packed into saved moves, and restored from them on the server. */
 	bool bWantsToSprint = false;
 
@@ -84,6 +97,9 @@ protected:
 	virtual bool ClientUpdatePositionAfterServerUpdate() override;
 	virtual void ControlledCharacterMove(const FVector& InputVector, float DeltaSeconds) override;
 	virtual void MoveAutonomous(float ClientTimeStamp, float DeltaTime, uint8 CompressedFlags, const FVector& NewAccel) override;
+#if WITH_DEV_AUTOMATION_TESTS
+	virtual void CallServerMovePacked(const FSavedMove_Character* NewMove, const FSavedMove_Character* PendingMove, const FSavedMove_Character* OldMove) override;
+#endif
 
 	/** Provisional POC sprint speed carried over from issue #100; not a canonical tuning value. */
 	UPROPERTY(EditDefaultsOnly, Category = "POC|Movement", meta = (ClampMin = "0.0", Units = "cm/s"))

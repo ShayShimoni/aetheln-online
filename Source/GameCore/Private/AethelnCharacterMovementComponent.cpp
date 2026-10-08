@@ -307,6 +307,13 @@ void UAethelnCharacterMovementComponent::MoveAutonomous(
 	uint8 CompressedFlags,
 	const FVector& NewAccel)
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (CharacterOwner != nullptr && CharacterOwner->HasAuthority() && GetCurrentNetworkMoveData() != nullptr)
+	{
+		++TestReceivedMoveCount;
+		TestReceivedMoveFlags.Add(CompressedFlags);
+	}
+#endif
 	if (HasValidData())
 	{
 		Acceleration = ConstrainInputAcceleration(NewAccel).GetClampedToMaxSize(GetMaxAcceleration());
@@ -314,6 +321,21 @@ void UAethelnCharacterMovementComponent::MoveAutonomous(
 	}
 	Super::MoveAutonomous(ClientTimeStamp, DeltaTime, CompressedFlags, NewAccel);
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+void UAethelnCharacterMovementComponent::CallServerMovePacked(
+	const FSavedMove_Character* NewMove,
+	const FSavedMove_Character* PendingMove,
+	const FSavedMove_Character* OldMove)
+{
+	if (TestMoveCapture)
+	{
+		TestMoveCapture(NewMove, PendingMove, OldMove);
+		return;
+	}
+	Super::CallServerMovePacked(NewMove, PendingMove, OldMove);
+}
+#endif
 
 FNetworkPredictionData_Client* UAethelnCharacterMovementComponent::GetPredictionData_Client() const
 {
