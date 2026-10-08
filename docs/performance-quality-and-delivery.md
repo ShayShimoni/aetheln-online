@@ -93,6 +93,38 @@ Every budget includes target, warning threshold, failure threshold, capture
 method, scenario, owner, evidence link, and approval status. Until measured, the
 entry is explicitly `TBD`.
 
+The first executable Issue #45 wave adds an opt-in, versioned
+`aetheln.performance-capture-contract` (version 1) to the network-authority
+runner via `PerformanceContractPath`; its exact shape and fail-closed rules are
+specified in
+[Networking Authority Spike](networking-authority-spike.md#issue-45-opt-in-performance-capture-and-budget-contract).
+The contract binds future capture evidence to the exact source revision,
+packaged-build identity, toolchain, hardware, topology, environment, map,
+duration, actor mix, run ID, scenario ID/version, network profile ID/version, runtime
+network-configuration identity, opaque profile-argument digest, and evidence
+references, and
+carries one budget record per version-1 network-authority-runner subset metric
+with metric identity and domain, target, warning threshold, failure threshold,
+measurement method, scenario, accountable owner, evidence references, an
+evidence classification (`measured`, `modeled`, `hypothetical`, or `unset`),
+and an approval status. In this wave every target, warning threshold, failure
+threshold, capacity, tick rate, sampling rate, bandwidth value, and
+player-count value remains `null`/`TBD`, and every budget remains
+`unapproved`: fixture evidence validates the contract but cannot approve or
+canonicalize any budget. Mismatched identity, populated numeric values,
+duplicate or missing budgets, undeclared evidence references, and self-approved
+entries fail closed before launch. Each accepted run retains the exact validated
+contract bytes and publishes their SHA-256 plus the fixed artifact name so later
+review can detect replacement or drift without exposing raw evidence references
+in the summary. This bounded subset does not replace or complete the broader
+Issue #45 registry above; the remaining client timing, frame-pacing, hitch,
+loading/streaming, server worker/tick-overrun/failure, and network burst/loss
+domains require later representative capture work.
+Metric identities remain case-sensitive, and fixture evidence cannot classify a
+budget as `measured`. The exact contract artifact is created without overwrite,
+kept protected from replacement during capture, and rehashed immediately before
+evidence publication.
+
 ## Evidence Record
 
 Each performance or scalability result records:
@@ -215,10 +247,10 @@ performed or proven by Issue #16 or Issue #127 repository changes.
 Representative engine-runner evidence is commit-specific and must come from
 the artifacts uploaded by the corresponding GitHub run. An earlier or
 in-progress run does not establish that the unpublished incremental candidate
-has completed successfully. GitHub runs the `02:00 UTC` schedule only from the
-default branch, which has been `develop` since 2026-10-03 (it was `main`
-before), so each scheduled run exercises the head of `develop`. `develop` is
-also the integration branch.
+has completed successfully. GitHub runs the weekly Saturday `02:00 UTC`
+schedule only from the default branch, which has been `develop` since
+2026-10-03 (it was `main` before), so each scheduled run exercises the head of
+`develop`. `develop` is also the integration branch.
 
 ## Change Gates
 

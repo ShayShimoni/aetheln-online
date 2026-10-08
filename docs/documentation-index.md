@@ -74,6 +74,13 @@ subordinate to the specialized canonical product and technical documents.
   resolution, lag-compensation and prediction policy, outcome reporting,
   rejection reasons, data-driven tuning, test plan, phased delivery, and the
   owner decisions of 2026-10-05.
+- [Dodge and Block](dodge-and-block.md) records the Issue #18 implementation
+  spec for the server-validated dodge and the right-mouse block: the
+  movement-carried dodge request, predicted displacement against the
+  server-owned invulnerability window, the held block and the defense state,
+  arc, and Guard hook it exposes to Issue #60, prediction and outcome
+  reporting, telemetry, test plan, phased delivery, owner decisions, and open
+  decisions.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path, plus the Issue #167

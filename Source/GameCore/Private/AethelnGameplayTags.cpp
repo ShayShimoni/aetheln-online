@@ -18,6 +18,9 @@ namespace AethelnGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_Endurance, "SetByCaller.Init.Endurance", "Initial Endurance magnitude for the attribute init effect");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_MaxGuard, "SetByCaller.Init.MaxGuard", "Initial MaxGuard magnitude for the attribute init effect");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_Guard, "SetByCaller.Init.Guard", "Initial Guard magnitude for the attribute init effect");
+
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Cooldown_Duration, "SetByCaller.Cooldown.Duration", "Cooldown duration in seconds for the shared cooldown effect");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Cost_Endurance, "SetByCaller.Cost.Endurance", "Negated Endurance cost for the shared cost effect");
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

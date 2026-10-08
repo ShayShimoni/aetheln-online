@@ -225,10 +225,11 @@ Every accepted decision records:
   same-repository pull requests may run the supported-target compile gate,
   after the portable gates pass and only when the exact base/head change
   classification in TA-012 requires the engine. The packaged-smoke milestone
-  runs at `02:00 UTC` from the protected default branch as the four
-  schedule-only phases decided in TA-012; the workflow declares no manual
-  trigger. The default branch was `main` when this was accepted and has been
-  `develop` since 2026-10-03 (see the amendment below).
+  runs on Saturday at `02:00 UTC` (weekly since the 2026-10-06 amendment
+  below) from the protected default branch as the four schedule-only phases
+  decided in TA-012; the workflow declares no manual trigger. The default
+  branch was `main` when this was accepted and has been `develop` since
+  2026-10-03 (see the amendment below).
 - **Rationale:** The pinned Unreal source build, Visual Studio and Linux
   cross-toolchains, WSL topology, disk capacity, and local build paths are not
   available on ordinary GitHub-hosted runners. Repository scope and explicit
@@ -276,6 +277,21 @@ Every accepted decision records:
   Release packaging stays on `release/*` through TA-022. The scheduled jobs
   guard only on the `schedule` event, so no workflow condition or test pins
   `main` for the schedule, and none changed.
+- **Amendment (2026-10-06, weekly schedule, issue #264):** The owner moved the
+  scheduled milestone from daily to weekly, on Saturday at `02:00 UTC` (cron
+  `0 2 * * 6`). At prototype stage, packaging-only changes are rare. Owner
+  pull requests with engine-impacting changes already compile, but a pull
+  request limited to portable-only paths or to the two exact packaging-script
+  exemptions (`scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`) is exercised on the engine
+  only by the scheduled and release packaging runs (TA-022). Weekly stretches
+  that gap from at most a day to at most a week; the owner accepted weekly on
+  2026-10-06. The owner estimated about one to two hours of runner time per
+  run (the 40/40/20/20-minute phase ceilings sum to two hours; no healthy
+  phased run has been measured yet), and a run could start late enough to
+  overlap the owner's working hours. The four phases, their bounds, the
+  handoff and evidence contracts, and the CI authority predicate are
+  unchanged.
 - **Revisit trigger:** A collaborator needs runner access, the runner moves to a
   different host/account or trust domain, hosted/ephemeral infrastructure can
   reproduce the pinned toolchain, or measured cost, reliability, isolation, or
@@ -1773,13 +1789,63 @@ Every accepted decision records:
     expect `NetCore.init.gen.cpp` to hold `0xF26BCE42`. Remove the setting only
     after a pinned engine revision contains an upstream fix for the race, and
     record that in a new amendment.
+- **Amendment (2026-10-06, `-NoEngineChanges` enabled, issue #267):** the
+  revisit trigger met on 2026-10-05 is now acted on. This amendment supersedes
+  the 2026-10-02 *Deferred fail-closed* bullet and the first sentence of the
+  2026-10-05 *Follow-ups* bullet; the rest of both amendments stands.
+  - *Decision:* `scripts/ci/InitialPreparation.BuildInvocation.ps1` passes
+    `-NoEngineChanges` for `AethelnOnlineEditor` (Win64) only. The compiler
+    selection is unchanged (no `-Compiler=`, the same version pins), and
+    client and server arguments are unchanged. A different compiler selection
+    would make UBT treat engine actions as outdated, which under the flag
+    becomes a false exit 5, so the selection stays pinned as above.
+  - *What the flag guarantees:* UBT (`Modes/BuildMode.cs`) exits 5
+    (`CompilationResult.FailedDueToEngineChange`) before any action that would
+    rewrite an **existing** file under `Engine/`, and the editor-build step
+    records `editor_build_engine_changes_required`; the refused file list
+    stays in the runner-local `build.log`. New engine files (for example a new
+    shared-PCH variant) and UHT and makefile outputs under `Engine/Intermediate`
+    may still be written. Any engine link makes the single engine metadata
+    action outdated, and that action rewrites the existing module manifests
+    and version file, so in practice an engine link always exits 5. A CI
+    editor build therefore no longer relinks an engine module or restamps the
+    shared engine BuildId, and a contributor editor built before a CI run keeps
+    loading after it.
+  - *Consequence:* a pull request that needs an engine rebuild, such as a new
+    engine plugin in `AethelnOnline.uproject`, keeps `unreal-receipt-shadow`
+    red with `editor_build_engine_changes_required` until the owner runs an
+    authorized engine build with the contributor command in
+    [Unreal Project Setup](unreal-project-setup.md) and re-attests the host
+    tools. This is intended. The flag also depends on the UHT input-cache file
+    above: if it is lost, the next CI editor run exits 5 instead of relinking
+    NetCore. Contributor builds, `scripts/content/Invoke-ContentValidation.ps1`
+    and `rebuild-authorized` host-tool provisioning still build the editor
+    without the flag and can still rewrite engine files.
+  - *Evidence:* `tests/ci/InitialPreparation.Build.Tests.ps1` (run outside
+    the CI suite) pins the flag on the editor target and its absence on client
+    and server, and the required suite entry
+    `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1` pins it through the
+    workflow's editor-build step and its control-checkout wrapper. The pull
+    request's own `trusted-editor-automation` run is a warm proof only: the
+    managed workspace keeps `Binaries/` and `Intermediate/` across runs. The
+    cold proof is local: in a new worktree of `develop`, with runner 21 idle,
+    `engine.lock` held and no engine process running, the owner (or the lead
+    with the owner's explicit approval) runs
+    `scripts/ci/Invoke-EditorColdDryRun.ps1`. It hashes the host-tools closure
+    (the engine-side editor and `ShaderCompileWorker` receipt products), runs
+    the wrapper, and hashes the closure again. It passes only on exit 0 with
+    identical hashes, and refuses a set `UE_ADDITIONAL_PLUGIN_PATHS` or a
+    worktree that already has `Binaries/` or `Intermediate/`; a fake-engine
+    fixture in the same suite entry covers it. The path-free result line is
+    recorded on issue #267 before the host-tools receipt change that depends on
+    it merges.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
   the combined compile plus editor hold becomes a measured scheduling bottleneck,
-  the NetCore follow-up identifies the varying UHT input (then enable
-  `-NoEngineChanges`), or the plugin definition header still changes across
-  a CI editor run.
+  a CI editor build records `editor_build_engine_changes_required` for a pull
+  request that changes no engine input (2026-10-06 amendment), or the plugin
+  definition header still changes across a CI editor run.
 
 ### TA-021 - Private GameCombat Dependency on the GameNet Observability Service
 
@@ -1896,10 +1962,11 @@ Every accepted decision records:
   dispatchable.
 - **Operator rules:** Run no local engine or editor build against the runner's
   engine root while a release dispatch is queued or running; nothing
-  serializes it, and attestation runs only at stage start. A
-  `trusted-editor-automation` job that runs between release phases relinks an
-  attested engine module, so the next package phase is expected to fail closed
-  on host-tools attestation; dispatch again.
+  serializes it, and attestation runs only at stage start. Obsolete since the
+  TA-020 2026-10-06 amendment (issue #267): a `trusted-editor-automation` job
+  that ran between release phases used to relink an attested engine module, so
+  the next package phase failed closed on host-tools attestation. That job now
+  builds with `-NoEngineChanges` and cannot rewrite an existing engine file.
 - **Evidence:** Issue
   [#226](https://github.com/ShayShimoni/aetheln-online/issues/226), its design,
   and its independent security review.
@@ -1934,6 +2001,96 @@ Every accepted decision records:
 - **Revisit trigger:** Any package leaves the owner's control (external
   testers, a public download, or a store), a collaborator gains write access, a
   second matching runner is registered, or `hotfix/*` packaging is needed.
+
+### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-06 by the delivery lead under the owner's
+  delegated authority.
+- **Scope:** Responsibility, dependencies, and target membership of the
+  `GameTests` module.
+- **Decision (2026-10-06):** `GameTests` is the editor-only automation module.
+  It hosts the project and module load harness (#85), the GAS foundation,
+  combat, and activation-seam tests with their observability assertions (#19),
+  and the content-validation commandlet with its tests (#120). Its dependency
+  rule, recorded in the `GameTests` row of
+  [Technical Architecture](technical-architecture.md#unreal-module-boundaries):
+  - Dependencies are private only. The module has no `Public/` folder and
+    exports nothing.
+  - It may depend on the project modules the Editor target lists, and on the
+    engine and engine-plugin modules (runtime, developer, or editor) that its
+    tests and the commandlet need.
+  - No other module may depend on it.
+  - Only `AethelnOnlineEditor.Target.cs` lists it. The Game, Client, and Server
+    targets never do.
+  - An engine third-party library needs a justification in this entry. The only
+    one today is OpenSSL. The content-validation scanner verifies
+    caller-supplied SHA-256 provenance of its bounded JSON inputs and of the
+    files it binds by hashing their bytes with OpenSSL `SHA256()`. The pinned
+    engine has no desktop SHA-256 in `Core`: the only definition of
+    `FPlatformMisc::GetSHA256Signature` is the generic one, which fails a
+    `checkf` with "No SHA256 Platform implementation". The build rule links
+    OpenSSL only on Win64, Mac, and Linux and sets
+    `AETHELN_CONTENT_VALIDATION_WITH_OPENSSL`; other platforms fail closed.
+- **Context:** PR #219 recorded `GameTests` on 2026-10-03 as project and module
+  load tests that depend only on `Core`. Three later changes widened it without
+  updating the row:
+  - `30f011f` (#120, merged in PR #235) added `AssetRegistry`, `CoreUObject`,
+    `DesktopPlatform`, `Engine`, `GameCore`, `Json`, `NavigationSystem`,
+    `PhysicsCore`, and OpenSSL for the content-validation commandlet.
+  - `cc65f1f` (#19, merged in PR #251) moved the GAS foundation tests out of
+    `GameCombat` and added `GameCombat`, `GameplayAbilities`, and
+    `GameplayTags`, so the shipping Client and Server targets carry no test
+    class.
+  - `3f839ed` (#19, merged in PR #261) added `GameNet`, for the activation-seam
+    tests that assert rejection telemetry through the observability subsystem
+    and its in-memory sink.
+
+  The issue #13 QA on 2026-10-06 found the row stale (AC6, DoD4).
+- **Evidence:** On `develop` `f173388`, `Source/GameTests/GameTests.Build.cs`
+  lists only private dependencies, `AethelnOnline.uproject` declares the module
+  `Type: Editor`, and only `Source/AethelnOnlineEditor.Target.cs` lists it in
+  `ExtraModuleNames`. No other `.Build.cs` names `GameTests`. The OpenSSL
+  reason is pinned by `tests/content/Invoke-ContentValidationCommand.Tests.ps1`:
+  the scanner must call `SHA256(` and must not call `GetSHA256Signature`, and
+  the build rule must add the OpenSSL dependency. The engine stub is in
+  `Engine/Source/Runtime/Core/Private/GenericPlatform/GenericPlatformMisc.cpp`
+  of the pinned source.
+- **Target boundary enforcement:** No automated check enforces the `GameTests`
+  target boundary today. `scripts/build/Validate-TargetComposition.ps1` reads
+  only the Game, Client, and Server targets. It rejects only `GameServer` in a
+  Game or Client target and `GameUI` in the Server target. The required CI
+  check `target-composition-tests` runs that validator against synthetic
+  fixtures only. The repository's real targets are validated only by the
+  `target-composition-gate` step of `scripts/build/Build-PackagedArtifacts.ps1`
+  during packaging. Until the validator also rejects `GameTests` in the Game,
+  Client, and Server targets, review of the target files and this entry
+  enforces the boundary.
+- **Alternatives:** Keep `GameTests` at `Core` only and move the tests
+  elsewhere (rejected: the GAS tests would return to `GameCombat` and ship test
+  classes in the Client and Server targets, which `cc65f1f` removed, and the
+  commandlet would need another editor module with the same dependencies).
+  Per-area test modules, such as separate combat-test and content-validation
+  editor modules (deferred: more `.uproject` and Editor-target entries under
+  the same boundary rule, with no measured compile or ownership problem today).
+  Hash with the engine's `Core` SHA-256 (rejected: the generic stub fails a
+  `checkf` on every desktop platform).
+- **Consequences:** The `GameTests` row in Technical Architecture states the
+  rule, and a Rules bullet keeps the module out of non-Editor targets. A new
+  dependency that fits the rule needs no new entry. A new engine third-party
+  library does. `docs/gas-foundation.md` refers to the row instead of listing
+  dependencies. The content-validation provenance contract
+  ([Asset Intake and Content Validation](asset-intake-and-content-validation.md))
+  binds exactly `GameCore` then `GameTests` as loaded project modules, so moving
+  the commandlet out of `GameTests` changes that contract. Follow-up: extend
+  `scripts/build/Validate-TargetComposition.ps1` and its tests to reject
+  `GameTests` in the Game, Client, and Server targets.
+- **Owner:** Issues #13, #19, #85, and #120.
+- **Revisit trigger:** A non-Editor target or another module needs `GameTests`
+  code, another engine third-party library is proposed, `GameTests` compile
+  time becomes a measured bottleneck for the Editor build or CI editor
+  automation, a per-area test split is proposed, or the pinned engine gains a
+  desktop SHA-256 in `Core`.
 
 ## Candidate Decisions
 

@@ -41,7 +41,7 @@ $DefaultChecks = @(
 	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
 	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
 	@{ name = 'visual-package-evidence-tests'; tier = 'required'; script = 'tests/ci/Invoke-VisualPackageValidation.Tests.ps1' },
-	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1' },
+	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Invoke-RunnerSchedulingAndPreparationTests.ps1' },
 	@{ name = 'ci-selection-tests'; tier = 'required'; script = 'tests/ci/Get-CiSelection.Tests.ps1' },
 	@{ name = 'ci-acceptance-receipt-tests'; tier = 'required'; script = 'tests/ci/New-CiAcceptanceReceipt.Tests.ps1' },
 	@{ name = 'ci-acceptance-aggregate-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiAcceptanceAggregate.Tests.ps1' },

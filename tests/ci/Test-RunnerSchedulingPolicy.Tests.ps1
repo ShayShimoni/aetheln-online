@@ -67,7 +67,7 @@ foreach ($OutputName in @('report_artifact_id','report_artifact_name','report_ar
 # still carries the retired 1,440-minute PackagedSmoke job; the four phases are
 # therefore schedule-only, and the monolithic gate is unreachable.
 Assert-True ($Workflow -notmatch 'workflow_dispatch') 'Workflow must not declare or reference workflow_dispatch anywhere.'
-Assert-True ($Workflow -match "(?m)^on:\r?\n  pull_request:\r?\n  push:\r?\n    branches:\r?\n      - develop\r?\n  schedule:\r?\n    - cron: '0 2 \* \* \*'\r?\n\r?\n") 'Workflow events must be exactly pull_request, push to develop, and the daily schedule.'
+Assert-True ($Workflow -match "(?m)^on:\r?\n  pull_request:\r?\n  push:\r?\n    branches:\r?\n      - develop\r?\n  schedule:\r?\n    - cron: '0 2 \* \* 6'\r?\n\r?\n") 'Workflow events must be exactly pull_request, push to develop, and the weekly Saturday 02:00 UTC schedule.'
 Assert-True ($Workflow -notmatch 'manual-packaged-smoke') 'Workflow must not define the retired manual-packaged-smoke job.'
 Assert-True ($Workflow -notmatch 'engine-runner-manual-smoke-report') 'Workflow must not publish the retired manual smoke artifact.'
 Assert-True ($Workflow -notmatch '-Mode PackagedSmoke') 'Workflow must not select the monolithic PackagedSmoke gate anywhere.'
@@ -173,7 +173,7 @@ Assert-True ($AcceptanceAuthority -match "(?m)^    needs: ci-acceptance-shadow\r
 Assert-True ($AcceptanceAuthority -match '(?ms)^    permissions:\r?\n      actions: read\r?\n      contents: read\r?$' -and $AcceptanceAuthority -notmatch '(?m)^      [a-z-]+: write\r?$') 'The dormant authority boundary must remain read-only.'
 Assert-True ($AcceptanceAuthority -match 'AETHELN_AGGREGATE_RESULT: \$\{\{ needs\.ci-acceptance-shadow\.result \}\}' -and $AcceptanceAuthority -match "throw 'acceptance_authority_dependency_invalid'") 'A failed or cancelled aggregate must execute the activated authority boundary and fail red rather than produce a skipped check.'
 
-# The milestone is split into four bounded phases that run only on the daily
+# The milestone is split into four bounded phases that run only on the weekly
 # schedule and only after the portable gates pass; pull requests and pushes
 # cannot enter them and no manual trigger exists. Job timeout-minutes is the
 # total concurrency-holding bound for the phase (40/40/20/20), and every
