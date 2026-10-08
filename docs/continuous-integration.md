@@ -1597,7 +1597,8 @@ a `host-tools-configuration` check — unset configuration fails closed so one
 missing runner variable can never silently launch another multi-hour host
 editor/engine rebuild:
 
-- `AETHELN_HOST_TOOLS` (**required**) — `prebuilt` (`host_tools_prebuilt`)
+- `AETHELN_HOST_TOOLS` (**required**) — `prebuilt` (`host_tools_prebuilt
+  attestation_sha256=<hex>`, the SHA-256 of the attestation record's bytes)
   for the scheduled clean milestone, or `rebuild-authorized`
   (`host_tools_rebuild_authorized`) as the explicit, separately named
   operator authorization for a full host-tools rebuild. Unset fails closed
@@ -1608,16 +1609,31 @@ editor/engine rebuild:
   closed with `engine_revision_invalid`.
 - `AETHELN_HOST_TOOLS_ATTESTATION` — required with `prebuilt`: the external
   host-tools attestation record file (an existing local fixed-drive file
-  disjoint from every approved root); missing or invalid fails closed with
-  `host_tools_attestation_invalid`.
+  disjoint from every approved root); missing, invalid, or unhashable fails
+  closed with `host_tools_attestation_invalid`.
 
 A valid `prebuilt` selection is forwarded to `Build-PackagedArtifacts.ps1`
 as `-HostToolsBoundary Prebuilt -EngineRevision <sha>
--HostToolsAttestationPath <file>`, and `rebuild-authorized` as
-`-HostToolsBoundary Rebuild`; the gate also forwards its validated runner
-name as `-RunnerName`. The build controller owns the fail-closed attestation
-proof that the host editor/tools belong to the exact clean canonical pinned
-engine revision before skipping their rebuild. See
+-HostToolsAttestationPath <file> -HostToolsAttestationSha256 <hex>`, and
+`rebuild-authorized` as `-HostToolsBoundary Rebuild`; the gate also forwards
+its validated runner name as `-RunnerName`. The build controller owns the
+fail-closed attestation proof that the host editor/tools belong to the exact
+clean canonical pinned engine revision before skipping their rebuild. Since
+issue #267 (TA-014 amendment) a prebuilt phase first builds only the project
+editor modules with the reviewed wrapper and `-NoEngineChanges`, then
+verifies the schema-2 record it read once against the receipt that build
+wrote. It fails closed with a fixed, path-free reason that the gate's
+diagnostic keeps: `host_tools_plugin_paths_set` (`UE_ADDITIONAL_PLUGIN_PATHS`
+is set), `host_tools_attestation_changed` (the record's bytes differ from the
+reported hash), `host_editor_engine_changes` (the build would
+rewrite an existing engine file), `host_editor_build_failed`,
+`host_editor_capture_failed`, `host_tools_receipt_invalid`,
+`host_tools_launch_invalid`, or `host_tools_manifest_set_invalid`
+(an engine module manifest outside the attested closure). Each code stays
+shorter than 32 characters because the diagnostic redacts longer tokens. The
+report schema,
+the check names, and the phase check lists do not change; the scheduled and
+release phases gain this behavior with no workflow change. See
 [Developer Environment and DDC](developer-environment-and-ddc.md).
 
 Every `Build-PackagedArtifacts.ps1` run that resolves a valid `LogRoot` also

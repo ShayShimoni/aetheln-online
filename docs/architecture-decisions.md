@@ -614,7 +614,8 @@ Every accepted decision records:
 - **Consequences:** The runner operator provisions the host tools once per
   engine pin (the retained authorized legacy build is the one-time source)
   and runs the explicit attestation step tied to its retained evidence. A
-  misconfigured, stale, or tampered state stops the milestone visibly. The
+  misconfigured, stale, or drifted state stops the milestone visibly (the
+  2026-10-06 amendment explains why "drifted", not "tampered"). The
   timing record gains `hostTools` and bounded `identity` evidence
   (canonical engine SHA, `Build.version` hash, Linux compiler SHA-256,
   targets, validated runner name), and the runner report gains `runnerName`.
@@ -623,6 +624,179 @@ Every accepted decision records:
   update the controller's canonical pin and `AETHELN_ENGINE_REVISION`),
   measured evidence shows the boundary does not reduce the dominant cost, or
   the milestone moves to an installed engine build distribution.
+- **Amendment (2026-10-06, schema-2 closure and in-phase project editor build,
+  issue #267):** The receipt set above named
+  `Engine/Binaries/Win64/UnrealEditor.target`, which never exists on this
+  engine: the editor is built through the project target, so its receipt is
+  the project's `Binaries/Win64/AethelnOnlineEditor.target`. A fresh package
+  checkout has no `Binaries/`, and UAT throws when that receipt is missing
+  (`ProjectUtils.cs:673-715`), so the prebuilt cook could not start. This
+  amendment replaces the closure and the prebuilt flow; the boundary stays
+  explicit and fail-closed.
+  - *Closure (schema 2):* every `$(EngineDir)` product of type `Executable`,
+    `DynamicLibrary`, `RequiredResource`, `BuildResource`, or `Package` in the
+    project receipt written by the phase's own build (about 1,252 files on
+    2026-10-06: engine and plugin `UnrealEditor-*.dll`, the
+    `UnrealEditor.modules` manifests, `UnrealEditor.version`, and the two
+    editor executables), plus `Engine/Binaries/Win64/ShaderCompileWorker.target`
+    and its non-symbol products. `UnrealPak` and `BootstrapPackagedGame` leave
+    the closure: UAT always builds `UnrealPak` with the project agenda and
+    cleans every agenda target first
+    (`BuildProjectCommand.Automation.cs:113-118,243,251`; `CleanMode.cs:160-222`
+    deletes only prefix-matched products, so it cannot reach a closure file),
+    and linking is not deterministic (`VCToolChain.cs:1826-1832`), so a second
+    phase would always fail on the first phase's rebuild. Their provenance is
+    that of the client and server executables: the verified clean pinned
+    engine source plus an in-run `-clean` build. `$(ProjectDir)` products (the
+    six project modules and the project manifest) are built in the phase and
+    not attested; the project receipt is a phase output, so its engine-side
+    list is checked by set equality instead of a hash.
+    `UnrealEditor-NetCore.dll` is inside any sound closure (`Engine.Build.cs:85`
+    makes NetCore a public dependency of `Engine`): a NetCore relink keeps
+    failing closed, and the 2026-10-04 failure was correct.
+  - *In-phase project editor build:* `-HostToolsBoundary Prebuilt` and
+    `-Stage AttestHostTools` run
+    `scripts/ci/InitialPreparation.BuildInvocation.ps1 -Target AethelnOnlineEditor`
+    as a child process, with the wrapper's TA-020 compiler selection and
+    `-NoEngineChanges` (enabled for the editor target by the issue #267
+    TA-020 amendment). Its console goes to `<LogRoot>/host-editor-build`,
+    never to the controller output. `-NoEngineChanges` refuses any action
+    that would rewrite an existing file under `Engine/`
+    (`BuildMode.cs:727-743`); new engine files and UHT or makefile outputs
+    under `Engine/Intermediate` may still be written. Any engine link makes
+    the single engine metadata action outdated, and that action rewrites the
+    existing manifests and version file, so in practice an engine link ends
+    in exit code 5. Reasons: `host_editor_engine_changes` (exit 5),
+    `host_editor_build_failed` (any other nonzero exit), and
+    `host_editor_capture_failed` (a missing or invalid
+    `native-result.json`, or a capture failure). Every new reason code is a
+    lowercase identifier shorter than 32 characters and its message contains
+    "failed" and no path: the gate's diagnostic keeps only lines with a
+    failure word and redacts any token of 32 or more characters, so longer
+    names proposed during design were shortened. The attest step no longer
+    "builds nothing": it builds only the project editor modules and rewrites
+    no existing engine file, so an engine that UBT considers out of date for
+    this project can no longer be attested.
+  - *Normative order, pinned by fixtures:* parameter checks (including the
+    plugin-path refusal; `-HostToolsAttestationSha256` is accepted only with
+    `Prebuilt`), clean canonical engine, read the record once (size bound,
+    SHA-256 of its bytes, structure, schema 2), the in-phase build, clean
+    engine again, receipt checks, set equality with the record, the
+    manifest-set check, and the content hashes. The receipt must describe the
+    `AethelnOnlineEditor` Win64 Development Editor target
+    (`host_tools_receipt_invalid`), and its `LaunchCmd` and `Launch` must be
+    `$(EngineDir)/Binaries/Win64/UnrealEditor-Cmd.exe` and
+    `$(EngineDir)/Binaries/Win64/UnrealEditor.exe`, because UAT runs
+    `LaunchCmd` for the cook (`host_tools_launch_invalid`).
+    Verification runs after the build, so an engine write that slipped past
+    `-NoEngineChanges` still fails closed.
+  - *Manifest-set check:* the engine loader reads `UnrealEditor.modules` in
+    every subdirectory of each binaries directory, merges any manifest whose
+    `BuildId` matches (later mappings win), and accepts any manifest under
+    `Engine/Plugins/Bridge/` whatever its `BuildId`
+    (`ModuleManager.cpp:1930-1965`; SCW reads `ShaderCompileWorker.modules`
+    the same way). `Binaries` trees are git-ignored, and a build that only
+    adds manifests recycles the `BuildId` (`WriteMetadataMode.cs:101-131,247-266`),
+    so an extra manifest could redirect a module without changing a hashed
+    byte. Every file with either name under `Engine/Binaries/Win64`,
+    `Engine/Plugins`, `Engine/Platforms`, and `Engine/Restricted` (when
+    present) must be a closure member, with no `BuildId` filter, and a
+    reparse-point directory in those trees fails closed
+    (`host_tools_manifest_set_invalid`). Measured on 2026-10-06: 245
+    manifests, all members, no reparse-point directory among 30,772
+    directories, about 4-9 seconds. `UnrealPak.modules` is not checked;
+    whether a pre-placed one could redirect an `UnrealPak` module is not
+    verified (residual).
+  - *Schema 2 and the record hash:* the record gains `projectRevision`, the
+    attesting worktree's HEAD (the attest step requires `-SourceRevision` to
+    equal it, `host_tools_revision_mismatch`). It is recorded, never
+    compared to the packaged revision, because every `develop` merge would
+    otherwise invalidate the record. Schema-1 records are rejected. The gate
+    hashes the record file, reports `host_tools_prebuilt
+    attestation_sha256=<hex>` in the passed `host-tools-configuration`
+    message (no path), and forwards the hash as `-HostToolsAttestationSha256`;
+    the controller reads the record once and fails closed
+    (`host_tools_attestation_changed`) unless those bytes hash to the same
+    value. `build-timing.json` `hostTools` gains `attestationSha256`,
+    `attestationCreatedUtc`, `attestationSchemaVersion`, and
+    `attestedProjectRevision`. No check is added or renamed.
+  - *Private plugins:* the controller refuses `Prebuilt` and
+    `AttestHostTools` while `UE_ADDITIONAL_PLUGIN_PATHS` is set in the process
+    (`host_tools_plugin_paths_set`), because the cook would load plugins from
+    outside the engine, the project, and the closure (see the TA-019 note).
+    `Rebuild` is unchanged.
+  - *BuildId masking:* considered and not adopted. UBT keeps the existing
+    `BuildId` unless a module of an existing manifest is missing or newer
+    (`WriteMetadataMode.cs:101-118,247-266`); both observed flips were closure
+    DLL relinks, which fail on the DLL hash anyway, and masking would add a
+    parser path to the checker.
+  - *What a pass proves:* at phase start, after the in-phase build, every
+    closure file is byte-identical to the record; the attested engine-side
+    set equals what this revision's editor target needs; no engine-side
+    manifest outside the closure can map a module; the cook executable named
+    by the receipt is attested; and the verified record is the one whose hash
+    the report carries. The attest step's exit 0 is UBT's timestamp and
+    action-history verdict that no existing engine file is outdated: evidence
+    of drift status, not of authenticity.
+  - *What it does not prove:* the six project modules (rebuilt in the phase
+    and compiled against unattested engine import libraries, shared PCHs,
+    and UHT-generated headers, which can change their code); the .NET
+    toolchain (UBT, UHT, UAT, AutomationScripts, and the bundled dotnet) and
+    UBA, which decide `-NoEngineChanges` and write every in-phase binary;
+    receipt runtime dependencies and prebuilt executables (`zenserver.exe`,
+    `zen.exe`, `crashpad_handler.exe`, `EpicWebHelper.exe`,
+    `UnrealTraceServer.exe`); Windows DLL search order (a non-KnownDLL placed
+    in `Engine/Binaries/Win64` loads ahead of System32); MSVC, the Windows
+    SDK, and the Linux toolchain (version pins only); DDC and handoff
+    contents; and anything after phase start, because UAT's later UBT runs
+    execute the checkout's build rules without `-NoEngineChanges`. Every job
+    on runner 21 runs as the owner account and can rewrite the record; "CI
+    never attests" is a property of the gate's code, which passes only
+    `Prebuilt` or `Rebuild`, not a boundary. The record is a drift tripwire
+    with an audit trail, not tamper-proofing against that account.
+  - *Re-attestation:* triggers are `host_editor_engine_changes`; a
+    set-equality, manifest-set, or content mismatch after a deliberate engine
+    build or a plugin change on `develop`; a new engine pin; and loss of
+    `Engine/Saved/UnrealBuildTool/BuildConfiguration.xml` (the UHT input
+    cache). Preconditions: runner idle, `engine.lock` held, a new clean
+    worktree whose HEAD equals the remote `develop` head,
+    `UE_ADDITIONAL_PLUGIN_PATHS` empty at every scope, `BuildConfiguration.xml`
+    present, and the old record archived (the controller never overwrites
+    one). Afterwards: a reviewed delta against the archived record (paths
+    added, removed, and changed, and the `projectRevision` change), the build
+    that produced each changed file named in the evidence note, and the new
+    record's SHA-256 and `createdUtc` posted on issue #267 without paths; the
+    next run's report carries the same hash. Who may re-attest is an open
+    owner decision (issue #267, OD-9).
+  - *Provisioning evidence for the current engine (lead decision OD-5,
+    2026-10-06):* a hash-bound evidence note cited by the record. Under
+    TA-022's trust model it accepts as provisioning for this engine the 246
+    files written on 2026-10-04 by a pull-request CI job
+    (`trusted-editor-automation`, run 37238722645: `UnrealEditor-NetCore.dll`,
+    `UnrealEditor.version`, and 244 manifests) and the 437 editor DLLs dated
+    2026-09-29, whose provenance is a timestamp inference (the attempt06
+    provisioner run failed and retained hashes for four files only). Later
+    re-attestations follow the procedure above.
+  - *Host lease:* packaging phases take no engine host lease. The in-phase
+    build writes shared engine state (UHT `.inputcache.data`,
+    `SourceFileCache.bin`) and is serialized by the wrapper's `-WaitMutex`,
+    the `aetheln-engine-runner` queue, and the operator rule against local
+    engine builds while a milestone is queued or running.
+  - *Paths affected:* the scheduled and release package phases call the same
+    controller and gate, so both gain the in-phase build, the `UnrealPak`
+    exclusion, the manifest-set check, the plugin-path refusal, and the
+    record hash in their reports, with no workflow change.
+  - *Evidence:* `tests/build/Build-PackagedArtifacts.Tests.ps1` covers the
+    attest step, the prebuilt order, out-of-closure rebuilds, in-closure
+    changes, set equality, build outcomes, receipt prefixes and launch
+    entries, schema-1 rejection, the three build-then-verify order fixtures,
+    the manifest-set fixtures (subdirectory, case variant, Bridge,
+    ShaderCompileWorker, and a junction), the plugin-path refusal, the
+    record-hash binding, and path-free failure output.
+    `tests/ci/Invoke-EngineRunnerGate.Tests.ps1` covers the hash message and
+    forwarding, two records giving two hashes, and a host-editor failure that
+    discloses no path. The first live proof is the owner's attestation after
+    merge.
 
 ### TA-016 - Revision-Bound Compile Applicability for Issue #151
 
@@ -1196,6 +1370,14 @@ Every accepted decision records:
     LFS-pulling job.
   - Guard against a persistent `UE_ADDITIONAL_PLUGIN_PATHS`: pin it empty in
     the workflow `env`, or fail the engine-runner gate when it is non-empty.
+- **Note (2026-10-06, issue #267):** `Build-PackagedArtifacts.ps1` now
+  refuses `-HostToolsBoundary Prebuilt` and `-Stage AttestHostTools` while
+  `UE_ADDITIONAL_PLUGIN_PATHS` is set (`host_tools_plugin_paths_set`, TA-014
+  amendment). This closes the "packaging or cooking with the art" follow-up
+  path for prebuilt cooks until a TA-019 revisit changes the controller. It
+  also partly implements the persistent-value guard: every prebuilt cook,
+  scheduled, release, or local, is covered; `-HostToolsBoundary Rebuild` is
+  not.
 - **Owner:** Issue #201, including the follow-ups until they move to their own
   issue. #202 and #203 consume this boundary. Intake and provenance follow #120
   and the `visuals/asset-provenance.md` model.
@@ -1809,7 +1991,12 @@ Every accepted decision records:
 - **Consequences:** One more FIFO waiter in `aetheln-engine-runner`, with the
   same bounds. Each run reserves 64 GiB of the shared handoff cap until its
   cleanup request is acted on. The immediate kill switch is disabling the
-  workflow; the permanent rollback is reverting it.
+  workflow; the permanent rollback is reverting it. The issue #267 TA-014
+  amendment (2026-10-06) changes the controller and gate this workflow calls,
+  with no workflow change: each release package phase builds the project
+  editor modules first, leaves `UnrealPak` outside the attestation, runs the
+  manifest-set check, refuses a set `UE_ADDITIONAL_PLUGIN_PATHS`, and reports
+  the attestation record hash.
 - **Owner:** Issue #226.
 - **Revisit trigger:** Any package leaves the owner's control (external
   testers, a public download, or a store), a collaborator gains write access, a

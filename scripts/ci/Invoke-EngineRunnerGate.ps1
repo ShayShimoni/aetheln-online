@@ -2024,8 +2024,12 @@ try {
 					$ForbiddenFull = [System.IO.Path]::GetFullPath($Forbidden)
 					if ((Test-IsWithin $AttestationFull $ForbiddenFull) -or (Test-IsWithin $ForbiddenFull $AttestationFull)) { throw 'host_tools_attestation_invalid' }
 				}
-				$HostToolsArguments = @{ HostToolsBoundary = 'Prebuilt'; EngineRevision = $EngineRevisionValue.ToLowerInvariant(); HostToolsAttestationPath = $AttestationFull }
-				Add-Check -Name 'host-tools-configuration' -Status 'passed' -CheckStarted $HostToolsStarted -Command 'resolve-host-tools-configuration' -Message 'host_tools_prebuilt'
+				# Issue #267 (TA-014 amendment): the report carries the SHA-256 of the
+				# record's bytes, never its path, and the controller fails closed unless
+				# the bytes it reads once hash to the same value.
+				try { $AttestationSha256 = (Get-FileHash -LiteralPath $AttestationFull -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() } catch { throw 'host_tools_attestation_invalid' }
+				$HostToolsArguments = @{ HostToolsBoundary = 'Prebuilt'; EngineRevision = $EngineRevisionValue.ToLowerInvariant(); HostToolsAttestationPath = $AttestationFull; HostToolsAttestationSha256 = $AttestationSha256 }
+				Add-Check -Name 'host-tools-configuration' -Status 'passed' -CheckStarted $HostToolsStarted -Command 'resolve-host-tools-configuration' -Message ('host_tools_prebuilt attestation_sha256=' + $AttestationSha256)
 			} else { throw 'host_tools_invalid' }
 		} catch {
 			$Reason = [string] $_.Exception.Message
