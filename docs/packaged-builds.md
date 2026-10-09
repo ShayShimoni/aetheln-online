@@ -201,6 +201,62 @@ The reports and command logs are stored under `LogRoot` as
 `server-dependency-registry-dump`, `server-cooked-inventory-dump`, and their
 corresponding `.log` files. Missing or malformed reports fail the build.
 
+## Explicit split target recipe
+
+The default `-PackageRecipe Stock` retains the existing BuildCookRun path.
+The candidate `-PackageRecipe CleanTargetsPrebuiltPrograms` is restricted to
+supervised Development Client, Server and Provenance phases. It requires the
+existing verified Prebuilt boundary plus an explicitly selected external
+`-HostProgramSupplementPath` and lowercase `-HostProgramSupplementSha256`.
+The supplement binds the immutable complete Editor/SCW record and the exact
+receipt-derived UnrealPak and BootstrapPackagedGame closure. An inventory or
+manually selected executable subset cannot replace it.
+
+Split Client/Server phases derive the compile action cap from the existing
+Issue #167 policy: the minimum of 4, physical cores, and each of available RAM
+and commit headroom minus 6 GiB divided by 3 GiB, rounded down. Optional
+`-PackageActionLimit` (1 through 4) is a caller ceiling. It cannot raise the
+measured limit. The same selected cap reaches the in-phase editor wrapper and
+the target Build command as `-MaxParallelActions=N`. A fresh precompile sample
+must still admit that fixed cap or the phase refuses compilation. The closed
+`compileResources` proof binds the caller ceiling, effective limit and both
+synchronous samples, including the existing volume floors. These are preflight
+readings, not a claim of continuous resource monitoring. Native arguments and
+sealed captures must agree; uncapped, duplicate or noncanonical caps fail.
+Stock retains its existing behavior and rejects the split-only caller flag.
+Split native/editor launches require the named inherited build input
+`UBT_EXTRA_ARGS` to be absent or empty. A nonempty value fails with a fixed
+diagnostic; its value is never printed, parsed or cleared. Resource samples
+and native steps/captures carry typed `buildInputs.ubtExtraArgsAbsent = true`.
+The generated native child rechecks immediately before canonical Clean/Build.
+Consumers require the same true fact in declared and sealed captures. Editor
+timing binds its immediate launch fact to the unchanged wrapper and capture
+hashes. These facts establish the reviewed inherited command chain, not
+continuous environment monitoring. Stock behavior remains unchanged.
+
+The gate forwards the exact run identity and existing absolute phase deadline.
+The controller captures pinned CleanMode `-DryRun` discovery, actual target
+Clean, and target Build with `-NoEngineChanges -Verbose`, then runs
+`BuildCookRun -skipbuild -cook -clean -stage -pak -archive` with every existing
+platform flag and Linux cook exclusion. Clean failure, a retained clean-owned
+product/receipt, compile failure, missing selected-tool evidence or drift stops
+the phase before UAT. The five copied dependency DLLs may survive target clean;
+all post-compile products, including symbols and those DLLs, are hashed into
+the handoff. The controller never deletes a proof plan itself.
+
+Split phase version 2 carries `packageRecipeProof`; stock remains version 1.
+Provenance stays schema 2 and adds a closed `build.packageRecipe` block. Typed
+phases, captures, discovery plans, raw target receipts and full product payloads
+are manifest-bound. Consumers reject skipbuild without proof, mixed versions,
+altered captures/products, conflicting run/source/host identity and unsupported
+programme branches. Stock arguments and document/report shapes are unchanged.
+
+Portable fixtures establish rejection semantics. Actual authorised programme
+provisioning and a fresh sealed supplement, followed by a source-bound supervised
+Client/Server/Provenance/Smoke milestone and independent audit, remain necessary
+for operational fit/equivalence and activation. Existing phase caps remain
+30/30/10/10 minutes. Issue #167's semantic producer is a separate gate.
+
 ## Clean build and package procedure
 
 1. Verify the source-engine tag and commit as described in

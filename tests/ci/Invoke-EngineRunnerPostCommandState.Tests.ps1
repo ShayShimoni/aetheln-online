@@ -42,6 +42,7 @@ function New-Fixture {
 	$Bin = Join-Path $Root 'bin'
 	New-Item -ItemType Directory -Force -Path (Join-Path $Repository 'scripts/ci'), (Join-Path $Repository 'scripts/build'), $BatchRoot, $Toolchain, $Bin | Out-Null
 	Copy-Item -LiteralPath $SourceScript -Destination (Join-Path $Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1')
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'scripts/build/PackagingRecipeProof.ps1') -Destination (Join-Path $Repository 'scripts/build/PackagingRecipeProof.ps1')
 	Write-Fixture (Join-Path $Repository 'AethelnOnline.uproject') '{}'
 	Write-Fixture (Join-Path $Repository '.gitignore') "TestResults/`n"
 	Write-Fixture (Join-Path $Repository 'tracked') 'clean'

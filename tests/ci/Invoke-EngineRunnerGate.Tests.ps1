@@ -156,6 +156,40 @@ function Test-PhaseSupervisorPublicationContract {
 			[IO.File]::WriteAllText($ValidPath, $Valid, (New-Object Text.UTF8Encoding($false)))
 			$Parsed = Read-PhaseSupervisorReport -Path $ValidPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture'
 			Assert-True ($Parsed.summary.requiredFailed -eq 0) "A complete $ExpectedMode private report must validate."
+			$SplitReport = $Valid | ConvertFrom-Json
+			$SplitReport | Add-Member -NotePropertyName packageRecipeEvidence -NotePropertyValue ([ordered]@{ id = 'clean-targets-prebuilt-programs-v1'; baseAttestationSha256 = 'a457da4e14808b85d5cc1439a920abfce114ec961e313c2684fdd57ba9385d95'; supplementSha256 = ('b' * 64); payloadSha256 = ('c' * 64) })
+			$SplitPath = Join-Path $ReportRoot ($ExpectedMode + '-split.json')
+			[IO.File]::WriteAllText($SplitPath, ($SplitReport | ConvertTo-Json -Depth 8 -Compress))
+			$ParsedSplit = Read-PhaseSupervisorReport -Path $SplitPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture' -ExpectedRecipe 'CleanTargetsPrebuiltPrograms' -ExpectedSupplementHash ('b' * 64)
+			Assert-True ($ParsedSplit.packageRecipeEvidence.payloadSha256 -ceq ('c' * 64)) 'Split reports must bind the typed payload and both host proof hashes.'
+			foreach ($EvidenceField in @('id', 'baseAttestationSha256', 'supplementSha256', 'payloadSha256')) {
+				foreach ($EvidenceShape in @('empty', 'singleton', 'repeated')) {
+					$ArrayReport = $SplitReport | ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json
+					$EvidenceValue = $ArrayReport.packageRecipeEvidence.($EvidenceField)
+					$ArrayReport.packageRecipeEvidence.($EvidenceField) = switch ($EvidenceShape) {
+						'empty' { ,@() }
+						'singleton' { ,@($EvidenceValue) }
+						'repeated' { ,@($EvidenceValue, $EvidenceValue) }
+					}
+					$ArrayPath = Join-Path $ReportRoot ($ExpectedMode + '-split-' + $EvidenceField + '-' + $EvidenceShape + '.json')
+					[IO.File]::WriteAllText($ArrayPath, ($ArrayReport | ConvertTo-Json -Depth 8 -Compress), (New-Object Text.UTF8Encoding($false)))
+					$ArrayRejected = $false
+					try { $null = Read-PhaseSupervisorReport -Path $ArrayPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture' -ExpectedRecipe 'CleanTargetsPrebuiltPrograms' -ExpectedSupplementHash ('b' * 64) } catch { $ArrayRejected = $_.Exception.Message -ceq 'phase_report_invalid' }
+					Assert-True -Condition $ArrayRejected -Message "A $ExpectedMode split report must reject an $EvidenceShape array for $EvidenceField."
+				}
+			}
+			$ArchivedBaseReport = $SplitReport | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+			$ArchivedBaseReport.packageRecipeEvidence.baseAttestationSha256 = '4aa4328043d9f65e57a2c5b160d3fde93389f4103e69b179293af93635f25377'
+			$ArchivedBasePath = Join-Path $ReportRoot ($ExpectedMode + '-archived-base.json')
+			[IO.File]::WriteAllText($ArchivedBasePath, ($ArchivedBaseReport | ConvertTo-Json -Depth 8 -Compress))
+			$ArchivedBaseRejected = $false
+			try { $null = Read-PhaseSupervisorReport -Path $ArchivedBasePath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture' -ExpectedRecipe 'CleanTargetsPrebuiltPrograms' -ExpectedSupplementHash ('b' * 64) } catch { $ArchivedBaseRejected = $_.Exception.Message -ceq 'phase_report_invalid' }
+			Assert-True $ArchivedBaseRejected 'A split supervisor report must reject the archived pre-adoption base.'
+			foreach ($ExpectedHash in @(('d' * 64), '')) {
+				$Rejected = $false
+				try { $null = Read-PhaseSupervisorReport -Path $SplitPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture' -ExpectedRecipe 'CleanTargetsPrebuiltPrograms' -ExpectedSupplementHash $ExpectedHash } catch { $Rejected = $_.Exception.Message -ceq 'phase_report_invalid' }
+				Assert-True $Rejected 'A split report cannot substitute or omit the gate-selected supplement hash.'
+			}
 
 			$SchemaMutations = @(
 				@{ Name = 'missing-policy'; Apply = { param($Report) $Report.PSObject.Properties.Remove('policy') } },
@@ -412,6 +446,7 @@ function New-Fixture {
 	$BatchRoot = Join-Path $Engine 'Engine/Build/BatchFiles'
 	New-Item -ItemType Directory -Force -Path (Join-Path $Repository 'scripts/ci'), (Join-Path $Repository 'scripts/build'), $BatchRoot, (Join-Path $Root 'toolchain'), (Join-Path $Root 'bin') | Out-Null
 	Copy-Item -LiteralPath $SourceScript -Destination (Join-Path $Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1')
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'scripts/build/PackagingRecipeProof.ps1') -Destination (Join-Path $Repository 'scripts/build/PackagingRecipeProof.ps1')
 	Write-Fixture (Join-Path $Repository 'AethelnOnline.uproject') '{}'
 	Write-Fixture (Join-Path $Repository '.gitignore') "Intermediate/`nTestResults/"
 	Write-Fixture (Join-Path $Repository 'tracked') 'x'
@@ -452,8 +487,8 @@ echo CLIENT_SECRET build_client_secret_marker
 exit /b 9
 )
 exit /b 0'
-	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot,$DerivedDataCachePath,$CacheFallback,$HostToolsBoundary,$EngineRevision,$HostToolsAttestationPath,$HostToolsAttestationSha256,$RunnerName,$BuildNumber)
-@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot;DerivedDataCachePath=$DerivedDataCachePath;CacheFallback=$CacheFallback;HostToolsBoundary=$HostToolsBoundary;EngineRevision=$EngineRevision;HostToolsAttestationPath=$HostToolsAttestationPath;HostToolsAttestationSha256=$HostToolsAttestationSha256;RunnerName=$RunnerName;BuildNumber=$BuildNumber;HasBuildNumber=$PSBoundParameters.ContainsKey(''BuildNumber'')}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
+	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot,$DerivedDataCachePath,$CacheFallback,$HostToolsBoundary,$EngineRevision,$HostToolsAttestationPath,$HostToolsAttestationSha256,$RunnerName,$BuildNumber,$PackageRecipe,$HostProgramSupplementPath,$HostProgramSupplementSha256,$PackageRunIdentityJson,$PackageDeadlineUtc,$PackageActionLimit)
+@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot;DerivedDataCachePath=$DerivedDataCachePath;CacheFallback=$CacheFallback;HostToolsBoundary=$HostToolsBoundary;EngineRevision=$EngineRevision;HostToolsAttestationPath=$HostToolsAttestationPath;HostToolsAttestationSha256=$HostToolsAttestationSha256;RunnerName=$RunnerName;PackageRecipe=$PackageRecipe;HostProgramSupplementPath=$HostProgramSupplementPath;HostProgramSupplementSha256=$HostProgramSupplementSha256;PackageRunIdentityJson=$PackageRunIdentityJson;PackageDeadlineUtc=$PackageDeadlineUtc;PackageActionLimit=$PackageActionLimit;BuildNumber=$BuildNumber;HasBuildNumber=$PSBoundParameters.ContainsKey(''BuildNumber'')}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
 if($env:RUNNER_TEST_UBT_OUTPUT_PACKAGE){Get-Content $env:RUNNER_TEST_UBT_OUTPUT_PACKAGE}
 if($env:RUNNER_TEST_PHASE_SPAWN){Start-Process -FilePath $env:RUNNER_TEST_DESCENDANT_EXE -ArgumentList @("-NoProfile","-Command","Start-Sleep -Seconds 120") -WindowStyle Hidden|Out-Null}
 if($env:RUNNER_TEST_PHASE_SLEEP){Start-Sleep -Seconds ([int]$env:RUNNER_TEST_PHASE_SLEEP)}
@@ -987,7 +1022,17 @@ try {
 		Assert-PhaseSupervisorProof -Report (Read-Report $Result) -ChildExitCode 0 -TimedOut $false -CleanupVerified $true -Message "A $PrivateFault private report rejection must retain outer cleanup proof"
 	}
 
-	$Fixture = New-Case 'phase-milestone-success'
+	$RecipeFixture = New-Case 'split-forward-failclosed'
+	$SupplementPath = Join-Path $RecipeFixture.Root 'program-supplement.json'
+	Write-Fixture $SupplementPath '{}'
+	$RecipeResult = Invoke-PhaseGate $RecipeFixture 'PackageClient' -ExtraArguments @('-PackageRecipe', 'CleanTargetsPrebuiltPrograms', '-HostProgramSupplementPath', $SupplementPath, '-HostProgramSupplementSha256', ('b' * 64), '-PackageActionLimit', '3')
+	$RecipeCalls = @(Get-Content -LiteralPath $RecipeFixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })
+	Assert-True ($RecipeResult.ExitCode -ne 0 -and $RecipeCalls.Count -eq 1 -and $RecipeCalls[0].PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms' -and $RecipeCalls[0].HostProgramSupplementPath -ceq $SupplementPath -and $RecipeCalls[0].HostProgramSupplementSha256 -ceq ('b' * 64)) 'The actual supervisor and child must forward the explicit recipe and exact supplement path/hash.'
+	Assert-True ($RecipeCalls[0].PackageActionLimit -eq 3) 'Actual parent supervisor and child must forward the caller action ceiling to the package producer.'
+	$RecipeRun = $RecipeCalls[0].PackageRunIdentityJson | ConvertFrom-Json
+	Assert-True ($RecipeRun.repository -ceq 'owner/repo' -and $RecipeRun.runId -ceq '12345' -and $RecipeRun.runAttempt -ceq '1' -and $RecipeRun.runnerName -ceq 'fixture-runner' -and $RecipeCalls[0].PackageDeadlineUtc -match 'Z$') 'The producer must receive the current closed run identity and absolute deadline.'
+	Assert-True (-not (Test-Path -LiteralPath (Join-Path (Get-PhaseRunDirectory $RecipeFixture) 'manifest-client.json'))) 'A fixture emitting stock records cannot publish a successful split phase.'
+	$Fixture = New-Case 'phase-milestone-success-after-recipe'
 	$RunDirectory = Get-PhaseRunDirectory $Fixture
 	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
 	Assert-True ($Result.ExitCode -eq 0) "PackageClient must pass. Output: $($Result.Output)"
