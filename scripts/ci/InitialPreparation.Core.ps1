@@ -501,6 +501,10 @@ function Enter-InitialPreparationLease {
 		$HeldRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $Record.leaseId;
 			attemptId = $Attempt.attemptId; ownerPid = $Record.ownerPid; ownerStartUtc = $Record.ownerStartUtc }
 		$Bytes = [Text.Encoding]::UTF8.GetBytes(($HeldRecord | ConvertTo-Json -Compress) + "`n")
+		$ReleasedRecord = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Record.leaseId;
+			attemptId = $Attempt.attemptId; cleanupVerified = $true }
+		$ReleaseBytes = [Text.Encoding]::UTF8.GetBytes(($ReleasedRecord | ConvertTo-Json -Compress) + "`n")
+		if ($Stream.Length + $Bytes.Length + $ReleaseBytes.Length -gt 65536) { throw 'lease_journal_limit' }
 		$Stream.Write($Bytes, 0, $Bytes.Length)
 		$Stream.Flush($true)
 	} catch {
@@ -510,7 +514,7 @@ function Enter-InitialPreparationLease {
 	}
 	$script:InitialPreparationLeaseRegistry[$Key] = [pscustomobject]@{
 		leaseId = $Record.leaseId; path = $Full; attemptId = $Attempt.attemptId
-		stream = $Stream; cleanupVerified = $false; ownerPid = $Record.ownerPid; ownerStartUtc = $Record.ownerStartUtc
+		stream = $Stream; releaseBytes = $ReleaseBytes; cleanupVerified = $false; ownerPid = $Record.ownerPid; ownerStartUtc = $Record.ownerStartUtc
 	}
 	return $Record
 }
@@ -534,10 +538,7 @@ function Exit-InitialPreparationLease {
 	if ($Lease.PSObject.Properties.Name -ccontains 'ownedProcesses') { $OwnedRecords = @($Lease.ownedProcesses) }
 	$Ownership = Test-InitialPreparationOwnership -Lease $Lease -OwnedProcesses $OwnedRecords
 	if (-not $Ownership.ok -or $Ownership.data.liveCount -ne 0) { throw 'cleanup_unproven' }
-	$Released = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Entry.leaseId;
-		attemptId = $Entry.attemptId; cleanupVerified = $true }
-	$Bytes = [Text.Encoding]::UTF8.GetBytes(($Released | ConvertTo-Json -Compress) + "`n")
-	$Entry.stream.Write($Bytes, 0, $Bytes.Length)
+	$Entry.stream.Write($Entry.releaseBytes, 0, $Entry.releaseBytes.Length)
 	$Entry.stream.Flush($true)
 	$Entry.stream.Dispose()
 	if ($Entry.PSObject.Properties.Name -contains 'supervisedJobs') {

@@ -226,6 +226,70 @@ function Test-LeaseLifecycle {
 	Exit-InitialPreparationLease -Lease $SecondLease
 }
 
+function Test-LeaseJournalCapacity {
+	$Owner = Get-Process -Id $PID
+	$OwnerStartUtc = $Owner.StartTime.ToUniversalTime().ToString('o')
+	$PriorLeaseId = 'b' * 32
+	$PriorHeld = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $PriorLeaseId;
+		attemptId = 'journal-prior'; ownerPid = $PID; ownerStartUtc = $OwnerStartUtc }
+	$PriorReleased = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $PriorLeaseId;
+		attemptId = 'journal-prior'; cleanupVerified = $true }
+	$PriorJournal = ($PriorHeld | ConvertTo-Json -Compress) + "`n" + ($PriorReleased | ConvertTo-Json -Compress) + "`n"
+	$PriorBytes = [Text.Encoding]::UTF8.GetByteCount($PriorJournal)
+	foreach ($Case in @(
+		@{ name = 'one-byte-short'; id = ('n' * 128); adjustment = 1; reject = $true },
+		@{ name = 'exact-fit'; id = ('e' * 128); adjustment = 0; reject = $false }
+	)) {
+		$Attempt = Get-TestAttempt -Id $Case.id
+		$LeasePath = Initialize-LeaseFixture -Name $Case.name
+		# Every generated lease GUID is 32 ASCII characters; use the real owner and attempt identity.
+		$ExpectedHeld = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = ('a' * 32);
+			attemptId = $Attempt.attemptId; ownerPid = $PID; ownerStartUtc = $OwnerStartUtc }
+		$ExpectedReleased = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = ('a' * 32);
+			attemptId = $Attempt.attemptId; cleanupVerified = $true }
+		$ReleaseLength = [Text.Encoding]::UTF8.GetByteCount(($ExpectedReleased | ConvertTo-Json -Compress) + "`n")
+		$PairLength = [Text.Encoding]::UTF8.GetByteCount(($ExpectedHeld | ConvertTo-Json -Compress) + "`n") + $ReleaseLength
+		$InitialLength = 65536 - $PairLength + $Case.adjustment
+		# Leading JSON whitespace preserves a genuine paired released journal at the exact boundary.
+		[IO.File]::WriteAllText($LeasePath, (' ' * ($InitialLength - $PriorBytes)) + $PriorJournal, (New-Object Text.UTF8Encoding($false)))
+		$BeforeHash = (Get-FileHash -LiteralPath $LeasePath -Algorithm SHA256).Hash
+		$Lease = $null
+		$Failure = $null
+		try { $Lease = Enter-InitialPreparationLease -Attempt $Attempt -LeasePath $LeasePath }
+		catch { $Failure = [string] $_.Exception.Message }
+		if ($Case.reject) {
+			# Release an old implementation's unexpected admission so the RED fixture leaves no owner behind.
+			if ($null -ne $Lease) {
+				$null = Stop-InitialPreparationOwnedTree -Lease $Lease -DeadlineTicks $Attempt.cleanupDeadlineTicks
+				Exit-InitialPreparationLease -Lease $Lease
+				Write-Output "Unexpected journal admission: before=$InitialLength after=$((Get-Item -LiteralPath $LeasePath).Length) limit=65536"
+			}
+			Assert-True -Condition ($Failure -ceq 'lease_journal_limit') -Message 'Insufficient release space must refuse before writing held ownership.'
+			Assert-True -Condition ((Get-FileHash -LiteralPath $LeasePath -Algorithm SHA256).Hash -ceq $BeforeHash) -Message 'Capacity refusal must preserve every journal byte.'
+			Assert-True -Condition (-not $script:InitialPreparationLeaseRegistry.ContainsKey($LeasePath.ToLowerInvariant())) -Message 'Capacity refusal must not register an owner.'
+			$Probe = [IO.File]::Open($LeasePath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+			$Probe.Dispose()
+		} else {
+			Assert-True -Condition ($null -eq $Failure -and $null -ne $Lease) -Message 'An exact-fit complete lease cycle must be admitted.'
+			$Entry = $script:InitialPreparationLeaseRegistry[$LeasePath.ToLowerInvariant()]
+			Assert-True -Condition ($Entry.stream.Length + $ReleaseLength -eq 65536) -Message 'Held bytes must leave exactly the reserved release space.'
+			Assert-Rejected -Action { Exit-InitialPreparationLease -Lease $Lease } -Reason 'cleanup_unproven' -Message 'Reservation must not bypass cleanup proof.'
+			$null = Stop-InitialPreparationOwnedTree -Lease $Lease -DeadlineTicks $Attempt.cleanupDeadlineTicks
+			Exit-InitialPreparationLease -Lease $Lease
+			Assert-True -Condition ((Get-Item -LiteralPath $LeasePath).Length -eq 65536) -Message 'The exact-fit verified release must remain within the reader limit.'
+			$Records = @([IO.File]::ReadAllLines($LeasePath) | ForEach-Object { $_ | ConvertFrom-Json })
+			Assert-True -Condition ($Records.Count -eq 4 -and $Records[2].leaseId -ceq $Lease.leaseId -and $Records[3].leaseId -ceq $Lease.leaseId -and
+				$Records[3].attemptId -ceq $Attempt.attemptId -and $Records[3].cleanupVerified -is [bool] -and $Records[3].cleanupVerified) -Message 'Release must retain the actual lease GUID, attempt identity and literal cleanup proof.'
+		}
+	}
+	$OversizedPath = Initialize-LeaseFixture -Name 'already-oversized'
+	[IO.File]::WriteAllText($OversizedPath, (' ' * (65537 - $PriorBytes)) + $PriorJournal, (New-Object Text.UTF8Encoding($false)))
+	$OversizedHash = (Get-FileHash -LiteralPath $OversizedPath -Algorithm SHA256).Hash
+	$OversizedAttempt = Get-TestAttempt -Id 'journal-already-oversized'
+	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $OversizedAttempt -LeasePath $OversizedPath } -Reason 'lease_journal_limit' -Message 'The original read bound must still reject oversized journals.'
+	Assert-True -Condition ((Get-FileHash -LiteralPath $OversizedPath -Algorithm SHA256).Hash -ceq $OversizedHash) -Message 'An oversized journal must remain immutable on refusal.'
+}
+
 function Test-ResourceWatcherContract {
 	$Attempt = Get-TestAttempt -Id 'watcher-attempt'
 	$SampleRoot = Join-Path $FixtureRoot 'watcher-root'
@@ -701,6 +765,7 @@ try {
 	Test-LeaseAndOwnershipContract
 	Test-CapacityContract
 	Test-LeaseLifecycle
+	Test-LeaseJournalCapacity
 	Test-ResourceWatcherContract
 	Test-CleanupContract
 	Test-ReceiptContract
