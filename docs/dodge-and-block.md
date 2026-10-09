@@ -170,6 +170,17 @@ through the interface, found through `CharacterOwner->GetPlayerState()`. A
 pawn without an authority (an AI pawn, or any pawn before P3) never starts a
 dodge: the server fails closed.
 
+The P2 interface returns `FAethelnDodgeMovementDefinition` by value, with
+`Distance`, `MoveDuration`, and `ContentVersion`. Its unset values are zero
+and cannot start displacement. `CanPredictDodge()` returns the authority's
+local eligibility; `TryAuthorizeDodge(const FAethelnDodgeStartRequest&)`
+returns acceptance and receives `ClientTimeStamp`, `ContentVersion`, and
+`bMovementAllowsStart`. The component exposes `RequestDodge()`,
+`GetDodgeState()`, and `EndDodgeForAuthority()`. P2 supplies no production
+PlayerState implementation and adds no cost, cooldown, window, or input key.
+The test-only authority seam and packed-transport views are compiled only
+under `WITH_DEV_AUTOMATION_TESTS`.
+
 ## The Dodge
 
 ### Request and transport
