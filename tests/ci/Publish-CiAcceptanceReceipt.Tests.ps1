@@ -58,7 +58,7 @@ function New-TestPortableReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs and returns an in-memory portable-report fixture without changing external state.')]
 	param()
 	$Names = @(
-		'formatting-policy','markdown-links','source-control-policy','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests',
+		'formatting-policy','markdown-links','source-control-policy','combat-design-registry','combat-design-registry-tests','combat-design-generation-tests','combat-design-generated-drift','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests',
 		'host-tool-provisioning-tests','cooked-inventory-capture-tests','content-cook-evidence-tests',
 		'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
