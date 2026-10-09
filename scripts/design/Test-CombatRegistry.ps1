@@ -46,7 +46,7 @@ function Test-RegistryArray {
 	return $true
 }
 
-function Test-RegistryExactValues {
+function Test-RegistryValueSet {
 	param($Actual, [string[]] $Expected)
 	if ($Actual -isnot [array] -or $Actual.Count -ne $Expected.Count) { return $false }
 	foreach ($Value in $Expected) {
@@ -192,9 +192,9 @@ function Test-CombatRegistry {
 	if ($Errors.Count -gt 0) { return [pscustomobject]@{ passed = $false; errors = @($Errors.ToArray()) } }
 	# Version 1 is a closed contract: adding values or widening syntax requires a
 	# reviewed schema and validator version change, not just editing schema.json.
-	if (-not (Test-RegistryExactValues $Schema.kinds @('order','specialization','weapon','ability','peak','form','thread','keystone','heritage','resource','damageFamily','effect','construct','visibility','recovery','preset','manifest')) -or
-		-not (Test-RegistryExactValues $Schema.maturities @('Canonical Intent','Prototype Candidate','Evidence Validated','Implementation Ready','Superseded')) -or
-		-not (Test-RegistryExactValues $Schema.budgetKinds @('depth','listeners','procs','targets','constructs'))) {
+	if (-not (Test-RegistryValueSet $Schema.kinds @('order','specialization','weapon','ability','peak','form','thread','keystone','heritage','resource','damageFamily','effect','construct','visibility','recovery','preset','manifest')) -or
+		-not (Test-RegistryValueSet $Schema.maturities @('Canonical Intent','Prototype Candidate','Evidence Validated','Implementation Ready','Superseded')) -or
+		-not (Test-RegistryValueSet $Schema.budgetKinds @('depth','listeners','procs','targets','constructs'))) {
 		$Errors.Add('schema: unsupported v1 schema vocabulary')
 	}
 	if ($Schema.idPattern -cne '^[a-z][a-z0-9]*(\.[a-z][a-z0-9_]*)+$' -or $Schema.sourcePattern -cne '^docs/[a-z0-9-]+\.md$') {
@@ -221,7 +221,7 @@ function Test-CombatRegistry {
 	}
 	foreach ($Property in $Schema.requiredReferenceKinds.PSObject.Properties) {
 		if (-not (Test-RegistryArray -Value $Property.Value -Errors $Errors -At "schema.requiredReferenceKinds.$($Property.Name)")) { continue }
-		if (-not (Test-RegistryExactValues $Property.Value $ExpectedReferenceKinds[$Property.Name])) { $Errors.Add('schema: unsupported v1 schema reference kinds') }
+		if (-not (Test-RegistryValueSet $Property.Value $ExpectedReferenceKinds[$Property.Name])) { $Errors.Add('schema: unsupported v1 schema reference kinds') }
 		foreach ($AllowedKind in $Property.Value) {
 			if ($Schema.kinds -cnotcontains $AllowedKind) { $Errors.Add("schema.requiredReferenceKinds.$($Property.Name): unknown kind $AllowedKind") }
 		}
