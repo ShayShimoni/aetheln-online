@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $RepositoryRoot = Split-Path (Split-Path $PSScriptRoot)
+$FixtureSourceRoot = $RepositoryRoot
 $GatePath = Join-Path $RepositoryRoot 'scripts/ci/Invoke-EngineRunnerGate.ps1'
 $Tokens = $null
 $ParseErrors = $null
@@ -40,6 +41,8 @@ $RoutineResourceMonitor = [pscustomobject]@{ fixtureMonitor = $true }
 $script:ManagedCompile = $true
 $script:IsCompileChild = $true
 $script:Mode = 'Compile'
+$script:PackageRecipe = 'Stock'
+$script:PackageRecipeEvidence = $null
 $FixtureCaptureExecutable = Join-Path $PSHOME 'powershell.exe'
 $script:DeadlineCalls = 0
 $script:ResourceCalls = 0
@@ -328,11 +331,13 @@ $EntryTarget = Join-Path $EntryRoot 'target'
 $EntryEngine = Join-Path $EntryRoot 'engine'
 $EntryToolchain = Join-Path $EntryRoot 'toolchain'
 $EntryScripts = Join-Path $EntryControl 'scripts/ci'
-foreach ($Path in @($EntryScripts, $EntryEngine, $EntryToolchain)) { $null = [IO.Directory]::CreateDirectory($Path) }
+$EntryBuild = Join-Path $EntryControl 'scripts/build'
+foreach ($Path in @($EntryScripts, $EntryBuild, $EntryEngine, $EntryToolchain)) { $null = [IO.Directory]::CreateDirectory($Path) }
 foreach ($ModuleName in @('Invoke-EngineRunnerGate.ps1', 'EngineRunnerHostLease.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1',
 	'InitialPreparation.Core.ps1', 'RoutineCompileDeadline.ps1', 'RoutineCompileCommand.ps1')) {
 	Copy-Item -LiteralPath (Join-Path (Split-Path $GatePath) $ModuleName) -Destination (Join-Path $EntryScripts $ModuleName)
 }
+Copy-Item -LiteralPath (Join-Path $FixtureSourceRoot 'scripts/build/PackagingRecipeProof.ps1') -Destination (Join-Path $EntryBuild 'PackagingRecipeProof.ps1')
 Copy-Item -LiteralPath (Join-Path (Split-Path $GatePath) 'RoutineCompileResources.ps1') -Destination (Join-Path $EntryScripts 'RoutineCompileResources.Production.ps1')
 Set-RoutineEntryFixtureFile -Path (Join-Path $EntryScripts 'RoutineCompileResources.ps1') -Value @'
 . (Join-Path $PSScriptRoot 'RoutineCompileResources.Production.ps1')

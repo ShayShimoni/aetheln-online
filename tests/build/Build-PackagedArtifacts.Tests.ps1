@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch] $RecipeProofOnly)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -10,8 +10,503 @@ $FixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("AethelnPackagingTes
 $OriginalUebpLogFolder = [Environment]::GetEnvironmentVariable('uebp_LogFolder', 'Process')
 $OriginalUebpFinalLogFolder = [Environment]::GetEnvironmentVariable('uebp_FinalLogFolder', 'Process')
 $OriginalAdditionalPluginPaths = [Environment]::GetEnvironmentVariable('UE_ADDITIONAL_PLUGIN_PATHS', 'Process')
+$OriginalUbtExtraArgs = [Environment]::GetEnvironmentVariable('UBT_EXTRA_ARGS', 'Process')
 
 function Assert-True([bool] $Condition, [string] $Message) { if (-not $Condition) { throw "Assertion failed: $Message" } }
+
+# Pure proof cases run before any fixture tools. They never execute an engine.
+. (Join-Path $RepositoryRoot 'scripts/build/PackagingRecipeProof.ps1')
+$ArchivedSupplementBase = @{ sha256 = '4aa4328043d9f65e57a2c5b160d3fde93389f4103e69b179293af93635f25377'; entries = @(1..1322) }
+$ArchivedSupplementRejected = $false
+try { $null = New-PackageProgramSupplementRecord '' '' ('a' * 40) $ArchivedSupplementBase @() $null { } } catch { $ArchivedSupplementRejected = $_.Exception.Message -match '^package_recipe_base_invalid' }
+Assert-True $ArchivedSupplementRejected 'Supplement construction must reject the archived base before provisioning or physical access.'
+$IncompleteSupplementBase = @{ sha256 = 'a457da4e14808b85d5cc1439a920abfce114ec961e313c2684fdd57ba9385d95'; entries = @(1..1321) }
+$IncompleteSupplementRejected = $false
+try { $null = New-PackageProgramSupplementRecord '' '' ('a' * 40) $IncompleteSupplementBase @() $null { } } catch { $IncompleteSupplementRejected = $_.Exception.Message -match '^package_recipe_base_invalid' }
+Assert-True $IncompleteSupplementRejected 'The adopted base still requires all 1322 entries before provisioning or physical access.'
+$OriginalReviewedPins = (Get-Item Function:\Get-PackageRecipeReviewedPins).ScriptBlock
+$OriginalResourceSample = (Get-Item Function:\Get-PackageResourceSample).ScriptBlock
+try {
+	[Environment]::SetEnvironmentVariable('UBT_EXTRA_ARGS', $null, 'Process')
+	Assert-PackageBuildInputProof (Get-PackageBuildInputProof)
+	[Environment]::SetEnvironmentVariable('UBT_EXTRA_ARGS', '-MaxParallelActions=4', 'Process')
+	foreach ($Producer in @('sample', 'native', 'controller')) {
+		$Rejected = $false
+		try {
+			if ($Producer -ceq 'sample') { $null = Get-PackageResourceSample @{ project = $RepositoryRoot } }
+			elseif ($Producer -ceq 'native') { $null = Invoke-PackageNativeStep 'unlaunched.bat' @() $FixtureRoot ([DateTime]::UtcNow.AddMinutes(1)) }
+			else { & $Script -ProjectPath $Script -EngineRoot $RepositoryRoot -LinuxToolchainRoot $RepositoryRoot -ArchiveRoot $FixtureRoot -LogRoot $FixtureRoot -SourceRevision ('a' * 40) -Stage Client -PackageRecipe CleanTargetsPrebuiltPrograms }
+		} catch { $Rejected = $_.Exception.Message -cmatch '^package_recipe_build_inputs_set: packaging recipe failed\.$' }
+		Assert-True $Rejected "Nonempty named inherited build input must refuse $Producer before any fixture/native launch."
+		Assert-True (-not (Test-Path -LiteralPath $FixtureRoot)) 'Input refusal must precede fixture output creation.'
+	}
+} finally { [Environment]::SetEnvironmentVariable('UBT_EXTRA_ARGS', $OriginalUbtExtraArgs, 'Process') }
+foreach ($Fact in @($null, @{}, @{ ubtExtraArgsAbsent = $false }, @{ ubtExtraArgsAbsent = 'true' }, @{ ubtExtraArgsAbsent = 1 })) {
+	$Rejected = $false
+	try { Assert-PackageBuildInputProof $Fact } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Named inherited input fact must be present and boolean true.'
+}
+Write-Output 'PASS: named Process input refusal before producers; missing/false/nonboolean facts rejected without value disclosure'
+function New-RecipeResourceSample {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory fixture value only and changes no external state.')]
+	param([double] $Ram = 16.81, [double] $Commit = 44.88, [int] $Cores = 6)
+	[ordered]@{ observedUtc = [DateTime]::UtcNow.ToString('o'); physicalCores = $Cores; availablePhysicalRamGiB = $Ram; commitHeadroomGiB = $Commit; volumes = @([ordered]@{ availableBytes = 100GB; knownAllocationBytes = 0L; recoveryFloorBytes = 20GB }); buildInputs = [ordered]@{ ubtExtraArgsAbsent = $true } }
+}
+Assert-True ((New-PackageCompileResources (New-RecipeResourceSample)).effectiveActionLimit -eq 3) 'Current modeled resource fixture must admit three actions without rounding RAM upward.'
+Assert-True ((New-PackageCompileResources (New-RecipeResourceSample) 4).effectiveActionLimit -eq 3) 'Caller four is a ceiling and cannot force four actions.'
+Assert-True ((New-PackageCompileResources (New-RecipeResourceSample) 2).effectiveActionLimit -eq 2) 'Caller lower ceiling must be retained.'
+foreach ($Limit in 1..4) {
+	$Resources = New-PackageCompileResources (New-RecipeResourceSample (6 + 3 * $Limit))
+	Assert-True ($Resources.effectiveActionLimit -eq $Limit) 'Exact resource boundary must select the corresponding reviewed action limit.'
+	Assert-True ((Get-PackageCompileArgumentLimit @("-MaxParallelActions=$Limit")) -eq $Limit) 'Canonical cap must parse for every reviewed limit.'
+}
+foreach ($Arguments in @(@('-Verbose'), @('-MaxParallelActions=0'), @('-MaxParallelActions=5'), @('-MaxParallelActions=03'), @('-maxparallelactions=3'), @('-MaxParallelActions:3'), @('-MaxParallelActions=3', '-MaxParallelActions:4'), @('-MaxParallelActions=3', '-MaxParallelActions=4'), @('-MaxParallelActions', '3'))) {
+	$Rejected = $false
+	try { $null = Get-PackageCompileArgumentLimit $Arguments } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Uncapped, duplicate, split, alias, or noncanonical action flags must be rejected.'
+}
+foreach ($Sample in @((New-RecipeResourceSample -Ram 8.99), (New-RecipeResourceSample -Ram 20 -Commit 8.99), (New-RecipeResourceSample -Ram 20 -Commit 40 -Cores 0), (New-RecipeResourceSample -Ram ([double]::NaN)))) {
+	$Rejected = $false
+	try { $null = New-PackageCompileResources $Sample } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Unavailable or insufficient resource evidence must refuse admission.'
+}
+$Resources = New-PackageCompileResources (New-RecipeResourceSample)
+$Resources.recheck = New-RecipeResourceSample 12
+$Rejected = $false
+try { Assert-PackageCompileResources $Resources } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+Assert-True $Rejected 'A lower precompile capacity must refuse the fixed selected limit.'
+function Get-PackageResourceSample { return (New-RecipeResourceSample) }
+Write-Output 'PASS: action cap boundaries, caller ceilings, insufficient capacity and malformed/duplicate/uncapped flags'
+foreach ($Path in @('AethelnOnline.uproject', 'D:AethelnOnline.uproject', '\\host\share\AethelnOnline.uproject', 'D:\Project\AethelnOnline.uproject:stream', 'D:\Project\..\AethelnOnline.uproject', 'D:\Project?\AethelnOnline.uproject')) {
+	$Rejected = $false
+	try { $null = ConvertTo-PackageProofProjectPath $Path } catch { $Rejected = $_.Exception.Message -match '^package_recipe_project_invalid' }
+	Assert-True $Rejected 'Project evidence must use an unambiguous absolute local descriptor path.'
+}
+foreach ($Name in @('AethelnOnlineClient.exe', 'aethelnonlineclient.EXE', ('AethelnOnlineClient-' + [char] 0x03A9 + '.dll'), 'UnrealClient.modules')) {
+	Assert-True (Test-PackageCleanProductName $Name 'Client' 'Win64' 'Development') "Pinned clean predicate must own $Name."
+}
+foreach ($Name in @('D3D12Core.dll', 'd3d12SDKLayers.dll', 'DirectML.dll', 'tbb12.dll', 'tbbmalloc.dll', 'AethelnOnlineClientBackup.exe', ([string][char] 0x0410 + 'ethelnOnlineClient.exe'))) {
+	Assert-True (-not (Test-PackageCleanProductName $Name 'Client' 'Win64' 'Development')) "Dependency or near-prefix $Name must remain outside target clean ownership."
+}
+foreach ($Json in @('{"a":1,"a":2}', '{"a":1,"A":2}', '{"a":{"b":1,"b":2}}')) {
+	$Rejected = $false
+	try { $null = ConvertFrom-PackageProofJson $Json } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Duplicate and case-colliding JSON keys must fail before deserialization.'
+}
+$null = ConvertFrom-PackageProofJson '{"a":[{"b":1},{"b":2}]}'
+foreach ($Arguments in @(@('BuildCookRun','-skipbuild','-cook','-clean','-stage','-pak','-archive'), @('BuildCookRun','-skipbuild','-build','-cook','-clean','-stage','-pak','-archive'))) {
+	$Rejected = $false
+	try { Assert-PackageRecipeArguments $Arguments 'client' 'Development' } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Incomplete or contradictory split UAT commands must fail.'
+}
+Write-Output 'PASS: strict recipe JSON, exact clean ownership and contradictory UAT proof cases'
+
+function New-RecipeTestSeal {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory fixture value only and changes no external state.')]
+	param($Receipt)
+	$Bytes = [Text.Encoding]::UTF8.GetBytes(($Receipt | ConvertTo-Json -Depth 12 -Compress))
+	[ordered]@{ sizeBytes = [long] $Bytes.Length; sha256 = Get-PackageProofBytesHash $Bytes; payloadBase64 = [Convert]::ToBase64String($Bytes) }
+}
+function New-RecipeProvisioningSteps {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Constructs the complete four-step in-memory fixture sequence used by this supplement contract test.')]
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory fixture value only and changes no external state.')]
+	param([int] $Limit)
+	foreach ($Target in @('UnrealPak', 'BootstrapPackagedGame')) {
+		foreach ($Operation in @('clean', 'compile')) {
+			$Relative = if ($Operation -ceq 'clean') { 'Engine/Build/BatchFiles/Clean.bat' } else { 'Engine/Build/BatchFiles/Build.bat' }
+			$Arguments = @($Target, 'Win64', $(if ($Target -ceq 'UnrealPak') { 'Development' } else { 'Shipping' }))
+			if ($Operation -ceq 'compile') { $Arguments += "-MaxParallelActions=$Limit" }
+			$Capture = [ordered]@{ executableSha256 = @(Get-PackageRecipeReviewedPins | Where-Object { $_.path -ceq $Relative })[0].sha256; arguments = $Arguments; startedUtc = '2026-10-09T00:00:00.0000000Z'; finishedUtc = '2026-10-09T00:00:00.0000000Z'; nativeExitCode = 0; infrastructureFailure = $null; buildInputs = [ordered]@{ ubtExtraArgsAbsent = $true } }
+			$CaptureSeal = New-RecipeTestSeal $Capture; $LogSeal = New-RecipeTestSeal 'synthetic provisioning log'
+			$Step = $Capture | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+			$Step | Add-Member -NotePropertyName captureSha256 -NotePropertyValue $CaptureSeal.sha256
+			$Step | Add-Member -NotePropertyName logSha256 -NotePropertyValue $LogSeal.sha256
+			[ordered]@{ target = $Target; operation = $Operation; nativeStep = $Step; capture = $CaptureSeal; log = $LogSeal }
+		}
+	}
+}
+$MissingInputSteps = @(New-RecipeProvisioningSteps 3) | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+foreach ($Entry in $MissingInputSteps) {
+	$Entry.nativeStep.PSObject.Properties.Remove('buildInputs')
+	$Capture = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Entry.capture.payloadBase64)) | ConvertFrom-Json
+	$Capture.PSObject.Properties.Remove('buildInputs'); $Entry.capture = New-RecipeTestSeal $Capture; $Entry.nativeStep.captureSha256 = $Entry.capture.sha256
+}
+$Rejected = $false
+try { Assert-PackageProvisioningSteps $MissingInputSteps } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+Assert-True $Rejected 'A sealed outer cap without actual inherited UBT_EXTRA_ARGS absence facts must fail closed.'
+foreach ($Limit in 1..4) { Assert-PackageProvisioningSteps (@(New-RecipeProvisioningSteps $Limit) | ConvertTo-Json -Depth 12 | ConvertFrom-Json) }
+foreach ($Arguments in @(@('UnrealPak','Win64','Development'), @('UnrealPak','Win64','Development','-MaxParallelActions=5'), @('UnrealPak','Win64','Development','-MaxParallelActions=03'), @('UnrealPak','Win64','Development','-MaxParallelActions=3','-maxparallelactions=4'), @('UnrealPak','Win64','Development','-MaxParallelActions=3','-Target=-MaxParallelActions=4'), @('UnrealPak','Win64','Development','--','-MaxParallelActions=3'))) {
+	$Steps = @(New-RecipeProvisioningSteps 3) | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+	$Step = $Steps[1]; $Step.nativeStep.arguments = $Arguments
+	$Capture = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Step.capture.payloadBase64)) | ConvertFrom-Json; $Capture.arguments = $Arguments
+	$Step.capture = New-RecipeTestSeal $Capture; $Step.nativeStep.captureSha256 = $Step.capture.sha256
+	$Rejected = $false
+	try { Assert-PackageProvisioningSteps $Steps } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Self-consistent sealed program compile cannot omit, duplicate or evade the canonical action cap.'
+}
+$Steps = @(New-RecipeProvisioningSteps 3) | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$Capture = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Steps[1].capture.payloadBase64)) | ConvertFrom-Json; $Capture.arguments[-1] = '-MaxParallelActions=4'
+$Steps[1].capture = New-RecipeTestSeal $Capture; $Steps[1].nativeStep.captureSha256 = $Steps[1].capture.sha256
+$Rejected = $false
+try { Assert-PackageProvisioningSteps $Steps } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+Assert-True $Rejected 'Program declared cap must equal the actual sealed capture cap.'
+Write-Output 'PASS: program cap 1 through 4, unchanged executable pins, sealed uncapped/alias/duplicate/capture mismatch rejection'
+foreach ($Limit in 1..4) {
+	$Steps = @(New-RecipeProvisioningSteps $Limit) | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+	foreach ($Entry in $Steps) {
+		$Entry.nativeStep.arguments += @('-Project=D:\Valid Project\TargetList\AethelnOnline.uproject', '-WaitMutex', '-NoHotReloadFromIDE', '-Verbose', '-Compiler=VisualStudio2022', '-CompilerVersion=14.44.35207', '-WindowsSDKVersion=10.0.26100.0')
+		$Capture = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Entry.capture.payloadBase64)) | ConvertFrom-Json
+		$Capture.arguments = $Entry.nativeStep.arguments; $Entry.capture = New-RecipeTestSeal $Capture; $Entry.nativeStep.captureSha256 = $Entry.capture.sha256
+	}
+	Assert-PackageProvisioningSteps $Steps
+	Assert-True ((Get-PackageCompileArgumentLimit $Steps[1].nativeStep.arguments) -eq $Limit) 'Legitimate project context, path components and ordinary compiler flags must preserve canonical cap selection.'
+}
+foreach ($Boundary in @('-Target=-MaxParallelActions=4', '-tArGeT=-MaxParallelActions=4', '-TargetList=D:\unused-list.txt', '-targetlist=D:\unused-list.txt', '-Target', '-TargetList', '-Target:', '-TargetList:', '-Mode=Build', '-mOdE=Clean', '-Mode', '-Mode:', '-Clean', '-Rebuild', '-ProjectFiles', '-ProjectFileFormat=VisualStudio2022', '--')) {
+	foreach ($Target in @('UnrealPak', 'BootstrapPackagedGame')) {
+		foreach ($Position in @('before', 'after')) {
+			$Steps = @(New-RecipeProvisioningSteps 3) | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+			$Entry = @($Steps | Where-Object { $_.target -ceq $Target -and $_.operation -ceq 'compile' })[0]
+			$Arguments = @($Entry.nativeStep.arguments[0..2])
+			$Arguments += $(if ($Position -ceq 'before') { @($Boundary, '-MaxParallelActions=3') } else { @('-MaxParallelActions=3', $Boundary) })
+			$Entry.nativeStep.arguments = $Arguments
+			$Capture = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Entry.capture.payloadBase64)) | ConvertFrom-Json
+			$Capture.arguments = $Arguments; $Entry.capture = New-RecipeTestSeal $Capture; $Entry.nativeStep.captureSha256 = $Entry.capture.sha256
+			foreach ($Api in @('cap', 'provisioning')) {
+				$Rejected = $false
+				try { if ($Api -ceq 'cap') { $null = Get-PackageCompileArgumentLimit $Arguments } else { Assert-PackageProvisioningSteps $Steps } } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+				Assert-True $Rejected "$Target sealed $Boundary $Position cap must reject through $Api without interpreting nested or unreachable flags."
+			}
+		}
+	}
+}
+# Clean uses its own canonical wrapper's internal -Clean, never caller mode flags.
+$Steps = @(New-RecipeProvisioningSteps 3) | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$Steps[0].nativeStep.arguments += '-Target=-MaxParallelActions=4'
+$Capture = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Steps[0].capture.payloadBase64)) | ConvertFrom-Json; $Capture.arguments = $Steps[0].nativeStep.arguments
+$Steps[0].capture = New-RecipeTestSeal $Capture; $Steps[0].nativeStep.captureSha256 = $Steps[0].capture.sha256
+$Rejected = $false
+try { Assert-PackageProvisioningSteps $Steps } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+Assert-True $Rejected 'Canonical Clean cannot accept caller nested targets either.'
+Write-Output 'PASS: sealed nested target/list, delimiter and mode boundary rejection through both APIs; legitimate project/compiler cap 1..4 positives'
+foreach ($Target in @('UnrealPak', 'BootstrapPackagedGame')) {
+	foreach ($Side in @('declared', 'sealed')) {
+		foreach ($Fact in @($null, @{}, @{ ubtExtraArgsAbsent = $false }, @{ ubtExtraArgsAbsent = 'true' }, @{ ubtExtraArgsAbsent = 1 }, @{ ubtExtraArgsAbsent = $true; extra = $true })) {
+			$Steps = @(New-RecipeProvisioningSteps 3) | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+			$Entry = @($Steps | Where-Object { $_.target -ceq $Target -and $_.operation -ceq 'compile' })[0]
+			if ($Side -ceq 'declared') { $Entry.nativeStep.buildInputs = $Fact }
+			else {
+				$Capture = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Entry.capture.payloadBase64)) | ConvertFrom-Json
+				$Capture.buildInputs = $Fact; $Entry.capture = New-RecipeTestSeal $Capture; $Entry.nativeStep.captureSha256 = $Entry.capture.sha256
+			}
+			$Rejected = $false
+			try { Assert-PackageProvisioningSteps $Steps } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+			Assert-True $Rejected "$Target $Side input fact must be boolean true and agree with its sealed counterpart (synthetic fact $($Fact | ConvertTo-Json -Compress))."
+		}
+	}
+}
+Write-Output 'PASS: both Program declared/sealed input facts reject missing/false/type/shape/disagreement cases'
+function New-RecipeTestPrograms {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Constructs both fixed Program receipt fixtures as one in-memory test value.')]
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory fixture value only and changes no external state.')]
+	param()
+	foreach ($Target in @('UnrealPak', 'BootstrapPackagedGame')) {
+		$Configuration = if ($Target -ceq 'UnrealPak') { 'Development' } else { 'Shipping' }
+		$Launch = '$(EngineDir)/Binaries/Win64/' + $(if ($Target -ceq 'UnrealPak') { 'UnrealPak.exe' } else { 'BootstrapPackagedGame-Win64-Shipping.exe' })
+		$Receipt = [ordered]@{ TargetName = $Target; Platform = 'Win64'; Configuration = $Configuration; TargetType = 'Program'; Architecture = 'x64'; Version = [ordered]@{ BuildId = $Target }; Launch = $Launch; BuildProducts = @([ordered]@{ Path = $Launch; Type = 'Executable' }); RuntimeDependencies = @() }
+		if ($Target -ceq 'UnrealPak') { $Receipt.BuildProducts += [ordered]@{ Path = '$(EngineDir)/Binaries/Win64/UnrealPak.modules'; Type = 'RequiredResource' }; $Receipt.RuntimeDependencies = @([ordered]@{ Path = '$(ProjectDir)/AethelnOnline.uproject'; Type = 'UFS' }, [ordered]@{ Path = '$(EngineDir)/Plugins/Messaging/TcpMessaging/TcpMessaging.uplugin'; Type = 'UFS' }) }
+		$Seal = New-RecipeTestSeal $Receipt
+		$Seal['originRoot'] = if ($Target -ceq 'UnrealPak') { 'project' } else { 'engine' }
+		$Seal['relativePath'] = if ($Target -ceq 'UnrealPak') { 'Binaries/Win64/UnrealPak.target' } else { 'Engine/Binaries/Win64/BootstrapPackagedGame-Win64-Shipping.target' }
+		[ordered]@{ target = $Target; platform = 'Win64'; configuration = $Configuration; architecture = 'x64'; receipt = $Seal; version = $Receipt.Version; launch = $Launch; products = $Receipt.BuildProducts; runtimeDependencies = $Receipt.RuntimeDependencies }
+	}
+}
+$Programs = @(New-RecipeTestPrograms)
+$Closure = Get-PackageProgramClosure ($Programs | ConvertTo-Json -Depth 12 | ConvertFrom-Json) ('a' * 64)
+Assert-True ($Closure.Count -eq 4 -and $Closure.ContainsKey('Engine/Plugins/Messaging/TcpMessaging/TcpMessaging.uplugin')) 'Both launches, the module manifest and runtime plugin must be in receipt-derived closure.'
+foreach ($Mutation in @(
+	{ param($P) $P[0].receipt.originRoot = 'engine' },
+	{ param($P) $P[0].products = @($P[0].products[0]) },
+	{ param($P) $P[1].launch = '$(EngineDir)/Binaries/Win64/missing.exe' },
+	{ param($P) $P[0].receipt.sha256 = ('A' * 64) },
+	{ param($P) $P[0].receipt.payloadBase64 = 'broken' },
+	{ param($P) $P[1].configuration = 'Development' },
+	{ param($P) $P[0] | Add-Member -NotePropertyName stale -NotePropertyValue $true }
+)) {
+	$Changed = $Programs | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+	& $Mutation $Changed
+	$Rejected = $false
+	try { $null = Get-PackageProgramClosure $Changed ('a' * 64) } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Changed origin, omitted product, absent bootstrap, alias hash, receipt bytes, tuple or extra field must fail.'
+}
+Write-Output 'PASS: sealed receipt-derived program closure and adversarial origin/product/bootstrap/byte cases'
+foreach ($Mutation in @(
+	{ param($R) $R.BuildProducts += $R.BuildProducts[0] },
+	{ param($R) $Alias = $R.BuildProducts[0] | ConvertTo-Json | ConvertFrom-Json; $Alias.Path = $Alias.Path.Replace('UnrealPak.exe', 'UNREALPAK.exe'); $R.BuildProducts += $Alias },
+	{ param($R) $R.BuildProducts[0].Type = 'UnknownType' },
+	{ param($R) $R.BuildProducts[0].Path = '$(EngineDir)/../escape.exe' },
+	{ param($R) $R.RuntimeDependencies[0].Type = 'UnknownRuntimeType' },
+	{ param($R) $R.RuntimeDependencies[1].Path = '$(EngineDir)/Plugins/../escape.uplugin' }
+)) {
+	$Changed = $Programs | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+	$Receipt = Read-PackageSealedReceipt $Changed[0].receipt
+	& $Mutation $Receipt
+	$Seal = New-RecipeTestSeal $Receipt
+	$Changed[0].receipt.sizeBytes = $Seal.sizeBytes; $Changed[0].receipt.sha256 = $Seal.sha256; $Changed[0].receipt.payloadBase64 = $Seal.payloadBase64
+	$Changed[0].products = $Receipt.BuildProducts; $Changed[0].runtimeDependencies = $Receipt.RuntimeDependencies
+	$Rejected = $false
+	try { $null = Get-PackageProgramClosure $Changed ('a' * 64) } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'A self-consistent sealed receipt with duplicate/case alias, unknown type or escaping path must still fail.'
+}
+
+try {
+	$RecipeRoot = Join-Path $FixtureRoot 'RecipeContracts'
+	[Environment]::SetEnvironmentVariable('UBT_EXTRA_ARGS', $null, 'Process')
+	$RecipeEngine = Join-Path $RecipeRoot 'EngineRoot'; $RecipeProjectRoot = Join-Path $RecipeRoot 'Project'
+	$RecipeBatch = Join-Path $RecipeEngine 'Engine/Build/BatchFiles'; $RecipeBin = Join-Path $RecipeProjectRoot 'Binaries/Win64'
+	New-Item -ItemType Directory -Path $RecipeBatch, $RecipeBin, (Join-Path $RecipeEngine 'Engine/Build'), (Join-Path $RecipeProjectRoot 'Source') -Force | Out-Null
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -Destination $RecipeProjectRoot
+	foreach ($Target in @('AethelnOnline', 'AethelnOnlineClient', 'AethelnOnlineEditor', 'AethelnOnlineServer')) { Copy-Item -LiteralPath (Join-Path $RepositoryRoot "Source/$Target.Target.cs") -Destination (Join-Path $RecipeProjectRoot 'Source') }
+	[IO.File]::WriteAllText((Join-Path $RecipeEngine 'Engine/Build/Build.version'), '{"MajorVersion":5}')
+	$SortedPaths = [string[]] @($Closure.Keys); [Array]::Sort($SortedPaths, [StringComparer]::Ordinal)
+	$Files = foreach ($Relative in $SortedPaths) {
+		$Path = Resolve-PackageProofPath $RecipeEngine $Relative
+		New-Item -ItemType Directory (Split-Path -Parent $Path) -Force | Out-Null
+		$Text = if ($Relative.EndsWith('/UnrealPak.modules', [StringComparison]::Ordinal)) { '{"BuildId":"UnrealPak","Modules":{"UnrealPak":"UnrealPak.exe"}}' } else { 'fixture product' }
+		[IO.File]::WriteAllText($Path, $Text)
+		$File = Get-PackageProofFile $RecipeEngine $Relative
+		[ordered]@{ engineRelativePath = $Relative; sizeBytes = $File.sizeBytes; sha256 = $File.sha256; origins = @($Closure[$Relative]) }
+	}
+	$Files = $Files | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+	Assert-PackageProgramFiles $Files $Closure @() $RecipeEngine
+	Assert-PackageProgramManifests ($Programs | ConvertTo-Json -Depth 12 | ConvertFrom-Json) $Closure $RecipeEngine
+	foreach ($Mutation in @(
+		{ param($F) $F[0].sha256 = ('0' * 64) },
+		{ param($F) $F[0].sizeBytes = [long] 4294967297 },
+		{ param($F) $F[0].engineRelativePath = $F[0].engineRelativePath.ToUpperInvariant() },
+		{ param($F) $F[0].origins = @('handpicked') }
+	)) {
+		$Changed = $Files | ConvertTo-Json -Depth 8 | ConvertFrom-Json; & $Mutation $Changed
+		$Rejected = $false
+		try { Assert-PackageProgramFiles $Changed $Closure @() $RecipeEngine } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+		Assert-True $Rejected 'Changed physical hash/size, case alias or handpicked origin must fail closure.'
+	}
+	$Rejected = $false
+	try { Assert-PackageProgramFiles $Files $Closure @([pscustomobject]@{ path = $Files[0].engineRelativePath; sizeBytes = $Files[0].sizeBytes; sha256 = ('0' * 64) }) $RecipeEngine } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Conflicting overlap with the immutable base must fail.'
+	$ExtraManifest = Resolve-PackageProofPath $RecipeEngine 'Engine/Plugins/Extra/Binaries/Win64/UnrealPak.modules'
+	New-Item -ItemType Directory (Split-Path -Parent $ExtraManifest) -Force | Out-Null
+	[IO.File]::WriteAllText($ExtraManifest, '{"BuildId":"foreign","Modules":{}}')
+	$Rejected = $false
+	try { Assert-PackageProgramManifests ($Programs | ConvertTo-Json -Depth 12 | ConvertFrom-Json) $Closure $RecipeEngine } catch { $Rejected = $_.Exception.Message -match '^package_recipe_manifest_invalid' }
+	Assert-True $Rejected 'An extra manifest must fail even when its BuildId differs; no masking filter is permitted.'
+	Remove-Item -LiteralPath $ExtraManifest
+	Write-Output 'PASS: complete physical closure, immutable overlap, bounds and unfiltered module-set checks'
+	$RecipeCompiler = Join-Path $RecipeRoot 'VS/MSVC/14.44/bin/Hostx64/x64/cl.exe'; $RecipeRc = Join-Path $RecipeRoot 'Windows Kits/10/bin/10.0/x64/rc.exe'; $RecipeClang = Join-Path $RecipeRoot 'toolchain/x86_64-unknown-linux-gnu/bin/clang++.exe'
+	foreach ($Path in @($RecipeCompiler, $RecipeRc, $RecipeClang)) { New-Item -ItemType Directory (Split-Path -Parent $Path) -Force | Out-Null; [IO.File]::WriteAllText($Path, 'fixture tool') }
+	$FixtureDriver = Join-Path $RecipeRoot 'fixture-native.ps1'
+	$Driver = @'
+param([string] $Operation, [string] $Target, [string] $Platform, [string] $Configuration, [string] $Project, [Parameter(ValueFromRemainingArguments)] [string[]] $Rest)
+$Root = Split-Path -Parent $Project
+$Bin = Join-Path $Root ('Binaries/' + $Platform)
+New-Item -ItemType Directory -Path $Bin -Force | Out-Null
+$ExecutableName = $Target + $(if ($Platform -eq 'Win64') { '.exe' } else { '' })
+$SymbolName = $Target + $(if ($Platform -eq 'Win64') { '.pdb' } else { '.debug' })
+$Selection = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $Root) 'selection.json') -Raw | ConvertFrom-Json
+if ($Operation -eq 'clean') {
+ foreach ($Name in @($ExecutableName, $SymbolName, ($Target + '.target'))) {
+  $Path = [IO.Path]::GetFullPath((Join-Path $Bin $Name))
+  if (-not $Path.StartsWith([IO.Path]::GetFullPath($Root) + '\', [StringComparison]::OrdinalIgnoreCase)) { exit 1 }
+  if (Test-Path -LiteralPath $Path) {
+   if ($Rest -contains '-DryRun') { Write-Output "    Deleting $Path..." }
+   elseif (-not (($Selection.keepExe -and $Name -eq 'AethelnOnlineClient.exe') -or ($Selection.keepReceipt -and $Name -eq 'AethelnOnlineClient.target'))) { Remove-Item -LiteralPath $Path }
+  }
+ }
+ Write-Output 'Fixture clean finished'; exit 0
+}
+if ($Selection.failCompile) { Write-Output 'Fixture compile failed'; exit 5 }
+$Names = @($ExecutableName, $SymbolName)
+if ($Platform -eq 'Win64') { $Names += @('D3D12Core.dll', 'd3d12SDKLayers.dll', 'DirectML.dll', 'tbb12.dll', 'tbbmalloc.dll') }
+$Products = foreach ($Name in $Names) {
+ $Path = Join-Path $Bin $Name; [IO.File]::WriteAllText($Path, 'compiled fixture ' + $Name)
+ [ordered]@{ Path = '$(ProjectDir)/Binaries/' + $Platform + '/' + $Name; Type = $(if ($Name -eq $ExecutableName) { 'Executable' } elseif ($Name -eq $SymbolName) { 'SymbolFile' } else { 'DynamicLibrary' }) }
+}
+[ordered]@{ TargetName = $Target; Platform = $Platform; Configuration = $Configuration; TargetType = $(if ($Platform -eq 'Win64') { 'Client' } else { 'Server' }); Architecture = 'x64'; Version = [ordered]@{ BuildId = 'fixture' }; Launch = '$(ProjectDir)/Binaries/' + $Platform + '/' + $ExecutableName; BuildProducts = @($Products); RuntimeDependencies = @() } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Bin ($Target + '.target')) -Encoding UTF8
+if ($Platform -eq 'Win64') {
+ Write-Output ('Compiler: ' + $Selection.compiler)
+ Write-Output ('Resource Compiler: ' + $Selection.resourceCompiler)
+} else { Write-Output ('Using Clang compiler 20.1.8 (' + $Selection.linuxCompiler + ')') }
+exit 0
+'@
+	[IO.File]::WriteAllText($FixtureDriver, $Driver, [Text.UTF8Encoding]::new($false))
+	foreach ($Tuple in @(@{ file = 'Clean.bat'; operation = 'clean' }, @{ file = 'Build.bat'; operation = 'compile' })) {
+		[IO.File]::WriteAllText((Join-Path $RecipeBatch $Tuple.file), ('@echo off' + "`r`n" + 'powershell.exe -NoProfile -NonInteractive -File "' + $FixtureDriver + '" ' + $Tuple.operation + ' %*' + "`r`nexit /b %ERRORLEVEL%`r`n"), [Text.Encoding]::ASCII)
+	}
+	# Only this in-process synthetic native fixture uses its own batch identities.
+	# Production and child-script consumers retain the immutable reviewed pins.
+	$RecipeReviewedPins = @(Get-PackageRecipeReviewedPins)
+	foreach ($Pin in $RecipeReviewedPins) {
+		if ($Pin.path -cin @('Engine/Build/BatchFiles/Clean.bat', 'Engine/Build/BatchFiles/Build.bat')) { $Pin.sha256 = (Get-PackageProofFile $RecipeEngine $Pin.path).sha256 }
+	}
+	function Get-PackageRecipeReviewedPins {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'Returns the complete reviewed source pin set; existing recipe constructor and fixture override require this exported name.')]
+	param() return $RecipeReviewedPins }
+	$Base = @{ sha256 = 'a457da4e14808b85d5cc1439a920abfce114ec961e313c2684fdd57ba9385d95'; entries = @() }
+	$Supplement = @{ sha256 = ('b' * 64); closure = @{}; record = @{ recipe = @{ sourcePins = @(Get-PackageRecipeReviewedPins) } } }
+	$Run = [ordered]@{ repository = 'fixture/repository'; runId = '123'; runAttempt = '1'; runnerName = 'fixture' }
+	foreach ($Case in @('valid', 'retained-exe', 'retained-receipt', 'compile-failed')) {
+		$Selection = [ordered]@{ keepExe = ($Case -ceq 'retained-exe'); keepReceipt = ($Case -ceq 'retained-receipt'); failCompile = ($Case -ceq 'compile-failed'); compiler = $RecipeCompiler; resourceCompiler = $RecipeRc; linuxCompiler = $RecipeClang }
+		$Selection | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $RecipeRoot 'selection.json') -Encoding UTF8
+		foreach ($Name in @('AethelnOnlineClient.exe', 'AethelnOnlineClient.pdb', 'AethelnOnlineClient.target', 'D3D12Core.dll', 'd3d12SDKLayers.dll', 'DirectML.dll', 'tbb12.dll', 'tbbmalloc.dll')) { [IO.File]::WriteAllText((Join-Path $RecipeBin $Name), 'old fixture ' + $Name) }
+		$Archive = Join-Path $RecipeRoot $Case; New-Item -ItemType Directory -Path $Archive | Out-Null
+		$Failure = $null; $Proof = $null
+		try { $Proof = New-PackageCleanPhase 'Client' $RecipeEngine $RecipeProjectRoot $Archive ('a' * 40) $Run ([DateTime]::UtcNow.AddMinutes(2)) $Base $Supplement { } (New-PackageCompileResources (New-RecipeResourceSample)) } catch { $Failure = $_.Exception.Message }
+		if ($Case -ceq 'valid') {
+			$ValidClientProof = $Proof
+			Assert-True ($null -eq $Failure -and $Proof.products.Count -eq 7) "Valid supervised fake clean/compile must retain five dependencies and capture all seven products: $Failure"
+			Assert-True (@($Proof.compile.arguments | Where-Object { $_ -cmatch '^-MaxParallelActions=[1-4]$' }).Count -eq 1) 'Split native compile must carry exactly one canonical reviewed action cap in the actual supervised command.'
+			Assert-True ($Proof.compileResources.effectiveActionLimit -eq 3 -and $Proof.compile.arguments[-1] -ceq '-MaxParallelActions=3') 'Actual sealed Client command must use the selected three-action resource limit.'
+			Assert-True (@($Proof.clean.ownedRemoval.filesBefore | Where-Object { $_.path -match 'tbb|D3D12Core|SDKLayers|DirectML' }).Count -eq 0) 'Dependency copies must never be asserted as clean-owned.'
+		} else {
+			$Expected = if ($Case.StartsWith('retained-', [StringComparison]::Ordinal)) { '^package_recipe_clean_retained' } else { '^package_recipe_native_failed' }
+			Assert-True ($Failure -match $Expected) "$Case must fail before UAT: $Failure"
+		}
+	}
+	$Selection.keepExe = $false; $Selection.keepReceipt = $false; $Selection.failCompile = $false
+	$Selection | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $RecipeRoot 'selection.json') -Encoding UTF8
+	$ServerArchive = Join-Path $RecipeRoot 'valid-server'; New-Item -ItemType Directory -Path $ServerArchive | Out-Null
+	$ValidServerProof = New-PackageCleanPhase 'Server' $RecipeEngine $RecipeProjectRoot $ServerArchive ('a' * 40) $Run ([DateTime]::UtcNow.AddMinutes(2)) $Base $Supplement { } (New-PackageCompileResources (New-RecipeResourceSample) 2)
+	Assert-True ($ValidServerProof.compile.arguments[-1] -ceq '-MaxParallelActions=2') 'Actual sealed Server command must retain the caller lower ceiling.'
+	$ClientArgs = @('BuildCookRun', "-project=$RecipeProjectRoot/AethelnOnline.uproject", '-nop4', '-utf8output', '-unattended', '-skipbuild', '-cook', '-clean', '-stage', '-pak', '-archive', '-map=/Game/Maps/StarterMap', '-nocompileeditor', '-target=AethelnOnlineClient', '-platform=Win64', '-clientconfig=Development', '-client', '-archivedirectory=client')
+	$ServerArgs = @('BuildCookRun', "-project=$RecipeProjectRoot/AethelnOnline.uproject", '-nop4', '-utf8output', '-unattended', '-skipbuild', '-cook', '-clean', '-stage', '-pak', '-archive', '-map=/Game/Maps/StarterMap', '-nocompileeditor', '-target=AethelnOnlineServer', '-server', '-noclient', '-serverplatform=Linux', '-serverconfig=Development', '-archivedirectory=server', '-AdditionalCookerOptions=-ini:Input:[/Script/CommonUI.CommonUIInputSettings]:DefaultVirtualPointerClass=None -NeverCookDir=CommonUI/Content -NeverCookDir=EnhancedInput/Content -NeverCookDir=Interchange/Runtime/Content')
+	$Pair = [ordered]@{ schemaVersion = 1; id = 'clean-targets-prebuilt-programs-v1'; baseAttestationSha256 = $Base.sha256; supplementSha256 = $Supplement.sha256; client = $ValidClientProof; server = $ValidServerProof }
+	$Provenance = [ordered]@{ source = [ordered]@{ revision = ('a' * 40); projectSha256 = $ValidClientProof.sourceIdentity.projectDescriptorSha256 }; build = [ordered]@{ configuration = 'Development'; uatInvocations = [ordered]@{ client = [ordered]@{ arguments = $ClientArgs }; server = [ordered]@{ arguments = $ServerArgs } }; packageRecipe = $Pair }; tools = [ordered]@{ unreal = [ordered]@{ repositoryRevision = $ValidClientProof.engineIdentity.revision; buildVersionSha256 = $ValidClientProof.engineIdentity.buildVersionSha256 }; compiler = [ordered]@{ sha256 = $ValidClientProof.engineIdentity.selectedTools.compiler.sha256 }; windowsSdk = [ordered]@{ resourceCompilerSha256 = $ValidClientProof.engineIdentity.selectedTools.resourceCompiler.sha256 }; linuxCrossToolchain = [ordered]@{ compilerSha256 = $ValidServerProof.engineIdentity.selectedTools.linuxCompiler.sha256 } } }
+	$Provenance = $Provenance | ConvertTo-Json -Depth 32 | ConvertFrom-Json
+	Assert-PackageRecipeProvenance $Provenance
+	$ArchivedBaseProvenance = $Provenance | ConvertTo-Json -Depth 32 | ConvertFrom-Json
+	$ArchivedBaseProvenance.build.packageRecipe.baseAttestationSha256 = '4aa4328043d9f65e57a2c5b160d3fde93389f4103e69b179293af93635f25377'
+	$ArchivedBaseRejected = $false
+	try { Assert-PackageRecipeProvenance $ArchivedBaseProvenance } catch { $ArchivedBaseRejected = $_.Exception.Message -match '^package_recipe_base_invalid' }
+	Assert-True $ArchivedBaseRejected 'The archived pre-adoption base cannot authorize a current split package proof.'
+	Assert-PackageRecipePayloads $Provenance (Join-Path $RecipeRoot 'valid') $ServerArchive
+	$ChildGuardRoot = Join-Path $RecipeRoot 'child-input-refusal'; New-Item -ItemType Directory -Path $ChildGuardRoot | Out-Null
+	$OriginalCompileRoot = Join-Path (Join-Path $RecipeRoot 'valid') 'Proof/compile'
+	$ChildDriverText = [IO.File]::ReadAllText((Join-Path $OriginalCompileRoot 'driver.ps1')).Replace($OriginalCompileRoot, $ChildGuardRoot)
+	$ChildDriverPath = Join-Path $ChildGuardRoot 'driver.ps1'; [IO.File]::WriteAllText($ChildDriverPath, $ChildDriverText, [Text.UTF8Encoding]::new($false))
+	try {
+		[Environment]::SetEnvironmentVariable('UBT_EXTRA_ARGS', '-MaxParallelActions=4', 'Process')
+		& powershell.exe -NoProfile -NonInteractive -File $ChildDriverPath
+		Assert-True ($LASTEXITCODE -eq 1) 'Generated actual native child must refuse its own polluted inherited input.'
+	} finally { [Environment]::SetEnvironmentVariable('UBT_EXTRA_ARGS', $null, 'Process') }
+	$RefusedCapture = ConvertFrom-PackageProofJson ([IO.File]::ReadAllText((Join-Path $ChildGuardRoot 'native-result.json')))
+	Assert-True ($RefusedCapture.buildInputs.ubtExtraArgsAbsent -is [bool] -and -not $RefusedCapture.buildInputs.ubtExtraArgsAbsent -and $RefusedCapture.nativeExitCode -eq -1 -and $RefusedCapture.infrastructureFailure -ceq 'build_inputs_set' -and -not (Test-Path -LiteralPath (Join-Path $ChildGuardRoot 'build.log'))) 'Child must record real false fact and never invoke even the fake canonical executable.'
+	Write-Output 'PASS: generated child independently refuses inherited input before fake native invocation and records actual false capture'
+	$ConsumerRegressionFailures = @()
+	foreach ($Case in @('native-hash-only', 'discovery-hash-only', 'clean-hash-only', 'compile-hash-only', 'project-context-only', 'relocated-positive')) {
+		$Changed = $Provenance | ConvertTo-Json -Depth 32 | ConvertFrom-Json
+		$CaseRoots = @{}
+		foreach ($Kind in @('client', 'server')) {
+			$OriginalArchive = if ($Kind -ceq 'client') { Join-Path $RecipeRoot 'valid' } else { $ServerArchive }
+			$CaseRoots[$Kind] = Join-Path $RecipeRoot "$Case/$Kind"
+			Copy-Item -LiteralPath $OriginalArchive -Destination $CaseRoots[$Kind] -Recurse
+			if ($Case.EndsWith('-hash-only', [StringComparison]::Ordinal)) {
+				foreach ($Name in @('discovery', 'clean', 'compile')) {
+					if ($Case -cne 'native-hash-only' -and $Case -cne "$Name-hash-only") { continue }
+					$Step = if ($Name -ceq 'discovery') { $Changed.build.packageRecipe.$Kind.clean.discovery.nativeStep } else { $Changed.build.packageRecipe.$Kind.$Name }
+					$Step.executableSha256 = ('d' * 64)
+					$CapturePath = Join-Path $CaseRoots[$Kind] "Proof/$Name/native-result.json"
+					$Capture = ConvertFrom-PackageProofJson ([IO.File]::ReadAllText($CapturePath))
+					$Capture.executableSha256 = $Step.executableSha256
+					$Capture | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $CapturePath -Encoding UTF8
+					$Step.captureSha256 = (Get-PackageProofFile $CaseRoots[$Kind] "Proof/$Name/native-result.json").sha256
+				}
+			} elseif ($Case -ceq 'project-context-only') {
+				$Changed.build.uatInvocations.$Kind.arguments = @($Changed.build.uatInvocations.$Kind.arguments | ForEach-Object { if ($_.StartsWith('-project=', [StringComparison]::Ordinal)) { '-project=D:\DifferentUatProject\AethelnOnline.uproject' } else { $_ } })
+			} elseif ($Kind -ceq 'server') {
+				$RelocatedProject = 'D:\RelocatedServer\AethelnOnline.uproject'
+				$Changed.build.uatInvocations.server.arguments = @($Changed.build.uatInvocations.server.arguments | ForEach-Object { if ($_.StartsWith('-project=', [StringComparison]::Ordinal)) { '-project=d:/relocatedserver/AethelnOnline.uproject' } else { $_ } })
+				foreach ($Name in @('discovery', 'clean', 'compile')) {
+					$Step = if ($Name -ceq 'discovery') { $Changed.build.packageRecipe.server.clean.discovery.nativeStep } else { $Changed.build.packageRecipe.server.$Name }
+					$Step.arguments[3] = $RelocatedProject
+					$CapturePath = Join-Path $CaseRoots.server "Proof/$Name/native-result.json"
+					$Capture = ConvertFrom-PackageProofJson ([IO.File]::ReadAllText($CapturePath)); $Capture.arguments[3] = $RelocatedProject
+					$Capture | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $CapturePath -Encoding UTF8
+					$Step.captureSha256 = (Get-PackageProofFile $CaseRoots.server "Proof/$Name/native-result.json").sha256
+				}
+			}
+		}
+		foreach ($Consumer in @('provenance', 'payload')) {
+			$Rejected = $false
+			$ConsumerFailure = $null
+			try {
+				if ($Consumer -ceq 'provenance') { Assert-PackageRecipeProvenance $Changed }
+				else { Assert-PackageRecipePayloads $Changed $CaseRoots.client $CaseRoots.server }
+			} catch { $ConsumerFailure = $_.Exception.Message; $Rejected = $ConsumerFailure -match '^package_recipe_' }
+			if ($Case -ceq 'relocated-positive') { Assert-True ($null -eq $ConsumerFailure) "Matching phase-local relocated native/UAT projects with normalized slash/case must remain valid: $ConsumerFailure" }
+			elseif (-not $Rejected) { $ConsumerRegressionFailures += "$Case/$Consumer"; Write-Output "REGRESSION ACCEPTED: $Case/$Consumer" }
+		}
+	}
+	Assert-True ($ConsumerRegressionFailures.Count -eq 0) ('Independent semantic consumers must reject isolated malformed proofs: ' + ($ConsumerRegressionFailures -join ', '))
+	Write-Output 'PASS: independently rejected native executable hashes and project context; relocated phase-local pair accepted'
+	foreach ($Mutation in @(
+		{ param($P) $P.build.packageRecipe.server.runIdentity.runId = '456' },
+		{ param($P) $P.build.packageRecipe.server.hostProof.supplementSha256 = ('d' * 64) },
+		{ param($P) $P.build.packageRecipe.client.clean.nativeExitCode = 1 },
+		{ param($P) $P.build.packageRecipe.client.clean.ownedRemoval.filesAfter[0].exists = $true },
+		{ param($P) $P.build.packageRecipe.client.products = @($P.build.packageRecipe.client.products | Select-Object -Skip 1) },
+		{ param($P) $P.build.packageRecipe.server.sourceIdentity.revision = ('d' * 40) },
+		{ param($P) $P.build.packageRecipe.client.compile.startedUtc = $P.build.packageRecipe.client.clean.startedUtc },
+		{ param($P) $P.build.uatInvocations.client.arguments += '-build' },
+		{ param($P) $P.build.uatInvocations.server.arguments = @($P.build.uatInvocations.server.arguments | Where-Object { $_ -cne '-clean' }) },
+		{ param($P) $P.build.packageRecipe.schemaVersion = '1' },
+		{ param($P) $P.tools.compiler.sha256 = ('d' * 64) },
+		{ param($P) $P.build.packageRecipe.client.cleanupProof.verified = $false },
+		{ param($P) $P.build.packageRecipe.client.compile.arguments = @($P.build.packageRecipe.client.compile.arguments | Where-Object { $_ -notmatch 'MaxParallelActions' }) },
+		{ param($P) $P.build.packageRecipe.client.compile.arguments += '-MaxParallelActions=4' },
+		{ param($P) $P.build.packageRecipe.client.compile.arguments[-1] = '-MaxParallelActions=4' },
+		{ param($P) $P.build.packageRecipe.client.compileResources.effectiveActionLimit = 4 },
+		{ param($P) $P.build.packageRecipe.client.compileResources.recheck.availablePhysicalRamGiB = 12 },
+		{ param($P) $P.build.packageRecipe.client.compileResources.admission.buildInputs.ubtExtraArgsAbsent = $false },
+		{ param($P) $P.build.packageRecipe.client.compileResources.recheck.buildInputs.ubtExtraArgsAbsent = 'true' },
+		{ param($P) $P.build.packageRecipe.client.compile.buildInputs.ubtExtraArgsAbsent = $false }
+	)) {
+		$Changed = $Provenance | ConvertTo-Json -Depth 32 | ConvertFrom-Json; & $Mutation $Changed
+		$Rejected = $false
+		try { Assert-PackageRecipeProvenance $Changed } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+		Assert-True $Rejected 'An inconsistent phase pair, failure/order, receipt closure, command, schema type, selected tool or cleanup proof must fail.'
+	}
+	$DriftProduct = Join-Path $ServerArchive $ValidServerProof.products[0].payloadPath
+	[IO.File]::AppendAllText($DriftProduct, 'drift')
+	$Rejected = $false
+	try { Assert-PackageRecipePayloads $Provenance (Join-Path $RecipeRoot 'valid') $ServerArchive } catch { $Rejected = $_.Exception.Message -match '^package_recipe_file_changed' }
+	Assert-True $Rejected 'Product drift in manifest-bound proof payload must fail.'
+	Write-Output 'PASS: valid split pair and adversarial run/source/host/order/command/schema/tool/cleanup/payload cases'
+	$CaptureFaultRoots = @{}
+	$CaptureFaultProof = $Provenance | ConvertTo-Json -Depth 32 | ConvertFrom-Json
+	foreach ($Kind in @('client', 'server')) {
+		$CaptureFaultRoots[$Kind] = Join-Path $RecipeRoot "captured-input-fault/$Kind"
+		$OriginalArchive = if ($Kind -ceq 'client') { Join-Path $RecipeRoot 'valid' } else { $ServerArchive }
+		Copy-Item -LiteralPath $OriginalArchive -Destination $CaptureFaultRoots[$Kind] -Recurse
+	}
+	$FaultCapturePath = Join-Path $CaptureFaultRoots.client 'Proof/compile/native-result.json'
+	$FaultCapture = ConvertFrom-PackageProofJson ([IO.File]::ReadAllText($FaultCapturePath)); $FaultCapture.buildInputs.ubtExtraArgsAbsent = $false
+	$FaultCapture | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $FaultCapturePath -Encoding UTF8
+	$CaptureFaultProof.build.packageRecipe.client.compile.captureSha256 = (Get-PackageProofFile $CaptureFaultRoots.client 'Proof/compile/native-result.json').sha256
+	$Rejected = $false
+	try { Assert-PackageRecipePayloads $CaptureFaultProof $CaptureFaultRoots.client $CaptureFaultRoots.server } catch { $Rejected = $_.Exception.Message -match '^package_recipe_' }
+	Assert-True $Rejected 'Even a rehashed actual native capture with false inherited-input fact must reject despite a declared true fact.'
+	Write-Output 'PASS: split payload API rejects rehashed captured input fact disagreement'
+	Write-Output 'PASS: actual supervised fixture dry-run/clean/compile, retained dependencies, old executable and compile failure'
+} finally {
+	Set-Item Function:\Get-PackageRecipeReviewedPins -Value $OriginalReviewedPins
+	Set-Item Function:\Get-PackageResourceSample -Value $OriginalResourceSample
+	[Environment]::SetEnvironmentVariable('UBT_EXTRA_ARGS', $OriginalUbtExtraArgs, 'Process')
+	if (Test-Path -LiteralPath $FixtureRoot) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
+}
+if ($RecipeProofOnly) { return }
+
+$Rejected = $false
+try { & $Script -ProjectPath $Script -EngineRoot $RepositoryRoot -LinuxToolchainRoot $RepositoryRoot -ArchiveRoot $FixtureRoot -LogRoot $FixtureRoot -SourceRevision ('a' * 40) -PackageActionLimit 3 } catch { $Rejected = $_.Exception.Message -match '^package_recipe_invalid' }
+Assert-True $Rejected 'Stock packaging must reject the split-only caller action ceiling before output or native work.'
 
 try {
 	# Prebuilt packaging refuses a set private-plugin path (issue #267), so the
