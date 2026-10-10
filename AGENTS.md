@@ -42,9 +42,9 @@ Before generating or editing character or asset imagery, read
 visual references. Use the polished stylized 3D sculpt/render direction recorded
 there; it supersedes older painterly rendering instructions. Keep rendering
 style separate from subject identity, preserve each asset's approved design,
-and save the exact prompt with each new version. The guide records rendering
-direction; it does not complete the paused Kell lore revision or establish
-production readiness.
+and save the exact prompt with each new version. Kell anatomy and lore are
+defined in `docs/playable-peoples.md` and the specialized canonical story
+documents. Image approval does not establish production readiness.
 
 Do not guess unresolved tuning values, final faction names, level caps, drop
 rates, invasion schedules, or population limits. Preserve explicit `TBD`

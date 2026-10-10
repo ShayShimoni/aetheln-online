@@ -637,13 +637,22 @@ Conflict:
 - **Combat lesson:** line of sight, healing angles, and area control
 
 Corvath crystallized from the glassed earth during the Duskbreak and remembers
-the catastrophe from inside its light. He remains a unique living-glass Kell:
-his complete material state is not ordinary Kell biology or an available player
-appearance.
+the catastrophe from inside its light. He carries the Kell face, horns,
+external ears, and clawed extremities, but the catastrophe realized his entire
+body as living glass. Ordinary Kell have renewing ivory-quartz plates over
+dark amethyst connections; Corvath's whole material state is exceptional and
+is not an available player appearance.
 
 He preserves people at the instant before death as conscious, painless living
 glass. Among them is Maren Dross. Corvath considers this mercy; others consider
 it an endless refusal to let the dead pass.
+
+For Kell who understand continuity through growth and repair, Corvath presents
+an intimate contradiction: he preserves a life by preventing its next change.
+His subjects' consciousness and suspended deaths are not an ordinary property
+of Kell crystal bodies, nor a technique available merely by being Kell. His
+practice makes the dispute over consent, remembrance, and release personal
+before it becomes the Unison's political promise.
 
 Conflict:
 
@@ -664,8 +673,21 @@ Conflict:
 Vothram forged the instruments Sevrin used to crack the Star. He did not know
 their purpose, but ignorance did not save the cities they destroyed.
 
+His precision craft comes from study of layered materials, joints, and
+resonance. Kell artisans see a joined fracture as evidence that something was
+kept alive through change; the Concordance instead promised to make history
+permanent. Vothram helped build its instruments without understanding what
+that promise would demand. The ritual's power came from its use of the Star,
+not from his race or the crystal within his body.
+
 He now guards the Concord's Ember vault. Secretly, he preserves memory-Embers
 that the law requires him to surrender and allow to expire.
+
+He tends the archive as carefully as a living surface, repairing its vessels
+and maintaining its records. Yet secrecy denies the people whose histories he
+holds a voice in that care. His guilt has made preservation a duty he cannot
+put down, even when it begins to resemble ownership. His archive uses learned
+memory craft; it is not a store of memories inside his anatomy.
 
 Conflict:
 
@@ -732,6 +754,12 @@ by its destruction, Serra inherited its blame, and Aldrec hunts its survivors.
 Saeril loses memories to power, Vothram steals memories to preserve them,
 Corvath keeps memory alive in glass, and Halveth records the dead in law. The
 faction conflict asks whether memory can ever be owned for the common good.
+
+Kell renewal sharpens this conflict: a person may remain themselves through
+visible change, while an archive can retain a past its subject no longer wants
+to carry. Vothram maintains the record, Corvath arrests the moment, and living
+Kell communities must decide when care requires preservation and when it
+requires release.
 
 ### Future Fractures
 

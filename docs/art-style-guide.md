@@ -16,8 +16,12 @@ This guide supersedes the painterly rendering instructions in the older
 remain useful for subject matter, composition, and world mood. Use this guide
 for the finish of newly generated characters and assets.
 
-The user selected the male and female Kell below. Recording the rendering
-style does not complete the requested Kell lore revision; that work is paused.
+The user selected the male and female Kell below as the new race baseline.
+Their revised anatomy, origin, and culture are canonical in
+[Playable Peoples](playable-peoples.md#kell), with story connections in
+[Characters and Factions](characters-and-factions.md) and
+[World and Settlements](world-and-settlements.md). Earlier visual-package
+anatomy notes and review judgments describe the superseded Kell direction.
 Gameplay rules and other races' identities remain governed by the
 [canonical design documents](documentation-index.md).
 

@@ -114,8 +114,10 @@ eligibility.
 than a shared list of nullable fields:
 
 - Aurin store hair style, hair color, and hair-dye treatment.
-- Kell store crown, mantle, mineral family, mineral finish, wear, engraving,
-  and inlay.
+- Kell store horn form, plate pattern, mineral tones, mineral finish, wear,
+  engraving, and inlay. Skin tone denotes their surface tone; glow remains
+  within the authored presentation envelope rather than a power or combat
+  input. Alternate mineral families and glow hues remain product TBDs.
 - Vesh store hair, veil form, veil adornment, inner-light hue, and light
   pattern.
 
