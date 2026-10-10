@@ -492,26 +492,12 @@ function Enter-InitialPreparationLease {
 			}
 			try {
 				$Journal = (New-Object Text.UTF8Encoding($false, $true)).GetString($StoredBytes)
-				$Lines = @($Journal.Split([char]10) | Where-Object { $_.Length -gt 0 })
-				$LastRecord = $Lines[-1] | ConvertFrom-Json
-				if ($LastRecord.schemaVersion -ne 1 -or $LastRecord.state -cne 'released' -or
-					$LastRecord.cleanupVerified -isnot [bool] -or -not $LastRecord.cleanupVerified) { throw 'lease_owner_ambiguous' }
-			} catch { throw 'lease_owner_ambiguous' }
-		}
-		$HeldRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $Record.leaseId;
-			attemptId = $Attempt.attemptId; ownerPid = $Record.ownerPid; ownerStartUtc = $Record.ownerStartUtc }
-		$Bytes = [Text.Encoding]::UTF8.GetBytes(($HeldRecord | ConvertTo-Json -Compress) + "`n")
-		$ReleasedRecord = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Record.leaseId;
-			attemptId = $Attempt.attemptId; cleanupVerified = $true }
-		$ReleaseBytes = [Text.Encoding]::UTF8.GetBytes(($ReleasedRecord | ConvertTo-Json -Compress) + "`n")
-		if ($Stream.Length + $Bytes.Length + $ReleaseBytes.Length -gt 65536) {
-			# Compaction discards history, so first apply the same whole-journal check as Assert-EngineRunnerLeaseJournal:
-			# the last-record check above is not enough to prove no older owner is unreleased or ambiguous.
-			try {
+				# Same whole-journal check as Assert-EngineRunnerLeaseJournal: both writers share this file, so a
+				# journal one refuses (unreleased or ambiguous record anywhere) the other must refuse too.
 				if (-not $Journal.EndsWith("`n") -or $Journal.Contains('\')) { throw 'lease_owner_ambiguous' }
 				$OpenHeld = $null
 				$SeenLeases = @{}
-				foreach ($Line in $Lines) {
+				foreach ($Line in @($Journal.Split([char]10) | Where-Object { $_.Length -gt 0 })) {
 					$Entry = $Line | ConvertFrom-Json
 					$Fields = @('schemaVersion', 'state', 'leaseId', 'attemptId', 'cleanupVerified')
 					if ($Entry.state -ceq 'held') { $Fields = @('schemaVersion', 'state', 'leaseId', 'attemptId', 'ownerPid', 'ownerStartUtc') }
@@ -537,9 +523,15 @@ function Enter-InitialPreparationLease {
 				}
 				if ($SeenLeases.Count -eq 0 -or $null -ne $OpenHeld) { throw 'lease_owner_ambiguous' }
 			} catch { throw 'lease_owner_ambiguous' }
-			$Stream.SetLength(0)
-			$Stream.Position = 0
 		}
+		$HeldRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $Record.leaseId;
+			attemptId = $Attempt.attemptId; ownerPid = $Record.ownerPid; ownerStartUtc = $Record.ownerStartUtc }
+		$Bytes = [Text.Encoding]::UTF8.GetBytes(($HeldRecord | ConvertTo-Json -Compress) + "`n")
+		$ReleasedRecord = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Record.leaseId;
+			attemptId = $Attempt.attemptId; cleanupVerified = $true }
+		$ReleaseBytes = [Text.Encoding]::UTF8.GetBytes(($ReleasedRecord | ConvertTo-Json -Compress) + "`n")
+		# The journal passed the whole-journal check above (or is empty), so every held record is released: compact instead of refusing.
+		if ($Stream.Length + $Bytes.Length + $ReleaseBytes.Length -gt 65536) { $Stream.SetLength(0); $Stream.Position = 0 }
 		$Stream.Write($Bytes, 0, $Bytes.Length)
 		$Stream.Flush($true)
 	} catch {

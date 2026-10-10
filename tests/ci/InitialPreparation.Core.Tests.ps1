@@ -305,6 +305,12 @@ function Test-LeaseJournalCapacity {
 	$AnomalyHash = (Get-FileHash -LiteralPath $AnomalyPath -Algorithm SHA256).Hash
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id ('a' * 128)) -LeasePath $AnomalyPath } -Reason 'lease_owner_ambiguous' -Message 'A journal the Engine writer refuses must not be compacted by the preparation writer.'
 	Assert-True -Condition ((Get-FileHash -LiteralPath $AnomalyPath -Algorithm SHA256).Hash -ceq $AnomalyHash) -Message 'A refused anomalous journal must keep every byte.'
+	# The same anomaly with plenty of room is refused too: appending after it would hide an unreleased owner.
+	$RoomPath = Initialize-LeaseFixture -Name 'room-anomaly'
+	[IO.File]::WriteAllText($RoomPath, $PriorJournal + $AnomalyTail, (New-Object Text.UTF8Encoding($false)))
+	$RoomHash = (Get-FileHash -LiteralPath $RoomPath -Algorithm SHA256).Hash
+	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id 'journal-room-anomaly') -LeasePath $RoomPath } -Reason 'lease_owner_ambiguous' -Message 'A mid-journal unreleased held record must be refused even when the journal has room.'
+	Assert-True -Condition ((Get-FileHash -LiteralPath $RoomPath -Algorithm SHA256).Hash -ceq $RoomHash) -Message 'A refused journal with room must keep every byte.'
 	# A journal with room for the pair appends without compaction.
 	$SmallPath = Initialize-LeaseFixture -Name 'small-journal'
 	[IO.File]::WriteAllText($SmallPath, $PriorJournal, (New-Object Text.UTF8Encoding($false)))
