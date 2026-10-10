@@ -374,8 +374,9 @@ any configured class that:
   spec-level `DynamicAbilityTriggers`.
 
 This also catches a future Blueprint subclass that edits policies or values.
-`FindGrantProblem` is virtual: #60 P3's chain extends this same grant dispatch
-with step, sampling, cooldown and reset-tag validation.
+#60 P3 makes `FindGrantProblem` virtual, so the PlayerState grant call reaches
+a derived definition through its base ability pointer. The chain extends this
+same grant dispatch with step, sampling, cooldown and reset-tag validation.
 
 For #18 T1, grant validation also requires a movement-carried ability to be
 Press-only with `bAcceptsRelease = false`, preserving the ServerOnly policies,
