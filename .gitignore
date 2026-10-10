@@ -64,6 +64,12 @@ Coverage/
 /todos/
 /.codex-workflow-scratchpad.md
 
+# Unselected art exploration belongs outside the Git worktree.
+# Retained character outputs live in docs/art-style-references/.
+/visuals/*explorations*/
+/visuals/aurin-3d-*/
+/visuals/vesh-body-variations-*/
+
 # Local environment and sensitive material
 .env
 .env.*

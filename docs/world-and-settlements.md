@@ -29,6 +29,33 @@ the engine, not persons who answer:
 
 The Wardens do not map cleanly to the two player factions.
 
+### Spirits and the Light
+
+Spirits are coherent local continuities of realized lives and places within
+Aetheln. Their knowledge is bounded by the histories they carry. They may
+remember incompletely, disagree, or misunderstand a change beyond their own
+experience; they cannot judge every person or reveal a certain future. They
+are distinct from the Wardens, falling Embers, and Forgettings. Their existence
+does not establish that every dead person's soul remains available to consult.
+
+The Star dreamed the Vesh separately from Aurin and Kell before the Duskbreak
+as mortal embodied spirit creatures connected to these presences. They are a
+people with lives of their own, not deceased members of another people, spent
+Embers reincarnated, or servants manufactured by the Wardens. Their existence
+does not establish which people the Star dreamed first.
+
+Vesh speak of following the Light: an ethical and spiritual call to attention,
+compassion, and discernment. Enlightenment is a fallible discipline rather than
+proof of moral purity. Individuals may interpret, neglect, or misuse what they
+hear. A guiding encounter does not prove the Star's intention or absolve its
+listener of responsibility. No faction has an exclusive claim to the Light.
+
+Spirit listening is learned practice open to every people. It does not grant
+racial combat power, certain prophecy, or automatic detection of hidden people.
+Spirit accounts must be investigated alongside living witnesses and records;
+they cannot replace the coherent witnessed record required for Emberbound
+restoration.
+
 ## The Duskbreak
 
 The Lucent Choir attempted the Great Concordance: binding the Waking Star's
@@ -155,8 +182,24 @@ either faction.
 ### Graefell - The Undervault
 
 Graefell is carved into the canyon where the first Kell awakened before the
-Duskbreak. The catastrophe later turned the canyon to glass. Dying light is
-preserved as memory in its geode archives.
+Duskbreak. The Star's dreaming realized living quartz and amethyst there;
+Graefell remembers that first awakening without claiming that Kell preceded
+the other peoples. The catastrophe later fused the surrounding canyon into
+inert glass. The contrast defines the Undervault: living layered bodies still
+grow and change among surfaces fixed by disaster.
+
+Its architecture follows curved mineral strata, with crafted supports joining
+older surfaces to newer work. Maintained seams remain visible as records of
+care. Geode archives preserve dying light as memory through learned craft;
+they are constructed vessels and institutions, not harvested Kell bodies.
+Keepers from every people can study and maintain them.
+
+Graefell's cultural dispute is whether keeping a memory creates a claim over
+its subject. Some archives treat custody as a duty that ends when the witness
+asks for release. Others consider any surrendered record part of a heritage
+too valuable for one person to withdraw. The Duskbreak's losses make both
+positions urgent, and Vothram's secret preservation and Corvath's living glass
+make the argument impossible to keep abstract.
 
 Revised role:
 
@@ -164,20 +207,30 @@ Revised role:
 - Crafting and memory-archive center.
 - Possible Hundred Witnesses stronghold, but not automatically race-locked.
 - Source of archive dungeons and disputes over whether memory can be privately
-  held.
+  held, who must care for it, and who may consent to its release.
 
 ### Selaen - The Drift
 
-Selaen is an airborne convoy of Vesh lantern-craft and dream-tech platforms
-that follows predicted Emberfalls. Resonant lantern engines read and ride
-predicted Ember currents to suspend and steer the convoy; Vesh bodies are not
-aquatic and cannot fly.
+Selaen is an airborne convoy of Vesh lantern-craft platforms that follows
+observed Ember currents and estimates the paths of Emberfalls. Resonant lantern
+engines ride those currents to suspend and steer the convoy. Navigators compare
+measured conditions, route records, and fallible local spirit guidance; an
+encounter cannot guarantee a safe passage. Neither captured spirits nor
+captured Star-light fuel routine travel. Vesh bodies cannot fly.
+
+Its lantern caravans connect scattered communities, carrying supplies, living
+witnesses, and records. Spirit interpreters travel alongside other craftspeople
+and route observers. The convoy's recurring dilemma is whether to divert toward
+an endangered place and its spirits when doing so would break a supply promise
+to another community. Following the Light still requires choosing whom its
+limited care can reach.
 
 Revised role:
 
 - Mobile neutral or conditionally aligned settlement.
 - Seasonal arrival point in mixed territory.
-- Source of dream forecasts, rare trade, and changing world objectives.
+- Source of current observations, spirit testimony, rare trade, and changing
+  world objectives.
 - Safe sanctuary only while stationed inside a defined mixed-city boundary.
 
 Its final political status remains open.
@@ -217,14 +270,48 @@ Functions:
 
 ### Lanternrest
 
-A Vesh caravan circle marked by a semi-living Mother-Lantern.
+A Vesh caravan circle marked by a constructed, semi-living Mother-Lantern: a
+cultural vessel where local spirits may voluntarily meet listeners. It is
+neither a spirit prison nor an oracle. Its keepers compare testimony with
+refugees' accounts and carried records; spirits are free to leave and may
+decline to speak. The lantern caravans gather here to exchange supplies,
+witnesses, and news before continuing their routes.
 
 Functions:
 
-- Dream-reading and Ashen Choir foreshadowing.
+- Spirit listening, investigation, and Ashen Choir foreshadowing.
 - Caravan and escort quests.
 - Cosmetic and travel services.
 - Dodge, pursuit, and threat-reading teaching.
+
+### The Quieting - Working Name
+
+At Lanternrest, spirits from unrelated places begin repeating identical
+testimony. The agreement first appears comforting, but their accounts lose the
+particular names, disagreements, and attachments that made each a local
+witness. Listeners investigate through refugees, route observations, and kept
+records rather than accepting unanimity as proof of the Light's guidance.
+
+The Ashen Choir is harmonizing these voices into the Onefold Vault, forcing
+distinct continuities toward one account. The danger is not that a spirit
+disagrees with a listener, but that it can no longer express its own history or
+choose whether to bear witness. Sevrin presents the quiet as relief from
+contradiction and suffering, bringing the crisis beside the Unison's promise
+of enforced mercy.
+
+Selaen must weigh a threatened place and its remaining spirits against supply
+obligations to another settlement. Crowned Ledger investigators seek accountable
+custody and comparable records, risking the confinement of witnesses in the
+name of protection. Hundred Witnesses delegates defend local consent and the
+right to leave, risking fragmented evidence and delayed action. Neither method
+alone establishes what compassion requires.
+
+The story asks whether rescue restores a witness's ability to speak or remain
+silent, whether release can be honored despite losing testimony, and when
+preservation becomes another form of coercion. Nhalen presses for care without
+a verdict on faith; Saeril must distinguish her ninth light's warning from
+evidence before using her public authority. The Quieting is a narrative arc,
+not approval of additional release scope, quest quantities, or numeric rules.
 
 ### The Duskvigil
 

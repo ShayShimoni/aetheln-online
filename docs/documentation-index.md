@@ -102,11 +102,42 @@ subordinate to the specialized canonical product and technical documents.
 
 ## Rendered Artifacts
 
-- [Character Codex](../output/pdf/champions_of_the_first_cycle.pdf)
-- [Settlement Codex](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex.pdf)
+- [Character Codex](../output/pdf/champions_of_the_first_cycle-2026-10-10-vesh-revamp-final.pdf)
+- [Settlement Codex](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-10-vesh-revamp-final.pdf)
 
-The PDF codices are rendered artifacts of the canonical Markdown character and
-settlement documents.
+The PDF codices are complete rendered snapshots of the canonical Markdown
+character and settlement documents, regenerated on 2026-10-10 with the Vesh
+spirit/Light story revision and the existing Kell redesign. Their complete
+source text was checked for parity and all 25 pages (16 character, 9 settlement)
+were rendered and visually inspected. Canonical Markdown remains the
+source of truth when later edits occur.
+
+The earlier [character](../output/pdf/champions_of_the_first_cycle.pdf) and
+[settlement](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex.pdf)
+editions are preserved as historical exports; they predate the current race
+revisions and do not define current canon. The intervening
+[Kell character edition](../output/pdf/champions_of_the_first_cycle-2026-10-10-kell-revamp-final.pdf)
+and [Kell settlement edition](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-10-kell-revamp-final.pdf)
+are likewise preserved; the Vesh editions above are the current snapshots.
+
+## Approved Art Direction
+
+- [Retained character results](art-style-references/character-results-2026-10-10.md)
+  lists the selected Kell and Aurin pairs and the current Vesh redesign pair,
+  their exact prompts, image hashes, and selection states. External source
+  images and superseded explorations are kept outside the repository.
+- [Art Style and Generation Guide](art-style-guide.md) records the user-approved
+  polished stylized 3D rendering direction, the selected Aurin and Kell references,
+  reusable prompts, and consistency checks for future characters and assets.
+  It supersedes older painterly rendering guidance. The selected Kell pair is
+  the race baseline in [Playable Peoples](playable-peoples.md#kell); its revised
+  story is recorded in the character and settlement documents.
+- [Approved Aurin design record](art-style-references/aurin-approved-design-2026-10-10.md)
+  records the selected male v06 and female v13, exact prompts, provenance, and
+  image hashes. The pair is the updated visual baseline in
+  [Playable Peoples](playable-peoples.md#aurin); Aurin biology and story remain
+  unchanged. Earlier Aurin studies and their historical approval states are
+  superseded for new race visuals.
 
 ## Non-Canonical Visual Development
 
@@ -114,12 +145,24 @@ settlement documents.
   concepts and editable UI studies.
 - [Asset provenance](../visuals/asset-provenance.md) records source, processing,
   and review status for the imported package.
-- [Future visuals plan](../visuals/FUTURE-VISUALS-PLAN.md) governs continuation
-  of the established visual language.
+- [Future visuals plan](../visuals/FUTURE-VISUALS-PLAN.md) records the earlier
+  visual-development sequence. For current rendering style, use the approved
+  art guide above.
 
 These files support review and production planning. They do not override the
 canonical product or technical documents, and repository inclusion does not
 approve an asset for Unreal `Content/` or runtime use.
+
+Earlier Kell anatomy instructions, generation prompts, and anatomy review
+judgments in the visual package describe the superseded skin, crown, and
+mantle direction. Preserve those historical records; use the approved pair and
+current [Kell canon](playable-peoples.md#kell) for new work.
+
+Earlier Vesh dream-veiled anatomy, back-veils, and dream-reader identity are
+likewise superseded by the [embodied-spirit Vesh canon](playable-peoples.md#vesh).
+Use the retained black-and-white design and the current character/settlement
+stories for new work. The male palette is selected; final female visual
+approval and production validation remain separately recorded.
 
 ## Historical Research Archive
 

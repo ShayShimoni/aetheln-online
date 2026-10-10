@@ -1,0 +1,18 @@
+Use case: identity-preserve
+Create ONE full-body female Vesh image by making a precise color edit to IMAGE 1.
+
+REFERENCE ROLES:
+IMAGE 1 is the FEMALE EDIT TARGET. Preserve her exact identity, slim athletic feminine silhouette, softened natural face geometry, hairstyle, clothing, white fur pattern, pose, framing and polished stylized 3D finish.
+IMAGE 2 is the SELECTED COLOR AND MATERIAL REFERENCE ONLY. Transfer its obsidian-black base pigment and softly shaded velvety finish. Do not copy the male's anatomy, face, hair, proportions, clothing state or larger extremities.
+
+CHANGE ONLY THE BROWN BASE COLOR ON THE FEMALE: Recolor every warm umber-brown part of her body, neck sides, head sides, arms, hands, exposed abdomen, legs and feet to the same rich obsidian black as IMAGE 2. It should read as true near-black with deep black shadows and subtle soft graphite highlights, not human brown, blue, or medium gray. Preserve three-dimensional shading and the short velvety coat. No global tint or colored lighting.
+
+PRESERVE THE FEMALE DESIGN: Adult slim, fit feminine build; same smaller delicate nonhuman hands with two long fingers and one thumb, same smaller solid tapered feet without individual toes or split hooves, same refined legs and balanced silhouette. Keep the latest softer, shorter faceted ivory-gray natural face and narrow glowing golden eyes. The mask-like structure IS her actual biological face; do not add a second face beneath it, a mouth, a human nose, mask straps or new facial features. Keep the long white high ponytail pulled away from her front and side neck, exposing the neck exactly as in IMAGE 1.
+
+Keep her opaque charcoal sports bra and fitted mid-thigh athletic shorts, exact cut, coverage and fabric color. Keep the exposed abdomen visible. Cloth remains visibly distinguishable from black body fur by its existing charcoal value, seams, roughness and fit.
+
+WHITE MARKINGS LOCK: Keep the hair, face and all white fur regions unchanged, including white front of neck and visible upper chest, shoulder and outer-arm markings, broad outer-forearm tufts, white flank markings beside the now-black belly, and outer-calf tufts. Preserve the exact female pattern placement and amount of fur; do not add new markings or restore brown.
+
+RENDERING: Tangible polished stylized fantasy 3D sculpt, broad coherent modeled volumes, clean silhouettes, refined transitions, smooth physical shading, subtle velvety surface, restrained broad fur clumps at existing locations, selective strand detail only. Soft studio directional key plus gentle fill, physically coherent occlusion and grounded contact shadows. No painterly fur strokes, dense strands, fine outlines, gritty texture, microfacets, uniform plastic gloss or extra magical effects. Glow remains confined to the existing golden eyes.
+
+PRESENTATION: Exactly one female, full-body frontal neutral A-pose, near-orthographic camera, identical neutral gray studio background and light, entire ponytail, hands and feet in frame. Preserve all unaffected details from IMAGE 1. No male figure, armor, jewelry, weapons, props, wings, tail, added animal features, text or watermark.
