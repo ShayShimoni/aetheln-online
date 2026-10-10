@@ -1,5 +1,10 @@
 # Aetheln Online Visual Direction Package
 
+> **Superseded Kell notes.** Kell anatomy described in this package (living
+> skin, mineral crown, mantle) is the superseded design, kept as history.
+> Current canon: `docs/playable-peoples.md` (Kell section)
+> and `docs/art-style-guide.md`.
+
 ## Direction
 
 Stylized dark fantasy with grounded anatomy, exaggerated but readable
@@ -78,6 +83,9 @@ never rely on color alone.
   facial planes, mantle, upper torso, and joints. A muscular, masculine, large,
   strongly non-human presentation is allowed only inside the shared playable
   scale and combat envelope.
+  - Superseded: the Kell bullet above describes the old design (living skin,
+    mineral crown, mantle). Use
+    `docs/playable-peoples.md` (Kell section) for current canon.
 - Vesh have two reflective eyes, a flush mouth seam, conventional hair,
   restrained subdermal light, and paired non-grasping back-veils. The white
   full-face mask shown in the new study is removable presentation equipment:
