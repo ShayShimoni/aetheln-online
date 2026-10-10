@@ -19,7 +19,16 @@ namespace
 {
 	UAethelnAbilitySystemComponent* FindLocalAbilitySystem(UWorld* World)
 	{
-		const APlayerController* Controller = World != nullptr ? World->GetFirstPlayerController() : nullptr;
+		// Clients only: on a server (reachable through ServerExec) the first controller is a remote player's.
+		if (World == nullptr || World->GetNetMode() != NM_Client)
+		{
+			return nullptr;
+		}
+		const APlayerController* Controller = World->GetFirstPlayerController();
+		if (Controller == nullptr || !Controller->IsLocalController())
+		{
+			return nullptr;
+		}
 		const AAethelnPlayerState* PlayerState = Controller != nullptr ? Controller->GetPlayerState<AAethelnPlayerState>() : nullptr;
 		return PlayerState != nullptr ? PlayerState->GetAethelnAbilitySystemComponent() : nullptr;
 	}
@@ -30,7 +39,7 @@ namespace
 		const FGameplayTag AbilityId = Args.Num() > 0 ? FGameplayTag::RequestGameplayTag(FName(*Args[0]), false) : FGameplayTag();
 		if (AbilitySystem == nullptr || !AbilityId.IsValid())
 		{
-			UE_LOG(LogAethelnCombatEvidence, Warning, TEXT("Usage: Aetheln.Combat.Request <AbilityId> [Press|Release]. Needs a local player with an Aetheln PlayerState and a valid ability tag."));
+			UE_LOG(LogAethelnCombatEvidence, Warning, TEXT("Usage: Aetheln.Combat.Request <AbilityId> [Press|Release]. Runs on a client only and needs a local player with an Aetheln PlayerState and a valid ability tag."));
 			return;
 		}
 		const bool bRelease = Args.Num() > 1 && Args[1].Equals(TEXT("Release"), ESearchCase::IgnoreCase);
@@ -44,7 +53,7 @@ namespace
 		UAethelnAbilitySystemComponent* AbilitySystem = FindLocalAbilitySystem(World);
 		if (AbilitySystem == nullptr)
 		{
-			UE_LOG(LogAethelnCombatEvidence, Warning, TEXT("Aetheln.Combat.Direct needs a local player with an Aetheln PlayerState."));
+			UE_LOG(LogAethelnCombatEvidence, Warning, TEXT("Aetheln.Combat.Direct runs on a client only and needs a local player with an Aetheln PlayerState."));
 			return;
 		}
 		for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())

@@ -32,4 +32,8 @@ public:
 	 */
 	UPROPERTY(Config)
 	TSoftClassPtr<APawn> InputEnabledPawnClass;
+
+private:
+	/** The spawn path asks for the class several times; warn once per game mode instance. */
+	bool bWarnedPawnClassLoad = false;
 };
