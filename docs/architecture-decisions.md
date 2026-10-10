@@ -798,6 +798,64 @@ Every accepted decision records:
     discloses no path. The first live proof is the owner's attestation after
     merge.
 
+- **Candidate amendment (2026-10-09, issue #267, additive programmes and split
+  target clean/compile):** Stock remains the default. The explicit
+  `CleanTargetsPrebuiltPrograms` selection separates Development Client/Server
+  target Clean and Build from UAT's clean cook/stage/package/archive. It uses
+  `-skipbuild` only after successful supervised target captures. The complete
+  accepted schema-2 Editor/SCW record stays immutable and verifies in full;
+  a separately operator-provisioned `aetheln.host-program-supplement/v1` binds
+  its hash/size/count and the receipt-derived UnrealPak and bootstrap closure.
+  UnrealPak's sealed receipt retains its provisioning-project origin. Current
+  descriptor and target-rule context must match. Extra programme branches,
+  unknown types, missing/extra manifests, changed products and conflicting base
+  overlaps fail closed without a rebuild fallback.
+  - The observed 101 programme execution files and 99 new unique files describe
+    one source snapshot, never a future handpicked subset of the 1322-file base.
+  - Pinned CleanMode `-DryRun` records its actual deletion plan in a separately
+    supervised capture before actual Clean. The typed clean receipt explicitly
+    binds `discovery.nativeStep` and `discovery.planSha256`. Planned paths must
+    satisfy the source-defined target/application predicates and scoped roots;
+    independent binary-name scans verify ownership and absence. The controller
+    never deletes a plan itself or authorises host-closure deletion.
+  - Clean-owned executables, symbols and the exact target receipt must be
+    absent. Copied D3D12Core, SDK layers, DirectML and TBB DLLs may survive.
+    Build freshly produces the exact receipt; every post-compile product,
+    including dependencies and symbols, is hashed as handoff payload. Selected
+    compiler/SDK/toolchain identity comes from that compile capture with
+    `-Verbose`; old UAT sidecars cannot supply it.
+  - Split phase records use version 2 with typed proof. Stock phase version 1
+    and schema-2 provenance stay compatible. A closed `build.packageRecipe`
+    binds both phases and their run/source/host identities. Writer, cook
+    evidence, release evidence/cut and engine gate reject absent, mixed,
+    altered or inconsistent split proof. Package reports add a closed
+    `packageRecipeEvidence` binding; stock reports keep their shape.
+  - Split compilation uses the existing Issue #167 resource-derived action
+    policy with an optional caller ceiling from 1 through 4. The effective cap
+    is forwarded to the editor wrapper and exact target Build arguments.
+    `compileResources` binds synchronous admission and precompile recheck
+    readings, caller ceiling and effective cap; a lower recheck refuses the
+    fixed selection. No continuous-monitor claim is added. Programme compile
+    steps likewise bind one canonical cap to their sealed actual capture.
+    Uncapped, duplicate, noncanonical or mismatched commands fail. Stock
+    compatibility, canonical executable pins and phase deadlines remain.
+  - Effective cap evidence also requires absent/empty inherited `UBT_EXTRA_ARGS`.
+    Split admission/editor/native launches guard that named Process input;
+    the native child repeats the guard before canonical invocation and seals
+    its actual boolean fact. Samples, declared native steps and sealed captures
+    carry matching `buildInputs.ubtExtraArgsAbsent = true`; missing/false/type
+    or capture disagreement fails. Editor timing binds the guard to unchanged
+    wrapper/capture hashes. No raw value, clearing, global configuration change
+    or continuous monitoring is added. Stock compatibility remains.
+
+  - Client/Server useful-work caps stay 30/30 minutes; Provenance/Smoke stay
+    10/10 minutes. Programme provisioning, fresh supplement adoption, native
+    fit/equivalence, #167 semantic receipt production, independent audit and
+    workflow activation remain separate gates. Portable fixtures establish
+    rejection semantics, never native provisioning or fit.
+  - This candidate records implementation and review requirements; it does
+    not invent owner acceptance, native evidence or dispatch authority.
+
 ### TA-016 - Revision-Bound Compile Applicability for Issue #151
 
 - **Status:** Accepted upon independent review and merge of this decision;

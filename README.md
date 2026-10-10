@@ -33,8 +33,9 @@ The [scope ledger](docs/prototype-and-1.0-scope-ledger.md) and
 - Every playable race supports male and female characters. Race and sex do not
   change combat statistics, class access, faction access, or authoritative
   hitboxes.
-- The confirmed playable peoples are human Aurin, organic-mineral Kell, and
-  dream-veiled Vesh. Culture, anatomy, and presentation never grant racial
+- The confirmed playable peoples are human Aurin, living crystalline Kell, and
+  enlightened embodied-spirit Vesh who follow the Light's guidance. Culture,
+  anatomy, and presentation never grant racial
   gameplay advantages or lock faction, class, or equipment access.
 - Permanent Character Levels are separate from seasonal Ember Rank.
 - Skein Weaving uses ability Forms, action-to-action Threads, a Keystone, and a
@@ -224,7 +225,13 @@ cd aetheln-online
 Review the [Unreal source-control workflow](docs/source-control.md) before
 adding or editing `.uasset` and `.umap` files.
 
-Review the [visual-development package](visuals/README.md), its
+For new art, start with the [Art Style and Generation Guide](docs/art-style-guide.md)
+and the current approved race references in
+[Playable Peoples](docs/playable-peoples.md). The updated
+[Aurin pair and approval record](docs/art-style-references/aurin-approved-design-2026-10-10.md)
+supersede the older Human studies for new character visuals.
+
+Review the historical [visual-development package](visuals/README.md), its
 [provenance register](visuals/asset-provenance.md), and the
 [future visuals plan](visuals/FUTURE-VISUALS-PLAN.md) before using or extending
 the imported concepts. Repository inclusion records and preserves the package;

@@ -91,7 +91,7 @@ function New-TestPortableReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param()
 	$Names = @(
-		'formatting-policy','markdown-links','source-control-policy','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests',
+		'formatting-policy','markdown-links','source-control-policy','combat-design-registry','combat-design-registry-tests','combat-design-generation-tests','combat-design-generated-drift','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests',
 		'host-tool-provisioning-tests','cooked-inventory-capture-tests','content-cook-evidence-tests',
 		'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
@@ -433,10 +433,18 @@ try {
 
 	$SuiteCheckNames = @([regex]::Matches([IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiSuite.ps1')), "(?m)^\s*@\{\s*name\s*=\s*'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
 	Assert-True (($SuiteCheckNames -join "`n") -ceq (@($script:AcceptancePortableCheckNames) -join "`n")) 'The receipt portable check list must equal the default Invoke-CiSuite check order.'
+	$RegistryGateNames = @('combat-design-registry','combat-design-registry-tests','combat-design-generation-tests','combat-design-generated-drift')
+	foreach ($RegistryGateName in $RegistryGateNames) {
+		Assert-True ($SuiteCheckNames -ccontains $RegistryGateName) "The required combat registry gate '$RegistryGateName' must be present in the portable manifest."
+	}
 	$ExtraSuiteCheckNames = @($SuiteCheckNames[0..($SuiteCheckNames.Count - 2)]) + @('unregistered-extra-tests', $SuiteCheckNames[-1])
 	foreach ($SuiteListCase in @(
 		@{name='exact';names=$SuiteCheckNames;reason=$null},
 		@{name='missing';names=@($SuiteCheckNames | Where-Object { $_ -cne 'content-cook-evidence-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='missing-combat-design-registry';names=@($SuiteCheckNames | Where-Object { $_ -cne 'combat-design-registry' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='missing-combat-design-registry-tests';names=@($SuiteCheckNames | Where-Object { $_ -cne 'combat-design-registry-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='missing-combat-design-generation-tests';names=@($SuiteCheckNames | Where-Object { $_ -cne 'combat-design-generation-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='missing-combat-design-generated-drift';names=@($SuiteCheckNames | Where-Object { $_ -cne 'combat-design-generated-drift' });reason='receipt_semantic_evidence_invalid:portable'},
 		@{name='reordered';names=@($SuiteCheckNames | ForEach-Object { if ($_ -ceq 'content-validation-policy-tests') { 'content-validation-command-tests' } elseif ($_ -ceq 'content-validation-command-tests') { 'content-validation-policy-tests' } else { $_ } });reason='receipt_semantic_evidence_invalid:portable'},
 		@{name='extra';names=$ExtraSuiteCheckNames;reason='receipt_semantic_evidence_invalid:portable'}
 	)) {

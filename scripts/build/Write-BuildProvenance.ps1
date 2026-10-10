@@ -28,6 +28,7 @@ param(
 	[Parameter(Mandatory)] [string] $ResourceCompilerPath,
 	[Parameter(Mandatory)] [string] $UatArgumentsJson,
 	[Parameter(Mandatory)] [string] $CookedRegistryReceiptsJson,
+	[string] $PackageRecipeJson,
 	[string] $BuildNumber
 )
 
@@ -47,6 +48,7 @@ function Get-OptionalProperty($Object, [string] $Name) {
 	return @($Property.Value)
 }
 . (Join-Path $PSScriptRoot 'ProjectVersion.ps1')
+. (Join-Path $PSScriptRoot 'PackagingRecipeProof.ps1')
 
 $HasBuildNumber = $PSBoundParameters.ContainsKey('BuildNumber')
 if ($HasBuildNumber -and $BuildNumber -cnotmatch '^[1-9][0-9]{0,9}\z') { throw 'build_number_invalid: -BuildNumber must be a positive integer of at most ten digits without a leading zero.' }
@@ -82,7 +84,9 @@ if (-not $ToolchainCompiler) { throw "Linux cross-toolchain identity could not f
 $ToolchainCompilerBanner = Invoke-IdentityCommand $ToolchainCompiler.FullName @('--version')
 if (-not $ToolchainCompilerBanner) { throw "Linux cross-toolchain compiler '$($ToolchainCompiler.FullName)' did not provide a version identity." }
 $ToolchainMarker = Get-ChildItem -LiteralPath $ResolvedToolchain -File | Where-Object { $_.Name -match '(?i)(version|toolchain)' } | Sort-Object Name | Select-Object -First 1
-try { $UatInvocations = $UatArgumentsJson | ConvertFrom-Json } catch { throw "UatArgumentsJson is invalid JSON: $($_.Exception.Message)" }
+$UatInvocations = ConvertFrom-PackageProofJson $UatArgumentsJson
+Assert-PackageProofFields $UatInvocations @('client', 'server', 'dependencyRegistryDump', 'cookedInventoryDump')
+if ([string]::IsNullOrWhiteSpace($PackageRecipeJson) -and @($UatInvocations.client + $UatInvocations.server | Where-Object { $_ -imatch '^-skipbuild(?:=|$)' }).Count) { Stop-PackageRecipe 'proof_missing' }
 $RecordedUatInvocations = [ordered]@{
 	client = [ordered]@{ arguments = @($UatInvocations.client) }
 	server = [ordered]@{ arguments = @($UatInvocations.server) }
@@ -139,8 +143,17 @@ $Document = [ordered]@{
 	artifacts = [ordered]@{ clientArchive = $ResolvedClient; serverArchive = $ResolvedServer; inventory = @($Inventory) }
 }
 if ($null -ne $ReleaseBlock) { $Document['release'] = $ReleaseBlock }
+if (-not [string]::IsNullOrWhiteSpace($PackageRecipeJson)) {
+	$Document.build['packageRecipe'] = ConvertFrom-PackageProofJson $PackageRecipeJson
+	$ParsedDocument = ConvertFrom-PackageProofJson ($Document | ConvertTo-Json -Depth 32 -Compress)
+	Assert-PackageRecipeProvenance $ParsedDocument
+	foreach ($Kind in @('client', 'server')) { Assert-PackageSourcePins $ParsedDocument.build.packageRecipe.$Kind.sourceIdentity.targetRulePins @(Get-PackageTargetRulePins $RepositoryRoot) $ResolvedEngine $RepositoryRoot }
+	Assert-PackageRecipePayloads $ParsedDocument (Split-Path -Parent $ResolvedClient) (Split-Path -Parent $ResolvedServer)
+	$Selected = $ParsedDocument.build.packageRecipe
+	if ($Selected.client.engineIdentity.selectedTools.compiler.path -cne $ResolvedCompiler -or $Selected.client.engineIdentity.selectedTools.compiler.sha256 -cne $CompilerIdentity.sha256 -or $Selected.client.engineIdentity.selectedTools.resourceCompiler.path -cne $ResolvedResourceCompiler -or $Selected.client.engineIdentity.selectedTools.resourceCompiler.sha256 -cne $WindowsSdk.resourceCompilerSha256 -or $Selected.server.engineIdentity.selectedTools.linuxCompiler.path -cne $ToolchainCompiler.FullName -or $Selected.server.engineIdentity.selectedTools.linuxCompiler.sha256 -cne $Document.tools.linuxCrossToolchain.compilerSha256) { Stop-PackageRecipe 'tool_changed' }
+}
 $Parent = Split-Path -Parent $OutputPath
 if (-not $Parent) { $Parent = (Get-Location).Path }
 New-Item -ItemType Directory -Path $Parent -Force | Out-Null
-$Document | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
+$Document | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
 Write-Output "Build provenance written to '$OutputPath'."

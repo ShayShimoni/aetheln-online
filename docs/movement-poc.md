@@ -240,8 +240,12 @@ against the yaw each move was recorded with, also when a later correction
 replays the same move again.
 
 Body facing is part of the same simulation. Aim steering (Reticle mode) travels
-in the saved move as `FLAG_Custom_1`; `FLAG_Custom_2` and `FLAG_Custom_3`
-remain free. `UAethelnCharacterMovementComponent::PhysicsRotation` selects the
+in the saved move as `FLAG_Custom_1`; `FLAG_Custom_2` is reserved for the
+one-move dodge start in [Dodge and Block](dodge-and-block.md), with its content
+version in custom packed move data. P2's GameCore authority interface has no
+production implementation until P3, so it enables no in-game dodge.
+`FLAG_Custom_3` remains free.
+`UAethelnCharacterMovementComponent::PhysicsRotation` selects the
 rotation mode for every move from that flag, the move's acceleration, and its
 control yaw: on the ground, aim or backpedal faces the camera at the 720
 degrees/s rate and anything else faces travel; airborne, aim faces the camera

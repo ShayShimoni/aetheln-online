@@ -72,11 +72,23 @@ param(
 	[ValidatePattern('^$|^[0-9a-f]{64}$')] [string] $HostToolsAttestationSha256,
 	[ValidatePattern('^$|^[^\x00-\x1f]{1,512}$')] [string] $ProvisioningEvidence,
 	[ValidatePattern('^$|^[^\\/:*?"<>|\x00-\x1f]{1,128}$')] [string] $RunnerName,
-	[string] $BuildNumber
+	[string] $BuildNumber,
+	[ValidateSet('Stock', 'CleanTargetsPrebuiltPrograms')] [string] $PackageRecipe = 'Stock',
+	[string] $HostProgramSupplementPath,
+	[ValidatePattern('^$|^[0-9a-f]{64}$')] [string] $HostProgramSupplementSha256,
+	[string] $PackageRunIdentityJson,
+	[string] $PackageDeadlineUtc,
+	[ValidateRange(1, 4)] [int] $PackageActionLimit
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'PackagingRecipeProof.ps1')
+$script:PackageProof = $null
+$script:PackageSupplement = $null
+$script:PackageBase = $null
+$script:PackageCompileResources = $null
+$script:PackageEditorInputProof = $null
 
 $script:TimingStarted = [DateTime]::UtcNow
 $script:TimingSteps = New-Object System.Collections.ArrayList
@@ -180,6 +192,7 @@ function Assert-NoAdditionalPluginPath([string] $Activity) {
 	if (-not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable('UE_ADDITIONAL_PLUGIN_PATHS', 'Process'))) { throw "host_tools_plugin_paths_set: $Activity failed because UE_ADDITIONAL_PLUGIN_PATHS is set." }
 }
 function Invoke-HostEditorModulesBuild {
+	if ($SplitRecipe) { $EditorBuildInputs = Get-PackageBuildInputProof }
 	# Builds only the project editor modules (AethelnOnlineEditor) before UAT so
 	# a fresh checkout has the receipt and UnrealEditor-Game*.dll modules the cook
 	# needs. It runs the reviewed CI wrapper as a child process, so its exit and
@@ -190,10 +203,17 @@ function Invoke-HostEditorModulesBuild {
 	$EvidenceRoot = Join-Path $ResolvedLogs 'host-editor-build'
 	New-Item -ItemType Directory -Path $EvidenceRoot | Out-Null
 	$Wrapper = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../ci/InitialPreparation.BuildInvocation.ps1')).Path
-	$ArgumentText = '-NoProfile -NonInteractive -File "{0}" -Target AethelnOnlineEditor -Platform Win64 -ActionLimit 4 -EngineRoot "{1}" -TargetRoot "{2}" -LinuxToolchainRoot "{3}" -EvidenceRoot "{4}"' -f $Wrapper, $ResolvedEngine, $ProjectRoot, $ResolvedToolchain, $EvidenceRoot
+	if ($SplitRecipe) { $WrapperHash = (Get-FileHash -LiteralPath $Wrapper -Algorithm SHA256).Hash.ToLowerInvariant() }
+	$EditorActionLimit = 4
+	if ($SplitRecipe) {
+		Assert-PackageCompileResources $script:PackageCompileResources $false
+		$EditorActionLimit = $script:PackageCompileResources.effectiveActionLimit
+	}
+	$ArgumentText = '-NoProfile -NonInteractive -File "{0}" -Target AethelnOnlineEditor -Platform Win64 -ActionLimit {5} -EngineRoot "{1}" -TargetRoot "{2}" -LinuxToolchainRoot "{3}" -EvidenceRoot "{4}"' -f $Wrapper, $ResolvedEngine, $ProjectRoot, $ResolvedToolchain, $EvidenceRoot, $EditorActionLimit
 	$Result = $null
 	$Valid = $false
 	try {
+		if ($SplitRecipe) { $EditorBuildInputs = Get-PackageBuildInputProof }
 		$Child = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $ArgumentText -WorkingDirectory $ProjectRoot -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $EvidenceRoot 'wrapper-console.log') -RedirectStandardError (Join-Path $EvidenceRoot 'wrapper-console-error.log')
 		# Reading the handle keeps ExitCode available after the child exits.
 		$null = $Child.Handle
@@ -212,6 +232,10 @@ function Invoke-HostEditorModulesBuild {
 	# UBT exit 5 (-NoEngineChanges): the build would rewrite an existing engine file.
 	if ($Result.nativeExitCode -eq 5) { throw 'host_editor_engine_changes: the in-phase project editor build failed because it would rewrite existing engine files; the engine needs an authorized build and a new attestation.' }
 	if ($Result.nativeExitCode -ne 0) { throw 'host_editor_build_failed: the in-phase project editor build failed.' }
+	if ($SplitRecipe) {
+		if ((Get-FileHash -LiteralPath $Wrapper -Algorithm SHA256).Hash.ToLowerInvariant() -cne $WrapperHash) { Stop-PackageRecipe 'source_changed' }
+		$script:PackageEditorInputProof = [ordered]@{ buildInputs = $EditorBuildInputs; wrapperSha256 = $WrapperHash; nativeCaptureSha256 = (Get-FileHash -LiteralPath $ResultFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+	}
 }
 function Assert-PackagedExecutable([string] $Label, [string] $Root, [string[]] $Names) {
 	$Match = @(Get-ChildItem -LiteralPath $Root -Recurse -File | Where-Object { $Names -contains $_.Name })
@@ -846,10 +870,17 @@ function Read-StageRecord([string] $Root, [string] $ExpectedStage) {
 	foreach ($Property in @('schemaVersion', 'stage', 'sourceRevision', 'configuration', 'map')) {
 		if ($null -eq $Record.PSObject.Properties[$Property]) { throw "Stage record '$RecordPath' is missing required property '$Property'." }
 	}
-	if ([int] $Record.schemaVersion -ne 1) { throw "Stage record '$RecordPath' has unsupported schema version '$($Record.schemaVersion)'." }
+	$ExpectedVersion = if ($PackageRecipe -ceq 'Stock') { 1 } else { 2 }
+	if ([int] $Record.schemaVersion -ne $ExpectedVersion) { Stop-PackageRecipe 'mixed_stages' }
 	if ([string] $Record.stage -ne $ExpectedStage.ToLowerInvariant()) { throw "Stage record '$RecordPath' records stage '$($Record.stage)' instead of '$($ExpectedStage.ToLowerInvariant())'." }
 	if (-not ([string] $Record.sourceRevision).Equals($SourceRevision, [StringComparison]::OrdinalIgnoreCase)) { throw "Stage record '$RecordPath' was produced from source revision '$($Record.sourceRevision)', not the requested '$SourceRevision'." }
 	if ([string] $Record.configuration -ne $Configuration -or [string] $Record.map -ne $Map) { throw "Stage record '$RecordPath' was produced with a different configuration or map than requested." }
+	if ($ExpectedVersion -eq 2) {
+		if ($null -eq $Record.PSObject.Properties['packageRecipeProof']) { Stop-PackageRecipe 'proof_missing' }
+		$Proof = $Record.packageRecipeProof
+		Assert-PackageCleanPhaseProof $Proof $ExpectedStage.ToLowerInvariant() $SourceRevision $Proof.hostProof.baseAttestationSha256 $Proof.hostProof.supplementSha256
+		if (($Proof.runIdentity | ConvertTo-Json -Compress) -cne ($script:PackageRunIdentity | ConvertTo-Json -Compress)) { Stop-PackageRecipe 'identity_invalid' }
+	}
 	return $Record
 }
 function Resolve-RecordDirectory([string] $Root, [string] $Relative, [string] $Label) {
@@ -879,6 +910,17 @@ function Get-CookedRegistryReceipt([string] $Kind) {
 # Release build number (issue #226): a Provenance-stage input only, checked before
 # any path, repository, or output work so a rejected value leaves nothing behind.
 $ProvenanceBuildNumberArguments = @{}
+$SplitRecipe = $PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms'
+if ($SplitRecipe) {
+	if ($Stage -cnotin @('Client', 'Server', 'Provenance') -or $Configuration -cne 'Development') { Stop-PackageRecipe 'selection_invalid' }
+	if ($Stage -cne 'Provenance') { $null = Get-PackageBuildInputProof }
+	if ($Stage -ceq 'Provenance' -and $PSBoundParameters.ContainsKey('PackageActionLimit')) { Stop-PackageRecipe 'selection_invalid' }
+	$script:PackageRunIdentity = ConvertFrom-PackageProofJson $PackageRunIdentityJson 4096
+	Assert-PackageProofFields $script:PackageRunIdentity @('repository', 'runId', 'runAttempt', 'runnerName')
+	$script:PackageDeadline = ConvertFrom-PackageProofTimestamp $PackageDeadlineUtc
+	if ($script:PackageDeadline -le [DateTime]::UtcNow -or ($script:PackageDeadline - [DateTime]::UtcNow).TotalMinutes -gt $(if ($Stage -ceq 'Provenance') { 10 } else { 30 })) { Stop-PackageRecipe 'deadline_invalid' }
+	if ($Stage -cne 'Provenance' -and ($HostToolsBoundary -cne 'Prebuilt' -or [string]::IsNullOrWhiteSpace($HostToolsAttestationSha256) -or [string]::IsNullOrWhiteSpace($HostProgramSupplementPath) -or [string]::IsNullOrWhiteSpace($HostProgramSupplementSha256))) { Stop-PackageRecipe 'proof_missing' }
+} elseif ($PSBoundParameters.ContainsKey('PackageActionLimit') -or -not [string]::IsNullOrWhiteSpace($HostProgramSupplementPath) -or -not [string]::IsNullOrWhiteSpace($HostProgramSupplementSha256) -or -not [string]::IsNullOrWhiteSpace($PackageRunIdentityJson) -or -not [string]::IsNullOrWhiteSpace($PackageDeadlineUtc)) { Stop-PackageRecipe 'selection_invalid' }
 if ($PSBoundParameters.ContainsKey('BuildNumber')) {
 	if ($Stage -ne 'Provenance') { throw "build_number_stage_invalid: -BuildNumber is only accepted with -Stage Provenance, not '$Stage'." }
 	if ($BuildNumber -cnotmatch '^[1-9][0-9]{0,9}\z') { throw 'build_number_invalid: -BuildNumber must be a positive integer of at most ten digits without a leading zero.' }
@@ -907,12 +949,36 @@ $DerivedDataCacheArguments = @{ DerivedDataCachePath = $DerivedDataCachePath; Ca
 # before any UAT process starts -- still finalizes bounded timing evidence.
 try {
 	Invoke-TimedStep 'evidence-identity-resolution' { $script:EvidenceIdentity = Resolve-EvidenceIdentity @EvidenceIdentityArguments }
+	if ($SplitRecipe -and $Stage -cne 'Provenance') {
+		# Structural/supplement proof precedes even the in-phase editor build.
+		$BasePath = Assert-SafeExternalPath 'HostToolsAttestationPath' $HostToolsAttestationPath
+		$SupplementPath = Assert-SafeExternalPath 'HostProgramSupplementPath' $HostProgramSupplementPath
+		$script:PackageBase = Read-HostToolsAttestation $BasePath $HostToolsAttestationSha256
+		$script:PackageSupplement = Read-PackageProgramSupplement $SupplementPath $HostProgramSupplementSha256 $script:PackageBase $ResolvedEngine $ProjectRoot
+		$RequestedLimit = if ($PSBoundParameters.ContainsKey('PackageActionLimit')) { $PackageActionLimit } else { $null }
+		$script:PackageCompileResources = New-PackageCompileResources (Get-PackageResourceSample @{ engine = $ResolvedEngine; project = $ProjectRoot; archive = $ResolvedArchive; logs = $ResolvedLogs }) $RequestedLimit
+	}
 	if ($Stage -eq 'AttestHostTools') {
 		Invoke-TimedStep 'host-tools-attestation-write' { $script:HostToolsState = Write-HostToolsAttestation @HostToolsArguments }
 		Write-Output "Host-tools attestation for canonical engine revision '$script:CanonicalEngineRevision' written to '$HostToolsAttestationPath'."
 		return
 	}
 	Invoke-TimedStep 'host-tools-boundary' { $script:HostToolsState = Resolve-HostToolsBoundary @HostToolsArguments }
+	if ($SplitRecipe -and $Stage -cne 'Provenance') {
+		$script:HostToolsState['programSupplementSha256'] = $script:PackageSupplement.sha256
+		$script:HostToolsState['compileResources'] = $script:PackageCompileResources
+		$script:HostToolsState['editorInputProof'] = $script:PackageEditorInputProof
+	}
+	$AssertPackageStable = {
+		Assert-CleanRepository $ProjectRoot
+		Assert-CanonicalCleanEngine
+		if ((Get-FileHash -LiteralPath $HostToolsAttestationPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $script:PackageBase.sha256 -or (Get-FileHash -LiteralPath $script:PackageSupplement.path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $script:PackageSupplement.sha256) { Stop-PackageRecipe 'host_changed' }
+		Assert-HostToolsAttestation $script:PackageBase
+		Assert-PackageSourcePins $script:PackageSupplement.record.recipe.sourcePins @(Get-PackageRecipeReviewedPins) $ResolvedEngine $ProjectRoot
+		Assert-PackageSourcePins $script:PackageSupplement.record.provisioning.targetRulePins @(Get-PackageTargetRulePins $ProjectRoot) $ResolvedEngine $ProjectRoot
+		Assert-PackageProgramFiles $script:PackageSupplement.record.files $script:PackageSupplement.closure $script:PackageBase.entries $ResolvedEngine
+		Assert-PackageProgramManifests $script:PackageSupplement.record.programs $script:PackageSupplement.closure $ResolvedEngine
+	}
 	Invoke-TimedStep 'derived-data-cache-resolution' { $script:CacheState = Resolve-DerivedDataCache @DerivedDataCacheArguments }
 	$ResolvedClientStage = $null
 	$ResolvedServerStage = $null
@@ -939,6 +1005,7 @@ try {
 	if ($Stage -ne 'Provenance') { Invoke-TimedStep 'target-composition-gate' { & $TargetGate -ProjectRoot $ProjectRoot } }
 
 	$CommonArguments = @('BuildCookRun', "-project=$ResolvedProject", '-nop4', '-utf8output', '-unattended', '-build', '-cook', '-clean', '-stage', '-pak', '-archive', "-map=$Map")
+	if ($SplitRecipe) { $CommonArguments = @($CommonArguments | ForEach-Object { if ($_ -ceq '-build') { '-skipbuild' } else { $_ } }) }
 	if ($script:HostToolsState.mode -eq 'prebuilt') {
 		# Pinned UE 5.8.1 maps -nocompileeditor to SkipBuildEditor: UAT omits
 		# the host editor/engine targets from BuildProjectCommand while the
@@ -982,16 +1049,32 @@ try {
 		[Environment]::SetEnvironmentVariable('LINUX_MULTIARCH_ROOT', $ResolvedToolchain, 'Process')
 		if ($null -ne $script:CacheState.appliedPath) { [Environment]::SetEnvironmentVariable('UE-LocalDataCachePath', $script:CacheState.appliedPath, 'Process') }
 		if ($Stage -in @('All', 'Client')) {
+			if ($SplitRecipe) {
+				Assert-PackageRecipeArguments $ClientArguments 'client' $Configuration
+				Invoke-TimedStep 'client-target-clean-compile' { $script:PackageProof = New-PackageCleanPhase 'Client' $ResolvedEngine $ProjectRoot $ResolvedArchive $SourceRevision $script:PackageRunIdentity $script:PackageDeadline $script:PackageBase $script:PackageSupplement $AssertPackageStable $script:PackageCompileResources }
+			}
 			Invoke-TimedStep 'client-uat-build-cook-package' { Invoke-UatBuild -Label 'Windows x64 client build/cook/package' -Arguments $ClientArguments -LogPath (Join-Path $ResolvedLogs 'client-uat.log') -AutomationToolLogDirectory $ClientAutomationToolLogs }
+			if ($SplitRecipe) { & $AssertPackageStable }
 			Invoke-TimedStep 'client-output-validation' {
 				Assert-PackagedExecutable -Label 'Windows client packaging' -Root $ClientArchive -Names @('AethelnOnlineClient.exe', 'AethelnOnline.exe')
-				$script:SelectedCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Compiler' -ExecutableName 'cl.exe'
-				$script:SelectedResourceCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Resource Compiler' -ExecutableName 'rc.exe'
+				if ($SplitRecipe) {
+					$CompileLog = Join-Path $ResolvedArchive 'Proof/compile/build.log'
+					$script:SelectedCompiler = Resolve-PackageCompileTool $CompileLog 'Compiler' 'cl.exe'
+					$script:SelectedResourceCompiler = Resolve-PackageCompileTool $CompileLog 'Resource Compiler' 'rc.exe'
+				} else {
+					$script:SelectedCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Compiler' -ExecutableName 'cl.exe'
+					$script:SelectedResourceCompiler = Resolve-UbtSelectedTool -LogDirectory $ClientAutomationToolLogs -Label 'Resource Compiler' -ExecutableName 'rc.exe'
+				}
 				$script:ClientRegistryReceipt = Get-CookedRegistryReceipt 'client'
 			}
 		}
 		if ($Stage -in @('All', 'Server')) {
+			if ($SplitRecipe) {
+				Assert-PackageRecipeArguments $ServerArguments 'server' $Configuration
+				Invoke-TimedStep 'server-target-clean-compile' { $script:PackageProof = New-PackageCleanPhase 'Server' $ResolvedEngine $ProjectRoot $ResolvedArchive $SourceRevision $script:PackageRunIdentity $script:PackageDeadline $script:PackageBase $script:PackageSupplement $AssertPackageStable $script:PackageCompileResources }
+			}
 			Invoke-TimedStep 'server-uat-build-cook-package' { Invoke-UatBuild -Label 'Linux x86-64 dedicated server build/cook/package' -Arguments $ServerArguments -LogPath (Join-Path $ResolvedLogs 'server-uat.log') -AutomationToolLogDirectory $ServerAutomationToolLogs }
+			if ($SplitRecipe) { & $AssertPackageStable }
 			Invoke-TimedStep 'server-output-validation' {
 				Assert-PackagedExecutable -Label 'Linux server packaging' -Root $ServerArchive -Names @('AethelnOnlineServer', 'AethelnOnlineServer-Linux-Shipping')
 				$script:ServerRegistryReceipt = Get-CookedRegistryReceipt 'server'
@@ -1004,11 +1087,19 @@ try {
 		[Environment]::SetEnvironmentVariable('LINUX_MULTIARCH_ROOT', $PreviousToolchain, 'Process')
 		[Environment]::SetEnvironmentVariable('UE-LocalDataCachePath', $PreviousLocalDdc, 'Process')
 	}
+	if ($SplitRecipe -and $Stage -cne 'Provenance') {
+		Assert-PackageTargetProductsCurrent $script:PackageProof $ResolvedEngine $ProjectRoot
+		foreach ($Name in @('discovery', 'clean', 'compile')) {
+			$Native = if ($Name -ceq 'discovery') { $script:PackageProof.clean.discovery.nativeStep } else { $script:PackageProof.$Name }
+			[void] $script:TimingSteps.Add([ordered]@{ name = $Stage.ToLowerInvariant() + '-target-' + $Name; startedUtc = $Native.startedUtc; durationSeconds = [Math]::Round(((ConvertFrom-PackageProofTimestamp $Native.finishedUtc) - (ConvertFrom-PackageProofTimestamp $Native.startedUtc)).TotalSeconds, 3); status = 'passed' })
+		}
+		$script:PackageProof | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'Proof/phase-proof.json') -Encoding UTF8
+	}
 
 	switch ($Stage) {
 		'Client' {
-			[ordered]@{
-				schemaVersion = 1
+			$PhaseRecord = [ordered]@{
+				schemaVersion = $(if ($SplitRecipe) { 2 } else { 1 })
 				stage = 'client'
 				sourceRevision = $SourceRevision
 				configuration = $Configuration
@@ -1017,12 +1108,14 @@ try {
 				compilerPath = $SelectedCompiler
 				resourceCompilerPath = $SelectedResourceCompiler
 				cookedRegistry = $ClientRegistryReceipt
-			} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-client.json') -Encoding UTF8
+			}
+			if ($SplitRecipe) { $PhaseRecord['packageRecipeProof'] = $script:PackageProof }
+			$PhaseRecord | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-client.json') -Encoding UTF8
 			Write-Output "Client packaging stage completed under '$ResolvedArchive'."
 		}
 		'Server' {
-			[ordered]@{
-				schemaVersion = 1
+			$PhaseRecord = [ordered]@{
+				schemaVersion = $(if ($SplitRecipe) { 2 } else { 1 })
 				stage = 'server'
 				sourceRevision = $SourceRevision
 				configuration = $Configuration
@@ -1033,7 +1126,9 @@ try {
 				dependencyReportDirectory = 'RegistryDumps/server-dependency-registry-dump'
 				cookedInventoryDirectory = 'RegistryDumps/server-cooked-inventory-dump'
 				cookedRegistry = $ServerRegistryReceipt
-			} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-server.json') -Encoding UTF8
+			}
+			if ($SplitRecipe) { $PhaseRecord['packageRecipeProof'] = $script:PackageProof }
+			$PhaseRecord | ConvertTo-Json -Depth 32 | Set-Content -LiteralPath (Join-Path $ResolvedArchive 'phase-server.json') -Encoding UTF8
 			Write-Output "Server packaging stage completed under '$ResolvedArchive'."
 		}
 		'Provenance' {
@@ -1050,6 +1145,9 @@ try {
 			Invoke-TimedStep 'server-cook-reference-gate' { & $CookGate -DependencyReportDirectory $DependencyReportDirectory -CookedInventoryDirectory $CookedInventoryDirectory }
 			$UatArgumentsJson = [ordered]@{ client = @($ClientRecord.clientArguments); server = @($ServerRecord.serverArguments); dependencyRegistryDump = @($ServerRecord.dependencyRegistryDumpArguments); cookedInventoryDump = @($ServerRecord.cookedInventoryDumpArguments) } | ConvertTo-Json -Compress
 			$CookedRegistryReceiptsJson = [ordered]@{ client = $ClientRecord.cookedRegistry; server = $ServerRecord.cookedRegistry } | ConvertTo-Json -Depth 4 -Compress
+			if ($SplitRecipe) {
+				$ProvenanceBuildNumberArguments['PackageRecipeJson'] = [ordered]@{ schemaVersion = 1; id = 'clean-targets-prebuilt-programs-v1'; baseAttestationSha256 = $ClientRecord.packageRecipeProof.hostProof.baseAttestationSha256; supplementSha256 = $ClientRecord.packageRecipeProof.hostProof.supplementSha256; client = $ClientRecord.packageRecipeProof; server = $ServerRecord.packageRecipeProof } | ConvertTo-Json -Depth 32 -Compress
+			}
 			Invoke-TimedStep 'provenance-write' { & (Join-Path $PSScriptRoot 'Write-BuildProvenance.ps1') -OutputPath (Join-Path $ResolvedArchive 'build-provenance.json') -ProjectPath $ResolvedProject -EngineRoot $ResolvedEngine -LinuxToolchainRoot $ResolvedToolchain -SourceRevision $SourceRevision -BuildConfiguration $Configuration -ClientArchivePath $ClientArchive -ServerArchivePath $ServerArchive -CompilerPath ([string] $ClientRecord.compilerPath) -ResourceCompilerPath ([string] $ClientRecord.resourceCompilerPath) -UatArgumentsJson $UatArgumentsJson -CookedRegistryReceiptsJson $CookedRegistryReceiptsJson @ProvenanceBuildNumberArguments }
 			Write-Output "Provenance validation stage completed under '$ResolvedArchive'."
 		}

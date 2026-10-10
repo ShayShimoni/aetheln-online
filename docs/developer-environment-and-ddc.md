@@ -456,6 +456,69 @@ exit status, and failures independently as described in
 Keep the raw receipt and logs local; publish only redacted summaries and
 references that omit machine-specific paths and sensitive content.
 
+### Additive programme supplement for the candidate split recipe
+
+The split recipe requires a fresh external JSON record with schema identity
+`aetheln.host-program-supplement/v1`. It does not edit or replace the accepted
+schema-2 Editor/SCW record. Its closed top-level fields are `schemaId`,
+`schemaVersion`, `createdUtc`, `engineRevision`, `engineBuildVersionSha256`,
+`baseAttestation`, `recipe`, `provisioning`, `programs` and `files`; the shared
+validator is `scripts/build/PackagingRecipeProof.ps1`.
+
+The base binding is the accepted 390169-byte, 1322-file record, SHA-256
+`a457da4e14808b85d5cc1439a920abfce114ec961e313c2684fdd57ba9385d95`.
+The 2026-10-09 recovery retained its original schema-2 provisioning origin,
+verified all 1322 physical files, built the current Editor modules with an
+action cap of 3, and passed all 32 movement tests without warnings. The
+configured record path remains unchanged. The former 390227-byte record,
+`4aa4328043d9f65e57a2c5b160d3fde93389f4103e69b179293af93635f25377`,
+is retained in the recovery archive and cannot authorize a current split
+recipe. This adoption does not establish programme provisioning or packaging
+acceptance.
+Programme receipt payloads retain original bytes and origins: UnrealPak Win64
+Development/x64 from the provisioning project's `Binaries/Win64/UnrealPak.target`,
+and BootstrapPackagedGame Win64 Shipping/x64 from the engine's corresponding
+receipt. A fresh package checkout need not contain the UnrealPak programme
+receipt; its descriptor and target rules must match the sealed context.
+Receipt-declared products/runtime dependencies derive the complete execution
+closure. Unknown types, aliases, extra/missing UnrealPak manifests, conflicting
+base overlaps, unpinned source or changed physical files fail closed.
+
+`provisioning.nativeSteps` requires successful captured programme clean/build
+steps, sealed capture/log bytes and verified supervisor cleanup. Existing binary
+inventories and this implementation's portable fixtures cannot establish those
+steps. Provisioning and record creation/adoption require separate operator
+authority and actual evidence; the packaging phase never provisions programmes
+implicitly. The record limits remain 8 MiB JSON, 16 MiB receipt, 8192 products,
+4 GiB per file and 128 GiB aggregate. Explicit path/hash selection has no rebuild
+fallback. IasTool, file-server, crash-reporter, new ProgramTargets/PreBuildTargets,
+Zen-store or platform-agenda branches require a reviewed extension.
+
+Every programme compile capture must contain exactly one canonical
+`-MaxParallelActions=N`, with N from 1 through 4, matching the declared step.
+The operator must select an admissible cap under the existing Issue #167
+resource policy; the supplement validator verifies the sealed actual command,
+not a retrospective capped claim. Canonical Clean/Build executable source pins
+stay unchanged. Native Clean does not require a compile action cap.
+This fixed single-program recipe rejects caller `-Target`/`-TargetList`,
+mode-selection flags and the `--` end-of-options delimiter. Those entry points
+can expand nested arguments or prevent the declared cap from being applied.
+Legitimate project context and ordinary compiler flags remain permitted.
+The actual provisioning child must also prove that `UBT_EXTRA_ARGS` was absent
+or empty before canonical invocation: each declared native step and sealed
+capture requires boolean `buildInputs.ubtExtraArgsAbsent = true`. Missing,
+false, nonboolean or disagreeing facts fail closed. An outer argv cap alone
+does not prove an effective cap because pinned UBT appends this inherited
+input before parsing. The operator must retain actual guarded child evidence;
+inventing a root-only assertion is insufficient. Packaging guards only this
+named Process input and never prints, parses or clears it or changes global
+User/Machine configuration.
+
+See [the split recipe](packaged-builds.md#explicit-split-target-recipe) and the
+candidate TA-014 amendment for typed target clean/compile proof and unchanged
+phase caps. Workflow activation and the #167 semantic acceptance producer remain
+separate from this proof implementation.
+
 ### Host-tools attestation record
 
 Provenance of the host binaries is proven by an external, local attestation

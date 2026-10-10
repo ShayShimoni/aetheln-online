@@ -36,7 +36,7 @@ $script:AcceptanceReceiptUnsupportedCheckIds = @(
 	'content-reference-validation'
 )
 $script:AcceptancePortableCheckNames = @(
-	'formatting-policy','markdown-links','source-control-policy','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests','host-tool-provisioning-tests','cooked-inventory-capture-tests','content-cook-evidence-tests',
+	'formatting-policy','markdown-links','source-control-policy','combat-design-registry','combat-design-registry-tests','combat-design-generation-tests','combat-design-generated-drift','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests','host-tool-provisioning-tests','cooked-inventory-capture-tests','content-cook-evidence-tests',
 	'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 	'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
 	'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',

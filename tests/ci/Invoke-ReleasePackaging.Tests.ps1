@@ -270,6 +270,9 @@ try {
 			}
 			release = $Release
 		}
+		if ($Fixture.ContainsKey('RecipeCase')) {
+			$Provenance['build'] = if ($Fixture.RecipeCase -ceq 'skip-without-proof') { [ordered]@{ uatInvocations = [ordered]@{ client = @{ arguments = @('BuildCookRun', '-skipbuild') }; server = @{ arguments = @('BuildCookRun') } } } } else { [ordered]@{ packageRecipe = [ordered]@{} } }
+		}
 		Write-Utf8 $ProvenancePath ($Provenance | ConvertTo-Json -Depth 8)
 		$Manifest = [ordered]@{
 			schemaVersion = 1; repository = 'ShayShimoni/aetheln-online'; sourceRevision = $Revision; runId = '4242'; runAttempt = '1'; producingPhase = 'provenance'
@@ -337,6 +340,8 @@ try {
 		@{ Name = 'smoke-not-passed'; Reason = 'smoke_not_passed'; Customize = { param($F) $F.SmokeEvents = @('process_started', 'server_listening') } },
 		@{ Name = 'provenance-digest'; Reason = 'provenance_digest_mismatch'; Customize = { param($F) $F.Mutate = { param($G) Add-Content -LiteralPath $G.ProvenancePath -Value ' ' } } },
 		@{ Name = 'provenance-revision'; Reason = 'provenance_revision_mismatch'; Customize = { param($F) $F.ProvenanceRevision = ('f' * 40) } },
+		@{ Name = 'recipe-skip-unproved'; Reason = 'provenance_recipe_invalid'; Customize = { param($F) $F['RecipeCase'] = 'skip-without-proof' } },
+		@{ Name = 'recipe-block-invalid'; Reason = 'provenance_recipe_invalid'; Customize = { param($F) $F['RecipeCase'] = 'invalid-block' } },
 		@{ Name = 'build-number'; Reason = 'provenance_build_number_mismatch'; Customize = { param($F) $F.Environment['GITHUB_RUN_NUMBER'] = '8' } },
 		@{ Name = 'provenance-version'; Reason = 'project_version_branch_mismatch'; Customize = { param($F) $F.ProjectVersion = '1.0.0-alpha.2' } },
 		@{ Name = 'manifest-revision'; Reason = 'provenance_manifest_invalid'; Customize = { param($F) $F.Environment['GITHUB_SHA'] = ('e' * 40) } },

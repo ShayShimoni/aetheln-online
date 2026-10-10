@@ -345,6 +345,11 @@ function Get-PackageViolation {
 
 	# Today's build-provenance.json (schemaVersion 2) records source.revision; the packaging stage records use sourceRevision.
 	$Provenance = Read-JsonFile $ProvenancePath 'provenance file'
+	. (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/PackagingRecipeProof.ps1')
+	try {
+		Assert-PackageRecipeProvenance $Provenance
+		if ($null -ne (Get-PackageProofMember (Get-PackageProofMember $Provenance 'build') 'packageRecipe')) { Assert-PackageRecipePayloads $Provenance (Split-Path -Parent $Provenance.artifacts.clientArchive) (Split-Path -Parent $Provenance.artifacts.serverArchive) }
+	} catch { Add-Violation -Code 'release_package_recipe_invalid' -Subject 'provenance' -Detail 'split recipe proof failed validation' }
 	$Recorded = Get-OptionalText $Provenance 'sourceRevision'
 	$Source = $Provenance.PSObject.Properties['source']
 	if (-not $Recorded -and $Source -and $Source.Value) { $Recorded = Get-OptionalText $Source.Value 'revision' }
