@@ -155,8 +155,24 @@ either faction.
 ### Graefell - The Undervault
 
 Graefell is carved into the canyon where the first Kell awakened before the
-Duskbreak. The catastrophe later turned the canyon to glass. Dying light is
-preserved as memory in its geode archives.
+Duskbreak. The Star's dreaming realized living quartz and amethyst there;
+Graefell remembers that first awakening without claiming that Kell preceded
+the other peoples. The catastrophe later fused the surrounding canyon into
+inert glass. The contrast defines the Undervault: living layered bodies still
+grow and change among surfaces fixed by disaster.
+
+Its architecture follows curved mineral strata, with crafted supports joining
+older surfaces to newer work. Maintained seams remain visible as records of
+care. Geode archives preserve dying light as memory through learned craft;
+they are constructed vessels and institutions, not harvested Kell bodies.
+Keepers from every people can study and maintain them.
+
+Graefell's cultural dispute is whether keeping a memory creates a claim over
+its subject. Some archives treat custody as a duty that ends when the witness
+asks for release. Others consider any surrendered record part of a heritage
+too valuable for one person to withdraw. The Duskbreak's losses make both
+positions urgent, and Vothram's secret preservation and Corvath's living glass
+make the argument impossible to keep abstract.
 
 Revised role:
 
@@ -164,7 +180,7 @@ Revised role:
 - Crafting and memory-archive center.
 - Possible Hundred Witnesses stronghold, but not automatically race-locked.
 - Source of archive dungeons and disputes over whether memory can be privately
-  held.
+  held, who must care for it, and who may consent to its release.
 
 ### Selaen - The Drift
 

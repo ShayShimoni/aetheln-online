@@ -117,92 +117,154 @@ region and culture independently from faction or class.
 
 ## Kell
 
+### Approved Design Record
+
+On 2026-10-10 the user selected
+[male Kell image 57](art-style-references/57-quartz-balanced-hands-feet.png) and
+[female Kell image 59](art-style-references/59-quartz-amethyst-female-refined.png)
+as the new Kell. These are the canonical visual baseline for the race. Use the
+[Art Style and Generation Guide](art-style-guide.md) for their polished 3D
+rendering finish.
+
+This revision replaces the former living-skin body with its localized mineral
+frame, crown, and shoulder mantle. It is a revision of the race's design and
+history, not a transformation that every Kell underwent during the Duskbreak.
+Earlier studies, prompts, and reviews retain their historical meaning but no
+longer define Kell anatomy. The selected front concepts approve the design
+direction; the production validation gate below still applies.
+
 ### Identity and Anatomy
 
-Kell are clearly nonhuman organic-mineral people. Living skin covers most of
-the body while an integrated mineral frame emerges at the skull, selected
-facial planes, upper torso, shoulders, and joints.
+Kell are living crystalline people. Pale ivory quartz grows in overlapping,
+curved anatomical plates over a deeper network of smoky amethyst crystal.
+Both layers are living parts of the body. The darker interior connects the
+neck, torso, limbs, and joints, allowing the layered form to articulate. Kell
+are born, grow, age, and die; their mineral appearance does not make them
+manufactured constructs or animated deposits of ore.
 
 Required Kell anatomy includes:
 
-- a readable humanoid face built from distinct faceted planes;
-- articulated faceted-lens eyes rather than human eyes;
-- a low faceted nasal bridge ending in narrow breathing apertures;
-- an expressive mouth;
-- recessed mineral-lined auditory openings instead of external ears;
-- five-digit hands with shared weapon-grip geometry and mineral joint caps;
-- mineral crown ridges integrated into the skull; and
-- a segmented mineral mantle supporting the upper spine and shoulders.
+- an expressive face with sculpted brow, cheek, and jaw planes, a broad low
+  flat nose, and a defined mouth;
+- glowing violet eyes with readable eye contours;
+- long external pointed ears with dark crystal accents;
+- paired swept quartz horns rooted above the temples, curving outward and
+  back, with dark amethyst insets;
+- amethyst accents at the forehead, temples, cheeks, and inner ears;
+- flowing quartz plates across the torso and limbs, with darker crystal bands
+  visible between them;
+- articulated clawed hands with an opposable thumb and usable weapon grips;
+  and
+- grounded feet with a heel and three articulated forward toes ending in
+  quartz claws.
 
-Kell do not grow hair. Crown shape, mineral family, finish, wear, engraving,
-and inlay fill the biological head-customization role. Fitted crown and mantle
-adornments use the shared cosmetic or equipment layer.
+Kell are hairless. Their head remains expressive and compact enough for fitted
+helmets; it has neither an animal muzzle nor a separate oversized crown. The
+neck is substantial but allows a readable collar and shoulder line. Hands and
+feet stay balanced with the body. Horns, ears, plate contours, and claws remain
+inside the shared presentation bounds and do not expand combat collision.
 
-The crown is sensitive to physical resonance, and the mantle braces the Kell
-upper body. These biological functions grant no detection, protection, armor,
-or other gameplay benefit. Crown, mantle, and joint structures are never
-included in authoritative targeting beyond the shared combat collision.
+The approved baseline uses pale ivory outer quartz and dark smoky violet
+amethyst beneath it. Sparse mineral veins and controlled facets enrich broad,
+smooth forms. The interior has restrained local radiance, and the eyes glow
+more clearly. These are ordinary Kell anatomy, not Ember attunement, a power
+resource, or a combat-state signal. Alternate mineral families and glow hues
+are not established by the earlier exploration; their availability remains TBD.
 
-Kell skin spans living clay, ash, ochre, and slate tones. Their exposed mineral
-frames support broad non-glowing natural families such as quartz, smoky glass,
-jade, amber, ironstone, and amethyst. Innate Kell glow is not part of the
-baseline design.
+Living plates are biological surfaces, not equipped armor. Horns, claws, and
+crystal light grant no racial damage, defense, detection, healing, or other
+gameplay advantage. Exact hand digit topology and grip deformation remain
+production TBDs to resolve from the selected concepts and shared weapon-grip
+tests, rather than carrying forward the former five-digit requirement.
 
 ### Sex, Age, and Variation
 
-Male Kell use outward buttressed crown lines and tiered mantle geometry.
-Female Kell use inward nested crown lines and overlapping mantle strata.
-These sex-linked crown and mantle anchor families do not cross, while
-individual presets provide substantial variation within each family. Both use
-the same visual scale, limb reach, combat envelope, and broad body-preset,
-age-presentation, and voice ranges.
+The selected male has a broader chest, shoulders, and jaw with moderately
+full musculature. The selected female has less muscle bulk, a softer brow and
+jaw, and an athletic feminine torso and waist-to-hip transition. Both share
+the same horn family, external ears, layered construction, glowing eyes, and
+clawed extremities. Sex differences do not require separate incompatible horn
+or plate systems. Each sex retains broad body-preset, age, and voice ranges
+within the same visual scale, limb reach, and combat envelope.
 
-Kell face presets may vary facet arrangement, brow and jaw planes, lens shape,
-mouth shape, and breathing-aperture placement while retaining every required
-Kell facial anchor.
+Face presets may vary the brow, cheeks, jaw, mouth, and low nasal planes while
+retaining the Kell anchors. Horn form, plate pattern, surface tones, finish,
+and wear provide variation without replacing the living layered structure.
 
 Kell are very long-lived and may span several Aurin generations, but they are
-not immortal. Exact lifespan years remain TBD. Age appears through added
-mineral strata, inclusions, softened polish, fine chips, repair, and slow
-organic aging rather than ever-increasing body size.
+not immortal. Exact lifespan years remain TBD. Growth and ordinary healing
+renew living crystal; older surfaces carry inclusions, softened edges, fine
+chips, and repair seams. Aging does not continually enlarge the body, horns,
+or combat silhouette. Mineral renewal is a description of life over time,
+not an accelerated combat-regeneration ability.
 
-Crown and mantle growth follows a balanced underlying structure with natural
-asymmetry from age, wear, damage, and repair. Kell may voluntarily engrave and
-inlay exposed mineral anatomy. These modifications are cosmetic records and
-art, never sources of power.
+Underlying anatomy remains balanced, with natural asymmetry from life and
+repair. Voluntary surface engraving and inlay may record personal history;
+they are cosmetic practices, not compulsory marks or sources of power.
 
 ### Visual Language
 
-Kell should inspire awe and unease while remaining emotionally expressive.
-Their beauty is architectural and strange rather than conventionally human.
+Kell should feel like living geology shaped into a graceful, powerful body.
+Sweeping plate curves and dark crystalline connections distinguish their
+silhouette while keeping face, gestures, and emotion readable.
 
-- **Materials:** fine etched dark metal, suspended memory glass,
-  tension-woven cloth, and precision inlay.
-- **Motifs:** nested facets and geological strata representing memories held
-  within memories.
-- **Heritage palette:** graphite, smoked black, deep umber, muted metal, and
-  selective natural-mineral accents.
-- **Clothing silhouette:** angular cloth planes suspended from precision
-  fittings around the biological mantle.
+- **Materials:** satin quartz, deep amethyst, maintained dark metal, woven
+  cloth, crafted memory glass, and selective inlay.
+- **Motifs:** overlapping growth lines, joined fractures, and a visible seam
+  allowed to remain after repair.
+- **Heritage palette:** ivory, smoky violet, charcoal, deep umber, and restrained
+  warm-metal accents. Biological color does not indicate faction.
+- **Clothing silhouette:** fitted collars, articulated layers, and clean
+  shoulder shapes that follow the body without obscuring its construction.
 
-Kell craft emphasizes precision and remembrance rather than stock stonefolk
-bulk or natural armor.
+Armor remains separate wearable equipment, with accommodations for horns,
+ears, plates, hands, and feet. Legendary suits may frame the body with stronger
+shapes and controlled light while preserving fit and combat readability.
 
-### Culture, Names, and Motion
+### Origin, Renewal, and Memory
+
+The Waking Star dreamed the Kell as living crystal, separately from the Aurin
+and Vesh. The first Kell awakened among the quartz-bearing depths of the canyon
+that became Graefell, before the Duskbreak. No account establishes which people
+the Star dreamed first. Ordinary Kell life continues through generations;
+the race does not depend on fresh catastrophes to create its people.
+
+Kell experience continuity through changing material. A repaired surface can
+remain visibly different while the person is still whole. A long life therefore
+leaves a succession of joined layers rather than a perfectly preserved original
+form. Care, craft, and remembrance are intertwined in their heritage: keeping
+something alive requires tending it, and tending it may require accepting
+change.
 
 Kell cultures argue over whether every memory must be preserved or whether
-forgetting, privacy, and release are necessary for life.
+forgetting, privacy, and release are necessary for life. Some treat every seam
+as a debt to the past. Others deliberately leave a repair undecorated or refuse
+to name what caused it. Neither practice describes all Kell or determines a
+person's faction.
 
-Memory preservation is learned craft using tools and study. It is not a
-universal Kell ability, and other peoples may learn its techniques.
+Their bodies show growth and injury, not readable recordings of thoughts,
+ancestry, or other people's lives. Memory preservation remains learned craft
+using tools, vessels, and study, open to all peoples. A crafted archive is
+distinct from its keeper's living body. The Memory Nail heritage represents
+the deliberate act of marking what one chooses to carry forward; it does not
+make memories biological property or grant an innate power.
+
+The Duskbreak confronted Kell with crystal's opposite promise: entire places
+fixed into inert glass while their living histories were torn apart. Their
+continued life did not prove that their archives, families, or knowledge were
+safe. Graefell's arguments about ownership became arguments about care: who
+may preserve a memory, who must maintain it, and who may consent to its release?
+
+### Names and Motion
 
 Kell heritage names are resonant and weighty. Names such as Corvath and Vothram
 favor deep consonants and held internal rhythms without requiring one repeated
 suffix.
 
-Kell movement appears slow and monumental through posture, easing, weight
-transfer, and mantle follow-through. Startup, contact, recovery, root motion,
-and travel timing remain identical to the shared gameplay source.
+Kell movement has deliberate weight transfer and fluid articulation between
+overlapping forms. Posture and easing convey substance without making them
+rigid or slow to respond. Startup, contact, recovery, root motion, and travel
+timing remain identical to the shared gameplay source.
 
 Kell voices support broad pitch and character choices with subtle mineral
 resonance rather than one fixed vocal archetype.
@@ -210,8 +272,11 @@ resonance rather than one fixed vocal archetype.
 ### Corvath's Exception
 
 Corvath is a unique living-glass Kell created by the Duskbreak. His silhouette
-remains Kell, but his complete material state is not ordinary Kell biology, a
-heritable subtype, or an available player appearance.
+retains the Kell facial, horn, ear, and limb structure, but his whole body is
+living catastrophe glass rather than renewing quartz plates and amethyst
+connections. His creation and preservation of conscious dying people are
+exceptions, not ordinary Kell birth, mineral renewal, or memory craft. His
+complete material state is not a heritable subtype or a player appearance.
 
 Vothram forged the instruments used to cause the Duskbreak, confirming that
 Kell existed before the catastrophe. Graefell's first Kell awakening therefore
@@ -334,15 +399,15 @@ Common appearance categories are:
 - constrained visual-height preset;
 - age-presentation preset;
 - face preset;
-- skin tone;
+- skin tone (surface tone for Kell);
 - markings; and
 - voice.
 
 Race-specific categories are:
 
 - **Aurin:** hair style, hair color, and hair-dye treatment.
-- **Kell:** crown, mantle, mineral family, mineral finish, wear, engraving, and
-  inlay.
+- **Kell:** horn form, plate pattern, mineral tones, mineral finish, wear,
+  engraving, and inlay.
 - **Vesh:** hair, veil form, veil adornment, inner-light hue, and light pattern.
 
 Race-specific fields must not become nullable gameplay inputs scattered across
@@ -365,8 +430,9 @@ All people and sexes share:
   recovery timing; and
 - the same readable telegraph requirements.
 
-Kell crown and mantle bones and Vesh back-veil bones are auxiliary visual bones.
-They may drive secondary animation and visual-only attachment sockets, but
+Kell horn, ear, and plate attachments and any auxiliary visual bones, together
+with Vesh back-veil bones, serve presentation only. They may drive secondary
+animation and visual-only attachment sockets, but
 never collision, authoritative traces, the shared weapon-presentation sockets,
 reach, root motion, authored contact timing, or gameplay state.
 
@@ -385,16 +451,18 @@ remain TBD until the combat prototype validates the reference body.
 One equipment item has one gameplay identity, stat definition, and eligibility
 rule. Its visible fitting set uses race-and-sex-specific bases plus the morphs,
 feature accommodations, or additional visual variants needed for every
-approved body, height, crown, mantle, hair, and veil combination.
+approved body, height, horn, plate, hair, and veil combination.
 
 Each people defines stable visual attachment roots and protected fit envelopes
 for required anatomy. Exact measurements remain TBD with the reference rigs,
 but equipment may not intrude into those envelopes or move them to imply a
 different combat surface.
 
-- Helmets accommodate Aurin hair, Kell crowns, and Vesh hair without removing
-  biological anatomy.
-- Shoulder and chest pieces fit around Kell mantles.
+- Helmets accommodate Aurin hair, Kell horns and external ears, and Vesh hair
+  without removing biological anatomy.
+- Shoulder, chest, and collar pieces fit Kell plate contours and neck movement.
+- Gauntlets and boots accommodate Kell claws, thumb articulation, and
+  three-toed feet while preserving shared grips and foot placement.
 - Cloaks and back equipment split, channel, or mount around Vesh back-veils.
 - Biological structures never retract, disappear, or become armor to solve
   equipment fitting.
@@ -415,13 +483,17 @@ and female presentation may differ within the same rule.
 
 ### Visibility and Accessibility
 
-Vesh light and Kell mineral reflectivity are presentation-normalized. Exposure,
-distance LOD, and common combat-readability rules must prevent race from
+Vesh light, Kell crystal and eye light, and Kell mineral reflectivity are
+presentation-normalized. Exposure, distance LOD, and common combat-readability
+rules must prevent race from
 creating a visibility, targeting, tracking, or concealment advantage.
 
 All Vesh hues, patterns, emotional states, and LODs use one authored luminance
 envelope. Player choices cannot disable the biological light or exceed that
-envelope. Accessibility and graphics settings may change presentation only if
+envelope. Kell crystal and eye light likewise use a bounded authored luminance
+envelope; appearance choices cannot turn biological glow off or make it a
+spotlight. Exact values remain TBD. Accessibility and graphics settings may
+change presentation only if
 the result preserves equivalent identification and tracking opportunity across
 all peoples.
 
@@ -437,16 +509,18 @@ A playable-people concept is not approved for production until review includes:
 - shared-capsule, limb-reach, skeleton, and weapon-presentation-socket
   overlays;
 - the broad body-preset range inside the constrained height envelope;
-- extreme supported body, height, age, crown, mantle, hair, and veil
+- extreme supported body, height, age, horn, plate, hair, and veil
   combinations;
 - grayscale silhouettes at representative gameplay-camera distance;
 - all supported class weapon grips and representative contact poses;
 - camera, aim-origin, hand, weapon, foot-plant, and authored-contact alignment;
 - fitted helmet, shoulder, chest, cloak, and back-equipment stress cases;
-- crown, mantle, veil, hair, and cloth clipping checks in locomotion and combat;
+- horn, ear, plate, claw, veil, hair, and cloth clipping checks in locomotion
+  and combat;
 - facial expression, eye behavior, speech-viseme, and facial-rig checks across
   every face preset;
-- low-light and high-exposure checks for Vesh light and Kell minerals;
+- low-light and high-exposure checks for Vesh light and Kell crystal surfaces,
+  inner radiance, and glowing eyes;
 - LOD checks that preserve identity without changing combat readability; and
 - examples showing each people outside its heritage clothing and in both
   faction presentations once final faction heraldry exists.
@@ -460,6 +534,8 @@ fantasy or animal-head silhouette.
 Do not invent:
 
 - exact lifespan years;
+- final Kell hand digit topology, grip deformation, and alternate mineral or
+  glow-color options;
 - exact body, capsule, skeleton, or visual-height measurements;
 - exact protected fit-envelope, joint-scaling, IK, and luminance measurements;
 - the number of presets or options for any common or race-specific appearance

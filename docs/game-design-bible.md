@@ -422,6 +422,10 @@ Confirmed rules:
 - The confirmed playable peoples are Aurin, Kell, and Vesh. The Waking Star
   dreamed each people separately, all three predate the Duskbreak, and no
   confirmed account identifies which was dreamed first.
+- Kell are living crystalline people with ivory-quartz outer plates, dark
+  amethyst connections, swept horns, external pointed ears, glowing violet
+  eyes, and clawed extremities. Their approved male and female references and
+  full anatomy contracts are recorded in [Playable Peoples](playable-peoples.md#kell).
 - Every playable race supports male and female characters.
 - Sex does not change attributes, combat power, class access, faction access,
   or authoritative hitboxes.
@@ -454,6 +458,15 @@ memory.
 
 The Star dreamed the Aurin, Kell, and Vesh separately. All three peoples
 predate the Duskbreak, and their creation order remains unknown.
+
+The Kell were dreamed as living layered crystal. Their long lives leave
+growth and repair visible in quartz and amethyst, shaping a cultural argument
+over continuity through change. Their bodies do not automatically store
+readable memories; preservation is learned craft. Graefell remembers their
+first awakening before its canyon was glassed. Vothram's ritual instruments
+and secret archive turn care into a question of responsibility and ownership,
+while Corvath's exceptional birth as living catastrophe glass confronts his
+people with life preserved at the cost of its next change.
 
 The Lucent Choir attempted the Great Concordance: binding the Star's light
 permanently and forcing incompatible histories to coexist. The Concordance

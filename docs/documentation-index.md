@@ -102,11 +102,28 @@ subordinate to the specialized canonical product and technical documents.
 
 ## Rendered Artifacts
 
-- [Character Codex](../output/pdf/champions_of_the_first_cycle.pdf)
-- [Settlement Codex](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex.pdf)
+- [Character Codex](../output/pdf/champions_of_the_first_cycle-2026-10-10-kell-revamp-final.pdf)
+- [Settlement Codex](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex-2026-10-10-kell-revamp-final.pdf)
 
-The PDF codices are rendered artifacts of the canonical Markdown character and
-settlement documents.
+The PDF codices are complete rendered snapshots of the canonical Markdown
+character and settlement documents, regenerated on 2026-10-10 with the Kell
+redesign and story revision. Their text was checked against the sources and all
+23 pages were rendered and visually inspected. Canonical Markdown remains the
+source of truth when later edits occur.
+
+The earlier [character](../output/pdf/champions_of_the_first_cycle.pdf) and
+[settlement](../output/pdf/Settlements_of_Aetheln_City_and_Village_Codex.pdf)
+editions are preserved as historical exports; they predate the current Kell
+revision and do not define current canon.
+
+## Approved Art Direction
+
+- [Art Style and Generation Guide](art-style-guide.md) records the user-approved
+  polished stylized 3D rendering direction, the selected Kell visual references,
+  reusable prompts, and consistency checks for future characters and assets.
+  It supersedes older painterly rendering guidance. The selected Kell pair is
+  the race baseline in [Playable Peoples](playable-peoples.md#kell); its revised
+  story is recorded in the character and settlement documents.
 
 ## Non-Canonical Visual Development
 
@@ -114,12 +131,18 @@ settlement documents.
   concepts and editable UI studies.
 - [Asset provenance](../visuals/asset-provenance.md) records source, processing,
   and review status for the imported package.
-- [Future visuals plan](../visuals/FUTURE-VISUALS-PLAN.md) governs continuation
-  of the established visual language.
+- [Future visuals plan](../visuals/FUTURE-VISUALS-PLAN.md) records the earlier
+  visual-development sequence. For current rendering style, use the approved
+  art guide above.
 
 These files support review and production planning. They do not override the
 canonical product or technical documents, and repository inclusion does not
 approve an asset for Unreal `Content/` or runtime use.
+
+Earlier Kell anatomy instructions, generation prompts, and anatomy review
+judgments in the visual package describe the superseded skin, crown, and
+mantle direction. Preserve those historical records; use the approved pair and
+current [Kell canon](playable-peoples.md#kell) for new work.
 
 ## Historical Research Archive
 

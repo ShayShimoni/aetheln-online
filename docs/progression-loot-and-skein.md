@@ -569,12 +569,12 @@ Character
 |   |-- Constrained Visual-Height Preset
 |   |-- Age-Presentation Preset
 |   |-- Face Preset
-|   |-- Skin Tone
+|   |-- Skin Tone (Surface Tone for Kell)
 |   |-- Markings
 |   |-- Voice
 |   `-- Race Features
 |       |-- Aurin: Hair Style, Hair Color, and Hair-Dye Treatment
-|       |-- Kell: Crown, Mantle, Mineral Family, Mineral Finish, Wear,
+|       |-- Kell: Horn Form, Plate Pattern, Mineral Tones, Mineral Finish, Wear,
 |       |   Engraving, and Inlay
 |       `-- Vesh: Hair, Veil Form, Veil Adornment, Inner-Light Hue, and Pattern
 |-- Permanent Progression
@@ -608,14 +608,16 @@ advantage.
 All people and sexes share one authoritative combat capsule, one
 combat-presentation skeleton, weapon-socket alignment, camera and
 aim-presentation anchors, a server-authored trace model, contact timing, and
-root-motion distance. Kell crown and mantle bones and Vesh back-veil bones are
-visual-only auxiliaries. They never affect collision, authoritative traces,
+root-motion distance. Kell horn, ear, and plate attachments and any auxiliary
+visual bones, together with Vesh back-veil bones, serve presentation only.
+They never affect collision, authoritative traces,
 shared weapon-presentation sockets, reach, or gameplay state. No presentation
 socket establishes a hit volume, window, contact, or selected target.
 
 One equipment item has one gameplay identity and race-and-sex-fitted visual
-assets. Its fitting set must support every approved body, height, hair, crown,
-mantle, and veil combination without hiding biological anatomy or restricting
+assets. Its fitting set must support every approved body, height, hair, horn,
+plate, and veil combination, including Kell external ears and clawed hands and
+feet, without hiding biological anatomy or restricting
 equipment access.
 
 Portable cultural pigments and adornment styles belong to shared cosmetic,

@@ -33,7 +33,7 @@ The [scope ledger](docs/prototype-and-1.0-scope-ledger.md) and
 - Every playable race supports male and female characters. Race and sex do not
   change combat statistics, class access, faction access, or authoritative
   hitboxes.
-- The confirmed playable peoples are human Aurin, organic-mineral Kell, and
+- The confirmed playable peoples are human Aurin, living crystalline Kell, and
   dream-veiled Vesh. Culture, anatomy, and presentation never grant racial
   gameplay advantages or lock faction, class, or equipment access.
 - Permanent Character Levels are separate from seasonal Ember Rank.
