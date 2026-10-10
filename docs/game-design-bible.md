@@ -422,6 +422,15 @@ Confirmed rules:
 - The confirmed playable peoples are Aurin, Kell, and Vesh. The Waking Star
   dreamed each people separately, all three predate the Duskbreak, and no
   confirmed account identifies which was dreamed first.
+- Kell are living crystalline people with ivory-quartz outer plates, dark
+  amethyst connections, swept horns, external pointed ears, glowing violet
+  eyes, and clawed extremities. Their approved male and female references and
+  full anatomy contracts are recorded in [Playable Peoples](playable-peoples.md#kell).
+- Vesh are mortal embodied spirit creatures connected to the world's spirits
+  and guided by the Light. The retained design uses an obsidian-black coat,
+  white markings, an ivory faceted natural face, golden eyes, three-digit hands,
+  and solid tapered feet. Their spiritual kinship supplies no innate gameplay
+  advantage; [Playable Peoples](playable-peoples.md#vesh) defines the full contract.
 - Every playable race supports male and female characters.
 - Sex does not change attributes, combat power, class access, faction access,
   or authoritative hitboxes.
@@ -454,6 +463,27 @@ memory.
 
 The Star dreamed the Aurin, Kell, and Vesh separately. All three peoples
 predate the Duskbreak, and their creation order remains unknown.
+
+The Vesh were dreamed as spirits with tangible lives and bodies of their own.
+They follow the Light through listening, compassion, and responsible judgment.
+The spirits they meet are local continuities of realized lives and places;
+their testimony can be incomplete, mistaken, or refused. Neither an encounter
+nor the Vesh's existence settles the Star's intention. Enlightenment is a
+practice rather than moral infallibility, and neither faction owns the Light.
+The Duskbreak fractured the histories many spirits carry. Selaen's caravans and
+Lanternrest's Mother-Lanterns now gather willing witnesses and care for places
+whose continuity is fading. In the Quieting, the Ashen Choir erases distinct
+voices into a single account, drawing Nhalen and Saeril into the conflict
+between preservation, consent, and certainty.
+
+The Kell were dreamed as living layered crystal. Their long lives leave
+growth and repair visible in quartz and amethyst, shaping a cultural argument
+over continuity through change. Their bodies do not automatically store
+readable memories; preservation is learned craft. Graefell remembers their
+first awakening before its canyon was glassed. Vothram's ritual instruments
+and secret archive turn care into a question of responsibility and ownership,
+while Corvath's exceptional birth as living catastrophe glass confronts his
+people with life preserved at the cost of its next change.
 
 The Lucent Choir attempted the Great Concordance: binding the Star's light
 permanently and forcing incompatible histories to coexist. The Concordance

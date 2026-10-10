@@ -419,6 +419,8 @@ try {
 	$RuntimeIntakePath = Join-Path $ResolvedPolicyDirectory 'runtime-asset-intake.json'
 	$BuildProvenancePath = Join-Path $FixtureRoot 'build-provenance.json'
 	Copy-Item -LiteralPath $GovernedValidator -Destination $Validator
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'scripts/build/PackagingRecipeProof.ps1') -Destination (Join-Path $ResolvedScriptDirectory 'PackagingRecipeProof.ps1')
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'scripts/build/PackagingRecipeProof.ps1') -Destination (Join-Path $FixtureRoot 'PackagingRecipeProof.ps1')
 	$IntegratedPolicy = Get-Content -LiteralPath $GovernedPolicyPath -Raw | ConvertFrom-Json
 	$IntegratedPolicy.schema_version = 2
 	$IntegratedPolicy.report.schema_version = 2
@@ -481,6 +483,20 @@ try {
 	$ActiveReportPath = $Report
 	Write-Inventory $Client @('/Game/Shared/DA_Objective', '/Game/UI/WBP_HUD')
 	Write-Inventory -Directory $Server -Packages @('/Game/Shared/DA_Objective', '/Game/Server/DA_ServerRules') -Kind 'server'
+	$StockBuildBytes = [IO.File]::ReadAllText($BuildProvenancePath)
+	$UnprovedBuild = $StockBuildBytes | ConvertFrom-Json
+	$UnprovedBuild.build.clientTarget = 'AethelnOnlineClient'
+	$UnprovedBuild.build.uatInvocations.client.arguments += '-skipbuild'
+	[IO.File]::WriteAllText($BuildProvenancePath, ($UnprovedBuild | ConvertTo-Json -Depth 12))
+	Write-Report $Report $Assets
+	Write-InventoryManifest $Client 2
+	Write-InventoryManifest $Server 2
+	Invoke-ExpectedFailure -Arguments @{ ContentValidationReportPath=$Report; ClientCookedInventoryDirectory=$Client; ServerCookedInventoryDirectory=$Server } -Pattern 'package_recipe_proof_missing' -ValidatorPath $Validator
+	[IO.File]::WriteAllText($BuildProvenancePath, $StockBuildBytes)
+	Write-Report $Report $Assets
+	Write-InventoryManifest $Client 2
+	Write-InventoryManifest $Server 2
+	Write-Output 'PASS: content cook evidence rejects skipbuild without typed clean/program proof'
 
 	$UnavailableReport = Join-Path $FixtureRoot 'unavailable-content-report.json'
 	$UnavailableOutput = Join-Path $FixtureRoot 'unavailable-cook-evidence.json'
