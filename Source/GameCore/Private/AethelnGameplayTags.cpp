@@ -5,6 +5,8 @@ namespace AethelnGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_GateStep, "Ability.Oathscar.GateStep", "order.oathscar.ability.gate_step");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_SwornRebuke, "Ability.Oathscar.SwornRebuke", "order.oathscar.ability.sworn_rebuke");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_HoldTheLine, "Ability.Oathscar.HoldTheLine", "order.oathscar.ability.hold_the_line");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_SwordShieldBasicChain, "Ability.Oathscar.SwordShieldBasicChain", "order.oathscar.ability.sword_shield_basic_chain");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Oathscar_SwordShieldBasicChain, "State.Oathscar.SwordShieldBasicChain", "Commitment state of order.oathscar.ability.sword_shield_basic_chain");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Oathscar_GateStep, "Cooldown.Oathscar.GateStep", "Cooldown state of order.oathscar.ability.gate_step");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Oathscar_SwornRebuke, "Cooldown.Oathscar.SwornRebuke", "Cooldown state of order.oathscar.ability.sworn_rebuke");

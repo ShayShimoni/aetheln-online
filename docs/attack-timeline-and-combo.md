@@ -320,8 +320,9 @@ time sample is rejected.
 
 ### Chain progression and buffering
 
-The ASC holds one server-only `FAethelnChainState`: the current step index, its
-start time, and its content version. The seam evaluates a press at server time
+The ASC holds one server-only `FAethelnServerChainState`: the current step index,
+its start time, immutable step definitions and accepted input snapshots. Each
+snapshot carries its content version. The seam evaluates a press at server time
 `t` with every boundary up to `t` already applied (see
 [Timeline driver](#timeline-driver-and-clock)). `S` is the current step's start.
 Every activation gets a new `ActivationId`, as the spike does per accepted
@@ -404,13 +405,14 @@ registered step with `ResetTime`, clears the phase state, and sends one
 | `Interrupted` | A committed interrupting result arrived inside `InterruptibleUntil` (P5) |
 | `AvatarLost` | #19's null-pawn case (unpossession, destroy while possessed, logout, disconnect); it already cancels all abilities |
 | `IncompatibleState` | `State.Dead`, an authored reset tag, or any tag in the chain's `ActivationBlockedTags` was added, through `RegisterGameplayTagEvent` (`GAS/Public/AbilitySystemComponent.h:720`) |
-| `OtherAction` | Any other ability activated on the ASC, through `AbilityActivatedCallbacks` (`GAS/Public/AbilitySystemComponent.h:542`, broadcast at `GAS/Private/AbilitySystemComponent_Abilities.cpp:2554-2557`) |
+| `OtherAction` | Another ability successfully committed through the ASC's seam; an ultimately failed commit preserves the chain |
 
 `AbilityActivatedCallbacks` fires from `PreActivate`
 (`GAS/Private/Abilities/GameplayAbility.cpp:997`), before the other ability
 commits, so an activation that then fails its commit (#19 `InternalFailure`)
-would still reset the chain. P3 either resets only on the other ability's
-committed activation or pins this behavior in A8.
+would still reset the chain. P3 resets only after the other ability's successful
+`CommitAbility`, through `RecordSeamCommit`; A8 pins both the successful and
+failed commit paths.
 
 #18 may call `ResetChain(OtherAction)` directly if its dodge is not a GAS
 ability.
