@@ -480,6 +480,8 @@ manual and checked in review.
 | `State.Oathscar.SwordShieldBasicChain` | (commitment state of the above) | #60 P3 |
 | `Cooldown.Oathscar.GateStep`, `Cooldown.Oathscar.SwornRebuke`, `Cooldown.Oathscar.HoldTheLine` | (cooldown state of the above) | #19 |
 | `State.Dead` | (death flow state) | Declared by #19, applied by #21 |
+| `Damage.Wrought` | `combat.damage.wrought` | #60 P4 |
+| `SetByCaller.Damage.Wrought` | (negated Wrought magnitude of the shared damage effect) | #60 P4 |
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and
