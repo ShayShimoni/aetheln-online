@@ -38,7 +38,10 @@
 	"Plugins": [
 		{
 			"Name": "ReplicationGraph",
-			"Enabled": true
+			"Enabled": true,
+			"TargetDenyList": [
+				"Editor"
+			]
 		},
 		{
 			"Name": "GameplayAbilities",

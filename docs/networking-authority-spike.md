@@ -100,8 +100,10 @@ objects built without that flag cannot establish the new candidate capability;
 fresh builds/packages and exact new provenance are required. Editor support was
 already enabled by its target default. `SetupIrisSupport(Target)` supplies
 `UE_WITH_IRIS=1` and IrisCore in this pin; there is no `bUseIris` target property.
-Enabling the Graph plugin/module can also change Editor host-tool closure, so the
-repository's receipt/attestation and `-NoEngineChanges` gates remain applicable.
+The ReplicationGraph plugin is denied for the Editor target, so the Graph
+candidate is available in packaged Client and Server builds only and refuses
+with `graph_class_unavailable` in the Editor and PIE. The accepted engine record
+stays unchanged.
 
 BasicReplicationGraph is the engine example with its existing 10000-unit grid
 default and fixed per-actor relevancy flags. That value is not approved Aetheln
