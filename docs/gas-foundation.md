@@ -28,10 +28,11 @@ That review disclosed earlier P2 movement-test authorship and did not freshly
 approve those authored changes. The contract below amends the ordinary seam;
 proposed entry/outcome names are not claims that APIs already exist. #18 P2
 movement merged in [PR #282](https://github.com/ShayShimoni/aetheln-online/pull/282).
-#60 P3's callback-safe operation and external-boundary integration and #19 P4
-integration readiness remain prerequisites for #18 P3; this selection does not
-satisfy them, the remaining product decisions, two-client PIE, or either whole
-issue's acceptance criteria.
+#60 P3's callback-safe operations and #19 P4 integration readiness remain
+prerequisites for #18 P3, which itself adds the non-chain boundary registration
+to the #60 timeline subsystem. This selection does not satisfy those
+prerequisites, tuning, two-client PIE, or either whole issue's acceptance
+criteria.
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
@@ -381,7 +382,7 @@ InstancedPerActor, no triggers, no spec input id, and no direct input
 replication. The dodge's finite, ordered definition and cost-or-cooldown rule
 must be checked through the actual PlayerState grant path (see
 [Dodge grant validation](dodge-and-block.md#server-owned-windows), including
-the unresolved Q4 choice). `FindGrantProblem` is non-virtual at the reviewed
+the Q4 rule, owner-approved 2026-10-10). `FindGrantProblem` is non-virtual at the reviewed
 GAS baseline `63f43184c6a775080f337152f1f694286df55d17`: a hidden derived method
 cannot satisfy this contract when the caller holds a base ability pointer.
 Implementation must introduce a reviewed virtual hook or an equivalent
@@ -511,8 +512,9 @@ dedicated-server route.
 The entry uses the validation substitutions below, the same one-spec scope,
 eligibility checks and full commit as the ordinary entry. Before either entry
 validates, apply the requester's due #60 boundaries to the server processing
-time. #60 P3 must supply reviewed external-boundary registration and operation
-lifetime protection; this document names no new boundary API. Dodge windows
+time. #60 P3 supplies operation lifetime protection; #18 P3 adds the non-chain
+boundary registration to the #60 timeline subsystem, and this document names no
+new boundary API. Dodge windows
 are authored half-open intervals from that processing time, never from the
 client timestamp or prediction.
 
@@ -633,9 +635,10 @@ cost, tag, cancellation or avatar callbacks can replace or end an operation
 before commit returns. Revalidate the actual operation and avatar after those
 callbacks; neither open a stale dodge window/displacement nor cancel a valid
 replacement. Rejecting before commit leaves no spend, cooldown, tags or
-activation id; later cancellation must follow a future owner-selected refund
-policy, not a fabricated rollback. Q16's truncated-displacement refund and
-#60 OQ5's queued/interrupted refund policy remain unresolved; T1 selects neither.
+activation id; later cancellation follows the owner-selected refund policy, not
+a fabricated rollback. Q16 (owner-approved 2026-10-10) refunds nothing when a
+dodge's displacement is cut short; #60 OQ5's queued/interrupted refund policy
+remains unresolved, and T1 selects neither.
 `State.Dead`, unpossession, avatar loss and
 PlayerState teardown cancel the actual operation, close its boundaries and end
 server displacement once. Re-possession revives none of them. See
@@ -1042,7 +1045,9 @@ All stay `TBD` until the named owner decides.
    hold-and-release (which would set `bAcceptsRelease`). Owners: #107 and the
    owner.
 6. **Blocking and cancel relations** among the three actives, the basic chain,
-   dodge, and block. Owners: #60 and #18 content.
+   dodge, and block. Owners: #60 and #18 content. For dodge and block, #18's
+   Q10 and Q17 (owner-approved 2026-10-10) answer it; the three actives' relations
+   stay open.
 7. **Cooldown and attribute behavior across death, respawn, and reconnect**,
    including closing the reconnect gap. Owner: #21.
 8. **What opponents may see** of the six attributes. Owner: #61.

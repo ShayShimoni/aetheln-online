@@ -369,7 +369,9 @@ Abilities that the chain commits against list it in their
 step 8 rejects them with `ActivationBlocked`. After `CancelOpen` another action
 may activate if its own tags allow it, and its activation resets the chain.
 Which actions are blocked, and which may cancel recovery, is content data `TBD`
-with #18 (#19 open decision 6).
+with #18 (#19 open decision 6). For dodge and block, #18 Q10 and Q17
+(owner-approved 2026-10-10) answer it: the commitment tag blocks both, and an
+attack press during a dodge or while blocking is refused.
 
 The tag is added and removed by the timeline as a loose server tag, not as
 `ActivationOwnedTags`, because those last for the whole activation
