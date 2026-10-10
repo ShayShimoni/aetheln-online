@@ -37,6 +37,10 @@
 	],
 	"Plugins": [
 		{
+			"Name": "ReplicationGraph",
+			"Enabled": true
+		},
+		{
 			"Name": "GameplayAbilities",
 			"Enabled": true
 		},

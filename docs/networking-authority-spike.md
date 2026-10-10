@@ -37,6 +37,81 @@ This boundary follows the canonical
 [Combat and Networking Architecture](combat-and-networking-architecture.md):
 clients request allowed actions, while the server owns combat truth.
 
+## Opt-in Replication Candidate Laboratory
+
+The candidate wave implements three mutually exclusive runtime choices without
+selecting a production backend. Omitting `-AethelnReplicationCandidate` leaves
+existing scenario switches, replication settings, and actors unchanged. An
+explicit choice also requires `-AethelnAuthorityScenario`. Each fresh isolated
+server/client process receives one of these exact values:
+
+| Candidate argument | Actual server backend |
+| --- | --- |
+| `replication-candidate.generic-push-model` | Generic replication, runtime push enabled, no replication driver |
+| `replication-candidate.replication-graph` | `/Script/ReplicationGraph.BasicReplicationGraph`, runtime push enabled, non-Iris |
+| `replication-candidate.iris` | Initialized Iris replication system, no replication driver |
+
+Each selected process also requires `-AethelnRunId`, `-AethelnSourceRevision`
+(40 hexadecimal characters), `-AethelnBuildIdentity`, and
+`-AethelnToolchainIdentity`, supplied as `-Name=value` arguments. These are
+correlation labels; they do not authenticate the compiled source. Independent
+package provenance, binary hashes, and raw-process evidence must bind the actual
+build before any comparison can be accepted. Duplicate selection/metadata,
+unknown candidates, explicit `UseIrisReplication` or `RepDriverEnable`/`Disable`
+overrides, an existing game driver, and foreign replication-driver settings or
+factories refuse selected mode. Unavailable support and observed backend
+mismatches refuse rather than silently falling back.
+
+GameNet sets the supported Iris preference before driver creation. This is a
+process-wide preference for compatible drivers; selected mode is an isolated
+experiment, never an in-process backend switch. Shutdown restores prior Iris
+and push preferences. The creation hook uses the `GameNetDriver` definition,
+including a client's initial `PendingNetDriver`. It configures the Graph class
+per driver without binding the global replication-driver factory. The world
+observer waits for adoption, a valid network resource, and the world's actual
+driver. A connected client's non-Iris observation alone does not establish the
+server Graph backend; the corresponding server observation is required.
+
+`AETHELN_REPLICATION_BACKEND` records observed Iris/system or Graph/driver state,
+server/client role, and legacy push status. Iris intentionally disables legacy
+push handles in this pinned engine. The common push-marked property remains a
+transport comparison probe under Iris; its receipt is not a claim that legacy
+push handles are enabled or that Iris performance was measured.
+
+After backend validation, the server creates one owner-relevant
+`AAethelnReplicationComparisonProbeActor` per connected remote controller. Its
+GUID identifies that connection's probe; reconnect receives a fresh probe. The
+client must receive the replicated baseline (revision 1), acknowledge it through
+its owned actor, and then receive the server's dirty-marked changed value
+(revision 2). These two integers are protocol markers, not gameplay tuning.
+Server and client candidate/run/source/build/toolchain labels must match before
+the client acknowledges. `AETHELN_REPLICATION_PROBE` emits the baseline receipt,
+server acknowledgement, changed send, and changed remote receipt. An initial
+replication or a candidate label alone supplies no changed-update proof. All
+three candidates use the same actor and property; no gameplay authority is moved
+into GameNet. The extra probe is a new actor-mix input that future comparison
+contracts must declare, rather than reusing historical captures unchanged.
+
+Client and Server targets now explicitly compile push support. Pinned UBT marks
+`bWithPushModel` as requiring a unique build environment; the existing source
+engine's monolithic targets satisfy its normal unique-environment rules. This
+wave adds no unsafe shared-environment override. Existing packages and EngineGame
+objects built without that flag cannot establish the new candidate capability;
+fresh builds/packages and exact new provenance are required. Editor support was
+already enabled by its target default. `SetupIrisSupport(Target)` supplies
+`UE_WITH_IRIS=1` and IrisCore in this pin; there is no `bUseIris` target property.
+Enabling the Graph plugin/module can also change Editor host-tool closure, so the
+repository's receipt/attestation and `-NoEngineChanges` gates remain applicable.
+
+BasicReplicationGraph is the engine example with its existing 10000-unit grid
+default and fixed per-actor relevancy flags. That value is not approved Aetheln
+production tuning. This candidate does not establish large-world density,
+privacy policy, ranking, bandwidth, capacity, or a production graph design.
+Native compile, actual three-mode packaged probe runs, representative actor mix,
+network profiles, normalized measurements, and an architecture decision remain
+separate gates. Numeric production budgets remain `TBD`; this wave does not
+fill metrics or select a backend.
+
 ## Stable Identities
 
 The contracts align the runner and runtime around these identities:

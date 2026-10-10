@@ -12,5 +12,7 @@ public class GameNet : ModuleRules
 			"CoreUObject",
 			"Engine"
 		});
+		PrivateDependencyModuleNames.AddRange(new string[] { "NetCore", "ReplicationGraph" });
+		SetupIrisSupport(Target);
 	}
 }

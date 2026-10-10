@@ -1,3 +1,11 @@
 #include "Modules/ModuleManager.h"
+#include "AethelnReplicationCandidateRuntime.h"
 
-IMPLEMENT_MODULE(FDefaultModuleImpl, GameNet);
+class FGameNetModule final : public IModuleInterface
+{
+public:
+	virtual void StartupModule() override { AethelnReplicationCandidates::Startup(); }
+	virtual void ShutdownModule() override { AethelnReplicationCandidates::Shutdown(); }
+};
+
+IMPLEMENT_MODULE(FGameNetModule, GameNet);
