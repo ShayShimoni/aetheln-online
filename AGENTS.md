@@ -37,6 +37,15 @@ research reports. Historical documents remain useful as research, but must not
 silently reintroduce rejected arena-only PvP, optional frontier PvP,
 gear-equalized world combat, or traditional talent-tree assumptions.
 
+Before generating or editing character or asset imagery, read
+[Art Style and Generation Guide](docs/art-style-guide.md) and open its approved
+visual references. Use the polished stylized 3D sculpt/render direction recorded
+there; it supersedes older painterly rendering instructions. Keep rendering
+style separate from subject identity, preserve each asset's approved design,
+and save the exact prompt with each new version. The guide records rendering
+direction; it does not complete the paused Kell lore revision or establish
+production readiness.
+
 Do not guess unresolved tuning values, final faction names, level caps, drop
 rates, invasion schedules, or population limits. Preserve explicit `TBD`
 decisions until evidence or user direction resolves them.
