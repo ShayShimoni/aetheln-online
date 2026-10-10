@@ -698,8 +698,8 @@ PlayerState (residual risk 4).
 ### Result cues
 
 `UFUNCTION(NetMulticast, Unreliable) MulticastCombatResultCue` on the target's
-ASC carries the source avatar, the outcome (`Hit`, `Avoided`, later `Blocked`
-and `GuardBroken`), the family tag, whether it was lethal, and the
+ASC carries the source avatar, the outcome (`Hit`, `Avoided`, `Blocked`, and
+later `GuardBroken`), the family tag, whether it was lethal, and the
 server-computed contact location. It carries no damage amount and no
 attribute value; Health stays owner-only (#19) until #61 decides opponent
 visibility. Losing a cue loses presentation only; attributes and death
