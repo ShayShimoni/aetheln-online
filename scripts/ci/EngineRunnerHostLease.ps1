@@ -182,8 +182,9 @@ function Enter-EngineRunnerHostLease {
 		$Release = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Lease.leaseId; attemptId = $OwnerId; cleanupVerified = $true }
 		$HeldBytes = [Text.Encoding]::UTF8.GetBytes(($Held | ConvertTo-Json -Compress) + "`n")
 		$ReleaseBytes = [Text.Encoding]::UTF8.GetBytes(($Release | ConvertTo-Json -Compress) + "`n")
-		if ($Stream.Length + $HeldBytes.Length + $ReleaseBytes.Length -gt 65536) { throw 'lease_journal_limit' }
 		$null = Get-EngineRunnerLeaseProgressBudget -Context $BudgetContext
+		# The journal passed Assert-EngineRunnerLeaseJournal, so every held record is released: no owner needs the old pairs.
+		if ($Stream.Length + $HeldBytes.Length + $ReleaseBytes.Length -gt 65536) { $Stream.SetLength(0); $Stream.Position = 0 }
 		$Stream.Write($HeldBytes, 0, $HeldBytes.Length)
 		$Stream.Flush($true)
 		$script:EngineRunnerHostLeases[$Full] = @{ lease = $Lease; identity = ($Lease | ConvertTo-Json -Compress);

@@ -504,7 +504,8 @@ function Enter-InitialPreparationLease {
 		$ReleasedRecord = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Record.leaseId;
 			attemptId = $Attempt.attemptId; cleanupVerified = $true }
 		$ReleaseBytes = [Text.Encoding]::UTF8.GetBytes(($ReleasedRecord | ConvertTo-Json -Compress) + "`n")
-		if ($Stream.Length + $Bytes.Length + $ReleaseBytes.Length -gt 65536) { throw 'lease_journal_limit' }
+		# The last record is a verified release, so no owner needs the older pairs: compact instead of refusing.
+		if ($Stream.Length + $Bytes.Length + $ReleaseBytes.Length -gt 65536) { $Stream.SetLength(0); $Stream.Position = 0 }
 		$Stream.Write($Bytes, 0, $Bytes.Length)
 		$Stream.Flush($true)
 	} catch {

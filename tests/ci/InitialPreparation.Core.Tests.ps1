@@ -237,8 +237,8 @@ function Test-LeaseJournalCapacity {
 	$PriorJournal = ($PriorHeld | ConvertTo-Json -Compress) + "`n" + ($PriorReleased | ConvertTo-Json -Compress) + "`n"
 	$PriorBytes = [Text.Encoding]::UTF8.GetByteCount($PriorJournal)
 	foreach ($Case in @(
-		@{ name = 'one-byte-short'; id = ('n' * 128); adjustment = 1; reject = $true },
-		@{ name = 'exact-fit'; id = ('e' * 128); adjustment = 0; reject = $false }
+		@{ name = 'one-byte-short'; id = ('n' * 128); adjustment = 1; compact = $true },
+		@{ name = 'exact-fit'; id = ('e' * 128); adjustment = 0; compact = $false }
 	)) {
 		$Attempt = Get-TestAttempt -Id $Case.id
 		$LeasePath = Initialize-LeaseFixture -Name $Case.name
@@ -252,23 +252,21 @@ function Test-LeaseJournalCapacity {
 		$InitialLength = 65536 - $PairLength + $Case.adjustment
 		# Leading JSON whitespace preserves a genuine paired released journal at the exact boundary.
 		[IO.File]::WriteAllText($LeasePath, (' ' * ($InitialLength - $PriorBytes)) + $PriorJournal, (New-Object Text.UTF8Encoding($false)))
-		$BeforeHash = (Get-FileHash -LiteralPath $LeasePath -Algorithm SHA256).Hash
 		$Lease = $null
 		$Failure = $null
 		try { $Lease = Enter-InitialPreparationLease -Attempt $Attempt -LeasePath $LeasePath }
 		catch { $Failure = [string] $_.Exception.Message }
-		if ($Case.reject) {
-			# Release an old implementation's unexpected admission so the RED fixture leaves no owner behind.
-			if ($null -ne $Lease) {
-				$null = Stop-InitialPreparationOwnedTree -Lease $Lease -DeadlineTicks $Attempt.cleanupDeadlineTicks
-				Exit-InitialPreparationLease -Lease $Lease
-				Write-Output "Unexpected journal admission: before=$InitialLength after=$((Get-Item -LiteralPath $LeasePath).Length) limit=65536"
-			}
-			Assert-True -Condition ($Failure -ceq 'lease_journal_limit') -Message 'Insufficient release space must refuse before writing held ownership.'
-			Assert-True -Condition ((Get-FileHash -LiteralPath $LeasePath -Algorithm SHA256).Hash -ceq $BeforeHash) -Message 'Capacity refusal must preserve every journal byte.'
-			Assert-True -Condition (-not $script:InitialPreparationLeaseRegistry.ContainsKey($LeasePath.ToLowerInvariant())) -Message 'Capacity refusal must not register an owner.'
-			$Probe = [IO.File]::Open($LeasePath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-			$Probe.Dispose()
+		if ($Case.compact) {
+			# A fully released journal with no room for another pair is compacted to the new held record.
+			Assert-True -Condition ($null -eq $Failure -and $null -ne $Lease) -Message 'A fully released journal without room for another pair must be compacted and admitted.'
+			$Entry = $script:InitialPreparationLeaseRegistry[$LeasePath.ToLowerInvariant()]
+			$HeldLength = [Text.Encoding]::UTF8.GetByteCount(($ExpectedHeld | ConvertTo-Json -Compress) + "`n")
+			Assert-True -Condition ($Entry.stream.Length -eq $HeldLength) -Message 'Compaction must leave only the new held record while the lease is held.'
+			$null = Stop-InitialPreparationOwnedTree -Lease $Lease -DeadlineTicks $Attempt.cleanupDeadlineTicks
+			Exit-InitialPreparationLease -Lease $Lease
+			$Records = @([IO.File]::ReadAllLines($LeasePath) | ForEach-Object { $_ | ConvertFrom-Json })
+			Assert-True -Condition ($Records.Count -eq 2 -and $Records[0].state -ceq 'held' -and $Records[1].state -ceq 'released' -and
+				$Records[0].leaseId -ceq $Lease.leaseId -and $Records[1].leaseId -ceq $Lease.leaseId -and $Records[1].cleanupVerified) -Message 'The compacted journal must hold exactly the new verified held and released pair.'
 		} else {
 			Assert-True -Condition ($null -eq $Failure -and $null -ne $Lease) -Message 'An exact-fit complete lease cycle must be admitted.'
 			$Entry = $script:InitialPreparationLeaseRegistry[$LeasePath.ToLowerInvariant()]
@@ -282,6 +280,26 @@ function Test-LeaseJournalCapacity {
 				$Records[3].attemptId -ceq $Attempt.attemptId -and $Records[3].cleanupVerified -is [bool] -and $Records[3].cleanupVerified) -Message 'Release must retain the actual lease GUID, attempt identity and literal cleanup proof.'
 		}
 	}
+	# A nearly full journal whose last record is an unreleased held record is still refused untouched, never compacted.
+	$HeldTailPath = Initialize-LeaseFixture -Name 'near-full-held'
+	$HeldTailRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = ('c' * 32);
+		attemptId = 'journal-held'; ownerPid = $PID; ownerStartUtc = $OwnerStartUtc }
+	$HeldTailLine = ($HeldTailRecord | ConvertTo-Json -Compress) + "`n"
+	$HeldTailLength = 65536 - $PairLength + 1
+	[IO.File]::WriteAllText($HeldTailPath, (' ' * ($HeldTailLength - $PriorBytes - [Text.Encoding]::UTF8.GetByteCount($HeldTailLine))) + $PriorJournal + $HeldTailLine, (New-Object Text.UTF8Encoding($false)))
+	Assert-True -Condition ((Get-Item -LiteralPath $HeldTailPath).Length -eq $HeldTailLength) -Message 'The held-tail fixture must be exactly one byte short of a full pair.'
+	$HeldTailHash = (Get-FileHash -LiteralPath $HeldTailPath -Algorithm SHA256).Hash
+	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id ('h' * 128)) -LeasePath $HeldTailPath } -Reason 'lease_owner_ambiguous' -Message 'A held journal must be refused, not compacted.'
+	Assert-True -Condition ((Get-FileHash -LiteralPath $HeldTailPath -Algorithm SHA256).Hash -ceq $HeldTailHash) -Message 'A refused held journal must keep every byte.'
+	# A journal with room for the pair appends without compaction.
+	$SmallPath = Initialize-LeaseFixture -Name 'small-journal'
+	[IO.File]::WriteAllText($SmallPath, $PriorJournal, (New-Object Text.UTF8Encoding($false)))
+	$SmallAttempt = Get-TestAttempt -Id 'journal-small'
+	$SmallLease = Enter-InitialPreparationLease -Attempt $SmallAttempt -LeasePath $SmallPath
+	$null = Stop-InitialPreparationOwnedTree -Lease $SmallLease -DeadlineTicks $SmallAttempt.cleanupDeadlineTicks
+	Exit-InitialPreparationLease -Lease $SmallLease
+	$SmallRecords = @([IO.File]::ReadAllLines($SmallPath) | ForEach-Object { $_ | ConvertFrom-Json })
+	Assert-True -Condition ($SmallRecords.Count -eq 4 -and $SmallRecords[0].leaseId -ceq $PriorLeaseId -and $SmallRecords[2].leaseId -ceq $SmallLease.leaseId) -Message 'A small journal must keep its prior pair and append the new one.'
 	$OversizedPath = Initialize-LeaseFixture -Name 'already-oversized'
 	[IO.File]::WriteAllText($OversizedPath, (' ' * (65537 - $PriorBytes)) + $PriorJournal, (New-Object Text.UTF8Encoding($false)))
 	$OversizedHash = (Get-FileHash -LiteralPath $OversizedPath -Algorithm SHA256).Hash
