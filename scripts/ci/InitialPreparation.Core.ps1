@@ -504,8 +504,42 @@ function Enter-InitialPreparationLease {
 		$ReleasedRecord = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Record.leaseId;
 			attemptId = $Attempt.attemptId; cleanupVerified = $true }
 		$ReleaseBytes = [Text.Encoding]::UTF8.GetBytes(($ReleasedRecord | ConvertTo-Json -Compress) + "`n")
-		# The last record is a verified release, so no owner needs the older pairs: compact instead of refusing.
-		if ($Stream.Length + $Bytes.Length + $ReleaseBytes.Length -gt 65536) { $Stream.SetLength(0); $Stream.Position = 0 }
+		if ($Stream.Length + $Bytes.Length + $ReleaseBytes.Length -gt 65536) {
+			# Compaction discards history, so first apply the same whole-journal check as Assert-EngineRunnerLeaseJournal:
+			# the last-record check above is not enough to prove no older owner is unreleased or ambiguous.
+			try {
+				if (-not $Journal.EndsWith("`n") -or $Journal.Contains('\')) { throw 'lease_owner_ambiguous' }
+				$OpenHeld = $null
+				$SeenLeases = @{}
+				foreach ($Line in $Lines) {
+					$Entry = $Line | ConvertFrom-Json
+					$Fields = @('schemaVersion', 'state', 'leaseId', 'attemptId', 'cleanupVerified')
+					if ($Entry.state -ceq 'held') { $Fields = @('schemaVersion', 'state', 'leaseId', 'attemptId', 'ownerPid', 'ownerStartUtc') }
+					$Keys = [regex]::Matches($Line, '"([^"\\]+)"\s*:')
+					if ($Keys.Count -ne $Fields.Count -or @($Entry.PSObject.Properties).Count -ne $Fields.Count) { throw 'lease_owner_ambiguous' }
+					foreach ($Field in $Fields) {
+						if (@($Keys | Where-Object { $_.Groups[1].Value -ceq $Field }).Count -ne 1 -or $Entry.PSObject.Properties.Name -cnotcontains $Field) { throw 'lease_owner_ambiguous' }
+					}
+					if ($Entry.schemaVersion -isnot [int] -or $Entry.schemaVersion -ne 1 -or
+						$Entry.leaseId -isnot [string] -or $Entry.leaseId -cnotmatch '^[a-f0-9]{32}$' -or
+						$Entry.attemptId -isnot [string] -or $Entry.attemptId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$') { throw 'lease_owner_ambiguous' }
+					if ($Entry.state -ceq 'held') {
+						$Start = [DateTime]::MinValue
+						if ($null -ne $OpenHeld -or $SeenLeases.ContainsKey($Entry.leaseId) -or $Entry.ownerPid -isnot [int] -or $Entry.ownerPid -le 0 -or
+							$Entry.ownerStartUtc -isnot [string] -or -not [DateTime]::TryParseExact($Entry.ownerStartUtc, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref] $Start) -or $Start.Kind -ne [DateTimeKind]::Utc) { throw 'lease_owner_ambiguous' }
+						$OpenHeld = $Entry
+						$SeenLeases[$Entry.leaseId] = $true
+					} elseif ($Entry.state -ceq 'released') {
+						if ($null -eq $OpenHeld -or $Entry.leaseId -cne $OpenHeld.leaseId -or $Entry.attemptId -cne $OpenHeld.attemptId -or
+							$Entry.cleanupVerified -isnot [bool] -or -not $Entry.cleanupVerified) { throw 'lease_owner_ambiguous' }
+						$OpenHeld = $null
+					} else { throw 'lease_owner_ambiguous' }
+				}
+				if ($SeenLeases.Count -eq 0 -or $null -ne $OpenHeld) { throw 'lease_owner_ambiguous' }
+			} catch { throw 'lease_owner_ambiguous' }
+			$Stream.SetLength(0)
+			$Stream.Position = 0
+		}
 		$Stream.Write($Bytes, 0, $Bytes.Length)
 		$Stream.Flush($true)
 	} catch {

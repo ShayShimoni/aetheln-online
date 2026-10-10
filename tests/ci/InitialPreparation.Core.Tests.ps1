@@ -291,6 +291,20 @@ function Test-LeaseJournalCapacity {
 	$HeldTailHash = (Get-FileHash -LiteralPath $HeldTailPath -Algorithm SHA256).Hash
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id ('h' * 128)) -LeasePath $HeldTailPath } -Reason 'lease_owner_ambiguous' -Message 'A held journal must be refused, not compacted.'
 	Assert-True -Condition ((Get-FileHash -LiteralPath $HeldTailPath -Algorithm SHA256).Hash -ceq $HeldTailHash) -Message 'A refused held journal must keep every byte.'
+	# A mid-journal anomaly (held D never released, then a complete E pair) with a valid released tail is refused untouched.
+	$AnomalyPath = Initialize-LeaseFixture -Name 'near-full-anomaly'
+	$AnomalyTail = ''
+	foreach ($AnomalyId in @(@('d', 'held'), @('e', 'held'), @('e', 'released'))) {
+		$AnomalyRecord = [ordered]@{ schemaVersion = 1; state = $AnomalyId[1]; leaseId = ($AnomalyId[0] * 32); attemptId = 'journal-anomaly' }
+		if ($AnomalyId[1] -ceq 'held') { $AnomalyRecord.ownerPid = $PID; $AnomalyRecord.ownerStartUtc = $OwnerStartUtc } else { $AnomalyRecord.cleanupVerified = $true }
+		$AnomalyTail += ($AnomalyRecord | ConvertTo-Json -Compress) + "`n"
+	}
+	$AnomalyLength = 65536 - $PairLength + 1
+	[IO.File]::WriteAllText($AnomalyPath, (' ' * ($AnomalyLength - $PriorBytes - [Text.Encoding]::UTF8.GetByteCount($AnomalyTail))) + $PriorJournal + $AnomalyTail, (New-Object Text.UTF8Encoding($false)))
+	Assert-True -Condition ((Get-Item -LiteralPath $AnomalyPath).Length -eq $AnomalyLength) -Message 'The anomaly fixture must be exactly one byte short of a full pair.'
+	$AnomalyHash = (Get-FileHash -LiteralPath $AnomalyPath -Algorithm SHA256).Hash
+	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id ('a' * 128)) -LeasePath $AnomalyPath } -Reason 'lease_owner_ambiguous' -Message 'A journal the Engine writer refuses must not be compacted by the preparation writer.'
+	Assert-True -Condition ((Get-FileHash -LiteralPath $AnomalyPath -Algorithm SHA256).Hash -ceq $AnomalyHash) -Message 'A refused anomalous journal must keep every byte.'
 	# A journal with room for the pair appends without compaction.
 	$SmallPath = Initialize-LeaseFixture -Name 'small-journal'
 	[IO.File]::WriteAllText($SmallPath, $PriorJournal, (New-Object Text.UTF8Encoding($false)))

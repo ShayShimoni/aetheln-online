@@ -1389,8 +1389,8 @@ import/non-force detached checkout, input validation and both native builds
 run inside the compile supervisor's original deadline. A missing or false
 cleanup proof never releases the lease; handles close but the held journal
 remains for explicit recovery. Both lease writers keep the journal under its
-65,536-byte reader limit by compaction: when their journal check finds no
-holder and another `held`/`released` pair would not fit, the writer truncates
+65,536-byte reader limit by compaction: when a whole-journal check finds every
+`held` record released and another pair would not fit, the writer truncates
 the journal to empty and writes the new `held` record, so completed pairs are
 not kept as history. A journal with an unreleased or ambiguous record, or one
 already above 65,536 bytes, is still refused unchanged. No implicit cleanup,
