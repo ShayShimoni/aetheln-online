@@ -606,7 +606,11 @@ that fails. Each rejection has one reason, and precedence is deterministic.
   `ActivateAbility` has been called, even if the commit then fails
   (`GAS/Private/AbilitySystemComponent_Abilities.cpp:1682`), so the result slot
   decides between `Accepted` and `InternalFailure`. A failed commit applies
-  nothing and does not advance the sequence.
+  nothing and does not advance the sequence. A commit that succeeds before the
+  activation fails (a #60 chain step that then cannot start) also reports
+  `InternalFailure`, but its spend is kept, so it advances the sequence, raw
+  aim, and client time and a replay cannot spend again (#60 P4, A29; any
+  refund is #60's OQ5).
 - **Pure validator.** Step 1 is a token bucket that takes the server time as an
   input and runs before any lookup. Steps 2 to 7 are a static pure function,
   modeled on the spike's, taking the request and the server and instance state
