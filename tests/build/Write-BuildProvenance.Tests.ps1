@@ -47,6 +47,12 @@ try {
 		}
 	}
 	$CookedRegistryReceipts = New-RegistryReceipts | ConvertTo-Json -Compress
+	$UnprovedSkip = $UatArguments | ConvertFrom-Json
+	$UnprovedSkip.client += '-skipbuild'
+	$UnprovedPath = Join-Path $FixtureRoot 'unproved-skip.json'
+	$Failure = $null
+	try { & $Script -OutputPath $UnprovedPath -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson ($UnprovedSkip | ConvertTo-Json -Compress) -CookedRegistryReceiptsJson $CookedRegistryReceipts } catch { $Failure = $_.Exception.Message }
+	Assert-True ($Failure -match '^package_recipe_proof_missing' -and -not (Test-Path -LiteralPath $UnprovedPath)) 'skipbuild without typed clean/program proof must never publish provenance.'
 
 	& $Script -OutputPath $OutputPath -ProjectPath (Join-Path $RepositoryRoot 'AethelnOnline.uproject') -EngineRoot $EngineRoot -LinuxToolchainRoot $ToolchainRoot -SourceRevision $Revision -BuildConfiguration Development -ClientArchivePath $Client -ServerArchivePath $Server -CompilerPath $Compiler -ResourceCompilerPath $ResourceCompiler -UatArgumentsJson $UatArguments -CookedRegistryReceiptsJson $CookedRegistryReceipts
 	$Provenance = Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json

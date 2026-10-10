@@ -1,6 +1,9 @@
 #include "AethelnCharacterMovementComponent.h"
 
 #include "GameFramework/Character.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
+#include "GameFramework/CharacterMovementReplication.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "AethelnPlayerCharacter.h"
 #include "Components/BoxComponent.h"
@@ -31,6 +34,9 @@ namespace
 			bSavedWantsToSprint = false;
 			bSavedWantsAimSteering = false;
 			bSavedAimTrackedJump = false;
+			bSavedWantsToDodge = false;
+			bSavedDodgeInProgress = false;
+			SavedDodgeContentVersion = 0;
 			SavedAimTrackedJumpYawOffset = 0.0f;
 		}
 
@@ -45,6 +51,9 @@ namespace
 				Character->GetCharacterMovement<UAethelnCharacterMovementComponent>();
 			bSavedWantsToSprint = Movement != nullptr && Movement->bWantsToSprint;
 			bSavedWantsAimSteering = Movement != nullptr && Movement->bWantsAimSteering;
+			bSavedWantsToDodge = Movement != nullptr && Movement->bWantsToDodge;
+			bSavedDodgeInProgress = Movement != nullptr && Movement->GetDodgeState().bInProgress;
+			SavedDodgeContentVersion = bSavedWantsToDodge ? Movement->GetDodgeRequestContentVersion() : 0;
 			// Start-of-move jump state, restored before this move is replayed. Moves combine only with equal
 			// flags and no movement-mode change, where the state this move reads is unchanged, so CombineWith
 			// needs no rollback of it.
@@ -75,8 +84,7 @@ namespace
 			}
 		}
 
-		// The base CanCombineWith compares GetCompressedFlags, and replay applies these
-		// flags through MoveAutonomous, so neither needs an override here.
+		// Replay applies the recorded intent through MoveAutonomous.
 		virtual uint8 GetCompressedFlags() const override
 		{
 			uint8 Flags = Super::GetCompressedFlags();
@@ -88,13 +96,33 @@ namespace
 			{
 				Flags |= FLAG_Custom_1;
 			}
+			if (bSavedWantsToDodge) { Flags |= FLAG_Custom_2; }
 			return Flags;
 		}
+
+		virtual bool CanCombineWith(const FSavedMovePtr& NewMove, ACharacter* Character, float MaxDelta) const override
+		{
+			// A combined move rewinds position, but saved moves must never rewind dodge simulation state.
+			return !bSavedWantsToDodge && !bSavedDodgeInProgress
+				&& !static_cast<const FSavedMove_Aetheln&>(*NewMove).bSavedDodgeInProgress
+				&& (NewMove->GetCompressedFlags() & FLAG_Custom_2) == 0
+				&& Super::CanCombineWith(NewMove, Character, MaxDelta);
+		}
+
+		virtual bool IsImportantMove(const FSavedMovePtr& LastAckedMove) const override
+		{
+			return bSavedWantsToDodge || Super::IsImportantMove(LastAckedMove);
+		}
+
+		uint32 GetDodgeContentVersion() const { return SavedDodgeContentVersion; }
 
 	private:
 		bool bSavedWantsToSprint = false;
 		bool bSavedWantsAimSteering = false;
 		bool bSavedAimTrackedJump = false;
+		bool bSavedWantsToDodge = false;
+		bool bSavedDodgeInProgress = false;
+		uint32 SavedDodgeContentVersion = 0;
 		float SavedAimTrackedJumpYawOffset = 0.0f;
 	};
 
@@ -113,6 +141,241 @@ namespace
 	};
 }
 
+struct FAethelnDodgeNetworkMoveData : FCharacterNetworkMoveData
+{
+	uint32 DodgeContentVersion = 0;
+
+	virtual void ClientFillNetworkMoveData(const FSavedMove_Character& Move, ENetworkMoveType Type) override
+	{
+		FCharacterNetworkMoveData::ClientFillNetworkMoveData(Move, Type);
+		DodgeContentVersion = static_cast<const FSavedMove_Aetheln&>(Move).GetDodgeContentVersion();
+	}
+
+	virtual bool Serialize(UCharacterMovementComponent& Movement, FArchive& Ar, UPackageMap* Map, ENetworkMoveType Type) override
+	{
+		if (!FCharacterNetworkMoveData::Serialize(Movement, Ar, Map, Type)) { return false; }
+		if ((CompressedMoveFlags & FSavedMove_Character::FLAG_Custom_2) != 0) { Ar << DodgeContentVersion; }
+		else { DodgeContentVersion = 0; }
+		return !Ar.IsError();
+	}
+};
+
+struct FAethelnDodgeMoveDataContainer : FCharacterNetworkMoveDataContainer
+{
+	FAethelnDodgeNetworkMoveData Moves[3];
+	FAethelnDodgeMoveDataContainer()
+	{
+		NewMoveData = &Moves[0];
+		PendingMoveData = &Moves[1];
+		OldMoveData = &Moves[2];
+	}
+};
+
+struct FAethelnDodgeMoveResponseData : FCharacterMoveResponseDataContainer
+{
+	FAethelnDodgeMovementState State;
+	bool bSnapshotMatches = true;
+
+	virtual void ServerFillResponseData(const UCharacterMovementComponent& Movement, const FClientAdjustment& Adjustment) override
+	{
+		FCharacterMoveResponseDataContainer::ServerFillResponseData(Movement, Adjustment);
+		const auto& AethelnMovement = static_cast<const UAethelnCharacterMovementComponent&>(Movement);
+		bSnapshotMatches = IsGoodMove() || AethelnMovement.PendingDodgeCorrectionTimeStamp == Adjustment.TimeStamp;
+		State = AethelnMovement.PendingDodgeCorrection;
+	}
+
+	virtual bool Serialize(UCharacterMovementComponent& Movement, FArchive& Ar, UPackageMap* Map) override
+	{
+		if (!FCharacterMoveResponseDataContainer::Serialize(Movement, Ar, Map) || (Ar.IsSaving() && !bSnapshotMatches)) { return false; }
+		if (IsCorrection())
+		{
+			uint8 InProgress = State.bInProgress ? 1 : 0;
+			Ar.SerializeBits(&InProgress, 1);
+			State.bInProgress = InProgress != 0;
+			Ar << State.Elapsed << State.Direction << State.ContentVersion << State.Distance << State.MoveDuration;
+			if (!FMath::IsFinite(State.Elapsed) || State.Elapsed < 0.0f || State.Direction.ContainsNaN()
+				|| !FMath::IsFinite(State.Distance) || !FMath::IsFinite(State.MoveDuration)) { return false; }
+			if (State.bInProgress && (State.ContentVersion == 0 || State.Distance <= 0.0f || State.MoveDuration <= 0.0f
+				|| State.Elapsed >= State.MoveDuration || !State.Direction.IsNormalized()
+				|| !FMath::IsFinite(State.Distance / State.MoveDuration))) { return false; }
+		}
+		return !Ar.IsError();
+	}
+};
+
+UAethelnCharacterMovementComponent::UAethelnCharacterMovementComponent(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+	, DodgeMoveData(MakeUnique<FAethelnDodgeMoveDataContainer>())
+	, DodgeMoveResponse(MakeUnique<FAethelnDodgeMoveResponseData>())
+{
+	SetNetworkMoveDataContainer(*DodgeMoveData);
+	SetMoveResponseDataContainer(*DodgeMoveResponse);
+}
+
+UAethelnCharacterMovementComponent::UAethelnCharacterMovementComponent(FVTableHelper& Helper) : Super(Helper) {}
+
+UAethelnCharacterMovementComponent::~UAethelnCharacterMovementComponent() = default;
+
+IAethelnMovementActionAuthority* UAethelnCharacterMovementComponent::GetDodgeAuthority() const
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (TestDodgeAuthority != nullptr) { return TestDodgeAuthority; }
+#endif
+	return CharacterOwner != nullptr ? Cast<IAethelnMovementActionAuthority>(CharacterOwner->GetPlayerState()) : nullptr;
+}
+
+bool UAethelnCharacterMovementComponent::CanCaptureDodgePrediction() const
+{
+	const APlayerController* Controller = CharacterOwner != nullptr ? Cast<APlayerController>(CharacterOwner->GetController()) : nullptr;
+	return HasValidData() && CharacterOwner->GetLocalRole() == ROLE_AutonomousProxy && CharacterOwner->IsReplicatingMovement()
+		&& Controller != nullptr && Controller->AcknowledgedPawn == CharacterOwner && Controller->Player != nullptr;
+}
+
+bool UAethelnCharacterMovementComponent::RequestDodge()
+{
+	IAethelnMovementActionAuthority* Authority = GetDodgeAuthority();
+	if (!CanCaptureDodgePrediction() || !IsWalking() || DodgeState.bInProgress || bWantsToDodge
+		|| Authority == nullptr || !Authority->CanPredictDodge()) { return false; }
+	const FAethelnDodgeMovementDefinition Definition = Authority->GetDodgeMovementDefinition();
+	if (!Definition.IsValid()) { return false; }
+	DodgeRequestContentVersion = Definition.ContentVersion;
+	bWantsToDodge = true;
+	return true;
+}
+
+void UAethelnCharacterMovementComponent::PrepareDodgeForMove(float ClientTimeStamp, uint8 Flags, const FVector& NewAcceleration, uint32 ContentVersion)
+{
+	if (bDodgeMovePrepared || !HasValidData()) { return; }
+	bDodgeMovePrepared = true;
+	bDodgeJumpSuppressedForMove = DodgeState.bInProgress;
+	if ((Flags & FSavedMove_Character::FLAG_Custom_2) == 0) { return; }
+	IAethelnMovementActionAuthority* Authority = GetDodgeAuthority();
+	const bool bAllowsStart = IsWalking() && !DodgeState.bInProgress;
+	const FAethelnDodgeMovementDefinition Definition = Authority != nullptr ? Authority->GetDodgeMovementDefinition() : FAethelnDodgeMovementDefinition();
+	bool bAccepted = false;
+	if (CharacterOwner->HasAuthority())
+	{
+		// Timestamp validation and positive delta already occurred in the engine. Never authorize forced updates.
+		if (GetCurrentNetworkMoveData() == nullptr) { return; }
+		FAethelnDodgeStartRequest Request;
+		Request.ClientTimeStamp = ClientTimeStamp;
+		Request.ContentVersion = ContentVersion;
+		Request.bMovementAllowsStart = bAllowsStart;
+		bAccepted = Authority != nullptr && Authority->TryAuthorizeDodge(Request);
+		if (!bAccepted || !bAllowsStart || !Definition.IsValid() || Definition.ContentVersion != ContentVersion)
+		{
+			GetPredictionData_Server_Character()->bForceClientUpdate = true;
+			return;
+		}
+	}
+	else
+	{
+		// The saved flag is the original prediction decision; replay must not re-run cooldown/tag eligibility.
+		bAccepted = CanCaptureDodgePrediction() && Authority != nullptr;
+	}
+	if (!bAccepted || !bAllowsStart || !Definition.IsValid() || Definition.ContentVersion != ContentVersion) { return; }
+	DodgeState.bInProgress = true;
+	DodgeState.Elapsed = 0.0f;
+	DodgeState.Direction = NewAcceleration.GetSafeNormal2D();
+	if (DodgeState.Direction.IsNearlyZero()) { DodgeState.Direction = -FRotator(0.0f, GetSimulatedControlYaw(), 0.0f).Vector(); }
+	DodgeState.ContentVersion = Definition.ContentVersion;
+	DodgeState.Distance = Definition.Distance;
+	DodgeState.MoveDuration = Definition.MoveDuration;
+	bDodgeJumpSuppressedForMove = true;
+}
+
+void UAethelnCharacterMovementComponent::FinishDodgeDisplacement(bool bPreserveHorizontalVelocity)
+{
+	if (!DodgeState.bInProgress) { return; }
+	DodgeState.bInProgress = false;
+	// A walking-to-falling transition keeps the engine's departure momentum.
+	// Other endings remove displacement; ordinary locomotion resumes next move.
+	if (!bPreserveHorizontalVelocity)
+	{
+		Velocity.X = 0.0;
+		Velocity.Y = 0.0;
+	}
+}
+
+void UAethelnCharacterMovementComponent::EndDodgeForAuthority()
+{
+	if (CharacterOwner == nullptr || !CharacterOwner->HasAuthority() || !DodgeState.bInProgress) { return; }
+	FinishDodgeDisplacement();
+	GetPredictionData_Server_Character()->bForceClientUpdate = true;
+}
+
+void UAethelnCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float DeltaSeconds)
+{
+	Super::UpdateCharacterStateBeforeMovement(DeltaSeconds);
+	if (CharacterOwner != nullptr && CharacterOwner->HasAuthority() && GetCurrentNetworkMoveData() == nullptr) { bWantsToDodge = false; }
+}
+
+void UAethelnCharacterMovementComponent::UpdateCharacterStateAfterMovement(float DeltaSeconds)
+{
+	Super::UpdateCharacterStateAfterMovement(DeltaSeconds);
+	bWantsToDodge = false;
+	bDodgeMovePrepared = false;
+	bDodgeJumpSuppressedForMove = false;
+}
+
+void UAethelnCharacterMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
+{
+	if (DodgeState.bInProgress && IsWalking())
+	{
+		Velocity = DodgeState.Direction * (DodgeState.Distance / DodgeState.MoveDuration);
+		return;
+	}
+	Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
+}
+
+void UAethelnCharacterMovementComponent::PhysWalking(float DeltaTime, int32 Iterations)
+{
+	if (!DodgeState.bInProgress) { Super::PhysWalking(DeltaTime, Iterations); return; }
+	const float Remaining = FMath::Max(0.0f, DodgeState.MoveDuration - DodgeState.Elapsed);
+	const float DodgeDelta = FMath::Min(DeltaTime, Remaining);
+	Super::PhysWalking(DodgeDelta, Iterations);
+	DodgeState.Elapsed = FMath::Min(DodgeState.MoveDuration, DodgeState.Elapsed + DodgeDelta);
+	if (DodgeState.Elapsed >= DodgeState.MoveDuration || !IsWalking()) { FinishDodgeDisplacement(); }
+}
+
+void UAethelnCharacterMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode)
+{
+	const bool bLeavingGround = PreviousMovementMode == MOVE_Walking && IsFalling();
+#if WITH_DEV_AUTOMATION_TESTS
+	const bool bWasDodging = DodgeState.bInProgress;
+#endif
+	if (!IsWalking()) { FinishDodgeDisplacement(bLeavingGround); }
+#if WITH_DEV_AUTOMATION_TESTS
+	if (bLeavingGround && bWasDodging && TestDodgeGroundDepartureCapture)
+	{
+		TestDodgeGroundDepartureCapture(UpdatedComponent->GetComponentLocation(), Velocity);
+	}
+#endif
+	Super::OnMovementModeChanged(PreviousMovementMode, PreviousCustomMode);
+}
+
+void UAethelnCharacterMovementComponent::ServerMoveHandleClientError(float ClientTimeStamp, float DeltaTime, const FVector& Accel, const FVector& RelativeClientLocation, FMovementBaseInterfaceData* ClientMovementBase, FName ClientBaseBoneName, uint8 ClientMovementMode)
+{
+	Super::ServerMoveHandleClientError(ClientTimeStamp, DeltaTime, Accel, RelativeClientLocation, ClientMovementBase, ClientBaseBoneName, ClientMovementMode);
+	const FClientAdjustment& Adjustment = GetPredictionData_Server_Character()->PendingAdjustment;
+	if (Adjustment.TimeStamp == ClientTimeStamp && !Adjustment.bAckGoodMove)
+	{
+		PendingDodgeCorrection = DodgeState;
+		PendingDodgeCorrectionTimeStamp = Adjustment.TimeStamp;
+	}
+}
+
+void UAethelnCharacterMovementComponent::OnClientCorrectionReceived(FNetworkPredictionData_Client_Character& ClientData, float TimeStamp, FVector NewLocation, FVector NewVelocity, FMovementBaseInterfaceData* NewMovementBase, FName NewBaseBoneName, bool bHasBase, bool bBaseRelativePosition, uint8 ServerMovementMode, FVector ServerGravityDirection)
+{
+	Super::OnClientCorrectionReceived(ClientData, TimeStamp, NewLocation, NewVelocity, NewMovementBase, NewBaseBoneName, bHasBase, bBaseRelativePosition, ServerMovementMode, ServerGravityDirection);
+	if (DodgeMoveResponse->IsCorrection() && DodgeMoveResponse->ClientAdjustment.TimeStamp == TimeStamp)
+	{
+		DodgeState = DodgeMoveResponse->State;
+		bDodgeMovePrepared = false;
+		bDodgeJumpSuppressedForMove = false;
+	}
+}
+
 float UAethelnCharacterMovementComponent::SelectGroundMaxSpeed(
 	bool bSprintAllowed,
 	bool bBackpedaling,
@@ -126,6 +389,7 @@ float UAethelnCharacterMovementComponent::SelectGroundMaxSpeed(
 
 float UAethelnCharacterMovementComponent::GetMaxSpeed() const
 {
+	if (DodgeState.bInProgress && IsWalking()) { return DodgeState.Distance / DodgeState.MoveDuration; }
 	const float BaseMaxSpeed = Super::GetMaxSpeed();
 	if (MovementMode != MOVE_Walking || IsCrouching())
 	{
@@ -199,6 +463,7 @@ UAethelnCharacterMovementComponent::FJumpTakeoff UAethelnCharacterMovementCompon
 
 bool UAethelnCharacterMovementComponent::DoJump(bool bReplayingMoves, float DeltaTime)
 {
+	if (DodgeState.bInProgress || bDodgeJumpSuppressedForMove) { return false; }
 	// Read before Super switches to falling, so the takeoff keeps this move's sprint or backpedal cap.
 	const bool bGroundTakeoff = IsMovingOnGround();
 	const float TakeoffSpeed = GetMaxSpeed();
@@ -298,7 +563,28 @@ void UAethelnCharacterMovementComponent::ControlledCharacterMove(const FVector& 
 	// the previous move. Apply it first; Super recomputes the same value. MoveAutonomous does the same.
 	Acceleration = ScaleInputAcceleration(ConstrainInputAcceleration(InputVector));
 	AnalogInputModifier = ComputeAnalogInputModifier();
+	const FAethelnDodgeMovementState Before = DodgeState;
+	const bool bPreserveUncapturedDodge = IsNetMode(NM_Client) && bWantsToDodge && !CanCaptureDodgePrediction();
+	const uint32 UncapturedContentVersion = DodgeRequestContentVersion;
+	if (IsNetMode(NM_Client) && CanCaptureDodgePrediction())
+	{
+		PrepareDodgeForMove(0.0f, bWantsToDodge ? FSavedMove_Character::FLAG_Custom_2 : 0, Acceleration, DodgeRequestContentVersion);
+	}
 	Super::ControlledCharacterMove(InputVector, DeltaSeconds);
+	if (bDodgeMovePrepared)
+	{
+		// A readiness change may make the stock replication path return before simulation.
+		DodgeState = Before;
+		bDodgeMovePrepared = false;
+		bDodgeJumpSuppressedForMove = false;
+	}
+	if (bPreserveUncapturedDodge)
+	{
+		// Stock CMC still performs local physics when movement replication is disabled,
+		// but captures no saved move. Keep the queued press through that ordinary movement.
+		bWantsToDodge = true;
+		DodgeRequestContentVersion = UncapturedContentVersion;
+	}
 }
 
 void UAethelnCharacterMovementComponent::MoveAutonomous(
@@ -307,13 +593,69 @@ void UAethelnCharacterMovementComponent::MoveAutonomous(
 	uint8 CompressedFlags,
 	const FVector& NewAccel)
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (CharacterOwner != nullptr && CharacterOwner->HasAuthority() && GetCurrentNetworkMoveData() != nullptr)
+	{
+		++TestReceivedMoveCount;
+		TestReceivedMoveFlags.Add(CompressedFlags);
+	}
+#endif
 	if (HasValidData())
 	{
 		Acceleration = ConstrainInputAcceleration(NewAccel).GetClampedToMaxSize(GetMaxAcceleration());
 		AnalogInputModifier = ComputeAnalogInputModifier();
+		const FCharacterNetworkMoveData* Data = GetCurrentNetworkMoveData();
+		const uint32 Version = Data != nullptr ? static_cast<const FAethelnDodgeNetworkMoveData*>(Data)->DodgeContentVersion : DodgeRequestContentVersion;
+		PrepareDodgeForMove(ClientTimeStamp, CompressedFlags, Acceleration, Version);
 	}
 	Super::MoveAutonomous(ClientTimeStamp, DeltaTime, CompressedFlags, NewAccel);
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+uint32 UAethelnCharacterMovementComponent::TestGetDodgeMoveContentVersion(const FCharacterNetworkMoveData& Data) const
+{
+	return static_cast<const FAethelnDodgeNetworkMoveData&>(Data).DodgeContentVersion;
+}
+
+void UAethelnCharacterMovementComponent::TestReplicateMove(float DeltaTime, const FVector& NewAcceleration)
+{
+	const FAethelnDodgeMovementState Before = DodgeState;
+	const bool bPreserveUncapturedDodge = bWantsToDodge && !CanCaptureDodgePrediction();
+	const uint32 UncapturedContentVersion = DodgeRequestContentVersion;
+	if (CanCaptureDodgePrediction())
+	{
+		Acceleration = ConstrainInputAcceleration(NewAcceleration).GetClampedToMaxSize(GetMaxAcceleration());
+		AnalogInputModifier = ComputeAnalogInputModifier();
+		PrepareDodgeForMove(0.0f, bWantsToDodge ? FSavedMove_Character::FLAG_Custom_2 : 0, Acceleration, DodgeRequestContentVersion);
+		CharacterOwner->CheckJumpInput(DeltaTime);
+	}
+	ReplicateMoveToServer(DeltaTime, NewAcceleration);
+	if (bDodgeMovePrepared)
+	{
+		DodgeState = Before;
+		bDodgeMovePrepared = false;
+		bDodgeJumpSuppressedForMove = false;
+	}
+	if (bPreserveUncapturedDodge)
+	{
+		bWantsToDodge = true;
+		DodgeRequestContentVersion = UncapturedContentVersion;
+	}
+}
+
+void UAethelnCharacterMovementComponent::CallServerMovePacked(
+	const FSavedMove_Character* NewMove,
+	const FSavedMove_Character* PendingMove,
+	const FSavedMove_Character* OldMove)
+{
+	if (TestMoveCapture)
+	{
+		TestMoveCapture(NewMove, PendingMove, OldMove);
+		return;
+	}
+	Super::CallServerMovePacked(NewMove, PendingMove, OldMove);
+}
+#endif
 
 FNetworkPredictionData_Client* UAethelnCharacterMovementComponent::GetPredictionData_Client() const
 {
@@ -331,6 +673,7 @@ void UAethelnCharacterMovementComponent::UpdateFromCompressedFlags(uint8 Flags)
 	Super::UpdateFromCompressedFlags(Flags);
 	bWantsToSprint = (Flags & FSavedMove_Character::FLAG_Custom_0) != 0;
 	bWantsAimSteering = (Flags & FSavedMove_Character::FLAG_Custom_1) != 0;
+	bWantsToDodge = (Flags & FSavedMove_Character::FLAG_Custom_2) != 0;
 }
 
 bool UAethelnCharacterMovementComponent::ClientUpdatePositionAfterServerUpdate()
@@ -339,9 +682,13 @@ bool UAethelnCharacterMovementComponent::ClientUpdatePositionAfterServerUpdate()
 	// as the engine does for crouch, because sprint and aim input are edge triggered.
 	const bool bRealWantsToSprint = bWantsToSprint;
 	const bool bRealWantsAimSteering = bWantsAimSteering;
+	const bool bRealWantsToDodge = bWantsToDodge;
+	const uint32 RealDodgeContentVersion = DodgeRequestContentVersion;
 	const bool bReplayed = Super::ClientUpdatePositionAfterServerUpdate();
 	bWantsToSprint = bRealWantsToSprint;
 	bWantsAimSteering = bRealWantsAimSteering;
+	bWantsToDodge = bRealWantsToDodge;
+	DodgeRequestContentVersion = RealDodgeContentVersion;
 	return bReplayed;
 }
 

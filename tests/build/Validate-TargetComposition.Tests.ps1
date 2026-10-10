@@ -30,6 +30,7 @@ function New-TargetFixture {
 		[string[]] $ClientModules,
 		[Parameter(Mandatory)]
 		[string[]] $ServerModules,
+		[string[]] $EditorModules = @('GameCore', 'GameTests'),
 		[string] $EngineConfig = "[/Script/Engine.Engine]`nGameViewportClientClassName=/Script/Engine.GameViewportClient",
 		[string] $InputConfig = $null
 	)
@@ -44,7 +45,8 @@ function New-TargetFixture {
 	$Definitions = @(
 		@{ File = 'AethelnOnline.Target.cs'; Class = 'AethelnOnlineTarget'; Type = 'Game'; Modules = $ClientModules },
 		@{ File = 'AethelnOnlineClient.Target.cs'; Class = 'AethelnOnlineClientTarget'; Type = 'Client'; Modules = $ClientModules },
-		@{ File = 'AethelnOnlineServer.Target.cs'; Class = 'AethelnOnlineServerTarget'; Type = 'Server'; Modules = $ServerModules }
+		@{ File = 'AethelnOnlineServer.Target.cs'; Class = 'AethelnOnlineServerTarget'; Type = 'Server'; Modules = $ServerModules },
+		@{ File = 'AethelnOnlineEditor.Target.cs'; Class = 'AethelnOnlineEditorTarget'; Type = 'Editor'; Modules = $EditorModules }
 	)
 
 	foreach ($Definition in $Definitions) {
@@ -107,6 +109,56 @@ try {
 	Assert-True -Condition ($ValidOutput -match 'Target composition validation passed\.') -Message 'The valid target graph should pass.'
 	Write-Output 'PASS: valid target graph'
 
+	foreach ($TargetFile in @('AethelnOnline.Target.cs', 'AethelnOnlineClient.Target.cs', 'AethelnOnlineServer.Target.cs')) {
+		$TestsTargetRoot = Join-Path $FixtureRoot ($TargetFile + '-has-tests')
+		New-TargetFixture -Root $TestsTargetRoot -ClientModules @('GameCore') -ServerModules @('GameCore', 'GameServer')
+		$TargetPath = Join-Path $TestsTargetRoot ('Source/' + $TargetFile)
+		$TargetContent = (Get-Content -LiteralPath $TargetPath -Raw).Replace('"GameCore"', '"GameCore", "GameTests"')
+		Set-Content -LiteralPath $TargetPath -Value $TargetContent -Encoding UTF8
+		Invoke-ExpectedFailure -Root $TestsTargetRoot -ExpectedPattern 'Target.*GameTests.*Editor'
+		Write-Output "PASS: GameTests is rejected in $TargetFile"
+	}
+
+	$AdditionalTargetRoot = Join-Path $FixtureRoot 'additional-target-has-tests'
+	New-TargetFixture -Root $AdditionalTargetRoot -ClientModules @('GameCore') -ServerModules @('GameCore', 'GameServer')
+	$AdditionalTargetPath = Join-Path $AdditionalTargetRoot 'Source/Additional.Target.cs'
+	$AdditionalContent = (Get-Content -LiteralPath (Join-Path $AdditionalTargetRoot 'Source/AethelnOnlineClient.Target.cs') -Raw).Replace('AethelnOnlineClientTarget', 'AdditionalTarget').Replace('"GameCore"', '"GameCore", "GameTests"')
+	Set-Content -LiteralPath $AdditionalTargetPath -Value $AdditionalContent -Encoding UTF8
+	Invoke-ExpectedFailure -Root $AdditionalTargetRoot -ExpectedPattern 'AdditionalTarget.*GameTests.*Editor'
+	Write-Output 'PASS: GameTests is rejected in an additional non-Editor target'
+	Set-Content -LiteralPath $AdditionalTargetPath -Value ($AdditionalContent.Replace('TargetType.Client', 'TargetType.Editor')) -Encoding UTF8
+	Invoke-ExpectedFailure -Root $AdditionalTargetRoot -ExpectedPattern 'AdditionalTarget.*GameTests.*AethelnOnlineEditor'
+	Write-Output 'PASS: only the canonical Editor target may list GameTests'
+	$AliasedTargetContent = $AdditionalContent.Replace('TargetType.Client;', 'TargetType.Client; var TestsModule = "GameTests"; ExtraModuleNames.Add(TestsModule);').Replace('"GameCore", "GameTests"', '"GameCore"')
+	Set-Content -LiteralPath $AdditionalTargetPath -Value $AliasedTargetContent -Encoding UTF8
+	Invoke-ExpectedFailure -Root $AdditionalTargetRoot -ExpectedPattern 'AdditionalTarget.*GameTests.*Editor'
+	Write-Output 'PASS: an aliased GameTests reference in a non-Editor target is rejected'
+
+	foreach ($Dependency in @('PublicDependencyModuleNames.Add("GameTests");', 'PrivateDependencyModuleNames.AddRange(new string[] { "Core", "GameTests" });', 'DynamicallyLoadedModuleNames.Add("GameTests");', 'var TestsModule = "GameTests"; PrivateDependencyModuleNames.Add(TestsModule);')) {
+		$DependencyRoot = Join-Path $FixtureRoot ('module-has-tests-' + [guid]::NewGuid().ToString('N'))
+		New-TargetFixture -Root $DependencyRoot -ClientModules @('GameCore') -ServerModules @('GameCore', 'GameServer')
+		$ModuleDirectory = Join-Path $DependencyRoot 'Source/GameCore'
+		New-Item -ItemType Directory -Path $ModuleDirectory | Out-Null
+		Set-Content -LiteralPath (Join-Path $ModuleDirectory 'GameCore.Build.cs') -Value "using UnrealBuildTool; public class GameCore : ModuleRules { public GameCore(ReadOnlyTargetRules Target) : base(Target) { $Dependency } }" -Encoding UTF8
+		Invoke-ExpectedFailure -Root $DependencyRoot -ExpectedPattern 'GameCore\.Build\.cs.*GameTests'
+		Write-Output "PASS: forbidden module dependency is rejected: $Dependency"
+	}
+
+	$AllowedReferencesRoot = Join-Path $FixtureRoot 'allowed-tests-references'
+	New-TargetFixture -Root $AllowedReferencesRoot -ClientModules @('GameCore') -ServerModules @('GameCore', 'GameServer')
+	$AllowedModuleDirectory = Join-Path $AllowedReferencesRoot 'Source/GameCore'
+	New-Item -ItemType Directory -Path $AllowedModuleDirectory | Out-Null
+	Set-Content -LiteralPath (Join-Path $AllowedModuleDirectory 'GameCore.Build.cs') -Value "// PrivateDependencyModuleNames.Add(`"GameTests`");`n/* PublicDependencyModuleNames.Add(`"GameTests`"); */`nPrivateDependencyModuleNames.Add(`"Core`");" -Encoding UTF8
+	$TestsModuleDirectory = Join-Path $AllowedReferencesRoot 'Source/GameTests'
+	New-Item -ItemType Directory -Path $TestsModuleDirectory | Out-Null
+	Set-Content -LiteralPath (Join-Path $TestsModuleDirectory 'GameTests.Build.cs') -Value 'PrivateDefinitions.Add("GameTests"); PrivateDependencyModuleNames.Add("Core");' -Encoding UTF8
+	$AllowedTargetPath = Join-Path $AllowedReferencesRoot 'Source/AethelnOnlineClient.Target.cs'
+	$AllowedTargetContent = Get-Content -LiteralPath $AllowedTargetPath -Raw
+	Set-Content -LiteralPath $AllowedTargetPath -Value ($AllowedTargetContent + "`n// ExtraModuleNames.Add(`"GameTests`");`n/* ExtraModuleNames.Add(`"GameTests`"); */") -Encoding UTF8
+	$AllowedOutput = & $Validator -ProjectRoot $AllowedReferencesRoot | Out-String
+	Assert-True -Condition ($AllowedOutput -match 'Target composition validation passed\.') -Message 'Editor membership, the GameTests module itself, and commented references must pass.'
+	Write-Output 'PASS: Editor GameTests membership and commented module references are allowed'
+
 	$ClientViolationRoot = Join-Path $FixtureRoot 'client-has-server'
 	New-TargetFixture -Root $ClientViolationRoot -ClientModules @('GameCore', 'GameUI', 'GameServer') -ServerModules @('GameCore', 'GameServer')
 	Invoke-ExpectedFailure -Root $ClientViolationRoot -ExpectedPattern "AethelnOnline(?:Client)?Target.*(?:Game|Client).*GameServer"
@@ -133,6 +185,10 @@ try {
 	Assert-True -Condition ($CommentedOutput -match 'Target composition validation passed\.') -Message 'Commented client-only config references should be ignored.'
 	Write-Output 'PASS: commented client-only config references are ignored'
 
+	# The required target-composition-tests entry runs this file, so enforce
+	# the same rules on the actual project, not only on synthetic fixtures.
+	& $Validator -ProjectRoot $RepositoryRoot
+	Write-Output 'PASS: real Source target and module boundaries'
 	Write-Output 'All target composition tests passed.'
 }
 finally {

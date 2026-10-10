@@ -28,4 +28,5 @@ public:
 	virtual void ReceiveJumpStopped() = 0;
 	virtual void ReceiveJumpCanceled() = 0;
 	virtual void ReceiveSprintIntent(bool bWantsToSprint) = 0;
+	virtual void ReceiveDodgePressed() = 0;
 };

@@ -1,0 +1,20 @@
+Tool: built-in image_gen
+Output: 59-quartz-amethyst-female-refined.png
+Edit target: 58-quartz-amethyst-female.png
+Artifact type: 3D-style raster concept image, not a 3D mesh.
+
+Use case: precise-object-edit.
+Input image 1 is the adult female character to refine. Keep her species and design, but make her A LITTLE LESS MUSCULAR and give her clearer feminine facial features and a more naturally feminine silhouette.
+
+BODY REFINEMENT:
+Reduce visible muscle bulk modestly, about 10–15 percent, especially in the shoulder caps, upper arms, forearms and thighs. Slightly soften the sharply defined muscular transitions. She should remain fit, athletic and physically capable, with sturdy legs, not frail or extremely thin. Narrow the shoulder line a little relative to the hips and give the waist-to-hip transition a gentle natural curve. Preserve a realistic waist and balanced ribcage; no extreme hourglass or pinup proportions. Let the chest plates follow a softer rounded adult female chest contour rather than blocky pectoral forms, while remaining continuous natural ivory quartz anatomy. Keep smooth non-explicit chest and pelvic surfaces, without nipples or genital detail. Do not add clothing or turn the chest plates into a bra.
+
+FACE REFINEMENT:
+Make the face visibly more feminine while retaining the same nonhuman quartz species: a gently narrower lower jaw, a smaller softly rounded chin without the heavy squared cleft, smoother cheek transitions, slightly less heavy brow ridges, graceful almond eye contours around the existing violet glow, and subtly fuller natural lips. Keep adult proportions, defined cheekbones and her broad low flat nose. Calm confident neutral expression, neither angry nor smiling. No makeup, lipstick, hair or generic human face replacement.
+
+PRESERVE:
+Same sweeping ivory horns with dark-amethyst insets, long pointed ears, forehead/temple/cheek crystal accents, luminous violet eyes, ivory outer quartz plates over dark smoky-purple crystal interior, flowing layered chest/abdomen and woven limb construction. Keep the established clawed hand design and balanced hand proportions, ridged lower legs, and broad three-toed dragonlike feet. Same height and limb length, frontal full-body neutral A-pose, hands relaxed and separated, feet grounded.
+
+RENDERING IS ESSENTIAL:
+Keep the approved polished 3D studio sculpt/render look: coherent smooth solid volumes, clean gently beveled surfaces, satin ivory quartz with only sparse faint mineral veins, dark amethyst depth and restrained internal glow, soft physically consistent lighting and grounded shadows. Do not add noisy faceting, tiny scales, paint strokes, dense cracks or glossy plastic. Preserve the warm-light-gray seamless studio background and framing, with complete horns, hands and feet visible.
+One adult female character only, no armor, clothes, accessories, props, text or watermark. A tasteful neutral fantasy anatomy reference. Make a modest refinement of the same female character, not a different race or a drastic redesign.

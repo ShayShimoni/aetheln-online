@@ -179,6 +179,11 @@ try {
 		$ProvenanceDigest = Get-FileSha256 $ProvenancePath
 		Assert-Condition ($ProvenanceDigest -ceq [string] (Get-JsonValue $Entries[0] 'sha256')) 'provenance_digest_mismatch'
 		$Provenance = Read-JsonFile $ProvenancePath 'provenance_invalid'
+		. (Join-Path $PSScriptRoot '../build/PackagingRecipeProof.ps1')
+		try {
+			Assert-PackageRecipeProvenance $Provenance
+			if ($null -ne (Get-PackageProofMember (Get-PackageProofMember $Provenance 'build') 'packageRecipe')) { Assert-PackageRecipePayloads $Provenance (Split-Path -Parent $Provenance.artifacts.clientArchive) (Split-Path -Parent $Provenance.artifacts.serverArchive) }
+		} catch { throw 'provenance_recipe_invalid' }
 		$SchemaVersion = Get-JsonValue $Provenance 'schemaVersion'
 		Assert-Condition ((Test-JsonInteger $SchemaVersion) -and $SchemaVersion -eq 2) 'provenance_invalid'
 		$Record.provenance = [ordered]@{ sha256 = $ProvenanceDigest; schemaVersion = 2 }

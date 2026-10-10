@@ -15,8 +15,21 @@ param(
 # any violation and 0 when the board is clean.
 #
 # Snapshot shape: { items: [{ number, state, status, release, blockedReason,
-# body }], pullRequests: [{ number, title, isDraft, isCrossRepository,
-# headRefName, baseRefName, linkedIssues: [n] }] }. A pull request links an
+# body, comments: [{ createdAt, body }] }], pullRequests: [{ number, title,
+# isDraft, isCrossRepository, headRefName, baseRefName, linkedIssues: [n] }] }.
+# `comments` may be omitted when an issue has none. The live read takes every
+# comment of every board issue, newest 100 inline and older pages of 100
+# through the issue node, so no comment is dropped; a failed page stops the
+# check rather than giving a partial result.
+#
+# QA round lifecycle (Issue #266): a comment whose first line starts with
+# `QA round started` starts a round, and one whose first line starts with
+# `## Post-merge QA record` records its end. Both are case-sensitive. A round
+# is open while the latest start is newer by createdAt than the latest record.
+# `qa-status-without-round` reports a QA card with no open round, and
+# `qa-round-not-in-qa` an open round on a card outside QA. Both apply to every
+# board issue, open or closed, in any status, so a card cannot reach Done or
+# close with its round unrecorded. A pull request links an
 # issue through closingIssuesReferences or a `#<n>` in its title. PRs reference
 # their issue with a body `Refs #<n>` line and no closing keyword or
 # Development link, so the title is the usual link; a carried fix's `Refs` line
@@ -56,7 +69,8 @@ function Invoke-GhGraphQl {
 
 function Get-LiveSnapshot {
 	# Queries contain no string literals so native argument passing stays safe.
-	$ItemQuery = 'query($id: ID!, $after: String) { node(id: $id) { ... on ProjectV2 { items(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { content { __typename ... on Issue { number state body repository { nameWithOwner } } } fieldValues(first: 30) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } } ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } } } } } } } } }'
+	$ItemQuery = 'query($id: ID!, $after: String) { node(id: $id) { ... on ProjectV2 { items(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { content { __typename ... on Issue { id number state body repository { nameWithOwner } comments(last: 100) { pageInfo { hasPreviousPage startCursor } nodes { createdAt body } } } } fieldValues(first: 30) { nodes { ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } } ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } } } } } } } } }'
+	$CommentQuery = 'query($id: ID!, $before: String) { node(id: $id) { ... on Issue { comments(last: 100, before: $before) { pageInfo { hasPreviousPage startCursor } nodes { createdAt body } } } } }'
 	$PullQuery = 'query($owner: String!, $name: String!, $after: String) { repository(owner: $owner, name: $name) { pullRequests(states: OPEN, first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { number title isDraft isCrossRepository headRefName baseRefName closingIssuesReferences(first: 20) { nodes { number } } } } } }'
 
 	$Items = New-Object Collections.Generic.List[object]
@@ -71,9 +85,15 @@ function Get-LiveSnapshot {
 				if ($null -eq $FieldProperty -or $null -eq $FieldProperty.Value) { continue }
 				$Fields[$FieldProperty.Value.name] = if ($Value.PSObject.Properties['name']) { $Value.name } else { $Value.text }
 			}
+			$CommentPage = $Node.content.comments
+			$Comments = @($CommentPage.nodes)
+			while ($CommentPage.pageInfo.hasPreviousPage) {
+				$CommentPage = (Invoke-GhGraphQl -Query $CommentQuery -Variables @{ id = $Node.content.id; before = $CommentPage.pageInfo.startCursor }).data.node.comments
+				$Comments += @($CommentPage.nodes)
+			}
 			$Items.Add([pscustomobject][ordered]@{
 				number = $Node.content.number; state = $Node.content.state; status = $Fields['Status']
-				release = $Fields['Release']; blockedReason = $Fields['Blocked Reason']; body = $Node.content.body
+				release = $Fields['Release']; blockedReason = $Fields['Blocked Reason']; body = $Node.content.body; comments = $Comments
 			})
 		}
 		$Cursor = $Page.pageInfo.endCursor
@@ -130,6 +150,17 @@ function Get-BoardViolation {
 		if ($State -ceq 'OPEN' -and $Status -cin @('Done', 'Released')) { Add-Violation -Rule 'open-issue-final-status' -Issue $Number -Detail "is open but in '$Status'" }
 		if ($Status -cin @('Release Candidate', 'Released') -and [string]::IsNullOrWhiteSpace((Get-OptionalText $Item 'release'))) { Add-Violation -Rule 'release-field-empty' -Issue $Number -Detail "is in '$Status' with an empty Release field" }
 		if ($Status -ceq 'Blocked' -and [string]::IsNullOrWhiteSpace((Get-OptionalText $Item 'blockedReason'))) { Add-Violation -Rule 'blocked-reason-empty' -Issue $Number -Detail 'is Blocked without a Blocked Reason' }
+		$LatestStart = $LatestRecord = [DateTimeOffset]::MinValue
+		foreach ($Comment in $(if ($Item.PSObject.Properties['comments']) { $Item.comments })) {
+			# A marker has no line break, so a body that starts with it has it at the start of its first line.
+			$Body = Get-OptionalText $Comment 'body'
+			$CreatedAt = [DateTimeOffset] $Comment.createdAt
+			if ($Body -clike 'QA round started*' -and $CreatedAt -gt $LatestStart) { $LatestStart = $CreatedAt }
+			if ($Body -clike '## Post-merge QA record*' -and $CreatedAt -gt $LatestRecord) { $LatestRecord = $CreatedAt }
+		}
+		$RoundOpen = $LatestStart -gt $LatestRecord
+		if ($Status -ceq 'QA' -and -not $RoundOpen) { Add-Violation -Rule 'qa-status-without-round' -Issue $Number -Detail "is in QA without an open QA round: no 'QA round started' comment is newer than the latest '## Post-merge QA record'" }
+		if ($RoundOpen -and $Status -cne 'QA') { Add-Violation -Rule 'qa-round-not-in-qa' -Issue $Number -Detail "has a QA round open since $($LatestStart.UtcDateTime.ToString('u')) but is in '$StatusLabel', not QA" }
 	}
 
 	$PullsByIssue = @{}

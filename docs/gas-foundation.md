@@ -16,6 +16,23 @@ adds the cost and cooldown overrides, the shared effects, the three Oathscar
 skeletons with their grant list and config, and their tests; the two-client
 evidence follows in P5 and P6.
 
+**Selected T1 contract (2026-10-09).** The lead selected #18's movement-carried
+entry under delegated technical authority, recorded on
+[#19](https://github.com/ShayShimoni/aetheln-online/issues/19#issuecomment-6085274596)
+and [#18](https://github.com/ShayShimoni/aetheln-online/issues/18#issuecomment-6085274264).
+The independent design review found it suitable with a required implementation
+delta checklist, not implemented or accepted at runtime. Its retained report
+is `technical-design-review.json`, SHA-256
+`86680107c7b0651fc48b65343623d73ab2a78143d7f8a2440fd5c50b34ed20cb`.
+That review disclosed earlier P2 movement-test authorship and did not freshly
+approve those authored changes. The contract below amends the ordinary seam;
+proposed entry/outcome names are not claims that APIs already exist. #18 P2
+movement merged in [PR #282](https://github.com/ShayShimoni/aetheln-online/pull/282).
+#60 P3's callback-safe operation and external-boundary integration and #19 P4
+integration readiness remain prerequisites for #18 P3; this selection does not
+satisfy them, the remaining product decisions, two-client PIE, or either whole
+issue's acceptance criteria.
+
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
 TA-002, TA-003, TA-004, and TA-021 in
@@ -44,8 +61,12 @@ UE 5.8.1 source, revision `71fe36aac5`
    of GAS.
 3. One attribute set holds Health, Endurance, Guard, and each maximum. All six
    replicate to the owner only. Gameplay Effects make every change.
-4. One versioned activation seam is the only way a client starts an ability.
-   Its request has no target, hit, aim, or attribute field.
+4. One activation authority has two selected entries: the ordinary versioned
+   RPC and #18's server-internal movement-carried entry, called only while
+   simulating an actual received CMC move. The ordinary schema-2 request carries
+   bounded aim and a client server-time estimate, with no target, hit, contact,
+   shape, range, window, or attribute field. Dodge carries neither ordinary
+   sequence nor aim/time history; it cannot use the ordinary RPC.
 5. The stock GAS activation routes are closed by two engine overrides and a
    choke point in the base ability. Every activation request draws from a
    per-connection rate bucket, and outcomes go to the owner only.
@@ -222,6 +243,13 @@ which is why the cancel in the null case is explicit. Granted abilities,
 cooldown effects, attribute values, and the seam's sequence and rate state
 persist across avatar changes.
 
+T1 extends cleanup to the movement-carried operation and its pending outcome
+delegates: cancel the actual operation before losing the old avatar, close its
+window/boundaries and end its server displacement once. Revalidate identity
+across synchronous callbacks so cleanup cannot cancel a replacement. It does
+not reset the shared limiter or ordinary accepted history, change ASC ownership,
+re-grant abilities, or revive a window on re-possession.
+
 **Client.** `PostInitializeComponents` sets the null avatar locally. The
 authoritative path is the engine's replication of `OwnerActor` and
 `AvatarActor`. The client's `OnPawnSet` handler also calls
@@ -347,6 +375,18 @@ any configured class that:
 
 This also catches a future Blueprint subclass that edits policies or values.
 
+For #18 T1, grant validation also requires a movement-carried ability to be
+Press-only with `bAcceptsRelease = false`, preserving the ServerOnly policies,
+InstancedPerActor, no triggers, no spec input id, and no direct input
+replication. The dodge's finite, ordered definition and cost-or-cooldown rule
+must be checked through the actual PlayerState grant path (see
+[Dodge grant validation](dodge-and-block.md#server-owned-windows), including
+the unresolved Q4 choice). `FindGrantProblem` is non-virtual at the reviewed
+GAS baseline `63f43184c6a775080f337152f1f694286df55d17`: a hidden derived method
+cannot satisfy this contract when the caller holds a base ability pointer.
+Implementation must introduce a reviewed virtual hook or an equivalent
+integrated check that reaches the specialized definition from that caller.
+
 **Cost and cooldown.** One shared `UAethelnCooldownEffect` takes its duration
 from `SetByCaller.Cooldown.Duration`. `ApplyCooldown` adds the ability's
 `Cooldown.<Order>.<Name>` tag to the spec's `DynamicGrantedTags`
@@ -365,7 +405,9 @@ recovery is not #19 scope.
 
 ### Prediction
 
-P2 to P5 predict nothing. The stock client activation RPC carries only a spec
+P2 to P5 predict no GAS ability state. #18's supported CMC displacement
+prediction is separate: no predicted GAS cost, cooldown or window is enabled
+by T1. The stock client activation RPC carries only a spec
 handle, an input flag, and a prediction key
 (`GAS/Public/AbilitySystemComponent.h:1724-1725`), so the versioned request
 cannot ride on it, and activating from the seam leaves the client no
@@ -414,17 +456,19 @@ Matrix in the combat document). The mechanism uses only engine hooks:
 UENUM()
 enum class EAethelnActivationPhase : uint8 { Press = 0, Release = 1 };
 
-/** Client intent only. No target, hit, contact, aim, damage, magnitude, cost, cooldown or attribute field. */
+/** Client intent only. No target, hit, contact, damage, magnitude, cost, cooldown, shape, range, window or attribute field. */
 USTRUCT()
 struct GAMECOMBAT_API FAethelnCombatActivationRequest
 {
 	GENERATED_BODY()
 
-	UPROPERTY() uint8 SchemaVersion = 1;      // layout version of this struct
+	UPROPERTY() uint8 SchemaVersion = 2;      // layout version of this struct
 	UPROPERTY() FGameplayTag AbilityId;       // Ability.<Order>.<Name>
 	UPROPERTY() uint32 ContentVersion = 0;    // authored definition the client built for
 	UPROPERTY() EAethelnActivationPhase Phase = EAethelnActivationPhase::Press;
 	UPROPERTY() uint32 Sequence = 0;          // per connection, one PlayerState lifetime, never wraps
+	UPROPERTY() FVector_NetQuantizeNormal Aim = FVector_NetQuantizeNormal(ForceInitToZero);
+	UPROPERTY() double ClientServerTimeSeconds = 0.0;
 };
 ```
 
@@ -434,8 +478,11 @@ struct GAMECOMBAT_API FAethelnCombatActivationRequest
 - **Transport.** `UFUNCTION(Server, Reliable) ServerSubmitActivation` on
   `UAethelnAbilitySystemComponent`. The PlayerState belongs to the client's
   controller, so only the owning connection can call it. The client entry
-  point `RequestActivation(AbilityId, Phase)` fills in the sequence and local
-  content version, may be `BlueprintCallable`, and cannot bypass validation.
+  point `RequestActivation(AbilityId, Phase)` fills in the sequence, local
+  content version, owning controller's control-rotation aim and the GameState's
+  server world time (local world time without a GameState). It flushes held
+  character moves before sending, as a mitigation for the lagging server
+  rotation. It cannot bypass validation and remains non-Blueprint-callable.
 - **Activation id.** The ability creates `ActivationId` (a GUID scoped to the
   instance, as the spike does at
   `Source/GameCombat/Private/AethelnSpikeAuthorityComponent.cpp:431`) and
@@ -445,6 +492,29 @@ struct GAMECOMBAT_API FAethelnCombatActivationRequest
 - **Territory policy** is a 2.x system and is not checked in #19. It will be
   checked in the seam after step 7 and again at every effect application
   (Combat Invariants in the combat document).
+
+### Selected movement-carried entry
+
+The proposed native `ProcessMovementCarriedRequest` is server-internal, not an
+RPC, Blueprint entry, or a client-selected ability route. GameCore calls its
+plain movement-authority interface; the PlayerState adapter and ASC must resolve
+the currently owned dodge grant and actual possessed avatar in the shared
+pipeline, with the token drawn before ability lookup. A received flagged move
+must pass the CMC authority, current
+network-move-data, timestamp-order and positive-delta gates. Forced position
+updates, client replay, old avatars and avatar reassignment cannot start an
+activation. The start predicate supplied by movement is a server-derived fact,
+never arbitrary client `bMovementAllowsStart` authority. Standalone and
+listen-host authority copies without received moves remain outside this
+dedicated-server route.
+
+The entry uses the validation substitutions below, the same one-spec scope,
+eligibility checks and full commit as the ordinary entry. Before either entry
+validates, apply the requester's due #60 boundaries to the server processing
+time. #60 P3 must supply reviewed external-boundary registration and operation
+lifetime protection; this document names no new boundary API. Dodge windows
+are authored half-open intervals from that processing time, never from the
+client timestamp or prediction.
 
 ### Outcome and client rules
 
@@ -457,6 +527,16 @@ request, the bucket bounds requests, and a rate-limited window sends at most
 one outcome.
 
 Rules for the client, written for #61 and #97:
+
+These sequence rules apply only to the ordinary RPC. T1 uses a dedicated
+reliable owning-client movement outcome (proposed
+`ClientMovementActivationOutcome`, carrying a typed activation result and the
+move timestamp). Its pending-move correlation is timestamp plus send order;
+it never calls `ClientActivationOutcome` with sequence 0. The separate nonzero
+PlayerState movement ordinal is telemetry correlation, not a new client
+request sequence or a cure for timestamp-reset aliases. See
+[Movement outcome rules](dodge-and-block.md#replication-and-outcome-reporting)
+and [residual risk 8](dodge-and-block.md#residual-risks-and-known-gaps).
 
 - **Outcomes arrive reliably and in order.** After a `RateLimited` outcome for
   sequence N, treat every later pending request as rate-limited and show no
@@ -479,10 +559,14 @@ that fails. Each rejection has one reason, and precedence is deterministic.
 | 4 | Sequence: zero or lower than the last accepted / equal to it. Forward gaps are accepted. | `StaleSequence` / `DuplicateSequence` |
 | 5 | `AbilityId` is a valid `Ability.` tag naming a spec granted to this ASC | `MalformedRequest` (unknown) / `ActivationBlocked` (known, not granted) |
 | 6 | `ContentVersion` matches the granted ability's config exactly | `IncompatibleVersion` |
+| 6a | Aim/time config is valid; client server-time sample is finite, within age/lead bounds and regression tolerance | `InternalFailure` (bounds) / `TimestampOutOfBounds` (sample) |
+| 6b | Finite, non-zero, unit aim within tolerance, with a defined great-circle direction if correction is needed | `MalformedRequest` |
+| 6c | Raw aim is within the hard angular bound of server control rotation | `ImpossibleAimTransition` |
+| 6d | Raw aim change is within the rate bound and separate slack over the nonnegative client-time interval; first accepted request skips this check | `ImpossibleAimTransition` |
 | 7 | Phase and instance state (below) | `ActivationBlocked` (already active) / `MalformedRequest` (unsupported phase) |
 | 8 | Engine eligibility: call the ability's `CheckCooldown`, `CheckCost`, and `DoesAbilitySatisfyTagRequirements` directly, in the engine's order, and take the reason from the first to fail | `OnCooldown` / `InsufficientResource` / `ActivationBlocked` |
 | 9 | Activate on the server inside the seam scope. `CommitAbility` re-checks and applies cooldown and cost. The seam reads the result slot, not the return value of `TryActivateAbility`. | `ActivationBlocked` (refused for a reason step 8 does not cover) / `InternalFailure` (activated but not committed) |
-| 10 | Advance `LastAcceptedSequence`, emit the accepted event with the `ActivationId` from the result slot, send the owner outcome | `Accepted` |
+| 10 | Advance last accepted sequence, raw aim and client time; emit any aim correction before the accepted event with the same activation id, then send one owner outcome | `Accepted` |
 
 - **Step 7.** A `Press` while the ability's single instance is active is
   blocked here, so the reason is deterministic and precedes commit (the engine
@@ -523,6 +607,40 @@ that fails. Each rejection has one reason, and precedence is deterministic.
   modeled on the spike's, taking the request and the server and instance state
   as inputs. Both are headless table-testable.
 
+**T1 validation substitutions.** Split shared lifecycle, grant identity,
+content-version and phase/instance checks into pure helpers used by both
+entries. Keep ordinary schema, sequence and aim/time checks in `ValidateRequest`.
+The movement entry never synthesizes a `FAethelnCombatActivationRequest`, calls
+that request-only validator, or advances ordinary accepted history.
+
+| Ordinary step | Movement-carried contract |
+| --- | --- |
+| 1 | Every received flagged move the server actually simulates draws one token from the same connection bucket before lookup, including invalid-start, version and lifecycle cases. CMC-dropped/zero-delta copies draw none because the entry is not called. |
+| 2 | Same lifecycle check against the current owned avatar. |
+| 3 and 4 | No ordinary schema or sequence. Build-identical move data and the engine's received-move timestamp ordering apply. |
+| 5 and 6 | Resolve the current granted movement-carried dodge; exact move content version must match its definition. An ordinary RPC naming a movement-carried grant is `MalformedRequest`. |
+| 6a to 6d | No ordinary aim or time sample; neither check nor accepted-history update runs for movement. |
+| 7 | Press-only, inactive instance and live movement start predicate; active, airborne or already-displacing starts are `ActivationBlocked`. |
+| 8 and 9 | Same cooldown, cost, tag precedence, cheat-independent eligibility and one-spec full commit. |
+| 10 | Typed movement outcome and nonzero server ordinal; `LastAcceptedSequence`, raw aim and client time remain unchanged. |
+
+**Operation and commit checklist.** Both entries must use #60 P3's reviewed
+operation/epoch and callback-safe context lifetime. Keep the scope bound to the
+resolved spec, record at most one successful full `CommitAbility`, and refuse
+partial commits and commits through another spec or stock route. The merged
+GAS baseline's mutable boolean result slot alone is insufficient: synchronous
+cost, tag, cancellation or avatar callbacks can replace or end an operation
+before commit returns. Revalidate the actual operation and avatar after those
+callbacks; neither open a stale dodge window/displacement nor cancel a valid
+replacement. Rejecting before commit leaves no spend, cooldown, tags or
+activation id; later cancellation must follow a future owner-selected refund
+policy, not a fabricated rollback. Q16's truncated-displacement refund and
+#60 OQ5's queued/interrupted refund policy remain unresolved; T1 selects neither.
+`State.Dead`, unpossession, avatar loss and
+PlayerState teardown cancel the actual operation, close its boundaries and end
+server displacement once. Re-possession revives none of them. See
+[T1 implementation checklist](dodge-and-block.md#technical-decision-t1-the-movement-carried-seam-entry).
+
 **Sequence policy.** The sequence advances only on acceptance (a valid Release
 included), accepts forward gaps, never wraps, and lives for one PlayerState
 lifetime. A client that jumps to the maximum only makes its own later requests
@@ -535,8 +653,10 @@ seam closes F9 (no ability id or phase), F6 (rejection replicated to everyone),
 and F3 (no rate limit) for itself; #60 still owns window and combo gating, and
 T14 replaces #82's planned spike test
 `Aetheln.GameCombat.NetworkSpike.RequestRateBound`. F1 and F2 (aim equality and
-angular or temporal bounds) are left to #60 with #2: the request carries no
-aim, and #60 adds aim and any timestamp with a `SchemaVersion` bump. The threat
+angular or temporal bounds) are addressed by #60 P2's schema-2 aim/time checks
+and bounded correction policy. The eight config values remain unset/`TBD`;
+every request fails closed until reviewed values are supplied. P3 carries
+accepted aim through the activation scope. The threat
 model's CM-04 and CM-07 rows map onto steps 1 to 8 and step 9
 (`docs/staged-multiplayer-threat-model.md:87`, `:90`).
 
@@ -568,6 +688,13 @@ with no project check.
   `CanActivateAbility` through `InternalTryActivateAbility` (`:1817`).
 
 Three mechanisms close them:
+
+T1 adds only one server-internal exemption: the validated movement entry may
+open the scope for its resolved dodge spec. The ordinary entry refuses that
+marker with `MalformedRequest`. No stock route, event, batch, nested other-spec
+activation, client replay or forced update gains an exemption; existing
+refusal/token/no-reply behavior remains. Grant validation must enforce the
+marker and specialized definition through base-pointer callers.
 
 1. **Two overrides on `UAethelnAbilitySystemComponent`:**
    `InternalServerTryActivateAbility` (covering both single-ability RPCs) and
@@ -603,8 +730,8 @@ these rules keep it so:
 
 | RPC | Status | Rule |
 | --- | --- | --- |
-| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`GAS/Public/AbilitySystemComponent.h:1572-1577`) | **Residual: memory growth.** A hostile client can `FindOrAdd` cache entries on keys it chooses, whether or not any ability reads the data; they are removed only when that activation ends (`GAS/Private/AbilitySystemComponent_Abilities.cpp:4007-4031`, `:4047-4056`, `:1301`). Neither is virtual. The batch route is closed; these remain. | **Owner: #60.** Bound it before any ability consumes target data. No ability may use target-data tasks until then. |
-| `ServerSetReplicatedEvent`, `...WithPayload` (`GAS/Public/AbilitySystemComponent.h:1554-1559`) | Nothing reads them. | No ability may use replicated-event tasks. |
+| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`GAS/Public/AbilitySystemComponent.h:1572-1577`) | Refused by virtual generated `_Implementation` overrides on the project ASC (#60 P2); no cache write. | Each draws one bucket token, emits a metric only and sends no reply. No project ability uses target-data tasks. |
+| `ServerSetReplicatedEvent`, `...WithPayload` (`GAS/Public/AbilitySystemComponent.h:1554-1559`) | The engine implementations write the same cache through `InvokeReplicatedEvent` / `InvokeReplicatedEventWithPayload`; project `_Implementation` overrides refuse them (#60 P2). | Same token/metric/no-reply contract; no project ability uses replicated-event tasks. |
 | `ServerSetInputPressed`, `ServerSetInputReleased` (`GAS/Public/AbilitySystemComponent.h:1618-1622`) | Only update spec input state (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2885-2893`). | Phase comes only from the request. Abilities must not read `InputPressed` or `InputReleased`. |
 | Montage section and play-rate RPCs (`GAS/Public/AbilitySystemComponent.h:1803-1812`) | Presentation only. | No gameplay window may derive from a montage (Server-Owned Attack Timeline in the combat document). |
 
@@ -637,14 +764,23 @@ for every rejection, because rejections precede activation
 | `OnCooldown` | **Cooldown** | `ActivationBlocked` |
 | `InsufficientResource` | **Resource** | `ActivationBlocked` |
 | `InternalFailure` (activated but not committed) | Ability | `InternalFailure` |
+| `TimestampOutOfBounds` | Ability | `TimestampOutOfBounds` |
+| `ImpossibleAimTransition` | Aim | `ImpossibleAimTransition` |
+
+An accepted corrected aim adds one Correction/Aim/`Corrected` event before
+the accepted event, with matching activation id, ability id and sequence,
+and one `CorrectionCount` sample. It adds no owner reply. P2 outputs the
+accepted aim; P3 passes it through the seam scope to the timeline.
 
 ### Bounding client-driven telemetry
 
 The client must not control event volume in the observability critical lane.
 
-- **Which messages draw from the bucket.** Seam requests and the two
-  overridden stock routes only. The target-data, replicated-event, input, and
-  montage RPCs cannot be intercepted, so they do not.
+- **Which messages draw from the bucket.** Seam requests, the two overridden
+  stock routes, all four refused target-data/replicated-event routes, and T1's
+  received flagged moves that the server simulates.
+  Input-state and montage RPCs retain their existing bounded behavior and
+  do not draw from this bucket.
 - **Refused stock-route calls** emit a metric only: they have no sequence, and
   the contract drops any event with sequence 0
   (`Source/GameNet/Public/AethelnObservabilitySubsystem.h:56-61`;
@@ -666,6 +802,13 @@ The client must not control event volume in the observability critical lane.
 
   Every limited window therefore costs at most two metric samples, one event,
   and one outcome, whatever the client sends.
+  This is one shared window across ordinary, movement and refused stock routes.
+  Emission is route-aware: if movement enters it, use the typed movement
+  outcome and nonzero ordinal; if an ordinary request enters it, use its
+  sequence outcome; stock entry sends no reply. Mixed traffic does not open a
+  second window or budget. Subsequent traffic contributes to the same bounded
+  suppressed count, and teardown flushes its exit metric and clears pending
+  movement delegates without emitting into the ordinary client stream.
 - **Zero-sequence requests** outside a window are counted by metric only; their
   event is dropped by contract. This is documented, not worked around.
 
@@ -677,6 +820,11 @@ The client must not control event volume in the observability critical lane.
   id is filled only once the server resolved a granted spec (step 6 onward).
   Accepted events carry both ids (`:47-61`); a valid Release carries the
   running activation's id.
+  Movement emits a separate nonzero PlayerState ordinal in the telemetry
+  sequence slot; it never manufactures a client sequence-0 activation event.
+  The result's subject comes from the resolved action (`Dodge`, `Block`,
+  otherwise `Ability`), with the same cooldown/resource reason mapping and
+  step-6 ability-id disclosure rule. No target identity or Guard value is added.
 - **Connection pseudonym: `excluded` in #19.** No pseudonym property or
   assigner is added; events use the explicit `excluded` value the contract
   allows (`docs/observability-and-crash-diagnostics.md:55-58`). When a packaged
@@ -748,7 +896,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T7 | `Aetheln.GameCombat.Attributes.ReplicationPolicy` | P2 | H | From the class default object: all six attributes `COND_OwnerOnly` and `REPNOTIFY_Always` |
 | T8 | `Aetheln.GameCombat.Attributes.ClampAndBounds` | P2 (P4 adds the lower-only case) | H | Values clamp to `[0, Max]`; lowering each max re-clamps its current value and lowers a base above it; with a positive temporary modifier active, lowering a max below the current value but above the base re-clamps the current value and never raises the base |
 | T9 | `Aetheln.GameCombat.Attributes.InitOnceThroughEffect` | P2 | H | Values arrive only through the init effect, once per PlayerState; every current value equals its configured value; re-possession does not reapply |
-| T10 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3 | H | Exactly five reflected fields; none named or typed as target, hit, contact, damage, magnitude, attribute, aim, cost, or cooldown (extends `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:186-189`) |
+| T10 / A1 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3, #60 P2 update | H | Exactly seven reflected fields; only Aim and ClientServerTimeSeconds are added; no target, hit, contact, damage, magnitude, attribute, shape, range, window, cost, or cooldown field |
 | T11 | `Aetheln.GameCombat.ActivationSeam.ValidateMatrix` | P3 | H | Steps 1 to 7 with an injected clock: each failure, precedence, zero/lower/equal sequences, an accepted forward gap, Press while active, Release undeclared, a valid Release |
 | T12 | `Aetheln.GameCombat.ActivationSeam.RejectionHasNoSideEffect` | P3 | H | Every rejection leaves no cost, cooldown, state tag, sequence advance, or activation id; a failing commit gives `InternalFailure`, and so does a failing commit whose ability keeps running (the seam cancels it) and a commit through the refused partial `CommitAbilityCost` and `CommitAbilityCooldown`, which apply nothing; a valid Release advances the sequence and replaying it is rejected |
 | T13 | `Aetheln.GameCombat.ActivationSeam.StockRoutesRefused` | P3 | H | Nothing activates or commits via the single-ability RPCs, `ServerAbilityRPCBatch` (whole batch dropped, target-data cache untouched), `TryActivateAbilityByClass`, `TryActivateAbilitiesByTag`, `GiveAbilityAndActivateOnce`, a gameplay event matching a test trigger, or an ability activated from inside another ability's `ActivateAbility`. The trigger case grants its test ability directly, because T15 refuses triggers. The cache assertion uses a test accessor on the project ASC, because `AbilityTargetDataMap` is protected (`GAS/Public/AbilitySystemComponent.h:1650`, `:1671`). |
@@ -772,6 +920,22 @@ matches the approved design; T32 is intentionally unassigned.
 | T31 | `Aetheln.GameCombat.ActivationSeam.LifecycleRejections` | P3 | H | No avatar gives `ConnectionClosed`; a dying avatar gives `ActorDestroyed`; sequence state survives re-possession |
 | T33 | `Aetheln.GameCombat.Lifecycle.PawnToAbilitySystemLookup` | P2 | H | `FindForPawn` returns the PlayerState ASC for a player pawn, the pawn's own ASC for AI, null for neither |
 | T34 | `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` | P2 | H | Pins the known gap: a fresh PlayerState for the same player gets a full init. #21 flips it. |
+
+### T1 required integration coverage
+
+These additions to existing test rows are required before movement-carried
+implementation acceptance. They do not widen the frozen CI filter or report
+an existing pass. D rows refer to the
+[Dodge test plan](dodge-and-block.md#test-plan).
+
+| #19 rows | #18 rows | Added obligation |
+| --- | --- | --- |
+| T11 | D8 | Shared check precedence and version/lifecycle/instance/start failures; ordinary RPC for a movement-carried grant is `MalformedRequest`. A valid ordinary Press immediately after movement is accepted using ordinary sequence, raw aim and client time state left untouched by the dodge; it advances that history only under the ordinary acceptance rule. |
+| T13 | D8 | Scope authorizes only the resolved spec. Client replay, forced updates and no-current-move-data calls authorize nothing; stock RPC/batch/event and nested other-spec routes remain refused and rate-accounted. |
+| T15 | D7 | Positive valid definition first, then finite/order/duration/tag/cost-or-cooldown failures as applicable to Q4; marker requires Press-only/no Release. Specialized checks are reached through the actual base-pointer PlayerState grant path. Test values are policy fixtures, not tuning. |
+| T12, T17, T18 | D9, D11, D12 | One full cost/cooldown commit; rejection and refused partial commits spend nothing or advance no history. Repeated full commit and synchronous cancellation/replacement/tag/avatar callbacks preserve operation identity and clear obsolete state. Use actual packed-move delivery to assert simulated-move and authority-call counts for dropped/duplicate/reordered/zero-delta/forced/unacknowledged cases. |
+| T14, T21 | D15 | Mixed ordinary/movement/stock flood shares one token budget and limited window; typed route-correct entry outcome/event, nonzero movement ordinal, bounded suppression and teardown exit metric. Preserve subject mapping, owner-only RPC, step-6 disclosure and unchanged gameplay when the sink is absent. |
+| T12 (operation cleanup), T11 (due-boundary validation) | D10, D13, D14, D16 | Due boundaries precede either transport's validation; half-open windows use server processing time even with withheld moves or absent presentation. State.Dead/avatar/PlayerState cleanup closes the actual operation and displacement once; re-possession or synchronous replacement cannot resurrect stale avoidance. |
 
 | Acceptance item | Tests and text |
 | --- | --- |
@@ -806,7 +970,7 @@ leaves the spike files untouched.
 
 Not part of #19: ability input bindings (they go with #60 and #82); damage and
 the defense order, contacts, Guard pressure, block resolution, the basic chain,
-and attack timelines (#60); bounding the target-data cache (#60); dodge (#18);
+and attack timelines (#60); dodge (#18);
 death, respawn, and reconnect restoration (#21); the HUD and opponent
 visibility (#61); enemy behavior (#20); widening the CI filter; and migrating
 the spike classes after #2 closes.
@@ -851,9 +1015,11 @@ here.
   so the gap stays visible, and #21 flips it when it lands its reconnect rule
   (its acceptance criterion: reconnect during death or respawn resolves to one
   valid state).
-- **Target-data cache growth (owner: #60).** A hostile client can grow server
-  memory through the standalone target-data RPCs; see the RPC table in Closing
-  the Stock Routes for the mechanism and the rule.
+- **Replicated-data cache closure (#60 P2).** All four client-callable cache
+  writers now refuse through generated virtual implementations. A3 covers
+  no writes, token accounting, metric-only telemetry, no replies, and
+  unaffected bounded input-state RPCs. Local non-RPC cache APIs remain
+  available to trusted engine code; project abilities do not use these tasks.
 
 ## Open Decisions
 
@@ -869,8 +1035,9 @@ All stay `TBD` until the named owner decides.
    evidence tickets (#45).
 3. **Final values** for the PlayerState update frequency and the rate bucket
    (placeholders set and reviewed in P3). Owner: #45.
-4. **Aim policy and bounds** (#82 F1, F2), and whether the request gains aim
-   and a timestamp. Owners: #60 and #2.
+4. **Numeric aim/time bounds** (#82 F1, F2). #60 P2 decides the schema-2
+   representation, bounded correction and raw-to-raw rate policy. Its eight
+   keys remain unset/`TBD`; owners #60, #2 and #45 approve future values.
 5. **Phase behavior of Hold the Line:** a fixed-duration commitment, or
    hold-and-release (which would set `bAcceptsRelease`). Owners: #107 and the
    owner.

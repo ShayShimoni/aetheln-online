@@ -820,6 +820,14 @@ void AAethelnPlayerCharacter::ReceiveSprintIntent(bool bWantsToSprint)
 	ApplySprintIntent(bWantsToSprint);
 }
 
+void AAethelnPlayerCharacter::ReceiveDodgePressed()
+{
+	if (IsLocallyControlled())
+	{
+		GetCharacterMovement<UAethelnCharacterMovementComponent>()->RequestDodge();
+	}
+}
+
 void AAethelnPlayerCharacter::UnPossessed()
 {
 	GetMesh()->SetOwnerNoSee(false);

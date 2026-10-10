@@ -54,6 +54,7 @@ namespace AethelnAbilityLifecycleTests
 		Request.AbilityId = AethelnCombatTestTags::Ability_Test_LongRunning;
 		Request.ContentVersion = GetDefault<UAethelnLongRunningTestAbility>()->ContentVersion;
 		Request.Sequence = 1;
+		AethelnCombatTests::FillTestAimAndTime(Request, AbilitySystem);
 		Test.TestTrue(TEXT("Test ability activates on the server through the seam"), AbilitySystem.ProcessServerRequest(Request) == EAethelnActivationResult::Accepted);
 		const FGameplayAbilitySpec* ActiveSpec = AbilitySystem.FindAbilitySpecFromHandle(Handle);
 		Test.TestTrue(TEXT("Test ability stays active until cancelled"), ActiveSpec != nullptr && ActiveSpec->IsActive());

@@ -33,7 +33,13 @@ public:
 	virtual void ReceiveJumpStopped() override;
 	virtual void ReceiveJumpCanceled() override;
 	virtual void ReceiveSprintIntent(bool bWantsToSprint) override;
+	virtual void ReceiveDodgePressed() override;
 	virtual void UnPossessed() override;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Forward the protected engine replication field only for the movement observer fixture. */
+	void TestSetReplicatedMovementMode(uint8 Mode) { SetReplicatedMovementMode(Mode); }
+#endif
 
 protected:
 	virtual void BeginPlay() override;

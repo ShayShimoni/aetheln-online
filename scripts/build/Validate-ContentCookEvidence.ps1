@@ -795,6 +795,11 @@ foreach ($IntakeAsset in @($Intake.assets)) {
 }
 
 if ([int]$BuildProvenance.schemaVersion -ne 2) { throw 'Build provenance must use schemaVersion 2.' }
+. (Join-Path $PSScriptRoot 'PackagingRecipeProof.ps1')
+Assert-PackageRecipeProvenance $BuildProvenance
+if ($null -ne (Get-PackageProofMember $BuildProvenance.build 'packageRecipe')) {
+	Assert-PackageRecipePayloads $BuildProvenance (Split-Path -Parent $BuildProvenance.artifacts.clientArchive) (Split-Path -Parent $BuildProvenance.artifacts.serverArchive)
+}
 Assert-Boolean $BuildProvenance.source.clean 'Build provenance source.clean'
 if (-not $BuildProvenance.source.clean) { throw 'Build provenance must bind a clean source tree.' }
 Assert-Equal -Actual $BuildProvenance.build.clientTarget -Expected 'AethelnOnlineClient' -Context 'Build provenance clientTarget'

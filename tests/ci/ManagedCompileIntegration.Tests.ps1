@@ -196,6 +196,8 @@ function Test-SupervisorScenario {
 	$script:ResolvedLogs = $CaseRoot
 	$script:ResolvedRepository = $RepositoryRoot
 	$script:Mode = 'Compile'
+	$script:PackageRecipe = 'Stock'
+	$script:PackageRecipeEvidence = $null
 	$script:SourceRevision = 'b' * 40
 	$script:ArchiveRoot = Join-Path $CaseRoot "archive's fixture"
 	$script:RunnerName = 'fixture-runner'

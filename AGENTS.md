@@ -37,6 +37,22 @@ research reports. Historical documents remain useful as research, but must not
 silently reintroduce rejected arena-only PvP, optional frontier PvP,
 gear-equalized world combat, or traditional talent-tree assumptions.
 
+Before generating or editing character or asset imagery, use
+[$aetheln-imagegen](.agents/skills/aetheln-imagegen/SKILL.md), then read
+[Art Style and Generation Guide](docs/art-style-guide.md) and open its approved
+visual references. Use the polished stylized 3D sculpt/render direction recorded
+there; it supersedes older painterly rendering instructions. Keep rendering
+style separate from subject identity, preserve each asset's approved design,
+and save the exact prompt with each new version outside the Git worktree.
+Follow the guide's reference and storage boundary: keep external references
+and candidate lineage outside the repository; retain selected Aetheln results
+and suitable prompts inside it. Open the race's current
+approved visual baseline recorded in `docs/playable-peoples.md`; use the
+selected Aurin and Kell pairs rather than superseded exploration images.
+Kell and Vesh anatomy and lore are
+defined in `docs/playable-peoples.md` and the specialized canonical story
+documents. Image approval does not establish production readiness.
+
 Do not guess unresolved tuning values, final faction names, level caps, drop
 rates, invasion schedules, or population limits. Preserve explicit `TBD`
 decisions until evidence or user direction resolves them.

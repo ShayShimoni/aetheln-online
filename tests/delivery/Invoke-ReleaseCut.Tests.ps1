@@ -423,6 +423,8 @@ try {
 	$GoodLog = New-NetVersionLog -Version '1.0.0-alpha.1'
 	$GoodProvenance = "{ `"schemaVersion`": 2, `"source`": { `"revision`": `"$CutRevision`" } }"
 	$PackageCases = @(
+		@{ Code = 'release_package_recipe_invalid'; Subject = 'provenance'; Client = $GoodLog; Server = $GoodLog; Provenance = ('{"schemaVersion":2,"source":{"revision":"' + $CutRevision + '"},"build":{"uatInvocations":{"client":{"arguments":["BuildCookRun","-skipbuild"]},"server":{"arguments":["BuildCookRun"]}}}}') },
+		@{ Code = 'release_package_recipe_invalid'; Subject = 'provenance'; Client = $GoodLog; Server = $GoodLog; Provenance = ('{"schemaVersion":2,"source":{"revision":"' + $CutRevision + '"},"build":{"packageRecipe":{}}}') },
 		@{ Code = 'release_package_version_mismatch'; Subject = 'server'; Client = $GoodLog; Server = (New-NetVersionLog -Version '1.0.0-alpha.2' -Checksum '777'); Provenance = $GoodProvenance },
 		@{ Code = 'release_package_version_mismatch'; Subject = 'client'; Client = "[2026.10.03-12.00.00:000][  0]LogInit: no net version line here`n"; Server = $GoodLog; Provenance = $GoodProvenance },
 		@{ Code = 'release_package_version_mismatch'; Subject = 'client-server'; Client = $GoodLog; Server = (New-NetVersionLog -Version '1.0.0-alpha.1' -Checksum '999'); Provenance = $GoodProvenance },

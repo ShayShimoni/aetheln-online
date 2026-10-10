@@ -1,0 +1,17 @@
+Tool: built-in image_gen
+Output: 57-quartz-balanced-hands-feet.png
+Edit target: 56-quartz-smaller-hands-feet.png
+Larger hand/foot reference: 55-quartz-amethyst-horn-insets.png
+Artifact type: 3D-style raster concept image, not a 3D mesh.
+
+Use case: precise-object-edit.
+Image 1 is the current character with hands and feet that became TOO SMALL. Image 2 is the previous character with slightly oversized hands and feet.
+Create ONE corrected full-body image with the HANDS AND FEET at a balanced INTERMEDIATE SIZE, approximately halfway between these two references.
+
+Specifically enlarge both hands from image 1 so they have visibly more substantial palms, longer fingers and proportional claws, better matching the muscular forearms. Bring them roughly halfway toward the larger hands in image 2: about 15–18 percent larger than image 1, still modestly smaller than image 2. The wrists must stay in the same anatomical location and the forearms must not shorten.
+Enlarge both feet from image 1 by a smaller amount, roughly 7–9 percent in width and length, about halfway toward image 2. Keep broad grounded heels and the three articulated forward toes with quartz claws. Hands and feet should feel strong and naturally proportioned to this buff fantasy character, neither tiny nor oversized.
+Keep each hand's current digit arrangement and dragonlike shape, plate layout and claw design. Scale the complete hand and complete foot naturally, with seamless wrist and ankle transitions. Do not change the arm or leg lengths, stance width or whole-character scale.
+
+Preserve EVERYTHING ELSE exactly from image 1: head and face, broad nose, glowing violet eyes, amethyst head accents, ivory sweeping horns with dark purple insets, pointed ears, buff body proportions, all torso and limb geometry above wrists and ankles, ivory outer quartz and dark amethyst inner bands, frontal A-pose, full-body camera and frame, warm-gray studio background and lighting.
+Maintain the approved polished 3D sculpt/render finish: clean smooth solid volumes, broad satin highlights, subtle mineral veins, restrained crystal glow and grounded soft contact shadows. No painterly noise, redesign, extra limbs, clothes, armor, props, text or watermark. Same smooth non-explicit mineral anatomy.
+Only restore some size to the hands and feet to achieve the middle ground between the two provided images.
