@@ -96,6 +96,7 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 
 	// Unpossession, or the possessed pawn is being destroyed. InitAbilityActorInfo
 	// does not cancel on an avatar change, so cancel explicitly.
+	AbilitySystemComponent->ResetChain(EAethelnChainEndReason::AvatarLost);
 	AbilitySystemComponent->CancelAllAbilities();
 
 	// SetAvatarActor, never ClearActorInfo: the owner must stay the PlayerState.
