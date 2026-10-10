@@ -31,7 +31,7 @@ public:
 	const FGuid& GetActivationId() const { return ActivationId; }
 
 	/** Grant-time validation of this definition: null when it may be granted, otherwise the reason. */
-	const TCHAR* FindGrantProblem() const;
+	virtual const TCHAR* FindGrantProblem() const;
 
 	virtual bool CanActivateAbility(
 		const FGameplayAbilitySpecHandle Handle,
@@ -94,6 +94,13 @@ public:
 	bool bAcceptsRelease = false;
 
 protected:
+	/** Establishes the server operation before stock owned-tag/activation callbacks. */
+	virtual void PreActivate(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
+		const FGameplayAbilityActivationInfo ActivationInfo, FOnGameplayAbilityEnded::FDelegate* OnGameplayAbilityEndedDelegate,
+		const FGameplayEventData* TriggerEventData = nullptr) override;
+	const FGuid& GetActivationOperationId() const { return ActivationOperationId; }
+	const FGameplayAbilityActorInfo& GetActivationActorInfo() const { return ActivationActorInfo; }
+	bool HasActivationLifecycle() const;
 	/**
 	 * Commits once through CommitAbility, then ends directly with EndAbility whether or not the
 	 * commit succeeded, so it never relies on the seam's cancel, which a non-cancelable ability
@@ -118,7 +125,19 @@ private:
 
 	/** Seam only: ends the running activation for a valid Release. */
 	void EndForRelease();
+	bool CanEndForRelease() const;
 
 	FGuid ActivationId;
+	FGuid ActivationOperationId;
+	FGuid CommitAttemptOperationId;
+	FGameplayAbilityActorInfo ActivationActorInfo;
+	struct FCommitContext
+	{
+		float EnduranceCost = 0.0f;
+		float CooldownSeconds = 0.0f;
+		int32 AbilityLevel = 1;
+		FGameplayTagContainer CooldownTags;
+	};
+	const FCommitContext* ActiveCommitContext = nullptr;
 	FGameplayTagContainer CooldownTags;
 };

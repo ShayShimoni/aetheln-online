@@ -7,8 +7,29 @@
 #include "AethelnAbilitySystemComponent.generated.h"
 
 class APawn;
+class AController;
+class UAethelnBasicChainAbility;
+class UAethelnCombatTimelineSubsystem;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnActivationOutcomeDelegate, uint32 /* Sequence */, EAethelnActivationResult /* Result */);
+DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatActivationDelegate, const FAethelnCombatActivationRecord&);
+DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnChainEndDelegate, const FGuid&, EAethelnChainEndReason);
+
+/** Server-only chain bookkeeping, separate from GAS activation and observer state. */
+struct FAethelnServerChainState
+{
+	bool bExists = false;
+	bool bWaiting = false;
+	bool bCommitmentHeld = false;
+	uint8 Step = 0;
+	double StartTime = 0.0;
+	double BufferedStartTime = 0.0;
+	FGameplayAbilitySpecHandle Handle;
+	TWeakObjectPtr<UAethelnBasicChainAbility> Ability;
+	TArray<FAethelnAttackStepDefinition> Definitions;
+	FAethelnAcceptedAttackInput CurrentInput;
+	FAethelnAcceptedAttackInput BufferedInput;
+};
 
 /** One connection's token bucket for activation messages (validation step 1). Starts full. */
 struct GAMECOMBAT_API FAethelnActivationRateBucket
@@ -53,6 +74,8 @@ struct FAethelnActivationValidationState
 	bool bAvatarBeingDestroyed = false;
 	/** 0 until a request is accepted; then the previous-request checks of 6a and 6d apply. */
 	uint32 LastAcceptedSequence = 0;
+	/** Scoped requests still on the server stack; not accepted aim/time history. */
+	uint32 HighestInFlightSequence = 0;
 	/** A spec granted to this ASC is named by the request's AbilityId. */
 	bool bAbilityGranted = false;
 	uint32 GrantedContentVersion = 0;
@@ -118,6 +141,14 @@ public:
 
 	/** Owning client: every outcome, reliably and in order. */
 	FAethelnActivationOutcomeDelegate OnActivationOutcome;
+	FAethelnCombatActivationDelegate OnCombatActivation;
+	FAethelnChainEndDelegate OnChainEnded;
+	const FAethelnAttackPresentationState& GetAttackPresentationState() const { return AttackPresentationState; }
+
+	/** Authority only; stamp the step and clear the chain once, without removing a mid-frame step. */
+	void ResetChain(EAethelnChainEndReason Reason);
+	void ResetChain(EAethelnChainEndReason Reason, double ResetTime);
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Rate bucket placeholder, never tuning; #45 owns the final value. Without config (0) every request is rate limited. */
 	UPROPERTY(Config)
@@ -167,8 +198,14 @@ public:
 
 	/** Flushes an open rate-limited window. */
 	virtual void OnUnregister() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 #if WITH_DEV_AUTOMATION_TESTS
+	const FAethelnServerChainState& GetChainStateForTests() const { return ChainState; }
+	double GetLastChainResetTimeForTests() const { return LastChainResetTime; }
+	uint32 GetLastAcceptedSequenceForTests() const { return LastAcceptedSequence; }
+	FVector GetLastAcceptedAimForTests() const { return LastAcceptedAim; }
+	double GetLastAcceptedClientTimeForTests() const { return LastAcceptedClientTimeSeconds; }
 	void CallServerTryActivateAbilityForTests(FGameplayAbilitySpecHandle Handle);
 	void CallServerTryActivateAbilityWithEventDataForTests(FGameplayAbilitySpecHandle Handle, const FGameplayEventData& EventData);
 	bool HasReplicatedTargetDataForTests(FGameplayAbilitySpecHandle Handle, const FPredictionKey& PredictionKey) const;
@@ -184,17 +221,51 @@ protected:
 
 	UFUNCTION(Client, Reliable)
 	void ClientActivationOutcome(uint32 Sequence, EAethelnActivationResult Result);
+	UFUNCTION(Client, Reliable)
+	void ClientCombatActivation(const FAethelnCombatActivationRecord& Record);
+	UFUNCTION(Client, Reliable)
+	void ClientChainEnded(const FGuid& ActivationId, EAethelnChainEndReason Reason);
 
 private:
 	friend class UAethelnGameplayAbility;
+	friend class UAethelnBasicChainAbility;
+	friend class UAethelnCombatTimelineSubsystem;
 
 	/** The seam's result slot, open only while the seam activates this one spec handle. */
 	struct FSeamScope
 	{
 		FGameplayAbilitySpecHandle Handle;
 		bool bCommitted = false;
+		bool bChainReady = false;
+		bool bCanceled = false;
 		FGuid ActivationId;
+		FAethelnAcceptedAttackInput AttackInput;
 	};
+	/** Per-call reservation: discarded on every return, including refusal. */
+	struct FRequestScope
+	{
+		FRequestScope* Previous = nullptr;
+		uint32 Sequence = 0;
+		TWeakObjectPtr<AActor> Owner;
+		TWeakObjectPtr<AActor> Avatar;
+		TWeakObjectPtr<AController> Controller;
+	};
+	FRequestScope* ActiveRequestScope = nullptr;
+
+	bool BeginChainPress(UAethelnBasicChainAbility& Ability, FGameplayAbilitySpecHandle Handle);
+	bool StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime);
+	void StartBufferedChainStep(double Now);
+	void ApplyChainBoundaries(double Now);
+	void HandleChainResetTag(const FGameplayTag Tag, int32 NewCount);
+	void BindChainResetTags(const FGameplayTagContainer& Tags);
+	void UnbindChainResetTags();
+	UAethelnCombatTimelineSubsystem* GetCombatTimeline() const;
+	FAethelnServerChainState ChainState;
+	TArray<TPair<FGameplayTag, FDelegateHandle>> ChainResetHandles;
+	double LastChainResetTime = 0.0;
+	uint32 AttackActivationCounter = 0;
+	UPROPERTY(Replicated)
+	FAethelnAttackPresentationState AttackPresentationState;
 
 	bool IsSeamActivating(FGameplayAbilitySpecHandle Handle) const;
 	void RecordSeamCommit(FGameplayAbilitySpecHandle Handle, bool bCommitted, const FGuid& ActivationId);

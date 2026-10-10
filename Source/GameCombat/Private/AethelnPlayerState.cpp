@@ -7,6 +7,7 @@
 #include "GameFramework/Pawn.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityGrant, Log, All);
+DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityAvatar, Log, All);
 
 AAethelnPlayerState::AAethelnPlayerState()
 {
@@ -65,6 +66,9 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 	{
 		// Clients converge on the server's replicated avatar either way.
 		AbilitySystemComponent->InitAbilityActorInfo(this, NewPawn);
+		UE_LOG(LogAethelnAbilityAvatar, Log, TEXT("%s possessed %s (%s): ASC owner=%s avatar=%s authority=%d"),
+			*GetNameSafe(this), *GetNameSafe(NewPawn), *GetNameSafe(NewPawn->GetClass()),
+			*GetNameSafe(AbilitySystemComponent->GetOwnerActor()), *GetNameSafe(AbilitySystemComponent->GetAvatarActor()), HasAuthority() ? 1 : 0);
 
 		// Keyed on the flag only, never on OldPawn: re-possession (for example a
 		// respawn) never re-grants, refills, or resets cooldowns. #21 owns respawn.
@@ -84,6 +88,7 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 		return;
 	}
 
+	UE_LOG(LogAethelnAbilityAvatar, Log, TEXT("%s has no pawn (was %s): authority=%d"), *GetNameSafe(this), *GetNameSafe(OldPawn), HasAuthority() ? 1 : 0);
 	if (!HasAuthority())
 	{
 		return;
@@ -91,6 +96,7 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 
 	// Unpossession, or the possessed pawn is being destroyed. InitAbilityActorInfo
 	// does not cancel on an avatar change, so cancel explicitly.
+	AbilitySystemComponent->ResetChain(EAethelnChainEndReason::AvatarLost);
 	AbilitySystemComponent->CancelAllAbilities();
 
 	// SetAvatarActor, never ClearActorInfo: the owner must stay the PlayerState.
