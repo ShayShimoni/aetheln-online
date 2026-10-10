@@ -299,7 +299,7 @@ function Assert-AllPowerShellRunBlocksParse([string] $Text, [string] $Name, [int
 	}
 	Assert-True ($ParsedCount -eq $ExpectedCount) "$Name must contain exactly $ExpectedCount reviewed literal PowerShell run blocks; found $ParsedCount."
 }
-Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 23
+Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 25
 Assert-AllPowerShellRunBlocksParse -Text $VisualWorkflow -Name 'Visual workflow' -ExpectedCount 2
 
 Assert-True ($VisualWorkflow -match '(?m)^  workflow_call:\r?$') 'Visual validation must expose an additive reusable workflow entry point.'
@@ -361,7 +361,7 @@ Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -matc
 # streams go to runner-local files and only a path-free summary is printed.
 Assert-True (((($TrustedCompile -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch '(?i)automation|AethelnOnlineEditor|editor_build') 'The compile job must carry no editor automation.'
 Assert-True ($EditorAutomation -match "(?m)^    needs: trusted-candidate-compile\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Editor automation must run only after a successful compile under the same owner and same-repository trust.'
-Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 45\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result|always\(\)') 'Editor automation must have its own 45-minute ceiling, join the FIFO engine queue, and add no status bypass.'
+Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 45\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result' -and [regex]::Matches($EditorAutomation, 'always\(\)').Count -eq 1) 'Editor automation must have its own 45-minute ceiling, join the FIFO engine queue, and add no status bypass beyond the one final control-checkout cleanup step.'
 # Issue #236: the editor job re-syncs the managed workspace from its own fresh
 # exact-revision control checkout, with the compile job's checkout inputs: no
 # persisted credentials, no LFS, a five-minute bound, and a run/attempt path.
@@ -384,8 +384,9 @@ $AutomationRun = [regex]::Match($EditorAutomation, '(?ms)^      - name: Run froz
 $AutomationResidue = [regex]::Match($EditorAutomation, '(?ms)^      - name: Clear editor-written input residue\r?\n.*?(?=^      - )').Value
 $AutomationBind = [regex]::Match($EditorAutomation, '(?ms)^      - name: Bind Unreal automation report\r?\n.*?(?=^      - )').Value
 $AutomationUpload = [regex]::Match($EditorAutomation, '(?ms)^      - name: Upload Unreal automation report\r?\n.*?(?=^      - )').Value
-$AutomationOutcome = [regex]::Match($EditorAutomation, '(?ms)^      - name: Report Unreal automation outcome\r?\n.*?(?=\r?\n\r?\n|\z)').Value
-Assert-True ($EditorControl -and $EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome) 'Editor automation must declare every reviewed step.'
+$AutomationOutcome = [regex]::Match($EditorAutomation, '(?ms)^      - name: Report Unreal automation outcome\r?\n.*?(?=^      - |\r?\n\r?\n|\z)').Value
+$ControlCleanup = [regex]::Match($EditorAutomation, '(?ms)^      - name: Remove control checkouts\r?\n.*?(?=^      - |\z)').Value
+Assert-True ($EditorControl -and $EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome -and $ControlCleanup) 'Editor automation must declare every reviewed step.'
 # Unreal failures stay on the unreal side: every automation step that can fail
 # continues on error, so the compile job and native receipt survive, while
 # binding and upload require every automation step to have succeeded. A
@@ -405,7 +406,10 @@ foreach ($Step in @(
 	@{ Name='residue cleanup'; Body=$AutomationResidue; Id='automation_residue'; If=$ResidueCondition; Timeout='2'; Continue=$true },
 	@{ Name='bind'; Body=$AutomationBind; Id='automation_identity'; If=$AutomationSuccess; Timeout='1'; Continue=$true },
 	@{ Name='upload'; Body=$AutomationUpload; Id='automation_artifact'; If=($AutomationSuccess + " && steps.automation_identity.outcome == 'success'"); Timeout='1'; Continue=$true },
-	@{ Name='outcome report'; Body=$AutomationOutcome; Id='automation_outcome'; If=$null; Timeout='1'; Continue=$true }
+	@{ Name='outcome report'; Body=$AutomationOutcome; Id='automation_outcome'; If=$null; Timeout='1'; Continue=$true },
+	# Issue #243 item 5: the final control-checkout cleanup keeps every checkout on the
+	# residue step's skip conditions, but also runs after a failed or cancelled later step.
+	@{ Name='control cleanup'; Body=$ControlCleanup; Id='control_cleanup'; If=('if: always() && (' + $ResidueCondition.Substring(4) + ')'); Timeout='1'; Continue=$true }
 )) {
 	$Body = [string] $Step.Body
 	Assert-True ($Body -match ('(?m)^        id: ' + $Step.Id + '\r?$')) "The automation $($Step.Name) step must carry id '$($Step.Id)'."
@@ -417,6 +421,33 @@ foreach ($Step in @(
 	else { Assert-True ($Body -notmatch 'continue-on-error') "The automation $($Step.Name) step must fail red once every automation step succeeded." }
 }
 Assert-True ($UnrealReceipt -match "(?ms)^      - name: Download exact unreal evidence\r?\n        if: needs\.trusted-editor-automation\.outputs\.automation_artifact_id != ''\r?\n") 'A missing automation artifact must skip the unreal download so the publisher fails at its raw binding check rather than downloading every run artifact.'
+# Issue #243 item 5: every compile and editor attempt adds one disposable control
+# checkout (issue #167) to the runner workspace. Each engine job therefore ends with
+# one cleanup step that removes its own checkout and any earlier ones. No other job
+# reads a control checkout: each job checks out and reads only its own. A runner
+# runs one job at a time, so no job can be using an earlier checkout.
+$CompileCleanup = [regex]::Match($TrustedCompile, '(?ms)^      - name: Remove control checkouts\r?\n.*?(?=^      - |\z)').Value
+Assert-True ($CompileCleanup -and $ControlCleanup) 'Both engine jobs must declare the control-checkout cleanup step.'
+Assert-True ($EditorAutomation -notmatch 'compile-control-' -and $TrustedCompile -notmatch 'editor-control-' -and $Workflow.Substring($Workflow.IndexOf('  scheduled-client-package:')) -notmatch 'compile-control-|editor-control-' -and $QualityGates -notmatch 'compile-control-|editor-control-' -and $ChangeImpact -notmatch 'compile-control-|editor-control-') 'Each engine job may name only its own control checkout; no other job reads one.'
+foreach ($Cleanup in @(
+	@{ Name = 'compile'; Body = $CompileCleanup; Job = $TrustedCompile; Own = 'compile-control-${{ github.run_id }}-${{ github.run_attempt }}' },
+	@{ Name = 'editor'; Body = $ControlCleanup; Job = $EditorAutomation; Own = 'editor-control-${{ github.run_id }}-${{ github.run_attempt }}' }
+)) {
+	$Body = [string] $Cleanup.Body
+	$Name = $Cleanup.Name
+	Assert-True (@([regex]::Matches([string] $Cleanup.Job, '(?m)^      - '))[-1].Index -eq ([string] $Cleanup.Job).IndexOf('      - name: Remove control checkouts')) "The $Name control-checkout cleanup must be the last step of its job."
+	Assert-True ($Body -match '(?m)^        shell: powershell\r?$' -and $Body.Contains('working-directory: ${{ runner.temp }}')) "The $Name cleanup must run from runner.temp so its own working directory is never inside a checkout it removes."
+	Assert-True ($Body.Contains('$Workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd(''\'', ''/'')') -and $Body.Contains('$Own = ''' + $Cleanup.Own + '''')) "The $Name cleanup must resolve the workspace and its own checkout name from the run and attempt."
+	Assert-True ($Body.Contains('-cmatch ''\A(compile|editor)-control-[0-9]+-[0-9]+\z''') -and $Body.Contains('[IO.Path]::GetDirectoryName($Path) -ine $Workspace')) "The $Name cleanup must remove only exact control-checkout names directly under the workspace."
+	Assert-True ($Body.Contains('[IO.FileAttributes]::ReparsePoint') -and $Body.Contains('(Test-ReparsePoint $Entry) -or (Test-HasLink $Path)') -and [regex]::Matches($Body, 'Remove-Item').Count -eq 1 -and $Body.Contains('Remove-Item -LiteralPath $Path -Recurse -Force')) "The $Name cleanup must refuse links, never follow them, and remove by literal path only."
+	Assert-True ($Body -notmatch 'Get-ChildItem|Stop-Process|taskkill|\.Kill\(|Get-Process|Get-CimInstance|Win32_Process|Remove-Item[^\r\n]*[*?]|Write-Output[^\r\n]*\$Path') "The $Name cleanup must use no wildcard, process control, or path output."
+}
+Assert-True ($AutomationOutcome -notmatch 'control_cleanup' -and ((($CompileCleanup -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch 'editor_build|automation') 'A cleanup failure must never become an automation reason or touch the compile job shape.'
+# The compile gate leaves a held lease journal when it cannot prove its tree empty or
+# release the lease, and a lease it could not take is held by someone else. Like the
+# editor residue cleanup, the compile cleanup then keeps every checkout, and also when
+# the gate report is missing.
+Assert-True ($CompileCleanup -match '(?m)^        if: always\(\)\r?$' -and $CompileCleanup.Contains('engine-runner-report.json') -and $CompileCleanup.Contains('compile_(cleanup|lease_release)_failed|"lease_[a-z_]{1,48}') -and $CompileCleanup -match '(?m)^        timeout-minutes: 1\r?$' -and $CompileCleanup -match '(?m)^        continue-on-error: true\r?$') 'The compile cleanup must keep every checkout when the gate report is missing or records an unproven cleanup or lease failure.'
 # Issue #236: another owner pull request's compile may re-sync the managed
 # workspace between this run's compile and this job. Under the engine host
 # lease, the step re-syncs it to this revision from the trusted control
@@ -733,6 +764,73 @@ try {
 	Assert-True (@($Residue | Where-Object { Test-Path -LiteralPath (Join-Path $ResidueRepo $_) }).Count -eq 0 -and @($Retained | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ResidueRepo $_)) }).Count -eq 0) 'Residue cleanup must remove only untracked compile-input files.'
 	$Repeated = Invoke-AutomationStepFixture $AutomationResidue
 	Assert-True ($null -eq $Repeated.failure -and (@($Repeated.output) -join "`n") -ceq 'automation_input_residue removed=0') 'Residue cleanup must be idempotent.'
+
+	# Issue #243 item 5: control-checkout cleanup. Run 1 attempt 1 owns the checkout; an
+	# earlier run, the same run's other job, and an earlier attempt left more. Names that
+	# are not exactly a control checkout, a file with a control name, and links stay.
+	$CleanupWorkspace = Join-Path $AutomationFixtureRoot 'cleanup-workspace'
+	$CleanupLinkTarget = Join-Path $AutomationFixtureRoot 'cleanup-link-target'
+	$CleanupReport = Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job\engine-runner-report.json'
+	function Initialize-ControlCleanupFixture {
+		foreach ($Stale in @($CleanupWorkspace, $CleanupLinkTarget)) { if (Test-Path -LiteralPath $Stale) { Remove-Item -LiteralPath $Stale -Recurse -Force } }
+		$null = New-Item -ItemType Directory -Path $CleanupWorkspace, $CleanupLinkTarget
+		[IO.File]::WriteAllText((Join-Path $CleanupLinkTarget 'keep.txt'), 'outside the workspace')
+		foreach ($Directory in @('editor-control-1-1', 'compile-control-1-1', 'compile-control-7-1', 'editor-control-0-3', 'compile-control-9-9', 'milestone', 'editor-control-1', 'editor-control-1-1-old', 'compile-control-x-1', 'Editor-Control-2-2')) {
+			$Git = Join-Path $CleanupWorkspace "$Directory\.git\objects"
+			$null = New-Item -ItemType Directory -Path $Git
+			[IO.File]::WriteAllText((Join-Path $Git 'pack.idx'), 'git objects are read-only')
+			(Get-Item -LiteralPath (Join-Path $Git 'pack.idx')).IsReadOnly = $true
+		}
+		[IO.File]::WriteAllText((Join-Path $CleanupWorkspace 'editor-control-4-4'), 'a file, not a checkout')
+		$null = New-Item -ItemType Junction -Path (Join-Path $CleanupWorkspace 'compile-control-8-8') -Target $CleanupLinkTarget
+		$null = New-Item -ItemType Junction -Path (Join-Path $CleanupWorkspace 'compile-control-9-9\inner-link') -Target $CleanupLinkTarget
+		$env:GITHUB_WORKSPACE = $CleanupWorkspace
+	}
+	function Get-ControlCleanupState {
+		[string[]] $Names = @([IO.Directory]::GetFileSystemEntries($CleanupWorkspace) | ForEach-Object { [IO.Path]::GetFileName($_) })
+		[Array]::Sort($Names, [StringComparer]::Ordinal)
+		return ($Names -join ',')
+	}
+	$KeptAlways = 'Editor-Control-2-2,compile-control-8-8,compile-control-9-9,compile-control-x-1,editor-control-1,editor-control-1-1-old,editor-control-4-4,milestone'
+	$PreviousWorkspace = $env:GITHUB_WORKSPACE
+	try {
+		# The editor job removes its own checkout first, then every other control
+		# checkout, and keeps the two link cases untouched.
+		Initialize-ControlCleanupFixture
+		$Swept = Invoke-AutomationStepFixture $ControlCleanup
+		Assert-True ($null -eq $Swept.failure -and (@($Swept.output) -join "`n") -ceq "control_checkouts removed=4 kept=2`n::warning::control_checkout_kept names=compile-control-8-8,compile-control-9-9") 'The editor cleanup must report only counts and the kept names.'
+		Assert-True ((Get-ControlCleanupState) -ceq $KeptAlways) 'The editor cleanup must remove exactly the own, same-run and earlier control checkouts, including read-only git objects.'
+		Assert-True ([IO.File]::ReadAllText((Join-Path $CleanupLinkTarget 'keep.txt')) -ceq 'outside the workspace' -and (Test-Path -LiteralPath (Join-Path $CleanupWorkspace 'compile-control-9-9\.git\objects\pack.idx'))) 'The cleanup must never follow or remove a link, nor touch a tree that contains one.'
+		$Again = Invoke-AutomationStepFixture $ControlCleanup
+		Assert-True ($null -eq $Again.failure -and (@($Again.output) -join "`n") -ceq "control_checkouts removed=0 kept=2`n::warning::control_checkout_kept names=compile-control-8-8,compile-control-9-9" -and (Get-ControlCleanupState) -ceq $KeptAlways) 'The cleanup must be idempotent.'
+		# A workspace without any control checkout is a successful no-op.
+		foreach ($Junction in @('compile-control-8-8', 'compile-control-9-9\inner-link')) { [IO.Directory]::Delete((Join-Path $CleanupWorkspace $Junction)) }
+		$Quiet = Invoke-AutomationStepFixture $ControlCleanup
+		Assert-True ($null -eq $Quiet.failure -and (@($Quiet.output) -join "`n") -ceq 'control_checkouts removed=1 kept=0') 'Links removed by the operator must let the next cleanup finish.'
+		Assert-True (-not ((@($Swept.output) + @($Again.output) + @($Quiet.output)) -join "`n").Contains($AutomationFixtureRoot)) 'The cleanup must print no runner path.'
+
+		# The compile job removes the same set, but keeps every checkout when the gate
+		# report is missing or records an unproven cleanup or a lease failure.
+		foreach ($CompileCase in @(
+			@{ name = 'no report'; report = $null; kept = $true },
+			@{ name = 'unproven cleanup'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_cleanup_failed"}]}'; kept = $true },
+			@{ name = 'failed release'; report = '{"checks":[{"name":"compile-host-lease","status":"failed","message":"compile_lease_release_failed"}]}'; kept = $true },
+			@{ name = 'lease not taken'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"lease_owner_ambiguous"}]}'; kept = $true },
+			@{ name = 'build failure'; report = '{"checks":[{"name":"compile-host-lease","status":"passed","message":"released"},{"name":"compile-gate","status":"failed","message":"compile_failed"}]}'; kept = $false }
+		)) {
+			Initialize-ControlCleanupFixture
+			if (Test-Path -LiteralPath $CleanupReport) { Remove-Item -LiteralPath $CleanupReport -Force }
+			if ($null -ne $CompileCase.report) { [IO.File]::WriteAllText($CleanupReport, $CompileCase.report) }
+			$Before = Get-ControlCleanupState
+			$Compiled = Invoke-AutomationStepFixture $CompileCleanup
+			if ($CompileCase.kept) { Assert-True ($null -eq $Compiled.failure -and (@($Compiled.output) -join "`n") -ceq 'control_checkouts kept reason=host_state_unproven' -and (Get-ControlCleanupState) -ceq $Before) "The compile cleanup must keep every checkout after: $($CompileCase.name)." }
+			else { Assert-True ($null -eq $Compiled.failure -and (@($Compiled.output) -join "`n") -ceq "control_checkouts removed=4 kept=2`n::warning::control_checkout_kept names=compile-control-8-8,compile-control-9-9" -and (Get-ControlCleanupState) -ceq $KeptAlways) "The compile cleanup must clean up after: $($CompileCase.name)." }
+		}
+		Remove-Item -LiteralPath $CleanupReport -Force -ErrorAction SilentlyContinue
+	} finally {
+		$env:GITHUB_WORKSPACE = $PreviousWorkspace
+		foreach ($Junction in @('compile-control-8-8', 'compile-control-9-9\inner-link')) { $JunctionPath = Join-Path $CleanupWorkspace $Junction; if (Test-Path -LiteralPath $JunctionPath) { [IO.Directory]::Delete($JunctionPath) } }
+	}
 
 	# The editor target reaches Build.bat only as a Win64 build through the
 	# bounded wrapper; Linux stays server-only.
@@ -1078,7 +1176,7 @@ Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Tru
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository') 'Trusted compile must require the head repository to match this repository.'
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.user\.login == github\.repository_owner') 'Trusted compile must require the pull request author to be the repository owner.'
 Assert-True ($TrustedCompile -match 'github\.triggering_actor == github\.repository_owner') 'Trusted compile must require the triggering actor to be the repository owner.'
-Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^        if: always\(\)\r?$' -Expected 2 -Message 'Trusted compile may use always() only for raw-report binding and upload steps, never at job scope.'
+Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^        if: always\(\)\r?$' -Expected 3 -Message 'Trusted compile may use always() only for raw-report binding, upload, and the final control-checkout cleanup steps, never at job scope.'
 Assert-True ($TrustedCompile -notmatch '(?m)^    if: always\(\)\r?$') 'Trusted compile must never bypass failed, cancelled, or skipped prerequisites at job scope.'
 Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^\s+-Mode Compile `\r?$' -Expected 1 -Message 'Trusted owner pull-request validation must select Compile exactly once.'
 Assert-True ($TrustedCompile -notmatch '(?m)^\s+-Mode PackagedSmoke `\r?$') 'Trusted owner pull-request validation must not select PackagedSmoke.'

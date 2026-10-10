@@ -1655,6 +1655,21 @@ Every accepted decision records:
   - *Pending evidence:* one live observation of two compile-selecting pull
     requests pushed together that both reach a green `unreal-receipt-shadow`.
     Authority stays off.
+  - *Control checkout cleanup (2026-10-10, issue #243):* the compile and editor
+    jobs each add a disposable control checkout per run and attempt to the
+    runner workspace, 139 of them (about 15 MiB each) by 2026-10-10. No job
+    reads another job's checkout. The last step of both jobs now removes its
+    own checkout and every earlier `compile-control-*` or `editor-control-*`
+    directory, by exact name and literal path, never following or removing a
+    link. A runner runs one job at a time and the engine queue serializes the
+    jobs, so pruning at the end of a job that proved its own lease state is
+    safe, whereas a prune at the start could not know whether an earlier job
+    left a held journal. The step keeps every checkout when that state is
+    unproven: the editor job on the residue cleanup's skip conditions, the
+    compile job when its report is missing or records an unproven cleanup, a
+    failed release, or a failed lease. It continues on error, adds a 1-minute
+    step bound inside the editor job's existing 3-minute margin, and leaves both
+    job ceilings unchanged.
 - **Amendment (2026-10-04, runner engine isolation):** the lead selected an
   independently writable runner source-engine tree for
   [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).

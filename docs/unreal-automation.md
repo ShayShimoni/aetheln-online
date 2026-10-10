@@ -184,7 +184,9 @@ artifact. Harness output goes to runner-local files and Unreal writes its log
 to the `-abslog` file under `Saved/`; both contain absolute runner paths and
 this repository is public, so the job log shows only a path-free summary.
 After the run, the job removes the untracked compile-input files the editor
-may have written, because the next managed workspace sync rejects them. Every
+may have written, because the next managed workspace sync rejects them. The last
+step removes the job's disposable control checkout and any earlier ones from the
+runner workspace (issue #243). Every
 step continues on error, and the job is separate from the compile, so a failed
 or skipped automation step uploads no report and never affects the compile job
 or the native receipt. The hosted `unreal-receipt-shadow` job publishes a
