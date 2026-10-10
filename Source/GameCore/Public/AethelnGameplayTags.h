@@ -14,6 +14,8 @@ namespace AethelnGameplayTags
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_GateStep);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_SwornRebuke);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_HoldTheLine);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_SwordShieldBasicChain);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_SwordShieldBasicChain);
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_GateStep);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_SwornRebuke);

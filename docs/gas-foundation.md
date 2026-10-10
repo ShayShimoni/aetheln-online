@@ -212,10 +212,10 @@ Engine facts the handler respects:
 | --- | --- |
 | `PostInitializeComponents` | `InitAbilityActorInfo(this, GetPawn())` (avatar null). Bind the handler. |
 | `OnPawnSet`, new pawn non-null | 1. `InitAbilityActorInfo(this, NewPawn)`. 2. If the server-only flag `bCombatStateInitialized` is false: validate and grant the configured abilities, apply `UAethelnAttributeInitEffect`, set the flag. Keyed on the flag only, never on `OldPawn`. 3. The seam becomes ready. |
-| `OnPawnSet`, new pawn null (unpossess, or destroy while possessed) | 1. `CancelAllAbilities()` (`GAS/Private/AbilitySystemComponent_Abilities.cpp:1374-1384`). 2. `SetAvatarActor(nullptr)`, only when `GetAvatarActor() == OldPawn` or `OldPawn` is null (it can be null after an `EndPlay` detach). 3. The seam rejects with `ConnectionClosed` until the next avatar. |
+| `OnPawnSet`, new pawn null (unpossess, or destroy while possessed) | 1. #60 P3 `ResetChain(AvatarLost)` stamps and ends the chain once before cancellation. 2. `CancelAllAbilities()` (`GAS/Private/AbilitySystemComponent_Abilities.cpp:1374-1384`). 3. `SetAvatarActor(nullptr)`, only when `GetAvatarActor() == OldPawn` or `OldPawn` is null (it can be null after an `EndPlay` detach). 4. The seam rejects with `ConnectionClosed` until the next avatar. |
 | Re-possession (for example respawn) | The null case, then the non-null case. The flag stops a second grant or init, so it never refills Health or resets cooldowns. |
 | Avatar destroyed without unpossession | The seam checks avatar validity and `IsActorBeingDestroyed` on every request and rejects with `ActorDestroyed`. |
-| PlayerState destroyed or logout | `OnUnregister` calls `DestroyActiveState` (`GAS/Private/AbilitySystemComponent.cpp:236-251`). Nothing extra except flushing pending telemetry (see Rejection Telemetry). |
+| PlayerState destroyed or logout | #60 P3 stamps `ResetChain(AvatarLost)` in `EndPlay` and idempotently in `OnUnregister`, before base destruction. `OnUnregister` calls `DestroyActiveState` (`GAS/Private/AbilitySystemComponent.cpp:236-251`) and flushes pending telemetry (see Rejection Telemetry). |
 
 `InitAbilityActorInfo` does not cancel abilities when the avatar changes (it
 only calls `OnAvatarSet`, `GAS/Private/AbilitySystemComponent_Abilities.cpp:182-204`),
@@ -347,6 +347,8 @@ any configured class that:
   spec-level `DynamicAbilityTriggers`.
 
 This also catches a future Blueprint subclass that edits policies or values.
+`FindGrantProblem` is virtual: #60 P3's chain extends this same grant dispatch
+with step, sampling, cooldown and reset-tag validation.
 
 **Cost and cooldown.** One shared `UAethelnCooldownEffect` takes its duration
 from `SetByCaller.Cooldown.Duration`. `ApplyCooldown` adds the ability's
