@@ -361,7 +361,7 @@ Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -matc
 # streams go to runner-local files and only a path-free summary is printed.
 Assert-True (((($TrustedCompile -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch '(?i)automation|AethelnOnlineEditor|editor_build') 'The compile job must carry no editor automation.'
 Assert-True ($EditorAutomation -match "(?m)^    needs: trusted-candidate-compile\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Editor automation must run only after a successful compile under the same owner and same-repository trust.'
-Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 45\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result' -and [regex]::Matches($EditorAutomation, 'always\(\)').Count -eq 1) 'Editor automation must have its own 45-minute ceiling, join the FIFO engine queue, and add no status bypass beyond the one final control-checkout cleanup step.'
+Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 46\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result' -and [regex]::Matches($EditorAutomation, 'always\(\)').Count -eq 1) 'Editor automation must have its own 46-minute ceiling, join the FIFO engine queue, and add no status bypass beyond the one final control-checkout cleanup step.'
 # Issue #236: the editor job re-syncs the managed workspace from its own fresh
 # exact-revision control checkout, with the compile job's checkout inputs: no
 # persisted credentials, no LFS, a five-minute bound, and a run/attempt path.
@@ -444,10 +444,13 @@ foreach ($Cleanup in @(
 }
 Assert-True ($AutomationOutcome -notmatch 'control_cleanup' -and ((($CompileCleanup -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch 'editor_build|automation') 'A cleanup failure must never become an automation reason or touch the compile job shape.'
 # The compile gate leaves a held lease journal when it cannot prove its tree empty or
-# release the lease, and a lease it could not take is held by someone else. Like the
-# editor residue cleanup, the compile cleanup then keeps every checkout, and also when
-# the gate report is missing.
-Assert-True ($CompileCleanup -match '(?m)^        if: always\(\)\r?$' -and $CompileCleanup.Contains('engine-runner-report.json') -and $CompileCleanup.Contains('compile_(cleanup|lease_release)_failed|"lease_[a-z_]{1,48}') -and $CompileCleanup -match '(?m)^        timeout-minutes: 1\r?$' -and $CompileCleanup -match '(?m)^        continue-on-error: true\r?$') 'The compile cleanup must keep every checkout when the gate report is missing or records an unproven cleanup or lease failure.'
+# release the lease, and a lease it could not take (or wait for until the budget ends,
+# compile_timeout without a supervisor receipt) is held by someone else. Like the
+# editor residue cleanup, the compile cleanup needs positive evidence: the report's
+# supervisor receipt, written only after the lease was taken and released, must record
+# a verified cleanup. Anything else, including a missing or unreadable report, keeps
+# every checkout.
+Assert-True ($CompileCleanup -match '(?m)^        if: always\(\)\r?$' -and $CompileCleanup.Contains('engine-runner-report.json') -and $CompileCleanup.Contains('ConvertFrom-Json') -and $CompileCleanup.Contains('$Report.supervisor.cleanupVerified -is [bool] -and $Report.supervisor.cleanupVerified') -and $CompileCleanup -notmatch 'compile_(cleanup|lease_release)_failed|lease_\[' -and $CompileCleanup -match '(?m)^        timeout-minutes: 1\r?$' -and $CompileCleanup -match '(?m)^        continue-on-error: true\r?$') 'The compile cleanup must keep every checkout when the gate report is missing or records an unproven cleanup or lease failure.'
 # Issue #236: another owner pull request's compile may re-sync the managed
 # workspace between this run's compile and this job. Under the engine host
 # lease, the step re-syncs it to this revision from the trusted control
@@ -809,14 +812,21 @@ try {
 		Assert-True ($null -eq $Quiet.failure -and (@($Quiet.output) -join "`n") -ceq 'control_checkouts removed=1 kept=0') 'Links removed by the operator must let the next cleanup finish.'
 		Assert-True (-not ((@($Swept.output) + @($Again.output) + @($Quiet.output)) -join "`n").Contains($AutomationFixtureRoot)) 'The cleanup must print no runner path.'
 
-		# The compile job removes the same set, but keeps every checkout when the gate
-		# report is missing or records an unproven cleanup or a lease failure.
+		# The compile job removes the same set, but only on positive evidence: the report
+		# must carry a supervisor receipt with a verified cleanup, which the gate writes only
+		# after it took and released the lease. Everything else keeps every checkout.
 		foreach ($CompileCase in @(
 			@{ name = 'no report'; report = $null; kept = $true },
-			@{ name = 'unproven cleanup'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_cleanup_failed"}]}'; kept = $true },
+			@{ name = 'unreadable report'; report = '{not json'; kept = $true },
+			@{ name = 'unproven cleanup'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_cleanup_failed"}],"supervisor":{"childExitCode":1,"timedOut":false,"cleanupVerified":false}}'; kept = $true },
 			@{ name = 'failed release'; report = '{"checks":[{"name":"compile-host-lease","status":"failed","message":"compile_lease_release_failed"}]}'; kept = $true },
 			@{ name = 'lease not taken'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"lease_owner_ambiguous"}]}'; kept = $true },
-			@{ name = 'build failure'; report = '{"checks":[{"name":"compile-host-lease","status":"passed","message":"released"},{"name":"compile-gate","status":"failed","message":"compile_failed"}]}'; kept = $false }
+			# Another holder kept the lease until the routine budget ended: no supervisor receipt.
+			@{ name = 'lease wait budget exhausted'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_timeout"}]}'; kept = $true },
+			@{ name = 'clock invalid during lease wait'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_clock_invalid"}]}'; kept = $true },
+			@{ name = 'receipt without a boolean'; report = '{"supervisor":{"cleanupVerified":"true"}}'; kept = $true },
+			@{ name = 'build failure after a released lease'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_failed"}],"supervisor":{"childExitCode":1,"timedOut":false,"cleanupVerified":true}}'; kept = $false },
+			@{ name = 'passed compile'; report = '{"checks":[],"supervisor":{"childExitCode":0,"timedOut":false,"cleanupVerified":true}}'; kept = $false }
 		)) {
 			Initialize-ControlCleanupFixture
 			if (Test-Path -LiteralPath $CleanupReport) { Remove-Item -LiteralPath $CleanupReport -Force }
