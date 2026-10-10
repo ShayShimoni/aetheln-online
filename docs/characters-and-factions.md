@@ -396,8 +396,10 @@ their resource, Proof, accumulates as their claims survive contact.
 - **Named characters:** Aldrec Fane, the Pyrelaw, works in the Nullwright
   manner - his case against Serra is real evidence serving an inhuman
   conclusion, the exact failure the taboos exist to prevent. Saeril,
-  Nine-Dreams, is the Order's living cautionary text: her journal is a
-  Nullwright record of a self she can no longer demonstrate.
+  Nine-Lights, is the Order's living cautionary text: her journal is a
+  Nullwright record of a self she can no longer demonstrate. Her guiding
+  encounters raise questions the Order must investigate; spirit testimony
+  does not demonstrate the Star's intention or settle an accusation.
 
 ### Hushblade - Working Name
 
@@ -430,7 +432,8 @@ their resource, Tempo, is the rhythm they steal from a fight.
   quietly fearing blades that answer to no assembly.
 - **Named characters:** Nhalen, the Gutterlight, is the Order's finest living
   instructor and its conscience - severed from Ember attunement, he embodies
-  the claim that the art needs no borrowed light. Serra Vale trains in the
+  the claim that the art needs no borrowed Ember power. His spirit identity
+  supplies no replacement combat advantage. Serra Vale trains in the
   Hushblade manner under scrutiny from both factions; Kaelen trained her early
   guard and knows what the Concord's demands are doing to her.
 
@@ -445,7 +448,9 @@ resource, Cadence, is the measured breath of that song.
   witnessing a stranger's passing and recording it truly.
 - **Duties:** keep the witnessed records from which the Emberbound respawn,
   tend Forgettings when they can be recovered and end them when they cannot,
-  and hold funeral truces that both factions honor.
+  and hold funeral truces that both factions honor. Local spirit testimony
+  must be assessed alongside other evidence; it cannot replace a coherent
+  witnessed record or establish that every dead person survives as a spirit.
 - **Taboos:** a Gravecant must not falsify a witnessed record, sing the Last
   Chorus - the Peak that briefly realizes the self who already died - over one
   who can still be saved, or refuse witness to an enemy.
@@ -476,8 +481,9 @@ distance - scouts, hunters, and route-keepers - and their resource, Tension,
 is the drawn stillness between sighting and release.
 
 - **Recruitment:** the Order recruits frontier guides, caravan scouts, and
-  Selaen-trained forecast readers. Entry is a solitary crossing of hostile
-  ground with nothing but a bow and one arrow, returned unspent.
+  Selaen-trained route observers and spirit interpreters. Entry is a solitary
+  crossing of hostile ground with nothing but a bow and one arrow, returned
+  unspent.
 - **Duties:** watch the frontier thresholds where protected territory ends,
   mark and tether Deepwake incursions before they spread, keep caravan routes
   and Emberfall predictions honest, and deny ground rather than take it.
@@ -491,7 +497,9 @@ is the drawn stillness between sighting and release.
   distance and argues the kindest arrow arrives before the war does; the
   Waykeeper interpretation traps, tethers, and escorts, arguing that an Order
   of wardens must never become an Order of assassins. The Order also disputes
-  how far to trust Vesh dream forecasts over walked ground.
+  how far to trust a local spirit's guidance before checking walked ground.
+  Listening is learned practice open to every people, and no testimony makes
+  a route safe merely because a Vesh carries it.
 - **Weapon traditions:** longbow, recurve bow, greatbow, and tether/trap bow.
   The traditions are taught as ranges of responsibility: the longbow watches a
   region, the recurve rides with a caravan, the greatbow answers a siege, and
@@ -501,12 +509,12 @@ is the drawn stillness between sighting and release.
   Ledger's own convoys. The Hundred Witnesses depend on Blackfletch paths for
   independent supply and chafe when a Waykeeper closes a route no assembly
   agreed to close.
-- **Named characters:** the Order keeps Selaen's dream-forecast tables and is
-  the standing customer of Lanternrest's readers, which puts it inside the
-  Vesh argument over foreknowledge and free choice. Nhalen sends Hushblade
-  students to Blackfletch wardens to learn patience, and Aldrec Fane uses
-  chartered Blackfletch trackers in his hunt for Ashen Choir survivors - a
-  charter the Waykeeper line publicly protests.
+- **Named characters:** the Order keeps Selaen's current observations and route
+  records and is the standing customer of Lanternrest's interpreters, which
+  puts it inside the Vesh argument over guidance, judgment, and responsibility.
+  Nhalen sends Hushblade students to Blackfletch wardens to learn patience, and
+  Aldrec Fane uses chartered Blackfletch trackers in his hunt for Ashen Choir
+  survivors - a charter the Waykeeper line publicly protests.
 
 ## The Emberbound Table
 
@@ -575,8 +583,15 @@ Nhalen killed an Ashen Choir agent to save a captive child. No sanctioned
 arbiter was present, so the Concord applied its law without considering motive.
 His attunement was severed and he was permanently barred from holding an Ember.
 
+The punishment cut off his Ember attunement without erasing his embodied spirit
+identity or connection to the world's spirits. He understands following the
+Light as attending to a life in danger, and saving the child expressed that
+practice. His conviction does not prove the facts: Aldrec's suppressed evidence
+establishes that the killing was justified, not a spirit's verdict.
+
 Nhalen fights without supernatural advantage and remains one of the finest
-combat instructors alive.
+combat instructors alive. Spirit listening gives him no substitute combat
+power, certain foresight, or knowledge of hidden enemies.
 
 Conflict:
 
@@ -585,8 +600,11 @@ Conflict:
 - Nhalen opposes the Concord but rejects indiscriminate revenge.
 - He teaches players that equipment and light create options, not automatic
   victory.
+- Saeril's uncertainty tests whether he can support a witness without accepting
+  an accusation on faith; he asks her to investigate rather than name an enemy
+  because a light appeared to guide her.
 
-### Saeril - Nine-Dreams
+### Saeril - Nine-Lights
 
 - **People:** Vesh
 - **Order:** Nullwright
@@ -597,8 +615,16 @@ Saeril is the greatest living Ember champion. Each Ember she integrated consumed
 a memory. She records her lost identity in a journal because she no longer
 remembers why she began climbing.
 
-Her ninth recurring dream identifies a future betrayal within the Emberbound
-Table. She has not revealed the traitor or whether the act is truly a betrayal.
+Her title remembers nine personal guiding encounters with the world's spirits.
+They are part of her own practice of following the Light, not a racial gift of
+prophecy. Other witnesses' fragments cannot substitute for the identity her
+lost memories once formed.
+
+The ninth light brought fragmentary testimony that she interprets as a warning
+of possible betrayal within the Emberbound Table. It guarantees neither a
+future event nor the identity or guilt of a traitor. She has not revealed the
+warning and must decide what to investigate, whom to trust, and when speaking
+would protect others rather than condemn someone without evidence.
 
 Conflict:
 
@@ -607,6 +633,8 @@ Conflict:
   champions.
 - Matron Halveth manages her decline.
 - Her eventual decision can change the perceived legitimacy of the faction war.
+- Nhalen challenges her to separate guidance from proof; accepting his counsel
+  may expose how much certainty the Crowned Ledger has built around her image.
 
 ### Aldrec Fane - The Pyrelaw
 
@@ -761,9 +789,15 @@ to carry. Vothram maintains the record, Corvath arrests the moment, and living
 Kell communities must decide when care requires preservation and when it
 requires release.
 
+Vesh spirit listening adds another witness without ending the argument. A local
+spirit's account may conflict with a survivor's recollection or a kept record;
+care requires hearing it without treating it as ownership of the truth. Nhalen
+and Saeril must choose how to act when compassion calls them toward someone
+whose account they cannot yet verify.
+
 ### Future Fractures
 
-- Saeril's ninth dream points to a traitor.
+- Saeril's ninth light raises a possible betrayal that remains unproven.
 - Serra must choose whether either faction deserves her loyalty.
 - Kaelen may refuse an order involving Maren.
 - Aldrec's concealment of Nhalen's innocence can damage the Crowned Ledger.

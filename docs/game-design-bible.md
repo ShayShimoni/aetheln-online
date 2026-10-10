@@ -426,6 +426,11 @@ Confirmed rules:
   amethyst connections, swept horns, external pointed ears, glowing violet
   eyes, and clawed extremities. Their approved male and female references and
   full anatomy contracts are recorded in [Playable Peoples](playable-peoples.md#kell).
+- Vesh are mortal embodied spirit creatures connected to the world's spirits
+  and guided by the Light. The retained design uses an obsidian-black coat,
+  white markings, an ivory faceted natural face, golden eyes, three-digit hands,
+  and solid tapered feet. Their spiritual kinship supplies no innate gameplay
+  advantage; [Playable Peoples](playable-peoples.md#vesh) defines the full contract.
 - Every playable race supports male and female characters.
 - Sex does not change attributes, combat power, class access, faction access,
   or authoritative hitboxes.
@@ -458,6 +463,18 @@ memory.
 
 The Star dreamed the Aurin, Kell, and Vesh separately. All three peoples
 predate the Duskbreak, and their creation order remains unknown.
+
+The Vesh were dreamed as spirits with tangible lives and bodies of their own.
+They follow the Light through listening, compassion, and responsible judgment.
+The spirits they meet are local continuities of realized lives and places;
+their testimony can be incomplete, mistaken, or refused. Neither an encounter
+nor the Vesh's existence settles the Star's intention. Enlightenment is a
+practice rather than moral infallibility, and neither faction owns the Light.
+The Duskbreak fractured the histories many spirits carry. Selaen's caravans and
+Lanternrest's Mother-Lanterns now gather willing witnesses and care for places
+whose continuity is fading. In the Quieting, the Ashen Choir erases distinct
+voices into a single account, drawing Nhalen and Saeril into the conflict
+between preservation, consent, and certainty.
 
 The Kell were dreamed as living layered crystal. Their long lives leave
 growth and repair visible in quartz and amethyst, shaping a cultural argument

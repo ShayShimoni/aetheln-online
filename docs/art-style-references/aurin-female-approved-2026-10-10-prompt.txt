@@ -1,0 +1,8 @@
+Use case: precise-object-edit.
+Edit the attached adult female Human/Aurin render. Change ONLY the hairstyle to a short neck-length carre bob haircut.
+
+Replace the pinned-up bun and loose long strands with a clean dark-brown bob that reaches the neck, below the jaw and above the shoulders. A subtly center-parted, softly shaped square bob silhouette, gently curved inward at the ends, with natural modest volume around the sides and nape. No bun, ponytail, long hanging strands or heavy bangs hiding the face. Render the hair as polished stylized 3D sculpted locks with controlled strand detail and natural soft highlights, matching the existing render quality.
+
+Preserve the exact face the user selected: same feminine jaw and chin, cheeks, eyes, eyebrows, nose, lips, mature adult age, skin tone and expression. Keep forehead and facial detail simple and smooth. Do not redesign the face.
+
+Preserve everything else exactly: head size, neck, athletic body proportions and current fuller chest, arms, waist, hips, legs, open hands, bare feet, opaque charcoal high-neck short-sleeved crop top and fitted knee-length pants. Same neutral frontal full-body A-pose, camera, complete silhouette and frame margins, soft studio light, warm-gray seamless background and grounded shadows. Natural Human anatomy only. Return one complete full-body image with the new haircut, no additional views, text, accessories or props.
