@@ -156,6 +156,40 @@ function Test-PhaseSupervisorPublicationContract {
 			[IO.File]::WriteAllText($ValidPath, $Valid, (New-Object Text.UTF8Encoding($false)))
 			$Parsed = Read-PhaseSupervisorReport -Path $ValidPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture'
 			Assert-True ($Parsed.summary.requiredFailed -eq 0) "A complete $ExpectedMode private report must validate."
+			$SplitReport = $Valid | ConvertFrom-Json
+			$SplitReport | Add-Member -NotePropertyName packageRecipeEvidence -NotePropertyValue ([ordered]@{ id = 'clean-targets-prebuilt-programs-v1'; baseAttestationSha256 = 'a457da4e14808b85d5cc1439a920abfce114ec961e313c2684fdd57ba9385d95'; supplementSha256 = ('b' * 64); payloadSha256 = ('c' * 64) })
+			$SplitPath = Join-Path $ReportRoot ($ExpectedMode + '-split.json')
+			[IO.File]::WriteAllText($SplitPath, ($SplitReport | ConvertTo-Json -Depth 8 -Compress))
+			$ParsedSplit = Read-PhaseSupervisorReport -Path $SplitPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture' -ExpectedRecipe 'CleanTargetsPrebuiltPrograms' -ExpectedSupplementHash ('b' * 64)
+			Assert-True ($ParsedSplit.packageRecipeEvidence.payloadSha256 -ceq ('c' * 64)) 'Split reports must bind the typed payload and both host proof hashes.'
+			foreach ($EvidenceField in @('id', 'baseAttestationSha256', 'supplementSha256', 'payloadSha256')) {
+				foreach ($EvidenceShape in @('empty', 'singleton', 'repeated')) {
+					$ArrayReport = $SplitReport | ConvertTo-Json -Depth 8 -Compress | ConvertFrom-Json
+					$EvidenceValue = $ArrayReport.packageRecipeEvidence.($EvidenceField)
+					$ArrayReport.packageRecipeEvidence.($EvidenceField) = switch ($EvidenceShape) {
+						'empty' { ,@() }
+						'singleton' { ,@($EvidenceValue) }
+						'repeated' { ,@($EvidenceValue, $EvidenceValue) }
+					}
+					$ArrayPath = Join-Path $ReportRoot ($ExpectedMode + '-split-' + $EvidenceField + '-' + $EvidenceShape + '.json')
+					[IO.File]::WriteAllText($ArrayPath, ($ArrayReport | ConvertTo-Json -Depth 8 -Compress), (New-Object Text.UTF8Encoding($false)))
+					$ArrayRejected = $false
+					try { $null = Read-PhaseSupervisorReport -Path $ArrayPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture' -ExpectedRecipe 'CleanTargetsPrebuiltPrograms' -ExpectedSupplementHash ('b' * 64) } catch { $ArrayRejected = $_.Exception.Message -ceq 'phase_report_invalid' }
+					Assert-True -Condition $ArrayRejected -Message "A $ExpectedMode split report must reject an $EvidenceShape array for $EvidenceField."
+				}
+			}
+			$ArchivedBaseReport = $SplitReport | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+			$ArchivedBaseReport.packageRecipeEvidence.baseAttestationSha256 = '4aa4328043d9f65e57a2c5b160d3fde93389f4103e69b179293af93635f25377'
+			$ArchivedBasePath = Join-Path $ReportRoot ($ExpectedMode + '-archived-base.json')
+			[IO.File]::WriteAllText($ArchivedBasePath, ($ArchivedBaseReport | ConvertTo-Json -Depth 8 -Compress))
+			$ArchivedBaseRejected = $false
+			try { $null = Read-PhaseSupervisorReport -Path $ArchivedBasePath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture' -ExpectedRecipe 'CleanTargetsPrebuiltPrograms' -ExpectedSupplementHash ('b' * 64) } catch { $ArchivedBaseRejected = $_.Exception.Message -ceq 'phase_report_invalid' }
+			Assert-True $ArchivedBaseRejected 'A split supervisor report must reject the archived pre-adoption base.'
+			foreach ($ExpectedHash in @(('d' * 64), '')) {
+				$Rejected = $false
+				try { $null = Read-PhaseSupervisorReport -Path $SplitPath -ExpectedMode $ExpectedMode -ExpectedRevision ('a' * 40) -ExpectedRunnerName 'fixture' -ExpectedRecipe 'CleanTargetsPrebuiltPrograms' -ExpectedSupplementHash $ExpectedHash } catch { $Rejected = $_.Exception.Message -ceq 'phase_report_invalid' }
+				Assert-True $Rejected 'A split report cannot substitute or omit the gate-selected supplement hash.'
+			}
 
 			$SchemaMutations = @(
 				@{ Name = 'missing-policy'; Apply = { param($Report) $Report.PSObject.Properties.Remove('policy') } },
@@ -412,6 +446,7 @@ function New-Fixture {
 	$BatchRoot = Join-Path $Engine 'Engine/Build/BatchFiles'
 	New-Item -ItemType Directory -Force -Path (Join-Path $Repository 'scripts/ci'), (Join-Path $Repository 'scripts/build'), $BatchRoot, (Join-Path $Root 'toolchain'), (Join-Path $Root 'bin') | Out-Null
 	Copy-Item -LiteralPath $SourceScript -Destination (Join-Path $Repository 'scripts/ci/Invoke-EngineRunnerGate.ps1')
+	Copy-Item -LiteralPath (Join-Path $RepositoryRoot 'scripts/build/PackagingRecipeProof.ps1') -Destination (Join-Path $Repository 'scripts/build/PackagingRecipeProof.ps1')
 	Write-Fixture (Join-Path $Repository 'AethelnOnline.uproject') '{}'
 	Write-Fixture (Join-Path $Repository '.gitignore') "Intermediate/`nTestResults/"
 	Write-Fixture (Join-Path $Repository 'tracked') 'x'
@@ -452,14 +487,15 @@ echo CLIENT_SECRET build_client_secret_marker
 exit /b 9
 )
 exit /b 0'
-	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot,$DerivedDataCachePath,$CacheFallback,$HostToolsBoundary,$EngineRevision,$HostToolsAttestationPath,$RunnerName)
-@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot;DerivedDataCachePath=$DerivedDataCachePath;CacheFallback=$CacheFallback;HostToolsBoundary=$HostToolsBoundary;EngineRevision=$EngineRevision;HostToolsAttestationPath=$HostToolsAttestationPath;RunnerName=$RunnerName}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
+	Write-Fixture (Join-Path $Fixture.Repository 'scripts/build/Build-PackagedArtifacts.ps1') 'param($ProjectPath,$EngineRoot,$LinuxToolchainRoot,$ArchiveRoot,$LogRoot,$SourceRevision,$Configuration,$Map,$Stage,$ClientStageRoot,$ServerStageRoot,$DerivedDataCachePath,$CacheFallback,$HostToolsBoundary,$EngineRevision,$HostToolsAttestationPath,$HostToolsAttestationSha256,$RunnerName,$BuildNumber,$PackageRecipe,$HostProgramSupplementPath,$HostProgramSupplementSha256,$PackageRunIdentityJson,$PackageDeadlineUtc,$PackageActionLimit)
+@{ProjectPath=$ProjectPath;EngineRoot=$EngineRoot;LinuxToolchainRoot=$LinuxToolchainRoot;ArchiveRoot=$ArchiveRoot;LogRoot=$LogRoot;SourceRevision=$SourceRevision;Configuration=$Configuration;Map=$Map;Stage=$Stage;ClientStageRoot=$ClientStageRoot;ServerStageRoot=$ServerStageRoot;DerivedDataCachePath=$DerivedDataCachePath;CacheFallback=$CacheFallback;HostToolsBoundary=$HostToolsBoundary;EngineRevision=$EngineRevision;HostToolsAttestationPath=$HostToolsAttestationPath;HostToolsAttestationSha256=$HostToolsAttestationSha256;RunnerName=$RunnerName;PackageRecipe=$PackageRecipe;HostProgramSupplementPath=$HostProgramSupplementPath;HostProgramSupplementSha256=$HostProgramSupplementSha256;PackageRunIdentityJson=$PackageRunIdentityJson;PackageDeadlineUtc=$PackageDeadlineUtc;PackageActionLimit=$PackageActionLimit;BuildNumber=$BuildNumber;HasBuildNumber=$PSBoundParameters.ContainsKey(''BuildNumber'')}|ConvertTo-Json -Compress|Add-Content $env:RUNNER_TEST_PACKAGE_CAPTURE
 if($env:RUNNER_TEST_UBT_OUTPUT_PACKAGE){Get-Content $env:RUNNER_TEST_UBT_OUTPUT_PACKAGE}
 if($env:RUNNER_TEST_PHASE_SPAWN){Start-Process -FilePath $env:RUNNER_TEST_DESCENDANT_EXE -ArgumentList @("-NoProfile","-Command","Start-Sleep -Seconds 120") -WindowStyle Hidden|Out-Null}
 if($env:RUNNER_TEST_PHASE_SLEEP){Start-Sleep -Seconds ([int]$env:RUNNER_TEST_PHASE_SLEEP)}
 if($Stage){
 New-Item -ItemType Directory -Force -Path $LogRoot|Out-Null
 if($env:RUNNER_TEST_PHASE_FAIL -eq $Stage){Write-Output "error P1234 phase fixture failure";exit 9}
+if($env:RUNNER_TEST_PHASE_HOST_EDITOR -eq $Stage){Write-Output "error: planted failed line at $EngineRoot\Engine\Source\Planted.cpp beside $HostToolsAttestationPath";Write-Output "planted build log marker line";throw "host_editor_engine_changes: the in-phase project editor build failed because it would rewrite existing engine files"}
 if($Stage -eq "Client"){
 New-Item -ItemType Directory -Force -Path (Join-Path $ArchiveRoot "WindowsClient/AethelnOnline/Binaries/Win64")|Out-Null
 Set-Content (Join-Path $ArchiveRoot "WindowsClient/AethelnOnlineClient.exe") launcher
@@ -527,6 +563,7 @@ throw "revealing failure"
 	$env:RUNNER_TEST_SMOKE_HANG = ''
 	$env:RUNNER_TEST_PHASE_SLEEP = ''
 	$env:RUNNER_TEST_PHASE_FAIL = ''
+	$env:RUNNER_TEST_PHASE_HOST_EDITOR = ''
 	$env:RUNNER_TEST_PHASE_SPAWN = ''
 	$env:RUNNER_TEST_KILL_FAULT = ''
 	$env:RUNNER_TEST_HASH_BLOCK_SECONDS = ''
@@ -592,6 +629,7 @@ function Assert-ReportReason($Result, [string] $Reason, [string] $Message) {
 	Assert-True (@((Read-Report $Result).checks | Where-Object message -like ($Reason + '*')).Count -ge 1) "$Message (report must carry $Reason). Actual: $(@((Read-Report $Result).checks | ForEach-Object message) -join '; ')"
 }
 function Read-Report($Result) { Get-Content -LiteralPath $Result.Report -Raw | ConvertFrom-Json }
+function Get-GateReportShape($Report) { return ((@($Report.PSObject.Properties.Name) -join ',') + '|' + (@($Report.checks | ForEach-Object { $_.name }) -join ',')) }
 function Assert-PhaseSupervisorProof($Report, [int] $ChildExitCode, [bool] $TimedOut, [bool] $CleanupVerified, [string] $Message) {
 	Assert-True ($null -ne $Report.supervisor) "$Message (missing outer-supervisor receipt)."
 	Assert-True (($Report.supervisor.childExitCode -is [int] -or $Report.supervisor.childExitCode -is [long]) -and [int] $Report.supervisor.childExitCode -eq $ChildExitCode) "$Message (child exit code)."
@@ -984,7 +1022,17 @@ try {
 		Assert-PhaseSupervisorProof -Report (Read-Report $Result) -ChildExitCode 0 -TimedOut $false -CleanupVerified $true -Message "A $PrivateFault private report rejection must retain outer cleanup proof"
 	}
 
-	$Fixture = New-Case 'phase-milestone-success'
+	$RecipeFixture = New-Case 'split-forward-failclosed'
+	$SupplementPath = Join-Path $RecipeFixture.Root 'program-supplement.json'
+	Write-Fixture $SupplementPath '{}'
+	$RecipeResult = Invoke-PhaseGate $RecipeFixture 'PackageClient' -ExtraArguments @('-PackageRecipe', 'CleanTargetsPrebuiltPrograms', '-HostProgramSupplementPath', $SupplementPath, '-HostProgramSupplementSha256', ('b' * 64), '-PackageActionLimit', '3')
+	$RecipeCalls = @(Get-Content -LiteralPath $RecipeFixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })
+	Assert-True ($RecipeResult.ExitCode -ne 0 -and $RecipeCalls.Count -eq 1 -and $RecipeCalls[0].PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms' -and $RecipeCalls[0].HostProgramSupplementPath -ceq $SupplementPath -and $RecipeCalls[0].HostProgramSupplementSha256 -ceq ('b' * 64)) 'The actual supervisor and child must forward the explicit recipe and exact supplement path/hash.'
+	Assert-True ($RecipeCalls[0].PackageActionLimit -eq 3) 'Actual parent supervisor and child must forward the caller action ceiling to the package producer.'
+	$RecipeRun = $RecipeCalls[0].PackageRunIdentityJson | ConvertFrom-Json
+	Assert-True ($RecipeRun.repository -ceq 'owner/repo' -and $RecipeRun.runId -ceq '12345' -and $RecipeRun.runAttempt -ceq '1' -and $RecipeRun.runnerName -ceq 'fixture-runner' -and $RecipeCalls[0].PackageDeadlineUtc -match 'Z$') 'The producer must receive the current closed run identity and absolute deadline.'
+	Assert-True (-not (Test-Path -LiteralPath (Join-Path (Get-PhaseRunDirectory $RecipeFixture) 'manifest-client.json'))) 'A fixture emitting stock records cannot publish a successful split phase.'
+	$Fixture = New-Case 'phase-milestone-success-after-recipe'
 	$RunDirectory = Get-PhaseRunDirectory $Fixture
 	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
 	Assert-True ($Result.ExitCode -eq 0) "PackageClient must pass. Output: $($Result.Output)"
@@ -1020,6 +1068,8 @@ try {
 	}
 	$ProvenanceCall = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })[-1]
 	Assert-True ($ProvenanceCall.Stage -eq 'Provenance' -and $ProvenanceCall.ClientStageRoot -eq (Join-Path $RunDirectory 'client') -and $ProvenanceCall.ServerStageRoot -eq (Join-Path $RunDirectory 'server')) 'ValidateProvenance must consume the exact verified stage payload directories.'
+	Assert-True ($ProvenanceCall.HasBuildNumber -eq $false -and $null -eq $ProvenanceCall.BuildNumber) 'Without -BuildNumber the provenance writer must receive no build number parameter.'
+	$PlainReportShape = Get-GateReportShape $Report
 	$Result = Invoke-PhaseGate $Fixture 'SmokePhase'
 	Assert-True ($Result.ExitCode -eq 0) "SmokePhase must pass. Output: $($Result.Output)"
 	$Smoke = Get-Content $Fixture.SmokeCapture -Raw | ConvertFrom-Json
@@ -1410,12 +1460,37 @@ try {
 	$env:AETHELN_HOST_TOOLS_ATTESTATION = $AttestationFile
 	$Result = Invoke-PhaseGate $Fixture 'PackageClient'
 	Assert-True ($Result.ExitCode -eq 0) "PackageClient with a valid prebuilt host-tools configuration must pass. Output: $($Result.Output)"
-	Assert-True (@((Read-Report $Result).checks | Where-Object { $_.name -eq 'host-tools-configuration' -and $_.status -eq 'passed' -and $_.message -eq 'host_tools_prebuilt' }).Count -eq 1) 'A valid prebuilt selection must be recorded as configured.'
+	# Issue #267 (SF1): the passed message carries the SHA-256 of the record's
+	# bytes, path-free, and the gate forwards the same hash to the controller,
+	# which fails closed unless the bytes it reads hash to it.
+	$AttestationSha256 = (Get-FileHash -LiteralPath $AttestationFile -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-True (@((Read-Report $Result).checks | Where-Object { $_.name -eq 'host-tools-configuration' -and $_.status -eq 'passed' -and $_.message -ceq ('host_tools_prebuilt attestation_sha256=' + $AttestationSha256) }).Count -eq 1) "A valid prebuilt selection must be recorded with the record hash. Actual: $(@((Read-Report $Result).checks | ForEach-Object message) -join '; ')"
+	Assert-True ((Get-Content -LiteralPath $Result.Report -Raw).IndexOf($AttestationFile, [StringComparison]::OrdinalIgnoreCase) -lt 0) 'The record hash message must not disclose the attestation path.'
 	Assert-True ((Read-Report $Result).runnerName -eq 'fixture-runner') 'The runner report must record the validated runner name.'
 	$PackageCall = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })[-1]
 	Assert-True ($PackageCall.HostToolsBoundary -eq 'Prebuilt' -and $PackageCall.EngineRevision -eq $Fixture.Revision.ToLowerInvariant()) 'The gate must forward the prebuilt boundary with the normalized pinned engine revision.'
 	Assert-True ($PackageCall.HostToolsAttestationPath -eq (Resolve-Path -LiteralPath $AttestationFile).Path) 'The gate must forward the resolved attestation record path.'
+	Assert-True ($PackageCall.HostToolsAttestationSha256 -ceq $AttestationSha256) 'The gate must forward the record hash it reported.'
 	Assert-True ($PackageCall.RunnerName -eq 'fixture-runner') 'The gate must forward the validated runner name to the build controller.'
+	$SecondAttestationFile = Join-Path $Fixture.Root 'host-tools-attestation-second.json'
+	Write-Fixture $SecondAttestationFile '{"fixture":"second attestation"}'
+	$env:AETHELN_HOST_TOOLS_ATTESTATION = $SecondAttestationFile
+	$SecondResult = Invoke-PhaseGate $Fixture 'PackageClient' -RunId '12346'
+	$env:AETHELN_HOST_TOOLS_ATTESTATION = $AttestationFile
+	$SecondSha256 = (Get-FileHash -LiteralPath $SecondAttestationFile -Algorithm SHA256).Hash.ToLowerInvariant()
+	Assert-True ($SecondResult.ExitCode -eq 0 -and $SecondSha256 -cne $AttestationSha256 -and @((Read-Report $SecondResult).checks | Where-Object { $_.name -eq 'host-tools-configuration' -and $_.message -ceq ('host_tools_prebuilt attestation_sha256=' + $SecondSha256) }).Count -eq 1) 'Two valid records must give two different report hashes.'
+	$env:RUNNER_TEST_PHASE_HOST_EDITOR = 'Client'
+	$HostEditorResult = Invoke-PhaseGate $Fixture 'PackageClient' -RunId '12347'
+	$env:RUNNER_TEST_PHASE_HOST_EDITOR = ''
+	# SF7: a controller failure with a new host-tools reason reaches the report
+	# through the keep-line filter, while the engine root, the attestation path,
+	# and lines without a failure word stay out of the report and the job output.
+	Assert-ReportReason -Result $HostEditorResult -Reason 'build_failed' -Message 'A failed in-phase editor build must fail the package phase'
+	$HostEditorReport = Get-Content -LiteralPath $HostEditorResult.Report -Raw
+	Assert-True ($HostEditorReport.Contains('host_editor_engine_changes') -and @((Read-Report $HostEditorResult).checks | Where-Object { $_.name -eq 'host-tools-configuration' -and $_.message -ceq ('host_tools_prebuilt attestation_sha256=' + $AttestationSha256) }).Count -eq 1) 'The package check must carry the controller reason code beside the reported record hash.'
+	foreach ($Leaked in @($Fixture.Engine, $Fixture.Engine.Replace('\', '\\'), $AttestationFile, $AttestationFile.Replace('\', '\\'), 'planted build log marker line')) {
+		Assert-True ($HostEditorReport.IndexOf($Leaked, [StringComparison]::OrdinalIgnoreCase) -lt 0 -and $HostEditorResult.Output.IndexOf($Leaked, [StringComparison]::OrdinalIgnoreCase) -lt 0) "A host-editor failure must not disclose '$Leaked' in the report or the job output."
+	}
 	$env:AETHELN_HOST_TOOLS = 'rebuild-authorized'
 	Remove-Item Env:AETHELN_ENGINE_REVISION
 	Remove-Item Env:AETHELN_HOST_TOOLS_ATTESTATION
@@ -1456,6 +1531,40 @@ try {
 	Remove-Item Env:AETHELN_ENGINE_REVISION
 	Remove-Item Env:AETHELN_HOST_TOOLS_ATTESTATION
 
+	# Issue #226: -BuildNumber is a ValidateProvenance-only input. The supervisor
+	# forwards it to the child, which hands it to the provenance writer; it never
+	# enters the closed gate report, and without it nothing changes.
+	$Fixture = New-Case 'build-number-forwarded'
+	[void] (Invoke-PhaseGate $Fixture 'PackageClient')
+	[void] (Invoke-PhaseGate $Fixture 'PackageServer')
+	$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' -ExtraArguments @('-BuildNumber', '7654321')
+	Assert-True ($Result.ExitCode -eq 0) "ValidateProvenance with a valid -BuildNumber must pass. Output: $($Result.Output)"
+	$NumberedCall = @(Get-Content $Fixture.PackageCapture | ForEach-Object { $_ | ConvertFrom-Json })[-1]
+	Assert-True ($NumberedCall.Stage -eq 'Provenance' -and $NumberedCall.HasBuildNumber -eq $true -and $NumberedCall.BuildNumber -ceq '7654321') 'The supervisor must forward -BuildNumber through the child to the provenance writer.'
+	$NumberedReport = Read-Report $Result
+	Assert-True ($PlainReportShape -ceq (Get-GateReportShape $NumberedReport)) 'A build number must not change the gate report shape or its checks.'
+	Assert-True ((Get-Content $Result.Report -Raw) -notmatch '(?i)buildnumber|7654321') 'Neither the build-number parameter nor its value may enter the gate report.'
+
+	foreach ($WrongMode in @('PackageClient', 'PackageServer', 'SmokePhase')) {
+		$Fixture = New-Case ('build-number-mode-' + $WrongMode)
+		$Result = Invoke-PhaseGate $Fixture $WrongMode -ExtraArguments @('-BuildNumber', '7')
+		Assert-ReportReason -Result $Result -Reason 'build_number_mode_invalid' -Message "-BuildNumber must be rejected for $WrongMode"
+		Assert-True (-not (Test-Path $Fixture.PackageCapture) -and -not (Test-Path $Fixture.SmokeCapture)) "A -BuildNumber rejected for $WrongMode must stop before any phase work."
+	}
+	foreach ($WrongMode in @('Compile', 'PackagedSmoke')) {
+		$Fixture = New-Case ('build-number-mode-' + $WrongMode)
+		$Result = Invoke-Gate $Fixture $WrongMode -ExtraArguments @('-BuildNumber', '7')
+		Assert-ReportReason -Result $Result -Reason 'build_number_mode_invalid' -Message "-BuildNumber must be rejected for $WrongMode"
+		Assert-True (-not (Test-Path $Fixture.BuildCapture) -and -not (Test-Path $Fixture.PackageCapture) -and -not (Test-Path $Fixture.SmokeCapture)) "A -BuildNumber rejected for $WrongMode must stop before any build or smoke work."
+	}
+	$Fixture = New-Case 'build-number-invalid'
+	foreach ($BadNumber in @('0', '01', 'abc', '12345678901', '7.5', '+7')) {
+		$Result = Invoke-PhaseGate $Fixture 'ValidateProvenance' -ExtraArguments @('-BuildNumber', $BadNumber)
+		Assert-ReportReason -Result $Result -Reason 'build_number_invalid' -Message "Build number '$BadNumber' must fail closed"
+		Assert-True (-not (Test-Path $Fixture.PackageCapture) -and -not (Test-Path (Get-PhaseRunDirectory $Fixture))) "Build number '$BadNumber' must be rejected before any handoff or provenance work."
+	}
+	Write-Output 'PASS: -BuildNumber is ValidateProvenance-only, validated before any phase work, forwarded to the provenance writer, and absent from the gate report'
+
 	Write-Output 'PASS: engine runner wrapper contracts are completely covered'
 } catch {
 	$RetainFixtureEvidence = $true
@@ -1477,6 +1586,6 @@ try {
 	Remove-Item Env:AETHELN_HOST_TOOLS_ATTESTATION -ErrorAction Ignore
 	Remove-Item Env:RUNNER_TEST_CLOCK_ROOT -ErrorAction Ignore
 	Remove-Item Env:RUNNER_TEST_CLOCK_BUILD -ErrorAction Ignore
-	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_SMOKE_HANG','RUNNER_TEST_PHASE_SLEEP','RUNNER_TEST_PHASE_FAIL','RUNNER_TEST_PHASE_SPAWN','RUNNER_TEST_KILL_FAULT','RUNNER_TEST_HASH_BLOCK_SECONDS','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineClient','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineServer','RUNNER_TEST_UBT_OUTPUT_PACKAGE','RUNNER_TEST_DESCENDANT_EXE','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
+	@('RUNNER_TEST_REPOSITORY','RUNNER_TEST_ALT_REVISION','RUNNER_TEST_BUILD_CAPTURE','RUNNER_TEST_PACKAGE_CAPTURE','RUNNER_TEST_SMOKE_CAPTURE','RUNNER_TEST_WSL_CAPTURE','RUNNER_TEST_MUTATION','RUNNER_TEST_FAIL_TARGET','RUNNER_TEST_AMBIGUOUS','RUNNER_TEST_INTERNAL','RUNNER_TEST_SMOKE_FAIL','RUNNER_TEST_SMOKE_HANG','RUNNER_TEST_PHASE_SLEEP','RUNNER_TEST_PHASE_FAIL','RUNNER_TEST_PHASE_HOST_EDITOR','RUNNER_TEST_PHASE_SPAWN','RUNNER_TEST_KILL_FAULT','RUNNER_TEST_HASH_BLOCK_SECONDS','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineClient','RUNNER_TEST_UBT_OUTPUT_AethelnOnlineServer','RUNNER_TEST_UBT_OUTPUT_PACKAGE','RUNNER_TEST_DESCENDANT_EXE','RUNNER_TEST_WSLPATH_OUTPUT','RUNNER_TEST_HOSTNAME_OUTPUT','RUNNER_TEST_WSLPATH_EXIT','RUNNER_TEST_HOSTNAME_EXIT') | ForEach-Object { Remove-Item -LiteralPath ('Env:' + $_) -ErrorAction Ignore }
 	if (-not $RetainFixtureEvidence -and (Test-Path -LiteralPath $FixtureRoot)) { Remove-Item -LiteralPath $FixtureRoot -Recurse -Force }
 }

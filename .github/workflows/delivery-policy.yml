@@ -1,0 +1,32 @@
+name: Delivery policy
+
+# Issue #214: hosted pull-request policy that needs no project access. PR data
+# reaches the script only through env, never interpolated into run.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches:
+      - develop
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  pull-request-policy:
+    name: pull-request-policy
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check pull request policy
+        shell: powershell
+        env:
+          AETHELN_PR_BASE_REF: ${{ github.base_ref }}
+          AETHELN_PR_HEAD_REF: ${{ github.head_ref }}
+          AETHELN_PR_TITLE: ${{ github.event.pull_request.title }}
+          AETHELN_PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          AETHELN_PR_BASE_REPOSITORY: ${{ github.repository }}
+        run: ./scripts/ci/Test-PullRequestPolicy.ps1

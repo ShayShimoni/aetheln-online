@@ -84,6 +84,9 @@ Coverage/
 *service_account*.json
 !service-account.redacted.example.json
 !service_account.redacted.example.json
+*.tfstate
+*.tfstate.*
+.terraform/
 
 # Logs, temporary files, and operating-system metadata
 *.log

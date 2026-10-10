@@ -110,11 +110,11 @@ function New-InvocationFixture {
 }
 
 function Invoke-Fixture {
-	param($Fixture,[ValidateSet('Identity','Aggregate','Gap')][string]$Mode='Aggregate',[string]$ActionItemsJson=(Get-ActionItemsJson),[string]$SelectorBindingJson=(Get-SelectorBindingJson),[string]$ProducerBindingsJson=(Get-ProducerBindingsJson))
+	param($Fixture,[ValidateSet('Identity','Aggregate','Gap')][string]$Mode='Aggregate',[string]$ActionItemsJson=(Get-ActionItemsJson),[string]$SelectorBindingJson=(Get-SelectorBindingJson),[string]$ProducerBindingsJson=(Get-ProducerBindingsJson),[string]$BaseRevision=('a'*40))
 	$Arguments = @{
 		Mode=$Mode;SelectorReportPath=$Fixture.SelectorPath;WorkflowPath=$Fixture.WorkflowPath
 		Repository='ShayShimoni/aetheln-online';Actor='owner';TriggeringActor='owner'
-		BaseRevision=('a'*40);HeadRevision=('b'*40);TestedRevision=('c'*40);WorkflowId='9876543';RunId='9001';RunAttempt=2
+		BaseRevision=$BaseRevision;HeadRevision=('b'*40);TestedRevision=('c'*40);WorkflowId='9876543';RunId='9001';RunAttempt=2
 		ActionItemsJson=$ActionItemsJson;IdentityContextOutputPath=$Fixture.IdentityPath
 	}
 	if ($Mode -ceq 'Aggregate') {
@@ -202,6 +202,14 @@ try {
 	Assert-True ($Gap.acceptedControllerUnavailable -eq $false -and (@($Gap.selectedUnsupported) -join ',') -ceq 'content-reference-validation') 'An accepted-base unsupported selection must retain the strict existing identity contract but produce only a gap diagnostic.'
 	Assert-True (-not (Test-Path -LiteralPath $AcceptedGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $AcceptedGapFixture.AggregatePath)) 'Accepted-base gap validation must not create aggregate inputs.'
 } finally { Remove-Item -LiteralPath $AcceptedGapFixture.Root -Recurse -Force }
+
+# Consumers bind the selector's verified first parent. A stale event base stays
+# a contradiction in every mode, so the builder keeps its strict base equality.
+$StaleBaseFixture = New-InvocationFixture
+try {
+	Write-FixtureJson $StaleBaseFixture.SelectorPath (New-SelectorFixture -Selected @('content-reference-validation','portable'))
+	foreach ($StaleBaseMode in @('Identity','Aggregate','Gap')) { Assert-Rejected { Invoke-Fixture -Fixture $StaleBaseFixture -Mode $StaleBaseMode -BaseRevision ('9'*40) } 'selector_identity_mismatch' }
+} finally { Remove-Item -LiteralPath $StaleBaseFixture.Root -Recurse -Force }
 
 $NoGapFixture = New-InvocationFixture
 try { Assert-Rejected { Invoke-Fixture -Fixture $NoGapFixture -Mode Gap } 'gap_selection_empty' }

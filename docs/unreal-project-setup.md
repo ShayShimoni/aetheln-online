@@ -86,6 +86,71 @@ git -C $AethelnEngineRoot rev-parse HEAD
 Stop if either value differs. Do not substitute a preview, launcher binary, or
 another UE 5.8 revision.
 
+## Enable the UHT input cache
+
+Do this once per engine tree, before the first build. Without it, UnrealHeaderTool
+can alternate NetCore's generated output through a race in the engine's
+`UhtHeaderFile.cs`, which relinks `UnrealEditor-NetCore.dll`, restamps the
+engine BuildId and stops editors built earlier from loading (see the TA-020
+2026-10-05 amendment in [Architecture Decisions](architecture-decisions.md)).
+The file is `Engine\Saved\UnrealBuildTool\BuildConfiguration.xml` under
+`$AethelnEngineRoot`. UnrealBuildTool creates a default file there on its first
+run, holding only an empty `<Configuration xmlns="...">` element. If the file
+holds only that default (or does not exist), it must contain exactly:
+
+```xml
+<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+  <UEBuildConfiguration>
+    <bEnableUHTInputCache>true</bEnableUHTInputCache>
+  </UEBuildConfiguration>
+</Configuration>
+```
+
+If the file already holds other settings, merge instead: add the
+`bEnableUHTInputCache` line inside an existing `UEBuildConfiguration` element,
+or add that element, and keep the rest. This PowerShell creates the directory
+and writes the file only when it is missing or holds just the default empty
+`Configuration` element, so it never overwrites an `UEBuildConfiguration`
+element or other settings:
+
+```powershell
+$AethelnUbtConfig = Join-Path $AethelnEngineRoot 'Engine\Saved\UnrealBuildTool\BuildConfiguration.xml'
+New-Item -ItemType Directory -Force (Split-Path $AethelnUbtConfig) | Out-Null
+$AethelnDefaultOnly = '^\s*(<\?xml[^>]*\?>)?\s*<Configuration[^>]*(/>|>\s*</Configuration>)\s*$'
+if (-not (Test-Path $AethelnUbtConfig) -or
+    ((Get-Content -Raw $AethelnUbtConfig) -match $AethelnDefaultOnly)) {
+  Set-Content -Path $AethelnUbtConfig -Encoding utf8 -Value @'
+<?xml version="1.0" encoding="utf-8" ?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+  <UEBuildConfiguration>
+    <bEnableUHTInputCache>true</bEnableUHTInputCache>
+  </UEBuildConfiguration>
+</Configuration>
+'@
+} else {
+  Write-Warning "Merge bEnableUHTInputCache=true into $AethelnUbtConfig by hand."
+}
+```
+
+UnrealBuildTool reads later configuration files (ProgramData, AppData,
+LocalAppData, Documents and the project's
+`Saved\UnrealBuildTool\BuildConfiguration.xml`) after the engine one, so none
+of them may set `bEnableUHTInputCache` to `false`.
+
+The engine's own `.gitignore` ignores `Saved/`, so the pinned checkout stays
+clean and the file is never committed. With the cache on, UHT also writes
+git-ignored `.inputcache.data` files under the engine and project
+`Intermediate` folders; they are shared mutable engine state. The cache fixes
+BuildId determinism and does not make concurrent engine writes safe, so
+serialization of shared-engine users through the host lease and queue remains a
+standing rule. The next build of each project logs
+`BuildConfiguration.xml is newer`, runs a full UHT pass and may rebuild the
+editor once; that is expected. Never pass `-ForceHeaderGeneration` to
+`Build.bat` or UnrealBuildTool, because it turns the cache read off and brings
+the race back. Re-apply this step whenever you recreate or re-provision the
+engine tree.
+
 ## Generate and build
 
 Generate the Visual Studio project files from the pinned source engine:
@@ -102,6 +167,41 @@ Build the Development Editor target:
   AethelnOnlineEditor Win64 Development $AethelnProject `
   -WaitMutex -NoHotReloadFromIDE
 ```
+
+### Recovery while CI shares the engine
+
+CI and contributor builds that use the runner host's engine root still share
+writable engine outputs. The recurring NetCore BuildId churn is resolved by the
+[UHT input cache setting](#enable-the-uht-input-cache) (TA-020, 2026-10-05), so
+a CI editor build should no longer refresh the engine BuildId. If a mismatch
+still appears (for example on a tree without that setting), a refreshed BuildId
+leaves a previously built contributor project unable to load its game modules,
+and the steps below are the fallback.
+
+Wait for the lead to release the shared engine (the lead holds it and
+announces the release in the delivery status or issue), close the affected
+editor, and run the normal Development Editor `Build.bat` command above for
+that project. Confirm the build succeeds and `BuildId` in
+`<project>\Binaries\Win64\UnrealEditor.modules` matches `BuildId` in
+`<engine>\Engine\Binaries\Win64\UnrealEditor.modules`, then relaunch. Do not
+hand-edit generated `.modules` files or pin a BuildId to bypass the mismatch.
+
+The lead selected an independent runner source-engine tree in
+[Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517);
+capacity, provisioning and CI-to-contributor isolation proof remain pending.
+The 2026-10-05 TA-020 amendment
+([UHT input cache](#enable-the-uht-input-cache)) removed the NetCore BuildId
+flip that motivated that tree, so it is no longer needed for this problem. It
+stays a recorded option with revisit triggers, and the recovery steps above
+remain the fallback for an unexplained BuildId mismatch.
+
+If a second tree is ever deployed, use the locally configured contributor
+engine root for these build and launch commands. CI uses its separately
+provisioned runner root; engine/plugin binaries, generated files,
+intermediates and module manifests must not share writable aliases. Each root
+retains its own applicable identity and provisioning evidence. Serialization
+of shared-engine consumers is a standing rule; only a verified separation
+could relax it. Even then, reserve a quiet host for performance captures.
 
 ## First launch
 

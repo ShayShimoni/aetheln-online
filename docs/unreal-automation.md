@@ -172,9 +172,11 @@ commit-specific and cannot be inferred from fixture coverage.
 
 Issue #167 Package 3C wires that run into the owner-only
 `trusted-editor-automation` job (TA-020), a separate engine-runner job that
-runs only after a successful `trusted-candidate-compile`. It first verifies
-that the registered managed compile workspace still holds the tested revision
-and is clean, then builds the `AethelnOnlineEditor` Win64 target there, runs
+runs only after a successful `trusted-candidate-compile`. Under the engine host
+lease, it first re-syncs the registered managed compile workspace to the tested
+revision from its own exact-revision control checkout, as the compile does, and
+asserts that the workspace holds that revision and is clean (issue #236). It
+then builds the `AethelnOnlineEditor` Win64 target there, runs
 this harness from that workspace with `-EngineRoot` set to the runner's engine
 root and the default 600-second timeout, and uploads the normalized
 `TestResults/unreal-automation-report.json` as the `unreal-automation-report`
@@ -189,13 +191,13 @@ or the native receipt. The hosted `unreal-receipt-shadow` job publishes a
 shadow-only `unreal-editor-automation` receipt from the report, or prints the
 fixed `automation_reason` and fails red when it is missing. Harness and build
 output stay in the runner temp directory, which is wiped after the job. The
-job has its own 35-minute ceiling, so a compile that uses its whole 30-minute
+job has its own 45-minute ceiling, so a compile that uses its whole 30-minute
 watchdog still leaves the editor build its full budget; first live compile
 durations on runner 21 were 102 s and 503 s, and editor-build and harness
-durations are to be recorded from the first live runs of this job. It runs
-outside the engine host lease for this first proof; wrapping it in the lease is
-a follow-up. The filter, report schema, and engine pin are unchanged, and
-nothing grants acceptance.
+durations are to be recorded from the first live runs of this job. The lease
+covers the re-sync and the editor build; this harness still runs outside it,
+serialized by the engine queue. The filter, report schema, and engine pin are
+unchanged, and nothing grants acceptance.
 
 Issue #44 must reuse this automation foundation for its downstream packaged
 dedicated-server/two-client lifecycle, Gauntlet orchestration, and network-

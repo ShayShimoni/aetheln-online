@@ -109,10 +109,10 @@ Every accepted decision records:
 
 - **Status:** Accepted
 - **Scope:** Source architecture
-- **Decision:** Keep `GameCore`, `GameCombat`, `GameUI`, `GameNet`, and
-  server-only `GameServer` with the dependency rules in
-  [Technical Architecture](technical-architecture.md). Put selected vendor SDKs
-  behind dedicated adapters/modules or plugins.
+- **Decision:** Keep `GameCore`, `GameCombat`, `GameUI`, `GameNet`,
+  server-only `GameServer`, and editor-only `GameTests` with the dependency
+  rules in [Technical Architecture](technical-architecture.md). Put selected
+  vendor SDKs behind dedicated adapters/modules or plugins.
 - **Rationale:** Gameplay ownership stays testable and vendor choices remain
   replaceable.
 - **Owner/evidence:** Issues #13, #15, and #36.
@@ -225,9 +225,11 @@ Every accepted decision records:
   same-repository pull requests may run the supported-target compile gate,
   after the portable gates pass and only when the exact base/head change
   classification in TA-012 requires the engine. The packaged-smoke milestone
-  runs at `02:00 UTC` from the protected default branch `main` as the four
-  schedule-only phases decided in TA-012; the workflow declares no manual
-  trigger.
+  runs on Saturday at `02:00 UTC` (weekly since the 2026-10-06 amendment
+  below) from the protected default branch as the four schedule-only phases
+  decided in TA-012; the workflow declares no manual trigger. The default
+  branch was `main` when this was accepted and has been `develop` since
+  2026-10-03 (see the amendment below).
 - **Rationale:** The pinned Unreal source build, Visual Studio and Linux
   cross-toolchains, WSL topology, disk capacity, and local build paths are not
   available on ordinary GitHub-hosted runners. Repository scope and explicit
@@ -247,17 +249,49 @@ Every accepted decision records:
   pull requests; granting future collaborators runner access without a new
   review; storing local paths as repository secrets; uploading packaged builds,
   cook output, or full logs by default; treating `develop` as the schedule's
-  activation branch.
+  activation branch (rejected while `main` was the default branch; superseded
+  by the amendment below).
 - **Consequences:** The owner must provision and maintain the runner, pinned
   toolchains, WSL `Ubuntu` distribution and `aethelnqa` user. Non-secret
   `AETHELN_ENGINE_ROOT` and `AETHELN_LINUX_TOOLCHAIN_ROOT` paths are current-
   account user variables inherited by the runner process. Engine jobs serialize
   through one concurrency group, convert the packaged server path with WSL
   `wslpath`, publish only the redacted JSON report by default, and retain large
-  archives/logs locally under per-run roots. The schedule becomes active only
-  when the workflow reaches `main` through normal Git Flow; `develop` remains
-  the integration branch. Artifact retention, local-output retention, scanner,
+  archives/logs locally under per-run roots. The schedule runs from the default
+  branch, now `develop` (see the amendment below), which is also the
+  integration branch. Artifact retention, local-output retention, scanner,
   SBOM, and signing decisions remain open.
+- **Amendment (2026-10-05, scheduled runs follow the default branch, issue
+  #228):** GitHub runs scheduled workflows only from the default branch, and
+  the owner made `develop` the default branch on 2026-10-03 (recorded on
+  [Issue #16](https://github.com/ShayShimoni/aetheln-online/issues/16)).
+  Scheduled runs 37106216412 (2026-10-03), 37186384030 (2026-10-04), and
+  37281226888 (2026-10-05) ran on `develop`; the earlier runs, through
+  36980533796 on 2026-10-02, ran on `main`. This replaces the original
+  consequence that kept the schedule off `develop` until the workflow reached
+  `main` through Git Flow. What changes: each scheduled run executes the
+  workflow at the head of `develop` when GitHub starts it, which can be hours
+  after the nominal `02:00 UTC`. A change to the schedule or to a phase takes
+  effect when it merges to `develop`, and the four phases package that head,
+  not the contents of `main`. The copy of the workflow on `main` is not scheduled.
+  Release packaging stays on `release/*` through TA-022. The scheduled jobs
+  guard only on the `schedule` event, so no workflow condition or test pins
+  `main` for the schedule, and none changed.
+- **Amendment (2026-10-06, weekly schedule, issue #264):** The owner moved the
+  scheduled milestone from daily to weekly, on Saturday at `02:00 UTC` (cron
+  `0 2 * * 6`). At prototype stage, packaging-only changes are rare. Owner
+  pull requests with engine-impacting changes already compile, but a pull
+  request limited to portable-only paths or to the two exact packaging-script
+  exemptions (`scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`) is exercised on the engine
+  only by the scheduled and release packaging runs (TA-022). Weekly stretches
+  that gap from at most a day to at most a week; the owner accepted weekly on
+  2026-10-06. The owner estimated about one to two hours of runner time per
+  run (the 40/40/20/20-minute phase ceilings sum to two hours; no healthy
+  phased run has been measured yet), and a run could start late enough to
+  overlap the owner's working hours. The four phases, their bounds, the
+  handoff and evidence contracts, and the CI authority predicate are
+  unchanged.
 - **Revisit trigger:** A collaborator needs runner access, the runner moves to a
   different host/account or trust domain, hosted/ephemeral infrastructure can
   reproduce the pinned toolchain, or measured cost, reliability, isolation, or
@@ -282,7 +316,8 @@ Every accepted decision records:
   schedule-only: a manual trigger on this workflow identity would let an
   operator select an older branch that still carries the retired
   1,440-minute single-job gate, and no replacement manual workflow is
-  provided. `trusted-candidate-compile` additionally needs the GitHub-hosted
+  provided on this identity. TA-022 (2026-10-03) later adds internal release
+  packaging on a separate workflow identity. `trusted-candidate-compile` additionally needs the GitHub-hosted
   `change-impact` classifier (the reviewed full-SHA checkout action plus repository-owned
   PowerShell, no third-party action), which compares the exact pull-request
   base SHA and head SHA with a rename-free name-status diff and publishes
@@ -354,9 +389,10 @@ Every accepted decision records:
   guaranteed before platform cancellation; checkout/LFS and grace also consume
   that budget, and missing evidence never establishes success. Checkout/LFS
   and report upload sit only inside the job bound. TA-020 (2026-10-02) adds a
-  sixth engine-runner job, `trusted-editor-automation`, with a 35-minute
-  ceiling after a successful trusted compile; a scheduled phase that queues
-  while it runs waits at most those 35 minutes for it. The recorded
+  sixth engine-runner job, `trusted-editor-automation`, with a 45-minute
+  ceiling (35 minutes before the 2026-10-03 re-sync amendment) after a
+  successful trusted compile; a scheduled phase that queues while it runs
+  waits at most those 45 minutes for it. The recorded
   40-minute value is the maximum trusted-compile queue delay attributable to one
   currently running scheduled phase, subject to platform assignment latency;
   total queue time can be longer when older jobs are already ahead.
@@ -446,9 +482,9 @@ Every accepted decision records:
   30-minute controlled-work watchdog, client/server packaging at 40 minutes
   each with 30-minute watchdogs, and provenance/smoke at 20 minutes each with
   10-minute watchdogs. These are operational ceilings, not measured budgets.
-  TA-020 adds the owner-only `trusted-editor-automation` job at 35 minutes
-  (its step bounds plus a 3-minute margin) and leaves every watchdog here
-  unchanged.
+  TA-020 adds the owner-only `trusted-editor-automation` job at 45 minutes
+  since its 2026-10-03 re-sync amendment (its step bounds plus a 3-minute
+  margin) and leaves every watchdog here unchanged.
   Supersede the former multi-hour TA-012 phase ceilings. Timeouts fail with
   retained evidence and owned-tree cleanup; no silent retry or longer fallback.
   Under the approved Issue #167 recovery, use a fresh exact-revision control
@@ -578,7 +614,8 @@ Every accepted decision records:
 - **Consequences:** The runner operator provisions the host tools once per
   engine pin (the retained authorized legacy build is the one-time source)
   and runs the explicit attestation step tied to its retained evidence. A
-  misconfigured, stale, or tampered state stops the milestone visibly. The
+  misconfigured, stale, or drifted state stops the milestone visibly (the
+  2026-10-06 amendment explains why "drifted", not "tampered"). The
   timing record gains `hostTools` and bounded `identity` evidence
   (canonical engine SHA, `Build.version` hash, Linux compiler SHA-256,
   targets, validated runner name), and the runner report gains `runnerName`.
@@ -587,6 +624,237 @@ Every accepted decision records:
   update the controller's canonical pin and `AETHELN_ENGINE_REVISION`),
   measured evidence shows the boundary does not reduce the dominant cost, or
   the milestone moves to an installed engine build distribution.
+- **Amendment (2026-10-06, schema-2 closure and in-phase project editor build,
+  issue #267):** The receipt set above named
+  `Engine/Binaries/Win64/UnrealEditor.target`, which never exists on this
+  engine: the editor is built through the project target, so its receipt is
+  the project's `Binaries/Win64/AethelnOnlineEditor.target`. A fresh package
+  checkout has no `Binaries/`, and UAT throws when that receipt is missing
+  (`ProjectUtils.cs:673-715`), so the prebuilt cook could not start. This
+  amendment replaces the closure and the prebuilt flow; the boundary stays
+  explicit and fail-closed.
+  - *Closure (schema 2):* every `$(EngineDir)` product of type `Executable`,
+    `DynamicLibrary`, `RequiredResource`, `BuildResource`, or `Package` in the
+    project receipt written by the phase's own build (about 1,252 files on
+    2026-10-06: engine and plugin `UnrealEditor-*.dll`, the
+    `UnrealEditor.modules` manifests, `UnrealEditor.version`, and the two
+    editor executables), plus `Engine/Binaries/Win64/ShaderCompileWorker.target`
+    and its non-symbol products. `UnrealPak` and `BootstrapPackagedGame` leave
+    the closure: UAT always builds `UnrealPak` with the project agenda and
+    cleans every agenda target first
+    (`BuildProjectCommand.Automation.cs:113-118,243,251`; `CleanMode.cs:160-222`
+    deletes only prefix-matched products, so it cannot reach a closure file),
+    and linking is not deterministic (`VCToolChain.cs:1826-1832`), so a second
+    phase would always fail on the first phase's rebuild. Their provenance is
+    that of the client and server executables: the verified clean pinned
+    engine source plus an in-run `-clean` build. `$(ProjectDir)` products (the
+    six project modules and the project manifest) are built in the phase and
+    not attested; the project receipt is a phase output, so its engine-side
+    list is checked by set equality instead of a hash.
+    `UnrealEditor-NetCore.dll` is inside any sound closure (`Engine.Build.cs:85`
+    makes NetCore a public dependency of `Engine`): a NetCore relink keeps
+    failing closed, and the 2026-10-04 failure was correct.
+  - *In-phase project editor build:* `-HostToolsBoundary Prebuilt` and
+    `-Stage AttestHostTools` run
+    `scripts/ci/InitialPreparation.BuildInvocation.ps1 -Target AethelnOnlineEditor`
+    as a child process, with the wrapper's TA-020 compiler selection and
+    `-NoEngineChanges` (enabled for the editor target by the issue #267
+    TA-020 amendment). Its console goes to `<LogRoot>/host-editor-build`,
+    never to the controller output. `-NoEngineChanges` refuses any action
+    that would rewrite an existing file under `Engine/`
+    (`BuildMode.cs:727-743`); new engine files and UHT or makefile outputs
+    under `Engine/Intermediate` may still be written. Any engine link makes
+    the single engine metadata action outdated, and that action rewrites the
+    existing manifests and version file, so in practice an engine link ends
+    in exit code 5. Reasons: `host_editor_engine_changes` (exit 5),
+    `host_editor_build_failed` (any other nonzero exit), and
+    `host_editor_capture_failed` (a missing or invalid
+    `native-result.json`, or a capture failure). Every new reason code is a
+    lowercase identifier shorter than 32 characters and its message contains
+    "failed" and no path: the gate's diagnostic keeps only lines with a
+    failure word and redacts any token of 32 or more characters, so longer
+    names proposed during design were shortened. The attest step no longer
+    "builds nothing": it builds only the project editor modules and rewrites
+    no existing engine file, so an engine that UBT considers out of date for
+    this project can no longer be attested.
+  - *Normative order, pinned by fixtures:* parameter checks (including the
+    plugin-path refusal; `-HostToolsAttestationSha256` is accepted only with
+    `Prebuilt`), clean canonical engine, read the record once (size bound,
+    SHA-256 of its bytes, structure, schema 2), the in-phase build, clean
+    engine again, receipt checks, set equality with the record, the
+    manifest-set check, and the content hashes. The receipt must describe the
+    `AethelnOnlineEditor` Win64 Development Editor target
+    (`host_tools_receipt_invalid`), and its `LaunchCmd` and `Launch` must be
+    `$(EngineDir)/Binaries/Win64/UnrealEditor-Cmd.exe` and
+    `$(EngineDir)/Binaries/Win64/UnrealEditor.exe`, because UAT runs
+    `LaunchCmd` for the cook (`host_tools_launch_invalid`).
+    Verification runs after the build, so an engine write that slipped past
+    `-NoEngineChanges` still fails closed.
+  - *Manifest-set check:* the engine loader reads `UnrealEditor.modules` in
+    every subdirectory of each binaries directory, merges any manifest whose
+    `BuildId` matches (later mappings win), and accepts any manifest under
+    `Engine/Plugins/Bridge/` whatever its `BuildId`
+    (`ModuleManager.cpp:1930-1965`; SCW reads `ShaderCompileWorker.modules`
+    the same way). `Binaries` trees are git-ignored, and a build that only
+    adds manifests recycles the `BuildId` (`WriteMetadataMode.cs:101-131,247-266`),
+    so an extra manifest could redirect a module without changing a hashed
+    byte. Every file with either name under `Engine/Binaries/Win64`,
+    `Engine/Plugins`, `Engine/Platforms`, and `Engine/Restricted` (when
+    present) must be a closure member, with no `BuildId` filter, and a
+    reparse-point directory in those trees fails closed
+    (`host_tools_manifest_set_invalid`). Measured on 2026-10-06: 245
+    manifests, all members, no reparse-point directory among 30,772
+    directories, about 4-9 seconds. `UnrealPak.modules` is not checked;
+    whether a pre-placed one could redirect an `UnrealPak` module is not
+    verified (residual).
+  - *Schema 2 and the record hash:* the record gains `projectRevision`, the
+    attesting worktree's HEAD (the attest step requires `-SourceRevision` to
+    equal it, `host_tools_revision_mismatch`). It is recorded, never
+    compared to the packaged revision, because every `develop` merge would
+    otherwise invalidate the record. Schema-1 records are rejected. The gate
+    hashes the record file, reports `host_tools_prebuilt
+    attestation_sha256=<hex>` in the passed `host-tools-configuration`
+    message (no path), and forwards the hash as `-HostToolsAttestationSha256`;
+    the controller reads the record once and fails closed
+    (`host_tools_attestation_changed`) unless those bytes hash to the same
+    value. `build-timing.json` `hostTools` gains `attestationSha256`,
+    `attestationCreatedUtc`, `attestationSchemaVersion`, and
+    `attestedProjectRevision`. No check is added or renamed.
+  - *Private plugins:* the controller refuses `Prebuilt` and
+    `AttestHostTools` while `UE_ADDITIONAL_PLUGIN_PATHS` is set in the process
+    (`host_tools_plugin_paths_set`), because the cook would load plugins from
+    outside the engine, the project, and the closure (see the TA-019 note).
+    `Rebuild` is unchanged.
+  - *BuildId masking:* considered and not adopted. UBT keeps the existing
+    `BuildId` unless a module of an existing manifest is missing or newer
+    (`WriteMetadataMode.cs:101-118,247-266`); both observed flips were closure
+    DLL relinks, which fail on the DLL hash anyway, and masking would add a
+    parser path to the checker.
+  - *What a pass proves:* at phase start, after the in-phase build, every
+    closure file is byte-identical to the record; the attested engine-side
+    set equals what this revision's editor target needs; no engine-side
+    manifest outside the closure can map a module; the cook executable named
+    by the receipt is attested; and the verified record is the one whose hash
+    the report carries. The attest step's exit 0 is UBT's timestamp and
+    action-history verdict that no existing engine file is outdated: evidence
+    of drift status, not of authenticity.
+  - *What it does not prove:* the six project modules (rebuilt in the phase
+    and compiled against unattested engine import libraries, shared PCHs,
+    and UHT-generated headers, which can change their code); the .NET
+    toolchain (UBT, UHT, UAT, AutomationScripts, and the bundled dotnet) and
+    UBA, which decide `-NoEngineChanges` and write every in-phase binary;
+    receipt runtime dependencies and prebuilt executables (`zenserver.exe`,
+    `zen.exe`, `crashpad_handler.exe`, `EpicWebHelper.exe`,
+    `UnrealTraceServer.exe`); Windows DLL search order (a non-KnownDLL placed
+    in `Engine/Binaries/Win64` loads ahead of System32); MSVC, the Windows
+    SDK, and the Linux toolchain (version pins only); DDC and handoff
+    contents; and anything after phase start, because UAT's later UBT runs
+    execute the checkout's build rules without `-NoEngineChanges`. Every job
+    on runner 21 runs as the owner account and can rewrite the record; "CI
+    never attests" is a property of the gate's code, which passes only
+    `Prebuilt` or `Rebuild`, not a boundary. The record is a drift tripwire
+    with an audit trail, not tamper-proofing against that account.
+  - *Re-attestation:* triggers are `host_editor_engine_changes`; a
+    set-equality, manifest-set, or content mismatch after a deliberate engine
+    build or a plugin change on `develop`; a new engine pin; and loss of
+    `Engine/Saved/UnrealBuildTool/BuildConfiguration.xml` (the UHT input
+    cache). Preconditions: runner idle, `engine.lock` held, a new clean
+    worktree whose HEAD equals the remote `develop` head,
+    `UE_ADDITIONAL_PLUGIN_PATHS` empty at every scope, `BuildConfiguration.xml`
+    present, and the old record archived (the controller never overwrites
+    one). Afterwards: a reviewed delta against the archived record (paths
+    added, removed, and changed, and the `projectRevision` change), the build
+    that produced each changed file named in the evidence note, and the new
+    record's SHA-256 and `createdUtc` posted on issue #267 without paths; the
+    next run's report carries the same hash. Who may re-attest is an open
+    owner decision (issue #267, OD-9).
+  - *Provisioning evidence for the current engine (lead decision OD-5,
+    2026-10-06):* a hash-bound evidence note cited by the record. Under
+    TA-022's trust model it accepts as provisioning for this engine the 246
+    files written on 2026-10-04 by a pull-request CI job
+    (`trusted-editor-automation`, run 37238722645: `UnrealEditor-NetCore.dll`,
+    `UnrealEditor.version`, and 244 manifests) and the 437 editor DLLs dated
+    2026-09-29, whose provenance is a timestamp inference (the attempt06
+    provisioner run failed and retained hashes for four files only). Later
+    re-attestations follow the procedure above.
+  - *Host lease:* packaging phases take no engine host lease. The in-phase
+    build writes shared engine state (UHT `.inputcache.data`,
+    `SourceFileCache.bin`) and is serialized by the wrapper's `-WaitMutex`,
+    the `aetheln-engine-runner` queue, and the operator rule against local
+    engine builds while a milestone is queued or running.
+  - *Paths affected:* the scheduled and release package phases call the same
+    controller and gate, so both gain the in-phase build, the `UnrealPak`
+    exclusion, the manifest-set check, the plugin-path refusal, and the
+    record hash in their reports, with no workflow change.
+  - *Evidence:* `tests/build/Build-PackagedArtifacts.Tests.ps1` covers the
+    attest step, the prebuilt order, out-of-closure rebuilds, in-closure
+    changes, set equality, build outcomes, receipt prefixes and launch
+    entries, schema-1 rejection, the three build-then-verify order fixtures,
+    the manifest-set fixtures (subdirectory, case variant, Bridge,
+    ShaderCompileWorker, and a junction), the plugin-path refusal, the
+    record-hash binding, and path-free failure output.
+    `tests/ci/Invoke-EngineRunnerGate.Tests.ps1` covers the hash message and
+    forwarding, two records giving two hashes, and a host-editor failure that
+    discloses no path. The first live proof is the owner's attestation after
+    merge.
+
+- **Candidate amendment (2026-10-09, issue #267, additive programmes and split
+  target clean/compile):** Stock remains the default. The explicit
+  `CleanTargetsPrebuiltPrograms` selection separates Development Client/Server
+  target Clean and Build from UAT's clean cook/stage/package/archive. It uses
+  `-skipbuild` only after successful supervised target captures. The complete
+  accepted schema-2 Editor/SCW record stays immutable and verifies in full;
+  a separately operator-provisioned `aetheln.host-program-supplement/v1` binds
+  its hash/size/count and the receipt-derived UnrealPak and bootstrap closure.
+  UnrealPak's sealed receipt retains its provisioning-project origin. Current
+  descriptor and target-rule context must match. Extra programme branches,
+  unknown types, missing/extra manifests, changed products and conflicting base
+  overlaps fail closed without a rebuild fallback.
+  - The observed 101 programme execution files and 99 new unique files describe
+    one source snapshot, never a future handpicked subset of the 1322-file base.
+  - Pinned CleanMode `-DryRun` records its actual deletion plan in a separately
+    supervised capture before actual Clean. The typed clean receipt explicitly
+    binds `discovery.nativeStep` and `discovery.planSha256`. Planned paths must
+    satisfy the source-defined target/application predicates and scoped roots;
+    independent binary-name scans verify ownership and absence. The controller
+    never deletes a plan itself or authorises host-closure deletion.
+  - Clean-owned executables, symbols and the exact target receipt must be
+    absent. Copied D3D12Core, SDK layers, DirectML and TBB DLLs may survive.
+    Build freshly produces the exact receipt; every post-compile product,
+    including dependencies and symbols, is hashed as handoff payload. Selected
+    compiler/SDK/toolchain identity comes from that compile capture with
+    `-Verbose`; old UAT sidecars cannot supply it.
+  - Split phase records use version 2 with typed proof. Stock phase version 1
+    and schema-2 provenance stay compatible. A closed `build.packageRecipe`
+    binds both phases and their run/source/host identities. Writer, cook
+    evidence, release evidence/cut and engine gate reject absent, mixed,
+    altered or inconsistent split proof. Package reports add a closed
+    `packageRecipeEvidence` binding; stock reports keep their shape.
+  - Split compilation uses the existing Issue #167 resource-derived action
+    policy with an optional caller ceiling from 1 through 4. The effective cap
+    is forwarded to the editor wrapper and exact target Build arguments.
+    `compileResources` binds synchronous admission and precompile recheck
+    readings, caller ceiling and effective cap; a lower recheck refuses the
+    fixed selection. No continuous-monitor claim is added. Programme compile
+    steps likewise bind one canonical cap to their sealed actual capture.
+    Uncapped, duplicate, noncanonical or mismatched commands fail. Stock
+    compatibility, canonical executable pins and phase deadlines remain.
+  - Effective cap evidence also requires absent/empty inherited `UBT_EXTRA_ARGS`.
+    Split admission/editor/native launches guard that named Process input;
+    the native child repeats the guard before canonical invocation and seals
+    its actual boolean fact. Samples, declared native steps and sealed captures
+    carry matching `buildInputs.ubtExtraArgsAbsent = true`; missing/false/type
+    or capture disagreement fails. Editor timing binds the guard to unchanged
+    wrapper/capture hashes. No raw value, clearing, global configuration change
+    or continuous monitoring is added. Stock compatibility remains.
+
+  - Client/Server useful-work caps stay 30/30 minutes; Provenance/Smoke stay
+    10/10 minutes. Programme provisioning, fresh supplement adoption, native
+    fit/equivalence, #167 semantic receipt production, independent audit and
+    workflow activation remain separate gates. Portable fixtures establish
+    rejection semantics, never native provisioning or fit.
+  - This candidate records implementation and review requirements; it does
+    not invent owner acceptance, native evidence or dispatch authority.
 
 ### TA-016 - Revision-Bound Compile Applicability for Issue #151
 
@@ -697,6 +965,20 @@ Every accepted decision records:
   equality and exact ordered merge parents. The event base remains an independent
   pre-checkout workflow ancestry witness; the candidate selector does not need
   that separate witness in its live context.
+  Receipt publishers and the shadow aggregate bind their base to the same
+  verified first parent through the selector's `accepted_base_sha` output,
+  never the raw event base. GitHub does not refresh the event base when the
+  target branch moves, so that binding failed every pull request behind its
+  base with `selector_identity_mismatch`, on every rerun. The selector diffs
+  the first parent against the tested merge, not the head, so a head behind its
+  target is not charged with reversed upstream changes. Because the selector is
+  accepted-base code, that diff applies only to runs whose accepted base
+  already contains it. A conservative fallback report, for example after
+  `path_unclassified`, carries the same accepted-controller blob OID and
+  SHA-256 as a classified report. Both come from the trusted control
+  repository, never from the candidate. The workflow's identity check
+  therefore accepts it, and the all-selected selection fails safe instead of
+  failing the selector job.
   The selector remains non-authoritative and does not alter legacy CI gates.
 - **Historical Package 3A amendment:** Pin every approved remote action to its reviewed
   full commit SHA, implement and fixture-test exact per-job shadow receipt and
@@ -773,6 +1055,28 @@ Every accepted decision records:
   normalized digest is
   `a1be534a661508fdccae17ea7623b2c3f215119a07cdc66ef7ab8653a9925536`.
   It is historical identity, not a Package 3C activation pin.
+- **Amendment (2026-10-05, selector aligned with `change-impact`, issue
+  #231):** the selector and `change-impact` disagreed for two path classes,
+  and the producer-gap path failed with `producer_direct_binding_invalid:native`
+  because the selector required a native receipt for a compile that
+  `change-impact` skipped. This reverses the reconciliation rule above that
+  kept unwired lookalikes unclassified, for one class: new
+  `tests/content/*.ps1` and `tests/content/*.md` files, nested ones included,
+  are now portable, as every other `tests/**/*.ps1|md` path already was. Any
+  other `tests/content/` file, such as a `.json` fixture, still fails closed as
+  `path_unclassified`. The two packaging scripts
+  `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1` no longer select
+  `controller-operational-proof`; they select `portable` and
+  `clean-package-provenance-smoke` only, because the Compile gate never runs
+  them. The match is exact and case-sensitive, so a case variant of either
+  filename keeps operational proof. The `change-impact` block and the
+  authority predicate are unchanged. The selector candidate is 41,492
+  LF-normalized bytes with digest
+  `40cb0f0c2aeee97557d0d939d63ce7e1b68274338033304a4c11a7626a70313d`. It is a
+  new policy identity and grants no activation authority; the earlier
+  digests above stay as recorded, and `docs/continuous-integration.md` holds
+  the detail.
 - **Package 3C receipt and aggregate wiring amendment:**
   `ci-selection-shadow` now exposes the validated nonce, aggregate readiness,
   all eight exact obligation decisions, and its artifact ID/name/API digest as
@@ -814,14 +1118,30 @@ Every accepted decision records:
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
   live portable/controller-contract/controller-operational-proof/native/unreal/visual subset, the aggregate is not called. The workflow
-  still validates the selector identity and emits the exact selected
-  unsupported set as a green `producer_contract_incomplete` record with
+  still validates the selector identity and the direct bindings of every
+  selected live producer, so a failed or skipped required receipt remains red
+  rather than hiding behind the gap, and emits the exact selected
+  unsupported set as a green `producer_contract_incomplete` record
+  (`aetheln.ci-acceptance-shadow-gap/v3`, carrying the checked
+  `liveBindings`) with
   `complete=false`, `shadow=true`, `authoritative=false`, and
   `grantsAcceptance=false`. The green result prevents a known incomplete shadow
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `clean-package-provenance-smoke` and
-  `content-reference-validation` remain unsupported live obligations.
+  `content-reference-validation` remain unsupported live obligations. The gap
+  path checks only job success, the exact artifact name, and the artifact ID and
+  digest format; it does not do the aggregate's artifact-API and byte
+  reconciliation, and `liveBindings` is informational. A
+  publisher-contract test ties the three selector-facing lists (the workflow
+  live list, the context builder live list and the aggregate unsupported list)
+  and the aggregate's inline exactly-one-evidence list to the checks the
+  publishers can prove, so shipping a producer fails that test until those
+  lists move together. Two other copies are not covered by it. The receipt
+  builder's unsupported-check list fails closed: a stale entry makes the builder
+  throw `receipt_semantic_evidence_unsupported:<id>`. The receipt builder's
+  inline evidence list is inert, because its strict evidence-name ordering
+  check still rejects a repeated evidence entry.
 - Authority activation remains a later change. Package 3C includes a dormant
   `ci-acceptance-authority` job whose pull-request condition is hard-skipped by
   the exact predicate
@@ -987,6 +1307,15 @@ Every accepted decision records:
   is recorded here rather than hidden. Authority stays off: the `ci-acceptance-authority` predicate remains
   literally `always() && github.event_name == 'pull_request' && false`, and no
   receipt or aggregate grants acceptance.
+- **Amendment (2026-10-05, issue #231):** the statement above that the
+  accepted-base selector is unchanged was true on 2026-10-02 and stays as
+  recorded. The selector has since stopped selecting
+  `controller-operational-proof` for exactly the two exempt packaging
+  scripts, so a packaging-only pull request selects `portable` and
+  `clean-package-provenance-smoke` and takes the green gap branch this
+  decision assumed. The exempt list, the controller paths, and the compile
+  decision are unchanged, so the revisit trigger below is not met. The
+  selector digest changed; the TA-017 amendment of the same date records it.
 - **Owner:** Issue #167.
 - **Revisit trigger:** the selector stops selecting
   `controller-operational-proof` for these paths, the producer moves off the
@@ -1099,6 +1428,14 @@ Every accepted decision records:
     LFS-pulling job.
   - Guard against a persistent `UE_ADDITIONAL_PLUGIN_PATHS`: pin it empty in
     the workflow `env`, or fail the engine-runner gate when it is non-empty.
+- **Note (2026-10-06, issue #267):** `Build-PackagedArtifacts.ps1` now
+  refuses `-HostToolsBoundary Prebuilt` and `-Stage AttestHostTools` while
+  `UE_ADDITIONAL_PLUGIN_PATHS` is set (`host_tools_plugin_paths_set`, TA-014
+  amendment). This closes the "packaging or cooking with the art" follow-up
+  path for prebuilt cooks until a TA-019 revisit changes the controller. It
+  also partly implements the persistent-value guard: every prebuilt cook,
+  scheduled, release, or local, is covered; `-HostToolsBoundary Rebuild` is
+  not.
 - **Owner:** Issue #201, including the follow-ups until they move to their own
   issue. #202 and #203 consume this boundary. Intake and provenance follow #120
   and the `visuals/asset-provenance.md` model.
@@ -1120,12 +1457,14 @@ Every accepted decision records:
   same pull-request, same-repository, owner, and triggering-actor predicates,
   targets `[self-hosted, Windows, X64, aetheln-engine]`, joins the
   `aetheln-engine-runner` group with `queue: max` and
-  `cancel-in-progress: false`, and has a 35-minute job ceiling: its step
+  `cancel-in-progress: false`, and had a 35-minute job ceiling: its step
   bounds (editor build 15, harness 12, residue cleanup 2, bind 1, upload 1,
-  outcome 1) plus a 3-minute margin. Every step continues on error. It reuses
-  the registered managed compile workspace only after verifying that the
-  workspace still holds the tested revision and is clean, and fails with a
-  fixed reason otherwise. `trusted-candidate-compile` returns to its
+  outcome 1) plus a 3-minute margin, raised by the re-sync amendment below.
+  Every step continues on error. It reused the registered managed compile
+  workspace only after verifying that the workspace still held the tested
+  revision and was clean, and failed with a fixed reason otherwise; the re-sync
+  amendment below replaces that check with a leased re-sync.
+  `trusted-candidate-compile` returns to its
   pre-producer shape, and the TA-015 30-minute compile watchdog is unchanged.
   The engine runner now has six jobs.
 - **Evidence:** first live runs on runner 21. The `trusted-candidate-compile`
@@ -1137,19 +1476,20 @@ Every accepted decision records:
   cover. A separate job gives the editor build its full budget even when the
   compile uses its whole 30-minute watchdog.
 - **Cost:** an owner engine pull request can hold the runner for up to
-  75 minutes (40-minute compile plus 35-minute editor automation) when no
-  older waiter queued between the two jobs. A scheduled phase that queues
-  while the editor job runs waits at most 35 minutes for it; the recorded
-  40-minute trusted-compile queue delay attributable to one running scheduled
-  phase is unchanged. Workspace race: when another owner pull request's
-  compile, or a newer push to the same pull request, enters the engine queue
-  during this pull request's compile window, it can re-sync the managed
-  workspace before the editor job starts. The editor-build step then stops
-  with `editor_workspace_revision_changed` instead of building another
-  revision; the editor job still succeeds because every step continues on
-  error, and only `unreal-receipt-shadow` fails, when it is selected. Recovery
-  needs "Re-run all jobs"; "Re-run failed jobs" does not re-run the successful
-  editor job.
+  85 minutes (40-minute compile plus 45-minute editor automation) when no
+  older waiter queued between the two jobs (75 minutes before the re-sync
+  amendment). A scheduled phase that queues while the editor job runs waits
+  at most 45 minutes for it; the recorded 40-minute trusted-compile queue
+  delay attributable to one running scheduled phase is unchanged. Workspace
+  race (history, resolved by the re-sync amendment): when another owner pull
+  request's compile, or a newer push to the same pull request, entered the
+  engine queue during this pull request's compile window, it could re-sync the
+  managed workspace before the editor job started. The editor-build step then
+  stopped with `editor_workspace_revision_changed` instead of building another
+  revision; the editor job still succeeded because every step continues on
+  error, and only `unreal-receipt-shadow` failed, when it was selected.
+  Recovery took a full workflow re-run, because re-running only the failed
+  jobs skipped the successful editor job.
 - **Alternatives:** lowering the editor or harness bounds (unmeasured, and
   would still skip on slow compiles); a budget-skip that publishes a green gap
   (reintroduces the exemption TA-018 removed); raising the compile job ceiling
@@ -1157,20 +1497,658 @@ Every accepted decision records:
 - **Consequences:** a failure in the editor automation job never affects the
   compile job or `native-receipt-shadow`; `unreal-receipt-shadow` needs the new
   job and fails red at its raw binding check, printing the fixed
-  `automation_reason`, when no report was uploaded. The job runs outside the
-  engine host lease for this first proof; wrapping it in the lease is a
-  follow-up. A second follow-up replaces the revision check with a real
-  re-sync through `Sync-ManagedCompileWorkspace`
+  `automation_reason`, when no report was uploaded. The job first ran outside
+  the engine host lease and only checked the workspace revision; the re-sync
+  amendment below wraps the re-sync and editor build in the lease and replaces
+  the check with a real re-sync through `Sync-ManagedCompileWorkspace`
   (`scripts/ci/ManagedCompileWorkspace.ps1`), as the gate's managed compile
-  path in `Invoke-EngineRunnerGate.ps1` does; that needs a control checkout at
-  `github.sha`, the managed-workspace registration variables, the engine host
-  lease, a larger job ceiling, and removal of the no-checkout pin in
-  `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`. Record editor-build and
+  path in `Invoke-EngineRunnerGate.ps1` does. Record editor-build and
   harness durations from the first live runs. Authority stays off.
+- **Amendment (2026-10-02, shared engine tree):** the editor build shares
+  the pinned engine tree with contributor builds. This amendment removes the
+  source-code-access plugin flip. It does not make the job leave the engine
+  unchanged. Residual cost: every CI editor run still relinks
+  `UnrealEditor-NetCore.dll` and rewrites the engine editor BuildId. A
+  contributor editor built before that run then needs a rebuild of about
+  30 seconds before it loads again. `-NoEngineChanges` is deferred (see
+  *Deferred fail-closed* below).
+  - *Incident:* the run 37056028961 editor build passed
+    `-Compiler=VisualStudio2022` and relinked
+    `UnrealEditor-VisualStudioCodeSourceCodeAccess.dll`, which rewrote the
+    engine editor BuildId in `UnrealEditor.version`. The next contributor build
+    relinked it again and produced another BuildId, which invalidated the
+    editor binaries of every other worktree. Cause:
+    `VisualStudioCodeSourceCodeAccess.Build.cs` emits `VSACCESSOR_HAS_DTE=1`
+    only when `WindowsPlatform.ToolChain` is `VisualStudio2022` (and the DTE
+    registry key exists), and `0` otherwise. The CI build resolved
+    `VisualStudio2022`; contributor builds, which pass no `-Compiler`
+    (`docs/unreal-project-setup.md`), resolve `VisualStudio`. The flip recurs on
+    every switch between a CI editor build and a contributor build.
+  - *NetCore regeneration (recurring, cause unknown):* both observed CI editor
+    runs (37056028961 and 37061874410, the PR #207 run) rewrote
+    `Engine/Intermediate/Build/Win64/UnrealEditor/Inc/NetCore/UHT/NetCore.init.gen.cpp`
+    and relinked `UnrealEditor-NetCore.dll`, which rewrote the BuildId. The
+    trigger is that NetCore's UHT output alternates between two package body
+    hashes. That has been seen only when CI and contributor builds alternate,
+    never across consecutive builds of one project. Each run also flipped the
+    plugin definition, which the compiler alignment below removes. Only the package registration body hash changed: it went to
+    `0xF26BCE42` in the first run and to `0x6C2D6518` in the second. The
+    declarations hash (`0x12F0F921`) and every per-header NetCore `.gen.cpp`
+    (unchanged since the engine build) stayed the same. The contributor editor
+    build that followed the second run flipped the definition back but left
+    NetCore and its DLL alone. No CI argument explains the difference:
+    - The arguments only CI passed were `-UBA -UBADisableRemote -NoXGE -NoSNDBS
+      -NoFASTBuild -MaxParallelActions=4`, the compiler pins, and, before this
+      change, `-Compiler=`. CI also sets child-only dotnet and toolchain
+      environment variables and builds a project on another drive.
+    - None of these reaches UHT. Both logs invoke the internal UHT with only
+      the project, the manifest, and `-WarningsAsErrors`.
+    - The CI and contributor `AethelnOnlineEditor.uhtmanifest` files are
+      identical for all 588 engine modules, NetCore included (headers,
+      definitions, dependencies, output directory). They also have the same
+      target settings, with the UHT input cache off (it is enabled only by
+      `-EnableUHTInputCache` or `IsBuildMachine=1`), and no UHT plugins. Only
+      the four project modules' paths differ.
+    - UHT writes an output only when its bytes differ. Header ordering is ruled
+      out, because UHT sorts headers before it combines body hashes. Monolithic
+      client and server builds always produce `0x6C2D6518`.
+    - The two contributor builds ran full-target UHT on identical project
+      sources and each left whatever value they found. A deterministic
+      generator could not have matched both values, so the input that varies
+      between UHT runs is not yet identified.
+  - *Compiler alignment:* for `AethelnOnlineEditor` only,
+    `InitialPreparation.BuildInvocation.ps1` no longer passes `-Compiler=` and
+    keeps `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0`. In the
+    pinned UnrealBuildTool (`Platform/Windows/UEBuildWindows.cs`), `Compiler`
+    stays `Default`, so `GetDefaultCompiler` has no `PreferredCompilers`, and
+    `GetDefaultToolchain` finds no project-file format, an empty
+    `BuildConfiguration.xml`, and no `PreferredAccessor` in the EditorSettings
+    hierarchy. It returns `WindowsCompiler.VisualStudio`, an alias of
+    `VisualStudio2026`. `ToolChain` then copies the MSVC compiler.
+    `MicrosoftPlatformSDK.FindToolChainInstallations(VisualStudio2026)` also
+    adds the VS 2022 toolsets, and the version pin selects the same MSVC 14.44
+    toolset that contributors use (both logs report product 14.44.35228).
+    That resolution reads host configuration, so a `PreferredCompilers`,
+    project-file format, or `PreferredAccessor` setting for the runner account
+    would change it. Contributor builds on the same host under the same user
+    account read the same inputs. A contributor can bring the plugin flip back
+    by preferring VS 2022 in the per-account `BuildConfiguration.xml` or by
+    setting `PreferredAccessor` to VS 2022 in the user-level
+    `EditorSettings.ini`. The plugin-header hash monitoring below would catch
+    that.
+    Client and server compile invocations, and the compile host proof's
+    `requiredWindowsArguments`, keep `-Compiler=VisualStudio2022`: those targets
+    write their UHT and definition outputs under the project's `Intermediate`
+    and do not build the editor-only plugin.
+  - *Deferred fail-closed:* the editor target does not pass
+    `-NoEngineChanges` yet. The NetCore regeneration happens on every CI editor
+    run, so the flag would turn `unreal-receipt-shadow` and
+    `ci-acceptance-shadow` red on every owner Source pull request. A test pins
+    that the flag is absent. The mapping is ready for when the NetCore
+    follow-up lands. With the flag, if an outdated action would rewrite an
+    existing file under `Engine/`, UBT (`Modes/BuildMode.cs`) logs the file
+    list and exits 5 (`CompilationResult.FailedDueToEngineChange`), and
+    `Build.bat` passes that code through. The editor-build step already maps
+    exit 5 without a capture failure to the fixed reason
+    `editor_build_engine_changes_required`, and an executed fixture covers it.
+    Every other nonzero exit stays `editor_build_failed`. The file list holds
+    engine paths, so it would stay in the runner-local `build.log`. Even
+    enabled, UBT runs the check after it creates the makefile, so UHT outputs
+    and `Definitions.*.h` headers may already be written. The flag stops
+    engine compile, link, and BuildId rewrites only.
+  - *Monitoring:* before and after CI editor runs, hash `NetCore.init.gen.cpp`
+    and the plugin header
+    `Engine/Plugins/Developer/VisualStudioCodeSourceCodeAccess/Intermediate/Build/Win64/x64/UnrealEditor/Development/VSCSCA/Definitions.VSCSCA.h`.
+    Follow-up (required): find what varies the NetCore package body hash. Run
+    UHT repeatedly against a scratch engine copy with the same manifest, then
+    compare the per-header body hashes and the exported header set, and align
+    or pin whatever input varies.
+  - *Follow-ups:* package jobs are unchanged. In `rebuild-authorized` mode,
+    `scripts/build/HostToolProvisioning.Policy.ps1` passes
+    `-Compiler=VisualStudio2022` when it rebuilds host `UnrealEditor`, so it can
+    flip the same definition. Align it separately. Longer term, give each
+    consumer an isolated or installed engine tree, which removes both
+    exposures. Live proof is still pending: the next CI editor run should show
+    no plugin relink, which leaves NetCore as the only engine rebuild.
+- **Amendment (2026-10-03, workspace re-sync, issue #236):** on 2026-10-03
+  the workspace race hit two of seven parallel pull requests (PR #227, run
+  37132326052; PR #232, run 37131973257), and each recovery cost a full
+  compile cycle on the single runner. The job now checks out its own
+  exact-revision control source at `github.sha` into
+  `editor-control-<run>-<attempt>` with the compile job's checkout inputs (no
+  persisted credentials, no LFS, 5 minutes). In one 20-minute step it then
+  takes the engine host lease, re-syncs the registered managed workspace to
+  that revision, and builds the editor. The control-checkout copy of
+  `scripts/ci/Sync-EditorAutomationWorkspace.ps1` validates the registration,
+  calls `Sync-ManagedCompileWorkspace` with the registered trust tuple, and
+  keeps the revision and clean checks as post-sync assertions; the build uses
+  the control-checkout copy of `InitialPreparation.BuildInvocation.ps1`.
+  - *Lease:* lease wait, sync, and build share one 17-minute deadline. The
+    sync child and the build each run in an owned kill-on-close Job Object
+    (`Aetheln.PreparationJob`) that stops at that deadline, and the step
+    releases the lease only after each job is proven empty, within the step
+    bound. Nothing is stopped by name or command line. An unproven cleanup or
+    a failed release keeps the held journal for explicit recovery, as the
+    compile does, and records `editor_host_lease_release_failed`. The harness
+    and residue cleanup still run outside the lease, serialized by the engine
+    queue. Residue cleanup is skipped when the lease state is unknown or held
+    by someone else (issue #243): after `editor_host_lease_failed` or
+    `editor_host_lease_release_failed`, a skipped editor step, or an
+    interrupted one that recorded no reason.
+  - *Reasons:* `editor_host_lease_failed`, `editor_workspace_sync_failed`,
+    `editor_build_timeout`, `editor_host_lease_release_failed`, and
+    `editor_control_checkout_failed` join the fixed vocabulary; the lease or
+    sync module's own fixed code is printed as one
+    `editor_build_detail code=<code>` line. `editor_build_timeout` means only
+    that the build reached the deadline: a lease wait that reaches it records
+    `editor_host_lease_failed`, and a sync that times out records
+    `editor_workspace_sync_failed` with no detail code. Issue #243 adds
+    `editor_sync_time_insufficient`, recorded when less than the provisional
+    fixed 5-minute minimum remains after the lease is taken, before any
+    checkout starts.
+  - *Ceiling:* the job now has a 45-minute job ceiling: its step bounds
+    (control checkout 5, re-sync and editor build 20, harness 12, residue
+    cleanup 2, bind 1, upload 1, outcome 1) plus a 3-minute margin. The added
+    10 minutes pay for the new checkout and re-sync work, not for a slower
+    build. An owner engine pull request can now hold the runner for up to
+    85 minutes (40-minute compile plus 45-minute editor automation).
+  - *Pending evidence:* one live observation of two compile-selecting pull
+    requests pushed together that both reach a green `unreal-receipt-shadow`.
+    Authority stays off.
+- **Amendment (2026-10-04, runner engine isolation):** the lead selected an
+  independently writable runner source-engine tree for
+  [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
+  This is the architectural direction; capacity, provisioning, deployment and
+  isolation proof remain pending. The shared-tree behavior above still applies
+  until the new route is deployed and verified.
+  - *Roles and identity:* keep contributor builds and editor launches on the
+    contributor engine root; route CI compile, editor automation and packaging
+    to the independently provisioned runner engine root. Preserve the pinned
+    engine source and toolchain identities, clean Git checkout at exactly the
+    pinned revision and automatic BuildId stale-module refusal. Do not pin a
+    BuildId or weaken the loader.
+    Keep root paths in local configuration. Bind each role's registration,
+    compile proof, host-tool attestation and cache identity to its actual root
+    and verified inputs; do not reuse evidence from the other root.
+  - *Output separation:* engine and plugin binaries, generated source,
+    intermediates and module manifests must have no shared writable aliases,
+    including hardlinks or junctions. A second path to the same writable
+    outputs is not isolation. Existing admission, queue, lease and failure
+    rules remain in force; this amendment does not change CI authority.
+  - *Provisioning gate:* measure available active-storage capacity, the
+    supported engine payload and peak build space before copying or building.
+    Preliminary, metadata-only evidence on the Issue #238 thread shows about
+    95 GiB free on the active volume against about 212 GiB of logical engine
+    data, so a plain full duplicate does not fit; this does not resolve the
+    provisioning `TBD`. Capacity and provisioning are not yet approved or
+    complete. Retain the
+    working contributor tree and its evidence; this decision authorizes no
+    deletion or relocation. An installed artifact is a possible later
+    optimization; its size, construction peak, duration and supported-target
+    validation remain `TBD`.
+  - *Deployment proof:* bind both roots, project revisions, engine/toolchain
+    identities and contributor DLL/manifest hashes before a CI editor build,
+    such as the first editor build on the newly provisioned tree. Require
+    evidence that the runner root's engine BuildId or NetCore outputs changed
+    during that run; a no-op build does not qualify. Require the contributor
+    engine's BuildId and relevant output hashes, and the contributor project's
+    DLLs and manifests, to remain unchanged. Then launch that contributor project
+    without rebuilding or restamping it and verify its modules and map load.
+    Cover a CI failure after engine metadata work as well; a no-op build or
+    successful CI result alone does not prove isolation. Record the new
+    runner's provisioning and applicable build/automation evidence separately.
+  - *Interim operation:* serialize shared-engine consumers until deployment.
+    The procedure is lead/owner-coordinated outside the repository: the lead
+    holds the engine and announces its release in the delivery status or
+    issue. Recover an affected contributor project with the normal Development
+    Editor `Build.bat` command in
+    [Unreal Project Setup](unreal-project-setup.md), compare `BuildId` in the
+    project and engine `UnrealEditor.modules` files, then relaunch. Never repair
+    this by hand-editing generated manifests. Even after file isolation,
+    performance captures require a quiet host because CI still competes for
+    CPU, memory, storage and GPU resources.
+  - *Rationale and alternatives:* a BuildId pin was rejected: CI would still
+    write the shared NetCore DLLs, so serialization would remain, and it would
+    remove stale-binary refusal. An installed engine is a later optimization
+    (`TBD`). The NetCore root-cause fix plus `-NoEngineChanges` remains the
+    TA-020 follow-up and does not isolate the trees. An unverified external
+    hypothesis on Issue #238 (comment, 2026-10-04 05:02Z) attributes the
+    NetCore output variance to a UHT race and proposes workarounds (enable the
+    UHT input cache, or change `UhtHeaderFile.cs`). It is under evaluation; if
+    confirmed, it triggers the TA-020 revisit before provisioning.
+  - *Amendment owner and revisit:* Issue #238; revisit when the runner route
+    is deployed and proven, or if capacity proves infeasible.
+- **Amendment (2026-10-05, UHT input cache, issue #238):** the NetCore
+  variance has a root cause and a fix. This amendment supersedes the
+  2026-10-02 *NetCore regeneration (recurring, cause unknown)* analysis, the
+  residual-cost statement in that amendment's lead-in ("every CI editor run
+  still relinks `UnrealEditor-NetCore.dll` and rewrites the engine editor
+  BuildId") and the 2026-10-04 treatment of the UHT-race report as an
+  unverified hypothesis. It
+  also changes the 2026-10-04 isolation direction as described below; it
+  does not otherwise alter that amendment.
+  - *Root cause:* a race in `UhtHeaderFile.cs`
+    (`Engine/Source/Programs/Shared/EpicGames.UHT/Types/UhtHeaderFile.cs`).
+    UHT reads and parses headers in parallel. `AddReferencedHeader` sets the
+    `Referenced` export flag on a same-module header while holding the lock of
+    the referring header, which does not protect that flag, and `Reset` clears
+    the flag without a lock. The flag decides whether NetCore's only
+    non-reflected header, `PushModel.h`, is exported, so it changes the
+    `NetCore.init.gen.cpp` bodies hash between `0x6C2D6518` (flag lost) and
+    `0xF26BCE42` (flag kept). Any flip rewrites that file, recompiles and
+    relinks `UnrealEditor-NetCore.dll`, and restamps the shared engine
+    BuildId, after which a contributor editor built earlier stops loading.
+    An external user reported the race on the Issue #238 thread (and in an
+    Epic Forums report); the lead's read of the pinned engine source confirms
+    the code path, and the fix below was verified on live builds. The
+    standalone idle harness did not reproduce the flip (10/10 default runs gave
+    `0x6C2D6518`), the flip rate under load is unmeasured, and the
+    kept/lost mapping of the two values is inferred from the source and the CI
+    history. The absolute hash values depend on host and source line endings;
+    the values above are this host's.
+  - *Corrections to the 2026-10-02 amendment:* the UHT input cache is off
+    on this host unless configured: `IsBuildMachine` is not set and UBT never
+    sets it, and every inspected CI manifest had the cache off. A cache-off CI
+    client build wrote
+    `0xF26BCE42` on 2026-10-04, so "monolithic client and server builds always
+    produce `0x6C2D6518`" does not hold. The contributor builds that left the
+    value unchanged logged `Generated code is up to date`, so UHT did not run
+    and they were not evidence of a deterministic generator. Cache-off UHT is
+    the nondeterministic state.
+  - *Fix:* set `bEnableUHTInputCache` to `true` for every builder in the
+    engine's git-ignored UBT configuration file. The exact path and content
+    are:
+
+    ```text
+    <engine root>\Engine\Saved\UnrealBuildTool\BuildConfiguration.xml
+    ```
+
+    ```xml
+    <?xml version="1.0" encoding="utf-8" ?>
+    <Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+      <UEBuildConfiguration>
+        <bEnableUHTInputCache>true</bEnableUHTInputCache>
+      </UEBuildConfiguration>
+    </Configuration>
+    ```
+
+    With the cache read enabled, UHT re-applies `Referenced` after all parsing
+    (`Resolve` in the `InvalidCheck` phase), so the result is `0xF26BCE42` on
+    every run. No engine source edit is needed and the pinned clean checkout
+    stays clean: the file lives under `Saved/`, which the engine's own
+    `.gitignore` ignores, and the repository's engine cleanliness checks run
+    `git status --porcelain --untracked-files=all` without `--ignored`.
+  - *Provisioning requirement:* this file is now part of the provisioning of
+    every engine tree that CI or contributors build: the runner's engine root
+    and each contributor engine root (the same tree today). It is host
+    configuration outside version control, so re-provisioning or recreating
+    an engine tree loses it silently. Apply it in the same step that creates or
+    restores the tree; the contributor step is in
+    [Unreal Project Setup](unreal-project-setup.md#enable-the-uht-input-cache).
+    UBT reads later configuration files (ProgramData, AppData, LocalAppData,
+    Documents and the project `Saved/UnrealBuildTool/BuildConfiguration.xml`)
+    after the engine file, so none of them may set the flag to `false`. With
+    the cache on, UHT also writes git-ignored `.inputcache.data` files under the
+    engine and project `Intermediate` folders; they are shared mutable state,
+    serialized only by the host lease or UBT's `-WaitMutex`.
+    CI scripts do not repeat the setting. A fail-closed pre-check of the file,
+    or an `-EnableUHTInputCache` argument in
+    `InitialPreparation.BuildInvocation.ps1` (one `command_line_changed`
+    makefile reload), is a possible follow-up and is not implemented.
+  - *Never use `-ForceHeaderGeneration`:* it turns the input-cache read off
+    (`UEBuildTarget.cs`), which removes the re-apply step and brings the race
+    back. Do not pass it for any build against these engine trees.
+  - *Rejected for this problem:* a CI-only `-EnableUHTInputCache` (a
+    contributor full UHT run could still flip the shared NetCore), a per-user
+    `AppData` configuration file (it breaks if the runner changes account and
+    does not cover other accounts), `-NoGoWide` (not reachable from UBT's
+    internal UHT, and deterministic only at the other value), and an engine
+    source edit of `UhtHeaderFile.cs` (it breaks the pinned clean-source
+    check).
+  - *Evidence:* the setting was applied on 2026-10-04 at 22:09Z and the engine
+    tree stayed clean. One expected, one-time flip followed on the first
+    compile after the fix (PR #242's CI build, 22:35Z): the shared engine
+    BuildId changed from `5aaac352` to `5e7e5279` and NetCore settled on
+    `0xF26BCE42`. Six local editor builds of the issue-19 branch followed;
+    three ran full-target UHT with input-cache reads (UBT logs 23:42Z with 588
+    cache reads, then 23:46Z and 00:47Z with 593 each) and three found the
+    generated code up to date. After them, the engine
+    `NetCore.init.gen.cpp` (22:35:34Z) and `UnrealEditor.modules` (22:35:58Z)
+    were untouched and the BuildId stayed `5e7e5279`. The standalone harness
+    also produced `0xF26BCE42` on 10/10 cold-cache runs. PR #245's compile run
+    37242860365 (`trusted-candidate-compile` and `trusted-editor-automation` on
+    runner 21) is weaker evidence: UHT did not run (generated code up to date)
+    and the BuildId was unchanged, which shows no regression, not determinism.
+    Expect one more one-time flip on any engine tree where the setting is first
+    applied; it is not a regression.
+  - *Effect on the isolation direction:* the 2026-10-04 amendment chose an
+    independently writable runner source-engine tree to stop shared engine
+    writes from churning the BuildId. With the NetCore flip removed, a
+    dedicated writable second engine tree is no longer needed for this
+    problem, and its capacity, provisioning and deployment-proof work is not
+    required to resolve Issue #238. The option is not deleted: it remains the
+    recorded alternative, with its pending items unapproved and unscheduled.
+    Revisit it, and the 2026-10-04 isolation requirements, if any of these
+    holds: the engine BuildId changes across a CI editor run or contributor
+    build with the setting confirmed present; a different cause of shared
+    engine writes appears; a measured contention cost from serializing
+    shared-engine consumers justifies the storage; or an engine upgrade
+    changes the UHT input-cache path or fixes the race upstream (then
+    re-evaluate the setting itself). Serialization of shared-engine users
+    through the existing host lease and queue stays a standing rule: the cache
+    makes the BuildId deterministic but does not make concurrent engine writes
+    safe. The recovery procedure above remains the fallback for any unexplained
+    BuildId mismatch, and performance captures still require a quiet host.
+  - *Follow-ups:* `-NoEngineChanges` stays off on the editor target. The
+    revisit trigger "the NetCore follow-up identifies the varying UHT input"
+    is met, but this amendment changes no script or test, so the flag and its
+    pinning test remain until a separate change enables them (fixed reason
+    `editor_build_engine_changes_required`). Keep the monitoring above and
+    expect `NetCore.init.gen.cpp` to hold `0xF26BCE42`. Remove the setting only
+    after a pinned engine revision contains an upstream fix for the race, and
+    record that in a new amendment.
+- **Amendment (2026-10-06, `-NoEngineChanges` enabled, issue #267):** the
+  revisit trigger met on 2026-10-05 is now acted on. This amendment supersedes
+  the 2026-10-02 *Deferred fail-closed* bullet and the first sentence of the
+  2026-10-05 *Follow-ups* bullet; the rest of both amendments stands.
+  - *Decision:* `scripts/ci/InitialPreparation.BuildInvocation.ps1` passes
+    `-NoEngineChanges` for `AethelnOnlineEditor` (Win64) only. The compiler
+    selection is unchanged (no `-Compiler=`, the same version pins), and
+    client and server arguments are unchanged. A different compiler selection
+    would make UBT treat engine actions as outdated, which under the flag
+    becomes a false exit 5, so the selection stays pinned as above.
+  - *What the flag guarantees:* UBT (`Modes/BuildMode.cs`) exits 5
+    (`CompilationResult.FailedDueToEngineChange`) before any action that would
+    rewrite an **existing** file under `Engine/`, and the editor-build step
+    records `editor_build_engine_changes_required`; the refused file list
+    stays in the runner-local `build.log`. New engine files (for example a new
+    shared-PCH variant) and UHT and makefile outputs under `Engine/Intermediate`
+    may still be written. Any engine link makes the single engine metadata
+    action outdated, and that action rewrites the existing module manifests
+    and version file, so in practice an engine link always exits 5. A CI
+    editor build therefore no longer relinks an engine module or restamps the
+    shared engine BuildId, and a contributor editor built before a CI run keeps
+    loading after it.
+  - *Consequence:* a pull request that needs an engine rebuild, such as a new
+    engine plugin in `AethelnOnline.uproject`, keeps `unreal-receipt-shadow`
+    red with `editor_build_engine_changes_required` until the owner runs an
+    authorized engine build with the contributor command in
+    [Unreal Project Setup](unreal-project-setup.md) and re-attests the host
+    tools. This is intended. The flag also depends on the UHT input-cache file
+    above: if it is lost, the next CI editor run exits 5 instead of relinking
+    NetCore. Contributor builds, `scripts/content/Invoke-ContentValidation.ps1`
+    and `rebuild-authorized` host-tool provisioning still build the editor
+    without the flag and can still rewrite engine files.
+  - *Evidence:* `tests/ci/InitialPreparation.Build.Tests.ps1` (run outside
+    the CI suite) pins the flag on the editor target and its absence on client
+    and server, and the required suite entry
+    `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1` pins it through the
+    workflow's editor-build step and its control-checkout wrapper. The pull
+    request's own `trusted-editor-automation` run is a warm proof only: the
+    managed workspace keeps `Binaries/` and `Intermediate/` across runs. The
+    cold proof is local: in a new worktree of `develop`, with runner 21 idle,
+    `engine.lock` held and no engine process running, the owner (or the lead
+    with the owner's explicit approval) runs
+    `scripts/ci/Invoke-EditorColdDryRun.ps1`. It hashes the host-tools closure
+    (the engine-side editor and `ShaderCompileWorker` receipt products), runs
+    the wrapper, and hashes the closure again. It passes only on exit 0 with
+    identical hashes, and refuses a set `UE_ADDITIONAL_PLUGIN_PATHS` or a
+    worktree that already has `Binaries/` or `Intermediate/`; a fake-engine
+    fixture in the same suite entry covers it. The path-free result line is
+    recorded on issue #267 before the host-tools receipt change that depends on
+    it merges.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
-  their step bounds, workspace-revision races appear in practice, or the
-  combined compile plus editor hold becomes a measured scheduling bottleneck.
+  their step bounds, the leased re-sync fails or keeps the lease in practice,
+  the combined compile plus editor hold becomes a measured scheduling bottleneck,
+  a CI editor build records `editor_build_engine_changes_required` for a pull
+  request that changes no engine input (2026-10-06 amendment), or the plugin
+  definition header still changes across a CI editor run.
+
+### TA-021 - Private GameCombat Dependency on the GameNet Observability Service
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-03 by the delivery lead under the owner's
+  delegated authority.
+- **Scope:** `GameCombat` module dependencies and the structured observability
+  producers added by issue #38.
+- **Decision (2026-10-03):** `GameCombat` keeps a private dependency on
+  `GameNet` (`PrivateDependencyModuleNames.Add("GameNet")` in
+  `Source/GameCombat/GameCombat.Build.cs`). The edge exists only so
+  authoritative combat and movement producers can emit structured events
+  through `UAethelnObservabilitySubsystem` (`AethelnObservability.h` and
+  `AethelnObservabilitySubsystem.h`). The only other `GameNet` types it uses
+  come in through those headers for the observability build context:
+  `FAethelnNetworkProfile` and `AethelnNetworkSpike::UnsetNetworkProfileId`
+  from `AethelnNetworkProfile.h`, which `AethelnObservability.h` includes, passed
+  only into `SetBuildContext`. `GameCombat` exposes no `GameNet` type in its
+  public headers.
+- **Context:** Commit `186b4f89` (#38) added the edge without a record, and the
+  issue #13 QA (AC6, DoD4) found it outside the `GameCombat` row of
+  [Technical Architecture](technical-architecture.md). The producers are
+  `AethelnSpikeCharacter`, `AethelnSpikeMovementComponent`,
+  `AethelnSpikeAuthorityComponent`, and `AethelnNetworkSpikeGameMode`, plus the
+  `AethelnNetworkSpikeAuthorityTests` automation test. Producers only enqueue,
+  and sink failure never changes gameplay truth
+  ([Observability and Crash Diagnostics](observability-and-crash-diagnostics.md)).
+- **Evidence:** All direct `GameNet` includes in `Source/GameCombat/` are the
+  two observability headers, in `Private/` source files only.
+  `AethelnNetworkSpikeGameMode.cpp` and `AethelnSpikeCharacter.cpp` build an
+  `FAethelnNetworkProfile` only to pass the network profile id to
+  `UAethelnObservabilitySubsystem::SetBuildContext`. `GameNet.Build.cs`
+  depends only on `Core`, `CoreUObject`, and `Engine`, so the edge is
+  one-directional and adds no cycle. `GameServer` already depends on both
+  modules.
+- **Alternatives:** Move the observability service, or an emission interface,
+  into `GameCore` so `GameCombat` needs no `GameNet` edge (deferred: a C++ move
+  with no behavior change). Drop the combat producers (rejected: #38 requires
+  correlated movement and combat activations, corrections, and rejection
+  reason codes).
+- **Consequences:** The `GameCombat` row in Technical Architecture lists the
+  private edge, and the `GameNet` row lists the observability service.
+  `GameNet` must never depend on `GameCombat`. The edge gives `GameCombat` no
+  session, admission, or transfer access, and `GameNet` still owns no combat
+  truth.
+- **Owner:** Issues #13 and #38.
+- **Revisit trigger:** `GameCombat` needs a `GameNet` type beyond those the
+  observability headers bring in, `GameNet` needs a `GameCombat` type, or a
+  reviewed change moves the observability service into `GameCore` or its own
+  module.
+
+### TA-022 - Dispatch-Only Release Packaging on a Separate Workflow Identity
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-03 by the delivery lead under the owner's
+  delegated authority, after an independent security review of the
+  self-hosted runner exposure. The owner accepted the runner-trust risk below
+  on 2026-10-03.
+- **Scope:** Internal pre-release packaging from `release/*` branches (issue
+  #226).
+- **Decision (2026-10-03):** `.github/workflows/release-packaging.yml`
+  packages internal pre-releases. Its only trigger is `workflow_dispatch`, with
+  no inputs. A hosted `release-gates` job refuses, red, anything but a dispatch
+  by the repository owner of exactly `refs/heads/release/v<ProjectVersion>` in
+  this repository on run attempt 1, and then runs the portable suite. Four
+  engine jobs copy the TA-012 scheduled phases (gate, modes, bounds, handoff,
+  and the `aetheln-engine-runner` group), and each repeats a literal six-clause
+  trust predicate. The token is `contents: read`, checkouts do not persist
+  credentials, and only six redacted reports are uploaded, kept for 90 days.
+  Packaged bytes are never published, not even as a GitHub pre-release,
+  because release assets on a public repository are world-downloadable;
+  packages stay in the durable handoff store on the runner host. The build
+  number is this workflow's `run_number`. The committed `ProjectVersion` has no
+  `+<build>`; the build version lives in the provenance `release` block and
+  the release evidence. Re-runs are refused, so one build number names one
+  package. `prototype-quality-gates.yml` is unchanged and keeps no manual
+  trigger.
+- **Context:** TA-012 forbids a manual trigger on `prototype-quality-gates.yml`
+  for the older branch reason: GitHub runs a dispatched workflow from the YAML
+  at the selected ref, so an older branch that still carries the retired
+  1,440-minute single-job gate could be selected. A new workflow identity has
+  no such older copies. On 2026-10-03, 12 stale remote branches still declared
+  that retired job. The owner deleted them that day (they are preserved
+  locally as archive refs and a verified bundle), and a check after pruning
+  found zero remote branches whose workflows declare `workflow_dispatch`. This
+  decision reverses TA-012's clause that no replacement manual workflow is
+  provided.
+- **Runner trust and risk acceptance:** Release-package integrity rests on no
+  untrusted code ever running on runner 21. That runner also runs
+  owner-authored pull-request heads, including agent-written ones, under the
+  owner's OS account and GitHub credentials, against the shared engine tree,
+  DDC, handoff store, and `milestone/.git`, interleaved with release phases by
+  design. The actor clauses cannot tell the human owner from an agent or a
+  local process that uses the owner's credentials. The controls are: approval
+  for every fork pull-request workflow run from an external contributor
+  (verified 2026-10-03), the owner and same-repository predicates, and a
+  standing rule to never approve a workflow run from a fork pull request while
+  runner 21 is registered. Owner-authored pull requests, agent-written ones
+  included, are trusted code. The owner accepted this risk on 2026-10-03 for
+  internal builds that never leave the owner's control.
+- **Release branch protection:** Before the first push of a release branch, a
+  ruleset on `release/*` is created with these rules: block force-push, block
+  deletion, require the `quality-gates` status check, and no bypass actors.
+  Land `ProjectVersion` through a reviewed PR into `develop` before the cut;
+  verify the resulting head's passing `quality-gates` check before pushing
+  the release branch. Later version changes use a reviewed PR into the release
+  branch, never an unchecked direct commit. The owner checks the remote head
+  SHA against the reviewed head immediately before every dispatch: the ruleset
+  does not prevent a writer from adding commits. Do not postpone protection
+  until after the first push.
+  After any security fix to `release-packaging.yml` or
+  `scripts/ci/Invoke-ReleasePackaging.ps1`, update or delete every existing
+  `release/*` branch, because each keeps its older copy and stays
+  dispatchable.
+- **Operator rules:** Run no local engine or editor build against the runner's
+  engine root while a release dispatch is queued or running; nothing
+  serializes it, and attestation runs only at stage start. Obsolete since the
+  TA-020 2026-10-06 amendment (issue #267): a `trusted-editor-automation` job
+  that ran between release phases used to relink an attested engine module, so
+  the next package phase failed closed on host-tools attestation. That job now
+  builds with `-NoEngineChanges` and cannot rewrite an existing engine file.
+- **Evidence:** Issue
+  [#226](https://github.com/ShayShimoni/aetheln-online/issues/226), its design,
+  and its independent security review.
+  `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the exact predicate,
+  the guard-first step, parity with the scheduled phases, the six uploads, and
+  repository-wide allowlists for workflow files, triggers, `runs-on` labels,
+  and permissions, each with a mutation case.
+  `tests/ci/Invoke-ReleasePackaging.Tests.ps1` covers the guard and evidence
+  modes. These pins catch honest drift only; they cannot stop an approved fork
+  run or a direct push, which the settings and rules above control. The first
+  dispatched run is the operational proof and is recorded on issue #226.
+- **Alternatives:** A dispatch trigger on `prototype-quality-gates.yml`
+  (rejected: the older branch risk); a reusable workflow or composite action
+  shared with the scheduled jobs (rejected: it renames the scheduled checks;
+  it also broke the preparation admission rule against job-level `uses:`,
+  which issue #229 relaxed on 2026-10-05 for local `./.github/workflows/`
+  calls only, so the rename ground alone keeps it rejected); dispatch
+  inputs for the version or ref (rejected: an injection surface, and the
+  version comes from the commit); tag refs (rejected: tags mark a tested
+  commit after release QA); publishing packages as a GitHub pre-release
+  (rejected: world-downloadable on a public repository).
+- **Consequences:** One more FIFO waiter in `aetheln-engine-runner`, with the
+  same bounds. Each run reserves 64 GiB of the shared handoff cap until its
+  cleanup request is acted on. The immediate kill switch is disabling the
+  workflow; the permanent rollback is reverting it. The issue #267 TA-014
+  amendment (2026-10-06) changes the controller and gate this workflow calls,
+  with no workflow change: each release package phase builds the project
+  editor modules first, leaves `UnrealPak` outside the attestation, runs the
+  manifest-set check, refuses a set `UE_ADDITIONAL_PLUGIN_PATHS`, and reports
+  the attestation record hash.
+- **Owner:** Issue #226.
+- **Revisit trigger:** Any package leaves the owner's control (external
+  testers, a public download, or a store), a collaborator gains write access, a
+  second matching runner is registered, or `hotfix/*` packaging is needed.
+
+### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-06 by the delivery lead under the owner's
+  delegated authority.
+- **Scope:** Responsibility, dependencies, and target membership of the
+  `GameTests` module.
+- **Decision (2026-10-06):** `GameTests` is the editor-only automation module.
+  It hosts the project and module load harness (#85), the GAS foundation,
+  combat, and activation-seam tests with their observability assertions (#19),
+  and the content-validation commandlet with its tests (#120). Its dependency
+  rule, recorded in the `GameTests` row of
+  [Technical Architecture](technical-architecture.md#unreal-module-boundaries):
+  - Dependencies are private only. The module has no `Public/` folder and
+    exports nothing.
+  - It may depend on the project modules the Editor target lists, and on the
+    engine and engine-plugin modules (runtime, developer, or editor) that its
+    tests and the commandlet need.
+  - No other module may depend on it.
+  - Only `AethelnOnlineEditor.Target.cs` lists it. The Game, Client, and Server
+    targets never do.
+  - An engine third-party library needs a justification in this entry. The only
+    one today is OpenSSL. The content-validation scanner verifies
+    caller-supplied SHA-256 provenance of its bounded JSON inputs and of the
+    files it binds by hashing their bytes with OpenSSL `SHA256()`. The pinned
+    engine has no desktop SHA-256 in `Core`: the only definition of
+    `FPlatformMisc::GetSHA256Signature` is the generic one, which fails a
+    `checkf` with "No SHA256 Platform implementation". The build rule links
+    OpenSSL only on Win64, Mac, and Linux and sets
+    `AETHELN_CONTENT_VALIDATION_WITH_OPENSSL`; other platforms fail closed.
+- **Context:** PR #219 recorded `GameTests` on 2026-10-03 as project and module
+  load tests that depend only on `Core`. Three later changes widened it without
+  updating the row:
+  - `30f011f` (#120, merged in PR #235) added `AssetRegistry`, `CoreUObject`,
+    `DesktopPlatform`, `Engine`, `GameCore`, `Json`, `NavigationSystem`,
+    `PhysicsCore`, and OpenSSL for the content-validation commandlet.
+  - `cc65f1f` (#19, merged in PR #251) moved the GAS foundation tests out of
+    `GameCombat` and added `GameCombat`, `GameplayAbilities`, and
+    `GameplayTags`, so the shipping Client and Server targets carry no test
+    class.
+  - `3f839ed` (#19, merged in PR #261) added `GameNet`, for the activation-seam
+    tests that assert rejection telemetry through the observability subsystem
+    and its in-memory sink.
+
+  The issue #13 QA on 2026-10-06 found the row stale (AC6, DoD4).
+- **Evidence:** On `develop` `f173388`, `Source/GameTests/GameTests.Build.cs`
+  lists only private dependencies, `AethelnOnline.uproject` declares the module
+  `Type: Editor`, and only `Source/AethelnOnlineEditor.Target.cs` lists it in
+  `ExtraModuleNames`. No other `.Build.cs` names `GameTests`. The OpenSSL
+  reason is pinned by `tests/content/Invoke-ContentValidationCommand.Tests.ps1`:
+  the scanner must call `SHA256(` and must not call `GetSHA256Signature`, and
+  the build rule must add the OpenSSL dependency. The engine stub is in
+  `Engine/Source/Runtime/Core/Private/GenericPlatform/GenericPlatformMisc.cpp`
+  of the pinned source.
+- **Target boundary enforcement:** No automated check enforces the `GameTests`
+  target boundary today. `scripts/build/Validate-TargetComposition.ps1` reads
+  only the Game, Client, and Server targets. It rejects only `GameServer` in a
+  Game or Client target and `GameUI` in the Server target. The required CI
+  check `target-composition-tests` runs that validator against synthetic
+  fixtures only. The repository's real targets are validated only by the
+  `target-composition-gate` step of `scripts/build/Build-PackagedArtifacts.ps1`
+  during packaging. Until the validator also rejects `GameTests` in the Game,
+  Client, and Server targets, review of the target files and this entry
+  enforces the boundary.
+- **Alternatives:** Keep `GameTests` at `Core` only and move the tests
+  elsewhere (rejected: the GAS tests would return to `GameCombat` and ship test
+  classes in the Client and Server targets, which `cc65f1f` removed, and the
+  commandlet would need another editor module with the same dependencies).
+  Per-area test modules, such as separate combat-test and content-validation
+  editor modules (deferred: more `.uproject` and Editor-target entries under
+  the same boundary rule, with no measured compile or ownership problem today).
+  Hash with the engine's `Core` SHA-256 (rejected: the generic stub fails a
+  `checkf` on every desktop platform).
+- **Consequences:** The `GameTests` row in Technical Architecture states the
+  rule, and a Rules bullet keeps the module out of non-Editor targets. A new
+  dependency that fits the rule needs no new entry. A new engine third-party
+  library does. `docs/gas-foundation.md` refers to the row instead of listing
+  dependencies. The content-validation provenance contract
+  ([Asset Intake and Content Validation](asset-intake-and-content-validation.md))
+  binds exactly `GameCore` then `GameTests` as loaded project modules, so moving
+  the commandlet out of `GameTests` changes that contract. Follow-up: extend
+  `scripts/build/Validate-TargetComposition.ps1` and its tests to reject
+  `GameTests` in the Game, Client, and Server targets.
+- **Owner:** Issues #13, #19, #85, and #120.
+- **Revisit trigger:** A non-Editor target or another module needs `GameTests`
+  code, another engine third-party library is proposed, `GameTests` compile
+  time becomes a measured bottleneck for the Editor build or CI editor
+  automation, a per-area test split is proposed, or the pinned engine gains a
+  desktop SHA-256 in `Core`.
 
 ## Candidate Decisions
 
@@ -1183,6 +2161,7 @@ Every accepted decision records:
 | TC-005 | Server tick, capacity, layers, and bandwidth | Representative combat and stress captures with explicit failure shape | #45 | Canonizing 32/64 players, a tick value, or bandwidth estimate | Approved performance baseline |
 | TC-006 | Production backup, retention, RPO, and RTO | Data criticality, provider capability, restore drills, operating cost | #36, #40, #48 | Vendor-default recovery promises | Before public production |
 | TC-007 | Anti-cheat and platform services | Threat coverage, platform support, privacy, cost, operations, false-positive handling, exit strategy | #40 | Treating client integrity as gameplay authority | Before external risk justifies integration |
+| TC-008 | Per-ability GAS prediction eligibility. First candidate (Issue #19, PR P6): predict Hold the Line's activation, its Endurance cost (if it has one), its cooldown, and its own state tag as a self-only reversible path, using the engine's `LocalPredicted` execution policy with the `ServerOnlyTermination` security policy. Every other ability stays server-only until it is added to an approved prediction list with its own evidence, and contact, Guard, damage, control, and death results are never predicted. See [Gameplay Ability System Foundation](gas-foundation.md) | The two-client PIE feel test of the server-only abilities (#19 PR P5); rollback evidence under the supported network profiles for rejection, acceptance, and loss: a rejected prediction removes the predicted cost, cooldown, and tag, and an accepted one converges with no double cost; a compile-level check that the project ASC can reach the engine's batched-activation data | #19 (owner decision after the feel test); #2 and #45 for network profiles | Predicting any ability without tested rollback; predicting a contact, Guard, damage, control, or death result; granting `LocalPredicted` to an ability not on an approved prediction list | The owner's decision, after the P5 feel test, on whether #19 can close without P6. If the owner closes #19 without P6, the row stays Candidate until a later ability requests prediction |
 
 ## Rejected Architecture Alternatives
 

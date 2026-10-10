@@ -89,7 +89,8 @@ remains lockable when it must be edited.
 ## Sensitive Material
 
 Private keys, certificates, signing bundles, provisioning profiles, keystores,
-signing-material directories, and service-account material stay outside source
+signing-material directories, service-account material, and infrastructure
+state files (`*.tfstate`, `*.tfstate.*`, `.terraform/`) stay outside source
 control. Only narrowly named redacted examples may be committed. Never open or
 print a suspected sensitive file to diagnose ignore behavior; test its path with
 `git check-ignore`.
@@ -143,7 +144,11 @@ Decide each ref separately, and record the evidence for every step:
    (`git rev-parse refs/heads/<branch>` and
    `git ls-remote origin refs/heads/<branch>`); each ref that exists must equal
    the verified tip.
-5. Act only with explicit authorization that names that exact ref. Delete one
+5. Act only with explicit authorization that names that exact ref. The owner's
+   standing authorization of 2026-10-03 (recorded on
+   [Issue #208](https://github.com/ShayShimoni/aetheln-online/issues/208))
+   satisfies this step for the head branch of a merged PR, together with its
+   worktree; steps 1-4 and 6 still apply to each ref. Delete one
    ref at a time and bind it to the verified object ID, for example
    `git update-ref -d refs/heads/<branch> <tip>` locally and
    `git push --force-with-lease=refs/heads/<branch>:<tip> origin :refs/heads/<branch>`

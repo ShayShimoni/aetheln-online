@@ -18,9 +18,17 @@ $DefaultChecks = @(
 	@{ name = 'formatting-policy'; tier = 'required'; script = 'scripts/ci/Test-FormattingPolicy.ps1' },
 	@{ name = 'markdown-links'; tier = 'required'; script = 'scripts/ci/Test-MarkdownLinks.ps1' },
 	@{ name = 'source-control-policy'; tier = 'required'; script = 'scripts/tests/Test-SourceControlPolicy.ps1' },
+	@{ name = 'combat-design-registry'; tier = 'required'; script = 'scripts/design/Test-CombatRegistry.ps1' },
+	@{ name = 'combat-design-registry-tests'; tier = 'required'; script = 'tests/design/Test-CombatRegistry.Tests.ps1' },
+	@{ name = 'combat-design-generation-tests'; tier = 'required'; script = 'tests/design/New-CombatRegistryAppendices.Tests.ps1' },
+	@{ name = 'combat-design-generated-drift'; tier = 'required'; script = 'scripts/design/New-CombatRegistryAppendices.ps1' },
 	@{ name = 'observability-contract'; tier = 'required'; script = 'scripts/tests/Test-ObservabilityContract.ps1' },
+	@{ name = 'content-validation-policy-tests'; tier = 'required'; script = 'tests/content/Invoke-ContentValidation.Tests.ps1' },
+	@{ name = 'content-validation-command-tests'; tier = 'required'; script = 'tests/content/Invoke-ContentValidationCommand.Tests.ps1' },
 	@{ name = 'build-packaged-artifacts-tests'; tier = 'required'; script = 'tests/build/Build-PackagedArtifacts.Tests.ps1' },
 	@{ name = 'host-tool-provisioning-tests'; tier = 'required'; script = 'tests/build/Invoke-HostToolProvisioning.Tests.ps1' },
+	@{ name = 'cooked-inventory-capture-tests'; tier = 'required'; script = 'tests/build/Invoke-CookedInventoryCapture.Tests.ps1' },
+	@{ name = 'content-cook-evidence-tests'; tier = 'required'; script = 'tests/build/Validate-ContentCookEvidence.Tests.ps1' },
 	@{ name = 'packaged-smoke-test-tests'; tier = 'required'; script = 'tests/build/Invoke-PackagedSmokeTest.Tests.ps1' },
 	@{ name = 'network-authority-spike-tests'; tier = 'required'; script = 'tests/build/Invoke-NetworkAuthoritySpike.Tests.ps1' },
 	# Keep independently isolated expensive fixtures consecutive so the two slots
@@ -37,7 +45,7 @@ $DefaultChecks = @(
 	@{ name = 'engine-runner-post-command-state-tests'; tier = 'required'; script = 'tests/ci/Invoke-EngineRunnerPostCommandState.Tests.ps1' },
 	@{ name = 'prototype-quality-workflow-tests'; tier = 'required'; script = 'tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1' },
 	@{ name = 'visual-package-evidence-tests'; tier = 'required'; script = 'tests/ci/Invoke-VisualPackageValidation.Tests.ps1' },
-	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1' },
+	@{ name = 'runner-scheduling-policy-tests'; tier = 'required'; script = 'tests/ci/Invoke-RunnerSchedulingAndPreparationTests.ps1' },
 	@{ name = 'ci-selection-tests'; tier = 'required'; script = 'tests/ci/Get-CiSelection.Tests.ps1' },
 	@{ name = 'ci-acceptance-receipt-tests'; tier = 'required'; script = 'tests/ci/New-CiAcceptanceReceipt.Tests.ps1' },
 	@{ name = 'ci-acceptance-aggregate-tests'; tier = 'required'; script = 'tests/ci/Invoke-CiAcceptanceAggregate.Tests.ps1' },
@@ -53,6 +61,10 @@ $DefaultChecks = @(
 	@{ name = 'routine-compile-resources-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileResources.Tests.ps1' },
 	@{ name = 'routine-compile-command-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileCommand.Tests.ps1' },
 	@{ name = 'routine-compile-gate-tests'; tier = 'required'; script = 'tests/ci/RoutineCompileGate.Tests.ps1' },
+	@{ name = 'release-packaging-tests'; tier = 'required'; script = 'tests/ci/Invoke-ReleasePackaging.Tests.ps1' },
+	@{ name = 'board-integrity-tests'; tier = 'required'; script = 'tests/delivery/Test-BoardIntegrity.Tests.ps1' },
+	@{ name = 'pull-request-policy-tests'; tier = 'required'; script = 'tests/delivery/Test-PullRequestPolicy.Tests.ps1' },
+	@{ name = 'release-cut-tests'; tier = 'required'; script = 'tests/delivery/Invoke-ReleaseCut.Tests.ps1' },
 	@{
 		name = 'psscriptanalyzer'
 		tier = 'advisory'

@@ -153,10 +153,11 @@ launcher installation.
 | Module | Responsibility | May depend on | Must not own |
 | --- | --- | --- | --- |
 | `GameCore` | Framework types, shared identifiers, tags, policy interfaces, data definitions | Unreal runtime foundations | Combat implementation, vendor SDKs, UI |
-| `GameCombat` | GAS abilities/effects, attack timelines, combat traces, health, death | `GameCore`, required GAS/runtime modules | Persistence, sessions, vendor SDKs |
+| `GameCombat` | GAS abilities/effects, attack timelines, combat traces, health, death | `GameCore`, required GAS/runtime modules; private `GameNet` dependency for the structured observability service only ([TA-021](architecture-decisions.md#ta-021---private-gamecombat-dependency-on-the-gamenet-observability-service)) | Persistence, sessions, vendor SDKs |
 | `GameUI` | CommonUI screens, HUD, presentation view models | `GameCore`; presentation-safe combat interfaces | Authority decisions, direct service or database access |
-| `GameNet` | Sessions, admission, transfer client/server adapters, protocol boundaries | `GameCore`; vendor-neutral interfaces | Combat truth, durable state ownership |
+| `GameNet` | Sessions, admission, transfer client/server adapters, protocol boundaries, structured observability service | `GameCore`; vendor-neutral interfaces | Combat truth, durable state ownership |
 | `GameServer` | Dedicated-server composition, allocation hooks, service adapters, server-only orchestration | `GameCore`, `GameCombat`, `GameNet` | Client presentation assets |
+| `GameTests` | Editor-only automation module: project and module load tests (#85), GAS, combat, and observability tests (#19), and the content-validation commandlet and its tests (#120). Module type `Editor`, listed only by the Editor target ([TA-023](architecture-decisions.md#ta-023---editor-only-gametests-module-for-project-automation-and-content-validation)) | Private dependencies only: project modules the Editor target lists, and the engine and engine-plugin modules (runtime, developer, or editor) that its tests and commandlet need. An engine third-party library needs a TA-023 justification; today only OpenSSL, for SHA-256 provenance checks | Gameplay, runtime, or server code; anything a game, client, or server target loads |
 
 Rules:
 
@@ -165,6 +166,8 @@ Rules:
 - Vendor SDKs live in dedicated adapter modules or plugins selected by an
   accepted architecture decision.
 - `GameServer` is excluded from client targets.
+- `GameTests` is listed only by the Editor target, and no other module depends
+  on it.
 - Server builds must not acquire hard references to client-only UI, audio,
   Niagara, camera, or high-detail art assets.
 - Gameplay data is versioned and loaded through Unreal's Asset Manager where

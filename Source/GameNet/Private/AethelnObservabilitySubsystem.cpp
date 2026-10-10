@@ -69,7 +69,7 @@ bool UAethelnObservabilitySubsystem::SetBuildContext(
 		|| InBuildIdentity.BuildConfiguration.IsEmpty()
 		|| InBuildIdentity.EngineRevision.IsEmpty()
 		|| InBuildIdentity.ToolchainIdentity.IsEmpty()
-		|| InNetworkProfile.SchemaId != AethelnNetworkSpike::NetworkProfileSchemaId
+		|| !InNetworkProfile.SchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)
 		|| InNetworkProfile.SchemaVersion != AethelnNetworkSpike::NetworkProfileSchemaVersion
 		|| InNetworkProfile.ProfileId.IsEmpty())
 	{
@@ -399,6 +399,74 @@ bool FAethelnObservabilitySubsystemContextTest::RunTest(const FString& Parameter
 	TestFalse(
 		TEXT("Reset context suppresses later composition"),
 		Subsystem->TryComposeCorrelation(EAethelnObservabilityCategory::Ability, Overlay, Correlation));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnObservabilitySubsystemBuildContextCaseTest,
+	"Aetheln.Observability.Subsystem.BuildContextSchemaCase",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnObservabilitySubsystemBuildContextCaseTest::RunTest(const FString& Parameters)
+{
+	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
+	UAethelnObservabilitySubsystem* Subsystem = NewObject<UAethelnObservabilitySubsystem>(GameInstance);
+	TestTrue(TEXT("Runtime context is accepted"), Subsystem->SetRuntimeContext(
+		EAethelnFlowKind::PrototypeAuthority, TEXT("run-schema-case"), TEXT("instance-schema-case"), TEXT("connection-schema-case")));
+
+	FAethelnBuildIdentity Build;
+	Build.SourceRevision = TEXT("revision-original");
+	Build.BuildIdentity = TEXT("build-original");
+	Build.BuildConfiguration = TEXT("Development");
+	Build.EngineRevision = TEXT("5.8.1");
+	Build.ToolchainIdentity = TEXT("toolchain-original");
+	FAethelnNetworkProfile Profile;
+	Profile.ProfileId = TEXT("profile-original");
+	TestTrue(TEXT("Original build context is accepted"), Subsystem->SetBuildContext(Build, Profile));
+
+	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> PublicSink =
+		MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(4);
+	TSharedPtr<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe> RestrictedSink =
+		MakeShared<FAethelnBoundedRestrictedAuditSink, ESPMode::ThreadSafe>(4);
+	TestTrue(TEXT("Public sink is accepted"), Subsystem->SetTestSink(PublicSink));
+	TestTrue(TEXT("Restricted sink is accepted"), Subsystem->SetTestRestrictedSink(RestrictedSink));
+
+	FAethelnObservabilityEvent Event;
+	FAethelnObservabilityEventContext Overlay;
+	Overlay.Sequence = 51;
+	Subsystem->EmitEvent(Event, Overlay);
+	TestTrue(TEXT("Original event dispatch drains"), Subsystem->WaitForIdleForTests());
+	TestEqual(TEXT("Original event reaches public sink"), PublicSink->GetEvents().Num(), 1);
+	TestEqual(TEXT("Original event reaches restricted sink"), RestrictedSink->GetEvents().Num(), 1);
+
+	FAethelnBuildIdentity ReplacementBuild = Build;
+	ReplacementBuild.BuildIdentity = TEXT("build-replacement");
+	FAethelnNetworkProfile CaseVariant = Profile;
+	CaseVariant.SchemaId = FString(AethelnNetworkSpike::NetworkProfileSchemaId).ToUpper();
+	CaseVariant.ProfileId = TEXT("profile-replacement");
+	TestTrue(TEXT("Profile schema differs only by case"),
+		CaseVariant.SchemaId.Equals(Profile.SchemaId, ESearchCase::IgnoreCase)
+		&& !CaseVariant.SchemaId.Equals(Profile.SchemaId, ESearchCase::CaseSensitive));
+	TestFalse(TEXT("Case-variant profile schema cannot replace build context"),
+		Subsystem->SetBuildContext(ReplacementBuild, CaseVariant));
+	TestTrue(TEXT("Rejected replacement keeps build context available"), Subsystem->HasBuildContext());
+
+	Overlay.Sequence = 52;
+	Subsystem->EmitEvent(Event, Overlay);
+	TestTrue(TEXT("Event after rejected replacement dispatches"), Subsystem->WaitForIdleForTests());
+	TestEqual(TEXT("Public sink receives event after rejected replacement"), PublicSink->GetEvents().Num(), 2);
+	TestEqual(TEXT("Restricted sink receives event after rejected replacement"), RestrictedSink->GetEvents().Num(), 2);
+	if (PublicSink->GetEvents().Num() == 2 && RestrictedSink->GetEvents().Num() == 2)
+	{
+		TestEqual(TEXT("Public event retains original build"), PublicSink->GetEvents()[1].Build.BuildIdentity, Build.BuildIdentity);
+		TestEqual(TEXT("Public event retains original profile"), PublicSink->GetEvents()[1].NetworkProfile.ProfileId, Profile.ProfileId);
+		TestEqual(TEXT("Restricted event retains original build"), RestrictedSink->GetEvents()[1].Build.BuildIdentity, Build.BuildIdentity);
+		TestEqual(TEXT("Restricted event retains original profile"), RestrictedSink->GetEvents()[1].NetworkProfile.ProfileId, Profile.ProfileId);
+	}
+
+	CaseVariant.SchemaId = Profile.SchemaId;
+	TestTrue(TEXT("Same replacement with the exact profile schema is accepted"),
+		Subsystem->SetBuildContext(ReplacementBuild, CaseVariant));
 	return true;
 }
 

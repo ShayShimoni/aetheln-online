@@ -47,6 +47,18 @@ Issue #45 converts the target into measured game-thread, render-thread, GPU,
 memory, streaming, and hitch budgets. No subsystem budget is invented before
 the representative capture.
 
+`Config/DefaultScalability.ini` lowers the Epic shadow tier's virtual shadow
+map page pool (`[ShadowQuality@3]` `r.Shadow.Virtual.MaxPhysicalPages`) from
+the engine's 4096 to 2048, the engine's High-tier value. Other tiers keep the
+engine values. The owner accepted the change on 2026-10-04 (#244, from #211):
+a 12-camera 4096/2048/4096 comparison on the development PC showed no visible
+shadow difference and no page-pool overflow, and two-client editor PIE at 4096
+left only about 129 MiB of video memory headroom on the RTX 2060. That
+evidence comes from editor PIE, not a packaged capture, so the value is not a
+#45 budget. The two-client editor PIE re-measure at 2048 on 2026-10-05 raised
+that headroom to about 1199 MiB (#211). The owner then kept the Epic tier at
+2048 with no dedicated device profile for the development PC (#211, #244).
+
 ## Initial World-Combat Hypothesis
 
 Planning may use:
@@ -80,6 +92,38 @@ Issue #45 maintains a versioned registry with:
 Every budget includes target, warning threshold, failure threshold, capture
 method, scenario, owner, evidence link, and approval status. Until measured, the
 entry is explicitly `TBD`.
+
+The first executable Issue #45 wave adds an opt-in, versioned
+`aetheln.performance-capture-contract` (version 1) to the network-authority
+runner via `PerformanceContractPath`; its exact shape and fail-closed rules are
+specified in
+[Networking Authority Spike](networking-authority-spike.md#issue-45-opt-in-performance-capture-and-budget-contract).
+The contract binds future capture evidence to the exact source revision,
+packaged-build identity, toolchain, hardware, topology, environment, map,
+duration, actor mix, run ID, scenario ID/version, network profile ID/version, runtime
+network-configuration identity, opaque profile-argument digest, and evidence
+references, and
+carries one budget record per version-1 network-authority-runner subset metric
+with metric identity and domain, target, warning threshold, failure threshold,
+measurement method, scenario, accountable owner, evidence references, an
+evidence classification (`measured`, `modeled`, `hypothetical`, or `unset`),
+and an approval status. In this wave every target, warning threshold, failure
+threshold, capacity, tick rate, sampling rate, bandwidth value, and
+player-count value remains `null`/`TBD`, and every budget remains
+`unapproved`: fixture evidence validates the contract but cannot approve or
+canonicalize any budget. Mismatched identity, populated numeric values,
+duplicate or missing budgets, undeclared evidence references, and self-approved
+entries fail closed before launch. Each accepted run retains the exact validated
+contract bytes and publishes their SHA-256 plus the fixed artifact name so later
+review can detect replacement or drift without exposing raw evidence references
+in the summary. This bounded subset does not replace or complete the broader
+Issue #45 registry above; the remaining client timing, frame-pacing, hitch,
+loading/streaming, server worker/tick-overrun/failure, and network burst/loss
+domains require later representative capture work.
+Metric identities remain case-sensitive, and fixture evidence cannot classify a
+budget as `measured`. The exact contract artifact is created without overwrite,
+kept protected from replacement during capture, and rehashed immediately before
+evidence publication.
 
 ## Evidence Record
 
@@ -203,9 +247,10 @@ performed or proven by Issue #16 or Issue #127 repository changes.
 Representative engine-runner evidence is commit-specific and must come from
 the artifacts uploaded by the corresponding GitHub run. An earlier or
 in-progress run does not establish that the unpublished incremental candidate
-has completed successfully. The `02:00 UTC` schedule becomes active only after
-the workflow reaches the protected default branch `main` through normal Git
-Flow; `develop` remains the integration branch.
+has completed successfully. GitHub runs the weekly Saturday `02:00 UTC`
+schedule only from the default branch, which has been `develop` since
+2026-10-03 (it was `main` before), so each scheduled run exercises the head of
+`develop`. `develop` is also the integration branch.
 
 ## Change Gates
 

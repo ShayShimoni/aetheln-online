@@ -91,15 +91,17 @@ function New-TestPortableReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
 	param()
 	$Names = @(
-		'formatting-policy','markdown-links','source-control-policy','observability-contract','build-packaged-artifacts-tests',
-		'host-tool-provisioning-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
+		'formatting-policy','markdown-links','source-control-policy','combat-design-registry','combat-design-registry-tests','combat-design-generation-tests','combat-design-generated-drift','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests',
+		'host-tool-provisioning-tests','cooked-inventory-capture-tests','content-cook-evidence-tests',
+		'packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests',
 		'server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests',
 		'formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests',
 		'prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests',
 		'ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests',
 		'ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests',
 		'managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests',
-		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests',
+		'routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','release-packaging-tests',
+		'board-integrity-tests','pull-request-policy-tests','release-cut-tests',
 		'psscriptanalyzer'
 	)
 	$Checks = @($Names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
@@ -313,7 +315,7 @@ try {
 	Assert-True ($ReceiptSubset.Count -eq 1 -and $AggregateSubset.Count -eq 1 -and $ReceiptSubset[0].Value.TrimEnd() -ceq $AggregateSubset[0].Value.TrimEnd()) 'The controller-contract subset must be byte-identical in the receipt producer and aggregate.'
 	$SubsetNames = @([regex]::Matches($ReceiptSubset[0].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
 	$SuiteNames = @([regex]::Matches($SuiteSource, "name = '([^']+)'; tier = 'required'; script = 'tests/ci/") | ForEach-Object { $_.Groups[1].Value })
-	Assert-True ($SuiteNames.Count -eq 25 -and ($SubsetNames -join ',') -ceq ($SuiteNames -join ',')) 'The controller-contract subset must equal the required tests/ci suites in Invoke-CiSuite.ps1 order.'
+	Assert-True ($SuiteNames.Count -eq 26 -and ($SubsetNames -join ',') -ceq ($SuiteNames -join ',')) 'The controller-contract subset must equal the required tests/ci suites in Invoke-CiSuite.ps1 order.'
 	Assert-True ((@($script:AcceptanceControllerContractCheckNames) -join ',') -ceq ($SubsetNames -join ',') -and $SubsetNames.Count -lt $script:AcceptancePortableCheckNames.Count -and @($SubsetNames | Where-Object { $script:AcceptancePortableCheckNames -cnotcontains $_ }).Count -eq 0) 'The controller-contract subset must be a strict subset of the portable manifest.'
 
 	$ContractEvidence = Write-ControllerContractReport (New-TestPortableReport)
@@ -428,6 +430,34 @@ try {
 	$SkippedAnalyzer.summary.skipped++
 	$SkippedAnalyzerBytes = $Utf8.GetBytes(($SkippedAnalyzer | ConvertTo-Json -Depth 12 -Compress) + "`n")
 	Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $SkippedAnalyzerBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_failure:portable'
+
+	$SuiteCheckNames = @([regex]::Matches([IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiSuite.ps1')), "(?m)^\s*@\{\s*name\s*=\s*'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+	Assert-True (($SuiteCheckNames -join "`n") -ceq (@($script:AcceptancePortableCheckNames) -join "`n")) 'The receipt portable check list must equal the default Invoke-CiSuite check order.'
+	$RegistryGateNames = @('combat-design-registry','combat-design-registry-tests','combat-design-generation-tests','combat-design-generated-drift')
+	foreach ($RegistryGateName in $RegistryGateNames) {
+		Assert-True ($SuiteCheckNames -ccontains $RegistryGateName) "The required combat registry gate '$RegistryGateName' must be present in the portable manifest."
+	}
+	$ExtraSuiteCheckNames = @($SuiteCheckNames[0..($SuiteCheckNames.Count - 2)]) + @('unregistered-extra-tests', $SuiteCheckNames[-1])
+	foreach ($SuiteListCase in @(
+		@{name='exact';names=$SuiteCheckNames;reason=$null},
+		@{name='missing';names=@($SuiteCheckNames | Where-Object { $_ -cne 'content-cook-evidence-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='missing-combat-design-registry';names=@($SuiteCheckNames | Where-Object { $_ -cne 'combat-design-registry' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='missing-combat-design-registry-tests';names=@($SuiteCheckNames | Where-Object { $_ -cne 'combat-design-registry-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='missing-combat-design-generation-tests';names=@($SuiteCheckNames | Where-Object { $_ -cne 'combat-design-generation-tests' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='missing-combat-design-generated-drift';names=@($SuiteCheckNames | Where-Object { $_ -cne 'combat-design-generated-drift' });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='reordered';names=@($SuiteCheckNames | ForEach-Object { if ($_ -ceq 'content-validation-policy-tests') { 'content-validation-command-tests' } elseif ($_ -ceq 'content-validation-command-tests') { 'content-validation-policy-tests' } else { $_ } });reason='receipt_semantic_evidence_invalid:portable'},
+		@{name='extra';names=$ExtraSuiteCheckNames;reason='receipt_semantic_evidence_invalid:portable'}
+	)) {
+		$SuitePortable = New-TestPortableReport
+		$SuitePortable.checks = @($SuiteListCase.names | ForEach-Object { [pscustomobject][ordered]@{name=$_;tier=$(if($_-ceq'psscriptanalyzer'){'advisory'}else{'required'});status='passed';durationSeconds=0.01;command='fixture';message='passed'} })
+		$SuitePortable.summary.total = $SuitePortable.checks.Count; $SuitePortable.summary.passed = $SuitePortable.checks.Count
+		$SuitePortableBytes = $Utf8.GetBytes(($SuitePortable | ConvertTo-Json -Depth 12 -Compress) + "`n")
+		try {
+			if ($null -eq $SuiteListCase.reason) { Assert-AcceptancePortableEvidence -Bytes $SuitePortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) | Out-Null }
+			else { Assert-Rejected { Assert-AcceptancePortableEvidence -Bytes $SuitePortableBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } $SuiteListCase.reason }
+		}
+		catch { throw "Receipt default-suite list fixture '$($SuiteListCase.name)' failed: $($_.Exception.Message)" }
+	}
 
 	foreach ($NativeTypeCase in @(
 		@{name='schema-string';mutate={param($x)$x.schemaVersion='1'}},

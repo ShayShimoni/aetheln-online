@@ -33,7 +33,13 @@ public:
 	virtual void ReceiveJumpStopped() override;
 	virtual void ReceiveJumpCanceled() override;
 	virtual void ReceiveSprintIntent(bool bWantsToSprint) override;
+	virtual void ReceiveDodgePressed() override;
 	virtual void UnPossessed() override;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Forward the protected engine replication field only for the movement observer fixture. */
+	void TestSetReplicatedMovementMode(uint8 Mode) { SetReplicatedMovementMode(Mode); }
+#endif
 
 protected:
 	virtual void BeginPlay() override;
@@ -45,14 +51,11 @@ protected:
 
 private:
 	void ApplyAimSteeringIntent(bool bWantsAimSteering);
-	void ApplyCurrentGroundRotationMode();
 	void ApplySprintIntent(bool bWantsToSprint);
-	void CaptureTravelFacingAimJumpOffset();
 	void ClearBufferedJumpRequest();
 	FRotator GetMovementReferenceRotation() const;
 	void ResetMovementPresentation(bool bResetImmediately);
 	void TryConsumeBufferedJump();
-	void UpdateAirborneAimFacing();
 	void UpdateCameraPresentation(float DeltaSeconds);
 	void UpdateMovementPresentation(float DeltaSeconds);
 
@@ -111,11 +114,8 @@ private:
 	float LockedJumpPresentationYaw = 0.0f;
 	float CurrentPresentationYaw = 0.0f;
 	float DesiredCameraZoomDistance = 400.0f;
-	float TravelFacingAimJumpOffset = 0.0f;
 	bool bAimSteeringActive = false;
 	bool bCameraMeshHidden = false;
 	bool bHasBufferedJump = false;
-	bool bTravelFacingAimJumpActive = false;
-	bool bWantsBackpedal = false;
 	bool bJumpPresentationActive = false;
 };

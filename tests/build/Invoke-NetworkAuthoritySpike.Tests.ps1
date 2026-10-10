@@ -38,6 +38,30 @@ try {
 	$RunnerParseErrors = $null
 	$RunnerAst = [System.Management.Automation.Language.Parser]::ParseInput($RunnerSource, [ref] $RunnerTokens, [ref] $RunnerParseErrors)
 	Assert-True ($RunnerParseErrors.Count -eq 0) 'The network-authority runner must parse without PowerShell syntax errors.'
+
+	# The parameterless WaitForExit() waits for the redirected pipes with no bound, so
+	# a surviving descendant hangs the run; -1 and [Timeout]::Infinite mean the same.
+	# Parsing, not matching text, keeps spacing and receiver variants from slipping by.
+	function Get-UnboundedWaitForExit([System.Management.Automation.Language.Ast] $Ast) {
+		return @($Ast.FindAll({
+			param($Node)
+			if ($Node -isnot [System.Management.Automation.Language.InvokeMemberExpressionAst]) { return $false }
+			if ($Node.Member -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or $Node.Member.Value -ine 'WaitForExit') { return $false }
+			$Arguments = @($Node.Arguments | Where-Object { $null -ne $_ })
+			return $Arguments.Count -eq 0 -or ($Arguments.Count -eq 1 -and ($Arguments[0].Extent.Text -replace '[\s()]', '') -imatch '^(-1|\[(System\.)?(Threading\.)?Timeout\]::Infinite)$')
+		}, $true))
+	}
+	foreach ($UnboundedWait in @('$p.WaitForExit()', '$p.WaitForExit( )', '$p.waitforexit()', '$p.WaitForExit(-1)', '$p.WaitForExit( -1 )', '$p.WaitForExit([System.Threading.Timeout]::Infinite)', '$p.WaitForExit([Threading.Timeout]::Infinite)', '$p.WaitForExit( [Timeout]::Infinite )', '$a[ ''x'' ].WaitForExit( )')) {
+		$WaitErrors = $null
+		$WaitAst = [System.Management.Automation.Language.Parser]::ParseInput($UnboundedWait, [ref] $null, [ref] $WaitErrors)
+		Assert-True ($WaitErrors.Count -eq 0 -and @(Get-UnboundedWaitForExit $WaitAst).Count -eq 1) "The unbounded-wait check must reject '$UnboundedWait'."
+	}
+	foreach ($BoundedWait in @('$p.WaitForExit(5000)', '$p.WaitForExit($TimeoutSeconds * 1000)', '$p.WaitForExit(0)', 'Wait-ForProcessDrain $p ''x''')) {
+		$WaitAst = [System.Management.Automation.Language.Parser]::ParseInput($BoundedWait, [ref] $null, [ref] $null)
+		Assert-True (@(Get-UnboundedWaitForExit $WaitAst).Count -eq 0) "The unbounded-wait check must allow '$BoundedWait'."
+	}
+	$UnboundedRunnerWaits = @(Get-UnboundedWaitForExit $RunnerAst | ForEach-Object { "line $($_.Extent.StartLineNumber)" })
+	Assert-True ($UnboundedRunnerWaits.Count -eq 0) "The runner must not wait on a process without a bound; use Wait-ForProcessDrain. Found: $($UnboundedRunnerWaits -join ', ')"
 	$ObservationFunctionAst = $RunnerAst.Find({
 		param($Ast)
 		$Ast -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -49,6 +73,7 @@ try {
 		param([string] $FunctionSource)
 
 		function Get-RuntimeError([string[]] $Paths) { return $null }
+		function Wait-ForProcessDrain([object] $Process, [string] $Description, [switch] $ReportOnly) { }
 		# Dot-sourced so the extracted runner function lands in this isolated
 		# scriptblock scope exactly as Invoke-Expression placed it.
 		. ([scriptblock]::Create($FunctionSource))
@@ -56,7 +81,6 @@ try {
 		$Clock = [pscustomobject]@{ UtcNow = [DateTime]::Parse('2026-08-12T00:00:00Z').ToUniversalTime() }
 		$ProcessState = [pscustomobject]@{ HasExited = $false; ExitCode = 0 }
 		$ProcessState | Add-Member -MemberType ScriptMethod -Name Refresh -Value { }
-		$ProcessState | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { }
 		$RequiredProcess = [pscustomobject]@{
 			Name = 'boundary-runtime'
 			Process = $ProcessState
@@ -109,6 +133,87 @@ try {
 	Assert-True (-not (Test-Path -LiteralPath $DeclinedStandardError)) 'A declined hidden launch must create no redirected standard-error capture.'
 	Write-Output 'PASS: a declined hidden launch starts no process and allocates no capture'
 
+	# A warn-only site must still report its original failure and warn about the held
+	# pipes. A real grandchild keeps the pipes open after its parent exits. It reports
+	# its own PID, and the test removes only a process started after this case began.
+	$DrainFunctionAst = $RunnerAst.Find({
+		param($Ast)
+		$Ast -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+		$Ast.Name -eq 'Wait-ForProcessDrain'
+	}, $true)
+	$MatchFunctionAst = $RunnerAst.Find({
+		param($Ast)
+		$Ast -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+		$Ast.Name -eq 'Wait-ForMatch'
+	}, $true)
+	$CaptureTypeAst = $RunnerAst.Find({
+		param($Ast)
+		$Ast -is [System.Management.Automation.Language.CommandAst] -and
+		$Ast.GetCommandName() -ceq 'Add-Type'
+	}, $true)
+	Assert-True ($null -ne $DrainFunctionAst -and $null -ne $MatchFunctionAst -and $null -ne $CaptureTypeAst) 'The runner must define Wait-ForProcessDrain, Wait-ForMatch, and its output-capture type.'
+	$DrainGrandchildScript = Join-Path $FixtureRoot 'drain-grandchild.ps1'
+	$DrainGrandchildPidPath = Join-Path $FixtureRoot 'drain-grandchild.pid'
+	Set-Content -LiteralPath $DrainGrandchildScript -Encoding UTF8 -Value @'
+param([string] $PidPath)
+[System.IO.File]::WriteAllText("$PidPath.tmp", [string] $PID)
+Move-Item -LiteralPath "$PidPath.tmp" -Destination $PidPath
+Start-Sleep -Seconds 12
+'@
+	$DrainLaunchedAt = [DateTime]::Now
+	$HeldPipeOutcome = & {
+		param([string] $TypeSource, [string] $DrainSource, [string] $MatchSource, [string] $Shell, [string] $GrandchildScript, [string] $GrandchildPidPath, [string] $LogPrefix)
+
+		# The extracted functions read the runner's timeout from their caller's scope.
+		Set-Variable -Name TimeoutSeconds -Value 2
+		function Get-RuntimeError([string[]] $Paths) { return $null }
+		if (-not ('AethelnProcessOutputCapture' -as [type])) { . ([scriptblock]::Create($TypeSource)) }
+		. ([scriptblock]::Create($DrainSource))
+		. ([scriptblock]::Create($MatchSource))
+
+		$StartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+		$StartInfo.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
+		# start /b: the parent exits at once and its child inherits the redirected pipes.
+		$StartInfo.Arguments = '/c start /b "" "' + $Shell + '" -NoProfile -File "' + $GrandchildScript + '" "' + $GrandchildPidPath + '"'
+		$StartInfo.UseShellExecute = $false
+		$StartInfo.CreateNoWindow = $true
+		$StartInfo.RedirectStandardOutput = $true
+		$StartInfo.RedirectStandardError = $true
+		$Process = [System.Diagnostics.Process]::new()
+		$Process.StartInfo = $StartInfo
+		$Capture = [AethelnProcessOutputCapture]::new($Process, "$LogPrefix.stdout.log", "$LogPrefix.stderr.log")
+		$Warnings = [System.Collections.Generic.List[string]]::new()
+		$Failure = $null
+		$Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+		try {
+			[void] $Process.Start()
+			$Process.BeginOutputReadLine()
+			$Process.BeginErrorReadLine()
+			try {
+				& { Wait-ForMatch -Process $Process -Path "$LogPrefix.never.log" -ErrorPath "$LogPrefix.stderr.log" -Description 'fixture readiness' -Pattern 'never' } 3>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.WarningRecord]) { $Warnings.Add($_.Message) } }
+			} catch { $Failure = $_.Exception.Message }
+		}
+		finally { $Capture.Dispose(); $Process.Dispose() }
+		return [pscustomobject]@{ Failure = $Failure; Warnings = @($Warnings); ElapsedSeconds = $Stopwatch.Elapsed.TotalSeconds }
+	} $CaptureTypeAst.Extent.Text $DrainFunctionAst.Extent.Text $MatchFunctionAst.Extent.Text (Get-Process -Id $PID).Path $DrainGrandchildScript $DrainGrandchildPidPath (Join-Path $FixtureRoot 'drain-held-pipe')
+	try {
+		Assert-True ($HeldPipeOutcome.Failure -match 'Process exited with code \d+ while waiting for fixture readiness') "A warn-only site must report its original failure, not the drain timeout. Actual: $($HeldPipeOutcome.Failure)"
+		Assert-True (@($HeldPipeOutcome.Warnings | Where-Object { $_ -match 'Timed out after 2 seconds waiting for process \d+ \(fixture readiness\) to exit and close its output pipes' }).Count -eq 1) "A warn-only site must warn that a descendant still holds the pipes. Actual: $($HeldPipeOutcome.Warnings -join ' | ')"
+		Assert-True ($HeldPipeOutcome.ElapsedSeconds -lt 8) "A warn-only site must give up at its bound instead of waiting for the grandchild. Elapsed: $($HeldPipeOutcome.ElapsedSeconds) s."
+	}
+	finally {
+		$DrainGrandchildId = 0
+		for ($Attempt = 0; $Attempt -lt 50 -and -not ((Test-Path -LiteralPath $DrainGrandchildPidPath) -and [int]::TryParse((Get-Content -LiteralPath $DrainGrandchildPidPath -Raw), [ref] $DrainGrandchildId) -and $DrainGrandchildId -gt 4); $Attempt++) { Start-Sleep -Milliseconds 200 }
+		if ($DrainGrandchildId -gt 4) {
+			$DrainGrandchild = Get-Process -Id $DrainGrandchildId -ErrorAction Ignore
+			if ($null -ne $DrainGrandchild) {
+				if ($DrainGrandchild.StartTime -ge $DrainLaunchedAt) { try { $DrainGrandchild.Kill() } catch { if (-not $DrainGrandchild.HasExited) { throw } } }
+				$DrainGrandchild.Dispose()
+			}
+		}
+	}
+	Write-Output 'PASS: a warn-only drain site warns about held pipes and still reports its original failure'
+
 	$CaptureDisposeIndex = $RunnerSource.LastIndexOf('$Handle.Capture.Dispose()', [System.StringComparison]::Ordinal)
 	$FinalInventoryIndex = $RunnerSource.LastIndexOf('Assert-ExactRejectionInventory -Lines @($FinalServerLines + $FinalServerErrorLines)', [System.StringComparison]::Ordinal)
 	$SuccessfulResultIndex = $RunnerSource.LastIndexOf("`$Result = if (`$EvidenceMode -ceq 'packaged')", [System.StringComparison]::Ordinal)
@@ -140,6 +245,8 @@ param(
 	[string] $ObservationExitSignalPath = 'none',
 	[Parameter(ValueFromRemainingArguments)] [string[]] $Remaining
 )
+$LauncherId = [int] $env:AETHELN_FIXTURE_PARENT_PID
+function Test-LauncherGone { $LauncherId -gt 0 -and $null -eq (Get-Process -Id $LauncherId -ErrorAction Ignore) }
 if ($Role -eq 'server') {
 	Start-Sleep -Seconds $StartupDelaySeconds
 	if ($Behavior -eq 'literal-profile-token') {
@@ -223,14 +330,17 @@ if ($Role -eq 'server') {
 	}
 	if ($ExitAfterMarkers -eq 'true') {
 		if ($ObservationExitSignalPath -eq 'none') { throw 'The early-exit fixture requires an observation-entry signal.' }
-		while (-not (Test-Path -LiteralPath $ObservationExitSignalPath -PathType Leaf)) { Start-Sleep -Milliseconds 50 }
+		while (-not (Test-Path -LiteralPath $ObservationExitSignalPath -PathType Leaf) -and -not (Test-LauncherGone)) { Start-Sleep -Milliseconds 50 }
 		exit 0
 	}
 	if ($ControlledExitSignalPath -ne 'none') {
-		while (-not (Test-Path -LiteralPath $ControlledExitSignalPath -PathType Leaf)) { Start-Sleep -Milliseconds 50 }
+		while (-not (Test-Path -LiteralPath $ControlledExitSignalPath -PathType Leaf) -and -not (Test-LauncherGone)) { Start-Sleep -Milliseconds 50 }
 		exit 0
 	}
-	while ($true) { Start-Sleep -Milliseconds 50 }
+	# A server whose launcher was killed must exit: an orphan keeps the launcher's
+	# redirected pipes open and holds the runner's output drain until its bound expires.
+	while (-not (Test-LauncherGone)) { Start-Sleep -Milliseconds 50 }
+	exit 0
 }
 if ($Behavior -eq 'slow-client-start') { Start-Sleep -Seconds 3 }
 if ($Behavior -eq 'literal-profile-token') {
@@ -259,6 +369,8 @@ if ($Mode -eq 'identity') {
 	exit 0
 }
 if ($Mode -eq 'cleanup') {
+	if ($env:AETHELN_TEST_CLEANUP_LEAK -eq 'true') { [Console]::Error.WriteLine('Fixture cleanup left the owned process running.'); exit 44 }
+	if ($env:AETHELN_TEST_CLEANUP_SILENT_LEAK -eq 'true') { exit 0 }
 	$TargetProcess = $null
 	try {
 		$IdentityText = Get-Content -LiteralPath $StatePath -Raw
@@ -290,6 +402,7 @@ if ($Mode -eq 'cleanup') {
 }
 if ($Mode -ne 'launch') { throw "Unsupported launcher mode '$Mode'." }
 if ($env:AETHELN_TEST_LAUNCHER_FAIL -eq 'true') { exit 41 }
+if ($env:AETHELN_TEST_KEEP_ORPHAN -ne 'true') { $env:AETHELN_FIXTURE_PARENT_PID = $PID }
 $Child = Start-Process -FilePath $Target -ArgumentList $Remaining -PassThru -NoNewWindow
 $null = $Child.Handle
 $IdentityText = [ordered]@{ pid = $Child.Id; start_ticks = $Child.StartTime.ToUniversalTime().Ticks } | ConvertTo-Json -Compress
@@ -400,6 +513,39 @@ exit $LASTEXITCODE
 	}
 	Write-Output 'PASS: launcher cleanup confirms owned-process exit without interpreting a later PID occupant as a leak'
 
+	# Per-case timeout. A hang inside the in-process runner cannot be interrupted
+	# from the harness thread, so a separate watchdog process terminates what keeps
+	# it blocked: the harness's runtime children and the recorded launcher-side
+	# server, which may have been orphaned and still holds the launcher's pipes.
+	$CaseWatchdog = Join-Path $FixtureRoot 'case-watchdog.ps1'
+	Set-Content -LiteralPath $CaseWatchdog -Encoding UTF8 -Value @'
+param([int] $HarnessId, [string] $StatePath, [string] $MarkerPath, [int] $Seconds)
+Start-Sleep -Seconds $Seconds
+[System.IO.File]::WriteAllText($MarkerPath, 'timeout')
+$Rows = @(Get-CimInstance -ClassName Win32_Process)
+$Doomed = @{}
+# Windows keeps a child's parent PID after the parent dies and reuses PIDs, so
+# follow a child only if it was created no earlier than its parent. The
+# harness's own console host is not a runtime child.
+$Frontier = @($Rows | Where-Object { $_.ProcessId -eq $HarnessId })
+while ($Frontier.Count -gt 0) {
+	$Parents = $Frontier
+	$Frontier = @(foreach ($Parent in $Parents) {
+		$Rows | Where-Object { $_.ParentProcessId -eq $Parent.ProcessId -and $_.CreationDate -ge $Parent.CreationDate -and $_.ProcessId -ne $PID -and $_.Name -cne 'conhost.exe' -and -not $Doomed.ContainsKey([int] $_.ProcessId) } | ForEach-Object { $Doomed[[int] $_.ProcessId] = $true; $_ }
+	})
+}
+if (Test-Path -LiteralPath $StatePath) {
+	$Identity = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+	$Orphan = Get-Process -Id $Identity.pid -ErrorAction Ignore
+	if ($null -ne $Orphan -and $Orphan.StartTime.ToUniversalTime().Ticks -eq $Identity.start_ticks) {
+		$null = $Doomed.Remove([int] $Orphan.Id)
+		# Kill the object whose identity was just checked, not its PID again.
+		try { $Orphan.Kill() } catch { if (-not $Orphan.HasExited) { throw } }
+	}
+}
+foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore }
+'@
+
 	function Invoke-FixtureRun(
 		[string] $FixtureLogRoot,
 		[string] $FixtureRunId,
@@ -421,10 +567,14 @@ exit $LASTEXITCODE
 		[string[]] $ClientArgumentsOverride,
 		[string] $JoinInProgressPatternOverride,
 		[string] $DamagePatternOverride,
+		[string] $PerformanceContractPath,
+		[bool] $ProbePerformanceContractReplacement = $false,
+		[string] $PerformanceArtifactProbeResultPath,
 		[int] $ObservationStartDelaySeconds = 0,
 		[bool] $WithholdShutdownRelease = $false,
 		[int] $ServerStartupDelaySeconds = 0,
-		[string] $BoundaryTimeoutDescription
+		[string] $BoundaryTimeoutDescription,
+		[int] $CaseTimeoutSeconds = 120
 	) {
 		$ControlledExitSignalPath = if ($UseContracts -and -not $ExitAfterMarkers -and $Behavior -in @('normal','literal-profile-token','adversarial-public-lines','duplicate-death','duplicate-respawn','duplicate-shutdown')) { Join-Path $FixtureRoot ("shutdown-release-$FixtureRunId") } else { 'none' }
 		$ObservationExitSignalPath = if ($ExitAfterMarkers) { Join-Path $FixtureRoot ("observation-exit-$FixtureRunId") } else { 'none' }
@@ -508,11 +658,33 @@ exit $LASTEXITCODE
 		}
 		if ($PackagedBuildProvenancePath) { $Arguments.PackagedBuildProvenancePath = $PackagedBuildProvenancePath }
 		if ($ServerProvenanceExecutable) { $Arguments.ServerProvenanceExecutable = $ServerProvenanceExecutable }
+		if ($PSBoundParameters.ContainsKey('PerformanceContractPath')) { $Arguments.PerformanceContractPath = $PerformanceContractPath }
 		$ObservationDelayBreakpoint = $null
 		$ShutdownReleaseBreakpoint = $null
 		$ObservationExitBreakpoint = $null
+		$PerformanceArtifactProbeBreakpoint = $null
 		$BoundaryTimeoutBreakpoints = @()
+		$Watchdog = $null
+		$WatchdogMarker = Join-Path $FixtureRoot ("case-timeout-$FixtureRunId")
 		try {
+			$Watchdog = Start-Process -FilePath $PowerShellExecutable -ArgumentList @('-NoProfile', '-File', $CaseWatchdog, $PID, (Join-Path $FixtureRoot "launcher-identity-$FixtureRunId.json"), $WatchdogMarker, $CaseTimeoutSeconds) -PassThru -WindowStyle Hidden
+			if ($ProbePerformanceContractReplacement) {
+				if (-not $PerformanceContractPath -or -not $PerformanceArtifactProbeResultPath) { throw 'Performance artifact replacement probe requires a contract path and result path.' }
+				$PerformanceArtifactPath = Join-Path $FixtureLogRoot 'performance-contract.json'
+				$ProbePerformanceArtifact = {
+					if (-not (Test-Path -LiteralPath $PerformanceArtifactProbeResultPath)) {
+						try {
+							[System.IO.File]::WriteAllBytes($PerformanceArtifactPath, [byte[]] @(1,2,3))
+							[System.IO.File]::WriteAllText($PerformanceArtifactProbeResultPath, 'replaced')
+						} catch {
+							$BaseException = $_.Exception.GetBaseException()
+							$ProbeResult = if ($BaseException -is [System.IO.IOException] -or $BaseException -is [System.UnauthorizedAccessException]) { 'denied' } else { "unexpected:$($BaseException.GetType().FullName)" }
+							[System.IO.File]::WriteAllText($PerformanceArtifactProbeResultPath, $ProbeResult)
+						}
+					}
+				}.GetNewClosure()
+				$PerformanceArtifactProbeBreakpoint = Set-PSBreakpoint -Script $Script -Command Start-HiddenProcess -Action $ProbePerformanceArtifact
+			}
 			if ($BoundaryTimeoutDescription) {
 				# Command breakpoint actions run in a child scope of the invoked function,
 				# after parameter binding. Shadow the runner's timeout only in that wait's
@@ -547,10 +719,17 @@ exit $LASTEXITCODE
 			& $Script @Arguments
 		}
 		finally {
+			if ($null -ne $Watchdog) {
+				try { $Watchdog.Kill() } catch { if (-not $Watchdog.HasExited) { throw } }
+				$Watchdog.WaitForExit()
+				$Watchdog.Dispose()
+			}
 			foreach ($Breakpoint in $BoundaryTimeoutBreakpoints) { Remove-PSBreakpoint -Breakpoint $Breakpoint }
 			if ($null -ne $ObservationDelayBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationDelayBreakpoint }
 			if ($null -ne $ShutdownReleaseBreakpoint) { Remove-PSBreakpoint -Breakpoint $ShutdownReleaseBreakpoint }
 			if ($null -ne $ObservationExitBreakpoint) { Remove-PSBreakpoint -Breakpoint $ObservationExitBreakpoint }
+			if ($null -ne $PerformanceArtifactProbeBreakpoint) { Remove-PSBreakpoint -Breakpoint $PerformanceArtifactProbeBreakpoint }
+			if (Test-Path -LiteralPath $WatchdogMarker) { throw "Fixture case '$FixtureRunId' exceeded its $CaseTimeoutSeconds-second case timeout; the watchdog terminated the runtime processes it blocked on." }
 		}
 	}
 
@@ -565,7 +744,7 @@ exit $LASTEXITCODE
 	$Evidence = Get-Content -LiteralPath $EvidencePath -Raw | ConvertFrom-Json
 	Assert-True ($Evidence.schema_id -eq 'aetheln.network-authority-evidence') 'Evidence must use the canonical schema identity.'
 	Assert-True ($Evidence.schema_version -eq 1) 'Evidence must use schema version 1.'
-	foreach ($ContractOnlyField in @('failure_details','scenario_lifecycle','scenario_lifecycle_summary','process_outcomes','cleanup')) {
+	foreach ($ContractOnlyField in @('failure_details','scenario_lifecycle','scenario_lifecycle_summary','process_outcomes','cleanup','performance_contract')) {
 		Assert-True ($Evidence.PSObject.Properties.Name -notcontains $ContractOnlyField) "Legacy version-1 evidence must not gain contract-only field '$ContractOnlyField'."
 	}
 	Assert-True ($Evidence.scenario.id -eq 'network-authority.baseline.v1') 'Evidence must preserve immutable scenario identity.'
@@ -983,6 +1162,12 @@ exit $LASTEXITCODE
 		$_.CommandLine.IndexOf($FakeRuntime, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 	})
 	Assert-True ($LauncherDescendants.Count -eq 0) 'Launcher-side server descendants must be confirmed stopped, not merely detached from the launcher.'
+	# The server also exits by itself once its launcher is killed, so the process
+	# count alone cannot show that the runner ran the launcher-side cleanup. Only
+	# the fake cleanup prints this line, after it confirms the owned target exited.
+	$LauncherIdentity = Get-Content -LiteralPath (Join-Path $FixtureRoot 'launcher-identity-fixture-launcher.json') -Raw | ConvertFrom-Json
+	$LauncherCleanupOutput = Get-Content -LiteralPath (Join-Path $LauncherLogRoot 'server.cleanup.stdout.log') -Raw
+	Assert-True ($LauncherCleanupOutput -match ('(?m)^AETHELN_SERVER_DESCENDANT_EXITED=' + $LauncherIdentity.pid + '\r?$')) 'The runner must run launcher-side descendant cleanup and the cleanup must confirm the owned server exited.'
 	Write-Output 'PASS: explicit Linux-server launcher indirection remains hidden, redirected, monitored, provenance-ready, and descendant-cleaned'
 
 	$env:AETHELN_TEST_CLEANUP_FAIL = 'true'
@@ -996,6 +1181,45 @@ exit $LASTEXITCODE
 	Assert-True ($CleanupFailureEvidence.schema_version -eq 2 -and $CleanupFailureEvidence.result -eq 'failed') 'Cleanup failure must downgrade otherwise complete contract evidence to failed.'
 	Assert-True ($CleanupFailureEvidence.failure_details.observed_stage -eq 'cleanup' -and $CleanupFailureEvidence.failure_details.process_role -eq 'server' -and $CleanupFailureEvidence.failure_details.cleanup_attempted -and -not $CleanupFailureEvidence.failure_details.cleanup_succeeded) 'Cleanup failure evidence must identify the cleanup stage, server role, attempt, and outcome.'
 	Write-Output 'PASS: launcher-side descendant cleanup failure is observable and fails closed'
+
+	# A cleanup that leaves the launcher-side server alive must fail the run, not
+	# hang it: the surviving server holds the launcher's redirected pipes open.
+	$env:AETHELN_TEST_CLEANUP_LEAK = 'true'
+	$CleanupLeakFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'cleanup-leak') -FixtureRunId 'fixture-cleanup-leak' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true
+	} catch { $CleanupLeakFailure = $_.Exception.Message }
+	Remove-Item -LiteralPath Env:AETHELN_TEST_CLEANUP_LEAK -ErrorAction Ignore
+	Assert-True ($CleanupLeakFailure -match 'server descendant cleanup.*exited with code 44') "A cleanup that leaves the server running must fail the run. Actual: $CleanupLeakFailure"
+	$LeakIdentity = Get-Content -LiteralPath (Join-Path $FixtureRoot 'launcher-identity-fixture-cleanup-leak.json') -Raw | ConvertFrom-Json
+	$LeakedServer = Get-Process -Id $LeakIdentity.pid -ErrorAction Ignore
+	Assert-True ($null -eq $LeakedServer -or $LeakedServer.StartTime.ToUniversalTime().Ticks -ne $LeakIdentity.start_ticks) 'A failed launcher cleanup must not leave the fake server orphaned after the run.'
+	Write-Output 'PASS: a launcher cleanup that leaks the server fails the run instead of hanging on the orphan'
+
+	# A cleanup that reports success while the launcher-side server survives leaves
+	# an orphan holding the launcher's redirected pipes. The runner must bound its
+	# wait for those pipes and fail by name instead of hanging; the per-case
+	# watchdog is only the backstop that turns a regression back into a diagnosis.
+	# Nothing owns the orphan once the runner gives up, so the test removes it.
+	$env:AETHELN_TEST_CLEANUP_SILENT_LEAK = 'true'
+	$env:AETHELN_TEST_KEEP_ORPHAN = 'true'
+	$OrphanDrainFailure = $null
+	try {
+		Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'orphan-timeout') -FixtureRunId 'fixture-orphan-timeout' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseLauncher $true -CaseTimeoutSeconds 60
+	} catch { $OrphanDrainFailure = $_.Exception.Message }
+	Remove-Item -LiteralPath Env:AETHELN_TEST_CLEANUP_SILENT_LEAK, Env:AETHELN_TEST_KEEP_ORPHAN -ErrorAction Ignore
+	$OrphanIdentity = Get-Content -LiteralPath (Join-Path $FixtureRoot 'launcher-identity-fixture-orphan-timeout.json') -Raw | ConvertFrom-Json
+	$OrphanedServer = Get-Process -Id $OrphanIdentity.pid -ErrorAction Ignore
+	$OrphanIsOurs = $null -ne $OrphanedServer -and $OrphanedServer.StartTime.ToUniversalTime().Ticks -eq $OrphanIdentity.start_ticks
+	try {
+		Assert-True ($OrphanDrainFailure -match "Runtime process 'server' cleanup failed: Timed out after 8 seconds waiting for process \d+ \(runtime process 'server'\) to exit and close its output pipes; a descendant process may still hold them \(launcher-side server process $($OrphanIdentity.pid)\)\.") "The runner must fail by name when an orphan holds the launcher's output pipes. Actual: $OrphanDrainFailure"
+		Assert-True $OrphanIsOurs 'The orphan must still be alive when the runner gives up; otherwise the drain bound was never exercised.'
+	}
+	finally {
+		if ($OrphanIsOurs) { try { $OrphanedServer.Kill() } catch { if (-not $OrphanedServer.HasExited) { throw } } }
+		if ($null -ne $OrphanedServer) { $OrphanedServer.Dispose() }
+	}
+	Write-Output 'PASS: an orphan that holds the launcher pipes fails the run by name within the drain bound instead of hanging it'
 
 	$env:AETHELN_TEST_CLEANUP_FAIL = 'true'
 	$CombinedFailure = $null
@@ -1288,6 +1512,228 @@ exit $LASTEXITCODE
 	} catch { $Failure = $_.Exception.Message }
 	Assert-True ($Failure -match 'ServerArguments must contain.*ScenarioId') 'Missing correlation placeholders must fail before launch.'
 	Write-Output 'PASS: incomplete launch correlation fails closed'
+
+	$NetworkAuthorityPerformanceDomains = [ordered]@{
+		client = @('client_memory_bytes','correction_count','correction_magnitude_centimeters')
+		server = @('server_game_thread_milliseconds','server_replication_cpu_milliseconds','server_memory_bytes','relevant_actor_count','destruction_event_count')
+		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second')
+	}
+	function Get-PerformanceContractObject {
+		$Budgets = foreach ($DomainName in $NetworkAuthorityPerformanceDomains.Keys) {
+			foreach ($MetricId in $NetworkAuthorityPerformanceDomains[$DomainName]) {
+				[ordered]@{
+					metric_id = $MetricId
+					domain = $DomainName
+					target = $null
+					warning_threshold = $null
+					failure_threshold = $null
+					measurement_method = 'packaged-representative-capture-pending'
+					scenario_id = 'network-authority.baseline.v1'
+					owner = 'issue-45'
+					evidence_references = @()
+					evidence_classification = 'unset'
+					approval_status = 'unapproved'
+				}
+			}
+		}
+		return [ordered]@{
+			schema_id = 'aetheln.performance-capture-contract'
+			schema_version = 1
+			capture = [ordered]@{
+				source_revision = 'fixture-revision'
+				build = 'fixture-build'
+				toolchain = 'UE-5.8.1-fixture'
+				hardware = 'fixture-host'
+				topology = 'one-server-two-clients-local-fixture'
+				environment = 'local'
+				map = '/Game/Maps/StarterMap'
+				duration_seconds = 1
+				actor_mix = 'network-authority.actor-mix.v1'
+				scenario_id = 'network-authority.baseline.v1'
+				profile_id = 'network-profile.unset'
+				network_config_identity = 'network-emulation.caller-supplied'
+				run_id = 'fixture-performance-success'
+				scenario_version = $null
+				profile_version = $null
+				profile_arguments_sha256 = $null
+				evidence_references = @('evidence-ref.fixture-capture-log','evidence-ref.fixture-capture-json')
+				measurement_domains = [ordered]@{
+					client = @($NetworkAuthorityPerformanceDomains.client)
+					server = @($NetworkAuthorityPerformanceDomains.server)
+					network = @($NetworkAuthorityPerformanceDomains.network)
+				}
+				sampling = [ordered]@{ sampling_rate_hz = $null; server_tick_hz = $null; bandwidth_limit_kbps = $null; capacity_players = $null }
+			}
+			budgets = @($Budgets)
+		}
+	}
+	function Write-PerformanceContract([string] $Path, [object] $Contract) {
+		$Contract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
+	}
+	function Write-PaddedPerformanceContract([string] $SourcePath, [string] $TargetPath, [int] $TargetBytes) {
+		$SourceBytes = [System.IO.File]::ReadAllBytes($SourcePath)
+		if ($SourceBytes.Length -gt $TargetBytes) { throw 'Source contract exceeds requested padded size.' }
+		$OutputBytes = [byte[]]::new($TargetBytes)
+		[Array]::Copy($SourceBytes, $OutputBytes, $SourceBytes.Length)
+		for ($Index = $SourceBytes.Length; $Index -lt $OutputBytes.Length; $Index++) { $OutputBytes[$Index] = 0x20 }
+		[System.IO.File]::WriteAllBytes($TargetPath, $OutputBytes)
+	}
+
+	$PerformanceContractRoot = Join-Path $FixtureRoot 'performance-contracts'
+	New-Item -ItemType Directory -Path $PerformanceContractRoot -Force | Out-Null
+	$PerformanceSuccessContract = Get-PerformanceContractObject
+	$PerformanceSuccessContract.budgets[0].evidence_classification = 'hypothetical'
+	$PerformanceSuccessContract.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log')
+	$PerformanceSuccessContractPath = Join-Path $PerformanceContractRoot 'performance-success.json'
+	Write-PerformanceContract $PerformanceSuccessContractPath $PerformanceSuccessContract
+	foreach ($InvalidPath in @(
+		@{ Name = 'empty'; Value = '' },
+		@{ Name = 'spaces'; Value = '   ' },
+		@{ Name = 'tab-newline'; Value = "`t`n" }
+	)) {
+		$InvalidRoot = Join-Path $FixtureRoot "performance-path-$($InvalidPath.Name)"
+		$InvalidFailure = $null
+		try {
+			Invoke-FixtureRun -FixtureLogRoot $InvalidRoot -FixtureRunId "fixture-performance-path-$($InvalidPath.Name)" -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $InvalidPath.Value
+		} catch { $InvalidFailure = $_.Exception.Message }
+		Assert-True ($InvalidFailure -match [regex]::Escape('PerformanceContractPath must not be empty or whitespace when supplied.')) "A supplied $($InvalidPath.Name) performance path must fail closed. Actual: $InvalidFailure"
+		Assert-True (-not (Test-Path -LiteralPath $InvalidRoot)) "A supplied $($InvalidPath.Name) performance path must fail before creating the evidence root."
+	}
+	Write-Output 'PASS: bound blank performance-contract paths fail before evidence creation'
+	$PerformanceSuccessRoot = Join-Path $FixtureRoot 'performance-success'
+	$PerformanceArtifactProbeResultPath = Join-Path $FixtureRoot 'performance-artifact-probe-result.txt'
+	Invoke-FixtureRun -FixtureLogRoot $PerformanceSuccessRoot -FixtureRunId 'fixture-performance-success' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceSuccessContractPath -ProbePerformanceContractReplacement $true -PerformanceArtifactProbeResultPath $PerformanceArtifactProbeResultPath
+	$PerformanceEvidenceJson = Get-Content -LiteralPath (Join-Path $PerformanceSuccessRoot 'network-authority-spike-evidence.json') -Raw
+	$PerformanceEvidence = $PerformanceEvidenceJson | ConvertFrom-Json
+	Assert-True ($PerformanceEvidence.result -eq 'fixture-passed' -and $PerformanceEvidence.schema_version -eq 1) 'The opt-in performance contract must not change the legacy evidence schema version or fixture result.'
+	Assert-True ($PerformanceEvidence.performance_contract.schema_id -eq 'aetheln.performance-capture-contract' -and $PerformanceEvidence.performance_contract.schema_version -eq 1) 'Validated performance-contract evidence must carry its versioned schema identity.'
+	Assert-True ($PerformanceEvidence.performance_contract.contract_sha256 -match '^[0-9a-f]{64}$' -and $PerformanceEvidence.performance_contract.contract_artifact -eq 'performance-contract.json') 'Validated performance-contract evidence must bind the exact retained contract bytes by SHA-256 and fixed artifact name.'
+	$RetainedPerformanceContractPath = Join-Path $PerformanceSuccessRoot $PerformanceEvidence.performance_contract.contract_artifact
+	Assert-True (Test-Path -LiteralPath $RetainedPerformanceContractPath -PathType Leaf) 'Validated performance-contract evidence must retain the exact contract artifact.'
+	Assert-True ((Get-FileHash -LiteralPath $RetainedPerformanceContractPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $PerformanceEvidence.performance_contract.contract_sha256) 'The retained performance-contract artifact must match the published SHA-256.'
+	Assert-True ((Get-FileHash -LiteralPath $PerformanceSuccessContractPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $PerformanceEvidence.performance_contract.contract_sha256) 'The published SHA-256 must bind the exact supplied contract bytes.'
+	Assert-True ((Test-Path -LiteralPath $PerformanceArtifactProbeResultPath -PathType Leaf) -and (Get-Content -LiteralPath $PerformanceArtifactProbeResultPath -Raw) -ceq 'denied') 'The retained performance-contract artifact must deny replacement while runtime evidence is being captured.'
+	Assert-True ($PerformanceEvidence.performance_contract.budget_count -eq 10) 'Validated performance-contract evidence must record exactly one budget per version-1 network-authority-runner subset metric.'
+	Assert-True (-not $PerformanceEvidence.performance_contract.targets_defined -and $PerformanceEvidence.performance_contract.approval_status -eq 'unapproved') 'Validated performance-contract evidence must remain target-free and unapproved in this wave.'
+	Assert-True ($PerformanceEvidence.performance_contract.evidence_reference_count -eq 2) 'Validated performance-contract evidence must count declared capture evidence references.'
+	Assert-True ($PerformanceEvidence.performance_contract.classification_counts.hypothetical -eq 1 -and $PerformanceEvidence.performance_contract.classification_counts.unset -eq 9 -and $PerformanceEvidence.performance_contract.classification_counts.measured -eq 0 -and $PerformanceEvidence.performance_contract.classification_counts.modeled -eq 0) 'Validated performance-contract evidence must classify every budget without invention.'
+	foreach ($DomainName in @('client','server','network')) {
+		Assert-True ((@($PerformanceEvidence.performance_contract.measurement_domains.$DomainName) -join ',') -eq (@($NetworkAuthorityPerformanceDomains[$DomainName]) -join ',')) "Performance-contract evidence must publish the exact version-1 network-authority-runner $DomainName measurement subset."
+	}
+	foreach ($Field in $MeasurementFields) {
+		Assert-True ($null -eq $PerformanceEvidence.measurements.$Field) "$Field must remain null even when the performance contract is supplied."
+	}
+	Assert-True ($PerformanceEvidenceJson.IndexOf('evidence-ref.fixture-capture-log', [System.StringComparison]::Ordinal) -lt 0) 'Performance-contract evidence must publish only counts, never raw evidence-reference values.'
+	Assert-True ($ContractEvidence.PSObject.Properties.Name -notcontains 'performance_contract') 'Schema-v2 evidence without the opt-in performance contract must not gain a performance_contract field.'
+	$PerformanceContractMaximumBytes = 1MB
+	$PerformanceExactLimitSourceContract = Get-PerformanceContractObject
+	$PerformanceExactLimitSourceContract.capture.run_id = 'fixture-performance-exact-size-limit'
+	$PerformanceExactLimitSourcePath = Join-Path $PerformanceContractRoot 'performance-exact-size-limit-source.json'
+	Write-PerformanceContract $PerformanceExactLimitSourcePath $PerformanceExactLimitSourceContract
+	$PerformanceExactLimitPath = Join-Path $PerformanceContractRoot 'performance-exact-size-limit.json'
+	Write-PaddedPerformanceContract -SourcePath $PerformanceExactLimitSourcePath -TargetPath $PerformanceExactLimitPath -TargetBytes $PerformanceContractMaximumBytes
+	$PerformanceExactLimitRoot = Join-Path $FixtureRoot 'performance-exact-size-limit'
+	Invoke-FixtureRun -FixtureLogRoot $PerformanceExactLimitRoot -FixtureRunId 'fixture-performance-exact-size-limit' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceExactLimitPath
+	$PerformanceExactLimitEvidence = Get-Content -LiteralPath (Join-Path $PerformanceExactLimitRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($PerformanceExactLimitEvidence.performance_contract.contract_sha256 -eq (Get-FileHash -LiteralPath $PerformanceExactLimitPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'A performance contract at the exact input limit must validate and retain its exact-byte identity.'
+	$PerformanceOverLimitPath = Join-Path $PerformanceContractRoot 'performance-over-size-limit.json'
+	Write-PaddedPerformanceContract -SourcePath $PerformanceSuccessContractPath -TargetPath $PerformanceOverLimitPath -TargetBytes ($PerformanceContractMaximumBytes + 1)
+	$PerformanceOverLimitFailure = $null
+	try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'performance-over-size-limit') -FixtureRunId 'fixture-performance-over-size-limit' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceOverLimitPath } catch { $PerformanceOverLimitFailure = $_.Exception.Message }
+	Assert-True ($PerformanceOverLimitFailure -match [regex]::Escape('PerformanceContract exceeds the 1048576-byte input limit.')) "A performance contract above the input limit must fail closed before launch. Actual: $PerformanceOverLimitFailure"
+	Write-Output 'PASS: performance-contract exact input limit is accepted and an oversized contract fails closed'
+	$PerformanceVariantContract = Get-PerformanceContractObject
+	$PerformanceVariantContract.budgets[0].evidence_classification = 'hypothetical'
+	$PerformanceVariantContract.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log')
+	$PerformanceVariantContract.budgets[0].owner = 'issue-45-independent-review'
+	$PerformanceVariantContract.capture.run_id = 'fixture-performance-valid-variant'
+	$PerformanceVariantContractPath = Join-Path $PerformanceContractRoot 'performance-valid-variant.json'
+	Write-PerformanceContract $PerformanceVariantContractPath $PerformanceVariantContract
+	$PerformanceVariantRoot = Join-Path $FixtureRoot 'performance-valid-variant'
+	Invoke-FixtureRun -FixtureLogRoot $PerformanceVariantRoot -FixtureRunId 'fixture-performance-valid-variant' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $PerformanceVariantContractPath
+	$PerformanceVariantEvidence = Get-Content -LiteralPath (Join-Path $PerformanceVariantRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($PerformanceVariantEvidence.performance_contract.budget_count -eq $PerformanceEvidence.performance_contract.budget_count -and $PerformanceVariantEvidence.performance_contract.classification_counts.hypothetical -eq $PerformanceEvidence.performance_contract.classification_counts.hypothetical) 'Materially different valid contracts may retain the same safe aggregate summary.'
+	Assert-True ($PerformanceVariantEvidence.performance_contract.contract_sha256 -ne $PerformanceEvidence.performance_contract.contract_sha256) 'Materially different valid contracts must publish different exact-byte evidence identities.'
+	$CombinedContract = Get-PerformanceContractObject
+	$CombinedContract.capture.profile_id = 'network-profile.clean'
+	$CombinedContract.capture.network_config_identity = 'network-emulation.clean'
+	$CombinedContract.capture.run_id = 'fixture-performance-schema-v2-combined'
+	$CombinedContract.capture.scenario_version = [string] $ContractEvidence.scenario.version
+	$CombinedContract.capture.profile_version = [string] $ContractEvidence.network_profile.version
+	$CombinedContract.capture.profile_arguments_sha256 = [string] $ContractEvidence.network_profile.arguments_sha256
+	$CombinedContractPath = Join-Path $PerformanceContractRoot 'performance-schema-v2-combined.json'
+	Write-PerformanceContract $CombinedContractPath $CombinedContract
+	$CombinedContractRoot = Join-Path $FixtureRoot 'performance-schema-v2-combined'
+	Invoke-FixtureRun -FixtureLogRoot $CombinedContractRoot -FixtureRunId 'fixture-performance-schema-v2-combined' -RejectionReason 'malformed-intent' -DurationSeconds 1 -UseContracts $true -PerformanceContractPath $CombinedContractPath
+	$CombinedEvidence = Get-Content -LiteralPath (Join-Path $CombinedContractRoot 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($CombinedEvidence.schema_version -eq 2 -and $CombinedEvidence.performance_contract.contract_sha256 -eq (Get-FileHash -LiteralPath $CombinedContractPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'Combined schema-v2 and performance-contract evidence must bind exact scenario and network-profile configuration identities.'
+	Write-Output 'PASS: opt-in performance capture and budget contract validates and publishes null-only unapproved summary evidence'
+
+	$PerformanceFailureCases = @(
+		@{ Name = 'wrong-schema-version'; Mutate = { param($C) $C.schema_version = 2 }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'string-schema-version'; Mutate = { param($C) $C.schema_version = '1' }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'fractional-schema-version'; Mutate = { param($C) $C.schema_version = 1.1 }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'boolean-schema-version'; Mutate = { param($C) $C.schema_version = $true }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'extra-top-level-field'; Mutate = { param($C) $C.extra = 'x' }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'missing-capture-field'; Mutate = { param($C) $C.capture.Remove('map') }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'numeric-capture-identity'; Mutate = { param($C) $C.capture.source_revision = 45 }; Failure = "capture 'source_revision' must be a JSON string" },
+		@{ Name = 'mismatched-map'; Mutate = { param($C) $C.capture.map = '/Game/Maps/OtherMap' }; Failure = "capture 'map' must equal" },
+		@{ Name = 'mismatched-duration'; Mutate = { param($C) $C.capture.duration_seconds = 2 }; Failure = 'duration_seconds must equal' },
+		@{ Name = 'mismatched-actor-mix'; Mutate = { param($C) $C.capture.actor_mix = 'network-authority.actor-mix.v2' }; Failure = "capture 'actor_mix' must equal" },
+		@{ Name = 'mismatched-profile'; Mutate = { param($C) $C.capture.profile_id = 'network-profile.clean' }; Failure = "capture 'profile_id' must equal" },
+		@{ Name = 'mismatched-network-config'; Mutate = { param($C) $C.capture.network_config_identity = 'network-emulation.other' }; Failure = "capture 'network_config_identity' must equal" },
+		@{ Name = 'mismatched-run-id'; Mutate = { param($C) $C.capture.run_id = 'fixture-performance-other-run' }; Failure = "capture 'run_id' must equal" },
+		@{ Name = 'unexpected-scenario-version'; Mutate = { param($C) $C.capture.scenario_version = 'fixture-v1' }; Failure = "capture 'scenario_version' must be null" },
+		@{ Name = 'unexpected-profile-version'; Mutate = { param($C) $C.capture.profile_version = 'fixture-v1' }; Failure = "capture 'profile_version' must be null" },
+		@{ Name = 'unexpected-profile-arguments-digest'; Mutate = { param($C) $C.capture.profile_arguments_sha256 = ('a' * 64) }; Failure = "capture 'profile_arguments_sha256' must be null" },
+		@{ Name = 'mismatched-environment'; Mutate = { param($C) $C.capture.environment = 'development' }; Failure = "capture 'environment' must equal" },
+		@{ Name = 'mismatched-source-revision'; Mutate = { param($C) $C.capture.source_revision = 'other-revision' }; Failure = "capture 'source_revision' must equal" },
+		@{ Name = 'mismatched-topology'; Mutate = { param($C) $C.capture.topology = 'other-topology' }; Failure = "capture 'topology' must equal" },
+		@{ Name = 'empty-evidence-references'; Mutate = { param($C) $C.capture.evidence_references = @() }; Failure = 'evidence_references must' },
+		@{ Name = 'duplicate-evidence-references'; Mutate = { param($C) $C.capture.evidence_references = @('evidence-ref.dup','evidence-ref.dup') }; Failure = 'evidence_references must' },
+		@{ Name = 'missing-network-domain'; Mutate = { param($C) $C.capture.measurement_domains.Remove('network') }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'incomplete-client-domain'; Mutate = { param($C) $C.capture.measurement_domains.client = @('client_memory_bytes') }; Failure = 'version-1 network-authority-runner' },
+		@{ Name = 'populated-tick-rate'; Mutate = { param($C) $C.capture.sampling.server_tick_hz = 30 }; Failure = 'must remain null' },
+		@{ Name = 'populated-capacity'; Mutate = { param($C) $C.capture.sampling.capacity_players = 32 }; Failure = 'must remain null' },
+		@{ Name = 'populated-target'; Mutate = { param($C) $C.budgets[0].target = 16 }; Failure = 'must remain null' },
+		@{ Name = 'populated-failure-threshold'; Mutate = { param($C) $C.budgets[1].failure_threshold = 100 }; Failure = 'must remain null' },
+		@{ Name = 'self-approved-budget'; Mutate = { param($C) $C.budgets[0].approval_status = 'approved' }; Failure = 'cannot self-approve' },
+		@{ Name = 'invented-classification'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'estimated' }; Failure = 'measured, modeled, hypothetical, or unset' },
+		@{ Name = 'fixture-measured-classification'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'measured'; $C.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log') }; Failure = 'measured classification requires packaged evidence mode' },
+		@{ Name = 'unset-with-references'; Mutate = { param($C) $C.budgets[0].evidence_references = @('evidence-ref.fixture-capture-log') }; Failure = 'unset classification must declare no evidence references' },
+		@{ Name = 'undeclared-evidence-reference'; Mutate = { param($C) $C.budgets[0].evidence_classification = 'modeled'; $C.budgets[0].evidence_references = @('evidence-ref.unknown') }; Failure = 'declared capture evidence references' },
+		@{ Name = 'duplicate-budget-metric'; Mutate = { param($C) $C.budgets[1].metric_id = $C.budgets[0].metric_id; $C.budgets[1].domain = $C.budgets[0].domain }; Failure = 'exactly one budget' },
+		@{ Name = 'missing-budget-metric'; Mutate = { param($C) $C.budgets = @($C.budgets | Select-Object -Skip 1) }; Failure = 'exactly one budget' },
+		@{ Name = 'unknown-budget-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'frames_per_second' }; Failure = 'Unsupported performance budget metric' },
+		@{ Name = 'case-variant-budget-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'CLIENT_MEMORY_BYTES' }; Failure = 'Unsupported performance budget metric' },
+		@{ Name = 'wrong-budget-domain'; Mutate = { param($C) $C.budgets[0].domain = 'server' }; Failure = 'domain must be' },
+		@{ Name = 'boolean-budget-domain'; Mutate = { param($C) $C.budgets[0].domain = $true }; Failure = 'domain must be a JSON string' },
+		@{ Name = 'numeric-measurement-method'; Mutate = { param($C) $C.budgets[0].measurement_method = 45 }; Failure = 'measurement_method must be a JSON string' },
+		@{ Name = 'mismatched-budget-scenario'; Mutate = { param($C) $C.budgets[0].scenario_id = 'network-authority.other.v1' }; Failure = 'scenario_id must equal' },
+		@{ Name = 'boolean-budget-owner'; Mutate = { param($C) $C.budgets[0].owner = $true }; Failure = 'owner must be a JSON string' },
+		@{ Name = 'numeric-evidence-classification'; Mutate = { param($C) $C.budgets[0].evidence_classification = 1 }; Failure = 'evidence_classification must be a JSON string' },
+		@{ Name = 'boolean-approval-status'; Mutate = { param($C) $C.budgets[0].approval_status = $true }; Failure = 'approval_status must be a JSON string' },
+		@{ Name = 'extra-budget-field'; Mutate = { param($C) $C.budgets[0].notes = 'x' }; Failure = 'unsupported or missing fields' }
+	)
+	foreach ($PerformanceFailureCase in $PerformanceFailureCases) {
+		$MutatedContract = Get-PerformanceContractObject
+		$FailureRunId = "fixture-performance-$($PerformanceFailureCase.Name)"
+		$MutatedContract.capture.run_id = $FailureRunId
+		& $PerformanceFailureCase.Mutate $MutatedContract
+		$MutatedContractPath = Join-Path $PerformanceContractRoot ("performance-$($PerformanceFailureCase.Name).json")
+		Write-PerformanceContract $MutatedContractPath $MutatedContract
+		$PerformanceFailure = $null
+		try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot ("performance-$($PerformanceFailureCase.Name)")) -FixtureRunId $FailureRunId -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $MutatedContractPath } catch { $PerformanceFailure = $_.Exception.Message }
+		Assert-True ($PerformanceFailure -match [regex]::Escape($PerformanceFailureCase.Failure)) "$($PerformanceFailureCase.Name) performance contract must fail closed before launch. Actual: $PerformanceFailure"
+	}
+	$DuplicatePerformancePropertyPath = Join-Path $PerformanceContractRoot 'performance-duplicate-property.json'
+	@'
+{ "schema_id": "aetheln.performance-capture-contract", "schema_version": 1, "schema_version": 1 }
+'@ | Set-Content -LiteralPath $DuplicatePerformancePropertyPath -Encoding UTF8
+	$DuplicatePerformanceFailure = $null
+	try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'performance-duplicate-property') -FixtureRunId 'fixture-performance-duplicate-property' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $DuplicatePerformancePropertyPath } catch { $DuplicatePerformanceFailure = $_.Exception.Message }
+	Assert-True ($DuplicatePerformanceFailure -match [regex]::Escape("duplicate JSON property 'schema_version'")) "A duplicate performance-contract JSON property must fail closed before launch. Actual: $DuplicatePerformanceFailure"
+	Write-Output 'PASS: malformed, duplicate, missing, extra, mismatched, populated, and self-approved performance contracts fail closed before launch'
 	$FixtureSucceeded = $true
 }
 finally {

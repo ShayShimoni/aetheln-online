@@ -72,7 +72,8 @@ enum class EAethelnSafeReason : uint8
 	ActivationBlocked,
 	NotImplemented,
 	InternalFailure,
-	ControlledShutdown
+	ControlledShutdown,
+	RateLimited
 };
 
 enum class EAethelnDiagnosticCode : uint8
@@ -188,6 +189,7 @@ inline bool IsKnown(EAethelnSafeReason Value)
 	case EAethelnSafeReason::NotImplemented:
 	case EAethelnSafeReason::InternalFailure:
 	case EAethelnSafeReason::ControlledShutdown:
+	case EAethelnSafeReason::RateLimited:
 		return true;
 	default:
 		return false;
@@ -274,6 +276,7 @@ inline const TCHAR* LexToString(EAethelnSafeReason Value)
 	case EAethelnSafeReason::NotImplemented: return TEXT("not-implemented");
 	case EAethelnSafeReason::InternalFailure: return TEXT("internal-failure");
 	case EAethelnSafeReason::ControlledShutdown: return TEXT("controlled-shutdown");
+	case EAethelnSafeReason::RateLimited: return TEXT("rate-limited");
 	default: return TEXT("unknown");
 	}
 }
@@ -439,7 +442,8 @@ struct GAMENET_API FAethelnObservabilityEvent
 		const bool bSubjectMatchesCategory = Category == EAethelnObservabilityCategory::Correction
 			? IsCorrectableSubject(SubjectCategory)
 			: (Category == EAethelnObservabilityCategory::Rejection || SubjectCategory == Category);
-		return SchemaId == AethelnObservability::SchemaId
+		// FString == ignores case, so schema identities compare case-sensitively.
+		return SchemaId.Equals(AethelnObservability::SchemaId, ESearchCase::CaseSensitive)
 			&& SchemaVersion == AethelnObservability::SchemaVersion
 			&& IsKnown(Category)
 			&& IsKnown(SubjectCategory)
@@ -448,7 +452,7 @@ struct GAMENET_API FAethelnObservabilityEvent
 			&& IsKnown(DiagnosticCode)
 			&& Correlation.IsValidForEvent(Category, SubjectCategory)
 			&& Build.HasSafeIdentifiers()
-			&& NetworkProfile.SchemaId == AethelnNetworkSpike::NetworkProfileSchemaId
+			&& NetworkProfile.SchemaId.Equals(AethelnNetworkSpike::NetworkProfileSchemaId, ESearchCase::CaseSensitive)
 			&& NetworkProfile.SchemaVersion == AethelnNetworkSpike::NetworkProfileSchemaVersion
 			&& !NetworkProfile.ProfileId.IsEmpty()
 			&& AethelnObservability::IsSafeIdentifier(NetworkProfile.ProfileId);

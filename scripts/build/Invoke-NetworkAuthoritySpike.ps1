@@ -28,6 +28,7 @@ param(
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $NetworkConfigIdentity,
 	[string] $NetworkProfileCatalogPath,
 	[string] $ScenarioContractPath,
+	[string] $PerformanceContractPath,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $RunId,
 	[Parameter(Mandatory)] [ValidateSet('local', 'development')] [string] $Environment,
 	[Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string] $SourceRevision,
@@ -60,6 +61,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:PerformanceContractMaximumBytes = 1MB
 
 # Compiled once at entry so a malformed -ErrorPattern fails before any
 # process starts. IgnoreCase reproduces the -match semantics this default
@@ -70,7 +72,9 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading.Tasks;
 
 public sealed class AethelnProcessOutputCapture : IDisposable
 {
@@ -107,6 +111,29 @@ public sealed class AethelnProcessOutputCapture : IDisposable
 		if (eventArgs.Data != null)
 		{
 			errorWriter.WriteLine(eventArgs.Data);
+		}
+	}
+
+	private static readonly ConditionalWeakTable<Process, Task> drains = new ConditionalWeakTable<Process, Task>();
+
+	// Process.WaitForExit(int) returns at process exit. Only the parameterless
+	// overload also waits for the redirected pipes to reach end-of-file, and it has
+	// no timeout: a surviving descendant that inherited the pipes blocks it forever.
+	// Each process gets one waiter that every later wait reuses: a second concurrent
+	// WaitForExit() races the first inside AsyncStreamReader.WaitUtilEOF() and can
+	// fault with a NullReferenceException.
+	// ponytail: a timed-out wait leaves its thread-pool thread blocked until the
+	// descendant exits; the runner is short-lived, so that thread is never reclaimed.
+	public static bool WaitForExitAndDrain(Process process, int milliseconds)
+	{
+		Task drain = drains.GetValue(process, p => Task.Run(() => p.WaitForExit()));
+		try
+		{
+			return drain.Wait(milliseconds);
+		}
+		catch (AggregateException exception)
+		{
+			throw exception.Flatten().InnerExceptions[0];
 		}
 	}
 
@@ -242,6 +269,21 @@ function Get-RuntimeError([string[]] $Paths) {
 	return $null
 }
 
+# Bounded replacement for the parameterless Process.WaitForExit(): waits for the
+# process to exit and for its redirected output pipes to close. A descendant that
+# outlives the process holds the pipes open, so the wait fails by name instead of
+# blocking the run. -ReportOnly is for callers that are already failing and only
+# want complete logs: it warns instead of replacing their primary failure.
+function Wait-ForProcessDrain([System.Diagnostics.Process] $Process, [string] $Description, [switch] $ReportOnly, [string] $DescendantProcessId) {
+	if ([AethelnProcessOutputCapture]::WaitForExitAndDrain($Process, $TimeoutSeconds * 1000)) { return }
+	# Stop the asynchronous readers that are being abandoned.
+	try { $Process.CancelOutputRead() } catch { Write-Verbose "Cancelling asynchronous standard-output capture failed after a drain timeout: $($_.Exception.Message)" }
+	try { $Process.CancelErrorRead() } catch { Write-Verbose "Cancelling asynchronous standard-error capture failed after a drain timeout: $($_.Exception.Message)" }
+	$Hint = if ($DescendantProcessId) { " (launcher-side server process $DescendantProcessId)" } else { '' }
+	$Message = "Timed out after $TimeoutSeconds seconds waiting for process $($Process.Id) ($Description) to exit and close its output pipes; a descendant process may still hold them$Hint."
+	if ($ReportOnly) { Write-Warning $Message } else { throw $Message }
+}
+
 function Wait-ForMatch([System.Diagnostics.Process] $Process, [string] $Path, [string] $ErrorPath, [string] $Description, [string] $Pattern) {
 	$Deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 	do {
@@ -253,7 +295,7 @@ function Wait-ForMatch([System.Diagnostics.Process] $Process, [string] $Path, [s
 		}
 		$Process.Refresh()
 		if ($Process.HasExited) {
-			$Process.WaitForExit()
+			Wait-ForProcessDrain $Process $Description -ReportOnly
 			throw "Process exited with code $($Process.ExitCode) while waiting for $Description. Review '$Path' and '$ErrorPath'."
 		}
 		Start-Sleep -Milliseconds 100
@@ -261,11 +303,11 @@ function Wait-ForMatch([System.Diagnostics.Process] $Process, [string] $Path, [s
 	throw "Timed out after $TimeoutSeconds seconds waiting for $Description in '$Path' (pattern '$Pattern')."
 }
 
-function Wait-ForSuccessfulProcessExit([System.Diagnostics.Process] $Process, [string] $Description) {
+function Wait-ForSuccessfulProcessExit([System.Diagnostics.Process] $Process, [string] $Description, [string] $DescendantProcessId) {
 	if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
 		throw "Timed out after $TimeoutSeconds seconds waiting for $Description."
 	}
-	$Process.WaitForExit()
+	Wait-ForProcessDrain $Process $Description -DescendantProcessId $DescendantProcessId
 	if ($Process.ExitCode -ne 0) {
 		throw "$Description exited with code $($Process.ExitCode)."
 	}
@@ -278,10 +320,10 @@ function Invoke-HiddenCommand([string] $Executable, [string[]] $Arguments, [stri
 	try {
 		if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
 			Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-			$Process.WaitForExit()
+			Wait-ForProcessDrain $Process $Description -ReportOnly
 			throw "Timed out after $TimeoutSeconds seconds waiting for $Description."
 		}
-		$Process.WaitForExit()
+		Wait-ForProcessDrain $Process $Description
 		if ($Process.ExitCode -ne 0) {
 			$ErrorText = if (Test-Path -LiteralPath $StandardErrorPath) { [string] (Get-Content -LiteralPath $StandardErrorPath -Raw -ErrorAction SilentlyContinue) } else { '' }
 			throw "$Description exited with code $($Process.ExitCode). Standard error: $ErrorText"
@@ -312,7 +354,7 @@ function Wait-ForRejection([System.Diagnostics.Process] $Process, [string] $Path
 		}
 		$Process.Refresh()
 		if ($Process.HasExited) {
-			$Process.WaitForExit()
+			Wait-ForProcessDrain $Process "rejection '$Category'" -ReportOnly
 			throw "Process exited with code $($Process.ExitCode) while waiting for rejection '$Category'. Review '$Path' and '$ErrorPath'."
 		}
 		Start-Sleep -Milliseconds 100
@@ -412,7 +454,7 @@ function Wait-ForObservationInterval {
 			if ($ErrorLine) { throw "Runtime '$($Required.Name)' reported an error during the observation interval: $ErrorLine" }
 			$Required.Process.Refresh()
 			if ($Required.Process.HasExited) {
-				$Required.Process.WaitForExit()
+				Wait-ForProcessDrain $Required.Process "required process '$($Required.Name)'" -ReportOnly
 				throw "Required process '$($Required.Name)' exited unexpectedly with code $($Required.Process.ExitCode) during the $Seconds-second observation interval. Review '$($Required.StandardOutputPath)' and '$($Required.StandardErrorPath)'."
 			}
 		}
@@ -544,6 +586,10 @@ function Assert-RecordToken([string] $Name, [string] $Value) {
 	if ($Value -notmatch '^\S+$') { throw "$Name must be one non-empty structured-record token without whitespace." }
 }
 
+function Assert-JsonString([string] $Name, [object] $Value) {
+	if ($Value -isnot [string]) { throw "$Name must be a JSON string." }
+}
+
 function Assert-ClosedProperty([object] $Value, [string[]] $Expected, [string] $Name) {
 	if ($null -eq $Value -or $null -eq $Value.PSObject) { throw "$Name must be one JSON object." }
 	$Actual = @($Value.PSObject.Properties.Name)
@@ -645,6 +691,103 @@ function Read-ContractJson([string] $Name, [string] $Path) {
 	}
 }
 
+function Read-ExactContractJsonRecord([string] $Name, [string] $Path) {
+	if ([string]::IsNullOrWhiteSpace($Path)) { throw "$Name path is required." }
+	if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "$Name '$Path' does not exist or is not a file." }
+	$Stream = $null
+	$MemoryStream = $null
+	$Reader = $null
+	$Hasher = $null
+	try {
+		$ResolvedPath = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+		$Stream = [System.IO.File]::Open(
+			$ResolvedPath,
+			[System.IO.FileMode]::Open,
+			[System.IO.FileAccess]::Read,
+			[System.IO.FileShare]::Read)
+		if ($Stream.Length -gt $script:PerformanceContractMaximumBytes) {
+			throw "$Name exceeds the $($script:PerformanceContractMaximumBytes)-byte input limit."
+		}
+		$Bytes = [byte[]]::new([int] $Stream.Length)
+		$Offset = 0
+		while ($Offset -lt $Bytes.Length) {
+			$ReadCount = $Stream.Read($Bytes, $Offset, $Bytes.Length - $Offset)
+			if ($ReadCount -le 0) { throw "$Name could not be read completely." }
+			$Offset += $ReadCount
+		}
+		$MemoryStream = [System.IO.MemoryStream]::new($Bytes, $false)
+		$StrictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+		$Reader = [System.IO.StreamReader]::new($MemoryStream, $StrictUtf8, $true, 1024, $false)
+		$Json = $Reader.ReadToEnd()
+		Assert-NoDuplicateJsonProperty -Json $Json
+		$Value = $Json | ConvertFrom-Json -ErrorAction Stop
+		$Hasher = [System.Security.Cryptography.SHA256]::Create()
+		$Sha256 = [System.BitConverter]::ToString($Hasher.ComputeHash($Bytes)).Replace('-', '').ToLowerInvariant()
+		return [pscustomobject]@{ Value = $Value; Bytes = $Bytes; Sha256 = $Sha256 }
+	}
+	catch {
+		throw "$Name is not valid JSON: $($_.Exception.Message)"
+	}
+	finally {
+		if ($null -ne $Hasher) { $Hasher.Dispose() }
+		if ($null -ne $Reader) { $Reader.Dispose() }
+		if ($null -ne $MemoryStream) { $MemoryStream.Dispose() }
+		if ($null -ne $Stream) { $Stream.Dispose() }
+	}
+}
+
+function Get-Sha256Stream([System.IO.Stream] $Stream) {
+	if ($null -eq $Stream -or -not $Stream.CanRead -or -not $Stream.CanSeek) { throw 'Exact contract artifact stream must remain readable and seekable.' }
+	$OriginalPosition = $Stream.Position
+	$Hasher = [System.Security.Cryptography.SHA256]::Create()
+	try {
+		$Stream.Position = 0
+		return [System.BitConverter]::ToString($Hasher.ComputeHash($Stream)).Replace('-', '').ToLowerInvariant()
+	}
+	finally {
+		$Stream.Position = $OriginalPosition
+		$Hasher.Dispose()
+	}
+}
+
+function Open-ExactContractArtifact([string] $Path, [byte[]] $Bytes, [string] $ExpectedSha256) {
+	$Stream = $null
+	try {
+		$Stream = [System.IO.FileStream]::new(
+			$Path,
+			[System.IO.FileMode]::CreateNew,
+			[System.IO.FileAccess]::ReadWrite,
+			[System.IO.FileShare]::Read,
+			4096,
+			[System.IO.FileOptions]::WriteThrough)
+		$Stream.Write($Bytes, 0, $Bytes.Length)
+		$Stream.Flush($true)
+		if ((Get-Sha256Stream -Stream $Stream) -cne $ExpectedSha256) { throw 'Exact contract artifact digest mismatch after create-only publication.' }
+		return $Stream
+	}
+	catch {
+		if ($null -ne $Stream) { $Stream.Dispose() }
+		throw
+	}
+}
+
+function Assert-ExactContractArtifact([System.IO.Stream] $Stream, [string] $Path, [string] $ExpectedSha256) {
+	$Stream.Flush($true)
+	if ((Get-Sha256Stream -Stream $Stream) -cne $ExpectedSha256) { throw 'Retained performance-contract handle no longer matches its validated digest.' }
+	$PathStream = $null
+	try {
+		$PathStream = [System.IO.FileStream]::new(
+			$Path,
+			[System.IO.FileMode]::Open,
+			[System.IO.FileAccess]::Read,
+			[System.IO.FileShare]::ReadWrite)
+		if ((Get-Sha256Stream -Stream $PathStream) -cne $ExpectedSha256) { throw 'Retained performance-contract path no longer matches its validated digest.' }
+	}
+	finally {
+		if ($null -ne $PathStream) { $PathStream.Dispose() }
+	}
+}
+
 function Assert-OpaqueArgument([string] $Name, [object] $Value) {
 	if ($null -eq $Value -or $Value -is [string] -or $Value -isnot [System.Collections.IEnumerable]) {
 		throw "$Name must be a JSON array of argument strings."
@@ -730,6 +873,153 @@ function Resolve-ScenarioContract([string] $Path) {
 		}
 	}
 	return $Contract
+}
+
+function Resolve-PerformanceContract([string] $Path) {
+	$ContractRecord = Read-ExactContractJsonRecord -Name 'PerformanceContract' -Path $Path
+	$Contract = $ContractRecord.Value
+	Assert-ClosedProperty -Value $Contract -Expected @('schema_id','schema_version','capture','budgets') -Name 'PerformanceContract'
+	Assert-JsonString -Name 'PerformanceContract schema_id' -Value $Contract.schema_id
+	if (($Contract.schema_version -isnot [int] -and $Contract.schema_version -isnot [long]) -or [long] $Contract.schema_version -ne 1) {
+		throw 'PerformanceContract schema_version must be the JSON integer 1.'
+	}
+	if ([string] $Contract.schema_id -cne 'aetheln.performance-capture-contract') {
+		throw 'PerformanceContract must use aetheln.performance-capture-contract schema version 1.'
+	}
+	$Capture = $Contract.capture
+	Assert-ClosedProperty -Value $Capture -Expected @('source_revision','build','toolchain','hardware','topology','environment','map','duration_seconds','actor_mix','scenario_id','profile_id','network_config_identity','run_id','scenario_version','profile_version','profile_arguments_sha256','evidence_references','measurement_domains','sampling') -Name 'PerformanceContract capture'
+	foreach ($IdentityEntry in @(
+		@('source_revision', $SourceRevision), @('build', $BuildIdentity), @('toolchain', $ToolchainIdentity),
+		@('hardware', $HardwareIdentity), @('topology', $TopologyIdentity), @('environment', $Environment),
+		@('map', $ServerMap), @('actor_mix', $ActorMixIdentity), @('scenario_id', $ScenarioId), @('profile_id', $ProfileId),
+		@('network_config_identity', $NetworkConfigIdentity), @('run_id', $RunId)
+	)) {
+		Assert-JsonString -Name "PerformanceContract capture '$($IdentityEntry[0])'" -Value $Capture.($IdentityEntry[0])
+		if ([string] $Capture.($IdentityEntry[0]) -cne [string] $IdentityEntry[1]) {
+			throw "PerformanceContract capture '$($IdentityEntry[0])' must equal the exact correlated runner identity."
+		}
+	}
+	foreach ($VersionEntry in @(
+		@('scenario_version', $ScenarioVersion),
+		@('profile_version', $ProfileVersion),
+		@('profile_arguments_sha256', $ProfileArgumentsSha256)
+	)) {
+		$FieldName = [string] $VersionEntry[0]
+		$ExpectedValue = $VersionEntry[1]
+		$ActualValue = $Capture.$FieldName
+		if ($null -eq $ExpectedValue) {
+			if ($null -ne $ActualValue) { throw "PerformanceContract capture '$FieldName' must be null when versioned scenario/profile contracts are omitted." }
+		} else {
+			Assert-JsonString -Name "PerformanceContract capture '$FieldName'" -Value $ActualValue
+			if ([string] $ActualValue -cne [string] $ExpectedValue) {
+				throw "PerformanceContract capture '$FieldName' must equal the exact selected scenario/profile identity."
+			}
+		}
+	}
+	if (($Capture.duration_seconds -isnot [int] -and $Capture.duration_seconds -isnot [long]) -or [long] $Capture.duration_seconds -ne $DurationSeconds) {
+		throw 'PerformanceContract capture duration_seconds must equal the exact DurationSeconds identity.'
+	}
+	$ReferenceFailure = 'PerformanceContract capture evidence_references must be a non-empty array of unique record tokens.'
+	$References = $Capture.evidence_references
+	if ($null -eq $References -or $References -is [string] -or $References -isnot [System.Collections.IEnumerable]) { throw $ReferenceFailure }
+	$ReferenceSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+	foreach ($Reference in @($References)) {
+		if ($Reference -isnot [string] -or [string] $Reference -notmatch '^\S+$' -or -not $ReferenceSet.Add([string] $Reference)) { throw $ReferenceFailure }
+	}
+	if ($ReferenceSet.Count -eq 0) { throw $ReferenceFailure }
+	$RequiredDomains = [ordered]@{
+		client = @('client_memory_bytes','correction_count','correction_magnitude_centimeters')
+		server = @('server_game_thread_milliseconds','server_replication_cpu_milliseconds','server_memory_bytes','relevant_actor_count','destruction_event_count')
+		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second')
+	}
+	Assert-ClosedProperty -Value $Capture.measurement_domains -Expected @('client','server','network') -Name 'PerformanceContract measurement_domains'
+	foreach ($DomainName in $RequiredDomains.Keys) {
+		$DeclaredMetrics = @($Capture.measurement_domains.$DomainName)
+		$ExpectedMetrics = @($RequiredDomains[$DomainName])
+		$DomainFailure = "PerformanceContract measurement_domains '$DomainName' must declare exactly the version-1 network-authority-runner ordered metrics."
+		if ($DeclaredMetrics.Count -ne $ExpectedMetrics.Count) { throw $DomainFailure }
+		for ($Index = 0; $Index -lt $ExpectedMetrics.Count; $Index++) {
+			if ($DeclaredMetrics[$Index] -isnot [string] -or [string] $DeclaredMetrics[$Index] -cne $ExpectedMetrics[$Index]) { throw $DomainFailure }
+		}
+	}
+	Assert-ClosedProperty -Value $Capture.sampling -Expected @('sampling_rate_hz','server_tick_hz','bandwidth_limit_kbps','capacity_players') -Name 'PerformanceContract sampling'
+	foreach ($SamplingField in @('sampling_rate_hz','server_tick_hz','bandwidth_limit_kbps','capacity_players')) {
+		if ($null -ne $Capture.sampling.$SamplingField) { throw "PerformanceContract sampling '$SamplingField' must remain null in this wave." }
+	}
+	$MetricDomains = [System.Collections.Generic.Dictionary[string,string]]::new([System.StringComparer]::Ordinal)
+	foreach ($DomainName in $RequiredDomains.Keys) {
+		foreach ($MetricId in $RequiredDomains[$DomainName]) { $MetricDomains.Add($MetricId, $DomainName) }
+	}
+	$Budgets = $Contract.budgets
+	if ($null -eq $Budgets -or $Budgets -is [string] -or $Budgets -isnot [System.Collections.IEnumerable]) {
+		throw 'PerformanceContract budgets must be a JSON array of budget records.'
+	}
+	$ClassificationCounts = [ordered]@{ measured = 0; modeled = 0; hypothetical = 0; unset = 0 }
+	$BudgetMetricIds = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+	foreach ($Budget in @($Budgets)) {
+		Assert-ClosedProperty -Value $Budget -Expected @('metric_id','domain','target','warning_threshold','failure_threshold','measurement_method','scenario_id','owner','evidence_references','evidence_classification','approval_status') -Name 'Performance budget'
+		Assert-JsonString -Name 'Performance budget metric_id' -Value $Budget.metric_id
+		$MetricId = [string] $Budget.metric_id
+		if (-not $MetricDomains.ContainsKey($MetricId)) { throw "Unsupported performance budget metric '$MetricId'." }
+		Assert-JsonString -Name "Performance budget '$MetricId' domain" -Value $Budget.domain
+		if ([string] $Budget.domain -cne $MetricDomains[$MetricId]) { throw "Performance budget '$MetricId' domain must be '$($MetricDomains[$MetricId])'." }
+		foreach ($ValueField in @('target','warning_threshold','failure_threshold')) {
+			if ($null -ne $Budget.$ValueField) { throw "Performance budget '$MetricId' $ValueField must remain null in this wave; populated values require measurement authority." }
+		}
+		Assert-JsonString -Name "Performance budget '$MetricId' measurement_method" -Value $Budget.measurement_method
+		Assert-RecordToken -Name "Performance budget '$MetricId' measurement_method" -Value ([string] $Budget.measurement_method)
+		Assert-JsonString -Name "Performance budget '$MetricId' scenario_id" -Value $Budget.scenario_id
+		if ([string] $Budget.scenario_id -cne $ScenarioId) { throw "Performance budget '$MetricId' scenario_id must equal ScenarioId." }
+		Assert-JsonString -Name "Performance budget '$MetricId' owner" -Value $Budget.owner
+		Assert-RecordToken -Name "Performance budget '$MetricId' owner" -Value ([string] $Budget.owner)
+		Assert-JsonString -Name "Performance budget '$MetricId' evidence_classification" -Value $Budget.evidence_classification
+		$Classification = [string] $Budget.evidence_classification
+		if ($Classification -cnotin @('measured','modeled','hypothetical','unset')) {
+			throw "Performance budget '$MetricId' evidence_classification must be measured, modeled, hypothetical, or unset."
+		}
+		if ($Classification -ceq 'measured' -and $EvidenceMode -cne 'packaged') {
+			throw "Performance budget '$MetricId' measured classification requires packaged evidence mode."
+		}
+		Assert-JsonString -Name "Performance budget '$MetricId' approval_status" -Value $Budget.approval_status
+		if ([string] $Budget.approval_status -cne 'unapproved') {
+			throw "Performance budget '$MetricId' must remain 'unapproved'; contracts cannot self-approve budgets."
+		}
+		$BudgetReferences = $Budget.evidence_references
+		if ($null -eq $BudgetReferences -or $BudgetReferences -is [string] -or $BudgetReferences -isnot [System.Collections.IEnumerable]) {
+			throw "Performance budget '$MetricId' evidence_references must be a JSON array."
+		}
+		$BudgetReferenceValues = @($BudgetReferences)
+		if ($Classification -ceq 'unset') {
+			if ($BudgetReferenceValues.Count -ne 0) { throw "Performance budget '$MetricId' with unset classification must declare no evidence references." }
+		} else {
+			if ($BudgetReferenceValues.Count -eq 0) { throw "Performance budget '$MetricId' must reference only declared capture evidence references." }
+			foreach ($Reference in $BudgetReferenceValues) {
+				if ($Reference -isnot [string] -or -not $ReferenceSet.Contains([string] $Reference)) {
+					throw "Performance budget '$MetricId' must reference only declared capture evidence references."
+				}
+			}
+		}
+		$ClassificationCounts[$Classification] = 1 + [int] $ClassificationCounts[$Classification]
+		if (-not $BudgetMetricIds.Add($MetricId)) { throw 'PerformanceContract budgets must declare exactly one budget for every version-1 network-authority-runner metric.' }
+	}
+	foreach ($MetricId in $MetricDomains.Keys) {
+		if (-not $BudgetMetricIds.Contains($MetricId)) { throw 'PerformanceContract budgets must declare exactly one budget for every version-1 network-authority-runner metric.' }
+	}
+	return [pscustomobject]@{
+		Summary = [ordered]@{
+			schema_id = 'aetheln.performance-capture-contract'
+			schema_version = 1
+			contract_sha256 = $ContractRecord.Sha256
+			contract_artifact = 'performance-contract.json'
+			measurement_domains = [ordered]@{ client = @($RequiredDomains.client); server = @($RequiredDomains.server); network = @($RequiredDomains.network) }
+			budget_count = @($Budgets).Count
+			targets_defined = $false
+			approval_status = 'unapproved'
+			evidence_reference_count = $ReferenceSet.Count
+			classification_counts = $ClassificationCounts
+		}
+		Bytes = $ContractRecord.Bytes
+	}
 }
 
 function Resolve-ProvenanceArchiveRoot([string] $Name, [string] $Path) {
@@ -889,6 +1179,14 @@ if ($script:UseScenarioContract) {
 	} | ConvertTo-Json -Depth 4 -Compress
 	$ProfileArgumentsSha256 = Get-Sha256Text $ProfileArgumentsJson
 }
+$script:PerformanceContractRecord = if ($PSBoundParameters.ContainsKey('PerformanceContractPath')) {
+	if ([string]::IsNullOrWhiteSpace($PerformanceContractPath)) {
+		throw 'PerformanceContractPath must not be empty or whitespace when supplied.'
+	}
+	Resolve-PerformanceContract -Path $PerformanceContractPath
+} else {
+	$null
+}
 
 if ($EvidenceMode -ceq 'packaged' -and $Environment -cne 'development') { throw 'Packaged authority evidence must use the development environment.' }
 if ($ServerLauncherExecutable) {
@@ -1009,6 +1307,13 @@ $CurrentProcessRole = 'server'
 $CurrentClientId = $null
 $CleanupAttempted = $false
 $CleanupSucceeded = $null
+$PerformanceContractArtifactPath = if ($script:PerformanceContractRecord) { Join-Path $ResolvedLogs $script:PerformanceContractRecord.Summary.contract_artifact } else { $null }
+$PerformanceContractArtifactStream = if ($script:PerformanceContractRecord) {
+	Open-ExactContractArtifact `
+		-Path $PerformanceContractArtifactPath `
+		-Bytes ([byte[]] $script:PerformanceContractRecord.Bytes) `
+		-ExpectedSha256 ([string] $script:PerformanceContractRecord.Summary.contract_sha256)
+} else { $null }
 
 try {
 	$CurrentStage = 'server-start'
@@ -1146,7 +1451,7 @@ try {
 	$CurrentProcessRole = 'client-1'
 	$CurrentClientId = 'client-1'
 	Stop-Process -Id $ClientProcesses['client-1'].Id -Force
-	$ClientProcesses['client-1'].WaitForExit()
+	Wait-ForProcessDrain $ClientProcesses['client-1'] 'client-1'
 	@($Processes | Where-Object { $_.Role -ceq 'client-1' })[0].TerminationState = 'runner-terminated'
 	$DisconnectLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'disconnect cleanup' -Pattern (Expand-Pattern $DisconnectPattern 'client-1')
 	$Lifecycle.Add((ConvertTo-Observation -EventName 'disconnect' -Source $ServerStdOut -Detail $DisconnectLine -ClientId 'client-1'))
@@ -1254,7 +1559,7 @@ try {
 		$CurrentProcessRole = 'server'
 		$CurrentClientId = $null
 		$ShutdownLine = Wait-ForMatch -Process $ServerProcess -Path $ServerStdOut -ErrorPath $ServerStdErr -Description 'controlled shutdown' -Pattern (Expand-Pattern $ShutdownPattern 'server')
-		[void] (Wait-ForSuccessfulProcessExit $ServerProcess 'authoritative server exit after controlled shutdown')
+		[void] (Wait-ForSuccessfulProcessExit $ServerProcess 'authoritative server exit after controlled shutdown' -DescendantProcessId $ServerDescendantProcessId)
 		$ServerHandle.TerminationState = 'exited'
 		$Lifecycle.Add((ConvertTo-Observation -EventName 'shutdown' -Source $ServerStdOut -Detail $ShutdownLine))
 		$ScenarioLifecycle.Add((ConvertTo-ScenarioStage -Ordinal 7 -Stage 'shutdown' -AuthoritativeResult 'shutdown-complete' -ProcessRole 'server' -Source $ServerStdOut -Detail $ShutdownLine))
@@ -1321,7 +1626,7 @@ finally {
 			if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
 				throw "Timed out after $TimeoutSeconds seconds waiting for runtime process '$($Handle.Role)' cleanup."
 			}
-			$Process.WaitForExit()
+			Wait-ForProcessDrain $Process "runtime process '$($Handle.Role)'" -DescendantProcessId $(if ($Handle.Role -ceq 'server') { $ServerDescendantProcessId })
 			if (-not $Handle.TerminationState) { $Handle.TerminationState = 'exited' }
 			try { $Process.CancelOutputRead() } catch { Write-Verbose "Cancelling asynchronous standard-output capture failed during runtime cleanup: $($_.Exception.Message)" }
 			try { $Process.CancelErrorRead() } catch { Write-Verbose "Cancelling asynchronous standard-error capture failed during runtime cleanup: $($_.Exception.Message)" }
@@ -1361,6 +1666,24 @@ finally {
 			$FailureStage = $CurrentStage
 			$FailureProcessRole = $CurrentProcessRole
 			$FailureClientId = $CurrentClientId
+			$Result = 'failed'
+		}
+	}
+	if ($script:PerformanceContractRecord) {
+		try {
+			Assert-ExactContractArtifact `
+				-Stream $PerformanceContractArtifactStream `
+				-Path $PerformanceContractArtifactPath `
+				-ExpectedSha256 ([string] $script:PerformanceContractRecord.Summary.contract_sha256)
+		}
+		catch {
+			if (-not $PostCaptureValidationFailure) { $PostCaptureValidationFailure = $_.Exception.Message }
+			if (-not $Failure) {
+				$Failure = $_.Exception.Message
+				$FailureStage = 'performance-contract-retention'
+				$FailureProcessRole = 'runner'
+				$FailureClientId = $null
+			}
 			$Result = 'failed'
 		}
 	}
@@ -1444,7 +1767,13 @@ finally {
 		$Evidence.process_outcomes = if (-not $Failure -and -not $CleanupFailure) { @($ProcessOutcomes) } else { $null }
 		$Evidence.cleanup = [ordered]@{ attempted = $CleanupAttempted; succeeded = $CleanupSucceeded; failure = $PublishedCleanupFailure }
 	}
-	$Evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
+	if ($script:PerformanceContractRecord) { $Evidence.performance_contract = $script:PerformanceContractRecord.Summary }
+	try {
+		$Evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
+	}
+	finally {
+		if ($null -ne $PerformanceContractArtifactStream) { $PerformanceContractArtifactStream.Dispose() }
+	}
 	if ($PostCaptureValidationFailure) { throw "Post-capture evidence validation failed: $PostCaptureValidationFailure" }
 	if ($CleanupFailure -and $FailureStage -ceq 'cleanup') { throw "Server cleanup failed: $CleanupFailure" }
 }

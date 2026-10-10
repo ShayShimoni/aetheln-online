@@ -33,6 +33,13 @@ workflow job bound, and a report cannot be preserved if the platform kills the
 job before this script starts. Handoff directories are never deleted here; eligible
 directories are only listed in cleanup-request records for external
 operational cleanup.
+.PARAMETER BuildNumber
+Optional release build number, accepted only with -Mode ValidateProvenance
+(build_number_mode_invalid otherwise) and validated as a positive integer of at
+most ten digits without a leading zero (build_number_invalid) before any phase
+work. The supervisor forwards it to the supervised child, which hands it to
+Build-PackagedArtifacts.ps1 -Stage Provenance. It never enters the gate report,
+and without it every invocation is unchanged.
 #>
 [CmdletBinding()]
 param(
@@ -45,6 +52,11 @@ param(
 	[string] $RunId,
 	[string] $RunAttempt,
 	[string] $RunnerName,
+	[string] $BuildNumber,
+	[ValidateSet('Stock', 'CleanTargetsPrebuiltPrograms')] [string] $PackageRecipe = 'Stock',
+	[string] $HostProgramSupplementPath,
+	[string] $HostProgramSupplementSha256,
+	[ValidateRange(1, 4)] [int] $PackageActionLimit = 1,
 	[string] $ManagedWorkspaceRoot,
 	[string] $ManagedWorkspaceRegistrationPath,
 	[string] $ManagedWorkspaceRegistrationSha256,
@@ -65,9 +77,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../build/PackagingRecipeProof.ps1')
+$PackageRecipeEvidence = $null
+$PackageActionLimitRequested = $PSBoundParameters.ContainsKey('PackageActionLimit')
 
 $Started = [DateTime]::UtcNow
 $ExplicitReportRequested = $PSBoundParameters.ContainsKey('ReportPath')
+$BuildNumberRequested = $PSBoundParameters.ContainsKey('BuildNumber')
 $CompileSupervisorContext = Get-Variable -Name AethelnCompileGateContext -Scope Global -ValueOnly -ErrorAction SilentlyContinue
 $IsCompileChild = $Mode -eq 'Compile' -and $null -ne $CompileSupervisorContext
 if ($IsCompileChild) { $Started = [DateTime]::Parse($CompileSupervisorContext.startedUtc).ToUniversalTime() }
@@ -80,6 +96,9 @@ $RoutineResourceMonitor = $null
 $RoutineDeadline = $null
 $ManagedCompile = $PSBoundParameters.ContainsKey('ManagedWorkspaceRoot')
 $CompileDeadlineUtc = [DateTime]::MaxValue
+# Provisional fixed minimum (not a tuning result): a checkout cut off by the
+# deadline can leave the managed workspace half-updated (issue #243).
+$ManagedWorkspaceMinimumSyncMilliseconds = 300000
 $Checks = New-Object System.Collections.ArrayList
 $RequiredFailed = $false
 $SupervisedChildExited = $false
@@ -577,6 +596,7 @@ function Write-RunnerReport {
 		}
 		compileEvidence = $(if ($null -eq $CompileEvidenceIdentity) { $null } else { [ordered]@{ schemaVersion = 1; identity = $CompileEvidenceIdentity; builds = @($CompileBuilds) } })
 	}
+	if ($PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms') { $Report['packageRecipeEvidence'] = $PackageRecipeEvidence }
 	if ($null -ne $RelayedReport) {
 		$Report = $RelayedReport
 		# Parent-owned failures (including lease release) cannot disappear behind
@@ -1415,7 +1435,7 @@ function Test-PhaseReportNumber($Value) {
 	return -not [double]::IsNaN($Number) -and -not [double]::IsInfinity($Number) -and $Number -ge 0
 }
 
-function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [string] $ExpectedRevision, [string] $ExpectedRunnerName) {
+function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [string] $ExpectedRevision, [string] $ExpectedRunnerName, [string] $ExpectedRecipe = 'Stock', [string] $ExpectedSupplementHash = '') {
 	# The child report is private input to the outer supervisor, not published
 	# evidence. Bound and validate its exact producer schema before any field can
 	# reach the final report. A nominal result is not trusted merely because it
@@ -1429,10 +1449,12 @@ function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [str
 		Assert-UniqueJsonProperty $Raw 'phase_report_invalid'
 		$ConvertFromJson = Get-Command ConvertFrom-Json -CommandType Cmdlet -ErrorAction Stop
 		$Report = if ($ConvertFromJson.Parameters.ContainsKey('DateKind')) { $Raw | ConvertFrom-Json -DateKind String } else { $Raw | ConvertFrom-Json }
-		Assert-ExactPhaseReportObject $Report @(
+		$ReportFields = @(
 			'schemaVersion', 'mode', 'policy', 'revision', 'runnerName', 'startedUtc',
 			'finishedUtc', 'checks', 'summary', 'compileEvidence'
 		)
+		if ($ExpectedRecipe -ceq 'CleanTargetsPrebuiltPrograms') { $ReportFields += 'packageRecipeEvidence' }
+		Assert-ExactPhaseReportObject $Report $ReportFields
 		if ($Report.schemaVersion -isnot [int] -or $Report.schemaVersion -ne 1 -or
 			@('PackageClient', 'PackageServer', 'ValidateProvenance', 'SmokePhase') -cnotcontains $ExpectedMode -or
 			$Report.mode -isnot [string] -or $Report.mode -cne $ExpectedMode -or
@@ -1460,6 +1482,14 @@ function Read-PhaseSupervisorReport([string] $Path, [string] $ExpectedMode, [str
 			$Counts[$Check.status]++
 		}
 		$Counts.requiredFailed = $Counts.failed
+		if ($ExpectedRecipe -ceq 'CleanTargetsPrebuiltPrograms') {
+			$Evidence = $Report.packageRecipeEvidence
+			if ($null -eq $Evidence) { if ($Counts.failed -eq 0) { throw 'phase_report_invalid' } }
+			else {
+				Assert-ExactPhaseReportObject $Evidence @('id', 'baseAttestationSha256', 'supplementSha256', 'payloadSha256')
+				if ($Evidence.id -isnot [string] -or $Evidence.baseAttestationSha256 -isnot [string] -or $Evidence.supplementSha256 -isnot [string] -or $Evidence.payloadSha256 -isnot [string] -or $Evidence.id -cne 'clean-targets-prebuilt-programs-v1' -or $Evidence.baseAttestationSha256 -cne 'a457da4e14808b85d5cc1439a920abfce114ec961e313c2684fdd57ba9385d95' -or $Evidence.supplementSha256 -cne $ExpectedSupplementHash -or $Evidence.payloadSha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'phase_report_invalid' }
+			}
+		}
 		Assert-ExactPhaseReportObject $Report.summary @('total', 'passed', 'failed', 'skipped', 'requiredFailed')
 		foreach ($Name in $Counts.Keys) {
 			$Value = $Report.summary.$Name
@@ -1616,6 +1646,13 @@ function Invoke-PhaseSupervisor {
 		PhaseSupervisorNonce = $SupervisorNonce
 		PhaseSupervisorParentProcessId = $SupervisorParentProcessId
 		PhaseSupervisorParentStartTicks = $SupervisorParentStartTicks
+	}
+	if ($BuildNumberRequested) { $ChildParameters['BuildNumber'] = $BuildNumber }
+	if ($PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms') {
+		$ChildParameters['PackageRecipe'] = $PackageRecipe
+		$ChildParameters['HostProgramSupplementPath'] = $HostProgramSupplementPath
+		$ChildParameters['HostProgramSupplementSha256'] = $HostProgramSupplementSha256
+		if ($PackageActionLimitRequested) { $ChildParameters['PackageActionLimit'] = [string] $PackageActionLimit }
 	}
 	$ChildParameters['ReportPath'] = $ChildReportPath
 	$BoundedGraceSeconds = [Math]::Min([Math]::Max($PhaseFinalizeGraceSeconds, 1), 600)
@@ -1798,7 +1835,25 @@ function Invoke-HandoffConsumeSet([string] $ConsumeRunDirectory, [string[]] $Pha
 	return $Directories
 }
 
+function Set-PackageProvenanceEvidence {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Sets only the in-memory validated recipe evidence value required by this phase; it changes no external artifact.')]
+	param([string] $Path)
+	if ((Get-Item -LiteralPath $Path).Length -gt 8MB) { Stop-PackageRecipe 'json_bound' }
+	$Provenance = ConvertFrom-PackageProofJson ([IO.File]::ReadAllText($Path))
+	Assert-PackageRecipeProvenance $Provenance
+	$Recipe = Get-PackageProofMember $Provenance.build 'packageRecipe'
+	if ($null -eq $Recipe -or $Recipe.supplementSha256 -cne $HostProgramSupplementSha256) { Stop-PackageRecipe 'proof_missing' }
+	$Run = [ordered]@{ repository = $Repository; runId = $RunId; runAttempt = $RunAttempt; runnerName = $RunnerName }
+	if (($Recipe.client.runIdentity | ConvertTo-Json -Compress) -cne ($Run | ConvertTo-Json -Compress)) { Stop-PackageRecipe 'identity_invalid' }
+	Assert-PackageRecipePayloads $Provenance (Split-Path -Parent $Provenance.artifacts.clientArchive) (Split-Path -Parent $Provenance.artifacts.serverArchive)
+	$script:PackageRecipeEvidence = [ordered]@{ id = $Recipe.id; baseAttestationSha256 = $Recipe.baseAttestationSha256; supplementSha256 = $Recipe.supplementSha256; payloadSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+}
+
 try {
+	if ($PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms') {
+		if ($PackageActionLimitRequested -and $Mode -cnotin @('PackageClient', 'PackageServer')) { Stop-PackageRecipe 'selection_invalid' }
+		if ($Mode -cnotin @('PackageClient', 'PackageServer', 'ValidateProvenance', 'SmokePhase') -or [string]::IsNullOrWhiteSpace($HostProgramSupplementPath) -or $HostProgramSupplementSha256 -cnotmatch '^[0-9a-f]{64}$') { Stop-PackageRecipe 'selection_invalid' }
+	} elseif ($PackageActionLimitRequested -or -not [string]::IsNullOrWhiteSpace($HostProgramSupplementPath) -or -not [string]::IsNullOrWhiteSpace($HostProgramSupplementSha256)) { Stop-PackageRecipe 'selection_invalid' }
 	if (($ManagedCompile -and $Mode -ne 'Compile') -or
 		(-not $ManagedCompile -and (-not [string]::IsNullOrWhiteSpace($HostLeasePath) -or
 			-not [string]::IsNullOrWhiteSpace($ManagedWorkspaceRegistrationPath) -or
@@ -1846,6 +1901,15 @@ try {
 		Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-phase-supervisor-authentication' -Message 'phase_supervisor_auth_invalid'
 		throw 'phase_supervisor_auth_invalid'
 	}
+	if ($BuildNumberRequested) {
+		# Decided before any mode-specific work, so no mode other than
+		# ValidateProvenance can start with a build number.
+		$BuildNumberFailure = if ($Mode -ne 'ValidateProvenance') { 'build_number_mode_invalid' } elseif ($BuildNumber -cnotmatch '^[1-9][0-9]{0,9}\z') { 'build_number_invalid' } else { $null }
+		if ($BuildNumberFailure) {
+			Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-build-number' -Message $BuildNumberFailure
+			throw $BuildNumberFailure
+		}
+	}
 	if ($Mode -eq 'Compile') {
 		if ([double]::IsNaN($CompileTimeoutMinutes) -or [double]::IsInfinity($CompileTimeoutMinutes) -or $CompileTimeoutMinutes -le 0 -or $CompileTimeoutMinutes -gt 30) {
 			Add-Check -Name 'runner-input-validation' -Status 'failed' -CheckStarted $Started -Command 'validate-runner-inputs' -Message 'compile_timeout_invalid'
@@ -1883,12 +1947,16 @@ try {
 			$Registered = $ManagedRegistration.record
 			# Authorization comes from the separately registered operator tuple;
 			# this is not endpoint/filter/hook certification by candidate code.
+			# The closure binds this script's values: invoked inside
+			# Sync-ManagedCompileWorkspace, an unbound block would read that
+			# function's own ControlRoot/SourceRevision parameters instead.
 			$TrustRegisteredWorkspace = {
 				param($ProposedControl, $ProposedTarget, $ProposedRepository, $ProposedRevision)
-				return ($ProposedControl -ceq $ControlRoot -and
+				return ([string]::Equals([IO.Path]::GetFullPath($ProposedControl).TrimEnd('\', '/'), [IO.Path]::GetFullPath($ControlRoot).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -and
 					[string]::Equals([IO.Path]::GetFullPath($ProposedTarget).TrimEnd('\', '/'), [IO.Path]::GetFullPath($Registered.targetRoot).TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase) -and
 					$ProposedRepository -ceq $Registered.repository -and $ProposedRevision -ceq $SourceRevision)
-			}
+			}.GetNewClosure()
+			if ((Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline) -lt $ManagedWorkspaceMinimumSyncMilliseconds) { throw 'managed_workspace_time_insufficient' }
 			$null = Sync-ManagedCompileWorkspace -ControlRoot $ControlRoot -TargetRoot $ManagedWorkspaceRoot -SourceRevision $SourceRevision -Repository $Repository -ExpectedGitCommonDirectory $Registered.gitCommonDirectory -DeadlineUtc $CompileDeadlineUtc -RemainingBudget { Get-RoutineCompileRemainingMillisecondCount -Deadline $RoutineDeadline } -AssertRepositoryTrust $TrustRegisteredWorkspace -OnProgress { Assert-RoutineCompileProgress }
 			$ResolvedRepository = Resolve-RequiredDirectory $ManagedWorkspaceRoot 'managed_workspace_root_invalid'
 			$ManagedWorkspaceEvidence = [ordered]@{ schemaVersion = 1; registrationId = $Registered.registrationId;
@@ -1998,8 +2066,12 @@ try {
 					$ForbiddenFull = [System.IO.Path]::GetFullPath($Forbidden)
 					if ((Test-IsWithin $AttestationFull $ForbiddenFull) -or (Test-IsWithin $ForbiddenFull $AttestationFull)) { throw 'host_tools_attestation_invalid' }
 				}
-				$HostToolsArguments = @{ HostToolsBoundary = 'Prebuilt'; EngineRevision = $EngineRevisionValue.ToLowerInvariant(); HostToolsAttestationPath = $AttestationFull }
-				Add-Check -Name 'host-tools-configuration' -Status 'passed' -CheckStarted $HostToolsStarted -Command 'resolve-host-tools-configuration' -Message 'host_tools_prebuilt'
+				# Issue #267 (TA-014 amendment): the report carries the SHA-256 of the
+				# record's bytes, never its path, and the controller fails closed unless
+				# the bytes it reads once hash to the same value.
+				try { $AttestationSha256 = (Get-FileHash -LiteralPath $AttestationFull -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() } catch { throw 'host_tools_attestation_invalid' }
+				$HostToolsArguments = @{ HostToolsBoundary = 'Prebuilt'; EngineRevision = $EngineRevisionValue.ToLowerInvariant(); HostToolsAttestationPath = $AttestationFull; HostToolsAttestationSha256 = $AttestationSha256 }
+				Add-Check -Name 'host-tools-configuration' -Status 'passed' -CheckStarted $HostToolsStarted -Command 'resolve-host-tools-configuration' -Message ('host_tools_prebuilt attestation_sha256=' + $AttestationSha256)
 			} else { throw 'host_tools_invalid' }
 		} catch {
 			$Reason = [string] $_.Exception.Message
@@ -2036,7 +2108,7 @@ try {
 			throw $HardReason
 		}
 		try {
-			$ChildReport = Read-PhaseSupervisorReport -Path ([string] $SupervisorResult.childReportPath) -ExpectedMode $Mode -ExpectedRevision $SourceRevision -ExpectedRunnerName $RunnerName
+			$ChildReport = Read-PhaseSupervisorReport -Path ([string] $SupervisorResult.childReportPath) -ExpectedMode $Mode -ExpectedRevision $SourceRevision -ExpectedRunnerName $RunnerName -ExpectedRecipe $PackageRecipe -ExpectedSupplementHash $HostProgramSupplementSha256
 			$ChildFailed = [long] $ChildReport.summary.requiredFailed -gt 0
 			if (($SupervisorResult.exitCode -eq 0 -and $ChildFailed) -or ($SupervisorResult.exitCode -ne 0 -and -not $ChildFailed)) { throw 'phase_report_invalid' }
 			$script:RelayedReport = $ChildReport
@@ -2209,6 +2281,14 @@ try {
 		}
 		if ($null -ne $DdcRoot) { $PhaseParameters['DerivedDataCachePath'] = $DdcRoot; $PhaseParameters['CacheFallback'] = $DdcFallback }
 		foreach ($HostToolsKey in @($HostToolsArguments.Keys)) { $PhaseParameters[$HostToolsKey] = $HostToolsArguments[$HostToolsKey] }
+		if ($PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms') {
+			$PhaseParameters['PackageRecipe'] = $PackageRecipe
+			$PhaseParameters['HostProgramSupplementPath'] = $HostProgramSupplementPath
+			$PhaseParameters['HostProgramSupplementSha256'] = $HostProgramSupplementSha256
+			if ($PackageActionLimitRequested) { $PhaseParameters['PackageActionLimit'] = $PackageActionLimit }
+			$PhaseParameters['PackageRunIdentityJson'] = [ordered]@{ repository = $Repository; runId = $RunId; runAttempt = $RunAttempt; runnerName = $RunnerName } | ConvertTo-Json -Compress
+			$PhaseParameters['PackageDeadlineUtc'] = $script:PhaseDeadlineUtc.ToString('o')
+		}
 		$BuildStarted = [DateTime]::UtcNow
 		$PhaseResult = Invoke-PhaseChildWithinDeadline (ConvertTo-NamedInvocationText $BuildScript $PhaseParameters)
 		Add-CompileBuildEvidence -Check $CheckName -Target $StageTarget -Platform $StagePlatform -Presence $Presence -Output $PhaseResult.output -OutputAvailable (-not $PhaseResult.timedOut)
@@ -2225,6 +2305,12 @@ try {
 			Add-Check -Name $CheckName -Status 'passed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message 'build_passed'
 		}
 		Complete-CommandStateCheck ('repository-state-after-{0}-package' -f $PhaseName) $BuildFailure
+		if ($PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms') {
+			$ProofPath = Join-Path $PhaseDirectory 'Proof/phase-proof.json'
+			$Proof = ConvertFrom-PackageProofJson ([IO.File]::ReadAllText($ProofPath))
+			Assert-PackageCleanPhaseProof $Proof $PhaseName $SourceRevision $HostToolsArguments.HostToolsAttestationSha256 $HostProgramSupplementSha256
+			$script:PackageRecipeEvidence = [ordered]@{ id = 'clean-targets-prebuilt-programs-v1'; baseAttestationSha256 = $Proof.hostProof.baseAttestationSha256; supplementSha256 = $Proof.hostProof.supplementSha256; payloadSha256 = (Get-FileHash -LiteralPath $ProofPath -Algorithm SHA256).Hash.ToLowerInvariant() }
+		}
 
 		Invoke-HandoffPublish -PublishRunDirectory $RunDirectory -Phase $PhaseName -Consumers @('provenance', 'smoke')
 		Assert-RepositoryState 'repository-state-at-completion'
@@ -2250,6 +2336,12 @@ try {
 			ClientStageRoot = $ClientDirectory
 			ServerStageRoot = $ServerDirectory
 		}
+		if ($BuildNumberRequested) { $PhaseParameters['BuildNumber'] = $BuildNumber }
+		if ($PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms') {
+			$PhaseParameters['PackageRecipe'] = $PackageRecipe
+			$PhaseParameters['PackageRunIdentityJson'] = [ordered]@{ repository = $Repository; runId = $RunId; runAttempt = $RunAttempt; runnerName = $RunnerName } | ConvertTo-Json -Compress
+			$PhaseParameters['PackageDeadlineUtc'] = $script:PhaseDeadlineUtc.ToString('o')
+		}
 		$BuildStarted = [DateTime]::UtcNow
 		$PhaseResult = Invoke-PhaseChildWithinDeadline (ConvertTo-NamedInvocationText $BuildScript $PhaseParameters)
 		$BuildFailure = $null
@@ -2265,11 +2357,13 @@ try {
 			Add-Check -Name 'registry-provenance-validation' -Status 'passed' -CheckStarted $BuildStarted -Command 'Build-PackagedArtifacts.ps1' -Message 'validation_passed'
 		}
 		Complete-CommandStateCheck 'repository-state-after-provenance-validation' $BuildFailure
+		if ($PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms') { Set-PackageProvenanceEvidence (Join-Path $PhaseDirectory 'build-provenance.json') }
 
 		Invoke-HandoffPublish -PublishRunDirectory $RunDirectory -Phase $PhaseName -Consumers @('smoke')
 		Assert-RepositoryState 'repository-state-at-completion'
 	} else {
 		[void] (Invoke-HandoffConsumeSet -ConsumeRunDirectory $RunDirectory -Phases @('client', 'server', 'provenance') -ConsumingPhase 'smoke')
+		if ($PackageRecipe -ceq 'CleanTargetsPrebuiltPrograms') { Set-PackageProvenanceEvidence (Join-Path $RunDirectory 'provenance/build-provenance.json') }
 
 		$SmokeFailure = Invoke-SmokeGateWork $RunDirectory $script:PhaseDeadlineUtc
 		# Marker, cleanup-request, and report finalization run after the
