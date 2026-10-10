@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aetheln Image Generation"
+  short_description: "Polished 3D art with approved Aetheln references"
+  default_prompt: "Use $aetheln-imagegen to generate or refine this Aetheln asset following the art guide and its selected design references."

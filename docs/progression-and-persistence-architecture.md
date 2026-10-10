@@ -118,8 +118,11 @@ than a shared list of nullable fields:
   engraving, and inlay. Skin tone denotes their surface tone; glow remains
   within the authored presentation envelope rather than a power or combat
   input. Alternate mineral families and glow hues remain product TBDs.
-- Vesh store hair, veil form, veil adornment, inner-light hue, and light
-  pattern.
+- Vesh store hair style, coat texture, white-fur pattern, and face-surface
+  finish. Skin tone denotes their coat tone. The selected obsidian-black and
+  white palette and golden eye light are presentation; alternate palettes
+  remain product TBDs. Spirit connection and Light guidance are narrative
+  identity, never new combat or progression fields.
 
 The exact transport and storage shape remains an implementation decision. The
 semantic contract must reject fields that do not belong to the selected race

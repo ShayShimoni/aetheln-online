@@ -25,23 +25,46 @@ anatomy notes and review judgments describe the superseded Kell direction.
 Gameplay rules and other races' identities remain governed by the
 [canonical design documents](documentation-index.md).
 
+The user also selected the updated male and female Aurin below on 2026-10-10.
+They establish the current Human race visual baseline in
+[Playable Peoples](playable-peoples.md#aurin). Preserve the cleaner facial
+planes and controlled skin, hair, and cloth detail when deriving new Aurin
+views. Their approval changes visual references, not Aurin biology or story.
+
 ## Visual references
 
-Open these images before generating. They are the primary examples of the
-approved rendering finish and the selected Kell designs.
+Open the selected Aetheln-generated images for the subject before generating.
+The approved Aurin and Kell pairs are examples of the rendering finish and
+current race designs. Vesh redesign status is identified separately below.
+
+### Aurin
+
+| Male Aurin | Female Aurin |
+| --- | --- |
+| ![Approved male Aurin](art-style-references/aurin-male-approved-2026-10-10.png) | ![Approved female Aurin](art-style-references/aurin-female-approved-2026-10-10.png) |
+| [Male v06](art-style-references/aurin-male-approved-2026-10-10.png) and [exact prompt](art-style-references/aurin-male-approved-2026-10-10-prompt.txt) | [Female v13](art-style-references/aurin-female-approved-2026-10-10.png) and [exact prompt](art-style-references/aurin-female-approved-2026-10-10-prompt.txt) |
+
+The [Aurin approval record](art-style-references/aurin-approved-design-2026-10-10.md)
+records byte-preserved copies from the 2026-10-10 Human exploration, exact
+prompts, generation provenance, and the user's selection. Open this pair for
+future Aurin body, clothing, armor, or character views. Use coherent sculpted
+forms, subtle skin detail, simplified mature facial planes, and clean hair and
+cloth shading. Preserve the selected design when making additional views.
+These example faces, hairstyles, and body builds do not constrain the broader
+canonical Human customization range.
+
+### Kell
 
 | Male Kell | Female Kell |
 | --- | --- |
 | ![Approved male Kell rendering reference](art-style-references/57-quartz-balanced-hands-feet.png) | ![Approved female Kell rendering reference](art-style-references/59-quartz-amethyst-female-refined.png) |
 | [Image 57](art-style-references/57-quartz-balanced-hands-feet.png) and [saved prompt](art-style-references/57-quartz-balanced-hands-feet-prompt.txt) | [Image 59](art-style-references/59-quartz-amethyst-female-refined.png) and [saved prompt](art-style-references/59-quartz-amethyst-female-refined-prompt.txt) |
 
-The reference files in `docs/art-style-references/` are preserved copies from
-`visuals/race-explorations-2026-10-10/`, generated through the built-in image
-workflow during this design session. The two approved PNGs and three exact
-prompt records accompany this guide in Git; images use Git LFS. Older edit
-inputs named in the prompts are historical lineage, not required inputs for
-using these approved references. The complete exploration stays in its
-original working folder.
+The Kell pair in `docs/art-style-references/` contains the selected results
+from the built-in image workflow. The two approved PNGs and their saved
+prompts accompany this guide; images use Git LFS. Earlier explorations and
+full generation lineage are retained outside the repository. Use the selected
+pair as the input for future Kell views.
 
 These are generated raster concepts with a 3D appearance. They provide a visual
 target for later modeling; they do not contain meshes, topology, rigs, or
@@ -53,19 +76,44 @@ Keep the new subject's own anatomy, proportions, palette, materials, clothing,
 and identity. Ivory quartz, amethyst, horns, claws, and glowing eyes belong to
 the selected Kell design and are not requirements for every asset.
 
-The rendering change originated with the user's supplied `image_0.png` and
-`image_1.png` references. The saved
-[polish-pass prompt](art-style-references/47-quartz-polished-3d-style-prompt.txt)
-records their roles. Later anatomy edits were separate decisions. Use the
-approved pair above for the current visual target, rather than reverting to an
-earlier exploration.
+### Vesh redesign
+
+| Selected male Vesh | Current female Vesh candidate |
+| --- | --- |
+| ![Selected male Vesh](art-style-references/vesh-male-selected-2026-10-10.png) | ![Current female Vesh candidate](art-style-references/vesh-female-current-2026-10-10.png) |
+
+The [character results record](art-style-references/character-results-2026-10-10.md)
+identifies the saved prompts and selection status. The male uses the selected
+black coat, white patterns and golden eyes. The female applies that palette to
+the current redesigned body; final female approval remains pending. The revised
+Vesh origins, spirit relationship, culture, and anatomy are now canonical in
+[Playable Peoples](playable-peoples.md#vesh), with connected stories in the
+character and settlement documents. Final female visual approval and production
+readiness remain separate from that written lore revision.
+
+## Reference and storage boundary
+
+Keep pasted external user reference images outside the repository. Repository
+art references contain selected Aetheln-generated results only, with their
+selection status recorded. Do not embed external reference copies, branded
+filenames, or links in repository art records.
+
+Save candidates, exact submitted prompts and full input lineage outside the
+Git worktree, in the generator's output directory or a user-approved external
+working folder. On selection, copy only the chosen output and a suitable
+standalone or current-result prompt into `docs/art-style-references/`. Retain
+an exact prompt in the repository only when it contains no prohibited external
+references. If a new reusable prompt is written from the selected result,
+label it as rewritten; keep the genuine submitted prompt and lineage outside
+the repository. This storage boundary does not establish rights clearance or
+change how the images were created.
 
 ## Rendering rules
 
 | Element | Target |
 | --- | --- |
 | Shape | Coherent sculpted volumes, strong silhouettes, clear overlapping forms, clean transitions, and intentional edge bevels. Curves and sharper planes should both read as solid geometry. |
-| Surface detail | Broad forms carry the design. Add selective veins, grain, seams, wear, or small facets where the material needs them; keep detail density controlled. |
+| Surface detail | Broad forms carry the design. Add selective veins, grain, seams, wear, or small facets where the material needs them; keep detail density controlled. Faces use clean sculpted planes with restrained wrinkles and fine texture, as in the approved Aurin pair. |
 | Materials | Distinct, physically convincing responses: matte skin and cloth, appropriately reflective metal, fibrous wood, and mineral depth where relevant. Match roughness and translucency to each material. |
 | Lighting | Soft directional key light, gentle fill, clear shading between overlapping forms, broad controlled highlights, and natural contact shadows. Keep enough light to inspect the asset. |
 | Color | A restrained, coordinated palette with intentional light/dark material contrast. Recessed or secondary materials remain distinguishable without turning every surface into a different saturated color. |
@@ -168,9 +216,10 @@ unrelated parts. Return [REQUESTED NUMBER OF IMAGES OR VIEWS].
    next edit. Additional views must depict the same design, not independently
    reinvent its hidden parts.
 7. Save each output and exact prompt under a new descriptive versioned filename
-   in the working visual folder. Retain the source reference paths, intended
-   change, and approval status. Preserve earlier images; a generated candidate
-   becomes the approved reference only when the user selects it.
+   outside the Git worktree, following the reference and storage boundary
+   above. Retain source reference paths, intended change, review and approval
+   status in that external record. Copy selected results into the repository
+   only after selection; a generated candidate is not automatically approved.
 
 Keep image approval separate from mesh production. Turnarounds, topology,
 rigging, equipment fitting, material setup, and in-engine validation follow

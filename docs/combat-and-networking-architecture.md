@@ -26,8 +26,8 @@ Technology selections that require measurement remain candidates in
 - Appearance, race, sex, cosmetics, and client visual scale never change
   authoritative collision, reach, timing, or damage.
 - Kell horn, ear, and plate attachments and any auxiliary visual bones, together
-  with Vesh back-veil bones, serve presentation only. They never drive combat
-  collision, authoritative traces, shared
+  with Vesh hair and fur presentation bones, serve presentation only. They
+  never drive combat collision, authoritative traces, shared
   weapon-presentation sockets, root motion, authored contact timing, or
   gameplay state.
 - Presentation sockets and camera or aim-presentation anchors never establish
