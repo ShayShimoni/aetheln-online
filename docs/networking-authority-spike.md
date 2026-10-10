@@ -103,7 +103,9 @@ already enabled by its target default. `SetupIrisSupport(Target)` supplies
 The ReplicationGraph plugin is denied for the Editor target, so the Graph
 candidate is available in packaged Client and Server builds only and refuses
 with `graph_class_unavailable` in the Editor and PIE. The accepted engine record
-stays unchanged.
+stays unchanged. Shipping builds compile the candidate runtime out: they never
+read candidate selection, never register the comparison subsystem, and never
+start a probe.
 
 BasicReplicationGraph is the engine example with its existing 10000-unit grid
 default and fixed per-actor relevancy flags. That value is not approved Aetheln

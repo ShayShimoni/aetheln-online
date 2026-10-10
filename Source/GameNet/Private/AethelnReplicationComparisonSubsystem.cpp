@@ -9,7 +9,11 @@
 
 bool UAethelnReplicationComparisonSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
+#if UE_BUILD_SHIPPING
+	return false;
+#else
 	return AethelnReplicationCandidates::IsActive() && Super::ShouldCreateSubsystem(Outer);
+#endif
 }
 
 bool UAethelnReplicationComparisonSubsystem::DoesSupportWorldType(EWorldType::Type WorldType) const

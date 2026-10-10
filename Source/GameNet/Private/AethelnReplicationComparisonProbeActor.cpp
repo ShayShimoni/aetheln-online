@@ -25,6 +25,9 @@ void AAethelnReplicationComparisonProbeActor::GetLifetimeReplicatedProps(TArray<
 
 bool AAethelnReplicationComparisonProbeActor::StartProbe(APlayerController* OwningController)
 {
+#if UE_BUILD_SHIPPING
+	return false;
+#else
 	if (!HasAuthority() || OwningController == nullptr || ProbeState.Revision != 0) { return false; }
 	SetOwner(OwningController);
 	const FAethelnReplicationCandidateRequest& Request = AethelnReplicationCandidates::GetRequest();
@@ -38,6 +41,7 @@ bool AAethelnReplicationComparisonProbeActor::StartProbe(APlayerController* Owni
 	MARK_PROPERTY_DIRTY_FROM_NAME(AAethelnReplicationComparisonProbeActor, ProbeState, this);
 	ForceNetUpdate();
 	return true;
+#endif
 }
 
 bool AAethelnReplicationComparisonProbeActor::ObserveBackend() const

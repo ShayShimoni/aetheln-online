@@ -70,6 +70,7 @@ namespace
 		FAethelnReplicationCandidateIdentity Identity;
 	};
 
+#if !UE_BUILD_SHIPPING
 	void OnDriverCreated(UWorld* World, UNetDriver* Driver)
 	{
 		// A joining client initially has a PendingNetDriver, often without a world.
@@ -101,6 +102,7 @@ namespace
 			Driver->ReplicationDriverClassName = GraphClassPath;
 		}
 	}
+#endif
 }
 
 bool AethelnReplicationCandidates::ParseRequest(const FString& CommandLine,
@@ -232,6 +234,8 @@ void AethelnReplicationCandidates::Refuse(const TCHAR* Reason)
 
 void AethelnReplicationCandidates::Startup()
 {
+#if !UE_BUILD_SHIPPING
+	// Shipping builds never read candidate selection; the laboratory stays inactive.
 	if (bChangedPreferences) { Refuse(TEXT("candidate_runtime_already_configured")); return; }
 	FString Reason;
 	if (!ParseRequest(FCommandLine::Get(), ActiveRequest, Reason)) { Refuse(*Reason); return; }
@@ -276,6 +280,7 @@ void AethelnReplicationCandidates::Startup()
 	if (Push->GetInt() != 1) { Refuse(TEXT("push_model_runtime_override_conflict")); return; }
 	DriverCreatedHandle = FWorldDelegates::OnNetDriverCreated.AddStatic(&OnDriverCreated);
 	bActive = true;
+#endif
 }
 
 void AethelnReplicationCandidates::Shutdown()
