@@ -17,6 +17,8 @@
 #include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
 
+DEFINE_LOG_CATEGORY_STATIC(LogAethelnActivationOutcome, Log, All);
+
 namespace AethelnActivationTelemetry
 {
 	struct FSafeOutcome
@@ -560,6 +562,7 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::Finish(
 
 void UAethelnAbilitySystemComponent::ClientActivationOutcome_Implementation(uint32 Sequence, EAethelnActivationResult Result)
 {
+	UE_LOG(LogAethelnActivationOutcome, Log, TEXT("Activation outcome received: sequence=%u result=%s"), Sequence, *UEnum::GetValueAsString(Result));
 	OnActivationOutcome.Broadcast(Sequence, Result);
 }
 
