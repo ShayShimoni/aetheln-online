@@ -39,6 +39,22 @@ UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const
 	return AbilitySystemComponent;
 }
 
+FAethelnDodgeMovementDefinition AAethelnPlayerState::GetDodgeMovementDefinition() const
+{
+	return AbilitySystemComponent != nullptr ? AbilitySystemComponent->GetDodgeMovementDefinition() : FAethelnDodgeMovementDefinition();
+}
+
+bool AAethelnPlayerState::CanPredictDodge() const
+{
+	return AbilitySystemComponent != nullptr && AbilitySystemComponent->CanPredictDodge();
+}
+
+bool AAethelnPlayerState::TryAuthorizeDodge(const FAethelnDodgeStartRequest& Request)
+{
+	return AbilitySystemComponent != nullptr
+		&& AbilitySystemComponent->ProcessMovementCarriedRequest(Request) == EAethelnActivationResult::Accepted;
+}
+
 bool AAethelnPlayerState::IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spec)
 {
 	// A plain UGameplayAbility subclass would bypass the choke point.
@@ -92,6 +108,8 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 	// Unpossession, or the possessed pawn is being destroyed. InitAbilityActorInfo
 	// does not cancel on an avatar change, so cancel explicitly.
 	AbilitySystemComponent->ResetChain(EAethelnChainEndReason::AvatarLost);
+	// Ends the dodge on the old avatar's movement while it is still reachable.
+	AbilitySystemComponent->CancelDodge();
 	AbilitySystemComponent->CancelAllAbilities();
 
 	// SetAvatarActor, never ClearActorInfo: the owner must stay the PlayerState.

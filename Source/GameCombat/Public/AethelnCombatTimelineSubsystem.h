@@ -21,11 +21,17 @@ public:
 
 	bool RegisterStep(UAethelnAbilitySystemComponent& AbilitySystem, const FAethelnAttackStepDefinition& Step, FAethelnCombatActivationRecord& Record);
 	bool CanRegisterStep(const UAethelnAbilitySystemComponent& AbilitySystem) const;
+	/**
+	 * Non-chain boundary registration (#18 P3): the ASC's own timelines, such as the dodge
+	 * windows, get their due boundaries applied in pass step 4 until none remain pending.
+	 */
+	bool RegisterNonChainBoundaries(UAethelnAbilitySystemComponent& AbilitySystem);
 	void StampReset(const FGuid& ActivationId, double Time);
 	FAethelnAttackWindowDelegate OnWindowEvaluated;
 
 #if WITH_DEV_AUTOMATION_TESTS
 	int32 GetRegisteredStepCountForTests() const { return Steps.Num(); }
+	int32 GetBoundaryOwnerCountForTests() const { return AbilitySystems.Num(); }
 #endif
 
 private:
