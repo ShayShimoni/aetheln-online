@@ -815,6 +815,10 @@ foreach ($ContentCase in @(
 	@{name='no-assets';mutate={param($x)$x.assets=@();$x.counts.assets=0}},
 	@{name='asset-count';mutate={param($x)$x.counts.assets=4}},
 	@{name='finding-count';mutate={param($x)$x.counts.findings=0}},
+	# Counts must be JSON integers: a string or boolean that compares equal to the bound is still rejected.
+	@{name='errors-string';mutate={param($x)$x.counts.errors='0'}},
+	@{name='errors-boolean';mutate={param($x)$x.counts.errors=$false}},
+	@{name='asset-count-string';mutate={param($x)$x.counts.assets=[string]@($x.assets).Count}},
 	# findings[7] is asset 0's allowlisted reference_boundary lifecycle finding; each case breaks one allowlist condition.
 	@{name='reference-finding-code';mutate={param($x)$x.findings[7].code='content.reference_boundary.failed'}},
 	@{name='reference-finding-severity';mutate={param($x)$x.findings[7].severity='error'}},
