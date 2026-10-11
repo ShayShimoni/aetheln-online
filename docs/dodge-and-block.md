@@ -1021,12 +1021,17 @@ the remapping mechanism and controller layout (#82); display names.
    finishes the displacement sooner in server time. The window is unaffected.
    Owners: #17, #2.
 3. **Airborne facing** is bound by [#306](https://github.com/ShayShimoni/aetheln-online/issues/306) (Q12): airborne aim-tracking
-   facing turns at the existing 720 degrees/s rate, so the block arc cannot
-   swing faster than that. One exception remains by design: the jump
-   takeoff snaps facing once per jump, up to 180 degrees, as described in
-   [Playable Movement POC](movement-poc.md#movement-baseline). The arc
-   reads server actor yaw, so a block raised in the takeoff move sees the
-   post-snap facing. Owner: #17.
+   facing turns at the existing 720 degrees/s rate, except for the jump takeoff
+   snap, which turns facing up to 180 degrees in one move, as described in
+   [Playable Movement POC](movement-poc.md#movement-baseline). Nothing limits
+   how often a jump can start: a held jump restarts on every landing, so under
+   a low ceiling or onto a short ledge the snap can repeat every few moves. The
+   arc reads server actor yaw, so a block raised in a takeoff move sees the
+   post-snap facing. Whether to leave this, add a minimum interval between
+   jumps, or limit the snap while blocking is an open owner decision for #18
+   P4; any value stays TBD. The 720 degrees/s bound is measured in
+   client-reported move time, so it depends on residual risk 2 (time-discrepancy
+   detection is off); ground facing has the same limit. Owner: #17.
 4. **Move data has no schema version** (#82 F10). The dodge field in the
    custom move data relies on build-identical clients and servers. F10's
    revisit trigger, "when a flag is added", fires with `FLAG_Custom_2`; this
