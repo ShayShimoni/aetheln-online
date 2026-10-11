@@ -2117,12 +2117,11 @@ Every accepted decision records:
   same bounds. Admission counts only the bytes already committed under the
   shared handoff root (see TA-024 for the limit this leaves). The immediate
   kill switch is disabling the workflow; the permanent rollback is reverting
-  it. The issue #267 TA-014
-  amendment (2026-10-06) changes the controller and gate this workflow calls,
-  with no workflow change: each release package phase builds the project
-  editor modules first, leaves `UnrealPak` outside the attestation, runs the
-  manifest-set check, refuses a set `UE_ADDITIONAL_PLUGIN_PATHS`, and reports
-  the attestation record hash.
+  it. The issue #267 TA-014 amendment (2026-10-06) changes the controller and
+  gate this workflow calls, with no workflow change: each release package
+  phase builds the project editor modules first, leaves `UnrealPak` outside
+  the attestation, runs the manifest-set check, refuses a set
+  `UE_ADDITIONAL_PLUGIN_PATHS`, and reports the attestation record hash.
 - **Owner:** Issue #226.
 - **Revisit trigger:** Any package leaves the owner's control (external
   testers, a public download, or a store), a collaborator gains write access, a
@@ -2137,10 +2136,9 @@ Every accepted decision records:
   does every agent that uses the owner's `gh` credentials. Who may dispatch,
   and the per-run OK, are therefore enforced by process, not by the workflow.
   TA-024 records the separate `.github/workflows/develop-packaging.yml`
-  identity that carries it. The
-  runner-trust analysis, the fork-run rule, the operator rule, and the
-  revisit triggers above apply to it unchanged. `prototype-quality-gates.yml`
-  still keeps no manual trigger.
+  identity that carries it. The runner-trust analysis, the fork-run rule, the
+  operator rule, and the revisit triggers above apply to it unchanged.
+  `prototype-quality-gates.yml` still keeps no manual trigger.
 
 ### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
 
