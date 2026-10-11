@@ -10,15 +10,16 @@
 // #60 P5 interruption (docs/attack-timeline-and-combo.md, Interruption; Test Plan A15 with the A28 row).
 // Only an enemy can hit a player (OQ1), and only players hold a chain, so the interrupter is an enemy
 // dummy whose step is registered directly on the timeline, as #20's enemy steps will be. Fixture
-// geometry and windows, not tuning: an enemy 60 units behind the player first touches the player's
-// capsule at its step start + 0.125 + 0.125 * 16 / 30; one 40 units behind overlaps at its ActiveStart.
+// geometry and windows, not tuning: the radius-10 sphere of an enemy 60 units behind the player first
+// touches the player's radius-42 capsule at its step start + 0.125 + 0.125 * 8 / 30; one 40 units behind
+// overlaps at its ActiveStart.
 namespace AethelnInterruptionTests
 {
 	using namespace AethelnChainTests;
 	using EResult = EAethelnActivationResult;
 	using EOutcome = EAethelnCombatResultOutcome;
 
-	constexpr double ContactOffset60 = 0.125 + 0.125 * 16.0 / 30.0;
+	constexpr double ContactOffset60 = 0.125 + 0.125 * 8.0 / 30.0;
 
 	float Health(const UAethelnAbilitySystemComponent& AbilitySystem)
 	{
