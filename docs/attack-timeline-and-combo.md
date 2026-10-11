@@ -90,7 +90,7 @@ what it leaves to other owners.
 | Owner | #60 consumes or provides | #60 does not do |
 | --- | --- | --- |
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes the seam, rate bucket, outcome RPC, base ability, cost and cooldown overrides, grant validation, `FindForPawn`, and `State.Dead` (see [Dependencies on #19](#dependencies-on-19)). Adds one `ResetChain(AvatarLost)` call to the PlayerState's null-pawn case. | Reorder or change #19's existing seam steps, or change what #19's lifecycle grants, initializes, or cancels. |
-| [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Provides the avoidance step and an authored avoidance-tag set that #18 fills with its dodge invulnerability tag; a dodge activation resets the chain like any other action. Resolves whether a contact is blocked against the active defense state #18 exposes (OQ6, owner, 2026-10-05). | Dodge cost, window, movement, or tags; the right-mouse block action, its state, and what a blocked hit does to Guard (#18 owns them). |
+| [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Provides the avoidance step, which asks the dodge's time-exact `IsAvoidingAt(ContactTime)` (#18 T2), and the defense step, which evaluates the defense slot's interval at the contact time; `State.DodgeInvulnerable` stays out of the authored avoidance-tag set (see [Dodge and Block](dodge-and-block.md#dependencies-on-60), items 2 and 3). A dodge activation resets the chain like any other action. Resolves whether a contact is blocked against the active defense state #18 exposes (OQ6, owner, 2026-10-05). | Dodge cost, window, movement, or tags; the right-mouse block action, its state, and what a blocked hit does to Guard (#18 owns them). |
 | [#260](https://github.com/ShayShimoni/aetheln-online/issues/260) | Provides the timeline, contact pipeline, defense-state check, and network-condition test rows that the representative actives reuse. | Gate Step and Sworn Rebuke contacts, Gate Step's movement, Hold the Line's Guard result (OQ3, owner, 2026-10-05). |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Provides the step definition, timeline driver, contact pipeline, and result path; the enemy registers its steps directly, without the seam. | Enemy behavior, target choice, or telegraph content. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Latches lethal results and raises one lethal notification per target; treats `State.Dead` and zero Health as not alive. | Apply `State.Dead`, run death, respawn, or reconnect. |
@@ -139,7 +139,7 @@ Existing code at `ab296d0`:
 | `UAethelnBasicChainAbility` | GameCombat | Derives from `UAethelnGameplayAbility` (`InstancedPerActor`). Each activation selects the step from the chain state, waits for a buffered start, registers the step with the subsystem, and ends at buffer-open. |
 | `UAethelnAbilitySystemComponent` (extend) | GameCombat | Aim and time validation (steps 6a to 6d), per-connection last accepted raw aim and time, chain state and `ResetChain`, owner RPCs, the replicated phase state, the result-cue multicast, the four replicated-data overrides. |
 | `AAethelnPlayerState` (extend) | GameCombat | Implements `IAethelnCombatInputSink`; calls `ResetChain(AvatarLost)` in its null-pawn case. |
-| `UAethelnCombatTimelineSubsystem` | GameCombat | `UWorldSubsystem`, active on the server. Registered steps, activation ordinals, combat entity ids, per-frame sampling, the contact queue, resolution, already-hit records, the lethal notification, the avoidance set, registered defense states, and the relation function. |
+| `UAethelnCombatTimelineSubsystem` | GameCombat | `UWorldSubsystem`, active on the server. Registered steps, boundary owners (chain steps and, through `RegisterNonChainBoundaries`, non-chain owners such as #18's dodge window; an owner leaves the list once `HasPendingBoundaries()` is false: no chain and no open dodge window), activation ordinals, combat entity ids, per-frame sampling, the contact queue, resolution, already-hit records, the lethal notification, the avoidance set, registered defense states, and the relation function. |
 | `UAethelnDamageEffect` | GameCombat | Instant effect: Health modifier from `SetByCaller.Damage.Wrought`, which carries the negated authored damage (a set-by-caller magnitude has no coefficient, as with the cost effect). The pipeline adds `Damage.Wrought` to every spec as a dynamic asset tag. |
 | `UAethelnPOCInputComponent` (extend) | GameUI | P6: primary-attack action on left mouse, Reticle mode only, never the recapture press. |
 
@@ -554,9 +554,16 @@ For each candidate, in order:
    for this activation, or if the activation's record already holds
    `MaxTargets` targets. Never evict a record while the activation's step is
    registered. Record the accepted contact.
-3. **Avoidance.** A target holding any tag in the authored avoidance set
-   (`AvoidanceTags` on the timeline subsystem, empty until #18 adds its dodge
-   invulnerability tag) yields a recorded `Avoided` result and nothing else.
+3. **Avoidance.** A target that avoids the contact yields a recorded
+   `Avoided` result and nothing else. The dodge is checked at the contact
+   time with `IsAvoidingAt(ContactTime)`, never by tag presence: pass step 4
+   removes `State.DodgeInvulnerable` at a mid-frame boundary only after the
+   frame's contacts resolve, so a presence check would still avoid contacts
+   after `InvulnerableEnd` (#18 decision T2). That tag stays out of the
+   authored avoidance set (`AvoidanceTags` on the timeline subsystem, empty).
+   P4 checks only that set, by presence, when the contact resolves; #18 P4
+   wires the time-exact query (see
+   [Residual Risks and Known Gaps](#residual-risks-and-known-gaps)).
 4. **Directional defense.** #60 decides only whether the contact is blocked
    (OQ6, owner, 2026-10-05). The defense owner exposes an active defense state
    on the target: a state tag, its authored arc, and a server hook. If the
@@ -826,7 +833,7 @@ change bumps the chain's `ContentVersion`.
 | Config section | Keys |
 | --- | --- |
 | `[/Script/GameCombat.AethelnBasicChainAbility]` | `ContentVersion`; `ProvisionalEnduranceCost` (optional); `ProvisionalSteps` (three step structs with the values in [Step definition](#step-definition)); `ProvisionalMaxSampleAngleDegrees`; `ProvisionalMaxSampleDistance` |
-| `[/Script/GameCombat.AethelnCombatTimelineSubsystem]` | `AvoidanceTags` (empty; #18 adds its dodge invulnerability tag) |
+| `[/Script/GameCombat.AethelnCombatTimelineSubsystem]` | `AvoidanceTags` (empty; `State.DodgeInvulnerable` is never added, see [Resolution order](#resolution-order-prototype-subset) step 3) |
 | `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimRateSlackDegrees`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
 | `Config/DefaultEngine.ini` | The `AethelnCombatQuery` trace channel with default response `Ignore` (structure, not tuning) |
 
@@ -899,7 +906,7 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A7 | `Aetheln.GameCombat.AttackTimeline.ChainResets` | P3 | H | Timeout, completion, interruption (test result), unpossession, avatar destruction, `State.Dead` added through the test seam, and another ability's activation each reset with the right reason and reset time; a waiting buffered step never starts; the next press is step 1; two reset paths for one chain send one chain end; from P4, a mid-frame external reset drops only contacts at or after its reset time, `IncompatibleState` and `AvatarLost` are stamped with their processing time, and the next press is step 1 after every reset reason, including `InternalFailure` (a buffered start refused for an exhausted ordinal) |
 | A8 | `Aetheln.GameCombat.AttackTimeline.CommitmentWindow` | P3 | H | The commitment tag exists exactly in `[0, CancelOpen)`; a test ability blocked by it is refused before and allowed after, and its activation resets the chain |
 | A9 | `Aetheln.GameCombat.AttackTimeline.ContactOnCapsuleOnly` | P4 | H | A sweep through a target capsule yields a contact; a shape overlapping only a query-enabled mesh yields none; the attacker is never its own target |
-| A10 | `Aetheln.GameCombat.AttackTimeline.AlreadyHitAllowance` | P4 | H | A target inside the shape across several sub-sweeps and frames gets exactly one result per activation; a second activation can hit it again; a full record (`MaxTargets`) rejects new targets without eviction; a replayed candidate converges |
+| A10 | `Aetheln.GameCombat.AttackTimeline.AlreadyHitAllowance` | P4 | H | A target inside the shape across several sub-sweeps and frames gets exactly one result per activation; a second activation can hit it again; a full record (`MaxTargets`) rejects new targets without eviction, and a record with room for two hits both targets once; a replayed candidate converges |
 | A11 | `Aetheln.GameCombat.AttackTimeline.DeterministicOrdering` | P4 | H | Two attackers' same-frame contacts on one target resolve by the total order; reversing registration and tick order changes nothing |
 | A12 | `Aetheln.GameCombat.AttackTimeline.DamageAndLethalLatch` | P4 | H | Health changes only through the damage effect by the test magnitude; it clamps at zero; the lethal notification fires once; a zero-Health target takes no further result |
 | A13 | `Aetheln.GameCombat.AttackTimeline.DeadLifeStateRejected` | P4 | H | An attacker with `State.Dead` (test seam) is refused with `ActivationBlocked`; a target with it yields no result |
@@ -1018,3 +1025,12 @@ and generation (#106).
    that reaches through thin cover still hits. Canon asks for near-cover
    validation; revisit when the arena gains cover (see
    [Target query](#target-query)).
+10. **Resolve-time presence checks.** P4 checks avoidance by tag presence
+    (`AvoidanceTags`) and the defense by its state tag, both when the contact
+    resolves (`AethelnCombatTimelineSubsystem.cpp`, `Resolve`), and
+    `FAethelnDefenseState` has no time interval. Neither can tell a contact
+    before a mid-frame boundary from one after it. `IsAvoidingAt(ContactTime)`
+    exists on the ability system component (#18 P3) but step 3 does not call it
+    yet. #18 P4 replaces both checks with `IsAvoidingAt(ContactTime)` and the
+    defense slot's interval at the contact time (#18 decision T2, dependencies
+    2 and 3).

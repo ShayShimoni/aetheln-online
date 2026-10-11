@@ -143,6 +143,19 @@ bool FAethelnAlreadyHitAllowanceTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("The earlier contact keeps its record"), Health(*Near), 35.0f);
 		TestEqual(TEXT("The later target is rejected, never swapped in"), Health(*Far), 40.0f);
 	}
+	{
+		// Same geometry with room for two: both targets are hit once, so the far one is really swept.
+		FFixture F; if (!F.Init(*this)) { return false; }
+		SetStepValues(*F.Ability, [](FAethelnAttackStepDefinition& Step) { Step.MaxTargets = 2; });
+		AAethelnCombatAICharacter* Near = F.SpawnTarget(*this, FVector(60.0, 0.0, 0.0));
+		AAethelnCombatAICharacter* Far = F.SpawnTarget(*this, FVector(70.0, 0.0, 50.0));
+		if (Near == nullptr || Far == nullptr) { return false; }
+		F.Press();
+		for (double Time : { 0.2, 0.22, 0.24, 0.375 }) { F.AdvanceTo(Time); }
+		TestEqual(TEXT("MaxTargets 2 records both targets"), F.Results.Num(), 2);
+		TestEqual(TEXT("The near target is hit once"), Health(*Near), 35.0f);
+		TestEqual(TEXT("The far target is hit once"), Health(*Far), 35.0f);
+	}
 	return true;
 }
 
