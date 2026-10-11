@@ -4,6 +4,8 @@
 #include "UObject/Interface.h"
 #include "AethelnMovementActionAuthority.generated.h"
 
+class AActor;
+
 /** Authored displacement only; windows, costs and eligibility belong to the authority. */
 struct GAMECORE_API FAethelnDodgeMovementDefinition
 {
@@ -25,6 +27,8 @@ struct GAMECORE_API FAethelnDodgeStartRequest
 	float ClientTimeStamp = 0.0f;
 	uint32 ContentVersion = 0;
 	bool bMovementAllowsStart = false;
+	/** The pawn whose received move this is; the authority refuses any pawn but its current possessed avatar. */
+	const AActor* Avatar = nullptr;
 };
 
 UINTERFACE(MinimalAPI)

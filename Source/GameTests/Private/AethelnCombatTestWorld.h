@@ -170,11 +170,14 @@ namespace AethelnCombatTests
 	 * limits a test unless the test sets its own.
 	 */
 	inline AAethelnPlayerState* AttachFreshPlayerState(
-		const FScopedCombatTestWorld& TestWorld,
+		UWorld& World,
 		APlayerController& Controller,
 		const TArray<TSubclassOf<UGameplayAbility>>& Abilities = { UAethelnLongRunningTestAbility::StaticClass() })
 	{
-		AAethelnPlayerState* PlayerState = TestWorld.Spawn<AAethelnPlayerState>(&Controller);
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Owner = &Controller;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		AAethelnPlayerState* PlayerState = World.SpawnActor<AAethelnPlayerState>(AAethelnPlayerState::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters);
 		if (PlayerState != nullptr)
 		{
 			PlayerState->GrantedAbilities = Abilities;
@@ -185,6 +188,14 @@ namespace AethelnCombatTests
 			Controller.SetPlayerState(PlayerState);
 		}
 		return PlayerState;
+	}
+
+	inline AAethelnPlayerState* AttachFreshPlayerState(
+		const FScopedCombatTestWorld& TestWorld,
+		APlayerController& Controller,
+		const TArray<TSubclassOf<UGameplayAbility>>& Abilities = { UAethelnLongRunningTestAbility::StaticClass() })
+	{
+		return TestWorld.World != nullptr ? AttachFreshPlayerState(*TestWorld.World, Controller, Abilities) : nullptr;
 	}
 
 	inline bool SpawnTestPlayer(
