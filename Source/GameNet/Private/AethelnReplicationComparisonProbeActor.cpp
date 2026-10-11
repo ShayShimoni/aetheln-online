@@ -98,6 +98,11 @@ void AAethelnReplicationComparisonProbeActor::Tick(float DeltaSeconds)
 	}
 }
 
+bool AAethelnReplicationComparisonProbeActor::ServerAcknowledgeBaseline_Validate(const FString& ProbeId)
+{
+	return IsValidProbeId(ProbeId);
+}
+
 void AAethelnReplicationComparisonProbeActor::ServerAcknowledgeBaseline_Implementation(const FString& ProbeId)
 {
 	const APlayerController* Controller = Cast<APlayerController>(GetOwner());

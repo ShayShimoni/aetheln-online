@@ -24,6 +24,14 @@ namespace
 	bool bPreviousHandles = false;
 	constexpr TCHAR PushPreferenceTag[] = TEXT("AethelnReplicationCandidate");
 
+	UClass* LoadGraphClass()
+	{
+		// The class lives in the ReplicationGraph plugin module, which may not be loaded yet when GameNet starts.
+		// The Editor target denies the plugin, so both calls return null there.
+		FModuleManager::Get().LoadModulePtr<IModuleInterface>(TEXT("ReplicationGraph"));
+		return LoadClass<UReplicationDriver>(nullptr, GraphClassPath);
+	}
+
 	bool IsSafeIdentity(const FString& Value)
 	{
 		if (Value.IsEmpty() || Value.Len() > 256) { return false; }
@@ -52,7 +60,7 @@ namespace
 			return false;
 #else
 			if (Identity.CandidateId == AethelnNetworkSpike::ReplicationGraphCandidateId
-				&& LoadClass<UReplicationDriver>(nullptr, GraphClassPath) == nullptr)
+				&& LoadGraphClass() == nullptr)
 			{
 				OutReason = TEXT("graph_class_unavailable");
 				return false;
@@ -92,7 +100,7 @@ namespace
 		}
 		if (ActiveRequest.CandidateId == AethelnNetworkSpike::ReplicationGraphCandidateId)
 		{
-			UClass* GraphClass = LoadClass<UReplicationDriver>(nullptr, GraphClassPath);
+			UClass* GraphClass = LoadGraphClass();
 			if (GraphClass == nullptr)
 			{
 				AethelnReplicationCandidates::Refuse(TEXT("graph_class_unavailable"));
@@ -199,7 +207,7 @@ bool AethelnReplicationCandidates::InspectDriver(const FAethelnReplicationCandid
 	}
 	OutObservation.bServer = Driver->IsServer();
 	OutObservation.bIris = Driver->IsUsingIrisReplication();
-	UClass* GraphClass = LoadClass<UReplicationDriver>(nullptr, GraphClassPath);
+	UClass* GraphClass = LoadGraphClass();
 	UReplicationDriver* ReplicationDriver = Driver->GetReplicationDriver();
 	OutObservation.bGraph = ReplicationDriver != nullptr && GraphClass != nullptr && ReplicationDriver->IsA(GraphClass);
 	OutObservation.DriverClass = ReplicationDriver != nullptr ? ReplicationDriver->GetClass()->GetPathName() : TEXT("none");

@@ -74,6 +74,40 @@ bool FAethelnReplicationCandidateObservationTest::RunTest(const FString& Paramet
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReplicationGraphEditorRefusalTest,
+	"Aetheln.GameNet.ReplicationCandidates.GraphRefusedInEditor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReplicationGraphEditorRefusalTest::RunTest(const FString& Parameters)
+{
+	// The Editor target denies the ReplicationGraph plugin, so Graph is measurable only in packaged builds.
+	FAethelnReplicationCandidateRequest Request;
+	Request.CandidateId = AethelnNetworkSpike::ReplicationGraphCandidateId;
+	const TUniquePtr<IAethelnReplicationCandidate> Candidate = AethelnReplicationCandidates::CreateCandidate(Request);
+	if (!TestNotNull(TEXT("Graph candidate exists"), Candidate.Get())) { return false; }
+	FString Reason;
+	TestFalse(TEXT("Graph is unavailable in the Editor"), Candidate->IsAvailableForPackagedRun(Reason));
+	TestEqual(TEXT("Graph refuses with the exact reason"), Reason, FString(TEXT("graph_class_unavailable")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReplicationProbeIdLengthTest,
+	"Aetheln.GameNet.ReplicationCandidates.ProbeIdLength",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReplicationProbeIdLengthTest::RunTest(const FString& Parameters)
+{
+	const FString Guid = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	TestTrue(TEXT("A generated probe id is accepted"), AAethelnReplicationComparisonProbeActor::IsValidProbeId(Guid));
+	TestTrue(TEXT("A 32 character id is accepted"),
+		AAethelnReplicationComparisonProbeActor::IsValidProbeId(FString::ChrN(32, TEXT('a'))));
+	TestFalse(TEXT("A 33 character id is rejected"),
+		AAethelnReplicationComparisonProbeActor::IsValidProbeId(FString::ChrN(33, TEXT('a'))));
+	TestFalse(TEXT("A very long id is rejected"),
+		AAethelnReplicationComparisonProbeActor::IsValidProbeId(FString::ChrN(100000, TEXT('a'))));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReplicationProbeAuthorityTest,
 	"Aetheln.GameNet.ReplicationCandidates.ProbeAuthority",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

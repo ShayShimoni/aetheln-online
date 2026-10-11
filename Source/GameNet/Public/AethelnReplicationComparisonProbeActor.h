@@ -45,6 +45,9 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	bool StartProbe(APlayerController* OwningController);
 	uint32 GetProbeRevision() const { return ProbeState.Revision; }
+	/** A probe id is a 32-digit GUID; the server rejects anything longer from a client. */
+	static constexpr int32 MaxProbeIdLength = 32;
+	static bool IsValidProbeId(const FString& ProbeId) { return ProbeId.Len() <= MaxProbeIdLength; }
 
 private:
 	UPROPERTY(ReplicatedUsing=OnRep_ProbeState)
@@ -53,7 +56,7 @@ private:
 	UFUNCTION()
 	void OnRep_ProbeState();
 
-	UFUNCTION(Server, Reliable)
+	UFUNCTION(Server, Reliable, WithValidation)
 	void ServerAcknowledgeBaseline(const FString& ProbeId);
 
 	bool ObserveBackend() const;
