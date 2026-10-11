@@ -93,3 +93,17 @@ class GAMECOMBAT_API UAethelnDamageEffect : public UGameplayEffect
 public:
 	UAethelnDamageEffect();
 };
+
+/**
+ * The shared Guard pressure of a blocked contact (#18 Q7): instant, adding SetByCaller.Pressure.Guard to
+ * Guard. The block's Guard hook passes the negated authored pressure and applies it from the attacker's
+ * ASC. The attribute set clamps Guard at zero. It never touches a maximum and has no duration (A18).
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnGuardPressureEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnGuardPressureEffect();
+};
