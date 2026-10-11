@@ -5,6 +5,7 @@
 #include "AethelnCombatEffects.h"
 #include "AethelnCombatTestWorld.h"
 #include "AethelnCombatTimelineSubsystem.h"
+#include "AethelnDefenseTestFixture.h"
 #include "AethelnDodgeTestAbility.h"
 #include "AethelnGameplayTags.h"
 #include "AethelnMovementLoopbackHarness.h"
@@ -376,6 +377,15 @@ bool FAethelnDodgeMovementCarriedRouteTest::RunTest(const FString& Parameters)
 	FillTestAimAndTime(ProbePress, ASC);
 	TestEqual(TEXT("A seam Press after an accepted dodge is accepted"), ASC.ProcessServerRequest(ProbePress), EResult::Accepted);
 	TestEqual(TEXT("Only ordinary acceptance advances the sequence"), ASC.GetLastAcceptedSequenceForTests(), 1u);
+	// With ordinary history present, a later dodge leaves it unchanged (#297 re-review low).
+	const FVector AcceptedAim = ASC.GetLastAcceptedAimForTests();
+	const double AcceptedClientTime = ASC.GetLastAcceptedClientTimeForTests();
+	F.AdvanceTimeOnlyTo(2.0); // past ActionEnd; the request applies its own due boundary
+	F.ClearCooldown();
+	TestEqual(TEXT("A later dodge is accepted"), F.Move(), EResult::Accepted);
+	TestEqual(TEXT("The dodge leaves LastAcceptedSequence unchanged"), ASC.GetLastAcceptedSequenceForTests(), 1u);
+	TestEqual(TEXT("The dodge leaves the last accepted aim unchanged"), ASC.GetLastAcceptedAimForTests(), AcceptedAim);
+	TestEqual(TEXT("The dodge leaves the last accepted client time unchanged"), ASC.GetLastAcceptedClientTimeForTests(), AcceptedClientTime);
 
 	// No grant: the move names no ability, so it is blocked with no ability id.
 	FDirect NoDodge;
@@ -707,6 +717,23 @@ bool FAethelnLifeStateCancelsDodgeTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Re-possession revives no window"), N.Window().bOpen);
 	TestFalse(TEXT("Re-possession revives no invulnerability"), N.ServerAbilitySystem->IsAvoidingAt(N.Pair.World->GetTimeSeconds()));
 	TestFalse(TEXT("Re-possession resumes no displacement"), N.Pair.ServerMovement->GetDodgeState().bInProgress);
+
+	// Block rows (P4): State.Dead ends a held block at its processing time and refuses a new one.
+	AethelnDefenseTests::FDefense D;
+	if (!D.Init(*this)) { return false; }
+	D.AdvanceTo(1.0);
+	TestEqual(TEXT("Block raised"), D.Raise(), EResult::Accepted);
+	D.AdvanceTo(1.25);
+	D.ASC().AddLooseGameplayTag(AethelnGameplayTags::State_Dead); // test seam until #21
+	TestFalse(TEXT("State.Dead ends the block"), D.Has(AethelnGameplayTags::State_Blocking));
+	TestEqual(TEXT("The slot ends at the processing time"), D.Slot()->ActiveUntilServerTime, 1.25);
+	D.ClearCooldowns();
+	TestEqual(TEXT("A later block while dead is ActivationBlocked"), D.Raise(), EResult::ActivationBlocked);
+	D.ASC().RemoveLooseGameplayTag(AethelnGameplayTags::State_Dead);
+	D.Player.Controller->UnPossess();
+	D.Player.Controller->Possess(D.Pawn);
+	TestFalse(TEXT("Re-possession revives no block"), D.Has(AethelnGameplayTags::State_Blocking));
+	TestEqual(TEXT("Re-possession revives no defense"), D.Slot()->ActiveUntilServerTime, 1.25);
 	return true;
 }
 
@@ -751,6 +778,44 @@ bool FAethelnTeardownMidDodgeTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("A new PlayerState starts with no window"), Fresh.Player.AbilitySystem->GetDodgeWindowForTests().bOpen);
 	TestEqual(TEXT("A new PlayerState starts its ordinal at 0"), Fresh.Player.AbilitySystem->GetMovementActivationOrdinalForTests(), 0u);
 	TestEqual(TEXT("A new PlayerState's first dodge is accepted"), Fresh.Move(), EResult::Accepted);
+	// Timeline subsystem teardown cancels a running dodge (#298 review low 3).
+	Fresh.Timeline->Deinitialize();
+	TestFalse(TEXT("Subsystem teardown closes the window"), Fresh.Player.AbilitySystem->GetDodgeWindowForTests().bOpen);
+	TestFalse(TEXT("Subsystem teardown ends the dodge"), Fresh.Dodge->IsActive());
+	TestFalse(TEXT("Subsystem teardown removes State.Dodging"), Fresh.Has(AethelnGameplayTags::State_Dodging));
+
+	// Block rows (P4): one end, no slot afterwards, no revival, and a new PlayerState starts clean.
+	for (const ECase Case : { ECase::Unpossess, ECase::DestroyAvatar, ECase::DestroyPlayerState })
+	{
+		AethelnDefenseTests::FDefense D;
+		if (!D.Init(*this)) { return false; }
+		D.AdvanceTo(1.0);
+		TestEqual(TEXT("Block raised"), D.Raise(), EResult::Accepted);
+		D.AdvanceTo(1.25);
+		UAethelnAbilitySystemComponent* ASC = D.Player.AbilitySystem;
+		int32 Ends = 0;
+		const FDelegateHandle EndHandle = ASC->RegisterGameplayTagEvent(AethelnGameplayTags::State_Blocking, EGameplayTagEventType::NewOrRemoved)
+			.AddLambda([&Ends](const FGameplayTag, int32 Count) { Ends += Count == 0 ? 1 : 0; });
+		if (Case == ECase::Unpossess) { D.Player.Controller->UnPossess(); }
+		if (Case == ECase::DestroyAvatar) { D.Pawn->Destroy(); }
+		if (Case == ECase::DestroyPlayerState) { D.Player.PlayerState->Destroy(); }
+		TestEqual(TEXT("One block end"), Ends, 1);
+		ASC->RegisterGameplayTagEvent(AethelnGameplayTags::State_Blocking, EGameplayTagEventType::NewOrRemoved).Remove(EndHandle);
+		if (Case != ECase::DestroyPlayerState)
+		{
+			TestEqual(TEXT("No slot afterwards"), D.Slot()->ActiveUntilServerTime, 1.25);
+		}
+		if (Case == ECase::Unpossess)
+		{
+			D.Player.Controller->Possess(D.Pawn);
+			TestFalse(TEXT("Re-possession revives no block"), D.Has(AethelnGameplayTags::State_Blocking));
+			TestEqual(TEXT("Re-possession revives no slot"), D.Slot()->ActiveUntilServerTime, 1.25);
+		}
+	}
+	AethelnDefenseTests::FDefense FreshBlock;
+	if (!FreshBlock.Init(*this)) { return false; }
+	TestNull(TEXT("A new PlayerState starts with no slot"), FreshBlock.Slot());
+	TestEqual(TEXT("A new PlayerState's first block is accepted"), FreshBlock.Raise(), EResult::Accepted);
 	return true;
 }
 
@@ -882,6 +947,21 @@ bool FAethelnDodgeWithoutPresentationTest::RunTest(const FString& Parameters)
 	F.AdvanceTo(S + 0.5);
 	TestFalse(TEXT("The server timeline ends it without animation"), F.Dodge->IsActive());
 	TestFalse(TEXT("No state tag remains"), F.Has(AethelnGameplayTags::State_Dodging));
+
+	// Block rows (P4): the block raises, resolves a contact, and ends with no mesh, montage or notify.
+	AethelnDefenseTests::FDefense D;
+	if (!D.Init(*this)) { return false; }
+	AAethelnCombatAICharacter* Enemy = D.SpawnEnemy(*this);
+	if (Enemy == nullptr) { return false; }
+	TestNull(TEXT("No defender mesh asset"), D.Pawn->GetMesh()->GetSkeletalMeshAsset());
+	TestNull(TEXT("No attacker mesh asset"), Enemy->GetMesh()->GetSkeletalMeshAsset());
+	D.AdvanceTo(1.0);
+	TestEqual(TEXT("A block raises with no presentation"), D.Raise(), EResult::Accepted);
+	D.Swing(*Enemy, 5.0f);
+	D.AdvanceTo(1.375);
+	if (TestEqual(TEXT("The contact resolves"), D.Results.Num(), 1)) { TestEqual(TEXT("Blocked"), D.Results[0].Outcome, EAethelnCombatResultOutcome::Blocked); }
+	TestEqual(TEXT("The block ends on Release"), D.Lower(), EResult::Accepted);
+	TestFalse(TEXT("No block tag remains"), D.Has(AethelnGameplayTags::State_Blocking));
 	return true;
 }
 

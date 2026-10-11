@@ -484,6 +484,9 @@ manual and checked in review.
 | `SetByCaller.Damage.Wrought` | (negated Wrought magnitude of the shared damage effect) | #60 P4 |
 | `Ability.Dodge` | `combat.action.dodge` (proposed for #106, #18 Q13) | #18 P3 |
 | `Cooldown.Dodge`, `State.Dodging`, `State.DodgeInvulnerable` | (cooldown, action, and invulnerability states of the above) | #18 P3 |
+| `Ability.Block` | `combat.action.block` (proposed for #106, #18 Q13) | #18 P4 |
+| `Cooldown.Block`, `State.Blocking`, `State.GuardBroken` | (cooldown, block, and Guard-break states of the above) | #18 P4 |
+| `SetByCaller.Pressure.Guard` | (negated Guard pressure of the shared Guard pressure effect) | #18 P4 |
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and

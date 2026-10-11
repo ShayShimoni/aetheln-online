@@ -41,6 +41,15 @@ namespace AethelnAttackTimeline
 		const double Count = FMath::Max(1.0, FMath::Max(FMath::CeilToDouble(Distance / MaxDistance), FMath::CeilToDouble(AngleDegrees / MaxAngleDegrees)));
 		return FMath::IsFinite(Count) && Count <= static_cast<double>(MAX_int32) ? static_cast<int32>(Count) : 0;
 	}
+
+	bool IsInsideDefenseArc(double DefenderYawDegrees, const FVector& DefenderCenter, const FVector& AttackerOrigin, double ArcDegrees)
+	{
+		if (!FMath::IsFinite(DefenderYawDegrees) || !FMath::IsFinite(ArcDegrees) || ArcDegrees <= 0.0 || ArcDegrees > 360.0) { return false; }
+		const FVector Toward = (AttackerOrigin - DefenderCenter).GetSafeNormal2D();
+		if (Toward.IsNearlyZero()) { return false; } // a zero-length direction fails closed
+		const FVector Facing = FRotator(0.0, DefenderYawDegrees, 0.0).Vector();
+		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Facing | Toward, -1.0, 1.0))) <= ArcDegrees * 0.5;
+	}
 }
 
 namespace
@@ -142,14 +151,29 @@ bool UAethelnCombatTimelineSubsystem::IsHostile(const UAethelnAbilitySystemCompo
 	return &Attacker != &Target && bAttackerIsPlayer != bTargetIsPlayer;
 }
 
-void UAethelnCombatTimelineSubsystem::SetDefenseState(UAethelnAbilitySystemComponent& Target, const FAethelnDefenseState& State)
+bool UAethelnCombatTimelineSubsystem::SetDefenseState(UAethelnAbilitySystemComponent& Target, const FAethelnDefenseState& State)
 {
-	Defenses.Add(TWeakObjectPtr<UAethelnAbilitySystemComponent>(&Target), State);
+	const TWeakObjectPtr<UAethelnAbilitySystemComponent> Key(&Target);
+	const FAethelnDefenseState* Existing = Defenses.Find(Key);
+	if (Existing != nullptr && Existing->ActiveUntilServerTime == TNumericLimits<double>::Max()) { return false; }
+	Defenses.Add(Key, State);
+	return true;
+}
+
+void UAethelnCombatTimelineSubsystem::EndDefenseState(UAethelnAbilitySystemComponent& Target, double EndTime)
+{
+	FAethelnDefenseState* Defense = Defenses.Find(TWeakObjectPtr<UAethelnAbilitySystemComponent>(&Target));
+	if (Defense != nullptr && FMath::IsFinite(EndTime)) { Defense->ActiveUntilServerTime = FMath::Min(Defense->ActiveUntilServerTime, EndTime); }
 }
 
 void UAethelnCombatTimelineSubsystem::ClearDefenseState(UAethelnAbilitySystemComponent& Target)
 {
 	Defenses.Remove(TWeakObjectPtr<UAethelnAbilitySystemComponent>(&Target));
+}
+
+const FAethelnDefenseState* UAethelnCombatTimelineSubsystem::FindDefenseState(UAethelnAbilitySystemComponent& Target) const
+{
+	return Defenses.Find(TWeakObjectPtr<UAethelnAbilitySystemComponent>(&Target));
 }
 
 void UAethelnCombatTimelineSubsystem::HandlePostActorTick(UWorld* World, ELevelTick TickType, float DeltaSeconds)
@@ -308,28 +332,33 @@ void UAethelnCombatTimelineSubsystem::Resolve(const FCandidate& Candidate, TArra
 	Committed.Cue.FamilyTag = AethelnGameplayTags::Damage_Wrought;
 	Committed.Cue.ContactLocation = Candidate.Location;
 	const float Damage = Entry->Definition.WroughtDamage;
+	FAethelnBlockedContact Contact;
+	Contact.Source = Attacker;
+	Contact.ActivationId = Entry->Record.ActivationId;
+	Contact.AbilityId = Entry->Record.AbilityId;
+	Contact.ContentVersion = Entry->Record.ContentVersion;
+	Contact.ContactTime = Candidate.ContactTime;
+	Contact.GuardPressure = Entry->Definition.GuardPressure;
 	// Entry is not used past this point: effects and hooks may re-enter and register steps.
+	// The defense at the contact time (#18 T2, T3): the slot's interval, and the arc from the server actor yaw.
 	const FAethelnDefenseState* Defense = Defenses.Find(Candidate.Target);
 	const AActor* TargetAvatar = Target->GetAvatarActor();
-	bool bBlocked = false;
-	if (Defense != nullptr && TargetAvatar != nullptr && Defense->StateTag.IsValid() && Target->HasMatchingGameplayTag(Defense->StateTag)
-		&& FMath::IsFinite(Defense->ArcDegrees) && Defense->ArcDegrees > 0.0 && Defense->ArcDegrees <= 360.0)
+	const bool bBlocked = Defense != nullptr && TargetAvatar != nullptr
+		&& AethelnAttackTimeline::IsWithinWindow(Candidate.ContactTime, Defense->ActiveFromServerTime, Defense->ActiveUntilServerTime)
+		&& AethelnAttackTimeline::IsInsideDefenseArc(TargetAvatar->GetActorRotation().Yaw, TargetAvatar->GetActorLocation(), Candidate.SourceOrigin, Defense->ArcDegrees);
+	if (Target->IsAvoidingAt(Candidate.ContactTime) || Target->HasAnyMatchingGameplayTags(AvoidanceTags))
 	{
-		const FVector Facing = TargetAvatar->GetActorForwardVector().GetSafeNormal2D();
-		const FVector Toward = (Candidate.SourceOrigin - TargetAvatar->GetActorLocation()).GetSafeNormal2D();
-		bBlocked = !Toward.IsNearlyZero() && FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Facing | Toward, -1.0, 1.0))) <= Defense->ArcDegrees * 0.5;
-	}
-	if (Target->HasAnyMatchingGameplayTags(AvoidanceTags))
-	{
-		// 3. Avoidance: a recorded result and nothing else.
+		// 3. Avoidance: the dodge window at the contact time (#18 T2), or the authored set. A recorded result and nothing else.
 		Committed.Result.Outcome = EAethelnCombatResultOutcome::Avoided;
 	}
 	else if (bBlocked)
 	{
-		// 4. Directional defense: recorded once; the defense owner's hook applies what a blocked hit does.
-		Committed.Result.Outcome = EAethelnCombatResultOutcome::Blocked;
+		// 4. Directional defense: recorded once. The defense owner's hook applies what a blocked hit does and
+		// returns its consequence; the contact is never re-scored. Copy the hook: a Guard break ends the slot.
 		const FAethelnBlockedHook Hook = Defense->OnBlocked;
-		Hook.ExecuteIfBound(Committed.Result);
+		Committed.Result.Outcome = Hook.IsBound() && Hook.Execute(Contact) == EAethelnBlockConsequence::GuardBroken
+			? EAethelnCombatResultOutcome::GuardBroken
+			: EAethelnCombatResultOutcome::Blocked;
 	}
 	else
 	{
@@ -354,14 +383,18 @@ void UAethelnCombatTimelineSubsystem::Resolve(const FCandidate& Candidate, TArra
 void UAethelnCombatTimelineSubsystem::Emit(const FCommitted& Committed)
 {
 	if (UAethelnAbilitySystemComponent* Target = Committed.Target.Get()) { Target->MulticastCombatResultCue(Committed.Cue); }
-	// One hit event per committed result; target identity is not an allowlisted field.
+	// One event per committed result: Dodge for Avoided, Block for Blocked and GuardBroken, otherwise Hit
+	// (#18 D25). Target identity and Guard values are not allowlisted fields.
 	const UWorld* World = GetWorld();
 	UGameInstance* GameInstance = World != nullptr ? World->GetGameInstance() : nullptr;
 	if (UAethelnObservabilitySubsystem* Observability = GameInstance != nullptr ? GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>() : nullptr)
 	{
+		const EAethelnCombatResultOutcome Outcome = Committed.Result.Outcome;
 		FAethelnObservabilityEvent Event;
-		Event.Category = EAethelnObservabilityCategory::Hit;
-		Event.SubjectCategory = EAethelnObservabilityCategory::Hit;
+		Event.Category = Outcome == EAethelnCombatResultOutcome::Hit ? EAethelnObservabilityCategory::Hit
+			: Outcome == EAethelnCombatResultOutcome::Avoided ? EAethelnObservabilityCategory::Dodge
+			: EAethelnObservabilityCategory::Block;
+		Event.SubjectCategory = Event.Category;
 		Event.SafeReason = EAethelnSafeReason::Accepted;
 		FAethelnObservabilityEventContext Context;
 		Context.ConnectionPseudonym = AethelnObservability::ExcludedIdentifier;

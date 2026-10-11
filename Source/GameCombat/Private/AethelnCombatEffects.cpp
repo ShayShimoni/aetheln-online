@@ -74,3 +74,16 @@ UAethelnDamageEffect::UAethelnDamageEffect()
 	Modifier.ModifierOp = EGameplayModOp::AddBase;
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Damage);
 }
+
+UAethelnGuardPressureEffect::UAethelnGuardPressureEffect()
+{
+	DurationPolicy = EGameplayEffectDurationType::Instant;
+
+	FSetByCallerFloat Pressure;
+	Pressure.DataTag = AethelnGameplayTags::SetByCaller_Pressure_Guard;
+
+	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
+	Modifier.Attribute = UAethelnCombatAttributeSet::GetGuardAttribute();
+	Modifier.ModifierOp = EGameplayModOp::AddBase;
+	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Pressure);
+}

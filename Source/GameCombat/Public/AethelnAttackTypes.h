@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AethelnDefenseTypes.h"
 #include "CoreMinimal.h"
 #include "Engine/NetSerialization.h"
 #include "GameplayTagContainer.h"
@@ -40,13 +41,15 @@ enum class EAethelnChainEndReason : uint8
 	InternalFailure
 };
 
-/** A committed contact result. Blocked and Avoided apply no damage. */
+/** A committed contact result. Avoided, Blocked and GuardBroken apply no damage. */
 UENUM()
 enum class EAethelnCombatResultOutcome : uint8
 {
 	Hit,
 	Avoided,
-	Blocked
+	Blocked,
+	/** Blocked, and the defense owner's hook broke the guard (Q8). */
+	GuardBroken
 };
 
 /** Presentation-safe result cue: no damage amount and no attribute value. */
@@ -74,17 +77,23 @@ struct FAethelnCombatResult
 	bool bLethal = false;
 };
 
-DECLARE_DELEGATE_OneParam(FAethelnBlockedHook, const FAethelnCombatResult&);
+DECLARE_DELEGATE_RetVal_OneParam(EAethelnBlockConsequence, FAethelnBlockedHook, const FAethelnBlockedContact&);
 
 /**
- * An active defense state exposed by the defense owner (#18). Active while the target holds
- * StateTag. A contact whose direction from the target lies within ArcDegrees (the full arc,
- * centered on the target's authoritative facing) is Blocked, and OnBlocked runs once; it
- * applies what a blocked hit does. A non-finite arc or one outside (0, 360] defends nothing.
+ * The one active directional defense of a target, exposed by the defense owner (#18; #260's
+ * Hold the Line uses the same slot). It defends a contact whose time lies in
+ * [ActiveFromServerTime, ActiveUntilServerTime) and whose direction lies within ArcDegrees (the
+ * full arc, centered on the target's server actor yaw); the contact is then Blocked, or
+ * GuardBroken, by what OnBlocked returns, and OnBlocked runs once. The interval, never the
+ * presence of StateTag at resolution, decides (#18 T2). A non-finite arc or one outside (0, 360]
+ * defends nothing.
  */
 struct FAethelnDefenseState
 {
 	FGameplayTag StateTag;
+	double ActiveFromServerTime = 0.0;
+	/** Exclusive. Max while held; set on release, Guard break, or cancel. */
+	double ActiveUntilServerTime = TNumericLimits<double>::Max();
 	double ArcDegrees = 0.0;
 	FAethelnBlockedHook OnBlocked;
 };
@@ -108,6 +117,8 @@ struct GAMECOMBAT_API FAethelnAttackStepDefinition
 	UPROPERTY() FTransform PathEnd = FTransform::Identity;
 	UPROPERTY() double MaxAimPitchDegrees = 0.0;
 	UPROPERTY() float WroughtDamage = 0.0f;
+	/** Guard pressure a blocked contact applies (Q7); TBD (#107). */
+	UPROPERTY() float GuardPressure = 0.0f;
 	UPROPERTY() int32 MaxTargets = 0;
 };
 
@@ -184,4 +195,10 @@ namespace AethelnAttackTimeline
 	GAMECOMBAT_API FAethelnAttackSampleInterval ClipActiveInterval(const FAethelnAttackStepDefinition& Step, double Start, double LastSample, double Now, double ResetTime = TNumericLimits<double>::Max());
 	/** Zero means invalid/unrepresentable. No numeric production sampling budget is chosen. */
 	GAMECOMBAT_API int32 GetSubstepCount(double Distance, double AngleDegrees, double MaxDistance, double MaxAngleDegrees);
+	/**
+	 * The block arc (#18 T3): the yaw-only direction from the defender's capsule center to the attacker's
+	 * combat-frame origin at the contact time, against the defender's server actor yaw (never a control
+	 * rotation). Inside at exactly half the arc; a zero-length direction or an invalid arc is outside.
+	 */
+	GAMECOMBAT_API bool IsInsideDefenseArc(double DefenderYawDegrees, const FVector& DefenderCenter, const FVector& AttackerOrigin, double ArcDegrees);
 }
