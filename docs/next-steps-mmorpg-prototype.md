@@ -38,6 +38,7 @@ The prototype should contain only:
 - Pure free aim
 - One basic three-hit attack chain
 - Dodge or evasive movement
+- Directional block
 - Three active abilities
 - Health, Endurance, active Guard, cooldowns, and damage
 - One enemy type
@@ -265,6 +266,7 @@ Add the Gameplay Ability System:
 - Endurance and active Guard
 - Basic attack ability
 - Dodge ability
+- Directional block ability
 - Three skills
 - Damage effects
 - Cooldowns

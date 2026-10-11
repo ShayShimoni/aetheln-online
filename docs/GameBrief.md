@@ -23,7 +23,7 @@ not the target faction-PvP model. (Trace: P10-002, P10-006, P10-009, P10-034.)
 
 1. Two clients join one dedicated-server arena.
 2. Each player moves, aims with pure free aim, uses a basic three-hit chain,
-   dodges, and uses three representative active abilities.
+   dodges, blocks directionally, and uses three representative active abilities.
 3. The players engage one readable enemy and one authoritative objective.
 4. Server-owned health drives death, respawn, reconnect cleanup, and the
    ephemeral activity result.
@@ -72,7 +72,7 @@ Prototype evidence must show:
 
 - a packaged dedicated server and two packaged clients completing the
   authoritative combat scenario;
-- movement, pure-free-aim combat, dodge, the three-hit chain, representative
+- movement, pure-free-aim combat, dodge, directional block, the three-hit chain, representative
   abilities, enemy behavior, death, respawn, and readable HUD feedback;
 - deterministic server rejection and structured, redacted rejection telemetry;
 - focused authority, lifecycle, invalid-command, and network-condition

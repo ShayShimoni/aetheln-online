@@ -90,7 +90,7 @@ The prototype proves the technical foundation and core combat before persistence
   `GameServer`, and editor-only `GameTests` boundaries form a repeatable
   baseline
 - Two connected players can move, use pure free aim, perform a basic three-hit
-  attack chain, dodge, use three representative active abilities, engage one
+  attack chain, dodge and directional block, use three representative active abilities, engage one
   readable enemy and one authoritative objective, take damage, die, and respawn
   in one greybox arena
 - Movement and combat remain understandable under representative latency and packet loss

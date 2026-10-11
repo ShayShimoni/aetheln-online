@@ -132,8 +132,10 @@ not biological restrictions.
 
 ### Safe Mixed Cities
 
-- Neutral cities allow both factions to trade, craft, form permitted groups,
-  use services, and socialize.
+- Neutral cities allow both factions to trade, craft, form groups within their
+  own faction, use services, and socialize.
+- Cross-faction grouping is forbidden everywhere, including neutral safe cities
+  (owner decision on Issue #115, 2026-10-11).
 - Hostile abilities cannot be used inside their sanctuary boundaries.
 - Leaving the boundary returns the character to the region's mandatory PvP
   rules.
@@ -548,7 +550,9 @@ The following require dedicated design decisions and must not be guessed:
 - Final faction names and heraldry.
 - Frontier unlock level.
 - Level cap and progression curve.
-- Faction-switching and cross-faction grouping rules.
+- Faction-switching rules. Cross-faction grouping is decided, not open:
+  forbidden everywhere, including neutral safe cities (owner decision on
+  Issue #115, 2026-10-11).
 - Item slots, rarity names, trading, binding, and economy rules.
 - Exact PvP death loss and contested-resource banking rules.
 - Territory population balancing and outnumbered-faction support.
