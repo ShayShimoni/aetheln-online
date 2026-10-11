@@ -515,6 +515,14 @@ Every accepted decision records:
 - **Revisit trigger:** Measured warm runtime fails the cap, pinned inputs change,
   or the runner trust domain changes. Investigate first; never raise ceilings
   automatically.
+- **Amendment (2026-10-11, portable cap raised to 40 minutes, issue #299):**
+  this revisit trigger fired. The hosted portable `quality-gates` job measured
+  27 to 29.5 minutes (`develop` run 38126471397 took 29m25s), and PR #301 run
+  38136328598 hit the 30-minute cap inside "Run CI suite". The lead, under the
+  owner's standing end-to-end delivery authority, raised only that job's cap to
+  40 minutes. It is still an operational ceiling, not a measured budget. Every
+  other ceiling and watchdog above is unchanged, and #299 continues to cut
+  suite and runner time rather than relying on the higher cap.
 
 ### TA-013 - Measured Clean-Package Time with Identity-Bound Persistent DDC
 
