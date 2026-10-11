@@ -399,7 +399,11 @@ with read-only workflow credentials. Only redacted evidence reports leave the
 runner; packaged bytes are never published, because release assets on this
 public repository are world-downloadable. Their integrity rests on no
 untrusted code ever running on that runner, so a workflow run from a fork pull
-request is never approved while it is registered. Publishing packaged bytes
+request is never approved while it is registered. The same rules cover the
+manual packaging of `develop`
+([TA-024](architecture-decisions.md#ta-024---owner-only-develop-packaging-dispatch-on-a-separate-workflow-identity)),
+which only the owner, or the lead with the owner's explicit OK for that run,
+may start. Publishing packaged bytes
 anywhere needs its own reviewed decision covering a path-leak scan, licensing,
 signing, and that runner-trust risk.
 
