@@ -58,6 +58,7 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 		}
 		if (S.Shape > EAethelnAttackShape::Box || S.ShapeExtent.ContainsNaN()
 			|| S.ShapeExtent.X <= 0.0 || S.ShapeExtent.Y <= 0.0 || S.ShapeExtent.Z <= 0.0
+			|| (S.Shape == EAethelnAttackShape::Capsule && S.ShapeExtent.Z < S.ShapeExtent.X)
 			|| !S.PathStart.IsValid() || !S.PathEnd.IsValid()
 			|| !FMath::IsFinite(S.WroughtDamage) || S.WroughtDamage < 0.0f
 			|| S.MaxTargets < 1 || S.MaxAimPitchDegrees > 90.0)

@@ -38,6 +38,18 @@ console. The repository-root [`.mcp.json`](../.mcp.json) points Claude Code at
 `http://127.0.0.1:8000/mcp`. The server has no authentication, so keep it bound
 to loopback.
 
+Security note: while the server runs, any process on this machine can drive the
+editor through `http://127.0.0.1:8000/mcp` without a login, including console
+commands, Live Coding, and automation tests. A page in a local web browser may
+also be able to send requests to it. Turn off the server's **Auto Start Server**
+setting when you are not using it. A running editor with the server on counts as
+engine use, so it must hold `engine.lock` in the local delivery workflow.
+
+Cook runs use the Editor target (`UnrealEditor-Cmd`), so these Editor-only
+modules load during cooks. This is harmless because the server only starts on a
+per-user preference. Their DLLs are part of the host-tools closure re-attested
+under #267.
+
 The minimal plugin defaults are recorded in
 [`DefaultEngine.ini`](../Config/DefaultEngine.ini) and
 [`DefaultInput.ini`](../Config/DefaultInput.ini):

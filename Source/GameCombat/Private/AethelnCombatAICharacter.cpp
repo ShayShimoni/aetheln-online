@@ -2,6 +2,8 @@
 
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnCombatAttributeSet.h"
+#include "AethelnCombatCollision.h"
+#include "Components/CapsuleComponent.h"
 
 AAethelnCombatAICharacter::AAethelnCombatAICharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -10,6 +12,8 @@ AAethelnCombatAICharacter::AAethelnCombatAICharacter(const FObjectInitializer& O
 	AbilitySystemComponent->SetIsReplicated(true);
 	AbilitySystemComponent->SetReplicationMode(EGameplayEffectReplicationMode::Minimal);
 	AttributeSet = CreateDefaultSubobject<UAethelnCombatAttributeSet>(TEXT("CombatAttributeSet"));
+	// Contacts resolve on the capsule only; the mesh keeps the channel's Ignore default.
+	GetCapsuleComponent()->SetCollisionResponseToChannel(AethelnCombatCollision::QueryChannel, ECR_Overlap);
 }
 
 UAbilitySystemComponent* AAethelnCombatAICharacter::GetAbilitySystemComponent() const

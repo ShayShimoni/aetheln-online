@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AethelnBasicChainAbility.h"
+#include "AethelnCombatAICharacter.h"
 #include "AethelnCombatTestWorld.h"
 #include "AethelnCombatTimelineSubsystem.h"
 #include "AethelnPlayerCharacter.h"
@@ -40,9 +41,23 @@ namespace AethelnChainTests
 		EAethelnChainEndReason Reason = EAethelnChainEndReason::None;
 	};
 
+	/** A chain request for any player ASC, with the controller's aim and the world time. */
+	FAethelnCombatActivationRequest MakeChainRequest(const UAethelnAbilitySystemComponent& AbilitySystem, uint32 Sequence);
+
+	/** Another attacker in the fixture's world, for ordering tests. */
+	struct FAttacker
+	{
+		AethelnCombatTests::FTestPlayer Player;
+		AAethelnPlayerCharacter* Pawn = nullptr;
+		UAethelnChainTestAbility* Ability = nullptr;
+		uint32 NextSequence = 1;
+		EAethelnActivationResult Press() { return Player.AbilitySystem->ProcessServerRequest(MakeChainRequest(*Player.AbilitySystem, NextSequence++)); }
+	};
+
 	/** Real authority world, possession, grant, seam, GAS effects and world-delegate driver. */
 	struct FFixture
 	{
+		explicit FFixture(bool bWithGameInstance = false) : World(bWithGameInstance) {}
 		AethelnCombatTests::FScopedCombatTestWorld World;
 		AethelnCombatTests::FTestPlayer Player;
 		AAethelnPlayerCharacter* Pawn = nullptr;
@@ -52,11 +67,13 @@ namespace AethelnChainTests
 		TArray<FAethelnCombatActivationRecord> Records;
 		TArray<FEnd> Ends;
 		TArray<FAethelnAttackSampleInterval> Intervals;
+		TArray<FAethelnCombatResult> Results;
 		uint32 NextSequence = 1;
 		int32 CostApplications = 0;
 		FDelegateHandle RecordHandle;
 		FDelegateHandle EndHandle;
 		FDelegateHandle WindowHandle;
+		FDelegateHandle ResultHandle;
 		FDelegateHandle CostHandle;
 
 		bool Init(FAutomationTestBase& Test);
@@ -65,6 +82,10 @@ namespace AethelnChainTests
 		EAethelnActivationResult Press();
 		void AdvanceTo(double Time);
 		float Endurance() const;
+		/** A headless enemy dummy with test attribute values, standing still at Location. */
+		AAethelnCombatAICharacter* SpawnTarget(FAutomationTestBase& Test, const FVector& Location) const;
+		/** A second player with the chain, possessing a still pawn at Location, aiming along Yaw. */
+		bool SpawnAttacker(FAutomationTestBase& Test, FAttacker& Out, const FVector& Location, double Yaw) const;
 	};
 }
 #endif
