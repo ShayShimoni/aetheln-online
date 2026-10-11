@@ -1039,7 +1039,12 @@ the remapping mechanism and controller layout (#82); display names.
 3. **Airborne facing** has no rate bound, which matters for the block arc
    (Q12). Owner: #17, tracked as
    [#306](https://github.com/ShayShimoni/aetheln-online/issues/306); P4's
-   merge waits for it (owner, 2026-10-11).
+   merge waits for it (owner, 2026-10-11). By owner direction of 2026-10-11
+   a jump may start again as soon as the character lands or touches an
+   obstacle, and each takeoff may snap the actor yaw by up to 180 degrees;
+   #306 bounds only the other mid-air turning. With a block held, repeated
+   takeoffs can therefore swing the arc. Whether to disable the snap while a
+   block is held is an open owner decision.
 4. **Move data has no schema version** (#82 F10). The dodge field in the
    custom move data relies on build-identical clients and servers. F10's
    revisit trigger, "when a flag is added", fires with `FLAG_Custom_2`; this
