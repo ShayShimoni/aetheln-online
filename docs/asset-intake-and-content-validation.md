@@ -289,7 +289,9 @@ wrapper first builds the exact `AethelnOnlineEditor Win64 Development` target
 with the CI editor build's compiler and Windows SDK pins
 (`-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0`, the values in
 `scripts/ci/InitialPreparation.BuildInvocation.ps1`), so in CI it reuses that
-editor build instead of switching toolchains. It then derives the exact
+editor build instead of switching toolchains. Like that build, it passes
+`-NoEngineChanges` (issue #267), so UBT exits 5 instead of rewriting an
+existing engine file. It then derives the exact
 versioned toolchain and module evidence from that build:
 
     New-Item -ItemType Directory -Path TestResults -Force

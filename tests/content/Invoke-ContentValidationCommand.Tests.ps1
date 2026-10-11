@@ -788,10 +788,10 @@ try {
 	Assert-True (($ParameterNames -join ',') -ceq ($ExpectedParameters -join ',')) 'The runner public parameter contract changed unexpectedly.'
 	$RunnerText = Get-Content -LiteralPath $SourceRunner -Raw
 	Assert-True ($RunnerText -match 'Engine[\\/]Build[\\/]BatchFiles[\\/]Build\.bat' -and $RunnerText -match "'AethelnOnlineEditor','Win64','Development'" -and $RunnerText -match "'-WaitMutex','-NoHotReloadFromIDE'") 'The wrapper must own the exact approved AethelnOnlineEditor Win64 Development build invocation.'
-	# The CI editor build pins its compiler and SDK; the wrapper's build must pass the same pins so it reuses that build in CI.
+	# The CI editor build pins its compiler and SDK and refuses engine rewrites (issue #267); the wrapper's build must pass the same flags so it reuses that build in CI and never relinks an engine module.
 	$CiBuildInvocation = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\InitialPreparation.BuildInvocation.ps1') -Raw
 	$CiToolchainPins = [regex]::Matches($CiBuildInvocation, ' (-CompilerVersion=[0-9.]+) (-WindowsSDKVersion=[0-9.]+)"')
-	Assert-True ($CiToolchainPins.Count -eq 1 -and $RunnerText.Contains("'-NoHotReloadFromIDE','" + $CiToolchainPins[0].Groups[1].Value + "','" + $CiToolchainPins[0].Groups[2].Value + "')")) 'The wrapper editor build must pass exactly the CI editor build compiler and Windows SDK pins.'
+	Assert-True ($CiToolchainPins.Count -eq 1 -and $CiBuildInvocation.Contains("'AethelnOnlineEditor') { ' -NoEngineChanges' }") -and $RunnerText.Contains("'-NoHotReloadFromIDE','-NoEngineChanges','" + $CiToolchainPins[0].Groups[1].Value + "','" + $CiToolchainPins[0].Groups[2].Value + "')")) 'The wrapper editor build must pass -NoEngineChanges and exactly the CI editor build compiler and Windows SDK pins.'
 	$CreateIndex = $RunnerText.IndexOf('if(!CreateProcess(')
 	$AssignIndex = $RunnerText.IndexOf('Assign(information.process)')
 	$ResumeIndex = $RunnerText.IndexOf('ResumeThread(information.thread)')
@@ -854,7 +854,7 @@ try {
 	$SpacedBuildPath = Invoke-Case -Name 'build path with spaces' -FakeBin $FakeBin
 	$SpacedBuildArguments = if (Test-Path -LiteralPath $SpacedBuildPath.fixture.buildCapture) { [IO.File]::ReadAllLines($SpacedBuildPath.fixture.buildCapture) } else { @() }
 	Assert-True ($SpacedBuildPath.exitCode -eq 0 -and $null -ne $SpacedBuildPath.report -and
-		$SpacedBuildArguments.Count -eq 8 -and $SpacedBuildArguments[3] -ceq (Join-Path $SpacedBuildPath.fixture.repository 'AethelnOnline.uproject')) "The suspended cmd.exe launch must preserve exact Build.bat arguments when engine and project paths contain spaces. Output: $($SpacedBuildPath.output)"
+		$SpacedBuildArguments.Count -eq 9 -and $SpacedBuildArguments[3] -ceq (Join-Path $SpacedBuildPath.fixture.repository 'AethelnOnline.uproject')) "The suspended cmd.exe launch must preserve exact Build.bat arguments when engine and project paths contain spaces. Output: $($SpacedBuildPath.output)"
 	$Concurrent = Invoke-Case -Name 'concurrent-directory' -FakeBin $FakeBin -OutputAttack 'concurrent-directory'
 	Assert-True ($Concurrent.secondExitCode -ne 0 -and $Concurrent.secondOutput -match 'output_guard_directory_busy' -and
 		-not $Concurrent.secondStartedBuild -and $Concurrent.canonicalBeforeRelease -ceq '{"stale":true}' -and
@@ -904,7 +904,7 @@ try {
 		$UpToDate.report.execution_provenance.resource_compiler_sha256 -ceq (Get-Sha256 $UpToDate.fixture.resourceCompiler) -and
 		(Get-Content -LiteralPath $UpToDate.fixture.buildLog -Raw) -notmatch 'Using Visual Studio') "An up-to-date editor build must take its toolchain identity from the UBT target makefile. Output: $($UpToDate.output)"
 	$BuildArguments = [IO.File]::ReadAllLines($Success.fixture.buildCapture)
-	$ExpectedBuildArguments = @('AethelnOnlineEditor','Win64','Development',(Join-Path $Success.fixture.repository 'AethelnOnline.uproject'),'-WaitMutex','-NoHotReloadFromIDE','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
+	$ExpectedBuildArguments = @('AethelnOnlineEditor','Win64','Development',(Join-Path $Success.fixture.repository 'AethelnOnline.uproject'),'-WaitMutex','-NoHotReloadFromIDE','-NoEngineChanges','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 	Assert-True (($BuildArguments -join [char]0) -ceq ($ExpectedBuildArguments -join [char]0)) 'The wrapper must run the exact approved Editor build argument vector before validation.'
 	Assert-True ([IO.File]::ReadAllText($Success.fixture.buildCapture + '.msbuild-node-reuse') -ceq '1') 'The editor build must inherit MSBUILDDISABLENODEREUSE=1 so no reusable MSBuild node keeps the build job alive.'
 	$ExpectedBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($Success.fixture.build) + $ExpectedBuildArguments))

@@ -2222,8 +2222,13 @@ Every accepted decision records:
   - *Build alignment (D3):* the launcher's editor build passes the CI editor
     build's `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0` and,
     like it, no `-Compiler`, so after the editor job the launcher's build is
-    expected to be a no-op rather than a toolchain switch. A launcher test pins
-    the two values to `InitialPreparation.BuildInvocation.ps1`. Because UBT
+    expected to be a no-op rather than a toolchain switch. Like it, the
+    launcher also passes `-NoEngineChanges` (TA-020 2026-10-06 amendment,
+    issue #267): the editor job finishes successfully even when its build
+    fails, so the content job still starts, and its build holds no engine
+    host lease; UBT then exits 5 instead of rewriting an existing engine file.
+    A launcher test pins the flag and the two values to
+    `InitialPreparation.BuildInvocation.ps1`. Because UBT
     logs its toolchain line only when it executes actions, the launcher reads
     the compiler and SDK identity from the toolchain line that UBT records in
     the target makefile, which an up-to-date build keeps
@@ -2279,7 +2284,7 @@ Every accepted decision records:
   (`Test-RunnerSchedulingPolicy.Tests.ps1`). The report fixtures are synthetic
   until the first live launcher run (decision D6) supplies a real report.
 - **Cost:** an owner engine pull request that selects content can hold the
-  runner for up to 119 minutes (40-minute compile, 45-minute editor
+  runner for up to 120 minutes (40-minute compile, 46-minute editor
   automation, and 34-minute content validation) when no older waiter queued
   between the jobs. A scheduled phase that queues while the content job runs
   waits at most 34 minutes for it.

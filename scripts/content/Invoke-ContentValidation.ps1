@@ -1074,8 +1074,10 @@ Invoke-OutputOpenTestSeam 'pre-build-open'
 Assert-ExecutionBoundary -Phase 'pre-build validation' -SourceRevision $SourceRevision -EngineRevision $EngineRevision -EngineTagRevision $EngineTagRevision -FileStates $ImmutableFileStates
 # The same compiler and SDK pins as the CI editor build
 # (scripts/ci/InitialPreparation.BuildInvocation.ps1), so in CI this build
-# reuses that editor build instead of switching toolchains.
-$BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-WaitMutex','-NoHotReloadFromIDE','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
+# reuses that editor build instead of switching toolchains. -NoEngineChanges,
+# also as there (issue #267): UBT exits 5 instead of rewriting an existing
+# engine file, because this build holds no engine host lease.
+$BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-WaitMutex','-NoHotReloadFromIDE','-NoEngineChanges','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 $EditorBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($BuildScriptPath) + $BuildArguments))
 $BuildExitCode = $null
 $BuildInvocationError = $null
