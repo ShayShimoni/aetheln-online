@@ -38,11 +38,21 @@ public:
 	/** The one relation rule (OQ1): players are allies, only enemies are hostile, never self. Faction policy replaces it later. */
 	static bool IsHostile(const UAethelnAbilitySystemComponent& Attacker, const UAethelnAbilitySystemComponent& Target);
 
-	/** Server only. The defense owner (#18) exposes or clears a target's active defense state. */
-	void SetDefenseState(UAethelnAbilitySystemComponent& Target, const FAethelnDefenseState& State);
+	/**
+	 * Server only. The defense owner (#18) registers a target's one defense slot. Returns false while
+	 * another slot is still held (no finite end), so a second slot fails closed; an ended slot is
+	 * replaced. EndDefenseState stamps the exclusive end and keeps the slot, so contacts stay exact.
+	 */
+	bool SetDefenseState(UAethelnAbilitySystemComponent& Target, const FAethelnDefenseState& State);
+	void EndDefenseState(UAethelnAbilitySystemComponent& Target, double EndTime);
 	void ClearDefenseState(UAethelnAbilitySystemComponent& Target);
+	const FAethelnDefenseState* FindDefenseState(UAethelnAbilitySystemComponent& Target) const;
 
-	/** Authored avoidance set: a target holding any of these tags yields Avoided. Empty until #18 adds its tag. */
+	/**
+	 * Authored avoidance set, checked by presence when the contact resolves: a target holding any of
+	 * these tags yields Avoided. Empty. The dodge never enters it: its window is asked at the contact
+	 * time (IsAvoidingAt, #18 T2), and no interval-backed tag may be added here.
+	 */
 	UPROPERTY(Config)
 	FGameplayTagContainer AvoidanceTags;
 

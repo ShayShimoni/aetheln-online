@@ -27,7 +27,7 @@ not the target faction-PvP model. (Trace: P10-002, P10-006, P10-009, P10-034.)
 3. The players engage one readable enemy and one authoritative objective.
 4. Server-owned health drives death, respawn, reconnect cleanup, and the
    ephemeral activity result.
-5. The HUD presents health, the prototype combat resource, cooldowns, objective
+5. The HUD presents Health, Endurance, active Guard, cooldowns, objective
    state, corrections, rejections, death, and completion without owning any
    outcome.
 
@@ -52,14 +52,15 @@ P10-017, P10-042, P10-043.)
 
 Exact timings, ranges, costs, damage, movement bounds, network profiles, and
 performance thresholds remain evidence or tuning TBDs. The prototype combat
-resource is deliberately unnamed: Guard, mana, and stamina are not approved.
+resources are Health, Endurance, and active Guard, as defined by the
+[Game Design Bible](game-design-bible.md#prototype-combat-boundary); Ward and OrderResource are not prototype runtime scope.
 (Trace: P10-003, P10-011-P10-017, P10-043, P10-047, P10-052; canonical owner:
 [Combat and Networking Architecture](combat-and-networking-architecture.md).)
 
 ## Foundation boundary
 
 The accepted module baseline is `GameCore`, `GameCombat`, `GameUI`,
-`GameNet`, and server-only `GameServer`. Exact engine revision, compiler,
+`GameNet`, server-only `GameServer`, and editor-only `GameTests`. Exact engine revision, compiler,
 SDK, plugin, build, and deployment mechanics remain owned by #13/#15. Issue
 #13 approved and verified a Blank C++ project with no Starter Content. (Trace:
 P10-002, P10-004, P10-006, P10-008, P10-044, P10-048, P10-051; canonical owner:
@@ -101,7 +102,8 @@ P10-046, P10-051; release allocation:
 | --- | --- | --- |
 | Target party size | #1/#71 | Blocks party-size-dependent 1.0 work; the prototype does not select it. |
 | First PvE completion condition | #1/#71 | Blocks final objective contracts in the prototype and 1.0. |
-| Prototype combat resource identity | #1/#71 | Blocks final GAS attribute, cost, recovery, and HUD wording. |
 
 These decisions require reviewed updates to their canonical destinations; brief
-prose alone cannot resolve them. (Trace: P10-041-P10-043.)
+prose alone cannot resolve them. The former prototype combat resource
+identity decision is resolved by the
+[Game Design Bible](game-design-bible.md#prototype-combat-boundary): Health, Endurance, and active Guard. (Trace: P10-041-P10-043.)
