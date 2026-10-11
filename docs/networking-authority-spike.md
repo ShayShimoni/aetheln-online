@@ -514,8 +514,11 @@ the repository owner's PR and Issue #2 comments.
 - **Covered results:** authoritative movement, enemy spawn, server-resolved
   melee and damage, join-in-progress, disconnect, and fresh-identity reconnect.
   The capture also contained exactly eight genuine invalid-claim rejections
-  (movement, aim, activation, hit, cooldown, dodge, block, and damage). The
-  30-second post-reconnect interval completed (30.932 s), logs drained, stderr
+  (movement, aim, activation, hit, cooldown, dodge, block, and damage). That
+  capture predates the current ten-probe contract: at `74bd706a` the runner
+  required these eight probes, and later changes for Issues #38 and #44
+  (commits `186b4f8` and `997ceeb`) moved the contract to the ten described
+  above. The 30-second post-reconnect interval completed (30.932 s), logs drained, stderr
   stayed empty, no Windows or WSL game process remained, and a bounded
   sensitive-pattern scan found zero matches.
 - **Artifact hashes (SHA-256):**
@@ -536,12 +539,13 @@ the repository owner's PR and Issue #2 comments.
 The original provenance recorded a null engine Git field. It was supplemented,
 without rebuilding or changing package bytes, with the pinned engine tag
 `5.8.1-release` at commit `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`. The
-runner marks this result `packaged-candidate`; the fresh restricted verifier,
-reviewer, and approver stages passed.
+owner's PR #129 comments record that the fresh restricted verifier, reviewer,
+and approver stages passed. Under the runner contract above, packaged mode
+produces only `packaged-candidate`, so the result needed those stages.
 
-This capture uses the opt-in scenario with the neutral present-time baseline
-only. It carries no measured latency, jitter, loss, tick, history, bandwidth,
-or capacity value, and it does not compare candidates.
+The scenario code drives the neutral present-time baseline only. By the
+contract above, this capture carries no measured latency, jitter, loss, tick,
+history, bandwidth, or capacity value, and it does not compare candidates.
 
 ### Not yet performed
 
