@@ -1964,6 +1964,93 @@ Every accepted decision records:
     output, the job gate, the head check step in both jobs, and runs the
     classifier matrix and the head check against fixtures (current, superseded,
     and every fail-open case).
+- **Amendment (2026-10-11, UHT input cache needs a new makefile, issue #167):**
+  the 2026-10-05 fix holds only for builds that create their target makefile.
+  This amendment corrects that amendment's statement that the cache gives
+  `0xF26BCE42` "on every run", supersedes its *Provisioning requirement*
+  remark that an `-EnableUHTInputCache` argument in the wrapper is a possible
+  follow-up, and completes the 2026-10-06 *Consequence* remark that the
+  editor flag depends on the input-cache file: the file must be present and
+  the build must create its makefile. The rest of both amendments stands,
+  including the `BuildConfiguration.xml` setting.
+  - *Mechanism:* a read-only investigation of the pinned engine source
+    (2026-10-11, `issue-167-uht-cache-investigation-2026-10-11.md` in the lead's
+    delivery evidence, outside the repository) found that UBT copies
+    `bEnableUHTInputCache` into the makefile's UHT target settings only while
+    it creates a makefile
+    (`UnrealBuildTool/Configuration/UEBuildTarget.cs:2866-2868`, in
+    `BuildMakefile1`). The makefile saves and loads only three of those
+    settings (`Shared/EpicGames.Core/UHTTypes.cs:147-159`, called from
+    `UnrealBuildTool/System/TargetMakefile.cs:554` and `:650`), so
+    `EnableInputCacheRead` and `EnableInputCacheWrite` come back `false` when
+    UBT reuses a saved `Makefile.bin`. UHT then re-parses every header with
+    the cache off and skips the cache-only pass that re-applies `Referenced`
+    after parsing (`Shared/EpicGames.UHT/Types/UhtHeaderFile.cs:461`), so the
+    race between `Reset` and `AddReferencedHeader` decides the NetCore output
+    again. The short UHT summary line "(N generated files written)" marks a
+    cache-off run (`UnrealBuildTool/Modes/UnrealHeaderToolMode.cs:869-881`).
+    Paths are relative to `Engine/Source/Programs/`.
+  - *Evidence:* on 2026-10-11 a local build that reused its makefile ran UHT
+    with the cache off for 20.8 s, rewrote the engine's
+    `Engine/Intermediate/Build/Win64/UnrealEditor/Inc/NetCore/UHT/NetCore.init.gen.cpp`,
+    and UBT then refused the NetCore relink and exited 5
+    (`FailedDueToEngineChange`). Every other build log available that day that
+    created its makefile used the cache and left NetCore unchanged. How often
+    a cache-off run flips the file is not measured.
+  - *Why `-NoEngineChanges` is not enough by itself:* UHT writes the flipped
+    file under `Engine/Intermediate` before UBT refuses the build. The tree is
+    then changed, and every later `-NoEngineChanges` build, including every CI
+    editor run, exits 5 (`editor_build_engine_changes_required`) until the file
+    is restored with its original timestamp.
+  - *CI mitigation:* `scripts/ci/InitialPreparation.BuildInvocation.ps1`
+    deletes the target's makefile,
+    `<target root>/Intermediate/Build/<platform>/x64/<target>/Development/Makefile.bin`,
+    before it starts `Build.bat`, so every build it runs creates its makefile
+    and runs UHT with the cache on. It deletes nothing else, refuses a
+    reparse point on that path (`build_path_invalid`), and records a failed
+    deletion as `build_capture_failed` without starting the build. The wrapper
+    is the only route by which CI builds a project target outside UAT: the
+    editor build, the client and server compile, packaging's host editor
+    build, initial preparation and the cold dry run all use it. Packaging's
+    client and server builds already delete the makefile: BuildCookRun
+    `-clean` and the split recipe's `Clean.bat` run UBT's clean mode, which
+    deletes `TargetMakefile.GetLocation(...)`
+    (`UnrealBuildTool/Modes/CleanMode.cs:179`). Creating the makefile costs a
+    few seconds per build, and UHT then runs on every build (about 4 to 6 s
+    with the cache on). Compile actions are not affected. The compile
+    report's pre-run presence fields still describe the state before the
+    wrapper, so a managed build now usually records
+    `makefileReason=no_existing_makefile` while `makefilePresentBeforeRun` is
+    `true`.
+  - *Local rule:* delegated agents delete their worktree's target makefile
+    before every local engine build, check NetCore with the lead's
+    `restore-netcore.ps1 -Check` tool before each build, and restore it with
+    that tool (keeping the original timestamp) after an exit 5 that names
+    NetCore. These rules live in the lead's agent rules outside the
+    repository.
+  - *Not covered:* UBT runs that the wrapper does not start still reuse their
+    makefile and run UHT with the cache off: editor-started rebuilds, Live
+    Coding, IDE builds, contributor command-line builds that skip the
+    deletion, `scripts/content/Invoke-ContentValidation.ps1`, host-tool
+    provisioning, and the engine-runner gate's unmanaged compile path, which
+    CI does not use.
+  - *Decision:* the owner chose on 2026-10-11 (recorded on Issue #167) to keep
+    the pinned Epic engine unmodified. The mitigation is the makefile deletion
+    plus the NetCore check and restore.
+  - *Rejected:* patching the engine source, either (a) to save and load the
+    two cache settings in `UHTTypes.cs` and raise
+    `TargetMakefile.CurrentVersion`, or (b) to run the `Referenced` re-apply
+    pass at `UhtHeaderFile.cs:461` whatever the cache setting. Either patch
+    would make the pinned engine tree no longer a clean checkout. Also
+    rejected: `-EnableUHTInputCache` on the UBT command line (it forces one
+    `command_line_changed` makefile rebuild, after which the setting is lost
+    again), `-NoUBTMakefiles` (UBT still loads the makefile), and
+    `-ForceHeaderGeneration` (it turns the cache read off).
+  - *Evidence of the change:* `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`
+    (required suite entry) and `tests/ci/InitialPreparation.Build.Tests.ps1`
+    run the wrapper against a fake `Build.bat` that reports whether the
+    target's makefile still exists when it starts; they require that it did
+    not, and that a makefile of another target or configuration remains.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
