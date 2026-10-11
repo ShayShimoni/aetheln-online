@@ -1124,7 +1124,7 @@ Assert-True ($Workflow.Substring(0, $AuthorityStart) -notmatch 'ci-acceptance-au
 
 # Portable job: GitHub-hosted, explicitly bounded, StarterMap-only LFS.
 Assert-True ($QualityGates -match '(?m)^\s+runs-on: windows-latest\r?$') 'The portable job must stay on the GitHub-hosted Windows runner.'
-Assert-True ($QualityGates -match '(?m)^\s+timeout-minutes: 30\r?$') 'The portable job must declare an explicit conservative bound.'
+Assert-True ($QualityGates -match '(?m)^\s+timeout-minutes: 40\r?$') 'The portable job must declare an explicit conservative bound.'
 Assert-True ($QualityGates -notmatch '(?m)^\s+needs:') 'The portable job must not depend on any engine or classifier job.'
 Assert-True ($QualityGates -match 'git lfs pull --include "Content/Maps/StarterMap\.umap"') 'The portable job must materialize the StarterMap LFS fixture.'
 

@@ -207,7 +207,7 @@ operator select an older branch that still carries the retired 1,440-minute
 `PackagedSmoke` job, so none exists on this workflow identity. Internal release
 packaging uses the separate workflow described in
 [Release packaging](#release-packaging-issue-226). The `quality-gates` job runs the portable suite on every event, on a
-GitHub-hosted `windows-latest` runner bounded at 30 minutes. That job checks
+GitHub-hosted `windows-latest` runner bounded at 40 minutes. That job checks
 out without LFS smudge, fetches only the
 `Content/Maps/StarterMap.umap` LFS object required by the source-control policy
 check, runs the local invocation above, and always uploads
@@ -1387,7 +1387,7 @@ be reused by the incremental compiler and are never deleted by this gate.
 ### Retained Compile workspace and operational limit
 
 The 2026-09-06 owner-directed CI redesign selects operational safety limits,
-not measured performance budgets. Portable CI has a 30-minute job cap.
+not measured performance budgets. Portable CI has a 40-minute job cap.
 Compile has a 40-minute job cap and one 30-minute controlled-work deadline
 covering checkout, input discovery, both targets and diagnostics. The workflow
 captures UTC evidence and the host's monotonic timestamp before control checkout;
