@@ -2201,14 +2201,14 @@ Every accepted decision records:
   commit after release QA); publishing packages as a GitHub pre-release
   (rejected: world-downloadable on a public repository).
 - **Consequences:** One more FIFO waiter in `aetheln-engine-runner`, with the
-  same bounds. Each run reserves 64 GiB of the shared handoff cap until its
-  cleanup request is acted on. The immediate kill switch is disabling the
-  workflow; the permanent rollback is reverting it. The issue #267 TA-014
-  amendment (2026-10-06) changes the controller and gate this workflow calls,
-  with no workflow change: each release package phase builds the project
-  editor modules first, leaves `UnrealPak` outside the attestation, runs the
-  manifest-set check, refuses a set `UE_ADDITIONAL_PLUGIN_PATHS`, and reports
-  the attestation record hash.
+  same bounds. Admission counts only the bytes already committed under the
+  shared handoff root (see TA-024 for the limit this leaves). The immediate
+  kill switch is disabling the workflow; the permanent rollback is reverting
+  it. The issue #267 TA-014 amendment (2026-10-06) changes the controller and
+  gate this workflow calls, with no workflow change: each release package
+  phase builds the project editor modules first, leaves `UnrealPak` outside
+  the attestation, runs the manifest-set check, refuses a set
+  `UE_ADDITIONAL_PLUGIN_PATHS`, and reports the attestation record hash.
 - **Owner:** Issue #226.
 - **Revisit trigger:** Any package leaves the owner's control (external
   testers, a public download, or a store), a collaborator gains write access, a
@@ -2217,12 +2217,15 @@ Every accepted decision records:
   owner accepted the same runner-trust risk for a manual packaging dispatch of
   `develop` (OD-7 on issue #267), extending the 2026-10-03 acceptance above,
   which covered `release/*` only. The dispatch is owner-only (OD-8): the owner
-  presses it, or the lead presses it only with the owner's explicit OK for
-  that run; agents never dispatch it. TA-024 records the separate
-  `.github/workflows/develop-packaging.yml` identity that carries it. The
-  runner-trust analysis, the fork-run rule, the operator rule, and the
-  revisit triggers above apply to it unchanged. `prototype-quality-gates.yml`
-  still keeps no manual trigger.
+  presses it. No agent other than the lead dispatches it, and the lead only
+  with the owner's explicit OK for that run. The workflow cannot tell a lead
+  dispatch from an owner dispatch, because both run as `ShayShimoni`, and so
+  does every agent that uses the owner's `gh` credentials. Who may dispatch,
+  and the per-run OK, are therefore enforced by process, not by the workflow.
+  TA-024 records the separate `.github/workflows/develop-packaging.yml`
+  identity that carries it. The runner-trust analysis, the fork-run rule, the
+  operator rule, and the revisit triggers above apply to it unchanged.
+  `prototype-quality-gates.yml` still keeps no manual trigger.
 
 ### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
 
@@ -2339,8 +2342,11 @@ Every accepted decision records:
   `contents: read`, checkouts pin the dispatched SHA without persisted
   credentials, and only five redacted reports are uploaded with the default
   retention. There is no build number and no release evidence. Who may
-  dispatch: the owner, or the lead only with the owner's explicit OK for that
-  run (OD-8).
+  dispatch: the owner; no agent other than the lead, and the lead only with
+  the owner's explicit OK for that run (OD-8). The workflow cannot tell a lead
+  dispatch from an owner dispatch (both run as `ShayShimoni`, as does every
+  agent that uses the owner's `gh` credentials), so who may dispatch, and the
+  per-run OK, are enforced by process, not by the workflow.
 - **Context:** The weekly schedule is the only other path that packages
   `develop`, so proving a packaging fix (PR #301 on issue #267) waits
   up to a week. On 2026-10-06 the lead chose a separate workflow (OD-6) over a
@@ -2359,11 +2365,18 @@ Every accepted decision records:
 - **Consequences:** One more FIFO waiter in `aetheln-engine-runner` with the
   same bounds; a dispatch that overlaps the schedule or a release run
   interleaves phase by phase in separate run-scoped handoff directories.
-  Residual risk: every packaging run reserves 64 GiB of the shared 256 GiB
-  handoff cap until its cleanup request is acted on, so dispatches between
-  cleanups can make a later scheduled, release, or dispatched run fail closed
-  with `handoff_storage_exhausted`. The owner checks the cleanup requests
-  before dispatching. This decision adds no workflow-level dispatch cap; that
+  Residual risk: nothing is reserved for a run in progress. Admission happens
+  once, in the PackageClient phase of `scripts/ci/Invoke-EngineRunnerGate.ps1`:
+  it counts only the bytes already committed under the shared handoff root and
+  refuses with `handoff_storage_exhausted` when they exceed 256 GiB minus
+  64 GiB (192 GiB). A run that does not overlap another therefore either
+  stays within 256 GiB or is refused with `handoff_storage_exhausted` before
+  packaging. Runs whose phases interleave on the shared engine queue
+  (scheduled, release, develop dispatch) can together exceed the 256 GiB cap.
+  The protection is that the dispatcher checks the cleanup requests and the
+  free disk space before a dispatch: the owner, or the lead when the owner OKs
+  the run.
+  This decision adds no workflow-level dispatch cap; that
   cap (OD-11 on issue #267) stays a separate lead decision. The immediate kill
   switch is disabling the workflow; the permanent rollback is reverting it.
 - **Evidence:** `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the exact
@@ -2376,6 +2389,11 @@ Every accepted decision records:
 - **Owner:** Issue #267.
 - **Revisit trigger:** The TA-022 revisit triggers, a dispatch needs inputs or
   another branch, or the handoff budget blocks a scheduled or release run.
+- **Amendment (2026-10-11, PR #315 and #316 reviews, issue #267):** Corrected
+  the handoff admission wording (committed bytes only, no reservation; a run
+  that does not overlap another either stays within 256 GiB or is refused with
+  `handoff_storage_exhausted`) and the dispatch authority wording (who may
+  dispatch is enforced by process, not only the per-run OK).
 
 ## Candidate Decisions
 
