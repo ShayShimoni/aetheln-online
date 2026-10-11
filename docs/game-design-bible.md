@@ -282,11 +282,13 @@ readability with [#61](https://github.com/ShayShimoni/aetheln-online/issues/61);
 and input/camera feel with
 [#82](https://github.com/ShayShimoni/aetheln-online/issues/82).
 
-Some prototype brief and scope-ledger text still carries the pre-Issue-#103
-placeholder phrase `prototype combat resource` or says not to canonize Guard.
 This Issue-#105 grammar is the approved source contract for the four canonical
-documents updated here; [Issue #115](https://github.com/ShayShimoni/aetheln-online/issues/115)
-owns the downstream brief, ledger, roadmap, glossary, generated-artifact, and
+documents updated here. It replaces the pre-Issue-#103 placeholder phrase
+`prototype combat resource` and the earlier instruction not to canonize Guard;
+the prototype brief, scope ledger, supporting artifacts, and prototype roadmap
+now name Health, Endurance, and active Guard.
+[Issue #115](https://github.com/ShayShimoni/aetheln-online/issues/115) owns any
+remaining downstream brief, ledger, roadmap, glossary, generated-artifact, and
 board reconciliation. Historical evidence keeps the terminology it recorded
 at the time and is not silently rewritten.
 
@@ -533,9 +535,10 @@ The current prototype does not build that entire game at once. It first proves:
 - One enemy and one controlled combat space.
 - Playability under representative latency and packet loss.
 
-Later vertical slices introduce permanent progression and loot, cooperative
-PvE, faction identity, one contested region, and finally capital-invasion
-systems. Deferring a target feature from the prototype does not make that
+Later vertical slices introduce cooperative PvE with minimal permanent
+progression, then inventory, equipment, Character Levels, and initial Skein
+Weaving, then faction identity with one contested region, and finally
+capital-invasion systems. Deferring a target feature from the prototype does not make that
 feature optional in the final game.
 
 ## Open Decisions

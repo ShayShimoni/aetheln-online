@@ -419,6 +419,8 @@ bool FAethelnAttackStepDefinitionTest::RunTest(const FString& Parameters)
 		[](auto& A) { A.ProvisionalSteps[2].BufferOpen = 0.375; },
 		[](auto& A) { A.ProvisionalSteps[2].LinkOpen = 0.5; },
 		[](auto& A) { A.ProvisionalSteps[0].WroughtDamage = -1.0f; },
+		[](auto& A) { A.ProvisionalSteps[0].GuardPressure = -1.0f; },
+		[](auto& A) { A.ProvisionalSteps[0].GuardPressure = std::numeric_limits<float>::quiet_NaN(); },
 		[](auto& A) { A.ProvisionalSteps[0].ShapeExtent = FVector::ZeroVector; },
 		[](auto& A) { A.ProvisionalSteps[0].MaxTargets = 0; },
 		[](auto& A) { A.ProvisionalSteps[0].MaxAimPitchDegrees = 91.0; },
