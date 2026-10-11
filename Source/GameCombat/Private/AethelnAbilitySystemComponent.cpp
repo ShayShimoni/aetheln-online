@@ -582,6 +582,11 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 	if (!Scope.bCommitted || (Cast<UAethelnBasicChainAbility>(Definition) != nullptr && !Scope.bChainReady))
 	{
 		CancelUncommittedActivation(Handle, Scope.ActivationId);
+		if (Scope.bCommitted)
+		{
+			// The cost is spent (not refunded, OQ5); advancing the sequence keeps a replay from spending again.
+			AdvanceAcceptedHistory(Request);
+		}
 		return Finish(Request, EAethelnActivationResult::InternalFailure, ResolvedAbilityId, Scope.bCommitted ? Scope.ActivationId : FGuid());
 	}
 
@@ -598,13 +603,7 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::Finish(
 {
 	if (Result == EAethelnActivationResult::Accepted)
 	{
-		if (Request.Sequence > LastAcceptedSequence)
-		{
-			// Outcome correlation remains per request; only the latest accepted tuple advances.
-			LastAcceptedSequence = Request.Sequence;
-			LastAcceptedAim = Request.Aim;
-			LastAcceptedClientTimeSeconds = Request.ClientServerTimeSeconds;
-		}
+		AdvanceAcceptedHistory(Request);
 		if (AimCorrection == EAethelnAimCorrection::AimCorrected)
 		{
 			AethelnActivationTelemetry::EmitAimCorrection(*this, Request.Sequence, ResolvedAbilityId, ActivationId);
@@ -613,6 +612,17 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::Finish(
 	AethelnActivationTelemetry::EmitOutcome(*this, Result, Request.Sequence, ResolvedAbilityId, ActivationId);
 	ClientActivationOutcome(Request.Sequence, Result);
 	return Result;
+}
+
+void UAethelnAbilitySystemComponent::AdvanceAcceptedHistory(const FAethelnCombatActivationRequest& Request)
+{
+	if (Request.Sequence > LastAcceptedSequence)
+	{
+		// Outcome correlation remains per request; only the latest accepted tuple advances.
+		LastAcceptedSequence = Request.Sequence;
+		LastAcceptedAim = Request.Aim;
+		LastAcceptedClientTimeSeconds = Request.ClientServerTimeSeconds;
+	}
 }
 
 void UAethelnAbilitySystemComponent::ClientActivationOutcome_Implementation(uint32 Sequence, EAethelnActivationResult Result)
@@ -1162,7 +1172,7 @@ bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttack
 	Record.Windows.BufferOpen = Definition.BufferOpen; Record.Windows.LinkOpen = Definition.LinkOpen;
 	Record.Windows.LinkClose = Definition.LinkClose; Record.Windows.RecoveryEnd = Definition.RecoveryEnd;
 	Record.Windows.CancelOpen = Definition.CancelOpen;
-	if (!Timeline->RegisterStep(*this, Definition, Record)) { return false; }
+	if (!Timeline->RegisterStep(*this, Definition, Record, Ability->ProvisionalMaxSampleDistance, Ability->ProvisionalMaxSampleAngleDegrees)) { return false; }
 	if (ChainState.CurrentInput.ActivationId.IsValid()) { Timeline->StampReset(ChainState.CurrentInput.ActivationId, StartTime); }
 	if (ChainState.bCommitmentHeld)
 	{
@@ -1208,7 +1218,8 @@ void UAethelnAbilitySystemComponent::StartBufferedChainStep(double Now)
 		&& ChainState.BufferedInput.ActivationId == Input.ActivationId)
 	{
 		// A callback's reset/replacement owns its reason and state; only registration failure remains ours.
-		ResetChain(EAethelnChainEndReason::AvatarLost);
+		const AActor* Avatar = GetAvatarActor();
+		ResetChain(Avatar == nullptr || Avatar->IsActorBeingDestroyed() ? EAethelnChainEndReason::AvatarLost : EAethelnChainEndReason::InternalFailure);
 	}
 }
 
@@ -1305,6 +1316,11 @@ void UAethelnAbilitySystemComponent::ClientCombatActivation_Implementation(const
 void UAethelnAbilitySystemComponent::ClientChainEnded_Implementation(const FGuid& ActivationId, EAethelnChainEndReason Reason)
 {
 	OnChainEnded.Broadcast(ActivationId, Reason);
+}
+
+void UAethelnAbilitySystemComponent::MulticastCombatResultCue_Implementation(const FAethelnCombatResultCue& Cue)
+{
+	OnCombatResultCue.Broadcast(Cue);
 }
 
 void UAethelnAbilitySystemComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

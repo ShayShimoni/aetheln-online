@@ -78,3 +78,18 @@ class GAMECOMBAT_API UAethelnEnduranceCostEffect : public UGameplayEffect
 public:
 	UAethelnEnduranceCostEffect();
 };
+
+/**
+ * The shared Wrought damage: instant, adding SetByCaller.Damage.Wrought to Health. A
+ * set-by-caller magnitude has no coefficient, so the contact pipeline passes the negated
+ * authored damage and adds Damage.Wrought as the spec's asset tag. It never touches a
+ * maximum and has no duration (A18).
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnDamageEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnDamageEffect();
+};

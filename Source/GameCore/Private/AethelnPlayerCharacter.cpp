@@ -1,6 +1,7 @@
 #include "AethelnPlayerCharacter.h"
 
 #include "AethelnCharacterMovementComponent.h"
+#include "AethelnCombatCollision.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -673,6 +674,8 @@ AAethelnPlayerCharacter::AAethelnPlayerCharacter(
 	PrimaryActorTick.bCanEverTick = true;
 
 	GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);
+	// Contacts resolve on the capsule only; the mesh keeps the channel's Ignore default.
+	GetCapsuleComponent()->SetCollisionResponseToChannel(AethelnCombatCollision::QueryChannel, ECR_Overlap);
 
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
