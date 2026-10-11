@@ -81,6 +81,11 @@ subordinate to the specialized canonical product and technical documents.
   arc, and Guard hook it exposes to Issue #60, prediction and outcome
   reporting, telemetry, test plan, phased delivery, owner decisions, and open
   decisions.
+- [Death, Respawn, and Reconnect](death-and-respawn.md) records the Issue #21
+  implementation spec: the server-owned death transition from the lethal
+  notification, refusal while dead, the fail-closed respawn flow and
+  restoration allowlist, reconnect carried state, disconnect edge cases, test
+  plan, phased delivery, and open decisions.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path, plus the Issue #167
