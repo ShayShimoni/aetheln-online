@@ -118,17 +118,25 @@ bool FAethelnAttackInterruptionTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("The chain continues"), F.Player.AbilitySystem->GetChainStateForTests().bExists);
 		TestEqual(TEXT("The player's later contact still lands"), Health(*Far->GetAethelnAbilitySystemComponent()), 35.0f);
 	}
-	// A lethal target and an avoiding target are not interrupted.
-	for (bool bLethal : { true, false })
+	// A lethal target, an avoiding target and a blocking target are not interrupted.
+	for (EOutcome Expected : { EOutcome::Hit, EOutcome::Avoided, EOutcome::Blocked })
 	{
+		const bool bLethal = Expected == EOutcome::Hit;
 		FFixture F; if (!F.Init(*this)) { return false; }
 		SetInterruptibleUntil(*F.Ability, 0.25);
 		AAethelnCombatAICharacter* Enemy = SpawnEnemy(*this, F, FVector(-60.0, 0.0, 0.0));
 		if (Enemy == nullptr) { return false; }
-		if (!bLethal)
+		if (Expected == EOutcome::Avoided)
 		{
 			F.Timeline->AvoidanceTags.AddTag(AethelnCombatTestTags::Test_Avoidance);
 			F.Player.AbilitySystem->AddLooseGameplayTag(AethelnCombatTestTags::Test_Avoidance);
+		}
+		else if (Expected == EOutcome::Blocked)
+		{
+			FAethelnDefenseState Defense;
+			Defense.ArcDegrees = 360.0; // test-only: every direction
+			Defense.OnBlocked.BindLambda([](const FAethelnBlockedContact&) { return EAethelnBlockConsequence::Blocked; });
+			TestTrue(TEXT("The test defense slot registers"), F.Timeline->SetDefenseState(*F.Player.AbilitySystem, Defense));
 		}
 		F.Press();
 		const FGuid EnemyId = Swing(F, *Enemy, [bLethal](FAethelnAttackStepDefinition& Step) { if (bLethal) { Step.WroughtDamage = 40.0f; } });
@@ -136,7 +144,7 @@ bool FAethelnAttackInterruptionTest::RunTest(const FString& Parameters)
 		const FAethelnCombatResult* Result = ResultFor(F, EnemyId);
 		if (TestNotNull(TEXT("The enemy contact commits a result"), Result))
 		{
-			TestEqual(TEXT("Lethal hit or avoided contact"), Result->Outcome, bLethal ? EOutcome::Hit : EOutcome::Avoided);
+			TestEqual(TEXT("Lethal hit, avoided or blocked contact"), Result->Outcome, Expected);
 			TestEqual(TEXT("Latched lethal only for the lethal row"), Result->bLethal, bLethal);
 		}
 		TestEqual(TEXT("No interruption"), F.Ends.Num(), 0);

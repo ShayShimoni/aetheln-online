@@ -630,8 +630,9 @@ authored rule. Resolve and control families are not prototype scope.
 
 P5 delivers it as follows:
 
-- **Hits only.** Only a non-lethal `Hit` interrupts. An `Avoided` or `Blocked`
-  result and a lethal hit never do (resolution step 7).
+- **Hits only.** Only a non-lethal `Hit` interrupts. An `Avoided`, `Blocked`,
+  or `GuardBroken` result and a lethal hit never do (resolution step 7; a
+  Guard break has no interruption, #18 Q8).
 - **The step at the contact time.** The target's current step is its
   registered step whose interval from its start to its reset time holds the
   contact time. Pass step 1 may already have started a buffered step later in
