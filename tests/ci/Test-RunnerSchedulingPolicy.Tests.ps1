@@ -238,7 +238,7 @@ $TrustedCompile = [string] $JobBodies['trusted-candidate-compile']
 # status bypass, so it can never fail the compile job or skip the native
 # receipt, and it is skipped whenever the compile is skipped.
 $EditorAutomation = [string] $JobBodies['trusted-editor-automation']
-Assert-True ($EditorAutomation -match '(?m)^    needs: trusted-candidate-compile\r?$' -and $EditorAutomation -match "github\.event_name == 'pull_request'" -and $EditorAutomation -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $EditorAutomation -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $EditorAutomation -match 'github\.triggering_actor == github\.repository_owner') 'Editor automation must need the compile and keep the owner, same-repository, and triggering-actor trust.'
+Assert-True ($EditorAutomation -match '(?m)^    needs:\r?\n      - trusted-candidate-compile\r?\n      - change-impact\r?$' -and $EditorAutomation -match "needs\.change-impact\.outputs\.editor_required == 'true'" -and $EditorAutomation -match "github\.event_name == 'pull_request'" -and $EditorAutomation -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $EditorAutomation -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $EditorAutomation -match 'github\.triggering_actor == github\.repository_owner') 'Editor automation must need the compile and keep the owner, same-repository, and triggering-actor trust.'
 Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 46\r?$' -and $EditorAutomation -notmatch 'timeout-minutes:\s*1440' -and $EditorAutomation -notmatch '(?m)^    if: always\(\)' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result' -and $EditorAutomation -notmatch '-Mode ') 'Editor automation must keep its 46-minute ceiling, never bypass prerequisite status, and never invoke the engine gate.'
 Assert-True ((($TrustedCompile -split '\r?\n' | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch 'AethelnOnlineEditor|automation_') 'The compile job must keep its pre-producer shape.'
 Assert-True ($TrustedCompile -match '(?m)^\s+needs:\r?\n\s+- quality-gates\r?\n\s+- change-impact\r?$') 'Trusted compile must depend on exactly the portable gates and the change-impact classifier.'
@@ -246,7 +246,8 @@ Assert-True ($TrustedCompile -match "needs\.change-impact\.outputs\.engine_requi
 Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Trusted compile must remain a pull-request lane.'
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $TrustedCompile -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $TrustedCompile -match 'github\.triggering_actor == github\.repository_owner') 'Trusted compile must keep the owner and same-repository trust checks.'
 Assert-True ($TrustedCompile -notmatch "github\.event_name == 'schedule'") 'Trusted compile must not be selectable by schedule.'
-Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^        if: always\(\)\r?$' -Expected 3 -Message 'Trusted compile may use always() only on report binding, upload, and the final control-checkout cleanup steps, never at job scope.'
+Assert-MatchCount -Text $TrustedCompile -Pattern "(?m)^        if: always\(\) && steps\.head_check\.outputs\.superseded != 'true'\r?$" -Expected 3 -Message 'Trusted compile may use always() only on report binding, upload, and the final control-checkout cleanup steps, never at job scope, and never for a superseded head.'
+Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^        if: always\(\)\r?$' -Expected 0 -Message 'Every trusted compile always() step must also skip a superseded head.'
 Assert-True ($TrustedCompile -notmatch '(?m)^    if: always\(\)\r?$') 'Trusted compile must not bypass a failed, cancelled, or skipped prerequisite at job scope.'
 Assert-True ($TrustedCompile -notmatch 'timeout-minutes:\s*1440') 'Trusted compile must not be a 24-hour job.'
 Assert-True ($TrustedCompile -notmatch '-PhaseTimeoutMinutes' -and $TrustedCompile -notmatch '-RunId') 'Trusted compile must not depend on the scheduled handoff contract.'
@@ -737,6 +738,13 @@ $EngineJobWord = @('zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'
 Assert-True ($EditorDecision.Contains('- **Status:** Accepted -') -and $EditorCeiling -gt 0 -and $CompileCeiling -gt 0) 'TA-020 must be accepted and both engine pull-request jobs must declare a job ceiling.'
 foreach ($Figure in @("has a $EditorCeiling-minute job ceiling", "up to $($CompileCeiling + $EditorCeiling) minutes ($CompileCeiling-minute compile plus $EditorCeiling-minute editor automation)", "now has $EngineJobWord jobs")) {
 	Assert-True ($EditorDecision.Contains($Figure)) "TA-020 must record the workflow figure '$Figure'."
+}
+# Issue #299: the editor gate and the superseded-head check are recorded where they are defined.
+foreach ($Term in @('Amendment (2026-10-11, editor gate and superseded-head check, issue #299)', '`editor_required`', '`superseded_head`', 'cancel-in-progress: true')) {
+	Assert-True ($EditorDecision.Contains($Term)) "TA-020 must record the issue #299 term '$Term'."
+}
+foreach ($Term in @('#### Editor gate (issue #299)', '### Superseded-head check (issue #299)', '`editor_required == ''true''`', '`superseded_head`', '`head_check result=unavailable`')) {
+	Assert-True ($CiDocumentation.Contains($Term)) "The CI documentation must record the issue #299 term '$Term'."
 }
 
 # The portable CI exemption is a closed applicability decision, not a blanket

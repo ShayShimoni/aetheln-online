@@ -409,6 +409,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       engine_required: ${{ steps.classify.outputs.engine_required }}
+      editor_required: ${{ steps.classify.outputs.editor_required }}
       reason: ${{ steps.classify.outputs.reason }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -425,6 +426,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $EngineRequired = $true
+          $EditorRequired = $true
           $Reason = 'classifier_error'
           $Detail = ''
 
@@ -462,6 +464,29 @@ jobs:
             return $false
           }
 
+          function Test-EditorPath([string] $Path) {
+            # Issue #299: the trusted editor job builds the editor target and runs the
+            # frozen automation filter, so it needs only engine content, its own
+            # harness (including every script those load), and this workflow. A
+            # controller-only change still compiles but skips it. The match is
+            # case-insensitive and fails closed: the managed workspace is a
+            # case-insensitive Windows checkout, so a case variant runs the editor.
+            $EditorCiPaths = @(
+              '.github/workflows/prototype-quality-gates.yml',
+              'AethelnOnline.uproject',
+              'scripts/ci/EngineRunnerHostLease.ps1',
+              'scripts/ci/Invoke-UnrealAutomationTests.ps1',
+              'scripts/ci/LeaseJournal.ps1',
+              'scripts/ci/ManagedCompileRegistration.ps1',
+              'scripts/ci/ManagedCompileWorkspace.ps1',
+              'scripts/ci/Sync-EditorAutomationWorkspace.ps1'
+            )
+            if ($EditorCiPaths -contains $Path) { return $true }
+            if ($Path -match '^(Source|Config|Content|Plugins)/.+') { return $true }
+            if ($Path -match '^scripts/ci/InitialPreparation\.[^/]+$') { return $true }
+            return $false
+          }
+
           try {
             $BaseSha = [string] $env:AETHELN_PR_BASE_SHA
             $HeadSha = [string] $env:AETHELN_PR_HEAD_SHA
@@ -478,10 +503,14 @@ jobs:
             $Entries = @($Diff.Output | Where-Object { $_ -ne '' })
             if ($Entries.Count -eq 0) { throw 'empty_diff' }
             $EnginePaths = @()
+            $EditorChanged = $false
             foreach ($Entry in $Entries) {
               if ($Entry -cnotmatch '^[AMDT]\t([^\t"]+)$') { throw 'unexpected_diff_entry' }
-              if (-not (Test-PortablePath $Matches[1])) { $EnginePaths += $Matches[1] }
+              $ChangedPath = $Matches[1]
+              if (-not (Test-PortablePath $ChangedPath)) { $EnginePaths += $ChangedPath }
+              if (Test-EditorPath $ChangedPath) { $EditorChanged = $true }
             }
+            $EditorRequired = $EditorChanged
             if ($EnginePaths.Count -gt 0) {
               $Reason = 'engine_paths_changed'
               $Detail = (@($EnginePaths | Select-Object -First 20) -join ', ')
@@ -494,16 +523,18 @@ jobs:
           }
           catch {
             $EngineRequired = $true
+            $EditorRequired = $true
             $Message = [string] $_.Exception.Message
             $Known = @('invalid_sha', 'identical_shas', 'commit_unavailable', 'diff_failed', 'empty_diff', 'unexpected_diff_entry')
             if ($Known -contains $Message) { $Reason = $Message } else { $Reason = 'classifier_error' }
           }
 
           $Flag = if ($EngineRequired) { 'true' } else { 'false' }
+          $EditorFlag = if ($EditorRequired) { 'true' } else { 'false' }
           $Utf8 = New-Object System.Text.UTF8Encoding $false
-          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "engine_required=$Flag`nreason=$Reason`n", $Utf8)
-          $Summary = "Change impact: engine_required=$Flag (reason: $Reason)."
-          if ($Detail) { $Summary = "Change impact: engine_required=$Flag (reason: ${Reason}; $Detail)." }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "engine_required=$Flag`neditor_required=$EditorFlag`nreason=$Reason`n", $Utf8)
+          $Summary = "Change impact: engine_required=$Flag editor_required=$EditorFlag (reason: $Reason)."
+          if ($Detail) { $Summary = "Change impact: engine_required=$Flag editor_required=$EditorFlag (reason: ${Reason}; $Detail)." }
           [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$Summary`n", $Utf8)
           Write-Output $Summary
           exit 0
@@ -538,7 +569,44 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
+      - name: Check the pull-request head is still current
+        id: head_check
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_API_TOKEN: ${{ github.token }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          # Issue #299: a push that arrives while this job waits in the engine queue
+          # makes the run stale. Skip the rest of the job when the pull request's
+          # current head is no longer the head this run tested. Fail open: any
+          # error, invalid value, or unexpected answer runs the job. This never
+          # cancels anything, so no lease or journal is left held by a cancel.
+          # The event values come from the runner's event payload file, never from
+          # an expression interpolated into this engine-runner job.
+          $Superseded = 'false'
+          $Result = 'unavailable'
+          try {
+            $Payload = [IO.File]::ReadAllText($env:GITHUB_EVENT_PATH) | ConvertFrom-Json
+            $Number = [string] $Payload.pull_request.number
+            $EventHead = [string] $Payload.pull_request.head.sha
+            if ($Number -cnotmatch '\A[1-9][0-9]{0,9}\z' -or $EventHead -cnotmatch '\A[0-9a-f]{40}\z') { throw 'event_invalid' }
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $Headers = @{ Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+            if ($env:AETHELN_API_TOKEN) { $Headers['Authorization'] = 'Bearer ' + $env:AETHELN_API_TOKEN }
+            $Api = if ($env:GITHUB_API_URL) { $env:GITHUB_API_URL.TrimEnd('/') } else { 'https://api.github.com' }
+            $Pull = Invoke-RestMethod -Method Get -Uri ($Api + '/repos/' + $env:GITHUB_REPOSITORY + '/pulls/' + $Number) -Headers $Headers -TimeoutSec 20
+            $Current = [string] $Pull.head.sha
+            if ($Current -cnotmatch '\A[0-9a-f]{40}\z') { throw 'response_invalid' }
+            if ($Current -cne $EventHead) { $Superseded = 'true'; $Result = 'superseded' } else { $Result = 'current' }
+          } catch { $Superseded = 'false'; $Result = 'unavailable' }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "superseded=$Superseded`n", (New-Object Text.UTF8Encoding $false))
+          Write-Output ('head_check result=' + $Result)
       - name: Capture routine compile deadline
+        if: steps.head_check.outputs.superseded != 'true'
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
@@ -548,6 +616,7 @@ jobs:
           $Utf8 = New-Object System.Text.UTF8Encoding $false
           [IO.File]::AppendAllText($env:GITHUB_ENV, "AETHELN_COMPILE_STARTED_UTC=$StartedUtc`nAETHELN_COMPILE_STARTED_TIMESTAMP=$StartedTimestamp`n", $Utf8)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.head_check.outputs.superseded != 'true'
         timeout-minutes: 5
         with:
           lfs: false
@@ -555,6 +624,7 @@ jobs:
           path: compile-control-${{ github.run_id }}-${{ github.run_attempt }}
           persist-credentials: false
       - name: Compile supported client and server targets
+        if: steps.head_check.outputs.superseded != 'true'
         shell: powershell
         env:
           AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
@@ -581,7 +651,7 @@ jobs:
             -ReportPath (Join-Path $RunRoot 'engine-runner-report.json')
       - name: Bind engine-runner report
         id: report_identity
-        if: always()
+        if: always() && steps.head_check.outputs.superseded != 'true'
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
@@ -599,7 +669,7 @@ jobs:
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "artifact_name=engine-runner-compile-report`nevidence_sha256=$Digest`nevidence_size_bytes=$($Report.Length)`n", $Utf8)
       - name: Upload engine-runner report
         id: report_artifact
-        if: always()
+        if: always() && steps.head_check.outputs.superseded != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: engine-runner-compile-report
@@ -619,7 +689,7 @@ jobs:
       # from runner.temp so no process holds a checkout as its working directory.
       - name: Remove control checkouts
         id: control_cleanup
-        if: always()
+        if: always() && steps.head_check.outputs.superseded != 'true'
         continue-on-error: true
         timeout-minutes: 1
         shell: powershell
@@ -677,11 +747,17 @@ jobs:
   # missing artifact fails unreal-receipt-shadow at its raw binding check. Each
   # failure records one fixed reason, exposed as automation_reason. build.log,
   # harness output, and the copied report live under runner.temp, which the
-  # runner wipes after the job.
+  # runner wipes after the job. Issue #299: the job runs only when change-impact
+  # published editor_required (engine content, the editor harness, or this
+  # workflow changed), and its first step skips the rest when a newer push
+  # superseded this run's head.
   trusted-editor-automation:
-    needs: trusted-candidate-compile
+    needs:
+      - trusted-candidate-compile
+      - change-impact
     if: >-
       github.event_name == 'pull_request' &&
+      needs.change-impact.outputs.editor_required == 'true' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == github.repository_owner &&
       github.triggering_actor == github.repository_owner
@@ -700,8 +776,45 @@ jobs:
       queue: max
       cancel-in-progress: false
     steps:
+      - name: Check the pull-request head is still current
+        id: head_check
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_API_TOKEN: ${{ github.token }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          # Issue #299: a push that arrives while this job waits in the engine queue
+          # makes the run stale. Skip the rest of the job when the pull request's
+          # current head is no longer the head this run tested. Fail open: any
+          # error, invalid value, or unexpected answer runs the job. This never
+          # cancels anything, so no lease or journal is left held by a cancel.
+          # The event values come from the runner's event payload file, never from
+          # an expression interpolated into this engine-runner job.
+          $Superseded = 'false'
+          $Result = 'unavailable'
+          try {
+            $Payload = [IO.File]::ReadAllText($env:GITHUB_EVENT_PATH) | ConvertFrom-Json
+            $Number = [string] $Payload.pull_request.number
+            $EventHead = [string] $Payload.pull_request.head.sha
+            if ($Number -cnotmatch '\A[1-9][0-9]{0,9}\z' -or $EventHead -cnotmatch '\A[0-9a-f]{40}\z') { throw 'event_invalid' }
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $Headers = @{ Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+            if ($env:AETHELN_API_TOKEN) { $Headers['Authorization'] = 'Bearer ' + $env:AETHELN_API_TOKEN }
+            $Api = if ($env:GITHUB_API_URL) { $env:GITHUB_API_URL.TrimEnd('/') } else { 'https://api.github.com' }
+            $Pull = Invoke-RestMethod -Method Get -Uri ($Api + '/repos/' + $env:GITHUB_REPOSITORY + '/pulls/' + $Number) -Headers $Headers -TimeoutSec 20
+            $Current = [string] $Pull.head.sha
+            if ($Current -cnotmatch '\A[0-9a-f]{40}\z') { throw 'response_invalid' }
+            if ($Current -cne $EventHead) { $Superseded = 'true'; $Result = 'superseded' } else { $Result = 'current' }
+          } catch { $Superseded = 'false'; $Result = 'unavailable' }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "superseded=$Superseded`n", (New-Object Text.UTF8Encoding $false))
+          Write-Output ('head_check result=' + $Result)
       - name: Check out trusted editor control source
         id: editor_control
+        if: steps.head_check.outputs.superseded != 'true'
         continue-on-error: true
         timeout-minutes: 5
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -979,6 +1092,7 @@ jobs:
         shell: powershell
         working-directory: ${{ runner.temp }}
         env:
+          AETHELN_SUPERSEDED: ${{ steps.head_check.outputs.superseded }}
           AETHELN_CONTROL_OUTCOME: ${{ steps.editor_control.outcome }}
           AETHELN_EDITOR_BUILD_OUTCOME: ${{ steps.editor_build.outcome }}
           AETHELN_EDITOR_BUILD_REASON: ${{ steps.editor_build.outputs.reason }}
@@ -1008,6 +1122,8 @@ jobs:
               break
             }
           }
+          # A superseded head skips every step, which would read as success; say so.
+          if ($env:AETHELN_SUPERSEDED -ceq 'true') { $Reason = 'superseded_head' }
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false))
           Write-Output ('unreal_automation_outcome reason=' + $Reason)
       # Issue #243: a control checkout is disposable source (issue #167) and each
