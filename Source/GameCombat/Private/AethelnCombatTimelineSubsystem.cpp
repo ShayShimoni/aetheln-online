@@ -160,7 +160,7 @@ void UAethelnCombatTimelineSubsystem::HandlePostActorTick(UWorld* World, ELevelT
 	// 1. Buffered starts, at their exact authored time, before sweeping.
 	for (const auto& Source : Sources)
 	{
-		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->StartBufferedChainStep(Now); }
+		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->StartBufferedChainStep(Now, true); } // record held to step 5
 	}
 	Steps.Sort([](const FStep& A, const FStep& B) { return A.Ordinal < B.Ordinal; });
 	// Snapshot identities: callbacks may register/reset; never retain an array reference across them.
@@ -206,7 +206,11 @@ void UAethelnCombatTimelineSubsystem::HandlePostActorTick(UWorld* World, ELevelT
 	{
 		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->ApplyDueBoundaries(Now); }
 	}
-	// 5. Emission, then removal of reset steps.
+	// 5. Emission (held buffered-start records first), then removal of reset steps.
+	for (const auto& Source : Sources)
+	{
+		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->SendHeldCombatActivation(); }
+	}
 	for (const FCommitted& Result : Committed) { Emit(Result); }
 	Steps.RemoveAll([Now](const FStep& Entry) { return !Entry.AbilitySystem.IsValid() || Entry.ResetTime <= Now; });
 	AbilitySystems.RemoveAll([](const auto& Source) { return !Source.IsValid() || !Source->HasPendingBoundaries(); });
@@ -304,6 +308,7 @@ void UAethelnCombatTimelineSubsystem::Resolve(const FCandidate& Candidate, TArra
 	Committed.Result.InstigatorCombatId = Entry->Record.InstigatorCombatId;
 	Committed.Result.TargetCombatId = Candidate.TargetCombatId;
 	Committed.Result.ContactTime = Candidate.ContactTime;
+	const bool bInterruptsTarget = Entry->Definition.bInterruptsTarget;
 	Committed.Cue.SourceAvatar = Entry->Avatar.Get();
 	Committed.Cue.FamilyTag = AethelnGameplayTags::Damage_Wrought;
 	Committed.Cue.ContactLocation = Candidate.Location;
@@ -344,11 +349,32 @@ void UAethelnCombatTimelineSubsystem::Resolve(const FCandidate& Candidate, TArra
 		Target = Candidate.Target.Get();
 		Committed.Result.bLethal = Target != nullptr && Target->HasAttributeSetForAttribute(UAethelnCombatAttributeSet::GetHealthAttribute())
 			&& Target->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()) <= 0.0f;
+		// Interruption follows Health, for a non-lethal target only, during resolution so the target's later contacts drop.
+		if (bInterruptsTarget && !Committed.Result.bLethal && Target != nullptr) { Interrupt(*Target, Candidate.ContactTime); }
 	}
 	// 8. Commit; emission follows the frame's boundaries.
 	Committed.Cue.Outcome = Committed.Result.Outcome;
 	Committed.Cue.bLethal = Committed.Result.bLethal;
 	OutCommitted.Add(Committed);
+}
+
+void UAethelnCombatTimelineSubsystem::Interrupt(UAethelnAbilitySystemComponent& Target, double ContactTime)
+{
+	// The target's step at the contact time. A buffered step that pass step 1 started later in this frame
+	// is not it yet: the contact belongs to the step before (A28).
+	const FStep* AtContact = Steps.FindByPredicate([&Target, ContactTime](const FStep& Item)
+	{
+		return Item.AbilitySystem.Get() == &Target && Item.Record.StartServerTime <= ContactTime && ContactTime < Item.ResetTime;
+	});
+	// InterruptibleUntil 0 means never: the contact time is never before the step start.
+	if (AtContact == nullptr || !(ContactTime < AtContact->Record.StartServerTime + AtContact->Definition.InterruptibleUntil)) { return; }
+	// Every step of the target ends at the contact time, so a later buffered start never started and none of
+	// the target's later contacts survive revalidation. An enemy has no chain; its steps only stop (#20).
+	for (FStep& Entry : Steps)
+	{
+		if (Entry.AbilitySystem.Get() == &Target) { Entry.ResetTime = FMath::Min(Entry.ResetTime, ContactTime); }
+	}
+	Target.ResetChain(EAethelnChainEndReason::Interrupted, ContactTime);
 }
 
 void UAethelnCombatTimelineSubsystem::Emit(const FCommitted& Committed)

@@ -52,6 +52,8 @@ struct FAethelnServerChainState
 	TArray<FAethelnAttackStepDefinition> Definitions;
 	FAethelnAcceptedAttackInput CurrentInput;
 	FAethelnAcceptedAttackInput BufferedInput;
+	/** A pass-started buffered step's record, held until the pass emits it; an interruption before its start drops it (A28). */
+	FAethelnCombatActivationRecord HeldRecord;
 };
 
 /** One connection's token bucket for activation messages (validation step 1). Starts full. */
@@ -325,8 +327,10 @@ private:
 	FRequestScope* ActiveRequestScope = nullptr;
 
 	bool BeginChainPress(UAethelnBasicChainAbility& Ability, FGameplayAbilitySpecHandle Handle);
-	bool StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime);
-	void StartBufferedChainStep(double Now);
+	bool StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime, bool bHoldRecord = false);
+	void StartBufferedChainStep(double Now, bool bHoldRecord = false);
+	/** Pass step 5: sends a held buffered-start record. */
+	void SendHeldCombatActivation();
 	void ApplyChainBoundaries(double Now);
 	void HandleChainResetTag(const FGameplayTag Tag, int32 NewCount);
 	void BindChainResetTags(const FGameplayTagContainer& Tags);

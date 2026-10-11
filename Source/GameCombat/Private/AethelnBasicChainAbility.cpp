@@ -35,14 +35,14 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 	for (int32 Index = 0; Index < ProvisionalSteps.Num(); ++Index)
 	{
 		const FAethelnAttackStepDefinition& S = ProvisionalSteps[Index];
-		for (double Value : { S.ActiveStart, S.ActiveEnd, S.BufferOpen, S.LinkOpen, S.LinkClose, S.RecoveryEnd, S.CancelOpen, S.MaxAimPitchDegrees })
+		for (double Value : { S.ActiveStart, S.ActiveEnd, S.BufferOpen, S.LinkOpen, S.LinkClose, S.RecoveryEnd, S.CancelOpen, S.MaxAimPitchDegrees, S.InterruptibleUntil })
 		{
 			if (!FMath::IsFinite(Value) || Value < 0.0) { return TEXT("has a non-finite or negative step value"); }
 		}
 		if (!(S.ActiveStart < S.ActiveEnd && S.ActiveEnd <= S.BufferOpen
-			&& S.ActiveEnd <= S.CancelOpen && S.CancelOpen <= S.RecoveryEnd))
+			&& S.ActiveEnd <= S.CancelOpen && S.CancelOpen <= S.RecoveryEnd && S.InterruptibleUntil <= S.RecoveryEnd))
 		{
-			return TEXT("has invalid active, buffer or commitment ordering");
+			return TEXT("has invalid active, buffer, commitment or interruptible ordering");
 		}
 		if (Index == 2)
 		{
