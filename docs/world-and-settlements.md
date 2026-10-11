@@ -470,5 +470,6 @@ remain TBD.
 - Final faction borders and travel fiction.
 - Safe mixed-city locations beyond Kindlehold.
 - Capital invasion routes, objectives, schedules, and recovery.
-- Whether cross-faction groups are allowed in selected PvE activities.
+- Decided, not open: cross-faction grouping is forbidden everywhere, including
+  neutral safe cities (owner decision on Issue #115, 2026-10-11).
 - Regional server boundaries and how combat state transfers between them.

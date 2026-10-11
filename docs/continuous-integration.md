@@ -236,9 +236,13 @@ full SHA; after LF normalization that block from `change-impact:` through the
 with SHA-256
 `f1ae549ac2b628df3a09b4d29d6b9f20e237e0c31cc3060ae44bf44923c3a9df`.
 TA-018 (2026-10-02) then removed the six controller paths from the
-portable-only set; the current normalized block is exactly 5,395 UTF-8 bytes
+portable-only set; that normalized block was exactly 5,395 UTF-8 bytes
 with SHA-256
 `e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805`.
+Issue #299 (2026-10-11) then added the `editor_required` output and its closed
+editor path set (see [Editor gate](#editor-gate-issue-299)); the current
+normalized block is exactly 7,194 UTF-8 bytes with SHA-256
+`83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -258,8 +262,8 @@ script verifies both commits are present (fetching each by SHA from `origin`
 only when missing), and diffs the two trees with
 `git diff --name-status --no-renames <base> <head>` so every entry is an
 add, modify, delete, or type change. It publishes the job output
-`engine_required` (`true` or `false`) plus a stable `reason` code and one
-concise `GITHUB_STEP_SUMMARY` line.
+`engine_required` (`true` or `false`), `editor_required` (see below), a stable
+`reason` code and one concise `GITHUB_STEP_SUMMARY` line.
 
 `engine_required=false` is emitted only when every changed path belongs to
 this closed, case-sensitive portable-only set:
@@ -327,6 +331,42 @@ lost runner or a checkout error), `trusted-candidate-compile` is skipped, not
 run; the failed `change-impact` check is visible on the pull request and a
 rerun restores the decision. This is the one path where uncertainty does not
 produce a compile, and it never bypasses the portable gates.
+
+#### Editor gate (issue #299)
+
+The same step publishes `editor_required`, and `trusted-editor-automation`
+needs `change-impact` as well as the compile and runs only when
+`editor_required == 'true'`. The editor job builds the `AethelnOnlineEditor`
+target and runs the frozen two-test filter, so it matters only when the pull
+request changed engine content or the editor's own harness. `editor_required`
+is `true` when any changed path matches one of these, case-insensitively (the
+managed workspace is a case-insensitive Windows checkout, so a case variant
+runs the editor):
+
+- `Source/**`, `Config/**`, `Content/**`, `Plugins/**`, and
+  `AethelnOnline.uproject`
+- `.github/workflows/prototype-quality-gates.yml`
+- the editor harness scripts and everything they load, as exact paths:
+  `scripts/ci/Invoke-UnrealAutomationTests.ps1`,
+  `scripts/ci/Sync-EditorAutomationWorkspace.ps1`,
+  `scripts/ci/EngineRunnerHostLease.ps1`, `scripts/ci/LeaseJournal.ps1`,
+  `scripts/ci/ManagedCompileRegistration.ps1`,
+  `scripts/ci/ManagedCompileWorkspace.ps1`, and every
+  `scripts/ci/InitialPreparation.<name>.ps1`
+
+It is `false` for every other change, including controller-only pull requests
+that change other `scripts/**`, `tests/**`, or `.gitattributes`: those still
+compile (TA-018) but skip the editor job, which is then skipped, not failed.
+Every uncertainty reason in the table above publishes `editor_required=true`,
+and `editor_required=true` always implies `engine_required=true`. The editor
+job does not read the shadow selector: the selector may not skip an
+authoritative job. The selector's `unreal-editor-automation` obligation is a
+strict subset of this set (the workflow and harness inputs run the editor but
+select no unreal receipt), so `unreal-receipt-shadow` is never expected for a
+skipped editor job unless the selector falls back to its conservative
+all-obligations record, which the shadow aggregate already reports red for a
+skipped compile. Required status checks stay `quality-gates` and
+`change-impact`, so a skipped editor job blocks no merge.
 
 ### Pull-request shadow selector (Issue #167 Package 2)
 
@@ -567,8 +607,8 @@ contract is:
 | `visual-receipt-shadow` | `pull_request` | `ci-selection-shadow`, `visual-proof` | Runs only when visual validation is selected and succeeds. | Apply the same direct binding and truthful publication contract to the exact bounded visual report. |
 | `ci-acceptance-shadow` | `pull_request`/`push`/`schedule` | Every current producer and receipt publisher directly | GitHub-hosted, bounded, the sole enabled job-level `always()`, and the only live job with job-scoped `actions: read`; never joins engine concurrency. The dormant authority boundary has the second structural `always()`. | On a PR whose selected obligations are all in the portable/controller-contract/controller-operational-proof/native/unreal/visual supported subset, execute the real shadow aggregate with direct selector and producer bindings. If any selected obligation lacks a live producer contract, validate the direct bindings of every selected live producer (a failed or skipped required receipt stays red), then publish the explicit green `producer_contract_incomplete` no-acceptance gap (`aetheln.ci-acceptance-shadow-gap/v3`, carrying `liveBindings`). Non-PR events publish `event_not_applicable`. Unexpected identity, reconciliation, semantic, or publication errors remain red. |
 | `ci-acceptance-authority` | `pull_request` | `ci-acceptance-shadow` | Hard-skipped by the literal `always() && github.event_name == 'pull_request' && false`; job-scoped `actions: read` is dormant. | Reserved activation boundary: when later enabled, it still runs after a failed or cancelled aggregate and fails unless `needs.ci-acceptance-shadow.result` is exactly `success`; only a complete, nonce-bound reconciled shadow aggregate could produce an authority receipt. It grants nothing in the live Package 3C workflow. |
-| `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | Incrementally compile the supported Windows client and Linux server targets without packaging. A final cleanup step (1 minute, runs after any earlier failure or cancellation, continues on error) removes this job's `compile-control-<run>-<attempt>` checkout and every earlier compile or editor control checkout in the runner workspace (issue #243); see Engine-Dependent Gates for its guards. |
-| `trusted-editor-automation` | `pull_request` | `trusted-candidate-compile` | Runs only after a successful compile (so it is skipped, not failed, whenever the compile is skipped or fails) under the same owner, same-repository, and triggering-actor predicates; 46-minute job ceiling (step bounds 5 + 20 + 12 + 2 + 1 + 1 + 1 + 1 plus a 3-minute margin); shared FIFO `aetheln-engine-runner` queue. TA-020 and its 2026-10-03 workspace re-sync amendment (issue #236). | Check out a fresh exact-revision control source at `github.sha` into `editor-control-<run>-<attempt>` with the compile job's inputs (no persisted credentials, no LFS; 5 minutes). Then, in one step (20 minutes), take the engine host lease and re-sync the registered managed compile workspace to this revision through `Sync-ManagedCompileWorkspace`, as `Invoke-EngineRunnerGate.ps1` does: the control-checkout copy of `scripts/ci/Sync-EditorAutomationWorkspace.ps1` validates the registration, synchronizes, and then asserts the exact revision and a clean workspace (`editor_workspace_revision_changed`, `editor_workspace_dirty`, or `editor_workspace_query_failed` otherwise). Build the `AethelnOnlineEditor` Win64 target there through the control-checkout copy of `InitialPreparation.BuildInvocation.ps1` (runner-local `build.log`) with the contributor compiler selection (no `-Compiler=`, the same `-CompilerVersion` and `-WindowsSDKVersion` pins), so the source-code-access plugin no longer flips between CI and contributor builds. Lease wait, sync, and build share one 17-minute deadline inside the 20-minute step. The sync and the build each run in an owned kill-on-close Job Object that stops at that deadline, and the step releases the lease only after each job is proven empty; nothing is stopped by name. An unproven cleanup or a failed release keeps the held journal for explicit recovery, as the compile does, and records `editor_host_lease_release_failed`. A lease that cannot be taken, including a lease wait that reaches the deadline, records `editor_host_lease_failed`. Fewer than 5 minutes left after the lease is taken (a provisional fixed minimum, not a tuning result) records `editor_sync_time_insufficient` before any checkout starts, because a checkout cut off by the deadline can leave the workspace half-updated (see Retained Compile workspace). A refused sync, or a sync that times out, records `editor_workspace_sync_failed`; a sync timeout carries no detail code. Only a build that reaches the deadline records `editor_build_timeout`, and a failed control checkout records `editor_control_checkout_failed`. A fixture may shorten, never extend, the deadline through `AETHELN_EDITOR_TEST_DEADLINE_SECONDS`, and may lower the minimum through `AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS` only while that deadline override is also set; the step then prints one fixed `editor_test_override active` line. Both variables come from the step's process environment, so a host-level variable on the runner would be honored too, visibly through that line; the lease or sync module's own fixed code is printed as one `editor_build_detail code=<code>` line. The build passes `-NoEngineChanges` (TA-020 2026-10-06 amendment, issue #267): if an outdated action would rewrite an existing file under `Engine/`, UBT exits 5 before it runs and the step records `editor_build_engine_changes_required`; the refused engine file list stays in the runner-local `build.log`, and an executed fixture pins both the flag and the mapping. So a CI editor run no longer relinks an engine module or rewrites the engine editor BuildId; UHT and makefile outputs under `Engine/Intermediate`, and new engine files, may still be written. A pull request that needs an engine rebuild (for example a new engine plugin in `AethelnOnline.uproject`) stays red with that reason until the owner runs an authorized engine build and re-attests the host tools. Every other build failure records `editor_build_failed`. Then run the frozen two-test harness from that workspace with its 600-second bound (12 minutes), remove the untracked compile-input files the next managed sync would reject (the exact `ls-files --others` query and git flags of `ManagedCompileWorkspace.ps1`; 2 minutes; runs only on positive evidence that the lease was released or never needed: the editor step succeeded, or failed with a recorded reason other than `editor_host_lease_failed` or `editor_host_lease_release_failed`; it is skipped after those two reasons, after a skipped editor step, and after an interrupted one with no recorded reason, because the lease state is then unknown or held by someone else, and the journal and workspace stay as recovery evidence), bind (1 minute) and upload (1 minute) the normalized `unreal-automation-report` artifact only when every earlier step succeeded, and publish the first failure as the fixed-vocabulary `automation_reason` output (1 minute). A final cleanup step (1 minute, issue #243) then removes this job's `editor-control-<run>-<attempt>` checkout and every earlier compile or editor control checkout, on the same evidence as the residue cleanup (it also runs after a later failed or cancelled step, and is skipped after `editor_host_lease_failed`, `editor_host_lease_release_failed`, a skipped editor step, or an interrupted one with no recorded reason); its result never changes `automation_reason`. Every step continues on error. This job is separate from the compile, so nothing in it can fail the compile job or skip the native receipt. `build.log`, harness output, and the copied report live under the runner temp directory, which the runner wipes after the job; only fixed failure-class and summary lines reach the public log, and the editor log stays in its `-abslog` file. The lease covers only the re-sync and build; the harness and residue cleanup still run outside it, serialized by the engine queue. History: before the re-sync, another owner pull request's compile, or a newer push to the same pull request, that entered the engine queue during this pull request's compile window could re-sync the managed workspace before this job started, and the editor build stopped with `editor_workspace_revision_changed` (PR #227 and PR #232 on 2026-10-03); recovery then took a full re-run of the workflow. |
+| `trusted-candidate-compile` | `pull_request` | `quality-gates`, `change-impact` | `engine_required == 'true'`, the head repository is this repository, the PR author is the repository owner, and `github.triggering_actor` is the repository owner. | A first step (issue #299) checks that the event head is still the pull request's current head and skips every later step when it is not (see [Superseded-head check](#superseded-head-check-issue-299)). Incrementally compile the supported Windows client and Linux server targets without packaging. A final cleanup step (1 minute, runs after any earlier failure or cancellation, continues on error) removes this job's `compile-control-<run>-<attempt>` checkout and every earlier compile or editor control checkout in the runner workspace (issue #243); see Engine-Dependent Gates for its guards. |
+| `trusted-editor-automation` | `pull_request` | `trusted-candidate-compile`, `change-impact` | Runs only after a successful compile (so it is skipped, not failed, whenever the compile is skipped or fails) and only when `change-impact` published `editor_required == 'true'` (issue #299; a controller-only pull request compiles but skips it), under the same owner, same-repository, and triggering-actor predicates; 46-minute job ceiling (step bounds 5 + 20 + 12 + 2 + 1 + 1 + 1 + 1 plus a 3-minute margin); shared FIFO `aetheln-engine-runner` queue. TA-020 and its 2026-10-03 workspace re-sync amendment (issue #236). | A first step (issue #299) runs the same superseded-head check as the compile job; a superseded head skips the checkout and every step that depends on it, and the outcome step then publishes the fixed reason `superseded_head`. Check out a fresh exact-revision control source at `github.sha` into `editor-control-<run>-<attempt>` with the compile job's inputs (no persisted credentials, no LFS; 5 minutes). Then, in one step (20 minutes), take the engine host lease and re-sync the registered managed compile workspace to this revision through `Sync-ManagedCompileWorkspace`, as `Invoke-EngineRunnerGate.ps1` does: the control-checkout copy of `scripts/ci/Sync-EditorAutomationWorkspace.ps1` validates the registration, synchronizes, and then asserts the exact revision and a clean workspace (`editor_workspace_revision_changed`, `editor_workspace_dirty`, or `editor_workspace_query_failed` otherwise). Build the `AethelnOnlineEditor` Win64 target there through the control-checkout copy of `InitialPreparation.BuildInvocation.ps1` (runner-local `build.log`) with the contributor compiler selection (no `-Compiler=`, the same `-CompilerVersion` and `-WindowsSDKVersion` pins), so the source-code-access plugin no longer flips between CI and contributor builds. Lease wait, sync, and build share one 17-minute deadline inside the 20-minute step. The sync and the build each run in an owned kill-on-close Job Object that stops at that deadline, and the step releases the lease only after each job is proven empty; nothing is stopped by name. An unproven cleanup or a failed release keeps the held journal for explicit recovery, as the compile does, and records `editor_host_lease_release_failed`. A lease that cannot be taken, including a lease wait that reaches the deadline, records `editor_host_lease_failed`. Fewer than 5 minutes left after the lease is taken (a provisional fixed minimum, not a tuning result) records `editor_sync_time_insufficient` before any checkout starts, because a checkout cut off by the deadline can leave the workspace half-updated (see Retained Compile workspace). A refused sync, or a sync that times out, records `editor_workspace_sync_failed`; a sync timeout carries no detail code. Only a build that reaches the deadline records `editor_build_timeout`, and a failed control checkout records `editor_control_checkout_failed`. A fixture may shorten, never extend, the deadline through `AETHELN_EDITOR_TEST_DEADLINE_SECONDS`, and may lower the minimum through `AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS` only while that deadline override is also set; the step then prints one fixed `editor_test_override active` line. Both variables come from the step's process environment, so a host-level variable on the runner would be honored too, visibly through that line; the lease or sync module's own fixed code is printed as one `editor_build_detail code=<code>` line. The build passes `-NoEngineChanges` (TA-020 2026-10-06 amendment, issue #267): if an outdated action would rewrite an existing file under `Engine/`, UBT exits 5 before it runs and the step records `editor_build_engine_changes_required`; the refused engine file list stays in the runner-local `build.log`, and an executed fixture pins both the flag and the mapping. So a CI editor run no longer relinks an engine module or rewrites the engine editor BuildId; UHT and makefile outputs under `Engine/Intermediate`, and new engine files, may still be written. A pull request that needs an engine rebuild (for example a new engine plugin in `AethelnOnline.uproject`) stays red with that reason until the owner runs an authorized engine build and re-attests the host tools. Every other build failure records `editor_build_failed`. Then run the frozen two-test harness from that workspace with its 600-second bound (12 minutes), remove the untracked compile-input files the next managed sync would reject (the exact `ls-files --others` query and git flags of `ManagedCompileWorkspace.ps1`; 2 minutes; runs only on positive evidence that the lease was released or never needed: the editor step succeeded, or failed with a recorded reason other than `editor_host_lease_failed` or `editor_host_lease_release_failed`; it is skipped after those two reasons, after a skipped editor step, and after an interrupted one with no recorded reason, because the lease state is then unknown or held by someone else, and the journal and workspace stay as recovery evidence), bind (1 minute) and upload (1 minute) the normalized `unreal-automation-report` artifact only when every earlier step succeeded, and publish the first failure as the fixed-vocabulary `automation_reason` output (1 minute). A final cleanup step (1 minute, issue #243) then removes this job's `editor-control-<run>-<attempt>` checkout and every earlier compile or editor control checkout, on the same evidence as the residue cleanup (it also runs after a later failed or cancelled step, and is skipped after `editor_host_lease_failed`, `editor_host_lease_release_failed`, a skipped editor step, or an interrupted one with no recorded reason); its result never changes `automation_reason`. Every step continues on error. This job is separate from the compile, so nothing in it can fail the compile job or skip the native receipt. `build.log`, harness output, and the copied report live under the runner temp directory, which the runner wipes after the job; only fixed failure-class and summary lines reach the public log, and the editor log stays in its `-abslog` file. The lease covers only the re-sync and build; the harness and residue cleanup still run outside it, serialized by the engine queue. History: before the re-sync, another owner pull request's compile, or a newer push to the same pull request, that entered the engine queue during this pull request's compile window could re-sync the managed workspace before this job started, and the editor build stopped with `editor_workspace_revision_changed` (PR #227 and PR #232 on 2026-10-03); recovery then took a full re-run of the workflow. |
 | `scheduled-client-package` | `schedule` weekly, Saturday at `02:00 UTC` | `quality-gates` | Schedule-only; GitHub runs the schedule from the default branch, `develop` since 2026-10-03 (`main` before), so each run packages the head of `develop`. | Milestone phase 1: clean-package the Windows client and publish it to the durable handoff store. |
 | `scheduled-server-package` | `schedule` | `scheduled-client-package` | Same as phase 1. | Milestone phase 2: clean-package the Linux dedicated server, dump its registry evidence, and publish both to the handoff store. |
 | `scheduled-provenance-validation` | `schedule` | `scheduled-server-package` | Same as phase 1. | Milestone phase 3: verify both handoff payloads, validate server cook references, and write bound provenance. |
@@ -828,6 +868,9 @@ Per event, the jobs that can run are:
 | `push` to `develop` | Skipped | Runs | Skipped | Skipped | Skipped |
 | `schedule` | Skipped | Runs | Skipped | Skipped | Phase 1 only after `quality-gates` succeeds; each later phase only after its predecessor succeeds |
 
+`trusted-editor-automation` additionally needs `change-impact` and runs only when
+`editor_required == 'true'` (see [Editor gate](#editor-gate-issue-299)).
+
 `develop` is both the integration branch and, since 2026-10-03, the default
 branch, and GitHub runs schedules only from the default branch. The weekly run
 therefore executes the workflow at the head of `develop`: a schedule or phase
@@ -919,6 +962,42 @@ tree ended, it fails closed as `phase_cleanup_failed` instead of releasing the
 concurrency group as a plain timeout. A newly queued pull request never
 cancels healthy in-progress work, and a later phase can never convert an
 earlier phase's failure or timeout into success.
+
+### Superseded-head check (issue #299)
+
+About one pull-request run in six had a newer push before it finished, and a
+run that has already been superseded still held the engine runner for its
+checkout, compile, and editor build. The first step of both pull-request
+engine jobs, `trusted-candidate-compile` and `trusted-editor-automation`, is
+now a byte-identical head check (step id `head_check`, one-minute bound,
+`continue-on-error`). It reads `GET /repos/<repository>/pulls/<number>` and
+compares `head.sha` with the event's `github.event.pull_request.head.sha`. A
+different 40-character head publishes `superseded=true` and the line
+`head_check result=superseded`; every later step that does not already depend
+on a gated step carries `if: steps.head_check.outputs.superseded != 'true'`
+(the `always()` steps become `always() && ...`), so the job ends in seconds with
+no checkout, no engine host lease, no workspace sync, and no report upload.
+
+The check fails open. A missing or unreadable event payload, a malformed
+pull-request number or head, a
+network or HTTP error (including a rate limit or a missing `pull-requests`
+right), a malformed body, or an uppercase or short SHA publishes
+`superseded=false` and `head_check result=unavailable`, and the job runs as
+before. It never cancels anything: platform `cancel-in-progress: true` can stop
+a job while it holds the engine host lease or a journal, so the concurrency
+group stays `cancel-in-progress: false` and the job simply finishes early.
+
+The step receives the per-run `github.token` through `env` and reads the
+pull-request number and event head from the runner's event payload file
+(`GITHUB_EVENT_PATH`), so no event data is interpolated into an engine job, as
+`tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` requires for every self-hosted
+job. It uses `Invoke-RestMethod` (no new action) and makes one read-only
+request with a 20-second timeout. The workflow
+permissions stay `contents: read`. A superseded compile exposes no report
+artifact, so a native receipt job that the selector still requires for that old
+head fails red at `native_raw_artifact_binding_invalid`; that run is no longer
+the pull request's head and gates nothing. A superseded editor job publishes
+`automation_reason=superseded_head`.
 
 ### Durable run-scoped handoff store
 
@@ -1859,6 +1938,10 @@ incremental compile policy.
   the read-only default. Receipt publishers use direct `needs` outputs and
   exact-ID same-run artifact downloads; they do not receive broader workflow
   permissions.
+- The superseded-head check (issue #299) passes the per-run `github.token` to one
+  step in each pull-request engine job through `env`, for a single read-only
+  `GET /repos/<repository>/pulls/<number>` request; the engine jobs receive it
+  nowhere else and no permission is added.
 - No step prints environment variables or credentials; engine failures expose
   only stable reason codes, command labels, and the bounded sanitized
   diagnostic tail. Full captured build and smoke output remains runner-local.

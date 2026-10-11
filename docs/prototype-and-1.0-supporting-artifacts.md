@@ -154,7 +154,7 @@ status, and evidence boundaries are in the [Staged Multiplayer Threat Model](sta
 | Requirement | Verification class | Evidence owner |
 | --- | --- | --- |
 | Packaged server plus two clients complete the prototype scenario | Packaged automation and gate review | #4/#44/#48; P10-010, P10-035, P10-037 |
-| Movement, free aim, combat timeline, dodge, death/respawn | Focused automation, network-condition runs, manual readability | #17-#21/#45; P10-011-P10-015, P10-036 |
+| Movement, free aim, combat timeline, dodge, directional block, death/respawn | Focused automation, network-condition runs, manual readability | #17-#21/#45; P10-011-P10-015, P10-036 |
 | Three-hit chain and `CombatActivation` outcomes | Focused deterministic automation | #60; P10-016 |
 | HUD authority, correction, rejection, objective and death feedback | Automated state checks plus manual readability/accessibility review | #61; P10-017 |
 | Authentication, ownership, admission, party recovery | Security and packaged integration | #3/#31/#35/#40; P10-019, P10-025, P10-029, P10-033 |

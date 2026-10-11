@@ -1929,6 +1929,41 @@ Every accepted decision records:
     fixture in the same suite entry covers it. The path-free result line is
     recorded on issue #267 before the host-tools receipt change that depends on
     it merges.
+- **Amendment (2026-10-11, editor gate and superseded-head check, issue #299):**
+  two cuts to self-hosted runner time, requested by the lead under the
+  owner's standing end-to-end delivery authority. They change when the job runs, not
+  what it proves or who may start it.
+  - *Editor gate:* `change-impact` publishes a second output,
+    `editor_required`, and `trusted-editor-automation` now needs
+    `change-impact` as well as the compile and runs only when it is `true`.
+    The closed, case-insensitive set is `Source`, `Config`, `Content`,
+    `Plugins`, `AethelnOnline.uproject`, the workflow itself, and the editor
+    harness as exact paths (`Invoke-UnrealAutomationTests.ps1`,
+    `Sync-EditorAutomationWorkspace.ps1`, `EngineRunnerHostLease.ps1`, every
+    `InitialPreparation.*`, and the three scripts those load, `LeaseJournal.ps1`,
+    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`). Every
+    classifier uncertainty publishes `editor_required=true`, and it implies
+    `engine_required=true`. A controller-only pull request still compiles
+    (TA-018) but skips the editor job, about two minutes of runner time. The
+    shadow selector is not consulted; the authoritative classifier alone gates
+    the job, and the byte-hash pin of the `change-impact` block is updated.
+  - *Superseded-head check:* the first step of `trusted-candidate-compile` and
+    `trusted-editor-automation` compares the event head with the pull request's
+    current head through the API and skips the rest of the job when they
+    differ, so a push that arrived while the job waited in the queue frees the
+    runner in seconds. It fails open on any error, passes `github.token`
+    through `env` for one read-only request, reads the event from the runner's
+    payload file so no event data is interpolated into the engine job, adds no action or permission, and
+    does not use `cancel-in-progress: true`, which could stop a job holding the
+    host lease. The editor outcome step records `superseded_head`, a new word
+    in the fixed `automation_reason` vocabulary.
+  - *Not changed:* the trust predicates, the ceilings, the queue, the lease and
+    journal rules, and the required checks (`quality-gates`, `change-impact`).
+    A skipped editor job is skipped, not failed.
+  - *Evidence:* `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1` pins the
+    output, the job gate, the head check step in both jobs, and runs the
+    classifier matrix and the head check against fixtures (current, superseded,
+    and every fail-open case).
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
