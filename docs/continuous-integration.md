@@ -851,8 +851,8 @@ subject to platform assignment latency. Total queue time can be longer when
 older jobs are already ahead in the queue (for example earlier pull-request
 compiles, or a scheduled milestone whose next phase queued earlier). TA-020
 adds a sixth engine-runner job, `trusted-editor-automation` (46-minute
-ceiling: 45 since the 2026-10-03 re-sync amendment added its control checkout and
-leased workspace re-sync, plus 1 for the issue #243 control checkout cleanup), which starts waiting only after its compile
+ceiling: the 2026-10-03 re-sync amendment added its control checkout and
+leased workspace re-sync, and issue #243 added the final control checkout cleanup), which starts waiting only after its compile
 succeeds: a scheduled phase that queues while it runs waits at most 46 minutes
 for it, a trusted compile queued while it runs now also waits up to 46 minutes
 for it, and an owner

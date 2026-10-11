@@ -826,7 +826,12 @@ try {
 			@{ name = 'clock invalid during lease wait'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_clock_invalid"}]}'; kept = $true },
 			@{ name = 'receipt without a boolean'; report = '{"supervisor":{"cleanupVerified":"true"}}'; kept = $true },
 			@{ name = 'build failure after a released lease'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_failed"}],"supervisor":{"childExitCode":1,"timedOut":false,"cleanupVerified":true}}'; kept = $false },
-			@{ name = 'passed compile'; report = '{"checks":[],"supervisor":{"childExitCode":0,"timedOut":false,"cleanupVerified":true}}'; kept = $false }
+			@{ name = 'passed compile'; report = '{"checks":[],"supervisor":{"childExitCode":0,"timedOut":false,"cleanupVerified":true}}'; kept = $false },
+			# A timeout after the lease was taken and released still leaves a verified receipt.
+			@{ name = 'compile_timeout after a released lease'; report = '{"checks":[{"name":"compile-hard-deadline","status":"failed","message":"compile_timeout"}],"supervisor":{"childExitCode":1,"timedOut":true,"cleanupVerified":true}}'; kept = $false },
+			@{ name = 'receipt with a numeric flag'; report = '{"supervisor":{"cleanupVerified":1}}'; kept = $true },
+			@{ name = 'receipt with a null flag'; report = '{"supervisor":{"cleanupVerified":null}}'; kept = $true },
+			@{ name = 'null receipt'; report = '{"supervisor":null}'; kept = $true }
 		)) {
 			Initialize-ControlCleanupFixture
 			if (Test-Path -LiteralPath $CleanupReport) { Remove-Item -LiteralPath $CleanupReport -Force }
