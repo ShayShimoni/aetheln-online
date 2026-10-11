@@ -49,6 +49,7 @@ Exit-EngineRunnerHostLease -Lease $Again -CleanupVerified $true
 
 $Records = @(Get-Content -LiteralPath $Path | ForEach-Object { $_ | ConvertFrom-Json })
 Assert-True -Condition ($Records.Count -eq 4 -and $Records[0].state -ceq 'held' -and $Records[3].state -ceq 'released') -Message 'Append-only paired journal'
+Assert-True -Condition ($Records[0].leaseId -ceq $Lease.leaseId -and $Records[2].leaseId -ceq $Again.leaseId) -Message 'A small journal appends without compaction'
 Assert-Rejected -Action { Exit-EngineRunnerHostLease -Lease $Again -CleanupVerified $true } -Reason 'lease_lost'
 foreach ($BadDeadline in @('2026-09-13T00:00:00Z', [DateTime]::Now, 123)) {
 	Assert-Rejected -Action { Enter-EngineRunnerHostLease -LeasePath $Path -OwnerId 'invalid' -DeadlineUtc $BadDeadline } -Reason 'lease_deadline_invalid'
@@ -148,19 +149,92 @@ foreach ($Journal in $BadJournals) {
 $LargePath = Join-Path $FixtureRoot 'large.lease'
 [IO.File]::WriteAllText($LargePath, ('x' * 65537))
 Assert-Rejected -Action { Enter-EngineRunnerHostLease -LeasePath $LargePath -OwnerId 'invalid' -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10)) } -Reason 'lease_journal_limit'
-$ReservedPath = Join-Path $FixtureRoot 'reserve.lease'
-$Builder = New-Object Text.StringBuilder
-while ($Builder.Length -lt 65000) {
-	$Token = [guid]::NewGuid().ToString('N')
-	$HeldRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $Token; attemptId = 'fixture'; ownerPid = $PID; ownerStartUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o') }
-	$ReleasedRecord = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Token; attemptId = 'fixture'; cleanupVerified = $true }
-	$null = $Builder.Append(($HeldRecord | ConvertTo-Json -Compress) + "`n" + ($ReleasedRecord | ConvertTo-Json -Compress) + "`n")
+function Initialize-JournalFixture([string] $Name, [int] $MinimumLength, [bool] $EndHeld = $false) {
+	$FixturePath = Join-Path $FixtureRoot $Name
+	$Builder = New-Object Text.StringBuilder
+	$StartUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+	while ($Builder.Length -lt $MinimumLength) {
+		$Token = [guid]::NewGuid().ToString('N')
+		$HeldRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $Token; attemptId = 'fixture'; ownerPid = $PID; ownerStartUtc = $StartUtc }
+		$ReleasedRecord = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Token; attemptId = 'fixture'; cleanupVerified = $true }
+		$null = $Builder.Append(($HeldRecord | ConvertTo-Json -Compress) + "`n")
+		if (-not $EndHeld -or $Builder.Length -lt $MinimumLength) { $null = $Builder.Append(($ReleasedRecord | ConvertTo-Json -Compress) + "`n") }
+	}
+	[IO.File]::WriteAllText($FixturePath, $Builder.ToString(), (New-Object Text.UTF8Encoding($false)))
+	return $FixturePath
 }
-[IO.File]::WriteAllText($ReservedPath, $Builder.ToString(), (New-Object Text.UTF8Encoding($false)))
-$ReservedHash = (Get-FileHash -LiteralPath $ReservedPath -Algorithm SHA256).Hash
+# A full, completely released journal is compacted to the new held record instead of being refused.
+$ReservedPath = Initialize-JournalFixture -Name 'reserve.lease' -MinimumLength 65000
 Assert-True -Condition ((Get-Item -LiteralPath $ReservedPath).Length -le 65536) -Message 'Valid almost-full journal is within read limit'
-Assert-Rejected -Action { Enter-EngineRunnerHostLease -LeasePath $ReservedPath -OwnerId ('x' * 128) -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10)) } -Reason 'lease_journal_limit'
-Assert-True -Condition ((Get-FileHash -LiteralPath $ReservedPath -Algorithm SHA256).Hash -ceq $ReservedHash) -Message 'Release space reserved before held append'
+$Compacting = Enter-EngineRunnerHostLease -LeasePath $ReservedPath -OwnerId ('x' * 128) -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10))
+Assert-True -Condition ($script:EngineRunnerHostLeases[$ReservedPath].stream.Length -lt 1000) -Message 'Compaction leaves only the new held record while the lease is held'
+Exit-EngineRunnerHostLease -Lease $Compacting -CleanupVerified $true
+$Compacted = @([IO.File]::ReadAllLines($ReservedPath) | ForEach-Object { $_ | ConvertFrom-Json })
+Assert-True -Condition ($Compacted.Count -eq 2 -and $Compacted[0].state -ceq 'held' -and $Compacted[0].leaseId -ceq $Compacting.leaseId -and $Compacted[1].state -ceq 'released' -and $Compacted[1].leaseId -ceq $Compacting.leaseId -and $Compacted[1].cleanupVerified) -Message 'Compacted journal holds exactly the new verified held/released pair'
+$Next = Enter-EngineRunnerHostLease -LeasePath $ReservedPath -OwnerId 'after-compaction' -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10))
+Exit-EngineRunnerHostLease -Lease $Next -CleanupVerified $true
+Assert-True -Condition (@([IO.File]::ReadAllLines($ReservedPath)).Count -eq 4) -Message 'A compacted journal appends normally afterwards'
+# An unreleased held record must still be refused, byte for byte, even when the journal is nearly full.
+$HeldTailPath = Initialize-JournalFixture -Name 'reserve-held.lease' -MinimumLength 65300 -EndHeld $true
+$HeldTailHash = (Get-FileHash -LiteralPath $HeldTailPath -Algorithm SHA256).Hash
+Assert-True -Condition ((Get-Item -LiteralPath $HeldTailPath).Length -le 65536 -and ([IO.File]::ReadAllLines($HeldTailPath)[-1] | ConvertFrom-Json).state -ceq 'held') -Message 'Almost-full journal fixture ends with an unreleased held record'
+Assert-Rejected -Action { Enter-EngineRunnerHostLease -LeasePath $HeldTailPath -OwnerId ('x' * 128) -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10)) } -Reason 'lease_owner_ambiguous'
+Assert-True -Condition ((Get-FileHash -LiteralPath $HeldTailPath -Algorithm SHA256).Hash -ceq $HeldTailHash) -Message 'Held almost-full journal is not compacted'
+# A valid journal already beyond the reader limit stays refused and unchanged; compaction never raises the limit.
+$OverLimitPath = Initialize-JournalFixture -Name 'over-limit.lease' -MinimumLength 65537
+$OverLimitHash = (Get-FileHash -LiteralPath $OverLimitPath -Algorithm SHA256).Hash
+Assert-True -Condition ((Get-Item -LiteralPath $OverLimitPath).Length -gt 65536) -Message 'Over-limit journal fixture exceeds the reader limit'
+Assert-Rejected -Action { Enter-EngineRunnerHostLease -LeasePath $OverLimitPath -OwnerId 'over-limit' -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10)) } -Reason 'lease_journal_limit'
+Assert-True -Condition ((Get-FileHash -LiteralPath $OverLimitPath -Algorithm SHA256).Hash -ceq $OverLimitHash) -Message 'Over-limit journal is preserved'
+# Exact boundary: a journal that leaves room for exactly one more pair appends; one byte less room compacts.
+$BoundaryOwner = 'b' * 128
+$BoundaryStartUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+$BoundaryPrior = ([ordered]@{ schemaVersion = 1; state = 'held'; leaseId = ('c' * 32); attemptId = 'boundary-prior'; ownerPid = $PID; ownerStartUtc = $BoundaryStartUtc } | ConvertTo-Json -Compress) + "`n" +
+	([ordered]@{ schemaVersion = 1; state = 'released'; leaseId = ('c' * 32); attemptId = 'boundary-prior'; cleanupVerified = $true } | ConvertTo-Json -Compress) + "`n"
+$BoundaryHeldLength = [Text.Encoding]::UTF8.GetByteCount(([ordered]@{ schemaVersion = 1; state = 'held'; leaseId = ('a' * 32); attemptId = $BoundaryOwner; ownerPid = $PID; ownerStartUtc = $BoundaryStartUtc } | ConvertTo-Json -Compress) + "`n")
+$BoundaryReleaseLength = [Text.Encoding]::UTF8.GetByteCount(([ordered]@{ schemaVersion = 1; state = 'released'; leaseId = ('a' * 32); attemptId = $BoundaryOwner; cleanupVerified = $true } | ConvertTo-Json -Compress) + "`n")
+foreach ($Case in @(@{ name = 'exact-fit'; adjustment = 0 }, @{ name = 'one-byte-short'; adjustment = 1 })) {
+	$BoundaryPath = Join-Path $FixtureRoot ('boundary-' + $Case.name + '.lease')
+	$BoundaryLength = 65536 - $BoundaryHeldLength - $BoundaryReleaseLength + $Case.adjustment
+	[IO.File]::WriteAllText($BoundaryPath, (' ' * ($BoundaryLength - [Text.Encoding]::UTF8.GetByteCount($BoundaryPrior))) + $BoundaryPrior, (New-Object Text.UTF8Encoding($false)))
+	Assert-True -Condition ((Get-Item -LiteralPath $BoundaryPath).Length -eq $BoundaryLength) -Message 'Boundary fixture has the intended length'
+	$BoundaryLease = Enter-EngineRunnerHostLease -LeasePath $BoundaryPath -OwnerId $BoundaryOwner -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10))
+	$HeldLength = $script:EngineRunnerHostLeases[$BoundaryPath].stream.Length
+	Exit-EngineRunnerHostLease -Lease $BoundaryLease -CleanupVerified $true
+	$BoundaryRecords = @([IO.File]::ReadAllLines($BoundaryPath) | ForEach-Object { $_ | ConvertFrom-Json })
+	if ($Case.adjustment -eq 0) {
+		Assert-True -Condition ($HeldLength + $BoundaryReleaseLength -eq 65536 -and (Get-Item -LiteralPath $BoundaryPath).Length -eq 65536 -and $BoundaryRecords.Count -eq 4 -and $BoundaryRecords[0].leaseId -ceq ('c' * 32)) -Message 'Exact-fit journal appends without compaction and ends exactly at the reader limit'
+	} else {
+		Assert-True -Condition ($HeldLength -eq $BoundaryHeldLength -and $BoundaryRecords.Count -eq 2 -and $BoundaryRecords[0].leaseId -ceq $BoundaryLease.leaseId) -Message 'One-byte-short journal is compacted to the new pair'
+	}
+}
+# Drift guard: the preparation and routine writers share one journal, so both must refuse the same bad journals
+# with the same code and leave the file untouched. Fixtures live only under this test's GUID folder in the temp directory.
+$ParityRoot = Join-Path $FixtureRoot ('parity-' + [guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $ParityRoot
+$ParityOk = ([ordered]@{ schemaVersion = 1; state = 'held'; leaseId = ('d' * 32); attemptId = 'parity'; ownerPid = $PID; ownerStartUtc = $BoundaryStartUtc } | ConvertTo-Json -Compress) + "`n" +
+	([ordered]@{ schemaVersion = 1; state = 'released'; leaseId = ('d' * 32); attemptId = 'parity'; cleanupVerified = $true } | ConvertTo-Json -Compress) + "`n"
+function Get-ParityHeld([string] $Id) { return ([ordered]@{ schemaVersion = 1; state = 'held'; leaseId = ($Id * 32); attemptId = 'parity'; ownerPid = $PID; ownerStartUtc = $BoundaryStartUtc } | ConvertTo-Json -Compress) + "`n" }
+function Get-ParityReleased([string] $Id) { return ([ordered]@{ schemaVersion = 1; state = 'released'; leaseId = ($Id * 32); attemptId = 'parity'; cleanupVerified = $true } | ConvertTo-Json -Compress) + "`n" }
+$ParityCases = @(
+	@{ name = 'mid-journal-held'; bytes = [Text.Encoding]::UTF8.GetBytes($ParityOk + (Get-ParityHeld 'e') + (Get-ParityHeld 'f') + (Get-ParityReleased 'f')); code = 'lease_owner_ambiguous' },
+	@{ name = 'duplicate-held'; bytes = [Text.Encoding]::UTF8.GetBytes($ParityOk + (Get-ParityHeld 'd') + (Get-ParityReleased 'd')); code = 'lease_owner_ambiguous' },
+	@{ name = 'missing-cleanup'; bytes = [Text.Encoding]::UTF8.GetBytes($ParityOk.Replace('"cleanupVerified":true', '"other":true')); code = 'lease_owner_ambiguous' },
+	@{ name = 'extra-field'; bytes = [Text.Encoding]::UTF8.GetBytes($ParityOk.Replace('"attemptId":"parity",', '"attemptId":"parity","extra":1,')); code = 'lease_owner_ambiguous' },
+	@{ name = 'bom'; bytes = [byte[]] (@(0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes($ParityOk)); code = 'lease_owner_ambiguous' },
+	@{ name = 'oversized'; bytes = [Text.Encoding]::UTF8.GetBytes(' ' * (65537 - $ParityOk.Length) + $ParityOk); code = 'lease_journal_limit' }
+)
+$ParityIndex = 0
+foreach ($Case in $ParityCases) {
+	$ParityIndex++
+	$ParityPath = Join-Path $ParityRoot ($Case.name + '.lease')
+	[IO.File]::WriteAllBytes($ParityPath, $Case.bytes)
+	$ParityHash = (Get-FileHash -LiteralPath $ParityPath -Algorithm SHA256).Hash
+	$ParityAttempt = New-InitialPreparationAttempt -Repository 'fixture/repository' -ControllerRevision ('a' * 40) -TargetRevision ('b' * 40) -AttemptId ('parity-' + $ParityIndex)
+	Assert-Rejected -Action { Enter-EngineRunnerHostLease -LeasePath $ParityPath -OwnerId 'parity' -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10)) } -Reason $Case.code
+	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $ParityAttempt -LeasePath $ParityPath } -Reason $Case.code
+	Assert-True -Condition ((Get-FileHash -LiteralPath $ParityPath -Algorithm SHA256).Hash -ceq $ParityHash) -Message ('Both writers leave the ' + $Case.name + ' journal untouched')
+}
 $LinkPath = Join-Path $FixtureRoot 'hardlink.lease'
 $null = New-Item -ItemType HardLink -Path $LinkPath -Target $Path
 Assert-Rejected -Action { Enter-EngineRunnerHostLease -LeasePath $LinkPath -OwnerId 'invalid' -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10)) } -Reason 'lease_path_invalid'
