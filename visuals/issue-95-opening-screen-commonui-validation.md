@@ -1,5 +1,10 @@
 # Issue #95 Opening-Screen Visual Review and CommonUI Plan
 
+> **Superseded Kell notes.** The Kell anatomy judgments in this report (living
+> skin, mineral crown, mantle) describe the superseded design, kept as history.
+> Current canon: `docs/playable-peoples.md` (Kell section)
+> and `docs/art-style-guide.md`.
+
 ## Status, scope, and authority
 
 This is a non-canonical visual-review and implementation-planning report for
