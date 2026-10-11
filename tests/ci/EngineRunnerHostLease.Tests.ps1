@@ -156,18 +156,24 @@ function Initialize-JournalFixture([string] $Name, [int] $MinimumLength, [bool] 
 	$FixturePath = Join-Path $FixtureRoot $Name
 	$Builder = New-Object Text.StringBuilder
 	$StartUtc = (Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
-	while ($Builder.Length -lt $MinimumLength) {
+	# Record widths depend on the PID, so a held tail is appended after the pairs rather than by length arithmetic.
+	$PairLimit = $MinimumLength
+	if ($EndHeld) { $PairLimit = $MinimumLength - 400 }
+	while ($Builder.Length -lt $PairLimit) {
 		$Token = [guid]::NewGuid().ToString('N')
 		$HeldRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $Token; attemptId = 'fixture'; ownerPid = $PID; ownerStartUtc = $StartUtc }
 		$ReleasedRecord = [ordered]@{ schemaVersion = 1; state = 'released'; leaseId = $Token; attemptId = 'fixture'; cleanupVerified = $true }
+		$null = $Builder.Append(($HeldRecord | ConvertTo-Json -Compress) + "`n" + ($ReleasedRecord | ConvertTo-Json -Compress) + "`n")
+	}
+	if ($EndHeld) {
+		$HeldRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = [guid]::NewGuid().ToString('N'); attemptId = 'fixture'; ownerPid = $PID; ownerStartUtc = $StartUtc }
 		$null = $Builder.Append(($HeldRecord | ConvertTo-Json -Compress) + "`n")
-		if (-not $EndHeld -or $Builder.Length -lt $MinimumLength) { $null = $Builder.Append(($ReleasedRecord | ConvertTo-Json -Compress) + "`n") }
 	}
 	[IO.File]::WriteAllText($FixturePath, $Builder.ToString(), (New-Object Text.UTF8Encoding($false)))
 	return $FixturePath
 }
 # A full, completely released journal is compacted to the new held record instead of being refused.
-$ReservedPath = Initialize-JournalFixture -Name 'reserve.lease' -MinimumLength 65000
+$ReservedPath = Initialize-JournalFixture -Name 'reserve.lease' -MinimumLength 65200
 Assert-True -Condition ((Get-Item -LiteralPath $ReservedPath).Length -le 65536) -Message 'Valid almost-full journal is within read limit'
 $Compacting = Enter-EngineRunnerHostLease -LeasePath $ReservedPath -OwnerId ('x' * 128) -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10))
 $CompactedHeldLength = [Text.Encoding]::UTF8.GetByteCount(([ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $Compacting.leaseId; attemptId = ('x' * 128); ownerPid = $Compacting.ownerPid; ownerStartUtc = $Compacting.ownerStartUtc } | ConvertTo-Json -Compress) + "`n")
@@ -181,7 +187,7 @@ Assert-True -Condition (@([IO.File]::ReadAllLines($ReservedPath)).Count -eq 4) -
 # An unreleased held record must still be refused, byte for byte, even when the journal is nearly full.
 $HeldTailPath = Initialize-JournalFixture -Name 'reserve-held.lease' -MinimumLength 65300 -EndHeld $true
 $HeldTailHash = (Get-FileHash -LiteralPath $HeldTailPath -Algorithm SHA256).Hash
-Assert-True -Condition ((Get-Item -LiteralPath $HeldTailPath).Length -le 65536 -and ([IO.File]::ReadAllLines($HeldTailPath)[-1] | ConvertFrom-Json).state -ceq 'held') -Message 'Almost-full journal fixture ends with an unreleased held record'
+Assert-True -Condition ((Get-Item -LiteralPath $HeldTailPath).Length -le 65536 -and (Get-Item -LiteralPath $HeldTailPath).Length -gt 64936 -and ([IO.File]::ReadAllLines($HeldTailPath)[-1] | ConvertFrom-Json).state -ceq 'held') -Message 'Almost-full journal fixture ends with an unreleased held record'
 Assert-Rejected -Action { Enter-EngineRunnerHostLease -LeasePath $HeldTailPath -OwnerId ('x' * 128) -DeadlineUtc ([DateTime]::UtcNow.AddSeconds(10)) } -Reason 'lease_owner_ambiguous'
 Assert-True -Condition ((Get-FileHash -LiteralPath $HeldTailPath -Algorithm SHA256).Hash -ceq $HeldTailHash) -Message 'Held almost-full journal is not compacted'
 # A valid journal already beyond the reader limit stays refused and unchanged; compaction never raises the limit.
