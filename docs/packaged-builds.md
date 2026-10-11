@@ -18,7 +18,7 @@ Launcher engine binaries and Editor-only success do not satisfy this workflow.
 | Windows compiler | MSVC `14.44.35207` toolset family |
 | Windows SDK | `10.0.26100.0` |
 | Linux cross-toolchain | `v26_clang-20.1.8-rockylinux8` |
-| Project plugins | `GameplayAbilities`, `EnhancedInput`, and `CommonUI`; the server target denies `EnhancedInput` and `CommonUI` |
+| Project plugins | `GameplayAbilities`, `EnhancedInput`, and `CommonUI`; the server target denies `EnhancedInput` and `CommonUI`; `ReplicationGraph` (issue #2 laboratory) is denied for the Editor target |
 | Startup map | `/Game/Maps/StarterMap` |
 
 The repository revision, exact resolved compiler and SDK versions, plugin

@@ -26,6 +26,8 @@ plugins. `EnhancedInput` and `CommonUI` are denied for the dedicated-server
 target so its module graph does not acquire client input or presentation code.
 `GameplayTags` and `GameplayTasks` are engine modules. `CommonInput` is supplied
 by the `CommonUI` plugin; it is not a separate project plugin.
+`ReplicationGraph` is enabled for the issue #2 replication candidate laboratory and
+denied for the Editor target (see [Networking Authority Spike](networking-authority-spike.md)).
 
 The minimal plugin defaults are recorded in
 [`DefaultEngine.ini`](../Config/DefaultEngine.ini) and

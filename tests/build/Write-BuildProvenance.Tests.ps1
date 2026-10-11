@@ -68,7 +68,9 @@ try {
 	Assert-True ($Provenance.tools.compiler.version -eq '14.44.35207') 'Exactly one pinned MSVC version should be recorded.'
 	Assert-True ($Provenance.tools.windowsSdk.resourceCompilerPath -eq $ResourceCompiler) 'Pinned SDK tool must win when multiple SDKs exist.'
 	Assert-True ($Provenance.tools.windowsSdk.version -eq '10.0.26100.0') 'Exactly one pinned Windows SDK version should be recorded.'
-	Assert-True ($Provenance.source.plugins.Count -eq 4) 'Project plugin descriptors and state should be recorded.'
+	Assert-True ($Provenance.source.plugins.Count -eq 5) 'Project plugin descriptors and state should be recorded.'
+	$ReplicationGraph = @($Provenance.source.plugins | Where-Object { $_.name -eq 'ReplicationGraph' })
+	Assert-True ($ReplicationGraph.Count -eq 1 -and $ReplicationGraph[0].enabled -eq $true -and @($ReplicationGraph[0].targetDenyList) -contains 'Editor') 'Spike ReplicationGraph state and Editor deny list should be recorded.'
 	$AndroidFileServer = @($Provenance.source.plugins | Where-Object { $_.name -eq 'AndroidFileServer' })
 	Assert-True ($AndroidFileServer.Count -eq 1 -and $AndroidFileServer[0].enabled -eq $false) 'Disabled plugins should remain explicit in provenance.'
 	Assert-True ($Provenance.build.uatInvocations.server.arguments[1] -eq '-serverplatform=Linux') 'Exact UAT argument order should be recorded.'
