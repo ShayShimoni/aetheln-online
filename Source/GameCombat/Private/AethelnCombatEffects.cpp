@@ -87,3 +87,15 @@ UAethelnGuardPressureEffect::UAethelnGuardPressureEffect()
 	Modifier.ModifierOp = EGameplayModOp::AddBase;
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Pressure);
 }
+
+UAethelnDeathStateEffect::UAethelnDeathStateEffect()
+{
+	DurationPolicy = EGameplayEffectDurationType::Infinite;
+}
+
+void UAethelnDeathStateEffect::ApplyTo(UAbilitySystemComponent& AbilitySystemComponent)
+{
+	FGameplayEffectSpec Spec(GetDefault<UAethelnDeathStateEffect>(), AbilitySystemComponent.MakeEffectContext(), 1.0f);
+	Spec.DynamicGrantedTags.AddTag(AethelnGameplayTags::State_Dead);
+	AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec);
+}
