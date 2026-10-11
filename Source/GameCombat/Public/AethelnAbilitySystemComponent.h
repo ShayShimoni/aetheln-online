@@ -36,6 +36,7 @@ struct FAethelnServerDodgeWindow
 };
 DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatActivationDelegate, const FAethelnCombatActivationRecord&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnChainEndDelegate, const FGuid&, EAethelnChainEndReason);
+DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatResultCueDelegate, const FAethelnCombatResultCue&);
 
 /** Server-only chain bookkeeping, separate from GAS activation and observer state. */
 struct FAethelnServerChainState
@@ -199,6 +200,8 @@ public:
 	FAethelnMovementActivationOutcomeDelegate OnMovementActivationOutcome;
 	FAethelnCombatActivationDelegate OnCombatActivation;
 	FAethelnChainEndDelegate OnChainEnded;
+	/** Every client, and the server: presentation only. Losing one loses nothing authoritative. */
+	FAethelnCombatResultCueDelegate OnCombatResultCue;
 	const FAethelnAttackPresentationState& GetAttackPresentationState() const { return AttackPresentationState; }
 
 	/** Authority only; stamp the step and clear the chain once, without removing a mid-frame step. */
@@ -206,6 +209,8 @@ public:
 	void ResetChain(EAethelnChainEndReason Reason, double ResetTime);
 	/** Authority only; cancels the running dodge operation, closing its windows now and ending server displacement once. */
 	void CancelDodge();
+	/** Authority only; ends a held block at the processing time (an accepted dodge, Q10 and Q18). */
+	void CancelBlock();
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Rate bucket placeholder, never tuning; #45 owns the final value. Without config (0) every request is rate limited. */
@@ -288,11 +293,15 @@ protected:
 	void ClientCombatActivation(const FAethelnCombatActivationRecord& Record);
 	UFUNCTION(Client, Reliable)
 	void ClientChainEnded(const FGuid& ActivationId, EAethelnChainEndReason Reason);
+	/** On the target's ASC: a committed result's presentation-safe cue. */
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastCombatResultCue(const FAethelnCombatResultCue& Cue);
 
 private:
 	friend class UAethelnGameplayAbility;
 	friend class UAethelnBasicChainAbility;
 	friend class UAethelnDodgeAbility;
+	friend class UAethelnBlockAbility;
 	friend class UAethelnCombatTimelineSubsystem;
 
 	/** The seam's result slot, open only while the seam activates this one spec handle. */
@@ -376,6 +385,8 @@ private:
 
 	FSeamScope* ActiveSeamScope = nullptr;
 	FAethelnActivationRateBucket RateBucket;
+	/** Step 10's history, also advanced by a committed request that then fails to start, so a replay cannot spend again. */
+	void AdvanceAcceptedHistory(const FAethelnCombatActivationRequest& Request);
 	uint32 LastAcceptedSequence = 0;
 	/** Raw, as received; they advance only with LastAcceptedSequence. */
 	FVector LastAcceptedAim = FVector::ZeroVector;

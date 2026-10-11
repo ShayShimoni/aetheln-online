@@ -9,6 +9,12 @@ UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 {
 	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
 	ResetTags.AddTag(AethelnGameplayTags::State_Dead);
+	// #18 Q17 and Q10: no attack while dodging or blocking. Each blocking tag is also a reset tag (grant rule).
+	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag() })
+	{
+		ActivationBlockedTags.AddTag(Tag);
+		ResetTags.AddTag(Tag);
+	}
 	// No authored steps/version/sampling/cost preset. Unset production fails grant.
 }
 
@@ -58,11 +64,13 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 		}
 		if (S.Shape > EAethelnAttackShape::Box || S.ShapeExtent.ContainsNaN()
 			|| S.ShapeExtent.X <= 0.0 || S.ShapeExtent.Y <= 0.0 || S.ShapeExtent.Z <= 0.0
+			|| (S.Shape == EAethelnAttackShape::Capsule && S.ShapeExtent.Z < S.ShapeExtent.X)
 			|| !S.PathStart.IsValid() || !S.PathEnd.IsValid()
 			|| !FMath::IsFinite(S.WroughtDamage) || S.WroughtDamage < 0.0f
+			|| !FMath::IsFinite(S.GuardPressure) || S.GuardPressure < 0.0f
 			|| S.MaxTargets < 1 || S.MaxAimPitchDegrees > 90.0)
 		{
-			return TEXT("has an invalid shape, damage, target bound or pitch clamp");
+			return TEXT("has an invalid shape, damage, Guard pressure, target bound or pitch clamp");
 		}
 	}
 	return nullptr;

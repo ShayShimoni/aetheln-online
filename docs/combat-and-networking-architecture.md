@@ -336,8 +336,8 @@ This document supplies semantics, not duplicate implementation or evidence:
 | [#82](https://github.com/ShayShimoni/aetheln-online/issues/82) | Input/camera contract and measured pure-free-aim feel. |
 | [#106](https://github.com/ShayShimoni/aetheln-online/issues/106) | Machine-readable IDs, deterministic generation, bounded listener/proc validation, and registry tooling. |
 
-Prototype briefs and ledgers that still carry the pre-Issue-#103 unnamed-resource
-placeholder are downstream reconciliation work for
+The prototype briefs, ledger, and roadmap no longer carry the pre-Issue-#103
+unnamed-resource placeholder; any remaining downstream reconciliation belongs to
 [#115](https://github.com/ShayShimoni/aetheln-online/issues/115). This contract
 does not rewrite historical evidence or claim that unimplemented behavior has
 passed runtime, packaged, performance, security, readability, or QA gates.
@@ -480,8 +480,13 @@ manual and checked in review.
 | `State.Oathscar.SwordShieldBasicChain` | (commitment state of the above) | #60 P3 |
 | `Cooldown.Oathscar.GateStep`, `Cooldown.Oathscar.SwornRebuke`, `Cooldown.Oathscar.HoldTheLine` | (cooldown state of the above) | #19 |
 | `State.Dead` | (death flow state) | Declared by #19, applied by #21 |
+| `Damage.Wrought` | `combat.damage.wrought` | #60 P4 |
+| `SetByCaller.Damage.Wrought` | (negated Wrought magnitude of the shared damage effect) | #60 P4 |
 | `Ability.Dodge` | `combat.action.dodge` (proposed for #106, #18 Q13) | #18 P3 |
 | `Cooldown.Dodge`, `State.Dodging`, `State.DodgeInvulnerable` | (cooldown, action, and invulnerability states of the above) | #18 P3 |
+| `Ability.Block` | `combat.action.block` (proposed for #106, #18 Q13) | #18 P4 |
+| `Cooldown.Block`, `State.Blocking`, `State.GuardBroken` | (cooldown, block, and Guard-break states of the above) | #18 P4 |
+| `SetByCaller.Pressure.Guard` | (negated Guard pressure of the shared Guard pressure effect) | #18 P4 |
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and

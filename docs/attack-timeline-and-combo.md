@@ -90,7 +90,7 @@ what it leaves to other owners.
 | Owner | #60 consumes or provides | #60 does not do |
 | --- | --- | --- |
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes the seam, rate bucket, outcome RPC, base ability, cost and cooldown overrides, grant validation, `FindForPawn`, and `State.Dead` (see [Dependencies on #19](#dependencies-on-19)). Adds one `ResetChain(AvatarLost)` call to the PlayerState's null-pawn case. | Reorder or change #19's existing seam steps, or change what #19's lifecycle grants, initializes, or cancels. |
-| [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Provides the avoidance step and an authored avoidance-tag set that #18 fills with its dodge invulnerability tag; a dodge activation resets the chain like any other action. Resolves whether a contact is blocked against the active defense state #18 exposes (OQ6, owner, 2026-10-05). | Dodge cost, window, movement, or tags; the right-mouse block action, its state, and what a blocked hit does to Guard (#18 owns them). |
+| [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Provides the avoidance step, which asks the dodge's time-exact `IsAvoidingAt(ContactTime)` (#18 T2), and the defense step, which evaluates the defense slot's interval at the contact time; `State.DodgeInvulnerable` stays out of the authored avoidance-tag set (see [Dodge and Block](dodge-and-block.md#dependencies-on-60), items 2 and 3). A dodge activation resets the chain like any other action. Resolves whether a contact is blocked against the active defense state #18 exposes (OQ6, owner, 2026-10-05). | Dodge cost, window, movement, or tags; the right-mouse block action, its state, and what a blocked hit does to Guard (#18 owns them). |
 | [#260](https://github.com/ShayShimoni/aetheln-online/issues/260) | Provides the timeline, contact pipeline, defense-state check, and network-condition test rows that the representative actives reuse. | Gate Step and Sworn Rebuke contacts, Gate Step's movement, Hold the Line's Guard result (OQ3, owner, 2026-10-05). |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Provides the step definition, timeline driver, contact pipeline, and result path; the enemy registers its steps directly, without the seam. | Enemy behavior, target choice, or telegraph content. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Latches lethal results and raises one lethal notification per target; treats `State.Dead` and zero Health as not alive. | Apply `State.Dead`, run death, respawn, or reconnect. |
@@ -134,13 +134,13 @@ Existing code at `ab296d0`:
 | `AethelnGameplayTags` (extend) | GameCore | `Ability.Oathscar.SwordShieldBasicChain` (`order.oathscar.ability.sword_shield_basic_chain`), `State.Oathscar.SwordShieldBasicChain` (commitment state), `Damage.Wrought` (`combat.damage.wrought`), `SetByCaller.Damage.Wrought`. The PR that adds each tag adds its row to the Initial entries table in the combat document. |
 | `IAethelnCombatInputSink` | GameCore | Presentation-safe client entry: `RequestAbilityPress(FGameplayTag AbilityId)`. No GAS type, so GameUI can call it. |
 | `AethelnActivationTypes.h` (extend) | GameCombat | Request schema 2, every field initialized; two appended `EAethelnActivationResult` values. |
-| `AethelnAttackTypes.h` | GameCombat | `FAethelnAttackStepDefinition`, `FAethelnCombatActivationRecord`, `FAethelnAttackPresentationState`, `FAethelnCombatResultCue`, `EAethelnAimCorrection`, `EAethelnChainEndReason`. |
+| `AethelnAttackTypes.h` | GameCombat | `FAethelnAttackStepDefinition`, `FAethelnCombatActivationRecord`, `FAethelnAttackPresentationState`, `FAethelnCombatResultCue`, `FAethelnCombatResult` (the server result record), `FAethelnDefenseState` (#18 P4 adds its interval and the hook's `EAethelnBlockConsequence` return, from `AethelnDefenseTypes.h`), `EAethelnCombatResultOutcome` (#18 P4 adds `GuardBroken`), `EAethelnAimCorrection`, `EAethelnChainEndReason`. |
 | `AethelnAttackTimeline` (namespace, pure functions) | GameCombat | Window evaluation, sweep segment clipping and sub-stepping, aim bounding. Headless-testable with injected times. |
 | `UAethelnBasicChainAbility` | GameCombat | Derives from `UAethelnGameplayAbility` (`InstancedPerActor`). Each activation selects the step from the chain state, waits for a buffered start, registers the step with the subsystem, and ends at buffer-open. |
 | `UAethelnAbilitySystemComponent` (extend) | GameCombat | Aim and time validation (steps 6a to 6d), per-connection last accepted raw aim and time, chain state and `ResetChain`, owner RPCs, the replicated phase state, the result-cue multicast, the four replicated-data overrides. |
 | `AAethelnPlayerState` (extend) | GameCombat | Implements `IAethelnCombatInputSink`; calls `ResetChain(AvatarLost)` in its null-pawn case. |
-| `UAethelnCombatTimelineSubsystem` | GameCombat | `UWorldSubsystem`, active on the server. Registered steps, activation ordinals, combat entity ids, per-frame sampling, the contact queue, resolution, already-hit records, the lethal notification. |
-| `UAethelnDamageEffect` | GameCombat | Instant effect: negated Health modifier from `SetByCaller.Damage.Wrought`, asset tag `Damage.Wrought`. |
+| `UAethelnCombatTimelineSubsystem` | GameCombat | `UWorldSubsystem`, active on the server. Registered steps, boundary owners (chain steps and, through `RegisterNonChainBoundaries`, non-chain owners such as #18's dodge window; an owner leaves the list once `HasPendingBoundaries()` is false: no chain and no open dodge window), activation ordinals, combat entity ids, per-frame sampling, the contact queue, resolution, already-hit records, the lethal notification, the avoidance set, registered defense slots (one per target, each with a server-time interval, #18 P4), and the relation function. |
+| `UAethelnDamageEffect` | GameCombat | Instant effect: Health modifier from `SetByCaller.Damage.Wrought`, which carries the negated authored damage (a set-by-caller magnitude has no coefficient, as with the cost effect). The pipeline adds `Damage.Wrought` to every spec as a dynamic asset tag. |
 | `UAethelnPOCInputComponent` (extend) | GameUI | P6: primary-attack action on left mouse, Reticle mode only, never the recapture press. |
 
 ## Request Contract
@@ -283,6 +283,7 @@ step's authoritative start; every value is `TBD`.
 | `PathStart`, `PathEnd` | Shape transforms in the combat frame at `ActiveStart` and `ActiveEnd` |
 | `MaxAimPitchDegrees` | Pitch clamp applied to the accepted aim when building the combat frame |
 | `WroughtDamage` | One Wrought component per contact |
+| `GuardPressure` | The Guard pressure a blocked contact applies through the defense owner's hook (#18 Q7, added by #18 P4) |
 | `MaxTargets` | The bounded number of targets one activation may record |
 | `bInterruptsTarget` (P5) | Whether this step's committed hit interrupts the target |
 
@@ -302,8 +303,8 @@ three steps, every value is finite, and:
   instant;
 - final step: `BufferOpen == RecoveryEnd`, no link values;
 - `ActiveEnd <= CancelOpen <= RecoveryEnd`;
-- extents are positive, damage is non-negative, `MaxTargets >= 1`, and the
-  pitch clamp is within `[0, 90]`;
+- extents are positive, damage and Guard pressure are non-negative,
+  `MaxTargets >= 1`, and the pitch clamp is within `[0, 90]`;
 - the chain's own `ActivationBlockedTags` do not contain its commitment tag,
   and every tag in them is also an authored reset tag (see [Resets](#resets)),
   so a blocking tag added while a buffered step waits resets the chain instead
@@ -372,7 +373,10 @@ may activate if its own tags allow it, and its activation resets the chain.
 Which actions are blocked, and which may cancel recovery, is content data `TBD`
 with #18 (#19 open decision 6). For dodge and block, #18 Q10 and Q17
 (owner-approved 2026-10-10) answer it: the commitment tag blocks both, and an
-attack press during a dodge or while blocking is refused.
+attack press during a dodge or while blocking is refused. Since #18 P4 the
+chain lists `State.Dodging` and `State.Blocking` among its
+`ActivationBlockedTags` and, as grant validation requires, among its reset
+tags.
 
 The tag is added and removed by the timeline as a loose server tag, not as
 `ActivationOwnedTags`, because those last for the whole activation
@@ -405,9 +409,10 @@ registered step with `ResetTime`, clears the phase state, and sends one
 | `Completed` | The final step's recovery ended |
 | `Timeout` | A non-final step's link window closed with no press |
 | `Interrupted` | A committed interrupting result arrived inside `InterruptibleUntil` (P5) |
-| `AvatarLost` | #19's null-pawn case (unpossession, destroy while possessed, logout, disconnect); it already cancels all abilities |
+| `AvatarLost` | #19's null-pawn case (unpossession, destroy while possessed, logout, disconnect); it already cancels all abilities. Also the timeline pass finding a step's avatar gone or replaced, and a buffered start refused because the avatar is gone |
 | `IncompatibleState` | `State.Dead`, an authored reset tag, or any tag in the chain's `ActivationBlockedTags` was added, through `RegisterGameplayTagEvent` (`GAS/Public/AbilitySystemComponent.h:720`) |
 | `OtherAction` | Another ability successfully committed through the ASC's seam; an ultimately failed commit preserves the chain |
+| `InternalFailure` | The timeline refused to register a buffered step for a reason other than a lost avatar (no subsystem, exhausted activation ordinals or combat ids); a lost or dying avatar reports `AvatarLost` instead |
 
 `AbilityActivatedCallbacks` fires from `PreActivate`
 (`GAS/Private/Abilities/GameplayAbility.cpp:997`), before the other ability
@@ -442,7 +447,10 @@ Each frame the pass:
    sweeps the active window over
    `(LastSample, min(Now, S + ActiveEnd, ResetTime)]` and queues contact
    candidates. Steps reset earlier in the frame are still swept up to their
-   reset time.
+   reset time. A step whose registered avatar is gone, being destroyed, or
+   replaced has no authoritative origin: it is not swept, and if it was not
+   already reset its chain ends with `AvatarLost` at `Now`. This covers an
+   avatar destroyed without the PlayerState's null-pawn case.
 3. **Resolves.** It sorts the queue in the canonical total order and resolves
    it. Revalidation accepts a candidate only if its contact time is earlier
    than its activation's reset time (if any). An interruption committed during
@@ -550,21 +558,45 @@ For each candidate, in order:
    for this activation, or if the activation's record already holds
    `MaxTargets` targets. Never evict a record while the activation's step is
    registered. Record the accepted contact.
-3. **Avoidance.** A target holding any tag in the authored avoidance set
-   (empty until #18) yields a recorded `Avoided` result and nothing else.
+3. **Avoidance.** A target that avoids the contact yields a recorded
+   `Avoided` result and nothing else. Since #18 P4 the dodge is checked at
+   the contact time with `IsAvoidingAt(ContactTime)`, never by tag presence:
+   pass step 4 removes `State.DodgeInvulnerable` at a mid-frame boundary only
+   after the frame's contacts resolve, so a presence check would still avoid
+   contacts after `InvulnerableEnd` (#18 decision T2, signed off by the lead
+   as #60 owner on 2026-10-11). That tag stays out of the authored avoidance
+   set (`AvoidanceTags` on the timeline subsystem, empty), which is still
+   checked by presence; no interval-backed tag may enter it.
 4. **Directional defense.** #60 decides only whether the contact is blocked
-   (OQ6, owner, 2026-10-05). The defense owner exposes an active defense state
-   on the target: a state tag, its authored arc, and a server hook. If the
-   state is active and the contact direction falls inside the arc around the
-   target's authoritative facing, #60 records `Blocked` and calls the hook
-   once; the hook applies what a blocked hit does (Guard pressure, Guard break,
-   and whether later steps still apply) under the defense's authored rule. The
-   same contact is never re-scored. #18 owns the block action and its state;
-   #260 owns Hold the Line's Guard result. #18's defense state must therefore
-   expose an authored arc and a Guard-consequence hook, not only the state tag.
-   Until a defense state exists, no
-   target is defending and this step passes. P4 adds the check with a test
-   defense state.
+   (OQ6, owner, 2026-10-05). The defense owner exposes one defense slot per
+   target: a state tag, a server-time interval, its authored arc, and a server
+   hook. If the contact time lies in the slot's interval
+   `[ActiveFromServerTime, ActiveUntilServerTime)` and the contact direction
+   falls inside the arc around the target's server actor yaw, #60 calls the
+   hook once and records what it returns: `Blocked`, or `GuardBroken` when the
+   hook broke the guard. The hook applies what a blocked hit does (Guard
+   pressure, Guard break) under the defense's authored rule. The same contact
+   is never re-scored, and a blocked contact applies no damage in #60. #18
+   owns the block action and its state; #260 owns Hold the Line's Guard
+   result. The state tag serves gating and observers only; since #18 P4 the
+   interval, not the tag's presence when the contact resolves, decides (#18
+   T2). Until a slot exists, no target is defending and this step passes. The
+   defense owner registers the slot on the timeline subsystem as an
+   `FAethelnDefenseState` (`SetDefenseState`, which refuses a slot without a
+   bound hook and a second slot while one is held; `EndDefenseState`, which
+   stamps the exclusive end and keeps the slot so later contacts stay exact;
+   `ClearDefenseState`). A slot whose hook's owner has expired defends
+   nothing, so no slot blocks for free. The arc is the full arc in degrees
+   centered on the target's actor yaw; a non-finite arc or one outside
+   `(0, 360]` defends nothing. The contact direction (#18 decision T3, signed
+   off 2026-10-11) is the yaw-only direction from the target to the
+   attacker's combat-frame origin, never the contact location, the sweep
+   direction, or a control rotation; a zero-length direction is outside. The
+   target is taken at its end-of-frame capsule center and actor yaw, as
+   targets are swept; only the attacker's origin is interpolated to the
+   contact time. The half-angle is inclusive: the pure evaluator,
+   `AethelnAttackTimeline::IsInsideDefenseArc`, compares the dot product
+   with the half-angle's cosine within a 1e-9 rounding tolerance.
 5. **Family mitigation.** Wrought has no mitigation inputs in the prototype;
    the step exists in code order and applies none. No value is invented.
 6. **Ward.** Not prototype scope; no attribute exists.
@@ -687,8 +719,8 @@ PlayerState (residual risk 4).
 ### Result cues
 
 `UFUNCTION(NetMulticast, Unreliable) MulticastCombatResultCue` on the target's
-ASC carries the source avatar, the outcome (`Hit`, `Avoided`, later `Blocked`
-and `GuardBroken`), the family tag, whether it was lethal, and the
+ASC carries the source avatar, the outcome (`Hit`, `Avoided`, `Blocked`, or,
+since #18 P4, `GuardBroken`), the family tag, whether it was lethal, and the
 server-computed contact location. It carries no damage amount and no
 attribute value; Health stays owner-only (#19) until #61 decides opponent
 visibility. Losing a cue loses presentation only; attributes and death
@@ -721,7 +753,7 @@ vocabulary does not change.
 | `ImpossibleAimTransition` (new) | Steps 6c, 6d | Aim | `ImpossibleAimTransition` |
 | `ActivationBlocked` | Early press, second buffered press, commitment tag, `State.Dead` | Ability | same |
 | `InsufficientResource` | Chain cost, if any | Resource | `ActivationBlocked` |
-| `InternalFailure` | Commit failed | Ability | same |
+| `InternalFailure` | Commit failed; or the chain committed and the step then could not start (a synchronous reset or a registration refusal), in which case the accepted sequence, raw aim, and client time still advance so a replay cannot spend again | Ability | same |
 | `Accepted` | Accepted, with or without correction | Ability | `Accepted` |
 
 Telemetry additions, using the #19 emission rules and allowlisted correlation
@@ -731,9 +763,12 @@ Telemetry additions, using the #19 emission rules and allowlisted correlation
   reason `Corrected`) before the accepted event, with the same activation id,
   ability id and request sequence, and one `CorrectionCount` metric sample.
   P2 adds and tests this with the two new rejections (A16).
-- Each committed result emits one event (subject `Hit`, reason `Accepted`)
-  with the activation id, ability id, and request sequence. Target identity is
-  not an allowlisted field and is not logged. P4 adds and tests this (A24).
+- Each committed result emits one event (reason `Accepted`) with the
+  activation id, ability id, and request sequence. Its category and subject
+  are `Hit` for a hit, and, since #18 P4 (#18 dependency 5, D25), `Dodge` for
+  `Avoided` and `Block` for `Blocked` and `GuardBroken`. Target identity and
+  Guard values are not allowlisted fields and are not logged. P4 adds and
+  tests this (A24).
 - The four refused replicated-data routes emit a metric only and draw from the
   bucket, like #19's refused stock routes.
 - AI activations have no client sequence, and the contract drops events with
@@ -815,6 +850,7 @@ change bumps the chain's `ContentVersion`.
 | Config section | Keys |
 | --- | --- |
 | `[/Script/GameCombat.AethelnBasicChainAbility]` | `ContentVersion`; `ProvisionalEnduranceCost` (optional); `ProvisionalSteps` (three step structs with the values in [Step definition](#step-definition)); `ProvisionalMaxSampleAngleDegrees`; `ProvisionalMaxSampleDistance` |
+| `[/Script/GameCombat.AethelnCombatTimelineSubsystem]` | `AvoidanceTags` (empty; `State.DodgeInvulnerable` is never added, see [Resolution order](#resolution-order-prototype-subset) step 3) |
 | `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimRateSlackDegrees`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
 | `Config/DefaultEngine.ini` | The `AethelnCombatQuery` trace channel with default response `Ignore` (structure, not tuning) |
 
@@ -884,18 +920,18 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A4 | `Aetheln.GameCombat.AttackTimeline.WindowEvaluation` | P3 (sweep rows P4) | H | Pure evaluator: inclusive starts and exclusive ends at exact boundaries; a frame spanning a whole window sweeps it once; clipping; sub-step counts honor the sampling bounds; one frame spanning the final step's remaining active window and its `RecoveryEnd`, and one spanning a non-final active window and its `LinkClose`, both still resolve the hit |
 | A5 | `Aetheln.GameCombat.AttackTimeline.StepDefinitionFailsClosed` | P3 (P5 rows) | H | Grant refused for a wrong step count, each ordering violation including `LinkOpen == LinkClose`, non-finite or negative values, empty extents, `MaxTargets` below 1, a self-blocking commitment tag, and a blocking tag that is not a reset tag; P5 adds the `InterruptibleUntil` rows |
 | A6 | `Aetheln.GameCombat.AttackTimeline.ChainProgression` | P3 | H | Injected clock: steps 1, 2, 3 in order; buffered press starts at `LinkOpen`; link press starts at once; early and second buffered presses get `ActivationBlocked` with no commit; a press after `LinkClose` or after the final step starts step 1; each step has its own activation id and sequence; a replayed accepted chain request neither advances the step nor commits |
-| A7 | `Aetheln.GameCombat.AttackTimeline.ChainResets` | P3 | H | Timeout, completion, interruption (test result), unpossession, avatar destruction, `State.Dead` added through the test seam, and another ability's activation each reset with the right reason and reset time; a waiting buffered step never starts; the next press is step 1; two reset paths for one chain send one chain end; from P4, a mid-frame external reset drops only contacts at or after its reset time |
+| A7 | `Aetheln.GameCombat.AttackTimeline.ChainResets` | P3 | H | Timeout, completion, interruption (test result), unpossession, avatar destruction, `State.Dead` added through the test seam, and another ability's activation each reset with the right reason and reset time; a waiting buffered step never starts; the next press is step 1; two reset paths for one chain send one chain end; from P4, a mid-frame external reset drops only contacts at or after its reset time, `IncompatibleState` and `AvatarLost` are stamped with their processing time, and the next press is step 1 after every reset reason, including `InternalFailure` (a buffered start refused for an exhausted ordinal) |
 | A8 | `Aetheln.GameCombat.AttackTimeline.CommitmentWindow` | P3 | H | The commitment tag exists exactly in `[0, CancelOpen)`; a test ability blocked by it is refused before and allowed after, and its activation resets the chain |
 | A9 | `Aetheln.GameCombat.AttackTimeline.ContactOnCapsuleOnly` | P4 | H | A sweep through a target capsule yields a contact; a shape overlapping only a query-enabled mesh yields none; the attacker is never its own target |
-| A10 | `Aetheln.GameCombat.AttackTimeline.AlreadyHitAllowance` | P4 | H | A target inside the shape across several sub-sweeps and frames gets exactly one result per activation; a second activation can hit it again; a full record (`MaxTargets`) rejects new targets without eviction; a replayed candidate converges |
+| A10 | `Aetheln.GameCombat.AttackTimeline.AlreadyHitAllowance` | P4 | H | A target inside the shape across several sub-sweeps and frames gets exactly one result per activation; a second activation can hit it again; a full record (`MaxTargets`) rejects new targets without eviction, and a record with room for two hits both targets once; a replayed candidate converges |
 | A11 | `Aetheln.GameCombat.AttackTimeline.DeterministicOrdering` | P4 | H | Two attackers' same-frame contacts on one target resolve by the total order; reversing registration and tick order changes nothing |
 | A12 | `Aetheln.GameCombat.AttackTimeline.DamageAndLethalLatch` | P4 | H | Health changes only through the damage effect by the test magnitude; it clamps at zero; the lethal notification fires once; a zero-Health target takes no further result |
 | A13 | `Aetheln.GameCombat.AttackTimeline.DeadLifeStateRejected` | P4 | H | An attacker with `State.Dead` (test seam) is refused with `ActivationBlocked`; a target with it yields no result |
-| A14 | `Aetheln.GameCombat.AttackTimeline.AvoidanceDefenseAndRelation` | P4 | H | A target with a test avoidance tag yields a recorded `Avoided` and no damage; a target holding a test defense state facing the contact yields `Blocked` and calls the test hook once, and facing away yields an ordinary hit; a player target yields nothing (OQ1) |
-| A15 | `Aetheln.GameCombat.AttackTimeline.Interruption` | P5 | H | An interrupting result inside `InterruptibleUntil` resets the target's chain; outside it does not; a lethal target is not interrupted |
+| A14 | `Aetheln.GameCombat.AttackTimeline.AvoidanceDefenseAndRelation` | P4 | H | A target with a test avoidance tag yields a recorded `Avoided` and no damage; a target holding a test defense state facing the contact yields `Blocked` and calls the test hook once, and facing away yields an ordinary hit; an ended slot defends nothing whatever tag the target holds (#18 P4); a player target yields nothing (OQ1) |
+| A15 | `Aetheln.GameCombat.AttackTimeline.Interruption` | P5 (with the A28 interruption row) | H | An interrupting result inside `InterruptibleUntil` resets the target's chain; outside it does not; a lethal target is not interrupted; the A28 row: an interruption in the same frame with a contact time before a buffered step's `S + LinkOpen` cancels that start, with no record and no contact |
 | A16 | `Aetheln.GameCombat.AttackTimeline.RejectionAndCorrectionTelemetry` | P2 | H | `TimestampOutOfBounds`, `ImpossibleAimTransition`, and the aim correction emit the events and metric in the tables; refused replicated-data routes are metric-only; the public copy has no diagnostic code |
 | A17 | `Aetheln.GameCombat.AttackTimeline.RunsWithoutPresentation` | P3 | H | A step with no mesh, montage, or notify advances, ends, and (from P4) resolves contacts |
-| A18 | `Aetheln.GameCombat.AttackTimeline.NoMaximumModifiers` | P4 | H | No #60 effect modifies a `Max*` attribute or adds a duration modifier to a current value |
+| A18 | `Aetheln.GameCombat.AttackTimeline.NoMaximumModifiers` | P4 | H | No #60 effect, nor #18's Guard pressure effect, modifies a `Max*` attribute or adds a duration modifier to a current value |
 | A19 | `Aetheln.GameCombat.Net.AttackOutcomeRouting` | P6 | P | The owner receives the outcome, record, and chain end; the other client receives the phase state but no record; both see result cues |
 | A20 | `Aetheln.GameCombat.Net.ChainUnderProfiles` | P6 | P | Additional PIE evidence beside A25 and A26: the full chain and a buffered link under C1 and each C2 kind: no double commit or damage, deterministic resets, recorded correction, rejection (including `ImpossibleAimTransition`, for #82 S5), and miss rates |
 | A21 | `Aetheln.GameCombat.Net.DisconnectMidChain` | P6 | P | Additional PIE evidence beside A27: a real disconnect during wind-up, active, and a buffered wait gives no result after avatar loss and no stale chain state for the new PlayerState |
@@ -904,8 +940,9 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A24 | `Aetheln.GameCombat.AttackTimeline.HitTelemetry` | P4 | H | One hit event per committed result with the activation id, ability id, and sequence; no target identity |
 | A25 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsChain` | P3 | H | Injected clock and a scripted delivery queue: chain requests delayed to arrive just before and after `BufferOpen`, `LinkOpen`, and `LinkClose` get the outcome their server arrival time dictates; a duplicated request gets `DuplicateSequence`; a reordered older request gets `StaleSequence`; a dropped follow-up lets the chain time out, and the next press (a forward sequence gap) starts step 1; nothing commits twice |
 | A26 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsContacts` | P4 | H | The A25 delivery profiles against a target dummy: delay moves only when a step starts, never adds a result; duplicated, reordered, and dropped requests never produce a second result or a result from a rejected request; each activation hits the target at most once |
-| A27 | `Aetheln.GameCombat.AttackTimeline.TeardownMidChain` | P3 (contact rows P4) | H | PlayerState or avatar teardown during wind-up, the active window, and a buffered wait: one chain end; the buffered step never starts; no contact at or after the teardown time; a new PlayerState starts with no chain or seam state |
-| A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time; an interruption in the same frame with a contact time before `S + LinkOpen` cancels the start, with no record and no contact |
+| A27 | `Aetheln.GameCombat.AttackTimeline.TeardownMidChain` | P3 (contact rows P4) | H | PlayerState or avatar teardown during wind-up, the active window, and a buffered wait: one chain end; the buffered step never starts; no contact at or after the teardown time; an avatar destroyed without unpossession is not swept and its chain ends once with `AvatarLost` at the next pass; a new PlayerState starts with no chain or seam state |
+| A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 (interruption row P5) | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time, ahead of an earlier-registered step with a later contact. The row for an interruption in the same frame with a contact time before `S + LinkOpen` (the start is cancelled, with no record and no contact) moves to P5 with A15, where interruption is delivered |
+| A29 | `Aetheln.GameCombat.AttackTimeline.ChainStartFailures` | P4 | H | A chain press that commits and whose step then cannot start reports `InternalFailure`, keeps its spent cost, advances the accepted sequence, and a replay is `DuplicateSequence` with no second spend; a client-mode world creates no subsystem, refuses registration, runs no pass, and commits no press |
 
 CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
 so each code PR records local automation evidence at its exact head on the
@@ -920,7 +957,7 @@ capsule response). P6 runs `Aetheln.POC` and records the manual PIE steps. No
 | --- | --- |
 | No request field names an authoritative target or claims a hit | A1, A3; [Request Contract](#request-contract) |
 | A valid sequence produces the three-hit chain and resets after timeout, interruption, unpossession, or incompatible action state | A6, A7, A8, A15, A20 |
-| Early, late, duplicate, stale, impossible, and version-mismatched activations are rejected deterministically and do not spend or grant twice | A2 (late time sample, impossible aim), A6 (early press, replay), #19 T11 and T12 (duplicate, stale, version), A25, A20. "Late" means a stale time sample, which is rejected with `TimestampOutOfBounds`; a follow-up press after `LinkClose` starts a new chain at step 1 (OQ8, owner, 2026-10-05). |
+| Early, late, duplicate, stale, impossible, and version-mismatched activations are rejected deterministically and do not spend or grant twice | A2 (late time sample, impossible aim), A6 (early press, replay), #19 T11 and T12 (duplicate, stale, version), A25, A29 (a committed start that fails cannot be replayed into a second spend), A20. "Late" means a stale time sample, which is rejected with `TimestampOutOfBounds`; a follow-up press after `LinkClose` starts a new chain at step 1 (OQ8, owner, 2026-10-05). |
 | An already-dead life state supplied through the test seam is rejected | A13 |
 | Each activation damages every eligible target no more than the authored number of times | A10, A11, A20 |
 | Server correction gives a bounded presentation correction without client state overwriting authority | A2, A19; [Bounded presentation correction](#bounded-presentation-correction) |
@@ -936,7 +973,7 @@ files untouched.
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Request and aim | Schema 2, steps 6a to 6d in the pure validator, last accepted raw aim and time, the two result values, rejection and correction telemetry, client fill with `FlushServerMoves`, the four replicated-data overrides, the #19 fixture and specification changes (dependencies 3 to 5); A1 to A3, A16. | #19 P3 |
 | **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17, A25, A27. No contacts yet. | P2, #19 P4 |
-| **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, A28, and the sweep and contact rows of A4, A7, and A27. | P3 |
+| **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, A28 (without its interruption row), A29, and the sweep and contact rows of A4, A7, and A27; the P3 review follow-ups (sequence advance for a committed start that fails, the `InternalFailure` chain-end label, the extra negative tests). | P3 |
 | **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct with a content-version bump; A15 and the A5 rows. | P4 |
 | **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
 
@@ -968,7 +1005,11 @@ numbers are the original question numbers.
 - **OQ5, buffered cost.** A buffered hit commits at its press; if the chain
   resets before it starts, nothing is refunded. Should it be refunded? It
   matters only if the chain costs Endurance, which is #107 tuning.
-  Recommendation: no refund.
+  Recommendation: no refund. The same question covers a chain press that
+  commits and whose step then cannot start (a synchronous reset or a
+  registration refusal): the request reports `InternalFailure`, the cost stays
+  spent, and since P4 the accepted sequence advances so a replay cannot spend
+  again.
 
 Decisions that belong to other owners, recorded so they are not lost: rewind
 and any client-time window evaluation (#2, TC-002); every numeric bound,
@@ -1001,3 +1042,11 @@ and generation (#106).
    that reaches through thin cover still hits. Canon asks for near-cover
    validation; revisit when the arena gains cover (see
    [Target query](#target-query)).
+10. **Resolve-time presence checks (closed by #18 P4).** #60 P4 checked
+    avoidance by tag presence and the defense by its state tag when the
+    contact resolved, which could not tell a contact before a mid-frame
+    boundary from one after it. #18 P4 replaced both with
+    `IsAvoidingAt(ContactTime)` and the defense slot's interval at the contact
+    time (#18 decision T2; D19 and D22 pin the boundaries). What remains: the
+    authored `AvoidanceTags` set is still checked by presence. It is empty,
+    and any tag added to it must not be interval-backed.

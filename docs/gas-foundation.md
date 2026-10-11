@@ -87,12 +87,11 @@ combat document). The prototype uses Health, Endurance, and active Guard
 (Prototype Boundary and Existing Owners; `docs/characters-and-factions.md:302-328`),
 with stable IDs `combat.resource.health`, `combat.resource.endurance`, and
 `combat.resource.guard`. Ward and OrderResource are not prototype runtime
-scope, and nothing is reserved for them. Old "unnamed prototype combat
-resource" wording remains in the roadmap
-(`docs/next-steps-mmorpg-prototype.md:42`, `:265`), the scope ledger
-(`docs/prototype-and-1.0-scope-ledger.md:102`), and Issue #61's body. Issue
-[#115](https://github.com/ShayShimoni/aetheln-online/issues/115) owns that
-cleanup (`docs/game-design-bible.md:285-291`); #19 does not edit it.
+scope, and nothing is reserved for them. Issue
+[#115](https://github.com/ShayShimoni/aetheln-online/issues/115) replaced the
+old "unnamed prototype combat resource" wording in the roadmap, the prototype
+brief, the scope ledger, and the supporting artifacts; Issue #61's body still
+carries it, and #19 does not edit it.
 
 [Characters and Factions](characters-and-factions.md)
 (`docs/characters-and-factions.md:313-319`) defines exactly three
@@ -608,7 +607,11 @@ that fails. Each rejection has one reason, and precedence is deterministic.
   `ActivateAbility` has been called, even if the commit then fails
   (`GAS/Private/AbilitySystemComponent_Abilities.cpp:1682`), so the result slot
   decides between `Accepted` and `InternalFailure`. A failed commit applies
-  nothing and does not advance the sequence.
+  nothing and does not advance the sequence. A commit that succeeds before the
+  activation fails (a #60 chain step that then cannot start) also reports
+  `InternalFailure`, but its spend is kept, so it advances the sequence, raw
+  aim, and client time and a replay cannot spend again (#60 P4, A29; any
+  refund is #60's OQ5).
 - **Pure validator.** Step 1 is a token bucket that takes the server time as an
   input and runs before any lookup. Steps 2 to 7 are a static pure function,
   modeled on the spike's, taking the request and the server and instance state

@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-Guards and records Issue #226 release packaging runs (TA-022).
+Guards and records Issue #226 release packaging runs (TA-022), and guards
+Issue #267 develop packaging dispatches (TA-024).
 .DESCRIPTION
 -Mode Guard runs first on the hosted release-gates job. It refuses, red,
 anything but an owner dispatch of refs/heads/release/v<ProjectVersion> in this
@@ -14,7 +15,12 @@ release, and that the packaged server and both clients logged the same network
 version line, then writes one closed, path-free record to -OutputPath. The
 record is create-only and is written for a failure too.
 
-Both modes read only the default GitHub and runner environment. Whatever
+-Mode DevelopGuard runs first on the hosted develop-gates job of the owner-only
+develop packaging dispatch (Issue #267, TA-024). It refuses, red, anything but
+an owner dispatch of exactly refs/heads/develop in this repository on run
+attempt 1, with develop_* reason codes, and reads no version or build number.
+
+Every mode reads only the default GitHub and runner environment. Whatever
 happens, each prints exactly one reason code to stdout and nothing else, so no
 local path or runtime text reaches the public job log.
 .EXAMPLE
@@ -115,11 +121,24 @@ try {
 		return $Full
 	}
 
+	function Assert-OwnerDispatch([string] $Prefix) {
+		Assert-Condition ((Get-ContextValue 'GITHUB_EVENT_NAME') -ceq 'workflow_dispatch') ($Prefix + '_event_invalid')
+		Assert-Condition ((Get-ContextValue 'GITHUB_REPOSITORY') -ceq $ReleaseRepository -and (Get-ContextValue 'GITHUB_REPOSITORY_OWNER') -ceq $ReleaseOwner) ($Prefix + '_repository_invalid')
+		Assert-Condition ((Get-ContextValue 'GITHUB_ACTOR') -ceq $ReleaseOwner -and (Get-ContextValue 'GITHUB_TRIGGERING_ACTOR') -ceq $ReleaseOwner) ($Prefix + '_actor_invalid')
+		Assert-Condition ((Get-ContextValue 'GITHUB_RUN_ATTEMPT') -ceq '1') ($Prefix + '_attempt_invalid')
+	}
+
+	function Invoke-DevelopGuard {
+		# Issue #267 (TA-024): the owner-only develop packaging dispatch. The
+		# phases package the head of develop exactly as the weekly schedule does,
+		# so no version or build number is read.
+		Assert-OwnerDispatch 'develop'
+		Assert-Condition ((Get-ContextValue 'GITHUB_REF') -ceq 'refs/heads/develop') 'develop_ref_invalid'
+		return 'develop_guard_passed'
+	}
+
 	function Invoke-ReleaseGuard([string] $RootOverride) {
-		Assert-Condition ((Get-ContextValue 'GITHUB_EVENT_NAME') -ceq 'workflow_dispatch') 'release_event_invalid'
-		Assert-Condition ((Get-ContextValue 'GITHUB_REPOSITORY') -ceq $ReleaseRepository -and (Get-ContextValue 'GITHUB_REPOSITORY_OWNER') -ceq $ReleaseOwner) 'release_repository_invalid'
-		Assert-Condition ((Get-ContextValue 'GITHUB_ACTOR') -ceq $ReleaseOwner -and (Get-ContextValue 'GITHUB_TRIGGERING_ACTOR') -ceq $ReleaseOwner) 'release_actor_invalid'
-		Assert-Condition ((Get-ContextValue 'GITHUB_RUN_ATTEMPT') -ceq '1') 'release_attempt_invalid'
+		Assert-OwnerDispatch 'release'
 		$RefMatch = [regex]::Match((Get-ContextValue 'GITHUB_REF'), $ReleaseRefPattern)
 		Assert-Condition $RefMatch.Success 'release_ref_invalid'
 		$BuildNumber = Get-ContextValue 'GITHUB_RUN_NUMBER'
@@ -288,6 +307,7 @@ try {
 
 	if ($Mode -ceq 'Guard') { $Outcome = Invoke-ReleaseGuard -RootOverride $RepositoryRoot }
 	elseif ($Mode -ceq 'Evidence') { $Outcome = Invoke-ReleaseEvidence -OutputFile $OutputPath }
+	elseif ($Mode -ceq 'DevelopGuard') { $Outcome = Invoke-DevelopGuard }
 	else { throw 'release_mode_invalid' }
 	Write-Output $Outcome
 	exit 0

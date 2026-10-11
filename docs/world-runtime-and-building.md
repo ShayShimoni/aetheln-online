@@ -391,9 +391,12 @@ representative captures.
 - Which outdoor maps adopt World Partition.
 - Layer population, placement, drain, and faction-balance rules.
 - Process-to-host packing and allocation provider.
-- Cross-faction group travel.
 - Capital routes, invasion capacity, scheduling, and recovery.
 - Navigation generation approach for final outdoor maps.
 - Cook chunking and delivery policy.
 
 These remain `TBD` until their owning design or evidence work records a decision.
+
+Decided, not open: cross-faction groups are forbidden everywhere, so cross-faction
+group travel cannot occur. The owner decided this on 2026-10-11 (Issue #115);
+see Safe Mixed Cities in [Game Design Bible](game-design-bible.md).

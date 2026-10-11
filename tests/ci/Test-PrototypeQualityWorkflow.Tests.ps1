@@ -299,7 +299,7 @@ function Assert-AllPowerShellRunBlocksParse([string] $Text, [string] $Name, [int
 	}
 	Assert-True ($ParsedCount -eq $ExpectedCount) "$Name must contain exactly $ExpectedCount reviewed literal PowerShell run blocks; found $ParsedCount."
 }
-Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 23
+Assert-AllPowerShellRunBlocksParse -Text $Workflow -Name 'Prototype workflow' -ExpectedCount 27
 Assert-AllPowerShellRunBlocksParse -Text $VisualWorkflow -Name 'Visual workflow' -ExpectedCount 2
 
 Assert-True ($VisualWorkflow -match '(?m)^  workflow_call:\r?$') 'Visual validation must expose an additive reusable workflow entry point.'
@@ -360,8 +360,8 @@ Assert-True ($TrustedCompile -notmatch 'Get-FileHash' -and $TrustedCompile -matc
 # native receipt. Nothing Unreal prints reaches the public log: the harness
 # streams go to runner-local files and only a path-free summary is printed.
 Assert-True (((($TrustedCompile -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch '(?i)automation|AethelnOnlineEditor|editor_build') 'The compile job must carry no editor automation.'
-Assert-True ($EditorAutomation -match "(?m)^    needs: trusted-candidate-compile\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Editor automation must run only after a successful compile under the same owner and same-repository trust.'
-Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 45\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result|always\(\)') 'Editor automation must have its own 45-minute ceiling, join the FIFO engine queue, and add no status bypass.'
+Assert-True ($EditorAutomation -match "(?m)^    needs:\r?\n      - trusted-candidate-compile\r?\n      - change-impact\r?\n    if: >-\r?\n      github\.event_name == 'pull_request' &&\r?\n      needs\.change-impact\.outputs\.editor_required == 'true' &&\r?\n      github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\r?\n      github\.event\.pull_request\.user\.login == github\.repository_owner &&\r?\n      github\.triggering_actor == github\.repository_owner\r?\n    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]\r?$") 'Editor automation must run only after a successful compile, only when the classifier requires the editor, and under the same owner and same-repository trust.'
+Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 46\r?$' -and $EditorAutomation -match '(?ms)^    concurrency:\r?\n      group: aetheln-engine-runner\r?\n      queue: max\r?\n      cancel-in-progress: false\r?$' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result' -and [regex]::Matches($EditorAutomation, 'always\(\)').Count -eq 1) 'Editor automation must have its own 46-minute ceiling, join the FIFO engine queue, and add no status bypass beyond the one final control-checkout cleanup step.'
 # Issue #236: the editor job re-syncs the managed workspace from its own fresh
 # exact-revision control checkout, with the compile job's checkout inputs: no
 # persisted credentials, no LFS, a five-minute bound, and a run/attempt path.
@@ -384,8 +384,9 @@ $AutomationRun = [regex]::Match($EditorAutomation, '(?ms)^      - name: Run froz
 $AutomationResidue = [regex]::Match($EditorAutomation, '(?ms)^      - name: Clear editor-written input residue\r?\n.*?(?=^      - )').Value
 $AutomationBind = [regex]::Match($EditorAutomation, '(?ms)^      - name: Bind Unreal automation report\r?\n.*?(?=^      - )').Value
 $AutomationUpload = [regex]::Match($EditorAutomation, '(?ms)^      - name: Upload Unreal automation report\r?\n.*?(?=^      - )').Value
-$AutomationOutcome = [regex]::Match($EditorAutomation, '(?ms)^      - name: Report Unreal automation outcome\r?\n.*?(?=\r?\n\r?\n|\z)').Value
-Assert-True ($EditorControl -and $EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome) 'Editor automation must declare every reviewed step.'
+$AutomationOutcome = [regex]::Match($EditorAutomation, '(?ms)^      - name: Report Unreal automation outcome\r?\n.*?(?=^      - |\r?\n\r?\n|\z)').Value
+$ControlCleanup = [regex]::Match($EditorAutomation, '(?ms)^      - name: Remove control checkouts\r?\n.*?(?=^      - |\z)').Value
+Assert-True ($EditorControl -and $EditorBuild -and $AutomationRun -and $AutomationResidue -and $AutomationBind -and $AutomationUpload -and $AutomationOutcome -and $ControlCleanup) 'Editor automation must declare every reviewed step.'
 # Unreal failures stay on the unreal side: every automation step that can fail
 # continues on error, so the compile job and native receipt survive, while
 # binding and upload require every automation step to have succeeded. A
@@ -399,13 +400,16 @@ $AutomationSuccess = "if: steps.editor_build.outcome == 'success' && steps.autom
 # A build, sync, or timeout failure still releases the lease, so it cleans up.
 $ResidueCondition = "if: steps.editor_build.outcome == 'success' || (steps.editor_build.outputs.reason != '' && steps.editor_build.outputs.reason != 'editor_host_lease_failed' && steps.editor_build.outputs.reason != 'editor_host_lease_release_failed')"
 foreach ($Step in @(
-	@{ Name='control checkout'; Body=$EditorControl; Id='editor_control'; If=$null; Timeout='5'; Continue=$true },
+	@{ Name='control checkout'; Body=$EditorControl; Id='editor_control'; If="if: steps.head_check.outputs.superseded != 'true'"; Timeout='5'; Continue=$true },
 	@{ Name='editor build'; Body=$EditorBuild; Id='editor_build'; If="if: steps.editor_control.outcome == 'success'"; Timeout='20'; Continue=$true },
 	@{ Name='harness'; Body=$AutomationRun; Id='automation_run'; If="if: steps.editor_build.outcome == 'success'"; Timeout='12'; Continue=$true },
 	@{ Name='residue cleanup'; Body=$AutomationResidue; Id='automation_residue'; If=$ResidueCondition; Timeout='2'; Continue=$true },
 	@{ Name='bind'; Body=$AutomationBind; Id='automation_identity'; If=$AutomationSuccess; Timeout='1'; Continue=$true },
 	@{ Name='upload'; Body=$AutomationUpload; Id='automation_artifact'; If=($AutomationSuccess + " && steps.automation_identity.outcome == 'success'"); Timeout='1'; Continue=$true },
-	@{ Name='outcome report'; Body=$AutomationOutcome; Id='automation_outcome'; If=$null; Timeout='1'; Continue=$true }
+	@{ Name='outcome report'; Body=$AutomationOutcome; Id='automation_outcome'; If=$null; Timeout='1'; Continue=$true },
+	# Issue #243 item 5: the final control-checkout cleanup keeps every checkout on the
+	# residue step's skip conditions, but also runs after a failed or cancelled later step.
+	@{ Name='control cleanup'; Body=$ControlCleanup; Id='control_cleanup'; If=('if: always() && (' + $ResidueCondition.Substring(4) + ')'); Timeout='1'; Continue=$true }
 )) {
 	$Body = [string] $Step.Body
 	Assert-True ($Body -match ('(?m)^        id: ' + $Step.Id + '\r?$')) "The automation $($Step.Name) step must carry id '$($Step.Id)'."
@@ -417,6 +421,36 @@ foreach ($Step in @(
 	else { Assert-True ($Body -notmatch 'continue-on-error') "The automation $($Step.Name) step must fail red once every automation step succeeded." }
 }
 Assert-True ($UnrealReceipt -match "(?ms)^      - name: Download exact unreal evidence\r?\n        if: needs\.trusted-editor-automation\.outputs\.automation_artifact_id != ''\r?\n") 'A missing automation artifact must skip the unreal download so the publisher fails at its raw binding check rather than downloading every run artifact.'
+# Issue #243 item 5: every compile and editor attempt adds one disposable control
+# checkout (issue #167) to the runner workspace. Each engine job therefore ends with
+# one cleanup step that removes its own checkout and any earlier ones. No other job
+# reads a control checkout: each job checks out and reads only its own. A runner
+# runs one job at a time, so no job can be using an earlier checkout.
+$CompileCleanup = [regex]::Match($TrustedCompile, '(?ms)^      - name: Remove control checkouts\r?\n.*?(?=^      - |\z)').Value
+Assert-True ($CompileCleanup -and $ControlCleanup) 'Both engine jobs must declare the control-checkout cleanup step.'
+Assert-True ($EditorAutomation -notmatch 'compile-control-' -and $TrustedCompile -notmatch 'editor-control-' -and $Workflow.Substring($Workflow.IndexOf('  scheduled-client-package:')) -notmatch 'compile-control-|editor-control-' -and $QualityGates -notmatch 'compile-control-|editor-control-' -and $ChangeImpact -notmatch 'compile-control-|editor-control-') 'Each engine job may name only its own control checkout; no other job reads one.'
+foreach ($Cleanup in @(
+	@{ Name = 'compile'; Body = $CompileCleanup; Job = $TrustedCompile; Own = 'compile-control-${{ github.run_id }}-${{ github.run_attempt }}' },
+	@{ Name = 'editor'; Body = $ControlCleanup; Job = $EditorAutomation; Own = 'editor-control-${{ github.run_id }}-${{ github.run_attempt }}' }
+)) {
+	$Body = [string] $Cleanup.Body
+	$Name = $Cleanup.Name
+	Assert-True (@([regex]::Matches([string] $Cleanup.Job, '(?m)^      - '))[-1].Index -eq ([string] $Cleanup.Job).IndexOf('      - name: Remove control checkouts')) "The $Name control-checkout cleanup must be the last step of its job."
+	Assert-True ($Body -match '(?m)^        shell: powershell\r?$' -and $Body.Contains('working-directory: ${{ runner.temp }}')) "The $Name cleanup must run from runner.temp so its own working directory is never inside a checkout it removes."
+	Assert-True ($Body.Contains('$Workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd(''\'', ''/'')') -and $Body.Contains('$Own = ''' + $Cleanup.Own + '''')) "The $Name cleanup must resolve the workspace and its own checkout name from the run and attempt."
+	Assert-True ($Body.Contains('-cmatch ''\A(compile|editor)-control-[0-9]+-[0-9]+\z''') -and $Body.Contains('[IO.Path]::GetDirectoryName($Path) -ine $Workspace')) "The $Name cleanup must remove only exact control-checkout names directly under the workspace."
+	Assert-True ($Body.Contains('[IO.FileAttributes]::ReparsePoint') -and $Body.Contains('(Test-ReparsePoint $Entry) -or (Test-HasLink $Path)') -and [regex]::Matches($Body, 'Remove-Item').Count -eq 1 -and $Body.Contains('Remove-Item -LiteralPath $Path -Recurse -Force')) "The $Name cleanup must refuse links, never follow them, and remove by literal path only."
+	Assert-True ($Body -notmatch 'Get-ChildItem|Stop-Process|taskkill|\.Kill\(|Get-Process|Get-CimInstance|Win32_Process|Remove-Item[^\r\n]*[*?]|Write-Output[^\r\n]*\$Path') "The $Name cleanup must use no wildcard, process control, or path output."
+}
+Assert-True ($AutomationOutcome -notmatch 'control_cleanup' -and ((($CompileCleanup -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch 'editor_build|automation') 'A cleanup failure must never become an automation reason or touch the compile job shape.'
+# The compile gate leaves a held lease journal when it cannot prove its tree empty or
+# release the lease, and a lease it could not take (or wait for until the budget ends,
+# compile_timeout without a supervisor receipt) is held by someone else. Like the
+# editor residue cleanup, the compile cleanup needs positive evidence: the report's
+# supervisor receipt, written only after the lease was taken and released, must record
+# a verified cleanup. Anything else, including a missing or unreadable report, keeps
+# every checkout.
+Assert-True ($CompileCleanup -match "(?m)^        if: always\(\) && steps\.head_check\.outputs\.superseded != 'true'\r?$" -and $CompileCleanup.Contains('engine-runner-report.json') -and $CompileCleanup.Contains('ConvertFrom-Json') -and $CompileCleanup.Contains('$Report.supervisor.cleanupVerified -is [bool] -and $Report.supervisor.cleanupVerified') -and $CompileCleanup -notmatch 'compile_(cleanup|lease_release)_failed|lease_\[' -and $CompileCleanup -match '(?m)^        timeout-minutes: 1\r?$' -and $CompileCleanup -match '(?m)^        continue-on-error: true\r?$') 'The compile cleanup must keep every checkout when the gate report is missing or records an unproven cleanup or lease failure.'
 # Issue #236: another owner pull request's compile may re-sync the managed
 # workspace between this run's compile and this job. Under the engine host
 # lease, the step re-syncs it to this revision from the trusted control
@@ -506,6 +540,48 @@ function Invoke-AutomationFixtureGit([string] $Root, [string[]] $Arguments) {
 $AutomationFixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ('aetheln-automation-steps-' + [guid]::NewGuid().ToString('N'))
 $script:AutomationFixtureTemp = Join-Path $AutomationFixtureRoot 'temp'
 $null = New-Item -ItemType Directory -Path (Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job')
+# Issue #299: both pull-request engine jobs check, as their first step on the
+# runner, that the event head is still the pull request's current head, and skip
+# the rest when a newer push superseded it. The check fails open, so an API
+# problem never blocks a run. The editor job also runs only when the classifier
+# says the pull request changed something the editor builds, loads, or runs.
+function Get-JobStep([string] $Job) {
+	# Steps start after the job's own steps: key; the needs list uses the same indentation.
+	$StepsKey = [regex]::Match($Job, '(?m)^    steps:\r?$')
+	Assert-True $StepsKey.Success 'An engine job must declare its steps.'
+	$Starts = @([regex]::Matches($Job, '(?m)^      - ') | Where-Object { $_.Index -gt $StepsKey.Index } | ForEach-Object { $_.Index })
+	$Steps = New-Object Collections.Generic.List[string]
+	for ($Index = 0; $Index -lt $Starts.Count; $Index++) {
+		$End = if ($Index + 1 -lt $Starts.Count) { $Starts[$Index + 1] } else { $Job.Length }
+		$Steps.Add($Job.Substring($Starts[$Index], $End - $Starts[$Index]))
+	}
+	return ,@($Steps)
+}
+$HeadCheckSteps = @{}
+foreach ($Engine in @(@{ Name = 'compile'; Body = $TrustedCompile }, @{ Name = 'editor'; Body = $EditorAutomation })) {
+	$Steps = Get-JobStep $Engine.Body
+	$HeadCheck = [string] $Steps[0]
+	$HeadCheckSteps[$Engine.Name] = $HeadCheck
+	Assert-True ($HeadCheck -match '(?ms)\A      - name: Check the pull-request head is still current\r?\n        id: head_check\r?\n        continue-on-error: true\r?\n        timeout-minutes: 1\r?\n        shell: powershell\r?\n        working-directory: \$\{\{ runner\.temp \}\}\r?\n        env:\r?\n          AETHELN_API_TOKEN: \$\{\{ github\.token \}\}\r?\n        run: \|\r?\n') "The $($Engine.Name) job must start with the reviewed head check: fail-open, one-minute bound, token through env only."
+	Assert-True ($HeadCheck.Contains('[IO.File]::ReadAllText($env:GITHUB_EVENT_PATH)') -and $HeadCheck -notmatch '\$\{\{[^}]*github\s*\.\s*(?:event|head_ref|base_ref|ref)') "The $($Engine.Name) head check must read the event from the runner's payload file, never interpolate event data into an engine job."
+	Assert-True ($HeadCheck -notmatch '(?m)^\s+(- )?uses:' -and $HeadCheck -notmatch 'secrets\.') "The $($Engine.Name) head check must add no action and read no secret."
+	$HeadCheckScript = Get-WorkflowStepScript $HeadCheck
+	Assert-True ($HeadCheckScript -notmatch '\$\{\{') "The $($Engine.Name) head check script must not interpolate workflow expressions."
+	$HeadCheckErrors = $null
+	$null = [System.Management.Automation.Language.Parser]::ParseInput($HeadCheckScript, [ref] $null, [ref] $HeadCheckErrors)
+	Assert-True ($HeadCheckErrors.Count -eq 0) "The $($Engine.Name) head check script must parse under Windows PowerShell 5.1."
+	Assert-True ($HeadCheck.Contains('/pulls/') -and $HeadCheck.Contains('GITHUB_API_URL') -and $HeadCheck.Contains('superseded=') -and $HeadCheck.Contains('head_check result=')) "The $($Engine.Name) head check must read the pull request through the API and publish one fixed result."
+	for ($Index = 1; $Index -lt $Steps.Count; $Index++) {
+		$Step = [string] $Steps[$Index]
+		# The editor job gates its first dependent step and its outcome step; every other editor step already depends on those outcomes.
+		if ($Engine.Name -eq 'editor' -and $Step -notmatch '(?m)^      - name: (Check out trusted editor control source|Report Unreal automation outcome)\r?$') { continue }
+		Assert-True ($Step -match "(?m)^        if: (always\(\) && )?steps\.head_check\.outputs\.superseded != 'true'\r?$" -or $Step -match '(?m)^          AETHELN_SUPERSEDED: \$\{\{ steps\.head_check\.outputs\.superseded \}\}\r?$') "Every $($Engine.Name) step that does not depend on an earlier gated step must skip a superseded head: $(($Step -split '\r?\n')[0])"
+	}
+}
+Assert-True ($HeadCheckSteps.compile -ceq $HeadCheckSteps.editor) 'Both engine jobs must carry the byte-identical head check step.'
+Assert-True ($AutomationOutcome.Contains('AETHELN_SUPERSEDED: ${{ steps.head_check.outputs.superseded }}') -and $AutomationOutcome.Contains("'superseded_head'")) 'The editor outcome step must record a superseded head as the fixed reason superseded_head.'
+Assert-True ($ChangeImpact -match '(?m)^\s+editor_required: \$\{\{ steps\.classify\.outputs\.editor_required \}\}\r?$') 'The classifier must publish editor_required as a job output.'
+Assert-True ($UnrealReceipt -notmatch 'editor_required' -and $ShadowSelection -notmatch 'editor_required' -and $AcceptanceShadow -notmatch 'editor_required') 'The shadow selector and receipts must not consume editor_required; only the authoritative classifier gates the editor job.'
 $PreviousAutomationEnvironment = @{}
 foreach ($Name in @('GITHUB_SHA', 'GITHUB_REPOSITORY', 'GITHUB_WORKSPACE', 'AETHELN_MANAGED_COMPILE_ROOT', 'AETHELN_MANAGED_COMPILE_REGISTRATION', 'AETHELN_MANAGED_COMPILE_REGISTRATION_SHA256', 'AETHELN_ENGINE_HOST_LEASE', 'AETHELN_ENGINE_ROOT', 'AETHELN_LINUX_TOOLCHAIN_ROOT', 'AETHELN_FIXTURE_NATIVE_EXIT', 'AETHELN_FIXTURE_NATIVE_SLEEP', 'AETHELN_EDITOR_TEST_DEADLINE_SECONDS', 'AETHELN_EDITOR_TEST_MINIMUM_SYNC_SECONDS', 'GITHUB_OUTPUT')) { $PreviousAutomationEnvironment[$Name] = [Environment]::GetEnvironmentVariable($Name) }
 try {
@@ -526,7 +602,7 @@ try {
 	$env:GITHUB_WORKSPACE = Join-Path $SyncRoot 'workspace'
 	$SyncControl = Join-Path $env:GITHUB_WORKSPACE 'editor-control-1-1'
 	$null = New-Item -ItemType Directory -Path (Join-Path $SyncSource 'scripts\ci'), (Join-Path $SyncSource 'Source'), $env:GITHUB_WORKSPACE
-	foreach ($Module in @('EngineRunnerHostLease.ps1', 'InitialPreparation.Core.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1', 'Sync-EditorAutomationWorkspace.ps1', 'InitialPreparation.BuildInvocation.ps1')) {
+	foreach ($Module in @('EngineRunnerHostLease.ps1', 'LeaseJournal.ps1', 'InitialPreparation.Core.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1', 'Sync-EditorAutomationWorkspace.ps1', 'InitialPreparation.BuildInvocation.ps1')) {
 		Copy-Item -LiteralPath (Join-Path $RepositoryRoot ('scripts\ci\' + $Module)) -Destination (Join-Path $SyncSource 'scripts\ci')
 	}
 	[IO.File]::WriteAllText((Join-Path $SyncSource 'AethelnOnline.uproject'), '{}')
@@ -702,14 +778,98 @@ try {
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='C:\leak path'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_interrupted' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='failure'; AETHELN_RUN_REASON='unreal_automation_test_failure'; AETHELN_RESIDUE_OUTCOME='failure'; AETHELN_RESIDUE_REASON='automation_input_residue_remaining'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='unreal_automation_test_failure' },
 		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='failure' }; expected='automation_report_upload_failed' },
-		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='success' }; expected='none' }
+		@{ env=@{ AETHELN_EDITOR_BUILD_OUTCOME='success'; AETHELN_RUN_OUTCOME='success'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='success'; AETHELN_UPLOAD_OUTCOME='success' }; expected='none' },
+		# Issue #299: a superseded head skips every step, so no outcome is 'failure'; the fixed reason says why.
+		@{ env=@{ AETHELN_SUPERSEDED='true'; AETHELN_CONTROL_OUTCOME='skipped'; AETHELN_EDITOR_BUILD_OUTCOME='skipped'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='skipped'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='superseded_head' },
+		@{ env=@{ AETHELN_SUPERSEDED='false'; AETHELN_CONTROL_OUTCOME='success'; AETHELN_EDITOR_BUILD_OUTCOME='failure'; AETHELN_EDITOR_BUILD_REASON='editor_build_failed'; AETHELN_RUN_OUTCOME='skipped'; AETHELN_RESIDUE_OUTCOME='success'; AETHELN_BIND_OUTCOME='skipped'; AETHELN_UPLOAD_OUTCOME='skipped' }; expected='editor_build_failed' }
 	)) {
-		$OutcomeNames = @('AETHELN_CONTROL_OUTCOME', 'AETHELN_EDITOR_BUILD_OUTCOME', 'AETHELN_EDITOR_BUILD_REASON', 'AETHELN_RUN_OUTCOME', 'AETHELN_RUN_REASON', 'AETHELN_RESIDUE_OUTCOME', 'AETHELN_RESIDUE_REASON', 'AETHELN_BIND_OUTCOME', 'AETHELN_BIND_REASON', 'AETHELN_UPLOAD_OUTCOME')
+		$OutcomeNames = @('AETHELN_SUPERSEDED', 'AETHELN_CONTROL_OUTCOME', 'AETHELN_EDITOR_BUILD_OUTCOME', 'AETHELN_EDITOR_BUILD_REASON', 'AETHELN_RUN_OUTCOME', 'AETHELN_RUN_REASON', 'AETHELN_RESIDUE_OUTCOME', 'AETHELN_RESIDUE_REASON', 'AETHELN_BIND_OUTCOME', 'AETHELN_BIND_REASON', 'AETHELN_UPLOAD_OUTCOME')
 		foreach ($Name in $OutcomeNames) { [Environment]::SetEnvironmentVariable($Name, [string] $OutcomeCase.env[$Name]) }
 		[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 		$Outcome = Invoke-AutomationStepFixture $AutomationOutcome
 		foreach ($Name in $OutcomeNames) { [Environment]::SetEnvironmentVariable($Name, $null) }
 		Assert-True ($null -eq $Outcome.failure -and (@($Outcome.output) -join "`n") -ceq ('unreal_automation_outcome reason=' + $OutcomeCase.expected) -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq ('reason=' + $OutcomeCase.expected + "`n")) "The automation outcome must be '$($OutcomeCase.expected)'."
+	}
+
+	# Issue #299: the head check publishes superseded=true only when the API
+	# answers with a different 40-character head, and fails open on everything
+	# else. A loopback listener stands in for the GitHub API through GITHUB_API_URL.
+	$HeadEvent = 'a' * 40
+	$HeadCheckNames = @('GITHUB_API_URL', 'GITHUB_REPOSITORY', 'AETHELN_API_TOKEN', 'GITHUB_EVENT_PATH')
+	$HeadCheckPrevious = @{}
+	foreach ($Name in $HeadCheckNames) { $HeadCheckPrevious[$Name] = [Environment]::GetEnvironmentVariable($Name) }
+	function Invoke-HeadCheckFixture([string] $Step, [int] $Status, [string] $Body, [string] $PrNumber = '42', [switch] $NoServer, [switch] $NoEventFile) {
+		$Probe = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback), 0
+		$Probe.Start()
+		$Port = $Probe.LocalEndpoint.Port
+		$Probe.Stop()
+		$Seen = [hashtable]::Synchronized(@{ Url = $null; Authorization = $null })
+		$Listener = $null
+		$Worker = $null
+		try {
+			if (-not $NoServer) {
+				$Listener = New-Object Net.HttpListener
+				$Listener.Prefixes.Add("http://127.0.0.1:$Port/")
+				$Listener.Start()
+				$Worker = [powershell]::Create()
+				$null = $Worker.AddScript({
+					param($Listener, $Seen, $Status, $Body)
+					$Context = $Listener.GetContext()
+					$Seen.Url = $Context.Request.RawUrl
+					$Seen.Authorization = $Context.Request.Headers['Authorization']
+					$Bytes = [Text.Encoding]::UTF8.GetBytes($Body)
+					$Context.Response.StatusCode = $Status
+					$Context.Response.ContentType = 'application/json'
+					$Context.Response.OutputStream.Write($Bytes, 0, $Bytes.Length)
+					$Context.Response.Close()
+				}).AddArgument($Listener).AddArgument($Seen).AddArgument($Status).AddArgument($Body)
+				$Pending = $Worker.BeginInvoke()
+			}
+			[Environment]::SetEnvironmentVariable('GITHUB_API_URL', "http://127.0.0.1:$Port")
+			[Environment]::SetEnvironmentVariable('GITHUB_REPOSITORY', 'Fixture/project')
+			[Environment]::SetEnvironmentVariable('AETHELN_API_TOKEN', 'fixture-token')
+			$EventFile = Join-Path $AutomationFixtureRoot 'head-check-event.json'
+			if ($NoEventFile) { Remove-Item -LiteralPath $EventFile -Force -ErrorAction SilentlyContinue }
+			else { [IO.File]::WriteAllText($EventFile, ('{"pull_request":{"number":"' + $PrNumber + '","head":{"sha":"' + $HeadEvent + '"}}}')) }
+			[Environment]::SetEnvironmentVariable('GITHUB_EVENT_PATH', $EventFile)
+			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+			$Run = Invoke-AutomationStepFixture $Step
+			if ($null -ne $Worker -and -not $Pending.IsCompleted) { $Listener.Stop() }
+			return [pscustomobject]@{ failure = $Run.failure; output = (@($Run.output) -join "`n"); published = [IO.File]::ReadAllText($env:GITHUB_OUTPUT); seen = $Seen }
+		} finally {
+			if ($null -ne $Listener) { $Listener.Close() }
+			if ($null -ne $Worker) { $Worker.Dispose() }
+		}
+	}
+	try {
+		foreach ($JobName in @('compile', 'editor')) {
+			$Step = $HeadCheckSteps[$JobName]
+			$Current = Invoke-HeadCheckFixture -Step $Step -Status 200 -Body (@{ head = @{ sha = $HeadEvent } } | ConvertTo-Json -Compress)
+			Assert-True ($null -eq $Current.failure -and $Current.published -ceq "superseded=false`n" -and $Current.output -ceq 'head_check result=current') "[$JobName] the current head must run (got '$($Current.output)')."
+			Assert-True ($Current.seen.Url -ceq '/repos/Fixture/project/pulls/42' -and $Current.seen.Authorization -ceq 'Bearer fixture-token') "[$JobName] the head check must read this pull request with the per-run token (got '$($Current.seen.Url)')."
+			$Superseded = Invoke-HeadCheckFixture -Step $Step -Status 200 -Body (@{ head = @{ sha = ('b' * 40) } } | ConvertTo-Json -Compress)
+			Assert-True ($null -eq $Superseded.failure -and $Superseded.published -ceq "superseded=true`n" -and $Superseded.output -ceq 'head_check result=superseded') "[$JobName] a different current head must mark the run superseded (got '$($Superseded.output)')."
+			foreach ($OpenCase in @(
+				@{ Name = 'server error'; Status = 500; Body = '{}' },
+				@{ Name = 'not found'; Status = 404; Body = '{"message":"Not Found"}' },
+				@{ Name = 'rate limited'; Status = 403; Body = '{"message":"rate limit"}' },
+				@{ Name = 'malformed body'; Status = 200; Body = 'not json' },
+				@{ Name = 'missing head'; Status = 200; Body = '{}' },
+				@{ Name = 'invalid sha'; Status = 200; Body = '{"head":{"sha":"ZZZ"}}' },
+				@{ Name = 'uppercase sha'; Status = 200; Body = ('{"head":{"sha":"' + ('B' * 40) + '"}}') }
+			)) {
+				$Open = Invoke-HeadCheckFixture -Step $Step -Status $OpenCase.Status -Body $OpenCase.Body
+				Assert-True ($null -eq $Open.failure -and $Open.published -ceq "superseded=false`n" -and $Open.output -ceq 'head_check result=unavailable') "[$JobName] $($OpenCase.Name) must fail open and run the job (got '$($Open.output)')."
+			}
+			$Refused = Invoke-HeadCheckFixture -Step $Step -Status 200 -Body '{}' -NoServer
+			Assert-True ($null -eq $Refused.failure -and $Refused.published -ceq "superseded=false`n" -and $Refused.output -ceq 'head_check result=unavailable') "[$JobName] an unreachable API must fail open and run the job (got '$($Refused.output)')."
+			$NoEvent = Invoke-HeadCheckFixture -Step $Step -Status 200 -Body (@{ head = @{ sha = ('b' * 40) } } | ConvertTo-Json -Compress) -NoEventFile
+			Assert-True ($null -eq $NoEvent.failure -and $NoEvent.published -ceq "superseded=false`n" -and $NoEvent.output -ceq 'head_check result=unavailable' -and $null -eq $NoEvent.seen.Url) "[$JobName] a missing event payload must fail open without calling the API."
+			$BadNumber = Invoke-HeadCheckFixture -Step $Step -Status 200 -Body (@{ head = @{ sha = ('b' * 40) } } | ConvertTo-Json -Compress) -PrNumber '4x2'
+			Assert-True ($null -eq $BadNumber.failure -and $BadNumber.published -ceq "superseded=false`n" -and $null -eq $BadNumber.seen.Url) "[$JobName] an invalid pull-request number must fail open without calling the API."
+		}
+	} finally {
+		foreach ($Name in $HeadCheckNames) { [Environment]::SetEnvironmentVariable($Name, $HeadCheckPrevious[$Name]) }
 	}
 
 	# Residue cleanup removes exactly the untracked compile-input files the next
@@ -733,6 +893,85 @@ try {
 	Assert-True (@($Residue | Where-Object { Test-Path -LiteralPath (Join-Path $ResidueRepo $_) }).Count -eq 0 -and @($Retained | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ResidueRepo $_)) }).Count -eq 0) 'Residue cleanup must remove only untracked compile-input files.'
 	$Repeated = Invoke-AutomationStepFixture $AutomationResidue
 	Assert-True ($null -eq $Repeated.failure -and (@($Repeated.output) -join "`n") -ceq 'automation_input_residue removed=0') 'Residue cleanup must be idempotent.'
+
+	# Issue #243 item 5: control-checkout cleanup. Run 1 attempt 1 owns the checkout; an
+	# earlier run, the same run's other job, and an earlier attempt left more. Names that
+	# are not exactly a control checkout, a file with a control name, and links stay.
+	$CleanupWorkspace = Join-Path $AutomationFixtureRoot 'cleanup-workspace'
+	$CleanupLinkTarget = Join-Path $AutomationFixtureRoot 'cleanup-link-target'
+	$CleanupReport = Join-Path $script:AutomationFixtureTemp 'aetheln-engine-1-1-job\engine-runner-report.json'
+	function Initialize-ControlCleanupFixture {
+		foreach ($Stale in @($CleanupWorkspace, $CleanupLinkTarget)) { if (Test-Path -LiteralPath $Stale) { Remove-Item -LiteralPath $Stale -Recurse -Force } }
+		$null = New-Item -ItemType Directory -Path $CleanupWorkspace, $CleanupLinkTarget
+		[IO.File]::WriteAllText((Join-Path $CleanupLinkTarget 'keep.txt'), 'outside the workspace')
+		foreach ($Directory in @('editor-control-1-1', 'compile-control-1-1', 'compile-control-7-1', 'editor-control-0-3', 'compile-control-9-9', 'milestone', 'editor-control-1', 'editor-control-1-1-old', 'compile-control-x-1', 'Editor-Control-2-2')) {
+			$Git = Join-Path $CleanupWorkspace "$Directory\.git\objects"
+			$null = New-Item -ItemType Directory -Path $Git
+			[IO.File]::WriteAllText((Join-Path $Git 'pack.idx'), 'git objects are read-only')
+			(Get-Item -LiteralPath (Join-Path $Git 'pack.idx')).IsReadOnly = $true
+		}
+		[IO.File]::WriteAllText((Join-Path $CleanupWorkspace 'editor-control-4-4'), 'a file, not a checkout')
+		$null = New-Item -ItemType Junction -Path (Join-Path $CleanupWorkspace 'compile-control-8-8') -Target $CleanupLinkTarget
+		$null = New-Item -ItemType Junction -Path (Join-Path $CleanupWorkspace 'compile-control-9-9\inner-link') -Target $CleanupLinkTarget
+		$env:GITHUB_WORKSPACE = $CleanupWorkspace
+	}
+	function Get-ControlCleanupState {
+		[string[]] $Names = @([IO.Directory]::GetFileSystemEntries($CleanupWorkspace) | ForEach-Object { [IO.Path]::GetFileName($_) })
+		[Array]::Sort($Names, [StringComparer]::Ordinal)
+		return ($Names -join ',')
+	}
+	$KeptAlways = 'Editor-Control-2-2,compile-control-8-8,compile-control-9-9,compile-control-x-1,editor-control-1,editor-control-1-1-old,editor-control-4-4,milestone'
+	$PreviousWorkspace = $env:GITHUB_WORKSPACE
+	try {
+		# The editor job removes its own checkout first, then every other control
+		# checkout, and keeps the two link cases untouched.
+		Initialize-ControlCleanupFixture
+		$Swept = Invoke-AutomationStepFixture $ControlCleanup
+		Assert-True ($null -eq $Swept.failure -and (@($Swept.output) -join "`n") -ceq "control_checkouts removed=4 kept=2`n::warning::control_checkout_kept names=compile-control-8-8,compile-control-9-9") 'The editor cleanup must report only counts and the kept names.'
+		Assert-True ((Get-ControlCleanupState) -ceq $KeptAlways) 'The editor cleanup must remove exactly the own, same-run and earlier control checkouts, including read-only git objects.'
+		Assert-True ([IO.File]::ReadAllText((Join-Path $CleanupLinkTarget 'keep.txt')) -ceq 'outside the workspace' -and (Test-Path -LiteralPath (Join-Path $CleanupWorkspace 'compile-control-9-9\.git\objects\pack.idx'))) 'The cleanup must never follow or remove a link, nor touch a tree that contains one.'
+		$Again = Invoke-AutomationStepFixture $ControlCleanup
+		Assert-True ($null -eq $Again.failure -and (@($Again.output) -join "`n") -ceq "control_checkouts removed=0 kept=2`n::warning::control_checkout_kept names=compile-control-8-8,compile-control-9-9" -and (Get-ControlCleanupState) -ceq $KeptAlways) 'The cleanup must be idempotent.'
+		# A workspace without any control checkout is a successful no-op.
+		foreach ($Junction in @('compile-control-8-8', 'compile-control-9-9\inner-link')) { [IO.Directory]::Delete((Join-Path $CleanupWorkspace $Junction)) }
+		$Quiet = Invoke-AutomationStepFixture $ControlCleanup
+		Assert-True ($null -eq $Quiet.failure -and (@($Quiet.output) -join "`n") -ceq 'control_checkouts removed=1 kept=0') 'Links removed by the operator must let the next cleanup finish.'
+		Assert-True (-not ((@($Swept.output) + @($Again.output) + @($Quiet.output)) -join "`n").Contains($AutomationFixtureRoot)) 'The cleanup must print no runner path.'
+
+		# The compile job removes the same set, but only on positive evidence: the report
+		# must carry a supervisor receipt with a verified cleanup, which the gate writes only
+		# after it took and released the lease. Everything else keeps every checkout.
+		foreach ($CompileCase in @(
+			@{ name = 'no report'; report = $null; kept = $true },
+			@{ name = 'unreadable report'; report = '{not json'; kept = $true },
+			@{ name = 'unproven cleanup'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_cleanup_failed"}],"supervisor":{"childExitCode":1,"timedOut":false,"cleanupVerified":false}}'; kept = $true },
+			@{ name = 'failed release'; report = '{"checks":[{"name":"compile-host-lease","status":"failed","message":"compile_lease_release_failed"}]}'; kept = $true },
+			@{ name = 'lease not taken'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"lease_owner_ambiguous"}]}'; kept = $true },
+			# Another holder kept the lease until the routine budget ended: no supervisor receipt.
+			@{ name = 'lease wait budget exhausted'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_timeout"}]}'; kept = $true },
+			@{ name = 'clock invalid during lease wait'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_clock_invalid"}]}'; kept = $true },
+			@{ name = 'receipt without a boolean'; report = '{"supervisor":{"cleanupVerified":"true"}}'; kept = $true },
+			@{ name = 'build failure after a released lease'; report = '{"checks":[{"name":"compile-gate","status":"failed","message":"compile_failed"}],"supervisor":{"childExitCode":1,"timedOut":false,"cleanupVerified":true}}'; kept = $false },
+			@{ name = 'passed compile'; report = '{"checks":[],"supervisor":{"childExitCode":0,"timedOut":false,"cleanupVerified":true}}'; kept = $false },
+			# A timeout after the lease was taken and released still leaves a verified receipt.
+			@{ name = 'compile_timeout after a released lease'; report = '{"checks":[{"name":"compile-hard-deadline","status":"failed","message":"compile_timeout"}],"supervisor":{"childExitCode":1,"timedOut":true,"cleanupVerified":true}}'; kept = $false },
+			@{ name = 'receipt with a numeric flag'; report = '{"supervisor":{"cleanupVerified":1}}'; kept = $true },
+			@{ name = 'receipt with a null flag'; report = '{"supervisor":{"cleanupVerified":null}}'; kept = $true },
+			@{ name = 'null receipt'; report = '{"supervisor":null}'; kept = $true }
+		)) {
+			Initialize-ControlCleanupFixture
+			if (Test-Path -LiteralPath $CleanupReport) { Remove-Item -LiteralPath $CleanupReport -Force }
+			if ($null -ne $CompileCase.report) { [IO.File]::WriteAllText($CleanupReport, $CompileCase.report) }
+			$Before = Get-ControlCleanupState
+			$Compiled = Invoke-AutomationStepFixture $CompileCleanup
+			if ($CompileCase.kept) { Assert-True ($null -eq $Compiled.failure -and (@($Compiled.output) -join "`n") -ceq 'control_checkouts kept reason=host_state_unproven' -and (Get-ControlCleanupState) -ceq $Before) "The compile cleanup must keep every checkout after: $($CompileCase.name)." }
+			else { Assert-True ($null -eq $Compiled.failure -and (@($Compiled.output) -join "`n") -ceq "control_checkouts removed=4 kept=2`n::warning::control_checkout_kept names=compile-control-8-8,compile-control-9-9" -and (Get-ControlCleanupState) -ceq $KeptAlways) "The compile cleanup must clean up after: $($CompileCase.name)." }
+		}
+		Remove-Item -LiteralPath $CleanupReport -Force -ErrorAction SilentlyContinue
+	} finally {
+		$env:GITHUB_WORKSPACE = $PreviousWorkspace
+		foreach ($Junction in @('compile-control-8-8', 'compile-control-9-9\inner-link')) { $JunctionPath = Join-Path $CleanupWorkspace $Junction; if (Test-Path -LiteralPath $JunctionPath) { [IO.Directory]::Delete($JunctionPath) } }
+	}
 
 	# The editor target reaches Build.bat only as a Win64 build through the
 	# bounded wrapper; Linux stays server-only.
@@ -1011,7 +1250,7 @@ Assert-True ($Workflow.Substring(0, $AuthorityStart) -notmatch 'ci-acceptance-au
 
 # Portable job: GitHub-hosted, explicitly bounded, StarterMap-only LFS.
 Assert-True ($QualityGates -match '(?m)^\s+runs-on: windows-latest\r?$') 'The portable job must stay on the GitHub-hosted Windows runner.'
-Assert-True ($QualityGates -match '(?m)^\s+timeout-minutes: 30\r?$') 'The portable job must declare an explicit conservative bound.'
+Assert-True ($QualityGates -match '(?m)^\s+timeout-minutes: 40\r?$') 'The portable job must declare an explicit conservative bound.'
 Assert-True ($QualityGates -notmatch '(?m)^\s+needs:') 'The portable job must not depend on any engine or classifier job.'
 Assert-True ($QualityGates -match 'git lfs pull --include "Content/Maps/StarterMap\.umap"') 'The portable job must materialize the StarterMap LFS fixture.'
 
@@ -1036,8 +1275,9 @@ $LegacyBytes = [Text.Encoding]::UTF8.GetBytes($NormalizedWorkflow.Substring($Leg
 $LegacyHasher = [Security.Cryptography.SHA256]::Create()
 try { $LegacyDigest = ([BitConverter]::ToString($LegacyHasher.ComputeHash($LegacyBytes)) -replace '-', '').ToLowerInvariant() }
 finally { $LegacyHasher.Dispose() }
-# TA-018 (2026-10-02) removed the six controller paths from the portable-only set; this is the reviewed block identity after that change.
-Assert-True ($LegacyBytes.Length -eq 5395 -and $LegacyDigest -ceq 'e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805') 'The change-impact block must match the reviewed TA-018 identity after LF normalization.'
+# TA-018 (2026-10-02) removed the six controller paths from the portable-only set (5,395 bytes, e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805).
+# Issue #299 (2026-10-11) added the editor_required output and its closed editor path set; this is the reviewed block identity after that change.
+Assert-True ($LegacyBytes.Length -eq 7194 -and $LegacyDigest -ceq '83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92') 'The change-impact block must match the reviewed issue #299 identity after LF normalization.'
 
 function Get-ClassifierScript {
 	$Lines = $Workflow -split "\r?\n"
@@ -1078,7 +1318,8 @@ Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Tru
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository') 'Trusted compile must require the head repository to match this repository.'
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.user\.login == github\.repository_owner') 'Trusted compile must require the pull request author to be the repository owner.'
 Assert-True ($TrustedCompile -match 'github\.triggering_actor == github\.repository_owner') 'Trusted compile must require the triggering actor to be the repository owner.'
-Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^        if: always\(\)\r?$' -Expected 2 -Message 'Trusted compile may use always() only for raw-report binding and upload steps, never at job scope.'
+Assert-MatchCount -Text $TrustedCompile -Pattern "(?m)^        if: always\(\) && steps\.head_check\.outputs\.superseded != 'true'\r?$" -Expected 3 -Message 'Trusted compile may use always() only for raw-report binding, upload, and the final control-checkout cleanup steps, never at job scope, and never for a superseded head.'
+Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^        if: always\(\)\r?$' -Expected 0 -Message 'Every trusted compile always() step must also skip a superseded head.'
 Assert-True ($TrustedCompile -notmatch '(?m)^    if: always\(\)\r?$') 'Trusted compile must never bypass failed, cancelled, or skipped prerequisites at job scope.'
 Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^\s+-Mode Compile `\r?$' -Expected 1 -Message 'Trusted owner pull-request validation must select Compile exactly once.'
 Assert-True ($TrustedCompile -notmatch '(?m)^\s+-Mode PackagedSmoke `\r?$') 'Trusted owner pull-request validation must not select PackagedSmoke.'
@@ -1198,10 +1439,14 @@ function Invoke-Classifier([string] $BaseSha, [string] $HeadSha, [switch] $OmitB
 	return @{ ExitCode = $ExitCode; Outputs = $Outputs; Summary = [string] (Get-Content -LiteralPath $SummaryFile -Raw); StdOut = $StdOut }
 }
 
-function Assert-Classification([string] $Case, [hashtable] $Result, [string] $EngineRequired, [string] $Reason) {
+function Assert-Classification([string] $Case, [hashtable] $Result, [string] $EngineRequired, [string] $Reason, [string] $EditorRequired) {
 	Assert-True ($Result.ExitCode -eq 0) "[$Case] classifier step must exit 0 so the compile decision is always published (stdout: $($Result.StdOut -join ' '))."
 	Assert-True ($Result.Outputs.ContainsKey('engine_required') -and $Result.Outputs['engine_required'] -ceq $EngineRequired) "[$Case] expected engine_required=$EngineRequired, got '$($Result.Outputs['engine_required'])' (reason '$($Result.Outputs['reason'])')."
 	Assert-True ($Result.Outputs.ContainsKey('reason') -and $Result.Outputs['reason'] -ceq $Reason) "[$Case] expected reason=$Reason, got '$($Result.Outputs['reason'])'."
+	# Issue #299: the editor job runs only for engine content or its own harness; every uncertainty fails closed to true.
+	Assert-True ($Result.Outputs.ContainsKey('editor_required') -and $Result.Outputs['editor_required'] -ceq $EditorRequired) "[$Case] expected editor_required=$EditorRequired, got '$($Result.Outputs['editor_required'])'."
+	Assert-True ($EditorRequired -ceq 'false' -or $EngineRequired -ceq 'true') "[$Case] editor_required=true must imply engine_required=true."
+	Assert-True ($Result.Summary -match ('editor_required=' + $EditorRequired)) "[$Case] step summary must state the editor decision."
 	Assert-True ($Result.Summary -match ('engine_required=' + $EngineRequired) -and $Result.Summary -match [regex]::Escape($Reason)) "[$Case] step summary must state the decision and reason."
 	Assert-True (([regex]::Matches($Result.Summary, "`n")).Count -le 2) "[$Case] step summary must stay concise."
 }
@@ -1229,8 +1474,8 @@ try {
 		@{ Case = 'exact smoke evidence runner'; Write = @('scripts/build/Invoke-PackagedSmokeTest.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
 		@{ Case = 'smoke runner lookalike'; Write = @('scripts/build/Invoke-PackagedSmokeTestHelper.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different smoke runner'; Write = @(); IndexOnly = @('scripts/build/invoke-PackagedSmokeTest.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'smoke runner mixed with C++'; Write = @('scripts/build/Invoke-PackagedSmokeTest.ps1', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'orchestration mixed with C++'; Write = @('scripts/ci/Invoke-EngineRunnerGate.ps1', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'smoke runner mixed with C++'; Write = @('scripts/build/Invoke-PackagedSmokeTest.ps1', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'orchestration mixed with C++'; Write = @('scripts/ci/Invoke-EngineRunnerGate.ps1', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'retention helper lookalike'; Write = @('scripts/ci/Initialize-CompileWorkspace.psm1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different wrapper'; Write = @(); IndexOnly = @('scripts/ci/invoke-EngineRunnerGate.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different packaging'; Write = @(); IndexOnly = @('Scripts/build/Build-PackagedArtifacts.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
@@ -1238,8 +1483,8 @@ try {
 		@{ Case = 'exact portable CI suite'; Write = @('scripts/ci/Invoke-CiSuite.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'exact portable formatting policy'; Write = @('scripts/ci/Test-FormattingPolicy.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'exact portable markdown links'; Write = @('scripts/ci/Test-MarkdownLinks.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'exact tested prototype workflow'; Write = @('.github/workflows/prototype-quality-gates.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'controller CI workflow plus fixtures'; Write = @('scripts/ci/Invoke-CiSuite.ps1', '.github/workflows/prototype-quality-gates.yml', 'tests/ci/Seed.Tests.ps1', 'docs/a.md'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'exact tested prototype workflow'; Write = @('.github/workflows/prototype-quality-gates.yml'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'controller CI workflow plus fixtures'; Write = @('scripts/ci/Invoke-CiSuite.ps1', '.github/workflows/prototype-quality-gates.yml', 'tests/ci/Seed.Tests.ps1', 'docs/a.md'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		# Portable-only set: no Unreal compile.
 		@{ Case = 'docs markdown'; Write = @('docs/a.md'); Expect = 'false'; Reason = 'portable_paths_only' },
 		@{ Case = 'docs nested any extension'; Write = @('docs/sub/new.png', 'docs/sub/b.md'); Expect = 'false'; Reason = 'portable_paths_only' },
@@ -1253,10 +1498,10 @@ try {
 		@{ Case = 'portable rename appears as delete plus add'; Write = @('docs/renamed.md'); Delete = @('docs/a.md'); Expect = 'false'; Reason = 'portable_paths_only' },
 		@{ Case = 'portable combination'; Write = @('docs/a.md', 'README.md', 'tests/ci/Seed.Tests.ps1', 'visuals/a.svg', '.github/ISSUE_TEMPLATE/bug-report.md'); Expect = 'false'; Reason = 'portable_paths_only' },
 		# Engine-impact set: compile required.
-		@{ Case = 'Source'; Write = @('Source/AethelnOnline/A.cpp'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'Config'; Write = @('Config/DefaultEngine.ini'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'Content'; Write = @('Content/Maps/Seed.txt'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'Plugins'; Write = @('Plugins/Seed/Seed.uplugin'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'Source'; Write = @('Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'Config'; Write = @('Config/DefaultEngine.ini'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'Content'; Write = @('Content/Maps/Seed.txt'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'Plugins'; Write = @('Plugins/Seed/Seed.uplugin'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'scripts'; Write = @('scripts/ci/Seed.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'CI suite lookalike'; Write = @('scripts/ci/Invoke-CiSuite.ps1.bak'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'formatting policy lookalike'; Write = @('scripts/ci/Test-FormattingPolicyExtra.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
@@ -1265,25 +1510,45 @@ try {
 		@{ Case = 'case-different CI suite'; Write = @(); IndexOnly = @('scripts/ci/invoke-CiSuite.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different formatting directory'; Write = @(); IndexOnly = @('Scripts/ci/Test-FormattingPolicy.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different markdown checker extension'; Write = @(); IndexOnly = @('scripts/ci/Test-MarkdownLinks.PS1'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'case-different workflow'; Write = @(); IndexOnly = @('.github/workflows/Prototype-quality-gates.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'case-different workflow'; Write = @(); IndexOnly = @('.github/workflows/Prototype-quality-gates.yml'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'engine gate script'; Write = @('scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'real Unreal automation script'; Write = @('scripts/ci/Invoke-UnrealAutomationTests.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'real Unreal automation script'; Write = @('scripts/ci/Invoke-UnrealAutomationTests.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'packaging script'; Write = @('scripts/build/Build-PackagedArtifacts.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
-		@{ Case = 'mixed portable CI and Source'; Write = @('scripts/ci/Invoke-CiSuite.ps1', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'mixed tested workflow and engine gate'; Write = @('.github/workflows/prototype-quality-gates.yml', 'scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'mixed portable CI and Source'; Write = @('scripts/ci/Invoke-CiSuite.ps1', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'mixed tested workflow and engine gate'; Write = @('.github/workflows/prototype-quality-gates.yml', 'scripts/ci/Invoke-EngineRunnerGate.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'new workflow file'; Write = @('.github/workflows/new.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'other .github yaml'; Write = @('.github/dependabot.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'template directory non-markdown'; Write = @('.github/ISSUE_TEMPLATE/script.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'uproject'; Write = @('AethelnOnline.uproject'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'uproject'; Write = @('AethelnOnline.uproject'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		# Issue #299: controller-only pull requests still compile but skip the editor job; engine content and the editor's own harness inputs run it.
+		@{ Case = 'controller scripts and tests only'; Write = @('scripts/ci/Invoke-CiSuite.ps1', 'scripts/ci/Seed.ps1', 'scripts/build/Write-Provenance.ps1', 'tests/ci/Seed.Tests.ps1', 'tests/ci/fixture.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'attribute policy only'; Write = @('.gitattributes'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'other workflow file'; Write = @('.github/workflows/delivery-policy.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness host lease'; Write = @('scripts/ci/EngineRunnerHostLease.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness automation runner'; Write = @('scripts/ci/Invoke-UnrealAutomationTests.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness workspace sync'; Write = @('scripts/ci/Sync-EditorAutomationWorkspace.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness initial preparation core'; Write = @('scripts/ci/InitialPreparation.Core.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness initial preparation build wrapper'; Write = @('scripts/ci/InitialPreparation.BuildInvocation.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness initial preparation sibling'; Write = @('scripts/ci/InitialPreparation.Work.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness lease journal'; Write = @('scripts/ci/LeaseJournal.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness managed registration'; Write = @('scripts/ci/ManagedCompileRegistration.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness managed workspace'; Write = @('scripts/ci/ManagedCompileWorkspace.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness input lookalike suffix'; Write = @('scripts/ci/Sync-EditorAutomationWorkspace.ps1.bak'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness input in a subdirectory'; Write = @('scripts/ci/sub/EngineRunnerHostLease.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'initial preparation directory lookalike'; Write = @('scripts/ci/InitialPreparation/Core.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'case-different harness host lease'; Write = @(); IndexOnly = @('scripts/ci/engineRunnerHostLease.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'case-different Source directory'; Write = @(); IndexOnly = @('source/AethelnOnline/B.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'controller scripts mixed with Source'; Write = @('scripts/ci/Invoke-CiSuite.ps1', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'portable and controller mix'; Write = @('docs/a.md', 'scripts/ci/Invoke-CiSuite.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'tests non-ps1 non-md'; Write = @('tests/ci/fixture.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'tests ps1 plus fixture'; Write = @('tests/ci/Seed.Tests.ps1', 'tests/ci/fixture.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different docs directory'; Write = @(); IndexOnly = @('Docs/x.md'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different markdown extension'; Write = @(); IndexOnly = @('docs/x.MD', 'CHANGELOG.MD'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different tests directory'; Write = @(); IndexOnly = @('Tests/ci/x.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'nested markdown outside portable roots'; Write = @('Source/AethelnOnline/README.md'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'nested markdown outside portable roots'; Write = @('Source/AethelnOnline/README.md'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'top-level non-markdown'; Write = @('Setup.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'engine deletion'; Write = @(); Delete = @('Source/AethelnOnline/A.cpp'); Expect = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'mixed docs and Source'; Write = @('docs/a.md', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'engine deletion'; Write = @(); Delete = @('Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'mixed docs and Source'; Write = @('docs/a.md', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'mixed portable set plus scripts'; Write = @('README.md', 'visuals/a.svg', 'scripts/ci/Seed.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' }
 	)
 	foreach ($Entry in $Matrix) {
@@ -1291,24 +1556,25 @@ try {
 		$Delete = if ($Entry.ContainsKey('Delete')) { $Entry.Delete } else { @() }
 		$IndexOnly = if ($Entry.ContainsKey('IndexOnly')) { $Entry.IndexOnly } else { @() }
 		$HeadSha = Add-FixtureCommit -Write $Entry.Write -Delete $Delete -Message $Entry.Case -IndexOnly $IndexOnly
-		Assert-Classification -Case $Entry.Case -Result (Invoke-Classifier $BaseSha $HeadSha) -EngineRequired $Entry.Expect -Reason $Entry.Reason
+		$Editor = if ($Entry.ContainsKey('Editor')) { $Entry.Editor } else { 'false' }
+		Assert-Classification -Case $Entry.Case -Result (Invoke-Classifier $BaseSha $HeadSha) -EngineRequired $Entry.Expect -Reason $Entry.Reason -EditorRequired $Editor
 	}
 
 	# Fail-closed uncertainty cases.
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$DocsHead = Add-FixtureCommit -Write @('docs/a.md') -Delete @() -Message 'docs for uncertainty cases'
-	Assert-Classification -Case 'short base sha' -Result (Invoke-Classifier $BaseSha.Substring(0, 12) $DocsHead) -EngineRequired 'true' -Reason 'invalid_sha'
-	Assert-Classification -Case 'uppercase head sha' -Result (Invoke-Classifier $BaseSha $DocsHead.ToUpperInvariant()) -EngineRequired 'true' -Reason 'invalid_sha'
-	Assert-Classification -Case 'missing base sha' -Result (Invoke-Classifier '' $DocsHead -OmitBase) -EngineRequired 'true' -Reason 'invalid_sha'
-	Assert-Classification -Case 'identical shas' -Result (Invoke-Classifier $DocsHead $DocsHead) -EngineRequired 'true' -Reason 'identical_shas'
-	Assert-Classification -Case 'unreachable base sha' -Result (Invoke-Classifier ('0' * 40) $DocsHead) -EngineRequired 'true' -Reason 'commit_unavailable'
-	Assert-Classification -Case 'unreachable head sha' -Result (Invoke-Classifier $BaseSha ('f' * 40)) -EngineRequired 'true' -Reason 'commit_unavailable'
+	Assert-Classification -Case 'short base sha' -Result (Invoke-Classifier $BaseSha.Substring(0, 12) $DocsHead) -EngineRequired 'true' -Reason 'invalid_sha' -EditorRequired 'true'
+	Assert-Classification -Case 'uppercase head sha' -Result (Invoke-Classifier $BaseSha $DocsHead.ToUpperInvariant()) -EngineRequired 'true' -Reason 'invalid_sha' -EditorRequired 'true'
+	Assert-Classification -Case 'missing base sha' -Result (Invoke-Classifier '' $DocsHead -OmitBase) -EngineRequired 'true' -Reason 'invalid_sha' -EditorRequired 'true'
+	Assert-Classification -Case 'identical shas' -Result (Invoke-Classifier $DocsHead $DocsHead) -EngineRequired 'true' -Reason 'identical_shas' -EditorRequired 'true'
+	Assert-Classification -Case 'unreachable base sha' -Result (Invoke-Classifier ('0' * 40) $DocsHead) -EngineRequired 'true' -Reason 'commit_unavailable' -EditorRequired 'true'
+	Assert-Classification -Case 'unreachable head sha' -Result (Invoke-Classifier $BaseSha ('f' * 40)) -EngineRequired 'true' -Reason 'commit_unavailable' -EditorRequired 'true'
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$EmptyHead = Add-FixtureCommit -Write @() -Delete @() -Message 'empty'
-	Assert-Classification -Case 'empty diff' -Result (Invoke-Classifier $BaseSha $EmptyHead) -EngineRequired 'true' -Reason 'empty_diff'
+	Assert-Classification -Case 'empty diff' -Result (Invoke-Classifier $BaseSha $EmptyHead) -EngineRequired 'true' -Reason 'empty_diff' -EditorRequired 'true'
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$QuotedHead = Add-FixtureCommit -Write @([string]::Concat('docs/', [char] 0x00FC, 'ber.md')) -Delete @() -Message 'quoted path'
-	Assert-Classification -Case 'quoted non-ascii path' -Result (Invoke-Classifier $BaseSha $QuotedHead) -EngineRequired 'true' -Reason 'unexpected_diff_entry'
+	Assert-Classification -Case 'quoted non-ascii path' -Result (Invoke-Classifier $BaseSha $QuotedHead) -EngineRequired 'true' -Reason 'unexpected_diff_entry' -EditorRequired 'true'
 
 	# Production path: actions/checkout on pull_request materializes only the
 	# depth-1 merge commit, so both SHAs are absent locally and must be fetched
@@ -1327,11 +1593,11 @@ try {
 		$Missing = Invoke-FixtureGit @('-C', $ShallowRoot, 'rev-list', '--all')
 		Assert-True ($Missing -notcontains $Revision) "shallow fixture must not already contain $Revision."
 	}
-	Assert-Classification -Case 'shallow clone fetches both shas then classifies portable' -Result (Invoke-Classifier $BaseSha $DocsHead -WorkingDirectory $ShallowRoot) -EngineRequired 'false' -Reason 'portable_paths_only'
+	Assert-Classification -Case 'shallow clone fetches both shas then classifies portable' -Result (Invoke-Classifier $BaseSha $DocsHead -WorkingDirectory $ShallowRoot) -EngineRequired 'false' -Reason 'portable_paths_only' -EditorRequired 'false'
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$SourceHead = Add-FixtureCommit -Write @('Source/AethelnOnline/A.cpp') -Delete @() -Message 'source for shallow case'
 	$null = Invoke-FixtureGit @('-C', $BareRoot, 'fetch', '-q', $RepoRoot, "${SourceHead}:refs/heads/fixture-source")
-	Assert-Classification -Case 'shallow clone fetches both shas then classifies engine' -Result (Invoke-Classifier $BaseSha $SourceHead -WorkingDirectory $ShallowRoot) -EngineRequired 'true' -Reason 'engine_paths_changed'
+	Assert-Classification -Case 'shallow clone fetches both shas then classifies engine' -Result (Invoke-Classifier $BaseSha $SourceHead -WorkingDirectory $ShallowRoot) -EngineRequired 'true' -Reason 'engine_paths_changed' -EditorRequired 'true'
 
 	# Reproduce DDC identity drift across consecutive shallow checkouts, then
 	# prove that complete ancestry restores the same root set at both revisions.

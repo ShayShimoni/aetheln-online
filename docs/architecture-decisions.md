@@ -389,10 +389,11 @@ Every accepted decision records:
   guaranteed before platform cancellation; checkout/LFS and grace also consume
   that budget, and missing evidence never establishes success. Checkout/LFS
   and report upload sit only inside the job bound. TA-020 (2026-10-02) adds a
-  sixth engine-runner job, `trusted-editor-automation`, with a 45-minute
-  ceiling (35 minutes before the 2026-10-03 re-sync amendment) after a
+  sixth engine-runner job, `trusted-editor-automation`, with a 46-minute
+  ceiling (35 minutes before the 2026-10-03 re-sync amendment, 45 before the
+  2026-10-10 control checkout cleanup) after a
   successful trusted compile; a scheduled phase that queues while it runs
-  waits at most those 45 minutes for it. The recorded
+  waits at most those 46 minutes for it. The recorded
   40-minute value is the maximum trusted-compile queue delay attributable to one
   currently running scheduled phase, subject to platform assignment latency;
   total queue time can be longer when older jobs are already ahead.
@@ -482,9 +483,9 @@ Every accepted decision records:
   30-minute controlled-work watchdog, client/server packaging at 40 minutes
   each with 30-minute watchdogs, and provenance/smoke at 20 minutes each with
   10-minute watchdogs. These are operational ceilings, not measured budgets.
-  TA-020 adds the owner-only `trusted-editor-automation` job at 45 minutes
-  since its 2026-10-03 re-sync amendment (its step bounds plus a 3-minute
-  margin) and leaves every watchdog here unchanged.
+  TA-020 adds the owner-only `trusted-editor-automation` job at 46 minutes
+  since its 2026-10-10 control checkout cleanup (its step bounds plus a
+  3-minute margin; 45 minutes from the 2026-10-03 re-sync amendment) and leaves every watchdog here unchanged.
   Supersede the former multi-hour TA-012 phase ceilings. Timeouts fail with
   retained evidence and owned-tree cleanup; no silent retry or longer fallback.
   Under the approved Issue #167 recovery, use a fresh exact-revision control
@@ -514,6 +515,14 @@ Every accepted decision records:
 - **Revisit trigger:** Measured warm runtime fails the cap, pinned inputs change,
   or the runner trust domain changes. Investigate first; never raise ceilings
   automatically.
+- **Amendment (2026-10-11, portable cap raised to 40 minutes, issue #299):**
+  this revisit trigger fired. The hosted portable `quality-gates` job measured
+  27 to 29.5 minutes (`develop` run 38126471397 took 29m25s), and PR #301 run
+  38136328598 hit the 30-minute cap inside "Run CI suite". The lead, under the
+  owner's standing end-to-end delivery authority, raised only that job's cap to
+  40 minutes. It is still an operational ceiling, not a measured budget. Every
+  other ceiling and watchdog above is unchanged, and #299 continues to cut
+  suite and runner time rather than relying on the higher cap.
 
 ### TA-013 - Measured Clean-Package Time with Identity-Bound Persistent DDC
 
@@ -1476,10 +1485,10 @@ Every accepted decision records:
   cover. A separate job gives the editor build its full budget even when the
   compile uses its whole 30-minute watchdog.
 - **Cost:** an owner engine pull request can hold the runner for up to
-  85 minutes (40-minute compile plus 45-minute editor automation) when no
+  86 minutes (40-minute compile plus 46-minute editor automation) when no
   older waiter queued between the two jobs (75 minutes before the re-sync
-  amendment). A scheduled phase that queues while the editor job runs waits
-  at most 45 minutes for it; the recorded 40-minute trusted-compile queue
+  amendment, 85 before the control checkout cleanup). A scheduled phase that
+  queues while the editor job runs waits at most 46 minutes for it; the recorded 40-minute trusted-compile queue
   delay attributable to one running scheduled phase is unchanged. Workspace
   race (history, resolved by the re-sync amendment): when another owner pull
   request's compile, or a newer push to the same pull request, entered the
@@ -1646,15 +1655,38 @@ Every accepted decision records:
     `editor_sync_time_insufficient`, recorded when less than the provisional
     fixed 5-minute minimum remains after the lease is taken, before any
     checkout starts.
-  - *Ceiling:* the job now has a 45-minute job ceiling: its step bounds
+  - *Ceiling:* the job now has a 46-minute job ceiling (45 before the issue
+    #243 control checkout cleanup below): its step bounds
     (control checkout 5, re-sync and editor build 20, harness 12, residue
-    cleanup 2, bind 1, upload 1, outcome 1) plus a 3-minute margin. The added
-    10 minutes pay for the new checkout and re-sync work, not for a slower
-    build. An owner engine pull request can now hold the runner for up to
-    85 minutes (40-minute compile plus 45-minute editor automation).
+    cleanup 2, bind 1, upload 1, outcome 1, final control-checkout cleanup 1)
+    plus a 3-minute margin. The 10 minutes added by this amendment pay for the
+    new checkout and re-sync work, not for a slower build. An owner engine
+    pull request can now hold the runner for up to
+    86 minutes (40-minute compile plus 46-minute editor automation).
   - *Pending evidence:* one live observation of two compile-selecting pull
     requests pushed together that both reach a green `unreal-receipt-shadow`.
     Authority stays off.
+  - *Control checkout cleanup (2026-10-10, issue #243):* the compile and editor
+    jobs each add a disposable control checkout per run and attempt to the
+    runner workspace, 139 of them (about 15 MiB each) by 2026-10-10. No job
+    reads another job's checkout. The last step of both jobs now removes its
+    own checkout and every earlier `compile-control-*` or `editor-control-*`
+    directory, by exact name and literal path, never following or removing a
+    link. A runner runs one job at a time and the engine queue serializes the
+    jobs, so pruning at the end of a job that proved its own lease state is
+    safe, whereas a prune at the start could not know whether an earlier job
+    left a held journal. The step keeps every checkout when that state is
+    unproven: the editor job on the residue cleanup's skip conditions, and the
+    compile job unless the gate report carries a supervisor receipt with a
+    verified cleanup. The gate writes that receipt only after it took and
+    released the lease, so a lease it could not take or wait for (the wait
+    ending in `compile_timeout` or `compile_clock_invalid`, which leave no
+    receipt), an unproven cleanup, a failed release, and a missing or
+    unreadable report all keep every checkout. The step continues on error and
+    adds a 1-minute step bound, so the editor job ceiling rises from 45 to
+    46 minutes to keep its 3-minute margin; an owner engine pull request can now
+    hold the runner for up to 86 minutes (40-minute compile plus 46-minute
+    editor automation). The compile ceiling is unchanged.
 - **Amendment (2026-10-04, runner engine isolation):** the lead selected an
   independently writable runner source-engine tree for
   [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).
@@ -1897,6 +1929,41 @@ Every accepted decision records:
     fixture in the same suite entry covers it. The path-free result line is
     recorded on issue #267 before the host-tools receipt change that depends on
     it merges.
+- **Amendment (2026-10-11, editor gate and superseded-head check, issue #299):**
+  two cuts to self-hosted runner time, requested by the lead under the
+  owner's standing end-to-end delivery authority. They change when the job runs, not
+  what it proves or who may start it.
+  - *Editor gate:* `change-impact` publishes a second output,
+    `editor_required`, and `trusted-editor-automation` now needs
+    `change-impact` as well as the compile and runs only when it is `true`.
+    The closed, case-insensitive set is `Source`, `Config`, `Content`,
+    `Plugins`, `AethelnOnline.uproject`, the workflow itself, and the editor
+    harness as exact paths (`Invoke-UnrealAutomationTests.ps1`,
+    `Sync-EditorAutomationWorkspace.ps1`, `EngineRunnerHostLease.ps1`, every
+    `InitialPreparation.*`, and the three scripts those load, `LeaseJournal.ps1`,
+    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`). Every
+    classifier uncertainty publishes `editor_required=true`, and it implies
+    `engine_required=true`. A controller-only pull request still compiles
+    (TA-018) but skips the editor job, about two minutes of runner time. The
+    shadow selector is not consulted; the authoritative classifier alone gates
+    the job, and the byte-hash pin of the `change-impact` block is updated.
+  - *Superseded-head check:* the first step of `trusted-candidate-compile` and
+    `trusted-editor-automation` compares the event head with the pull request's
+    current head through the API and skips the rest of the job when they
+    differ, so a push that arrived while the job waited in the queue frees the
+    runner in seconds. It fails open on any error, passes `github.token`
+    through `env` for one read-only request, reads the event from the runner's
+    payload file so no event data is interpolated into the engine job, adds no action or permission, and
+    does not use `cancel-in-progress: true`, which could stop a job holding the
+    host lease. The editor outcome step records `superseded_head`, a new word
+    in the fixed `automation_reason` vocabulary.
+  - *Not changed:* the trust predicates, the ceilings, the queue, the lease and
+    journal rules, and the required checks (`quality-gates`, `change-impact`).
+    A skipped editor job is skipped, not failed.
+  - *Evidence:* `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1` pins the
+    output, the job gate, the head check step in both jobs, and runs the
+    classifier matrix and the head check against fixtures (current, superseded,
+    and every fail-open case).
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
@@ -2059,6 +2126,16 @@ Every accepted decision records:
 - **Revisit trigger:** Any package leaves the owner's control (external
   testers, a public download, or a store), a collaborator gains write access, a
   second matching runner is registered, or `hotfix/*` packaging is needed.
+- **Amendment (2026-10-11, develop dispatch, issue #267):** On 2026-10-10 the
+  owner accepted the same runner-trust risk for a manual packaging dispatch of
+  `develop` (OD-7 on issue #267), extending the 2026-10-03 acceptance above,
+  which covered `release/*` only. The dispatch is owner-only (OD-8): the owner
+  presses it, or the lead presses it only with the owner's explicit OK for
+  that run; agents never dispatch it. TA-024 records the separate
+  `.github/workflows/develop-packaging.yml` identity that carries it. The
+  runner-trust analysis, the fork-run rule, the operator rule, and the
+  revisit triggers above apply to it unchanged. `prototype-quality-gates.yml`
+  still keeps no manual trigger.
 
 ### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
 
@@ -2149,6 +2226,69 @@ Every accepted decision records:
   time becomes a measured bottleneck for the Editor build or CI editor
   automation, a per-area test split is proposed, or the pinned engine gains a
   desktop SHA-256 in `Core`.
+
+### TA-024 - Owner-Only Develop Packaging Dispatch on a Separate Workflow Identity
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-11 by the delivery lead under the owner's
+  delegated authority. The owner accepted the runner-trust risk (OD-7) and the
+  dispatcher rule (OD-8) on 2026-10-10; both are recorded as the 2026-10-11
+  amendment to TA-022.
+- **Scope:** Manual packaging of the head of `develop` outside the weekly
+  schedule (issue #267).
+- **Decision (2026-10-11):** `.github/workflows/develop-packaging.yml`
+  packages the head of `develop` on demand. Its only trigger is
+  `workflow_dispatch`, with no inputs. A hosted `develop-gates` job runs
+  `scripts/ci/Invoke-ReleasePackaging.ps1 -Mode DevelopGuard` first and
+  refuses, red, anything but a dispatch by the repository owner, as actor and
+  as triggering actor, of exactly `refs/heads/develop` in this repository on
+  attempt 1; it then runs the portable suite. Four engine jobs copy the TA-012
+  scheduled phases: the same gate, modes, job bounds (40/40/20/20 minutes),
+  watchdogs (30/30/10/10), handoff contract, artifact names, and the
+  `aetheln-engine-runner` FIFO group with `queue: max` and
+  `cancel-in-progress: false`. Each repeats the six-clause predicate of TA-022
+  with `github.ref == 'refs/heads/develop'` in place of the `release/*` prefix,
+  and pins `UE_ADDITIONAL_PLUGIN_PATHS` empty (TA-019). The token is
+  `contents: read`, checkouts pin the dispatched SHA without persisted
+  credentials, and only five redacted reports are uploaded with the default
+  retention. There is no build number and no release evidence. Who may
+  dispatch: the owner, or the lead only with the owner's explicit OK for that
+  run (OD-8).
+- **Context:** The weekly schedule is the only other path that packages
+  `develop`, so proving a packaging fix (PR #301 on issue #267) waits
+  up to a week. On 2026-10-06 the lead chose a separate workflow (OD-6) over a
+  trigger on `prototype-quality-gates.yml`. TA-012 forbids a manual trigger on
+  that workflow for the older branch reason, and TA-022 rejected that
+  alternative too. On 2026-10-11 a scan of all 23 remote branches and tags
+  that carry `prototype-quality-gates.yml` found none that declares a manual
+  trigger, but the TA-012 rule stands; this decision does not reverse it. A
+  new workflow identity has no older copies.
+- **Alternatives:** A trigger on `prototype-quality-gates.yml` (rejected:
+  reverses TA-012 and TA-022, and every pull-request job would have to be
+  proven unreachable on a dispatch); reusing `release-packaging.yml` with a
+  wider ref rule (rejected: release builds carry a build number and release
+  evidence that `develop` heads must not claim); dispatch inputs (rejected: an
+  injection surface; the ref is the only choice).
+- **Consequences:** One more FIFO waiter in `aetheln-engine-runner` with the
+  same bounds; a dispatch that overlaps the schedule or a release run
+  interleaves phase by phase in separate run-scoped handoff directories.
+  Residual risk: every packaging run reserves 64 GiB of the shared 256 GiB
+  handoff cap until its cleanup request is acted on, so dispatches between
+  cleanups can make a later scheduled, release, or dispatched run fail closed
+  with `handoff_storage_exhausted`. The owner checks the cleanup requests
+  before dispatching. This decision adds no workflow-level dispatch cap; that
+  cap (OD-11 on issue #267) stays a separate lead decision. The immediate kill
+  switch is disabling the workflow; the permanent rollback is reverting it.
+- **Evidence:** `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the exact
+  predicate, the guard-first step, parity with the scheduled phases including
+  artifact names, the five uploads, and allows `workflow_dispatch` in exactly
+  the release and develop packaging workflows, each with mutation cases.
+  `tests/ci/Invoke-ReleasePackaging.Tests.ps1` covers `-Mode DevelopGuard`.
+  The first dispatched run is the operational proof and is recorded on issue
+  #267.
+- **Owner:** Issue #267.
+- **Revisit trigger:** The TA-022 revisit triggers, a dispatch needs inputs or
+  another branch, or the handoff budget blocks a scheduled or release run.
 
 ## Candidate Decisions
 

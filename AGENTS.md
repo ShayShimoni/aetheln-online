@@ -83,7 +83,7 @@ decisions until evidence or user direction resolves them.
 - Combat, progression, loot generation, PvP contribution, territory state, and
   reward grants are server authoritative, transactional, idempotent, and
   auditable.
-- Working names such as Dawn Concordat and Unbound Flame are not final names.
+- Working names such as Crowned Ledger and Hundred Witnesses are not final names.
 
 Prototype deferral does not make a confirmed target feature optional. The
 prototype still begins with one class and one controlled combat space because
