@@ -934,12 +934,13 @@ function Resolve-PerformanceContract([string] $Path) {
 		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second')
 	}
 	if ($ContractVersion -eq 2) {
-		# Version 2 keeps every version-1 metric first and appends metric names only; no value or threshold is defined here.
+		# Version 2 keeps every version-1 metric first and appends metric names only. The appended names are proposals pending owner review;
+		# this table defines no value, threshold, statistic, or hitch, stall, or tick-overrun definition.
 		$RequiredDomains = [ordered]@{
-			client = @($RequiredDomains.client) + @('client_frame_time_milliseconds','client_game_thread_milliseconds','client_render_thread_milliseconds','client_gpu_milliseconds','client_frame_pacing_variance_milliseconds','client_hitch_count','client_hitch_duration_milliseconds')
+			client = @($RequiredDomains.client) + @('client_frame_time_milliseconds','client_game_thread_milliseconds','client_render_thread_milliseconds','client_gpu_milliseconds','client_frame_pacing_milliseconds','client_hitch_count','client_hitch_duration_milliseconds')
 			loading_streaming = @('client_startup_milliseconds','client_travel_milliseconds','client_map_load_milliseconds','client_streaming_stall_count','client_streaming_stall_milliseconds')
-			server = @($RequiredDomains.server) + @('server_tick_duration_milliseconds','server_tick_overrun_count','server_tick_overrun_milliseconds','server_worker_task_milliseconds','server_overload_failure_shape')
-			network = @($RequiredDomains.network) + @('network_send_burst_bits_per_second','network_receive_burst_bits_per_second','network_packet_loss_percent','network_loss_impact_correction_count')
+			server = @($RequiredDomains.server) + @('server_tick_duration_milliseconds','server_tick_overrun_count','server_tick_overrun_milliseconds','server_worker_task_milliseconds')
+			network = @($RequiredDomains.network) + @('network_send_burst_bits_per_second','network_receive_burst_bits_per_second')
 		}
 	}
 	Assert-ClosedProperty -Value $Capture.measurement_domains -Expected @($RequiredDomains.Keys) -Name 'PerformanceContract measurement_domains'

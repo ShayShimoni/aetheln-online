@@ -1519,10 +1519,10 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second')
 	}
 	$NetworkAuthorityPerformanceDomainsV2 = [ordered]@{
-		client = @('client_memory_bytes','correction_count','correction_magnitude_centimeters','client_frame_time_milliseconds','client_game_thread_milliseconds','client_render_thread_milliseconds','client_gpu_milliseconds','client_frame_pacing_variance_milliseconds','client_hitch_count','client_hitch_duration_milliseconds')
+		client = @('client_memory_bytes','correction_count','correction_magnitude_centimeters','client_frame_time_milliseconds','client_game_thread_milliseconds','client_render_thread_milliseconds','client_gpu_milliseconds','client_frame_pacing_milliseconds','client_hitch_count','client_hitch_duration_milliseconds')
 		loading_streaming = @('client_startup_milliseconds','client_travel_milliseconds','client_map_load_milliseconds','client_streaming_stall_count','client_streaming_stall_milliseconds')
-		server = @('server_game_thread_milliseconds','server_replication_cpu_milliseconds','server_memory_bytes','relevant_actor_count','destruction_event_count','server_tick_duration_milliseconds','server_tick_overrun_count','server_tick_overrun_milliseconds','server_worker_task_milliseconds','server_overload_failure_shape')
-		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second','network_send_burst_bits_per_second','network_receive_burst_bits_per_second','network_packet_loss_percent','network_loss_impact_correction_count')
+		server = @('server_game_thread_milliseconds','server_replication_cpu_milliseconds','server_memory_bytes','relevant_actor_count','destruction_event_count','server_tick_duration_milliseconds','server_tick_overrun_count','server_tick_overrun_milliseconds','server_worker_task_milliseconds')
+		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second','network_send_burst_bits_per_second','network_receive_burst_bits_per_second')
 	}
 	function Get-PerformanceContractObject([int] $SchemaVersion = 1) {
 		$Domains = if ($SchemaVersion -eq 2) { $NetworkAuthorityPerformanceDomainsV2 } else { $NetworkAuthorityPerformanceDomains }
@@ -1698,6 +1698,9 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 		@{ Name = 'duplicate-evidence-references'; Mutate = { param($C) $C.capture.evidence_references = @('evidence-ref.dup','evidence-ref.dup') }; Failure = 'evidence_references must' },
 		@{ Name = 'missing-network-domain'; Mutate = { param($C) $C.capture.measurement_domains.Remove('network') }; Failure = 'unsupported or missing fields' },
 		@{ Name = 'incomplete-client-domain'; Mutate = { param($C) $C.capture.measurement_domains.client = @('client_memory_bytes') }; Failure = 'version-1 network-authority-runner' },
+		@{ Name = 'v1-body-labeled-v2'; Mutate = { param($C) $C.schema_version = 2 }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'reordered-client-domain'; Mutate = { param($C) $D = $C.capture.measurement_domains.client; $C.capture.measurement_domains.client = @($D[1], $D[0], $D[2]) }; Failure = 'version-1 network-authority-runner' },
+		@{ Name = 'extra-network-metric'; Mutate = { param($C) $C.capture.measurement_domains.network = @($C.capture.measurement_domains.network) + @('extra_metric') }; Failure = 'version-1 network-authority-runner' },
 		@{ Name = 'populated-tick-rate'; Mutate = { param($C) $C.capture.sampling.server_tick_hz = 30 }; Failure = 'must remain null' },
 		@{ Name = 'populated-capacity'; Mutate = { param($C) $C.capture.sampling.capacity_players = 32 }; Failure = 'must remain null' },
 		@{ Name = 'populated-target'; Mutate = { param($C) $C.budgets[0].target = 16 }; Failure = 'must remain null' },
@@ -1760,8 +1763,11 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 	$V2Root = Join-Path $FixtureRoot 'performance-v2-success'
 	Invoke-FixtureRun -FixtureLogRoot $V2Root -FixtureRunId 'fixture-performance-v2-success' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $V2ContractPath
 	$V2Evidence = Get-Content -LiteralPath (Join-Path $V2Root 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
-	Assert-True ($V2Evidence.performance_contract.schema_version -eq 2 -and $V2Evidence.performance_contract.budget_count -eq 31) 'A version-2 contract must publish schema version 2 and one budget per version-2 metric.'
+	Assert-True ($V2Evidence.performance_contract.schema_version -eq 2 -and $V2Evidence.performance_contract.budget_count -eq 28) 'A version-2 contract must publish schema version 2 and one budget per version-2 metric.'
 	Assert-True (@($V2Evidence.performance_contract.measurement_domains.client) -ccontains $V2ClientMetric -and @($V2Evidence.performance_contract.measurement_domains.loading_streaming).Count -eq 5) 'Version-2 evidence must list the new client and loading_streaming metrics.'
+	foreach ($V2DomainName in $NetworkAuthorityPerformanceDomainsV2.Keys) {
+		Assert-True ((@($V2Evidence.performance_contract.measurement_domains.$V2DomainName) -join ',') -ceq (@($NetworkAuthorityPerformanceDomainsV2[$V2DomainName]) -join ',')) "Version-2 evidence must publish the exact ordered '$V2DomainName' metric list."
+	}
 	Assert-True ($V2Evidence.performance_contract.targets_defined -eq $false -and $V2Evidence.performance_contract.approval_status -eq 'unapproved') 'Version-2 evidence must stay target-free and unapproved.'
 	Assert-True ($V2Evidence.performance_contract.contract_sha256 -eq (Get-FileHash -LiteralPath $V2ContractPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'Version-2 evidence must bind the exact contract bytes.'
 	Write-Output 'PASS: version-2 performance capture contract accepts the new metric families while version-1 contracts still pass'
@@ -1770,8 +1776,13 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 		@{ Name = 'v2-populated-client-target'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'client_render_thread_milliseconds' })[0].target = 16 }; Failure = 'must remain null' },
 		@{ Name = 'v2-populated-loading-warning'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'client_map_load_milliseconds' })[0].warning_threshold = 100 }; Failure = 'must remain null' },
 		@{ Name = 'v2-populated-server-failure-threshold'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'server_tick_overrun_count' })[0].failure_threshold = 1 }; Failure = 'must remain null' },
-		@{ Name = 'v2-self-approved-network-budget'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'network_packet_loss_percent' })[0].approval_status = 'approved' }; Failure = 'cannot self-approve' },
+		@{ Name = 'v2-self-approved-network-budget'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'network_send_burst_bits_per_second' })[0].approval_status = 'approved' }; Failure = 'cannot self-approve' },
 		@{ Name = 'v2-self-approved-client-budget'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'client_hitch_count' })[0].approval_status = 'approved' }; Failure = 'cannot self-approve' },
+		@{ Name = 'v2-body-labeled-v1'; Mutate = { param($C) $C.schema_version = 1 }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'v2-reordered-server-domain'; Mutate = { param($C) $D = $C.capture.measurement_domains.server; $C.capture.measurement_domains.server = @($D[0..4]) + @($D[6], $D[5]) + @($D[7..($D.Count - 1)]) }; Failure = 'version-2 network-authority-runner' },
+		@{ Name = 'v2-extra-network-metric'; Mutate = { param($C) $C.capture.measurement_domains.network = @($C.capture.measurement_domains.network) + @('extra_metric') }; Failure = 'version-2 network-authority-runner' },
+		@{ Name = 'v2-removed-failure-shape-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'server_overload_failure_shape' }; Failure = 'Unsupported performance budget metric' },
+		@{ Name = 'v2-removed-packet-loss-percent-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'network_packet_loss_percent' }; Failure = 'Unsupported performance budget metric' },
 		@{ Name = 'v2-populated-sampling'; Mutate = { param($C) $C.capture.sampling.server_tick_hz = 30 }; Failure = 'must remain null' },
 		@{ Name = 'v2-missing-loading-domain'; Mutate = { param($C) $C.capture.measurement_domains.Remove('loading_streaming') }; Failure = 'unsupported or missing fields' },
 		@{ Name = 'v2-incomplete-client-domain'; Mutate = { param($C) $C.capture.measurement_domains.client = @('client_memory_bytes','correction_count','correction_magnitude_centimeters') }; Failure = 'version-2 network-authority-runner' },
