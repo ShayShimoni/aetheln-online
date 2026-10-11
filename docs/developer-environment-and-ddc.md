@@ -227,7 +227,16 @@ editor/engine rebuild:
 
 - `-HostToolsBoundary Rebuild` — the explicit, operator-authorized full
   host-tools rebuild (the host editor/engine tools rebuild as part of the
-  UAT invocation). It is never a default or an automatic fallback.
+  UAT invocation). It is never a default or an
+  automatic fallback. This run already cleans the editor target:
+  `BuildCookRun -build -clean` makes UAT run UBT's clean mode on every agenda
+  target (`AutomationTool/AutomationUtils/UnrealBuild.cs:603-606`,
+  `UnrealBuildTool/Modes/CleanMode.cs:181`), which deletes the target
+  makefile, so it needs no manual delete. The split recipe never runs with
+  `Rebuild`: it requires the `Prebuilt` boundary
+  (`scripts/build/Build-PackagedArtifacts.ps1:953`), and its host editor build
+  goes through the CI wrapper, which deletes the makefile
+  (`Build-PackagedArtifacts.ps1:194-206`).
 - `-HostToolsBoundary Prebuilt -EngineRevision <canonical sha>
   -HostToolsAttestationPath <file>` — skip rebuilding the host editor/engine
   tools by passing `-nocompileeditor`, which the pinned UE 5.8.1 source maps
@@ -358,6 +367,14 @@ Project generation may create UBT products that fail this preflight; it is not
 assumed to do so on every host. The normal contributor project-generation and
 Development Editor sequence remains documented in
 [Unreal Project Setup](unreal-project-setup.md).
+
+Before the provisioner builds the editor, delete the editor target makefile
+of the controller checkout, where `<project>` is that checkout:
+`<project>\Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin`.
+`scripts/build/HostToolProvisioning.BuildInvocation.ps1` does not delete it
+today, and a build that reuses the makefile runs UHT with the input cache off
+(TA-020 2026-10-11 amendment, issue #167). Doing this by hand is a known
+residual limitation until a code change adds it.
 
 From a clean committed controller checkout, an authorized operator supplies
 existing validated paths and a *new* F: evidence root. The F: bootstrap uses
@@ -642,10 +659,13 @@ cache setting) is lost. Who may re-attest is an open owner decision (issue
 
 Before attesting:
 
-1. If an engine change is intended, run the authorized engine build first
-   (the contributor `Build.bat` command in
-   [Unreal Project Setup](unreal-project-setup.md), without
-   `-NoEngineChanges`) and keep its log.
+1. If an engine change is intended, first delete the editor target makefile
+   `<project>\Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin`.
+   Then run the authorized engine build (the contributor `Build.bat` command
+   in [Unreal Project Setup](unreal-project-setup.md), without
+   `-NoEngineChanges`) and keep its log. A build that reuses the makefile runs
+   UHT with the input cache off and can relink NetCore from the wrong output
+   (TA-020 2026-10-11 amendment, issue #167).
 2. The runner is idle, no engine process runs, and `engine.lock` is held.
 3. Use a new clean worktree whose HEAD equals the remote `develop` head
    (`git ls-remote origin refs/heads/develop`): the step runs that
