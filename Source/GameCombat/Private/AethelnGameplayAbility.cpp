@@ -58,6 +58,10 @@ const TCHAR* UAethelnGameplayAbility::FindGrantProblem() const
 	{
 		return TEXT("sets bReplicateInputDirectly");
 	}
+	if (bMovementCarried && bAcceptsRelease)
+	{
+		return TEXT("is movement-carried but accepts Release");
+	}
 	return nullptr;
 }
 

@@ -2,6 +2,7 @@
 
 #include "AbilitySystemInterface.h"
 #include "AethelnCombatEffects.h"
+#include "AethelnMovementActionAuthority.h"
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerState.h"
 #include "AethelnPlayerState.generated.h"
@@ -19,7 +20,7 @@ struct FGameplayAbilitySpec;
  * See docs/gas-foundation.md (Lifecycle).
  */
 UCLASS(Config = Game)
-class GAMECOMBAT_API AAethelnPlayerState : public APlayerState, public IAbilitySystemInterface
+class GAMECOMBAT_API AAethelnPlayerState : public APlayerState, public IAbilitySystemInterface, public IAethelnMovementActionAuthority
 {
 	GENERATED_BODY()
 
@@ -28,6 +29,11 @@ public:
 
 	virtual void PostInitializeComponents() override;
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
+
+	/** The movement authority (#18 T1) forwards to the ASC, which resolves the current grant and possessed avatar. */
+	virtual FAethelnDodgeMovementDefinition GetDodgeMovementDefinition() const override;
+	virtual bool CanPredictDodge() const override;
+	virtual bool TryAuthorizeDodge(const FAethelnDodgeStartRequest& Request) override;
 
 	UAethelnAbilitySystemComponent* GetAethelnAbilitySystemComponent() const { return AbilitySystemComponent; }
 	const UAethelnCombatAttributeSet* GetCombatAttributeSet() const { return AttributeSet; }
