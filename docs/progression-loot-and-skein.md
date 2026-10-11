@@ -103,10 +103,10 @@ resolved.
 
 Ember Rank is separate from Character Level. It expresses a character's
 attunement, story standing, faction achievements, and visible place in the
-world. It may support seasonal or campaign progression, but it must not remove
-permanent Character Levels or learned core options.
+world. It is seasonal: it may compress or reset between Ember Cycles, but it
+must not remove permanent Character Levels or learned core options.
 
-Its exact ranks, reset or compression rules, and rewards are TBD. Suitable
+Its exact ranks, season length, reset or compression rules, and rewards are TBD. Suitable
 rewards include titles, aura or armor evolution, access, and faction recognition
 in addition to carefully bounded power.
 
@@ -692,7 +692,7 @@ canonical technical rules live in
 
 - Character Level cap, experience curve, and unlock cadence.
 - Relationship between Character Level and Doctrine prerequisites.
-- Ember Rank names, rewards, and any seasonal rules.
+- Ember Rank names, rewards, season length, and reset or compression rules.
 - Exact Form, Thread, Keystone, and Doctrine collections.
 - Number of equipped choices and loadout-change rules.
 - Item tiers, quality names, stat budgets, caps, and stacking groups.

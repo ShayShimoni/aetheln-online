@@ -38,8 +38,9 @@ The prototype should contain only:
 - Pure free aim
 - One basic three-hit attack chain
 - Dodge or evasive movement
+- Directional block
 - Three active abilities
-- Health, the unnamed prototype combat resource, cooldowns, and damage
+- Health, Endurance, active Guard, cooldowns, and damage
 - One enemy type
 - One small greybox arena
 - Two players connecting locally
@@ -156,7 +157,7 @@ Starter Content.
 
 The approved project is where the actual prototype will live.
 
-Record the exact Unreal project name in [Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13) before creating it; do not introduce a second product or repository name.
+[Issue #13](https://github.com/ShayShimoni/aetheln-online/issues/13) created the project as `AethelnOnline`; do not introduce a second product or repository name.
 
 Start with C++ enabled even though you will initially use many Blueprints. Adding C++ later can produce unnecessary restructuring, while a C++ project still permits extensive Blueprint development.
 
@@ -262,9 +263,10 @@ Build and validate:
 Add the Gameplay Ability System:
 
 - Health
-- The unnamed prototype combat resource
+- Endurance and active Guard
 - Basic attack ability
 - Dodge ability
+- Directional block ability
 - Three skills
 - Damage effects
 - Cooldowns

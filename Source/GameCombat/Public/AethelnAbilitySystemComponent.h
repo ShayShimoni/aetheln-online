@@ -211,6 +211,8 @@ public:
 	void ResetChain(EAethelnChainEndReason Reason, double ResetTime);
 	/** Authority only; cancels the running dodge operation, closing its windows now and ending server displacement once. */
 	void CancelDodge();
+	/** Authority only; ends a held block at the processing time (an accepted dodge, Q10 and Q18). */
+	void CancelBlock();
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Rate bucket placeholder, never tuning; #45 owns the final value. Without config (0) every request is rate limited. */
@@ -301,6 +303,7 @@ private:
 	friend class UAethelnGameplayAbility;
 	friend class UAethelnBasicChainAbility;
 	friend class UAethelnDodgeAbility;
+	friend class UAethelnBlockAbility;
 	friend class UAethelnCombatTimelineSubsystem;
 
 	/** The seam's result slot, open only while the seam activates this one spec handle. */

@@ -9,8 +9,9 @@ phase P1 of the issue and contains no code. Pull requests P2 to P5 deliver it
 (see [Phased Delivery](#phased-delivery)). The owner decisions already made,
 including the product-question answers approved on 2026-10-10, are recorded in
 [Owner Decisions](#owner-decisions). [Open Decisions](#open-decisions) holds
-only the `TBD` tuning values, the two technical decisions that await #60
-sign-off (T2 and T3), and the decisions that belong to other owners.
+only the `TBD` tuning values and the decisions that belong to other owners;
+the lead signed off T2 and T3 as #60 owner on 2026-10-11, and #18 P4
+implements them.
 
 **Current technical selection.** #18 P2 movement merged in
 [PR #282](https://github.com/ShayShimoni/aetheln-online/pull/282). The lead
@@ -72,19 +73,21 @@ relative to the root of the pinned UE 5.8.1 source, revision `71fe36aac5`.
    dodge already in progress in server time; they never start one.
 4. **Avoidance is time-exact.** A contact is avoided if its contact time lies
    inside the target's invulnerability window. The window tag stays for gating
-   and observers. This asks one change of #60 P4 (Technical decision T2).
+   and observers. #18 P4 makes this change to #60's contact pipeline
+   (Technical decision T2, signed off 2026-10-11).
 5. **The block is a held seam ability.** Right mouse sends a seam `Press` and a
    `Release` (`bAcceptsRelease`). Nothing is predicted.
 6. **One defense slot per ASC.** While active, the block registers the
    three things the owner required of it: the defense state tag
    (`State.Blocking`, with its server-time interval), an authored arc, and a
-   Guard-consequence hook that #60 calls once per blocked hit. #260's Hold the
-   Line uses the same slot.
+   Guard-consequence hook that #60 calls once per blocked hit. The slot lives
+   on #60's timeline subsystem, keyed by the ASC. #260's Hold the Line uses
+   the same slot.
 7. **The block arc is measured from server state.** The incoming direction is
    the yaw-only vector from the defender's capsule center to the attacker's
    combat-frame origin at the contact time, compared with the defender's
    server-simulated actor yaw, never the client control rotation. #60 adopts
-   that direction (Technical decision T3).
+   that direction (Technical decision T3, signed off 2026-10-11).
 8. **A blocked contact never resolves twice.** The hook applies Guard pressure
    once; a Guard break ends the block at the contact time and affects only
    later contacts.
@@ -175,11 +178,12 @@ Existing code at `f173388`:
 | `FAethelnDodgeMovementDefinition`, `FAethelnDodgeStartRequest` | GameCore | Distance, move duration, and content version; the request is the move's client timestamp, the client's content version, and whether the movement state allows a start. |
 | `UAethelnCharacterMovementComponent` (extend) | GameCore | Dodge intent on `FLAG_Custom_2`, dodge simulation state, the displacement, a custom move-data container (content version on flagged moves) and move-response container (dodge state on corrections), `EndDodgeForAuthority()`. |
 | `IAethelnPlayerInputReceiver`, `AAethelnPlayerCharacter` (extend) | GameCore | `ReceiveDodgePressed()`: sets the dodge intent when the local gate passes. |
-| `AethelnDefenseTypes.h` | GameCombat | `FAethelnDodgeDefinition`, `FAethelnActiveDefense`, `FAethelnBlockedContact`, `EAethelnBlockConsequence`. |
+| `AethelnDefenseTypes.h` | GameCombat | `FAethelnDodgeDefinition`, `FAethelnBlockedContact`, `EAethelnBlockConsequence`. The slot itself is #60's `FAethelnDefenseState` (`AethelnAttackTypes.h`), which P4 gives its server-time interval and a hook that returns the consequence. |
 | `UAethelnDodgeAbility` | GameCombat | Movement-carried ability. Commits cost and cooldown, opens the server windows, ends at `ActionEnd`, and ends an active block (Q10). |
-| `UAethelnBlockAbility` | GameCombat | Held ability (`bAcceptsRelease`). Registers and clears the defense slot, owns the Guard hook and the Guard break. |
+| `UAethelnBlockAbility` | GameCombat | Held ability (`bAcceptsRelease`). Registers and ends the defense slot, owns the Guard hook, the Guard break, and its own `State.Dead` binding; overrides `CheckCost` for Q8. |
 | `UAethelnGuardPressureEffect` | GameCombat | Instant effect: negated Guard modifier from `SetByCaller.Pressure.Guard`. |
-| `UAethelnAbilitySystemComponent` (extend) | GameCombat | The movement-carried seam entry and its owner outcome RPC; the defense slot (`GetActiveDefense`); the avoidance window (`IsAvoidingAt`); the `State.Dead` binding that ends defense. |
+| `UAethelnCombatTimelineSubsystem` (#60, extend) | GameCombat | Holds the defense slot per ASC (`SetDefenseState` refuses a second held slot, `EndDefenseState` stamps the exclusive end, `FindDefenseState`); step 3 asks `IsAvoidingAt`; step 4 evaluates the slot's interval and `AethelnAttackTimeline::IsInsideDefenseArc` at the contact time. |
+| `UAethelnAbilitySystemComponent` (extend) | GameCombat | The movement-carried seam entry and its owner outcome RPC; the avoidance window (`IsAvoidingAt`); the dodge's `State.Dead` binding; `CancelBlock`, which an accepted dodge calls (Q10). |
 | `AAethelnPlayerState` (extend) | GameCombat | Implements `IAethelnMovementActionAuthority` by forwarding to its ASC. |
 | `IAethelnCombatInputSink` (#60 P6, extend) | GameCore | P5 adds `RequestAbilityRelease(FGameplayTag AbilityId)` beside #60's press. |
 | `UAethelnPOCInputComponent` (extend) | GameUI | P5: dodge press (key per Q1) and right-mouse hold, Reticle mode only; Cursor entry releases a held block. |
@@ -555,18 +559,18 @@ sends a `Release` for a held block, as the #82 contract requires
 
 The owner decision requires the block to expose exactly three things to #60:
 a defense state tag, an authored defense arc, and a server hook for the Guard
-consequence. They live in one server-only slot on the ASC, which #260's Hold
-the Line also uses:
+consequence. They live in one server-only slot per ASC, held by #60's timeline
+subsystem, which #260's Hold the Line also uses:
 
 ```cpp
-/** The one active directional defense on an ASC. Server only. */
-struct GAMECOMBAT_API FAethelnActiveDefense
+/** The one active directional defense of a target. Server only. */
+struct FAethelnDefenseState
 {
 	FGameplayTag StateTag;                    // State.Blocking (Hold the Line: its own state tag)
 	double ActiveFromServerTime = 0.0;        // inclusive: S + RaiseSeconds
 	double ActiveUntilServerTime = TNumericLimits<double>::Max(); // exclusive: set on release, break, or cancel
-	float ArcHalfAngleDegrees = 0.0f;         // authored, TBD
-	TDelegate<EAethelnBlockConsequence(const FAethelnBlockedContact&)> OnBlockedHit; // #60 calls it once per blocked contact
+	double ArcDegrees = 0.0;                  // full arc: 2 * ProvisionalArcHalfAngleDegrees, TBD
+	FAethelnBlockedHook OnBlocked;            // returns EAethelnBlockConsequence; #60 calls it once per blocked contact
 };
 ```
 
@@ -580,14 +584,19 @@ struct GAMECOMBAT_API FAethelnActiveDefense
   actor yaw and the incoming direction is at most `ArcHalfAngleDegrees`
   (inclusive). The incoming direction is the horizontal vector from the
   defender's capsule center to the attacker's combat-frame origin at the
-  contact time, not the contact location or the sweep direction; #60 must
-  adopt it as its "contact direction" (T3). #60 already interpolates that
+  contact time, not the contact location or the sweep direction; #60 adopts
+  it as its "contact direction" (T3, signed off 2026-10-11; the evaluator is
+  `AethelnAttackTimeline::IsInsideDefenseArc`). #60 already interpolates that
   origin per sub-step and holds defenders at their end-of-frame pose. A
-  zero-length direction is outside (fails closed). The actor yaw is
+  zero-length direction is outside (fails closed). The inclusive edge is
+  evaluated as the dot product against the half-angle's cosine, within a
+  1e-9 rounding tolerance. The actor yaw is
   server-simulated and rate-limited on the ground; the control rotation is
   client-supplied and is never used.
 - **One slot.** Registering while a slot is active fails closed. Block and Hold
-  the Line block each other (Q10), so this cannot happen through content. The
+  the Line block each other (Q10), so this cannot happen through content. A
+  slot without a bound Guard hook is refused, and a slot whose hook's owner
+  has expired defends nothing, so no slot blocks for free. The
   block registers the slot before it commits: a failed registration ends the
   activation uncommitted, which #19's step 9 reports as `InternalFailure` with
   nothing spent, and a failed commit clears the slot.
@@ -618,7 +627,12 @@ The block's hook:
    `ActiveUntilServerTime` to the contact time, ends the block activation,
    and removes `State.Blocking`. Per Q8 (owner-approved 2026-10-10) it also adds
    `State.GuardBroken` for `GuardBreakSeconds` (`TBD`), which the block lists
-   among its blocking tags. It returns `GuardBroken`.
+   among its blocking tags. P4 grants it through the shared duration effect
+   that cooldowns use, from the resolution time (at most one server frame
+   after the contact time); a zero duration grants nothing. `State.Dead`
+   removes it, so a respawned avatar never inherits a Guard break (Death,
+   Logout, and Recovery Safety in the combat document). It returns
+   `GuardBroken`.
 3. Otherwise returns `Blocked`.
 
 #60 records the returned consequence and stops resolving that contact. Per Q6
@@ -665,7 +679,8 @@ change halfway through a contact.
 | `ClientActivationOutcome(Sequence, Result)` (#19) | Owner, per block request | Reliable |
 | Movement correction with dodge state | Owner | Engine move response |
 | Replicated movement | Observers | Engine |
-| `State.Dodging`, `State.DodgeInvulnerable`, `State.Blocking`, `State.GuardBroken` | Owner and observers | Loose `TagOnly` tags |
+| `State.Dodging`, `State.DodgeInvulnerable`, `State.Blocking` | Owner and observers | Loose `TagOnly` tags |
+| `State.GuardBroken` | Owner (the effect, `Mixed` mode) and observers (minimal replicated tags) | Granted by the shared duration effect |
 | Result cues `Avoided`, `Blocked`, `GuardBroken` | Everyone relevant | #60's unreliable multicast |
 
 - **A separate outcome RPC.** Movement-carried outcomes do not share #19's
@@ -728,6 +743,8 @@ serves client and server. Block grant validation requires finite values,
 `GuardBreakSeconds >= 0`, `bAcceptsRelease`, and `State.Dead` among its
 blocking tags, plus the tags the adopted Q8 and Q10 answers name. Both fail
 closed. The keys live in shared `Config/DefaultGame.ini` for #19's reason.
+Neither ability has a section there yet: the unset production values fail
+grant, so neither is granted until #107 supplies values; tests use fixtures.
 
 ## Dependencies on #19
 
@@ -767,21 +784,25 @@ closed. The keys live in shared `Config/DefaultGame.ini` for #19's reason.
    #60 P3's operation identity and retained callback-safe lifetime. Every cost,
    tag or avatar callback must leave the active operation correctly identified;
    an obsolete operation cannot open a window or cancel its replacement.
+Items 2 to 5 are implemented by #18 P4, which landed second of the two, with
+the lead's sign-off on T2 and T3 as #60 owner (2026-10-11).
+
 2. **P4: time-exact avoidance (T2).** Step 3 asks `IsAvoidingAt(ContactTime)`
    for the dodge. `State.DodgeInvulnerable` stays out of the authored
    avoidance-tag set: an interval-backed tag is never checked by presence,
    because the driver removes it at a mid-frame boundary only after the
    frame's contacts (pass step 4), so a presence check would still avoid
    contacts after `InvulnerableEnd`. The tag serves gating and observers only.
-3. **P4: the defense step.** Step 4 reads `GetActiveDefense()`, evaluates the
-   slot's interval at the contact time and the arc as defined above, with the
-   incoming direction of T3 as "the contact direction", calls `OnBlockedHit`
-   once, records its consequence, and ends that contact's resolution. #60 P4's
-   test defense state uses the same slot.
+3. **P4: the defense step.** Step 4 reads the target's slot from the timeline
+   subsystem, evaluates the slot's interval at the contact time and the arc as
+   defined above, with the incoming direction of T3 as "the contact
+   direction", calls `OnBlocked` once, records its consequence, and ends that
+   contact's resolution. #60 P4's test defense state uses the same slot.
 4. **Guard pressure (Q7).** Guard pressure is attack-authored (owner-approved
-   2026-10-10), so #60's step definition gains `GuardPressure` with a
-   content-version bump, in whichever of #60 P4 and #18
-   P4 lands second.
+   2026-10-10), so #60's step definition gains `GuardPressure`, validated as
+   finite and non-negative at grant. No content version is bumped: the
+   production chain has no configured steps or version yet (they fail grant
+   until #107), so only test fixtures author it.
 5. **Result events.** The committed-result event uses subject `Dodge` for
    `Avoided` and `Block` for `Blocked` and `GuardBroken`.
 6. **The scope of steps 6a to 6d.** #60's Validation additions say the steps
@@ -872,7 +893,7 @@ drops chosen copies and models a reliable resend as a later arrival.
 | D10 | `Aetheln.GameCombat.Defense.DodgeWindowBoundaries` | P3 | H | `S` is the processing time; `IsAvoidingAt` is true at `S + InvulnerableStart` and false at `S + InvulnerableEnd`; each tag exists exactly over its window; a request at exactly `S + ActionEnd` is not blocked by the dodge; withheld moves neither extend nor shorten the window |
 | D11 | `Aetheln.GameCombat.Defense.DodgeEndToEnd` | P3 | H | A client pawn and a server pawn with the real PlayerState authority: an accepted dodge produces no correction and the predicted path; a predicted dodge refused for cooldown rolls back with one correction; the owner receives one outcome per flagged move |
 | D12 | `Aetheln.GameCombat.Defense.NetworkConditionsDodge` | P3 | H | The D5 profiles with the real authority: each dodge commits at most once, with no double cost or cooldown; the window starts at server arrival; outcomes arrive in order; a dropped flagged move commits nothing and gets no outcome, and the client resolves it as never simulated when the next outcome arrives; a refused flagged move (cooldown) followed by silence draws one token and sends one outcome, and nothing commits after the cooldown lapses; every profile asserts the server's simulated-move count |
-| D13 | `Aetheln.GameCombat.Defense.LifeStateCancelsDefense` | P3 (block rows P4) | H | `State.Dead` added through the test seam ends an active dodge window at that time, ends the server displacement, and ends a held block; later dodge and block requests get `ActivationBlocked`; re-possession revives no invulnerability or defense and resumes no displacement |
+| D13 | `Aetheln.GameCombat.Defense.LifeStateCancelsDefense` | P3 (block rows P4) | H | `State.Dead` added through the test seam ends an active dodge window at that time, ends the server displacement, ends a held block, and removes a Guard break; later dodge and block requests get `ActivationBlocked`; re-possession revives no invulnerability or defense and resumes no displacement |
 | D14 | `Aetheln.GameCombat.Defense.TeardownMidDodgeAndBlock` | P3 (block rows P4) | H | Unpossession, avatar destruction, and PlayerState teardown during the window and during a held block: one end, no window or slot afterwards, the cancel path ends the server displacement, re-possession resumes no displacement, and a new PlayerState starts clean |
 | D15 | `Aetheln.GameCombat.Defense.DodgeTelemetry` | P3 | H | Events and metrics per the table with a nonzero ordinal; a flood of flagged moves stays within #19's window bound; the public copy has no diagnostic code |
 | D16 | `Aetheln.GameCombat.Defense.RunsWithoutPresentation` | P3 (block rows P4) | H | Dodge and block run, end, and (from P4) resolve contacts with no mesh, montage, or notify |
@@ -932,7 +953,7 @@ files untouched.
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Dodge movement | GameCore only: first the loopback harness (see [Test Plan](#test-plan)); then the authority interface and definition structs, `FLAG_Custom_2`, dodge simulation state, displacement, custom move-data and move-response containers, `EndDodgeForAuthority`, the receiver method, the test accessor; D1 to D6 with a test authority; the `docs/movement-poc.md` flag note. No game code implements the authority yet, so no dodge runs in game. | P1; Q2, Q3, Q14, Q15, and Q20 approved 2026-10-07 |
 | **P3** Dodge authority | Dodge tags, `UAethelnDodgeAbility`, the selected movement-carried entry and outcome RPC, the ordinal, the PlayerState authority, windows and boundaries, `IsAvoidingAt`, operation/callback-safe commit and lifecycle cancellation, telemetry, the #19 fixture changes; D7 to D16 (dodge rows). | P2 (PR #282); #19 P4 cost and cooldown (PR #270); #60 P3 operation identity and callback safety (PR #291); Q4 and Q16 (owner-approved 2026-10-10); T1 selected. #60's `RegisterStep` takes only chain steps 1 to 3, so P3 itself adds the non-chain boundary registration (`RegisterNonChainBoundaries`) to the #60 timeline subsystem. |
-| **P4** Block and contact integration | Block tags, `UAethelnBlockAbility`, the defense slot, `UAethelnGuardPressureEffect`, the Guard hook and break, the Q10 relations; D13, D14, D16 block rows, D17 to D25. | P3, #60 P4, the answers to Q6 to Q8, Q10, Q12, and Q17 to Q19 (owner-approved 2026-10-10; Q12's airborne facing bound exists in the movement component since [#306](https://github.com/ShayShimoni/aetheln-online/issues/306), so the gate is met), and #60's sign-off on T2 and T3 |
+| **P4** Block and contact integration | Block tags, `UAethelnBlockAbility`, the defense slot, `UAethelnGuardPressureEffect`, the Guard hook and break, the Q10 relations; D13, D14, D16 block rows, D17 to D25. | P3, #60 P4, the answers to Q6 to Q8, Q10, Q12, and Q17 to Q19 (owner-approved 2026-10-10; Q12's airborne facing bound exists in the movement component since [#306](https://github.com/ShayShimoni/aetheln-online/issues/306), so the gate is met), and the lead's sign-off on T2 and T3 as #60 owner (2026-10-11) |
 | **P5** Bindings and two-client evidence | The receiver and input-sink release, the GameUI dodge key and right-mouse hold, Cursor-entry release; D26, D27. | P4, #60 P6 (input sink), #19 P5 (input-enabled pawn), Q1 |
 
 Guard and Endurance recovery are not #18 phases. By Q9 (owner-approved
@@ -1000,9 +1021,10 @@ Decisions rows 10 to 24.
 **Technical selection:** T1 (#19) is selected by the lead records linked in
 [Document Status](#document-status), with the implementation checklist above.
 It is no longer an open recommendation. It accepts no tuning, refund or runtime
-evidence. The remaining technical decisions await #60 sign-off:
+evidence. The lead signed off T2 and T3 as #60 owner on 2026-10-11, and #18 P4
+implements both; they are recorded here as decision history:
 
-| # | Decision | Recommendation |
+| # | Decision | Selected |
 | --- | --- | --- |
 | T2 (#60) | Evaluate avoidance and the defense slot at the contact time (`IsAvoidingAt`, the slot's interval), or by tag presence when #60 resolves the contact. | At the contact time. #60's driver applies boundaries after it resolves the frame's contacts, so a tag check cannot tell a contact before a mid-frame window boundary from one after it. The #60 changes are dependencies 2 and 3 in [Dependencies on #60](#dependencies-on-60). |
 | T3 (#60) | What "the contact direction" in #60's step 4 is: the yaw-only vector from the defender's capsule center to the attacker's combat-frame origin at the contact time, the direction to the contact location, or the sweep direction. | The vector to the attacker's combat-frame origin (see [Defense state exposed to #60](#defense-state-exposed-to-60)). It depends only on where the attacker stands, so a shape cannot reach around a block. The cost: a wide sweep that reaches the defender's flank while the attacker stands in front is blocked. #60 implements it in dependency 3. |
@@ -1032,7 +1054,8 @@ the remapping mechanism and controller layout (#82); display names.
    the arc up to 180 degrees each time. This is a residual risk for #18 P4,
    whose only open option is to disable the snap while a block is held. The 720 degrees/s bound is measured in
    client-reported move time, so it depends on residual risk 2 (time-discrepancy
-   detection is off); ground facing has the same limit. Owner: #17.
+   detection is off); ground facing has the same limit. Owner: #17. Disabling the snap while a
+   block is held is an open owner decision; P4 does not implement it.
 4. **Move data has no schema version** (#82 F10). The dodge field in the
    custom move data relies on build-identical clients and servers. F10's
    revisit trigger, "when a flag is added", fires with `FLAG_Custom_2`; this

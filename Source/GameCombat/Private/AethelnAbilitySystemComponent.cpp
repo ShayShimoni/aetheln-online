@@ -824,7 +824,7 @@ FAethelnDodgeMovementDefinition UAethelnAbilitySystemComponent::GetDodgeMovement
 
 bool UAethelnAbilitySystemComponent::CanPredictDodge() const
 {
-	// ponytail: the commitment-window check from the owner's ClientCombatActivation record is P5 (D26).
+	// P5 (D26): the commitment-window check from the owner's ClientCombatActivation record.
 	const FGameplayAbilitySpec* Spec = nullptr;
 	const UAethelnDodgeAbility* Dodge = FindDodgeSource(Spec);
 	return Dodge != nullptr && GetDodgeMovementDefinition().IsValid()
@@ -949,6 +949,14 @@ void UAethelnAbilitySystemComponent::CancelDodge()
 	}
 	const UWorld* World = GetWorld();
 	CloseDodgeWindow(OperationId, World != nullptr ? World->GetTimeSeconds() : 0.0, true);
+}
+
+void UAethelnAbilitySystemComponent::CancelBlock()
+{
+	if (!IsOwnerActorAuthoritative()) { return; }
+	// The block's cancel path ends its slot and State.Blocking at this processing time.
+	const FGameplayAbilitySpec* Spec = FindSpecForAbilityId(AethelnGameplayTags::Ability_Block);
+	if (Spec != nullptr && Spec->IsActive()) { CancelAbilityHandle(Spec->Handle); }
 }
 
 bool UAethelnAbilitySystemComponent::AdmitMessage(EMessageRoute Route, uint32 Sequence, float ClientTimeStamp)

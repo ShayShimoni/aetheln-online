@@ -355,8 +355,8 @@ bool FAethelnAvoidanceDefenseAndRelationTest::RunTest(const FString& Parameters)
 		FAethelnDefenseState Defense;
 		Defense.StateTag = AethelnCombatTestTags::Test_Defending;
 		Defense.ArcDegrees = 90.0; // test-only arc
-		Defense.OnBlocked.BindLambda([&HookCalls](const FAethelnCombatResult&) { ++HookCalls; });
-		F.Timeline->SetDefenseState(*TargetAsc, Defense);
+		Defense.OnBlocked.BindLambda([&HookCalls](const FAethelnBlockedContact&) { ++HookCalls; return EAethelnBlockConsequence::Blocked; });
+		TestTrue(TEXT("The test slot registers"), F.Timeline->SetDefenseState(*TargetAsc, Defense));
 		TargetAsc->AddLooseGameplayTag(AethelnCombatTestTags::Test_Defending);
 		F.Press(); F.AdvanceTo(0.5);
 		if (TestEqual(TEXT("One result either way"), F.Results.Num(), 1))
@@ -365,10 +365,32 @@ bool FAethelnAvoidanceDefenseAndRelationTest::RunTest(const FString& Parameters)
 		}
 		TestEqual(TEXT("The defense hook runs once per block"), HookCalls, bFacingAttacker ? 1 : 0);
 		TestEqual(TEXT("A block applies no damage here; the hook owns its consequence"), Health(*Target), bFacingAttacker ? 40.0f : 35.0f);
-		TargetAsc->RemoveLooseGameplayTag(AethelnCombatTestTags::Test_Defending);
+		// #18 T2: the slot's interval decides, not the state tag. The tag stays; the ended slot defends nothing.
+		F.Timeline->EndDefenseState(*TargetAsc, F.World.World->GetTimeSeconds());
 		F.Press(); F.AdvanceTo(1.0);
-		TestEqual(TEXT("Without the state tag no target is defending"), HookCalls, bFacingAttacker ? 1 : 0);
+		TestEqual(TEXT("An ended slot defends nothing, whatever tag the target holds"), HookCalls, bFacingAttacker ? 1 : 0);
+		TargetAsc->RemoveLooseGameplayTag(AethelnCombatTestTags::Test_Defending);
 		TestEqual(TEXT("The undefended hit damages"), Health(*Target), bFacingAttacker ? 35.0f : 30.0f);
+	}
+	{
+		// #18 P4 fails closed: a slot without a hook, or with a hook whose owner expired, blocks nothing for free.
+		FFixture F; if (!F.Init(*this)) { return false; }
+		AAethelnCombatAICharacter* Target = F.SpawnTarget(*this, FVector(60.0, 0.0, 0.0));
+		if (Target == nullptr) { return false; }
+		Target->SetActorRotation(FRotator(0.0, 180.0, 0.0));
+		UAethelnAbilitySystemComponent* TargetAsc = Target->GetAethelnAbilitySystemComponent();
+		FAethelnDefenseState Hookless;
+		Hookless.ArcDegrees = 360.0;
+		TestFalse(TEXT("A slot without a hook is refused"), F.Timeline->SetDefenseState(*TargetAsc, Hookless));
+		UGameplayEffect* HookOwner = AethelnCombatTests::MakeTestEffect(EGameplayEffectDurationType::Instant); // any transient UObject
+		FAethelnDefenseState Expiring;
+		Expiring.ArcDegrees = 360.0;
+		Expiring.OnBlocked.BindWeakLambda(HookOwner, [](const FAethelnBlockedContact&) { return EAethelnBlockConsequence::Blocked; });
+		TestTrue(TEXT("A slot with a live hook registers"), F.Timeline->SetDefenseState(*TargetAsc, Expiring));
+		HookOwner->MarkAsGarbage();
+		F.Press(); F.AdvanceTo(0.5);
+		if (TestEqual(TEXT("One result"), F.Results.Num(), 1)) { TestEqual(TEXT("An expired hook defends nothing: an ordinary hit"), F.Results[0].Outcome, EOutcome::Hit); }
+		TestEqual(TEXT("The undefended hit damages"), Health(*Target), 35.0f);
 	}
 	{
 		FFixture F; if (!F.Init(*this)) { return false; }
@@ -391,7 +413,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnNoMaximumModifiersTest,
 bool FAethelnNoMaximumModifiersTest::RunTest(const FString& Parameters)
 {
 	// Every effect #60 adds. A later #60 effect joins this list.
-	for (const UGameplayEffect* Effect : { static_cast<const UGameplayEffect*>(GetDefault<UAethelnDamageEffect>()) })
+	for (const UGameplayEffect* Effect : { static_cast<const UGameplayEffect*>(GetDefault<UAethelnDamageEffect>()),
+		static_cast<const UGameplayEffect*>(GetDefault<UAethelnGuardPressureEffect>()) })
 	{
 		TestEqual(TEXT("No duration modifier on a current value"), Effect->DurationPolicy, EGameplayEffectDurationType::Instant);
 		for (const FGameplayModifierInfo& Modifier : Effect->Modifiers)
@@ -400,7 +423,7 @@ bool FAethelnNoMaximumModifiersTest::RunTest(const FString& Parameters)
 				&& Modifier.Attribute != UAethelnCombatAttributeSet::GetMaxEnduranceAttribute()
 				&& Modifier.Attribute != UAethelnCombatAttributeSet::GetMaxGuardAttribute());
 		}
-		TestEqual(TEXT("Damage modifies Health only"), Effect->Modifiers.Num(), 1);
+		TestEqual(TEXT("Damage and Guard pressure each modify one current value"), Effect->Modifiers.Num(), 1);
 	}
 	return true;
 }
