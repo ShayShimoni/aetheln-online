@@ -1098,6 +1098,11 @@ public static class FakeEditor {
 	Assert-True ($HostTools.mode -eq 'prebuilt' -and $HostTools.status -eq 'verified' -and $HostTools.engineRevision -eq $CanonicalEnginePin) 'The verified prebuilt boundary must be recorded in the timing record.'
 	Assert-True ($HostTools.attestationSha256 -ceq $AttestationSha256 -and [string] $HostTools.attestationCreatedUtc -ceq [string] $Attestation.createdUtc -and $HostTools.attestationSchemaVersion -eq 2 -and $HostTools.attestedProjectRevision -ceq $Revision) 'The timing record must bind the verified record hash, creation time, schema, and attested project revision.'
 	Assert-True ($Run.Timing.identity.runnerName -eq 'fixture-runner') 'The forwarded runner name must be bound into the timing identity.'
+	# Issue #267: the engine runner's toolchain root ends in a separator. A quoted
+	# trailing backslash must not escape the closing quote of the child argument.
+	$Run = Invoke-PackagingCase 'PrebuiltClientTrailingSeparator' $PrebuiltArguments -Override @{ Stage = 'Client'; LinuxToolchainRoot = ($ToolchainRoot + '\') }
+	Assert-True ($null -eq $Run.Failure) "A prebuilt client phase whose toolchain root ends in a separator must pass; observed '$($Run.Failure)'."
+	Assert-HostEditorBuildStep $Run 'passed' -Context 'A toolchain root with a trailing separator'
 	$UatBefore = Get-CaptureCount $CapturePath
 	$Run = Invoke-PackagingCase 'PrebuiltAll' $PrebuiltArguments
 	Assert-True ($null -eq $Run.Failure) "A local prebuilt run without the gate hash must pass; observed '$($Run.Failure)'."
@@ -1181,6 +1186,7 @@ public static class FakeEditor {
 			if ($BuildCase.Post -ceq 'nodotnet') { Rename-Item -LiteralPath ($FakeDotnetPath + '.hidden') -NewName 'dotnet.exe' }
 		}
 		Assert-ReasonFailure $Run $BuildCase.Code -Context "An in-phase editor build ($($BuildCase.Label))"
+		if ($BuildCase.Code -ceq 'host_editor_capture_failed') { Assert-True ($Run.Failure -cmatch '\(child exit 1, result (missing|infrastructure failure build_capture_failed); first wrapper error: ') "A capture failure ($($BuildCase.Label)) must report the child exit code, the record state, and the first wrapper error; observed '$($Run.Failure)'." }
 		Assert-HostEditorBuildStep $Run 'failed' -Context "An in-phase editor build ($($BuildCase.Label))"
 	}
 	Assert-True ((Get-CaptureCount $CapturePath) -eq $UatBefore) 'A failed in-phase editor build must stop before verification and UAT.'

@@ -198,8 +198,9 @@ function Invoke-HostEditorModulesBuild {
 	# needs. It runs the reviewed CI wrapper as a child process, so its exit and
 	# Add-Type stay isolated and its compiler selection matches the shared engine
 	# tree (TA-020); the wrapper adds the per-target UBT flags. Its console goes
-	# to files under LogRoot and nothing from it reaches this output, so every
-	# failure below is one fixed path-free reason containing 'failed'.
+	# to files under LogRoot. Every failure below is one path-free reason line
+	# containing 'failed'; a missing or invalid result record adds the child exit
+	# code and the first wrapper error lines with every path replaced.
 	$EvidenceRoot = Join-Path $ResolvedLogs 'host-editor-build'
 	New-Item -ItemType Directory -Path $EvidenceRoot | Out-Null
 	$Wrapper = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../ci/InitialPreparation.BuildInvocation.ps1')).Path
@@ -209,26 +210,54 @@ function Invoke-HostEditorModulesBuild {
 		Assert-PackageCompileResources $script:PackageCompileResources $false
 		$EditorActionLimit = $script:PackageCompileResources.effectiveActionLimit
 	}
-	$ArgumentText = '-NoProfile -NonInteractive -File "{0}" -Target AethelnOnlineEditor -Platform Win64 -ActionLimit {5} -EngineRoot "{1}" -TargetRoot "{2}" -LinuxToolchainRoot "{3}" -EvidenceRoot "{4}"' -f $Wrapper, $ResolvedEngine, $ProjectRoot, $ResolvedToolchain, $EvidenceRoot, $EditorActionLimit
+	# A path ending in a backslash (the runner's toolchain root does) would escape
+	# its closing quote and swallow the next argument, so double a trailing run
+	# (Windows argument rules). The wrapper rejects quotes inside paths.
+	$ArgumentPaths = @($Wrapper, $ResolvedEngine, $ProjectRoot, $ResolvedToolchain, $EvidenceRoot) -replace '\\+$', '$0$0'
+	$ArgumentText = '-NoProfile -NonInteractive -File "{0}" -Target AethelnOnlineEditor -Platform Win64 -ActionLimit {5} -EngineRoot "{1}" -TargetRoot "{2}" -LinuxToolchainRoot "{3}" -EvidenceRoot "{4}"' -f ($ArgumentPaths + $EditorActionLimit)
 	$Result = $null
 	$Valid = $false
+	$ChildExit = 'none'
+	$Problem = 'result missing'
+	$ErrorLog = Join-Path $EvidenceRoot 'wrapper-console-error.log'
 	try {
 		if ($SplitRecipe) { $EditorBuildInputs = Get-PackageBuildInputProof }
-		$Child = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $ArgumentText -WorkingDirectory $ProjectRoot -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $EvidenceRoot 'wrapper-console.log') -RedirectStandardError (Join-Path $EvidenceRoot 'wrapper-console-error.log')
+		$Child = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $ArgumentText -WorkingDirectory $ProjectRoot -NoNewWindow -PassThru -RedirectStandardOutput (Join-Path $EvidenceRoot 'wrapper-console.log') -RedirectStandardError $ErrorLog
 		# Reading the handle keeps ExitCode available after the child exits.
 		$null = $Child.Handle
 		$Child.WaitForExit()
+		$ChildExit = $Child.ExitCode
 		# The cross-check of InitialPreparation.Build.ps1: a bounded schema-1
 		# record for this target whose native exit equals the child's exit code.
 		$ResultFile = Get-Item -LiteralPath (Join-Path $EvidenceRoot 'native-result.json')
+		$Problem = 'result oversize'
 		if ($ResultFile.Length -le 4096) {
+			$Problem = 'result invalid'
 			$Result = Get-Content -LiteralPath $ResultFile.FullName -Raw | ConvertFrom-Json
+			if ([string] $Result.infrastructureFailure -cmatch '^[a-z_]{1,32}$') { $Problem = 'result infrastructure failure ' + $Result.infrastructureFailure }
 			$Valid = ($Result.schemaVersion -eq 1 -and $Result.target -ceq 'AethelnOnlineEditor' -and $Result.platform -ceq 'Win64' -and
 				$null -eq $Result.infrastructureFailure -and ($Result.nativeExitCode -is [int] -or $Result.nativeExitCode -is [long]) -and
 				$Child.ExitCode -eq $Result.nativeExitCode)
 		}
 	} catch { Write-Verbose "The in-phase project editor build result could not be read: $($_.Exception.Message)" }
-	if (-not $Valid) { throw 'host_editor_capture_failed: the in-phase project editor build failed to produce a valid result record.' }
+	if (-not $Valid) {
+		# The first wrapper error lines (for example a parameter-binding error that
+		# stops the child before it writes a record), bounded, on one line, with
+		# every known root and any remaining drive path replaced.
+		$FirstError = 'none'
+		if (Test-Path -LiteralPath $ErrorLog -PathType Leaf) {
+			$Reader = New-Object IO.StreamReader($ErrorLog)
+			try { $Buffer = New-Object char[] 2048; $Text = New-Object string($Buffer, 0, $Reader.Read($Buffer, 0, $Buffer.Length)) } finally { $Reader.Dispose() }
+			$Text = (@($Text -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Select-Object -First 4) -join ' '
+			foreach ($Root in @($Wrapper, $EvidenceRoot, $ResolvedLogs, $ResolvedToolchain, $ResolvedEngine, $ProjectRoot | Sort-Object Length -Descending)) {
+				$Text = [regex]::Replace($Text, [regex]::Escape($Root.TrimEnd('\', '/')), '<path>', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+			}
+			$Text = $Text -replace '[A-Za-z]:[\\/]\S*', '<path>'
+			if ($Text.Length -gt 300) { $Text = $Text.Substring(0, 300) }
+			if ($Text) { $FirstError = $Text }
+		}
+		throw "host_editor_capture_failed: the in-phase project editor build failed to produce a valid result record (child exit $ChildExit, $Problem; first wrapper error: $FirstError)."
+	}
 	# UBT exit 5 (-NoEngineChanges): the build would rewrite an existing engine file.
 	if ($Result.nativeExitCode -eq 5) { throw 'host_editor_engine_changes: the in-phase project editor build failed because it would rewrite existing engine files; the engine needs an authorized build and a new attestation.' }
 	if ($Result.nativeExitCode -ne 0) { throw 'host_editor_build_failed: the in-phase project editor build failed.' }
