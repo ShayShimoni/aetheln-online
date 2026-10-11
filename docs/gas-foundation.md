@@ -28,10 +28,11 @@ That review disclosed earlier P2 movement-test authorship and did not freshly
 approve those authored changes. The contract below amends the ordinary seam;
 proposed entry/outcome names are not claims that APIs already exist. #18 P2
 movement merged in [PR #282](https://github.com/ShayShimoni/aetheln-online/pull/282).
-#60 P3's callback-safe operation and external-boundary integration and #19 P4
-integration readiness remain prerequisites for #18 P3; this selection does not
-satisfy them, the remaining product decisions, two-client PIE, or either whole
-issue's acceptance criteria.
+#60 P3's callback-safe operations and #19 P4 integration readiness remain
+prerequisites for #18 P3, which itself adds the non-chain boundary registration
+to the #60 timeline subsystem. This selection does not satisfy those
+prerequisites, tuning, two-client PIE, or either whole issue's acceptance
+criteria.
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
@@ -138,7 +139,7 @@ only if they are declared in GameCore.
 | `UAethelnGameplayAbility` (abstract) | GameCombat | Base ability: reads config, overrides `CheckCost`, `ApplyCost`, `GetCooldownTags`, `ApplyCooldown`, `CanActivateAbility` (the choke point), and `CommitAbility` (records the seam's result slot), refuses the partial `CommitAbilityCost` and `CommitAbilityCooldown`, fixes the net and instancing policies, leaves the engine cost and cooldown effect classes null. |
 | `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnGateStepAbility`, `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility` skeletons. |
 | `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first). All magnitudes set by caller. |
-| `AAethelnCombatGameMode` | GameCombat | Derives from `AGameModeBase` (for example through `AAethelnGameModeBase`), never `AGameMode`: `AGameMode::FindInactivePlayer` (`Runtime/Engine/Private/GameMode.cpp:687-751`) would reuse the old PlayerState on reconnect, which breaks the sequence policy and T34. A later base-class change must revisit both. Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by extending `scripts/build_movement_poc.py`, a config soft-class path, or a `?game=` URL, never by editing binary assets by hand. |
+| `AAethelnCombatGameMode` | GameCombat | Derives from `AGameModeBase` (for example through `AAethelnGameModeBase`), never `AGameMode`: `AGameMode::FindInactivePlayer` (`Runtime/Engine/Private/GameMode.cpp:687-751`) would reuse the old PlayerState on reconnect, which breaks the sequence policy and T34. A later base-class change must revisit both. Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by a config soft-class path, never by editing binary assets by hand: `InputEnabledPawnClass` (`Config/DefaultGame.ini`, `/Game/POC/BP_MovementPOCCharacter`) is returned from `GetDefaultPawnClassForController`, and an empty or unloadable path keeps `DefaultPawnClass`. The mode is not the project default; a launch selects it with `?game=/Script/GameCombat.AethelnCombatGameMode`, which overrides the map's game mode. |
 | `AAethelnCombatAICharacter` | GameCombat | Base for Issue [#20](https://github.com/ShayShimoni/aetheln-online/issues/20)'s enemy: its own ASC in Minimal mode and its own attribute set. |
 
 ### Why Mixed for players and Minimal for AI
@@ -384,7 +385,7 @@ InstancedPerActor, no triggers, no spec input id, and no direct input
 replication. The dodge's finite, ordered definition and cost-or-cooldown rule
 must be checked through the actual PlayerState grant path (see
 [Dodge grant validation](dodge-and-block.md#server-owned-windows), including
-the unresolved Q4 choice). `FindGrantProblem` is non-virtual at the reviewed
+the Q4 rule, owner-approved 2026-10-10). `FindGrantProblem` is non-virtual at the reviewed
 GAS baseline `63f43184c6a775080f337152f1f694286df55d17`: a hidden derived method
 cannot satisfy this contract when the caller holds a base ability pointer.
 Implementation must introduce a reviewed virtual hook or an equivalent
@@ -514,8 +515,9 @@ dedicated-server route.
 The entry uses the validation substitutions below, the same one-spec scope,
 eligibility checks and full commit as the ordinary entry. Before either entry
 validates, apply the requester's due #60 boundaries to the server processing
-time. #60 P3 must supply reviewed external-boundary registration and operation
-lifetime protection; this document names no new boundary API. Dodge windows
+time. #60 P3 supplies operation lifetime protection; #18 P3 adds the non-chain
+boundary registration to the #60 timeline subsystem, and this document names no
+new boundary API. Dodge windows
 are authored half-open intervals from that processing time, never from the
 client timestamp or prediction.
 
@@ -636,9 +638,10 @@ cost, tag, cancellation or avatar callbacks can replace or end an operation
 before commit returns. Revalidate the actual operation and avatar after those
 callbacks; neither open a stale dodge window/displacement nor cancel a valid
 replacement. Rejecting before commit leaves no spend, cooldown, tags or
-activation id; later cancellation must follow a future owner-selected refund
-policy, not a fabricated rollback. Q16's truncated-displacement refund and
-#60 OQ5's queued/interrupted refund policy remain unresolved; T1 selects neither.
+activation id; later cancellation follows the owner-selected refund policy, not
+a fabricated rollback. Q16 (owner-approved 2026-10-10) refunds nothing when a
+dodge's displacement is cut short; #60 OQ5's queued/interrupted refund policy
+remains unresolved, and T1 selects neither.
 `State.Dead`, unpossession, avatar loss and
 PlayerState teardown cancel the actual operation, close its boundaries and end
 server displacement once. Re-possession revives none of them. See
@@ -912,7 +915,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T20 | `Aetheln.GameCombat.Abilities.DefinitionsAndVersions` | P4 | H | `DefaultGame.ini` grants exactly the three skeletons, in order, and every definition passes grant validation; unique `Ability.` tags whose native tag comments are their semantic IDs, `ContentVersion >= 1` loaded from the ini, `InstancedPerActor` and ServerOnly policies (nothing predicted), exactly one unique cooldown tag, null effect classes, `bAcceptsRelease = false`; through the configured grant list, a newer or older content version gives `IncompatibleVersion` and the matching one is accepted |
 | T21 | `Aetheln.GameCombat.Telemetry.ActivationOutcomes` | P3 | H | One event and one metric per ordinary outcome, matching the telemetry table; activation id empty on rejections, ability id only from step 6; a valid Release event carries the running activation id; public copy has no diagnostic code; zero-sequence rejections and refused stock-route calls are metric-only; a rate-limited flood gives one event and one outcome on entry and one aggregated metric on exit; a stock-route flood during a window folds into the suppressed count; teardown while limited flushes the exit metric. The test calls `SetRuntimeContext` itself (as `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:251` does), because `TryComposeCorrelation` drops every event without one (`Source/GameNet/Private/AethelnObservabilitySubsystem.cpp:149-152`). |
 | T22 | `Aetheln.Observability.Contracts.SchemaAndVocabulary` (update) | P3 | H | `RateLimited` is known, its string `rate-limited` is stable, the schema version is still 1 |
-| T23 | `Aetheln.GameCombat.Net.ClientAvatarConvergence` | P5 | P | On both clients the avatar is null before possession and equals the pawn after spawn, re-possession, and unpossession, including when the PlayerState arrives after the pawn |
+| T23 | `Aetheln.GameCombat.Net.ClientAvatarConvergence` | P5 | P | On both clients the avatar is null before possession, equals the pawn after spawn and re-possession, and is null again after unpossession, including when the PlayerState arrives after the pawn |
 | T24 | `Aetheln.GameCombat.Net.AttributeReplication` | P5 | P | All six attributes reach the owner only, at the provisional frequency rather than 1 Hz |
 | T25 | `Aetheln.GameCombat.Net.MixedEffectReplication` | P5 | P | The owner gets the full cooldown effect with time remaining; the other client sees only the tag |
 | T26 | `Aetheln.GameCombat.Net.OutcomeOwnerOnly` | P5 | P | The outcome reaches the owning client only, reliably |
@@ -968,7 +971,7 @@ leaves the spike files untouched.
 | **P2** ASC foundation | Native tags (`Source/GameCore/GameCore.Build.cs`, `AethelnGameplayTags.*`); `AethelnPlayerState.*`; `AethelnAbilitySystemComponent.*` (with `FindForPawn`, no seam yet); the attribute set; the init effect; the combat game mode; the AI character base; `Config/DefaultGame.ini` sections; T1 to T9, T33, T34, using a test-only long-running ability, all in `Source/GameTests/Private/` (`GameTests.Build.cs` gains `GameCombat`, `GameplayAbilities`, and `GameplayTags`). | P1 |
 | **P3** Seam and telemetry | `AethelnActivationTypes.h`; in `AethelnAbilitySystemComponent.*`: the seam RPC, static validator, rate bucket, two stock-route overrides, seam scope and result slot, owner outcome, and telemetry; in `AethelnPlayerState.*`: grant validation; the base `AethelnGameplayAbility.*` with the choke point (cost and cooldown arrive in P4); `RateLimited` in `Source/GameNet/Public/AethelnObservability.h` and its test; T10 to T16, T21, T22, T31 with test-only abilities; the append-only rule in `docs/observability-and-crash-diagnostics.md`. | P2 |
 | **P4** Abilities | Cost and cooldown overrides on the base ability, the shared effects, the three skeletons (`AethelnOathscarAbilities.*`), the grant list and per-ability config, T17 to T20. | P3 |
-| **P5** Two-client evidence | Select the input-enabled pawn with `AAethelnCombatGameMode` by one of the three routes in Class Layout. T23 to T28 as manual PIE steps recorded in the PR. This is also the feel test after which the owner answers whether #19 can close without P6. | P4 |
+| **P5** Two-client evidence | Select the input-enabled pawn with `AAethelnCombatGameMode` by the config soft-class route in Class Layout, with the game mode chosen per launch by `?game=`. T23 to T28 as manual PIE steps recorded in the PR. Until #60 and #82 bind ability input, the non-shipping console commands `Aetheln.Combat.Request <AbilityId> [Press\|Release]` and `Aetheln.Combat.Direct` start an ability through the seam and call the stock client routes by hand, and the possession and outcome log lines show the result. This is also the feel test after which the owner answers whether #19 can close without P6. | P4 |
 | **P6** Predicted Hold the Line (gated) | Batching override, `ServerSubmitPredictedActivation`, the Hold the Line policy change, the grant-validation allowance, T29 under network emulation, and the TC-008 update. | P5 and the owner's decision |
 
 Not part of #19: ability input bindings (they go with #60 and #82); damage and
@@ -1045,7 +1048,9 @@ All stay `TBD` until the named owner decides.
    hold-and-release (which would set `bAcceptsRelease`). Owners: #107 and the
    owner.
 6. **Blocking and cancel relations** among the three actives, the basic chain,
-   dodge, and block. Owners: #60 and #18 content.
+   dodge, and block. Owners: #60 and #18 content. For dodge and block, #18's
+   Q10 and Q17 (owner-approved 2026-10-10) answer it; the three actives' relations
+   stay open.
 7. **Cooldown and attribute behavior across death, respawn, and reconnect**,
    including closing the reconnect gap. Owner: #21.
 8. **What opponents may see** of the six attributes. Owner: #61.
