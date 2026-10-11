@@ -116,6 +116,9 @@ bool UAethelnCombatTimelineSubsystem::RegisterStep(UAethelnAbilitySystemComponen
 {
 	AActor* Avatar = ASC.GetAvatarActor();
 	if (!CanRegisterStep(ASC) || Avatar == nullptr || !Record.ActivationId.IsValid() || Record.ChainStep < 1 || Record.ChainStep > 3) { return false; }
+	// A step never starts in the future: request starts use the receipt time and buffered starts S + LinkOpen <= Now,
+	// and the pass samples each step from its start.
+	if (!ensure(Record.StartServerTime <= GetWorld()->GetTimeSeconds())) { return false; }
 	Record.InstigatorCombatId = GetOrAssignCombatId(ASC);
 	FStep& Entry = Steps.AddDefaulted_GetRef();
 	Entry.AbilitySystem = &ASC; Entry.Avatar = Avatar; Entry.Definition = Definition; Entry.Record = Record;

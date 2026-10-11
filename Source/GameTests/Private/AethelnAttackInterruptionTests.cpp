@@ -118,8 +118,8 @@ bool FAethelnAttackInterruptionTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("The chain continues"), F.Player.AbilitySystem->GetChainStateForTests().bExists);
 		TestEqual(TEXT("The player's later contact still lands"), Health(*Far->GetAethelnAbilitySystemComponent()), 35.0f);
 	}
-	// A lethal target, an avoiding target and a blocking target are not interrupted.
-	for (EOutcome Expected : { EOutcome::Hit, EOutcome::Avoided, EOutcome::Blocked })
+	// A lethal target, an avoiding target, a blocking target and a guard-broken target are not interrupted.
+	for (EOutcome Expected : { EOutcome::Hit, EOutcome::Avoided, EOutcome::Blocked, EOutcome::GuardBroken })
 	{
 		const bool bLethal = Expected == EOutcome::Hit;
 		FFixture F; if (!F.Init(*this)) { return false; }
@@ -131,11 +131,13 @@ bool FAethelnAttackInterruptionTest::RunTest(const FString& Parameters)
 			F.Timeline->AvoidanceTags.AddTag(AethelnCombatTestTags::Test_Avoidance);
 			F.Player.AbilitySystem->AddLooseGameplayTag(AethelnCombatTestTags::Test_Avoidance);
 		}
-		else if (Expected == EOutcome::Blocked)
+		else if (Expected != EOutcome::Hit)
 		{
+			// Test-only slot: every direction. The hook's consequence decides Blocked or GuardBroken.
+			const EAethelnBlockConsequence Consequence = Expected == EOutcome::GuardBroken ? EAethelnBlockConsequence::GuardBroken : EAethelnBlockConsequence::Blocked;
 			FAethelnDefenseState Defense;
-			Defense.ArcDegrees = 360.0; // test-only: every direction
-			Defense.OnBlocked.BindLambda([](const FAethelnBlockedContact&) { return EAethelnBlockConsequence::Blocked; });
+			Defense.ArcDegrees = 360.0;
+			Defense.OnBlocked.BindLambda([Consequence](const FAethelnBlockedContact&) { return Consequence; });
 			TestTrue(TEXT("The test defense slot registers"), F.Timeline->SetDefenseState(*F.Player.AbilitySystem, Defense));
 		}
 		F.Press();
@@ -144,7 +146,7 @@ bool FAethelnAttackInterruptionTest::RunTest(const FString& Parameters)
 		const FAethelnCombatResult* Result = ResultFor(F, EnemyId);
 		if (TestNotNull(TEXT("The enemy contact commits a result"), Result))
 		{
-			TestEqual(TEXT("Lethal hit, avoided or blocked contact"), Result->Outcome, Expected);
+			TestEqual(TEXT("Lethal hit, avoided, blocked or guard-broken contact"), Result->Outcome, Expected);
 			TestEqual(TEXT("Latched lethal only for the lethal row"), Result->bLethal, bLethal);
 		}
 		TestEqual(TEXT("No interruption"), F.Ends.Num(), 0);
@@ -218,6 +220,97 @@ bool FAethelnAttackInterruptionTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("The next press starts step 1"), F.Press(), EResult::Accepted);
 			TestEqual(TEXT("Step 1 again"), F.Records.Last().ChainStep, uint8(1));
 		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnAttackInterruptionEdgesTest,
+	"Aetheln.GameCombat.AttackTimeline.InterruptionEdgesAndTrades",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnAttackInterruptionEdgesTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnInterruptionTests;
+	// The window is half-open: a contact exactly at Start + InterruptibleUntil does not interrupt. An enemy 40 units
+	// behind overlaps the player at its ActiveStart, so its contact is exactly 0.125 after both start at 0.
+	for (bool bAtEdge : { true, false })
+	{
+		FFixture F; if (!F.Init(*this)) { return false; }
+		SetInterruptibleUntil(*F.Ability, bAtEdge ? 0.125 : 0.1875);
+		AAethelnCombatAICharacter* Enemy = SpawnEnemy(*this, F, FVector(-40.0, 0.0, 0.0));
+		if (Enemy == nullptr) { return false; }
+		F.Press();
+		const FGuid EnemyId = Swing(F, *Enemy, [](FAethelnAttackStepDefinition&) {});
+		F.AdvanceTo(0.5);
+		const FAethelnCombatResult* Result = ResultFor(F, EnemyId);
+		if (TestNotNull(TEXT("The enemy hits the player"), Result)) { TestEqual(TEXT("At exactly 0.125"), Result->ContactTime, 0.125); }
+		TestEqual(TEXT("The window end is exclusive; just inside it interrupts"), F.Ends.Num(), bAtEdge ? 0 : 1);
+	}
+	{
+		// Two attackers on one target: the first interrupting hit ends the chain once; both hits still commit.
+		FFixture F; if (!F.Init(*this)) { return false; }
+		SetInterruptibleUntil(*F.Ability, 0.25);
+		AAethelnCombatAICharacter* Early = SpawnEnemy(*this, F, FVector(0.0, 40.0, 0.0)); // contact at 0.125
+		AAethelnCombatAICharacter* Late = SpawnEnemy(*this, F, FVector(-60.0, 0.0, 0.0)); // contact at ContactOffset60
+		if (Early == nullptr || Late == nullptr) { return false; }
+		F.Press();
+		const FGuid EarlyId = Swing(F, *Early, [](FAethelnAttackStepDefinition&) {});
+		const FGuid LateId = Swing(F, *Late, [](FAethelnAttackStepDefinition&) {});
+		F.AdvanceTo(0.5);
+		TestNotNull(TEXT("The first hit commits"), ResultFor(F, EarlyId));
+		TestNotNull(TEXT("The second hit commits"), ResultFor(F, LateId));
+		if (TestEqual(TEXT("One chain end"), F.Ends.Num(), 1)) { TestEqual(TEXT("Interrupted"), F.Ends[0].Reason, EAethelnChainEndReason::Interrupted); }
+		TestEqual(TEXT("Stamped at the first contact"), F.Player.AbilitySystem->GetLastChainResetTimeForTests(), 0.125);
+		TestEqual(TEXT("Both hits damage"), Health(*F.Player.AbilitySystem), 30.0f);
+	}
+	// An exact trade: the player and an enemy face each other 40 units apart, both steps interrupt, and each overlaps
+	// the other at ActiveStart, so both contacts are at 0.125. The lower activation ordinal resolves first, and its
+	// interruption stamps the other side at 0.125, so the other contact fails revalidation.
+	for (bool bPlayerFirst : { true, false })
+	{
+		FFixture F; if (!F.Init(*this)) { return false; }
+		for (FAethelnAttackStepDefinition& Step : F.Ability->ProvisionalSteps) { Step.InterruptibleUntil = 0.25; Step.bInterruptsTarget = true; }
+		AAethelnCombatAICharacter* Enemy = SpawnEnemy(*this, F, FVector(40.0, 0.0, 0.0));
+		if (Enemy == nullptr) { return false; }
+		const auto SwingBack = [&F, Enemy]() { return Swing(F, *Enemy, [](FAethelnAttackStepDefinition& Step) { Step.InterruptibleUntil = 0.25; }); };
+		FGuid EnemyId;
+		if (bPlayerFirst) { F.Press(); EnemyId = SwingBack(); }
+		else { EnemyId = SwingBack(); F.Press(); }
+		const FGuid PlayerId = F.Player.AbilitySystem->GetChainStateForTests().CurrentInput.ActivationId;
+		F.AdvanceTo(0.5);
+		const FAethelnCombatResult* PlayerHit = ResultFor(F, PlayerId);
+		const FAethelnCombatResult* EnemyHit = ResultFor(F, EnemyId);
+		if (bPlayerFirst)
+		{
+			if (TestNotNull(TEXT("The earlier-registered player wins the trade"), PlayerHit)) { TestEqual(TEXT("At 0.125"), PlayerHit->ContactTime, 0.125); }
+			TestNull(TEXT("The interrupted enemy's equal-time contact is dropped"), EnemyHit);
+			TestEqual(TEXT("The player's chain continues"), F.Ends.Num(), 0);
+			TestEqual(TEXT("Only the enemy is damaged"), Health(*Enemy->GetAethelnAbilitySystemComponent()), 35.0f);
+			TestEqual(TEXT("The player is not damaged"), Health(*F.Player.AbilitySystem), 40.0f);
+		}
+		else
+		{
+			if (TestNotNull(TEXT("The earlier-registered enemy wins the trade"), EnemyHit)) { TestEqual(TEXT("At 0.125"), EnemyHit->ContactTime, 0.125); }
+			TestNull(TEXT("The interrupted player's equal-time contact is dropped"), PlayerHit);
+			if (TestEqual(TEXT("The player's chain ends once"), F.Ends.Num(), 1)) { TestEqual(TEXT("Interrupted"), F.Ends[0].Reason, EAethelnChainEndReason::Interrupted); }
+			TestEqual(TEXT("Only the player is damaged"), Health(*F.Player.AbilitySystem), 35.0f);
+			TestEqual(TEXT("The enemy is not damaged"), Health(*Enemy->GetAethelnAbilitySystemComponent()), 40.0f);
+		}
+	}
+	{
+		// A target that is not alive at the contact (zero Health, no State.Dead, so no chain reset) fails revalidation
+		// before interruption: no result and no chain end.
+		FFixture F; if (!F.Init(*this)) { return false; }
+		SetInterruptibleUntil(*F.Ability, 0.25);
+		AAethelnCombatAICharacter* Enemy = SpawnEnemy(*this, F, FVector(-60.0, 0.0, 0.0));
+		if (Enemy == nullptr) { return false; }
+		F.Press();
+		const FGuid EnemyId = Swing(F, *Enemy, [](FAethelnAttackStepDefinition&) {});
+		F.Player.AbilitySystem->SetNumericAttributeBase(UAethelnCombatAttributeSet::GetHealthAttribute(), 0.0f);
+		F.AdvanceTo(0.5);
+		TestNull(TEXT("A dead target yields no result"), ResultFor(F, EnemyId));
+		TestEqual(TEXT("A dead target is not interrupted"), F.Ends.Num(), 0);
+		TestTrue(TEXT("Its chain is untouched"), F.Player.AbilitySystem->GetChainStateForTests().bExists);
 	}
 	return true;
 }
