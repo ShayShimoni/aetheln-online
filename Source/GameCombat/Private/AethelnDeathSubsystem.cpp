@@ -36,7 +36,7 @@ void UAethelnDeathSubsystem::Deinitialize()
 bool UAethelnDeathSubsystem::ApplyDeath(UAethelnAbilitySystemComponent& Victim)
 {
 	const FGameplayAttribute Health = UAethelnCombatAttributeSet::GetHealthAttribute();
-	// ponytail: players only; a zero-Health AI stays inert until AI death has an owner (#20 or a later #21 phase).
+	// Players only: #20 owns AI death, so a zero-Health AI stays inert here.
 	if (!Victim.IsOwnerActorAuthoritative() || Cast<APlayerState>(Victim.GetOwner()) == nullptr
 		|| Victim.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead)
 		|| !Victim.HasAttributeSetForAttribute(Health) || Victim.GetNumericAttribute(Health) > 0.0f)

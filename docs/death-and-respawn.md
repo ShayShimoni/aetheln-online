@@ -56,9 +56,11 @@ UE 5.8.1 source, revision `71fe36aac5`. `GAS/` abbreviates
    (`CMC.cpp:1474-1479`). The owning client's later moves get corrections that
    carry the server movement mode, so the client converges. A client-side
    input block is presentation only and is not needed for authority.
-5. **Players only in P1.** The transition refuses an ASC whose owner is not a
-   `PlayerState`. A zero-Health AI target stays inert, as it is today (see
-   [Open Decisions](#open-decisions)).
+5. **Players only.** The transition refuses an ASC whose owner is not a
+   `PlayerState`. AI death belongs to
+   [#20](https://github.com/ShayShimoni/aetheln-online/issues/20), not #21
+   (lead decision, 2026-10-12); until #20 lands it, a zero-Health AI target
+   stays inert, as it is today.
 6. **Respawn and restored values fail closed.** P2 respawns only when both the
    delay and the restoration allowlist are configured and valid. With either
    unset, the player stays dead and the server logs why. No value is invented.
@@ -75,7 +77,7 @@ UE 5.8.1 source, revision `71fe36aac5`. `GAS/` abbreviates
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Applies and removes `State.Dead`; owns the restoration allowlist and the reconnect carried state (closes T34). | Change the grant-once rule, the seam, or the avatar lifecycle. |
 | [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Binds `OnLethalResult`. | Change the lethal latch, contact order, or chain reset rules. |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Tests the integrated death case on top of #18's `State.Dead` bindings. | Change dodge or block cancellation. |
-| [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Nothing in P1. | AI death and despawn, and AI attacks that kill a player. |
+| [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Nothing. | AI death and despawn (owned by #20), and AI attacks that kill a player. |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61) | Raises the authoritative death state that presentation reads. | HUD, death screen, and readability of the death cue. |
 
 ## Server Death Transition (P1)
@@ -161,7 +163,7 @@ effects, and a second grant. P4 closes it:
   for the fresh PlayerState. Abilities are granted once on the new
   PlayerState, as #19 requires.
 - The identity key goes through an adapter (AGENTS.md: vendors stay behind
-  adapters). Which identity the prototype uses is an open decision.
+  adapters). P4 chooses the prototype identity key (lead decision, 2026-10-12).
 
 ### Disconnect edge cases
 
@@ -209,7 +211,7 @@ tag event.
 | **P1** Death state | This document; `UAethelnDeathStateEffect`; `UAethelnDeathSubsystem`; R1, R2. | #60 P4 lethal notification (merged) |
 | **P2** Respawn | Delay and allowlist config, life generation, restart order, restoration effect; R3, R4. | P1; owner decisions on delay, allowlist, location, dead pawn |
 | **P3** Replication | Two-client harness run, death cue; R5. | P2 |
-| **P4** Reconnect | Carried snapshot behind an identity adapter; R6; T34 flipped. | P2; owner decision on identity and grace window |
+| **P4** Reconnect | Carried snapshot behind an identity adapter; R6; T34 flipped. | P2; owner decision on the grace window; P4 chooses the identity key |
 
 ## Open Decisions
 
@@ -223,12 +225,17 @@ Owner decisions (none blocks P1):
 - Whether a dead player keeps the dead pawn's camera or spectates.
 - The disconnect grace window (already `TBD` in the combat document).
 
-Technical or ownership decisions for the lead:
+Lead decisions (2026-10-12):
 
-- AI death: whether a zero-Health AI gets `State.Dead` in a later #21 phase or
-  in #20. Applying it would add an effect to the AI target that
-  `Aetheln.GameCombat.AttackTimeline.DamageAndLethalLatch` currently asserts
-  never arrives.
-- The prototype identity key for the reconnect snapshot.
-- Death sources other than a contact (periodic effects later) need their own
-  call into the same transition.
+- **AI death is #20's.** #21 stays player-only. When #20 applies a death state
+  to AI, `Aetheln.GameCombat.AttackTimeline.DamageAndLethalLatch`, which
+  asserts that no other effect reaches the AI target, needs updating.
+- **The reconnect identity key is decided in P4**, behind the identity
+  adapter. P1 needs nothing for it.
+
+## Follow-ups
+
+- **Non-contact death.** Death sources other than a contact, such as periodic
+  effects later, are not wired in P1. They enter death through the same public
+  entry point, `UAethelnDeathSubsystem::ApplyDeath`, which stays callable from
+  any server code and keeps the same refusal rules.

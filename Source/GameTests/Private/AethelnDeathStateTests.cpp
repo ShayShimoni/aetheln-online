@@ -57,7 +57,7 @@ bool FAethelnLethalNotificationAppliesDeathTest::RunTest(const FString& Paramete
 	TestEqual(TEXT("State.Dead is held once"), Victim.GetTagCount(AethelnGameplayTags::State_Dead), 1);
 	TestFalse(TEXT("The other player is still alive"), Living.Player.AbilitySystem->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
 
-	// P1 is player death only; AI death is an open decision (#20 or a later #21 phase).
+	// #21 is player death only; #20 owns AI death.
 	UAethelnAbilitySystemComponent* DummyAbilitySystem = Dummy->GetAethelnAbilitySystemComponent();
 	ZeroHealth(*DummyAbilitySystem);
 	F.Timeline->OnLethalResult.Broadcast(DummyAbilitySystem, FGuid::NewGuid());
