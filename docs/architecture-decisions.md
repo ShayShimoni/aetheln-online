@@ -1947,7 +1947,8 @@ Every accepted decision records:
     harness as exact paths (`Invoke-UnrealAutomationTests.ps1`,
     `Sync-EditorAutomationWorkspace.ps1`, `EngineRunnerHostLease.ps1`, every
     `InitialPreparation.*`, and the three scripts those load, `LeaseJournal.ps1`,
-    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`). Every
+    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`; TA-025
+    later added `scripts/content/Invoke-ContentValidation.ps1`). Every
     classifier uncertainty publishes `editor_required=true`, and it implies
     `engine_required=true`. A controller-only pull request still compiles
     (TA-018) but skips the editor job, about two minutes of runner time. The
@@ -2315,6 +2316,10 @@ Every accepted decision records:
     owner, and triggering-actor predicates, and joins the
     `aetheln-engine-runner` group with `queue: max` and
     `cancel-in-progress: false`. It leaves producer 3's job unchanged.
+    Because the content job needs the editor job, and only the editor job's
+    leased re-sync puts the managed workspace at the tested revision, the
+    issue #299 editor gate (TA-020 amendment) also runs the editor job when
+    `scripts/content/Invoke-ContentValidation.ps1` changes (2026-10-12).
   - *Bounds (D9):* the launch step passes `-BuildTimeoutSeconds 900` and
     `-TimeoutSeconds 600` and is bounded at 27 minutes: the two launcher
     bounds plus 2 minutes for the launcher's own checks outside them;

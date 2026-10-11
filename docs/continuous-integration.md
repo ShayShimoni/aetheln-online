@@ -242,9 +242,12 @@ portable-only set; that normalized block was exactly 5,395 UTF-8 bytes
 with SHA-256
 `e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805`.
 Issue #299 (2026-10-11) then added the `editor_required` output and its closed
-editor path set (see [Editor gate](#editor-gate-issue-299)); the current
-normalized block is exactly 7,194 UTF-8 bytes with SHA-256
-`83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92`.
+editor path set (see [Editor gate](#editor-gate-issue-299)): 7,194 UTF-8 bytes
+with SHA-256
+`83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92`. TA-025
+(2026-10-12) added the content launcher to that set; the current normalized
+block is exactly 7,488 UTF-8 bytes with SHA-256
+`5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -355,6 +358,9 @@ runs the editor):
   `scripts/ci/ManagedCompileRegistration.ps1`,
   `scripts/ci/ManagedCompileWorkspace.ps1`, and every
   `scripts/ci/InitialPreparation.<name>.ps1`
+- `scripts/content/Invoke-ContentValidation.ps1` (TA-025): it selects
+  `content-reference-validation`, and `trusted-content-validation` needs this
+  job, whose leased re-sync puts the managed workspace at the tested revision
 
 It is `false` for every other change, including controller-only pull requests
 that change other `scripts/**`, `tests/**`, or `.gitattributes`: those still

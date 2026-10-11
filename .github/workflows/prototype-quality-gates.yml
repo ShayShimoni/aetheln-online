@@ -471,6 +471,9 @@ jobs:
             # controller-only change still compiles but skips it. The match is
             # case-insensitive and fails closed: the managed workspace is a
             # case-insensitive Windows checkout, so a case variant runs the editor.
+            # TA-025: trusted-content-validation needs this job, whose leased
+            # re-sync puts the managed workspace at the tested revision, so the
+            # content launcher (which selects that producer) runs it too.
             $EditorCiPaths = @(
               '.github/workflows/prototype-quality-gates.yml',
               'AethelnOnline.uproject',
@@ -479,7 +482,8 @@ jobs:
               'scripts/ci/LeaseJournal.ps1',
               'scripts/ci/ManagedCompileRegistration.ps1',
               'scripts/ci/ManagedCompileWorkspace.ps1',
-              'scripts/ci/Sync-EditorAutomationWorkspace.ps1'
+              'scripts/ci/Sync-EditorAutomationWorkspace.ps1',
+              'scripts/content/Invoke-ContentValidation.ps1'
             )
             if ($EditorCiPaths -contains $Path) { return $true }
             if ($Path -match '^(Source|Config|Content|Plugins)/.+') { return $true }

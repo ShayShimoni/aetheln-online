@@ -1420,8 +1420,9 @@ $LegacyHasher = [Security.Cryptography.SHA256]::Create()
 try { $LegacyDigest = ([BitConverter]::ToString($LegacyHasher.ComputeHash($LegacyBytes)) -replace '-', '').ToLowerInvariant() }
 finally { $LegacyHasher.Dispose() }
 # TA-018 (2026-10-02) removed the six controller paths from the portable-only set (5,395 bytes, e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805).
-# Issue #299 (2026-10-11) added the editor_required output and its closed editor path set; this is the reviewed block identity after that change.
-Assert-True ($LegacyBytes.Length -eq 7194 -and $LegacyDigest -ceq '83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92') 'The change-impact block must match the reviewed issue #299 identity after LF normalization.'
+# Issue #299 (2026-10-11) added the editor_required output and its closed editor path set (7,194 bytes, 83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92).
+# TA-025 (2026-10-12) added the content launcher to that set; this is the reviewed block identity after that change.
+Assert-True ($LegacyBytes.Length -eq 7488 -and $LegacyDigest -ceq '5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d') 'The change-impact block must match the reviewed TA-025 identity after LF normalization.'
 
 function Get-ClassifierScript {
 	$Lines = $Workflow -split "\r?\n"
@@ -1677,7 +1678,9 @@ try {
 		@{ Case = 'harness lease journal'; Write = @('scripts/ci/LeaseJournal.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'harness managed registration'; Write = @('scripts/ci/ManagedCompileRegistration.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'harness managed workspace'; Write = @('scripts/ci/ManagedCompileWorkspace.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
-		@{ Case = 'harness input lookalike suffix'; Write = @('scripts/ci/Sync-EditorAutomationWorkspace.ps1.bak'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		# TA-025: the content job needs the editor job, whose leased re-sync puts the managed workspace at this revision.
+		@{ Case = 'content validation launcher'; Write = @('scripts/content/Invoke-ContentValidation.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'harness input lookalike suffix';Write = @('scripts/ci/Sync-EditorAutomationWorkspace.ps1.bak'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'harness input in a subdirectory'; Write = @('scripts/ci/sub/EngineRunnerHostLease.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'initial preparation directory lookalike'; Write = @('scripts/ci/InitialPreparation/Core.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'case-different harness host lease'; Write = @(); IndexOnly = @('scripts/ci/engineRunnerHostLease.ps1'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
