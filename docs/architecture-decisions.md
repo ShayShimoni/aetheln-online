@@ -2240,8 +2240,9 @@ Every accepted decision records:
   Residual risk: every packaging run reserves 64 GiB of the shared 256 GiB
   handoff cap until its cleanup request is acted on, so dispatches between
   cleanups can make a later scheduled, release, or dispatched run fail closed
-  with `handoff_storage_exhausted`. No workflow-level dispatch cap is added;
-  the owner checks the cleanup requests before dispatching. The immediate kill
+  with `handoff_storage_exhausted`. The owner checks the cleanup requests
+  before dispatching. This decision adds no workflow-level dispatch cap; that
+  cap (OD-11 on issue #267) stays a separate lead decision. The immediate kill
   switch is disabling the workflow; the permanent rollback is reverting it.
 - **Evidence:** `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the exact
   predicate, the guard-first step, parity with the scheduled phases including

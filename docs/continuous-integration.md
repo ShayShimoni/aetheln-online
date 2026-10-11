@@ -1163,7 +1163,10 @@ never be selected.
   release workflow with `github.ref == 'refs/heads/develop'` in place of the
   `release/*` prefix: the dispatch event, this repository, that exact ref, the
   owner as actor and as triggering actor, and attempt 1. GitHub skips a
-  refused run before it requests the self-hosted runner. Re-runs are refused;
+  refused run before it requests the self-hosted runner. Expression comparisons
+  ignore case, so a ref such as `refs/heads/Develop` passes this predicate;
+  the guard's case-sensitive check refuses it as `develop_ref_invalid`, and
+  every engine job needs `develop-gates`. Re-runs are refused;
   retry with a new dispatch. Like the release jobs, the two cook phases pin
   `UE_ADDITIONAL_PLUGIN_PATHS` empty and refuse to start
   (`private_plugin_paths_set`) if it is set (TA-019). There is no build
