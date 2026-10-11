@@ -1216,9 +1216,12 @@ as the release workflow: `prototype-quality-gates.yml` keeps no manual trigger
 (TA-012), so an older branch that still carries the retired single-job gate can
 never be selected.
 
-- **Who may dispatch.** The owner only: the owner presses it, or the lead
-  presses it only with the owner's explicit OK for that run (OD-7 and OD-8,
-  accepted 2026-10-10 as a TA-022 extension). Agents never dispatch it.
+- **Who may dispatch.** The owner presses it. No agent other than the lead
+  dispatches it, and the lead only with the owner's explicit OK for that run
+  (OD-7 and OD-8, accepted 2026-10-10 as a TA-022 extension). The workflow
+  cannot tell a lead dispatch from an owner dispatch, because both run as
+  `ShayShimoni`, so the per-run OK is enforced by process, not by the
+  workflow.
 - **Trigger.** `workflow_dispatch` only, with no inputs. There is no
   pull-request, push, schedule, chained, or comment trigger.
 - **Guard.** `develop-gates` runs on GitHub-hosted `windows-latest` with a
@@ -1256,12 +1259,16 @@ never be selected.
   cancel them. A dispatch that overlaps the weekly schedule or a release run
   interleaves phase by phase; each run keeps its own run-scoped handoff
   directory, so the runs do not mix bytes.
-- **Handoff budget.** Every packaging run, whether scheduled, release, or
-  dispatched, reserves 64 GiB in the one shared handoff root (default cap
-  256 GiB) and its bytes stay there until the owner acts on its cleanup
-  request. Dispatches between cleanups therefore bring the next run closer to
-  `handoff_storage_exhausted`, which fails it closed before any packaging.
-  Check the cleanup requests before dispatching.
+- **Handoff budget.** Nothing is reserved for a run in progress. Admission
+  happens once, in the PackageClient phase: it counts only the bytes already
+  committed under the one shared handoff root (default cap 256 GiB) and fails
+  closed with `handoff_storage_exhausted` when they exceed 256 GiB minus the
+  64 GiB payload cap (192 GiB). A run's bytes stay there until the owner acts
+  on its cleanup request. Runs that do not overlap therefore fail closed
+  before any packaging. Runs whose phases interleave on the shared engine
+  queue (scheduled, release, develop dispatch) can together exceed 256 GiB.
+  The protection is that the owner checks the cleanup requests and the free
+  disk space before a dispatch. A dispatch cap remains deferred under OD-11.
 - **Checkout, token, and uploads.** Workflow permissions are `contents: read`.
   Every checkout pins `ref: ${{ github.sha }}` and sets
   `persist-credentials: false`. No step reads a secret or a repository
