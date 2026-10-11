@@ -2132,8 +2132,9 @@ Every accepted decision records:
   which covered `release/*` only. The dispatch is owner-only (OD-8): the owner
   presses it. No agent other than the lead dispatches it, and the lead only
   with the owner's explicit OK for that run. The workflow cannot tell a lead
-  dispatch from an owner dispatch, because both run as `ShayShimoni`, so the
-  per-run OK is enforced by process, not by the workflow. TA-024 records the separate
+  dispatch from an owner dispatch, because both run as `ShayShimoni`, so who
+  may dispatch, and the per-run OK, are enforced by process, not by the
+  workflow. TA-024 records the separate
   `.github/workflows/develop-packaging.yml` identity that carries it. The
   runner-trust analysis, the fork-run rule, the operator rule, and the
   revisit triggers above apply to it unchanged. `prototype-quality-gates.yml`
@@ -2256,8 +2257,8 @@ Every accepted decision records:
   retention. There is no build number and no release evidence. Who may
   dispatch: the owner; no agent other than the lead, and the lead only with
   the owner's explicit OK for that run (OD-8). The workflow cannot tell a lead
-  dispatch from an owner dispatch (both run as `ShayShimoni`), so the per-run
-  OK is enforced by process, not by the workflow.
+  dispatch from an owner dispatch (both run as `ShayShimoni`), so who may dispatch, and the per-run OK, are
+  enforced by process, not by the workflow.
 - **Context:** The weekly schedule is the only other path that packages
   `develop`, so proving a packaging fix (PR #301 on issue #267) waits
   up to a week. On 2026-10-06 the lead chose a separate workflow (OD-6) over a
@@ -2280,7 +2281,8 @@ Every accepted decision records:
   once, in the PackageClient phase of `scripts/ci/Invoke-EngineRunnerGate.ps1`:
   it counts only the bytes already committed under the shared handoff root and
   refuses with `handoff_storage_exhausted` when they exceed 256 GiB minus
-  64 GiB (192 GiB). Runs that do not overlap therefore fail closed. Runs whose
+  64 GiB (192 GiB). A run that does not overlap another therefore either stays within
+  256 GiB or fails closed before packaging. Runs whose
   phases interleave on the shared engine queue (scheduled, release, develop
   dispatch) can together exceed the 256 GiB cap. The protection is that the
   owner checks the cleanup requests and the free disk space before a dispatch.

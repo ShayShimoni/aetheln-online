@@ -1054,7 +1054,7 @@ handed to the consumer. Before
 creating a new run directory the first phase measures the **complete
 validated handoff root** — every repository scope counts, reparse points are
 never traversed or counted — and fails closed as `handoff_storage_exhausted`
-when the committed bytes plus the 64 GiB reservation exceed the configured
+when the committed bytes plus the 64 GiB payload cap exceed the configured
 total-root cap (default **256 GiB**), retaining the cleanup-request evidence.
 
 CI never deletes anything under the handoff root. Instead the first and last
@@ -1220,8 +1220,8 @@ never be selected.
   dispatches it, and the lead only with the owner's explicit OK for that run
   (OD-7 and OD-8, accepted 2026-10-10 as a TA-022 extension). The workflow
   cannot tell a lead dispatch from an owner dispatch, because both run as
-  `ShayShimoni`, so the per-run OK is enforced by process, not by the
-  workflow.
+  `ShayShimoni`, so who may dispatch, and the per-run OK, are enforced by
+  process, not by the workflow.
 - **Trigger.** `workflow_dispatch` only, with no inputs. There is no
   pull-request, push, schedule, chained, or comment trigger.
 - **Guard.** `develop-gates` runs on GitHub-hosted `windows-latest` with a
@@ -1264,8 +1264,8 @@ never be selected.
   committed under the one shared handoff root (default cap 256 GiB) and fails
   closed with `handoff_storage_exhausted` when they exceed 256 GiB minus the
   64 GiB payload cap (192 GiB). A run's bytes stay there until the owner acts
-  on its cleanup request. Runs that do not overlap therefore fail closed
-  before any packaging. Runs whose phases interleave on the shared engine
+  on its cleanup request. A run that does not overlap another therefore either stays within
+  256 GiB or fails closed before packaging. Runs whose phases interleave on the shared engine
   queue (scheduled, release, develop dispatch) can together exceed 256 GiB.
   The protection is that the owner checks the cleanup requests and the free
   disk space before a dispatch. A dispatch cap remains deferred under OD-11.
