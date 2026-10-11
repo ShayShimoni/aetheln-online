@@ -47,6 +47,9 @@ Build/Receipts/
 !.vscode/settings.json
 !.vscode/tasks.json
 *.code-workspace
+compile_commands.json
+.clangd
+.cache/
 *.rsuser
 *.user
 *.userosscache
