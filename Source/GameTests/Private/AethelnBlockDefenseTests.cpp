@@ -152,6 +152,11 @@ bool FAethelnBlockArcAndBoundariesTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("An arc beyond a full circle defends nothing"), IsInsideDefenseArc(0.0, Center, FVector(100.0, 0.0, 0.0), 361.0));
 	TestFalse(TEXT("A non-finite arc defends nothing"), IsInsideDefenseArc(0.0, Center, FVector(100.0, 0.0, 0.0), std::numeric_limits<double>::quiet_NaN()));
 	TestFalse(TEXT("The yaw decides: facing away is outside"), IsInsideDefenseArc(180.0, Center, FVector(100.0, 0.0, 0.0), 180.0));
+	// A test-only 45-degree half-angle (90-degree arc), where the edge is not an exact cosine.
+	TestTrue(TEXT("Inside exactly at a 45-degree half-angle"), IsInsideDefenseArc(0.0, Center, FVector(100.0, 100.0, 0.0), 90.0));
+	TestTrue(TEXT("Inside exactly at a 45-degree half-angle, other side"), IsInsideDefenseArc(0.0, Center, FVector(100.0, -100.0, 0.0), 90.0));
+	TestFalse(TEXT("Outside just beyond a 45-degree half-angle"), IsInsideDefenseArc(0.0, Center, FVector(100.0, 101.0, 0.0), 90.0));
+	TestTrue(TEXT("The edge is measured from the yaw: 45 degrees off a 90-degree facing"), IsInsideDefenseArc(90.0, Center, FVector(100.0, 100.0, 0.0), 90.0));
 
 	// Pipeline boundaries: the enemy's contact is exactly E + 0.125; RaiseSeconds is 0.0625.
 	const auto RunCase = [this](const TCHAR* What, TFunctionRef<void(FDefense&, AAethelnCombatAICharacter&)> Script, EOutcome Expected)
@@ -303,12 +308,20 @@ bool FAethelnAvoidanceBeatsContactTest::RunTest(const FString& Parameters)
 		if (Enemy == nullptr) { return false; }
 		F.AdvanceTo(1.0);
 		TestEqual(TEXT("Dodge accepted"), F.Dodge(), EResult::Accepted);
-		F.Swing(*Enemy, 5.0f); // contact 1.125, inside the window
+		// A held slot facing the enemy over the same contact: avoidance (step 3) resolves before defense (step 4).
+		// The block itself cannot be held during a dodge (Q10), so a test slot stands in for it.
+		int32 HookCalls = 0;
+		FAethelnDefenseState Held;
+		Held.ArcDegrees = 360.0;
+		Held.OnBlocked.BindLambda([&HookCalls](const FAethelnBlockedContact&) { ++HookCalls; return EAethelnBlockConsequence::Blocked; });
+		TestTrue(TEXT("The test slot is held"), F.Timeline->SetDefenseState(F.ASC(), Held));
+		F.Swing(*Enemy, 5.0f); // contact 1.125, inside the window and the slot
 		F.AdvanceTo(1.25);
-		if (TestEqual(TEXT("One result"), F.Results.Num(), 1)) { TestEqual(TEXT("Inside the window: Avoided"), F.Results[0].Outcome, EOutcome::Avoided); }
+		if (TestEqual(TEXT("One result"), F.Results.Num(), 1)) { TestEqual(TEXT("Inside the window and a held slot: Avoided"), F.Results[0].Outcome, EOutcome::Avoided); }
+		TestEqual(TEXT("No defense hook call"), HookCalls, 0);
 		TestEqual(TEXT("No damage"), F.Health(), 40.0f);
 		TestEqual(TEXT("No Guard change"), F.Guard(), 20.0f);
-		TestEqual(TEXT("No hook call"), F.PressureApplications, 0);
+		TestEqual(TEXT("No Guard pressure"), F.PressureApplications, 0);
 	}
 	{
 		// At the window end it hits, although State.DodgeInvulnerable is still present when the frame's contacts resolve.
@@ -378,7 +391,8 @@ bool FAethelnDefenseActionRelationsTest::RunTest(const FString& Parameters)
 	// A second defense slot fails closed.
 	FAethelnDefenseState Other;
 	Other.ArcDegrees = 360.0;
-	TestFalse(TEXT("A second slot fails closed"), F.Timeline->SetDefenseState(F.ASC(), Other));
+	Other.OnBlocked.BindLambda([](const FAethelnBlockedContact&) { return EAethelnBlockConsequence::Blocked; });
+	TestFalse(TEXT("A second slot, even with a hook, fails closed"), F.Timeline->SetDefenseState(F.ASC(), Other));
 	TestEqual(TEXT("The block keeps its slot"), F.Slot()->ArcDegrees, 180.0);
 	TestEqual(TEXT("Lowered"), F.Lower(), EResult::Accepted);
 

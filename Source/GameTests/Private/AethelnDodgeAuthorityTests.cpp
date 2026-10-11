@@ -734,6 +734,23 @@ bool FAethelnLifeStateCancelsDodgeTest::RunTest(const FString& Parameters)
 	D.Player.Controller->Possess(D.Pawn);
 	TestFalse(TEXT("Re-possession revives no block"), D.Has(AethelnGameplayTags::State_Blocking));
 	TestEqual(TEXT("Re-possession revives no defense"), D.Slot()->ActiveUntilServerTime, 1.25);
+
+	// State.Dead also ends a Guard break, so a respawned avatar never inherits it.
+	AethelnDefenseTests::FDefense B;
+	if (!B.Init(*this)) { return false; }
+	AAethelnCombatAICharacter* Enemy = B.SpawnEnemy(*this);
+	if (Enemy == nullptr) { return false; }
+	B.AdvanceTo(1.0);
+	TestEqual(TEXT("Block raised"), B.Raise(), EResult::Accepted);
+	B.Swing(*Enemy, 20.0f); // pressure at Guard: the break
+	B.AdvanceTo(1.375);
+	TestTrue(TEXT("The Guard break holds"), B.Has(AethelnGameplayTags::State_GuardBroken));
+	B.ASC().AddLooseGameplayTag(AethelnGameplayTags::State_Dead); // test seam until #21
+	TestFalse(TEXT("State.Dead removes the Guard break"), B.Has(AethelnGameplayTags::State_GuardBroken));
+	B.ASC().RemoveLooseGameplayTag(AethelnGameplayTags::State_Dead);
+	B.Player.Controller->UnPossess();
+	B.Player.Controller->Possess(B.Pawn);
+	TestFalse(TEXT("Re-possession revives no Guard break"), B.Has(AethelnGameplayTags::State_GuardBroken));
 	return true;
 }
 

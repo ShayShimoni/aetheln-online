@@ -588,11 +588,15 @@ struct FAethelnDefenseState
   it as its "contact direction" (T3, signed off 2026-10-11; the evaluator is
   `AethelnAttackTimeline::IsInsideDefenseArc`). #60 already interpolates that
   origin per sub-step and holds defenders at their end-of-frame pose. A
-  zero-length direction is outside (fails closed). The actor yaw is
+  zero-length direction is outside (fails closed). The inclusive edge is
+  evaluated as the dot product against the half-angle's cosine, within a
+  1e-9 rounding tolerance. The actor yaw is
   server-simulated and rate-limited on the ground; the control rotation is
   client-supplied and is never used.
 - **One slot.** Registering while a slot is active fails closed. Block and Hold
-  the Line block each other (Q10), so this cannot happen through content. The
+  the Line block each other (Q10), so this cannot happen through content. A
+  slot without a bound Guard hook is refused, and a slot whose hook's owner
+  has expired defends nothing, so no slot blocks for free. The
   block registers the slot before it commits: a failed registration ends the
   activation uncommitted, which #19's step 9 reports as `InternalFailure` with
   nothing spent, and a failed commit clears the slot.
@@ -625,7 +629,9 @@ The block's hook:
    `State.GuardBroken` for `GuardBreakSeconds` (`TBD`), which the block lists
    among its blocking tags. P4 grants it through the shared duration effect
    that cooldowns use, from the resolution time (at most one server frame
-   after the contact time); a zero duration grants nothing. It returns
+   after the contact time); a zero duration grants nothing. `State.Dead`
+   removes it, so a respawned avatar never inherits a Guard break (Death,
+   Logout, and Recovery Safety in the combat document). It returns
    `GuardBroken`.
 3. Otherwise returns `Blocked`.
 
@@ -887,7 +893,7 @@ drops chosen copies and models a reliable resend as a later arrival.
 | D10 | `Aetheln.GameCombat.Defense.DodgeWindowBoundaries` | P3 | H | `S` is the processing time; `IsAvoidingAt` is true at `S + InvulnerableStart` and false at `S + InvulnerableEnd`; each tag exists exactly over its window; a request at exactly `S + ActionEnd` is not blocked by the dodge; withheld moves neither extend nor shorten the window |
 | D11 | `Aetheln.GameCombat.Defense.DodgeEndToEnd` | P3 | H | A client pawn and a server pawn with the real PlayerState authority: an accepted dodge produces no correction and the predicted path; a predicted dodge refused for cooldown rolls back with one correction; the owner receives one outcome per flagged move |
 | D12 | `Aetheln.GameCombat.Defense.NetworkConditionsDodge` | P3 | H | The D5 profiles with the real authority: each dodge commits at most once, with no double cost or cooldown; the window starts at server arrival; outcomes arrive in order; a dropped flagged move commits nothing and gets no outcome, and the client resolves it as never simulated when the next outcome arrives; a refused flagged move (cooldown) followed by silence draws one token and sends one outcome, and nothing commits after the cooldown lapses; every profile asserts the server's simulated-move count |
-| D13 | `Aetheln.GameCombat.Defense.LifeStateCancelsDefense` | P3 (block rows P4) | H | `State.Dead` added through the test seam ends an active dodge window at that time, ends the server displacement, and ends a held block; later dodge and block requests get `ActivationBlocked`; re-possession revives no invulnerability or defense and resumes no displacement |
+| D13 | `Aetheln.GameCombat.Defense.LifeStateCancelsDefense` | P3 (block rows P4) | H | `State.Dead` added through the test seam ends an active dodge window at that time, ends the server displacement, ends a held block, and removes a Guard break; later dodge and block requests get `ActivationBlocked`; re-possession revives no invulnerability or defense and resumes no displacement |
 | D14 | `Aetheln.GameCombat.Defense.TeardownMidDodgeAndBlock` | P3 (block rows P4) | H | Unpossession, avatar destruction, and PlayerState teardown during the window and during a held block: one end, no window or slot afterwards, the cancel path ends the server displacement, re-possession resumes no displacement, and a new PlayerState starts clean |
 | D15 | `Aetheln.GameCombat.Defense.DodgeTelemetry` | P3 | H | Events and metrics per the table with a nonzero ordinal; a flood of flagged moves stays within #19's window bound; the public copy has no diagnostic code |
 | D16 | `Aetheln.GameCombat.Defense.RunsWithoutPresentation` | P3 (block rows P4) | H | Dodge and block run, end, and (from P4) resolve contacts with no mesh, montage, or notify |

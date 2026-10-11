@@ -117,6 +117,12 @@ EAethelnBlockConsequence UAethelnBlockAbility::HandleBlockedHit(const FAethelnBl
 			Break.Data->SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Cooldown_Duration, ProvisionalGuardBreakSeconds);
 			Break.Data->DynamicGrantedTags.AddTag(AethelnGameplayTags::State_GuardBroken);
 			ASC->ApplyGameplayEffectSpecToSelf(*Break.Data.Get());
+			// Death ends the break, so a respawned avatar never inherits it (stale control state).
+			if (!BreakDeadHandle.IsValid())
+			{
+				BreakDeadHandle = ASC->RegisterGameplayTagEvent(AethelnGameplayTags::State_Dead, EGameplayTagEventType::NewOrRemoved)
+					.AddUObject(this, &UAethelnBlockAbility::HandleDeadDuringBreak);
+			}
 		}
 	}
 	if (IsActive()) { EndAbility(CurrentSpecHandle, CurrentActorInfo, CurrentActivationInfo, true, false); }
@@ -127,6 +133,15 @@ void UAethelnBlockAbility::HandleDeadTag(const FGameplayTag Tag, int32 NewCount)
 {
 	UAbilitySystemComponent* ASC = CurrentActorInfo != nullptr ? CurrentActorInfo->AbilitySystemComponent.Get() : nullptr;
 	if (NewCount > 0 && ASC != nullptr && IsActive()) { ASC->CancelAbilityHandle(CurrentSpecHandle); }
+}
+
+void UAethelnBlockAbility::HandleDeadDuringBreak(const FGameplayTag Tag, int32 NewCount)
+{
+	UAbilitySystemComponent* ASC = CurrentActorInfo != nullptr ? CurrentActorInfo->AbilitySystemComponent.Get() : nullptr;
+	if (NewCount <= 0 || ASC == nullptr) { return; }
+	ASC->RegisterGameplayTagEvent(AethelnGameplayTags::State_Dead, EGameplayTagEventType::NewOrRemoved).Remove(BreakDeadHandle);
+	BreakDeadHandle.Reset();
+	ASC->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(AethelnGameplayTags::State_GuardBroken));
 }
 
 void UAethelnBlockAbility::EndAbility(

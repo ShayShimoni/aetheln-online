@@ -361,6 +361,26 @@ bool FAethelnAvoidanceDefenseAndRelationTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("The undefended hit damages"), Health(*Target), bFacingAttacker ? 35.0f : 30.0f);
 	}
 	{
+		// #18 P4 fails closed: a slot without a hook, or with a hook whose owner expired, blocks nothing for free.
+		FFixture F; if (!F.Init(*this)) { return false; }
+		AAethelnCombatAICharacter* Target = F.SpawnTarget(*this, FVector(60.0, 0.0, 0.0));
+		if (Target == nullptr) { return false; }
+		Target->SetActorRotation(FRotator(0.0, 180.0, 0.0));
+		UAethelnAbilitySystemComponent* TargetAsc = Target->GetAethelnAbilitySystemComponent();
+		FAethelnDefenseState Hookless;
+		Hookless.ArcDegrees = 360.0;
+		TestFalse(TEXT("A slot without a hook is refused"), F.Timeline->SetDefenseState(*TargetAsc, Hookless));
+		UGameplayEffect* HookOwner = AethelnCombatTests::MakeTestEffect(EGameplayEffectDurationType::Instant); // any transient UObject
+		FAethelnDefenseState Expiring;
+		Expiring.ArcDegrees = 360.0;
+		Expiring.OnBlocked.BindWeakLambda(HookOwner, [](const FAethelnBlockedContact&) { return EAethelnBlockConsequence::Blocked; });
+		TestTrue(TEXT("A slot with a live hook registers"), F.Timeline->SetDefenseState(*TargetAsc, Expiring));
+		HookOwner->MarkAsGarbage();
+		F.Press(); F.AdvanceTo(0.5);
+		if (TestEqual(TEXT("One result"), F.Results.Num(), 1)) { TestEqual(TEXT("An expired hook defends nothing: an ordinary hit"), F.Results[0].Outcome, EOutcome::Hit); }
+		TestEqual(TEXT("The undefended hit damages"), Health(*Target), 35.0f);
+	}
+	{
 		FFixture F; if (!F.Init(*this)) { return false; }
 		FAttacker Ally;
 		if (!F.SpawnAttacker(*this, Ally, FVector(60.0, 0.0, 0.0), 0.0)) { return false; }

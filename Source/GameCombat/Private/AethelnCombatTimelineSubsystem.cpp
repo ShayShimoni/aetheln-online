@@ -48,7 +48,10 @@ namespace AethelnAttackTimeline
 		const FVector Toward = (AttackerOrigin - DefenderCenter).GetSafeNormal2D();
 		if (Toward.IsNearlyZero()) { return false; } // a zero-length direction fails closed
 		const FVector Facing = FRotator(0.0, DefenderYawDegrees, 0.0).Vector();
-		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Facing | Toward, -1.0, 1.0))) <= ArcDegrees * 0.5;
+		// Inclusive at the half-angle: the dot-product tolerance (about 1e-7 degrees) absorbs rounding in the
+		// cosine and the normalized direction, so a contact exactly on the edge is inside at any half-angle.
+		constexpr double EdgeDotTolerance = 1.0e-9;
+		return (Facing | Toward) >= FMath::Cos(FMath::DegreesToRadians(ArcDegrees * 0.5)) - EdgeDotTolerance;
 	}
 }
 
@@ -153,6 +156,8 @@ bool UAethelnCombatTimelineSubsystem::IsHostile(const UAethelnAbilitySystemCompo
 
 bool UAethelnCombatTimelineSubsystem::SetDefenseState(UAethelnAbilitySystemComponent& Target, const FAethelnDefenseState& State)
 {
+	// A slot without a hook would block for free (no Guard pressure, no break): fail closed.
+	if (!State.OnBlocked.IsBound()) { return false; }
 	const TWeakObjectPtr<UAethelnAbilitySystemComponent> Key(&Target);
 	const FAethelnDefenseState* Existing = Defenses.Find(Key);
 	if (Existing != nullptr && Existing->ActiveUntilServerTime == TNumericLimits<double>::Max()) { return false; }
@@ -343,7 +348,8 @@ void UAethelnCombatTimelineSubsystem::Resolve(const FCandidate& Candidate, TArra
 	// The defense at the contact time (#18 T2, T3): the slot's interval, and the arc from the server actor yaw.
 	const FAethelnDefenseState* Defense = Defenses.Find(Candidate.Target);
 	const AActor* TargetAvatar = Target->GetAvatarActor();
-	const bool bBlocked = Defense != nullptr && TargetAvatar != nullptr
+	// A hook whose owner expired defends nothing (fails closed).
+	const bool bBlocked = Defense != nullptr && TargetAvatar != nullptr && Defense->OnBlocked.IsBound()
 		&& AethelnAttackTimeline::IsWithinWindow(Candidate.ContactTime, Defense->ActiveFromServerTime, Defense->ActiveUntilServerTime)
 		&& AethelnAttackTimeline::IsInsideDefenseArc(TargetAvatar->GetActorRotation().Yaw, TargetAvatar->GetActorLocation(), Candidate.SourceOrigin, Defense->ArcDegrees);
 	if (Target->IsAvoidingAt(Candidate.ContactTime) || Target->HasAnyMatchingGameplayTags(AvoidanceTags))

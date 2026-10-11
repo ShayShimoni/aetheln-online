@@ -582,17 +582,21 @@ For each candidate, in order:
    interval, not the tag's presence when the contact resolves, decides (#18
    T2). Until a slot exists, no target is defending and this step passes. The
    defense owner registers the slot on the timeline subsystem as an
-   `FAethelnDefenseState` (`SetDefenseState`, which refuses a second slot
-   while one is held; `EndDefenseState`, which stamps the exclusive end and
-   keeps the slot so later contacts stay exact; `ClearDefenseState`). The arc
-   is the full arc in degrees centered on the target's actor yaw; a
-   non-finite arc or one outside `(0, 360]` defends nothing. The contact
-   direction (#18 decision T3, signed off 2026-10-11) is the yaw-only
-   direction from the target's capsule center to the attacker's interpolated
-   combat-frame origin (its capsule center) at the contact time, never the
-   contact location, the sweep direction, or a control rotation; a
-   zero-length direction is outside. The pure evaluator is
-   `AethelnAttackTimeline::IsInsideDefenseArc`.
+   `FAethelnDefenseState` (`SetDefenseState`, which refuses a slot without a
+   bound hook and a second slot while one is held; `EndDefenseState`, which
+   stamps the exclusive end and keeps the slot so later contacts stay exact;
+   `ClearDefenseState`). A slot whose hook's owner has expired defends
+   nothing, so no slot blocks for free. The arc is the full arc in degrees
+   centered on the target's actor yaw; a non-finite arc or one outside
+   `(0, 360]` defends nothing. The contact direction (#18 decision T3, signed
+   off 2026-10-11) is the yaw-only direction from the target to the
+   attacker's combat-frame origin, never the contact location, the sweep
+   direction, or a control rotation; a zero-length direction is outside. The
+   target is taken at its end-of-frame capsule center and actor yaw, as
+   targets are swept; only the attacker's origin is interpolated to the
+   contact time. The half-angle is inclusive: the pure evaluator,
+   `AethelnAttackTimeline::IsInsideDefenseArc`, compares the dot product
+   with the half-angle's cosine within a 1e-9 rounding tolerance.
 5. **Family mitigation.** Wrought has no mitigation inputs in the prototype;
    the step exists in code order and applies none. No value is invented.
 6. **Ward.** Not prototype scope; no attribute exists.

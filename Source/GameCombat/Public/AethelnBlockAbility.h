@@ -52,8 +52,11 @@ private:
 	/** The Guard hook: pressure once from the attacker's ASC; at zero Guard, the break. */
 	EAethelnBlockConsequence HandleBlockedHit(const FAethelnBlockedContact& Contact);
 	void HandleDeadTag(const FGameplayTag Tag, int32 NewCount);
+	/** State.Dead removes the Guard-break effect; bound from the break until the next death. */
+	void HandleDeadDuringBreak(const FGameplayTag Tag, int32 NewCount);
 
 	bool bHoldsSlot = false;
 	bool bHoldsStateTag = false;
 	FDelegateHandle DeadHandle;
+	FDelegateHandle BreakDeadHandle;
 };
