@@ -1,5 +1,11 @@
 # Aetheln Online Future Visuals Plan
 
+> **Superseded Kell notes.** The Kell description in this file (living skin,
+> mineral crown, mantle, anatomy correction sheet) is the superseded design,
+> kept as history. Current canon:
+> `docs/playable-peoples.md` (Kell section) and the
+> `docs/art-style-guide.md`.
+
 ## Purpose
 
 This non-canonical document is the handoff point for future visual-generation

@@ -167,13 +167,14 @@ so the pose blends briefly without delaying movement.
   smooths only the visible ground turn.
 - A jump uses the normalized direction held at takeoff. Airborne input cannot
   redirect the trajectory. Reticle camera movement may turn capsule
-  facing while airborne without changing velocity. Diagonal aimed jumps with
+  facing while airborne, at the 720 degrees/s camera-facing rate, without
+  changing velocity. Diagonal aimed jumps with
   positive forward input add up to 25 degrees of local, presentation-only mesh
   yaw toward the locked takeoff direction; it blends in and returns after
   landing without changing collision or aim. Pure lateral aimed jumps instead
   snap the whole body to the locked travel direction. While Reticle mode remains active,
-  later camera-yaw changes rotate that airborne body angle by the same amount
-  without redirecting velocity. Separate camera-facing head
+  later camera-yaw changes turn that airborne body angle toward the same
+  amount, at the 720 degrees/s rate, without redirecting velocity. Separate camera-facing head
   tracking is deferred. Backward aimed jumps add no local yaw and retain
   camera-forward body facing.
 - A Space press during the final 0.20 seconds before landing is retained once
@@ -250,33 +251,56 @@ rotation mode for every move from that flag, the move's acceleration, and its
 control yaw: on the ground, aim or backpedal faces the camera at the 720
 degrees/s rate and anything else faces travel; airborne, aim faces the camera
 unless the takeoff was a pure lateral aimed jump, whose sideways body then
-turns with camera yaw while aim is held and holds still while it is released.
-Camera facing turns toward the move's own control yaw, so correction replay
-uses the recorded yaw rather than the live camera. The aim-tracked jump state
-is saved with each client move, so a correction replay restores it too. The
+turns toward camera yaw plus its held offset, at the same 720 degrees/s rate
+(`RotationRate.Yaw`, no separate airborne value), while aim is held and holds
+still while it is released. Releasing aim mid-turn holds the facing reached so
+far, and the offset follows it, so re-aiming resumes from there. Camera facing
+turns toward the move's own control yaw, so correction replay uses the recorded
+yaw rather than the live camera. The aim-tracked jump state is saved with each
+client move, so a correction replay restores it too. Because the bounded turn
+starts from the previous facing, the replay also starts from the rotation the
+client simulated after the last acknowledged move; the engine restores that
+rotation only while a rotation mode flag is set, which a tracked jump clears, so
+`ClientUpdatePositionAfterServerUpdate` restores it in that case. The
 owning client's prediction and replay and the server therefore compute the
 same facing, and remote players receive it through ordinary replicated
 movement. A client can only request aim; it sends no body rotation (only the
 control rotation every move already carries), and the server never turns the
-body faster than the rotation rate except at the takeoff and airborne-tracking
-snaps described above. The visible mesh-yaw blends stay local presentation.
+body faster than the rotation rate, in the air as on the ground, with one
+exception: the takeoff snap in `DoJump`. The snap stays because it happens
+at the grounded-to-airborne transition, from the move's own acceleration and
+control yaw, and the owner confirmed the instant takeoff facing in the tuning
+pass below. It can turn the body up to 180 degrees in that one move; a system
+that reads authoritative facing, such as a directional block, sees the
+post-snap facing from that move on. By owner direction (2026-10-11) a jump may
+start again the moment the character lands or its feet touch an obstacle, with
+no minimum interval between jumps, so under a low ceiling or onto a short ledge
+the snap can repeat every few moves, each turning the body up to 180 degrees.
+That repeat is intended jump behaviour; its consequence for a directional block
+arc is a residual risk for #18 P4, whose only open option is to disable the snap
+while a block is held. The rate is also measured in client-reported move time, so it
+depends on engine time-discrepancy detection, which is off (see Correction and
+rubber-banding); ground facing has the same limit. The visible mesh-yaw blends
+stay local presentation.
 
 `Aetheln.Movement.Net.*` covers the flag round trip, the server speed and
 backpedal clamps, rejected requests, client/server takeoff parity on a
 land-and-rejump direction change, takeoff replay, once and repeated, with a
 turned camera (also for an aimed diagonal jump with aim released), airborne
-tracking replay across an aim release and re-press, and server and
+tracking replay across an aim release and re-press, a replay of a bounded
+airborne turn that starts from the acknowledged facing, and server and
 simulated-proxy facing equal to the owning client's for aimed diagonal jumps,
 Reticle strafing, S backpedal, and pure lateral airborne aim tracking, plus
 bounds on what a client can obtain through the aim flag (rate-limited facing,
-no extra speed).
+on the ground and in the air, including alternating camera yaws, and no extra
+speed).
 
 Known limits: remote players do not see the local mesh-yaw presentation (the
 35-degree strafe and 25-degree aim-jump turns), and their locomotion Animation
 Blueprint does not yet know the rotation mode, so it uses the travel-facing
-direction clamp. Airborne aim tracking sets server facing to camera yaw plus
-the held offset on every aimed move, with no rate limit; a future directional
-block that reads authoritative facing may need one.
+direction clamp. Airborne facing is rate limited (issue #306); the jump
+takeoff snap is the only unbounded facing change, and by design it repeats as
+often as jumps can start (see the paragraph above).
 
 ### Correction and rubber-banding
 
@@ -317,8 +341,8 @@ root; `CharacterMovementComponent.cpp` below is
   client that predicted more speed or acceleration than these allow ends at a
   different location, which is position error, so the check above corrects it.
   `PhysicsRotation` turns the body at the rotation rate toward the move's
-  travel direction or its own control yaw, apart from the takeoff and
-  airborne-tracking snaps described above. A facing disagreement is never
+  travel direction or its own control yaw, apart from the takeoff snap
+  described above. A facing disagreement is never
   corrected: rotation does not enter the check, so the server's facing simply
   replicates to remote players. The tests
   `Aetheln.Movement.Net.ServerSpeedClamp`, `InvalidSprintRejected` and
@@ -339,7 +363,14 @@ root; `CharacterMovementComponent.cpp` below is
   `Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h`);
   while `bOrientRotationToMovement` or `bUseControllerDesiredRotation` is set,
   the engine restores the last acknowledged move's rotation before the replay
-  (`p.UseLastGoodRotationDuringCorrection`, default 1). Sprint and aim intent,
+  (`p.UseLastGoodRotationDuringCorrection`, default 1). A tracked airborne jump
+  clears both flags, so `ClientUpdatePositionAfterServerUpdate` restores that
+  rotation itself, because the bounded turn replays correctly only from it. It
+  does so when the latest predicted move has neither flag set, and it does not
+  read the console variable. With `p.UseLastGoodRotationDuringCorrection=0`, a
+  correction that arrives after landing, while tracked moves are still
+  unacknowledged, gets no restore from either, so that replay starts from the
+  client's latest facing. Sprint and aim intent,
   recorded yaw, and takeoff and tracking replay are described in the
   [Movement baseline](#movement-baseline) text above and are not repeated here.
 - What remote players see: they are simulated proxies and do not predict or

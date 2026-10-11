@@ -14,6 +14,13 @@ namespace AethelnGameplayTags
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Dead, "State.Dead", "Death flow state. Declared by #19, applied and removed only by #21.");
 
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Damage_Wrought, "Damage.Wrought", "combat.damage.wrought");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Damage_Wrought, "SetByCaller.Damage.Wrought", "Negated Wrought damage for the shared damage effect");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Dodge, "Ability.Dodge", "combat.action.dodge (proposed for #106)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Dodge, "Cooldown.Dodge", "Cooldown state of combat.action.dodge");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Dodging, "State.Dodging", "Server-owned dodge action state, [S, S + ActionEnd)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_DodgeInvulnerable, "State.DodgeInvulnerable", "Server-owned dodge invulnerability window; gating and observers only, never an avoidance check");
+
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_MaxHealth, "SetByCaller.Init.MaxHealth", "Initial MaxHealth magnitude for the attribute init effect");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_Health, "SetByCaller.Init.Health", "Initial Health magnitude for the attribute init effect");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_MaxEndurance, "SetByCaller.Init.MaxEndurance", "Initial MaxEndurance magnitude for the attribute init effect");
@@ -34,5 +41,7 @@ namespace AethelnCombatTestTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Test_Trigger, "Test.Trigger", "Test-only gameplay event that UAethelnTriggeredTestAbility responds to");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Test_ProbeActive, "Test.ProbeActive", "Test-only state tag held while the seam probe is active");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Test_Blocking, "Test.Blocking", "Test-only tag that blocks the seam probe");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Test_Avoidance, "Test.Avoidance", "Test-only tag placed in the contact pipeline's avoidance set");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Test_Defending, "Test.Defending", "Test-only state tag of a test defense state");
 }
 #endif

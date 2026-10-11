@@ -61,3 +61,16 @@ UAethelnEnduranceCostEffect::UAethelnEnduranceCostEffect()
 	Modifier.ModifierOp = EGameplayModOp::AddBase;
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Cost);
 }
+
+UAethelnDamageEffect::UAethelnDamageEffect()
+{
+	DurationPolicy = EGameplayEffectDurationType::Instant;
+
+	FSetByCallerFloat Damage;
+	Damage.DataTag = AethelnGameplayTags::SetByCaller_Damage_Wrought;
+
+	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
+	Modifier.Attribute = UAethelnCombatAttributeSet::GetHealthAttribute();
+	Modifier.ModifierOp = EGameplayModOp::AddBase;
+	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Damage);
+}

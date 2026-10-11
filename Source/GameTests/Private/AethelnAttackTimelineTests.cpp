@@ -4,6 +4,7 @@
 #include "AethelnCombatTestAbilities.h"
 #include "AethelnCombatTestWorld.h"
 #include "AethelnChainTestFixture.h"
+#include "AethelnCombatAttributeSet.h"
 #include "AethelnCombatEffects.h"
 #include "AethelnObservability.h"
 #include "AethelnObservabilitySubsystem.h"
@@ -371,9 +372,13 @@ bool FAethelnAttackWindowEvaluationTest::RunTest(const FString& Parameters)
 
 	AethelnChainTests::FFixture Fixture;
 	if (!Fixture.Init(*this)) { return false; }
+	// Fixture geometry: the test shape reaches a dummy 60 units ahead partway through each active window.
+	if (Fixture.SpawnTarget(*this, FVector(60.0, 0.0, 0.0)) == nullptr) { return false; }
 	TestEqual(TEXT("Real seam starts a step"), Fixture.Press(), EAethelnActivationResult::Accepted);
 	Fixture.AdvanceTo(1.0);
 	TestEqual(TEXT("World pass samples before timeout despite a long frame"), Fixture.Intervals.Num(), 1);
+	TestEqual(TEXT("A frame spanning the whole window sweeps it once, sub-stepped by the sampling bounds (30 / 10)"), Fixture.Timeline->GetSweepCountForTests(), 3);
+	TestEqual(TEXT("A frame spanning the active window and LinkClose still resolves the hit"), Fixture.Results.Num(), 1);
 	TestEqual(TEXT("Timeout uses authored time"), Fixture.Player.AbilitySystem->GetLastChainResetTimeForTests(), 0.75);
 	Fixture.Press();
 	Fixture.AdvanceTo(1.5); Fixture.Press();
@@ -382,6 +387,8 @@ bool FAethelnAttackWindowEvaluationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Final active interval survives the same frame's completion"), Fixture.Intervals.Num(), 4);
 	TestEqual(TEXT("Long final frame completes with the exact authored stamp"), Fixture.Player.AbilitySystem->GetLastChainResetTimeForTests(), 2.625);
 	TestEqual(TEXT("Long final frame reports Completed"), Fixture.Ends.Last().Reason, EAethelnChainEndReason::Completed);
+	TestEqual(TEXT("A frame spanning the final active window and RecoveryEnd still resolves the hit"), Fixture.Results.Num(), 4);
+	if (Fixture.Results.Num() == 4) { TestEqual(TEXT("The last hit is the final step's"), Fixture.Results[3].ActivationId, Fixture.Records.Last().ActivationId); }
 	AethelnChainTests::FFixture OtherWorld; if (!OtherWorld.Init(*this)) { return false; }
 	OtherWorld.Press();
 	Fixture.AdvanceTo(4.0);
@@ -559,12 +566,85 @@ bool FAethelnAttackChainResetsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Missing followup ends by timeout"), F.Ends.Last().Reason, EAethelnChainEndReason::Timeout);
 	F.Press(); F.Player.AbilitySystem->AddLooseGameplayTag(AethelnGameplayTags::State_Dead);
 	TestEqual(TEXT("Actual tag event resets incompatible chain"), F.Ends.Last().Reason, EAethelnChainEndReason::IncompatibleState);
+	TestEqual(TEXT("IncompatibleState is stamped with its processing time"), F.Player.AbilitySystem->GetLastChainResetTimeForTests(), 1.25);
 	TestEqual(TEXT("Dead state refuses new activation"), F.Press(), EAethelnActivationResult::ActivationBlocked);
 	F.Player.AbilitySystem->RemoveLooseGameplayTag(AethelnGameplayTags::State_Dead);
-	F.Press(); F.Player.Controller->UnPossess();
+	F.Press(); F.AdvanceTo(1.3125); F.Player.Controller->UnPossess();
 	TestEqual(TEXT("Actual null-avatar lifecycle emits AvatarLost"), F.Ends.Last().Reason, EAethelnChainEndReason::AvatarLost);
+	TestEqual(TEXT("AvatarLost is stamped with its processing time"), F.Player.AbilitySystem->GetLastChainResetTimeForTests(), 1.3125);
 	F.Player.AbilitySystem->CancelAllAbilities();
 	TestEqual(TEXT("Existing CancelAll after AvatarLost cannot emit a second end"), F.Ends.Num(), 4);
+
+	// From P4: a mid-frame external reset drops only the contacts at or after its reset time.
+	{
+		FFixture M; if (!M.Init(*this)) { return false; }
+		AAethelnCombatAICharacter* Near = M.SpawnTarget(*this, FVector(60.0, 0.0, 0.0));
+		AAethelnCombatAICharacter* Far = M.SpawnTarget(*this, FVector(70.0, 0.0, 50.0));
+		if (Near == nullptr || Far == nullptr) { return false; }
+		M.Press(); M.AdvanceTo(0.125);
+		M.Player.AbilitySystem->ResetChain(EAethelnChainEndReason::Interrupted, 0.21875);
+		M.AdvanceTo(0.25);
+		if (TestEqual(TEXT("Only the contact before the reset time survives"), M.Results.Num(), 1))
+		{
+			TestTrue(TEXT("The surviving contact precedes the reset"), M.Results[0].ContactTime < 0.21875);
+		}
+		TestEqual(TEXT("The later target takes no damage"), Far->GetAethelnAbilitySystemComponent()->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
+		TestEqual(TEXT("The reset step leaves the subsystem after the pass"), M.Timeline->GetRegisteredStepCountForTests(), 0);
+	}
+
+	// The next press is step 1 after every reset reason.
+	for (EAethelnChainEndReason Reason : { EAethelnChainEndReason::Completed, EAethelnChainEndReason::Timeout, EAethelnChainEndReason::Interrupted,
+		EAethelnChainEndReason::AvatarLost, EAethelnChainEndReason::IncompatibleState, EAethelnChainEndReason::OtherAction, EAethelnChainEndReason::InternalFailure })
+	{
+		FFixture R; if (!R.Init(*this)) { return false; }
+		R.Press(); R.AdvanceTo(0.5);
+		TestEqual(TEXT("Link press starts step 2"), R.Press(), EAethelnActivationResult::Accepted);
+		switch (Reason)
+		{
+		case EAethelnChainEndReason::Completed:
+			R.AdvanceTo(1.0); R.Press(); R.AdvanceTo(1.625);
+			break;
+		case EAethelnChainEndReason::Timeout:
+			R.AdvanceTo(1.25);
+			break;
+		case EAethelnChainEndReason::Interrupted:
+			R.Player.AbilitySystem->ResetChain(EAethelnChainEndReason::Interrupted);
+			break;
+		case EAethelnChainEndReason::AvatarLost:
+			R.Player.Controller->UnPossess(); R.Player.Controller->Possess(R.Pawn);
+			break;
+		case EAethelnChainEndReason::IncompatibleState:
+			R.Player.AbilitySystem->AddLooseGameplayTag(AethelnGameplayTags::State_Dead);
+			R.Player.AbilitySystem->RemoveLooseGameplayTag(AethelnGameplayTags::State_Dead);
+			break;
+		case EAethelnChainEndReason::OtherAction:
+		{
+			const FGameplayAbilitySpecHandle OtherHandle = R.Player.AbilitySystem->GiveAbility(FGameplayAbilitySpec(UAethelnCommitmentProbeTestAbility::StaticClass()));
+			const UAethelnGameplayAbility* Other = Cast<UAethelnGameplayAbility>(R.Player.AbilitySystem->FindAbilitySpecFromHandle(OtherHandle)->GetPrimaryInstance());
+			R.AdvanceTo(1.0);
+			FAethelnCombatActivationRequest Request = R.Request(R.NextSequence++); Request.AbilityId = Other->GetAbilityId();
+			TestEqual(TEXT("Other action is accepted after commitment"), R.Player.AbilitySystem->ProcessServerRequest(Request), EAethelnActivationResult::Accepted);
+			break;
+		}
+		case EAethelnChainEndReason::InternalFailure:
+			// A buffered start the timeline refuses for a reason other than a lost avatar (an exhausted ordinal).
+			R.AdvanceTo(0.875);
+			TestEqual(TEXT("Buffered press for step 3"), R.Press(), EAethelnActivationResult::Accepted);
+			R.Timeline->SetNextOrdinalForTests(MAX_uint64);
+			R.AdvanceTo(1.0);
+			TestEqual(TEXT("The refused buffered step never starts"), R.Records.Num(), 2);
+			R.Timeline->SetNextOrdinalForTests(1000);
+			break;
+		default:
+			break;
+		}
+		if (TestTrue(TEXT("The chain ended"), R.Ends.Num() > 0))
+		{
+			TestEqual(TEXT("The chain ended with the expected reason"), R.Ends.Last().Reason, Reason);
+		}
+		TestEqual(TEXT("A press after the reset is accepted"), R.Press(), EAethelnActivationResult::Accepted);
+		TestEqual(TEXT("A press after every reset reason starts step 1"), R.Records.Last().ChainStep, uint8(1));
+	}
 	return true;
 }
 
@@ -1173,6 +1253,7 @@ bool FAethelnAttackTeardownChainTest::RunTest(const FString& Parameters)
 		for (bool bDestroyPlayerState : { false, true })
 		{
 			AethelnChainTests::FFixture F; if (!F.Init(*this)) { return false; }
+			if (F.SpawnTarget(*this, FVector(60.0, 0.0, 0.0)) == nullptr) { return false; }
 			F.Press();
 			if (Time > 0.375) { F.AdvanceTo(0.375); F.Press(); }
 			F.AdvanceTo(Time);
@@ -1182,7 +1263,26 @@ bool FAethelnAttackTeardownChainTest::RunTest(const FString& Parameters)
 			F.AdvanceTo(1.0);
 			TestEqual(TEXT("No waiting step starts after teardown"), F.Records.Num(), 1);
 			TestEqual(TEXT("No subsystem step or delegate owner leaks"), F.Timeline->GetRegisteredStepCountForTests(), 0);
+			// The dummy is first touched at 0.1917: only a teardown after it keeps that one earlier contact.
+			TestEqual(TEXT("No contact at or after the teardown time"), F.Results.Num(), Time > 0.25 ? 1 : 0);
 		}
+	}
+	// The avatar is destroyed while the controller and PlayerState still reference it, so the null-pawn hook never runs.
+	for (double Time : { 0.0625, 0.1875, 0.4375 })
+	{
+		AethelnChainTests::FFixture F; if (!F.Init(*this)) { return false; }
+		if (F.SpawnTarget(*this, FVector(60.0, 0.0, 0.0)) == nullptr) { return false; }
+		F.Press();
+		if (Time > 0.375) { F.AdvanceTo(0.375); F.Press(); }
+		F.AdvanceTo(Time);
+		F.Pawn->Controller = nullptr;
+		F.Pawn->Destroy();
+		F.AdvanceTo(1.0);
+		TestEqual(TEXT("The next pass ends the chain once"), F.Ends.Num(), 1);
+		if (F.Ends.Num() == 1) { TestEqual(TEXT("A lost avatar is AvatarLost"), F.Ends[0].Reason, EAethelnChainEndReason::AvatarLost); }
+		TestEqual(TEXT("No waiting step starts without an avatar"), F.Records.Num(), 1);
+		TestEqual(TEXT("No sweep from a destroyed avatar"), F.Results.Num(), Time > 0.25 ? 1 : 0);
+		TestEqual(TEXT("No subsystem step leaks"), F.Timeline->GetRegisteredStepCountForTests(), 0);
 	}
 	AethelnChainTests::FFixture Fresh; if (!Fresh.Init(*this)) { return false; }
 	TestFalse(TEXT("Fresh PlayerState has no previous chain"), Fresh.Player.AbilitySystem->GetChainStateForTests().bExists);
@@ -1197,6 +1297,58 @@ bool FAethelnAttackTeardownChainTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("World teardown ends a waiting chain once"), Fresh.Ends.Num(), 1);
 	TestEqual(TEXT("World teardown has the AvatarLost reason"), Fresh.Ends.Last().Reason, EAethelnChainEndReason::AvatarLost);
 	TestEqual(TEXT("World teardown clears subsystem entries"), Fresh.Timeline->GetRegisteredStepCountForTests(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnAttackChainStartFailuresTest,
+	"Aetheln.GameCombat.AttackTimeline.ChainStartFailures",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnAttackChainStartFailuresTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnChainTests;
+	{
+		// The chain commits its cost, then a synchronous reset stops the step from starting.
+		FFixture F; if (!F.Init(*this)) { return false; }
+		F.Press(); F.AdvanceTo(0.5);
+		bool bReset = false;
+		const FDelegateHandle CostListener = F.Player.AbilitySystem->OnGameplayEffectAppliedDelegateToSelf.AddLambda(
+			[&F, &bReset](UAbilitySystemComponent*, const FGameplayEffectSpec& Spec, FActiveGameplayEffectHandle)
+			{
+				if (!bReset && Spec.Def != nullptr && Spec.Def->IsA<UAethelnEnduranceCostEffect>())
+				{
+					bReset = true;
+					F.Player.AbilitySystem->ResetChain(EAethelnChainEndReason::Interrupted);
+				}
+			});
+		const FAethelnCombatActivationRequest Committed = F.Request(F.NextSequence++);
+		TestEqual(TEXT("A committed step that cannot start reports InternalFailure"), F.Player.AbilitySystem->ProcessServerRequest(Committed), EAethelnActivationResult::InternalFailure);
+		F.Player.AbilitySystem->OnGameplayEffectAppliedDelegateToSelf.Remove(CostListener);
+		TestTrue(TEXT("The cost callback reset the chain"), bReset);
+		TestEqual(TEXT("The cost was spent once and is not refunded (OQ5)"), F.CostApplications, 2);
+		TestEqual(TEXT("A committed operation advances the accepted sequence"), F.Player.AbilitySystem->GetLastAcceptedSequenceForTests(), Committed.Sequence);
+		TestEqual(TEXT("A replay of the committed request is a duplicate"), F.Player.AbilitySystem->ProcessServerRequest(Committed), EAethelnActivationResult::DuplicateSequence);
+		TestEqual(TEXT("The replay spends nothing"), F.CostApplications, 2);
+		TestEqual(TEXT("The next press is accepted"), F.Press(), EAethelnActivationResult::Accepted);
+		TestEqual(TEXT("The next press starts step 1"), F.Records.Last().ChainStep, uint8(1));
+	}
+	{
+		// A client-mode world never registers or drives a step.
+		FFixture F; if (!F.Init(*this)) { return false; }
+		TestEqual(TEXT("Standalone press starts a step"), F.Press(), EAethelnActivationResult::Accepted);
+		F.World.World->NextURL = TEXT("127.0.0.1:7777");
+		if (TestTrue(TEXT("The world now derives client mode"), F.World.World->GetNetMode() == NM_Client))
+		{
+			TestFalse(TEXT("No subsystem is created for a client world"), F.Timeline->ShouldCreateSubsystem(F.World.World));
+			TestFalse(TEXT("A client-mode world refuses registration"), F.Timeline->CanRegisterStep(*F.Player.AbilitySystem));
+			F.AdvanceTo(0.5);
+			TestEqual(TEXT("The pass does not run in a client world"), F.Intervals.Num(), 0);
+			TestEqual(TEXT("A press in a client world never commits"), F.Press(), EAethelnActivationResult::InternalFailure);
+			TestEqual(TEXT("Only the standalone cost was spent"), F.CostApplications, 1);
+			TestEqual(TEXT("No step starts in a client world"), F.Records.Num(), 1);
+		}
+		F.World.World->NextURL.Empty();
+	}
 	return true;
 }
 

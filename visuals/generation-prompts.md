@@ -1,5 +1,10 @@
 # Generation Prompt Set
 
+> **Superseded Kell notes.** The Kell prompts in this file (living skin,
+> mineral crown, mantle) are the superseded design, kept as history. Current
+> canon: `docs/playable-peoples.md` (Kell section) and the
+> `docs/art-style-guide.md`.
+
 All images were generated with the built-in image-generation workflow. These
 are the reusable final prompt briefs; canonical details come from the Aetheln
 design documents.

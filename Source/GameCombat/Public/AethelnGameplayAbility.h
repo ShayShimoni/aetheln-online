@@ -30,6 +30,9 @@ public:
 	/** Server only: the id this instance's latest CommitAbility created, or invalid if that commit failed. */
 	const FGuid& GetActivationId() const { return ActivationId; }
 
+	/** Movement-carried (#18 T1): reachable only through ProcessMovementCarriedRequest; the ordinary seam refuses it. */
+	bool IsMovementCarried() const { return bMovementCarried; }
+
 	/** Grant-time validation of this definition: null when it may be granted, otherwise the reason. */
 	virtual const TCHAR* FindGrantProblem() const;
 
@@ -119,6 +122,9 @@ protected:
 	void SetCooldownTag(const FGameplayTag& InCooldownTag);
 
 	FGameplayTag AbilityId;
+
+	/** Constructor only: structure, never config. */
+	bool bMovementCarried = false;
 
 private:
 	friend class UAethelnAbilitySystemComponent;
