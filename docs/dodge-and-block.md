@@ -1023,13 +1023,14 @@ the remapping mechanism and controller layout (#82); display names.
 3. **Airborne facing** is bound by [#306](https://github.com/ShayShimoni/aetheln-online/issues/306) (Q12): airborne aim-tracking
    facing turns at the existing 720 degrees/s rate, except for the jump takeoff
    snap, which turns facing up to 180 degrees in one move, as described in
-   [Playable Movement POC](movement-poc.md#movement-baseline). Nothing limits
-   how often a jump can start: a held jump restarts on every landing, so under
-   a low ceiling or onto a short ledge the snap can repeat every few moves. The
-   arc reads server actor yaw, so a block raised in a takeoff move sees the
-   post-snap facing. Whether to leave this, add a minimum interval between
-   jumps, or limit the snap while blocking is an open owner decision for #18
-   P4; any value stays TBD. The 720 degrees/s bound is measured in
+   [Playable Movement POC](movement-poc.md#movement-baseline). By owner
+   direction (2026-10-11) a jump may start again the moment the character
+   lands or its feet touch an obstacle, with no minimum interval, so under a
+   low ceiling or onto a short ledge the snap repeats every few moves; that is
+   intended jump behaviour. The arc reads server actor yaw, so a block raised
+   in a takeoff move sees the post-snap facing, and a repeating snap can turn
+   the arc up to 180 degrees each time. This is a residual risk for #18 P4,
+   whose only open option is to disable the snap while a block is held. The 720 degrees/s bound is measured in
    client-reported move time, so it depends on residual risk 2 (time-discrepancy
    detection is off); ground facing has the same limit. Owner: #17.
 4. **Move data has no schema version** (#82 F10). The dodge field in the

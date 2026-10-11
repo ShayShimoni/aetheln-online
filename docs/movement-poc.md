@@ -272,12 +272,13 @@ at the grounded-to-airborne transition, from the move's own acceleration and
 control yaw, and the owner confirmed the instant takeoff facing in the tuning
 pass below. It can turn the body up to 180 degrees in that one move; a system
 that reads authoritative facing, such as a directional block, sees the
-post-snap facing from that move on. Nothing limits how often a jump can start:
-a held jump restarts on every landing, so under a low ceiling or onto a short
-ledge the snap can repeat every few moves, each turning the body up to 180
-degrees. Whether to leave that, add a minimum interval between jumps, or limit
-the snap while blocking is an open owner decision for #18 P4, and any value
-stays TBD. The rate is also measured in client-reported move time, so it
+post-snap facing from that move on. By owner direction (2026-10-11) a jump may
+start again the moment the character lands or its feet touch an obstacle, with
+no minimum interval between jumps, so under a low ceiling or onto a short ledge
+the snap can repeat every few moves, each turning the body up to 180 degrees.
+That repeat is intended jump behaviour; its consequence for a directional block
+arc is a residual risk for #18 P4, whose only open option is to disable the snap
+while a block is held. The rate is also measured in client-reported move time, so it
 depends on engine time-discrepancy detection, which is off (see Correction and
 rubber-banding); ground facing has the same limit. The visible mesh-yaw blends
 stay local presentation.
@@ -298,8 +299,8 @@ Known limits: remote players do not see the local mesh-yaw presentation (the
 35-degree strafe and 25-degree aim-jump turns), and their locomotion Animation
 Blueprint does not yet know the rotation mode, so it uses the travel-facing
 direction clamp. Airborne facing is rate limited (issue #306); the jump
-takeoff snap is the only unbounded facing change, and it can repeat as often as
-jumps can start (see the paragraph above).
+takeoff snap is the only unbounded facing change, and by design it repeats as
+often as jumps can start (see the paragraph above).
 
 ### Correction and rubber-banding
 
