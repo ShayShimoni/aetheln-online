@@ -2,6 +2,11 @@
 
 #include "AbilitySystemInterface.h"
 #include "AethelnGameplayAbility.h"
+#include "AethelnBasicChainAbility.h"
+#include "AethelnCharacterMovementComponent.h"
+#include "AethelnCombatTimelineSubsystem.h"
+#include "AethelnDodgeAbility.h"
+#include "AethelnGameplayTags.h"
 #include "AethelnObservability.h"
 #include "AethelnObservabilitySubsystem.h"
 #include "Engine/GameInstance.h"
@@ -12,6 +17,9 @@
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
+#include "Net/UnrealNetwork.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogAethelnActivationOutcome, Log, All);
 
 namespace AethelnActivationTelemetry
 {
@@ -66,13 +74,18 @@ namespace AethelnActivationTelemetry
 		}
 	}
 
-	/** One event and one metric per outcome. The contract drops the event of a zero-sequence request. */
+	/**
+	 * One event and one metric per outcome. The contract drops the event of a zero-sequence request.
+	 * ActionSubject replaces the generic Ability subject for a resolved action (Dodge); the
+	 * Cooldown, Resource and Aim subjects keep #19's mapping.
+	 */
 	void EmitOutcome(
 		const UActorComponent& Component,
 		EAethelnActivationResult Result,
 		uint32 Sequence,
 		const FGameplayTag& ResolvedAbilityId,
-		const FGuid& ActivationId)
+		const FGuid& ActivationId,
+		EAethelnObservabilityCategory ActionSubject = EAethelnObservabilityCategory::Ability)
 	{
 		UAethelnObservabilitySubsystem* Subsystem = ResolveSubsystem(Component);
 		if (Subsystem == nullptr)
@@ -81,7 +94,11 @@ namespace AethelnActivationTelemetry
 		}
 
 		const bool bAccepted = Result == EAethelnActivationResult::Accepted;
-		const FSafeOutcome Outcome = ToSafeOutcome(Result);
+		FSafeOutcome Outcome = ToSafeOutcome(Result);
+		if (Outcome.Subject == EAethelnObservabilityCategory::Ability)
+		{
+			Outcome.Subject = ActionSubject;
+		}
 		FAethelnObservabilityEvent Event;
 		Event.Category = bAccepted ? Outcome.Subject : EAethelnObservabilityCategory::Rejection;
 		Event.SubjectCategory = Outcome.Subject;
@@ -170,6 +187,32 @@ namespace AethelnAimValidation
 	}
 }
 
+/** Steps both routes share (docs/dodge-and-block.md, T1): pure, so each route calls them without a synthesized request. */
+namespace AethelnSharedValidation
+{
+	/** 2. Lifecycle. */
+	EAethelnActivationResult Lifecycle(const FAethelnActivationValidationState& State)
+	{
+		if (State.bAvatarBeingDestroyed)
+		{
+			return EAethelnActivationResult::ActorDestroyed;
+		}
+		return State.bHasPossessedAvatar ? EAethelnActivationResult::Accepted : EAethelnActivationResult::ConnectionClosed;
+	}
+
+	/** 6. Content version. */
+	EAethelnActivationResult ContentVersion(uint32 RequestVersion, const FAethelnActivationValidationState& State)
+	{
+		return RequestVersion == State.GrantedContentVersion ? EAethelnActivationResult::Accepted : EAethelnActivationResult::IncompatibleVersion;
+	}
+
+	/** 7, Press: the single instance must be inactive. */
+	EAethelnActivationResult Press(const FAethelnActivationValidationState& State)
+	{
+		return State.bAbilityActive ? EAethelnActivationResult::ActivationBlocked : EAethelnActivationResult::Accepted;
+	}
+}
+
 bool FAethelnActivationRateBucket::TryConsume(double NowSeconds, double Capacity, double RefillPerSecond)
 {
 	if (!FMath::IsFinite(NowSeconds) || !FMath::IsFinite(Capacity) || !FMath::IsFinite(RefillPerSecond)
@@ -220,13 +263,10 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ValidateRequest(
 	OutAimCorrection = EAethelnAimCorrection::None;
 
 	// 2. Lifecycle.
-	if (State.bAvatarBeingDestroyed)
+	const EAethelnActivationResult LifecycleResult = AethelnSharedValidation::Lifecycle(State);
+	if (LifecycleResult != EAethelnActivationResult::Accepted)
 	{
-		return EAethelnActivationResult::ActorDestroyed;
-	}
-	if (!State.bHasPossessedAvatar)
-	{
-		return EAethelnActivationResult::ConnectionClosed;
+		return LifecycleResult;
 	}
 
 	// 3. Layout version.
@@ -236,11 +276,12 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ValidateRequest(
 	}
 
 	// 4. Sequence: zero or lower is stale, equal is a duplicate, forward gaps are accepted.
-	if (Request.Sequence == 0 || Request.Sequence < State.LastAcceptedSequence)
+	const uint32 SequenceFloor = FMath::Max(State.LastAcceptedSequence, State.HighestInFlightSequence);
+	if (Request.Sequence == 0 || Request.Sequence < SequenceFloor)
 	{
 		return EAethelnActivationResult::StaleSequence;
 	}
-	if (Request.Sequence == State.LastAcceptedSequence)
+	if (Request.Sequence == SequenceFloor)
 	{
 		return EAethelnActivationResult::DuplicateSequence;
 	}
@@ -254,12 +295,18 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ValidateRequest(
 	{
 		return EAethelnActivationResult::ActivationBlocked;
 	}
+	// Each ability has exactly one route: a movement-carried one never enters through the RPC.
+	if (State.bMovementCarried)
+	{
+		return EAethelnActivationResult::MalformedRequest;
+	}
 	bOutAbilityResolved = true;
 
 	// 6. Content version.
-	if (Request.ContentVersion != State.GrantedContentVersion)
+	const EAethelnActivationResult VersionResult = AethelnSharedValidation::ContentVersion(Request.ContentVersion, State);
+	if (VersionResult != EAethelnActivationResult::Accepted)
 	{
-		return EAethelnActivationResult::IncompatibleVersion;
+		return VersionResult;
 	}
 
 	// 6a. Bounds (invalid or unset config fails closed), then the client time sample.
@@ -328,7 +375,7 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ValidateRequest(
 	switch (Request.Phase)
 	{
 	case EAethelnActivationPhase::Press:
-		return State.bAbilityActive ? EAethelnActivationResult::ActivationBlocked : EAethelnActivationResult::Accepted;
+		return AethelnSharedValidation::Press(State);
 	case EAethelnActivationPhase::Release:
 		if (!State.bAcceptsRelease)
 		{
@@ -338,6 +385,45 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ValidateRequest(
 	default:
 		return EAethelnActivationResult::MalformedRequest;
 	}
+}
+
+EAethelnActivationResult UAethelnAbilitySystemComponent::ValidateMovementRequest(
+	uint32 ContentVersion,
+	bool bMovementAllowsStart,
+	const FAethelnActivationValidationState& State,
+	bool& bOutAbilityResolved)
+{
+	bOutAbilityResolved = false;
+
+	// 2.
+	const EAethelnActivationResult LifecycleResult = AethelnSharedValidation::Lifecycle(State);
+	if (LifecycleResult != EAethelnActivationResult::Accepted)
+	{
+		return LifecycleResult;
+	}
+
+	// 3 and 4 do not apply: build-identical move data and the engine's received-move timestamp rule.
+	// 5. The granted movement-carried ability; the move names no ability, so absent is blocked.
+	if (!State.bAbilityGranted || !State.bMovementCarried)
+	{
+		return EAethelnActivationResult::ActivationBlocked;
+	}
+	bOutAbilityResolved = true;
+
+	// 6. Content version. 6a to 6d do not apply: a dodge has no aim and no time sample.
+	const EAethelnActivationResult VersionResult = AethelnSharedValidation::ContentVersion(ContentVersion, State);
+	if (VersionResult != EAethelnActivationResult::Accepted)
+	{
+		return VersionResult;
+	}
+
+	// 7. Press only, on an inactive instance, with the server's own start predicate.
+	const EAethelnActivationResult PressResult = AethelnSharedValidation::Press(State);
+	if (PressResult != EAethelnActivationResult::Accepted)
+	{
+		return PressResult;
+	}
+	return bMovementAllowsStart ? EAethelnActivationResult::Accepted : EAethelnActivationResult::ActivationBlocked;
 }
 
 void UAethelnAbilitySystemComponent::RequestActivation(const FGameplayTag& AbilityId, EAethelnActivationPhase Phase)
@@ -385,23 +471,31 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 	}
 
 	// 1. Rate bucket, before any lookup.
-	if (!AdmitMessage(true, Request.Sequence))
+	if (!AdmitMessage(EMessageRoute::Seam, Request.Sequence))
 	{
 		return EAethelnActivationResult::RateLimited;
 	}
 
+	FRequestScope RequestScope;
+	RequestScope.Previous = ActiveRequestScope;
+	RequestScope.Sequence = Request.Sequence;
+	RequestScope.Owner = GetOwner();
+	RequestScope.Avatar = GetAvatarActor();
+	const APlayerState* RequestOwner = Cast<APlayerState>(GetOwner());
+	RequestScope.Controller = RequestOwner != nullptr ? RequestOwner->GetOwningController() : nullptr;
+	TGuardValue<FRequestScope*> RequestGuard(ActiveRequestScope, &RequestScope);
+	// Boundaries can end/reset an ability and synchronously admit another request.
+	const UWorld* BoundaryWorld = GetWorld();
+	ApplyDueBoundaries(BoundaryWorld != nullptr ? BoundaryWorld->GetTimeSeconds() : 0.0);
 	FAethelnActivationValidationState State;
-	AActor* Avatar = GetAvatarActor();
-	const APawn* AvatarPawn = Cast<APawn>(Avatar);
+	FillLifecycleState(State, RequestScope);
 	const APlayerState* PlayerState = Cast<APlayerState>(GetOwner());
 	const AController* Controller = PlayerState != nullptr ? PlayerState->GetOwningController() : nullptr;
-	State.bAvatarBeingDestroyed = Avatar != nullptr && Avatar->IsActorBeingDestroyed();
-	State.bHasPossessedAvatar = AvatarPawn != nullptr
-		&& PlayerState != nullptr
-		&& PlayerState->GetPawn() == AvatarPawn
-		&& Controller != nullptr
-		&& AvatarPawn->GetController() == Controller;
 	State.LastAcceptedSequence = LastAcceptedSequence;
+	for (const FRequestScope* Pending = RequestScope.Previous; Pending != nullptr; Pending = Pending->Previous)
+	{
+		State.HighestInFlightSequence = FMath::Max(State.HighestInFlightSequence, Pending->Sequence);
+	}
 	const UWorld* World = GetWorld();
 	State.NowSeconds = World != nullptr ? World->GetTimeSeconds() : 0.0;
 	if (State.bHasPossessedAvatar)
@@ -425,12 +519,16 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 	if (Definition != nullptr)
 	{
 		State.bAbilityGranted = true;
+		State.bMovementCarried = Definition->IsMovementCarried();
 		State.GrantedContentVersion = Definition->ContentVersion;
 		State.bAcceptsRelease = Definition->bAcceptsRelease;
-		State.bAbilityActive = Spec->IsActive();
+		// PreActivate makes the instance active before it increments the spec count.
+		State.bAbilityActive = Request.Phase == EAethelnActivationPhase::Release
+			? Instance != nullptr && Instance->CanEndForRelease()
+			: Spec->IsActive() || (Instance != nullptr && Instance->IsActive());
 	}
 
-	// 2 to 7. P2 outputs the accepted aim only; #60 P3 carries it through the seam scope.
+	// 2 to 7. Carry only the accepted direction into the activation; RAW history remains in Finish.
 	bool bAbilityResolved = false;
 	FVector AcceptedAim;
 	EAethelnAimCorrection AimCorrection = EAethelnAimCorrection::None;
@@ -457,23 +555,21 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 	// 8. Engine eligibility, in the engine's order. Unlike the engine, the seam ignores the cheat variables.
 	const FGameplayAbilitySpecHandle Handle = Spec->Handle;
 	const UGameplayAbility* Source = Instance != nullptr ? static_cast<const UGameplayAbility*>(Instance) : Definition;
-	const FGameplayAbilityActorInfo* ActorInfo = AbilityActorInfo.Get();
-	if (!Source->CheckCooldown(Handle, ActorInfo))
+	const EAethelnActivationResult Eligibility = CheckEligibility(*Source, Handle);
+	if (Eligibility != EAethelnActivationResult::Accepted)
 	{
-		return Finish(Request, EAethelnActivationResult::OnCooldown, ResolvedAbilityId, FGuid());
-	}
-	if (!Source->CheckCost(Handle, ActorInfo))
-	{
-		return Finish(Request, EAethelnActivationResult::InsufficientResource, ResolvedAbilityId, FGuid());
-	}
-	if (!Source->DoesAbilitySatisfyTagRequirements(*this))
-	{
-		return Finish(Request, EAethelnActivationResult::ActivationBlocked, ResolvedAbilityId, FGuid());
+		return Finish(Request, Eligibility, ResolvedAbilityId, FGuid());
 	}
 
 	// 9. Activate inside the seam scope. The result slot, not the return value, says whether it committed.
 	FSeamScope Scope;
 	Scope.Handle = Handle;
+	Scope.ActivationId = FGuid::NewGuid(); // immutable original server operation, before PreActivate
+	Scope.AttackInput.Sequence = Request.Sequence;
+	Scope.AttackInput.ContentVersion = Request.ContentVersion;
+	Scope.AttackInput.AcceptedAim = AcceptedAim;
+	Scope.AttackInput.AimCorrection = AimCorrection;
+	Scope.AttackInput.ReceiptServerTime = State.NowSeconds;
 	bool bActivated = false;
 	{
 		TGuardValue<FSeamScope*> ScopeGuard(ActiveSeamScope, &Scope);
@@ -483,15 +579,10 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessServerRequest(co
 	{
 		return Finish(Request, EAethelnActivationResult::ActivationBlocked, ResolvedAbilityId, FGuid());
 	}
-	if (!Scope.bCommitted)
+	if (!Scope.bCommitted || (Cast<UAethelnBasicChainAbility>(Definition) != nullptr && !Scope.bChainReady))
 	{
-		// Fail closed: an activation that did not commit must not keep running or holding its state tags.
-		const FGameplayAbilitySpec* ActivatedSpec = FindAbilitySpecFromHandle(Handle);
-		if (ActivatedSpec != nullptr && ActivatedSpec->IsActive())
-		{
-			CancelAbilityHandle(Handle);
-		}
-		return Finish(Request, EAethelnActivationResult::InternalFailure, ResolvedAbilityId, FGuid());
+		CancelUncommittedActivation(Handle, Scope.ActivationId);
+		return Finish(Request, EAethelnActivationResult::InternalFailure, ResolvedAbilityId, Scope.bCommitted ? Scope.ActivationId : FGuid());
 	}
 
 	// 10.
@@ -507,9 +598,13 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::Finish(
 {
 	if (Result == EAethelnActivationResult::Accepted)
 	{
-		LastAcceptedSequence = Request.Sequence;
-		LastAcceptedAim = Request.Aim;
-		LastAcceptedClientTimeSeconds = Request.ClientServerTimeSeconds;
+		if (Request.Sequence > LastAcceptedSequence)
+		{
+			// Outcome correlation remains per request; only the latest accepted tuple advances.
+			LastAcceptedSequence = Request.Sequence;
+			LastAcceptedAim = Request.Aim;
+			LastAcceptedClientTimeSeconds = Request.ClientServerTimeSeconds;
+		}
 		if (AimCorrection == EAethelnAimCorrection::AimCorrected)
 		{
 			AethelnActivationTelemetry::EmitAimCorrection(*this, Request.Sequence, ResolvedAbilityId, ActivationId);
@@ -522,10 +617,331 @@ EAethelnActivationResult UAethelnAbilitySystemComponent::Finish(
 
 void UAethelnAbilitySystemComponent::ClientActivationOutcome_Implementation(uint32 Sequence, EAethelnActivationResult Result)
 {
+	UE_LOG(LogAethelnActivationOutcome, Log, TEXT("Activation outcome received: sequence=%u result=%s"), Sequence, *UEnum::GetValueAsString(Result));
 	OnActivationOutcome.Broadcast(Sequence, Result);
 }
 
-bool UAethelnAbilitySystemComponent::AdmitMessage(bool bSeamRequest, uint32 Sequence)
+EAethelnActivationResult UAethelnAbilitySystemComponent::ProcessMovementCarriedRequest(const FAethelnDodgeStartRequest& Request)
+{
+	// A client or replay copy never authorizes; it draws no token and sends nothing.
+	if (!IsOwnerActorAuthoritative())
+	{
+		return EAethelnActivationResult::ConnectionClosed;
+	}
+
+	// The ordinal correlates every movement outcome, the rate-limited one included; it never wraps to 0.
+	const uint32 Ordinal = MovementActivationOrdinal < MAX_uint32 ? ++MovementActivationOrdinal : MovementActivationOrdinal;
+
+	// 1. The connection's shared bucket, before any lookup.
+	if (!AdmitMessage(EMessageRoute::Movement, Ordinal, Request.ClientTimeStamp))
+	{
+		return EAethelnActivationResult::RateLimited;
+	}
+
+	FRequestScope RequestScope;
+	RequestScope.Previous = ActiveRequestScope;
+	RequestScope.Owner = GetOwner();
+	RequestScope.Avatar = GetAvatarActor();
+	const APlayerState* RequestOwner = Cast<APlayerState>(GetOwner());
+	RequestScope.Controller = RequestOwner != nullptr ? RequestOwner->GetOwningController() : nullptr;
+	TGuardValue<FRequestScope*> RequestGuard(ActiveRequestScope, &RequestScope);
+	const UWorld* World = GetWorld();
+	const double Now = World != nullptr ? World->GetTimeSeconds() : 0.0;
+	ApplyDueBoundaries(Now);
+
+	FAethelnActivationValidationState State;
+	FillLifecycleState(State, RequestScope);
+	// Only the current possessed avatar's own received move may ask.
+	State.bHasPossessedAvatar = State.bHasPossessedAvatar && Request.Avatar != nullptr && Request.Avatar == GetAvatarActor();
+	State.NowSeconds = Now;
+	const FGameplayAbilitySpec* Spec = nullptr;
+	const UAethelnDodgeAbility* Source = FindDodgeSource(Spec);
+	if (Source != nullptr)
+	{
+		const UAethelnGameplayAbility* Instance = Cast<UAethelnGameplayAbility>(Spec->GetPrimaryInstance());
+		State.bAbilityGranted = true;
+		State.bMovementCarried = Source->IsMovementCarried();
+		State.GrantedContentVersion = Source->ContentVersion;
+		State.bAbilityActive = Spec->IsActive() || (Instance != nullptr && Instance->IsActive());
+	}
+
+	// 2 to 7.
+	bool bAbilityResolved = false;
+	const EAethelnActivationResult Validation = ValidateMovementRequest(Request.ContentVersion, Request.bMovementAllowsStart, State, bAbilityResolved);
+	const FGameplayTag ResolvedAbilityId = bAbilityResolved ? Source->GetAbilityId() : FGameplayTag();
+	if (Validation != EAethelnActivationResult::Accepted)
+	{
+		return FinishMovement(Request.ClientTimeStamp, Ordinal, Validation, ResolvedAbilityId, FGuid());
+	}
+
+	// 8. Same eligibility and precedence as the ordinary seam.
+	const FGameplayAbilitySpecHandle Handle = Spec->Handle;
+	const EAethelnActivationResult Eligibility = CheckEligibility(*Source, Handle);
+	if (Eligibility != EAethelnActivationResult::Accepted)
+	{
+		return FinishMovement(Request.ClientTimeStamp, Ordinal, Eligibility, ResolvedAbilityId, FGuid());
+	}
+
+	// 9. Activate inside a seam scope for the dodge's spec only; S is this processing time.
+	FSeamScope Scope;
+	Scope.Handle = Handle;
+	Scope.bMovementCarried = true;
+	Scope.ActivationId = FGuid::NewGuid();
+	Scope.AttackInput.ContentVersion = Request.ContentVersion;
+	Scope.AttackInput.ReceiptServerTime = Now;
+	bool bActivated = false;
+	{
+		TGuardValue<FSeamScope*> ScopeGuard(ActiveSeamScope, &Scope);
+		bActivated = TryActivateAbility(Handle, false);
+	}
+	if (!bActivated)
+	{
+		return FinishMovement(Request.ClientTimeStamp, Ordinal, EAethelnActivationResult::ActivationBlocked, ResolvedAbilityId, FGuid());
+	}
+	if (!Scope.bCommitted || Scope.bCanceled || !DodgeWindow.bOpen || DodgeWindow.OperationId != Scope.ActivationId)
+	{
+		CancelUncommittedActivation(Handle, Scope.ActivationId);
+		return FinishMovement(Request.ClientTimeStamp, Ordinal, EAethelnActivationResult::InternalFailure, ResolvedAbilityId, Scope.bCommitted ? Scope.ActivationId : FGuid());
+	}
+
+	// 10. No ordinary sequence, aim or client time advances.
+	return FinishMovement(Request.ClientTimeStamp, Ordinal, EAethelnActivationResult::Accepted, ResolvedAbilityId, Scope.ActivationId);
+}
+
+EAethelnActivationResult UAethelnAbilitySystemComponent::FinishMovement(
+	float ClientTimeStamp,
+	uint32 Ordinal,
+	EAethelnActivationResult Result,
+	const FGameplayTag& ResolvedAbilityId,
+	const FGuid& ActivationId)
+{
+	AethelnActivationTelemetry::EmitOutcome(*this, Result, Ordinal, ResolvedAbilityId, ActivationId, EAethelnObservabilityCategory::Dodge);
+	ClientMovementActivationOutcome(ClientTimeStamp, Result);
+	return Result;
+}
+
+void UAethelnAbilitySystemComponent::ClientMovementActivationOutcome_Implementation(float ClientTimeStamp, EAethelnActivationResult Result)
+{
+	OnMovementActivationOutcome.Broadcast(ClientTimeStamp, Result);
+}
+
+void UAethelnAbilitySystemComponent::FillLifecycleState(FAethelnActivationValidationState& State, const FRequestScope& RequestScope) const
+{
+	AActor* Avatar = GetAvatarActor();
+	const APawn* AvatarPawn = Cast<APawn>(Avatar);
+	const APlayerState* PlayerState = Cast<APlayerState>(GetOwner());
+	const AController* Controller = PlayerState != nullptr ? PlayerState->GetOwningController() : nullptr;
+	State.bAvatarBeingDestroyed = Avatar != nullptr && Avatar->IsActorBeingDestroyed();
+	State.bHasPossessedAvatar = AvatarPawn != nullptr
+		&& PlayerState != nullptr
+		&& PlayerState->GetPawn() == AvatarPawn
+		&& Controller != nullptr
+		&& AvatarPawn->GetController() == Controller
+		&& RequestScope.Owner.Get() == GetOwner() && RequestScope.Avatar.Get() == Avatar
+		&& RequestScope.Controller.Get() == Controller;
+}
+
+EAethelnActivationResult UAethelnAbilitySystemComponent::CheckEligibility(const UGameplayAbility& Source, FGameplayAbilitySpecHandle Handle) const
+{
+	const FGameplayAbilityActorInfo* ActorInfo = AbilityActorInfo.Get();
+	if (!Source.CheckCooldown(Handle, ActorInfo))
+	{
+		return EAethelnActivationResult::OnCooldown;
+	}
+	if (!Source.CheckCost(Handle, ActorInfo))
+	{
+		return EAethelnActivationResult::InsufficientResource;
+	}
+	if (!Source.DoesAbilitySatisfyTagRequirements(*this))
+	{
+		return EAethelnActivationResult::ActivationBlocked;
+	}
+	return EAethelnActivationResult::Accepted;
+}
+
+void UAethelnAbilitySystemComponent::CancelUncommittedActivation(FGameplayAbilitySpecHandle Handle, const FGuid& OperationId)
+{
+	// Fail closed: an activation that did not commit must not keep running or holding its state tags.
+	const FGameplayAbilitySpec* ActivatedSpec = FindAbilitySpecFromHandle(Handle);
+	const UAethelnGameplayAbility* ActivatedInstance = ActivatedSpec != nullptr ? Cast<UAethelnGameplayAbility>(ActivatedSpec->GetPrimaryInstance()) : nullptr;
+	// Synchronous end/tag callbacks may have accepted a new activation on this same handle.
+	const bool bOwnsCurrentActivation = ActivatedInstance == nullptr || ActivatedInstance->ActivationOperationId == OperationId;
+	if (ActivatedSpec != nullptr && ActivatedSpec->IsActive() && bOwnsCurrentActivation)
+	{
+		CancelAbilityHandle(Handle);
+	}
+}
+
+const FGameplayAbilitySpec* UAethelnAbilitySystemComponent::FindMovementCarriedSpec() const
+{
+	for (const FGameplayAbilitySpec& Spec : GetActivatableAbilities())
+	{
+		const UAethelnGameplayAbility* Ability = Cast<UAethelnGameplayAbility>(Spec.Ability);
+		if (Ability != nullptr && !Spec.PendingRemove && Ability->IsMovementCarried())
+		{
+			return &Spec;
+		}
+	}
+	return nullptr;
+}
+
+const UAethelnDodgeAbility* UAethelnAbilitySystemComponent::FindDodgeSource(const FGameplayAbilitySpec*& OutSpec) const
+{
+	OutSpec = FindMovementCarriedSpec();
+	if (OutSpec == nullptr)
+	{
+		return nullptr;
+	}
+	// ServerOnly abilities have no client instance; the owner reads the granted definition.
+	const UGameplayAbility* Source = OutSpec->GetPrimaryInstance() != nullptr ? OutSpec->GetPrimaryInstance() : OutSpec->Ability.Get();
+	return Cast<UAethelnDodgeAbility>(Source);
+}
+
+FAethelnDodgeMovementDefinition UAethelnAbilitySystemComponent::GetDodgeMovementDefinition() const
+{
+	const FGameplayAbilitySpec* Spec = nullptr;
+	const UAethelnDodgeAbility* Dodge = FindDodgeSource(Spec);
+	FAethelnDodgeMovementDefinition Definition;
+	// An invalid definition is never granted; refuse here too if an instance was changed after grant.
+	if (Dodge != nullptr && Dodge->FindGrantProblem() == nullptr)
+	{
+		Definition.Distance = Dodge->ProvisionalDodge.Distance;
+		Definition.MoveDuration = Dodge->ProvisionalDodge.MoveDuration;
+		Definition.ContentVersion = Dodge->ContentVersion;
+	}
+	return Definition;
+}
+
+bool UAethelnAbilitySystemComponent::CanPredictDodge() const
+{
+	// ponytail: the commitment-window check from the owner's ClientCombatActivation record is P5 (D26).
+	const FGameplayAbilitySpec* Spec = nullptr;
+	const UAethelnDodgeAbility* Dodge = FindDodgeSource(Spec);
+	return Dodge != nullptr && GetDodgeMovementDefinition().IsValid()
+		&& !HasMatchingGameplayTag(AethelnGameplayTags::State_Dodging)
+		&& CheckEligibility(*Dodge, Spec->Handle) == EAethelnActivationResult::Accepted;
+}
+
+bool UAethelnAbilitySystemComponent::IsAvoidingAt(double ContactTime) const
+{
+	return FMath::IsFinite(ContactTime) && DodgeWindow.InvulnerableStart <= ContactTime && ContactTime < DodgeWindow.InvulnerableEnd;
+}
+
+void UAethelnAbilitySystemComponent::ApplyDueBoundaries(double Now)
+{
+	ApplyChainBoundaries(Now);
+	ApplyDodgeBoundaries(Now);
+}
+
+bool UAethelnAbilitySystemComponent::HasPendingBoundaries() const
+{
+	return ChainState.bExists || DodgeWindow.bOpen;
+}
+
+bool UAethelnAbilitySystemComponent::OpenDodgeWindow(const UAethelnDodgeAbility& Ability, FGameplayAbilitySpecHandle Handle)
+{
+	UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline();
+	// One window per ASC: the instance gate makes an open one unreachable, so fail closed if it exists.
+	if (!IsSeamActivating(Handle) || !ActiveSeamScope->bMovementCarried || !ActiveSeamScope->bCommitted || ActiveSeamScope->bCanceled
+		|| Ability.ActivationOperationId != ActiveSeamScope->ActivationId || DodgeWindow.bOpen
+		|| Timeline == nullptr || !Timeline->RegisterNonChainBoundaries(*this)) { return false; }
+	const FGuid OperationId = ActiveSeamScope->ActivationId;
+	const double Start = ActiveSeamScope->AttackInput.ReceiptServerTime;
+	const FAethelnDodgeDefinition& Definition = Ability.ProvisionalDodge;
+	DodgeWindow = FAethelnServerDodgeWindow();
+	DodgeWindow.bOpen = true;
+	DodgeWindow.OperationId = OperationId;
+	DodgeWindow.Handle = Handle;
+	DodgeWindow.Avatar = Ability.ActivationActorInfo.AvatarActor;
+	DodgeWindow.StartTime = Start;
+	DodgeWindow.InvulnerableStart = Start + Definition.InvulnerableStart;
+	DodgeWindow.InvulnerableEnd = Start + Definition.InvulnerableEnd;
+	DodgeWindow.ActionEnd = Start + Definition.ActionEnd;
+	DodgeDeadHandle = RegisterGameplayTagEvent(AethelnGameplayTags::State_Dead, EGameplayTagEventType::NewOrRemoved)
+		.AddUObject(this, &UAethelnAbilitySystemComponent::HandleDodgeDeadTag);
+	DodgeWindow.bDodgingTag = true;
+	AddLooseGameplayTag(AethelnGameplayTags::State_Dodging, 1, EGameplayTagReplicationState::TagOnly);
+	ApplyDodgeBoundaries(Start);
+	// Tag callbacks may have cancelled or replaced the operation; only a still-open own window is ready.
+	return DodgeWindow.bOpen && DodgeWindow.OperationId == OperationId && !HasMatchingGameplayTag(AethelnGameplayTags::State_Dead);
+}
+
+void UAethelnAbilitySystemComponent::ApplyDodgeBoundaries(double Now)
+{
+	if (!IsOwnerActorAuthoritative() || !DodgeWindow.bOpen || !FMath::IsFinite(Now)) { return; }
+	const FGuid OperationId = DodgeWindow.OperationId;
+	if (!DodgeWindow.bInvulnerableTag && Now >= DodgeWindow.InvulnerableStart && Now < DodgeWindow.InvulnerableEnd)
+	{
+		DodgeWindow.bInvulnerableTag = true;
+		AddLooseGameplayTag(AethelnGameplayTags::State_DodgeInvulnerable, 1, EGameplayTagReplicationState::TagOnly);
+	}
+	// Tag callbacks may close or replace the window. Never touch a replacement.
+	if (!DodgeWindow.bOpen || DodgeWindow.OperationId != OperationId) { return; }
+	if (DodgeWindow.bInvulnerableTag && Now >= DodgeWindow.InvulnerableEnd)
+	{
+		DodgeWindow.bInvulnerableTag = false;
+		RemoveLooseGameplayTag(AethelnGameplayTags::State_DodgeInvulnerable, 1, EGameplayTagReplicationState::TagOnly);
+	}
+	if (!DodgeWindow.bOpen || DodgeWindow.OperationId != OperationId || Now < DodgeWindow.ActionEnd) { return; }
+	// The normal end at ActionEnd. It never touches displacement, which runs in client move time.
+	const FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(DodgeWindow.Handle);
+	UAethelnDodgeAbility* Instance = Spec != nullptr ? Cast<UAethelnDodgeAbility>(Spec->GetPrimaryInstance()) : nullptr;
+	if (Instance != nullptr && Instance->ActivationOperationId == OperationId) { Instance->EndAtActionEnd(); }
+	CloseDodgeWindow(OperationId, DodgeWindow.ActionEnd, false);
+}
+
+void UAethelnAbilitySystemComponent::CloseDodgeWindow(const FGuid& OperationId, double EndTime, bool bEndDisplacement)
+{
+	if (!DodgeWindow.bOpen || DodgeWindow.OperationId != OperationId || !OperationId.IsValid()) { return; }
+	const FAethelnServerDodgeWindow Previous = DodgeWindow;
+	// Idempotence before tag callbacks re-enter; the truncated window keeps IsAvoidingAt exact.
+	DodgeWindow.bOpen = false;
+	DodgeWindow.bDodgingTag = false;
+	DodgeWindow.bInvulnerableTag = false;
+	if (FMath::IsFinite(EndTime))
+	{
+		DodgeWindow.InvulnerableEnd = FMath::Min(DodgeWindow.InvulnerableEnd, EndTime);
+		DodgeWindow.ActionEnd = FMath::Min(DodgeWindow.ActionEnd, EndTime);
+	}
+	RegisterGameplayTagEvent(AethelnGameplayTags::State_Dead, EGameplayTagEventType::NewOrRemoved).Remove(DodgeDeadHandle);
+	DodgeDeadHandle.Reset();
+	if (Previous.bDodgingTag) { RemoveLooseGameplayTag(AethelnGameplayTags::State_Dodging, 1, EGameplayTagReplicationState::TagOnly); }
+	if (Previous.bInvulnerableTag) { RemoveLooseGameplayTag(AethelnGameplayTags::State_DodgeInvulnerable, 1, EGameplayTagReplicationState::TagOnly); }
+	if (bEndDisplacement)
+	{
+		const ACharacter* Character = Cast<ACharacter>(Previous.Avatar.Get());
+		if (UAethelnCharacterMovementComponent* Movement = Character != nullptr ? Cast<UAethelnCharacterMovementComponent>(Character->GetCharacterMovement()) : nullptr)
+		{
+			Movement->EndDodgeForAuthority();
+		}
+	}
+}
+
+void UAethelnAbilitySystemComponent::HandleDodgeDeadTag(const FGameplayTag Tag, int32 NewCount)
+{
+	if (NewCount > 0) { CancelDodge(); }
+}
+
+void UAethelnAbilitySystemComponent::CancelDodge()
+{
+	if (!IsOwnerActorAuthoritative() || !DodgeWindow.bOpen) { return; }
+	const FGuid OperationId = DodgeWindow.OperationId;
+	const FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(DodgeWindow.Handle);
+	const UAethelnGameplayAbility* Instance = Spec != nullptr ? Cast<UAethelnGameplayAbility>(Spec->GetPrimaryInstance()) : nullptr;
+	if (IsSeamActivating(DodgeWindow.Handle) && ActiveSeamScope->ActivationId == OperationId)
+	{
+		ActiveSeamScope->bCanceled = true;
+	}
+	// The cancel path closes the windows at this time and ends the server displacement once.
+	if (Spec != nullptr && Spec->IsActive() && Instance != nullptr && Instance->ActivationOperationId == OperationId)
+	{
+		CancelAbilityHandle(DodgeWindow.Handle);
+	}
+	const UWorld* World = GetWorld();
+	CloseDodgeWindow(OperationId, World != nullptr ? World->GetTimeSeconds() : 0.0, true);
+}
+
+bool UAethelnAbilitySystemComponent::AdmitMessage(EMessageRoute Route, uint32 Sequence, float ClientTimeStamp)
 {
 	const UWorld* World = GetWorld();
 	if (RateBucket.TryConsume(
@@ -544,13 +960,20 @@ bool UAethelnAbilitySystemComponent::AdmitMessage(bool bSeamRequest, uint32 Sequ
 		return false;
 	}
 
-	// Entering the window: one event (dropped for a zero sequence), one metric, and an outcome only for a seam request.
+	// Entering the one shared window: one event (dropped for a zero sequence), one metric, and the
+	// entering route's own outcome. A stock route gets no reply; a movement entry uses its ordinal.
 	bRateLimited = true;
 	SuppressedMessageCount = 0;
-	AethelnActivationTelemetry::EmitOutcome(*this, EAethelnActivationResult::RateLimited, Sequence, FGameplayTag(), FGuid());
-	if (bSeamRequest)
+	const bool bMovement = Route == EMessageRoute::Movement;
+	AethelnActivationTelemetry::EmitOutcome(*this, EAethelnActivationResult::RateLimited, Sequence, FGameplayTag(), FGuid(),
+		bMovement ? EAethelnObservabilityCategory::Dodge : EAethelnObservabilityCategory::Ability);
+	if (Route == EMessageRoute::Seam)
 	{
 		ClientActivationOutcome(Sequence, EAethelnActivationResult::RateLimited);
+	}
+	else if (bMovement)
+	{
+		ClientMovementActivationOutcome(ClientTimeStamp, EAethelnActivationResult::RateLimited);
 	}
 	return false;
 }
@@ -573,7 +996,7 @@ void UAethelnAbilitySystemComponent::CloseRateLimitedWindow()
 void UAethelnAbilitySystemComponent::RefuseStockRoute()
 {
 	// No reply: no legitimate client uses the stock routes, so a hostile one gets nothing to amplify.
-	if (AdmitMessage(false, 0))
+	if (AdmitMessage(EMessageRoute::Stock, 0))
 	{
 		AethelnActivationTelemetry::EmitMetric(
 			*this,
@@ -636,9 +1059,19 @@ void UAethelnAbilitySystemComponent::ServerSetReplicatedEventWithPayload_Impleme
 
 void UAethelnAbilitySystemComponent::OnUnregister()
 {
+	ResetChain(EAethelnChainEndReason::AvatarLost);
+	CancelDodge();
+	UnbindChainResetTags();
 	// A window ends only when a message is admitted, so teardown flushes it.
 	CloseRateLimitedWindow();
 	Super::OnUnregister();
+}
+
+void UAethelnAbilitySystemComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ResetChain(EAethelnChainEndReason::AvatarLost);
+	CancelDodge();
+	Super::EndPlay(EndPlayReason);
 }
 
 bool UAethelnAbilitySystemComponent::IsSeamActivating(FGameplayAbilitySpecHandle Handle) const
@@ -648,11 +1081,236 @@ bool UAethelnAbilitySystemComponent::IsSeamActivating(FGameplayAbilitySpecHandle
 
 void UAethelnAbilitySystemComponent::RecordSeamCommit(FGameplayAbilitySpecHandle Handle, bool bCommitted, const FGuid& ActivationId)
 {
-	if (IsSeamActivating(Handle))
+	if (IsSeamActivating(Handle) && ActiveSeamScope->ActivationId == ActivationId)
 	{
 		ActiveSeamScope->bCommitted = bCommitted;
-		ActiveSeamScope->ActivationId = ActivationId;
+		ActiveSeamScope->AttackInput.ActivationId = ActivationId;
+		const FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(Handle);
+		const UAethelnGameplayAbility* Instance = Spec != nullptr ? Cast<UAethelnGameplayAbility>(Spec->GetPrimaryInstance()) : nullptr;
+		if (bCommitted && !ActiveSeamScope->bCanceled && Spec != nullptr && Instance != nullptr
+			&& Instance->ActivationOperationId == ActivationId && Cast<UAethelnBasicChainAbility>(Spec->Ability) == nullptr)
+		{
+			// PreActivate is too early: a failed other commit must not reset recovery.
+			ResetChain(EAethelnChainEndReason::OtherAction);
+		}
 	}
+}
+
+UAethelnCombatTimelineSubsystem* UAethelnAbilitySystemComponent::GetCombatTimeline() const
+{
+	UWorld* World = GetWorld();
+	return World != nullptr && World->GetNetMode() != NM_Client ? World->GetSubsystem<UAethelnCombatTimelineSubsystem>() : nullptr;
+}
+
+bool UAethelnAbilitySystemComponent::BeginChainPress(UAethelnBasicChainAbility& Ability, FGameplayAbilitySpecHandle Handle)
+{
+	if (!IsOwnerActorAuthoritative() || !IsSeamActivating(Handle) || !ActiveSeamScope->bCommitted || ActiveSeamScope->bCanceled
+		|| Ability.ActivationOperationId != ActiveSeamScope->ActivationId || !Ability.HasActivationLifecycle()
+		|| !ActiveSeamScope->AttackInput.ActivationId.IsValid() || GetAvatarActor() == nullptr) { return false; }
+	const FAethelnAcceptedAttackInput Input = ActiveSeamScope->AttackInput;
+	if (ChainState.bExists && ChainState.Handle != Handle) { ResetChain(EAethelnChainEndReason::OtherAction, Input.ReceiptServerTime); }
+	if (Ability.ActivationOperationId != Input.ActivationId || ActiveSeamScope->bCanceled || !Ability.HasActivationLifecycle()) { return false; }
+	if (!ChainState.bExists)
+	{
+		ChainState.bExists = true;
+		ChainState.Handle = Handle;
+		ChainState.Ability = &Ability;
+		ChainState.Definitions = Ability.ProvisionalSteps; // immutable for this chain
+		BindChainResetTags(Ability.ResetTags);
+		ActiveSeamScope->bChainReady = StartChainStep(Input, 1, Input.ReceiptServerTime);
+		if (!ActiveSeamScope->bChainReady && ChainState.bExists && ChainState.Handle == Handle
+			&& ChainState.Ability.Get() == &Ability && ChainState.Step == 0 && !ChainState.CurrentInput.ActivationId.IsValid())
+		{
+			// Nothing registered or started. Do not leave a step-zero recovery state.
+			UnbindChainResetTags();
+			ChainState = FAethelnServerChainState();
+		}
+		return ActiveSeamScope->bChainReady;
+	}
+	if (ChainState.bWaiting || ChainState.Step >= 3) { return false; }
+	const FAethelnAttackStepDefinition& Previous = ChainState.Definitions[ChainState.Step - 1];
+	const double LinkOpen = ChainState.StartTime + Previous.LinkOpen;
+	if (Input.ReceiptServerTime < LinkOpen)
+	{
+		ChainState.bWaiting = true;
+		ChainState.BufferedStartTime = LinkOpen;
+		ChainState.BufferedInput = Input; // accepted/corrected press snapshot, never later controller aim
+		ActiveSeamScope->bChainReady = true;
+		return true;
+	}
+	ActiveSeamScope->bChainReady = StartChainStep(Input, ChainState.Step + 1, Input.ReceiptServerTime);
+	return ActiveSeamScope->bChainReady;
+}
+
+bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime)
+{
+	UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline();
+	UAethelnBasicChainAbility* Ability = ChainState.Ability.Get();
+	AActor* Avatar = GetAvatarActor();
+	if (!ChainState.bExists || Ability == nullptr || Timeline == nullptr || Avatar == nullptr || Avatar->IsActorBeingDestroyed()
+		|| Step < 1 || Step > ChainState.Definitions.Num() || !FMath::IsFinite(StartTime)) { return false; }
+	// Tag delegates can synchronously reset or replace the chain and free its definitions.
+	const FAethelnAttackStepDefinition Definition = ChainState.Definitions[Step - 1];
+	const FAethelnServerChainState Previous = ChainState;
+	FAethelnCombatActivationRecord Record;
+	Record.ActivationId = Input.ActivationId; Record.Sequence = Input.Sequence;
+	Record.AbilityId = Ability->GetAbilityId(); Record.ContentVersion = Input.ContentVersion;
+	Record.ChainStep = Step; Record.StartServerTime = StartTime;
+	Record.AcceptedAim = Input.AcceptedAim; Record.AimCorrection = Input.AimCorrection;
+	Record.CapsuleOrigin = Avatar->GetActorLocation();
+	Record.Windows.ActiveStart = Definition.ActiveStart; Record.Windows.ActiveEnd = Definition.ActiveEnd;
+	Record.Windows.BufferOpen = Definition.BufferOpen; Record.Windows.LinkOpen = Definition.LinkOpen;
+	Record.Windows.LinkClose = Definition.LinkClose; Record.Windows.RecoveryEnd = Definition.RecoveryEnd;
+	Record.Windows.CancelOpen = Definition.CancelOpen;
+	if (!Timeline->RegisterStep(*this, Definition, Record)) { return false; }
+	if (ChainState.CurrentInput.ActivationId.IsValid()) { Timeline->StampReset(ChainState.CurrentInput.ActivationId, StartTime); }
+	if (ChainState.bCommitmentHeld)
+	{
+		ChainState.bCommitmentHeld = false;
+		RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+	}
+	if (!ChainState.bExists || ChainState.Handle != Previous.Handle || ChainState.Ability.Get() != Ability
+		|| ChainState.Step != Previous.Step || ChainState.CurrentInput.ActivationId != Previous.CurrentInput.ActivationId
+		|| ChainState.bWaiting != Previous.bWaiting || ChainState.BufferedInput.ActivationId != Previous.BufferedInput.ActivationId)
+	{
+		// ResetChain could only stamp the previous current input before this transition.
+		Timeline->StampReset(Record.ActivationId, LastChainResetTime);
+		return false;
+	}
+	ChainState.Step = Step; ChainState.StartTime = StartTime; ChainState.CurrentInput = Input;
+	ChainState.bWaiting = false; ChainState.BufferedInput = FAethelnAcceptedAttackInput();
+	ChainState.bCommitmentHeld = Definition.CancelOpen > 0.0;
+	if (ChainState.bCommitmentHeld) { AddLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain); }
+	if (!ChainState.bExists || ChainState.Handle != Previous.Handle || ChainState.Ability.Get() != Ability
+		|| ChainState.Step != Step || ChainState.CurrentInput.ActivationId != Input.ActivationId)
+	{
+		Timeline->StampReset(Record.ActivationId, LastChainResetTime);
+		return false;
+	}
+	AttackPresentationState.bActive = true; AttackPresentationState.AbilityId = Record.AbilityId;
+	AttackPresentationState.ContentVersion = Record.ContentVersion; AttackPresentationState.ChainStep = Step;
+	AttackPresentationState.StartServerTime = StartTime; AttackPresentationState.AcceptedAim = Input.AcceptedAim;
+	AttackPresentationState.ActivationCounter = ++AttackActivationCounter;
+	AttackPresentationState.EndReason = EAethelnChainEndReason::None;
+	ClientCombatActivation(Record);
+	return true;
+}
+
+void UAethelnAbilitySystemComponent::StartBufferedChainStep(double Now)
+{
+	if (!IsOwnerActorAuthoritative() || !ChainState.bExists || !ChainState.bWaiting || Now < ChainState.BufferedStartTime) { return; }
+	const auto Input = ChainState.BufferedInput;
+	const double Start = ChainState.BufferedStartTime;
+	const FGuid PreviousActivationId = ChainState.CurrentInput.ActivationId;
+	const FGameplayAbilitySpecHandle Handle = ChainState.Handle;
+	if (!StartChainStep(Input, ChainState.Step + 1, Start) && ChainState.bExists && ChainState.Handle == Handle
+		&& ChainState.bWaiting && ChainState.CurrentInput.ActivationId == PreviousActivationId
+		&& ChainState.BufferedInput.ActivationId == Input.ActivationId)
+	{
+		// A callback's reset/replacement owns its reason and state; only registration failure remains ours.
+		ResetChain(EAethelnChainEndReason::AvatarLost);
+	}
+}
+
+void UAethelnAbilitySystemComponent::ApplyChainBoundaries(double Now)
+{
+	if (!IsOwnerActorAuthoritative() || !ChainState.bExists || !FMath::IsFinite(Now)) { return; }
+	StartBufferedChainStep(Now);
+	if (!ChainState.bExists) { return; }
+	const FAethelnAttackStepDefinition Step = ChainState.Definitions[ChainState.Step - 1];
+	const FGuid ActivationId = ChainState.CurrentInput.ActivationId;
+	if (ChainState.bCommitmentHeld && Now >= ChainState.StartTime + Step.CancelOpen)
+	{
+		ChainState.bCommitmentHeld = false;
+		RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+	}
+	if (!ChainState.bExists || ChainState.CurrentInput.ActivationId != ActivationId) { return; }
+	if (!ChainState.bWaiting && Now >= ChainState.StartTime + Step.BufferOpen)
+	{
+		if (UAethelnBasicChainAbility* Ability = ChainState.Ability.Get()) { Ability->EndAtBufferOpen(); }
+	}
+	// GAS end delegates may reset or replace this chain. Do not touch their state.
+	if (!ChainState.bExists || ChainState.CurrentInput.ActivationId != ActivationId) { return; }
+	if (ChainState.Step == 3 && Now >= ChainState.StartTime + Step.RecoveryEnd)
+	{
+		ResetChain(EAethelnChainEndReason::Completed, ChainState.StartTime + Step.RecoveryEnd);
+	}
+	else if (ChainState.Step < 3 && !ChainState.bWaiting && Now >= ChainState.StartTime + Step.LinkClose)
+	{
+		ResetChain(EAethelnChainEndReason::Timeout, ChainState.StartTime + Step.LinkClose);
+	}
+}
+
+void UAethelnAbilitySystemComponent::ResetChain(EAethelnChainEndReason Reason)
+{
+	const UWorld* World = GetWorld();
+	ResetChain(Reason, World != nullptr ? World->GetTimeSeconds() : 0.0);
+}
+
+void UAethelnAbilitySystemComponent::ResetChain(EAethelnChainEndReason Reason, double ResetTime)
+{
+	if (!IsOwnerActorAuthoritative() || !ChainState.bExists || !FMath::IsFinite(ResetTime) || Reason == EAethelnChainEndReason::None) { return; }
+	const FAethelnServerChainState Previous = ChainState;
+	const FGameplayAbilitySpec* OriginalSpec = FindAbilitySpecFromHandle(Previous.Handle);
+	const UAethelnGameplayAbility* OriginalInstance = OriginalSpec != nullptr ? Cast<UAethelnGameplayAbility>(OriginalSpec->GetPrimaryInstance()) : nullptr;
+	const FGuid OriginalActiveOperation = OriginalSpec != nullptr && OriginalSpec->IsActive() && OriginalInstance != nullptr
+		&& OriginalInstance->IsActive() ? OriginalInstance->ActivationOperationId : FGuid();
+	if (OriginalInstance != nullptr && IsSeamActivating(Previous.Handle) && ActiveSeamScope->ActivationId == OriginalInstance->ActivationOperationId)
+	{
+		ActiveSeamScope->bCanceled = true;
+	}
+	ChainState = FAethelnServerChainState(); // idempotence before GAS/tag callbacks re-enter
+	LastChainResetTime = ResetTime;
+	AttackPresentationState = FAethelnAttackPresentationState();
+	AttackPresentationState.ActivationCounter = AttackActivationCounter;
+	AttackPresentationState.EndReason = Reason;
+	if (UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline()) { Timeline->StampReset(Previous.CurrentInput.ActivationId, ResetTime); }
+	UnbindChainResetTags();
+	if (Previous.bCommitmentHeld) { RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain); }
+	const FGameplayAbilitySpec* CurrentSpec = FindAbilitySpecFromHandle(Previous.Handle);
+	const UAethelnGameplayAbility* CurrentInstance = CurrentSpec != nullptr ? Cast<UAethelnGameplayAbility>(CurrentSpec->GetPrimaryInstance()) : nullptr;
+	if (OriginalActiveOperation.IsValid() && CurrentSpec != nullptr && CurrentSpec->IsActive() && CurrentInstance != nullptr
+		&& CurrentInstance->ActivationOperationId == OriginalActiveOperation)
+	{
+		CancelAbilityHandle(Previous.Handle);
+	}
+	ClientChainEnded(Previous.bWaiting ? Previous.BufferedInput.ActivationId : Previous.CurrentInput.ActivationId, Reason);
+}
+
+void UAethelnAbilitySystemComponent::BindChainResetTags(const FGameplayTagContainer& Tags)
+{
+	UnbindChainResetTags();
+	for (const FGameplayTag Tag : Tags)
+	{
+		ChainResetHandles.Emplace(Tag, RegisterGameplayTagEvent(Tag, EGameplayTagEventType::NewOrRemoved).AddUObject(this, &UAethelnAbilitySystemComponent::HandleChainResetTag));
+	}
+}
+
+void UAethelnAbilitySystemComponent::UnbindChainResetTags()
+{
+	for (const auto& Entry : ChainResetHandles) { RegisterGameplayTagEvent(Entry.Key, EGameplayTagEventType::NewOrRemoved).Remove(Entry.Value); }
+	ChainResetHandles.Reset();
+}
+
+void UAethelnAbilitySystemComponent::HandleChainResetTag(const FGameplayTag Tag, int32 NewCount)
+{
+	if (NewCount > 0) { ResetChain(EAethelnChainEndReason::IncompatibleState); }
+}
+
+void UAethelnAbilitySystemComponent::ClientCombatActivation_Implementation(const FAethelnCombatActivationRecord& Record)
+{
+	OnCombatActivation.Broadcast(Record);
+}
+
+void UAethelnAbilitySystemComponent::ClientChainEnded_Implementation(const FGuid& ActivationId, EAethelnChainEndReason Reason)
+{
+	OnChainEnded.Broadcast(ActivationId, Reason);
+}
+
+void UAethelnAbilitySystemComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME_CONDITION(UAethelnAbilitySystemComponent, AttackPresentationState, COND_SkipOwner);
 }
 
 const FGameplayAbilitySpec* UAethelnAbilitySystemComponent::FindSpecForAbilityId(const FGameplayTag& AbilityId) const

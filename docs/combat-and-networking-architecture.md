@@ -476,8 +476,12 @@ manual and checked in review.
 | `Ability.Oathscar.GateStep` | `order.oathscar.ability.gate_step` | #19 (skeleton), #60 (contact) |
 | `Ability.Oathscar.SwornRebuke` | `order.oathscar.ability.sworn_rebuke` | #19 (skeleton), #60 (contact) |
 | `Ability.Oathscar.HoldTheLine` | `order.oathscar.ability.hold_the_line` | #19 (skeleton), #60 (Guard result) |
+| `Ability.Oathscar.SwordShieldBasicChain` | `order.oathscar.ability.sword_shield_basic_chain` | #60 P3 |
+| `State.Oathscar.SwordShieldBasicChain` | (commitment state of the above) | #60 P3 |
 | `Cooldown.Oathscar.GateStep`, `Cooldown.Oathscar.SwornRebuke`, `Cooldown.Oathscar.HoldTheLine` | (cooldown state of the above) | #19 |
 | `State.Dead` | (death flow state) | Declared by #19, applied by #21 |
+| `Ability.Dodge` | `combat.action.dodge` (proposed for #106, #18 Q13) | #18 P3 |
+| `Cooldown.Dodge`, `State.Dodging`, `State.DodgeInvulnerable` | (cooldown, action, and invulnerability states of the above) | #18 P3 |
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and

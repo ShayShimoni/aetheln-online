@@ -3,12 +3,55 @@
 #include "AbilitySystemComponent.h"
 #include "AethelnActivationTypes.h"
 #include "AethelnAttackTypes.h"
+#include "AethelnMovementActionAuthority.h"
 #include "CoreMinimal.h"
 #include "AethelnAbilitySystemComponent.generated.h"
 
 class APawn;
+class AController;
+class UAethelnBasicChainAbility;
+class UAethelnCombatTimelineSubsystem;
+class UAethelnDodgeAbility;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnActivationOutcomeDelegate, uint32 /* Sequence */, EAethelnActivationResult /* Result */);
+DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnMovementActivationOutcomeDelegate, float /* ClientTimeStamp */, EAethelnActivationResult /* Result */);
+
+/**
+ * Server-only dodge windows in absolute server world time (docs/dodge-and-block.md,
+ * Server-owned windows). Kept after the activation ends, truncated at a cancel, so the
+ * avoidance query stays exact and nothing revives.
+ */
+struct FAethelnServerDodgeWindow
+{
+	bool bOpen = false;
+	bool bDodgingTag = false;
+	bool bInvulnerableTag = false;
+	FGuid OperationId;
+	FGameplayAbilitySpecHandle Handle;
+	TWeakObjectPtr<AActor> Avatar;
+	double StartTime = 0.0;
+	double InvulnerableStart = 0.0;
+	double InvulnerableEnd = 0.0;
+	double ActionEnd = 0.0;
+};
+DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatActivationDelegate, const FAethelnCombatActivationRecord&);
+DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnChainEndDelegate, const FGuid&, EAethelnChainEndReason);
+
+/** Server-only chain bookkeeping, separate from GAS activation and observer state. */
+struct FAethelnServerChainState
+{
+	bool bExists = false;
+	bool bWaiting = false;
+	bool bCommitmentHeld = false;
+	uint8 Step = 0;
+	double StartTime = 0.0;
+	double BufferedStartTime = 0.0;
+	FGameplayAbilitySpecHandle Handle;
+	TWeakObjectPtr<UAethelnBasicChainAbility> Ability;
+	TArray<FAethelnAttackStepDefinition> Definitions;
+	FAethelnAcceptedAttackInput CurrentInput;
+	FAethelnAcceptedAttackInput BufferedInput;
+};
 
 /** One connection's token bucket for activation messages (validation step 1). Starts full. */
 struct GAMECOMBAT_API FAethelnActivationRateBucket
@@ -53,8 +96,12 @@ struct FAethelnActivationValidationState
 	bool bAvatarBeingDestroyed = false;
 	/** 0 until a request is accepted; then the previous-request checks of 6a and 6d apply. */
 	uint32 LastAcceptedSequence = 0;
+	/** Scoped requests still on the server stack; not accepted aim/time history. */
+	uint32 HighestInFlightSequence = 0;
 	/** A spec granted to this ASC is named by the request's AbilityId. */
 	bool bAbilityGranted = false;
+	/** The granted ability is movement-carried (#18 T1): the ordinary seam refuses it. */
+	bool bMovementCarried = false;
 	uint32 GrantedContentVersion = 0;
 	bool bAcceptsRelease = false;
 	bool bAbilityActive = false;
@@ -103,6 +150,36 @@ public:
 		EAethelnAimCorrection& OutAimCorrection);
 
 	/**
+	 * The movement-carried substitutions of steps 2 to 7 (docs/gas-foundation.md, T1
+	 * validation substitutions): lifecycle, the granted movement-carried ability, its
+	 * content version, then Press-only on an inactive instance whose server movement
+	 * allows a start. No schema, sequence, aim or time sample exists to check.
+	 */
+	static EAethelnActivationResult ValidateMovementRequest(
+		uint32 ContentVersion,
+		bool bMovementAllowsStart,
+		const FAethelnActivationValidationState& State,
+		bool& bOutAbilityResolved);
+
+	/**
+	 * Server-internal movement-carried entry (#18 T1). Called only by the PlayerState
+	 * authority from the server's simulation of a received flagged move; never an RPC.
+	 * Draws one token, applies due boundaries, validates, and activates the granted dodge
+	 * inside a seam scope for its spec only. Every outcome goes to the owner through
+	 * ClientMovementActivationOutcome. A non-authority copy authorizes nothing.
+	 */
+	EAethelnActivationResult ProcessMovementCarriedRequest(const FAethelnDodgeStartRequest& Request);
+
+	/** The granted dodge's displacement definition; unset when no valid dodge is granted. */
+	FAethelnDodgeMovementDefinition GetDodgeMovementDefinition() const;
+
+	/** Owner-side local gate: whether to flag and predict a dodge. Presentation logic, never authority. */
+	bool CanPredictDodge() const;
+
+	/** Time-exact avoidance: true if ContactTime lies in [S + InvulnerableStart, S + InvulnerableEnd). */
+	bool IsAvoidingAt(double ContactTime) const;
+
+	/**
 	 * Client entry point: fills in the sequence, the local content version, the owning
 	 * controller's control-rotation aim, and the game state's server world time (local
 	 * world time without a game state), flushes any held move, then sends the request.
@@ -118,6 +195,18 @@ public:
 
 	/** Owning client: every outcome, reliably and in order. */
 	FAethelnActivationOutcomeDelegate OnActivationOutcome;
+	/** Owning client: one outcome per received flagged move the server simulated, keyed by its client timestamp. */
+	FAethelnMovementActivationOutcomeDelegate OnMovementActivationOutcome;
+	FAethelnCombatActivationDelegate OnCombatActivation;
+	FAethelnChainEndDelegate OnChainEnded;
+	const FAethelnAttackPresentationState& GetAttackPresentationState() const { return AttackPresentationState; }
+
+	/** Authority only; stamp the step and clear the chain once, without removing a mid-frame step. */
+	void ResetChain(EAethelnChainEndReason Reason);
+	void ResetChain(EAethelnChainEndReason Reason, double ResetTime);
+	/** Authority only; cancels the running dodge operation, closing its windows now and ending server displacement once. */
+	void CancelDodge();
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Rate bucket placeholder, never tuning; #45 owns the final value. Without config (0) every request is rate limited. */
 	UPROPERTY(Config)
@@ -167,8 +256,16 @@ public:
 
 	/** Flushes an open rate-limited window. */
 	virtual void OnUnregister() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 #if WITH_DEV_AUTOMATION_TESTS
+	const FAethelnServerChainState& GetChainStateForTests() const { return ChainState; }
+	double GetLastChainResetTimeForTests() const { return LastChainResetTime; }
+	uint32 GetLastAcceptedSequenceForTests() const { return LastAcceptedSequence; }
+	FVector GetLastAcceptedAimForTests() const { return LastAcceptedAim; }
+	double GetLastAcceptedClientTimeForTests() const { return LastAcceptedClientTimeSeconds; }
+	const FAethelnServerDodgeWindow& GetDodgeWindowForTests() const { return DodgeWindow; }
+	uint32 GetMovementActivationOrdinalForTests() const { return MovementActivationOrdinal; }
 	void CallServerTryActivateAbilityForTests(FGameplayAbilitySpecHandle Handle);
 	void CallServerTryActivateAbilityWithEventDataForTests(FGameplayAbilitySpecHandle Handle, const FGameplayEventData& EventData);
 	bool HasReplicatedTargetDataForTests(FGameplayAbilitySpecHandle Handle, const FPredictionKey& PredictionKey) const;
@@ -184,24 +281,92 @@ protected:
 
 	UFUNCTION(Client, Reliable)
 	void ClientActivationOutcome(uint32 Sequence, EAethelnActivationResult Result);
+	/** Separate from the sequence space: resolves the first pending flagged move with this timestamp, in send order. */
+	UFUNCTION(Client, Reliable)
+	void ClientMovementActivationOutcome(float ClientTimeStamp, EAethelnActivationResult Result);
+	UFUNCTION(Client, Reliable)
+	void ClientCombatActivation(const FAethelnCombatActivationRecord& Record);
+	UFUNCTION(Client, Reliable)
+	void ClientChainEnded(const FGuid& ActivationId, EAethelnChainEndReason Reason);
 
 private:
 	friend class UAethelnGameplayAbility;
+	friend class UAethelnBasicChainAbility;
+	friend class UAethelnDodgeAbility;
+	friend class UAethelnCombatTimelineSubsystem;
 
 	/** The seam's result slot, open only while the seam activates this one spec handle. */
 	struct FSeamScope
 	{
 		FGameplayAbilitySpecHandle Handle;
 		bool bCommitted = false;
+		bool bChainReady = false;
+		bool bCanceled = false;
+		/** Opened by the movement-carried entry, the only route a movement-carried ability accepts. */
+		bool bMovementCarried = false;
 		FGuid ActivationId;
+		FAethelnAcceptedAttackInput AttackInput;
 	};
+	/** Per-call reservation: discarded on every return, including refusal. */
+	struct FRequestScope
+	{
+		FRequestScope* Previous = nullptr;
+		uint32 Sequence = 0;
+		TWeakObjectPtr<AActor> Owner;
+		TWeakObjectPtr<AActor> Avatar;
+		TWeakObjectPtr<AController> Controller;
+	};
+	FRequestScope* ActiveRequestScope = nullptr;
+
+	bool BeginChainPress(UAethelnBasicChainAbility& Ability, FGameplayAbilitySpecHandle Handle);
+	bool StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime);
+	void StartBufferedChainStep(double Now);
+	void ApplyChainBoundaries(double Now);
+	void HandleChainResetTag(const FGameplayTag Tag, int32 NewCount);
+	void BindChainResetTags(const FGameplayTagContainer& Tags);
+	void UnbindChainResetTags();
+	UAethelnCombatTimelineSubsystem* GetCombatTimeline() const;
+	FAethelnServerChainState ChainState;
+	TArray<TPair<FGameplayTag, FDelegateHandle>> ChainResetHandles;
+	double LastChainResetTime = 0.0;
+	uint32 AttackActivationCounter = 0;
+	UPROPERTY(Replicated)
+	FAethelnAttackPresentationState AttackPresentationState;
+
+	/** Due boundaries of every server timeline this ASC owns: the chain and the dodge windows. */
+	void ApplyDueBoundaries(double Now);
+	bool HasPendingBoundaries() const;
+	bool OpenDodgeWindow(const UAethelnDodgeAbility& Ability, FGameplayAbilitySpecHandle Handle);
+	void ApplyDodgeBoundaries(double Now);
+	void CloseDodgeWindow(const FGuid& OperationId, double EndTime, bool bEndDisplacement);
+	void HandleDodgeDeadTag(const FGameplayTag Tag, int32 NewCount);
+	FAethelnServerDodgeWindow DodgeWindow;
+	FDelegateHandle DodgeDeadHandle;
+	/** Per PlayerState lifetime, from 1: telemetry correlation for movement-carried outcomes, never a client sequence. */
+	uint32 MovementActivationOrdinal = 0;
+
+	enum class EMessageRoute : uint8 { Stock, Seam, Movement };
 
 	bool IsSeamActivating(FGameplayAbilitySpecHandle Handle) const;
 	void RecordSeamCommit(FGameplayAbilitySpecHandle Handle, bool bCommitted, const FGuid& ActivationId);
 	const FGameplayAbilitySpec* FindSpecForAbilityId(const FGameplayTag& AbilityId) const;
-	bool AdmitMessage(bool bSeamRequest, uint32 Sequence);
+	const FGameplayAbilitySpec* FindMovementCarriedSpec() const;
+	/** The granted dodge: the primary instance on the server, else the definition; null unless it is a dodge. */
+	const UAethelnDodgeAbility* FindDodgeSource(const FGameplayAbilitySpec*& OutSpec) const;
+	void FillLifecycleState(FAethelnActivationValidationState& State, const FRequestScope& RequestScope) const;
+	/** Step 8: the ability's own checks in the engine's order, ignoring the cheat variables. */
+	EAethelnActivationResult CheckEligibility(const UGameplayAbility& Source, FGameplayAbilitySpecHandle Handle) const;
+	/** Step 9 fail-closed: cancel an uncommitted activation only if it is still this operation. */
+	void CancelUncommittedActivation(FGameplayAbilitySpecHandle Handle, const FGuid& OperationId);
+	bool AdmitMessage(EMessageRoute Route, uint32 Sequence, float ClientTimeStamp = 0.0f);
 	void CloseRateLimitedWindow();
 	void RefuseStockRoute();
+	EAethelnActivationResult FinishMovement(
+		float ClientTimeStamp,
+		uint32 Ordinal,
+		EAethelnActivationResult Result,
+		const FGameplayTag& ResolvedAbilityId,
+		const FGuid& ActivationId);
 	EAethelnActivationResult Finish(
 		const FAethelnCombatActivationRequest& Request,
 		EAethelnActivationResult Result,

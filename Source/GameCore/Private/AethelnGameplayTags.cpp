@@ -5,12 +5,19 @@ namespace AethelnGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_GateStep, "Ability.Oathscar.GateStep", "order.oathscar.ability.gate_step");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_SwornRebuke, "Ability.Oathscar.SwornRebuke", "order.oathscar.ability.sworn_rebuke");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_HoldTheLine, "Ability.Oathscar.HoldTheLine", "order.oathscar.ability.hold_the_line");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_SwordShieldBasicChain, "Ability.Oathscar.SwordShieldBasicChain", "order.oathscar.ability.sword_shield_basic_chain");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Oathscar_SwordShieldBasicChain, "State.Oathscar.SwordShieldBasicChain", "Commitment state of order.oathscar.ability.sword_shield_basic_chain");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Oathscar_GateStep, "Cooldown.Oathscar.GateStep", "Cooldown state of order.oathscar.ability.gate_step");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Oathscar_SwornRebuke, "Cooldown.Oathscar.SwornRebuke", "Cooldown state of order.oathscar.ability.sworn_rebuke");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Oathscar_HoldTheLine, "Cooldown.Oathscar.HoldTheLine", "Cooldown state of order.oathscar.ability.hold_the_line");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Dead, "State.Dead", "Death flow state. Declared by #19, applied and removed only by #21.");
+
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Dodge, "Ability.Dodge", "combat.action.dodge (proposed for #106)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Dodge, "Cooldown.Dodge", "Cooldown state of combat.action.dodge");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Dodging, "State.Dodging", "Server-owned dodge action state, [S, S + ActionEnd)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_DodgeInvulnerable, "State.DodgeInvulnerable", "Server-owned dodge invulnerability window; gating and observers only, never an avoidance check");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_MaxHealth, "SetByCaller.Init.MaxHealth", "Initial MaxHealth magnitude for the attribute init effect");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_Health, "SetByCaller.Init.Health", "Initial Health magnitude for the attribute init effect");
