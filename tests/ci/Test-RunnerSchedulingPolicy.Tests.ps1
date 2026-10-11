@@ -100,7 +100,7 @@ Assert-True ($NeedsResultsOutsideEvidenceBoundaries -notmatch 'needs\.[a-z-]+\.r
 Assert-MatchCount -Text ([string] $JobBodies['ci-acceptance-shadow']) -Pattern 'needs\.(?:portable|native|unreal|visual)-receipt-shadow\.result' -Expected 4 -Message 'The aggregate must inspect exactly the four receipt publisher conclusions.'
 
 # GitHub-hosted jobs carry explicit conservative bounds.
-Assert-True (([string] $JobBodies['quality-gates']) -match '(?m)^\s+timeout-minutes: 30\r?$') 'quality-gates must declare an explicit 30-minute bound.'
+Assert-True (([string] $JobBodies['quality-gates']) -match '(?m)^\s+timeout-minutes: 40\r?$') 'quality-gates must declare an explicit 40-minute bound.'
 Assert-True (([string] $JobBodies['change-impact']) -match '(?m)^\s+timeout-minutes: 10\r?$') 'change-impact must declare an explicit 10-minute bound.'
 Assert-True (([string] $JobBodies['change-impact']) -match "(?m)^\s+if: github\.event_name == 'pull_request'\r?$") 'change-impact must run only for pull requests.'
 Assert-True (([string] $JobBodies['change-impact']) -notmatch 'aetheln-engine-runner') 'change-impact must never hold the engine-runner concurrency group.'

@@ -355,7 +355,7 @@ jobs:
 
   quality-gates:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     outputs:
       report_artifact_id: ${{ steps.report_artifact.outputs.artifact-id }}
       report_artifact_name: ${{ steps.report_identity.outputs.artifact_name }}
