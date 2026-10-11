@@ -389,10 +389,11 @@ Every accepted decision records:
   guaranteed before platform cancellation; checkout/LFS and grace also consume
   that budget, and missing evidence never establishes success. Checkout/LFS
   and report upload sit only inside the job bound. TA-020 (2026-10-02) adds a
-  sixth engine-runner job, `trusted-editor-automation`, with a 45-minute
-  ceiling (35 minutes before the 2026-10-03 re-sync amendment) after a
+  sixth engine-runner job, `trusted-editor-automation`, with a 46-minute
+  ceiling (35 minutes before the 2026-10-03 re-sync amendment, 45 before the
+  2026-10-10 control checkout cleanup) after a
   successful trusted compile; a scheduled phase that queues while it runs
-  waits at most those 45 minutes for it. The recorded
+  waits at most those 46 minutes for it. The recorded
   40-minute value is the maximum trusted-compile queue delay attributable to one
   currently running scheduled phase, subject to platform assignment latency;
   total queue time can be longer when older jobs are already ahead.
@@ -482,9 +483,9 @@ Every accepted decision records:
   30-minute controlled-work watchdog, client/server packaging at 40 minutes
   each with 30-minute watchdogs, and provenance/smoke at 20 minutes each with
   10-minute watchdogs. These are operational ceilings, not measured budgets.
-  TA-020 adds the owner-only `trusted-editor-automation` job at 45 minutes
-  since its 2026-10-03 re-sync amendment (its step bounds plus a 3-minute
-  margin) and leaves every watchdog here unchanged.
+  TA-020 adds the owner-only `trusted-editor-automation` job at 46 minutes
+  since its 2026-10-10 control checkout cleanup (its step bounds plus a
+  3-minute margin; 45 minutes from the 2026-10-03 re-sync amendment) and leaves every watchdog here unchanged.
   Supersede the former multi-hour TA-012 phase ceilings. Timeouts fail with
   retained evidence and owned-tree cleanup; no silent retry or longer fallback.
   Under the approved Issue #167 recovery, use a fresh exact-revision control
@@ -1476,10 +1477,10 @@ Every accepted decision records:
   cover. A separate job gives the editor build its full budget even when the
   compile uses its whole 30-minute watchdog.
 - **Cost:** an owner engine pull request can hold the runner for up to
-  85 minutes (40-minute compile plus 45-minute editor automation) when no
+  86 minutes (40-minute compile plus 46-minute editor automation) when no
   older waiter queued between the two jobs (75 minutes before the re-sync
-  amendment). A scheduled phase that queues while the editor job runs waits
-  at most 45 minutes for it; the recorded 40-minute trusted-compile queue
+  amendment, 85 before the control checkout cleanup). A scheduled phase that
+  queues while the editor job runs waits at most 46 minutes for it; the recorded 40-minute trusted-compile queue
   delay attributable to one running scheduled phase is unchanged. Workspace
   race (history, resolved by the re-sync amendment): when another owner pull
   request's compile, or a newer push to the same pull request, entered the
@@ -1646,15 +1647,38 @@ Every accepted decision records:
     `editor_sync_time_insufficient`, recorded when less than the provisional
     fixed 5-minute minimum remains after the lease is taken, before any
     checkout starts.
-  - *Ceiling:* the job now has a 45-minute job ceiling: its step bounds
+  - *Ceiling:* the job now has a 46-minute job ceiling (45 before the issue
+    #243 control checkout cleanup below): its step bounds
     (control checkout 5, re-sync and editor build 20, harness 12, residue
-    cleanup 2, bind 1, upload 1, outcome 1) plus a 3-minute margin. The added
-    10 minutes pay for the new checkout and re-sync work, not for a slower
-    build. An owner engine pull request can now hold the runner for up to
-    85 minutes (40-minute compile plus 45-minute editor automation).
+    cleanup 2, bind 1, upload 1, outcome 1, final control-checkout cleanup 1)
+    plus a 3-minute margin. The 10 minutes added by this amendment pay for the
+    new checkout and re-sync work, not for a slower build. An owner engine
+    pull request can now hold the runner for up to
+    86 minutes (40-minute compile plus 46-minute editor automation).
   - *Pending evidence:* one live observation of two compile-selecting pull
     requests pushed together that both reach a green `unreal-receipt-shadow`.
     Authority stays off.
+  - *Control checkout cleanup (2026-10-10, issue #243):* the compile and editor
+    jobs each add a disposable control checkout per run and attempt to the
+    runner workspace, 139 of them (about 15 MiB each) by 2026-10-10. No job
+    reads another job's checkout. The last step of both jobs now removes its
+    own checkout and every earlier `compile-control-*` or `editor-control-*`
+    directory, by exact name and literal path, never following or removing a
+    link. A runner runs one job at a time and the engine queue serializes the
+    jobs, so pruning at the end of a job that proved its own lease state is
+    safe, whereas a prune at the start could not know whether an earlier job
+    left a held journal. The step keeps every checkout when that state is
+    unproven: the editor job on the residue cleanup's skip conditions, and the
+    compile job unless the gate report carries a supervisor receipt with a
+    verified cleanup. The gate writes that receipt only after it took and
+    released the lease, so a lease it could not take or wait for (the wait
+    ending in `compile_timeout` or `compile_clock_invalid`, which leave no
+    receipt), an unproven cleanup, a failed release, and a missing or
+    unreadable report all keep every checkout. The step continues on error and
+    adds a 1-minute step bound, so the editor job ceiling rises from 45 to
+    46 minutes to keep its 3-minute margin; an owner engine pull request can now
+    hold the runner for up to 86 minutes (40-minute compile plus 46-minute
+    editor automation). The compile ceiling is unchanged.
 - **Amendment (2026-10-04, runner engine isolation):** the lead selected an
   independently writable runner source-engine tree for
   [Issue #238](https://github.com/ShayShimoni/aetheln-online/issues/238#issuecomment-5976376517).

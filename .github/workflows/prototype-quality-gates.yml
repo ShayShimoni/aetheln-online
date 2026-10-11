@@ -605,6 +605,65 @@ jobs:
           name: engine-runner-compile-report
           path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json
           if-no-files-found: error
+      # Issue #243: a control checkout is disposable source (issue #167) and each
+      # run and attempt adds one to the runner workspace. Remove this job's and
+      # every earlier compile or editor control checkout, so they stop piling up.
+      # No job reads another job's checkout, and a runner runs one job at a time.
+      # The gate keeps a held lease journal when it cannot prove its child tree
+      # empty or release the lease, and a lease it could not take or wait for is
+      # held by someone else. Only positive evidence removes anything: the report's
+      # supervisor receipt, which the gate writes after it took and released the
+      # lease, must record a verified cleanup. Otherwise, including a missing or
+      # unreadable report, every checkout stays. A link anywhere in a checkout
+      # is never followed or removed, and that checkout stays too. The step runs
+      # from runner.temp so no process holds a checkout as its working directory.
+      - name: Remove control checkouts
+        id: control_cleanup
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $Report = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json'
+          $Verified = $false
+          try {
+            $Report = [IO.File]::ReadAllText($Report) | ConvertFrom-Json
+            $Verified = $Report.supervisor.cleanupVerified -is [bool] -and $Report.supervisor.cleanupVerified
+          } catch { $Verified = $false }
+          if (-not $Verified) {
+            Write-Output 'control_checkouts kept reason=host_state_unproven'
+            return
+          }
+          $Workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\', '/')
+          $Own = 'compile-control-${{ github.run_id }}-${{ github.run_attempt }}'
+          function Test-ReparsePoint([IO.FileSystemInfo] $Item) { return [bool] ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+          function Test-HasLink([string] $Root) {
+            $Pending = New-Object Collections.Generic.Stack[string]
+            $Pending.Push($Root)
+            while ($Pending.Count -gt 0) {
+              foreach ($Item in (New-Object IO.DirectoryInfo ($Pending.Pop())).EnumerateFileSystemInfos()) {
+                if (Test-ReparsePoint $Item) { return $true }
+                if ($Item -is [IO.DirectoryInfo]) { $Pending.Push($Item.FullName) }
+              }
+            }
+            return $false
+          }
+          $Removed = 0
+          $Kept = New-Object Collections.Generic.List[string]
+          $Entries = @((New-Object IO.DirectoryInfo ($Workspace)).GetDirectories() | Where-Object { $_.Name -cmatch '\A(compile|editor)-control-[0-9]+-[0-9]+\z' } | Sort-Object { $_.Name -cne $Own }, Name)
+          foreach ($Entry in $Entries) {
+            try {
+              $Path = [IO.Path]::GetFullPath($Entry.FullName)
+              if ([IO.Path]::GetDirectoryName($Path) -ine $Workspace -or (Test-ReparsePoint $Entry) -or (Test-HasLink $Path)) { throw 'control_checkout_unsafe' }
+              Remove-Item -LiteralPath $Path -Recurse -Force
+              $Removed++
+            } catch { $Kept.Add($Entry.Name) }
+          }
+          Write-Output ('control_checkouts removed={0} kept={1}' -f $Removed, $Kept.Count)
+          if ($Kept.Count -gt 0) { Write-Output ('::warning::control_checkout_kept names=' + ($Kept -join ',')) }
 
   # Package 3C unreal-editor-automation producer (TA-020). A separate
   # owner-only engine job runs after a successful compile, so the editor build
@@ -627,8 +686,8 @@ jobs:
       github.event.pull_request.user.login == github.repository_owner &&
       github.triggering_actor == github.repository_owner
     runs-on: [self-hosted, Windows, X64, aetheln-engine]
-    # The step bounds (5 + 20 + 12 + 2 + 1 + 1 + 1) plus a 3-minute margin.
-    timeout-minutes: 45
+    # The step bounds (5 + 20 + 12 + 2 + 1 + 1 + 1 + 1) plus a 3-minute margin.
+    timeout-minutes: 46
     outputs:
       automation_artifact_id: ${{ steps.automation_artifact.outputs.artifact-id }}
       automation_artifact_name: ${{ steps.automation_identity.outputs.artifact_name }}
@@ -951,6 +1010,54 @@ jobs:
           }
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false))
           Write-Output ('unreal_automation_outcome reason=' + $Reason)
+      # Issue #243: a control checkout is disposable source (issue #167) and each
+      # run and attempt adds one to the runner workspace. Remove this job's and
+      # every earlier compile or editor control checkout, so they stop piling up.
+      # No job reads another job's checkout, and a runner runs one job at a time.
+      # It runs after any later failure or cancellation, but only on the residue
+      # step's evidence that the lease was released or never needed (a lease
+      # failure, a failed release, a skipped checkout, or an interrupted build
+      # leaves the host state unknown, so every checkout stays). A link anywhere
+      # in a checkout is never followed or removed, and that checkout stays too.
+      # The step runs from runner.temp so no process holds a checkout as its
+      # working directory, and its result never changes the recorded reason.
+      - name: Remove control checkouts
+        id: control_cleanup
+        if: always() && (steps.editor_build.outcome == 'success' || (steps.editor_build.outputs.reason != '' && steps.editor_build.outputs.reason != 'editor_host_lease_failed' && steps.editor_build.outputs.reason != 'editor_host_lease_release_failed'))
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $Workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\', '/')
+          $Own = 'editor-control-${{ github.run_id }}-${{ github.run_attempt }}'
+          function Test-ReparsePoint([IO.FileSystemInfo] $Item) { return [bool] ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) }
+          function Test-HasLink([string] $Root) {
+            $Pending = New-Object Collections.Generic.Stack[string]
+            $Pending.Push($Root)
+            while ($Pending.Count -gt 0) {
+              foreach ($Item in (New-Object IO.DirectoryInfo ($Pending.Pop())).EnumerateFileSystemInfos()) {
+                if (Test-ReparsePoint $Item) { return $true }
+                if ($Item -is [IO.DirectoryInfo]) { $Pending.Push($Item.FullName) }
+              }
+            }
+            return $false
+          }
+          $Removed = 0
+          $Kept = New-Object Collections.Generic.List[string]
+          $Entries = @((New-Object IO.DirectoryInfo ($Workspace)).GetDirectories() | Where-Object { $_.Name -cmatch '\A(compile|editor)-control-[0-9]+-[0-9]+\z' } | Sort-Object { $_.Name -cne $Own }, Name)
+          foreach ($Entry in $Entries) {
+            try {
+              $Path = [IO.Path]::GetFullPath($Entry.FullName)
+              if ([IO.Path]::GetDirectoryName($Path) -ine $Workspace -or (Test-ReparsePoint $Entry) -or (Test-HasLink $Path)) { throw 'control_checkout_unsafe' }
+              Remove-Item -LiteralPath $Path -Recurse -Force
+              $Removed++
+            } catch { $Kept.Add($Entry.Name) }
+          }
+          Write-Output ('control_checkouts removed={0} kept={1}' -f $Removed, $Kept.Count)
+          if ($Kept.Count -gt 0) { Write-Output ('::warning::control_checkout_kept names=' + ($Kept -join ',')) }
 
   # Issue #150 milestone phases. The packaging and smoke milestone is split
   # into four bounded, schedule-only jobs (no manual trigger exists on this
