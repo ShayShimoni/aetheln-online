@@ -190,7 +190,9 @@ $PhaseContract = @(
 )
 foreach ($Phase in $PhaseContract) {
 	$Body = [string] $JobBodies[$Phase.Job]
-	Assert-MatchCount -Text $Body -Pattern '(?m)^\s+if: ' -Expected 2 -Message "$($Phase.Job) must declare exactly one job-level trigger predicate plus the report-upload predicate."
+	# Issue #267: the client phase also uploads its redacted in-phase editor build diagnostics.
+	$ExpectedPredicates = if ($Phase.Job -ceq 'scheduled-client-package') { 3 } else { 2 }
+	Assert-MatchCount -Text $Body -Pattern '(?m)^\s+if: ' -Expected $ExpectedPredicates -Message "$($Phase.Job) must declare exactly one job-level trigger predicate plus its upload predicates."
 	Assert-True ($Body -match $PhaseTrigger) "$($Phase.Job) must run only on the schedule event."
 	Assert-True ($Body -notmatch 'workflow_dispatch' -and $Body -notmatch 'pull_request' -and $Body -notmatch "'push'") "$($Phase.Job) must not be selectable by dispatch, pull requests, or pushes."
 	Assert-True ($Body -notmatch 'always\(\)\s*&&' -and $Body -notmatch '(?m)^\s+if:\s*always\(\)\s*\|\|' -and $Body -notmatch 'cancelled\(\)' -and $Body -notmatch 'failure\(\)') "$($Phase.Job) must not bypass a skipped, cancelled, or failed predecessor."
@@ -454,6 +456,8 @@ function Assert-ReleaseWorkflow([string] $Source) {
 		# Parity: the release gate step is the scheduled one plus only the
 		# reviewed additions (plugin refusal on cooks, build number on provenance).
 		$ExpectedGateTail = $ScheduledGate[0] -replace '^[^\n]*\n', ''
+		# Issue #267: the scheduled client phase's diagnostics copy is not part of the release gate.
+		$ExpectedGateTail = $ExpectedGateTail -replace '(?s)          \$GateExit = \$LASTEXITCODE\n.*?          exit \$GateExit\n', ''
 		if ($Phase.Package) { $ExpectedGateTail = $ExpectedGateTail.Replace("        run: |`n", "        run: |`n" + $PluginRefusal) }
 		if ($Phase.Job -ceq 'release-provenance-validation') { $ExpectedGateTail = $ExpectedGateTail.Replace('            -PhaseTimeoutMinutes', $BuildNumberLine + '            -PhaseTimeoutMinutes') }
 		$Expected = @($EngineCheckout)
@@ -603,7 +607,7 @@ foreach ($Mutation in $RepositoryMutations) {
 
 function Assert-ReportOnlyUpload([string] $Text) {
 	$Blocks = @([regex]::Split($Text, '(?m)^      - ') | Where-Object { $_ -match '(?m)^\s*uses: actions/upload-artifact@' })
-	Assert-True ($Blocks.Count -eq 14) 'Exactly seven raw reports, selector, four receipts, aggregate, and hard-disabled authority receipt must exist.'
+	Assert-True ($Blocks.Count -eq 15) 'Exactly seven raw reports, selector, four receipts, aggregate, hard-disabled authority receipt, and the client phase editor build diagnostics must exist.'
 	$Allowed = @(
 		'TestResults/ci-report.json',
 		'milestone/TestResults/engine-runner-report.json',
@@ -612,7 +616,9 @@ function Assert-ReportOnlyUpload([string] $Text) {
 		'${{ runner.temp }}/ci-selection-shadow.json',
 		'${{ runner.temp }}/${{ steps.receipt_identity.outputs.artifact_name }}',
 		'${{ runner.temp }}/ci-acceptance-shadow.json',
-		'${{ runner.temp }}/ci-acceptance-authority.json'
+		'${{ runner.temp }}/ci-acceptance-authority.json',
+		# Issue #267: the redacted, bounded in-phase editor build records of a failed client phase.
+		'${{ runner.temp }}/aetheln-host-editor-build-${{ github.run_id }}-${{ github.run_attempt }}'
 	)
 	foreach ($Block in $Blocks) {
 		$Paths = @([regex]::Matches($Block, '(?m)^          path: ([^\r\n]+)\r?$'))

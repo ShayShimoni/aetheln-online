@@ -1019,6 +1019,22 @@ jobs:
             -RunAttempt '${{ github.run_attempt }}' `
             -RunnerName '${{ runner.name }}' `
             -PhaseTimeoutMinutes 30
+          $GateExit = $LASTEXITCODE
+          # Issue #267: after a failed phase, keep the in-phase editor build's
+          # records (its wrapper caps build.log at 16 MiB) with local roots replaced.
+          $EditorBuild = Join-Path $RunRoot 'logs/phase/client/host-editor-build'
+          if ($GateExit -ne 0 -and (Test-Path -LiteralPath $EditorBuild -PathType Container)) {
+            $Diagnostics = New-Item -ItemType Directory -Path (Join-Path '${{ runner.temp }}' 'aetheln-host-editor-build-${{ github.run_id }}-${{ github.run_attempt }}')
+            $Roots = @(@($env:AETHELN_ENGINE_ROOT, $env:AETHELN_LINUX_TOOLCHAIN_ROOT, $env:AETHELN_HANDOFF_ROOT, '${{ github.workspace }}', '${{ runner.temp }}', $env:USERPROFILE) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\', '/') } | Sort-Object Length -Descending)
+            foreach ($Name in @('native-result.json', 'build.log', 'wrapper-console.log', 'wrapper-console-error.log')) {
+              $Source = Join-Path $EditorBuild $Name
+              if (-not (Test-Path -LiteralPath $Source -PathType Leaf) -or (Get-Item -LiteralPath $Source).Length -gt 16MB) { continue }
+              $Text = [IO.File]::ReadAllText($Source)
+              foreach ($Root in $Roots) { foreach ($Form in @($Root, $Root.Replace('\', '/'))) { $Text = [regex]::Replace($Text, [regex]::Escape($Form), '<root>', 'IgnoreCase') } }
+              [IO.File]::WriteAllText((Join-Path $Diagnostics.FullName $Name), $Text)
+            }
+          }
+          exit $GateExit
       - name: Upload engine-runner report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -1026,6 +1042,14 @@ jobs:
           name: engine-runner-client-package-report
           path: milestone/TestResults/engine-runner-report.json
           if-no-files-found: error
+      - name: Upload in-phase editor build diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: host-editor-build-client-package
+          path: ${{ runner.temp }}/aetheln-host-editor-build-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 14
 
   scheduled-server-package:
     if: github.event_name == 'schedule'

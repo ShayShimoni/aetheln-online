@@ -1122,7 +1122,12 @@ Assert-True ($ReportUploads.Count -eq 6) 'Exactly six report uploads remain.'
 Assert-True ($TrustedCompile.Contains('path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/engine-runner-report.json')) 'Compile artifact is unique to this run, attempt and job.'
 Assert-True ($TrustedCompile -match 'timeout-minutes: 40' -and $TrustedCompile -match '-CompileTimeoutMinutes 30') 'Routine compile has a whole-job and controlled-work limit.'
 Assert-True ($Workflow -notmatch '(?m)^          path: .*\*') 'Uploads cannot contain wildcard payload paths.'
-Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 14 -Message 'Only seven raw reports, the selector, four nonce-bound receipts, the acceptance shadow diagnostic, and the hard-disabled authority receipt may be uploaded.'
+Assert-MatchCount -Text $Workflow -Pattern '(?m)^\s*uses: actions/upload-artifact@' -Expected 15 -Message 'Only seven raw reports, the selector, four nonce-bound receipts, the acceptance shadow diagnostic, the hard-disabled authority receipt, and the client phase editor build diagnostics may be uploaded.'
+# Issue #267: a failed client phase uploads only the four named in-phase editor
+# build records, each at most 16 MiB, with the runner's local roots replaced.
+$ClientPackage = Get-JobBody 'scheduled-client-package' 'scheduled-server-package'
+Assert-True ($ClientPackage.Contains('path: ${{ runner.temp }}/aetheln-host-editor-build-${{ github.run_id }}-${{ github.run_attempt }}') -and $ClientPackage -match '(?m)^          if-no-files-found: ignore\r?$') 'The client phase editor build diagnostics upload must be one run-scoped directory that may be absent.'
+Assert-True ($ClientPackage.Contains("if (`$GateExit -ne 0 -and") -and $ClientPackage.Contains('-gt 16MB') -and $ClientPackage.Contains("'<root>'") -and $ClientPackage.Contains('exit $GateExit')) 'The client phase must copy editor build diagnostics only after a failed gate, bound and redact them, and keep the gate exit code.'
 Assert-True ($Workflow -notmatch '(?m)^\s+path:\s*.*(?:archives?|logs?|Saved|StagedBuilds)') 'Generated payload directories must never be uploaded.'
 
 # Classifier behavior matrix: run the extracted script against fixture commits.
