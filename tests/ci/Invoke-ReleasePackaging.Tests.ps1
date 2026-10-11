@@ -55,7 +55,7 @@ function Assert-Hygienic([string] $Text, [string[]] $ForbiddenValues, [string] $
 }
 
 function Assert-Outcome($Result, [string] $Reason, [string[]] $ForbiddenValues, [string] $Context) {
-	$ExpectedExit = if ($Reason -cin @('release_guard_passed', 'release_evidence_passed')) { 0 } else { 1 }
+	$ExpectedExit = if ($Reason -cin @('release_guard_passed', 'release_evidence_passed', 'develop_guard_passed')) { 0 } else { 1 }
 	Assert-True ($Result.ExitCode -eq $ExpectedExit) "$Context must exit $ExpectedExit. Exit: $($Result.ExitCode). Stdout: $($Result.StdOut) Stderr: $($Result.StdErr)"
 	Assert-True ($Result.StdOut -cmatch ('^' + [regex]::Escape($Reason) + '\r?\n?\z')) "$Context must print exactly the reason code '$Reason'. Stdout: $($Result.StdOut) Stderr: $($Result.StdErr)"
 	Assert-True ($Result.StdErr.Length -eq 0) "$Context must write nothing to stderr. Stderr: $($Result.StdErr)"
@@ -217,6 +217,48 @@ try {
 	$Missing = Join-Path $FixtureRoot 'no-such-root'
 	Assert-Outcome -Result (Invoke-Guard $Missing) -Reason 'project_version_missing' -ForbiddenValues @($Missing, $FixtureRoot) -Context 'A missing repository root'
 	Write-Output 'PASS: an unknown mode or a missing root yields only a reason code'
+
+	# Issue #267 (TA-024): the develop dispatch guard. It shares the release
+	# guard's owner, repository, event and attempt checks under develop_* codes,
+	# requires exactly refs/heads/develop, and reads no version or build number.
+	$DevelopGuardRoot = Initialize-GuardRoot 'develop-guard' @($SectionHeader, 'ProjectName=AethelnOnline')
+	$DevelopPass = Invoke-Guard -Root $DevelopGuardRoot -Override @{ GITHUB_REF = 'refs/heads/develop'; GITHUB_RUN_NUMBER = $null } -Mode 'DevelopGuard'
+	Assert-Outcome -Result $DevelopPass -Reason 'develop_guard_passed' -ForbiddenValues @($DevelopGuardRoot, $FixtureRoot) -Context 'An owner dispatch of develop'
+	Assert-True (-not (Test-Path -LiteralPath (Join-Path $DevelopGuardRoot 'step-summary.md'))) 'The develop guard must not write a job summary.'
+	$DevelopRefusals = @(
+		@{ Name = 'event-schedule'; Override = @{ GITHUB_EVENT_NAME = 'schedule' }; Reason = 'develop_event_invalid' },
+		@{ Name = 'event-push'; Override = @{ GITHUB_EVENT_NAME = 'push' }; Reason = 'develop_event_invalid' },
+		@{ Name = 'event-pull-request'; Override = @{ GITHUB_EVENT_NAME = 'pull_request' }; Reason = 'develop_event_invalid' },
+		@{ Name = 'event-case'; Override = @{ GITHUB_EVENT_NAME = 'Workflow_Dispatch' }; Reason = 'develop_event_invalid' },
+		@{ Name = 'event-missing'; Override = @{ GITHUB_EVENT_NAME = $null }; Reason = 'develop_event_invalid' },
+		@{ Name = 'fork-repository'; Override = @{ GITHUB_REPOSITORY = 'someone/aetheln-online'; GITHUB_REPOSITORY_OWNER = 'someone'; GITHUB_ACTOR = 'someone'; GITHUB_TRIGGERING_ACTOR = 'someone' }; Reason = 'develop_repository_invalid' },
+		@{ Name = 'repository-case'; Override = @{ GITHUB_REPOSITORY = 'shayshimoni/aetheln-online' }; Reason = 'develop_repository_invalid' },
+		@{ Name = 'owner-missing'; Override = @{ GITHUB_REPOSITORY_OWNER = $null }; Reason = 'develop_repository_invalid' },
+		@{ Name = 'actor-other'; Override = @{ GITHUB_ACTOR = 'someone' }; Reason = 'develop_actor_invalid' },
+		@{ Name = 'actor-case'; Override = @{ GITHUB_ACTOR = 'shayshimoni' }; Reason = 'develop_actor_invalid' },
+		@{ Name = 'actor-bot'; Override = @{ GITHUB_ACTOR = 'github-actions[bot]' }; Reason = 'develop_actor_invalid' },
+		@{ Name = 'triggering-actor-other'; Override = @{ GITHUB_TRIGGERING_ACTOR = 'someone' }; Reason = 'develop_actor_invalid' },
+		@{ Name = 'triggering-actor-missing'; Override = @{ GITHUB_TRIGGERING_ACTOR = $null }; Reason = 'develop_actor_invalid' },
+		@{ Name = 'attempt-2'; Override = @{ GITHUB_RUN_ATTEMPT = '2' }; Reason = 'develop_attempt_invalid' },
+		@{ Name = 'attempt-01'; Override = @{ GITHUB_RUN_ATTEMPT = '01' }; Reason = 'develop_attempt_invalid' },
+		@{ Name = 'ref-release'; Override = @{ GITHUB_REF = 'refs/heads/release/v1.0.0-alpha.1' }; Reason = 'develop_ref_invalid' },
+		@{ Name = 'ref-main'; Override = @{ GITHUB_REF = 'refs/heads/main' }; Reason = 'develop_ref_invalid' },
+		@{ Name = 'ref-case'; Override = @{ GITHUB_REF = 'refs/heads/Develop' }; Reason = 'develop_ref_invalid' },
+		@{ Name = 'ref-suffix'; Override = @{ GITHUB_REF = 'refs/heads/develop-old' }; Reason = 'develop_ref_invalid' },
+		@{ Name = 'ref-nested'; Override = @{ GITHUB_REF = 'refs/heads/feature/develop' }; Reason = 'develop_ref_invalid' },
+		@{ Name = 'ref-tag'; Override = @{ GITHUB_REF = 'refs/tags/develop' }; Reason = 'develop_ref_invalid' },
+		@{ Name = 'ref-pull'; Override = @{ GITHUB_REF = 'refs/pull/1/merge' }; Reason = 'develop_ref_invalid' },
+		@{ Name = 'ref-newline'; Override = @{ GITHUB_REF = "refs/heads/develop`n" }; Reason = 'develop_ref_invalid' },
+		@{ Name = 'ref-missing'; Override = @{ GITHUB_REF = $null }; Reason = 'develop_ref_invalid' }
+	)
+	foreach ($Case in $DevelopRefusals) {
+		$Override = @{ GITHUB_REF = 'refs/heads/develop' }
+		foreach ($Name in $Case.Override.Keys) { $Override[$Name] = $Case.Override[$Name] }
+		Assert-Outcome -Result (Invoke-Guard -Root $DevelopGuardRoot -Override $Override -Mode 'DevelopGuard') -Reason $Case.Reason -ForbiddenValues @($DevelopGuardRoot, $FixtureRoot) -Context "Develop guard case '$($Case.Name)'"
+	}
+	Assert-Outcome -Result (Invoke-Guard -Root $AlphaRoot -Override @{} -Mode 'DevelopGuard') -Reason 'develop_ref_invalid' -ForbiddenValues @($AlphaRoot) -Context 'A release head under the develop guard'
+	Assert-Outcome -Result (Invoke-Guard -Root $DevelopGuardRoot -Override @{ GITHUB_REF = 'refs/heads/develop' } -Mode 'Guard') -Reason 'release_ref_invalid' -ForbiddenValues @($DevelopGuardRoot) -Context 'A develop head under the release guard'
+	Write-Output 'PASS: the develop guard accepts only an owner dispatch of refs/heads/develop on attempt 1 and refuses everything else case-sensitively'
 
 	# ------------------------------------------------------------ Evidence mode
 

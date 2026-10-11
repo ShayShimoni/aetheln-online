@@ -8,7 +8,9 @@ param()
 # the portable gates and the change-impact classifier, evidence separation per
 # phase, and the absence of any manual or monolithic package/smoke entry point
 # on that workflow. Issue #226 adds the pins for the separate, dispatch-only
-# release workflow (TA-022) and the repository-wide workflow allowlists.
+# release workflow (TA-022) and the repository-wide workflow allowlists. Issue
+# #267 adds the same pins for the owner-only develop packaging dispatch
+# (TA-024), a second dispatch-only workflow identity.
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -44,9 +46,12 @@ $JobBodies['ci-acceptance-authority'] = $Workflow.Substring($Workflow.IndexOf(' 
 $ReleaseWorkflowPath = Join-Path $RepositoryRoot '.github\workflows\release-packaging.yml'
 Assert-True (Test-Path -LiteralPath $ReleaseWorkflowPath -PathType Leaf) 'The dispatch-only release packaging workflow must exist (TA-022).'
 $ReleaseWorkflow = Get-Content -LiteralPath $ReleaseWorkflowPath -Raw
+$DevelopWorkflowPath = Join-Path $RepositoryRoot '.github\workflows\develop-packaging.yml'
+Assert-True (Test-Path -LiteralPath $DevelopWorkflowPath -PathType Leaf) 'The owner-only develop packaging dispatch workflow must exist (TA-024).'
+$DevelopWorkflow = Get-Content -LiteralPath $DevelopWorkflowPath -Raw
 
 $AllowedRemoteActions = @($CheckoutAction, $DownloadAction, $UploadAction)
-foreach ($WorkflowSource in @($Workflow, $VisualWorkflow, $DeliveryWorkflow, $ReleaseWorkflow)) {
+foreach ($WorkflowSource in @($Workflow, $VisualWorkflow, $DeliveryWorkflow, $ReleaseWorkflow, $DevelopWorkflow)) {
 	foreach ($ActionUse in @([regex]::Matches($WorkflowSource, '(?m)^\s+(?:- )?uses: (?<action>actions/[^@\s]+@[^\s]+)\r?$'))) {
 		$Identity = [string] $ActionUse.Groups['action'].Value
 		Assert-True ($Identity -cin $AllowedRemoteActions) "Remote action '$Identity' must belong to the reviewed checkout/download/upload allowlist."
@@ -239,10 +244,10 @@ $TrustedCompile = [string] $JobBodies['trusted-candidate-compile']
 # status bypass, so it can never fail the compile job or skip the native
 # receipt, and it is skipped whenever the compile is skipped.
 $EditorAutomation = [string] $JobBodies['trusted-editor-automation']
-Assert-True ($EditorAutomation -match '(?m)^    needs: trusted-candidate-compile\r?$' -and $EditorAutomation -match "github\.event_name == 'pull_request'" -and $EditorAutomation -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $EditorAutomation -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $EditorAutomation -match 'github\.triggering_actor == github\.repository_owner') 'Editor automation must need the compile and keep the owner, same-repository, and triggering-actor trust.'
+Assert-True ($EditorAutomation -match '(?m)^    needs:\r?\n      - trusted-candidate-compile\r?\n      - change-impact\r?$' -and $EditorAutomation -match "needs\.change-impact\.outputs\.editor_required == 'true'" -and $EditorAutomation -match "github\.event_name == 'pull_request'" -and $EditorAutomation -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $EditorAutomation -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $EditorAutomation -match 'github\.triggering_actor == github\.repository_owner') 'Editor automation must need the compile and keep the owner, same-repository, and triggering-actor trust.'
 Assert-True ($EditorAutomation -match '(?m)^    timeout-minutes: 46\r?$' -and $EditorAutomation -notmatch 'timeout-minutes:\s*1440' -and $EditorAutomation -notmatch '(?m)^    if: always\(\)' -and $EditorAutomation -notmatch 'needs\.[a-z-]+\.result' -and $EditorAutomation -notmatch '-Mode ') 'Editor automation must keep its 46-minute ceiling, never bypass prerequisite status, and never invoke the engine gate.'
 Assert-True ((($TrustedCompile -split '\r?\n' | Where-Object { $_ -notmatch '^\s*#' }) -join "`n") -notmatch 'AethelnOnlineEditor|automation_') 'The compile job must keep its pre-producer shape.'
-# TA-024: content validation is a separate owner-only engine job after the editor job,
+# TA-025: content validation is a separate owner-only engine job after the editor job,
 # selected only by the accepted selector, with its own 34-minute ceiling, the shared
 # FIFO queue, and no status bypass; it never invokes the engine gate.
 $ContentValidation = [string] $JobBodies['trusted-content-validation']
@@ -253,7 +258,8 @@ Assert-True ($TrustedCompile -match "needs\.change-impact\.outputs\.engine_requi
 Assert-True ($TrustedCompile -match "github\.event_name == 'pull_request'") 'Trusted compile must remain a pull-request lane.'
 Assert-True ($TrustedCompile -match 'github\.event\.pull_request\.head\.repo\.full_name == github\.repository' -and $TrustedCompile -match 'github\.event\.pull_request\.user\.login == github\.repository_owner' -and $TrustedCompile -match 'github\.triggering_actor == github\.repository_owner') 'Trusted compile must keep the owner and same-repository trust checks.'
 Assert-True ($TrustedCompile -notmatch "github\.event_name == 'schedule'") 'Trusted compile must not be selectable by schedule.'
-Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^        if: always\(\)\r?$' -Expected 3 -Message 'Trusted compile may use always() only on report binding, upload, and the final control-checkout cleanup steps, never at job scope.'
+Assert-MatchCount -Text $TrustedCompile -Pattern "(?m)^        if: always\(\) && steps\.head_check\.outputs\.superseded != 'true'\r?$" -Expected 3 -Message 'Trusted compile may use always() only on report binding, upload, and the final control-checkout cleanup steps, never at job scope, and never for a superseded head.'
+Assert-MatchCount -Text $TrustedCompile -Pattern '(?m)^        if: always\(\)\r?$' -Expected 0 -Message 'Every trusted compile always() step must also skip a superseded head.'
 Assert-True ($TrustedCompile -notmatch '(?m)^    if: always\(\)\r?$') 'Trusted compile must not bypass a failed, cancelled, or skipped prerequisite at job scope.'
 Assert-True ($TrustedCompile -notmatch 'timeout-minutes:\s*1440') 'Trusted compile must not be a 24-hour job.'
 Assert-True ($TrustedCompile -notmatch '-PhaseTimeoutMinutes' -and $TrustedCompile -notmatch '-RunId') 'Trusted compile must not depend on the scheduled handoff contract.'
@@ -334,6 +340,28 @@ $ReleasePhases = @(
 	@{ Job = 'release-provenance-validation'; Needs = 'release-server-package'; Scheduled = 'scheduled-provenance-validation'; Artifact = 'release-provenance-validation-report'; Package = $false },
 	@{ Job = 'release-packaged-smoke'; Needs = 'release-provenance-validation'; Scheduled = 'scheduled-packaged-smoke'; Artifact = 'release-packaged-smoke-report'; Package = $false }
 )
+$ReleaseProfile = @{
+	Label = 'Release packaging'; Prefix = 'release'; Predicate = $ReleasePredicate; Phases = $ReleasePhases
+	GuardStep = 'Refuse anything but an owner dispatch of a matching release head'; GuardMode = 'Guard'
+	CiArtifact = 'release-ci-report'; Retention = "          retention-days: 90`n"; Release = $true; Uploads = 6
+}
+
+# Issue #267 (TA-024): the owner-only develop packaging dispatch. The same
+# six clauses with the exact develop ref; the phases keep the scheduled
+# artifact names and the default retention, and add no build number or
+# release evidence.
+$DevelopPredicate = "github.event_name == 'workflow_dispatch' && github.repository == 'ShayShimoni/aetheln-online' && github.ref == 'refs/heads/develop' && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.run_attempt == '1'"
+$DevelopPhases = @(
+	@{ Job = 'develop-client-package'; Needs = 'develop-gates'; Scheduled = 'scheduled-client-package'; Artifact = 'engine-runner-client-package-report'; Package = $true },
+	@{ Job = 'develop-server-package'; Needs = 'develop-client-package'; Scheduled = 'scheduled-server-package'; Artifact = 'engine-runner-server-package-report'; Package = $true },
+	@{ Job = 'develop-provenance-validation'; Needs = 'develop-server-package'; Scheduled = 'scheduled-provenance-validation'; Artifact = 'engine-runner-provenance-validation-report'; Package = $false },
+	@{ Job = 'develop-packaged-smoke'; Needs = 'develop-provenance-validation'; Scheduled = 'scheduled-packaged-smoke'; Artifact = 'engine-runner-scheduled-smoke-report'; Package = $false }
+)
+$DevelopProfile = @{
+	Label = 'Develop packaging'; Prefix = 'develop'; Predicate = $DevelopPredicate; Phases = $DevelopPhases
+	GuardStep = 'Refuse anything but an owner dispatch of develop'; GuardMode = 'DevelopGuard'
+	CiArtifact = 'ci-report'; Retention = ''; Release = $false; Uploads = 5
+}
 
 $ReleaseBuildNumberLine = '            -BuildNumber ''${{ github.run_number }}'' `' + "`n"
 
@@ -359,8 +387,8 @@ function Get-StepBlock([string] $JobBody) {
 	return @([regex]::Split($StepsMatch.Groups['steps'].Value, '(?m)^(?=      - )') | Where-Object { $_.Length -gt 0 } | ForEach-Object { $_.TrimEnd([char] 10) + "`n" })
 }
 
-function Get-ReleaseUploadStep([string] $Name, [string] $Condition, [string] $Artifact, [string] $Path) {
-	return (@(('      - name: ' + $Name), ('        if: ' + $Condition), ('        uses: ' + $UploadAction), '        with:', ('          name: ' + $Artifact), ('          path: ' + $Path), '          if-no-files-found: error', '          retention-days: 90', '') -join "`n")
+function Get-ReleaseUploadStep([string] $Name, [string] $Condition, [string] $Artifact, [string] $Path, [string] $Retention = "          retention-days: 90`n") {
+	return (@(('      - name: ' + $Name), ('        if: ' + $Condition), ('        uses: ' + $UploadAction), '        with:', ('          name: ' + $Artifact), ('          path: ' + $Path), '          if-no-files-found: error', '') -join "`n") + $Retention
 }
 
 function Edit-WorkflowText([string] $Text, [string] $Old, [string] $New) {
@@ -382,13 +410,15 @@ function Test-WorkflowWritePermission([string] $Text) {
 	return ($Text -match '(?m)^[ \t]+[''"]?[a-z-]+[''"]?\s*:[ \t]*[''"]?write\b|write-all|(?m)^\s*[''"]?permissions[''"]?\s*:\s*\{')
 }
 
-function Assert-ReleaseWorkflow([string] $Source) {
+function Assert-DispatchWorkflow([string] $Source, [hashtable] $Shape) {
+	$Label = $Shape.Label
+	$Prefix = $Shape.Prefix
 	$Text = ConvertTo-LfText $Source
 	$TopKeys = @([regex]::Matches($Text, '(?m)^(?<key>[^\s#:][^:\n]*):') | ForEach-Object { $_.Groups['key'].Value })
-	Assert-True (($TopKeys -join ',') -ceq 'name,on,permissions,jobs') 'Release packaging must have exactly the reviewed name, on, permissions and jobs top-level keys.'
-	Assert-True (-not (Test-WorkflowWritePermission $Text)) 'Release packaging must not grant write or use flow-form permissions.'
-	Assert-True (-not (Test-UntrustedWorkflowInterpolation $Text)) 'Release packaging must not interpolate event or ref data inside any expression.'
-	Assert-True ($Text -match '(?m)^on:\n  workflow_dispatch:\n\npermissions:\n  contents: read\n\njobs:$') 'Release packaging must declare only the input-free workflow_dispatch trigger and an explicit top-level contents: read.'
+	Assert-True (($TopKeys -join ',') -ceq 'name,on,permissions,jobs') "$Label must have exactly the reviewed name, on, permissions and jobs top-level keys."
+	Assert-True (-not (Test-WorkflowWritePermission $Text)) "$Label must not grant write or use flow-form permissions."
+	Assert-True (-not (Test-UntrustedWorkflowInterpolation $Text)) "$Label must not interpolate event or ref data inside any expression."
+	Assert-True ($Text -match '(?m)^on:\n  workflow_dispatch:\n\npermissions:\n  contents: read\n\njobs:$') "$Label must declare only the input-free workflow_dispatch trigger and an explicit top-level contents: read."
 	foreach ($Rule in @(
 		@('(?m)^\s+inputs:', 'dispatch inputs'),
 		@('\binputs\.', 'an inputs expression'),
@@ -406,60 +436,66 @@ function Assert-ReleaseWorkflow([string] $Source) {
 		@('cancel-in-progress: true', 'a cancelling concurrency block'),
 		@('-ArchiveRoot|-HostLeasePath|-ManagedWorkspace', 'a run-local archive, host lease, or managed-workspace parameter')
 	)) {
-		Assert-True ($Text -notmatch $Rule[0]) "Release packaging must not contain $($Rule[1])."
+		Assert-True ($Text -notmatch $Rule[0]) "$Label must not contain $($Rule[1])."
 	}
 	foreach ($Use in [regex]::Matches($Text, '(?m)^\s+(?:- )?uses: (?<action>\S+)$')) {
-		Assert-True ($Use.Groups['action'].Value -cin @($CheckoutAction, $UploadAction)) "Release packaging may use only the pinned checkout and upload actions, not '$($Use.Groups['action'].Value)'."
+		Assert-True ($Use.Groups['action'].Value -cin @($CheckoutAction, $UploadAction)) "$Label may use only the pinned checkout and upload actions, not '$($Use.Groups['action'].Value)'."
 	}
 	foreach ($JobIf in [regex]::Matches($Text, '(?m)^    if: (?<value>.*)$')) {
-		Assert-True ($JobIf.Groups['value'].Value -notmatch 'always\(|success\(|failure\(|cancelled\(|needs\.') 'No release job-level condition may use a status function or read a dependency result.'
+		Assert-True ($JobIf.Groups['value'].Value -notmatch 'always\(|success\(|failure\(|cancelled\(|needs\.') "No $Prefix job-level condition may use a status function or read a dependency result."
 	}
 	Assert-MatchCount -Text $Text -Pattern '(?m)^    if: ' -Expected 4 -Message 'Only the four engine jobs may carry a job-level condition.'
-	Assert-MatchCount -Text $Text -Pattern '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]$' -Expected 4 -Message 'Exactly the four release phases may target the engine runner.'
-	Assert-MatchCount -Text $Text -Pattern ('(?m)^\s+uses: ' + [regex]::Escape($UploadAction) + '$') -Expected 6 -Message 'Release packaging must upload exactly six reports.'
-	Assert-MatchCount -Text $Text -Pattern '-BuildNumber' -Expected 1 -Message 'Only the provenance phase may pass the build number.'
+	Assert-MatchCount -Text $Text -Pattern '(?m)^    runs-on: \[self-hosted, Windows, X64, aetheln-engine\]$' -Expected 4 -Message "Exactly the four $Prefix phases may target the engine runner."
+	Assert-MatchCount -Text $Text -Pattern ('(?m)^\s+uses: ' + [regex]::Escape($UploadAction) + '$') -Expected $Shape.Uploads -Message "$Label must upload exactly $($Shape.Uploads) reports."
+	Assert-MatchCount -Text $Text -Pattern '-BuildNumber' -Expected ([int] $Shape.Release) -Message 'Only the release provenance phase may pass the build number.'
 	foreach ($Step in @([regex]::Split($Text, '(?m)^(?=      - )'))) {
 		$StepIf = [regex]::Match($Step, '(?m)^        if: (?<value>.*)$')
 		if ($StepIf.Success) { Assert-True ($Step.Contains('uses: ' + $UploadAction) -and $StepIf.Groups['value'].Value -cin @('always()', "always() && steps.suite.outcome != 'skipped'")) 'Only report uploads may run after a failed step.' }
-		if ($Step.Contains('uses: ' + $UploadAction)) { Assert-True ($Step.Contains("          if-no-files-found: error`n") -and $Step.Contains("          retention-days: 90`n") -and $Step -notmatch '(?m)^          path: .*\*') 'Every release upload must be one exact file, fail when it is missing, and keep the 90-day retention.' }
+		if ($Step.Contains('uses: ' + $UploadAction)) {
+			$RetentionHeld = if ($Shape.Retention.Length -gt 0) { $Step.Contains($Shape.Retention) } else { $Step -notmatch 'retention-days' }
+			Assert-True ($Step.Contains("          if-no-files-found: error`n") -and $RetentionHeld -and $Step -notmatch '(?m)^          path: .*\*') "Every $Prefix upload must be one exact file, fail when it is missing, and keep the reviewed retention."
+		}
 	}
 
 	$Jobs = Get-WorkflowJobBody $Text
-	Assert-True ((@($Jobs.Keys) -join ',') -ceq 'release-gates,release-client-package,release-server-package,release-provenance-validation,release-packaged-smoke') 'Release packaging must define exactly the hosted guard job and the four phase jobs, in order.'
-	$GatesBody = [string] $Jobs['release-gates']
+	$GatesJob = $Prefix + '-gates'
+	Assert-True ((@($Jobs.Keys) -join ',') -ceq ((@($GatesJob) + @($Shape.Phases | ForEach-Object { $_.Job })) -join ',')) "$Label must define exactly the hosted guard job and the four phase jobs, in order."
+	$GatesBody = [string] $Jobs[$GatesJob]
 	$GatesStepsIndex = $GatesBody.IndexOf('    steps:', [StringComparison]::Ordinal)
-	Assert-True ($GatesStepsIndex -gt 0 -and $GatesBody.Substring(0, $GatesStepsIndex) -ceq (@('  release-gates:', '    runs-on: windows-latest', '    timeout-minutes: 30', '') -join "`n")) 'release-gates must stay a 30-minute hosted job with no condition, predecessor, environment, or runner admission.'
+	Assert-True ($GatesStepsIndex -gt 0 -and $GatesBody.Substring(0, $GatesStepsIndex) -ceq (@("  ${GatesJob}:", '    runs-on: windows-latest', '    timeout-minutes: 30', '') -join "`n")) "$GatesJob must stay a 30-minute hosted job with no condition, predecessor, environment, or runner admission."
 	$ExpectedGatesSteps = @(
 		(@(('      - uses: ' + $CheckoutAction), '        with:', '          ref: ${{ github.sha }}', '          lfs: false', '          persist-credentials: false', '') -join "`n"),
-		(@('      - name: Refuse anything but an owner dispatch of a matching release head', '        shell: powershell', '        run: powershell -NoProfile -File scripts/ci/Invoke-ReleasePackaging.ps1 -Mode Guard', '') -join "`n"),
+		(@(('      - name: ' + $Shape.GuardStep), '        shell: powershell', ('        run: powershell -NoProfile -File scripts/ci/Invoke-ReleasePackaging.ps1 -Mode ' + $Shape.GuardMode), '') -join "`n"),
 		(@('      - name: Fetch StarterMap LFS object', '        shell: powershell', '        run: git lfs pull --include "Content/Maps/StarterMap.umap"', '') -join "`n"),
 		(@('      - name: Run CI suite', '        id: suite', '        shell: powershell', '        run: powershell -NoProfile -File scripts/ci/Invoke-CiSuite.ps1', '') -join "`n"),
-		(Get-ReleaseUploadStep -Name 'Upload machine-readable report' -Condition "always() && steps.suite.outcome != 'skipped'" -Artifact 'release-ci-report' -Path 'TestResults/ci-report.json')
+		(Get-ReleaseUploadStep -Name 'Upload machine-readable report' -Condition "always() && steps.suite.outcome != 'skipped'" -Artifact $Shape.CiArtifact -Path 'TestResults/ci-report.json' -Retention $Shape.Retention)
 	)
 	$GatesSteps = @(Get-StepBlock $GatesBody)
-	Assert-True ($GatesSteps.Count -eq $ExpectedGatesSteps.Count) 'release-gates must keep exactly its five reviewed steps.'
+	Assert-True ($GatesSteps.Count -eq $ExpectedGatesSteps.Count) "$GatesJob must keep exactly its five reviewed steps."
 	for ($Index = 0; $Index -lt $ExpectedGatesSteps.Count; $Index++) {
-		Assert-True ($GatesSteps[$Index] -ceq $ExpectedGatesSteps[$Index]) ("release-gates step {0} must match the reviewed text: checkout at the dispatched SHA, the guard as the first and only command of its own step, then the LFS fetch, the portable suite, and the report upload." -f ($Index + 1))
+		Assert-True ($GatesSteps[$Index] -ceq $ExpectedGatesSteps[$Index]) ("{0} step {1} must match the reviewed text: checkout at the dispatched SHA, the guard as the first and only command of its own step, then the LFS fetch, the portable suite, and the report upload." -f $GatesJob, ($Index + 1))
 	}
 
 	$EngineCheckout = @(('      - uses: ' + $CheckoutAction), '        with:', '          ref: ${{ github.sha }}', '          lfs: false', '          path: milestone', '          fetch-depth: 0', '          persist-credentials: false', '') -join "`n"
 	$PluginRefusal = '          if (-not [string]::IsNullOrEmpty($env:UE_ADDITIONAL_PLUGIN_PATHS)) { Write-Output ''private_plugin_paths_set''; exit 1 }' + "`n"
 	$BuildNumberLine = $ReleaseBuildNumberLine
 	$EvidenceStep = @('      - name: Record release version evidence', '        id: release_evidence', '        timeout-minutes: 2', '        shell: powershell', '        run: powershell -NoProfile -File scripts/ci/Invoke-ReleasePackaging.ps1 -Mode Evidence -OutputPath TestResults/release-evidence.json', '') -join "`n"
-	foreach ($Phase in $ReleasePhases) {
+	foreach ($Phase in $Shape.Phases) {
 		$Body = [string] $Jobs[$Phase.Job]
 		Assert-True ($Body -notmatch 'always\(\)\s*(?:&&|\|\|)') "$($Phase.Job) must not combine always() with another condition."
 		$Scheduled = ConvertTo-LfText ([string] $JobBodies[$Phase.Scheduled])
 		$ScheduledTimeout = [regex]::Match($Scheduled, '(?m)^    timeout-minutes: (?<value>\d+)$').Groups['value'].Value
 		Assert-True ($ScheduledTimeout.Length -gt 0) "$($Phase.Scheduled) must declare its job bound."
-		$ExpectedHead = @(('  {0}:' -f $Phase.Job), ('    needs: {0}' -f $Phase.Needs), ('    if: ' + $ReleasePredicate), '    runs-on: [self-hosted, Windows, X64, aetheln-engine]', ('    timeout-minutes: ' + $ScheduledTimeout), '    env:', "      UE_ADDITIONAL_PLUGIN_PATHS: ''", '    defaults:', '      run:', '        working-directory: milestone', '    concurrency:', '      group: aetheln-engine-runner', '      queue: max', '      cancel-in-progress: false', '') -join "`n"
+		if (-not $Shape.Release) { Assert-True ($Scheduled.Contains("          name: $($Phase.Artifact)`n")) "$($Phase.Job) must keep the artifact name of $($Phase.Scheduled)." }
+		$ExpectedHead = @(('  {0}:' -f $Phase.Job), ('    needs: {0}' -f $Phase.Needs), ('    if: ' + $Shape.Predicate), '    runs-on: [self-hosted, Windows, X64, aetheln-engine]', ('    timeout-minutes: ' + $ScheduledTimeout), '    env:', "      UE_ADDITIONAL_PLUGIN_PATHS: ''", '    defaults:', '      run:', '        working-directory: milestone', '    concurrency:', '      group: aetheln-engine-runner', '      queue: max', '      cancel-in-progress: false', '') -join "`n"
 		$StepsIndex = $Body.IndexOf('    steps:', [StringComparison]::Ordinal)
-		Assert-True ($StepsIndex -gt 0 -and $Body.Substring(0, $StepsIndex) -ceq $ExpectedHead) "$($Phase.Job) must need exactly $($Phase.Needs), carry exactly the six-clause release predicate, keep the scheduled $ScheduledTimeout-minute bound, pin the private plugin path empty, and join the FIFO engine-runner group."
+		Assert-True ($StepsIndex -gt 0 -and $Body.Substring(0, $StepsIndex) -ceq $ExpectedHead) "$($Phase.Job) must need exactly $($Phase.Needs), carry exactly the six-clause $Prefix predicate, keep the scheduled $ScheduledTimeout-minute bound, pin the private plugin path empty, and join the FIFO engine-runner group."
 		$ScheduledSteps = @(Get-StepBlock $Scheduled)
 		$ScheduledGate = @($ScheduledSteps | Where-Object { $_.Contains('scripts/ci/Invoke-EngineRunnerGate.ps1') })
 		Assert-True ($ScheduledGate.Count -eq 1) "$($Phase.Scheduled) must invoke the gate exactly once."
-		# Parity: the release gate step is the scheduled one plus only the
-		# reviewed additions (plugin refusal on cooks, build number on provenance).
+		# Parity: the dispatched gate step is the scheduled one plus only the
+		# reviewed additions (plugin refusal on cooks, and the release build
+		# number on provenance).
 		$ExpectedGateTail = $ScheduledGate[0] -replace '^[^\n]*\n', ''
 		if ($Phase.Package) { $ExpectedGateTail = $ExpectedGateTail.Replace("        run: |`n", "        run: |`n" + $PluginRefusal) }
 		if ($Phase.Job -ceq 'release-provenance-validation') { $ExpectedGateTail = $ExpectedGateTail.Replace('            -PhaseTimeoutMinutes', $BuildNumberLine + '            -PhaseTimeoutMinutes') }
@@ -467,13 +503,13 @@ function Assert-ReleaseWorkflow([string] $Source) {
 		if ($Phase.Package) { $Expected += @($ScheduledSteps | Where-Object { $_.Contains('git lfs pull --include "Content/**"') }) }
 		$Expected += 'gate'
 		if ($Phase.Job -ceq 'release-packaged-smoke') { $Expected += $EvidenceStep }
-		$Expected += Get-ReleaseUploadStep -Name 'Upload engine-runner report' -Condition 'always()' -Artifact $Phase.Artifact -Path 'milestone/TestResults/engine-runner-report.json'
+		$Expected += Get-ReleaseUploadStep -Name 'Upload engine-runner report' -Condition 'always()' -Artifact $Phase.Artifact -Path 'milestone/TestResults/engine-runner-report.json' -Retention $Shape.Retention
 		if ($Phase.Job -ceq 'release-packaged-smoke') { $Expected += Get-ReleaseUploadStep -Name 'Upload release evidence' -Condition 'always()' -Artifact 'release-evidence' -Path 'milestone/TestResults/release-evidence.json' }
 		$Steps = @(Get-StepBlock $Body)
 		Assert-True ($Steps.Count -eq $Expected.Count) "$($Phase.Job) must keep exactly its reviewed steps."
 		for ($Index = 0; $Index -lt $Expected.Count; $Index++) {
 			if ($Expected[$Index] -ceq 'gate') {
-				Assert-True ($Steps[$Index] -match '^      - name: [^\n]+\n' -and ($Steps[$Index] -replace '^[^\n]*\n', '') -ceq $ExpectedGateTail) "$($Phase.Job) must run the scheduled gate invocation with the same mode, bindings, and watchdog, changed only by the reviewed release additions."
+				Assert-True ($Steps[$Index] -match '^      - name: [^\n]+\n' -and ($Steps[$Index] -replace '^[^\n]*\n', '') -ceq $ExpectedGateTail) "$($Phase.Job) must run the scheduled gate invocation with the same mode, bindings, and watchdog, changed only by the reviewed additions."
 			} else {
 				Assert-True ($Steps[$Index] -ceq $Expected[$Index]) ("{0} step {1} must match the reviewed text." -f $Phase.Job, ($Index + 1))
 			}
@@ -482,7 +518,7 @@ function Assert-ReleaseWorkflow([string] $Source) {
 }
 
 function Assert-RepositoryWorkflowSet([hashtable] $Workflows) {
-	Assert-True ((@($Workflows.Keys | Sort-Object) -join ',') -ceq 'delivery-policy.yml,prototype-quality-gates.yml,release-packaging.yml,visual-package-validation.yml') 'The workflow set is closed: a new workflow file needs its own reviewed pins.'
+	Assert-True ((@($Workflows.Keys | Sort-Object) -join ',') -ceq 'delivery-policy.yml,develop-packaging.yml,prototype-quality-gates.yml,release-packaging.yml,visual-package-validation.yml') 'The workflow set is closed: a new workflow file needs its own reviewed pins.'
 	foreach ($Name in @($Workflows.Keys)) {
 		$Text = ConvertTo-LfText ([string] $Workflows[$Name])
 		Assert-True ($Text -match '(?m)^permissions:\n(?:  [a-z-]+: (?:read|none)\n)+' -and $Text -cnotmatch 'write-all|read-all' -and -not (Test-WorkflowWritePermission $Text)) "$Name must declare an explicit top-level permissions block and grant no write permission."
@@ -496,10 +532,10 @@ function Assert-RepositoryWorkflowSet([hashtable] $Workflows) {
 		foreach ($Trigger in $Triggers) {
 			Assert-True ($Trigger -cin @('pull_request', 'push', 'schedule', 'workflow_call', 'workflow_dispatch')) "$Name must not use the '$Trigger' trigger."
 		}
-		Assert-True (($Name -ceq 'release-packaging.yml') -or ($Text -notmatch 'workflow_dispatch')) "Only release-packaging.yml may declare or mention workflow_dispatch; $Name does."
+		Assert-True (($Name -cin @('release-packaging.yml', 'develop-packaging.yml')) -or ($Text -notmatch 'workflow_dispatch')) "Only release-packaging.yml and develop-packaging.yml may declare or mention workflow_dispatch; $Name does."
 		foreach ($RunsOn in [regex]::Matches($Text, '(?m)^\s+runs-on:(?<value>.*)$')) {
 			$Value = $RunsOn.Groups['value'].Value.Trim()
-			$EngineWorkflow = $Name -cin @('prototype-quality-gates.yml', 'release-packaging.yml')
+			$EngineWorkflow = $Name -cin @('prototype-quality-gates.yml', 'release-packaging.yml', 'develop-packaging.yml')
 			Assert-True (($Value -ceq 'windows-latest') -or ($EngineWorkflow -and $Value -ceq '[self-hosted, Windows, X64, aetheln-engine]')) "$Name may target only windows-latest, or the exact engine label set in an engine workflow; found '$Value'."
 		}
 		foreach ($Job in (Get-WorkflowJobBody $Text).GetEnumerator()) {
@@ -511,7 +547,7 @@ function Assert-RepositoryWorkflowSet([hashtable] $Workflows) {
 }
 
 $ReleaseWorkflowLf = ConvertTo-LfText $ReleaseWorkflow
-Assert-ReleaseWorkflow $ReleaseWorkflowLf
+Assert-DispatchWorkflow $ReleaseWorkflowLf $ReleaseProfile
 $ReleaseMutations = @(
 	@{ Name = 'append a top-level environment'; Old = $null; New = "`nenv:`n  PSModulePath: fixture`n" },
 	@{ Name = 'prepend a top-level environment'; Old = "on:`n"; New = "env:`n  GIT_CONFIG_PARAMETERS: fixture`n`non:`n" },
@@ -560,8 +596,58 @@ $ReleaseMutations = @(
 foreach ($Mutation in $ReleaseMutations) {
 	$Mutated = if ($null -eq $Mutation.Old) { $ReleaseWorkflowLf + $Mutation.New } else { Edit-WorkflowText -Text $ReleaseWorkflowLf -Old $Mutation.Old -New $Mutation.New }
 	$Rejected = $false
-	try { Assert-ReleaseWorkflow $Mutated } catch { $Rejected = $true }
+	try { Assert-DispatchWorkflow $Mutated $ReleaseProfile } catch { $Rejected = $true }
 	Assert-True $Rejected "Release workflow mutation '$($Mutation.Name)' must be rejected."
+}
+
+$DevelopWorkflowLf = ConvertTo-LfText $DevelopWorkflow
+Assert-DispatchWorkflow $DevelopWorkflowLf $DevelopProfile
+$DevelopRef = "github.ref == 'refs/heads/develop'"
+$DevelopMutations = @(
+	@{ Name = 'append a top-level environment'; Old = $null; New = "`nenv:`n  PSModulePath: fixture`n" },
+	@{ Name = 'drop the ref clause'; Old = "$DevelopRef && "; New = '' },
+	@{ Name = 'widen the ref to a prefix'; Old = $DevelopRef; New = "startsWith(github.ref, 'refs/heads/develop')" },
+	@{ Name = 'select release heads'; Old = $DevelopRef; New = "startsWith(github.ref, 'refs/heads/release/')" },
+	@{ Name = 'select the default branch by name'; Old = $DevelopRef; New = "github.ref_name == 'develop'" },
+	@{ Name = 'drop the repository clause'; Old = "github.repository == 'ShayShimoni/aetheln-online' && "; New = '' },
+	@{ Name = 'drop the actor clause'; Old = 'github.actor == github.repository_owner && '; New = '' },
+	@{ Name = 'drop the triggering-actor clause'; Old = ' && github.triggering_actor == github.repository_owner'; New = '' },
+	@{ Name = 'drop the attempt clause'; Old = " && github.run_attempt == '1'"; New = '' },
+	@{ Name = 'accept the schedule event'; Old = "github.event_name == 'workflow_dispatch'"; New = "(github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')" },
+	@{ Name = 'prefix always() to an engine predicate'; Old = '    if: github.event_name'; New = '    if: always() && github.event_name' },
+	@{ Name = 'give the guard job a status condition'; Old = "  develop-gates:`n"; New = "  develop-gates:`n    if: always()`n" },
+	@{ Name = 'add a schedule trigger'; Old = "  workflow_dispatch:`n"; New = "  workflow_dispatch:`n  schedule:`n    - cron: '0 3 * * 6'`n" },
+	@{ Name = 'add a pull-request trigger'; Old = "  workflow_dispatch:`n"; New = "  workflow_dispatch:`n  pull_request:`n" },
+	@{ Name = 'add dispatch inputs'; Old = "  workflow_dispatch:`n"; New = "  workflow_dispatch:`n    inputs:`n      target:`n        type: string`n" },
+	@{ Name = 'persist checkout credentials'; Old = 'persist-credentials: false'; New = 'persist-credentials: true' },
+	@{ Name = 'check out a moving ref'; Old = 'ref: ${{ github.sha }}'; New = 'ref: develop' },
+	@{ Name = 'cancel in-progress engine work'; Old = 'cancel-in-progress: false'; New = 'cancel-in-progress: true' },
+	@{ Name = 'leave the shared engine queue'; Old = 'group: aetheln-engine-runner'; New = 'group: develop-packaging' },
+	@{ Name = 'continue past a refused guard'; Old = "-Mode DevelopGuard`n"; New = "-Mode DevelopGuard`n        continue-on-error: true`n" },
+	@{ Name = 'mask the guard exit code'; Old = '-Mode DevelopGuard'; New = '-Mode DevelopGuard; exit 0' },
+	@{ Name = 'use the release guard'; Old = '-Mode DevelopGuard'; New = '-Mode Guard' },
+	@{ Name = 'run a step before the guard'; Old = '      - name: Refuse anything'; New = "      - name: Early step`n        shell: powershell`n        run: git --version`n      - name: Refuse anything" },
+	@{ Name = 'drop needs: develop-gates'; Old = "    needs: develop-gates`n"; New = '' },
+	@{ Name = 'pass a build number'; Old = ('            -Mode ValidateProvenance `' + "`n"); New = ('            -Mode ValidateProvenance `' + "`n" + $ReleaseBuildNumberLine) },
+	@{ Name = 'add a retention override'; Old = "          if-no-files-found: error`n"; New = "          if-no-files-found: error`n          retention-days: 1`n" },
+	@{ Name = 'rename a scheduled artifact'; Old = 'name: engine-runner-client-package-report'; New = 'name: develop-client-package-report' },
+	@{ Name = 'drop the private plugin path pin'; Old = "    env:`n      UE_ADDITIONAL_PLUGIN_PATHS: ''`n"; New = '' },
+	@{ Name = 'drop the private plugin path refusal'; Old = ('          if (-not [string]::IsNullOrEmpty($env:UE_ADDITIONAL_PLUGIN_PATHS)) { Write-Output ''private_plugin_paths_set''; exit 1 }' + "`n"); New = '' },
+	@{ Name = 'raise a phase bound'; Old = '    timeout-minutes: 40'; New = '    timeout-minutes: 45' },
+	@{ Name = 'raise a phase watchdog'; Old = '-PhaseTimeoutMinutes 30'; New = '-PhaseTimeoutMinutes 35' },
+	@{ Name = 'select the monolithic gate'; Old = '-Mode PackageServer'; New = '-Mode PackagedSmoke' },
+	@{ Name = 'upload a wildcard'; Old = 'path: milestone/TestResults/engine-runner-report.json'; New = 'path: milestone/TestResults/*' },
+	@{ Name = 'upload packaged bytes'; Old = 'path: milestone/TestResults/engine-runner-report.json'; New = 'path: milestone/Saved' },
+	@{ Name = 'read a secret'; Old = "      UE_ADDITIONAL_PLUGIN_PATHS: ''`n"; New = "      UE_ADDITIONAL_PLUGIN_PATHS: ''`n" + '      AETHELN_TOKEN: ${{ secrets.GITHUB_TOKEN }}' + "`n" },
+	@{ Name = 'raise the workflow permission'; Old = "  contents: read`n"; New = "  contents: write`n" },
+	@{ Name = 'interpolate the ref into an engine run'; Old = "-SourceRevision '`${{ github.sha }}'"; New = "-SourceRevision '`${{ github.ref }}'" },
+	@{ Name = 'route the guard to a runner label'; Old = '    runs-on: windows-latest'; New = '    runs-on: self-hosted' }
+)
+foreach ($Mutation in $DevelopMutations) {
+	$Mutated = if ($null -eq $Mutation.Old) { $DevelopWorkflowLf + $Mutation.New } else { Edit-WorkflowText -Text $DevelopWorkflowLf -Old $Mutation.Old -New $Mutation.New }
+	$Rejected = $false
+	try { Assert-DispatchWorkflow $Mutated $DevelopProfile } catch { $Rejected = $true }
+	Assert-True $Rejected "Develop workflow mutation '$($Mutation.Name)' must be rejected."
 }
 
 $RepositoryWorkflows = @{}
@@ -586,7 +672,7 @@ $RepositoryMutations = @(
 	@{ Name = 'add a workflow file'; File = 'extra.yml'; Old = $null; New = "name: Extra`n" },
 	@{ Name = 'add an issue_comment trigger'; File = 'delivery-policy.yml'; Old = "on:`n  pull_request:`n"; New = "on:`n  issue_comment:`n  pull_request:`n" },
 	@{ Name = 'switch to pull_request_target'; File = 'delivery-policy.yml'; Old = "  pull_request:`n    types:"; New = "  pull_request_target:`n    types:" },
-	@{ Name = 'add a second dispatch workflow'; File = 'visual-package-validation.yml'; Old = "on:`n  workflow_call:`n"; New = "on:`n  workflow_dispatch:`n  workflow_call:`n" },
+	@{ Name = 'add a third dispatch workflow'; File = 'visual-package-validation.yml'; Old = "on:`n  workflow_call:`n"; New = "on:`n  workflow_dispatch:`n  workflow_call:`n" },
 	@{ Name = 'target a bare self-hosted label'; File = 'delivery-policy.yml'; Old = '    runs-on: windows-latest'; New = '    runs-on: self-hosted' },
 	@{ Name = 'target the engine labels from a hosted workflow'; File = 'visual-package-validation.yml'; Old = '    runs-on: windows-latest'; New = '    runs-on: [self-hosted, Windows, X64, aetheln-engine]' },
 	@{ Name = 'target a runs-on expression'; File = 'delivery-policy.yml'; Old = '    runs-on: windows-latest'; New = '    runs-on: ${{ github.event.inputs.runner }}' },
@@ -595,7 +681,9 @@ $RepositoryMutations = @(
 	@{ Name = 'grant write-all'; File = 'delivery-policy.yml'; Old = "permissions:`n  contents: read`n"; New = "permissions: write-all`n" },
 	@{ Name = 'grant a job-level write'; File = 'prototype-quality-gates.yml'; Old = "    permissions:`n      actions: read`n"; New = "    permissions:`n      actions: write`n" },
 	@{ Name = 'interpolate event data in a scheduled engine job'; File = 'prototype-quality-gates.yml'; Old = "-RunnerName '`${{ runner.name }}'"; New = "-RunnerName '`${{ github.event.sender.login }}'" },
-	@{ Name = 'interpolate the head ref in a release engine job'; File = 'release-packaging.yml'; Old = "-RunnerName '`${{ runner.name }}'"; New = "-RunnerName '`${{ github.head_ref }}'" }
+	@{ Name = 'interpolate the head ref in a release engine job'; File = 'release-packaging.yml'; Old = "-RunnerName '`${{ runner.name }}'"; New = "-RunnerName '`${{ github.head_ref }}'" },
+	@{ Name = 'interpolate the ref in a develop engine job'; File = 'develop-packaging.yml'; Old = "-RunnerName '`${{ runner.name }}'"; New = "-RunnerName '`${{ github.ref }}'" },
+	@{ Name = 'add a dispatch trigger to the quality gates'; File = 'prototype-quality-gates.yml'; Old = "on:`n  pull_request:`n"; New = "on:`n  workflow_dispatch:`n  pull_request:`n" }
 )
 foreach ($Mutation in $RepositoryMutations) {
 	$Copy = @{}
@@ -665,10 +753,17 @@ Assert-True ($CiDocumentation -notmatch 'engine-runner-manual-smoke-report') 'CI
 $ReleaseDocSection = [regex]::Match($CiDocumentation, '(?ms)^### Release packaging \(Issue #226\)\r?\n.*?(?=^#{1,3} |\z)')
 Assert-True ($ReleaseDocSection.Success -and [regex]::Matches($CiDocumentation, '(?m)^### Release packaging \(Issue #226\)\r?$').Count -eq 1) 'CI documentation must contain exactly one release packaging section (TA-022).'
 $CiDocumentationOutsideRelease = $CiDocumentation.Remove($ReleaseDocSection.Index, $ReleaseDocSection.Length)
-foreach ($Term in @('release-packaging.yml', 'workflow_dispatch', 'release/*', 'no inputs', 'run_number', 'contents: read', 'aetheln-engine-runner', 'release-gates', 'retention-days: 90', 'release-evidence.json', 'LogNetVersion', 'local engine or editor build', 'attestation', 'release_guard_passed', 'release_event_invalid', 'release_repository_invalid', 'release_actor_invalid', 'release_attempt_invalid', 'release_ref_invalid', 'build_number_invalid', 'project_version_missing', 'project_version_invalid', 'project_version_override', 'project_version_branch_mismatch', 'release_evidence_passed', 'net_version_missing', 'net_version_line_invalid', 'net_version_mismatch', 'net_version_project_mismatch')) {
+# Issue #267 adds exactly one develop packaging dispatch section (TA-024).
+$DevelopDocSection = [regex]::Match($CiDocumentationOutsideRelease, '(?ms)^### Develop packaging dispatch \(Issue #267\)\r?\n.*?(?=^#{1,3} |\z)')
+Assert-True ($DevelopDocSection.Success -and [regex]::Matches($CiDocumentation, '(?m)^### Develop packaging dispatch \(Issue #267\)\r?$').Count -eq 1) 'CI documentation must contain exactly one develop packaging dispatch section (TA-024).'
+$CiDocumentationOutsideRelease = $CiDocumentationOutsideRelease.Remove($DevelopDocSection.Index, $DevelopDocSection.Length)
+foreach ($Term in @('develop-packaging.yml', 'workflow_dispatch', 'no inputs', "github.ref == 'refs/heads/develop'", 'attempt 1', 'OD-7', 'explicit OK', 'develop-gates', 'contents: read', 'aetheln-engine-runner', '256 GiB', '64 GiB', 'handoff_storage_exhausted', 'develop_guard_passed', 'develop_event_invalid', 'develop_repository_invalid', 'develop_actor_invalid', 'develop_attempt_invalid', 'develop_ref_invalid', 'local engine or editor build', 'TA-024')) {
+	Assert-True ($DevelopDocSection.Value.Contains($Term)) "The CI develop packaging dispatch section must record '$Term'."
+}
+foreach ($Term in @('release-packaging.yml','workflow_dispatch', 'release/*', 'no inputs', 'run_number', 'contents: read', 'aetheln-engine-runner', 'release-gates', 'retention-days: 90', 'release-evidence.json', 'LogNetVersion', 'local engine or editor build', 'attestation', 'release_guard_passed', 'release_event_invalid', 'release_repository_invalid', 'release_actor_invalid', 'release_attempt_invalid', 'release_ref_invalid', 'build_number_invalid', 'project_version_missing', 'project_version_invalid', 'project_version_override', 'project_version_branch_mismatch', 'release_evidence_passed', 'net_version_missing', 'net_version_line_invalid', 'net_version_mismatch', 'net_version_project_mismatch')) {
 	Assert-True ($ReleaseDocSection.Value.Contains($Term)) "The CI release packaging section must record '$Term'."
 }
-Assert-True ($CiDocumentationOutsideRelease -notmatch 'workflow_dispatch' -and $CiDocumentationOutsideRelease -notmatch '(?i)owner-dispatched|owner\s+dispatch') 'CI documentation outside the release packaging section must not advertise a manual dispatch entry point.'
+Assert-True ($CiDocumentationOutsideRelease -notmatch 'workflow_dispatch' -and $CiDocumentationOutsideRelease -notmatch '(?i)owner-dispatched|owner\s+dispatch') 'CI documentation outside the release and develop packaging sections must not advertise a manual dispatch entry point.'
 Assert-True ($CiDocumentation -match '(?i)schedule-only') 'CI documentation must record that the four phases are schedule-only.'
 Assert-True ($CiDocumentation -match '(?i)needs:?\s*`?quality-gates`?') 'CI documentation must record that phase 1 depends on the portable gates.'
 Assert-True ($CiDocumentation -match 'change-impact' -and $CiDocumentation -match 'engine_required') 'CI documentation must record the change-impact classifier and its engine_required output.'
@@ -713,8 +808,18 @@ foreach ($Term in @('release-packaging.yml', 'workflow_dispatch', 'older branch'
 	Assert-True ($ReleaseDecision.IndexOf($Term, [StringComparison]::OrdinalIgnoreCase) -ge 0) "TA-022 must record '$Term'."
 }
 Assert-True ($SchedulingDecision -match 'TA-022') 'TA-012 must point to the separate TA-022 release workflow.'
-$ArchitectureDecisionsOutsideRelease = $ArchitectureDecisions.Replace($ReleaseDecision, '')
-Assert-True ($ArchitectureDecisionsOutsideRelease -notmatch 'workflow_dispatch' -and $ArchitectureDecisionsOutsideRelease -notmatch '(?i)owner-dispatched|owner\s+dispatch') 'Architecture decisions outside TA-022 must not describe a manual dispatch entry point.'
+# Issue #267: TA-022 records the owner's OD-7 extension of its runner-trust
+# acceptance to develop, and TA-024 records the separate develop identity.
+foreach ($Term in @('OD-7', '2026-10-10', 'develop-packaging.yml', 'explicit OK', 'TA-024')) {
+	Assert-True ($ReleaseDecision.Contains($Term)) "The TA-022 extension must record '$Term'."
+}
+$DevelopDecision = Get-DecisionSection 'TA-024'
+Assert-True ($DevelopDecision -match '(?m)^- \*\*Status:\*\* Accepted\r?$') 'TA-024 must record the accepted owner-only develop packaging dispatch.'
+foreach ($Term in @('develop-packaging.yml', 'workflow_dispatch', "github.ref == 'refs/heads/develop'", 'older branch', 'TA-012', 'TA-022', 'OD-6', 'OD-7', 'OD-8', 'explicit OK', 'attempt 1', 'aetheln-engine-runner', '256 GiB', 'prototype-quality-gates.yml')) {
+	Assert-True ($DevelopDecision.Contains($Term)) "TA-024 must record '$Term'."
+}
+$ArchitectureDecisionsOutsideRelease = $ArchitectureDecisions.Replace($ReleaseDecision, '').Replace($DevelopDecision, '')
+Assert-True ($ArchitectureDecisionsOutsideRelease -notmatch 'workflow_dispatch' -and $ArchitectureDecisionsOutsideRelease -notmatch '(?i)owner-dispatched|owner\s+dispatch') 'Architecture decisions outside TA-022 and TA-024 must not describe a manual dispatch entry point.'
 Assert-True ($ArchitectureDecisions -notmatch '(?i)queued\s+manual') 'TA-012 must not describe older queued manual jobs; no manual job can exist.'
 Assert-True ($RunnerDecision -notmatch '(?i)request\s+the\s+same\s+gate\s+manually' -and $RunnerDecision -notmatch '(?i)manual\s+packaged-smoke') 'TA-011 must not offer or await a manual packaged-smoke gate.'
 Assert-True ($SchedulingDecision -match '(?i)schedule-only' -and $SchedulingDecision -match '(?i)no\s+manual') 'TA-012 must record that the milestone phases are schedule-only with no manual trigger.'
@@ -745,6 +850,13 @@ $EngineJobWord = @('zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'
 Assert-True ($EditorDecision.Contains('- **Status:** Accepted -') -and $EditorCeiling -gt 0 -and $CompileCeiling -gt 0) 'TA-020 must be accepted and both engine pull-request jobs must declare a job ceiling.'
 foreach ($Figure in @("has a $EditorCeiling-minute job ceiling", "up to $($CompileCeiling + $EditorCeiling) minutes ($CompileCeiling-minute compile plus $EditorCeiling-minute editor automation)", "now has $EngineJobWord jobs")) {
 	Assert-True ($EditorDecision.Contains($Figure)) "TA-020 must record the workflow figure '$Figure'."
+}
+# Issue #299: the editor gate and the superseded-head check are recorded where they are defined.
+foreach ($Term in @('Amendment (2026-10-11, editor gate and superseded-head check, issue #299)', '`editor_required`', '`superseded_head`', 'cancel-in-progress: true')) {
+	Assert-True ($EditorDecision.Contains($Term)) "TA-020 must record the issue #299 term '$Term'."
+}
+foreach ($Term in @('#### Editor gate (issue #299)', '### Superseded-head check (issue #299)', '`editor_required == ''true''`', '`superseded_head`', '`head_check result=unavailable`')) {
+	Assert-True ($CiDocumentation.Contains($Term)) "The CI documentation must record the issue #299 term '$Term'."
 }
 
 # The portable CI exemption is a closed applicability decision, not a blanket
@@ -777,5 +889,6 @@ Write-Output 'PASS: trusted compile requires portable success and an engine-impa
 Write-Output 'PASS: accepted decisions TA-011 and TA-012 describe the same schedule-only, portable-first, fail-closed selective gates as the workflow and CI documentation'
 Write-Output 'PASS: Package 3C receipt and aggregate jobs remain PR-selected, directly bound, hosted, bounded, non-authoritative, and isolated from engine scheduling'
 Write-Output 'PASS: the TA-022 release workflow is dispatch-only, guard-first, owner- and release/*-gated, attempt-1, read-only, parity-bound to the scheduled phases, and uploads only six reports; every pin fails red under mutation'
+Write-Output 'PASS: the TA-024 develop workflow is dispatch-only, guard-first, owner- and exact-develop-gated, attempt-1, read-only, parity-bound to the scheduled phases with their artifact names, and uploads only five reports; every pin fails red under mutation'
 Write-Output 'PASS: repository workflows keep closed trigger, file, runs-on, and permission allowlists, and no engine job interpolates event or ref data'
 exit 0

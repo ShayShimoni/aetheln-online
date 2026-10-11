@@ -1115,7 +1115,7 @@ Every accepted decision records:
   TA-020), so an automation failure leaves the compile job and native receipt
   intact while the unreal receipt reports the fixed `automation_reason` and
   fails red at its raw binding check. Host-lease wrapping remains a follow-up.
-  TA-024 adds a fifth publisher, `content-receipt-shadow`, which proves
+  TA-025 adds a fifth publisher, `content-receipt-shadow`, which proves
   `content-reference-validation` from the exact
   `content-validation-report.json` of the separate `trusted-content-validation`
   job with zero native exit and no cleanup claim.
@@ -1142,7 +1142,7 @@ Every accepted decision records:
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
   publication error remains red. `clean-package-provenance-smoke` remains the
-  only unsupported obligation; TA-024 made `content-reference-validation`
+  only unsupported obligation; TA-025 made `content-reference-validation`
   live. The gap
   path checks only job success, the exact artifact name, and the artifact ID and
   digest format; it does not do the aggregate's artifact-API and byte
@@ -1480,7 +1480,7 @@ Every accepted decision records:
   amendment below replaces that check with a leased re-sync.
   `trusted-candidate-compile` returns to its
   pre-producer shape, and the TA-015 30-minute compile watchdog is unchanged.
-  The engine runner then had six jobs; TA-024 adds `trusted-content-validation`,
+  The engine runner then had six jobs; TA-025 adds `trusted-content-validation`,
   so it now has seven jobs.
 - **Evidence:** first live runs on runner 21. The `trusted-candidate-compile`
   step "Compile supported client and server targets" took 102 s on PR #204 (a
@@ -1935,6 +1935,41 @@ Every accepted decision records:
     fixture in the same suite entry covers it. The path-free result line is
     recorded on issue #267 before the host-tools receipt change that depends on
     it merges.
+- **Amendment (2026-10-11, editor gate and superseded-head check, issue #299):**
+  two cuts to self-hosted runner time, requested by the lead under the
+  owner's standing end-to-end delivery authority. They change when the job runs, not
+  what it proves or who may start it.
+  - *Editor gate:* `change-impact` publishes a second output,
+    `editor_required`, and `trusted-editor-automation` now needs
+    `change-impact` as well as the compile and runs only when it is `true`.
+    The closed, case-insensitive set is `Source`, `Config`, `Content`,
+    `Plugins`, `AethelnOnline.uproject`, the workflow itself, and the editor
+    harness as exact paths (`Invoke-UnrealAutomationTests.ps1`,
+    `Sync-EditorAutomationWorkspace.ps1`, `EngineRunnerHostLease.ps1`, every
+    `InitialPreparation.*`, and the three scripts those load, `LeaseJournal.ps1`,
+    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`). Every
+    classifier uncertainty publishes `editor_required=true`, and it implies
+    `engine_required=true`. A controller-only pull request still compiles
+    (TA-018) but skips the editor job, about two minutes of runner time. The
+    shadow selector is not consulted; the authoritative classifier alone gates
+    the job, and the byte-hash pin of the `change-impact` block is updated.
+  - *Superseded-head check:* the first step of `trusted-candidate-compile` and
+    `trusted-editor-automation` compares the event head with the pull request's
+    current head through the API and skips the rest of the job when they
+    differ, so a push that arrived while the job waited in the queue frees the
+    runner in seconds. It fails open on any error, passes `github.token`
+    through `env` for one read-only request, reads the event from the runner's
+    payload file so no event data is interpolated into the engine job, adds no action or permission, and
+    does not use `cancel-in-progress: true`, which could stop a job holding the
+    host lease. The editor outcome step records `superseded_head`, a new word
+    in the fixed `automation_reason` vocabulary.
+  - *Not changed:* the trust predicates, the ceilings, the queue, the lease and
+    journal rules, and the required checks (`quality-gates`, `change-impact`).
+    A skipped editor job is skipped, not failed.
+  - *Evidence:* `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1` pins the
+    output, the job gate, the head check step in both jobs, and runs the
+    classifier matrix and the head check against fixtures (current, superseded,
+    and every fail-open case).
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
@@ -2097,6 +2132,16 @@ Every accepted decision records:
 - **Revisit trigger:** Any package leaves the owner's control (external
   testers, a public download, or a store), a collaborator gains write access, a
   second matching runner is registered, or `hotfix/*` packaging is needed.
+- **Amendment (2026-10-11, develop dispatch, issue #267):** On 2026-10-10 the
+  owner accepted the same runner-trust risk for a manual packaging dispatch of
+  `develop` (OD-7 on issue #267), extending the 2026-10-03 acceptance above,
+  which covered `release/*` only. The dispatch is owner-only (OD-8): the owner
+  presses it, or the lead presses it only with the owner's explicit OK for
+  that run; agents never dispatch it. TA-024 records the separate
+  `.github/workflows/develop-packaging.yml` identity that carries it. The
+  runner-trust analysis, the fork-run rule, the operator rule, and the
+  revisit triggers above apply to it unchanged. `prototype-quality-gates.yml`
+  still keeps no manual trigger.
 
 ### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
 
@@ -2188,7 +2233,70 @@ Every accepted decision records:
   automation, a per-area test split is proposed, or the pinned engine gains a
   desktop SHA-256 in `Core`.
 
-### TA-024 - Separate Engine-Runner Job for Content Reference Validation
+### TA-024 - Owner-Only Develop Packaging Dispatch on a Separate Workflow Identity
+
+- **Status:** Accepted
+- **Acceptance:** Accepted 2026-10-11 by the delivery lead under the owner's
+  delegated authority. The owner accepted the runner-trust risk (OD-7) and the
+  dispatcher rule (OD-8) on 2026-10-10; both are recorded as the 2026-10-11
+  amendment to TA-022.
+- **Scope:** Manual packaging of the head of `develop` outside the weekly
+  schedule (issue #267).
+- **Decision (2026-10-11):** `.github/workflows/develop-packaging.yml`
+  packages the head of `develop` on demand. Its only trigger is
+  `workflow_dispatch`, with no inputs. A hosted `develop-gates` job runs
+  `scripts/ci/Invoke-ReleasePackaging.ps1 -Mode DevelopGuard` first and
+  refuses, red, anything but a dispatch by the repository owner, as actor and
+  as triggering actor, of exactly `refs/heads/develop` in this repository on
+  attempt 1; it then runs the portable suite. Four engine jobs copy the TA-012
+  scheduled phases: the same gate, modes, job bounds (40/40/20/20 minutes),
+  watchdogs (30/30/10/10), handoff contract, artifact names, and the
+  `aetheln-engine-runner` FIFO group with `queue: max` and
+  `cancel-in-progress: false`. Each repeats the six-clause predicate of TA-022
+  with `github.ref == 'refs/heads/develop'` in place of the `release/*` prefix,
+  and pins `UE_ADDITIONAL_PLUGIN_PATHS` empty (TA-019). The token is
+  `contents: read`, checkouts pin the dispatched SHA without persisted
+  credentials, and only five redacted reports are uploaded with the default
+  retention. There is no build number and no release evidence. Who may
+  dispatch: the owner, or the lead only with the owner's explicit OK for that
+  run (OD-8).
+- **Context:** The weekly schedule is the only other path that packages
+  `develop`, so proving a packaging fix (PR #301 on issue #267) waits
+  up to a week. On 2026-10-06 the lead chose a separate workflow (OD-6) over a
+  trigger on `prototype-quality-gates.yml`. TA-012 forbids a manual trigger on
+  that workflow for the older branch reason, and TA-022 rejected that
+  alternative too. On 2026-10-11 a scan of all 23 remote branches and tags
+  that carry `prototype-quality-gates.yml` found none that declares a manual
+  trigger, but the TA-012 rule stands; this decision does not reverse it. A
+  new workflow identity has no older copies.
+- **Alternatives:** A trigger on `prototype-quality-gates.yml` (rejected:
+  reverses TA-012 and TA-022, and every pull-request job would have to be
+  proven unreachable on a dispatch); reusing `release-packaging.yml` with a
+  wider ref rule (rejected: release builds carry a build number and release
+  evidence that `develop` heads must not claim); dispatch inputs (rejected: an
+  injection surface; the ref is the only choice).
+- **Consequences:** One more FIFO waiter in `aetheln-engine-runner` with the
+  same bounds; a dispatch that overlaps the schedule or a release run
+  interleaves phase by phase in separate run-scoped handoff directories.
+  Residual risk: every packaging run reserves 64 GiB of the shared 256 GiB
+  handoff cap until its cleanup request is acted on, so dispatches between
+  cleanups can make a later scheduled, release, or dispatched run fail closed
+  with `handoff_storage_exhausted`. The owner checks the cleanup requests
+  before dispatching. This decision adds no workflow-level dispatch cap; that
+  cap (OD-11 on issue #267) stays a separate lead decision. The immediate kill
+  switch is disabling the workflow; the permanent rollback is reverting it.
+- **Evidence:** `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the exact
+  predicate, the guard-first step, parity with the scheduled phases including
+  artifact names, the five uploads, and allows `workflow_dispatch` in exactly
+  the release and develop packaging workflows, each with mutation cases.
+  `tests/ci/Invoke-ReleasePackaging.Tests.ps1` covers `-Mode DevelopGuard`.
+  The first dispatched run is the operational proof and is recorded on issue
+  #267.
+- **Owner:** Issue #267.
+- **Revisit trigger:** The TA-022 revisit triggers, a dispatch needs inputs or
+  another branch, or the handoff budget blocks a scheduled or release run.
+
+### TA-025 - Separate Engine-Runner Job for Content Reference Validation
 
 - **Status:** Accepted
 - **Acceptance:** Lead decisions D1-D10 on issue #120 (2026-10-03), recorded

@@ -427,7 +427,9 @@ and reward values remain TBD.
 
 Protection comes from world structure and enforcement, not optional flagging.
 
-- Rival players cannot enter faction starting territories.
+- Rival players cannot enter faction beginner districts through ordinary world
+  travel. Faction capitals inside those territories follow their separate
+  infiltration and invasion rules.
 - Safe mixed-city sanctuary policy rejects hostile ability activation and
   hostile effect application when the authoritative source or target is
   protected.
@@ -468,5 +470,6 @@ remain TBD.
 - Final faction borders and travel fiction.
 - Safe mixed-city locations beyond Kindlehold.
 - Capital invasion routes, objectives, schedules, and recovery.
-- Whether cross-faction groups are allowed in selected PvE activities.
+- Decided, not open: cross-faction grouping is forbidden everywhere, including
+  neutral safe cities (owner decision on Issue #115, 2026-10-11).
 - Regional server boundaries and how combat state transfers between them.

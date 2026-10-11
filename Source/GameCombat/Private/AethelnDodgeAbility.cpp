@@ -9,6 +9,8 @@ UAethelnDodgeAbility::UAethelnDodgeAbility()
 	SetAbilityId(AethelnGameplayTags::Ability_Dodge);
 	SetCooldownTag(AethelnGameplayTags::Cooldown_Dodge);
 	bMovementCarried = true;
+	// Q10: the chain's commitment blocks the dodge. A held block does not: the accepted dodge ends it.
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
 	// No authored version, definition, cost or cooldown preset: unset production config fails grant.
 }
 
@@ -58,7 +60,10 @@ void UAethelnDodgeAbility::ActivateAbility(
 	if (!bCommitted || !IsActive() || ASC->ActiveSeamScope->bCanceled || !HasActivationLifecycle() || !ASC->OpenDodgeWindow(*this, Handle))
 	{
 		if (GetActivationOperationId() == OperationId) { EndAbility(Handle, &OriginalActorInfo, ActivationInfo, true, true); }
+		return;
 	}
+	// Q10 and Q18: the accepted dodge ends a held block at its acceptance time S, the processing time.
+	ASC->CancelBlock();
 }
 
 void UAethelnDodgeAbility::EndAtActionEnd()
