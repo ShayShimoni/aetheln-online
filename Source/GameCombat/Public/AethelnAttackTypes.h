@@ -109,6 +109,10 @@ struct GAMECOMBAT_API FAethelnAttackStepDefinition
 	UPROPERTY() double MaxAimPitchDegrees = 0.0;
 	UPROPERTY() float WroughtDamage = 0.0f;
 	UPROPERTY() int32 MaxTargets = 0;
+	/** An interrupting result cancels this step in [0, InterruptibleUntil); 0 means never. At most RecoveryEnd. */
+	UPROPERTY() double InterruptibleUntil = 0.0;
+	/** Whether this step's committed, non-lethal hit interrupts the target. */
+	UPROPERTY() bool bInterruptsTarget = false;
 };
 
 USTRUCT()
@@ -122,6 +126,7 @@ struct GAMECOMBAT_API FAethelnAttackWindowOffsets
 	UPROPERTY() double LinkClose = 0.0;
 	UPROPERTY() double RecoveryEnd = 0.0;
 	UPROPERTY() double CancelOpen = 0.0;
+	UPROPERTY() double InterruptibleUntil = 0.0;
 };
 
 /** Owner-only record for a started step. A waiting accepted press has no record yet. */

@@ -614,6 +614,35 @@ inside its interruptible window at that contact time
 P5. The same mechanism serves #20's enemy steps and, in #260, Sworn Rebuke's
 authored rule. Resolve and control families are not prototype scope.
 
+P5 delivers it as follows:
+
+- **Hits only.** Only a non-lethal `Hit` interrupts. An `Avoided` or `Blocked`
+  result and a lethal hit never do (resolution step 7).
+- **The step at the contact time.** The target's current step is its
+  registered step whose interval from its start to its reset time holds the
+  contact time. Pass step 1 may already have started a buffered step later in
+  the same frame; a contact before that start belongs to the step before it.
+- **Reset.** The interruption stamps every registered step of the target at
+  the contact time, then calls `ResetChain(Interrupted, ContactTime)`. A
+  buffered step that started after the contact never started: its contacts
+  fail revalidation, the owner gets no record for it, and the chain end names
+  its activation (A28's interruption row).
+- **Held records.** So that such a record can be withheld, a buffered start
+  made by the pass holds its `ClientCombatActivation` until pass step 5. A
+  reset sends a held record before its chain end when the reset time is at or
+  after the step's start, and drops it otherwise. A step that starts on a
+  request still sends its record at once. While a record is held, no further
+  step of that chain starts (it cannot in practice: a held record lives only
+  inside one pass).
+- **Record.** The record's windows carry `InterruptibleUntil`.
+- **Content version.** The production chain has no configured
+  `ContentVersion` yet (no ini section; unset values fail the grant), so P5
+  has nothing to bump; the first configured version includes the P5 fields.
+  The test fixture keeps version 1.
+- **Enemy targets.** An enemy has no chain. Interrupting one only stamps its
+  registered steps, so their later contacts drop; #20 decides what else an
+  interrupted enemy step does.
+
 ### Relation
 
 The prototype is two players against one enemy (`docs/GameBrief.md:24-27`),

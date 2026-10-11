@@ -307,6 +307,18 @@ bool FAethelnDeadLifeStateRejectedTest::RunTest(const FString& Parameters)
 	F.AdvanceTo(1.5);
 	TestEqual(TEXT("An attacker that dies before its contact time resolves nothing"), F.Results.Num(), 0);
 	TestEqual(TEXT("The dead attacker's chain ended"), F.Ends.Last().Reason, EAethelnChainEndReason::IncompatibleState);
+	{
+		// The attacker alive check alone: zero Health without State.Dead leaves the chain running, so no reset time drops the contact.
+		FFixture G; if (!G.Init(*this)) { return false; }
+		AAethelnCombatAICharacter* Other = G.SpawnTarget(*this, FVector(60.0, 0.0, 0.0));
+		if (Other == nullptr) { return false; }
+		G.Press(); G.AdvanceTo(0.125);
+		G.Player.AbilitySystem->SetNumericAttributeBase(UAethelnCombatAttributeSet::GetHealthAttribute(), 0.0f);
+		G.AdvanceTo(0.375);
+		TestEqual(TEXT("The chain did not end"), G.Ends.Num(), 0);
+		TestEqual(TEXT("A zero-Health attacker resolves nothing"), G.Results.Num(), 0);
+		TestEqual(TEXT("Its target takes no damage"), Health(*Other), 40.0f);
+	}
 	return true;
 }
 

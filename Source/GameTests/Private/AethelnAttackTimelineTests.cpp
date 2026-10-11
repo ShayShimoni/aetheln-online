@@ -427,7 +427,8 @@ bool FAethelnAttackStepDefinitionTest::RunTest(const FString& Parameters)
 		[](auto& A) { A.ProvisionalMaxSampleAngleDegrees = std::numeric_limits<double>::infinity(); },
 		[](auto& A) { A.ProvisionalCooldownSeconds = 1.0f; },
 		[](auto& A) { FGameplayTagContainer Tags(AethelnGameplayTags::State_Dead); Tags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain); A.SetBlockedTagsForTests(Tags); },
-		[](auto& A) { FGameplayTagContainer Tags(AethelnGameplayTags::State_Dead); Tags.AddTag(AethelnCombatTestTags::Test_Blocking); A.SetBlockedTagsForTests(Tags); }
+		[](auto& A) { FGameplayTagContainer Tags(AethelnGameplayTags::State_Dead); Tags.AddTag(AethelnCombatTestTags::Test_Blocking); A.SetBlockedTagsForTests(Tags); },
+		[](auto& A) { A.ProvisionalSteps[0].InterruptibleUntil = 0.6875; } // P5: beyond RecoveryEnd
 	};
 	for (const auto& Mutate : Mutations)
 	{
@@ -437,7 +438,8 @@ bool FAethelnAttackStepDefinitionTest::RunTest(const FString& Parameters)
 	}
 	for (double FAethelnAttackStepDefinition::* Field : { &FAethelnAttackStepDefinition::ActiveStart, &FAethelnAttackStepDefinition::ActiveEnd,
 		&FAethelnAttackStepDefinition::BufferOpen, &FAethelnAttackStepDefinition::LinkOpen, &FAethelnAttackStepDefinition::LinkClose,
-		&FAethelnAttackStepDefinition::RecoveryEnd, &FAethelnAttackStepDefinition::CancelOpen, &FAethelnAttackStepDefinition::MaxAimPitchDegrees })
+		&FAethelnAttackStepDefinition::RecoveryEnd, &FAethelnAttackStepDefinition::CancelOpen, &FAethelnAttackStepDefinition::MaxAimPitchDegrees,
+		&FAethelnAttackStepDefinition::InterruptibleUntil })
 	{
 		for (double Value : { -1.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity() })
 		{
@@ -446,6 +448,9 @@ bool FAethelnAttackStepDefinitionTest::RunTest(const FString& Parameters)
 			TestFalse(TEXT("Every negative/nonfinite authored time or pitch refuses at grant"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition)));
 		}
 	}
+	Definition = NewObject<UAethelnChainTestAbility>();
+	for (FAethelnAttackStepDefinition& Step : Definition->ProvisionalSteps) { Step.InterruptibleUntil = Step.RecoveryEnd; Step.bInterruptsTarget = true; }
+	TestTrue(TEXT("P5: an interruptible window may reach RecoveryEnd"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition)));
 	Definition = NewObject<UAethelnChainTestAbility>(); Definition->ResetTags.Reset();
 	AddExpectedError(TEXT("Refused to grant ability"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("State.Dead reset cannot be removed by config"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition)));
