@@ -354,7 +354,10 @@ root; `CharacterMovementComponent.cpp` below is
   `Engine/Source/Runtime/Engine/Classes/GameFramework/CharacterMovementComponent.h`);
   while `bOrientRotationToMovement` or `bUseControllerDesiredRotation` is set,
   the engine restores the last acknowledged move's rotation before the replay
-  (`p.UseLastGoodRotationDuringCorrection`, default 1). Sprint and aim intent,
+  (`p.UseLastGoodRotationDuringCorrection`, default 1). A tracked airborne jump
+  clears both flags, so `ClientUpdatePositionAfterServerUpdate` restores that
+  rotation itself, whatever the console variable says, because the bounded turn
+  replays correctly only from it. Sprint and aim intent,
   recorded yaw, and takeoff and tracking replay are described in the
   [Movement baseline](#movement-baseline) text above and are not repeated here.
 - What remote players see: they are simulated proxies and do not predict or
