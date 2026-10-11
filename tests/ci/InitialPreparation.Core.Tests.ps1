@@ -146,12 +146,18 @@ function Test-LeaseAndOwnershipContract {
 
 	$OtherAttempt = Get-TestAttempt -Id 'concurrent-attempt'
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $OtherAttempt -LeasePath $LeasePath } -Reason 'lease_held' -Message 'A concurrent attempt must not take an existing live lease.'
-	# Issue #299: only a sharing or lock violation means another process holds the lease file.
+	# Issue #299: only a sharing or lock violation may be reported as a held lease. A lease file held open by
+	# another handle still surfaces the native sharing violation (tests/ci/EngineRunnerHostLease.Tests.ps1 pins this).
 	$ExternalLease = Initialize-LeaseFixture -Name 'external-holder'
 	$ExternalHolder = [IO.File]::Open($ExternalLease, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+	$ExternalFailure = $null
 	try {
-		Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id 'external-attempt') -LeasePath $ExternalLease } -Reason 'lease_held' -Message 'A lease file held open by another handle is a sharing violation and must report lease_held.'
+		try { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id 'external-attempt') -LeasePath $ExternalLease | Out-Null } catch {
+			$ExternalFailure = $_.Exception
+			while ($null -ne $ExternalFailure.InnerException) { $ExternalFailure = $ExternalFailure.InnerException }
+		}
 	} finally { $ExternalHolder.Dispose() }
+	Assert-True -Condition ($ExternalFailure -is [IO.IOException] -and ($ExternalFailure.HResult -band 65535) -eq 32) -Message 'A lease file held open by another handle must surface the native sharing violation.'
 	$MissingParent = Join-Path (Join-Path (Split-Path -Parent (Initialize-LeaseFixture -Name 'missing-parent')) 'absent') 'preparation.lease.json'
 	$MissingFailure = $null
 	try { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id 'missing-parent-attempt') -LeasePath $MissingParent | Out-Null } catch { $MissingFailure = [string] $_.Exception.Message }
