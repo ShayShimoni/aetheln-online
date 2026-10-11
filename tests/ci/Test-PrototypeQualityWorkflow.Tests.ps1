@@ -526,7 +526,7 @@ try {
 	$env:GITHUB_WORKSPACE = Join-Path $SyncRoot 'workspace'
 	$SyncControl = Join-Path $env:GITHUB_WORKSPACE 'editor-control-1-1'
 	$null = New-Item -ItemType Directory -Path (Join-Path $SyncSource 'scripts\ci'), (Join-Path $SyncSource 'Source'), $env:GITHUB_WORKSPACE
-	foreach ($Module in @('EngineRunnerHostLease.ps1', 'InitialPreparation.Core.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1', 'Sync-EditorAutomationWorkspace.ps1', 'InitialPreparation.BuildInvocation.ps1')) {
+	foreach ($Module in @('EngineRunnerHostLease.ps1', 'LeaseJournal.ps1', 'InitialPreparation.Core.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1', 'Sync-EditorAutomationWorkspace.ps1', 'InitialPreparation.BuildInvocation.ps1')) {
 		Copy-Item -LiteralPath (Join-Path $RepositoryRoot ('scripts\ci\' + $Module)) -Destination (Join-Path $SyncSource 'scripts\ci')
 	}
 	[IO.File]::WriteAllText((Join-Path $SyncSource 'AethelnOnline.uproject'), '{}')

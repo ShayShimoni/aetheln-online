@@ -333,7 +333,7 @@ $EntryToolchain = Join-Path $EntryRoot 'toolchain'
 $EntryScripts = Join-Path $EntryControl 'scripts/ci'
 $EntryBuild = Join-Path $EntryControl 'scripts/build'
 foreach ($Path in @($EntryScripts, $EntryBuild, $EntryEngine, $EntryToolchain)) { $null = [IO.Directory]::CreateDirectory($Path) }
-foreach ($ModuleName in @('Invoke-EngineRunnerGate.ps1', 'EngineRunnerHostLease.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1',
+foreach ($ModuleName in @('Invoke-EngineRunnerGate.ps1', 'EngineRunnerHostLease.ps1', 'LeaseJournal.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1',
 	'InitialPreparation.Core.ps1', 'RoutineCompileDeadline.ps1', 'RoutineCompileCommand.ps1')) {
 	Copy-Item -LiteralPath (Join-Path (Split-Path $GatePath) $ModuleName) -Destination (Join-Path $EntryScripts $ModuleName)
 }
