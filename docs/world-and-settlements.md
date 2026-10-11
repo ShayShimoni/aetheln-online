@@ -427,7 +427,9 @@ and reward values remain TBD.
 
 Protection comes from world structure and enforcement, not optional flagging.
 
-- Rival players cannot enter faction starting territories.
+- Rival players cannot enter faction beginner districts through ordinary world
+  travel. Faction capitals inside those territories follow their separate
+  infiltration and invasion rules.
 - Safe mixed-city sanctuary policy rejects hostile ability activation and
   hostile effect application when the authoritative source or target is
   protected.

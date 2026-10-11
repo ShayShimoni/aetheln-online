@@ -336,8 +336,8 @@ This document supplies semantics, not duplicate implementation or evidence:
 | [#82](https://github.com/ShayShimoni/aetheln-online/issues/82) | Input/camera contract and measured pure-free-aim feel. |
 | [#106](https://github.com/ShayShimoni/aetheln-online/issues/106) | Machine-readable IDs, deterministic generation, bounded listener/proc validation, and registry tooling. |
 
-Prototype briefs and ledgers that still carry the pre-Issue-#103 unnamed-resource
-placeholder are downstream reconciliation work for
+The prototype briefs, ledger, and roadmap no longer carry the pre-Issue-#103
+unnamed-resource placeholder; any remaining downstream reconciliation belongs to
 [#115](https://github.com/ShayShimoni/aetheln-online/issues/115). This contract
 does not rewrite historical evidence or claim that unimplemented behavior has
 passed runtime, packaged, performance, security, readability, or QA gates.
