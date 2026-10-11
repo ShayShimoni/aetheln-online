@@ -707,9 +707,14 @@ public static class AethelnContentFixtureMountPoint {
 		$StandardError = $Process.StandardError.ReadToEndAsync()
 		if ($OutputAttack -ceq 'concurrent-directory') {
 			try {
-				$Deadline = [DateTime]::UtcNow.AddSeconds(8)
-				while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf) -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 10 }
-				Assert-True (Test-Path -LiteralPath $ReadyPath -PathType Leaf) 'The first invocation must reach the held pre-build seam.'
+				# Wait for the seam or for the first invocation to exit. The seam is reached in about 1.5 s on an idle
+				# host; a fixed 8 s bound failed under full-suite load (2026-10-11). An early exit fails with its output.
+				$Deadline = [DateTime]::UtcNow.AddSeconds(60)
+				while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf) -and -not $Process.HasExited -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 10 }
+				if (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf) -and $Process.HasExited) {
+					Assert-True $false "The first invocation exited with $($Process.ExitCode) before the held pre-build seam. Output: $($StandardOutput.GetAwaiter().GetResult())$($StandardError.GetAwaiter().GetResult())"
+				}
+				Assert-True (Test-Path -LiteralPath $ReadyPath -PathType Leaf) 'The first invocation must reach the held pre-build seam within 60 seconds.'
 				$SecondInfo = New-Object Diagnostics.ProcessStartInfo
 				$SecondInfo.FileName = $Info.FileName
 				$SecondInfo.Arguments = $Info.Arguments
@@ -726,7 +731,8 @@ public static class AethelnContentFixtureMountPoint {
 					Assert-True ($SecondProcess.Start()) 'The second invocation must start.'
 					$SecondStdout = $SecondProcess.StandardOutput.ReadToEndAsync()
 					$SecondStderr = $SecondProcess.StandardError.ReadToEndAsync()
-					Assert-True ($SecondProcess.WaitForExit(7000)) 'The second invocation must fail closed within seven seconds.'
+					# The first invocation stays held until ContinuePath, so any bound proves the second does not wait for it.
+					Assert-True ($SecondProcess.WaitForExit(60000)) 'The second invocation must fail closed while the first is held.'
 					$SecondExitCode = $SecondProcess.ExitCode
 					$SecondOutput = $SecondStdout.GetAwaiter().GetResult() + $SecondStderr.GetAwaiter().GetResult()
 				}
