@@ -98,6 +98,16 @@ The first executable Issue #45 wave adds an opt-in, versioned
 runner via `PerformanceContractPath`; its exact shape and fail-closed rules are
 specified in
 [Networking Authority Spike](networking-authority-spike.md#issue-45-opt-in-performance-capture-and-budget-contract).
+
+Capture contract version 2 adds the registry measurement families that version 1
+could not bind, as metric names only: client frame time (game thread, render
+thread, GPU), frame pacing, hitches, loading and streaming (startup, travel,
+map load, streaming stalls), server tick duration, overrun, worker tasks and
+overload failure shape, and network send/receive bursts and packet-loss impact.
+Version 1 contracts remain accepted unchanged. Every version 2 target, warning
+threshold, failure threshold, sampling value, and approval stays `null` or
+`unapproved` and `TBD` until measured evidence is reviewed; the contract
+defines no frame-time, tick, bandwidth, loss, or capacity number.
 The contract binds future capture evidence to the exact source revision,
 packaged-build identity, toolchain, hardware, topology, environment, map,
 duration, actor mix, run ID, scenario ID/version, network profile ID/version, runtime
