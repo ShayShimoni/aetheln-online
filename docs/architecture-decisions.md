@@ -2115,8 +2115,9 @@ Every accepted decision records:
   (rejected: world-downloadable on a public repository).
 - **Consequences:** One more FIFO waiter in `aetheln-engine-runner`, with the
   same bounds. Admission counts only the bytes already committed under the
-  shared handoff root (see TA-024 for the limit this leaves). The immediate kill switch is disabling the
-  workflow; the permanent rollback is reverting it. The issue #267 TA-014
+  shared handoff root (see TA-024 for the limit this leaves). The immediate
+  kill switch is disabling the workflow; the permanent rollback is reverting
+  it. The issue #267 TA-014
   amendment (2026-10-06) changes the controller and gate this workflow calls,
   with no workflow change: each release package phase builds the project
   editor modules first, leaves `UnrealPak` outside the attestation, runs the
@@ -2132,10 +2133,11 @@ Every accepted decision records:
   which covered `release/*` only. The dispatch is owner-only (OD-8): the owner
   presses it. No agent other than the lead dispatches it, and the lead only
   with the owner's explicit OK for that run. The workflow cannot tell a lead
-  dispatch from an owner dispatch, because both run as `ShayShimoni`, so who
-  may dispatch, and the per-run OK, are enforced by process, not by the
-  workflow. TA-024 records the separate
-  `.github/workflows/develop-packaging.yml` identity that carries it. The
+  dispatch from an owner dispatch, because both run as `ShayShimoni`, and so
+  does every agent that uses the owner's `gh` credentials. Who may dispatch,
+  and the per-run OK, are therefore enforced by process, not by the workflow.
+  TA-024 records the separate `.github/workflows/develop-packaging.yml`
+  identity that carries it. The
   runner-trust analysis, the fork-run rule, the operator rule, and the
   revisit triggers above apply to it unchanged. `prototype-quality-gates.yml`
   still keeps no manual trigger.
@@ -2257,8 +2259,9 @@ Every accepted decision records:
   retention. There is no build number and no release evidence. Who may
   dispatch: the owner; no agent other than the lead, and the lead only with
   the owner's explicit OK for that run (OD-8). The workflow cannot tell a lead
-  dispatch from an owner dispatch (both run as `ShayShimoni`), so who may dispatch, and the per-run OK, are
-  enforced by process, not by the workflow.
+  dispatch from an owner dispatch (both run as `ShayShimoni`, as does every
+  agent that uses the owner's `gh` credentials), so who may dispatch, and the
+  per-run OK, are enforced by process, not by the workflow.
 - **Context:** The weekly schedule is the only other path that packages
   `develop`, so proving a packaging fix (PR #301 on issue #267) waits
   up to a week. On 2026-10-06 the lead chose a separate workflow (OD-6) over a
@@ -2281,11 +2284,13 @@ Every accepted decision records:
   once, in the PackageClient phase of `scripts/ci/Invoke-EngineRunnerGate.ps1`:
   it counts only the bytes already committed under the shared handoff root and
   refuses with `handoff_storage_exhausted` when they exceed 256 GiB minus
-  64 GiB (192 GiB). A run that does not overlap another therefore either stays within
-  256 GiB or fails closed before packaging. Runs whose
-  phases interleave on the shared engine queue (scheduled, release, develop
-  dispatch) can together exceed the 256 GiB cap. The protection is that the
-  owner checks the cleanup requests and the free disk space before a dispatch.
+  64 GiB (192 GiB). A run that does not overlap another therefore either
+  stays within 256 GiB or is refused with `handoff_storage_exhausted` before
+  packaging. Runs whose phases interleave on the shared engine queue
+  (scheduled, release, develop dispatch) can together exceed the 256 GiB cap.
+  The protection is that the dispatcher checks the cleanup requests and the
+  free disk space before a dispatch: the owner, or the lead when the owner OKs
+  the run.
   This decision adds no workflow-level dispatch cap; that
   cap (OD-11 on issue #267) stays a separate lead decision. The immediate kill
   switch is disabling the workflow; the permanent rollback is reverting it.
@@ -2299,8 +2304,11 @@ Every accepted decision records:
 - **Owner:** Issue #267.
 - **Revisit trigger:** The TA-022 revisit triggers, a dispatch needs inputs or
   another branch, or the handoff budget blocks a scheduled or release run.
-- Corrected 2026-10-11 after the PR #315 review: handoff admission wording
-  (committed bytes only, no reservation) and dispatch authority wording.
+- **Amendment (2026-10-11, PR #315 and #316 reviews, issue #267):** Corrected
+  the handoff admission wording (committed bytes only, no reservation; a run
+  that does not overlap another either stays within 256 GiB or is refused with
+  `handoff_storage_exhausted`) and the dispatch authority wording (who may
+  dispatch is enforced by process, not only the per-run OK).
 
 ## Candidate Decisions
 
