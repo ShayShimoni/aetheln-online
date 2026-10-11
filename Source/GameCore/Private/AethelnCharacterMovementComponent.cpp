@@ -261,6 +261,7 @@ void UAethelnCharacterMovementComponent::PrepareDodgeForMove(float ClientTimeSta
 		Request.ClientTimeStamp = ClientTimeStamp;
 		Request.ContentVersion = ContentVersion;
 		Request.bMovementAllowsStart = bAllowsStart;
+		Request.Avatar = CharacterOwner;
 		bAccepted = Authority != nullptr && Authority->TryAuthorizeDodge(Request);
 		if (!bAccepted || !bAllowsStart || !Definition.IsValid() || Definition.ContentVersion != ContentVersion)
 		{

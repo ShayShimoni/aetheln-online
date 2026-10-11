@@ -28,6 +28,11 @@ public:
 	/** The sampling bounds are the registering ability's authored budget (TBD, #45). */
 	bool RegisterStep(UAethelnAbilitySystemComponent& AbilitySystem, const FAethelnAttackStepDefinition& Step, FAethelnCombatActivationRecord& Record, double MaxSampleDistance, double MaxSampleAngleDegrees);
 	bool CanRegisterStep(const UAethelnAbilitySystemComponent& AbilitySystem) const;
+	/**
+	 * Non-chain boundary registration (#18 P3): the ASC's own timelines, such as the dodge
+	 * windows, get their due boundaries applied in pass step 4 until none remain pending.
+	 */
+	bool RegisterNonChainBoundaries(UAethelnAbilitySystemComponent& AbilitySystem);
 	void StampReset(const FGuid& ActivationId, double Time);
 
 	/** The one relation rule (OQ1): players are allies, only enemies are hostile, never self. Faction policy replaces it later. */
@@ -51,6 +56,7 @@ public:
 	int32 GetRegisteredStepCountForTests() const { return Steps.Num(); }
 	int32 GetSweepCountForTests() const { return SweepCountForTests; }
 	void SetNextOrdinalForTests(uint64 Ordinal) { NextOrdinal = Ordinal; }
+	int32 GetBoundaryOwnerCountForTests() const { return AbilitySystems.Num(); }
 #endif
 
 private:
