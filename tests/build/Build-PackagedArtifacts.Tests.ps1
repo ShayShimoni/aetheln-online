@@ -1103,6 +1103,9 @@ public static class FakeEditor {
 	$Run = Invoke-PackagingCase 'PrebuiltClientTrailingSeparator' $PrebuiltArguments -Override @{ Stage = 'Client'; LinuxToolchainRoot = ($ToolchainRoot + '\') }
 	Assert-True ($null -eq $Run.Failure) "A prebuilt client phase whose toolchain root ends in a separator must pass; observed '$($Run.Failure)'."
 	Assert-HostEditorBuildStep $Run 'passed' -Context 'A toolchain root with a trailing separator'
+	$Run = Invoke-PackagingCase 'PrebuiltClientTwoTrailingSeparators' $PrebuiltArguments -Override @{ Stage = 'Client'; LinuxToolchainRoot = ($ToolchainRoot + '\\') }
+	Assert-True ($null -eq $Run.Failure) "A prebuilt client phase whose toolchain root ends in two separators must pass; observed '$($Run.Failure)'."
+	Assert-HostEditorBuildStep $Run 'passed' -Context 'A toolchain root with two trailing separators'
 	$UatBefore = Get-CaptureCount $CapturePath
 	$Run = Invoke-PackagingCase 'PrebuiltAll' $PrebuiltArguments
 	Assert-True ($null -eq $Run.Failure) "A local prebuilt run without the gate hash must pass; observed '$($Run.Failure)'."

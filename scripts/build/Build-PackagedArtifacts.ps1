@@ -249,10 +249,12 @@ function Invoke-HostEditorModulesBuild {
 			$Reader = New-Object IO.StreamReader($ErrorLog)
 			try { $Buffer = New-Object char[] 2048; $Text = New-Object string($Buffer, 0, $Reader.Read($Buffer, 0, $Buffer.Length)) } finally { $Reader.Dispose() }
 			$Text = (@($Text -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) | Select-Object -First 4) -join ' '
-			foreach ($Root in @($Wrapper, $EvidenceRoot, $ResolvedLogs, $ResolvedToolchain, $ResolvedEngine, $ProjectRoot | Sort-Object Length -Descending)) {
-				$Text = [regex]::Replace($Text, [regex]::Escape($Root.TrimEnd('\', '/')), '<path>', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+			# A value that trims to nothing (for example a root of '\') would match everywhere, so it is skipped.
+			$Roots = @(@($Wrapper, $EvidenceRoot, $ResolvedLogs, $ResolvedToolchain, $ResolvedEngine, $ProjectRoot, $env:USERPROFILE, $env:TEMP, $env:COMPUTERNAME) | ForEach-Object { ([string] $_).TrimEnd('\', '/') } | Where-Object { $_ } | Sort-Object Length -Descending)
+			foreach ($Root in $Roots) {
+				$Text = [regex]::Replace($Text, '(?<!\w)' + [regex]::Escape($Root) + '(?!\w)', '<path>', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
 			}
-			$Text = $Text -replace '[A-Za-z]:[\\/]\S*', '<path>'
+			$Text = $Text -replace '[A-Za-z]:[\\/]\S*', '<path>' -replace '\\\\[^\s\\]+\\\S*', '<path>'
 			if ($Text.Length -gt 300) { $Text = $Text.Substring(0, 300) }
 			if ($Text) { $FirstError = $Text }
 		}
