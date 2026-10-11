@@ -2013,14 +2013,18 @@ Every accepted decision records:
     makefile path in `TargetMakefile.GetLocation`
     (`UnrealBuildTool/System/TargetMakefile.cs:1229-1239`) from
     `UEBuildTarget.GetPlatformIntermediateFolder`
-    (`UnrealBuildTool/Configuration/UEBuildTarget.cs:1986-1995`), which adds
-    the platform's architecture folder name. For Linux,
+    (`UnrealBuildTool/Configuration/UEBuildTarget.cs:1986-1995`), which asks
+    the platform's architecture config for the folder name through
+    `GetFolderNameForArchitectures` (`UEBuildPlatform.cs:149-153`). That calls
+    `UnrealArchitectures.GetFolderNameForPlatform`
+    (`UEBuildTarget.cs:1101-1104`), which joins the per-architecture names
+    with `+`. For Linux,
     `LinuxArchitectureConfig` supports the single architecture `x64`
     (`UnrealBuildTool/Platform/Linux/UEBuildLinux.cs:205-210`), the default
     `ActiveArchitectures` returns it
     (`UnrealBuildTool/Configuration/UEBuildPlatform.cs:84-92`), and nothing
-    overrides the folder name, which defaults to the architecture name
-    (`UEBuildPlatform.cs:140-144`; the name `x64` is defined at
+    overrides the per-architecture folder name, which defaults to the
+    architecture name (`UEBuildPlatform.cs:140-144`; the name `x64` is defined at
     `UEBuildTarget.cs:873`). For Win64, `WindowsArchitectureConfig` returns
     `x64` unless the command line overrides it
     (`UnrealBuildTool/Platform/Windows/UEBuildWindows.cs:1235-1239`). This is
@@ -2068,16 +2072,15 @@ Every accepted decision records:
     to keep the pinned Epic engine unmodified. That rules out an engine patch.
     The owner chose to rely on deleting the target's `Makefile.bin` before
     every build, with the lead's NetCore check and restore tool as a backstop.
-    The investigation comment on Issue #167 listed the engine patch as its
-    option (a). That patch was rejected, not chosen.
   - *Rejected:* patching the engine source, either to save and load the two
     cache settings in `UHTTypes.cs` and raise `TargetMakefile.CurrentVersion`,
     or to run the `Referenced` re-apply pass at `UhtHeaderFile.cs:461`
     whatever the cache setting. Either patch would make the pinned engine tree
-    no longer a clean checkout. Also rejected: `-EnableUHTInputCache` on the UBT command line (it forces one
-    `command_line_changed` makefile rebuild, after which the setting is lost
-    again), `-NoUBTMakefiles` (UBT still loads the makefile), and
-    `-ForceHeaderGeneration` (it turns the cache read off).
+    no longer a clean checkout. Also rejected: `-EnableUHTInputCache` on the
+    UBT command line (it forces one `command_line_changed` makefile rebuild,
+    after which the setting is lost again), `-NoUBTMakefiles` (UBT still
+    loads the makefile), and `-ForceHeaderGeneration` (it turns the cache
+    read off).
   - *Evidence of the change:* `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`
     (required suite entry) and `tests/ci/InitialPreparation.Build.Tests.ps1`
     run the wrapper against a fake `Build.bat` that reports whether the

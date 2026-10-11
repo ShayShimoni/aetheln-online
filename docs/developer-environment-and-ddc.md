@@ -227,9 +227,15 @@ editor/engine rebuild:
 
 - `-HostToolsBoundary Rebuild` — the explicit, operator-authorized full
   host-tools rebuild (the host editor/engine tools rebuild as part of the
-  UAT invocation). It is never a default or an automatic fallback. Delete the
-  project editor target `Makefile.bin` before this run, as in the
-  "Before attesting" list below, so UHT runs with the input cache on.
+  UAT invocation). It is never a default or an automatic fallback. Without the split
+  recipe it already cleans the editor target: `BuildCookRun -build -clean`
+  makes UAT run UBT's clean mode on every agenda target
+  (`AutomationTool/AutomationUtils/UnrealBuild.cs:603-606`,
+  `UnrealBuildTool/Modes/CleanMode.cs:181`), which deletes the target
+  makefile. The split recipe swaps `-build` for `-skipbuild`
+  (`scripts/build/Build-PackagedArtifacts.ps1:1039`), so no clean runs: delete
+  the project editor target `Makefile.bin` by hand before any editor build for
+  that run, as in the "Before attesting" list below.
 - `-HostToolsBoundary Prebuilt -EngineRevision <canonical sha>
   -HostToolsAttestationPath <file>` — skip rebuilding the host editor/engine
   tools by passing `-nocompileeditor`, which the pinned UE 5.8.1 source maps
@@ -361,9 +367,9 @@ assumed to do so on every host. The normal contributor project-generation and
 Development Editor sequence remains documented in
 [Unreal Project Setup](unreal-project-setup.md).
 
-Before the provisioner builds the editor, delete the project editor target
-makefile
-(`<project>\Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin`):
+Before the provisioner builds the editor, delete the editor target makefile
+of the controller checkout, where `<project>` is that checkout:
+`<project>\Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin`.
 `scripts/build/HostToolProvisioning.BuildInvocation.ps1` does not delete it
 today, and a build that reuses the makefile runs UHT with the input cache off
 (TA-020 2026-10-11 amendment, issue #167). Doing this by hand is a known
