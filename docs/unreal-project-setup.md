@@ -29,6 +29,17 @@ by the `CommonUI` plugin; it is not a separate project plugin.
 `ReplicationGraph` is enabled for the issue #2 replication candidate laboratory and
 denied for the Editor target (see [Networking Authority Spike](networking-authority-spike.md)).
 
+For agent-driven editor work, the project also enables Epic's experimental
+`ModelContextProtocol` (Unreal MCP) plugin with the `GASToolsets`,
+`EditorToolset`, `GameplayTagsToolset`, `AutomationTestToolset`, and
+`LiveCodingToolset` toolsets. Each is allowed only for the Editor target, so
+client, game, and dedicated-server builds do not include them. To start the
+server, enable **Auto Start Server** under Editor Preferences > General >
+Model Context Protocol, or run `ModelContextProtocol.StartServer` in the editor
+console. The repository-root [`.mcp.json`](../.mcp.json) points Claude Code at
+`http://127.0.0.1:8000/mcp`. The server has no authentication, so keep it bound
+to loopback.
+
 The minimal plugin defaults are recorded in
 [`DefaultEngine.ini`](../Config/DefaultEngine.ini) and
 [`DefaultInput.ini`](../Config/DefaultInput.ini):
