@@ -227,15 +227,16 @@ editor/engine rebuild:
 
 - `-HostToolsBoundary Rebuild` — the explicit, operator-authorized full
   host-tools rebuild (the host editor/engine tools rebuild as part of the
-  UAT invocation). It is never a default or an automatic fallback. Without the split
-  recipe it already cleans the editor target: `BuildCookRun -build -clean`
-  makes UAT run UBT's clean mode on every agenda target
-  (`AutomationTool/AutomationUtils/UnrealBuild.cs:603-606`,
+  UAT invocation). It is never a default or an
+  automatic fallback. This run already cleans the editor target:
+  `BuildCookRun -build -clean` makes UAT run UBT's clean mode on every agenda
+  target (`AutomationTool/AutomationUtils/UnrealBuild.cs:603-606`,
   `UnrealBuildTool/Modes/CleanMode.cs:181`), which deletes the target
-  makefile. The split recipe swaps `-build` for `-skipbuild`
-  (`scripts/build/Build-PackagedArtifacts.ps1:1039`), so no clean runs: delete
-  the project editor target `Makefile.bin` by hand before any editor build for
-  that run, as in the "Before attesting" list below.
+  makefile, so it needs no manual delete. The split recipe never runs with
+  `Rebuild`: it requires the `Prebuilt` boundary
+  (`scripts/build/Build-PackagedArtifacts.ps1:953`), and its host editor build
+  goes through the CI wrapper, which deletes the makefile
+  (`Build-PackagedArtifacts.ps1:194-206`).
 - `-HostToolsBoundary Prebuilt -EngineRevision <canonical sha>
   -HostToolsAttestationPath <file>` — skip rebuilding the host editor/engine
   tools by passing `-nocompileeditor`, which the pinned UE 5.8.1 source maps
