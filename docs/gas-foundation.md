@@ -87,12 +87,11 @@ combat document). The prototype uses Health, Endurance, and active Guard
 (Prototype Boundary and Existing Owners; `docs/characters-and-factions.md:302-328`),
 with stable IDs `combat.resource.health`, `combat.resource.endurance`, and
 `combat.resource.guard`. Ward and OrderResource are not prototype runtime
-scope, and nothing is reserved for them. Old "unnamed prototype combat
-resource" wording remains in the roadmap
-(`docs/next-steps-mmorpg-prototype.md:42`, `:265`), the scope ledger
-(`docs/prototype-and-1.0-scope-ledger.md:102`), and Issue #61's body. Issue
-[#115](https://github.com/ShayShimoni/aetheln-online/issues/115) owns that
-cleanup (`docs/game-design-bible.md:285-291`); #19 does not edit it.
+scope, and nothing is reserved for them. Issue
+[#115](https://github.com/ShayShimoni/aetheln-online/issues/115) replaced the
+old "unnamed prototype combat resource" wording in the roadmap, the prototype
+brief, the scope ledger, and the supporting artifacts; Issue #61's body still
+carries it, and #19 does not edit it.
 
 [Characters and Factions](characters-and-factions.md)
 (`docs/characters-and-factions.md:313-319`) defines exactly three

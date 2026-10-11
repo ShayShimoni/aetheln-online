@@ -337,8 +337,10 @@ Required evidence:
 
 - Exact UE 5.8 source/toolchain baseline and repeatable build instructions.
 - Packaged Windows x64 clients and Linux x86-64 dedicated server.
-- Two players can move, use pure-free-aim combat, dodge, take damage, die, and
-  respawn in the greybox arena.
+- Two players can move, use pure free aim, perform a basic three-hit attack
+  chain, dodge, use three representative active abilities, engage one readable
+  enemy and one authoritative objective, take damage, die, and respawn in the
+  greybox arena.
 - CMC prediction/reconciliation and GAS authority behave under clean,
   representative, and harsh profiles.
 - Invalid movement, ability, hit, dodge, block, cooldown, and damage claims are
