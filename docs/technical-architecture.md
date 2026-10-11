@@ -309,7 +309,11 @@ The following must remain evidence-gated:
 - Backend and infrastructure vendors.
 - Regional boundary layout and Glasswake Reach ownership.
 - Production backup frequency, retention, RPO, and RTO.
-- Cross-faction grouping and capital-invasion scheduling/capacity.
+- Capital-invasion scheduling/capacity.
 
 These questions remain open until their product owner or evidence issue records
 an accepted decision.
+
+Cross-faction grouping is not open. The owner decided on 2026-10-11 (Issue
+#115) that it is forbidden everywhere, including neutral safe cities; see Safe
+Mixed Cities in [Game Design Bible](game-design-bible.md).

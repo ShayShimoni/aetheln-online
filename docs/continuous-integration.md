@@ -206,7 +206,10 @@ manual trigger: a manual trigger on this workflow identity would let an
 operator select an older branch that still carries the retired 1,440-minute
 `PackagedSmoke` job, so none exists on this workflow identity. Internal release
 packaging uses the separate workflow described in
-[Release packaging](#release-packaging-issue-226). The `quality-gates` job runs the portable suite on every event, on a
+[Release packaging](#release-packaging-issue-226), and owner-requested packaging
+of the `develop` head outside the schedule uses another separate workflow
+described in [Develop packaging dispatch](#develop-packaging-dispatch-issue-267).
+The `quality-gates` job runs the portable suite on every event, on a
 GitHub-hosted `windows-latest` runner bounded at 40 minutes. That job checks
 out without LFS smudge, fetches only the
 `Content/Maps/StarterMap.umap` LFS object required by the source-control policy
@@ -861,7 +864,9 @@ no single-job package and smoke entry point: no workflow job selects the
 gate's `PackagedSmoke` mode or holds the engine runner for a 24-hour bound.
 Pull requests and pushes cannot start any of the four phases, and no manual
 trigger exists on this workflow. The separate release workflow reuses the same
-phases for release heads (see [Release packaging](#release-packaging-issue-226)).
+phases for release heads (see [Release packaging](#release-packaging-issue-226)),
+and the separate develop packaging workflow reuses them for the `develop` head
+(see [Develop packaging dispatch](#develop-packaging-dispatch-issue-267)).
 
 Per event, the jobs that can run are:
 
@@ -1207,8 +1212,82 @@ the retired single-job gate.
   repository-wide allowlists for workflow files, triggers, `runs-on` labels, and
   permissions. These pins catch honest drift only. GitHub settings and the
   TA-022 operator rules are the controls against a direct push or an approved
-  fork run. `release-packaging-tests` covers both script modes with offline
+  fork run. `release-packaging-tests` covers every script mode with offline
   fixtures.
+
+### Develop packaging dispatch (Issue #267)
+
+`.github/workflows/develop-packaging.yml` packages the head of `develop`
+outside the weekly schedule, so a packaging fix can be proven without waiting
+for Saturday.
+[TA-024](architecture-decisions.md#ta-024---owner-only-develop-packaging-dispatch-on-a-separate-workflow-identity)
+records the decision. It is a separate workflow identity for the same reason
+as the release workflow: `prototype-quality-gates.yml` keeps no manual trigger
+(TA-012), so an older branch that still carries the retired single-job gate can
+never be selected.
+
+- **Who may dispatch.** The owner only: the owner presses it, or the lead
+  presses it only with the owner's explicit OK for that run (OD-7 and OD-8,
+  accepted 2026-10-10 as a TA-022 extension). Agents never dispatch it.
+- **Trigger.** `workflow_dispatch` only, with no inputs. There is no
+  pull-request, push, schedule, chained, or comment trigger.
+- **Guard.** `develop-gates` runs on GitHub-hosted `windows-latest` with a
+  30-minute bound and no job condition, so a refused dispatch is a visible red
+  check. Its first step after checkout runs
+  `scripts/ci/Invoke-ReleasePackaging.ps1 -Mode DevelopGuard` as the only
+  command. It requires, case-sensitively, the `workflow_dispatch` event, this
+  repository, the repository owner as both actor and triggering actor, run
+  attempt 1, and a ref of exactly `refs/heads/develop`. It reads no version or
+  build number. Reason codes: `develop_guard_passed`, `develop_event_invalid`,
+  `develop_repository_invalid`, `develop_actor_invalid`,
+  `develop_attempt_invalid`, and `develop_ref_invalid`. The job then runs the
+  full portable suite, as `quality-gates` does, and uploads its report as
+  `ci-report` unless the guard refused.
+- **Engine jobs.** `develop-client-package`, `develop-server-package`,
+  `develop-provenance-validation`, and `develop-packaged-smoke` copy the four
+  scheduled phases: the same gate script, modes, handoff bindings, job bounds
+  (40/40/20/20 minutes), watchdogs (30/30/10/10), and artifact names. Each
+  needs its predecessor (the first needs `develop-gates`) with no
+  status-function bypass and repeats the literal six-clause predicate of the
+  release workflow with `github.ref == 'refs/heads/develop'` in place of the
+  `release/*` prefix: the dispatch event, this repository, that exact ref, the
+  owner as actor and as triggering actor, and attempt 1. GitHub skips a
+  refused run before it requests the self-hosted runner. Expression comparisons
+  ignore case, so a ref such as `refs/heads/Develop` passes this predicate;
+  the guard's case-sensitive check refuses it as `develop_ref_invalid`, and
+  every engine job needs `develop-gates`. Re-runs are refused;
+  retry with a new dispatch. Like the release jobs, the two cook phases pin
+  `UE_ADDITIONAL_PLUGIN_PATHS` empty and refuse to start
+  (`private_plugin_paths_set`) if it is set (TA-019). There is no build
+  number, `release` provenance block, or release evidence step.
+- **Concurrency.** All four engine jobs join `aetheln-engine-runner` with
+  `queue: max` and `cancel-in-progress: false`, so they wait FIFO with the
+  trusted compile, editor automation, scheduled, and release phases and never
+  cancel them. A dispatch that overlaps the weekly schedule or a release run
+  interleaves phase by phase; each run keeps its own run-scoped handoff
+  directory, so the runs do not mix bytes.
+- **Handoff budget.** Every packaging run, whether scheduled, release, or
+  dispatched, reserves 64 GiB in the one shared handoff root (default cap
+  256 GiB) and its bytes stay there until the owner acts on its cleanup
+  request. Dispatches between cleanups therefore bring the next run closer to
+  `handoff_storage_exhausted`, which fails it closed before any packaging.
+  Check the cleanup requests before dispatching.
+- **Checkout, token, and uploads.** Workflow permissions are `contents: read`.
+  Every checkout pins `ref: ${{ github.sha }}` and sets
+  `persist-credentials: false`. No step reads a secret or a repository
+  variable, downloads an artifact, uses a cache, or interpolates event or ref
+  data. Exactly five reports are uploaded, each one exact file with
+  `if-no-files-found: error` and the default retention: `ci-report` and the
+  four scheduled report names. Packaged bytes are never uploaded.
+- **Operator rule.** Run no local engine or editor build against the runner's
+  engine root while a develop dispatch is queued or running, for the same
+  reason as a release dispatch.
+- **Pins.** `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins this workflow
+  with the same checks as the release workflow (exact predicate, guard-first
+  step, parity with the scheduled phases including artifact names, and the
+  five uploads), each with mutation cases, and allows `workflow_dispatch` in
+  exactly the release and develop packaging workflows.
+  `release-packaging-tests` covers `-Mode DevelopGuard`.
 
 ## Runner Constraints
 
