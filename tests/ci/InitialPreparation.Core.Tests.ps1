@@ -278,6 +278,13 @@ function Test-LeaseJournalCapacity {
 			$Records = @([IO.File]::ReadAllLines($LeasePath) | ForEach-Object { $_ | ConvertFrom-Json })
 			Assert-True -Condition ($Records.Count -eq 4 -and $Records[2].leaseId -ceq $Lease.leaseId -and $Records[3].leaseId -ceq $Lease.leaseId -and
 				$Records[3].attemptId -ceq $Attempt.attemptId -and $Records[3].cleanupVerified -is [bool] -and $Records[3].cleanupVerified) -Message 'Release must retain the actual lease GUID, attempt identity and literal cleanup proof.'
+			# The 65536-byte journal must still be readable; the next entry compacts it to the new held record.
+			$ReentryAttempt = Get-TestAttempt -Id ('x' * 128)
+			$ReentryLease = Enter-InitialPreparationLease -Attempt $ReentryAttempt -LeasePath $LeasePath
+			$ReentryEntry = $script:InitialPreparationLeaseRegistry[$LeasePath.ToLowerInvariant()]
+			Assert-True -Condition ($ReentryEntry.stream.Length -eq [Text.Encoding]::UTF8.GetByteCount(($ExpectedHeld | ConvertTo-Json -Compress) + "`n")) -Message 'Re-entering an exact-fit journal is admitted and compacts it to the new held record.'
+			$null = Stop-InitialPreparationOwnedTree -Lease $ReentryLease -DeadlineTicks $ReentryAttempt.cleanupDeadlineTicks
+			Exit-InitialPreparationLease -Lease $ReentryLease
 		}
 	}
 	# A nearly full journal whose last record is an unreleased held record is still refused untouched, never compacted.

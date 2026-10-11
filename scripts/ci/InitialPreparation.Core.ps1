@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $script:InitialPreparationPolicyVersion = 'issue167-preparation-v1'
 $script:InitialPreparationRecoveryFloorBytes = 21474836480L
 $script:InitialPreparationPressureGiB = 2.0
+. (Join-Path $PSScriptRoot 'LeaseJournal.ps1')
 if ($null -eq (Get-Variable -Name InitialPreparationLeaseRegistry -Scope Script -ErrorAction SilentlyContinue)) {
 	$script:InitialPreparationLeaseRegistry = @{}
 }
@@ -492,36 +493,8 @@ function Enter-InitialPreparationLease {
 			}
 			try {
 				$Journal = (New-Object Text.UTF8Encoding($false, $true)).GetString($StoredBytes)
-				# Same whole-journal check as Assert-EngineRunnerLeaseJournal: both writers share this file, so a
-				# journal one refuses (unreleased or ambiguous record anywhere) the other must refuse too.
-				if (-not $Journal.EndsWith("`n") -or $Journal.Contains('\')) { throw 'lease_owner_ambiguous' }
-				$OpenHeld = $null
-				$SeenLeases = @{}
-				foreach ($Line in @($Journal.Split([char]10) | Where-Object { $_.Length -gt 0 })) {
-					$Entry = $Line | ConvertFrom-Json
-					$Fields = @('schemaVersion', 'state', 'leaseId', 'attemptId', 'cleanupVerified')
-					if ($Entry.state -ceq 'held') { $Fields = @('schemaVersion', 'state', 'leaseId', 'attemptId', 'ownerPid', 'ownerStartUtc') }
-					$Keys = [regex]::Matches($Line, '"([^"\\]+)"\s*:')
-					if ($Keys.Count -ne $Fields.Count -or @($Entry.PSObject.Properties).Count -ne $Fields.Count) { throw 'lease_owner_ambiguous' }
-					foreach ($Field in $Fields) {
-						if (@($Keys | Where-Object { $_.Groups[1].Value -ceq $Field }).Count -ne 1 -or $Entry.PSObject.Properties.Name -cnotcontains $Field) { throw 'lease_owner_ambiguous' }
-					}
-					if ($Entry.schemaVersion -isnot [int] -or $Entry.schemaVersion -ne 1 -or
-						$Entry.leaseId -isnot [string] -or $Entry.leaseId -cnotmatch '^[a-f0-9]{32}$' -or
-						$Entry.attemptId -isnot [string] -or $Entry.attemptId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$') { throw 'lease_owner_ambiguous' }
-					if ($Entry.state -ceq 'held') {
-						$Start = [DateTime]::MinValue
-						if ($null -ne $OpenHeld -or $SeenLeases.ContainsKey($Entry.leaseId) -or $Entry.ownerPid -isnot [int] -or $Entry.ownerPid -le 0 -or
-							$Entry.ownerStartUtc -isnot [string] -or -not [DateTime]::TryParseExact($Entry.ownerStartUtc, 'o', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref] $Start) -or $Start.Kind -ne [DateTimeKind]::Utc) { throw 'lease_owner_ambiguous' }
-						$OpenHeld = $Entry
-						$SeenLeases[$Entry.leaseId] = $true
-					} elseif ($Entry.state -ceq 'released') {
-						if ($null -eq $OpenHeld -or $Entry.leaseId -cne $OpenHeld.leaseId -or $Entry.attemptId -cne $OpenHeld.attemptId -or
-							$Entry.cleanupVerified -isnot [bool] -or -not $Entry.cleanupVerified) { throw 'lease_owner_ambiguous' }
-						$OpenHeld = $null
-					} else { throw 'lease_owner_ambiguous' }
-				}
-				if ($SeenLeases.Count -eq 0 -or $null -ne $OpenHeld) { throw 'lease_owner_ambiguous' }
+				# One shared whole-journal check (LeaseJournal.ps1), also used by the routine writer.
+				Assert-LeaseJournalText -Journal $Journal
 			} catch { throw 'lease_owner_ambiguous' }
 		}
 		$HeldRecord = [ordered]@{ schemaVersion = 1; state = 'held'; leaseId = $Record.leaseId;
