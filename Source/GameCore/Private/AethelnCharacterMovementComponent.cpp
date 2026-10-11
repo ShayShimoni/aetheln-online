@@ -524,31 +524,26 @@ void UAethelnCharacterMovementComponent::PhysicsRotation(float DeltaTime)
 	ConfigureRotationMode(*this, bFalling, bWantsAimSteering, IsBackpedaling(), bAimTrackedJump);
 	const float ControlYaw = GetSimulatedControlYaw();
 	const float CurrentYaw = static_cast<float>(UpdatedComponent->GetComponentRotation().Yaw);
+	float TargetYaw = static_cast<float>(FRotator::NormalizeAxis(ControlYaw));
 	if (bAimTrackedJump)
 	{
-		// While aim is held the sideways body turns with camera yaw; otherwise it holds and the offset
-		// follows, so re-aiming mid-air resumes from the held facing.
-		if (bWantsAimSteering)
-		{
-			MoveUpdatedComponent(
-				FVector::ZeroVector,
-				FRotator(0.0f, FRotator::NormalizeAxis(ControlYaw + AimTrackedJumpYawOffset), 0.0f),
-				false);
-		}
-		else
+		// While aim is held the sideways body turns toward camera yaw plus the held offset at the same
+		// rate as every other camera-facing turn; otherwise it holds and the offset follows the body, so
+		// re-aiming mid-air resumes from the facing reached so far.
+		if (!bWantsAimSteering)
 		{
 			AimTrackedJumpYawOffset = static_cast<float>(FRotator::NormalizeAxis(CurrentYaw - ControlYaw));
+			return;
 		}
-		return;
+		TargetYaw = static_cast<float>(FRotator::NormalizeAxis(ControlYaw + AimTrackedJumpYawOffset));
 	}
-	if (!bUseControllerDesiredRotation)
+	else if (!bUseControllerDesiredRotation)
 	{
 		Super::PhysicsRotation(DeltaTime);
 		return;
 	}
 	// The engine's controller-desired path would read the live control rotation, which correction
 	// replay must not use; turn toward this move's control yaw at the same rate instead.
-	const float TargetYaw = static_cast<float>(FRotator::NormalizeAxis(ControlYaw));
 	if (!FMath::IsNearlyEqual(CurrentYaw, TargetYaw, 1e-3f))
 	{
 		MoveUpdatedComponent(
@@ -685,6 +680,16 @@ bool UAethelnCharacterMovementComponent::ClientUpdatePositionAfterServerUpdate()
 	const bool bRealWantsAimSteering = bWantsAimSteering;
 	const bool bRealWantsToDodge = bWantsToDodge;
 	const uint32 RealDodgeContentVersion = DodgeRequestContentVersion;
+	// Airborne aim tracking turns from the previous facing, so a replay must start from the facing after
+	// the last acknowledged move. The engine restores it only while a rotation mode flag is set, which a
+	// tracked jump clears.
+	const FNetworkPredictionData_Client_Character* ClientData = GetPredictionData_Client_Character();
+	if (ClientData != nullptr && ClientData->bUpdatePosition && ClientData->SavedMoves.Num() > 0
+		&& ClientData->LastAckedMove.IsValid() && UpdatedComponent != nullptr
+		&& !bOrientRotationToMovement && !bUseControllerDesiredRotation)
+	{
+		UpdatedComponent->SetWorldRotation(ClientData->LastAckedMove->SavedRotation, false, nullptr, ETeleportType::TeleportPhysics);
+	}
 	const bool bReplayed = Super::ClientUpdatePositionAfterServerUpdate();
 	bWantsToSprint = bRealWantsToSprint;
 	bWantsAimSteering = bRealWantsAimSteering;
@@ -1540,15 +1545,17 @@ bool FAethelnMovementNetAirborneAimTrackingParityTest::RunTest(const FString& Pa
 	Pair.Steps(10, FVector2D::ZeroVector, true);
 	Pair.Step(MoveRight, true, false, true);
 	TestYaw(*this, TEXT("Client pure-lateral aimed takeoff faces travel"), Pair.Client->GetActorRotation().Yaw, 90.0f);
-	// Airborne camera turns rotate the sideways body by the same delta without redirecting velocity,
-	// here past the +/-180 yaw boundary.
+	// Airborne camera turns rotate the sideways body toward the same delta, at the rotation rate (12 degrees
+	// per 60 Hz move), without redirecting velocity, here past the +/-180 yaw boundary.
 	Pair.SetControlYaw(100.0f);
 	Pair.Steps(5, MoveRight, true);
 	TestTrue(TEXT("Still airborne while tracking"), Pair.ClientMovement->IsFalling());
+	TestYaw(*this, TEXT("Client airborne body is part way through the camera turn"), Pair.Client->GetActorRotation().Yaw, 150.0f);
+	Pair.Steps(4, MoveRight, true);
 	TestYaw(*this, TEXT("Client airborne body tracks the camera turn"), Pair.Client->GetActorRotation().Yaw, -170.0f);
 	TestYaw(*this, TEXT("Server airborne body tracks the camera turn"), Pair.Server->GetActorRotation().Yaw, -170.0f);
 	Pair.SetControlYaw(-40.0f);
-	Pair.Step(MoveRight, false, false, true);
+	Pair.Steps(12, MoveRight, true);
 	TestYaw(*this, TEXT("Client airborne body tracks a turn back across zero"), Pair.Client->GetActorRotation().Yaw, 50.0f);
 	TestTrue(
 		TEXT("Airborne tracking never redirects the locked takeoff velocity"),
@@ -1636,6 +1643,158 @@ bool FAethelnMovementNetAimTrackingReplayTest::RunTest(const FString& Parameters
 	TestYaw(
 		*this,
 		TEXT("Replay across aim release and re-press ends with the first-pass (server) facing"),
+		Character->GetActorRotation().Yaw,
+		FirstPassYaw);
+	ClientData->SavedMoves.Reset();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnMovementNetAirborneFacingBoundedTest,
+	"Aetheln.Movement.Net.AirborneFacingBounded",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnMovementNetAirborneFacingBoundedTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnMovementNetTests;
+	const FTestWorld TestWorld;
+	AAethelnPlayerCharacter* Character = TestWorld.SpawnGroundedCharacter(FVector(0.0f, 0.0f, 100.0f));
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	APlayerController* Controller = TestWorld.World != nullptr
+		? TestWorld.World->SpawnActor<APlayerController>(
+			APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters)
+		: nullptr;
+	UAethelnCharacterMovementComponent* Movement = GetMovement(Character);
+	TestNotNull(TEXT("POC character uses the project movement component"), Movement);
+	TestNotNull(TEXT("POC character has a player controller"), Controller);
+	if (Movement == nullptr || Controller == nullptr)
+	{
+		return false;
+	}
+	Controller->Possess(Character);
+
+	constexpr uint8 AimFlag = FSavedMove_Character::FLAG_Custom_1;
+	const float MaxTurnPerMove = Movement->RotationRate.Yaw * MoveDeltaTime + YawTolerance;
+	const FVector RightAccel = FVector::RightVector * Movement->GetMaxAcceleration();
+	float TimeStamp = 0.0f;
+	float MaxTurn = 0.0f;
+	// MoveAutonomous is protected; this lambda shares the friend test's access.
+	auto RunAuthorityMoves = [Movement, Character, &TimeStamp, &MaxTurn](int32 MoveCount, uint8 Flags, const FVector& Accel)
+	{
+		for (int32 Index = 0; Index < MoveCount; ++Index)
+		{
+			const float YawBefore = Character->GetActorRotation().Yaw;
+			TimeStamp += MoveDeltaTime;
+			Movement->MoveAutonomous(TimeStamp, MoveDeltaTime, Flags, Accel);
+			MaxTurn = FMath::Max(MaxTurn, FMath::Abs(FRotator::NormalizeAxis(Character->GetActorRotation().Yaw - YawBefore)));
+		}
+	};
+	RunAuthorityMoves(10, 0, FVector::ZeroVector);
+
+	// A pure-lateral aimed takeoff faces travel (90) and is aim tracked. The takeoff move is the one snap
+	// the bound leaves alone, so it is not measured.
+	RunAuthorityMoves(1, FSavedMove_Character::FLAG_JumpPressed | AimFlag, RightAccel);
+	TestTrue(TEXT("Aimed lateral jump takes off aim tracked"), Movement->IsFalling() && Movement->bAimTrackedJump);
+	TestYaw(*this, TEXT("Aimed lateral takeoff faces travel"), Character->GetActorRotation().Yaw, 90.0f);
+
+	// A 120 degree camera turn moves the airborne body 12 degrees per 60 Hz move, not all at once.
+	MaxTurn = 0.0f;
+	Controller->SetControlRotation(FRotator(0.0f, 120.0f, 0.0f));
+	RunAuthorityMoves(5, AimFlag, RightAccel);
+	TestTrue(TEXT("Still airborne"), Movement->IsFalling());
+	TestTrue(TEXT("Airborne tracking turns the body no faster than the rotation rate"), MaxTurn <= MaxTurnPerMove);
+	TestYaw(*this, TEXT("Five moves turn the airborne body five rate steps"), Character->GetActorRotation().Yaw, 90.0f + 5.0f * 12.0f);
+	RunAuthorityMoves(5, AimFlag, RightAccel);
+	TestYaw(*this, TEXT("The airborne body reaches the camera target after the bounded turn"), Character->GetActorRotation().Yaw, -150.0f);
+
+	// A client that flips its camera between opposite yaws each move cannot swing the body faster.
+	MaxTurn = 0.0f;
+	for (int32 Index = 0; Index < 20; ++Index)
+	{
+		Controller->SetControlRotation(FRotator(0.0f, Index % 2 == 0 ? 0.0f : 180.0f, 0.0f));
+		RunAuthorityMoves(1, AimFlag, RightAccel);
+	}
+	TestTrue(TEXT("Still airborne after the camera flips"), Movement->IsFalling());
+	TestTrue(TEXT("Alternating camera yaw never turns the airborne body faster than the rotation rate"), MaxTurn <= MaxTurnPerMove);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAethelnMovementNetAirborneFacingReplayTest,
+	"Aetheln.Movement.Net.AirborneFacingReplay",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnMovementNetAirborneFacingReplayTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnMovementNetTests;
+	const FTestWorld TestWorld;
+	AAethelnPlayerCharacter* Character = TestWorld.SpawnGroundedCharacter(FVector(0.0f, 0.0f, 100.0f));
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	APlayerController* Controller = TestWorld.World != nullptr
+		? TestWorld.World->SpawnActor<APlayerController>(
+			APlayerController::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParameters)
+		: nullptr;
+	UAethelnCharacterMovementComponent* Movement = GetMovement(Character);
+	TestNotNull(TEXT("POC character uses the project movement component"), Movement);
+	TestNotNull(TEXT("POC character has a player controller"), Controller);
+	if (Movement == nullptr || Controller == nullptr)
+	{
+		return false;
+	}
+	Controller->Possess(Character);
+
+	const FVector RightAccel = FVector::RightVector * Movement->GetMaxAcceleration();
+	float TimeStamp = 0.0f;
+	for (int32 Index = 0; Index < 10; ++Index)
+	{
+		TimeStamp += MoveDeltaTime;
+		Movement->MoveAutonomous(TimeStamp, MoveDeltaTime, 0, FVector::ZeroVector);
+	}
+	TimeStamp += MoveDeltaTime;
+	Movement->MoveAutonomous(
+		TimeStamp, MoveDeltaTime, FSavedMove_Character::FLAG_JumpPressed | FSavedMove_Character::FLAG_Custom_1, RightAccel);
+	TestTrue(TEXT("Aimed lateral jump takes off aim tracked"), Movement->IsFalling() && Movement->bAimTrackedJump);
+
+	// The takeoff move is the last acknowledged one; its end facing (90) is where a replay must start.
+	FNetworkPredictionData_Client_Character* ClientData = Movement->GetPredictionData_Client_Character();
+	ClientData->SavedMoves.Reset();
+	FSavedMovePtr AckedMove = ClientData->AllocateNewMove();
+	AckedMove->SetMoveFor(Character, MoveDeltaTime, RightAccel, *ClientData);
+	AckedMove->PostUpdate(Character, FSavedMove_Character::PostUpdate_Record);
+	ClientData->LastAckedMove = AckedMove;
+	const FVector AirborneStartLocation = Character->GetActorLocation();
+	const FVector AirborneStartVelocity = Movement->Velocity;
+
+	// Record six aimed moves toward a camera 150 degrees away: fewer than the thirteen the full turn takes.
+	Controller->SetControlRotation(FRotator(0.0f, 150.0f, 0.0f));
+	Movement->bWantsAimSteering = true;
+	for (int32 Index = 0; Index < 6; ++Index)
+	{
+		FSavedMovePtr Move = ClientData->AllocateNewMove();
+		Move->SetMoveFor(Character, MoveDeltaTime, RightAccel, *ClientData);
+		TimeStamp += MoveDeltaTime;
+		Movement->MoveAutonomous(TimeStamp, MoveDeltaTime, Move->GetCompressedFlags(), RightAccel);
+		Move->PostUpdate(Character, FSavedMove_Character::PostUpdate_Record);
+		ClientData->SavedMoves.Add(Move);
+	}
+	const float FirstPassYaw = Character->GetActorRotation().Yaw;
+	TestYaw(*this, TEXT("First pass is still part way through the bounded turn"), FirstPassYaw, 90.0f + 6.0f * 12.0f);
+
+	// A correction to the takeoff state with the live camera and aim since changed. The pawn is left at the
+	// wrong facing and the correction carries none, so the replay must start from the acknowledged one.
+	Character->SetActorLocation(AirborneStartLocation);
+	Movement->Velocity = AirborneStartVelocity;
+	Movement->bAimTrackedJump = false;
+	Movement->AimTrackedJumpYawOffset = 0.0f;
+	Controller->SetControlRotation(FRotator(0.0f, -90.0f, 0.0f));
+	Movement->bWantsAimSteering = false;
+	ClientData->bUpdatePosition = true;
+	TestTrue(TEXT("Correction replays the airborne moves"), Movement->ClientUpdatePositionAfterServerUpdate());
+	TestYaw(
+		*this,
+		TEXT("Replay of a bounded airborne turn ends with the first-pass (server) facing"),
 		Character->GetActorRotation().Yaw,
 		FirstPassYaw);
 	ClientData->SavedMoves.Reset();

@@ -53,7 +53,7 @@ public:
 		float FacingYaw = 0.0f;
 		/** False when the move has no input: the jump keeps its current velocity and facing. */
 		bool bHasMoveInput = false;
-		/** Aimed pure-lateral takeoff: faces travel, then turns with camera yaw while aim is held. */
+		/** Aimed pure-lateral takeoff: faces travel, then turns toward camera yaw at the rotation rate while aim is held. */
 		bool bAimTracked = false;
 	};
 
@@ -172,6 +172,8 @@ private:
 	friend class FAethelnMovementNetJumpTakeoffParityTest;
 	friend class FAethelnMovementNetFacingSpoofBoundedTest;
 	friend class FAethelnMovementNetAimTrackingReplayTest;
+	friend class FAethelnMovementNetAirborneFacingBoundedTest;
+	friend class FAethelnMovementNetAirborneFacingReplayTest;
 	friend struct FAethelnMovementNetPredictionPair;
 	friend struct FAethelnMovementNetJumpReplayScenario;
 

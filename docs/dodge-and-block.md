@@ -110,7 +110,7 @@ Prototype Boundary and Existing Owners; `docs/characters-and-factions.md:349`;
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes the seam, rate bucket, base ability, cost and cooldown (P4), grant validation, `FindForPawn`, `State.Dead`. Adds the selected movement-carried entry (T1) and separate owner outcome; reconciles shared checks and operation safety (see [Dependencies on #19](#dependencies-on-19)). | Change ordinary schema/sequence/aim-time history, PlayerState ownership, or lifecycle policy. |
 | [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Provides the dodge invulnerability window and tag for the avoidance step, and the defense slot (tag, arc, hook) for the defense step. Consumes the timeline driver's boundary pass and the requests-before-contacts rule. Dodge and block activations reset the chain like any other action. | Contacts, the contact order, damage, the already-hit records, or deciding "blocked or not" (#60 does, against #18's defense state). |
 | [#260](https://github.com/ShayShimoni/aetheln-online/issues/260) | Provides the defense slot Hold the Line reuses. | Hold the Line, Gate Step, or Sworn Rebuke behavior. |
-| [#17](https://github.com/ShayShimoni/aetheln-online/issues/17) | Extends the project movement component with the dodge movement on `FLAG_Custom_2`. Asks #17 for an airborne facing bound (Q12). | Sprint, jump, facing, or other movement rules. |
+| [#17](https://github.com/ShayShimoni/aetheln-online/issues/17) | Extends the project movement component with the dodge movement on `FLAG_Custom_2`. Its airborne facing bound (Q12) is delivered by [#306](https://github.com/ShayShimoni/aetheln-online/issues/306). | Sprint, jump, facing, or other movement rules. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Ends the dodge window and the block when `State.Dead` is added, tested through the test seam. | Apply `State.Dead`, run death, respawn, or reconnect, or test the integrated death and respawn case. |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61), [#97](https://github.com/ShayShimoni/aetheln-online/issues/97) | Provides outcomes, replicated state tags, corrections, and result cues to present. | HUD, animation, effects, `GameplayCue.*` tags. |
 | [#82](https://github.com/ShayShimoni/aetheln-online/issues/82) | Supplies the dodge and right-mouse bindings in P5; the lead has selected T1's movement-carried transport. | Camera, reticle, controller layout, remapping UI. |
@@ -947,7 +947,7 @@ files untouched.
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Dodge movement | GameCore only: first the loopback harness (see [Test Plan](#test-plan)); then the authority interface and definition structs, `FLAG_Custom_2`, dodge simulation state, displacement, custom move-data and move-response containers, `EndDodgeForAuthority`, the receiver method, the test accessor; D1 to D6 with a test authority; the `docs/movement-poc.md` flag note. No game code implements the authority yet, so no dodge runs in game. | P1; Q2, Q3, Q14, Q15, and Q20 approved 2026-10-07 |
 | **P3** Dodge authority | Dodge tags, `UAethelnDodgeAbility`, the selected movement-carried entry and outcome RPC, the ordinal, the PlayerState authority, windows and boundaries, `IsAvoidingAt`, operation/callback-safe commit and lifecycle cancellation, telemetry, the #19 fixture changes; D7 to D16 (dodge rows). | P2 (PR #282); #19 P4 cost and cooldown (PR #270); #60 P3 operation identity and callback safety (PR #291); Q4 and Q16 (owner-approved 2026-10-10); T1 selected. #60's `RegisterStep` takes only chain steps 1 to 3, so P3 itself adds the non-chain boundary registration (`RegisterNonChainBoundaries`) to the #60 timeline subsystem. |
-| **P4** Block and contact integration | Block tags, `UAethelnBlockAbility`, the defense slot, `UAethelnGuardPressureEffect`, the Guard hook and break, the Q10 relations; D13, D14, D16 block rows, D17 to D25. | P3, #60 P4, the answers to Q6 to Q8, Q10, Q12, and Q17 to Q19 (owner-approved 2026-10-10), and the lead's sign-off on T2 and T3 as #60 owner (2026-10-11). Q12 was resolved by the owner on 2026-10-11: this PR's merge waits for #17's airborne facing bound, tracked as [#306](https://github.com/ShayShimoni/aetheln-online/issues/306) |
+| **P4** Block and contact integration | Block tags, `UAethelnBlockAbility`, the defense slot, `UAethelnGuardPressureEffect`, the Guard hook and break, the Q10 relations; D13, D14, D16 block rows, D17 to D25. | P3, #60 P4, the answers to Q6 to Q8, Q10, Q12, and Q17 to Q19 (owner-approved 2026-10-10; Q12's airborne facing bound exists in the movement component since [#306](https://github.com/ShayShimoni/aetheln-online/issues/306), so the gate is met), and the lead's sign-off on T2 and T3 as #60 owner (2026-10-11) |
 | **P5** Bindings and two-client evidence | The receiver and input-sink release, the GameUI dodge key and right-mouse hold, Cursor-entry release; D26, D27. | P4, #60 P6 (input sink), #19 P5 (input-enabled pawn), Q1 |
 
 Guard and Endurance recovery are not #18 phases. By Q9 (owner-approved
@@ -991,7 +991,7 @@ the lead posted on the owner's behalf. Every numeric value stays `TBD` (#107,
 | 16 (Q9) | Owner-approved 2026-10-10: a new ticket under #19's resource grammar owns passive and delayed server-clock recovery of Guard and Endurance, with values from #107, before P5's feel evidence. #18 does not design it. The ticket is [#292](https://github.com/ShayShimoni/aetheln-online/issues/292). | #292; [Residual Risks and Known Gaps](#residual-risks-and-known-gaps) item 5 |
 | 17 (Q10) | Owner-approved 2026-10-10: an accepted dodge ends a held block. A block is refused while `State.Dodging` holds. The chain's commitment tag blocks both, and their activation after `CancelOpen` resets the chain. An attack press while blocking is refused (release first). Block and Hold the Line block each other. | P4 action relations; D23 |
 | 18 (Q11) | Owner-approved 2026-10-10: no perfect block or parry in the prototype. The canon places it in a Thread (`docs/characters-and-factions.md:287`), outside the default prototype. | Nothing in the prototype |
-| 19 (Q12) | Owner-approved 2026-10-10: #17 bounds airborne facing before the block phase (P4) merges, or the owner accepts the risk at that point (residual risk 3). Resolved by the owner on 2026-10-11: P4's merge waits for the bound, tracked as [#306](https://github.com/ShayShimoni/aetheln-online/issues/306); no risk acceptance. | P4 merge gate in [Phased Delivery](#phased-delivery); [Residual Risks and Known Gaps](#residual-risks-and-known-gaps) item 3 |
+| 19 (Q12) | Owner-approved 2026-10-10: #17 bounds airborne facing before the block phase (P4) merges, or the owner accepts the risk at that point. Delivered by [#306](https://github.com/ShayShimoni/aetheln-online/issues/306): airborne aim-tracking facing turns at the existing 720 degrees/s camera-facing rate (residual risk 3). | P4 merge gate in [Phased Delivery](#phased-delivery); [Residual Risks and Known Gaps](#residual-risks-and-known-gaps) item 3 |
 | 20 (Q13) | Owner-approved 2026-10-10: the semantic IDs `combat.action.dodge` and `combat.action.block` are proposed for #106. The tags do not wait on the IDs. | The `AethelnGameplayTags` row of [Class Layout](#class-layout) |
 | 21 (Q16) | Owner-approved 2026-10-10: no refund when the displacement is cut short (a wall, a ledge, death). The commit and the window are authoritative at acceptance. #60's analogous OQ5 stays #60's. | [Cost and cooldown](#cost-and-cooldown) |
 | 22 (Q17) | Owner-approved 2026-10-10: no attack while `State.Dodging` holds. The chain lists `State.Dodging` among its activation-blocking tags, so an attack `Press` during the dodge gets `ActivationBlocked` until `ActionEnd`, which #107 tunes. | The chain's blocking tags (P4); D23 |
@@ -1036,15 +1036,20 @@ the remapping mechanism and controller layout (#82); display names.
    engine time-discrepancy detection is off (#82 F8), so a fast client clock
    finishes the displacement sooner in server time. The window is unaffected.
    Owners: #17, #2.
-3. **Airborne facing** has no rate bound, which matters for the block arc
-   (Q12). Owner: #17, tracked as
-   [#306](https://github.com/ShayShimoni/aetheln-online/issues/306); P4's
-   merge waits for it (owner, 2026-10-11). By owner direction of 2026-10-11
-   a jump may start again as soon as the character lands or touches an
-   obstacle, and each takeoff may snap the actor yaw by up to 180 degrees;
-   #306 bounds only the other mid-air turning. With a block held, repeated
-   takeoffs can therefore swing the arc. Whether to disable the snap while a
-   block is held is an open owner decision.
+3. **Airborne facing** is bound by [#306](https://github.com/ShayShimoni/aetheln-online/issues/306) (Q12): airborne aim-tracking
+   facing turns at the existing 720 degrees/s rate, except for the jump takeoff
+   snap, which turns facing up to 180 degrees in one move, as described in
+   [Playable Movement POC](movement-poc.md#movement-baseline). By owner
+   direction (2026-10-11) a jump may start again the moment the character
+   lands or its feet touch an obstacle, with no minimum interval, so under a
+   low ceiling or onto a short ledge the snap repeats every few moves; that is
+   intended jump behaviour. The arc reads server actor yaw, so a block raised
+   in a takeoff move sees the post-snap facing, and a repeating snap can turn
+   the arc up to 180 degrees each time. This is a residual risk for #18 P4,
+   whose only open option is to disable the snap while a block is held. The 720 degrees/s bound is measured in
+   client-reported move time, so it depends on residual risk 2 (time-discrepancy
+   detection is off); ground facing has the same limit. Owner: #17. Disabling the snap while a
+   block is held is an open owner decision; P4 does not implement it.
 4. **Move data has no schema version** (#82 F10). The dodge field in the
    custom move data relies on build-identical clients and servers. F10's
    revisit trigger, "when a flag is added", fires with `FLAG_Custom_2`; this
