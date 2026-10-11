@@ -52,7 +52,7 @@ void UAethelnCombatTimelineSubsystem::Deinitialize()
 	const auto Sources = AbilitySystems;
 	for (const auto& Source : Sources)
 	{
-		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->ResetChain(EAethelnChainEndReason::AvatarLost); }
+		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->ResetChain(EAethelnChainEndReason::AvatarLost); ASC->CancelDodge(); }
 	}
 	Steps.Reset(); AbilitySystems.Reset(); CombatIds.Reset(); OnWindowEvaluated.Clear();
 	Super::Deinitialize();
@@ -76,6 +76,13 @@ bool UAethelnCombatTimelineSubsystem::CanRegisterStep(const UAethelnAbilitySyste
 {
 	return GetWorld() != nullptr && GetWorld()->GetNetMode() != NM_Client && ASC.GetWorld() == GetWorld()
 		&& ASC.IsOwnerActorAuthoritative() && NextOrdinal != MAX_uint64 && NextCombatId != MAX_uint32;
+}
+
+bool UAethelnCombatTimelineSubsystem::RegisterNonChainBoundaries(UAethelnAbilitySystemComponent& ASC)
+{
+	if (!CanRegisterStep(ASC)) { return false; }
+	AbilitySystems.AddUnique(TWeakObjectPtr<UAethelnAbilitySystemComponent>(&ASC));
+	return true;
 }
 
 void UAethelnCombatTimelineSubsystem::StampReset(const FGuid& ActivationId, double Time)
@@ -112,10 +119,10 @@ void UAethelnCombatTimelineSubsystem::HandlePostActorTick(UWorld* World, ELevelT
 	// P4 inserts contact resolution here, before these exact authored boundaries.
 	for (const auto& Source : Sources)
 	{
-		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->ApplyChainBoundaries(Now); }
+		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->ApplyDueBoundaries(Now); }
 	}
 	Steps.RemoveAll([Now](const FStep& Entry) { return !Entry.AbilitySystem.IsValid() || Entry.ResetTime <= Now; });
-	AbilitySystems.RemoveAll([](const auto& Source) { return !Source.IsValid() || !Source->ChainState.bExists; });
+	AbilitySystems.RemoveAll([](const auto& Source) { return !Source.IsValid() || !Source->HasPendingBoundaries(); });
 	for (auto Iterator = CombatIds.CreateIterator(); Iterator; ++Iterator)
 	{
 		if (!Iterator.Key().IsValid()) { Iterator.RemoveCurrent(); }

@@ -28,11 +28,10 @@ That review disclosed earlier P2 movement-test authorship and did not freshly
 approve those authored changes. The contract below amends the ordinary seam;
 proposed entry/outcome names are not claims that APIs already exist. #18 P2
 movement merged in [PR #282](https://github.com/ShayShimoni/aetheln-online/pull/282).
-#60 P3's callback-safe operations and #19 P4 integration readiness remain
-prerequisites for #18 P3, which itself adds the non-chain boundary registration
-to the #60 timeline subsystem. This selection does not satisfy those
-prerequisites, tuning, two-client PIE, or either whole issue's acceptance
-criteria.
+#18 P3 builds on #19 P4 cost and cooldown (PR #270) and #60 P3's
+callback-safe operations (PR #291), and itself adds the non-chain boundary
+registration to the #60 timeline subsystem. This selection does not satisfy
+tuning, two-client PIE, or either whole issue's acceptance criteria.
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
@@ -385,11 +384,14 @@ InstancedPerActor, no triggers, no spec input id, and no direct input
 replication. The dodge's finite, ordered definition and cost-or-cooldown rule
 must be checked through the actual PlayerState grant path (see
 [Dodge grant validation](dodge-and-block.md#server-owned-windows), including
-the Q4 rule, owner-approved 2026-10-10). `FindGrantProblem` is non-virtual at the reviewed
-GAS baseline `63f43184c6a775080f337152f1f694286df55d17`: a hidden derived method
-cannot satisfy this contract when the caller holds a base ability pointer.
-Implementation must introduce a reviewed virtual hook or an equivalent
-integrated check that reaches the specialized definition from that caller.
+the Q4 rule, owner-approved 2026-10-10). `FindGrantProblem` was non-virtual at
+the reviewed GAS baseline `63f43184c6a775080f337152f1f694286df55d17`, where a
+hidden derived method could not satisfy this contract. #60 P3 made it virtual,
+and `UAethelnDodgeAbility` overrides it, so `IsGrantableAbilitySpec` reaches
+the dodge's checks through its base ability pointer. Grant validation does not
+touch the non-chain boundary registration: it checks the definition once, at
+grant; the dodge registers its window boundaries with the #60 timeline
+subsystem only when the server accepts it.
 
 **Cost and cooldown.** One shared `UAethelnCooldownEffect` takes its duration
 from `SetByCaller.Cooldown.Duration`. `ApplyCooldown` adds the ability's
@@ -516,8 +518,8 @@ The entry uses the validation substitutions below, the same one-spec scope,
 eligibility checks and full commit as the ordinary entry. Before either entry
 validates, apply the requester's due #60 boundaries to the server processing
 time. #60 P3 supplies operation lifetime protection; #18 P3 adds the non-chain
-boundary registration to the #60 timeline subsystem, and this document names no
-new boundary API. Dodge windows
+boundary registration to the #60 timeline subsystem
+(`RegisterNonChainBoundaries`). Dodge windows
 are authored half-open intervals from that processing time, never from the
 client timestamp or prediction.
 
