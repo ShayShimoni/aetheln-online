@@ -456,6 +456,8 @@ jobs:
             if ($PortableCiPaths -ccontains $Path) { return $true }
             if ($Path -cmatch '^docs/.+') { return $true }
             if ($Path -cmatch '^visuals/.+') { return $true }
+            if ($Path -cmatch '^\.agents/.+') { return $true }
+            if ($Path -cmatch '^tests/build/.+') { return $true }
             if ($Path -cmatch '^output/pdf/.+') { return $true }
             if ($Path -cmatch '^tests/.+\.(ps1|md)$') { return $true }
             if ($Path -cmatch '^[^/]+\.md$') { return $true }
@@ -589,6 +591,8 @@ jobs:
           # an expression interpolated into this engine-runner job.
           $Superseded = 'false'
           $Result = 'unavailable'
+          $Current = ''
+          $EventHead = ''
           try {
             $Payload = [IO.File]::ReadAllText($env:GITHUB_EVENT_PATH) | ConvertFrom-Json
             $Number = [string] $Payload.pull_request.number
@@ -604,6 +608,10 @@ jobs:
             if ($Current -cne $EventHead) { $Superseded = 'true'; $Result = 'superseded' } else { $Result = 'current' }
           } catch { $Superseded = 'false'; $Result = 'unavailable' }
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "superseded=$Superseded`n", (New-Object Text.UTF8Encoding $false))
+          # A superseded job ends green with every later step skipped; say why on the run page.
+          if ($Superseded -ceq 'true') {
+            try { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "skipped: superseded head $EventHead (current head $Current)`n", (New-Object Text.UTF8Encoding $false)) } catch { Write-Output 'head_check summary_unavailable' }
+          }
           Write-Output ('head_check result=' + $Result)
       - name: Capture routine compile deadline
         if: steps.head_check.outputs.superseded != 'true'
@@ -796,6 +804,8 @@ jobs:
           # an expression interpolated into this engine-runner job.
           $Superseded = 'false'
           $Result = 'unavailable'
+          $Current = ''
+          $EventHead = ''
           try {
             $Payload = [IO.File]::ReadAllText($env:GITHUB_EVENT_PATH) | ConvertFrom-Json
             $Number = [string] $Payload.pull_request.number
@@ -811,6 +821,10 @@ jobs:
             if ($Current -cne $EventHead) { $Superseded = 'true'; $Result = 'superseded' } else { $Result = 'current' }
           } catch { $Superseded = 'false'; $Result = 'unavailable' }
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "superseded=$Superseded`n", (New-Object Text.UTF8Encoding $false))
+          # A superseded job ends green with every later step skipped; say why on the run page.
+          if ($Superseded -ceq 'true') {
+            try { [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "skipped: superseded head $EventHead (current head $Current)`n", (New-Object Text.UTF8Encoding $false)) } catch { Write-Output 'head_check summary_unavailable' }
+          }
           Write-Output ('head_check result=' + $Result)
       - name: Check out trusted editor control source
         id: editor_control

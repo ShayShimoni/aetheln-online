@@ -1964,6 +1964,16 @@ Every accepted decision records:
     output, the job gate, the head check step in both jobs, and runs the
     classifier matrix and the head check against fixtures (current, superseded,
     and every fail-open case).
+- **Amendment (2026-10-11, issue #299 follow-up):** a test now walks the
+  dot-sourcing chain from the editor job's scripts and fails if any script it
+  loads does not make `editor_required` true. A superseded job writes a step
+  summary line, since it ends green with every later step skipped. The
+  `change-impact` portable-only set gains `.agents/**` and `tests/build/**`,
+  matching the selector, so such a pull request starts no engine job. The
+  hosted `powershell-yaml` test download retries a failed transfer up to three
+  times and never retries wrong bytes, and the initial-preparation lease maps
+  only a sharing or lock violation to `lease_held`. No ceiling, trust
+  predicate, or lease rule changes.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,

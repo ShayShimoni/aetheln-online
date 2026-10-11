@@ -146,6 +146,16 @@ function Test-LeaseAndOwnershipContract {
 
 	$OtherAttempt = Get-TestAttempt -Id 'concurrent-attempt'
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $OtherAttempt -LeasePath $LeasePath } -Reason 'lease_held' -Message 'A concurrent attempt must not take an existing live lease.'
+	# Issue #299: only a sharing or lock violation means another process holds the lease file.
+	$ExternalLease = Initialize-LeaseFixture -Name 'external-holder'
+	$ExternalHolder = [IO.File]::Open($ExternalLease, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+	try {
+		Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id 'external-attempt') -LeasePath $ExternalLease } -Reason 'lease_held' -Message 'A lease file held open by another handle is a sharing violation and must report lease_held.'
+	} finally { $ExternalHolder.Dispose() }
+	$MissingParent = Join-Path (Join-Path (Split-Path -Parent (Initialize-LeaseFixture -Name 'missing-parent')) 'absent') 'preparation.lease.json'
+	$MissingFailure = $null
+	try { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id 'missing-parent-attempt') -LeasePath $MissingParent | Out-Null } catch { $MissingFailure = [string] $_.Exception.Message }
+	Assert-True -Condition ($null -ne $MissingFailure -and $MissingFailure -cne 'lease_held') -Message "An I/O failure that is not a sharing violation must not be reported as lease_held; received '$MissingFailure'."
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $Attempt -LeasePath (Join-Path $RepositoryRoot 'unsafe.lease.json') } -Reason 'lease_path_invalid' -Message 'A repository-contained lease must be rejected.'
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $Attempt -LeasePath 'relative.lease.json' } -Reason 'lease_path_invalid' -Message 'A relative lease path must be rejected.'
 

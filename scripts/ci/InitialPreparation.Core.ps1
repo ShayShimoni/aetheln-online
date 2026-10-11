@@ -509,7 +509,10 @@ function Enter-InitialPreparationLease {
 		$Stream.Flush($true)
 	} catch {
 		if ($null -ne $Stream) { $Stream.Dispose() }
-		if ($_.Exception -is [IO.IOException]) { throw 'lease_held' }
+		# PowerShell wraps a failed .NET call in a MethodInvocationException. Only a sharing or
+		# lock violation (Win32 32 or 33) means another process holds the lease file (issue #299).
+		$LeaseIo = if ($_.Exception.InnerException -is [IO.IOException]) { $_.Exception.InnerException } else { $_.Exception }
+		if ($LeaseIo -is [IO.IOException] -and ($LeaseIo.HResult -band 0xFFFF) -in 32, 33) { throw 'lease_held' }
 		throw
 	}
 	$script:InitialPreparationLeaseRegistry[$Key] = [pscustomobject]@{
