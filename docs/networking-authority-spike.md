@@ -498,14 +498,62 @@ gate was skipped because that module was unavailable. These results validate
 the bounded source and orchestration baseline only; they are not packaged
 multiplayer evidence.
 
+### Packaged two-client capture (PR #129)
+
+PR [#129](https://github.com/ShayShimoni/aetheln-online/pull/129) delivered one
+genuine packaged authority capture. The facts below come from the merged PR and
+the repository owner's PR and Issue #2 comments.
+
+- **Source revision:** the exact PR head
+  `9c960497c7bae7bfee5bfb0d36eb3e2101849980`, merged into `develop` as
+  `74bd706a15c7f7be631d564e60762ac302408321` (`74bd706a`). The merge tree and
+  the tested PR-head tree are identical.
+- **Topology:** one Linux dedicated server and two Windows clients, from one
+  clean Windows-client/Linux-server package (87 files independently rehashed,
+  5,622,769,752 bytes).
+- **Covered results:** authoritative movement, enemy spawn, server-resolved
+  melee and damage, join-in-progress, disconnect, and fresh-identity reconnect.
+  The capture also contained exactly eight genuine invalid-claim rejections
+  (movement, aim, activation, hit, cooldown, dodge, block, and damage). The
+  30-second post-reconnect interval completed (30.932 s), logs drained, stderr
+  stayed empty, no Windows or WSL game process remained, and a bounded
+  sensitive-pattern scan found zero matches.
+- **Artifact hashes (SHA-256):**
+  - schema-v2 build provenance
+    `34bbebb6592a036d312fa78436a236be5c2220ec40e552a299c0b89921a09b88`
+  - capture evidence
+    `c1546581c5890266d47ef003a0b87f865785825176228e800ac9c69455f954a0`
+  - composite candidate
+    `5c70ee9bdc1c63876ca2c03f55efabac58c63f1c171a1f72ab8240b915893dec`
+  - post-merge QA handoff
+    `992acc755d96a0420472cda1b9da2b312350356a5c5fc6dca90d16b9ae423b17`
+  - accepted post-merge QA manifest
+    `483c045c34cb9f9924749c39b37f0ce24b86d7245fb25dfd532a0aa3d6b6ce3e`
+- **Post-merge gate:** workflow run `31952847659` passed `quality-gates` on the
+  merge commit, and fresh independent post-merge QA passed all five bounded
+  criteria.
+
+The original provenance recorded a null engine Git field. It was supplemented,
+without rebuilding or changing package bytes, with the pinned engine tag
+`5.8.1-release` at commit `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`. The
+runner marks this result `packaged-candidate`; the fresh restricted verifier,
+reviewer, and approver stages passed.
+
+This capture uses the opt-in scenario with the neutral present-time baseline
+only. It carries no measured latency, jitter, loss, tick, history, bandwidth,
+or capacity value, and it does not compare candidates.
+
 ### Not yet performed
 
-No real packaged dedicated-server-plus-two-client gameplay capture is claimed
-by this unit or by the Issue #44 fixture contract. The fixture uses a fake process that
-emits expected log records; it validates orchestration and evidence handling,
-not Unreal networking, replicated gameplay, combat feel, latency tolerance, or
-packaged lifecycle behavior. A packaged run and its correlated raw logs and
-JSON evidence remain required before Issue #2 can close.
+The Issue #44 fixture contract and unit 1 do not claim packaged gameplay on
+their own: the fixture uses a fake process that emits expected log records and
+validates orchestration and evidence handling, not Unreal networking,
+replicated gameplay, combat feel, latency tolerance, or packaged lifecycle
+behavior. The PR #129 capture above is the only packaged
+dedicated-server-plus-two-client capture. Issue #2 stays open for the remaining
+work listed under Continuation Ownership. That includes packaged captures for
+equivalent generic push-model, Replication Graph, and Iris candidates and the
+bounded-rewind comparison, each with correlated raw logs and JSON evidence.
 
 All numeric network conditions, measurements, budgets, thresholds, tick rates,
 history windows, bandwidth limits, and capacity values remain explicitly
@@ -513,7 +561,17 @@ history windows, bandwidth limits, and capacity values remain explicitly
 unselected. Present-time melee is only the implemented baseline used to expose
 the comparison seam; it is not the final selected latency policy. Bounded
 rewind and the remaining projectile, block, and dodge coverage are not
-implemented by this unit. No entry in
+implemented by this unit.
+
+The `NotImplemented` projectile, block, dodge, and bounded-rewind rows of
+`FAethelnNetworkSpikeActorMix` (`AethelnNetworkSpikeEvidence.h`, lines 98-104)
+describe only this spike's own actor mix, meaning the capabilities its
+comparison scenario exercises. They do not describe the product dodge and block
+code, which Issue #18 owns under [Dodge and Block](dodge-and-block.md). The
+packaged capture's `dodge` and `block` rejections are invalid-claim probes
+against the neutral spike authority; they do not exercise that product code.
+
+No entry in
 [Architecture Decisions](architecture-decisions.md) is added or changed.
 
 ## Continuation Ownership
