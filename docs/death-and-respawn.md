@@ -193,7 +193,10 @@ effects, and a second grant. P4 closes it:
 
 Dodge and block refusal while dead is already covered by D13
 (`Aetheln.GameCombat.Defense.LifeStateCancelsDefense`), which reacts to the same
-tag event.
+tag event. The real lethal path, an AI swing that kills the player through the
+contact pipeline, is the lethal row of
+`Aetheln.GameCombat.AttackTimeline.Interruption` (#60 P5): since P1 the player
+dies, and death, not interruption, ends the chain once as `IncompatibleState`.
 
 ## Acceptance-Criteria Mapping
 
