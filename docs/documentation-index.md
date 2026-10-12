@@ -81,6 +81,13 @@ subordinate to the specialized canonical product and technical documents.
   arc, and Guard hook it exposes to Issue #60, prediction and outcome
   reporting, telemetry, test plan, phased delivery, owner decisions, and open
   decisions.
+- [Animation and Combat-Content Authoring Pipeline](animation-and-combat-content-pipeline.md)
+  records the Issue #84 authoring contract: the authoritative attack
+  definition and client-only presentation binding split, the source,
+  retarget, intake, montage, and binding flow, the authoring validation
+  matrix, source-control expectations, the representative attack and
+  telegraph plan, ownership boundaries, phased delivery, owner actions, and
+  open decisions.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path, plus the Issue #167
