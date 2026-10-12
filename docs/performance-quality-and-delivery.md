@@ -94,17 +94,33 @@ method, scenario, owner, evidence link, and approval status. Until measured, the
 entry is explicitly `TBD`.
 
 The first executable Issue #45 wave adds an opt-in, versioned
-`aetheln.performance-capture-contract` (version 1) to the network-authority
+`aetheln.performance-capture-contract` (versions 1 and 2) to the network-authority
 runner via `PerformanceContractPath`; its exact shape and fail-closed rules are
 specified in
 [Networking Authority Spike](networking-authority-spike.md#issue-45-opt-in-performance-capture-and-budget-contract).
-The contract binds future capture evidence to the exact source revision,
+
+Capture contract version 2 adds the registry measurement families that version 1
+could not bind, as metric names only: client frame time (game thread, render
+thread, GPU), frame pacing, hitches, loading and streaming (startup, travel,
+map load, streaming stalls), server tick duration, overrun and worker tasks,
+and network send/receive bursts. These names are proposals pending owner
+review. Version 1 contracts remain accepted unchanged. Every version 2 target,
+warning threshold, failure threshold, sampling value, and approval stays `null`
+or `unapproved` and `TBD` until measured evidence is reviewed; the contract
+defines no frame-time, tick, bandwidth, loss, or capacity number. The overload
+failure shape is a non-numeric evidence field to define later, and packet-loss
+impact is observed through the correction and bandwidth metrics captured under
+a loss profile. The hitch, stall, and tick-overrun counters each depend on an
+undecided threshold, and the statistic each timing metric reports is also
+undecided.
+
+Both contract versions bind future capture evidence to the exact source revision,
 packaged-build identity, toolchain, hardware, topology, environment, map,
 duration, actor mix, run ID, scenario ID/version, network profile ID/version, runtime
 network-configuration identity, opaque profile-argument digest, and evidence
 references, and
-carries one budget record per version-1 network-authority-runner subset metric
-with metric identity and domain, target, warning threshold, failure threshold,
+carries one budget record per metric of its declared contract version (ten in
+version 1, 28 in version 2) with metric identity and domain, target, warning threshold, failure threshold,
 measurement method, scenario, accountable owner, evidence references, an
 evidence classification (`measured`, `modeled`, `hypothetical`, or `unset`),
 and an approval status. In this wave every target, warning threshold, failure
@@ -116,10 +132,11 @@ duplicate or missing budgets, undeclared evidence references, and self-approved
 entries fail closed before launch. Each accepted run retains the exact validated
 contract bytes and publishes their SHA-256 plus the fixed artifact name so later
 review can detect replacement or drift without exposing raw evidence references
-in the summary. This bounded subset does not replace or complete the broader
-Issue #45 registry above; the remaining client timing, frame-pacing, hitch,
-loading/streaming, server worker/tick-overrun/failure, and network burst/loss
-domains require later representative capture work.
+in the summary. Neither contract version replaces or completes the broader Issue #45
+registry above. Version 2 declares the client timing, frame-pacing, hitch,
+loading/streaming, server worker/tick-overrun, and network burst metric names,
+but each still requires representative capture work, and the replication,
+detailed memory, backend, persistence, and build/cook domains are not covered.
 Metric identities remain case-sensitive, and fixture evidence cannot classify a
 budget as `measured`. The exact contract artifact is created without overwrite,
 kept protected from replacement during capture, and rehashed immediately before

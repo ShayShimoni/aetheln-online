@@ -880,11 +880,12 @@ function Resolve-PerformanceContract([string] $Path) {
 	$Contract = $ContractRecord.Value
 	Assert-ClosedProperty -Value $Contract -Expected @('schema_id','schema_version','capture','budgets') -Name 'PerformanceContract'
 	Assert-JsonString -Name 'PerformanceContract schema_id' -Value $Contract.schema_id
-	if (($Contract.schema_version -isnot [int] -and $Contract.schema_version -isnot [long]) -or [long] $Contract.schema_version -ne 1) {
-		throw 'PerformanceContract schema_version must be the JSON integer 1.'
+	if (($Contract.schema_version -isnot [int] -and $Contract.schema_version -isnot [long]) -or [long] $Contract.schema_version -notin 1, 2) {
+		throw 'PerformanceContract schema_version must be the JSON integer 1 or 2.'
 	}
+	$ContractVersion = [int] $Contract.schema_version
 	if ([string] $Contract.schema_id -cne 'aetheln.performance-capture-contract') {
-		throw 'PerformanceContract must use aetheln.performance-capture-contract schema version 1.'
+		throw 'PerformanceContract must use aetheln.performance-capture-contract schema version 1 or 2.'
 	}
 	$Capture = $Contract.capture
 	Assert-ClosedProperty -Value $Capture -Expected @('source_revision','build','toolchain','hardware','topology','environment','map','duration_seconds','actor_mix','scenario_id','profile_id','network_config_identity','run_id','scenario_version','profile_version','profile_arguments_sha256','evidence_references','measurement_domains','sampling') -Name 'PerformanceContract capture'
@@ -932,11 +933,21 @@ function Resolve-PerformanceContract([string] $Path) {
 		server = @('server_game_thread_milliseconds','server_replication_cpu_milliseconds','server_memory_bytes','relevant_actor_count','destruction_event_count')
 		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second')
 	}
-	Assert-ClosedProperty -Value $Capture.measurement_domains -Expected @('client','server','network') -Name 'PerformanceContract measurement_domains'
+	if ($ContractVersion -eq 2) {
+		# Version 2 keeps every version-1 metric first and appends metric names only. The appended names are proposals pending owner review;
+		# this table defines no value, threshold, statistic, or hitch, stall, or tick-overrun definition.
+		$RequiredDomains = [ordered]@{
+			client = @($RequiredDomains.client) + @('client_frame_time_milliseconds','client_game_thread_milliseconds','client_render_thread_milliseconds','client_gpu_milliseconds','client_frame_pacing_milliseconds','client_hitch_count','client_hitch_duration_milliseconds')
+			loading_streaming = @('client_startup_milliseconds','client_travel_milliseconds','client_map_load_milliseconds','client_streaming_stall_count','client_streaming_stall_milliseconds')
+			server = @($RequiredDomains.server) + @('server_tick_duration_milliseconds','server_tick_overrun_count','server_tick_overrun_milliseconds','server_worker_task_milliseconds')
+			network = @($RequiredDomains.network) + @('network_send_burst_bits_per_second','network_receive_burst_bits_per_second')
+		}
+	}
+	Assert-ClosedProperty -Value $Capture.measurement_domains -Expected @($RequiredDomains.Keys) -Name 'PerformanceContract measurement_domains'
 	foreach ($DomainName in $RequiredDomains.Keys) {
 		$DeclaredMetrics = @($Capture.measurement_domains.$DomainName)
 		$ExpectedMetrics = @($RequiredDomains[$DomainName])
-		$DomainFailure = "PerformanceContract measurement_domains '$DomainName' must declare exactly the version-1 network-authority-runner ordered metrics."
+		$DomainFailure = "PerformanceContract measurement_domains '$DomainName' must declare exactly the version-$ContractVersion network-authority-runner ordered metrics."
 		if ($DeclaredMetrics.Count -ne $ExpectedMetrics.Count) { throw $DomainFailure }
 		for ($Index = 0; $Index -lt $ExpectedMetrics.Count; $Index++) {
 			if ($DeclaredMetrics[$Index] -isnot [string] -or [string] $DeclaredMetrics[$Index] -cne $ExpectedMetrics[$Index]) { throw $DomainFailure }
@@ -1000,18 +1011,18 @@ function Resolve-PerformanceContract([string] $Path) {
 			}
 		}
 		$ClassificationCounts[$Classification] = 1 + [int] $ClassificationCounts[$Classification]
-		if (-not $BudgetMetricIds.Add($MetricId)) { throw 'PerformanceContract budgets must declare exactly one budget for every version-1 network-authority-runner metric.' }
+		if (-not $BudgetMetricIds.Add($MetricId)) { throw "PerformanceContract budgets must declare exactly one budget for every version-$ContractVersion network-authority-runner metric." }
 	}
 	foreach ($MetricId in $MetricDomains.Keys) {
-		if (-not $BudgetMetricIds.Contains($MetricId)) { throw 'PerformanceContract budgets must declare exactly one budget for every version-1 network-authority-runner metric.' }
+		if (-not $BudgetMetricIds.Contains($MetricId)) { throw "PerformanceContract budgets must declare exactly one budget for every version-$ContractVersion network-authority-runner metric." }
 	}
 	return [pscustomobject]@{
 		Summary = [ordered]@{
 			schema_id = 'aetheln.performance-capture-contract'
-			schema_version = 1
+			schema_version = $ContractVersion
 			contract_sha256 = $ContractRecord.Sha256
 			contract_artifact = 'performance-contract.json'
-			measurement_domains = [ordered]@{ client = @($RequiredDomains.client); server = @($RequiredDomains.server); network = @($RequiredDomains.network) }
+			measurement_domains = $RequiredDomains
 			budget_count = @($Budgets).Count
 			targets_defined = $false
 			approval_status = 'unapproved'
