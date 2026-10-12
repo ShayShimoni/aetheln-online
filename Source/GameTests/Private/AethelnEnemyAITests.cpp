@@ -11,6 +11,7 @@
 #include "GameFramework/PlayerState.h"
 #include "GameplayTagsManager.h"
 #include "Misc/AutomationTest.h"
+#include "Navigation/PathFollowingComponent.h"
 #include "UObject/UnrealType.h"
 
 // #83 enemy AI foundation (docs/enemy-ai-and-navigation.md, Test Plan E1 to E11). The fixture's player stands at

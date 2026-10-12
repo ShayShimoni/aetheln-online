@@ -8,6 +8,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
+#include "Navigation/PathFollowingComponent.h"
 
 AAethelnEnemyController::AAethelnEnemyController(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
