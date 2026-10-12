@@ -6,6 +6,7 @@
 
 class IAethelnPlayerInputReceiver;
 class APlayerController;
+class UAethelnHudWidget;
 class UAethelnPOCOverlayWidget;
 class ULocalPlayer;
 class UInputAction;
@@ -106,6 +107,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAethelnPOCOverlayWidget> OverlayWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAethelnHudWidget> HudWidget;
 
 	TWeakObjectPtr<UObject> ReceiverObject;
 	TWeakObjectPtr<ULocalPlayer> AppliedLocalPlayer;
