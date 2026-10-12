@@ -147,6 +147,17 @@ bool FAethelnHudPlayerStateSnapshotTest::RunTest(const FString& Parameters)
 	}
 	UAethelnAbilitySystemComponent* AbilitySystem = PlayerState->GetAethelnAbilitySystemComponent();
 
+	// Before the first owner replication (or the server's init) every maximum is 0: the HUD must not read "Health 0 / 0".
+	APlayerController* FreshController = TestWorld.Spawn<APlayerController>();
+	AAethelnPlayerState* FreshPlayerState = FreshController != nullptr ? AethelnCombatTests::AttachFreshPlayerState(TestWorld, *FreshController) : nullptr;
+	if (TestNotNull(TEXT("Uninitialized PlayerState"), FreshPlayerState))
+	{
+		const FAethelnHudSnapshot Unknown = FreshPlayerState->GetHudSnapshot();
+		TestFalse(TEXT("Health is unknown before the attributes arrive"), Unknown.Health.bKnown);
+		TestFalse(TEXT("Endurance is unknown before the attributes arrive"), Unknown.Endurance.bKnown);
+		TestFalse(TEXT("Guard is unknown before the attributes arrive"), Unknown.Guard.bKnown);
+	}
+
 	FAethelnHudSnapshot Snapshot = PlayerState->GetHudSnapshot();
 	TestTrue(TEXT("Health is known"), Snapshot.Health.bKnown);
 	TestEqual(TEXT("Health"), Snapshot.Health.Current, 40.0f);

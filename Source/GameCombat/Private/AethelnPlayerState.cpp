@@ -91,7 +91,8 @@ FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
 		FAethelnHudResource Resource;
 		Resource.Current = Current;
 		Resource.Max = Max;
-		Resource.bKnown = true;
+		// Every maximum is 0 until the init or the first owner replication, so a 0 maximum is not a value yet.
+		Resource.bKnown = Max > 0.0f;
 		return Resource;
 	};
 	Snapshot.Health = Read(AttributeSet->GetHealth(), AttributeSet->GetMaxHealth());
