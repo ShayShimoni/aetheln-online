@@ -624,7 +624,7 @@ and never repeat damage, interruption, or a cue.
 The subsystem exposes a native multicast `OnLethalResult(TargetAsc,
 ActivationId, ContactTime)`, raised once per target from the committed result
 (#83 added the contact time). #21 binds it and applies `State.Dead`; the #83
-enemy controller binds it and dies at the contact time. Until #21 lands nothing binds it, and a zero-Health
+enemy controller binds it and dies at the contact time. Until #21 lands nothing applies `State.Dead`, and a zero-Health
 target is not alive to step 1, so it takes no further results and its attacks
 fail revalidation.
 

@@ -53,7 +53,7 @@ UE 5.8.1 source, revision `71fe36aac5`; `Runtime/` abbreviates
 | Target choice | Provisional rule for #20 to confirm: keep the current target while it stays eligible; otherwise the nearest eligible player, ties broken by the lower `PlayerId`. |
 | Navigation | One static navmesh for the controlled arena, used only by the server. Path following with partial paths, the engine's block detection for stuck recovery, and a leash around the spawn point. |
 | Death and reset | The enemy dies at its lethal contact time. After an authored delay from that time it resets at its spawn point with its initial attributes. |
-| Replication | Character movement, the attribute set, the timeline's result cues, and one small replicated presentation state that includes the server-owned `Telegraph` state. No RPC on any enemy class. |
+| Replication | Character movement, the timeline's result cues, and one small replicated presentation state that includes the server-owned `Telegraph` state. No RPC on any enemy class. The combat attribute set replicates to the owning connection only and an AI pawn has none, so no client receives enemy Health, Endurance, or Guard yet; P3 decides the fix (see [Replication](#replication)). |
 | Completion | Out of scope. The first PvE completion condition (P10-042) stays a Blocking `TBD` owned by #1 and #71. |
 
 ## Scope and Boundaries
@@ -174,7 +174,7 @@ exist; `Reset` is an instant action, not a state.
 | State | Entered when | Behavior | Leaves to |
 | --- | --- | --- | --- |
 | `Idle` | Spawn, reset done | Stands at home. Runs the eligibility query. | `Engage` when a target is eligible, or `Telegraph` when that target is already in range and the enemy can attack |
-| `Engage` | A target is chosen | Path-follows toward the target. Re-runs target choice. | `Telegraph` when the target is within `ProvisionalAttackRange` and the enemy can attack; `Return` when no target is eligible, the enemy leaves its leash, or a move request fails |
+| `Engage` | A target is chosen | Path-follows toward the target. Re-runs target choice. | `Telegraph` when the target is within `ProvisionalAttackRange` and the enemy can attack; `Return` when no target is eligible (a target beyond the leash is not eligible) or a move request fails |
 | `Telegraph` | Attack chosen | Stops moving and faces the target. Lasts `ProvisionalTelegraphSeconds`. No step is registered yet. | `Attack` at its end; `Engage` if the target stopped being eligible before the step started (no step is registered) |
 | `Attack` | Step registered at `S` | Stays still. Wind-up, active, and recovery are the step's windows: `[S, S + ActiveStart)`, `[S + ActiveStart, S + ActiveEnd)`, `[S + ActiveEnd, S + RecoveryEnd)`. | `Engage` at `S + RecoveryEnd`; `Interrupted` on an interruption |
 | `Interrupted` | Timeline interruption at contact time `C` | Stays still from `C` for `ProvisionalInterruptedSeconds`. | `Engage` at its end |
@@ -216,7 +216,7 @@ The controller makes no decision in its own tick. The timeline pass drives it:
 1. In pass step 1, after the players' buffered starts and before the sweeps,
    the subsystem raises `OnPassStart(Now)`. It is raised before the pass
    sorts its steps and snapshots their activation ids
-   (`AethelnCombatTimelineSubsystem.cpp:197-200`), so a step registered in it
+   (the sort and the id snapshot at the start of `HandlePostActorTick`), so a step registered in it
    is part of this pass. Each bound enemy controller, in the
    order they were bound, applies every transition due up to `Now`. A
    transition due at an authored time `T <= Now` starts its state at `T`; a
@@ -228,8 +228,11 @@ The controller makes no decision in its own tick. The timeline pass drives it:
    has already resolved.
 3. Path-following results that arrive during the actor tick are only recorded,
    and only for the controller's current move request (matched by request id);
-   a result of a replaced or aborted request is dropped. The controller applies
-   the recorded result at the next pass start.
+   a result recorded for the current request id is applied at the next pass start,
+   and `Aborted` changes nothing (`DecideMoveRecovery`). A request that finishes
+   inside `MoveTo` itself (`Failed` or `AlreadyAtGoal`) is handled from the
+   return code, not from the callback: the controller stores the new request id
+   only after `MoveTo` returns, so that synchronous callback is dropped.
 4. A reset decided in pass step 1 (respawn, return home, a failed move request
    in `Return`, or stuck recovery) does not move or heal the enemy there. It is
    pending until the subsystem raises `OnPassEnd(Now)` after the pass's
@@ -377,19 +380,20 @@ identity stay, so no client sees a destroyed and re-created enemy.
 
 ## Replication
 
-Everything the clients need is already replicated, except one struct:
+Position, result cues, and the presentation struct reach clients. Enemy Health, Endurance, and Guard do not yet:
 
 | Data | Path | Audience |
 | --- | --- | --- |
 | Position and rotation | Character movement replication | All relevant clients |
-| Health and the other attributes | The pawn's attribute set (Minimal mode replicates attributes, not effects) | All relevant clients |
+| Health and the other attributes | The pawn's attribute set, which replicates `COND_OwnerOnly` (`AethelnCombatAttributeSet.cpp`); an AI pawn has no owning connection, so no client receives them | None until P3 changes the condition or adds a path (#61 decides what opponents may see) |
 | Contact results | `MulticastCombatResultCue` on the target's ASC | All relevant clients |
 | State and attack timing | `FAethelnEnemyPresentationState` on `AAethelnEnemyCharacter` | All relevant clients |
 
 `FAethelnEnemyPresentationState` holds the state, its server start time, the
 ability id and content version of the current step, the step start time, the
 accepted aim, and a wrapping attack counter so a repeated attack replicates as
-a change. The server-owned `Telegraph` state and its start time are the tell;
+a change. The step fields keep the last step's values while `State` is
+`Interrupted` or later, so clients key on `State`. The server-owned `Telegraph` state and its start time are the tell;
 clients derive wind-up, active, and recovery from the step start time and the
 ability's configured windows, as observers of the player chain do. A reset
 shows as `Idle` at home. Presentation never feeds back: no enemy class has a
@@ -452,7 +456,9 @@ same fixtures. Every test is written red first. Test names are under
    and tests E1 to E11.
 3. **P3**: navmesh and one enemy in the prototype space, real-navmesh and
    two-client evidence (E12, E13), and measurements for #45. Needs approved
-   provisional values.
+   provisional values. E13 needs clients to see enemy Health: P3 changes the
+   attribute replication condition or adds a client path for it first (the
+   attribute set is `COND_OwnerOnly` today).
 
 ## Open Decisions
 
