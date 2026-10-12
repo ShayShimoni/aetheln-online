@@ -2093,6 +2093,27 @@ Every accepted decision records:
     run the wrapper against a fake `Build.bat` that reports whether the
     target's makefile still exists when it starts; they require that it did
     not, and that a makefile of another target or configuration remains.
+- **Amendment (2026-10-12, every declared project test, issue #237):** the
+  harness this job runs no longer runs the frozen two-test filter. It runs
+  `^Aetheln.`, every test whose full path starts with `Aetheln.`. Before
+  launch it derives the expected set by scanning `Source/` at the tested
+  revision for `IMPLEMENT_SIMPLE_AUTOMATION_TEST` declarations, and it still
+  requires exact discovery against that set. A scan with no tests, a
+  duplicate, an unprefixed name, or a declaration form it cannot read fails
+  `preflight` before the editor starts. The receipt producer and the
+  aggregate check every record against the same selection: the filter, 1 to
+  1024 tests, each `Aetheln.`-prefixed, unique, and passed without warnings or
+  errors. The aggregate's parse bounds for this report rise to 8192
+  properties and 1024 array items. The report schema (version 1), the
+  failure-reason set, the workflow, the step bounds, and the CI authority
+  predicate are unchanged.
+  - *Measured:* on 2026-10-12 the full harness ran 142 tests in 36 s on the
+    pinned engine at PR #333's head, against its 600-second timeout and
+    12-minute step, so no bound changes.
+  - *Rejected for now:* the receipt and aggregate re-scanning `Source/`
+    themselves. Both hosted jobs check out the tested revision, so this
+    remains possible, but it needs a source-root input and fixture source
+    trees in three test files.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
@@ -2578,6 +2599,70 @@ Every accepted decision records:
 - **Revisit trigger:** the first live launcher run, a recorded
   `content_workspace_revision_changed` race, a report that approaches the 4 MiB
   limit, or the producer-5 change.
+
+### TA-026 - Server-Only C++ State Machine for the Prototype Enemy
+
+- **Status:** Accepted
+- **Acceptance:** Accepted when the delivery lead merges the reviewed issue #83
+  P1 pull request, under the owner's delegated authority.
+- **Scope:** The prototype's one enemy (issues #83 and #20): its decision
+  logic, perception, and navigation control. Not later enemy archetypes,
+  elites, or bosses.
+- **Decision:** The enemy's decisions run in a server-only C++ state machine
+  inside a project `AAIController` subclass, driven by the #60 timeline pass,
+  as specified in [Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md).
+  Perception is a server-side eligibility query, not AI Perception. Movement
+  uses the engine's path following on a static navmesh. `GameCombat` adds the
+  engine runtime module `AIModule`, which brings `NavigationSystem` as its own
+  public dependency. The prototype adds no Behavior Tree, Blackboard,
+  StateTree, or AI Perception asset, and enables no plugin.
+- **Context:** #83 requires the AI approach to come from measured prototype
+  needs, not from habit. No enemy code existed when this was decided, so the
+  needs below come from the canonical documents and the existing combat code,
+  not from running candidates side by side. The #83 criterion is therefore
+  only partly met until #83 P3 records measurements.
+- **Evidence (needs derived from the documents and code):**
+  - One enemy type with one attack in one controlled space
+    (`docs/game-design-bible.md`, ledger row P10-014). The specification has
+    seven flat states and no nesting, parallel branches, or shared
+    sub-behaviors.
+  - Server-only decisions (TA-002, TA-003). An `AAIController` exists only on
+    the server, so a controller-owned state machine gives clients nothing to
+    run or drive.
+  - Deterministic headless tests. The repository's combat tests run in a
+    headless automation world with no editor-authored assets
+    (`Source/GameTests/Private/AethelnCombatTestWorld.h`). A C++ state machine
+    runs there directly and is reviewed as text. Behavior Tree and StateTree
+    both need an editor-authored binary asset, which a reviewer cannot read as
+    text and which the content validation of #120 would then govern.
+  - No plugin change. StateTree is a plugin that is off by default, so using it
+    means enabling it in the `.uproject`, a project-wide change to every
+    target. `AIModule` and `NavigationSystem` are engine runtime modules and
+    need no plugin.
+  - Exact authored times. The enemy's transitions must use the timeline's
+    authored times and run inside its pass. This is not a differentiator: a
+    Behavior Tree task or a StateTree state could keep the same time
+    bookkeeping. It only means a framework would not remove that code.
+- **Not yet measured:** decision cost per enemy per frame, navmesh build time
+  and size, and behavior under the network profiles. No candidate was
+  prototyped and timed against another. #83 P3 records the first three for
+  #45 (measurements only, no thresholds).
+- **Alternatives:** Behavior Tree with Blackboard (rejected for the prototype:
+  an editor asset and a brain component for seven flat states, outside the
+  headless tests); StateTree (rejected for the prototype: a plugin enable and
+  an editor asset, outside the headless tests); AI Perception (rejected for the
+  prototype: the arena has no line-of-sight rule, and eligibility is a
+  combat-policy query the timeline already defines).
+- **Consequences:** New enemy behavior needs a programmer and a code review.
+  The state machine must keep each transition at its authored time, run inside
+  the timeline pass, and stay covered by headless tests. A later change to
+  Behavior Tree or StateTree must keep the server-only rule and the timeline's
+  ordering.
+- **Owner:** Issue #83, with issue #20 for the enemy's behavior.
+- **Revisit trigger:** a second enemy archetype, an elite or boss with layered
+  behavior, a designer who must author behavior without code, an arena with
+  cover that needs line of sight, or a P3 measurement that shows the state
+  machine as a material server cost.
 
 ## Candidate Decisions
 

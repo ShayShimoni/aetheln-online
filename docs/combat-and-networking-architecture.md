@@ -444,8 +444,11 @@ ID is Order-scoped (an `order.<order>.` prefix), as in `Ability.Oathscar.GateSte
 `Cooldown.Oathscar.GateStep`. Order-scoped state follows the same form,
 `State.<Order>.<Name>`. A shared action with no Order-scoped semantic ID, such
 as dodge, block, or sprint, uses `<Family>.<Name>`, for example
-`Cooldown.Dodge` and `State.Dodging`. The basic chain takes the form its
-semantic ID dictates (`order.oathscar.ability.sword_shield_basic_chain` is
+`Cooldown.Dodge` and `State.Dodging`. An enemy-scoped semantic ID (an
+`enemy.<enemy>.` prefix, proposed for #106) gives `<Family>.Enemy.<Enemy>.<Name>`,
+as in `Ability.Enemy.Greybox.Strike` for `enemy.greybox.ability.strike`
+(#83); the `Enemy` segment keeps enemy tags apart from Order-scoped ones. The
+basic chain takes the form its semantic ID dictates (`order.oathscar.ability.sword_shield_basic_chain` is
 Order-scoped). `Ability.Melee.Combo1` is the spike's string and a spelling
 example only. This keeps the mapping from tag to semantic ID one to one.
 
@@ -491,6 +494,7 @@ manual and checked in review.
 | `SetByCaller.Pressure.Guard` | (negated Guard pressure of the shared Guard pressure effect) | #18 P4 |
 | `State.EnduranceRecoveryDelayed`, `State.GuardRecoveryDelayed` | (recovery delay states of `combat.resource.endurance` and `combat.resource.guard`) | #292 |
 | `SetByCaller.Recovery.Amount`, `SetByCaller.Recovery.Delay` | (step amount and delay length of the recovery effects) | #292 |
+| `Ability.Enemy.Greybox.Strike` | `enemy.greybox.ability.strike` (working name, assigned by #83) | #83 P2 |
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and

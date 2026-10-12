@@ -445,6 +445,10 @@ Each frame the pass:
    it, so the part of its window up to `Now` is swept in this same pass. A step
    that starts on a request registers the same way, with `LastSample` equal to
    its start. The first sweep of a step includes initial overlaps at its start.
+   Then the subsystem raises `OnPassStart(Now)`: the enemy controllers of #83
+   advance to `Now` and register any enemy step due at `S <= Now` with start
+   `S`, so this same pass sweeps it
+   ([Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md#timing)).
 2. **Sweeps.** For every registered step, in activation-ordinal order, it
    sweeps the active window over
    `(LastSample, min(Now, S + ActiveEnd, ResetTime)]` and queues contact
@@ -470,7 +474,9 @@ Each frame the pass:
    invalidate the frame's contacts. The buffered start is the one boundary
    applied before sweeping, in pass step 1.
 5. **Emits** records, cues, telemetry, and lethal notifications from committed
-   results, and removes the steps that were reset.
+   results, and removes the steps that were reset. Between the emission and the
+   removal it raises `OnPassEnd(Now)`, where a #83 enemy controller applies a
+   pending reset, so the pass resolved against the pre-reset enemy.
 
 Rules:
 
@@ -616,8 +622,9 @@ and never repeat damage, interruption, or a cue.
 ### Lethal results
 
 The subsystem exposes a native multicast `OnLethalResult(TargetAsc,
-ActivationId)`, raised once per target from the committed result. #21 binds it
-and applies `State.Dead`. Until #21 lands nothing binds it, and a zero-Health
+ActivationId, ContactTime)`, raised once per target from the committed result
+(#83 added the contact time). #21 binds it and applies `State.Dead`; the #83
+enemy controller binds it and dies at the contact time. Until #21 lands nothing binds it, and a zero-Health
 target is not alive to step 1, so it takes no further results and its attacks
 fail revalidation.
 
@@ -657,8 +664,10 @@ P5 delivers it as follows:
   has nothing to bump; the first configured version includes the P5 fields.
   The test fixture keeps version 1.
 - **Enemy targets.** An enemy has no chain. Interrupting one only stamps its
-  registered steps, so their later contacts drop; #20 decides what else an
-  interrupted enemy step does.
+  registered steps, so their later contacts drop. The subsystem then raises
+  `OnTargetInterrupted(TargetAsc, ContactTime)`, and the #83 enemy controller
+  enters its `Interrupted` state at the contact time; #20 decides what else an
+  interrupted enemy does.
 - **Exact trades.** Contacts at the same time resolve by activation ordinal
   (see [Total order](#total-order)). When two interrupting steps hit each
   other at the same contact time, the earlier-registered activation resolves
@@ -1052,12 +1061,12 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 (interruption row P5) | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time, ahead of an earlier-registered step with a later contact. The row for an interruption in the same frame with a contact time before `S + LinkOpen` (the start is cancelled, with no record and no contact) moves to P5 with A15, where interruption is delivered |
 | A29 | `Aetheln.GameCombat.AttackTimeline.ChainStartFailures` | P4 | H | A chain press that commits and whose step then cannot start reports `InternalFailure`, keeps its spent cost, advances the accepted sequence, and a replay is `DuplicateSequence` with no second spend; a client-mode world creates no subsystem, refuses registration, runs no pass, and commits no press |
 
-CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
-so each code PR records local automation evidence at its exact head on the
-pinned engine, as #19 does. P2 to P5 run `Aetheln.GameCombat`; P3 and P4 also
-run `Aetheln.Movement` and `Aetheln.POC`, because they change GameCore (tags,
-capsule response). P6 runs `Aetheln.POC` and records the manual PIE steps. No
-#60 PR changes the GameNet vocabulary.
+CI ran a frozen two-test filter until #237 widened it to every declared
+`Aetheln.` test, so each code PR records local automation evidence at its exact
+head on the pinned engine, as #19 does. P2 to P5 run `Aetheln.GameCombat`; P3
+and P4 also run `Aetheln.Movement` and `Aetheln.POC`, because they change
+GameCore (tags, capsule response). P6 runs `Aetheln.POC` and records the manual
+PIE steps. No #60 PR changes the GameNet vocabulary.
 
 ## Acceptance-Criteria Mapping
 

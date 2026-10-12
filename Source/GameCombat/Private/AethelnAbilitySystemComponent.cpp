@@ -1075,6 +1075,16 @@ void UAethelnAbilitySystemComponent::ServerSetReplicatedEventWithPayload_Impleme
 	RefuseStockRoute();
 }
 
+void UAethelnAbilitySystemComponent::ServerPrintDebug_Request_Implementation()
+{
+	RefuseStockRoute();
+}
+
+void UAethelnAbilitySystemComponent::ServerPrintDebug_RequestWithStrings_Implementation(const TArray<FString>& Strings)
+{
+	RefuseStockRoute();
+}
+
 void UAethelnAbilitySystemComponent::OnUnregister()
 {
 	ResetChain(EAethelnChainEndReason::AvatarLost);
