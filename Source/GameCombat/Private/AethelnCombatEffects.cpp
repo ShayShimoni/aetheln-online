@@ -87,3 +87,27 @@ UAethelnGuardPressureEffect::UAethelnGuardPressureEffect()
 	Modifier.ModifierOp = EGameplayModOp::AddBase;
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Pressure);
 }
+
+// Red-first stubs (#292): the implementation commit replaces these bodies.
+void UAethelnResourceRecoveryEffect::Configure(const FGameplayAttribute& Attribute, const FGameplayTag& InDelayTag)
+{
+}
+
+FActiveGameplayEffectHandle UAethelnResourceRecoveryEffect::Start(UAbilitySystemComponent& AbilitySystemComponent, TSubclassOf<UAethelnResourceRecoveryEffect> Recovery, const FAethelnResourceRecoveryValues& Values)
+{
+	return FActiveGameplayEffectHandle();
+}
+
+void UAethelnResourceRecoveryEffect::RestartDelay(UAbilitySystemComponent& AbilitySystemComponent, TSubclassOf<UAethelnResourceRecoveryEffect> Recovery)
+{
+}
+
+UAethelnEnduranceRecoveryEffect::UAethelnEnduranceRecoveryEffect()
+{
+	Configure(UAethelnCombatAttributeSet::GetEnduranceAttribute(), AethelnGameplayTags::State_EnduranceRecoveryDelayed);
+}
+
+UAethelnGuardRecoveryEffect::UAethelnGuardRecoveryEffect()
+{
+	Configure(UAethelnCombatAttributeSet::GetGuardAttribute(), AethelnGameplayTags::State_GuardRecoveryDelayed);
+}

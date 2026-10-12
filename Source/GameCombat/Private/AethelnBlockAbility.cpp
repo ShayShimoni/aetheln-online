@@ -102,6 +102,8 @@ EAethelnBlockConsequence UAethelnBlockAbility::HandleBlockedHit(const FAethelnBl
 		{
 			Pressure.Data->SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Pressure_Guard, -Contact.GuardPressure);
 			Source->ApplyGameplayEffectSpecToTarget(*Pressure.Data.Get(), ASC);
+			// Pressure, including a breaking one, restarts the defender's Guard recovery delay (#292).
+			UAethelnResourceRecoveryEffect::RestartDelay(*ASC, UAethelnGuardRecoveryEffect::StaticClass());
 		}
 	}
 	if (ASC->GetNumericAttribute(UAethelnCombatAttributeSet::GetGuardAttribute()) > 0.0f) { return EAethelnBlockConsequence::Blocked; }
