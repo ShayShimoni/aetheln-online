@@ -384,7 +384,7 @@ bool FAethelnEnemyDeathResetTest::RunTest(const FString& Parameters)
 	F.AdvanceTo(S + 0.2);
 	TestNull(TEXT("A dead enemy has no target"), E.Controller->GetTarget());
 	// Only the player's own chain step is left (registered until 0.05 + 0.625); the enemy's step, unstamped, would make it two.
-	TestEqual(TEXT("The dead enemy's step is stamped and removed"), F.Timeline->GetRegisteredStepCountForTests(), 1);
+	TestEqual(TEXT("Only the player's chain step remains registered"), F.Timeline->GetRegisteredStepCountForTests(), 1);
 	TestNull(TEXT("The dead enemy's step made no contact"), FindResult(F, AethelnGameplayTags::Ability_Enemy_Greybox_Strike));
 	E.Pawn->SetActorLocation(FVector(200.0, 0.0, 0.0)); // moved while dead; reset must bring it home
 	const double ResetTime = DeathTime + Respawn;
