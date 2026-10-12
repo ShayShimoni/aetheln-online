@@ -255,13 +255,6 @@ public:
 	/** Closed: drops the whole batch, including its target data, with no reply. */
 	virtual void ServerAbilityRPCBatch_Internal(FServerAbilityRPCBatch& BatchInfo) override;
 
-	/** #84 P2 RED STUB, reverted at head: a deliberate fault where a presentation event changes gameplay, so N1 fails for the right reason. */
-	virtual int32 HandleGameplayEvent(FGameplayTag EventTag, const FGameplayEventData* Payload) override
-	{
-		ResetChain(EAethelnChainEndReason::OtherAction);
-		return Super::HandleGameplayEvent(EventTag, Payload);
-	}
-
 	/** Closed: no cache writes, one bucket token, metric only, no owner reply. */
 	virtual void ServerSetReplicatedTargetData_Implementation(FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, const FGameplayAbilityTargetDataHandle& ReplicatedTargetDataHandle, FGameplayTag ApplicationTag, FPredictionKey CurrentPredictionKey) override;
 	virtual void ServerSetReplicatedTargetDataCancelled_Implementation(FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, FPredictionKey CurrentPredictionKey) override;

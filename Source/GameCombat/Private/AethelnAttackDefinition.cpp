@@ -57,7 +57,12 @@ namespace AethelnAttackTimeline
 
 const TCHAR* UAethelnAttackDefinition::FindProblem() const
 {
-	return nullptr; // #84 P2 RED STUB, reverted at head: the validator accepts everything, so N2 fails for the right reason.
+	if (StableContentId.IsNone()) { return TEXT("has no StableContentId"); }
+	if (ContentVersion < 1) { return TEXT("has ContentVersion below 1"); }
+	if (Audience != EAethelnContentAudience::Shared) { return TEXT("is not Shared (TA-027)"); }
+	if (!UAethelnGameplayAbility::IsAbilityIdentityTag(AbilityId)) { return TEXT("lacks a valid Ability. identity tag"); }
+	if (!FMath::IsFinite(EnduranceCost) || EnduranceCost < 0.0f) { return TEXT("has a non-finite or negative cost"); }
+	return AethelnAttackTimeline::FindStepListProblem(Steps, MaxSampleDistance, MaxSampleAngleDegrees);
 }
 
 #if WITH_EDITOR
