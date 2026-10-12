@@ -13,7 +13,7 @@
 // #260: contacts and outcomes of the representative Oathscar actives (docs/attack-timeline-and-combo.md,
 // Representative actives). Gate Step and Sworn Rebuke run as single-step attacks on #60's timeline; Hold the
 // Line holds #18's defense slot. Fixture geometry and windows, not tuning: the chain fixture's step, whose
-// radius-10 sphere first touches a radius-42 capsule 60 units ahead at its start + 0.125 + 0.125 * 8 / 30, and
+// radius-10 sphere first touches a target dummy 60 units ahead at its start + 0.125 + 0.125 * 16 / 30, and
 // overlaps one 40 units ahead at its ActiveStart. Only an enemy can hit a player (OQ1), so the attacker of a
 // player is an enemy dummy whose step is registered directly on the timeline, as #20's enemy steps will be.
 namespace AethelnOathscarContactTests
@@ -22,7 +22,8 @@ namespace AethelnOathscarContactTests
 	using EResult = EAethelnActivationResult;
 	using EOutcome = EAethelnCombatResultOutcome;
 
-	constexpr double ContactOffset60 = 0.125 + 0.125 * 8.0 / 30.0;
+	/** A target dummy 60 units ahead (as in #60's A26 and A27 rows). */
+	constexpr double ContactOffset60 = 0.125 + 0.125 * 16.0 / 30.0;
 
 	float Health(const UAethelnAbilitySystemComponent& AbilitySystem)
 	{
@@ -294,9 +295,10 @@ bool FAethelnOathscarInterruptionTest::RunTest(const FString& Parameters)
 		FFixture F; if (!F.Init(*this, Attacks())) { return false; }
 		AAethelnCombatAICharacter* Enemy = SpawnEnemy(*this, F, FVector(60.0, 0.0, 0.0));
 		if (Enemy == nullptr) { return false; }
-		TestEqual(TEXT("The active is accepted"), Submit(F, AbilityId), EResult::Accepted); // contact at 0.1583
+		TestEqual(TEXT("The active is accepted"), Submit(F, AbilityId), EResult::Accepted); // contact on the enemy at 0.1917
 		F.AdvanceTo(0.0625);
-		const FGuid EnemyId = Swing(F, *Enemy, [](FAethelnAttackStepDefinition& Step) { Step.InterruptibleUntil = 0.5; }); // contact at 0.2208
+		// Contact on the player's radius-42 capsule at 0.0625 + 0.125 + 0.125 * 8 / 30 = 0.2208, after the active's.
+		const FGuid EnemyId = Swing(F, *Enemy, [](FAethelnAttackStepDefinition& Step) { Step.InterruptibleUntil = 0.5; });
 		TestTrue(TEXT("The enemy step registers"), EnemyId.IsValid());
 		F.AdvanceTo(0.5);
 		const FAethelnCombatResult* PlayerResult = F.Records.Num() == 1 ? ResultFor(F, F.Records[0].ActivationId) : nullptr;
@@ -459,7 +461,7 @@ bool FAethelnOathscarNetworkConditionsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Forward sequence gap after a drop"), F.Player.AbilitySystem->ProcessServerRequest(MakeRequest(F, GateStepId, 20)), EResult::Accepted);
 	}
 	// A27: teardown during wind-up or after the contact: one end, no contact at or after the teardown time.
-	for (double Time : { 0.0625, 0.1875 })
+	for (double Time : { 0.0625, 0.25 })
 	{
 		FFixture F; if (!F.Init(*this, Attacks())) { return false; }
 		if (F.SpawnTarget(*this, FVector(60.0, 0.0, 0.0)) == nullptr) { return false; }
