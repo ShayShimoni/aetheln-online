@@ -42,6 +42,42 @@ namespace AethelnAttackTimeline
 		return FMath::IsFinite(Count) && Count <= static_cast<double>(MAX_int32) ? static_cast<int32>(Count) : 0;
 	}
 
+	const TCHAR* FindStepProblem(const FAethelnAttackStepDefinition& S, bool bFinalStep)
+	{
+		for (double Value : { S.ActiveStart, S.ActiveEnd, S.BufferOpen, S.LinkOpen, S.LinkClose, S.RecoveryEnd, S.CancelOpen, S.MaxAimPitchDegrees, S.InterruptibleUntil })
+		{
+			if (!FMath::IsFinite(Value) || Value < 0.0) { return TEXT("has a non-finite or negative step value"); }
+		}
+		if (!(S.ActiveStart < S.ActiveEnd && S.ActiveEnd <= S.BufferOpen
+			&& S.ActiveEnd <= S.CancelOpen && S.CancelOpen <= S.RecoveryEnd && S.InterruptibleUntil <= S.RecoveryEnd))
+		{
+			return TEXT("has invalid active, buffer, commitment or interruptible ordering");
+		}
+		if (bFinalStep)
+		{
+			if (S.BufferOpen != S.RecoveryEnd || S.LinkOpen != 0.0 || S.LinkClose != 0.0)
+			{
+				return TEXT("has a final-step buffer or link window");
+			}
+		}
+		else if (!(S.BufferOpen <= S.LinkOpen && S.LinkOpen <= S.RecoveryEnd
+			&& S.RecoveryEnd <= S.LinkClose && S.LinkOpen < S.LinkClose))
+		{
+			return TEXT("has invalid link or recovery ordering");
+		}
+		if (S.Shape > EAethelnAttackShape::Box || S.ShapeExtent.ContainsNaN()
+			|| S.ShapeExtent.X <= 0.0 || S.ShapeExtent.Y <= 0.0 || S.ShapeExtent.Z <= 0.0
+			|| (S.Shape == EAethelnAttackShape::Capsule && S.ShapeExtent.Z < S.ShapeExtent.X)
+			|| !S.PathStart.IsValid() || !S.PathEnd.IsValid()
+			|| !FMath::IsFinite(S.WroughtDamage) || S.WroughtDamage < 0.0f
+			|| !FMath::IsFinite(S.GuardPressure) || S.GuardPressure < 0.0f
+			|| S.MaxTargets < 1 || S.MaxAimPitchDegrees > 90.0)
+		{
+			return TEXT("has an invalid shape, damage, Guard pressure, target bound or pitch clamp");
+		}
+		return nullptr;
+	}
+
 	bool IsInsideDefenseArc(double DefenderYawDegrees, const FVector& DefenderCenter, const FVector& AttackerOrigin, double ArcDegrees)
 	{
 		if (!FMath::IsFinite(DefenderYawDegrees) || !FMath::IsFinite(ArcDegrees) || ArcDegrees <= 0.0 || ArcDegrees > 360.0) { return false; }
@@ -57,15 +93,6 @@ namespace AethelnAttackTimeline
 
 namespace
 {
-	/** Not alive: State.Dead, no Health attribute (fails closed until #21), or zero Health. */
-	bool IsAlive(const UAethelnAbilitySystemComponent& AbilitySystem)
-	{
-		const FGameplayAttribute Health = UAethelnCombatAttributeSet::GetHealthAttribute();
-		return !AbilitySystem.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead)
-			&& AbilitySystem.HasAttributeSetForAttribute(Health)
-			&& AbilitySystem.GetNumericAttribute(Health) > 0.0f;
-	}
-
 	FCollisionShape MakeShape(const FAethelnAttackStepDefinition& Step)
 	{
 		switch (Step.Shape)
@@ -100,7 +127,7 @@ void UAethelnCombatTimelineSubsystem::Deinitialize()
 		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->ResetChain(EAethelnChainEndReason::AvatarLost); ASC->CancelDodge(); }
 	}
 	Steps.Reset(); AbilitySystems.Reset(); CombatIds.Reset(); Defenses.Reset();
-	OnWindowEvaluated.Clear(); OnResultCommitted.Clear(); OnLethalResult.Clear();
+	OnWindowEvaluated.Clear(); OnResultCommitted.Clear(); OnLethalResult.Clear(); OnTargetInterrupted.Clear(); OnPassStart.Clear(); OnPassEnd.Clear();
 	Super::Deinitialize();
 }
 
@@ -157,6 +184,14 @@ bool UAethelnCombatTimelineSubsystem::IsHostile(const UAethelnAbilitySystemCompo
 	return &Attacker != &Target && bAttackerIsPlayer != bTargetIsPlayer;
 }
 
+bool UAethelnCombatTimelineSubsystem::IsAlive(const UAethelnAbilitySystemComponent& AbilitySystem)
+{
+	const FGameplayAttribute Health = UAethelnCombatAttributeSet::GetHealthAttribute();
+	return !AbilitySystem.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead)
+		&& AbilitySystem.HasAttributeSetForAttribute(Health)
+		&& AbilitySystem.GetNumericAttribute(Health) > 0.0f;
+}
+
 bool UAethelnCombatTimelineSubsystem::SetDefenseState(UAethelnAbilitySystemComponent& Target, const FAethelnDefenseState& State)
 {
 	// A slot without a hook would block for free (no Guard pressure, no break): fail closed.
@@ -194,6 +229,7 @@ void UAethelnCombatTimelineSubsystem::HandlePostActorTick(UWorld* World, ELevelT
 	{
 		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->StartBufferedChainStep(Now, true); } // record held to step 5
 	}
+	// Then the enemy controllers (#83) advance to Now: a step due at S <= Now registers here, so this pass sweeps it.
 	Steps.Sort([](const FStep& A, const FStep& B) { return A.Ordinal < B.Ordinal; });
 	// Snapshot identities: callbacks may register/reset; never retain an array reference across them.
 	TArray<FGuid> Ids;
@@ -244,6 +280,7 @@ void UAethelnCombatTimelineSubsystem::HandlePostActorTick(UWorld* World, ELevelT
 		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->SendHeldCombatActivation(); }
 	}
 	for (const FCommitted& Result : Committed) { Emit(Result); }
+	// After emission: the enemy controllers (#83) apply a pending reset, so this pass resolved against the pre-reset enemy.
 	Steps.RemoveAll([Now](const FStep& Entry) { return !Entry.AbilitySystem.IsValid() || Entry.ResetTime <= Now; });
 	AbilitySystems.RemoveAll([](const auto& Source) { return !Source.IsValid() || !Source->HasPendingBoundaries(); });
 	for (auto Iterator = CombatIds.CreateIterator(); Iterator; ++Iterator)
@@ -441,6 +478,6 @@ void UAethelnCombatTimelineSubsystem::Emit(const FCommitted& Committed)
 	OnResultCommitted.Broadcast(Committed.Result);
 	if (Committed.Result.bLethal)
 	{
-		if (UAethelnAbilitySystemComponent* Target = Committed.Target.Get()) { OnLethalResult.Broadcast(Target, Committed.Result.ActivationId); }
+		if (UAethelnAbilitySystemComponent* Target = Committed.Target.Get()) { OnLethalResult.Broadcast(Target, Committed.Result.ActivationId, 0.0); }
 	}
 }

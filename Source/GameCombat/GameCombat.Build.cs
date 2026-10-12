@@ -8,6 +8,7 @@ public class GameCombat : ModuleRules
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{
+			"AIModule",
 			"Core",
 			"CoreUObject",
 			"Engine",
