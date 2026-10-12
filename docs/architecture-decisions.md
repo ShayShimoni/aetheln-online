@@ -2577,6 +2577,57 @@ Every accepted decision records:
   `content_workspace_revision_changed` race, a report that approaches the 4 MiB
   limit, or the producer-5 change.
 
+### TA-027 - One Shared Primary Data Asset per Authored Attack Definition
+
+- **Status:** Accepted
+- **Acceptance:** Lead decision D1 on issue #84 (2026-10-12), recorded from
+  the [Animation and Combat-Content Authoring Pipeline](animation-and-combat-content-pipeline.md#storage-form).
+- **Scope:** Issue #84 authoring pipeline; the authored form of attack
+  definitions that #60 (basic chain), #20 (enemy steps), and #260 (Oathscar
+  actives) read. It does not change the timeline, contacts, the request, or
+  the `CombatActivation` record.
+- **Decision:** Each authored attack is one `UAethelnAttackDefinition`, a
+  primary data asset derived from `UAethelnPrimaryAssetDefinition` with
+  audience `Shared`, governed by #120 intake and content validation. It holds
+  the ability ID, the step definitions (windows, shapes, paths, damage, Guard
+  pressure, target bound, interruption), the sampling bounds, and the
+  Endurance cost. Its `StableContentId` is the registry semantic ID and its
+  `ContentVersion` is the version the request and the record carry. The
+  server reads it as the authority. A client may read its windows for
+  presentation only. It never references presentation; a client-only
+  presentation binding references it. For a migrated attack it replaces the
+  ini `ContentVersion` and step path; attacks not yet migrated keep the ini
+  path, which fails closed while unset.
+- **Context:** #60 left definitions in ini "until #84 and #106 supply the
+  asset and registry pipeline"; #106 shipped Markdown generators only. Ini
+  gives designers no editor validation, no stable-ID binding to intake, and no
+  asset for a presentation binding to reference. Observers derive phases from
+  the authored windows (#60 Observers), so the windows must reach clients.
+- **Evidence:** #84 P2 adds the class, its fail-closed validator (the same
+  step rules the chain's grant validation uses, through
+  `AethelnAttackTimeline::FindStepListProblem`), editor `IsDataValid`, and the
+  tests `Aetheln.GameCombat.AttackContent.DefinitionValidation` and
+  `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing`. No
+  definition asset exists yet: every value is `TBD` (#84 D3).
+- **Alternatives:** keep ini (no editor validation or intake binding); a
+  ServerOnly definition plus a Shared mirror of the windows (two sources of one
+  truth that can drift); generating ini from the design registry (the registry
+  carries no tuning and is not runtime data).
+- **Consequences:** shapes, damage, and cost values are in the client cook;
+  canon does not treat them as hidden information. A definition that fails its
+  validator is refused, never replaced by a default or an older version. Any
+  authoritative change bumps `ContentVersion` in the same change.
+- **Follow-up (not implemented):** migrating an attack. The ability resolves
+  its definition on the server at grant and takes the content version, steps,
+  sampling bounds, and cost from it; the reads of the ability's
+  `ContentVersion` in the ASC and the timeline then come from the definition.
+  This lands with the first authored values, not before.
+- **Owner:** Issue #84, with #60, #20, and #260 as consumers and #120 for
+  intake.
+- **Revisit trigger:** a definition value that must stay hidden from clients,
+  a second runtime consumer that needs a different form, or #106 producing
+  runtime definitions.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |

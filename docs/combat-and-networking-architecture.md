@@ -466,8 +466,10 @@ bump it. The server accepts only an exact match and otherwise fails closed with
 `IncompatibleVersion`. The request struct has its own `SchemaVersion`, which is
 bumped on any layout change; an older schema is rejected. The authoritative
 `CombatActivation` record carries the `ContentVersion` the server used. Ability
-definitions live in config ini until #106 generates them. Until then, bumps are
-manual and checked in review.
+definitions live in config ini until an attack is migrated to its Shared attack
+definition asset
+([TA-027](architecture-decisions.md#ta-027---one-shared-primary-data-asset-per-authored-attack-definition)).
+Bumps are manual and checked in review.
 
 **Initial entries.**
 

@@ -129,23 +129,38 @@ authoritative, and changing it bumps nothing.
 Today the definitions are `Config` properties in `DefaultGame.ini`, validated
 at grant time and failing closed when unset
 (`Config/DefaultGame.ini:17-38`). The basic chain has no configured
-`ContentVersion` or steps yet, so it cannot be granted. The combat document
-says ability definitions live in ini until #106 generates them; #106 closed
-with Markdown generators only.
+`ContentVersion` or steps yet, so it cannot be granted. #60 left definitions
+in ini until #84 and #106 supplied an asset pipeline; #106 closed with
+Markdown generators only.
 
-The real #84 choice is the form designers author. It is open decision D1 in
-[Open Decisions](#open-decisions). The options:
+The form designers author was decision D1. The lead decided it on 2026-10-12:
+option B, recorded as
+[TA-027](architecture-decisions.md#ta-027---one-shared-primary-data-asset-per-authored-attack-definition).
+The options compared:
 
 | Option | Shape | For | Against |
 | --- | --- | --- | --- |
 | A. Keep ini | Status quo | No code | No editor preview, no asset validation, no stable-ID binding to intake |
-| B. One Shared data asset (recommended) | `UAethelnAttackDefinition`, derived from `UAethelnPrimaryAssetDefinition`, `DA_` prefix, audience `Shared`; the ability loads it on the server at grant | Stable ID and content version already exist on the base class; the #120 validator already scans it; observers need the windows on clients anyway (#60, Observers) | Shapes and damage values are in the client cook (they are not hidden information under canon) |
+| B. One Shared data asset (selected) | `UAethelnAttackDefinition`, derived from `UAethelnPrimaryAssetDefinition`, `DA_` prefix, audience `Shared`; the ability loads it on the server at grant | Stable ID and content version already exist on the base class; the #120 validator already scans it; observers need the windows on clients anyway (#60, Observers) | Shapes and damage values are in the client cook (they are not hidden information under canon) |
 | C. ServerOnly definition plus a Shared mirror | Two assets, windows mirrored for clients | Damage and shapes stay out of the client cook | Two sources of one truth; a mirror can drift |
 
-The recommendation is B. Under any option the server reads only the
-authoritative form, its `StableContentId` equals the registry semantic ID,
-and its `ContentVersion` is the one the request and the `CombatActivation`
-record carry.
+The server reads only the definition, its `StableContentId` equals the
+registry semantic ID, and its `ContentVersion` is the one the request and the
+`CombatActivation` record carry. A client may read its windows for
+presentation only.
+
+P2 adds `UAethelnAttackDefinition`
+(`Source/GameCombat/Public/AethelnAttackDefinition.h`) and its fail-closed
+validator, which runs the chain's grant rules through one shared function,
+`AethelnAttackTimeline::FindStepListProblem`, and also requires a stable ID,
+a content version of at least 1, the `Shared` audience, an `Ability.`
+identity tag, and a finite non-negative cost. The editor runs it on save
+through `IsDataValid`. No attack is migrated yet: migration, where the ability
+resolves its definition at grant and takes its content version, steps, and
+cost from it, lands with the first authored values (D3), as TA-027 records.
+Registry membership of the stable ID cannot be checked at runtime or in the
+editor, because the registry is design data under `design/`; the #120 intake
+review checks it until a tool exists.
 
 ## Presentation Binding Contract
 
@@ -226,9 +241,9 @@ is on `develop` now; "P2" and "P3" are later phases of this issue.
 | Error | Gate | Status |
 | --- | --- | --- |
 | Missing definition or unset values | Grant validation refuses a zero `ContentVersion` (`Source/GameCombat/Private/AethelnGameplayAbility.cpp:41-44`) and a chain without exactly three valid steps (#60 A5) | Exists |
-| Missing definition asset referenced by an ability | Definition validator at editor save and at grant | P2 (after D1) |
+| Missing definition asset referenced by an ability | Resolved at grant when an attack is migrated; an unresolved reference refuses the grant | With the first migration (TA-027 follow-up) |
 | Missing montage, section, or effect in a binding | Presentation binding validator | P3 |
-| Invalid phase order | Grant validation ordering rules (#60, Step definition) | Exists; P2 runs the same rules at editor save |
+| Invalid phase order | Grant validation ordering rules (#60, Step definition), shared with the definition validator | Exists; P2 runs the same rules at editor save |
 | Unsafe volume data | Grant validation: positive extents, non-negative damage and pressure, `MaxTargets >= 1`, pitch clamp in `[0, 90]` | Exists. A maximum reach or shape size is a `TBD` budget (#45, #107); until it exists the validator reports `non_promotion`, not a pass |
 | Incompatible skeleton | `skeletal_animation` family `rig_compatibility` for meshes, skeletons, and sequences; the binding validator checks each montage's skeleton against the binding's skeleton | Family exists; binding check P3 |
 | Incompatible socket reference | `socket_ownership` counts invalid sockets per mesh; the binding validator checks each named socket exists on the binding's skeleton or mesh | Family exists; binding check P3 |
@@ -361,7 +376,7 @@ validation test, and **P** is two-client PIE recorded in the PR.
 | # | Test | Phase | Kind | What it proves |
 | --- | --- | --- | --- | --- |
 | N1 | `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing` | P2 | H | During wind-up, active, and recovery of a registered step, gameplay events (any tag, including the ability and state tags), `GameplayCue` executions, and montage play and stop requests on the server change no window, contact, result, Health, Guard, cost, cooldown, tag, chain state, or record, compared with the same run without them. Any path that cannot run headless is listed in the PR with the reason. |
-| N2 | `Aetheln.GameCombat.AttackContent.DefinitionValidation` | P2 | H | The definition validator refuses a missing asset, each phase-order violation, unsafe volume data, a stable ID that is not in the registry, and a content-version mismatch with the ability; an unset reach budget reports `non_promotion` |
+| N2 | `Aetheln.GameCombat.AttackContent.DefinitionValidation` | P2 | H | The definition validator and editor `IsDataValid` refuse a missing stable ID, content version 0, a non-Shared audience, a missing or non-`Ability.` identity tag, a negative or non-finite cost, no steps, unset sampling bounds, each phase-order violation, and unsafe volume data; a valid three-step and a valid single-step definition pass |
 | N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes |
 | N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3 | E | A Shared or ServerOnly package that hard- or soft-references a binding fails `reference_boundary`, and the intake policy declares no soft-reference rule that targets a binding path |
 | N5 | Representative lifecycle | P5 | P | One authored step runs from validated data through server resolution to presentation on both clients, under C1 and C2 |
@@ -373,7 +388,7 @@ the registry tests, and the four portable content-validation suites.
 
 | Issue #84 criterion | Covered by | Status |
 | --- | --- | --- |
-| The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; D1 for the asset form | Contract defined; asset form waits on D1 and P2 |
+| The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; TA-027 and `UAethelnAttackDefinition` (P2) | Contract and asset class defined; migrating an attack waits on D3 |
 | Montages, animation notifies, sockets, trails, audio, and VFX are presentation or authoring aids and cannot create contact, damage, cooldown, or persistence truth | [Presentation Binding Contract](#presentation-binding-contract); T13, A9, A17, D16; N1 | Enforced in code; N1 pins it in P2 |
 | The server can evaluate authored melee volumes without a client-selected target or client-claimed hit | [Server Evaluation Without Client Targets](#server-evaluation-without-client-targets); #60 A1, A9 | Met by #60 |
 | Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 | Partly exists; P2 and P3 complete it |
@@ -393,7 +408,7 @@ Each PR targets `develop` and uses `Refs #84`.
 | PR | Scope | Depends on |
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
-| **P2** Definition and focused tests | The authoritative definition in the form D1 selects, its validator at editor save and grant, N1 and N2. No values. | D1; engine time |
+| **P2** Definition and focused tests | `UAethelnAttackDefinition` (TA-027), its validator shared with grant validation, editor `IsDataValid`, N1 and N2. No values and no asset. | Engine time |
 | **P3** Presentation binding | The client-only binding, its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3 and N4. Fixture assets only. | P2; engine time |
 | **P4** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin | Owner actions O1 and O2; D2; P3 |
 | **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
@@ -411,7 +426,7 @@ Each PR targets `develop` and uses `Refs #84`.
 
 | # | Decision | Owner | Recommendation |
 | --- | --- | --- | --- |
-| D1 | Storage form of authoritative attack definitions: ini, one Shared data asset, or ServerOnly plus a Shared mirror ([Storage form](#storage-form)) | Lead (technical); may need an ADR entry | One Shared data asset (option B) |
+| D1 | Storage form of authoritative attack definitions ([Storage form](#storage-form)) | Decided by the lead, 2026-10-12: one Shared data asset, [TA-027](architecture-decisions.md#ta-027---one-shared-primary-data-asset-per-authored-attack-definition) | Done |
 | D2 | Source of sword-and-shield attack and enemy telegraph animation, which the Epic baseline does not appear to include: a third-party pack through #120 (private plugin under TA-019), Codex-generated motion, a human animator, or a placeholder presentation for P5 evidence | Owner | Placeholder presentation for P5, so evidence does not wait on art; replace later without changing gameplay |
 | D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Owner, with #45 and #97 | None; no value is proposed here |
 

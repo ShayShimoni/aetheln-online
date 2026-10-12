@@ -24,11 +24,6 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 	if (ProvisionalCooldownSeconds != 0.0f || bAcceptsRelease) { return TEXT("has a chain cooldown or Release route"); }
 	if (ProvisionalSteps.Num() != 3) { return TEXT("does not have exactly three chain steps"); }
 	if (!ResetTags.HasTagExact(AethelnGameplayTags::State_Dead)) { return TEXT("does not reset on State.Dead"); }
-	if (!FMath::IsFinite(ProvisionalMaxSampleDistance) || ProvisionalMaxSampleDistance <= 0.0
-		|| !FMath::IsFinite(ProvisionalMaxSampleAngleDegrees) || ProvisionalMaxSampleAngleDegrees <= 0.0)
-	{
-		return TEXT("has unset or invalid sampling bounds");
-	}
 	const FGameplayTagContainer Commitment(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
 	if (Commitment.HasAny(ActivationBlockedTags) || Commitment.HasAny(ResetTags))
 	{
@@ -38,42 +33,7 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 	{
 		if (!ResetTags.HasTagExact(Tag)) { return TEXT("has a blocking tag without a reset event"); }
 	}
-	for (int32 Index = 0; Index < ProvisionalSteps.Num(); ++Index)
-	{
-		const FAethelnAttackStepDefinition& S = ProvisionalSteps[Index];
-		for (double Value : { S.ActiveStart, S.ActiveEnd, S.BufferOpen, S.LinkOpen, S.LinkClose, S.RecoveryEnd, S.CancelOpen, S.MaxAimPitchDegrees, S.InterruptibleUntil })
-		{
-			if (!FMath::IsFinite(Value) || Value < 0.0) { return TEXT("has a non-finite or negative step value"); }
-		}
-		if (!(S.ActiveStart < S.ActiveEnd && S.ActiveEnd <= S.BufferOpen
-			&& S.ActiveEnd <= S.CancelOpen && S.CancelOpen <= S.RecoveryEnd && S.InterruptibleUntil <= S.RecoveryEnd))
-		{
-			return TEXT("has invalid active, buffer, commitment or interruptible ordering");
-		}
-		if (Index == 2)
-		{
-			if (S.BufferOpen != S.RecoveryEnd || S.LinkOpen != 0.0 || S.LinkClose != 0.0)
-			{
-				return TEXT("has a final-step buffer or link window");
-			}
-		}
-		else if (!(S.BufferOpen <= S.LinkOpen && S.LinkOpen <= S.RecoveryEnd
-			&& S.RecoveryEnd <= S.LinkClose && S.LinkOpen < S.LinkClose))
-		{
-			return TEXT("has invalid link or recovery ordering");
-		}
-		if (S.Shape > EAethelnAttackShape::Box || S.ShapeExtent.ContainsNaN()
-			|| S.ShapeExtent.X <= 0.0 || S.ShapeExtent.Y <= 0.0 || S.ShapeExtent.Z <= 0.0
-			|| (S.Shape == EAethelnAttackShape::Capsule && S.ShapeExtent.Z < S.ShapeExtent.X)
-			|| !S.PathStart.IsValid() || !S.PathEnd.IsValid()
-			|| !FMath::IsFinite(S.WroughtDamage) || S.WroughtDamage < 0.0f
-			|| !FMath::IsFinite(S.GuardPressure) || S.GuardPressure < 0.0f
-			|| S.MaxTargets < 1 || S.MaxAimPitchDegrees > 90.0)
-		{
-			return TEXT("has an invalid shape, damage, Guard pressure, target bound or pitch clamp");
-		}
-	}
-	return nullptr;
+	return AethelnAttackTimeline::FindStepListProblem(ProvisionalSteps, ProvisionalMaxSampleDistance, ProvisionalMaxSampleAngleDegrees);
 }
 
 bool UAethelnBasicChainAbility::CanActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
