@@ -158,7 +158,7 @@ a content version of at least 1, the `Shared` audience, an `Ability.`
 identity tag, and a finite non-negative cost. The editor runs it on save
 through `IsDataValid`. No attack is migrated yet: migration, where the ability
 resolves its definition at grant and takes its content version, steps, and
-cost from it, lands with the first authored values (D3), as TA-027 records.
+cost from it, lands in P3 with the D3 provisional values, as TA-027 records.
 Registry membership of the stable ID cannot be checked at runtime or in the
 editor, because the registry is design data under `design/`; the #120 intake
 review checks it until a tool exists.
@@ -266,7 +266,7 @@ is on `develop` now; "P2" and "P3" are later phases of this issue.
 | Missing definition asset referenced by an ability | Resolved at grant when an attack is migrated; an unresolved reference refuses the grant | With the first migration (TA-027 follow-up) |
 | Missing montage, section, or effect in a binding | Presentation binding validator | P3 |
 | Invalid phase order | Grant validation ordering rules (#60, Step definition), shared with the definition validator | Exists; P2 runs the same rules at editor save |
-| Unsafe volume data | Grant validation: positive extents, non-negative damage and pressure, `MaxTargets >= 1`, pitch clamp in `[0, 90]` | Exists. A maximum reach or shape size is a `TBD` budget (#45, #107); until it exists the validator reports `non_promotion`, not a pass |
+| Unsafe volume data | Grant validation: positive extents, non-negative damage and pressure, `MaxTargets >= 1`, pitch clamp in `[0, 90]` | Exists as structural checks only. A maximum reach or shape size is a `TBD` budget (#45, #107); until it exists no validator limits reach, an oversized volume passes, and no `non_promotion` result is produced (Residual Risk 4) |
 | Incompatible skeleton | `skeletal_animation` family `rig_compatibility` for meshes, skeletons, and sequences; the binding validator checks each montage's skeleton against the binding's skeleton | Family exists; binding check P3 |
 | Incompatible socket reference | `socket_ownership` counts invalid sockets per mesh; the binding validator checks each named socket exists on the binding's skeleton or mesh | Family exists; binding check P3 |
 | Stale identifiers | `reference_boundary` (unique stable ID, compatible content version, redirectors); the binding validator refuses a binding whose ability ID has no definition or whose content version differs | Family exists; binding check P3 |
@@ -323,7 +323,9 @@ timing, so retargeting changes presentation only.
 As far as Epic's public descriptions show, neither the mannequin template set
 nor the Game Animation Sample includes sword-and-shield attacks or enemy
 attack telegraphs. Their locomotion is a baseline, not a combat source. The
-source for attack and telegraph animation is open decision D2.
+source for attack and telegraph animation was decision D2, which the owner
+decided on 2026-10-12: a placeholder presentation for P5, with real art later
+and no change to gameplay.
 
 ### Blender MCP boundary
 
@@ -367,7 +369,7 @@ The issue asks for one representative attack and one enemy telegraph that
 stay readable under representative latency, without final tuning.
 
 - **Attack.** The first step of the Oathscar basic chain, authored as a
-  definition (values from decision D3) and a binding on the mannequin.
+  definition (provisional values from decision D3) and a binding on the mannequin.
 - **Enemy telegraph.** The telegraph is server-owned state: #83's controller
   enters `Telegraph` before it registers the #20 step and replicates it in
   `FAethelnEnemyPresentationState`. The binding's telegraph and wind-up
@@ -403,8 +405,8 @@ validation test, and **P** is two-client PIE recorded in the PR.
 
 | # | Test | Phase | Kind | What it proves |
 | --- | --- | --- | --- | --- |
-| N1 | `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing` | P2 | H | During wind-up, active, and recovery of a registered step, gameplay events (any tag, including the ability and state tags), `GameplayCue` executions, and montage play and stop requests on the server change no window, contact, result, Health, Guard, cost, cooldown, tag, chain state, or record, compared with the same run without them. Any path that cannot run headless is listed in the PR with the reason. |
-| N2 | `Aetheln.GameCombat.AttackContent.DefinitionValidation` | P2 | H | The definition validator and editor `IsDataValid` refuse a missing stable ID, content version 0, a non-Shared audience, a missing or non-`Ability.` identity tag, a negative or non-finite cost, no steps, unset sampling bounds, each phase-order violation, and unsafe volume data; a valid three-step and a valid single-step definition pass |
+| N1 | `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing` | P2 | H | During wind-up, active, and recovery of a registered step, gameplay events (any tag, including the ability and state tags), `GameplayCue` executions, and montage play and stop requests on the server change no evaluated window, recorded window offset, contact result, Health, Endurance, or Guard on either side, owned tag, active effect, cost application, chain state, chain end, or record, compared with the same run without them. Any path that cannot run headless is listed in the PR with the reason: the montage play and stop requests run on a mesh-less pawn that cannot play a montage, so those rows show only that the requests are harmless. A real montage and notify run is not proven here. |
+| N2 | `Aetheln.GameCombat.AttackContent.DefinitionValidation` | P2 | H | The definition validator and editor `IsDataValid` refuse a missing stable ID, content version 0, a non-Shared audience, a missing or non-`Ability.` identity tag, a negative or non-finite cost, no steps, unset sampling bounds, each phase-order violation, and structurally unsafe volume data; a valid three-step and a valid single-step definition pass. `StepDefinitionFailsClosed` also pins the step-rule sub-conditions. Not in N2: registry membership of the stable ID (the #120 intake review until a tool exists), `non_promotion` for an unset reach budget (no budget exists), and a content-version mismatch against a binding (N3). |
 | N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes |
 | N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3 | E | A Shared or ServerOnly package that hard- or soft-references a binding fails `reference_boundary`, and the intake policy declares no soft-reference rule that targets a binding path |
 | N5 | Representative lifecycle | P5 | P | One authored step runs from validated data through server resolution to presentation on both clients, under C1 and C2 |
@@ -416,12 +418,12 @@ the registry tests, and the four portable content-validation suites.
 
 | Issue #84 criterion | Covered by | Status |
 | --- | --- | --- |
-| The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; TA-027 and `UAethelnAttackDefinition` (P2) | Contract and asset class defined; migrating an attack waits on D3 |
+| The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; TA-027 and `UAethelnAttackDefinition` (P2) | Contract and asset class defined; migrating an attack is P3 work with the D3 provisional values |
 | Montages, animation notifies, sockets, trails, audio, and VFX are presentation or authoring aids and cannot create contact, damage, cooldown, or persistence truth | [Presentation Binding Contract](#presentation-binding-contract); T13, A9, A17, D16; N1 | Enforced in code; N1 pins it in P2 |
 | The server can evaluate authored melee volumes without a client-selected target or client-claimed hit | [Server Evaluation Without Client Targets](#server-evaluation-without-client-targets); #60 A1, A9 | Met by #60 |
-| Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 | Partly exists; P2 and P3 complete it |
+| Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 | Partly exists; P2 adds the definition validator and P3 the binding validator. The grant-time check for a missing definition asset exists only after the first attack migration (P3, TA-027 follow-up), and a definition's registry membership stays with the #120 intake review |
 | The pipeline defines source-control/LFS/locking expectations and coordinates with #14 before non-map binary assets land | [Source Control, LFS, and Locking](#source-control-lfs-and-locking) | Defined; no matrix change needed |
-| A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on D2, D3, #83, #20, #61, #45, and owner actions |
+| A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on #83, #20, #61, #45, the P3 provisional values (D3 decided), the D2 placeholder presentation, and owner feel review (O3) |
 
 | Definition of done | Covered by | Status |
 | --- | --- | --- |
@@ -437,9 +439,9 @@ Each PR targets `develop` and uses `Refs #84`.
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Definition and focused tests | `UAethelnAttackDefinition` (TA-027), its validator shared with grant validation, editor `IsDataValid`, N1 and N2. No values and no asset. | Engine time |
-| **P3** Presentation binding | The client-only binding, its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3 and N4; binding lookup without any public reference to the plugin (see below); the portable tag-to-registry check. Fixture assets only. | P2; engine time |
-| **P4** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin | Owner actions O1 and O2; D2; P3 |
-| **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3; #83 enemy controller and presentation state; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
+| **P3** Presentation binding | The client-only binding, its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3 and N4; binding lookup without any public reference to the plugin (see below); the portable tag-to-registry check; the first attack migration with the D3 provisional values (see Open Decisions). Fixture assets only. | P2; engine time |
+| **P4** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin | Owner actions O1 and O2 (O1 is not required for P5 under D2); P3 |
+| **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3 provisional values (P3); D2 placeholder presentation; #83 enemy controller and presentation state; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
 
 **Binding lookup (P3).** A binding in the private plugin cannot be reached
 through any public reference, and public `Config/` cannot name the plugin's
@@ -454,6 +456,7 @@ P3 records the exact mechanism and its test.
 
 - **O1.** Download the Game Animation Sample from Fab and accept its terms, if
   the owner chooses to. Automation must not download content or accept terms.
+  The owner decided on 2026-10-12 that O1 is not required for P5 (D2).
 - **O2.** Record where the download lives and its licence, so #120 intake can
   decide between public `Content/` and the private `AethelnArt` plugin.
 - **O3.** Review final animation feel for the representative attack and
@@ -464,8 +467,8 @@ P3 records the exact mechanism and its test.
 | # | Decision | Owner | Recommendation |
 | --- | --- | --- | --- |
 | D1 | Storage form of authoritative attack definitions ([Storage form](#storage-form)) | Decided by the lead, 2026-10-12: one Shared data asset, [TA-027](architecture-decisions.md#ta-027---one-shared-primary-data-asset-per-authored-attack-definition) | Done |
-| D2 | Source of sword-and-shield attack and enemy telegraph animation, which the Epic baseline does not appear to include: a third-party pack through #120 (private plugin under TA-019), Codex-generated motion, a human animator, or a placeholder presentation for P5 evidence | Owner | Placeholder presentation for P5, so evidence does not wait on art; replace later without changing gameplay |
-| D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Owner, with #45 and #97 | None; no value is proposed here |
+| D2 | Source of sword-and-shield attack and enemy telegraph animation, which the Epic baseline does not appear to include: a third-party pack through #120 (private plugin under TA-019), Codex-generated motion, a human animator, or a placeholder presentation for P5 evidence | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): a placeholder presentation for P5 evidence; real art later without changing gameplay | Done |
+| D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): promote the existing GameTests fixture values to `Config/DefaultGame.ini`, marked provisional, with no new numbers; re-tune at the P5 feel test | Lands in P3 with the first attack migration. P3 records whether the provisional values end up in the ini of the unmigrated chain or in the migrated definition asset |
 
 ## Residual Risks
 

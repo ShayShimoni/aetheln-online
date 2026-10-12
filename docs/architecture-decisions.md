@@ -2695,7 +2695,9 @@ Every accepted decision records:
   `AethelnAttackTimeline::FindStepListProblem`), editor `IsDataValid`, and the
   tests `Aetheln.GameCombat.AttackContent.DefinitionValidation` and
   `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing`. No
-  definition asset exists yet: every value is `TBD` (#84 D3).
+  definition asset exists yet. The owner decided the values (#84 D3, 2026-10-12): the
+  existing GameTests fixture values are promoted as provisional, with no new
+  numbers, and re-tuned at the P5 feel test. That lands in P3.
 - **Alternatives:** keep ini (no editor validation or intake binding); a
   ServerOnly definition plus a Shared mirror of the windows (two sources of one
   truth that can drift); generating ini from the design registry (the registry
@@ -2708,7 +2710,9 @@ Every accepted decision records:
   its definition on the server at grant and takes the content version, steps,
   sampling bounds, and cost from it; the reads of the ability's
   `ContentVersion` in the ASC and the timeline then come from the definition.
-  This lands with the first authored values, not before.
+  This lands in P3 with the first attack migration and the D3 provisional
+  values, not before. P3 records whether the provisional values then live in
+  the migrated definition asset or stay in the ini of an unmigrated chain.
 - **Owner:** Issue #84, with #60, #20, and #260 as consumers and #120 for
   intake.
 - **Revisit trigger:** a definition value that must stay hidden from clients,
