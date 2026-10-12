@@ -501,9 +501,9 @@ All three derive from `UAethelnGameplayAbility`.
   through `CommitAbility` the same way; T17 now runs on fixture subclasses.
   Hold the Line holds its own state tag while active,
   `State.Oathscar.HoldTheLine` (a technical identifier, not a display name),
-  listed in the Initial entries table. Its duration-or-hold behavior is still
-  an open owner decision; #260 implements hold-and-release, the one mode that
-  needs no invented value.
+  listed in the Initial entries table. Its phase behavior is hold-and-release
+  (`bAcceptsRelease`) with no fixed duration, decided by the owner on
+  2026-10-12 (open decision 5).
 
 **Grant-time validation.** `AAethelnPlayerState` refuses to grant, and logs,
 any configured class that:
@@ -1230,13 +1230,16 @@ All stay `TBD` until the named owner decides.
 4. **Numeric aim/time bounds** (#82 F1, F2). #60 P2 decides the schema-2
    representation, bounded correction and raw-to-raw rate policy. Its eight
    keys remain unset/`TBD`; owners #60, #2 and #45 approve future values.
-5. **Phase behavior of Hold the Line:** a fixed-duration commitment, or
-   hold-and-release (which would set `bAcceptsRelease`). Owners: #107 and the
-   owner. Until decided, #260 ships hold-and-release, which needs no value.
+5. **Phase behavior of Hold the Line: resolved.** The owner chose
+   hold-and-release (`bAcceptsRelease`) with no fixed duration on 2026-10-12
+   (recorded on [#260](https://github.com/ShayShimoni/aetheln-online/issues/260)).
+   The choice is provisional and is re-tuned at the P5 feel test.
 6. **Blocking and cancel relations** among the three actives, the basic chain,
-   dodge, and block. Owners: #60 and #18 content. For dodge and block, #18's
-   Q10 and Q17 (owner-approved 2026-10-10) answer it; the three actives' relations
-   stay open. #260's defaults are listed in
+   dodge, and block: **resolved.** For dodge and block, #18's Q10 and Q17
+   (owner-approved 2026-10-10) answer it. For the three actives, the owner
+   accepted #260's defaults on 2026-10-12 (recorded on
+   [#260](https://github.com/ShayShimoni/aetheln-online/issues/260)); they are
+   listed in
    [Representative actives](attack-timeline-and-combo.md#representative-actives-260).
 7. **Cooldown and attribute behavior across death, respawn, and reconnect**,
    including closing the reconnect gap. Owner: #21.

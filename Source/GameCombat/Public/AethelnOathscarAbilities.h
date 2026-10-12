@@ -38,7 +38,7 @@ public:
 
 /**
  * order.oathscar.ability.hold_the_line. Held: a seam Press raises it and a Release lowers it
- * (the duration-or-hold choice is an open owner decision; hold-and-release needs no invented value).
+ * (hold-and-release with no fixed duration, owner decision 2026-10-12).
  */
 UCLASS(Config = Game)
 class GAMECOMBAT_API UAethelnHoldTheLineAbility : public UAethelnBlockAbility

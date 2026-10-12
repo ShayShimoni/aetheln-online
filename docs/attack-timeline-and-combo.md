@@ -373,9 +373,11 @@ Abilities that the chain commits against list it in their
 step 8 rejects them with `ActivationBlocked`. After `CancelOpen` another action
 may activate if its own tags allow it, and its activation resets the chain.
 Which actions are blocked, and which may cancel recovery, is content data `TBD`
-with #18 (#19 open decision 6). For dodge and block, #18 Q10 and Q17
+with #18 (#19 open decision 6, resolved). For dodge and block, #18 Q10 and Q17
 (owner-approved 2026-10-10) answer it: the commitment tag blocks both, and an
-attack press during a dodge or while blocking is refused. Since #18 P4 the
+attack press during a dodge or while blocking is refused. The three actives'
+relations are the owner-accepted defaults in
+[Representative Actives](#representative-actives-260). Since #18 P4 the
 chain lists `State.Dodging` and `State.Blocking` among its
 `ActivationBlockedTags` and, as grant validation requires, among its reset
 tags.
@@ -720,29 +722,36 @@ the client still selects no target, claims no hit, and decides no result.
   other's state tag as an activation-blocking tag, and grant validation
   requires it. It is held and released.
 - **Gate Step's advance is not here.** Character displacement (AC2, validated
-  with #17's movement rules) is #260's package B and needs a transport
-  decision. Until then, Gate Step's contact uses the server capsule pose and its
-  authored volume path; the character is not displaced.
+  with #17's movement rules) is #260's package B, not yet implemented; its
+  transport is decided below. Until then, Gate Step's contact uses the server
+  capsule pose and its authored volume path; the character is not displaced.
 - **Production values are unset.** Steps, sampling bounds, raise, arc, and
   break times fail grant validation, as for the chain and the block, so
-  `DefaultGame.ini` grants none of the three until #107 supplies values.
-  Their `ContentVersion` is 2: the authoritative definition changed.
+  `DefaultGame.ini` grants none of the three until authored values exist (owner
+  decision, 2026-10-12). Their `ContentVersion` is 2: the authoritative
+  definition changed.
 
-Open owner decisions, with the defaults #260 ships because they invent no
-value:
+Owner decisions (recorded on #260 by the lead from chat, 2026-10-12; the values
+are provisional and are re-tuned at the P5 feel test):
 
 1. **Hold the Line phase** ([GAS Foundation](gas-foundation.md) open decision
-   5): hold-and-release. A fixed duration needs a value and an end boundary.
-2. **Relations beyond Q10 and Q17** (GAS Foundation open decision 6). The
-   attacks inherit the chain's refusal while dodging or blocking (Q17, and
-   Q10's "an attack press while blocking is refused"). Nothing lists the
-   actives' commitment tags yet, so a dodge, a block, Hold the Line, or another
-   attack may start during an active and ends it with `OtherAction`. An
-   attack may start while Hold the Line holds, and an accepted dodge does not
-   end Hold the Line (`CancelBlock` ends the block only). Hold the Line shares
-   the block's Guard rules: zero Guard refuses it, and a Guard break ends it and
-   prevents a raise for the break duration. Each of these is a one-line tag
-   list change if the owner chooses otherwise.
+   5): hold-and-release (`bAcceptsRelease`) with no fixed duration.
+2. **Relations beyond Q10 and Q17** (GAS Foundation open decision 6): the
+   defaults below are accepted. The attacks inherit the chain's refusal while
+   dodging or blocking (Q17, and Q10's "an attack press while blocking is
+   refused"). Nothing lists the actives' commitment tags, so a dodge, a block,
+   Hold the Line, or another attack may start during an active and ends it with
+   `OtherAction`. An attack may start while Hold the Line holds, and an accepted
+   dodge does not end Hold the Line (`CancelBlock` ends the block only). Hold
+   the Line shares the block's Guard rules: zero Guard refuses it, and a Guard
+   break ends it and prevents a raise for the break duration. Each of these is a
+   one-line tag list change if a later decision differs.
+3. **Production grants:** the three actives stay out of `GrantedAbilities` in
+   `DefaultGame.ini` until authored values exist; their `ContentVersion` is 2.
+4. **Gate Step's advance transport** (package B, AC2): it reuses the owner-only
+   activation records and rejection reasons of the chain and the block, with no
+   new replication path. Opponent-visible presentation comes with #61's
+   opponent view.
 3. **Gate Step's advance transport** (package B).
 
 The automated network-condition rows defined for #60, A25 (delayed,
