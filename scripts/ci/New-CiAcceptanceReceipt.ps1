@@ -370,7 +370,8 @@ function Assert-AcceptanceContentValidationEvidence {
 		$Execution.configuration -isnot [string] -or $Execution.configuration -cne 'Development' -or $Execution.registry_source -isnot [string] -or $Execution.registry_source -cne 'live_asset_registry' -or
 		$Report.result -isnot [string] -or $Report.result -cnotin @('passed','non_promotion') -or -not (Test-AcceptanceBoundedInteger -Value $Report.counts.errors -Minimum 0 -Maximum 0) -or
 		$Report.assets -isnot [array] -or @($Report.assets).Count -lt 1 -or -not (Test-AcceptanceBoundedInteger -Value $Report.counts.assets -Minimum 1 -Maximum 1000000) -or $Report.counts.assets -ne @($Report.assets).Count -or
-		$Report.findings -isnot [array] -or -not (Test-AcceptanceBoundedInteger -Value $Report.counts.findings -Minimum 0 -Maximum 1000000) -or $Report.counts.findings -ne @($Report.findings).Count) { throw $Reason }
+		$Report.findings -isnot [array] -or -not (Test-AcceptanceBoundedInteger -Value $Report.counts.findings -Minimum 0 -Maximum 1000000) -or $Report.counts.findings -ne @($Report.findings).Count -or
+		-not (Test-AcceptanceBoundedInteger -Value $Report.counts.non_promotion -Minimum 0 -Maximum 1000000)) { throw $Reason }
 	$ReferenceChecks = 'audience_reachability,broken_references,compatible_content_version,hard_reference_exceptions,redirectors,stable_id_unique'
 	$LifecycleByAsset = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
 	foreach ($Asset in @($Report.assets)) {

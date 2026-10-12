@@ -2460,6 +2460,12 @@ Every accepted decision records:
     leased re-sync puts the managed workspace at the tested revision, the
     issue #299 editor gate (TA-020 amendment) also runs the editor job when
     `scripts/content/Invoke-ContentValidation.ps1` changes (2026-10-12).
+    The job also reads the editor job's `automation_reason` and does not start
+    after `editor_host_lease_failed`, `editor_host_lease_release_failed`, or
+    `editor_build_interrupted`, when the host lease state is unknown and the
+    editor job keeps the workspace and the held journal as recovery evidence
+    (#243), or after `superseded_head`, when the managed workspace may still
+    hold this stale head (2026-10-12, PR #326 review).
   - *Bounds (D9):* the launch step passes `-BuildTimeoutSeconds 900` and
     `-TimeoutSeconds 600` and is bounded at 27 minutes: the two launcher
     bounds plus 2 minutes for the launcher's own checks outside them;
@@ -2484,8 +2490,11 @@ Every accepted decision records:
     `InitialPreparation.BuildInvocation.ps1`. Because UBT
     logs its toolchain line only when it executes actions, the launcher reads
     the compiler and SDK identity from the toolchain line that UBT records in
-    the target makefile, which an up-to-date build keeps
-    (`docs/asset-intake-and-content-validation.md`).
+    the target makefile (`docs/asset-intake-and-content-validation.md`). As
+    the CI editor build does since the TA-020 2026-10-11 amendment, the
+    launcher deletes that `Makefile.bin` before its build, so UBT always
+    creates it and UHT keeps its input cache on; a reparse point on the path is
+    refused before any build starts.
   - *Workspace:* the job runs the launcher from the registered managed compile
     workspace without a control checkout, a re-sync, or the engine host lease.
     It first requires the exact tested revision and a clean workspace
@@ -2534,8 +2543,10 @@ Every accepted decision records:
   (`New-CiAcceptanceAggregateContext.Tests.ps1`, `Get-CiSelection.Tests.ps1`),
   the job, its executed steps, and the publisher
   (`Test-PrototypeQualityWorkflow.Tests.ps1`), and its bounds
-  (`Test-RunnerSchedulingPolicy.Tests.ps1`). The report fixtures are synthetic
-  until the first live launcher run (decision D6) supplies a real report.
+  (`Test-RunnerSchedulingPolicy.Tests.ps1`). The parser fixtures stay
+  synthetic. The live launcher runs (L1, decision D6) supplied the real
+  51-asset report that both parsers, the allowlist, and the parse bounds were
+  checked against.
 - **Cost:** an owner engine pull request that selects content can hold the
   runner for up to 120 minutes (40-minute compile, 46-minute editor
   automation, and 34-minute content validation) when no older waiter queued

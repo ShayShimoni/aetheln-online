@@ -1079,6 +1079,20 @@ Assert-ExecutionBoundary -Phase 'pre-build validation' -SourceRevision $SourceRe
 # engine file, because this build holds no engine host lease.
 $BuildArguments = @('AethelnOnlineEditor','Win64','Development',$ProjectPath,'-WaitMutex','-NoHotReloadFromIDE','-NoEngineChanges','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 $EditorBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($BuildScriptPath) + $BuildArguments))
+# TA-020 2026-10-11, as in InitialPreparation.BuildInvocation.ps1: UBT enables the
+# UHT input cache only while it creates the target makefile, and a reused
+# Makefile.bin runs UHT with the cache off, which can rewrite the engine's
+# NetCore.init.gen.cpp. Delete this target's makefile so every build creates it;
+# a reparse point anywhere on its path is refused and starts no build.
+$StaleMakefilePath = Join-Path $RepositoryRoot 'Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin'
+if (Test-Path -LiteralPath $StaleMakefilePath -PathType Leaf) {
+	$Probe = $StaleMakefilePath
+	while ($Probe) {
+		if ((Get-Item -LiteralPath $Probe -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The AethelnOnlineEditor UBT target makefile path contains a reparse point.' }
+		$Probe = Split-Path -Parent $Probe
+	}
+	Remove-Item -LiteralPath $StaleMakefilePath -Force
+}
 $BuildExitCode = $null
 $BuildInvocationError = $null
 try {

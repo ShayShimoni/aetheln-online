@@ -1194,7 +1194,12 @@ jobs:
   # runner-local files and only fixed codes reach the public log. Every step
   # continues on error; bind and upload run only after the earlier steps
   # succeeded, and a missing artifact fails content-receipt-shadow at its raw
-  # binding check. The first failure is exposed as content_reason.
+  # binding check. The first failure is exposed as content_reason. It never
+  # starts after an editor outcome that leaves the host lease state unknown
+  # (editor_host_lease_failed, editor_host_lease_release_failed,
+  # editor_build_interrupted), when the editor job kept the workspace and the
+  # held journal as recovery evidence (#243), or after superseded_head, when
+  # the managed workspace may still hold this stale head.
   trusted-content-validation:
     needs:
       - ci-selection-shadow
@@ -1202,6 +1207,10 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       needs.ci-selection-shadow.outputs.content_reference_validation_required == 'true' &&
+      needs.trusted-editor-automation.outputs.automation_reason != 'editor_host_lease_failed' &&
+      needs.trusted-editor-automation.outputs.automation_reason != 'editor_host_lease_release_failed' &&
+      needs.trusted-editor-automation.outputs.automation_reason != 'editor_build_interrupted' &&
+      needs.trusted-editor-automation.outputs.automation_reason != 'superseded_head' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == github.repository_owner &&
       github.triggering_actor == github.repository_owner

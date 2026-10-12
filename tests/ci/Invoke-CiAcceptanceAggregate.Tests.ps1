@@ -819,6 +819,8 @@ foreach ($ContentCase in @(
 	@{name='errors-string';mutate={param($x)$x.counts.errors='0'}},
 	@{name='errors-boolean';mutate={param($x)$x.counts.errors=$false}},
 	@{name='asset-count-string';mutate={param($x)$x.counts.assets=[string]@($x.assets).Count}},
+	@{name='non-promotion-string';mutate={param($x)$x.counts.non_promotion=[string]$x.counts.non_promotion}},
+	@{name='non-promotion-negative';mutate={param($x)$x.counts.non_promotion=-1}},
 	# findings[7] is asset 0's allowlisted reference_boundary lifecycle finding; each case breaks one allowlist condition.
 	@{name='reference-finding-code';mutate={param($x)$x.findings[7].code='content.reference_boundary.failed'}},
 	@{name='reference-finding-severity';mutate={param($x)$x.findings[7].severity='error'}},

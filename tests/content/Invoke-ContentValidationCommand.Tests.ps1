@@ -110,6 +110,8 @@ public static class FakeEditorBuildForContentValidation {
   string capture=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CAPTURE")??"";
   if(capture.Length>0) File.WriteAllLines(capture,args);
   if(capture.Length>0) File.WriteAllText(capture+".msbuild-node-reuse",Environment.GetEnvironmentVariable("MSBUILDDISABLENODEREUSE")??"unset");
+  // TA-020 2026-10-11 makefile guard: record whether the target makefile already existed when the build started.
+  if(capture.Length>0&&args.Length>=4) File.WriteAllText(capture+".makefile-at-start",File.Exists(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[3])),"Intermediate","Build","Win64","x64","AethelnOnlineEditor","Development","Makefile.bin"))?"present":"absent");
   string scenario=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CASE")??"success";
   string compilerRoot=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_COMPILER_ROOT")??"";
   string sdkRoot=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_SDK_ROOT")??"";
@@ -371,6 +373,8 @@ function New-Case {
 		New-Item -ItemType Directory -Path $Directory -Force | Out-Null
 	}
 	Copy-Item -LiteralPath $SourceRunner -Destination (Join-Path $Repository 'scripts\content\Invoke-ContentValidation.ps1')
+	# A stale makefile from an earlier build; the wrapper must delete it before its build (TA-020 2026-10-11 makefile guard).
+	Write-Utf8 (Join-Path $Repository 'Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin') 'stale makefile from an earlier build'
 	Copy-Item -LiteralPath (Join-Path $FakeBin 'UnrealEditor-Cmd.exe') -Destination (Join-Path $EditorDirectory 'UnrealEditor-Cmd.exe')
 	Copy-Item -LiteralPath (Join-Path $FakeBin 'FakeEditorBuild.exe') -Destination (Join-Path $BuildBatchDirectory 'FakeEditorBuild.exe')
 	$BuildBatch = @'
@@ -548,6 +552,13 @@ function Invoke-Case {
 		$RealDirectory = Join-Path $Fixture.root 'aliased-results'
 		New-Item -ItemType Directory -Path $RealDirectory | Out-Null
 		New-Item -ItemType Junction -Path $ResultDirectory -Target $RealDirectory | Out-Null
+	}
+	elseif ($OutputAttack -ceq 'makefile-reparse') {
+		# The stale makefile's Intermediate directory becomes a junction; the wrapper must refuse to delete through it.
+		$IntermediateDirectory = Join-Path $Fixture.repository 'Intermediate'
+		$RealDirectory = Join-Path $Fixture.root 'aliased-intermediate'
+		Move-Item -LiteralPath $IntermediateDirectory -Destination $RealDirectory
+		New-Item -ItemType Junction -Path $IntermediateDirectory -Target $RealDirectory | Out-Null
 	}
 	elseif ($OutputAttack -ceq 'policy-hardlink') {
 		Remove-Item -LiteralPath $Fixture.report -Force
@@ -837,6 +848,9 @@ try {
 
 	$ReparseOutput = Invoke-Case -Name 'reparse-output' -FakeBin $FakeBin -OutputAttack 'reparse'
 	Assert-True ($ReparseOutput.exitCode -ne 0 -and $ReparseOutput.output -match 'output_path_reparse' -and -not (Test-Path -LiteralPath $ReparseOutput.fixture.buildCapture)) 'A reparse-point output traversal must fail before cleanup or build launch.'
+	$MakefileReparse = Invoke-Case -Name 'makefile-reparse' -FakeBin $FakeBin -OutputAttack 'makefile-reparse'
+	Assert-True ($MakefileReparse.exitCode -ne 0 -and $MakefileReparse.output -match 'makefile path contains a reparse point' -and -not (Test-Path -LiteralPath $MakefileReparse.fixture.buildCapture) -and
+		(Test-Path -LiteralPath (Join-Path $MakefileReparse.fixture.root 'aliased-intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin') -PathType Leaf)) "A reparse point on the target makefile path must fail before the delete and the build. Output: $($MakefileReparse.output)"
 	$HardLinkOutput = Invoke-Case -Name 'hardlink-output' -FakeBin $FakeBin -OutputAttack 'policy-hardlink'
 	Assert-True ($HardLinkOutput.exitCode -ne 0 -and $HardLinkOutput.output -match 'output_path_alias' -and -not (Test-Path -LiteralPath $HardLinkOutput.fixture.buildCapture)) 'A same-file output alias to a protected input must fail before cleanup or build launch.'
 	$RetentionCap = Invoke-Case -Name 'retention-cap' -FakeBin $FakeBin -OutputAttack 'retention-cap'
@@ -913,6 +927,7 @@ try {
 	$ExpectedBuildArguments = @('AethelnOnlineEditor','Win64','Development',(Join-Path $Success.fixture.repository 'AethelnOnline.uproject'),'-WaitMutex','-NoHotReloadFromIDE','-NoEngineChanges','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 	Assert-True (($BuildArguments -join [char]0) -ceq ($ExpectedBuildArguments -join [char]0)) 'The wrapper must run the exact approved Editor build argument vector before validation.'
 	Assert-True ([IO.File]::ReadAllText($Success.fixture.buildCapture + '.msbuild-node-reuse') -ceq '1') 'The editor build must inherit MSBUILDDISABLENODEREUSE=1 so no reusable MSBuild node keeps the build job alive.'
+	Assert-True ([IO.File]::ReadAllText($Success.fixture.buildCapture + '.makefile-at-start') -ceq 'absent') 'The wrapper must delete the target Makefile.bin before its editor build, so UBT creates it and UHT keeps its input cache on (TA-020 2026-10-11).'
 	$ExpectedBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($Success.fixture.build) + $ExpectedBuildArguments))
 	Assert-True ($Success.report.execution_provenance.editor_build_command_sha256 -ceq $ExpectedBuildCommandSha256) 'The report must bind the exact Editor build command.'
 	Assert-True ($Success.report.execution_provenance.editor_build_log_sha256 -ceq (Get-Sha256 $Success.fixture.buildLog) -and (Get-Content -LiteralPath $Success.fixture.buildLog -Raw) -notmatch 'stale build log') 'The report must bind the fresh exact Editor build log.'

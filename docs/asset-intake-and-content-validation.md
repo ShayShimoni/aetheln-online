@@ -291,7 +291,9 @@ with the CI editor build's compiler and Windows SDK pins
 `scripts/ci/InitialPreparation.BuildInvocation.ps1`), so in CI it reuses that
 editor build instead of switching toolchains. Like that build, it passes
 `-NoEngineChanges` (issue #267), so UBT exits 5 instead of rewriting an
-existing engine file. It then derives the exact
+existing engine file, and like that build it first deletes the target's
+`Makefile.bin`, so UBT creates it and UHT keeps its input cache on (TA-020
+2026-10-11 amendment). It then derives the exact
 versioned toolchain and module evidence from that build:
 
     New-Item -ItemType Directory -Path TestResults -Force
