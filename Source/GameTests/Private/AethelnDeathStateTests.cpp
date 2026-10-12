@@ -8,9 +8,9 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Misc/AutomationTest.h"
 
-// #21 P1 server death state (docs/death-and-respawn.md, Test Plan R1 and R2). Players are allies and no AI
-// attacks a player yet (#20), so no committed result can kill a player: the tests zero a player's Health and
-// raise the timeline's lethal notification, the seam the lethal latch uses.
+// #21 P1 server death state (docs/death-and-respawn.md, Test Plan R1 and R2). The tests zero a player's Health and
+// raise the timeline's lethal notification, the seam the lethal latch uses. The real lethal path (an AI swing that
+// kills the player) is the lethal row of Aetheln.GameCombat.AttackTimeline.Interruption.
 namespace AethelnDeathTests
 {
 	using namespace AethelnChainTests;
@@ -22,9 +22,12 @@ namespace AethelnDeathTests
 			-AethelnCombatTests::MakeTestInitValues().Health);
 	}
 
+	/** By class: an owning-tag query reads the definition's tags only, not the spec's dynamic granted State.Dead. */
 	int32 DeathEffects(const UAethelnAbilitySystemComponent& AbilitySystem)
 	{
-		return AbilitySystem.GetActiveEffectsWithAllTags(FGameplayTagContainer(AethelnGameplayTags::State_Dead)).Num();
+		FGameplayEffectQuery Query;
+		Query.EffectDefinition = UAethelnDeathStateEffect::StaticClass();
+		return AbilitySystem.GetActiveEffects(Query).Num();
 	}
 }
 
@@ -82,8 +85,10 @@ bool FAethelnDeadPlayerRefusesActionsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("The living player's chain starts"), F.Press(), EResult::Accepted);
 	F.AdvanceTo(0.15);
 	// The fixture parks the pawn in MOVE_None; give it a live mode so the death transition has something to stop.
+	// Flying with no input keeps the pawn still: a falling pawn would exceed the step's sample budget and drop the
+	// contact on its own, which would make the no-contact check below pass without a death.
 	UCharacterMovementComponent* Movement = F.Pawn->GetCharacterMovement();
-	Movement->SetMovementMode(MOVE_Walking);
+	Movement->SetMovementMode(MOVE_Flying);
 	TestNotEqual(TEXT("The living pawn can move"), static_cast<int32>(Movement->MovementMode), static_cast<int32>(MOVE_None));
 
 	ZeroHealth(Victim);
