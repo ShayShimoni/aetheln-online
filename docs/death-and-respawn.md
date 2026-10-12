@@ -59,8 +59,9 @@ UE 5.8.1 source, revision `71fe36aac5`. `GAS/` abbreviates
 5. **Players only.** The transition refuses an ASC whose owner is not a
    `PlayerState`. AI death belongs to
    [#20](https://github.com/ShayShimoni/aetheln-online/issues/20), not #21
-   (lead decision, 2026-10-12); until #20 lands it, a zero-Health AI target
-   stays inert, as it is today.
+   (lead decision, 2026-10-12). #21 applies nothing to an AI target. The #83
+   enemy controller enters its own Dead state on the lethal notification
+   without `State.Dead`, and AI death as a life state stays #20's.
 6. **Respawn and restored values fail closed.** P2 respawns only when both the
    delay and the restoration allowlist are configured and valid. With either
    unset, the player stays dead and the server logs why. No value is invented.
@@ -98,7 +99,7 @@ binds `OnLethalResult` once in `Initialize`. The handler forwards to
 4. Calls `DisableMovement()` on the avatar's character movement.
 
 The emission loop that raises the notification iterates a local array of
-committed results (`AethelnCombatTimelineSubsystem.cpp:235`, `:246`), and a
+committed results (`AethelnCombatTimelineSubsystem.cpp:234-235`, `:246`), and a
 chain reset only stamps a reset time (`:144-151`), so the synchronous
 transition does not invalidate the timeline's iteration. Since #60 P5
 ([PR #321](https://github.com/ShayShimoni/aetheln-online/pull/321)), the pass
@@ -129,7 +130,7 @@ values stay. The Guard break ends on `State.Dead`
 (`AethelnBlockAbility.cpp:121-126`, `:146`). Recovery delay effects (the
 Endurance and Guard recovery delays) also persist through death under the
 current default, in which a running delay keeps counting on the server clock
-(`gas-foundation.md:402-403`); whether death removes a running delay is open
+(`gas-foundation.md:402-404`); whether death removes a running delay is open
 (see [Open Decisions](#open-decisions)) and stays `TBD`. Which values respawn
 restores is P2's allowlist.
 
@@ -251,7 +252,7 @@ Owner decisions (none blocks P1):
 - Whether a dead player keeps the dead pawn's camera or spectates.
 - The disconnect grace window (already `TBD` in the combat document).
 - Whether death removes a running recovery delay (#21, listed in
-  `gas-foundation.md:1239`). P1 keeps the current default: the delay persists.
+  `gas-foundation.md:1211`). P1 keeps the current default: the delay persists.
 
 Lead decisions (2026-10-12):
 

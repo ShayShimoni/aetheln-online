@@ -559,7 +559,7 @@ For each candidate, in order:
 
 1. **Revalidate.** The activation was not reset at or before the contact time,
    the attacker and target are alive (no `State.Dead` and Health above zero,
-   which fails closed until #21), the relation is hostile (see
+   which fails closed when the Health attribute is missing), the relation is hostile (see
    [Relation](#relation)), and the content version is the activation's.
    Territory policy is 2.x and is not checked.
 2. **Allowance.** Reject the candidate if this target already has a result
@@ -1100,8 +1100,11 @@ and generation (#106).
 6. **No movement commitment** in P3 to P6 (OQ4, owner, 2026-10-05): an
    attacker can move freely while attacking until #17 adds authored
    restrictions.
-7. **No death transition** until #21: a zero-Health actor is inert to #60 but
-   is not dead.
+7. **Death is #21's for players only.** A player enters death through #21 P1
+   (`UAethelnDeathSubsystem` applies `State.Dead`). AI death as a life state
+   stays #20's: the #83 enemy controller keeps its own Dead state, and a
+   non-controller AI target (the R1 dummy) stays inert to #60 but is not dead
+   until #20.
 8. **Reconnect refill** (#19 T34) also restores a chain-free state; #21 owns it.
 9. **No occlusion.** Melee sweeps are not stopped by world geometry, so a shape
    that reaches through thin cover still hits. Canon asks for near-cover
