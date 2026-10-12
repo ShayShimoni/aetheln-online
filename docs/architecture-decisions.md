@@ -2577,6 +2577,70 @@ Every accepted decision records:
   `content_workspace_revision_changed` race, a report that approaches the 4 MiB
   limit, or the producer-5 change.
 
+### TA-026 - Server-Only C++ State Machine for the Prototype Enemy
+
+- **Status:** Accepted
+- **Acceptance:** Accepted when the delivery lead merges the reviewed issue #83
+  P1 pull request, under the owner's delegated authority.
+- **Scope:** The prototype's one enemy (issues #83 and #20): its decision
+  logic, perception, and navigation control. Not later enemy archetypes,
+  elites, or bosses.
+- **Decision:** The enemy's decisions run in a server-only C++ state machine
+  inside a project `AAIController` subclass, as specified in
+  [Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md). Perception
+  is a server-side eligibility query, not AI Perception. Movement uses the
+  engine's path following on a static navmesh. `GameCombat` adds the engine
+  runtime modules `AIModule` and `NavigationSystem` as dependencies. The
+  prototype adds no Behavior Tree, Blackboard, StateTree, or AI Perception
+  asset, and enables no plugin.
+- **Context:** #83 requires the AI approach to come from measured prototype
+  needs, not from habit. No enemy code existed when this was decided, so the
+  needs below come from the canonical documents and the existing combat code,
+  not from running candidates side by side.
+- **Evidence (needs derived from the documents and code):**
+  - One enemy type with one attack in one controlled space
+    (`docs/game-design-bible.md`, ledger row P10-014). The specification has
+    eight states and no nesting, parallel branches, or shared sub-behaviors.
+  - Server-only decisions (TA-002, TA-003). An `AAIController` exists only on
+    the server, so a controller-owned state machine gives clients nothing to
+    run or drive.
+  - Exact authored transition times. The #60 timeline stamps every boundary
+    with its authored server time, never a frame time
+    ([Timeline driver and clock](attack-timeline-and-combo.md#timeline-driver-and-clock)).
+    The enemy's step must start at its authored telegraph end and its
+    interruption at the contact time. A state machine in code can stamp the
+    exact time directly; a Behavior Tree task or a StateTree state ends on the
+    tick that notices it, so it would need the same time bookkeeping on top.
+  - Deterministic headless tests. The repository's combat tests run in a
+    headless automation world with no editor-authored assets
+    (`Source/GameTests/Private/AethelnCombatTestWorld.h`). A C++ state machine
+    runs there directly. Behavior Tree and StateTree both need an
+    editor-authored binary asset, which agents cannot review as text and which
+    the content validation of #120 would then govern.
+  - No global build change. StateTree needs a plugin enabled in the
+    `.uproject`; plugin and global-environment changes have caused
+    compile-timeout cascades on the shared engine runner. `AIModule` and
+    `NavigationSystem` are engine runtime modules and need no plugin.
+- **Not yet measured:** decision cost per enemy per frame, navmesh build time
+  and size, and behavior under the network profiles. No candidate was
+  prototyped and timed against another. #83 P4 records the first three for
+  #45 (measurements only, no thresholds).
+- **Alternatives:** Behavior Tree with Blackboard (rejected for the prototype:
+  an asset and a brain component for eight flat states, and its task ends at
+  frame granularity); StateTree (rejected for the prototype: a plugin enable
+  and an asset, with the same frame-granularity issue); AI Perception
+  (rejected for the prototype: the arena has no line-of-sight rule, and
+  eligibility is a combat-policy query the timeline already defines).
+- **Consequences:** New enemy behavior needs a programmer and a code review.
+  The state machine must keep each transition at its authored time and stay
+  covered by headless tests. A later change to Behavior Tree or StateTree must
+  keep the server-only rule and the timeline's time stamping.
+- **Owner:** Issue #83, with issue #20 for the enemy's behavior.
+- **Revisit trigger:** a second enemy archetype, an elite or boss with layered
+  behavior, a designer who must author behavior without code, an arena with
+  cover that needs line of sight, or a P4 measurement that shows the state
+  machine as a material server cost.
+
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |
