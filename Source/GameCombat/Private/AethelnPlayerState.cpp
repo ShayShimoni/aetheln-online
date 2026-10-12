@@ -100,6 +100,9 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 				}
 			}
 			UAethelnAttributeInitEffect::ApplyTo(*AbilitySystemComponent, ProvisionalInitialAttributes);
+			// Once per PlayerState, like the init: a re-possession never stacks a second recovery.
+			UAethelnResourceRecoveryEffect::Start(*AbilitySystemComponent, UAethelnEnduranceRecoveryEffect::StaticClass(), ProvisionalEnduranceRecovery);
+			UAethelnResourceRecoveryEffect::Start(*AbilitySystemComponent, UAethelnGuardRecoveryEffect::StaticClass(), ProvisionalGuardRecovery);
 		}
 		return;
 	}
