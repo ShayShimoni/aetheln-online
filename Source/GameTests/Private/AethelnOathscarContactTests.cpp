@@ -129,7 +129,7 @@ bool FAethelnOathscarDefinitionsFailClosedTest::RunTest(const FString& Parameter
 	}
 	const TArray<TFunction<void(UAethelnGateStepTestAbility&)>> Mutations = {
 		[](auto& A) { A.ProvisionalSteps.Reset(); },
-		[](auto& A) { A.ProvisionalSteps.Add(A.ProvisionalSteps[0]); },
+		[](auto& A) { const FAethelnAttackStepDefinition Copy = A.ProvisionalSteps[0]; A.ProvisionalSteps.Add(Copy); },
 		[](auto& A) { A.ProvisionalSteps[0].BufferOpen = 0.375; }, // a single step is the final step: BufferOpen == RecoveryEnd
 		[](auto& A) { A.ProvisionalSteps[0].LinkOpen = 0.625; A.ProvisionalSteps[0].LinkClose = 0.75; },
 		[](auto& A) { A.ProvisionalSteps[0].GuardPressure = -1.0f; },
