@@ -1,7 +1,9 @@
 #pragma once
 
 #include "AbilitySystemInterface.h"
+#include "AethelnActivationTypes.h"
 #include "AethelnCombatEffects.h"
+#include "AethelnHudSource.h"
 #include "AethelnMovementActionAuthority.h"
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerState.h"
@@ -20,7 +22,7 @@ struct FGameplayAbilitySpec;
  * See docs/gas-foundation.md (Lifecycle).
  */
 UCLASS(Config = Game)
-class GAMECOMBAT_API AAethelnPlayerState : public APlayerState, public IAbilitySystemInterface, public IAethelnMovementActionAuthority
+class GAMECOMBAT_API AAethelnPlayerState : public APlayerState, public IAbilitySystemInterface, public IAethelnMovementActionAuthority, public IAethelnHudStateSource
 {
 	GENERATED_BODY()
 
@@ -34,6 +36,12 @@ public:
 	virtual FAethelnDodgeMovementDefinition GetDodgeMovementDefinition() const override;
 	virtual bool CanPredictDodge() const override;
 	virtual bool TryAuthorizeDodge(const FAethelnDodgeStartRequest& Request) override;
+
+	/** HUD (#61): the attributes and owned timed tags this machine currently has. Presentation only. */
+	virtual FAethelnHudSnapshot GetHudSnapshot() const override;
+	/** HUD (#61): one event per owner activation outcome and per aim-corrected started step. */
+	virtual FAethelnHudActionOutcomeDelegate& OnHudActionOutcome() override { return HudActionOutcome; }
+	static FAethelnHudActionOutcome ToHudOutcome(uint32 Sequence, EAethelnActivationResult Result);
 
 	UAethelnAbilitySystemComponent* GetAethelnAbilitySystemComponent() const { return AbilitySystemComponent; }
 	const UAethelnCombatAttributeSet* GetCombatAttributeSet() const { return AttributeSet; }
@@ -71,6 +79,8 @@ public:
 private:
 	UFUNCTION()
 	void HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn);
+
+	FAethelnHudActionOutcomeDelegate HudActionOutcome;
 
 	UPROPERTY(VisibleAnywhere, Category = "Aetheln|Abilities")
 	TObjectPtr<UAethelnAbilitySystemComponent> AbilitySystemComponent;

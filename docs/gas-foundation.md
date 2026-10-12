@@ -121,17 +121,19 @@ No gameplay tags are registered today; the spike uses the plain string
 
 ## Class Layout
 
-Everything is in `GameCombat` except the native tags, which are in `GameCore`:
-`docs/technical-architecture.md:155-157` assigns shared identifiers and tags to
-GameCore, and GameUI may depend only on GameCore and presentation-safe combat
-interfaces (`:157`), so the HUD (Issue
+Everything is in `GameCombat` except the native tags and the HUD interfaces,
+which are in `GameCore`: `docs/technical-architecture.md:155-157` assigns shared
+identifiers and tags to GameCore, and GameUI may depend only on GameCore and
+presentation-safe combat interfaces (`:157`), so the HUD (Issue
 [#61](https://github.com/ShayShimoni/aetheln-online/issues/61)) can reach tags
-only if they are declared in GameCore.
+only if they are declared in GameCore, and reaches player state only through
+`AethelnHudSource.h` ([HUD State Source](#hud-state-source)).
 
 | Class or file | Module | Responsibility |
 | --- | --- | --- |
 | `AethelnGameplayTags.h/.cpp` | GameCore | Native tag declarations; adds `GameplayTags` to `GameCore.Build.cs`. |
-| `AAethelnPlayerState` | GameCombat | Owns the player ASC and attribute set as default subobjects; implements `IAbilitySystemInterface`; sets the avatar to null before first possession; binds a `UFUNCTION` handler to its own `OnPawnSet`; validates and grants configured abilities once; applies initial attributes once; starts Endurance and Guard recovery once (#292); sets the provisional update frequency. |
+| `AethelnHudSource.h` | GameCore | The presentation-safe HUD contract (#61): `IAethelnHudStateSource`, `IAethelnHudObjectiveSource`, and their plain data types ([HUD State Source](#hud-state-source)). |
+| `AAethelnPlayerState` | GameCombat | Owns the player ASC and attribute set as default subobjects; implements `IAbilitySystemInterface`; sets the avatar to null before first possession; binds a `UFUNCTION` handler to its own `OnPawnSet`; in `PostInitializeComponents` also binds three weak lambdas to the ASC's `OnActivationOutcome`, `OnMovementActivationOutcome` and `OnCombatActivation` delegates, which feed the HUD outcome event; validates and grants configured abilities once; applies initial attributes once; starts Endurance and Guard recovery once (#292); sets the provisional update frequency; implements the HUD state source `IAethelnHudStateSource` (#61), a read-only snapshot and owner outcome events. |
 | `UAethelnAbilitySystemComponent` | GameCombat | Project ASC for players and AI. Hosts the activation seam (request RPC, validator, per-connection sequence and rate state, seam scope with result slot, owner-only outcome RPC). Overrides the two stock client-route entry points. Provides static `FindForPawn(const APawn*)`. |
 | `UAethelnCombatAttributeSet` | GameCombat | `Health`, `MaxHealth`, `Endurance`, `MaxEndurance`, `Guard`, `MaxGuard`. |
 | `AethelnActivationTypes.h` | GameCombat | `FAethelnCombatActivationRequest`, `EAethelnActivationPhase`, `EAethelnActivationResult` (client-facing mirror of the safe reasons). |
@@ -450,6 +452,51 @@ test data, never tuning.
 Two-client PIE (**P**, manual until a harness exists): the owner sees Endurance
 and Guard rise at the provisional PlayerState frequency, and the other client
 sees neither value.
+
+## HUD State Source
+
+Issue [#61](https://github.com/ShayShimoni/aetheln-online/issues/61)'s first
+slice presents player state. `Source/GameCore/Public/AethelnHudSource.h` is the
+only interface through which `GameUI` reads it, so `GameUI` keeps depending on
+`GameCore` alone (`docs/technical-architecture.md:157`).
+
+- **Presentation only.** No HUD value or event is an input to gameplay. The
+  HUD never requests, predicts, or decides damage, cooldowns, costs, outcomes,
+  or persistence. It displays what the owning client already holds.
+- **State source.** `IAethelnHudStateSource` is implemented by
+  `AAethelnPlayerState`. `GetHudSnapshot()` returns Health, Endurance and Guard
+  with their maxima plus the timed states, and the presenter pulls a fresh
+  snapshot on every refresh so values converge to the replicated state. A
+  resource is known only when its maximum is above 0, so the HUD never reads
+  "0 / 0" before the first owner replication.
+- **Timed states.** The snapshot lists every owned `Cooldown.*` tag plus
+  `State.GuardBroken`, `State.EnduranceRecoveryDelayed` and
+  `State.GuardRecoveryDelayed` (the last two are #292's recovery delays, see
+  [Resource Recovery](#resource-recovery)). Remaining time is the longest of
+  the active timed effects that grant the tag; a negative value means no
+  duration is known. Adding a timed state means adding its tag to the list in
+  `AAethelnPlayerState::GetHudSnapshot()`.
+- **Outcome mapping.** The ASC's owner-only outcome delegates become one
+  presentation-safe event, `OnHudActionOutcome`. `OnActivationOutcome` and
+  `OnMovementActivationOutcome` map `Accepted` to Accepted and every other
+  result to Rejected, naming the owner-facing result. `OnCombatActivation` maps
+  an aim-corrected record to Corrected. The event carries no target, hit,
+  amount, or server-only detail. The three bindings are made once in
+  `AAethelnPlayerState::PostInitializeComponents` and are weak, so they end
+  with the PlayerState.
+- **Corrected and Accepted.** The server sends a step's record before that
+  request's Accepted outcome when the step starts at once, and later when the
+  step is buffered. For one non-zero sequence the presenter keeps a single cue
+  and Corrected wins; a late correction never replaces a newer action's cue.
+  Movement-carried actions have sequence 0 and always count as a new cue.
+- **Objective seam.** `IAethelnHudObjectiveSource` is the seam for the
+  authoritative objective owner (Issue
+  [#4](https://github.com/ShayShimoni/aetheln-online/issues/4)). Until #4
+  implements it a test fixture supplies the objective, and the HUD shows
+  "Objective: none".
+
+Wording, layout, colors, cue timing, localization, and what opponents see of
+another player's Health, Endurance and Guard stay `TBD` (Open Decisions).
 
 ## Abilities
 

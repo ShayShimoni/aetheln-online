@@ -18,6 +18,7 @@ public class GameTests : ModuleRules
 			"GameNet",
 			"GameplayAbilities",
 			"GameplayTags",
+			"GameUI",
 			"Json",
 			"NavigationSystem",
 			"PhysicsCore"
