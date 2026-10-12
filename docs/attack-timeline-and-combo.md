@@ -752,7 +752,6 @@ are provisional and are re-tuned at the P5 feel test):
    activation records and rejection reasons of the chain and the block, with no
    new replication path. Opponent-visible presentation comes with #61's
    opponent view.
-3. **Gate Step's advance transport** (package B).
 
 The automated network-condition rows defined for #60, A25 (delayed,
 duplicated, reordered, and dropped requests), A26 (the same against contacts),
