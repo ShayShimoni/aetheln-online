@@ -230,6 +230,7 @@ void UAethelnCombatTimelineSubsystem::HandlePostActorTick(UWorld* World, ELevelT
 		if (UAethelnAbilitySystemComponent* ASC = Source.Get()) { ASC->StartBufferedChainStep(Now, true); } // record held to step 5
 	}
 	// Then the enemy controllers (#83) advance to Now: a step due at S <= Now registers here, so this pass sweeps it.
+	OnPassStart.Broadcast(Now);
 	Steps.Sort([](const FStep& A, const FStep& B) { return A.Ordinal < B.Ordinal; });
 	// Snapshot identities: callbacks may register/reset; never retain an array reference across them.
 	TArray<FGuid> Ids;
@@ -281,6 +282,7 @@ void UAethelnCombatTimelineSubsystem::HandlePostActorTick(UWorld* World, ELevelT
 	}
 	for (const FCommitted& Result : Committed) { Emit(Result); }
 	// After emission: the enemy controllers (#83) apply a pending reset, so this pass resolved against the pre-reset enemy.
+	OnPassEnd.Broadcast(Now);
 	Steps.RemoveAll([Now](const FStep& Entry) { return !Entry.AbilitySystem.IsValid() || Entry.ResetTime <= Now; });
 	AbilitySystems.RemoveAll([](const auto& Source) { return !Source.IsValid() || !Source->HasPendingBoundaries(); });
 	for (auto Iterator = CombatIds.CreateIterator(); Iterator; ++Iterator)
@@ -449,6 +451,7 @@ void UAethelnCombatTimelineSubsystem::Interrupt(UAethelnAbilitySystemComponent& 
 	{
 		if (Entry.AbilitySystem.Get() == &Target) { Entry.ResetTime = FMath::Min(Entry.ResetTime, ContactTime); }
 	}
+	OnTargetInterrupted.Broadcast(&Target, ContactTime);
 	Target.ResetChain(EAethelnChainEndReason::Interrupted, ContactTime);
 }
 
@@ -478,6 +481,6 @@ void UAethelnCombatTimelineSubsystem::Emit(const FCommitted& Committed)
 	OnResultCommitted.Broadcast(Committed.Result);
 	if (Committed.Result.bLethal)
 	{
-		if (UAethelnAbilitySystemComponent* Target = Committed.Target.Get()) { OnLethalResult.Broadcast(Target, Committed.Result.ActivationId, 0.0); }
+		if (UAethelnAbilitySystemComponent* Target = Committed.Target.Get()) { OnLethalResult.Broadcast(Target, Committed.Result.ActivationId, Committed.Result.ContactTime); }
 	}
 }

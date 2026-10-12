@@ -61,7 +61,16 @@ void AAethelnEnemyController::Unbind()
 
 void AAethelnEnemyController::Advance(double Now)
 {
-	// Red stub (#83 P2): no decisions yet.
+	if (GetEnemyAbilitySystem() == nullptr || !HasValidConfig()) { return; }
+	if (PendingMoveResult.IsSet())
+	{
+		const EPathFollowingResult::Type Result = PendingMoveResult.GetValue();
+		PendingMoveResult.Reset();
+		ApplyMoveResult(Result, Now);
+	}
+	// Each transition starts its state at a time no later than Now; seven states bound the chain. A reset request
+	// ends this pass's decisions: the reset waits for the pass end.
+	for (int32 Guard = 0; Guard < 8 && !PendingResetTime.IsSet() && EvaluateOnce(Now); ++Guard) {}
 }
 
 bool AAethelnEnemyController::EvaluateOnce(double Now)
@@ -321,11 +330,25 @@ void AAethelnEnemyController::RequestReset(double Time)
 
 void AAethelnEnemyController::HandlePassEnd(double Now)
 {
+	if (!PendingResetTime.IsSet()) { return; }
+	const double Time = PendingResetTime.GetValue();
+	PendingResetTime.Reset();
+	AAethelnEnemyCharacter* Enemy = GetEnemy();
+	UAethelnAbilitySystemComponent* AbilitySystem = GetEnemyAbilitySystem();
+	ConsecutiveMoveFailures = 0;
+	if (Enemy != nullptr && AbilitySystem != nullptr)
+	{
+		Enemy->GetCharacterMovement()->StopMovementImmediately();
+		Enemy->TeleportTo(Enemy->GetHome().GetLocation(), Enemy->GetHome().Rotator(), false, true);
+		UAethelnAttributeInitEffect::ApplyTo(*AbilitySystem, Enemy->ProvisionalInitialAttributes);
+	}
+	Enter(EAethelnEnemyState::Idle, Time);
 }
 
 EAethelnEnemyMoveRecovery AAethelnEnemyController::DecideMoveRecovery(EPathFollowingResult::Type Result, int32 PreviousConsecutiveFailures)
 {
-	return EAethelnEnemyMoveRecovery::None;
+	if (Result != EPathFollowingResult::Blocked && Result != EPathFollowingResult::OffPath) { return EAethelnEnemyMoveRecovery::None; }
+	return PreviousConsecutiveFailures < 1 ? EAethelnEnemyMoveRecovery::Repath : EAethelnEnemyMoveRecovery::Reset;
 }
 
 void AAethelnEnemyController::OnMoveCompleted(FAIRequestID RequestID, const FPathFollowingResult& Result)
@@ -352,10 +375,24 @@ void AAethelnEnemyController::ApplyMoveResult(EPathFollowingResult::Type Result,
 
 void AAethelnEnemyController::HandleTargetInterrupted(UAethelnAbilitySystemComponent* TargetAbilitySystem, double ContactTime)
 {
+	// Raised during resolution. The timeline already stamped every enemy step at ContactTime, so whatever this
+	// controller advanced to after ContactTime in pass step 1 (a later step included) never happened. Dead ignores it.
+	if (TargetAbilitySystem == nullptr || TargetAbilitySystem != GetEnemyAbilitySystem() || State == EAethelnEnemyState::Dead) { return; }
+	StopMovement();
+	bMoveRequested = false;
+	PendingResetTime.Reset(); // a late interruption cancels a reset decided after it
+	Enter(EAethelnEnemyState::Interrupted, ContactTime);
 }
 
 void AAethelnEnemyController::HandleLethalResult(UAethelnAbilitySystemComponent* TargetAbilitySystem, const FGuid& ActivationId, double ContactTime)
 {
+	// Raised during emission. Death starts at the lethal contact time, even if pass step 1 advanced past it.
+	if (TargetAbilitySystem == nullptr || TargetAbilitySystem != GetEnemyAbilitySystem() || State == EAethelnEnemyState::Dead) { return; }
+	StopMovement();
+	bMoveRequested = false;
+	Target.Reset();
+	PendingResetTime.Reset(); // a late death cancels a pending return reset
+	Enter(EAethelnEnemyState::Dead, ContactTime);
 }
 
 AAethelnEnemyCharacter* AAethelnEnemyController::GetEnemy() const
