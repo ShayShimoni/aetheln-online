@@ -409,6 +409,25 @@ root; `CharacterMovementComponent.cpp` below is
   the tuning table below), every value in this section is an engine default,
   not a tuned project decision, kept until evidence resolves it.
 
+### Server rejections (issue #17 AC4)
+
+How the server answers each invalid input named in AC4, and the test that
+covers it. The tests describe current engine and project behavior. They add or
+change no threshold. Time-discrepancy detection stays off, and its thresholds
+stay `TBD` (#2, #45). The `Reject.*` tests write the hostile value into the
+client's saved move, so it travels the real packed move path.
+
+| Input | Server response | Test |
+| --- | --- | --- |
+| Sprint or aim flag the simulation does not allow | Sprint speed is granted only when the server's own move is eligible; aim facing is rate limited | `InvalidSprintRejected`, `FacingSpoofBounded` |
+| Speed beyond the cap | Server speed is capped per move, with its own walk, sprint and backpedal limits | `ServerSpeedClamp` |
+| Claimed movement mode | Correction, and the server keeps its own mode (`ServerExceedsAllowablePositionError`) | `Reject.ClientModeMismatch` |
+| Stale timestamp | Move is dropped before simulation (`IsClientTimeStampValid`) | `Reject.StaleTimestamp` |
+| Duplicate timestamp | Move is dropped before simulation | `LoopbackTransport` |
+| Acceleration over the limit | Not rejected: the server clamps the claim to `MaxAcceleration` and simulates the clamped value | `Reject.AccelerationOverLimit` |
+| Large displacement | Correction; the server does not adopt the client location (`ClientAuthorativePosition=false`) | `Reject.DisplacementTeleport` |
+| Rotation | Not corrected: facing is derived by the server and rate limited | `FacingSpoofBounded`, `AirborneFacingBounded` |
+
 ## Verification and feedback
 
 The mouse-button observations in the historical tuning table below describe
