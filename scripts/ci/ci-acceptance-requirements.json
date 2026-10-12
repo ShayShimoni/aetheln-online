@@ -2,6 +2,13 @@
   "schemaVersion": "aetheln.ci-acceptance-requirements-template/v1",
   "jobs": [
     {
+      "key": "content",
+      "jobName": "content-receipt-shadow",
+      "checks": [
+        "content-reference-validation"
+      ]
+    },
+    {
       "key": "native",
       "jobName": "native-receipt-shadow",
       "checks": [
@@ -14,7 +21,6 @@
       "key": "portable",
       "jobName": "portable-receipt-shadow",
       "checks": [
-        "content-reference-validation",
         "controller-contract",
         "portable"
       ]
