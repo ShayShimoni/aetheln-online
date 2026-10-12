@@ -130,13 +130,13 @@ only if they are declared in GameCore.
 | Class or file | Module | Responsibility |
 | --- | --- | --- |
 | `AethelnGameplayTags.h/.cpp` | GameCore | Native tag declarations; adds `GameplayTags` to `GameCore.Build.cs`. |
-| `AAethelnPlayerState` | GameCombat | Owns the player ASC and attribute set as default subobjects; implements `IAbilitySystemInterface`; sets the avatar to null before first possession; binds a `UFUNCTION` handler to its own `OnPawnSet`; validates and grants configured abilities once; applies initial attributes once; sets the provisional update frequency. |
+| `AAethelnPlayerState` | GameCombat | Owns the player ASC and attribute set as default subobjects; implements `IAbilitySystemInterface`; sets the avatar to null before first possession; binds a `UFUNCTION` handler to its own `OnPawnSet`; validates and grants configured abilities once; applies initial attributes once; starts Endurance and Guard recovery once (#292); sets the provisional update frequency. |
 | `UAethelnAbilitySystemComponent` | GameCombat | Project ASC for players and AI. Hosts the activation seam (request RPC, validator, per-connection sequence and rate state, seam scope with result slot, owner-only outcome RPC). Overrides the two stock client-route entry points. Provides static `FindForPawn(const APawn*)`. |
 | `UAethelnCombatAttributeSet` | GameCombat | `Health`, `MaxHealth`, `Endurance`, `MaxEndurance`, `Guard`, `MaxGuard`. |
 | `AethelnActivationTypes.h` | GameCombat | `FAethelnCombatActivationRequest`, `EAethelnActivationPhase`, `EAethelnActivationResult` (client-facing mirror of the safe reasons). |
 | `UAethelnGameplayAbility` (abstract) | GameCombat | Base ability: reads config, overrides `CheckCost`, `ApplyCost`, `GetCooldownTags`, `ApplyCooldown`, `CanActivateAbility` (the choke point), and `CommitAbility` (records the seam's result slot), refuses the partial `CommitAbilityCost` and `CommitAbilityCooldown`, fixes the net and instancing policies, leaves the engine cost and cooldown effect classes null. |
 | `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnGateStepAbility`, `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility` skeletons. |
-| `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first). All magnitudes set by caller. |
+| `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first), and #292's `UAethelnEnduranceRecoveryEffect` and `UAethelnGuardRecoveryEffect` ([Resource Recovery](#resource-recovery)). All magnitudes set by caller. |
 | `AAethelnCombatGameMode` | GameCombat | Derives from `AGameModeBase` (for example through `AAethelnGameModeBase`), never `AGameMode`: `AGameMode::FindInactivePlayer` (`Runtime/Engine/Private/GameMode.cpp:687-751`) would reuse the old PlayerState on reconnect, which breaks the sequence policy and T34. A later base-class change must revisit both. Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by a config soft-class path, never by editing binary assets by hand: `InputEnabledPawnClass` (`Config/DefaultGame.ini`, `/Game/POC/BP_MovementPOCCharacter`) is returned from `GetDefaultPawnClassForController`, and an empty or unloadable path keeps `DefaultPawnClass`. The mode is not the project default; a launch selects it with `?game=/Script/GameCombat.AethelnCombatGameMode`, which overrides the map's game mode. |
 | `AAethelnCombatAICharacter` | GameCombat | Base for Issue [#20](https://github.com/ShayShimoni/aetheln-online/issues/20)'s enemy: its own ASC in Minimal mode and its own attribute set. |
 
@@ -272,7 +272,7 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
 | Actor | May change attributes? | How |
 | --- | --- | --- |
 | Client | Never | No RPC accepts an attribute, magnitude, cost, cooldown, or effect. Attributes replicate down only. |
-| Server GAS | Yes | `UAethelnAttributeInitEffect` (once), `UAethelnEnduranceCostEffect` (commit), and #60's and #21's damage and restoration effects later. |
+| Server GAS | Yes | `UAethelnAttributeInitEffect` (once), `UAethelnEnduranceCostEffect` (commit), the two recovery effects (#292, [Resource Recovery](#resource-recovery)), and #60's and #21's damage and restoration effects later. |
 | Server C++ outside effects | No | No public setters. The only direct writes are the set's own clamps, through a protected setter. Reviewers reject `SetNumericAttributeBase` on combat attributes. |
 | Client prediction (P6 only) | Temporary, local | GAS applies a predicted instant effect as a temporary infinite-duration modifier and removes it on confirm or reject (`GAS/Public/GameplayPrediction.h:113-132`). |
 
@@ -309,6 +309,135 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
 - **No identity data.** Race, sex, and appearance are never inputs to any
   attribute, effect, or ability. Faction and Faction Doctrine inputs are outside
   #19's scope; canon Doctrine abilities arrive in a later stage.
+
+## Resource Recovery
+
+[Issue #292](https://github.com/ShayShimoni/aetheln-online/issues/292) adds
+passive and delayed recovery of Endurance and Guard on the server clock. It
+implements owner decision Q9 of #18 (approved 2026-10-10,
+[Dodge and Block](dodge-and-block.md#owner-decisions) row 16) under the
+resource grammar above. It is the first of the four recovery paths in the
+Shared Combat Semantic Contract in the combat document: "passive or delayed
+recovery advances from the server clock under explicit tags and combat-state
+conditions". Event-driven recovery, effect-supplied restoration, and lifecycle
+restoration stay with #60 and #21. Health has no passive recovery. Every rate,
+period, and delay is `TBD` (#107); this section sets none.
+
+### Mechanism
+
+- **One effect per resource.** `UAethelnEnduranceRecoveryEffect` and
+  `UAethelnGuardRecoveryEffect` (`AethelnCombatEffects`) are infinite periodic
+  Gameplay Effects. Each period executes one `AddBase` modifier on the resource
+  with `SetByCaller.Recovery.Amount`, which is `RatePerSecond * PeriodSeconds`.
+  The spec carries the period from config; the class default carries no number.
+  The recovery effect class is the mutation reason (Resource contract mapping
+  above).
+- **Started once, on the server.** `AAethelnPlayerState` starts both with the
+  initial attributes, inside the `bCombatStateInitialized` branch (Lifecycle),
+  so re-possession never starts a second recovery. `Start` and `RestartDelay`
+  refuse a non-authoritative ASC.
+- **Clients only display values.** The engine sets period timers only where
+  the effect is applied (`GAS/Private/GameplayEffect.cpp:4496-4508`) and, on
+  resume, only on authority (`:4643-4655`). A replicated copy in the owner's
+  Mixed-mode effect list never executes. Endurance and Guard reach the owner
+  through the owner-only attribute replication above. No request carries a
+  recovery value. Other clients see only the delay tags, through the minimal
+  replicated tags, as they see cooldown tags; #61 decides whether that may stay
+  (Open Decisions 12).
+- **Configuration.** `AAethelnPlayerState` reads `ProvisionalEnduranceRecovery`
+  and `ProvisionalGuardRecovery` (`RatePerSecond`, `PeriodSeconds`,
+  `DelaySeconds`) from its `Config/DefaultGame.ini` section. The section has
+  no recovery keys until #107 supplies values. All-zero values mean unset and
+  start nothing, so today Guard and Endurance still only fall. A non-finite or
+  negative value, or a positive rate without a positive period, logs and starts
+  nothing (fails closed). A zero delay is valid and means no pause after a
+  spend.
+
+### Pause and resume
+
+| Condition | Endurance recovery | Guard recovery |
+| --- | --- | --- |
+| `State.Dead` | Paused | Paused |
+| Its delay tag | `State.EnduranceRecoveryDelayed`, restarted by each Endurance cost commit | `State.GuardRecoveryDelayed`, restarted by each applied Guard pressure |
+| Anything else: blocking, dodging, `State.GuardBroken`, cooldowns, no avatar | Runs | Runs |
+
+- **Pause.** Each effect lists `State.Dead` and its own delay tag as ongoing
+  ignore tags (`UTargetTagRequirementsGameplayEffectComponent`). While either
+  holds, the effect stays applied but inhibited, and no period executes
+  (`GAS/Private/GameplayEffect.cpp:4765`).
+- **Resume.** `PeriodicInhibitionPolicy` is `ResetPeriod`, so the first step
+  lands one full period after the pause ends. Paused time is not caught up, and
+  resuming adds nothing at once. The first step after `Start` is likewise one
+  period later (`bExecutePeriodicEffectOnApplication` is false).
+- **Delay.** `RestartDelay` removes the resource's delay effect and applies a
+  new one: the shared duration effect, with the delay tag in its
+  `DynamicGrantedTags`, as the Guard break does. Recovery therefore resumes
+  `DelaySeconds` after the latest spend, and spends never stack delays. The
+  delay length travels on the active recovery spec
+  (`SetByCaller.Recovery.Delay`), so an ASC without an active recovery, or
+  with a zero delay, gets no delay effect. A zero-duration effect would never
+  expire (Cost and cooldown).
+
+### Interactions
+
+- **Cost commits.** `UAethelnGameplayAbility::ApplyCost` is the only Endurance
+  spend. After it applies a positive cost, it restarts the Endurance delay. A
+  zero cost spends nothing and restarts nothing; a refused activation spends
+  nothing (T12).
+- **Guard pressure.** The block's Guard hook
+  ([The Guard hook](dodge-and-block.md#the-guard-hook)) restarts the Guard
+  delay after it applies positive pressure. Any later Guard-pressure source,
+  such as Hold the Line, must call `RestartDelay` the same way.
+- **Guard break.** No rule of its own. The breaking contact's pressure
+  restarts the Guard delay like any other, and recovery resumes after the
+  delay whether or not `State.GuardBroken` still holds. Until Guard is above
+  zero, a block `Press` gets `InsufficientResource` (Q8). How the break and
+  the delay compare in length is #107's tuning.
+- **Cap.** The cap is the resource's maximum, its authored bound. The attribute
+  set clamps each step's base and current value to `[0, Max]`. There is no
+  separate recovery ceiling.
+- **Death and respawn.** `State.Dead` pauses both resources. #21 applies and
+  removes it; recovery resumes one period after its removal. A running delay
+  keeps counting on the server clock through death. Respawn restores nothing
+  through recovery: what respawn restores is #21's lifecycle allowlist.
+- **No avatar.** Recovery runs on the server clock while the PlayerState has
+  no pawn, as cooldowns do.
+- **Disconnect and reconnect.** Recovery belongs to the PlayerState, and a
+  disconnect only removes the connection. With the `AGameModeBase` base class,
+  a reconnect gets a fresh PlayerState, which starts one new recovery with no
+  delay; the old PlayerState's recovery ends with it. The full refill on
+  reconnect is #21's interim gap (Known Interim Gaps); recovery adds nothing to
+  it.
+- **Same-timestamp order.** Within one server frame the order is: activation
+  requests (cost commits restart the Endurance delay), then the timer pass
+  (recovery steps and delay ends), then #60's contact pass (Guard pressure
+  restarts the Guard delay). So a spend pauses the same frame's step, and a
+  Guard step in a frame lands before that frame's contacts. A step due inside
+  a frame applies at that frame, and a long frame applies every step it
+  covers.
+- **Neutrality.** Race, sex, and appearance are never inputs: the only inputs
+  are the PlayerState config, the two state tags, and the server clock.
+
+### Recovery tests
+
+All are **H** (headless). Steps that need time run one `World->Tick` per engine
+frame through a latent command, because the timer manager that runs periodic
+and duration effects ticks at most once per engine frame. Fixture values are
+test data, never tuning.
+
+| Test | What it proves |
+| --- | --- |
+| `Aetheln.GameCombat.Recovery.EffectDefinition` | Infinite, no step on application, `ResetPeriod`, one set-by-caller `AddBase` modifier on its resource, paused by exactly `State.Dead` and its own delay tag |
+| `Aetheln.GameCombat.Recovery.FailsClosed` | Unset config starts nothing and a restart then applies no delay; each invalid value logs and starts nothing; a zero delay applies no delay effect |
+| `Aetheln.GameCombat.Recovery.PassiveDeathAndCap` | Passive rate; `State.Dead` pauses both resources and keeps the effect; resume at the same rate; each resource stops at its maximum, base included |
+| `Aetheln.GameCombat.Recovery.DelayAfterCostCommit` | A real cost commit starts the Endurance delay (not Guard's); no recovery during it; resume one period after it; back-to-back commits restart it without stacking |
+| `Aetheln.GameCombat.Recovery.DelayAfterGuardPressure` | Guard pressure from a real blocked contact starts the Guard delay; a later contact restarts it, so recovery stays paused past the first delay's end; then the configured rate and the cap |
+| `Aetheln.GameCombat.Recovery.AfterGuardBreak` | The breaking pressure starts the delay; after the break and the delay end, Guard recovers and the block rises again |
+| `Aetheln.GameCombat.Recovery.RespawnAndReconnect` | Re-possession starts no second recovery; a reconnect's fresh PlayerState has one recovery per resource, at one rate, and no carried delay; recovery continues with no avatar |
+
+Two-client PIE (**P**, manual until a harness exists): the owner sees Endurance
+and Guard rise at the provisional PlayerState frequency, and the other client
+sees neither value.
 
 ## Abilities
 
@@ -405,8 +534,8 @@ added only when a canon ability spends that resource. `CommitAbility`
 re-checks and applies both. A zero cost or a zero cooldown applies no effect:
 a duration effect without a positive duration gets no expiry timer
 (`GAS/Private/GameplayEffect.cpp:4438-4441`), so it would never end. Recovery
-windows, cooldowns, and resource recovery are separate states, and resource
-recovery is not #19 scope.
+windows, cooldowns, and resource recovery are separate states. Resource
+recovery is not #19 scope; #292 owns it ([Resource Recovery](#resource-recovery)).
 
 ### Prediction
 
@@ -1064,3 +1193,10 @@ All stay `TBD` until the named owner decides.
 10. **Final display names** of the abilities, resources, and the Order.
 11. **Widening the CI automation filter** for the new test groups. A later
     ticket under #85 and #167.
+12. **Resource recovery (#292).** Values: each resource's rate, period, and
+    delay (#107; the period also costs replication, #45). Policy defaults the
+    owner may change: whether blocking pauses Guard recovery, whether
+    `State.GuardBroken` pauses it, whether recovery runs with no avatar,
+    whether death removes a running delay (#21), whether opponents may see the
+    delay tags (#61), recovery for AI (#20), and the per-resource content
+    version (#106).
