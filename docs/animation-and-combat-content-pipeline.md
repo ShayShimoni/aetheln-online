@@ -69,7 +69,7 @@ not own the systems the content runs on.
 | [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | The step definition, grant validation, timeline driver, contact pipeline, `CombatActivation` record, and observer phase state | Change the timeline, contacts, or record |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | The dodge and block windows and the defense slot | Change defense rules |
 | [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) | The server-owned enemy controller, its `Telegraph` state before a step, and `FAethelnEnemyPresentationState`, which replicates that state and the step's timing to clients (`docs/enemy-ai-and-navigation.md`, landing with #83) | Enemy states, telegraph timing, or replication |
-| [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Enemy intent, enemy steps registered on the timeline, and the enemy telegraph content | Enemy behavior or target choice |
+| [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Enemy intent, enemy step content (#83's controller registers the step), and the enemy telegraph content | Enemy behavior or target choice |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61), [#97](https://github.com/ShayShimoni/aetheln-online/issues/97) | HUD, `GameplayCue.*` tags, readable feedback, and the readability review | Visual language or UI timing |
 | [#120](https://github.com/ShayShimoni/aetheln-online/issues/120) | Intake records, lifecycle, stable IDs, audiences, and the content validator families | Change the intake contract |
 | [#14](https://github.com/ShayShimoni/aetheln-online/issues/14) | The LFS and locking matrix in [Source Control](source-control.md) | Add LFS patterns |
@@ -207,7 +207,8 @@ Licensed content follows TA-019 (the private `AethelnArt` plugin):
   writes that phase state; a step an enemy registers directly gives observers
   nothing to read. Enemy presentation reads `FAethelnEnemyPresentationState`
   instead (#83): the `Telegraph` state and its server start time before the
-  step, then the step start time and windows.
+  step, then the step start time, with the windows from the ability's
+  configuration (its attack definition once the attack is migrated, TA-027).
 - Play cosmetic anticipation at press, which a rejection cancels, a record
   realigns, and a chain end stops (#60, Prediction Policy).
 - Play trails, sounds, Niagara, and camera feedback from notifies, and play
@@ -222,7 +223,8 @@ Licensed content follows TA-019 (the private `AethelnArt` plugin):
 - Send a gameplay event, call an ability, or write persistence.
 - Use root motion or motion warping in attack montages. Root motion and
   motion warping need separate network validation and may not move an attack
-  volume (combat document, Server-Owned Attack Timeline). Attacks restrict no
+  volume beyond the server's accepted character state (combat document,
+  Server-Owned Attack Timeline). Attacks restrict no
   movement in #60 P3 to P6 (OQ4); authored restrictions come later with #17's
   predicted movement, and this rule is revisited then.
 
@@ -268,7 +270,7 @@ is on `develop` now; "P2" and "P3" are later phases of this issue.
 | Incompatible skeleton | `skeletal_animation` family `rig_compatibility` for meshes, skeletons, and sequences; the binding validator checks each montage's skeleton against the binding's skeleton | Family exists; binding check P3 |
 | Incompatible socket reference | `socket_ownership` counts invalid sockets per mesh; the binding validator checks each named socket exists on the binding's skeleton or mesh | Family exists; binding check P3 |
 | Stale identifiers | `reference_boundary` (unique stable ID, compatible content version, redirectors); the binding validator refuses a binding whose ability ID has no definition or whose content version differs | Family exists; binding check P3 |
-| Stale tag or semantic ID | The registry validator checks registry records; the tag-to-semantic-ID mapping is checked only for the three Oathscar actives by a hand-listed test (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp:31-37`) | Partly exists. Gap: nothing checks a new or stale ability tag against the registry; a check that every native `Ability.` tag maps to one registry ID is needed |
+| Stale tag or semantic ID | The registry validator checks registry records; the tag-to-semantic-ID mapping is checked only for the three Oathscar actives by a hand-listed test (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp:31-37`) | Partly exists. Gap: nothing checks a new or stale ability tag against the registry; P3 adds a portable check beside the registry validator that every native `Ability.` tag maps to exactly one registry ID |
 | Notify that could carry gameplay | Binding validator allowlists presentation notify classes; any other notify class fails | P3 |
 
 All gates fail closed. A validation failure never falls back to another
@@ -435,9 +437,18 @@ Each PR targets `develop` and uses `Refs #84`.
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Definition and focused tests | `UAethelnAttackDefinition` (TA-027), its validator shared with grant validation, editor `IsDataValid`, N1 and N2. No values and no asset. | Engine time |
-| **P3** Presentation binding | The client-only binding, its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3 and N4. Fixture assets only. | P2; engine time |
+| **P3** Presentation binding | The client-only binding, its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3 and N4; binding lookup without any public reference to the plugin (see below); the portable tag-to-registry check. Fixture assets only. | P2; engine time |
 | **P4** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin | Owner actions O1 and O2; D2; P3 |
 | **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3; #83 enemy controller and presentation state; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
+
+**Binding lookup (P3).** A binding in the private plugin cannot be reached
+through any public reference, and public `Config/` cannot name the plugin's
+content path (TA-019). P3 therefore finds a binding on the client by an Asset
+Registry query over all mounted content for the binding class and its
+searchable ability ID and content version, never by a package path, soft
+reference, or scan directory that names the plugin. Two bindings for the same
+ability ID and content version are a validation error, not a priority rule.
+P3 records the exact mechanism and its test.
 
 ## Owner Actions
 
