@@ -56,6 +56,16 @@ bool AAethelnPlayerState::TryAuthorizeDodge(const FAethelnDodgeStartRequest& Req
 		&& AbilitySystemComponent->ProcessMovementCarriedRequest(Request) == EAethelnActivationResult::Accepted;
 }
 
+FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
+{
+	return FAethelnHudSnapshot(); // Red-first stub (#61).
+}
+
+FAethelnHudActionOutcome AAethelnPlayerState::ToHudOutcome(uint32 Sequence, EAethelnActivationResult Result)
+{
+	return FAethelnHudActionOutcome(); // Red-first stub (#61).
+}
+
 bool AAethelnPlayerState::IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spec)
 {
 	// A plain UGameplayAbility subclass would bypass the choke point.
