@@ -99,7 +99,11 @@ binds `OnLethalResult` once in `Initialize`. The handler forwards to
 The emission loop that raises the notification iterates a local array of
 committed results (`AethelnCombatTimelineSubsystem.cpp:231-240`), and a chain
 reset only stamps a reset time (`:141-148`), so the synchronous transition does
-not invalidate the timeline's iteration.
+not invalidate the timeline's iteration. Since #60 P5
+([PR #321](https://github.com/ShayShimoni/aetheln-online/pull/321)), the pass
+sends held buffered-start records before emission, and interruption never runs
+for a lethal target. A death raised during emission therefore finds no held
+record, and its chain reset sends exactly one chain end.
 
 **Replication.** The player ASC uses Mixed replication. The owning client gets
 the death effect; every other client gets `State.Dead` as a minimal
