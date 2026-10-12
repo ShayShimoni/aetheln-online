@@ -62,8 +62,9 @@ function New-RequirementsTemplateFixture {
 	return [pscustomobject][ordered]@{
 		schemaVersion='aetheln.ci-acceptance-requirements-template/v1'
 		jobs=@(
+			[pscustomobject][ordered]@{key='content';jobName='content-receipt-shadow';checks=@('content-reference-validation')},
 			[pscustomobject][ordered]@{key='native';jobName='native-receipt-shadow';checks=@('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile')},
-			[pscustomobject][ordered]@{key='portable';jobName='portable-receipt-shadow';checks=@('content-reference-validation','controller-contract','portable')},
+			[pscustomobject][ordered]@{key='portable';jobName='portable-receipt-shadow';checks=@('controller-contract','portable')},
 			[pscustomobject][ordered]@{key='unreal';jobName='unreal-receipt-shadow';checks=@('unreal-editor-automation')},
 			[pscustomobject][ordered]@{key='visual';jobName='visual-receipt-shadow';checks=@('visual-package')}
 		)
@@ -144,7 +145,7 @@ try {
 	}
 	Assert-True ($Identity.workflow.sha256 -ceq (Get-FileHash -LiteralPath $Fixture.WorkflowPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'Workflow digest must bind exact workflow bytes.'
 	Assert-True ($Identity.controller.blobOid -ceq ('d'*40) -and $Identity.policy.digest -ceq ('1'*64) -and $Identity.attemptAnchor.nonce -ceq $script:Nonce) 'Controller, policy, and attempt anchor must come from the selector report.'
-	Assert-True ($Requirements.schemaVersion -ceq 'aetheln.ci-acceptance-requirements/v1' -and @($Requirements.jobs).Count -eq 4) 'Runtime requirements must use the aggregate schema.'
+	Assert-True ($Requirements.schemaVersion -ceq 'aetheln.ci-acceptance-requirements/v1' -and @($Requirements.jobs).Count -eq 5) 'Runtime requirements must use the aggregate schema.'
 	foreach ($Job in $Requirements.jobs) { Assert-True ($Job.artifactName -ceq ('ci-receipt-'+$Job.key+'-9001-2-'+$script:Nonce)) 'Runtime artifact names must bind the current nonce.' }
 	. (Join-Path $RepositoryRoot 'scripts\ci\Invoke-CiAcceptanceAggregate.ps1')
 	Assert-AcceptanceContext -Context $Aggregate
@@ -168,7 +169,7 @@ try {
 	Write-FixtureJson $UnavailableGapFixture.SelectorPath (Get-UnavailableSelectorFixture)
 	$Gap = Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Gap
 	Assert-True ($Gap.mode -ceq 'Gap' -and $Gap.acceptedControllerUnavailable -eq $true -and $Gap.attemptAnchor.nonce -ceq $script:Nonce) 'Unavailable-controller gap validation must bind the current attempt without claiming accepted-base identity.'
-	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'content-reference-validation,clean-package-provenance-smoke') 'The fallback must conservatively select both obligations without live producers.'
+	Assert-True ((@($Gap.selectedUnsupported) -join ',') -ceq 'clean-package-provenance-smoke') 'The fallback must conservatively select the one obligation without a live producer.'
 	Assert-True (-not (Test-Path -LiteralPath $UnavailableGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.AggregatePath) -and -not (Test-Path -LiteralPath $UnavailableGapFixture.RequirementsPath)) 'Gap mode must publish no identity, aggregate context, or receipt prerequisites.'
 	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Identity } 'selector_execution_invalid'
 	Assert-Rejected { Invoke-Fixture -Fixture $UnavailableGapFixture -Mode Aggregate } 'selector_execution_invalid'
@@ -188,7 +189,7 @@ try {
 	$FallbackBytes = [IO.File]::ReadAllBytes($WorkflowFallbackFixture.SelectorPath)
 	Assert-True ($FallbackBytes.Length -gt 2 -and $FallbackBytes[-1] -eq 10 -and $FallbackBytes[-2] -ne 10 -and $FallbackBytes[-2] -ne 13) 'The actual workflow fallback writer must emit exactly one trailing LF.'
 	$Gap = Invoke-Fixture -Fixture $WorkflowFallbackFixture -Mode Gap
-	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 2) 'The exact workflow fallback serialization must pass strict gap validation.'
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $true -and @($Gap.selectedUnsupported).Count -eq 1) 'The exact workflow fallback serialization must pass strict gap validation.'
 } finally {
 	if ($null -eq $PreviousShadowReportPath) { Remove-Item Env:AETHELN_SHADOW_REPORT -ErrorAction SilentlyContinue }
 	else { $env:AETHELN_SHADOW_REPORT = $PreviousShadowReportPath }
@@ -197,9 +198,12 @@ try {
 
 $AcceptedGapFixture = New-InvocationFixture
 try {
+	# Producer 4 made content-reference-validation live, so a content-only selection is no longer a gap.
 	Write-FixtureJson $AcceptedGapFixture.SelectorPath (New-SelectorFixture -Selected @('content-reference-validation'))
+	Assert-Rejected { Invoke-Fixture -Fixture $AcceptedGapFixture -Mode Gap } 'gap_selection_empty'
+	Write-FixtureJson $AcceptedGapFixture.SelectorPath (New-SelectorFixture -Selected @('content-reference-validation','clean-package-provenance-smoke'))
 	$Gap = Invoke-Fixture -Fixture $AcceptedGapFixture -Mode Gap
-	Assert-True ($Gap.acceptedControllerUnavailable -eq $false -and (@($Gap.selectedUnsupported) -join ',') -ceq 'content-reference-validation') 'An accepted-base unsupported selection must retain the strict existing identity contract but produce only a gap diagnostic.'
+	Assert-True ($Gap.acceptedControllerUnavailable -eq $false -and (@($Gap.selectedUnsupported) -join ',') -ceq 'clean-package-provenance-smoke') 'An accepted-base unsupported selection must retain the strict existing identity contract but produce only a gap diagnostic.'
 	Assert-True (-not (Test-Path -LiteralPath $AcceptedGapFixture.IdentityPath) -and -not (Test-Path -LiteralPath $AcceptedGapFixture.AggregatePath)) 'Accepted-base gap validation must not create aggregate inputs.'
 } finally { Remove-Item -LiteralPath $AcceptedGapFixture.Root -Recurse -Force }
 
@@ -287,9 +291,9 @@ foreach ($Case in @(
 	@{name='selector-missing-lf';reason='json_canonical_bytes_invalid';mutate={param($f)$raw=[IO.File]::ReadAllText($f.SelectorPath,$script:ContextUtf8);[IO.File]::WriteAllText($f.SelectorPath,$raw.Substring(0,$raw.Length-1),$script:ContextUtf8)}},
 	@{name='selector-extra-lf';reason='json_canonical_bytes_invalid';mutate={param($f)[IO.File]::AppendAllText($f.SelectorPath,"`n",$script:ContextUtf8)}},
 	@{name='selector-duplicate-json';reason='json_duplicate_property';mutate={param($f)$raw=[IO.File]::ReadAllText($f.SelectorPath,$script:ContextUtf8);$raw=$raw -replace '^\{','{"schemaVersion":"evil",';[IO.File]::WriteAllText($f.SelectorPath,$raw,$script:ContextUtf8)}},
-	@{name='incomplete-coverage';reason='requirements_check_coverage_incomplete';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks|Where-Object{$_ -cne 'portable'});Write-FixtureJson $f.TemplatePath $x}},
+	@{name='incomplete-coverage';reason='requirements_check_coverage_incomplete';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[2].checks=@($x.jobs[2].checks|Where-Object{$_ -cne 'portable'});Write-FixtureJson $f.TemplatePath $x}},
 	@{name='retired-template-id';reason='requirements_check_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs[1].checks=@($x.jobs[1].checks[0..1])+@('delivery-harness')+@($x.jobs[1].checks[2]);Write-FixtureJson $f.TemplatePath $x}},
-	@{name='unsorted-template';reason='requirements_not_sorted';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs=@($x.jobs[1],$x.jobs[0],$x.jobs[2],$x.jobs[3]);Write-FixtureJson $f.TemplatePath $x}},
+	@{name='unsorted-template';reason='requirements_not_sorted';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x.jobs=@($x.jobs[1],$x.jobs[0],$x.jobs[2],$x.jobs[3],$x.jobs[4]);Write-FixtureJson $f.TemplatePath $x}},
 	@{name='template-open';reason='requirements_schema_invalid';mutate={param($f)$x=Get-Content -Raw $f.TemplatePath|ConvertFrom-Json;$x|Add-Member extra $true;Write-FixtureJson $f.TemplatePath $x}},
 	@{name='workflow-reparse';reason='input_reparse_rejected';mutate={param($f)$targetRoot=Join-Path $f.Root 'actual';$linkRoot=Join-Path $f.Root 'linked';New-Item -ItemType Directory -Path $targetRoot|Out-Null;Move-Item $f.WorkflowPath (Join-Path $targetRoot 'workflow.yml');New-Item -ItemType Junction -Path $linkRoot -Target $targetRoot|Out-Null;$f.WorkflowPath=Join-Path $linkRoot 'workflow.yml'}}
 )) {

@@ -124,12 +124,43 @@ function New-TestEngineReport {
 
 function New-TestUnrealReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
-	param()
-	$Tests = @(
-		[pscustomobject][ordered]@{fullTestPath='Aetheln.GameCombat.NetworkSpike.Authority';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0},
-		[pscustomobject][ordered]@{fullTestPath='Aetheln.Harness.ProjectAndModuleLoad';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0}
-	)
-	return [pscustomobject][ordered]@{schemaId='aetheln.unreal-automation';schemaVersion=1;mode='production';sourceRevision=('c'*40);engineRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';projectName='AethelnOnline';filter='^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$';timeoutSeconds=600;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';processExitCode=0;repositoryCleanBefore=$true;repositoryCleanAfter=$true;outputs=[pscustomobject][ordered]@{unrealReport='TestResults/UnrealAutomation/index.json';log='Saved/Logs/AethelnUnrealAutomation.log'};tests=$Tests;summary=[pscustomobject][ordered]@{total=2;passed=2;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=0};result='passed';failureReason='none'}
+	param([string[]] $Names = @('Aetheln.GameCombat.NetworkSpike.Authority','Aetheln.Harness.ProjectAndModuleLoad'))
+	$Tests = @($Names | ForEach-Object { [pscustomobject][ordered]@{fullTestPath=$_;state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0} })
+	return [pscustomobject][ordered]@{schemaId='aetheln.unreal-automation';schemaVersion=1;mode='production';sourceRevision=('c'*40);engineRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';projectName='AethelnOnline';filter='^Aetheln.';timeoutSeconds=600;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';processExitCode=0;repositoryCleanBefore=$true;repositoryCleanAfter=$true;outputs=[pscustomobject][ordered]@{unrealReport='TestResults/UnrealAutomation/index.json';log='Saved/Logs/AethelnUnrealAutomation.log'};tests=$Tests;summary=[pscustomobject][ordered]@{total=$Tests.Count;passed=$Tests.Count;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=0};result='passed';failureReason='none'}
+}
+
+# Synthetic until the first live launcher run replaces it: the field inventory follows the launcher's report contract
+# (scripts/content/Invoke-ContentValidation.ps1) and the scanner's families and checks, with every TBD family non_promotion.
+function New-TestContentReport {
+	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
+	param([int] $AssetCount = 1)
+	$FamilyChecks = [ordered]@{
+		collision=@('presentation_equivalence','profile','simple_complex_policy'); rendering_suitability=@('hlod','lod','nanite_suitability','streaming')
+		texture=@('compression','mips','pbr_channels','streaming','tiling'); material=@('material_instance_policy','shader_complexity_evidence')
+		skeletal_animation=@('animation_complexity','influences','morph_policy','rig_compatibility','socket_ownership'); map_world=@('data_layers','map_identity','pcg_authority','runtime_editor_boundary')
+		navigation=@('navigation_data_audience','runtime_rebuild_policy','streaming_boundaries')
+		reference_boundary=@('audience_reachability','broken_references','compatible_content_version','hard_reference_exceptions','redirectors','stable_id_unique')
+	}
+	$Assets = New-Object Collections.Generic.List[object]
+	$Findings = New-Object Collections.Generic.List[object]
+	for ($Index = 0; $Index -lt $AssetCount; $Index++) {
+		$AssetPath = '/Game/Fixture/Asset' + $Index
+		$Families = @($FamilyChecks.Keys | ForEach-Object {
+			# A temporary_prototype asset is non_promotion in every family, reference_boundary included (live L1 report).
+			$Promotion = 'non_promotion'
+			$Checks = @($FamilyChecks[$_] | ForEach-Object { [pscustomobject][ordered]@{check_id=$_;applicability='applicable';deterministic_status='passed';promotion_status=$Promotion;evidence='fixture'} })
+			[pscustomobject][ordered]@{policy_id=$_;applicability='applicable';deterministic_status='passed';promotion_status=$Promotion;evidence='fixture';check_results=$Checks}
+		})
+		foreach ($Family in @($Families | Where-Object { $_.promotion_status -ceq 'non_promotion' })) {
+			$Findings.Add([pscustomobject][ordered]@{policy_id=$Family.policy_id;code=('content.' + $Family.policy_id + '.non_promotion');asset_path=$AssetPath;severity='non_promotion';reason='fixture';remediation='fixture';evidence_field='thresholds.unresolved_budgets'})
+		}
+		$Provenance = [pscustomobject][ordered]@{author_or_provider='fixture';source_record='fixture';source_version='1';license_or_permission_evidence='fixture';modifications='none';generation_metadata_when_applicable='none';content_sha256=('9'*64);reviewer='fixture';approval_state='fixture'}
+		$Lifecycle = [pscustomobject][ordered]@{content_identity='fixture';temporary_prototype='fixture';runtime_candidate=@();production_approval=@()}
+		$Assets.Add([pscustomobject][ordered]@{asset_path=$AssetPath;stable_id=('fixture.asset.' + $Index);content_version=1;audience='shared';lifecycle_state='temporary_prototype';provenance=$Provenance;lifecycle_evidence=$Lifecycle;family_results=$Families})
+	}
+	$Artifact = [pscustomobject][ordered]@{path='Binaries/Win64/AethelnOnlineEditor.target';size_bytes=1;sha256=('b'*64);build_id='fixture'}
+	$Execution = [pscustomobject][ordered]@{repository_clean=$true;engine_revision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';engine_tag='5.8.1-release';engine_binary_sha256=('3'*64);build_version_sha256=('4'*64);target='AethelnOnlineEditor';platform='Win64';configuration='Development';editor_build_command_sha256=('5'*64);editor_build_log_sha256=('6'*64);compiler_version='14.44.35228';compiler_sha256=('7'*64);resource_compiler_version='10.0.26100.0';resource_compiler_sha256=('8'*64);target_receipt=$Artifact;module_manifest=$Artifact;loaded_project_modules=@($Artifact,$Artifact);project_sha256=('1'*64);policy_sha256=('0'*64);intake_sha256=('2'*64);invocation_sha256=('a'*64);registry_source='live_asset_registry'}
+	return [pscustomobject][ordered]@{schema_id='aetheln.content-validation-report';schema_version=2;revision=('c'*40);engine_identity='5.8.1-release@71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';policy_sha256=('0'*64);intake_sha256=('2'*64);execution_provenance=$Execution;audience='all';started_utc='2026-10-05T00:00:00.0000000Z';finished_utc='2026-10-05T00:00:01.000Z';command=('GameTests.AethelnContentValidation invocation_sha256=' + ('a'*64));counts=[pscustomobject][ordered]@{assets=$Assets.Count;findings=$Findings.Count;errors=0;non_promotion=$Findings.Count};assets=$Assets.ToArray();findings=$Findings.ToArray();result='non_promotion'}
 }
 
 function Write-Input($Value, [string] $Path = $InputPath) {
@@ -278,7 +309,8 @@ try {
 	foreach ($SemanticFixture in @(
 		@{id='portable';name='ci-report.json';report=(New-TestPortableReport);native=$null;cleanup=$null},
 		@{id='native-client-server-compile';name='engine-runner-report.json';report=(New-TestEngineReport);native=0;cleanup=$true},
-		@{id='unreal-editor-automation';name='unreal-automation-report.json';report=(New-TestUnrealReport);native=0;cleanup=$null}
+		@{id='unreal-editor-automation';name='unreal-automation-report.json';report=(New-TestUnrealReport);native=0;cleanup=$null},
+		@{id='content-reference-validation';name='content-validation-report.json';report=(New-TestContentReport);native=0;cleanup=$null}
 	)) {
 		$SemanticPath = Join-Path $EvidenceRoot $SemanticFixture.name
 		[IO.File]::WriteAllText($SemanticPath, (($SemanticFixture.report | ConvertTo-Json -Depth 12 -Compress) + "`n"), $Utf8)
@@ -295,6 +327,7 @@ try {
 		$BadReport = $SemanticFixture.report | ConvertTo-Json -Depth 12 | ConvertFrom-Json
 		if ($SemanticFixture.id -ceq 'portable') { $BadReport.summary.requiredFailed = 1 }
 		elseif ($SemanticFixture.id -ceq 'native-client-server-compile') { $BadReport.supervisor.cleanupVerified = $false }
+		elseif ($SemanticFixture.id -ceq 'content-reference-validation') { $BadReport.assets[0].family_results[7].check_results[4].deterministic_status = 'failed' }
 		else { $BadReport.tests[0].status = 'failed' }
 		[IO.File]::WriteAllText($SemanticPath, (($BadReport | ConvertTo-Json -Depth 12 -Compress) + "`n"), $Utf8)
 		$SemanticInput.results.checks[0].evidence[0].sha256 = Get-Sha256 $SemanticPath
@@ -524,15 +557,82 @@ try {
 		@{name='test-duration-string';mutate={param($x)$x.tests[0].durationSeconds='0.1'}},
 		@{name='warning-count-string';mutate={param($x)$x.tests[0].warningCount='0'}},
 		@{name='summary-passed-string';mutate={param($x)$x.summary.passed='2'}},
-		@{name='summary-relationship';mutate={param($x)$x.summary.total=3}}
+		@{name='summary-relationship';mutate={param($x)$x.summary.total=3}},
+		@{name='old-two-test-filter';mutate={param($x)$x.filter='^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$'}},
+		@{name='unprefixed-test';mutate={param($x)$x.tests[0].fullTestPath='GameTests.AethelnContentValidation.ReportOutputGuard'}},
+		@{name='duplicate-test';mutate={param($x)$x.tests[1].fullTestPath=$x.tests[0].fullTestPath}},
+		@{name='no-tests';mutate={param($x)$x.tests=@();$x.summary.total=0;$x.summary.passed=0}},
+		@{name='missing-test';mutate={param($x)$x.summary.missing=1}}
 	)) {
 		$BadUnreal = New-TestUnrealReport; & $UnrealTypeCase.mutate $BadUnreal
 		$BadUnrealBytes = $Utf8.GetBytes(($BadUnreal | ConvertTo-Json -Depth 12 -Compress) + "`n")
 		try { Assert-Rejected { Assert-AcceptanceUnrealAutomationEvidence -Bytes $BadUnrealBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
 		catch { throw "Unreal type fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 	}
+	# Issue #237: every Aetheln. test runs (142 on 2026-10-12), so a passing report with many tests must be accepted.
+	$ManyUnrealBytes = $Utf8.GetBytes(((New-TestUnrealReport @(1..300 | ForEach-Object { 'Aetheln.Fixture.Test{0:D3}' -f $_ })) | ConvertTo-Json -Depth 12 -Compress) + "`n")
+	$null = Assert-AcceptanceUnrealAutomationEvidence -Bytes $ManyUnrealBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0)
 
-	foreach ($UnsupportedId in @('clean-package-provenance-smoke','content-reference-validation')) {
+	# The content receipt claims report integrity and the six reference_boundary checks only (decision D1).
+	$ContentIdentity = Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0
+	Assert-AcceptanceContentValidationEvidence -Bytes $Utf8.GetBytes((New-TestContentReport -AssetCount 3 | ConvertTo-Json -Depth 12 -Compress) + "`n") -Identity $ContentIdentity
+	foreach ($ContentCase in @(
+		@{name='wrong-revision';mutate={param($x)$x.revision=('d'*40)}},
+		@{name='wrong-engine-identity';mutate={param($x)$x.engine_identity='5.8.1-release@'+('0'*40)}},
+		@{name='test-snapshot';mutate={param($x)$x.execution_provenance.registry_source='test_snapshot'}},
+		@{name='dirty-repository';mutate={param($x)$x.execution_provenance.repository_clean=$false}},
+		@{name='wrong-target';mutate={param($x)$x.execution_provenance.target='AethelnOnlineClient'}},
+		@{name='schema-version';mutate={param($x)$x.schema_version=1}},
+		@{name='extra-field';mutate={param($x)$x|Add-Member -NotePropertyName extra -NotePropertyValue $true}},
+		@{name='execution-field-missing';mutate={param($x)$x.execution_provenance.PSObject.Properties.Remove('policy_sha256')}},
+		@{name='result-failed';mutate={param($x)$x.result='failed'}},
+		@{name='errors';mutate={param($x)$x.counts.errors=1}},
+		@{name='no-assets';mutate={param($x)$x.assets=@();$x.counts.assets=0}},
+		@{name='asset-count';mutate={param($x)$x.counts.assets=4}},
+		@{name='finding-count';mutate={param($x)$x.counts.findings=0}},
+		# Counts must be JSON integers: a string or boolean that compares equal to the bound is still rejected.
+		@{name='errors-string';mutate={param($x)$x.counts.errors='0'}},
+		@{name='errors-boolean';mutate={param($x)$x.counts.errors=$false}},
+		@{name='asset-count-string';mutate={param($x)$x.counts.assets=[string]@($x.assets).Count}},
+		@{name='non-promotion-string';mutate={param($x)$x.counts.non_promotion=[string]$x.counts.non_promotion}},
+		@{name='non-promotion-negative';mutate={param($x)$x.counts.non_promotion=-1}},
+		# findings[7] is asset 0's allowlisted reference_boundary lifecycle finding; each case breaks one allowlist condition.
+		@{name='reference-finding-code';mutate={param($x)$x.findings[7].code='content.reference_boundary.failed'}},
+		@{name='reference-finding-severity';mutate={param($x)$x.findings[7].severity='error'}},
+		@{name='reference-finding-evidence-field';mutate={param($x)$x.findings[7].evidence_field='family_results.reference_boundary.check_results'}},
+		@{name='reference-finding-lifecycle';mutate={param($x)$x.assets[0].lifecycle_state='runtime_candidate'}},
+		@{name='reference-finding-duplicate';mutate={param($x)$x.findings=@($x.findings)+$x.findings[7];$x.counts.findings=@($x.findings).Count}},
+		@{name='family-failed';mutate={param($x)$x.assets[1].family_results[7].deterministic_status='failed'}},
+		@{name='family-missing';mutate={param($x)$x.assets[2].family_results=@($x.assets[2].family_results[0..6])}},
+		@{name='five-checks';mutate={param($x)$x.assets[0].family_results[7].check_results=@($x.assets[0].family_results[7].check_results[0..4])}},
+		@{name='check-renamed';mutate={param($x)$x.assets[0].family_results[7].check_results[5].check_id='stable_id'}},
+		@{name='check-unavailable';mutate={param($x)$x.assets[0].family_results[7].check_results[2].deterministic_status='evidence_unavailable'}},
+		@{name='check-not-applicable';mutate={param($x)$x.assets[0].family_results[7].check_results[0].applicability='not_applicable'}},
+		@{name='check-extra-field';mutate={param($x)$x.assets[0].family_results[7].check_results[0]|Add-Member -NotePropertyName extra -NotePropertyValue 1}}
+	)) {
+		$BadContent = New-TestContentReport -AssetCount 3; & $ContentCase.mutate $BadContent
+		$BadContentBytes = $Utf8.GetBytes(($BadContent | ConvertTo-Json -Depth 12 -Compress) + "`n")
+		try { Assert-Rejected { Assert-AcceptanceContentValidationEvidence -Bytes $BadContentBytes -Identity $ContentIdentity } 'receipt_semantic_evidence_invalid:content-reference-validation' }
+		catch { throw "Content fixture '$($ContentCase.name)' failed: $($_.Exception.Message)" }
+	}
+	Assert-Rejected { Assert-AcceptanceContentValidationEvidence -Bytes ([byte[]]::new(4MB + 1)) -Identity $ContentIdentity } 'receipt_semantic_evidence_invalid:content-reference-validation'
+	$ContentEvidence = Write-ControllerContractReport (New-TestContentReport) 'content-validation-report.json'
+	$ContentArguments = @{ EvidenceName = 'content-validation-report.json'; JobName = 'content-receipt-shadow'; NativeExitCode = 0; CleanupVerified = $null }
+	foreach ($ContentResultCase in @(
+		@{ name='null-native-exit'; reason='receipt_semantic_evidence_invalid:content-reference-validation'; mutate={ param($x) $x.results.checks[0].nativeExitCode = $null } },
+		@{ name='native-exit'; reason='receipt_invalid'; mutate={ param($x) $x.results.checks[0].nativeExitCode = 2 } },
+		@{ name='cleanup'; reason='receipt_invalid'; mutate={ param($x) $x.results.checks[0].cleanupVerified = $true } },
+		@{ name='two-evidence'; reason='receipt_semantic_evidence_duplicate:content-reference-validation'; mutate={ param($x) $x.results.checks[0].evidence = @($x.results.checks[0].evidence[0], $x.results.checks[0].evidence[0]) } }
+	)) {
+		$ContentInput = New-ControllerContractInput -CheckIds @('content-reference-validation') -Evidence $ContentEvidence @ContentArguments
+		& $ContentResultCase.mutate $ContentInput
+		$ContentInputPath = Join-Path $FixtureRoot ('content-' + $ContentResultCase.name + '.json'); Write-Input $ContentInput $ContentInputPath
+		try { Assert-Rejected { New-CiAcceptanceReceipt -InputPath $ContentInputPath -EvidenceRoot $EvidenceRoot -OutputPath $OutputPath } $ContentResultCase.reason }
+		catch { throw "Content result fixture '$($ContentResultCase.name)' failed: $($_.Exception.Message)" }
+	}
+	Remove-Item -LiteralPath (Join-Path $EvidenceRoot 'content-validation-report.json') -Force
+
+	foreach ($UnsupportedId in @('clean-package-provenance-smoke')) {
 		$Unsupported = Get-TestReceiptInput -VisualSha256 $VisualSha256 -VisualSize $VisualSize
 		$Unsupported.selection.checks[0] = $UnsupportedId; $Unsupported.results.checks[0].id = $UnsupportedId
 		if ($UnsupportedId -in @('clean-package-provenance-smoke','native-client-server-compile')) { $Unsupported.results.checks[0].nativeExitCode=0; $Unsupported.results.checks[0].cleanupVerified=$true }

@@ -104,6 +104,8 @@ private:
 	void HandlePostActorTick(UWorld* World, ELevelTick TickType, float DeltaSeconds);
 	void Sweep(const FStep& Entry, const FAethelnAttackSampleInterval& Interval, const FVector& NowOrigin, double Now, TArray<FCandidate>& OutCandidates);
 	void Resolve(const FCandidate& Candidate, TArray<FCommitted>& OutCommitted);
+	/** Ends the target's step and chain at the contact time if the step at that time is still interruptible. */
+	void Interrupt(UAethelnAbilitySystemComponent& Target, double ContactTime);
 	void Emit(const FCommitted& Committed);
 	uint32 GetOrAssignCombatId(UAethelnAbilitySystemComponent& AbilitySystem);
 	TArray<FStep> Steps;

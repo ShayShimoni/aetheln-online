@@ -1075,6 +1075,16 @@ void UAethelnAbilitySystemComponent::ServerSetReplicatedEventWithPayload_Impleme
 	RefuseStockRoute();
 }
 
+void UAethelnAbilitySystemComponent::ServerPrintDebug_Request_Implementation()
+{
+	RefuseStockRoute();
+}
+
+void UAethelnAbilitySystemComponent::ServerPrintDebug_RequestWithStrings_Implementation(const TArray<FString>& Strings)
+{
+	RefuseStockRoute();
+}
+
 void UAethelnAbilitySystemComponent::OnUnregister()
 {
 	ResetChain(EAethelnChainEndReason::AvatarLost);
@@ -1160,13 +1170,14 @@ bool UAethelnAbilitySystemComponent::BeginChainPress(UAethelnBasicChainAbility& 
 	return ActiveSeamScope->bChainReady;
 }
 
-bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime)
+bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime, bool bHoldRecord)
 {
 	UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline();
 	UAethelnBasicChainAbility* Ability = ChainState.Ability.Get();
 	AActor* Avatar = GetAvatarActor();
+	// A held record lives only inside one pass; no later step may overtake it (records stay in start order).
 	if (!ChainState.bExists || Ability == nullptr || Timeline == nullptr || Avatar == nullptr || Avatar->IsActorBeingDestroyed()
-		|| Step < 1 || Step > ChainState.Definitions.Num() || !FMath::IsFinite(StartTime)) { return false; }
+		|| Step < 1 || Step > ChainState.Definitions.Num() || !FMath::IsFinite(StartTime) || ChainState.HeldRecord.ActivationId.IsValid()) { return false; }
 	// Tag delegates can synchronously reset or replace the chain and free its definitions.
 	const FAethelnAttackStepDefinition Definition = ChainState.Definitions[Step - 1];
 	const FAethelnServerChainState Previous = ChainState;
@@ -1180,6 +1191,7 @@ bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttack
 	Record.Windows.BufferOpen = Definition.BufferOpen; Record.Windows.LinkOpen = Definition.LinkOpen;
 	Record.Windows.LinkClose = Definition.LinkClose; Record.Windows.RecoveryEnd = Definition.RecoveryEnd;
 	Record.Windows.CancelOpen = Definition.CancelOpen;
+	Record.Windows.InterruptibleUntil = Definition.InterruptibleUntil;
 	if (!Timeline->RegisterStep(*this, Definition, Record, Ability->ProvisionalMaxSampleDistance, Ability->ProvisionalMaxSampleAngleDegrees)) { return false; }
 	if (ChainState.CurrentInput.ActivationId.IsValid()) { Timeline->StampReset(ChainState.CurrentInput.ActivationId, StartTime); }
 	if (ChainState.bCommitmentHeld)
@@ -1210,18 +1222,29 @@ bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttack
 	AttackPresentationState.StartServerTime = StartTime; AttackPresentationState.AcceptedAim = Input.AcceptedAim;
 	AttackPresentationState.ActivationCounter = ++AttackActivationCounter;
 	AttackPresentationState.EndReason = EAethelnChainEndReason::None;
-	ClientCombatActivation(Record);
+	// A pass-started buffered step is announced after the pass resolves contacts: an interruption before
+	// its start means it never started (docs/attack-timeline-and-combo.md, Interruption).
+	if (bHoldRecord) { ChainState.HeldRecord = Record; }
+	else { ClientCombatActivation(Record); }
 	return true;
 }
 
-void UAethelnAbilitySystemComponent::StartBufferedChainStep(double Now)
+void UAethelnAbilitySystemComponent::SendHeldCombatActivation()
+{
+	if (!ChainState.HeldRecord.ActivationId.IsValid()) { return; }
+	const FAethelnCombatActivationRecord Record = ChainState.HeldRecord;
+	ChainState.HeldRecord = FAethelnCombatActivationRecord();
+	ClientCombatActivation(Record);
+}
+
+void UAethelnAbilitySystemComponent::StartBufferedChainStep(double Now, bool bHoldRecord)
 {
 	if (!IsOwnerActorAuthoritative() || !ChainState.bExists || !ChainState.bWaiting || Now < ChainState.BufferedStartTime) { return; }
 	const auto Input = ChainState.BufferedInput;
 	const double Start = ChainState.BufferedStartTime;
 	const FGuid PreviousActivationId = ChainState.CurrentInput.ActivationId;
 	const FGameplayAbilitySpecHandle Handle = ChainState.Handle;
-	if (!StartChainStep(Input, ChainState.Step + 1, Start) && ChainState.bExists && ChainState.Handle == Handle
+	if (!StartChainStep(Input, ChainState.Step + 1, Start, bHoldRecord) && ChainState.bExists && ChainState.Handle == Handle
 		&& ChainState.bWaiting && ChainState.CurrentInput.ActivationId == PreviousActivationId
 		&& ChainState.BufferedInput.ActivationId == Input.ActivationId)
 	{
@@ -1293,6 +1316,8 @@ void UAethelnAbilitySystemComponent::ResetChain(EAethelnChainEndReason Reason, d
 	{
 		CancelAbilityHandle(Previous.Handle);
 	}
+	// A held record goes out before its end if the step started by the reset time; otherwise it never started.
+	if (Previous.HeldRecord.ActivationId.IsValid() && ResetTime >= Previous.HeldRecord.StartServerTime) { ClientCombatActivation(Previous.HeldRecord); }
 	ClientChainEnded(Previous.bWaiting ? Previous.BufferedInput.ActivationId : Previous.CurrentInput.ActivationId, Reason);
 }
 

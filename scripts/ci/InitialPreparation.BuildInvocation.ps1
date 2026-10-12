@@ -101,6 +101,19 @@ public static class PreparationBuildCapture {
 		$Selection = if ($Target -ceq 'AethelnOnlineEditor') { ' -NoEngineChanges' } else { ' -Compiler=VisualStudio2022' }
 		$Command = $Command.TrimEnd('"') + $Selection + ' -CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0"'
 	}
+	# TA-020 2026-10-11: UBT enables the UHT input cache only while it creates the
+	# target makefile, and a reused Makefile.bin runs UHT with the cache off, which
+	# can rewrite the engine's NetCore.init.gen.cpp. Delete this target's makefile
+	# (the path UBT TargetMakefile.GetLocation gives) so every build creates it.
+	$Makefile = Join-Path $TargetRoot ('Intermediate/Build/{0}/x64/{1}/Development/Makefile.bin' -f $Platform, $Target)
+	if (Test-Path -LiteralPath $Makefile -PathType Leaf) {
+		$Probe = $Makefile
+		while ($Probe) {
+			if ((Get-Item -LiteralPath $Probe -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'build_path_invalid' }
+			$Probe = Split-Path -Parent $Probe
+		}
+		Remove-Item -LiteralPath $Makefile -Force
+	}
 	$Cmd = Join-Path ([Environment]::SystemDirectory) 'cmd.exe'
 	$NativeExit = [PreparationBuildCapture]::Run($Cmd, ('/d /s /c ' + $Command), $TargetRoot, $LinuxToolchainRoot, $DotnetRoot, (Join-Path $EvidenceRoot 'build.log'))
 	$Failure = $null

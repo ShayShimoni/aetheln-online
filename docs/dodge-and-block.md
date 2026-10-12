@@ -622,7 +622,9 @@ a duplicate, reordered, or replayed candidate from reaching the hook again.
 The block's hook:
 
 1. Applies `UAethelnGuardPressureEffect` from the attacker's ASC with
-   `GuardPressure`. The attribute set clamps Guard at zero.
+   `GuardPressure`. The attribute set clamps Guard at zero. Positive pressure
+   restarts the defender's Guard recovery delay (#292,
+   [Resource Recovery](gas-foundation.md#resource-recovery)).
 2. If Guard is now zero, breaks the guard: sets the slot's
    `ActiveUntilServerTime` to the contact time, ends the block activation,
    and removes `State.Blocking`. Per Q8 (owner-approved 2026-10-10) it also adds
@@ -922,11 +924,11 @@ lifecycle cancellation without stale revival; D15 shares mixed-route flood
 coverage with T14/T21. Existing assertions and network-profile evidence remain
 required; these are future test obligations, not newly passing tests.
 
-CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
-so each code PR records local automation evidence at its exact head on the
-pinned engine, as #19 and #60 do: P2 runs `Aetheln.Movement`; P3 and P4 run
-`Aetheln.GameCombat` and `Aetheln.Movement`; P5 runs `Aetheln.POC` and records
-the manual PIE steps.
+CI ran a frozen two-test filter until #237 widened it to every declared
+`Aetheln.` test, so each code PR records local automation evidence at its exact
+head on the pinned engine, as #19 and #60 do: P2 runs `Aetheln.Movement`; P3 and
+P4 run `Aetheln.GameCombat` and `Aetheln.Movement`; P5 runs `Aetheln.POC` and
+records the manual PIE steps.
 
 ## Acceptance-Criteria Mapping
 
@@ -1060,9 +1062,11 @@ the remapping mechanism and controller layout (#82); display names.
    custom move data relies on build-identical clients and servers. F10's
    revisit trigger, "when a flag is added", fires with `FLAG_Custom_2`; this
    is that revisit, and it keeps the build-identical rule.
-5. **No resource recovery** until the ticket assigned by Q9
-   ([#292](https://github.com/ShayShimoni/aetheln-online/issues/292))
-   delivers it.
+5. **No resource recovery in play yet.** Q9's ticket
+   ([#292](https://github.com/ShayShimoni/aetheln-online/issues/292)) defines
+   it in [Resource Recovery](gas-foundation.md#resource-recovery), but its
+   rates, periods, and delays are unset until #107 supplies them, so Guard and
+   Endurance still only fall.
 6. **Refused predictions are visible.** A stale local gate produces one
    correction. P5 records the rate.
 7. **PlayerState relevancy.** The state tags replicate from an always-relevant

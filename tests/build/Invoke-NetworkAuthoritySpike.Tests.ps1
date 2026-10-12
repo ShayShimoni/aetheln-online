@@ -1518,9 +1518,16 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 		server = @('server_game_thread_milliseconds','server_replication_cpu_milliseconds','server_memory_bytes','relevant_actor_count','destruction_event_count')
 		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second')
 	}
-	function Get-PerformanceContractObject {
-		$Budgets = foreach ($DomainName in $NetworkAuthorityPerformanceDomains.Keys) {
-			foreach ($MetricId in $NetworkAuthorityPerformanceDomains[$DomainName]) {
+	$NetworkAuthorityPerformanceDomainsV2 = [ordered]@{
+		client = @('client_memory_bytes','correction_count','correction_magnitude_centimeters','client_frame_time_milliseconds','client_game_thread_milliseconds','client_render_thread_milliseconds','client_gpu_milliseconds','client_frame_pacing_milliseconds','client_hitch_count','client_hitch_duration_milliseconds')
+		loading_streaming = @('client_startup_milliseconds','client_travel_milliseconds','client_map_load_milliseconds','client_streaming_stall_count','client_streaming_stall_milliseconds')
+		server = @('server_game_thread_milliseconds','server_replication_cpu_milliseconds','server_memory_bytes','relevant_actor_count','destruction_event_count','server_tick_duration_milliseconds','server_tick_overrun_count','server_tick_overrun_milliseconds','server_worker_task_milliseconds')
+		network = @('bandwidth_per_connection_bits_per_second','aggregate_bandwidth_bits_per_second','network_send_burst_bits_per_second','network_receive_burst_bits_per_second')
+	}
+	function Get-PerformanceContractObject([int] $SchemaVersion = 1) {
+		$Domains = if ($SchemaVersion -eq 2) { $NetworkAuthorityPerformanceDomainsV2 } else { $NetworkAuthorityPerformanceDomains }
+		$Budgets = foreach ($DomainName in $Domains.Keys) {
+			foreach ($MetricId in $Domains[$DomainName]) {
 				[ordered]@{
 					metric_id = $MetricId
 					domain = $DomainName
@@ -1536,9 +1543,9 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 				}
 			}
 		}
-		return [ordered]@{
+		$Contract = [ordered]@{
 			schema_id = 'aetheln.performance-capture-contract'
-			schema_version = 1
+			schema_version = $SchemaVersion
 			capture = [ordered]@{
 				source_revision = 'fixture-revision'
 				build = 'fixture-build'
@@ -1557,15 +1564,13 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 				profile_version = $null
 				profile_arguments_sha256 = $null
 				evidence_references = @('evidence-ref.fixture-capture-log','evidence-ref.fixture-capture-json')
-				measurement_domains = [ordered]@{
-					client = @($NetworkAuthorityPerformanceDomains.client)
-					server = @($NetworkAuthorityPerformanceDomains.server)
-					network = @($NetworkAuthorityPerformanceDomains.network)
-				}
+				measurement_domains = [ordered]@{}
 				sampling = [ordered]@{ sampling_rate_hz = $null; server_tick_hz = $null; bandwidth_limit_kbps = $null; capacity_players = $null }
 			}
 			budgets = @($Budgets)
 		}
+		foreach ($DomainName in $Domains.Keys) { $Contract.capture.measurement_domains[$DomainName] = @($Domains[$DomainName]) }
+		return $Contract
 	}
 	function Write-PerformanceContract([string] $Path, [object] $Contract) {
 		$Contract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
@@ -1670,7 +1675,7 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 	Write-Output 'PASS: opt-in performance capture and budget contract validates and publishes null-only unapproved summary evidence'
 
 	$PerformanceFailureCases = @(
-		@{ Name = 'wrong-schema-version'; Mutate = { param($C) $C.schema_version = 2 }; Failure = 'schema_version must be the JSON integer 1' },
+		@{ Name = 'wrong-schema-version'; Mutate = { param($C) $C.schema_version = 3 }; Failure = 'schema_version must be the JSON integer 1' },
 		@{ Name = 'string-schema-version'; Mutate = { param($C) $C.schema_version = '1' }; Failure = 'schema_version must be the JSON integer 1' },
 		@{ Name = 'fractional-schema-version'; Mutate = { param($C) $C.schema_version = 1.1 }; Failure = 'schema_version must be the JSON integer 1' },
 		@{ Name = 'boolean-schema-version'; Mutate = { param($C) $C.schema_version = $true }; Failure = 'schema_version must be the JSON integer 1' },
@@ -1693,6 +1698,9 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 		@{ Name = 'duplicate-evidence-references'; Mutate = { param($C) $C.capture.evidence_references = @('evidence-ref.dup','evidence-ref.dup') }; Failure = 'evidence_references must' },
 		@{ Name = 'missing-network-domain'; Mutate = { param($C) $C.capture.measurement_domains.Remove('network') }; Failure = 'unsupported or missing fields' },
 		@{ Name = 'incomplete-client-domain'; Mutate = { param($C) $C.capture.measurement_domains.client = @('client_memory_bytes') }; Failure = 'version-1 network-authority-runner' },
+		@{ Name = 'v1-body-labeled-v2'; Mutate = { param($C) $C.schema_version = 2 }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'reordered-client-domain'; Mutate = { param($C) $D = $C.capture.measurement_domains.client; $C.capture.measurement_domains.client = @($D[1], $D[0], $D[2]) }; Failure = 'version-1 network-authority-runner' },
+		@{ Name = 'extra-network-metric'; Mutate = { param($C) $C.capture.measurement_domains.network = @($C.capture.measurement_domains.network) + @('extra_metric') }; Failure = 'version-1 network-authority-runner' },
 		@{ Name = 'populated-tick-rate'; Mutate = { param($C) $C.capture.sampling.server_tick_hz = 30 }; Failure = 'must remain null' },
 		@{ Name = 'populated-capacity'; Mutate = { param($C) $C.capture.sampling.capacity_players = 32 }; Failure = 'must remain null' },
 		@{ Name = 'populated-target'; Mutate = { param($C) $C.budgets[0].target = 16 }; Failure = 'must remain null' },
@@ -1734,6 +1742,65 @@ foreach ($Id in $Doomed.Keys) { Stop-Process -Id $Id -Force -ErrorAction Ignore 
 	try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'performance-duplicate-property') -FixtureRunId 'fixture-performance-duplicate-property' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $DuplicatePerformancePropertyPath } catch { $DuplicatePerformanceFailure = $_.Exception.Message }
 	Assert-True ($DuplicatePerformanceFailure -match [regex]::Escape("duplicate JSON property 'schema_version'")) "A duplicate performance-contract JSON property must fail closed before launch. Actual: $DuplicatePerformanceFailure"
 	Write-Output 'PASS: malformed, duplicate, missing, extra, mismatched, populated, and self-approved performance contracts fail closed before launch'
+
+	$V2ClientMetric = 'client_render_thread_milliseconds'
+	$V1RejectsV2Contract = Get-PerformanceContractObject
+	$V1RejectsV2Contract.capture.run_id = 'fixture-performance-v1-rejects-v2-metric'
+	$V1RejectsV2Contract.budgets[0].metric_id = $V2ClientMetric
+	$V1RejectsV2ContractPath = Join-Path $PerformanceContractRoot 'performance-v1-rejects-v2-metric.json'
+	Write-PerformanceContract $V1RejectsV2ContractPath $V1RejectsV2Contract
+	$V1RejectsV2Failure = $null
+	try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot 'performance-v1-rejects-v2-metric') -FixtureRunId 'fixture-performance-v1-rejects-v2-metric' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $V1RejectsV2ContractPath } catch { $V1RejectsV2Failure = $_.Exception.Message }
+	Assert-True ($V1RejectsV2Failure -match [regex]::Escape("Unsupported performance budget metric '$V2ClientMetric'")) "A version-1 contract must reject a version-2 metric. Actual: $V1RejectsV2Failure"
+	$V2Contract = Get-PerformanceContractObject -SchemaVersion 2
+	$V2Contract.capture.run_id = 'fixture-performance-v2-success'
+	$V2ClientBudget = @($V2Contract.budgets | Where-Object { $_.metric_id -ceq $V2ClientMetric })
+	Assert-True ($V2ClientBudget.Count -eq 1) 'The version-2 fixture must declare the client render-thread metric exactly once.'
+	$V2ClientBudget[0].evidence_classification = 'hypothetical'
+	$V2ClientBudget[0].evidence_references = @('evidence-ref.fixture-capture-log')
+	$V2ContractPath = Join-Path $PerformanceContractRoot 'performance-v2-success.json'
+	Write-PerformanceContract $V2ContractPath $V2Contract
+	$V2Root = Join-Path $FixtureRoot 'performance-v2-success'
+	Invoke-FixtureRun -FixtureLogRoot $V2Root -FixtureRunId 'fixture-performance-v2-success' -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $V2ContractPath
+	$V2Evidence = Get-Content -LiteralPath (Join-Path $V2Root 'network-authority-spike-evidence.json') -Raw | ConvertFrom-Json
+	Assert-True ($V2Evidence.performance_contract.schema_version -eq 2 -and $V2Evidence.performance_contract.budget_count -eq 28) 'A version-2 contract must publish schema version 2 and one budget per version-2 metric.'
+	Assert-True (@($V2Evidence.performance_contract.measurement_domains.client) -ccontains $V2ClientMetric -and @($V2Evidence.performance_contract.measurement_domains.loading_streaming).Count -eq 5) 'Version-2 evidence must list the new client and loading_streaming metrics.'
+	foreach ($V2DomainName in $NetworkAuthorityPerformanceDomainsV2.Keys) {
+		Assert-True ((@($V2Evidence.performance_contract.measurement_domains.$V2DomainName) -join ',') -ceq (@($NetworkAuthorityPerformanceDomainsV2[$V2DomainName]) -join ',')) "Version-2 evidence must publish the exact ordered '$V2DomainName' metric list."
+	}
+	Assert-True ($V2Evidence.performance_contract.targets_defined -eq $false -and $V2Evidence.performance_contract.approval_status -eq 'unapproved') 'Version-2 evidence must stay target-free and unapproved.'
+	Assert-True ($V2Evidence.performance_contract.contract_sha256 -eq (Get-FileHash -LiteralPath $V2ContractPath -Algorithm SHA256).Hash.ToLowerInvariant()) 'Version-2 evidence must bind the exact contract bytes.'
+	Write-Output 'PASS: version-2 performance capture contract accepts the new metric families while version-1 contracts still pass'
+
+	$V2FailureCases = @(
+		@{ Name = 'v2-populated-client-target'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'client_render_thread_milliseconds' })[0].target = 16 }; Failure = 'must remain null' },
+		@{ Name = 'v2-populated-loading-warning'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'client_map_load_milliseconds' })[0].warning_threshold = 100 }; Failure = 'must remain null' },
+		@{ Name = 'v2-populated-server-failure-threshold'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'server_tick_overrun_count' })[0].failure_threshold = 1 }; Failure = 'must remain null' },
+		@{ Name = 'v2-self-approved-network-budget'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'network_send_burst_bits_per_second' })[0].approval_status = 'approved' }; Failure = 'cannot self-approve' },
+		@{ Name = 'v2-self-approved-client-budget'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'client_hitch_count' })[0].approval_status = 'approved' }; Failure = 'cannot self-approve' },
+		@{ Name = 'v2-body-labeled-v1'; Mutate = { param($C) $C.schema_version = 1 }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'v2-reordered-server-domain'; Mutate = { param($C) $D = $C.capture.measurement_domains.server; $C.capture.measurement_domains.server = @($D[0..4]) + @($D[6], $D[5]) + @($D[7..($D.Count - 1)]) }; Failure = 'version-2 network-authority-runner' },
+		@{ Name = 'v2-extra-network-metric'; Mutate = { param($C) $C.capture.measurement_domains.network = @($C.capture.measurement_domains.network) + @('extra_metric') }; Failure = 'version-2 network-authority-runner' },
+		@{ Name = 'v2-removed-failure-shape-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'server_overload_failure_shape' }; Failure = 'Unsupported performance budget metric' },
+		@{ Name = 'v2-removed-packet-loss-percent-metric'; Mutate = { param($C) $C.budgets[0].metric_id = 'network_packet_loss_percent' }; Failure = 'Unsupported performance budget metric' },
+		@{ Name = 'v2-populated-sampling'; Mutate = { param($C) $C.capture.sampling.server_tick_hz = 30 }; Failure = 'must remain null' },
+		@{ Name = 'v2-missing-loading-domain'; Mutate = { param($C) $C.capture.measurement_domains.Remove('loading_streaming') }; Failure = 'unsupported or missing fields' },
+		@{ Name = 'v2-incomplete-client-domain'; Mutate = { param($C) $C.capture.measurement_domains.client = @('client_memory_bytes','correction_count','correction_magnitude_centimeters') }; Failure = 'version-2 network-authority-runner' },
+		@{ Name = 'v2-missing-new-budget'; Mutate = { param($C) $C.budgets = @($C.budgets | Where-Object { $_.metric_id -cne 'client_hitch_count' }) }; Failure = 'exactly one budget' },
+		@{ Name = 'v2-wrong-new-metric-domain'; Mutate = { param($C) @($C.budgets | Where-Object { $_.metric_id -ceq 'client_map_load_milliseconds' })[0].domain = 'client' }; Failure = 'domain must be' }
+	)
+	foreach ($V2FailureCase in $V2FailureCases) {
+		$MutatedV2Contract = Get-PerformanceContractObject -SchemaVersion 2
+		$V2FailureRunId = "fixture-performance-$($V2FailureCase.Name)"
+		$MutatedV2Contract.capture.run_id = $V2FailureRunId
+		& $V2FailureCase.Mutate $MutatedV2Contract
+		$MutatedV2ContractPath = Join-Path $PerformanceContractRoot ("performance-$($V2FailureCase.Name).json")
+		Write-PerformanceContract $MutatedV2ContractPath $MutatedV2Contract
+		$V2Failure = $null
+		try { Invoke-FixtureRun -FixtureLogRoot (Join-Path $FixtureRoot ("performance-$($V2FailureCase.Name)")) -FixtureRunId $V2FailureRunId -RejectionReason 'malformed-intent' -DurationSeconds 1 -PerformanceContractPath $MutatedV2ContractPath } catch { $V2Failure = $_.Exception.Message }
+		Assert-True ($V2Failure -match [regex]::Escape($V2FailureCase.Failure)) "$($V2FailureCase.Name) performance contract must fail closed before launch. Actual: $V2Failure"
+	}
+	Write-Output 'PASS: populated, self-approved, and incomplete version-2 performance contracts fail closed before launch'
 	$FixtureSucceeded = $true
 }
 finally {

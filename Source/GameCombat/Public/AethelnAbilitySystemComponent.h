@@ -52,6 +52,8 @@ struct FAethelnServerChainState
 	TArray<FAethelnAttackStepDefinition> Definitions;
 	FAethelnAcceptedAttackInput CurrentInput;
 	FAethelnAcceptedAttackInput BufferedInput;
+	/** A pass-started buffered step's record, held until the pass emits it; an interruption before its start drops it (A28). */
+	FAethelnCombatActivationRecord HeldRecord;
 };
 
 /** One connection's token bucket for activation messages (validation step 1). Starts full. */
@@ -259,6 +261,10 @@ public:
 	virtual void ServerSetReplicatedEvent_Implementation(EAbilityGenericReplicatedEvent::Type EventType, FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, FPredictionKey CurrentPredictionKey) override;
 	virtual void ServerSetReplicatedEventWithPayload_Implementation(EAbilityGenericReplicatedEvent::Type EventType, FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, FPredictionKey CurrentPredictionKey, FVector_NetQuantize100 VectorPayload) override;
 
+	/** Closed (#324): no server state dump, no client debug-string write, no reply; one bucket token, metric only. */
+	virtual void ServerPrintDebug_Request_Implementation() override;
+	virtual void ServerPrintDebug_RequestWithStrings_Implementation(const TArray<FString>& Strings) override;
+
 	/** Flushes an open rate-limited window. */
 	virtual void OnUnregister() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -328,8 +334,10 @@ private:
 	FRequestScope* ActiveRequestScope = nullptr;
 
 	bool BeginChainPress(UAethelnBasicChainAbility& Ability, FGameplayAbilitySpecHandle Handle);
-	bool StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime);
-	void StartBufferedChainStep(double Now);
+	bool StartChainStep(const FAethelnAcceptedAttackInput& Input, uint8 Step, double StartTime, bool bHoldRecord = false);
+	void StartBufferedChainStep(double Now, bool bHoldRecord = false);
+	/** Pass step 5: sends a held buffered-start record. */
+	void SendHeldCombatActivation();
 	void ApplyChainBoundaries(double Now);
 	void HandleChainResetTag(const FGameplayTag Tag, int32 NewCount);
 	void BindChainResetTags(const FGameplayTagContainer& Tags);
