@@ -11,6 +11,8 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/DataValidation.h"
 
+#include <limits>
+
 // #84 P2 (docs/animation-and-combat-content-pipeline.md, Test Plan N1 and N2). Fixture values only;
 // no tuning is approved here. The geometry is the #60 contact fixture: the test chain's sphere reaches
 // a dummy centered 60 units ahead during the first step's active window.
@@ -206,8 +208,8 @@ bool FAethelnAttackDefinitionValidationTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("A fixture-only valid definition passes"), Definition->FindProblem());
 	{
 		FDataValidationContext Context;
-		TestEqual(TEXT("Editor validation passes it"), Definition->IsDataValid(Context), EDataValidationResult::Valid);
-		TestEqual(TEXT("With no error"), Context.GetNumErrors(), 0u);
+		TestTrue(TEXT("Editor validation passes it"), Definition->IsDataValid(Context) == EDataValidationResult::Valid);
+		TestEqual(TEXT("With no error"), static_cast<int32>(Context.GetNumErrors()), 0);
 	}
 	Definition = MakeValidDefinition();
 	Definition->Steps.SetNum(1);
@@ -216,7 +218,12 @@ bool FAethelnAttackDefinitionValidationTest::RunTest(const FString& Parameters)
 	Definition->Steps[0].LinkClose = 0.0;
 	TestNull(TEXT("A single-step attack (an enemy step) is valid"), Definition->FindProblem());
 
-	const TArray<TPair<const TCHAR*, TFunction<void(UAethelnAttackDefinition&)>>> Mutations = {
+	struct FMutation
+	{
+		const TCHAR* Name;
+		TFunction<void(UAethelnAttackDefinition&)> Apply;
+	};
+	const TArray<FMutation> Mutations = {
 		{ TEXT("No stable ID"), [](UAethelnAttackDefinition& D) { D.StableContentId = NAME_None; } },
 		{ TEXT("Content version 0"), [](UAethelnAttackDefinition& D) { D.ContentVersion = 0; } },
 		{ TEXT("ServerOnly audience"), [](UAethelnAttackDefinition& D) { D.Audience = EAethelnContentAudience::ServerOnly; } },
@@ -242,14 +249,14 @@ bool FAethelnAttackDefinitionValidationTest::RunTest(const FString& Parameters)
 		{ TEXT("Pitch clamp above 90"), [](UAethelnAttackDefinition& D) { D.Steps[0].MaxAimPitchDegrees = 91.0; } },
 		{ TEXT("Interruptible beyond recovery"), [](UAethelnAttackDefinition& D) { D.Steps[0].InterruptibleUntil = 0.6875; } }
 	};
-	for (const TPair<const TCHAR*, TFunction<void(UAethelnAttackDefinition&)>>& Mutation : Mutations)
+	for (const FMutation& Mutation : Mutations)
 	{
 		Definition = MakeValidDefinition();
-		Mutation.Value(*Definition);
-		TestNotNull(*FString::Printf(TEXT("%s is refused"), Mutation.Key), Definition->FindProblem());
+		Mutation.Apply(*Definition);
+		TestNotNull(*FString::Printf(TEXT("%s is refused"), Mutation.Name), Definition->FindProblem());
 		FDataValidationContext Context;
-		TestEqual(*FString::Printf(TEXT("%s fails editor validation"), Mutation.Key), Definition->IsDataValid(Context), EDataValidationResult::Invalid);
-		TestTrue(*FString::Printf(TEXT("%s reports an error"), Mutation.Key), Context.GetNumErrors() > 0);
+		TestTrue(*FString::Printf(TEXT("%s fails editor validation"), Mutation.Name), Definition->IsDataValid(Context) == EDataValidationResult::Invalid);
+		TestTrue(*FString::Printf(TEXT("%s reports an error"), Mutation.Name), Context.GetNumErrors() > 0);
 	}
 	return true;
 }
