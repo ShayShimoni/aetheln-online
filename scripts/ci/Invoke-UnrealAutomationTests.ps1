@@ -11,8 +11,9 @@ $ErrorActionPreference = 'Stop'
 $PinnedEngineTag = '5.8.1-release'
 $PinnedEngineRevision = '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43'
 $ProjectName = 'AethelnOnline'
-$Filter = '^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$'
-$ExpectedTests = @('Aetheln.Harness.ProjectAndModuleLoad','Aetheln.GameCombat.NetworkSpike.Authority')
+# Issue #237: run every project test. The expected set is what the tested revision declares under Source/.
+$Filter = '^Aetheln.'
+$ExpectedTests = @()
 $RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $ProjectPath = Join-Path $RepositoryRoot 'AethelnOnline.uproject'
 $UnrealReportDirectory = Join-Path $RepositoryRoot 'TestResults\UnrealAutomation'
@@ -27,7 +28,7 @@ $RepositoryCleanBefore = $false
 $RepositoryCleanAfter = $false
 $FailureReason = 'none'
 $NormalizedTests = @()
-$Summary = [ordered]@{total=0;passed=0;passedWithWarnings=0;failed=0;notRun=0;missing=$ExpectedTests.Count;requiredFailed=$ExpectedTests.Count}
+$Summary = [ordered]@{total=0;passed=0;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=1}
 $Process = $null
 $ProcessJob = $null
 $EditorLaunched = $false
@@ -145,6 +146,24 @@ function Invoke-BoundedTaskKill([int] $ProcessId) {
 	# rather than discarded, and none of them changes the run's failure reason.
 	try{if($TaskKillProcess.Start()-and -not $TaskKillProcess.WaitForExit(5000)){try{$TaskKillProcess.Kill()}catch{Write-Verbose "Terminating the unresponsive taskkill fallback failed: $($_.Exception.Message)"};try{[void]$TaskKillProcess.WaitForExit(1000)}catch{Write-Verbose "Bounded wait for the terminated taskkill fallback failed: $($_.Exception.Message)"}}}catch{Write-Verbose "The bounded taskkill fallback could not run: $($_.Exception.Message)"}finally{$TaskKillProcess.Dispose()}
 }
+function Get-DeclaredAutomationTest([string] $Root) {
+	# Every automation-test declaration under Source/ must be a simple test whose name starts with Aetheln., so the
+	# ^Aetheln. filter selects it and it reports exactly one record. A complex test or a spec reports a path per case,
+	# so it fails preflight until this scan learns its form; nothing the scan cannot read is dropped silently.
+	$SourceRoot=Join-Path $Root 'Source';if(-not(Test-Path -LiteralPath $SourceRoot -PathType Container)){throw 'source_missing'}
+	$Names=New-Object 'Collections.Generic.List[string]'
+	foreach($File in @(Get-ChildItem -LiteralPath $SourceRoot -Recurse -File|Where-Object{$_.Extension-in @('.cpp','.h','.inl')})){
+		$Text=[IO.File]::ReadAllText($File.FullName)
+		$Declarations=[regex]::Matches($Text,'\b(?:IMPLEMENT|BEGIN_DEFINE|DEFINE)_\w*(?:AUTOMATION_TEST|SPEC)\w*\s*\(')
+		$Simple=[regex]::Matches($Text,'\bIMPLEMENT_SIMPLE_AUTOMATION_TEST\s*\(\s*\w+\s*,\s*"(Aetheln\.[^"\\\s]+)"')
+		if($Declarations.Count-ne $Simple.Count){throw 'automation_declaration_unsupported'}
+		foreach($Match in $Simple){$Names.Add($Match.Groups[1].Value)}
+	}
+	$Sorted=$Names.ToArray();[Array]::Sort($Sorted,[StringComparer]::Ordinal)
+	if($Sorted.Count-eq 0){throw 'automation_declarations_missing'}
+	for($Index=1;$Index-lt $Sorted.Count;$Index++){if($Sorted[$Index]-ceq $Sorted[$Index-1]){throw 'automation_declaration_duplicate'}}
+	return ,$Sorted
+}
 function Read-UnrealReport {
 	$Raw=Get-Content $UnrealReportPath -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
 	if($null-eq $Raw){throw 'report_is_null'}
@@ -183,6 +202,7 @@ function Write-NormalizedReport {
 try {
 	try {if(-not(Test-Path $ProjectPath -PathType Leaf)){throw 'project_missing'};if(-not(Test-Path $EngineRoot -PathType Container)){throw 'engine_root_invalid'};$EngineRoot=(Resolve-Path $EngineRoot).Path;$EditorPath=Join-Path $EngineRoot 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe';if(-not(Test-Path $EditorPath -PathType Leaf)){throw 'editor_missing'};if($null-eq(Get-Command git -ErrorAction SilentlyContinue)){throw 'git_missing'};Initialize-JobObjectType}catch{$FailureReason='preflight'}
 	if($FailureReason-ceq 'none'){try{$SourceRevision=Get-SingleGitRevision $RepositoryRoot @('rev-parse','HEAD');$Before=Get-RepositoryState $SourceRevision;$RepositoryCleanBefore=$Before.clean;if(-not $RepositoryCleanBefore){$FailureReason='repository-dirty'}}catch{$FailureReason='preflight'}}
+	if($FailureReason-ceq 'none'){try{$ExpectedTests=Get-DeclaredAutomationTest $RepositoryRoot;$Summary.missing=$ExpectedTests.Count;$Summary.requiredFailed=$ExpectedTests.Count}catch{$FailureReason='preflight'}}
 	if($FailureReason-ceq 'none'){try{$EngineRevision=Get-SingleGitRevision $EngineRoot @('rev-parse','HEAD');$TagRevision=Get-SingleGitRevision $EngineRoot @('rev-parse','--verify',"refs/tags/$PinnedEngineTag^{commit}");if($EngineRevision-cne $PinnedEngineRevision-or $TagRevision-cne $PinnedEngineRevision){throw 'engine_pin_mismatch'}}catch{$FailureReason='engine-pin'}}
 	if($FailureReason-ceq 'none'){try{foreach($Directory in @($UnrealReportDirectory,(Split-Path -Parent $NormalizedReportPath),(Split-Path -Parent $LogPath))){if(-not(Test-Path $Directory)){New-Item -ItemType Directory $Directory -Force|Out-Null}};foreach($File in @($UnrealReportPath,$NormalizedReportPath,$LogPath)){if(Test-Path $File -PathType Leaf){Remove-Item $File -Force}}}catch{$FailureReason='preflight'}}
 	if($FailureReason-ceq 'none'){
@@ -202,5 +222,5 @@ finally {
 }
 Write-Output "Unreal automation report: $NormalizedReportPath"
 if($FailureReason-cne 'none'){Write-Output "Unreal automation failed: $FailureReason";exit 1}
-Write-Output 'Unreal automation passed: both required tests succeeded without warnings or errors.'
+Write-Output "Unreal automation passed: all $($ExpectedTests.Count) declared Aetheln. tests succeeded without warnings or errors."
 exit 0

@@ -477,6 +477,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FAethelnObservabilitySubsystemSinkTest::RunTest(const FString& Parameters)
 {
+	// The failing-sink step below writes one event and one metric; each logs this warning once.
+	AddExpectedMessagePlain(
+		TEXT("dispatch_failure metric=\"sink-failure-count\""),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		2);
 	UGameInstance* GameInstance = NewObject<UGameInstance>(GEngine);
 	UAethelnObservabilitySubsystem* Subsystem = NewObject<UAethelnObservabilitySubsystem>(GameInstance);
 	TestTrue(
