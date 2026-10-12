@@ -69,7 +69,7 @@ private:
 	bool StartAttack(double StartTime);
 	void Enter(EAethelnEnemyState NewState, double Time);
 	/** Engage: toward the target. Return: home. A failed request follows the invalid-destination rule. */
-	void RequestMove(double Now);
+	void IssueMoveRequest(double Now);
 	void BeginReturn(double Now);
 	/** Pass step 1: stops moving and deciding; the reset itself waits for the pass end. */
 	void RequestReset(double Time);

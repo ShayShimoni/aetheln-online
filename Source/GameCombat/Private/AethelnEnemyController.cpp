@@ -117,7 +117,7 @@ bool AAethelnEnemyController::EvaluateOnce(double Now)
 	}
 	case EAethelnEnemyState::Return:
 		// A move request ends this pass's evaluation, so a failed path resets at most once per pass.
-		if (!bMoveRequested) { RequestMove(Now); }
+		if (!bMoveRequested) { IssueMoveRequest(Now); }
 		return false;
 	case EAethelnEnemyState::Idle:
 	case EAethelnEnemyState::Engage:
@@ -143,7 +143,7 @@ bool AAethelnEnemyController::EvaluateOnce(double Now)
 		if (State == EAethelnEnemyState::Idle) { Enter(EAethelnEnemyState::Engage, Now); return true; }
 		// ponytail: an enemy whose every path request fails (no navigation under it) resets once per pass while a
 		// target stays eligible; P3's navmesh evidence decides whether it needs a back-off.
-		if (!bMoveRequested) { RequestMove(Now); }
+		if (!bMoveRequested) { IssueMoveRequest(Now); }
 		return false;
 	}
 	}
@@ -177,10 +177,10 @@ APawn* AAethelnEnemyController::ChooseTarget() const
 	{
 		const APlayerController* Player = Iterator->Get();
 		APawn* Candidate = Player != nullptr ? Player->GetPawn() : nullptr;
-		const APlayerState* PlayerState = Player != nullptr ? Player->GetPlayerState<APlayerState>() : nullptr;
-		if (Candidate == nullptr || PlayerState == nullptr || !IsEligible(*Candidate)) { continue; }
+		const APlayerState* CandidateState = Player != nullptr ? Player->GetPlayerState<APlayerState>() : nullptr;
+		if (Candidate == nullptr || CandidateState == nullptr || !IsEligible(*Candidate)) { continue; }
 		const double DistanceSquared = FVector::DistSquared(Candidate->GetActorLocation(), Enemy->GetActorLocation());
-		const int32 PlayerId = PlayerState->GetPlayerId();
+		const int32 PlayerId = CandidateState->GetPlayerId();
 		if (Best == nullptr || DistanceSquared < BestDistanceSquared || (DistanceSquared == BestDistanceSquared && PlayerId < BestPlayerId))
 		{
 			Best = Candidate; BestDistanceSquared = DistanceSquared; BestPlayerId = PlayerId;
@@ -192,7 +192,7 @@ APawn* AAethelnEnemyController::ChooseTarget() const
 bool AAethelnEnemyController::IsInAttackRange(const APawn& Candidate) const
 {
 	const AAethelnEnemyCharacter* Enemy = GetEnemy();
-	// 2D capsule-center distance, the measure of the engine's reach test with both radii excluded (RequestMove).
+	// 2D capsule-center distance, the measure of the engine's reach test with both radii excluded (IssueMoveRequest).
 	return Enemy != nullptr && FVector::Dist2D(Candidate.GetActorLocation(), Enemy->GetActorLocation()) <= ProvisionalAttackRange;
 }
 
@@ -270,7 +270,7 @@ void AAethelnEnemyController::Enter(EAethelnEnemyState NewState, double Time)
 	}
 }
 
-void AAethelnEnemyController::RequestMove(double Now)
+void AAethelnEnemyController::IssueMoveRequest(double Now)
 {
 	const AAethelnEnemyCharacter* Enemy = GetEnemy();
 	if (Enemy == nullptr) { return; }
@@ -316,7 +316,7 @@ void AAethelnEnemyController::BeginReturn(double Now)
 	Target.Reset();
 	Enter(EAethelnEnemyState::Return, Now);
 	bMoveRequested = false;
-	RequestMove(Now);
+	IssueMoveRequest(Now);
 }
 
 void AAethelnEnemyController::RequestReset(double Time)
@@ -370,7 +370,7 @@ void AAethelnEnemyController::ApplyMoveResult(EPathFollowingResult::Type Result,
 		return;
 	}
 	const EAethelnEnemyMoveRecovery Recovery = DecideMoveRecovery(Result, ConsecutiveMoveFailures);
-	if (Recovery == EAethelnEnemyMoveRecovery::Repath) { ++ConsecutiveMoveFailures; bMoveRequested = false; RequestMove(Now); }
+	if (Recovery == EAethelnEnemyMoveRecovery::Repath) { ++ConsecutiveMoveFailures; bMoveRequested = false; IssueMoveRequest(Now); }
 	else if (Recovery == EAethelnEnemyMoveRecovery::Reset) { RequestReset(Now); }
 }
 
