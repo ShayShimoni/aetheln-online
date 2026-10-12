@@ -637,6 +637,12 @@ bool FAethelnActivationDebugRequestsRefusedTest::RunTest(const FString& Paramete
 	TestFalse(TEXT("Nothing activated"), Fixture.IsActive(Fixture.ProbeHandle));
 
 	// Control: the engine implementations, called directly past the override, do write both.
+	// The engine logs its dump at Warning: one header line and eleven indented lines for this fixture.
+	AddExpectedMessage(
+		TEXT("LogAbilitySystem: (ABILITIES ATTRIBUTES GAMEPLAYEFFECTS for avatar|\\s+\\S)"),
+		ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains,
+		12);
 	AbilitySystem.UAbilitySystemComponent::ServerPrintDebug_Request_Implementation();
 	TestTrue(TEXT("Control: the engine dump writes server debug strings"), AbilitySystem.GetServerDebugStrings().Num() > 0);
 	AbilitySystem.UAbilitySystemComponent::ServerPrintDebug_RequestWithStrings_Implementation({ TEXT("client-supplied") });
