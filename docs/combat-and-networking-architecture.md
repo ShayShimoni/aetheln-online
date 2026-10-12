@@ -494,6 +494,7 @@ Bumps are manual and checked in review.
 | `SetByCaller.Pressure.Guard` | (negated Guard pressure of the shared Guard pressure effect) | #18 P4 |
 | `State.EnduranceRecoveryDelayed`, `State.GuardRecoveryDelayed` | (recovery delay states of `combat.resource.endurance` and `combat.resource.guard`) | #292 |
 | `SetByCaller.Recovery.Amount`, `SetByCaller.Recovery.Delay` | (step amount and delay length of the recovery effects) | #292 |
+| `Ability.Enemy.Greybox.Strike` | `enemy.greybox.ability.strike` (working name, assigned by #83) | #83 P2 |
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and

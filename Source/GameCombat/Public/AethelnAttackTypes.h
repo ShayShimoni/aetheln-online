@@ -206,6 +206,11 @@ namespace AethelnAttackTimeline
 	 * rotation). Inside at exactly half the arc (dot >= cos(half) within a 1e-9 rounding tolerance); a
 	 * zero-length direction or an invalid arc is outside.
 	 */
+	/**
+	 * Grant-time validation of one authored step: null when valid, otherwise the reason. A final step has no
+	 * buffer or link window (BufferOpen == RecoveryEnd, no link); any other step needs a valid link window.
+	 */
+	GAMECOMBAT_API const TCHAR* FindStepProblem(const FAethelnAttackStepDefinition& Step, bool bFinalStep);
 	GAMECOMBAT_API bool IsInsideDefenseArc(double DefenderYawDegrees, const FVector& DefenderCenter, const FVector& AttackerOrigin, double ArcDegrees);
 	/**
 	 * The authored step rules shared by chain grant validation and UAethelnAttackDefinition (#84 P2):

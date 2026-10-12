@@ -25,6 +25,7 @@ namespace AethelnGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Blocking, "State.Blocking", "Server-owned block state; gating and observers only, never a contact check");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_GuardBroken, "State.GuardBroken", "Server-owned Guard break state; blocks raising the block for the authored duration");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Pressure_Guard, "SetByCaller.Pressure.Guard", "Negated Guard pressure for the shared Guard pressure effect");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Enemy_Greybox_Strike, "Ability.Enemy.Greybox.Strike", "enemy.greybox.ability.strike");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_MaxHealth, "SetByCaller.Init.MaxHealth", "Initial MaxHealth magnitude for the attribute init effect");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Init_Health, "SetByCaller.Init.Health", "Initial Health magnitude for the attribute init effect");

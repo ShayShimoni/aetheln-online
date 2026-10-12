@@ -4,7 +4,9 @@
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnGameplayAbility.h"
+#include "AethelnGameplayTags.h"
 #include "GameFramework/Pawn.h"
+#include "GameplayEffect.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityGrant, Log, All);
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityAvatar, Log, All);
@@ -33,6 +35,27 @@ void AAethelnPlayerState::PostInitializeComponents()
 	// pawn yet, so this sets the avatar to null on the server and on clients.
 	AbilitySystemComponent->InitAbilityActorInfo(this, GetPawn());
 	OnPawnSet.AddUniqueDynamic(this, &AAethelnPlayerState::HandlePawnSet);
+
+	// HUD (#61): owner outcomes become presentation-safe HUD events. The ASC is this
+	// actor's subobject, so these bindings live exactly as long as both.
+	AbilitySystemComponent->OnActivationOutcome.AddWeakLambda(this, [this](uint32 Sequence, EAethelnActivationResult Result)
+	{
+		HudActionOutcome.Broadcast(ToHudOutcome(Sequence, Result));
+	});
+	AbilitySystemComponent->OnMovementActivationOutcome.AddWeakLambda(this, [this](float /* ClientTimeStamp */, EAethelnActivationResult Result)
+	{
+		HudActionOutcome.Broadcast(ToHudOutcome(0, Result));
+	});
+	AbilitySystemComponent->OnCombatActivation.AddWeakLambda(this, [this](const FAethelnCombatActivationRecord& Record)
+	{
+		if (Record.AimCorrection == EAethelnAimCorrection::AimCorrected)
+		{
+			FAethelnHudActionOutcome Outcome;
+			Outcome.Kind = EAethelnHudOutcomeKind::Corrected;
+			Outcome.Sequence = Record.Sequence;
+			HudActionOutcome.Broadcast(Outcome);
+		}
+	});
 }
 
 UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const
@@ -54,6 +77,62 @@ bool AAethelnPlayerState::TryAuthorizeDodge(const FAethelnDodgeStartRequest& Req
 {
 	return AbilitySystemComponent != nullptr
 		&& AbilitySystemComponent->ProcessMovementCarriedRequest(Request) == EAethelnActivationResult::Accepted;
+}
+
+FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
+{
+	FAethelnHudSnapshot Snapshot;
+	if (AttributeSet == nullptr || AbilitySystemComponent == nullptr)
+	{
+		return Snapshot;
+	}
+	auto Read = [](float Current, float Max)
+	{
+		FAethelnHudResource Resource;
+		Resource.Current = Current;
+		Resource.Max = Max;
+		// Every maximum is 0 until the init or the first owner replication, so a 0 maximum is not a value yet.
+		Resource.bKnown = Max > 0.0f;
+		return Resource;
+	};
+	Snapshot.Health = Read(AttributeSet->GetHealth(), AttributeSet->GetMaxHealth());
+	Snapshot.Endurance = Read(AttributeSet->GetEndurance(), AttributeSet->GetMaxEndurance());
+	Snapshot.Guard = Read(AttributeSet->GetGuard(), AttributeSet->GetMaxGuard());
+
+	// Every owned Cooldown.* tag plus these timed states, each applied through a timed duration effect.
+	// Built once, on first use, after native tags are registered.
+	static const FGameplayTagContainer TimedTags = []
+	{
+		FGameplayTagContainer Tags;
+		Tags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("Cooldown")));
+		Tags.AddTag(AethelnGameplayTags::State_GuardBroken);
+		Tags.AddTag(AethelnGameplayTags::State_EnduranceRecoveryDelayed);
+		Tags.AddTag(AethelnGameplayTags::State_GuardRecoveryDelayed);
+		return Tags;
+	}();
+	for (const FGameplayTag& Tag : AbilitySystemComponent->GetOwnedGameplayTags().Filter(TimedTags))
+	{
+		FAethelnHudTimedState& State = Snapshot.TimedStates.AddDefaulted_GetRef();
+		State.Tag = Tag;
+		for (const float Seconds : AbilitySystemComponent->GetActiveEffectsTimeRemaining(FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(FGameplayTagContainer(Tag))))
+		{
+			State.RemainingSeconds = FMath::Max(State.RemainingSeconds, Seconds);
+		}
+	}
+	return Snapshot;
+}
+
+FAethelnHudActionOutcome AAethelnPlayerState::ToHudOutcome(uint32 Sequence, EAethelnActivationResult Result)
+{
+	FAethelnHudActionOutcome Outcome;
+	Outcome.Sequence = Sequence;
+	if (Result != EAethelnActivationResult::Accepted)
+	{
+		// The owner already receives this result; its name carries no server-only detail.
+		Outcome.Kind = EAethelnHudOutcomeKind::Rejected;
+		Outcome.Reason = FName(*StaticEnum<EAethelnActivationResult>()->GetNameStringByValue(static_cast<int64>(Result)));
+	}
+	return Outcome;
 }
 
 bool AAethelnPlayerState::IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spec)
