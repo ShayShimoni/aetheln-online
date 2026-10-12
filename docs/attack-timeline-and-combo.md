@@ -559,7 +559,7 @@ For each candidate, in order:
 
 1. **Revalidate.** The activation was not reset at or before the contact time,
    the attacker and target are alive (no `State.Dead` and Health above zero,
-   which fails closed until #21), the relation is hostile (see
+   which fails closed when the Health attribute is missing), the relation is hostile (see
    [Relation](#relation)), and the content version is the activation's.
    Territory policy is 2.x and is not checked.
 2. **Allowance.** Reject the candidate if this target already has a result
@@ -623,10 +623,14 @@ and never repeat damage, interruption, or a cue.
 
 The subsystem exposes a native multicast `OnLethalResult(TargetAsc,
 ActivationId, ContactTime)`, raised once per target from the committed result
-(#83 added the contact time). #21 binds it and applies `State.Dead`; the #83
-enemy controller binds it and dies at the contact time. Until #21 lands nothing binds it, and a zero-Health
-target is not alive to step 1, so it takes no further results and its attacks
-fail revalidation.
+(#83 added the contact time). #21 binds it and applies `State.Dead` to a
+player (`UAethelnDeathSubsystem`, see [Death, Respawn, and
+Reconnect](death-and-respawn.md)); the #83 enemy controller binds it and dies
+at the contact time. A zero-Health target is not alive to step 1, so it takes
+no further results and its attacks fail revalidation. Death resets the chain
+at the processing time, not the lethal contact time, so a buffered step that
+starts between the two still sends its record (presentation only; see the A28
+lethal row).
 
 ### Interruption
 
@@ -995,7 +999,7 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A25 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsChain` | P3 | H | Injected clock and a scripted delivery queue: chain requests delayed to arrive just before and after `BufferOpen`, `LinkOpen`, and `LinkClose` get the outcome their server arrival time dictates; a duplicated request gets `DuplicateSequence`; a reordered older request gets `StaleSequence`; a dropped follow-up lets the chain time out, and the next press (a forward sequence gap) starts step 1; nothing commits twice |
 | A26 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsContacts` | P4 | H | The A25 delivery profiles against a target dummy: delay moves only when a step starts, never adds a result; duplicated, reordered, and dropped requests never produce a second result or a result from a rejected request; each activation hits the target at most once |
 | A27 | `Aetheln.GameCombat.AttackTimeline.TeardownMidChain` | P3 (contact rows P4) | H | PlayerState or avatar teardown during wind-up, the active window, and a buffered wait: one chain end; the buffered step never starts; no contact at or after the teardown time; an avatar destroyed without unpossession is not swept and its chain ends once with `AvatarLost` at the next pass; a new PlayerState starts with no chain or seam state |
-| A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 (interruption row P5) | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time, ahead of an earlier-registered step with a later contact. The row for an interruption in the same frame with a contact time before `S + LinkOpen` (the start is cancelled, with no record and no contact) moves to P5 with A15, where interruption is delivered |
+| A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 (interruption row P5) | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time, ahead of an earlier-registered step with a later contact. The row for an interruption in the same frame with a contact time before `S + LinkOpen` (the start is cancelled, with no record and no contact) moves to P5 with A15, where interruption is delivered. The lethal row, recorded from #21 P1 (a case, not yet a test): a lethal contact in the same frame before a buffered step's `S + LinkOpen` does not cancel that start. Death resets the chain at the processing time, so the step starts and its held record is sent, as presentation only, and death then ends the chain once with `IncompatibleState`. Resetting at the lethal contact time is deferred to #21 P2 (`OnLethalResult` carries `ContactTime` since #83 P2, but #21 P1's handler does not use it), after which the start is cancelled as for interruption |
 | A29 | `Aetheln.GameCombat.AttackTimeline.ChainStartFailures` | P4 | H | A chain press that commits and whose step then cannot start reports `InternalFailure`, keeps its spent cost, advances the accepted sequence, and a replay is `DuplicateSequence` with no second spend; a client-mode world creates no subsystem, refuses registration, runs no pass, and commits no press |
 
 CI ran a frozen two-test filter until #237 widened it to every declared
@@ -1096,8 +1100,11 @@ and generation (#106).
 6. **No movement commitment** in P3 to P6 (OQ4, owner, 2026-10-05): an
    attacker can move freely while attacking until #17 adds authored
    restrictions.
-7. **No death transition** until #21: a zero-Health actor is inert to #60 but
-   is not dead.
+7. **Death is #21's for players only.** A player enters death through #21 P1
+   (`UAethelnDeathSubsystem` applies `State.Dead`). AI death as a life state
+   stays #20's: the #83 enemy controller keeps its own Dead state, and a
+   non-controller AI target (the R1 dummy) stays inert to #60 but is not dead
+   until #20.
 8. **Reconnect refill** (#19 T34) also restores a chain-free state; #21 owns it.
 9. **No occlusion.** Melee sweeps are not stopped by world geometry, so a shape
    that reaches through thin cover still hits. Canon asks for near-cover
