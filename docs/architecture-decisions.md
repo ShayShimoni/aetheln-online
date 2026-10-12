@@ -2123,9 +2123,11 @@ Every accepted decision records:
   exemption supersedes TA-016's rejected exemption of the whole `.agents/` directory: the
   issue #151 delivery harness that TA-016 protected is retired, only skill text
   remains there, and the selector has treated the directory as portable-only
-  since issues #167 and #231. TA-012's closed-set list above is historical and
+  since issue #70 retired the delivery-harness obligation (commit af5cb46e).
+  TA-012's closed-set list above is historical and
   is superseded by this amendment for those two paths. The hosted `powershell-yaml`
-  test download retries a failed transfer up to three times and never retries
+  test download retries a failed transfer up to five times with a doubling
+  delay and never retries
   wrong bytes. In the initial-preparation lease, a real sharing violation still
   reaches the caller unmapped, as before; the only change is that a bare
   non-sharing `IOException` from a cmdlet is no longer reported as `lease_held`.
