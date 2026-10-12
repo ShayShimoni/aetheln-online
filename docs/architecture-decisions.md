@@ -1115,9 +1115,13 @@ Every accepted decision records:
   TA-020), so an automation failure leaves the compile job and native receipt
   intact while the unreal receipt reports the fixed `automation_reason` and
   fails red at its raw binding check. Host-lease wrapping remains a follow-up.
+  TA-025 adds a fifth publisher, `content-receipt-shadow`, which proves
+  `content-reference-validation` from the exact
+  `content-validation-report.json` of the separate `trusted-content-validation`
+  job with zero native exit and no cleanup claim.
   `New-CiAcceptanceAggregateContext.ps1` builds closed identity contexts and,
-  when the selector's chosen checks are a subset of those six live
-  obligations, nonce-specific requirements with an exact selector binding and
+  when the selector's chosen checks are a subset of the live obligations,
+  nonce-specific requirements with an exact selector binding and
   sorted producer bindings. Each binding carries the job name and exact
   artifact ID/name/digest from the named direct dependency. The aggregate
   independently reconciles those bindings with the current attempt's GitHub
@@ -1126,7 +1130,7 @@ Every accepted decision records:
   closed. This direct producer binding resolves the earlier shared-nonce
   uploader ambiguity; interval checks remain additional temporal evidence.
 - **Known producer-gap behavior:** When any selected obligation is outside the
-  live portable/controller-contract/controller-operational-proof/native/unreal/visual subset, the aggregate is not called. The workflow
+  live portable/controller-contract/controller-operational-proof/native/unreal/visual/content subset, the aggregate is not called. The workflow
   still validates the selector identity and the direct bindings of every
   selected live producer, so a failed or skipped required receipt remains red
   rather than hiding behind the gap, and emits the exact selected
@@ -1137,8 +1141,9 @@ Every accepted decision records:
   `grantsAcceptance=false`. The green result prevents a known incomplete shadow
   migration from making healthy pull requests permanently red; it is never an
   acceptance result. Any unexpected identity, semantic, reconciliation, or
-  publication error remains red. `clean-package-provenance-smoke` and
-  `content-reference-validation` remain unsupported live obligations. The gap
+  publication error remains red. `clean-package-provenance-smoke` remains the
+  only unsupported obligation; TA-025 made `content-reference-validation`
+  live. The gap
   path checks only job success, the exact artifact name, and the artifact ID and
   digest format; it does not do the aggregate's artifact-API and byte
   reconciliation, and `liveBindings` is informational. A
@@ -1475,7 +1480,8 @@ Every accepted decision records:
   amendment below replaces that check with a leased re-sync.
   `trusted-candidate-compile` returns to its
   pre-producer shape, and the TA-015 30-minute compile watchdog is unchanged.
-  The engine runner now has six jobs.
+  The engine runner then had six jobs; TA-025 adds `trusted-content-validation`,
+  so it now has seven jobs.
 - **Evidence:** first live runs on runner 21. The `trusted-candidate-compile`
   step "Compile supported client and server targets" took 102 s on PR #204 (a
   CI-script change) and 503 s on PR #205 (a Source change). Inside the compile
@@ -1941,7 +1947,8 @@ Every accepted decision records:
     harness as exact paths (`Invoke-UnrealAutomationTests.ps1`,
     `Sync-EditorAutomationWorkspace.ps1`, `EngineRunnerHostLease.ps1`, every
     `InitialPreparation.*`, and the three scripts those load, `LeaseJournal.ps1`,
-    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`). Every
+    `ManagedCompileRegistration.ps1` and `ManagedCompileWorkspace.ps1`; TA-025
+    later added `scripts/content/Invoke-ContentValidation.ps1`). Every
     classifier uncertainty publishes `editor_required=true`, and it implies
     `engine_required=true`. A controller-only pull request still compiles
     (TA-018) but skips the editor job, about two minutes of runner time. The
@@ -2429,6 +2436,212 @@ Every accepted decision records:
   that does not overlap another either stays within 256 GiB or is refused with
   `handoff_storage_exhausted`) and the dispatch authority wording (who may
   dispatch is enforced by process, not only the per-run OK).
+
+### TA-025 - Separate Engine-Runner Job for Content Reference Validation
+
+- **Status:** Accepted
+- **Acceptance:** Lead decisions D1-D10 on issue #120 (2026-10-03), recorded
+  from the producer-4 design.
+- **Scope:** Issue #167 Package 3C `content-reference-validation` producer
+  (producer 4), the content-validation launcher and scanner from issue #120,
+  and the engine-runner ceilings in TA-012, TA-015, and TA-020.
+- **Decision (2026-10-05):** A new self-hosted job,
+  `trusted-content-validation`, runs the content-validation launcher
+  (`scripts/content/Invoke-ContentValidation.ps1`) against the live Asset
+  Registry, and a hosted publisher, `content-receipt-shadow`, turns its report
+  into a shadow receipt under producer key `content`.
+  - *Placement (D2):* the job needs `ci-selection-shadow` and
+    `trusted-editor-automation`, runs only when the selector selects
+    `content-reference-validation`, keeps the pull-request, same-repository,
+    owner, and triggering-actor predicates, and joins the
+    `aetheln-engine-runner` group with `queue: max` and
+    `cancel-in-progress: false`. It leaves producer 3's job unchanged.
+    Because the content job needs the editor job, and only the editor job's
+    leased re-sync puts the managed workspace at the tested revision, the
+    issue #299 editor gate (TA-020 amendment) also runs the editor job when
+    `scripts/content/Invoke-ContentValidation.ps1` changes (2026-10-12).
+    The job also reads the editor job's `automation_reason` and starts only
+    when it is `none`: the lease was taken and released, the workspace was
+    re-synced to the tested revision, and no step failed or was superseded.
+    Any other reason, an empty one included, skips it. After
+    `editor_host_lease_failed`, `editor_host_lease_release_failed`, or
+    `editor_build_interrupted` the host lease state is unknown and the editor
+    job keeps the workspace and the held journal as recovery evidence (#243);
+    after `editor_control_checkout_failed` the editor job never took the lease
+    or re-synced; after `superseded_head` the workspace may still hold this
+    stale head. An editor build or automation failure also skips the content
+    job; the aggregate is already red then (2026-10-12, PR #326 reviews).
+  - *Bounds (D9):* the launch step passes `-BuildTimeoutSeconds 900` and
+    `-TimeoutSeconds 600` and is bounded at 27 minutes: the two launcher
+    bounds plus 2 minutes for the launcher's own checks outside them;
+    residue cleanup, bind, upload, and outcome take 1 minute each, plus a
+    3-minute margin, for a 34-minute job ceiling. D9 started at 25 and 32
+    minutes (31 recorded, plus the outcome step that producer 3 also has).
+    The live launcher run (L1, 2026-10-05) resized them: on the CI path, after
+    a CI-style editor build, the launcher's build phase took about 30 seconds,
+    the 51-asset commandlet about 22 to 25 seconds, and the launcher's checks
+    outside both bounds about 25 seconds (engine-tree `git status` takes
+    3.5 seconds per call); a cold build phase took about 110 seconds. The
+    build and commandlet bounds stay at 900 and 600 seconds.
+  - *Build alignment (D3):* the launcher's editor build passes the CI editor
+    build's `-CompilerVersion=14.44.35207 -WindowsSDKVersion=10.0.26100.0` and,
+    like it, no `-Compiler`, so after the editor job the launcher's build is
+    expected to be a no-op rather than a toolchain switch. Like it, the
+    launcher also passes `-NoEngineChanges` (TA-020 2026-10-06 amendment,
+    issue #267): its build holds no engine host lease, so UBT exits 5
+    instead of rewriting an existing engine file. In CI the content job starts
+    only after a clean editor outcome (`automation_reason` `none`), so the flag
+    there guards against an engine tree that changed between the two jobs; it
+    also guards every local launcher run.
+    A launcher test pins the flag and the two values to
+    `InitialPreparation.BuildInvocation.ps1`. Because UBT
+    logs its toolchain line only when it executes actions, the launcher reads
+    the compiler and SDK identity from the toolchain line that UBT records in
+    the target makefile (`docs/asset-intake-and-content-validation.md`). As
+    the CI editor build does since the TA-020 2026-10-11 amendment, the
+    launcher deletes that `Makefile.bin` before its build, so UBT always
+    creates it and UHT keeps its input cache on; a reparse point on the path is
+    refused before any build starts.
+  - *Workspace:* the job runs the launcher from the registered managed compile
+    workspace without a control checkout, a re-sync, or the engine host lease.
+    It first requires the exact tested revision and a clean workspace
+    (`content_workspace_revision_changed`, `content_workspace_dirty`, or
+    `content_workspace_query_failed` otherwise). The launcher writes into a
+    fresh `TestResults/content-validation-<run>-<attempt>` directory because it
+    never prunes its retained pending and backup files; the step copies the
+    report to the runner temp directory and removes that directory. Launcher
+    output carries absolute paths, so it goes to runner-local files and only
+    fixed codes reach the public log. Residue cleanup removes the untracked
+    compile inputs the next managed sync would reject, after every launch.
+  - *Claim boundary (D1):* the receipt and the aggregate both parse the exact
+    `aetheln.content-validation-report` version-2 report (closed top-level,
+    `execution_provenance`, and `counts` field sets) and require the tested
+    revision, the pinned engine identity, target `AethelnOnlineEditor` Win64
+    Development, a clean repository, `registry_source=live_asset_registry`,
+    `counts.errors=0`, a `passed` or `non_promotion` result, at least one
+    asset, and, for every asset, one `reference_boundary` family whose six
+    checks are exactly `audience_reachability`, `broken_references`,
+    `compatible_content_version`, `hard_reference_exceptions`, `redirectors`,
+    and `stable_id_unique`, each applicable and `passed`. The only
+    `reference_boundary` finding allowed is the lifecycle finding that
+    accepted `non_promotion` implies: code
+    `content.reference_boundary.non_promotion`, severity `non_promotion`, and
+    evidence field `thresholds.unresolved_budgets`, on a `temporary_prototype`
+    asset, at most one per asset. Any other `reference_boundary` finding fails
+    both parsers.
+    `evidence_unavailable` never passes. The other seven families still run
+    and any deterministic error fails the report, but they are not claimed,
+    and a green content receipt is never content approval. Binding
+    `policy_sha256` and `intake_sha256` to the tested revision was left out.
+    The aggregate parses this report with larger property and array bounds
+    than the other reports (about 230 properties and 40 array items per
+    asset); the 4 MiB evidence limit stays binding.
+  - *Identity (D8):* as for producer 3, the aggregate does not bind the engine
+    job's runner name or labels.
+  - `content-reference-validation` leaves every unsupported or pending list
+    and gets the `content` requirements-template job, sorted before `native`,
+    instead of being parked under `portable`.
+    `clean-package-provenance-smoke` (producer 5) stays unsupported.
+- **Evidence:** the producer-4 design and lead decisions D1-D10 on issue
+  #120. Portable fixtures pin the publisher contract
+  (`Publish-CiAcceptanceReceipt.Tests.ps1`), the receipt and aggregate parsers
+  with negative cases and a 51-asset report (`New-CiAcceptanceReceipt.Tests.ps1`,
+  `Invoke-CiAcceptanceAggregate.Tests.ps1`), the gap and template changes
+  (`New-CiAcceptanceAggregateContext.Tests.ps1`, `Get-CiSelection.Tests.ps1`),
+  the job, its executed steps, and the publisher
+  (`Test-PrototypeQualityWorkflow.Tests.ps1`), and its bounds
+  (`Test-RunnerSchedulingPolicy.Tests.ps1`). The parser fixtures stay
+  synthetic. The live launcher runs (L1, decision D6) supplied the real
+  51-asset report that both parsers, the allowlist, and the parse bounds were
+  checked against.
+- **Cost:** an owner engine pull request that selects content can hold the
+  runner for up to 120 minutes (40-minute compile, 46-minute editor
+  automation, and 34-minute content validation) when no older waiter queued
+  between the jobs. A scheduled phase that queues while the content job runs
+  waits at most 34 minutes for it.
+- **Consequences:** a content or configuration owner pull request can now
+  reach a complete shadow aggregate with four receipts instead of the green
+  producer gap; any selection that includes `clean-package-provenance-smoke`
+  still ends on the gap. Workspace race: when another owner pull request's
+  compile, or a newer push to the same pull request, enters the engine queue
+  between this run's editor job and content job, it can re-sync the managed
+  workspace first. The launch step then stops with
+  `content_workspace_revision_changed`, and recovery takes "Re-run all jobs",
+  as it did for the editor job before its re-sync amendment. Authority stays
+  off.
+- **Alternatives:** steps inside `trusted-editor-automation` (changes that
+  job's ceiling and pins); a separate job after the compile with its own full
+  editor build; a portable parser of package headers (a weaker claim under the
+  same name); a leased re-sync as the editor job does (more steps and a larger
+  ceiling; deferred until the race is observed).
+- **Owner:** Issue #167, with issue #120 for the launcher and scanner.
+- **Revisit trigger:** the first live launcher run, a recorded
+  `content_workspace_revision_changed` race, a report that approaches the 4 MiB
+  limit, or the producer-5 change.
+
+### TA-026 - Server-Only C++ State Machine for the Prototype Enemy
+
+- **Status:** Accepted
+- **Acceptance:** Accepted when the delivery lead merges the reviewed issue #83
+  P1 pull request, under the owner's delegated authority.
+- **Scope:** The prototype's one enemy (issues #83 and #20): its decision
+  logic, perception, and navigation control. Not later enemy archetypes,
+  elites, or bosses.
+- **Decision:** The enemy's decisions run in a server-only C++ state machine
+  inside a project `AAIController` subclass, driven by the #60 timeline pass,
+  as specified in [Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md).
+  Perception is a server-side eligibility query, not AI Perception. Movement
+  uses the engine's path following on a static navmesh. `GameCombat` adds the
+  engine runtime module `AIModule`, which brings `NavigationSystem` as its own
+  public dependency. The prototype adds no Behavior Tree, Blackboard,
+  StateTree, or AI Perception asset, and enables no plugin.
+- **Context:** #83 requires the AI approach to come from measured prototype
+  needs, not from habit. No enemy code existed when this was decided, so the
+  needs below come from the canonical documents and the existing combat code,
+  not from running candidates side by side. The #83 criterion is therefore
+  only partly met until #83 P3 records measurements.
+- **Evidence (needs derived from the documents and code):**
+  - One enemy type with one attack in one controlled space
+    (`docs/game-design-bible.md`, ledger row P10-014). The specification has
+    seven flat states and no nesting, parallel branches, or shared
+    sub-behaviors.
+  - Server-only decisions (TA-002, TA-003). An `AAIController` exists only on
+    the server, so a controller-owned state machine gives clients nothing to
+    run or drive.
+  - Deterministic headless tests. The repository's combat tests run in a
+    headless automation world with no editor-authored assets
+    (`Source/GameTests/Private/AethelnCombatTestWorld.h`). A C++ state machine
+    runs there directly and is reviewed as text. Behavior Tree and StateTree
+    both need an editor-authored binary asset, which a reviewer cannot read as
+    text and which the content validation of #120 would then govern.
+  - No plugin change. StateTree is a plugin that is off by default, so using it
+    means enabling it in the `.uproject`, a project-wide change to every
+    target. `AIModule` and `NavigationSystem` are engine runtime modules and
+    need no plugin.
+  - Exact authored times. The enemy's transitions must use the timeline's
+    authored times and run inside its pass. This is not a differentiator: a
+    Behavior Tree task or a StateTree state could keep the same time
+    bookkeeping. It only means a framework would not remove that code.
+- **Not yet measured:** decision cost per enemy per frame, navmesh build time
+  and size, and behavior under the network profiles. No candidate was
+  prototyped and timed against another. #83 P3 records the first three for
+  #45 (measurements only, no thresholds).
+- **Alternatives:** Behavior Tree with Blackboard (rejected for the prototype:
+  an editor asset and a brain component for seven flat states, outside the
+  headless tests); StateTree (rejected for the prototype: a plugin enable and
+  an editor asset, outside the headless tests); AI Perception (rejected for the
+  prototype: the arena has no line-of-sight rule, and eligibility is a
+  combat-policy query the timeline already defines).
+- **Consequences:** New enemy behavior needs a programmer and a code review.
+  The state machine must keep each transition at its authored time, run inside
+  the timeline pass, and stay covered by headless tests. A later change to
+  Behavior Tree or StateTree must keep the server-only rule and the timeline's
+  ordering.
+- **Owner:** Issue #83, with issue #20 for the enemy's behavior.
+- **Revisit trigger:** a second enemy archetype, an elite or boss with layered
+  behavior, a designer who must author behavior without code, an arena with
+  cover that needs line of sight, or a P3 measurement that shows the state
+  machine as a material server cost.
 
 ## Candidate Decisions
 

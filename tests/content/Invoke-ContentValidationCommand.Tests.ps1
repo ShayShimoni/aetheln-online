@@ -81,6 +81,7 @@ public static class FakeGitForContentValidation {
 
 	$BuildSource = @'
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
@@ -108,18 +109,21 @@ public static class FakeEditorBuildForContentValidation {
   }
   string capture=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CAPTURE")??"";
   if(capture.Length>0) File.WriteAllLines(capture,args);
+  if(capture.Length>0) File.WriteAllText(capture+".msbuild-node-reuse",Environment.GetEnvironmentVariable("MSBUILDDISABLENODEREUSE")??"unset");
+  // TA-020 2026-10-11 makefile guard: record whether the target makefile already existed when the build started.
+  if(capture.Length>0&&args.Length>=4) File.WriteAllText(capture+".makefile-at-start",File.Exists(Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[3])),"Intermediate","Build","Win64","x64","AethelnOnlineEditor","Development","Makefile.bin"))?"present":"absent");
   string scenario=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_CASE")??"success";
   string compilerRoot=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_COMPILER_ROOT")??"";
   string sdkRoot=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_SDK_ROOT")??"";
   if(scenario=="missing-compiler") compilerRoot=Path.Combine(compilerRoot,"missing");
   if(scenario=="missing-resource-compiler") sdkRoot=Path.Combine(sdkRoot,"missing");
   string compilerVersion="14.44.35228", sdkVersion="10.0.26100.0";
+  string toolchain="Using Visual Studio "+compilerVersion+" toolchain ("+compilerRoot+") and Windows "+sdkVersion+" SDK ("+sdkRoot+").";
+  // Like UBT, log the toolchain line only when actions execute; an up-to-date build logs none.
   if(scenario=="silent-success") { }
-  else if(scenario=="missing-toolchain") Console.WriteLine("No toolchain identity was emitted.");
-  else {
-   Console.WriteLine("Using Visual Studio "+compilerVersion+" toolchain ("+compilerRoot+") and Windows "+sdkVersion+" SDK ("+sdkRoot+").");
-   if(scenario=="duplicate-toolchain") Console.WriteLine("Using Visual Studio 14.50.99999 toolchain ("+compilerRoot+") and Windows 10.0.30000.0 SDK ("+sdkRoot+").");
-  }
+  else if(scenario=="missing-toolchain"||scenario=="up-to-date") Console.WriteLine("Target is up to date");
+  else if(scenario=="log-toolchain-mismatch") Console.WriteLine(toolchain.Replace(compilerVersion,"14.44.11111"));
+  else Console.WriteLine(toolchain);
   if(scenario=="nonzero") return 41;
   if(scenario=="child-flood"||scenario=="child-timeout"||scenario=="child-pump-fault") {
    string parentPidPath=Environment.GetEnvironmentVariable("AETHELN_CONTENT_FAKE_BUILD_PARENT_PID")??"";
@@ -142,6 +146,20 @@ public static class FakeEditorBuildForContentValidation {
   string repository=Path.GetDirectoryName(Path.GetFullPath(args[3]));
   string binaries=Path.Combine(repository,"Binaries","Win64");
   Directory.CreateDirectory(binaries);
+  if(scenario!="missing-makefile") {
+   // The UE 5.8.1 UBT makefile layout the launcher reads: int32 version 37, VProject flag,
+   // int64 creation ticks, then the diagnostics as int32 count and int32-length UTF-8 strings.
+   List<string> diagnostics=new List<string>{"Using ISPC compiler (fixture)"};
+   if(scenario!="missing-toolchain") diagnostics.Add(toolchain);
+   if(scenario=="duplicate-toolchain") diagnostics.Add("Using Visual Studio 14.50.99999 toolchain ("+compilerRoot+") and Windows 10.0.30000.0 SDK ("+sdkRoot+").");
+   string makefile=Path.Combine(repository,"Intermediate","Build","Win64","x64","AethelnOnlineEditor","Development","Makefile.bin");
+   Directory.CreateDirectory(Path.GetDirectoryName(makefile));
+   using(BinaryWriter writer=new BinaryWriter(File.Create(makefile))) {
+    writer.Write(scenario=="makefile-version"?36:37); writer.Write((byte)0); writer.Write(DateTime.UtcNow.Ticks); writer.Write(diagnostics.Count);
+    foreach(string line in diagnostics) { byte[] bytes=Encoding.UTF8.GetBytes(line); writer.Write(bytes.Length); writer.Write(bytes); }
+    writer.Write(new byte[16]); // later makefile fields, which the launcher does not read
+   }
+  }
   string buildId="fixture-build-id";
   string receiptBuildId=scenario=="receipt-build-id-mismatch"?"other-receipt-id":buildId;
   string manifestBuildId=scenario=="manifest-build-id-mismatch"?"other-manifest-id":buildId;
@@ -211,6 +229,16 @@ public static class FakeUnrealEditorForContentValidation {
    int split=arg.IndexOf('=');
    if(split>1) values[arg.Substring(1,split-1)]=arg.Substring(split+1);
    else values[arg.Substring(1)]="true";
+  }
+  // Mirrors the path contract in AethelnContentValidationCommandlet.cpp (pinned below):
+  // the report is named content-validation-report.json below <project>/TestResults,
+  // and policy and intake are the project's ContentValidation config files.
+  string contractProject=Path.GetDirectoryName(Path.GetFullPath(args[0])), contractReport=Get(values,"Report"), contractConfig=Path.Combine(contractProject,"Config","ContentValidation");
+  if(contractReport.Length==0||!Path.GetFullPath(contractReport).StartsWith(Path.Combine(contractProject,"TestResults")+"\\",StringComparison.OrdinalIgnoreCase)||Path.GetFileName(contractReport)!="content-validation-report.json"
+   ||!string.Equals(Path.GetFullPath(Get(values,"Policy")),Path.Combine(contractConfig,"asset-intake-policy.json"),StringComparison.OrdinalIgnoreCase)
+   ||!string.Equals(Path.GetFullPath(Get(values,"Intake")),Path.Combine(contractConfig,"runtime-asset-intake.json"),StringComparison.OrdinalIgnoreCase)) {
+   Console.WriteLine("LogAethelnContentValidationCommandlet: Error: Report, policy, or runtime intake path is outside the supported local contract.");
+   return 3;
   }
   if(scenario=="snapshot-swap-restore") {
    string snapshot=Get(values,"RegistrySnapshot"), expected=Get(values,"RegistrySnapshotSha256");
@@ -345,6 +373,8 @@ function New-Case {
 		New-Item -ItemType Directory -Path $Directory -Force | Out-Null
 	}
 	Copy-Item -LiteralPath $SourceRunner -Destination (Join-Path $Repository 'scripts\content\Invoke-ContentValidation.ps1')
+	# A stale makefile from an earlier build; the wrapper must delete it before its build (TA-020 2026-10-11 makefile guard).
+	Write-Utf8 (Join-Path $Repository 'Intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin') 'stale makefile from an earlier build'
 	Copy-Item -LiteralPath (Join-Path $FakeBin 'UnrealEditor-Cmd.exe') -Destination (Join-Path $EditorDirectory 'UnrealEditor-Cmd.exe')
 	Copy-Item -LiteralPath (Join-Path $FakeBin 'FakeEditorBuild.exe') -Destination (Join-Path $BuildBatchDirectory 'FakeEditorBuild.exe')
 	$BuildBatch = @'
@@ -523,6 +553,13 @@ function Invoke-Case {
 		New-Item -ItemType Directory -Path $RealDirectory | Out-Null
 		New-Item -ItemType Junction -Path $ResultDirectory -Target $RealDirectory | Out-Null
 	}
+	elseif ($OutputAttack -ceq 'makefile-reparse') {
+		# The stale makefile's Intermediate directory becomes a junction; the wrapper must refuse to delete through it.
+		$IntermediateDirectory = Join-Path $Fixture.repository 'Intermediate'
+		$RealDirectory = Join-Path $Fixture.root 'aliased-intermediate'
+		Move-Item -LiteralPath $IntermediateDirectory -Destination $RealDirectory
+		New-Item -ItemType Junction -Path $IntermediateDirectory -Target $RealDirectory | Out-Null
+	}
 	elseif ($OutputAttack -ceq 'policy-hardlink') {
 		Remove-Item -LiteralPath $Fixture.report -Force
 		& fsutil.exe hardlink create $Fixture.report (Join-Path $Fixture.repository 'Config\ContentValidation\asset-intake-policy.json') | Out-Null
@@ -672,6 +709,7 @@ public static class AethelnContentFixtureMountPoint {
 	$Info.CreateNoWindow = $true
 	$Info.RedirectStandardOutput = $true
 	$Info.RedirectStandardError = $true
+	$Info.EnvironmentVariables.Remove('MSBUILDDISABLENODEREUSE') # the launcher itself must set it for its build
 	$Process = New-Object Diagnostics.Process
 	$Process.StartInfo = $Info
 	try {
@@ -680,9 +718,14 @@ public static class AethelnContentFixtureMountPoint {
 		$StandardError = $Process.StandardError.ReadToEndAsync()
 		if ($OutputAttack -ceq 'concurrent-directory') {
 			try {
-				$Deadline = [DateTime]::UtcNow.AddSeconds(8)
-				while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf) -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 10 }
-				Assert-True (Test-Path -LiteralPath $ReadyPath -PathType Leaf) 'The first invocation must reach the held pre-build seam.'
+				# Wait for the seam or for the first invocation to exit. The seam is reached in about 1.5 s on an idle
+				# host; a fixed 8 s bound failed under full-suite load (2026-10-11). An early exit fails with its output.
+				$Deadline = [DateTime]::UtcNow.AddSeconds(60)
+				while (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf) -and -not $Process.HasExited -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Milliseconds 10 }
+				if (-not (Test-Path -LiteralPath $ReadyPath -PathType Leaf) -and $Process.HasExited) {
+					Assert-True $false "The first invocation exited with $($Process.ExitCode) before the held pre-build seam. Output: $($StandardOutput.GetAwaiter().GetResult())$($StandardError.GetAwaiter().GetResult())"
+				}
+				Assert-True (Test-Path -LiteralPath $ReadyPath -PathType Leaf) 'The first invocation must reach the held pre-build seam within 60 seconds.'
 				$SecondInfo = New-Object Diagnostics.ProcessStartInfo
 				$SecondInfo.FileName = $Info.FileName
 				$SecondInfo.Arguments = $Info.Arguments
@@ -699,7 +742,8 @@ public static class AethelnContentFixtureMountPoint {
 					Assert-True ($SecondProcess.Start()) 'The second invocation must start.'
 					$SecondStdout = $SecondProcess.StandardOutput.ReadToEndAsync()
 					$SecondStderr = $SecondProcess.StandardError.ReadToEndAsync()
-					Assert-True ($SecondProcess.WaitForExit(7000)) 'The second invocation must fail closed within seven seconds.'
+					# The first invocation stays held until ContinuePath, so any bound proves the second does not wait for it.
+					Assert-True ($SecondProcess.WaitForExit(60000)) 'The second invocation must fail closed while the first is held.'
 					$SecondExitCode = $SecondProcess.ExitCode
 					$SecondOutput = $SecondStdout.GetAwaiter().GetResult() + $SecondStderr.GetAwaiter().GetResult()
 				}
@@ -761,6 +805,10 @@ try {
 	Assert-True (($ParameterNames -join ',') -ceq ($ExpectedParameters -join ',')) 'The runner public parameter contract changed unexpectedly.'
 	$RunnerText = Get-Content -LiteralPath $SourceRunner -Raw
 	Assert-True ($RunnerText -match 'Engine[\\/]Build[\\/]BatchFiles[\\/]Build\.bat' -and $RunnerText -match "'AethelnOnlineEditor','Win64','Development'" -and $RunnerText -match "'-WaitMutex','-NoHotReloadFromIDE'") 'The wrapper must own the exact approved AethelnOnlineEditor Win64 Development build invocation.'
+	# The CI editor build pins its compiler and SDK and refuses engine rewrites (issue #267); the wrapper's build must pass the same flags so it reuses that build in CI and never relinks an engine module.
+	$CiBuildInvocation = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts\ci\InitialPreparation.BuildInvocation.ps1') -Raw
+	$CiToolchainPins = [regex]::Matches($CiBuildInvocation, ' (-CompilerVersion=[0-9.]+) (-WindowsSDKVersion=[0-9.]+)"')
+	Assert-True ($CiToolchainPins.Count -eq 1 -and $CiBuildInvocation.Contains("'AethelnOnlineEditor') { ' -NoEngineChanges' }") -and $RunnerText.Contains("'-NoHotReloadFromIDE','-NoEngineChanges','" + $CiToolchainPins[0].Groups[1].Value + "','" + $CiToolchainPins[0].Groups[2].Value + "')")) 'The wrapper editor build must pass -NoEngineChanges and exactly the CI editor build compiler and Windows SDK pins.'
 	$CreateIndex = $RunnerText.IndexOf('if(!CreateProcess(')
 	$AssignIndex = $RunnerText.IndexOf('Assign(information.process)')
 	$ResumeIndex = $RunnerText.IndexOf('ResumeThread(information.thread)')
@@ -778,6 +826,10 @@ try {
 	$CommandletText = Get-Content -LiteralPath $CommandletSource -Raw
 	Assert-True ($HeaderText -match 'UCLASS\(\)' -and $HeaderText -match 'public UCommandlet' -and $HeaderText -match 'generated\.h') 'The scanner entry point must be a reflected Unreal commandlet.'
 	Assert-True ($CommandletText -match 'FParse::Value' -and $CommandletText -match 'AllowTestRegistrySnapshot') 'The commandlet must parse explicit inputs and guard test snapshots.'
+	# The fake editor mirrors this exact path contract, so a launcher that passes any other -Report name fails here as it does live.
+	Assert-True ($CommandletText.Contains('FPaths::Combine(FPaths::ProjectDir(), TEXT("TestResults"))') -and $CommandletText.Contains('!FPaths::IsUnderDirectory(Arguments.ReportPath, ReportRoot)') -and
+		$CommandletText.Contains('FPaths::GetCleanFilename(Arguments.ReportPath) != TEXT("content-validation-report.json")') -and
+		$CommandletText.Contains('TEXT("ContentValidation/asset-intake-policy.json")') -and $CommandletText.Contains('TEXT("ContentValidation/runtime-asset-intake.json")')) 'The commandlet report, policy, and intake path contract changed; update the fake editor that mirrors it.'
 	Assert-True ($RunnerText -match 'RegistrySnapshotSha256=\$\(\$SnapshotState\.Sha256\)' -and $ScannerHeaderText -match 'RegistrySnapshotSha256' -and $CommandletText -match 'RegistrySnapshotSha256=' -and $CommandletText -match 'bAllSnapshotMembers') 'The captured snapshot digest must flow through wrapper, commandlet, and scanner run arguments.'
 	Assert-True ($ScannerText -match 'LoadVerifiedRegistrySnapshot\(Arguments\.RegistrySnapshotPath, Arguments\.RegistrySnapshotSha256' -and $ScannerText -notmatch 'Serialize\(SnapshotRoot') 'The scanner must hash and parse the original snapshot byte buffer without object serialization and reparsing.'
 	Assert-True ($ScannerText -match 'SearchAllAssets\(true\)' -and $ScannerText -match 'GetAllAssets' -and $ScannerText -match 'GetDependencies') 'The live scanner must use the read-only Asset Registry and dependency graph.'
@@ -796,6 +848,9 @@ try {
 
 	$ReparseOutput = Invoke-Case -Name 'reparse-output' -FakeBin $FakeBin -OutputAttack 'reparse'
 	Assert-True ($ReparseOutput.exitCode -ne 0 -and $ReparseOutput.output -match 'output_path_reparse' -and -not (Test-Path -LiteralPath $ReparseOutput.fixture.buildCapture)) 'A reparse-point output traversal must fail before cleanup or build launch.'
+	$MakefileReparse = Invoke-Case -Name 'makefile-reparse' -FakeBin $FakeBin -OutputAttack 'makefile-reparse'
+	Assert-True ($MakefileReparse.exitCode -ne 0 -and $MakefileReparse.output -match 'makefile path contains a reparse point' -and -not (Test-Path -LiteralPath $MakefileReparse.fixture.buildCapture) -and
+		(Test-Path -LiteralPath (Join-Path $MakefileReparse.fixture.root 'aliased-intermediate\Build\Win64\x64\AethelnOnlineEditor\Development\Makefile.bin') -PathType Leaf)) "A reparse point on the target makefile path must fail before the delete and the build. Output: $($MakefileReparse.output)"
 	$HardLinkOutput = Invoke-Case -Name 'hardlink-output' -FakeBin $FakeBin -OutputAttack 'policy-hardlink'
 	Assert-True ($HardLinkOutput.exitCode -ne 0 -and $HardLinkOutput.output -match 'output_path_alias' -and -not (Test-Path -LiteralPath $HardLinkOutput.fixture.buildCapture)) 'A same-file output alias to a protected input must fail before cleanup or build launch.'
 	$RetentionCap = Invoke-Case -Name 'retention-cap' -FakeBin $FakeBin -OutputAttack 'retention-cap'
@@ -819,7 +874,7 @@ try {
 	$SpacedBuildPath = Invoke-Case -Name 'build path with spaces' -FakeBin $FakeBin
 	$SpacedBuildArguments = if (Test-Path -LiteralPath $SpacedBuildPath.fixture.buildCapture) { [IO.File]::ReadAllLines($SpacedBuildPath.fixture.buildCapture) } else { @() }
 	Assert-True ($SpacedBuildPath.exitCode -eq 0 -and $null -ne $SpacedBuildPath.report -and
-		$SpacedBuildArguments.Count -eq 6 -and $SpacedBuildArguments[3] -ceq (Join-Path $SpacedBuildPath.fixture.repository 'AethelnOnline.uproject')) "The suspended cmd.exe launch must preserve exact Build.bat arguments when engine and project paths contain spaces. Output: $($SpacedBuildPath.output)"
+		$SpacedBuildArguments.Count -eq 9 -and $SpacedBuildArguments[3] -ceq (Join-Path $SpacedBuildPath.fixture.repository 'AethelnOnline.uproject')) "The suspended cmd.exe launch must preserve exact Build.bat arguments when engine and project paths contain spaces. Output: $($SpacedBuildPath.output)"
 	$Concurrent = Invoke-Case -Name 'concurrent-directory' -FakeBin $FakeBin -OutputAttack 'concurrent-directory'
 	Assert-True ($Concurrent.secondExitCode -ne 0 -and $Concurrent.secondOutput -match 'output_guard_directory_busy' -and
 		-not $Concurrent.secondStartedBuild -and $Concurrent.canonicalBeforeRelease -ceq '{"stale":true}' -and
@@ -861,11 +916,18 @@ try {
 	Assert-True ($Success.report.execution_provenance.engine_revision -ceq $PinnedEngineRevision -and $Success.report.execution_provenance.engine_tag -ceq $PinnedEngineTag) 'The report must bind the pinned engine revision and tag.'
 	Assert-True ($Success.report.policy_sha256 -ceq (Get-Sha256 (Join-Path $Success.fixture.repository 'Config\ContentValidation\asset-intake-policy.json'))) 'The report must bind the exact policy bytes.'
 	Assert-True ($Success.report.intake_sha256 -ceq (Get-Sha256 (Join-Path $Success.fixture.repository 'Config\ContentValidation\runtime-asset-intake.json'))) 'The report must bind the exact intake bytes.'
-	Assert-True ($Success.report.execution_provenance.compiler_version -ceq '14.44.35228' -and $Success.report.execution_provenance.compiler_sha256 -ceq (Get-Sha256 $Success.fixture.compiler)) 'The report must bind the compiler identity derived from the exact UBT build log.'
-	Assert-True ($Success.report.execution_provenance.resource_compiler_version -ceq '10.0.26100.0' -and $Success.report.execution_provenance.resource_compiler_sha256 -ceq (Get-Sha256 $Success.fixture.resourceCompiler)) 'The report must bind the resource-compiler identity derived from the exact UBT build log.'
+	Assert-True ($Success.report.execution_provenance.compiler_version -ceq '14.44.35228' -and $Success.report.execution_provenance.compiler_sha256 -ceq (Get-Sha256 $Success.fixture.compiler)) 'The report must bind the compiler identity recorded in the UBT target makefile.'
+	Assert-True ($Success.report.execution_provenance.resource_compiler_version -ceq '10.0.26100.0' -and $Success.report.execution_provenance.resource_compiler_sha256 -ceq (Get-Sha256 $Success.fixture.resourceCompiler)) 'The report must bind the resource-compiler identity recorded in the UBT target makefile.'
+	# UBT logs no toolchain line when the target is up to date (live L1 runs 2 and 3); its makefile still records one.
+	$UpToDate = Invoke-Case -Name 'up-to-date-build' -FakeBin $FakeBin -BuildCase 'up-to-date'
+	Assert-True ($UpToDate.exitCode -eq 0 -and $UpToDate.report.execution_provenance.compiler_version -ceq '14.44.35228' -and
+		$UpToDate.report.execution_provenance.resource_compiler_sha256 -ceq (Get-Sha256 $UpToDate.fixture.resourceCompiler) -and
+		(Get-Content -LiteralPath $UpToDate.fixture.buildLog -Raw) -notmatch 'Using Visual Studio') "An up-to-date editor build must take its toolchain identity from the UBT target makefile. Output: $($UpToDate.output)"
 	$BuildArguments = [IO.File]::ReadAllLines($Success.fixture.buildCapture)
-	$ExpectedBuildArguments = @('AethelnOnlineEditor','Win64','Development',(Join-Path $Success.fixture.repository 'AethelnOnline.uproject'),'-WaitMutex','-NoHotReloadFromIDE')
+	$ExpectedBuildArguments = @('AethelnOnlineEditor','Win64','Development',(Join-Path $Success.fixture.repository 'AethelnOnline.uproject'),'-WaitMutex','-NoHotReloadFromIDE','-NoEngineChanges','-CompilerVersion=14.44.35207','-WindowsSDKVersion=10.0.26100.0')
 	Assert-True (($BuildArguments -join [char]0) -ceq ($ExpectedBuildArguments -join [char]0)) 'The wrapper must run the exact approved Editor build argument vector before validation.'
+	Assert-True ([IO.File]::ReadAllText($Success.fixture.buildCapture + '.msbuild-node-reuse') -ceq '1') 'The editor build must inherit MSBUILDDISABLENODEREUSE=1 so no reusable MSBuild node keeps the build job alive.'
+	Assert-True ([IO.File]::ReadAllText($Success.fixture.buildCapture + '.makefile-at-start') -ceq 'absent') 'The wrapper must delete the target Makefile.bin before its editor build, so UBT creates it and UHT keeps its input cache on (TA-020 2026-10-11).'
 	$ExpectedBuildCommandSha256 = Get-TextSha256 ([string]::Join([char]0, @($Success.fixture.build) + $ExpectedBuildArguments))
 	Assert-True ($Success.report.execution_provenance.editor_build_command_sha256 -ceq $ExpectedBuildCommandSha256) 'The report must bind the exact Editor build command.'
 	Assert-True ($Success.report.execution_provenance.editor_build_log_sha256 -ceq (Get-Sha256 $Success.fixture.buildLog) -and (Get-Content -LiteralPath $Success.fixture.buildLog -Raw) -notmatch 'stale build log') 'The report must bind the fresh exact Editor build log.'
@@ -889,6 +951,7 @@ try {
 	foreach ($Prefix in @('-Report=', '-ReportFileIdentity=', '-ReportHandle=', '-Policy=', '-Intake=', '-Revision=', '-EngineRevision=', '-EngineTag=', '-EngineBinarySha256=', '-BuildVersionSha256=', '-EditorBuildCommandSha256=', '-EditorBuildLogSha256=', '-CompilerVersion=', '-CompilerSha256=', '-ResourceCompilerVersion=', '-ResourceCompilerSha256=', '-TargetReceiptPath=', '-TargetReceiptSizeBytes=', '-TargetReceiptSha256=', '-TargetReceiptBuildId=', '-ModuleManifestPath=', '-ModuleManifestSizeBytes=', '-ModuleManifestSha256=', '-ModuleManifestBuildId=', '-ProjectSha256=', '-PolicySha256=', '-IntakeSha256=', '-InvocationSha256=', '-StartedUtc=', '-RegistrySource=live_asset_registry')) {
 		Assert-True (@($CapturedArguments | Where-Object { $_.StartsWith($Prefix, [StringComparison]::Ordinal) }).Count -eq 1) "The commandlet argument '$Prefix' must occur exactly once."
 	}
+	Assert-True ($CapturedArguments -ccontains ('-Report=' + $Success.fixture.report)) 'The commandlet -Report must name the published content-validation-report.json; the report bytes go through -ReportHandle to the pending file.'
 
 	$Snapshot = Invoke-Case -Name 'snapshot' -FakeBin $FakeBin -EditorCase 'success' -GitCase 'clean' -UseSnapshot $true -AllowSnapshot $true
 	Assert-True ($Snapshot.exitCode -eq 0 -and $Snapshot.report.execution_provenance.registry_source -ceq 'test_snapshot') "Explicitly authorized test snapshot failed: $($Snapshot.output)"
@@ -919,6 +982,9 @@ try {
 		@('silent-build-log','silent-success','positive size'),
 		@('missing-toolchain','missing-toolchain','toolchain identity'),
 		@('duplicate-toolchain','duplicate-toolchain','toolchain identity'),
+		@('missing-makefile','missing-makefile','UBT target makefile'),
+		@('makefile-version','makefile-version','unsupported format'),
+		@('log-toolchain-mismatch','log-toolchain-mismatch','differs from the UBT target makefile'),
 		@('missing-compiler','missing-compiler','compiler'),
 		@('missing-resource-compiler','missing-resource-compiler','resource compiler'),
 		@('missing-receipt','missing-receipt','target receipt'),

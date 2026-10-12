@@ -42,7 +42,7 @@ $script:AcceptanceCheckIds = @('clean-package-provenance-smoke','content-referen
 $script:SelectorCheckIds = @('portable','visual-package','native-client-server-compile','unreal-editor-automation','content-reference-validation','controller-contract','controller-operational-proof','clean-package-provenance-smoke')
 # Opaque hashes and receipt summaries never establish success. Add an
 # obligation from here only after its evidence bytes have an exact semantic parser.
-$script:AcceptanceUnsupportedCheckIds = @('clean-package-provenance-smoke','content-reference-validation')
+$script:AcceptanceUnsupportedCheckIds = @('clean-package-provenance-smoke')
 $script:AcceptancePortableCheckNames = @(
 	'formatting-policy','markdown-links','source-control-policy','combat-design-registry','combat-design-registry-tests','combat-design-generation-tests','combat-design-generated-drift','observability-contract','content-validation-policy-tests','content-validation-command-tests','build-packaged-artifacts-tests','host-tool-provisioning-tests','cooked-inventory-capture-tests','content-cook-evidence-tests','packaged-smoke-test-tests','network-authority-spike-tests','engine-runner-gate-tests','unreal-automation-tests','server-cook-reference-tests','target-composition-tests','build-provenance-tests','markdown-link-tests','formatting-policy-tests','observability-contract-tests','ci-suite-tests','engine-runner-post-command-state-tests','prototype-quality-workflow-tests','visual-package-evidence-tests','runner-scheduling-policy-tests','ci-selection-tests','ci-acceptance-receipt-tests','ci-acceptance-aggregate-tests','ci-acceptance-publisher-tests','ci-acceptance-context-tests','ci-activation-candidate-tests','compile-workspace-tests','engine-host-lease-tests','managed-compile-registration-tests','managed-compile-workspace-tests','managed-compile-integration-tests','routine-compile-deadline-tests','routine-compile-resources-tests','routine-compile-command-tests','routine-compile-gate-tests','release-packaging-tests','board-integrity-tests','pull-request-policy-tests','release-cut-tests','psscriptanalyzer'
 )
@@ -628,6 +628,63 @@ function Assert-UnrealAutomationSemanticEvidence {
 		-not (Test-AggregateBoundedInteger -Value $Report.summary.missing -Minimum 0 -Maximum 0) -or -not (Test-AggregateBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 0)) { throw $Reason }
 }
 
+function Assert-ContentValidationSemanticEvidence {
+	# Same claim as the receipt producer (decision D1): report integrity and the six reference_boundary checks only.
+	param([byte[]]$Bytes,$Context)
+	$Reason = 'receipt_semantic_evidence_invalid:content-reference-validation'
+	try {
+		# A live report carries about 230 properties and 40 array items per governed asset, so these parse bounds
+		# are far above the default ones; the 4 MiB byte limit stays the binding bound.
+		$Report = ConvertFrom-StrictBoundedJson -Bytes $Bytes -MaximumBytes $script:AggregateLimits.jsonBytes -MaximumDepth 16 -MaximumProperties 262144 -MaximumArrayItems 65536
+		Assert-ClosedObject -Value $Report -Names @('schema_id','schema_version','revision','engine_identity','policy_sha256','intake_sha256','execution_provenance','audience','started_utc','finished_utc','command','counts','assets','findings','result') -Reason $Reason
+		Assert-ClosedObject -Value $Report.execution_provenance -Names @('repository_clean','engine_revision','engine_tag','engine_binary_sha256','build_version_sha256','target','platform','configuration','editor_build_command_sha256','editor_build_log_sha256','compiler_version','compiler_sha256','resource_compiler_version','resource_compiler_sha256','target_receipt','module_manifest','loaded_project_modules','project_sha256','policy_sha256','intake_sha256','invocation_sha256','registry_source') -Reason $Reason
+		Assert-ClosedObject -Value $Report.counts -Names @('assets','findings','errors','non_promotion') -Reason $Reason
+	} catch { if ($_.Exception.Message -cmatch '^receipt_semantic_evidence_') { throw }; throw $Reason }
+	$Execution = $Report.execution_provenance
+	if ($Report.schema_id -isnot [string] -or $Report.schema_id -cne 'aetheln.content-validation-report' -or -not (Test-AggregateBoundedInteger -Value $Report.schema_version -Minimum 2 -Maximum 2) -or
+		$Report.revision -isnot [string] -or $Report.revision -cne $Context.source.testedRevision -or
+		$Report.engine_identity -isnot [string] -or $Report.engine_identity -cne '5.8.1-release@71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or
+		$Execution.repository_clean -isnot [bool] -or -not $Execution.repository_clean -or
+		$Execution.engine_revision -isnot [string] -or $Execution.engine_revision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or $Execution.engine_tag -isnot [string] -or $Execution.engine_tag -cne '5.8.1-release' -or
+		$Execution.target -isnot [string] -or $Execution.target -cne 'AethelnOnlineEditor' -or $Execution.platform -isnot [string] -or $Execution.platform -cne 'Win64' -or
+		$Execution.configuration -isnot [string] -or $Execution.configuration -cne 'Development' -or $Execution.registry_source -isnot [string] -or $Execution.registry_source -cne 'live_asset_registry' -or
+		$Report.result -isnot [string] -or $Report.result -cnotin @('passed','non_promotion') -or -not (Test-AggregateBoundedInteger -Value $Report.counts.errors -Minimum 0 -Maximum 0) -or
+		$Report.assets -isnot [array] -or @($Report.assets).Count -lt 1 -or -not (Test-AggregateBoundedInteger -Value $Report.counts.assets -Minimum 1 -Maximum 1000000) -or $Report.counts.assets -ne @($Report.assets).Count -or
+		$Report.findings -isnot [array] -or -not (Test-AggregateBoundedInteger -Value $Report.counts.findings -Minimum 0 -Maximum 1000000) -or $Report.counts.findings -ne @($Report.findings).Count -or
+		-not (Test-AggregateBoundedInteger -Value $Report.counts.non_promotion -Minimum 0 -Maximum 1000000)) { throw $Reason }
+	$ReferenceChecks = 'audience_reachability,broken_references,compatible_content_version,hard_reference_exceptions,redirectors,stable_id_unique'
+	$LifecycleByAsset = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+	foreach ($Asset in @($Report.assets)) {
+		if ($Asset -isnot [pscustomobject] -or $Asset.PSObject.Properties.Name -cnotcontains 'family_results' -or $Asset.family_results -isnot [array] -or
+			$Asset.PSObject.Properties.Name -cnotcontains 'asset_path' -or $Asset.asset_path -isnot [string] -or $Asset.PSObject.Properties.Name -cnotcontains 'lifecycle_state' -or
+			$Asset.lifecycle_state -isnot [string] -or $LifecycleByAsset.ContainsKey($Asset.asset_path)) { throw $Reason }
+		$LifecycleByAsset.Add($Asset.asset_path, $Asset.lifecycle_state)
+		$Families = @($Asset.family_results | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties.Name -ccontains 'policy_id' -and $_.policy_id -ceq 'reference_boundary' })
+		if ($Families.Count -ne 1) { throw $Reason }
+		$Family = $Families[0]
+		if ($Family.PSObject.Properties.Name -cnotcontains 'deterministic_status' -or $Family.deterministic_status -isnot [string] -or $Family.deterministic_status -cne 'passed' -or
+			$Family.PSObject.Properties.Name -cnotcontains 'check_results' -or $Family.check_results -isnot [array]) { throw $Reason }
+		$Checks = @($Family.check_results)
+		foreach ($Check in $Checks) {
+			Assert-ClosedObject -Value $Check -Names @('check_id','applicability','deterministic_status','promotion_status','evidence') -Reason $Reason
+			if ($Check.check_id -isnot [string] -or $Check.applicability -isnot [string] -or $Check.applicability -cne 'applicable' -or
+				$Check.deterministic_status -isnot [string] -or $Check.deterministic_status -cne 'passed') { throw $Reason }
+		}
+		if ((@($Checks | ForEach-Object { $_.check_id }) -join ',') -cne $ReferenceChecks) { throw $Reason }
+	}
+	# Closed allowlist, as in the receipt producer: only the lifecycle non_promotion finding of a temporary_prototype
+	# asset, at most one per asset.
+	$LifecycleFindingAssets = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+	foreach ($Finding in @($Report.findings)) {
+		if ($Finding -isnot [pscustomobject] -or $Finding.PSObject.Properties.Name -cnotcontains 'policy_id' -or $Finding.policy_id -isnot [string]) { throw $Reason }
+		if ($Finding.policy_id -cne 'reference_boundary') { continue }
+		Assert-ClosedObject -Value $Finding -Names @('policy_id','code','asset_path','severity','reason','remediation','evidence_field') -Reason $Reason
+		if ($Finding.code -isnot [string] -or $Finding.code -cne 'content.reference_boundary.non_promotion' -or $Finding.severity -isnot [string] -or $Finding.severity -cne 'non_promotion' -or
+			$Finding.evidence_field -isnot [string] -or $Finding.evidence_field -cne 'thresholds.unresolved_budgets' -or $Finding.asset_path -isnot [string] -or
+			-not $LifecycleByAsset.ContainsKey($Finding.asset_path) -or $LifecycleByAsset[$Finding.asset_path] -cne 'temporary_prototype' -or -not $LifecycleFindingAssets.Add($Finding.asset_path)) { throw $Reason }
+	}
+}
+
 function Assert-VisualPackageSemanticEvidence {
 	param([byte[]] $Bytes, $Context)
 	try {
@@ -720,14 +777,15 @@ function Assert-CiAcceptanceReceipt {
 		if ($Result.id -ceq 'visual-package' -and ($null -ne $Result.nativeExitCode -or $null -ne $Result.cleanupVerified)) { throw 'receipt_semantic_evidence_invalid:visual-package' }
 		if ($Result.id -cin @('portable','controller-contract') -and ($null -ne $Result.nativeExitCode -or $null -ne $Result.cleanupVerified)) { throw ('receipt_semantic_evidence_invalid:' + $Result.id) }
 		if ($Result.id -ceq 'unreal-editor-automation' -and ($Result.nativeExitCode -ne 0 -or $null -ne $Result.cleanupVerified)) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
+		if ($Result.id -ceq 'content-reference-validation' -and ($Result.nativeExitCode -ne 0 -or $null -ne $Result.cleanupVerified)) { throw 'receipt_semantic_evidence_invalid:content-reference-validation' }
 		if ($null -ne $Result.cleanupVerified -and $Result.cleanupVerified -isnot [bool]) { throw 'receipt_cleanup_invalid' }
 		if ($Result.id -cin @('clean-package-provenance-smoke','controller-operational-proof','native-client-server-compile') -and ($Result.nativeExitCode -ne 0 -or $Result.cleanupVerified -ne $true)) { throw 'receipt_native_proof_incomplete' }
 		if ($Result.evidence -isnot [array]) { throw 'receipt_evidence_invalid' }
 		$Evidence = @($Result.evidence)
 		if ($Evidence.Count -eq 0 -or $Evidence.Count -gt $script:AggregateLimits.evidencePerReceipt) { throw 'receipt_evidence_invalid' }
-		if ($Result.id -in @('portable','controller-contract','controller-operational-proof','native-client-server-compile','unreal-editor-automation','visual-package') -and $Evidence.Count -ne 1) { throw ('receipt_semantic_evidence_duplicate:' + $Result.id) }
+		if ($Result.id -in @('content-reference-validation','portable','controller-contract','controller-operational-proof','native-client-server-compile','unreal-editor-automation','visual-package') -and $Evidence.Count -ne 1) { throw ('receipt_semantic_evidence_duplicate:' + $Result.id) }
 		$SemanticEvidenceBytes = $null
-		$SemanticEvidenceName = switch ($Result.id) { 'portable' {'ci-report.json'} 'controller-contract' {'ci-report.json'} 'controller-operational-proof' {'engine-runner-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) } }
+		$SemanticEvidenceName = switch ($Result.id) { 'content-reference-validation' {'content-validation-report.json'} 'portable' {'ci-report.json'} 'controller-contract' {'ci-report.json'} 'controller-operational-proof' {'engine-runner-report.json'} 'native-client-server-compile' {'engine-runner-report.json'} 'unreal-editor-automation' {'unreal-automation-report.json'} 'visual-package' {'visual-package-report.json'} default { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) } }
 		foreach ($Item in $Evidence) {
 			Assert-ClosedObject -Value $Item -Names @('name','sha256','sizeBytes') -Reason 'receipt_schema_invalid'
 			Assert-SafeArchivePath ([string] $Item.name)
@@ -744,7 +802,7 @@ function Assert-CiAcceptanceReceipt {
 		}
 		if ($null -ne $SemanticEvidenceName) {
 			if ($null -eq $SemanticEvidenceBytes) { throw ('receipt_semantic_evidence_missing:' + $Result.id) }
-			switch ($Result.id) { 'portable' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'controller-contract' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -CheckId 'controller-contract'} 'controller-operational-proof' {if ($null -eq $CompileJob) { throw 'native_compile_job_missing' }; Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName ([string] $CompileJob.runner_name) -CheckId 'controller-operational-proof'} 'native-client-server-compile' {if ($null -eq $CompileJob) { throw 'native_compile_job_missing' }; Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName ([string] $CompileJob.runner_name)} 'unreal-editor-automation' {Assert-UnrealAutomationSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'visual-package' {Assert-VisualPackageSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} default { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) } }
+			switch ($Result.id) { 'content-reference-validation' {Assert-ContentValidationSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'portable' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'controller-contract' {Assert-PortableSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -CheckId 'controller-contract'} 'controller-operational-proof' {if ($null -eq $CompileJob) { throw 'native_compile_job_missing' }; Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName ([string] $CompileJob.runner_name) -CheckId 'controller-operational-proof'} 'native-client-server-compile' {if ($null -eq $CompileJob) { throw 'native_compile_job_missing' }; Assert-EngineRunnerSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context -ExpectedRunnerName ([string] $CompileJob.runner_name)} 'unreal-editor-automation' {Assert-UnrealAutomationSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} 'visual-package' {Assert-VisualPackageSemanticEvidence -Bytes $SemanticEvidenceBytes -Context $Context} default { throw ('receipt_semantic_evidence_unsupported:' + $Result.id) } }
 		}
 	}
 	if ($Archive.entries.Count -ne $ExpectedNames.Count -or @($Archive.entries | Where-Object { -not $ExpectedNames.Contains($_.name) }).Count -ne 0) { throw 'archive_unexpected_entry' }

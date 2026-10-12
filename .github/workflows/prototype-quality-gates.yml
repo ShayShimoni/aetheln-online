@@ -317,7 +317,7 @@ jobs:
             'controller-operational-proof' = 'controller_operational_proof_required'
             'clean-package-provenance-smoke' = 'clean_package_provenance_smoke_required'
           }
-          $LiveProducerChecks = @('controller-contract', 'controller-operational-proof', 'native-client-server-compile', 'portable', 'unreal-editor-automation', 'visual-package')
+          $LiveProducerChecks = @('content-reference-validation', 'controller-contract', 'controller-operational-proof', 'native-client-server-compile', 'portable', 'unreal-editor-automation', 'visual-package')
           $Obligations = @($Parsed.selection.obligations)
           if ($Obligations.Count -ne $ExpectedObligations.Count) { throw 'shadow_selection_obligations_invalid' }
           $AggregateReady = $true
@@ -471,6 +471,9 @@ jobs:
             # controller-only change still compiles but skips it. The match is
             # case-insensitive and fails closed: the managed workspace is a
             # case-insensitive Windows checkout, so a case variant runs the editor.
+            # TA-025: trusted-content-validation needs this job, whose leased
+            # re-sync puts the managed workspace at the tested revision, so the
+            # content launcher (which selects that producer) runs it too.
             $EditorCiPaths = @(
               '.github/workflows/prototype-quality-gates.yml',
               'AethelnOnline.uproject',
@@ -479,7 +482,8 @@ jobs:
               'scripts/ci/LeaseJournal.ps1',
               'scripts/ci/ManagedCompileRegistration.ps1',
               'scripts/ci/ManagedCompileWorkspace.ps1',
-              'scripts/ci/Sync-EditorAutomationWorkspace.ps1'
+              'scripts/ci/Sync-EditorAutomationWorkspace.ps1',
+              'scripts/content/Invoke-ContentValidation.ps1'
             )
             if ($EditorCiPaths -contains $Path) { return $true }
             if ($Path -match '^(Source|Config|Content|Plugins)/.+') { return $true }
@@ -1175,6 +1179,222 @@ jobs:
           Write-Output ('control_checkouts removed={0} kept={1}' -f $Removed, $Kept.Count)
           if ($Kept.Count -gt 0) { Write-Output ('::warning::control_checkout_kept names=' + ($Kept -join ',')) }
 
+  # Package 3C content-reference-validation producer (TA-025). A separate
+  # owner-only engine job runs after trusted-editor-automation, only when the
+  # selector selects the obligation, and runs the content-validation launcher
+  # from the registered managed compile workspace against the live Asset
+  # Registry; its editor build reuses the editor job's build (same compiler
+  # and SDK pins). It does not re-sync the workspace: when another owner pull
+  # request's compile re-synced it after the editor job, the launch step
+  # records content_workspace_revision_changed and the run needs "Re-run all
+  # jobs". The launcher writes into a fresh run/attempt directory under the
+  # workspace's ignored TestResults, so no earlier run's retained outputs count
+  # against its budget; the step copies the report to runner.temp and removes
+  # that directory. Launcher output carries absolute paths, so it goes to
+  # runner-local files and only fixed codes reach the public log. Every step
+  # continues on error; bind and upload run only after the earlier steps
+  # succeeded, and a missing artifact fails content-receipt-shadow at its raw
+  # binding check. The first failure is exposed as content_reason. It starts
+  # only when the editor job reported automation_reason 'none': the lease was
+  # taken and released, the workspace was re-synced to this revision, and no
+  # step failed or was superseded. Any other reason, an empty one included,
+  # skips it: after an unknown lease state the editor job keeps the workspace
+  # and the held journal as recovery evidence (#243), and after a skipped
+  # control checkout or a superseded head the workspace may hold another head.
+  trusted-content-validation:
+    needs:
+      - ci-selection-shadow
+      - trusted-editor-automation
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.ci-selection-shadow.outputs.content_reference_validation_required == 'true' &&
+      needs.trusted-editor-automation.outputs.automation_reason == 'none' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.triggering_actor == github.repository_owner
+    runs-on: [self-hosted, Windows, X64, aetheln-engine]
+    # The step bounds (27 + 1 + 1 + 1 + 1) plus a 3-minute margin. The launch
+    # step holds the launcher's 15-minute build and 10-minute commandlet bounds
+    # plus 2 minutes for the launcher's own checks (about 25 seconds measured).
+    timeout-minutes: 34
+    outputs:
+      content_artifact_id: ${{ steps.content_artifact.outputs.artifact-id }}
+      content_artifact_name: ${{ steps.content_identity.outputs.artifact_name }}
+      content_artifact_digest: sha256:${{ steps.content_artifact.outputs.artifact-digest }}
+      content_sha256: ${{ steps.content_identity.outputs.evidence_sha256 }}
+      content_size_bytes: ${{ steps.content_identity.outputs.evidence_size_bytes }}
+      content_reason: ${{ steps.content_outcome.outputs.reason }}
+    concurrency:
+      group: aetheln-engine-runner
+      queue: max
+      cancel-in-progress: false
+    steps:
+      - name: Run content validation launcher
+        id: content_run
+        continue-on-error: true
+        timeout-minutes: 27
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          function Exit-Content([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }
+          # Mask both roots in later step output, as the editor job does.
+          if ($env:AETHELN_ENGINE_ROOT) { Write-Output "::add-mask::$env:AETHELN_ENGINE_ROOT" }
+          if ($env:AETHELN_MANAGED_COMPILE_ROOT) { Write-Output "::add-mask::$env:AETHELN_MANAGED_COMPILE_ROOT" }
+          # Another owner pull request's compile may have re-synced the managed
+          # workspace after the editor job; scan only this exact, clean revision.
+          $Root = [IO.Path]::GetFullPath($env:AETHELN_MANAGED_COMPILE_ROOT).TrimEnd('\', '/')
+          $Git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          function Get-WorkspaceGitText([string] $Arguments) {
+            $Info = New-Object Diagnostics.ProcessStartInfo $Git, ('--no-replace-objects --no-optional-locks -C "' + $Root + '" ' + $Arguments)
+            $Info.UseShellExecute = $false
+            $Info.CreateNoWindow = $true
+            $Info.RedirectStandardOutput = $true
+            $Info.RedirectStandardError = $true
+            $Info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false, $true)
+            $Process = [Diagnostics.Process]::Start($Info)
+            $ErrorText = $Process.StandardError.ReadToEndAsync()
+            $Text = $Process.StandardOutput.ReadToEnd()
+            $Process.WaitForExit()
+            $null = $ErrorText.Result
+            if ($Process.ExitCode -ne 0) { Exit-Content 'content_workspace_query_failed' }
+            return $Text
+          }
+          if ((Get-WorkspaceGitText 'rev-parse HEAD').Trim() -cne $env:GITHUB_SHA) { Exit-Content 'content_workspace_revision_changed' }
+          if ((Get-WorkspaceGitText 'status --porcelain --untracked-files=all').Trim().Length -ne 0) { Exit-Content 'content_workspace_dirty' }
+          $RunRoot = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}'
+          $null = New-Item -ItemType Directory -Path $RunRoot -Force
+          # The launcher never prunes its retained pending and backup files, so a
+          # shared output directory would exhaust its retention budget over runs.
+          $OutputDirectory = Join-Path $Root 'TestResults\content-validation-${{ github.run_id }}-${{ github.run_attempt }}'
+          if (Test-Path -LiteralPath $OutputDirectory) { Exit-Content 'content_output_directory_exists' }
+          $null = New-Item -ItemType Directory -Path $OutputDirectory
+          try {
+            $Launcher = Join-Path $Root 'scripts\content\Invoke-ContentValidation.ps1'
+            $Arguments = @('-NoProfile', '-NonInteractive', '-File', ('"' + $Launcher + '"'), '-EngineRoot', ('"' + $env:AETHELN_ENGINE_ROOT.TrimEnd('\') + '"'), '-OutputPath', ('"' + (Join-Path $OutputDirectory 'content-validation-report.json') + '"'), '-BuildTimeoutSeconds', '900', '-TimeoutSeconds', '600')
+            $Launched = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $Arguments -NoNewWindow -Wait -PassThru `
+              -RedirectStandardOutput (Join-Path $RunRoot 'content-validation-stdout.txt') `
+              -RedirectStandardError (Join-Path $RunRoot 'content-validation-stderr.txt')
+            Write-Output ('content_validation exit=' + $Launched.ExitCode)
+            if ($Launched.ExitCode -ne 0) { Exit-Content 'content_validation_failed' }
+            $ManagedReport = Join-Path $OutputDirectory 'content-validation-report.json'
+            if (-not (Test-Path -LiteralPath $ManagedReport -PathType Leaf)) { Exit-Content 'content_report_missing' }
+            Copy-Item -LiteralPath $ManagedReport -Destination (Join-Path $RunRoot 'content-validation-report.json')
+          } finally {
+            Remove-Item -LiteralPath $OutputDirectory -Recurse -Force -ErrorAction SilentlyContinue
+          }
+      # The editor may write gitignored files under compile inputs, and the next
+      # managed sync rejects any untracked input file. Remove exactly the set
+      # that sync query reports, as the editor job does. This job takes no
+      # engine host lease, so the cleanup runs after every launch outcome.
+      - name: Clear content-scan input residue
+        id: content_residue
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_MANAGED_COMPILE_ROOT: ${{ vars.AETHELN_MANAGED_COMPILE_ROOT }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          function Exit-Content([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }
+          $Root = [IO.Path]::GetFullPath($env:AETHELN_MANAGED_COMPILE_ROOT).TrimEnd('\', '/')
+          $Query = 'ls-files --others -z -- ":(icase)Source" ":(icase)Config" ":(icase)Content" ":(icase)Plugins" ":(icase)Build" ":(icase)Platforms" ":(icase)AethelnOnline.uproject" ":(icase).gitattributes" ":(icase).gitmodules" ":(icase).lfsconfig" ":(exclude,icase,glob)**/Binaries/**" ":(exclude,icase,glob)**/Intermediate/**"'
+          # Same git resolution and flags as the managed sync.
+          $Git = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          function Get-InputResidue {
+            $Info = New-Object Diagnostics.ProcessStartInfo $Git, ('--no-replace-objects --no-optional-locks -C "' + $Root + '" ' + $Query)
+            $Info.UseShellExecute = $false
+            $Info.CreateNoWindow = $true
+            $Info.RedirectStandardOutput = $true
+            $Info.RedirectStandardError = $true
+            $Info.StandardOutputEncoding = New-Object Text.UTF8Encoding($false, $true)
+            $Process = [Diagnostics.Process]::Start($Info)
+            $ErrorText = $Process.StandardError.ReadToEndAsync()
+            $Text = $Process.StandardOutput.ReadToEnd()
+            $Process.WaitForExit()
+            $null = $ErrorText.Result
+            if ($Process.ExitCode -ne 0) { Exit-Content 'content_input_residue_query_failed' }
+            return @($Text.Split([char] 0) | Where-Object { $_ })
+          }
+          $Residue = @(Get-InputResidue)
+          foreach ($Relative in $Residue) {
+            $Path = [IO.Path]::GetFullPath((Join-Path $Root $Relative))
+            if (-not $Path.StartsWith($Root + '\', [StringComparison]::OrdinalIgnoreCase)) { Exit-Content 'content_input_residue_path_invalid' }
+            Remove-Item -LiteralPath $Path -Force
+          }
+          if (@(Get-InputResidue).Count -ne 0) { Exit-Content 'content_input_residue_remaining' }
+          Write-Output ('content_input_residue removed={0}' -f $Residue.Count)
+      - name: Bind content validation report
+        id: content_identity
+        if: steps.content_run.outcome == 'success' && steps.content_residue.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          function Exit-Content([string] $Reason) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false)); throw $Reason }
+          $ReportPath = Join-Path '${{ runner.temp }}' 'aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/content-validation-report.json'
+          if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) { Exit-Content 'content_report_missing' }
+          $Report = Get-Item -LiteralPath $ReportPath
+          if ($Report.Length -le 0 -or $Report.Length -gt 4MB) { Exit-Content 'content_report_size_invalid' }
+          $ReportStream = [IO.File]::OpenRead($ReportPath)
+          $Hasher = [Security.Cryptography.SHA256]::Create()
+          try { $Digest = ([BitConverter]::ToString($Hasher.ComputeHash($ReportStream))).Replace('-', '').ToLowerInvariant() }
+          finally { $Hasher.Dispose(); $ReportStream.Dispose() }
+          $Utf8 = New-Object Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "artifact_name=content-validation-report`nevidence_sha256=$Digest`nevidence_size_bytes=$($Report.Length)`n", $Utf8)
+      - name: Upload content validation report
+        id: content_artifact
+        if: steps.content_run.outcome == 'success' && steps.content_residue.outcome == 'success' && steps.content_identity.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: content-validation-report
+          path: ${{ runner.temp }}/aetheln-engine-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}/content-validation-report.json
+          if-no-files-found: error
+      # Expose the first failure as one fixed-vocabulary reason so a red content
+      # receipt says why; runner-temp evidence is wiped after the job.
+      - name: Report content validation outcome
+        id: content_outcome
+        continue-on-error: true
+        timeout-minutes: 1
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        env:
+          AETHELN_RUN_OUTCOME: ${{ steps.content_run.outcome }}
+          AETHELN_RUN_REASON: ${{ steps.content_run.outputs.reason }}
+          AETHELN_RESIDUE_OUTCOME: ${{ steps.content_residue.outcome }}
+          AETHELN_RESIDUE_REASON: ${{ steps.content_residue.outputs.reason }}
+          AETHELN_BIND_OUTCOME: ${{ steps.content_identity.outcome }}
+          AETHELN_BIND_REASON: ${{ steps.content_identity.outputs.reason }}
+          AETHELN_UPLOAD_OUTCOME: ${{ steps.content_artifact.outcome }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          # First failed or cancelled step wins; an unrecorded failure (for
+          # example a step timeout) maps to that step's fixed fallback.
+          $Reason = 'none'
+          foreach ($Step in @(
+              @($env:AETHELN_RUN_OUTCOME, $env:AETHELN_RUN_REASON, 'content_validation_interrupted'),
+              @($env:AETHELN_RESIDUE_OUTCOME, $env:AETHELN_RESIDUE_REASON, 'content_input_residue_interrupted'),
+              @($env:AETHELN_BIND_OUTCOME, $env:AETHELN_BIND_REASON, 'content_report_bind_interrupted'),
+              @($env:AETHELN_UPLOAD_OUTCOME, '', 'content_report_upload_failed'))) {
+            if ($Step[0] -cin @('failure', 'cancelled')) {
+              $Reason = if ([string] $Step[1] -cmatch '\A[a-z][a-z0-9_]{0,63}\z') { [string] $Step[1] } else { $Step[2] }
+              break
+            }
+          }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "reason=$Reason`n", (New-Object Text.UTF8Encoding $false))
+          Write-Output ('content_validation_outcome reason=' + $Reason)
+
   # Issue #150 milestone phases. The packaging and smoke milestone is split
   # into four bounded, schedule-only jobs (no manual trigger exists on this
   # workflow identity, so an older branch carrying the retired 1,440-minute
@@ -1473,6 +1693,101 @@ jobs:
           path: ${{ runner.temp }}/${{ steps.receipt_identity.outputs.artifact_name }}
           if-no-files-found: error
 
+  content-receipt-shadow:
+    needs:
+      - ci-selection-shadow
+      - trusted-content-validation
+    if: github.event_name == 'pull_request' && needs.ci-selection-shadow.outputs.content_reference_validation_required == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      artifact_id: ${{ steps.receipt_artifact.outputs.artifact-id }}
+      artifact_name: ${{ steps.receipt_identity.outputs.artifact_name }}
+      artifact_digest: sha256:${{ steps.receipt_artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          lfs: false
+          persist-credentials: false
+      - name: Download exact selector evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.ci-selection-shadow.outputs.selector_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/aetheln-content-selector
+      - name: Download exact content evidence
+        if: needs.trusted-content-validation.outputs.content_artifact_id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.trusted-content-validation.outputs.content_artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/aetheln-content-evidence
+      - name: Publish content acceptance receipt
+        id: receipt_identity
+        shell: powershell
+        env:
+          AETHELN_REPOSITORY: ${{ github.repository }}
+          AETHELN_ACTOR: ${{ github.actor }}
+          AETHELN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          AETHELN_BASE_REVISION: ${{ needs.ci-selection-shadow.outputs.accepted_base_sha }}
+          AETHELN_HEAD_REVISION: ${{ github.event.pull_request.head.sha }}
+          AETHELN_TESTED_REVISION: ${{ github.sha }}
+          AETHELN_RUN_ID: ${{ github.run_id }}
+          AETHELN_RUN_ATTEMPT: ${{ github.run_attempt }}
+          AETHELN_RAW_ARTIFACT_ID: ${{ needs.trusted-content-validation.outputs.content_artifact_id }}
+          AETHELN_RAW_ARTIFACT_NAME: ${{ needs.trusted-content-validation.outputs.content_artifact_name }}
+          AETHELN_RAW_ARTIFACT_DIGEST: ${{ needs.trusted-content-validation.outputs.content_artifact_digest }}
+          AETHELN_EVIDENCE_SHA256: ${{ needs.trusted-content-validation.outputs.content_sha256 }}
+          AETHELN_EVIDENCE_SIZE_BYTES: ${{ needs.trusted-content-validation.outputs.content_size_bytes }}
+          AETHELN_CONTENT_REASON: ${{ needs.trusted-content-validation.outputs.content_reason }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          # Fixed-vocabulary reason from the content validation job's outcome step.
+          $ContentReason = if ($env:AETHELN_CONTENT_REASON -cmatch '\A[a-z][a-z0-9_]{0,63}\z') { $env:AETHELN_CONTENT_REASON } else { 'unrecorded' }
+          Write-Output ('content_validation_outcome reason=' + $ContentReason)
+          if ($env:AETHELN_RAW_ARTIFACT_ID -cnotmatch '\A[1-9][0-9]{0,19}\z' -or
+              $env:AETHELN_RAW_ARTIFACT_NAME -cne 'content-validation-report' -or
+              $env:AETHELN_RAW_ARTIFACT_DIGEST -cnotmatch '\Asha256:[0-9a-f]{64}\z') { throw 'content_raw_artifact_binding_invalid' }
+          if ($env:AETHELN_BASE_REVISION -cnotmatch '\A[0-9a-f]{40}\z') { throw 'accepted_base_invalid' }
+          $ContextPath = Join-Path '${{ runner.temp }}' 'aetheln-content-identity.json'
+          $OutputRoot = Join-Path '${{ runner.temp }}' ('ci-receipt-content-' + $env:AETHELN_RUN_ID + '-' + $env:AETHELN_RUN_ATTEMPT + '-${{ needs.ci-selection-shadow.outputs.attempt_nonce }}')
+          $WorkflowPath = (Resolve-Path -LiteralPath '.github/workflows/prototype-quality-gates.yml').Path
+          $ContextBuilder = (Resolve-Path -LiteralPath 'scripts/ci/New-CiAcceptanceAggregateContext.ps1').Path
+          & $ContextBuilder `
+            -Mode Identity `
+            -SelectorReportPath '${{ runner.temp }}/aetheln-content-selector/ci-selection-shadow.json' `
+            -WorkflowPath $WorkflowPath `
+            -Repository $env:AETHELN_REPOSITORY `
+            -Actor $env:AETHELN_ACTOR `
+            -TriggeringActor $env:AETHELN_TRIGGERING_ACTOR `
+            -BaseRevision $env:AETHELN_BASE_REVISION `
+            -HeadRevision $env:AETHELN_HEAD_REVISION `
+            -TestedRevision $env:AETHELN_TESTED_REVISION `
+            -WorkflowId $env:AETHELN_ACCEPTANCE_WORKFLOW_ID `
+            -RunId $env:AETHELN_RUN_ID `
+            -RunAttempt ([int] $env:AETHELN_RUN_ATTEMPT) `
+            -ActionItemsJson $env:AETHELN_ACCEPTANCE_ACTION_ITEMS_JSON `
+            -IdentityContextOutputPath $ContextPath | Out-Null
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ci/Publish-CiAcceptanceReceipt.ps1 `
+            -ContextPath $ContextPath `
+            -ProducerKey content `
+            -JobName content-receipt-shadow `
+            -EvidenceRoot '${{ runner.temp }}/aetheln-content-evidence' `
+            -ExpectedEvidenceSha256 $env:AETHELN_EVIDENCE_SHA256 `
+            -ExpectedEvidenceSizeBytes ([long] $env:AETHELN_EVIDENCE_SIZE_BYTES) `
+            -OutputRoot $OutputRoot
+          if ($LASTEXITCODE -ne 0) { throw 'content_receipt_failed' }
+          $Utf8 = New-Object Text.UTF8Encoding $false
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, ('artifact_name=' + (Split-Path -Leaf $OutputRoot) + "`n"), $Utf8)
+      - name: Upload content acceptance receipt
+        id: receipt_artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.receipt_identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/${{ steps.receipt_identity.outputs.artifact_name }}
+          if-no-files-found: error
+
   native-receipt-shadow:
     needs:
       - ci-selection-shadow
@@ -1761,12 +2076,14 @@ jobs:
       - change-impact
       - trusted-candidate-compile
       - trusted-editor-automation
+      - trusted-content-validation
       - scheduled-client-package
       - scheduled-server-package
       - scheduled-provenance-validation
       - scheduled-packaged-smoke
       - visual-proof
       - portable-receipt-shadow
+      - content-receipt-shadow
       - native-receipt-shadow
       - unreal-receipt-shadow
       - visual-receipt-shadow
@@ -1817,6 +2134,7 @@ jobs:
           AETHELN_SELECTOR_ARTIFACT_NAME: ${{ needs.ci-selection-shadow.outputs.selector_artifact_name }}
           AETHELN_SELECTOR_ARTIFACT_DIGEST: ${{ needs.ci-selection-shadow.outputs.selector_artifact_digest }}
           AETHELN_PORTABLE_REQUIRED: ${{ needs.ci-selection-shadow.outputs.portable_required }}
+          AETHELN_CONTENT_REQUIRED: ${{ needs.ci-selection-shadow.outputs.content_reference_validation_required }}
           AETHELN_NATIVE_REQUIRED: ${{ needs.ci-selection-shadow.outputs.native_client_server_compile_required }}
           AETHELN_OPERATIONAL_REQUIRED: ${{ needs.ci-selection-shadow.outputs.controller_operational_proof_required }}
           AETHELN_UNREAL_REQUIRED: ${{ needs.ci-selection-shadow.outputs.unreal_editor_automation_required }}
@@ -1825,6 +2143,10 @@ jobs:
           AETHELN_PORTABLE_ARTIFACT_ID: ${{ needs.portable-receipt-shadow.outputs.artifact_id }}
           AETHELN_PORTABLE_ARTIFACT_NAME: ${{ needs.portable-receipt-shadow.outputs.artifact_name }}
           AETHELN_PORTABLE_ARTIFACT_DIGEST: ${{ needs.portable-receipt-shadow.outputs.artifact_digest }}
+          AETHELN_CONTENT_RESULT: ${{ needs.content-receipt-shadow.result }}
+          AETHELN_CONTENT_ARTIFACT_ID: ${{ needs.content-receipt-shadow.outputs.artifact_id }}
+          AETHELN_CONTENT_ARTIFACT_NAME: ${{ needs.content-receipt-shadow.outputs.artifact_name }}
+          AETHELN_CONTENT_ARTIFACT_DIGEST: ${{ needs.content-receipt-shadow.outputs.artifact_digest }}
           AETHELN_NATIVE_RESULT: ${{ needs.native-receipt-shadow.result }}
           AETHELN_NATIVE_ARTIFACT_ID: ${{ needs.native-receipt-shadow.outputs.artifact_id }}
           AETHELN_NATIVE_ARTIFACT_NAME: ${{ needs.native-receipt-shadow.outputs.artifact_name }}
@@ -1911,6 +2233,7 @@ jobs:
           }
           # The native publisher proves either native obligation from one compile report; any other output pair is invalid and fails closed.
           $NativeProducerRequired = if ($env:AETHELN_NATIVE_REQUIRED -ceq 'true' -or $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'true') { 'true' } elseif ($env:AETHELN_NATIVE_REQUIRED -ceq 'false' -and $env:AETHELN_OPERATIONAL_REQUIRED -ceq 'false') { 'false' } else { 'invalid' }
+          Add-ProducerBinding $env:AETHELN_CONTENT_REQUIRED $env:AETHELN_CONTENT_RESULT 'content' 'content-receipt-shadow' $env:AETHELN_CONTENT_ARTIFACT_ID $env:AETHELN_CONTENT_ARTIFACT_NAME $env:AETHELN_CONTENT_ARTIFACT_DIGEST
           Add-ProducerBinding $NativeProducerRequired $env:AETHELN_NATIVE_RESULT 'native' 'native-receipt-shadow' $env:AETHELN_NATIVE_ARTIFACT_ID $env:AETHELN_NATIVE_ARTIFACT_NAME $env:AETHELN_NATIVE_ARTIFACT_DIGEST
           Add-ProducerBinding $env:AETHELN_PORTABLE_REQUIRED $env:AETHELN_PORTABLE_RESULT 'portable' 'portable-receipt-shadow' $env:AETHELN_PORTABLE_ARTIFACT_ID $env:AETHELN_PORTABLE_ARTIFACT_NAME $env:AETHELN_PORTABLE_ARTIFACT_DIGEST
           Add-ProducerBinding $env:AETHELN_UNREAL_REQUIRED $env:AETHELN_UNREAL_RESULT 'unreal' 'unreal-receipt-shadow' $env:AETHELN_UNREAL_ARTIFACT_ID $env:AETHELN_UNREAL_ARTIFACT_NAME $env:AETHELN_UNREAL_ARTIFACT_DIGEST
