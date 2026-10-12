@@ -2460,12 +2460,17 @@ Every accepted decision records:
     leased re-sync puts the managed workspace at the tested revision, the
     issue #299 editor gate (TA-020 amendment) also runs the editor job when
     `scripts/content/Invoke-ContentValidation.ps1` changes (2026-10-12).
-    The job also reads the editor job's `automation_reason` and does not start
-    after `editor_host_lease_failed`, `editor_host_lease_release_failed`, or
-    `editor_build_interrupted`, when the host lease state is unknown and the
-    editor job keeps the workspace and the held journal as recovery evidence
-    (#243), or after `superseded_head`, when the managed workspace may still
-    hold this stale head (2026-10-12, PR #326 review).
+    The job also reads the editor job's `automation_reason` and starts only
+    when it is `none`: the lease was taken and released, the workspace was
+    re-synced to the tested revision, and no step failed or was superseded.
+    Any other reason, an empty one included, skips it. After
+    `editor_host_lease_failed`, `editor_host_lease_release_failed`, or
+    `editor_build_interrupted` the host lease state is unknown and the editor
+    job keeps the workspace and the held journal as recovery evidence (#243);
+    after `editor_control_checkout_failed` the editor job never took the lease
+    or re-synced; after `superseded_head` the workspace may still hold this
+    stale head. An editor build or automation failure also skips the content
+    job; the aggregate is already red then (2026-10-12, PR #326 reviews).
   - *Bounds (D9):* the launch step passes `-BuildTimeoutSeconds 900` and
     `-TimeoutSeconds 600` and is bounded at 27 minutes: the two launcher
     bounds plus 2 minutes for the launcher's own checks outside them;
