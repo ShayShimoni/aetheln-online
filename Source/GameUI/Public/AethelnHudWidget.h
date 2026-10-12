@@ -32,4 +32,6 @@ private:
 	/** Collapsed instead of the widget itself, which must keep ticking to notice a source. */
 	TSharedPtr<SWidget> Panel;
 	TSharedPtr<STextBlock> Lines;
+	/** Last text sent to Lines, so the text layout is redone only when a line changes. */
+	FString ShownText;
 };

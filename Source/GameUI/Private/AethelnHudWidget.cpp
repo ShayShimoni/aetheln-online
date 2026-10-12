@@ -19,6 +19,7 @@ UAethelnHudWidget::UAethelnHudWidget(const FObjectInitializer& ObjectInitializer
 TSharedRef<SWidget> UAethelnHudWidget::RebuildWidget()
 {
 	// Placeholder presentation: the engine's default font and panel brush; no project art.
+	// Placement, padding, and font size are TBD placeholders.
 	return SNew(SOverlay)
 		+ SOverlay::Slot()
 		.HAlign(HAlign_Left)
@@ -54,8 +55,13 @@ void UAethelnHudWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 	if (bHasSource && Lines.IsValid())
 	{
 		// View.bObjectiveCompletedThisRefresh is the completion event; its extra cue (timing, sound) is TBD.
-		Lines->SetText(FText::Join(FText::FromString(TEXT("\n")), TArray<FText>{
-			View.Health, View.Endurance, View.Guard, View.TimedStates, View.Objective, View.Outcome }));
+		FString Text = FString::Printf(TEXT("%s\n%s\n%s\n%s\n%s\n%s"), *View.Health.ToString(), *View.Endurance.ToString(),
+			*View.Guard.ToString(), *View.TimedStates.ToString(), *View.Objective.ToString(), *View.Outcome.ToString());
+		if (Text != ShownText)
+		{
+			ShownText = MoveTemp(Text);
+			Lines->SetText(FText::FromString(ShownText));
+		}
 	}
 }
 
@@ -70,4 +76,5 @@ void UAethelnHudWidget::ReleaseSlateResources(bool bReleaseChildren)
 	Super::ReleaseSlateResources(bReleaseChildren);
 	Panel.Reset();
 	Lines.Reset();
+	ShownText.Reset();
 }

@@ -98,10 +98,17 @@ FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
 	Snapshot.Endurance = Read(AttributeSet->GetEndurance(), AttributeSet->GetMaxEndurance());
 	Snapshot.Guard = Read(AttributeSet->GetGuard(), AttributeSet->GetMaxGuard());
 
-	// Every owned Cooldown.* tag plus the timed states listed here; #292's recovery delays can join this list.
-	FGameplayTagContainer TimedTags;
-	TimedTags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("Cooldown")));
-	TimedTags.AddTag(AethelnGameplayTags::State_GuardBroken);
+	// Every owned Cooldown.* tag plus these timed states, each applied through a timed duration effect.
+	// Built once, on first use, after native tags are registered.
+	static const FGameplayTagContainer TimedTags = []
+	{
+		FGameplayTagContainer Tags;
+		Tags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("Cooldown")));
+		Tags.AddTag(AethelnGameplayTags::State_GuardBroken);
+		Tags.AddTag(AethelnGameplayTags::State_EnduranceRecoveryDelayed);
+		Tags.AddTag(AethelnGameplayTags::State_GuardRecoveryDelayed);
+		return Tags;
+	}();
 	for (const FGameplayTag& Tag : AbilitySystemComponent->GetOwnedGameplayTags().Filter(TimedTags))
 	{
 		FAethelnHudTimedState& State = Snapshot.TimedStates.AddDefaulted_GetRef();

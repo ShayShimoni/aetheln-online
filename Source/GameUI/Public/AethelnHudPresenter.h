@@ -48,6 +48,8 @@ private:
 	FDelegateHandle OutcomeHandle;
 	TOptional<FAethelnHudActionOutcome> LastOutcome;
 	uint32 OutcomeCount = 0;
+	/** The highest request sequence shown since binding. */
+	uint32 HighestSequence = 0;
 	TWeakObjectPtr<UObject> ObjectiveSourceSeen;
 	EAethelnHudObjectiveState LastObjectiveState = EAethelnHudObjectiveState::None;
 	FAethelnHudView View;

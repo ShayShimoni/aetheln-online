@@ -60,6 +60,7 @@ void FAethelnHudPresenter::Unbind()
 	OutcomeHandle.Reset();
 	LastOutcome.Reset();
 	OutcomeCount = 0;
+	HighestSequence = 0;
 }
 
 FText FAethelnHudPresenter::FormatResource(const FText& Label, const FAethelnHudResource& Resource)
@@ -68,7 +69,7 @@ FText FAethelnHudPresenter::FormatResource(const FText& Label, const FAethelnHud
 	{
 		return FText::Format(LOCTEXT("ResourceUnknown", "{0} --"), Label);
 	}
-	// Rounds up so a living character never reads 0.
+	// TBD placeholder rounding: up, so a living character never reads 0 (and 39.2 of 40 reads 40 / 40).
 	return FText::Format(LOCTEXT("Resource", "{0} {1} / {2}"), Label,
 		FText::AsNumber(FMath::CeilToInt(Resource.Current)), FText::AsNumber(FMath::RoundToInt(Resource.Max)));
 }
@@ -92,8 +93,9 @@ FText FAethelnHudPresenter::FormatTimedStates(const TArray<FAethelnHudTimedState
 			Lines.Add(FText::Format(LOCTEXT("TimerActive", "{0} active"), Name));
 			continue;
 		}
-		// Rounds up to a tenth, so a running timer never reads 0.0; the small bias absorbs float error.
-		const float Seconds = FMath::CeilToFloat(State.RemainingSeconds * 10.0f - 0.001f) / 10.0f;
+		// TBD placeholder precision: rounds up to a tenth with a floor of 0.1, so a running timer
+		// never reads 0.0 or -0.0; the small bias absorbs float error.
+		const float Seconds = FMath::Max(FMath::CeilToFloat(State.RemainingSeconds * 10.0f - 0.001f), 1.0f) / 10.0f;
 		Lines.Add(FText::Format(LOCTEXT("TimerSeconds", "{0} {1}s"), Name, FText::AsNumber(Seconds, &Tenths)));
 	}
 	return FText::Join(FText::FromString(TEXT("\n")), Lines);
@@ -135,12 +137,22 @@ FText FAethelnHudPresenter::FormatObjective(const FAethelnHudObjective& Objectiv
 
 void FAethelnHudPresenter::HandleOutcome(const FAethelnHudActionOutcome& Outcome)
 {
-	// The server sends a started step's record (Corrected) before that request's Accepted outcome.
-	if (Outcome.Kind == EAethelnHudOutcomeKind::Accepted && Outcome.Sequence != 0 && LastOutcome.IsSet()
-		&& LastOutcome->Kind == EAethelnHudOutcomeKind::Corrected && LastOutcome->Sequence == Outcome.Sequence)
+	// A step that starts at once sends its record (Corrected) before its request's Accepted outcome;
+	// a buffered step sends it later. Either way one action keeps one cue, and Corrected wins.
+	if (Outcome.Sequence != 0 && LastOutcome.IsSet() && LastOutcome->Sequence == Outcome.Sequence)
+	{
+		if (Outcome.Kind == EAethelnHudOutcomeKind::Corrected)
+		{
+			LastOutcome = Outcome;
+		}
+		return;
+	}
+	// A buffered step's late correction never replaces a newer action's cue.
+	if (Outcome.Kind == EAethelnHudOutcomeKind::Corrected && Outcome.Sequence != 0 && Outcome.Sequence <= HighestSequence)
 	{
 		return;
 	}
+	HighestSequence = FMath::Max(HighestSequence, Outcome.Sequence);
 	LastOutcome = Outcome;
 	++OutcomeCount;
 }

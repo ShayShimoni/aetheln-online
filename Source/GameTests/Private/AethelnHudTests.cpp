@@ -81,6 +81,10 @@ bool FAethelnHudFormattingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Remaining time rounds up to a tenth; an unknown duration reads active"),
 		FAethelnHudPresenter::FormatTimedStates({ Dodge, Broken }).ToString(),
 		FString(TEXT("Cooldown.Dodge 1.3s\nState.GuardBroken active")));
+	Dodge.RemainingSeconds = 0.00005f;
+	TestEqual(TEXT("A nearly expired timer reads 0.1s, never 0.0s or -0.0s"), FAethelnHudPresenter::FormatTimedStates({ Dodge }).ToString(), FString(TEXT("Cooldown.Dodge 0.1s")));
+	Dodge.RemainingSeconds = 0.0f;
+	TestEqual(TEXT("A timer at zero still reads 0.1s while its tag is owned"), FAethelnHudPresenter::FormatTimedStates({ Dodge }).ToString(), FString(TEXT("Cooldown.Dodge 0.1s")));
 
 	TestEqual(TEXT("No outcome yet"), FAethelnHudPresenter::FormatOutcome({}, 0).ToString(), FString(TEXT("Last action: none")));
 	TestEqual(TEXT("Accepted"), FAethelnHudPresenter::FormatOutcome(MakeOutcome(EAethelnHudOutcomeKind::Accepted, 1), 1).ToString(), FString(TEXT("Last action: ACCEPTED #1")));
@@ -159,11 +163,13 @@ bool FAethelnHudPlayerStateSnapshotTest::RunTest(const FString& Parameters)
 	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::Cooldown_Dodge, 5.0f);
 	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::Cooldown_Oathscar_GateStep, 3.0f);
 	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::State_GuardBroken, 2.0f);
+	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::State_EnduranceRecoveryDelayed, 1.0f);
+	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::State_GuardRecoveryDelayed, 1.0f);
 	AbilitySystem->AddLooseGameplayTag(AethelnGameplayTags::State_Blocking);
 
 	Snapshot = PlayerState->GetHudSnapshot();
 	TestEqual(TEXT("A new value shows on the next snapshot"), Snapshot.Health.Current, 25.0f);
-	TestEqual(TEXT("Cooldowns and the Guard break are the timed states"), Snapshot.TimedStates.Num(), 3);
+	TestEqual(TEXT("Cooldowns, the Guard break and the recovery delays are the timed states"), Snapshot.TimedStates.Num(), 5);
 	const FAethelnHudTimedState* Dodge = FindTimedState(Snapshot, AethelnGameplayTags::Cooldown_Dodge);
 	if (TestNotNull(TEXT("Cooldown.Dodge"), Dodge))
 	{
@@ -171,6 +177,8 @@ bool FAethelnHudPlayerStateSnapshotTest::RunTest(const FString& Parameters)
 	}
 	TestNotNull(TEXT("Cooldown.Oathscar.GateStep"), FindTimedState(Snapshot, AethelnGameplayTags::Cooldown_Oathscar_GateStep));
 	TestNotNull(TEXT("State.GuardBroken"), FindTimedState(Snapshot, AethelnGameplayTags::State_GuardBroken));
+	TestNotNull(TEXT("State.EnduranceRecoveryDelayed"), FindTimedState(Snapshot, AethelnGameplayTags::State_EnduranceRecoveryDelayed));
+	TestNotNull(TEXT("State.GuardRecoveryDelayed"), FindTimedState(Snapshot, AethelnGameplayTags::State_GuardRecoveryDelayed));
 	TestNull(TEXT("An untimed state is not a timed state"), FindTimedState(Snapshot, AethelnGameplayTags::State_Blocking));
 	return true;
 }
@@ -267,6 +275,20 @@ bool FAethelnHudPresenterValuesTest::RunTest(const FString& Parameters)
 	AbilitySystem->OnActivationOutcome.Broadcast(3, EAethelnActivationResult::Accepted);
 	View = &Presenter.Refresh(PlayerState, nullptr);
 	TestEqual(TEXT("A later action replaces it"), View->Outcome.ToString(), FString(TEXT("Last action: ACCEPTED #3")));
+
+	// A buffered step sends its record after its Accepted outcome: the same action's cue upgrades, without a new count.
+	Record.Sequence = 3;
+	AbilitySystem->OnCombatActivation.Broadcast(Record);
+	View = &Presenter.Refresh(PlayerState, nullptr);
+	TestEqual(TEXT("A late correction upgrades its own action's cue"), View->Outcome.ToString(), FString(TEXT("Last action: CORRECTED #3")));
+
+	// A late correction for an older action never replaces a newer action's cue.
+	AbilitySystem->OnActivationOutcome.Broadcast(4, EAethelnActivationResult::Accepted);
+	AbilitySystem->OnActivationOutcome.Broadcast(5, EAethelnActivationResult::Accepted);
+	Record.Sequence = 4;
+	AbilitySystem->OnCombatActivation.Broadcast(Record);
+	View = &Presenter.Refresh(PlayerState, nullptr);
+	TestEqual(TEXT("An older action's correction is dropped"), View->Outcome.ToString(), FString(TEXT("Last action: ACCEPTED #5")));
 	return true;
 }
 
@@ -302,6 +324,7 @@ bool FAethelnHudPresenterBindingLifecycleTest::RunTest(const FString& Parameters
 		const FAethelnHudView& Switched = Presenter.Refresh(Second, nullptr);
 		TestEqual(TEXT("The old source's cue does not carry over"), Switched.Outcome.ToString(), FString(TEXT("Last action: none")));
 		TestEqual(TEXT("The count restarts"), static_cast<int32>(Switched.OutcomeCount), 0);
+		TestFalse(TEXT("The old source keeps no binding"), First->OnHudActionOutcome().IsBound());
 		Reject(First, 2);
 		TestEqual(TEXT("The old source no longer reaches the HUD"), static_cast<int32>(Presenter.Refresh(Second, nullptr).OutcomeCount), 0);
 		Reject(Second, 1);
@@ -313,8 +336,10 @@ bool FAethelnHudPresenterBindingLifecycleTest::RunTest(const FString& Parameters
 		TestEqual(TEXT("No cue without a source"), Empty.Outcome.ToString(), FString(TEXT("Last action: none")));
 		Reject(Second, 2);
 		TestEqual(TEXT("Unbound without a source"), static_cast<int32>(Presenter.Refresh(nullptr, nullptr).OutcomeCount), 0);
+		TestFalse(TEXT("No binding without a source"), Second->OnHudActionOutcome().IsBound());
 		Presenter.Refresh(Second, nullptr);
 	}
+	TestFalse(TEXT("A destroyed presenter leaves no binding"), Second->OnHudActionOutcome().IsBound());
 
 	// The HUD is torn down with its pawn and recreated on respawn; the PlayerState persists.
 	// A leaked binding from the destroyed presenter would run on freed memory here.
