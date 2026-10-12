@@ -81,6 +81,11 @@ subordinate to the specialized canonical product and technical documents.
   arc, and Guard hook it exposes to Issue #60, prediction and outcome
   reporting, telemetry, test plan, phased delivery, owner decisions, and open
   decisions.
+- [Death, Respawn, and Reconnect](death-and-respawn.md) records the Issue #21
+  implementation spec: the server-owned death transition from the lethal
+  notification, refusal while dead, the fail-closed respawn flow and
+  restoration allowlist, reconnect carried state, disconnect edge cases, test
+  plan, phased delivery, and open decisions.
 - [Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md) records
   the Issue #83 implementation spec for the prototype enemy: the server-only
   state machine (TA-026), perception and target eligibility, navigation in the

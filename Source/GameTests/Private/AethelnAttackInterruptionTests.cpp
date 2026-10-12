@@ -149,6 +149,15 @@ bool FAethelnAttackInterruptionTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("Lethal hit, avoided, blocked or guard-broken contact"), Result->Outcome, Expected);
 			TestEqual(TEXT("Latched lethal only for the lethal row"), Result->bLethal, bLethal);
 		}
+		if (bLethal)
+		{
+			// #21: the lethal result kills the player, and death (State.Dead), not interruption, ends the chain once.
+			if (TestEqual(TEXT("One chain end, from death"), F.Ends.Num(), 1))
+			{
+				TestEqual(TEXT("Death ends the chain as IncompatibleState, not Interrupted"), F.Ends[0].Reason, EAethelnChainEndReason::IncompatibleState);
+			}
+			continue;
+		}
 		TestEqual(TEXT("No interruption"), F.Ends.Num(), 0);
 		TestTrue(TEXT("The chain is not ended by the result"), F.Player.AbilitySystem->GetChainStateForTests().bExists);
 	}

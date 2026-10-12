@@ -185,3 +185,20 @@ class GAMECOMBAT_API UAethelnGuardRecoveryEffect : public UAethelnResourceRecove
 public:
 	UAethelnGuardRecoveryEffect();
 };
+
+/**
+ * The death state (#21): infinite, granting State.Dead through the spec's dynamic granted tags, as the Guard
+ * break does. Mixed replication sends the effect to the owner and the tag to every other client. Only the
+ * death transition (UAethelnDeathSubsystem) applies it; respawn removes it (docs/death-and-respawn.md).
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnDeathStateEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnDeathStateEffect();
+
+	/** Server only. */
+	static void ApplyTo(UAbilitySystemComponent& AbilitySystemComponent);
+};
