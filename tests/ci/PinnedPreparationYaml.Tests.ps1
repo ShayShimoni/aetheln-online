@@ -90,12 +90,12 @@ Assert-Condition -Condition ($script:DownloadAttempts -eq 3 -and $Retried.Packag
 $script:DownloadAttempts = 0
 $AlwaysFails = { $script:DownloadAttempts++; throw 'transient network error' }
 Assert-Rejected -Action { Get-PinnedPreparationYaml -CacheRoot $FixtureRoot -Download $AlwaysFails -RetryDelaySeconds 0 } -Reason 'preparation_yaml_download_failed'
-Assert-Condition -Condition ($script:DownloadAttempts -eq 3) -Message 'The download must stop after three attempts.'
+Assert-Condition -Condition ($script:DownloadAttempts -eq 5) -Message 'The download must stop after five attempts.'
 $script:DownloadAttempts = 0
 $WrongBytes = { $script:DownloadAttempts++; return ,([byte[]]::new(327106)) }
 Assert-Rejected -Action { Get-PinnedPreparationYaml -CacheRoot $FixtureRoot -Download $WrongBytes -RetryDelaySeconds 0 } -Reason 'preparation_yaml_package_invalid'
 Assert-Condition -Condition ($script:DownloadAttempts -eq 1) -Message 'A completed download with the wrong bytes is an integrity failure and must not be retried.'
-Write-Output 'PASS: a transient download failure is retried three times at most; wrong bytes are never retried'
+Write-Output 'PASS: a transient download failure is retried five times at most; wrong bytes are never retried'
 
 $WrapperSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-RunnerSchedulingAndPreparationTests.ps1') -Raw
 foreach ($RequiredFixture in @('Test-RunnerSchedulingPolicy.Tests.ps1', 'PinnedPreparationYaml.Tests.ps1', 'InitialPreparation.GitHub.Tests.ps1')) {

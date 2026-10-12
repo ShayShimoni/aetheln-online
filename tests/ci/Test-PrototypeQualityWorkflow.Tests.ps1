@@ -816,7 +816,7 @@ try {
 			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 			$Harnessed = Invoke-AutomationStepFixture $AutomationRun
 			$ExpectedOutput = if ($null -eq $HarnessCase.failure) { '' } else { 'reason=' + $HarnessCase.failure + "`n" }
-			Assert-True ($Harnessed.failure -ceq $HarnessCase.failure -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput -and ($null -ne $HarnessCase.failure -or (@($Harnessed.output) -join "`n") -ceq $HarnessCase.output)) "The harness step must handle report case '$($HarnessCase.exit)/$($HarnessCase.failure)'."
+			Assert-True ($Harnessed.failure -ceq $HarnessCase.failure -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput -and ($null -ne $HarnessCase.failure -or (@($Harnessed.output) -join "`n") -ceq $HarnessCase.output)) "The harness step must handle report case '$($HarnessCase.exit)/$($HarnessCase.failure)' (failure='$($Harnessed.failure)', output='$([IO.File]::ReadAllText($env:GITHUB_OUTPUT).Replace("`n", '|'))', step='$((@($Harnessed.output) -join '|'))')."
 		}
 	} finally {
 		$env:AETHELN_MANAGED_COMPILE_ROOT = $PreviousHarnessManaged

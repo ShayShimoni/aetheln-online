@@ -44,7 +44,7 @@ function Get-PinnedPreparationYaml {
 	param(
 		[string] $PackagePath,
 		[string] $CacheRoot = [IO.Path]::GetTempPath(),
-		# Test seam: returns the package bytes as one byte[] (use ',$Bytes'). Retried up to three times (issue #299).
+		# Test seam: returns the package bytes as one byte[] (use ',$Bytes'). Retried up to five times with a doubling delay (issue #299).
 		[scriptblock] $Download = {
 			Add-Type -AssemblyName System.Net.Http
 			$Client = [Net.Http.HttpClient]::new()
@@ -67,8 +67,8 @@ function Get-PinnedPreparationYaml {
 		$PackageBytes = $null
 		for ($Attempt = 1; $null -eq $PackageBytes; $Attempt++) {
 			try { $PackageBytes = & $Download } catch {
-				if ($Attempt -ge 3) { throw 'preparation_yaml_download_failed' }
-				Start-Sleep -Seconds $RetryDelaySeconds
+				if ($Attempt -ge 5) { throw 'preparation_yaml_download_failed' }
+				Start-Sleep -Seconds ($RetryDelaySeconds * [Math]::Pow(2, $Attempt - 1))
 			}
 		}
 		$Output = [IO.File]::Open($PackagePath, [IO.FileMode]::CreateNew)
