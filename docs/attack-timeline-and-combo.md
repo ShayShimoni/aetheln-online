@@ -445,6 +445,10 @@ Each frame the pass:
    it, so the part of its window up to `Now` is swept in this same pass. A step
    that starts on a request registers the same way, with `LastSample` equal to
    its start. The first sweep of a step includes initial overlaps at its start.
+   Then the subsystem raises `OnPassStart(Now)`: the enemy controllers of #83
+   advance to `Now` and register any enemy step due at `S <= Now` with start
+   `S`, so this same pass sweeps it
+   ([Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md#timing)).
 2. **Sweeps.** For every registered step, in activation-ordinal order, it
    sweeps the active window over
    `(LastSample, min(Now, S + ActiveEnd, ResetTime)]` and queues contact
@@ -470,7 +474,9 @@ Each frame the pass:
    invalidate the frame's contacts. The buffered start is the one boundary
    applied before sweeping, in pass step 1.
 5. **Emits** records, cues, telemetry, and lethal notifications from committed
-   results, and removes the steps that were reset.
+   results, and removes the steps that were reset. Between the emission and the
+   removal it raises `OnPassEnd(Now)`, where a #83 enemy controller applies a
+   pending reset, so the pass resolved against the pre-reset enemy.
 
 Rules:
 
@@ -616,13 +622,15 @@ and never repeat damage, interruption, or a cue.
 ### Lethal results
 
 The subsystem exposes a native multicast `OnLethalResult(TargetAsc,
-ActivationId)`, raised once per target from the committed result. #21 binds it
-and applies `State.Dead` to a player (`UAethelnDeathSubsystem`, see [Death,
-Respawn, and Reconnect](death-and-respawn.md)). A zero-Health target is not
-alive to step 1, so it takes no further results and its attacks fail
-revalidation. Death resets the chain at the processing time, not the lethal
-contact time, so a buffered step that starts between the two still sends its
-record (presentation only; see the A28 lethal row).
+ActivationId, ContactTime)`, raised once per target from the committed result
+(#83 added the contact time). #21 binds it and applies `State.Dead` to a
+player (`UAethelnDeathSubsystem`, see [Death, Respawn, and
+Reconnect](death-and-respawn.md)); the #83 enemy controller binds it and dies
+at the contact time. A zero-Health target is not alive to step 1, so it takes
+no further results and its attacks fail revalidation. Death resets the chain
+at the processing time, not the lethal contact time, so a buffered step that
+starts between the two still sends its record (presentation only; see the A28
+lethal row).
 
 ### Interruption
 
@@ -660,8 +668,10 @@ P5 delivers it as follows:
   has nothing to bump; the first configured version includes the P5 fields.
   The test fixture keeps version 1.
 - **Enemy targets.** An enemy has no chain. Interrupting one only stamps its
-  registered steps, so their later contacts drop; #20 decides what else an
-  interrupted enemy step does.
+  registered steps, so their later contacts drop. The subsystem then raises
+  `OnTargetInterrupted(TargetAsc, ContactTime)`, and the #83 enemy controller
+  enters its `Interrupted` state at the contact time; #20 decides what else an
+  interrupted enemy does.
 - **Exact trades.** Contacts at the same time resolve by activation ordinal
   (see [Total order](#total-order)). When two interrupting steps hit each
   other at the same contact time, the earlier-registered activation resolves
@@ -989,7 +999,7 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A25 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsChain` | P3 | H | Injected clock and a scripted delivery queue: chain requests delayed to arrive just before and after `BufferOpen`, `LinkOpen`, and `LinkClose` get the outcome their server arrival time dictates; a duplicated request gets `DuplicateSequence`; a reordered older request gets `StaleSequence`; a dropped follow-up lets the chain time out, and the next press (a forward sequence gap) starts step 1; nothing commits twice |
 | A26 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsContacts` | P4 | H | The A25 delivery profiles against a target dummy: delay moves only when a step starts, never adds a result; duplicated, reordered, and dropped requests never produce a second result or a result from a rejected request; each activation hits the target at most once |
 | A27 | `Aetheln.GameCombat.AttackTimeline.TeardownMidChain` | P3 (contact rows P4) | H | PlayerState or avatar teardown during wind-up, the active window, and a buffered wait: one chain end; the buffered step never starts; no contact at or after the teardown time; an avatar destroyed without unpossession is not swept and its chain ends once with `AvatarLost` at the next pass; a new PlayerState starts with no chain or seam state |
-| A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 (interruption row P5) | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time, ahead of an earlier-registered step with a later contact. The row for an interruption in the same frame with a contact time before `S + LinkOpen` (the start is cancelled, with no record and no contact) moves to P5 with A15, where interruption is delivered. The lethal row, recorded from #21 P1 (a case, not yet a test): a lethal contact in the same frame before a buffered step's `S + LinkOpen` does not cancel that start. Death resets the chain at the processing time, so the step starts and its held record is sent, as presentation only, and death then ends the chain once with `IncompatibleState`. Resetting at the lethal contact time is deferred to #83 P2 (`ContactTime` on `OnLethalResult`), after which the start is cancelled as for interruption |
+| A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 (interruption row P5) | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time, ahead of an earlier-registered step with a later contact. The row for an interruption in the same frame with a contact time before `S + LinkOpen` (the start is cancelled, with no record and no contact) moves to P5 with A15, where interruption is delivered. The lethal row, recorded from #21 P1 (a case, not yet a test): a lethal contact in the same frame before a buffered step's `S + LinkOpen` does not cancel that start. Death resets the chain at the processing time, so the step starts and its held record is sent, as presentation only, and death then ends the chain once with `IncompatibleState`. Resetting at the lethal contact time is deferred to #21 P2 (`OnLethalResult` carries `ContactTime` since #83 P2, but #21 P1's handler does not use it), after which the start is cancelled as for interruption |
 | A29 | `Aetheln.GameCombat.AttackTimeline.ChainStartFailures` | P4 | H | A chain press that commits and whose step then cannot start reports `InternalFailure`, keeps its spent cost, advances the accepted sequence, and a replay is `DuplicateSequence` with no second spend; a client-mode world creates no subsystem, refuses registration, runs no pass, and commits no press |
 
 CI ran a frozen two-test filter until #237 widened it to every declared

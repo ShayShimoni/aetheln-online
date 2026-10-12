@@ -36,6 +36,8 @@ namespace AethelnGameplayTags
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Blocking);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_GuardBroken);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Pressure_Guard);
+	// #83 prototype enemy attack, enemy.greybox.ability.strike (working name): enemy-scoped IDs map to <Family>.Enemy.<Enemy>.<Name>.
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Enemy_Greybox_Strike);
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Init_MaxHealth);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Init_Health);
