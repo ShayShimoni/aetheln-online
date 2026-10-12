@@ -169,3 +169,15 @@ UAethelnGuardRecoveryEffect::UAethelnGuardRecoveryEffect()
 {
 	Configure(UAethelnCombatAttributeSet::GetGuardAttribute(), AethelnGameplayTags::State_GuardRecoveryDelayed);
 }
+
+UAethelnDeathStateEffect::UAethelnDeathStateEffect()
+{
+	DurationPolicy = EGameplayEffectDurationType::Infinite;
+}
+
+void UAethelnDeathStateEffect::ApplyTo(UAbilitySystemComponent& AbilitySystemComponent)
+{
+	FGameplayEffectSpec Spec(GetDefault<UAethelnDeathStateEffect>(), AbilitySystemComponent.MakeEffectContext(), 1.0f);
+	Spec.DynamicGrantedTags.AddTag(AethelnGameplayTags::State_Dead);
+	AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec);
+}
