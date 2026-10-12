@@ -70,6 +70,7 @@ namespace AethelnGameplayTags
 namespace AethelnCombatTestTags
 {
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_LongRunning);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_CostCommit);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_Probe);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Test_Triggered);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Test_Trigger);
