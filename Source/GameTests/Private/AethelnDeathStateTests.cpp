@@ -46,16 +46,16 @@ bool FAethelnLethalNotificationAppliesDeathTest::RunTest(const FString& Paramete
 	UAethelnAbilitySystemComponent& Victim = *F.Player.AbilitySystem;
 
 	// The server reads authoritative Health: a notification for a living player kills nobody.
-	F.Timeline->OnLethalResult.Broadcast(Living.Player.AbilitySystem, FGuid::NewGuid());
+	F.Timeline->OnLethalResult.Broadcast(Living.Player.AbilitySystem, FGuid::NewGuid(), 0.0);
 	TestFalse(TEXT("A player with Health above zero gets no death state"), Living.Player.AbilitySystem->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
 
 	ZeroHealth(Victim);
-	F.Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid());
+	F.Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), 0.0);
 	TestTrue(TEXT("The lethal notification applies State.Dead"), Victim.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
 	TestEqual(TEXT("State.Dead comes from one death-state effect, not a loose tag"), DeathEffects(Victim), 1);
 
 	// AC3: a repeated notification is not a second death.
-	F.Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid());
+	F.Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), 0.0);
 	TestEqual(TEXT("A repeated notification adds no second death effect"), DeathEffects(Victim), 1);
 	TestEqual(TEXT("State.Dead is held once"), Victim.GetTagCount(AethelnGameplayTags::State_Dead), 1);
 	TestFalse(TEXT("The other player is still alive"), Living.Player.AbilitySystem->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
@@ -63,7 +63,7 @@ bool FAethelnLethalNotificationAppliesDeathTest::RunTest(const FString& Paramete
 	// #21 is player death only; #20 owns AI death.
 	UAethelnAbilitySystemComponent* DummyAbilitySystem = Dummy->GetAethelnAbilitySystemComponent();
 	ZeroHealth(*DummyAbilitySystem);
-	F.Timeline->OnLethalResult.Broadcast(DummyAbilitySystem, FGuid::NewGuid());
+	F.Timeline->OnLethalResult.Broadcast(DummyAbilitySystem, FGuid::NewGuid(), 0.0);
 	TestEqual(TEXT("An AI victim gets no player death effect"), DeathEffects(*DummyAbilitySystem), 0);
 	return true;
 }
@@ -93,7 +93,7 @@ bool FAethelnDeadPlayerRefusesActionsTest::RunTest(const FString& Parameters)
 	TestNotEqual(TEXT("The living pawn can move"), static_cast<int32>(Movement->MovementMode), static_cast<int32>(MOVE_None));
 
 	ZeroHealth(Victim);
-	F.Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid());
+	F.Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), 0.0);
 	TestTrue(TEXT("The player is dead"), Victim.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
 	TestEqual(TEXT("The server stops the dead avatar's movement"), static_cast<int32>(Movement->MovementMode), static_cast<int32>(MOVE_None));
 	TestFalse(TEXT("No ability stays active"), F.Ability->IsActive());

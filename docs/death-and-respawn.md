@@ -78,7 +78,7 @@ UE 5.8.1 source, revision `71fe36aac5`. `GAS/` abbreviates
 | [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Binds `OnLethalResult`. | Change the lethal latch, contact order, or chain reset rules. |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Tests the integrated death case on top of #18's `State.Dead` bindings. | Change dodge or block cancellation. |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Nothing. | AI death and despawn (owned by #20), and AI attacks that kill a player. |
-| [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) | Nothing. | Apply `State.Dead`. #83 binds the same `OnLethalResult` and owns its signature change (a `ContactTime` parameter in its P2, `docs/enemy-ai-and-navigation.md:356-363`). When it lands, P1's one-line handler takes the new parameter. |
+| [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) | Nothing. | Apply `State.Dead`. #83 binds the same `OnLethalResult` and owned its signature change (the `ContactTime` parameter, merged in its P2, `docs/enemy-ai-and-navigation.md:356-363`). P1's handler takes the three-argument form and ignores `ContactTime`. |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61) | Raises the authoritative death state that presentation reads. | HUD, death screen, and readability of the death cue. |
 
 ## Server Death Transition (P1)
@@ -115,8 +115,9 @@ record is accepted and presentation-only: no gameplay truth leaks, because the
 victim's contacts after `C` fail `IsAlive` (Health is already zero). An
 interruption would drop the record, because it stamps its reset at the contact
 time ([A28](attack-timeline-and-combo.md), interruption row). Resetting the
-chain at `C` for death is deferred to #83 P2, which adds `ContactTime` to
-`OnLethalResult`. The lethal row of A28 records this case.
+chain at `C` for death is deferred to P2. #83 P2 has since added `ContactTime`
+to `OnLethalResult`, and P1's handler receives it but does not use it. The
+lethal row of A28 records this case.
 
 **Replication.** The player ASC uses Mixed replication. The owning client gets
 the death effect; every other client gets `State.Dead` as a minimal
@@ -234,7 +235,7 @@ dies, and death, not interruption, ends the chain once as `IncompatibleState`.
 | Phase | Content | Depends on |
 | --- | --- | --- |
 | **P1** Death state | This document; `UAethelnDeathStateEffect`; `UAethelnDeathSubsystem`; R1, R2. | #60 P4 lethal notification (merged) |
-| **P2** Respawn | Delay and allowlist config, life generation, restart order, restoration effect; R3, R4. A `Death` observability event (`EAethelnObservabilityCategory::Death`, `observability-and-crash-diagnostics.md:21`) with the activation id as correlation, as `Emit` does for hits; the Guard-break-at-death row R7; the lethal-contact-time chain reset with #83's `ContactTime`. | P1; owner decisions on delay, allowlist, location, dead pawn |
+| **P2** Respawn | Delay and allowlist config, life generation, restart order, restoration effect; R3, R4. A `Death` observability event (`EAethelnObservabilityCategory::Death`, `observability-and-crash-diagnostics.md:21`) with the activation id as correlation, as `Emit` does for hits; the Guard-break-at-death row R7; the lethal-contact-time chain reset using `ContactTime` from `OnLethalResult`. | P1; owner decisions on delay, allowlist, location, dead pawn |
 | **P3** Replication | Two-client harness run, death cue; R5. | P2 |
 | **P4** Reconnect | Carried snapshot behind an identity adapter; R6; T34 flipped. | P2; owner decision on the grace window; P4 chooses the identity key |
 

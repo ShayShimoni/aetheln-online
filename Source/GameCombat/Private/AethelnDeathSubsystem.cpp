@@ -53,7 +53,7 @@ bool UAethelnDeathSubsystem::ApplyDeath(UAethelnAbilitySystemComponent& Victim)
 	return true;
 }
 
-void UAethelnDeathSubsystem::HandleLethalResult(UAethelnAbilitySystemComponent* Target, const FGuid& ActivationId)
+void UAethelnDeathSubsystem::HandleLethalResult(UAethelnAbilitySystemComponent* Target, const FGuid& ActivationId, double /*ContactTime*/)
 {
 	if (Target != nullptr && ApplyDeath(*Target))
 	{

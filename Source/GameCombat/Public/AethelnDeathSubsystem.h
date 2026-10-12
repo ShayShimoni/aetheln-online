@@ -30,7 +30,7 @@ public:
 	static bool ApplyDeath(UAethelnAbilitySystemComponent& Victim);
 
 private:
-	void HandleLethalResult(UAethelnAbilitySystemComponent* Target, const FGuid& ActivationId);
+	void HandleLethalResult(UAethelnAbilitySystemComponent* Target, const FGuid& ActivationId, double ContactTime);
 
 	TWeakObjectPtr<UAethelnCombatTimelineSubsystem> Timeline;
 	FDelegateHandle LethalHandle;
