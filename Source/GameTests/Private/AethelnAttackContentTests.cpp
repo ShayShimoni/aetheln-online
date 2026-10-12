@@ -27,22 +27,39 @@ namespace AethelnAttackContentTests
 		int32 Ends = 0;
 		int32 Results = 0;
 		int32 CostApplications = 0;
-		float TargetHealth = 0.0f;
-		float Endurance = 0.0f;
+		/** Health, Endurance and Guard of the attacker then the target. */
+		float Attributes[6] = {};
 		bool bChainExists = false;
 		uint8 ChainStep = 0;
-		bool bCommitmentTag = false;
+		FGameplayTagContainer AttackerTags;
+		FGameplayTagContainer TargetTags;
 		int32 AttackerEffects = 0;
 		int32 TargetEffects = 0;
+		int32 Intervals = 0;
 
 		bool operator==(const FCheckpoint& Other) const
 		{
+			for (int32 Index = 0; Index < UE_ARRAY_COUNT(Attributes); ++Index)
+			{
+				if (Attributes[Index] != Other.Attributes[Index]) { return false; }
+			}
 			return Records == Other.Records && Ends == Other.Ends && Results == Other.Results
-				&& CostApplications == Other.CostApplications && TargetHealth == Other.TargetHealth
-				&& Endurance == Other.Endurance && bChainExists == Other.bChainExists && ChainStep == Other.ChainStep
-				&& bCommitmentTag == Other.bCommitmentTag && AttackerEffects == Other.AttackerEffects && TargetEffects == Other.TargetEffects;
+				&& CostApplications == Other.CostApplications && bChainExists == Other.bChainExists && ChainStep == Other.ChainStep
+				&& AttackerTags == Other.AttackerTags && TargetTags == Other.TargetTags
+				&& AttackerEffects == Other.AttackerEffects && TargetEffects == Other.TargetEffects && Intervals == Other.Intervals;
 		}
 	};
+
+	bool SameWindows(const FAethelnAttackWindowOffsets& A, const FAethelnAttackWindowOffsets& B)
+	{
+		return A.ActiveStart == B.ActiveStart && A.ActiveEnd == B.ActiveEnd && A.BufferOpen == B.BufferOpen && A.LinkOpen == B.LinkOpen
+			&& A.LinkClose == B.LinkClose && A.RecoveryEnd == B.RecoveryEnd && A.CancelOpen == B.CancelOpen && A.InterruptibleUntil == B.InterruptibleUntil;
+	}
+
+	bool SameInterval(const FAethelnAttackSampleInterval& A, const FAethelnAttackSampleInterval& B)
+	{
+		return A.bValid == B.bValid && A.bIncludesInitialOverlap == B.bIncludesInitialOverlap && A.FromSeconds == B.FromSeconds && A.ToSeconds == B.ToSeconds;
+	}
 
 	struct FRun
 	{
@@ -50,6 +67,7 @@ namespace AethelnAttackContentTests
 		TArray<FAethelnCombatResult> Results;
 		TArray<FAethelnCombatActivationRecord> Records;
 		TArray<FEnd> Ends;
+		TArray<FAethelnAttackSampleInterval> Intervals;
 		int32 MontagePlays = 0;
 	};
 
@@ -62,11 +80,18 @@ namespace AethelnAttackContentTests
 		C.Ends = F.Ends.Num();
 		C.Results = F.Results.Num();
 		C.CostApplications = F.CostApplications;
-		C.TargetHealth = Victim.GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute());
-		C.Endurance = F.Endurance();
+		const FGameplayAttribute Watched[3] = {
+			UAethelnCombatAttributeSet::GetHealthAttribute(), UAethelnCombatAttributeSet::GetEnduranceAttribute(), UAethelnCombatAttributeSet::GetGuardAttribute() };
+		for (int32 Index = 0; Index < 3; ++Index)
+		{
+			C.Attributes[Index] = Attacker.GetNumericAttribute(Watched[Index]);
+			C.Attributes[3 + Index] = Victim.GetNumericAttribute(Watched[Index]);
+		}
 		C.bChainExists = Attacker.GetChainStateForTests().bExists;
 		C.ChainStep = Attacker.GetChainStateForTests().Step;
-		C.bCommitmentTag = Attacker.HasMatchingGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+		Attacker.GetOwnedGameplayTags(C.AttackerTags);
+		Victim.GetOwnedGameplayTags(C.TargetTags);
+		C.Intervals = F.Intervals.Num();
 		C.AttackerEffects = Attacker.GetActiveEffects(FGameplayEffectQuery()).Num();
 		C.TargetEffects = Victim.GetActiveEffects(FGameplayEffectQuery()).Num();
 		return C;
@@ -131,6 +156,7 @@ namespace AethelnAttackContentTests
 		Out.Results = F.Results;
 		Out.Records = F.Records;
 		Out.Ends = F.Ends;
+		Out.Intervals = F.Intervals;
 		return true;
 	}
 
@@ -165,7 +191,7 @@ bool FAethelnPresentationEventsGrantNothingTest::RunTest(const FString& Paramete
 	{
 		for (int32 Index = 0; Index < Reference.Checkpoints.Num(); ++Index)
 		{
-			TestTrue(*FString::Printf(TEXT("Checkpoint %d: no window, contact, result, Health, Endurance, cost, cooldown, tag or chain change"), Index),
+			TestTrue(*FString::Printf(TEXT("Checkpoint %d: no Health, Endurance or Guard change on either side, no tag, effect, record, result, end, cost, evaluated-window count or chain change"), Index),
 				WithEvents.Checkpoints[Index] == Reference.Checkpoints[Index]);
 		}
 	}
@@ -184,7 +210,14 @@ bool FAethelnPresentationEventsGrantNothingTest::RunTest(const FString& Paramete
 		{
 			TestEqual(TEXT("Same step"), WithEvents.Records[Index].ChainStep, Reference.Records[Index].ChainStep);
 			TestEqual(TEXT("Same start"), WithEvents.Records[Index].StartServerTime, Reference.Records[Index].StartServerTime);
-			TestEqual(TEXT("Same windows"), WithEvents.Records[Index].Windows.ActiveEnd, Reference.Records[Index].Windows.ActiveEnd);
+			TestTrue(TEXT("Same windows"), SameWindows(WithEvents.Records[Index].Windows, Reference.Records[Index].Windows));
+		}
+	}
+	if (TestEqual(TEXT("Same evaluated windows"), WithEvents.Intervals.Num(), Reference.Intervals.Num()))
+	{
+		for (int32 Index = 0; Index < Reference.Intervals.Num(); ++Index)
+		{
+			TestTrue(TEXT("Same evaluated window"), SameInterval(WithEvents.Intervals[Index], Reference.Intervals[Index]));
 		}
 	}
 	if (TestEqual(TEXT("Same chain ends"), WithEvents.Ends.Num(), Reference.Ends.Num()))
