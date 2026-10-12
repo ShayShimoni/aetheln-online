@@ -201,15 +201,15 @@ namespace AethelnAttackTimeline
 	/** Zero means invalid/unrepresentable. No numeric production sampling budget is chosen. */
 	GAMECOMBAT_API int32 GetSubstepCount(double Distance, double AngleDegrees, double MaxDistance, double MaxAngleDegrees);
 	/**
+	 * Grant-time validation of one authored step: null when valid, otherwise the reason. A final step has no
+	 * buffer or link window (BufferOpen == RecoveryEnd, no link); any other step needs a valid link window.
+	 */
+	GAMECOMBAT_API const TCHAR* FindStepProblem(const FAethelnAttackStepDefinition& Step, bool bFinalStep);
+	/**
 	 * The block arc (#18 T3): the yaw-only direction from the defender's capsule center to the attacker's
 	 * combat-frame origin at the contact time, against the defender's server actor yaw (never a control
 	 * rotation). Inside at exactly half the arc (dot >= cos(half) within a 1e-9 rounding tolerance); a
 	 * zero-length direction or an invalid arc is outside.
 	 */
-	/**
-	 * Grant-time validation of one authored step: null when valid, otherwise the reason. A final step has no
-	 * buffer or link window (BufferOpen == RecoveryEnd, no link); any other step needs a valid link window.
-	 */
-	GAMECOMBAT_API const TCHAR* FindStepProblem(const FAethelnAttackStepDefinition& Step, bool bFinalStep);
 	GAMECOMBAT_API bool IsInsideDefenseArc(double DefenderYawDegrees, const FVector& DefenderCenter, const FVector& AttackerOrigin, double ArcDegrees);
 }

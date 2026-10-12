@@ -302,7 +302,9 @@ void AAethelnEnemyController::IssueMoveRequest(double Now)
 		Result = MoveTo(Request);
 		if (Result.Code == EPathFollowingRequestResult::AlreadyAtGoal) { RequestReset(Now); return; }
 	}
-	// Only this request's completion is applied; a replaced or aborted request's result is dropped.
+	// Only this request's completion is applied. MoveTo finishes a Failed or AlreadyAtGoal request inside the call
+	// (RequestMoveWithImmediateFinish broadcasts OnMoveCompleted with the new id); storing the id only now drops
+	// that callback, so the return code below handles those two results exactly once. Do not move this assignment.
 	MoveRequestId = Result.MoveId;
 	if (Result.Code != EPathFollowingRequestResult::Failed) { return; }
 	// Invalid destination: Engage gives up the target and returns; Return resets home.
