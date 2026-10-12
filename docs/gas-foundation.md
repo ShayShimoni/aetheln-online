@@ -365,10 +365,13 @@ period, and delay is `TBD` (#107); this section sets none.
   ignore tags (`UTargetTagRequirementsGameplayEffectComponent`). While either
   holds, the effect stays applied but inhibited, and no period executes
   (`GAS/Private/GameplayEffect.cpp:4765`).
-- **Resume.** `PeriodicInhibitionPolicy` is `ResetPeriod`, so the first step
-  lands one full period after the pause ends. Paused time is not caught up, and
-  resuming adds nothing at once. The first step after `Start` is likewise one
-  period later (`bExecutePeriodicEffectOnApplication` is false).
+- **Resume.** `PeriodicInhibitionPolicy` is `ResetPeriod`, so the period
+  restarts in the server frame that processes the pause end. The first step
+  lands one period after that frame, not one period after the exact moment
+  the pause ended. When a delay ends partway through a frame, the rest of that
+  frame adds no step. Paused time is not caught up, and resuming adds nothing
+  at once. The first step after `Start` is one period later
+  (`bExecutePeriodicEffectOnApplication` is false).
 - **Delay.** `RestartDelay` removes the resource's delay effect and applies a
   new one: the shared duration effect, with the delay tag in its
   `DynamicGrantedTags`, as the Guard break does. Recovery therefore resumes
@@ -397,9 +400,10 @@ period, and delay is `TBD` (#107); this section sets none.
   set clamps each step's base and current value to `[0, Max]`. There is no
   separate recovery ceiling.
 - **Death and respawn.** `State.Dead` pauses both resources. #21 applies and
-  removes it; recovery resumes one period after its removal. A running delay
-  keeps counting on the server clock through death. Respawn restores nothing
-  through recovery: what respawn restores is #21's lifecycle allowlist.
+  removes it; recovery resumes one period after the frame that removes it. A
+  running delay keeps counting on the server clock through death. Respawn
+  restores nothing through recovery: what respawn restores is #21's lifecycle
+  allowlist.
 - **No avatar.** Recovery runs on the server clock while the PlayerState has
   no pawn, as cooldowns do.
 - **Disconnect and reconnect.** Recovery belongs to the PlayerState, and a
@@ -408,13 +412,20 @@ period, and delay is `TBD` (#107); this section sets none.
   delay; the old PlayerState's recovery ends with it. The full refill on
   reconnect is #21's interim gap (Known Interim Gaps); recovery adds nothing to
   it.
-- **Same-timestamp order.** Within one server frame the order is: activation
-  requests (cost commits restart the Endurance delay), then the timer pass
-  (recovery steps and delay ends), then #60's contact pass (Guard pressure
-  restarts the Guard delay). So a spend pauses the same frame's step, and a
-  Guard step in a frame lands before that frame's contacts. A step due inside
-  a frame applies at that frame, and a long frame applies every step it
-  covers.
+- **Same-timestamp order (open, #60 and #45).** Canon says the combat
+  timeline or content version declares this order, not actor tick order
+  (Shared Combat Semantic Contract in the combat document). The
+  implementation does not do that yet. Today the order follows the engine's
+  frame phases: activation requests (cost commits restart the Endurance
+  delay), then the timer pass (recovery steps and delay ends), then #60's
+  contact pass (Guard pressure restarts the Guard delay). So a spend pauses
+  the same frame's step, and a Guard step lands before that frame's contacts,
+  even a step due later in the frame than a contact. Whether a hit is blocked
+  or breaks the guard can then depend on frame boundaries. Cooldown and
+  Guard-break expiry already use the same timer pass. A step due inside a
+  frame applies at that frame. While recovery runs, a long frame applies every
+  step it covers, except the part of the frame after a pause ends (Resume).
+  The order stays open (Open Decisions 12).
 - **Neutrality.** Race, sex, and appearance are never inputs: the only inputs
   are the PlayerState config, the two state tags, and the server clock.
 
@@ -430,7 +441,7 @@ test data, never tuning.
 | `Aetheln.GameCombat.Recovery.EffectDefinition` | Infinite, no step on application, `ResetPeriod`, one set-by-caller `AddBase` modifier on its resource, paused by exactly `State.Dead` and its own delay tag |
 | `Aetheln.GameCombat.Recovery.FailsClosed` | Unset config starts nothing and a restart then applies no delay; each invalid value logs and starts nothing; a zero delay applies no delay effect |
 | `Aetheln.GameCombat.Recovery.PassiveDeathAndCap` | Passive rate; `State.Dead` pauses both resources and keeps the effect; resume at the same rate; each resource stops at its maximum, base included |
-| `Aetheln.GameCombat.Recovery.DelayAfterCostCommit` | A real cost commit starts the Endurance delay (not Guard's); no recovery during it; resume one period after it; back-to-back commits restart it without stacking |
+| `Aetheln.GameCombat.Recovery.DelayAfterCostCommit` | A real cost commit starts the Endurance delay (not Guard's); no recovery during it; resume one period after the frame that ends it; back-to-back commits restart it without stacking |
 | `Aetheln.GameCombat.Recovery.DelayAfterGuardPressure` | Guard pressure from a real blocked contact starts the Guard delay; a later contact restarts it, so recovery stays paused past the first delay's end; then the configured rate and the cap |
 | `Aetheln.GameCombat.Recovery.AfterGuardBreak` | The breaking pressure starts the delay; after the break and the delay end, Guard recovers and the block rises again |
 | `Aetheln.GameCombat.Recovery.RespawnAndReconnect` | Re-possession starts no second recovery; a reconnect's fresh PlayerState has one recovery per resource, at one rate, and no carried delay; recovery continues with no avatar |
@@ -1199,4 +1210,9 @@ All stay `TBD` until the named owner decides.
     `State.GuardBroken` pauses it, whether recovery runs with no avatar,
     whether death removes a running delay (#21), whether opponents may see the
     delay tags (#61), recovery for AI (#20), and the per-resource content
-    version (#106).
+    version (#106). Technical questions: the same-timestamp order of
+    recovery steps, delay ends, and contacts, which canon says the combat
+    timeline declares (#60, #45; see Same-timestamp order in
+    [Resource Recovery](#resource-recovery)), and the lower bound for the
+    period, since any positive value is accepted today (#107, #45; no number
+    is set).
