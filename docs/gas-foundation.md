@@ -910,10 +910,18 @@ input. Both cost nothing against the activation bucket. The issue asked for
 closure in non-development builds. The override closes it unconditionally
 instead: a build-configuration split cannot be tested in the Editor
 (Development), and a Development dedicated server still faces real clients in
-the `development` environment. The loss is the engine's `showdebug
-abilitysystem` server-state panel on a remote client (`PrintDebug`,
-`GAS/Private/AbilitySystemComponent.cpp:2627-2636`). Server-side console
-debugging is unaffected. A later decision may re-enable it behind an explicit
+the `development` environment. The loss is only the server half of
+`UAbilitySystemComponent::PrintDebug()` when project code calls it on a client
+(`GAS/Private/AbilitySystemComponent.cpp:2607-2636`); no such project code
+exists. `showdebug abilitysystem` is not affected: it runs `OnShowDebugInfo`,
+`DisplayDebug` and `Debug_Internal` locally with `bPrintToLog = false`
+(`GAS/Private/AbilitySystemComponent.cpp:2524-2590`). The only engine caller
+of `PrintDebug()` is the failed-activation threshold dump
+(`GAS/Private/AbilitySystemComponent_Abilities.cpp:2296-2310`), which the
+production ASC never reaches because `InternalServerTryActivateAbility`
+refuses without sending `ClientActivateAbilityFailed`. Nothing outside the GAS
+plugin reads the response. Server-side console debugging is unaffected. A
+later decision may re-enable it behind an explicit
 development-only gate; no new RPC is needed for that.
 
 **Blueprint exposure review (DoD2).** Attributes are `BlueprintReadOnly` with
