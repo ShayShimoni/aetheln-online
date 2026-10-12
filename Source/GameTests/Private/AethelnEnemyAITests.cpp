@@ -56,6 +56,8 @@ namespace AethelnEnemyAITests
 		Out.Pawn->AttackAbilityClass = Attack;
 		Out.Pawn->ProvisionalInitialAttributes = MakeInit(Health);
 		Out.Pawn->FinishSpawning(Transform);
+		// The harness world never reports HasBegunPlay (no game mode), so BeginPlay (home, init, grant) is dispatched by hand.
+		Out.Pawn->DispatchBeginPlay();
 		Out.Pawn->GetCharacterMovement()->DisableMovement();
 		Out.Controller = Cast<AAethelnEnemyController>(Out.Pawn->GetController());
 		Out.AbilitySystem = Out.Pawn->GetAethelnAbilitySystemComponent();
