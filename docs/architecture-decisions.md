@@ -1971,6 +1971,128 @@ Every accepted decision records:
     output, the job gate, the head check step in both jobs, and runs the
     classifier matrix and the head check against fixtures (current, superseded,
     and every fail-open case).
+- **Amendment (2026-10-11, UHT input cache needs a new makefile, issue #167):**
+  the 2026-10-05 fix holds only for builds that create their target makefile.
+  This amendment corrects that amendment's statement that the cache gives
+  `0xF26BCE42` "on every run", supersedes its *Provisioning requirement*
+  remark that an `-EnableUHTInputCache` argument in the wrapper is a possible
+  follow-up, and completes the 2026-10-06 *Consequence* remark that the
+  editor flag depends on the input-cache file: the file must be present and
+  the build must create its makefile. The rest of both amendments stands,
+  including the `BuildConfiguration.xml` setting.
+  - *Mechanism:* a read-only investigation of the pinned engine source
+    (2026-10-11, `issue-167-uht-cache-investigation-2026-10-11.md` in the lead's
+    delivery evidence, outside the repository) found that UBT copies
+    `bEnableUHTInputCache` into the makefile's UHT target settings only while
+    it creates a makefile
+    (`UnrealBuildTool/Configuration/UEBuildTarget.cs:2866-2868`, in
+    `BuildMakefile1`). The makefile saves and loads only three of those
+    settings (`Shared/EpicGames.Core/UHTTypes.cs:147-159`, called from
+    `UnrealBuildTool/System/TargetMakefile.cs:554` and `:650`), so
+    `EnableInputCacheRead` and `EnableInputCacheWrite` come back `false` when
+    UBT reuses a saved `Makefile.bin`. UHT then re-parses every header with
+    the cache off and skips the cache-only pass that re-applies `Referenced`
+    after parsing (`Shared/EpicGames.UHT/Types/UhtHeaderFile.cs:461`), so the
+    race between `Reset` and `AddReferencedHeader` decides the NetCore output
+    again. The short UHT summary line "(N generated files written)" marks a
+    cache-off run (`UnrealBuildTool/Modes/UnrealHeaderToolMode.cs:869-881`).
+    Paths are relative to `Engine/Source/Programs/`.
+  - *Evidence:* on 2026-10-11 a local build that reused its makefile ran UHT
+    with the cache off for 20.8 s, rewrote the engine's
+    `Engine/Intermediate/Build/Win64/UnrealEditor/Inc/NetCore/UHT/NetCore.init.gen.cpp`,
+    and UBT then refused the NetCore relink and exited 5
+    (`FailedDueToEngineChange`). Every other build log available that day that
+    created its makefile used the cache and left NetCore unchanged. How often
+    a cache-off run flips the file is not measured.
+  - *Why `-NoEngineChanges` is not enough by itself:* UHT writes the flipped
+    file under `Engine/Intermediate` before UBT refuses the build. The tree is
+    then changed, and every later `-NoEngineChanges` build, including every CI
+    editor run, exits 5 (`editor_build_engine_changes_required`) until the file
+    is restored with its original timestamp.
+  - *CI mitigation:* `scripts/ci/InitialPreparation.BuildInvocation.ps1`
+    deletes the target's makefile,
+    `<target root>/Intermediate/Build/<platform>/x64/<target>/Development/Makefile.bin`,
+    before it starts `Build.bat`, so every build it runs creates its makefile
+    and runs UHT with the cache on. It deletes nothing else, refuses a
+    reparse point on that path (`build_path_invalid`), and records a failed
+    deletion as `build_capture_failed` without starting the build. The `x64`
+    folder is right for both platforms the wrapper accepts. UBT builds the
+    makefile path in `TargetMakefile.GetLocation`
+    (`UnrealBuildTool/System/TargetMakefile.cs:1229-1239`) from
+    `UEBuildTarget.GetPlatformIntermediateFolder`
+    (`UnrealBuildTool/Configuration/UEBuildTarget.cs:1986-1995`), which asks
+    the platform's architecture config for the folder name through
+    `GetFolderNameForArchitectures` (`UEBuildPlatform.cs:149-153`). That calls
+    `UnrealArchitectures.GetFolderNameForPlatform`
+    (`UEBuildTarget.cs:1101-1104`), which joins the per-architecture names
+    with `+`. For Linux,
+    `LinuxArchitectureConfig` supports the single architecture `x64`
+    (`UnrealBuildTool/Platform/Linux/UEBuildLinux.cs:205-210`), the default
+    `ActiveArchitectures` returns it
+    (`UnrealBuildTool/Configuration/UEBuildPlatform.cs:84-92`), and nothing
+    overrides the per-architecture folder name, which defaults to the
+    architecture name (`UEBuildPlatform.cs:140-144`; the name `x64` is defined at
+    `UEBuildTarget.cs:873`). For Win64, `WindowsArchitectureConfig` returns
+    `x64` unless the command line overrides it
+    (`UnrealBuildTool/Platform/Windows/UEBuildWindows.cs:1235-1239`). This is
+    read from the pinned source only. No runner tree was inspected, and no
+    fixture can catch a wrong folder, because the fake `Build.bat` uses the
+    same `x64` template. The wrapper
+    is the only route by which CI builds a project target outside UAT: the
+    editor build, the client and server compile, packaging's host editor
+    build, initial preparation and the cold dry run all use it. Packaging's
+    client and server builds already delete the makefile: BuildCookRun
+    `-clean` and the split recipe's `Clean.bat` run UBT's clean mode, which
+    deletes `TargetMakefile.GetLocation(...)`
+    (`UnrealBuildTool/Modes/CleanMode.cs:179`). Creating the makefile costs a
+    few seconds per build, and UHT then runs on every build (about 4 to 6 s
+    with the cache on). Compile actions are not affected. The compile
+    report's pre-run presence fields still describe the state before the
+    wrapper, so a managed build now usually records
+    `makefileReason=no_existing_makefile` while `makefilePresentBeforeRun` is
+    `true`.
+  - *Local rule:* delegated agents delete their worktree's target makefile
+    before every local engine build, check NetCore with the lead's
+    `restore-netcore.ps1 -Check` tool before each build, and restore it with
+    that tool (keeping the original timestamp) after an exit 5 that names
+    NetCore. These rules live in the lead's agent rules outside the
+    repository.
+  - *Not covered:* UBT runs that the wrapper does not start still reuse their
+    makefile and run UHT with the cache off: editor-started rebuilds, Live
+    Coding, IDE builds, contributor command-line builds that skip the
+    deletion, `scripts/content/Invoke-ContentValidation.ps1`, host-tool
+    provisioning, and the engine-runner gate's unmanaged compile path, which
+    CI does not use.
+  - *Assumption:* the mitigation assumes the engine binaries were built from
+    cache-on UHT output. An owner-authorized engine or host-tool rebuild that
+    reuses a target makefile runs UHT with the cache off and can relink NetCore
+    from the flipped output. After that, every cache-on CI build rewrites the
+    file back and every `-NoEngineChanges` editor run exits 5. So the
+    authorized-rebuild procedure must delete the target `Makefile.bin` before
+    its editor build (see
+    [Developer Environment and DDC](developer-environment-and-ddc.md)).
+    *Residual limitation:*
+    `scripts/build/HostToolProvisioning.BuildInvocation.ps1` (lines 3 and 33)
+    builds the editor directly with `Build.bat` and does not delete the
+    makefile today. That step stays manual until a code change adds it.
+  - *Decision:* on 2026-10-11 the owner chose in chat (recorded on Issue #167)
+    to keep the pinned Epic engine unmodified. That rules out an engine patch.
+    The owner chose to rely on deleting the target's `Makefile.bin` before
+    every build, with the lead's NetCore check and restore tool as a backstop.
+  - *Rejected:* patching the engine source, either to save and load the two
+    cache settings in `UHTTypes.cs` and raise `TargetMakefile.CurrentVersion`,
+    or to run the `Referenced` re-apply pass at `UhtHeaderFile.cs:461`
+    whatever the cache setting. Either patch would make the pinned engine tree
+    no longer a clean checkout. Also rejected: `-EnableUHTInputCache` on the
+    UBT command line (it forces one `command_line_changed` makefile rebuild,
+    after which the setting is lost again), `-NoUBTMakefiles` (UBT still
+    loads the makefile), and `-ForceHeaderGeneration` (it turns the cache
+    read off).
+  - *Evidence of the change:* `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1`
+    (required suite entry) and `tests/ci/InitialPreparation.Build.Tests.ps1`
+    run the wrapper against a fake `Build.bat` that reports whether the
+    target's makefile still exists when it starts; they require that it did
+    not, and that a makefile of another target or configuration remains.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
@@ -2121,14 +2243,14 @@ Every accepted decision records:
   commit after release QA); publishing packages as a GitHub pre-release
   (rejected: world-downloadable on a public repository).
 - **Consequences:** One more FIFO waiter in `aetheln-engine-runner`, with the
-  same bounds. Each run reserves 64 GiB of the shared handoff cap until its
-  cleanup request is acted on. The immediate kill switch is disabling the
-  workflow; the permanent rollback is reverting it. The issue #267 TA-014
-  amendment (2026-10-06) changes the controller and gate this workflow calls,
-  with no workflow change: each release package phase builds the project
-  editor modules first, leaves `UnrealPak` outside the attestation, runs the
-  manifest-set check, refuses a set `UE_ADDITIONAL_PLUGIN_PATHS`, and reports
-  the attestation record hash.
+  same bounds. Admission counts only the bytes already committed under the
+  shared handoff root (see TA-024 for the limit this leaves). The immediate
+  kill switch is disabling the workflow; the permanent rollback is reverting
+  it. The issue #267 TA-014 amendment (2026-10-06) changes the controller and
+  gate this workflow calls, with no workflow change: each release package
+  phase builds the project editor modules first, leaves `UnrealPak` outside
+  the attestation, runs the manifest-set check, refuses a set
+  `UE_ADDITIONAL_PLUGIN_PATHS`, and reports the attestation record hash.
 - **Owner:** Issue #226.
 - **Revisit trigger:** Any package leaves the owner's control (external
   testers, a public download, or a store), a collaborator gains write access, a
@@ -2137,12 +2259,15 @@ Every accepted decision records:
   owner accepted the same runner-trust risk for a manual packaging dispatch of
   `develop` (OD-7 on issue #267), extending the 2026-10-03 acceptance above,
   which covered `release/*` only. The dispatch is owner-only (OD-8): the owner
-  presses it, or the lead presses it only with the owner's explicit OK for
-  that run; agents never dispatch it. TA-024 records the separate
-  `.github/workflows/develop-packaging.yml` identity that carries it. The
-  runner-trust analysis, the fork-run rule, the operator rule, and the
-  revisit triggers above apply to it unchanged. `prototype-quality-gates.yml`
-  still keeps no manual trigger.
+  presses it. No agent other than the lead dispatches it, and the lead only
+  with the owner's explicit OK for that run. The workflow cannot tell a lead
+  dispatch from an owner dispatch, because both run as `ShayShimoni`, and so
+  does every agent that uses the owner's `gh` credentials. Who may dispatch,
+  and the per-run OK, are therefore enforced by process, not by the workflow.
+  TA-024 records the separate `.github/workflows/develop-packaging.yml`
+  identity that carries it. The runner-trust analysis, the fork-run rule, the
+  operator rule, and the revisit triggers above apply to it unchanged.
+  `prototype-quality-gates.yml` still keeps no manual trigger.
 
 ### TA-023 - Editor-Only GameTests Module for Project Automation and Content Validation
 
@@ -2259,8 +2384,11 @@ Every accepted decision records:
   `contents: read`, checkouts pin the dispatched SHA without persisted
   credentials, and only five redacted reports are uploaded with the default
   retention. There is no build number and no release evidence. Who may
-  dispatch: the owner, or the lead only with the owner's explicit OK for that
-  run (OD-8).
+  dispatch: the owner; no agent other than the lead, and the lead only with
+  the owner's explicit OK for that run (OD-8). The workflow cannot tell a lead
+  dispatch from an owner dispatch (both run as `ShayShimoni`, as does every
+  agent that uses the owner's `gh` credentials), so who may dispatch, and the
+  per-run OK, are enforced by process, not by the workflow.
 - **Context:** The weekly schedule is the only other path that packages
   `develop`, so proving a packaging fix (PR #301 on issue #267) waits
   up to a week. On 2026-10-06 the lead chose a separate workflow (OD-6) over a
@@ -2279,11 +2407,18 @@ Every accepted decision records:
 - **Consequences:** One more FIFO waiter in `aetheln-engine-runner` with the
   same bounds; a dispatch that overlaps the schedule or a release run
   interleaves phase by phase in separate run-scoped handoff directories.
-  Residual risk: every packaging run reserves 64 GiB of the shared 256 GiB
-  handoff cap until its cleanup request is acted on, so dispatches between
-  cleanups can make a later scheduled, release, or dispatched run fail closed
-  with `handoff_storage_exhausted`. The owner checks the cleanup requests
-  before dispatching. This decision adds no workflow-level dispatch cap; that
+  Residual risk: nothing is reserved for a run in progress. Admission happens
+  once, in the PackageClient phase of `scripts/ci/Invoke-EngineRunnerGate.ps1`:
+  it counts only the bytes already committed under the shared handoff root and
+  refuses with `handoff_storage_exhausted` when they exceed 256 GiB minus
+  64 GiB (192 GiB). A run that does not overlap another therefore either
+  stays within 256 GiB or is refused with `handoff_storage_exhausted` before
+  packaging. Runs whose phases interleave on the shared engine queue
+  (scheduled, release, develop dispatch) can together exceed the 256 GiB cap.
+  The protection is that the dispatcher checks the cleanup requests and the
+  free disk space before a dispatch: the owner, or the lead when the owner OKs
+  the run.
+  This decision adds no workflow-level dispatch cap; that
   cap (OD-11 on issue #267) stays a separate lead decision. The immediate kill
   switch is disabling the workflow; the permanent rollback is reverting it.
 - **Evidence:** `tests/ci/Test-RunnerSchedulingPolicy.Tests.ps1` pins the exact
@@ -2296,6 +2431,11 @@ Every accepted decision records:
 - **Owner:** Issue #267.
 - **Revisit trigger:** The TA-022 revisit triggers, a dispatch needs inputs or
   another branch, or the handoff budget blocks a scheduled or release run.
+- **Amendment (2026-10-11, PR #315 and #316 reviews, issue #267):** Corrected
+  the handoff admission wording (committed bytes only, no reservation; a run
+  that does not overlap another either stays within 256 GiB or is refused with
+  `handoff_storage_exhausted`) and the dispatch authority wording (who may
+  dispatch is enforced by process, not only the per-run OK).
 
 ### TA-025 - Separate Engine-Runner Job for Content Reference Validation
 

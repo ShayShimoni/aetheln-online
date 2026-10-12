@@ -1064,11 +1064,16 @@ try {
 	$EditorDotnet = Join-Path $EditorRoot 'Engine/Binaries/ThirdParty/DotNet/10.0/win-x64'
 	$null = New-Item -ItemType Directory -Path $EditorDotnet
 	[IO.File]::WriteAllText((Join-Path $EditorDotnet 'dotnet.exe'), 'fixture')
-	[IO.File]::WriteAllText((Join-Path $EditorBatch 'Build.bat'), "@echo off`r`necho build-args %1 %2`r`nexit /b 0`r`n")
+	# TA-020 2026-10-11: the wrapper deletes the target's makefile before
+	# Build.bat, so UHT keeps its input cache; the fake reports what it saw.
+	[IO.File]::WriteAllText((Join-Path $EditorBatch 'Build.bat'), "@echo off`r`necho build-args %1 %2`r`nif exist `"Intermediate\Build\%2\x64\%1\Development\Makefile.bin`" echo makefile-present`r`nexit /b 0`r`n")
 	[IO.File]::WriteAllText((Join-Path $EditorRoot 'AethelnOnline.uproject'), '{}')
+	$EditorMakefile = Join-Path $EditorRoot 'Intermediate/Build/Win64/x64/AethelnOnlineEditor/Development/Makefile.bin'
+	$OtherMakefile = Join-Path $EditorRoot 'Intermediate/Build/Win64/x64/AethelnOnlineClient/Development/Makefile.bin'
 	foreach ($EditorCase in @(@{ platform = 'Win64'; exit = 0 }, @{ platform = 'Linux'; exit = 1 })) {
 		$EditorEvidence = Join-Path $EditorRoot ('evidence-' + $EditorCase.platform)
 		$null = New-Item -ItemType Directory -Path $EditorEvidence
+		foreach ($Path in @($EditorMakefile, $OtherMakefile)) { $null = New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force; [IO.File]::WriteAllText($Path, 'stale') }
 		& (Join-Path $PSHOME 'powershell.exe') -NoProfile -NonInteractive -File (Join-Path $RepositoryRoot 'scripts/ci/InitialPreparation.BuildInvocation.ps1') `
 			-Target AethelnOnlineEditor -Platform $EditorCase.platform -ActionLimit 1 -EngineRoot $EditorRoot -TargetRoot $EditorRoot -LinuxToolchainRoot $EditorRoot -EvidenceRoot $EditorEvidence 2>&1 | Out-Null
 		Assert-True ($LASTEXITCODE -eq $EditorCase.exit) "Editor target on $($EditorCase.platform) must exit $($EditorCase.exit)."
@@ -1076,6 +1081,7 @@ try {
 		if ($EditorCase.exit -eq 0) {
 			$EditorRecord = Get-Content -LiteralPath $EditorResultPath -Raw | ConvertFrom-Json
 			Assert-True ($EditorRecord.target -ceq 'AethelnOnlineEditor' -and $EditorRecord.platform -ceq 'Win64' -and $EditorRecord.nativeExitCode -eq 0 -and $null -eq $EditorRecord.infrastructureFailure -and [IO.File]::ReadAllText((Join-Path $EditorEvidence 'build.log')).Contains('build-args AethelnOnlineEditor Win64')) 'Editor target must reach Build.bat as a Win64 build.'
+			Assert-True (-not [IO.File]::ReadAllText((Join-Path $EditorEvidence 'build.log')).Contains('makefile-present') -and -not (Test-Path -LiteralPath $EditorMakefile) -and (Test-Path -LiteralPath $OtherMakefile)) 'The wrapper must delete only the editor target makefile, before Build.bat runs.'
 		} else {
 			Assert-True (-not (Test-Path -LiteralPath $EditorResultPath) -and -not (Test-Path -LiteralPath (Join-Path $EditorEvidence 'build.log'))) 'Editor target must be rejected on Linux before Build.bat runs.'
 		}
