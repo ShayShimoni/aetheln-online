@@ -85,8 +85,9 @@ bool FAethelnDeadPlayerRefusesActionsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("The living player's chain starts"), F.Press(), EResult::Accepted);
 	F.AdvanceTo(0.15);
 	// The fixture parks the pawn in MOVE_None; give it a live mode so the death transition has something to stop.
-	// Flying with no input keeps the pawn still: a falling pawn would exceed the step's sample budget and drop the
-	// contact on its own, which would make the no-contact check below pass without a death.
+	// Flying with no input keeps the pawn, and so the step's sweep, still. The no-contact check below is a regression
+	// guard only: zero Health alone already makes the attacker not alive (the timeline's liveness rule), so it holds
+	// without State.Dead; A13 (DeadLifeStateRejected) is the State.Dead contact evidence.
 	UCharacterMovementComponent* Movement = F.Pawn->GetCharacterMovement();
 	Movement->SetMovementMode(MOVE_Flying);
 	TestNotEqual(TEXT("The living pawn can move"), static_cast<int32>(Movement->MovementMode), static_cast<int32>(MOVE_None));
