@@ -998,12 +998,12 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A28 | `Aetheln.GameCombat.AttackTimeline.BufferedStartWithinFrame` | P4 (interruption row P5) | H | A buffered step whose `ActiveStart` is shorter than one server frame starts at exactly `S + LinkOpen` partway through a frame: its window from that start to `Now` is swept in the same pass, and its contacts sort with other attackers' contacts from that frame by contact time, ahead of an earlier-registered step with a later contact. The row for an interruption in the same frame with a contact time before `S + LinkOpen` (the start is cancelled, with no record and no contact) moves to P5 with A15, where interruption is delivered |
 | A29 | `Aetheln.GameCombat.AttackTimeline.ChainStartFailures` | P4 | H | A chain press that commits and whose step then cannot start reports `InternalFailure`, keeps its spent cost, advances the accepted sequence, and a replay is `DuplicateSequence` with no second spend; a client-mode world creates no subsystem, refuses registration, runs no pass, and commits no press |
 
-CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
-so each code PR records local automation evidence at its exact head on the
-pinned engine, as #19 does. P2 to P5 run `Aetheln.GameCombat`; P3 and P4 also
-run `Aetheln.Movement` and `Aetheln.POC`, because they change GameCore (tags,
-capsule response). P6 runs `Aetheln.POC` and records the manual PIE steps. No
-#60 PR changes the GameNet vocabulary.
+CI ran a frozen two-test filter until #237 widened it to every declared
+`Aetheln.` test, so each code PR records local automation evidence at its exact
+head on the pinned engine, as #19 does. P2 to P5 run `Aetheln.GameCombat`; P3
+and P4 also run `Aetheln.Movement` and `Aetheln.POC`, because they change
+GameCore (tags, capsule response). P6 runs `Aetheln.POC` and records the manual
+PIE steps. No #60 PR changes the GameNet vocabulary.
 
 ## Acceptance-Criteria Mapping
 

@@ -26,20 +26,40 @@ performance evidence and budgets.
 | Project | `AethelnOnline` |
 | Mode | `production` |
 | Schema | `aetheln.unreal-automation`, version `1` |
-| Filter | `^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$` |
+| Filter | `^Aetheln.` |
 | Default timeout | 600 seconds |
 
-The filter must discover exactly one record for each required full test path
-and no other record:
+Since [issue #237](https://github.com/ShayShimoni/aetheln-online/issues/237),
+the runner runs every project automation test. The filter selects every test
+whose full path starts with `Aetheln.`. The expected set comes from the tested
+revision itself: before launch, the runner scans `Source/` (`.cpp`, `.h`, and
+`.inl` files) for automation-test declarations. Every declaration must be an
+`IMPLEMENT_SIMPLE_AUTOMATION_TEST` whose name is a string literal starting
+with `Aetheln.`. The scan fails `preflight`, before the editor starts, when:
+
+- it finds no declaration;
+- it finds two declarations with the same name;
+- a declaration's name does not start with `Aetheln.`;
+- it finds a declaration it cannot read, such as a complex test, a spec, or
+  a name that is not a string literal.
+
+A complex test or a spec reports one path per case, so it stays unsupported
+until the scan learns its form. A commented-out declaration still counts and
+fails discovery, so delete unused tests rather than comment them out.
+
+The filter must discover exactly one record for each declared full test path
+and no other record. Zero discovered tests, a missing expected path, more than
+one record for an expected path, or any unexpected path is a discovery
+failure. A new test that does not register, or a test renamed outside the
+prefix, therefore fails the run and never drops out silently. The runner does
+not treat an empty, partial, duplicated, or broadened result set as success.
+
+Two of the selected tests are the original Issue #85 harness tests:
 
 | Full test path | Purpose |
 | --- | --- |
 | `Aetheln.Harness.ProjectAndModuleLoad` | Deterministic smoke coverage that the project and required automation modules load. |
 | `Aetheln.GameCombat.NetworkSpike.Authority` | Focused coverage that the networking spike preserves server authority and can expose an authority regression. |
-
-Zero discovered tests, a missing expected path, more than one record for an
-expected path, or any unexpected path is a discovery failure. The runner does
-not treat an empty, partial, duplicated, or broadened result set as success.
 
 ## Local prerequisites and invocation
 
@@ -95,7 +115,7 @@ these top-level fields:
 | `sourceRevision` | Full repository revision tested. |
 | `engineRevision` | Exact engine commit `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`. |
 | `projectName` | Constant `AethelnOnline`. |
-| `filter` | The exact frozen two-test filter. |
+| `filter` | The exact filter, `^Aetheln.`. |
 | `timeoutSeconds` | Effective timeout, defaulting to `600`. |
 | `startedUtc`, `finishedUtc` | UTC timestamps bounding the run. |
 | `processExitCode` | Exit code returned by the headless editor process. |
@@ -126,20 +146,20 @@ discarded.
 
 `summary` contains `total`, `passed`, `passedWithWarnings`, `failed`,
 `notRun`, `missing`, and `requiredFailed`. The discovery contract requires
-`total` to represent exactly the two expected unique tests and `missing` to be
+`total` to represent exactly the declared unique tests and `missing` to be
 zero. Any failed or not-run required test, missing test, duplicate, or
 unexpected result prevents success.
 
 ## Fail-closed behavior
 
 The PowerShell process exits `0` only when preflight validation succeeds,
-exact discovery succeeds, both required tests pass, the raw report is valid,
+exact discovery succeeds, every declared test passes, the raw report is valid,
 the editor exits successfully, and the repository remains at the same clean
 revision. Every other outcome is nonzero.
 
 | `failureReason` | Failure | Required behavior |
 | --- | --- | --- |
-| `preflight` | General input or prerequisite validation | Fail before launch when a required production precondition other than the separately coded engine pin or repository state is invalid. |
+| `preflight` | General input or prerequisite validation | Fail before launch when a required production precondition other than the separately coded engine pin or repository state is invalid, including a failed scan of the declared tests. |
 | `engine-pin` | Engine-pin mismatch | Reject a checkout whose exact tag or commit differs from the pinned engine. |
 | `repository-dirty` | Dirty repository before launch | Do not start the editor; record the failed cleanliness boundary. |
 | `process-start` | Process start failure | Fail when the headless editor cannot be started. |
@@ -147,7 +167,7 @@ revision. Every other outcome is nonzero.
 | `editor-exit` | Editor exit failure | Treat a nonzero editor process exit as failure even if partial output exists. |
 | `missing-report` | Missing report | Fail when `index.json` is absent. |
 | `invalid-report` | Invalid report | Fail when `index.json` is unreadable, malformed, or lacks the required result structure. |
-| `discovery-mismatch` | Zero, duplicate, missing, or unexpected discovery | Fail unless exactly one result exists for each frozen full test path and no other result exists. |
+| `discovery-mismatch` | Zero, duplicate, missing, or unexpected discovery | Fail unless exactly one result exists for each declared full test path and no other result exists. |
 | `test-failure` | Failed or not-run test | Count the required failure and exit nonzero. |
 | `repository-drift` | Repository revision or state drift | Fail if the revision changes or tracked/non-ignored state is dirty after execution. |
 
@@ -198,17 +218,20 @@ watchdog still leaves the editor build its full budget; first live compile
 durations on runner 21 were 102 s and 503 s, and editor-build and harness
 durations are to be recorded from the first live runs of this job. The lease
 covers the re-sync and the editor build; this harness still runs outside it,
-serialized by the engine queue. The filter, report schema, and engine pin are
-unchanged, and nothing grants acceptance.
+serialized by the engine queue. The report schema and engine pin are unchanged,
+and nothing grants acceptance. Issue #237 changed only the filter and the
+expected set: the job now runs every declared `Aetheln.` test, the receipt
+and the aggregate check every record against that selection (prefixed,
+unique, and passed), and the aggregate's parse bounds allow up to 1024 tests.
 
 Issue #44 must reuse this automation foundation for its downstream packaged
 dedicated-server/two-client lifecycle, Gauntlet orchestration, and network-
 profile scenarios rather than create a second test system. Those packaged
-multi-process scenarios are not satisfied by the two focused Issue #85 tests.
+multi-process scenarios are not satisfied by this harness's editor tests.
 The first Issue #44 fixture wave extends the existing
 `Invoke-NetworkAuthoritySpike.ps1` orchestration contract with versioned
 scenario/profile inputs and normalized lifecycle/failure evidence. It does not
-change this harness's frozen two-test discovery filter, launch Unreal, or prove
+change this harness's discovery filter, launch Unreal, or prove
 packaged execution. A real packaged scenario remains a separate evidence gate.
 Issue #45 separately owns performance captures, thresholds, and evidence; this
 harness does not establish a performance budget.
