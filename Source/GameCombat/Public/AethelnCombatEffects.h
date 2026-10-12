@@ -107,3 +107,81 @@ class GAMECOMBAT_API UAethelnGuardPressureEffect : public UGameplayEffect
 public:
 	UAethelnGuardPressureEffect();
 };
+
+/**
+ * Passive and delayed recovery of one resource (#292), read from config. Every value is TBD (#107);
+ * a config entry is a named placeholder, never tuning. All zero means unset: no recovery.
+ */
+USTRUCT()
+struct GAMECOMBAT_API FAethelnResourceRecoveryValues
+{
+	GENERATED_BODY()
+
+	/** Amount recovered per second of server time while recovery runs. */
+	UPROPERTY()
+	float RatePerSecond = 0.0f;
+
+	/** Server-time interval between recovery steps; each step adds RatePerSecond * PeriodSeconds. */
+	UPROPERTY()
+	float PeriodSeconds = 0.0f;
+
+	/** Pause after each spend of the resource before recovery resumes. Zero: no pause. */
+	UPROPERTY()
+	float DelaySeconds = 0.0f;
+};
+
+/**
+ * Passive and delayed recovery of one resource on the server clock (docs/gas-foundation.md, Resource
+ * Recovery): an infinite periodic effect adding SetByCaller.Recovery.Amount to the resource each period.
+ * It pauses while State.Dead or its own delay tag holds and, when the pause ends, resumes one full period
+ * later. Only the server executes periods; clients receive the attribute values. The resource's maximum
+ * caps it through the attribute set's clamp.
+ */
+UCLASS(Abstract)
+class GAMECOMBAT_API UAethelnResourceRecoveryEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	/**
+	 * Server only. Applies the recovery once. Unset values apply nothing; values that are non-finite, negative,
+	 * or a positive rate without a positive period log and apply nothing (fail closed).
+	 */
+	static FActiveGameplayEffectHandle Start(UAbilitySystemComponent& AbilitySystemComponent, TSubclassOf<UAethelnResourceRecoveryEffect> Recovery, const FAethelnResourceRecoveryValues& Values);
+
+	/**
+	 * Server only. Called after each spend of the recovery's resource: restarts its delay, so recovery
+	 * resumes DelaySeconds after the latest spend. Without an active recovery or a delay, it does nothing.
+	 */
+	static void RestartDelay(UAbilitySystemComponent& AbilitySystemComponent, TSubclassOf<UAethelnResourceRecoveryEffect> Recovery);
+
+	/** The tag the delay grants; it pauses this recovery. */
+	FGameplayTag GetDelayTag() const { return DelayTag; }
+
+protected:
+	/** Called from a subclass constructor. */
+	void Configure(const FGameplayAttribute& Attribute, const FGameplayTag& InDelayTag);
+
+private:
+	FGameplayTag DelayTag;
+};
+
+/** Endurance recovery; each Endurance cost commit restarts its delay. */
+UCLASS()
+class GAMECOMBAT_API UAethelnEnduranceRecoveryEffect : public UAethelnResourceRecoveryEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnEnduranceRecoveryEffect();
+};
+
+/** Guard recovery; each applied Guard pressure restarts its delay. */
+UCLASS()
+class GAMECOMBAT_API UAethelnGuardRecoveryEffect : public UAethelnResourceRecoveryEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnGuardRecoveryEffect();
+};
