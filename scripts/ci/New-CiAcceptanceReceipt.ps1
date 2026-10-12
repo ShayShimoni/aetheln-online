@@ -325,23 +325,24 @@ function Assert-AcceptanceUnrealAutomationEvidence {
 	if ($Report.schemaId -isnot [string] -or $Report.schemaId -cne 'aetheln.unreal-automation' -or -not (Test-AcceptanceBoundedInteger -Value $Report.schemaVersion -Minimum 1 -Maximum 1) -or
 		$Report.mode -isnot [string] -or $Report.mode -cne 'production' -or $Report.sourceRevision -isnot [string] -or $Report.sourceRevision -cne $Identity.source.testedRevision -or
 		$Report.engineRevision -isnot [string] -or $Report.engineRevision -cne '71fe36aac5a8df5ccd66c763ffc902b29b6a9c43' -or
-		$Report.projectName -isnot [string] -or $Report.projectName -cne 'AethelnOnline' -or $Report.filter -isnot [string] -or $Report.filter -cne '^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$' -or
+		$Report.projectName -isnot [string] -or $Report.projectName -cne 'AethelnOnline' -or $Report.filter -isnot [string] -or $Report.filter -cne '^Aetheln.' -or
 		-not (Test-AcceptanceBoundedInteger -Value $Report.timeoutSeconds -Minimum 1 -Maximum 86400) -or -not (Test-AcceptanceTimestampRange $Report.startedUtc $Report.finishedUtc) -or
 		-not (Test-AcceptanceBoundedInteger -Value $Report.processExitCode -Minimum 0 -Maximum 0) -or $Report.repositoryCleanBefore -isnot [bool] -or -not $Report.repositoryCleanBefore -or
 		$Report.repositoryCleanAfter -isnot [bool] -or -not $Report.repositoryCleanAfter -or $Report.outputs.unrealReport -isnot [string] -or
 		$Report.outputs.unrealReport -cne 'TestResults/UnrealAutomation/index.json' -or $Report.outputs.log -isnot [string] -or $Report.outputs.log -cne 'Saved/Logs/AethelnUnrealAutomation.log' -or
 		$Report.result -isnot [string] -or $Report.result -cne 'passed' -or $Report.failureReason -isnot [string] -or $Report.failureReason -cne 'none' -or
-		$Report.tests -isnot [array] -or @($Report.tests).Count -ne 2) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
-	$ExpectedTests = @('Aetheln.GameCombat.NetworkSpike.Authority','Aetheln.Harness.ProjectAndModuleLoad')
-	for ($Index = 0; $Index -lt 2; $Index++) {
-		$Test = $Report.tests[$Index]
+		$Report.tests -isnot [array] -or @($Report.tests).Count -lt 1 -or @($Report.tests).Count -gt 1024) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
+	# Issue #237: the harness selects every Aetheln. test and proves discovery equals the tests the tested revision
+	# declares; this checks each record against that selection: Aetheln.-prefixed, unique, and passed.
+	$SeenTests = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+	foreach ($Test in @($Report.tests)) {
 		try { Assert-AcceptanceClosedObject $Test @('fullTestPath','state','status','durationSeconds','warningCount','errorCount') } catch { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
-		if ($Test.fullTestPath -isnot [string] -or $Test.fullTestPath -cne $ExpectedTests[$Index] -or $Test.state -isnot [string] -or $Test.state -cne 'Success' -or
+		if ($Test.fullTestPath -isnot [string] -or $Test.fullTestPath -cnotmatch '\AAetheln\.\S+\z' -or -not $SeenTests.Add($Test.fullTestPath) -or $Test.state -isnot [string] -or $Test.state -cne 'Success' -or
 			$Test.status -isnot [string] -or $Test.status -cne 'passed' -or -not (Test-AcceptanceBoundedNumber -Value $Test.durationSeconds -Minimum 0 -Maximum 86400) -or
 			-not (Test-AcceptanceBoundedInteger -Value $Test.warningCount -Minimum 0 -Maximum 0) -or -not (Test-AcceptanceBoundedInteger -Value $Test.errorCount -Minimum 0 -Maximum 0)) { throw 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
 	}
-	if (-not (Test-AcceptanceBoundedInteger -Value $Report.summary.total -Minimum 2 -Maximum 2) -or $Report.summary.total -ne $Report.tests.Count -or
-		-not (Test-AcceptanceBoundedInteger -Value $Report.summary.passed -Minimum 2 -Maximum 2) -or -not (Test-AcceptanceBoundedInteger -Value $Report.summary.passedWithWarnings -Minimum 0 -Maximum 0) -or
+	if (-not (Test-AcceptanceBoundedInteger -Value $Report.summary.total -Minimum 1 -Maximum 1024) -or $Report.summary.total -ne @($Report.tests).Count -or
+		-not (Test-AcceptanceBoundedInteger -Value $Report.summary.passed -Minimum 1 -Maximum 1024) -or $Report.summary.passed -ne $Report.summary.total -or -not (Test-AcceptanceBoundedInteger -Value $Report.summary.passedWithWarnings -Minimum 0 -Maximum 0) -or
 		-not (Test-AcceptanceBoundedInteger -Value $Report.summary.failed -Minimum 0 -Maximum 0) -or -not (Test-AcceptanceBoundedInteger -Value $Report.summary.notRun -Minimum 0 -Maximum 0) -or
 		-not (Test-AcceptanceBoundedInteger -Value $Report.summary.missing -Minimum 0 -Maximum 0) -or -not (Test-AcceptanceBoundedInteger -Value $Report.summary.requiredFailed -Minimum 0 -Maximum 0)) {
 		throw 'receipt_semantic_evidence_invalid:unreal-editor-automation'

@@ -261,6 +261,10 @@ public:
 	virtual void ServerSetReplicatedEvent_Implementation(EAbilityGenericReplicatedEvent::Type EventType, FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, FPredictionKey CurrentPredictionKey) override;
 	virtual void ServerSetReplicatedEventWithPayload_Implementation(EAbilityGenericReplicatedEvent::Type EventType, FGameplayAbilitySpecHandle AbilityHandle, FPredictionKey AbilityOriginalPredictionKey, FPredictionKey CurrentPredictionKey, FVector_NetQuantize100 VectorPayload) override;
 
+	/** Closed (#324): no server state dump, no client debug-string write, no reply; one bucket token, metric only. */
+	virtual void ServerPrintDebug_Request_Implementation() override;
+	virtual void ServerPrintDebug_RequestWithStrings_Implementation(const TArray<FString>& Strings) override;
+
 	/** Flushes an open rate-limited window. */
 	virtual void OnUnregister() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
