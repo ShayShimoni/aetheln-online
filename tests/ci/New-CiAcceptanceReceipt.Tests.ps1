@@ -124,12 +124,9 @@ function New-TestEngineReport {
 
 function New-TestUnrealReport {
 	[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The function constructs an in-memory report fixture.')]
-	param()
-	$Tests = @(
-		[pscustomobject][ordered]@{fullTestPath='Aetheln.GameCombat.NetworkSpike.Authority';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0},
-		[pscustomobject][ordered]@{fullTestPath='Aetheln.Harness.ProjectAndModuleLoad';state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0}
-	)
-	return [pscustomobject][ordered]@{schemaId='aetheln.unreal-automation';schemaVersion=1;mode='production';sourceRevision=('c'*40);engineRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';projectName='AethelnOnline';filter='^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$';timeoutSeconds=600;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';processExitCode=0;repositoryCleanBefore=$true;repositoryCleanAfter=$true;outputs=[pscustomobject][ordered]@{unrealReport='TestResults/UnrealAutomation/index.json';log='Saved/Logs/AethelnUnrealAutomation.log'};tests=$Tests;summary=[pscustomobject][ordered]@{total=2;passed=2;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=0};result='passed';failureReason='none'}
+	param([string[]] $Names = @('Aetheln.GameCombat.NetworkSpike.Authority','Aetheln.Harness.ProjectAndModuleLoad'))
+	$Tests = @($Names | ForEach-Object { [pscustomobject][ordered]@{fullTestPath=$_;state='Success';status='passed';durationSeconds=0.1;warningCount=0;errorCount=0} })
+	return [pscustomobject][ordered]@{schemaId='aetheln.unreal-automation';schemaVersion=1;mode='production';sourceRevision=('c'*40);engineRevision='71fe36aac5a8df5ccd66c763ffc902b29b6a9c43';projectName='AethelnOnline';filter='^Aetheln.';timeoutSeconds=600;startedUtc='2026-09-20T20:00:00.0000000Z';finishedUtc='2026-09-20T20:00:01.0000000Z';processExitCode=0;repositoryCleanBefore=$true;repositoryCleanAfter=$true;outputs=[pscustomobject][ordered]@{unrealReport='TestResults/UnrealAutomation/index.json';log='Saved/Logs/AethelnUnrealAutomation.log'};tests=$Tests;summary=[pscustomobject][ordered]@{total=$Tests.Count;passed=$Tests.Count;passedWithWarnings=0;failed=0;notRun=0;missing=0;requiredFailed=0};result='passed';failureReason='none'}
 }
 
 # Synthetic until the first live launcher run replaces it: the field inventory follows the launcher's report contract
@@ -560,13 +557,21 @@ try {
 		@{name='test-duration-string';mutate={param($x)$x.tests[0].durationSeconds='0.1'}},
 		@{name='warning-count-string';mutate={param($x)$x.tests[0].warningCount='0'}},
 		@{name='summary-passed-string';mutate={param($x)$x.summary.passed='2'}},
-		@{name='summary-relationship';mutate={param($x)$x.summary.total=3}}
+		@{name='summary-relationship';mutate={param($x)$x.summary.total=3}},
+		@{name='old-two-test-filter';mutate={param($x)$x.filter='^Aetheln.Harness.ProjectAndModuleLoad$+^Aetheln.GameCombat.NetworkSpike.Authority$'}},
+		@{name='unprefixed-test';mutate={param($x)$x.tests[0].fullTestPath='GameTests.AethelnContentValidation.ReportOutputGuard'}},
+		@{name='duplicate-test';mutate={param($x)$x.tests[1].fullTestPath=$x.tests[0].fullTestPath}},
+		@{name='no-tests';mutate={param($x)$x.tests=@();$x.summary.total=0;$x.summary.passed=0}},
+		@{name='missing-test';mutate={param($x)$x.summary.missing=1}}
 	)) {
 		$BadUnreal = New-TestUnrealReport; & $UnrealTypeCase.mutate $BadUnreal
 		$BadUnrealBytes = $Utf8.GetBytes(($BadUnreal | ConvertTo-Json -Depth 12 -Compress) + "`n")
 		try { Assert-Rejected { Assert-AcceptanceUnrealAutomationEvidence -Bytes $BadUnrealBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0) } 'receipt_semantic_evidence_invalid:unreal-editor-automation' }
 		catch { throw "Unreal type fixture '$($UnrealTypeCase.name)' failed: $($_.Exception.Message)" }
 	}
+	# Issue #237: every Aetheln. test runs (142 on 2026-10-12), so a passing report with many tests must be accepted.
+	$ManyUnrealBytes = $Utf8.GetBytes(((New-TestUnrealReport @(1..300 | ForEach-Object { 'Aetheln.Fixture.Test{0:D3}' -f $_ })) | ConvertTo-Json -Depth 12 -Compress) + "`n")
+	$null = Assert-AcceptanceUnrealAutomationEvidence -Bytes $ManyUnrealBytes -Identity (Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0)
 
 	# The content receipt claims report integrity and the six reference_boundary checks only (decision D1).
 	$ContentIdentity = Get-TestReceiptInput -VisualSha256 ('0'*64) -VisualSize 0
