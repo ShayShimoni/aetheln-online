@@ -989,15 +989,11 @@ the spike classes after #2 closes.
 
 ### Local automation evidence for P2 to P5
 
-CI compiles the new code but runs only a frozen filter of two tests,
-`Aetheln.Harness.ProjectAndModuleLoad` and
-`Aetheln.GameCombat.NetworkSpike.Authority`
-(`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`; harness contract
-`docs/unreal-automation.md:18-37`; receipt and aggregate pins
-`scripts/ci/New-CiAcceptanceReceipt.ps1:329-336`,
-`scripts/ci/Invoke-CiAcceptanceAggregate.ps1:610-617`,
-`docs/continuous-integration.md:513`). The new tests therefore did not run in
-CI until #237, which runs every declared `Aetheln.` test. Under the repository
+When P2 to P5 were delivered, CI compiled the new code but ran only a frozen
+filter of two tests, `Aetheln.Harness.ProjectAndModuleLoad` and
+`Aetheln.GameCombat.NetworkSpike.Authority`. The new tests therefore did not
+run in CI until #237, which runs every declared `Aetheln.` test (see
+[Unreal Automation](unreal-automation.md)). Under the repository
 rule to record manual test steps in the pull request
 when automation is unavailable, each of P2 to P5 records, at its exact head on
 the pinned engine, the `Automation RunTests` command, the revision, and the

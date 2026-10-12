@@ -2093,6 +2093,27 @@ Every accepted decision records:
     run the wrapper against a fake `Build.bat` that reports whether the
     target's makefile still exists when it starts; they require that it did
     not, and that a makefile of another target or configuration remains.
+- **Amendment (2026-10-12, every declared project test, issue #237):** the
+  harness this job runs no longer runs the frozen two-test filter. It runs
+  `^Aetheln.`, every test whose full path starts with `Aetheln.`. Before
+  launch it derives the expected set by scanning `Source/` at the tested
+  revision for `IMPLEMENT_SIMPLE_AUTOMATION_TEST` declarations, and it still
+  requires exact discovery against that set. A scan with no tests, a
+  duplicate, an unprefixed name, or a declaration form it cannot read fails
+  `preflight` before the editor starts. The receipt producer and the
+  aggregate check every record against the same selection: the filter, 1 to
+  1024 tests, each `Aetheln.`-prefixed, unique, and passed without warnings or
+  errors. The aggregate's parse bounds for this report rise to 8192
+  properties and 1024 array items. The report schema (version 1), the
+  failure-reason set, the workflow, the step bounds, and the CI authority
+  predicate are unchanged.
+  - *Measured:* on 2026-10-12 the full harness ran 142 tests in 36 s on the
+    pinned engine at PR #333's head, against its 600-second timeout and
+    12-minute step, so no bound changes.
+  - *Rejected for now:* the receipt and aggregate re-scanning `Source/`
+    themselves. Both hosted jobs check out the tested revision, so this
+    remains possible, but it needs a source-root input and fixture source
+    trees in three test files.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
