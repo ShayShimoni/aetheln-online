@@ -22,8 +22,9 @@ that [Attack Timeline and Three-Hit Combo](attack-timeline-and-combo.md)
 (see [Animation Sourcing](#animation-sourcing-retargeting-and-intake)).
 
 Every timing, range, shape, damage, cost, cooldown, and readability value
-stays `TBD`. #107 closed without timing values, and `design/combat-registry/registry.json`
-carries none; values arrive only through an owner or tuning decision and the
+stays `TBD`. #107 closed without timing values: phase timings and other tuning
+stay `TBD` (`docs/characters-and-factions.md:324-327`), and
+`design/combat-registry/registry.json` carries none. Values arrive only through an owner or tuning decision and the
 #45 budgets. Oathscar, Gate Step, Sworn Rebuke, Hold the Line, Endurance, and
 Guard are working names. C++ and asset names below are proposed names.
 
@@ -127,7 +128,7 @@ authoritative, and changing it bumps nothing.
 
 Today the definitions are `Config` properties in `DefaultGame.ini`, validated
 at grant time and failing closed when unset
-(`Config/DefaultGame.ini:17-35`). The basic chain has no configured
+(`Config/DefaultGame.ini:17-38`). The basic chain has no configured
 `ContentVersion` or steps yet, so it cannot be granted. The combat document
 says ability definitions live in ini until #106 generates them; #106 closed
 with Markdown generators only.
@@ -160,9 +161,12 @@ A presentation binding is a client-only data asset (proposed
 - for an enemy, the telegraph presentation (#20 supplies the content).
 
 It may hard-reference the Shared definition (`client_only` to `shared` is
-allowed by the intake policy). The definition never references it, and a
-Shared or ServerOnly package referencing it fails the existing
-`reference_boundary` audience check.
+allowed by the intake policy). The definition never references it. A Shared
+or ServerOnly package that hard-references a binding fails the existing
+`reference_boundary` audience check. A soft reference is denied unless the
+intake policy declares a matching rule, and this pipeline declares none; adding
+one would undo the one-direction rule and needs a reviewed change to this
+document.
 
 ### What presentation may do
 
@@ -359,7 +363,7 @@ validation test, and **P** is two-client PIE recorded in the PR.
 | N1 | `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing` | P2 | H | During wind-up, active, and recovery of a registered step, gameplay events (any tag, including the ability and state tags), `GameplayCue` executions, and montage play and stop requests on the server change no window, contact, result, Health, Guard, cost, cooldown, tag, chain state, or record, compared with the same run without them. Any path that cannot run headless is listed in the PR with the reason. |
 | N2 | `Aetheln.GameCombat.AttackContent.DefinitionValidation` | P2 | H | The definition validator refuses a missing asset, each phase-order violation, unsafe volume data, a stable ID that is not in the registry, and a content-version mismatch with the ability; an unset reach budget reports `non_promotion` |
 | N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes |
-| N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3 | E | A Shared or ServerOnly package that references a binding fails `reference_boundary` |
+| N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3 | E | A Shared or ServerOnly package that hard- or soft-references a binding fails `reference_boundary`, and the intake policy declares no soft-reference rule that targets a binding path |
 | N5 | Representative lifecycle | P5 | P | One authored step runs from validated data through server resolution to presentation on both clients, under C1 and C2 |
 
 Existing tests that already cover this pipeline: T13, A1, A5, A9, A17, D16,
