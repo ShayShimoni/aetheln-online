@@ -38,6 +38,11 @@ namespace AethelnGameplayTags
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Cooldown_Duration, "SetByCaller.Cooldown.Duration", "Cooldown duration in seconds for the shared cooldown effect");
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Cost_Endurance, "SetByCaller.Cost.Endurance", "Negated Endurance cost for the shared cost effect");
+
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_EnduranceRecoveryDelayed, "State.EnduranceRecoveryDelayed", "Server-owned delay after an Endurance cost commit; pauses Endurance recovery");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_GuardRecoveryDelayed, "State.GuardRecoveryDelayed", "Server-owned delay after Guard pressure; pauses Guard recovery");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Recovery_Amount, "SetByCaller.Recovery.Amount", "Amount one period of a recovery effect adds to its resource");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Recovery_Delay, "SetByCaller.Recovery.Delay", "Delay in seconds a spend restarts, carried on the active recovery effect's spec");
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

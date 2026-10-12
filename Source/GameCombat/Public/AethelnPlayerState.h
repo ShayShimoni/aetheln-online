@@ -54,6 +54,13 @@ public:
 	UPROPERTY(Config)
 	FAethelnCombatAttributeInitValues ProvisionalInitialAttributes;
 
+	/** Server-side config: Endurance and Guard recovery, started once with the initial attributes. TBD (#107); unset starts none. */
+	UPROPERTY(Config)
+	FAethelnResourceRecoveryValues ProvisionalEnduranceRecovery;
+
+	UPROPERTY(Config)
+	FAethelnResourceRecoveryValues ProvisionalGuardRecovery;
+
 	/**
 	 * Placeholder network update frequency, set only from Config/DefaultGame.ini; #45 owns the
 	 * final value. Without config (0) the engine's 1 Hz PlayerState default stays.

@@ -3,6 +3,9 @@
 #include "AbilitySystemComponent.h"
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnGameplayTags.h"
+#include "GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogAethelnResourceRecovery, Log, All);
 
 UAethelnAttributeInitEffect::UAethelnAttributeInitEffect()
 {
@@ -86,4 +89,83 @@ UAethelnGuardPressureEffect::UAethelnGuardPressureEffect()
 	Modifier.Attribute = UAethelnCombatAttributeSet::GetGuardAttribute();
 	Modifier.ModifierOp = EGameplayModOp::AddBase;
 	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Pressure);
+}
+
+void UAethelnResourceRecoveryEffect::Configure(const FGameplayAttribute& Attribute, const FGameplayTag& InDelayTag)
+{
+	DelayTag = InDelayTag;
+	DurationPolicy = EGameplayEffectDurationType::Infinite;
+	// The period comes from config on each spec; the first step lands one period after the start or a pause.
+	bExecutePeriodicEffectOnApplication = false;
+	PeriodicInhibitionPolicy = EGameplayEffectPeriodInhibitionRemovedPolicy::ResetPeriod;
+
+	FSetByCallerFloat Amount;
+	Amount.DataTag = AethelnGameplayTags::SetByCaller_Recovery_Amount;
+	FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
+	Modifier.Attribute = Attribute;
+	Modifier.ModifierOp = EGameplayModOp::AddBase;
+	Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Amount);
+
+	// Native GE components must be default subobjects listed in GEComponents during construction.
+	UTargetTagRequirementsGameplayEffectComponent* Pause = CreateDefaultSubobject<UTargetTagRequirementsGameplayEffectComponent>(TEXT("RecoveryPause"));
+	Pause->OngoingTagRequirements.IgnoreTags.AddTag(AethelnGameplayTags::State_Dead);
+	Pause->OngoingTagRequirements.IgnoreTags.AddTag(DelayTag);
+	GEComponents.Add(Pause);
+}
+
+FActiveGameplayEffectHandle UAethelnResourceRecoveryEffect::Start(UAbilitySystemComponent& AbilitySystemComponent, TSubclassOf<UAethelnResourceRecoveryEffect> Recovery, const FAethelnResourceRecoveryValues& Values)
+{
+	if (Recovery == nullptr || !AbilitySystemComponent.IsOwnerActorAuthoritative()
+		|| (Values.RatePerSecond == 0.0f && Values.PeriodSeconds == 0.0f && Values.DelaySeconds == 0.0f))
+	{
+		return FActiveGameplayEffectHandle();
+	}
+	if (!FMath::IsFinite(Values.RatePerSecond) || !FMath::IsFinite(Values.PeriodSeconds) || !FMath::IsFinite(Values.DelaySeconds)
+		|| !(Values.RatePerSecond > 0.0f) || !(Values.PeriodSeconds > 0.0f) || Values.DelaySeconds < 0.0f)
+	{
+		UE_LOG(LogAethelnResourceRecovery, Warning, TEXT("Refused to start %s: rate %f, period %f, delay %f must be finite, with a positive rate and period and a non-negative delay."),
+			*GetNameSafe(Recovery), Values.RatePerSecond, Values.PeriodSeconds, Values.DelaySeconds);
+		return FActiveGameplayEffectHandle();
+	}
+	FGameplayEffectSpec Spec(Recovery.GetDefaultObject(), AbilitySystemComponent.MakeEffectContext(), 1.0f);
+	Spec.Period = Values.PeriodSeconds;
+	Spec.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Recovery_Amount, Values.RatePerSecond * Values.PeriodSeconds);
+	Spec.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Recovery_Delay, Values.DelaySeconds);
+	return AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec);
+}
+
+void UAethelnResourceRecoveryEffect::RestartDelay(UAbilitySystemComponent& AbilitySystemComponent, TSubclassOf<UAethelnResourceRecoveryEffect> Recovery)
+{
+	if (Recovery == nullptr || !AbilitySystemComponent.IsOwnerActorAuthoritative())
+	{
+		return;
+	}
+	FGameplayEffectQuery Query;
+	Query.EffectDefinition = Recovery;
+	const TArray<FActiveGameplayEffectHandle> Active = AbilitySystemComponent.GetActiveEffects(Query);
+	const FActiveGameplayEffect* Running = Active.Num() > 0 ? AbilitySystemComponent.GetActiveGameplayEffect(Active[0]) : nullptr;
+	const float Delay = Running != nullptr ? Running->Spec.GetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Recovery_Delay, false, 0.0f) : 0.0f;
+	// A zero duration would never expire, so no delay applies nothing.
+	if (!(Delay > 0.0f))
+	{
+		return;
+	}
+	// Restart, never stack: the delay ends DelaySeconds after the latest spend.
+	const FGameplayTag Tag = Recovery.GetDefaultObject()->GetDelayTag();
+	AbilitySystemComponent.RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(Tag));
+	// The shared duration effect, as a cooldown or a Guard break is applied.
+	FGameplayEffectSpec Spec(GetDefault<UAethelnCooldownEffect>(), AbilitySystemComponent.MakeEffectContext(), 1.0f);
+	Spec.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Cooldown_Duration, Delay);
+	Spec.DynamicGrantedTags.AddTag(Tag);
+	AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec);
+}
+
+UAethelnEnduranceRecoveryEffect::UAethelnEnduranceRecoveryEffect()
+{
+	Configure(UAethelnCombatAttributeSet::GetEnduranceAttribute(), AethelnGameplayTags::State_EnduranceRecoveryDelayed);
+}
+
+UAethelnGuardRecoveryEffect::UAethelnGuardRecoveryEffect()
+{
+	Configure(UAethelnCombatAttributeSet::GetGuardAttribute(), AethelnGameplayTags::State_GuardRecoveryDelayed);
 }

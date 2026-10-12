@@ -50,6 +50,12 @@ namespace AethelnGameplayTags
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Cooldown_Duration);
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Cost_Endurance);
+
+	// #292 passive and delayed resource recovery.
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_EnduranceRecoveryDelayed);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_GuardRecoveryDelayed);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Recovery_Amount);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Recovery_Delay);
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
