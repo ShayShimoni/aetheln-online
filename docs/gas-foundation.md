@@ -736,15 +736,44 @@ marker and specialized definition through base-pointer callers.
    choke point makes any activation through them fail on a player ASC. Review
    rule: no project Blueprint calls them on a player ASC.
 
-Other engine client-to-server RPCs have no gameplay effect in this design, and
-these rules keep it so:
+The engine declares 16 `Server` RPCs on `UAbilitySystemComponent` in the pinned
+UE 5.8.1 (all in `GAS/Public/AbilitySystemComponent.h`; its base
+`UGameplayTasksComponent` declares none). The audit below (#324) gives the
+state of each on the production `UAethelnAbilitySystemComponent`. "Closed"
+means a project override refuses it with the shared `RefuseStockRoute`
+contract (`AethelnAbilitySystemComponent.cpp:1014`): one bucket token, a
+metric only, no reply. Production abilities set `NetSecurityPolicy =
+ServerOnly` (`AethelnGameplayAbility.cpp:14`), and grant validation refuses
+any other policy.
 
-| RPC | Status | Rule |
+| RPC (engine header line) | State on the production ASC | Evidence and reason |
 | --- | --- | --- |
-| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`GAS/Public/AbilitySystemComponent.h:1572-1577`) | Refused by virtual generated `_Implementation` overrides on the project ASC (#60 P2); no cache write. | Each draws one bucket token, emits a metric only and sends no reply. No project ability uses target-data tasks. |
-| `ServerSetReplicatedEvent`, `...WithPayload` (`GAS/Public/AbilitySystemComponent.h:1554-1559`) | The engine implementations write the same cache through `InvokeReplicatedEvent` / `InvokeReplicatedEventWithPayload`; project `_Implementation` overrides refuse them (#60 P2). | Same token/metric/no-reply contract; no project ability uses replicated-event tasks. |
-| `ServerSetInputPressed`, `ServerSetInputReleased` (`GAS/Public/AbilitySystemComponent.h:1618-1622`) | Only update spec input state (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2885-2893`). | Phase comes only from the request. Abilities must not read `InputPressed` or `InputReleased`. |
-| Montage section and play-rate RPCs (`GAS/Public/AbilitySystemComponent.h:1803-1812`) | Presentation only. | No gameplay window may derive from a montage (Server-Owned Attack Timeline in the combat document). |
+| `ServerTryActivateAbility`, `ServerTryActivateAbilityWithEventData` (`:1724`, `:1727`) | Closed. Both reach the virtual `InternalServerTryActivateAbility`, overridden at `AethelnAbilitySystemComponent.cpp:1027`. The engine also refuses `ServerOnly` abilities (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2087-2093`). | `ActivationSeam.StockRoutesRefused` |
+| `ServerAbilityRPCBatch` (`:1311`) | Closed. The virtual `ServerAbilityRPCBatch_Internal` drops the whole batch and its target data (`AethelnAbilitySystemComponent.cpp:1036`). | `ActivationSeam.StockRoutesRefused` |
+| `ServerSetReplicatedTargetData`, `ServerSetReplicatedTargetDataCancelled` (`:1572`, `:1576`) | Closed (`AethelnAbilitySystemComponent.cpp:1041`, `:1051`); no cache write. | `AttackTimeline.ReplicatedDataRoutesRefused`. No project ability uses target-data tasks. |
+| `ServerSetReplicatedEvent`, `ServerSetReplicatedEventWithPayload` (`:1554`, `:1558`) | Closed (`AethelnAbilitySystemComponent.cpp:1059`, `:1068`); the engine versions write the same cache through `InvokeReplicatedEvent`. | `AttackTimeline.ReplicatedDataRoutesRefused`. No project ability uses replicated-event tasks. |
+| `ServerPrintDebug_Request`, `ServerPrintDebug_RequestWithStrings` (`:1250`, `:1254`) | Closed in every build (#324; `AethelnAbilitySystemComponent.cpp:1078`, `:1083`). | `ActivationSeam.DebugRequestsRefused`. Reason below. |
+| `ServerEndAbility`, `ServerCancelAbility` (`:1736`, `:1742`) | Refused by the engine for `ServerOnly` abilities (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2222-2235`, `:2248-2257`; both skip a spec whose policy is `ServerOnlyTermination` or `ServerOnly`). No project override. | Every production ability is `ServerOnly` in both net policies, enforced at grant. A non-production ability on the production ASC would be a grant-validation failure. No automation test pins the engine's refusal. |
+| `ServerSetInputPressed`, `ServerSetInputReleased` (`:1618`, `:1621`) | Open, by design. They only set `FGameplayAbilitySpec::InputPressed` and pipe `InputPressed` / `InputReleased` to an already-active ability instance (`GAS/Private/AbilitySystemComponent_Abilities.cpp:2885-2893`, `:2915-2952`). | Nothing activates, commits or reads a result. Activation phase comes only from the request. Abilities must not override `InputPressed` / `InputReleased` or read the spec's `InputPressed`. `ReplicatedDataRoutesRefused` pins the spec-flag effect. |
+| `ServerCurrentMontageSetNextSectionName`, `ServerCurrentMontageJumpToSectionName`, `ServerCurrentMontageSetPlayRate` (`:1804`, `:1808`, `:1812`) | Open, by design. They act only on the ASC's own current montage, and only when the client names that same animation (`GAS/Private/AbilitySystemComponent_Abilities.cpp:3639`, `:3679`, `:3719`). | Presentation only. No gameplay window may derive from a montage (Server-Owned Attack Timeline in the combat document). The project plays no ability montage through the ASC yet (no `PlayMontage` use under `Source/`). |
+
+**Why the debug request is closed in every build.** The stock
+`ServerPrintDebug_Request_Implementation` runs `Debug_Internal` with
+`bPrintToLog`, so any client can make the server dump its ASC (granted
+abilities, attributes, effects) to the server log, store the result in the
+replicated `ServerDebugStrings`, and send the full dump back with a reliable
+client RPC (`GAS/Private/AbilitySystemComponent.cpp:2310-2325`). The
+`...WithStrings` variant also logs and stores a client-chosen string array in
+the replicated `ClientDebugStrings` (`:2292-2302`), which is unbounded client
+input. Both cost nothing against the activation bucket. The issue asked for
+closure in non-development builds. The override closes it unconditionally
+instead: a build-configuration split cannot be tested in the Editor
+(Development), and a Development dedicated server still faces real clients in
+the `development` environment. The loss is the engine's `showdebug
+abilitysystem` server-state panel on a remote client (`PrintDebug`,
+`GAS/Private/AbilitySystemComponent.cpp:2627-2636`). Server-side console
+debugging is unaffected. A later decision may re-enable it behind an explicit
+development-only gate; no new RPC is needed for that.
 
 **Blueprint exposure review (DoD2).** Attributes are `BlueprintReadOnly` with
 no setters. P3 exposes no project Blueprint entry point; the client-side
@@ -931,6 +960,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T31 | `Aetheln.GameCombat.ActivationSeam.LifecycleRejections` | P3 | H | No avatar gives `ConnectionClosed`; a dying avatar gives `ActorDestroyed`; sequence state survives re-possession |
 | T33 | `Aetheln.GameCombat.Lifecycle.PawnToAbilitySystemLookup` | P2 | H | `FindForPawn` returns the PlayerState ASC for a player pawn, the pawn's own ASC for AI, null for neither |
 | T34 | `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` | P2 | H | Pins the known gap: a fresh PlayerState for the same player gets a full init. #21 flips it. |
+| T35 | `Aetheln.GameCombat.ActivationSeam.DebugRequestsRefused` | #324 | H | `ServerPrintDebug_Request` and `...WithStrings` write no server or client debug strings, send no outcome and each draw one bucket token (two-token bucket, no refill, then a seam request is `RateLimited`). Control: the engine implementations, called past the override, write both string arrays. |
 
 ### T1 required integration coverage
 
