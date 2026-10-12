@@ -180,6 +180,11 @@ void UAethelnGameplayAbility::ApplyCost(
 	{
 		Spec.Data->SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Cost_Endurance, -Cost);
 		ApplyGameplayEffectSpecToOwner(Handle, ActorInfo, ActivationInfo, Spec);
+		// The one Endurance spend: it restarts the Endurance recovery delay (#292).
+		if (UAbilitySystemComponent* AbilitySystem = ActorInfo != nullptr ? ActorInfo->AbilitySystemComponent.Get() : nullptr)
+		{
+			UAethelnResourceRecoveryEffect::RestartDelay(*AbilitySystem, UAethelnEnduranceRecoveryEffect::StaticClass());
+		}
 	}
 }
 

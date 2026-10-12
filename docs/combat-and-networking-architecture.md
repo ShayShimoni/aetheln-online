@@ -487,6 +487,8 @@ manual and checked in review.
 | `Ability.Block` | `combat.action.block` (proposed for #106, #18 Q13) | #18 P4 |
 | `Cooldown.Block`, `State.Blocking`, `State.GuardBroken` | (cooldown, block, and Guard-break states of the above) | #18 P4 |
 | `SetByCaller.Pressure.Guard` | (negated Guard pressure of the shared Guard pressure effect) | #18 P4 |
+| `State.EnduranceRecoveryDelayed`, `State.GuardRecoveryDelayed` | (recovery delay states of `combat.resource.endurance` and `combat.resource.guard`) | #292 |
+| `SetByCaller.Recovery.Amount`, `SetByCaller.Recovery.Delay` | (step amount and delay length of the recovery effects) | #292 |
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and
