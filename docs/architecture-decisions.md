@@ -2643,7 +2643,6 @@ Every accepted decision records:
   cover that needs line of sight, or a P3 measurement that shows the state
   machine as a material server cost.
 
-
 ## Candidate Decisions
 
 | ID | Candidate | Evidence required | Owner | Rejected until evidence | Revisit/decision trigger |

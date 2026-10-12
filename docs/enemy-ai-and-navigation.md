@@ -48,7 +48,7 @@ UE 5.8.1 source, revision `71fe36aac5`; `Runtime/` abbreviates
 | AI approach | A server-only C++ state machine in a project `AAIController` subclass (TA-026). No Behavior Tree, StateTree, or AI Perception asset in the prototype. |
 | Ability system | The enemy's ASC stays on the authoritative pawn in Minimal replication (TA-003). The controller keeps `bWantsPlayerState = false`, so `FindForPawn` resolves the pawn's own ASC. |
 | Attack | The enemy registers one step at a time directly on the #60 timeline, without the activation seam. A granted enemy attack ability supplies the ability id, content version, and step definition the timeline revalidates against. |
-| Time | The timeline pass drives the controller, in pass step 1, so an enemy step is swept and resolved in the same pass and the same total order as every other contact. Transitions are stamped with their authored times; results committed later in the pass move the enemy back to their contact time. |
+| Time | The timeline pass drives the controller, in pass step 1, so an enemy step is swept and resolved in the same pass and the same total order as every other contact. Transitions are stamped with their authored times; results committed later in the pass move the enemy back to their contact time. A reset takes effect after the pass, so the pass resolves against the pre-reset enemy. |
 | Perception | A server-side eligibility query over player pawns. No line-of-sight check in the controlled arena, matching the timeline's occlusion decision. |
 | Target choice | Provisional rule for #20 to confirm: keep the current target while it stays eligible; otherwise the nearest eligible player, ties broken by the lower `PlayerId`. |
 | Navigation | One static navmesh for the controlled arena, used only by the server. Path following with partial paths, the engine's block detection for stuck recovery, and a leash around the spawn point. |
@@ -60,7 +60,7 @@ UE 5.8.1 source, revision `71fe36aac5`; `Runtime/` abbreviates
 
 | Owner | #83 consumes or provides | #83 does not do |
 | --- | --- | --- |
-| [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Consumes `RegisterStep`, `StampReset`, the contact pipeline, interruption, and the lethal notification. Adds a pass-start notification and an interruption notification, and adds the contact time to the lethal notification (see [Timing](#timing)). | Change the total order, revalidation, the allowance, or the result path. |
+| [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Consumes `RegisterStep`, `StampReset`, the contact pipeline, interruption, and the lethal notification. Adds pass-start, pass-end, and interruption notifications, and adds the contact time to the lethal notification (see [Timing](#timing)). | Change the total order, revalidation, the allowance, or the result path. |
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes `AAethelnCombatAICharacter`, `FindForPawn`, the grant validation, and `UAethelnAttributeInitEffect`. | Change the activation seam or the PlayerState lifecycle. |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Provides the enemy, its attack lifecycle, and the target-choice mechanism. | Choose the final target rule, threat, telegraph content, or the completion result. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Binds the same lethal notification #21 binds. | Player death, respawn, or reconnect. #83 never applies `State.Dead` itself (see [Death and Reset](#death-and-reset)). |
@@ -130,7 +130,7 @@ What the existing code fixes:
 | `UAethelnEnemyAttackAbility` | GameCombat | `UAethelnGameplayAbility` subclass that is never activated (`CanActivateAbility` is always false). It is the identity the timeline revalidates: ability id, `ContentVersion`, `ProvisionalStep`, `ProvisionalMaxSampleDistance`, `ProvisionalMaxSampleAngleDegrees`. Clients read the same config to derive the attack phases. |
 | `AAethelnEnemyController` | GameCombat | `AAIController` subclass, server only. Runs the state machine, the eligibility query, path following, the leash, stuck recovery, and death and reset. Writes the presentation state on its pawn. `bWantsPlayerState = false`. |
 | `EAethelnEnemyState`, `FAethelnEnemyPresentationState` | GameCombat | The state enum and its replicated presentation struct (see [Replication](#replication)). |
-| Timeline notifications | GameCombat | `OnPassStart(Now)`, `OnTargetInterrupted(TargetAsc, ContactTime)`, and `OnLethalResult` with the contact time added (see [Timing](#timing)). |
+| Timeline notifications | GameCombat | `OnPassStart(Now)`, `OnPassEnd(Now)`, `OnTargetInterrupted(TargetAsc, ContactTime)`, and `OnLethalResult` with the contact time added (see [Timing](#timing)). |
 
 **Grant rules for the one step.** `FindGrantProblem` applies the base rules of
 `UAethelnGameplayAbility` and then:
@@ -152,13 +152,15 @@ These are the basic chain's per-step rules with `bFinalStep` set; P2 moves them
 into one shared function so both abilities use the same code.
 
 **Ability identity.** P2 assigns the semantic ID
-`enemy.greybox.ability.strike` (working name), adds the mapping row to the
+`enemy.greybox.ability.strike` (working name, proposed for #106, as new IDs
+are), adds the mapping row to the
 [Initial entries](combat-and-networking-architecture.md#gameplay-tag-and-content-version-conventions)
 table, and adds the test entry that pins the tag to that ID. The tag form follows
 from the ID: an enemy-scoped ID (`enemy.<enemy>.` prefix) gives
 `<Family>.Enemy.<Enemy>.<Name>`, here `Ability.Enemy.Greybox.Strike`. The
 `Enemy` segment keeps enemy tags apart from Order-scoped tags, so the mapping
-stays one to one.
+stays one to one. This PR adds that enemy-scope rule to the Order-scope
+paragraph of the convention.
 
 `GameCombat.Build.cs` gains the engine runtime module `AIModule`, which brings
 `NavigationSystem` as its own public dependency. Neither is a plugin, so the
@@ -171,7 +173,7 @@ exist; `Reset` is an instant action, not a state.
 
 | State | Entered when | Behavior | Leaves to |
 | --- | --- | --- | --- |
-| `Idle` | Spawn, reset done | Stands at home. Runs the eligibility query. | `Engage` when a target is eligible |
+| `Idle` | Spawn, reset done | Stands at home. Runs the eligibility query. | `Engage` when a target is eligible, or `Telegraph` when that target is already in range |
 | `Engage` | A target is chosen | Path-follows toward the target. Re-runs target choice. | `Telegraph` when the target is within `ProvisionalAttackRange` and the enemy can attack; `Return` when no target is eligible, the enemy leaves its leash, or a move request fails |
 | `Telegraph` | Attack chosen | Stops moving and faces the target. Lasts `ProvisionalTelegraphSeconds`. No step is registered yet. | `Attack` at its end; `Engage` if the target stopped being eligible before the step started (no step is registered) |
 | `Attack` | Step registered at `S` | Stays still. Wind-up, active, and recovery are the step's windows: `[S, S + ActiveStart)`, `[S + ActiveStart, S + ActiveEnd)`, `[S + ActiveEnd, S + RecoveryEnd)`. | `Engage` at `S + RecoveryEnd`; `Interrupted` on an interruption |
@@ -180,7 +182,9 @@ exist; `Reset` is an instant action, not a state.
 | `Return` | No eligible target, or outside the leash | Path-follows home. Ignores targets until home. | `Reset` at home, on a failed move request, or by [stuck recovery](#stuck-recovery) |
 
 `Reset` teleports the enemy home if it is not already there, stops movement,
-re-applies the initial attributes, clears the target, and enters `Idle`.
+re-applies the initial attributes, clears the target, and enters `Idle` at the
+reset time. A reset decided in pass step 1 takes effect after the pass's
+emission (see [Timing](#timing)).
 
 Every exit from `Attack` stamps the step's reset at the exit time (recovery
 end, interruption, or death), so no enemy step stays registered after it ends.
@@ -190,8 +194,9 @@ end, interruption, or death), so no enemy step stays registered after it ends.
 `ProvisionalAttackRange` of the enemy capsule. Recovery is the only gap
 between attacks; any further cooldown is a tuning decision.
 
-**Accepted aim.** At the step start the aim is the unit vector from the enemy
-capsule to the target capsule. The timeline clamps its pitch and fixes the
+**Accepted aim.** The aim is the unit vector from the enemy capsule to the
+target capsule, read from their server positions at the pass time `Now` when
+the step registers (the step start `S` may be slightly earlier). The timeline clamps its pitch and fixes the
 combat frame for the step. The aim is never recomputed during the step.
 
 **Step registration.** At the telegraph end `S`, the controller fills an
@@ -207,7 +212,10 @@ advances.
 The controller makes no decision in its own tick. The timeline pass drives it:
 
 1. In pass step 1, after the players' buffered starts and before the sweeps,
-   the subsystem raises `OnPassStart(Now)`. Each bound enemy controller, in the
+   the subsystem raises `OnPassStart(Now)`. It is raised before the pass
+   sorts its steps and snapshots their activation ids
+   (`AethelnCombatTimelineSubsystem.cpp:197-200`), so a step registered in it
+   is part of this pass. Each bound enemy controller, in the
    order they were bound, applies every transition due up to `Now`. A
    transition due at an authored time `T <= Now` starts its state at `T`; a
    transition that depends on positions (perception, range) starts at `Now`.
@@ -216,8 +224,16 @@ The controller makes no decision in its own tick. The timeline pass drives it:
    every other contact of the frame, in the one total order. The controller
    never registers a step anywhere else, so no step starts inside time a pass
    has already resolved.
-3. Path-following results that arrive during the actor tick are only recorded.
-   The controller applies them at the next pass start.
+3. Path-following results that arrive during the actor tick are only recorded,
+   and only for the controller's current move request (matched by request id);
+   a result of a replaced or aborted request is dropped. The controller applies
+   the recorded result at the next pass start.
+4. A reset decided in pass step 1 (respawn, return home, or stuck recovery)
+   does not move or heal the enemy there. It is pending until the subsystem
+   raises `OnPassEnd(Now)` after emission; then the enemy is teleported home,
+   healed, and enters `Idle` at the reset time. So every contact of the pass
+   resolves against the enemy's pre-reset position and Health, and the pass
+   makes no further decision for that enemy.
 
 When the controller advances in pass step 1, it knows every result up to the
 previous pass. This pass may then commit results for times between the
@@ -229,13 +245,14 @@ entered. Those late results win:
   controller reached after `C`. The timeline has already stamped every enemy
   step at `C`, so a step the controller started after `C` never started: its
   contacts fail revalidation, and the controller drops it. Its sequence number
-  stays used.
+  stays used, and its attack counter has advanced. Clients never see that
+  step as an attack, because replication happens after the pass.
 - **Late death.** A lethal result at contact time `C`, raised during emission,
   moves the enemy to `Dead` at `C`. A step started after `C` makes no contact,
   because the enemy is not alive when its contacts resolve.
 
 An interruption or a lethal result that arrives while the enemy is already
-`Dead` is ignored.
+`Dead` is ignored. A late lethal result cancels a pending reset.
 
 ## Perception and Target Eligibility
 
@@ -276,7 +293,7 @@ when the arena gains cover.
   `navigation` content-validation family (navigation data audience, streaming
   boundaries, runtime rebuild policy). That family stays `non_promotion` until
   a producer binds governed navigation packages to exact client and server
-  cook evidence
+  cook evidence and the pinned-Editor tests have run
   ([Asset Intake and Content Validation](asset-intake-and-content-validation.md)).
   P3 names this gate in its evidence and does not claim the family passes.
   Whether the client cook can drop the navigation data stays open for #120.
@@ -284,10 +301,11 @@ when the arena gains cover.
 
 ### Movement
 
-- `Engage` uses `MoveToActor` with acceptance radius
+- `Engage` moves toward the target actor with acceptance radius
   `ProvisionalAttackRange` and partial paths allowed, so a target on ground the
   enemy cannot reach still draws it to the nearest reachable point, where it
-  waits.
+  waits. The reach test excludes both capsule radii, so path following stops at
+  the same capsule-center distance the attack-range check uses.
 - `Return` uses `MoveToLocation` to home, with partial paths not allowed.
 
 ### Invalid and unreachable destinations
@@ -348,7 +366,7 @@ One exception: if the enemy stops being alive without a lethal result (for
 example a test or a later effect sets Health to zero), the controller notices
 it at the next pass start and enters `Dead` at that pass time.
 
-`Reset` re-applies `ProvisionalInitialAttributes` with
+After the pass's emission, `Reset` re-applies `ProvisionalInitialAttributes` with
 `UAethelnAttributeInitEffect::ApplyTo`, the same path the AI base uses in
 `BeginPlay`. It does not respawn a new actor: the pawn, its ASC, and its combat
 identity stay, so no client sees a destroyed and re-created enemy.
@@ -396,7 +414,7 @@ same fixtures. Every test is written red first. Test names are under
 | E2 | P2 | Grant validation and invalid commands (`ServerOnly`): unset production config grants nothing and the enemy never attacks; unset controller config decides nothing; a valid test definition is granted once; `TryActivateAbility` on the enemy attack is refused; a refused `RegisterStep` returns the enemy to `Engage` with no sequence or counter advance. |
 | E3 | P2 | Attack lifecycle (`AttackLifecycle`): telegraph, then a step registered at the exact telegraph end under an uneven frame, its contact at the authored time, recovery, and the next telegraph; the ended step is stamped and removed. |
 | E4 | P2 | Interruption ordering (`Interruption`): a player hit inside the enemy step's interruptible window moves the enemy to `Interrupted` at the contact time and drops its later contacts; outside the window nothing changes; one notification per interruption; the late case, where one long frame takes the controller past recovery end and into a new step before the pass commits the earlier interruption, ends `Interrupted` at the contact time with the new step never started. |
-| E5 | P2 | Death and reset (`DeathAndReset`): a lethal hit during wind-up kills the enemy at the contact time, its step makes no later contact, and at the contact time plus the respawn delay it is home with its initial attributes and no target. |
+| E5 | P2 | Death and reset (`DeathAndReset`): a lethal hit during wind-up kills the enemy at the contact time, its step makes no later contact, and at the contact time plus the respawn delay it is home with its initial attributes and no target; a player contact in the respawn pass resolves against the dead, pre-reset enemy; Health set to zero without a lethal result kills the enemy at the pass time. |
 | E6 | P2 | Two-player contention (`TargetChoice`): deterministic choice between equidistant players by `PlayerId`, whichever controller comes first; the current target stays while eligible; the other player is chosen when it dies. |
 | E7 | P2 | Target loss (`TargetLoss`): leaving perception, pawn destruction, and leaving the leash during `Telegraph` each drop the target with no step registered, and the enemy resets home. |
 | E8 | P2 | Presentation (`AttackLifecycle`, `ServerOnly`): the replicated state, counter, and step timing match the server state; the struct replicates. |
