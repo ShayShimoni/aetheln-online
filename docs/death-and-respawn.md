@@ -23,7 +23,7 @@ restored values, the respawn location, and the disconnect grace window stay
 C++ names are proposed code names until their phase lands.
 
 **Citations.** Repository `path:line` citations are valid at `develop`
-revision `b55dad2`. Engine citations are relative to the root of the pinned
+revision `89a2111e`. Engine citations are relative to the root of the pinned
 UE 5.8.1 source, revision `71fe36aac5`. `GAS/` abbreviates
 `Engine/Plugins/Runtime/GameplayAbilities/Source/GameplayAbilities/` and
 `CMC.cpp` abbreviates
@@ -40,7 +40,7 @@ UE 5.8.1 source, revision `71fe36aac5`. `GAS/` abbreviates
    document lets only server-owned effects or abilities of the owning issue
    apply a `State.<Name>` tag. `UAethelnDeathStateEffect` is infinite and grants
    `State.Dead` through the spec's dynamic granted tags, as the Guard break
-   does (`Source/GameCombat/Private/AethelnBlockAbility.cpp:113-118`).
+   does (`Source/GameCombat/Private/AethelnBlockAbility.cpp:115-120`).
 3. **Refusal reuses the existing bindings.** `State.Dead` already blocks every
    ability (`Source/GameCombat/Private/AethelnGameplayAbility.cpp:17`), resets
    the chain with `IncompatibleState`
@@ -78,6 +78,7 @@ UE 5.8.1 source, revision `71fe36aac5`. `GAS/` abbreviates
 | [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Binds `OnLethalResult`. | Change the lethal latch, contact order, or chain reset rules. |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Tests the integrated death case on top of #18's `State.Dead` bindings. | Change dodge or block cancellation. |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Nothing. | AI death and despawn (owned by #20), and AI attacks that kill a player. |
+| [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) | Nothing. | Apply `State.Dead`. #83 binds the same `OnLethalResult` and owns its signature change (a `ContactTime` parameter in its P2, `docs/enemy-ai-and-navigation.md:356-363`). When it lands, P1's one-line handler takes the new parameter. |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61) | Raises the authoritative death state that presentation reads. | HUD, death screen, and readability of the death cue. |
 
 ## Server Death Transition (P1)
@@ -97,13 +98,25 @@ binds `OnLethalResult` once in `Initialize`. The handler forwards to
 4. Calls `DisableMovement()` on the avatar's character movement.
 
 The emission loop that raises the notification iterates a local array of
-committed results (`AethelnCombatTimelineSubsystem.cpp:231-240`), and a chain
-reset only stamps a reset time (`:141-148`), so the synchronous transition does
-not invalidate the timeline's iteration. Since #60 P5
+committed results (`AethelnCombatTimelineSubsystem.cpp:235`, `:246`), and a
+chain reset only stamps a reset time (`:144-151`), so the synchronous
+transition does not invalidate the timeline's iteration. Since #60 P5
 ([PR #321](https://github.com/ShayShimoni/aetheln-online/pull/321)), the pass
 sends held buffered-start records before emission, and interruption never runs
 for a lethal target. A death raised during emission therefore finds no held
 record, and its chain reset sends exactly one chain end.
+
+**A buffered step that starts after the lethal contact.** Death resets the
+chain at the processing time `Now`, through the tag event, not at the lethal
+contact time `C`. A buffered step whose start `B` falls in `C < B <= Now`
+therefore still starts in pass step 1, and its held activation record is sent
+to the owning client in step 5, before the death reset ends the chain. That
+record is accepted and presentation-only: no gameplay truth leaks, because the
+victim's contacts after `C` fail `IsAlive` (Health is already zero). An
+interruption would drop the record, because it stamps its reset at the contact
+time ([A28](attack-timeline-and-combo.md), interruption row). Resetting the
+chain at `C` for death is deferred to #83 P2, which adds `ContactTime` to
+`OnLethalResult`. The lethal row of A28 records this case.
 
 **Replication.** The player ASC uses Mixed replication. The owning client gets
 the death effect; every other client gets `State.Dead` as a minimal
@@ -112,8 +125,12 @@ Health stays owner-only. P3 proves this with two clients.
 
 **What death keeps.** Granted abilities, cooldown effects, and attribute
 values stay. The Guard break ends on `State.Dead`
-(`AethelnBlockAbility.cpp:119-124`, `:144`). Which values respawn restores is P2's
-allowlist.
+(`AethelnBlockAbility.cpp:121-126`, `:146`). Recovery delay effects (the
+Endurance and Guard recovery delays) also persist through death under the
+current default, in which a running delay keeps counting on the server clock
+(`gas-foundation.md:402-403`); whether death removes a running delay is open
+(see [Open Decisions](#open-decisions)) and stays `TBD`. Which values respawn
+restores is P2's allowlist.
 
 ## Respawn (P2, design)
 
@@ -190,6 +207,7 @@ effects, and a second grant. P4 closes it:
 | R4 | Respawn restoration and stale state | P2 | Only allowlisted values change; DoD3 list is clear |
 | R5 | Two-client death and respawn | P3 | AC2 and DoD1 |
 | R6 | Reconnect while alive, dead, and respawning | P4 | AC5; T34 flips |
+| R7 | Guard break active at death (P2 adds the row) | P2 | A real Guard break, then death: the break effect is gone, Guard recovery stays paused, and the chain ends once |
 
 Dodge and block refusal while dead is already covered by D13
 (`Aetheln.GameCombat.Defense.LifeStateCancelsDefense`), which reacts to the same
@@ -216,7 +234,7 @@ dies, and death, not interruption, ends the chain once as `IncompatibleState`.
 | Phase | Content | Depends on |
 | --- | --- | --- |
 | **P1** Death state | This document; `UAethelnDeathStateEffect`; `UAethelnDeathSubsystem`; R1, R2. | #60 P4 lethal notification (merged) |
-| **P2** Respawn | Delay and allowlist config, life generation, restart order, restoration effect; R3, R4. | P1; owner decisions on delay, allowlist, location, dead pawn |
+| **P2** Respawn | Delay and allowlist config, life generation, restart order, restoration effect; R3, R4. A `Death` observability event (`EAethelnObservabilityCategory::Death`, `observability-and-crash-diagnostics.md:21`) with the activation id as correlation, as `Emit` does for hits; the Guard-break-at-death row R7; the lethal-contact-time chain reset with #83's `ContactTime`. | P1; owner decisions on delay, allowlist, location, dead pawn |
 | **P3** Replication | Two-client harness run, death cue; R5. | P2 |
 | **P4** Reconnect | Carried snapshot behind an identity adapter; R6; T34 flipped. | P2; owner decision on the grace window; P4 chooses the identity key |
 
@@ -231,6 +249,8 @@ Owner decisions (none blocks P1):
   corpse, and for how long).
 - Whether a dead player keeps the dead pawn's camera or spectates.
 - The disconnect grace window (already `TBD` in the combat document).
+- Whether death removes a running recovery delay (#21, listed in
+  `gas-foundation.md:1239`). P1 keeps the current default: the delay persists.
 
 Lead decisions (2026-10-12):
 
@@ -239,6 +259,21 @@ Lead decisions (2026-10-12):
   asserts that no other effect reaches the AI target, needs updating.
 - **The reconnect identity key is decided in P4**, behind the identity
   adapter. P1 needs nothing for it.
+
+## Residual Limitations
+
+- **Activation record after the lethal contact.** See the buffered-step
+  paragraph in Server Death Transition. Accepted and presentation-only in P1.
+- **Recovery delay through death.** A running delay persists under the current
+  default; the decision stays `TBD`.
+- **Guard break active at death is untested.** Death's tag event runs
+  `HandleDeadDuringBreak`, which removes the break effect
+  (`AethelnBlockAbility.cpp:146`) while the death effect is being applied. No
+  test covers this ordering: the existing `State.Dead` tests add a loose tag.
+  P2 adds R7: a real Guard break, then death; assert the break effect is gone,
+  Guard recovery is paused, and there is no second chain end.
+- **No death telemetry in P1.** P1 logs the death with `UE_LOG` only; P2 emits
+  the `Death` event (see Phased Delivery).
 
 ## Follow-ups
 
