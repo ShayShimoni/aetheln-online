@@ -250,9 +250,10 @@ bool FAethelnDamageAndLethalLatchTest::RunTest(const FString& Parameters)
 			else { ++OtherEffects; }
 		});
 	TArray<FGuid> Lethal;
-	const FDelegateHandle LethalHandle = F.Timeline->OnLethalResult.AddLambda([&](UAethelnAbilitySystemComponent* Victim, const FGuid& Id)
+	TArray<double> LethalTimes;
+	const FDelegateHandle LethalHandle = F.Timeline->OnLethalResult.AddLambda([&](UAethelnAbilitySystemComponent* Victim, const FGuid& Id, double ContactTime)
 		{
-			if (Victim == TargetAsc) { Lethal.Add(Id); }
+			if (Victim == TargetAsc) { Lethal.Add(Id); LethalTimes.Add(ContactTime); }
 		});
 	F.Press(); F.AdvanceTo(0.5);
 	TestEqual(TEXT("First hit lowers Health by the test magnitude"), Health(*Target), 25.0f);
@@ -269,6 +270,7 @@ bool FAethelnDamageAndLethalLatchTest::RunTest(const FString& Parameters)
 	if (TestEqual(TEXT("The lethal notification fires once"), Lethal.Num(), 1) && F.Records.Num() == 3)
 	{
 		TestEqual(TEXT("The lethal notification names the activation"), Lethal[0], F.Records[2].ActivationId);
+		if (F.Results.Num() == 3) { TestEqual(TEXT("The lethal notification carries the contact time (#83)"), LethalTimes[0], F.Results[2].ContactTime); }
 	}
 	TestEqual(TEXT("A new chain after completion starts"), F.Press(), EResult::Accepted);
 	F.AdvanceTo(2.5);
