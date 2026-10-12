@@ -71,21 +71,25 @@ and `GM.cpp` abbreviates `Engine/Source/Runtime/Engine/Private/GameModeBase.cpp`
 6. **Respawn fails closed.** P2 respawns only when the delay is configured and
    valid and the server can restart the player (a controller, a game mode with a
    pawn class, and a maximum Health above zero). Otherwise the player stays dead
-   and the server logs why. The restored values are the owner's decision, not
-   config: full Health, Endurance and Guard, so there is no allowlist to leave
-   unset. No value is invented.
+   and the server logs why. The restored values are the owner's decision (full
+   Health, Endurance and Guard, provisional) and are fixed in the restoration
+   effect, not config. Whether that fixed set is the declared lifecycle allowlist
+   the canonical technical documents describe is an open owner decision (see
+   [Open Decisions](#open-decisions)). No value is invented.
 7. **Reconnect uses a carried snapshot, not PlayerState reuse.** The combat
    game mode stays on `AGameModeBase`, so a reconnect gets a fresh PlayerState
    (`Source/GameCombat/Public/AethelnCombatGameMode.h:10-17`). P4 keeps a
-   server-side snapshot keyed by a stable player identity for a `TBD` grace
-   window and applies it in place of initial attributes.
+   server-side snapshot keyed by a stable player identity for the disconnect
+   grace window (15 s, provisional and owner-set, see
+   [Open Decisions](#open-decisions)) and applies it in place of initial
+   attributes.
 
 ## Scope and Boundaries
 
 | Owner | #21 does | #21 does not |
 | --- | --- | --- |
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Applies and removes `State.Dead`; owns the restoration allowlist and the reconnect carried state (closes T34). | Change the grant-once rule, the seam, or the avatar lifecycle. |
-| [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Binds `OnLethalResult`. | Change the lethal latch, contact order, or chain reset rules. |
+| [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Binds `OnLethalResult`. | Change the lethal latch, the contact order, or the chain reset rules, except one: a death from a lethal contact ends the chain at the lethal contact time (the stamp that #60's A28 row deferred to #21 P2). |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Tests the integrated death case on top of #18's `State.Dead` bindings. | Change dodge or block cancellation. |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Nothing. | AI death and despawn (owned by #20), and AI attacks that kill a player. |
 | [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) | Nothing. | Apply `State.Dead`. #83 binds the same `OnLethalResult` and owned its signature change (the `ContactTime` parameter, merged in its P2, `docs/enemy-ai-and-navigation.md:356-363`). P1's handler took the three-argument form and ignored `ContactTime`; P2 uses it for the chain reset. |
@@ -235,7 +239,8 @@ effects, and a second grant. P4 closes it:
 - On logout, the server stores a snapshot keyed by a stable player identity:
   attribute values, remaining cooldowns, the life state, the life generation,
   and the respawn deadline. It expires after the disconnect grace window
-  (`TBD` in the combat document).
+  (15 s, provisional and owner-set, issue #21 comment 6131998770; the combat
+  document's general safe-logout and disconnect durations stay `TBD`).
 - On login, a matching unexpired snapshot replaces the initial-attribute step
   for the fresh PlayerState. Abilities are granted once on the new
   PlayerState, as #19 requires.
@@ -295,7 +300,7 @@ dies, and death, not interruption, ends the chain once as `IncompatibleState`.
 | **P1** Death state | This document; `UAethelnDeathStateEffect`; `UAethelnDeathSubsystem`; R1, R2. | #60 P4 lethal notification (merged) |
 | **P2** Respawn (delivered) | The delay config, life generation, restart order, restoration effect; R3, R4, R8, R9. A `Death` observability event (`EAethelnObservabilityCategory::Death`, `observability-and-crash-diagnostics.md:21`) with the activation id as correlation, as `Emit` does for hits (R10); the Guard-break-at-death row R7; the lethal-contact-time chain reset using `ContactTime` from `OnLethalResult`. | P1; the owner decisions of 2026-10-12 on delay, restoration, location, dead pawn, and camera |
 | **P3** Replication | Two-client harness run, death cue; R5. | P2 |
-| **P4** Reconnect | Carried snapshot behind an identity adapter; R6; T34 flipped. | P2; owner decision on the grace window; P4 chooses the identity key |
+| **P4** Reconnect | Carried snapshot behind an identity adapter; R6; T34 flipped. | P2; P4 chooses the identity key and implements the owner's 15 s provisional grace window |
 
 ## Open Decisions
 
@@ -322,6 +327,12 @@ Still open for the owner:
 
 - Whether death removes a running recovery delay (#21, listed in
   `gas-foundation.md:1211`). P1 keeps the current default: the delay persists.
+- Whether the owner's restoration (full Health, Endurance, and Guard) is the
+  declared lifecycle allowlist that the canonical technical documents describe
+  (`combat-and-networking-architecture.md:68` and `:270`, `gas-foundation.md:268`),
+  or whether a separate allowlist declaration is wanted. P2 implements the three
+  resources as a fixed set in the restoration effect, adds no allowlist config,
+  and changes no canonical document.
 
 Lead decisions (2026-10-12):
 
@@ -355,17 +366,25 @@ Lead decisions (2026-10-12):
   and the death effect is infinite. #61 and P3 decide how the deadline reaches
   the owner (for example a replicated deadline or a timed effect). No value is
   invented here.
-- **No `Respawn` event.** P2 emits `Death` only, as the issue assigned. The
-  `Respawn` category exists (`observability-and-crash-diagnostics.md:21`) and can
-  be wired with P3's feedback.
+- **No `Respawn` event.** P2 emits `Death` only, as this spec's phased delivery
+  assigns (the issue itself names no observability event). The `Respawn`
+  category exists (`observability-and-crash-diagnostics.md:21`) and can be wired
+  with P3's feedback.
 - **A failed restart after the restore.** If the game mode cannot spawn a pawn
   after the checks pass, `Respawn` logs an error and returns false with the
   player alive and without a pawn (the seam rejects with `ConnectionClosed`).
   The checks make this unlikely, and the pawn spawn that remains is the
   engine's.
-- **Respawn is not delayed for a disconnected player.** With no controller at the
-  deadline, `Respawn` refuses and the wait is dropped. P4's snapshot carries the
-  deadline across a reconnect.
+- **Respawn is not delayed for a disconnected player.** With the AGameModeBase
+  base class, a logout normally destroys the controller and its PlayerState, so
+  the wait's weak key goes invalid and the wait is dropped without a log. A
+  PlayerState that outlives its controller reaches `Respawn`, which refuses and
+  logs "no controller". P4's snapshot carries the deadline across a reconnect.
+  Neither path is tested in P2.
+- **Untested P2 paths.** No test covers the no-controller and no-pawn-class
+  refusals, the error after `RestartPlayer` (no pawn), the death-order sort, two
+  players due in one tick, or a second death after a respawn (life generation
+  2 and its `Death` event sequence).
 
 ## Follow-ups
 

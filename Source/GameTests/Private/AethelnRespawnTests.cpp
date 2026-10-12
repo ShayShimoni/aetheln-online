@@ -17,9 +17,11 @@
 #include "Misc/AutomationTest.h"
 #include <limits>
 
-// #21 P2 server respawn (docs/death-and-respawn.md, Test Plan R3, R4, R7). The delay is set on the subsystem
-// instance: TestDelay is a fixture value, never the provisional ini value. The harness registers no game mode, so
-// the tests install the combat game mode through UWorld::SetGameMode, as a server's map load does.
+// #21 P2 server respawn (docs/death-and-respawn.md, Test Plan). Rows implemented here: R3 RespawnFailsClosed,
+// R4 RespawnAfterDelay, R7 GuardBreakThenDeath, R8 RespawnRefusesNonDeadAndNonPlayer, R9 LethalContactThenRespawn,
+// and R10 DeathTelemetry. The delay is set on the subsystem instance: TestDelay is a fixture value, never the
+// provisional ini value. The harness registers no game mode, so the tests install the combat game mode through
+// UWorld::SetGameMode, as a server's map load does.
 namespace AethelnRespawnTests
 {
 	using namespace AethelnChainTests;
@@ -200,14 +202,16 @@ bool FAethelnRespawnFailsClosedTest::RunTest(const FString& Parameters)
 	const float IniDelay = GetDefault<UAethelnDeathSubsystem>()->ProvisionalRespawnDelaySeconds;
 	TestTrue(TEXT("The ini sets a finite, positive provisional respawn delay"), FMath::IsFinite(IniDelay) && IniDelay > 0.0f);
 
-	// An unset, negative or non-finite delay means no respawn: the player stays dead and the server says why.
+	// An unset, negative or non-finite delay means no respawn: the player stays dead and the server says why, once for
+	// each of the four deaths. One expectation counts all four: a repeated AddExpectedError with the same pattern
+	// replaces the earlier entry and its count.
+	AddExpectedError(TEXT("Refused to schedule a respawn"), EAutomationExpectedErrorFlags::Contains, 4);
 	for (const float Delay : { 0.0f, -1.0f, NaN, Infinity })
 	{
 		FFixture F(true); if (!F.Init(*this)) { return false; }
 		UAethelnDeathSubsystem* Deaths = F.World.World->GetSubsystem<UAethelnDeathSubsystem>();
 		if (!TestNotNull(TEXT("The authority world owns the death subsystem"), Deaths) || !InstallGameMode(*this, *F.World.World)) { return false; }
 		Deaths->ProvisionalRespawnDelaySeconds = Delay;
-		AddExpectedError(TEXT("Refused to schedule a respawn"), EAutomationExpectedErrorFlags::Contains, 1);
 		Kill(F, FGuid::NewGuid(), 0.0);
 		F.AdvanceTo(9.0);
 		F.AdvanceTo(18.0);
@@ -282,6 +286,9 @@ bool FAethelnRespawnRefusesNonDeadAndNonPlayerTest::RunTest(const FString& Param
 	TestTrue(TEXT("A non-contact death is accepted"), UAethelnDeathSubsystem::ApplyDeath(Victim));
 	TestFalse(TEXT("A second death request is a no-op"), UAethelnDeathSubsystem::ApplyDeath(Victim));
 	TestEqual(TEXT("One death effect"), CountActive(Victim, UAethelnDeathStateEffect::StaticClass()), 1);
+	F.AdvanceTo(TestDelay - 0.1);
+	TestTrue(TEXT("The non-contact death is still dead before the delay"), Victim.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	TestTrue(TEXT("The dead pawn is still possessed before the delay"), F.Player.Controller->GetPawn() == F.Pawn);
 	F.AdvanceTo(TestDelay + 0.5);
 	TestFalse(TEXT("The non-contact death respawns after the delay"), Victim.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
 	TestEqual(TEXT("Health is restored"), Read(Victim, HealthAttribute), 40.0f);

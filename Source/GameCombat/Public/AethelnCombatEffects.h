@@ -207,9 +207,10 @@ public:
 };
 
 /**
- * The respawn restoration (#21 P2; owner decision, issue #21 comment 6131998770): instant, overriding exactly Health,
- * Endurance and Guard with the target's own maximum. No maximum, cooldown effect, ability, or other state changes.
- * Only the death subsystem applies it, before it removes the death effect (docs/death-and-respawn.md).
+ * The respawn restoration (#21 P2; provisional, owner-set decision, issue #21 comment 6131998770, re-tuned at the P5
+ * feel test): instant, overriding exactly Health, Endurance and Guard with the target's own maximum. No maximum,
+ * cooldown effect, ability, or other state changes. Only the death subsystem applies it, before it removes the
+ * death effect (docs/death-and-respawn.md).
  */
 UCLASS()
 class GAMECOMBAT_API UAethelnRespawnRestorationEffect : public UGameplayEffect
