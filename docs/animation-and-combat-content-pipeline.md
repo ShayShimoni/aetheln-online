@@ -68,6 +68,7 @@ not own the systems the content runs on.
 | --- | --- | --- |
 | [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | The step definition, grant validation, timeline driver, contact pipeline, `CombatActivation` record, and observer phase state | Change the timeline, contacts, or record |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | The dodge and block windows and the defense slot | Change defense rules |
+| [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) | The server-owned enemy controller, its `Telegraph` state before a step, and `FAethelnEnemyPresentationState`, which replicates that state and the step's timing to clients (`docs/enemy-ai-and-navigation.md`, landing with #83) | Enemy states, telegraph timing, or replication |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Enemy intent, enemy steps registered on the timeline, and the enemy telegraph content | Enemy behavior or target choice |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61), [#97](https://github.com/ShayShimoni/aetheln-online/issues/97) | HUD, `GameplayCue.*` tags, readable feedback, and the readability review | Visual language or UI timing |
 | [#120](https://github.com/ShayShimoni/aetheln-online/issues/120) | Intake records, lifecycle, stable IDs, audiences, and the content validator families | Change the intake contract |
@@ -111,7 +112,7 @@ ability-level fields of the #19 base ability. #84 adds no field and no value.
 | Concern (issue wording) | Owned by | Field or rule |
 | --- | --- | --- |
 | Phases | Step definition | `ActiveStart`, `ActiveEnd`, `BufferOpen`, `LinkOpen`, `LinkClose`, `RecoveryEnd`, `CancelOpen` as offsets from the authoritative start |
-| Authored volumes | Step definition | `Shape`, `ShapeExtent`, `PathStart`, `PathEnd` in the combat frame, `MaxAimPitchDegrees`, and the sampling budget (`ProvisionalMaxSampleAngleDegrees`, `ProvisionalMaxSampleDistance`) |
+| Authored volumes | Step definition; ability | Step: `Shape`, `ShapeExtent`, `PathStart`, `PathEnd` in the combat frame, `MaxAimPitchDegrees`. Ability: the sampling budget (`ProvisionalMaxSampleAngleDegrees`, `ProvisionalMaxSampleDistance`, `Source/GameCombat/Public/AethelnBasicChainAbility.h:19-20`) |
 | Already-hit state | Step definition and timeline | `MaxTargets`; one result per target per activation, fixed for the prototype chain |
 | Ordering | Timeline | The canonical total order (contact time, activation ordinal, result slot, target id); not authored per attack |
 | Costs | Ability | `ProvisionalEnduranceCost` |
@@ -158,7 +159,10 @@ A presentation binding is a client-only data asset (proposed
 - per step: a montage (`AM_`), section names for wind-up, active, and
   recovery, and optional trail, sound, Niagara, and camera feedback;
 - sockets used for trails and effects, and the skeleton they belong to;
-- for an enemy, the telegraph presentation (#20 supplies the content).
+- for an enemy, the telegraph presentation (#20 supplies the content). It
+  only visualizes the server-owned `Telegraph` state that #83 replicates in
+  `FAethelnEnemyPresentationState` before the step, and then the step's phase
+  once the step is registered. It never starts, times, or ends a telegraph.
 
 It may hard-reference the Shared definition (`client_only` to `shared` is
 allowed by the intake policy). The definition never references it. A Shared
@@ -168,13 +172,27 @@ intake policy declares a matching rule, and this pipeline declares none; adding
 one would undo the one-direction rule and needs a reviewed change to this
 document.
 
+Licensed content follows TA-019 (the private `AethelnArt` plugin):
+
+- A binding that names a licensed montage, sequence, or effect lives in the
+  plugin, next to that content.
+- No public package in `Content/`, `Config/`, `Source/`, or `Plugins/`, and
+  not the `.uproject`, references the plugin. A public binding names only
+  public content.
+- The authoritative definition never moves into the plugin. It stays public
+  and `Shared`, so the server, tests, and CI never depend on private art.
+
 ### What presentation may do
 
 - Play a montage from the authoritative `StartServerTime` in the
   `CombatActivation` record (owner) or the replicated phase state
-  (observers), mapping montage sections onto the authored windows. If the
-  record arrives late, presentation skips forward so the active section lines
-  up with server time.
+  (observers of the player chain), mapping montage sections onto the authored
+  windows. If the record arrives late, presentation skips forward so the
+  active section lines up with server time. On `develop` only the player chain
+  writes that phase state; a step an enemy registers directly gives observers
+  nothing to read. Enemy presentation reads `FAethelnEnemyPresentationState`
+  instead (#83): the `Telegraph` state and its server start time before the
+  step, then the step start time and windows.
 - Play cosmetic anticipation at press, which a rejection cancels, a record
   realigns, and a chain end stops (#60, Prediction Policy).
 - Play trails, sounds, Niagara, and camera feedback from notifies, and play
@@ -187,9 +205,11 @@ document.
 - Create a contact, choose a target, or report a hit.
 - Apply damage, Guard pressure, a cost, a cooldown, a tag, or an effect.
 - Send a gameplay event, call an ability, or write persistence.
-- Use root motion or motion warping in attack montages. Attacks restrict no
-  movement in the prototype (#60 OQ4), and root motion needs separate network
-  validation (combat document, Server-Owned Attack Timeline).
+- Use root motion or motion warping in attack montages. Root motion and
+  motion warping need separate network validation and may not move an attack
+  volume (combat document, Server-Owned Attack Timeline). Attacks restrict no
+  movement in #60 P3 to P6 (OQ4); authored restrictions come later with #17's
+  predicted movement, and this rule is revisited then.
 
 If the binding's content version does not match the record, the client plays
 a neutral fallback and logs a presentation warning. Gameplay is unchanged.
@@ -233,7 +253,7 @@ is on `develop` now; "P2" and "P3" are later phases of this issue.
 | Incompatible skeleton | `skeletal_animation` family `rig_compatibility` for meshes, skeletons, and sequences; the binding validator checks each montage's skeleton against the binding's skeleton | Family exists; binding check P3 |
 | Incompatible socket reference | `socket_ownership` counts invalid sockets per mesh; the binding validator checks each named socket exists on the binding's skeleton or mesh | Family exists; binding check P3 |
 | Stale identifiers | `reference_boundary` (unique stable ID, compatible content version, redirectors); the binding validator refuses a binding whose ability ID has no definition or whose content version differs | Family exists; binding check P3 |
-| Stale tag or semantic ID | The registry validator and the native tag table (one-to-one mapping) | Exists |
+| Stale tag or semantic ID | The registry validator checks registry records; the tag-to-semantic-ID mapping is checked only for the three Oathscar actives by a hand-listed test (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp:31-37`) | Partly exists. Gap: nothing checks a new or stale ability tag against the registry; a check that every native `Ability.` tag maps to one registry ID is needed |
 | Notify that could carry gameplay | Binding validator allowlists presentation notify classes; any other notify class fails | P3 |
 
 All gates fail closed. A validation failure never falls back to another
@@ -304,7 +324,8 @@ covers every format this pipeline produces. No new LFS pattern is needed.
 | Content | Placement | Policy |
 | --- | --- | --- |
 | `.fbx` animation source, `.blend` rig and cleanup files | Source only, never in `Content/`; the reserved `SourceAssets/` root needs an asset-owning ticket before use | LFS binary and lockable |
-| Sequences, montages, IK rigs, retargeters, bindings, definitions (`.uasset`) | `Content/` (public) or `Plugins/AethelnArt` (licensed) | LFS binary and lockable |
+| Sequences, montages, IK rigs, retargeters, bindings (`.uasset`) | `Content/` (public) or `Plugins/AethelnArt` (licensed, under the TA-019 rules in [The binding](#the-binding)) | LFS binary and lockable |
+| Definitions (`.uasset`) | `Content/` only, never the plugin | LFS binary and lockable |
 | Blender export scripts and intake records | Text outside `Content/` | Normal Git text |
 
 Expectations:
@@ -330,15 +351,20 @@ stay readable under representative latency, without final tuning.
 
 - **Attack.** The first step of the Oathscar basic chain, authored as a
   definition (values from decision D3) and a binding on the mannequin.
-- **Enemy telegraph.** One #20 enemy step, registered on the timeline as #20
-  specifies, with a binding whose wind-up section is the telegraph.
-- **Readability under latency.** Observers learn a step from the replicated
-  phase state about half a round trip after it starts. Presentation starts at
-  the authoritative start and skips forward, so a late observer sees a shorter
-  wind-up. A telegraph is readable only if its wind-up is longer than the
-  one-way latency of the representative profile plus a minimum visible
-  duration. Both numbers are `TBD` (#45 profiles, #97 readability). Until they
-  exist, this criterion cannot close.
+- **Enemy telegraph.** The telegraph is server-owned state: #83's controller
+  enters `Telegraph` before it registers the #20 step and replicates it in
+  `FAethelnEnemyPresentationState`. The binding's telegraph and wind-up
+  presentation only visualize that replicated state, then the step's phase
+  once the step is registered.
+- **Readability under latency.** Observers learn a state or step from
+  replicated state about half a round trip after it starts. Presentation
+  starts at the authoritative start and skips forward, so a late observer sees
+  a shorter tell. Proposed criterion for #97, which owns readability: a tell
+  (the `Telegraph` state plus wind-up) is readable only if it lasts longer
+  than the one-way latency of the representative profile plus a minimum
+  visible duration. The criterion and both numbers are #97's and #45's to
+  accept; the numbers are `TBD`. Until they exist, this criterion cannot
+  close.
 - **Evidence.** Two-client PIE runs under the #82 conditions C1 and C2, with
   the server-side result log and a capture of each client, reviewed by the
   owner for feel and by #97 for readability.
@@ -347,7 +373,7 @@ stay readable under representative latency, without final tuning.
 
 | Area | Owns | Never owns |
 | --- | --- | --- |
-| Combat (#60, #18, #20, #260) | Definitions, windows, volumes, contacts, results, costs, cooldowns, interruption, the record, and the observer phase state | Montages, notifies, sockets, effects, HUD |
+| Combat (#60, #18, #20, #83, #260) | Definitions, windows, volumes, contacts, results, costs, cooldowns, interruption, the record, the observer phase state, and the enemy `Telegraph` state and its presentation state | Montages, notifies, sockets, effects, HUD |
 | Animation (#84 pipeline, owner feel approval, Codex generation) | Sources, rigs, retargeters, sequences, montages, presentation notifies, bindings, and their intake records | Any authoritative field or content-version bump |
 | UI feedback (#61, #97) | HUD, `GameplayCue.*` tags, result and telegraph readability, correction presentation | Windows, hit decisions, resources |
 | Automation (#120 validator, registry validator, this pipeline's validators, Blender scripts, CI) | Detecting and refusing invalid data, recording evidence | Approving content, downloading content, accepting terms, generating assets, or choosing tuning |
@@ -378,7 +404,7 @@ the registry tests, and the four portable content-validation suites.
 | The server can evaluate authored melee volumes without a client-selected target or client-claimed hit | [Server Evaluation Without Client Targets](#server-evaluation-without-client-targets); #60 A1, A9 | Met by #60 |
 | Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 | Partly exists; P2 and P3 complete it |
 | The pipeline defines source-control/LFS/locking expectations and coordinates with #14 before non-map binary assets land | [Source Control, LFS, and Locking](#source-control-lfs-and-locking) | Defined; no matrix change needed |
-| A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on D2, D3, #20, #61, #45, and owner actions |
+| A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on D2, D3, #83, #20, #61, #45, and owner actions |
 
 | Definition of done | Covered by | Status |
 | --- | --- | --- |
@@ -396,7 +422,7 @@ Each PR targets `develop` and uses `Refs #84`.
 | **P2** Definition and focused tests | The authoritative definition in the form D1 selects, its validator at editor save and grant, N1 and N2. No values. | D1; engine time |
 | **P3** Presentation binding | The client-only binding, its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3 and N4. Fixture assets only. | P2; engine time |
 | **P4** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin | Owner actions O1 and O2; D2; P3 |
-| **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
+| **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3; #83 enemy controller and presentation state; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
 
 ## Owner Actions
 
@@ -421,7 +447,7 @@ Each PR targets `develop` and uses `Refs #84`.
    packaged builds yet (TA-019 follow-ups). A representative attack bound to
    licensed animation presents only in local editor sessions until that
    changes.
-2. **Late observers.** Under latency, observers see a shortened wind-up.
+2. **Late observers.** Under latency, observers see a shortened tell.
    Readability depends on `TBD` budgets (#45, #97).
 3. **Notify allowlist scope.** The allowlist (P3) checks notify classes, not
    their code. A presentation notify class that calls gameplay code would pass
