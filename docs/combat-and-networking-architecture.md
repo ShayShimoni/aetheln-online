@@ -473,9 +473,11 @@ manual and checked in review.
 
 | Tag | Semantic ID | Owner |
 | --- | --- | --- |
-| `Ability.Oathscar.GateStep` | `order.oathscar.ability.gate_step` | #19 (skeleton), #60 (contact) |
-| `Ability.Oathscar.SwornRebuke` | `order.oathscar.ability.sworn_rebuke` | #19 (skeleton), #60 (contact) |
-| `Ability.Oathscar.HoldTheLine` | `order.oathscar.ability.hold_the_line` | #19 (skeleton), #60 (Guard result) |
+| `Ability.Oathscar.GateStep` | `order.oathscar.ability.gate_step` | #19 (skeleton), #260 (contact) |
+| `Ability.Oathscar.SwornRebuke` | `order.oathscar.ability.sworn_rebuke` | #19 (skeleton), #260 (contact) |
+| `Ability.Oathscar.HoldTheLine` | `order.oathscar.ability.hold_the_line` | #19 (skeleton), #260 (Guard result) |
+| `State.Oathscar.GateStep`, `State.Oathscar.SwornRebuke` | (commitment states of the above) | #260 |
+| `State.Oathscar.HoldTheLine` | (defense state of the above) | #260 |
 | `Ability.Oathscar.SwordShieldBasicChain` | `order.oathscar.ability.sword_shield_basic_chain` | #60 P3 |
 | `State.Oathscar.SwordShieldBasicChain` | (commitment state of the above) | #60 P3 |
 | `Cooldown.Oathscar.GateStep`, `Cooldown.Oathscar.SwornRebuke`, `Cooldown.Oathscar.HoldTheLine` | (cooldown state of the above) | #19 |

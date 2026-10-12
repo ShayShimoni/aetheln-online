@@ -681,6 +681,67 @@ before factions (`Faction = Unassigned`). The relation is (OQ1, owner,
 allies and only enemies are hostile. Self is excluded. One server function
 decides it, so faction and territory policy replace it later.
 
+## Representative Actives (#260)
+
+[Issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260) resolves
+the contacts and outcomes of Gate Step, Sworn Rebuke, and Hold the Line through
+the seam and this timeline. It adds no request field and no new pipeline step;
+the client still selects no target, claims no hit, and decides no result.
+
+- **Gate Step and Sworn Rebuke are single-step chains.** They derive from
+  `UAethelnBasicChainAbility` with a step count of one and their own commitment
+  tags, `State.Oathscar.GateStep` and `State.Oathscar.SwornRebuke`. Their one
+  step is the final step (`BufferOpen == RecoveryEnd`, no link window), so the
+  activation lasts to `RecoveryEnd`, an early press is `ActivationBlocked`,
+  and the step ends with `Completed`. Registration, records, boundaries,
+  resets, sweeps, the allowance, avoidance, the defense step, damage, and
+  interruption are the chain's, unchanged. The ASC's one chain state holds
+  whichever of the chain or an active runs, so one can interrupt the other.
+  A single step may have a cooldown; the no-cooldown rule applies only to a
+  multi-step chain, whose every hit commits.
+- **Authored rules are step data.** Gate Step's Wrought contact and Guard
+  pressure are its step's `WroughtDamage` and `GuardPressure`. Sworn Rebuke's
+  interruption rule is its step's `bInterruptsTarget`, and either active's own
+  interruptibility is `InterruptibleUntil`. Every value is `TBD` (#107).
+- **Hold the Line is a block on the same slot.** It derives from
+  `UAethelnBlockAbility` and inherits its defense slot, arc, Guard hook (Guard
+  pressure from the attacking step, `GuardBroken` at zero Guard), break, and
+  death handling. Its slot and loose tag carry `State.Oathscar.HoldTheLine`.
+  The block and Hold the Line block each other (#18 Q10): each lists the
+  other's state tag as an activation-blocking tag, and grant validation
+  requires it. It is held and released.
+- **Gate Step's advance is not here.** Character displacement (AC2, validated
+  with #17's movement rules) is #260's package B and needs a transport
+  decision. Until then, Gate Step's contact uses the server capsule pose and its
+  authored volume path; the character is not displaced.
+- **Production values are unset.** Steps, sampling bounds, raise, arc, and
+  break times fail grant validation, as for the chain and the block, so
+  `DefaultGame.ini` grants none of the three until #107 supplies values.
+  Their `ContentVersion` is 2: the authoritative definition changed.
+
+Open owner decisions, with the defaults #260 ships because they invent no
+value:
+
+1. **Hold the Line phase** ([GAS Foundation](gas-foundation.md) open decision
+   5): hold-and-release. A fixed duration needs a value and an end boundary.
+2. **Relations beyond Q10 and Q17** (GAS Foundation open decision 6). The
+   attacks inherit the chain's refusal while dodging or blocking (Q17, and
+   Q10's "an attack press while blocking is refused"). Nothing lists the
+   actives' commitment tags yet, so a dodge, a block, Hold the Line, or another
+   attack may start during an active and ends it with `OtherAction`. An
+   attack may start while Hold the Line holds, and an accepted dodge does not
+   end Hold the Line (`CancelBlock` ends the block only). Hold the Line shares
+   the block's Guard rules: zero Guard refuses it, and a Guard break ends it and
+   prevents a raise for the break duration. Each of these is a one-line tag
+   list change if the owner chooses otherwise.
+3. **Gate Step's advance transport** (package B).
+
+The automated network-condition rows defined for #60, A25 (delayed,
+duplicated, reordered, and dropped requests), A26 (the same against contacts),
+and A27 (teardown), are replayed against the actives in
+`Aetheln.GameCombat.OathscarActives.NetworkConditions`. A19 to A21 are #60 P6
+PIE rows with no automated form yet.
+
 ## Lag Compensation
 
 The prototype validates at present time. Windows are judged when the server
@@ -895,6 +956,8 @@ change bumps the chain's `ContentVersion`.
 | Config section | Keys |
 | --- | --- |
 | `[/Script/GameCombat.AethelnBasicChainAbility]` | `ContentVersion`; `ProvisionalEnduranceCost` (optional); `ProvisionalSteps` (three step structs with the values in [Step definition](#step-definition)); `ProvisionalMaxSampleAngleDegrees`; `ProvisionalMaxSampleDistance` |
+| `[/Script/GameCombat.AethelnGateStepAbility]`, `[/Script/GameCombat.AethelnSwornRebukeAbility]` (#260) | The chain's keys with one step, plus `ProvisionalCooldownSeconds` |
+| `[/Script/GameCombat.AethelnHoldTheLineAbility]` (#260) | `ContentVersion`; `ProvisionalEnduranceCost`; `ProvisionalCooldownSeconds`; `ProvisionalRaiseSeconds`; `ProvisionalArcHalfAngleDegrees`; `ProvisionalGuardBreakSeconds`; `bAcceptsRelease` |
 | `[/Script/GameCombat.AethelnCombatTimelineSubsystem]` | `AvoidanceTags` (empty; `State.DodgeInvulnerable` is never added, see [Resolution order](#resolution-order-prototype-subset) step 3) |
 | `[/Script/GameCombat.AethelnAbilitySystemComponent]` | `ProvisionalAimSoftBoundDegrees`; `ProvisionalAimHardBoundDegrees`; `ProvisionalAimMaxRateDegreesPerSecond`; `ProvisionalAimRateSlackDegrees`; `ProvisionalAimUnitTolerance`; `ProvisionalTimestampMaxAgeSeconds`; `ProvisionalTimestampMaxLeadSeconds`; `ProvisionalTimestampRegressionToleranceSeconds` |
 | `Config/DefaultEngine.ini` | The `AethelnCombatQuery` trace channel with default response `Ignore` (structure, not tuning) |

@@ -17,6 +17,8 @@ UAethelnBlockAbility::UAethelnBlockAbility()
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_GuardBroken);
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Dodging);
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+	// Q10: Block and Hold the Line block each other (Hold the Line's constructor swaps this for State.Blocking).
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_HoldTheLine);
 	// No authored version, raise, arc, break, cost or cooldown preset: unset production config fails grant.
 }
 
@@ -24,8 +26,11 @@ const TCHAR* UAethelnBlockAbility::FindGrantProblem() const
 {
 	if (const TCHAR* Problem = Super::FindGrantProblem()) { return Problem; }
 	if (IsMovementCarried() || !bAcceptsRelease) { return TEXT("is not a held seam ability that accepts Release"); }
+	const FGameplayTag OtherDefense = DefenseStateTag == AethelnGameplayTags::State_Blocking
+		? AethelnGameplayTags::State_Oathscar_HoldTheLine.GetTag() : AethelnGameplayTags::State_Blocking.GetTag();
+	if (!DefenseStateTag.IsValid() || ActivationBlockedTags.HasTagExact(DefenseStateTag)) { return TEXT("has no defense state tag or blocks its own"); }
 	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dead.GetTag(), AethelnGameplayTags::State_GuardBroken.GetTag(),
-		AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain.GetTag() })
+		AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain.GetTag(), OtherDefense })
 	{
 		if (!ActivationBlockedTags.HasTagExact(Tag)) { return TEXT("lacks a required blocking tag"); }
 	}
@@ -64,7 +69,7 @@ void UAethelnBlockAbility::ActivateAbility(
 	}
 	// The slot before the commit: a refused slot (one is still held) ends uncommitted, InternalFailure, nothing spent.
 	FAethelnDefenseState Slot;
-	Slot.StateTag = AethelnGameplayTags::State_Blocking;
+	Slot.StateTag = DefenseStateTag;
 	Slot.ActiveFromServerTime = ASC->ActiveSeamScope->AttackInput.ReceiptServerTime + ProvisionalRaiseSeconds;
 	Slot.ArcDegrees = 2.0 * ProvisionalArcHalfAngleDegrees;
 	Slot.OnBlocked.BindUObject(this, &UAethelnBlockAbility::HandleBlockedHit);
@@ -84,7 +89,7 @@ void UAethelnBlockAbility::ActivateAbility(
 	}
 	// After the commit, so the chain resets once with OtherAction rather than through its State.Blocking reset tag.
 	bHoldsStateTag = true;
-	ASC->AddLooseGameplayTag(AethelnGameplayTags::State_Blocking, 1, EGameplayTagReplicationState::TagOnly);
+	ASC->AddLooseGameplayTag(DefenseStateTag, 1, EGameplayTagReplicationState::TagOnly);
 	if (GetActivationOperationId() != OperationId || !IsActive()) { return; }
 	DeadHandle = ASC->RegisterGameplayTagEvent(AethelnGameplayTags::State_Dead, EGameplayTagEventType::NewOrRemoved)
 		.AddUObject(this, &UAethelnBlockAbility::HandleDeadTag);
@@ -170,7 +175,7 @@ void UAethelnBlockAbility::EndAbility(
 		if (bHoldsStateTag)
 		{
 			bHoldsStateTag = false;
-			ASC->RemoveLooseGameplayTag(AethelnGameplayTags::State_Blocking, 1, EGameplayTagReplicationState::TagOnly);
+			ASC->RemoveLooseGameplayTag(DefenseStateTag, 1, EGameplayTagReplicationState::TagOnly);
 		}
 	}
 	Super::EndAbility(Handle, ActorInfo, ActivationInfo, bReplicateEndAbility, bWasCancelled);

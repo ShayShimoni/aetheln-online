@@ -100,7 +100,9 @@ stable IDs and canon summaries and with all tuning `TBD` (`:324-328`). The
 combat document's conventions table maps their IDs to tags. #19 builds only
 their skeletons: identity, activation, validation, cost, cooldown, and state
 tags. Contacts, Guard pressure, interruption, movement, and attack windows
-belong to Issue [#60](https://github.com/ShayShimoni/aetheln-online/issues/60);
+belong to Issue [#260](https://github.com/ShayShimoni/aetheln-online/issues/260),
+which builds on #60's timeline (see
+[Representative actives](attack-timeline-and-combo.md#representative-actives-260));
 dodge interplay belongs to Issue
 [#18](https://github.com/ShayShimoni/aetheln-online/issues/18).
 
@@ -135,7 +137,7 @@ only if they are declared in GameCore.
 | `UAethelnCombatAttributeSet` | GameCombat | `Health`, `MaxHealth`, `Endurance`, `MaxEndurance`, `Guard`, `MaxGuard`. |
 | `AethelnActivationTypes.h` | GameCombat | `FAethelnCombatActivationRequest`, `EAethelnActivationPhase`, `EAethelnActivationResult` (client-facing mirror of the safe reasons). |
 | `UAethelnGameplayAbility` (abstract) | GameCombat | Base ability: reads config, overrides `CheckCost`, `ApplyCost`, `GetCooldownTags`, `ApplyCooldown`, `CanActivateAbility` (the choke point), and `CommitAbility` (records the seam's result slot), refuses the partial `CommitAbilityCost` and `CommitAbilityCooldown`, fixes the net and instancing policies, leaves the engine cost and cooldown effect classes null. |
-| `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnGateStepAbility`, `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility` skeletons. |
+| `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnGateStepAbility`, `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility`: skeletons in #19; since #260, single-step attacks on #60's timeline and a defense on #18's slot (see [Attack Timeline](attack-timeline-and-combo.md#representative-actives-260)). |
 | `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first). All magnitudes set by caller. |
 | `AAethelnCombatGameMode` | GameCombat | Derives from `AGameModeBase` (for example through `AAethelnGameModeBase`), never `AGameMode`: `AGameMode::FindInactivePlayer` (`Runtime/Engine/Private/GameMode.cpp:687-751`) would reuse the old PlayerState on reconnect, which breaks the sequence policy and T34. A later base-class change must revisit both. Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by a config soft-class path, never by editing binary assets by hand: `InputEnabledPawnClass` (`Config/DefaultGame.ini`, `/Game/POC/BP_MovementPOCCharacter`) is returned from `GetDefaultPawnClassForController`, and an empty or unloadable path keeps `DefaultPawnClass`. The mode is not the project default; a launch selects it with `?game=/Script/GameCombat.AethelnCombatGameMode`, which overrides the map's game mode. |
 | `AAethelnCombatAICharacter` | GameCombat | Base for Issue [#20](https://github.com/ShayShimoni/aetheln-online/issues/20)'s enemy: its own ASC in Minimal mode and its own attribute set. |
@@ -351,13 +353,16 @@ All three derive from `UAethelnGameplayAbility`.
   itself directly with `EndAbility`, as the seam's `EndForRelease` does, whether
   or not its commit succeeded. A C++ subclass could still call `ApplyCost`,
   `ApplyCooldown`, or `CommitExecute` directly, which Blueprint cannot; review
-  refuses that, so `CommitAbility` stays the only spend. The three skeletons do
-  not override `ActivateAbility`; they inherit the base one, which follows both
-  rules, and T17 pins them. Hold the Line may
-  later hold its own state tag while active, `State.<Order>.<Name>` under the
-  conventions (for example `State.Oathscar.HoldTheLine`, a technical
-  identifier, not a display name). The PR that creates it adds it to the
-  Initial entries table. Hold the Line's duration-or-hold behavior is `TBD`.
+  refuses that, so `CommitAbility` stays the only spend. The three skeletons did
+  not override `ActivateAbility`; they inherited the base one, which follows both
+  rules, and T17 pinned them. Since #260 Gate Step and Sworn Rebuke use the
+  chain's `ActivateAbility` and Hold the Line the block's, which commit once
+  through `CommitAbility` the same way; T17 now runs on fixture subclasses.
+  Hold the Line holds its own state tag while active,
+  `State.Oathscar.HoldTheLine` (a technical identifier, not a display name),
+  listed in the Initial entries table. Its duration-or-hold behavior is still
+  an open owner decision; #260 implements hold-and-release, the one mode that
+  needs no invented value.
 
 **Grant-time validation.** `AAethelnPlayerState` refuses to grant, and logs,
 any configured class that:
@@ -1051,11 +1056,12 @@ All stay `TBD` until the named owner decides.
    keys remain unset/`TBD`; owners #60, #2 and #45 approve future values.
 5. **Phase behavior of Hold the Line:** a fixed-duration commitment, or
    hold-and-release (which would set `bAcceptsRelease`). Owners: #107 and the
-   owner.
+   owner. Until decided, #260 ships hold-and-release, which needs no value.
 6. **Blocking and cancel relations** among the three actives, the basic chain,
    dodge, and block. Owners: #60 and #18 content. For dodge and block, #18's
    Q10 and Q17 (owner-approved 2026-10-10) answer it; the three actives' relations
-   stay open.
+   stay open. #260's defaults are listed in
+   [Representative actives](attack-timeline-and-combo.md#representative-actives-260).
 7. **Cooldown and attribute behavior across death, respawn, and reconnect**,
    including closing the reconnect gap. Owner: #21.
 8. **What opponents may see** of the six attributes. Owner: #61.

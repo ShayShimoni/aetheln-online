@@ -299,8 +299,8 @@ bool FAethelnOathscarInterruptionTest::RunTest(const FString& Parameters)
 		const FGuid EnemyId = Swing(F, *Enemy, [](FAethelnAttackStepDefinition& Step) { Step.InterruptibleUntil = 0.5; }); // contact at 0.2208
 		TestTrue(TEXT("The enemy step registers"), EnemyId.IsValid());
 		F.AdvanceTo(0.5);
-		const FAethelnCombatResult* Player = F.Records.Num() == 1 ? ResultFor(F, F.Records[0].ActivationId) : nullptr;
-		if (TestNotNull(TEXT("The active hits the enemy"), Player)) { TestEqual(TEXT("An ordinary hit"), Player->Outcome, EOutcome::Hit); }
+		const FAethelnCombatResult* PlayerResult = F.Records.Num() == 1 ? ResultFor(F, F.Records[0].ActivationId) : nullptr;
+		if (TestNotNull(TEXT("The active hits the enemy"), PlayerResult)) { TestEqual(TEXT("An ordinary hit"), PlayerResult->Outcome, EOutcome::Hit); }
 		TestEqual(bInterrupts ? TEXT("Sworn Rebuke's interruption drops the enemy's later contact") : TEXT("Without an interruption rule the enemy's hit lands"),
 			ResultFor(F, EnemyId) != nullptr, !bInterrupts);
 		TestEqual(TEXT("Player Health follows"), Health(*F.Player.AbilitySystem), bInterrupts ? 40.0f : 35.0f);
@@ -383,13 +383,13 @@ bool FAethelnOathscarHoldTheLineGuardResultTest::RunTest(const FString& Paramete
 		TestEqual(TEXT("No pressure from an unblocked contact"), F.PressureApplications, 1);
 
 		const FGuid BreakId = F.Swing(*Front, 18.0f);
-		const double BreakContact = F.Now() + 0.125;
 		F.AdvanceTo(1.5);
 		const FAethelnCombatResult* Broken = F.ResultFor(BreakId);
-		if (TestNotNull(TEXT("A result for the breaking contact"), Broken)) { TestEqual(TEXT("GuardBroken"), Broken->Outcome, EOutcome::GuardBroken); }
+		if (!TestNotNull(TEXT("A result for the breaking contact"), Broken)) { return false; }
+		TestEqual(TEXT("GuardBroken"), Broken->Outcome, EOutcome::GuardBroken);
 		TestFalse(TEXT("A Guard break ends Hold the Line"), F.Has(HoldState));
 		TestTrue(TEXT("The Guard break state holds"), F.Has(AethelnGameplayTags::State_GuardBroken));
-		if (F.Slot() != nullptr) { TestEqual(TEXT("The slot ends at the contact time"), F.Slot()->ActiveUntilServerTime, BreakContact); }
+		if (F.Slot() != nullptr) { TestEqual(TEXT("The slot ends at the contact time"), F.Slot()->ActiveUntilServerTime, Broken->ContactTime); }
 		// Isolate State.GuardBroken: Guard restored and cooldown cleared, the Press is still refused.
 		F.ASC().RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(AethelnGameplayTags::Cooldown_Oathscar_HoldTheLine));
 		AethelnCombatTests::ApplyInstantModifier(F.ASC(), UAethelnCombatAttributeSet::GetGuardAttribute(), EGameplayModOp::Override, 20.0f);
@@ -473,9 +473,8 @@ bool FAethelnOathscarNetworkConditionsTest::RunTest(const FString& Parameters)
 	}
 	// Hold the Line Press and Release under reordering, duplication, a dropped Release, and teardown.
 	{
-		using namespace AethelnDefenseTests;
 		const FGameplayTag HoldTheLine = AethelnGameplayTags::Ability_Oathscar_HoldTheLine;
-		FDefense F; if (!F.Init(*this, { UAethelnHoldTheLineTestAbility::StaticClass() })) { return false; }
+		AethelnDefenseTests::FDefense F; if (!F.Init(*this, { UAethelnHoldTheLineTestAbility::StaticClass() })) { return false; }
 		const FAethelnCombatActivationRequest Press = F.Request(HoldTheLine);
 		const FAethelnCombatActivationRequest Release = F.Request(HoldTheLine, EAethelnActivationPhase::Release);
 		TestEqual(TEXT("A Release that overtakes its Press is refused"), F.Deliver(Release), EResult::ActivationBlocked);
@@ -488,9 +487,8 @@ bool FAethelnOathscarNetworkConditionsTest::RunTest(const FString& Parameters)
 		if (F.Slot() != nullptr) { TestEqual(TEXT("Ended once, at the first Release"), F.Slot()->ActiveUntilServerTime, 0.25); }
 	}
 	{
-		using namespace AethelnDefenseTests;
 		const FGameplayTag HoldTheLine = AethelnGameplayTags::Ability_Oathscar_HoldTheLine;
-		FDefense F; if (!F.Init(*this, { UAethelnHoldTheLineTestAbility::StaticClass() })) { return false; }
+		AethelnDefenseTests::FDefense F; if (!F.Init(*this, { UAethelnHoldTheLineTestAbility::StaticClass() })) { return false; }
 		AAethelnCombatAICharacter* Front = F.SpawnEnemy(*this, FVector(40.0, 0.0, 0.0));
 		if (Front == nullptr) { return false; }
 		TestEqual(TEXT("Raised"), F.Deliver(F.Request(HoldTheLine)), EResult::Accepted);

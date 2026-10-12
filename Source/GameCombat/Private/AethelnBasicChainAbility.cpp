@@ -22,16 +22,17 @@ UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 {
 	if (const TCHAR* Problem = Super::FindGrantProblem()) { return Problem; }
-	if (ProvisionalCooldownSeconds != 0.0f || bAcceptsRelease) { return TEXT("has a chain cooldown or Release route"); }
-	if (ProvisionalSteps.Num() != 3) { return TEXT("does not have exactly three chain steps"); }
+	// Every hit of a multi-step chain commits, so a chain cooldown would block its next hit; a single step may have one.
+	if ((StepCount > 1 && ProvisionalCooldownSeconds != 0.0f) || bAcceptsRelease) { return TEXT("has a chain cooldown or Release route"); }
+	if (StepCount < 1 || ProvisionalSteps.Num() != StepCount) { return TEXT("does not have its authored number of steps"); }
 	if (!ResetTags.HasTagExact(AethelnGameplayTags::State_Dead)) { return TEXT("does not reset on State.Dead"); }
 	if (!FMath::IsFinite(ProvisionalMaxSampleDistance) || ProvisionalMaxSampleDistance <= 0.0
 		|| !FMath::IsFinite(ProvisionalMaxSampleAngleDegrees) || ProvisionalMaxSampleAngleDegrees <= 0.0)
 	{
 		return TEXT("has unset or invalid sampling bounds");
 	}
-	const FGameplayTagContainer Commitment(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
-	if (Commitment.HasAny(ActivationBlockedTags) || Commitment.HasAny(ResetTags))
+	const FGameplayTagContainer Commitment(CommitmentTag);
+	if (!CommitmentTag.IsValid() || Commitment.HasAny(ActivationBlockedTags) || Commitment.HasAny(ResetTags))
 	{
 		return TEXT("blocks or resets its own commitment");
 	}
@@ -51,7 +52,7 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 		{
 			return TEXT("has invalid active, buffer, commitment or interruptible ordering");
 		}
-		if (Index == 2)
+		if (Index == StepCount - 1)
 		{
 			if (S.BufferOpen != S.RecoveryEnd || S.LinkOpen != 0.0 || S.LinkClose != 0.0)
 			{

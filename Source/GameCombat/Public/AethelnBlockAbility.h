@@ -7,8 +7,9 @@
 /**
  * The right-mouse directional block (docs/dodge-and-block.md, The Block). Held: a seam Press raises it
  * and a seam Release (bAcceptsRelease) lowers it. While active it holds the target's one defense slot on
- * the timeline subsystem: State.Blocking, the interval [S + RaiseSeconds, end), the authored arc, and the
- * Guard hook #60 calls once per blocked contact. Nothing about it is predicted.
+ * the timeline subsystem: its state tag (State.Blocking; #260's Hold the Line subclass holds its own), the
+ * interval [S + RaiseSeconds, end), the authored arc, and the Guard hook #60 calls once per blocked contact.
+ * Nothing about it is predicted.
  */
 UCLASS(Config = Game)
 class GAMECOMBAT_API UAethelnBlockAbility : public UAethelnGameplayAbility
