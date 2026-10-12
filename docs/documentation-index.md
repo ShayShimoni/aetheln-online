@@ -87,6 +87,13 @@ subordinate to the specialized canonical product and technical documents.
   controlled space, attack lifecycle on the Issue #60 timeline, interruption,
   death and reset, replication, test plan, phased delivery, and open
   decisions.
+- [Animation and Combat-Content Authoring Pipeline](animation-and-combat-content-pipeline.md)
+  records the Issue #84 authoring contract: the authoritative attack
+  definition and client-only presentation binding split, the source,
+  retarget, intake, montage, and binding flow, the authoring validation
+  matrix, source-control expectations, the representative attack and
+  telegraph plan, ownership boundaries, phased delivery, owner actions, and
+  open decisions.
 - [Continuous Integration](continuous-integration.md) records the Issue #16
   prototype CI quality gates, required-versus-advisory checks, runner
   constraints, and machine-readable evidence path, plus the Issue #167
