@@ -1,5 +1,6 @@
 #include "AethelnPOCInputComponent.h"
 
+#include "AethelnHudWidget.h"
 #include "AethelnPOCOverlayWidget.h"
 #include "AethelnPlayerInputReceiver.h"
 #include "Blueprint/UserWidget.h"
@@ -389,6 +390,14 @@ void UAethelnPOCInputComponent::ActivateLocalPlayerResources()
 			OverlayWidget->AddToPlayerScreen();
 		}
 	}
+	if (HudWidget == nullptr)
+	{
+		HudWidget = CreateWidget<UAethelnHudWidget>(PlayerController, UAethelnHudWidget::StaticClass());
+		if (HudWidget != nullptr)
+		{
+			HudWidget->AddToPlayerScreen();
+		}
+	}
 
 	ApplyControlMode(ControlMode);
 }
@@ -422,6 +431,11 @@ void UAethelnPOCInputComponent::ReleaseLocalPlayerResources()
 	{
 		OverlayWidget->RemoveFromParent();
 		OverlayWidget = nullptr;
+	}
+	if (HudWidget != nullptr)
+	{
+		HudWidget->RemoveFromParent();
+		HudWidget = nullptr;
 	}
 	AppliedPlayerController.Reset();
 }
