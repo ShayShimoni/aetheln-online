@@ -8,6 +8,7 @@
 UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 {
 	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
+	CommitmentTag = AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain;
 	ResetTags.AddTag(AethelnGameplayTags::State_Dead);
 	// #18 Q17 and Q10: no attack while dodging or blocking. Each blocking tag is also a reset tag (grant rule).
 	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag() })

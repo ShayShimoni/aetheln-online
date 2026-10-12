@@ -31,6 +31,7 @@ public:
 		ProvisionalGuardBreakSeconds = 0.5f;
 	}
 
+	const FGameplayTagContainer& GetBlockedTagsForTests() const { return ActivationBlockedTags; }
 	void SetBlockedTagsForTests(const FGameplayTagContainer& Tags) { ActivationBlockedTags = Tags; }
 	void SetMovementCarriedForTests(bool bValue) { bMovementCarried = bValue; }
 };

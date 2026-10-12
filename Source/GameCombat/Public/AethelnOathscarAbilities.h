@@ -1,23 +1,24 @@
 #pragma once
 
-#include "AethelnGameplayAbility.h"
+#include "AethelnBasicChainAbility.h"
+#include "AethelnBlockAbility.h"
 #include "CoreMinimal.h"
 #include "AethelnOathscarAbilities.generated.h"
 
 /*
- * Skeletons of the three representative Oathscar actives (docs/characters-and-factions.md;
- * docs/gas-foundation.md, Abilities): identity, cooldown tag, activation, validation, cost
- * and cooldown only. Each constructor sets the structure; the config section of each class
- * in Config/DefaultGame.ini sets ContentVersion and the provisional cost and cooldown,
- * which stay TBD (#107, #45). Contacts, Guard results and windows belong to #60.
- *
- * None overrides ActivateAbility: the base commits once through CommitAbility and ends
- * directly. Gate Step, Sworn Rebuke and Hold the Line are working names.
+ * The three representative Oathscar actives (docs/characters-and-factions.md; #260 in
+ * docs/attack-timeline-and-combo.md, Representative actives). Gate Step and Sworn Rebuke
+ * are single-step attacks on #60's timeline: one authored step, its contact, Guard
+ * pressure and interruption rule, resolved on the server. Hold the Line is a held
+ * directional defense on #18's defense slot. Every value is config in the class's
+ * section of Config/DefaultGame.ini and stays TBD (#107, #45); unset values fail grant.
+ * Gate Step's advance (character displacement) is not here (#260 package B).
+ * Gate Step, Sworn Rebuke and Hold the Line are working names.
  */
 
 /** order.oathscar.ability.gate_step */
-UCLASS()
-class GAMECOMBAT_API UAethelnGateStepAbility : public UAethelnGameplayAbility
+UCLASS(Config = Game)
+class GAMECOMBAT_API UAethelnGateStepAbility : public UAethelnBasicChainAbility
 {
 	GENERATED_BODY()
 
@@ -26,8 +27,8 @@ public:
 };
 
 /** order.oathscar.ability.sworn_rebuke */
-UCLASS()
-class GAMECOMBAT_API UAethelnSwornRebukeAbility : public UAethelnGameplayAbility
+UCLASS(Config = Game)
+class GAMECOMBAT_API UAethelnSwornRebukeAbility : public UAethelnBasicChainAbility
 {
 	GENERATED_BODY()
 
@@ -35,9 +36,12 @@ public:
 	UAethelnSwornRebukeAbility();
 };
 
-/** order.oathscar.ability.hold_the_line. Duration-or-hold behavior is TBD (#107). */
-UCLASS()
-class GAMECOMBAT_API UAethelnHoldTheLineAbility : public UAethelnGameplayAbility
+/**
+ * order.oathscar.ability.hold_the_line. Held: a seam Press raises it and a Release lowers it
+ * (the duration-or-hold choice is an open owner decision; hold-and-release needs no invented value).
+ */
+UCLASS(Config = Game)
+class GAMECOMBAT_API UAethelnHoldTheLineAbility : public UAethelnBlockAbility
 {
 	GENERATED_BODY()
 

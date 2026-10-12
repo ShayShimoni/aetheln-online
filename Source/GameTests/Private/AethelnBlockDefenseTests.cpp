@@ -27,6 +27,7 @@ namespace AethelnBlockDefenseTests
 		Tags.AddTag(AethelnGameplayTags::State_GuardBroken);
 		Tags.AddTag(AethelnGameplayTags::State_Dodging);
 		Tags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+		Tags.AddTag(AethelnGameplayTags::State_Oathscar_HoldTheLine); // #260, Q10
 		return Tags;
 	}
 }

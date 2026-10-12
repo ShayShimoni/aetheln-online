@@ -48,6 +48,9 @@ protected:
 		bool bReplicateEndAbility,
 		bool bWasCancelled) override;
 
+	/** Constructor only: the state tag the slot and the loose tag carry (State.Blocking; Hold the Line its own). */
+	FGameplayTag DefenseStateTag;
+
 private:
 	/** The Guard hook: pressure once from the attacker's ASC; at zero Guard, the break. */
 	EAethelnBlockConsequence HandleBlockedHit(const FAethelnBlockedContact& Contact);

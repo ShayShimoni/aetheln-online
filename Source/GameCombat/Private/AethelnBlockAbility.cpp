@@ -12,6 +12,7 @@ UAethelnBlockAbility::UAethelnBlockAbility()
 	SetAbilityId(AethelnGameplayTags::Ability_Block);
 	SetCooldownTag(AethelnGameplayTags::Cooldown_Block);
 	bAcceptsRelease = true;
+	DefenseStateTag = AethelnGameplayTags::State_Blocking;
 	// Q8: no raise during a Guard break. Q10: no raise while dodging or inside the chain's commitment.
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_GuardBroken);
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Dodging);
