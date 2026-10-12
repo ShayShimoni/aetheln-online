@@ -44,7 +44,7 @@ function Get-PinnedPreparationYaml {
 	param(
 		[string] $PackagePath,
 		[string] $CacheRoot = [IO.Path]::GetTempPath(),
-		# Test seam: returns the package bytes as one byte[] (use ',$Bytes'). Retried up to five times with a doubling delay (issue #299).
+		# Test seam: returns the package bytes as one byte[] (use ',$Bytes'). Up to five attempts with a doubling delay (issue #299).
 		[scriptblock] $Download = {
 			Add-Type -AssemblyName System.Net.Http
 			$Client = [Net.Http.HttpClient]::new()

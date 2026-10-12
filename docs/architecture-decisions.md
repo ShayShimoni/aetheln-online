@@ -2119,19 +2119,19 @@ Every accepted decision records:
   loads does not make `editor_required` true. A superseded job writes a step
   summary line, since it ends green with every later step skipped. The
   `change-impact` portable-only set gains `.agents/**` and `tests/build/**`,
-  matching the selector, so such a pull request starts no engine job. The `.agents/**`
-  exemption supersedes TA-016's rejected exemption of the whole `.agents/` directory: the
-  issue #151 delivery harness that TA-016 protected is retired, only skill text
-  remains there, and the selector has treated the directory as portable-only
-  since issue #70 retired the delivery-harness obligation (commit af5cb46e).
-  TA-012's closed-set list above is historical and
-  is superseded by this amendment for those two paths. The hosted `powershell-yaml`
-  test download retries a failed transfer up to five times with a doubling
-  delay and never retries
-  wrong bytes. In the initial-preparation lease, a real sharing violation still
-  reaches the caller unmapped, as before; the only change is that a bare
-  non-sharing `IOException` from a cmdlet is no longer reported as `lease_held`.
-  No ceiling, trust predicate, or lease rule changes.
+  matching the selector, so such a pull request starts no engine job. The
+  `.agents/**` exemption supersedes TA-016's rejected exemption of the whole
+  `.agents/` directory: the issue #151 delivery harness that TA-016 protected
+  is retired, only skill text remains there, and the selector has treated the
+  directory as portable-only since issue #70 retired the delivery-harness
+  obligation (commit af5cb46e). TA-012's closed-set list above is historical
+  and is superseded by this amendment for those two paths. The hosted
+  `powershell-yaml` test download makes up to five attempts with a doubling
+  delay between them and never retries wrong bytes. In the initial-preparation
+  lease, a real sharing violation still reaches the caller unmapped, as before;
+  the only change is that a bare non-sharing `IOException` from a cmdlet is no
+  longer reported as `lease_held`. No ceiling, trust predicate, or lease rule
+  changes.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
