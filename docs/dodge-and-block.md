@@ -922,11 +922,11 @@ lifecycle cancellation without stale revival; D15 shares mixed-route flood
 coverage with T14/T21. Existing assertions and network-profile evidence remain
 required; these are future test obligations, not newly passing tests.
 
-CI runs a frozen two-test filter (`scripts/ci/Invoke-UnrealAutomationTests.ps1:14-15`),
-so each code PR records local automation evidence at its exact head on the
-pinned engine, as #19 and #60 do: P2 runs `Aetheln.Movement`; P3 and P4 run
-`Aetheln.GameCombat` and `Aetheln.Movement`; P5 runs `Aetheln.POC` and records
-the manual PIE steps.
+CI ran a frozen two-test filter until #237 widened it to every declared
+`Aetheln.` test, so each code PR records local automation evidence at its exact
+head on the pinned engine, as #19 and #60 do: P2 runs `Aetheln.Movement`; P3 and
+P4 run `Aetheln.GameCombat` and `Aetheln.Movement`; P5 runs `Aetheln.POC` and
+records the manual PIE steps.
 
 ## Acceptance-Criteria Mapping
 

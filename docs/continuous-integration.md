@@ -342,11 +342,11 @@ produce a compile, and it never bypasses the portable gates.
 The same step publishes `editor_required`, and `trusted-editor-automation`
 needs `change-impact` as well as the compile and runs only when
 `editor_required == 'true'`. The editor job builds the `AethelnOnlineEditor`
-target and runs the frozen two-test filter, so it matters only when the pull
-request changed engine content or the editor's own harness. `editor_required`
-is `true` when any changed path matches one of these, case-insensitively (the
-managed workspace is a case-insensitive Windows checkout, so a case variant
-runs the editor):
+target and runs every declared `Aetheln.` automation test (issue #237), so it
+matters only when the pull request changed engine content or the editor's own
+harness. `editor_required` is `true` when any changed path matches one of
+these, case-insensitively (the managed workspace is a case-insensitive Windows
+checkout, so a case variant runs the editor):
 
 - `Source/**`, `Config/**`, `Content/**`, `Plugins/**`, and
   `AethelnOnline.uproject`
@@ -1335,11 +1335,11 @@ The production PowerShell 5.1 runner is
 `scripts/ci/Invoke-UnrealAutomationTests.ps1`. It requires an explicit
 `-EngineRoot` for the source engine pinned to tag `5.8.1-release` and commit
 `71fe36aac5a8df5ccd66c763ffc902b29b6a9c43`; `-TimeoutSeconds` is optional and
-defaults to 600. It runs exactly the project/module-load smoke test and focused
-network-spike authority test under the frozen filter, validates exact discovery,
-and exits nonzero on every preflight, process, discovery, report, or test
-failure. The detailed contract and normalized report schema are in
-[Unreal Automation](unreal-automation.md).
+defaults to 600. Since issue #237 it runs every `Aetheln.` automation test that
+the tested revision declares under `Source/`, under the `^Aetheln.` filter,
+validates exact discovery against that declared set, and exits nonzero on every
+preflight, process, discovery, report, or test failure. The detailed contract
+and normalized report schema are in [Unreal Automation](unreal-automation.md).
 
 This production run is attainable on the accepted Issue #16 repository-scoped
 self-hosted Windows topology because that machine owns the pinned source engine
@@ -1934,8 +1934,8 @@ incremental compile policy.
   `aetheln.visual-package-report/v1`; and `unreal-editor-automation`
   revalidates the exact `aetheln.unreal-automation` report from the hosted
   `unreal-receipt-shadow` publisher (tested revision, pinned engine commit,
-  frozen filter, exactly two passing tests, clean repository after the run,
-  native exit `0`, no cleanup claim); and `content-reference-validation`
+  the `^Aetheln.` filter, one to 1024 unique `Aetheln.` tests that all pass,
+  clean repository after the run, native exit `0`, no cleanup claim); and `content-reference-validation`
   revalidates the exact `aetheln.content-validation-report` version-2 report
   from the hosted `content-receipt-shadow` publisher under the TA-025 claim
   boundary (tested revision, pinned engine, clean repository, live Asset

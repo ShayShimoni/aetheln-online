@@ -72,8 +72,9 @@ UE 5.8.1 source, revision `71fe36aac5`
    per-connection rate bucket, and outcomes go to the owner only.
 6. P2 to P5 merge without prediction. Predicting Hold the Line (P6) waits for
    an owner decision after the P5 feel test (candidate TC-008).
-7. CI runs a frozen two-test filter, so P2 to P5 record local automation
-   evidence. The spike classes are untouched.
+7. CI ran a frozen two-test filter, so P2 to P5 record local automation
+   evidence. Since #237, CI runs every declared `Aetheln.` test. The spike
+   classes are untouched.
 
 The PlayerState network update frequency is raised to a provisional 100 Hz
 under the config name `ProvisionalNetUpdateFrequency`; Issue
@@ -995,8 +996,9 @@ CI compiles the new code but runs only a frozen filter of two tests,
 `docs/unreal-automation.md:18-37`; receipt and aggregate pins
 `scripts/ci/New-CiAcceptanceReceipt.ps1:329-336`,
 `scripts/ci/Invoke-CiAcceptanceAggregate.ps1:610-617`,
-`docs/continuous-integration.md:513`). The new tests therefore do not run in
-CI. Under the repository rule to record manual test steps in the pull request
+`docs/continuous-integration.md:513`). The new tests therefore did not run in
+CI until #237, which runs every declared `Aetheln.` test. Under the repository
+rule to record manual test steps in the pull request
 when automation is unavailable, each of P2 to P5 records, at its exact head on
 the pinned engine, the `Automation RunTests` command, the revision, and the
 pass counts:
@@ -1062,5 +1064,5 @@ All stay `TBD` until the named owner decides.
 9. **Content version in the observability correlation fields.** Owner: #38,
    when #60 needs it.
 10. **Final display names** of the abilities, resources, and the Order.
-11. **Widening the CI automation filter** for the new test groups. A later
-    ticket under #85 and #167.
+11. **Widening the CI automation filter** for the new test groups. Resolved by
+    #237: CI runs every declared `Aetheln.` test.
