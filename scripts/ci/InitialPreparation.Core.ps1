@@ -509,10 +509,10 @@ function Enter-InitialPreparationLease {
 		$Stream.Flush($true)
 	} catch {
 		if ($null -ne $Stream) { $Stream.Dispose() }
-		# Only a sharing or lock violation (Win32 32 or 33) means another process holds the lease file (issue #299).
-		# A failed .NET call normally arrives wrapped in a MethodInvocationException, so the native violation
-		# reaches the caller unmapped, as tests/ci/EngineRunnerHostLease.Tests.ps1 pins; any other I/O failure
-		# is never reported as a held lease.
+		# Issue #299: only a sharing or lock violation (Win32 32 or 33) is reported as lease_held. A real sharing
+		# violation from the .NET open arrives wrapped in a MethodInvocationException, so it still reaches the caller
+		# unmapped, as tests/ci/EngineRunnerHostLease.Tests.ps1 pins. The guard changes one case: a bare IOException
+		# from a cmdlet that is not a sharing violation is no longer reported as lease_held.
 		if ($_.Exception -is [IO.IOException] -and ($_.Exception.HResult -band 0xFFFF) -in 32, 33) { throw 'lease_held' }
 		throw
 	}

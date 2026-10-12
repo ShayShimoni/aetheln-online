@@ -146,8 +146,8 @@ function Test-LeaseAndOwnershipContract {
 
 	$OtherAttempt = Get-TestAttempt -Id 'concurrent-attempt'
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $OtherAttempt -LeasePath $LeasePath } -Reason 'lease_held' -Message 'A concurrent attempt must not take an existing live lease.'
-	# Issue #299: only a sharing or lock violation may be reported as a held lease. A lease file held open by
-	# another handle still surfaces the native sharing violation (tests/ci/EngineRunnerHostLease.Tests.ps1 pins this).
+	# Issue #299 characterization: a lease file held open by another handle surfaces the native sharing violation to the caller,
+	# unmapped, as before (tests/ci/EngineRunnerHostLease.Tests.ps1 pins this).
 	$ExternalLease = Initialize-LeaseFixture -Name 'external-holder'
 	$ExternalHolder = [IO.File]::Open($ExternalLease, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 	$ExternalFailure = $null
@@ -159,9 +159,7 @@ function Test-LeaseAndOwnershipContract {
 	} finally { $ExternalHolder.Dispose() }
 	Assert-True -Condition ($ExternalFailure -is [IO.IOException] -and ($ExternalFailure.HResult -band 65535) -eq 32) -Message 'A lease file held open by another handle must surface the native sharing violation.'
 	$MissingParent = Join-Path (Join-Path (Split-Path -Parent (Initialize-LeaseFixture -Name 'missing-parent')) 'absent') 'preparation.lease.json'
-	$MissingFailure = $null
-	try { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id 'missing-parent-attempt') -LeasePath $MissingParent | Out-Null } catch { $MissingFailure = [string] $_.Exception.Message }
-	Assert-True -Condition ($null -ne $MissingFailure -and $MissingFailure -cne 'lease_held') -Message "An I/O failure that is not a sharing violation must not be reported as lease_held; received '$MissingFailure'."
+	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt (Get-TestAttempt -Id 'missing-parent-attempt') -LeasePath $MissingParent } -Reason 'lease_path_invalid' -Message 'A lease path whose parent directory is missing is rejected as lease_path_invalid before any file is opened, never as lease_held.'
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $Attempt -LeasePath (Join-Path $RepositoryRoot 'unsafe.lease.json') } -Reason 'lease_path_invalid' -Message 'A repository-contained lease must be rejected.'
 	Assert-Rejected -Action { Enter-InitialPreparationLease -Attempt $Attempt -LeasePath 'relative.lease.json' } -Reason 'lease_path_invalid' -Message 'A relative lease path must be rejected.'
 
