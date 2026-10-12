@@ -81,6 +81,12 @@ subordinate to the specialized canonical product and technical documents.
   arc, and Guard hook it exposes to Issue #60, prediction and outcome
   reporting, telemetry, test plan, phased delivery, owner decisions, and open
   decisions.
+- [Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md) records
+  the Issue #83 implementation spec for the prototype enemy: the server-only
+  state machine (TA-026), perception and target eligibility, navigation in the
+  controlled space, attack lifecycle on the Issue #60 timeline, interruption,
+  death and reset, replication, test plan, phased delivery, and open
+  decisions.
 - [Animation and Combat-Content Authoring Pipeline](animation-and-combat-content-pipeline.md)
   records the Issue #84 authoring contract: the authoritative attack
   definition and client-only presentation binding split, the source,
