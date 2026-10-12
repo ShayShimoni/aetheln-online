@@ -311,8 +311,10 @@ three steps, every value is finite, and:
   of letting the step start.
 
 P5 adds `InterruptibleUntil` and `bInterruptsTarget` to the step struct, with
-the rule `0 <= InterruptibleUntil <= RecoveryEnd`, extends A5, and bumps the
-chain's `ContentVersion`.
+the rule `0 <= InterruptibleUntil <= RecoveryEnd`, and extends A5. The
+production chain has no configured `ContentVersion` yet, so P5 bumps nothing;
+the first configured version includes these fields (see
+[Interruption](#interruption)).
 
 `LinkClose >= RecoveryEnd` keeps a late press out of recovery: after the link
 closes, the character is already free and the press starts a new chain. The
@@ -627,6 +629,49 @@ inside its interruptible window at that contact time
 (`ContactTime < TargetStepStart + InterruptibleUntil`). Both fields arrive in
 P5. The same mechanism serves #20's enemy steps and, in #260, Sworn Rebuke's
 authored rule. Resolve and control families are not prototype scope.
+
+P5 delivers it as follows:
+
+- **Hits only.** Only a non-lethal `Hit` interrupts. An `Avoided`, `Blocked`,
+  or `GuardBroken` result and a lethal hit never do (resolution step 7; a
+  Guard break has no interruption, #18 Q8).
+- **The step at the contact time.** The target's current step is its
+  registered step whose interval from its start to its reset time holds the
+  contact time. Pass step 1 may already have started a buffered step later in
+  the same frame; a contact before that start belongs to the step before it.
+- **Reset.** The interruption stamps every registered step of the target at
+  the contact time, then calls `ResetChain(Interrupted, ContactTime)`. A
+  buffered step that started after the contact never started: its contacts
+  fail revalidation, the owner gets no record for it, and the chain end names
+  its activation (A28's interruption row).
+- **Held records.** So that such a record can be withheld, a buffered start
+  made by the pass holds its `ClientCombatActivation` until pass step 5. A
+  reset sends a held record before its chain end when the reset time is at or
+  after the step's start, and drops it otherwise. A step that starts on a
+  request still sends its record at once. While a record is held, no further
+  step of that chain starts (it cannot in practice: a held record lives only
+  inside one pass).
+- **Record.** The record's windows carry `InterruptibleUntil`.
+- **Content version.** The production chain has no configured
+  `ContentVersion` yet (no ini section; unset values fail the grant), so P5
+  has nothing to bump; the first configured version includes the P5 fields.
+  The test fixture keeps version 1.
+- **Enemy targets.** An enemy has no chain. Interrupting one only stamps its
+  registered steps, so their later contacts drop; #20 decides what else an
+  interrupted enemy step does.
+- **Exact trades.** Contacts at the same time resolve by activation ordinal
+  (see [Total order](#total-order)). When two interrupting steps hit each
+  other at the same contact time, the earlier-registered activation resolves
+  first. Its interruption stamps the other side at that time, so the other
+  contact fails revalidation and the earlier-registered activation wins the
+  trade outright. This is the current rule, not a tuned choice; the owner may
+  choose a different tie rule (for example, both hits land).
+- **Victim lockout (open owner decision).** An interruption ends the
+  victim's chain and removes its commitment tag at the contact time. So the
+  victim may dodge, block, or start a new step 1 in the same frame, even when
+  the hit landed inside its commitment window. No stagger, hit-stun, or
+  lockout is defined, and P5 invents none. What lockout an interrupted victim
+  gets is OQ10 in [Open Questions for the Owner](#open-questions-for-the-owner).
 
 ### Relation
 
@@ -974,7 +1019,7 @@ files untouched.
 | **P2** Request and aim | Schema 2, steps 6a to 6d in the pure validator, last accepted raw aim and time, the two result values, rejection and correction telemetry, client fill with `FlushServerMoves`, the four replicated-data overrides, the #19 fixture and specification changes (dependencies 3 to 5); A1 to A3, A16. | #19 P3 |
 | **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17, A25, A27. No contacts yet. | P2, #19 P4 |
 | **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, A28 (without its interruption row), A29, and the sweep and contact rows of A4, A7, and A27; the P3 review follow-ups (sequence advance for a committed start that fails, the `InternalFailure` chain-end label, the extra negative tests). | P3 |
-| **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct with a content-version bump; A15 and the A5 rows. | P4 |
+| **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct (no configured chain `ContentVersion` exists to bump); A15 and the A5 rows. | P4 |
 | **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
 
 Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result are not
@@ -1010,6 +1055,13 @@ numbers are the original question numbers.
   registration refusal): the request reports `InternalFailure`, the cost stays
   spent, and since P4 the accepted sequence advances so a replay cannot spend
   again.
+- **OQ10, interrupted victim lockout.** An interrupting hit ends the victim's
+  chain and releases its commitment at the contact time, so the victim can
+  dodge, block, or attack again in the same frame (see
+  [Interruption](#interruption)). Should an interrupted victim get a lockout,
+  stagger, or hit-stun, and of what kind? Any duration is #107 tuning. No
+  recommendation on the duration; P5 keeps the current behaviour until the
+  owner decides.
 
 Decisions that belong to other owners, recorded so they are not lost: rewind
 and any client-time window evaluation (#2, TC-002); every numeric bound,
