@@ -4,7 +4,9 @@
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnGameplayAbility.h"
+#include "AethelnGameplayTags.h"
 #include "GameFramework/Pawn.h"
+#include "GameplayEffect.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityGrant, Log, All);
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityAvatar, Log, All);
@@ -33,6 +35,27 @@ void AAethelnPlayerState::PostInitializeComponents()
 	// pawn yet, so this sets the avatar to null on the server and on clients.
 	AbilitySystemComponent->InitAbilityActorInfo(this, GetPawn());
 	OnPawnSet.AddUniqueDynamic(this, &AAethelnPlayerState::HandlePawnSet);
+
+	// HUD (#61): owner outcomes become presentation-safe HUD events. The ASC is this
+	// actor's subobject, so these bindings live exactly as long as both.
+	AbilitySystemComponent->OnActivationOutcome.AddWeakLambda(this, [this](uint32 Sequence, EAethelnActivationResult Result)
+	{
+		HudActionOutcome.Broadcast(ToHudOutcome(Sequence, Result));
+	});
+	AbilitySystemComponent->OnMovementActivationOutcome.AddWeakLambda(this, [this](float /* ClientTimeStamp */, EAethelnActivationResult Result)
+	{
+		HudActionOutcome.Broadcast(ToHudOutcome(0, Result));
+	});
+	AbilitySystemComponent->OnCombatActivation.AddWeakLambda(this, [this](const FAethelnCombatActivationRecord& Record)
+	{
+		if (Record.AimCorrection == EAethelnAimCorrection::AimCorrected)
+		{
+			FAethelnHudActionOutcome Outcome;
+			Outcome.Kind = EAethelnHudOutcomeKind::Corrected;
+			Outcome.Sequence = Record.Sequence;
+			HudActionOutcome.Broadcast(Outcome);
+		}
+	});
 }
 
 UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const
@@ -58,12 +81,50 @@ bool AAethelnPlayerState::TryAuthorizeDodge(const FAethelnDodgeStartRequest& Req
 
 FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
 {
-	return FAethelnHudSnapshot(); // Red-first stub (#61).
+	FAethelnHudSnapshot Snapshot;
+	if (AttributeSet == nullptr || AbilitySystemComponent == nullptr)
+	{
+		return Snapshot;
+	}
+	auto Read = [](float Current, float Max)
+	{
+		FAethelnHudResource Resource;
+		Resource.Current = Current;
+		Resource.Max = Max;
+		Resource.bKnown = true;
+		return Resource;
+	};
+	Snapshot.Health = Read(AttributeSet->GetHealth(), AttributeSet->GetMaxHealth());
+	Snapshot.Endurance = Read(AttributeSet->GetEndurance(), AttributeSet->GetMaxEndurance());
+	Snapshot.Guard = Read(AttributeSet->GetGuard(), AttributeSet->GetMaxGuard());
+
+	// Every owned Cooldown.* tag plus the timed states listed here; #292's recovery delays can join this list.
+	FGameplayTagContainer TimedTags;
+	TimedTags.AddTag(FGameplayTag::RequestGameplayTag(TEXT("Cooldown")));
+	TimedTags.AddTag(AethelnGameplayTags::State_GuardBroken);
+	for (const FGameplayTag& Tag : AbilitySystemComponent->GetOwnedGameplayTags().Filter(TimedTags))
+	{
+		FAethelnHudTimedState& State = Snapshot.TimedStates.AddDefaulted_GetRef();
+		State.Tag = Tag;
+		for (const float Seconds : AbilitySystemComponent->GetActiveEffectsTimeRemaining(FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(FGameplayTagContainer(Tag))))
+		{
+			State.RemainingSeconds = FMath::Max(State.RemainingSeconds, Seconds);
+		}
+	}
+	return Snapshot;
 }
 
 FAethelnHudActionOutcome AAethelnPlayerState::ToHudOutcome(uint32 Sequence, EAethelnActivationResult Result)
 {
-	return FAethelnHudActionOutcome(); // Red-first stub (#61).
+	FAethelnHudActionOutcome Outcome;
+	Outcome.Sequence = Sequence;
+	if (Result != EAethelnActivationResult::Accepted)
+	{
+		// The owner already receives this result; its name carries no server-only detail.
+		Outcome.Kind = EAethelnHudOutcomeKind::Rejected;
+		Outcome.Reason = FName(*StaticEnum<EAethelnActivationResult>()->GetNameStringByValue(static_cast<int64>(Result)));
+	}
+	return Outcome;
 }
 
 bool AAethelnPlayerState::IsGrantableAbilitySpec(const FGameplayAbilitySpec& Spec)
