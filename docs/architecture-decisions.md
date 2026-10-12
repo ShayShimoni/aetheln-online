@@ -2488,9 +2488,11 @@ Every accepted decision records:
     like it, no `-Compiler`, so after the editor job the launcher's build is
     expected to be a no-op rather than a toolchain switch. Like it, the
     launcher also passes `-NoEngineChanges` (TA-020 2026-10-06 amendment,
-    issue #267): the editor job finishes successfully even when its build
-    fails, so the content job still starts, and its build holds no engine
-    host lease; UBT then exits 5 instead of rewriting an existing engine file.
+    issue #267): its build holds no engine host lease, so UBT exits 5
+    instead of rewriting an existing engine file. In CI the content job starts
+    only after a clean editor outcome (`automation_reason` `none`), so the flag
+    there guards against an engine tree that changed between the two jobs; it
+    also guards every local launcher run.
     A launcher test pins the flag and the two values to
     `InitialPreparation.BuildInvocation.ps1`. Because UBT
     logs its toolchain line only when it executes actions, the launcher reads
