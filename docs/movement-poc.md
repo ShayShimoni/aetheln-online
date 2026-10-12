@@ -409,6 +409,29 @@ root; `CharacterMovementComponent.cpp` below is
   the tuning table below), every value in this section is an engine default,
   not a tuned project decision, kept until evidence resolves it.
 
+### Server rejections (issue #17 AC4)
+
+How the server answers the invalid inputs named in AC4, and the test that
+covers each. The tests describe current engine and project behavior. They add or
+change no threshold. Time-discrepancy detection stays off, and its thresholds
+stay `TBD` (#2, #45). The `Reject.*` tests differ in how the hostile input is
+made. The mode and acceleration tests rewrite the client's saved move right
+before the engine packs it, the stale test replays earlier honest packets after
+newer ones, and the displacement test moves the client and then predicts
+normally. Every move goes through the real packed move path.
+
+| Input | Server response | Test |
+| --- | --- | --- |
+| Sprint or aim flag the simulation does not allow | Sprint speed is granted only when the server's own move is eligible; aim facing is rate limited | `InvalidSprintRejected`, `FacingSpoofBounded` |
+| Speed beyond the cap | Server speed is capped per move, with its own walk, sprint and backpedal limits | `ServerSpeedClamp` |
+| Claimed movement mode | Correction, and the server keeps its own mode (`ServerExceedsAllowablePositionError`) | `Reject.ClientModeMismatch` |
+| Stale timestamp | Move is dropped before simulation (`IsClientTimeStampValid`) | `Reject.StaleTimestamp` |
+| Duplicate timestamp | Move is dropped before simulation | `LoopbackTransport` |
+| Acceleration over the limit | Not rejected: the server clamps the claim to `MaxAcceleration` and simulates the clamped value | `Reject.AccelerationOverLimit` |
+| Large displacement | Correction; the server does not adopt the client location (`ClientAuthorativePosition=false`) | `Reject.DisplacementTeleport` |
+| Invalid transition | Partly covered. A claimed mode change is corrected (`Reject.ClientModeMismatch`), an ineligible sprint state gets no sprint speed (`InvalidSprintRejected`, `AethelnCharacterMovementComponent.cpp:947`), and a refused dodge start is rolled back (`DodgeRefusedRollsBack`, `AethelnDodgeMovementTests.cpp:352`). Gap: no dedicated test sends other illegal transition sequences, such as a jump request while airborne, so that part of AC4 is not covered | `Reject.ClientModeMismatch`, `InvalidSprintRejected`, `DodgeRefusedRollsBack` |
+| Rotation | Not corrected: facing is derived by the server and rate limited | `FacingSpoofBounded`, `AirborneFacingBounded` |
+
 ## Verification and feedback
 
 The mouse-button observations in the historical tuning table below describe
