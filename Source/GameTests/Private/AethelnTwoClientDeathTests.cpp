@@ -5,6 +5,7 @@
 #include "AethelnCombatGameMode.h"
 #include "AethelnCombatTestWorld.h"
 #include "AethelnCombatTimelineSubsystem.h"
+#include "AethelnDeathSubsystem.h"
 #include "AethelnGameplayTags.h"
 #include "AethelnPlayerState.h"
 #include "Components/PIENetworkComponent.h"
@@ -38,6 +39,7 @@ namespace AethelnTwoClientDeathTests
 		bool bImpaired = false;
 		int32 VictimPlayerId = INDEX_NONE;
 		TWeakObjectPtr<APawn> ServerCorpse;
+		double ServerDeathTime = 0.0;
 		TWeakObjectPtr<APawn> ClientCorpse[2];
 		int32 ServerCues = 0;
 		int32 ClientCues[2] = { 0, 0 };
@@ -161,8 +163,9 @@ namespace AethelnTwoClientDeathTests
 				AethelnCombatTests::ApplyInstantModifier(Victim, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::Override, 0.0f);
 				UAethelnCombatTimelineSubsystem* Timeline = Server.World->GetSubsystem<UAethelnCombatTimelineSubsystem>();
 				if (!R->Test.TestNotNull(TEXT("The server world has the combat timeline"), Timeline)) { return; }
-				Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), Server.World->GetTimeSeconds());
-				Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), Server.World->GetTimeSeconds());
+				R->ServerDeathTime = Server.World->GetTimeSeconds();
+				Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), R->ServerDeathTime);
+				Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), R->ServerDeathTime);
 				R->ServerCorpse = Cast<APawn>(Victim.GetAvatarActor());
 				R->Test.TestTrue(TEXT("The server holds State.Dead on A"), Victim.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
 				R->Test.TestEqual(TEXT("The server raises one death cue for one death and a repeat"), R->ServerCues, 1);
@@ -182,11 +185,19 @@ namespace AethelnTwoClientDeathTests
 				const AAethelnPlayerState* PlayerState = ClientVictim(Client, R->VictimPlayerId);
 				return PlayerState != nullptr && PlayerState->GetAethelnAbilitySystemComponent()->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead);
 			}, Timeout)
-			.UntilServer(TEXT("The server respawns A after the configured delay"), [R](FState& Server)
+			.UntilServer(TEXT("The server respawns A, no earlier than the configured delay"), [R](FState& Server)
 			{
 				const UAethelnAbilitySystemComponent* Victim = ServerAbilitySystem(Server, VictimClient);
 				const APawn* Avatar = Victim != nullptr ? Cast<APawn>(Victim->GetAvatarActor()) : nullptr;
-				return Avatar != nullptr && Avatar != R->ServerCorpse.Get() && !Victim->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead);
+				if (Avatar == nullptr || Avatar == R->ServerCorpse.Get() || Victim->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead)) { return false; }
+				// Lower bound only, from the ini value the server uses (R4 owns the exact deadline): never before death time plus the delay.
+				const UAethelnDeathSubsystem* Death = Server.World->GetSubsystem<UAethelnDeathSubsystem>();
+				if (R->Test.TestNotNull(TEXT("The server world has the death subsystem"), Death))
+				{
+					R->Test.TestTrue(TEXT("The respawn comes no earlier than the death time plus the configured delay"),
+						Server.World->GetTimeSeconds() >= R->ServerDeathTime + Death->ProvisionalRespawnDelaySeconds);
+				}
+				return true;
 			}, Timeout)
 			.UntilClients(TEXT("Both clients receive A's new avatar without State.Dead"), [R](FState& Client)
 			{
@@ -212,12 +223,17 @@ namespace AethelnTwoClientDeathTests
 		Framework.EnqueueLatentCommand(Run->Builder.Build());
 		Framework.EnqueueLatentCommand(Run->Builder.BuildTearDown());
 		// Wait for the editor to end the PIE session, then release the run (the last reference to the lambdas' state).
-		Framework.EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>([Run]()
+		// Bounded like CQTest's own steps, so a PIE session that never ends fails this test by name instead of the suite timeout.
+		Framework.EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>([Run, Start = TOptional<FDateTime>()]() mutable
 		{
+			if (!Start.IsSet()) { Start = FDateTime::UtcNow(); }
+			bool bPieEnded = true;
 			for (const FWorldContext& Context : GEngine->GetWorldContexts())
 			{
-				if (Context.WorldType == EWorldType::PIE && Context.World() != nullptr) { return false; }
+				bPieEnded &= !(Context.WorldType == EWorldType::PIE && Context.World() != nullptr);
 			}
+			if (!bPieEnded && FDateTime::UtcNow() - Start.GetValue() < FTimespan::FromSeconds(30.0)) { return false; }
+			if (!bPieEnded) { Run->Test.AddError(FString::Printf(TEXT("%s: PIE did not end within 30 s after the R5 teardown"), *Run->Test.GetTestFullName())); }
 			return true;
 		}));
 	}

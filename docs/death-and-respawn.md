@@ -245,9 +245,11 @@ are zero until #107. Client 0 is player A, the victim; client 1 is player B.
   through the timeline's lethal notification and repeats the notification. A's
   own client and B's client both observe `State.Dead` on A. A's own client is
   corrected to `MOVE_None`; `ReplicatedMovementMode` is simulated-only, so the
-  owner can only reach it through a move correction. After the configured
-  delay, both clients receive A's new avatar, used by their copy of A's ASC,
-  without `State.Dead`, and A's own client receives the restored Health.
+  owner can only reach it through a move correction. The server respawns A no
+  earlier than the death time plus `ProvisionalRespawnDelaySeconds` (a lower
+  bound read from config; R4 owns the exact deadline). Both clients then
+  receive A's new avatar, used by their copy of A's ASC, without `State.Dead`,
+  and A's own client receives the restored Health.
 - **Health split** (owner decision on
   [#61](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)):
   B's client receives A's Health and MaxHealth. B's copy of A's Endurance,
@@ -266,9 +268,14 @@ are zero until #107. Client 0 is player A, the victim; client 1 is player B.
 - **Latency and loss.**
   `Aetheln.GameCombat.Death.TwoClientDeathAndRespawnImpaired` runs the same
   steps with `PktLag=100` (ms) and `PktLoss=5` (percent) on the server's and
-  both clients' net drivers. These are test settings, not the #45 network
-  profile. Under loss it asserts only that no client receives a second cue,
-  because the cue is unreliable by design.
+  both clients' net drivers. CQTest applies the settings after the client
+  worlds exist, so the connection handshake is not under loss. These are test
+  settings, not the #45 network profile. The impaired run proves that the
+  reliable paths settle under lag and loss: `State.Dead`, the replicated
+  attributes, the `MOVE_None` correction, and the new avatar. It checks only
+  that no client receives a second cue; cue delivery is covered by the clean
+  link and R1, because the cue is unreliable by design. The loss is random
+  with no fixed seed.
 
 ## Reconnect and Carried State (P4, design)
 
@@ -307,7 +314,7 @@ effects, and a second grant. P4 closes it:
 | R2 | `Aetheln.GameCombat.Death.DeadPlayerRefusesActions` | P1 | Death mid-chain ends the chain once with `IncompatibleState`, resolves no later contact, refuses the next press with `ActivationBlocked`, and sets the avatar's movement to `MOVE_None` |
 | R3 | `Aetheln.GameCombat.Death.RespawnFailsClosed` | P2 | The ini delay is finite and positive; an unset, negative, or non-finite delay, a world with no game mode, and a maximum Health of zero each keep the player dead, with one logged refusal and no retry |
 | R4 | `Aetheln.GameCombat.Death.RespawnAfterDelay` | P2 | No respawn before the deadline (death time plus the delay); then `State.Dead` and the death effect are gone, Health, Endurance, and Guard equal their maxima and the maxima did not move, a new pawn is the avatar and the corpse is destroyed, no ability is granted again, a cooldown keeps counting, no chain, dodge window, or other state from the previous life remains, one chain end overall, a second respawn is refused, and the player starts a chain again. The chain reset is stamped at the lethal contact time |
-| R5 | `Aetheln.GameCombat.Death.TwoClientDeathAndRespawn`, `Aetheln.GameCombat.Death.TwoClientDeathAndRespawnImpaired` | P3 | AC2 and DoD1 on a dedicated server with two PIE clients: both clients see `State.Dead` on the victim, the owner is corrected to `MOVE_None`, and both receive the new avatar without `State.Dead`; B receives the victim's Health and MaxHealth but not its Endurance or Guard; on a clean link the death cue reaches each client once; the impaired run repeats the steps at 100 ms lag and 5 % loss |
+| R5 | `Aetheln.GameCombat.Death.TwoClientDeathAndRespawn`, `Aetheln.GameCombat.Death.TwoClientDeathAndRespawnImpaired` | P3 | AC2 and DoD1 on a dedicated server with two PIE clients: both clients see `State.Dead` on the victim, the owner is corrected to `MOVE_None`, the server respawns no earlier than the configured delay, and both clients receive the new avatar without `State.Dead`; B receives the victim's Health and MaxHealth but not its Endurance or Guard; on a clean link the death cue reaches each client once; the impaired run repeats the steps at 100 ms lag and 5 % loss |
 | R6 | Reconnect while alive, dead, and respawning | P4 | AC5; T34 flips |
 | R7 | `Aetheln.GameCombat.Death.GuardBreakThenDeath` | P2 | A real Guard break with a running chain, then death: the break effect and tag are gone, Guard stays zero and its recovery is kept and paused, one death effect, and the chain ends once as `IncompatibleState` |
 | R8 | `Aetheln.GameCombat.Death.RespawnRefusesNonDeadAndNonPlayer` | P2 | A living player and a dead AI (`State.Dead` and zero Health, no `PlayerState` owner) are refused with nothing changed; a death from `ApplyDeath` with no contact starts the same wait and the same single respawn |
