@@ -185,7 +185,7 @@ bool FAethelnAbilitiesCostAndCooldownCommitTest::RunTest(const FString& Paramete
 		Fixture.Commits = 0;
 		Fixture.CancelledEnds = 0;
 
-		// The previous ability is still on its own cooldown (EndActivation keeps it here), so acceptance also shows the cooldowns are independent.
+		// The previous ability is still on its own cooldown (EndActivation keeps it here), so acceptance also shows the cooldowns are independent (#260 P3).
 		ExpectResult(*this, Name + TEXT(": accepted"), Fixture.Submit(Index), EResult::Accepted);
 		TestEqual(Name + TEXT(": one cost effect"), Fixture.CostEffects, 1);
 		TestEqual(Name + TEXT(": Endurance spent once"), Fixture.Endurance(), EnduranceBefore - Cost);

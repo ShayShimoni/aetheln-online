@@ -483,6 +483,9 @@ Bumps are manual and checked in review.
 | `State.Oathscar.SwordShieldBasicChain` | (commitment state of the above) | #60 P3 |
 | `State.Oathscar.InstantStrike` | (commitment state of Instant Strike) | #260 P2 |
 | `Cooldown.Oathscar.InstantStrike` | (cooldown state of Instant Strike) | #260 P2 |
+| `Ability.Oathscar.Parry` | `order.oathscar.ability.parry` | #260 P3 |
+| `State.Oathscar.Parrying`, `Cooldown.Oathscar.Parry` | (window state and cooldown state of the Parry) | #260 P3 |
+| `State.Staggered`, `SetByCaller.Stagger.Duration` | (stagger state of a parried player attacker; duration of its effect) | #260 P3 |
 | `State.Dead` | (death flow state) | Declared by #19, applied by #21 |
 | `Damage.Wrought` | `combat.damage.wrought` | #60 P4 |
 | `SetByCaller.Damage.Wrought` | (negated Wrought magnitude of the shared damage effect) | #60 P4 |

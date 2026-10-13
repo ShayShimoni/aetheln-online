@@ -147,7 +147,7 @@ only if they are declared in GameCore, and reaches player state only through
 | `UAethelnCombatAttributeSet` | GameCombat | `Health`, `MaxHealth`, `Endurance`, `MaxEndurance`, `Guard`, `MaxGuard`. |
 | `AethelnActivationTypes.h` | GameCombat | `FAethelnCombatActivationRequest`, `EAethelnActivationPhase`, `EAethelnActivationResult` (client-facing mirror of the safe reasons). |
 | `UAethelnGameplayAbility` (abstract) | GameCombat | Base ability: reads config, overrides `CheckCost`, `ApplyCost`, `GetCooldownTags`, `ApplyCooldown`, `CanActivateAbility` (the choke point), and `CommitAbility` (records the seam's result slot), refuses the partial `CommitAbilityCost` and `CommitAbilityCooldown`, fixes the net and instancing policies, leaves the engine cost and cooldown effect classes null. |
-| `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnInstantStrikeAbility` (#260 P2), which replaced the superseded skeletons; `UAethelnParryAbility`, `UAethelnAttackStanceAbility`, and `UAethelnDefenseStanceAbility` follow in #260 P3 and P4 ([Representative Oathscar Actives](#representative-oathscar-actives-260)). |
+| `AethelnOathscarAbilities.h/.cpp` | GameCombat | `UAethelnInstantStrikeAbility` (#260 P2), which replaced the superseded skeletons, and `UAethelnParryAbility` (#260 P3); `UAethelnAttackStanceAbility` and `UAethelnDefenseStanceAbility` follow in #260 P4 ([Representative Oathscar Actives](#representative-oathscar-actives-260)). |
 | `AethelnCombatEffects.h/.cpp` | GameCombat | `UAethelnCooldownEffect`, `UAethelnEnduranceCostEffect`, `UAethelnAttributeInitEffect` (maxima first), and #292's `UAethelnEnduranceRecoveryEffect` and `UAethelnGuardRecoveryEffect` ([Resource Recovery](#resource-recovery)). All magnitudes set by caller. |
 | `AAethelnCombatGameMode` | GameCombat | Derives from `AGameModeBase` (for example through `AAethelnGameModeBase`), never `AGameMode`: `AGameMode::FindInactivePlayer` (`Runtime/Engine/Private/GameMode.cpp:687-751`) would reuse the old PlayerState on reconnect, which breaks the sequence policy and T34. A later base-class change must revisit both. Sets `PlayerStateClass`. The input-enabled pawn is a generated Blueprint, so P5 selects it by a config soft-class path, never by editing binary assets by hand: `InputEnabledPawnClass` (`Config/DefaultGame.ini`, `/Game/POC/BP_MovementPOCCharacter`) is returned from `GetDefaultPawnClassForController`, and an empty or unloadable path keeps `DefaultPawnClass`. The mode is not the project default; a launch selects it with `?game=/Script/GameCombat.AethelnCombatGameMode`, which overrides the map's game mode. |
 | `AAethelnCombatAICharacter` | GameCombat | Base for Issue [#20](https://github.com/ShayShimoni/aetheln-online/issues/20)'s enemy: its own ASC in Minimal mode and its own attribute set. |
@@ -533,13 +533,14 @@ All three derive from `UAethelnGameplayAbility`.
   the spike (`Source/GameCombat/Public/AethelnSpikeAuthorityComponent.h:60-70`).
   Identity, cooldown tag, and activation tag rules are structure in the C++
   constructor. Until #107 and #45 decide, each section sets `ContentVersion=1`
-  and both placeholders to 0, which means no cost and no cooldown; automation
-  tests set their own values on the granted instances. `AAethelnPlayerState`
-  grants the three, in order, from `+GrantedAbilities` entries in its own
-  section.
+  and both placeholders to 0, which is unset: a zero cost is no cost, and for
+  an ability that must have a cooldown (Instant Strike, K1) a zero cooldown
+  fails grant. Automation tests set their own values on fixture subclasses.
+  `AAethelnPlayerState` grants the abilities listed in its own `+GrantedAbilities`
+  entries, none of the #260 actives until their values exist.
 - **`State.Dead`** blocks every project ability: the base constructor adds it
   to `ActivationBlockedTags`.
-- **Phase:** Press only by default; `bAcceptsRelease = false` for all three.
+- **Phase:** Press only by default; `bAcceptsRelease = false` for every representative active.
 - **`CostGameplayEffectClass` and `CooldownGameplayEffectClass` stay null.**
   The overrides apply the shared effects directly, so the engine's cost check
   never evaluates set-by-caller magnitudes that have no value.
@@ -556,12 +557,13 @@ All three derive from `UAethelnGameplayAbility`.
   itself directly with `EndAbility`, as the seam's `EndForRelease` does, whether
   or not its commit succeeded. A C++ subclass could still call `ApplyCost`,
   `ApplyCooldown`, or `CommitExecute` directly, which Blueprint cannot; review
-  refuses that, so `CommitAbility` stays the only spend. An ability that does not override
-  `ActivateAbility` inherits the base one, which follows both rules. The
-  chain's `ActivateAbility`, which Instant Strike inherits, commits once through `CommitAbility`, then joins the timeline and
-  ends at its `RecoveryEnd`, and T17 pins that path for the strike; the plain
-  cost-commit test ability in the Editor test module pins the base one (the
-  recovery test). An active that holds its own state tag uses
+  refuses that, so `CommitAbility` stays the only spend. An ability that
+  does not override `ActivateAbility` inherits the base one, which follows both
+  rules. The chain's `ActivateAbility`, which Instant Strike inherits,
+  commits once through `CommitAbility`, then joins the timeline and ends at
+  its `RecoveryEnd`; T17 pins that path for the strike. The plain cost-commit
+  test ability in the Editor test module pins the base one (the recovery
+  test). An active that holds its own state tag uses
   `State.<Order>.<Name>` under the conventions (for example
   `State.Oathscar.Parrying`, a technical identifier, not a display name); the
   PR that creates it adds it to the Initial entries table. The #260 actives
@@ -765,14 +767,14 @@ value is set here except the owner's provisional 600 s stance duration.
 | Relation | Rule | Status |
 | --- | --- | --- |
 | Instant Strike inside the chain's commitment window | Refused with `ActivationBlocked`, as dodge and block are | Decided (owner, 2026-10-13, [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142792186)); implemented in P2 |
-| Instant Strike or Parry while dodging or blocking | Refused (`State.Dodging`, `State.Blocking` in their blocking tags) | Default carried from the owner's 2026-10-12 relations for the earlier actives; open to confirm. Instant Strike implemented in P2 |
+| Instant Strike or Parry while dodging or blocking | Refused (`State.Dodging`, `State.Blocking` in their blocking tags) | Default carried from the owner's 2026-10-12 relations for the earlier actives; open to confirm. Instant Strike implemented in P2; Parry implemented in P3 |
 | Any action inside Instant Strike's own commitment window | Refused, as for the chain's commitment tag | Default, open. Implemented in P2: `State.Oathscar.InstantStrike` is a blocking tag of the dodge, the block, and the chain (and a reset tag of the chain) |
 | An accepted active after a commitment window | Resets the chain (`OtherAction`), the existing #60 rule | Existing rule |
-| Parry inside the chain's commitment window | Refused | Default, open |
-| Parry and block | Refused both ways: one defense slot per ASC | Default, open (the owner may prefer a parry that ends the block) |
-| A dodge accepted during a Parry window | Ends the window at the dodge's acceptance, as it ends a block (Q10) | Default, open |
+| Parry inside the chain's commitment window | Refused (also inside Instant Strike's) | Default, open. Implemented in P3 |
+| Parry and block | Refused both ways: one defense slot per ASC (`State.Blocking` blocks the Parry, `State.Oathscar.Parrying` blocks the block) | Default, open (the owner may prefer a parry that ends the block). Implemented in P3 |
+| A dodge accepted during a Parry window | Ends the window at the dodge's acceptance, as it ends a block (Q10) | Default, open. Implemented in P3 (`CancelParry`) |
 | A stance cast inside a commitment window, and whether it resets the chain | Refused inside; resets after, as any committed action | Default, open (the owner may exempt the stance) |
-| What a staggered player may do | Every project ability is refused while `State.Staggered` holds; movement is unrestricted (#60 OQ4) | Default, open |
+| What a staggered player may do | Every project ability is refused while `State.Staggered` holds; movement is unrestricted (#60 OQ4) | Default, open. Implemented in P3: `State.Staggered` is a blocking tag of the base ability and a reset tag of the chain |
 
 ### Phased plan
 
@@ -1333,7 +1335,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T14 | `Aetheln.GameCombat.ActivationSeam.RateBound` | P3 | H | With an injected clock and test-set bucket: excess requests get `RateLimited` with no side effect; refused stock-route calls draw from the same bucket; in-bound requests are unaffected. The bucket runs before validation: zero-sequence, malformed, and no-avatar requests each spend a token, and once the bucket is empty a malformed request gets `RateLimited`, not its validation reason |
 | T15 | `Aetheln.GameCombat.ActivationSeam.GrantValidationFailsClosed` | P3 | H | Grant refused for a class not deriving from `UAethelnGameplayAbility`, a null class, a client security policy, a predicted execution policy, per-execution instancing, a missing tag, an identity outside the `Ability.` family or the bare root, content version 0, a negative or non-finite cost or cooldown, `AbilityTriggers`, `bReplicateInputDirectly`, a spec input id, or spec-level `DynamicAbilityTriggers`. Each definition case first shows the unchanged definition is grantable, the exact refusal count is pinned, and end to end the PlayerState grants only the valid configured class |
 | T16 | `Aetheln.GameCombat.ActivationSeam.CheatFlagsOff` | P3 | H | `AbilitySystem.IgnoreCooldowns` and `IgnoreCosts` are off by default (cheat variables, `GAS/Private/AbilitySystemGlobals.cpp:39-40`); the seam ignores them |
-| T17 | `Aetheln.GameCombat.Abilities.CostAndCooldownCommit` | P4, #260 P2 | H | For the fixture Instant Strike (the Parry and the stances join it in #260 P3 and P4), with test-set values on the granted instance, ending the strike at its `RecoveryEnd`: acceptance commits once through `CommitAbility`, applies one cost (Endurance drops by exactly the cost) and one cooldown effect that grants the ability's own cooldown tag for the set duration, and the activation ends itself without a cancel; a request during the cooldown gets `OnCooldown` and spends nothing; after the test removes the cooldown effect, the next is accepted; one ability's cooldown never blocks another , and an ability accepted while another is still on its own cooldown shows the independence |
+| T17 | `Aetheln.GameCombat.Abilities.CostAndCooldownCommit` | P4, #260 P2 | H | For the fixture Instant Strike (the Parry joined it in #260 P3 and the stances join it in #260 P4), with test-set values on the granted instance, ending the strike at its `RecoveryEnd`: acceptance commits once through `CommitAbility`, applies one cost (Endurance drops by exactly the cost) and one cooldown effect that grants the ability's own cooldown tag for the set duration, and the activation ends itself without a cancel; a request during the cooldown gets `OnCooldown` and spends nothing; after the test removes the cooldown effect, the next is accepted; one ability's cooldown never blocks another; with the Parry beside the strike, an ability accepted while another is still on its own cooldown shows the independence |
 | T18 | `Aetheln.GameCombat.Abilities.ResourceBounds` | P4 | H | Endurance below cost gives `InsufficientResource`, no partial spend; a non-finite or negative cost fails closed the same way; cost equal to Endurance is accepted and leaves 0; a zero cost is accepted at 0 Endurance and applies no cost effect; content check: no configured cost exceeds the configured `MaxEndurance` |
 | T19 | `Aetheln.GameCombat.Abilities.TagAndStateGates` | P4, #260 P2 | H | For the fixture Instant Strike, `State.Dead` and a test block give `ActivationBlocked` with nothing spent or committed, and removing either allows activation. Which abilities block which is pinned in K3, so this test's block uses the ASC's blocked-ability tags (`BlockAbilitiesWithTags` on the ability's identity), as an active blocking ability would, and puts no test tag on a production ability |
 | T20 | `Aetheln.GameCombat.Abilities.DefinitionsAndVersions` | P4, #260 P2 | H | `DefaultGame.ini` grants none of the actives (unset values refuse the grant) and the fixture definition passes grant validation; unique `Ability.` tags whose native tag comments are their semantic IDs, `ContentVersion >= 1` loaded from the ini, `InstancedPerActor` and ServerOnly policies (nothing predicted), exactly one unique cooldown tag, null effect classes, `bAcceptsRelease = false`; through the fixture grant, a newer or older content version gives `IncompatibleVersion` and the matching one is accepted |
