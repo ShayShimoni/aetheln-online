@@ -6,7 +6,6 @@
 #include "AethelnCombatTestWorld.h"
 #include "AethelnDefenseTestFixture.h"
 #include "AethelnGameplayTags.h"
-#include "AethelnOathscarAbilities.h"
 #include "AethelnPlayerCharacter.h"
 #include "AethelnPlayerState.h"
 #include "GameFramework/WorldSettings.h"
@@ -262,18 +261,18 @@ bool FAethelnRecoveryDelayAfterCostCommitTest::RunTest(const FString& Parameters
 	using namespace AethelnResourceRecoveryTests;
 	using EResult = EAethelnActivationResult;
 	const TSharedRef<FRecoveryPlayer> F = MakeShared<FRecoveryPlayer>();
-	if (!F->Init(*this, { UAethelnGateStepAbility::StaticClass() })) { return false; }
-	const FGameplayAbilitySpec* Spec = F->ASC().FindAbilitySpecFromClass(UAethelnGateStepAbility::StaticClass());
-	UAethelnGameplayAbility* GateStep = Spec != nullptr ? Cast<UAethelnGameplayAbility>(Spec->GetPrimaryInstance()) : nullptr;
-	if (!TestNotNull(TEXT("Gate Step is granted with an instance"), GateStep)) { return false; }
+	if (!F->Init(*this, { UAethelnCostCommitTestAbility::StaticClass() })) { return false; }
+	const FGameplayAbilitySpec* Spec = F->ASC().FindAbilitySpecFromClass(UAethelnCostCommitTestAbility::StaticClass());
+	UAethelnGameplayAbility* CostCommit = Spec != nullptr ? Cast<UAethelnGameplayAbility>(Spec->GetPrimaryInstance()) : nullptr;
+	if (!TestNotNull(TEXT("The cost-commit ability is granted with an instance"), CostCommit)) { return false; }
 	// Test-pinned values on the granted instance, not tuning.
-	GateStep->ProvisionalEnduranceCost = 8.0f;
-	GateStep->ProvisionalCooldownSeconds = 0.0f;
-	auto Commit = [F, GateStep](uint32 Sequence)
+	CostCommit->ProvisionalEnduranceCost = 8.0f;
+	CostCommit->ProvisionalCooldownSeconds = 0.0f;
+	auto Commit = [F, CostCommit](uint32 Sequence)
 	{
 		FAethelnCombatActivationRequest Request;
-		Request.AbilityId = AethelnGameplayTags::Ability_Oathscar_GateStep;
-		Request.ContentVersion = GateStep->ContentVersion;
+		Request.AbilityId = AethelnCombatTestTags::Ability_Test_CostCommit;
+		Request.ContentVersion = CostCommit->ContentVersion;
 		Request.Sequence = Sequence;
 		FillTestAimAndTime(Request, F->ASC());
 		return F->ASC().ProcessServerRequest(Request);

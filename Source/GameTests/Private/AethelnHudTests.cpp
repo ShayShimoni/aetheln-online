@@ -172,7 +172,7 @@ bool FAethelnHudPlayerStateSnapshotTest::RunTest(const FString& Parameters)
 
 	AethelnCombatTests::ApplyInstantModifier(*AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::Additive, -15.0f);
 	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::Cooldown_Dodge, 5.0f);
-	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::Cooldown_Oathscar_GateStep, 3.0f);
+	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::Cooldown_Oathscar_InstantStrike, 3.0f);
 	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::State_GuardBroken, 2.0f);
 	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::State_EnduranceRecoveryDelayed, 1.0f);
 	ApplyTimedTag(*AbilitySystem, AethelnGameplayTags::State_GuardRecoveryDelayed, 1.0f);
@@ -186,7 +186,7 @@ bool FAethelnHudPlayerStateSnapshotTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("Cooldown.Dodge remaining time"), Dodge->RemainingSeconds > 4.9f && Dodge->RemainingSeconds <= 5.0f);
 	}
-	TestNotNull(TEXT("Cooldown.Oathscar.GateStep"), FindTimedState(Snapshot, AethelnGameplayTags::Cooldown_Oathscar_GateStep));
+	TestNotNull(TEXT("Cooldown.Oathscar.InstantStrike"), FindTimedState(Snapshot, AethelnGameplayTags::Cooldown_Oathscar_InstantStrike));
 	TestNotNull(TEXT("State.GuardBroken"), FindTimedState(Snapshot, AethelnGameplayTags::State_GuardBroken));
 	TestNotNull(TEXT("State.EnduranceRecoveryDelayed"), FindTimedState(Snapshot, AethelnGameplayTags::State_EnduranceRecoveryDelayed));
 	TestNotNull(TEXT("State.GuardRecoveryDelayed"), FindTimedState(Snapshot, AethelnGameplayTags::State_GuardRecoveryDelayed));

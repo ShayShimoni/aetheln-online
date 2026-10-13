@@ -39,7 +39,7 @@ Sworn Rebuke, Hold the Line) are Superseded by them (owner, 2026-10-13, issue
 Oathbreak's spend, eligibility, grant suppression, and refund behavior are not
 defined by this registry. The five Skein records tied to the earlier actives
 were removed rather than marked Superseded, because they have no same-kind
-replacement yet; canon lists their retired IDs, which the registry tests pin
+replacement yet; canon lists their set-aside IDs, which the registry tests pin
 as absent.
 The ten approved Prototype Candidate IDs are pinned independently in the
 validator. Editing the schema's allowlist alone cannot promote another record.

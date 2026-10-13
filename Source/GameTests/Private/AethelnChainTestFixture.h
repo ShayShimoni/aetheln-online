@@ -78,7 +78,8 @@ namespace AethelnChainTests
 		FDelegateHandle ResultHandle;
 		FDelegateHandle CostHandle;
 
-		bool Init(FAutomationTestBase& Test);
+		/** Grants the fixture chain plus Extra (for example #260's fixture actives). */
+		bool Init(FAutomationTestBase& Test, const TArray<TSubclassOf<UGameplayAbility>>& Extra = {});
 		~FFixture();
 		FAethelnCombatActivationRequest Request(uint32 Sequence = 0) const;
 		EAethelnActivationResult Press();

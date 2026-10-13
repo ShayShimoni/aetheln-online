@@ -478,12 +478,11 @@ Bumps are manual and checked in review.
 
 | Tag | Semantic ID | Owner |
 | --- | --- | --- |
-| `Ability.Oathscar.GateStep` | `order.oathscar.ability.gate_step` | #19 (skeleton), #60 (contact) |
-| `Ability.Oathscar.SwornRebuke` | `order.oathscar.ability.sworn_rebuke` | #19 (skeleton), #60 (contact) |
-| `Ability.Oathscar.HoldTheLine` | `order.oathscar.ability.hold_the_line` | #19 (skeleton), #60 (Guard result) |
+| `Ability.Oathscar.InstantStrike` | `order.oathscar.ability.instant_strike` | #260 P2 |
 | `Ability.Oathscar.SwordShieldBasicChain` | `order.oathscar.ability.sword_shield_basic_chain` | #60 P3 |
 | `State.Oathscar.SwordShieldBasicChain` | (commitment state of the above) | #60 P3 |
-| `Cooldown.Oathscar.GateStep`, `Cooldown.Oathscar.SwornRebuke`, `Cooldown.Oathscar.HoldTheLine` | (cooldown state of the above) | #19 |
+| `State.Oathscar.InstantStrike` | (commitment state of Instant Strike) | #260 P2 |
+| `Cooldown.Oathscar.InstantStrike` | (cooldown state of Instant Strike) | #260 P2 |
 | `State.Dead` | (death flow state) | Declared by #19, applied by #21 |
 | `Damage.Wrought` | `combat.damage.wrought` | #60 P4 |
 | `SetByCaller.Damage.Wrought` | (negated Wrought magnitude of the shared damage effect) | #60 P4 |
@@ -501,8 +500,8 @@ Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.guard`. The working names Instant Strike, Parry, Attack
 Stance, Defense Stance, Endurance, Guard, and Oathscar are not final display
 names. Gate Step, Sworn Rebuke, and Hold the Line were superseded on
-2026-10-13 (#260); their rows below record tags that still exist in code until
-#260 P2 removes them.
+2026-10-13 (#260); #260 P2 removed their tags and classes. The tags of Parry and
+the stances are added with the PRs that create them (#260 P3 and P4).
 
 ## Pure Free Aim
 

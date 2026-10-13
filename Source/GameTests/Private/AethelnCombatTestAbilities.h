@@ -40,6 +40,24 @@ public:
 };
 
 /**
+ * The base ability's own activation: one CommitAbility (cost and cooldown from the instance's
+ * Provisional values), then it ends. Where a test needs a plain cost commit, this stands in for
+ * the pre-#260 Gate Step skeleton, which is removed.
+ */
+UCLASS(NotBlueprintable, HideDropdown)
+class UAethelnCostCommitTestAbility : public UAethelnGameplayAbility
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnCostCommitTestAbility()
+	{
+		SetAbilityId(AethelnCombatTestTags::Ability_Test_CostCommit);
+		ContentVersion = 1;
+	}
+};
+
+/**
  * Seam probe. The knobs and counters live on the primary instance, which the seam
  * reads. Its cost and cooldown overrides count, not apply (the Oathscar ability
  * tests cover the base ability's real ones).

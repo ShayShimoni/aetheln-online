@@ -50,6 +50,8 @@ struct FAethelnServerChainState
 	double BufferedStartTime = 0.0;
 	FGameplayAbilitySpecHandle Handle;
 	TWeakObjectPtr<UAethelnBasicChainAbility> Ability;
+	/** The ability's commitment tag, captured with its definitions (#260: each single-step active has its own). */
+	FGameplayTag CommitmentTag;
 	TArray<FAethelnAttackStepDefinition> Definitions;
 	FAethelnAcceptedAttackInput CurrentInput;
 	FAethelnAcceptedAttackInput BufferedInput;
