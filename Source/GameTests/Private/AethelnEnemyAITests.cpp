@@ -188,12 +188,14 @@ bool FAethelnEnemyServerOnlyTest::RunTest(const FString& Parameters)
 		}
 	}
 	{
-		// E2: unset controller config decides nothing.
+		// E2: unset controller config decides nothing. Only HasValidConfig() stops this enemy: the player is in perception,
+		// leash and attack range and the attack is granted, so without the gate it would telegraph (an unset attack range
+		// would not do: the enemy would try to engage, fail to find a path, and reset to Idle in the same pass).
 		FFixture F; if (!Init(*this, F)) { return false; }
 		FEnemy E; if (!SpawnEnemy(*this, F, E, FVector(60.0, 0.0, 0.0))) { return false; }
-		E.Controller->ProvisionalPerceptionRadius = 0.0;
+		E.Controller->ProvisionalRespawnSeconds = 0.0;
 		F.AdvanceTo(0.5);
-		TestEqual(TEXT("An unset perception radius leaves the enemy idle"), E.Controller->GetState(), EState::Idle);
+		TestEqual(TEXT("An unset respawn delay leaves the enemy idle"), E.Controller->GetState(), EState::Idle);
 		TestNull(TEXT("No target is chosen"), E.Controller->GetTarget());
 	}
 	return true;
