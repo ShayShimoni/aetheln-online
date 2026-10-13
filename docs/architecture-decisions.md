@@ -1086,6 +1086,19 @@ Every accepted decision records:
   new policy identity and grants no activation authority; the earlier
   digests above stay as recorded, and `docs/continuous-integration.md` holds
   the detail.
+- **Amendment (2026-10-13, selector design paths, issue #231):** pull request
+  #347 changed only `design/`, `scripts/design/`, `tests/design/`, and
+  documents, and failed `ci-acceptance-shadow` with
+  `producer_direct_binding_invalid:content` because the selector did not
+  classify `design/**` or `scripts/design/**` and selected all eight checks.
+  Both paths are now portable-only; their sole consumer is the portable suite
+  in `scripts/ci/Invoke-CiSuite.ps1`. Case variants and lookalikes stay
+  `path_unclassified`. The reconcile step, the `change-impact` block, and the
+  authority predicate are unchanged, and `change-impact` still compiles for
+  these paths. The selector candidate is 41,534 LF-normalized bytes with digest
+  `ec2c22b291957b32b0b4ca7919ec23d34e5539279243349a7a6bd7e6e818ca5f`, a new
+  policy identity with no activation authority; `docs/continuous-integration.md`
+  holds the detail.
 - **Package 3C receipt and aggregate wiring amendment:**
   `ci-selection-shadow` now exposes the validated nonce, aggregate readiness,
   all eight exact obligation decisions, and its artifact ID/name/API digest as

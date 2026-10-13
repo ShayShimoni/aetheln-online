@@ -200,6 +200,23 @@ foreach ($PortableTestPath in @('tests/content/New.Tests.ps1', 'tests/content/ne
 	$PortableTest = @(Get-PathCheckSelection $PortableTestPath @{})
 	Assert-True (($PortableTest -join ',') -ceq 'portable') "Portable test or documentation path '$PortableTestPath' must select only portable proof."
 }
+# Issue #231: change-impact skips the content and Editor producers for design paths, and
+# scripts/ci/Invoke-CiSuite.ps1 runs the combat-registry checks as portable suites, so a
+# design-only change must select portable proof and must not fall into the all-obligations
+# conservative report (PR #347, producer_direct_binding_invalid:content).
+$DesignPaths = @('design/combat-registry/README.md', 'design/combat-registry/registry.json', 'design/combat-registry/schema.json', 'scripts/design/Test-CombatRegistry.ps1', 'scripts/design/New-CombatRegistryAppendices.ps1')
+foreach ($DesignPath in $DesignPaths) {
+	$Design = @(Get-PathCheckSelection $DesignPath @{})
+	Assert-True (($Design -join ',') -ceq 'portable') "Design path '$DesignPath' must select only portable proof."
+}
+$Pr347Paths = @($DesignPaths) + @('docs/animation-and-combat-content-pipeline.md', 'docs/generated/combat-design-registry.md', 'docs/generated/oathscar-codex-appendix.md', 'tests/design/New-CombatRegistryAppendices.Tests.ps1', 'tests/design/Test-CombatRegistry.Tests.ps1')
+$Pr347Selected = @($Pr347Paths | ForEach-Object { Get-PathCheckSelection $_ @{} } | Sort-Object -Unique)
+Assert-True (($Pr347Selected -join ',') -ceq 'portable') 'The PR 347 file set (design, docs, and design tests) must select only portable proof.'
+foreach ($DesignLookalike in @('designx/combat-registry/registry.json', 'Design/combat-registry/registry.json', 'design', 'scripts/design', 'scripts/designx/Test-CombatRegistry.ps1', 'Scripts/design/Test-CombatRegistry.ps1', 'scripts/Design/Test-CombatRegistry.ps1', 'tests/design/registry.json')) {
+	Assert-Rejected { Get-PathCheckSelection $DesignLookalike @{} } 'path_unclassified'
+}
+$DesignWithSource = @(@('design/combat-registry/registry.json', 'Source/GameCore/A.cpp') | ForEach-Object { Get-PathCheckSelection $_ @{} } | Sort-Object -Unique)
+Assert-True ($DesignWithSource -ccontains 'native-client-server-compile' -and $DesignWithSource -ccontains 'unreal-editor-automation' -and $DesignWithSource -ccontains 'portable') 'Design paths mixed with engine inputs must still select the native and Editor checks.'
 $AttributesPolicy = @(Get-PathCheckSelection '.gitattributes' @{})
 Assert-True ($AttributesPolicy -ccontains 'controller-contract' -and $AttributesPolicy -ccontains 'controller-operational-proof') 'Attribute policy changes should remain classifiable while triggering global attribute evaluation.'
 Assert-Rejected { Get-PathCheckSelection 'Setup.ps1' @{} } 'path_unclassified'
