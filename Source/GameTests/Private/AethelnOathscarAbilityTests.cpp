@@ -49,7 +49,7 @@ namespace AethelnOathscarAbilityTests
 	/**
 	 * A possessed player granted the fixture Instant Strike with the test-pinned attributes.
 	 * Each test sets its own cost and cooldown on the granted instance, which the seam
-	 * checks and CommitAbility spends; the fixture starts it at no cost and no cooldown.
+	 * checks and CommitAbility spends; the fixture starts it at no cost and the fixture cooldown.
 	 * Since #260 the strike runs until its RecoveryEnd, so EndActivation finishes one before the next request.
 	 */
 	struct FOathscarFixture
@@ -88,7 +88,6 @@ namespace AethelnOathscarAbilityTests
 					return false;
 				}
 				Instance->ProvisionalEnduranceCost = 0.0f;
-				Instance->ProvisionalCooldownSeconds = 0.0f;
 				Instances.Add(Instance);
 				Handles.Add(Spec->Handle);
 			}
@@ -127,10 +126,14 @@ namespace AethelnOathscarAbilityTests
 			return Player.AbilitySystem->ProcessServerRequest(Request);
 		}
 
-		/** Ends a running strike the authored way: at its RecoveryEnd. */
-		void EndActivation()
+		/** Ends a running strike the authored way, at its RecoveryEnd, and by default removes the cooldown it committed. */
+		void EndActivation(bool bClearCooldown = true)
 		{
 			World->Tick(LEVELTICK_All, 0.625f); // the fixture step's RecoveryEnd
+			if (bClearCooldown)
+			{
+				Player.AbilitySystem->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(AethelnGameplayTags::Cooldown_Oathscar_InstantStrike));
+			}
 		}
 
 		bool IsActive(int32 Index) const
@@ -191,7 +194,7 @@ bool FAethelnAbilitiesCostAndCooldownCommitTest::RunTest(const FString& Paramete
 		TestEqual(Name + TEXT(": one active cooldown effect carries the tag"), Durations.Num(), 1);
 		TestTrue(Name + TEXT(": the cooldown lasts the configured duration"), Durations.Num() == 1 && FMath::IsNearlyEqual(Durations[0], CooldownSeconds));
 		TestEqual(Name + TEXT(": committed once, through CommitAbility"), Fixture.Commits, 1);
-		Fixture.EndActivation();
+		Fixture.EndActivation(false);
 		TestFalse(Name + TEXT(": the activation ended"), Fixture.IsActive(Index));
 		TestEqual(Name + TEXT(": it ended itself; nothing was cancelled"), Fixture.CancelledEnds, 0);
 
@@ -206,7 +209,7 @@ bool FAethelnAbilitiesCostAndCooldownCommitTest::RunTest(const FString& Paramete
 		TestEqual(Name + TEXT(": the second acceptance spends once more"), Fixture.Endurance(), EnduranceBefore - 2.0f * Cost);
 		TestEqual(Name + TEXT(": the second acceptance applies one more cost and cooldown"), Fixture.CostEffects + Fixture.CooldownEffects, 4);
 		TestEqual(Name + TEXT(": two commits in all"), Fixture.Commits, 2);
-		Fixture.EndActivation();
+		Fixture.EndActivation(false);
 	}
 	for (const FDefinition& Definition : Definitions)
 	{

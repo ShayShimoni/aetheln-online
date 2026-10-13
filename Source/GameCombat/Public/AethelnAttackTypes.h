@@ -81,7 +81,7 @@ DECLARE_DELEGATE_RetVal_OneParam(EAethelnBlockConsequence, FAethelnBlockedHook, 
 
 /**
  * The one active directional defense of a target, exposed by the defense owner (#18; #260's
- * Hold the Line uses the same slot). It defends a contact whose time lies in
+ * Parry window will use the same slot, P3). It defends a contact whose time lies in
  * [ActiveFromServerTime, ActiveUntilServerTime) and whose direction lies within ArcDegrees (the
  * full arc, centered on the target's server actor yaw); the contact is then Blocked, or
  * GuardBroken, by what OnBlocked returns, and OnBlocked runs once. The interval, never the
