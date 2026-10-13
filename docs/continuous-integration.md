@@ -245,9 +245,12 @@ Issue #299 (2026-10-11) then added the `editor_required` output and its closed
 editor path set (see [Editor gate](#editor-gate-issue-299)): 7,194 UTF-8 bytes
 with SHA-256
 `83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92`. TA-025
-(2026-10-12) added the content launcher to that set; the current normalized
-block is exactly 7,488 UTF-8 bytes with SHA-256
-`5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d`.
+(2026-10-12) added the content launcher to that set (7,488 UTF-8 bytes, SHA-256
+`5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d`). The issue
+#299 follow-up (2026-10-11) then added `.agents/**` and `tests/build/**` to the
+portable-only set; the current normalized block is exactly 7,617 UTF-8 bytes
+with SHA-256
+`19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -276,7 +279,10 @@ this closed, case-sensitive portable-only set:
 - `docs/**`
 - `visuals/**`
 - `output/pdf/**`
-- `tests/**` when every changed file there is `.ps1` or `.md`
+- `tests/**` when every changed file there is `.ps1` or `.md`, and every file
+  under `tests/build/**` of any extension (issue #299; the selector already
+  treats it as portable-only)
+- `.agents/**` (issue #299; the selector already treats it as portable-only)
 - top-level `.md` files
 - GitHub issue or pull-request template Markdown or YAML files under
   `.github/ISSUE_TEMPLATE/` or `.github/PULL_REQUEST_TEMPLATE/`, or the
@@ -372,8 +378,10 @@ authoritative job. The selector's `unreal-editor-automation` obligation is a
 strict subset of this set (the workflow and harness inputs run the editor but
 select no unreal receipt), so `unreal-receipt-shadow` is never expected for a
 skipped editor job unless the selector falls back to its conservative
-all-obligations record, which the shadow aggregate already reports red for a
-skipped compile. Required status checks stay `quality-gates` and
+all-obligations record. That record selects checks the aggregate does not
+support (`clean-package-provenance-smoke` and `content-reference-validation`,
+see `Invoke-CiAcceptanceAggregate.ps1`), so the shadow aggregate reports it red
+whether or not the editor job ran. Required status checks stay `quality-gates` and
 `change-impact`, so a skipped editor job blocks no merge.
 
 ### Pull-request shadow selector (Issue #167 Package 2)
@@ -985,8 +993,8 @@ compares `head.sha` with the event's `github.event.pull_request.head.sha`. A
 different 40-character head publishes `superseded=true` and the line
 `head_check result=superseded`; every later step that does not already depend
 on a gated step carries `if: steps.head_check.outputs.superseded != 'true'`
-(the `always()` steps become `always() && ...`), so the job ends in seconds with
-no checkout, no engine host lease, no workspace sync, and no report upload.
+(the `always()` steps become `always() && ...`), so, once it has waited for its turn in the engine queue, the job ends in
+seconds with no checkout, no engine host lease, no workspace sync, and no report upload.
 
 The check fails open. A missing or unreadable event payload, a malformed
 pull-request number or head, a
@@ -1006,8 +1014,10 @@ request with a 20-second timeout. The workflow
 permissions stay `contents: read`. A superseded compile exposes no report
 artifact, so a native receipt job that the selector still requires for that old
 head fails red at `native_raw_artifact_binding_invalid`; that run is no longer
-the pull request's head and gates nothing. A superseded editor job publishes
-`automation_reason=superseded_head`.
+the pull request's head and gates nothing. A superseded job writes one
+`skipped: superseded head <sha> (current head <sha>)` line to its step
+summary, because it ends green with every later step skipped, and a superseded
+editor job also publishes `automation_reason=superseded_head`.
 
 ### Durable run-scoped handoff store
 
