@@ -1432,8 +1432,9 @@ finally { $LegacyHasher.Dispose() }
 # TA-018 (2026-10-02) removed the six controller paths from the portable-only set (5,395 bytes, e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805).
 # Issue #299 (2026-10-11) added the editor_required output and its closed editor path set (7,194 bytes, 83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92).
 # TA-025 (2026-10-12) added the content launcher to that set (7,488 bytes, 5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d).
-# The issue #299 follow-up added .agents/** and tests/build/** to the portable-only set; this is the reviewed block identity after that change.
-Assert-True ($LegacyBytes.Length -eq 7617 -and $LegacyDigest -ceq '19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2') 'The change-impact block must match the reviewed issue #299 follow-up identity after LF normalization.'
+# The issue #299 follow-up added .agents/** and tests/build/** to the portable-only set (7,617 bytes, 19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2).
+# Issue #299 PR 4 (2026-10-13) diffs the head against its merge base with the base SHA; this is the reviewed block identity after that change.
+Assert-True ($LegacyBytes.Length -eq 7611 -and $LegacyDigest -ceq '3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2') 'The change-impact block must match the reviewed issue #299 PR 4 identity after LF normalization.'
 
 function Get-ClassifierScript {
 	$Lines = $Workflow -split "\r?\n"
@@ -1769,6 +1770,16 @@ try {
 	$QuotedHead = Add-FixtureCommit -Write @([string]::Concat('docs/', [char] 0x00FC, 'ber.md')) -Delete @() -Message 'quoted path'
 	Assert-Classification -Case 'quoted non-ascii path' -Result (Invoke-Classifier $BaseSha $QuotedHead) -EngineRequired 'true' -Reason 'unexpected_diff_entry' -EditorRequired 'true'
 
+	# Issue #299 PR 4: a pull request is classified by what its branch changed since the merge base,
+	# not by the difference to the current base tip. Develop advanced with code after the branch point.
+	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
+	$AdvancedBase = Add-FixtureCommit -Write @('Source/AethelnOnline/A.cpp') -Delete @() -Message 'develop advanced with code after the branch point'
+	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
+	$BranchDocsHead = Add-FixtureCommit -Write @('docs/a.md') -Delete @() -Message 'docs-only branch cut before the code merge'
+	$BranchSourceHead = Add-FixtureCommit -Write @('Source/AethelnOnline/A.cpp') -Delete @() -Message 'branch changes code after the branch point'
+	Assert-Classification -Case 'docs-only branch while develop advanced with code after the branch point' -Result (Invoke-Classifier $AdvancedBase $BranchDocsHead) -EngineRequired 'false' -Reason 'portable_paths_only' -EditorRequired 'false'
+	Assert-Classification -Case 'code branch while develop advanced with code after the branch point' -Result (Invoke-Classifier $AdvancedBase $BranchSourceHead) -EngineRequired 'true' -Reason 'engine_paths_changed' -EditorRequired 'true'
+
 	# Production path: actions/checkout on pull_request materializes only the
 	# depth-1 merge commit, so both SHAs are absent locally and must be fetched
 	# by SHA from origin before the diff. Exercise fetch-then-classify from a
@@ -1787,6 +1798,8 @@ try {
 		Assert-True ($Missing -notcontains $Revision) "shallow fixture must not already contain $Revision."
 	}
 	Assert-Classification -Case 'shallow clone fetches both shas then classifies portable' -Result (Invoke-Classifier $BaseSha $DocsHead -WorkingDirectory $ShallowRoot) -EngineRequired 'false' -Reason 'portable_paths_only' -EditorRequired 'false'
+	# The merge base needs history on both sides, which a depth-1 checkout lacks.
+	Assert-Classification -Case 'shallow clone computes the merge base while develop advanced with code' -Result (Invoke-Classifier $AdvancedBase $BranchDocsHead -WorkingDirectory $ShallowRoot) -EngineRequired 'false' -Reason 'portable_paths_only' -EditorRequired 'false'
 	$null = Invoke-FixtureGit @('checkout', '-q', '--detach', $BaseSha)
 	$SourceHead = Add-FixtureCommit -Write @('Source/AethelnOnline/A.cpp') -Delete @() -Message 'source for shallow case'
 	$null = Invoke-FixtureGit @('-C', $BareRoot, 'fetch', '-q', $RepoRoot, "${SourceHead}:refs/heads/fixture-source")

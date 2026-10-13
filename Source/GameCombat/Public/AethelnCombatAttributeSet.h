@@ -14,7 +14,8 @@
  * Prototype combat resources: Health, Endurance and Guard, each with its maximum
  * (combat.resource.health, combat.resource.endurance, combat.resource.guard).
  * Only Gameplay Effects change them; the set's own clamps are the only direct
- * writes. All six replicate to the owner only (#61 decides what opponents see).
+ * writes. Health and MaxHealth replicate to every client; Endurance, Guard and their
+ * maxima replicate to the owner only (#61).
  */
 UCLASS()
 class GAMECOMBAT_API UAethelnCombatAttributeSet : public UAttributeSet
