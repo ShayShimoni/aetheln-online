@@ -460,6 +460,7 @@ jobs:
             if ($Path -cmatch '^\.agents/.+') { return $true }
             if ($Path -cmatch '^tests/build/.+') { return $true }
             if ($Path -cmatch '^output/pdf/.+') { return $true }
+            if ($Path -cmatch '^(scripts/)?design/.+') { return $true }
             if ($Path -cmatch '^tests/.+\.(ps1|md)$') { return $true }
             if ($Path -cmatch '^[^/]+\.md$') { return $true }
             if ($Path -cmatch '^\.github/(ISSUE_TEMPLATE|PULL_REQUEST_TEMPLATE)/[^/]+\.(md|yml|yaml)$') { return $true }

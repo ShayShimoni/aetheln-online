@@ -252,8 +252,12 @@ portable-only set (7,617 UTF-8 bytes, SHA-256
 `19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2`). Issue
 #299 PR 4 (2026-10-13) then diffed against the merge base (see
 [Pull-request change-impact classifier](#pull-request-change-impact-classifier));
-the current normalized block is exactly 7,611 UTF-8 bytes with SHA-256
-`3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2`.
+that block was exactly 7,611 UTF-8 bytes with SHA-256
+`3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2`. Issue #231
+(2026-10-13) then added `design/**` and `scripts/design/**` to the portable-only
+set (see the remaining-classes paragraphs of the selector section);
+the current normalized block is exactly 7,683 UTF-8 bytes with SHA-256
+`d8d01abbfd22733fdb9bc4f31e3aa737995a6f5c343ff4677e154394fe7722c7`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -289,6 +293,8 @@ this closed, case-sensitive portable-only set:
   under `tests/build/**` of any extension (issue #299; the selector already
   treats it as portable-only)
 - `.agents/**` (issue #299; the selector already treats it as portable-only)
+- `design/**` and `scripts/design/**` (issue #231; the selector already treats
+  them as portable-only, and their only consumer is the portable CI suite)
 - top-level `.md` files
 - GitHub issue or pull-request template Markdown or YAML files under
   `.github/ISSUE_TEMPLATE/` or `.github/PULL_REQUEST_TEMPLATE/`, or the
@@ -589,17 +595,65 @@ the engine jobs reads them. The match is ordinal and case-sensitive:
 `designx/`, `scripts/designx/`, `Design/`, and `scripts/Design/` stay
 `path_unclassified` and take the conservative report, and a change that also
 touches an engine input still selects the native and Editor checks through
-that input. `change-impact` is unchanged and still compiles for `design/**`
-and `scripts/design/**`; narrowing it is a follow-up candidate, not part of
-this change. `.gitignore` stays deliberately unclassified (#167), because the
-engine gate's drift check reads it. Non-script `tests/content` files and the
-other `scripts/build` classes from the issue remain as recorded above. This
-candidate is 41,534 LF-normalized bytes with digest
+that input. `.gitignore` stays deliberately unclassified (#167), because the
+engine gate's drift check reads it. The `change-impact` half of this
+reconciliation follows in the next paragraph. This candidate is 41,534
+LF-normalized bytes with digest
 `ec2c22b291957b32b0b4ca7919ec23d34e5539279243349a7a6bd7e6e818ca5f`. It is a new
 policy identity and grants no activation authority; the shadow job runs the
 accepted-base selector, so a later owner pull request that touches only these
 paths must record a green `ci-acceptance-shadow` observation (aggregate
 branch, portable receipt bound) after this change merges.
+
+Issue #231 (2026-10-13, remaining classes) finished the reconciliation with
+`change-impact`. Each path class from the issue body was decided separately,
+and the authority predicate, the `.gitignore` rule, and the selector source
+(so the policy digest above) are unchanged.
+
+- `scripts/build/Build-PackagedArtifacts.ps1` and
+  `scripts/build/Invoke-PackagedSmokeTest.ps1`: already reconciled on
+  2026-10-05 and verified again. Compile never executes them, so a native
+  receipt cannot prove them; both classifiers treat them as portable for
+  compile, and the selector keeps `clean-package-provenance-smoke` for them.
+  The selector over-selected, not `change-impact`. Every other
+  `scripts/build/` path stays selector `controller-operational-proof` and
+  compiles in `change-impact`: both sides require the native receipt, so they
+  agree.
+- New `tests/**` `.ps1` and `.md` files, including `tests/content/`:
+  already reconciled on 2026-10-05 and verified again. Both classifiers treat
+  them as portable, and a compile cannot prove a test script.
+- New non-script `tests/**` files other than `tests/ci/` and `tests/build/`
+  (for example a `.json` fixture under `tests/content/` or `tests/design/`):
+  deliberately unchanged. The selector reports `path_unclassified` and
+  `change-impact` compiles, which is a fail-closed pair, not a disagreement
+  about what is portable. The first pull request that adds such a fixture must
+  add a reviewed rule to both classifiers together; guessing one now would
+  classify files nothing consumes yet. This is recorded as a
+  residual, not a defect.
+- `design/**` and `scripts/design/**`: `change-impact` now treats them as
+  portable-only, matching the selector since pull request #351. The reasoning
+  is the one used for `.agents/**` and `tests/build/**` (issue #299). A
+  search of `Source/`, `Config/`, `Plugins/`, `.github/`, and every script
+  outside `scripts/design/` found no reader of these paths except
+  `scripts/ci/Invoke-CiSuite.ps1`, which runs the four combat-registry checks
+  and their `tests/design/` tests as required portable suites, so a compile or Editor run proves nothing about
+  them. The match is ordinal and case-sensitive; `designx/`, `Design/`,
+  `scripts/designx/`, and `scripts/Design/` still compile, and a change that
+  also touches an engine input still compiles through that input. Revisit when
+  any engine input starts reading `design/**`, for example a generator that
+  turns the registry into runtime data: drop the rule in both classifiers in
+  that change. This narrows when compile runs for design-only pull requests and
+  weakens no authority predicate, controller gate, or engine gate, because the
+  skipped jobs could not have exercised those files.
+
+A new fixture in `tests/ci/Test-PrototypeQualityWorkflow.Tests.ps1` runs the
+real classifier over design-only, design-with-docs, lookalike, case-variant,
+and design-with-engine-input pull requests, and
+`tests/ci/Get-CiSelection.Tests.ps1` keeps the selector side for the same
+paths. A pull request that touches only these paths should therefore reach a
+green `ci-acceptance-shadow` with the portable receipt bound and the engine
+jobs skipped; that observation is recorded after this change merges (the shadow
+job runs the accepted-base selector, which already carries pull request #351).
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify

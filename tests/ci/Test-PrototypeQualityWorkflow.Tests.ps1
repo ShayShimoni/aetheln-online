@@ -1433,8 +1433,9 @@ finally { $LegacyHasher.Dispose() }
 # Issue #299 (2026-10-11) added the editor_required output and its closed editor path set (7,194 bytes, 83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92).
 # TA-025 (2026-10-12) added the content launcher to that set (7,488 bytes, 5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d).
 # The issue #299 follow-up added .agents/** and tests/build/** to the portable-only set (7,617 bytes, 19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2).
-# Issue #299 PR 4 (2026-10-13) diffs the head against its merge base with the base SHA; this is the reviewed block identity after that change.
-Assert-True ($LegacyBytes.Length -eq 7611 -and $LegacyDigest -ceq '3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2') 'The change-impact block must match the reviewed issue #299 PR 4 identity after LF normalization.'
+# Issue #299 PR 4 (2026-10-13) diffs the head against its merge base with the base SHA (7,611 bytes, 3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2).
+# Issue #231 (2026-10-13) added design/** and scripts/design/** to the portable-only set; this is the reviewed block identity after that change.
+Assert-True ($LegacyBytes.Length -eq 7683 -and $LegacyDigest -ceq 'd8d01abbfd22733fdb9bc4f31e3aa737995a6f5c343ff4677e154394fe7722c7') 'The change-impact block must match the reviewed issue #231 design-path identity after LF normalization.'
 
 function Get-ClassifierScript {
 	$Lines = $Workflow -split "\r?\n"
@@ -1712,6 +1713,17 @@ try {
 		@{ Case = 'case-different agents'; Write = @(); IndexOnly = @('.Agents/skills/x.md'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'agent skills mixed with Source'; Write = @('.agents/skills/x/SKILL.md', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'agent skills mixed with controller scripts'; Write = @('.agents/skills/x/SKILL.md', 'scripts/ci/Seed.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		# Issue #231: the selector treats design/** and scripts/design/** as portable-only and their only consumer is the portable CI suite, so the classifier must start no engine job for them.
+		@{ Case = 'design registry only'; Write = @('design/combat-registry/registry.json', 'design/combat-registry/README.md'); Expect = 'false'; Reason = 'portable_paths_only' },
+		@{ Case = 'design scripts only'; Write = @('scripts/design/Test-CombatRegistry.ps1', 'scripts/design/New-CombatRegistryAppendices.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
+		@{ Case = 'design with docs and tests'; Write = @('design/combat-registry/schema.json', 'scripts/design/Test-CombatRegistry.ps1', 'docs/a.md', 'tests/design/Test-CombatRegistry.Tests.ps1'); Expect = 'false'; Reason = 'portable_paths_only' },
+		@{ Case = 'design lookalike directory'; Write = @('designx/combat-registry/registry.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'design scripts lookalike directory'; Write = @('scripts/designx/X.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'design file at the top level'; Write = @('design'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'case-different design'; Write = @(); IndexOnly = @('Design/combat-registry/registry.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'case-different design scripts'; Write = @(); IndexOnly = @('scripts/Design/X.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'design mixed with Source'; Write = @('design/combat-registry/registry.json', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'design mixed with controller scripts'; Write = @('design/combat-registry/registry.json', 'scripts/ci/Seed.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		# Issue #299: controller-only pull requests still compile but skip the editor job; engine content and the editor's own harness inputs run it.
 		@{ Case = 'controller scripts and tests only'; Write = @('scripts/ci/Invoke-CiSuite.ps1', 'scripts/ci/Seed.ps1', 'scripts/build/Write-Provenance.ps1', 'tests/ci/Seed.Tests.ps1', 'tests/ci/fixture.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'attribute policy only'; Write = @('.gitattributes'); Expect = 'true'; Reason = 'engine_paths_changed' },
