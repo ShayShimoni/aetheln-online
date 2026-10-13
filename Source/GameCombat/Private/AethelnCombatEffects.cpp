@@ -181,3 +181,36 @@ void UAethelnDeathStateEffect::ApplyTo(UAbilitySystemComponent& AbilitySystemCom
 	Spec.DynamicGrantedTags.AddTag(AethelnGameplayTags::State_Dead);
 	AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec);
 }
+
+void UAethelnDeathStateEffect::RemoveFrom(UAbilitySystemComponent& AbilitySystemComponent)
+{
+	// By class: an owning-tag query reads the definition's tags only, not the spec's dynamic granted State.Dead.
+	FGameplayEffectQuery Query;
+	Query.EffectDefinition = UAethelnDeathStateEffect::StaticClass();
+	AbilitySystemComponent.RemoveActiveEffects(Query);
+}
+
+UAethelnRespawnRestorationEffect::UAethelnRespawnRestorationEffect()
+{
+	DurationPolicy = EGameplayEffectDurationType::Instant;
+
+	auto AddRestore = [this](const FGameplayAttribute& Current, const FGameplayAttribute& Maximum)
+	{
+		FAttributeBasedFloat Based;
+		Based.BackingAttribute = FGameplayEffectAttributeCaptureDefinition(Maximum, EGameplayEffectAttributeCaptureSource::Target, false);
+
+		FGameplayModifierInfo& Modifier = Modifiers.AddDefaulted_GetRef();
+		Modifier.Attribute = Current;
+		Modifier.ModifierOp = EGameplayModOp::Override;
+		Modifier.ModifierMagnitude = FGameplayEffectModifierMagnitude(Based);
+	};
+	AddRestore(UAethelnCombatAttributeSet::GetHealthAttribute(), UAethelnCombatAttributeSet::GetMaxHealthAttribute());
+	AddRestore(UAethelnCombatAttributeSet::GetEnduranceAttribute(), UAethelnCombatAttributeSet::GetMaxEnduranceAttribute());
+	AddRestore(UAethelnCombatAttributeSet::GetGuardAttribute(), UAethelnCombatAttributeSet::GetMaxGuardAttribute());
+}
+
+void UAethelnRespawnRestorationEffect::ApplyTo(UAbilitySystemComponent& AbilitySystemComponent)
+{
+	FGameplayEffectSpec Spec(GetDefault<UAethelnRespawnRestorationEffect>(), AbilitySystemComponent.MakeEffectContext(), 1.0f);
+	AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec);
+}

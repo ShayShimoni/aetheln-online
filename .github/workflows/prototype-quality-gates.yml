@@ -396,10 +396,11 @@ jobs:
           if-no-files-found: error
 
   # Issue #150 pull-request change-impact classifier. GitHub-hosted, checkout
-  # plus repository-owned PowerShell only. It compares the exact pull-request
-  # base and head SHAs (passed through env, never interpolated into the
-  # script) and skips trusted Unreal compilation only when every changed path
-  # belongs to the closed portable-only set. Every uncertainty — invalid or
+  # plus repository-owned PowerShell only. It diffs the exact pull-request
+  # head SHA against its merge base with the base SHA (both passed through
+  # env, never interpolated into the script; issue #299) and skips trusted
+  # Unreal compilation only when every changed path belongs to the closed
+  # portable-only set. Every uncertainty — invalid or
   # missing SHAs, unreachable commits, Git errors, an empty diff, a quoted or
   # rename/copy diff entry — fails closed to engine_required=true, and the
   # step always exits 0 so the decision is always published.
@@ -500,11 +501,11 @@ jobs:
             if ($BaseSha -eq $HeadSha) { throw 'identical_shas' }
             foreach ($Revision in @($BaseSha, $HeadSha)) {
               if ((Invoke-GitRaw @('cat-file', '-e', "$Revision^{commit}")).ExitCode -ne 0) {
-                $null = Invoke-GitRaw @('fetch', '--no-tags', '--depth=1', 'origin', $Revision)
+                $null = Invoke-GitRaw @('fetch', '--no-tags', 'origin', $Revision)
                 if ((Invoke-GitRaw @('cat-file', '-e', "$Revision^{commit}")).ExitCode -ne 0) { throw 'commit_unavailable' }
               }
             }
-            $Diff = Invoke-GitRaw @('diff', '--name-status', '--no-renames', $BaseSha, $HeadSha)
+            $Diff = Invoke-GitRaw @('diff', '--name-status', '--no-renames', "${BaseSha}...${HeadSha}")
             if ($Diff.ExitCode -ne 0) { throw 'diff_failed' }
             $Entries = @($Diff.Output | Where-Object { $_ -ne '' })
             if ($Entries.Count -eq 0) { throw 'empty_diff' }

@@ -42,7 +42,8 @@ struct GAMECOMBAT_API FAethelnEnemyPresentationState
 /**
  * The prototype enemy (#83, #20). The ASC stays on this pawn (the AI base); an AAethelnEnemyController
  * possesses it on the server and owns every decision. Declares no RPC: clients only read replicated movement,
- * attributes, result cues, and the presentation state.
+ * result cues, and the presentation state. Which attributes reach a client follows the attribute set's replication
+ * conditions (see Replication in docs/enemy-ai-and-navigation.md); an AI pawn has no owning connection.
  */
 UCLASS(Config = Game)
 class GAMECOMBAT_API AAethelnEnemyCharacter : public AAethelnCombatAICharacter

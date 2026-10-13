@@ -59,7 +59,8 @@ UE 5.8.1 source, revision `71fe36aac5`
    AI uses its own ASC on the pawn, in Minimal mode.
 2. `APlayerState::OnPawnSet` drives the lifecycle. The GameCore pawn stays free
    of GAS.
-3. One attribute set holds Health, Endurance, Guard, and each maximum. All six
+3. One attribute set holds Health, Endurance, Guard, and each maximum. Health
+   and MaxHealth replicate to every client; Endurance, Guard, and their maxima
    replicate to the owner only. Gameplay Effects make every change.
 4. One activation authority has two selected entries: the ordinary versioned
    RPC and #18's server-internal movement-carried entry, called only while
@@ -298,12 +299,15 @@ declared by #19, blocks every #19 ability, and is applied or removed only by
   holds the current value above the base. Rewriting an unchanged base still
   re-evaluates the current value, which its own clamp then lowers. The clamp
   after instant effects follows the same rule.
-- **Replication:** all six use `COND_OwnerOnly` with `REPNOTIFY_Always`. Canon
-  says opponent cues must not expose exact unrevealed resources (Secure
-  Stealth and Opponent Readability in the combat document). Owner-only fails
-  closed and is easy to widen; #61 decides later what opponents may see. Other
-  clients still get death from #21's replicated state and hit results from
-  cues. `REPNOTIFY_Always` lets prediction reconcile later
+- **Replication:** all six use `REPNOTIFY_Always`. Health and MaxHealth use
+  `COND_None`, so every client sees them; Endurance, MaxEndurance, Guard, and
+  MaxGuard use `COND_OwnerOnly`. The owner decided on #61 (2026-10-12,
+  [comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614))
+  that Health is visible to everyone while Endurance and Guard stay owner-only.
+  Canon still says opponent cues must not expose other exact unrevealed
+  resources (Secure Stealth and Opponent Readability in the combat document).
+  Other clients still get death from #21's replicated state and hit results
+  from cues. `REPNOTIFY_Always` lets prediction reconcile later
   (`GAS/Public/GameplayPrediction.h:122-132`).
 - **Resource contract mapping** (Shared Combat Semantic Contract in the combat
   document). The authored bound is the matching `Max*` attribute. The mutation
@@ -405,8 +409,10 @@ period, and delay is `TBD` (#107); this section sets none.
 - **Death and respawn.** `State.Dead` pauses both resources. #21 applies and
   removes it; recovery resumes one period after the frame that removes it. A
   running delay keeps counting on the server clock through death. Respawn
-  restores nothing through recovery: what respawn restores is #21's lifecycle
-  allowlist.
+  restores nothing through recovery: #21 P2's respawn restores Health,
+  Endurance, and Guard to their maxima through its own instant effect (owner
+  decision, issue #21, 2026-10-12;
+  [Death, Respawn, and Reconnect](death-and-respawn.md)).
 - **No avatar.** Recovery runs on the server clock while the PlayerState has
   no pawn, as cooldowns do.
 - **Disconnect and reconnect.** Recovery belongs to the PlayerState, and a
@@ -495,8 +501,10 @@ only interface through which `GameUI` reads it, so `GameUI` keeps depending on
   implements it a test fixture supplies the objective, and the HUD shows
   "Objective: none".
 
-Wording, layout, colors, cue timing, localization, and what opponents see of
-another player's Health, Endurance and Guard stay `TBD` (Open Decisions).
+Wording, layout, colors, visual language, cue timing, and localization stay
+`TBD` until the UI pass after the P5 feel test (Open Decisions). The owner
+decided that Health is visible to everyone and Endurance and Guard stay
+owner-only (see Replication under Attribute Policy).
 
 ## Abilities
 
@@ -1129,7 +1137,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T4 | `Aetheln.GameCombat.Lifecycle.AvatarReassignment` | P2 | H | Real `Possess` of pawn B after A: B is the avatar, no re-grant, no refill, no synthetic broadcasts |
 | T5 | `Aetheln.GameCombat.Lifecycle.AvatarDestroyedWhilePossessed` | P2 | H | Null case fires first; avatar null; PlayerState ASC intact; no crash |
 | T6 | `Aetheln.GameCombat.Lifecycle.AIPawnOwnsAbilitySystem` | P2 | H | AI ASC on the pawn, Minimal, owner and avatar the pawn; possession refreshes actor info; no PlayerState |
-| T7 | `Aetheln.GameCombat.Attributes.ReplicationPolicy` | P2 | H | From the class default object: all six attributes `COND_OwnerOnly` and `REPNOTIFY_Always` |
+| T7 | `Aetheln.GameCombat.Attributes.ReplicationPolicy` | P2 | H | From the class default object: `Health` and `MaxHealth` `COND_None`, the other four `COND_OwnerOnly`, all six `REPNOTIFY_Always` |
 | T8 | `Aetheln.GameCombat.Attributes.ClampAndBounds` | P2 (P4 adds the lower-only case) | H | Values clamp to `[0, Max]`; lowering each max re-clamps its current value and lowers a base above it; with a positive temporary modifier active, lowering a max below the current value but above the base re-clamps the current value and never raises the base |
 | T9 | `Aetheln.GameCombat.Attributes.InitOnceThroughEffect` | P2 | H | Values arrive only through the init effect, once per PlayerState; every current value equals its configured value; re-possession does not reapply |
 | T10 / A1 | `Aetheln.GameCombat.ActivationSeam.RequestShape` | P3, #60 P2 update | H | Exactly seven reflected fields; only Aim and ClientServerTimeSeconds are added; no target, hit, contact, damage, magnitude, attribute, shape, range, window, cost, or cooldown field |
@@ -1146,7 +1154,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T21 | `Aetheln.GameCombat.Telemetry.ActivationOutcomes` | P3 | H | One event and one metric per ordinary outcome, matching the telemetry table; activation id empty on rejections, ability id only from step 6; a valid Release event carries the running activation id; public copy has no diagnostic code; zero-sequence rejections and refused stock-route calls are metric-only; a rate-limited flood gives one event and one outcome on entry and one aggregated metric on exit; a stock-route flood during a window folds into the suppressed count; teardown while limited flushes the exit metric. The test calls `SetRuntimeContext` itself (as `Source/GameCombat/Private/AethelnNetworkSpikeAuthorityTests.cpp:251` does), because `TryComposeCorrelation` drops every event without one (`Source/GameNet/Private/AethelnObservabilitySubsystem.cpp:149-152`). |
 | T22 | `Aetheln.Observability.Contracts.SchemaAndVocabulary` (update) | P3 | H | `RateLimited` is known, its string `rate-limited` is stable, the schema version is still 1 |
 | T23 | `Aetheln.GameCombat.Net.ClientAvatarConvergence` | P5 | P | On both clients the avatar is null before possession, equals the pawn after spawn and re-possession, and is null again after unpossession, including when the PlayerState arrives after the pawn |
-| T24 | `Aetheln.GameCombat.Net.AttributeReplication` | P5 | P | All six attributes reach the owner only, at the provisional frequency rather than 1 Hz |
+| T24 | `Aetheln.GameCombat.Net.AttributeReplication` | P5 | P | Health and MaxHealth reach every client and the other four attributes reach the owner only, at the provisional frequency rather than 1 Hz |
 | T25 | `Aetheln.GameCombat.Net.MixedEffectReplication` | P5 | P | The owner gets the full cooldown effect with time remaining; the other client sees only the tag |
 | T26 | `Aetheln.GameCombat.Net.OutcomeOwnerOnly` | P5 | P | The outcome reaches the owning client only, reliably |
 | T27 | `Aetheln.GameCombat.Net.ClientCannotActivateDirectly` | P5 | P | A client calling `TryActivateAbility` or the engine RPCs activates and commits nothing and gets no reply to amplify; client-side `CanActivateAbility` is false for every player ability |
@@ -1279,9 +1287,15 @@ All stay `TBD` until the named owner decides.
    dodge, and block. Owners: #60 and #18 content. For dodge and block, #18's
    Q10 and Q17 (owner-approved 2026-10-10) answer it; the three actives' relations
    stay open.
-7. **Cooldown and attribute behavior across death, respawn, and reconnect**,
-   including closing the reconnect gap. Owner: #21.
-8. **What opponents may see** of the six attributes. Owner: #61.
+7. **Cooldown and attribute behavior across reconnect**, including closing the
+   reconnect gap. Owner: #21 (P4). Decided for respawn (owner, 2026-10-12,
+   issue #21): full Health, Endurance, and Guard, with cooldowns kept
+   counting.
+8. **What opponents may see** of the six attributes. Resolved by the owner on
+   #61 (2026-10-12, [comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): Health and MaxHealth are visible to
+   everyone; Endurance, Guard, and their maxima stay owner-only. The visual
+   language, cue timing, and localization of that view stay `TBD` until the
+   UI pass after the P5 feel test (#61).
 9. **Content version in the observability correlation fields.** Owner: #38,
    when #60 needs it.
 10. **Final display names** of the abilities, resources, and the Order.
