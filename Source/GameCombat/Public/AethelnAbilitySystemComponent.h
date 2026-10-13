@@ -12,6 +12,7 @@ class AController;
 class UAethelnBasicChainAbility;
 class UAethelnCombatTimelineSubsystem;
 class UAethelnDodgeAbility;
+class UAethelnParryAbility;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnActivationOutcomeDelegate, uint32 /* Sequence */, EAethelnActivationResult /* Result */);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnMovementActivationOutcomeDelegate, float /* ClientTimeStamp */, EAethelnActivationResult /* Result */);
@@ -329,6 +330,7 @@ private:
 	friend class UAethelnBasicChainAbility;
 	friend class UAethelnDodgeAbility;
 	friend class UAethelnBlockAbility;
+	friend class UAethelnParryAbility;
 	friend class UAethelnCombatTimelineSubsystem;
 	friend class UAethelnDeathSubsystem;
 
