@@ -98,22 +98,31 @@ try {
 	$CanonicalGrammarText = Get-Content -LiteralPath (Join-Path $Root 'docs/game-design-bible.md') -Raw -Encoding UTF8
 	$CanonicalIds = @([regex]::Matches($CanonicalOrderText, 'order\.oathscar(?:\.[a-z][a-z0-9_]*)*') | ForEach-Object { $_.Value } | Sort-Object -Unique) +
 		@([regex]::Matches($CanonicalGrammarText, 'combat\.(?:resource|damage)\.[a-z][a-z0-9_]*') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+	# Issue #260 (owner, 2026-10-13): canon lists these retired Skein IDs by name;
+	# with no same-kind replacement they cannot be Superseded records, so they stay absent.
+	$RetiredIds = @('order.oathscar.form.gate_step.advancing_answer', 'order.oathscar.form.gate_step.rooted_answer',
+		'order.oathscar.form.hold_the_line.closed_oath', 'order.oathscar.thread.unbroken_sequence', 'order.oathscar.thread.ground_reclaimed')
 	$Seed = Copy-Fixture
 	$SeedIds = @($Seed.definitions | ForEach-Object { $_.id } | Sort-Object -Unique)
-	$MissingOrExtra = @(Compare-Object -ReferenceObject $CanonicalIds -DifferenceObject $SeedIds -CaseSensitive)
-	if ($CanonicalIds.Count -ne 29 -or $Seed.definitions.Count -ne 29 -or $MissingOrExtra.Count -gt 0 -or
-		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Canonical Intent' }).Count -ne 20 -or
-		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Prototype Candidate' }).Count -ne 9 -or
-		@($Seed.budgets | Where-Object { $_.maxPerRoot -cne 'TBD' }).Count -gt 0) {
-		throw "Expected exactly 29 source-bound shared/Oathscar records, nine prototype candidates, and unresolved budgets: $($MissingOrExtra | Out-String)"
+	foreach ($RetiredId in $RetiredIds) {
+		if ($CanonicalIds -cnotcontains $RetiredId -or $SeedIds -ccontains $RetiredId) { throw "Retired ID $RetiredId must be listed in canon and absent from the registry." }
 	}
-	Write-Output 'PASS: all 29 merged shared/Oathscar IDs, nine prototype candidates, and TBD budgets match the seed'
+	$CanonicalIds = @($CanonicalIds | Where-Object { $RetiredIds -cnotcontains $_ })
+	$MissingOrExtra = @(Compare-Object -ReferenceObject $CanonicalIds -DifferenceObject $SeedIds -CaseSensitive)
+	if ($CanonicalIds.Count -ne 28 -or $Seed.definitions.Count -ne 28 -or $MissingOrExtra.Count -gt 0 -or
+		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Canonical Intent' }).Count -ne 15 -or
+		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Prototype Candidate' }).Count -ne 10 -or
+		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Superseded' }).Count -ne 3 -or
+		@($Seed.budgets | Where-Object { $_.maxPerRoot -cne 'TBD' }).Count -gt 0) {
+		throw "Expected exactly 28 source-bound shared/Oathscar records, ten prototype candidates, three superseded actives, and unresolved budgets: $($MissingOrExtra | Out-String)"
+	}
+	Write-Output 'PASS: all 28 merged shared/Oathscar IDs, ten prototype candidates, three superseded actives, and TBD budgets match the seed'
 	$Schema = Get-Content -LiteralPath $SchemaPath -Raw -Encoding UTF8 | ConvertFrom-Json
 	$AllKinds = Copy-Fixture
 	foreach ($Kind in $Schema.kinds) {
 		$KindReferences = @()
 		if ($Kind -in @('specialization','weapon','peak')) { $KindReferences = @([pscustomobject]@{id='order.oathscar';minVersion=1;maxVersion=1}) }
-		elseif ($Kind -in @('form','thread')) { $KindReferences = @([pscustomobject]@{id='order.oathscar.ability.gate_step';minVersion=1;maxVersion=1}) }
+		elseif ($Kind -in @('form','thread')) { $KindReferences = @([pscustomobject]@{id='order.oathscar.ability.instant_strike';minVersion=1;maxVersion=1}) }
 		elseif ($Kind -eq 'keystone') { $KindReferences = @([pscustomobject]@{id='combat.resource.guard';minVersion=1;maxVersion=1}) }
 		$AllKinds.definitions += [pscustomobject]@{
 			id = "fixture.kind.$($Kind.ToLowerInvariant())"; kind = $Kind; definitionVersion = 1
@@ -280,7 +289,7 @@ try {
 	$ExpandedSchema.prototypeCandidateIds += 'order.oathscar'
 	[IO.File]::WriteAllText($SchemaFixturePath, ($ExpandedSchema | ConvertTo-Json -Depth 100), (New-Object System.Text.UTF8Encoding($false)))
 	$Fixture = Copy-Fixture; $Fixture.definitions[8].maturity = 'Prototype Candidate'
-	Assert-Invalid -Name 'schema-expanded prototype promotion' -Fixture $Fixture -Reason 'prototype allowlist differs from the approved nine IDs' -UseSchemaPath $SchemaFixturePath
+	Assert-Invalid -Name 'schema-expanded prototype promotion' -Fixture $Fixture -Reason 'prototype allowlist differs from the approved ten IDs' -UseSchemaPath $SchemaFixturePath
 	$ExpandedSchema = Get-Content -LiteralPath $SchemaPath -Raw -Encoding UTF8 | ConvertFrom-Json
 	$ExpandedSchema.referenceKindPolicy = 'all-of'
 	[IO.File]::WriteAllText($SchemaFixturePath, ($ExpandedSchema | ConvertTo-Json -Depth 100), (New-Object System.Text.UTF8Encoding($false)))
@@ -326,8 +335,8 @@ try {
 	$Fixture = Copy-Fixture; $Fixture.definitions[9].references[0].minVersion = 2
 	Assert-Invalid -Name 'incompatible definition version' -Fixture $Fixture -Reason 'incompatible version'
 	$Fixture = Copy-Fixture
-	@($Fixture.definitions | Where-Object { $_.id -ceq 'order.oathscar.ability.sworn_rebuke' })[0].definitionVersion = 2
-	Assert-Invalid -Name 'Unbroken Sequence modified Sworn Rebuke version drift' -Fixture $Fixture -Reason 'definition order\.oathscar\.thread\.unbroken_sequence: incompatible version of order\.oathscar\.ability\.sworn_rebuke'
+	@($Fixture.definitions | Where-Object { $_.id -ceq 'order.oathscar.ability.parry' })[0].definitionVersion = 2
+	Assert-Invalid -Name 'Witnessed Reprisal modified Parry version drift' -Fixture $Fixture -Reason 'definition order\.oathscar\.thread\.witnessed_reprisal: incompatible version of order\.oathscar\.ability\.parry'
 	foreach ($Pair in $ThreadTargetPairs) {
 		$Fixture = $ThreadTargetFixture | ConvertTo-Json -Depth 100 | ConvertFrom-Json
 		$Thread = @($Fixture.definitions | Where-Object { $_.id -ceq $Pair.threadId })[0]
@@ -341,9 +350,9 @@ try {
 	}
 	$Fixture = Copy-Fixture; $Fixture.definitions[9].references = @()
 	Assert-Invalid -Name 'specialization without Order reference' -Fixture $Fixture -Reason 'missing required kind reference'
-	$Fixture = Copy-Fixture; $Fixture.definitions[21].references = @()
-	Assert-Invalid -Name 'Form without ability reference' -Fixture $Fixture -Reason 'missing required kind reference'
-	$Fixture = Copy-Fixture; $Fixture.definitions[28].references[0].id = 'combat.damage.wrought'
+	$Fixture = $AllKinds | ConvertTo-Json -Depth 100 | ConvertFrom-Json; @($Fixture.definitions | Where-Object { $_.id -ceq 'fixture.kind.form' })[0].references = @()
+	Assert-Invalid -Name 'Form without ability reference' -Fixture $Fixture -Reason 'missing required kind reference' -UseSchemaPath $KindsSchemaPath
+	$Fixture = Copy-Fixture; $Fixture.definitions[27].references[0].id = 'combat.damage.wrought'
 	Assert-Invalid -Name 'Keystone without any accepted reference kind' -Fixture $Fixture -Reason 'missing required kind reference'
 	Assert-Valid -Name 'Keystone any-of accepts one resource reference' -Fixture $AllKinds -UseSchemaPath $KindsSchemaPath
 	$Fixture = Copy-Fixture; $Fixture.definitions[8].references += [pscustomobject]@{id='order.oathscar.spec.ironwake';minVersion=1;maxVersion=1}
@@ -373,23 +382,23 @@ try {
 	$Fixture = Copy-Fixture
 	foreach ($Budget in $Fixture.budgets) { $Budget.maxPerRoot = 2 }
 	$Fixture.definitions[9] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=1;procs=1;targets=0;constructs=0})
-	$Fixture.definitions[9].emits += 'order.oathscar.ability.gate_step'
-	$Fixture.definitions[18] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=2;procs=0;targets=0;constructs=0})
+	$Fixture.definitions[9].emits += 'order.oathscar.ability.instant_strike'
+	$Fixture.definitions[21] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=2;procs=0;targets=0;constructs=0})
 	Assert-Invalid -Name 'aggregate descendant fan-out' -Fixture $Fixture -Reason 'aggregate listeners work exceeds root budget'
 	$Fixture = Copy-Fixture
 	foreach ($Budget in $Fixture.budgets) { $Budget.maxPerRoot = 4 }
 	$Fixture.definitions[9] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=1;procs=1;targets=0;constructs=0})
-	$Fixture.definitions[9].emits += 'order.oathscar.ability.gate_step'
-	$Fixture.definitions[18] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=0;procs=0;targets=1;constructs=0})
+	$Fixture.definitions[9].emits += 'order.oathscar.ability.instant_strike'
+	$Fixture.definitions[21] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=0;procs=0;targets=1;constructs=0})
 	Assert-Valid -Name 'finite acyclic proc work' -Fixture $Fixture
-	$Fixture.definitions[18].emits += 'order.oathscar.spec.ironwake'
-	$Fixture.definitions[18].work.listeners = 1; $Fixture.definitions[18].work.procs = 1
+	$Fixture.definitions[21].emits += 'order.oathscar.spec.ironwake'
+	$Fixture.definitions[21].work.listeners = 1; $Fixture.definitions[21].work.procs = 1
 	Assert-Invalid -Name 'proc cycle' -Fixture $Fixture -Reason 'cycle:'
 	$Fixture = Copy-Fixture
 	foreach ($Budget in $Fixture.budgets) { $Budget.maxPerRoot = [long]::MaxValue }
 	$Fixture.definitions[9] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=1;procs=1;targets=[long]::MaxValue;constructs=0})
-	$Fixture.definitions[9].emits += 'order.oathscar.ability.gate_step'
-	$Fixture.definitions[18] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=0;procs=0;targets=[long]::MaxValue;constructs=0})
+	$Fixture.definitions[9].emits += 'order.oathscar.ability.instant_strike'
+	$Fixture.definitions[21] | Add-Member -NotePropertyName work -NotePropertyValue ([pscustomobject]@{listeners=0;procs=0;targets=[long]::MaxValue;constructs=0})
 	Assert-Invalid -Name 'wide integer aggregate overflow' -Fixture $Fixture -Reason 'aggregate targets work exceeds root budget'
 	$CompositionFixture = Get-CompositionFixture
 	Assert-Valid -Name 'two-listener composition within aggregate limits' -Fixture $CompositionFixture -UseSchemaPath $KindsSchemaPath

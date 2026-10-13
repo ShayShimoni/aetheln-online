@@ -160,6 +160,18 @@ current default, in which a running delay keeps counting on the server clock
 (see [Open Decisions](#open-decisions)) and stays `TBD`. Respawn restores only
 Health, Endurance, and Guard (see [Respawn](#respawn-p2)).
 
+**Stance buffs end at death (#260).** The owner's stance buffs (Attack Stance
+and Defense Stance) are removed on death
+([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)).
+#260 P4 gives each stance effect a removal tag requirement on `State.Dead`, so
+step 3's death effect removes the active stance at the processing time and
+#21 adds no code for it. Respawn does not bring a stance back: the restoration
+stays the fixed Health, Endurance, and Guard set, which the owner declared the
+restoration allowlist (option A,
+[issue #21](https://github.com/ShayShimoni/aetheln-online/issues/21#issuecomment-6142791700)).
+The specification and test (K11) are in
+[Representative Oathscar Actives](gas-foundation.md#representative-oathscar-actives-260).
+
 ## Respawn (P2)
 
 The owner decisions below are provisional, owner-set, and re-tuned at the P5
