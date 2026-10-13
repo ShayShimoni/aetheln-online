@@ -1615,6 +1615,15 @@ bool FAethelnContentValidationScanner::IsSoftReferenceAllowed(
 	return false;
 }
 
+bool FAethelnContentValidationScanner::IsHardReferenceAllowed(
+	const TMap<FString, TSet<FString>>& Rules,
+	const FString& SourceAudience,
+	const FString& TargetAudience)
+{
+	const TSet<FString>* AllowedTargets = Rules.Find(SourceAudience);
+	return AllowedTargets != nullptr && AllowedTargets->Contains(TargetAudience);
+}
+
 FAethelnEditorOnlyTarget FAethelnContentValidationScanner::ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage)
 {
 	// UHT flags Editor-module script packages PKG_EditorOnly and UncookedOnly-module script packages
@@ -2391,8 +2400,7 @@ int32 FAethelnContentValidationScanner::Run(const FAethelnContentValidationRunAr
 			{
 				continue;
 			}
-			const TSet<FString>* AllowedTargets = Policy.HardAudienceRules.Find(IntakeAsset.Audience);
-			if (AllowedTargets == nullptr || !AllowedTargets->Contains(Target->Audience))
+			if (!IsHardReferenceAllowed(Policy.HardAudienceRules, IntakeAsset.Audience, Target->Audience))
 			{
 				HardAudienceFailures.Add(FString::Printf(
 					TEXT("hard dependency '%s' crosses prohibited audience boundary %s -> %s"),

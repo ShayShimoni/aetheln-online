@@ -10,6 +10,9 @@
 #include "Animation/AnimNotifies/AnimNotify_PlaySound.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
+#include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "UObject/AssetRegistryTagsContext.h"
 
 #if WITH_EDITOR
 #include "Misc/DataValidation.h"
@@ -17,6 +20,23 @@
 
 namespace
 {
+	const FName AbilityIdTag(TEXT("AbilityId"));
+	const FName AuthoredContentVersionTag(TEXT("AuthoredContentVersion"));
+
+	/** Every binding that claims the ability and version, found by class and searchable tags only. */
+	TArray<FAssetData> QueryBindings(const FGameplayTag& AbilityId, int32 AuthoredContentVersion)
+	{
+		TArray<FAssetData> Found;
+		if (!AbilityId.IsValid() || AuthoredContentVersion < 1) { return Found; }
+		FARFilter Filter;
+		Filter.ClassPaths.Add(UAethelnAttackPresentation::StaticClass()->GetClassPathName());
+		Filter.bRecursiveClasses = true;
+		Filter.TagsAndValues.Add(AbilityIdTag, AbilityId.ToString());
+		Filter.TagsAndValues.Add(AuthoredContentVersionTag, FString::FromInt(AuthoredContentVersion));
+		IAssetRegistry::GetChecked().GetAssets(Filter, Found);
+		return Found;
+	}
+
 	bool HasOnlyAllowedNotifies(const TArray<FAnimNotifyEvent>& Notifies)
 	{
 		for (const FAnimNotifyEvent& Event : Notifies)
@@ -52,7 +72,24 @@ bool UAethelnAttackPresentation::IsPresentationNotifyClass(const UClass* NotifyC
 {
 	return NotifyClass == UAnimNotify_PlaySound::StaticClass()
 		|| NotifyClass == UAnimNotify_PlayParticleEffect::StaticClass()
-		|| NotifyClass == UAnimNotifyState_Trail::StaticClass();
+		|| NotifyClass == UAnimNotifyState_Trail::StaticClass()
+		// The Niagara notify, matched by exact class path so GameCombat takes no dependency on the Niagara modules.
+		|| (NotifyClass != nullptr && NotifyClass->GetClassPathName() == FTopLevelAssetPath(TEXT("/Script/NiagaraAnimNotifies"), TEXT("AnimNotify_PlayNiagaraEffect")));
+}
+
+EAethelnPresentationLookup UAethelnAttackPresentation::FindBinding(const FGameplayTag& InAbilityId, int32 InAuthoredContentVersion, FAssetData& OutAsset)
+{
+	const TArray<FAssetData> Found = QueryBindings(InAbilityId, InAuthoredContentVersion);
+	if (Found.IsEmpty()) { return EAethelnPresentationLookup::NotFound; }
+	if (Found.Num() > 1) { return EAethelnPresentationLookup::Ambiguous; }
+	OutAsset = Found[0];
+	return EAethelnPresentationLookup::Found;
+}
+
+void UAethelnAttackPresentation::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
+{
+	Super::GetAssetRegistryTags(Context);
+	Context.AddTag(FAssetRegistryTag(AbilityIdTag, AbilityId.ToString(), FAssetRegistryTag::TT_Alphabetical));
 }
 
 const TCHAR* UAethelnAttackPresentation::FindProblem() const
@@ -86,11 +123,25 @@ const TCHAR* UAethelnAttackPresentation::FindProblem() const
 EDataValidationResult UAethelnAttackPresentation::IsDataValid(FDataValidationContext& Context) const
 {
 	EDataValidationResult Result = Super::IsDataValid(Context);
+	bool bInvalid = Result == EDataValidationResult::Invalid;
 	if (const TCHAR* Problem = FindProblem())
 	{
 		Context.AddError(FText::FromString(FString::Printf(TEXT("Attack presentation %s %s."), *GetPathName(), Problem)));
-		return EDataValidationResult::Invalid;
+		bInvalid = true;
 	}
-	return Result == EDataValidationResult::Invalid ? Result : EDataValidationResult::Valid;
+	// Two bindings for the same ability ID and version are an error, not a priority rule. A real asset only:
+	// transient fixtures are never mounted content.
+	if (GetOutermost() != GetTransientPackage())
+	{
+		for (const FAssetData& Other : QueryBindings(AbilityId, AuthoredContentVersion))
+		{
+			if (Other.GetSoftObjectPath() != FSoftObjectPath(this))
+			{
+				Context.AddError(FText::FromString(FString::Printf(TEXT("Attack presentation %s duplicates the binding %s for the same ability ID and content version."), *GetPathName(), *Other.GetSoftObjectPath().ToString())));
+				bInvalid = true;
+			}
+		}
+	}
+	return bInvalid ? EDataValidationResult::Invalid : EDataValidationResult::Valid;
 }
 #endif

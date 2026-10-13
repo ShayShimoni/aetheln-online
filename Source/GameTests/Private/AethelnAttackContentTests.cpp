@@ -7,6 +7,7 @@
 #include "AethelnChainTestFixture.h"
 #include "AethelnCombatAICharacter.h"
 #include "AethelnCombatAttributeSet.h"
+#include "AethelnContentValidationScanner.h"
 #include "AethelnGameplayTags.h"
 #include "Animation/AnimComposite.h"
 #include "Animation/AnimMontage.h"
@@ -16,13 +17,21 @@
 #include "Animation/AnimNotifies/AnimNotify_ResetDynamics.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
+#include "AnimNotify_PlayNiagaraEffect.h"
+#include "AssetRegistry/AssetData.h"
+#include "Dom/JsonObject.h"
 #include "Engine/SkeletalMeshSocket.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/DataValidation.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Guid.h"
+#include "Misc/Paths.h"
+#include "Serialization/JsonSerializer.h"
+#include "UObject/Package.h"
 
 #include <limits>
 
-// #84 P2 and P3 (docs/animation-and-combat-content-pipeline.md, Test Plan N1 to N3). Fixture values only;
+// #84 P2, P3 and P3b (docs/animation-and-combat-content-pipeline.md, Test Plan N1 to N4 and N6). Fixture values only;
 // no tuning is approved here. The geometry is the #60 contact fixture: the test chain's sphere reaches
 // a dummy centered 60 units ahead during the first step's active window.
 namespace AethelnAttackContentTests
@@ -364,13 +373,30 @@ bool FAethelnPresentationBindingValidationTest::RunTest(const FString& Parameter
 	using namespace AethelnAttackContentTests;
 	// UAnimationSequencerDataModel::ValidateSequencerData logs this once for each UAnimSequence built below (the sequence
 	// mutation and the composite mutation), not for montages; it is not a validator result.
-	AddExpectedError(TEXT("No Movie Scene found for SequencerDataModel"), EAutomationExpectedErrorFlags::Contains, 2);
+	AddExpectedError(TEXT("No Movie Scene found for SequencerDataModel"), EAutomationExpectedErrorFlags::Contains, 3);
 	{
 		FBindingFixture Valid;
 		TestNull(TEXT("A fixture-only valid binding passes, with allowlisted sound and trail notifies"), Valid.Binding->FindProblem());
 		FDataValidationContext Context;
 		TestTrue(TEXT("Editor validation passes it"), Valid.Binding->IsDataValid(Context) == EDataValidationResult::Valid);
 		TestEqual(TEXT("With no error"), static_cast<int32>(Context.GetNumErrors()), 0);
+	}
+	{
+		// A plain UAnimSequence segment is walked, and passes when every notify on it is allowlisted (PR 348 delta review, L1).
+		FBindingFixture Fixture;
+		UAnimSequence* Sequence = NewObject<UAnimSequence>(Fixture.Montage);
+		Sequence->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_PlaySound>(Sequence);
+		Sequence->Notifies.AddDefaulted_GetRef().NotifyStateClass = NewObject<UAnimNotifyState_Trail>(Sequence);
+		FAnimSegment Segment;
+		Segment.SetAnimReference(Sequence);
+		Fixture.Montage->SlotAnimTracks.AddDefaulted_GetRef().AnimTrack.AnimSegments.Add(Segment);
+		TestNull(TEXT("A plain sequence segment with allowlisted notifies passes"), Fixture.Binding->FindProblem());
+	}
+	{
+		// The Niagara effect notify is on the allowlist (Residual Risk 5).
+		FBindingFixture Fixture;
+		Fixture.Montage->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_PlayNiagaraEffect>(Fixture.Montage);
+		TestNull(TEXT("A Niagara effect notify passes"), Fixture.Binding->FindProblem());
 	}
 
 	struct FMutation
@@ -441,6 +467,144 @@ bool FAethelnPresentationBindingValidationTest::RunTest(const FString& Parameter
 		TestTrue(*FString::Printf(TEXT("%s fails editor validation"), Mutation.Name), Fixture.Binding->IsDataValid(Context) == EDataValidationResult::Invalid);
 		TestTrue(*FString::Printf(TEXT("%s reports an error"), Mutation.Name), Context.GetNumErrors() > 0);
 	}
+	return true;
+}
+
+namespace AethelnAttackContentTests
+{
+	/**
+	 * A binding in its own in-memory package: a public, non-transient asset the Asset Registry enumerates, found
+	 * through its class and tags and not through its path. The package is never saved.
+	 */
+	struct FMountedBinding
+	{
+		UPackage* Package = nullptr;
+		UAethelnAttackPresentation* Binding = nullptr;
+
+		FMountedBinding(const FGameplayTag& AbilityId, int32 AuthoredContentVersion)
+		{
+			Package = CreatePackage(*FString::Printf(TEXT("/Temp/AethelnAttackContentTests/%s/Bindings"), *FGuid::NewGuid().ToString()));
+			Binding = NewObject<UAethelnAttackPresentation>(Package, TEXT("DA_LookupFixture"), RF_Public | RF_Standalone);
+			Binding->AbilityId = AbilityId;
+			Binding->AuthoredContentVersion = AuthoredContentVersion;
+		}
+
+		~FMountedBinding()
+		{
+			Binding->ClearFlags(RF_Public | RF_Standalone);
+			Binding->MarkAsGarbage();
+			Package->MarkAsGarbage();
+		}
+
+		FSoftObjectPath Path() const { return FSoftObjectPath(Binding); }
+	};
+
+	EAethelnPresentationLookup Lookup(const FGameplayTag& AbilityId, int32 AuthoredContentVersion, FAssetData& Out)
+	{
+		Out = FAssetData();
+		return UAethelnAttackPresentation::FindBinding(AbilityId, AuthoredContentVersion, Out);
+	}
+
+	/** Whether editor validation of the binding names a duplicate binding. */
+	bool ReportsDuplicate(const UAethelnAttackPresentation& Binding)
+	{
+		FDataValidationContext Context;
+		Binding.IsDataValid(Context);
+		for (const FDataValidationContext::FIssue& Issue : Context.GetIssues())
+		{
+			if (Issue.Message.ToString().Contains(TEXT("duplicates the binding"))) { return true; }
+		}
+		return false;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnBindingLookupTest,
+	"Aetheln.GameCombat.AttackContent.BindingLookup",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnBindingLookupTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnAttackContentTests;
+	const FGameplayTag Ability = AethelnCombatTestTags::Ability_Test_Probe;
+	const FGameplayTag OtherAbility = AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain;
+	// Far above any definition version, so no other fixture in the session shares the key.
+	const int32 Version = 9001;
+	FAssetData Found;
+	TestTrue(TEXT("Nothing mounted: not found"), Lookup(Ability, Version, Found) == EAethelnPresentationLookup::NotFound);
+	TestTrue(TEXT("An invalid ability ID is not found"), Lookup(FGameplayTag(), Version, Found) == EAethelnPresentationLookup::NotFound);
+	TestTrue(TEXT("A content version below 1 is not found"), Lookup(Ability, 0, Found) == EAethelnPresentationLookup::NotFound);
+	{
+		FMountedBinding First(Ability, Version);
+		TestTrue(TEXT("One binding is found by ability ID and version"), Lookup(Ability, Version, Found) == EAethelnPresentationLookup::Found);
+		TestTrue(TEXT("It is that binding"), Found.GetSoftObjectPath() == First.Path());
+		FString TagValue;
+		TestTrue(TEXT("The registry holds the ability ID as a plain tag"), Found.GetTagValue(TEXT("AbilityId"), TagValue));
+		TestEqual(TEXT("Its value is the tag name"), TagValue, Ability.ToString());
+		TestTrue(TEXT("Another version is not found"), Lookup(Ability, Version + 1, Found) == EAethelnPresentationLookup::NotFound);
+		TestTrue(TEXT("Another ability is not found"), Lookup(OtherAbility, Version, Found) == EAethelnPresentationLookup::NotFound);
+		TestFalse(TEXT("A unique binding reports no duplicate"), ReportsDuplicate(*First.Binding));
+
+		{
+			FMountedBinding NextVersion(Ability, Version + 1);
+			TestTrue(TEXT("A binding in another package for another version does not collide"), Lookup(Ability, Version, Found) == EAethelnPresentationLookup::Found);
+			TestTrue(TEXT("The first version still resolves to the first binding"), Found.GetSoftObjectPath() == First.Path());
+			TestTrue(TEXT("The next version resolves"), Lookup(Ability, Version + 1, Found) == EAethelnPresentationLookup::Found);
+			TestTrue(TEXT("To the next binding"), Found.GetSoftObjectPath() == NextVersion.Path());
+		}
+		{
+			FMountedBinding Second(Ability, Version);
+			TestTrue(TEXT("Two bindings for the same ability ID and version are ambiguous"), Lookup(Ability, Version, Found) == EAethelnPresentationLookup::Ambiguous);
+			TestFalse(TEXT("An ambiguous lookup returns no asset"), Found.IsValid());
+			TestTrue(TEXT("Editor validation names the duplicate of the first"), ReportsDuplicate(*First.Binding));
+			TestTrue(TEXT("And of the second"), ReportsDuplicate(*Second.Binding));
+		}
+		TestTrue(TEXT("Once the duplicate is gone the first binding resolves again"), Lookup(Ability, Version, Found) == EAethelnPresentationLookup::Found);
+		TestFalse(TEXT("And reports no duplicate"), ReportsDuplicate(*First.Binding));
+	}
+	TestTrue(TEXT("Once unmounted: not found"), Lookup(Ability, Version, Found) == EAethelnPresentationLookup::NotFound);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnBindingAudienceTest,
+	"Aetheln.GameCombat.AttackContent.BindingAudience",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnBindingAudienceTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnAttackContentTests;
+	// A binding is ClientOnly; the audience of a Shared or ServerOnly binding is itself refused.
+	for (const EAethelnContentAudience Audience : { EAethelnContentAudience::Shared, EAethelnContentAudience::ServerOnly })
+	{
+		FBindingFixture Fixture;
+		Fixture.Binding->Audience = Audience;
+		const TCHAR* Problem = Fixture.Binding->FindProblem();
+		TestEqual(TEXT("A binding that is not ClientOnly is refused"), FString(Problem != nullptr ? Problem : TEXT("<accepted>")), FString(TEXT("is not ClientOnly")));
+	}
+
+	// reference_boundary applies the policy's hard-reference matrix through IsHardReferenceAllowed.
+	FString PolicyText;
+	const FString PolicyPath = FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("ContentValidation/asset-intake-policy.json"));
+	if (!TestTrue(TEXT("The intake policy loads"), FFileHelper::LoadFileToString(PolicyText, *PolicyPath))) { return false; }
+	TSharedPtr<FJsonObject> Policy;
+	if (!TestTrue(TEXT("The intake policy parses"), FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(PolicyText), Policy) && Policy.IsValid())) { return false; }
+	const TSharedPtr<FJsonObject>* References = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* RuleValues = nullptr;
+	if (!TestTrue(TEXT("The policy declares hard-reference audience rules"),
+		Policy->TryGetObjectField(TEXT("references"), References) && (*References)->TryGetArrayField(TEXT("hard_reference_audience_rules"), RuleValues))) { return false; }
+	TMap<FString, TSet<FString>> Rules;
+	for (const TSharedPtr<FJsonValue>& RuleValue : *RuleValues)
+	{
+		const TSharedPtr<FJsonObject> Rule = RuleValue->AsObject();
+		TSet<FString>& Allowed = Rules.Add(Rule->GetStringField(TEXT("source")));
+		for (const TSharedPtr<FJsonValue>& Target : Rule->GetArrayField(TEXT("may_reference"))) { Allowed.Add(Target->AsString()); }
+	}
+	using FScanner = FAethelnContentValidationScanner;
+	TestFalse(TEXT("A Shared package that hard-references a binding fails reference_boundary"), FScanner::IsHardReferenceAllowed(Rules, TEXT("shared"), TEXT("client_only")));
+	TestFalse(TEXT("A ServerOnly package that hard-references a binding fails reference_boundary"), FScanner::IsHardReferenceAllowed(Rules, TEXT("server_only"), TEXT("client_only")));
+	TestTrue(TEXT("A binding may hard-reference the Shared definition"), FScanner::IsHardReferenceAllowed(Rules, TEXT("client_only"), TEXT("shared")));
+	TestTrue(TEXT("A binding may hard-reference another ClientOnly asset"), FScanner::IsHardReferenceAllowed(Rules, TEXT("client_only"), TEXT("client_only")));
+	TestFalse(TEXT("A binding may not hard-reference a ServerOnly asset"), FScanner::IsHardReferenceAllowed(Rules, TEXT("client_only"), TEXT("server_only")));
+	TestFalse(TEXT("An unknown source audience fails closed"), FScanner::IsHardReferenceAllowed(Rules, TEXT("unknown"), TEXT("shared")));
 	return true;
 }
 
