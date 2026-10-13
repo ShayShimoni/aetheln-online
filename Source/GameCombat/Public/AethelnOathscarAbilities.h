@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AethelnBasicChainAbility.h"
 #include "AethelnGameplayAbility.h"
 #include "CoreMinimal.h"
 #include "AethelnOathscarAbilities.generated.h"
@@ -43,4 +44,16 @@ class GAMECOMBAT_API UAethelnHoldTheLineAbility : public UAethelnGameplayAbility
 
 public:
 	UAethelnHoldTheLineAbility();
+};
+
+/**
+ * order.oathscar.ability.instant_strike (#260): a single-step use of the #60 chain machinery.
+ */
+UCLASS(Config = Game)
+class GAMECOMBAT_API UAethelnInstantStrikeAbility : public UAethelnBasicChainAbility
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnInstantStrikeAbility();
 };

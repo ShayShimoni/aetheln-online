@@ -19,3 +19,11 @@ UAethelnHoldTheLineAbility::UAethelnHoldTheLineAbility()
 	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_HoldTheLine);
 	SetCooldownTag(AethelnGameplayTags::Cooldown_Oathscar_HoldTheLine);
 }
+
+UAethelnInstantStrikeAbility::UAethelnInstantStrikeAbility()
+{
+	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_InstantStrike);
+	SetCooldownTag(AethelnGameplayTags::Cooldown_Oathscar_InstantStrike);
+	StepCount = 1;
+	CommitmentTag = AethelnGameplayTags::State_Oathscar_InstantStrike;
+}

@@ -1144,6 +1144,7 @@ bool UAethelnAbilitySystemComponent::BeginChainPress(UAethelnBasicChainAbility& 
 		ChainState.Handle = Handle;
 		ChainState.Ability = &Ability;
 		ChainState.Definitions = Ability.ProvisionalSteps; // immutable for this chain
+		ChainState.CommitmentTag = Ability.GetCommitmentTag();
 		BindChainResetTags(Ability.ResetTags);
 		ActiveSeamScope->bChainReady = StartChainStep(Input, 1, Input.ReceiptServerTime);
 		if (!ActiveSeamScope->bChainReady && ChainState.bExists && ChainState.Handle == Handle
@@ -1155,7 +1156,7 @@ bool UAethelnAbilitySystemComponent::BeginChainPress(UAethelnBasicChainAbility& 
 		}
 		return ActiveSeamScope->bChainReady;
 	}
-	if (ChainState.bWaiting || ChainState.Step >= 3) { return false; }
+	if (ChainState.bWaiting || ChainState.Step >= ChainState.Definitions.Num()) { return false; }
 	const FAethelnAttackStepDefinition& Previous = ChainState.Definitions[ChainState.Step - 1];
 	const double LinkOpen = ChainState.StartTime + Previous.LinkOpen;
 	if (Input.ReceiptServerTime < LinkOpen)
@@ -1197,7 +1198,7 @@ bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttack
 	if (ChainState.bCommitmentHeld)
 	{
 		ChainState.bCommitmentHeld = false;
-		RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+		RemoveLooseGameplayTag(Previous.CommitmentTag);
 	}
 	if (!ChainState.bExists || ChainState.Handle != Previous.Handle || ChainState.Ability.Get() != Ability
 		|| ChainState.Step != Previous.Step || ChainState.CurrentInput.ActivationId != Previous.CurrentInput.ActivationId
@@ -1210,7 +1211,7 @@ bool UAethelnAbilitySystemComponent::StartChainStep(const FAethelnAcceptedAttack
 	ChainState.Step = Step; ChainState.StartTime = StartTime; ChainState.CurrentInput = Input;
 	ChainState.bWaiting = false; ChainState.BufferedInput = FAethelnAcceptedAttackInput();
 	ChainState.bCommitmentHeld = Definition.CancelOpen > 0.0;
-	if (ChainState.bCommitmentHeld) { AddLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain); }
+	if (ChainState.bCommitmentHeld) { AddLooseGameplayTag(ChainState.CommitmentTag); }
 	if (!ChainState.bExists || ChainState.Handle != Previous.Handle || ChainState.Ability.Get() != Ability
 		|| ChainState.Step != Step || ChainState.CurrentInput.ActivationId != Input.ActivationId)
 	{
@@ -1264,7 +1265,7 @@ void UAethelnAbilitySystemComponent::ApplyChainBoundaries(double Now)
 	if (ChainState.bCommitmentHeld && Now >= ChainState.StartTime + Step.CancelOpen)
 	{
 		ChainState.bCommitmentHeld = false;
-		RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
+		RemoveLooseGameplayTag(ChainState.CommitmentTag);
 	}
 	if (!ChainState.bExists || ChainState.CurrentInput.ActivationId != ActivationId) { return; }
 	if (!ChainState.bWaiting && Now >= ChainState.StartTime + Step.BufferOpen)
@@ -1273,11 +1274,12 @@ void UAethelnAbilitySystemComponent::ApplyChainBoundaries(double Now)
 	}
 	// GAS end delegates may reset or replace this chain. Do not touch their state.
 	if (!ChainState.bExists || ChainState.CurrentInput.ActivationId != ActivationId) { return; }
-	if (ChainState.Step == 3 && Now >= ChainState.StartTime + Step.RecoveryEnd)
+	const int32 FinalStep = ChainState.Definitions.Num();
+	if (ChainState.Step == FinalStep && Now >= ChainState.StartTime + Step.RecoveryEnd)
 	{
 		ResetChain(EAethelnChainEndReason::Completed, ChainState.StartTime + Step.RecoveryEnd);
 	}
-	else if (ChainState.Step < 3 && !ChainState.bWaiting && Now >= ChainState.StartTime + Step.LinkClose)
+	else if (ChainState.Step < FinalStep && !ChainState.bWaiting && Now >= ChainState.StartTime + Step.LinkClose)
 	{
 		ResetChain(EAethelnChainEndReason::Timeout, ChainState.StartTime + Step.LinkClose);
 	}
@@ -1308,7 +1310,7 @@ void UAethelnAbilitySystemComponent::ResetChain(EAethelnChainEndReason Reason, d
 	AttackPresentationState.EndReason = Reason;
 	if (UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline()) { Timeline->StampReset(Previous.CurrentInput.ActivationId, ResetTime); }
 	UnbindChainResetTags();
-	if (Previous.bCommitmentHeld) { RemoveLooseGameplayTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain); }
+	if (Previous.bCommitmentHeld) { RemoveLooseGameplayTag(Previous.CommitmentTag); }
 	const FGameplayAbilitySpec* CurrentSpec = FindAbilitySpecFromHandle(Previous.Handle);
 	const UAethelnGameplayAbility* CurrentInstance = CurrentSpec != nullptr ? Cast<UAethelnGameplayAbility>(CurrentSpec->GetPrimaryInstance()) : nullptr;
 	if (OriginalActiveOperation.IsValid() && CurrentSpec != nullptr && CurrentSpec->IsActive() && CurrentInstance != nullptr

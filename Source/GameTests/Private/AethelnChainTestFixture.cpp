@@ -40,9 +40,11 @@ namespace AethelnChainTests
 		return Result;
 	}
 
-	bool FFixture::Init(FAutomationTestBase& Test)
+	bool FFixture::Init(FAutomationTestBase& Test, const TArray<TSubclassOf<UGameplayAbility>>& Extra)
 	{
-		if (!AethelnCombatTests::SpawnTestPlayer(Test, World, Player, { UAethelnChainTestAbility::StaticClass() })) { return false; }
+		TArray<TSubclassOf<UGameplayAbility>> Abilities = { UAethelnChainTestAbility::StaticClass() };
+		Abilities.Append(Extra);
+		if (!AethelnCombatTests::SpawnTestPlayer(Test, World, Player, Abilities)) { return false; }
 		Pawn = World.Spawn<AAethelnPlayerCharacter>();
 		if (!Test.TestNotNull(TEXT("Chain pawn exists"), Pawn)) { return false; }
 		Player.Controller->Possess(Pawn);
