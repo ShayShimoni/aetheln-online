@@ -31,7 +31,7 @@ public:
 
 	virtual void PostInitializeComponents() override;
 	/** A logout carries this player's state across the disconnect grace window (#21 P4). */
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void Destroyed() override;
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 	/** The movement authority (#18 T1) forwards to the ASC, which resolves the current grant and possessed avatar. */

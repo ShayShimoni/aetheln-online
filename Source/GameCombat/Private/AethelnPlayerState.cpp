@@ -59,15 +59,16 @@ void AAethelnPlayerState::PostInitializeComponents()
 	});
 }
 
-void AAethelnPlayerState::EndPlay(const EEndPlayReason::Type EndPlayReason)
+void AAethelnPlayerState::Destroyed()
 {
-	// A logout destroys the PlayerState; the ASC still holds its attributes and effects here, before the base destroys them.
+	// A logout destroys the PlayerState. Destroyed() runs for every destroy, before the actor ends play and before its components
+	// unregister, so the ASC still holds its attributes and effects. EndPlay would not do: an actor that never began play skips it.
 	// A player who never took a first possession has nothing to carry (its attributes were never initialized).
-	if (EndPlayReason == EEndPlayReason::Destroyed && HasAuthority() && bCombatStateInitialized && !ReconnectKey.IsEmpty())
+	if (HasAuthority() && bCombatStateInitialized && !ReconnectKey.IsEmpty())
 	{
 		UAethelnDeathSubsystem::CaptureCarriedState(*AbilitySystemComponent, ReconnectKey);
 	}
-	Super::EndPlay(EndPlayReason);
+	Super::Destroyed();
 }
 
 UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const

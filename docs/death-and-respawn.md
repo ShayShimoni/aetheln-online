@@ -300,10 +300,11 @@ valid, and now asserts the carried values. The combat game mode stays on
 `AGameModeBase` (see [Decisions at a Glance](#decisions-at-a-glance), item 7);
 the snapshot lives in `UAethelnDeathSubsystem` beside the respawn wait.
 
-- **Capture.** `AAethelnPlayerState::EndPlay` (authority, reason `Destroyed`,
-  first possession done, a reconnect key set) calls
-  `UAethelnDeathSubsystem::CaptureCarriedState`. The ASC still holds its
-  attributes and effects at that point; the base destroys them afterwards. The
+- **Capture.** `AAethelnPlayerState::Destroyed` (authority, first possession
+  done, a reconnect key set) calls `UAethelnDeathSubsystem::CaptureCarriedState`.
+  `Destroyed` runs for every destroy, before the actor ends play and before its
+  components unregister, so the ASC still holds its attributes and effects.
+  `EndPlay` would not do: an actor that never began play skips it. The
   snapshot holds the six attribute values; every active
   `UAethelnCooldownEffect` with its granted tags and its end time on the world
   clock (that one effect class is the shared timed state: ability cooldowns, the
