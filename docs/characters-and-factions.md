@@ -392,13 +392,29 @@ IDs are not reused:
 
 The weave definitions tied to them are superseded and are redesigned later in
 a Skein pass
-([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142746909)):
-the Forms Advancing Answer and Rooted Answer (Gate Step) and Closed Oath (Hold
-the Line), and the Threads Unbroken Sequence (Sworn Rebuke) and Ground
-Reclaimed (Gate Step). Their former IDs are retired, not reused, and are not
-registry records: the registry has no superseded state without a same-kind
-replacement, so the Skein pass issues new IDs. Witnessed Reprisal stays and
-now answers the Parry.
+([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142746909)).
+Their former intent, kept for that pass:
+
+- Form Advancing Answer (`order.oathscar.form.gate_step.advancing_answer`):
+  changed Gate Step into a more committed advance with authored contact,
+  movement, and recovery.
+- Form Rooted Answer (`order.oathscar.form.gate_step.rooted_answer`): gave up
+  Gate Step's advance to contest Guard from a held position; mutually
+  exclusive with Advancing Answer.
+- Form Closed Oath (`order.oathscar.form.hold_the_line.closed_oath`): narrowed
+  Hold the Line to a more committed directional defense with a readable
+  facing requirement.
+- Thread Unbroken Sequence (`order.oathscar.thread.unbroken_sequence`):
+  completing the basic chain without a miss changed the next compatible Sworn
+  Rebuke.
+- Thread Ground Reclaimed (`order.oathscar.thread.ground_reclaimed`): a
+  committed dodge result changed the next compatible Gate Step; a predicted
+  dodge alone could not trigger it.
+
+These five IDs are retired: they are not registry records, because the
+registry has no superseded state without a same-kind replacement. Whether the
+Skein pass reuses them or issues new IDs is open (lane default: new IDs).
+Witnessed Reprisal stays and now answers the Parry.
 
 ### Nullwright - Working Name
 

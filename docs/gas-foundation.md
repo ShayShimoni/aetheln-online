@@ -698,7 +698,10 @@ value is set here except the owner's provisional 600 s stance duration.
 - **Fail closed.** Every value is config, unset in production; an unset value
   refuses the grant with a log, as the chain and block do. The actives stay out
   of `GrantedAbilities` until authored values exist (owner, 2026-10-12, for
-  the earlier actives; carried over). Tests set their own values.
+  the earlier actives; carried over). Tests set their own values. The one
+  exception is the owner's provisional stance duration: P4 sets
+  `ProvisionalStanceDurationSeconds=600` in `Config/DefaultGame.ini`, while
+  the stances stay out of `GrantedAbilities` until their magnitudes exist.
 - **Superseded skeletons.** P2 removes `UAethelnGateStepAbility`,
   `UAethelnSwornRebukeAbility`, `UAethelnHoldTheLineAbility`, their tags and
   ini sections, and moves the tests that use them (T17, T19, T20, and the HUD
@@ -715,8 +718,8 @@ value is set here except the owner's provisional 600 s stance duration.
   `UAethelnDefenseStanceEffect`, which grants its exclusive state tag,
   `State.Oathscar.AttackStance` or `State.Oathscar.DefenseStance`. The
   duration comes from `SetByCaller.Stance.Duration`, read from
-  `ProvisionalStanceDurationSeconds` (600, the owner's provisional value,
-  re-tuned at the feel test). A zero or non-finite duration refuses the grant.
+  `ProvisionalStanceDurationSeconds` (600 in `Config/DefaultGame.ini`, the
+  owner's provisional value, re-tuned at the feel test). A zero or non-finite duration refuses the grant.
 - **Instant and uncooled.** `ActivateAbility` commits, removes every active
   effect that grants either stance tag, applies its own effect, and ends, all
   in one server call; there is no timeline step and no commitment tag. A
@@ -782,7 +785,7 @@ its PIE rows (A19 to A21) under the same conditions.
 
 | # | Test | Phase | Kind | What it proves |
 | --- | --- | --- | --- | --- |
-| K1 | `Aetheln.GameCombat.OathscarActives.InstantStrikeDefinition` | P2 | H | Grant refused unless there is exactly one step that obeys the final-step rules, `GuardPressure` is 0 and `bInterruptsTarget` is false (owner: pure damage), the commitment tag is its own and not self-blocking, and the chain commitment tag is a blocking tag; unset values fail closed; a positive cooldown is accepted |
+| K1 | `Aetheln.GameCombat.OathscarActives.InstantStrikeDefinition` | P2 | H | Grant refused unless there is exactly one step that obeys the final-step rules, `GuardPressure` is 0 and `bInterruptsTarget` is false (owner: pure damage), the commitment tag is its own and not self-blocking, and the chain commitment tag is both a blocking tag and an authored reset tag; unset values fail closed; a zero cooldown is refused (owner: the strike has a cooldown) and a positive one accepted |
 | K2 | `Aetheln.GameCombat.OathscarActives.InstantStrikeContact` | P2 | H | A press registers one step at the acceptance time; a target capsule in the authored volume takes one Wrought result through the damage effect; a blocking target loses no Guard; nothing is interrupted; a second activation can hit again |
 | K3 | `Aetheln.GameCombat.OathscarActives.InstantStrikeRelations` | P2 | H | `OnCooldown` with nothing spent; refused inside the chain's commitment window, accepted after it and resets the chain with `OtherAction`; the relation defaults above; `State.Dead` refuses |
 | K4 | `Aetheln.GameCombat.OathscarActives.InstantStrikeNetworkConditions` | P2 | H | A25 profiles: requests delayed across the cooldown end and the chain's `CancelOpen` get the outcome their arrival time dictates; duplicated gives `DuplicateSequence`, reordered `StaleSequence`, dropped commits nothing; A26 against a dummy: at most one result per activation and none from a rejected request; A27: teardown in each phase ends the step once with no later contact |

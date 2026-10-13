@@ -456,9 +456,12 @@ It is a single-step use of the chain machinery, not a new timeline:
   `State.Oathscar.InstantStrike` in `[0, CancelOpen)` and commits
   `Cooldown.Oathscar.InstantStrike`. The chain's no-cooldown rule is a
   consequence of committing every hit of a multi-step chain, so it does not
-  apply to a single step; a positive cooldown is allowed.
+  apply to a single step. The owner gave Instant Strike a relatively low
+  cooldown, so a cooldown exists by owner rule: grant validation refuses a
+  zero cooldown. Its length is `TBD`.
 - **Refused inside the chain's commitment window.** It lists
   `State.Oathscar.SwordShieldBasicChain` among its `ActivationBlockedTags`
+  and, as the inherited grant rule requires, among its authored reset tags
   (owner, 2026-10-13,
   [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142792186)).
   Accepted after `CancelOpen`, it resets the chain with `OtherAction`.

@@ -98,8 +98,16 @@ try {
 	$CanonicalGrammarText = Get-Content -LiteralPath (Join-Path $Root 'docs/game-design-bible.md') -Raw -Encoding UTF8
 	$CanonicalIds = @([regex]::Matches($CanonicalOrderText, 'order\.oathscar(?:\.[a-z][a-z0-9_]*)*') | ForEach-Object { $_.Value } | Sort-Object -Unique) +
 		@([regex]::Matches($CanonicalGrammarText, 'combat\.(?:resource|damage)\.[a-z][a-z0-9_]*') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+	# Issue #260 (owner, 2026-10-13): canon lists these retired Skein IDs by name;
+	# with no same-kind replacement they cannot be Superseded records, so they stay absent.
+	$RetiredIds = @('order.oathscar.form.gate_step.advancing_answer', 'order.oathscar.form.gate_step.rooted_answer',
+		'order.oathscar.form.hold_the_line.closed_oath', 'order.oathscar.thread.unbroken_sequence', 'order.oathscar.thread.ground_reclaimed')
 	$Seed = Copy-Fixture
 	$SeedIds = @($Seed.definitions | ForEach-Object { $_.id } | Sort-Object -Unique)
+	foreach ($RetiredId in $RetiredIds) {
+		if ($CanonicalIds -cnotcontains $RetiredId -or $SeedIds -ccontains $RetiredId) { throw "Retired ID $RetiredId must be listed in canon and absent from the registry." }
+	}
+	$CanonicalIds = @($CanonicalIds | Where-Object { $RetiredIds -cnotcontains $_ })
 	$MissingOrExtra = @(Compare-Object -ReferenceObject $CanonicalIds -DifferenceObject $SeedIds -CaseSensitive)
 	if ($CanonicalIds.Count -ne 28 -or $Seed.definitions.Count -ne 28 -or $MissingOrExtra.Count -gt 0 -or
 		@($Seed.definitions | Where-Object { $_.maturity -ceq 'Canonical Intent' }).Count -ne 15 -or

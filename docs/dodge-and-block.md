@@ -671,8 +671,11 @@ Every value below is `TBD` (#107).
 
 - **Activation.** `UAethelnParryAbility` is a seam `Press` with no
   `Release`, `ServerOnly` in both policies. On acceptance at server time
-  `S` it commits its optional Endurance cost and `Cooldown.Oathscar.Parry`,
-  registers the slot, and holds `State.Oathscar.Parrying`.
+  `S` it registers the slot before it commits, as the block does: a failed
+  registration ends the activation uncommitted (`InternalFailure`, nothing
+  spent), and a failed commit clears the slot. It then commits its optional
+  Endurance cost and `Cooldown.Oathscar.Parry` and holds
+  `State.Oathscar.Parrying`.
 - **The window is server time.** The slot's interval is
   `[S + WindowStart, S + WindowEnd)`, both offsets authored
   (`ProvisionalParry`, `TBD`), set when the slot registers, so the interval

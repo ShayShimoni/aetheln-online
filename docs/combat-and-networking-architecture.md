@@ -409,7 +409,7 @@ The foundation that implements these conventions is specified in
 [Gameplay Ability System Foundation](gas-foundation.md).
 
 **Two vocabularies, one mapping.** Canonical semantic IDs such as
-`combat.resource.endurance` and `order.oathscar.ability.gate_step` are the
+`combat.resource.endurance` and `order.oathscar.ability.instant_strike` are the
 content identity and belong to the registry work in
 [#106](https://github.com/ShayShimoni/aetheln-online/issues/106). Gameplay Tags
 are the runtime vocabulary. Every tag that names authored content maps one to
@@ -440,8 +440,8 @@ rename.
 | `Ability.Test.*`, `Test.*` | Test-only tags (`AethelnCombatTestTags`) for the automation tests. They name no content and map to no semantic ID. Declared in `GameCore` under `WITH_DEV_AUTOMATION_TESTS`, so Shipping builds carry none (see the Test Plan in [Gameplay Ability System Foundation](gas-foundation.md#test-plan)) | Automation tests only |
 
 **Order scope.** The `<Order>` segment appears only when the content's semantic
-ID is Order-scoped (an `order.<order>.` prefix), as in `Ability.Oathscar.GateStep` and
-`Cooldown.Oathscar.GateStep`. Order-scoped state follows the same form,
+ID is Order-scoped (an `order.<order>.` prefix), as in `Ability.Oathscar.InstantStrike` and
+`Cooldown.Oathscar.InstantStrike`. Order-scoped state follows the same form,
 `State.<Order>.<Name>`. A shared action with no Order-scoped semantic ID, such
 as dodge, block, or sprint, uses `<Family>.<Name>`, for example
 `Cooldown.Dodge` and `State.Dodging`. An enemy-scoped semantic ID (an
@@ -498,8 +498,11 @@ Bumps are manual and checked in review.
 
 Attributes are not tags. `Health`, `Endurance`, and `Guard` map to
 `combat.resource.health`, `combat.resource.endurance`, and
-`combat.resource.guard`. The working names Gate Step, Sworn Rebuke, Hold the
-Line, Endurance, Guard, and Oathscar are not final display names.
+`combat.resource.guard`. The working names Instant Strike, Parry, Attack
+Stance, Defense Stance, Endurance, Guard, and Oathscar are not final display
+names. Gate Step, Sworn Rebuke, and Hold the Line were superseded on
+2026-10-13 (#260); their rows below record tags that still exist in code until
+#260 P2 removes them.
 
 ## Pure Free Aim
 

@@ -25,8 +25,9 @@ Every timing, range, shape, damage, cost, cooldown, and readability value
 stays `TBD`. #107 closed without timing values: phase timings and other tuning
 stay `TBD` (`docs/characters-and-factions.md:324-327`), and
 `design/combat-registry/registry.json` carries none. Values arrive only through an owner or tuning decision and the
-#45 budgets. Oathscar, Gate Step, Sworn Rebuke, Hold the Line, Endurance, and
-Guard are working names. C++ and asset names below are proposed names.
+#45 budgets. Oathscar, Instant Strike, Parry, Attack Stance, Defense Stance,
+Endurance, and Guard are working names (the owner replaced Gate Step, Sworn
+Rebuke, and Hold the Line on 2026-10-13, #260). C++ and asset names below are proposed names.
 
 **Citations.** Repository `path:line` citations are valid at `develop`
 revision `d950ac92`.
