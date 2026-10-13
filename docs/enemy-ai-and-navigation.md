@@ -53,7 +53,7 @@ UE 5.8.1 source, revision `71fe36aac5`; `Runtime/` abbreviates
 | Target choice | Provisional rule for #20 to confirm: keep the current target while it stays eligible; otherwise the nearest eligible player, ties broken by the lower `PlayerId`. |
 | Navigation | One static navmesh for the controlled arena, used only by the server. Path following with partial paths, the engine's block detection for stuck recovery, and a leash around the spawn point. |
 | Death and reset | The enemy dies at its lethal contact time. After an authored delay from that time it resets at its spawn point with its initial attributes. |
-| Replication | Character movement, the timeline's result cues, and one small replicated presentation state that includes the server-owned `Telegraph` state. No RPC on any enemy class. The combat attribute set replicates to the owning connection only and an AI pawn has none, so no client receives enemy Health, Endurance, or Guard yet; P3 decides the fix (see [Replication](#replication)). |
+| Replication | Character movement, the timeline's result cues, and one small replicated presentation state that includes the server-owned `Telegraph` state. No RPC on any enemy class. Enemy Endurance and Guard replicate `COND_OwnerOnly` and reach no client. Enemy Health and MaxHealth follow the #61 decision ([comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): public to every relevant client once PR #343 merges (see [Replication](#replication)). |
 | Completion | Out of scope. The first PvE completion condition (P10-042) stays a Blocking `TBD` owned by #1 and #71. |
 
 ## Scope and Boundaries
@@ -179,7 +179,7 @@ exist; `Reset` is an instant action, not a state.
 | `Attack` | Step registered at `S` | Stays still. Wind-up, active, and recovery are the step's windows: `[S, S + ActiveStart)`, `[S + ActiveStart, S + ActiveEnd)`, `[S + ActiveEnd, S + RecoveryEnd)`. | `Engage` at `S + RecoveryEnd`; `Interrupted` on an interruption |
 | `Interrupted` | Timeline interruption at contact time `C` | Stays still from `C` for `ProvisionalInterruptedSeconds`. | `Engage` at its end |
 | `Dead` | Lethal contact at `C` | Stops moving and acting. | `Reset` at `C + ProvisionalRespawnSeconds` |
-| `Return` | No eligible target, or outside the leash | Path-follows home. Ignores targets until home. | `Reset` at home, on a failed move request, or by [stuck recovery](#stuck-recovery) |
+| `Return` | No eligible target (a target beyond the leash is not eligible), or a failed move request in `Engage` | Path-follows home. Ignores targets until home. | `Reset` at home, on a failed move request, or by [stuck recovery](#stuck-recovery) |
 
 `Reset` teleports the enemy home if it is not already there, stops movement,
 re-applies the initial attributes, clears the target, and enters `Idle` at the
@@ -216,7 +216,7 @@ The controller makes no decision in its own tick. The timeline pass drives it:
 1. In pass step 1, after the players' buffered starts and before the sweeps,
    the subsystem raises `OnPassStart(Now)`. It is raised before the pass
    sorts its steps and snapshots their activation ids
-   (the sort and the id snapshot at the start of `HandlePostActorTick`), so a step registered in it
+   (the sort and the id snapshot right after `OnPassStart` in `HandlePostActorTick`), so a step registered in it
    is part of this pass. Each bound enemy controller, in the
    order they were bound, applies every transition due up to `Now`. A
    transition due at an authored time `T <= Now` starts its state at `T`; a
@@ -380,20 +380,20 @@ identity stay, so no client sees a destroyed and re-created enemy.
 
 ## Replication
 
-Position, result cues, and the presentation struct reach clients. Enemy Health, Endurance, and Guard do not yet:
+Position, result cues, and the presentation struct reach clients. Enemy Endurance and Guard do not. Enemy Health and MaxHealth follow the #61 decision ([comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): they become public to every relevant client once PR #343 merges, and reach no client until then:
 
 | Data | Path | Audience |
 | --- | --- | --- |
 | Position and rotation | Character movement replication | All relevant clients |
-| Health and the other attributes | The pawn's attribute set, which replicates `COND_OwnerOnly` (`AethelnCombatAttributeSet.cpp`); an AI pawn has no owning connection, so no client receives them | None until P3 changes the condition or adds a path (#61 decides what opponents may see) |
+| Health and MaxHealth | The pawn's attribute set. They replicate `COND_OwnerOnly` until PR #343 (the #61 decision) makes them public (`AethelnCombatAttributeSet.cpp`); an AI pawn has no owning connection | None until PR #343 merges; all relevant clients after |
+| Endurance, Guard, and the other attributes | The pawn's attribute set, `COND_OwnerOnly` by the #61 decision; an AI pawn has no owning connection | None |
 | Contact results | `MulticastCombatResultCue` on the target's ASC | All relevant clients |
 | State and attack timing | `FAethelnEnemyPresentationState` on `AAethelnEnemyCharacter` | All relevant clients |
 
 `FAethelnEnemyPresentationState` holds the state, its server start time, the
 ability id and content version of the current step, the step start time, the
 accepted aim, and a wrapping attack counter so a repeated attack replicates as
-a change. The step fields keep the last step's values while `State` is
-`Interrupted` or later, so clients key on `State`. The server-owned `Telegraph` state and its start time are the tell;
+a change. The step fields are never cleared: they describe the most recent step in every state and are current only while `State` is `Attack`, so clients key on `State`. The server-owned `Telegraph` state and its start time are the tell;
 clients derive wind-up, active, and recovery from the step start time and the
 ability's configured windows, as observers of the player chain do. A reset
 shows as `Idle` at home. Presentation never feeds back: no enemy class has a
@@ -456,9 +456,8 @@ same fixtures. Every test is written red first. Test names are under
    and tests E1 to E11.
 3. **P3**: navmesh and one enemy in the prototype space, real-navmesh and
    two-client evidence (E12, E13), and measurements for #45. Needs approved
-   provisional values. E13 needs clients to see enemy Health: P3 changes the
-   attribute replication condition or adds a client path for it first (the
-   attribute set is `COND_OwnerOnly` today).
+   provisional values. E13 needs clients to see enemy Health: that comes from the
+   #61 change (PR #343), not from P3, so E13 waits for it to merge.
 
 ## Open Decisions
 
