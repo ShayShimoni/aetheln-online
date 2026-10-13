@@ -64,6 +64,8 @@ bool UAethelnDeathSubsystem::ApplyDeath(UAethelnAbilitySystemComponent& Victim, 
 	{
 		if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement()) { Movement->DisableMovement(); }
 	}
+	// Presentation only, after the authoritative state is in place; a refused repeat never reaches this line.
+	Victim.MulticastDeathCue();
 	Self->BeginRespawnWait(Victim, ActivationId);
 	return true;
 }
