@@ -340,7 +340,7 @@ Everything else requires compile, including `Source/**`, `Config/**`,
 | `commit_unavailable` | `true` | A commit is absent locally and could not be fetched from `origin`. |
 | `diff_failed` | `true` | Git returned a nonzero exit code for the diff (including no merge base between the head and the base). |
 | `empty_diff` | `true` | The diff produced no entries. |
-| `unexpected_diff_entry` | `true` | An entry was not `A`/`M`/`D`/`T` with a plain path (quoted, rename, or copy entries). |
+| `unexpected_diff_entry` | `true` | An entry was not `A`/`M`/`D`/`T` with a plain path (quoted, rename, or copy entries, or a multiple-merge-base warning). |
 | `classifier_error` | `true` | Any other exception inside the classifier. |
 
 If the classifier job itself fails before the script publishes an output (a
