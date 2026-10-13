@@ -73,7 +73,7 @@ const TCHAR* UAethelnAttackPresentation::FindProblem() const
 		{
 			if (Skeleton->FindSocket(Socket) == nullptr) { return TEXT("names a socket the skeleton does not have"); }
 		}
-		if (!MontageHasOnlyAllowedNotifies(*Step.Montage)) { return TEXT("has a montage with a notify that is not an allowlisted presentation class"); }
+		if (!MontageHasOnlyAllowedNotifies(*Step.Montage)) { return TEXT("has a montage with a notify that is not an allowlisted presentation class, or with a segment that is not a plain sequence"); }
 	}
 	return nullptr;
 }

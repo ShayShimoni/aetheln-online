@@ -312,8 +312,9 @@ three steps, every value is finite, and:
 
 P5 adds `InterruptibleUntil` and `bInterruptsTarget` to the step struct, with
 the rule `0 <= InterruptibleUntil <= RecoveryEnd`, and extends A5. The
-production chain has no configured `ContentVersion` yet, so P5 bumps nothing;
-the first configured version includes these fields (see
+production chain's first configured `ContentVersion` is 1, set with the D3
+provisional values in `Config/DefaultGame.ini` (#84 P3), so P5 bumps nothing
+and version 1 includes these fields (see
 [Interruption](#interruption)).
 
 `LinkClose >= RecoveryEnd` keeps a late press out of recovery: after the link
@@ -666,10 +667,11 @@ P5 delivers it as follows:
   step of that chain starts (it cannot in practice: a held record lives only
   inside one pass).
 - **Record.** The record's windows carry `InterruptibleUntil`.
-- **Content version.** The production chain has no configured
-  `ContentVersion` yet (no ini section; unset values fail the grant), so P5
-  has nothing to bump; the first configured version includes the P5 fields.
-  The test fixture keeps version 1.
+- **Content version.** The production chain's first configured
+  `ContentVersion` is 1, set with the D3 provisional values in
+  `Config/DefaultGame.ini` (#84 P3; unset values still fail the grant), so P5
+  has nothing to bump and version 1 includes the P5 fields. The test fixture
+  no longer sets values; it reads the same ini section.
 - **Enemy targets.** An enemy has no chain. Interrupting one only stamps its
   registered steps, so their later contacts drop. The subsystem then raises
   `OnTargetInterrupted(TargetAsc, ContactTime)`, and the #83 enemy controller
@@ -903,12 +905,19 @@ change (dependency 7).
 
 ## Data-Driven Tuning
 
-All values are `TBD`. The P2 lead decision of 2026-10-06 leaves all eight
+All values are `TBD`, except the provisional chain values below. The P2 lead decision of 2026-10-06 leaves all eight
 aim/time keys unset, so requests fail closed; tests inject fixture values.
 Any future placeholder needs an explicit reviewed decision and is not approved
 tuning. Ini now,
 assets with #84 and generation with #106 later, as in #19. Every authoritative
 change bumps the chain's `ContentVersion`.
+
+The one exception is the basic chain's provisional values. By owner decision D3
+([issue #84 comment 6131999366](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366),
+2026-10-12), the former GameTests fixture values live in
+`[/Script/GameCombat.AethelnBasicChainAbility]` in `Config/DefaultGame.ini`,
+marked provisional. They are not tuning, no number was invented, and the #84 P5
+feel test re-tunes them. The chain is grantable but not granted in production.
 
 | Config section | Keys |
 | --- | --- |

@@ -129,8 +129,9 @@ authoritative, and changing it bumps nothing.
 
 Today the definitions are `Config` properties in `DefaultGame.ini`, validated
 at grant time and failing closed when unset
-(`Config/DefaultGame.ini:17-38`). The basic chain has no configured
-`ContentVersion` or steps yet, so it cannot be granted. #60 left definitions
+(`Config/DefaultGame.ini`). The basic chain carries the D3 provisional
+values (first configured `ContentVersion` 1, #84 P3), so it is grantable but
+not granted in production. #60 left definitions
 in ini until #84 and #106 supplied an asset pipeline; #106 closed with
 Markdown generators only.
 
@@ -277,7 +278,7 @@ is on `develop` now; "P2" and "P3" are later phases of this issue.
 | Incompatible socket reference | `socket_ownership` counts invalid sockets per mesh; the binding validator checks each named socket exists on the binding's skeleton or mesh | Family exists; binding check exists (P3, N3) for skeleton sockets; the binding names no mesh, so mesh sockets are not checked |
 | Stale identifiers | `reference_boundary` (unique stable ID, compatible content version, redirectors); the binding validator refuses a binding whose ability ID has no definition or whose content version differs | Family exists; the binding check for ability ID and content version exists (P3, N3) |
 | Stale tag or semantic ID | The registry validator checks registry records; the tag-to-semantic-ID mapping is checked only for the three Oathscar actives by a hand-listed test (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp:31-37`) | Partly exists. Gap: nothing checks a new or stale ability tag against the registry; P3 adds a portable check beside the registry validator that every native `Ability.` tag maps to exactly one registry ID |
-| Notify that could carry gameplay | Binding validator allowlists presentation notify classes; any other notify class fails | Exists (P3, N3): initial allowlist `UAnimNotify_PlaySound`, `UAnimNotify_PlayParticleEffect`, and `UAnimNotifyState_Trail`, exact class match, checked on the montage and on every sequence it plays; a name-only notify fails |
+| Notify that could carry gameplay | Binding validator allowlists presentation notify classes; any other notify class fails | Exists (P3, N3): initial allowlist `UAnimNotify_PlaySound`, `UAnimNotify_PlayParticleEffect`, and `UAnimNotifyState_Trail`, exact class match, checked on the montage and on each plain `UAnimSequence` it plays; a name-only notify fails, and so does any segment that is not a plain `UAnimSequence` (a composite, for one), because its notifies are not walked |
 
 All gates fail closed. A validation failure never falls back to another
 definition, an older version, or a default value.
@@ -413,7 +414,7 @@ validation test, and **P** is two-client PIE recorded in the PR.
 | --- | --- | --- | --- | --- |
 | N1 | `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing` | P2 | H | During wind-up, active, and recovery of a registered step, gameplay events (any tag, including the ability and state tags), `GameplayCue` executions, and montage play and stop requests on the server change no evaluated window, recorded window offset, contact result, Health, Endurance, or Guard on either side, owned tag, active effect, cost application, chain state, chain end, or record, compared with the same run without them. Any path that cannot run headless is listed in the PR with the reason: the montage play and stop requests run on a mesh-less pawn that cannot play a montage, so those rows show only that the requests are harmless. A real montage and notify run is not proven here. |
 | N2 | `Aetheln.GameCombat.AttackContent.DefinitionValidation` | P2 | H | The definition validator and editor `IsDataValid` refuse a missing stable ID, content version 0, a non-Shared audience, a missing or non-`Ability.` identity tag, a negative or non-finite cost, no steps, unset sampling bounds, a sample of the phase-order violations, and structurally unsafe volume data; a valid three-step and a valid single-step definition pass. `StepDefinitionFailsClosed` covers each ordering clause and negative or NaN Guard pressure through the shared function; an out-of-range shape, an invalid path transform, NaN damage, and a nonzero final-step `LinkClose` have no test yet. Not in N2: registry membership of the stable ID (the #120 intake review until a tool exists), `non_promotion` for an unset reach budget (no budget exists), and a content-version mismatch against a binding (N3). |
-| N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes. Also refuses a missing skeleton, a step count that differs from the definition, a Shared or ServerOnly audience, a name-only notify, and a notify on a sequence the montage plays. Builds its montages, skeleton, and sockets in memory; no package is added |
+| N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes. Also refuses a missing skeleton, a step count that differs from the definition, a Shared or ServerOnly audience, a name-only notify, a notify on a sequence the montage plays, and a notify on a sequence inside a composite segment. Builds its montages, skeleton, and sockets in memory; no package is added |
 | N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3 (remaining, not written yet) | E | A Shared or ServerOnly package that hard- or soft-references a binding fails `reference_boundary`, and the intake policy declares no soft-reference rule that targets a binding path |
 | N5 | Representative lifecycle | P5 | P | One authored step runs from validated data through server resolution to presentation on both clients, under C1 and C2 |
 
@@ -490,3 +491,12 @@ P3 records the exact mechanism and its test.
    and code review owns the rest.
 4. **No reach budget.** Unsafe volume checks are structural until a maximum
    reach or shape budget exists.
+5. **Niagara notifies.** The initial allowlist holds the Cascade
+   `UAnimNotify_PlayParticleEffect` and no Niagara notify class, although the
+   binding contract names Niagara feedback. A Niagara notify is refused, so P5
+   Niagara placeholders need a reviewed allowlist change first.
+6. **Chain cost against resource bounds.** The provisional chain cost of 2
+   exceeds the configured `MaxEndurance` of 0, and the resource-bounds test
+   (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp`) covers only the
+   three Oathscar actives. The chain is not granted, so this is unreachable
+   today; include the chain in that test when it is granted.

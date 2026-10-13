@@ -8,6 +8,7 @@
 #include "AethelnCombatAICharacter.h"
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnGameplayTags.h"
+#include "Animation/AnimComposite.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimNotifies/AnimNotifyState_DisableRootMotion.h"
 #include "Animation/AnimNotifies/AnimNotifyState_Trail.h"
@@ -361,8 +362,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnPresentationBindingValidationTest,
 bool FAethelnPresentationBindingValidationTest::RunTest(const FString& Parameters)
 {
 	using namespace AethelnAttackContentTests;
-	// Creating a montage or sequence outside a package makes the engine log this once; it is not a validator result.
-	AddExpectedError(TEXT("No Movie Scene found for SequencerDataModel"), EAutomationExpectedErrorFlags::Contains, 0);
+	// UAnimationSequencerDataModel::ValidateSequencerData logs this once for each UAnimSequence built below (the sequence
+	// mutation and the composite mutation), not for montages; it is not a validator result.
+	AddExpectedError(TEXT("No Movie Scene found for SequencerDataModel"), EAutomationExpectedErrorFlags::Contains, 2);
 	{
 		FBindingFixture Valid;
 		TestNull(TEXT("A fixture-only valid binding passes, with allowlisted sound and trail notifies"), Valid.Binding->FindProblem());
@@ -374,46 +376,67 @@ bool FAethelnPresentationBindingValidationTest::RunTest(const FString& Parameter
 	struct FMutation
 	{
 		const TCHAR* Name;
+		/** The exact FindProblem() text, so a mutation cannot pass on another check's refusal. */
+		const TCHAR* Problem;
 		TFunction<void(FBindingFixture&)> Apply;
 	};
+	const TCHAR* const NotAllowlisted = TEXT("has a montage with a notify that is not an allowlisted presentation class, or with a segment that is not a plain sequence");
+	const TCHAR* const NoDefinition = TEXT("names an ability ID that has no matching definition");
+	const TCHAR* const NotClientOnly = TEXT("is not ClientOnly");
+	const TCHAR* const Stale = TEXT("is stale: its authored content version differs from the definition's");
+	const TCHAR* const OtherSkeleton = TEXT("has a montage on another skeleton");
+	const TCHAR* const NotAbilityTag = TEXT("lacks a valid Ability. identity tag");
 	const TArray<FMutation> Mutations = {
-		{ TEXT("No stable ID"), [](FBindingFixture& F) { F.Binding->StableContentId = NAME_None; } },
-		{ TEXT("Shared audience"), [](FBindingFixture& F) { F.Binding->Audience = EAethelnContentAudience::Shared; } },
-		{ TEXT("ServerOnly audience"), [](FBindingFixture& F) { F.Binding->Audience = EAethelnContentAudience::ServerOnly; } },
-		{ TEXT("Unknown ability ID: no definition"), [](FBindingFixture& F) { F.Binding->Definition = nullptr; } },
-		{ TEXT("Unknown ability ID: another ability's definition"), [](FBindingFixture& F) { F.Binding->AbilityId = AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain; } },
-		{ TEXT("Not an ability tag"), [](FBindingFixture& F) { F.Binding->AbilityId = AethelnGameplayTags::State_Dead; F.Definition->AbilityId = AethelnGameplayTags::State_Dead; } },
-		{ TEXT("Stale content version: the definition moved on"), [](FBindingFixture& F) { F.Definition->ContentVersion = 2; } },
-		{ TEXT("Stale content version: the binding is newer"), [](FBindingFixture& F) { F.Binding->AuthoredContentVersion = 2; } },
-		{ TEXT("Unset authored content version"), [](FBindingFixture& F) { F.Binding->AuthoredContentVersion = 0; } },
-		{ TEXT("No skeleton"), [](FBindingFixture& F) { F.Binding->Skeleton = nullptr; } },
-		{ TEXT("Fewer steps than the definition"), [](FBindingFixture& F) { F.Binding->Steps.SetNum(2); } },
-		{ TEXT("More steps than the definition"), [](FBindingFixture& F) { F.Binding->Steps.AddDefaulted(); } },
-		{ TEXT("Missing montage"), [](FBindingFixture& F) { F.Binding->Steps[1].Montage = nullptr; } },
-		{ TEXT("Montage on another skeleton"), [](FBindingFixture& F) { F.Binding->Steps[2].Montage = FBindingFixture::MakeMontage(NewObject<USkeleton>(GetTransientPackage())); } },
-		{ TEXT("Montage with no skeleton"), [](FBindingFixture& F) { F.Binding->Steps[0].Montage = NewObject<UAnimMontage>(GetTransientPackage()); } },
-		{ TEXT("Missing wind-up section"), [](FBindingFixture& F) { F.Binding->Steps[0].WindUpSection = TEXT("Missing"); } },
-		{ TEXT("Missing active section"), [](FBindingFixture& F) { F.Binding->Steps[1].ActiveSection = TEXT("Missing"); } },
-		{ TEXT("Unset recovery section"), [](FBindingFixture& F) { F.Binding->Steps[2].RecoverySection = NAME_None; } },
-		{ TEXT("Unknown socket"), [](FBindingFixture& F) { F.Binding->Steps[0].Sockets.Add(TEXT("no_such_socket")); } },
-		{ TEXT("Non-allowlisted notify class"), [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_ResetDynamics>(F.Montage); } },
-		{ TEXT("Non-allowlisted notify state class"), [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().NotifyStateClass = NewObject<UAnimNotifyState_DisableRootMotion>(F.Montage); } },
-		{ TEXT("A name-only notify carries no class"), [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().NotifyName = TEXT("AnyName"); } },
-		{ TEXT("Non-allowlisted notify on a sequence the montage plays"), [](FBindingFixture& F)
+		{ TEXT("No stable ID"), TEXT("has no StableContentId"), [](FBindingFixture& F) { F.Binding->StableContentId = NAME_None; } },
+		{ TEXT("Content version 0"), TEXT("has ContentVersion below 1"), [](FBindingFixture& F) { F.Binding->ContentVersion = 0; } },
+		{ TEXT("Shared audience"), NotClientOnly, [](FBindingFixture& F) { F.Binding->Audience = EAethelnContentAudience::Shared; } },
+		{ TEXT("ServerOnly audience"), NotClientOnly, [](FBindingFixture& F) { F.Binding->Audience = EAethelnContentAudience::ServerOnly; } },
+		{ TEXT("Unknown ability ID: no definition"), NoDefinition, [](FBindingFixture& F) { F.Binding->Definition = nullptr; } },
+		{ TEXT("Unknown ability ID: another ability's definition"), NoDefinition, [](FBindingFixture& F) { F.Binding->AbilityId = AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain; } },
+		{ TEXT("Not an ability tag"), NotAbilityTag, [](FBindingFixture& F) { F.Binding->AbilityId = AethelnGameplayTags::State_Dead; F.Definition->AbilityId = AethelnGameplayTags::State_Dead; } },
+		{ TEXT("Stale content version: the definition moved on"), Stale, [](FBindingFixture& F) { F.Definition->ContentVersion = 2; } },
+		{ TEXT("Stale content version: the binding is newer"), Stale, [](FBindingFixture& F) { F.Binding->AuthoredContentVersion = 2; } },
+		{ TEXT("Unset authored content version"), Stale, [](FBindingFixture& F) { F.Binding->AuthoredContentVersion = 0; } },
+		{ TEXT("No skeleton"), TEXT("has no skeleton"), [](FBindingFixture& F) { F.Binding->Skeleton = nullptr; } },
+		{ TEXT("Fewer steps than the definition"), TEXT("does not have one presentation step per definition step"), [](FBindingFixture& F) { F.Binding->Steps.SetNum(2); } },
+		{ TEXT("More steps than the definition"), TEXT("does not have one presentation step per definition step"), [](FBindingFixture& F) { F.Binding->Steps.AddDefaulted(); } },
+		{ TEXT("Missing montage"), TEXT("has a step without a montage"), [](FBindingFixture& F) { F.Binding->Steps[1].Montage = nullptr; } },
+		{ TEXT("Montage on another skeleton"), OtherSkeleton, [](FBindingFixture& F) { F.Binding->Steps[2].Montage = FBindingFixture::MakeMontage(NewObject<USkeleton>(GetTransientPackage())); } },
+		{ TEXT("Montage with no skeleton"), OtherSkeleton, [](FBindingFixture& F) { F.Binding->Steps[0].Montage = NewObject<UAnimMontage>(GetTransientPackage()); } },
+		{ TEXT("Missing wind-up section"), TEXT("names a montage section that does not exist"), [](FBindingFixture& F) { F.Binding->Steps[0].WindUpSection = TEXT("Missing"); } },
+		{ TEXT("Missing active section"), TEXT("names a montage section that does not exist"), [](FBindingFixture& F) { F.Binding->Steps[1].ActiveSection = TEXT("Missing"); } },
+		{ TEXT("Unset recovery section"), TEXT("names a montage section that does not exist"), [](FBindingFixture& F) { F.Binding->Steps[2].RecoverySection = NAME_None; } },
+		{ TEXT("Unknown socket"), TEXT("names a socket the skeleton does not have"), [](FBindingFixture& F) { F.Binding->Steps[0].Sockets.Add(TEXT("no_such_socket")); } },
+		{ TEXT("Non-allowlisted notify class"), NotAllowlisted, [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_ResetDynamics>(F.Montage); } },
+		{ TEXT("Non-allowlisted notify state class"), NotAllowlisted, [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().NotifyStateClass = NewObject<UAnimNotifyState_DisableRootMotion>(F.Montage); } },
+		{ TEXT("A name-only notify carries no class"), NotAllowlisted, [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().NotifyName = TEXT("AnyName"); } },
+		{ TEXT("Non-allowlisted notify on a sequence the montage plays"), NotAllowlisted, [](FBindingFixture& F)
 			{
 				UAnimSequence* Sequence = NewObject<UAnimSequence>(F.Montage);
 				Sequence->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_ResetDynamics>(Sequence);
-				FSlotAnimationTrack& Slot = F.Montage->SlotAnimTracks.AddDefaulted_GetRef();
 				FAnimSegment Segment;
 				Segment.SetAnimReference(Sequence);
-				Slot.AnimTrack.AnimSegments.Add(Segment);
+				F.Montage->SlotAnimTracks.AddDefaulted_GetRef().AnimTrack.AnimSegments.Add(Segment);
+			} },
+		{ TEXT("Non-allowlisted notify on a sequence inside a composite segment"), NotAllowlisted, [](FBindingFixture& F)
+			{
+				UAnimSequence* Sequence = NewObject<UAnimSequence>(F.Montage);
+				Sequence->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_ResetDynamics>(Sequence);
+				FAnimSegment Inner;
+				Inner.SetAnimReference(Sequence);
+				UAnimComposite* Composite = NewObject<UAnimComposite>(F.Montage);
+				Composite->AnimationTrack.AnimSegments.Add(Inner);
+				FAnimSegment Outer;
+				Outer.SetAnimReference(Composite);
+				F.Montage->SlotAnimTracks.AddDefaulted_GetRef().AnimTrack.AnimSegments.Add(Outer);
 			} }
 	};
 	for (const FMutation& Mutation : Mutations)
 	{
 		FBindingFixture Fixture;
 		Mutation.Apply(Fixture);
-		TestNotNull(*FString::Printf(TEXT("%s is refused"), Mutation.Name), Fixture.Binding->FindProblem());
+		const TCHAR* Problem = Fixture.Binding->FindProblem();
+		TestEqual(*FString::Printf(TEXT("%s is refused for its own reason"), Mutation.Name), FString(Problem != nullptr ? Problem : TEXT("<accepted>")), FString(Mutation.Problem));
 		FDataValidationContext Context;
 		TestTrue(*FString::Printf(TEXT("%s fails editor validation"), Mutation.Name), Fixture.Binding->IsDataValid(Context) == EDataValidationResult::Invalid);
 		TestTrue(*FString::Printf(TEXT("%s reports an error"), Mutation.Name), Context.GetNumErrors() > 0);
