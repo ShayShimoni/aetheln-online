@@ -2132,6 +2132,17 @@ Every accepted decision records:
   the only change is that a bare non-sharing `IOException` from a cmdlet is no
   longer reported as `lease_held`. No ceiling, trust predicate, or lease rule
   changes.
+- **Amendment (2026-10-13, issue #299 PR 4):** `change-impact` now diffs
+  `<merge-base>...<head>` (`git diff --name-status --no-renames
+  <base>...<head>`) instead of the base SHA against the head, so code merged to
+  `develop` after a branch point no longer makes a docs-only pull request
+  compile. A missing base or head commit is fetched by SHA with full ancestry
+  (no `--depth=1`) so the merge base can be computed, and "no merge base" fails
+  closed as `diff_failed`. TA-012's wording that the classifier compares the
+  "exact pull-request base SHA and head SHA" is superseded for the diff range;
+  the SHA validation, closed portable-only set, and every other fail-closed
+  reason are unchanged. The `change-impact` block pin is now 7,611 bytes,
+  SHA-256 `3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2`.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
