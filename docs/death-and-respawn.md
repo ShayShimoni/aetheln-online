@@ -333,8 +333,10 @@ the snapshot lives in `UAethelnDeathSubsystem` beside the respawn wait.
   only when it applies a break itself, so a carried break has no binding.
   `ApplyDeath` therefore removes `State.GuardBroken` too, which is a no-op for a
   live break that the ability's binding already ended.
-- **Not carried.** The stance buffs of #260 (a reconnect ends a running stance;
-  whether that stays is open, `gas-foundation.md`), the recovery effects
+- **Not carried.** The stance buffs of #260 are not named by the snapshot (they
+  are carried only if #260 builds them on the shared timed-state effect, which
+  the death removal rule still ends; the choice is open in
+  `gas-foundation.md`), the recovery effects
   themselves (the new PlayerState starts them), the pawn's location (a
   reconnect starts at the game mode's start spot, and a dead player's corpse
   does not return to where it died), and anything the snapshot does not name.

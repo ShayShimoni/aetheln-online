@@ -759,9 +759,10 @@ value is set here except the owner's provisional 600 s stance duration.
 - **Lifecycle and replication.** The effect lives on the PlayerState ASC, so
   it survives re-possession and keeps counting with no avatar, as cooldowns
   do. In Mixed mode the owner receives the effect and other clients only the
-  tag; what opponents see is #61's. #21 P4's reconnect snapshot does not carry
+  tag; what opponents see is #61's. #21 P4's reconnect snapshot does not name
   the stance (it carries the attributes and the shared timed-state effect
-  only), so a reconnect ends a running stance; whether that stays is open.
+  only), so a reconnect carries a stance only if its effect is that shared
+  class; whether it should is open.
 
 ### Action relations
 
@@ -832,7 +833,7 @@ All stay `TBD` until the owner (product) or #107 and #45 (values) decide.
    and what a staggered enemy does (#20).
 5. **Stance:** the magnitudes, the modified quantities and their place in the
    resolution order, the Endurance cost, the recast default, what opponents
-   see (#61), and whether a reconnect carries it (#21 P4 does not: it carries the shared timed states only).
+   see (#61), and whether a reconnect carries it (#21 P4 carries the shared timed-state effect only).
 6. **Relations** marked default or open in [Action relations](#action-relations).
 7. **Prediction:** whether any active replaces Hold the Line as the TC-008
    candidate (Open Decisions 1).
