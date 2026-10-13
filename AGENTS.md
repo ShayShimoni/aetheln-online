@@ -48,7 +48,7 @@ Follow the guide's reference and storage boundary: keep external references
 and candidate lineage outside the repository; retain selected Aetheln results
 and suitable prompts inside it. Open the race's current
 approved visual baseline recorded in `docs/playable-peoples.md`; use the
-selected Aurin and Kell pairs rather than superseded exploration images.
+selected Aurin, Kell, and Vesh pairs rather than superseded exploration images.
 Kell and Vesh anatomy and lore are
 defined in `docs/playable-peoples.md` and the specialized canonical story
 documents. Image approval does not establish production readiness.
