@@ -387,6 +387,8 @@ bool FAethelnInstantStrikeNetworkConditionsTest::RunTest(const FString& Paramete
 		TestEqual(TEXT("First press accepted"), Submit(F, StrikeId), EResult::Accepted);
 		FAethelnCombatActivationRequest Delayed = MakeRequest(F, StrikeId, 10); // explicit gap; client sample 0
 		F.AdvanceTo(Arrival);
+		// The headless world does not expire duration effects (as in T17), so the cooldown's end is applied by the test.
+		if (Arrival >= 0.875) { F.Player.AbilitySystem->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(AethelnGameplayTags::Cooldown_Oathscar_InstantStrike)); }
 		const EResult Expected = Arrival < 0.625 ? EResult::ActivationBlocked : (Arrival < 0.875 ? EResult::OnCooldown : EResult::Accepted);
 		TestEqual(TEXT("Server arrival governs the window, never the client sample"), F.Player.AbilitySystem->ProcessServerRequest(Delayed), Expected);
 		TestEqual(TEXT("Duplicate delivery"), F.Player.AbilitySystem->ProcessServerRequest(Delayed), Expected == EResult::Accepted ? EResult::DuplicateSequence : Expected);
