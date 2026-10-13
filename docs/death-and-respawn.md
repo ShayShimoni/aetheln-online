@@ -123,7 +123,9 @@ lethal row of A28 records this case.
 **Replication.** The player ASC uses Mixed replication. The owning client gets
 the death effect; every other client gets `State.Dead` as a minimal
 replicated tag (`GAS/Private/GameplayEffect.cpp:3733-3736`, `:4663-4664`).
-Health stays owner-only. P3 proves this with two clients.
+Health and MaxHealth reach every client, and Endurance and Guard stay
+owner-only (owner decision on [#61](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)). P3 proves that split with two
+clients.
 
 **What death keeps.** Granted abilities, cooldown effects, and attribute
 values stay. The Guard break ends on `State.Dead`

@@ -780,11 +780,13 @@ PlayerState (residual risk 4).
 ASC carries the source avatar, the outcome (`Hit`, `Avoided`, `Blocked`, or,
 since #18 P4, `GuardBroken`), the family tag, whether it was lethal, and the
 server-computed contact location. It carries no damage amount and no
-attribute value; Health stays owner-only (#19) until #61 decides opponent
-visibility. Losing a cue loses presentation only; attributes and death
-replicate separately. The attacker gets no reliable hit confirmation in the
-prototype: the unreliable cue is its only hit signal, and #61 treats it as
-presentation.
+attribute value. Health and MaxHealth replicate to every client, and Endurance
+and Guard stay owner-only (owner decision on [#61](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)). Losing a cue loses
+presentation only; attributes and death replicate separately. The attacker gets
+no reliable per-hit confirmation in the prototype: the unreliable cue is its
+only per-hit signal. The target's replicated Health now also tells the attacker
+that damage landed, as coalesced state with no per-hit identity, and #61 treats
+both as presentation.
 
 ### Bounded presentation correction
 

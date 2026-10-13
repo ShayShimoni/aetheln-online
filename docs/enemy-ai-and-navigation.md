@@ -382,7 +382,8 @@ Everything the clients need is already replicated, except one struct:
 | Data | Path | Audience |
 | --- | --- | --- |
 | Position and rotation | Character movement replication | All relevant clients |
-| Health and the other attributes | The pawn's attribute set (Minimal mode replicates attributes, not effects) | All relevant clients |
+| Health and MaxHealth | The pawn's attribute set (Minimal mode replicates attributes, not effects); `COND_None` since the owner decision on #61 | All relevant clients |
+| Endurance, Guard and their maxima | The same attribute set, `COND_OwnerOnly`; an AI pawn has no owning client | No client |
 | Contact results | `MulticastCombatResultCue` on the target's ASC | All relevant clients |
 | State and attack timing | `FAethelnEnemyPresentationState` on `AAethelnEnemyCharacter` | All relevant clients |
 
