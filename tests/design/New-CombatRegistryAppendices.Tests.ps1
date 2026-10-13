@@ -55,7 +55,7 @@ Write-Output 'PASS: byte-for-byte deterministic generation'
 $TableText = [IO.File]::ReadAllText($Table, $Utf8)
 $CodexText = [IO.File]::ReadAllText($Codex, $Utf8)
 if ($TableText -notmatch 'combat\.resource\.health' -or $TableText -notmatch 'order\.oathscar\.peak\.oathbreak' -or $TableText -notmatch 'Canonical Intent') { throw 'Generated table omits required registry data.' }
-if ($CodexText -notmatch 'order\.oathscar\.ability\.gate_step' -or $CodexText -match 'combat\.resource\.health') { throw 'Oathscar appendix selection is incorrect.' }
+if ($CodexText -notmatch 'order\.oathscar\.ability\.instant_strike' -or $CodexText -match 'combat\.resource\.health') { throw 'Oathscar appendix selection is incorrect.' }
 if ($TableText -notmatch '\.\./characters-and-factions\.md#' -or $CodexText -notmatch '\.\./characters-and-factions\.md#') { throw 'Generated source links are missing.' }
 Write-Output 'PASS: table, codex selection, and canonical source links'
 

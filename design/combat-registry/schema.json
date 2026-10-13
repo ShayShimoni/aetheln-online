@@ -47,9 +47,10 @@
     "combat.damage.wrought",
     "order.oathscar.weapon.sword_and_shield",
     "order.oathscar.ability.sword_shield_basic_chain",
-    "order.oathscar.ability.gate_step",
-    "order.oathscar.ability.sworn_rebuke",
-    "order.oathscar.ability.hold_the_line"
+    "order.oathscar.ability.instant_strike",
+    "order.oathscar.ability.parry",
+    "order.oathscar.ability.attack_stance",
+    "order.oathscar.ability.defense_stance"
   ],
   "idPattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9_]*)+$",
   "sourcePattern": "^docs/[a-z0-9-]+\\.md$"

@@ -10,7 +10,8 @@ issue and contains no code. Pull requests P2 to P6 deliver it (see
 [Phased Delivery](#phased-delivery)). The owner's decisions of 2026-10-05 are
 recorded in [Owner Decisions](#owner-decisions); the representative Oathscar
 actives moved to
-[Issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260).
+[Issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260), and
+the owner replaced them on 2026-10-13 (see [Instant Strike](#instant-strike)).
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md),
@@ -22,8 +23,8 @@ seam specified in [Gameplay Ability System Foundation](gas-foundation.md)
 [Input, Camera, and Free-Aim Spike](input-camera-free-aim-spike.md) (Issue #82)
 at the policy level. Every timing, range, shape, damage, cost, aim, timestamp,
 and sampling value stays `TBD`; a `Provisional...` config key is a named
-placeholder, never tuning. C++ names are proposed code names. Oathscar, Gate
-Step, Sworn Rebuke, Hold the Line, Endurance, and Guard are working names.
+placeholder, never tuning. C++ names are proposed code names. Oathscar,
+Instant Strike, Parry, Endurance, and Guard are working names.
 
 **Citations.** Repository `path:line` citations are valid at `develop`
 revision `ab296d0`; citations into the combat document and the #19
@@ -83,15 +84,17 @@ the deterministic contact order, the already-hit allowance, Wrought damage
 application, interruption, the lethal latch, and the three-hit chain
 (`docs/characters-and-factions.md:309-310`;
 `docs/prototype-and-1.0-scope-ledger.md:75`). It covers the three-hit chain
-only: Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result
-belong to #260 (OQ3, owner, 2026-10-05). The table lists what #60 consumes and
-what it leaves to other owners.
+only: the representative actives belong to #260 (OQ3, owner, 2026-10-05).
+Since the owner's redesign of 2026-10-13 they are Instant Strike, Parry, and
+the stance buffs; #260 reuses this timeline for Instant Strike
+([Instant Strike](#instant-strike)) and the defense step for the Parry. The
+table lists what #60 consumes and what it leaves to other owners.
 
 | Owner | #60 consumes or provides | #60 does not do |
 | --- | --- | --- |
 | [#19](https://github.com/ShayShimoni/aetheln-online/issues/19) | Consumes the seam, rate bucket, outcome RPC, base ability, cost and cooldown overrides, grant validation, `FindForPawn`, and `State.Dead` (see [Dependencies on #19](#dependencies-on-19)). Adds one `ResetChain(AvatarLost)` call to the PlayerState's null-pawn case. | Reorder or change #19's existing seam steps, or change what #19's lifecycle grants, initializes, or cancels. |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Provides the avoidance step, which asks the dodge's time-exact `IsAvoidingAt(ContactTime)` (#18 T2), and the defense step, which evaluates the defense slot's interval at the contact time; `State.DodgeInvulnerable` stays out of the authored avoidance-tag set (see [Dodge and Block](dodge-and-block.md#dependencies-on-60), items 2 and 3). A dodge activation resets the chain like any other action. Resolves whether a contact is blocked against the active defense state #18 exposes (OQ6, owner, 2026-10-05). | Dodge cost, window, movement, or tags; the right-mouse block action, its state, and what a blocked hit does to Guard (#18 owns them). |
-| [#260](https://github.com/ShayShimoni/aetheln-online/issues/260) | Provides the timeline, contact pipeline, defense-state check, and network-condition test rows that the representative actives reuse. | Gate Step and Sworn Rebuke contacts, Gate Step's movement, Hold the Line's Guard result (OQ3, owner, 2026-10-05). |
+| [#260](https://github.com/ShayShimoni/aetheln-online/issues/260) | Provides the timeline, contact pipeline, defense-state check, interruption path, and network-condition test rows that the representative actives reuse. | Instant Strike's definition, the Parry's result and stagger, and the stance buffs (OQ3, owner, 2026-10-05; redesign, owner, 2026-10-13). |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Provides the step definition, timeline driver, contact pipeline, and result path; the enemy registers its steps directly, without the seam. | Enemy behavior, target choice, or telegraph content. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Latches lethal results and raises one lethal notification per target; treats `State.Dead` and zero Health as not alive. | Apply `State.Dead`, run death, respawn, or reconnect. |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61), [#97](https://github.com/ShayShimoni/aetheln-online/issues/97) | Provides the outcome, record, chain-end, phase state, and result cues. | Presentation, HUD, `GameplayCue.*` tags. |
@@ -219,7 +222,8 @@ and Cursor mode blocks the press without cancelling an accepted step
 
 Steps 6a to 6d run after #19's step 6 and before step 7, so identity, sequence,
 and version reasons keep their precedence. They apply to every request through
-the seam, for every ability (the chain, Gate Step, Sworn Rebuke, Hold the Line)
+the seam, for every ability (the chain, the dodge's ordinary routes, the block,
+and the representative actives)
 and both phases, not only to the chain. Each rejection has one reason and no
 side effect.
 
@@ -427,6 +431,41 @@ failed commit paths.
 #18 may call `ResetChain(OtherAction)` directly if its dodge is not a GAS
 ability.
 
+### Instant Strike
+
+Instant Strike (`order.oathscar.ability.instant_strike`, #260) is a single
+weapon strike that hits on press, deals pure Wrought damage, and has a
+relatively low cooldown (owner, 2026-10-13,
+[issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)).
+It is a single-step use of the chain machinery, not a new timeline:
+
+- **One step.** `UAethelnInstantStrikeAbility` derives from
+  `UAethelnBasicChainAbility`. The chain state reads the step count and the
+  commitment tag from the definition instead of the fixed three and the chain
+  tag. Its grant validation requires exactly one step that obeys the
+  final-step rules in [Step definition](#step-definition) (`BufferOpen ==
+  RecoveryEnd`, no link values), so every press during the step is an early
+  press, and a press after recovery starts a new strike.
+- **Pure damage.** `GuardPressure` is 0 and `bInterruptsTarget` is false: no
+  Guard drain, interruption, or knockback is an owner rule, checked at grant.
+  A blocked strike is `Blocked` and costs the defender no Guard.
+- **Hits on press.** The step starts at the acceptance time. The lane reading
+  of "hits on press" is `ActiveStart = 0`; whether a short authored wind-up is
+  allowed is open ([open decisions](gas-foundation.md#open-decisions-for-the-representative-actives)).
+- **Own commitment tag and cooldown.** It holds
+  `State.Oathscar.InstantStrike` in `[0, CancelOpen)` and commits
+  `Cooldown.Oathscar.InstantStrike`. The chain's no-cooldown rule is a
+  consequence of committing every hit of a multi-step chain, so it does not
+  apply to a single step; a positive cooldown is allowed.
+- **Refused inside the chain's commitment window.** It lists
+  `State.Oathscar.SwordShieldBasicChain` among its `ActivationBlockedTags`
+  (owner, 2026-10-13,
+  [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142792186)).
+  Accepted after `CancelOpen`, it resets the chain with `OtherAction`.
+- **Everything else is reused:** registration, boundaries, the contact
+  pipeline, the allowance, the total order, the lethal latch, resets, records,
+  and telemetry. Its tests replay A25 to A27 (#260 K1 to K4).
+
 ### Timeline driver and clock
 
 `UAethelnCombatTimelineSubsystem` binds `FWorldDelegates::OnWorldPostActorTick`
@@ -583,12 +622,13 @@ For each candidate, in order:
    hook. If the contact time lies in the slot's interval
    `[ActiveFromServerTime, ActiveUntilServerTime)` and the contact direction
    falls inside the arc around the target's server actor yaw, #60 calls the
-   hook once and records what it returns: `Blocked`, or `GuardBroken` when the
-   hook broke the guard. The hook applies what a blocked hit does (Guard
-   pressure, Guard break) under the defense's authored rule. The same contact
-   is never re-scored, and a blocked contact applies no damage in #60. #18
-   owns the block action and its state; #260 owns Hold the Line's Guard
-   result. The state tag serves gating and observers only; since #18 P4 the
+   hook once and records what it returns: `Blocked`, `GuardBroken` when the
+   hook broke the guard, or `Parried` when the slot is #260's Parry. The hook
+   applies what a defended hit does (Guard pressure and Guard break for the
+   block; the attacker's stagger for the Parry) under the defense's authored
+   rule. The same contact is never re-scored, and a defended contact applies
+   no damage in #60. #18 owns the block action and its state; #260 owns the
+   Parry ([The Parry](dodge-and-block.md#the-parry)). The state tag serves gating and observers only; since #18 P4 the
    interval, not the tag's presence when the contact resolves, decides (#18
    T2). Until a slot exists, no target is defending and this step passes. The
    defense owner registers the slot on the timeline subsystem as an
@@ -641,8 +681,11 @@ A committed result with `bInterruptsTarget` resets the target's chain with
 `Interrupted`, stamped at the contact time, if the target's current step is
 inside its interruptible window at that contact time
 (`ContactTime < TargetStepStart + InterruptibleUntil`). Both fields arrive in
-P5. The same mechanism serves #20's enemy steps and, in #260, Sworn Rebuke's
-authored rule. Resolve and control families are not prototype scope.
+P5. The same mechanism serves #20's enemy steps. In #260 the Parry staggers
+its attacker through it, with the attacker as the interrupted party and
+without the `InterruptibleUntil` check
+([The Parry](dodge-and-block.md#the-parry)). Resolve and control families are
+not prototype scope.
 
 P5 delivers it as follows:
 
@@ -1038,8 +1081,9 @@ files untouched.
 | **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct (no configured chain `ContentVersion` exists to bump); A15 and the A5 rows. | P4 |
 | **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
 
-Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result are not
-#60 phases; they are #260, which builds on P4 and P5 (OQ3, owner, 2026-10-05).
+The representative actives are not #60 phases; they are #260, which builds on
+P4 and P5 (OQ3, owner, 2026-10-05; the actives were redesigned on 2026-10-13,
+see [Instant Strike](#instant-strike)).
 
 ## Owner Decisions
 
@@ -1054,7 +1098,7 @@ numbers are the original question numbers.
 | --- | --- | --- |
 | OQ1 | No player-versus-player hits in the prototype arena. Players are allies; only enemies are hostile until faction policy exists. | [Relation](#relation), A14 |
 | OQ2 | Lowering a maximum never raises a base value. Implemented and regression-tested in #19 P4, merged at the P2 base `77e7414`. | [Attribute Re-clamp Behavior](#attribute-re-clamp-behavior), dependency 7 |
-| OQ3 | Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result move to #260. #60 covers the three-hit chain only, and its former P7 is removed. | [Scope and Boundaries](#scope-and-boundaries), [Phased Delivery](#phased-delivery) |
+| OQ3 | Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result move to #260. #60 covers the three-hit chain only, and its former P7 is removed. The owner replaced those actives on 2026-10-13; the move to #260 stands. | [Scope and Boundaries](#scope-and-boundaries), [Phased Delivery](#phased-delivery) |
 | OQ4 | Attacks do not restrict movement in P3 to P6. Authored restrictions come later with #17's predicted movement. | [Chain progression and buffering](#chain-progression-and-buffering) |
 | OQ6 | #18 owns the right-mouse block action, alongside dodge. #60 only resolves whether a hit is blocked against an active defense state. | [Resolution order](#resolution-order-prototype-subset) step 4, A14 |
 | OQ7 | No restart buffer. A press after the final recovery starts step 1. | [Chain progression and buffering](#chain-progression-and-buffering) |
@@ -1077,7 +1121,9 @@ numbers are the original question numbers.
   [Interruption](#interruption)). Should an interrupted victim get a lockout,
   stagger, or hit-stun, and of what kind? Any duration is #107 tuning. No
   recommendation on the duration; P5 keeps the current behaviour until the
-  owner decides.
+  owner decides. The Parry's stagger (#260, owner, 2026-10-13) applies only
+  to a parried attacker and does not answer this question for ordinary
+  interruptions.
 
 Decisions that belong to other owners, recorded so they are not lost: rewind
 and any client-time window evaluation (#2, TC-002); every numeric bound,

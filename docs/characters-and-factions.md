@@ -281,19 +281,18 @@ not an approved final collection, slot count, unlock schedule, or tuning set:
 
 | Kind | Working name and stable ID | Decision changed |
 | --- | --- | --- |
-| Form | Advancing Answer (`order.oathscar.form.gate_step.advancing_answer`) | Changes Gate Step into a more committed advance; contact, movement, and recovery remain authored and server resolved. |
-| Form | Rooted Answer (`order.oathscar.form.gate_step.rooted_answer`) | Gives up the advance so Gate Step contests Guard from a held position; it is mutually exclusive with Advancing Answer for that ability. |
-| Form | Closed Oath (`order.oathscar.form.hold_the_line.closed_oath`) | Narrows Hold the Line to a more committed directional defense with a distinct readable facing requirement. |
-| Thread | Witnessed Reprisal (`order.oathscar.thread.witnessed_reprisal`) | A committed perfect-block result authorizes one compatible follow-up; duplicate result delivery cannot authorize it again. |
-| Thread | Unbroken Sequence (`order.oathscar.thread.unbroken_sequence`) | Completing the authored basic chain without a miss changes the next compatible Sworn Rebuke rather than adding an invisible passive bonus. |
-| Thread | Ground Reclaimed (`order.oathscar.thread.ground_reclaimed`) | A committed dodge result changes the next compatible Gate Step; a predicted dodge alone cannot trigger it. |
+| Thread | Witnessed Reprisal (`order.oathscar.thread.witnessed_reprisal`) | A committed Parry result (`order.oathscar.ability.parry`) authorizes one compatible follow-up; duplicate result delivery cannot authorize it again. |
 | Keystone | Debt Comes Due (`order.oathscar.keystone.debt_comes_due`) | Makes committed Grudge spends favor continuing offensive pressure while preserving the normal defense and authority rules. |
 | Keystone | The Line Remembers (`order.oathscar.keystone.the_line_remembers`) | Makes correctly resolved directional defense favor deliberate counter-pressure without turning Guard into Grudge or passive damage. |
 
 Forms modify only their referenced ability, Threads consume bounded and visible
 server-owned triggers, and one Keystone changes the build's central rhythm.
 None may create a target, contact, hit, resource result, or recursive proc from
-client presentation. Compatibility, listener budgets, cycles, versioning, and
+client presentation. On 2026-10-13 the owner re-pointed Witnessed Reprisal from
+the perfect block to the Parry and superseded five weave definitions tied to
+the dropped actives; they are listed in
+[Superseded Representative Actives](#superseded-representative-actives) and
+are redesigned in a later Skein pass. Compatibility, listener budgets, cycles, versioning, and
 machine-readable generation remain owned by
 [#106](https://github.com/ShayShimoni/aetheln-online/issues/106); compiled
 builds, presets, persistence, and atomic equipment changes remain owned by
@@ -309,23 +308,36 @@ controlled combat space. Its default playable contract is exactly:
 - one server-owned, pure-free-aim, three-hit Wrought basic combo
   (`order.oathscar.ability.sword_shield_basic_chain`);
 - directional block, the shared prototype dodge, and exactly three
-  representative active abilities:
-  - Gate Step (`order.oathscar.ability.gate_step`), an aimed, server-bounded
-    shield-led advance with authored Wrought contact and Guard pressure;
-  - Sworn Rebuke (`order.oathscar.ability.sworn_rebuke`), an aimed committed
-    Wrought answer with an authored interruption rule; and
-  - Hold the Line (`order.oathscar.ability.hold_the_line`), an active
-    directional defensive commitment whose Guard result comes only from the
-    authoritative contact and facing check;
+  representative actives (owner decision, 2026-10-13,
+  [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)):
+  - Instant Strike (`order.oathscar.ability.instant_strike`), a single aimed
+    weapon strike that hits on press and deals pure Wrought damage, with no
+    Guard pressure, interruption, or knockback, and a relatively low cooldown.
+    It is refused inside the three-hit chain's commitment window, as dodge and
+    block are (owner decision, 2026-10-13,
+    [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142792186));
+  - Parry (`order.oathscar.ability.parry`), a short timed defensive window. A
+    hit whose authoritative contact time lies inside the window is fully
+    negated, and its attacker is staggered. Only the server decides a parry,
+    from the contact time against the window; a client never claims one; and
+  - Stance, two mutually exclusive buffs: Attack Stance
+    (`order.oathscar.ability.attack_stance`) and Defense Stance
+    (`order.oathscar.ability.defense_stance`). Each is cast instantly with no
+    cooldown and lasts about ten minutes (600 s, a provisional owner value).
+    Casting one replaces the other, so at most one is active. Death removes
+    the active stance, and respawn restores only Health, Endurance, and Guard;
 - one representative enemy; and
 - authoritative damage, readable acceptance/correction/rejection feedback,
   death, and respawn.
 
-All damage, Guard pressure, Endurance costs, cooldowns, ranges, shapes, movement,
-phase timings, interruption rules, recovery, enemy values, and other tuning are
-`TBD` for their owning implementation and evidence work. The active abilities
-describe distinct prototype decisions; their working names do not approve
-animation, VFX, audio, or final balance.
+Instant Strike, Parry, Attack Stance, and Defense Stance are working names;
+final names stay `TBD`. All damage, Guard pressure, Endurance costs,
+cooldowns, ranges, shapes, phase timings, the parry window, the stagger
+duration, the stance magnitudes, recovery, enemy values, and other tuning are
+`TBD` for their owning implementation and evidence work. The only owner value
+is the provisional 600 s stance duration, re-tuned at the prototype feel test.
+The active abilities describe distinct prototype decisions; their working
+names do not approve animation, VFX, audio, or final balance.
 
 The default prototype does not read, grant, spend, display, or persist Grudge
 and does not depend on Ironwake, Last Gate, Oathbreak, Forms, Threads,
@@ -363,6 +375,30 @@ No statement in this shard is runtime, packaged, balance, performance,
 security, readability, accessibility, or QA evidence. Only the bounded subset
 above is a Prototype Candidate; every broader Oathscar definition remains
 Canonical Intent.
+
+#### Superseded Representative Actives
+
+On 2026-10-13 the owner replaced the earlier three representative actives
+([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142715904)).
+They are dropped as designed, including Gate Step's movement, and their stable
+IDs are not reused:
+
+- Gate Step (`order.oathscar.ability.gate_step`), an aimed shield-led advance
+  with Wrought contact and Guard pressure, superseded by Instant Strike;
+- Sworn Rebuke (`order.oathscar.ability.sworn_rebuke`), an aimed committed
+  Wrought answer with an interruption rule, superseded by Instant Strike; and
+- Hold the Line (`order.oathscar.ability.hold_the_line`), a held directional
+  defense with a Guard result, superseded by Parry.
+
+The weave definitions tied to them are superseded and are redesigned later in
+a Skein pass
+([issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142746909)):
+the Forms Advancing Answer and Rooted Answer (Gate Step) and Closed Oath (Hold
+the Line), and the Threads Unbroken Sequence (Sworn Rebuke) and Ground
+Reclaimed (Gate Step). Their former IDs are retired, not reused, and are not
+registry records: the registry has no superseded state without a same-kind
+replacement, so the Skein pass issues new IDs. Witnessed Reprisal stays and
+now answers the Parry.
 
 ### Nullwright - Working Name
 
