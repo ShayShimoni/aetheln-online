@@ -2156,6 +2156,20 @@ Every accepted decision records:
   the SHA validation, closed portable-only set, and every other fail-closed
   reason are unchanged. The `change-impact` block pin is now 7,611 bytes,
   SHA-256 `3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2`.
+- **Amendment (2026-10-13, issue #231):** `change-impact`'s portable-only set
+  gains `design/**` and `scripts/design/**` (one case-sensitive regex line in
+  `Test-PortablePath`), matching the selector since pull request #351. The
+  only reader of those paths is `scripts/ci/Invoke-CiSuite.ps1`, which runs the
+  four combat-registry checks as required portable suites; nothing under
+  `Source/`, `Config/`, `Content/`, `Plugins/`, or `.github/`, and no other
+  script, reads them, so a compile or Editor run cannot prove them (the same
+  reasoning as the issue #299 `.agents/**` and `tests/build/**` amendment). Case
+  variants and lookalike directories still compile. The `editor_required` set,
+  the trust predicates, the superseded-head check, and every fail-closed reason
+  are unchanged, and the selector source and its policy digest are unchanged.
+  The `change-impact` block pin is now 7,683 bytes, SHA-256
+  `d8d01abbfd22733fdb9bc4f31e3aa737995a6f5c343ff4677e154394fe7722c7`. Revisit
+  when any engine input reads `design/**`.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
@@ -2778,7 +2792,7 @@ Every accepted decision records:
 | TC-005 | Server tick, capacity, layers, and bandwidth | Representative combat and stress captures with explicit failure shape | #45 | Canonizing 32/64 players, a tick value, or bandwidth estimate | Approved performance baseline |
 | TC-006 | Production backup, retention, RPO, and RTO | Data criticality, provider capability, restore drills, operating cost | #36, #40, #48 | Vendor-default recovery promises | Before public production |
 | TC-007 | Anti-cheat and platform services | Threat coverage, platform support, privacy, cost, operations, false-positive handling, exit strategy | #40 | Treating client integrity as gameplay authority | Before external risk justifies integration |
-| TC-008 | Per-ability GAS prediction eligibility. First candidate (Issue #19, PR P6): predict Hold the Line's activation, its Endurance cost (if it has one), its cooldown, and its own state tag as a self-only reversible path, using the engine's `LocalPredicted` execution policy with the `ServerOnlyTermination` security policy. Every other ability stays server-only until it is added to an approved prediction list with its own evidence, and contact, Guard, damage, control, and death results are never predicted. See [Gameplay Ability System Foundation](gas-foundation.md) | The two-client PIE feel test of the server-only abilities (#19 PR P5); rollback evidence under the supported network profiles for rejection, acceptance, and loss: a rejected prediction removes the predicted cost, cooldown, and tag, and an accepted one converges with no double cost; a compile-level check that the project ASC can reach the engine's batched-activation data | #19 (owner decision after the feel test); #2 and #45 for network profiles | Predicting any ability without tested rollback; predicting a contact, Guard, damage, control, or death result; granting `LocalPredicted` to an ability not on an approved prediction list | The owner's decision, after the P5 feel test, on whether #19 can close without P6. If the owner closes #19 without P6, the row stays Candidate until a later ability requests prediction |
+| TC-008 | Per-ability GAS prediction eligibility. First candidate (Issue #19, PR P6; Hold the Line was dropped by the owner on 2026-10-13, #260, so the candidate is open: gas-foundation.md Open Decisions 7): predict Hold the Line's activation, its Endurance cost (if it has one), its cooldown, and its own state tag as a self-only reversible path, using the engine's `LocalPredicted` execution policy with the `ServerOnlyTermination` security policy. Every other ability stays server-only until it is added to an approved prediction list with its own evidence, and contact, Guard, damage, control, and death results are never predicted. See [Gameplay Ability System Foundation](gas-foundation.md) | The two-client PIE feel test of the server-only abilities (#19 PR P5); rollback evidence under the supported network profiles for rejection, acceptance, and loss: a rejected prediction removes the predicted cost, cooldown, and tag, and an accepted one converges with no double cost; a compile-level check that the project ASC can reach the engine's batched-activation data | #19 (owner decision after the feel test); #2 and #45 for network profiles | Predicting any ability without tested rollback; predicting a contact, Guard, damage, control, or death result; granting `LocalPredicted` to an ability not on an approved prediction list | The owner's decision, after the P5 feel test, on whether #19 can close without P6. If the owner closes #19 without P6, the row stays Candidate until a later ability requests prediction |
 
 ## Rejected Architecture Alternatives
 

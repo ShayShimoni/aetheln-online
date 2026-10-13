@@ -1,46 +1,31 @@
 #pragma once
 
-#include "AethelnGameplayAbility.h"
+#include "AethelnBasicChainAbility.h"
 #include "CoreMinimal.h"
 #include "AethelnOathscarAbilities.generated.h"
 
 /*
- * Skeletons of the three representative Oathscar actives (docs/characters-and-factions.md;
- * docs/gas-foundation.md, Abilities): identity, cooldown tag, activation, validation, cost
- * and cooldown only. Each constructor sets the structure; the config section of each class
- * in Config/DefaultGame.ini sets ContentVersion and the provisional cost and cooldown,
- * which stay TBD (#107, #45). Contacts, Guard results and windows belong to #60.
- *
- * None overrides ActivateAbility: the base commits once through CommitAbility and ends
- * directly. Gate Step, Sworn Rebuke and Hold the Line are working names.
+ * The representative Oathscar actives (docs/characters-and-factions.md; docs/gas-foundation.md,
+ * Representative Oathscar Actives; #260). The owner replaced Gate Step, Sworn Rebuke, and Hold
+ * the Line on 2026-10-13 with Instant Strike, Parry, and the stance buffs; the superseded
+ * skeletons are removed. Every value is config in the class's section of Config/DefaultGame.ini
+ * and stays TBD (#107, #45): an unset value refuses the grant, as for the chain and the block.
+ * Instant Strike, Parry, Attack Stance, and Defense Stance are working names.
  */
 
-/** order.oathscar.ability.gate_step */
-UCLASS()
-class GAMECOMBAT_API UAethelnGateStepAbility : public UAethelnGameplayAbility
+/**
+ * order.oathscar.ability.instant_strike: a single weapon strike that hits on press, deals pure
+ * Wrought damage (no Guard pressure and no interruption), and has a cooldown. It is a one-step
+ * use of the chain machinery: the same registration, contact pipeline, boundaries, and records,
+ * with its own commitment tag. The three-hit chain's commitment window refuses it, as it refuses
+ * dodge and block (owner, 2026-10-13, issue #260).
+ */
+UCLASS(Config = Game)
+class GAMECOMBAT_API UAethelnInstantStrikeAbility : public UAethelnBasicChainAbility
 {
 	GENERATED_BODY()
 
 public:
-	UAethelnGateStepAbility();
-};
-
-/** order.oathscar.ability.sworn_rebuke */
-UCLASS()
-class GAMECOMBAT_API UAethelnSwornRebukeAbility : public UAethelnGameplayAbility
-{
-	GENERATED_BODY()
-
-public:
-	UAethelnSwornRebukeAbility();
-};
-
-/** order.oathscar.ability.hold_the_line. Duration-or-hold behavior is TBD (#107). */
-UCLASS()
-class GAMECOMBAT_API UAethelnHoldTheLineAbility : public UAethelnGameplayAbility
-{
-	GENERATED_BODY()
-
-public:
-	UAethelnHoldTheLineAbility();
+	UAethelnInstantStrikeAbility();
+	virtual const TCHAR* FindGrantProblem() const override;
 };

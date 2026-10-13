@@ -7,8 +7,11 @@
 #include "AethelnCombatTestWorld.h"
 #include "AethelnGameplayTags.h"
 #include "AethelnOathscarAbilities.h"
+#include "AethelnOathscarTestAbilities.h"
 #include "AethelnPlayerCharacter.h"
 #include "AethelnPlayerState.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/WorldSettings.h"
 #include "GameplayTagsManager.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ConfigCacheIni.h"
@@ -22,6 +25,8 @@ namespace AethelnOathscarAbilityTests
 	struct FDefinition
 	{
 		TSubclassOf<UAethelnGameplayAbility> Class;
+		/** The test-only subclass with valid fixture values (#260): unset production values refuse the grant. */
+		TSubclassOf<UAethelnGameplayAbility> FixtureClass;
 		FGameplayTag AbilityId;
 		FGameplayTag CooldownTag;
 		const TCHAR* SemanticId;
@@ -31,9 +36,7 @@ namespace AethelnOathscarAbilityTests
 	TArray<FDefinition> GetDefinitions()
 	{
 		return {
-			{ UAethelnGateStepAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_GateStep, AethelnGameplayTags::Cooldown_Oathscar_GateStep, TEXT("order.oathscar.ability.gate_step") },
-			{ UAethelnSwornRebukeAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_SwornRebuke, AethelnGameplayTags::Cooldown_Oathscar_SwornRebuke, TEXT("order.oathscar.ability.sworn_rebuke") },
-			{ UAethelnHoldTheLineAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_HoldTheLine, AethelnGameplayTags::Cooldown_Oathscar_HoldTheLine, TEXT("order.oathscar.ability.hold_the_line") },
+			{ UAethelnInstantStrikeAbility::StaticClass(), UAethelnInstantStrikeTestAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_InstantStrike, AethelnGameplayTags::Cooldown_Oathscar_InstantStrike, TEXT("order.oathscar.ability.instant_strike") },
 		};
 	}
 
@@ -44,13 +47,15 @@ namespace AethelnOathscarAbilityTests
 	}
 
 	/**
-	 * A possessed player granted the three skeletons with the test-pinned attributes.
-	 * Each test sets its own cost and cooldown on the granted instances, which the seam
-	 * checks and CommitAbility spends; the fixture starts them at no cost and no cooldown.
+	 * A possessed player granted the fixture Instant Strike with the test-pinned attributes.
+	 * Each test sets its own cost and cooldown on the granted instance, which the seam
+	 * checks and CommitAbility spends; the fixture starts it at no cost and the fixture cooldown.
+	 * Since #260 the strike runs until its RecoveryEnd, so EndActivation finishes one before the next request.
 	 */
 	struct FOathscarFixture
 	{
 		AethelnCombatTests::FTestPlayer Player;
+		UWorld* World = nullptr;
 		TArray<UAethelnGameplayAbility*> Instances;
 		TArray<FGameplayAbilitySpecHandle> Handles;
 		uint32 NextSequence = 1;
@@ -71,16 +76,18 @@ namespace AethelnOathscarAbilityTests
 				return false;
 			}
 			Player.Controller->Possess(Pawn);
+			Pawn->GetCharacterMovement()->DisableMovement();
+			World = TestWorld.World;
+			World->GetWorldSettings()->MaxUndilatedFrameTime = 10.0f; // fixture long frames, not a tick budget
 			for (const FDefinition& Definition : GetDefinitions())
 			{
-				const FGameplayAbilitySpec* Spec = Player.AbilitySystem->FindAbilitySpecFromClass(Definition.Class);
+				const FGameplayAbilitySpec* Spec = Player.AbilitySystem->FindAbilitySpecFromClass(Definition.FixtureClass);
 				UAethelnGameplayAbility* Instance = Spec != nullptr ? Cast<UAethelnGameplayAbility>(Spec->GetPrimaryInstance()) : nullptr;
 				if (!Test.TestNotNull(*FString::Printf(TEXT("%s is granted with an instance"), *Definition.AbilityId.ToString()), Instance))
 				{
 					return false;
 				}
 				Instance->ProvisionalEnduranceCost = 0.0f;
-				Instance->ProvisionalCooldownSeconds = 0.0f;
 				Instances.Add(Instance);
 				Handles.Add(Spec->Handle);
 			}
@@ -102,7 +109,7 @@ namespace AethelnOathscarAbilityTests
 			TArray<TSubclassOf<UGameplayAbility>> Abilities;
 			for (const FDefinition& Definition : GetDefinitions())
 			{
-				Abilities.Add(Definition.Class);
+				Abilities.Add(Definition.FixtureClass);
 			}
 			return Init(Test, TestWorld, Abilities);
 		}
@@ -113,10 +120,20 @@ namespace AethelnOathscarAbilityTests
 			const FDefinition Definition = GetDefinitions()[Index];
 			FAethelnCombatActivationRequest Request;
 			Request.AbilityId = Definition.AbilityId;
-			Request.ContentVersion = ContentVersion.Get(Definition.Class->GetDefaultObject<UAethelnGameplayAbility>()->ContentVersion);
+			Request.ContentVersion = ContentVersion.Get(Definition.FixtureClass->GetDefaultObject<UAethelnGameplayAbility>()->ContentVersion);
 			Request.Sequence = NextSequence++;
 			AethelnCombatTests::FillTestAimAndTime(Request, *Player.AbilitySystem);
 			return Player.AbilitySystem->ProcessServerRequest(Request);
+		}
+
+		/** Ends a running strike the authored way, at its RecoveryEnd, and by default removes the cooldown it committed. */
+		void EndActivation(bool bClearCooldown = true)
+		{
+			World->Tick(LEVELTICK_All, 0.625f); // the fixture step's RecoveryEnd
+			if (bClearCooldown)
+			{
+				Player.AbilitySystem->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(AethelnGameplayTags::Cooldown_Oathscar_InstantStrike));
+			}
 		}
 
 		bool IsActive(int32 Index) const
@@ -167,7 +184,7 @@ bool FAethelnAbilitiesCostAndCooldownCommitTest::RunTest(const FString& Paramete
 		Fixture.Commits = 0;
 		Fixture.CancelledEnds = 0;
 
-		// The previous ability is still on its own cooldown, so acceptance here also shows the cooldowns are independent.
+		// Cooldown independence between abilities is exercised once the Parry joins the fixture in P3; with one ability it is not shown here.
 		ExpectResult(*this, Name + TEXT(": accepted"), Fixture.Submit(Index), EResult::Accepted);
 		TestEqual(Name + TEXT(": one cost effect"), Fixture.CostEffects, 1);
 		TestEqual(Name + TEXT(": Endurance spent once"), Fixture.Endurance(), EnduranceBefore - Cost);
@@ -177,6 +194,7 @@ bool FAethelnAbilitiesCostAndCooldownCommitTest::RunTest(const FString& Paramete
 		TestEqual(Name + TEXT(": one active cooldown effect carries the tag"), Durations.Num(), 1);
 		TestTrue(Name + TEXT(": the cooldown lasts the configured duration"), Durations.Num() == 1 && FMath::IsNearlyEqual(Durations[0], CooldownSeconds));
 		TestEqual(Name + TEXT(": committed once, through CommitAbility"), Fixture.Commits, 1);
+		Fixture.EndActivation(false);
 		TestFalse(Name + TEXT(": the activation ended"), Fixture.IsActive(Index));
 		TestEqual(Name + TEXT(": it ended itself; nothing was cancelled"), Fixture.CancelledEnds, 0);
 
@@ -191,6 +209,7 @@ bool FAethelnAbilitiesCostAndCooldownCommitTest::RunTest(const FString& Paramete
 		TestEqual(Name + TEXT(": the second acceptance spends once more"), Fixture.Endurance(), EnduranceBefore - 2.0f * Cost);
 		TestEqual(Name + TEXT(": the second acceptance applies one more cost and cooldown"), Fixture.CostEffects + Fixture.CooldownEffects, 4);
 		TestEqual(Name + TEXT(": two commits in all"), Fixture.Commits, 2);
+		Fixture.EndActivation(false);
 	}
 	for (const FDefinition& Definition : Definitions)
 	{
@@ -224,13 +243,13 @@ bool FAethelnAbilitiesResourceBoundsTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	UAethelnGameplayAbility& GateStep = *Fixture.Instances[0];
+	UAethelnGameplayAbility& InstantStrike = *Fixture.Instances[0];
 	const float Endurance = Fixture.Endurance();
 	TestTrue(TEXT("The test starts with Endurance"), Endurance > 0.0f);
 
 	auto ExpectInsufficient = [&](const FString& Case, float Cost)
 	{
-		GateStep.ProvisionalEnduranceCost = Cost;
+		InstantStrike.ProvisionalEnduranceCost = Cost;
 		const float Before = Fixture.Endurance();
 		const int32 CommitsBefore = Fixture.Commits;
 		ExpectResult(*this, Case, Fixture.Submit(0), EResult::InsufficientResource);
@@ -243,14 +262,15 @@ bool FAethelnAbilitiesResourceBoundsTest::RunTest(const FString& Parameters)
 	ExpectInsufficient(TEXT("A negative cost fails closed"), -1.0f);
 	TestEqual(TEXT("No cost effect was applied"), Fixture.CostEffects, 0);
 
-	GateStep.ProvisionalEnduranceCost = Endurance;
+	InstantStrike.ProvisionalEnduranceCost = Endurance;
 	ExpectResult(*this, TEXT("A cost equal to Endurance"), Fixture.Submit(0), EResult::Accepted);
 	TestEqual(TEXT("A cost equal to Endurance leaves 0"), Fixture.Endurance(), 0.0f);
 	TestEqual(TEXT("It applied one cost effect"), Fixture.CostEffects, 1);
+	Fixture.EndActivation();
 
 	ExpectInsufficient(TEXT("Any cost at 0 Endurance"), 1.0f);
 
-	GateStep.ProvisionalEnduranceCost = 0.0f;
+	InstantStrike.ProvisionalEnduranceCost = 0.0f;
 	ExpectResult(*this, TEXT("No cost at 0 Endurance"), Fixture.Submit(0), EResult::Accepted);
 	TestEqual(TEXT("No cost applies no cost effect"), Fixture.CostEffects, 1);
 	TestEqual(TEXT("No cost leaves Endurance at 0"), Fixture.Endurance(), 0.0f);
@@ -297,13 +317,15 @@ bool FAethelnAbilitiesTagAndStateGatesTest::RunTest(const FString& Parameters)
 		ExpectBlocked(Name + TEXT(" while State.Dead"));
 		AbilitySystem.RemoveLooseGameplayTag(AethelnGameplayTags::State_Dead);
 		ExpectResult(*this, Name + TEXT(" after State.Dead is removed"), Fixture.Submit(Index), EResult::Accepted);
+		Fixture.EndActivation();
 
-		// Which abilities block which is TBD (#60, #18), so the test blocks the ability the way an
-		// active blocking ability would, through the ASC's blocked-ability tags.
+		// Which abilities block which is in OathscarActives.InstantStrikeRelations; this block-by-tag stands for any
+		// active blocking ability, through the ASC's blocked-ability tags.
 		AbilitySystem.BlockAbilitiesWithTags(AbilityIdTags);
 		ExpectBlocked(Name + TEXT(" while blocked by a test block"));
 		AbilitySystem.UnBlockAbilitiesWithTags(AbilityIdTags);
 		ExpectResult(*this, Name + TEXT(" after the block is removed"), Fixture.Submit(Index), EResult::Accepted);
+		Fixture.EndActivation();
 	}
 	return true;
 }
@@ -319,8 +341,6 @@ bool FAethelnAbilitiesDefinitionsAndVersionsTest::RunTest(const FString& Paramet
 
 	const TArray<FDefinition> Definitions = GetDefinitions();
 	const TArray<TSubclassOf<UGameplayAbility>>& Configured = GetDefault<AAethelnPlayerState>()->GrantedAbilities;
-	TestEqual(TEXT("DefaultGame.ini grants exactly the three skeletons"), Configured.Num(), Definitions.Num());
-
 	TSet<FGameplayTag> AbilityIds;
 	TSet<FGameplayTag> CooldownTags;
 	for (int32 Index = 0; Index < Definitions.Num(); ++Index)
@@ -328,7 +348,8 @@ bool FAethelnAbilitiesDefinitionsAndVersionsTest::RunTest(const FString& Paramet
 		const FDefinition& Definition = Definitions[Index];
 		const FString Name = Definition.AbilityId.ToString();
 		const UAethelnGameplayAbility* Ability = Definition.Class->GetDefaultObject<UAethelnGameplayAbility>();
-		TestTrue(Name + TEXT(": granted by config, in order"), Configured.IsValidIndex(Index) && Configured[Index].Get() == Definition.Class.Get());
+		// #260: the actives are not granted until their values exist (unset values refuse the grant).
+		TestFalse(Name + TEXT(": DefaultGame.ini does not grant the unconfigured active"), Configured.ContainsByPredicate([&Definition](const TSubclassOf<UGameplayAbility>& Granted) { return Granted.Get() == Definition.Class.Get(); }));
 
 		TestEqual(Name + TEXT(": identity"), Ability->GetAbilityId(), Definition.AbilityId);
 		TestTrue(Name + TEXT(": a valid Ability. tag"), UAethelnGameplayAbility::IsAbilityIdentityTag(Ability->GetAbilityId()));
@@ -354,22 +375,24 @@ bool FAethelnAbilitiesDefinitionsAndVersionsTest::RunTest(const FString& Paramet
 		TestNull(Name + TEXT(": no engine cost effect class"), Ability->GetCostGameplayEffect());
 		TestNull(Name + TEXT(": no engine cooldown effect class"), Ability->GetCooldownGameplayEffect());
 		TestFalse(Name + TEXT(": bAcceptsRelease is false"), Ability->bAcceptsRelease);
-		TestTrue(Name + TEXT(": the definition passes grant validation"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition.Class, 1)));
+		AddExpectedError(TEXT("Refused to grant ability"), EAutomationExpectedErrorFlags::Contains, 1);
+		TestFalse(Name + TEXT(": unset production values refuse the grant"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition.Class, 1)));
+		TestTrue(Name + TEXT(": the fixture definition passes grant validation"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition.FixtureClass, 1)));
 	}
 
-	// End to end through the configured grant list.
+	// End to end through the fixture strike.
 	// The fixture outlives the world, so its delegate bindings never dangle during teardown.
 	FOathscarFixture Fixture;
 	FScopedCombatTestWorld TestWorld;
-	if (!Fixture.Init(*this, TestWorld, Configured))
+	if (!Fixture.Init(*this, TestWorld))
 	{
 		return false;
 	}
-	TestEqual(TEXT("The configured grant list grants three abilities"), Fixture.Player.AbilitySystem->GetActivatableAbilities().Num(), Definitions.Num());
+	TestEqual(TEXT("The fixture strike is granted"), Fixture.Player.AbilitySystem->GetActivatableAbilities().Num(), Definitions.Num());
 	for (int32 Index = 0; Index < Definitions.Num(); ++Index)
 	{
 		const FString Name = Definitions[Index].AbilityId.ToString();
-		const uint32 ContentVersion = Definitions[Index].Class->GetDefaultObject<UAethelnGameplayAbility>()->ContentVersion;
+		const uint32 ContentVersion = Definitions[Index].FixtureClass->GetDefaultObject<UAethelnGameplayAbility>()->ContentVersion;
 		ExpectResult(*this, Name + TEXT(": a newer content version"), Fixture.Submit(Index, ContentVersion + 1), EResult::IncompatibleVersion);
 		ExpectResult(*this, Name + TEXT(": an older content version"), Fixture.Submit(Index, ContentVersion - 1), EResult::IncompatibleVersion);
 		TestEqual(Name + TEXT(": a version mismatch commits nothing"), Fixture.Commits, 0);

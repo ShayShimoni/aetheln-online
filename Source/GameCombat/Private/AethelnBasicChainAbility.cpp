@@ -8,9 +8,12 @@
 UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 {
 	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
+	CommitmentTag = AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain;
 	ResetTags.AddTag(AethelnGameplayTags::State_Dead);
 	// #18 Q17 and Q10: no attack while dodging or blocking. Each blocking tag is also a reset tag (grant rule).
-	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag() })
+	// #260 (default, open): nor inside a committed Instant Strike (its own constructor swaps this for the chain's).
+	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag(),
+		AethelnGameplayTags::State_Oathscar_InstantStrike.GetTag() })
 	{
 		ActivationBlockedTags.AddTag(Tag);
 		ResetTags.AddTag(Tag);
@@ -21,11 +24,12 @@ UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 {
 	if (const TCHAR* Problem = Super::FindGrantProblem()) { return Problem; }
-	if (ProvisionalCooldownSeconds != 0.0f || bAcceptsRelease) { return TEXT("has a chain cooldown or Release route"); }
-	if (ProvisionalSteps.Num() != 3) { return TEXT("does not have exactly three chain steps"); }
+	// Every hit of a multi-step chain commits, so a chain cooldown would block its next hit; a single step may have one.
+	if ((StepCount > 1 && ProvisionalCooldownSeconds != 0.0f) || bAcceptsRelease) { return TEXT("has a chain cooldown or Release route"); }
+	if (StepCount < 1 || ProvisionalSteps.Num() != StepCount) { return TEXT("does not have its authored number of steps"); }
 	if (!ResetTags.HasTagExact(AethelnGameplayTags::State_Dead)) { return TEXT("does not reset on State.Dead"); }
-	const FGameplayTagContainer Commitment(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
-	if (Commitment.HasAny(ActivationBlockedTags) || Commitment.HasAny(ResetTags))
+	const FGameplayTagContainer Commitment(CommitmentTag);
+	if (!CommitmentTag.IsValid() || Commitment.HasAny(ActivationBlockedTags) || Commitment.HasAny(ResetTags))
 	{
 		return TEXT("blocks or resets its own commitment");
 	}
