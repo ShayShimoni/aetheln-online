@@ -52,6 +52,9 @@ namespace AethelnEnemyAITests
 	bool SpawnEnemy(FAutomationTestBase& Test, const FFixture& F, FEnemy& Out, const FVector& Location,
 		TSubclassOf<UAethelnEnemyAttackAbility> Attack = UAethelnEnemyAttackAbility::StaticClass(), TOptional<float> Health = {})
 	{
+		// The tests derive their times from the promoted values; with none in config they would step the world backwards.
+		if (!Test.TestTrue(TEXT("Config/DefaultGame.ini holds the promoted enemy values"),
+			Telegraph() > 0.0 && InterruptedPause() > 0.0 && Respawn() > 0.0 && StepRecoveryEnd() > 0.0)) { return false; }
 		const FTransform Transform(Location);
 		Out.Pawn = F.World.World->SpawnActorDeferred<AAethelnEnemyCharacter>(AAethelnEnemyCharacter::StaticClass(), Transform,
 			nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);

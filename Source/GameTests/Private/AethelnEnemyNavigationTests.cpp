@@ -78,6 +78,10 @@ namespace AethelnEnemyNavigationTests
 	/** A 3000 x 1000 floor with its top at z = 0, a bounds volume around it, and a built navigation mesh. */
 	bool BuildArena(FAutomationTestBase& Test, UWorld& World, FNavigation& Out)
 	{
+		// The headless world has no saved navigation data, so the system spawns the mesh at runtime, which it logs as a warning;
+		// and the crowd manager, at world cleanup, looks for the mesh that is already gone.
+		Test.AddExpectedMessage(TEXT("SpawnMissingNavigationData: No saved navigation data found"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+		Test.AddExpectedMessage(TEXT("Unable to find RecastNavMesh instance while trying to create UCrowdManager instance"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
 		if (!Test.TestNotNull(TEXT("The arena floor spawned"), SpawnBox(World, FVector(0.0, 0.0, -50.0), FVector(3000.0, 1000.0, 100.0), true))) { return false; }
 		const ANavMeshBoundsVolume* Bounds = SpawnBounds(World, FVector(0.0, 0.0, 100.0), FVector(3200.0, 1200.0, 600.0));
 		if (!Test.TestNotNull(TEXT("The bounds volume spawned"), Bounds)) { return false; }
@@ -197,6 +201,8 @@ bool FAethelnEnemyNavigationMeasurementsTest::RunTest(const FString& Parameters)
 	F.Player.PlayerState->SetPlayerId(1);
 	F.Pawn->SetActorLocation(FVector(350.0, 0.0, PlayerHeight));
 	FNavigation Navigation; if (!BuildArena(*this, *F.World.World, Navigation)) { return false; }
+	// LogMemUsed logs the tile memory it returns, as a warning.
+	AddExpectedMessage(TEXT("RecastNavMesh-Default: ARecastNavMesh:"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
 	const int32 Tiles = Navigation.Mesh->GetNavMeshTilesCount();
 	const int32 ActiveTiles = Navigation.Mesh->GetNumActiveTiles();
 	const uint32 NavMeshBytes = Navigation.Mesh->LogMemUsed();
