@@ -591,13 +591,15 @@ the engine jobs reads them. The match is ordinal and case-sensitive:
 touches an engine input still selects the native and Editor checks through
 that input. `change-impact` is unchanged and still compiles for `design/**`
 and `scripts/design/**`; narrowing it is a follow-up candidate, not part of
-this change. `.gitignore`, non-script `tests/content` files, and the other
-`scripts/build` classes from the issue remain as recorded above. This
+this change. `.gitignore` stays deliberately unclassified (#167), because the
+engine gate's drift check reads it. Non-script `tests/content` files and the
+other `scripts/build` classes from the issue remain as recorded above. This
 candidate is 41,534 LF-normalized bytes with digest
 `ec2c22b291957b32b0b4ca7919ec23d34e5539279243349a7a6bd7e6e818ca5f`. It is a new
 policy identity and grants no activation authority; the shadow job runs the
 accepted-base selector, so a later owner pull request that touches only these
-paths must record the green gap observation after this change merges.
+paths must record a green `ci-acceptance-shadow` observation (aggregate
+branch, portable receipt bound) after this change merges.
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
