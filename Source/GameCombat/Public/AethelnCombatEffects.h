@@ -223,3 +223,21 @@ public:
 	/** Server only. */
 	static void ApplyTo(UAbilitySystemComponent& AbilitySystemComponent);
 };
+
+/**
+ * The stagger of a parried player attacker (#260; docs/dodge-and-block.md, The Parry): a duration effect that grants
+ * State.Staggered for SetByCaller.Stagger.Duration seconds, the duration of the Parry's authored StaggerSeconds. State.Dead
+ * removes it and refuses a new one, so a respawned avatar never inherits it. Only the Parry hook applies it, and a zero
+ * duration is never applied.
+ */
+UCLASS()
+class GAMECOMBAT_API UAethelnStaggerEffect : public UGameplayEffect
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnStaggerEffect();
+
+	/** Server only. Applies the stagger to the target for Seconds; false for a non-finite or non-positive duration. */
+	static bool ApplyTo(UAbilitySystemComponent& AbilitySystemComponent, float Seconds);
+};
