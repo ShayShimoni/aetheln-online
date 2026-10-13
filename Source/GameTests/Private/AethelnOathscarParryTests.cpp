@@ -5,6 +5,8 @@
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnDefenseTestFixture.h"
 #include "AethelnGameplayTags.h"
+#include "AethelnObservability.h"
+#include "AethelnObservabilitySubsystem.h"
 #include "AethelnOathscarTestAbilities.h"
 #include "AethelnPlayerState.h"
 #include "GameplayTagsManager.h"
@@ -68,11 +70,18 @@ namespace AethelnOathscarParryTests
 		AAethelnPlayerCharacter* Pawn = nullptr;
 		uint32 NextSequence = 1;
 		EResult Press() { return Player.AbilitySystem->ProcessServerRequest(AethelnChainTests::MakeChainRequest(*Player.AbilitySystem, NextSequence++)); }
+		/** A block raise, to show that a staggered player is refused every ability, not only the chain. */
+		EResult Raise()
+		{
+			FAethelnCombatActivationRequest Request = AethelnChainTests::MakeChainRequest(*Player.AbilitySystem, NextSequence++);
+			Request.AbilityId = AethelnGameplayTags::Ability_Block;
+			return Player.AbilitySystem->ProcessServerRequest(Request);
+		}
 	};
 
 	bool SpawnPlayerAttacker(FAutomationTestBase& Test, FDefense& F, FPlayerAttacker& Out, const FVector& Location, double Yaw)
 	{
-		if (!AethelnCombatTests::SpawnTestPlayer(Test, F.World, Out.Player, { UAethelnChainTestAbility::StaticClass() })) { return false; }
+		if (!AethelnCombatTests::SpawnTestPlayer(Test, F.World, Out.Player, { UAethelnChainTestAbility::StaticClass(), UAethelnBlockTestAbility::StaticClass() })) { return false; }
 		Out.Pawn = F.World.Spawn<AAethelnPlayerCharacter>();
 		if (!Test.TestNotNull(TEXT("Player attacker pawn exists"), Out.Pawn)) { return false; }
 		Out.Pawn->SetActorLocationAndRotation(Location, FRotator(0.0, Yaw, 0.0));
@@ -171,11 +180,17 @@ bool FAethelnParryWindowBoundariesTest::RunTest(const FString& Parameters)
 	}
 	int32 Interrupts = 0;
 	const FDelegateHandle InterruptHandle = F.Timeline->OnTargetInterrupted.AddLambda([&Interrupts](UAethelnAbilitySystemComponent*, double) { ++Interrupts; });
+	UAethelnObservabilitySubsystem* Subsystem = F.World.GameInstance != nullptr ? F.World.GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>() : nullptr;
+	if (!TestNotNull(TEXT("Observability subsystem exists"), Subsystem)) { return false; }
+	const auto Sink = MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(64);
+	TestTrue(TEXT("Runtime context is set"), Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-parry-test"), TEXT("instance-parry-test"), TEXT("connection-parry-test")));
+	TestTrue(TEXT("Public sink is set"), Subsystem->SetTestSink(Sink));
+	const float GuardBefore = F.Guard();
 	// The Parry is accepted at 1.0: it defends [1.0625, 1.5). Each step's contact is exactly its start + 1/8.
 	F.AdvanceTo(0.90625);
 	const FGuid JustBefore = F.Swing(*Enemies[0], 0.0f); // contact 1.03125: before the window
 	F.AdvanceTo(0.9375);
-	const FGuid AtStart = F.Swing(*Enemies[1], 0.0f); // contact 1.0625: the window start, inclusive
+	const FGuid AtStart = F.Swing(*Enemies[1], 3.0f, 21); // contact 1.0625: the window start, inclusive; a positive pressure that must not apply
 	F.AdvanceTo(1.0);
 	TestEqual(TEXT("The Parry is accepted"), Parry(F), EResult::Accepted);
 	TestTrue(TEXT("It holds its state tag"), F.Has(AethelnGameplayTags::State_Oathscar_Parrying));
@@ -189,7 +204,7 @@ bool FAethelnParryWindowBoundariesTest::RunTest(const FString& Parameters)
 	F.AdvanceTo(1.125);
 	const FGuid Behind = F.Swing(*Enemies[2], 0.0f); // contact 1.25 from behind: outside the arc
 	F.AdvanceTo(1.3125);
-	const FGuid JustBeforeEnd = F.Swing(*Enemies[3], 0.0f); // contact 1.4375
+	const FGuid JustBeforeEnd = F.Swing(*Enemies[3], 3.0f, 22); // contact 1.4375; likewise
 	F.AdvanceTo(1.375);
 	const FGuid AtEnd = F.Swing(*Enemies[4], 0.0f); // contact 1.5: the window end, exclusive
 	F.AdvanceTo(2.0);
@@ -201,12 +216,26 @@ bool FAethelnParryWindowBoundariesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("At the window end: a hit"), Outcome(AtEnd), EOutcome::Hit);
 	TestEqual(TEXT("Three hits cost Health; the two parried contacts changed nothing"), F.Health(), 25.0f);
 	TestEqual(TEXT("A parried contact applies no Guard pressure"), F.PressureApplications, 0);
+	TestEqual(TEXT("Nor does it change Guard, though both parried swings author pressure"), F.Guard(), GuardBefore);
 	TestEqual(TEXT("The hook ran once per parried contact"), Interrupts, 2);
 	const FAethelnCombatResult* Parried = F.ResultFor(AtStart);
 	if (TestNotNull(TEXT("The parried result is recorded"), Parried)) { TestEqual(TEXT("At its contact time"), Parried->ContactTime, 1.0625); }
 	TestFalse(TEXT("The window ended at WindowEnd: no state tag"), F.Has(AethelnGameplayTags::State_Oathscar_Parrying));
 	TestFalse(TEXT("The activation ended at WindowEnd"), ParryActive(F));
 	if (TestNotNull(TEXT("The slot is kept for exact contacts"), F.Slot())) { TestEqual(TEXT("It ended at WindowEnd"), F.Slot()->ActiveUntilServerTime, 1.5); }
+	// Telemetry (docs/dodge-and-block.md, Observability Events): a Parried result emits one Block event with the attack's ids.
+	TestTrue(TEXT("Telemetry drained"), Subsystem->WaitForIdleForTests());
+	const FString ParriedId = AtStart.ToString(EGuidFormats::DigitsWithHyphensLower);
+	const TArray<FAethelnObservabilityEvent> Events = Sink->GetEvents().FilterByPredicate([&ParriedId](const FAethelnObservabilityEvent& Event) { return Event.Correlation.ActivationId == ParriedId; });
+	if (TestEqual(TEXT("One event for the parried result"), Events.Num(), 1))
+	{
+		TestTrue(TEXT("The Block category, not Hit"), Events[0].Category == EAethelnObservabilityCategory::Block && Events[0].SubjectCategory == EAethelnObservabilityCategory::Block);
+		TestTrue(TEXT("Accepted reason"), Events[0].SafeReason == EAethelnSafeReason::Accepted);
+		TestEqual(TEXT("The attack's sequence"), static_cast<int64>(Events[0].Correlation.Sequence), static_cast<int64>(21));
+		TestEqual(TEXT("No connection or target identity"), Events[0].Correlation.ConnectionPseudonym, FString(AethelnObservability::ExcludedIdentifier));
+	}
+	Subsystem->ResetSink();
+	Subsystem->ResetRuntimeContext();
 	F.Timeline->OnTargetInterrupted.Remove(InterruptHandle);
 	return true;
 }
@@ -262,7 +291,8 @@ bool FAethelnParryStaggersAttackerTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("The Parry is accepted"), AethelnOathscarParryTests::Parry(F), EResult::Accepted);
 		TestEqual(TEXT("The attacker's chain press is accepted"), Attacker.Press(), EResult::Accepted); // contact 1.125
 		F.AdvanceTo(1.25);
-		TestEqual(TEXT("The attacker takes no damage and the defender none"), F.Health(), 40.0f);
+		TestEqual(TEXT("The defender takes no damage"), F.Health(), 40.0f);
+		TestEqual(TEXT("The attacker is not harmed either"), Attacker.Player.AbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
 		if (TestEqual(TEXT("The attacker's chain ended once"), Ends.Num(), 1)) { TestEqual(TEXT("Interrupted"), Ends[0].Value, EAethelnChainEndReason::Interrupted); }
 		TestEqual(TEXT("It was stamped at the contact time"), Attacker.Player.AbilitySystem->GetLastChainResetTimeForTests(), 1.125);
 		const FGameplayTagContainer StaggerTag(AethelnGameplayTags::State_Staggered);
@@ -272,7 +302,8 @@ bool FAethelnParryStaggersAttackerTest::RunTest(const FString& Parameters)
 		{
 			const TArray<float> Durations = Attacker.Player.AbilitySystem->GetActiveEffectsDuration(FGameplayEffectQuery::MakeQuery_MatchAnyOwningTags(StaggerTag));
 			if (TestEqual(TEXT("One stagger effect"), Durations.Num(), 1)) { TestEqual(TEXT("For the authored duration"), Durations[0], StaggerSeconds); }
-			TestEqual(TEXT("Every project ability is refused while staggered"), Attacker.Press(), EResult::ActivationBlocked);
+			TestEqual(TEXT("The chain is refused while staggered"), Attacker.Press(), EResult::ActivationBlocked);
+			TestEqual(TEXT("So is a block raise (every project ability, via the base blocking tag)"), Attacker.Raise(), EResult::ActivationBlocked);
 			TestFalse(TEXT("The defender is not staggered"), F.Has(AethelnGameplayTags::State_Staggered));
 			Attacker.Player.AbilitySystem->AddLooseGameplayTag(AethelnGameplayTags::State_Dead);
 			TestFalse(TEXT("State.Dead removes the stagger"), Attacker.Player.AbilitySystem->HasMatchingGameplayTag(AethelnGameplayTags::State_Staggered));

@@ -104,12 +104,18 @@ void UAethelnParryAbility::ActivateAbility(
 		return;
 	}
 	bHoldsSlot = true;
+	// The end boundary before the commit too, so a refused boundary spends nothing; a failed commit closes it again.
+	if (!ASC->OpenParryWindow(OperationId, Handle, Slot.ActiveUntilServerTime))
+	{
+		EndAbility(Handle, &OriginalActorInfo, ActivationInfo, true, true);
+		return;
+	}
 	const bool bCommitted = CommitAbility(Handle, &OriginalActorInfo, ActivationInfo);
 	// A synchronous cost/tag/avatar callback replaced this operation: it owns the instance now.
 	if (GetActivationOperationId() != OperationId) { return; }
 	if (!bCommitted || !IsActive() || ASC->ActiveSeamScope->bCanceled || !HasActivationLifecycle())
 	{
-		EndAbility(Handle, &OriginalActorInfo, ActivationInfo, true, true); // a failed commit ends the slot unused
+		EndAbility(Handle, &OriginalActorInfo, ActivationInfo, true, true); // a failed commit ends the slot and the window unused
 		return;
 	}
 	bHoldsStateTag = true;
@@ -117,10 +123,6 @@ void UAethelnParryAbility::ActivateAbility(
 	if (GetActivationOperationId() != OperationId || !IsActive()) { return; }
 	DeadHandle = ASC->RegisterGameplayTagEvent(AethelnGameplayTags::State_Dead, EGameplayTagEventType::NewOrRemoved)
 		.AddUObject(this, &UAethelnParryAbility::HandleDeadTag);
-	if (!ASC->OpenParryWindow(OperationId, Handle, Slot.ActiveUntilServerTime) && GetActivationOperationId() == OperationId && IsActive())
-	{
-		EndAbility(Handle, &OriginalActorInfo, ActivationInfo, true, true);
-	}
 }
 
 EAethelnBlockConsequence UAethelnParryAbility::HandleParriedHit(const FAethelnBlockedContact& Contact)

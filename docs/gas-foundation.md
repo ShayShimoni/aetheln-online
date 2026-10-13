@@ -517,7 +517,7 @@ owner-only (see Replication under Attribute Policy).
 
 ## Abilities
 
-All three derive from `UAethelnGameplayAbility`.
+Every representative active derives from `UAethelnGameplayAbility`.
 
 - **Policies:** `InstancedPerActor`, `NetExecutionPolicy = ServerOnly`,
   `NetSecurityPolicy = ServerOnly`. The engine itself then rejects client
@@ -772,6 +772,7 @@ value is set here except the owner's provisional 600 s stance duration.
 | An accepted active after a commitment window | Resets the chain (`OtherAction`), the existing #60 rule | Existing rule |
 | Parry inside the chain's commitment window | Refused (also inside Instant Strike's) | Default, open. Implemented in P3 |
 | Parry and block | Refused both ways: one defense slot per ASC (`State.Blocking` blocks the Parry, `State.Oathscar.Parrying` blocks the block) | Default, open (the owner may prefer a parry that ends the block). Implemented in P3 |
+| An attack press (the chain or Instant Strike) during the Parry window | Accepted today: neither lists `State.Oathscar.Parrying` among its blocking tags, and the window keeps defending (the block, by contrast, refuses an attack, Q10) | Default, open (the owner may prefer to refuse it, or to end the window) |
 | A dodge accepted during a Parry window | Ends the window at the dodge's acceptance, as it ends a block (Q10) | Default, open. Implemented in P3 (`CancelParry`) |
 | A stance cast inside a commitment window, and whether it resets the chain | Refused inside; resets after, as any committed action | Default, open (the owner may exempt the stance) |
 | What a staggered player may do | Every project ability is refused while `State.Staggered` holds; movement is unrestricted (#60 OQ4) | Default, open. Implemented in P3: `State.Staggered` is a blocking tag of the base ability and a reset tag of the chain |
@@ -802,10 +803,10 @@ its PIE rows (A19 to A21) under the same conditions.
 | K3 | `Aetheln.GameCombat.OathscarActives.InstantStrikeRelations` | P2 | H | `OnCooldown` with nothing spent; refused inside the chain's commitment window, accepted after it and resets the chain with `OtherAction`; the relation defaults above; `State.Dead` refuses |
 | K4 | `Aetheln.GameCombat.OathscarActives.InstantStrikeNetworkConditions` | P2 | H | A25 profiles: requests delayed across the cooldown end and the chain's `CancelOpen` get the outcome their arrival time dictates; duplicated gives `DuplicateSequence`, reordered `StaleSequence`, dropped commits nothing; A26 against a dummy: at most one result per activation and none from a rejected request; A27: teardown before the active window, inside it before the contact, and after the contact ends the step once with no later contact; the cooldown end is simulated by removing the cooldown effect, because the headless world does not expire duration effects |
 | K5 | `Aetheln.GameCombat.OathscarActives.ParryDefinition` | P3 | H | Grant refused for non-finite values, a window that is empty or starts before acceptance, an arc outside `(0, 360]`, a negative stagger, or a Release phase; unset values fail closed |
-| K6 | `Aetheln.GameCombat.OathscarActives.ParryWindowBoundaries` | P3 | H | Enemy contacts just before the window start (hit), at the start (parried), just before the end (parried), at the end (hit), and outside the arc (hit); a parried contact changes no Health or Guard and calls the hook once; a duplicate candidate converges |
+| K6 | `Aetheln.GameCombat.OathscarActives.ParryWindowBoundaries` | P3 | H | Partial (the duplicate-candidate leg is #60's allowance, tested there): enemy contacts just before the window start (hit), at the start (parried), just before the end (parried), at the end (hit), and outside the arc (hit); a parried contact with authored Guard pressure changes no Health or Guard and calls the hook once; a parried result emits one Block event |
 | K7 | `Aetheln.GameCombat.OathscarActives.ParryStaggersAttacker` | P3 | H | A parried enemy's registered steps are stamped at the contact time, its later contacts drop, and `OnTargetInterrupted` fires once, whatever its `InterruptibleUntil`; with a test-only hostile player relation, the attacker's chain ends with `Interrupted` at the contact time and `State.Staggered` holds for the test duration; a zero duration grants nothing; a lethal or avoided contact staggers no one |
 | K8 | `Aetheln.GameCombat.OathscarActives.ParryRelations` | P3 | H | The relation defaults above; `State.Dead` and avatar loss end the window at the processing time |
-| K9 | `Aetheln.GameCombat.OathscarActives.ParryNetworkConditions` | P3 | H | A25 profiles: a parry request delayed to arrive just before and just after an enemy contact is judged by its server arrival time; duplicated, reordered, and dropped requests open no second window; contacts just before, at, and after the window end under delayed delivery; A27 teardown inside the window |
+| K9 | `Aetheln.GameCombat.OathscarActives.ParryNetworkConditions` | P3 | H | Partial (the window-end contacts are K6's; delivery is varied around the window start only): A25 profiles: a parry request delayed to arrive just before and just after an enemy contact is judged by its server arrival time; duplicated, reordered, and dropped requests open no second window; A27 teardown inside the window |
 | K10 | `Aetheln.GameCombat.OathscarActives.StanceExclusive` | P4 | H | A cast applies its effect with the configured duration and no cooldown; the other stance's cast removes it; never both, including two casts in one frame; the recast default |
 | K11 | `Aetheln.GameCombat.OathscarActives.StanceRemovedOnDeath` | P4 | H | Death removes the active stance; no cast while dead; after respawn Health, Endurance, and Guard are restored and no stance exists; re-possession keeps the stance |
 | K12 | `Aetheln.GameCombat.OathscarActives.StanceNetworkConditions` | P4 | H | A25 profiles: duplicated, reordered, and dropped casts leave at most one stance effect and spend nothing twice |
