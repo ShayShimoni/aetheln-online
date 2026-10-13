@@ -11,6 +11,8 @@ public class GameTests : ModuleRules
 			"AssetRegistry",
 			"Core",
 			"CoreUObject",
+			// #21 P3: CQTest's PIE network component hosts the two-client death test (R5); it needs UnrealEd and IrisCore headers.
+			"CQTest",
 			"DesktopPlatform",
 			"Engine",
 			"GameCombat",
@@ -19,9 +21,11 @@ public class GameTests : ModuleRules
 			"GameplayAbilities",
 			"GameplayTags",
 			"GameUI",
+			"IrisCore",
 			"Json",
 			"NavigationSystem",
-			"PhysicsCore"
+			"PhysicsCore",
+			"UnrealEd"
 		});
 
 		bool bWithOpenSsl = Target.Platform == UnrealTargetPlatform.Win64

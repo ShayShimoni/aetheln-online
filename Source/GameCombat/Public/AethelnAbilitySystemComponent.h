@@ -37,6 +37,7 @@ struct FAethelnServerDodgeWindow
 DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatActivationDelegate, const FAethelnCombatActivationRecord&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnChainEndDelegate, const FGuid&, EAethelnChainEndReason);
 DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatResultCueDelegate, const FAethelnCombatResultCue&);
+DECLARE_MULTICAST_DELEGATE(FAethelnDeathCueDelegate);
 
 /** Server-only chain bookkeeping, separate from GAS activation and observer state. */
 struct FAethelnServerChainState
@@ -206,6 +207,8 @@ public:
 	FAethelnChainEndDelegate OnChainEnded;
 	/** Every client, and the server: presentation only. Losing one loses nothing authoritative. */
 	FAethelnCombatResultCueDelegate OnCombatResultCue;
+	/** Every client, and the server: presentation only, once per death (#21 P3). Losing one loses nothing authoritative. */
+	FAethelnDeathCueDelegate OnDeathCue;
 	const FAethelnAttackPresentationState& GetAttackPresentationState() const { return AttackPresentationState; }
 
 	/** Authority only; stamp the step and clear the chain once, without removing a mid-frame step. */
@@ -304,6 +307,9 @@ protected:
 	/** On the target's ASC: a committed result's presentation-safe cue. */
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastCombatResultCue(const FAethelnCombatResultCue& Cue);
+	/** On the victim's ASC: raised once per death by UAethelnDeathSubsystem. It carries no attribute value and no gameplay truth. */
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastDeathCue();
 
 private:
 	friend class UAethelnGameplayAbility;
@@ -311,6 +317,7 @@ private:
 	friend class UAethelnDodgeAbility;
 	friend class UAethelnBlockAbility;
 	friend class UAethelnCombatTimelineSubsystem;
+	friend class UAethelnDeathSubsystem;
 
 	/** The seam's result slot, open only while the seam activates this one spec handle. */
 	struct FSeamScope
