@@ -44,6 +44,8 @@ bool FAethelnLethalNotificationAppliesDeathTest::RunTest(const FString& Paramete
 	AAethelnCombatAICharacter* Dummy = F.SpawnTarget(*this, FVector(300.0, 0.0, 0.0));
 	if (Dummy == nullptr) { return false; }
 	UAethelnAbilitySystemComponent& Victim = *F.Player.AbilitySystem;
+	int32 DeathCues = 0;
+	const FDelegateHandle CueHandle = Victim.OnDeathCue.AddLambda([&DeathCues] { ++DeathCues; });
 
 	// The server reads authoritative Health: a notification for a living player kills nobody.
 	F.Timeline->OnLethalResult.Broadcast(Living.Player.AbilitySystem, FGuid::NewGuid(), 0.0);
@@ -53,11 +55,14 @@ bool FAethelnLethalNotificationAppliesDeathTest::RunTest(const FString& Paramete
 	F.Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), 0.0);
 	TestTrue(TEXT("The lethal notification applies State.Dead"), Victim.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
 	TestEqual(TEXT("State.Dead comes from one death-state effect, not a loose tag"), DeathEffects(Victim), 1);
+	TestEqual(TEXT("The server raises one death cue"), DeathCues, 1);
 
 	// AC3: a repeated notification is not a second death.
 	F.Timeline->OnLethalResult.Broadcast(&Victim, FGuid::NewGuid(), 0.0);
 	TestEqual(TEXT("A repeated notification adds no second death effect"), DeathEffects(Victim), 1);
 	TestEqual(TEXT("State.Dead is held once"), Victim.GetTagCount(AethelnGameplayTags::State_Dead), 1);
+	TestEqual(TEXT("A repeated notification raises no second death cue"), DeathCues, 1);
+	Victim.OnDeathCue.Remove(CueHandle);
 	TestFalse(TEXT("The other player is still alive"), Living.Player.AbilitySystem->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
 
 	// #21 is player death only; #20 owns AI death.
