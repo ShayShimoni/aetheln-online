@@ -248,9 +248,12 @@ with SHA-256
 (2026-10-12) added the content launcher to that set (7,488 UTF-8 bytes, SHA-256
 `5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d`). The issue
 #299 follow-up (2026-10-11) then added `.agents/**` and `tests/build/**` to the
-portable-only set; the current normalized block is exactly 7,617 UTF-8 bytes
-with SHA-256
-`19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2`.
+portable-only set (7,617 UTF-8 bytes, SHA-256
+`19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2`). Issue
+#299 PR 4 (2026-10-13) then diffed against the merge base (see
+[Pull-request change-impact classifier](#pull-request-change-impact-classifier));
+the current normalized block is exactly 7,611 UTF-8 bytes with SHA-256
+`3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2`.
 
 Every engine job depends on `quality-gates`: `trusted-candidate-compile` and
 milestone phase 1 (`scheduled-client-package`) declare `needs: quality-gates`
@@ -267,9 +270,12 @@ compilation. It uses the reviewed
 (v7.0.1) and repository-owned PowerShell only; no third-party action. The exact pull-request base SHA and head SHA
 enter the script through `env` (never interpolated into the script body), the
 script verifies both commits are present (fetching each by SHA from `origin`
-only when missing), and diffs the two trees with
-`git diff --name-status --no-renames <base> <head>` so every entry is an
-add, modify, delete, or type change. It publishes the job output
+only when missing, with full ancestry so the merge base can be computed), and
+classifies what the pull request itself changed: the diff is taken from the
+merge base of the head and the base SHA to the head, with
+`git diff --name-status --no-renames <base>...<head>`, so code merged to
+`develop` after the branch point never makes a docs-only pull request compile.
+Every entry is an add, modify, delete, or type change. It publishes the job output
 `engine_required` (`true` or `false`), `editor_required` (see below), a stable
 `reason` code and one concise `GITHUB_STEP_SUMMARY` line.
 
@@ -332,9 +338,9 @@ Everything else requires compile, including `Source/**`, `Config/**`,
 | `invalid_sha` | `true` | A SHA is missing or is not exactly 40 lowercase hex characters. |
 | `identical_shas` | `true` | Base and head SHAs are equal. |
 | `commit_unavailable` | `true` | A commit is absent locally and could not be fetched from `origin`. |
-| `diff_failed` | `true` | Git returned a nonzero exit code for the diff. |
+| `diff_failed` | `true` | Git returned a nonzero exit code for the diff (including no merge base between the head and the base). |
 | `empty_diff` | `true` | The diff produced no entries. |
-| `unexpected_diff_entry` | `true` | An entry was not `A`/`M`/`D`/`T` with a plain path (quoted, rename, or copy entries). |
+| `unexpected_diff_entry` | `true` | An entry was not `A`/`M`/`D`/`T` with a plain path (quoted, rename, or copy entries, or a multiple-merge-base warning). |
 | `classifier_error` | `true` | Any other exception inside the classifier. |
 
 If the classifier job itself fails before the script publishes an output (a
@@ -565,6 +571,35 @@ This candidate is 41,492 LF-normalized bytes with digest
 policy identity, and the shadow job runs the accepted-base selector. A later
 owner pull request that touches only these paths must therefore record the
 green gap observation after this change merges.
+
+Issue #231 (2026-10-13) applies the same reconciliation to a third path class.
+Pull request #347 changed only `design/combat-registry/`, combat design
+documents, `scripts/design/`, and `tests/design/`. `ci-acceptance-shadow` failed
+with `producer_direct_binding_invalid:content`: the selector had no rule for
+`design/**` or `scripts/design/**`, threw `path_unclassified`, and the
+conservative report selected all eight checks, including
+`content-reference-validation` and `unreal-editor-automation`, which
+`change-impact` correctly did not run. The reconcile throw is deliberate and
+unchanged. The selector was the outlier, so `design/**` and
+`scripts/design/**` now select `portable` only, like `docs/**` and
+`tests/**/*.ps1|md`. The only consumer of these paths is
+`scripts/ci/Invoke-CiSuite.ps1`, which runs the four combat-registry checks as
+portable suites; nothing under `Source/`, `Config/`, `Content/`, `Plugins/`, or
+the engine jobs reads them. The match is ordinal and case-sensitive:
+`designx/`, `scripts/designx/`, `Design/`, and `scripts/Design/` stay
+`path_unclassified` and take the conservative report, and a change that also
+touches an engine input still selects the native and Editor checks through
+that input. `change-impact` is unchanged and still compiles for `design/**`
+and `scripts/design/**`; narrowing it is a follow-up candidate, not part of
+this change. `.gitignore` stays deliberately unclassified (#167), because the
+engine gate's drift check reads it. Non-script `tests/content` files and the
+other `scripts/build` classes from the issue remain as recorded above. This
+candidate is 41,534 LF-normalized bytes with digest
+`ec2c22b291957b32b0b4ca7919ec23d34e5539279243349a7a6bd7e6e818ca5f`. It is a new
+policy identity and grants no activation authority; the shadow job runs the
+accepted-base selector, so a later owner pull request that touches only these
+paths must record a green `ci-acceptance-shadow` observation (aggregate
+branch, portable receipt bound) after this change merges.
 
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify

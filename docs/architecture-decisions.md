@@ -1086,6 +1086,19 @@ Every accepted decision records:
   new policy identity and grants no activation authority; the earlier
   digests above stay as recorded, and `docs/continuous-integration.md` holds
   the detail.
+- **Amendment (2026-10-13, selector design paths, issue #231):** pull request
+  #347 changed only `design/`, `scripts/design/`, `tests/design/`, and
+  documents, and failed `ci-acceptance-shadow` with
+  `producer_direct_binding_invalid:content` because the selector did not
+  classify `design/**` or `scripts/design/**` and selected all eight checks.
+  Both paths are now portable-only; their sole consumer is the portable suite
+  in `scripts/ci/Invoke-CiSuite.ps1`. Case variants and lookalikes stay
+  `path_unclassified`. The reconcile step, the `change-impact` block, and the
+  authority predicate are unchanged, and `change-impact` still compiles for
+  these paths. The selector candidate is 41,534 LF-normalized bytes with digest
+  `ec2c22b291957b32b0b4ca7919ec23d34e5539279243349a7a6bd7e6e818ca5f`, a new
+  policy identity with no activation authority; `docs/continuous-integration.md`
+  holds the detail.
 - **Package 3C receipt and aggregate wiring amendment:**
   `ci-selection-shadow` now exposes the validated nonce, aggregate readiness,
   all eight exact obligation decisions, and its artifact ID/name/API digest as
@@ -2132,6 +2145,17 @@ Every accepted decision records:
   the only change is that a bare non-sharing `IOException` from a cmdlet is no
   longer reported as `lease_held`. No ceiling, trust predicate, or lease rule
   changes.
+- **Amendment (2026-10-13, issue #299 PR 4):** `change-impact` now diffs
+  `<merge-base>...<head>` (`git diff --name-status --no-renames
+  <base>...<head>`) instead of the base SHA against the head, so code merged to
+  `develop` after a branch point no longer makes a docs-only pull request
+  compile. A missing base or head commit is fetched by SHA with full ancestry
+  (no `--depth=1`) so the merge base can be computed, and "no merge base" fails
+  closed as `diff_failed`. TA-012's wording that the classifier compares the
+  "exact pull-request base SHA and head SHA" is superseded for the diff range;
+  the SHA validation, closed portable-only set, and every other fail-closed
+  reason are unchanged. The `change-impact` block pin is now 7,611 bytes,
+  SHA-256 `3bee2ee02998e1c445f69db1e588aba8a229833a2bfd3ab4d799d42586eaafc2`.
 - **Owner:** Issue #167.
 - **Revisit trigger:** measured editor-build or harness durations approach
   their step bounds, the leased re-sync fails or keeps the lease in practice,
@@ -2715,7 +2739,10 @@ Every accepted decision records:
   `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing`. No
   definition asset exists yet. The owner decided the values (#84 D3, 2026-10-12): the
   existing GameTests fixture values are promoted as provisional, with no new
-  numbers, and re-tuned at the P5 feel test. That lands in P3.
+  numbers, and re-tuned at the P5 feel test. P3 promotes them into the ini
+  section of the unmigrated basic chain (`Config/DefaultGame.ini`, marked
+  provisional), and adds the client-only presentation binding class and its
+  validator (`Aetheln.GameCombat.AttackContent.PresentationBindingValidation`).
 - **Alternatives:** keep ini (no editor validation or intake binding); a
   ServerOnly definition plus a Shared mirror of the windows (two sources of one
   truth that can drift); generating ini from the design registry (the registry
@@ -2728,9 +2755,12 @@ Every accepted decision records:
   its definition on the server at grant and takes the content version, steps,
   sampling bounds, and cost from it; the reads of the ability's
   `ContentVersion` in the ASC and the timeline then come from the definition.
-  This lands in P3 with the first attack migration and the D3 provisional
-  values, not before. P3 records whether the provisional values then live in
-  the migrated definition asset or stay in the ini of an unmigrated chain.
+  P3 recorded that the provisional values stay in the ini of the unmigrated
+  chain: a migrated chain needs a `DA_` package under `Content/`, which needs
+  an editor session, an LFS lock, and a `runtime-asset-intake.json` record, and
+  keeping the same values in both the ini and the asset would be two sources of
+  one truth. When the first definition asset lands, its values replace the ini
+  section in the same change.
 - **Owner:** Issue #84, with #60, #20, and #260 as consumers and #120 for
   intake.
 - **Revisit trigger:** a definition value that must stay hidden from clients,

@@ -8,9 +8,9 @@
 /**
  * One authored attack (TA-027, docs/animation-and-combat-content-pipeline.md). The server reads it as
  * the authority for windows, volumes, damage and cost; clients may read its windows for presentation
- * only. It never references presentation. No attack is migrated to it yet and no definition asset holds values: the chain still
- * reads its ini values. The owner decided (#84 D3) that provisional values come from the existing
- * test fixture in P3, with the first attack migration.
+ * only. It never references presentation. No attack is migrated to it yet and no definition asset holds
+ * values: the chain still reads its ini values, which are the provisional ones the owner decided (#84 D3)
+ * in Config/DefaultGame.ini. The first definition asset replaces that ini section in the same change.
  */
 UCLASS(BlueprintType)
 class GAMECOMBAT_API UAethelnAttackDefinition : public UAethelnPrimaryAssetDefinition

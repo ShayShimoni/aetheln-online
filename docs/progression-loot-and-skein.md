@@ -618,9 +618,9 @@ socket establishes a hit volume, window, contact, or selected target.
 One equipment item has one gameplay identity and race-and-sex-fitted visual
 assets. Its fitting set must support every approved body, height, hair, horn,
 plate, fur, and natural-face combination, including Kell external ears and
-clawed extremities and Vesh three-digit hands and solid tapered feet, without
-hiding biological anatomy or restricting
-equipment access.
+clawed extremities and Vesh clawed three-digit hands and digitigrade,
+three-toed paws, without removing biological anatomy to fit equipment or
+restricting equipment access.
 
 Portable cultural pigments and adornment styles belong to shared cosmetic,
 marking, or equipment layers rather than a race-restricted appearance field.

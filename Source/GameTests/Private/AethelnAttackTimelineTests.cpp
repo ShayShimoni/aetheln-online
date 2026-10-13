@@ -456,8 +456,33 @@ bool FAethelnAttackStepDefinitionTest::RunTest(const FString& Parameters)
 	Definition = NewObject<UAethelnChainTestAbility>(); Definition->ResetTags.Reset();
 	AddExpectedError(TEXT("Refused to grant ability"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("State.Dead reset cannot be removed by config"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition)));
+	Definition = NewObject<UAethelnChainTestAbility>(); Definition->ContentVersion = 0; Definition->ProvisionalSteps.Reset();
 	AddExpectedError(TEXT("Refused to grant ability"), EAutomationExpectedErrorFlags::Contains, 1);
-	TestFalse(TEXT("Unset production chain has no usable grant"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnBasicChainAbility::StaticClass())));
+	TestFalse(TEXT("A chain with no version and no steps has no usable grant"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition)));
+
+	// #84 D3: the production chain now carries the provisional values from Config/DefaultGame.ini. A step that
+	// mis-parses (a nested FTransform most of all) can still pass structural grant validation, so spot-check them.
+	TestTrue(TEXT("The production chain with its provisional ini values is grantable"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(UAethelnBasicChainAbility::StaticClass())));
+	const UAethelnBasicChainAbility* Production = GetDefault<UAethelnBasicChainAbility>();
+	TestEqual(TEXT("Provisional ContentVersion"), Production->ContentVersion, 1u);
+	TestEqual(TEXT("Provisional cost"), Production->ProvisionalEnduranceCost, 2.0f);
+	TestEqual(TEXT("Provisional sampling distance"), Production->ProvisionalMaxSampleDistance, 10.0);
+	TestEqual(TEXT("Provisional sampling angle"), Production->ProvisionalMaxSampleAngleDegrees, 5.0);
+	if (TestEqual(TEXT("Three provisional steps"), Production->ProvisionalSteps.Num(), 3))
+	{
+		TestEqual(TEXT("Step 0 BufferOpen"), Production->ProvisionalSteps[0].BufferOpen, 0.375);
+		TestEqual(TEXT("Step 0 LinkClose"), Production->ProvisionalSteps[0].LinkClose, 0.75);
+		TestEqual(TEXT("Step 0 extent"), Production->ProvisionalSteps[0].ShapeExtent, FVector(10.0));
+		TestEqual(TEXT("Step 0 path end translation"), Production->ProvisionalSteps[0].PathEnd.GetTranslation(), FVector(30.0, 0.0, 0.0));
+		TestTrue(TEXT("Step 0 path end rotation and scale stay identity"), Production->ProvisionalSteps[0].PathEnd.GetRotation().Equals(FQuat::Identity) && Production->ProvisionalSteps[0].PathEnd.GetScale3D().Equals(FVector::OneVector));
+		TestTrue(TEXT("Step 0 path start stays identity"), Production->ProvisionalSteps[0].PathStart.Equals(FTransform::Identity));
+		TestEqual(TEXT("Step 0 damage"), Production->ProvisionalSteps[0].WroughtDamage, 5.0f);
+		TestEqual(TEXT("Step 0 targets"), Production->ProvisionalSteps[0].MaxTargets, 4);
+		TestEqual(TEXT("Step 2 BufferOpen"), Production->ProvisionalSteps[2].BufferOpen, 0.625);
+		TestEqual(TEXT("Step 2 LinkOpen"), Production->ProvisionalSteps[2].LinkOpen, 0.0);
+		TestEqual(TEXT("Step 2 LinkClose"), Production->ProvisionalSteps[2].LinkClose, 0.0);
+		TestEqual(TEXT("Step 2 path end translation"), Production->ProvisionalSteps[2].PathEnd.GetTranslation(), FVector(30.0, 0.0, 0.0));
+	}
 	return true;
 }
 

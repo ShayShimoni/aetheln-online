@@ -53,7 +53,7 @@ UE 5.8.1 source, revision `71fe36aac5`; `Runtime/` abbreviates
 | Target choice | Provisional rule for #20 to confirm: keep the current target while it stays eligible; otherwise the nearest eligible player, ties broken by the lower `PlayerId`. |
 | Navigation | One static navmesh for the controlled arena, used only by the server. Path following with partial paths, the engine's block detection for stuck recovery, and a leash around the spawn point. |
 | Death and reset | The enemy dies at its lethal contact time. After an authored delay from that time it resets at its spawn point with its initial attributes. |
-| Replication | Character movement, the timeline's result cues, and one small replicated presentation state that includes the server-owned `Telegraph` state. No RPC on any enemy class. Enemy Endurance and Guard replicate `COND_OwnerOnly` and reach no client. Enemy Health and MaxHealth follow the #61 decision ([comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): public to every relevant client once PR #343 merges (see [Replication](#replication)). |
+| Replication | Character movement, the timeline's result cues, and one small replicated presentation state that includes the server-owned `Telegraph` state. No RPC on any enemy class. Enemy Endurance and Guard replicate `COND_OwnerOnly` and reach no client. Enemy Health and MaxHealth follow the #61 decision ([comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): `COND_None`, public to every relevant client (see [Replication](#replication)). |
 | Completion | Out of scope. The first PvE completion condition (P10-042) stays a Blocking `TBD` owned by #1 and #71. |
 
 ## Scope and Boundaries
@@ -380,13 +380,13 @@ identity stay, so no client sees a destroyed and re-created enemy.
 
 ## Replication
 
-Position, result cues, and the presentation struct reach clients. Enemy Endurance and Guard do not. Enemy Health and MaxHealth follow the #61 decision ([comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): they become public to every relevant client once PR #343 merges, and reach no client until then:
+Position, result cues, and the presentation struct reach clients. Enemy Endurance and Guard do not. Enemy Health and MaxHealth follow the #61 decision ([comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): they replicate `COND_None` and reach every relevant client:
 
 | Data | Path | Audience |
 | --- | --- | --- |
 | Position and rotation | Character movement replication | All relevant clients |
-| Health and MaxHealth | The pawn's attribute set. They replicate `COND_OwnerOnly` until PR #343 (the #61 decision) makes them public (`AethelnCombatAttributeSet.cpp`); an AI pawn has no owning connection | None until PR #343 merges; all relevant clients after |
-| Endurance, Guard, and the other attributes | The pawn's attribute set, `COND_OwnerOnly` by the #61 decision; an AI pawn has no owning connection | None |
+| Health and MaxHealth | The pawn's attribute set (Minimal mode replicates attributes, not effects); `COND_None` since the owner decision on #61 | All relevant clients |
+| Endurance, Guard and their maxima | The same attribute set, `COND_OwnerOnly`; an AI pawn has no owning client | No client |
 | Contact results | `MulticastCombatResultCue` on the target's ASC | All relevant clients |
 | State and attack timing | `FAethelnEnemyPresentationState` on `AAethelnEnemyCharacter` | All relevant clients |
 
@@ -456,8 +456,8 @@ same fixtures. Every test is written red first. Test names are under
    and tests E1 to E11.
 3. **P3**: navmesh and one enemy in the prototype space, real-navmesh and
    two-client evidence (E12, E13), and measurements for #45. Needs approved
-   provisional values. E13 needs clients to see enemy Health: that comes from the
-   #61 change (PR #343), not from P3, so E13 waits for it to merge.
+   provisional values. E13 needs clients to see enemy Health: the #61 change
+   already provides it, so P3 needs no replication change.
 
 ## Open Decisions
 

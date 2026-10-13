@@ -273,7 +273,9 @@ and `Aetheln.GameCombat.NetworkSpike.AimRateBound`.
 ### Step definition
 
 Each of the three steps has these authored values. Offsets are seconds from the
-step's authoritative start; every value is `TBD`.
+step's authoritative start; every value is `TBD`, except the provisional chain
+values owner decision D3 promoted to `Config/DefaultGame.ini` (see
+[Data-Driven Tuning](#data-driven-tuning)).
 
 | Value | Meaning |
 | --- | --- |
@@ -316,8 +318,9 @@ three steps, every value is finite, and:
 
 P5 adds `InterruptibleUntil` and `bInterruptsTarget` to the step struct, with
 the rule `0 <= InterruptibleUntil <= RecoveryEnd`, and extends A5. The
-production chain has no configured `ContentVersion` yet, so P5 bumps nothing;
-the first configured version includes these fields (see
+production chain's first configured `ContentVersion` is 1, set with the D3
+provisional values in `Config/DefaultGame.ini` (#84 P3), so P5 bumps nothing
+and version 1 includes these fields (see
 [Interruption](#interruption)).
 
 `LinkClose >= RecoveryEnd` keeps a late press out of recovery: after the link
@@ -712,10 +715,11 @@ P5 delivers it as follows:
   step of that chain starts (it cannot in practice: a held record lives only
   inside one pass).
 - **Record.** The record's windows carry `InterruptibleUntil`.
-- **Content version.** The production chain has no configured
-  `ContentVersion` yet (no ini section; unset values fail the grant), so P5
-  has nothing to bump; the first configured version includes the P5 fields.
-  The test fixture keeps version 1.
+- **Content version.** The production chain's first configured
+  `ContentVersion` is 1, set with the D3 provisional values in
+  `Config/DefaultGame.ini` (#84 P3; unset values still fail the grant), so P5
+  has nothing to bump and version 1 includes the P5 fields. The test fixture
+  no longer sets values; it reads the same ini section.
 - **Enemy targets.** An enemy has no chain. Interrupting one only stamps its
   registered steps, so their later contacts drop. The subsystem then raises
   `OnTargetInterrupted(TargetAsc, ContactTime)`, and the #83 enemy controller
@@ -829,11 +833,13 @@ PlayerState (residual risk 4).
 ASC carries the source avatar, the outcome (`Hit`, `Avoided`, `Blocked`, or,
 since #18 P4, `GuardBroken`), the family tag, whether it was lethal, and the
 server-computed contact location. It carries no damage amount and no
-attribute value; Health stays owner-only (#19) until #61 decides opponent
-visibility. Losing a cue loses presentation only; attributes and death
-replicate separately. The attacker gets no reliable hit confirmation in the
-prototype: the unreliable cue is its only hit signal, and #61 treats it as
-presentation.
+attribute value. Health and MaxHealth replicate to every client, and Endurance
+and Guard stay owner-only (owner decision on [#61](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)). Losing a cue loses
+presentation only; attributes and death replicate separately. The attacker gets
+no reliable per-hit confirmation in the prototype: the unreliable cue is its
+only per-hit signal. The target's replicated Health now also tells the attacker
+that damage landed, as coalesced state with no per-hit identity, and #61 treats
+both as presentation.
 
 ### Bounded presentation correction
 
@@ -947,12 +953,19 @@ change (dependency 7).
 
 ## Data-Driven Tuning
 
-All values are `TBD`. The P2 lead decision of 2026-10-06 leaves all eight
+All values are `TBD`, except the provisional chain values below. The P2 lead decision of 2026-10-06 leaves all eight
 aim/time keys unset, so requests fail closed; tests inject fixture values.
 Any future placeholder needs an explicit reviewed decision and is not approved
 tuning. Ini now,
 assets with #84 and generation with #106 later, as in #19. Every authoritative
 change bumps the chain's `ContentVersion`.
+
+The one exception is the basic chain's provisional values. By owner decision D3
+([issue #84 comment 6131999366](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366),
+2026-10-12), the former GameTests fixture values live in
+`[/Script/GameCombat.AethelnBasicChainAbility]` in `Config/DefaultGame.ini`,
+marked provisional. They are not tuning, no number was invented, and the #84 P5
+feel test re-tunes them. The chain is grantable but not granted in production.
 
 | Config section | Keys |
 | --- | --- |
@@ -1081,7 +1094,7 @@ files untouched.
 | **P2** Request and aim | Schema 2, steps 6a to 6d in the pure validator, last accepted raw aim and time, the two result values, rejection and correction telemetry, client fill with `FlushServerMoves`, the four replicated-data overrides, the #19 fixture and specification changes (dependencies 3 to 5); A1 to A3, A16. | #19 P3 |
 | **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17, A25, A27. No contacts yet. | P2, #19 P4 |
 | **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, A28 (without its interruption row), A29, and the sweep and contact rows of A4, A7, and A27; the P3 review follow-ups (sequence advance for a committed start that fails, the `InternalFailure` chain-end label, the extra negative tests). | P3 |
-| **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct (no configured chain `ContentVersion` exists to bump); A15 and the A5 rows. | P4 |
+| **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct (the chain had no configured `ContentVersion` to bump then; its first, 1, came with the D3 provisional values, #84 P3); A15 and the A5 rows. | P4 |
 | **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
 
 The representative actives are not #60 phases; they are #260, which builds on

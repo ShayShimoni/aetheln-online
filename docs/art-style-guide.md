@@ -35,7 +35,7 @@ views. Their approval changes visual references, not Aurin biology or story.
 
 Open the selected Aetheln-generated images for the subject before generating.
 The approved Aurin and Kell pairs are examples of the rendering finish and
-current race designs. Vesh redesign status is identified separately below.
+current race designs. The approved Vesh pair is recorded below as well.
 
 ### Aurin
 
@@ -76,20 +76,25 @@ Keep the new subject's own anatomy, proportions, palette, materials, clothing,
 and identity. Ivory quartz, amethyst, horns, claws, and glowing eyes belong to
 the selected Kell design and are not requirements for every asset.
 
-### Vesh redesign
+### Vesh
 
-| Selected male Vesh | Current female Vesh candidate |
+| Approved male Vesh | Approved female Vesh |
 | --- | --- |
-| ![Selected male Vesh](art-style-references/vesh-male-selected-2026-10-10.png) | ![Current female Vesh candidate](art-style-references/vesh-female-current-2026-10-10.png) |
+| ![Approved male Vesh](art-style-references/vesh-male-approved-2026-10-13.png) | ![Approved female Vesh](art-style-references/vesh-female-approved-2026-10-13.png) |
 
-The [character results record](art-style-references/character-results-2026-10-10.md)
-identifies the saved prompts and selection status. The male uses the selected
-black coat, white patterns and golden eyes. The female applies that palette to
-the current redesigned body; final female approval remains pending. The revised
-Vesh origins, spirit relationship, culture, and anatomy are now canonical in
-[Playable Peoples](playable-peoples.md#vesh), with connected stories in the
-character and settlement documents. Final female visual approval and production
-readiness remain separate from that written lore revision.
+The [Vesh approval record](art-style-references/vesh-approved-design-2026-10-13.md)
+identifies the selected male v36 and female v37, exact prompts, hashes, and a
+reusable prompt. The user adopted this pair on 2026-10-13. Use these images for
+future Vesh work: black coat, white sculpted fur, rigid natural face with a
+neutral creature mouth, golden eyes, clawed hands, and digitigrade paws. Keep
+the selected female's swept mane with its longer nape when deriving her views.
+Use broad clumps and coherent satin highlights rather than adding fine strands
+or painted texture. The earlier 2026-10-10 pair is superseded.
+
+[Playable Peoples](playable-peoples.md#vesh) records the anatomy and unchanged
+spirit/Light identity, with connected stories in the character and settlement
+documents. Visual approval does not establish a production-ready mesh, rig,
+equipment fit, or in-engine asset.
 
 ## Reference and storage boundary
 

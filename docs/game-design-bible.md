@@ -431,9 +431,10 @@ Confirmed rules:
   eyes, and clawed extremities. Their approved male and female references and
   full anatomy contracts are recorded in [Playable Peoples](playable-peoples.md#kell).
 - Vesh are mortal embodied spirit creatures connected to the world's spirits
-  and guided by the Light. The retained design uses an obsidian-black coat,
-  white markings, an ivory faceted natural face, golden eyes, three-digit hands,
-  and solid tapered feet. Their spiritual kinship supplies no innate gameplay
+  and guided by the Light. The approved 2026-10-13 design uses an obsidian-black coat,
+  white sculpted fur markings, an ivory faceted natural face with a neutral
+  creature mouth, golden eyes, clawed three-digit hands, and digitigrade legs
+  with three-toed clawed paws. Their spiritual kinship supplies no innate gameplay
   advantage; [Playable Peoples](playable-peoples.md#vesh) defines the full contract.
 - Every playable race supports male and female characters.
 - Sex does not change attributes, combat power, class access, faction access,
