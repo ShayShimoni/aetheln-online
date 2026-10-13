@@ -129,8 +129,9 @@ authoritative, and changing it bumps nothing.
 
 Today the definitions are `Config` properties in `DefaultGame.ini`, validated
 at grant time and failing closed when unset
-(`Config/DefaultGame.ini:17-38`). The basic chain has no configured
-`ContentVersion` or steps yet, so it cannot be granted. #60 left definitions
+(`Config/DefaultGame.ini`). The basic chain carries the D3 provisional
+values (first configured `ContentVersion` 1, #84 P3), so it is grantable but
+not granted in production. #60 left definitions
 in ini until #84 and #106 supplied an asset pipeline; #106 closed with
 Markdown generators only.
 
@@ -158,8 +159,14 @@ a content version of at least 1, the `Shared` audience, an `Ability.`
 identity tag, and a finite non-negative cost. The editor runs it on save
 through `IsDataValid`. No attack is migrated yet: migration, where the ability
 resolves its definition at grant and takes its content version, steps, and
-cost from it, lands in P3 with the D3 provisional values, as TA-027 records.
-Registry membership of the stable ID cannot be checked at runtime or in the
+cost from it, needs the first `DA_` definition package. That package needs an
+editor session, an LFS lock, and a `runtime-asset-intake.json` record, so it is
+not part of P3, which has fixture assets only. Until it lands, the D3
+provisional values live in one place, the `[/Script/GameCombat.AethelnBasicChainAbility]`
+section of `Config/DefaultGame.ini` (the fixture values, unchanged, marked
+provisional; the test fixture no longer sets them). When the first definition
+asset lands, its values replace that section in the same change, so no value is
+ever in both. Registry membership of the stable ID cannot be checked at runtime or in the
 editor, because the registry is design data under `design/`; the #120 intake
 review checks it until a tool exists.
 
@@ -263,15 +270,15 @@ is on `develop` now; "P2" and "P3" are later phases of this issue.
 | Error | Gate | Status |
 | --- | --- | --- |
 | Missing definition or unset values | Grant validation refuses a zero `ContentVersion` (`Source/GameCombat/Private/AethelnGameplayAbility.cpp:41-44`) and a chain without exactly three valid steps (#60 A5) | Exists |
-| Missing definition asset referenced by an ability | Resolved at grant when an attack is migrated; an unresolved reference refuses the grant | P3, with the first migration (TA-027 follow-up); not present before then |
-| Missing montage, section, or effect in a binding | Presentation binding validator | P3 |
+| Missing definition asset referenced by an ability | Resolved at grant when an attack is migrated; an unresolved reference refuses the grant | Not present until the first `DA_` definition package lands (TA-027 follow-up); no attack reads a definition asset yet |
+| Missing montage, section, or effect in a binding | Presentation binding validator | Exists (P3, N3): the montage and its three sections; the binding has no effect field yet |
 | Invalid phase order | Grant validation ordering rules (#60, Step definition), shared with the definition validator | Exists; P2 runs the same rules at editor save |
 | Unsafe volume data | Grant validation: positive extents, non-negative damage and pressure, `MaxTargets >= 1`, pitch clamp in `[0, 90]` | Exists as structural checks only. A maximum reach or shape size is a `TBD` budget (#45, #107); until it exists no validator limits reach, an oversized volume passes, and no `non_promotion` result is produced (Residual Risk 4) |
-| Incompatible skeleton | `skeletal_animation` family `rig_compatibility` for meshes, skeletons, and sequences; the binding validator checks each montage's skeleton against the binding's skeleton | Family exists; binding check P3 |
-| Incompatible socket reference | `socket_ownership` counts invalid sockets per mesh; the binding validator checks each named socket exists on the binding's skeleton or mesh | Family exists; binding check P3 |
-| Stale identifiers | `reference_boundary` (unique stable ID, compatible content version, redirectors); the binding validator refuses a binding whose ability ID has no definition or whose content version differs | Family exists; binding check P3 |
+| Incompatible skeleton | `skeletal_animation` family `rig_compatibility` for meshes, skeletons, and sequences; the binding validator checks each montage's skeleton against the binding's skeleton | Family exists; binding check exists (P3, N3) |
+| Incompatible socket reference | `socket_ownership` counts invalid sockets per mesh; the binding validator checks each named socket exists on the binding's skeleton or mesh | Family exists; binding check exists (P3, N3) for skeleton sockets; the binding names no mesh, so mesh sockets are not checked |
+| Stale identifiers | `reference_boundary` (unique stable ID, compatible content version, redirectors); the binding validator refuses a binding whose ability ID has no definition or whose content version differs | Family exists; the binding check for ability ID and content version exists (P3, N3) |
 | Stale tag or semantic ID | The registry validator checks registry records; the tag-to-semantic-ID mapping is checked only for the three Oathscar actives by a hand-listed test (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp:31-37`) | Partly exists. Gap: nothing checks a new or stale ability tag against the registry; P3 adds a portable check beside the registry validator that every native `Ability.` tag maps to exactly one registry ID |
-| Notify that could carry gameplay | Binding validator allowlists presentation notify classes; any other notify class fails | P3 |
+| Notify that could carry gameplay | Binding validator allowlists presentation notify classes; any other notify class fails | Exists (P3, N3): initial allowlist `UAnimNotify_PlaySound`, `UAnimNotify_PlayParticleEffect`, and `UAnimNotifyState_Trail`, exact class match, checked on the montage and on each plain `UAnimSequence` it plays; a name-only notify fails, and so does any segment that is not a plain `UAnimSequence` (a composite, for one), because its notifies are not walked |
 
 All gates fail closed. A validation failure never falls back to another
 definition, an older version, or a default value.
@@ -407,8 +414,8 @@ validation test, and **P** is two-client PIE recorded in the PR.
 | --- | --- | --- | --- | --- |
 | N1 | `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing` | P2 | H | During wind-up, active, and recovery of a registered step, gameplay events (any tag, including the ability and state tags), `GameplayCue` executions, and montage play and stop requests on the server change no evaluated window, recorded window offset, contact result, Health, Endurance, or Guard on either side, owned tag, active effect, cost application, chain state, chain end, or record, compared with the same run without them. Any path that cannot run headless is listed in the PR with the reason: the montage play and stop requests run on a mesh-less pawn that cannot play a montage, so those rows show only that the requests are harmless. A real montage and notify run is not proven here. |
 | N2 | `Aetheln.GameCombat.AttackContent.DefinitionValidation` | P2 | H | The definition validator and editor `IsDataValid` refuse a missing stable ID, content version 0, a non-Shared audience, a missing or non-`Ability.` identity tag, a negative or non-finite cost, no steps, unset sampling bounds, a sample of the phase-order violations, and structurally unsafe volume data; a valid three-step and a valid single-step definition pass. `StepDefinitionFailsClosed` covers each ordering clause and negative or NaN Guard pressure through the shared function; an out-of-range shape, an invalid path transform, NaN damage, and a nonzero final-step `LinkClose` have no test yet. Not in N2: registry membership of the stable ID (the #120 intake review until a tool exists), `non_promotion` for an unset reach budget (no budget exists), and a content-version mismatch against a binding (N3). |
-| N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes |
-| N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3 | E | A Shared or ServerOnly package that hard- or soft-references a binding fails `reference_boundary`, and the intake policy declares no soft-reference rule that targets a binding path |
+| N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes. Also refuses a missing skeleton, a step count that differs from the definition, a Shared or ServerOnly audience, a name-only notify, a notify on a sequence the montage plays, and a notify on a sequence inside a composite segment. Builds its montages, skeleton, and sockets in memory; no package is added |
+| N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3 (remaining, not written yet) | E | A Shared or ServerOnly package that hard- or soft-references a binding fails `reference_boundary`, and the intake policy declares no soft-reference rule that targets a binding path |
 | N5 | Representative lifecycle | P5 | P | One authored step runs from validated data through server resolution to presentation on both clients, under C1 and C2 |
 
 Existing tests that already cover this pipeline: T13, A1, A5, A9, A17, D16,
@@ -418,12 +425,12 @@ the registry tests, and the four portable content-validation suites.
 
 | Issue #84 criterion | Covered by | Status |
 | --- | --- | --- |
-| The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; TA-027 and `UAethelnAttackDefinition` (P2) | Contract and asset class defined; migrating an attack is P3 work with the D3 provisional values |
+| The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; TA-027 and `UAethelnAttackDefinition` (P2) | Contract and asset class defined; the D3 provisional values are in `Config/DefaultGame.ini` (P3); migrating an attack needs the first `DA_` package and is not done |
 | Montages, animation notifies, sockets, trails, audio, and VFX are presentation or authoring aids and cannot create contact, damage, cooldown, or persistence truth | [Presentation Binding Contract](#presentation-binding-contract); T13, A9, A17, D16; N1 | Enforced in code; N1 pins it in P2 |
 | The server can evaluate authored melee volumes without a client-selected target or client-claimed hit | [Server Evaluation Without Client Targets](#server-evaluation-without-client-targets); #60 A1, A9 | Met by #60 |
-| Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 | Partly exists; P2 adds the definition validator and P3 the binding validator. The grant-time check for a missing definition asset exists only after the first attack migration (P3, TA-027 follow-up), and a definition's registry membership stays with the #120 intake review. Unsafe volume data stays structural until a reach budget exists, so no `non_promotion` result is produced (Residual Risk 4). A content-version mismatch between a binding and its definition is the P3 binding check (N3); a migrated ability takes its version from the definition |
+| Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 | Partly exists; P2 added the definition validator and P3 the binding validator. The binding validator exists (P3, N3). The grant-time check for a missing definition asset exists only after the first attack migration (TA-027 follow-up), and a definition's registry membership stays with the #120 intake review. Unsafe volume data stays structural until a reach budget exists, so no `non_promotion` result is produced (Residual Risk 4). A content-version mismatch between a binding and its definition is the binding check (P3, N3); a migrated ability takes its version from the definition |
 | The pipeline defines source-control/LFS/locking expectations and coordinates with #14 before non-map binary assets land | [Source Control, LFS, and Locking](#source-control-lfs-and-locking) | Defined; no matrix change needed |
-| A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on #83, #20, #61, #45, the P3 provisional values (D3 decided), the D2 placeholder presentation, and owner feel review (O3) |
+| A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on #83, #20, #61, #45, the provisional values now in `Config/DefaultGame.ini` (P3; D3 decided), the D2 placeholder presentation, and owner feel review (O3) |
 
 | Definition of done | Covered by | Status |
 | --- | --- | --- |
@@ -439,7 +446,7 @@ Each PR targets `develop` and uses `Refs #84`.
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Definition and focused tests | `UAethelnAttackDefinition` (TA-027), its validator shared with grant validation, editor `IsDataValid`, N1 and N2. No values and no asset. | Engine time |
-| **P3** Presentation binding | The client-only binding, its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3 and N4; binding lookup without any public reference to the plugin (see below); the portable tag-to-registry check; the first attack migration with the D3 provisional values (see Open Decisions). Fixture assets only. | P2; engine time |
+| **P3** Presentation binding and provisional values | Landed: the client-only binding (`UAethelnAttackPresentation`), its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3; the D3 provisional values in `Config/DefaultGame.ini`. Not landed: N4, binding lookup without any public reference to the plugin (see below), the portable tag-to-registry check, and the first attack migration, which needs the first `DA_` package (see Storage form). Fixture assets only. | P2; engine time |
 | **P4** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin | P3; owner action O2 once the owner has downloaded the sample (O1 is optional and not required for P5 under D2) |
 | **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3 provisional values (P3); D2 placeholder presentation; #83 enemy controller and presentation state; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
 
@@ -468,7 +475,7 @@ P3 records the exact mechanism and its test.
 | --- | --- | --- | --- |
 | D1 | Storage form of authoritative attack definitions ([Storage form](#storage-form)) | Decided by the lead, 2026-10-12: one Shared data asset, [TA-027](architecture-decisions.md#ta-027---one-shared-primary-data-asset-per-authored-attack-definition) | Done |
 | D2 | Source of sword-and-shield attack and enemy telegraph animation, which the Epic baseline does not appear to include: a third-party pack through #120 (private plugin under TA-019), Codex-generated motion, a human animator, or a placeholder presentation for P5 evidence | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): a placeholder presentation for P5 evidence; real art later without changing gameplay | Done |
-| D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): promote the existing GameTests fixture values to `Config/DefaultGame.ini`, marked provisional, with no new numbers; re-tune at the P5 feel test | Lands in P3 with the first attack migration. P3 records whether the provisional values end up in the ini of the unmigrated chain or in the migrated definition asset |
+| D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): promote the existing GameTests fixture values to `Config/DefaultGame.ini`, marked provisional, with no new numbers; re-tune at the P5 feel test | Landed in P3, recorded: the provisional values are in the ini of the unmigrated chain (`[/Script/GameCombat.AethelnBasicChainAbility]`), and the test fixture no longer sets them. The enemy telegraph values stay with #83 and #20, which own telegraph timing |
 
 ## Residual Risks
 
@@ -484,3 +491,12 @@ P3 records the exact mechanism and its test.
    and code review owns the rest.
 4. **No reach budget.** Unsafe volume checks are structural until a maximum
    reach or shape budget exists.
+5. **Niagara notifies.** The initial allowlist holds the Cascade
+   `UAnimNotify_PlayParticleEffect` and no Niagara notify class, although the
+   binding contract names Niagara feedback. A Niagara notify is refused, so P5
+   Niagara placeholders need a reviewed allowlist change first.
+6. **Chain cost against resource bounds.** The provisional chain cost of 2
+   exceeds the configured `MaxEndurance` of 0, and the resource-bounds test
+   (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp`) covers only the
+   three Oathscar actives. The chain is not granted, so this is unreachable
+   today; include the chain in that test when it is granted.

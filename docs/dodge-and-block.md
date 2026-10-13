@@ -803,8 +803,9 @@ the lead's sign-off on T2 and T3 as #60 owner (2026-10-11).
 4. **Guard pressure (Q7).** Guard pressure is attack-authored (owner-approved
    2026-10-10), so #60's step definition gains `GuardPressure`, validated as
    finite and non-negative at grant. No content version is bumped: the
-   production chain has no configured steps or version yet (they fail grant
-   until #107), so only test fixtures author it.
+   production chain had no configured steps or version then (they failed grant),
+   so only test fixtures authored it. The chain's first configured version, 1,
+   came later with the D3 provisional values in `Config/DefaultGame.ini` (#84 P3).
 5. **Result events.** The committed-result event uses subject `Dodge` for
    `Avoided` and `Block` for `Blocked` and `GuardBroken`.
 6. **The scope of steps 6a to 6d.** #60's Validation additions say the steps

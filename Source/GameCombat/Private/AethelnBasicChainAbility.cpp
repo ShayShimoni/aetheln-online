@@ -15,7 +15,7 @@ UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 		ActivationBlockedTags.AddTag(Tag);
 		ResetTags.AddTag(Tag);
 	}
-	// No authored steps/version/sampling/cost preset. Unset production fails grant.
+	// No preset in code: the values come only from Config/DefaultGame.ini (#84 D3), and unset config fails grant.
 }
 
 const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
