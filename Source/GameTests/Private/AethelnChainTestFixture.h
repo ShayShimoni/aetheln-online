@@ -7,14 +7,16 @@
 #include "AethelnPlayerCharacter.h"
 #include "AethelnChainTestFixture.generated.h"
 
-/** A valid definition authored only in the Editor test module, never production tuning. */
+/**
+ * The production chain with test hooks. Its authored values are the provisional ones in
+ * Config/DefaultGame.ini (#84 D3), read through the parent class section, so no test sets them.
+ */
 UCLASS(NotBlueprintable, HideDropdown)
 class UAethelnChainTestAbility : public UAethelnBasicChainAbility
 {
 	GENERATED_BODY()
 
 public:
-	UAethelnChainTestAbility();
 	void SetBlockedTagsForTests(const FGameplayTagContainer& Tags) { ActivationBlockedTags = Tags; }
 	bool bFailCommitForTests = false;
 	FGuid GetOperationIdForTests() const { return GetActivationOperationId(); }

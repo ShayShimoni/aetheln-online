@@ -3,17 +3,25 @@
 #include "AbilitySystemBlueprintLibrary.h"
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnAttackDefinition.h"
+#include "AethelnAttackPresentation.h"
 #include "AethelnChainTestFixture.h"
 #include "AethelnCombatAICharacter.h"
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnGameplayTags.h"
 #include "Animation/AnimMontage.h"
+#include "Animation/AnimNotifies/AnimNotifyState_DisableRootMotion.h"
+#include "Animation/AnimNotifies/AnimNotifyState_Trail.h"
+#include "Animation/AnimNotifies/AnimNotify_PlaySound.h"
+#include "Animation/AnimNotifies/AnimNotify_ResetDynamics.h"
+#include "Animation/AnimSequence.h"
+#include "Animation/Skeleton.h"
+#include "Engine/SkeletalMeshSocket.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/DataValidation.h"
 
 #include <limits>
 
-// #84 P2 (docs/animation-and-combat-content-pipeline.md, Test Plan N1 and N2). Fixture values only;
+// #84 P2 and P3 (docs/animation-and-combat-content-pipeline.md, Test Plan N1 to N3). Fixture values only;
 // no tuning is approved here. The geometry is the #60 contact fixture: the test chain's sphere reaches
 // a dummy centered 60 units ahead during the first step's active window.
 namespace AethelnAttackContentTests
@@ -289,6 +297,123 @@ bool FAethelnAttackDefinitionValidationTest::RunTest(const FString& Parameters)
 		TestNotNull(*FString::Printf(TEXT("%s is refused"), Mutation.Name), Definition->FindProblem());
 		FDataValidationContext Context;
 		TestTrue(*FString::Printf(TEXT("%s fails editor validation"), Mutation.Name), Definition->IsDataValid(Context) == EDataValidationResult::Invalid);
+		TestTrue(*FString::Printf(TEXT("%s reports an error"), Mutation.Name), Context.GetNumErrors() > 0);
+	}
+	return true;
+}
+
+namespace AethelnAttackContentTests
+{
+	/** A valid binding over a valid definition, all transient. */
+	struct FBindingFixture
+	{
+		UAethelnAttackDefinition* Definition = nullptr;
+		USkeleton* Skeleton = nullptr;
+		UAnimMontage* Montage = nullptr;
+		UAethelnAttackPresentation* Binding = nullptr;
+
+		static UAnimMontage* MakeMontage(USkeleton* Skeleton)
+		{
+			UAnimMontage* Result = NewObject<UAnimMontage>(GetTransientPackage());
+			Result->SetSkeleton(Skeleton);
+			for (const TCHAR* Name : { TEXT("WindUp"), TEXT("Active"), TEXT("Recovery") })
+			{
+				Result->CompositeSections.AddDefaulted_GetRef().SectionName = Name;
+			}
+			Result->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_PlaySound>(Result);
+			Result->Notifies.AddDefaulted_GetRef().NotifyStateClass = NewObject<UAnimNotifyState_Trail>(Result);
+			return Result;
+		}
+
+		FBindingFixture()
+		{
+			Definition = MakeValidDefinition();
+			Skeleton = NewObject<USkeleton>(GetTransientPackage());
+			USkeletalMeshSocket* Socket = NewObject<USkeletalMeshSocket>(Skeleton);
+			Socket->SocketName = TEXT("weapon_r");
+			Skeleton->Sockets.Add(Socket);
+			Montage = MakeMontage(Skeleton);
+			Binding = NewObject<UAethelnAttackPresentation>(GetTransientPackage());
+			Binding->StableContentId = TEXT("test.attack.presentation");
+			Binding->ContentVersion = 1;
+			Binding->Audience = EAethelnContentAudience::ClientOnly;
+			Binding->AbilityId = Definition->AbilityId;
+			Binding->Definition = Definition;
+			Binding->AuthoredContentVersion = Definition->ContentVersion;
+			Binding->Skeleton = Skeleton;
+			for (int32 Index = 0; Index < Definition->Steps.Num(); ++Index)
+			{
+				FAethelnAttackPresentationStep& Step = Binding->Steps.AddDefaulted_GetRef();
+				Step.Montage = Montage;
+				Step.WindUpSection = TEXT("WindUp");
+				Step.ActiveSection = TEXT("Active");
+				Step.RecoverySection = TEXT("Recovery");
+				Step.Sockets.Add(TEXT("weapon_r"));
+			}
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnPresentationBindingValidationTest,
+	"Aetheln.GameCombat.AttackContent.PresentationBindingValidation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnPresentationBindingValidationTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnAttackContentTests;
+	{
+		FBindingFixture Valid;
+		TestNull(TEXT("A fixture-only valid binding passes, with allowlisted sound and trail notifies"), Valid.Binding->FindProblem());
+		FDataValidationContext Context;
+		TestTrue(TEXT("Editor validation passes it"), Valid.Binding->IsDataValid(Context) == EDataValidationResult::Valid);
+		TestEqual(TEXT("With no error"), static_cast<int32>(Context.GetNumErrors()), 0);
+	}
+
+	struct FMutation
+	{
+		const TCHAR* Name;
+		TFunction<void(FBindingFixture&)> Apply;
+	};
+	const TArray<FMutation> Mutations = {
+		{ TEXT("No stable ID"), [](FBindingFixture& F) { F.Binding->StableContentId = NAME_None; } },
+		{ TEXT("Shared audience"), [](FBindingFixture& F) { F.Binding->Audience = EAethelnContentAudience::Shared; } },
+		{ TEXT("ServerOnly audience"), [](FBindingFixture& F) { F.Binding->Audience = EAethelnContentAudience::ServerOnly; } },
+		{ TEXT("Unknown ability ID: no definition"), [](FBindingFixture& F) { F.Binding->Definition = nullptr; } },
+		{ TEXT("Unknown ability ID: another ability's definition"), [](FBindingFixture& F) { F.Binding->AbilityId = AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain; } },
+		{ TEXT("Not an ability tag"), [](FBindingFixture& F) { F.Binding->AbilityId = AethelnGameplayTags::State_Dead; F.Definition->AbilityId = AethelnGameplayTags::State_Dead; } },
+		{ TEXT("Stale content version: the definition moved on"), [](FBindingFixture& F) { F.Definition->ContentVersion = 2; } },
+		{ TEXT("Stale content version: the binding is newer"), [](FBindingFixture& F) { F.Binding->AuthoredContentVersion = 2; } },
+		{ TEXT("Unset authored content version"), [](FBindingFixture& F) { F.Binding->AuthoredContentVersion = 0; } },
+		{ TEXT("No skeleton"), [](FBindingFixture& F) { F.Binding->Skeleton = nullptr; } },
+		{ TEXT("Fewer steps than the definition"), [](FBindingFixture& F) { F.Binding->Steps.SetNum(2); } },
+		{ TEXT("More steps than the definition"), [](FBindingFixture& F) { F.Binding->Steps.AddDefaulted(); } },
+		{ TEXT("Missing montage"), [](FBindingFixture& F) { F.Binding->Steps[1].Montage = nullptr; } },
+		{ TEXT("Montage on another skeleton"), [](FBindingFixture& F) { F.Binding->Steps[2].Montage = FBindingFixture::MakeMontage(NewObject<USkeleton>(GetTransientPackage())); } },
+		{ TEXT("Montage with no skeleton"), [](FBindingFixture& F) { F.Binding->Steps[0].Montage = NewObject<UAnimMontage>(GetTransientPackage()); } },
+		{ TEXT("Missing wind-up section"), [](FBindingFixture& F) { F.Binding->Steps[0].WindUpSection = TEXT("Missing"); } },
+		{ TEXT("Missing active section"), [](FBindingFixture& F) { F.Binding->Steps[1].ActiveSection = TEXT("Missing"); } },
+		{ TEXT("Unset recovery section"), [](FBindingFixture& F) { F.Binding->Steps[2].RecoverySection = NAME_None; } },
+		{ TEXT("Unknown socket"), [](FBindingFixture& F) { F.Binding->Steps[0].Sockets.Add(TEXT("no_such_socket")); } },
+		{ TEXT("Non-allowlisted notify class"), [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_ResetDynamics>(F.Montage); } },
+		{ TEXT("Non-allowlisted notify state class"), [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().NotifyStateClass = NewObject<UAnimNotifyState_DisableRootMotion>(F.Montage); } },
+		{ TEXT("A name-only notify carries no class"), [](FBindingFixture& F) { F.Montage->Notifies.AddDefaulted_GetRef().NotifyName = TEXT("AnyName"); } },
+		{ TEXT("Non-allowlisted notify on a sequence the montage plays"), [](FBindingFixture& F)
+			{
+				UAnimSequence* Sequence = NewObject<UAnimSequence>(F.Montage);
+				Sequence->Notifies.AddDefaulted_GetRef().Notify = NewObject<UAnimNotify_ResetDynamics>(Sequence);
+				FSlotAnimationTrack& Slot = F.Montage->SlotAnimTracks.AddDefaulted_GetRef();
+				FAnimSegment Segment;
+				Segment.SetAnimReference(Sequence);
+				Slot.AnimTrack.AnimSegments.Add(Segment);
+			} }
+	};
+	for (const FMutation& Mutation : Mutations)
+	{
+		FBindingFixture Fixture;
+		Mutation.Apply(Fixture);
+		TestNotNull(*FString::Printf(TEXT("%s is refused"), Mutation.Name), Fixture.Binding->FindProblem());
+		FDataValidationContext Context;
+		TestTrue(*FString::Printf(TEXT("%s fails editor validation"), Mutation.Name), Fixture.Binding->IsDataValid(Context) == EDataValidationResult::Invalid);
 		TestTrue(*FString::Printf(TEXT("%s reports an error"), Mutation.Name), Context.GetNumErrors() > 0);
 	}
 	return true;
