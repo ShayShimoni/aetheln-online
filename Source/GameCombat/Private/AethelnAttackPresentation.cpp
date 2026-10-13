@@ -8,6 +8,7 @@
 #include "Animation/AnimNotifies/AnimNotifyState_Trail.h"
 #include "Animation/AnimNotifies/AnimNotify_PlayParticleEffect.h"
 #include "Animation/AnimNotifies/AnimNotify_PlaySound.h"
+#include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
 
 #if WITH_EDITOR
@@ -28,7 +29,10 @@ namespace
 		return true;
 	}
 
-	/** The notifies the montage itself carries and those of every sequence it plays. */
+	/**
+	 * The notifies the montage itself carries and those of each plain sequence it plays. A segment that is not
+	 * a UAnimSequence (a composite, or an empty reference) fails closed instead of being walked.
+	 */
 	bool MontageHasOnlyAllowedNotifies(const UAnimMontage& Montage)
 	{
 		if (!HasOnlyAllowedNotifies(Montage.Notifies)) { return false; }
@@ -36,8 +40,8 @@ namespace
 		{
 			for (const FAnimSegment& Segment : Slot.AnimTrack.AnimSegments)
 			{
-				const UAnimSequenceBase* Sequence = Segment.GetAnimReference();
-				if (Sequence != nullptr && !HasOnlyAllowedNotifies(Sequence->Notifies)) { return false; }
+				const UAnimSequence* Sequence = Cast<UAnimSequence>(Segment.GetAnimReference());
+				if (Sequence == nullptr || !HasOnlyAllowedNotifies(Sequence->Notifies)) { return false; }
 			}
 		}
 		return true;
