@@ -411,7 +411,7 @@ bool FAethelnParryRelationsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("It spends nothing"), F.CostApplications, Spent);
 	}
 	{
-		// Refused inside the chain's commitment and inside Instant Strike's; the Parry's own relations to attacks stay open.
+		// Refused inside the chain's commitment and inside Instant Strike's.
 		FDefense F; if (!F.Init(*this, Abilities())) { return false; }
 		F.AdvanceTo(1.0);
 		TestEqual(TEXT("The chain's first hit is accepted"), F.Attack(), EResult::Accepted);
@@ -432,6 +432,30 @@ bool FAethelnParryRelationsTest::RunTest(const FString& Parameters)
 		F.AdvanceTo(1.5);
 		TestEqual(TEXT("Accepted after it"), Parry(F), EResult::Accepted);
 		if (TestEqual(TEXT("The strike ends once"), F.ChainEnds.Num(), 1)) { TestEqual(TEXT("With OtherAction"), F.ChainEnds[0], EAethelnChainEndReason::OtherAction); }
+	}
+	{
+		// Owner, 2026-10-14: while the window is open an attack press (the chain or Instant Strike) is refused, as the block
+		// refuses it (Q10). The refusal spends nothing, ends nothing, and the window keeps defending; after it, a press is accepted.
+		FDefense F; if (!F.Init(*this, Abilities())) { return false; }
+		F.AdvanceTo(1.0);
+		TestEqual(TEXT("The Parry is accepted"), Parry(F), EResult::Accepted); // defends [1.0625, 1.5)
+		F.AdvanceTo(1.25);
+		const int32 Spent = F.CostApplications;
+		TestEqual(TEXT("The chain is refused during the window"), F.Attack(), EResult::ActivationBlocked);
+		TestEqual(TEXT("Instant Strike is refused during the window"), F.Deliver(F.Request(Strike)), EResult::ActivationBlocked);
+		TestEqual(TEXT("The refused presses spend nothing"), F.CostApplications, Spent);
+		TestEqual(TEXT("They end nothing"), F.ChainEnds.Num(), 0);
+		TestTrue(TEXT("The window is still open"), ParryActive(F) && F.Has(AethelnGameplayTags::State_Oathscar_Parrying));
+		F.AdvanceTo(1.5); // the window end
+		TestFalse(TEXT("The window ended"), ParryActive(F));
+		TestEqual(TEXT("Instant Strike is accepted after the window end"), F.Deliver(F.Request(Strike)), EResult::Accepted);
+	}
+	{
+		FDefense F; if (!F.Init(*this, Abilities())) { return false; }
+		F.AdvanceTo(1.0);
+		TestEqual(TEXT("The Parry is accepted"), Parry(F), EResult::Accepted);
+		F.AdvanceTo(1.5);
+		TestEqual(TEXT("The chain is accepted after the window end"), F.Attack(), EResult::Accepted);
 	}
 	{
 		// An accepted dodge ends a running Parry window at its acceptance time, as it ends a block (Q10).
