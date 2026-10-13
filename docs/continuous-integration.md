@@ -572,6 +572,35 @@ policy identity, and the shadow job runs the accepted-base selector. A later
 owner pull request that touches only these paths must therefore record the
 green gap observation after this change merges.
 
+Issue #231 (2026-10-13) applies the same reconciliation to a third path class.
+Pull request #347 changed only `design/combat-registry/`, combat design
+documents, `scripts/design/`, and `tests/design/`. `ci-acceptance-shadow` failed
+with `producer_direct_binding_invalid:content`: the selector had no rule for
+`design/**` or `scripts/design/**`, threw `path_unclassified`, and the
+conservative report selected all eight checks, including
+`content-reference-validation` and `unreal-editor-automation`, which
+`change-impact` correctly did not run. The reconcile throw is deliberate and
+unchanged. The selector was the outlier, so `design/**` and
+`scripts/design/**` now select `portable` only, like `docs/**` and
+`tests/**/*.ps1|md`. The only consumer of these paths is
+`scripts/ci/Invoke-CiSuite.ps1`, which runs the four combat-registry checks as
+portable suites; nothing under `Source/`, `Config/`, `Content/`, `Plugins/`, or
+the engine jobs reads them. The match is ordinal and case-sensitive:
+`designx/`, `scripts/designx/`, `Design/`, and `scripts/Design/` stay
+`path_unclassified` and take the conservative report, and a change that also
+touches an engine input still selects the native and Editor checks through
+that input. `change-impact` is unchanged and still compiles for `design/**`
+and `scripts/design/**`; narrowing it is a follow-up candidate, not part of
+this change. `.gitignore` stays deliberately unclassified (#167), because the
+engine gate's drift check reads it. Non-script `tests/content` files and the
+other `scripts/build` classes from the issue remain as recorded above. This
+candidate is 41,534 LF-normalized bytes with digest
+`ec2c22b291957b32b0b4ca7919ec23d34e5539279243349a7a6bd7e6e818ca5f`. It is a new
+policy identity and grants no activation authority; the shadow job runs the
+accepted-base selector, so a later owner pull request that touches only these
+paths must record a green `ci-acceptance-shadow` observation (aggregate
+branch, portable receipt bound) after this change merges.
+
 Classification uses binary `git diff --raw -z --no-abbrev --no-ext-diff
 --no-textconv --find-renames --find-copies-harder`. Rename/copy entries classify
 both paths and preserve status, score, modes, OIDs, and paths. The base and
