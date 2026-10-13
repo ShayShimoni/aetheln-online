@@ -184,7 +184,7 @@ bool FAethelnAbilitiesCostAndCooldownCommitTest::RunTest(const FString& Paramete
 		Fixture.Commits = 0;
 		Fixture.CancelledEnds = 0;
 
-		// The previous ability is still on its own cooldown, so acceptance here also shows the cooldowns are independent.
+		// Cooldown independence between abilities is exercised once the Parry joins the fixture in P3; with one ability it is not shown here.
 		ExpectResult(*this, Name + TEXT(": accepted"), Fixture.Submit(Index), EResult::Accepted);
 		TestEqual(Name + TEXT(": one cost effect"), Fixture.CostEffects, 1);
 		TestEqual(Name + TEXT(": Endurance spent once"), Fixture.Endurance(), EnduranceBefore - Cost);

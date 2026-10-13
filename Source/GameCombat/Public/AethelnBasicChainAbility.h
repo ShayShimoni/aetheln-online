@@ -6,8 +6,8 @@
 
 /**
  * Server-only, one GAS activation per press. Timeline recovery survives its GAS end.
- * The three-hit chain has three steps; a single-step subclass (#260's Gate Step and
- * Sworn Rebuke) is a chain of one step that ends at its RecoveryEnd.
+ * The three-hit chain has three steps; a single-step subclass (#260's Instant Strike) is a
+ * chain of one step that ends at its RecoveryEnd.
  */
 UCLASS(Config = Game)
 class GAMECOMBAT_API UAethelnBasicChainAbility : public UAethelnGameplayAbility

@@ -424,9 +424,9 @@ bool FAethelnInstantStrikeNetworkConditionsTest::RunTest(const FString& Paramete
 		TestEqual(TEXT("Duplicate delivery"), F.Player.AbilitySystem->ProcessServerRequest(Delayed), Expected == EResult::Accepted ? EResult::DuplicateSequence : EResult::ActivationBlocked);
 		TestEqual(TEXT("A refused request spends nothing"), F.CostApplications, 1 + (Expected == EResult::Accepted ? 1 : 0));
 	}
-	// A27: avatar teardown (Destroy) before or after the contact: one end, no contact at or after the teardown time.
+	// A27: avatar teardown (Destroy) before the active window, inside it before the contact, or after it: one end, no contact at or after the teardown time.
 	// A PlayerState teardown leg is not replayed.
-	for (double Time : { 0.0625, 0.25 })
+	for (double Time : { 0.0625, 0.15625, 0.25 }) // before the active window, inside it before the contact, after the contact
 	{
 		FFixture F; if (!F.Init(*this, Strike())) { return false; }
 		if (F.SpawnTarget(*this, FVector(60.0, 0.0, 0.0)) == nullptr) { return false; }
