@@ -3,6 +3,7 @@
 #include "Abilities/GameplayAbility.h"
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnCombatAttributeSet.h"
+#include "AethelnDeathSubsystem.h"
 #include "AethelnGameplayAbility.h"
 #include "AethelnGameplayTags.h"
 #include "GameFramework/Pawn.h"
@@ -56,6 +57,17 @@ void AAethelnPlayerState::PostInitializeComponents()
 			HudActionOutcome.Broadcast(Outcome);
 		}
 	});
+}
+
+void AAethelnPlayerState::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// A logout destroys the PlayerState; the ASC still holds its attributes and effects here, before the base destroys them.
+	// A player who never took a first possession has nothing to carry (its attributes were never initialized).
+	if (EndPlayReason == EEndPlayReason::Destroyed && HasAuthority() && bCombatStateInitialized && !ReconnectKey.IsEmpty())
+	{
+		UAethelnDeathSubsystem::CaptureCarriedState(*AbilitySystemComponent, ReconnectKey);
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const
@@ -178,7 +190,11 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 					AbilitySystemComponent->GiveAbility(Spec);
 				}
 			}
-			UAethelnAttributeInitEffect::ApplyTo(*AbilitySystemComponent, ProvisionalInitialAttributes);
+			// A reconnect inside the grace window takes its carried state in place of the initial attributes (#21 P4).
+			if (ReconnectKey.IsEmpty() || !UAethelnDeathSubsystem::RestoreCarriedState(*AbilitySystemComponent, ReconnectKey))
+			{
+				UAethelnAttributeInitEffect::ApplyTo(*AbilitySystemComponent, ProvisionalInitialAttributes);
+			}
 			// Once per PlayerState, like the init: a re-possession never stacks a second recovery.
 			UAethelnResourceRecoveryEffect::Start(*AbilitySystemComponent, UAethelnEnduranceRecoveryEffect::StaticClass(), ProvisionalEnduranceRecovery);
 			UAethelnResourceRecoveryEffect::Start(*AbilitySystemComponent, UAethelnGuardRecoveryEffect::StaticClass(), ProvisionalGuardRecovery);

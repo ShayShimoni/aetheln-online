@@ -242,7 +242,7 @@ Engine facts the handler respects:
 | Server event | Action |
 | --- | --- |
 | `PostInitializeComponents` | `InitAbilityActorInfo(this, GetPawn())` (avatar null). Bind the handler. |
-| `OnPawnSet`, new pawn non-null | 1. `InitAbilityActorInfo(this, NewPawn)`. 2. If the server-only flag `bCombatStateInitialized` is false: validate and grant the configured abilities, apply `UAethelnAttributeInitEffect`, set the flag. Keyed on the flag only, never on `OldPawn`. 3. The seam becomes ready. |
+| `OnPawnSet`, new pawn non-null | 1. `InitAbilityActorInfo(this, NewPawn)`. 2. If the server-only flag `bCombatStateInitialized` is false: validate and grant the configured abilities, apply `UAethelnAttributeInitEffect` (or, for a reconnect inside the disconnect grace window, the carried state of #21 P4 in its place), set the flag. Keyed on the flag only, never on `OldPawn`. 3. The seam becomes ready. |
 | `OnPawnSet`, new pawn null (unpossess, or destroy while possessed) | 1. #60 P3 `ResetChain(AvatarLost)` stamps and ends the chain once before cancellation. 2. `CancelAllAbilities()` (`GAS/Private/AbilitySystemComponent_Abilities.cpp:1374-1384`). 3. `SetAvatarActor(nullptr)`, only when `GetAvatarActor() == OldPawn` or `OldPawn` is null (it can be null after an `EndPlay` detach). 4. The seam rejects with `ConnectionClosed` until the next avatar. |
 | Re-possession (for example respawn) | The null case, then the non-null case. The flag stops a second grant or init, so it never refills Health or resets cooldowns. |
 | Avatar destroyed without unpossession | The seam checks avatar validity and `IsActorBeingDestroyed` on every request and rejects with `ActorDestroyed`. |
@@ -427,9 +427,11 @@ period, and delay is `TBD` (#107); this section sets none.
 - **Disconnect and reconnect.** Recovery belongs to the PlayerState, and a
   disconnect only removes the connection. With the `AGameModeBase` base class,
   a reconnect gets a fresh PlayerState, which starts one new recovery with no
-  delay; the old PlayerState's recovery ends with it. The full refill on
-  reconnect is #21's interim gap (Known Interim Gaps); recovery adds nothing to
-  it.
+  delay; the old PlayerState's recovery ends with it. A reconnect inside the
+  grace window carries the attributes and the shared timed states, a running
+  recovery delay with its remaining time among them (#21 P4,
+  [Reconnect and Carried State](death-and-respawn.md#reconnect-and-carried-state-p4-delivered)).
+  Recovery itself is never carried: the new PlayerState starts one.
 - **Same-timestamp order (open, #60 and #45).** Canon says the combat
   timeline or content version declares this order, not actor tick order
   (Shared Combat Semantic Contract in the combat document). The
@@ -753,8 +755,9 @@ value is set here except the owner's provisional 600 s stance duration.
 - **Lifecycle and replication.** The effect lives on the PlayerState ASC, so
   it survives re-possession and keeps counting with no avatar, as cooldowns
   do. In Mixed mode the owner receives the effect and other clients only the
-  tag; what opponents see is #61's. Whether #21 P4's reconnect snapshot
-  carries the stance is open.
+  tag; what opponents see is #61's. #21 P4's reconnect snapshot does not carry
+  the stance (it carries the attributes and the shared timed-state effect
+  only), so a reconnect ends a running stance; whether that stays is open.
 
 ### Action relations
 
@@ -825,7 +828,7 @@ All stay `TBD` until the owner (product) or #107 and #45 (values) decide.
    and what a staggered enemy does (#20).
 5. **Stance:** the magnitudes, the modified quantities and their place in the
    resolution order, the Endurance cost, the recast default, what opponents
-   see (#61), and whether a reconnect carries it (#21 P4).
+   see (#61), and whether a reconnect carries it (#21 P4 does not: it carries the shared timed states only).
 6. **Relations** marked default or open in [Action relations](#action-relations).
 7. **Prediction:** whether any active replaces Hold the Line as the TC-008
    candidate (Open Decisions 1).
@@ -1034,7 +1037,7 @@ server displacement once. Re-possession revives none of them. See
 included), accepts forward gaps, never wraps, and lives for one PlayerState
 lifetime. A client that jumps to the maximum only makes its own later requests
 stale. With the `AGameModeBase` base class pinned in Class Layout, a reconnect
-gets a new PlayerState and starts at 1 (see Known Interim Gaps).
+gets a new PlayerState and starts at 1.
 
 **Input-contract findings** (numbers from the Issue
 [#82](https://github.com/ShayShimoni/aetheln-online/issues/82) review). The
@@ -1345,7 +1348,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T30 | Packaged two-client run with the new seam | later | K | Not required to merge #19 |
 | T31 | `Aetheln.GameCombat.ActivationSeam.LifecycleRejections` | P3 | H | No avatar gives `ConnectionClosed`; a dying avatar gives `ActorDestroyed`; sequence state survives re-possession |
 | T33 | `Aetheln.GameCombat.Lifecycle.PawnToAbilitySystemLookup` | P2 | H | `FindForPawn` returns the PlayerState ASC for a player pawn, the pawn's own ASC for AI, null for neither |
-| T34 | `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` | P2 | H | Pins the known gap: a fresh PlayerState for the same player gets a full init. #21 flips it. |
+| T34 | `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` | P2, flipped by #21 P4 | H | A fresh PlayerState for the same player and key takes the carried Health and cooldown, and is granted once. The name keeps the P2 gap it pinned; #21 P4 closed it. |
 | T35 | `Aetheln.GameCombat.ActivationSeam.DebugRequestsRefused` | #324 | H | `ServerPrintDebug_Request` and `...WithStrings` write no server or client debug strings, send no outcome and each draw one bucket token (two-token bucket, no refill, then a seam request is `RateLimited`). Control: the engine implementations, called past the override, write both string arrays. |
 
 ### T1 required integration coverage
@@ -1429,16 +1432,18 @@ here.
 
 ## Known Interim Gaps
 
-- **Reconnect is a free refill (owner: #21).** With the `AGameModeBase` base
-  class pinned in Class Layout, a reconnect creates a new PlayerState, so
-  `bCombatStateInitialized` is false and P2 applies the init effect again: the
-  player returns with full Health and Endurance and no cooldowns. Canon forbids this: "disconnect is never an instant escape,
-  cleanse, restore, or grant" (Death, Logout, and Recovery Safety in the combat
-  document). #19 adds no restoration code. The test
-  `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` pins the current behavior
-  so the gap stays visible, and #21 flips it when it lands its reconnect rule
-  (its acceptance criterion: reconnect during death or respawn resolves to one
-  valid state).
+- **Reconnect is a free refill (closed by #21 P4).** With the `AGameModeBase`
+  base class pinned in Class Layout, a reconnect creates a new PlayerState, so
+  `bCombatStateInitialized` is false. #21 P4 closes the gap: a logout carries
+  the player's attributes, shared timed states, life state and respawn wait
+  under a server-held key for the disconnect grace window, and the new
+  PlayerState takes them in place of the initial attributes ([Reconnect and
+  Carried State](death-and-respawn.md#reconnect-and-carried-state-p4-delivered)).
+  Canon: "disconnect is never an instant escape, cleanse, restore, or grant"
+  (Death, Logout, and Recovery Safety in the combat document). Past the grace
+  window, or with no key, a reconnect is a new session. The test
+  `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` keeps its name and now
+  asserts the closure.
 - **Replicated-data cache closure (#60 P2).** All four client-callable cache
   writers now refuse through generated virtual implementations. A3 covers
   no writes, token accounting, metric-only telemetry, no replies, and
@@ -1475,7 +1480,8 @@ All stay `TBD` until the named owner decides.
 7. **Cooldown and attribute behavior across reconnect**, including closing the
    reconnect gap. Owner: #21 (P4). Decided for respawn (owner, 2026-10-12,
    issue #21): full Health, Endurance, and Guard, with cooldowns kept
-   counting.
+   counting. Delivered for reconnect in #21 P4: the carried state keeps the
+   attributes and the shared timed states counting on the server clock.
 8. **What opponents may see** of the six attributes. Resolved by the owner on
    #61 (2026-10-12, [comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): Health and MaxHealth are visible to
    everyone; Endurance, Guard, and their maxima stay owner-only. The visual
