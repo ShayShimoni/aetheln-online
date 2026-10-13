@@ -382,8 +382,8 @@ and jaw retain the rigid face's identity around the creature mouth. Speech
 retains its subtly harmonic resonance through the body and face. Mouth movement,
 eye expression, head inclination, posture, and gesture carry expression.
 Preserve the rigid facial planes when animating the mouth; detailed jaw
-deformation and physiology
-remain TBD rather than implying a human face beneath the surface.
+deformation and physiology remain TBD rather than implying a human face
+beneath the surface.
 
 White markings are fur pigment, not glowing veins or separate luminous organs.
 Keep emission localized to the golden eyes. The dark coat remains close and
@@ -398,7 +398,7 @@ The [art guide](art-style-guide.md) governs the polished 3D finish.
 The approved male uses an athletic masculine build, broader shoulders and
 chest, and a stronger facial contour. The approved female uses a slim athletic
 feminine build, gentler waist-to-hip transitions, a softer jaw and cheek contour,
-and balanced smaller-looking hands and feet. Both must fit the shared
+and balanced smaller-looking hands and paws. Both must fit the shared
 visual scale, limb-reach bounds, combat envelope, and broad body-preset range.
 
 Both sexes retain the same face material, creature mouth, golden eyes, short
