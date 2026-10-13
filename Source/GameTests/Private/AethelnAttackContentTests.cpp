@@ -361,6 +361,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnPresentationBindingValidationTest,
 bool FAethelnPresentationBindingValidationTest::RunTest(const FString& Parameters)
 {
 	using namespace AethelnAttackContentTests;
+	// Creating a montage or sequence outside a package makes the engine log this once; it is not a validator result.
+	AddExpectedError(TEXT("No Movie Scene found for SequencerDataModel"), EAutomationExpectedErrorFlags::Contains, 0);
 	{
 		FBindingFixture Valid;
 		TestNull(TEXT("A fixture-only valid binding passes, with allowlisted sound and trail notifies"), Valid.Binding->FindProblem());
