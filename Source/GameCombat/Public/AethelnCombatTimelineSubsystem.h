@@ -83,6 +83,8 @@ public:
 	FAethelnInterruptedDelegate OnTargetInterrupted;
 
 #if WITH_DEV_AUTOMATION_TESTS
+	/** Test-only: lets two players be hostile, for the Parry's player-attacker leg. Tests reset it. */
+	inline static bool bPlayersHostileForTests = false;
 	int32 GetRegisteredStepCountForTests() const { return Steps.Num(); }
 	int32 GetSweepCountForTests() const { return SweepCountForTests; }
 	void SetNextOrdinalForTests(uint64 Ordinal) { NextOrdinal = Ordinal; }

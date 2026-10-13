@@ -181,6 +181,9 @@ bool UAethelnCombatTimelineSubsystem::IsHostile(const UAethelnAbilitySystemCompo
 {
 	const bool bAttackerIsPlayer = Cast<APlayerState>(Attacker.GetOwner()) != nullptr;
 	const bool bTargetIsPlayer = Cast<APlayerState>(Target.GetOwner()) != nullptr;
+#if WITH_DEV_AUTOMATION_TESTS
+	if (bPlayersHostileForTests && &Attacker != &Target && bAttackerIsPlayer && bTargetIsPlayer) { return true; }
+#endif
 	return &Attacker != &Target && bAttackerIsPlayer != bTargetIsPlayer;
 }
 

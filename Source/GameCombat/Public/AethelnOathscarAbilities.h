@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AethelnBasicChainAbility.h"
+#include "AethelnDefenseTypes.h"
 #include "CoreMinimal.h"
 #include "AethelnOathscarAbilities.generated.h"
 
@@ -28,4 +29,17 @@ class GAMECOMBAT_API UAethelnInstantStrikeAbility : public UAethelnBasicChainAbi
 public:
 	UAethelnInstantStrikeAbility();
 	virtual const TCHAR* FindGrantProblem() const override;
+};
+
+/** order.oathscar.ability.parry (#260 P3). */
+UCLASS(Config = Game)
+class GAMECOMBAT_API UAethelnParryAbility : public UAethelnGameplayAbility
+{
+	GENERATED_BODY()
+
+public:
+	UAethelnParryAbility();
+
+	UPROPERTY(Config)
+	FAethelnParryDefinition ProvisionalParry;
 };

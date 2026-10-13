@@ -9,6 +9,12 @@ namespace AethelnGameplayTags
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Oathscar_InstantStrike, "Cooldown.Oathscar.InstantStrike", "Cooldown state of order.oathscar.ability.instant_strike");
 
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_Oathscar_Parry, "Ability.Oathscar.Parry", "order.oathscar.ability.parry");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Oathscar_Parrying, "State.Oathscar.Parrying", "Server-owned Parry window state of order.oathscar.ability.parry; gating and observers only, never a contact check");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Cooldown_Oathscar_Parry, "Cooldown.Oathscar.Parry", "Cooldown state of order.oathscar.ability.parry");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Staggered, "State.Staggered", "Server-owned stagger state of a parried player attacker; every project ability is refused while it holds (#260 default)");
+	UE_DEFINE_GAMEPLAY_TAG_COMMENT(SetByCaller_Stagger_Duration, "SetByCaller.Stagger.Duration", "Stagger duration in seconds for the stagger effect");
+
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_Dead, "State.Dead", "Death flow state. Declared by #19, applied and removed only by #21.");
 
 	UE_DEFINE_GAMEPLAY_TAG_COMMENT(Damage_Wrought, "Damage.Wrought", "combat.damage.wrought");

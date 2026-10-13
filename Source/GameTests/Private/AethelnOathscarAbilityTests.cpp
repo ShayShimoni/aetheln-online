@@ -37,6 +37,7 @@ namespace AethelnOathscarAbilityTests
 	{
 		return {
 			{ UAethelnInstantStrikeAbility::StaticClass(), UAethelnInstantStrikeTestAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_InstantStrike, AethelnGameplayTags::Cooldown_Oathscar_InstantStrike, TEXT("order.oathscar.ability.instant_strike") },
+			{ UAethelnParryAbility::StaticClass(), UAethelnParryTestAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_Parry, AethelnGameplayTags::Cooldown_Oathscar_Parry, TEXT("order.oathscar.ability.parry") },
 		};
 	}
 
@@ -126,13 +127,13 @@ namespace AethelnOathscarAbilityTests
 			return Player.AbilitySystem->ProcessServerRequest(Request);
 		}
 
-		/** Ends a running strike the authored way, at its RecoveryEnd, and by default removes the cooldown it committed. */
+		/** Ends a running active the authored way (a strike at its RecoveryEnd, a Parry at its WindowEnd), and by default removes the cooldowns they committed. */
 		void EndActivation(bool bClearCooldown = true)
 		{
-			World->Tick(LEVELTICK_All, 0.625f); // the fixture step's RecoveryEnd
+			World->Tick(LEVELTICK_All, 0.625f); // the fixture strike's RecoveryEnd, after the Parry's WindowEnd
 			if (bClearCooldown)
 			{
-				Player.AbilitySystem->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(AethelnGameplayTags::Cooldown_Oathscar_InstantStrike));
+				for (const FDefinition& Definition : GetDefinitions()) { Player.AbilitySystem->RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(Definition.CooldownTag)); }
 			}
 		}
 
@@ -184,7 +185,7 @@ bool FAethelnAbilitiesCostAndCooldownCommitTest::RunTest(const FString& Paramete
 		Fixture.Commits = 0;
 		Fixture.CancelledEnds = 0;
 
-		// Cooldown independence between abilities is exercised once the Parry joins the fixture in P3; with one ability it is not shown here.
+		// The previous ability is still on its own cooldown (EndActivation keeps it here), so acceptance also shows the cooldowns are independent.
 		ExpectResult(*this, Name + TEXT(": accepted"), Fixture.Submit(Index), EResult::Accepted);
 		TestEqual(Name + TEXT(": one cost effect"), Fixture.CostEffects, 1);
 		TestEqual(Name + TEXT(": Endurance spent once"), Fixture.Endurance(), EnduranceBefore - Cost);
@@ -400,6 +401,7 @@ bool FAethelnAbilitiesDefinitionsAndVersionsTest::RunTest(const FString& Paramet
 	for (int32 Index = 0; Index < Definitions.Num(); ++Index)
 	{
 		ExpectResult(*this, Definitions[Index].AbilityId.ToString() + TEXT(": the matching content version"), Fixture.Submit(Index), EResult::Accepted);
+		Fixture.EndActivation();
 	}
 	return true;
 }

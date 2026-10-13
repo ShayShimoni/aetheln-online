@@ -32,3 +32,9 @@ const TCHAR* UAethelnInstantStrikeAbility::FindGrantProblem() const
 	}
 	return nullptr;
 }
+
+UAethelnParryAbility::UAethelnParryAbility()
+{
+	SetAbilityId(AethelnGameplayTags::Ability_Oathscar_Parry);
+	SetCooldownTag(AethelnGameplayTags::Cooldown_Oathscar_Parry);
+}
