@@ -12,8 +12,10 @@ UAethelnBasicChainAbility::UAethelnBasicChainAbility()
 	ResetTags.AddTag(AethelnGameplayTags::State_Dead);
 	// #18 Q17 and Q10: no attack while dodging or blocking. Each blocking tag is also a reset tag (grant rule).
 	// #260 (default, open): nor inside a committed Instant Strike (its own constructor swaps this for the chain's).
+	// Owner, 2026-10-14: nor while a Parry window is open, as for the block (Q10). Accepting a Parry resets a running chain
+	// itself (OtherAction) before the tag is held, so the reset tag only guards a window that is somehow already open.
 	for (const FGameplayTag Tag : { AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag(),
-		AethelnGameplayTags::State_Oathscar_InstantStrike.GetTag(), AethelnGameplayTags::State_Staggered.GetTag() })
+		AethelnGameplayTags::State_Oathscar_InstantStrike.GetTag(), AethelnGameplayTags::State_Staggered.GetTag(), AethelnGameplayTags::State_Oathscar_Parrying.GetTag() })
 	{
 		ActivationBlockedTags.AddTag(Tag);
 		ResetTags.AddTag(Tag);

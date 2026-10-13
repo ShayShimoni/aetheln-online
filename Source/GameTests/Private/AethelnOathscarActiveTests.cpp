@@ -121,7 +121,8 @@ bool FAethelnInstantStrikeDefinitionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("The three-hit chain keeps its commitment tag"), GetDefault<UAethelnChainTestAbility>()->GetCommitmentTag(), Chain);
 	// Owner, 2026-10-13: refused inside the chain's commitment window (as dodge and block). The inherited grant rule
 	// makes each blocking tag a reset tag. Q17 and Q10: no attack while dodging or blocking.
-	for (const FGameplayTag Tag : { Chain, AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag(), AethelnGameplayTags::State_Dead.GetTag() })
+	for (const FGameplayTag Tag : { Chain, AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag(), AethelnGameplayTags::State_Dead.GetTag(),
+		AethelnGameplayTags::State_Staggered.GetTag(), AethelnGameplayTags::State_Oathscar_Parrying.GetTag() })
 	{
 		TestTrue(FString::Printf(TEXT("Blocked while %s"), *Tag.ToString()), Defaults->GetBlockedTagsForTests().HasTagExact(Tag));
 		TestTrue(FString::Printf(TEXT("Resets on %s"), *Tag.ToString()), Defaults->ResetTags.HasTagExact(Tag));

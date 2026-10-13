@@ -715,7 +715,10 @@ Every value below is `TBD` (#107).
   because one slot exists per ASC; the Parry is refused while dodging and
   inside the chain's commitment window; an accepted dodge ends a running
   Parry window, as it ends a block (Q10). `State.Dead`, avatar loss, and
-  teardown end the window at the processing time.
+  teardown end the window at the processing time. Decided (owner, 2026-10-14,
+  [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6156696832)):
+  while the window is open an attack press, the chain or Instant Strike, is
+  refused until it ends, as the block refuses one.
 - **Committed result for Skein.** A committed `Parried` result is the trigger
   the Witnessed Reprisal Thread consumes later; that Thread is not prototype
   scope.
