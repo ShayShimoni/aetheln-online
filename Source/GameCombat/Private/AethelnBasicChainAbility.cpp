@@ -26,11 +26,6 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 	if ((StepCount > 1 && ProvisionalCooldownSeconds != 0.0f) || bAcceptsRelease) { return TEXT("has a chain cooldown or Release route"); }
 	if (StepCount < 1 || ProvisionalSteps.Num() != StepCount) { return TEXT("does not have its authored number of steps"); }
 	if (!ResetTags.HasTagExact(AethelnGameplayTags::State_Dead)) { return TEXT("does not reset on State.Dead"); }
-	if (!FMath::IsFinite(ProvisionalMaxSampleDistance) || ProvisionalMaxSampleDistance <= 0.0
-		|| !FMath::IsFinite(ProvisionalMaxSampleAngleDegrees) || ProvisionalMaxSampleAngleDegrees <= 0.0)
-	{
-		return TEXT("has unset or invalid sampling bounds");
-	}
 	const FGameplayTagContainer Commitment(CommitmentTag);
 	if (!CommitmentTag.IsValid() || Commitment.HasAny(ActivationBlockedTags) || Commitment.HasAny(ResetTags))
 	{
@@ -40,11 +35,7 @@ const TCHAR* UAethelnBasicChainAbility::FindGrantProblem() const
 	{
 		if (!ResetTags.HasTagExact(Tag)) { return TEXT("has a blocking tag without a reset event"); }
 	}
-	for (int32 Index = 0; Index < ProvisionalSteps.Num(); ++Index)
-	{
-		if (const TCHAR* Problem = AethelnAttackTimeline::FindStepProblem(ProvisionalSteps[Index], Index == StepCount - 1)) { return Problem; }
-	}
-	return nullptr;
+	return AethelnAttackTimeline::FindStepListProblem(ProvisionalSteps, ProvisionalMaxSampleDistance, ProvisionalMaxSampleAngleDegrees);
 }
 
 bool UAethelnBasicChainAbility::CanActivateAbility(FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
