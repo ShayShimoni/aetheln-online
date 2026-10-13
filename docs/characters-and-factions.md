@@ -411,7 +411,7 @@ Their former intent, kept for that pass:
   committed dodge result changed the next compatible Gate Step; a predicted
   dodge alone could not trigger it.
 
-These five IDs are retired: they are not registry records, because the
+These five IDs are set aside: they are not registry records, because the
 registry has no superseded state without a same-kind replacement. Whether the
 Skein pass reuses them or issues new IDs is open (lane default: new IDs).
 Witnessed Reprisal stays and now answers the Parry.

@@ -468,6 +468,12 @@ It is a single-step use of the chain machinery, not a new timeline:
   (owner, 2026-10-13,
   [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6142792186)).
   Accepted after `CancelOpen`, it resets the chain with `OtherAction`.
+- **Its own commitment window blocks the others (default, open).** The chain's
+  constructor lists `State.Oathscar.InstantStrike` among its blocking and reset
+  tags, and so do the dodge and the block among their blocking tags, so a
+  committed strike cannot be cancelled either (gas-foundation.md, Action
+  relations). Instant Strike's own constructor swaps that entry for the
+  chain's, so it never blocks itself.
 - **Everything else is reused:** registration, boundaries, the contact
   pipeline, the allowance, the total order, the lethal latch, resets, records,
   and telemetry. Its tests replay A25 to A27 (#260 K1 to K4).
