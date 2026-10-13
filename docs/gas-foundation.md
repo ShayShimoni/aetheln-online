@@ -409,8 +409,10 @@ period, and delay is `TBD` (#107); this section sets none.
 - **Death and respawn.** `State.Dead` pauses both resources. #21 applies and
   removes it; recovery resumes one period after the frame that removes it. A
   running delay keeps counting on the server clock through death. Respawn
-  restores nothing through recovery: what respawn restores is #21's lifecycle
-  allowlist.
+  restores nothing through recovery: #21 P2's respawn restores Health,
+  Endurance, and Guard to their maxima through its own instant effect (owner
+  decision, issue #21, 2026-10-12;
+  [Death, Respawn, and Reconnect](death-and-respawn.md)).
 - **No avatar.** Recovery runs on the server clock while the PlayerState has
   no pawn, as cooldowns do.
 - **Disconnect and reconnect.** Recovery belongs to the PlayerState, and a
@@ -1285,8 +1287,10 @@ All stay `TBD` until the named owner decides.
    dodge, and block. Owners: #60 and #18 content. For dodge and block, #18's
    Q10 and Q17 (owner-approved 2026-10-10) answer it; the three actives' relations
    stay open.
-7. **Cooldown and attribute behavior across death, respawn, and reconnect**,
-   including closing the reconnect gap. Owner: #21.
+7. **Cooldown and attribute behavior across reconnect**, including closing the
+   reconnect gap. Owner: #21 (P4). Decided for respawn (owner, 2026-10-12,
+   issue #21): full Health, Endurance, and Guard, with cooldowns kept
+   counting.
 8. **What opponents may see** of the six attributes. Resolved by the owner on
    #61 (2026-10-12, [comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)): Health and MaxHealth are visible to
    everyone; Endurance, Guard, and their maxima stay owner-only. The visual

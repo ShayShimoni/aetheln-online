@@ -816,7 +816,7 @@ try {
 			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
 			$Harnessed = Invoke-AutomationStepFixture $AutomationRun
 			$ExpectedOutput = if ($null -eq $HarnessCase.failure) { '' } else { 'reason=' + $HarnessCase.failure + "`n" }
-			Assert-True ($Harnessed.failure -ceq $HarnessCase.failure -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput -and ($null -ne $HarnessCase.failure -or (@($Harnessed.output) -join "`n") -ceq $HarnessCase.output)) "The harness step must handle report case '$($HarnessCase.exit)/$($HarnessCase.failure)'."
+			Assert-True ($Harnessed.failure -ceq $HarnessCase.failure -and [IO.File]::ReadAllText($env:GITHUB_OUTPUT) -ceq $ExpectedOutput -and ($null -ne $HarnessCase.failure -or (@($Harnessed.output) -join "`n") -ceq $HarnessCase.output)) "The harness step must handle report case '$($HarnessCase.exit)/$($HarnessCase.failure)' (failure='$($Harnessed.failure)', output='$([IO.File]::ReadAllText($env:GITHUB_OUTPUT).Replace("`n", '|'))', step='$((@($Harnessed.output) -join '|'))')."
 		}
 	} finally {
 		$env:AETHELN_MANAGED_COMPILE_ROOT = $PreviousHarnessManaged
@@ -850,7 +850,7 @@ try {
 	# answers with a different 40-character head, and fails open on everything
 	# else. A loopback listener stands in for the GitHub API through GITHUB_API_URL.
 	$HeadEvent = 'a' * 40
-	$HeadCheckNames = @('GITHUB_API_URL', 'GITHUB_REPOSITORY', 'AETHELN_API_TOKEN', 'GITHUB_EVENT_PATH')
+	$HeadCheckNames = @('GITHUB_API_URL', 'GITHUB_REPOSITORY', 'AETHELN_API_TOKEN', 'GITHUB_EVENT_PATH', 'GITHUB_STEP_SUMMARY')
 	$HeadCheckPrevious = @{}
 	foreach ($Name in $HeadCheckNames) { $HeadCheckPrevious[$Name] = [Environment]::GetEnvironmentVariable($Name) }
 	function Invoke-HeadCheckFixture([string] $Step, [int] $Status, [string] $Body, [string] $PrNumber = '42', [switch] $NoServer, [switch] $NoEventFile) {
@@ -888,9 +888,12 @@ try {
 			else { [IO.File]::WriteAllText($EventFile, ('{"pull_request":{"number":"' + $PrNumber + '","head":{"sha":"' + $HeadEvent + '"}}}')) }
 			[Environment]::SetEnvironmentVariable('GITHUB_EVENT_PATH', $EventFile)
 			[IO.File]::WriteAllText($env:GITHUB_OUTPUT, '')
+			$SummaryFile = Join-Path $AutomationFixtureRoot 'head-check-summary.md'
+			[IO.File]::WriteAllText($SummaryFile, '')
+			[Environment]::SetEnvironmentVariable('GITHUB_STEP_SUMMARY', $SummaryFile)
 			$Run = Invoke-AutomationStepFixture $Step
 			if ($null -ne $Worker -and -not $Pending.IsCompleted) { $Listener.Stop() }
-			return [pscustomobject]@{ failure = $Run.failure; output = (@($Run.output) -join "`n"); published = [IO.File]::ReadAllText($env:GITHUB_OUTPUT); seen = $Seen }
+			return [pscustomobject]@{ failure = $Run.failure; output = (@($Run.output) -join "`n"); published = [IO.File]::ReadAllText($env:GITHUB_OUTPUT); summary = [IO.File]::ReadAllText($SummaryFile); seen = $Seen }
 		} finally {
 			if ($null -ne $Listener) { $Listener.Close() }
 			if ($null -ne $Worker) { $Worker.Dispose() }
@@ -900,10 +903,11 @@ try {
 		foreach ($JobName in @('compile', 'editor')) {
 			$Step = $HeadCheckSteps[$JobName]
 			$Current = Invoke-HeadCheckFixture -Step $Step -Status 200 -Body (@{ head = @{ sha = $HeadEvent } } | ConvertTo-Json -Compress)
+			Assert-True ($Current.summary -ceq '') "[$JobName] a current head must not write a step summary line (got '$($Current.summary)')."
 			Assert-True ($null -eq $Current.failure -and $Current.published -ceq "superseded=false`n" -and $Current.output -ceq 'head_check result=current') "[$JobName] the current head must run (got '$($Current.output)')."
 			Assert-True ($Current.seen.Url -ceq '/repos/Fixture/project/pulls/42' -and $Current.seen.Authorization -ceq 'Bearer fixture-token') "[$JobName] the head check must read this pull request with the per-run token (got '$($Current.seen.Url)')."
 			$Superseded = Invoke-HeadCheckFixture -Step $Step -Status 200 -Body (@{ head = @{ sha = ('b' * 40) } } | ConvertTo-Json -Compress)
-			Assert-True ($null -eq $Superseded.failure -and $Superseded.published -ceq "superseded=true`n" -and $Superseded.output -ceq 'head_check result=superseded') "[$JobName] a different current head must mark the run superseded (got '$($Superseded.output)')."
+			Assert-True ($Superseded.summary -ceq ('skipped: superseded head ' + $HeadEvent + ' (current head ' + ('b' * 40) + ')' + "`n") -and $null -eq $Superseded.failure -and $Superseded.published -ceq "superseded=true`n" -and $Superseded.output -ceq 'head_check result=superseded') "[$JobName] a different current head must mark the run superseded (got '$($Superseded.output)')."
 			foreach ($OpenCase in @(
 				@{ Name = 'server error'; Status = 500; Body = '{}' },
 				@{ Name = 'not found'; Status = 404; Body = '{"message":"Not Found"}' },
@@ -1427,8 +1431,9 @@ try { $LegacyDigest = ([BitConverter]::ToString($LegacyHasher.ComputeHash($Legac
 finally { $LegacyHasher.Dispose() }
 # TA-018 (2026-10-02) removed the six controller paths from the portable-only set (5,395 bytes, e4a7bc5968f066178d1b78cb26d15df06f60af50696cda51b8e758ca8a38c805).
 # Issue #299 (2026-10-11) added the editor_required output and its closed editor path set (7,194 bytes, 83d84fb8f7d50fb8ee6a876da0e402370cd2dccaa43e6385d93f3967e0a3db92).
-# TA-025 (2026-10-12) added the content launcher to that set; this is the reviewed block identity after that change.
-Assert-True ($LegacyBytes.Length -eq 7488 -and $LegacyDigest -ceq '5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d') 'The change-impact block must match the reviewed TA-025 identity after LF normalization.'
+# TA-025 (2026-10-12) added the content launcher to that set (7,488 bytes, 5581f66f3b96b36334e42ba9b32d4c41725374dc3269a085f967de87e79e5c9d).
+# The issue #299 follow-up added .agents/** and tests/build/** to the portable-only set; this is the reviewed block identity after that change.
+Assert-True ($LegacyBytes.Length -eq 7617 -and $LegacyDigest -ceq '19e0b2fe2e944f1c769427130aa3d0add37d3d7d4c2c97bf64468101c3b091c2') 'The change-impact block must match the reviewed issue #299 follow-up identity after LF normalization.'
 
 function Get-ClassifierScript {
 	$Lines = $Workflow -split "\r?\n"
@@ -1460,6 +1465,30 @@ Assert-True ($ClassifierScript -match '--no-renames') 'The classifier must diff 
 $ParseErrors = $null
 $null = [System.Management.Automation.Language.Parser]::ParseInput($ClassifierScript, [ref] $null, [ref] $ParseErrors)
 Assert-True ($ParseErrors.Count -eq 0) "The classifier script must parse under Windows PowerShell 5.1: $($ParseErrors | ForEach-Object { $_.Message } | Select-Object -First 1)"
+
+# Issue #299: every script the editor job runs, and every script those load, must make editor_required true.
+# The entry points come from the editor job itself and the closure from the dot-sourcing chain, so a helper
+# added to the chain later fails here instead of silently skipping the editor job.
+$ClassifierAst = [System.Management.Automation.Language.Parser]::ParseInput($ClassifierScript, [ref] $null, [ref] $null)
+$EditorPathFunction = $ClassifierAst.Find({ param($Node) $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -ceq 'Test-EditorPath' }, $true)
+Assert-True ($null -ne $EditorPathFunction) 'The classifier must define Test-EditorPath.'
+. ([scriptblock]::Create($EditorPathFunction.Extent.Text))
+$EditorScripts = New-Object Collections.Generic.Queue[string]
+foreach ($EditorEntry in [regex]::Matches($EditorAutomation, 'scripts\\ci\\([A-Za-z0-9.-]+\.ps1)')) { $EditorScripts.Enqueue($EditorEntry.Groups[1].Value) }
+$EditorClosure = New-Object Collections.Generic.HashSet[string]
+while ($EditorScripts.Count -gt 0) {
+	$EditorScript = $EditorScripts.Dequeue()
+	if (-not $EditorClosure.Add($EditorScript)) { continue }
+	$EditorScriptPath = Join-Path $RepositoryRoot ('scripts\ci\' + $EditorScript)
+	Assert-True (Test-Path -LiteralPath $EditorScriptPath -PathType Leaf) "The editor job names scripts/ci/$EditorScript, which must exist."
+	foreach ($Loaded in [regex]::Matches([IO.File]::ReadAllText($EditorScriptPath), 'Join-Path \$PSScriptRoot ''([A-Za-z0-9.-]+\.ps1)''')) { $EditorScripts.Enqueue($Loaded.Groups[1].Value) }
+}
+foreach ($Known in @('Invoke-UnrealAutomationTests.ps1', 'Sync-EditorAutomationWorkspace.ps1', 'EngineRunnerHostLease.ps1', 'InitialPreparation.Core.ps1', 'InitialPreparation.BuildInvocation.ps1', 'LeaseJournal.ps1', 'ManagedCompileRegistration.ps1', 'ManagedCompileWorkspace.ps1')) {
+	Assert-True ($EditorClosure.Contains($Known)) "The editor script walk must reach $Known."
+}
+foreach ($EditorScript in $EditorClosure) {
+	Assert-True (Test-EditorPath ('scripts/ci/' + $EditorScript)) "scripts/ci/$EditorScript is loaded by the editor job but does not make editor_required true; add it to Test-EditorPath."
+}
 
 # Trusted compile: pull requests only, owner/same-repo trust, and it may start
 # only after the portable gates passed and the classifier demanded the engine.
@@ -1671,6 +1700,17 @@ try {
 		@{ Case = 'other .github yaml'; Write = @('.github/dependabot.yml'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'template directory non-markdown'; Write = @('.github/ISSUE_TEMPLATE/script.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'uproject'; Write = @('AethelnOnline.uproject'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		# Issue #299 item 3: the selector already treats these as portable-only, so the classifier must start no engine job for them.
+		@{ Case = 'agent skills only'; Write = @('.agents/skills/aetheln-imagegen/SKILL.md', '.agents/skills/new/script.ps1', '.agents/config.json'); Expect = 'false'; Reason = 'portable_paths_only' },
+		@{ Case = 'build tests of any extension'; Write = @('tests/build/New.Tests.ps1', 'tests/build/fixture.json', 'tests/build/nested/data.bin'); Expect = 'false'; Reason = 'portable_paths_only' },
+		@{ Case = 'agent skills with docs'; Write = @('.agents/skills/x/SKILL.md', 'docs/a.md'); Expect = 'false'; Reason = 'portable_paths_only' },
+		@{ Case = 'agents lookalike directory'; Write = @('.agentsx/skills/x.md'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'agents file at the top level'; Write = @('.agents'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'build tests lookalike directory'; Write = @('tests/buildx/fixture.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'case-different build tests'; Write = @(); IndexOnly = @('tests/Build/fixture.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'case-different agents'; Write = @(); IndexOnly = @('.Agents/skills/x.md'); Expect = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'agent skills mixed with Source'; Write = @('.agents/skills/x/SKILL.md', 'Source/AethelnOnline/A.cpp'); Expect = 'true'; Editor = 'true'; Reason = 'engine_paths_changed' },
+		@{ Case = 'agent skills mixed with controller scripts'; Write = @('.agents/skills/x/SKILL.md', 'scripts/ci/Seed.ps1'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		# Issue #299: controller-only pull requests still compile but skip the editor job; engine content and the editor's own harness inputs run it.
 		@{ Case = 'controller scripts and tests only'; Write = @('scripts/ci/Invoke-CiSuite.ps1', 'scripts/ci/Seed.ps1', 'scripts/build/Write-Provenance.ps1', 'tests/ci/Seed.Tests.ps1', 'tests/ci/fixture.json'); Expect = 'true'; Reason = 'engine_paths_changed' },
 		@{ Case = 'attribute policy only'; Write = @('.gitattributes'); Expect = 'true'; Reason = 'engine_paths_changed' },

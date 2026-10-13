@@ -98,32 +98,32 @@ struct FAethelnDefenseState
 	FAethelnBlockedHook OnBlocked;
 };
 
-/** Authored offsets only. Every zero default is unset, not production tuning. */
+/** Authored offsets only. Every zero default is unset, not production tuning. Editable so a UAethelnAttackDefinition can author it (TA-027). */
 USTRUCT()
 struct GAMECOMBAT_API FAethelnAttackStepDefinition
 {
 	GENERATED_BODY()
-	UPROPERTY() double ActiveStart = 0.0;
-	UPROPERTY() double ActiveEnd = 0.0;
-	UPROPERTY() double BufferOpen = 0.0;
-	UPROPERTY() double LinkOpen = 0.0;
-	UPROPERTY() double LinkClose = 0.0;
-	UPROPERTY() double RecoveryEnd = 0.0;
-	UPROPERTY() double CancelOpen = 0.0;
-	UPROPERTY() EAethelnAttackShape Shape = EAethelnAttackShape::Sphere;
+	UPROPERTY(EditAnywhere) double ActiveStart = 0.0;
+	UPROPERTY(EditAnywhere) double ActiveEnd = 0.0;
+	UPROPERTY(EditAnywhere) double BufferOpen = 0.0;
+	UPROPERTY(EditAnywhere) double LinkOpen = 0.0;
+	UPROPERTY(EditAnywhere) double LinkClose = 0.0;
+	UPROPERTY(EditAnywhere) double RecoveryEnd = 0.0;
+	UPROPERTY(EditAnywhere) double CancelOpen = 0.0;
+	UPROPERTY(EditAnywhere) EAethelnAttackShape Shape = EAethelnAttackShape::Sphere;
 	/** Sphere: X is the radius. Capsule: X is the radius, Z the half height. Box: the half extents. */
-	UPROPERTY() FVector ShapeExtent = FVector::ZeroVector;
-	UPROPERTY() FTransform PathStart = FTransform::Identity;
-	UPROPERTY() FTransform PathEnd = FTransform::Identity;
-	UPROPERTY() double MaxAimPitchDegrees = 0.0;
-	UPROPERTY() float WroughtDamage = 0.0f;
+	UPROPERTY(EditAnywhere) FVector ShapeExtent = FVector::ZeroVector;
+	UPROPERTY(EditAnywhere) FTransform PathStart = FTransform::Identity;
+	UPROPERTY(EditAnywhere) FTransform PathEnd = FTransform::Identity;
+	UPROPERTY(EditAnywhere) double MaxAimPitchDegrees = 0.0;
+	UPROPERTY(EditAnywhere) float WroughtDamage = 0.0f;
 	/** Guard pressure a blocked contact applies (Q7); TBD (#107). */
-	UPROPERTY() float GuardPressure = 0.0f;
-	UPROPERTY() int32 MaxTargets = 0;
+	UPROPERTY(EditAnywhere) float GuardPressure = 0.0f;
+	UPROPERTY(EditAnywhere) int32 MaxTargets = 0;
 	/** An interrupting result cancels this step in [0, InterruptibleUntil); 0 means never. At most RecoveryEnd. */
-	UPROPERTY() double InterruptibleUntil = 0.0;
+	UPROPERTY(EditAnywhere) double InterruptibleUntil = 0.0;
 	/** Whether this step's committed, non-lethal hit interrupts the target. */
-	UPROPERTY() bool bInterruptsTarget = false;
+	UPROPERTY(EditAnywhere) bool bInterruptsTarget = false;
 };
 
 USTRUCT()
@@ -201,15 +201,22 @@ namespace AethelnAttackTimeline
 	/** Zero means invalid/unrepresentable. No numeric production sampling budget is chosen. */
 	GAMECOMBAT_API int32 GetSubstepCount(double Distance, double AngleDegrees, double MaxDistance, double MaxAngleDegrees);
 	/**
+	 * Grant-time validation of one authored step: null when valid, otherwise the reason. A final step has no
+	 * buffer or link window (BufferOpen == RecoveryEnd, no link); any other step needs a valid link window.
+	 */
+	GAMECOMBAT_API const TCHAR* FindStepProblem(const FAethelnAttackStepDefinition& Step, bool bFinalStep);
+	/**
 	 * The block arc (#18 T3): the yaw-only direction from the defender's capsule center to the attacker's
 	 * combat-frame origin at the contact time, against the defender's server actor yaw (never a control
 	 * rotation). Inside at exactly half the arc (dot >= cos(half) within a 1e-9 rounding tolerance); a
 	 * zero-length direction or an invalid arc is outside.
 	 */
-	/**
-	 * Grant-time validation of one authored step: null when valid, otherwise the reason. A final step has no
-	 * buffer or link window (BufferOpen == RecoveryEnd, no link); any other step needs a valid link window.
-	 */
-	GAMECOMBAT_API const TCHAR* FindStepProblem(const FAethelnAttackStepDefinition& Step, bool bFinalStep);
 	GAMECOMBAT_API bool IsInsideDefenseArc(double DefenderYawDegrees, const FVector& DefenderCenter, const FVector& AttackerOrigin, double ArcDegrees);
+	/**
+	 * The authored step rules shared by chain grant validation and UAethelnAttackDefinition (#84 P2):
+	 * at least one step, finite non-negative offsets in order, a final step with no buffer or link window,
+	 * a valid shape and path, non-negative damage and Guard pressure, MaxTargets >= 1, pitch in [0, 90],
+	 * and positive finite sampling bounds. Returns nullptr when valid.
+	 */
+	GAMECOMBAT_API const TCHAR* FindStepListProblem(TConstArrayView<FAethelnAttackStepDefinition> Steps, double MaxSampleDistance, double MaxSampleAngleDegrees);
 }

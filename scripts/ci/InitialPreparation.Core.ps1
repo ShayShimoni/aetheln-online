@@ -509,7 +509,11 @@ function Enter-InitialPreparationLease {
 		$Stream.Flush($true)
 	} catch {
 		if ($null -ne $Stream) { $Stream.Dispose() }
-		if ($_.Exception -is [IO.IOException]) { throw 'lease_held' }
+		# Issue #299: only a sharing or lock violation (Win32 32 or 33) is reported as lease_held. A real sharing
+		# violation from the .NET open arrives wrapped in a MethodInvocationException, so it still reaches the caller
+		# unmapped, as tests/ci/EngineRunnerHostLease.Tests.ps1 pins. The guard changes one case: a bare IOException
+		# from a cmdlet that is not a sharing violation is no longer reported as lease_held.
+		if ($_.Exception -is [IO.IOException] -and ($_.Exception.HResult -band 0xFFFF) -in 32, 33) { throw 'lease_held' }
 		throw
 	}
 	$script:InitialPreparationLeaseRegistry[$Key] = [pscustomobject]@{

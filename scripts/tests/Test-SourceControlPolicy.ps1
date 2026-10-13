@@ -154,6 +154,15 @@ try {
 		throw "Prohibited sensitive-pattern paths are tracked: $($TrackedViolations -join ', ')"
 	}
 
+	# Issue #299: the clangd outputs belong to the repository root, so a same-named path deeper in the tree
+	# stays visible to Git. The check reads the tracked rules, not git check-ignore, which also honors the
+	# machine-local info/exclude file.
+	$IgnoreRules = @(Get-Content -LiteralPath '.gitignore' | ForEach-Object { $_.TrimEnd() })
+	foreach ($RootRule in @('/compile_commands.json', '/.cache/')) {
+		Assert-Equal -Actual ($IgnoreRules -ccontains $RootRule) -Expected $true -Message ".gitignore must anchor '$RootRule' to the repository root."
+		Assert-Equal -Actual ($IgnoreRules -ccontains $RootRule.TrimStart('/')) -Expected $false -Message ".gitignore must not also carry the unanchored '$($RootRule.TrimStart('/'))'."
+	}
+
 	$StarterMap = 'Content/Maps/StarterMap.umap'
 	$ExpectedHash = '2a2b755b0feee3035b6c84fcd1eacebb67505d9344e66d0fb578b7804044b49a'
 	$ActualHash = (Get-FileHash -LiteralPath $StarterMap -Algorithm SHA256).Hash.ToLowerInvariant()
