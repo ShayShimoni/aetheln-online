@@ -269,7 +269,9 @@ and `Aetheln.GameCombat.NetworkSpike.AimRateBound`.
 ### Step definition
 
 Each of the three steps has these authored values. Offsets are seconds from the
-step's authoritative start; every value is `TBD`.
+step's authoritative start; every value is `TBD`, except the provisional chain
+values owner decision D3 promoted to `Config/DefaultGame.ini` (see
+[Data-Driven Tuning](#data-driven-tuning)).
 
 | Value | Meaning |
 | --- | --- |
@@ -1046,7 +1048,7 @@ files untouched.
 | **P2** Request and aim | Schema 2, steps 6a to 6d in the pure validator, last accepted raw aim and time, the two result values, rejection and correction telemetry, client fill with `FlushServerMoves`, the four replicated-data overrides, the #19 fixture and specification changes (dependencies 3 to 5); A1 to A3, A16. | #19 P3 |
 | **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17, A25, A27. No contacts yet. | P2, #19 P4 |
 | **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, A28 (without its interruption row), A29, and the sweep and contact rows of A4, A7, and A27; the P3 review follow-ups (sequence advance for a committed start that fails, the `InternalFailure` chain-end label, the extra negative tests). | P3 |
-| **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct (no configured chain `ContentVersion` exists to bump); A15 and the A5 rows. | P4 |
+| **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct (the chain had no configured `ContentVersion` to bump then; its first, 1, came with the D3 provisional values, #84 P3); A15 and the A5 rows. | P4 |
 | **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
 
 Gate Step and Sworn Rebuke contacts and Hold the Line's Guard result are not
