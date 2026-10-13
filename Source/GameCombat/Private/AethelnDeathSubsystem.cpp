@@ -237,6 +237,13 @@ void UAethelnDeathSubsystem::HandlePostActorTick(UWorld* World, ELevelTick /*Tic
 			Due.Emplace(Iterator.Value().Generation, Iterator.Key());
 			Iterator.RemoveCurrent();
 		}
+		else if (const ACharacter* Character = Cast<ACharacter>(Iterator.Key()->GetAvatarActor()))
+		{
+			// A dead player's pawn stays still. A restored one is possessed after the restore (P4), and the engine's restart
+			// can reset its movement mode, so this keeps the dead pawn at MOVE_None until the respawn.
+			UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+			if (Movement != nullptr && Movement->MovementMode != MOVE_None) { Movement->DisableMovement(); }
+		}
 	}
 	// Death order, never map order.
 	Due.Sort([](const TPair<uint64, TWeakObjectPtr<UAethelnAbilitySystemComponent>>& A, const TPair<uint64, TWeakObjectPtr<UAethelnAbilitySystemComponent>>& B) { return A.Key < B.Key; });

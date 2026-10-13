@@ -324,8 +324,10 @@ the snapshot lives in `UAethelnDeathSubsystem` beside the respawn wait.
   keeps counting on the server clock while the player is away: it is neither
   paused nor reset. For a dead player it applies the death effect, cancels
   abilities, calls `DisableMovement` on the new avatar, and re-adds the respawn
-  wait with the same deadline and life generation. It raises no death cue, emits
-  no `Death` event, and advances no generation. Abilities are granted once and
+  wait with the same deadline and life generation. The engine's restart can
+  reset the new pawn's movement mode after the restore, so the world's post-actor
+  tick also holds any pawn with a pending respawn wait at `MOVE_None`. It raises
+  no death cue, emits no `Death` event, and advances no generation. Abilities are granted once and
   recovery is started once on the new PlayerState, as #19 requires.
 - **A carried Guard break meets death.** The block ability binds the dead tag
   only when it applies a break itself, so a carried break has no binding.
