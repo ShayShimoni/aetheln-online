@@ -209,7 +209,7 @@ foreach ($DesignPath in $DesignPaths) {
 	$Design = @(Get-PathCheckSelection $DesignPath @{})
 	Assert-True (($Design -join ',') -ceq 'portable') "Design path '$DesignPath' must select only portable proof."
 }
-$Pr347Paths = @($DesignPaths) + @('docs/animation-and-combat-content-pipeline.md', 'docs/generated/combat-design-registry.md', 'docs/generated/oathscar-codex-appendix.md', 'tests/design/New-CombatRegistryAppendices.Tests.ps1', 'tests/design/Test-CombatRegistry.Tests.ps1')
+$Pr347Paths = @('design/combat-registry/README.md', 'design/combat-registry/registry.json', 'design/combat-registry/schema.json', 'docs/animation-and-combat-content-pipeline.md', 'docs/attack-timeline-and-combo.md', 'docs/characters-and-factions.md', 'docs/combat-and-networking-architecture.md', 'docs/death-and-respawn.md', 'docs/dodge-and-block.md', 'docs/gas-foundation.md', 'docs/generated/combat-design-registry.md', 'docs/generated/oathscar-codex-appendix.md', 'scripts/design/Test-CombatRegistry.ps1', 'tests/design/New-CombatRegistryAppendices.Tests.ps1', 'tests/design/Test-CombatRegistry.Tests.ps1')
 $Pr347Selected = @($Pr347Paths | ForEach-Object { Get-PathCheckSelection $_ @{} } | Sort-Object -Unique)
 Assert-True (($Pr347Selected -join ',') -ceq 'portable') 'The PR 347 file set (design, docs, and design tests) must select only portable proof.'
 foreach ($DesignLookalike in @('designx/combat-registry/registry.json', 'Design/combat-registry/registry.json', 'design', 'scripts/design', 'scripts/designx/Test-CombatRegistry.ps1', 'Scripts/design/Test-CombatRegistry.ps1', 'scripts/Design/Test-CombatRegistry.ps1', 'tests/design/registry.json')) {
