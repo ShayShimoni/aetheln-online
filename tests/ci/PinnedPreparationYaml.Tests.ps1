@@ -80,6 +80,23 @@ $CacheLink = Join-Path $FixtureRoot 'cache-link'
 Assert-Rejected -Action { Get-PinnedPreparationYaml -PackagePath $Verified.PackagePath -CacheRoot $CacheLink } -Reason 'preparation_yaml_path_invalid'
 Write-Output 'PASS: a genuine DLL in an unpinned container and reparse-point package/cache paths fail closed'
 
+# Issue #299: a transient download failure on a hosted runner is retried a bounded number of times,
+# and the downloaded bytes still pass the same package pin.
+$script:DownloadAttempts = 0
+$GoodBytes = [IO.File]::ReadAllBytes($Verified.PackagePath)
+$FlakyThenGood = { $script:DownloadAttempts++; if ($script:DownloadAttempts -lt 3) { throw 'transient network error' }; return ,$GoodBytes }
+$Retried = Get-PinnedPreparationYaml -CacheRoot $FixtureRoot -Download $FlakyThenGood -RetryDelaySeconds 0
+Assert-Condition -Condition ($script:DownloadAttempts -eq 3 -and $Retried.PackageSha256 -ceq $Verified.PackageSha256) -Message 'Two transient download failures must be retried and the third attempt must succeed.'
+$script:DownloadAttempts = 0
+$AlwaysFails = { $script:DownloadAttempts++; throw 'transient network error' }
+Assert-Rejected -Action { Get-PinnedPreparationYaml -CacheRoot $FixtureRoot -Download $AlwaysFails -RetryDelaySeconds 0 } -Reason 'preparation_yaml_download_failed'
+Assert-Condition -Condition ($script:DownloadAttempts -eq 5) -Message 'The download must stop after five attempts.'
+$script:DownloadAttempts = 0
+$WrongBytes = { $script:DownloadAttempts++; return ,([byte[]]::new(327106)) }
+Assert-Rejected -Action { Get-PinnedPreparationYaml -CacheRoot $FixtureRoot -Download $WrongBytes -RetryDelaySeconds 0 } -Reason 'preparation_yaml_package_invalid'
+Assert-Condition -Condition ($script:DownloadAttempts -eq 1) -Message 'A completed download with the wrong bytes is an integrity failure and must not be retried.'
+Write-Output 'PASS: a transient download failure stops after five attempts; wrong bytes are never retried'
+
 $WrapperSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'Invoke-RunnerSchedulingAndPreparationTests.ps1') -Raw
 foreach ($RequiredFixture in @('Test-RunnerSchedulingPolicy.Tests.ps1', 'PinnedPreparationYaml.Tests.ps1', 'InitialPreparation.GitHub.Tests.ps1')) {
 	Assert-Condition -Condition ($WrapperSource.Contains($RequiredFixture)) -Message "The composite must run '$RequiredFixture'."

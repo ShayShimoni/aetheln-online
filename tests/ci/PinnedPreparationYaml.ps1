@@ -41,7 +41,21 @@ function Read-PinnedPreparationYamlBytes {
 
 function Get-PinnedPreparationYaml {
 	[CmdletBinding()]
-	param([string] $PackagePath, [string] $CacheRoot = [IO.Path]::GetTempPath())
+	param(
+		[string] $PackagePath,
+		[string] $CacheRoot = [IO.Path]::GetTempPath(),
+		# Test seam: returns the package bytes as one byte[] (use ',$Bytes'). Up to five attempts with a doubling delay (issue #299).
+		[scriptblock] $Download = {
+			Add-Type -AssemblyName System.Net.Http
+			$Client = [Net.Http.HttpClient]::new()
+			try {
+				$Client.Timeout = [TimeSpan]::FromSeconds(60)
+				$Client.MaxResponseContentBufferSize = 327106
+				return ,$Client.GetByteArrayAsync('https://www.powershellgallery.com/api/v2/package/powershell-yaml/0.4.12').GetAwaiter().GetResult()
+			} finally { $Client.Dispose() }
+		},
+		[int] $RetryDelaySeconds = 5
+	)
 	# Acquisition is confined to unprivileged portable tests. Admission's existing
 	# Initialize-PreparationYaml remains offline and independently checks the DLL.
 	Assert-PinnedPreparationYamlPath -Path $CacheRoot -Directory
@@ -49,13 +63,14 @@ function Get-PinnedPreparationYaml {
 	[void] (New-Item -ItemType Directory -Path $Cache)
 	if (-not $PackagePath) {
 		$PackagePath = Join-Path $Cache 'powershell-yaml.0.4.12.nupkg'
-		Add-Type -AssemblyName System.Net.Http
-		$Client = [Net.Http.HttpClient]::new()
-		try {
-			$Client.Timeout = [TimeSpan]::FromSeconds(60)
-			$Client.MaxResponseContentBufferSize = 327106
-			$PackageBytes = $Client.GetByteArrayAsync('https://www.powershellgallery.com/api/v2/package/powershell-yaml/0.4.12').GetAwaiter().GetResult()
-		} finally { $Client.Dispose() }
+		# A hosted runner can lose the network for a moment. Retry only a failed transfer; the pins below still judge the bytes.
+		$PackageBytes = $null
+		for ($Attempt = 1; $null -eq $PackageBytes; $Attempt++) {
+			try { $PackageBytes = & $Download } catch {
+				if ($Attempt -ge 5) { throw 'preparation_yaml_download_failed' }
+				Start-Sleep -Seconds ($RetryDelaySeconds * [Math]::Pow(2, $Attempt - 1))
+			}
+		}
 		$Output = [IO.File]::Open($PackagePath, [IO.FileMode]::CreateNew)
 		try { $Output.Write($PackageBytes, 0, $PackageBytes.Length) } finally { $Output.Dispose() }
 	}
