@@ -6,8 +6,8 @@ This is the implementation specification for
 [Issue #21](https://github.com/ShayShimoni/aetheln-online/issues/21): a player
 can die, respawn, and rejoin combat safely. Pull requests P1 to P4 deliver it
 (see [Phased Delivery](#phased-delivery)). P1 added this document and the
-server-side death state. P2 adds the server respawn. P3 and P4 are design only
-until their pull requests land.
+server-side death state. P2 adds the server respawn. P3 adds the two-client
+proof and the death cue. P4 is design only until its pull request lands.
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md)
@@ -23,8 +23,8 @@ dead camera rule on 2026-10-12
 ([issue #21 comment](https://github.com/ShayShimoni/aetheln-online/issues/21#issuecomment-6131998770)).
 Every value is provisional, owner-set, and re-tuned at the P5 feel test, and a
 `Provisional...` config key is a named placeholder, never final tuning. The
-disconnect grace window (15 s, provisional) is P4's. C++ names for P3 and P4 are
-proposed code names until their phase lands.
+disconnect grace window (15 s, provisional) is P4's. C++ names for P4 are
+proposed code names until that phase lands.
 
 **Citations.** Repository `path:line` citations are valid at `develop`
 revision `89a2111e`; the P2 code is cited by name, because it landed after that
@@ -73,9 +73,10 @@ and `GM.cpp` abbreviates `Engine/Source/Runtime/Engine/Private/GameModeBase.cpp`
    pawn class, and a maximum Health above zero). Otherwise the player stays dead
    and the server logs why. The restored values are the owner's decision (full
    Health, Endurance and Guard, provisional) and are fixed in the restoration
-   effect, not config. Whether that fixed set is the declared lifecycle allowlist
-   the canonical technical documents describe is an open owner decision (see
-   [Open Decisions](#open-decisions)). No value is invented.
+   effect, not config. That fixed set is the declared lifecycle allowlist the
+   canonical technical documents describe (owner decision, option A, see
+   [Open Decisions](#open-decisions)): there is no allowlist config, and a later
+   change is a code change with review. No value is invented.
 7. **Reconnect uses a carried snapshot, not PlayerState reuse.** The combat
    game mode stays on `AGameModeBase`, so a reconnect gets a fresh PlayerState
    (`Source/GameCombat/Public/AethelnCombatGameMode.h:10-17`). P4 keeps a
@@ -149,7 +150,7 @@ the death effect; every other client gets `State.Dead` as a minimal
 replicated tag (`GAS/Private/GameplayEffect.cpp:3733-3736`, `:4663-4664`).
 Health and MaxHealth reach every client, and Endurance and Guard stay
 owner-only (owner decision on [#61](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)). P3 proves that split with two
-clients.
+clients (see [Two-Player Replication and Feedback](#two-player-replication-and-feedback-p3-delivered)).
 
 **What death keeps.** Granted abilities, cooldown effects, and attribute
 values stay. The Guard break ends on `State.Dead`
@@ -233,15 +234,60 @@ feel test ([issue #21 comment](https://github.com/ShayShimoni/aetheln-online/iss
   sequence, the way the timeline emits a hit. A death with no contact has no
   activation id. A missing sink changes no gameplay.
 
-## Two-Player Replication and Feedback (P3, design)
+## Two-Player Replication and Feedback (P3, delivered)
 
-- Two clients on the loopback network harness: player A dies, and both the
-  owner and player B observe `State.Dead`; A's movement is corrected to
-  `MOVE_None`; a respawn reaches both clients as a new avatar without
-  `State.Dead`.
-- A presentation-only death cue on the victim's ASC, as the result cue does.
-  Losing it loses nothing authoritative. #61 owns the HUD.
-- One run under simulated latency and packet loss.
+**Harness.** The movement loopback harness
+(`Source/GameCore/Public/AethelnMovementLoopbackHarness.h`) scripts character
+movement packets inside one world and has no net driver, so it cannot show
+property replication, replication conditions, or RPC delivery. R5 therefore
+uses the engine's CQTest PIE network component (`FPIENetworkComponent`,
+`Engine/Source/Developer/CQTest/Public/Components/PIENetworkComponent.h`): one
+dedicated server and two clients as PIE worlds in the editor process, on real
+net drivers over loopback, with `AAethelnCombatGameMode`. Replication,
+relevancy, conditions, RPCs, and character movement corrections are the
+engine's own. It simulates no input device and no separate process, and it
+plays CQTest's new unsaved map, so its two net GUID cache warnings about that
+map are expected by the test. The test is declared with
+`IMPLEMENT_SIMPLE_AUTOMATION_TEST`, as the CI discovery scan requires, and
+queues the component's latent steps itself. Attribute values are the test
+fixture values (`MakeTestInitValues`), because the ini's initial attributes
+are zero until #107. Client 0 is player A, the victim; client 1 is player B.
+
+- `Aetheln.GameCombat.Death.TwoClientDeathAndRespawn`: the server kills A
+  through the timeline's lethal notification and repeats the notification. A's
+  own client and B's client both observe `State.Dead` on A. A's own client is
+  corrected to `MOVE_None`; `ReplicatedMovementMode` is simulated-only, so the
+  owner can only reach it through a move correction. The server respawns A no
+  earlier than the death time plus `ProvisionalRespawnDelaySeconds` (a lower
+  bound read from config; R4 owns the exact deadline). Both clients then
+  receive A's new avatar, used by their copy of A's ASC, without `State.Dead`,
+  and A's own client receives the restored Health.
+- **Health split** (owner decision on
+  [#61](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)):
+  B's client receives A's Health and MaxHealth. B's copy of A's Endurance,
+  MaxEndurance, Guard, and MaxGuard keeps the class defaults: they change in the
+  same server frame and attribute set as Health, so they would have arrived with
+  it had they replicated to a non-owner.
+- **Death cue.** `UAethelnAbilitySystemComponent::MulticastDeathCue`
+  (`NetMulticast`, `Unreliable`) on the victim's ASC, with the `OnDeathCue`
+  delegate on every client and the server, as the result cue does. It carries no
+  attribute value and no gameplay truth. `ApplyDeath` raises it once, after the
+  death effect, the ability cancel, and the movement stop; a refused repeat
+  never reaches it. Losing it loses nothing authoritative. R1 checks one cue per
+  death and none for a repeated notification; R5 checks that the server raised
+  one and, on the clean link, that each client received it once. #61 owns the
+  HUD; P3 adds no widget.
+- **Latency and loss.**
+  `Aetheln.GameCombat.Death.TwoClientDeathAndRespawnImpaired` runs the same
+  steps with `PktLag=100` (ms) and `PktLoss=5` (percent) on the server's and
+  both clients' net drivers. CQTest applies the settings after the client
+  worlds exist, so the connection handshake is not under loss. These are test
+  settings, not the #45 network profile. The impaired run proves that the
+  reliable paths settle under lag and loss: `State.Dead`, the replicated
+  attributes, the `MOVE_None` correction, and the new avatar. It checks only
+  that no client receives a second cue; cue delivery is covered by the clean
+  link and R1, because the cue is unreliable by design. The loss is random
+  with no fixed seed.
 
 ## Reconnect and Carried State (P4, design)
 
@@ -276,11 +322,11 @@ effects, and a second grant. P4 closes it:
 
 | ID | Test | Phase | Proves |
 | --- | --- | --- | --- |
-| R1 | `Aetheln.GameCombat.Death.LethalNotificationAppliesDeath` | P1 | A lethal notification for a zero-Health player applies one death effect and one `State.Dead`; a repeat adds nothing; a living player and an AI target get no death state |
+| R1 | `Aetheln.GameCombat.Death.LethalNotificationAppliesDeath` | P1 | A lethal notification for a zero-Health player applies one death effect and one `State.Dead`; a repeat adds nothing; a living player and an AI target get no death state. (P3) The server raises one death cue for the death and none for the repeat |
 | R2 | `Aetheln.GameCombat.Death.DeadPlayerRefusesActions` | P1 | Death mid-chain ends the chain once with `IncompatibleState`, resolves no later contact, refuses the next press with `ActivationBlocked`, and sets the avatar's movement to `MOVE_None` |
 | R3 | `Aetheln.GameCombat.Death.RespawnFailsClosed` | P2 | The ini delay is finite and positive; an unset, negative, or non-finite delay, a world with no game mode, and a maximum Health of zero each keep the player dead, with one logged refusal and no retry |
 | R4 | `Aetheln.GameCombat.Death.RespawnAfterDelay` | P2 | No respawn before the deadline (death time plus the delay); then `State.Dead` and the death effect are gone, Health, Endurance, and Guard equal their maxima and the maxima did not move, a new pawn is the avatar and the corpse is destroyed, no ability is granted again, a cooldown keeps counting, no chain, dodge window, or other state from the previous life remains, one chain end overall, a second respawn is refused, and the player starts a chain again. The chain reset is stamped at the lethal contact time |
-| R5 | Two-client death and respawn | P3 | AC2 and DoD1 |
+| R5 | `Aetheln.GameCombat.Death.TwoClientDeathAndRespawn`, `Aetheln.GameCombat.Death.TwoClientDeathAndRespawnImpaired` | P3 | AC2 and DoD1 on a dedicated server with two PIE clients: both clients see `State.Dead` on the victim, the owner is corrected to `MOVE_None`, the server respawns no earlier than the configured delay, and both clients receive the new avatar without `State.Dead`; B receives the victim's Health and MaxHealth but not its Endurance or Guard; on a clean link the death cue reaches each client once; the impaired run repeats the steps at 100 ms lag and 5 % loss |
 | R6 | Reconnect while alive, dead, and respawning | P4 | AC5; T34 flips |
 | R7 | `Aetheln.GameCombat.Death.GuardBreakThenDeath` | P2 | A real Guard break with a running chain, then death: the break effect and tag are gone, Guard stays zero and its recovery is kept and paused, one death effect, and the chain ends once as `IncompatibleState` |
 | R8 | `Aetheln.GameCombat.Death.RespawnRefusesNonDeadAndNonPlayer` | P2 | A living player and a dead AI (`State.Dead` and zero Health, no `PlayerState` owner) are refused with nothing changed; a death from `ApplyDeath` with no contact starts the same wait and the same single respawn |
@@ -313,7 +359,7 @@ dies, and death, not interruption, ends the chain once as `IncompatibleState`.
 | --- | --- | --- |
 | **P1** Death state | This document; `UAethelnDeathStateEffect`; `UAethelnDeathSubsystem`; R1, R2. | #60 P4 lethal notification (merged) |
 | **P2** Respawn (delivered) | The delay config, life generation, restart order, restoration effect; R3, R4, R8, R9. A `Death` observability event (`EAethelnObservabilityCategory::Death`, `observability-and-crash-diagnostics.md:21`) with the activation id as correlation, as `Emit` does for hits (R10); the Guard-break-at-death row R7; the lethal-contact-time chain reset using `ContactTime` from `OnLethalResult`. | P1; the owner decisions of 2026-10-12 on delay, restoration, location, dead pawn, and camera |
-| **P3** Replication | Two-client harness run, death cue; R5. | P2 |
+| **P3** Replication (delivered) | Two-client PIE run on CQTest's network component, the Health split, the death cue, the impaired run; R5 and the R1 cue rows. | P2; #61's Health decision (PR #343) |
 | **P4** Reconnect | Carried snapshot behind an identity adapter; R6; T34 flipped. | P2; P4 chooses the identity key and implements the owner's 15 s provisional grace window |
 
 ## Open Decisions
@@ -337,16 +383,24 @@ All are provisional and owner-set, and are re-tuned at the P5 feel test:
   server-controlled and attackable, and the player resumes it on reconnect. P4
   implements it.
 
+Later owner decisions:
+
+- **Restoration allowlist (option A,
+  [issue #21 comment](https://github.com/ShayShimoni/aetheln-online/issues/21#issuecomment-6142791700)):**
+  the fixed Health, Endurance, and Guard set in
+  `UAethelnRespawnRestorationEffect` is the declared lifecycle allowlist that
+  the canonical technical documents describe
+  (`combat-and-networking-architecture.md:68` and `:270`, `gas-foundation.md:268`).
+  There is no allowlist config; a later change is a code change with review.
+- **Health visibility
+  ([issue #61 comment](https://github.com/ShayShimoni/aetheln-online/issues/61#issuecomment-6131999614)):**
+  Health and MaxHealth are public; Endurance and Guard stay owner-only. R5
+  proves the split on two clients.
+
 Still open for the owner:
 
 - Whether death removes a running recovery delay (#21, listed in
   `gas-foundation.md:1211`). P1 keeps the current default: the delay persists.
-- Whether the owner's restoration (full Health, Endurance, and Guard) is the
-  declared lifecycle allowlist that the canonical technical documents describe
-  (`combat-and-networking-architecture.md:68` and `:270`, `gas-foundation.md:268`),
-  or whether a separate allowlist declaration is wanted. P2 implements the three
-  resources as a fixed set in the restoration effect, adds no allowlist config,
-  and changes no canonical document.
 
 Lead decisions (2026-10-12):
 
@@ -377,13 +431,13 @@ Lead decisions (2026-10-12):
   the dead pawn possessed and enters no spectator state. A client-side look lock
   and the HUD countdown need the respawn deadline on the owning client, which
   the server does not replicate yet: the HUD's timed list reads active effects,
-  and the death effect is infinite. #61 and P3 decide how the deadline reaches
-  the owner (for example a replicated deadline or a timed effect). No value is
-  invented here.
+  and the death effect is infinite. P3 replicates no deadline (its cue carries
+  none); #61 decides how the deadline reaches the owner (for example a
+  replicated deadline or a timed effect). No value is invented here.
 - **No `Respawn` event.** P2 emits `Death` only, as this spec's phased delivery
   assigns (the issue itself names no observability event). The `Respawn`
-  category exists (`observability-and-crash-diagnostics.md:21`) and can be wired
-  with P3's feedback.
+  category exists (`observability-and-crash-diagnostics.md:21`) and is not wired:
+  P3 adds only the presentation death cue.
 - **A failed restart after the restore.** If the game mode cannot spawn a pawn
   after the checks pass, `Respawn` logs an error and returns false with the
   player alive and without a pawn (the seam rejects with `ConnectionClosed`).
@@ -399,6 +453,12 @@ Lead decisions (2026-10-12):
   refusals, the error after `RestartPlayer` (no pawn), the death-order sort, two
   players due in one tick, or a second death after a respawn (life generation
   2 and its `Death` event sequence).
+- **R5 runs in one editor process.** The server and both clients are PIE worlds
+  with real net drivers over loopback, not separate packaged processes, and no
+  input device drives the pawns. The impaired run uses one fixed setting, not
+  the #45 network profile; packaged multi-process evidence stays with #44 and
+  #45. R5 kills A through the lethal notification, not through a player's
+  swing (R9 covers the real lethal path on the server).
 
 ## Follow-ups
 

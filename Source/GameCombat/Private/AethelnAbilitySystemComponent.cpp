@@ -1356,6 +1356,11 @@ void UAethelnAbilitySystemComponent::MulticastCombatResultCue_Implementation(con
 	OnCombatResultCue.Broadcast(Cue);
 }
 
+void UAethelnAbilitySystemComponent::MulticastDeathCue_Implementation()
+{
+	OnDeathCue.Broadcast();
+}
+
 void UAethelnAbilitySystemComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
