@@ -129,6 +129,23 @@ namespace AethelnTwoClientDeathTests
 				{
 					return false;
 				}
+				if (Client.ClientIndex == ObserverClient)
+				{
+					// #61 (issue #61 comment 6131999614): Health and MaxHealth reach every client.
+					if (Attribute(*AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()) != Init.Health
+						|| Attribute(*AbilitySystem, UAethelnCombatAttributeSet::GetMaxHealthAttribute()) != Init.MaxHealth)
+					{
+						return false;
+					}
+					// Endurance and Guard changed in the same server frame and set, so had they replicated to B they would be here
+					// now. They stay owner-only: B's copy keeps the class defaults.
+					const UAethelnCombatAttributeSet* Defaults = GetDefault<UAethelnCombatAttributeSet>();
+					R->Test.TestEqual(TEXT("B never receives A's Endurance"), Attribute(*AbilitySystem, UAethelnCombatAttributeSet::GetEnduranceAttribute()), Defaults->GetEndurance());
+					R->Test.TestEqual(TEXT("B never receives A's MaxEndurance"), Attribute(*AbilitySystem, UAethelnCombatAttributeSet::GetMaxEnduranceAttribute()), Defaults->GetMaxEndurance());
+					R->Test.TestEqual(TEXT("B never receives A's Guard"), Attribute(*AbilitySystem, UAethelnCombatAttributeSet::GetGuardAttribute()), Defaults->GetGuard());
+					R->Test.TestEqual(TEXT("B never receives A's MaxGuard"), Attribute(*AbilitySystem, UAethelnCombatAttributeSet::GetMaxGuardAttribute()), Defaults->GetMaxGuard());
+					R->Test.TestNotEqual(TEXT("The fixture Endurance differs from the default, so the check can fail"), Init.Endurance, Defaults->GetEndurance());
+				}
 				if (!R->bClientCueBound[Client.ClientIndex])
 				{
 					R->bClientCueBound[Client.ClientIndex] = true;
