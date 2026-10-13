@@ -1,0 +1,18 @@
+REWRITTEN REUSABLE PROMPT - 2026-10-13
+This is generation guidance derived from the selected result, not an exact historical submitted prompt.
+
+Attach the selected male or female Vesh image as Image 1. It defines identity, anatomy, pattern placement, proportions, face, hairstyle and polished stylized 3D finish. For an edit, apply only the requested change. Otherwise preserve its design in the requested new view. Do not use superseded explorations as extra references.
+
+Create one adult Vesh, an embodied spirit creature with an athletic humanoid build, a modest forward shoulder set, a compact upper back and a clearly visible neck. Match the selected sex-specific build: broad athletic male shoulders and chest, or a slim athletic female body with gentler facial contours. Preserve the selected proportions.
+
+Black close coat with white sculpted fur fields: white throat, paired upper chest separated by a dark central V, shoulder and outer arm markings, forearm tufts, flanks, outer thighs and calves. The central abdomen stays dark. Keep these specific pattern boundaries aligned with Image 1. White fur is pigment, not glowing markings or feathers.
+
+The ivory-gray rigid geometric face is biological anatomy, not a removable mask over skin. Broad clean planes, dark lateral cheeks, tapered chin, narrow golden-yellow luminous eyes, and a neutral nearly horizontal dark creature mouth with softly rounded ends. Preserve its size and surrounding face geometry. No visible teeth, human lips, nose, muzzle, human face beneath it, or smile. Keep emission localized to the eyes.
+
+Each hand has two elongated clawed fingers and one opposable thumb. The legs are digitigrade with raised hocks and three-toed clawed paws. Do not replace these with human hands, flat human feet, solid tapered feet, or hooves. No wings, back-veils, horns, tail, or animal ears.
+
+White creature mane in compact broad clumps: short spiky male mane; swept-back female mane with a longer nape. Follow the attached selected hairstyle rather than inventing a replacement. Keep the neck readable and volume controlled. No giant mane, salon styling, braid, ponytail, accessories or additional anatomy.
+
+Render as a polished stylized fantasy 3D sculpt. Use coherent solid volumes, clean contours, selective fur clumps, restrained grooves, smooth physical shading gradients, controlled satin highlights, a distinct ivory facial material, and polished dark claws. Soft directional studio light, gentle fill, readable occlusion and grounded shadows. Keep fine detail low. No painterly strokes, fuzzy strands, noisy microtexture, dense facets, scale texture, blur, gritty sharpening, excessive bloom, or uniform plastic gloss.
+
+For anatomy references, show the full adult body in a neutral near-front A-pose, arms separated, both hands and paws clear, comfortable framing, little perspective distortion and a warm-gray studio background. Use opaque natural coat coverage, without exposed genital or nipple detail. No armor, clothes, weapons, props, lettering or watermark unless the request specifically calls for them. For equipment views, preserve the anatomy under fitted armor, including the complete paws inside boots.

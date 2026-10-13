@@ -141,9 +141,13 @@ are likewise preserved; the Vesh editions above are the current snapshots.
 ## Approved Art Direction
 
 - [Retained character results](art-style-references/character-results-2026-10-10.md)
-  lists the selected Kell and Aurin pairs and the current Vesh redesign pair,
-  their exact prompts, image hashes, and selection states. External source
-  images and superseded explorations are kept outside the repository.
+  lists the selected Kell and Aurin pairs and the superseded 2026-10-10 Vesh pair,
+  their exact prompts, image hashes, and historical selection states. External
+  source images and discarded explorations are kept outside the repository.
+- [Approved Vesh design record](art-style-references/vesh-approved-design-2026-10-13.md)
+  records the adopted male v36 and female v37, exact prompts, image hashes, and
+  regeneration guidance. This pair replaces the earlier Vesh visuals while
+  preserving the embodied-spirit origin and Light-guided culture.
 - [Art Style and Generation Guide](art-style-guide.md) records the user-approved
   polished stylized 3D rendering direction, the selected Aurin and Kell references,
   reusable prompts, and consistency checks for future characters and assets.
@@ -178,9 +182,9 @@ current [Kell canon](playable-peoples.md#kell) for new work.
 
 Earlier Vesh dream-veiled anatomy, back-veils, and dream-reader identity are
 likewise superseded by the [embodied-spirit Vesh canon](playable-peoples.md#vesh).
-Use the retained black-and-white design and the current character/settlement
-stories for new work. The male palette is selected; final female visual
-approval and production validation remain separately recorded.
+Use the approved 2026-10-13 male and female pair and the current
+character/settlement stories for new work. Their visual approval is recorded;
+production validation remains separate.
 
 ## Historical Research Archive
 

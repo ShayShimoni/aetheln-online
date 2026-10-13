@@ -1,5 +1,10 @@
 # Retained character results - 2026-10-10
 
+**Vesh supersession, 2026-10-13:** the [approved Vesh pair](vesh-approved-design-2026-10-13.md)
+replaces the Vesh images and anatomy below for all new work. This dated record
+preserves their earlier selection states; its pending-female language is
+historical. Kell and Aurin approvals remain current.
+
 The user requested that this character-design session retain its chosen
 Aetheln results in the repository, with pasted external source images and
 superseded explorations kept outside it. The six images below are unchanged
@@ -32,7 +37,7 @@ pair's selection and delivery evidence. Follow the
 [Art Style and Generation Guide](../art-style-guide.md) for the common polished
 stylized 3D finish and reference-storage boundary.
 
-## Vesh design retained for the active redesign
+## Historical Vesh design retained on 2026-10-10
 
 - Near-black velvety coat, white throat and limb markings, white hair, and
   narrow golden-yellow glowing eyes.
@@ -55,11 +60,11 @@ lineage are retained outside the repository. They are not extra required
 repository references, and these edit prompts are not standalone regeneration
 recipes without their original inputs.
 
-For a new view or edit, attach the corresponding retained image above and use
-the art guide's edit block with the requested change. Save candidates and their
+For a new Kell or Aurin view or edit, attach the corresponding retained image
+above and use the art guide's edit block with the requested change. Save candidates and their
 full prompt records outside the Git worktree. Retain only selected results in
-the repository; the current female Vesh is the explicitly recorded pending
-companion candidate. Label newly written reusable prompts accurately instead
+the repository. For Vesh, use the approved pair linked at the top of this record.
+Label newly written reusable prompts accurately instead
 of presenting them as the historical submitted prompts.
 
 This storage change does not change the generation history or establish
