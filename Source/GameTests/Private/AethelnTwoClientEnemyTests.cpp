@@ -282,13 +282,15 @@ namespace AethelnTwoClientEnemyTests
 			.UntilServer(TEXT("The server resets the enemy home at full Health, no earlier than the respawn delay"), [R, EnemyInit](FState& Server)
 			{
 				const AAethelnEnemyController* Controller = R->ServerController.Get();
-				const AAethelnEnemyCharacter* Enemy = R->ServerEnemy.Get();
+				AAethelnEnemyCharacter* Enemy = R->ServerEnemy.Get();
 				if (Controller == nullptr || Enemy == nullptr || Controller->GetState() != EState::Idle) { return false; }
 				const UAethelnAbilitySystemComponent* AbilitySystem = Enemy->GetAethelnAbilitySystemComponent();
 				if (Attribute(*AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()) != EnemyInit.Health) { return false; }
 				R->Test.TestTrue(TEXT("The reset comes no earlier than the death time plus the respawn delay"),
 					Server.World->GetTimeSeconds() >= R->ServerDeathTime + GetDefault<AAethelnEnemyController>()->ProvisionalRespawnSeconds);
 				R->Test.TestTrue(TEXT("The reset enemy is home"), FVector::Dist(Enemy->GetActorLocation(), R->EnemyHome) < 1.0);
+				// The reset teleports the enemy, which on this floorless map sets it falling: hold it still again, in the frame it was reset.
+				Enemy->GetCharacterMovement()->DisableMovement();
 				// The enemy is dead or idle from here on, so no result can follow.
 				R->ServerVictimHealth = Attribute(*ServerAbilitySystem(Server, VictimClient), UAethelnCombatAttributeSet::GetHealthAttribute());
 				return true;

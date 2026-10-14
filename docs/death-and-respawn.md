@@ -93,7 +93,7 @@ and `GM.cpp` abbreviates `Engine/Source/Runtime/Engine/Private/GameModeBase.cpp`
 | [#60](https://github.com/ShayShimoni/aetheln-online/issues/60) | Binds `OnLethalResult`. | Change the lethal latch, the contact order, or the chain reset rules, except one: a death from a lethal contact ends the chain at the lethal contact time (the stamp that #60's A28 row deferred to #21 P2). |
 | [#18](https://github.com/ShayShimoni/aetheln-online/issues/18) | Tests the integrated death case on top of #18's `State.Dead` bindings. | Change dodge or block cancellation. |
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Nothing. | AI death and despawn (owned by #20), and AI attacks that kill a player. |
-| [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) | Nothing. | Apply `State.Dead`. #83 binds the same `OnLethalResult` and owned its signature change (the `ContactTime` parameter, merged in its P2, `docs/enemy-ai-and-navigation.md:356-363`). P1's handler took the three-argument form and ignored `ContactTime`; P2 uses it for the chain reset. |
+| [#83](https://github.com/ShayShimoni/aetheln-online/issues/83) | Nothing. | Apply `State.Dead`. #83 binds the same `OnLethalResult` and owned its signature change (the `ContactTime` parameter, merged in its P2, [Death and Reset](enemy-ai-and-navigation.md#death-and-reset)). P1's handler took the three-argument form and ignored `ContactTime`; P2 uses it for the chain reset. |
 | [#61](https://github.com/ShayShimoni/aetheln-online/issues/61) | Raises the authoritative death state that presentation reads. | HUD, death screen, and readability of the death cue. |
 
 ## Server Death Transition (P1, extended by P2)

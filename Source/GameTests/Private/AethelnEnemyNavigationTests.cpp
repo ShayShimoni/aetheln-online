@@ -7,6 +7,8 @@
 #include "AethelnEnemyController.h"
 #include "Builders/CubeBuilder.h"
 #include "Components/BrushComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
@@ -107,20 +109,40 @@ namespace AethelnEnemyNavigationTests
 			nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 		if (!Test.TestNotNull(TEXT("Enemy exists"), Enemy)) { return nullptr; }
 		Enemy->FinishSpawning(Transform);
-		// The harness world never reports HasBegunPlay (no game mode), so BeginPlay (home, init, grant) is dispatched by hand.
+		// The harness world never reports HasBegunPlay (no game mode), so BeginPlay (home, init, grant) is dispatched by hand,
+		// and the controller begins play too: its path following component only ticks after that.
 		Enemy->DispatchBeginPlay();
+		if (AController* Controller = Enemy->GetController()) { Controller->DispatchBeginPlay(); }
 		Enemy->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 		return Enemy;
 	}
 
+	/**
+	 * Ticks the enemy's path following and movement components by hand. In this headless fixture world their scheduled
+	 * ticks never run (the pending movement input is never consumed, although a plain tick function does run), so the
+	 * test supplies them. The controller's state machine, the navmesh queries, the engine's path following and its block
+	 * detection are the real ones; the hand tick only lets the capsule move. The scheduled ticks are not covered here.
+	 */
+	void TickEnemyComponents(AAethelnEnemyCharacter& Enemy, float DeltaSeconds)
+	{
+		if (AAethelnEnemyController* Controller = Cast<AAethelnEnemyController>(Enemy.GetController()))
+		{
+			UPathFollowingComponent* PathFollowing = Controller->GetPathFollowingComponent();
+			PathFollowing->TickComponent(DeltaSeconds, LEVELTICK_All, &PathFollowing->PrimaryComponentTick);
+		}
+		UCharacterMovementComponent* Movement = Enemy.GetCharacterMovement();
+		Movement->TickComponent(DeltaSeconds, LEVELTICK_All, &Movement->PrimaryComponentTick);
+	}
+
 	/** Advances the world in small steps until Done holds or MaxSeconds pass; false on timeout. */
 	template <typename TDone>
-	bool TickUntil(FFixture& F, double MaxSeconds, TDone Done)
+	bool TickUntil(FFixture& F, AAethelnEnemyCharacter* Enemy, double MaxSeconds, TDone Done)
 	{
 		const double End = F.World.World->GetTimeSeconds() + MaxSeconds;
 		while (!Done())
 		{
 			if (F.World.World->GetTimeSeconds() >= End) { return false; }
+			TickEnemyComponents(*Enemy, static_cast<float>(TickSeconds));
 			F.AdvanceTo(F.World.World->GetTimeSeconds() + TickSeconds);
 		}
 		return true;
@@ -148,11 +170,11 @@ bool FAethelnEnemyRealNavmeshTest::RunTest(const FString& Parameters)
 		const FVector Home = Enemy->GetActorLocation();
 		const double Range = Controller->ProvisionalAttackRange;
 		TestTrue(TEXT("The target starts out of attack range"), FVector::Dist2D(Home, F.Pawn->GetActorLocation()) > Range);
-		const bool bReached = TickUntil(F, 5.0, [&]() { return FVector::Dist2D(Enemy->GetActorLocation(), F.Pawn->GetActorLocation()) <= Range; });
+		const bool bReached = TickUntil(F, Enemy, 5.0, [&]() { return FVector::Dist2D(Enemy->GetActorLocation(), F.Pawn->GetActorLocation()) <= Range; });
 		TestTrue(TEXT("The enemy walked across the floor into attack range"), bReached);
 		TestTrue(TEXT("The enemy left home on its own"), FVector::Dist2D(Enemy->GetActorLocation(), Home) > 100.0);
 		TestTrue(TEXT("The player is the target"), Controller->GetTarget() == F.Pawn);
-		const bool bTelegraphed = TickUntil(F, 2.0, [&]() { return Controller->GetState() == EState::Telegraph || Controller->GetState() == EState::Attack; });
+		const bool bTelegraphed = TickUntil(F, Enemy, 2.0, [&]() { return Controller->GetState() == EState::Telegraph || Controller->GetState() == EState::Attack; });
 		TestTrue(TEXT("At the target the enemy telegraphs"), bTelegraphed);
 	}
 	{
@@ -174,7 +196,7 @@ bool FAethelnEnemyRealNavmeshTest::RunTest(const FString& Parameters)
 		const FDelegateHandle Listener = PathFollowing->OnRequestFinished.AddLambda(
 			[&Results](FAIRequestID, const FPathFollowingResult& Result) { Results.Add(Result.Code); });
 		// Block detection needs a full sample window (engine defaults) of no progress, twice.
-		const bool bReset = TickUntil(F, 40.0, [&]() { return Results.Num() >= 2 && Controller->GetState() == EState::Idle; });
+		const bool bReset = TickUntil(F, Enemy, 40.0, [&]() { return Results.Num() >= 2 && Controller->GetState() == EState::Idle; });
 		PathFollowing->OnRequestFinished.Remove(Listener);
 		TestTrue(TEXT("Two moves ended and the second one reset the enemy"), bReset);
 		if (Results.Num() >= 2)
@@ -212,13 +234,15 @@ bool FAethelnEnemyNavigationMeasurementsTest::RunTest(const FString& Parameters)
 	UE_LOG(LogTemp, Display, TEXT("%s"), *Mesh);
 
 	// Server frame cost: world ticks at 60 Hz, first with no enemy, then with one enemy walking to the player and attacking.
-	auto Measure = [&F](int32 Frames, double& OutAverageMicroseconds, double& OutWorstMicroseconds)
+	AAethelnEnemyCharacter* Enemy = nullptr;
+	auto Measure = [&F, &Enemy](int32 Frames, double& OutAverageMicroseconds, double& OutWorstMicroseconds)
 	{
 		double Total = 0.0;
 		OutWorstMicroseconds = 0.0;
 		for (int32 Frame = 0; Frame < Frames; ++Frame)
 		{
 			const double Start = FPlatformTime::Seconds();
+			if (Enemy != nullptr) { TickEnemyComponents(*Enemy, 1.0f / 60.0f); }
 			F.AdvanceTo(F.World.World->GetTimeSeconds() + 1.0 / 60.0);
 			const double Microseconds = (FPlatformTime::Seconds() - Start) * 1.0e6;
 			Total += Microseconds;
@@ -233,7 +257,7 @@ bool FAethelnEnemyNavigationMeasurementsTest::RunTest(const FString& Parameters)
 	AddInfo(Empty);
 	UE_LOG(LogTemp, Display, TEXT("%s"), *Empty);
 
-	AAethelnEnemyCharacter* Enemy = SpawnWalkingEnemy(*this, *F.World.World, FVector(0.0, 0.0, EnemyHeight));
+	Enemy = SpawnWalkingEnemy(*this, *F.World.World, FVector(0.0, 0.0, EnemyHeight));
 	if (Enemy == nullptr) { return false; }
 	Measure(Frames, Average, Worst);
 	const FString Engaged = FString::Printf(TEXT("AETHELN_MEASURE frame, one enemy engaging one player: %d frames of 1/60 s, average %.1f us, worst %.1f us"), Frames, Average, Worst);
