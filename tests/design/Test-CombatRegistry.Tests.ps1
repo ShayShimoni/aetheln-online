@@ -460,6 +460,10 @@ try {
 	$RealTags = Test-CombatTagMapping -SourceRoot (Join-Path $Root 'Source') -RegistryPath $RegistryPath
 	if (-not $RealTags.passed) { throw "Expected the repository tags to map: $($RealTags.errors -join '; ')" }
 	Write-Output 'PASS: repository native Ability. tags map to the registry'
+	# The pending list is pinned: adding an entry needs a reviewed change here (D5, owners #18 and #83).
+	$PinnedPending = 'Ability.Block,Ability.Dodge,Ability.Enemy.Greybox.Strike'
+	if ((@($PendingRegistryIds.Keys | Sort-Object) -join ',') -cne $PinnedPending) { throw "The pending registry ID list changed: $(@($PendingRegistryIds.Keys | Sort-Object) -join ',')" }
+	Write-Output 'PASS: pending registry ID list is pinned'
 	$Mapped = 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.InstantStrike", "order.oathscar.ability.instant_strike");'
 	Assert-TagMapping -Name 'one tag, one registry ID' -Source $Mapped
 	Assert-TagMapping -Name 'a non-Ability tag is not checked' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_A, "State.Unmapped", "no id");')
@@ -475,6 +479,7 @@ try {
 	Assert-TagMapping -Name 'an unlisted tag with an unregistered ID' -Source $PendingSource -Reason 'not a registry definition ID'
 	Assert-TagMapping -Name 'a pending ID that differs from the declaration' -Source $PendingSource -Pending @{ 'Ability.Pending' = 'pending.other.id' } -Reason 'differs from the declared ID'
 	Assert-TagMapping -Name 'a stale pending entry whose ID reached the registry' -Source $Mapped -Pending @{ 'Ability.Oathscar.InstantStrike' = 'order.oathscar.ability.instant_strike' } -Reason 'remove the tag from the pending list'
+	Assert-TagMapping -Name 'a declaration in a shape the check cannot read' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, TEXT("Ability.Oathscar.Odd"), "order.oathscar.ability.instant_strike");' -Reason 'not in the shape the check reads'
 	Assert-TagMapping -Name 'a pending entry for a tag that is gone' -Source $Mapped -Pending @{ 'Ability.Gone' = 'gone.fixture.id' } -Reason 'no longer declared'
 }
 finally {

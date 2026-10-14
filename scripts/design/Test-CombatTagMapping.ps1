@@ -14,8 +14,9 @@ if (-not $TagRegistryPath) { $TagRegistryPath = Join-Path $PSScriptRoot '..\..\d
 # #84 P3b: every native Ability. tag maps to exactly one semantic ID in the combat registry.
 # The tag declaration's comment names the ID (docs/combat-and-networking-architecture.md,
 # Gameplay Tag and Content-Version Conventions). A test-only Ability.Test. tag is exempt.
-# Pending: tags whose ID the registry does not hold yet (#106 owns registry growth). Remove an entry when its ID lands;
-# the check fails on a stale entry so this list only shrinks.
+# Pending: tags whose ID the registry does not hold yet (#18 owns Ability.Dodge and Ability.Block, #83 owns
+# Ability.Enemy.Greybox.Strike). Remove an entry when its ID lands; the check fails on a stale entry.
+# tests/design/Test-CombatRegistry.Tests.ps1 pins this list's keys, so an addition needs a reviewed test change.
 $PendingRegistryIds = @{
 	'Ability.Dodge' = 'combat.action.dodge'
 	'Ability.Block' = 'combat.action.block'
@@ -30,9 +31,13 @@ function Test-CombatTagMapping {
 	$RegistryIds = @{}
 	foreach ($Definition in @($Registry.definitions)) { $RegistryIds[[string]$Definition.id] = $true }
 	$Declaration = [regex]'UE_DEFINE_GAMEPLAY_TAG(?:_COMMENT|_STATIC)?\(\s*\w+\s*,\s*"(Ability\.[^"]+)"(?:\s*,\s*"([^"]*)")?\s*\)'
+	$Loose = [regex]'UE_DEFINE_GAMEPLAY_TAG\w*\(\s*\w+\s*,\s*[^"]*"Ability\.'
 	$Tags = @{}
 	foreach ($File in (Get-ChildItem -LiteralPath $SourceRoot -Recurse -File | Where-Object { $_.Extension -ceq '.cpp' -or $_.Extension -ceq '.h' })) {
-		foreach ($Match in $Declaration.Matches((Get-Content -LiteralPath $File.FullName -Raw -Encoding UTF8))) {
+		$Text = Get-Content -LiteralPath $File.FullName -Raw -Encoding UTF8
+		# A declaration the strict pattern skips (TEXT(...), an escaped quote) would escape the check silently.
+		if ($Loose.Matches($Text).Count -ne $Declaration.Matches($Text).Count) { $Errors.Add("$($File.Name): an Ability. tag declaration is not in the shape the check reads") }
+		foreach ($Match in $Declaration.Matches($Text)) {
 			$Tag = $Match.Groups[1].Value
 			$Comment = if ($Match.Groups[2].Success) { $Match.Groups[2].Value } else { '' }
 			if ($Tags.ContainsKey($Tag)) { $Errors.Add("${Tag}: declared more than once"); continue }

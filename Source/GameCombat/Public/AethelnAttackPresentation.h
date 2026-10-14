@@ -77,7 +77,7 @@ public:
 	 */
 	static EAethelnPresentationLookup FindBinding(const FGameplayTag& InAbilityId, int32 InAuthoredContentVersion, FAssetData& OutAsset);
 
-	/** AbilityId is a struct, which the Asset Registry would export as an empty value, so it is written as a plain-string tag. */
+	/** AbilityId is written as a plain-string tag whose value is the tag name, so the registry filter matches it exactly. A searchable FGameplayTag would export as (TagName="..."). */
 	virtual void GetAssetRegistryTags(FAssetRegistryTagsContext Context) const override;
 
 #if WITH_EDITOR

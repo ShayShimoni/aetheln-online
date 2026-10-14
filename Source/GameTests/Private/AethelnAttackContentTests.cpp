@@ -371,8 +371,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnPresentationBindingValidationTest,
 bool FAethelnPresentationBindingValidationTest::RunTest(const FString& Parameters)
 {
 	using namespace AethelnAttackContentTests;
-	// UAnimationSequencerDataModel::ValidateSequencerData logs this once for each UAnimSequence built below (the sequence
-	// mutation and the composite mutation), not for montages; it is not a validator result.
+	// UAnimationSequencerDataModel::ValidateSequencerData logs this once for each UAnimSequence built below (the plain
+	// sequence passing case, the sequence mutation and the composite mutation), not for montages; it is not a validator result.
 	AddExpectedError(TEXT("No Movie Scene found for SequencerDataModel"), EAutomationExpectedErrorFlags::Contains, 3);
 	{
 		FBindingFixture Valid;
@@ -599,12 +599,36 @@ bool FAethelnBindingAudienceTest::RunTest(const FString& Parameters)
 		for (const TSharedPtr<FJsonValue>& Target : Rule->GetArrayField(TEXT("may_reference"))) { Allowed.Add(Target->AsString()); }
 	}
 	using FScanner = FAethelnContentValidationScanner;
-	TestFalse(TEXT("A Shared package that hard-references a binding fails reference_boundary"), FScanner::IsHardReferenceAllowed(Rules, TEXT("shared"), TEXT("client_only")));
-	TestFalse(TEXT("A ServerOnly package that hard-references a binding fails reference_boundary"), FScanner::IsHardReferenceAllowed(Rules, TEXT("server_only"), TEXT("client_only")));
+	TestFalse(TEXT("The matrix refuses a Shared package that hard-references a binding"), FScanner::IsHardReferenceAllowed(Rules, TEXT("shared"), TEXT("client_only")));
+	TestFalse(TEXT("The matrix refuses a ServerOnly package that hard-references a binding"), FScanner::IsHardReferenceAllowed(Rules, TEXT("server_only"), TEXT("client_only")));
 	TestTrue(TEXT("A binding may hard-reference the Shared definition"), FScanner::IsHardReferenceAllowed(Rules, TEXT("client_only"), TEXT("shared")));
 	TestTrue(TEXT("A binding may hard-reference another ClientOnly asset"), FScanner::IsHardReferenceAllowed(Rules, TEXT("client_only"), TEXT("client_only")));
 	TestFalse(TEXT("A binding may not hard-reference a ServerOnly asset"), FScanner::IsHardReferenceAllowed(Rules, TEXT("client_only"), TEXT("server_only")));
 	TestFalse(TEXT("An unknown source audience fails closed"), FScanner::IsHardReferenceAllowed(Rules, TEXT("unknown"), TEXT("shared")));
+
+	// Open decision D4: pins today's soft-reference result. The policy's shared-to-client-presentation rule lets a
+	// Shared package soft-reference a client-only /Game package, a binding included, so N4 does not cover soft
+	// references. Narrowing that rule changes this assertion in the same change.
+	const TSharedPtr<FJsonObject>* SoftRules = nullptr;
+	const TArray<TSharedPtr<FJsonValue>>* SoftRuleValues = nullptr;
+	if (!TestTrue(TEXT("The policy declares soft-reference rules"),
+		(*References)->TryGetObjectField(TEXT("soft_reference_rules"), SoftRules) && (*SoftRules)->TryGetArrayField(TEXT("rules"), SoftRuleValues))) { return false; }
+	TArray<FAethelnSoftReferenceRule> SoftRuleList;
+	for (const TSharedPtr<FJsonValue>& RuleValue : *SoftRuleValues)
+	{
+		const TSharedPtr<FJsonObject> Rule = RuleValue->AsObject();
+		FAethelnSoftReferenceRule& Out = SoftRuleList.AddDefaulted_GetRef();
+		Out.Id = Rule->GetStringField(TEXT("id"));
+		Out.SourcePackagePattern = Rule->GetStringField(TEXT("source_package_pattern"));
+		Out.SourceAudience = Rule->GetStringField(TEXT("source_audience"));
+		Out.TargetPackagePattern = Rule->GetStringField(TEXT("target_package_pattern"));
+		Out.TargetAudience = Rule->GetStringField(TEXT("target_audience"));
+		Out.Justification = Rule->GetStringField(TEXT("justification"));
+	}
+	TestTrue(TEXT("D4: today a Shared package may soft-reference a client-only /Game package"),
+		FScanner::IsSoftReferenceAllowed(TEXT("/Game/Fixtures/DA_Shared"), TEXT("shared"), TEXT("/Game/Fixtures/DA_Binding"), TEXT("client_only"), SoftRuleList));
+	TestFalse(TEXT("A ServerOnly package may not soft-reference a client-only package"),
+		FScanner::IsSoftReferenceAllowed(TEXT("/Game/Fixtures/DA_Server"), TEXT("server_only"), TEXT("/Game/Fixtures/DA_Binding"), TEXT("client_only"), SoftRuleList));
 	return true;
 }
 
