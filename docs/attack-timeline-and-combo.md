@@ -1036,10 +1036,12 @@ seam keys live in shared `DefaultGame.ini` for the reason #19 gives
 
 Names follow `Aetheln.<Area>.<Group>.<Case>`, as in #19, with the same kinds.
 **H** is a headless authority world with the in-memory sink, in the editor-only
-`GameTests` module. **P** is PIE with a dedicated server and two clients;
-without a multi-client harness these are manual steps recorded in the PR,
-under the #82 conditions C1 and C2 (one run per #44 catalog kind). **K** is a
-packaged run. Tests that pin a policy set their own values, never tuning.
+`GameTests` module. **P** is PIE with a dedicated server and two or more
+clients in one editor process, on CQTest's `FPIENetworkComponent` (the harness
+#21 P3 introduced); a step it cannot drive is a manual step recorded in the PR.
+The clean link is the #82 condition C1; the impaired run uses a fixture lag and
+loss, which is a test setting and not a #44 catalog kind or the #45 profile.
+**K** is a packaged run. Tests that pin a policy set their own values, never tuning.
 
 | # | Test | PR | Kind | What it proves |
 | --- | --- | --- | --- | --- |
@@ -1061,10 +1063,10 @@ packaged run. Tests that pin a policy set their own values, never tuning.
 | A16 | `Aetheln.GameCombat.AttackTimeline.RejectionAndCorrectionTelemetry` | P2 | H | `TimestampOutOfBounds`, `ImpossibleAimTransition`, and the aim correction emit the events and metric in the tables; refused replicated-data routes are metric-only; the public copy has no diagnostic code |
 | A17 | `Aetheln.GameCombat.AttackTimeline.RunsWithoutPresentation` | P3 | H | A step with no mesh, montage, or notify advances, ends, and (from P4) resolves contacts |
 | A18 | `Aetheln.GameCombat.AttackTimeline.NoMaximumModifiers` | P4 | H | No #60 effect, nor #18's Guard pressure effect, modifies a `Max*` attribute or adds a duration modifier to a current value |
-| A19 | `Aetheln.GameCombat.Net.AttackOutcomeRouting` | P6 | P | The owner receives the outcome, record, and chain end; the other client receives the phase state but no record; both see result cues |
-| A20 | `Aetheln.GameCombat.Net.ChainUnderProfiles` | P6 | P | Additional PIE evidence beside A25 and A26: the full chain and a buffered link under C1 and each C2 kind: no double commit or damage, deterministic resets, recorded correction, rejection (including `ImpossibleAimTransition`, for #82 S5), and miss rates |
-| A21 | `Aetheln.GameCombat.Net.DisconnectMidChain` | P6 | P | Additional PIE evidence beside A27: a real disconnect during wind-up, active, and a buffered wait gives no result after avatar loss and no stale chain state for the new PlayerState |
-| A22 | `Aetheln.POC.Input.AttackBindingSubmitsControlAim` | P6 | H | A Reticle-mode press builds a request with the control-rotation aim including pitch; Cursor mode blocks it; the recapture click is never an attack; a fresh press is needed after recapture |
+| A19 | `Aetheln.GameCombat.Net.AttackOutcomeRouting` | P6 | P | On a clean link the owner presses through the GameUI entry and completes the chain: it receives three accepted outcomes, three records (steps 1 to 3, no correction) and one `Completed` chain end, and the server committed one hit per step; the other client receives the replicated phase state (steps seen, then inactive with the end reason) and no outcome, record or chain end, and the owner's own copy of the phase state never changes (`COND_SkipOwner`); both clients see one result cue per hit |
+| A20 | `Aetheln.GameCombat.Net.ChainUnderProfiles`, `Aetheln.GameCombat.Net.ChainUnderProfilesImpaired` | P6 | P | Additional PIE evidence beside A25 and A26, on the clean link (C1) and under a fixture 100 ms lag and 5 % loss (C2): six presses on a fixed 0.5 s cadence give one outcome per press in order, the cost spent once per accepted press, ordered records, one end per chain, one hit per activation and a dummy Health equal to the authored damage of its hits. The server then crafts a turn beyond the hard bound, a stale time sample and an aim between the soft and hard bounds, and the owner receives `ImpossibleAimTransition`, `TimestampOutOfBounds` and an accepted press whose record is marked `AimCorrected` at exactly the soft bound. The info line of each run prints the outcome counts (the miss rate). The clean run also requires the full three-step chain. Duplication and reordering cannot combine with lag, and the reliable channel absorbs them before the seam sees a request, so they are not separate runs; the seam's own duplicate, stale and dropped rows are A25 and A26 |
+| A21 | `Aetheln.GameCombat.Net.DisconnectMidChain` | P6 | P | Additional PIE evidence beside A27, with windows four times the provisional ones so a poll per frame lands in each phase: four clients press at once and the server closes three connections, one in the wind-up, one in the active window and one while a buffered step waits. Each lost player's dummy takes nothing after the loss, nothing stays registered with the timeline, and a fourth, surviving player's first press is its sequence 1, starts step 1 and hits its own dummy. The harness cannot reconnect a client after a disconnect (`ConnectClientsToServer` looks up every client again), so the new-PlayerState row stays with A27 and this test shows that no state of a lost player reaches another |
+| A22 | `Aetheln.POC.Input.AttackBindingSubmitsControlAim` | P6 | H | `FAethelnPrimaryButtonRouter` and `SubmitPrimaryAttack` against a real PlayerState and seam: a Reticle-mode press builds a request with the control-rotation aim including pitch; a Cursor-mode press recaptures and sends nothing; the recapture click is never an attack; a fresh press is needed after recapture. The Enhanced Input wiring that calls them is manual step 1 below |
 | A23 | Packaged two-client run of the chain | later | K | Evidence for #2 and #48; not required to merge #60 |
 | A24 | `Aetheln.GameCombat.AttackTimeline.HitTelemetry` | P4 | H | One hit event per committed result with the activation id, ability id, and sequence; no target identity |
 | A25 | `Aetheln.GameCombat.AttackTimeline.NetworkConditionsChain` | P3 | H | Injected clock and a scripted delivery queue: chain requests delayed to arrive just before and after `BufferOpen`, `LinkOpen`, and `LinkClose` get the outcome their server arrival time dictates; a duplicated request gets `DuplicateSequence`; a reordered older request gets `StaleSequence`; a dropped follow-up lets the chain time out, and the next press (a forward sequence gap) starts step 1; nothing commits twice |
@@ -1077,8 +1079,36 @@ CI ran a frozen two-test filter until #237 widened it to every declared
 `Aetheln.` test, so each code PR records local automation evidence at its exact
 head on the pinned engine, as #19 does. P2 to P5 run `Aetheln.GameCombat`; P3
 and P4 also run `Aetheln.Movement` and `Aetheln.POC`, because they change
-GameCore (tags, capsule response). P6 runs `Aetheln.POC` and records the manual
-PIE steps. No #60 PR changes the GameNet vocabulary.
+GameCore (tags, capsule response). P6 adds a GameCore interface and a GameUI
+route, so it runs `Aetheln.GameCombat`, `Aetheln.POC` and the full harness, and
+records the manual S5 steps below. No #60 PR changes the GameNet vocabulary.
+
+### Manual S5 steps (#82)
+
+The automated rows above prove the routing; S5 measures feel and rates with a
+person at the mouse, which the harness cannot. It cannot run on the production
+configuration yet: the eight aim and time bounds are `TBD` and unset (the seam
+fails closed, `InternalFailure`), and the chain is not in `GrantedAbilities`.
+Both are owner and #45 decisions, so this document sets neither. A run supplies
+candidate values locally, untracked (for example in
+`Saved/Config/WindowsEditor/Game.ini`: the eight `Provisional...` keys of
+`/Script/GameCombat.AethelnAbilitySystemComponent` and `+GrantedAbilities` under
+`/Script/GameCombat.AethelnPlayerState`), and records them verbatim as candidate
+values for that run, never as tuning.
+
+1. PIE net mode "Play As Client", two players and a separate server, launched with
+   `?game=/Script/GameCombat.AethelnCombatGameMode`. Click to capture the mouse.
+   Left mouse in Reticle mode must start the chain; Left Alt then a left click
+   recaptures and must not attack; a second click attacks (this is the wiring
+   that A22 does not simulate).
+2. Attack while sweeping the aim, while still, and during movement, under C0
+   (standalone), C1 (clean) and each C2 kind of the #44 catalog (`Net PktLag`,
+   `PktLagVariance`, `PktLoss`, `PktOrder`, `PktDup`, applied to the side recorded
+   with the result). Vary the aim during wind-up.
+3. Record input to visible action, input to server accept or reject, every
+   rejection reason (the owner's log prints each outcome as
+   `LogAethelnActivationOutcome`), the `AimCorrected` count, and the
+   `ImpossibleAimTransition` rate. No client-claimed target or hit may change a result.
 
 ## Acceptance-Criteria Mapping
 
@@ -1104,7 +1134,7 @@ files untouched.
 | **P3** Timeline and chain | Tags, step definition and grant validation, `UAethelnBasicChainAbility`, chain state and `ResetChain`, the commitment tag, the subsystem's boundary pass, owner record and chain-end RPCs, the observer phase state, the PlayerState hook, the zero-cooldown delta if needed; A4 to A8, A17, A25, A27. No contacts yet. | P2, #19 P4 |
 | **P4** Contacts and damage | Combat query channel and `ECR_Overlap` capsule responses, sweeps, total order, time-aware revalidation, allowance records, the ally relation, avoidance hook, the blocked check against a defense state, damage effect, lethal latch, result cues, hit telemetry; A9 to A14, A18, A24, A26, A28 (without its interruption row), A29, and the sweep and contact rows of A4, A7, and A27; the P3 review follow-ups (sequence advance for a committed start that fails, the `InternalFailure` chain-end label, the extra negative tests). | P3 |
 | **P5** Interruption | `InterruptibleUntil` and `bInterruptsTarget` added to the step struct (the chain had no configured `ContentVersion` to bump then; its first, 1, came with the D3 provisional values, #84 P3); A15 and the A5 rows. | P4 |
-| **P6** Binding and two-client evidence | `IAethelnCombatInputSink`, the PlayerState implementation, the GameUI binding; A19 to A22; the #82 S5 attack scenario. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
+| **P6** Binding and two-client evidence (delivered) | `IAethelnCombatInputSink` (GameCore), the PlayerState implementation, the GameUI left-mouse route (`FAethelnPrimaryButtonRouter`, `SubmitPrimaryAttack`); A19 to A22; the #82 S5 attack scenario as recorded manual steps (it needs the eight bounds and the chain grant, both `TBD`). The A14 isolation and target combat id ordering follow-ups from P4 were not in this row and stay open. | P5, #19 P5 (input-enabled pawn under the combat game mode) |
 
 The representative actives are not #60 phases; they are #260, which builds on
 P4 and P5 (OQ3, owner, 2026-10-05; the actives were redesigned on 2026-10-13,
