@@ -2675,8 +2675,8 @@ Every accepted decision records:
 - **Context:** #83 requires the AI approach to come from measured prototype
   needs, not from habit. No enemy code existed when this was decided, so the
   needs below come from the canonical documents and the existing combat code,
-  not from running candidates side by side. The #83 criterion is therefore
-  only partly met until #83 P3 records measurements.
+  not from running candidates side by side. The #83 criterion therefore stays
+  partly met: P3 measured the state machine, not a rival framework.
 - **Evidence (needs derived from the documents and code):**
   - One enemy type with one attack in one controlled space
     (`docs/game-design-bible.md`, ledger row P10-014). The specification has
@@ -2699,10 +2699,12 @@ Every accepted decision records:
     authored times and run inside its pass. This is not a differentiator: a
     Behavior Tree task or a StateTree state could keep the same time
     bookkeeping. It only means a framework would not remove that code.
-- **Not yet measured:** decision cost per enemy per frame, navmesh build time
-  and size, and behavior under the network profiles. No candidate was
-  prototyped and timed against another. #83 P3 records the first three for
-  #45 (measurements only, no thresholds).
+- **Measured since:** #83 P3 recorded the navmesh build time and size and the
+  server tick cost with one enemy engaging one player
+  ([Measurements](enemy-ai-and-navigation.md#measurements); measurements only,
+  no thresholds), and tested one enemy against two PIE clients on a clean and
+  an impaired link. **Not yet measured:** behavior under the #45 network
+  profiles. No candidate was prototyped and timed against another.
 - **Alternatives:** Behavior Tree with Blackboard (rejected for the prototype:
   an editor asset and a brain component for seven flat states, outside the
   headless tests); StateTree (rejected for the prototype: a plugin enable and
