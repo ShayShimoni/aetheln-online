@@ -8,6 +8,7 @@
 #include "AethelnDodgeAbility.h"
 #include "AethelnGameplayTags.h"
 #include "AethelnObservability.h"
+#include "AethelnOathscarAbilities.h"
 #include "AethelnObservabilitySubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -841,11 +842,12 @@ void UAethelnAbilitySystemComponent::ApplyDueBoundaries(double Now)
 {
 	ApplyChainBoundaries(Now);
 	ApplyDodgeBoundaries(Now);
+	ApplyParryBoundaries(Now);
 }
 
 bool UAethelnAbilitySystemComponent::HasPendingBoundaries() const
 {
-	return ChainState.bExists || DodgeWindow.bOpen;
+	return ChainState.bExists || DodgeWindow.bOpen || ParryWindow.bOpen;
 }
 
 bool UAethelnAbilitySystemComponent::OpenDodgeWindow(const UAethelnDodgeAbility& Ability, FGameplayAbilitySpecHandle Handle)
@@ -1402,3 +1404,40 @@ bool UAethelnAbilitySystemComponent::HasReplicatedTargetDataForTests(FGameplayAb
 	return AbilityTargetDataMap.Find(FGameplayAbilitySpecHandleAndPredictionKey(Handle, PredictionKey)).IsValid();
 }
 #endif
+
+bool UAethelnAbilitySystemComponent::OpenParryWindow(const FGuid& OperationId, FGameplayAbilitySpecHandle Handle, double EndTime)
+{
+	UAethelnCombatTimelineSubsystem* Timeline = GetCombatTimeline();
+	// One window per ASC: the instance gate makes an open one unreachable, so fail closed if it exists.
+	if (!OperationId.IsValid() || !FMath::IsFinite(EndTime) || ParryWindow.bOpen || Timeline == nullptr || !Timeline->RegisterNonChainBoundaries(*this)) { return false; }
+	ParryWindow = FAethelnServerParryWindow();
+	ParryWindow.bOpen = true;
+	ParryWindow.OperationId = OperationId;
+	ParryWindow.Handle = Handle;
+	ParryWindow.End = EndTime;
+	return true;
+}
+
+void UAethelnAbilitySystemComponent::CloseParryWindow(const FGuid& OperationId)
+{
+	if (ParryWindow.bOpen && ParryWindow.OperationId == OperationId) { ParryWindow = FAethelnServerParryWindow(); }
+}
+
+void UAethelnAbilitySystemComponent::ApplyParryBoundaries(double Now)
+{
+	if (!IsOwnerActorAuthoritative() || !ParryWindow.bOpen || !FMath::IsFinite(Now) || Now < ParryWindow.End) { return; }
+	// The normal end at WindowEnd. The slot's interval already ends there; this ends the activation and the state tag.
+	const FGuid OperationId = ParryWindow.OperationId;
+	const FGameplayAbilitySpec* Spec = FindAbilitySpecFromHandle(ParryWindow.Handle);
+	UAethelnParryAbility* Instance = Spec != nullptr ? Cast<UAethelnParryAbility>(Spec->GetPrimaryInstance()) : nullptr;
+	if (Instance != nullptr && Instance->ActivationOperationId == OperationId) { Instance->EndAtWindowEnd(); }
+	CloseParryWindow(OperationId);
+}
+
+void UAethelnAbilitySystemComponent::CancelParry()
+{
+	if (!IsOwnerActorAuthoritative()) { return; }
+	// The Parry's cancel path ends its slot, its state tag and its window at this processing time.
+	const FGameplayAbilitySpec* Spec = FindSpecForAbilityId(AethelnGameplayTags::Ability_Oathscar_Parry);
+	if (Spec != nullptr && Spec->IsActive()) { CancelAbilityHandle(Spec->Handle); }
+}

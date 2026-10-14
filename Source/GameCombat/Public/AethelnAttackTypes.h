@@ -41,7 +41,7 @@ enum class EAethelnChainEndReason : uint8
 	InternalFailure
 };
 
-/** A committed contact result. Avoided, Blocked and GuardBroken apply no damage. */
+/** A committed contact result. Avoided, Blocked, GuardBroken and Parried apply no damage. */
 UENUM()
 enum class EAethelnCombatResultOutcome : uint8
 {
@@ -49,7 +49,9 @@ enum class EAethelnCombatResultOutcome : uint8
 	Avoided,
 	Blocked,
 	/** Blocked, and the defense owner's hook broke the guard (Q8). */
-	GuardBroken
+	GuardBroken,
+	/** The Parry hook fully negated the contact (#260); no damage, no Guard pressure. */
+	Parried
 };
 
 /** Presentation-safe result cue: no damage amount and no attribute value. */

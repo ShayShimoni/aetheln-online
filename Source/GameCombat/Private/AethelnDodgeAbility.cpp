@@ -66,6 +66,8 @@ void UAethelnDodgeAbility::ActivateAbility(
 	}
 	// Q10 and Q18: the accepted dodge ends a held block at its acceptance time S, the processing time.
 	ASC->CancelBlock();
+	// #260 default, open: it ends a running Parry window the same way.
+	ASC->CancelParry();
 }
 
 void UAethelnDodgeAbility::EndAtActionEnd()
