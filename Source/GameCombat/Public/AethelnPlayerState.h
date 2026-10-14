@@ -30,6 +30,8 @@ public:
 	AAethelnPlayerState();
 
 	virtual void PostInitializeComponents() override;
+	/** A logout carries this player's state across the disconnect grace window (#21 P4). */
+	virtual void Destroyed() override;
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 	/** The movement authority (#18 T1) forwards to the ASC, which resolves the current grant and possessed avatar. */
@@ -42,6 +44,14 @@ public:
 	/** HUD (#61): one event per owner activation outcome and per aim-corrected started step. */
 	virtual FAethelnHudActionOutcomeDelegate& OnHudActionOutcome() override { return HudActionOutcome; }
 	static FAethelnHudActionOutcome ToHudOutcome(uint32 Sequence, EAethelnActivationResult Result);
+
+	/**
+	 * Server only (#21 P4). The key under which a logout stores this player's state and a reconnect takes it back. Set
+	 * by the game mode at login (AAethelnCombatGameMode::ResolveReconnectKey); empty means no carry. Never replicated
+	 * and never set by a client RPC.
+	 */
+	void SetReconnectKey(const FString& Key) { ReconnectKey = Key; }
+	const FString& GetReconnectKey() const { return ReconnectKey; }
 
 	UAethelnAbilitySystemComponent* GetAethelnAbilitySystemComponent() const { return AbilitySystemComponent; }
 	const UAethelnCombatAttributeSet* GetCombatAttributeSet() const { return AttributeSet; }
@@ -90,4 +100,7 @@ private:
 
 	/** Server only, never replicated: abilities granted and initial attributes applied. */
 	bool bCombatStateInitialized = false;
+
+	/** Server only, never replicated: see SetReconnectKey. */
+	FString ReconnectKey;
 };
