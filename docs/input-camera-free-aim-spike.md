@@ -144,7 +144,7 @@ Findings come from code reading at the pinned revision and are unmeasured. No fi
 ### Preconditions
 
 - Use one exact source revision, the pinned engine and toolchain from [Unreal Project Setup](unreal-project-setup.md), the same hardware, display settings, and capture tooling across a comparison. Discard the first warm-up run, as [Verification and feedback](movement-poc.md#verification-and-feedback) requires.
-- Steps S1 to S4 can run now on the `MovementPOC` map with the POC pawn. Step S5 needs a player-operated attack binding on a pawn with the authority component (#60 and the combat owner). Step S6 needs a candidate gamepad mapping.
+- Steps S1 to S4 can run now on the `MovementPOC` map with the POC pawn. Step S5 has its player-operated attack binding since #60 P6 (left mouse in Reticle mode under the combat game mode) and needs only the eight aim and time bounds and the chain grant, both `TBD` (see Manual S5 steps in the attack timeline document). Step S6 needs a candidate gamepad mapping.
 - The POC pawn has no observability seam; correction events exist only on the spike pawn's movement component. Until one pawn has both, record POC corrections visually and spike corrections from events, and say which pawn produced each record.
 
 ### Network conditions

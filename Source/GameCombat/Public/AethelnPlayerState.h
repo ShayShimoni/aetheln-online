@@ -3,6 +3,7 @@
 #include "AbilitySystemInterface.h"
 #include "AethelnActivationTypes.h"
 #include "AethelnCombatEffects.h"
+#include "AethelnCombatInputSink.h"
 #include "AethelnHudSource.h"
 #include "AethelnMovementActionAuthority.h"
 #include "CoreMinimal.h"
@@ -22,7 +23,7 @@ struct FGameplayAbilitySpec;
  * See docs/gas-foundation.md (Lifecycle).
  */
 UCLASS(Config = Game)
-class GAMECOMBAT_API AAethelnPlayerState : public APlayerState, public IAbilitySystemInterface, public IAethelnMovementActionAuthority, public IAethelnHudStateSource
+class GAMECOMBAT_API AAethelnPlayerState : public APlayerState, public IAbilitySystemInterface, public IAethelnMovementActionAuthority, public IAethelnHudStateSource, public IAethelnCombatInputSink
 {
 	GENERATED_BODY()
 
@@ -30,6 +31,8 @@ public:
 	AAethelnPlayerState();
 
 	virtual void PostInitializeComponents() override;
+	/** A logout carries this player's state across the disconnect grace window (#21 P4). */
+	virtual void Destroyed() override;
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 	/** The movement authority (#18 T1) forwards to the ASC, which resolves the current grant and possessed avatar. */
@@ -37,11 +40,22 @@ public:
 	virtual bool CanPredictDodge() const override;
 	virtual bool TryAuthorizeDodge(const FAethelnDodgeStartRequest& Request) override;
 
+	/** The local controller's ability press (#60 P6): forwards to the ASC's activation request. Intent only. */
+	virtual void RequestAbilityPress(FGameplayTag AbilityId) override;
+
 	/** HUD (#61): the attributes and owned timed tags this machine currently has. Presentation only. */
 	virtual FAethelnHudSnapshot GetHudSnapshot() const override;
 	/** HUD (#61): one event per owner activation outcome and per aim-corrected started step. */
 	virtual FAethelnHudActionOutcomeDelegate& OnHudActionOutcome() override { return HudActionOutcome; }
 	static FAethelnHudActionOutcome ToHudOutcome(uint32 Sequence, EAethelnActivationResult Result);
+
+	/**
+	 * Server only (#21 P4). The key under which a logout stores this player's state and a reconnect takes it back. Set
+	 * by the game mode at login (AAethelnCombatGameMode::ResolveReconnectKey); empty means no carry. Never replicated
+	 * and never set by a client RPC.
+	 */
+	void SetReconnectKey(const FString& Key) { ReconnectKey = Key; }
+	const FString& GetReconnectKey() const { return ReconnectKey; }
 
 	UAethelnAbilitySystemComponent* GetAethelnAbilitySystemComponent() const { return AbilitySystemComponent; }
 	const UAethelnCombatAttributeSet* GetCombatAttributeSet() const { return AttributeSet; }
@@ -90,4 +104,7 @@ private:
 
 	/** Server only, never replicated: abilities granted and initial attributes applied. */
 	bool bCombatStateInitialized = false;
+
+	/** Server only, never replicated: see SetReconnectKey. */
+	FString ReconnectKey;
 };

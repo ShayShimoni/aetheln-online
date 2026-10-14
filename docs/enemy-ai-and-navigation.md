@@ -19,10 +19,18 @@ the server-owned attack timeline of
 #60) and the AI ability-system rules of
 [Gameplay Ability System Foundation](gas-foundation.md) (Issue #19).
 
-Every timing, range, distance, damage, and delay value stays `TBD`. A
-`Provisional...` config key is a named placeholder that stays unset (0) in
-production config; automation tests set their own. Two groups of keys gate the
-enemy, so unset production config fails closed:
+Every timing, range, distance, damage, and delay value stays `TBD` as tuning.
+The owner approved the P3 greybox run on provisional values: the values the E1
+to E11 tests used moved unchanged into `Config/DefaultGame.ini`, marked
+provisional, with no new number
+([decision](https://github.com/ShayShimoni/aetheln-online/issues/83#issuecomment-6156988023)).
+A `Provisional...` config key holds one of them; the feel test re-tunes them,
+and a change to any authoritative step field bumps the attack's
+`ContentVersion`. The config is each value's only place: no test supplies the
+provisional values and this document repeats none. Scenario tests override single
+instance values and derive expectations from the step geometry, so a re-tune must
+update those expectations in the same change. Two groups of keys gate the enemy, so a key that is
+unset, zero, or invalid fails closed:
 
 - The attack ability's `ContentVersion`, step values, and sampling bounds. Unset,
   the ability's grant is refused, and the enemy never attacks.
@@ -65,7 +73,7 @@ UE 5.8.1 source, revision `71fe36aac5`; `Runtime/` abbreviates
 | [#20](https://github.com/ShayShimoni/aetheln-online/issues/20) | Provides the enemy, its attack lifecycle, and the target-choice mechanism. | Choose the final target rule, threat, telegraph content, or the completion result. |
 | [#21](https://github.com/ShayShimoni/aetheln-online/issues/21) | Binds the same lethal notification #21 binds. | Player death, respawn, or reconnect. #83 never applies `State.Dead` itself (see [Death and Reset](#death-and-reset)). |
 | [#84](https://github.com/ShayShimoni/aetheln-online/issues/84) | Owns the server `Telegraph` state and replicates it in `FAethelnEnemyPresentationState`; the #84 binding's telegraph and wind-up only visualize that state and the step's phases. | Montages, sockets, notifies, or the authoring pipeline. |
-| [#120](https://github.com/ShayShimoni/aetheln-online/issues/120) | P3 adds navigation data to the governed `StarterMap`, which the `navigation` content-validation family reviews. | Change the content-validation gate. |
+| [#120](https://github.com/ShayShimoni/aetheln-online/issues/120) | Names the navigation data the prototype space needs in `MovementPOC`, which the `navigation` content-validation family reviews. P3 adds none (see [Residual Risks](#residual-risks)). | Change the content-validation gate. |
 | [#45](https://github.com/ShayShimoni/aetheln-online/issues/45) | Records measurements (navmesh build time and size, server frame cost with the enemy). | Set budgets, thresholds, or population assumptions. |
 | [#96](https://github.com/ShayShimoni/aetheln-online/issues/96), [#97](https://github.com/ShayShimoni/aetheln-online/issues/97) | Uses the existing placeholder capsule and mannequin only. | Enemy art, animation, or effects. |
 | [#107](https://github.com/ShayShimoni/aetheln-online/issues/107) | Names every tuning key. | Choose any value. |
@@ -288,15 +296,24 @@ when the arena gains cover.
 
 ### Prototype space
 
-- The prototype space is the controlled greybox arena map. Until that map
-  exists, P3 uses the server default map `/Game/Maps/StarterMap`.
+- The prototype space is `/Game/Maps/MovementPOC`, the project's
+  `GameDefaultMap` and editor startup map (owner decision on
+  [#83](https://github.com/ShayShimoni/aetheln-online/issues/83#issuecomment-6156988023)).
+  `ServerDefaultMap` is still `StarterMap` by an earlier decision
+  ([Movement POC](movement-poc.md)); changing it is a separate decision. The
+  two-client automation (E13) runs on CQTest's generated map, which the owner
+  allowed.
 - One `NavMeshBoundsVolume` covers the arena floor. The `RecastNavMesh` uses
   static runtime generation, is built in the editor, and is saved with the
   map. The arena has no dynamic obstacles, doors, or streaming, so no runtime
-  rebuild is needed.
+  rebuild is needed. P3 does not add them to `MovementPOC.umap`: that is a
+  lockable LFS binary ([Source Control](source-control.md)), and the volume, the
+  built mesh, and the placed enemy need an Editor session under that lock. The
+  mesh and the enemy walking on it are proven on a built headless arena instead
+  (E12, [Measurements](#measurements)).
 - Only the server queries navigation. Clients see enemy movement through
   character movement replication.
-- `StarterMap` is governed content. Its navigation data falls under the #120
+- `MovementPOC` is governed content. Its navigation data falls under the #120
   `navigation` content-validation family (navigation data audience, streaming
   boundaries, runtime rebuild policy). That family stays `non_promotion` until
   a producer binds governed navigation packages to exact client and server
@@ -363,11 +380,13 @@ the foundation's provisional behavior and an open #20 decision (see
 The controller binds the timeline's lethal notification for its own ASC. P2
 adds the contact time to that notification:
 `OnLethalResult(TargetAsc, ActivationId, ContactTime)`. #21 binds the same
-notification, so whichever of #21 and #83 merges second adapts its binding.
-The enemy enters `Dead` at the lethal contact time, and its respawn delay runs
-from that time. The controller does not apply `State.Dead`, which #21 owns. If
-#21's binding applies `State.Dead` to enemies too, `Reset` must remove it
-through #21's removal path; P2 checks #21's merged code before it lands.
+notification; both are merged. #21's handler acts on players only and applies
+nothing to an AI target
+([Death and Respawn](death-and-respawn.md)), so the enemy's own state machine
+is the only reader of an enemy's lethal result. The enemy enters `Dead` at the
+lethal contact time, and its respawn delay runs from that time. The controller
+does not apply `State.Dead`, which #21 owns for players, so `Reset` has none to
+remove.
 
 One exception: if the enemy stops being alive without a lethal result (for
 example a test or a later effect sets Health to zero), the controller notices
@@ -419,7 +438,7 @@ same fixtures. Every test is written red first. Test names are under
 | ID | Package | Covers |
 | --- | --- | --- |
 | E1 | P2 | Server-only execution (`ServerOnly`): a client-mode world never registers a step or changes state; the enemy classes declare no RPC; the controller's `bWantsPlayerState` is false and `FindForPawn` on the enemy returns its own ASC. |
-| E2 | P2 | Grant validation and invalid commands (`ServerOnly`): unset production config grants nothing and the enemy never attacks; unset controller config decides nothing; a valid test definition is granted once; `TryActivateAbility` on the enemy attack is refused; a refused `RegisterStep` returns the enemy to `Engage` with no sequence or counter advance. |
+| E2 | P2 | Grant validation and invalid commands (`ServerOnly`): an unset attack definition (the production class with its config cleared) grants nothing and the enemy never attacks; unset controller config decides nothing; the promoted production definition is granted once; `TryActivateAbility` on the enemy attack is refused; a refused `RegisterStep` returns the enemy to `Engage` with no sequence or counter advance. |
 | E3 | P2 | Attack lifecycle (`AttackLifecycle`): telegraph, then a step registered at the exact telegraph end under an uneven frame, its contact at the authored time, recovery, and the next telegraph; the ended step is stamped and removed. |
 | E4 | P2 | Interruption ordering (`Interruption`): a player hit inside the enemy step's interruptible window moves the enemy to `Interrupted` at the contact time and drops its later contacts; outside the window nothing changes; one notification per interruption; the late case, where one long frame takes the controller past recovery end and into a new step before the pass commits the earlier interruption, ends `Interrupted` at the contact time with the new step never started; a late interruption cancels a reset the controller decided in the same pass. |
 | E5 | P2 | Death and reset (`DeathAndReset`): a lethal hit during wind-up kills the enemy at the contact time, its step makes no later contact, and at the contact time plus the respawn delay it is home with its initial attributes and no target; a player contact in the respawn pass resolves against the dead, pre-reset enemy; Health set to zero without a lethal result kills the enemy at the pass time; a late lethal result cancels a return reset decided in the same pass, with no heal and the respawn timed from the contact. |
@@ -429,20 +448,46 @@ same fixtures. Every test is written red first. Test names are under
 | E9 | P2 | Unreachable and invalid destinations (`Navigation`): a failed move request (no navigation data) moves `Engage` to `Return` and resets the enemy home. |
 | E10 | P2 | Stuck recovery (`Navigation`): the pure policy repaths on the first `Blocked` or `OffPath` and resets on the second; other results change nothing. |
 | E11 | P2 | Leash (`TargetLoss`): a target outside the leash is dropped, and the enemy returns home and is restored. |
-| E12 | P3 | Real navmesh: in the prototype map, or in a headless world with navigation if one can build it, the enemy reaches a target across the floor and stuck recovery acts on a real `Blocked` result. |
-| E13 | P3 | Two PIE clients against a dedicated server in the prototype space: both see the same enemy state, health, and results, including under the supported network profiles. |
+| E12 | P3 | Real navmesh (`RealNavmesh`, `NavigationMeasurements`): a headless world with a built navigation mesh, because one builds (the test adds the navigation system as a map load does, then calls `Build()`). The enemy reaches a target across the floor, and stuck recovery acts on a real `Blocked` result: the first repaths, the second resets the enemy home. The fixture world does not run the scheduled ticks of the enemy's movement and path following components, so the test ticks both by hand (residual risk 4). |
+| E13 | P3 | Two PIE clients against a dedicated server (`TwoClientEnemy`, `TwoClientEnemyImpaired`), on CQTest's generated map: both see the same enemy state and attack timing, public Health and MaxHealth, death and reset, and result cues, on a clean link. Under a fixture impairment (100 ms lag, 5 % loss) it requires the attack (not the telegraph), Health, death, and reset, and only bounds the cue count, which is unreliable. Not the #45 network profiles. |
+| C1 | P3 | Config (`ProvisionalConfig`): every promoted value is in `Config/DefaultGame.ini` and reaches the class defaults. |
+
+## Measurements
+
+Recorded for [#45](https://github.com/ShayShimoni/aetheln-online/issues/45) by
+P3. They set no budget, threshold, or population assumption, and no test passes
+or fails on them. They come from `NavigationMeasurements`, which logs lines
+starting with `AETHELN_MEASURE`, on a developer machine (Intel Core i7-9750H,
+6 cores, Windows 11) in the Unreal Editor's headless automation world: no
+rendering, no networking, one player, one enemy, the fixture arena of E12 (a
+3000 by 1000 unit floor under one `NavMeshBoundsVolume`), the engine's default
+navigation agent (radius 35), and static runtime generation.
+
+| What | Value |
+| --- | --- |
+| Navigation system added to the world and mesh built, wall time | 2.6 to 10.2 ms over three runs |
+| Tiles in the mesh, and tiles holding data | 24, and 8 |
+| Memory the mesh reports (`LogMemUsed`) | 4160 bytes |
+| World tick, no enemy, 300 frames of 1/60 s | average 38 to 45 microseconds, worst 0.7 to 1.4 ms |
+| World tick, one enemy engaging one player, 300 frames | average 72 to 89 microseconds, worst 0.3 to 1.8 ms |
+
+The tick figures include the hand tick of the enemy's movement and path
+following components (see E12), the timeline pass, and the controller's
+decisions. They say nothing about a real map, several enemies, a client load, or a
+packaged server; #45 owns those. The raw logs are in the issue's delivery
+evidence (`issue-83-p3`).
 
 ## Acceptance-Criteria Mapping
 
 | #83 criterion | Covered by |
 | --- | --- |
 | Server owns perception, navigation, transitions, eligibility, attack selection, timing, damage, death, and reset | State machine, timing, eligibility, navigation; E1, E3, E5, E7, E9-E11 |
-| Reviewed AI approach selected from measured needs | Partly met. TA-026 derives the needs from the documents and the code; nothing was measured yet. The box stays unchecked until P3 records the measurements. |
+| Reviewed AI approach selected from measured needs | TA-026 derives the needs from the documents and the code, and P3 records the first measurements ([Measurements](#measurements)): navmesh build time and size, and the server tick cost with one enemy. The box is the owner's to check; no candidate framework was timed against the state machine. |
 | Navmesh, runtime constraints, spawn and reset boundaries, stuck recovery, invalid destinations specified | [Navigation](#navigation) |
 | Readable telegraph, wind-up, active, recovery, interruption, death, and reset states without notifies | State machine and replication; E3, E4, E5, E8 |
 | Minimum replication; clients cannot drive AI or contact | [Replication](#replication), [Server-Only Execution](#server-only-execution); E1, E8 |
 | Tests for target loss, unreachable paths, invalid commands, interruption ordering, death and reset, two-player contention, server-only execution | E1-E11 |
-| DoD: one greybox enemy navigates and attacks in the prototype space | P3, once provisional values are approved |
+| DoD: one greybox enemy navigates and attacks in the prototype space | P3 on the provisional values: E12 (headless arena) and E13. The enemy placed in `MovementPOC.umap` is P4 (residual risk 7), so this box stays open after P3. |
 | DoD: focused automation and repeatable multiplayer evidence | E1-E13 |
 | DoD: budgets stay with #45 | Measurements only, P3 |
 
@@ -454,23 +499,37 @@ same fixtures. Every test is written red first. Test names are under
    behavior (failed and partial paths, stuck recovery, leash return), death
    and reset, presentation state, the ability's semantic ID and mapping row,
    and tests E1 to E11.
-3. **P3**: navmesh and one enemy in the prototype space, real-navmesh and
-   two-client evidence (E12, E13), and measurements for #45. Needs approved
-   provisional values. E13 needs clients to see enemy Health: the #61 change
-   already provides it, so P3 needs no replication change.
+3. **P3**: the provisional values in config, real-navmesh and two-client
+   evidence (E12, E13), and measurements for #45. E13 needs clients to see enemy
+   Health: the #61 change already provides it, so P3 needs no replication
+   change. The navmesh volume and the enemy in `MovementPOC.umap` moved to P4.
+4. **P4, prototype space in the map**: a `NavMeshBoundsVolume`, a built
+   `RecastNavMesh`, and the placed enemy in `MovementPOC.umap` (an Editor session
+   under the LFS lock), then the #120 `navigation` content-validation review.
+   The lead deferred it from P3 to this named package, a delivery-order decision
+   under the standing lead authority
+   ([PR 355 review](https://github.com/ShayShimoni/aetheln-online/pull/355#issuecomment-6158560412));
+   the owner's choice of `MovementPOC` is unchanged. #83 stays In Progress until
+   P4 merges.
 
 ## Open Decisions
 
-All stay `TBD` until the named owner decides.
+All stay `TBD` as tuning until the named owner decides. Items 1 to 3 have
+owner-approved provisional values in config (decision 1 on
+[#83](https://github.com/ShayShimoni/aetheln-online/issues/83#issuecomment-6156988023)),
+which the feel test re-tunes.
 
 1. **Enemy step values:** windows, shape, damage, Guard pressure, interruptible
-   window, whether it interrupts, sampling bounds (#107, #45).
+   window, whether it interrupts, sampling bounds (#107, #45). Provisional.
 2. **Enemy behavior values:** `ProvisionalTelegraphSeconds`,
    `ProvisionalInterruptedSeconds`, `ProvisionalRespawnSeconds`,
    `ProvisionalAttackRange`, `ProvisionalPerceptionRadius`,
-   `ProvisionalLeashRadius` (#107, #45). The P3 greybox run needs approved
-   provisional values.
-3. **Enemy initial attributes** (#107; already `TBD` on the AI base).
+   `ProvisionalLeashRadius` (#107, #45). Provisional. The strike's reach is the
+   path end plus the shape radius plus the target capsule radius, which is less
+   than the provisional attack range, so an enemy that stops at the edge of that
+   range swings and misses; the feel test decides which value moves.
+3. **Enemy initial attributes** (#107; `TBD` on the AI base, provisional on
+   `AAethelnEnemyCharacter`).
 4. **Target rule** (#20): the provisional rule above, or another.
 5. **Interrupted enemy behavior** (#20): the foundation pauses for an authored
    time, then re-engages.
@@ -479,9 +538,13 @@ All stay `TBD` until the named owner decides.
    is registered yet. The alternative is that such a hit cancels the telegraph.
 7. **Return behavior** (#20): whether a returning enemy can be hit, and whether
    it heals on return.
-8. **Prototype space** (#20 with the arena owner): which map, if not
-   `StarterMap`.
+8. **Prototype space:** resolved. `MovementPOC` (owner decision on #83). Whether
+   `ServerDefaultMap` follows is a separate decision.
 9. **Navigation data in the client cook** (#120).
+10. **Player initial attributes** (#107): `AAethelnPlayerState` stays at zero in
+    config, and an eligible target needs Health above zero, so in a real session
+    the enemy has no eligible player until those values exist. E13 applies
+    fixture values by hand. The interactive two-client run is blocked on it.
 
 ## Residual Risks
 
@@ -490,10 +553,27 @@ All stay `TBD` until the named owner decides.
 2. `ChainStep = 1` for every enemy step reuses a player-chain field.
 3. The state machine is code, so new enemy behavior needs a programmer. TA-026
    names when to revisit.
-4. The headless world has no navigation by default; real-navmesh coverage
-   comes from P3 (E12, E13).
+4. The headless fixture world has no navigation by default; E12 adds it. The
+   arena there is fixture geometry, not `MovementPOC`. In that world the
+   scheduled ticks of the enemy's movement and path following components never
+   run (the cause is not found; a plain tick function does run), so E12 ticks
+   both by hand. No automated test walks an enemy under its scheduled ticks:
+   E13 runs in a real PIE world but holds the enemy still on a floorless map.
 5. An enemy whose every path request fails resets at most once per pass while
-   a target stays eligible. P3's navmesh evidence decides whether it needs a
-   back-off.
+   a target stays eligible. E9 still shows this with no navigation data; the
+   built-mesh run (E12) reaches its target and shows no such fast loop, so P3
+   adds no back-off. A slower cycle remains where a target stays eligible behind
+   an obstacle the mesh does not know: the enemy is blocked, repaths, is blocked,
+   resets home, then Idle engages again, once per block-detection window (about
+   5 s each). Whether that needs a back-off or a different give-up is a #20
+   behavior to decide, with #45.
 6. Several enemies advance in the order they bound to the pass. Their steps'
    ordinals follow that order, which decides exact-time ties.
+7. `MovementPOC.umap` has no `NavMeshBoundsVolume`, no built `RecastNavMesh`,
+   and no placed enemy, so the greybox enemy is not yet in the prototype space
+   itself. Adding them is an Editor session on a lockable LFS binary
+   ([Source Control](source-control.md)), then the #120 `navigation`
+   content-validation review. `ServerDefaultMap` also still names
+   `StarterMap`. Until P4, on that map a target between the attack range and
+   the perception radius starts the failed-path reset of risk 5, which E12 shows
+   only does not loop on a built mesh.

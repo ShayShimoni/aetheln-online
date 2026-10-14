@@ -3,6 +3,7 @@
 #include "Abilities/GameplayAbility.h"
 #include "AethelnAbilitySystemComponent.h"
 #include "AethelnCombatAttributeSet.h"
+#include "AethelnDeathSubsystem.h"
 #include "AethelnGameplayAbility.h"
 #include "AethelnGameplayTags.h"
 #include "GameFramework/Pawn.h"
@@ -58,6 +59,18 @@ void AAethelnPlayerState::PostInitializeComponents()
 	});
 }
 
+void AAethelnPlayerState::Destroyed()
+{
+	// A logout destroys the PlayerState. Destroyed() runs for every destroy, before the actor ends play and before its components
+	// unregister, so the ASC still holds its attributes and effects. EndPlay would not do: an actor that never began play skips it.
+	// A player who never took a first possession has nothing to carry (its attributes were never initialized).
+	if (HasAuthority() && bCombatStateInitialized && !ReconnectKey.IsEmpty())
+	{
+		UAethelnDeathSubsystem::CaptureCarriedState(*AbilitySystemComponent, ReconnectKey);
+	}
+	Super::Destroyed();
+}
+
 UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const
 {
 	return AbilitySystemComponent;
@@ -77,6 +90,14 @@ bool AAethelnPlayerState::TryAuthorizeDodge(const FAethelnDodgeStartRequest& Req
 {
 	return AbilitySystemComponent != nullptr
 		&& AbilitySystemComponent->ProcessMovementCarriedRequest(Request) == EAethelnActivationResult::Accepted;
+}
+
+void AAethelnPlayerState::RequestAbilityPress(FGameplayTag AbilityId)
+{
+	if (AbilitySystemComponent != nullptr)
+	{
+		AbilitySystemComponent->RequestActivation(AbilityId, EAethelnActivationPhase::Press);
+	}
 }
 
 FAethelnHudSnapshot AAethelnPlayerState::GetHudSnapshot() const
@@ -178,7 +199,11 @@ void AAethelnPlayerState::HandlePawnSet(APlayerState* Player, APawn* NewPawn, AP
 					AbilitySystemComponent->GiveAbility(Spec);
 				}
 			}
-			UAethelnAttributeInitEffect::ApplyTo(*AbilitySystemComponent, ProvisionalInitialAttributes);
+			// A reconnect inside the grace window takes its carried state in place of the initial attributes (#21 P4).
+			if (ReconnectKey.IsEmpty() || !UAethelnDeathSubsystem::RestoreCarriedState(*AbilitySystemComponent, ReconnectKey))
+			{
+				UAethelnAttributeInitEffect::ApplyTo(*AbilitySystemComponent, ProvisionalInitialAttributes);
+			}
 			// Once per PlayerState, like the init: a re-possession never stacks a second recovery.
 			UAethelnResourceRecoveryEffect::Start(*AbilitySystemComponent, UAethelnEnduranceRecoveryEffect::StaticClass(), ProvisionalEnduranceRecovery);
 			UAethelnResourceRecoveryEffect::Start(*AbilitySystemComponent, UAethelnGuardRecoveryEffect::StaticClass(), ProvisionalGuardRecovery);

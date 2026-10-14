@@ -8,7 +8,9 @@
  * The prototype enemy's one attack (docs/enemy-ai-and-navigation.md). It is never activated: the enemy
  * controller registers its step on the #60 timeline directly. Granting it gives the timeline the ability id
  * and content version it revalidates contacts against, and clients read the same config to derive the
- * attack phases. Every value is TBD (#107, #45); unset config fails the grant, so the enemy never attacks.
+ * attack phases. The values are the owner-approved provisional ones in Config/DefaultGame.ini (issue #83
+ * comment 6156988023), not tuning (#107, #45); an unset or invalid definition fails the grant, so the enemy
+ * never attacks.
  */
 UCLASS(Config = Game)
 class GAMECOMBAT_API UAethelnEnemyAttackAbility : public UAethelnGameplayAbility
