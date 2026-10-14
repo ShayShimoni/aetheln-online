@@ -71,7 +71,7 @@ public:
 
 	/**
 	 * Finds the binding for an ability and the definition version it was authored against with an Asset Registry
-	 * query over all mounted content: the binding class plus the searchable AbilityId and AuthoredContentVersion
+	 * query over all mounted content: the binding class plus the AbilityId and AuthoredContentVersion registry
 	 * tags. It never names a package path, so a binding in the private art plugin is found without any public
 	 * reference to that plugin (TA-019). OutAsset is set only for Found.
 	 */

@@ -16,7 +16,8 @@ if (-not $TagRegistryPath) { $TagRegistryPath = Join-Path $PSScriptRoot '..\..\d
 # Gameplay Tag and Content-Version Conventions). A test-only Ability.Test. tag is exempt.
 # Pending: tags whose ID the registry does not hold yet (#18 owns Ability.Dodge and Ability.Block, #83 owns
 # Ability.Enemy.Greybox.Strike). Remove an entry when its ID lands; the check fails on a stale entry.
-# tests/design/Test-CombatRegistry.Tests.ps1 pins this list's keys, so an addition needs a reviewed test change.
+# tests/design/Test-CombatRegistry.Tests.ps1 pins this list's keys ($PinnedPending), so an addition or a removal also
+# needs a reviewed change to $PinnedPending there.
 $PendingRegistryIds = @{
 	'Ability.Dodge' = 'combat.action.dodge'
 	'Ability.Block' = 'combat.action.block'
@@ -31,7 +32,7 @@ function Test-CombatTagMapping {
 	$RegistryIds = @{}
 	foreach ($Definition in @($Registry.definitions)) { $RegistryIds[[string]$Definition.id] = $true }
 	$Declaration = [regex]'UE_DEFINE_GAMEPLAY_TAG(?:_COMMENT|_STATIC)?\(\s*\w+\s*,\s*"(Ability\.[^"]+)"(?:\s*,\s*"([^"]*)")?\s*\)'
-	$Loose = [regex]'UE_DEFINE_GAMEPLAY_TAG\w*\(\s*\w+\s*,\s*[^"]*"Ability\.'
+	$Loose = [regex]'UE_DEFINE_GAMEPLAY_TAG\w*\(\s*\w+\s*,\s*[^";]*"Ability\.'
 	$Tags = @{}
 	foreach ($File in (Get-ChildItem -LiteralPath $SourceRoot -Recurse -File | Where-Object { $_.Extension -ceq '.cpp' -or $_.Extension -ceq '.h' })) {
 		$Text = Get-Content -LiteralPath $File.FullName -Raw -Encoding UTF8
