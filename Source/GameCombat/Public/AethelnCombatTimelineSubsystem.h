@@ -54,6 +54,12 @@ public:
 	const FAethelnDefenseState* FindDefenseState(UAethelnAbilitySystemComponent& Target) const;
 
 	/**
+	 * Server only. The Parry staggers its attacker (#260): the same interruption as a committed interrupting hit,
+	 * stamped at the contact time, without the attacker step's InterruptibleUntil check. Called from the Parry hook.
+	 */
+	void ForceInterrupt(UAethelnAbilitySystemComponent& Target, double ContactTime);
+
+	/**
 	 * Authored avoidance set, checked by presence when the contact resolves: a target holding any of
 	 * these tags yields Avoided. Empty. The dodge never enters it: its window is asked at the contact
 	 * time (IsAvoidingAt, #18 T2), and no interval-backed tag may be added here.
@@ -83,6 +89,8 @@ public:
 	FAethelnInterruptedDelegate OnTargetInterrupted;
 
 #if WITH_DEV_AUTOMATION_TESTS
+	/** Test-only: lets two players be hostile, for the Parry's player-attacker leg. Tests reset it. */
+	inline static bool bPlayersHostileForTests = false;
 	int32 GetRegisteredStepCountForTests() const { return Steps.Num(); }
 	int32 GetSweepCountForTests() const { return SweepCountForTests; }
 	void SetNextOrdinalForTests(uint64 Ordinal) { NextOrdinal = Ordinal; }
@@ -124,8 +132,8 @@ private:
 	void HandlePostActorTick(UWorld* World, ELevelTick TickType, float DeltaSeconds);
 	void Sweep(const FStep& Entry, const FAethelnAttackSampleInterval& Interval, const FVector& NowOrigin, double Now, TArray<FCandidate>& OutCandidates);
 	void Resolve(const FCandidate& Candidate, TArray<FCommitted>& OutCommitted);
-	/** Ends the target's step and chain at the contact time if the step at that time is still interruptible. */
-	void Interrupt(UAethelnAbilitySystemComponent& Target, double ContactTime);
+	/** Ends the target's step and chain at the contact time if the step at that time is still interruptible, or always when forced. */
+	void Interrupt(UAethelnAbilitySystemComponent& Target, double ContactTime, bool bForce = false);
 	void Emit(const FCommitted& Committed);
 	uint32 GetOrAssignCombatId(UAethelnAbilitySystemComponent& AbilitySystem);
 	TArray<FStep> Steps;

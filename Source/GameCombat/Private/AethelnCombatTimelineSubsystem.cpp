@@ -181,6 +181,10 @@ bool UAethelnCombatTimelineSubsystem::IsHostile(const UAethelnAbilitySystemCompo
 {
 	const bool bAttackerIsPlayer = Cast<APlayerState>(Attacker.GetOwner()) != nullptr;
 	const bool bTargetIsPlayer = Cast<APlayerState>(Target.GetOwner()) != nullptr;
+#if WITH_DEV_AUTOMATION_TESTS
+	// Players are allies (OQ1). The Parry's player-attacker leg (K7) needs a hostile pair, so a test may open one.
+	if (bPlayersHostileForTests && &Attacker != &Target && bAttackerIsPlayer && bTargetIsPlayer) { return true; }
+#endif
 	return &Attacker != &Target && bAttackerIsPlayer != bTargetIsPlayer;
 }
 
@@ -409,8 +413,10 @@ void UAethelnCombatTimelineSubsystem::Resolve(const FCandidate& Candidate, TArra
 		// 4. Directional defense: recorded once. The defense owner's hook applies what a blocked hit does and
 		// returns its consequence; the contact is never re-scored. Copy the hook: a Guard break ends the slot.
 		const FAethelnBlockedHook Hook = Defense->OnBlocked;
-		Committed.Result.Outcome = Hook.IsBound() && Hook.Execute(Contact) == EAethelnBlockConsequence::GuardBroken
-			? EAethelnCombatResultOutcome::GuardBroken
+		// The Parry hook returns Parried: fully negated, and it staggers the attacker itself (#260).
+		const EAethelnBlockConsequence Consequence = Hook.IsBound() ? Hook.Execute(Contact) : EAethelnBlockConsequence::Blocked;
+		Committed.Result.Outcome = Consequence == EAethelnBlockConsequence::GuardBroken ? EAethelnCombatResultOutcome::GuardBroken
+			: Consequence == EAethelnBlockConsequence::Parried ? EAethelnCombatResultOutcome::Parried
 			: EAethelnCombatResultOutcome::Blocked;
 	}
 	else
@@ -435,7 +441,12 @@ void UAethelnCombatTimelineSubsystem::Resolve(const FCandidate& Candidate, TArra
 	OutCommitted.Add(Committed);
 }
 
-void UAethelnCombatTimelineSubsystem::Interrupt(UAethelnAbilitySystemComponent& Target, double ContactTime)
+void UAethelnCombatTimelineSubsystem::ForceInterrupt(UAethelnAbilitySystemComponent& Target, double ContactTime)
+{
+	Interrupt(Target, ContactTime, true);
+}
+
+void UAethelnCombatTimelineSubsystem::Interrupt(UAethelnAbilitySystemComponent& Target, double ContactTime, bool bForce)
 {
 	// The target's step at the contact time. A buffered step that pass step 1 started later in this frame
 	// is not it yet: the contact belongs to the step before (A28).
@@ -443,8 +454,8 @@ void UAethelnCombatTimelineSubsystem::Interrupt(UAethelnAbilitySystemComponent& 
 	{
 		return Item.AbilitySystem.Get() == &Target && Item.Record.StartServerTime <= ContactTime && ContactTime < Item.ResetTime;
 	});
-	// InterruptibleUntil 0 means never: the contact time is never before the step start.
-	if (AtContact == nullptr || !(ContactTime < AtContact->Record.StartServerTime + AtContact->Definition.InterruptibleUntil)) { return; }
+	// InterruptibleUntil 0 means never: the contact time is never before the step start. The Parry (#260) forces it.
+	if (!bForce && (AtContact == nullptr || !(ContactTime < AtContact->Record.StartServerTime + AtContact->Definition.InterruptibleUntil))) { return; }
 	// Every step of the target ends at the contact time, so a later buffered start never started and none of
 	// the target's later contacts survive revalidation. An enemy has no chain; its steps only stop (#20).
 	for (FStep& Entry : Steps)
@@ -466,6 +477,7 @@ void UAethelnCombatTimelineSubsystem::Emit(const FCommitted& Committed)
 	{
 		const EAethelnCombatResultOutcome Outcome = Committed.Result.Outcome;
 		FAethelnObservabilityEvent Event;
+		// A Parried result is a defense: it reports as Block.
 		Event.Category = Outcome == EAethelnCombatResultOutcome::Hit ? EAethelnObservabilityCategory::Hit
 			: Outcome == EAethelnCombatResultOutcome::Avoided ? EAethelnObservabilityCategory::Dodge
 			: EAethelnObservabilityCategory::Block;
