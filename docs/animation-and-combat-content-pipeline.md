@@ -190,10 +190,11 @@ A presentation binding is a client-only data asset (proposed
 It may hard-reference the Shared definition (`client_only` to `shared` is
 allowed by the intake policy). The definition never references it. A Shared
 or ServerOnly package that hard-references a binding fails the existing
-`reference_boundary` audience check. A soft reference is denied unless the
-intake policy declares a matching rule, and this pipeline declares none; adding
-one would undo the one-direction rule and needs a reviewed change to this
-document.
+`reference_boundary` audience check (N4). A soft reference is denied unless the
+intake policy declares a matching rule, and this pipeline declares none. The
+policy's general `shared-to-client-presentation` rule matches any `/Game`
+package, though, so it also lets a Shared package soft-reference a binding:
+N4 does not forbid soft references; it only pins today's result, and narrowing the rule is open decision D4.
 
 Licensed content follows TA-019 (the private `AethelnArt` plugin):
 
@@ -278,8 +279,8 @@ is on `develop` now; "P2" and "P3" are later phases of this issue.
 | Incompatible skeleton | `skeletal_animation` family `rig_compatibility` for meshes, skeletons, and sequences; the binding validator checks each montage's skeleton against the binding's skeleton | Family exists; binding check exists (P3, N3) |
 | Incompatible socket reference | `socket_ownership` counts invalid sockets per mesh; the binding validator checks each named socket exists on the binding's skeleton or mesh | Family exists; binding check exists (P3, N3) for skeleton sockets; the binding names no mesh, so mesh sockets are not checked |
 | Stale identifiers | `reference_boundary` (unique stable ID, compatible content version, redirectors); the binding validator refuses a binding whose ability ID has no definition or whose content version differs | Family exists; the binding check for ability ID and content version exists (P3, N3) |
-| Stale tag or semantic ID | The registry validator checks registry records; the tag-to-semantic-ID mapping is checked only for the three Oathscar actives by a hand-listed test (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp:31-37`) | Partly exists. Gap: nothing checks a new or stale ability tag against the registry; P3 adds a portable check beside the registry validator that every native `Ability.` tag maps to exactly one registry ID |
-| Notify that could carry gameplay | Binding validator allowlists presentation notify classes; any other notify class fails | Exists (P3, N3): initial allowlist `UAnimNotify_PlaySound`, `UAnimNotify_PlayParticleEffect`, and `UAnimNotifyState_Trail`, exact class match, checked on the montage and on each plain `UAnimSequence` it plays; a name-only notify fails, and so does any segment that is not a plain `UAnimSequence` (a composite, for one), because its notifies are not walked |
+| Stale tag or semantic ID | The registry validator checks registry records; the tag-to-semantic-ID mapping was checked only for the three Oathscar actives by a hand-listed test (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp:31-37`) | Exists (P3b): `scripts/design/Test-CombatTagMapping.ps1`, run by `Test-CombatRegistry.ps1`, checks that every native `Ability.` tag names exactly one registry ID in its declaration comment and that no two tags share an ID. `Ability.Test.` tags are exempt. Three tags whose IDs the registry does not hold yet (`Ability.Dodge`, `Ability.Block`, `Ability.Enemy.Greybox.Strike`) sit on a pending list inside the script. The check fails once an ID lands, so the entry must be removed, and `Test-CombatRegistry.Tests.ps1` pins the list's keys, so adding an entry needs a reviewed test change (open decision D5). A tag declaration the check cannot read fails it too |
+| Notify that could carry gameplay | Binding validator allowlists presentation notify classes; any other notify class fails | Exists (P3, N3): initial allowlist `UAnimNotify_PlaySound`, `UAnimNotify_PlayParticleEffect`, `UAnimNotifyState_Trail`, and `UAnimNotify_PlayNiagaraEffect` (by exact class path, so GameCombat takes no Niagara module dependency), exact class match, checked on the montage and on each plain `UAnimSequence` it plays; a name-only notify fails, and so does any segment that is not a plain `UAnimSequence` (a composite, for one), because its notifies are not walked |
 
 All gates fail closed. A validation failure never falls back to another
 definition, an older version, or a default value.
@@ -415,12 +416,13 @@ validation test, and **P** is two-client PIE recorded in the PR.
 | --- | --- | --- | --- | --- |
 | N1 | `Aetheln.GameCombat.AttackTimeline.PresentationEventsGrantNothing` | P2 | H | During wind-up, active, and recovery of a registered step, gameplay events (any tag, including the ability and state tags), `GameplayCue` executions, and montage play and stop requests on the server change no evaluated window, recorded window offset, contact result, Health, Endurance, or Guard on either side, owned tag, active effect, cost application, chain state, chain end, or record, compared with the same run without them. Any path that cannot run headless is listed in the PR with the reason: the montage play and stop requests run on a mesh-less pawn that cannot play a montage, so those rows show only that the requests are harmless. A real montage and notify run is not proven here. |
 | N2 | `Aetheln.GameCombat.AttackContent.DefinitionValidation` | P2 | H | The definition validator and editor `IsDataValid` refuse a missing stable ID, content version 0, a non-Shared audience, a missing or non-`Ability.` identity tag, a negative or non-finite cost, no steps, unset sampling bounds, a sample of the phase-order violations, and structurally unsafe volume data; a valid three-step and a valid single-step definition pass. `StepDefinitionFailsClosed` covers each ordering clause and negative or NaN Guard pressure through the shared function; an out-of-range shape, an invalid path transform, NaN damage, and a nonzero final-step `LinkClose` have no test yet. Not in N2: registry membership of the stable ID (the #120 intake review until a tool exists), `non_promotion` for an unset reach budget (no budget exists), and a content-version mismatch against a binding (N3). |
-| N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes. Also refuses a missing skeleton, a step count that differs from the definition, a Shared or ServerOnly audience, a name-only notify, a notify on a sequence the montage plays, and a notify on a sequence inside a composite segment. Builds its montages, skeleton, and sockets in memory; no package is added |
-| N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3 (remaining, not written yet) | E | A Shared or ServerOnly package that hard- or soft-references a binding fails `reference_boundary`, and the intake policy declares no soft-reference rule that targets a binding path |
+| N3 | `Aetheln.GameCombat.AttackContent.PresentationBindingValidation` | P3 | E | The binding validator refuses a missing montage or section, a montage on another skeleton, an unknown socket, a non-allowlisted notify class, an unknown ability ID, and a stale content version; a valid binding passes. Also refuses a missing skeleton, a step count that differs from the definition, a Shared or ServerOnly audience, a name-only notify, a notify on a sequence the montage plays, and a notify on a sequence inside a composite segment. A montage with a plain `UAnimSequence` segment that carries only allowlisted notifies passes, and so does one with the Niagara effect notify. Builds its montages, skeleton, and sockets in memory; no package is added |
+| N4 | `Aetheln.GameCombat.AttackContent.BindingAudience` | P3b | E | A Shared or ServerOnly binding is refused, and the intake policy's hard-reference matrix, applied through `FAethelnContentValidationScanner::IsHardReferenceAllowed` (the call `reference_boundary` makes), refuses a Shared or ServerOnly package that hard-references a client-only binding while a binding may reference the Shared definition. It also pins today's soft-reference result (a Shared package may soft-reference a client-only `/Game` package, a ServerOnly package may not); the pin documents D4 and does not forbid it |
+| N6 | `Aetheln.GameCombat.AttackContent.BindingLookup` | P3b | E | The Asset Registry lookup finds one binding by ability ID and authored content version across packages, returns not found for another version, another ability, an invalid ID, or nothing mounted, returns ambiguous for two bindings with the same key, and editor `IsDataValid` names the duplicate on each. The fixtures are in-memory packages that are never saved |
 | N5 | Representative lifecycle | P5 | P | One authored step runs from validated data through server resolution to presentation on both clients, under C1 and C2 |
 
 Existing tests that already cover this pipeline: T13, A1, A5, A9, A17, D16,
-the registry tests, and the four portable content-validation suites.
+the registry tests (which include the tag-to-registry cases of P3b), and the four portable content-validation suites.
 
 ## Acceptance-Criteria Mapping
 
@@ -429,7 +431,7 @@ the registry tests, and the four portable content-validation suites.
 | The authoritative attack asset/data contract owns phases, authored volumes, already-hit state, ordering, costs, cooldown links, interruption policy, and validation identifiers | [Fields](#fields); #60 step definition and grant validation; TA-027 and `UAethelnAttackDefinition` (P2) | Contract and asset class defined; the D3 provisional values are in `Config/DefaultGame.ini` (P3); migrating an attack needs the first `DA_` package and is not done |
 | Montages, animation notifies, sockets, trails, audio, and VFX are presentation or authoring aids and cannot create contact, damage, cooldown, or persistence truth | [Presentation Binding Contract](#presentation-binding-contract); T13, A9, A17, D16; N1 | Enforced in code; N1 pins it in P2 |
 | The server can evaluate authored melee volumes without a client-selected target or client-claimed hit | [Server Evaluation Without Client Targets](#server-evaluation-without-client-targets); #60 A1, A9 | Met by #60 |
-| Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 | Partly exists; P2 added the definition validator and P3 the binding validator. The binding validator exists (P3, N3). The grant-time check for a missing definition asset exists only after the first attack migration (TA-027 follow-up), and a definition's registry membership stays with the #120 intake review. Unsafe volume data stays structural until a reach budget exists, so no `non_promotion` result is produced (Residual Risk 4). A content-version mismatch between a binding and its definition is the binding check (P3, N3); a migrated ability takes its version from the definition |
+| Authoring validation detects missing assets, invalid phase order, unsafe volume data, incompatible skeleton/socket references, and stale identifiers before runtime | [Authoring Validation](#authoring-validation); N2 to N4 and N6 | Partly exists; P2 added the definition validator and P3 the binding validator. The binding validator exists (P3, N3), and the binding lookup, its duplicate check, and N4 exist (P3b). The grant-time check for a missing definition asset exists only after the first attack migration (TA-027 follow-up), and a definition's registry membership stays with the #120 intake review. Unsafe volume data stays structural until a reach budget exists, so no `non_promotion` result is produced (Residual Risk 4). A content-version mismatch between a binding and its definition is the binding check (P3, N3); a migrated ability takes its version from the definition |
 | The pipeline defines source-control/LFS/locking expectations and coordinates with #14 before non-map binary assets land | [Source Control, LFS, and Locking](#source-control-lfs-and-locking) | Defined; no matrix change needed |
 | A representative attack and enemy telegraph are authored and remain readable under representative latency without choosing final combat tuning | [Representative Attack and Enemy Telegraph](#representative-attack-and-enemy-telegraph); N5 | Waits on #83, #20, #61, #45, the provisional values now in `Config/DefaultGame.ini` (P3; D3 decided), the D2 placeholder presentation, and owner feel review (O3) |
 
@@ -447,7 +449,7 @@ Each PR targets `develop` and uses `Refs #84`.
 | --- | --- | --- |
 | **P1** | This document and the index entry. Docs only. | Lead review |
 | **P2** Definition and focused tests | `UAethelnAttackDefinition` (TA-027), its validator shared with grant validation, editor `IsDataValid`, N1 and N2. No values and no asset. | Engine time |
-| **P3** Presentation binding and provisional values | Landed: the client-only binding (`UAethelnAttackPresentation`), its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3; the D3 provisional values in `Config/DefaultGame.ini`. Not landed: N4, binding lookup without any public reference to the plugin (see below), the portable tag-to-registry check, and the first attack migration, which needs the first `DA_` package (see Storage form). Fixture assets only. | P2; engine time |
+| **P3** Presentation binding and provisional values | Landed: the client-only binding (`UAethelnAttackPresentation`), its validator (skeleton, socket, section, notify allowlist, ability ID, content version), N3; the D3 provisional values in `Config/DefaultGame.ini`. Landed in P3b: N4, the binding lookup without any public reference to the plugin (see below), and the portable tag-to-registry check. Not landed: the first attack migration, which needs the first `DA_` package (see Storage form). Fixture assets only. | P2; engine time |
 | **P4** Baseline intake | #120 intake of the downloaded Epic content, IK Rig and IK Retargeter assets, Blender cleanup scripts, and the first montage on the mannequin | P3; owner action O2 once the owner has downloaded the sample (O1 is optional and not required for P5 under D2) |
 | **P5** Representative lifecycle | The representative attack and enemy telegraph bindings and N5 evidence | D3 provisional values (P3); D2 placeholder presentation; #83 enemy controller and presentation state; #20 enemy steps; #61 presentation; #45 profiles; owner feel review |
 
@@ -458,7 +460,28 @@ Registry query over all mounted content for the binding class and its
 searchable ability ID and content version, never by a package path, soft
 reference, or scan directory that names the plugin. Two bindings for the same
 ability ID and content version are a validation error, not a priority rule.
-P3 records the exact mechanism and its test.
+P3b implements it as `UAethelnAttackPresentation::FindBinding(AbilityId,
+AuthoredContentVersion, OutAsset)`: one Asset Registry `GetAssets` query for the
+binding class and the `AbilityId` tag, with no path filter, whose results are
+then kept only when their `AuthoredContentVersion` tag (the definition version
+the binding was authored against) matches. A registry filter matches its tags
+as any-of, so the version cannot join the query. `AbilityId` is written as a
+plain-string tag of the same name whose value is the tag name, so the filter
+matches it exactly (a searchable `FGameplayTag` would export as
+`(TagName="...")`); `AuthoredContentVersion` is `AssetRegistrySearchable`. No match is `NotFound`
+(the neutral fallback), two or more are `Ambiguous`, and editor `IsDataValid` on a
+binding reports every other binding with the same key as an error. The test is
+N6.
+
+**The lookup sees only cooked bindings.** The only cook rule for
+`UAethelnPrimaryAssetDefinition` (`Config/DefaultGame.ini`, `CookRule=Unknown`)
+cooks an asset only when something references it, and nothing references a
+binding by design. A packaged client therefore finds no binding, public ones
+included, and `FindBinding` returns `NotFound` (the neutral fallback) with no
+error. A cook-inclusion rule that adds bindings to the client target only is a
+prerequisite for packaged presentation (#15 and the TA-019 follow-ups); an
+always-cook rule for both targets would put client-only content in the server
+cook. P3b changes no cook configuration.
 
 ## Owner Actions
 
@@ -477,13 +500,16 @@ P3 records the exact mechanism and its test.
 | D1 | Storage form of authoritative attack definitions ([Storage form](#storage-form)) | Decided by the lead, 2026-10-12: one Shared data asset, [TA-027](architecture-decisions.md#ta-027---one-shared-primary-data-asset-per-authored-attack-definition) | Done |
 | D2 | Source of sword-and-shield attack and enemy telegraph animation, which the Epic baseline does not appear to include: a third-party pack through #120 (private plugin under TA-019), Codex-generated motion, a human animator, or a placeholder presentation for P5 evidence | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): a placeholder presentation for P5 evidence; real art later without changing gameplay | Done |
 | D3 | Timing, shape, damage, and readability values for the representative attack and telegraph. #107 closed without them. | Decided by the owner, 2026-10-12 ([issue #84](https://github.com/ShayShimoni/aetheln-online/issues/84#issuecomment-6131999366)): promote the existing GameTests fixture values to `Config/DefaultGame.ini`, marked provisional, with no new numbers; re-tune at the P5 feel test | Landed in P3, recorded: the provisional values are in the ini of the unmigrated chain (`[/Script/GameCombat.AethelnBasicChainAbility]`), and the test fixture no longer sets them. The enemy telegraph values stay with #83 and #20, which own telegraph timing |
+| D4 | Soft references to a binding. The intake policy's `shared-to-client-presentation` rule lets a Shared package soft-reference any client-only `/Game` package, a binding included, which the one-direction rule in [The binding](#the-binding) forbids | Lead (an intake-policy question, not a product rule) | Leave it while no Shared asset soft-references client content. N4 pins today's result for a Shared to client-only `/Game` soft reference; narrowing the rule or adding a binding-specific denial changes the intake policy, its tests, and that pin |
+| D5 | Registry IDs for `Ability.Dodge`, `Ability.Block`, and `Ability.Enemy.Greybox.Strike`, which the tag mapping check lists as pending | #18 (`Ability.Dodge`, `Ability.Block`) and #83 (`Ability.Enemy.Greybox.Strike`) | Add the IDs to the registry, then delete the pending entries in `scripts/design/Test-CombatTagMapping.ps1` and update `$PinnedPending` in `tests/design/Test-CombatRegistry.Tests.ps1` |
 
 ## Residual Risks
 
 1. **Licensed art and packaging.** Content in the private plugin is not in
    packaged builds yet (TA-019 follow-ups). A representative attack bound to
    licensed animation presents only in local editor sessions until that
-   changes.
+   changes. Public bindings are not cooked either, because nothing references
+   them (see [Binding lookup](#phased-delivery)).
 2. **Late observers.** Under latency, observers see a shortened tell.
    Readability depends on `TBD` budgets (#45, #97).
 3. **Notify allowlist scope.** The allowlist (P3) checks notify classes, not
@@ -492,10 +518,11 @@ P3 records the exact mechanism and its test.
    and code review owns the rest.
 4. **No reach budget.** Unsafe volume checks are structural until a maximum
    reach or shape budget exists.
-5. **Niagara notifies.** The initial allowlist holds the Cascade
-   `UAnimNotify_PlayParticleEffect` and no Niagara notify class, although the
-   binding contract names Niagara feedback. A Niagara notify is refused, so P5
-   Niagara placeholders need a reviewed allowlist change first.
+5. **Niagara notifies.** The allowlist holds the Cascade
+   `UAnimNotify_PlayParticleEffect` and the Niagara
+   `UAnimNotify_PlayNiagaraEffect` (P3b, N3), but not the timed Niagara notify
+   state `UAnimNotifyState_TimedNiagaraEffect`. That state is refused until a
+   reviewed allowlist change adds it.
 6. **Chain cost against resource bounds.** The provisional chain cost of 2
    exceeds the configured `MaxEndurance` of 0, and the resource-bounds test
    (`Source/GameTests/Private/AethelnOathscarAbilityTests.cpp`) covers only the

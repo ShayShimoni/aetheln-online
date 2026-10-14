@@ -469,4 +469,11 @@ if (-not $SkipMain) {
 		exit 1
 	}
 	Write-Output "PASS: combat registry ($($Result.definitionCount) definitions)"
+	. (Join-Path $PSScriptRoot 'Test-CombatTagMapping.ps1') -SkipMain
+	$TagResult = Test-CombatTagMapping -SourceRoot (Join-Path $PSScriptRoot '..\..\Source') -RegistryPath $RegistryPath
+	if (-not $TagResult.passed) {
+		$TagResult.errors | ForEach-Object { Write-Output "FAIL: $_" }
+		exit 1
+	}
+	Write-Output "PASS: combat tag mapping ($($TagResult.tagCount) native Ability. tags)"
 }
