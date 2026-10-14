@@ -8,6 +8,7 @@
 #include "AethelnCombatGameMode.h"
 #include "AethelnCombatTestAbilities.h"
 #include "AethelnCombatTestWorld.h"
+#include "AethelnDeathSubsystem.h"
 #include "AethelnGameplayTags.h"
 #include "AethelnPlayerCharacter.h"
 #include "AethelnPlayerController.h"
@@ -418,6 +419,13 @@ bool FAethelnReconnectInterimGapTest::RunTest(const FString& Parameters)
 	// The configured input-enabled Blueprint pawn is not this test's subject.
 	GameMode->InputEnabledPawnClass.Reset();
 	GameMode->DefaultPawnClass = AAethelnPlayerCharacter::StaticClass();
+	// A fixture grace window (review L7), never the provisional ini value.
+	UAethelnDeathSubsystem* Deaths = TestWorld.World->GetSubsystem<UAethelnDeathSubsystem>();
+	if (!TestNotNull(TEXT("The authority world owns the death subsystem"), Deaths))
+	{
+		return false;
+	}
+	Deaths->ProvisionalDisconnectGraceSeconds = 5.0f;
 	Player.PlayerState->SetReconnectKey(TEXT("t34-key"));
 	Player.Controller->Destroy();
 	APlayerController* NewController = TestWorld.Spawn<AAethelnPlayerController>();
