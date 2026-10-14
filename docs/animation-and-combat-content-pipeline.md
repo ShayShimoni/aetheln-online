@@ -462,11 +462,13 @@ reference, or scan directory that names the plugin. Two bindings for the same
 ability ID and content version are a validation error, not a priority rule.
 P3b implements it as `UAethelnAttackPresentation::FindBinding(AbilityId,
 AuthoredContentVersion, OutAsset)`: one Asset Registry `GetAssets` query for the
-binding class with the `AbilityId` and `AuthoredContentVersion` tags (the
-definition version the binding was authored against) and no path filter.
-`AbilityId` is a struct, which the registry would export as an empty value, so
-the class writes it as a plain-string tag of the same name;
-`AuthoredContentVersion` is `AssetRegistrySearchable`. No match is `NotFound`
+binding class and the `AbilityId` tag, with no path filter, whose results are
+then kept only when their `AuthoredContentVersion` tag (the definition version
+the binding was authored against) matches. A registry filter matches its tags
+as any-of, so the version cannot join the query. `AbilityId` is a struct, which
+the registry would export as an empty value, so the class writes it as a
+plain-string tag of the same name; `AuthoredContentVersion` is
+`AssetRegistrySearchable`. No match is `NotFound`
 (the neutral fallback), two or more are `Ambiguous`, and editor `IsDataValid` on a
 binding reports every other binding with the same key as an error. The test is
 N6.
