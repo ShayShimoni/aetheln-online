@@ -1357,7 +1357,7 @@ matches the approved design; T32 is intentionally unassigned.
 | T30 | Packaged two-client run with the new seam | later | K | Not required to merge #19 |
 | T31 | `Aetheln.GameCombat.ActivationSeam.LifecycleRejections` | P3 | H | No avatar gives `ConnectionClosed`; a dying avatar gives `ActorDestroyed`; sequence state survives re-possession |
 | T33 | `Aetheln.GameCombat.Lifecycle.PawnToAbilitySystemLookup` | P2 | H | `FindForPawn` returns the PlayerState ASC for a player pawn, the pawn's own ASC for AI, null for neither |
-| T34 | `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` | P2, flipped by #21 P4 and P4b | H | After the production logout (the controller's destruction), a fresh PlayerState for the same player and key resumes the same pawn, takes the carried Health and cooldown, and is granted once. The name keeps the P2 gap it pinned; #21 P4 flipped it for a keyed reconnect, and P4b keeps the pawn and issues every client its key. |
+| T34 | `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` | P2, flipped by #21 P4 and P4b | H | After the production logout (the controller's destruction), a fresh PlayerState for the same player and key resumes the same pawn, takes the carried Health and cooldown, and is granted once. The name keeps the P2 gap it pinned; #21 P4 flipped it for a keyed reconnect, and P4b keeps the pawn and issues every client its key, which closes it for a client that keeps the key. |
 | T35 | `Aetheln.GameCombat.ActivationSeam.DebugRequestsRefused` | #324 | H | `ServerPrintDebug_Request` and `...WithStrings` write no server or client debug strings, send no outcome and each draw one bucket token (two-token bucket, no refill, then a seam request is `RateLimited`). Control: the engine implementations, called past the override, write both string arrays. |
 
 ### T1 required integration coverage
@@ -1441,19 +1441,23 @@ here.
 
 ## Known Interim Gaps
 
-- **Reconnect is a free refill (closed by #21 P4 and P4b).** With the
+- **Reconnect is a free refill (closed for a client that keeps its key, #21 P4
+  and P4b).** With the
   `AGameModeBase` base class pinned in Class Layout, a reconnect creates a new
   PlayerState, so `bCombatStateInitialized` is false. #21 P4 builds the
   transfer and P4b keeps the player: a logout keeps the old PlayerState,
-  unreplicated, and its pawn in the world, attackable, for the disconnect grace
-  window under a server-issued key that every client presents, and the new
+  inactive and unowned, and its pawn in the world, attackable, for the disconnect grace
+  window under a server-issued key that the client presents, and the new
   PlayerState resumes the pawn and takes the attributes, shared timed states,
   life state and respawn wait in place of the initial attributes
   ([Reconnect and Carried State](death-and-respawn.md#reconnect-and-carried-state-p4-and-p4b)).
   Canon says "disconnect is never an instant escape, cleanse, restore, or grant"
-  (Death, Logout, and Recovery Safety in the combat document). What remains is
-  identity: a client that drops its key starts a new session, as any new player
-  does, until #35 authenticates accounts. The test
+  (Death, Logout, and Recovery Safety in the combat document). That holds only
+  for a client that keeps its key. The client keeps it in memory only, so a
+  process crash, a restart, or an omitted or changed key starts a new session
+  at once: the same person returns refilled and cleansed of death, the respawn
+  wait, cooldowns and a Guard break. This is accepted under the key's exception
+  record and closes with #35 (authenticated accounts). The test
   `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` keeps its name and asserts
   the carried values and the resumed pawn through the production logout.
 - **Replicated-data cache closure (#60 P2).** All four client-callable cache
