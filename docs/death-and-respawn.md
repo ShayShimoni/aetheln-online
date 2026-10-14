@@ -346,10 +346,13 @@ for the grace window is decided and is the work of P4b.
   only when it applies a break itself, so a carried break has no binding.
   `ApplyDeath` therefore removes `State.GuardBroken` too, which is a no-op for a
   live break that the ability's binding already ended.
-- **Not carried.** The stance buffs of #260 are not named by the snapshot (they
-  are carried only if #260 builds them on the shared timed-state effect, which
-  the death removal rule still ends; the choice is open in
-  `gas-foundation.md`), the recovery effects
+- **Not carried.** The stagger a successful Parry puts on its attacker
+  (`UAethelnStaggerEffect`, a duration effect on a player attacker) is not
+  carried, so a keyed reconnect ends it; the capture names it in a warning. The
+  stance buffs of #260 are not named by the snapshot either (they are carried
+  only if #260 builds them on the shared timed-state effect, which the death
+  removal rule still ends; the choice is open in `gas-foundation.md`). The
+  recovery effects
   themselves (the new PlayerState starts them), the pawn's location (a
   reconnect starts at the game mode's start spot, and a dead player's corpse
   does not return to where it died), and anything the snapshot does not name.
@@ -362,8 +365,9 @@ for the grace window is decided and is the work of P4b.
   state, and the recovery effects are started again by the new PlayerState. Any
   other duration effect would be ended by a reconnect, so the capture logs a
   warning naming it, and `...Death.ReconnectNamesUncarriedEffects` fails when
-  that warning is missing. A future debuff, stance or stagger on another class
-  cannot be cleansed silently, and a duration modifier on a maximum would show
+  that warning is missing. The Parry stagger (`UAethelnStaggerEffect`) already
+  falls here, and a future debuff or stance on another class cannot be cleansed
+  silently either, and a duration modifier on a maximum would show
   there too.
 
 ### Identity key (prototype)
@@ -590,6 +594,10 @@ Lead decisions (2026-10-12):
   players with the same key both capture at logout, and the later logout wins.
 - **A hard drop leaves two states (P4).** See the hard-drop row of the edge-case
   table; P4b decides it.
+- **A keyed reconnect ends a Parry stagger (P4).** `UAethelnStaggerEffect` is
+  not carried, so a staggered player who reconnects with a key is no longer
+  staggered. The capture warns, and `...Death.ReconnectNamesUncarriedEffects`
+  guards the warning; carrying it is a later decision.
 - **The location is not carried (P4).** A reconnect starts at the game mode's
   start spot, so a player can leave a fight by reconnecting. That is outside the
   snapshot this document lists; position belongs to the persistence design.
