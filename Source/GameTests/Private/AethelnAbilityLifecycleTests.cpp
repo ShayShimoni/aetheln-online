@@ -416,7 +416,8 @@ bool FAethelnReconnectInterimGapTest::RunTest(const FString& Parameters)
 	ReconnectedPlayerState->SetReconnectKey(TEXT("t34-key"));
 	Player.Controller->Possess(Pawn);
 
-	// The gap #19 pinned here is closed: a reconnect inside the grace window is not a free refill.
+	// The gap #19 pinned here is closed: a reconnect inside the grace window is not a free refill, for a client that presents a
+	// key (no client sends one until P4b).
 	UAethelnAbilitySystemComponent* ReconnectedAbilitySystem = ReconnectedPlayerState->GetAethelnAbilitySystemComponent();
 	TestTrue(TEXT("Pawn resolves to the fresh PlayerState ASC"), UAethelnAbilitySystemComponent::FindForPawn(Pawn) == ReconnectedAbilitySystem);
 	TestEqual(TEXT("Health is carried over, not refilled to its configured value"), ReconnectedAbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), MakeTestInitValues().Health - 10.0f);

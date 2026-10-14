@@ -81,8 +81,8 @@ and `GM.cpp` abbreviates `Engine/Source/Runtime/Engine/Private/GameModeBase.cpp`
 7. **Reconnect uses a carried snapshot, not PlayerState reuse.** The combat
    game mode stays on `AGameModeBase`, so a reconnect gets a fresh PlayerState
    (`Source/GameCombat/Public/AethelnCombatGameMode.h:10-17`). P4 keeps a
-   server-side snapshot keyed by a server-held reconnect key for the disconnect
-   grace window (15 s, provisional and owner-set, see
+   server-side snapshot, held by the server under a client-presented reconnect key,
+   for the disconnect grace window (15 s, provisional and owner-set, see
    [Open Decisions](#open-decisions)) and applies it in place of initial
    attributes (see [Reconnect and Carried State](#reconnect-and-carried-state-p4-partial)).
 
@@ -396,8 +396,9 @@ yet (see above).
   `:7577`), so it sits in default server logs. The observability events carry
   no key.
 - **Exception record** (`security-and-operations.md`: an accepted exception
-  names an owner, evidence and a revisit trigger). Owner: issue #45 (the identity
-  and backend decision) replaces this function. Evidence: this section and
+  names an owner, evidence and a revisit trigger). Owner: issue #35 (authenticate
+  accounts and manage sessions) replaces this function, and issue #36 (the
+  identity and backend vendor spike) decides the vendor. Evidence: this section and
   `...Death.ReconnectKeyIsClientPresented`, `...ReconnectLoginStampsKey`.
   Trigger: before any build leaves `local` or `development` (AGENTS.md,
   Environment Strategy), the key must be authenticated and kept out of the logs.
@@ -419,8 +420,8 @@ yet (see above).
 The owner's rule (issue #21 comment 6131998770, restated in comment 6133925614)
 is decided: during the 15 s grace window the pawn stays in the world,
 server-controlled and attackable, and the player resumes it on reconnect. It was
-to be built in P4 and is the named next phase, P4b. This pull request merges as
-a partial P4. The shape the engine allows, none of it built:
+to be built in P4 and is the named next phase, P4b. P4 (PR #357) merged as
+partial. The shape the engine allows, none of it built:
 
 - **Keep the pawn.** `APlayerController::PawnLeavingGame` is virtual
   (`PlayerController.h:2054`) and is what destroys the pawn at logout.

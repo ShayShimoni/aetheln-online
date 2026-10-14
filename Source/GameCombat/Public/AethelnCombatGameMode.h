@@ -34,7 +34,7 @@ public:
 	 * The one place a player's reconnect identity is decided (#21 P4, docs/death-and-respawn.md). Prototype key: the
 	 * opaque "ReconnectKey" login option, 1 to 64 characters of A-Z, a-z, 0-9, '-' and '_'. It is client-supplied and
 	 * not authenticated: it only names a snapshot the server already holds, and it never carries state. A vendor or
-	 * account identity replaces this function when #45 and the backend decide one. Returns an empty key, which means
+	 * account identity replaces this function when #35 and #36 decide one. Returns an empty key, which means
 	 * no carry, for a missing or malformed option.
 	 */
 	static FString ResolveReconnectKey(const FString& Options);

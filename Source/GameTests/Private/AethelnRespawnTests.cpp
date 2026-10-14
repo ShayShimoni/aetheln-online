@@ -429,7 +429,7 @@ bool FAethelnDeathEventTest::RunTest(const FString& Parameters)
 
 // #21 P4 reconnect (docs/death-and-respawn.md, Test Plan R6). One authority world: the logout is the PlayerState's
 // destruction, which carries its state under the reconnect key, and the login is a fresh PlayerState with the key whose
-// first possession takes it. Most tests set the key directly; ReconnectIdentityIsServerHeld and ReconnectLoginStampsKey
+// first possession takes it. Most tests set the key directly; ReconnectKeyIsClientPresented and ReconnectLoginStampsKey
 // cover the key's source.
 namespace AethelnRespawnTests
 {

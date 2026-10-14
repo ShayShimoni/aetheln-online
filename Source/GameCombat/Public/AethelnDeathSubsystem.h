@@ -14,7 +14,7 @@ class UAethelnCombatTimelineSubsystem;
  * notification and enters death once per life: State.Dead through UAethelnDeathStateEffect, every active
  * ability canceled, and the avatar's movement stopped. It then waits for the respawn deadline on the world
  * clock and respawns the player through the world's game mode. (P4) It also keeps the disconnect snapshot: what a
- * logout carries across the grace window, keyed by a server-held reconnect key, so a reconnect is not a refill.
+ * logout carries across the grace window, a server-held snapshot under a client-presented reconnect key, so a reconnect is not a refill.
  */
 UCLASS(Config = Game)
 class GAMECOMBAT_API UAethelnDeathSubsystem : public UWorldSubsystem
