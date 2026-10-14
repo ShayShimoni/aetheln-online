@@ -1034,9 +1034,12 @@ bool FAethelnGraceKeptPawnFallsTest::RunTest(const FString& Parameters)
 	F.Pawn->GetCharacterMovement()->SetMovementMode(MOVE_Falling);
 	const TWeakObjectPtr<APawn> Pawn(F.Pawn);
 	Disconnect(F, TestKey);
-	F.AdvanceTo(0.5);
 	if (!TestTrue(TEXT("The pawn is kept"), Pawn.IsValid())) { return false; }
 	TestNull(TEXT("No controller drives the kept pawn"), Pawn->GetController());
+	// This harness world's tick does not run the movement component (observed: a kept pawn with the flag set stayed at Start with
+	// zero velocity), so the test runs the component's own server tick, the path a live server's world tick takes.
+	UCharacterMovementComponent* Movement = CastChecked<ACharacter>(Pawn.Get())->GetCharacterMovement();
+	for (int32 Step = 0; Step < 5; ++Step) { Movement->TickComponent(0.1f, LEVELTICK_All, nullptr); }
 	TestTrue(TEXT("A kept pawn in the air falls under gravity with no input; it does not hang"), Pawn->GetActorLocation().Z < Start.Z - 10.0);
 	return true;
 }

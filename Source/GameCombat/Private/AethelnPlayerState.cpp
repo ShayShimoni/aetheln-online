@@ -6,8 +6,10 @@
 #include "AethelnDeathSubsystem.h"
 #include "AethelnGameplayAbility.h"
 #include "AethelnGameplayTags.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameplayEffect.h"
+#include "Net/UnrealNetwork.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityGrant, Log, All);
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnAbilityAvatar, Log, All);
@@ -57,6 +59,26 @@ void AAethelnPlayerState::PostInitializeComponents()
 			HudActionOutcome.Broadcast(Outcome);
 		}
 	});
+}
+
+void AAethelnPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(AAethelnPlayerState, bKeptForGrace);
+}
+
+void AAethelnPlayerState::MarkKeptForGrace()
+{
+	bKeptForGrace = true;
+	SetIsInactive(true);
+	if (AGameStateBase* GameState = GetWorld() != nullptr ? GetWorld()->GetGameState() : nullptr) { GameState->RemovePlayerState(this); }
+}
+
+void AAethelnPlayerState::OnRep_KeptForGrace()
+{
+	// The engine's handler removes it from the local list and re-adds it only while active (GameStateBase.cpp:122-130).
+	SetIsInactive(bKeptForGrace);
+	OnRep_bIsInactive();
 }
 
 void AAethelnPlayerState::OnDeactivated()

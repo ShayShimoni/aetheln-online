@@ -14,7 +14,6 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/GameModeBase.h"
-#include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerState.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnDeath, Log, All);
@@ -159,11 +158,10 @@ bool UAethelnDeathSubsystem::RetainForGrace(AAethelnPlayerState& PlayerState)
 	FRetained Previous;
 	if (Self->Retained.RemoveAndCopyValue(Key, Previous) && Previous.PlayerState.IsValid()) { Self->EndGrace(*Previous.PlayerState.Get()); }
 	// Lead decision (2026-10-14): it keeps replicating, so attackers see the kept pawn's Health, State.Dead and death cue. It is
-	// inactive, so it leaves the server's player list and, through the replicated flag, every client's (OnRep_bIsInactive). The
-	// controller that owned it is being destroyed; with no owner, its owner-only data (Endurance, Guard, full effects) reaches nobody.
+	// inactive and leaves the server's player list and every client's (MarkKeptForGrace). The controller that owned it is being
+	// destroyed; with no owner, its owner-only data (Endurance, Guard, full effects) reaches nobody.
 	PlayerState.SetOwner(nullptr);
-	PlayerState.SetIsInactive(true);
-	if (AGameStateBase* GameState = World->GetGameState()) { GameState->RemovePlayerState(&PlayerState); }
+	PlayerState.MarkKeptForGrace();
 	// Server-controlled: no input moves it and a pawn in mid-move does not coast on, but it still falls and lands under gravity
 	// with no controller, so a player who leaves in mid-air does not leave a pawn hanging out of reach.
 	if (ACharacter* Character = Cast<ACharacter>(PlayerState.GetPawn()))

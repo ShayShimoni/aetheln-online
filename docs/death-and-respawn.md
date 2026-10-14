@@ -514,9 +514,13 @@ above zero), so the two hooks never disagree:
   `CleanupPlayerState` calls (`PlayerController.cpp:1392-1398`) and which would
   destroy it. `UAethelnDeathSubsystem::RetainForGrace` keeps it replicating, so
   attackers still see the kept pawn's Health, `State.Dead` and death cue (lead
-  decision, 2026-10-14). It marks it inactive (`APlayerState::SetIsInactive`)
-  and removes it from the server's player list; the replicated flag removes it
-  from each client's player list too (`APlayerState::OnRep_bIsInactive` and
+  decision, 2026-10-14). `AAethelnPlayerState::MarkKeptForGrace` marks it
+  inactive (`APlayerState::SetIsInactive`) and removes it from the server's
+  player list. The engine's `bIsInactive` replicates only in the initial bunch
+  (`COND_InitialOnly`, `PlayerState.cpp:440-443`), so clients that already hold
+  the PlayerState would never see it; the project's replicated `bKeptForGrace`
+  makes each client mark its copy inactive, and the engine's handler then takes
+  it out of that client's player list (`APlayerState::OnRep_bIsInactive` and
   `AGameStateBase::AddPlayerState`, `PlayerState.cpp:188-197`,
   `GameStateBase.cpp:122-130`). It clears its owner (the controller being
   destroyed), so no connection owns it: its owner-only Endurance and Guard and

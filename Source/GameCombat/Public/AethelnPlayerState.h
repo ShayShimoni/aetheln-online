@@ -64,6 +64,16 @@ public:
 	/** Server only: abilities granted and the first attributes applied, at the first possession. */
 	bool IsCombatStateInitialized() const { return bCombatStateInitialized; }
 
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	/**
+	 * Server only (#21 P4b). Marks this PlayerState kept for the grace window: inactive, and out of the server's player list
+	 * and, through bKeptForGrace, every client's. The engine's own bIsInactive replicates only in the initial bunch
+	 * (COND_InitialOnly, PlayerState.cpp:440-443), so a client that already holds this PlayerState would never see it.
+	 */
+	void MarkKeptForGrace();
+	bool IsKeptForGrace() const { return bKeptForGrace; }
+
 	UAethelnAbilitySystemComponent* GetAethelnAbilitySystemComponent() const { return AbilitySystemComponent; }
 	const UAethelnCombatAttributeSet* GetCombatAttributeSet() const { return AttributeSet; }
 
@@ -100,6 +110,14 @@ public:
 private:
 	UFUNCTION()
 	void HandlePawnSet(APlayerState* Player, APawn* NewPawn, APawn* OldPawn);
+
+	/** Clients: a kept PlayerState becomes inactive here too, which takes it out of the local player list (OnRep_bIsInactive). */
+	UFUNCTION()
+	void OnRep_KeptForGrace();
+
+	/** See MarkKeptForGrace. Replicated to every client; never set by a client. */
+	UPROPERTY(ReplicatedUsing = OnRep_KeptForGrace)
+	bool bKeptForGrace = false;
 
 	FAethelnHudActionOutcomeDelegate HudActionOutcome;
 
