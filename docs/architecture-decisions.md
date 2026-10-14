@@ -2669,10 +2669,9 @@ Every accepted decision records:
   as specified in [Enemy AI and Navigation Foundation](enemy-ai-and-navigation.md).
   Perception is a server-side eligibility query, not AI Perception. Movement
   uses the engine's path following on a static navmesh. `GameCombat` adds the
-  engine runtime modules `AIModule` and, listed explicitly since #83 P3,
-  `NavigationSystem` (a module dependency, not a plugin). The prototype adds
-  no Behavior Tree, Blackboard, StateTree, or AI Perception asset, and enables
-  no plugin.
+  engine runtime module `AIModule`, which brings `NavigationSystem` as its own
+  public dependency. The prototype adds no Behavior Tree, Blackboard,
+  StateTree, or AI Perception asset, and enables no plugin.
 - **Context:** #83 requires the AI approach to come from measured prototype
   needs, not from habit. No enemy code existed when this was decided, so the
   needs below come from the canonical documents and the existing combat code,

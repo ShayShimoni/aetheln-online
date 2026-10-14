@@ -26,8 +26,10 @@ provisional, with no new number
 ([decision](https://github.com/ShayShimoni/aetheln-online/issues/83#issuecomment-6156988023)).
 A `Provisional...` config key holds one of them; the feel test re-tunes them,
 and a change to any authoritative step field bumps the attack's
-`ContentVersion`. The config is each value's only place: no test sets one, and
-this document repeats none. Two groups of keys gate the enemy, so a key that is
+`ContentVersion`. The config is each value's only place: no test supplies the
+provisional values and this document repeats none. Scenario tests override single
+instance values and derive expectations from the step geometry, so a re-tune must
+update those expectations in the same change. Two groups of keys gate the enemy, so a key that is
 unset, zero, or invalid fails closed:
 
 - The attack ability's `ContentVersion`, step values, and sampling bounds. Unset,
@@ -447,7 +449,7 @@ same fixtures. Every test is written red first. Test names are under
 | E10 | P2 | Stuck recovery (`Navigation`): the pure policy repaths on the first `Blocked` or `OffPath` and resets on the second; other results change nothing. |
 | E11 | P2 | Leash (`TargetLoss`): a target outside the leash is dropped, and the enemy returns home and is restored. |
 | E12 | P3 | Real navmesh (`RealNavmesh`, `NavigationMeasurements`): a headless world with a built navigation mesh, because one builds (the test adds the navigation system as a map load does, then calls `Build()`). The enemy reaches a target across the floor, and stuck recovery acts on a real `Blocked` result: the first repaths, the second resets the enemy home. The fixture world does not run the scheduled ticks of the enemy's movement and path following components, so the test ticks both by hand (residual risk 4). |
-| E13 | P3 | Two PIE clients against a dedicated server (`TwoClientEnemy`, `TwoClientEnemyImpaired`), on CQTest's generated map: both see the same enemy state and attack timing, public Health and MaxHealth, death and reset, and result cues, on a clean link and under a fixture impairment (100 ms lag, 5 % loss). Not the #45 network profiles. |
+| E13 | P3 | Two PIE clients against a dedicated server (`TwoClientEnemy`, `TwoClientEnemyImpaired`), on CQTest's generated map: both see the same enemy state and attack timing, public Health and MaxHealth, death and reset, and result cues, on a clean link. Under a fixture impairment (100 ms lag, 5 % loss) it requires the attack (not the telegraph), Health, death, and reset, and only bounds the cue count, which is unreliable. Not the #45 network profiles. |
 | C1 | P3 | Config (`ProvisionalConfig`): every promoted value is in `Config/DefaultGame.ini` and reaches the class defaults. |
 
 ## Measurements
@@ -485,7 +487,7 @@ evidence (`issue-83-p3`).
 | Readable telegraph, wind-up, active, recovery, interruption, death, and reset states without notifies | State machine and replication; E3, E4, E5, E8 |
 | Minimum replication; clients cannot drive AI or contact | [Replication](#replication), [Server-Only Execution](#server-only-execution); E1, E8 |
 | Tests for target loss, unreachable paths, invalid commands, interruption ordering, death and reset, two-player contention, server-only execution | E1-E11 |
-| DoD: one greybox enemy navigates and attacks in the prototype space | P3 on the provisional values: E12 (headless arena) and E13. Not yet placed in `MovementPOC.umap` (residual risk 7). |
+| DoD: one greybox enemy navigates and attacks in the prototype space | P3 on the provisional values: E12 (headless arena) and E13. The enemy placed in `MovementPOC.umap` is P4 (residual risk 7), so this box stays open after P3. |
 | DoD: focused automation and repeatable multiplayer evidence | E1-E13 |
 | DoD: budgets stay with #45 | Measurements only, P3 |
 
@@ -498,10 +500,17 @@ evidence (`issue-83-p3`).
    and reset, presentation state, the ability's semantic ID and mapping row,
    and tests E1 to E11.
 3. **P3**: the provisional values in config, real-navmesh and two-client
-   evidence (E12, E13), the `NavigationSystem` module dependency, and
-   measurements for #45. E13 needs clients to see enemy Health: the #61 change
-   already provides it, so P3 needs no replication change. The navmesh volume
-   and the enemy in `MovementPOC.umap` are not part of P3 (residual risk 7).
+   evidence (E12, E13), and measurements for #45. E13 needs clients to see enemy
+   Health: the #61 change already provides it, so P3 needs no replication
+   change. The navmesh volume and the enemy in `MovementPOC.umap` moved to P4.
+4. **P4, prototype space in the map**: a `NavMeshBoundsVolume`, a built
+   `RecastNavMesh`, and the placed enemy in `MovementPOC.umap` (an Editor session
+   under the LFS lock), then the #120 `navigation` content-validation review.
+   The lead deferred it from P3 to this named package, a delivery-order decision
+   under the standing lead authority
+   ([PR 355 review](https://github.com/ShayShimoni/aetheln-online/pull/355#issuecomment-6158560412));
+   the owner's choice of `MovementPOC` is unchanged. #83 stays In Progress until
+   P4 merges.
 
 ## Open Decisions
 
@@ -552,8 +561,12 @@ which the feel test re-tunes.
    E13 runs in a real PIE world but holds the enemy still on a floorless map.
 5. An enemy whose every path request fails resets at most once per pass while
    a target stays eligible. E9 still shows this with no navigation data; the
-   built-mesh run (E12) reaches its target and shows no such loop, so P3 adds no
-   back-off. A back-off stays a #20 and #45 decision.
+   built-mesh run (E12) reaches its target and shows no such fast loop, so P3
+   adds no back-off. A slower cycle remains where a target stays eligible behind
+   an obstacle the mesh does not know: the enemy is blocked, repaths, is blocked,
+   resets home, then Idle engages again, once per block-detection window (about
+   5 s each). Whether that needs a back-off or a different give-up is a #20
+   behavior to decide, with #45.
 6. Several enemies advance in the order they bound to the pass. Their steps'
    ordinals follow that order, which decides exact-time ties.
 7. `MovementPOC.umap` has no `NavMeshBoundsVolume`, no built `RecastNavMesh`,
@@ -561,6 +574,6 @@ which the feel test re-tunes.
    itself. Adding them is an Editor session on a lockable LFS binary
    ([Source Control](source-control.md)), then the #120 `navigation`
    content-validation review. `ServerDefaultMap` also still names
-   `StarterMap`. Until then, on that map a target between the attack range and
+   `StarterMap`. Until P4, on that map a target between the attack range and
    the perception radius starts the failed-path reset of risk 5, which E12 shows
    only does not loop on a built mesh.

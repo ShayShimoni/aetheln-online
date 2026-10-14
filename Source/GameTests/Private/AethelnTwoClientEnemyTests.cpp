@@ -124,6 +124,10 @@ namespace AethelnTwoClientEnemyTests
 		// Generous bounds: the run waits on replication under impairment, never on a fixed tick.
 		const FTimespan Timeout = FTimespan::FromSeconds(30.0);
 		const FAethelnCombatAttributeInitValues Init = AethelnCombatTests::MakeTestInitValues();
+		// A takes a hit about every 0.7 s for the whole run; fixture Health this high keeps A alive through every wait.
+		FAethelnCombatAttributeInitValues VictimInit = Init;
+		VictimInit.MaxHealth = 400.0f;
+		VictimInit.Health = 400.0f;
 		const FAethelnCombatAttributeInitValues EnemyInit = GetDefault<AAethelnEnemyCharacter>()->ProvisionalInitialAttributes;
 		const UAethelnEnemyAttackAbility* Attack = GetDefault<UAethelnEnemyAttackAbility>();
 		FRun* R = &Run.Get();
@@ -138,13 +142,13 @@ namespace AethelnTwoClientEnemyTests
 				}
 				return true;
 			}, Timeout)
-			.ThenServer(TEXT("Give both players fixture attributes and hold them still, B out of the enemy's reach"), [R, Init](FState& Server)
+			.ThenServer(TEXT("Give both players fixture attributes and hold them still, B out of the enemy's reach"), [R, Init, VictimInit](FState& Server)
 			{
 				// The ini's provisional player attributes are zero (TBD until #107): an eligible target needs Health.
 				for (int32 Index : { VictimClient, ObserverClient })
 				{
 					UAethelnAbilitySystemComponent& AbilitySystem = *ServerAbilitySystem(Server, Index);
-					UAethelnAttributeInitEffect::ApplyTo(AbilitySystem, Init);
+					UAethelnAttributeInitEffect::ApplyTo(AbilitySystem, Index == VictimClient ? VictimInit : Init);
 					if (ACharacter* Pawn = Cast<ACharacter>(AbilitySystem.GetAvatarActor())) { Pawn->GetCharacterMovement()->DisableMovement(); }
 				}
 				UAethelnAbilitySystemComponent& Victim = *ServerAbilitySystem(Server, VictimClient);
@@ -273,9 +277,8 @@ namespace AethelnTwoClientEnemyTests
 				R->ServerDeathTime = Server.World->GetTimeSeconds();
 				AethelnCombatTests::ApplyInstantModifier(*Enemy->GetAethelnAbilitySystemComponent(), UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::Override, 0.0f);
 			})
-			.UntilClients(TEXT("Both clients see the enemy dead, when the link is clean"), [R](FState& Client)
+			.UntilClients(TEXT("Both clients see the enemy dead"), [R](FState& Client)
 			{
-				if (R->bImpaired) { return true; }
 				const AAethelnEnemyCharacter* Enemy = ClientEnemy(Client);
 				if (Enemy != nullptr && Enemy->GetPresentationState().State == EState::Dead) { R->bSawDead[Client.ClientIndex] = true; }
 				return R->bSawDead[Client.ClientIndex];
@@ -292,6 +295,7 @@ namespace AethelnTwoClientEnemyTests
 				R->Test.TestTrue(TEXT("The reset enemy is home"), FVector::Dist(Enemy->GetActorLocation(), R->EnemyHome) < 1.0);
 				// The enemy is dead or idle from here on, so no result can follow.
 				R->ServerVictimHealth = Attribute(*ServerAbilitySystem(Server, VictimClient), UAethelnCombatAttributeSet::GetHealthAttribute());
+				R->Test.TestTrue(TEXT("A is still alive: the waits above ended on the enemy, not on A's death"), R->ServerVictimHealth > 0.0f);
 				return true;
 			}, Timeout)
 			.UntilClients(TEXT("Both clients see the enemy idle at home with full Health, and A's Health the server's"), [R, EnemyInit](FState& Client)

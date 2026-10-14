@@ -15,8 +15,7 @@ public class GameCombat : ModuleRules
 			"GameCore",
 			"GameplayAbilities",
 			"GameplayTags",
-			"GameplayTasks",
-			"NavigationSystem"
+			"GameplayTasks"
 		});
 
 		PrivateDependencyModuleNames.Add("GameNet");

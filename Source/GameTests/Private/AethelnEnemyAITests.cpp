@@ -18,7 +18,9 @@
 // #83 enemy AI foundation (docs/enemy-ai-and-navigation.md, Test Plan E1 to E11). The fixture's player stands at
 // the origin aiming along +X with the test chain; the enemy stands still (movement disabled). Its controller, attack
 // definition, and initial attributes are the provisional values the owner promoted to Config/DefaultGame.ini
-// (issue #83 comment 6156988023); no test sets them, and the constants below read them from the class defaults.
+// (issue #83 comment 6156988023); no test supplies them, and the constants below read them from the class defaults.
+// Scenario tests override single instance values and derive expectations from the step geometry, so a re-tune
+// must update those expectations in the same change.
 // Geometry: the enemy's radius-10 sphere, 60 units from the player, first
 // touches the player's capsule at its step start + 0.125 + 0.125 * 8 / 30; the player's sphere first touches an
 // enemy capsule 60 units ahead at the press + 0.125 + 0.125 * 16 / 30. The headless world has no navigation
