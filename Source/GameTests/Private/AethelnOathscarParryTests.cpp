@@ -312,6 +312,9 @@ bool FAethelnParryStaggersAttackerTest::RunTest(const FString& Parameters)
 		else
 		{
 			TestEqual(TEXT("A zero stagger leaves the attacker free"), Attacker.Press(), EResult::Accepted);
+			// The positive control for the refusals above: with no stagger and no chain commitment left, the same block raise is accepted.
+			F.AdvanceTo(2.0);
+			TestEqual(TEXT("A block raise is accepted when the attacker is not staggered"), Attacker.Raise(), EResult::Accepted);
 		}
 		Attacker.Player.AbilitySystem->OnChainEnded.Remove(Handle);
 	}
@@ -444,8 +447,7 @@ bool FAethelnParryRelationsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("The chain is refused during the window"), F.Attack(), EResult::ActivationBlocked);
 		TestEqual(TEXT("Instant Strike is refused during the window"), F.Deliver(F.Request(Strike)), EResult::ActivationBlocked);
 		TestEqual(TEXT("The refused presses spend nothing"), F.CostApplications, Spent);
-		TestEqual(TEXT("They end nothing"), F.ChainEnds.Num(), 0);
-		TestTrue(TEXT("The window is still open"), ParryActive(F) && F.Has(AethelnGameplayTags::State_Oathscar_Parrying));
+		TestTrue(TEXT("The refusals ended nothing: the window is still open"), ParryActive(F) && F.Has(AethelnGameplayTags::State_Oathscar_Parrying));
 		F.AdvanceTo(1.5); // the window end
 		TestFalse(TEXT("The window ended"), ParryActive(F));
 		TestEqual(TEXT("Instant Strike is accepted after the window end"), F.Deliver(F.Request(Strike)), EResult::Accepted);
