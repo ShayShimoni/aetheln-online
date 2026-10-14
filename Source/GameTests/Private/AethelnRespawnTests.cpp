@@ -939,8 +939,11 @@ bool FAethelnGraceKeepsAttackablePawnTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("No controller drives the kept pawn, so no input reaches it"), Pawn->GetController());
 	TestTrue(TEXT("The kept pawn resolves to the kept ASC"), UAethelnAbilitySystemComponent::FindForPawn(Pawn.Get()) == Kept.Get());
 	TestTrue(TEXT("The kept ASC's avatar is the kept pawn"), Kept->GetAvatarActor() == Pawn.Get());
+	// Lead decision (2026-10-14): attackers keep seeing the kept player, so its PlayerState still replicates, inactive (out of the
+	// player list) and with no owner, so its owner-only data (Endurance, Guard, full effects) reaches no connection.
 	TestTrue(TEXT("The kept PlayerState is inactive"), KeptState->IsInactive());
-	TestFalse(TEXT("The kept PlayerState no longer replicates"), KeptState->GetIsReplicated());
+	TestTrue(TEXT("The kept PlayerState still replicates"), KeptState->GetIsReplicated());
+	TestNull(TEXT("The kept PlayerState has no owner, so no connection is its owner"), KeptState->GetOwner());
 	TestEqual(TEXT("One player is kept"), Deaths->GetCarriedStateCountForTests(), 1);
 
 	// Attackable and killable: an enemy swing through the real contact pipeline hits the kept pawn, and the death is real.
