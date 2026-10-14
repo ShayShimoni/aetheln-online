@@ -31,7 +31,7 @@ public:
 
 	virtual void PostInitializeComponents() override;
 	/**
-	 * A logout (CleanupPlayerState). Inside the disconnect grace window this PlayerState stays, unreplicated, with its pawn,
+	 * A logout (CleanupPlayerState). Inside the disconnect grace window this PlayerState stays, inactive and unowned, with its pawn,
 	 * until the player reconnects or the window ends (#21 P4b, UAethelnDeathSubsystem::RetainForGrace). Otherwise the engine
 	 * default destroys it.
 	 */

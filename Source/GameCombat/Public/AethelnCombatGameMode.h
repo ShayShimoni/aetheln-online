@@ -5,6 +5,7 @@
 #include "UObject/SoftObjectPtr.h"
 #include "AethelnCombatGameMode.generated.h"
 
+class AAethelnPlayerState;
 class APawn;
 
 /**
@@ -42,7 +43,7 @@ public:
 	/** Sends the player its reconnect key over its own connection (AAethelnPlayerController::ClientReceiveReconnectKey). */
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
-	/** Resumes the pawn a reconnecting player left inside the grace window (#21 P4b); otherwise the engine's restart. */
+	/** Resumes the pawn a reconnecting player left inside the grace window and issues it a new key (#21 P4b); otherwise the engine's restart. */
 	virtual void RestartPlayer(AController* NewPlayer) override;
 
 	/**
@@ -54,7 +55,14 @@ public:
 	 */
 	static FString ResolveReconnectKey(const FString& Options);
 
-	/** A new server-issued reconnect key (#21 P4b): 32 random hexadecimal digits, which ResolveReconnectKey accepts. */
+	/** The connected player (one with a controller) that holds Key, if any; a kept player has none. */
+	const AAethelnPlayerState* FindConnectedPlayer(const FString& Key) const;
+
+	/**
+	 * A new server-issued reconnect key (#21 P4b): FGuid::NewGuid as 32 hexadecimal digits, which ResolveReconnectKey accepts.
+	 * Windows makes a version 4 GUID (122 random bits), the Linux server a UUIDv7 (48-bit time, 74 random bits). Empty, which
+	 * means no carry, when the platform cannot make a GUID.
+	 */
 	static FString IssueReconnectKey();
 
 	/**

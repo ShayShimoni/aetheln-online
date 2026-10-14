@@ -66,13 +66,14 @@ public:
 
 	/**
 	 * Authority only (#21 P4b). Whether a logout keeps this player for the grace window: a player whose first possession
-	 * is done, with a reconnect key, in a world whose grace window is finite and above zero.
+	 * is done, with a reconnect key, in a world that is not tearing down and whose grace window is finite and above zero.
 	 */
 	static bool CanRetain(const AAethelnPlayerState& PlayerState);
 
 	/**
 	 * Authority only (#21 P4b). Called at logout from the PlayerState's OnDeactivated. Keeps the PlayerState, inactive,
-	 * unowned and unreplicated, with its ASC, effects and respawn wait running, and its pawn (if any) in the world, until
+	 * unowned and still replicated (attackers see the kept pawn's Health and death; nobody gets its owner-only data), with
+	 * its ASC, effects and respawn wait running, and its pawn (if any) in the world, running physics with no controller, until
 	 * the player reconnects with the key or the grace window ends. Returns false, logging why when the window is not
 	 * valid, when the player is not kept; the caller then destroys it.
 	 */
@@ -81,9 +82,10 @@ public:
 	/**
 	 * Authority only (#21 P4b). For a reconnecting player's start, before any possession: when the fresh PlayerState's key
 	 * names a player kept inside its grace window, captures the kept player's state for the fresh PlayerState's restore,
-	 * removes the kept PlayerState, and returns the kept pawn to resume (null when it has none). Returns null otherwise.
+	 * removes the kept PlayerState, sets OutPawn to the kept pawn to resume (null when it has none), and returns true. A
+	 * refused capture ends the window instead. Returns false, with OutPawn null, when nothing was taken over.
 	 */
-	static APawn* TakeOverRetained(const AAethelnPlayerState& Fresh);
+	static bool TakeOverRetained(const AAethelnPlayerState& Fresh, APawn*& OutPawn);
 
 	/** Whether Key names a player kept inside its grace window. */
 	bool IsRetainedKey(const FString& Key) const;

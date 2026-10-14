@@ -120,13 +120,24 @@ bool UAethelnDeathSubsystem::Respawn(UAethelnAbilitySystemComponent& Victim)
 	return true;
 }
 
+namespace
+{
+	/** A player a logout would carry: on a server, past its first possession, with a reconnect key. */
+	bool WouldCarry(const AAethelnPlayerState& PlayerState)
+	{
+		return PlayerState.HasAuthority() && PlayerState.IsCombatStateInitialized() && !PlayerState.GetReconnectKey().IsEmpty();
+	}
+
+	bool IsValidGrace(float Grace) { return FMath::IsFinite(Grace) && Grace > 0.0f; }
+}
+
 bool UAethelnDeathSubsystem::CanRetain(const AAethelnPlayerState& PlayerState)
 {
 	const UWorld* World = PlayerState.GetWorld();
 	const UAethelnDeathSubsystem* Self = World != nullptr ? World->GetSubsystem<UAethelnDeathSubsystem>() : nullptr;
-	const float Grace = Self != nullptr ? Self->ProvisionalDisconnectGraceSeconds : 0.0f;
-	return Self != nullptr && PlayerState.HasAuthority() && PlayerState.IsCombatStateInitialized() && !PlayerState.GetReconnectKey().IsEmpty()
-		&& FMath::IsFinite(Grace) && Grace > 0.0f;
+	// A world that is tearing down keeps nothing, as AGameMode::AddInactivePlayer (GameMode.cpp:606). Kicks are not excluded:
+	// nothing kicks players yet, and a kick path must exclude itself here when one is built.
+	return Self != nullptr && !World->bIsTearingDown && WouldCarry(PlayerState) && IsValidGrace(Self->ProvisionalDisconnectGraceSeconds);
 }
 
 bool UAethelnDeathSubsystem::RetainForGrace(AAethelnPlayerState& PlayerState)
@@ -136,7 +147,7 @@ bool UAethelnDeathSubsystem::RetainForGrace(AAethelnPlayerState& PlayerState)
 	if (!CanRetain(PlayerState))
 	{
 		// Only a player who would be kept says why it is not: one with a key, past its first possession, on a server.
-		if (Self != nullptr && PlayerState.HasAuthority() && PlayerState.IsCombatStateInitialized() && !PlayerState.GetReconnectKey().IsEmpty())
+		if (Self != nullptr && WouldCarry(PlayerState) && !IsValidGrace(Self->ProvisionalDisconnectGraceSeconds))
 		{
 			UE_LOG(LogAethelnDeath, Warning, TEXT("Refused to carry the state of %s: ProvisionalDisconnectGraceSeconds %f must be finite and above zero; a reconnect is a new session."),
 				*GetNameSafe(&PlayerState), Self->ProvisionalDisconnectGraceSeconds);
@@ -147,44 +158,50 @@ bool UAethelnDeathSubsystem::RetainForGrace(AAethelnPlayerState& PlayerState)
 	// The game mode never stamps a kept player's key on a live one, so this is unreachable; it never leaves two kept players.
 	FRetained Previous;
 	if (Self->Retained.RemoveAndCopyValue(Key, Previous) && Previous.PlayerState.IsValid()) { Self->EndGrace(*Previous.PlayerState.Get()); }
-	// The engine's own inactive player (AGameMode::AddInactivePlayer): out of the player list and unreplicated, so clients drop it.
-	// The controller that owned it is being destroyed.
+	// Lead decision (2026-10-14): it keeps replicating, so attackers see the kept pawn's Health, State.Dead and death cue. It is
+	// inactive, so it leaves the server's player list and, through the replicated flag, every client's (OnRep_bIsInactive). The
+	// controller that owned it is being destroyed; with no owner, its owner-only data (Endurance, Guard, full effects) reaches nobody.
 	PlayerState.SetOwner(nullptr);
 	PlayerState.SetIsInactive(true);
 	if (AGameStateBase* GameState = World->GetGameState()) { GameState->RemovePlayerState(&PlayerState); }
-	PlayerState.SetReplicates(false);
-	// Server-controlled and still: no controller moves it, and a pawn in mid-move does not coast on.
+	// Server-controlled: no input moves it and a pawn in mid-move does not coast on, but it still falls and lands under gravity
+	// with no controller, so a player who leaves in mid-air does not leave a pawn hanging out of reach.
 	if (ACharacter* Character = Cast<ACharacter>(PlayerState.GetPawn()))
 	{
-		if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement()) { Movement->StopMovementImmediately(); }
+		if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+		{
+			Movement->StopMovementImmediately();
+			Movement->bRunPhysicsWithNoController = true;
+		}
 	}
 	Self->Retained.Add(Key, FRetained{ &PlayerState, World->GetTimeSeconds() + Self->ProvisionalDisconnectGraceSeconds });
 	UE_LOG(LogAethelnDeath, Log, TEXT("%s is kept for the disconnect grace window with pawn %s."), *GetNameSafe(&PlayerState), *GetNameSafe(PlayerState.GetPawn()));
 	return true;
 }
 
-APawn* UAethelnDeathSubsystem::TakeOverRetained(const AAethelnPlayerState& Fresh)
+bool UAethelnDeathSubsystem::TakeOverRetained(const AAethelnPlayerState& Fresh, APawn*& OutPawn)
 {
+	OutPawn = nullptr;
 	UWorld* World = Fresh.GetWorld();
 	UAethelnDeathSubsystem* Self = World != nullptr ? World->GetSubsystem<UAethelnDeathSubsystem>() : nullptr;
 	const FString& Key = Fresh.GetReconnectKey();
 	FRetained Entry;
-	if (Self == nullptr || Key.IsEmpty() || !Fresh.HasAuthority() || !Self->Retained.RemoveAndCopyValue(Key, Entry)) { return nullptr; }
+	if (Self == nullptr || Key.IsEmpty() || !Fresh.HasAuthority() || !Self->Retained.RemoveAndCopyValue(Key, Entry)) { return false; }
 	AAethelnPlayerState* Kept = Entry.PlayerState.Get();
-	if (Kept == nullptr || Kept == &Fresh) { return nullptr; }
-	if (World->GetTimeSeconds() > Entry.GraceEndsAt)
+	if (Kept == nullptr || Kept == &Fresh) { return false; }
+	// Capture first: re-pointing the pawn runs the kept PlayerState's null-pawn case, which cancels its abilities. A window that
+	// ended before this tick's sweep, or a refused capture (the window was made invalid while the player was away), ends the
+	// window as the sweep would: never a pawn without its state.
+	if (World->GetTimeSeconds() > Entry.GraceEndsAt || !CaptureCarriedState(*Kept->GetAethelnAbilitySystemComponent(), Key))
 	{
-		// The window ended before this tick's sweep: the same end as the sweep's.
 		Self->EndGrace(*Kept);
-		return nullptr;
+		return false;
 	}
-	// Capture first: re-pointing the pawn runs the kept PlayerState's null-pawn case, which cancels its abilities.
-	CaptureCarriedState(*Kept->GetAethelnAbilitySystemComponent(), Key);
-	APawn* Pawn = Kept->GetPawn();
-	if (Pawn != nullptr) { Pawn->SetPlayerState(nullptr); }
+	OutPawn = Kept->GetPawn();
+	if (OutPawn != nullptr) { OutPawn->SetPlayerState(nullptr); }
 	Kept->Destroy();
-	UE_LOG(LogAethelnDeath, Log, TEXT("%s takes over the kept player and pawn %s."), *GetNameSafe(&Fresh), *GetNameSafe(Pawn));
-	return Pawn;
+	UE_LOG(LogAethelnDeath, Log, TEXT("%s takes over the kept player and pawn %s."), *GetNameSafe(&Fresh), *GetNameSafe(OutPawn));
+	return true;
 }
 
 bool UAethelnDeathSubsystem::IsRetainedKey(const FString& Key) const
