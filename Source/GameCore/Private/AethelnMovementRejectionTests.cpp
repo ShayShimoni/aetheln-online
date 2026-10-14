@@ -5,13 +5,14 @@
 
 /*
  * #17 AC4 server rejections that need a hostile client: a claimed movement mode, a stale
- * timestamp, an over-limit acceleration and a large displacement. They run on the dodge
- * loopback harness, so every move goes through the engine's real saved-move capture, packed
- * serialization, received-move handler and response. The hostile input differs per test:
- * the mode and acceleration tests rewrite the client's saved move right before the engine
- * packs it, the stale test replays earlier honest packets after newer ones, and the
- * displacement test moves the client and then predicts normally. All four go through the
- * real packed path.
+ * timestamp, an over-limit acceleration, a large displacement and two illegal transitions
+ * (a jump request while airborne, and a claimed landing while the server is falling). They
+ * run on the dodge loopback harness, so every move goes through the engine's real saved-move
+ * capture, packed serialization, received-move handler and response. The hostile input differs
+ * per test: the mode, transition and acceleration tests rewrite the client's saved move right
+ * before the engine packs it, the stale test replays earlier honest packets after newer ones,
+ * and the displacement test moves the client and then predicts normally. All six go through
+ * the real packed path.
  * They describe engine behavior; none adds or changes a threshold. Time-discrepancy
  * detection stays off and its thresholds stay TBD (#2/#45).
  */
@@ -181,6 +182,112 @@ bool FAethelnMovementRejectDisplacementTeleportTest::RunTest(const FString& Para
 	TestEqual(TEXT("Server corrects the displacement"), Pair.CorrectionCount, 1);
 	TestTrue(TEXT("Server does not adopt the claimed location"), Pair.Server->GetActorLocation().Equals(ServerBefore, PositionTolerance));
 	TestTrue(TEXT("Client is returned to the server location"), Pair.Client->GetActorLocation().Equals(Pair.Server->GetActorLocation(), PositionTolerance));
+	TestTrue(TEXT("All move and response packing succeeded"), Pair.bSerializationSucceeded);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnMovementRejectTransitionJumpWhileAirborneTest,
+	"Aetheln.Movement.Net.Reject.TransitionJumpWhileAirborne", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnMovementRejectTransitionJumpWhileAirborneTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnMovementRejectionTests;
+	FLoopback Pair;
+	TestTrue(TEXT("Loopback roles and acknowledgement are valid"), Pair.IsValid());
+	if (!Pair.IsValid()) { return false; }
+
+	TestTrue(TEXT("Honest warm move is simulated and acknowledged"), Pair.Warm());
+
+	// Positive control: an honest takeoff from the ground is accepted, so the airborne refusal below is not a dead jump path.
+	Pair.Client->Jump();
+	Pair.Predict();
+	Pair.Client->StopJumping();
+	TestTrue(TEXT("Honest takeoff goes through the real received-move handler"), Pair.Deliver(Pair.Packets.Last()));
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		Pair.Predict();
+		TestTrue(TEXT("Honest airborne move is acknowledged"), Pair.Deliver(Pair.Packets.Last()));
+	}
+	TestTrue(TEXT("Positive control: the honest jump took off on the client and the server"),
+		Pair.ClientMovement->IsFalling() && Pair.ServerMovement->IsFalling() && Pair.Server->JumpCurrentCount == 1);
+	TestEqual(TEXT("Positive control: honest moves are not corrected"), Pair.CorrectionCount, 0);
+
+	const float ServerVerticalBefore = Pair.ServerMovement->Velocity.Z;
+	// A second takeoff would reset the vertical speed to the jump speed, clearly above the decayed value. The margin is
+	// only a test margin well above numeric noise; it is not a tuning value.
+	TestTrue(TEXT("Fixture: a second takeoff would be visible in the server's vertical speed"),
+		ServerVerticalBefore > 0.0f && Pair.ServerMovement->JumpZVelocity - ServerVerticalBefore > 10.0f);
+
+	const int32 ReceivedBefore = Pair.ServerMovement->TestReceivedMoveCount;
+	const int32 PacketsBefore = Pair.Packets.Num();
+	bool bClaimed = false;
+	PredictClaiming(Pair, [&bClaimed](FSavedMove_Character& Move)
+	{
+		Move.bPressedJump = true;
+		bClaimed = true;
+	});
+	TestTrue(TEXT("The jump claim was written into the packed move"), bClaimed);
+	TestEqual(TEXT("Hostile move was captured"), Pair.Packets.Num(), PacketsBefore + 1);
+	if (Pair.Packets.Num() != PacketsBefore + 1) { return false; }
+	TestTrue(TEXT("Hostile move goes through the real received-move handler"), Pair.Deliver(Pair.Packets.Last()));
+	TestEqual(TEXT("Positive control: the hostile move simulated"), Pair.ServerMovement->TestReceivedMoveCount, ReceivedBefore + 1);
+	TestTrue(TEXT("Positive control: the server received the jump flag"),
+		(Pair.ServerMovement->TestReceivedMoveFlags.Last() & FSavedMove_Character::FLAG_JumpPressed) != 0);
+	TestEqual(TEXT("Server grants no second jump"), Pair.Server->JumpCurrentCount, 1);
+	TestTrue(TEXT("Server keeps falling"), Pair.ServerMovement->IsFalling());
+	TestTrue(TEXT("Server vertical speed keeps decaying instead of resetting to the jump speed"),
+		Pair.ServerMovement->Velocity.Z < ServerVerticalBefore);
+	TestTrue(TEXT("Server vertical speed matches the client's, which did not jump again"),
+		FMath::IsNearlyEqual(Pair.ServerMovement->Velocity.Z, Pair.ClientMovement->Velocity.Z, 0.5f));
+	TestEqual(TEXT("The refused jump needs no correction"), Pair.CorrectionCount, 0);
+	TestTrue(TEXT("All move and response packing succeeded"), Pair.bSerializationSucceeded);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnMovementRejectTransitionClaimedLandingTest,
+	"Aetheln.Movement.Net.Reject.TransitionClaimedLanding", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnMovementRejectTransitionClaimedLandingTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnMovementRejectionTests;
+	FLoopback Pair;
+	TestTrue(TEXT("Loopback roles and acknowledgement are valid"), Pair.IsValid());
+	if (!Pair.IsValid()) { return false; }
+
+	TestTrue(TEXT("Honest warm move is simulated and acknowledged"), Pair.Warm());
+	const float GroundHeight = Pair.Server->GetActorLocation().Z;
+
+	Pair.Client->Jump();
+	Pair.Predict();
+	Pair.Client->StopJumping();
+	TestTrue(TEXT("Honest takeoff goes through the real received-move handler"), Pair.Deliver(Pair.Packets.Last()));
+	for (int32 Index = 0; Index < 2; ++Index)
+	{
+		Pair.Predict();
+		TestTrue(TEXT("Honest airborne move is acknowledged"), Pair.Deliver(Pair.Packets.Last()));
+	}
+	TestTrue(TEXT("Positive control: the client and the server are airborne"),
+		Pair.ClientMovement->IsFalling() && Pair.ServerMovement->IsFalling() && Pair.Server->GetActorLocation().Z > GroundHeight + 1.0f);
+	TestEqual(TEXT("Positive control: honest moves are not corrected"), Pair.CorrectionCount, 0);
+
+	// The client claims to have landed although the server has it in the air: falling to walking is not a transition the server allows.
+	const uint8 Claimed = static_cast<uint8>(MOVE_Walking);
+	TestNotEqual(TEXT("Fixture: the claimed landing differs from the server's mode"), Claimed, Pair.ServerMovement->PackNetworkMovementMode());
+	const int32 PacketsBefore = Pair.Packets.Num();
+	bool bClaimed = false;
+	PredictClaiming(Pair, [Claimed, &bClaimed](FSavedMove_Character& Move)
+	{
+		Move.EndPackedMovementMode = Claimed;
+		bClaimed = true;
+	});
+	TestTrue(TEXT("The claim was written into the packed move"), bClaimed);
+	TestEqual(TEXT("Hostile move was captured"), Pair.Packets.Num(), PacketsBefore + 1);
+	if (Pair.Packets.Num() != PacketsBefore + 1) { return false; }
+	TestTrue(TEXT("Hostile move goes through the real received-move handler"), Pair.Deliver(Pair.Packets.Last()));
+	TestEqual(TEXT("Server corrects the claimed landing"), Pair.CorrectionCount, 1);
+	TestTrue(TEXT("Server keeps falling and does not land on the claim"),
+		Pair.ServerMovement->IsFalling() && Pair.Server->GetActorLocation().Z > GroundHeight + 1.0f);
+	TestTrue(TEXT("The correction returns the client to falling"), Pair.ClientMovement->IsFalling());
 	TestTrue(TEXT("All move and response packing succeeded"), Pair.bSerializationSucceeded);
 	return true;
 }
