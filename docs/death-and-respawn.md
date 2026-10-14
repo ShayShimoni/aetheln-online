@@ -485,12 +485,14 @@ above zero), so the two hooks never disagree:
   `OnDeactivated` (`PlayerState.cpp:128-132`; the engine comment at
   `PlayerController.cpp:1396` says a game can override it), which
   `CleanupPlayerState` calls (`PlayerController.cpp:1392-1398`) and which would
-  destroy it. `UAethelnDeathSubsystem::RetainForGrace` keeps it as the engine
-  keeps an inactive player (`AGameMode::AddInactivePlayer`,
+  destroy it. `UAethelnDeathSubsystem::RetainForGrace` keeps it with the calls
+  the engine uses for an inactive player (`AGameMode::AddInactivePlayer`,
   `Engine/Source/Runtime/Engine/Private/GameMode.cpp:601-618`): out of the game
-  state's player list and no longer replicated, so clients drop their copy. It
-  also marks it inactive (`APlayerState::SetIsInactive`), clears its owner (the
-  controller being destroyed) and stops the pawn's movement. The kept PlayerState keeps its ASC, effects and respawn wait
+  state's player list, and `SetReplicates(false)`. It also marks it inactive
+  (`APlayerState::SetIsInactive`), clears its owner (the controller being
+  destroyed) and stops the pawn's movement. The engine's own inactive copy was
+  never replicated, but this PlayerState was: what clients then hold is not
+  verified (see [Residual Limitations](#residual-limitations)). The kept PlayerState keeps its ASC, effects and respawn wait
   running. This is not PlayerState reuse (item 7 stands).
 - **Attackable and killable.** Damage, death and respawn rules apply to the
   kept pawn unchanged: a lethal result is a real death (`ApplyDeath` on the kept
@@ -654,14 +656,27 @@ Lead decision (2026-10-14,
   is removed at the deadline and the respawn waits for the reconnect (R6). A
   logout with an invalid grace window drops the wait with the PlayerState, and
   the next login is a new session.
-- **Other clients do not see the kept player's attributes or death (P4b).** The
-  kept PlayerState is unreplicated, as the engine keeps an inactive player, so
-  while the player is away other clients still see the kept pawn and its
-  movement but no longer receive its Health, its `State.Dead` tag or its death
-  cue, which live on the PlayerState's ASC. The server state is authoritative
-  and the reconnect replicates it to every client (P3's replication). Showing an
-  away player's Health or death to others would need the kept PlayerState to
-  stay replicated; that choice and its presentation belong to #61.
+- **Other clients do not receive the kept player's attributes or death (P4b).**
+  The kept PlayerState stops replicating (lead instruction for P4b), so while
+  the player is away other clients still see the kept pawn and its movement
+  but receive no update of its Health, its `State.Dead` tag or its death cue,
+  which live on the PlayerState's ASC. A kept pawn's death while the player is
+  away is therefore authoritative on the server only, and acceptance criterion
+  2 (death state and feedback replicate to all relevant clients) is not met for
+  that case until the lead accepts it or the kept PlayerState stays replicated;
+  the reconnect replicates the state to every client (P3's replication).
+  Whether a client drops its copy of the PlayerState when replication stops,
+  or keeps a frozen copy (and so stale Health on the kept pawn), is not
+  verified: the engine's `AActor::SetReplicates(false)` only stops replication
+  on the Iris path (`Actor.cpp:4593-4596`), and `UWorld::DestroyActor` sends a
+  destruction only for an actor that still replicates (`LevelActor.cpp:1012-1018`).
+  How others see an away player belongs to #61.
+- **Two network paths run only in one world (P4b).** A new connection taking
+  over an existing pawn (the owning connection changes, the pawn becomes the
+  new client's autonomous proxy, and the new client receives a restart for a
+  pawn it never saw), and the death cue of a kept pawn (a multicast on the ASC
+  of a PlayerState that no longer replicates) have no two-client test. R11's
+  single world and P3's replication of the same state are the evidence.
 - **AI does not pick an away player as a new target (P4b).** The #83 enemy
   chooses new targets among connected players' pawns
   (`AethelnEnemyController.cpp:176-187`), so it ignores a kept pawn it was not
