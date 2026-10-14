@@ -7,7 +7,9 @@ This is the implementation specification for
 can die, respawn, and rejoin combat safely. Pull requests P1 to P4 deliver it
 (see [Phased Delivery](#phased-delivery)). P1 added this document and the
 server-side death state. P2 adds the server respawn. P3 adds the two-client
-proof and the death cue. P4 adds the reconnect carried state.
+proof and the death cue. P4 adds the reconnect carried snapshot and is partial:
+P4b, grace-window pawn retention, is decided and not built (see
+[P4b](#p4b-grace-window-pawn-retention-decided-not-built)).
 
 It is subordinate to
 [Combat and Networking Architecture](combat-and-networking-architecture.md)
@@ -82,7 +84,7 @@ and `GM.cpp` abbreviates `Engine/Source/Runtime/Engine/Private/GameModeBase.cpp`
    server-side snapshot keyed by a server-held reconnect key for the disconnect
    grace window (15 s, provisional and owner-set, see
    [Open Decisions](#open-decisions)) and applies it in place of initial
-   attributes (see [Reconnect and Carried State](#reconnect-and-carried-state-p4-delivered)).
+   attributes (see [Reconnect and Carried State](#reconnect-and-carried-state-p4-partial)).
 
 ## Scope and Boundaries
 
@@ -290,15 +292,26 @@ are zero until #107. Client 0 is player A, the victim; client 1 is player B.
   link and R1, because the cue is unreliable by design. The loss is random
   with no fixed seed.
 
-## Reconnect and Carried State (P4, delivered)
+## Reconnect and Carried State (P4, partial)
 
 T34 (`Aetheln.GameCombat.Lifecycle.ReconnectInterimGap`,
 `Source/GameTests/Private/AethelnAbilityLifecycleTests.cpp`) pinned the gap in
 P2: a reconnect got a fresh PlayerState, refilled attributes, no effects, and a
-second grant. P4 closes it. The test keeps its name, so the citations to it stay
-valid, and now asserts the carried values. The combat game mode stays on
+second grant. P4 builds the transfer that closes it: a snapshot taken at logout
+and applied at the next login. The test keeps its name, so the citations to it
+stay valid, and now asserts the carried values. The combat game mode stays on
 `AGameModeBase` (see [Decisions at a Glance](#decisions-at-a-glance), item 7);
 the snapshot lives in `UAethelnDeathSubsystem` beside the respawn wait.
+
+**P4 closes the gap only for a client that presents a key, and no client sends
+one yet.** The key producer joins P4b. A client that omits or changes the key
+escapes a death (it returns alive at once), the respawn wait, its cooldowns, and
+a Guard break. And until P4b a disconnect is an instant escape in another way:
+the engine destroys the pawn at once when the connection ends
+(`APlayerController::Destroyed` calls `PawnLeavingGame`,
+`Engine/Source/Runtime/Engine/Private/PlayerController.cpp:1633-1641`, `:1572-1579`),
+which `combat-and-networking-architecture.md:281` forbids. The owner's rule
+for the grace window is decided and is the work of P4b.
 
 - **Capture.** `AAethelnPlayerState::Destroyed` (authority, first possession
   done, a reconnect key set) calls `UAethelnDeathSubsystem::CaptureCarriedState`.
@@ -340,10 +353,18 @@ the snapshot lives in `UAethelnDeathSubsystem` beside the respawn wait.
   themselves (the new PlayerState starts them), the pawn's location (a
   reconnect starts at the game mode's start spot, and a dead player's corpse
   does not return to where it died), and anything the snapshot does not name.
-- **Server authority.** The client supplies at most the reconnect key (see
+- **Server authority.** The client presents at most the reconnect key (see
   below). Nothing a client sends is a state value, and the restored values come
   only from the server's own snapshot. A key with no snapshot, an expired one,
   or no key at all gets the initial attributes.
+- **Uncarried effects are named.** The capture walks every active non-instant
+  effect. The shared timed-state effect is carried, the death effect is the life
+  state, and the recovery effects are started again by the new PlayerState. Any
+  other duration effect would be ended by a reconnect, so the capture logs a
+  warning naming it, and `...Death.ReconnectNamesUncarriedEffects` fails when
+  that warning is missing. A future debuff, stance or stagger on another class
+  cannot be cleansed silently, and a duration modifier on a maximum would show
+  there too.
 
 ### Identity key (prototype)
 
@@ -353,8 +374,10 @@ seam, never a vendor identity). The prototype key is the opaque `ReconnectKey`
 login option, 1 to 64 characters of `A-Z`, `a-z`, `0-9`, `-` and `_`, and a
 missing or malformed option means no key and so no carry.
 `AAethelnCombatGameMode::InitNewPlayer` stamps it on the new PlayerState before
-the first possession. It lives in a server-only member that no replication or
-RPC sets.
+the first possession. The key is client-presented and the snapshot is
+server-held: the key lives in a server-only member that no replication or RPC
+sets, and it names a snapshot without carrying a value. No client sends the key
+yet (see above).
 
 - **Why this key.** `GetPlayerId()` is new for every PlayerState, so it cannot
   survive a reconnect. The online subsystem's `FUniqueNetIdRepl` is a vendor
@@ -368,10 +391,16 @@ RPC sets.
   already holds and carries no state, but a client that changes its key starts
   a new session (the refill an authenticated identity prevents), and a client
   that learns another player's key could take that player's snapshot inside the
-  grace window. That is acceptable for the prototype and not for a public
-  service: the account identity that #45 and the backend decide replaces this
-  function, and its key must be authenticated. Keys are never logged and never
-  appear in telemetry.
+  grace window. The key is a bearer capability, and the engine logs the login
+  options at `LogNet` (`Engine/Source/Runtime/Engine/Private/World.cpp:7508`,
+  `:7577`), so it sits in default server logs. The observability events carry
+  no key.
+- **Exception record** (`security-and-operations.md`: an accepted exception
+  names an owner, evidence and a revisit trigger). Owner: issue #45 (the identity
+  and backend decision) replaces this function. Evidence: this section and
+  `...Death.ReconnectKeyIsClientPresented`, `...ReconnectLoginStampsKey`.
+  Trigger: before any build leaves `local` or `development` (AGENTS.md,
+  Environment Strategy), the key must be authenticated and kept out of the logs.
 
 ### Disconnect edge cases
 
@@ -382,7 +411,38 @@ RPC sets.
 | Disconnect while dead, deadline passes while away | Respawn waits for the reconnect; the player respawns once, through the normal order, on the first tick after the reconnect (`...Death.ReconnectAfterDeadlineRespawnsOnce`). |
 | Disconnect during the respawn step | The respawn step runs inside one world tick and a logout happens between ticks, so the reconnect sees either the player before the step (dead, with the wait) or after it (alive, restored, no wait), never both (`...Death.ReconnectRespawnStepIsAtomic`). |
 | Reconnect after the grace window | No snapshot: treated as a new session under the persistence policy (`...Death.ReconnectAfterGraceIsNewSession`). |
-| Lethal result while the connection is gone | **Not delivered by the snapshot.** The engine destroys the pawn when the connection ends (`Engine/Source/Runtime/Engine/Private/PlayerController.cpp:1633-1646`, `PawnLeavingGame`) and then the PlayerState with its ASC (`Engine/Source/Runtime/Engine/Private/Controller.cpp:595-612`), so no avatar is attackable and no lethal result arrives while the player is away. See [Open Decisions](#open-decisions). |
+| Lethal result while the connection is gone | **Not built; decided, P4b.** Today the engine destroys the pawn at once when the connection ends (`PlayerController.cpp:1633-1641`, `PawnLeavingGame`) and then the PlayerState with its ASC (`Controller.cpp:595-612`), so no avatar is attackable while the player is away and disconnect is an instant escape. P4b keeps the pawn (see below). |
+| A hard drop before the connection timeout | **Not handled in P4.** A crash or a pulled cable does not close the connection until `ConnectionTimeout=60.0` (`Engine/Config/BaseEngine.ini:1855`), so the old pawn stays possessed for up to 60 s. A client that rejoins inside that time with the same key gets a fresh, refilled session while the old pawn still exists, two avatars for one identity. At the timeout the old `Destroyed()` capture stores a snapshot nothing consumes, swept after the grace window. P4b decides this with the duplicate-key rule. |
+
+### P4b: grace-window pawn retention (decided, not built)
+
+The owner's rule (issue #21 comment 6131998770, restated in comment 6133925614)
+is decided: during the 15 s grace window the pawn stays in the world,
+server-controlled and attackable, and the player resumes it on reconnect. It was
+to be built in P4 and is the named next phase, P4b. This pull request merges as
+a partial P4. The shape the engine allows, none of it built:
+
+- **Keep the pawn.** `APlayerController::PawnLeavingGame` is virtual
+  (`PlayerController.h:2054`) and is what destroys the pawn at logout.
+- **Keep the old PlayerState, unreplicated, for the grace window.** The
+  PlayerState is destroyed by `CleanupPlayerState` (`PlayerController.cpp:1392-1398`)
+  through the virtual `APlayerState::OnDeactivated` (`PlayerState.cpp:128-132`;
+  the engine comment at `PlayerController.cpp:1396` says a game can override it).
+  A kept PlayerState keeps its ASC, effects and respawn wait running, so a lethal
+  result still applies to the kept pawn. This is not PlayerState reuse (item 7
+  stands): the reconnect gets a fresh PlayerState, and the state reaches it
+  through the P4 snapshot, taken from the kept PlayerState at reconnect or at the
+  end of the grace window.
+- **Re-point the pawn.** `APawn::UnPossessed` clears the pawn's PlayerState
+  (`Engine/Source/Runtime/Engine/Private/Pawn.cpp:719`), and
+  `UAethelnAbilitySystemComponent::FindForPawn` resolves the ASC through it
+  (`AethelnAbilitySystemComponent.cpp:246`), so the kept pawn must be re-pointed
+  to the kept ASC, or held under a server controller.
+- **The key producer** (a client that sends the key), so the P4 gap is closed for
+  every client.
+- **Duplicate live key.** A rejoin with the key of a PlayerState that is still
+  alive (the hard-drop row). Logging out the live one in `InitNewPlayer` is a
+  kick vector with an unauthenticated key. This is a lead decision for P4b.
 
 ## Test Plan
 
@@ -393,7 +453,7 @@ RPC sets.
 | R3 | `Aetheln.GameCombat.Death.RespawnFailsClosed` | P2 | The ini delay is finite and positive; an unset, negative, or non-finite delay, a world with no game mode, and a maximum Health of zero each keep the player dead, with one logged refusal and no retry |
 | R4 | `Aetheln.GameCombat.Death.RespawnAfterDelay` | P2 | No respawn before the deadline (death time plus the delay); then `State.Dead` and the death effect are gone, Health, Endurance, and Guard equal their maxima and the maxima did not move, a new pawn is the avatar and the corpse is destroyed, no ability is granted again, a cooldown keeps counting, no chain, dodge window, or other state from the previous life remains, one chain end overall, a second respawn is refused, and the player starts a chain again. The chain reset is stamped at the lethal contact time |
 | R5 | `Aetheln.GameCombat.Death.TwoClientDeathAndRespawn`, `Aetheln.GameCombat.Death.TwoClientDeathAndRespawnImpaired` | P3 | AC2 and DoD1 on a dedicated server with two PIE clients: both clients see `State.Dead` on the victim, the owner is corrected to `MOVE_None`, the server respawns no earlier than the configured delay, and both clients receive the new avatar without `State.Dead`; B receives the victim's Health and MaxHealth but not its Endurance or Guard; on a clean link the death cue reaches each client once; the impaired run repeats the steps at 100 ms lag and 5 % loss |
-| R6 | `Aetheln.GameCombat.Death.ReconnectCarriesLivingState`, `...ReconnectDeadKeepsDeadline`, `...ReconnectAfterDeadlineRespawnsOnce`, `...ReconnectRespawnStepIsAtomic`, `...ReconnectAfterGraceIsNewSession`, `...ReconnectIdentityIsServerHeld`, `...ReconnectLoginStampsKey`, `...ReconnectDuplicatesNothing`; T34 `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` flipped | P4 | AC5; T34 flips. Each row of the edge-case table; reconnect is not a refill and clears no timed state; a dead player keeps the same deadline and generation, and respawns once; an invalid or expired grace window is a new session; the restored values come only from the server's snapshot under the server-held key, and another key or none never takes it; a reconnect adds no death cue, no `Death` event, no life generation, and no second grant |
+| R6 | `Aetheln.GameCombat.Death.ReconnectCarriesLivingState`, `...ReconnectDeadKeepsDeadline`, `...ReconnectAfterDeadlineRespawnsOnce`, `...ReconnectRespawnStepIsAtomic`, `...ReconnectAfterGraceIsNewSession`, `...ReconnectKeyIsClientPresented`, `...ReconnectLoginStampsKey`, `...ReconnectThroughControllerDestroy`, `...ReconnectNamesUncarriedEffects`, `...ReconnectDuplicatesNothing`; T34 `Aetheln.GameCombat.Lifecycle.ReconnectInterimGap` flipped | P4 (partial) | AC5 for a client that presents a key; T34 flips. Each built row of the edge-case table; reconnect is not a refill and clears no timed state (cooldown, Guard break, recovery delay) and carries maxima that differ from the initial values; a dead player keeps the same deadline and generation, and respawns once; an invalid or expired grace window is a new session; the restored values come only from the server's snapshot, and another key or none never takes it; the controller's destruction, the production chain of a logout, stores the snapshot; an effect the snapshot does not carry is named; a reconnect adds no death cue (observed from before the restore), no `Death` event, no life generation, and no second grant |
 | R7 | `Aetheln.GameCombat.Death.GuardBreakThenDeath` | P2 | A real Guard break with a running chain, then death: the break effect and tag are gone, Guard stays zero and its recovery is kept and paused, one death effect, and the chain ends once as `IncompatibleState` |
 | R8 | `Aetheln.GameCombat.Death.RespawnRefusesNonDeadAndNonPlayer` | P2 | A living player and a dead AI (`State.Dead` and zero Health, no `PlayerState` owner) are refused with nothing changed; a death from `ApplyDeath` with no contact starts the same wait and the same single respawn |
 | R9 | `Aetheln.GameCombat.Death.LethalContactThenRespawn` | P2 | The real lethal path: an enemy swing kills the player, the chain reset is stamped at the committed result's contact time, one chain end, and the respawn follows the delay |
@@ -414,9 +474,9 @@ dies, and death, not interruption, ends the chain once as `IncompatibleState`.
 | Death state and feedback replicate to all relevant clients | P1 server state on a replicated effect; P3 two-client proof and cue (R5) |
 | Dead players cannot move or attack, and death/respawn cannot emit duplicate completion events | P1 death half (R1, R2); P2 respawn half (R3, R4, R8) |
 | Respawn restores only intended attributes and abilities | P2 (R4) |
-| Reconnect during death or respawn resolves to one valid state | P4 (R6, delivered) |
+| Reconnect during death or respawn resolves to one valid state | P4 (R6) for a client that presents a key; P4b keeps the pawn and sends the key. Partial until P4b |
 | DoD: two-player death and respawn paths are tested | P3 (R5) |
-| DoD: disconnect edge cases are documented | P1 table above; P4 verifies (R6) |
+| DoD: disconnect edge cases are documented | P1 table above; P4 verifies the built rows (R6); the lethal-while-away and hard-drop rows are P4b |
 | DoD: no stale activation, tag, effect, pawn reference, invulnerability, or already-hit state | P1 at death (R2); P2 after respawn (R4) |
 
 ## Phased Delivery
@@ -426,7 +486,8 @@ dies, and death, not interruption, ends the chain once as `IncompatibleState`.
 | **P1** Death state | This document; `UAethelnDeathStateEffect`; `UAethelnDeathSubsystem`; R1, R2. | #60 P4 lethal notification (merged) |
 | **P2** Respawn (delivered) | The delay config, life generation, restart order, restoration effect; R3, R4, R8, R9. A `Death` observability event (`EAethelnObservabilityCategory::Death`, `observability-and-crash-diagnostics.md:21`) with the activation id as correlation, as `Emit` does for hits (R10); the Guard-break-at-death row R7; the lethal-contact-time chain reset using `ContactTime` from `OnLethalResult`. | P1; the owner decisions of 2026-10-12 on delay, restoration, location, dead pawn, and camera |
 | **P3** Replication (delivered) | Two-client PIE run on CQTest's network component, the Health split, the death cue, the impaired run; R5 and the R1 cue rows. | P2; #61's Health decision (PR #343) |
-| **P4** Reconnect (delivered) | Carried snapshot behind an identity seam (`ResolveReconnectKey`); the 15 s provisional grace window; R6; T34 flipped. | P2; P4 chose the prototype identity key |
+| **P4** Reconnect (partial) | Carried snapshot behind an identity seam (`ResolveReconnectKey`); the 15 s provisional grace window; R6; T34 flipped. | P2; P4 chose the prototype identity key |
+| **P4b** Grace-window pawn retention (decided, not built) | Keep the pawn (`PawnLeavingGame`) and the old PlayerState unreplicated (`OnDeactivated`) for the grace window, re-point the kept pawn to the kept ASC, capture and restore at reconnect or at grace expiry, the client key producer, the hard-drop and duplicate-key rules. Until then disconnect is an instant escape. | P4; the lead decides the duplicate-key rule |
 
 ## Open Decisions
 
@@ -445,10 +506,10 @@ All are provisional and owner-set, and are re-tuned at the P5 feel test:
   No loot on the body.
 - **Dead camera:** the camera stays on the dead pawn, locked. No input is
   accepted, and the HUD shows the respawn countdown. No spectate in P2.
-- **Disconnect grace window:** 15 s, provisional. The owner's wording adds that
-  the pawn stays in the world, server-controlled and attackable, and the player
-  resumes it on reconnect. P4 implements the window as the carried snapshot; it
-  does not keep the pawn (see the lethal row of the edge-case table).
+- **Disconnect grace window:** 15 s, provisional. The pawn stays in the world,
+  server-controlled and attackable, and the player resumes it on reconnect. P4
+  builds the snapshot transfer and the window; keeping the pawn is decided and
+  not built, named P4b (see [P4b](#p4b-grace-window-pawn-retention-decided-not-built)).
 
 Later owner decisions:
 
@@ -466,14 +527,6 @@ Later owner decisions:
 
 Still open for the owner:
 
-- Whether the disconnect grace window keeps the pawn in the world,
-  server-controlled and attackable (the owner's 2026-10-12 wording), or only
-  carries the state as P4 does. Keeping the pawn needs an avatar that outlives
-  the connection and an ASC owner that outlives the controller. The base game
-  mode destroys both at logout, and keeping them either reuses the old
-  PlayerState (rejected in Decisions at a Glance, item 7) or moves the ASC off
-  the PlayerState. That is a design change for the lead and the owner, not a
-  P4 detail.
 - Whether death removes a running recovery delay (#21, listed in
   `gas-foundation.md:1211`). P1 keeps the current default: the delay persists.
 
@@ -485,6 +538,8 @@ Lead decisions (2026-10-12):
 - **The reconnect identity key is decided in P4**: the `ReconnectKey` login
   option behind `ResolveReconnectKey`, unauthenticated and prototype only (see
   [Identity key](#identity-key-prototype)).
+- **The duplicate-live-key rule is the lead's, in P4b** (the hard-drop row: kick
+  the live PlayerState, refuse the login, or merge).
 
 ## Residual Limitations
 
@@ -524,11 +579,16 @@ Lead decisions (2026-10-12):
   moves the player's respawn wait into the snapshot, and the reconnect restores
   it (R6). A logout without a key, or with an invalid grace window, drops the
   wait with the PlayerState, and the next login is a new session.
-- **The pawn does not stay attackable while the player is away (P4).** See the
-  lethal row of the edge-case table and [Open Decisions](#open-decisions).
-- **The reconnect key is unauthenticated (P4).** See
-  [Identity key](#identity-key-prototype). Two live players with the same key
-  both capture at logout, and the later logout wins.
+- **Disconnect is an instant escape until P4b.** The pawn is destroyed at once
+  when the connection ends, so nothing is attackable while the player is away and
+  the lethal row is not built (see [P4b](#p4b-grace-window-pawn-retention-decided-not-built)).
+  No client sends the reconnect key yet, so omitting or changing it escapes a
+  death, the respawn wait, cooldowns and a Guard break.
+- **The reconnect key is unauthenticated and logged (P4).** See
+  [Identity key](#identity-key-prototype) for the exception record. Two live
+  players with the same key both capture at logout, and the later logout wins.
+- **A hard drop leaves two states (P4).** See the hard-drop row of the edge-case
+  table; P4b decides it.
 - **The location is not carried (P4).** A reconnect starts at the game mode's
   start spot, so a player can leave a fight by reconnecting. That is outside the
   snapshot this document lists; position belongs to the persistence design.

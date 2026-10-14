@@ -143,15 +143,25 @@ bool UAethelnDeathSubsystem::CaptureCarriedState(UAethelnAbilitySystemComponent&
 	State.Attributes.MaxGuard = Read(UAethelnCombatAttributeSet::GetMaxGuardAttribute());
 	State.Attributes.Guard = Read(UAethelnCombatAttributeSet::GetGuardAttribute());
 	// The shared duration effect carries cooldowns, the Guard break and the recovery delays; each expires on the server clock.
-	FGameplayEffectQuery TimedQuery;
-	TimedQuery.EffectDefinition = UAethelnCooldownEffect::StaticClass();
-	for (const FActiveGameplayEffectHandle& Handle : Player.GetActiveEffects(TimedQuery))
+	// The death effect is the life state and the recovery effects are started again by the new PlayerState. Any other active
+	// non-instant effect is not carried, so a reconnect would cleanse it: say so, so a new effect class cannot slip through.
+	for (auto Effect = Player.GetActiveGameplayEffects().CreateConstIterator(); Effect; ++Effect)
 	{
-		const FActiveGameplayEffect* Active = Player.GetActiveGameplayEffect(Handle);
-		const double Remaining = Active != nullptr ? Active->GetTimeRemaining(static_cast<float>(Now)) : 0.0;
-		if (Active != nullptr && Remaining > 0.0 && Active->Spec.DynamicGrantedTags.Num() > 0)
+		const FActiveGameplayEffect* Active = &*Effect;
+		const UGameplayEffect* Definition = Active != nullptr ? Active->Spec.Def.Get() : nullptr;
+		if (Definition == nullptr || Definition->DurationPolicy == EGameplayEffectDurationType::Instant) { continue; }
+		if (Definition->IsA<UAethelnCooldownEffect>())
 		{
-			State.TimedStates.Add({ Active->Spec.DynamicGrantedTags, Now + Remaining });
+			const double Remaining = Active->GetTimeRemaining(static_cast<float>(Now));
+			if (Remaining > 0.0 && Active->Spec.DynamicGrantedTags.Num() > 0)
+			{
+				State.TimedStates.Add({ Active->Spec.DynamicGrantedTags, Now + Remaining });
+			}
+		}
+		else if (!Definition->IsA<UAethelnDeathStateEffect>() && !Definition->IsA<UAethelnResourceRecoveryEffect>())
+		{
+			UE_LOG(LogAethelnDeath, Warning, TEXT("The reconnect snapshot of %s does not carry the active effect %s; a reconnect would end it."),
+				*GetNameSafe(Player.GetOwner()), *GetNameSafe(Definition));
 		}
 	}
 	State.bDead = Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead);
