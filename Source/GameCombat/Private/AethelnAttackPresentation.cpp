@@ -31,9 +31,15 @@ namespace
 		FARFilter Filter;
 		Filter.ClassPaths.Add(UAethelnAttackPresentation::StaticClass()->GetClassPathName());
 		Filter.bRecursiveClasses = true;
+		// The tags of a filter match as "any of", not "all of", so the filter holds only the ability ID.
 		Filter.TagsAndValues.Add(AbilityIdTag, AbilityId.ToString());
-		Filter.TagsAndValues.Add(AuthoredContentVersionTag, FString::FromInt(AuthoredContentVersion));
 		IAssetRegistry::GetChecked().GetAssets(Filter, Found);
+		const FString Version = FString::FromInt(AuthoredContentVersion);
+		Found.RemoveAll([&Version](const FAssetData& Asset)
+		{
+			FString Authored;
+			return !Asset.GetTagValue(AuthoredContentVersionTag, Authored) || Authored != Version;
+		});
 		return Found;
 	}
 
