@@ -24,6 +24,8 @@ public class GameTests : ModuleRules
 			"IrisCore",
 			"Json",
 			"NavigationSystem",
+			// #60 P6: A21 closes a server connection (UNetConnection::Close links the NetCloseResult enum).
+			"NetCore",
 			// #84 P3b: N3 builds a Niagara effect notify for the allowlist case.
 			"Niagara",
 			"NiagaraAnimNotifies",
