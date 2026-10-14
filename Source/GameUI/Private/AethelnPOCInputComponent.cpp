@@ -1,5 +1,7 @@
 #include "AethelnPOCInputComponent.h"
 
+#include "AethelnCombatInputSink.h"
+#include "AethelnGameplayTags.h"
 #include "AethelnHudWidget.h"
 #include "AethelnPOCOverlayWidget.h"
 #include "AethelnPlayerInputReceiver.h"
@@ -10,6 +12,7 @@
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "InputAction.h"
 #include "InputCoreTypes.h"
 #include "InputMappingContext.h"
@@ -161,6 +164,27 @@ bool FAethelnPOCControlModeTest::RunTest(const FString& Parameters)
 	return true;
 }
 #endif
+
+FAethelnPrimaryButtonRouter::EAction FAethelnPrimaryButtonRouter::Press(EAethelnPOCControlMode Mode)
+{
+	if (!IsGameplayInputEnabled(Mode))
+	{
+		bConsumed = true;
+		return EAction::Recapture;
+	}
+	return bConsumed ? EAction::None : EAction::Attack;
+}
+
+bool SubmitPrimaryAttack(APlayerController* Controller)
+{
+	IAethelnCombatInputSink* Sink = Controller != nullptr ? Cast<IAethelnCombatInputSink>(Controller->PlayerState.Get()) : nullptr;
+	if (Sink == nullptr)
+	{
+		return false;
+	}
+	Sink->RequestAbilityPress(AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
+	return true;
+}
 
 UAethelnPOCInputComponent::UAethelnPOCInputComponent()
 {
@@ -344,6 +368,8 @@ void UAethelnPOCInputComponent::BindReceiver()
 	BindAction(MoveRightAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleMoveRightStopped);
 	BindAction(ToggleControlModeAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleToggleControlMode);
 	BindAction(ViewportRecaptureAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleViewportRecapture);
+	BindAction(ViewportRecaptureAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleViewportRecaptureReleased);
+	BindAction(ViewportRecaptureAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleViewportRecaptureReleased);
 	BindAction(JumpAction, ETriggerEvent::Started, this, &UAethelnPOCInputComponent::HandleJumpStarted);
 	BindAction(JumpAction, ETriggerEvent::Completed, this, &UAethelnPOCInputComponent::HandleJumpStopped);
 	BindAction(JumpAction, ETriggerEvent::Canceled, this, &UAethelnPOCInputComponent::HandleJumpCanceled);
@@ -452,6 +478,7 @@ void UAethelnPOCInputComponent::ResetGameplayInputState()
 	bMoveBackwardHeld = false;
 	bMoveLeftHeld = false;
 	bMoveRightHeld = false;
+	PrimaryButton.Release();
 	SetComponentTickEnabled(false);
 	if (IAethelnPlayerInputReceiver* Receiver = GetReceiver())
 	{
@@ -680,10 +707,26 @@ void UAethelnPOCInputComponent::HandleToggleControlMode(
 void UAethelnPOCInputComponent::HandleViewportRecapture(
 	const FInputActionValue& Value)
 {
-	if (!IsGameplayInputEnabled(ControlMode))
+	switch (PrimaryButton.Press(ControlMode))
 	{
+	case FAethelnPrimaryButtonRouter::EAction::Recapture:
 		ApplyControlMode(EAethelnPOCControlMode::Reticle);
+		break;
+	case FAethelnPrimaryButtonRouter::EAction::Attack:
+	{
+		const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+		SubmitPrimaryAttack(OwnerPawn != nullptr ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr);
+		break;
 	}
+	case FAethelnPrimaryButtonRouter::EAction::None:
+		break;
+	}
+}
+
+void UAethelnPOCInputComponent::HandleViewportRecaptureReleased(
+	const FInputActionValue& Value)
+{
+	PrimaryButton.Release();
 }
 
 void UAethelnPOCInputComponent::HandleJumpStarted(const FInputActionValue& Value)

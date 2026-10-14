@@ -3,6 +3,7 @@
 #include "AbilitySystemInterface.h"
 #include "AethelnActivationTypes.h"
 #include "AethelnCombatEffects.h"
+#include "AethelnCombatInputSink.h"
 #include "AethelnHudSource.h"
 #include "AethelnMovementActionAuthority.h"
 #include "CoreMinimal.h"
@@ -22,7 +23,7 @@ struct FGameplayAbilitySpec;
  * See docs/gas-foundation.md (Lifecycle).
  */
 UCLASS(Config = Game)
-class GAMECOMBAT_API AAethelnPlayerState : public APlayerState, public IAbilitySystemInterface, public IAethelnMovementActionAuthority, public IAethelnHudStateSource
+class GAMECOMBAT_API AAethelnPlayerState : public APlayerState, public IAbilitySystemInterface, public IAethelnMovementActionAuthority, public IAethelnHudStateSource, public IAethelnCombatInputSink
 {
 	GENERATED_BODY()
 
@@ -36,6 +37,9 @@ public:
 	virtual FAethelnDodgeMovementDefinition GetDodgeMovementDefinition() const override;
 	virtual bool CanPredictDodge() const override;
 	virtual bool TryAuthorizeDodge(const FAethelnDodgeStartRequest& Request) override;
+
+	/** The local controller's ability press (#60 P6): forwards to the ASC's activation request. Intent only. */
+	virtual void RequestAbilityPress(FGameplayTag AbilityId) override;
 
 	/** HUD (#61): the attributes and owned timed tags this machine currently has. Presentation only. */
 	virtual FAethelnHudSnapshot GetHudSnapshot() const override;
