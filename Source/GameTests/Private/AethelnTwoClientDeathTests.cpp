@@ -224,7 +224,7 @@ namespace AethelnTwoClientDeathTests
 		Framework.EnqueueLatentCommand(Run->Builder.BuildTearDown());
 		// Wait for the editor to end the PIE session, then release the run (the last reference to the lambdas' state).
 		// Bounded like CQTest's own steps, so a PIE session that never ends fails this test by name instead of the suite timeout.
-		Framework.EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>([Run, Start = TOptional<FDateTime>()]() mutable
+		Framework.EnqueueLatentCommand(MakeShared<FFunctionLatentCommand>([Run, Timeout, Start = TOptional<FDateTime>()]() mutable
 		{
 			if (!Start.IsSet()) { Start = FDateTime::UtcNow(); }
 			bool bPieEnded = true;
@@ -232,8 +232,8 @@ namespace AethelnTwoClientDeathTests
 			{
 				bPieEnded &= !(Context.WorldType == EWorldType::PIE && Context.World() != nullptr);
 			}
-			if (!bPieEnded && FDateTime::UtcNow() - Start.GetValue() < FTimespan::FromSeconds(30.0)) { return false; }
-			if (!bPieEnded) { Run->Test.AddError(FString::Printf(TEXT("%s: PIE did not end within 30 s after the R5 teardown"), *Run->Test.GetTestFullName())); }
+			if (!bPieEnded && FDateTime::UtcNow() - Start.GetValue() < Timeout) { return false; }
+			if (!bPieEnded) { Run->Test.AddError(FString::Printf(TEXT("%s: PIE did not end within %.0f s after the R5 teardown"), *Run->Test.GetTestFullName(), Timeout.GetTotalSeconds())); }
 			return true;
 		}));
 	}

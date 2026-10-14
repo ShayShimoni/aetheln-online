@@ -59,6 +59,8 @@ bool UAethelnDeathSubsystem::ApplyDeath(UAethelnAbilitySystemComponent& Victim, 
 	if (ContactTime.IsSet()) { Victim.ResetChain(EAethelnChainEndReason::IncompatibleState, ContactTime.GetValue()); }
 	// The tag event ends any remaining chain (IncompatibleState), the dodge window and the block first.
 	UAethelnDeathStateEffect::ApplyTo(Victim);
+	// A Guard break carried across a reconnect has no death binding (P4): death ends it here, as it does for a live break.
+	Victim.RemoveActiveEffectsWithGrantedTags(FGameplayTagContainer(AethelnGameplayTags::State_GuardBroken));
 	Victim.CancelAllAbilities();
 	if (const ACharacter* Character = Cast<ACharacter>(Victim.GetAvatarActor()))
 	{
@@ -114,6 +116,102 @@ bool UAethelnDeathSubsystem::Respawn(UAethelnAbilitySystemComponent& Victim)
 	return true;
 }
 
+bool UAethelnDeathSubsystem::CaptureCarriedState(UAethelnAbilitySystemComponent& Player, const FString& Key)
+{
+	UWorld* World = Player.GetWorld();
+	UAethelnDeathSubsystem* Self = World != nullptr ? World->GetSubsystem<UAethelnDeathSubsystem>() : nullptr;
+	if (Self == nullptr || Key.IsEmpty() || !Player.IsOwnerActorAuthoritative() || Cast<APlayerState>(Player.GetOwner()) == nullptr) { return false; }
+	// The respawn wait leaves with the player: it moves into the snapshot, or is dropped when no snapshot is kept.
+	FPendingRespawn Wait;
+	const bool bHasWait = Self->Pending.RemoveAndCopyValue(TWeakObjectPtr<UAethelnAbilitySystemComponent>(&Player), Wait);
+	const float Grace = Self->ProvisionalDisconnectGraceSeconds;
+	if (!FMath::IsFinite(Grace) || !(Grace > 0.0f))
+	{
+		UE_LOG(LogAethelnDeath, Warning, TEXT("Refused to carry the state of %s: ProvisionalDisconnectGraceSeconds %f must be finite and above zero; a reconnect is a new session."),
+			*GetNameSafe(Player.GetOwner()), Grace);
+		return false;
+	}
+	const FGameplayAttribute Health = UAethelnCombatAttributeSet::GetHealthAttribute();
+	if (!Player.HasAttributeSetForAttribute(Health)) { return false; }
+	const double Now = World->GetTimeSeconds();
+	FCarriedState State;
+	auto Read = [&Player](const FGameplayAttribute& Attribute) { return Player.GetNumericAttribute(Attribute); };
+	State.Attributes.MaxHealth = Read(UAethelnCombatAttributeSet::GetMaxHealthAttribute());
+	State.Attributes.Health = Read(Health);
+	State.Attributes.MaxEndurance = Read(UAethelnCombatAttributeSet::GetMaxEnduranceAttribute());
+	State.Attributes.Endurance = Read(UAethelnCombatAttributeSet::GetEnduranceAttribute());
+	State.Attributes.MaxGuard = Read(UAethelnCombatAttributeSet::GetMaxGuardAttribute());
+	State.Attributes.Guard = Read(UAethelnCombatAttributeSet::GetGuardAttribute());
+	// The shared duration effect carries cooldowns, the Guard break and the recovery delays; each expires on the server clock.
+	// The death effect is the life state and the recovery effects are started again by the new PlayerState. Any other active
+	// non-instant effect is not carried, so a reconnect would cleanse it: say so, so a new effect class cannot slip through.
+	for (auto Effect = Player.GetActiveGameplayEffects().CreateConstIterator(); Effect; ++Effect)
+	{
+		const FActiveGameplayEffect* Active = &*Effect;
+		const UGameplayEffect* Definition = Active != nullptr ? Active->Spec.Def.Get() : nullptr;
+		if (Definition == nullptr || Definition->DurationPolicy == EGameplayEffectDurationType::Instant) { continue; }
+		if (Definition->IsA<UAethelnCooldownEffect>())
+		{
+			const double Remaining = Active->GetTimeRemaining(static_cast<float>(Now));
+			if (Remaining > 0.0 && Active->Spec.DynamicGrantedTags.Num() > 0)
+			{
+				State.TimedStates.Add({ Active->Spec.DynamicGrantedTags, Now + Remaining });
+			}
+		}
+		else if (!Definition->IsA<UAethelnDeathStateEffect>() && !Definition->IsA<UAethelnResourceRecoveryEffect>())
+		{
+			UE_LOG(LogAethelnDeath, Warning, TEXT("The reconnect snapshot of %s does not carry the active effect %s; a reconnect would end it."),
+				*GetNameSafe(Player.GetOwner()), *GetNameSafe(Definition));
+		}
+	}
+	State.bDead = Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead);
+	State.bHasRespawnWait = State.bDead && bHasWait;
+	State.Deadline = Wait.Deadline;
+	State.Generation = Wait.Generation;
+	State.GraceEndsAt = Now + Grace;
+	Self->Carried.Add(Key, State);
+	return true;
+}
+
+bool UAethelnDeathSubsystem::RestoreCarriedState(UAethelnAbilitySystemComponent& Player, const FString& Key)
+{
+	UWorld* World = Player.GetWorld();
+	UAethelnDeathSubsystem* Self = World != nullptr ? World->GetSubsystem<UAethelnDeathSubsystem>() : nullptr;
+	FCarriedState State;
+	// One reconnect consumes the snapshot; an expired one is dropped and the caller starts a new session.
+	if (Self == nullptr || Key.IsEmpty() || !Player.IsOwnerActorAuthoritative() || !Self->Carried.RemoveAndCopyValue(Key, State)) { return false; }
+	const double Now = World->GetTimeSeconds();
+	if (Now > State.GraceEndsAt) { return false; }
+	UAethelnAttributeInitEffect::ApplyTo(Player, State.Attributes);
+	for (const FCarriedState::FTimedState& Timed : State.TimedStates)
+	{
+		if (!(Timed.ExpiresAt > Now)) { continue; }
+		FGameplayEffectSpec Spec(GetDefault<UAethelnCooldownEffect>(), Player.MakeEffectContext(), 1.0f);
+		Spec.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Cooldown_Duration, static_cast<float>(Timed.ExpiresAt - Now));
+		Spec.DynamicGrantedTags.AppendTags(Timed.Tags);
+		Player.ApplyGameplayEffectSpecToSelf(Spec);
+	}
+	if (State.bDead)
+	{
+		// The same death, not a new one: no cue, no Death event, no new generation. The respawn follows the old deadline.
+		UAethelnDeathStateEffect::ApplyTo(Player);
+		Player.CancelAllAbilities();
+		if (const ACharacter* Character = Cast<ACharacter>(Player.GetAvatarActor()))
+		{
+			if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement()) { Movement->DisableMovement(); }
+		}
+		if (State.bHasRespawnWait) { Self->Pending.Add(TWeakObjectPtr<UAethelnAbilitySystemComponent>(&Player), FPendingRespawn{ State.Deadline, State.Generation }); }
+	}
+	return true;
+}
+
+bool UAethelnDeathSubsystem::FindRespawnWaitForTests(const UAethelnAbilitySystemComponent& Player, double& OutDeadline, uint64& OutGeneration) const
+{
+	const FPendingRespawn* Wait = Pending.Find(TWeakObjectPtr<UAethelnAbilitySystemComponent>(const_cast<UAethelnAbilitySystemComponent*>(&Player)));
+	if (Wait != nullptr) { OutDeadline = Wait->Deadline; OutGeneration = Wait->Generation; }
+	return Wait != nullptr;
+}
+
 void UAethelnDeathSubsystem::BeginRespawnWait(UAethelnAbilitySystemComponent& Victim, const FGuid& ActivationId)
 {
 	const uint64 Generation = ++LifeGeneration;
@@ -133,8 +231,13 @@ void UAethelnDeathSubsystem::BeginRespawnWait(UAethelnAbilitySystemComponent& Vi
 
 void UAethelnDeathSubsystem::HandlePostActorTick(UWorld* World, ELevelTick /*TickType*/, float /*DeltaSeconds*/)
 {
-	if (World == nullptr || World != GetWorld() || Pending.IsEmpty()) { return; }
+	if (World == nullptr || World != GetWorld() || (Pending.IsEmpty() && Carried.IsEmpty())) { return; }
 	const double Now = World->GetTimeSeconds(); // Never DeltaSeconds: the deadline is on the world clock.
+	// A snapshot is valid through its grace window; the restore checks the same bound, so this only frees memory.
+	for (auto Iterator = Carried.CreateIterator(); Iterator; ++Iterator)
+	{
+		if (Now > Iterator.Value().GraceEndsAt) { Iterator.RemoveCurrent(); }
+	}
 	TArray<TPair<uint64, TWeakObjectPtr<UAethelnAbilitySystemComponent>>> Due;
 	for (auto Iterator = Pending.CreateIterator(); Iterator; ++Iterator)
 	{
@@ -143,6 +246,13 @@ void UAethelnDeathSubsystem::HandlePostActorTick(UWorld* World, ELevelTick /*Tic
 		{
 			Due.Emplace(Iterator.Value().Generation, Iterator.Key());
 			Iterator.RemoveCurrent();
+		}
+		else if (const ACharacter* Character = Cast<ACharacter>(Iterator.Key()->GetAvatarActor()))
+		{
+			// A dead player's pawn stays still. A restored one is possessed after the restore (P4), and the engine's restart
+			// can reset its movement mode, so this keeps the dead pawn at MOVE_None until the respawn.
+			UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+			if (Movement != nullptr && Movement->MovementMode != MOVE_None) { Movement->DisableMovement(); }
 		}
 	}
 	// Death order, never map order.
