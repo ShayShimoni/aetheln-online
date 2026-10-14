@@ -446,7 +446,7 @@ same fixtures. Every test is written red first. Test names are under
 | E9 | P2 | Unreachable and invalid destinations (`Navigation`): a failed move request (no navigation data) moves `Engage` to `Return` and resets the enemy home. |
 | E10 | P2 | Stuck recovery (`Navigation`): the pure policy repaths on the first `Blocked` or `OffPath` and resets on the second; other results change nothing. |
 | E11 | P2 | Leash (`TargetLoss`): a target outside the leash is dropped, and the enemy returns home and is restored. |
-| E12 | P3 | Real navmesh (`RealNavmesh`, `NavigationMeasurements`): a headless world with a built navigation mesh, because one builds (the test adds the navigation system as a map load does, then calls `Build()`). The enemy reaches a target across the floor, and stuck recovery acts on a real `Blocked` result: the first repaths, the second resets the enemy home. |
+| E12 | P3 | Real navmesh (`RealNavmesh`, `NavigationMeasurements`): a headless world with a built navigation mesh, because one builds (the test adds the navigation system as a map load does, then calls `Build()`). The enemy reaches a target across the floor, and stuck recovery acts on a real `Blocked` result: the first repaths, the second resets the enemy home. The fixture world does not run the scheduled ticks of the enemy's movement and path following components, so the test ticks both by hand (residual risk 4). |
 | E13 | P3 | Two PIE clients against a dedicated server (`TwoClientEnemy`, `TwoClientEnemyImpaired`), on CQTest's generated map: both see the same enemy state and attack timing, public Health and MaxHealth, death and reset, and result cues, on a clean link and under a fixture impairment (100 ms lag, 5 % loss). Not the #45 network profiles. |
 | C1 | P3 | Config (`ProvisionalConfig`): every promoted value is in `Config/DefaultGame.ini` and reaches the class defaults. |
 
@@ -532,6 +532,10 @@ which the feel test re-tunes.
 8. **Prototype space:** resolved. `MovementPOC` (owner decision on #83). Whether
    `ServerDefaultMap` follows is a separate decision.
 9. **Navigation data in the client cook** (#120).
+10. **Player initial attributes** (#107): `AAethelnPlayerState` stays at zero in
+    config, and an eligible target needs Health above zero, so in a real session
+    the enemy has no eligible player until those values exist. E13 applies
+    fixture values by hand. The interactive two-client run is blocked on it.
 
 ## Residual Risks
 
@@ -541,7 +545,11 @@ which the feel test re-tunes.
 3. The state machine is code, so new enemy behavior needs a programmer. TA-026
    names when to revisit.
 4. The headless fixture world has no navigation by default; E12 adds it. The
-   arena there is fixture geometry, not `MovementPOC`.
+   arena there is fixture geometry, not `MovementPOC`. In that world the
+   scheduled ticks of the enemy's movement and path following components never
+   run (the cause is not found; a plain tick function does run), so E12 ticks
+   both by hand. No automated test walks an enemy under its scheduled ticks:
+   E13 runs in a real PIE world but holds the enemy still on a floorless map.
 5. An enemy whose every path request fails resets at most once per pass while
    a target stays eligible. E9 still shows this with no navigation data; the
    built-mesh run (E12) reaches its target and shows no such loop, so P3 adds no
@@ -553,4 +561,6 @@ which the feel test re-tunes.
    itself. Adding them is an Editor session on a lockable LFS binary
    ([Source Control](source-control.md)), then the #120 `navigation`
    content-validation review. `ServerDefaultMap` also still names
-   `StarterMap`.
+   `StarterMap`. Until then, on that map a target between the attack range and
+   the perception radius starts the failed-path reset of risk 5, which E12 shows
+   only does not loop on a built mesh.
