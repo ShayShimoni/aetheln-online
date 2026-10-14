@@ -18,6 +18,10 @@ public class GameCombat : ModuleRules
 			"GameplayTasks"
 		});
 
-		PrivateDependencyModuleNames.Add("GameNet");
+		PrivateDependencyModuleNames.AddRange(new string[]
+		{
+			"AssetRegistry",
+			"GameNet"
+		});
 	}
 }

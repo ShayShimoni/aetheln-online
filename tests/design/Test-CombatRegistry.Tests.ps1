@@ -11,6 +11,7 @@ $FixturePath = Join-Path ([IO.Path]::GetTempPath()) ("AethelnCombatRegistry-{0}.
 $SchemaFixturePath = Join-Path ([IO.Path]::GetTempPath()) ("AethelnCombatSchema-{0}.json" -f [guid]::NewGuid().ToString('N'))
 $FixtureRoot = Join-Path ([IO.Path]::GetTempPath()) ("AethelnCombatKinds-{0}" -f [guid]::NewGuid().ToString('N'))
 . $Validator -SkipMain
+. (Join-Path $Root 'scripts/design/Test-CombatTagMapping.ps1') -SkipMain
 
 function Copy-Fixture {
 	return (Get-Content -LiteralPath $RegistryPath -Raw -Encoding UTF8 | ConvertFrom-Json)
@@ -59,6 +60,22 @@ function Get-EmittedCompositionFixture {
 		}
 	}
 	return $Fixture
+}
+
+function Assert-TagMapping {
+	param([string] $Name, [string] $Source, [hashtable] $Pending = @{}, [string] $Reason)
+	$Directory = Join-Path $FixtureRoot ("tags-{0}" -f [guid]::NewGuid().ToString('N'))
+	[void](New-Item -ItemType Directory -Path $Directory -Force)
+	[IO.File]::WriteAllText((Join-Path $Directory 'Tags.cpp'), $Source, (New-Object System.Text.UTF8Encoding($false)))
+	$Result = Test-CombatTagMapping -SourceRoot $Directory -RegistryPath $RegistryPath -Pending $Pending
+	if ($Reason) {
+		if ($Result.passed -or -not (@($Result.errors) -match $Reason)) { throw "Expected tag mapping $Name to fail with '$Reason'; actual: $($Result.errors -join '; ')" }
+		Write-Output "PASS: rejected tag mapping $Name"
+	}
+	else {
+		if (-not $Result.passed) { throw "Expected valid tag mapping ${Name}: $($Result.errors -join '; ')" }
+		Write-Output "PASS: tag mapping $Name"
+	}
 }
 
 function Invoke-Fixture {
@@ -438,6 +455,33 @@ try {
 	Assert-Invalid -Name 'string registry version' -Fixture $Fixture -Reason 'incompatible schema identity or version'
 	$Fixture = Copy-Fixture; $Fixture.definitions[0] | Add-Member -NotePropertyName accidental -NotePropertyValue 'drift'
 	Assert-Invalid -Name 'unknown definition property' -Fixture $Fixture -Reason 'unexpected accidental'
+
+	# #84 P3b: every native Ability. tag maps to exactly one registry ID.
+	$RealTags = Test-CombatTagMapping -SourceRoot (Join-Path $Root 'Source') -RegistryPath $RegistryPath
+	if (-not $RealTags.passed) { throw "Expected the repository tags to map: $($RealTags.errors -join '; ')" }
+	Write-Output 'PASS: repository native Ability. tags map to the registry'
+	# The pending list is pinned: adding an entry needs a reviewed change here (D5, owners #18 and #83).
+	$PinnedPending = 'Ability.Block,Ability.Dodge,Ability.Enemy.Greybox.Strike'
+	if ((@($PendingRegistryIds.Keys | Sort-Object) -join ',') -cne $PinnedPending) { throw "The pending registry ID list changed; update `$PinnedPending in this file: $(@($PendingRegistryIds.Keys | Sort-Object) -join ',')" }
+	Write-Output 'PASS: pending registry ID list is pinned'
+	$Mapped = 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.InstantStrike", "order.oathscar.ability.instant_strike");'
+	Assert-TagMapping -Name 'one tag, one registry ID' -Source $Mapped
+	Assert-TagMapping -Name 'a non-Ability tag is not checked' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(State_A, "State.Unmapped", "no id");')
+	Assert-TagMapping -Name 'a test-only Ability.Test. tag is exempt' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_T, "Ability.Test.Probe", "Test-only identity of a probe");')
+	Assert-TagMapping -Name 'an ID outside the registry' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.Nope", "order.oathscar.ability.nope");' -Reason 'not a registry definition ID'
+	Assert-TagMapping -Name 'a tag with no comment' -Source 'UE_DEFINE_GAMEPLAY_TAG(Ability_A, "Ability.Oathscar.Bare");' -Reason 'does not start with a registry semantic ID'
+	Assert-TagMapping -Name 'a comment that is not an ID' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.Prose", "Some free text");' -Reason 'does not start with a registry semantic ID'
+	Assert-TagMapping -Name 'Test-only outside Ability.Test. is not exempt' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, "Ability.Oathscar.Sneaky", "Test-only identity");' -Reason 'does not start with a registry semantic ID'
+	Assert-TagMapping -Name 'two tags for one ID' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_B, "Ability.Oathscar.Twin", "order.oathscar.ability.instant_strike");') -Reason 'already mapped by'
+	Assert-TagMapping -Name 'a tag declared twice' -Source ($Mapped + "`n" + $Mapped) -Reason 'declared more than once'
+	$PendingSource = 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_P, "Ability.Pending", "pending.fixture.id (later)");'
+	Assert-TagMapping -Name 'a pending tag whose ID is not in the registry yet' -Source $PendingSource -Pending @{ 'Ability.Pending' = 'pending.fixture.id' }
+	Assert-TagMapping -Name 'an unlisted tag with an unregistered ID' -Source $PendingSource -Reason 'not a registry definition ID'
+	Assert-TagMapping -Name 'a pending ID that differs from the declaration' -Source $PendingSource -Pending @{ 'Ability.Pending' = 'pending.other.id' } -Reason 'differs from the declared ID'
+	Assert-TagMapping -Name 'a stale pending entry whose ID reached the registry' -Source $Mapped -Pending @{ 'Ability.Oathscar.InstantStrike' = 'order.oathscar.ability.instant_strike' } -Reason 'remove the tag from the pending list'
+	Assert-TagMapping -Name 'a declaration in a shape the check cannot read' -Source 'UE_DEFINE_GAMEPLAY_TAG_COMMENT(Ability_A, TEXT("Ability.Oathscar.Odd"), "order.oathscar.ability.instant_strike");' -Reason 'not in the shape the check reads'
+	Assert-TagMapping -Name 'a declaration followed by an unrelated Ability. string' -Source ($Mapped + "`n" + 'UE_DEFINE_GAMEPLAY_TAG(State_A, kName);' + "`n" + 'Foo("Ability.Q");')
+	Assert-TagMapping -Name 'a pending entry for a tag that is gone' -Source $Mapped -Pending @{ 'Ability.Gone' = 'gone.fixture.id' } -Reason 'no longer declared'
 }
 finally {
 	if (Test-Path -LiteralPath $FixturePath) { Remove-Item -LiteralPath $FixturePath -Force }
