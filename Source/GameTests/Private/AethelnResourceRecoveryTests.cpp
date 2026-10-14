@@ -461,7 +461,7 @@ bool FAethelnRecoveryLifecycleTest::RunTest(const FString& Parameters)
 	UAethelnAbilitySystemComponent& ASC = F->ASC();
 	TestEqual(TEXT("Reconnect: one Endurance recovery"), CountActive(ASC, UAethelnEnduranceRecoveryEffect::StaticClass()), 1);
 	TestEqual(TEXT("Reconnect: one Guard recovery"), CountActive(ASC, UAethelnGuardRecoveryEffect::StaticClass()), 1);
-	TestFalse(TEXT("Reconnect: no delay carries over"), ASC.HasMatchingGameplayTag(AethelnGameplayTags::State_EnduranceRecoveryDelayed));
+	TestFalse(TEXT("Reconnect without a carried snapshot (no key): no delay carries over"), ASC.HasMatchingGameplayTag(AethelnGameplayTags::State_EnduranceRecoveryDelayed));
 	ApplyInstantModifier(ASC, UAethelnCombatAttributeSet::GetEnduranceAttribute(), EGameplayModOp::AddBase, -10.0f);
 
 	ADD_LATENT_AUTOMATION_COMMAND(FFrameSteps({

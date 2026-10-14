@@ -13,13 +13,14 @@
 #include "AethelnPlayerCharacter.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameModeBase.h"
+#include "GameFramework/GameSession.h"
 #include "GameFramework/WorldSettings.h"
 #include "Misc/AutomationTest.h"
 #include <limits>
 
 // #21 P2 server respawn (docs/death-and-respawn.md, Test Plan). Rows implemented here: R3 RespawnFailsClosed,
 // R4 RespawnAfterDelay, R7 GuardBreakThenDeath, R8 RespawnRefusesNonDeadAndNonPlayer, R9 LethalContactThenRespawn,
-// and R10 DeathTelemetry. The delay is set on the subsystem instance: TestDelay is a fixture value, never the
+// and R10 DeathTelemetry. P4 adds the reconnect rows (R6) at the end of the file. The delay is set on the subsystem instance: TestDelay is a fixture value, never the
 // provisional ini value. The harness registers no game mode, so the tests install the combat game mode through
 // UWorld::SetGameMode, as a server's map load does.
 namespace AethelnRespawnTests
@@ -422,6 +423,473 @@ bool FAethelnDeathEventTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("No connection or player identity"), Deaths[0].Correlation.ConnectionPseudonym, FString(AethelnObservability::ExcludedIdentifier));
 		TestTrue(TEXT("Public channel hides diagnostics"), Deaths[0].DiagnosticCode == EAethelnDiagnosticCode::None);
 	}
+	Subsystem->ResetSink(); Subsystem->ResetRuntimeContext();
+	return true;
+}
+
+// #21 P4 reconnect (docs/death-and-respawn.md, Test Plan R6). One authority world: the logout is the PlayerState's
+// destruction, which carries its state under the reconnect key, and the login is a fresh PlayerState with the key whose
+// first possession takes it. Most tests set the key directly; ReconnectKeyIsClientPresented and ReconnectLoginStampsKey
+// cover the key's source.
+namespace AethelnRespawnTests
+{
+	/** A fixture value, never the provisional ini value. */
+	constexpr float TestGrace = 5.0f;
+	const TCHAR* const TestKey = TEXT("player-a-key");
+
+	/** The logout. The pawn leaves with the connection, and the destroyed PlayerState carries its state under Key. */
+	void Disconnect(FFixture& F, const FString& Key)
+	{
+		F.Player.PlayerState->SetReconnectKey(Key);
+		APawn* Pawn = F.Player.Controller->GetPawn();
+		F.Player.Controller->UnPossess();
+		if (Pawn != nullptr) { Pawn->Destroy(); }
+		F.Pawn = nullptr;
+		F.Player.PlayerState->Destroy();
+		F.Player.Controller->SetPlayerState(nullptr);
+		F.Player.PlayerState = nullptr;
+		F.Player.AbilitySystem = nullptr;
+	}
+
+	/**
+	 * The login: a fresh PlayerState with Key takes the controller, and the game mode starts the player. Updates F.Player.
+	 * BeforeStart runs on the fresh ASC before the game mode starts the player, so a test can observe the restore itself.
+	 */
+	bool Reconnect(FAutomationTestBase& Test, FFixture& F, const FString& Key, TFunctionRef<void(UAethelnAbilitySystemComponent&)> BeforeStart = [](UAethelnAbilitySystemComponent&) {})
+	{
+		F.Player.PlayerState = AethelnCombatTests::AttachFreshPlayerState(F.World, *F.Player.Controller, { UAethelnChainTestAbility::StaticClass() });
+		if (!Test.TestNotNull(TEXT("The fresh PlayerState exists"), F.Player.PlayerState)) { return false; }
+		F.Player.PlayerState->SetReconnectKey(Key);
+		F.Player.AbilitySystem = F.Player.PlayerState->GetAethelnAbilitySystemComponent();
+		BeforeStart(*F.Player.AbilitySystem);
+		F.World.World->GetAuthGameMode()->RestartPlayer(F.Player.Controller);
+		F.Pawn = Cast<AAethelnPlayerCharacter>(F.Player.Controller->GetPawn());
+		return Test.TestNotNull(TEXT("The game mode starts the reconnected player with a pawn"), F.Pawn);
+	}
+
+	void ApplyTimedState(UAethelnAbilitySystemComponent& Player, const FGameplayTag& Tag, float Seconds)
+	{
+		FGameplayEffectSpec Spec(GetDefault<UAethelnCooldownEffect>(), Player.MakeEffectContext(), 1.0f);
+		Spec.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Cooldown_Duration, Seconds);
+		Spec.DynamicGrantedTags.AddTag(Tag);
+		Player.ApplyGameplayEffectSpecToSelf(Spec);
+	}
+
+	/** The fixture's world, game mode, and death subsystem with the delay and the grace window set. */
+	UAethelnDeathSubsystem* PrepareReconnect(FAutomationTestBase& Test, FFixture& F)
+	{
+		UAethelnDeathSubsystem* Deaths = F.World.World->GetSubsystem<UAethelnDeathSubsystem>();
+		if (!Test.TestNotNull(TEXT("The authority world owns the death subsystem"), Deaths) || !InstallGameMode(Test, *F.World.World)) { return nullptr; }
+		Deaths->ProvisionalRespawnDelaySeconds = TestDelay;
+		Deaths->ProvisionalDisconnectGraceSeconds = TestGrace;
+		return Deaths;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectCarriesLivingStateTest,
+	"Aetheln.GameCombat.Death.ReconnectCarriesLivingState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectCarriesLivingStateTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+	if (Deaths == nullptr) { return false; }
+	UAethelnAbilitySystemComponent& Old = *F.Player.AbilitySystem;
+
+	// Spent resources, a long cooldown, and a short Guard break: a reconnect refills none of them and clears none of them.
+	AethelnCombatTests::ApplyInstantModifier(Old, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::AddBase, -10.0f);
+	AethelnCombatTests::ApplyInstantModifier(Old, UAethelnCombatAttributeSet::GetEnduranceAttribute(), EGameplayModOp::AddBase, -12.0f);
+	AethelnCombatTests::ApplyInstantModifier(Old, UAethelnCombatAttributeSet::GetGuardAttribute(), EGameplayModOp::AddBase, -7.0f);
+	// Maxima that differ from the initial values (40, 30, 20), so a restore from the initial attributes could not pass.
+	AethelnCombatTests::ApplyInstantModifier(Old, UAethelnCombatAttributeSet::GetMaxHealthAttribute(), EGameplayModOp::Override, 50.0f);
+	AethelnCombatTests::ApplyInstantModifier(Old, UAethelnCombatAttributeSet::GetMaxEnduranceAttribute(), EGameplayModOp::Override, 35.0f);
+	AethelnCombatTests::ApplyInstantModifier(Old, UAethelnCombatAttributeSet::GetMaxGuardAttribute(), EGameplayModOp::Override, 25.0f);
+	ApplyTimedState(Old, AethelnGameplayTags::Cooldown_Block, 20.0f);
+	ApplyTimedState(Old, AethelnGameplayTags::State_GuardBroken, 4.0f);
+	ApplyTimedState(Old, AethelnGameplayTags::State_EnduranceRecoveryDelayed, 6.0f);
+
+	F.AdvanceTo(1.0);
+	Disconnect(F, TestKey);
+	TestEqual(TEXT("The logout stored one snapshot"), Deaths->GetCarriedStateCountForTests(), 1);
+
+	// Away for two seconds of server time, inside the grace window.
+	F.AdvanceTo(3.0);
+	if (!Reconnect(*this, F, TestKey)) { return false; }
+	UAethelnAbilitySystemComponent& Player = *F.Player.AbilitySystem;
+	TestEqual(TEXT("The reconnect consumed the snapshot"), Deaths->GetCarriedStateCountForTests(), 0);
+	TestEqual(TEXT("Health carries over, it is not refilled"), Read(Player, UAethelnCombatAttributeSet::GetHealthAttribute()), 30.0f);
+	TestEqual(TEXT("Endurance carries over"), Read(Player, UAethelnCombatAttributeSet::GetEnduranceAttribute()), 18.0f);
+	TestEqual(TEXT("Guard carries over"), Read(Player, UAethelnCombatAttributeSet::GetGuardAttribute()), 13.0f);
+	TestEqual(TEXT("MaxHealth carries over, not the initial value"), Read(Player, UAethelnCombatAttributeSet::GetMaxHealthAttribute()), 50.0f);
+	TestEqual(TEXT("MaxEndurance carries over, not the initial value"), Read(Player, UAethelnCombatAttributeSet::GetMaxEnduranceAttribute()), 35.0f);
+	TestEqual(TEXT("MaxGuard carries over, not the initial value"), Read(Player, UAethelnCombatAttributeSet::GetMaxGuardAttribute()), 25.0f);
+	TestFalse(TEXT("The player is alive"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	TestEqual(TEXT("Abilities are granted once on the new PlayerState"), Player.GetActivatableAbilities().Num(), 1);
+
+	// The timed states kept counting on the server clock while the player was away: 20 s from 0 is 17 s left at 3 s.
+	FGameplayEffectQuery TimedQuery;
+	TimedQuery.EffectDefinition = UAethelnCooldownEffect::StaticClass();
+	TArray<float> Remaining = Player.GetActiveEffectsTimeRemaining(TimedQuery);
+	Remaining.Sort();
+	if (TestEqual(TEXT("The cooldown, the Guard break and the recovery delay carried over"), Remaining.Num(), 3))
+	{
+		TestEqual(TEXT("The Guard break has one second left"), Remaining[0], 1.0f, 0.01f);
+		TestEqual(TEXT("The recovery delay has three seconds left"), Remaining[1], 3.0f, 0.01f);
+		TestEqual(TEXT("The cooldown has 17 seconds left"), Remaining[2], 17.0f, 0.01f);
+	}
+	TestTrue(TEXT("The recovery delay is not cleansed by the reconnect"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_EnduranceRecoveryDelayed));
+	TestTrue(TEXT("The cooldown tag is held"), Player.HasMatchingGameplayTag(AethelnGameplayTags::Cooldown_Block));
+	TestTrue(TEXT("The Guard break is not cleansed by the reconnect"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_GuardBroken));
+
+	// A death ends the carried Guard break at the death, as it ends a live one, and keeps the cooldown (the effects' timers
+	// fire at most once per engine frame, so expiry is not asserted here).
+	ZeroHealth(Player);
+	TestTrue(TEXT("A death after a reconnect is accepted"), UAethelnDeathSubsystem::ApplyDeath(Player));
+	TestFalse(TEXT("Death ends the carried break"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_GuardBroken));
+	TestTrue(TEXT("Death keeps the cooldown"), Player.HasMatchingGameplayTag(AethelnGameplayTags::Cooldown_Block));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectDeadKeepsDeadlineTest,
+	"Aetheln.GameCombat.Death.ReconnectDeadKeepsDeadline",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectDeadKeepsDeadlineTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+	if (Deaths == nullptr) { return false; }
+	F.AdvanceTo(0.5);
+	Kill(F, FGuid::NewGuid(), 0.4); // deadline 0.5 + TestDelay
+	double Deadline = 0.0;
+	uint64 Generation = 0;
+	if (!TestTrue(TEXT("The death starts a respawn wait"), Deaths->FindRespawnWaitForTests(*F.Player.AbilitySystem, Deadline, Generation))) { return false; }
+	TestEqual(TEXT("The deadline is the death time plus the delay"), Deadline, 0.5 + TestDelay);
+
+	F.AdvanceTo(1.0);
+	Disconnect(F, TestKey);
+	TestEqual(TEXT("The logout stored one snapshot"), Deaths->GetCarriedStateCountForTests(), 1);
+	F.AdvanceTo(1.5); // before the deadline
+	if (!Reconnect(*this, F, TestKey)) { return false; }
+	UAethelnAbilitySystemComponent& Player = *F.Player.AbilitySystem;
+
+	// The same death: dead, one death effect, no health, no movement, and the old deadline and generation.
+	TestTrue(TEXT("The player is still dead"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	TestEqual(TEXT("One death effect"), CountActive(Player, UAethelnDeathStateEffect::StaticClass()), 1);
+	TestEqual(TEXT("Health stays at zero"), Read(Player, UAethelnCombatAttributeSet::GetHealthAttribute()), 0.0f);
+	double ReconnectDeadline = 0.0;
+	uint64 ReconnectGeneration = 0;
+	if (TestTrue(TEXT("The respawn wait carried over"), Deaths->FindRespawnWaitForTests(Player, ReconnectDeadline, ReconnectGeneration)))
+	{
+		TestEqual(TEXT("The deadline is the same"), ReconnectDeadline, Deadline);
+		TestEqual(TEXT("The life generation is the same"), static_cast<int64>(ReconnectGeneration), static_cast<int64>(Generation));
+	}
+	TestEqual(TEXT("The reconnect started no new life generation"), static_cast<int64>(Deaths->GetLifeGenerationForTests()), static_cast<int64>(Generation));
+	TestEqual(TEXT("The reconnect consumed the snapshot"), Deaths->GetCarriedStateCountForTests(), 0);
+
+	// The dead pawn stays still: the next tick holds it at MOVE_None, even if the engine's restart reset its movement mode.
+	F.AdvanceTo(1.6);
+	if (const ACharacter* Character = Cast<ACharacter>(F.Pawn))
+	{
+		TestEqual(TEXT("The reconnected pawn cannot move"), static_cast<int32>(Character->GetCharacterMovement()->MovementMode), static_cast<int32>(MOVE_None));
+	}
+
+	// Not before the carried deadline, then once.
+	F.AdvanceTo(0.5 + TestDelay - 0.1);
+	TestTrue(TEXT("Still dead before the carried deadline"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	F.AdvanceTo(0.5 + TestDelay + 0.1);
+	TestFalse(TEXT("Respawned at the carried deadline"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	TestEqual(TEXT("Health is restored"), Read(Player, UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
+	TestFalse(TEXT("A second respawn is refused"), UAethelnDeathSubsystem::Respawn(Player));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectAfterDeadlineRespawnsOnceTest,
+	"Aetheln.GameCombat.Death.ReconnectAfterDeadlineRespawnsOnce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectAfterDeadlineRespawnsOnceTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+	if (Deaths == nullptr) { return false; }
+	F.AdvanceTo(0.5);
+	Kill(F, FGuid::NewGuid(), 0.4); // deadline 2.5
+	F.AdvanceTo(1.0);
+	Disconnect(F, TestKey);
+
+	// The deadline passes while the player is away: nothing respawns a player who is not there.
+	F.AdvanceTo(3.0);
+	TestEqual(TEXT("The snapshot waits for the reconnect"), Deaths->GetCarriedStateCountForTests(), 1);
+	TestNull(TEXT("Nobody respawned the absent player"), F.Player.Controller->GetPawn());
+	if (!Reconnect(*this, F, TestKey)) { return false; }
+	UAethelnAbilitySystemComponent& Player = *F.Player.AbilitySystem;
+	TestTrue(TEXT("The reconnect resolves to the dead state first"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	const TWeakObjectPtr<APawn> ReconnectPawn(F.Pawn);
+
+	// The next tick runs the normal respawn order, once.
+	F.AdvanceTo(3.1);
+	TestFalse(TEXT("The player respawned"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	TestEqual(TEXT("The death effect was removed"), CountActive(Player, UAethelnDeathStateEffect::StaticClass()), 0);
+	TestEqual(TEXT("Health is restored"), Read(Player, UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
+	TestEqual(TEXT("Endurance is restored"), Read(Player, UAethelnCombatAttributeSet::GetEnduranceAttribute()), 30.0f);
+	TestEqual(TEXT("Guard is restored"), Read(Player, UAethelnCombatAttributeSet::GetGuardAttribute()), 20.0f);
+	APawn* NewPawn = F.Player.Controller->GetPawn();
+	if (TestNotNull(TEXT("The player has a new pawn"), NewPawn))
+	{
+		TestTrue(TEXT("The new pawn is not the pawn the reconnect started"), NewPawn != ReconnectPawn.Get());
+		TestTrue(TEXT("The new pawn is the ability avatar"), Player.GetAvatarActor() == NewPawn);
+	}
+	TestEqual(TEXT("Abilities are granted once"), Player.GetActivatableAbilities().Num(), 1);
+	TestFalse(TEXT("A second respawn is refused"), UAethelnDeathSubsystem::Respawn(Player));
+	F.AdvanceTo(9.0);
+	TestTrue(TEXT("Nothing respawns the player again"), F.Player.Controller->GetPawn() == NewPawn);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectRespawnStepIsAtomicTest,
+	"Aetheln.GameCombat.Death.ReconnectRespawnStepIsAtomic",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectRespawnStepIsAtomicTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+	if (Deaths == nullptr) { return false; }
+	F.AdvanceTo(0.5);
+	Kill(F, FGuid::NewGuid(), 0.4); // deadline 2.5
+	const uint64 Generation = Deaths->GetLifeGenerationForTests();
+	F.AdvanceTo(2.6); // the respawn step runs in this tick, wholly
+	TestFalse(TEXT("The respawn completed"), F.Player.AbilitySystem->HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+
+	// A disconnect right after it carries the living, restored player: never the dead one, and no wait.
+	Disconnect(F, TestKey);
+	F.AdvanceTo(2.7);
+	if (!Reconnect(*this, F, TestKey)) { return false; }
+	UAethelnAbilitySystemComponent& Player = *F.Player.AbilitySystem;
+	TestFalse(TEXT("The reconnect sees the living state"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	TestEqual(TEXT("No death effect"), CountActive(Player, UAethelnDeathStateEffect::StaticClass()), 0);
+	TestEqual(TEXT("Health is the restored value"), Read(Player, UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
+	double Deadline = 0.0;
+	uint64 WaitGeneration = 0;
+	TestFalse(TEXT("No respawn wait remains"), Deaths->FindRespawnWaitForTests(Player, Deadline, WaitGeneration));
+	APawn* Pawn = F.Player.Controller->GetPawn();
+	F.AdvanceTo(9.0);
+	TestTrue(TEXT("Nothing respawns the player a second time"), F.Player.Controller->GetPawn() == Pawn);
+	TestEqual(TEXT("No new life generation"), static_cast<int64>(Deaths->GetLifeGenerationForTests()), static_cast<int64>(Generation));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectAfterGraceIsNewSessionTest,
+	"Aetheln.GameCombat.Death.ReconnectAfterGraceIsNewSession",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectAfterGraceIsNewSessionTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	constexpr float NaN = std::numeric_limits<float>::quiet_NaN();
+	const float IniGrace = GetDefault<UAethelnDeathSubsystem>()->ProvisionalDisconnectGraceSeconds;
+	TestTrue(TEXT("The ini sets a finite, positive provisional disconnect grace window"), FMath::IsFinite(IniGrace) && IniGrace > 0.0f);
+
+	// Past the grace window the snapshot is gone and the reconnect is a new session under the initial attributes.
+	{
+		FFixture F(true); if (!F.Init(*this)) { return false; }
+		UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+		if (Deaths == nullptr) { return false; }
+		AethelnCombatTests::ApplyInstantModifier(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::AddBase, -10.0f);
+		F.AdvanceTo(1.0);
+		Disconnect(F, TestKey);
+		F.AdvanceTo(1.0 + TestGrace - 0.1);
+		TestEqual(TEXT("The snapshot is still held inside the window"), Deaths->GetCarriedStateCountForTests(), 1);
+		F.AdvanceTo(1.0 + TestGrace + 0.1);
+		TestEqual(TEXT("The snapshot is dropped after the window"), Deaths->GetCarriedStateCountForTests(), 0);
+		if (!Reconnect(*this, F, TestKey)) { return false; }
+		TestEqual(TEXT("A reconnect after the window gets the initial Health"), Read(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
+	}
+
+	// An unset, negative, or non-finite window stores nothing: the server says why and a reconnect is a new session.
+	AddExpectedError(TEXT("Refused to carry the state"), EAutomationExpectedErrorFlags::Contains, 3);
+	for (const float Grace : { 0.0f, -1.0f, NaN })
+	{
+		FFixture F(true); if (!F.Init(*this)) { return false; }
+		UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+		if (Deaths == nullptr) { return false; }
+		Deaths->ProvisionalDisconnectGraceSeconds = Grace;
+		AethelnCombatTests::ApplyInstantModifier(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::AddBase, -10.0f);
+		Disconnect(F, TestKey);
+		TestEqual(TEXT("An invalid window stores no snapshot"), Deaths->GetCarriedStateCountForTests(), 0);
+		if (!Reconnect(*this, F, TestKey)) { return false; }
+		TestEqual(TEXT("The reconnect is a new session"), Read(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectKeyIsClientPresentedTest,
+	"Aetheln.GameCombat.Death.ReconnectKeyIsClientPresented",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectKeyIsClientPresentedTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	// The one identity function: a missing, empty, too long, or malformed key means no carry.
+	TestEqual(TEXT("A valid key is used as given"), AAethelnCombatGameMode::ResolveReconnectKey(TEXT("?Name=x?ReconnectKey=abc-1_Z")), FString(TEXT("abc-1_Z")));
+	TestEqual(TEXT("A 64 character key is valid"), AAethelnCombatGameMode::ResolveReconnectKey(TEXT("?ReconnectKey=") + FString::ChrN(64, TEXT('a'))), FString::ChrN(64, TEXT('a')));
+	TestEqual(TEXT("A 65 character key is refused"), AAethelnCombatGameMode::ResolveReconnectKey(TEXT("?ReconnectKey=") + FString::ChrN(65, TEXT('a'))), FString());
+	TestEqual(TEXT("No option is no key"), AAethelnCombatGameMode::ResolveReconnectKey(TEXT("?Name=x")), FString());
+	TestEqual(TEXT("No options is no key"), AAethelnCombatGameMode::ResolveReconnectKey(FString()), FString());
+	TestEqual(TEXT("An empty key is no key"), AAethelnCombatGameMode::ResolveReconnectKey(TEXT("?ReconnectKey=")), FString());
+	TestEqual(TEXT("A path character is refused"), AAethelnCombatGameMode::ResolveReconnectKey(TEXT("?ReconnectKey=ab/cd")), FString());
+	TestEqual(TEXT("A non-ASCII character is refused"), AAethelnCombatGameMode::ResolveReconnectKey(TEXT("?ReconnectKey=abü")), FString());
+
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+	if (Deaths == nullptr) { return false; }
+	AethelnCombatTests::ApplyInstantModifier(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::AddBase, -10.0f);
+	Disconnect(F, TestKey);
+	TestEqual(TEXT("One snapshot is held"), Deaths->GetCarriedStateCountForTests(), 1);
+
+	// The client presents only the key. The state belongs to the server's snapshot under that key: another key, or none, never
+	// takes it, and nothing the player says changes what is restored.
+	if (!Reconnect(*this, F, TEXT("another-key"))) { return false; }
+	TestEqual(TEXT("Another key gets the initial Health"), Read(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
+	TestEqual(TEXT("Another key leaves the snapshot alone"), Deaths->GetCarriedStateCountForTests(), 1);
+	Disconnect(F, FString());
+	TestEqual(TEXT("A player with no key stores nothing"), Deaths->GetCarriedStateCountForTests(), 1);
+	if (!Reconnect(*this, F, FString())) { return false; }
+	TestEqual(TEXT("No key gets the initial Health"), Read(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()), 40.0f);
+	TestEqual(TEXT("No key leaves the snapshot alone"), Deaths->GetCarriedStateCountForTests(), 1);
+	Disconnect(F, FString());
+	if (!Reconnect(*this, F, TestKey)) { return false; }
+	TestEqual(TEXT("The owner of the key gets the carried Health"), Read(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()), 30.0f);
+	TestEqual(TEXT("The reconnect consumed the snapshot"), Deaths->GetCarriedStateCountForTests(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectLoginStampsKeyTest,
+	"Aetheln.GameCombat.Death.ReconnectLoginStampsKey",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectLoginStampsKeyTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	if (PrepareReconnect(*this, F) == nullptr) { return false; }
+	AAethelnCombatGameMode* GameMode = F.World.World->GetAuthGameMode<AAethelnCombatGameMode>();
+	if (!TestNotNull(TEXT("The combat game mode is the authority"), GameMode)) { return false; }
+
+	// The harness world has no game session, which InitNewPlayer registers the player with, so the test supplies one.
+	GameMode->GameSession = F.World.World->SpawnActor<AGameSession>();
+	if (!TestNotNull(TEXT("The game mode has a game session"), GameMode->GameSession.Get())) { return false; }
+
+	// The game mode's login stamps the key on the PlayerState before any possession; a bad key stamps none.
+	TestTrue(TEXT("The PlayerState has no key before login"), F.Player.PlayerState->GetReconnectKey().IsEmpty());
+	GameMode->InitNewPlayer(F.Player.Controller, FUniqueNetIdRepl(), TEXT("?ReconnectKey=login-key"), FString());
+	TestEqual(TEXT("Login stamps the key"), F.Player.PlayerState->GetReconnectKey(), FString(TEXT("login-key")));
+	GameMode->InitNewPlayer(F.Player.Controller, FUniqueNetIdRepl(), TEXT("?ReconnectKey=bad/key"), FString());
+	TestTrue(TEXT("A malformed key stamps none"), F.Player.PlayerState->GetReconnectKey().IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectThroughControllerDestroyTest,
+	"Aetheln.GameCombat.Death.ReconnectThroughControllerDestroy",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectThroughControllerDestroyTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+	if (Deaths == nullptr) { return false; }
+	AethelnCombatTests::ApplyInstantModifier(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::AddBase, -10.0f);
+	F.Player.PlayerState->SetReconnectKey(TestKey);
+
+	// The production chain of a logout: the controller's destruction calls PawnLeavingGame, the game mode's Logout, and the
+	// PlayerState's cleanup, whose destroy is the capture trigger. Nothing here destroys the PlayerState by hand.
+	F.Player.Controller->Destroy();
+	TestEqual(TEXT("Destroying the controller stored one snapshot"), Deaths->GetCarriedStateCountForTests(), 1);
+
+	// A new connection: a new controller, a fresh PlayerState with the key, and the game mode starts the player.
+	APlayerController* NewController = F.World.Spawn<APlayerController>();
+	if (!TestNotNull(TEXT("A new controller exists"), NewController)) { return false; }
+	F.Player.Controller = NewController;
+	if (!Reconnect(*this, F, TestKey)) { return false; }
+	TestEqual(TEXT("The snapshot from the controller's destruction is taken"), Deaths->GetCarriedStateCountForTests(), 0);
+	TestEqual(TEXT("Health carries over through the production logout"), Read(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()), 30.0f);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectNamesUncarriedEffectsTest,
+	"Aetheln.GameCombat.Death.ReconnectNamesUncarriedEffects",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectNamesUncarriedEffectsTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+	if (Deaths == nullptr) { return false; }
+
+	// A duration effect of another class is not carried, so a reconnect would end it: the capture says so, once for it. The
+	// shared timed-state effect, an instant effect, and the recovery and death effects stay silent.
+	ApplyTimedState(*F.Player.AbilitySystem, AethelnGameplayTags::Cooldown_Block, 20.0f);
+	AethelnCombatTests::ApplyInstantModifier(*F.Player.AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute(), EGameplayModOp::AddBase, -10.0f);
+	F.Player.AbilitySystem->ApplyGameplayEffectToSelf(
+		AethelnCombatTests::MakeTestEffect(EGameplayEffectDurationType::Infinite), 1.0f, F.Player.AbilitySystem->MakeEffectContext());
+	AddExpectedError(TEXT("does not carry the active effect"), EAutomationExpectedErrorFlags::Contains, 1);
+	Disconnect(F, TestKey);
+	TestEqual(TEXT("The snapshot is still stored"), Deaths->GetCarriedStateCountForTests(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnReconnectDuplicatesNothingTest,
+	"Aetheln.GameCombat.Death.ReconnectDuplicatesNothing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnReconnectDuplicatesNothingTest::RunTest(const FString& Parameters)
+{
+	using namespace AethelnRespawnTests;
+	FFixture F(true); if (!F.Init(*this)) { return false; }
+	UAethelnDeathSubsystem* Deaths = PrepareReconnect(*this, F);
+	UAethelnObservabilitySubsystem* Subsystem = F.World.GameInstance != nullptr ? F.World.GameInstance->GetSubsystem<UAethelnObservabilitySubsystem>() : nullptr;
+	if (Deaths == nullptr || !TestNotNull(TEXT("Observability subsystem exists"), Subsystem)) { return false; }
+	TSharedPtr<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe> Sink = MakeShared<FAethelnInMemoryObservabilitySink, ESPMode::ThreadSafe>(64);
+	TestTrue(TEXT("Runtime context is set"), Subsystem->SetRuntimeContext(EAethelnFlowKind::PrototypeAuthority, TEXT("run-death-p4-test"), TEXT("instance-death-p4-test"), TEXT("connection-death-p4-test")));
+	TestTrue(TEXT("Public sink is set"), Subsystem->SetTestSink(Sink));
+
+	F.AdvanceTo(0.5);
+	Kill(F, FGuid::NewGuid(), 0.4);
+	F.AdvanceTo(1.0);
+	Disconnect(F, TestKey);
+	F.AdvanceTo(1.5);
+	// Bound before the game mode starts the player, so the restore itself is observed.
+	int32 DeathCues = 0;
+	FDelegateHandle CueHandle;
+	if (!Reconnect(*this, F, TestKey, [&DeathCues, &CueHandle](UAethelnAbilitySystemComponent& Fresh) { CueHandle = Fresh.OnDeathCue.AddLambda([&DeathCues] { ++DeathCues; }); })) { return false; }
+	UAethelnAbilitySystemComponent& Player = *F.Player.AbilitySystem;
+
+	// A repeated lethal notification for the reconnected, already dead player is the same no-op as before the logout.
+	F.Timeline->OnLethalResult.Broadcast(&Player, FGuid::NewGuid(), 1.2);
+	TestEqual(TEXT("A repeated notification adds no death effect"), CountActive(Player, UAethelnDeathStateEffect::StaticClass()), 1);
+	TestEqual(TEXT("State.Dead is held once"), Player.GetTagCount(AethelnGameplayTags::State_Dead), 1);
+	F.AdvanceTo(3.0);
+	TestFalse(TEXT("The player respawned once"), Player.HasMatchingGameplayTag(AethelnGameplayTags::State_Dead));
+	TestEqual(TEXT("The reconnect and the respawn raised no death cue"), DeathCues, 0);
+	Player.OnDeathCue.Remove(CueHandle);
+	TestEqual(TEXT("Abilities are granted once"), Player.GetActivatableAbilities().Num(), 1);
+	TestEqual(TEXT("There was one life generation in all"), static_cast<int64>(Deaths->GetLifeGenerationForTests()), static_cast<int64>(1));
+
+	TestTrue(TEXT("Telemetry drained"), Subsystem->WaitForIdleForTests());
+	int32 DeathEvents = 0;
+	for (const FAethelnObservabilityEvent& Event : Sink->GetEvents())
+	{
+		if (Event.Category == EAethelnObservabilityCategory::Death) { ++DeathEvents; }
+	}
+	TestEqual(TEXT("One Death event for the one death"), DeathEvents, 1);
 	Subsystem->ResetSink(); Subsystem->ResetRuntimeContext();
 	return true;
 }
