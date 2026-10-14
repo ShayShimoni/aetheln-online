@@ -19,9 +19,9 @@
 // (player B) only watches. When A has stopped, A's authoritative server pawn, A's own client pawn and B's view of A's pawn
 // must agree on position and facing within the stated tolerances, and the server must have granted sprint speed above the
 // walk cap. Tolerances are measurement limits, not tuning values:
-//  - Position 5 cm (3D). Replicated movement rounds each axis to a whole centimetre by default, so a resting proxy is within
-//    about 1 cm of the server; the owner is bound by the engine's own correction threshold. 5 cm leaves margin for neither.
-//  - Facing 3 degrees. Replicated rotation is quantized to a byte per axis (about 1.4 degrees per step).
+//  - Position 5 cm (3D). Pawns replicate location to 0.01 cm (APawn sets RoundTwoDecimals), and the owning client is held
+//    within about 1.7 cm of the server by MAXPOSITIONERRORSQUARED 3, so 5 cm leaves margin.
+//  - Facing 3 degrees. Replicated rotation uses ByteComponents, a byte per axis (about 1.4 degrees per step).
 // Everything runs in one process, so the run state below is shared by the server and client worlds.
 namespace AethelnTwoClientMovementTests
 {
@@ -52,7 +52,7 @@ namespace AethelnTwoClientMovementTests
 		FVector RouteDirection = FVector::ForwardVector;
 		double ServerWalkPeak = 0.0;
 		double ServerSprintPeak = 0.0;
-		double ServerSprintCap = 0.0;
+		float UAethelnCharacterMovementComponent::* SprintSpeedMember = nullptr;
 		TWeakObjectPtr<AAethelnPlayerCharacter> ServerMover;
 		TWeakObjectPtr<AAethelnPlayerCharacter> ServerObserver;
 	};
@@ -104,7 +104,8 @@ namespace AethelnTwoClientMovementTests
 		return FVector::Dist2D(From, To);
 	}
 
-	void QueueTwoClientMovement(FAutomationTestBase& Test)
+	/** SprintSpeedMember is a pointer to the protected sprint cap, taken by the friend test class and read here from the live pawn. */
+	void QueueTwoClientMovement(FAutomationTestBase& Test, float UAethelnCharacterMovementComponent::* SprintSpeedMember)
 	{
 		// CQTest plays a new unsaved map, whose level and world settings have no stable package path for the net GUID cache.
 		Test.AddExpectedMessage(TEXT("FNetGUIDCache::SupportsObject: Level /Temp/UEDPIE_\\d+_Untitled_\\d+\\.Untitled:PersistentLevel NOT Supported"), ELogVerbosity::Warning,
@@ -118,6 +119,7 @@ namespace AethelnTwoClientMovementTests
 		// Generous bounds: every wait ends on replicated state, never on a fixed tick.
 		const FTimespan Timeout = FTimespan::FromSeconds(30.0);
 		FRun* R = &Run.Get();
+		R->SprintSpeedMember = SprintSpeedMember;
 
 		Run->Network
 			.UntilServer(TEXT("Both players have a character pawn"), [R](FState& Server)
@@ -184,7 +186,6 @@ namespace AethelnTwoClientMovementTests
 				Pawn->ReceiveSprintIntent(true);
 				Pawn->ReceiveMoveInput(FVector2D(0.0, 1.0));
 				R->ServerSprintPeak = FMath::Max(R->ServerSprintPeak, R->ServerMover->GetVelocity().Size2D());
-				R->ServerSprintCap = FMath::Max<double>(R->ServerSprintCap, R->ServerMover->GetCharacterMovement()->GetMaxSpeed());
 				return PlanarDistance(Pawn->GetActorLocation(), R->RouteStart) >= WalkRoute + SprintRoute;
 			}, Timeout)
 			.ThenClient(TEXT("The mover lets go of sprint and movement"), MoverClient, [R](FState& Client)
@@ -208,7 +209,11 @@ namespace AethelnTwoClientMovementTests
 				R->Test.TestTrue(TEXT("The server pawn travelled the whole route"), PlanarDistance(Mover->GetActorLocation(), R->RouteStart) >= WalkRoute + SprintRoute - PositionTolerance);
 				R->Test.TestTrue(TEXT("Walking never exceeded the walk cap on the server"), R->ServerWalkPeak > 0.0 && R->ServerWalkPeak <= Movement->MaxWalkSpeed + 1.0);
 				R->Test.TestTrue(TEXT("The server granted a sprint speed above the walk cap"), R->ServerSprintPeak > Movement->MaxWalkSpeed + 1.0);
-				R->Test.TestTrue(TEXT("Sprint never exceeded the speed the server's own movement component allows"), R->ServerSprintPeak <= R->ServerSprintCap + 1.0);
+				const UAethelnCharacterMovementComponent* AethelnMovement = Cast<UAethelnCharacterMovementComponent>(Movement);
+				if (R->Test.TestNotNull(TEXT("The server pawn uses the project movement component"), AethelnMovement))
+				{
+					R->Test.TestTrue(TEXT("Sprint never exceeded the project's sprint speed"), R->ServerSprintPeak <= AethelnMovement->*R->SprintSpeedMember + 1.0);
+				}
 				const double Heading = (Mover->GetActorLocation() - R->RouteStart).GetSafeNormal2D().Rotation().Yaw;
 				R->Test.TestTrue(TEXT("The server pawn faces the direction it travelled"), YawDifference(Mover->GetActorRotation().Yaw, Heading) <= FacingToleranceDegrees);
 				R->Test.TestTrue(TEXT("The route followed the commanded heading"), YawDifference(Heading, R->RouteDirection.Rotation().Yaw) <= FacingToleranceDegrees);
@@ -253,7 +258,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnTwoClientMovementTest,
 
 bool FAethelnTwoClientMovementTest::RunTest(const FString& Parameters)
 {
-	AethelnTwoClientMovementTests::QueueTwoClientMovement(*this);
+	AethelnTwoClientMovementTests::QueueTwoClientMovement(*this, &UAethelnCharacterMovementComponent::SprintSpeed);
 	return true;
 }
 

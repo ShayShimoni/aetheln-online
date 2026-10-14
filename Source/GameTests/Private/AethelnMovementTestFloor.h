@@ -10,7 +10,7 @@
  * replicates by network GUID (a default subobject of a replicated actor) keeps the engine's movement-base references
  * resolvable on every client. Authored only in the Editor test module; the size is a test fixture, not tuning.
  */
-UCLASS(NotBlueprintable, HideDropdown)
+UCLASS(Transient, NotPlaceable, NotBlueprintable, HideDropdown)
 class AAethelnMovementTestFloor : public AActor
 {
 	GENERATED_BODY()

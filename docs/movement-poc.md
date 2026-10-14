@@ -429,7 +429,7 @@ normally. Every move goes through the real packed move path.
 | Duplicate timestamp | Move is dropped before simulation | `LoopbackTransport` |
 | Acceleration over the limit | Not rejected: the server clamps the claim to `MaxAcceleration` and simulates the clamped value | `Reject.AccelerationOverLimit` |
 | Large displacement | Correction; the server does not adopt the client location (`ClientAuthorativePosition=false`) | `Reject.DisplacementTeleport` |
-| Invalid transition | Covered. A jump request while airborne is refused: the server's `ACharacter::CanJumpInternal` allows one jump per ground contact (`JumpMaxCount` stays at the engine default of 1), so the flag is received and ignored, the server's jump count and vertical speed continue on their own path, and no correction is needed (`Reject.TransitionJumpWhileAirborne`). A claimed landing while the server has the pawn falling is corrected, and the server stays airborne (`Reject.TransitionClaimedLanding`). A claimed mode change from the ground is corrected (`Reject.ClientModeMismatch`), an ineligible sprint state gets no sprint speed (`InvalidSprintRejected`, `AethelnCharacterMovementComponent.cpp:947`), and a refused dodge start is rolled back (`DodgeRefusedRollsBack`, `AethelnDodgeMovementTests.cpp:352`). | `Reject.TransitionJumpWhileAirborne`, `Reject.TransitionClaimedLanding`, `Reject.ClientModeMismatch`, `InvalidSprintRejected`, `DodgeRefusedRollsBack` |
+| Invalid transition | Covered. A jump request while airborne is refused: the server's `ACharacter::CanJumpInternal` allows one jump per ground contact (`JumpMaxCount` stays at the engine default of 1), so the flag is received and ignored, the server's jump count and vertical speed continue on their own path, and no correction is needed (`Reject.TransitionJumpWhileAirborne`). A claimed landing while the server has the pawn falling is corrected, and the server stays airborne (`Reject.TransitionClaimedLanding`); the engine's generic mode-mismatch correction refuses it, with no project code involved. A claimed mode change from the ground is corrected (`Reject.ClientModeMismatch`), an ineligible sprint state gets no sprint speed (`InvalidSprintRejected`, `AethelnCharacterMovementComponent.cpp:947`), and a refused dodge start is rolled back (`DodgeRefusedRollsBack`, `AethelnDodgeMovementTests.cpp:352`). A jump after walking off a ledge (jump count 0 while falling) takes a different engine branch and has no dedicated test; adding one is an optional follow-up. | `Reject.TransitionJumpWhileAirborne`, `Reject.TransitionClaimedLanding`, `Reject.ClientModeMismatch`, `InvalidSprintRejected`, `DodgeRefusedRollsBack` |
 | Rotation | Not corrected: facing is derived by the server and rate limited | `FacingSpoofBounded`, `AirborneFacingBounded` |
 
 ### Two-client dedicated-server test (issue #17 DoD)
@@ -455,9 +455,10 @@ When the mover has stopped, the test requires:
 - the mover's own client and the observer's client to show the mover's pawn within 5 cm
   of the server's position and within 3 degrees of the server's facing.
 
-The tolerances are measurement limits, not tuning. Replicated movement rounds each axis
-to a whole centimetre by default, and replicated rotation is quantized to a byte per
-axis (about 1.4 degrees). The run takes about 3 seconds after PIE starts and passed
+The tolerances are measurement limits, not tuning. Pawns replicate
+location to 0.01 cm (`APawn` sets `RoundTwoDecimals`), the owning client is held within
+about 1.7 cm of the server by `MAXPOSITIONERRORSQUARED` 3, so 5 cm leaves margin, and
+replicated rotation uses `ByteComponents`, a byte per axis (about 1.4 degrees). The run takes about 3 seconds after PIE starts and passed
 three consecutive runs. It does not add an impaired-link variant: the network profiles
 and the correction and rubber-banding measurements stay with #45.
 
