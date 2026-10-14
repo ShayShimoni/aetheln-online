@@ -87,6 +87,11 @@ int32 UAethelnPrototypeSpaceAuthoringCommandlet::Main(const FString& Params)
 		UE_LOG(LogAethelnPrototypeSpaceAuthoring, Error, TEXT("The world has no navigation system."));
 		return 1;
 	}
+	// A map load in an editor world leaves its async-load lock on until the Editor's tick releases it, and a commandlet
+	// never ticks that far; Build() refuses to run while it is held.
+	Navigation->RemoveNavigationBuildLock(ENavigationBuildLock::AsyncLoadLock, UNavigationSystemV1::ELockRemovalRebuildAction::NoRebuild);
+	// The new volume registers with the navigation system on its tick, which a commandlet does not run.
+	for (int32 Tick = 0; Tick < 3; ++Tick) { Navigation->Tick(0.1f); }
 	const double BuildStart = FPlatformTime::Seconds();
 	Navigation->Build();
 	const double BuildMilliseconds = (FPlatformTime::Seconds() - BuildStart) * 1000.0;
