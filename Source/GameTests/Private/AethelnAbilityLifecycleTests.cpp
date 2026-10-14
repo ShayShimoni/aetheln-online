@@ -10,10 +10,12 @@
 #include "AethelnCombatTestWorld.h"
 #include "AethelnGameplayTags.h"
 #include "AethelnPlayerCharacter.h"
+#include "AethelnPlayerController.h"
 #include "AethelnPlayerState.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameMode.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/WorldSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -382,7 +384,8 @@ bool FAethelnReconnectInterimGapTest::RunTest(const FString& Parameters)
 {
 	using namespace AethelnAbilityLifecycleTests;
 
-	FScopedCombatTestWorld TestWorld;
+	// A game instance, because the combat game mode is installed through UWorld::SetGameMode.
+	FScopedCombatTestWorld TestWorld(true);
 	FTestPlayer Player;
 	if (!SpawnTestPlayer(*this, TestWorld, Player))
 	{
@@ -403,22 +406,33 @@ bool FAethelnReconnectInterimGapTest::RunTest(const FString& Parameters)
 	Player.AbilitySystem->ApplyGameplayEffectSpecToSelf(Cooldown);
 	TestEqual(TEXT("Old PlayerState carries one active effect (a cooldown)"), Player.AbilitySystem->GetNumActiveGameplayEffects(), 1);
 
-	// AGameModeBase never reuses an inactive PlayerState, so a reconnect gets a fresh one. The destroyed PlayerState
-	// carries its state under the reconnect key (#21 P4), and the fresh one takes it with the same key.
+	// AGameModeBase never reuses an inactive PlayerState, so a reconnect gets a fresh one. The logout (the controller's
+	// destruction) keeps the old PlayerState and the pawn for the grace window under the reconnect key (#21 P4b), and the
+	// combat game mode resumes them for a fresh PlayerState with the same key.
+	TestWorld.World->GetWorldSettings()->DefaultGameMode = AAethelnCombatGameMode::StaticClass();
+	AAethelnCombatGameMode* GameMode = TestWorld.World->SetGameMode(FURL()) ? TestWorld.World->GetAuthGameMode<AAethelnCombatGameMode>() : nullptr;
+	if (!TestNotNull(TEXT("The world takes the combat game mode"), GameMode))
+	{
+		return false;
+	}
+	// The configured input-enabled Blueprint pawn is not this test's subject.
+	GameMode->InputEnabledPawnClass.Reset();
+	GameMode->DefaultPawnClass = AAethelnPlayerCharacter::StaticClass();
 	Player.PlayerState->SetReconnectKey(TEXT("t34-key"));
-	Player.Controller->UnPossess();
-	AAethelnPlayerState* ReconnectedPlayerState = AttachFreshPlayerState(TestWorld, *Player.Controller);
+	Player.Controller->Destroy();
+	APlayerController* NewController = TestWorld.Spawn<AAethelnPlayerController>();
+	AAethelnPlayerState* ReconnectedPlayerState = NewController != nullptr ? AttachFreshPlayerState(TestWorld, *NewController) : nullptr;
 	if (!TestNotNull(TEXT("Fresh PlayerState exists"), ReconnectedPlayerState))
 	{
 		return false;
 	}
-	Player.PlayerState->Destroy();
 	ReconnectedPlayerState->SetReconnectKey(TEXT("t34-key"));
-	Player.Controller->Possess(Pawn);
+	GameMode->RestartPlayer(NewController);
 
-	// The gap #19 pinned here is closed: a reconnect inside the grace window is not a free refill, for a client that presents a
-	// key (no client sends one until P4b).
+	// The gap #19 pinned here is closed: a reconnect inside the grace window is not a free refill, and the player resumes its
+	// own pawn. Every client presents the server-issued key (P4b).
 	UAethelnAbilitySystemComponent* ReconnectedAbilitySystem = ReconnectedPlayerState->GetAethelnAbilitySystemComponent();
+	TestTrue(TEXT("The reconnect resumes the same pawn"), NewController->GetPawn() == Pawn);
 	TestTrue(TEXT("Pawn resolves to the fresh PlayerState ASC"), UAethelnAbilitySystemComponent::FindForPawn(Pawn) == ReconnectedAbilitySystem);
 	TestEqual(TEXT("Health is carried over, not refilled to its configured value"), ReconnectedAbilitySystem->GetNumericAttribute(UAethelnCombatAttributeSet::GetHealthAttribute()), MakeTestInitValues().Health - 10.0f);
 	TestEqual(TEXT("The cooldown effect carries over"), ReconnectedAbilitySystem->GetNumActiveGameplayEffects(), 1);
