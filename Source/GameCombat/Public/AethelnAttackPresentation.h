@@ -7,6 +7,18 @@
 class UAethelnAttackDefinition;
 class UAnimMontage;
 class USkeleton;
+struct FAssetData;
+
+/** The outcome of looking up the binding of one ability and definition version. */
+enum class EAethelnPresentationLookup : uint8
+{
+	/** Exactly one binding. */
+	Found,
+	/** No binding is mounted for that ability and version; presentation falls back to the neutral one. */
+	NotFound,
+	/** Two or more bindings claim the ability and version. A validation error, never a priority rule. */
+	Ambiguous
+};
 
 /** The presentation of one attack step. The montage sections map onto the step's authored windows; they never define them. */
 USTRUCT()
@@ -41,7 +53,7 @@ public:
 	TObjectPtr<UAethelnAttackDefinition> Definition;
 
 	/** The definition ContentVersion this binding was authored against. A different definition version makes it stale. */
-	UPROPERTY(EditDefaultsOnly, Category = "Aetheln|Presentation", meta = (ClampMin = "1", UIMin = "1"))
+	UPROPERTY(EditDefaultsOnly, AssetRegistrySearchable, Category = "Aetheln|Presentation", meta = (ClampMin = "1", UIMin = "1"))
 	int32 AuthoredContentVersion = 0;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Aetheln|Presentation")
@@ -56,6 +68,17 @@ public:
 
 	/** Initial allowlist of presentation notify classes. Any other class, and a notify with no class, fails. */
 	static bool IsPresentationNotifyClass(const UClass* NotifyClass);
+
+	/**
+	 * Finds the binding for an ability and the definition version it was authored against with an Asset Registry
+	 * query over all mounted content: the binding class plus the AbilityId and AuthoredContentVersion registry
+	 * tags. It never names a package path, so a binding in the private art plugin is found without any public
+	 * reference to that plugin (TA-019). OutAsset is set only for Found.
+	 */
+	static EAethelnPresentationLookup FindBinding(const FGameplayTag& InAbilityId, int32 InAuthoredContentVersion, FAssetData& OutAsset);
+
+	/** AbilityId is written as a plain-string tag whose value is the tag name, so the registry filter matches it exactly. A searchable FGameplayTag would export as (TagName="..."). */
+	virtual void GetAssetRegistryTags(FAssetRegistryTagsContext Context) const override;
 
 #if WITH_EDITOR
 	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;

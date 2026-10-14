@@ -699,6 +699,9 @@ without the `InterruptibleUntil` check
 ([The Parry](dodge-and-block.md#the-parry)). Resolve and control families are
 not prototype scope.
 
+The Parry's forced interruption is the timeline's `ForceInterrupt` (#260 P3),
+the same stamping and reset without the `InterruptibleUntil` check.
+
 P5 delivers it as follows:
 
 - **Hits only.** Only a non-lethal `Hit` interrupts. An `Avoided`, `Blocked`,

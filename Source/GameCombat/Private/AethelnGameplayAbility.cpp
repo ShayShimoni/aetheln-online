@@ -15,6 +15,8 @@ UAethelnGameplayAbility::UAethelnGameplayAbility()
 
 	// Declared by #19, applied and removed only by #21.
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Dead);
+	// #260 default, open: a staggered player (a parried attacker) may move but uses no project ability.
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Staggered);
 }
 
 bool UAethelnGameplayAbility::IsAbilityIdentityTag(const FGameplayTag& Tag)

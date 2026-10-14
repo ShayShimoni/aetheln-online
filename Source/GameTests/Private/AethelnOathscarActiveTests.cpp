@@ -121,7 +121,8 @@ bool FAethelnInstantStrikeDefinitionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("The three-hit chain keeps its commitment tag"), GetDefault<UAethelnChainTestAbility>()->GetCommitmentTag(), Chain);
 	// Owner, 2026-10-13: refused inside the chain's commitment window (as dodge and block). The inherited grant rule
 	// makes each blocking tag a reset tag. Q17 and Q10: no attack while dodging or blocking.
-	for (const FGameplayTag Tag : { Chain, AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag(), AethelnGameplayTags::State_Dead.GetTag() })
+	for (const FGameplayTag Tag : { Chain, AethelnGameplayTags::State_Dodging.GetTag(), AethelnGameplayTags::State_Blocking.GetTag(), AethelnGameplayTags::State_Dead.GetTag(),
+		AethelnGameplayTags::State_Staggered.GetTag(), AethelnGameplayTags::State_Oathscar_Parrying.GetTag() })
 	{
 		TestTrue(FString::Printf(TEXT("Blocked while %s"), *Tag.ToString()), Defaults->GetBlockedTagsForTests().HasTagExact(Tag));
 		TestTrue(FString::Printf(TEXT("Resets on %s"), *Tag.ToString()), Defaults->ResetTags.HasTagExact(Tag));
@@ -441,36 +442,64 @@ bool FAethelnInstantStrikeNetworkConditionsTest::RunTest(const FString& Paramete
 	return true;
 }
 
-// K13 (Instant Strike rows): identity, version, policies, and that the superseded skeletons are gone.
+// K13: identity, version, policies, state tags and ini of every active, and that the superseded skeletons are gone.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnOathscarDefinitionsAndTagsTest,
 	"Aetheln.GameCombat.OathscarActives.DefinitionsAndTags",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
 bool FAethelnOathscarDefinitionsAndTagsTest::RunTest(const FString& Parameters)
 {
-	const UAethelnGameplayAbility* Strike = GetDefault<UAethelnInstantStrikeAbility>();
-	const FGameplayTag Id = AethelnGameplayTags::Ability_Oathscar_InstantStrike;
-	TestEqual(TEXT("Identity"), Strike->GetAbilityId(), Id);
-	TestTrue(TEXT("A valid Ability. tag"), UAethelnGameplayAbility::IsAbilityIdentityTag(Strike->GetAbilityId()));
-	int32 IniContentVersion = 0;
-	TestTrue(TEXT("DefaultGame.ini sets ContentVersion"), GConfig->GetInt(*UAethelnInstantStrikeAbility::StaticClass()->GetPathName(), TEXT("ContentVersion"), IniContentVersion, GGameIni));
-	TestEqual(TEXT("Version 1, a new identity"), static_cast<int64>(Strike->ContentVersion), static_cast<int64>(1));
-	TestEqual(TEXT("The class default loaded the ini ContentVersion"), static_cast<int64>(Strike->ContentVersion), static_cast<int64>(IniContentVersion));
-	TestTrue(TEXT("InstancedPerActor"), Strike->GetInstancingPolicy() == EGameplayAbilityInstancingPolicy::InstancedPerActor);
-	TestTrue(TEXT("ServerOnly execution, nothing predicted"), Strike->GetNetExecutionPolicy() == EGameplayAbilityNetExecutionPolicy::ServerOnly);
-	TestTrue(TEXT("ServerOnly security"), Strike->GetNetSecurityPolicy() == EGameplayAbilityNetSecurityPolicy::ServerOnly);
-	const FGameplayTagContainer* CooldownTags = Strike->GetCooldownTags();
-	TestTrue(TEXT("Exactly its cooldown tag"), CooldownTags != nullptr && CooldownTags->Num() == 1 && CooldownTags->HasTagExact(AethelnGameplayTags::Cooldown_Oathscar_InstantStrike));
-	TestNull(TEXT("No engine cost effect class"), Strike->GetCostGameplayEffect());
-	TestNull(TEXT("No engine cooldown effect class"), Strike->GetCooldownGameplayEffect());
-	TestFalse(TEXT("bAcceptsRelease is false"), Strike->bAcceptsRelease);
+	struct FActive
+	{
+		UClass* Class;
+		FGameplayTag Id;
+		/** Invalid for the stances, which have no cooldown tag. */
+		FGameplayTag CooldownTag;
+		const TCHAR* SemanticId;
+		bool bReleases;
+	};
+	const TArray<FActive> Actives = {
+		{ UAethelnInstantStrikeAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_InstantStrike, AethelnGameplayTags::Cooldown_Oathscar_InstantStrike, TEXT("order.oathscar.ability.instant_strike"), false },
+		{ UAethelnParryAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_Parry, AethelnGameplayTags::Cooldown_Oathscar_Parry, TEXT("order.oathscar.ability.parry"), false },
+	};
+	TSet<FGameplayTag> Ids;
+	TSet<FGameplayTag> Cooldowns;
 	const TArray<TSubclassOf<UGameplayAbility>>& Configured = GetDefault<AAethelnPlayerState>()->GrantedAbilities;
-	TestFalse(TEXT("Not granted by config until its values exist"), Configured.ContainsByPredicate([](const TSubclassOf<UGameplayAbility>& Granted) { return Granted.Get() == UAethelnInstantStrikeAbility::StaticClass(); }));
+	for (const FActive& Active : Actives)
+	{
+		const FString Name = Active.Id.ToString();
+		const UAethelnGameplayAbility* Ability = Active.Class->GetDefaultObject<UAethelnGameplayAbility>();
+		TestEqual(Name + TEXT(": identity"), Ability->GetAbilityId(), Active.Id);
+		TestTrue(Name + TEXT(": a valid Ability. tag"), UAethelnGameplayAbility::IsAbilityIdentityTag(Ability->GetAbilityId()));
+		TestFalse(Name + TEXT(": a unique identity"), Ids.Contains(Active.Id));
+		Ids.Add(Active.Id);
+		int32 IniContentVersion = 0;
+		TestTrue(Name + TEXT(": DefaultGame.ini sets ContentVersion"), GConfig->GetInt(*Active.Class->GetPathName(), TEXT("ContentVersion"), IniContentVersion, GGameIni));
+		TestEqual(Name + TEXT(": version 1, a new identity"), static_cast<int64>(Ability->ContentVersion), static_cast<int64>(1));
+		TestEqual(Name + TEXT(": the class default loaded the ini ContentVersion"), static_cast<int64>(Ability->ContentVersion), static_cast<int64>(IniContentVersion));
+		TestTrue(Name + TEXT(": InstancedPerActor"), Ability->GetInstancingPolicy() == EGameplayAbilityInstancingPolicy::InstancedPerActor);
+		TestTrue(Name + TEXT(": ServerOnly execution, nothing predicted"), Ability->GetNetExecutionPolicy() == EGameplayAbilityNetExecutionPolicy::ServerOnly);
+		TestTrue(Name + TEXT(": ServerOnly security"), Ability->GetNetSecurityPolicy() == EGameplayAbilityNetSecurityPolicy::ServerOnly);
+		const FGameplayTagContainer* CooldownTags = Ability->GetCooldownTags();
+		if (Active.CooldownTag.IsValid())
+		{
+			TestTrue(Name + TEXT(": exactly its cooldown tag"), CooldownTags != nullptr && CooldownTags->Num() == 1 && CooldownTags->HasTagExact(Active.CooldownTag));
+			TestFalse(Name + TEXT(": a unique cooldown tag"), Cooldowns.Contains(Active.CooldownTag));
+			Cooldowns.Add(Active.CooldownTag);
+		}
+		else
+		{
+			TestTrue(Name + TEXT(": no cooldown tag"), CooldownTags == nullptr || CooldownTags->IsEmpty());
+		}
+		TestNull(Name + TEXT(": no engine cost effect class"), Ability->GetCostGameplayEffect());
+		TestNull(Name + TEXT(": no engine cooldown effect class"), Ability->GetCooldownGameplayEffect());
+		TestEqual(Name + TEXT(": bAcceptsRelease"), Ability->bAcceptsRelease, Active.bReleases);
+		TestFalse(Name + TEXT(": not granted by config until its values exist"), Configured.ContainsByPredicate([&Active](const TSubclassOf<UGameplayAbility>& Granted) { return Granted.Get() == Active.Class; }));
 #if WITH_EDITORONLY_DATA
-	const UGameplayTagsManager& Tags = UGameplayTagsManager::Get();
-	const TSharedPtr<FGameplayTagNode> Node = Tags.FindTagNode(Id);
-	TestEqual(TEXT("The tag maps to its semantic ID"), Node.IsValid() ? Node->GetDevComment() : FString(), FString(TEXT("order.oathscar.ability.instant_strike")));
+		const TSharedPtr<FGameplayTagNode> Node = UGameplayTagsManager::Get().FindTagNode(Active.Id);
+		TestEqual(Name + TEXT(": the tag maps to its semantic ID"), Node.IsValid() ? Node->GetDevComment() : FString(), FString(Active.SemanticId));
 #endif
+	}
 	// The superseded skeletons (owner, 2026-10-13) are gone: their tags are not declared, their classes do not exist,
 	// and their config sections are removed.
 	for (const TCHAR* Name : { TEXT("Ability.Oathscar.GateStep"), TEXT("Ability.Oathscar.SwornRebuke"), TEXT("Ability.Oathscar.HoldTheLine"),

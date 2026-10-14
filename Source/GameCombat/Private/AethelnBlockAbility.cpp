@@ -16,7 +16,8 @@ UAethelnBlockAbility::UAethelnBlockAbility()
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_GuardBroken);
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Dodging);
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_SwordShieldBasicChain);
-	// #260 (default, open): a committed Instant Strike also blocks the raise.
+	// #260 (default, open): a Parry window also blocks the raise (one defense slot per ASC), and a committed Instant Strike.
+	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_Parrying);
 	ActivationBlockedTags.AddTag(AethelnGameplayTags::State_Oathscar_InstantStrike);
 	// No authored version, raise, arc, break, cost or cooldown preset: unset production config fails grant.
 }
