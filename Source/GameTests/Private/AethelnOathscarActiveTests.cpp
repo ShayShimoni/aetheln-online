@@ -442,6 +442,47 @@ bool FAethelnInstantStrikeNetworkConditionsTest::RunTest(const FString& Paramete
 	return true;
 }
 
+namespace AethelnOathscarActiveTests
+{
+	/** The stance grant rules (#260 P4), for either fixture stance: finite positive duration, no cooldown, Press-only, blocking tags. */
+	template <typename TStance>
+	void CheckStanceGrantRules(FAutomationTestBase& Test, const FString& Name)
+	{
+		const float NaN = std::numeric_limits<float>::quiet_NaN();
+		const float Infinity = std::numeric_limits<float>::infinity();
+		Test.TestTrue(Name + TEXT(": the fixture definition is grantable"), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(TStance::StaticClass(), 1)));
+		const TArray<TFunction<void(TStance&)>> Mutations = {
+			[](TStance& A) { A.ProvisionalStanceDurationSeconds = 0.0f; }, // unset
+			[](TStance& A) { A.ProvisionalStanceDurationSeconds = -1.0f; },
+			[NaN](TStance& A) { A.ProvisionalStanceDurationSeconds = NaN; },
+			[Infinity](TStance& A) { A.ProvisionalStanceDurationSeconds = Infinity; },
+			[](TStance& A) { A.ProvisionalCooldownSeconds = 0.5f; }, // no cooldown is an owner rule
+			[NaN](TStance& A) { A.ProvisionalCooldownSeconds = NaN; },
+			[](TStance& A) { A.ProvisionalEnduranceCost = -1.0f; },
+			[](TStance& A) { A.bAcceptsRelease = true; },
+			[](TStance& A) { A.SetMovementCarriedForTests(true); },
+			[](TStance& A) { A.ContentVersion = 0; },
+		};
+		for (int32 Index = 0; Index < Mutations.Num(); ++Index)
+		{
+			TStance* Definition = NewObject<TStance>();
+			Mutations[Index](*Definition);
+			Test.AddExpectedError(TEXT("Refused to grant ability"), EAutomationExpectedErrorFlags::Contains, 1);
+			Test.TestFalse(FString::Printf(TEXT("%s: invalid value %d refuses at grant"), *Name, Index), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition)));
+		}
+		const TStance* Defaults = GetDefault<TStance>();
+		for (const FGameplayTag Missing : Defaults->GetBlockedTagsForTests())
+		{
+			TStance* Definition = NewObject<TStance>();
+			FGameplayTagContainer Tags = Definition->GetBlockedTagsForTests();
+			Tags.RemoveTag(Missing);
+			Definition->SetBlockedTagsForTests(Tags);
+			Test.AddExpectedError(TEXT("Refused to grant ability"), EAutomationExpectedErrorFlags::Contains, 1);
+			Test.TestFalse(FString::Printf(TEXT("%s: a stance without blocking tag %s refuses at grant"), *Name, *Missing.ToString()), AAethelnPlayerState::IsGrantableAbilitySpec(FGameplayAbilitySpec(Definition)));
+		}
+	}
+}
+
 // K13: identity, version, policies, state tags and ini of every active, and that the superseded skeletons are gone.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnOathscarDefinitionsAndTagsTest,
 	"Aetheln.GameCombat.OathscarActives.DefinitionsAndTags",
@@ -461,6 +502,8 @@ bool FAethelnOathscarDefinitionsAndTagsTest::RunTest(const FString& Parameters)
 	const TArray<FActive> Actives = {
 		{ UAethelnInstantStrikeAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_InstantStrike, AethelnGameplayTags::Cooldown_Oathscar_InstantStrike, TEXT("order.oathscar.ability.instant_strike"), false },
 		{ UAethelnParryAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_Parry, AethelnGameplayTags::Cooldown_Oathscar_Parry, TEXT("order.oathscar.ability.parry"), false },
+		{ UAethelnAttackStanceAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_AttackStance, FGameplayTag(), TEXT("order.oathscar.ability.attack_stance"), false },
+		{ UAethelnDefenseStanceAbility::StaticClass(), AethelnGameplayTags::Ability_Oathscar_DefenseStance, FGameplayTag(), TEXT("order.oathscar.ability.defense_stance"), false },
 	};
 	TSet<FGameplayTag> Ids;
 	TSet<FGameplayTag> Cooldowns;
@@ -500,6 +543,9 @@ bool FAethelnOathscarDefinitionsAndTagsTest::RunTest(const FString& Parameters)
 		TestEqual(Name + TEXT(": the tag maps to its semantic ID"), Node.IsValid() ? Node->GetDevComment() : FString(), FString(Active.SemanticId));
 #endif
 	}
+	// The stances: valid grant rules, with the fixture values; the production sections are checked above.
+	AethelnOathscarActiveTests::CheckStanceGrantRules<UAethelnAttackStanceTestAbility>(*this, TEXT("Attack Stance"));
+	AethelnOathscarActiveTests::CheckStanceGrantRules<UAethelnDefenseStanceTestAbility>(*this, TEXT("Defense Stance"));
 	// The superseded skeletons (owner, 2026-10-13) are gone: their tags are not declared, their classes do not exist,
 	// and their config sections are removed.
 	for (const TCHAR* Name : { TEXT("Ability.Oathscar.GateStep"), TEXT("Ability.Oathscar.SwornRebuke"), TEXT("Ability.Oathscar.HoldTheLine"),
