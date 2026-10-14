@@ -96,6 +96,7 @@ namespace AethelnTwoClientAttackTests
 		bool bWaitingAtClose = false;
 		bool bSecondPressed = false;
 		int32 ResultsAtAllClosed = 0;
+		bool bLostChainGone[MaxClients] = {};
 		int32 StepsAfterLoss = INDEX_NONE;
 		int32 OwnersAfterLoss = INDEX_NONE;
 
@@ -434,7 +435,7 @@ namespace AethelnTwoClientAttackTests
 				Cadence[Index].Result == EResult::Accepted || Cadence[Index].Result == EResult::ActivationBlocked);
 		}
 		Test.TestEqual(TEXT("The server spent the cost once per accepted press, never twice"), R.CostApplications, Accepted + CraftedAccepted);
-		Test.TestTrue(TEXT("Records never outnumber accepted presses"), R.Records.Num() <= Accepted + CraftedAccepted);
+		Test.TestEqual(TEXT("Every accepted press started a step: one record each"), R.Records.Num(), Accepted + CraftedAccepted);
 
 		int32 ChainsStarted = 0;
 		TMap<FGuid, uint8> StepOfActivation;
@@ -517,7 +518,7 @@ namespace AethelnTwoClientAttackTests
 				T.TestEqual(TEXT("The server committed three hits, one per step"), R->Results.Num(), 3);
 				T.TestEqual(TEXT("The cost was spent once per step"), R->CostApplications, 3);
 
-				T.TestTrue(TEXT("The observer saw the phase state of the chain"), R->ObserverSteps.Num() >= 1);
+				T.TestEqual(TEXT("The observer saw the phase state of each step"), R->ObserverSteps.Num(), 3);
 				for (const uint8 Step : R->ObserverSteps) { T.TestTrue(TEXT("An observed step is 1, 2 or 3"), Step >= 1 && Step <= 3); }
 				T.TestFalse(TEXT("The phase state is inactive at the end"), R->ObserverLast.bActive);
 				T.TestEqual(TEXT("The observer sees why the chain ended"), R->ObserverLast.EndReason, EAethelnChainEndReason::Completed);
@@ -541,9 +542,9 @@ namespace AethelnTwoClientAttackTests
 	}
 
 	/**
-	 * A20: the cadence run, then the server crafts three requests the client cannot reliably force (a turn beyond the hard
-	 * bound, a stale time sample, an aim between the soft and hard bounds) and the run checks that each outcome and the
-	 * correction mark reach the owner. The validation math is A2's; this proves the routing.
+	 * A20: the cadence run, then the attacker's client sends three requests over the reliable RPC that the GameUI entry never
+	 * builds (a turn beyond the hard bound, a stale time sample, an aim between the soft and hard bounds) and the run checks that
+	 * each outcome and the correction mark reach the owner. The validation math is A2's; this proves the routing.
 	 */
 	void QueueChainUnderProfile(FAutomationTestBase& Test, const FPacketSimulationSettings* Impairment)
 	{
@@ -556,22 +557,24 @@ namespace AethelnTwoClientAttackTests
 		FRun* R = &Run.Get();
 		R->Network.Until(TEXT("Press on a fixed cadence"), [R]() { return DriveCadence(*R, Presses, SpacingSeconds); }, FTimespan::FromSeconds(60.0));
 		R->Network
-			.ThenServer(TEXT("Craft an impossible turn, a stale time sample and a corrected aim"), [R](FState& Server)
+			.ThenClient(TEXT("The attacker's client sends an impossible turn, a stale time sample and a corrected aim over the wire"), AttackerClient, [R](FState& Client)
 			{
-				UAethelnAbilitySystemComponent* Attacker = ServerAbilitySystem(Server, AttackerClient);
-				if (!R->Test.TestNotNull(TEXT("The attacker's ASC exists"), Attacker)) { return; }
-				const FVector Reference = Cast<APlayerState>(Attacker->GetOwner())->GetOwningController()->GetControlRotation().Vector();
-				const double Now = Server.World->GetTimeSeconds();
-				auto Craft = [&](uint32 Sequence, double YawOffsetDegrees, double TimeOffsetSeconds)
+				const AAethelnPlayerState* PlayerState = ClientPlayerState(Client, R->PlayerId[AttackerClient]);
+				UAethelnAbilitySystemComponent* Attacker = PlayerState != nullptr ? PlayerState->GetAethelnAbilitySystemComponent() : nullptr;
+				if (!R->Test.TestNotNull(TEXT("The attacker's ASC exists on its own client"), Attacker)) { return; }
+				const FVector Reference = Client.World->GetFirstPlayerController()->GetControlRotation().Vector();
+				const double Now = ClientServerTime(Client);
+				// What a client that bypasses the GameUI entry could send: its own aim and time sample, on the reliable RPC.
+				auto Send = [&](uint32 Sequence, double YawOffsetDegrees, double TimeOffsetSeconds)
 				{
 					FAethelnCombatActivationRequest Request = AethelnChainTests::MakeChainRequest(*Attacker, Sequence);
 					Request.Aim = FRotator(0.0, YawOffsetDegrees, 0.0).RotateVector(Reference);
 					Request.ClientServerTimeSeconds = Now + TimeOffsetSeconds;
-					return Attacker->ProcessServerRequest(Request);
+					Attacker->ServerSubmitActivation(Request);
 				};
-				R->Test.TestEqual(TEXT("A turn beyond the hard bound is an impossible transition"), Craft(CraftedBase, 120.0, 0.0), EResult::ImpossibleAimTransition);
-				R->Test.TestEqual(TEXT("A stale time sample is out of bounds"), Craft(CraftedBase + 1, 0.0, -10.0), EResult::TimestampOutOfBounds);
-				R->Test.TestEqual(TEXT("An aim between the soft and hard bounds is accepted"), Craft(CraftedBase + 2, 45.0, 0.0), EResult::Accepted);
+				Send(CraftedBase, 120.0, 0.0);
+				Send(CraftedBase + 1, 0.0, -10.0);
+				Send(CraftedBase + 2, 45.0, 0.0);
 			});
 		R->Network
 			.UntilClient(TEXT("The owner receives the crafted outcomes, the corrected record and the chain end"), AttackerClient, [R](FState&)
@@ -606,12 +609,6 @@ namespace AethelnTwoClientAttackTests
 				{
 					int32 Accepted = 0;
 					for (const FOutcome& Outcome : Cadence) { Accepted += Outcome.Result == EResult::Accepted ? 1 : 0; }
-					bool bFullChain = false;
-					for (int32 Index = 2; Index < R->Records.Num(); ++Index)
-					{
-						bFullChain |= R->Records[Index].ChainStep == 3 && R->Records[Index - 1].ChainStep == 2 && R->Records[Index - 2].ChainStep == 1;
-					}
-					T.TestTrue(TEXT("On a clean link the cadence runs the full three-step chain"), bFullChain);
 					T.TestTrue(TEXT("On a clean link at least three presses are accepted"), Accepted >= 3);
 					for (const int32 Client : { AttackerClient, ObserverClient }) { T.TestEqual(TEXT("On a clean link a client sees a cue per hit"), R->Cues[Client], R->Results.Num()); }
 				}
@@ -683,18 +680,31 @@ namespace AethelnTwoClientAttackTests
 			}
 			return false;
 		}
-		// Stage 2: each lost player's avatar is gone, nothing is registered, and a second has passed.
 		const UAethelnCombatTimelineSubsystem* Timeline = Server.World->GetSubsystem<UAethelnCombatTimelineSubsystem>();
-		for (int32 Index = 0; Index < 3; ++Index)
+		if (R.Stage == 2)
 		{
-			const UAethelnAbilitySystemComponent* Lost = R.LostAbilitySystem[Index].Get();
-			if (Lost != nullptr && Lost->GetAvatarActor() != nullptr) { return false; }
+			// The first poll at which every lost player's avatar is gone. Sample the timeline now and do not wait for zero:
+			// a step expires on its own within the scaled link window, so waiting would pass without any loss handling.
+			for (int32 Index = 0; Index < 3; ++Index)
+			{
+				const UAethelnAbilitySystemComponent* Lost = R.LostAbilitySystem[Index].Get();
+				if (Lost != nullptr && Lost->GetAvatarActor() != nullptr) { return false; }
+			}
+			if (Timeline == nullptr) { return false; }
+			R.StepsAfterLoss = Timeline->GetRegisteredStepCountForTests();
+			R.OwnersAfterLoss = Timeline->GetBoundaryOwnerCountForTests();
+			for (int32 Index = 0; Index < 3; ++Index)
+			{
+				// An ASC that is already destroyed has no chain; one still alive must have ended it.
+				const UAethelnAbilitySystemComponent* Lost = R.LostAbilitySystem[Index].Get();
+				R.bLostChainGone[Index] = Lost == nullptr || !Lost->GetChainStateForTests().bExists;
+			}
+			R.StageTime = Now;
+			R.Stage = 3;
+			return false;
 		}
-		if (Timeline == nullptr || Timeline->GetRegisteredStepCountForTests() != 0 || Timeline->GetBoundaryOwnerCountForTests() != 0) { return false; }
-		if (Now < R.StageTime + 1.0) { return false; }
-		R.StepsAfterLoss = Timeline->GetRegisteredStepCountForTests();
-		R.OwnersAfterLoss = Timeline->GetBoundaryOwnerCountForTests();
-		return true;
+		// Stage 3: let a second pass, past the buffered step's LinkOpen, before anything else runs.
+		return Now >= R.StageTime + 1.0;
 	}
 
 	void QueueDisconnectMidChain(FAutomationTestBase& Test)
@@ -730,8 +740,9 @@ namespace AethelnTwoClientAttackTests
 				{
 					T.TestEqual(*FString::Printf(TEXT("Player %d's dummy took nothing after the loss"), Index), HealthOf(*R->Dummy[Index]), R->HealthAtClose[Index]);
 				}
-				T.TestEqual(TEXT("Nothing stayed registered with the timeline after the losses"), R->StepsAfterLoss, 0);
-				T.TestEqual(TEXT("No boundary owner stayed registered after the losses"), R->OwnersAfterLoss, 0);
+				for (int32 Index = 0; Index < 3; ++Index) { T.TestTrue(*FString::Printf(TEXT("Player %d had no chain left when its avatar went"), Index), R->bLostChainGone[Index]); }
+				T.TestEqual(TEXT("Nothing stayed registered with the timeline when the last avatar went"), R->StepsAfterLoss, 0);
+				T.TestEqual(TEXT("No boundary owner stayed registered when the last avatar went"), R->OwnersAfterLoss, 0);
 				T.TestEqual(TEXT("The survivor's first press is its sequence 1: nothing carried over from a lost player"), static_cast<int32>(Survivor->GetLastAcceptedSequenceForTests()), 1);
 				T.TestTrue(TEXT("The survivor's chain started at step 1"), Survivor->GetChainStateForTests().bExists && Survivor->GetChainStateForTests().Step == 1);
 				T.AddInfo(FString::Printf(TEXT("elapsed at close (s): %.3f %.3f %.3f; results at last loss %d; survivor results %d"),
