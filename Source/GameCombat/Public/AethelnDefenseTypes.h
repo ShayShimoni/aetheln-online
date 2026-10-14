@@ -10,7 +10,9 @@ class UAethelnAbilitySystemComponent;
 enum class EAethelnBlockConsequence : uint8
 {
 	Blocked,
-	GuardBroken
+	GuardBroken,
+	/** #260: the Parry fully negated the contact and staggered its attacker. */
+	Parried
 };
 
 /** The blocked contact handed to the defense owner's hook, once per contact. Server only. */
@@ -53,4 +55,29 @@ struct GAMECOMBAT_API FAethelnDodgeDefinition
 	/** The activation ends and State.Dodging is removed at S + ActionEnd. */
 	UPROPERTY()
 	float ActionEnd = 0.0f;
+};
+
+/**
+ * Authored Parry definition (docs/dodge-and-block.md, The Parry). The window offsets are seconds
+ * after the server step S that accepted the Parry; the slot's interval is [S + WindowStart,
+ * S + WindowEnd). ArcDegrees is the full directional arc. StaggerSeconds is the State.Staggered
+ * duration of a player attacker (0 grants none). Every value is TBD (#107); the zero defaults
+ * fail grant validation, because an empty window defends nothing.
+ */
+USTRUCT()
+struct GAMECOMBAT_API FAethelnParryDefinition
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	float WindowStart = 0.0f;
+
+	UPROPERTY()
+	float WindowEnd = 0.0f;
+
+	UPROPERTY()
+	float ArcDegrees = 0.0f;
+
+	UPROPERTY()
+	float StaggerSeconds = 0.0f;
 };

@@ -715,12 +715,26 @@ Every value below is `TBD` (#107).
   because one slot exists per ASC; the Parry is refused while dodging and
   inside the chain's commitment window; an accepted dodge ends a running
   Parry window, as it ends a block (Q10). `State.Dead`, avatar loss, and
-  teardown end the window at the processing time.
+  teardown end the window at the processing time. Decided (owner, 2026-10-14,
+  [issue #260](https://github.com/ShayShimoni/aetheln-online/issues/260#issuecomment-6156696832)):
+  while the window is open an attack press, the chain or Instant Strike, is
+  refused until it ends, as the block refuses one.
 - **Committed result for Skein.** A committed `Parried` result is the trigger
   the Witnessed Reprisal Thread consumes later; that Thread is not prototype
   scope.
 - **Nothing is predicted.** The client may play a cosmetic parry stance at
   press; the outcome cancels it.
+- **As built (#260 P3).** The slot's whole interval is fixed when it registers, so
+  `SetDefenseState` cannot tell a running Parry from an ended one; the Parry and
+  the block refuse each other through their state tags instead
+  (`State.Blocking` blocks the Parry, `State.Oathscar.Parrying` blocks the
+  block). The window end is an ASC boundary (`OpenParryWindow`,
+  `ApplyParryBoundaries`) that ends the activation and the tag at
+  `S + WindowEnd`; an accepted dodge calls `CancelParry`. The hook staggers
+  through the timeline's `ForceInterrupt`. `State.Staggered` comes from
+  `UAethelnStaggerEffect`, which State.Dead removes, and it is a blocking tag
+  of the base ability and a reset tag of the chain. A `Parried` result
+  reports as the Block event category.
 
 ## Prediction Policy
 
@@ -747,7 +761,7 @@ Every value below is `TBD` (#107).
 | Replicated movement | Observers | Engine |
 | `State.Dodging`, `State.DodgeInvulnerable`, `State.Blocking` | Owner and observers | Loose `TagOnly` tags |
 | `State.GuardBroken` | Owner (the effect, `Mixed` mode) and observers (minimal replicated tags) | Granted by the shared duration effect |
-| Result cues `Avoided`, `Blocked`, `GuardBroken` | Everyone relevant | #60's unreliable multicast |
+| Result cues `Avoided`, `Blocked`, `GuardBroken`, `Parried` | Everyone relevant | #60's unreliable multicast |
 
 - **A separate outcome RPC.** Movement-carried outcomes do not share #19's
   sequence space; #19's client rule ("an outcome for any later sequence means
@@ -776,7 +790,7 @@ correlation only. No GameNet vocabulary changes.
 | Block press or release accepted | `Block` | `Accepted` | #19 seam fields |
 | Block rejected | `Block`; `Cooldown`; `Resource` | #19's mapping | #19 seam fields |
 | Committed `Avoided` result (#60 emits) | `Dodge` | `Accepted` | The attack's activation id, ability id, sequence |
-| Committed `Blocked` or `GuardBroken` result (#60 emits) | `Block` | `Accepted` | Same |
+| Committed `Blocked`, `GuardBroken`, or `Parried` result (#60 emits; #260 P3) | `Block` | `Accepted` | Same |
 
 - **Server ordinal.** Movement-carried requests have no client sequence, and
   the contract drops events with sequence 0. The ASC therefore issues a
@@ -972,7 +986,7 @@ drops chosen copies and models a reliable resend as a later arrival.
 | D22 | `Aetheln.GameCombat.Defense.AvoidanceBeatsContact` | P4 | H | An enemy contact inside the window is `Avoided` with no damage, no Guard change, and no hook call; at the window end it hits; a dodge processed in the same frame as a contact follows the requests-before-contacts rule |
 | D23 | `Aetheln.GameCombat.Defense.ActionRelations` | P4 | H | The adopted Q10 relations with test tags: a dodge ends a block; a block is refused during `State.Dodging`; the chain's commitment tag blocks both; a dodge or block activation resets the chain (`OtherAction`); a second defense slot fails closed |
 | D24 | `Aetheln.GameCombat.Defense.NetworkConditionsBlock` | P4 | H | Press and Release under normal, high-latency, and packet-loss delivery around enemy contacts: blocked exactly when the server arrival precedes the contact under the stamping rule; duplicated and reordered requests get sequence reasons; the hook never runs twice |
-| D25 | `Aetheln.GameCombat.Defense.DefenseResultTelemetry` | P4 | H | `Avoided`, `Blocked`, and `GuardBroken` emit the events in the table, with no target identity and no Guard value |
+| D25 | `Aetheln.GameCombat.Defense.DefenseResultTelemetry` | P4 | H | `Avoided`, `Blocked`, and `GuardBroken` emit the events in the table, with no target identity and no Guard value (`Parried` reports as Block, #260 P3, and K6 checks it) |
 | D26 | `Aetheln.POC.Input.DodgeAndBlockBindings` | P5 | H | A dodge press sets the flag only in Reticle mode and when the local gate passes; the gate fails during the commitment window of an owner `ClientCombatActivation` record and while a replicated blocking tag is present; right mouse maps to Press and Release; Cursor entry releases a held block; the recapture click is never a block |
 | D27 | `Aetheln.GameCombat.Net.DodgeAndBlockTwoClients` | P5 | P | Additional PIE evidence under #82 C1 and C2: the owner's predicted dodge and the other client's view follow the same path; outcomes go to the owner only; both clients see the tags and cues; refused-dodge correction rates recorded |
 | D28 | Packaged two-client dodge and block run | later | K | Evidence for #2 and #48; not required to merge #18 |

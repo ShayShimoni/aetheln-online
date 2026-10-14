@@ -12,6 +12,7 @@ class AController;
 class UAethelnBasicChainAbility;
 class UAethelnCombatTimelineSubsystem;
 class UAethelnDodgeAbility;
+class UAethelnParryAbility;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnActivationOutcomeDelegate, uint32 /* Sequence */, EAethelnActivationResult /* Result */);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnMovementActivationOutcomeDelegate, float /* ClientTimeStamp */, EAethelnActivationResult /* Result */);
@@ -33,6 +34,14 @@ struct FAethelnServerDodgeWindow
 	double InvulnerableStart = 0.0;
 	double InvulnerableEnd = 0.0;
 	double ActionEnd = 0.0;
+};
+/** Server-only end of the Parry window (#260): the activation and State.Oathscar.Parrying end at End. */
+struct FAethelnServerParryWindow
+{
+	bool bOpen = false;
+	FGuid OperationId;
+	FGameplayAbilitySpecHandle Handle;
+	double End = 0.0;
 };
 DECLARE_MULTICAST_DELEGATE_OneParam(FAethelnCombatActivationDelegate, const FAethelnCombatActivationRecord&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FAethelnChainEndDelegate, const FGuid&, EAethelnChainEndReason);
@@ -218,6 +227,11 @@ public:
 	void CancelDodge();
 	/** Authority only; ends a held block at the processing time (an accepted dodge, Q10 and Q18). */
 	void CancelBlock();
+	/** Authority only; ends a running Parry window at the processing time (an accepted dodge, as for a held block). */
+	void CancelParry();
+	/** Authority only; the Parry opens its end boundary after it commits. False when the timeline refuses it. */
+	bool OpenParryWindow(const FGuid& OperationId, FGameplayAbilitySpecHandle Handle, double EndTime);
+	void CloseParryWindow(const FGuid& OperationId);
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Rate bucket placeholder, never tuning; #45 owns the final value. Without config (0) every request is rate limited. */
@@ -316,6 +330,7 @@ private:
 	friend class UAethelnBasicChainAbility;
 	friend class UAethelnDodgeAbility;
 	friend class UAethelnBlockAbility;
+	friend class UAethelnParryAbility;
 	friend class UAethelnCombatTimelineSubsystem;
 	friend class UAethelnDeathSubsystem;
 
@@ -368,6 +383,8 @@ private:
 	void HandleDodgeDeadTag(const FGameplayTag Tag, int32 NewCount);
 	FAethelnServerDodgeWindow DodgeWindow;
 	FDelegateHandle DodgeDeadHandle;
+	void ApplyParryBoundaries(double Now);
+	FAethelnServerParryWindow ParryWindow;
 	/** Per PlayerState lifetime, from 1: telemetry correlation for movement-carried outcomes, never a client sequence. */
 	uint32 MovementActivationOrdinal = 0;
 

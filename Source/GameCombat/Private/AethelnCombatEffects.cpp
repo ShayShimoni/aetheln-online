@@ -4,6 +4,7 @@
 #include "AethelnCombatAttributeSet.h"
 #include "AethelnGameplayTags.h"
 #include "GameplayEffectComponents/TargetTagRequirementsGameplayEffectComponent.h"
+#include "GameplayEffectComponents/TargetTagsGameplayEffectComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogAethelnResourceRecovery, Log, All);
 
@@ -213,4 +214,32 @@ void UAethelnRespawnRestorationEffect::ApplyTo(UAbilitySystemComponent& AbilityS
 {
 	FGameplayEffectSpec Spec(GetDefault<UAethelnRespawnRestorationEffect>(), AbilitySystemComponent.MakeEffectContext(), 1.0f);
 	AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec);
+}
+
+UAethelnStaggerEffect::UAethelnStaggerEffect()
+{
+	DurationPolicy = EGameplayEffectDurationType::HasDuration;
+
+	FSetByCallerFloat Duration;
+	Duration.DataTag = AethelnGameplayTags::SetByCaller_Stagger_Duration;
+	DurationMagnitude = FGameplayEffectModifierMagnitude(Duration);
+
+	// Native GE components must be default subobjects listed in GEComponents during construction.
+	UTargetTagsGameplayEffectComponent* Granted = CreateDefaultSubobject<UTargetTagsGameplayEffectComponent>(TEXT("StaggerTags"));
+	FInheritedTagContainer GrantedTags;
+	GrantedTags.AddTag(AethelnGameplayTags::State_Staggered);
+	Granted->SetAndApplyTargetTagChanges(GrantedTags);
+	GEComponents.Add(Granted);
+
+	UTargetTagRequirementsGameplayEffectComponent* Removal = CreateDefaultSubobject<UTargetTagRequirementsGameplayEffectComponent>(TEXT("StaggerRemoval"));
+	Removal->RemovalTagRequirements.RequireTags.AddTag(AethelnGameplayTags::State_Dead);
+	GEComponents.Add(Removal);
+}
+
+bool UAethelnStaggerEffect::ApplyTo(UAbilitySystemComponent& AbilitySystemComponent, float Seconds)
+{
+	if (!AbilitySystemComponent.IsOwnerActorAuthoritative() || !FMath::IsFinite(Seconds) || !(Seconds > 0.0f)) { return false; }
+	FGameplayEffectSpec Spec(GetDefault<UAethelnStaggerEffect>(), AbilitySystemComponent.MakeEffectContext(), 1.0f);
+	Spec.SetSetByCallerMagnitude(AethelnGameplayTags::SetByCaller_Stagger_Duration, Seconds);
+	return AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(Spec).IsValid();
 }

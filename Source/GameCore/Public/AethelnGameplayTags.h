@@ -18,6 +18,13 @@ namespace AethelnGameplayTags
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_InstantStrike);
 
+	// #260 Parry: its identity, window state and cooldown, and the stagger it causes.
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Oathscar_Parry);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Oathscar_Parrying);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Oathscar_Parry);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Staggered);
+	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(SetByCaller_Stagger_Duration);
+
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Dead);
 
 	GAMECORE_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Damage_Wrought);
