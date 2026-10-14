@@ -27,7 +27,7 @@
 //
 // The server spawns one enemy beside A with the promoted provisional values from Config/DefaultGame.ini (controller,
 // attack, and initial attributes), so this is also the greybox enemy run on provisional values. The untitled map has no
-// floor and no navigation, so the pawns and the enemy are held still (MOVE_None) and A stands inside attack range;
+// floor and no navigation, so the pawns are held still (MOVE_None), the enemy hovers (MOVE_Flying), and A stands inside attack range;
 // walking on a real mesh is E12. Players' attribute values are fixture values (MakeTestInitValues), not tuning.
 //
 // What both clients must agree with the server on: the enemy's replicated state (the telegraph and the attack, with
@@ -181,7 +181,8 @@ namespace AethelnTwoClientEnemyTests
 					nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 				if (!R->Test.TestNotNull(TEXT("The server spawned the enemy"), Enemy)) { return; }
 				Enemy->FinishSpawning(Transform);
-				Enemy->GetCharacterMovement()->DisableMovement();
+				// Flying with no input stays put on this floorless map, and a teleport leaves it flying: MOVE_None would become Falling at the reset.
+				Enemy->GetCharacterMovement()->SetMovementMode(MOVE_Flying);
 				R->ServerEnemy = Enemy;
 				R->ServerController = Cast<AAethelnEnemyController>(Enemy->GetController());
 				R->Test.TestTrue(TEXT("An enemy controller possessed the enemy"), R->ServerController.IsValid());
@@ -282,15 +283,13 @@ namespace AethelnTwoClientEnemyTests
 			.UntilServer(TEXT("The server resets the enemy home at full Health, no earlier than the respawn delay"), [R, EnemyInit](FState& Server)
 			{
 				const AAethelnEnemyController* Controller = R->ServerController.Get();
-				AAethelnEnemyCharacter* Enemy = R->ServerEnemy.Get();
+				const AAethelnEnemyCharacter* Enemy = R->ServerEnemy.Get();
 				if (Controller == nullptr || Enemy == nullptr || Controller->GetState() != EState::Idle) { return false; }
 				const UAethelnAbilitySystemComponent* AbilitySystem = Enemy->GetAethelnAbilitySystemComponent();
 				if (Attribute(*AbilitySystem, UAethelnCombatAttributeSet::GetHealthAttribute()) != EnemyInit.Health) { return false; }
 				R->Test.TestTrue(TEXT("The reset comes no earlier than the death time plus the respawn delay"),
 					Server.World->GetTimeSeconds() >= R->ServerDeathTime + GetDefault<AAethelnEnemyController>()->ProvisionalRespawnSeconds);
 				R->Test.TestTrue(TEXT("The reset enemy is home"), FVector::Dist(Enemy->GetActorLocation(), R->EnemyHome) < 1.0);
-				// The reset teleports the enemy, which on this floorless map sets it falling: hold it still again, in the frame it was reset.
-				Enemy->GetCharacterMovement()->DisableMovement();
 				// The enemy is dead or idle from here on, so no result can follow.
 				R->ServerVictimHealth = Attribute(*ServerAbilitySystem(Server, VictimClient), UAethelnCombatAttributeSet::GetHealthAttribute());
 				return true;
