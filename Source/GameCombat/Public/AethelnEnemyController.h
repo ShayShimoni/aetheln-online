@@ -23,7 +23,8 @@ enum class EAethelnEnemyMoveRecovery : uint8
  * interruptions and lethal results move it back to their contact time. It also runs a server eligibility query
  * for perception, engine path following, a leash around home, stuck recovery, and death and reset. It registers
  * the enemy's attack step on the timeline directly, only in pass step 1. bWantsPlayerState stays false, so FindForPawn resolves the pawn's
- * own ASC. Every Provisional... value is TBD (#107, #45). Unset config fails closed: with a zero respawn delay,
+ * own ASC. The Provisional... values are the owner-approved provisional ones in Config/DefaultGame.ini (issue #83
+ * comment 6156988023), not tuning (#107, #45). Unset config fails closed: with a zero respawn delay,
  * attack range, perception radius, or leash radius, or any non-finite or negative value, the controller decides
  * nothing. The telegraph and the interrupted pause may be 0.
  */

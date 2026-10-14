@@ -11,24 +11,29 @@
 #include "GameFramework/PlayerState.h"
 #include "GameplayTagsManager.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Navigation/PathFollowingComponent.h"
 #include "UObject/UnrealType.h"
 
 // #83 enemy AI foundation (docs/enemy-ai-and-navigation.md, Test Plan E1 to E11). The fixture's player stands at
-// the origin aiming along +X with the test chain; the enemy stands still (movement disabled) and its controller
-// uses test-only values, never tuning. Geometry: the enemy's radius-10 sphere, 60 units from the player, first
+// the origin aiming along +X with the test chain; the enemy stands still (movement disabled). Its controller, attack
+// definition, and initial attributes are the provisional values the owner promoted to Config/DefaultGame.ini
+// (issue #83 comment 6156988023); no test supplies them, and the constants below read them from the class defaults.
+// Scenario tests override single instance values and derive expectations from the step geometry, so a re-tune
+// must update those expectations in the same change.
+// Geometry: the enemy's radius-10 sphere, 60 units from the player, first
 // touches the player's capsule at its step start + 0.125 + 0.125 * 8 / 30; the player's sphere first touches an
 // enemy capsule 60 units ahead at the press + 0.125 + 0.125 * 16 / 30. The headless world has no navigation
-// system, so every path request fails there (E9); real-navmesh coverage is E12, later.
+// system, so every path request fails there (E9); real-navmesh coverage is E12 (AethelnEnemyNavigationTests.cpp).
 namespace AethelnEnemyAITests
 {
 	using namespace AethelnChainTests;
 	using EState = EAethelnEnemyState;
 
-	constexpr double Telegraph = 0.1;
-	constexpr double InterruptedPause = 0.2;
-	constexpr double Respawn = 0.5;
-	constexpr double StepRecoveryEnd = 0.625;
+	double Telegraph() { return GetDefault<AAethelnEnemyController>()->ProvisionalTelegraphSeconds; }
+	double InterruptedPause() { return GetDefault<AAethelnEnemyController>()->ProvisionalInterruptedSeconds; }
+	double Respawn() { return GetDefault<AAethelnEnemyController>()->ProvisionalRespawnSeconds; }
+	double StepRecoveryEnd() { return GetDefault<UAethelnEnemyAttackAbility>()->ProvisionalStep.RecoveryEnd; }
 
 	struct FEnemy
 	{
@@ -45,16 +50,19 @@ namespace AethelnEnemyAITests
 		return Values;
 	}
 
-	/** Spawns a still enemy at Location (its home) with the given attack class and test controller values. */
+	/** Spawns a still enemy at Location (its home) with the given attack class; Health, if set, replaces the configured initial attributes. */
 	bool SpawnEnemy(FAutomationTestBase& Test, const FFixture& F, FEnemy& Out, const FVector& Location,
-		TSubclassOf<UAethelnEnemyAttackAbility> Attack = UAethelnEnemyAttackTestAbility::StaticClass(), float Health = 40.0f)
+		TSubclassOf<UAethelnEnemyAttackAbility> Attack = UAethelnEnemyAttackAbility::StaticClass(), TOptional<float> Health = {})
 	{
+		// The tests derive their times from the promoted values; with none in config they would step the world backwards.
+		if (!Test.TestTrue(TEXT("Config/DefaultGame.ini holds the promoted enemy values"),
+			Telegraph() > 0.0 && InterruptedPause() > 0.0 && Respawn() > 0.0 && StepRecoveryEnd() > 0.0)) { return false; }
 		const FTransform Transform(Location);
 		Out.Pawn = F.World.World->SpawnActorDeferred<AAethelnEnemyCharacter>(AAethelnEnemyCharacter::StaticClass(), Transform,
 			nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 		if (!Test.TestNotNull(TEXT("Enemy exists"), Out.Pawn)) { return false; }
 		Out.Pawn->AttackAbilityClass = Attack;
-		Out.Pawn->ProvisionalInitialAttributes = MakeInit(Health);
+		if (Health.IsSet()) { Out.Pawn->ProvisionalInitialAttributes = MakeInit(Health.GetValue()); }
 		Out.Pawn->FinishSpawning(Transform);
 		// The harness world never reports HasBegunPlay (no game mode), so BeginPlay (home, init, grant) is dispatched by hand.
 		Out.Pawn->DispatchBeginPlay();
@@ -62,12 +70,6 @@ namespace AethelnEnemyAITests
 		Out.Controller = Cast<AAethelnEnemyController>(Out.Pawn->GetController());
 		Out.AbilitySystem = Out.Pawn->GetAethelnAbilitySystemComponent();
 		if (!Test.TestNotNull(TEXT("The enemy controller possessed the enemy on spawn"), Out.Controller)) { return false; }
-		Out.Controller->ProvisionalTelegraphSeconds = Telegraph;
-		Out.Controller->ProvisionalInterruptedSeconds = InterruptedPause;
-		Out.Controller->ProvisionalRespawnSeconds = Respawn;
-		Out.Controller->ProvisionalAttackRange = 100.0;
-		Out.Controller->ProvisionalPerceptionRadius = 400.0;
-		Out.Controller->ProvisionalLeashRadius = 600.0;
 		return true;
 	}
 
@@ -145,12 +147,13 @@ bool FAethelnEnemyServerOnlyTest::RunTest(const FString& Parameters)
 		F.World.World->NextURL.Empty();
 	}
 	{
-		// E2: unset production config grants nothing, and the enemy never attacks.
+		// E2: an unset definition grants nothing, and the enemy never attacks. The production definition is valid from
+		// config since the owner promoted the provisional values; the unset class is the same with its config cleared.
 		FFixture F; if (!Init(*this, F)) { return false; }
 		AddExpectedMessagePlain(TEXT("Refused to grant ability"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
-		FEnemy E; if (!SpawnEnemy(*this, F, E, FVector(60.0, 0.0, 0.0), UAethelnEnemyAttackAbility::StaticClass())) { return false; }
-		TestNotNull(TEXT("The unset production attack has a grant problem"), GetDefault<UAethelnEnemyAttackAbility>()->FindGrantProblem());
-		TestNull(TEXT("The test attack is valid"), GetDefault<UAethelnEnemyAttackTestAbility>()->FindGrantProblem());
+		FEnemy E; if (!SpawnEnemy(*this, F, E, FVector(60.0, 0.0, 0.0), UAethelnEnemyAttackUnsetTestAbility::StaticClass())) { return false; }
+		TestNotNull(TEXT("The unset attack has a grant problem"), GetDefault<UAethelnEnemyAttackUnsetTestAbility>()->FindGrantProblem());
+		TestNull(TEXT("The production attack is valid from config"), GetDefault<UAethelnEnemyAttackAbility>()->FindGrantProblem());
 		TestEqual(TEXT("Nothing is granted from unset config"), E.AbilitySystem->GetActivatableAbilities().Num(), 0);
 		F.AdvanceTo(0.05); F.AdvanceTo(0.5);
 		TestEqual(TEXT("Without an attack the enemy engages but never telegraphs"), E.Controller->GetState(), EState::Engage);
@@ -172,7 +175,7 @@ bool FAethelnEnemyServerOnlyTest::RunTest(const FString& Parameters)
 		FFixture F; if (!Init(*this, F)) { return false; }
 		FEnemy E; if (!SpawnEnemy(*this, F, E, FVector(60.0, 0.0, 0.0))) { return false; }
 		F.AdvanceTo(0.05);
-		const double S = F.World.World->GetTimeSeconds() + Telegraph;
+		const double S = F.World.World->GetTimeSeconds() + Telegraph();
 		F.Timeline->SetNextOrdinalForTests(MAX_uint64); // CanRegisterStep refuses an exhausted ordinal space
 		F.AdvanceTo(S + 0.02);
 		TestEqual(TEXT("No enemy step is registered"), F.Timeline->GetRegisteredStepCountForTests(), 0);
@@ -180,7 +183,7 @@ bool FAethelnEnemyServerOnlyTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Back to Engage, then a new telegraph at the pass time"), E.Controller->GetState(), EState::Telegraph);
 		TestEqual(TEXT("The new telegraph starts at the pass time"), E.Controller->GetStateStartTime(), F.World.World->GetTimeSeconds());
 		F.Timeline->SetNextOrdinalForTests(1000);
-		F.AdvanceTo(F.World.World->GetTimeSeconds() + Telegraph + 0.3);
+		F.AdvanceTo(F.World.World->GetTimeSeconds() + Telegraph() + 0.3);
 		const FAethelnCombatResult* Result = FindResult(F, AethelnGameplayTags::Ability_Enemy_Greybox_Strike);
 		if (TestNotNull(TEXT("The next attack registers and hits"), Result))
 		{
@@ -218,8 +221,8 @@ bool FAethelnEnemyAttackLifecycleTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("The player is the target"), E.Controller->GetTarget() == F.Pawn);
 	TestEqual(TEXT("No step is registered during the telegraph"), F.Timeline->GetRegisteredStepCountForTests(), 0);
 	// An uneven frame that overshoots the telegraph end.
-	F.AdvanceTo(T1 + Telegraph + 0.07);
-	const double S = T1 + Telegraph;
+	F.AdvanceTo(T1 + Telegraph() + 0.07);
+	const double S = T1 + Telegraph();
 	TestEqual(TEXT("The attack follows the telegraph"), E.Controller->GetState(), EState::Attack);
 	TestEqual(TEXT("The step starts at the authored telegraph end, not the tick"), E.Controller->GetStateStartTime(), S);
 	TestEqual(TEXT("One enemy step is registered"), F.Timeline->GetRegisteredStepCountForTests(), 1);
@@ -239,7 +242,7 @@ bool FAethelnEnemyAttackLifecycleTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("The contact is at the authored geometry time"), Result->ContactTime, S + 0.125 + 0.125 * 8.0 / 30.0, 1.0e-6);
 	}
 	TestEqual(TEXT("The player took the authored damage"), Health(*F.Player.AbilitySystem), 35.0f);
-	F.AdvanceTo(S + StepRecoveryEnd + 0.05);
+	F.AdvanceTo(S + StepRecoveryEnd() + 0.05);
 	const double T2 = F.World.World->GetTimeSeconds();
 	TestEqual(TEXT("After recovery the enemy telegraphs again"), E.Controller->GetState(), EState::Telegraph);
 	TestEqual(TEXT("The second telegraph starts at the tick time"), E.Controller->GetStateStartTime(), T2);
@@ -264,7 +267,7 @@ bool FAethelnEnemyInterruptionTest::RunTest(const FString& Parameters)
 		const FDelegateHandle Listener = F.Timeline->OnTargetInterrupted.AddLambda(
 			[&E, &Notifications](UAethelnAbilitySystemComponent* Target, double) { Notifications += Target == E.AbilitySystem ? 1 : 0; });
 		F.AdvanceTo(0.05);
-		const double S = F.World.World->GetTimeSeconds() + Telegraph;
+		const double S = F.World.World->GetTimeSeconds() + Telegraph();
 		TestEqual(TEXT("The player's press is accepted"), F.Press(), EAethelnActivationResult::Accepted);
 		F.AdvanceTo(S + 0.05);
 		TestEqual(TEXT("The enemy step started"), E.Controller->GetState(), EState::Attack);
@@ -280,7 +283,7 @@ bool FAethelnEnemyInterruptionTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("One notification for the one interruption"), Notifications, 1);
 		// Copy the time: F.Results may reallocate as later passes commit results.
 		const double ContactTime = PlayerHit != nullptr ? PlayerHit->ContactTime : S + 0.1;
-		F.AdvanceTo(ContactTime + InterruptedPause + 0.05);
+		F.AdvanceTo(ContactTime + InterruptedPause() + 0.05);
 		TestEqual(TEXT("After the pause the enemy re-engages and telegraphs"), E.Controller->GetState(), EState::Telegraph);
 		TestNull(TEXT("The interrupted step makes no later contact"), FindResult(F, AethelnGameplayTags::Ability_Enemy_Greybox_Strike));
 		TestEqual(TEXT("The player took no damage"), Health(*F.Player.AbilitySystem), 40.0f);
@@ -295,7 +298,7 @@ bool FAethelnEnemyInterruptionTest::RunTest(const FString& Parameters)
 		const FDelegateHandle Listener = F.Timeline->OnTargetInterrupted.AddLambda(
 			[&E, &Notifications](UAethelnAbilitySystemComponent* Target, double) { Notifications += Target == E.AbilitySystem ? 1 : 0; });
 		F.AdvanceTo(0.05);
-		const double S = F.World.World->GetTimeSeconds() + Telegraph;
+		const double S = F.World.World->GetTimeSeconds() + Telegraph();
 		F.AdvanceTo(S + 0.25);
 		TestEqual(TEXT("The player's press is accepted"), F.Press(), EAethelnActivationResult::Accepted);
 		F.AdvanceTo(S + 0.5);
@@ -320,14 +323,14 @@ bool FAethelnEnemyInterruptionTest::RunTest(const FString& Parameters)
 		const double S = F.World.World->GetTimeSeconds();
 		TestEqual(TEXT("With no telegraph the first step starts at once"), E.Controller->GetState(), EState::Attack);
 		TestEqual(TEXT("The player's press is accepted"), F.Press(), EAethelnActivationResult::Accepted);
-		F.AdvanceTo(S + StepRecoveryEnd + 0.05);
+		F.AdvanceTo(S + StepRecoveryEnd() + 0.05);
 		const FAethelnCombatResult* PlayerHit = FindResult(F, AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
 		if (!TestNotNull(TEXT("The player hit the enemy in the long frame"), PlayerHit)) { return false; }
 		TestTrue(TEXT("The contact is inside the first step's interruptible window"), PlayerHit->ContactTime < S + 0.25);
 		TestEqual(TEXT("The second step was started before the interruption arrived"), E.Pawn->GetPresentationState().AttackCounter, 2u);
 		TestEqual(TEXT("The late interruption wins"), E.Controller->GetState(), EState::Interrupted);
 		TestEqual(TEXT("It starts at the earlier contact time"), E.Controller->GetStateStartTime(), PlayerHit->ContactTime);
-		const double SecondStart = S + StepRecoveryEnd + 0.05;
+		const double SecondStart = S + StepRecoveryEnd() + 0.05;
 		F.AdvanceTo(SecondStart + 0.3);
 		int32 EnemyResults = 0;
 		for (const FAethelnCombatResult& Result : F.Results)
@@ -350,7 +353,7 @@ bool FAethelnEnemyInterruptionTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("The step starts at once"), E.Controller->GetState(), EState::Attack);
 		TestEqual(TEXT("The player's press is accepted"), F.Press(), EAethelnActivationResult::Accepted);
 		E.Controller->ProvisionalLeashRadius = 50.0; // the player, 60 from home, is no longer eligible
-		F.AdvanceTo(S + StepRecoveryEnd + 0.05);
+		F.AdvanceTo(S + StepRecoveryEnd() + 0.05);
 		const FAethelnCombatResult* PlayerHit = FindResult(F, AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
 		if (!TestNotNull(TEXT("The player hit the enemy in the long frame"), PlayerHit)) { return false; }
 		TestEqual(TEXT("The late interruption wins over the pending reset"), E.Controller->GetState(), EState::Interrupted);
@@ -370,9 +373,9 @@ bool FAethelnEnemyDeathResetTest::RunTest(const FString& Parameters)
 	// E5: a lethal hit during the enemy's wind-up, then the respawn at home with its initial attributes.
 	FFixture F; if (!Init(*this, F)) { return false; }
 	const FVector Home(60.0, 0.0, 0.0);
-	FEnemy E; if (!SpawnEnemy(*this, F, E, Home, UAethelnEnemyAttackTestAbility::StaticClass(), 5.0f)) { return false; }
+	FEnemy E; if (!SpawnEnemy(*this, F, E, Home, UAethelnEnemyAttackAbility::StaticClass(), 5.0f)) { return false; }
 	F.AdvanceTo(0.05);
-	const double S = F.World.World->GetTimeSeconds() + Telegraph;
+	const double S = F.World.World->GetTimeSeconds() + Telegraph();
 	TestEqual(TEXT("The player's press is accepted"), F.Press(), EAethelnActivationResult::Accepted);
 	F.AdvanceTo(S + 0.15);
 	const FAethelnCombatResult* PlayerHit = FindResult(F, AethelnGameplayTags::Ability_Oathscar_SwordShieldBasicChain);
@@ -389,7 +392,7 @@ bool FAethelnEnemyDeathResetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Only the player's chain step remains registered"), F.Timeline->GetRegisteredStepCountForTests(), 1);
 	TestNull(TEXT("The dead enemy's step made no contact"), FindResult(F, AethelnGameplayTags::Ability_Enemy_Greybox_Strike));
 	E.Pawn->SetActorLocation(FVector(200.0, 0.0, 0.0)); // moved while dead; reset must bring it home
-	const double ResetTime = DeathTime + Respawn;
+	const double ResetTime = DeathTime + Respawn();
 	F.AdvanceTo(ResetTime - 0.05);
 	TestEqual(TEXT("Still dead before the respawn delay"), E.Controller->GetState(), EState::Dead);
 	// A second player swings at the enemy's home in the respawn pass. The reset applies after the pass's emission, so
@@ -423,7 +426,7 @@ bool FAethelnEnemyDeathResetTest::RunTest(const FString& Parameters)
 	{
 		// E5: a late lethal result cancels a return reset decided in the same pass (the target left the leash).
 		FFixture G; if (!Init(*this, G)) { return false; }
-		FEnemy D; if (!SpawnEnemy(*this, G, D, Home, UAethelnEnemyAttackTestAbility::StaticClass(), 5.0f)) { return false; }
+		FEnemy D; if (!SpawnEnemy(*this, G, D, Home, UAethelnEnemyAttackAbility::StaticClass(), 5.0f)) { return false; }
 		G.AdvanceTo(0.05);
 		TestEqual(TEXT("The enemy telegraphs"), D.Controller->GetState(), EState::Telegraph);
 		TestEqual(TEXT("The player's press is accepted"), G.Press(), EAethelnActivationResult::Accepted);
@@ -435,11 +438,11 @@ bool FAethelnEnemyDeathResetTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Dead, not reset"), D.Controller->GetState(), EState::Dead);
 		TestEqual(TEXT("Death starts at the lethal contact time"), D.Controller->GetStateStartTime(), LethalTime);
 		TestEqual(TEXT("The cancelled reset did not heal the enemy"), Health(*D.AbilitySystem), 0.0f);
-		G.AdvanceTo(LethalTime + Respawn - 0.02);
+		G.AdvanceTo(LethalTime + Respawn() - 0.02);
 		TestEqual(TEXT("Still dead before the respawn delay"), D.Controller->GetState(), EState::Dead);
-		G.AdvanceTo(LethalTime + Respawn + 0.02);
+		G.AdvanceTo(LethalTime + Respawn() + 0.02);
 		TestEqual(TEXT("Respawned at the pass end, timed from the contact"), D.Controller->GetState(), EState::Idle);
-		TestEqual(TEXT("Idle starts at the contact time plus the respawn delay"), D.Controller->GetStateStartTime(), LethalTime + Respawn);
+		TestEqual(TEXT("Idle starts at the contact time plus the respawn delay"), D.Controller->GetStateStartTime(), LethalTime + Respawn());
 		TestEqual(TEXT("Health is restored"), Health(*D.AbilitySystem), 5.0f);
 	}
 	return true;
@@ -546,6 +549,49 @@ bool FAethelnEnemyNavigationTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Aborted changes nothing"), AAethelnEnemyController::DecideMoveRecovery(EPathFollowingResult::Aborted, 1), ERecovery::None);
 		TestEqual(TEXT("Invalid changes nothing"), AAethelnEnemyController::DecideMoveRecovery(EPathFollowingResult::Invalid, 1), ERecovery::None);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAethelnEnemyProvisionalConfigTest,
+	"Aetheln.GameCombat.EnemyAI.ProvisionalConfig",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAethelnEnemyProvisionalConfigTest::RunTest(const FString& Parameters)
+{
+	// The owner's provisional values (issue #83 comment 6156988023) live only in Config/DefaultGame.ini and reach the
+	// class defaults. Every header default is 0, so only the ini can make these positive. Not tuning: the feel test re-tunes them.
+	const FString ControllerSection = TEXT("/Script/GameCombat.AethelnEnemyController");
+	const AAethelnEnemyController* Controller = GetDefault<AAethelnEnemyController>();
+	struct FKey { const TCHAR* Name; double Loaded; };
+	for (const FKey& Key : { FKey{ TEXT("ProvisionalTelegraphSeconds"), Controller->ProvisionalTelegraphSeconds },
+		FKey{ TEXT("ProvisionalInterruptedSeconds"), Controller->ProvisionalInterruptedSeconds },
+		FKey{ TEXT("ProvisionalRespawnSeconds"), Controller->ProvisionalRespawnSeconds },
+		FKey{ TEXT("ProvisionalAttackRange"), Controller->ProvisionalAttackRange },
+		FKey{ TEXT("ProvisionalPerceptionRadius"), Controller->ProvisionalPerceptionRadius },
+		FKey{ TEXT("ProvisionalLeashRadius"), Controller->ProvisionalLeashRadius } })
+	{
+		double Ini = 0.0;
+		TestTrue(*FString::Printf(TEXT("DefaultGame.ini sets %s"), Key.Name), GConfig->GetDouble(*ControllerSection, Key.Name, Ini, GGameIni));
+		TestEqual(*FString::Printf(TEXT("The controller default loaded %s"), Key.Name), Key.Loaded, Ini);
+	}
+	TestTrue(TEXT("The promoted controller values pass the controller's own validity rule"),
+		Controller->ProvisionalRespawnSeconds > 0.0 && Controller->ProvisionalAttackRange > 0.0
+		&& Controller->ProvisionalPerceptionRadius > 0.0 && Controller->ProvisionalLeashRadius > 0.0);
+
+	const FString AttackSection = TEXT("/Script/GameCombat.AethelnEnemyAttackAbility");
+	const UAethelnEnemyAttackAbility* Attack = GetDefault<UAethelnEnemyAttackAbility>();
+	int32 IniVersion = 0;
+	FString IniStep;
+	TestTrue(TEXT("DefaultGame.ini sets the attack's ContentVersion"), GConfig->GetInt(*AttackSection, TEXT("ContentVersion"), IniVersion, GGameIni));
+	TestTrue(TEXT("DefaultGame.ini sets the attack's ProvisionalStep"), GConfig->GetString(*AttackSection, TEXT("ProvisionalStep"), IniStep, GGameIni));
+	TestEqual(TEXT("The attack default loaded ContentVersion"), static_cast<int32>(Attack->ContentVersion), IniVersion);
+	TestNull(TEXT("The production attack definition is complete, so the grant is accepted"), Attack->FindGrantProblem());
+
+	const FString EnemySection = TEXT("/Script/GameCombat.AethelnEnemyCharacter");
+	FString IniAttributes;
+	TestTrue(TEXT("DefaultGame.ini sets the enemy's ProvisionalInitialAttributes"), GConfig->GetString(*EnemySection, TEXT("ProvisionalInitialAttributes"), IniAttributes, GGameIni));
+	const FAethelnCombatAttributeInitValues& Initial = GetDefault<AAethelnEnemyCharacter>()->ProvisionalInitialAttributes;
+	TestTrue(TEXT("The enemy default loaded a positive Health"), Initial.MaxHealth > 0.0f && Initial.Health == Initial.MaxHealth);
 	return true;
 }
 
