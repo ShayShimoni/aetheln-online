@@ -163,6 +163,12 @@ public:
 		const FString& TargetAudience,
 		const TArray<FAethelnSoftReferenceRule>& Rules);
 
+	/** Applies the policy's hard-reference audience matrix: whether a package of SourceAudience may hard-reference one of TargetAudience. */
+	static bool IsHardReferenceAllowed(
+		const TMap<FString, TSet<FString>>& Rules,
+		const FString& SourceAudience,
+		const FString& TargetAudience);
+
 	/** Classifies whether a dependency target is editor-only content. */
 	static FAethelnEditorOnlyTarget ClassifyEditorOnlyTarget(IAssetRegistry& Registry, const FString& TargetPackage);
 

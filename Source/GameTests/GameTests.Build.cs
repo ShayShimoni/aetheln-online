@@ -24,6 +24,9 @@ public class GameTests : ModuleRules
 			"IrisCore",
 			"Json",
 			"NavigationSystem",
+			// #84 P3b: N3 builds a Niagara effect notify for the allowlist case.
+			"Niagara",
+			"NiagaraAnimNotifies",
 			"PhysicsCore",
 			"UnrealEd"
 		});
