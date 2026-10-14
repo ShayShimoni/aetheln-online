@@ -429,8 +429,37 @@ normally. Every move goes through the real packed move path.
 | Duplicate timestamp | Move is dropped before simulation | `LoopbackTransport` |
 | Acceleration over the limit | Not rejected: the server clamps the claim to `MaxAcceleration` and simulates the clamped value | `Reject.AccelerationOverLimit` |
 | Large displacement | Correction; the server does not adopt the client location (`ClientAuthorativePosition=false`) | `Reject.DisplacementTeleport` |
-| Invalid transition | Partly covered. A claimed mode change is corrected (`Reject.ClientModeMismatch`), an ineligible sprint state gets no sprint speed (`InvalidSprintRejected`, `AethelnCharacterMovementComponent.cpp:947`), and a refused dodge start is rolled back (`DodgeRefusedRollsBack`, `AethelnDodgeMovementTests.cpp:352`). Gap: no dedicated test sends other illegal transition sequences, such as a jump request while airborne, so that part of AC4 is not covered | `Reject.ClientModeMismatch`, `InvalidSprintRejected`, `DodgeRefusedRollsBack` |
+| Invalid transition | Covered. A jump request while airborne is refused: the server's `ACharacter::CanJumpInternal` allows one jump per ground contact (`JumpMaxCount` stays at the engine default of 1), so the flag is received and ignored, the server's jump count and vertical speed continue on their own path, and no correction is needed (`Reject.TransitionJumpWhileAirborne`). A claimed landing while the server has the pawn falling is corrected, and the server stays airborne (`Reject.TransitionClaimedLanding`). A claimed mode change from the ground is corrected (`Reject.ClientModeMismatch`), an ineligible sprint state gets no sprint speed (`InvalidSprintRejected`, `AethelnCharacterMovementComponent.cpp:947`), and a refused dodge start is rolled back (`DodgeRefusedRollsBack`, `AethelnDodgeMovementTests.cpp:352`). | `Reject.TransitionJumpWhileAirborne`, `Reject.TransitionClaimedLanding`, `Reject.ClientModeMismatch`, `InvalidSprintRejected`, `DodgeRefusedRollsBack` |
 | Rotation | Not corrected: facing is derived by the server and rate limited | `FacingSpoofBounded`, `AirborneFacingBounded` |
+
+### Two-client dedicated-server test (issue #17 DoD)
+
+`Aetheln.Movement.Net.TwoClientMoveAndSprint`
+(`Source/GameTests/Private/AethelnTwoClientMovementTests.cpp`) runs one PIE session
+with a **dedicated server** and two clients in one process, on real net drivers over
+loopback (CQTest's `FPIENetworkComponent`, the harness of
+[the death and respawn test](death-and-respawn.md)). It runs under the combat game mode
+on an empty CQTest map with a replicated fixture floor
+(`AethelnMovementTestFloor.h`), and it simulates no input device and no separate
+process. Client 0 (the mover) walks 300 cm and then sprints 700 cm through the
+character's real input entry points (`ReceiveMoveInput`, `ReceiveSprintIntent`) along
+a control yaw of 90 degrees, so its facing changes from the spawn facing. Client 1 only
+watches. The route lengths are test values, not tuning.
+
+When the mover has stopped, the test requires:
+
+- the server's pawn to have travelled the route and to face its direction of travel;
+- the server's measured speed to stay at or below the walk cap while walking, to rise
+  above the walk cap while sprinting, and never to exceed the speed the server's own
+  movement component allows (read from the component, not hardcoded);
+- the mover's own client and the observer's client to show the mover's pawn within 5 cm
+  of the server's position and within 3 degrees of the server's facing.
+
+The tolerances are measurement limits, not tuning. Replicated movement rounds each axis
+to a whole centimetre by default, and replicated rotation is quantized to a byte per
+axis (about 1.4 degrees). The run takes about 3 seconds after PIE starts and passed
+three consecutive runs. It does not add an impaired-link variant: the network profiles
+and the correction and rubber-banding measurements stay with #45.
 
 ## Verification and feedback
 
