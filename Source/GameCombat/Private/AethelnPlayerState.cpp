@@ -59,16 +59,14 @@ void AAethelnPlayerState::PostInitializeComponents()
 	});
 }
 
-void AAethelnPlayerState::Destroyed()
+void AAethelnPlayerState::OnDeactivated()
 {
-	// A logout destroys the PlayerState. Destroyed() runs for every destroy, before the actor ends play and before its components
-	// unregister, so the ASC still holds its attributes and effects. EndPlay would not do: an actor that never began play skips it.
-	// A player who never took a first possession has nothing to carry (its attributes were never initialized).
-	if (HasAuthority() && bCombatStateInitialized && !ReconnectKey.IsEmpty())
+	// The controller's CleanupPlayerState calls this at logout (PlayerController.cpp:1392-1398). The kept PlayerState keeps its
+	// ASC, effects and respawn wait running, so the kept pawn stays attackable; the reconnect takes its state (P4b).
+	if (!UAethelnDeathSubsystem::RetainForGrace(*this))
 	{
-		UAethelnDeathSubsystem::CaptureCarriedState(*AbilitySystemComponent, ReconnectKey);
+		Super::OnDeactivated();
 	}
-	Super::Destroyed();
 }
 
 UAbilitySystemComponent* AAethelnPlayerState::GetAbilitySystemComponent() const

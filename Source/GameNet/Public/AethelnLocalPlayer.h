@@ -16,6 +16,9 @@ class GAMENET_API UAethelnLocalPlayer : public ULocalPlayer
 	GENERATED_BODY()
 
 public:
+	/** PendingNetGame.cpp:335 appends these to the join URL, so the key reaches the server's login options. */
+	virtual FString GetGameLoginOptions() const override { return ReconnectKey.IsEmpty() ? FString() : FString(TEXT("ReconnectKey=")) + ReconnectKey; }
+
 	void SetReconnectKey(const FString& Key) { ReconnectKey = Key; }
 	const FString& GetReconnectKey() const { return ReconnectKey; }
 
