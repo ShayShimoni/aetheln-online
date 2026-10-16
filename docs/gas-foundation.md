@@ -529,7 +529,7 @@ The fixture attributes are test values, not tuning.
 | Test | Proves |
 | --- | --- |
 | `Aetheln.GameUI.Hud.TwoClientReadability` | Each HUD shows its own Health, Endurance, and Guard. Each client's copy of the other player reads Health and `Endurance --` and `Guard --`: Endurance and Guard never replicate to a non-owner, so their maxima stay at the class default of 0 and read as unknown, not `0 / 0`. A request for an ability that was never granted draws one Rejected cue on A's own HUD and none on B's own HUD, B's copy of A, or A's copy of B. The rejection leaves the server's Health, Endurance, Guard, and timed states unchanged. After the server kills A, both HUDs read A's Health as 0 and see `State.Dead`; A's own Endurance and Guard lines are unchanged and B still sees neither. After the respawn both HUDs converge back to the restored Health on A's new avatar, and a second rejected request raises one HUD event, so death and respawn left one binding. |
-| `Aetheln.GameUI.Hud.TwoClientReadabilityImpaired` | The same steps with `PktLag=100` (ms) and `PktLoss=5` (percent) on every net driver. The values are test settings, not the #45 network profile. The owner outcome is reliable, so the count stays exactly one per request. |
+| `Aetheln.GameUI.Hud.TwoClientReadabilityImpaired` | The same steps with `PktLag=100` (ms) and `PktLoss=5` (percent) on every net driver. The values are test settings, not the #45 network profile. The owner outcome is reliable, so the count stays exactly one per request. Open flake: about 1 run in 14 failed because a client never received A's new avatar within 30 s after the respawn. The cause is undiagnosed and recorded on #21 as a respawn replication suspect ([comment](https://github.com/ShayShimoni/aetheln-online/issues/21#issuecomment-6216130369)). The test stays required. |
 
 The HUD reads replicated state only. Neither test sets a client value, and the
 server is the state the clients converge to. This confirms what the HUD shows
@@ -547,6 +547,10 @@ Not part of this confirmation, and still open for #61:
   telegraph cues (#20): the visual language is `TBD`.
 - Endurance and Guard rising at the PlayerState frequency (the manual step
   under Resource Recovery) stays manual.
+- **Opponent view of timed states.** The tests do not assert an opponent's timed
+  states. Non-owners see cooldown and recovery-delay tags through the minimal
+  replicated tags, and whether opponents may see the delay tags is an owner
+  decision (Open Decisions 12; stance visibility in Open Decisions 5).
 
 ## Abilities
 
